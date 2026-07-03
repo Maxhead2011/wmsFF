@@ -16,6 +16,10 @@ export class ListTurnoverDto {
 
   @IsOptional()
   @IsString()
+  kiz?: string;
+
+  @IsOptional()
+  @IsString()
   search?: string;
 
   @IsOptional()

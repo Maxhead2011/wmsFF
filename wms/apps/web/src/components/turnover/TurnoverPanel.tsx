@@ -82,6 +82,7 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
   const [selectedClientId, setSelectedClientId] = useState('');
   const [search, setSearch] = useState('');
   const [barcode, setBarcode] = useState('');
+  const [kiz, setKiz] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [groupBy, setGroupBy] = useState<'day' | 'month' | 'quarter' | 'year'>('month');
@@ -186,6 +187,7 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
       clientId: selectedClientId,
       search: search.trim() || undefined,
       barcode: barcode.trim() || undefined,
+      kiz: kiz.trim() || undefined,
       dateFrom: dateFrom || undefined,
       dateTo: dateTo || undefined,
     };
@@ -352,6 +354,27 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
               const skuId = optionDataString(option, 'skuId');
               if (skuId) {
                 setSelectedSkuId(skuId);
+              }
+            }}
+          />
+
+          <KnownValueInput
+            label="КИЗ"
+            value={kiz}
+            options={kizOptions}
+            placeholder="КИЗ или часть КИЗа"
+            onChange={setKiz}
+            onSearch={setSuggestionQuery}
+            onSelect={(option) => {
+              setKiz(option.value);
+              setSearch(optionDataString(option, 'name') || option.label || option.value);
+              const skuId = optionDataString(option, 'skuId');
+              if (skuId) {
+                setSelectedSkuId(skuId);
+              }
+              const barcodeValue = optionDataString(option, 'barcode');
+              if (barcodeValue) {
+                setBarcode(barcodeValue);
               }
             }}
           />

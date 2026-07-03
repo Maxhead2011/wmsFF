@@ -94,6 +94,7 @@ export class TurnoverService {
     const clientFilter = this.clientScopes.resolveClientFilter(user, query.clientId);
     const skuWhere = this.buildSkuWhere(query, clientFilter);
     const movementDateRange = dateRange(query.dateFrom, query.dateTo);
+    const kiz = query.kiz?.trim();
 
     const skus = await this.prisma.sku.findMany({
       where: {
@@ -111,6 +112,7 @@ export class TurnoverService {
           orderBy: [{ updatedAt: 'desc' }],
         },
         productMarks: {
+          ...(kiz ? { where: { value: { contains: kiz, mode: Prisma.QueryMode.insensitive } } } : {}),
           select: { id: true, value: true, status: true, boxId: true, createdAt: true },
           orderBy: { updatedAt: 'desc' },
           take: 30,
@@ -569,11 +571,13 @@ export class TurnoverService {
   private buildSkuWhere(query: ListTurnoverDto, clientFilter: string | { in: string[] } | undefined): Prisma.SkuWhereInput {
     const search = query.search?.trim();
     const barcode = query.barcode?.trim();
+    const kiz = query.kiz?.trim();
 
     return {
       clientId: clientFilter,
       ...(query.skuId ? { id: query.skuId } : {}),
       ...(barcode ? { barcodes: { some: { value: barcode } } } : {}),
+      ...(kiz ? { productMarks: { some: { value: { contains: kiz, mode: Prisma.QueryMode.insensitive } } } } : {}),
       ...(search
         ? {
             OR: [
@@ -994,6 +998,7 @@ function normalizedFilters(query: ListTurnoverDto) {
     clientId: query.clientId ?? null,
     skuId: query.skuId ?? null,
     barcode: query.barcode ?? null,
+    kiz: query.kiz ?? null,
     search: query.search ?? null,
     dateFrom: query.dateFrom ?? null,
     dateTo: query.dateTo ?? null,

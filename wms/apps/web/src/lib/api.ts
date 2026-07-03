@@ -2969,7 +2969,7 @@ export async function fetchStockBalances(accessToken: string, filter: { clientId
 
 export async function fetchTurnoverReport(
   accessToken: string,
-  filter: { clientId?: string; skuId?: string; barcode?: string; search?: string; dateFrom?: string; dateTo?: string; limit?: number } = {},
+  filter: { clientId?: string; skuId?: string; barcode?: string; kiz?: string; search?: string; dateFrom?: string; dateTo?: string; limit?: number } = {},
 ) {
   return request<TurnoverReport>(withQuery('/turnover', turnoverReportQuery(filter)), {
     accessToken,
@@ -2994,6 +2994,7 @@ export async function fetchTurnoverStatistics(
     clientId?: string;
     skuId?: string;
     barcode?: string;
+    kiz?: string;
     search?: string;
     dateFrom?: string;
     dateTo?: string;
@@ -3810,6 +3811,7 @@ function turnoverQuery(filter: {
   clientId?: string;
   skuId?: string;
   barcode?: string;
+  kiz?: string;
   search?: string;
   dateFrom?: string;
   dateTo?: string;
@@ -3820,6 +3822,7 @@ function turnoverQuery(filter: {
     clientId: filter.clientId,
     skuId: filter.skuId,
     barcode: filter.barcode,
+    kiz: filter.kiz,
     search: filter.search,
     dateFrom: filter.dateFrom,
     dateTo: filter.dateTo,
@@ -3832,6 +3835,7 @@ function turnoverReportQuery(filter: {
   clientId?: string;
   skuId?: string;
   barcode?: string;
+  kiz?: string;
   search?: string;
   dateFrom?: string;
   dateTo?: string;
@@ -3841,6 +3845,7 @@ function turnoverReportQuery(filter: {
     clientId: filter.clientId,
     skuId: filter.skuId,
     barcode: filter.barcode,
+    kiz: filter.kiz,
     search: filter.search,
     dateFrom: filter.dateFrom,
     dateTo: filter.dateTo,
