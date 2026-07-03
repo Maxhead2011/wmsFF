@@ -1,5 +1,5 @@
-import { Plus, ReceiptText, Save, Trash2 } from 'lucide-react';
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { Boxes, FileText, Plus, ReceiptText, Save, Trash2, Warehouse } from 'lucide-react';
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import {
   createBillingInvoice,
   createManualBillingInvoice,
@@ -13,12 +13,15 @@ import {
   type ClientBillingServiceSummary,
   type ClientSummary,
 } from '../../lib/api';
+import { billingUnitOptions } from './billingMeta';
 
 type BillingInvoiceFormProps = {
   clients: ClientSummary[];
   session: AuthSession;
   onCreated: (invoice: BillingInvoiceSummary) => void;
 };
+
+type InvoiceMode = 'charges' | 'storage' | 'manual';
 
 type InvoiceRow = {
   key: string;
@@ -37,20 +40,21 @@ type InvoiceRow = {
 const standardServiceCodes = ['BOX_60_40_40', 'BOX_ASSEMBLY', 'PALLET', 'PALLET_ASSEMBLY'];
 
 export function BillingInvoiceForm({ clients, session, onCreated }: BillingInvoiceFormProps) {
-  const [clientId, setClientId] = useState(clients[0]?.id ?? '');
+  const [clientId, setClientId] = useState('');
   const [periodFrom, setPeriodFrom] = useState(monthStart());
   const [periodTo, setPeriodTo] = useState(today());
   const [dueDate, setDueDate] = useState('');
   const [comment, setComment] = useState('');
-  const [isStorageInvoice, setIsStorageInvoice] = useState(false);
-  const [isApprovedChargesInvoice, setIsApprovedChargesInvoice] = useState(false);
+  const [mode, setMode] = useState<InvoiceMode>('charges');
   const [services, setServices] = useState<ClientBillingServiceSummary[]>([]);
   const [rows, setRows] = useState<InvoiceRow[]>([]);
+  const [activeSearchRowKey, setActiveSearchRowKey] = useState('');
   const [isLoadingServices, setIsLoadingServices] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSavingPrices, setIsSavingPrices] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const selectedClient = clients.find((client) => client.id === clientId);
   const serviceOptions = useMemo(() => services.filter((item) => item.isActive), [services]);
   const invoiceTotal = useMemo(() => rows.reduce((sum, row) => sum + rowTotal(row), 0), [rows]);
 
@@ -116,7 +120,7 @@ export function BillingInvoiceForm({ clients, session, onCreated }: BillingInvoi
       return;
     }
 
-    if (isApprovedChargesInvoice) {
+    if (mode === 'charges') {
       setIsSubmitting(true);
       setError(null);
 
@@ -138,7 +142,7 @@ export function BillingInvoiceForm({ clients, session, onCreated }: BillingInvoi
       return;
     }
 
-    if (isStorageInvoice) {
+    if (mode === 'storage') {
       setIsSubmitting(true);
       setError(null);
 
@@ -234,7 +238,9 @@ export function BillingInvoiceForm({ clients, session, onCreated }: BillingInvoi
 
   function updateServiceSearch(key: string, value: string) {
     const selected = serviceOptions.find(
-      (item) => normalizedServiceLabel(item) === normalizeSearch(value) || normalizeSearch(item.service.code) === normalizeSearch(value),
+      (item) =>
+        normalizedServiceLabel(item) === normalizeSearch(value) ||
+        normalizeSearch(item.service.code) === normalizeSearch(value),
     );
     if (selected) {
       selectService(key, selected);
@@ -264,6 +270,7 @@ export function BillingInvoiceForm({ clients, session, onCreated }: BillingInvoi
       unitPriceRub: String(numberFromInput(item.priceRub)),
       taxMode: item.taxMode,
     });
+    setActiveSearchRowKey('');
   }
 
   function addRow() {
@@ -275,14 +282,23 @@ export function BillingInvoiceForm({ clients, session, onCreated }: BillingInvoi
   }
 
   return (
-    <form className="billing-form" onSubmit={(event) => void submit(event)}>
+    <form className="billing-form billing-invoice-form" onSubmit={(event) => void submit(event)}>
+      <div className="billing-form-head">
+        <div>
+          <strong>Новый счет</strong>
+          <span>Сначала выберите клиента и способ заполнения счета.</span>
+        </div>
+        {selectedClient ? <span className="status status--in-progress">{selectedClient.name}</span> : null}
+      </div>
+
       <div className="billing-fields billing-fields--invoice">
         <label>
           <span>Клиент</span>
           <select value={clientId} onChange={(event) => setClientId(event.target.value)}>
+            <option value="">Выберите клиента</option>
             {clients.map((client) => (
               <option key={client.id} value={client.id}>
-                {client.code} - {client.name}
+                {client.name}
               </option>
             ))}
           </select>
@@ -305,39 +321,43 @@ export function BillingInvoiceForm({ clients, session, onCreated }: BillingInvoi
 
         <label className="billing-fields__wide">
           <span>Комментарий</span>
-          <input value={comment} onChange={(event) => setComment(event.target.value)} placeholder="для счета" />
+          <input value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Комментарий попадет в счет" />
         </label>
       </div>
 
-      <label className="billing-checkbox">
-        <input
-          checked={isApprovedChargesInvoice}
-          type="checkbox"
-          onChange={(event) => {
-            setIsApprovedChargesInvoice(event.target.checked);
-            if (event.target.checked) {
-              setIsStorageInvoice(false);
-            }
-          }}
+      <div className="billing-mode-grid" role="radiogroup" aria-label="Способ создания счета">
+        <ModeButton
+          active={mode === 'charges'}
+          icon={<FileText size={18} />}
+          title="Из начислений"
+          text="Возьмет все утвержденные начисления клиента за период."
+          onClick={() => setMode('charges')}
         />
-        <span>Все утвержденные начисления за выбранный период</span>
-      </label>
-
-      <label className="billing-checkbox">
-        <input
-          checked={isStorageInvoice}
-          type="checkbox"
-          onChange={(event) => {
-            setIsStorageInvoice(event.target.checked);
-            if (event.target.checked) {
-              setIsApprovedChargesInvoice(false);
-            }
-          }}
+        <ModeButton
+          active={mode === 'storage'}
+          icon={<Warehouse size={18} />}
+          title="Хранение"
+          text="Посчитает хранение за период и сразу создаст счет."
+          onClick={() => setMode('storage')}
         />
-        <span>Хранение за выбранный период</span>
-      </label>
+        <ModeButton
+          active={mode === 'manual'}
+          icon={<Boxes size={18} />}
+          title="Ручной счет"
+          text="Для упаковки, коробов, паллет и дополнительных услуг."
+          onClick={() => setMode('manual')}
+        />
+      </div>
 
-      {!isStorageInvoice && !isApprovedChargesInvoice ? (
+      {mode !== 'manual' ? (
+        <p className="panel-message billing-mode-note">
+          {mode === 'charges'
+            ? 'Счет будет заполнен утвержденными начислениями, которые еще не попали в другие счета.'
+            : 'Система создаст начисление хранения за выбранный период, утвердит его и добавит в счет.'}
+        </p>
+      ) : null}
+
+      {mode === 'manual' ? (
         <>
           <div className="billing-invoice-toolbar">
             <button className="secondary-button" type="button" onClick={addRow}>
@@ -366,56 +386,76 @@ export function BillingInvoiceForm({ clients, session, onCreated }: BillingInvoi
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
-                  <tr key={row.key}>
-                    <td>
-                      <div className="billing-service-combobox">
-                        <input
-                          autoComplete="off"
-                          list={`billing-services-${row.key}`}
-                          value={row.serviceSearch}
-                          onChange={(event) => updateServiceSearch(row.key, event.target.value)}
-                          placeholder="Начните вводить услугу"
-                        />
-                        <datalist id={`billing-services-${row.key}`}>
-                          {filteredServiceOptions(serviceOptions, row.serviceSearch).map((item) => (
-                            <option key={item.service.id} label={item.service.code} value={item.service.name} />
+                {rows.map((row) => {
+                  const suggestions = filteredServiceOptions(serviceOptions, row.serviceSearch);
+                  const showSuggestions = activeSearchRowKey === row.key && suggestions.length > 0;
+
+                  return (
+                    <tr key={row.key}>
+                      <td>
+                        <div className="billing-service-combobox">
+                          <input
+                            autoComplete="off"
+                            value={row.serviceSearch}
+                            onBlur={() => window.setTimeout(() => setActiveSearchRowKey(''), 120)}
+                            onChange={(event) => updateServiceSearch(row.key, event.target.value)}
+                            onFocus={() => setActiveSearchRowKey(row.key)}
+                            placeholder="Начните вводить услугу"
+                          />
+                          {showSuggestions ? (
+                            <div className="billing-service-combobox__list">
+                              {suggestions.map((item) => (
+                                <button
+                                  key={item.service.id}
+                                  type="button"
+                                  onMouseDown={(event) => {
+                                    event.preventDefault();
+                                    selectService(row.key, item);
+                                  }}
+                                >
+                                  <strong>{item.service.name}</strong>
+                                  <span>
+                                    {item.service.code} · {unitLabel(item.service.unit)} · {formatMoney(numberFromInput(item.priceRub))} ₽
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      </td>
+                      <td>
+                        <input value={row.description} onChange={(event) => updateRow(row.key, { description: event.target.value })} />
+                      </td>
+                      <td>
+                        <select value={row.unit} onChange={(event) => updateRow(row.key, { unit: event.target.value as BillingUnit })}>
+                          {billingUnitOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
                           ))}
-                        </datalist>
-                      </div>
-                    </td>
-                    <td>
-                      <input value={row.description} onChange={(event) => updateRow(row.key, { description: event.target.value })} />
-                    </td>
-                    <td>
-                      <select value={row.unit} onChange={(event) => updateRow(row.key, { unit: event.target.value as BillingUnit })}>
-                        {unitOptions.map((unit) => (
-                          <option key={unit} value={unit}>
-                            {unitLabel(unit)}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td>
-                      <input min="0" step="0.001" type="number" value={row.quantity} onChange={(event) => updateRow(row.key, { quantity: event.target.value })} />
-                    </td>
-                    <td>
-                      <input min="0" step="0.01" type="number" value={row.unitPriceRub} onChange={(event) => updateRow(row.key, { unitPriceRub: event.target.value })} />
-                    </td>
-                    <td>
-                      <select value={row.taxMode} onChange={(event) => updateRow(row.key, { taxMode: event.target.value as BillingPriceTaxMode })}>
-                        <option value="INCLUDED">В цене</option>
-                        <option value="ADD_6_PERCENT">Добавить 6%</option>
-                      </select>
-                    </td>
-                    <td>{formatMoney(rowTotal(row))} ₽</td>
-                    <td>
-                      <button className="icon-button" type="button" onClick={() => deleteRow(row.key)} title="Удалить строку" aria-label="Удалить строку">
-                        <Trash2 size={16} aria-hidden="true" />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                        </select>
+                      </td>
+                      <td>
+                        <input min="0" step="0.001" type="number" value={row.quantity} onChange={(event) => updateRow(row.key, { quantity: event.target.value })} />
+                      </td>
+                      <td>
+                        <input min="0" step="0.01" type="number" value={row.unitPriceRub} onChange={(event) => updateRow(row.key, { unitPriceRub: event.target.value })} />
+                      </td>
+                      <td>
+                        <select value={row.taxMode} onChange={(event) => updateRow(row.key, { taxMode: event.target.value as BillingPriceTaxMode })}>
+                          <option value="INCLUDED">В цене</option>
+                          <option value="ADD_6_PERCENT">Добавить 6%</option>
+                        </select>
+                      </td>
+                      <td>{formatMoney(rowTotal(row))} ₽</td>
+                      <td>
+                        <button className="icon-button" type="button" onClick={() => deleteRow(row.key)} title="Удалить строку" aria-label="Удалить строку">
+                          <Trash2 size={16} aria-hidden="true" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
                 {isLoadingServices ? (
                   <tr>
                     <td colSpan={8}>Загружаю услуги клиента.</td>
@@ -424,26 +464,54 @@ export function BillingInvoiceForm({ clients, session, onCreated }: BillingInvoi
               </tbody>
             </table>
           </div>
+
+          <p className="billing-tax-hint">Если цена указана без 6%, выберите “Добавить 6%”: система применит формулу сумма / 94 * 100.</p>
         </>
-      ) : (
-        <p className="panel-message">
-          {isApprovedChargesInvoice
-            ? 'Счет будет заполнен всеми утвержденными начислениями клиента за выбранный период, которые еще не вошли в другие счета.'
-            : 'Счет будет заполнен начислением хранения за выбранный период.'}
-        </p>
-      )}
+      ) : null}
 
       {error ? <p className="form-error">{error}</p> : null}
 
-      <button className="primary-button billing-submit" disabled={isSubmitting || clients.length === 0} type="submit">
+      <button className="primary-button billing-submit" disabled={isSubmitting || !clientId} type="submit">
         <ReceiptText size={17} aria-hidden="true" />
-        <span>{isSubmitting ? 'Формирую' : 'Сформировать счет'}</span>
+        <span>{isSubmitting ? 'Формирую' : submitLabel(mode)}</span>
       </button>
     </form>
   );
 }
 
-const unitOptions: BillingUnit[] = ['SERVICE', 'PIECE', 'BOX', 'PALLET', 'LITER', 'LITER_DAY', 'DAY', 'HOUR'];
+function ModeButton({
+  active,
+  icon,
+  title,
+  text,
+  onClick,
+}: {
+  active: boolean;
+  icon: ReactNode;
+  title: string;
+  text: string;
+  onClick: () => void;
+}) {
+  return (
+    <button className={active ? 'billing-mode-button is-active' : 'billing-mode-button'} type="button" onClick={onClick}>
+      {icon}
+      <span>{title}</span>
+      <small>{text}</small>
+    </button>
+  );
+}
+
+function submitLabel(mode: InvoiceMode) {
+  if (mode === 'charges') {
+    return 'Создать счет из начислений';
+  }
+
+  if (mode === 'storage') {
+    return 'Создать счет за хранение';
+  }
+
+  return 'Сформировать ручной счет';
+}
 
 function buildInitialRows(services: ClientBillingServiceSummary[], serviceDate: string): InvoiceRow[] {
   const standardRows = standardServiceCodes
@@ -509,8 +577,8 @@ function filteredServiceOptions(options: ClientBillingServiceSummary[], query: s
   const filtered = normalized
     ? options.filter(
         (item) =>
-          normalizeSearch(item.service.name).startsWith(normalized) ||
-          normalizeSearch(item.service.code).startsWith(normalized),
+          normalizeSearch(item.service.name).includes(normalized) ||
+          normalizeSearch(item.service.code).includes(normalized),
       )
     : options;
 
@@ -548,18 +616,7 @@ function formatMoney(value: number) {
 }
 
 function unitLabel(unit: BillingUnit) {
-  const labels: Record<BillingUnit, string> = {
-    SERVICE: 'услуга',
-    PIECE: 'шт',
-    BOX: 'короб',
-    PALLET: 'паллет',
-    LITER: 'литр',
-    LITER_DAY: 'литро-день',
-    DAY: 'день',
-    HOUR: 'час',
-  };
-
-  return labels[unit];
+  return billingUnitOptions.find((option) => option.value === unit)?.label ?? unit;
 }
 
 function errorMessage(caught: unknown) {

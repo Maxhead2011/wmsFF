@@ -4,11 +4,12 @@ import { createBillingPayment, type AuthSession, type BillingInvoiceSummary } fr
 
 type BillingPaymentFormProps = {
   invoices: BillingInvoiceSummary[];
+  preferredInvoiceId?: string;
   session: AuthSession;
   onPaid: (invoice: BillingInvoiceSummary) => void;
 };
 
-export function BillingPaymentForm({ invoices, session, onPaid }: BillingPaymentFormProps) {
+export function BillingPaymentForm({ invoices, preferredInvoiceId, session, onPaid }: BillingPaymentFormProps) {
   const payableInvoices = useMemo(
     () =>
       invoices.filter(
@@ -16,7 +17,7 @@ export function BillingPaymentForm({ invoices, session, onPaid }: BillingPayment
       ),
     [invoices],
   );
-  const [invoiceId, setInvoiceId] = useState(payableInvoices[0]?.id ?? '');
+  const [invoiceId, setInvoiceId] = useState(preferredInvoiceId || payableInvoices[0]?.id || '');
   const selectedInvoice = payableInvoices.find((invoice) => invoice.id === invoiceId) ?? payableInvoices[0];
   const [amountRub, setAmountRub] = useState(selectedInvoice ? String(remainingRub(selectedInvoice)) : '');
   const [paidAt, setPaidAt] = useState(today());
@@ -25,6 +26,12 @@ export function BillingPaymentForm({ invoices, session, onPaid }: BillingPayment
   const [comment, setComment] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (preferredInvoiceId && payableInvoices.some((invoice) => invoice.id === preferredInvoiceId)) {
+      setInvoiceId(preferredInvoiceId);
+    }
+  }, [payableInvoices, preferredInvoiceId]);
 
   useEffect(() => {
     if (!selectedInvoice) {
@@ -36,6 +43,18 @@ export function BillingPaymentForm({ invoices, session, onPaid }: BillingPayment
     setInvoiceId(selectedInvoice.id);
     setAmountRub(String(remainingRub(selectedInvoice)));
   }, [selectedInvoice?.id]);
+
+  if (payableInvoices.length === 0) {
+    return (
+      <section className="billing-payment-card billing-payment-card--empty">
+        <CreditCard size={18} aria-hidden="true" />
+        <div>
+          <strong>Оплатить нечего</strong>
+          <span>Открытых счетов с остатком к оплате нет.</span>
+        </div>
+      </section>
+    );
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -67,14 +86,22 @@ export function BillingPaymentForm({ invoices, session, onPaid }: BillingPayment
   }
 
   return (
-    <form className="billing-form" onSubmit={(event) => void submit(event)}>
+    <form className="billing-form billing-payment-card" onSubmit={(event) => void submit(event)}>
+      <div className="billing-payment-card__heading">
+        <CreditCard size={18} aria-hidden="true" />
+        <div>
+          <strong>Принять оплату</strong>
+          <span>Выберите счет, проверьте сумму и сохраните платеж.</span>
+        </div>
+      </div>
+
       <div className="billing-fields billing-fields--payment">
         <label>
           <span>Счет</span>
           <select value={invoiceId} onChange={(event) => setInvoiceId(event.target.value)}>
             {payableInvoices.map((invoice) => (
               <option key={invoice.id} value={invoice.id}>
-                {invoice.number} - {invoice.client.code}
+                № {invoice.number} - {invoice.client.name} - остаток {remainingRub(invoice).toLocaleString('ru-RU')} ₽
               </option>
             ))}
           </select>
