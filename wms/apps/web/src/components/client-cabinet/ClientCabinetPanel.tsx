@@ -695,7 +695,7 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
             reconciliation={view.reconciliation}
             onNavigate={navigateToSection}
           />
-          <ClientCabinetStorageWidget accessToken={session.accessToken} client={view.client} filters={filters} />
+          <ClientCabinetStorageWidget accessToken={session.accessToken} client={view.client} />
           <ClientCabinetFilters
             value={filters}
             totals={view.filterTotals}
