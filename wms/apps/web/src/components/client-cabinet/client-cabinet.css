@@ -928,6 +928,94 @@
   font-size: 18px;
 }
 
+.client-storage-widget {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 14px;
+}
+
+.client-storage-widget__heading {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.client-storage-widget__heading span,
+.client-storage-widget__heading strong {
+  display: block;
+}
+
+.client-storage-widget__heading span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.client-storage-widget__heading strong {
+  margin-top: 3px;
+  font-size: 17px;
+}
+
+.client-storage-widget__status {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.client-storage-widget__metrics {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.client-storage-widget__metrics > div {
+  min-height: 64px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdff;
+  padding: 10px;
+}
+
+.client-storage-widget__metrics span,
+.client-storage-widget__metrics strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.client-storage-widget__metrics span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.client-storage-widget__metrics strong {
+  margin-top: 6px;
+  font-size: 16px;
+}
+
+.client-storage-widget__mark {
+  position: absolute;
+  right: 14px;
+  bottom: -18px;
+  color: rgb(215 25 32 / 0.08);
+  pointer-events: none;
+}
+
 .client-cabinet-sections {
   display: grid;
   gap: 14px;
@@ -1810,6 +1898,10 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .client-storage-widget__metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .client-cabinet-tabs {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1867,6 +1959,19 @@
 
   .client-cabinet-metrics {
     grid-template-columns: 1fr;
+  }
+
+  .client-storage-widget__heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .client-storage-widget__status {
+    justify-content: space-between;
+  }
+
+  .client-storage-widget__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .client-cabinet-table-toolbar,

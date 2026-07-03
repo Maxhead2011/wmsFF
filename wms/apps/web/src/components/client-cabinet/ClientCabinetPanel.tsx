@@ -47,6 +47,7 @@ import { ClientRequestDocumentPreview } from '../client-requests/ClientRequestDo
 import './client-cabinet.css';
 import { ClientCabinetExports } from './ClientCabinetExports';
 import { ClientCabinetMetrics, type ClientCabinetMetricTarget } from './ClientCabinetMetrics';
+import { ClientCabinetStorageWidget } from './ClientCabinetStorageWidget';
 import { ClientCabinetTables } from './ClientCabinetTables';
 import type { BrowserNotificationPermission } from './ClientCabinetNotifications';
 import { ClientMarketplaceConnections } from './ClientMarketplaceConnections';
@@ -694,6 +695,7 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
             reconciliation={view.reconciliation}
             onNavigate={navigateToSection}
           />
+          <ClientCabinetStorageWidget accessToken={session.accessToken} client={view.client} filters={filters} />
           <ClientCabinetFilters
             value={filters}
             totals={view.filterTotals}
