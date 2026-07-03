@@ -6,6 +6,7 @@ import {
   BillingPriceTaxMode,
   BillingUnit,
   ClientNotificationEvent,
+  MovementType,
   Prisma,
 } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -274,6 +275,7 @@ export class BillingService {
       },
       select: {
         skuId: true,
+        type: true,
         status: true,
         quantity: true,
         createdAt: true,
@@ -1460,6 +1462,7 @@ function calculateStorageDetails(
 function calculateHistoricalStorageDetails(
   movements: Array<{
     skuId: string;
+    type: MovementType;
     status: string;
     quantity: number;
     createdAt: Date;
@@ -1481,33 +1484,22 @@ function calculateHistoricalStorageDetails(
   let literDays = 0;
   let totalLitersSum = 0;
   const days = listPeriodDays(periodFrom, periodTo);
+  const periodStart = new Date(Date.UTC(periodFrom.getUTCFullYear(), periodFrom.getUTCMonth(), periodFrom.getUTCDate()));
 
-  days.forEach((day) => {
-    const dayEnd = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 23, 59, 59, 999));
-
-    while (movementIndex < sorted.length && sorted[movementIndex].createdAt <= dayEnd) {
-      const movement = sorted[movementIndex];
+  while (movementIndex < sorted.length && sorted[movementIndex].createdAt < periodStart) {
+    const movement = sorted[movementIndex];
+    if (isHistoricalStorageMovement(movement)) {
+      applyHistoricalStorageMovement(quantities, movement);
       const volumeLiters = calculateSkuVolumeLiters(movement.sku) || null;
-      const key = `${movement.skuId}:${movement.status}`;
-      const current =
-        quantities.get(key) ??
-        ({
-          skuId: movement.skuId,
-          status: movement.status,
-          internalSku: movement.sku.internalSku,
-          name: movement.sku.name,
-          volumeLiters,
-          quantity: 0,
-        } satisfies HistoricalBalanceState);
-      current.quantity += movement.quantity;
-      quantities.set(key, current);
-
       if (!volumeLiters || volumeLiters <= 0) {
         skippedWithoutVolume += 1;
       }
-
-      movementIndex += 1;
     }
+    movementIndex += 1;
+  }
+
+  days.forEach((day) => {
+    const dayEnd = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 23, 59, 59, 999));
 
     let dayLiters = 0;
     let positions = 0;
@@ -1542,6 +1534,18 @@ function calculateHistoricalStorageDetails(
       literDays: roundedDayLiters,
       positions,
     });
+
+    while (movementIndex < sorted.length && sorted[movementIndex].createdAt <= dayEnd) {
+      const movement = sorted[movementIndex];
+      if (isHistoricalStorageMovement(movement)) {
+        applyHistoricalStorageMovement(quantities, movement);
+        const volumeLiters = calculateSkuVolumeLiters(movement.sku) || null;
+        if (!volumeLiters || volumeLiters <= 0) {
+          skippedWithoutVolume += 1;
+        }
+      }
+      movementIndex += 1;
+    }
   });
 
   return {
@@ -1563,6 +1567,45 @@ function calculateHistoricalStorageDetails(
       .sort((left, right) => right.literDays - left.literDays)
       .slice(0, 50),
   };
+}
+
+function isHistoricalStorageMovement(movement: { type: MovementType; quantity: number }) {
+  if (movement.type === MovementType.PICK || movement.type === MovementType.PACK || movement.type === MovementType.MOVE) {
+    return false;
+  }
+  if (movement.type === MovementType.SHIP) {
+    return movement.quantity < 0;
+  }
+  return movement.quantity !== 0;
+}
+
+function applyHistoricalStorageMovement(
+  quantities: Map<string, HistoricalBalanceState>,
+  movement: {
+    skuId: string;
+    status: string;
+    quantity: number;
+    sku: {
+      internalSku: string;
+      name: string;
+    } & StorageSkuVolumeSource;
+  },
+) {
+  const volumeLiters = calculateSkuVolumeLiters(movement.sku) || null;
+  const key = `${movement.skuId}:${movement.status}`;
+  const current =
+    quantities.get(key) ??
+    ({
+      skuId: movement.skuId,
+      status: movement.status,
+      internalSku: movement.sku.internalSku,
+      name: movement.sku.name,
+      volumeLiters,
+      quantity: 0,
+    } satisfies HistoricalBalanceState);
+  current.quantity += movement.quantity;
+  current.volumeLiters = volumeLiters || current.volumeLiters;
+  quantities.set(key, current);
 }
 
 type HistoricalBalanceState = {

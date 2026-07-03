@@ -259,9 +259,6 @@ function calculateStorageHistory(movements: StorageMovementForOverview[], period
   days.forEach((day) => {
     const dayStart = startOfUtcDay(day);
     const dayEnd = endOfUtcDay(day);
-    storageMovements
-      .filter((movement) => movement.createdAt >= dayStart && movement.createdAt <= dayEnd)
-      .forEach((movement) => applyStorageMovement(state, movement, firstReceiptBySku));
 
     let totalLiters = 0;
     let positions = 0;
@@ -317,6 +314,10 @@ function calculateStorageHistory(movements: StorageMovementForOverview[], period
       literDays: roundedLiters,
       positions,
     });
+
+    storageMovements
+      .filter((movement) => movement.createdAt >= dayStart && movement.createdAt <= dayEnd)
+      .forEach((movement) => applyStorageMovement(state, movement, firstReceiptBySku));
   });
 
   return { skuTotals, firstReceiptBySku, daily, dailyRows };

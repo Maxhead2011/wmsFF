@@ -56,8 +56,8 @@ describe('StorageOverviewService', () => {
     );
 
     expect(overview.daily).toEqual([
-      { date: '2026-06-01', totalLiters: 20, literDays: 20, positions: 1 },
-      { date: '2026-06-02', totalLiters: 0, literDays: 0, positions: 0 },
+      { date: '2026-06-01', totalLiters: 0, literDays: 0, positions: 0 },
+      { date: '2026-06-02', totalLiters: 20, literDays: 20, positions: 1 },
       { date: '2026-06-03', totalLiters: 0, literDays: 0, positions: 0 },
     ]);
     expect(overview.totals).toEqual({
