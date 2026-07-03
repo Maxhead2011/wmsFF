@@ -175,7 +175,7 @@ export function ClientRequisitesForm({ session }: ClientRequisitesFormProps) {
       return;
     }
 
-    const confirmed = window.confirm(`Удалить клиента ${selectedClient.code} - ${selectedClient.name}? Если у клиента есть данные, WMS не даст удалить его.`);
+    const confirmed = window.confirm(`Удалить клиента ${selectedClient.code} - ${selectedClient.name}? Если есть связанные данные, WMS не даст удалить его.`);
     if (!confirmed) {
       return;
     }

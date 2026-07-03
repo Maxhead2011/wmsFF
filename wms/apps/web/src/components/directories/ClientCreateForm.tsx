@@ -392,7 +392,7 @@ export function ClientCreateForm({ session }: ClientCreateFormProps) {
                 <div className="directory-subheading directory-subheading--plain">
                   <div>
                     <h3>Привязать существующего</h3>
-                    <span>добавит доступ к этому клиенту пользователю с ролью клиента</span>
+                    <span>даст выбранному пользователю доступ к клиенту</span>
                   </div>
                   <button className="icon-text-button" type="button" onClick={() => void loadFulfillmentUsers()}>
                     <RefreshCw size={15} aria-hidden="true" />

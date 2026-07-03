@@ -520,7 +520,7 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
       {activeTab === 'kiz' ? (
         <Section title="Поиск КИЗ" icon={<Search size={18} />}>
           <div className="service-search-row">
-            <input value={kizSearch} onChange={(event) => setKizSearch(event.target.value)} placeholder="Введите КИЗ или часть КИЗа" />
+            <input value={kizSearch} onChange={(event) => setKizSearch(event.target.value)} placeholder="Введите номер или фрагмент" />
             <button className="primary-button" type="button" onClick={() => void runKizSearch()} disabled={kizSearch.trim().length < 3}>
               Найти
             </button>

@@ -103,7 +103,7 @@ export function StoragePanel({ session }: StoragePanelProps) {
       return;
     }
     if (!storageEnabled) {
-      setError('У выбранного клиента отключен учет хранения. Включите галочку в настройках клиента.');
+      setError('У выбранного клиента отключен учет хранения. Включите его в карточке.');
       return;
     }
 
@@ -146,7 +146,7 @@ export function StoragePanel({ session }: StoragePanelProps) {
       return;
     }
     if (!storageEnabled) {
-      setError('У выбранного клиента отключен учет хранения. Включите галочку в настройках клиента.');
+      setError('У выбранного клиента отключен учет хранения. Включите его в карточке.');
       return;
     }
 

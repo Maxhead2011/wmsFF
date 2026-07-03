@@ -509,7 +509,7 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
   }
 
   async function removeClient(client: ClientSummary) {
-    const confirmed = window.confirm(`Удалить клиента ${client.code} - ${client.name}? Если у клиента есть рабочие данные, WMS не даст удалить его.`);
+    const confirmed = window.confirm(`Удалить клиента ${client.code} - ${client.name}? Если есть рабочие данные, WMS не даст удалить его.`);
     if (!confirmed) {
       return;
     }

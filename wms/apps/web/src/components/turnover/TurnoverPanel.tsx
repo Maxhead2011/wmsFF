@@ -362,7 +362,7 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
             label="КИЗ"
             value={kiz}
             options={kizOptions}
-            placeholder="КИЗ или часть КИЗа"
+            placeholder="Номер или фрагмент"
             onChange={setKiz}
             onSearch={setSuggestionQuery}
             onSelect={(option) => {

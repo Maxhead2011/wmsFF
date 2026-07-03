@@ -207,7 +207,7 @@ export function LogisticsDeliveryForm({ clients, requests, tariffs, session, onC
       </div>
 
       {isPackageDriven && !hasActualPackages ? (
-        <p className="form-error">По выбранной заявке нет упаковочных мест. Сначала упакуйте заявку на складе.</p>
+        <p className="form-error">По выбранной заявке нет упаковочных мест. Сначала упакуйте ее на складе.</p>
       ) : null}
 
       {isUnknownDestination ? (
