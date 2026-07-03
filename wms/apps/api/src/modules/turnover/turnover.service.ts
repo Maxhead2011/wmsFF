@@ -251,7 +251,15 @@ export class TurnoverService {
           article: true,
           name: true,
           barcodes: { select: { value: true, isPrimary: true }, orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }], take: 5 },
-          balances: { select: { quantity: true } },
+          balances: {
+            select: {
+              quantity: true,
+              status: true,
+              updatedAt: true,
+              box: { select: { code: true } },
+            },
+            orderBy: [{ updatedAt: 'desc' }],
+          },
         },
         orderBy: { updatedAt: 'desc' },
         take: 40,
@@ -264,7 +272,7 @@ export class TurnoverService {
         select: {
           value: true,
           isPrimary: true,
-          sku: { select: { id: true, internalSku: true, article: true, name: true } },
+          sku: { select: { id: true, internalSku: true, clientSku: true, article: true, name: true } },
         },
         orderBy: { value: 'asc' },
         take: 60,
@@ -297,15 +305,19 @@ export class TurnoverService {
 
     const products = skus.map((sku) => {
       const primaryBarcode = sku.barcodes.find((barcode) => barcode.isPrimary)?.value ?? sku.barcodes[0]?.value ?? null;
+      const firstBalance = sku.balances.find((balance) => balance.box?.code && balance.quantity > 0) ?? sku.balances[0] ?? null;
 
       return {
         skuId: sku.id,
         label: [sku.name, primaryBarcode ? `ШК ${primaryBarcode}` : null].filter(Boolean).join(' · '),
         name: sku.name,
         internalSku: sku.internalSku,
+        clientSku: sku.clientSku,
         article: sku.article,
         barcode: primaryBarcode,
         quantity: sku.balances.reduce((sum, balance) => sum + balance.quantity, 0),
+        boxCode: firstBalance?.box?.code ?? null,
+        status: firstBalance?.status ?? null,
       };
     });
 
@@ -319,6 +331,8 @@ export class TurnoverService {
             skuId: product.skuId,
             name: product.name,
             internalSku: product.internalSku,
+            clientSku: product.clientSku,
+            article: product.article,
           })),
         ...barcodeRows.map((row) => ({
           value: row.value,
@@ -326,6 +340,8 @@ export class TurnoverService {
           skuId: row.sku.id,
           name: row.sku.name,
           internalSku: row.sku.internalSku,
+          clientSku: row.sku.clientSku,
+          article: row.sku.article,
         })),
       ],
       (row) => row.value,
@@ -340,6 +356,8 @@ export class TurnoverService {
         status: mark.status,
         skuId: mark.sku.id,
         name: mark.sku.name,
+        internalSku: mark.sku.internalSku,
+        article: mark.sku.article,
         barcode: mark.sku.barcodes[0]?.value ?? null,
         boxCode: mark.box?.code ?? null,
       })),

@@ -1465,9 +1465,12 @@ export type TurnoverSuggestions = {
     label: string;
     name: string;
     internalSku: string;
+    clientSku: string | null;
     article: string | null;
     barcode: string | null;
     quantity: number;
+    boxCode: string | null;
+    status: string | null;
   }>;
   barcodes: Array<{
     value: string;
@@ -1475,6 +1478,8 @@ export type TurnoverSuggestions = {
     skuId: string;
     name: string;
     internalSku: string;
+    clientSku: string | null;
+    article: string | null;
   }>;
   kiz: Array<{
     id: string;
@@ -1482,6 +1487,8 @@ export type TurnoverSuggestions = {
     status: string;
     skuId: string;
     name: string;
+    internalSku: string;
+    article: string | null;
     barcode: string | null;
     boxCode: string | null;
   }>;

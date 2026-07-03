@@ -1,6 +1,6 @@
 import { ClipboardPaste, Plus, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { fetchTurnoverSuggestions, type ClientRequestAvailabilityPreview } from '../../lib/api';
+import { fetchTurnoverSuggestions, type ClientRequestAvailabilityPreview, type TurnoverSuggestions } from '../../lib/api';
 import {
   emptyClientRequestItem,
   MAX_CLIENT_REQUEST_ITEMS,
@@ -21,6 +21,7 @@ type ClientRequestItemsEditorProps = {
 type StockSuggestion = {
   skuId: string;
   internalSku: string;
+  article: string | null;
   name: string;
   barcode: string;
   availableQuantity: number;
@@ -51,7 +52,7 @@ export function ClientRequestItemsEditor({
     const timeoutId = window.setTimeout(() => {
       setSuggesting(true);
       fetchTurnoverSuggestions(accessToken, { clientId, search: query || undefined })
-        .then((result) => setSuggestions(buildStockSuggestions(result.products).slice(0, 8)))
+        .then((result) => setSuggestions(buildStockSuggestions(result).slice(0, 8)))
         .catch(() => setSuggestions([]))
         .finally(() => setSuggesting(false));
     }, 180);
@@ -198,7 +199,7 @@ export function ClientRequestItemsEditor({
                     <button key={sku.skuId} type="button" onClick={() => selectSku(index, sku)}>
                       <strong>{sku.internalSku}</strong>
                       <span>{sku.name}</span>
-                      <small>{sku.barcode || 'без штрихкода'} · {sku.availableQuantity} шт.</small>
+                      <small>{[sku.article, sku.barcode || 'без штрихкода', `${sku.availableQuantity} шт.`].filter(Boolean).join(' · ')}</small>
                     </button>
                   ))}
                 </div>
@@ -235,16 +236,46 @@ export function ClientRequestItemsEditor({
   );
 }
 
-function buildStockSuggestions(products: Array<{ skuId: string; internalSku: string; name: string; barcode: string | null; quantity: number }>) {
-  return products
-    .map((product) => ({
+function buildStockSuggestions(result: TurnoverSuggestions) {
+  const quantitiesBySku = new Map(result.products.map((product) => [product.skuId, product.quantity]));
+  const suggestions = [
+    ...result.products.map((product) => ({
       skuId: product.skuId,
       internalSku: product.internalSku,
+      article: product.article,
       name: product.name,
       barcode: product.barcode ?? '',
       availableQuantity: product.quantity,
-    }))
+    })),
+    ...result.barcodes.map((barcode) => ({
+      skuId: barcode.skuId,
+      internalSku: barcode.internalSku,
+      article: barcode.article,
+      name: barcode.name,
+      barcode: barcode.value,
+      availableQuantity: quantitiesBySku.get(barcode.skuId) ?? 0,
+    })),
+  ];
+
+  return uniqueStockSuggestions(suggestions)
     .sort((left, right) => right.availableQuantity - left.availableQuantity);
+}
+
+function uniqueStockSuggestions(suggestions: StockSuggestion[]) {
+  const seen = new Set<string>();
+  const result: StockSuggestion[] = [];
+
+  for (const suggestion of suggestions) {
+    const key = `${suggestion.skuId}:${suggestion.barcode}`;
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    result.push(suggestion);
+  }
+
+  return result;
 }
 
 function availabilityClassName(line: ClientRequestAvailabilityPreview['lines'][number] | undefined) {

@@ -92,7 +92,11 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
     const items = report.data?.items ?? [];
     return items.find((item) => item.skuId === selectedSkuId) ?? items[0] ?? null;
   }, [report.data, selectedSkuId]);
-  const sourceCells = selectedReportItem?.currentCells ?? [];
+  const actionReportItem = useMemo(() => {
+    const items = report.data?.items ?? [];
+    return items.find((item) => item.skuId === actionForm.skuId) ?? null;
+  }, [actionForm.skuId, report.data]);
+  const sourceCells = (activeTile === 'actions' && actionForm.skuId ? actionReportItem?.currentCells : selectedReportItem?.currentCells) ?? [];
   const allCells = useMemo(() => uniqueValues((report.data?.items ?? []).flatMap((item) => item.currentCells.map((cell) => cell.boxCode))), [report.data]);
   const productOptions = useMemo(() => buildProductOptions(report.data?.items ?? [], suggestions.data?.products ?? []), [report.data, suggestions.data]);
   const barcodeOptions = useMemo(() => buildBarcodeOptions(report.data?.items ?? [], suggestions.data?.barcodes ?? []), [report.data, suggestions.data]);
@@ -279,6 +283,11 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
             onSelect={(option) => {
               setSearch(option.label ?? option.value);
               setSuggestionQuery(option.value);
+              setBarcode(optionDataString(option, 'barcode'));
+              const skuId = optionDataString(option, 'skuId');
+              if (skuId) {
+                setSelectedSkuId(skuId);
+              }
             }}
           />
 
@@ -289,7 +298,14 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
             placeholder="ШК товара"
             onChange={setBarcode}
             onSearch={setSuggestionQuery}
-            onSelect={(option) => setBarcode(option.value)}
+            onSelect={(option) => {
+              setBarcode(option.value);
+              setSearch(optionDataString(option, 'name') || option.label || option.value);
+              const skuId = optionDataString(option, 'skuId');
+              if (skuId) {
+                setSelectedSkuId(skuId);
+              }
+            }}
           />
 
           <label>
@@ -542,6 +558,31 @@ function ActionsSection({
   const needsTarget = form.action === 'ADD' || form.action === 'TRANSFER' || form.action === 'HOLD';
   const needsReason = form.action === 'WRITE_OFF' || form.action === 'UTILIZE' || form.action === 'HOLD';
 
+  function selectProduct(option: KnownValueOption) {
+    onChange('skuText', productTextFromOption(option));
+    onChange('skuId', optionDataString(option, 'skuId'));
+
+    const boxCode = optionDataString(option, 'boxCode');
+    if (boxCode) {
+      onChange('sourceBoxCode', boxCode);
+    }
+  }
+
+  function selectKiz(option: KnownValueOption) {
+    onChange('kiz', option.value);
+
+    const skuId = optionDataString(option, 'skuId');
+    if (skuId) {
+      onChange('skuId', skuId);
+      onChange('skuText', productTextFromOption(option));
+    }
+
+    const boxCode = optionDataString(option, 'boxCode');
+    if (boxCode) {
+      onChange('sourceBoxCode', boxCode);
+    }
+  }
+
   return (
     <section className="turnover-panel turnover-actions-panel" aria-label="Действия с товарами">
       <div className="turnover-details__heading">
@@ -575,10 +616,7 @@ function ActionsSection({
             onChange('skuId', '');
           }}
           onSearch={onSuggest}
-          onSelect={(option) => {
-            onChange('skuText', option.label ?? option.value);
-            onChange('skuId', String(option.data?.skuId ?? ''));
-          }}
+          onSelect={selectProduct}
         />
 
         <label>
@@ -627,7 +665,7 @@ function ActionsSection({
           multiline
           onChange={(value) => onChange('kiz', value)}
           onSearch={onSuggest}
-          onSelect={(option) => onChange('kiz', option.value)}
+          onSelect={selectKiz}
         />
 
         <label>
@@ -794,6 +832,19 @@ function productText(item?: TurnoverSkuReport | null) {
   return [item.name, item.primaryBarcode ? `ШК ${item.primaryBarcode}` : item.internalSku].filter(Boolean).join(' · ');
 }
 
+function productTextFromOption(option: KnownValueOption) {
+  const name = optionDataString(option, 'name');
+  const barcode = optionDataString(option, 'barcode');
+  const internalSku = optionDataString(option, 'internalSku');
+
+  return [name || option.label || option.value, barcode ? `ШК ${barcode}` : internalSku].filter(Boolean).join(' · ');
+}
+
+function optionDataString(option: KnownValueOption, key: string) {
+  const value = option.data?.[key];
+  return value === null || value === undefined ? '' : String(value);
+}
+
 function buildProductOptions(items: TurnoverSkuReport[], products: TurnoverSuggestions['products']): KnownValueOption[] {
   return uniqueOptions([
     ...items.map((item) => ({
@@ -802,7 +853,12 @@ function buildProductOptions(items: TurnoverSkuReport[], products: TurnoverSugge
       description: `Остаток ${formatNumber(item.currentQuantity)} шт · ${item.article ?? item.internalSku}`,
       data: {
         skuId: item.skuId,
+        name: item.name,
+        internalSku: item.internalSku,
+        clientSku: item.clientSku,
+        article: item.article,
         barcode: item.primaryBarcode,
+        boxCode: item.currentCells.find((cell) => cell.quantity > 0)?.boxCode ?? item.firstCell,
       },
     })),
     ...products.map((product) => ({
@@ -811,7 +867,12 @@ function buildProductOptions(items: TurnoverSkuReport[], products: TurnoverSugge
       description: `Остаток ${formatNumber(product.quantity)} шт · ${product.article ?? product.internalSku}`,
       data: {
         skuId: product.skuId,
+        name: product.name,
+        internalSku: product.internalSku,
+        clientSku: product.clientSku,
+        article: product.article,
         barcode: product.barcode,
+        boxCode: product.boxCode,
       },
     })),
   ]);
@@ -824,14 +885,29 @@ function buildBarcodeOptions(items: TurnoverSkuReport[], barcodes: TurnoverSugge
         value: barcode,
         label: barcode,
         description: `${item.name} · остаток ${formatNumber(item.currentQuantity)} шт`,
-        data: { skuId: item.skuId },
+        data: {
+          skuId: item.skuId,
+          name: item.name,
+          internalSku: item.internalSku,
+          clientSku: item.clientSku,
+          article: item.article,
+          barcode,
+          boxCode: item.currentCells.find((cell) => cell.quantity > 0)?.boxCode ?? item.firstCell,
+        },
       })),
     ),
     ...barcodes.map((barcode) => ({
       value: barcode.value,
       label: barcode.value,
       description: `${barcode.name} · ${barcode.internalSku}`,
-      data: { skuId: barcode.skuId },
+      data: {
+        skuId: barcode.skuId,
+        name: barcode.name,
+        internalSku: barcode.internalSku,
+        clientSku: barcode.clientSku,
+        article: barcode.article,
+        barcode: barcode.value,
+      },
     })),
   ]);
 }
@@ -843,14 +919,29 @@ function buildKizOptions(items: TurnoverSkuReport[], kiz: TurnoverSuggestions['k
         value: mark.value,
         label: mark.value,
         description: `${item.name} · ${mark.status}`,
-        data: { skuId: item.skuId },
+        data: {
+          skuId: item.skuId,
+          name: item.name,
+          internalSku: item.internalSku,
+          clientSku: item.clientSku,
+          article: item.article,
+          barcode: item.primaryBarcode,
+          boxCode: item.currentCells.find((cell) => cell.quantity > 0)?.boxCode ?? item.firstCell,
+        },
       })),
     ),
     ...kiz.map((mark) => ({
       value: mark.value,
       label: mark.value,
       description: [mark.name, mark.boxCode ? `ячейка ${mark.boxCode}` : null, mark.status].filter(Boolean).join(' · '),
-      data: { skuId: mark.skuId },
+      data: {
+        skuId: mark.skuId,
+        name: mark.name,
+        internalSku: mark.internalSku,
+        article: mark.article,
+        barcode: mark.barcode,
+        boxCode: mark.boxCode,
+      },
     })),
   ]);
 }
