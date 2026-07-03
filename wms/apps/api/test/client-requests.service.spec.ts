@@ -12,7 +12,7 @@ describe('ClientRequestsService', () => {
         findMany: vi.fn().mockResolvedValue([]),
       },
     };
-    const service = new ClientRequestsService(prisma as never, new ClientScopeService());
+    const service = new ClientRequestsService(prisma as never, new ClientScopeService(), stockOperations() as never);
 
     await service.list({}, user({ clientIds: ['client-1', 'client-2'] }));
 
@@ -40,7 +40,7 @@ describe('ClientRequestsService', () => {
       },
       $transaction: vi.fn((callback) => callback(tx)),
     };
-    const service = new ClientRequestsService(prisma as never, new ClientScopeService());
+    const service = new ClientRequestsService(prisma as never, new ClientScopeService(), stockOperations() as never);
 
     await service.create(
       {
@@ -81,7 +81,7 @@ describe('ClientRequestsService', () => {
         findMany: vi.fn().mockResolvedValue([]),
       },
     };
-    const service = new ClientRequestsService(prisma as never, new ClientScopeService());
+    const service = new ClientRequestsService(prisma as never, new ClientScopeService(), stockOperations() as never);
 
     await expect(
       service.create(
@@ -103,7 +103,7 @@ describe('ClientRequestsService', () => {
         findMany: vi.fn().mockResolvedValue([]),
       },
     };
-    const service = new ClientRequestsService(prisma as never, new ClientScopeService());
+    const service = new ClientRequestsService(prisma as never, new ClientScopeService(), stockOperations() as never);
 
     await expect(
       service.create(
@@ -116,6 +116,89 @@ describe('ClientRequestsService', () => {
         user({ clientIds: ['client-1'], writableClientIds: ['client-1'] }),
       ),
     ).rejects.toThrow(BadRequestException);
+  });
+
+  it('при ручном статусе DONE списывает outbound-заявку через складское SHIP-движение', async () => {
+    const stock = {
+      shipClientRequestFromCurrentStock: vi.fn().mockResolvedValue({ status: 'APPLIED', requestId: 'request-1' }),
+    };
+    const tx = {
+      clientRequest: {
+        update: vi.fn().mockResolvedValue({
+          id: 'request-1',
+          clientId: 'client-1',
+          type: ClientRequestType.OUTBOUND,
+          status: ClientRequestStatus.DONE,
+          title: 'Отгрузка',
+          destinationCity: 'Казань',
+          items: [],
+          files: [],
+          packages: [],
+          client: { id: 'client-1', code: 'CL-1', name: 'Клиент' },
+        }),
+      },
+      clientRequestEvent: {
+        create: vi.fn().mockResolvedValue({ id: 'event-1' }),
+      },
+      clientNotificationPreference: {
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
+      clientNotification: {
+        create: vi.fn().mockResolvedValue({ id: 'notification-1' }),
+      },
+    };
+    const prisma = {
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'request-1',
+          clientId: 'client-1',
+          type: ClientRequestType.OUTBOUND,
+          status: ClientRequestStatus.PACKED,
+          title: 'Отгрузка',
+        }),
+      },
+      $transaction: vi.fn((callback) => callback(tx)),
+    };
+    const service = new ClientRequestsService(prisma as never, new ClientScopeService(), stock as never);
+
+    const updated = await service.updateStatus(
+      'request-1',
+      { status: ClientRequestStatus.DONE, managerComment: 'Сдано' },
+      user({
+        clientIds: ['client-1'],
+        writableClientIds: ['client-1'],
+        permissionCodes: ['client-requests:read', 'client-requests:write', 'client-requests:status'],
+      }),
+    );
+
+    expect(stock.shipClientRequestFromCurrentStock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: 'request-1',
+        idempotencyKey: 'manual-status-done:request-1',
+        comment: 'Сдано',
+      }),
+      expect.any(Object),
+    );
+    expect(tx.clientRequest.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'request-1' },
+        data: expect.objectContaining({
+          status: ClientRequestStatus.DONE,
+          managerComment: 'Сдано',
+          assignedToUserId: 'user-1',
+        }),
+      }),
+    );
+    expect(tx.clientRequestEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          eventType: ClientRequestEventType.STATUS_CHANGED,
+          statusFrom: ClientRequestStatus.PACKED,
+          statusTo: ClientRequestStatus.DONE,
+        }),
+      }),
+    );
+    expect(updated).toMatchObject({ id: 'request-1', status: ClientRequestStatus.DONE });
   });
 
   it('позволяет клиенту отменить свою заявку до начала сборки', async () => {
@@ -144,7 +227,7 @@ describe('ClientRequestsService', () => {
       },
       $transaction: vi.fn((callback) => callback(tx)),
     };
-    const service = new ClientRequestsService(prisma as never, new ClientScopeService());
+    const service = new ClientRequestsService(prisma as never, new ClientScopeService(), stockOperations() as never);
 
     const updated = await service.cancel('request-1', user({ clientIds: ['client-1'], writableClientIds: ['client-1'] }));
 
@@ -182,7 +265,7 @@ describe('ClientRequestsService', () => {
         }),
       },
     };
-    const service = new ClientRequestsService(prisma as never, new ClientScopeService());
+    const service = new ClientRequestsService(prisma as never, new ClientScopeService(), stockOperations() as never);
 
     await expect(
       service.cancel('request-1', user({ clientIds: ['client-1'], writableClientIds: ['client-1'] })),
@@ -201,5 +284,11 @@ function user(overrides: Partial<AuthUser>): AuthUser {
     clientIds: [],
     writableClientIds: [],
     ...overrides,
+  };
+}
+
+function stockOperations() {
+  return {
+    shipClientRequestFromCurrentStock: vi.fn(),
   };
 }

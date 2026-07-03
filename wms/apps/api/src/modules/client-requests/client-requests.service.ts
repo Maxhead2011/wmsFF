@@ -5,6 +5,7 @@ import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { isClientNotificationEnabled } from '../client-notifications/client-notification-preferences';
 import { TelegramNotificationService } from '../client-notifications/telegram-notification.service';
+import { StockOperationsService } from '../stock/stock-operations.service';
 import { clientRequestFileSummarySelect } from './client-request-files.service';
 import { clientRequestPackageInclude } from './client-request-packages.include';
 import { CreateClientRequestDto } from './dto/create-client-request.dto';
@@ -17,6 +18,7 @@ export class ClientRequestsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly clientScopes: ClientScopeService,
+    private readonly stockOperations: StockOperationsService,
     private readonly telegram?: TelegramNotificationService,
   ) {}
 
@@ -191,7 +193,7 @@ export class ClientRequestsService {
   async updateStatus(id: string, dto: UpdateClientRequestStatusDto, user: AuthUser) {
     const request = await this.prisma.clientRequest.findUnique({
       where: { id },
-      select: { id: true, clientId: true, status: true, title: true },
+      select: { id: true, clientId: true, type: true, status: true, title: true },
     });
 
     if (!request) {
@@ -201,7 +203,12 @@ export class ClientRequestsService {
     // Русский комментарий: даже менеджер с ограниченным scope не меняет статусы чужого клиента.
     this.clientScopes.requireClientAccess(user, request.clientId, 'write');
 
-    const updated = await this.prisma.$transaction(async (tx) => {
+    const shouldFinalizeOutbound =
+      request.type === ClientRequestType.OUTBOUND && request.status !== dto.status && dto.status === ClientRequestStatus.DONE;
+
+    const updated = shouldFinalizeOutbound
+      ? await this.finalizeOutboundByManualStatus(request, dto, user)
+      : await this.prisma.$transaction(async (tx) => {
       const updated = await tx.clientRequest.update({
         where: { id },
         data: {
@@ -256,6 +263,63 @@ export class ClientRequestsService {
     }
 
     return updated;
+  }
+
+  private async finalizeOutboundByManualStatus(
+    request: { id: string; clientId: string; status: ClientRequestStatus; title: string },
+    dto: UpdateClientRequestStatusDto,
+    user: AuthUser,
+  ) {
+    const comment = normalizeText(dto.managerComment) ?? 'Заявка сдана вручную; остатки списаны автоматически.';
+
+    await this.stockOperations.shipClientRequestFromCurrentStock(
+      {
+        requestId: request.id,
+        idempotencyKey: `manual-status-done:${request.id}`,
+        comment,
+      },
+      user,
+    );
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.clientRequest.update({
+        where: { id: request.id },
+        data: {
+          status: ClientRequestStatus.DONE,
+          managerComment: comment,
+          assignedToUserId: user.id,
+        },
+        include: clientRequestInclude,
+      });
+
+      await tx.clientRequestEvent.create({
+        data: {
+          requestId: request.id,
+          clientId: request.clientId,
+          eventType: ClientRequestEventType.STATUS_CHANGED,
+          title: 'Статус заявки изменен',
+          body: comment,
+          statusFrom: request.status,
+          statusTo: ClientRequestStatus.DONE,
+          createdByUserId: user.id,
+        },
+      });
+
+      if (await isClientNotificationEnabled(tx, request.clientId, ClientNotificationEvent.REQUEST_STATUS_CHANGED)) {
+        await tx.clientNotification.create({
+          data: {
+            clientId: request.clientId,
+            requestId: request.id,
+            title: 'Статус заявки изменен',
+            body: `${request.title}: ${request.status} -> ${ClientRequestStatus.DONE}`,
+            severity: 'INFO',
+            createdByUserId: user.id,
+          },
+        });
+      }
+
+      return updated;
+    });
   }
 
   async cancel(id: string, user: AuthUser) {

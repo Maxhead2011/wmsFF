@@ -544,6 +544,95 @@ describe('StockOperationsService', () => {
       }),
     );
   });
+
+  it('ручное закрытие outbound-заявки списывает товар из текущего доступного остатка', async () => {
+    const tx = {
+      stockMovement: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'request-1',
+          clientId: 'client-1',
+          type: 'OUTBOUND',
+          status: 'APPROVED',
+          title: 'Ручная сдача',
+          items: [{ id: 'item-1', skuId: 'sku-1', barcode: null, quantity: 3 }],
+        }),
+        update: vi.fn().mockResolvedValue(undefined),
+      },
+      sku: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'sku-1', internalSku: 'SKU-1' }),
+      },
+      stockBalance: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'available-balance',
+            balanceKey: 'client-1:sku-1:no-box:no-pallet:AVAILABLE',
+            clientId: 'client-1',
+            skuId: 'sku-1',
+            boxId: null,
+            palletId: null,
+            status: 'AVAILABLE',
+            quantity: 3,
+            updatedAt: new Date('2026-07-03T00:00:00.000Z'),
+          },
+        ]),
+        update: vi.fn().mockResolvedValue({ id: 'available-balance', quantity: 0 }),
+        delete: vi.fn().mockResolvedValue(undefined),
+      },
+    };
+    const shipService = new StockOperationsService(
+      { $transaction: (callback: (tx: typeof tx) => unknown) => callback(tx) } as never,
+      { requireClientAccess: vi.fn() } as never,
+      { balanceKey: vi.fn() } as never,
+    );
+
+    await expect(
+      shipService.shipClientRequestFromCurrentStock(
+        {
+          requestId: 'request-1',
+          idempotencyKey: 'manual-done',
+          comment: 'Сдано вручную',
+        },
+        user(),
+      ),
+    ).resolves.toMatchObject({
+      status: 'APPLIED',
+      requestId: 'request-1',
+      shippedLines: [
+        {
+          itemId: 'item-1',
+          skuId: 'sku-1',
+          requestedQuantity: 3,
+          shippedQuantity: 3,
+        },
+      ],
+    });
+
+    expect(tx.stockBalance.delete).toHaveBeenCalledWith({ where: { id: 'available-balance' } });
+    expect(tx.stockMovement.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: 'SHIP',
+          status: 'AVAILABLE',
+          quantity: -3,
+          sourceDocument: 'request-1',
+          idempotencyKey: 'manual-done:item-1:available-balance:out',
+        }),
+      }),
+    );
+    expect(tx.clientRequest.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'DONE',
+          assignedToUserId: 'user-1',
+          managerComment: 'Сдано вручную',
+        }),
+      }),
+    );
+  });
 });
 
 function user(): AuthUser {

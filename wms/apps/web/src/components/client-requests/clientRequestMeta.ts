@@ -15,7 +15,7 @@ export const requestStatusOptions: Array<{ value: ClientRequestStatus; label: st
   { value: 'APPROVED', label: 'Согласована' },
   { value: 'IN_WORK', label: 'В работе' },
   { value: 'PACKED', label: 'Упакована' },
-  { value: 'DONE', label: 'Готово' },
+  { value: 'DONE', label: 'Сдано' },
   { value: 'CANCELLED', label: 'Отменена' },
   { value: 'REJECTED', label: 'Отклонена' },
 ];

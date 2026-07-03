@@ -130,7 +130,7 @@ export function requestStatusLabel(value: ClientRequestStatus) {
     APPROVED: 'Согласована',
     IN_WORK: 'В работе',
     PACKED: 'Упакована',
-    DONE: 'Готово',
+    DONE: 'Сдано',
     CANCELLED: 'Отменена',
     REJECTED: 'Отклонена',
   };

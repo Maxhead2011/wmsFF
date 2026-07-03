@@ -427,6 +427,96 @@ export class StockOperationsService {
     });
   }
 
+  shipClientRequestFromCurrentStock(dto: FulfillClientRequestDto, user: AuthUser) {
+    const baseKey = dto.idempotencyKey ?? `manual-ship-request:${dto.requestId}`;
+
+    return this.prisma.$transaction(async (tx) => {
+      const existingMovement = await tx.stockMovement.findFirst({
+        where: {
+          OR: [
+            { idempotencyKey: { startsWith: `${baseKey}:` } },
+            {
+              sourceDocument: dto.requestId,
+              type: MovementType.SHIP,
+              quantity: { lt: 0 },
+            },
+          ],
+        },
+      });
+
+      const request = await this.loadOutboundRequest(tx, dto.requestId, user, 'РћС‚РіСЂСѓР·РєР°');
+
+      if (request.status === ClientRequestStatus.DONE) {
+        return {
+          idempotencyKey: baseKey,
+          status: 'ALREADY_APPLIED',
+          requestId: request.id,
+          clientId: request.clientId,
+        };
+      }
+
+      this.ensureRequestCanMove(request, 'РѕС‚РіСЂСѓР¶Р°С‚СЊ');
+
+      if (existingMovement) {
+        await tx.clientRequest.update({
+          where: { id: request.id },
+          data: {
+            status: ClientRequestStatus.DONE,
+            assignedToUserId: user.id,
+            managerComment: dto.comment ?? 'Р—Р°СЏРІРєР° СЃРґР°РЅР°; СЃРїРёСЃР°РЅРёРµ СЂР°РЅРµРµ СѓР¶Рµ Р±С‹Р»Рѕ РІС‹РїРѕР»РЅРµРЅРѕ.',
+          },
+        });
+
+        return {
+          idempotencyKey: baseKey,
+          status: 'ALREADY_APPLIED',
+          requestId: request.id,
+          clientId: request.clientId,
+        };
+      }
+
+      const plan = await this.planRequestShipment(tx, request.clientId, request.items);
+
+      for (const line of plan.lines) {
+        for (const allocation of line.allocations) {
+          await this.decrementSourceBalance(tx, allocation.balance, allocation.quantity);
+
+          await tx.stockMovement.create({
+            data: {
+              clientId: request.clientId,
+              skuId: line.skuId,
+              boxId: allocation.balance.boxId,
+              palletId: allocation.balance.palletId,
+              type: MovementType.SHIP,
+              status: allocation.balance.status,
+              quantity: -allocation.quantity,
+              sourceDocument: request.id,
+              idempotencyKey: `${baseKey}:${line.itemId}:${allocation.balance.id}:out`,
+              comment: dto.comment ?? `Р СѓС‡РЅРѕРµ Р·Р°РєСЂС‹С‚РёРµ Р·Р°СЏРІРєРё ${request.title} СЃРѕ СЃРїРёСЃР°РЅРёРµРј РѕСЃС‚Р°С‚РєР°`,
+            },
+          });
+        }
+      }
+
+      await tx.clientRequest.update({
+        where: { id: request.id },
+        data: {
+          status: ClientRequestStatus.DONE,
+          assignedToUserId: user.id,
+          managerComment: dto.comment ?? 'Р—Р°СЏРІРєР° СЃРґР°РЅР°; РѕСЃС‚Р°С‚РєРё СЃРїРёСЃР°РЅС‹ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё.',
+        },
+      });
+
+      return {
+        idempotencyKey: baseKey,
+        status: 'APPLIED',
+        requestId: request.id,
+        clientId: request.clientId,
+        shippedLines: this.formatFulfillmentLines(plan, 'shippedQuantity'),
+      };
+    });
+  }
+
   receiveIntoBox(dto: ReceiveIntoBoxInput, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
 
@@ -576,6 +666,73 @@ export class StockOperationsService {
     items: RequestItemForAllocation[],
   ) {
     return this.planRequestAllocations(tx, clientId, items, StockStatus.AVAILABLE);
+  }
+
+  private async planRequestShipment(
+    tx: Prisma.TransactionClient,
+    clientId: string,
+    items: RequestItemForAllocation[],
+  ): Promise<RequestAllocationPlan> {
+    const lines = [];
+    const balanceRemaining = new Map<string, number>();
+    const sourceStatuses: StockStatus[] = [StockStatus.SHIPPING, StockStatus.PACKING, StockStatus.AVAILABLE];
+
+    for (const item of items) {
+      const sku = await this.resolveSku(tx, {
+        clientId,
+        skuId: item.skuId ?? undefined,
+        barcode: item.barcode ?? undefined,
+      });
+      const balances = await tx.stockBalance.findMany({
+        where: {
+          clientId,
+          skuId: sku.id,
+          status: { in: sourceStatuses },
+          quantity: { gt: 0 },
+        },
+        orderBy: [{ updatedAt: 'asc' }],
+      });
+      balances.sort((left, right) => {
+        const statusPriority = sourceStatuses.indexOf(left.status) - sourceStatuses.indexOf(right.status);
+        if (statusPriority !== 0) {
+          return statusPriority;
+        }
+        return (left.updatedAt?.getTime?.() ?? 0) - (right.updatedAt?.getTime?.() ?? 0);
+      });
+
+      let remaining = item.quantity;
+      const allocations: Array<{ balance: StockBalance; quantity: number }> = [];
+
+      for (const balance of balances) {
+        if (remaining <= 0) {
+          break;
+        }
+
+        const available = balanceRemaining.has(balance.id) ? balanceRemaining.get(balance.id)! : balance.quantity;
+        if (available <= 0) {
+          continue;
+        }
+
+        const quantity = Math.min(available, remaining);
+        allocations.push({ balance, quantity });
+        balanceRemaining.set(balance.id, available - quantity);
+        remaining -= quantity;
+      }
+
+      if (remaining > 0) {
+        throw new BadRequestException(`Недостаточно остатка для списания позиции ${sku.internalSku}.`);
+      }
+
+      lines.push({
+        itemId: item.id,
+        skuId: sku.id,
+        barcode: item.barcode,
+        requestedQuantity: item.quantity,
+        allocations,
+      });
+    }
+
+    return { lines };
   }
 
   private async planRequestAllocations(
