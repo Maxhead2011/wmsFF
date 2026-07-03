@@ -8,7 +8,9 @@ import {
   updateUserClientScopes,
   type AuthSession,
   type ClientKind,
+  type ClientLogisticsInvoiceMode,
   type ClientSummary,
+  type ClientStorageBillingMode,
   type CreateClientPayload,
   type UserSummary,
 } from '../../lib/api';
@@ -23,6 +25,17 @@ const clientKindOptions: Array<{ value: ClientKind; label: string }> = [
   { value: 'INDIVIDUAL_ENTREPRENEUR', label: 'Индивидуальный предприниматель' },
   { value: 'SELF_EMPLOYED', label: 'Самозанятый' },
   { value: 'INDIVIDUAL', label: 'Физическое лицо' },
+];
+
+const logisticsInvoiceModeOptions: Array<{ value: ClientLogisticsInvoiceMode; label: string }> = [
+  { value: 'SEPARATE', label: 'Логистика отдельным счетом' },
+  { value: 'SAME_INVOICE', label: 'Логистика в общем счете' },
+  { value: 'DISABLED', label: 'Не выставлять автоматически' },
+];
+
+const storageBillingModeOptions: Array<{ value: ClientStorageBillingMode; label: string }> = [
+  { value: 'MONTHLY', label: 'Хранение раз в месяц' },
+  { value: 'ON_SHIPMENT', label: 'Хранение по отгрузке' },
 ];
 
 const emptyClientForm = {
@@ -41,6 +54,8 @@ const emptyClientForm = {
   bankAccount: '',
   correspondentAccount: '',
   storageAccountingEnabled: false,
+  logisticsInvoiceMode: 'SEPARATE' as ClientLogisticsInvoiceMode,
+  storageBillingMode: 'MONTHLY' as ClientStorageBillingMode,
   fulfillmentManagerUserId: '',
 };
 
@@ -285,6 +300,32 @@ export function ClientCreateForm({ session }: ClientCreateFormProps) {
             <span>Вести учет хранения</span>
           </label>
           <label>
+            <span>Счета логистики</span>
+            <select
+              value={form.logisticsInvoiceMode}
+              onChange={(event) => setForm({ ...form, logisticsInvoiceMode: event.target.value as ClientLogisticsInvoiceMode })}
+            >
+              {logisticsInvoiceModeOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Начисление хранения</span>
+            <select
+              value={form.storageBillingMode}
+              onChange={(event) => setForm({ ...form, storageBillingMode: event.target.value as ClientStorageBillingMode })}
+            >
+              {storageBillingModeOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
             <span>Юр. адрес</span>
             <input value={form.legalAddress} onChange={(event) => setForm({ ...form, legalAddress: event.target.value })} />
           </label>
@@ -329,6 +370,8 @@ export function ClientCreateForm({ session }: ClientCreateFormProps) {
               `${createdClient.code} - ${createdClient.name}`,
               `${clientKindLabel(createdClient.clientKind)} · ИНН ${createdClient.inn}`,
               createdClient.storageAccountingEnabled ? 'Учет хранения включен' : 'Учет хранения отключен',
+              logisticsInvoiceModeLabel(createdClient.logisticsInvoiceMode),
+              storageBillingModeLabel(createdClient.storageBillingMode),
               selectedFulfillmentManager ? `Менеджер фулфилмента: ${selectedFulfillmentManager.name}` : 'Менеджер фулфилмента не назначен',
             ]}
           />
@@ -478,6 +521,8 @@ function compactPayload(form: typeof emptyClientForm): CreateClientPayload {
     ...optionalString('bankAccount', form.bankAccount),
     ...optionalString('correspondentAccount', form.correspondentAccount),
     storageAccountingEnabled: form.storageAccountingEnabled,
+    logisticsInvoiceMode: form.logisticsInvoiceMode,
+    storageBillingMode: form.storageBillingMode,
     ...optionalString('fulfillmentManagerUserId', form.fulfillmentManagerUserId),
   };
 }
@@ -489,6 +534,14 @@ function optionalString<T extends string>(key: T, value: string): Partial<Record
 
 function clientKindLabel(kind: ClientKind) {
   return clientKindOptions.find((option) => option.value === kind)?.label ?? kind;
+}
+
+function logisticsInvoiceModeLabel(mode: ClientLogisticsInvoiceMode) {
+  return logisticsInvoiceModeOptions.find((option) => option.value === mode)?.label ?? mode;
+}
+
+function storageBillingModeLabel(mode: ClientStorageBillingMode) {
+  return storageBillingModeOptions.find((option) => option.value === mode)?.label ?? mode;
 }
 
 function canUse(session: AuthSession, permission: string) {

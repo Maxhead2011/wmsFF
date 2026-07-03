@@ -14,6 +14,7 @@ import {
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
+import { RequestBillingAutomationService } from '../billing/request-billing-automation.service';
 import { clientRequestPackageInclude } from '../client-requests/client-request-packages.include';
 import { FulfillClientRequestDto } from './dto/fulfill-client-request.dto';
 import { PickClientRequestDto } from './dto/pick-client-request.dto';
@@ -54,6 +55,7 @@ type RequestAllocationPlan = {
   lines: Array<{
     itemId: string;
     skuId: string;
+    skuWeightGrams: number | null;
     barcode: string | null;
     requestedQuantity: number;
     allocations: Array<{ balance: StockBalance; quantity: number }>;
@@ -68,6 +70,7 @@ type RequestPackageInput = {
   widthCm?: number;
   heightCm?: number;
   comment?: string;
+  metadata?: Prisma.InputJsonValue;
   items: Array<{
     requestItemId: string;
     skuId: string;
@@ -82,6 +85,7 @@ export class StockOperationsService {
     private readonly prisma: PrismaService,
     private readonly clientScopes: ClientScopeService,
     private readonly balances: StockBalancesService,
+    private readonly billingAutomation?: RequestBillingAutomationService,
   ) {}
 
   transferBetweenBoxes(dto: TransferBetweenBoxesDto, user: AuthUser) {
@@ -357,10 +361,10 @@ export class StockOperationsService {
     });
   }
 
-  shipClientRequest(dto: FulfillClientRequestDto, user: AuthUser) {
+  async shipClientRequest(dto: FulfillClientRequestDto, user: AuthUser) {
     const baseKey = dto.idempotencyKey ?? `ship-request:${dto.requestId}`;
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const existingMovement = await tx.stockMovement.findFirst({
         where: { idempotencyKey: { startsWith: `${baseKey}:` } },
       });
@@ -425,12 +429,18 @@ export class StockOperationsService {
         shippedLines: this.formatFulfillmentLines(plan, 'shippedQuantity'),
       };
     });
+
+    if (result.status === 'APPLIED') {
+      await this.billingAutomation?.generateForDoneRequest(result.requestId, user);
+    }
+
+    return result;
   }
 
-  shipClientRequestFromCurrentStock(dto: FulfillClientRequestDto, user: AuthUser) {
+  async shipClientRequestFromCurrentStock(dto: FulfillClientRequestDto, user: AuthUser) {
     const baseKey = dto.idempotencyKey ?? `manual-ship-request:${dto.requestId}`;
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const existingMovement = await tx.stockMovement.findFirst({
         where: {
           OR: [
@@ -475,7 +485,20 @@ export class StockOperationsService {
         };
       }
 
+      this.ensureManualDonePackageInput(dto);
       const plan = await this.planRequestShipment(tx, request.clientId, request.items);
+      const packages = await this.createRequestPackages(tx, {
+        request,
+        plan,
+        dto,
+        user,
+      });
+      await this.createFulfillmentBillingCharges(tx, {
+        request,
+        packages,
+        user,
+        serviceDate: new Date(),
+      });
 
       for (const line of plan.lines) {
         for (const allocation of line.allocations) {
@@ -513,8 +536,15 @@ export class StockOperationsService {
         requestId: request.id,
         clientId: request.clientId,
         shippedLines: this.formatFulfillmentLines(plan, 'shippedQuantity'),
+        packages,
       };
     });
+
+    if (result.status === 'APPLIED' || result.status === 'ALREADY_APPLIED') {
+      await this.billingAutomation?.generateForDoneRequest(result.requestId, user);
+    }
+
+    return result;
   }
 
   receiveIntoBox(dto: ReceiveIntoBoxInput, user: AuthUser) {
@@ -726,6 +756,7 @@ export class StockOperationsService {
       lines.push({
         itemId: item.id,
         skuId: sku.id,
+        skuWeightGrams: sku.weightGrams,
         barcode: item.barcode,
         requestedQuantity: item.quantity,
         allocations,
@@ -786,6 +817,7 @@ export class StockOperationsService {
       lines.push({
         itemId: item.id,
         skuId: sku.id,
+        skuWeightGrams: sku.weightGrams,
         barcode: item.barcode,
         requestedQuantity: item.quantity,
         allocations,
@@ -870,6 +902,7 @@ export class StockOperationsService {
             widthCm: packageInput.widthCm,
             heightCm: packageInput.heightCm,
             comment: packageInput.comment,
+            metadata: packageInput.metadata,
             createdByUserId: input.user.id,
             items: {
               create: packageInput.items.map((item) => ({
@@ -896,17 +929,21 @@ export class StockOperationsService {
     const lineByItemId = new Map(plan.lines.map((line) => [line.itemId, line]));
 
     if (!dto.packages?.length) {
+      const packageCode = `PKG-${requestId.slice(0, 8)}-1`;
+      const items = plan.lines.map((line) => ({
+        requestItemId: line.itemId,
+        skuId: line.skuId,
+        skuWeightGrams: line.skuWeightGrams,
+        barcode: line.barcode,
+        quantity: line.requestedQuantity,
+      }));
       return [
         {
-          packageCode: `PKG-${requestId.slice(0, 8)}-1`,
+          packageCode,
           packageType: 'BOX',
           comment: dto.comment?.trim() || undefined,
-          items: plan.lines.map((line) => ({
-            requestItemId: line.itemId,
-            skuId: line.skuId,
-            barcode: line.barcode,
-            quantity: line.requestedQuantity,
-          })),
+          metadata: validateBoxWeight(packageCode, { packageType: 'BOX' }, items),
+          items: items.map(({ skuWeightGrams: _skuWeightGrams, ...item }) => item),
         },
       ];
     }
@@ -924,6 +961,24 @@ export class StockOperationsService {
         throw new BadRequestException(`В упаковочном месте ${packageCode} нет товарных строк.`);
       }
 
+      const items = packageDto.items.map((item) => {
+        const line = lineByItemId.get(item.requestItemId);
+        if (!line) {
+          throw new BadRequestException(`Позиция ${item.requestItemId} не найдена в заявке.`);
+        }
+
+        totalsByItemId.set(item.requestItemId, (totalsByItemId.get(item.requestItemId) ?? 0) + item.quantity);
+
+        return {
+          requestItemId: item.requestItemId,
+          skuId: line.skuId,
+          skuWeightGrams: line.skuWeightGrams,
+          barcode: line.barcode,
+          quantity: item.quantity,
+        };
+      });
+      const metadata = validateBoxWeight(packageCode, packageDto, items);
+
       return {
         packageCode,
         packageType: packageDto.packageType?.trim() || undefined,
@@ -932,21 +987,8 @@ export class StockOperationsService {
         widthCm: packageDto.widthCm,
         heightCm: packageDto.heightCm,
         comment: packageDto.comment?.trim() || undefined,
-        items: packageDto.items.map((item) => {
-          const line = lineByItemId.get(item.requestItemId);
-          if (!line) {
-            throw new BadRequestException(`Позиция ${item.requestItemId} не найдена в заявке.`);
-          }
-
-          totalsByItemId.set(item.requestItemId, (totalsByItemId.get(item.requestItemId) ?? 0) + item.quantity);
-
-          return {
-            requestItemId: item.requestItemId,
-            skuId: line.skuId,
-            barcode: line.barcode,
-            quantity: item.quantity,
-          };
-        }),
+        metadata,
+        items: items.map(({ skuWeightGrams: _skuWeightGrams, ...item }) => item),
       };
     });
 
@@ -957,6 +999,37 @@ export class StockOperationsService {
     }
 
     return packages;
+  }
+
+  private ensureManualDonePackageInput(dto: FulfillClientRequestDto) {
+    if (!dto.comment?.trim()) {
+      throw new BadRequestException('Для ручного закрытия отгрузки нужен комментарий.');
+    }
+
+    if (!dto.packages?.length) {
+      throw new BadRequestException('Для ручного закрытия отгрузки укажите фактические упаковочные места.');
+    }
+
+    if (dto.boxes == null || dto.pallets == null || dto.packedUnits == null) {
+      throw new BadRequestException('Для ручного закрытия отгрузки укажите количество коробов, паллет и упакованных единиц.');
+    }
+
+    const counts = dto.packages.reduce(
+      (result, pack) => {
+        if (isPalletPackage(pack.packageType)) {
+          result.pallets += 1;
+        } else {
+          result.boxes += 1;
+        }
+        result.packedUnits += pack.items.reduce((sum, item) => sum + item.quantity, 0);
+        return result;
+      },
+      { boxes: 0, pallets: 0, packedUnits: 0 },
+    );
+
+    if (counts.boxes !== dto.boxes || counts.pallets !== dto.pallets || counts.packedUnits !== dto.packedUnits) {
+      throw new BadRequestException('Итоги ручного закрытия должны совпадать с составом упаковочных мест.');
+    }
   }
 
   private async createFulfillmentBillingCharges(
@@ -1263,6 +1336,47 @@ const FULFILLMENT_BILLING_SERVICES = {
     defaultPriceRub: 250,
   },
 } as const;
+
+const MAX_BOX_WEIGHT_GRAMS = 25_000;
+
+function validateBoxWeight(
+  packageCode: string,
+  packageDto: { packageType?: string; weightGrams?: number },
+  items: Array<{ quantity: number; skuWeightGrams: number | null }>,
+): Prisma.InputJsonValue | undefined {
+  if (isPalletPackage(packageDto.packageType)) {
+    return undefined;
+  }
+
+  if (packageDto.weightGrams != null) {
+    if (packageDto.weightGrams > MAX_BOX_WEIGHT_GRAMS) {
+      throw new BadRequestException(`Вес короба ${packageCode} превышает 25 кг.`);
+    }
+    return undefined;
+  }
+
+  const missingWeights = items.filter((item) => item.skuWeightGrams == null).reduce((sum, item) => sum + item.quantity, 0);
+  if (missingWeights > 0) {
+    return {
+      warnings: [
+        {
+          code: 'SKU_WEIGHT_MISSING',
+          message: 'Вес короба не проверен: у части SKU не заполнен weightGrams.',
+          missingUnits: missingWeights,
+        },
+      ],
+    };
+  }
+
+  const calculatedWeightGrams = items.reduce((sum, item) => sum + (item.skuWeightGrams ?? 0) * item.quantity, 0);
+  if (calculatedWeightGrams > MAX_BOX_WEIGHT_GRAMS) {
+    throw new BadRequestException(`Расчетный вес короба ${packageCode} превышает 25 кг.`);
+  }
+
+  return {
+    calculatedWeightGrams,
+  };
+}
 
 function isPalletPackage(packageType?: string | null) {
   return ['PALLET', 'PALLETTE', 'ПАЛЛЕТ', 'ПАЛЛЕТА'].includes((packageType ?? '').trim().toUpperCase());

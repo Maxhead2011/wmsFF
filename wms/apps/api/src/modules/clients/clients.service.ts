@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { ClientKind, ClientStatus, Prisma } from '@prisma/client';
+import { ClientKind, ClientLogisticsInvoiceMode, ClientStatus, ClientStorageBillingMode, Prisma } from '@prisma/client';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AuthUser } from '../auth/auth.types';
@@ -169,6 +169,8 @@ export class ClientsService {
             ? {}
             : { fulfillmentManagerUserId: normalizeNullableString(dto.fulfillmentManagerUserId) }),
           ...(dto.storageAccountingEnabled === undefined ? {} : { storageAccountingEnabled: dto.storageAccountingEnabled }),
+          ...(dto.logisticsInvoiceMode === undefined ? {} : { logisticsInvoiceMode: dto.logisticsInvoiceMode }),
+          ...(dto.storageBillingMode === undefined ? {} : { storageBillingMode: dto.storageBillingMode }),
           ...(dto.storesWithoutBoxes === undefined ? {} : { storesWithoutBoxes: dto.storesWithoutBoxes }),
           ...nullableUpdateClientData(dto),
         },
@@ -278,6 +280,8 @@ export class ClientsService {
             inn: dto.inn.trim(),
             ...optionalCreateClientData(dto),
             storageAccountingEnabled: dto.storageAccountingEnabled ?? false,
+            logisticsInvoiceMode: dto.logisticsInvoiceMode ?? ClientLogisticsInvoiceMode.SEPARATE,
+            storageBillingMode: dto.storageBillingMode ?? ClientStorageBillingMode.MONTHLY,
             storesWithoutBoxes: dto.storesWithoutBoxes ?? false,
             fulfillmentManagerUserId: normalizeNullableString(dto.fulfillmentManagerUserId),
           },
@@ -320,6 +324,8 @@ export class ClientsService {
         name: row.name,
         legalName: row.name,
         storageAccountingEnabled: false,
+        logisticsInvoiceMode: ClientLogisticsInvoiceMode.SEPARATE,
+        storageBillingMode: ClientStorageBillingMode.MONTHLY,
         ...(row.registrationDate ? { createdAt: row.registrationDate } : {}),
       },
       select: this.clientSummarySelect(),
@@ -381,6 +387,8 @@ export class ClientsService {
       correspondentAccount: true,
       storageAccountingEnabled: true,
       storagePriceRubPerLiterDay: true,
+      logisticsInvoiceMode: true,
+      storageBillingMode: true,
       storesWithoutBoxes: true,
       fulfillmentManagerUserId: true,
       fulfillmentManager: {

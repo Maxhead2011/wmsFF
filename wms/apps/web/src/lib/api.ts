@@ -36,6 +36,8 @@ export type ClientSummary = {
   correspondentAccount: string | null;
   storageAccountingEnabled: boolean;
   storagePriceRubPerLiterDay: string | number | null;
+  logisticsInvoiceMode: ClientLogisticsInvoiceMode;
+  storageBillingMode: ClientStorageBillingMode;
   storesWithoutBoxes?: boolean;
   fulfillmentManagerUserId: string | null;
   fulfillmentManager: {
@@ -50,6 +52,10 @@ export type ClientSummary = {
 export type ClientKind = 'LEGAL_ENTITY' | 'INDIVIDUAL_ENTREPRENEUR' | 'SELF_EMPLOYED' | 'INDIVIDUAL';
 
 export type ClientStatus = 'ACTIVE' | 'PAUSED' | 'ARCHIVED';
+
+export type ClientLogisticsInvoiceMode = 'SEPARATE' | 'SAME_INVOICE' | 'DISABLED';
+
+export type ClientStorageBillingMode = 'MONTHLY' | 'ON_SHIPMENT';
 
 export type MarketplaceType = 'WILDBERRIES' | 'OZON' | 'YANDEX_MARKET' | 'SBER_MARKET' | 'OTHER';
 
@@ -92,6 +98,8 @@ export type BillingChargeStatus = 'DRAFT' | 'APPROVED' | 'CANCELLED';
 export type BillingChargeSource = 'MANUAL' | 'STORAGE' | 'LOGISTICS';
 
 export type BillingInvoiceStatus = 'DRAFT' | 'ISSUED' | 'PAID' | 'CANCELLED';
+
+export type BillingInvoiceSource = 'MANUAL' | 'REQUEST_DONE' | 'LOGISTICS';
 
 export type BillingPaymentStatus = 'RECORDED' | 'CANCELLED';
 
@@ -269,6 +277,9 @@ export type BillingInvoiceSummary = {
   periodTo: string;
   dueDate: string | null;
   status: BillingInvoiceStatus;
+  source: BillingInvoiceSource;
+  sourceKey: string | null;
+  requestId: string | null;
   totalRub: string | number;
   paidRub: string | number;
   issuedAt: string | null;
@@ -845,6 +856,7 @@ export type ClientRequestPackage = {
   widthCm: string | number | null;
   heightCm: string | number | null;
   comment: string | null;
+  metadata: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;
   createdBy: {
@@ -1021,6 +1033,8 @@ export type CreateClientPayload = {
   bankAccount?: string;
   correspondentAccount?: string;
   storageAccountingEnabled?: boolean;
+  logisticsInvoiceMode?: ClientLogisticsInvoiceMode;
+  storageBillingMode?: ClientStorageBillingMode;
   storesWithoutBoxes?: boolean;
   fulfillmentManagerUserId?: string;
 };
@@ -2830,7 +2844,14 @@ export async function commitOutboundRequestXlsx(accessToken: string, payload: Ou
 export async function updateClientRequestStatus(
   accessToken: string,
   requestId: string,
-  payload: { status: ClientRequestStatus; managerComment?: string },
+  payload: {
+    status: ClientRequestStatus;
+    managerComment?: string;
+    boxes?: number;
+    pallets?: number;
+    packedUnits?: number;
+    packages?: unknown[];
+  },
 ) {
   return request<ClientRequestSummary>(`/client-requests/${requestId}/status`, {
     method: 'PATCH',
@@ -3745,7 +3766,7 @@ export async function packageClientRequest(
 
 export async function shipClientRequest(
   accessToken: string,
-  payload: { requestId: string; idempotencyKey?: string; comment?: string },
+  payload: { requestId: string; idempotencyKey?: string; comment?: string; boxes?: number; pallets?: number; packedUnits?: number; packages?: unknown[] },
 ) {
   return request<FulfillClientRequestResult>('/stock/fulfillment/ship-request', {
     method: 'POST',

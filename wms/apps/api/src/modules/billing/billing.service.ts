@@ -925,7 +925,7 @@ export class BillingService {
             serviceId: service.id,
             priceRub: service.defaultPriceRub ?? 0,
             taxMode: BillingPriceTaxMode.INCLUDED,
-            isActive: true,
+            isActive: service.defaultPriceRub != null,
             updatedByUserId: userId,
           },
         }),
@@ -993,6 +993,13 @@ const STANDARD_BILLING_SERVICES = [
     name: 'Сборка паллета',
     unit: BillingUnit.PALLET,
     defaultPriceRub: 250,
+    isActive: true,
+  },
+  {
+    code: 'ITEM_PROCESSING',
+    name: 'Обработка товара',
+    unit: BillingUnit.PIECE,
+    defaultPriceRub: null,
     isActive: true,
   },
 ] satisfies Prisma.BillingServiceUncheckedCreateInput[];

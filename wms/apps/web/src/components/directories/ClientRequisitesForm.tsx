@@ -8,8 +8,10 @@ import {
   updateClientStatus,
   type AuthSession,
   type ClientKind,
+  type ClientLogisticsInvoiceMode,
   type ClientStatus,
   type ClientSummary,
+  type ClientStorageBillingMode,
   type UpdateClientPayload,
   type UserSummary,
 } from '../../lib/api';
@@ -36,6 +38,8 @@ type ClientRequisitesFormState = {
   bankAccount: string;
   correspondentAccount: string;
   storageAccountingEnabled: boolean;
+  logisticsInvoiceMode: ClientLogisticsInvoiceMode;
+  storageBillingMode: ClientStorageBillingMode;
   fulfillmentManagerUserId: string;
 };
 
@@ -55,6 +59,8 @@ const emptyForm: ClientRequisitesFormState = {
   bankAccount: '',
   correspondentAccount: '',
   storageAccountingEnabled: false,
+  logisticsInvoiceMode: 'SEPARATE',
+  storageBillingMode: 'MONTHLY',
   fulfillmentManagerUserId: '',
 };
 
@@ -63,6 +69,17 @@ const clientKindOptions: Array<{ value: ClientKind; label: string }> = [
   { value: 'INDIVIDUAL_ENTREPRENEUR', label: 'Индивидуальный предприниматель' },
   { value: 'SELF_EMPLOYED', label: 'Самозанятый' },
   { value: 'INDIVIDUAL', label: 'Физическое лицо' },
+];
+
+const logisticsInvoiceModeOptions: Array<{ value: ClientLogisticsInvoiceMode; label: string }> = [
+  { value: 'SEPARATE', label: 'Логистика отдельным счетом' },
+  { value: 'SAME_INVOICE', label: 'Логистика в общем счете' },
+  { value: 'DISABLED', label: 'Не выставлять автоматически' },
+];
+
+const storageBillingModeOptions: Array<{ value: ClientStorageBillingMode; label: string }> = [
+  { value: 'MONTHLY', label: 'Хранение раз в месяц' },
+  { value: 'ON_SHIPMENT', label: 'Хранение по отгрузке' },
 ];
 
 export function ClientRequisitesForm({ session }: ClientRequisitesFormProps) {
@@ -353,6 +370,32 @@ export function ClientRequisitesForm({ session }: ClientRequisitesFormProps) {
           <span>Вести учет хранения</span>
         </label>
         <label>
+          <span>Счета логистики</span>
+          <select
+            value={form.logisticsInvoiceMode}
+            onChange={(event) => setForm({ ...form, logisticsInvoiceMode: event.target.value as ClientLogisticsInvoiceMode })}
+          >
+            {logisticsInvoiceModeOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Начисление хранения</span>
+          <select
+            value={form.storageBillingMode}
+            onChange={(event) => setForm({ ...form, storageBillingMode: event.target.value as ClientStorageBillingMode })}
+          >
+            {storageBillingModeOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
           <span>КПП</span>
           <input value={form.kpp} onChange={(event) => setForm({ ...form, kpp: event.target.value })} />
         </label>
@@ -429,6 +472,8 @@ export function ClientRequisitesForm({ session }: ClientRequisitesFormProps) {
             `${savedClient.code} - ${savedClient.name}`,
             `${clientKindLabel(savedClient.clientKind)} · ИНН ${savedClient.inn ?? 'не задан'}`,
             savedClient.storageAccountingEnabled ? 'Учет хранения включен' : 'Учет хранения отключен',
+            logisticsInvoiceModeLabel(savedClient.logisticsInvoiceMode),
+            storageBillingModeLabel(savedClient.storageBillingMode),
           ]}
         />
       ) : null}
@@ -453,6 +498,8 @@ function formFromClient(client: ClientSummary): ClientRequisitesFormState {
     bankAccount: client.bankAccount ?? '',
     correspondentAccount: client.correspondentAccount ?? '',
     storageAccountingEnabled: client.storageAccountingEnabled,
+    logisticsInvoiceMode: client.logisticsInvoiceMode,
+    storageBillingMode: client.storageBillingMode,
     fulfillmentManagerUserId: client.fulfillmentManagerUserId ?? '',
   };
 }
@@ -474,12 +521,22 @@ function compactPayload(form: ClientRequisitesFormState): UpdateClientPayload {
     bankAccount: form.bankAccount,
     correspondentAccount: form.correspondentAccount,
     storageAccountingEnabled: form.storageAccountingEnabled,
+    logisticsInvoiceMode: form.logisticsInvoiceMode,
+    storageBillingMode: form.storageBillingMode,
     fulfillmentManagerUserId: form.fulfillmentManagerUserId,
   };
 }
 
 function clientKindLabel(kind: ClientKind) {
   return clientKindOptions.find((option) => option.value === kind)?.label ?? kind;
+}
+
+function logisticsInvoiceModeLabel(mode: ClientLogisticsInvoiceMode) {
+  return logisticsInvoiceModeOptions.find((option) => option.value === mode)?.label ?? mode;
+}
+
+function storageBillingModeLabel(mode: ClientStorageBillingMode) {
+  return storageBillingModeOptions.find((option) => option.value === mode)?.label ?? mode;
 }
 
 function clientStatusLabel(status: ClientStatus) {

@@ -1,4 +1,4 @@
-import { ClientKind } from '@prisma/client';
+import { ClientKind, ClientLogisticsInvoiceMode, ClientStorageBillingMode } from '@prisma/client';
 import { IsBoolean, IsEmail, IsEnum, IsOptional, IsString, Length, ValidateIf } from 'class-validator';
 
 export class CreateClientDto {
@@ -65,6 +65,14 @@ export class CreateClientDto {
   @IsOptional()
   @IsBoolean()
   storageAccountingEnabled?: boolean;
+
+  @IsOptional()
+  @IsEnum(ClientLogisticsInvoiceMode)
+  logisticsInvoiceMode?: ClientLogisticsInvoiceMode;
+
+  @IsOptional()
+  @IsEnum(ClientStorageBillingMode)
+  storageBillingMode?: ClientStorageBillingMode;
 
   @IsOptional()
   @IsBoolean()

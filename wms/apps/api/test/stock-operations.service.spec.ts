@@ -545,7 +545,41 @@ describe('StockOperationsService', () => {
     );
   });
 
-  it('ручное закрытие outbound-заявки списывает товар из текущего доступного остатка', async () => {
+  it('блокирует ручное закрытие outbound-заявки без фактических упаковочных мест', async () => {
+    const tx = {
+      stockMovement: {
+        findFirst: vi.fn().mockResolvedValue(null),
+      },
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'request-1',
+          clientId: 'client-1',
+          type: 'OUTBOUND',
+          status: 'APPROVED',
+          title: 'Ручная сдача',
+          items: [{ id: 'item-1', skuId: 'sku-1', barcode: null, quantity: 3 }],
+        }),
+      },
+    };
+    const shipService = new StockOperationsService(
+      { $transaction: (callback: (tx: typeof tx) => unknown) => callback(tx) } as never,
+      { requireClientAccess: vi.fn() } as never,
+      { balanceKey: vi.fn() } as never,
+    );
+
+    await expect(
+      shipService.shipClientRequestFromCurrentStock(
+        {
+          requestId: 'request-1',
+          idempotencyKey: 'manual-done',
+          comment: 'Сдано вручную',
+        },
+        user(),
+      ),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('ручное закрытие outbound-заявки с упаковочными местами списывает товар и создает пакеты', async () => {
     const tx = {
       stockMovement: {
         findFirst: vi.fn().mockResolvedValue(null),
@@ -563,7 +597,20 @@ describe('StockOperationsService', () => {
         update: vi.fn().mockResolvedValue(undefined),
       },
       sku: {
-        findFirst: vi.fn().mockResolvedValue({ id: 'sku-1', internalSku: 'SKU-1' }),
+        findFirst: vi.fn().mockResolvedValue({ id: 'sku-1', internalSku: 'SKU-1', weightGrams: 500 }),
+      },
+      clientRequestPackage: {
+        create: vi.fn().mockResolvedValue({ id: 'package-1', packageType: 'BOX' }),
+      },
+      billingService: {
+        upsert: vi.fn().mockResolvedValue({ id: 'service-box', defaultPriceRub: 100 }),
+      },
+      clientBillingService: {
+        upsert: vi.fn().mockResolvedValue({ priceRub: 100, taxMode: 'INCLUDED', isActive: true }),
+      },
+      billingCharge: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ id: 'charge-1' }),
       },
       stockBalance: {
         findMany: vi.fn().mockResolvedValue([
@@ -595,6 +642,17 @@ describe('StockOperationsService', () => {
           requestId: 'request-1',
           idempotencyKey: 'manual-done',
           comment: 'Сдано вручную',
+          boxes: 1,
+          pallets: 0,
+          packedUnits: 3,
+          packages: [
+            {
+              packageCode: 'BOX-1',
+              packageType: 'BOX',
+              weightGrams: 1500,
+              items: [{ requestItemId: 'item-1', quantity: 3 }],
+            },
+          ],
         },
         user(),
       ),
@@ -611,6 +669,14 @@ describe('StockOperationsService', () => {
       ],
     });
 
+    expect(tx.clientRequestPackage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          packageCode: 'BOX-1',
+          weightGrams: 1500,
+        }),
+      }),
+    );
     expect(tx.stockBalance.delete).toHaveBeenCalledWith({ where: { id: 'available-balance' } });
     expect(tx.stockMovement.create).toHaveBeenCalledWith(
       expect.objectContaining({

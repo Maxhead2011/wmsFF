@@ -277,6 +277,10 @@ export class ClientRequestsService {
         requestId: request.id,
         idempotencyKey: `manual-status-done:${request.id}`,
         comment,
+        boxes: dto.boxes,
+        pallets: dto.pallets,
+        packedUnits: dto.packedUnits,
+        packages: dto.packages,
       },
       user,
     );

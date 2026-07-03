@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { BillingModule } from '../billing/billing.module';
 import { AuthModule } from '../auth/auth.module';
 import { FulfillmentWaveService } from './fulfillment-wave.service';
 import { PickInstructionService } from './pick-instruction.service';
@@ -11,7 +12,7 @@ import { StorageOverviewService } from './storage-overview.service';
 import { VolumeService } from './volume.service';
 
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, BillingModule],
   controllers: [StockController],
   providers: [
     StockBalancesService,
