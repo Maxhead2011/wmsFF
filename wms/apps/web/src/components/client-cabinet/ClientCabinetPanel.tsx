@@ -191,6 +191,7 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
 
   const view = useMemo(() => {
     const clientId = selectedClientId || state.data.clients[0]?.id || '';
+    const hideCancelledBilling = isClientUser(session.user);
 
     const stock = sortByDate(
       state.data.stock.filter((balance) => !clientId || balance.clientId === clientId),
@@ -211,6 +212,7 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
     const charges = sortByDate(
       state.data.charges
         .filter((charge) => !clientId || charge.clientId === clientId)
+        .filter((charge) => !hideCancelledBilling || charge.status !== 'CANCELLED')
         .filter((charge) => chargeMatchesFilters(charge, filters)),
       (charge) => charge.serviceDate,
     );
@@ -229,7 +231,7 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
       invoices,
       charges,
       reconciliation: filterReconciliation(state.data.reconciliation, clientId, filters),
-      serviceHistory: filterServiceHistory(state.data.serviceHistory, clientId, filters),
+      serviceHistory: filterServiceHistory(state.data.serviceHistory, clientId, filters, hideCancelledBilling),
       notifications,
       notificationPreferences: state.data.notificationPreferences.filter(
         (preference) => !clientId || preference.clientId === clientId,
@@ -1184,6 +1186,7 @@ function filterServiceHistory(
   history: BillingServiceHistory | null,
   clientId: string,
   filters: ClientCabinetFiltersValue,
+  hideCancelledCharges = false,
 ): BillingServiceHistory | null {
   if (!history) {
     return null;
@@ -1192,6 +1195,8 @@ function filterServiceHistory(
   // Русский комментарий: история услуг фильтруется по агрегированным датам группы; точные строки остаются в таблице начислений.
   const groups = history.groups
     .filter((group) => !clientId || group.clientId === clientId)
+    .map((group) => (hideCancelledCharges ? withoutCancelledServiceHistoryGroup(group) : group))
+    .filter((group): group is BillingServiceHistoryGroup => Boolean(group))
     .filter((group) => serviceHistoryGroupMatchesFilters(group, filters));
 
   return {
@@ -1207,6 +1212,39 @@ function filterServiceHistory(
       { chargesCount: 0, totalRub: 0, draftRub: 0, approvedRub: 0, cancelledRub: 0 },
     ),
     groups,
+  };
+}
+
+function withoutCancelledServiceHistoryGroup(group: BillingServiceHistoryGroup) {
+  const charges = group.charges.filter((charge) => charge.status !== 'CANCELLED');
+  if (charges.length === 0) {
+    return null;
+  }
+
+  const serviceDates = charges.map((charge) => charge.serviceDate).sort();
+  const latestCharge = [...charges].sort(
+    (left, right) =>
+      right.serviceDate.localeCompare(left.serviceDate) || right.createdAt.localeCompare(left.createdAt),
+  )[0];
+
+  return {
+    ...group,
+    charges,
+    chargesCount: charges.length,
+    quantity: charges.reduce((sum, charge) => sum + Number(charge.quantity), 0),
+    totalRub: charges.reduce((sum, charge) => roundMoney(sum + Number(charge.totalRub)), 0),
+    draftRub: charges.reduce(
+      (sum, charge) => roundMoney(sum + (charge.status === 'DRAFT' ? Number(charge.totalRub) : 0)),
+      0,
+    ),
+    approvedRub: charges.reduce(
+      (sum, charge) => roundMoney(sum + (charge.status === 'APPROVED' ? Number(charge.totalRub) : 0)),
+      0,
+    ),
+    cancelledRub: 0,
+    firstServiceDate: serviceDates[0],
+    lastServiceDate: serviceDates[serviceDates.length - 1],
+    latestStatus: latestCharge.status,
   };
 }
 
