@@ -1294,6 +1294,26 @@
   padding: 9px 10px;
 }
 
+.client-period-detail-row--action button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfdff;
+  color: var(--ink);
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.client-period-detail-row--action button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 .client-period-detail-row--total {
   border-color: rgb(215 25 32 / 0.25);
   background: #fff8f8;
@@ -1571,6 +1591,87 @@
   background: #fff8f8;
   outline: 3px solid rgb(215 25 32 / 0.16);
   outline-offset: -3px;
+}
+
+.client-cabinet-table tbody tr.is-expanded {
+  background: #fff8f8;
+}
+
+.client-invoice-detail-row > td {
+  background: #fbfdff;
+  padding: 0;
+}
+
+.client-invoice-detail {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.client-invoice-detail__head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.client-invoice-detail__head > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.client-invoice-detail__head span,
+.client-invoice-detail__notice {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.client-invoice-detail__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.client-invoice-detail__notice {
+  margin: 0;
+  border: 1px dashed rgb(215 25 32 / 0.28);
+  border-radius: 8px;
+  background: #fff8f8;
+  padding: 8px 10px;
+}
+
+.client-invoice-detail-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  font-size: 12px;
+}
+
+.client-invoice-detail-table th,
+.client-invoice-detail-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 8px 9px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.client-invoice-detail-table th {
+  background: #f4f7fb;
+  color: var(--muted);
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.client-invoice-detail-table tr:last-child td {
+  border-bottom: 0;
 }
 
 .client-cabinet-pager {

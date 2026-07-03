@@ -49,7 +49,8 @@ export function ClientCabinetExports({
   const exportData: ClientCabinetExportData = { client, filters, requests, invoices, charges, serviceHistory };
   const htmlPackageData: ClientCabinetHtmlPackageData = { client, filters, requests, invoices };
   const pdfPackageData: ClientCabinetPdfPackageData = { client, filters, requests, invoices, options: pdfOptions };
-  const documentsCount = requests.length + invoices.length * 2;
+  const paidActsCount = invoices.filter(isInvoicePaid).length;
+  const documentsCount = requests.length + invoices.length + paidActsCount;
   const pdfDocumentsCount = countClientCabinetPdfDocuments(pdfPackageData);
   const financeRowsCount = charges.length + invoices.length + invoices.reduce((total, invoice) => total + invoice.payments.length, 0);
 
@@ -178,6 +179,10 @@ export function ClientCabinetExports({
       {message ? <p className="inline-status client-cabinet-exports__message">{message}</p> : null}
     </section>
   );
+}
+
+function isInvoicePaid(invoice: BillingInvoiceSummary) {
+  return invoice.status === 'PAID' || Number(invoice.paidRub) >= Number(invoice.totalRub);
 }
 
 function PdfOption({

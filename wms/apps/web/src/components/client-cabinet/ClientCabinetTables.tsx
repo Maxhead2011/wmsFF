@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { FileSpreadsheet, FileText, MessageSquareText, ReceiptText, Search } from 'lucide-react';
+import { Fragment, useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { Download, FileSpreadsheet, FileText, MessageSquareText, ReceiptText, Search } from 'lucide-react';
 import type {
   BillingChargeSummary,
   BillingInvoiceSummary,
@@ -14,13 +14,14 @@ import type {
   SkuDetail,
   StockBalance,
 } from '../../lib/api';
-import { fetchSku } from '../../lib/api';
+import { downloadBillingInvoiceActPdf, downloadBillingInvoicePdf, fetchSku } from '../../lib/api';
 import { billingInvoiceStatusTone } from '../billing/billingMeta';
 import { BillingReconciliationPanel } from '../billing/BillingReconciliationPanel';
 import { ProductCardModal } from '../catalog/ProductCardModal';
 import { requestStatusTone } from '../client-requests/clientRequestMeta';
 import {
   billingInvoiceStatusLabel,
+  billingUnitLabel,
   formatCabinetDate,
   formatCabinetMoney,
   formatCabinetNumber,
@@ -166,7 +167,7 @@ export function ClientCabinetTables({
       />
 
       <ClientCabinetServiceHistory history={serviceHistory} />
-      <ClientCabinetPeriodSummary invoices={invoices} charges={charges} />
+      <ClientCabinetPeriodSummary accessToken={accessToken} invoices={invoices} charges={charges} />
       <BillingReconciliationPanel report={reconciliation} title="Задолженность и сверка" />
 
       <section id="client-cabinet-workspace" className="client-cabinet-section" aria-label="Таблицы клиента">
@@ -221,6 +222,7 @@ export function ClientCabinetTables({
           onOpenRequestDocument,
           onOpenRequestTimeline,
           onOpenInvoiceDocument,
+          accessToken,
           onUploadRequestFile,
           onDownloadRequestFile,
         })}
@@ -277,6 +279,7 @@ function renderActiveTable({
   onOpenRequestDocument,
   onOpenRequestTimeline,
   onOpenInvoiceDocument,
+  accessToken,
   onUploadRequestFile,
   onDownloadRequestFile,
 }: {
@@ -290,6 +293,7 @@ function renderActiveTable({
   onOpenRequestDocument: (request: ClientRequestSummary) => void;
   onOpenRequestTimeline: (request: ClientRequestSummary) => void;
   onOpenInvoiceDocument: (invoice: BillingInvoiceSummary) => void;
+  accessToken: string;
   onUploadRequestFile: (request: ClientRequestSummary, file: File) => Promise<void>;
   onDownloadRequestFile: (request: ClientRequestSummary, file: ClientRequestFileSummary) => Promise<void>;
 }) {
@@ -309,7 +313,11 @@ function renderActiveTable({
     );
   }
 
-  return invoices.length > 0 ? renderInvoiceTable(invoices, onOpenInvoiceDocument) : <EmptyTable>Счетов пока нет.</EmptyTable>;
+  return invoices.length > 0 ? (
+    <ClientCabinetInvoiceTable accessToken={accessToken} items={invoices} onOpenInvoiceDocument={onOpenInvoiceDocument} />
+  ) : (
+    <EmptyTable>Счетов пока нет.</EmptyTable>
+  );
 }
 
 function EmptyTable({ children }: { children: ReactNode }) {
@@ -471,9 +479,59 @@ function renderRequestTable(
   );
 }
 
-function renderInvoiceTable(items: BillingInvoiceSummary[], onOpenInvoiceDocument: (invoice: BillingInvoiceSummary) => void) {
+function ClientCabinetInvoiceTable({
+  accessToken,
+  items,
+  onOpenInvoiceDocument,
+}: {
+  accessToken: string;
+  items: BillingInvoiceSummary[];
+  onOpenInvoiceDocument: (invoice: BillingInvoiceSummary) => void;
+}) {
+  const [expandedInvoiceId, setExpandedInvoiceId] = useState('');
+  const [downloadingId, setDownloadingId] = useState('');
+  const [downloadError, setDownloadError] = useState('');
+
+  useEffect(() => {
+    if (expandedInvoiceId && !items.some((invoice) => invoice.id === expandedInvoiceId)) {
+      setExpandedInvoiceId('');
+    }
+  }, [expandedInvoiceId, items]);
+
+  async function downloadInvoice(invoice: BillingInvoiceSummary) {
+    setDownloadError('');
+    setDownloadingId(`invoice:${invoice.id}`);
+    try {
+      const blob = await downloadBillingInvoicePdf(accessToken, invoice.id);
+      downloadBlobFile(blob, `Счет_${safeFileName(invoice.number)}.pdf`);
+    } catch (caught) {
+      setDownloadError(caught instanceof Error ? caught.message : 'Не удалось скачать счет.');
+    } finally {
+      setDownloadingId('');
+    }
+  }
+
+  async function downloadAct(invoice: BillingInvoiceSummary) {
+    setDownloadError('');
+    if (!isInvoicePaid(invoice)) {
+      setDownloadError(`Акт по счету № ${invoice.number} будет доступен после оплаты.`);
+      return;
+    }
+
+    setDownloadingId(`act:${invoice.id}`);
+    try {
+      const blob = await downloadBillingInvoiceActPdf(accessToken, invoice.id);
+      downloadBlobFile(blob, `Акт_${safeFileName(actNumber(invoice.number))}.pdf`);
+    } catch (caught) {
+      setDownloadError(caught instanceof Error ? caught.message : 'Не удалось скачать акт.');
+    } finally {
+      setDownloadingId('');
+    }
+  }
+
   return (
     <div id="client-cabinet-invoices" className="client-cabinet-table-wrap">
+      {downloadError ? <p className="form-error">{downloadError}</p> : null}
       <table className="data-table client-cabinet-table">
         <thead>
           <tr>
@@ -489,52 +547,176 @@ function renderInvoiceTable(items: BillingInvoiceSummary[], onOpenInvoiceDocumen
         <tbody>
           {items.map((invoice) => {
             const remaining = Math.max(0, Number(invoice.totalRub) - Number(invoice.paidRub));
+            const expanded = expandedInvoiceId === invoice.id;
+            const isPaid = isInvoicePaid(invoice);
 
             return (
-              <tr key={invoice.id}>
-                <td>
-                  <strong>{invoice.number}</strong>
-                  {invoice.dueDate ? <span>до {formatCabinetDate(invoice.dueDate)}</span> : null}
-                </td>
-                <td>
-                  <strong>{formatCabinetDate(invoice.periodFrom)}</strong>
-                  <span>{formatCabinetDate(invoice.periodTo)}</span>
-                </td>
-                <td>
-                  <strong>{formatCabinetMoney(invoice.totalRub)} ₽</strong>
-                  <span>остаток {formatCabinetMoney(remaining)} ₽</span>
-                </td>
-                <td>
-                  <strong>{formatCabinetMoney(invoice.paidRub)} ₽</strong>
-                  {invoice.paidAt ? <span>{formatCabinetDate(invoice.paidAt)}</span> : null}
-                </td>
-                <td>
-                  <span className={`status status--${billingInvoiceStatusTone(invoice.status)}`}>
-                    {billingInvoiceStatusLabel(invoice.status)}
-                  </span>
-                </td>
-                <td>
-                  <strong>{invoice.items.length} поз.</strong>
-                  <span>{invoice.payments.length} оплат</span>
-                </td>
-                <td>
-                  <button
-                    className="document-open-button"
-                    type="button"
-                    onClick={() => onOpenInvoiceDocument(invoice)}
-                    title="Открыть документ"
-                  >
-                    <ReceiptText size={15} aria-hidden="true" />
-                    <span>Счет</span>
-                  </button>
-                </td>
-              </tr>
+              <Fragment key={invoice.id}>
+                <tr
+                  className={expanded ? 'is-expanded' : ''}
+                  onClick={() => setExpandedInvoiceId(expanded ? '' : invoice.id)}
+                  onKeyDown={(event) => toggleInvoiceFromKeyboard(event, invoice.id, expanded, setExpandedInvoiceId)}
+                  tabIndex={0}
+                >
+                  <td>
+                    <strong>{invoice.number}</strong>
+                    {invoice.dueDate ? <span>до {formatCabinetDate(invoice.dueDate)}</span> : null}
+                  </td>
+                  <td>
+                    <strong>{formatCabinetDate(invoice.periodFrom)}</strong>
+                    <span>{formatCabinetDate(invoice.periodTo)}</span>
+                  </td>
+                  <td>
+                    <strong>{formatCabinetMoney(invoice.totalRub)} ₽</strong>
+                    <span>остаток {formatCabinetMoney(remaining)} ₽</span>
+                  </td>
+                  <td>
+                    <strong>{formatCabinetMoney(invoice.paidRub)} ₽</strong>
+                    {invoice.paidAt ? <span>{formatCabinetDate(invoice.paidAt)}</span> : null}
+                  </td>
+                  <td>
+                    <span className={`status status--${billingInvoiceStatusTone(invoice.status)}`}>
+                      {billingInvoiceStatusLabel(invoice.status)}
+                    </span>
+                  </td>
+                  <td>
+                    <strong>{invoice.items.length} поз.</strong>
+                    <span>{expanded ? 'состав открыт' : 'нажмите строку'}</span>
+                  </td>
+                  <td>
+                    <div className="client-request-actions-cell">
+                      <button
+                        className="document-open-button"
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onOpenInvoiceDocument(invoice);
+                        }}
+                        title="Открыть документ"
+                      >
+                        <ReceiptText size={15} aria-hidden="true" />
+                        <span>Счет</span>
+                      </button>
+                      <button
+                        className="document-open-button"
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void downloadInvoice(invoice);
+                        }}
+                        disabled={downloadingId === `invoice:${invoice.id}`}
+                        title="Скачать счет PDF"
+                      >
+                        <Download size={15} aria-hidden="true" />
+                        <span>{downloadingId === `invoice:${invoice.id}` ? 'Скачиваю' : 'PDF'}</span>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+                {expanded ? (
+                  <tr className="client-invoice-detail-row">
+                    <td colSpan={7}>
+                      <div className="client-invoice-detail">
+                        <div className="client-invoice-detail__head">
+                          <div>
+                            <strong>Состав счета № {invoice.number}</strong>
+                            <span>
+                              {invoice.items.length} позиций · оплачено {formatCabinetMoney(invoice.paidRub)} ₽
+                            </span>
+                          </div>
+                          <div className="client-invoice-detail__actions">
+                            <button
+                              className="document-open-button"
+                              type="button"
+                              onClick={() => void downloadInvoice(invoice)}
+                              disabled={downloadingId === `invoice:${invoice.id}`}
+                            >
+                              <Download size={15} aria-hidden="true" />
+                              <span>Скачать счет</span>
+                            </button>
+                            <button
+                              className="document-open-button"
+                              type="button"
+                              onClick={() => void downloadAct(invoice)}
+                              disabled={!isPaid || downloadingId === `act:${invoice.id}`}
+                              title={isPaid ? 'Скачать акт PDF' : 'Акт доступен после оплаты счета'}
+                            >
+                              <FileText size={15} aria-hidden="true" />
+                              <span>{downloadingId === `act:${invoice.id}` ? 'Скачиваю' : 'Скачать акт'}</span>
+                            </button>
+                          </div>
+                        </div>
+                        {!isPaid ? (
+                          <p className="client-invoice-detail__notice">Акт будет доступен после оплаты счета.</p>
+                        ) : null}
+                        <table className="client-invoice-detail-table">
+                          <thead>
+                            <tr>
+                              <th>Услуга</th>
+                              <th>Дата</th>
+                              <th>Ед.</th>
+                              <th>Кол-во</th>
+                              <th>Цена</th>
+                              <th>Сумма</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {invoice.items.map((item) => (
+                              <tr key={item.id}>
+                                <td>{item.description}</td>
+                                <td>{formatCabinetDate(item.serviceDate)}</td>
+                                <td>{billingUnitLabel(item.unit)}</td>
+                                <td>{formatCabinetNumber(Number(item.quantity))}</td>
+                                <td>{formatCabinetMoney(item.unitPriceRub)} ₽</td>
+                                <td>{formatCabinetMoney(item.totalRub)} ₽</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </td>
+                  </tr>
+                ) : null}
+              </Fragment>
             );
           })}
         </tbody>
       </table>
     </div>
   );
+}
+
+function toggleInvoiceFromKeyboard(
+  event: KeyboardEvent<HTMLTableRowElement>,
+  invoiceId: string,
+  expanded: boolean,
+  setExpandedInvoiceId: (invoiceId: string) => void,
+) {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    setExpandedInvoiceId(expanded ? '' : invoiceId);
+  }
+}
+
+function isInvoicePaid(invoice: BillingInvoiceSummary) {
+  return invoice.status === 'PAID' || Number(invoice.paidRub) >= Number(invoice.totalRub);
+}
+
+function actNumber(invoiceNumber: string) {
+  return invoiceNumber.startsWith('INV-') ? `ACT-${invoiceNumber.slice(4)}` : `ACT-${invoiceNumber}`;
+}
+
+function safeFileName(value: string) {
+  return value.replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, '_');
+}
+
+function downloadBlobFile(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function openProductCardFromKeyboard(

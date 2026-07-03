@@ -36,10 +36,14 @@ async function loadPackageDocuments(accessToken: string, data: ClientCabinetHtml
   const requestDocuments = data.requests.map((request) => fetchClientRequestDocument(accessToken, request.id));
   const invoiceDocuments = data.invoices.flatMap((invoice) => [
     fetchBillingInvoiceDocument(accessToken, invoice.id),
-    fetchBillingInvoiceActDocument(accessToken, invoice.id),
+    ...(isInvoicePaid(invoice) ? [fetchBillingInvoiceActDocument(accessToken, invoice.id)] : []),
   ]);
 
   return (await Promise.all([...requestDocuments, ...invoiceDocuments])).map(toPrintableDocument);
+}
+
+function isInvoicePaid(invoice: BillingInvoiceSummary) {
+  return invoice.status === 'PAID' || Number(invoice.paidRub) >= Number(invoice.totalRub);
 }
 
 function toPrintableDocument(document: ClientRequestDocument | BillingInvoiceDocument): PrintableDocument {

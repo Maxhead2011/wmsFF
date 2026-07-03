@@ -65,7 +65,7 @@ async function loadPdfPackageFiles(accessToken: string, data: ClientCabinetPdfPa
           ),
         ]
       : []),
-    ...(options.includeActs
+    ...(options.includeActs && isInvoicePaid(invoice)
       ? [
           asyncPdfFile(`${prefix}Акты/Акт_${safeFileName(actNumber(invoice.number))}.pdf`, () =>
             downloadBillingInvoiceActPdf(accessToken, invoice.id),
@@ -89,7 +89,7 @@ export function countClientCabinetPdfDocuments(data: ClientCabinetPdfPackageData
   return (
     (options.includeRequests ? data.requests.length : 0) +
     (options.includeInvoices ? data.invoices.length : 0) +
-    (options.includeActs ? data.invoices.length : 0)
+    (options.includeActs ? data.invoices.filter(isInvoicePaid).length : 0)
   );
 }
 
@@ -276,6 +276,10 @@ function pdfPackageFileName(clientCode: string) {
 
 function safeFileName(value: string) {
   return value.replace(/[^\p{L}\p{N}._-]+/gu, '_').replace(/^_+|_+$/g, '') || 'document';
+}
+
+function isInvoicePaid(invoice: BillingInvoiceSummary) {
+  return invoice.status === 'PAID' || Number(invoice.paidRub) >= Number(invoice.totalRub);
 }
 
 function downloadBlob(fileName: string, blob: Blob) {

@@ -1,9 +1,10 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { CalendarDays, Download, FileText, ListChecks, Printer, ReceiptText, WalletCards } from 'lucide-react';
-import type { BillingChargeSource, BillingChargeSummary, BillingInvoiceSummary } from '../../lib/api';
+import { downloadBillingInvoiceActPdf, type BillingChargeSource, type BillingChargeSummary, type BillingInvoiceSummary } from '../../lib/api';
 import { billingSourceLabel, formatCabinetDate, formatCabinetMoney, formatCabinetNumber } from './clientCabinetFormat';
 
 type ClientCabinetPeriodSummaryProps = {
+  accessToken: string;
   invoices: BillingInvoiceSummary[];
   charges: BillingChargeSummary[];
 };
@@ -43,7 +44,7 @@ type PeriodServiceGroup = {
   totalRub: number;
 };
 
-type OperationFilter = 'all' | 'services' | 'invoices' | 'payments';
+type OperationFilter = 'all' | 'services' | 'invoices' | 'acts' | 'payments';
 
 const periodFormatter = new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric' });
 
@@ -51,10 +52,11 @@ const operationFilters: Array<{ key: OperationFilter; label: string }> = [
   { key: 'all', label: 'Все' },
   { key: 'services', label: 'Услуги' },
   { key: 'invoices', label: 'Счета' },
+  { key: 'acts', label: 'Акты' },
   { key: 'payments', label: 'Оплаты' },
 ];
 
-export function ClientCabinetPeriodSummary({ invoices, charges }: ClientCabinetPeriodSummaryProps) {
+export function ClientCabinetPeriodSummary({ accessToken, invoices, charges }: ClientCabinetPeriodSummaryProps) {
   const periods = useMemo(() => buildPeriodGroups(invoices, charges), [invoices, charges]);
   const [selectedKey, setSelectedKey] = useState('');
   const selectedPeriod = periods.find((period) => period.key === selectedKey) ?? periods[0] ?? null;
@@ -103,22 +105,43 @@ export function ClientCabinetPeriodSummary({ invoices, charges }: ClientCabinetP
               </button>
             ))}
           </div>
-          {selectedPeriod ? <ClientCabinetPeriodDetails period={selectedPeriod} /> : null}
+          {selectedPeriod ? <ClientCabinetPeriodDetails accessToken={accessToken} period={selectedPeriod} /> : null}
         </>
       )}
     </section>
   );
 }
 
-function ClientCabinetPeriodDetails({ period }: { period: PeriodGroup }) {
+function ClientCabinetPeriodDetails({ accessToken, period }: { accessToken: string; period: PeriodGroup }) {
   const [operationFilter, setOperationFilter] = useState<OperationFilter>('all');
+  const [downloadingActId, setDownloadingActId] = useState('');
+  const [downloadError, setDownloadError] = useState('');
   const showServices = operationFilter === 'all' || operationFilter === 'services';
   const showInvoices = operationFilter === 'all' || operationFilter === 'invoices';
+  const showActs = operationFilter === 'all' || operationFilter === 'acts';
   const showPayments = operationFilter === 'all' || operationFilter === 'payments';
   const filteredRowsCount = useMemo(
     () => buildPeriodExportRows(period, operationFilter).length - 1,
     [period, operationFilter],
   );
+
+  async function downloadAct(invoice: BillingInvoiceSummary) {
+    setDownloadError('');
+    if (!isInvoicePaid(invoice)) {
+      setDownloadError(`Акт по счету № ${invoice.number} будет доступен после оплаты.`);
+      return;
+    }
+
+    setDownloadingActId(invoice.id);
+    try {
+      const blob = await downloadBillingInvoiceActPdf(accessToken, invoice.id);
+      downloadBlobFile(blob, `Акт_${safeFileName(actNumber(invoice.number))}.pdf`);
+    } catch (caught) {
+      setDownloadError(caught instanceof Error ? caught.message : 'Не удалось скачать акт.');
+    } finally {
+      setDownloadingActId('');
+    }
+  }
 
   return (
     <div className="client-period-detail" aria-label={`Детализация ${period.label}`}>
@@ -165,6 +188,7 @@ function ClientCabinetPeriodDetails({ period }: { period: PeriodGroup }) {
           </button>
         </div>
       </div>
+      {downloadError ? <p className="form-error">{downloadError}</p> : null}
 
       <div className="client-period-detail-grid">
         {showServices ? (
@@ -190,7 +214,7 @@ function ClientCabinetPeriodDetails({ period }: { period: PeriodGroup }) {
         {showInvoices ? (
           <PeriodDetailColumn
             icon={<ReceiptText size={17} aria-hidden="true" />}
-            title="Счета и акты"
+            title="Счета"
             emptyText="Счетов за период нет."
           >
             {period.invoices.map((invoice) => (
@@ -198,13 +222,44 @@ function ClientCabinetPeriodDetails({ period }: { period: PeriodGroup }) {
                 <div>
                   <strong>Счет № {invoice.number}</strong>
                   <span>
-                    Акт № {invoice.number} · {formatCabinetDate(invoice.periodFrom)} - {formatCabinetDate(invoice.periodTo)} ·{' '}
-                    {invoice.items.length} поз.
+                    {formatCabinetDate(invoice.periodFrom)} - {formatCabinetDate(invoice.periodTo)} · {invoice.items.length} поз.
                   </span>
                 </div>
                 <strong>{formatCabinetMoney(invoice.totalRub)} ₽</strong>
               </div>
             ))}
+          </PeriodDetailColumn>
+        ) : null}
+
+        {showActs ? (
+          <PeriodDetailColumn
+            icon={<FileText size={17} aria-hidden="true" />}
+            title="Акты"
+            emptyText="Актов за период нет."
+          >
+            {period.invoices.map((invoice) => {
+              const isPaid = isInvoicePaid(invoice);
+
+              return (
+                <div className="client-period-detail-row client-period-detail-row--action" key={invoice.id}>
+                  <div>
+                    <strong>Акт № {actNumber(invoice.number)}</strong>
+                    <span>
+                      счет № {invoice.number} · {isPaid ? 'доступен для скачивания' : 'доступен после оплаты'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void downloadAct(invoice)}
+                    disabled={!isPaid || downloadingActId === invoice.id}
+                    title={isPaid ? 'Скачать акт PDF' : 'Оплатите счет, чтобы скачать акт'}
+                  >
+                    <Download size={15} aria-hidden="true" />
+                    <span>{downloadingActId === invoice.id ? 'Скачиваю' : 'Скачать'}</span>
+                  </button>
+                </div>
+              );
+            })}
           </PeriodDetailColumn>
         ) : null}
 
@@ -283,7 +338,7 @@ function buildPeriodGroups(invoices: BillingInvoiceSummary[], charges: BillingCh
     group.invoicesRub += Number(invoice.totalRub);
     group.paidRub += Number(invoice.paidRub);
     group.debtRub += Math.max(0, Number(invoice.totalRub) - Number(invoice.paidRub));
-    group.documentsCount += 1 + invoice.payments.length;
+    group.documentsCount += 2 + invoice.payments.length;
     group.invoices.push(invoice);
     invoice.payments.forEach((payment) => {
       group.payments.push({
@@ -426,10 +481,23 @@ function buildPeriodExportRows(period: PeriodGroup, filter: OperationFilter) {
   if (filter === 'all' || filter === 'invoices') {
     period.invoices.forEach((invoice) => {
       rows.push([
-        'Счет и акт',
+        'Счет',
         `${formatCabinetDate(invoice.periodFrom)} - ${formatCabinetDate(invoice.periodTo)}`,
-        `Счет № ${invoice.number}; Акт № ${invoice.number}`,
+        `Счет № ${invoice.number}`,
         `${invoice.items.length} позиций`,
+        String(invoice.items.length),
+        formatCabinetMoney(invoice.totalRub),
+      ]);
+    });
+  }
+
+  if (filter === 'all' || filter === 'acts') {
+    period.invoices.forEach((invoice) => {
+      rows.push([
+        'Акт',
+        `${formatCabinetDate(invoice.periodFrom)} - ${formatCabinetDate(invoice.periodTo)}`,
+        `Акт № ${actNumber(invoice.number)}`,
+        isInvoicePaid(invoice) ? 'Доступен для скачивания' : 'Доступен после оплаты счета',
         String(invoice.items.length),
         formatCabinetMoney(invoice.totalRub),
       ]);
@@ -454,12 +522,28 @@ function buildPeriodExportRows(period: PeriodGroup, filter: OperationFilter) {
 
 function downloadTextFile(fileName: string, content: string, type: string) {
   const blob = new Blob([content], { type });
+  downloadBlobFile(blob, fileName);
+}
+
+function downloadBlobFile(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
   link.download = fileName;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function isInvoicePaid(invoice: BillingInvoiceSummary) {
+  return invoice.status === 'PAID' || Number(invoice.paidRub) >= Number(invoice.totalRub);
+}
+
+function actNumber(invoiceNumber: string) {
+  return invoiceNumber.startsWith('INV-') ? `ACT-${invoiceNumber.slice(4)}` : `ACT-${invoiceNumber}`;
+}
+
+function safeFileName(value: string) {
+  return value.replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, '_');
 }
 
 function csvCell(value: string) {
