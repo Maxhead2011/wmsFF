@@ -142,7 +142,7 @@ export function BillingChargesTable({ accessToken, charges, canWrite, onStatusCh
               <Metric label="Тариф" value={`${formatMoney(breakdown.unitPriceRub)} ₽`} />
               <Metric label="Сумма" value={`${formatMoney(breakdown.totalRub)} ₽`} />
             </div>
-            <div className="billing-table-wrap">
+            <div className="billing-table-wrap billing-storage-modal__table">
               <table className="data-table billing-storage-detail-table">
                 <thead>
                   <tr>

@@ -216,6 +216,7 @@ export function ClientCabinetTables({
           skuRows: visibleSkuRows,
           stock: visibleStockRows,
           canSeeStoragePlaces,
+          canSeeRequestFiles: canSeeStoragePlaces,
           onOpenProductCard: (skuId) => void openProductCard(skuId),
           requests: visibleRequestRows,
           invoices: visibleInvoiceRows,
@@ -273,6 +274,7 @@ function renderActiveTable({
   skuRows,
   stock,
   canSeeStoragePlaces,
+  canSeeRequestFiles,
   onOpenProductCard,
   requests,
   invoices,
@@ -287,6 +289,7 @@ function renderActiveTable({
   skuRows: SkuStockSummary[];
   stock: StockBalance[];
   canSeeStoragePlaces: boolean;
+  canSeeRequestFiles: boolean;
   onOpenProductCard: (skuId: string) => void;
   requests: ClientRequestSummary[];
   invoices: BillingInvoiceSummary[];
@@ -307,7 +310,14 @@ function renderActiveTable({
 
   if (activeSection === 'requests') {
     return requests.length > 0 ? (
-      renderRequestTable(requests, onOpenRequestDocument, onOpenRequestTimeline, onUploadRequestFile, onDownloadRequestFile)
+      renderRequestTable(
+        requests,
+        onOpenRequestDocument,
+        onOpenRequestTimeline,
+        onUploadRequestFile,
+        onDownloadRequestFile,
+        canSeeRequestFiles,
+      )
     ) : (
       <EmptyTable>Заявок пока нет.</EmptyTable>
     );
@@ -411,6 +421,7 @@ function renderRequestTable(
   onOpenRequestTimeline: (request: ClientRequestSummary) => void,
   onUploadRequestFile: (request: ClientRequestSummary, file: File) => Promise<void>,
   onDownloadRequestFile: (request: ClientRequestSummary, file: ClientRequestFileSummary) => Promise<void>,
+  canSeeRequestFiles: boolean,
 ) {
   return (
     <div id="client-cabinet-requests" className="client-cabinet-table-wrap">
@@ -423,7 +434,7 @@ function renderRequestTable(
             <th>Срок</th>
             <th>Статус</th>
             <th>Документ</th>
-            <th>Файлы</th>
+            {canSeeRequestFiles ? <th>Файлы</th> : null}
           </tr>
         </thead>
         <tbody>
@@ -464,13 +475,15 @@ function renderRequestTable(
                   </button>
                 </div>
               </td>
-              <td>
-                <ClientRequestFilesCell
-                  request={request}
-                  onUpload={onUploadRequestFile}
-                  onDownload={onDownloadRequestFile}
-                />
-              </td>
+              {canSeeRequestFiles ? (
+                <td>
+                  <ClientRequestFilesCell
+                    request={request}
+                    onUpload={onUploadRequestFile}
+                    onDownload={onDownloadRequestFile}
+                  />
+                </td>
+              ) : null}
             </tr>
           ))}
         </tbody>

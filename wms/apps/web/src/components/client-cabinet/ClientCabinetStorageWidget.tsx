@@ -6,6 +6,7 @@ import { formatCabinetMoney, formatCabinetNumber } from './clientCabinetFormat';
 type ClientCabinetStorageWidgetProps = {
   accessToken: string;
   client: ClientSummary;
+  lastPaymentDate?: string | null;
 };
 
 type StorageWidgetState = {
@@ -14,9 +15,10 @@ type StorageWidgetState = {
   error?: string;
 };
 
-export function ClientCabinetStorageWidget({ accessToken, client }: ClientCabinetStorageWidgetProps) {
+export function ClientCabinetStorageWidget({ accessToken, client, lastPaymentDate }: ClientCabinetStorageWidgetProps) {
   const [state, setState] = useState<StorageWidgetState>({ status: 'idle', overview: null });
-  const [currentDate, setCurrentDate] = useState(today());
+  const [periodTo, setPeriodTo] = useState(today());
+  const periodFrom = dateOnly(lastPaymentDate) ?? dateOnly(client.createdAt) ?? monthStart(periodTo);
 
   useEffect(() => {
     if (!client.storageAccountingEnabled) {
@@ -31,8 +33,8 @@ export function ClientCabinetStorageWidget({ accessToken, client }: ClientCabine
       try {
         const overview = await fetchStorageOverview(accessToken, {
           clientId: client.id,
-          periodFrom: currentDate,
-          periodTo: currentDate,
+          periodFrom,
+          periodTo,
         });
         if (isActive) {
           setState({ status: 'ready', overview });
@@ -53,23 +55,23 @@ export function ClientCabinetStorageWidget({ accessToken, client }: ClientCabine
     return () => {
       isActive = false;
     };
-  }, [accessToken, client.id, client.storageAccountingEnabled, currentDate]);
+  }, [accessToken, client.id, client.storageAccountingEnabled, periodFrom, periodTo]);
 
   function reload() {
     if (!client.storageAccountingEnabled) {
       return;
     }
     const nextDate = today();
-    if (nextDate !== currentDate) {
-      setCurrentDate(nextDate);
+    if (nextDate !== periodTo) {
+      setPeriodTo(nextDate);
       return;
     }
 
-    setCurrentDate(nextDate);
+    setPeriodTo(nextDate);
     setState((current) => ({ ...current, status: 'loading', error: undefined }));
     void fetchStorageOverview(accessToken, {
       clientId: client.id,
-      periodFrom: nextDate,
+      periodFrom,
       periodTo: nextDate,
     })
       .then((overview) => setState({ status: 'ready', overview }))
@@ -84,13 +86,16 @@ export function ClientCabinetStorageWidget({ accessToken, client }: ClientCabine
 
   const overview = state.overview;
   const tariff = overview?.tariffRubPerLiterDay ?? numberValue(client.storagePriceRubPerLiterDay);
+  const periodLabel = lastPaymentDate
+    ? `с последней оплаты ${formatDate(periodFrom)} по ${formatDate(periodTo)}`
+    : `с ${formatDate(periodFrom)} по ${formatDate(periodTo)}`;
 
   return (
     <section className="client-storage-widget" aria-label="Хранение клиента">
       <div className="client-storage-widget__heading">
         <div>
           <span>Хранение</span>
-          <strong>на {formatDate(currentDate)}</strong>
+          <strong>{periodLabel}</strong>
         </div>
         <div className="client-storage-widget__status">
           <span className={client.storageAccountingEnabled ? 'status status--ready' : 'status status--planned'}>
@@ -115,8 +120,9 @@ export function ClientCabinetStorageWidget({ accessToken, client }: ClientCabine
 
       {client.storageAccountingEnabled ? (
         <div className="client-storage-widget__metrics">
-          <StorageMetric label="Литров на сегодня" value={formatCabinetNumber(overview?.totals.totalLiters ?? 0)} />
-          <StorageMetric label="Начисление сегодня" value={`${formatCabinetMoney(overview?.totals.storageCostRub ?? 0)} ₽`} />
+          <StorageMetric label="Литров сейчас" value={formatCabinetNumber(overview?.totals.totalLiters ?? 0)} />
+          <StorageMetric label="Литро-дней" value={formatCabinetNumber(overview?.totals.literDays ?? 0)} />
+          <StorageMetric label="К оплате за период" value={`${formatCabinetMoney(overview?.totals.storageCostRub ?? 0)} ₽`} />
           <StorageMetric label="Тариф" value={`${formatCabinetNumber(tariff)} ₽/л`} />
           <StorageMetric label="SKU" value={formatCabinetNumber(overview?.totals.skuCount ?? 0)} />
           <StorageMetric label="Единиц" value={formatCabinetNumber(overview?.totals.quantity ?? 0)} />
@@ -148,7 +154,17 @@ function numberValue(value: string | number | null | undefined) {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
+function dateOnly(value: string | null | undefined) {
+  const match = value?.match(/^\d{4}-\d{2}-\d{2}/);
+  return match?.[0] ?? null;
+}
+
 function today() {
   const date = new Date();
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function monthStart(value: string) {
+  const match = value.match(/^(\d{4})-(\d{2})-/);
+  return match ? `${match[1]}-${match[2]}-01` : today().replace(/-\d{2}$/, '-01');
 }

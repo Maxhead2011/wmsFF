@@ -263,6 +263,7 @@
 
 .billing-storage-modal__card {
   display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
   width: min(1120px, 100%);
   max-height: min(820px, 92vh);
   overflow: hidden;
@@ -308,6 +309,11 @@
   display: block;
   margin-top: 4px;
   font-size: 18px;
+}
+
+.billing-storage-modal__table {
+  min-height: 0;
+  overflow: auto;
 }
 
 .billing-storage-detail-table {

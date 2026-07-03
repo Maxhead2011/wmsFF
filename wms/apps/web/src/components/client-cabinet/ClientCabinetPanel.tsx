@@ -203,10 +203,9 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
         .filter((request) => requestMatchesFilters(request, filters)),
       (request) => request.createdAt,
     );
+    const clientInvoices = state.data.invoices.filter((invoice) => !clientId || invoice.clientId === clientId);
     const invoices = sortByDate(
-      state.data.invoices
-        .filter((invoice) => !clientId || invoice.clientId === clientId)
-        .filter((invoice) => invoiceMatchesFilters(invoice, filters)),
+      clientInvoices.filter((invoice) => invoiceMatchesFilters(invoice, filters)),
       (invoice) => invoice.createdAt,
     );
     const charges = sortByDate(
@@ -235,6 +234,7 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
       notificationPreferences: state.data.notificationPreferences.filter(
         (preference) => !clientId || preference.clientId === clientId,
       ),
+      storageLastPaymentDate: latestPaymentDate(clientInvoices),
       clientCards: state.data.clients.map((client) => buildClientSummary(client, state.data)),
       filterTotals: {
         requests: requests.length,
@@ -695,7 +695,11 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
             reconciliation={view.reconciliation}
             onNavigate={navigateToSection}
           />
-          <ClientCabinetStorageWidget accessToken={session.accessToken} client={view.client} />
+          <ClientCabinetStorageWidget
+            accessToken={session.accessToken}
+            client={view.client}
+            lastPaymentDate={view.storageLastPaymentDate}
+          />
           <ClientCabinetFilters
             value={filters}
             totals={view.filterTotals}
@@ -1101,6 +1105,24 @@ function isInternalUser(user: AuthSession['user']) {
 
 function isClientUser(user: AuthSession['user']) {
   return user.roleCodes.includes('CLIENT') && !user.permissionCodes.includes('system:admin');
+}
+
+function latestPaymentDate(invoices: BillingInvoiceSummary[]) {
+  return invoices.reduce<string | null>((latest, invoice) => {
+    const paymentDates = [
+      invoice.paidAt,
+      ...invoice.payments
+        .filter((payment) => payment.status === 'RECORDED')
+        .map((payment) => payment.paidAt),
+    ].filter((value): value is string => Boolean(value));
+
+    return paymentDates.reduce((currentLatest, paidAt) => {
+      if (!currentLatest || paidAt > currentLatest) {
+        return paidAt;
+      }
+      return currentLatest;
+    }, latest);
+  }, null);
 }
 
 function browserNotificationPermissionState(): BrowserNotificationPermission {
