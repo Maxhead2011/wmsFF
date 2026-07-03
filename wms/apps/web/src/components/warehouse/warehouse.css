@@ -1,9 +1,19 @@
+.warehouse-workspace {
+  display: grid;
+  gap: 18px;
+  margin-bottom: 28px;
+}
+
 .warehouse-panel {
   margin-bottom: 28px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
   padding: 18px;
+}
+
+.warehouse-workspace .warehouse-panel {
+  margin-bottom: 0;
 }
 
 .warehouse-panel__heading {
@@ -158,6 +168,12 @@
   padding-top: 18px;
 }
 
+.warehouse-panel--storage .storage-panel {
+  margin-top: 0;
+  border-top: 0;
+  padding-top: 0;
+}
+
 .warehouse-subheading {
   display: flex;
   align-items: center;
@@ -188,7 +204,7 @@
 
 .storage-controls {
   display: grid;
-  grid-template-columns: minmax(240px, 1.4fr) repeat(3, minmax(140px, 0.8fr)) auto auto;
+  grid-template-columns: minmax(240px, 1.4fr) repeat(3, minmax(140px, 0.8fr));
   gap: 10px;
   align-items: end;
 }
@@ -215,9 +231,16 @@
   padding: 0 11px;
 }
 
+.storage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  grid-column: 1 / -1;
+  gap: 8px;
+}
+
 .storage-summary {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 10px;
 }
 

@@ -1,4 +1,4 @@
-import { ChevronDown, Download, Filter, RefreshCw, Save } from 'lucide-react';
+import { ChevronDown, Download, Filter, ReceiptText, RefreshCw, Save } from 'lucide-react';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   downloadStorageOverviewXlsx,
@@ -28,6 +28,7 @@ export function StoragePanel({ session }: StoragePanelProps) {
   const [storageCharge, setStorageCharge] = useState<BillingChargeSummary | null>(null);
   const [isLoading, setLoading] = useState(false);
   const [isSavingTariff, setSavingTariff] = useState(false);
+  const [isCharging, setCharging] = useState(false);
   const [areControlsOpen, setControlsOpen] = useState(false);
   const selectedClient = useMemo(() => clients.find((client) => client.id === clientId) ?? null, [clientId, clients]);
   const storageEnabled = selectedClient?.storageAccountingEnabled === true;
@@ -119,13 +120,6 @@ export function StoragePanel({ session }: StoragePanelProps) {
       const updated = await updateStorageTariff(session.accessToken, clientId, {
         storagePriceRubPerLiterDay: price,
       });
-      const charge = await generateStorageCharge(session.accessToken, {
-        clientId,
-        periodFrom,
-        periodTo,
-        approve: true,
-        comment: 'Автоматическое начисление при сохранении тарифа хранения.',
-      });
       setClients((current) =>
         current.map((client) =>
           client.id === updated.id
@@ -137,13 +131,50 @@ export function StoragePanel({ session }: StoragePanelProps) {
             : client,
         ),
       );
-      setStorageCharge(charge);
+      setStorageCharge(null);
       await loadOverview();
-      setMessage(`Тариф хранения сохранен. Начисление в биллинге: ${formatMoney(Number(charge.totalRub))}.`);
+      setMessage('Тариф хранения сохранен.');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Не удалось сохранить тариф.');
     } finally {
       setSavingTariff(false);
+    }
+  }
+
+  async function createStorageCharge() {
+    if (!clientId) {
+      return;
+    }
+    if (!storageEnabled) {
+      setError('У выбранного клиента отключен учет хранения. Включите галочку в настройках клиента.');
+      return;
+    }
+
+    const price = Number(tariff);
+    if (!Number.isFinite(price) || price < 0) {
+      setError('Тариф должен быть числом не меньше 0.');
+      return;
+    }
+
+    setCharging(true);
+    setError('');
+    setMessage('');
+    try {
+      const charge = await generateStorageCharge(session.accessToken, {
+        clientId,
+        periodFrom,
+        periodTo,
+        unitPriceRub: price,
+        approve: true,
+        comment: 'Начисление хранения из раздела Склад и операции.',
+      });
+      setStorageCharge(charge);
+      await loadOverview();
+      setMessage(`Начисление хранения создано в биллинге: ${formatMoney(Number(charge.totalRub))}.`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Не удалось начислить хранение.');
+    } finally {
+      setCharging(false);
     }
   }
 
@@ -219,23 +250,34 @@ export function StoragePanel({ session }: StoragePanelProps) {
               onChange={(event) => setTariff(event.target.value)}
             />
           </label>
-          <button
-            className="icon-text-button warehouse-secondary"
-            type="button"
-            onClick={() => void saveTariff()}
-            disabled={!clientId || !storageEnabled || isSavingTariff}
-          >
-            <Save size={16} aria-hidden="true" />
-            <span>{isSavingTariff ? 'Сохраняю' : 'Сохранить тариф'}</span>
-          </button>
-          <button className="primary-button" type="submit" disabled={!clientId || isLoading}>
-            <RefreshCw size={16} aria-hidden="true" />
-            <span>{isLoading ? 'Считаю' : 'Показать'}</span>
-          </button>
-          <button className="icon-text-button warehouse-secondary" type="button" onClick={() => void downloadStorageXlsx()} disabled={!clientId}>
-            <Download size={16} aria-hidden="true" />
-            <span>XLSX</span>
-          </button>
+          <div className="storage-actions">
+            <button
+              className="icon-text-button warehouse-secondary"
+              type="button"
+              onClick={() => void saveTariff()}
+              disabled={!clientId || !storageEnabled || isSavingTariff}
+            >
+              <Save size={16} aria-hidden="true" />
+              <span>{isSavingTariff ? 'Сохраняю' : 'Сохранить тариф'}</span>
+            </button>
+            <button className="primary-button" type="submit" disabled={!clientId || isLoading}>
+              <RefreshCw size={16} aria-hidden="true" />
+              <span>{isLoading ? 'Считаю' : 'Показать'}</span>
+            </button>
+            <button
+              className="icon-text-button warehouse-secondary"
+              type="button"
+              onClick={() => void createStorageCharge()}
+              disabled={!clientId || !storageEnabled || isCharging}
+            >
+              <ReceiptText size={16} aria-hidden="true" />
+              <span>{isCharging ? 'Начисляю' : 'Начислить хранение'}</span>
+            </button>
+            <button className="icon-text-button warehouse-secondary" type="button" onClick={() => void downloadStorageXlsx()} disabled={!clientId}>
+              <Download size={16} aria-hidden="true" />
+              <span>XLSX</span>
+            </button>
+          </div>
         </form>
       ) : null}
 
