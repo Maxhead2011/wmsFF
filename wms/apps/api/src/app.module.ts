@@ -19,6 +19,7 @@ import { ServiceCenterModule } from './modules/service/service-center.module';
 import { SkusModule } from './modules/skus/skus.module';
 import { StockModule } from './modules/stock/stock.module';
 import { TsdModule } from './modules/tsd/tsd.module';
+import { TurnoverModule } from './modules/turnover/turnover.module';
 import { UsersModule } from './modules/users/users.module';
 import { WarehouseModule } from './modules/warehouse/warehouse.module';
 
@@ -42,6 +43,7 @@ import { WarehouseModule } from './modules/warehouse/warehouse.module';
     PrintModule,
     ServiceCenterModule,
     TsdModule,
+    TurnoverModule,
   ],
   controllers: [HealthController],
   providers: [

@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   PackageSearch,
   Printer,
+  RefreshCw,
   ShieldCheck,
   Settings2,
   Truck,
@@ -26,6 +27,7 @@ export type WorkspaceId =
   | 'imports'
   | 'logistics'
   | 'warehouse'
+  | 'turnover'
   | 'requests'
   | 'catalog'
   | 'billing'
@@ -98,6 +100,16 @@ export const workspaceNav: WorkspaceNavItem[] = [
     icon: Boxes,
     status: 'in-progress',
     audience: 'internal',
+  },
+  {
+    id: 'turnover',
+    title: 'ТОВАРООБОРОТ',
+    eyebrow: 'Движение товаров',
+    description: 'История товара от приемки до списания, ручные действия и статистика по штрихкодам.',
+    permissions: ['stock:read'],
+    icon: RefreshCw,
+    status: 'in-progress',
+    audience: 'all',
   },
   {
     id: 'requests',

@@ -14,6 +14,7 @@ import { LogisticsQuotePanel } from './components/logistics/LogisticsQuotePanel'
 import { OwnCompaniesPanel } from './components/own-companies/OwnCompaniesPanel';
 import { PrintPanel } from './components/print/PrintPanel';
 import { ServiceCenterPanel } from './components/service/ServiceCenterPanel';
+import { TurnoverPanel } from './components/turnover/TurnoverPanel';
 import { WarehouseOpsPanel } from './components/warehouse/WarehouseOpsPanel';
 import { fetchMe, type AuthSession, type AuthUser } from './lib/api';
 import { clearStoredSession, loadStoredSession, storeSession } from './lib/session';
@@ -221,6 +222,8 @@ function renderWorkspace(
       return <LogisticsQuotePanel session={session} />;
     case 'warehouse':
       return <WarehouseOpsPanel session={session} />;
+    case 'turnover':
+      return <TurnoverPanel session={session} />;
     case 'requests':
       return <ClientRequestsPanel session={session} />;
     case 'catalog':
@@ -332,7 +335,7 @@ function sectionForWorkspace(id: WorkspaceId): WorkspaceSection {
     return 'client';
   }
 
-  if (id === 'warehouse' || id === 'imports' || id === 'logistics' || id === 'print') {
+  if (id === 'warehouse' || id === 'turnover' || id === 'imports' || id === 'logistics' || id === 'print') {
     return 'operations';
   }
 
@@ -377,8 +380,9 @@ function permissionTitle(item: WorkspaceNavItem) {
 
 function defaultWorkspaceForUser(user: AuthUser): WorkspaceId {
   const preferredOrder: WorkspaceId[] = isClientOnlyUser(user)
-    ? ['cabinet', 'requests', 'catalog', 'logistics', 'billing', 'overview']
+    ? ['cabinet', 'requests', 'catalog', 'turnover', 'logistics', 'billing', 'overview']
     : [
+        'turnover',
         'warehouse',
         'requests',
         'catalog',

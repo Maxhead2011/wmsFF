@@ -1314,6 +1314,151 @@ export type ServiceTelegramSettings = {
   } | null;
 };
 
+export type TurnoverMovementType =
+  | 'INITIAL_IMPORT'
+  | 'RECEIPT'
+  | 'MOVE'
+  | 'RESERVE'
+  | 'PICK'
+  | 'PACK'
+  | 'SHIP'
+  | 'RETURN'
+  | 'INVENTORY_ADJUSTMENT';
+
+export type TurnoverActionKind = 'ADD' | 'WRITE_OFF' | 'TRANSFER' | 'UTILIZE' | 'HOLD';
+
+export type TurnoverSkuReport = {
+  skuId: string;
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  internalSku: string;
+  clientSku: string | null;
+  article: string | null;
+  name: string;
+  primaryBarcode: string | null;
+  barcodes: string[];
+  volumeLiters: number | null;
+  firstReceiptAt: string | null;
+  firstCell: string | null;
+  shippedByRequest: {
+    id: string;
+    title: string;
+    status: string;
+    destinationCity: string | null;
+    createdAt: string;
+  } | null;
+  latestShipAt: string | null;
+  writtenOffAt: string | null;
+  storageDays: number;
+  receivedQuantity: number;
+  shippedQuantity: number;
+  writtenOffQuantity: number;
+  currentQuantity: number;
+  currentCells: Array<{
+    boxId: string | null;
+    boxCode: string;
+    palletCode: string | null;
+    status: string;
+    quantity: number;
+  }>;
+  kiz: Array<{
+    id: string;
+    value: string;
+    status: string;
+    createdAt: string;
+  }>;
+  movements: Array<{
+    id: string;
+    date: string;
+    type: TurnoverMovementType;
+    typeLabel: string;
+    status: string;
+    statusLabel: string;
+    quantity: number;
+    boxCode: string | null;
+    palletCode: string | null;
+    sourceDocument: string | null;
+    request: {
+      id: string;
+      title: string;
+      status: string;
+      destinationCity: string | null;
+      createdAt: string;
+    } | null;
+    comment: string | null;
+    kiz: string[];
+  }>;
+};
+
+export type TurnoverReport = {
+  generatedAt: string;
+  filters: Record<string, string | null>;
+  totals: {
+    skuCount: number;
+    currentQuantity: number;
+    receivedQuantity: number;
+    shippedQuantity: number;
+    writtenOffQuantity: number;
+  };
+  items: TurnoverSkuReport[];
+};
+
+export type TurnoverStatistics = {
+  generatedAt: string;
+  filters: Record<string, string | null>;
+  groupBy: 'day' | 'month' | 'quarter' | 'year';
+  totals: {
+    receivedQuantity: number;
+    shippedQuantity: number;
+    writtenOffQuantity: number;
+    currentQuantity: number;
+  };
+  rows: Array<{
+    skuId: string;
+    clientId: string;
+    client: Pick<ClientSummary, 'id' | 'code' | 'name'> | null;
+    internalSku: string;
+    clientSku: string | null;
+    article: string | null;
+    name: string;
+    primaryBarcode: string | null;
+    receivedQuantity: number;
+    shippedQuantity: number;
+    writtenOffQuantity: number;
+    currentQuantity: number;
+  }>;
+  trend: Array<{
+    period: string;
+    receivedQuantity: number;
+    shippedQuantity: number;
+    writtenOffQuantity: number;
+  }>;
+  clientWidgetCandidate: boolean;
+};
+
+export type TurnoverActionPayload = {
+  clientId: string;
+  skuId?: string;
+  barcode?: string;
+  action: TurnoverActionKind;
+  quantity: number;
+  sourceBoxCode?: string;
+  targetBoxCode?: string;
+  reason?: string;
+  kiz?: string;
+  photoFileName?: string;
+  comment?: string;
+  idempotencyKey?: string;
+};
+
+export type TurnoverActionResult = {
+  status: 'APPLIED' | 'ALREADY_APPLIED';
+  idempotencyKey: string;
+  skuId?: string;
+  skuName?: string;
+  quantity?: number;
+  targetBoxCode?: string | null;
+};
+
 export type ServiceKizSearchRow = {
   id: string;
   value: string;
@@ -2749,6 +2894,41 @@ export async function fetchStockBalances(accessToken: string, filter: { clientId
   });
 }
 
+export async function fetchTurnoverReport(
+  accessToken: string,
+  filter: { clientId?: string; skuId?: string; barcode?: string; search?: string; dateFrom?: string; dateTo?: string; limit?: number } = {},
+) {
+  return request<TurnoverReport>(withQuery('/turnover', turnoverQuery(filter)), {
+    accessToken,
+  });
+}
+
+export async function fetchTurnoverStatistics(
+  accessToken: string,
+  filter: {
+    clientId?: string;
+    skuId?: string;
+    barcode?: string;
+    search?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    limit?: number;
+    groupBy?: 'day' | 'month' | 'quarter' | 'year';
+  } = {},
+) {
+  return request<TurnoverStatistics>(withQuery('/turnover/statistics', turnoverQuery(filter)), {
+    accessToken,
+  });
+}
+
+export async function runTurnoverAction(accessToken: string, payload: TurnoverActionPayload) {
+  return request<TurnoverActionResult>('/turnover/actions', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
 export async function fetchServiceClientStockCleanupPreview(accessToken: string, clientId: string) {
   return request<ServiceClientStockCleanupPreview>(`/service/clients/${clientId}/stock-cleanup`, {
     accessToken,
@@ -3529,6 +3709,28 @@ function withQuery(path: string, params: Record<string, string | undefined>) {
 
   const query = search.toString();
   return query ? `${path}?${query}` : path;
+}
+
+function turnoverQuery(filter: {
+  clientId?: string;
+  skuId?: string;
+  barcode?: string;
+  search?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  limit?: number;
+  groupBy?: 'day' | 'month' | 'quarter' | 'year';
+}) {
+  return {
+    clientId: filter.clientId,
+    skuId: filter.skuId,
+    barcode: filter.barcode,
+    search: filter.search,
+    dateFrom: filter.dateFrom,
+    dateTo: filter.dateTo,
+    limit: filter.limit ? String(filter.limit) : undefined,
+    groupBy: filter.groupBy,
+  };
 }
 
 async function requestMultipart<T>(path: string, body: FormData, accessToken: string) {
