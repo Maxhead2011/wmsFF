@@ -6,6 +6,7 @@ import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { ListTurnoverDto, TurnoverStatisticsDto, TurnoverSuggestionsDto } from './dto/list-turnover.dto';
 import { TurnoverActionDto, TurnoverActionKind } from './dto/turnover-action.dto';
+import { buildTurnoverReceiptWorkbook, turnoverReceiptXlsxMimeType } from './turnover-receipt-xlsx';
 
 type TurnoverMovement = Prisma.StockMovementGetPayload<{
   include: {
@@ -50,6 +51,38 @@ type SourceAllocation = {
   quantity: number;
 };
 
+export type TurnoverReceiptDocument = {
+  movementId: string;
+  sourceDocument: string | null;
+  type: MovementType;
+  typeLabel: string;
+  generatedAt: string;
+  periodFrom: string;
+  periodTo: string;
+  totalQuantity: number;
+  skuCount: number;
+  boxesCount: number;
+  fileName: string;
+  client: { id: string; code: string; name: string };
+  rows: Array<{
+    position: number;
+    movementId: string;
+    date: string;
+    boxCode: string | null;
+    barcode: string | null;
+    internalSku: string;
+    clientSku: string | null;
+    article: string | null;
+    name: string;
+    quantity: number;
+    status: StockStatus;
+    statusLabel: string;
+    kiz: string | null;
+    sourceRows: number[];
+    comment: string | null;
+  }>;
+};
+
 @Injectable()
 export class TurnoverService {
   constructor(
@@ -83,6 +116,7 @@ export class TurnoverService {
           take: 30,
         },
         movements: {
+          ...(movementDateRange ? { where: { createdAt: movementDateRange } } : {}),
           include: {
             box: { select: { id: true, code: true, status: true } },
             productMarks: { select: { id: true, value: true, status: true } },
@@ -92,7 +126,7 @@ export class TurnoverService {
         },
       },
       orderBy: { updatedAt: 'desc' },
-      take: query.limit ?? 40,
+      ...(query.limit ? { take: query.limit } : {}),
     });
 
     const requestMap = await this.loadRequestMap(skus.flatMap((sku) => sku.movements));
@@ -132,7 +166,7 @@ export class TurnoverService {
         barcodes: { orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }] },
       },
       orderBy: { updatedAt: 'desc' },
-      take: query.limit ?? 100,
+      ...(query.limit ? { take: query.limit } : {}),
     });
     const skuIds = skus.map((sku) => sku.id);
 
@@ -491,6 +525,47 @@ export class TurnoverService {
     });
   }
 
+  async getReceiptDocument(movementId: string, user: AuthUser): Promise<TurnoverReceiptDocument> {
+    const seed = await this.prisma.stockMovement.findUnique({
+      where: { id: movementId },
+      include: receiptDocumentInclude,
+    });
+
+    if (!seed) {
+      throw new NotFoundException('Движение прихода не найдено.');
+    }
+
+    this.clientScopes.requireClientAccess(user, seed.clientId, 'read');
+
+    if (!isDocumentMovement(seed)) {
+      throw new BadRequestException('По этому движению нет отдельного документа для просмотра.');
+    }
+
+    const sourceDocument = seed.sourceDocument?.trim() || null;
+    const documentWhere =
+      sourceDocument && sourceDocument !== 'turnover-action'
+        ? documentGroupWhere(seed, sourceDocument)
+        : { id: seed.id };
+    const movements = await this.prisma.stockMovement.findMany({
+      where: documentWhere,
+      include: receiptDocumentInclude,
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+
+    return buildReceiptDocument(seed.id, movements.length ? movements : [seed], sourceDocument);
+  }
+
+  async getReceiptDocumentXlsx(movementId: string, user: AuthUser) {
+    const document = await this.getReceiptDocument(movementId, user);
+    const content = buildTurnoverReceiptWorkbook(document);
+
+    return {
+      fileName: document.fileName,
+      mimeType: turnoverReceiptXlsxMimeType(),
+      content,
+    };
+  }
+
   private buildSkuWhere(query: ListTurnoverDto, clientFilter: string | { in: string[] } | undefined): Prisma.SkuWhereInput {
     const search = query.search?.trim();
     const barcode = query.barcode?.trim();
@@ -786,6 +861,103 @@ export class TurnoverService {
   }
 }
 
+const INCOMING_DOCUMENT_MOVEMENT_TYPES: MovementType[] = [
+  MovementType.INITIAL_IMPORT,
+  MovementType.RECEIPT,
+  MovementType.RETURN,
+];
+
+const DOCUMENT_MOVEMENT_TYPES: MovementType[] = [...INCOMING_DOCUMENT_MOVEMENT_TYPES, MovementType.SHIP];
+
+const receiptDocumentInclude = {
+  client: { select: { id: true, code: true, name: true } },
+  sku: {
+    select: {
+      id: true,
+      internalSku: true,
+      clientSku: true,
+      article: true,
+      name: true,
+      barcodes: { select: { value: true, isPrimary: true }, orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }] },
+    },
+  },
+  box: { select: { id: true, code: true, status: true } },
+  productMarks: { select: { value: true, sourceRow: true }, orderBy: [{ sourceRow: 'asc' }, { value: 'asc' }] },
+} satisfies Prisma.StockMovementInclude;
+
+type ReceiptDocumentMovement = Prisma.StockMovementGetPayload<{ include: typeof receiptDocumentInclude }>;
+
+function buildReceiptDocument(movementId: string, movements: ReceiptDocumentMovement[], sourceDocument: string | null): TurnoverReceiptDocument {
+  const first = movements[0];
+  const last = movements[movements.length - 1] ?? first;
+  const rows = movements.map((movement, index) => {
+    const primaryBarcode = movement.sku.barcodes.find((barcode) => barcode.isPrimary)?.value ?? movement.sku.barcodes[0]?.value ?? null;
+    const sourceRows = uniqueValues(movement.productMarks.map((mark) => mark.sourceRow).filter((row): row is number => row != null));
+
+    return {
+      position: index + 1,
+      movementId: movement.id,
+      date: movement.createdAt.toISOString(),
+      boxCode: movement.box?.code ?? null,
+      barcode: primaryBarcode,
+      internalSku: movement.sku.internalSku,
+      clientSku: movement.sku.clientSku,
+      article: movement.sku.article,
+      name: movement.sku.name,
+      quantity: Math.abs(movement.quantity),
+      status: movement.status,
+      statusLabel: stockStatusLabel(movement.status),
+      kiz: movement.productMarks.map((mark) => mark.value).join(', ') || null,
+      sourceRows,
+      comment: movement.comment,
+    };
+  });
+
+  const sourceName = sourceDocument || `movement-${movementId.slice(0, 8)}`;
+
+  return {
+    movementId,
+    sourceDocument,
+    type: first.type,
+    typeLabel: movementTypeLabel(first.type),
+    generatedAt: new Date().toISOString(),
+    periodFrom: first.createdAt.toISOString(),
+    periodTo: last.createdAt.toISOString(),
+    totalQuantity: rows.reduce((sum, row) => sum + row.quantity, 0),
+    skuCount: uniqueValues(rows.map((row) => row.internalSku)).length,
+    boxesCount: uniqueValues(rows.map((row) => row.boxCode).filter((boxCode): boxCode is string => Boolean(boxCode))).length,
+    fileName: `movement-${safeFileName(first.client.code)}-${safeFileName(sourceName)}.xlsx`,
+    client: first.client,
+    rows,
+  };
+}
+
+function isDocumentMovement(movement: { type: MovementType; quantity: number }) {
+  if (!DOCUMENT_MOVEMENT_TYPES.includes(movement.type)) {
+    return false;
+  }
+
+  return movement.type === MovementType.SHIP ? movement.quantity < 0 : movement.quantity > 0;
+}
+
+function documentGroupWhere(seed: ReceiptDocumentMovement, sourceDocument: string): Prisma.StockMovementWhereInput {
+  if (seed.type === MovementType.SHIP) {
+    return {
+      clientId: seed.clientId,
+      sourceDocument,
+      type: MovementType.SHIP,
+      quantity: { lt: 0 },
+    };
+  }
+
+  return {
+    clientId: seed.clientId,
+    sourceDocument,
+    quantity: { gt: 0 },
+    type: { in: INCOMING_DOCUMENT_MOVEMENT_TYPES },
+  };
+}
+
 function isReceiptMovement(movement: { type: MovementType; quantity: number }) {
   const receiptMovementTypes: MovementType[] = [
     MovementType.INITIAL_IMPORT,
@@ -918,6 +1090,14 @@ function parseKizValues(value?: string) {
       .map((item) => item.trim())
       .filter(Boolean),
   );
+}
+
+function safeFileName(value: string) {
+  return value
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .replace(/\s+/g, '_')
+    .slice(0, 80) || 'receipt';
 }
 
 function emptyStatistics(query: TurnoverStatisticsDto, groupBy: string) {

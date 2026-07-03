@@ -1500,6 +1500,38 @@ export type TurnoverSuggestions = {
   }>;
 };
 
+export type TurnoverMovementDocument = {
+  movementId: string;
+  sourceDocument: string | null;
+  type: TurnoverMovementType;
+  typeLabel: string;
+  generatedAt: string;
+  periodFrom: string;
+  periodTo: string;
+  totalQuantity: number;
+  skuCount: number;
+  boxesCount: number;
+  fileName: string;
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  rows: Array<{
+    position: number;
+    movementId: string;
+    date: string;
+    boxCode: string | null;
+    barcode: string | null;
+    internalSku: string;
+    clientSku: string | null;
+    article: string | null;
+    name: string;
+    quantity: number;
+    status: string;
+    statusLabel: string;
+    kiz: string | null;
+    sourceRows: number[];
+    comment: string | null;
+  }>;
+};
+
 export type ServiceKizSearchRow = {
   id: string;
   value: string;
@@ -2972,6 +3004,16 @@ export async function fetchTurnoverStatistics(
   return request<TurnoverStatistics>(withQuery('/turnover/statistics', turnoverQuery(filter)), {
     accessToken,
   });
+}
+
+export async function fetchTurnoverMovementDocument(accessToken: string, movementId: string) {
+  return request<TurnoverMovementDocument>(`/turnover/movements/${movementId}/document`, {
+    accessToken,
+  });
+}
+
+export async function downloadTurnoverMovementDocumentXlsx(accessToken: string, movementId: string) {
+  return requestBlob(`/turnover/movements/${movementId}/document.xlsx`, accessToken);
 }
 
 export async function runTurnoverAction(accessToken: string, payload: TurnoverActionPayload) {

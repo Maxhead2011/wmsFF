@@ -2,15 +2,18 @@ import {
   Archive,
   ArrowRightLeft,
   BarChart3,
+  Download,
   History,
   PackagePlus,
   RefreshCw,
-  Search,
   Trash2,
+  X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import {
+  downloadTurnoverMovementDocumentXlsx,
   fetchClients,
+  fetchTurnoverMovementDocument,
   fetchTurnoverReport,
   fetchTurnoverStatistics,
   fetchTurnoverSuggestions,
@@ -18,6 +21,7 @@ import {
   type AuthSession,
   type ClientSummary,
   type TurnoverActionKind,
+  type TurnoverMovementDocument,
   type TurnoverReport,
   type TurnoverSkuReport,
   type TurnoverStatistics,
@@ -86,8 +90,11 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
   const [actionMessage, setActionMessage] = useState('');
   const [actionError, setActionError] = useState('');
   const [isSubmittingAction, setSubmittingAction] = useState(false);
+  const [movementDocument, setMovementDocument] = useState<LoadState<TurnoverMovementDocument | null>>({ status: 'idle', data: null });
+  const [isDownloadingMovementDocument, setDownloadingMovementDocument] = useState(false);
 
   const canSeeStatistics = useMemo(() => canUseStatistics(session.user.roleCodes, session.user.permissionCodes), [session.user]);
+  const canUseActions = useMemo(() => canUseTurnoverActions(session.user.roleCodes, session.user.permissionCodes), [session.user]);
   const selectedReportItem = useMemo(() => {
     const items = report.data?.items ?? [];
     return items.find((item) => item.skuId === selectedSkuId) ?? items[0] ?? null;
@@ -128,6 +135,12 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
 
     return () => window.clearTimeout(timer);
   }, [selectedClientId, suggestionQuery]);
+
+  useEffect(() => {
+    if ((activeTile === 'actions' && !canUseActions) || (activeTile === 'stats' && !canSeeStatistics)) {
+      setActiveTile('movement');
+    }
+  }, [activeTile, canSeeStatistics, canUseActions]);
 
   useEffect(() => {
     if (!report.data || report.data.items.length === 0) {
@@ -175,7 +188,6 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
       barcode: barcode.trim() || undefined,
       dateFrom: dateFrom || undefined,
       dateTo: dateTo || undefined,
-      limit: 80,
     };
     const statisticsFilter = { ...reportFilter, groupBy };
 
@@ -252,6 +264,42 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
     } finally {
       setSubmittingAction(false);
     }
+  }
+
+  async function openMovementDocument(movement: TurnoverSkuReport['movements'][number]) {
+    if (!isDocumentMovement(movement)) {
+      return;
+    }
+
+    setMovementDocument({ status: 'loading', data: null, error: undefined });
+    try {
+      setMovementDocument({
+        status: 'ready',
+        data: await fetchTurnoverMovementDocument(session.accessToken, movement.id),
+      });
+    } catch (caught) {
+      setMovementDocument({ status: 'error', data: null, error: errorMessage(caught) });
+    }
+  }
+
+  async function downloadMovementDocument(movementId: string, fileName?: string) {
+    setDownloadingMovementDocument(true);
+    try {
+      const blob = await downloadTurnoverMovementDocumentXlsx(session.accessToken, movementId);
+      downloadBlob(blob, fileName || `movement-${movementId.slice(0, 8)}.xlsx`);
+    } catch (caught) {
+      setMovementDocument((current) => ({
+        ...current,
+        status: current.data ? 'ready' : 'error',
+        error: errorMessage(caught),
+      }));
+    } finally {
+      setDownloadingMovementDocument(false);
+    }
+  }
+
+  function closeMovementDocument() {
+    setMovementDocument({ status: 'idle', data: null, error: undefined });
   }
 
   const totals = report.data?.totals;
@@ -337,28 +385,39 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
           value={totals ? `${formatNumber(totals.currentQuantity)} шт` : '0 шт'}
           onClick={() => setActiveTile('movement')}
         />
-        <TurnoverTile
-          active={activeTile === 'actions'}
-          icon={<ArrowRightLeft size={22} aria-hidden="true" />}
-          title="Действия с товарами"
-          text="Добавить, списать, перенести, утилизировать или отложить."
-          value={selectedClient?.name ?? 'Клиент'}
-          onClick={() => setActiveTile('actions')}
-        />
-        <TurnoverTile
-          active={activeTile === 'stats'}
-          icon={<BarChart3 size={22} aria-hidden="true" />}
-          title="Статистика"
-          text="Приход, отгрузка и тенденции по дням, месяцам, кварталам."
-          value={canSeeStatistics ? 'Доступно' : 'Только ФФ'}
-          onClick={() => setActiveTile('stats')}
-        />
+        {canUseActions ? (
+          <TurnoverTile
+            active={activeTile === 'actions'}
+            icon={<ArrowRightLeft size={22} aria-hidden="true" />}
+            title="Действия с товарами"
+            text="Добавить, списать, перенести, утилизировать или отложить."
+            value={selectedClient?.name ?? 'Клиент'}
+            onClick={() => setActiveTile('actions')}
+          />
+        ) : null}
+        {canSeeStatistics ? (
+          <TurnoverTile
+            active={activeTile === 'stats'}
+            icon={<BarChart3 size={22} aria-hidden="true" />}
+            title="Статистика"
+            text="Приход, отгрузка и тенденции по дням, месяцам, кварталам."
+            value="Доступно"
+            onClick={() => setActiveTile('stats')}
+          />
+        ) : null}
       </section>
 
       {report.status === 'loading' ? <p className="inline-status">Загружаю товарооборот.</p> : null}
 
-      {activeTile === 'movement' ? <MovementSection items={report.data?.items ?? []} selectedSkuId={selectedReportItem?.skuId ?? ''} onSelect={setSelectedSkuId} /> : null}
-      {activeTile === 'actions' ? (
+      {activeTile === 'movement' ? (
+        <MovementSection
+          items={report.data?.items ?? []}
+          selectedSkuId={selectedReportItem?.skuId ?? ''}
+          onOpenDocument={(movement) => void openMovementDocument(movement)}
+          onSelect={setSelectedSkuId}
+        />
+      ) : null}
+      {activeTile === 'actions' && canUseActions ? (
         <ActionsSection
           form={actionForm}
           items={report.data?.items ?? []}
@@ -376,13 +435,21 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
           onSubmit={() => void submitAction()}
         />
       ) : null}
-      {activeTile === 'stats' ? (
+      {activeTile === 'stats' && canSeeStatistics ? (
         <StatisticsSection
           canSee={canSeeStatistics}
           statistics={statistics.data}
           groupBy={groupBy}
           onGroupBy={(value) => setGroupBy(value)}
           onReload={() => void loadTurnover()}
+        />
+      ) : null}
+      {movementDocument.status !== 'idle' ? (
+        <TurnoverMovementDocumentModal
+          documentState={movementDocument}
+          isDownloading={isDownloadingMovementDocument}
+          onClose={closeMovementDocument}
+          onDownload={(movementId, fileName) => void downloadMovementDocument(movementId, fileName)}
         />
       ) : null}
     </div>
@@ -416,7 +483,17 @@ function TurnoverTile({
   );
 }
 
-function MovementSection({ items, selectedSkuId, onSelect }: { items: TurnoverSkuReport[]; selectedSkuId: string; onSelect: (skuId: string) => void }) {
+function MovementSection({
+  items,
+  selectedSkuId,
+  onOpenDocument,
+  onSelect,
+}: {
+  items: TurnoverSkuReport[];
+  selectedSkuId: string;
+  onOpenDocument: (movement: TurnoverSkuReport['movements'][number]) => void;
+  onSelect: (skuId: string) => void;
+}) {
   const selected = items.find((item) => item.skuId === selectedSkuId) ?? items[0] ?? null;
 
   if (items.length === 0) {
@@ -458,13 +535,19 @@ function MovementSection({ items, selectedSkuId, onSelect }: { items: TurnoverSk
           </table>
         </div>
 
-        {selected ? <MovementDetails item={selected} /> : null}
+        {selected ? <MovementDetails item={selected} onOpenDocument={onOpenDocument} /> : null}
       </div>
     </section>
   );
 }
 
-function MovementDetails({ item }: { item: TurnoverSkuReport }) {
+function MovementDetails({
+  item,
+  onOpenDocument,
+}: {
+  item: TurnoverSkuReport;
+  onOpenDocument: (movement: TurnoverSkuReport['movements'][number]) => void;
+}) {
   return (
     <div className="turnover-details">
       <div className="turnover-details__heading">
@@ -507,8 +590,17 @@ function MovementDetails({ item }: { item: TurnoverSkuReport }) {
               <tr key={movement.id}>
                 <td>{formatDateTime(movement.date)}</td>
                 <td>
-                  <strong>{movement.typeLabel}</strong>
-                  <span>{movement.comment || movement.statusLabel}</span>
+                  {isDocumentMovement(movement) ? (
+                    <button className="turnover-movement-action" type="button" onClick={() => onOpenDocument(movement)}>
+                      <strong>{movement.typeLabel}</strong>
+                      <span>{movement.comment || 'Открыть документ движения'}</span>
+                    </button>
+                  ) : (
+                    <>
+                      <strong>{movement.typeLabel}</strong>
+                      <span>{movement.comment || movement.statusLabel}</span>
+                    </>
+                  )}
                 </td>
                 <td className={movement.quantity < 0 ? 'is-negative' : 'is-positive'}>{formatNumber(movement.quantity)}</td>
                 <td>{movement.boxCode ?? 'без ячейки'}</td>
@@ -518,6 +610,93 @@ function MovementDetails({ item }: { item: TurnoverSkuReport }) {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+function TurnoverMovementDocumentModal({
+  documentState,
+  isDownloading,
+  onClose,
+  onDownload,
+}: {
+  documentState: LoadState<TurnoverMovementDocument | null>;
+  isDownloading: boolean;
+  onClose: () => void;
+  onDownload: (movementId: string, fileName: string) => void;
+}) {
+  const document = documentState.data;
+
+  return (
+    <div className="turnover-document-modal" role="dialog" aria-modal="true" aria-label="Документ движения">
+      <section className="turnover-document-modal__panel">
+        <header className="turnover-document-modal__header">
+          <div>
+            <p className="eyebrow">Документ движения</p>
+            <h3>{document ? document.typeLabel : 'Загрузка документа'}</h3>
+            <span>{document ? `${document.client.name} · ${document.sourceDocument ?? document.movementId}` : 'Получаю данные из WMS'}</span>
+          </div>
+          <div className="turnover-document-modal__actions">
+            {document ? (
+              <button className="primary-button" type="button" onClick={() => onDownload(document.movementId, document.fileName)} disabled={isDownloading}>
+                <Download size={16} aria-hidden="true" />
+                <span>{isDownloading ? 'Скачиваю' : 'Скачать Excel'}</span>
+              </button>
+            ) : null}
+            <button className="icon-button" type="button" onClick={onClose} aria-label="Закрыть">
+              <X size={18} aria-hidden="true" />
+            </button>
+          </div>
+        </header>
+
+        {documentState.status === 'loading' ? <p className="inline-status">Загружаю документ движения.</p> : null}
+        {documentState.error ? <p className="form-error">{documentState.error}</p> : null}
+
+        {document ? (
+          <>
+            <div className="turnover-metrics">
+              <Metric label="Период" value={`${formatDateTime(document.periodFrom)} - ${formatDateTime(document.periodTo)}`} />
+              <Metric label="Строк" value={formatNumber(document.rows.length)} />
+              <Metric label="Товаров, шт" value={formatNumber(document.totalQuantity)} />
+              <Metric label="Коробов" value={formatNumber(document.boxesCount)} />
+            </div>
+
+            <div className="turnover-table-wrap turnover-document-modal__table">
+              <table className="turnover-table">
+                <thead>
+                  <tr>
+                    <th>№</th>
+                    <th>Дата</th>
+                    <th>Короб</th>
+                    <th>ШК</th>
+                    <th>Товар</th>
+                    <th>Кол-во</th>
+                    <th>КИЗ</th>
+                    <th>Комментарий</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {document.rows.map((row) => (
+                    <tr key={row.movementId}>
+                      <td>{row.position}</td>
+                      <td>{formatDateTime(row.date)}</td>
+                      <td>{row.boxCode ?? 'без короба'}</td>
+                      <td>{row.barcode ?? 'нет'}</td>
+                      <td>
+                        <strong>{row.name}</strong>
+                        <span>{[row.article, row.internalSku].filter(Boolean).join(' · ')}</span>
+                      </td>
+                      <td>{formatNumber(row.quantity)}</td>
+                      <td>{row.kiz ?? '-'}</td>
+                      <td>{row.comment ?? '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : null}
+      </section>
     </div>
   );
 }
@@ -982,6 +1161,38 @@ function uniqueOptions(options: KnownValueOption[]) {
 
 function canUseStatistics(roleCodes: string[], permissionCodes: string[]) {
   return permissionCodes.includes('system:admin') || roleCodes.some((role) => ['ADMIN', 'OWNER', 'MANAGER'].includes(role));
+}
+
+function canUseTurnoverActions(roleCodes: string[], permissionCodes: string[]) {
+  if (permissionCodes.includes('system:admin')) {
+    return true;
+  }
+
+  const hasStaffRole = roleCodes.some((role) => ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR'].includes(role));
+  if (!hasStaffRole && roleCodes.includes('CLIENT')) {
+    return false;
+  }
+
+  return permissionCodes.includes('stock:write') || roleCodes.some((role) => ['ADMIN', 'OWNER', 'MANAGER'].includes(role));
+}
+
+function isDocumentMovement(movement: TurnoverSkuReport['movements'][number]) {
+  if (movement.type === 'SHIP') {
+    return movement.quantity < 0;
+  }
+
+  return ['INITIAL_IMPORT', 'RECEIPT', 'RETURN'].includes(movement.type) && movement.quantity > 0;
+}
+
+function downloadBlob(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function uniqueValues(values: string[]) {

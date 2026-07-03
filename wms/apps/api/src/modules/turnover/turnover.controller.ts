@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Res, StreamableFile } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import type { Response } from 'express';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
@@ -28,9 +29,33 @@ export class TurnoverController {
     return this.turnover.statistics(query, user);
   }
 
+  @Get('movements/:movementId/document')
+  movementDocument(@Param('movementId') movementId: string, @CurrentUser() user: AuthUser) {
+    return this.turnover.getReceiptDocument(movementId, user);
+  }
+
+  @Get('movements/:movementId/document.xlsx')
+  async movementDocumentXlsx(
+    @Param('movementId') movementId: string,
+    @CurrentUser() user: AuthUser,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const file = await this.turnover.getReceiptDocumentXlsx(movementId, user);
+    response.setHeader('Content-Type', file.mimeType);
+    response.setHeader('Content-Length', String(file.content.length));
+    response.setHeader('Content-Disposition', contentDisposition(file.fileName));
+
+    return new StreamableFile(file.content);
+  }
+
   @Post('actions')
   @RequirePermissions('stock:write')
   runAction(@Body() dto: TurnoverActionDto, @CurrentUser() user: AuthUser) {
     return this.turnover.runAction(dto, user);
   }
+}
+
+function contentDisposition(fileName: string) {
+  const asciiName = fileName.replace(/[^\x20-\x7E]+/g, '_').replace(/"/g, '');
+  return `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
 }

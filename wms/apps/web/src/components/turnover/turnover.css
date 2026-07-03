@@ -257,6 +257,29 @@
   font-size: 12px;
 }
 
+.turnover-movement-action {
+  display: grid;
+  width: 100%;
+  gap: 2px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.turnover-movement-action strong {
+  color: var(--red-dark);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.turnover-movement-action:focus-visible {
+  outline: 2px solid rgb(215 25 32 / 0.32);
+  outline-offset: 3px;
+}
+
 .turnover-details {
   display: grid;
   gap: 12px;
@@ -373,6 +396,55 @@
   font-weight: 900;
 }
 
+.turnover-document-modal {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(15 23 42 / 0.52);
+}
+
+.turnover-document-modal__panel {
+  display: grid;
+  width: min(1120px, 100%);
+  max-height: min(86vh, 860px);
+  gap: 14px;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 24px 70px rgb(15 23 42 / 0.28);
+  padding: 16px;
+}
+
+.turnover-document-modal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.turnover-document-modal__header h3 {
+  font-size: 22px;
+}
+
+.turnover-document-modal__header span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.turnover-document-modal__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.turnover-document-modal__table {
+  max-height: 430px;
+}
+
 @media (max-width: 1180px) {
   .turnover-tiles,
   .turnover-two-columns,
@@ -387,7 +459,17 @@
   }
 
   .turnover-details__heading,
-  .turnover-stats__toolbar {
+  .turnover-stats__toolbar,
+  .turnover-document-modal__header {
     display: grid;
+  }
+
+  .turnover-document-modal {
+    padding: 10px;
+  }
+
+  .turnover-document-modal__actions {
+    width: 100%;
+    justify-content: space-between;
   }
 }
