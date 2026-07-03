@@ -559,7 +559,16 @@ function ClientCabinetInvoiceTable({
                   tabIndex={0}
                 >
                   <td>
-                    <strong>{invoice.number}</strong>
+                    <button
+                      className="client-invoice-number-button"
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setExpandedInvoiceId(expanded ? '' : invoice.id);
+                      }}
+                    >
+                      {invoice.number}
+                    </button>
                     {invoice.dueDate ? <span>до {formatCabinetDate(invoice.dueDate)}</span> : null}
                   </td>
                   <td>
@@ -580,8 +589,18 @@ function ClientCabinetInvoiceTable({
                     </span>
                   </td>
                   <td>
-                    <strong>{invoice.items.length} поз.</strong>
-                    <span>{expanded ? 'состав открыт' : 'нажмите строку'}</span>
+                    <button
+                      className="client-invoice-expand-button"
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setExpandedInvoiceId(expanded ? '' : invoice.id);
+                      }}
+                      aria-expanded={expanded}
+                    >
+                      {expanded ? 'Скрыть состав' : 'Показать состав'}
+                    </button>
+                    <span>{invoice.items.length} поз. · {invoice.payments.length} оплат</span>
                   </td>
                   <td>
                     <div className="client-request-actions-cell">
