@@ -69,6 +69,7 @@ export class LogisticsService {
     return this.prisma.logisticsTariffSet.findUniqueOrThrow({
       where: { id },
       include: {
+        _count: { select: { directions: true } },
         directions: {
           orderBy: [{ origin: 'asc' }, { destination: 'asc' }],
           include: { tiers: { orderBy: [{ maxBoxes: 'asc' }, { minPallets: 'asc' }] } },
@@ -675,7 +676,8 @@ export class LogisticsService {
         note: quote.note,
       };
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : 'Требуется ручной расчет логистики.';
+      const details = caught instanceof Error ? caught.message : 'тариф не найден';
+      const message = `Требуется ручной расчет фулфилментом: ${details}`;
 
       return {
         tariffSetId: dto.tariffSetId,

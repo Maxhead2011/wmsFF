@@ -1800,6 +1800,31 @@ export type LogisticsTariffSetSummary = {
   };
 };
 
+export type LogisticsRateTierSummary = {
+  id: string;
+  directionId: string;
+  label: string;
+  minPallets: number | null;
+  maxPallets: number | null;
+  maxBoxes: number | null;
+  pricingMode: LogisticsPricingMode;
+  priceRub: string | number;
+};
+
+export type LogisticsDirectionSummary = {
+  id: string;
+  tariffSetId: string;
+  origin: string;
+  destination: string;
+  note: string | null;
+  pricingMode: LogisticsPricingMode;
+  tiers: LogisticsRateTierSummary[];
+};
+
+export type LogisticsTariffSetDetail = LogisticsTariffSetSummary & {
+  directions: LogisticsDirectionSummary[];
+};
+
 export type LogisticsQuotePayload = {
   tariffSetId?: string;
   destination: string;
@@ -3044,6 +3069,12 @@ export async function resolveTsdReviewOperation(
 
 export async function fetchLogisticsTariffSets(accessToken: string) {
   return request<LogisticsTariffSetSummary[]>('/logistics/tariff-sets', {
+    accessToken,
+  });
+}
+
+export async function fetchLogisticsTariffSet(accessToken: string, tariffSetId: string) {
+  return request<LogisticsTariffSetDetail>(`/logistics/tariff-sets/${tariffSetId}`, {
     accessToken,
   });
 }

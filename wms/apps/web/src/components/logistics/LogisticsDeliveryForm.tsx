@@ -2,10 +2,12 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { Truck } from 'lucide-react';
 import {
   createLogisticsDeliveryRequest,
+  fetchLogisticsTariffSet,
   type AuthSession,
   type ClientRequestSummary,
   type ClientSummary,
   type LogisticsDeliveryRequestSummary,
+  type LogisticsTariffSetDetail,
   type LogisticsTariffSetSummary,
 } from '../../lib/api';
 
@@ -25,6 +27,7 @@ export function LogisticsDeliveryForm({ clients, requests, tariffs, session, onC
   const [clientId, setClientId] = useState(clients[0]?.id ?? '');
   const [requestId, setRequestId] = useState('');
   const [tariffSetId, setTariffSetId] = useState(tariffs[0]?.id ?? '');
+  const [tariffDetail, setTariffDetail] = useState<LogisticsTariffSetDetail | null>(null);
   const [destination, setDestination] = useState('');
   const [quantityMode, setQuantityMode] = useState<QuantityMode>('boxes');
   const [quantity, setQuantity] = useState('1');
@@ -41,10 +44,14 @@ export function LogisticsDeliveryForm({ clients, requests, tariffs, session, onC
     () => availableRequests.find((request) => request.id === requestId) ?? null,
     [availableRequests, requestId],
   );
+  const destinationOptions = useMemo(() => buildDestinationOptions(tariffDetail), [tariffDetail]);
   const packageCounts = useMemo(() => countRequestPackages(selectedRequest), [selectedRequest]);
   const isPackageDriven = Boolean(selectedRequest);
   const parsedQuantity = Number(quantity);
   const hasActualPackages = packageCounts.boxes + packageCounts.pallets > 0;
+  const destinationExists = !destination.trim() || hasDestinationOption(destinationOptions, destination);
+  const isUnknownDestination = Boolean(destination.trim() && destinationOptions.length > 0 && !destinationExists);
+  const destinationListId = 'logistics-delivery-destinations';
   const canSubmit = Boolean(
     clientId &&
       destination.trim() &&
@@ -56,6 +63,30 @@ export function LogisticsDeliveryForm({ clients, requests, tariffs, session, onC
       setDestination(selectedRequest.destinationCity);
     }
   }, [selectedRequest?.destinationCity]);
+
+  useEffect(() => {
+    if (!tariffSetId) {
+      setTariffDetail(null);
+      return;
+    }
+
+    let isMounted = true;
+    fetchLogisticsTariffSet(session.accessToken, tariffSetId)
+      .then((detail) => {
+        if (isMounted) {
+          setTariffDetail(detail);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setTariffDetail(null);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [session.accessToken, tariffSetId]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -139,7 +170,18 @@ export function LogisticsDeliveryForm({ clients, requests, tariffs, session, onC
         </label>
         <label>
           <span>Куда</span>
-          <input value={destination} onChange={(event) => setDestination(event.target.value)} required />
+          <input
+            value={destination}
+            onChange={(event) => setDestination(event.target.value)}
+            list={destinationListId}
+            placeholder="Начните вводить город"
+            required
+          />
+          <datalist id={destinationListId}>
+            {destinationOptions.map((city) => (
+              <option key={city} value={city} />
+            ))}
+          </datalist>
         </label>
         <div className="quote-mode" role="tablist" aria-label="Единица доставки">
           <button className={quantityMode === 'boxes' ? 'active' : ''} disabled={isPackageDriven} type="button" onClick={() => setQuantityMode('boxes')}>
@@ -166,6 +208,12 @@ export function LogisticsDeliveryForm({ clients, requests, tariffs, session, onC
 
       {isPackageDriven && !hasActualPackages ? (
         <p className="form-error">По выбранной заявке нет упаковочных мест. Сначала упакуйте заявку на складе.</p>
+      ) : null}
+
+      {isUnknownDestination ? (
+        <p className="logistics-route-warning">
+          Города нет в тарифах. После создания заявка попадет фулфилменту на ручной расчет стоимости перевозки.
+        </p>
       ) : null}
 
       <div className="delivery-footer">
@@ -211,4 +259,38 @@ function formatPackageCounts(counts: { boxes: number; pallets: number }) {
     parts.push(`${counts.pallets} пал.`);
   }
   return parts.join(' / ') || 'нет упаковки';
+}
+
+function buildDestinationOptions(tariffSet: LogisticsTariffSetDetail | null) {
+  if (!tariffSet) {
+    return [];
+  }
+
+  const moscowDirections = tariffSet.directions.filter((direction) => isMoscowOrigin(direction.origin));
+  const source = moscowDirections.length > 0 ? moscowDirections : tariffSet.directions;
+  const options = new Map<string, string>();
+
+  source.forEach((direction) => {
+    const destination = direction.destination.trim();
+    if (!destination) {
+      return;
+    }
+    options.set(normalizeLogisticsPoint(destination), destination);
+  });
+
+  return [...options.values()].sort((left, right) => left.localeCompare(right, 'ru'));
+}
+
+function hasDestinationOption(options: string[], destination: string) {
+  const normalized = normalizeLogisticsPoint(destination);
+  return options.some((option) => normalizeLogisticsPoint(option) === normalized);
+}
+
+function isMoscowOrigin(origin: string) {
+  const normalized = normalizeLogisticsPoint(origin);
+  return normalized === normalizeLogisticsPoint(DEFAULT_LOGISTICS_ORIGIN) || normalized === 'москва' || normalized === 'moscow';
+}
+
+function normalizeLogisticsPoint(value: string) {
+  return value.toLowerCase().replace(/\s*,\s*/g, ', ').replace(/\s+/g, ' ').trim();
 }

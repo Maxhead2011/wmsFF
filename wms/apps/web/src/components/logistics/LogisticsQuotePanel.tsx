@@ -1,5 +1,5 @@
 import { Calculator, RefreshCw } from 'lucide-react';
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   assignLogisticsDeliveryTrip,
   createBillingInvoice,
@@ -7,6 +7,7 @@ import {
   fetchClients,
   fetchLogisticsCarriers,
   fetchLogisticsDeliveryRequests,
+  fetchLogisticsTariffSet,
   fetchLogisticsTariffSets,
   fetchLogisticsTrips,
   finalizeLogisticsDeliveryQuote,
@@ -21,6 +22,7 @@ import {
   type LogisticsDeliveryRequestSummary,
   type LogisticsDeliveryStatus,
   type LogisticsQuoteResult,
+  type LogisticsTariffSetDetail,
   type LogisticsTariffSetSummary,
   type LogisticsTripSummary,
   type FinalizeLogisticsDeliveryQuotePayload,
@@ -49,6 +51,7 @@ export function LogisticsQuotePanel({ session }: LogisticsQuotePanelProps) {
   const [carriers, setCarriers] = useState<LogisticsCarrierSummary[]>([]);
   const [trips, setTrips] = useState<LogisticsTripSummary[]>([]);
   const [tariffSetId, setTariffSetId] = useState('');
+  const [tariffDetail, setTariffDetail] = useState<LogisticsTariffSetDetail | null>(null);
   const [destination, setDestination] = useState('');
   const [quantityMode, setQuantityMode] = useState<QuantityMode>('boxes');
   const [quantity, setQuantity] = useState('1');
@@ -62,6 +65,37 @@ export function LogisticsQuotePanel({ session }: LogisticsQuotePanelProps) {
   useEffect(() => {
     void loadData();
   }, [session.accessToken]);
+
+  useEffect(() => {
+    if (!tariffSetId) {
+      setTariffDetail(null);
+      return;
+    }
+
+    let isMounted = true;
+    fetchLogisticsTariffSet(session.accessToken, tariffSetId)
+      .then((detail) => {
+        if (isMounted) {
+          setTariffDetail(detail);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setTariffDetail(null);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [session.accessToken, tariffSetId]);
+
+  const destinationOptions = useMemo(() => buildDestinationOptions(tariffDetail), [tariffDetail]);
+  const parsedQuantity = Number(quantity);
+  const canSubmit = Boolean(destination.trim() && Number.isInteger(parsedQuantity) && parsedQuantity > 0);
+  const destinationExists = !destination.trim() || hasDestinationOption(destinationOptions, destination);
+  const isUnknownDestination = Boolean(destination.trim() && destinationOptions.length > 0 && !destinationExists);
+  const destinationListId = 'logistics-quote-destinations';
 
   if (!canUse(session.user, 'logistics:read')) {
     return null;
@@ -163,9 +197,15 @@ export function LogisticsQuotePanel({ session }: LogisticsQuotePanelProps) {
     event.preventDefault();
     setSubmitting(true);
     setError('');
+    setMessage('');
     setResult(null);
 
     try {
+      if (destination.trim() && destinationOptions.length > 0 && !destinationExists) {
+        setMessage('Города нет в загруженных тарифах. Создайте заявку на доставку ниже: она уйдет фулфилменту на ручной расчет стоимости.');
+        return;
+      }
+
       const parsedQuantity = Number(quantity);
       // Русский комментарий: backend принимает ровно один параметр количества, поэтому режим формы разворачиваем в boxes или pallets.
       const quote = await quoteLogistics(session.accessToken, {
@@ -181,9 +221,6 @@ export function LogisticsQuotePanel({ session }: LogisticsQuotePanelProps) {
       setSubmitting(false);
     }
   }
-
-  const parsedQuantity = Number(quantity);
-  const canSubmit = Boolean(destination.trim() && Number.isInteger(parsedQuantity) && parsedQuantity > 0);
 
   return (
     <section className="logistics-panel" aria-label="Расчет логистики">
@@ -223,7 +260,18 @@ export function LogisticsQuotePanel({ session }: LogisticsQuotePanelProps) {
           </label>
           <label>
             <span>Куда</span>
-            <input value={destination} onChange={(event) => setDestination(event.target.value)} required />
+            <input
+              value={destination}
+              onChange={(event) => setDestination(event.target.value)}
+              list={destinationListId}
+              placeholder="Начните вводить город"
+              required
+            />
+            <datalist id={destinationListId}>
+              {destinationOptions.map((city) => (
+                <option key={city} value={city} />
+              ))}
+            </datalist>
           </label>
           <label>
             <span>Дата</span>
@@ -255,6 +303,11 @@ export function LogisticsQuotePanel({ session }: LogisticsQuotePanelProps) {
         </div>
 
         {error ? <p className="form-error">{error}</p> : null}
+        {isUnknownDestination ? (
+          <p className="logistics-route-warning">
+            Города нет в тарифах. Для точной стоимости создайте заявку на доставку: она попадет фулфилменту на расчет.
+          </p>
+        ) : null}
         {message ? <p className="form-success">{message}</p> : null}
       </form>
 
@@ -326,4 +379,38 @@ function canUse(user: AuthUser, permission: string) {
 
 function dateOnly(value: string) {
   return new Date(value).toISOString().slice(0, 10);
+}
+
+function buildDestinationOptions(tariffSet: LogisticsTariffSetDetail | null) {
+  if (!tariffSet) {
+    return [];
+  }
+
+  const moscowDirections = tariffSet.directions.filter((direction) => isMoscowOrigin(direction.origin));
+  const source = moscowDirections.length > 0 ? moscowDirections : tariffSet.directions;
+  const options = new Map<string, string>();
+
+  source.forEach((direction) => {
+    const destination = direction.destination.trim();
+    if (!destination) {
+      return;
+    }
+    options.set(normalizeLogisticsPoint(destination), destination);
+  });
+
+  return [...options.values()].sort((left, right) => left.localeCompare(right, 'ru'));
+}
+
+function hasDestinationOption(options: string[], destination: string) {
+  const normalized = normalizeLogisticsPoint(destination);
+  return options.some((option) => normalizeLogisticsPoint(option) === normalized);
+}
+
+function isMoscowOrigin(origin: string) {
+  const normalized = normalizeLogisticsPoint(origin);
+  return normalized === normalizeLogisticsPoint(DEFAULT_LOGISTICS_ORIGIN) || normalized === 'москва' || normalized === 'moscow';
+}
+
+function normalizeLogisticsPoint(value: string) {
+  return value.toLowerCase().replace(/\s*,\s*/g, ', ').replace(/\s+/g, ' ').trim();
 }
