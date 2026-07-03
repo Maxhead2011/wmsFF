@@ -13,6 +13,7 @@ import {
   fetchClients,
   fetchTurnoverReport,
   fetchTurnoverStatistics,
+  fetchTurnoverSuggestions,
   runTurnoverAction,
   type AuthSession,
   type ClientSummary,
@@ -20,7 +21,9 @@ import {
   type TurnoverReport,
   type TurnoverSkuReport,
   type TurnoverStatistics,
+  type TurnoverSuggestions,
 } from '../../lib/api';
+import { KnownValueInput, type KnownValueOption } from '../common/KnownValueInput';
 import './turnover.css';
 
 type LoadState<T> = {
@@ -34,6 +37,7 @@ type ActiveTile = 'movement' | 'actions' | 'stats';
 type ActionForm = {
   action: TurnoverActionKind;
   skuId: string;
+  skuText: string;
   quantity: string;
   sourceBoxCode: string;
   targetBoxCode: string;
@@ -46,6 +50,7 @@ type ActionForm = {
 const emptyActionForm: ActionForm = {
   action: 'TRANSFER',
   skuId: '',
+  skuText: '',
   quantity: '1',
   sourceBoxCode: '',
   targetBoxCode: '',
@@ -68,6 +73,8 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
   const [clients, setClients] = useState<LoadState<ClientSummary[]>>({ status: 'idle', data: [] });
   const [report, setReport] = useState<LoadState<TurnoverReport | null>>({ status: 'idle', data: null });
   const [statistics, setStatistics] = useState<LoadState<TurnoverStatistics | null>>({ status: 'idle', data: null });
+  const [suggestions, setSuggestions] = useState<LoadState<TurnoverSuggestions | null>>({ status: 'idle', data: null });
+  const [suggestionQuery, setSuggestionQuery] = useState('');
   const [selectedClientId, setSelectedClientId] = useState('');
   const [search, setSearch] = useState('');
   const [barcode, setBarcode] = useState('');
@@ -87,6 +94,11 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
   }, [report.data, selectedSkuId]);
   const sourceCells = selectedReportItem?.currentCells ?? [];
   const allCells = useMemo(() => uniqueValues((report.data?.items ?? []).flatMap((item) => item.currentCells.map((cell) => cell.boxCode))), [report.data]);
+  const productOptions = useMemo(() => buildProductOptions(report.data?.items ?? [], suggestions.data?.products ?? []), [report.data, suggestions.data]);
+  const barcodeOptions = useMemo(() => buildBarcodeOptions(report.data?.items ?? [], suggestions.data?.barcodes ?? []), [report.data, suggestions.data]);
+  const kizOptions = useMemo(() => buildKizOptions(report.data?.items ?? [], suggestions.data?.kiz ?? []), [report.data, suggestions.data]);
+  const sourceCellOptions = useMemo(() => buildCellOptions(sourceCells, suggestions.data?.boxes ?? []), [sourceCells, suggestions.data]);
+  const targetCellOptions = useMemo(() => buildCellOptions(allCells.map((boxCode) => ({ boxCode, quantity: 0, status: '' })), suggestions.data?.boxes ?? []), [allCells, suggestions.data]);
 
   useEffect(() => {
     void loadClients();
@@ -98,7 +110,20 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
     }
 
     void loadTurnover();
+    void loadSuggestions('');
   }, [selectedClientId]);
+
+  useEffect(() => {
+    if (!selectedClientId) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void loadSuggestions(suggestionQuery);
+    }, 180);
+
+    return () => window.clearTimeout(timer);
+  }, [selectedClientId, suggestionQuery]);
 
   useEffect(() => {
     if (!report.data || report.data.items.length === 0) {
@@ -112,6 +137,7 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
     setActionForm((current) => ({
       ...current,
       skuId: items.some((item) => item.skuId === current.skuId) ? current.skuId : items[0]?.skuId ?? '',
+      skuText: items.some((item) => item.skuId === current.skuId) ? current.skuText : productText(items[0]),
     }));
   }, [report.data]);
 
@@ -160,6 +186,23 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
       const message = errorMessage(caught);
       setReport((current) => ({ ...current, status: 'error', error: message }));
       setStatistics((current) => ({ ...current, status: 'error', error: message }));
+    }
+  }
+
+  async function loadSuggestions(query: string) {
+    if (!selectedClientId) {
+      return;
+    }
+
+    setSuggestions((current) => ({ ...current, status: 'loading', error: undefined }));
+    try {
+      const loaded = await fetchTurnoverSuggestions(session.accessToken, {
+        clientId: selectedClientId,
+        search: query.trim() || undefined,
+      });
+      setSuggestions({ status: 'ready', data: loaded });
+    } catch (caught) {
+      setSuggestions((current) => ({ ...current, status: 'error', error: errorMessage(caught) }));
     }
   }
 
@@ -226,15 +269,28 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
             </select>
           </label>
 
-          <label>
-            <span>Поиск по товару</span>
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Название, SKU, артикул" />
-          </label>
+          <KnownValueInput
+            label="Поиск по товару"
+            value={search}
+            options={productOptions}
+            placeholder="Название, SKU, артикул"
+            onChange={setSearch}
+            onSearch={setSuggestionQuery}
+            onSelect={(option) => {
+              setSearch(option.label ?? option.value);
+              setSuggestionQuery(option.value);
+            }}
+          />
 
-          <label>
-            <span>Штрихкод</span>
-            <input value={barcode} onChange={(event) => setBarcode(event.target.value)} placeholder="ШК товара" />
-          </label>
+          <KnownValueInput
+            label="Штрихкод"
+            value={barcode}
+            options={barcodeOptions}
+            placeholder="ШК товара"
+            onChange={setBarcode}
+            onSearch={setSuggestionQuery}
+            onSelect={(option) => setBarcode(option.value)}
+          />
 
           <label>
             <span>Период с</span>
@@ -292,10 +348,15 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
           items={report.data?.items ?? []}
           sourceCells={sourceCells}
           allCells={allCells}
+          productOptions={productOptions}
+          sourceCellOptions={sourceCellOptions}
+          targetCellOptions={targetCellOptions}
+          kizOptions={kizOptions}
           isSubmitting={isSubmittingAction}
           message={actionMessage}
           error={actionError}
           onChange={updateActionForm}
+          onSuggest={setSuggestionQuery}
           onSubmit={() => void submitAction()}
         />
       ) : null}
@@ -450,20 +511,30 @@ function ActionsSection({
   items,
   sourceCells,
   allCells,
+  productOptions,
+  sourceCellOptions,
+  targetCellOptions,
+  kizOptions,
   isSubmitting,
   message,
   error,
   onChange,
+  onSuggest,
   onSubmit,
 }: {
   form: ActionForm;
   items: TurnoverSkuReport[];
   sourceCells: TurnoverSkuReport['currentCells'];
   allCells: string[];
+  productOptions: KnownValueOption[];
+  sourceCellOptions: KnownValueOption[];
+  targetCellOptions: KnownValueOption[];
+  kizOptions: KnownValueOption[];
   isSubmitting: boolean;
   message: string;
   error: string;
   onChange: <K extends keyof ActionForm>(key: K, value: ActionForm[K]) => void;
+  onSuggest: (value: string) => void;
   onSubmit: () => void;
 }) {
   const selectedAction = actionOptions.find((item) => item.value === form.action) ?? actionOptions[0];
@@ -494,17 +565,21 @@ function ActionsSection({
           <small>{selectedAction.hint}</small>
         </label>
 
-        <label>
-          <span>Товар</span>
-          <select value={form.skuId} onChange={(event) => onChange('skuId', event.target.value)}>
-            {items.length === 0 ? <option value="">Нет товаров по фильтру</option> : null}
-            {items.map((item) => (
-              <option key={item.skuId} value={item.skuId}>
-                {item.name} · {item.primaryBarcode ?? item.internalSku} · остаток {item.currentQuantity}
-              </option>
-            ))}
-          </select>
-        </label>
+        <KnownValueInput
+          label="Товар"
+          value={form.skuText}
+          options={productOptions}
+          placeholder={items.length === 0 ? 'Нет товаров по фильтру' : 'Начните вводить товар, артикул или ШК'}
+          onChange={(value) => {
+            onChange('skuText', value);
+            onChange('skuId', '');
+          }}
+          onSearch={onSuggest}
+          onSelect={(option) => {
+            onChange('skuText', option.label ?? option.value);
+            onChange('skuId', String(option.data?.skuId ?? ''));
+          }}
+        />
 
         <label>
           <span>Количество</span>
@@ -512,39 +587,27 @@ function ActionsSection({
         </label>
 
         {needsSource ? (
-          <label>
-            <span>Откуда</span>
-            <input
-              list="turnover-source-cells"
-              value={form.sourceBoxCode}
-              onChange={(event) => onChange('sourceBoxCode', event.target.value)}
-              placeholder="Можно оставить пустым"
-            />
-            <datalist id="turnover-source-cells">
-              {sourceCells.map((cell) => (
-                <option key={`${cell.boxCode}-${cell.status}`} value={cell.boxCode}>
-                  {cell.quantity} шт · {cell.status}
-                </option>
-              ))}
-            </datalist>
-          </label>
+          <KnownValueInput
+            label="Откуда"
+            value={form.sourceBoxCode}
+            options={sourceCellOptions}
+            placeholder="Можно оставить пустым"
+            onChange={(value) => onChange('sourceBoxCode', value)}
+            onSearch={onSuggest}
+            onSelect={(option) => onChange('sourceBoxCode', option.value)}
+          />
         ) : null}
 
         {needsTarget ? (
-          <label>
-            <span>Куда</span>
-            <input
-              list="turnover-target-cells"
-              value={form.targetBoxCode}
-              onChange={(event) => onChange('targetBoxCode', event.target.value)}
-              placeholder="Новая или существующая ячейка"
-            />
-            <datalist id="turnover-target-cells">
-              {allCells.map((cell) => (
-                <option key={cell} value={cell} />
-              ))}
-            </datalist>
-          </label>
+          <KnownValueInput
+            label="Куда"
+            value={form.targetBoxCode}
+            options={targetCellOptions}
+            placeholder="Новая или существующая ячейка"
+            onChange={(value) => onChange('targetBoxCode', value)}
+            onSearch={onSuggest}
+            onSelect={(option) => onChange('targetBoxCode', option.value)}
+          />
         ) : null}
 
         {needsReason ? (
@@ -556,10 +619,16 @@ function ActionsSection({
       </div>
 
       <div className="turnover-action-grid turnover-action-grid--wide">
-        <label>
-          <span>КИЗ</span>
-          <textarea value={form.kiz} onChange={(event) => onChange('kiz', event.target.value)} placeholder="Можно несколько: через запятую или с новой строки" />
-        </label>
+        <KnownValueInput
+          label="КИЗ"
+          value={form.kiz}
+          options={kizOptions}
+          placeholder="Можно несколько: через запятую или с новой строки"
+          multiline
+          onChange={(value) => onChange('kiz', value)}
+          onSearch={onSuggest}
+          onSelect={(option) => onChange('kiz', option.value)}
+        />
 
         <label>
           <span>Фото / файл</span>
@@ -715,6 +784,109 @@ function Metric({ label, value }: { label: string; value: string }) {
       <strong>{value}</strong>
     </div>
   );
+}
+
+function productText(item?: TurnoverSkuReport | null) {
+  if (!item) {
+    return '';
+  }
+
+  return [item.name, item.primaryBarcode ? `ШК ${item.primaryBarcode}` : item.internalSku].filter(Boolean).join(' · ');
+}
+
+function buildProductOptions(items: TurnoverSkuReport[], products: TurnoverSuggestions['products']): KnownValueOption[] {
+  return uniqueOptions([
+    ...items.map((item) => ({
+      value: productText(item),
+      label: productText(item),
+      description: `Остаток ${formatNumber(item.currentQuantity)} шт · ${item.article ?? item.internalSku}`,
+      data: {
+        skuId: item.skuId,
+        barcode: item.primaryBarcode,
+      },
+    })),
+    ...products.map((product) => ({
+      value: product.label,
+      label: product.label,
+      description: `Остаток ${formatNumber(product.quantity)} шт · ${product.article ?? product.internalSku}`,
+      data: {
+        skuId: product.skuId,
+        barcode: product.barcode,
+      },
+    })),
+  ]);
+}
+
+function buildBarcodeOptions(items: TurnoverSkuReport[], barcodes: TurnoverSuggestions['barcodes']): KnownValueOption[] {
+  return uniqueOptions([
+    ...items.flatMap((item) =>
+      item.barcodes.map((barcode) => ({
+        value: barcode,
+        label: barcode,
+        description: `${item.name} · остаток ${formatNumber(item.currentQuantity)} шт`,
+        data: { skuId: item.skuId },
+      })),
+    ),
+    ...barcodes.map((barcode) => ({
+      value: barcode.value,
+      label: barcode.value,
+      description: `${barcode.name} · ${barcode.internalSku}`,
+      data: { skuId: barcode.skuId },
+    })),
+  ]);
+}
+
+function buildKizOptions(items: TurnoverSkuReport[], kiz: TurnoverSuggestions['kiz']): KnownValueOption[] {
+  return uniqueOptions([
+    ...items.flatMap((item) =>
+      item.kiz.map((mark) => ({
+        value: mark.value,
+        label: mark.value,
+        description: `${item.name} · ${mark.status}`,
+        data: { skuId: item.skuId },
+      })),
+    ),
+    ...kiz.map((mark) => ({
+      value: mark.value,
+      label: mark.value,
+      description: [mark.name, mark.boxCode ? `ячейка ${mark.boxCode}` : null, mark.status].filter(Boolean).join(' · '),
+      data: { skuId: mark.skuId },
+    })),
+  ]);
+}
+
+function buildCellOptions(
+  cells: Array<{ boxCode: string; quantity: number; status: string }>,
+  boxes: TurnoverSuggestions['boxes'],
+): KnownValueOption[] {
+  return uniqueOptions([
+    ...cells.map((cell) => ({
+      value: cell.boxCode,
+      label: cell.boxCode,
+      description: cell.quantity ? `${formatNumber(cell.quantity)} шт · ${cell.status}` : cell.status || 'ячейка клиента',
+    })),
+    ...boxes.map((box) => ({
+      value: box.code,
+      label: box.code,
+      description: box.status,
+    })),
+  ]);
+}
+
+function uniqueOptions(options: KnownValueOption[]) {
+  const seen = new Set<string>();
+  const result: KnownValueOption[] = [];
+
+  for (const option of options) {
+    if (!option.value || seen.has(option.value)) {
+      continue;
+    }
+
+    seen.add(option.value);
+    result.push(option);
+  }
+
+  return result;
 }
 
 function canUseStatistics(roleCodes: string[], permissionCodes: string[]) {

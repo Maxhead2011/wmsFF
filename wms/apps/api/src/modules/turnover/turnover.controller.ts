@@ -3,7 +3,7 @@ import { ApiTags } from '@nestjs/swagger';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
-import { ListTurnoverDto, TurnoverStatisticsDto } from './dto/list-turnover.dto';
+import { ListTurnoverDto, TurnoverStatisticsDto, TurnoverSuggestionsDto } from './dto/list-turnover.dto';
 import { TurnoverActionDto } from './dto/turnover-action.dto';
 import { TurnoverService } from './turnover.service';
 
@@ -12,6 +12,11 @@ import { TurnoverService } from './turnover.service';
 @Controller('turnover')
 export class TurnoverController {
   constructor(private readonly turnover: TurnoverService) {}
+
+  @Get('suggestions')
+  suggestions(@Query() query: TurnoverSuggestionsDto, @CurrentUser() user: AuthUser) {
+    return this.turnover.suggestions(query, user);
+  }
 
   @Get()
   list(@Query() query: ListTurnoverDto, @CurrentUser() user: AuthUser) {

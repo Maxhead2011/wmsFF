@@ -1459,6 +1459,40 @@ export type TurnoverActionResult = {
   targetBoxCode?: string | null;
 };
 
+export type TurnoverSuggestions = {
+  products: Array<{
+    skuId: string;
+    label: string;
+    name: string;
+    internalSku: string;
+    article: string | null;
+    barcode: string | null;
+    quantity: number;
+  }>;
+  barcodes: Array<{
+    value: string;
+    label: string;
+    skuId: string;
+    name: string;
+    internalSku: string;
+  }>;
+  kiz: Array<{
+    id: string;
+    value: string;
+    status: string;
+    skuId: string;
+    name: string;
+    barcode: string | null;
+    boxCode: string | null;
+  }>;
+  boxes: Array<{
+    id: string;
+    value: string;
+    code: string;
+    status: string;
+  }>;
+};
+
 export type ServiceKizSearchRow = {
   id: string;
   value: string;
@@ -2899,6 +2933,18 @@ export async function fetchTurnoverReport(
   filter: { clientId?: string; skuId?: string; barcode?: string; search?: string; dateFrom?: string; dateTo?: string; limit?: number } = {},
 ) {
   return request<TurnoverReport>(withQuery('/turnover', turnoverReportQuery(filter)), {
+    accessToken,
+  });
+}
+
+export async function fetchTurnoverSuggestions(
+  accessToken: string,
+  filter: { clientId?: string; search?: string } = {},
+) {
+  return request<TurnoverSuggestions>(withQuery('/turnover/suggestions', {
+    clientId: filter.clientId,
+    search: filter.search,
+  }), {
     accessToken,
   });
 }

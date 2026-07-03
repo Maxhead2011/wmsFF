@@ -1,6 +1,6 @@
 import { ClipboardPaste, Plus, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { fetchStockBalances, type ClientRequestAvailabilityPreview, type StockBalance } from '../../lib/api';
+import { fetchTurnoverSuggestions, type ClientRequestAvailabilityPreview } from '../../lib/api';
 import {
   emptyClientRequestItem,
   MAX_CLIENT_REQUEST_ITEMS,
@@ -43,15 +43,15 @@ export function ClientRequestItemsEditor({
 
   useEffect(() => {
     const query = activeSuggest?.query.trim() ?? '';
-    if (!clientId || query.length < 1) {
+    if (!clientId || !activeSuggest) {
       setSuggestions([]);
       return;
     }
 
     const timeoutId = window.setTimeout(() => {
       setSuggesting(true);
-      fetchStockBalances(accessToken, { clientId, search: query })
-        .then((balances) => setSuggestions(buildStockSuggestions(balances).slice(0, 8)))
+      fetchTurnoverSuggestions(accessToken, { clientId, search: query || undefined })
+        .then((result) => setSuggestions(buildStockSuggestions(result.products).slice(0, 8)))
         .catch(() => setSuggestions([]))
         .finally(() => setSuggesting(false));
     }, 180);
@@ -235,38 +235,16 @@ export function ClientRequestItemsEditor({
   );
 }
 
-function buildStockSuggestions(balances: StockBalance[]) {
-  const bySku = new Map<string, StockSuggestion>();
-
-  for (const balance of balances) {
-    if (balance.status !== 'AVAILABLE' || balance.quantity <= 0) {
-      continue;
-    }
-
-    const existing = bySku.get(balance.skuId);
-    const barcode = primaryBarcode(balance);
-    if (existing) {
-      existing.availableQuantity += balance.quantity;
-      if (!existing.barcode && barcode) {
-        existing.barcode = barcode;
-      }
-      continue;
-    }
-
-    bySku.set(balance.skuId, {
-      skuId: balance.skuId,
-      internalSku: balance.sku.internalSku,
-      name: balance.sku.name,
-      barcode,
-      availableQuantity: balance.quantity,
-    });
-  }
-
-  return Array.from(bySku.values()).sort((left, right) => right.availableQuantity - left.availableQuantity);
-}
-
-function primaryBarcode(balance: StockBalance) {
-  return balance.sku.barcodes.find((barcode) => barcode.isPrimary)?.value ?? balance.sku.barcodes[0]?.value ?? '';
+function buildStockSuggestions(products: Array<{ skuId: string; internalSku: string; name: string; barcode: string | null; quantity: number }>) {
+  return products
+    .map((product) => ({
+      skuId: product.skuId,
+      internalSku: product.internalSku,
+      name: product.name,
+      barcode: product.barcode ?? '',
+      availableQuantity: product.quantity,
+    }))
+    .sort((left, right) => right.availableQuantity - left.availableQuantity);
 }
 
 function availabilityClassName(line: ClientRequestAvailabilityPreview['lines'][number] | undefined) {

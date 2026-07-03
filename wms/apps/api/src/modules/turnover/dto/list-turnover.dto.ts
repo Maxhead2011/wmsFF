@@ -39,3 +39,13 @@ export class TurnoverStatisticsDto extends ListTurnoverDto {
   @IsIn(['day', 'month', 'quarter', 'year'])
   groupBy?: 'day' | 'month' | 'quarter' | 'year';
 }
+
+export class TurnoverSuggestionsDto {
+  @IsOptional()
+  @IsString()
+  clientId?: string;
+
+  @IsOptional()
+  @IsString()
+  search?: string;
+}

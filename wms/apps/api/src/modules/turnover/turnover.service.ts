@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
-import { ListTurnoverDto, TurnoverStatisticsDto } from './dto/list-turnover.dto';
+import { ListTurnoverDto, TurnoverStatisticsDto, TurnoverSuggestionsDto } from './dto/list-turnover.dto';
 import { TurnoverActionDto, TurnoverActionKind } from './dto/turnover-action.dto';
 
 type TurnoverMovement = Prisma.StockMovementGetPayload<{
@@ -220,6 +220,135 @@ export class TurnoverService {
       rows: rowList,
       trend: Array.from(trend.values()).sort((a, b) => a.period.localeCompare(b.period)),
       clientWidgetCandidate: true,
+    };
+  }
+
+  async suggestions(query: TurnoverSuggestionsDto, user: AuthUser) {
+    const clientFilter = this.clientScopes.resolveClientFilter(user, query.clientId);
+    const search = query.search?.trim();
+    const searchText = search ? { contains: search, mode: Prisma.QueryMode.insensitive } : undefined;
+
+    const [skus, barcodeRows, marks, boxes] = await Promise.all([
+      this.prisma.sku.findMany({
+        where: {
+          clientId: clientFilter,
+          ...(search
+            ? {
+                OR: [
+                  { name: searchText },
+                  { internalSku: searchText },
+                  { clientSku: searchText },
+                  { article: searchText },
+                  { barcodes: { some: { value: { contains: search } } } },
+                ],
+              }
+            : {}),
+        },
+        select: {
+          id: true,
+          internalSku: true,
+          clientSku: true,
+          article: true,
+          name: true,
+          barcodes: { select: { value: true, isPrimary: true }, orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }], take: 5 },
+          balances: { select: { quantity: true } },
+        },
+        orderBy: { updatedAt: 'desc' },
+        take: 40,
+      }),
+      this.prisma.barcode.findMany({
+        where: {
+          ...(search ? { value: { contains: search } } : {}),
+          sku: { clientId: clientFilter },
+        },
+        select: {
+          value: true,
+          isPrimary: true,
+          sku: { select: { id: true, internalSku: true, article: true, name: true } },
+        },
+        orderBy: { value: 'asc' },
+        take: 60,
+      }),
+      this.prisma.productMark.findMany({
+        where: {
+          clientId: clientFilter,
+          ...(search ? { value: searchText } : {}),
+        },
+        select: {
+          id: true,
+          value: true,
+          status: true,
+          sku: { select: { id: true, internalSku: true, article: true, name: true, barcodes: { select: { value: true }, take: 3 } } },
+          box: { select: { id: true, code: true, status: true } },
+        },
+        orderBy: { updatedAt: 'desc' },
+        take: 50,
+      }),
+      this.prisma.box.findMany({
+        where: {
+          clientId: clientFilter,
+          ...(search ? { code: searchText } : {}),
+        },
+        select: { id: true, code: true, status: true },
+        orderBy: { code: 'asc' },
+        take: 60,
+      }),
+    ]);
+
+    const products = skus.map((sku) => {
+      const primaryBarcode = sku.barcodes.find((barcode) => barcode.isPrimary)?.value ?? sku.barcodes[0]?.value ?? null;
+
+      return {
+        skuId: sku.id,
+        label: [sku.name, primaryBarcode ? `ШК ${primaryBarcode}` : null].filter(Boolean).join(' · '),
+        name: sku.name,
+        internalSku: sku.internalSku,
+        article: sku.article,
+        barcode: primaryBarcode,
+        quantity: sku.balances.reduce((sum, balance) => sum + balance.quantity, 0),
+      };
+    });
+
+    const barcodes = uniqueByValue(
+      [
+        ...products
+          .filter((product) => product.barcode)
+          .map((product) => ({
+            value: product.barcode!,
+            label: product.barcode!,
+            skuId: product.skuId,
+            name: product.name,
+            internalSku: product.internalSku,
+          })),
+        ...barcodeRows.map((row) => ({
+          value: row.value,
+          label: row.value,
+          skuId: row.sku.id,
+          name: row.sku.name,
+          internalSku: row.sku.internalSku,
+        })),
+      ],
+      (row) => row.value,
+    ).slice(0, 60);
+
+    return {
+      products,
+      barcodes,
+      kiz: marks.map((mark) => ({
+        id: mark.id,
+        value: mark.value,
+        status: mark.status,
+        skuId: mark.sku.id,
+        name: mark.sku.name,
+        barcode: mark.sku.barcodes[0]?.value ?? null,
+        boxCode: mark.box?.code ?? null,
+      })),
+      boxes: boxes.map((box) => ({
+        id: box.id,
+        value: box.code,
+        code: box.code,
+        status: box.status,
+      })),
     };
   }
 
@@ -745,6 +874,23 @@ function extractUuid(value?: string | null) {
 
 function uniqueValues<T>(values: T[]) {
   return Array.from(new Set(values));
+}
+
+function uniqueByValue<T>(values: T[], key: (value: T) => string) {
+  const seen = new Set<string>();
+  const result: T[] = [];
+
+  for (const value of values) {
+    const id = key(value);
+    if (seen.has(id)) {
+      continue;
+    }
+
+    seen.add(id);
+    result.push(value);
+  }
+
+  return result;
 }
 
 function parseKizValues(value?: string) {
