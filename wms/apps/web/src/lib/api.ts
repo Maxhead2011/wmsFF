@@ -2898,7 +2898,7 @@ export async function fetchTurnoverReport(
   accessToken: string,
   filter: { clientId?: string; skuId?: string; barcode?: string; search?: string; dateFrom?: string; dateTo?: string; limit?: number } = {},
 ) {
-  return request<TurnoverReport>(withQuery('/turnover', turnoverQuery(filter)), {
+  return request<TurnoverReport>(withQuery('/turnover', turnoverReportQuery(filter)), {
     accessToken,
   });
 }
@@ -3730,6 +3730,26 @@ function turnoverQuery(filter: {
     dateTo: filter.dateTo,
     limit: filter.limit ? String(filter.limit) : undefined,
     groupBy: filter.groupBy,
+  };
+}
+
+function turnoverReportQuery(filter: {
+  clientId?: string;
+  skuId?: string;
+  barcode?: string;
+  search?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  limit?: number;
+}) {
+  return {
+    clientId: filter.clientId,
+    skuId: filter.skuId,
+    barcode: filter.barcode,
+    search: filter.search,
+    dateFrom: filter.dateFrom,
+    dateTo: filter.dateTo,
+    limit: filter.limit ? String(filter.limit) : undefined,
   };
 }
 

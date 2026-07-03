@@ -139,20 +139,20 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
     setActionMessage('');
     setActionError('');
 
-    const filter = {
+    const reportFilter = {
       clientId: selectedClientId,
       search: search.trim() || undefined,
       barcode: barcode.trim() || undefined,
       dateFrom: dateFrom || undefined,
       dateTo: dateTo || undefined,
-      groupBy,
       limit: 80,
     };
+    const statisticsFilter = { ...reportFilter, groupBy };
 
     try {
       const [nextReport, nextStatistics] = await Promise.all([
-        fetchTurnoverReport(session.accessToken, filter),
-        canSeeStatistics ? fetchTurnoverStatistics(session.accessToken, filter) : Promise.resolve(null),
+        fetchTurnoverReport(session.accessToken, reportFilter),
+        canSeeStatistics ? fetchTurnoverStatistics(session.accessToken, statisticsFilter) : Promise.resolve(null),
       ]);
       setReport({ status: 'ready', data: nextReport });
       setStatistics({ status: nextStatistics ? 'ready' : 'idle', data: nextStatistics });
