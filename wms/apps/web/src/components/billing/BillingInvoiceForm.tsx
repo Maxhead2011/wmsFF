@@ -90,6 +90,7 @@ export function BillingInvoiceForm({
   const [services, setServices] = useState<ClientBillingServiceSummary[]>([]);
   const [rows, setRows] = useState<InvoiceRow[]>([]);
   const [activeSearchRowKey, setActiveSearchRowKey] = useState('');
+  const [serviceFilter, setServiceFilter] = useState('');
   const [isLoadingServices, setIsLoadingServices] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSavingPrices, setIsSavingPrices] = useState(false);
@@ -97,6 +98,18 @@ export function BillingInvoiceForm({
 
   const selectedClient = clients.find((client) => client.id === clientId);
   const serviceOptions = useMemo(() => services.filter((item) => item.isActive), [services]);
+  const visibleClientServices = useMemo(() => {
+    const normalized = normalizeSearch(serviceFilter);
+    if (!normalized) {
+      return services;
+    }
+
+    return services.filter(
+      (item) =>
+        normalizeSearch(item.service.name).includes(normalized) ||
+        normalizeSearch(item.service.code).includes(normalized),
+    );
+  }, [services, serviceFilter]);
   const invoiceTotal = useMemo(() => rows.reduce((sum, row) => sum + rowTotal(row), 0), [rows]);
 
   useEffect(() => {
@@ -420,42 +433,70 @@ export function BillingInvoiceForm({
         <details className="billing-client-services" open={mode === 'manual'}>
           <summary>
             <span>Услуги и цены клиента</span>
-            <strong>{serviceOptions.length} активных</strong>
+            <strong>{serviceOptions.length} активных из {services.length}</strong>
           </summary>
-          <div className="billing-client-services__grid">
-            {services.map((item) => (
-              <div className={item.isActive ? 'billing-client-service is-active' : 'billing-client-service'} key={item.service.id}>
-                <label className="billing-client-service__check">
-                  <input
-                    checked={item.isActive}
-                    type="checkbox"
-                    onChange={(event) => updateClientService(item.service.id, { isActive: event.target.checked })}
-                  />
-                  <span>{item.service.name}</span>
-                </label>
-                <small>{item.service.code} · {unitLabel(item.service.unit)}</small>
-                <label>
-                  <span>Цена</span>
-                  <input
-                    min="0"
-                    step="0.01"
-                    type="number"
-                    value={String(item.priceRub ?? '')}
-                    onChange={(event) => updateClientService(item.service.id, { priceRub: event.target.value })}
-                  />
-                </label>
-                <label>
-                  <span>Налог</span>
-                  <select
-                    value={item.taxMode}
-                    onChange={(event) => updateClientService(item.service.id, { taxMode: event.target.value as BillingPriceTaxMode })}
-                  >
-                    <option value="INCLUDED">В цене</option>
-                    <option value="ADD_6_PERCENT">Добавить 6%</option>
-                  </select>
-                </label>
-              </div>
-            ))}
+          <div className="billing-client-services__tools">
+            <input
+              value={serviceFilter}
+              onChange={(event) => setServiceFilter(event.target.value)}
+              placeholder="Найти услугу по названию или коду"
+            />
+            <span>Показано {visibleClientServices.length}</span>
+          </div>
+          <div className="billing-client-services__table-wrap">
+            <table className="billing-client-services__table">
+              <thead>
+                <tr>
+                  <th>Активна</th>
+                  <th>Услуга</th>
+                  <th>Код</th>
+                  <th>Ед.</th>
+                  <th>Цена</th>
+                  <th>Налог</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleClientServices.map((item) => (
+                  <tr className={item.isActive ? 'is-active' : undefined} key={item.service.id}>
+                    <td>
+                      <input
+                        checked={item.isActive}
+                        type="checkbox"
+                        onChange={(event) => updateClientService(item.service.id, { isActive: event.target.checked })}
+                      />
+                    </td>
+                    <td>
+                      <strong className="billing-client-services__name">{item.service.name}</strong>
+                    </td>
+                    <td>{item.service.code}</td>
+                    <td>{unitLabel(item.service.unit)}</td>
+                    <td>
+                      <input
+                        min="0"
+                        step="0.01"
+                        type="number"
+                        value={String(item.priceRub ?? '')}
+                        onChange={(event) => updateClientService(item.service.id, { priceRub: event.target.value })}
+                      />
+                    </td>
+                    <td>
+                      <select
+                        value={item.taxMode}
+                        onChange={(event) => updateClientService(item.service.id, { taxMode: event.target.value as BillingPriceTaxMode })}
+                      >
+                        <option value="INCLUDED">В цене</option>
+                        <option value="ADD_6_PERCENT">Добавить 6%</option>
+                      </select>
+                    </td>
+                  </tr>
+                ))}
+                {visibleClientServices.length === 0 ? (
+                  <tr>
+                    <td colSpan={6}>Услуги не найдены.</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
           </div>
           <button className="secondary-button" disabled={isSavingPrices || services.length === 0} type="button" onClick={() => void saveClientPrices()}>
             <Save size={16} aria-hidden="true" />

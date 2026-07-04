@@ -291,65 +291,97 @@
   font-size: 12px;
 }
 
-.billing-client-services__grid {
+.billing-client-services__tools {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(220px, 1fr) auto;
   gap: 8px;
-  margin: 10px 0;
-}
-
-.billing-client-service {
-  display: grid;
-  gap: 8px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #f8fafc;
-  padding: 10px;
-}
-
-.billing-client-service.is-active {
-  border-color: rgb(37 99 235 / 0.35);
-  background: #f8fbff;
-}
-
-.billing-client-service__check {
-  display: flex !important;
   align-items: center;
-  gap: 8px !important;
-  font-weight: 900;
+  margin: 8px 0;
 }
 
-.billing-client-service__check input {
-  width: 16px;
-  min-height: 16px;
-}
-
-.billing-client-service small {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.billing-client-service label:not(.billing-client-service__check) {
-  display: grid;
-  gap: 5px;
-}
-
-.billing-client-service label:not(.billing-client-service__check) span {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.billing-client-service input,
-.billing-client-service select {
+.billing-client-services__tools input {
   width: 100%;
   min-height: 36px;
   border: 1px solid var(--line);
   border-radius: 6px;
+  background: #fbfdff;
+  color: var(--ink);
+  padding: 0 10px;
+}
+
+.billing-client-services__tools span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.billing-client-services__table-wrap {
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+.billing-client-services__table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12px;
+}
+
+.billing-client-services__table th,
+.billing-client-services__table td {
+  border-bottom: 1px solid var(--line);
+  padding: 7px 8px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.billing-client-services__table th {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  background: #f8fafc;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.billing-client-services__table tr:last-child td {
+  border-bottom: 0;
+}
+
+.billing-client-services__table tr.is-active td {
+  background: #f8fbff;
+}
+
+.billing-client-services__name {
+  display: block;
+  max-width: 360px;
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.billing-client-services__table input[type='checkbox'] {
+  width: 16px;
+  min-height: 16px;
+}
+
+.billing-client-services__table input:not([type='checkbox']),
+.billing-client-services__table select {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
   background: #ffffff;
   color: var(--ink);
-  padding: 0 9px;
+  padding: 0 8px;
 }
 
 .billing-edit-modal {
