@@ -15,6 +15,7 @@ import { LogisticsModule } from './modules/logistics/logistics.module';
 import { MarketplaceConnectionsModule } from './modules/marketplace-connections/marketplace-connections.module';
 import { OwnCompaniesModule } from './modules/own-companies/own-companies.module';
 import { PrintModule } from './modules/print/print.module';
+import { ReferralsModule } from './modules/referrals/referrals.module';
 import { ServiceCenterModule } from './modules/service/service-center.module';
 import { SkusModule } from './modules/skus/skus.module';
 import { StockModule } from './modules/stock/stock.module';
@@ -41,6 +42,7 @@ import { WarehouseModule } from './modules/warehouse/warehouse.module';
     OwnCompaniesModule,
     ImportsModule,
     PrintModule,
+    ReferralsModule,
     ServiceCenterModule,
     TsdModule,
     TurnoverModule,

@@ -395,7 +395,8 @@
 }
 
 .user-edit-fields,
-.user-access-add {
+.user-access-add,
+.user-referral-add {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
@@ -403,13 +404,15 @@
 }
 
 .user-edit-fields label,
-.user-access-add label {
+.user-access-add label,
+.user-referral-add label {
   display: grid;
   gap: 5px;
 }
 
 .user-edit-fields label > span,
-.user-access-add label > span {
+.user-access-add label > span,
+.user-referral-add label > span {
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
@@ -419,6 +422,9 @@
 .user-edit-fields select,
 .user-access-add input,
 .user-access-add select,
+.user-referral-add input,
+.user-referral-add select,
+.user-referral-table input,
 .user-access-table select {
   width: 100%;
   min-height: 36px;
@@ -502,6 +508,18 @@
   grid-template-columns: minmax(170px, 1fr) minmax(220px, 1.4fr) 140px auto;
 }
 
+.user-referral-card {
+  border-color: rgb(37 99 235 / 0.2);
+}
+
+.user-referral-add {
+  grid-template-columns: minmax(150px, 1fr) minmax(220px, 1.5fr) 90px 150px auto;
+}
+
+.user-referral-table input {
+  max-width: 92px;
+}
+
 .user-access-table-wrap {
   max-height: 300px;
   overflow: auto;
@@ -555,7 +573,8 @@
   .scope-picker,
   .user-management,
   .user-management__grid,
-  .user-access-add {
+  .user-access-add,
+  .user-referral-add {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -579,7 +598,8 @@
   .user-management,
   .user-management__grid,
   .user-edit-fields,
-  .user-access-add {
+  .user-access-add,
+  .user-referral-add {
     grid-template-columns: 1fr;
   }
 

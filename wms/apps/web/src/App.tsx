@@ -13,6 +13,7 @@ import { ImportPanel } from './components/imports/ImportPanel';
 import { LogisticsQuotePanel } from './components/logistics/LogisticsQuotePanel';
 import { OwnCompaniesPanel } from './components/own-companies/OwnCompaniesPanel';
 import { PrintPanel } from './components/print/PrintPanel';
+import { ReferralPanel } from './components/referrals/ReferralPanel';
 import { ServiceCenterPanel } from './components/service/ServiceCenterPanel';
 import { TurnoverPanel } from './components/turnover/TurnoverPanel';
 import { WarehouseOpsPanel } from './components/warehouse/WarehouseOpsPanel';
@@ -31,7 +32,6 @@ const workspaceSections = [
   { id: 'client', title: 'Клиентский контур' },
   { id: 'operations', title: 'Склад и операции' },
   { id: 'management', title: 'Управление' },
-  { id: 'control', title: 'Контроль' },
 ] as const;
 
 type WorkspaceSection = (typeof workspaceSections)[number]['id'];
@@ -212,6 +212,8 @@ function renderWorkspace(
   switch (activeWorkspaceId) {
     case 'cabinet':
       return <ClientCabinetPanel session={session} />;
+    case 'referrals':
+      return <ReferralPanel session={session} />;
     case 'access':
       return <AccessAdminPanel session={session} />;
     case 'directories':
@@ -331,7 +333,7 @@ function sectionForWorkspace(id: WorkspaceId): WorkspaceSection {
     return 'main';
   }
 
-  if (id === 'cabinet' || id === 'requests' || id === 'catalog') {
+  if (id === 'cabinet' || id === 'referrals' || id === 'requests' || id === 'catalog') {
     return 'client';
   }
 
@@ -339,11 +341,11 @@ function sectionForWorkspace(id: WorkspaceId): WorkspaceSection {
     return 'operations';
   }
 
-  if (id === 'access' || id === 'directories' || id === 'billing' || id === 'own-companies') {
+  if (id === 'access' || id === 'directories' || id === 'billing' || id === 'own-companies' || id === 'service' || id === 'debug' || id === 'data') {
     return 'management';
   }
 
-  return 'control';
+  return 'management';
 }
 
 function audienceLabel(item: WorkspaceNavItem) {
@@ -379,7 +381,9 @@ function permissionTitle(item: WorkspaceNavItem) {
 }
 
 function defaultWorkspaceForUser(user: AuthUser): WorkspaceId {
-  const preferredOrder: WorkspaceId[] = isClientOnlyUser(user)
+  const preferredOrder: WorkspaceId[] = isReferralOnlyUser(user)
+    ? ['referrals', 'overview']
+    : isClientOnlyUser(user)
     ? ['cabinet', 'requests', 'catalog', 'turnover', 'logistics', 'billing', 'overview']
     : [
         'turnover',
@@ -391,6 +395,7 @@ function defaultWorkspaceForUser(user: AuthUser): WorkspaceId {
         'imports',
         'logistics',
         'billing',
+        'referrals',
         'own-companies',
         'print',
         'service',
@@ -408,6 +413,11 @@ function canKeepWorkspace(user: AuthUser, workspaceId: WorkspaceId) {
 }
 
 function isClientOnlyUser(user: AuthUser) {
-  const internalRoles = ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR'];
+  const internalRoles = ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR', 'REFERRAL_PARTNER'];
   return user.roleCodes.includes('CLIENT') && !user.roleCodes.some((roleCode) => internalRoles.includes(roleCode));
+}
+
+function isReferralOnlyUser(user: AuthUser) {
+  const internalRoles = ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR', 'CLIENT'];
+  return user.roleCodes.includes('REFERRAL_PARTNER') && !user.roleCodes.some((roleCode) => internalRoles.includes(roleCode));
 }

@@ -72,6 +72,8 @@ const actionOptions: Array<{ value: TurnoverActionKind; label: string; hint: str
   { value: 'HOLD', label: 'Отложить на отдельное хранение', hint: 'Переносит товар в отдельную ячейку со статусом отложено.' },
 ];
 
+const MOVEMENT_PAGE_SIZE = 50;
+
 export function TurnoverPanel({ session }: { session: AuthSession }) {
   const [activeTile, setActiveTile] = useState<ActiveTile>('movement');
   const [clients, setClients] = useState<LoadState<ClientSummary[]>>({ status: 'idle', data: [] });
@@ -517,9 +519,24 @@ function MovementSection({
   onOpenDocument: (movement: TurnoverSkuReport['movements'][number]) => void;
   onSelect: (skuId: string) => void;
 }) {
-  const selected = items.find((item) => item.skuId === selectedSkuId) ?? items[0] ?? null;
+  const [localSearch, setLocalSearch] = useState('');
+  const [shippedOnly, setShippedOnly] = useState(false);
+  const [page, setPage] = useState(1);
+  const receivedItems = useMemo(() => items.filter(hasEverBeenReceived), [items]);
+  const filteredItems = useMemo(() => {
+    const normalized = normalizeTurnoverSearch(localSearch);
+    return receivedItems.filter((item) => (!shippedOnly || hasBeenShipped(item)) && (!normalized || turnoverItemMatches(item, normalized)));
+  }, [localSearch, receivedItems, shippedOnly]);
+  const pageCount = Math.max(1, Math.ceil(filteredItems.length / MOVEMENT_PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
+  const pageItems = filteredItems.slice((currentPage - 1) * MOVEMENT_PAGE_SIZE, currentPage * MOVEMENT_PAGE_SIZE);
+  const selected = filteredItems.find((item) => item.skuId === selectedSkuId) ?? pageItems[0] ?? filteredItems[0] ?? null;
 
-  if (items.length === 0) {
+  useEffect(() => {
+    setPage(1);
+  }, [items, localSearch, shippedOnly]);
+
+  if (receivedItems.length === 0) {
     return (
       <section className="turnover-panel">
         <p className="turnover-empty">По фильтру пока нет движения товаров.</p>
@@ -529,6 +546,26 @@ function MovementSection({
 
   return (
     <section className="turnover-panel turnover-movement" aria-label="Товаро-движение">
+      <div className="turnover-movement-toolbar">
+        <label className="turnover-movement-search">
+          <span>Быстрый поиск</span>
+          <input
+            value={localSearch}
+            onChange={(event) => setLocalSearch(event.target.value)}
+            placeholder="Товар, ШК, артикул, SKU или КИЗ"
+          />
+        </label>
+        <label className="turnover-movement-toggle">
+          <input checked={shippedOnly} type="checkbox" onChange={(event) => setShippedOnly(event.target.checked)} />
+          <span>Только отгруженные</span>
+        </label>
+        <span className="turnover-movement-counter">
+          Показано {formatNumber(filteredItems.length)} из {formatNumber(receivedItems.length)}
+        </span>
+      </div>
+
+      {filteredItems.length === 0 ? <p className="turnover-empty">По поиску и фильтру ничего не найдено.</p> : null}
+
       <div className="turnover-two-columns">
         <div className="turnover-table-wrap">
           <table className="turnover-table">
@@ -542,7 +579,7 @@ function MovementSection({
               </tr>
             </thead>
             <tbody>
-              {items.map((item) => (
+              {pageItems.map((item) => (
                 <tr className={item.skuId === selected?.skuId ? 'is-active' : ''} key={item.skuId} onClick={() => onSelect(item.skuId)}>
                   <td>
                     <strong>{item.name}</strong>
@@ -556,6 +593,17 @@ function MovementSection({
               ))}
             </tbody>
           </table>
+          <div className="turnover-pagination">
+            <button type="button" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={currentPage <= 1}>
+              Назад
+            </button>
+            <span>
+              Страница {formatNumber(currentPage)} из {formatNumber(pageCount)}, по {formatNumber(MOVEMENT_PAGE_SIZE)}
+            </span>
+            <button type="button" onClick={() => setPage((current) => Math.min(pageCount, current + 1))} disabled={currentPage >= pageCount}>
+              Далее
+            </button>
+          </div>
         </div>
 
         {selected ? <MovementDetails item={selected} onOpenDocument={onOpenDocument} /> : null}
@@ -1180,6 +1228,46 @@ function uniqueOptions(options: KnownValueOption[]) {
   }
 
   return result;
+}
+
+function hasEverBeenReceived(item: TurnoverSkuReport) {
+  return (
+    item.receivedQuantity > 0 ||
+    item.currentQuantity > 0 ||
+    Boolean(item.firstReceiptAt) ||
+    item.movements.some((movement) => movement.quantity > 0 && ['INITIAL_IMPORT', 'RECEIPT', 'RETURN', 'INVENTORY_ADJUSTMENT'].includes(movement.type))
+  );
+}
+
+function hasBeenShipped(item: TurnoverSkuReport) {
+  return item.shippedQuantity > 0 || item.movements.some((movement) => movement.type === 'SHIP' && movement.quantity < 0);
+}
+
+function turnoverItemMatches(item: TurnoverSkuReport, normalizedQuery: string) {
+  const values = [
+    item.name,
+    item.internalSku,
+    item.clientSku,
+    item.article,
+    item.primaryBarcode,
+    ...item.barcodes,
+    ...item.kiz.map((mark) => mark.value),
+    ...item.currentCells.map((cell) => cell.boxCode),
+    ...item.movements.flatMap((movement) => [
+      movement.sourceDocument,
+      movement.comment,
+      movement.request?.title,
+      movement.request?.destinationCity,
+      movement.boxCode,
+      ...movement.kiz,
+    ]),
+  ];
+
+  return values.some((value) => normalizeTurnoverSearch(value ?? '').includes(normalizedQuery));
+}
+
+function normalizeTurnoverSearch(value: string) {
+  return value.trim().toLocaleLowerCase('ru-RU');
 }
 
 function canUseStatistics(roleCodes: string[], permissionCodes: string[]) {

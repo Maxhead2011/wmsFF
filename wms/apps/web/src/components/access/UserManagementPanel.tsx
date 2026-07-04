@@ -1,17 +1,21 @@
-import { KeyRound, RefreshCw, Save, Search, ShieldCheck, Trash2, UserCog } from 'lucide-react';
+import { BadgePercent, KeyRound, RefreshCw, Save, Search, ShieldCheck, Trash2, UserCog } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import {
   fetchClients,
+  fetchUserReferralClients,
   fetchRoles,
   fetchUsers,
   updateUserClientScopes,
   updateUserProfile,
+  updateUserReferralClients,
   updateUserRoles,
   type AuthSession,
   type ClientSummary,
   type RoleSummary,
   type UpdateUserClientScopesPayload,
   type UpdateUserProfilePayload,
+  type UpdateUserReferralClientsPayload,
+  type UserReferralClientSummary,
   type UserSummary,
 } from '../../lib/api';
 import { ConfirmDialog } from '../common/ConfirmDialog';
@@ -22,6 +26,12 @@ type UserManagementPanelProps = {
 
 type ClientAccessLevel = 'read' | 'write';
 type ClientAccessMap = Record<string, ClientAccessLevel>;
+type ReferralAccess = {
+  percent: string;
+  termMonths: string;
+  expiresAt: string | null;
+};
+type ReferralAccessMap = Record<string, ReferralAccess>;
 
 const emptyProfile = {
   email: '',
@@ -29,6 +39,14 @@ const emptyProfile = {
   password: '',
   status: 'ACTIVE',
 };
+
+const referralTermOptions = [
+  { value: '1', label: '1 месяц' },
+  { value: '6', label: '6 месяцев' },
+  { value: '12', label: '1 год' },
+  { value: '24', label: '2 года' },
+  { value: 'none', label: 'Без срока' },
+];
 
 export function UserManagementPanel({ session }: UserManagementPanelProps) {
   const [users, setUsers] = useState<UserSummary[]>([]);
@@ -43,12 +61,19 @@ export function UserManagementPanel({ session }: UserManagementPanelProps) {
   const [clientSearch, setClientSearch] = useState('');
   const [clientToAdd, setClientToAdd] = useState('');
   const [clientLevelToAdd, setClientLevelToAdd] = useState<ClientAccessLevel>('read');
+  const [referralAccess, setReferralAccess] = useState<ReferralAccessMap>({});
+  const [referralClientSearch, setReferralClientSearch] = useState('');
+  const [referralClientToAdd, setReferralClientToAdd] = useState('');
+  const [referralPercentToAdd, setReferralPercentToAdd] = useState('5');
+  const [referralTermToAdd, setReferralTermToAdd] = useState('6');
   const [confirmReasons, setConfirmReasons] = useState<string[] | null>(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setLoading] = useState(false);
   const [isSavingProfile, setSavingProfile] = useState(false);
   const [isSavingAccess, setSavingAccess] = useState(false);
+  const [isLoadingReferrals, setLoadingReferrals] = useState(false);
+  const [isSavingReferrals, setSavingReferrals] = useState(false);
 
   const selectedUser = useMemo(
     () => users.find((user) => user.id === selectedUserId) ?? null,
@@ -69,6 +94,7 @@ export function UserManagementPanel({ session }: UserManagementPanelProps) {
   }, [userSearch, users]);
   const roleByCode = useMemo(() => new Map(roles.map((role) => [role.code, role])), [roles]);
   const hasClientRole = roleCodes.includes('CLIENT');
+  const hasReferralRole = roleCodes.includes('REFERRAL_PARTNER');
   const grantedPermissions = useMemo(() => {
     const permissions = new Map<string, string>();
     roleCodes.forEach((code) => {
@@ -102,6 +128,29 @@ export function UserManagementPanel({ session }: UserManagementPanelProps) {
       )
       .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
   }, [clientAccess, clientSearch, clients]);
+  const visibleReferralRows = useMemo(
+    () =>
+      Object.entries(referralAccess)
+        .map(([clientId, referral]) => {
+          const client = clients.find((item) => item.id === clientId);
+          return client ? { client, referral } : null;
+        })
+        .filter((item): item is { client: ClientSummary; referral: ReferralAccess } => Boolean(item))
+        .sort((left, right) => left.client.name.localeCompare(right.client.name, 'ru')),
+    [clients, referralAccess],
+  );
+  const clientsForReferralAdd = useMemo(() => {
+    const normalized = normalizeSearch(referralClientSearch);
+    return clients
+      .filter((client) => !referralAccess[client.id])
+      .filter(
+        (client) =>
+          !normalized ||
+          normalizeSearch(client.name).includes(normalized) ||
+          normalizeSearch(client.code).includes(normalized),
+      )
+      .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
+  }, [clients, referralAccess, referralClientSearch]);
   const isDirtyProfile = selectedUser
     ? profile.email.trim() !== selectedUser.email ||
       profile.name.trim() !== selectedUser.name ||
@@ -120,6 +169,7 @@ export function UserManagementPanel({ session }: UserManagementPanelProps) {
     }
 
     applySelectedUser(selectedUser);
+    void loadReferralClients(selectedUser.id);
   }, [selectedUser?.id]);
 
   useEffect(() => {
@@ -136,6 +186,15 @@ export function UserManagementPanel({ session }: UserManagementPanelProps) {
       setClientToAdd(clientsForAdd[0]?.id ?? '');
     }
   }, [clientToAdd, clientsForAdd]);
+
+  useEffect(() => {
+    if (!referralClientToAdd && clientsForReferralAdd[0]) {
+      setReferralClientToAdd(clientsForReferralAdd[0].id);
+    }
+    if (referralClientToAdd && !clientsForReferralAdd.some((client) => client.id === referralClientToAdd)) {
+      setReferralClientToAdd(clientsForReferralAdd[0]?.id ?? '');
+    }
+  }, [clientsForReferralAdd, referralClientToAdd]);
 
   async function loadDictionaries() {
     setLoading(true);
@@ -175,8 +234,24 @@ export function UserManagementPanel({ session }: UserManagementPanelProps) {
     setAccessMode(user.clientScopes.length === 0 && !nextRoleCodes.includes('CLIENT') ? 'all' : 'limited');
     setClientSearch('');
     setClientToAdd('');
+    setReferralAccess({});
+    setReferralClientSearch('');
+    setReferralClientToAdd('');
     setMessage('');
     setError('');
+  }
+
+  async function loadReferralClients(userId: string) {
+    setLoadingReferrals(true);
+
+    try {
+      const assignments = await fetchUserReferralClients(session.accessToken, userId);
+      setReferralAccess(referralAssignmentsToMap(assignments));
+    } catch (caught) {
+      setError(errorMessage(caught, 'Не удалось загрузить реферальные настройки пользователя.'));
+    } finally {
+      setLoadingReferrals(false);
+    }
   }
 
   function selectUser(userId: string) {
@@ -208,6 +283,40 @@ export function UserManagementPanel({ session }: UserManagementPanelProps) {
 
   function removeClientAccess(clientId: string) {
     setClientAccess((current) => {
+      const next = { ...current };
+      delete next[clientId];
+      return next;
+    });
+  }
+
+  function addReferralClient() {
+    if (!referralClientToAdd) {
+      return;
+    }
+
+    setReferralAccess((current) => ({
+      ...current,
+      [referralClientToAdd]: {
+        percent: referralPercentToAdd,
+        termMonths: referralTermToAdd,
+        expiresAt: null,
+      },
+    }));
+    setReferralClientToAdd('');
+  }
+
+  function changeReferralClient(clientId: string, patch: Partial<ReferralAccess>) {
+    setReferralAccess((current) => ({
+      ...current,
+      [clientId]: {
+        ...(current[clientId] ?? { percent: '0', termMonths: '6', expiresAt: null }),
+        ...patch,
+      },
+    }));
+  }
+
+  function removeReferralClient(clientId: string) {
+    setReferralAccess((current) => {
       const next = { ...current };
       delete next[clientId];
       return next;
@@ -293,6 +402,35 @@ export function UserManagementPanel({ session }: UserManagementPanelProps) {
       setError(errorMessage(caught, 'Не удалось сохранить доступы к клиентам.'));
     } finally {
       setSavingAccess(false);
+    }
+  }
+
+  async function saveReferrals() {
+    if (!selectedUser) {
+      return;
+    }
+
+    const assignments: UpdateUserReferralClientsPayload['assignments'] = Object.entries(referralAccess).map(
+      ([clientId, referral]) => ({
+        clientId,
+        percent: Number(referral.percent) || 0,
+        termMonths: referral.termMonths === 'none' ? null : Number(referral.termMonths),
+        isActive: (Number(referral.percent) || 0) > 0,
+      }),
+    );
+
+    setSavingReferrals(true);
+    setError('');
+    setMessage('');
+
+    try {
+      const saved = await updateUserReferralClients(session.accessToken, selectedUser.id, { assignments });
+      setReferralAccess(referralAssignmentsToMap(saved));
+      setMessage('Реферальная программа пользователя сохранена.');
+    } catch (caught) {
+      setError(errorMessage(caught, 'Не удалось сохранить реферальную программу.'));
+    } finally {
+      setSavingReferrals(false);
     }
   }
 
@@ -521,6 +659,127 @@ export function UserManagementPanel({ session }: UserManagementPanelProps) {
               </div>
             </section>
 
+            {hasReferralRole || visibleReferralRows.length > 0 ? (
+              <section className="user-edit-card user-referral-card">
+                <header>
+                  <BadgePercent size={18} aria-hidden="true" />
+                  <div>
+                    <strong>Реферальная программа</strong>
+                    <span>Клиенты, процент и срок действия для партнера. В расчет не входят логистика, хранение и ПРР.</span>
+                  </div>
+                </header>
+
+                {isLoadingReferrals ? <p className="inline-status">Загружаю реферальные настройки.</p> : null}
+
+                <div className="user-referral-add">
+                  <label>
+                    <span>Поиск клиента</span>
+                    <input value={referralClientSearch} onChange={(event) => setReferralClientSearch(event.target.value)} placeholder="Название или код" />
+                  </label>
+                  <label>
+                    <span>Клиент</span>
+                    <select value={referralClientToAdd} onChange={(event) => setReferralClientToAdd(event.target.value)}>
+                      <option value="">Выберите клиента</option>
+                      {clientsForReferralAdd.map((client) => (
+                        <option key={client.id} value={client.id}>
+                          {client.name} · {client.code}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>%</span>
+                    <input
+                      min="0"
+                      max="100"
+                      step="0.01"
+                      type="number"
+                      value={referralPercentToAdd}
+                      onChange={(event) => setReferralPercentToAdd(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>Срок</span>
+                    <select value={referralTermToAdd} onChange={(event) => setReferralTermToAdd(event.target.value)}>
+                      {referralTermOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button className="primary-button access-secondary" type="button" onClick={addReferralClient} disabled={!referralClientToAdd}>
+                    Добавить
+                  </button>
+                </div>
+
+                <div className="user-access-table-wrap">
+                  <table className="user-access-table user-referral-table">
+                    <thead>
+                      <tr>
+                        <th>Клиент</th>
+                        <th>Код</th>
+                        <th>%</th>
+                        <th>Срок</th>
+                        <th>Действует до</th>
+                        <th aria-label="Убрать" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleReferralRows.map(({ client, referral }) => (
+                        <tr key={client.id}>
+                          <td>
+                            <strong>{client.name}</strong>
+                          </td>
+                          <td>{client.code}</td>
+                          <td>
+                            <input
+                              min="0"
+                              max="100"
+                              step="0.01"
+                              type="number"
+                              value={referral.percent}
+                              onChange={(event) => changeReferralClient(client.id, { percent: event.target.value })}
+                            />
+                          </td>
+                          <td>
+                            <select
+                              value={referral.termMonths}
+                              onChange={(event) => changeReferralClient(client.id, { termMonths: event.target.value })}
+                            >
+                              {referralTermOptions.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                          <td>{referral.expiresAt ? formatDate(referral.expiresAt) : 'Без срока'}</td>
+                          <td>
+                            <button className="icon-button" type="button" onClick={() => removeReferralClient(client.id)} aria-label="Убрать из рефералки">
+                              <Trash2 size={16} aria-hidden="true" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {visibleReferralRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={6}>Клиенты для реферальной программы еще не назначены.</td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="access-actions">
+                  <button className="primary-button" type="button" onClick={() => void saveReferrals()} disabled={isSavingReferrals}>
+                    <Save size={16} aria-hidden="true" />
+                    <span>{isSavingReferrals ? 'Сохранение' : 'Сохранить рефералку'}</span>
+                  </button>
+                </div>
+              </section>
+            ) : null}
+
             {message ? <p className="access-success">{message}</p> : null}
             {error ? <p className="form-error">{error}</p> : null}
           </>
@@ -587,6 +846,23 @@ function statusLabel(status: string) {
 
 function isLikelyEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function referralAssignmentsToMap(assignments: UserReferralClientSummary[]) {
+  return assignments
+    .filter((assignment) => assignment.isActive)
+    .reduce<ReferralAccessMap>((acc, assignment) => {
+      acc[assignment.client.id] = {
+        percent: String(assignment.percent),
+        termMonths: assignment.termMonths ? String(assignment.termMonths) : 'none',
+        expiresAt: assignment.expiresAt,
+      };
+      return acc;
+    }, {});
+}
+
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat('ru-RU').format(new Date(value));
 }
 
 function errorMessage(caught: unknown, fallback: string) {

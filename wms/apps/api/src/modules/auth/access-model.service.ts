@@ -25,6 +25,7 @@ const permissions = [
   ['billing:read', 'Просмотр услуг и начислений биллинга'],
   ['billing:write', 'Создание услуг и начислений биллинга'],
   ['print:write', 'Печать этикеток'],
+  ['referrals:read', 'Просмотр реферальной программы'],
 ] as const;
 
 const rolePermissions: Record<string, { name: string; permissions: string[] }> = {
@@ -94,6 +95,10 @@ const rolePermissions: Record<string, { name: string; permissions: string[] }> =
       'logistics:request',
       'billing:read',
     ],
+  },
+  REFERRAL_PARTNER: {
+    name: 'Реферальный партнер',
+    permissions: ['referrals:read'],
   },
 };
 

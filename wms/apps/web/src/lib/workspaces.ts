@@ -1,4 +1,5 @@
 import {
+  BadgePercent,
   BriefcaseBusiness,
   Building2,
   Boxes,
@@ -22,6 +23,7 @@ import type { AuthUser } from './api';
 export type WorkspaceId =
   | 'overview'
   | 'cabinet'
+  | 'referrals'
   | 'access'
   | 'directories'
   | 'imports'
@@ -70,6 +72,16 @@ export const workspaceNav: WorkspaceNavItem[] = [
     icon: BriefcaseBusiness,
     status: 'in-progress',
     audience: 'client',
+  },
+  {
+    id: 'referrals',
+    title: 'Рефералка',
+    eyebrow: 'Партнер',
+    description: 'Виджет по назначенным клиентам: услуги ФФ, процент и сумма реферальной программы.',
+    permissions: ['referrals:read'],
+    icon: BadgePercent,
+    status: 'ready',
+    audience: 'all',
   },
   {
     id: 'access',
@@ -194,7 +206,7 @@ export const workspaceNav: WorkspaceNavItem[] = [
   {
     id: 'debug',
     title: 'Отладка',
-    eyebrow: 'Контроль',
+    eyebrow: 'Управление',
     description: 'Быстрое редактирование клиентов, пользователей, операторов и служебных параметров БД.',
     permissions: ['system:admin'],
     icon: Bug,
@@ -204,7 +216,7 @@ export const workspaceNav: WorkspaceNavItem[] = [
   {
     id: 'data',
     title: 'Данные',
-    eyebrow: 'Контроль',
+    eyebrow: 'Управление',
     description: 'Таблицы остатков, клиентов, SKU и очередь разбора ТСД.',
     permissions: ['clients:read', 'skus:read', 'stock:read'],
     icon: Database,

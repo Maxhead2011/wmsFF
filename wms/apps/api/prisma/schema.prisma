@@ -277,6 +277,8 @@ model User {
   authoredRequestComments        ClientRequestComment[]         @relation("ClientRequestCommentAuthor")
   createdRequestEvents           ClientRequestEvent[]           @relation("ClientRequestEventCreatedBy")
   assignedFulfillmentClients     Client[]                       @relation("ClientFulfillmentManager")
+  referralClients                UserReferralClient[]           @relation("UserReferralAssignments")
+  updatedReferralClients         UserReferralClient[]           @relation("UserReferralUpdatedBy")
   systemSettings                 SystemSetting[]
   auditLogs                      AuditLog[]
   createdAt                      DateTime                       @default(now())
@@ -329,6 +331,28 @@ model UserClient {
 
   @@id([userId, clientId])
   @@index([clientId])
+}
+
+model UserReferralClient {
+  userId          String
+  clientId        String
+  percent         Decimal  @db.Decimal(5, 2)
+  isActive        Boolean  @default(true)
+  startsAt        DateTime @default(now())
+  expiresAt       DateTime?
+  termMonths      Int?
+  updatedByUserId String?
+  user            User     @relation("UserReferralAssignments", fields: [userId], references: [id], onDelete: Cascade)
+  client          Client   @relation(fields: [clientId], references: [id])
+  updatedBy       User?    @relation("UserReferralUpdatedBy", fields: [updatedByUserId], references: [id])
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@id([userId, clientId])
+  @@index([clientId])
+  @@index([updatedByUserId])
+  @@index([isActive])
+  @@index([expiresAt])
 }
 
 model UserPrinterGroup {
@@ -398,6 +422,7 @@ model Client {
   articleMappings          ClientArticleMapping[]
   allowedIps               ClientAllowedIp[]
   productMarks             ProductMark[]
+  referralUsers            UserReferralClient[]
   requestComments          ClientRequestComment[]
   requestEvents            ClientRequestEvent[]
   createdAt                DateTime                       @default(now())

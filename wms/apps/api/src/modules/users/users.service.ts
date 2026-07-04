@@ -8,8 +8,10 @@ import { SetTsdActivationCodeDto } from './dto/set-tsd-activation-code.dto';
 import { UpdateUserClientScopesDto } from './dto/update-user-client-scopes.dto';
 import { UpdateUserPrinterScopesDto } from './dto/update-user-printer-scopes.dto';
 import { UpdateUserProfileDto } from './dto/update-user-profile.dto';
+import { UpdateUserReferralClientsDto } from './dto/update-user-referral-clients.dto';
 import { UpdateUserRolesDto } from './dto/update-user-roles.dto';
 import { normalizePrinterGroupCode } from '../auth/printer-scope.service';
+import type { AuthUser } from '../auth/auth.types';
 
 @Injectable()
 export class UsersService {
@@ -76,6 +78,79 @@ export class UsersService {
     });
 
     return this.findUserSummary(userId);
+  }
+
+  async listReferralClients(userId: string) {
+    await this.ensureUserExists(userId);
+
+    const assignments = await this.prisma.userReferralClient.findMany({
+      where: { userId },
+      include: {
+        client: { select: { id: true, code: true, name: true } },
+        updatedBy: { select: { id: true, email: true, name: true } },
+      },
+      orderBy: [{ isActive: 'desc' }, { updatedAt: 'desc' }],
+    });
+
+    return assignments.map((assignment) => this.toReferralClientSummary(assignment));
+  }
+
+  async updateReferralClients(userId: string, dto: UpdateUserReferralClientsDto, currentUser: AuthUser) {
+    await this.ensureUserExists(userId);
+
+    const assignments = [...new Map(dto.assignments.map((assignment) => [assignment.clientId, assignment])).values()];
+    await this.ensureClientsExist(assignments.map((assignment) => assignment.clientId));
+
+    const now = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      const activeClientIds: string[] = [];
+
+      for (const assignment of assignments) {
+        const termMonths = assignment.termMonths ?? null;
+        const isActive = assignment.isActive ?? assignment.percent > 0;
+        activeClientIds.push(assignment.clientId);
+
+        await tx.userReferralClient.upsert({
+          where: {
+            userId_clientId: {
+              userId,
+              clientId: assignment.clientId,
+            },
+          },
+          create: {
+            userId,
+            clientId: assignment.clientId,
+            percent: new Prisma.Decimal(roundPercent(assignment.percent)),
+            isActive,
+            startsAt: now,
+            expiresAt: termMonths ? addMonths(now, termMonths) : null,
+            termMonths,
+            updatedByUserId: currentUser.id,
+          },
+          update: {
+            percent: new Prisma.Decimal(roundPercent(assignment.percent)),
+            isActive,
+            startsAt: now,
+            expiresAt: termMonths ? addMonths(now, termMonths) : null,
+            termMonths,
+            updatedByUserId: currentUser.id,
+          },
+        });
+      }
+
+      await tx.userReferralClient.updateMany({
+        where: {
+          userId,
+          ...(activeClientIds.length > 0 ? { clientId: { notIn: activeClientIds } } : {}),
+        },
+        data: {
+          isActive: false,
+          updatedByUserId: currentUser.id,
+        },
+      });
+    });
+
+    return this.listReferralClients(userId);
   }
 
   async updatePrinterScopes(userId: string, dto: UpdateUserPrinterScopesDto) {
@@ -244,6 +319,20 @@ export class UsersService {
     }
   }
 
+  private async ensureUserExists(userId: string) {
+    try {
+      await this.prisma.user.findUniqueOrThrow({
+        where: { id: userId },
+        select: { id: true },
+      });
+    } catch (caught) {
+      if (isRecordNotFoundError(caught)) {
+        throw new NotFoundException('Пользователь не найден.');
+      }
+      throw caught;
+    }
+  }
+
   private normalizeRoleCodes(roleCodes: string[]) {
     return [...new Set(roleCodes.map((code) => code.trim().toUpperCase()).filter(Boolean))];
   }
@@ -361,6 +450,32 @@ export class UsersService {
     };
   }
 
+  private toReferralClientSummary(assignment: {
+    clientId: string;
+    percent: Prisma.Decimal | number | string;
+    isActive: boolean;
+    startsAt: Date;
+    expiresAt: Date | null;
+    termMonths: number | null;
+    createdAt: Date;
+    updatedAt: Date;
+    client: { id: string; code: string; name: string };
+    updatedBy: { id: string; email: string; name: string } | null;
+  }) {
+    return {
+      clientId: assignment.clientId,
+      client: assignment.client,
+      percent: Number(assignment.percent),
+      isActive: assignment.isActive,
+      startsAt: assignment.startsAt.toISOString(),
+      expiresAt: assignment.expiresAt?.toISOString() ?? null,
+      termMonths: assignment.termMonths,
+      createdAt: assignment.createdAt.toISOString(),
+      updatedAt: assignment.updatedAt.toISOString(),
+      updatedBy: assignment.updatedBy,
+    };
+  }
+
   private async ensureSystemAdminStatusSurvives(userId: string) {
     const currentHasSystemAdmin = await this.prisma.userRole.count({
       where: {
@@ -409,4 +524,14 @@ function isRecordNotFoundError(caught: unknown) {
 
 function isUniqueUserEmailError(caught: unknown) {
   return caught instanceof Prisma.PrismaClientKnownRequestError && caught.code === 'P2002';
+}
+
+function roundPercent(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+function addMonths(date: Date, months: number) {
+  const next = new Date(date);
+  next.setMonth(next.getMonth() + months);
+  return next;
 }

@@ -1,11 +1,14 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import type { AuthUser } from '../auth/auth.types';
 import { CreateUserDto } from './dto/create-user.dto';
 import { SetTsdActivationCodeDto } from './dto/set-tsd-activation-code.dto';
 import { UpdateUserClientScopesDto } from './dto/update-user-client-scopes.dto';
 import { UpdateUserPrinterScopesDto } from './dto/update-user-printer-scopes.dto';
 import { UpdateUserProfileDto } from './dto/update-user-profile.dto';
+import { UpdateUserReferralClientsDto } from './dto/update-user-referral-clients.dto';
 import { UpdateUserRolesDto } from './dto/update-user-roles.dto';
 import { UsersService } from './users.service';
 
@@ -31,6 +34,18 @@ export class UsersController {
   @RequirePermissions('users:write')
   updateClientScopes(@Param('id') id: string, @Body() dto: UpdateUserClientScopesDto) {
     return this.users.updateClientScopes(id, dto);
+  }
+
+  @Get(':id/referrals')
+  @RequirePermissions('system:admin')
+  listReferralClients(@Param('id') id: string) {
+    return this.users.listReferralClients(id);
+  }
+
+  @Patch(':id/referrals')
+  @RequirePermissions('system:admin')
+  updateReferralClients(@Param('id') id: string, @Body() dto: UpdateUserReferralClientsDto, @CurrentUser() user: AuthUser) {
+    return this.users.updateReferralClients(id, dto, user);
   }
 
   @Patch(':id/printer-scopes')

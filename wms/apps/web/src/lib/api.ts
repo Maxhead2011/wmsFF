@@ -1909,6 +1909,23 @@ export type UserSummary = {
   printerScopes: UserPrinterScope[];
 };
 
+export type UserReferralClientSummary = {
+  clientId: string;
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  percent: number;
+  isActive: boolean;
+  startsAt: string;
+  expiresAt: string | null;
+  termMonths: number | null;
+  createdAt: string;
+  updatedAt: string;
+  updatedBy: {
+    id: string;
+    email: string;
+    name: string;
+  } | null;
+};
+
 export type CreateUserPayload = {
   email: string;
   name: string;
@@ -1924,6 +1941,50 @@ export type UpdateUserClientScopesPayload = {
     canRead?: boolean;
     canWrite?: boolean;
   }>;
+};
+
+export type UpdateUserReferralClientsPayload = {
+  assignments: Array<{
+    clientId: string;
+    percent: number;
+    termMonths?: number | null;
+    isActive?: boolean;
+  }>;
+};
+
+export type ReferralReportServiceRow = {
+  serviceId: string | null;
+  serviceCode: string | null;
+  serviceName: string;
+  quantity: number;
+  totalRub: number;
+  chargesCount: number;
+};
+
+export type ReferralReportClientRow = {
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  percent: number;
+  startsAt: string;
+  expiresAt: string | null;
+  termMonths: number | null;
+  servicesRub: number;
+  referralRub: number;
+  chargesCount: number;
+  latestServiceAt: string | null;
+  services: ReferralReportServiceRow[];
+};
+
+export type ReferralReport = {
+  generatedAt: string;
+  periodFrom: string;
+  periodTo: string;
+  totals: {
+    clientsCount: number;
+    servicesRub: number;
+    referralRub: number;
+    chargesCount: number;
+  };
+  clients: ReferralReportClientRow[];
 };
 
 export type UpdateUserRolesPayload = {
@@ -3310,6 +3371,24 @@ export async function updateUserClientScopes(
   );
 }
 
+export async function fetchUserReferralClients(accessToken: string, userId: string) {
+  return request<UserReferralClientSummary[]>(`/users/${userId}/referrals`, {
+    accessToken,
+  });
+}
+
+export async function updateUserReferralClients(
+  accessToken: string,
+  userId: string,
+  payload: UpdateUserReferralClientsPayload,
+) {
+  return request<UserReferralClientSummary[]>(`/users/${userId}/referrals`, {
+    method: 'PATCH',
+    body: payload,
+    accessToken,
+  });
+}
+
 export async function updateUserRoles(accessToken: string, userId: string, payload: UpdateUserRolesPayload) {
   return request<UserSummary>(`/users/${userId}/roles`, {
     method: 'PATCH',
@@ -3349,6 +3428,15 @@ export async function updateUserPrinterScopes(
   return request<UserSummary>(`/users/${userId}/printer-scopes`, {
     method: 'PATCH',
     body: payload,
+    accessToken,
+  });
+}
+
+export async function fetchReferralReport(
+  accessToken: string,
+  filter: { periodFrom?: string; periodTo?: string } = {},
+) {
+  return request<ReferralReport>(withQuery('/referrals/report', filter), {
     accessToken,
   });
 }
