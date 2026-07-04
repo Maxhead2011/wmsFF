@@ -25,6 +25,7 @@ import { ClientRequestCreateForm } from './ClientRequestCreateForm';
 import { ClientRequestDocumentPreview } from './ClientRequestDocumentPreview';
 import { ClientRequestEditForm } from './ClientRequestEditForm';
 import { ClientRequestXlsxImportForm } from './ClientRequestXlsxImportForm';
+import { ManualShipmentCloseModal, type ManualShipmentClosePayload } from './ManualShipmentCloseModal';
 import '../billing/billing.css';
 import { BillingInvoiceForm } from '../billing/BillingInvoiceForm';
 import './client-requests.css';
@@ -53,6 +54,9 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
   const [issuingInvoiceRequestId, setIssuingInvoiceRequestId] = useState('');
   const [manualInvoiceRequest, setManualInvoiceRequest] = useState<ClientRequestSummary | null>(null);
   const [editingRequest, setEditingRequest] = useState<ClientRequestSummary | null>(null);
+  const [manualShipmentRequest, setManualShipmentRequest] = useState<ClientRequestSummary | null>(null);
+  const [manualShipmentError, setManualShipmentError] = useState<string | null>(null);
+  const [isManualShipmentSubmitting, setManualShipmentSubmitting] = useState(false);
   const [documentPreview, setDocumentPreview] = useState<ClientRequestDocument | null>(null);
   const [pickInstructionPreview, setPickInstructionPreview] = useState<PickInstructionDocument | null>(null);
 
@@ -88,12 +92,26 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     }
   }
 
-  async function changeStatus(requestId: string, status: ClientRequestStatus) {
+  async function changeStatus(request: ClientRequestSummary, status: ClientRequestStatus) {
     setError(null);
     setNotice(null);
+    setManualShipmentError(null);
+
+    if (request.status === status) {
+      return;
+    }
+
+    if (request.type === 'OUTBOUND' && status === 'DONE') {
+      if (request.status === 'PACKED') {
+        await shipOutboundRequest(request);
+      } else {
+        setManualShipmentRequest(request);
+      }
+      return;
+    }
 
     try {
-      const updated = await updateClientRequestStatus(session.accessToken, requestId, { status });
+      const updated = await updateClientRequestStatus(session.accessToken, request.id, { status });
       setRequests((current) => ({
         ...current,
         data: current.data.map((request) => (request.id === updated.id ? updated : request)),
@@ -241,6 +259,38 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     }
   }
 
+  async function closeShipmentManually(payload: ManualShipmentClosePayload) {
+    if (!manualShipmentRequest) {
+      return;
+    }
+
+    setManualShipmentSubmitting(true);
+    setManualShipmentError(null);
+    setError(null);
+    setNotice(null);
+
+    try {
+      const updated = await updateClientRequestStatus(session.accessToken, manualShipmentRequest.id, {
+        status: 'DONE',
+        managerComment: payload.managerComment,
+        boxes: payload.boxes,
+        pallets: payload.pallets,
+        packedUnits: payload.packedUnits,
+        packages: payload.packages,
+      });
+      setRequests((current) => ({
+        ...current,
+        data: current.data.map((request) => (request.id === updated.id ? updated : request)),
+      }));
+      setManualShipmentRequest(null);
+      setNotice(`Заявка "${updated.title}" сдана. Остатки списаны, упаковочные места зафиксированы.`);
+    } catch (caught) {
+      setManualShipmentError(errorMessage(caught));
+    } finally {
+      setManualShipmentSubmitting(false);
+    }
+  }
+
   function acceptManualInvoice(invoice: BillingInvoiceSummary) {
     setManualInvoiceRequest(null);
     setNotice(`Черновик счета № ${invoice.number} сохранен. Он станет образцом для следующих похожих заявок клиента.`);
@@ -299,7 +349,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           canUse(session.user, 'billing:write'),
           canWrite,
           issuingInvoiceRequestId,
-          (requestId, status) => void changeStatus(requestId, status),
+          (request, status) => void changeStatus(request, status),
           (request) => setEditingRequest(request),
           (request) => void cancelRequest(request),
           (request) => void openRequestDocument(request),
@@ -372,6 +422,21 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           </div>
         </div>
       ) : null}
+
+      {manualShipmentRequest ? (
+        <ManualShipmentCloseModal
+          request={manualShipmentRequest}
+          isSubmitting={isManualShipmentSubmitting}
+          error={manualShipmentError}
+          onClose={() => {
+            if (!isManualShipmentSubmitting) {
+              setManualShipmentRequest(null);
+              setManualShipmentError(null);
+            }
+          }}
+          onSubmit={(payload) => void closeShipmentManually(payload)}
+        />
+      ) : null}
     </section>
   );
 }
@@ -383,7 +448,7 @@ function renderRequests(
   canIssueInvoice: boolean,
   canCancelRequests: boolean,
   issuingInvoiceRequestId: string,
-  onStatusChange: (requestId: string, status: ClientRequestStatus) => void,
+  onStatusChange: (request: ClientRequestSummary, status: ClientRequestStatus) => void,
   onEditRequest: (request: ClientRequestSummary) => void,
   onCancelRequest: (request: ClientRequestSummary) => void,
   onOpenDocument: (request: ClientRequestSummary) => void,

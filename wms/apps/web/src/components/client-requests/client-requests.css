@@ -154,6 +154,41 @@
   justify-content: flex-end;
 }
 
+.client-request-manual-close {
+  display: grid;
+  gap: 14px;
+}
+
+.client-request-manual-close form {
+  display: grid;
+  gap: 14px;
+}
+
+.client-request-manual-close__summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 12px;
+}
+
+.client-request-manual-close__summary span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.client-request-manual-close__summary strong {
+  font-size: 20px;
+}
+
+.client-request-manual-close__fields {
+  grid-template-columns: repeat(3, minmax(130px, 1fr));
+}
+
 .client-request-invoice-modal__content {
   display: grid;
   width: min(1180px, 100%);

@@ -17,7 +17,7 @@ type ClientRequestsTableProps = {
   canCancelRequests: boolean;
   canEditRequests: boolean;
   issuingInvoiceRequestId: string;
-  onStatusChange: (requestId: string, status: ClientRequestStatus) => void;
+  onStatusChange: (request: ClientRequestSummary, status: ClientRequestStatus) => void;
   onEditRequest: (request: ClientRequestSummary) => void;
   onCancelRequest: (request: ClientRequestSummary) => void;
   onOpenDocument?: (request: ClientRequestSummary) => void;
@@ -221,7 +221,7 @@ export function ClientRequestsTable({
                     <CheckCircle2 size={15} aria-hidden="true" />
                     <select
                       value={request.status}
-                      onChange={(event) => onStatusChange(request.id, event.target.value as ClientRequestStatus)}
+                      onChange={(event) => onStatusChange(request, event.target.value as ClientRequestStatus)}
                     >
                       {requestStatusOptions.map((option) => (
                         <option key={option.value} value={option.value}>
