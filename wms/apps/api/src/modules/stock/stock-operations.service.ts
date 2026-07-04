@@ -365,25 +365,40 @@ export class StockOperationsService {
     const baseKey = dto.idempotencyKey ?? `ship-request:${dto.requestId}`;
 
     const result = await this.prisma.$transaction(async (tx) => {
+      const request = await this.loadOutboundRequest(tx, dto.requestId, user, 'Отгрузка');
+
+      if (request.status === ClientRequestStatus.DONE) {
+        return {
+          idempotencyKey: baseKey,
+          status: 'ALREADY_APPLIED',
+          requestId: request.id,
+          clientId: request.clientId,
+        };
+      }
+
+      this.ensureRequestCanMove(request, 'отгружать');
+
       const existingMovement = await tx.stockMovement.findFirst({
         where: { idempotencyKey: { startsWith: `${baseKey}:` } },
       });
 
       if (existingMovement) {
+        await tx.clientRequest.update({
+          where: { id: request.id },
+          data: {
+            status: ClientRequestStatus.DONE,
+            assignedToUserId: user.id,
+            managerComment: dto.comment ?? 'Заявка отгружена со склада.',
+          },
+        });
+
         return {
           idempotencyKey: baseKey,
           status: 'ALREADY_APPLIED',
-          requestId: dto.requestId,
+          requestId: request.id,
+          clientId: request.clientId,
         };
       }
-
-      const request = await this.loadOutboundRequest(tx, dto.requestId, user, 'Отгрузка');
-
-      if (request.status === ClientRequestStatus.DONE) {
-        throw new BadRequestException('Заявка уже закрыта как отгруженная.');
-      }
-
-      this.ensureRequestCanMove(request, 'отгружать');
 
       if (request.status !== ClientRequestStatus.PACKED) {
         throw new BadRequestException('Отгрузка доступна только после упаковки заявки.');
@@ -432,7 +447,7 @@ export class StockOperationsService {
       };
     });
 
-    if (result.status === 'APPLIED') {
+    if (result.status === 'APPLIED' || result.status === 'ALREADY_APPLIED') {
       await this.billingAutomation?.generateForDoneRequest(result.requestId, user);
     }
 

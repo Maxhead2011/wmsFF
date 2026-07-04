@@ -63,6 +63,7 @@ export class RequestBillingAutomationService {
       return { status: 'SKIPPED', reason: 'DEMO_CLIENT' as const };
     }
 
+    await this.ensureFulfillmentPackageCharges(request, user);
     await this.ensureItemProcessingCharge(request, user);
     await this.ensureOnShipmentStorageCharge(request, user);
 
@@ -185,6 +186,102 @@ export class RequestBillingAutomationService {
     });
 
     return charge.id;
+  }
+
+  private async ensureFulfillmentPackageCharges(request: DoneRequestPayload, user: AuthUser) {
+    const counts = countPackages(request.packages);
+    const rows = [
+      { ...FULFILLMENT_BILLING_SERVICES.BOX_60_40_40, quantity: counts.boxes },
+      { ...FULFILLMENT_BILLING_SERVICES.BOX_ASSEMBLY, quantity: counts.boxes },
+      { ...FULFILLMENT_BILLING_SERVICES.PALLET, quantity: counts.pallets },
+      { ...FULFILLMENT_BILLING_SERVICES.PALLET_ASSEMBLY, quantity: counts.pallets },
+    ].filter((row) => row.quantity > 0);
+
+    for (const row of rows) {
+      const sourceKey = fulfillmentPackageSourceKey(request.id, row.code);
+      const existing = await this.prisma.billingCharge.findFirst({
+        where: { sourceKey },
+        select: { id: true },
+      });
+      if (existing) {
+        continue;
+      }
+
+      const service = await this.prisma.billingService.upsert({
+        where: { code: row.code },
+        update: {
+          name: row.name,
+          unit: row.unit,
+          defaultPriceRub: row.defaultPriceRub,
+          isActive: true,
+        },
+        create: {
+          code: row.code,
+          name: row.name,
+          unit: row.unit,
+          defaultPriceRub: row.defaultPriceRub,
+          isActive: true,
+        },
+      });
+
+      const clientPrice = await this.prisma.clientBillingService.upsert({
+        where: {
+          clientId_serviceId: {
+            clientId: request.clientId,
+            serviceId: service.id,
+          },
+        },
+        update: {},
+        create: {
+          clientId: request.clientId,
+          serviceId: service.id,
+          priceRub: row.defaultPriceRub,
+          taxMode: BillingPriceTaxMode.INCLUDED,
+          isActive: true,
+          updatedByUserId: user.id,
+        },
+      });
+      if (!clientPrice.isActive) {
+        continue;
+      }
+
+      const priceRub = decimalToNumber(clientPrice.priceRub);
+      if (priceRub == null || priceRub <= 0) {
+        continue;
+      }
+
+      const unitPriceRub = applyTaxMode(priceRub, clientPrice.taxMode);
+      const totalRub = roundMoney(unitPriceRub * row.quantity);
+      await this.prisma.billingCharge.create({
+        data: {
+          clientId: request.clientId,
+          serviceId: service.id,
+          requestId: request.id,
+          description: `${row.name} по заявке ${request.title}`,
+          unit: row.unit,
+          quantity: row.quantity,
+          unitPriceRub,
+          totalRub,
+          status: BillingChargeStatus.APPROVED,
+          serviceDate: request.updatedAt,
+          source: BillingChargeSource.MANUAL,
+          sourceKey,
+          metadata: {
+            requestId: request.id,
+            packageBilling: true,
+            packagesCount: request.packages.length,
+            boxes: counts.boxes,
+            pallets: counts.pallets,
+            taxMode: clientPrice.taxMode,
+            priceBeforeTaxRub: priceRub,
+          },
+          comment: 'Автоматически создано при закрытии заявки.',
+          createdByUserId: user.id,
+          approvedByUserId: user.id,
+          approvedAt: new Date(),
+        },
+      });
+    }
   }
 
   private async ensureOnShipmentStorageCharge(
@@ -510,6 +607,32 @@ const ITEM_PROCESSING_SERVICE = {
   unit: BillingUnit.PIECE,
   isActive: true,
 } satisfies Prisma.BillingServiceUncheckedCreateInput;
+const FULFILLMENT_BILLING_SERVICES = {
+  BOX_60_40_40: {
+    code: 'BOX_60_40_40',
+    name: 'Короб 60*40*40',
+    unit: BillingUnit.PIECE,
+    defaultPriceRub: 100,
+  },
+  BOX_ASSEMBLY: {
+    code: 'BOX_ASSEMBLY',
+    name: 'Сборка короба',
+    unit: BillingUnit.PIECE,
+    defaultPriceRub: 40,
+  },
+  PALLET: {
+    code: 'PALLET',
+    name: 'Паллет',
+    unit: BillingUnit.PALLET,
+    defaultPriceRub: 350,
+  },
+  PALLET_ASSEMBLY: {
+    code: 'PALLET_ASSEMBLY',
+    name: 'Сборка паллета',
+    unit: BillingUnit.PALLET,
+    defaultPriceRub: 250,
+  },
+} satisfies Record<string, Prisma.BillingServiceUncheckedCreateInput & { defaultPriceRub: number }>;
 
 const billingInvoiceInclude = {
   client: {
@@ -646,6 +769,10 @@ function logisticsInvoiceSourceKey(requestId: string) {
 
 function itemProcessingSourceKey(requestId: string) {
   return `request-done:${requestId}:item-processing`;
+}
+
+function fulfillmentPackageSourceKey(requestId: string, code: string) {
+  return `fulfillment-package:${requestId}:${code}`;
 }
 
 function storageOnShipmentSourceKey(requestId: string) {

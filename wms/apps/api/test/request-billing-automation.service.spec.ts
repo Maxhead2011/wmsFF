@@ -27,9 +27,46 @@ describe('RequestBillingAutomationService', () => {
       source: BillingInvoiceSource.REQUEST_DONE,
       sourceKey: 'request-done:request-1:main',
       status: 'DRAFT',
-      totalRub: 200,
+      totalRub: 280,
     });
-    expect(prisma.state.invoices[0].items).toEqual([expect.objectContaining({ chargeId: 'charge-box' })]);
+    expect(prisma.state.invoices[0].items).toEqual([
+      expect.objectContaining({ chargeId: 'charge-box' }),
+      expect.objectContaining({ description: 'Сборка короба по заявке Отгрузка' }),
+    ]);
+  });
+
+  it('creates fulfillment package charges when a manual DONE request has no charges yet', async () => {
+    const prisma = fakePrisma({
+      request: requestFixture({ logisticsInvoiceMode: ClientLogisticsInvoiceMode.DISABLED }),
+      charges: [],
+    });
+    const service = serviceWith(prisma);
+
+    await service.generateForDoneRequest('request-1', user());
+
+    expect(prisma.state.charges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceKey: 'fulfillment-package:request-1:BOX_60_40_40',
+          description: 'Короб 60*40*40 по заявке Отгрузка',
+          quantity: 2,
+          totalRub: 200,
+        }),
+        expect.objectContaining({
+          sourceKey: 'fulfillment-package:request-1:BOX_ASSEMBLY',
+          description: 'Сборка короба по заявке Отгрузка',
+          quantity: 2,
+          totalRub: 80,
+        }),
+      ]),
+    );
+    expect(prisma.state.invoices).toHaveLength(1);
+    expect(prisma.state.invoices[0]).toMatchObject({
+      source: BillingInvoiceSource.REQUEST_DONE,
+      sourceKey: 'request-done:request-1:main',
+      status: 'DRAFT',
+      totalRub: 280,
+    });
   });
 
   it('создает отдельный draft-счет логистики в режиме SEPARATE', async () => {
@@ -46,7 +83,7 @@ describe('RequestBillingAutomationService', () => {
       'request-done:request-1:main',
       'request-done:request-1:logistics',
     ]);
-    expect(prisma.state.invoices[0].totalRub).toBe(140);
+    expect(prisma.state.invoices[0].totalRub).toBe(220);
     expect(prisma.state.invoices[1]).toMatchObject({ source: BillingInvoiceSource.LOGISTICS, totalRub: 900 });
   });
 
@@ -63,7 +100,7 @@ describe('RequestBillingAutomationService', () => {
     expect(prisma.state.invoices).toHaveLength(1);
     expect(prisma.state.invoices[0]).toMatchObject({
       sourceKey: 'request-done:request-1:main',
-      totalRub: 1040,
+      totalRub: 1120,
     });
     expect(prisma.state.invoices[0].items.map((item) => item.chargeId)).toContain('charge-logistics');
   });
@@ -242,6 +279,14 @@ function fakePrisma(input: {
     },
     clientBillingService: {
       findUnique: vi.fn(async () => null),
+      upsert: vi.fn(async (args: { create: Record<string, unknown> }) => ({
+        id: `client-price-${String(args.create.serviceId)}`,
+        clientId: args.create.clientId,
+        serviceId: args.create.serviceId,
+        priceRub: args.create.priceRub,
+        taxMode: args.create.taxMode,
+        isActive: args.create.isActive,
+      })),
     },
     billingInvoice: {
       findFirst: vi.fn(async (args: { where: { sourceKey?: string } }) =>
