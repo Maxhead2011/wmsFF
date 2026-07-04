@@ -22,7 +22,7 @@
 }
 
 .access-tabs {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-bottom: 16px;
 }
 
@@ -246,12 +246,321 @@
   text-align: center;
 }
 
+.access-success {
+  margin: 0;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  background: #f0fdf4;
+  color: #0f8a5f;
+  font-weight: 800;
+  padding: 10px 12px;
+}
+
+.user-management {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.32fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.user-management__list,
+.user-management__workspace,
+.user-edit-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.user-management__list {
+  display: grid;
+  gap: 10px;
+  max-height: 780px;
+  overflow: hidden;
+  padding: 10px;
+}
+
+.user-management__search {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfdff;
+  color: var(--muted);
+  padding: 0 10px;
+}
+
+.user-management__search input {
+  width: 100%;
+  min-height: 36px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  outline: none;
+}
+
+.user-management__users {
+  display: grid;
+  gap: 6px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.user-row {
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdff;
+  color: var(--ink);
+  padding: 10px;
+  text-align: left;
+}
+
+.user-row:hover,
+.user-row.is-selected {
+  border-color: rgb(37 99 235 / 0.38);
+  background: #f8fbff;
+}
+
+.user-row strong,
+.user-row span,
+.user-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-row span,
+.user-row small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.user-management__workspace {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.user-management__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.user-management__header h3 {
+  margin: 0;
+}
+
+.user-management__header span,
+.user-edit-card header span,
+.user-permissions summary,
+.user-access-note {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.user-management__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  gap: 12px;
+}
+
+.user-edit-card {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 12px;
+}
+
+.user-edit-card > header {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+}
+
+.user-edit-card > header svg {
+  color: #2563eb;
+  flex: 0 0 auto;
+}
+
+.user-edit-card > header strong,
+.user-edit-card > header span {
+  display: block;
+}
+
+.user-edit-fields,
+.user-access-add {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.user-edit-fields label,
+.user-access-add label {
+  display: grid;
+  gap: 5px;
+}
+
+.user-edit-fields label > span,
+.user-access-add label > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.user-edit-fields input,
+.user-edit-fields select,
+.user-access-add input,
+.user-access-add select,
+.user-access-table select {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfdff;
+  color: var(--ink);
+  padding: 0 10px;
+}
+
+.user-role-table {
+  display: grid;
+  gap: 6px;
+}
+
+.user-role-table label {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdff;
+  padding: 8px 10px;
+}
+
+.user-role-table label.is-selected {
+  border-color: rgb(37 99 235 / 0.38);
+  background: #f8fbff;
+}
+
+.user-role-table strong,
+.user-role-table small {
+  display: block;
+}
+
+.user-role-table small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.user-permissions {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.user-permissions summary {
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.user-permissions div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.user-permissions div span {
+  border-radius: 999px;
+  background: #eef5ff;
+  color: #174ea6;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 4px 8px;
+}
+
+.user-access-card {
+  gap: 12px;
+}
+
+.user-access-note {
+  margin: 0;
+  border-left: 3px solid #2563eb;
+  background: #eff6ff;
+  padding: 9px 10px;
+}
+
+.user-access-add {
+  grid-template-columns: minmax(170px, 1fr) minmax(220px, 1.4fr) 140px auto;
+}
+
+.user-access-table-wrap {
+  max-height: 300px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.user-access-table {
+  width: 100%;
+  min-width: 680px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12px;
+}
+
+.user-access-table th,
+.user-access-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 8px 9px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.user-access-table th {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  background: #f8fafc;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.user-access-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.user-access-table strong {
+  display: block;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (max-width: 980px) {
   .access-fields,
   .access-fields--editor,
   .role-choice-grid,
-  .scope-picker {
+  .scope-picker,
+  .user-management,
+  .user-management__grid,
+  .user-access-add {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .user-management {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -266,7 +575,11 @@
   .access-fields--editor,
   .role-choice-grid,
   .scope-picker,
-  .scope-row {
+  .scope-row,
+  .user-management,
+  .user-management__grid,
+  .user-edit-fields,
+  .user-access-add {
     grid-template-columns: 1fr;
   }
 
