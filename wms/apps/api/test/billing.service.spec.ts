@@ -917,6 +917,86 @@ describe('BillingService', () => {
       latestStatus: BillingChargeStatus.DRAFT,
     });
   });
+
+  it('редактирует черновик с услугой без активной цены клиента, если цена указана в строке', async () => {
+    const invoice = {
+      id: 'invoice-1',
+      clientId: 'client-1',
+      requestId: null,
+      status: BillingInvoiceStatus.DRAFT,
+      payments: [],
+      items: [{ id: 'item-old', chargeId: 'charge-old' }],
+    };
+    const serviceRow = {
+      id: 'service-clothes',
+      code: 'CLOTHES_PROCESSING',
+      name: 'Обработка одежды',
+      unit: BillingUnit.PIECE,
+      defaultPriceRub: null,
+      clientPrices: [],
+    };
+    const prisma = {
+      billingInvoice: {
+        findUnique: vi.fn().mockResolvedValue(invoice),
+        update: vi.fn().mockResolvedValue({ id: 'invoice-1', totalRub: 150 }),
+      },
+      billingService: {
+        upsert: vi.fn().mockImplementation(async (args) => ({
+          id: `service-${args.where.code}`,
+          ...args.create,
+        })),
+        findMany: vi.fn().mockImplementation(async (args) => (args.where?.id?.in ? [serviceRow] : [])),
+      },
+      clientBillingService: {
+        upsert: vi.fn().mockResolvedValue({ id: 'client-price' }),
+      },
+      nomenclatureItem: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      billingInvoiceItem: {
+        deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      billingCharge: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        create: vi.fn().mockResolvedValue({ id: 'charge-new' }),
+      },
+      $transaction: vi.fn((callback) => callback(prisma)),
+    };
+    const service = new BillingService(prisma as never, clientScopes());
+
+    await expect(
+      service.updateManualInvoice(
+        'invoice-1',
+        {
+          clientId: 'client-1',
+          periodFrom: '2026-07-01',
+          periodTo: '2026-07-01',
+          rows: [
+            {
+              serviceId: 'service-clothes',
+              description: 'Обработка одежды',
+              quantity: 3,
+              unitPriceRub: 50,
+              unit: BillingUnit.PIECE,
+            },
+          ],
+        },
+        user({ roleCodes: ['ADMIN'], permissionCodes: ['billing:write', 'system:admin'] }),
+      ),
+    ).resolves.toMatchObject({ id: 'invoice-1' });
+
+    expect(prisma.billingCharge.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          serviceId: 'service-clothes',
+          description: 'Обработка одежды',
+          quantity: 3,
+          unitPriceRub: 50,
+          totalRub: 150,
+        }),
+      }),
+    );
+  });
 });
 
 function clientScopes() {

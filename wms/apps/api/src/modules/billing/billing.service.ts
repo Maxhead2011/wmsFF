@@ -774,9 +774,6 @@ export class BillingService {
     const rows = dto.rows.map((row) => {
       const service = row.serviceId ? servicesById.get(row.serviceId) : null;
       const clientPrice = service?.clientPrices[0] ?? null;
-      if (service && !clientPrice?.isActive) {
-        throw new BadRequestException(`Услуга "${service.name}" не подключена клиенту или не имеет активной цены.`);
-      }
 
       const baseUnitPriceRub =
         row.unitPriceRub ?? decimalToNumber(clientPrice?.priceRub) ?? decimalToNumber(service?.defaultPriceRub);
