@@ -1,45 +1,37 @@
-import { Send } from 'lucide-react';
-import { useCallback, useMemo, useState, type FormEvent } from 'react';
+import { Save, X } from 'lucide-react';
+import { useCallback, useState, type FormEvent } from 'react';
 import {
-  createClientRequest,
   previewClientRequestAvailability,
+  updateClientRequest,
   type AuthSession,
   type ClientRequestAvailabilityPreview,
   type ClientRequestPriority,
+  type ClientRequestStatus,
   type ClientRequestSummary,
   type ClientRequestType,
-  type ClientSummary,
 } from '../../lib/api';
 import { ClientRequestItemsEditor } from './ClientRequestItemsEditor';
 import { emptyClientRequestItem, normalizeClientRequestItems, type ClientRequestDraftItem } from './clientRequestItems';
 import { requestPriorityOptions, requestTypeOptions } from './clientRequestMeta';
 import { useLogisticsDestinationOptions } from './useLogisticsDestinationOptions';
 
-type ClientRequestCreateFormProps = {
-  clients: ClientSummary[];
+type ClientRequestEditFormProps = {
+  request: ClientRequestSummary;
   session: AuthSession;
-  onCreated: (request: ClientRequestSummary) => void;
+  onCancel: () => void;
+  onUpdated: (request: ClientRequestSummary) => void;
 };
 
-export function ClientRequestCreateForm({ clients, session, onCreated }: ClientRequestCreateFormProps) {
-  const writableClientIds = useMemo(() => {
-    if (session.user.permissionCodes.includes('system:admin') || session.user.clientScopeMode === 'ALL') {
-      return new Set(clients.map((client) => client.id));
-    }
-
-    return new Set(session.user.writableClientIds);
-  }, [clients, session.user]);
-  const writableClients = clients.filter((client) => writableClientIds.has(client.id));
-  const [clientId, setClientId] = useState(writableClients[0]?.id ?? '');
-  const [type, setType] = useState<ClientRequestType>('OUTBOUND');
-  const [priority, setPriority] = useState<ClientRequestPriority>('NORMAL');
-  const [title, setTitle] = useState('');
-  const [comment, setComment] = useState('');
-  const [desiredDate, setDesiredDate] = useState('');
-  const [contactPhone, setContactPhone] = useState('');
-  const [destinationCity, setDestinationCity] = useState('');
-  const [deliveryAddress, setDeliveryAddress] = useState('');
-  const [items, setItems] = useState<ClientRequestDraftItem[]>([emptyClientRequestItem()]);
+export function ClientRequestEditForm({ request, session, onCancel, onUpdated }: ClientRequestEditFormProps) {
+  const [type, setType] = useState<ClientRequestType>(request.type);
+  const [priority, setPriority] = useState<ClientRequestPriority>(request.priority);
+  const [title, setTitle] = useState(request.title);
+  const [comment, setComment] = useState(request.comment ?? '');
+  const [desiredDate, setDesiredDate] = useState(dateInput(request.desiredDate));
+  const [contactPhone, setContactPhone] = useState(request.contactPhone ?? '');
+  const [destinationCity, setDestinationCity] = useState(request.destinationCity ?? '');
+  const [deliveryAddress, setDeliveryAddress] = useState(request.deliveryAddress ?? '');
+  const [items, setItems] = useState<ClientRequestDraftItem[]>(requestItemsToDraft(request));
   const [availability, setAvailability] = useState<ClientRequestAvailabilityPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setSubmitting] = useState(false);
@@ -56,8 +48,9 @@ export function ClientRequestCreateForm({ clients, session, onCreated }: ClientR
     setCheckingAvailability(true);
     try {
       const nextAvailability = await previewClientRequestAvailability(session.accessToken, {
-        clientId,
+        clientId: request.clientId,
         type,
+        excludeRequestId: request.id,
         items: requestItems,
       });
       setAvailability(nextAvailability);
@@ -65,11 +58,7 @@ export function ClientRequestCreateForm({ clients, session, onCreated }: ClientR
     } finally {
       setCheckingAvailability(false);
     }
-  }, [clientId, items, session.accessToken, type]);
-
-  if (writableClients.length === 0) {
-    return null;
-  }
+  }, [items, request.clientId, request.id, session.accessToken, type]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -79,14 +68,12 @@ export function ClientRequestCreateForm({ clients, session, onCreated }: ClientR
     try {
       const requestItems = normalizeClientRequestItems(items);
       const nextAvailability = await checkAvailability(items);
-
       if (nextAvailability && !nextAvailability.canCommit) {
-        setError('Исправьте красные позиции: удалите строку крестиком или уменьшите количество до доступного остатка.');
+        setError('Исправьте красные позиции: удалите строку или уменьшите количество до доступного остатка.');
         return;
       }
 
-      const request = await createClientRequest(session.accessToken, {
-        clientId,
+      const updated = await updateClientRequest(session.accessToken, request.id, {
         type,
         priority,
         title,
@@ -95,45 +82,31 @@ export function ClientRequestCreateForm({ clients, session, onCreated }: ClientR
         destinationCity,
         deliveryAddress: deliveryAddress || undefined,
         desiredDate: desiredDate || undefined,
-        items: requestItems.length > 0 ? requestItems : undefined,
+        items: requestItems,
       });
 
-      onCreated(request);
-      setTitle('');
-      setComment('');
-      setDesiredDate('');
-      setContactPhone('');
-      setDestinationCity('');
-      setDeliveryAddress('');
-      setItems([emptyClientRequestItem()]);
-      setAvailability(null);
+      onUpdated(updated);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Не удалось создать заявку.');
+      setError(caught instanceof Error ? caught.message : 'Не удалось сохранить заявку.');
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <form className="client-request-form" onSubmit={(event) => void submit(event)}>
-      <div className="client-request-fields">
-        <label>
-          <span>Клиент</span>
-          <select
-            value={clientId}
-            onChange={(event) => {
-              setClientId(event.target.value);
-              setAvailability(null);
-            }}
-          >
-            {writableClients.map((client) => (
-              <option key={client.id} value={client.id}>
-                {client.code} · {client.name}
-              </option>
-            ))}
-          </select>
-        </label>
+    <form className="client-request-form client-request-edit-form" onSubmit={(event) => void submit(event)}>
+      <div className="client-request-edit-form__head">
+        <div>
+          <p className="eyebrow">Редактирование заявки</p>
+          <h3>{request.title}</h3>
+          <span>{request.client.name}</span>
+        </div>
+        <button className="icon-button" type="button" onClick={onCancel} aria-label="Закрыть">
+          <X size={18} aria-hidden="true" />
+        </button>
+      </div>
 
+      <div className="client-request-fields">
         <label>
           <span>Тип</span>
           <select
@@ -167,20 +140,10 @@ export function ClientRequestCreateForm({ clients, session, onCreated }: ClientR
           <input type="date" value={desiredDate} onChange={(event) => setDesiredDate(event.target.value)} />
         </label>
 
-        <label className="client-request-fields__wide">
-          <span>Название</span>
-          <input required value={title} onChange={(event) => setTitle(event.target.value)} />
-        </label>
-
-        <label>
-          <span>Телефон</span>
-          <input value={contactPhone} onChange={(event) => setContactPhone(event.target.value)} />
-        </label>
-
         <label>
           <span>Город поставки</span>
           <input
-            list="client-request-destination-options"
+            list="client-request-edit-destination-options"
             required
             value={destinationCity}
             onFocus={(event) => destinationOptions.search(event.currentTarget.value)}
@@ -189,13 +152,23 @@ export function ClientRequestCreateForm({ clients, session, onCreated }: ClientR
               destinationOptions.search(event.target.value);
             }}
           />
-          <datalist id="client-request-destination-options">
+          <datalist id="client-request-edit-destination-options">
             {destinationOptions.options.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.description}
               </option>
             ))}
           </datalist>
+        </label>
+
+        <label className="client-request-fields__wide">
+          <span>Название</span>
+          <input required value={title} onChange={(event) => setTitle(event.target.value)} />
+        </label>
+
+        <label>
+          <span>Телефон</span>
+          <input value={contactPhone} onChange={(event) => setContactPhone(event.target.value)} />
         </label>
 
         <label className="client-request-fields__wide">
@@ -212,22 +185,47 @@ export function ClientRequestCreateForm({ clients, session, onCreated }: ClientR
       <ClientRequestItemsEditor
         items={items}
         accessToken={session.accessToken}
-        clientId={clientId}
+        clientId={request.clientId}
         availability={availability}
-        onChange={(nextItems) => {
-          setItems(nextItems);
-        }}
+        onChange={setItems}
         onAvailabilityCheck={checkAvailability}
         onError={setError}
       />
-      {isCheckingAvailability ? <p className="inline-status">Проверяю остатки.</p> : null}
 
+      {isCheckingAvailability ? <p className="inline-status">Проверяю остатки.</p> : null}
       {error ? <p className="form-error">{error}</p> : null}
 
-      <button className="primary-button client-request-submit" disabled={isSubmitting} type="submit">
-        <Send size={16} aria-hidden="true" />
-        <span>{isSubmitting ? 'Создаю' : 'Создать заявку'}</span>
-      </button>
+      <div className="client-request-edit-form__actions">
+        <button className="secondary-action" type="button" onClick={onCancel}>
+          Отмена
+        </button>
+        <button className="primary-button" disabled={isSubmitting} type="submit">
+          <Save size={16} aria-hidden="true" />
+          <span>{isSubmitting ? 'Сохраняю' : 'Сохранить изменения'}</span>
+        </button>
+      </div>
     </form>
   );
+}
+
+export function canEditClientRequest(request: { status: ClientRequestStatus }) {
+  return ['SUBMITTED', 'IN_REVIEW', 'APPROVED'].includes(request.status);
+}
+
+function requestItemsToDraft(request: ClientRequestSummary) {
+  if (request.items.length === 0) {
+    return [emptyClientRequestItem()];
+  }
+
+  return request.items.map((item) => ({
+    skuId: item.skuId ?? item.sku?.id ?? '',
+    barcode: item.barcode ?? '',
+    name: item.name ?? item.sku?.name ?? '',
+    quantity: String(item.quantity),
+    comment: item.comment ?? '',
+  }));
+}
+
+function dateInput(value: string | null | undefined) {
+  return value ? value.slice(0, 10) : '';
 }

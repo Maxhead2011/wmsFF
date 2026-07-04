@@ -65,6 +65,67 @@ export class LogisticsService {
     });
   }
 
+  async listDestinationSuggestions(query: { search?: string; tariffSetId?: string } = {}) {
+    const search = normalizeText(query.search)?.toLowerCase();
+    const activeTariffSet = query.tariffSetId ? null : await this.findActiveTariffSet(new Date());
+    const tariffSetId = query.tariffSetId ?? activeTariffSet?.id;
+    const rows = await this.prisma.logisticsDirection.findMany({
+      where: {
+        tariffSetId: tariffSetId ?? undefined,
+      },
+      select: {
+        origin: true,
+        destination: true,
+        tariffSetId: true,
+        tariffSet: {
+          select: {
+            name: true,
+            sourceFile: true,
+          },
+        },
+      },
+      orderBy: [{ destination: 'asc' }, { origin: 'asc' }],
+      take: 2000,
+    });
+    const suggestions = new Map<string, {
+      value: string;
+      label: string;
+      description: string;
+      origin: string;
+      destination: string;
+      tariffSetId: string;
+      tariffSetName: string;
+      sourceFile: string | null;
+    }>();
+
+    rows.forEach((row) => {
+      const destination = row.destination.trim();
+      if (!destination) {
+        return;
+      }
+
+      const normalizedDestination = this.normalizePoint(destination);
+      if (search && !normalizedDestination.includes(search)) {
+        return;
+      }
+
+      if (!suggestions.has(normalizedDestination)) {
+        suggestions.set(normalizedDestination, {
+          value: destination,
+          label: destination,
+          description: [row.origin, row.tariffSet.name].filter(Boolean).join(' -> '),
+          origin: row.origin,
+          destination,
+          tariffSetId: row.tariffSetId,
+          tariffSetName: row.tariffSet.name,
+          sourceFile: row.tariffSet.sourceFile,
+        });
+      }
+    });
+
+    return [...suggestions.values()].slice(0, 80);
+  }
+
   getTariffSet(id: string) {
     return this.prisma.logisticsTariffSet.findUniqueOrThrow({
       where: { id },

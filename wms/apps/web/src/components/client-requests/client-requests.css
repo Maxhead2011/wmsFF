@@ -105,6 +105,55 @@
   padding: 18px;
 }
 
+.client-request-edit-modal {
+  position: fixed;
+  z-index: 60;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgb(15 23 42 / 0.46);
+  padding: 18px;
+}
+
+.client-request-edit-modal__content {
+  width: min(1180px, 100%);
+  max-height: min(88vh, 900px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 24px 70px rgb(15 23 42 / 0.24);
+  padding: 16px;
+}
+
+.client-request-edit-form {
+  margin-bottom: 0;
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.client-request-edit-form__head,
+.client-request-edit-form__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.client-request-edit-form__head h3 {
+  font-size: 20px;
+}
+
+.client-request-edit-form__head span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.client-request-edit-form__actions {
+  justify-content: flex-end;
+}
+
 .client-request-invoice-modal__content {
   display: grid;
   width: min(1180px, 100%);
@@ -675,6 +724,12 @@
 }
 
 .client-request-action-button--invoice {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.client-request-action-button--edit {
   border-color: #bfdbfe;
   background: #eff6ff;
   color: #1d4ed8;

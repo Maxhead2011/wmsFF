@@ -23,6 +23,7 @@ import {
 } from '../../lib/api';
 import { ClientRequestCreateForm } from './ClientRequestCreateForm';
 import { ClientRequestDocumentPreview } from './ClientRequestDocumentPreview';
+import { ClientRequestEditForm } from './ClientRequestEditForm';
 import { ClientRequestXlsxImportForm } from './ClientRequestXlsxImportForm';
 import '../billing/billing.css';
 import { BillingInvoiceForm } from '../billing/BillingInvoiceForm';
@@ -51,6 +52,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
   const [notice, setNotice] = useState<string | null>(null);
   const [issuingInvoiceRequestId, setIssuingInvoiceRequestId] = useState('');
   const [manualInvoiceRequest, setManualInvoiceRequest] = useState<ClientRequestSummary | null>(null);
+  const [editingRequest, setEditingRequest] = useState<ClientRequestSummary | null>(null);
   const [documentPreview, setDocumentPreview] = useState<ClientRequestDocument | null>(null);
   const [pickInstructionPreview, setPickInstructionPreview] = useState<PickInstructionDocument | null>(null);
 
@@ -251,6 +253,16 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     }));
   }
 
+  function acceptUpdated(request: ClientRequestSummary) {
+    setEditingRequest(null);
+    setRequests((current) => ({
+      ...current,
+      status: 'ready',
+      data: current.data.map((item) => (item.id === request.id ? request : item)),
+    }));
+    setNotice(`Заявка "${request.title}" обновлена.`);
+  }
+
   return (
     <section className="client-requests-panel" aria-label="Клиентские заявки">
       <div className="section-heading client-requests-panel__heading">
@@ -288,6 +300,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           canWrite,
           issuingInvoiceRequestId,
           (requestId, status) => void changeStatus(requestId, status),
+          (request) => setEditingRequest(request),
           (request) => void cancelRequest(request),
           (request) => void openRequestDocument(request),
           (request) => void openPickInstruction(request),
@@ -346,6 +359,19 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           </div>
         </div>
       ) : null}
+
+      {editingRequest ? (
+        <div className="client-request-edit-modal" role="dialog" aria-modal="true" aria-label="Редактирование заявки">
+          <div className="client-request-edit-modal__content">
+            <ClientRequestEditForm
+              request={editingRequest}
+              session={session}
+              onCancel={() => setEditingRequest(null)}
+              onUpdated={acceptUpdated}
+            />
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -358,6 +384,7 @@ function renderRequests(
   canCancelRequests: boolean,
   issuingInvoiceRequestId: string,
   onStatusChange: (requestId: string, status: ClientRequestStatus) => void,
+  onEditRequest: (request: ClientRequestSummary) => void,
   onCancelRequest: (request: ClientRequestSummary) => void,
   onOpenDocument: (request: ClientRequestSummary) => void,
   onOpenPickInstruction: (request: ClientRequestSummary) => void,
@@ -393,8 +420,10 @@ function renderRequests(
         canPickOutbound={canPickOutbound}
         canIssueInvoice={canIssueInvoice}
         canCancelRequests={canCancelRequests}
+        canEditRequests={canCancelRequests}
         issuingInvoiceRequestId={issuingInvoiceRequestId}
         onStatusChange={onStatusChange}
+        onEditRequest={onEditRequest}
         onCancelRequest={onCancelRequest}
         onOpenDocument={onOpenDocument}
         onOpenPickInstruction={onOpenPickInstruction}

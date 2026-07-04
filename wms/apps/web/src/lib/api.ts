@@ -1009,7 +1009,11 @@ export type CreateClientRequestPayload = {
   }>;
 };
 
-export type PreviewClientRequestAvailabilityPayload = Pick<CreateClientRequestPayload, 'clientId' | 'type' | 'items'>;
+export type UpdateClientRequestPayload = Partial<Omit<CreateClientRequestPayload, 'clientId'>>;
+
+export type PreviewClientRequestAvailabilityPayload = Pick<CreateClientRequestPayload, 'clientId' | 'type' | 'items'> & {
+  excludeRequestId?: string;
+};
 
 export type OutboundRequestXlsxPayload = {
   file: File;
@@ -2126,6 +2130,17 @@ export type LogisticsTariffSetDetail = LogisticsTariffSetSummary & {
   directions: LogisticsDirectionSummary[];
 };
 
+export type LogisticsDestinationSuggestion = {
+  value: string;
+  label: string;
+  description: string;
+  origin: string;
+  destination: string;
+  tariffSetId: string;
+  tariffSetName: string;
+  sourceFile: string | null;
+};
+
 export type LogisticsQuotePayload = {
   tariffSetId?: string;
   destination: string;
@@ -2902,6 +2917,18 @@ export async function createClientRequest(accessToken: string, payload: CreateCl
   });
 }
 
+export async function updateClientRequest(
+  accessToken: string,
+  requestId: string,
+  payload: UpdateClientRequestPayload,
+) {
+  return request<ClientRequestSummary>(`/client-requests/${requestId}`, {
+    method: 'PATCH',
+    body: payload,
+    accessToken,
+  });
+}
+
 export async function previewClientRequestAvailability(
   accessToken: string,
   payload: PreviewClientRequestAvailabilityPayload,
@@ -3487,6 +3514,15 @@ export async function fetchLogisticsTariffSets(accessToken: string) {
 
 export async function fetchLogisticsTariffSet(accessToken: string, tariffSetId: string) {
   return request<LogisticsTariffSetDetail>(`/logistics/tariff-sets/${tariffSetId}`, {
+    accessToken,
+  });
+}
+
+export async function fetchLogisticsDestinationSuggestions(
+  accessToken: string,
+  filter: { search?: string; tariffSetId?: string } = {},
+) {
+  return request<LogisticsDestinationSuggestion[]>(withQuery('/logistics/destinations', filter), {
     accessToken,
   });
 }

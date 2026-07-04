@@ -13,6 +13,7 @@ import {
   type OutboundRequestXlsxPreview,
 } from '../../lib/api';
 import { requestPriorityOptions } from './clientRequestMeta';
+import { useLogisticsDestinationOptions } from './useLogisticsDestinationOptions';
 
 type ClientRequestXlsxImportFormProps = {
   clients: ClientSummary[];
@@ -43,6 +44,7 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
   const [message, setMessage] = useState('');
   const [isPreviewing, setPreviewing] = useState(false);
   const [isCommitting, setCommitting] = useState(false);
+  const destinationOptions = useLogisticsDestinationOptions(session.accessToken);
 
   if (writableClients.length === 0) {
     return null;
@@ -184,7 +186,23 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
         </label>
         <label>
           <span>Город поставки</span>
-          <input required value={destinationCity} onChange={(event) => setDestinationCity(event.target.value)} />
+          <input
+            list="client-request-xlsx-destination-options"
+            required
+            value={destinationCity}
+            onFocus={(event) => destinationOptions.search(event.currentTarget.value)}
+            onChange={(event) => {
+              setDestinationCity(event.target.value);
+              destinationOptions.search(event.target.value);
+            }}
+          />
+          <datalist id="client-request-xlsx-destination-options">
+            {destinationOptions.options.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.description}
+              </option>
+            ))}
+          </datalist>
         </label>
         <label className="client-request-fields__wide">
           <span>Название</span>

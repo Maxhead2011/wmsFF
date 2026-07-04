@@ -11,6 +11,7 @@ import { clientRequestPackageInclude } from './client-request-packages.include';
 import { CreateClientRequestDto } from './dto/create-client-request.dto';
 import { ListClientRequestsDto } from './dto/list-client-requests.dto';
 import { PreviewClientRequestAvailabilityDto } from './dto/preview-client-request-availability.dto';
+import { UpdateClientRequestDto } from './dto/update-client-request.dto';
 import { UpdateClientRequestStatusDto } from './dto/update-client-request-status.dto';
 
 @Injectable()
@@ -77,7 +78,7 @@ export class ClientRequestsService {
     const skuIds = [...new Set(resolved.map((line) => line.skuId).filter(Boolean))] as string[];
     const barcodes = [...new Set(resolved.map((line) => line.barcode).filter(Boolean))] as string[];
     const stockBySkuId = await this.stockQuantityBySkuId(dto.clientId, skuIds);
-    const reservationsBySkuId = await this.activeReservationBySkuId(dto.clientId, skuIds, barcodes);
+    const reservationsBySkuId = await this.activeReservationBySkuId(dto.clientId, skuIds, barcodes, dto.excludeRequestId);
 
     const lines = resolved.map((line) => {
       if (!line.skuId) {
@@ -187,7 +188,123 @@ export class ClientRequestsService {
       ].join('\n'),
     );
 
+    if (!(await this.hasLogisticsTariffForDestination(destinationCity))) {
+      await this.createLogisticsCostRequestEvent(created, user, 'Новый город поставки отсутствует в тарифах логистики.');
+    }
+
     return created;
+  }
+
+  async update(id: string, dto: UpdateClientRequestDto, user: AuthUser) {
+    const request = await this.prisma.clientRequest.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        clientId: true,
+        type: true,
+        status: true,
+        title: true,
+        destinationCity: true,
+      },
+    });
+
+    if (!request) {
+      throw new NotFoundException('Клиентская заявка не найдена.');
+    }
+
+    this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+
+    if (!clientEditableStatuses.has(request.status)) {
+      throw new BadRequestException('Заявку нельзя редактировать: склад уже начал обработку.');
+    }
+
+    await this.ensureSkuItemsBelongToClient(request.clientId, dto.items ?? []);
+
+    const updateData: Prisma.ClientRequestUpdateInput = {};
+    if (dto.type !== undefined) {
+      updateData.type = dto.type;
+    }
+    if (dto.priority !== undefined) {
+      updateData.priority = dto.priority;
+    }
+    if (dto.title !== undefined) {
+      updateData.title = normalizeRequiredText(dto.title, 'Название заявки обязательно.');
+    }
+    if (dto.comment !== undefined) {
+      updateData.comment = normalizeText(dto.comment);
+    }
+    if (dto.contactName !== undefined) {
+      updateData.contactName = normalizeText(dto.contactName);
+    }
+    if (dto.contactPhone !== undefined) {
+      updateData.contactPhone = normalizeText(dto.contactPhone);
+    }
+    if (dto.destinationCity !== undefined) {
+      updateData.destinationCity = normalizeRequiredText(dto.destinationCity, 'Город поставки обязателен.');
+    }
+    if (dto.deliveryAddress !== undefined) {
+      updateData.deliveryAddress = normalizeText(dto.deliveryAddress);
+    }
+    if (dto.desiredDate !== undefined) {
+      updateData.desiredDate = dto.desiredDate ? new Date(dto.desiredDate) : null;
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      if (dto.items) {
+        await tx.clientRequestItem.deleteMany({ where: { requestId: id } });
+        if (dto.items.length > 0) {
+          await tx.clientRequestItem.createMany({
+            data: dto.items.map((item) => ({
+              requestId: id,
+              skuId: normalizeText(item.skuId),
+              barcode: normalizeText(item.barcode),
+              name: normalizeText(item.name),
+              quantity: item.quantity,
+              comment: normalizeText(item.comment),
+            })),
+          });
+        }
+      }
+
+      const updatedRequest = await tx.clientRequest.update({
+        where: { id },
+        data: updateData,
+        include: clientRequestInclude,
+      });
+
+      await tx.clientRequestEvent.create({
+        data: {
+          requestId: id,
+          clientId: request.clientId,
+          eventType: ClientRequestEventType.COMMENT,
+          title: 'Заявка изменена до начала работы',
+          body: this.updateRequestEventBody(request, updatedRequest),
+          createdByUserId: user.id,
+        },
+      });
+
+      return updatedRequest;
+    });
+
+    void this.telegram?.notifyFulfillment(
+      [
+        'LOGOFF WMS: клиент изменил заявку до начала работы.',
+        `Заявка: ${updated.title}`,
+        `Клиент: ${updated.client.name}`,
+        `Город: ${updated.destinationCity ?? '-'}`,
+        `Строк: ${updated.items.length}`,
+      ].join('\n'),
+    );
+
+    if (
+      updated.destinationCity &&
+      this.normalizePoint(updated.destinationCity) !== this.normalizePoint(request.destinationCity ?? '') &&
+      !(await this.hasLogisticsTariffForDestination(updated.destinationCity))
+    ) {
+      await this.createLogisticsCostRequestEvent(updated, user, 'Город поставки изменен и отсутствует в тарифах логистики.');
+    }
+
+    return updated;
   }
 
   async updateStatus(id: string, dto: UpdateClientRequestStatusDto, user: AuthUser) {
@@ -387,6 +504,82 @@ export class ClientRequestsService {
     });
   }
 
+  private updateRequestEventBody(
+    previous: { title: string; destinationCity: string | null },
+    updated: { title: string; destinationCity: string | null; items: Array<{ quantity: number }> },
+  ) {
+    return [
+      previous.title !== updated.title ? `Название: ${previous.title} -> ${updated.title}` : null,
+      this.normalizePoint(previous.destinationCity ?? '') !== this.normalizePoint(updated.destinationCity ?? '')
+        ? `Город: ${previous.destinationCity ?? '-'} -> ${updated.destinationCity ?? '-'}`
+        : null,
+      `Строк: ${updated.items.length}`,
+      `Количество: ${updated.items.reduce((sum, item) => sum + item.quantity, 0)}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  private async hasLogisticsTariffForDestination(destinationCity: string) {
+    const normalizedDestination = this.normalizePoint(destinationCity);
+    const activeTariffSet = await this.prisma.logisticsTariffSet.findFirst({
+      where: {
+        AND: [
+          { OR: [{ activeFrom: null }, { activeFrom: { lte: new Date() } }] },
+          { OR: [{ activeTo: null }, { activeTo: { gte: new Date() } }] },
+        ],
+      },
+      orderBy: [{ activeFrom: 'desc' }, { createdAt: 'desc' }],
+      select: { id: true },
+    });
+    const directions = await this.prisma.logisticsDirection.findMany({
+      where: {
+        tariffSetId: activeTariffSet?.id,
+      },
+      select: { destination: true },
+      take: 2000,
+    });
+
+    return directions.some((direction) => this.normalizePoint(direction.destination) === normalizedDestination);
+  }
+
+  private async createLogisticsCostRequestEvent(
+    request: {
+      id: string;
+      clientId: string;
+      title: string;
+      destinationCity: string | null;
+      client?: { name: string };
+    },
+    user: AuthUser,
+    reason: string,
+  ) {
+    await this.prisma.clientRequestEvent.create({
+      data: {
+        requestId: request.id,
+        clientId: request.clientId,
+        eventType: ClientRequestEventType.COMMENT,
+        title: 'Нужен расчет логистики',
+        body: `${reason}\nГород: ${request.destinationCity ?? '-'}`,
+        createdByUserId: user.id,
+      },
+    });
+
+    void this.telegram?.notifyFulfillment(
+      [
+        'LOGOFF WMS: нужен расчет логистики.',
+        `Заявка: ${request.title}`,
+        `Клиент: ${request.client?.name ?? request.clientId}`,
+        `Город: ${request.destinationCity ?? '-'}`,
+        reason,
+      ].join('\n'),
+    );
+  }
+
+  private normalizePoint(value: string) {
+    return value.toLowerCase().replace(/\s*,\s*/g, ', ').replace(/\s+/g, ' ').trim();
+  }
+
   private async ensureSkuItemsBelongToClient(clientId: string, items: Array<{ skuId?: string }>) {
     const skuIds = [...new Set(items.map((item) => item.skuId).filter(Boolean))] as string[];
     if (skuIds.length === 0) {
@@ -483,7 +676,12 @@ export class ClientRequestsService {
     return new Map(stockRows.map((row) => [row.skuId, Number(row._sum.quantity ?? 0)]));
   }
 
-  private async activeReservationBySkuId(clientId: string, skuIds: string[], barcodes: string[]) {
+  private async activeReservationBySkuId(
+    clientId: string,
+    skuIds: string[],
+    barcodes: string[],
+    excludeRequestId?: string,
+  ) {
     const empty = new Map<string, { quantity: number; requests: ClientRequestAvailabilityConflict[] }>();
     if (skuIds.length === 0 && barcodes.length === 0) {
       return empty;
@@ -491,6 +689,7 @@ export class ClientRequestsService {
 
     const requests = await this.prisma.clientRequest.findMany({
       where: {
+        id: excludeRequestId ? { not: excludeRequestId } : undefined,
         clientId,
         type: ClientRequestType.OUTBOUND,
         status: { in: activeRequestStatuses },
@@ -620,6 +819,12 @@ const activeRequestStatuses = [
   ClientRequestStatus.IN_WORK,
   ClientRequestStatus.PACKED,
 ];
+
+const clientEditableStatuses = new Set<ClientRequestStatus>([
+  ClientRequestStatus.SUBMITTED,
+  ClientRequestStatus.IN_REVIEW,
+  ClientRequestStatus.APPROVED,
+]);
 
 const clientCancelableStatuses = new Set<ClientRequestStatus>([
   ClientRequestStatus.SUBMITTED,

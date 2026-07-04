@@ -1,4 +1,4 @@
-import { CheckCircle2, ClipboardList, FileDown, FileText, PackageCheck, ReceiptText, Send, Truck, XCircle } from 'lucide-react';
+import { CheckCircle2, ClipboardList, FileDown, FileText, PackageCheck, Pencil, ReceiptText, Send, Truck, XCircle } from 'lucide-react';
 import { type ClientRequestStatus, type ClientRequestSummary } from '../../lib/api';
 import {
   requestPriorityLabel,
@@ -7,6 +7,7 @@ import {
   requestStatusTone,
   requestTypeLabel,
 } from './clientRequestMeta';
+import { canEditClientRequest } from './ClientRequestEditForm';
 
 type ClientRequestsTableProps = {
   items: ClientRequestSummary[];
@@ -14,8 +15,10 @@ type ClientRequestsTableProps = {
   canPickOutbound: boolean;
   canIssueInvoice: boolean;
   canCancelRequests: boolean;
+  canEditRequests: boolean;
   issuingInvoiceRequestId: string;
   onStatusChange: (requestId: string, status: ClientRequestStatus) => void;
+  onEditRequest: (request: ClientRequestSummary) => void;
   onCancelRequest: (request: ClientRequestSummary) => void;
   onOpenDocument?: (request: ClientRequestSummary) => void;
   onOpenPickInstruction?: (request: ClientRequestSummary) => void;
@@ -38,8 +41,10 @@ export function ClientRequestsTable({
   canPickOutbound,
   canIssueInvoice,
   canCancelRequests,
+  canEditRequests,
   issuingInvoiceRequestId,
   onStatusChange,
+  onEditRequest,
   onCancelRequest,
   onOpenDocument,
   onOpenPickInstruction,
@@ -184,6 +189,17 @@ export function ClientRequestsTable({
               ) : null}
               {canCancelRequests ? (
                 <td>
+                  {canEditRequests && canEditClientRequest(request) ? (
+                    <button
+                      className="client-request-action-button client-request-action-button--edit"
+                      type="button"
+                      onClick={() => onEditRequest(request)}
+                      title="Редактировать заявку до начала работы"
+                    >
+                      <Pencil size={15} aria-hidden="true" />
+                      <span>Редактировать</span>
+                    </button>
+                  ) : null}
                   {canCancelRequest(request) ? (
                     <button
                       className="client-request-action-button client-request-action-button--cancel"

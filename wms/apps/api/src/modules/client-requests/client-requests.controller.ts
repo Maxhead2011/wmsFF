@@ -29,6 +29,7 @@ import { CreateClientRequestDto } from './dto/create-client-request.dto';
 import { ImportOutboundRequestXlsxDto } from './dto/import-outbound-request-xlsx.dto';
 import { ListClientRequestsDto } from './dto/list-client-requests.dto';
 import { PreviewClientRequestAvailabilityDto } from './dto/preview-client-request-availability.dto';
+import { UpdateClientRequestDto } from './dto/update-client-request.dto';
 import { UpdateClientRequestStatusDto } from './dto/update-client-request-status.dto';
 
 @ApiTags('client-requests')
@@ -124,6 +125,12 @@ export class ClientRequestsController {
   @RequirePermissions('client-requests:write')
   create(@Body() dto: CreateClientRequestDto, @CurrentUser() user: AuthUser) {
     return this.clientRequests.create(dto, user);
+  }
+
+  @Patch(':id')
+  @RequirePermissions('client-requests:write')
+  update(@Param('id') id: string, @Body() dto: UpdateClientRequestDto, @CurrentUser() user: AuthUser) {
+    return this.clientRequests.update(id, dto, user);
   }
 
   @Post('availability-preview')

@@ -32,6 +32,10 @@ export class PreviewClientRequestAvailabilityDto {
   type!: ClientRequestType;
 
   @IsOptional()
+  @IsString()
+  excludeRequestId?: string;
+
+  @IsOptional()
   @IsArray()
   @ArrayMaxSize(1000)
   @ValidateNested({ each: true })
