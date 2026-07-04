@@ -162,6 +162,51 @@ describe('RequestBillingAutomationService', () => {
     expect(prisma.state.invoices).toHaveLength(2);
     expect(prisma.state.charges.filter((charge) => charge.sourceKey === 'request-done:request-1:logistics-charge')).toHaveLength(1);
   });
+
+  it('создает счет логистики по коробам из строк счета, если пакеты в заявке не сохранены', async () => {
+    const prisma = fakePrisma({
+      request: {
+        ...requestFixture({ logisticsInvoiceMode: ClientLogisticsInvoiceMode.SEPARATE }),
+        packages: [],
+      },
+      charges: [
+        chargeFixture({
+          id: 'charge-box',
+          serviceId: 'service-box',
+          serviceCode: 'BOX_60_40_40',
+          quantity: 3,
+          totalRub: 300,
+        }),
+        chargeFixture({
+          id: 'charge-box-assembly',
+          serviceId: 'service-box-assembly',
+          serviceCode: 'BOX_ASSEMBLY',
+          quantity: 3,
+          totalRub: 120,
+        }),
+      ],
+      quote: { estimatedTotalRub: 1500, requiresManualReview: false },
+    });
+    const service = serviceWith(prisma);
+
+    await service.generateForDoneRequest('request-1', user());
+
+    expect(prisma.state.charges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: BillingChargeSource.LOGISTICS,
+          sourceKey: 'request-done:request-1:logistics-charge',
+          totalRub: 1500,
+          metadata: expect.objectContaining({
+            boxes: 3,
+            pallets: 0,
+            billedBy: 'BOXES',
+          }),
+        }),
+      ]),
+    );
+    expect(prisma.state.invoices.map((invoice) => invoice.sourceKey)).toContain('request-done:request-1:logistics');
+  });
 });
 
 function serviceWith(prisma: ReturnType<typeof fakePrisma>) {
@@ -219,8 +264,13 @@ function fakePrisma(input: {
       findFirst: vi.fn(async (args: { where: { sourceKey?: string } }) =>
         state.charges.find((charge) => charge.sourceKey === args.where.sourceKey) ?? null,
       ),
-      findMany: vi.fn(async (args: { where: { id?: { in: string[] }; source?: { not: BillingChargeSource } } }) => {
+      findMany: vi.fn(async (args: { where: { id?: { in: string[] }; source?: { not: BillingChargeSource }; service?: { code?: { in: string[] } } } }) => {
+        const serviceCodeFilter = args.where.service?.code?.in;
         return state.charges.filter((charge) => {
+          const serviceCode = charge.serviceCode ?? state.services.find((service) => service.id === charge.serviceId)?.code;
+          if (serviceCodeFilter && !serviceCodeFilter.includes(serviceCode ?? '')) {
+            return false;
+          }
           if (args.where.id?.in && !args.where.id.in.includes(charge.id)) {
             return false;
           }
@@ -233,8 +283,13 @@ function fakePrisma(input: {
           if (args.where.source?.not && charge.source === args.where.source.not) {
             return false;
           }
-          return !state.invoices.some((invoice) => invoice.items.some((item) => item.chargeId === charge.id));
-        });
+          return serviceCodeFilter || !state.invoices.some((invoice) => invoice.items.some((item) => item.chargeId === charge.id));
+        }).map((charge) => ({
+          ...charge,
+          service: {
+            code: charge.serviceCode ?? state.services.find((service) => service.id === charge.serviceId)?.code,
+          },
+        }));
       }),
       create: vi.fn(async (args: { data: Record<string, unknown>; select?: unknown }) => {
         const data = args.data;
@@ -259,6 +314,7 @@ function fakePrisma(input: {
           serviceDate: data.serviceDate as Date,
           source: data.source as BillingChargeSource,
           sourceKey: data.sourceKey as string,
+          metadata: data.metadata as Record<string, unknown> | undefined,
           createdAt: new Date('2026-07-03T10:00:00.000Z'),
         } satisfies FakeCharge;
         state.charges.push(charge);
@@ -346,6 +402,8 @@ type FakeCharge = {
   serviceDate: Date;
   source: BillingChargeSource;
   sourceKey: string;
+  serviceCode?: string;
+  metadata?: Record<string, unknown>;
   createdAt: Date;
 };
 

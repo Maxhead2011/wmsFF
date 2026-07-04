@@ -710,6 +710,10 @@ export class BillingService {
       });
     });
 
+    if (updated.requestId) {
+      await this.requestBillingAutomation?.generateForDoneRequest(updated.requestId, user);
+    }
+
     return updated;
   }
 
@@ -809,7 +813,7 @@ export class BillingService {
     const totalRub = roundMoney(rows.reduce((sum, row) => sum + row.totalRub, 0));
     const previousChargeIds = invoice.items.map((item) => item.chargeId).filter((id): id is string => Boolean(id));
 
-    return this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       await tx.billingInvoiceItem.deleteMany({ where: { invoiceId } });
       if (previousChargeIds.length > 0) {
         await tx.billingCharge.updateMany({
@@ -872,6 +876,12 @@ export class BillingService {
         include: billingInvoiceInclude,
       });
     });
+
+    if (updated.requestId) {
+      await this.requestBillingAutomation?.generateForDoneRequest(updated.requestId, user);
+    }
+
+    return updated;
   }
 
   async updateInvoiceStatus(invoiceId: string, dto: UpdateBillingInvoiceStatusDto, user: AuthUser) {

@@ -368,7 +368,7 @@ export class RequestBillingAutomationService {
       return existing.id;
     }
 
-    const counts = countPackages(request.packages);
+    const counts = await this.resolveLogisticsPackageCounts(request);
     if (!request.destinationCity || (counts.boxes <= 0 && counts.pallets <= 0)) {
       await this.createManualLogisticsReview(request, user, 'Не указан город назначения или нет упаковочных мест.');
       return null;
@@ -431,6 +431,50 @@ export class RequestBillingAutomationService {
       await this.createManualLogisticsReview(request, user, reason);
       return null;
     }
+  }
+
+  private async resolveLogisticsPackageCounts(request: DoneRequestPayload) {
+    const packageCounts = countPackages(request.packages);
+    if (packageCounts.boxes > 0 || packageCounts.pallets > 0) {
+      return packageCounts;
+    }
+
+    const charges = await this.prisma.billingCharge.findMany({
+      where: {
+        requestId: request.id,
+        status: { not: BillingChargeStatus.CANCELLED },
+        service: {
+          code: {
+            in: LOGISTICS_PACKAGE_SERVICE_CODES,
+          },
+        },
+      },
+      select: {
+        quantity: true,
+        service: {
+          select: {
+            code: true,
+          },
+        },
+      },
+    });
+
+    let boxes = 0;
+    let pallets = 0;
+    for (const charge of charges) {
+      const quantity = Math.ceil(decimalToNumber(charge.quantity) ?? 0);
+      if (quantity <= 0) {
+        continue;
+      }
+      if (LOGISTICS_BOX_SERVICE_CODES.includes(charge.service?.code ?? '')) {
+        boxes = Math.max(boxes, quantity);
+      }
+      if (LOGISTICS_PALLET_SERVICE_CODES.includes(charge.service?.code ?? '')) {
+        pallets = Math.max(pallets, quantity);
+      }
+    }
+
+    return { boxes, pallets };
   }
 
   private async createRequestInvoice(input: {
@@ -633,6 +677,15 @@ const FULFILLMENT_BILLING_SERVICES = {
     defaultPriceRub: 250,
   },
 } satisfies Record<string, Prisma.BillingServiceUncheckedCreateInput & { defaultPriceRub: number }>;
+const LOGISTICS_BOX_SERVICE_CODES = [
+  FULFILLMENT_BILLING_SERVICES.BOX_60_40_40.code,
+  FULFILLMENT_BILLING_SERVICES.BOX_ASSEMBLY.code,
+];
+const LOGISTICS_PALLET_SERVICE_CODES = [
+  FULFILLMENT_BILLING_SERVICES.PALLET.code,
+  FULFILLMENT_BILLING_SERVICES.PALLET_ASSEMBLY.code,
+];
+const LOGISTICS_PACKAGE_SERVICE_CODES = [...LOGISTICS_BOX_SERVICE_CODES, ...LOGISTICS_PALLET_SERVICE_CODES];
 
 const billingInvoiceInclude = {
   client: {
