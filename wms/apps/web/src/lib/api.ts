@@ -297,6 +297,13 @@ export type BillingInvoiceSummary = {
   } | null;
 };
 
+export type IssueRequestBillingInvoicesResult = {
+  requestId: string;
+  status: 'ISSUED';
+  issuedCount: number;
+  invoices: BillingInvoiceSummary[];
+};
+
 export type BillingInvoiceDocument = {
   invoiceId: string;
   number: string;
@@ -2794,6 +2801,13 @@ export async function updateBillingInvoiceStatus(
   return request<BillingInvoiceSummary>(`/billing/invoices/${invoiceId}/status`, {
     method: 'PATCH',
     body: payload,
+    accessToken,
+  });
+}
+
+export async function issueClientRequestInvoice(accessToken: string, requestId: string) {
+  return request<IssueRequestBillingInvoicesResult>(`/billing/requests/${requestId}/issue`, {
+    method: 'POST',
     accessToken,
   });
 }

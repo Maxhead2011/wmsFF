@@ -154,6 +154,12 @@ export class BillingController {
     return this.billing.createManualInvoice(dto, user);
   }
 
+  @Post('requests/:id/issue')
+  @RequirePermissions('billing:write')
+  issueRequestInvoice(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.billing.issueRequestInvoices(id, user);
+  }
+
   @Patch('invoices/:id/status')
   @RequirePermissions('billing:write')
   updateInvoiceStatus(

@@ -629,6 +629,17 @@
   color: #b91c1c;
 }
 
+.client-request-action-button--invoice {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.client-request-action-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 @media (max-width: 980px) {
   .client-request-fields {
     grid-template-columns: repeat(2, minmax(0, 1fr));

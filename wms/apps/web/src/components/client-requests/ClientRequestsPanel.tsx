@@ -7,6 +7,7 @@ import {
   fetchClientRequests,
   fetchClients,
   fetchPickInstruction,
+  issueClientRequestInvoice,
   packageClientRequest,
   pickClientRequest,
   shipClientRequest,
@@ -44,6 +45,8 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
   const [requests, setRequests] = useState<LoadState<ClientRequestSummary>>({ status: 'idle', data: [] });
   const [clients, setClients] = useState<LoadState<ClientSummary>>({ status: 'idle', data: [] });
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [issuingInvoiceRequestId, setIssuingInvoiceRequestId] = useState('');
   const [documentPreview, setDocumentPreview] = useState<ClientRequestDocument | null>(null);
   const [pickInstructionPreview, setPickInstructionPreview] = useState<PickInstructionDocument | null>(null);
 
@@ -61,6 +64,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
 
   async function loadData() {
     setError(null);
+    setNotice(null);
     setRequests((current) => ({ ...current, status: 'loading', error: undefined }));
     setClients((current) => ({ ...current, status: 'loading', error: undefined }));
 
@@ -80,6 +84,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
 
   async function changeStatus(requestId: string, status: ClientRequestStatus) {
     setError(null);
+    setNotice(null);
 
     try {
       const updated = await updateClientRequestStatus(session.accessToken, requestId, { status });
@@ -98,6 +103,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     }
 
     setError(null);
+    setNotice(null);
 
     try {
       const updated = await cancelClientRequest(session.accessToken, request.id);
@@ -112,6 +118,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
 
   async function pickOutboundRequest(request: ClientRequestSummary) {
     setError(null);
+    setNotice(null);
 
     try {
       await pickClientRequest(session.accessToken, {
@@ -130,6 +137,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
 
   async function openRequestDocument(request: ClientRequestSummary) {
     setError(null);
+    setNotice(null);
 
     try {
       setDocumentPreview(await fetchClientRequestDocument(session.accessToken, request.id));
@@ -140,6 +148,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
 
   async function openPickInstruction(request: ClientRequestSummary) {
     setError(null);
+    setNotice(null);
 
     try {
       setPickInstructionPreview(await fetchPickInstruction(session.accessToken, request.id));
@@ -150,6 +159,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
 
   async function downloadPickInstruction(request: ClientRequestSummary) {
     setError(null);
+    setNotice(null);
 
     try {
       const blob = await downloadPickInstructionXlsx(session.accessToken, request.id);
@@ -161,6 +171,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
 
   async function packageOutboundRequest(request: ClientRequestSummary) {
     setError(null);
+    setNotice(null);
 
     try {
       const result = await packageClientRequest(session.accessToken, {
@@ -181,6 +192,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
 
   async function shipOutboundRequest(request: ClientRequestSummary) {
     setError(null);
+    setNotice(null);
 
     try {
       await shipClientRequest(session.accessToken, {
@@ -194,6 +206,26 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
       }));
     } catch (caught) {
       setError(errorMessage(caught));
+    }
+  }
+
+  async function issueInvoiceForRequest(request: ClientRequestSummary) {
+    setError(null);
+    setNotice(null);
+    setIssuingInvoiceRequestId(request.id);
+
+    try {
+      const result = await issueClientRequestInvoice(session.accessToken, request.id);
+      const invoiceNumbers = result.invoices.map((invoice) => `№ ${invoice.number}`).join(', ');
+      setNotice(
+        invoiceNumbers
+          ? `Счет по заявке "${request.title}" выставлен: ${invoiceNumbers}.`
+          : `Счет по заявке "${request.title}" выставлен.`,
+      );
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setIssuingInvoiceRequestId('');
     }
   }
 
@@ -230,13 +262,16 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
       ) : null}
 
       {error ? <p className="form-error">{error}</p> : null}
+      {notice ? <p className="inline-status">{notice}</p> : null}
 
       <div className="client-requests-panel__list">
         {renderRequests(
           requests,
           canChangeStatus,
           canPickOutbound,
+          canUse(session.user, 'billing:write'),
           canWrite,
+          issuingInvoiceRequestId,
           (requestId, status) => void changeStatus(requestId, status),
           (request) => void cancelRequest(request),
           (request) => void openRequestDocument(request),
@@ -245,6 +280,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           (request) => void pickOutboundRequest(request),
           (request) => void packageOutboundRequest(request),
           (request) => void shipOutboundRequest(request),
+          (request) => void issueInvoiceForRequest(request),
         )}
       </div>
 
@@ -268,7 +304,9 @@ function renderRequests(
   state: LoadState<ClientRequestSummary>,
   canChangeStatus: boolean,
   canPickOutbound: boolean,
+  canIssueInvoice: boolean,
   canCancelRequests: boolean,
+  issuingInvoiceRequestId: string,
   onStatusChange: (requestId: string, status: ClientRequestStatus) => void,
   onCancelRequest: (request: ClientRequestSummary) => void,
   onOpenDocument: (request: ClientRequestSummary) => void,
@@ -277,6 +315,7 @@ function renderRequests(
   onPickOutbound: (request: ClientRequestSummary) => void,
   onPackageOutbound: (request: ClientRequestSummary) => void,
   onShipOutbound: (request: ClientRequestSummary) => void,
+  onIssueInvoice: (request: ClientRequestSummary) => void,
 ) {
   if (state.status === 'idle' || (state.status === 'loading' && state.data.length === 0)) {
     return (
@@ -302,7 +341,9 @@ function renderRequests(
         items={state.data}
         canChangeStatus={canChangeStatus}
         canPickOutbound={canPickOutbound}
+        canIssueInvoice={canIssueInvoice}
         canCancelRequests={canCancelRequests}
+        issuingInvoiceRequestId={issuingInvoiceRequestId}
         onStatusChange={onStatusChange}
         onCancelRequest={onCancelRequest}
         onOpenDocument={onOpenDocument}
@@ -311,6 +352,7 @@ function renderRequests(
         onPickOutbound={onPickOutbound}
         onPackageOutbound={onPackageOutbound}
         onShipOutbound={onShipOutbound}
+        onIssueInvoice={onIssueInvoice}
       />
     </>
   );

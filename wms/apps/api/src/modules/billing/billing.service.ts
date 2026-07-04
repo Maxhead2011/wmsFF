@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import {
   BillingChargeSource,
   BillingChargeStatus,
+  BillingInvoiceSource,
   BillingInvoiceStatus,
   BillingPriceTaxMode,
   BillingUnit,
@@ -14,6 +15,7 @@ import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { isClientNotificationEnabled } from '../client-notifications/client-notification-preferences';
 import { TelegramNotificationService } from '../client-notifications/telegram-notification.service';
+import { RequestBillingAutomationService } from './request-billing-automation.service';
 import { CreateBillingChargeDto } from './dto/create-billing-charge.dto';
 import { CreateBillingInvoiceDto } from './dto/create-billing-invoice.dto';
 import { CreateBillingPaymentDto } from './dto/create-billing-payment.dto';
@@ -33,6 +35,7 @@ export class BillingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly clientScopes: ClientScopeService,
+    private readonly requestBillingAutomation: RequestBillingAutomationService,
     private readonly telegram?: TelegramNotificationService,
   ) {}
 
@@ -779,6 +782,51 @@ export class BillingService {
     return updated;
   }
 
+  async issueRequestInvoices(requestId: string, user: AuthUser) {
+    const generation = await this.requestBillingAutomation.generateForDoneRequest(requestId, user);
+    if (generation.status !== 'APPLIED') {
+      throw new BadRequestException('Счет можно выставить только по сданной исходящей заявке с начислениями.');
+    }
+
+    const generatedInvoiceIds = [generation.mainInvoiceId, generation.logisticsInvoiceId].filter(Boolean) as string[];
+    const candidates = await this.prisma.billingInvoice.findMany({
+      where: {
+        requestId,
+        source: { in: [BillingInvoiceSource.REQUEST_DONE, BillingInvoiceSource.LOGISTICS] },
+        status: { not: BillingInvoiceStatus.CANCELLED },
+      },
+      include: billingInvoiceInclude,
+      orderBy: [{ createdAt: 'asc' }, { number: 'asc' }],
+    });
+    const invoicesById = new Map(candidates.map((invoice) => [invoice.id, invoice]));
+    const invoices = [
+      ...generatedInvoiceIds.map((id) => invoicesById.get(id)).filter((invoice): invoice is BillingInvoiceWithInclude => Boolean(invoice)),
+      ...candidates.filter((invoice) => !generatedInvoiceIds.includes(invoice.id)),
+    ];
+
+    if (invoices.length === 0) {
+      throw new BadRequestException('По заявке нет счетов для выставления. Проверьте начисления по заявке.');
+    }
+
+    const issued = [];
+    let issuedCount = 0;
+    for (const invoice of invoices) {
+      if (invoice.status === BillingInvoiceStatus.DRAFT) {
+        issued.push(await this.updateInvoiceStatus(invoice.id, { status: BillingInvoiceStatus.ISSUED }, user));
+        issuedCount += 1;
+      } else {
+        issued.push(invoice);
+      }
+    }
+
+    return {
+      requestId,
+      status: 'ISSUED',
+      issuedCount,
+      invoices: issued,
+    };
+  }
+
   async createPayment(dto: CreateBillingPaymentDto, user: AuthUser) {
     const invoice = await this.prisma.billingInvoice.findUnique({
       where: { id: dto.invoiceId },
@@ -1080,6 +1128,7 @@ const billingReconciliationInvoiceInclude = {
 } satisfies Prisma.BillingInvoiceInclude;
 
 type BillingChargeWithRelations = Prisma.BillingChargeGetPayload<{ include: typeof billingChargeInclude }>;
+type BillingInvoiceWithInclude = Prisma.BillingInvoiceGetPayload<{ include: typeof billingInvoiceInclude }>;
 type BillingInvoiceForReconciliation = Prisma.BillingInvoiceGetPayload<{
   include: typeof billingReconciliationInvoiceInclude;
 }>;

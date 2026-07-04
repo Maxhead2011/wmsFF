@@ -1,4 +1,4 @@
-import { CheckCircle2, ClipboardList, FileDown, FileText, PackageCheck, Send, Truck, XCircle } from 'lucide-react';
+import { CheckCircle2, ClipboardList, FileDown, FileText, PackageCheck, ReceiptText, Send, Truck, XCircle } from 'lucide-react';
 import { type ClientRequestStatus, type ClientRequestSummary } from '../../lib/api';
 import {
   requestPriorityLabel,
@@ -12,7 +12,9 @@ type ClientRequestsTableProps = {
   items: ClientRequestSummary[];
   canChangeStatus: boolean;
   canPickOutbound: boolean;
+  canIssueInvoice: boolean;
   canCancelRequests: boolean;
+  issuingInvoiceRequestId: string;
   onStatusChange: (requestId: string, status: ClientRequestStatus) => void;
   onCancelRequest: (request: ClientRequestSummary) => void;
   onOpenDocument?: (request: ClientRequestSummary) => void;
@@ -21,6 +23,7 @@ type ClientRequestsTableProps = {
   onPickOutbound: (request: ClientRequestSummary) => void;
   onPackageOutbound: (request: ClientRequestSummary) => void;
   onShipOutbound: (request: ClientRequestSummary) => void;
+  onIssueInvoice: (request: ClientRequestSummary) => void;
 };
 
 const dateFormatter = new Intl.DateTimeFormat('ru-RU', {
@@ -33,7 +36,9 @@ export function ClientRequestsTable({
   items,
   canChangeStatus,
   canPickOutbound,
+  canIssueInvoice,
   canCancelRequests,
+  issuingInvoiceRequestId,
   onStatusChange,
   onCancelRequest,
   onOpenDocument,
@@ -42,7 +47,10 @@ export function ClientRequestsTable({
   onPickOutbound,
   onPackageOutbound,
   onShipOutbound,
+  onIssueInvoice,
 }: ClientRequestsTableProps) {
+  const showOperationActions = canPickOutbound || canIssueInvoice;
+
   return (
     <div className="client-request-table-wrap">
       <table className="data-table client-request-table">
@@ -53,7 +61,7 @@ export function ClientRequestsTable({
             <th>Состав</th>
             <th>Срок</th>
             <th>Статус</th>
-            {canPickOutbound ? <th>Склад</th> : null}
+            {showOperationActions ? <th>Операции</th> : null}
             {canCancelRequests ? <th>Действия</th> : null}
             {canChangeStatus ? <th>Процесс</th> : null}
           </tr>
@@ -97,11 +105,11 @@ export function ClientRequestsTable({
                 </span>
                 {request.managerComment ? <span>{request.managerComment}</span> : null}
               </td>
-              {canPickOutbound ? (
+              {showOperationActions ? (
                 <td>
-                  {canShowWarehouseActions(request) ? (
+                  {canShowOperationActions(request, canPickOutbound, canIssueInvoice) ? (
                     <div className="client-request-actions">
-                      {onOpenPickInstruction && request.type === 'OUTBOUND' ? (
+                      {canPickOutbound && onOpenPickInstruction && request.type === 'OUTBOUND' ? (
                         <button
                           className="client-request-action-button client-request-action-button--instruction"
                           type="button"
@@ -112,7 +120,7 @@ export function ClientRequestsTable({
                           <span>Инструкция</span>
                         </button>
                       ) : null}
-                      {onDownloadPickInstruction && request.type === 'OUTBOUND' ? (
+                      {canPickOutbound && onDownloadPickInstruction && request.type === 'OUTBOUND' ? (
                         <button
                           className="client-request-action-button client-request-action-button--xlsx"
                           type="button"
@@ -123,7 +131,7 @@ export function ClientRequestsTable({
                           <span>Инструкция Excel</span>
                         </button>
                       ) : null}
-                      {canPickRequest(request) ? (
+                      {canPickOutbound && canPickRequest(request) ? (
                         <button
                           className="client-request-action-button client-request-action-button--pick"
                           type="button"
@@ -134,7 +142,7 @@ export function ClientRequestsTable({
                           <span>Собрать</span>
                         </button>
                       ) : null}
-                      {canPackageRequest(request) ? (
+                      {canPickOutbound && canPackageRequest(request) ? (
                         <button
                           className="client-request-action-button client-request-action-button--pack"
                           type="button"
@@ -145,7 +153,7 @@ export function ClientRequestsTable({
                           <span>Упаковать</span>
                         </button>
                       ) : null}
-                      {canShipRequest(request) ? (
+                      {canPickOutbound && canShipRequest(request) ? (
                         <button
                           className="client-request-action-button client-request-action-button--ship"
                           type="button"
@@ -154,6 +162,18 @@ export function ClientRequestsTable({
                         >
                           <Truck size={15} aria-hidden="true" />
                           <span>Отгрузить</span>
+                        </button>
+                      ) : null}
+                      {canIssueInvoice && canIssueRequestInvoice(request) ? (
+                        <button
+                          className="client-request-action-button client-request-action-button--invoice"
+                          disabled={issuingInvoiceRequestId === request.id}
+                          type="button"
+                          onClick={() => onIssueInvoice(request)}
+                          title="Выставить счет по сданной заявке"
+                        >
+                          <ReceiptText size={15} aria-hidden="true" />
+                          <span>{issuingInvoiceRequestId === request.id ? 'Выставляю' : 'Выставить счет'}</span>
                         </button>
                       ) : null}
                     </div>
@@ -222,6 +242,14 @@ function canRunFulfillment(request: ClientRequestSummary) {
 
 function canShowWarehouseActions(request: ClientRequestSummary) {
   return request.type === 'OUTBOUND' || canRunFulfillment(request);
+}
+
+function canShowOperationActions(request: ClientRequestSummary, canPickOutbound: boolean, canIssueInvoice: boolean) {
+  return (canPickOutbound && canShowWarehouseActions(request)) || (canIssueInvoice && canIssueRequestInvoice(request));
+}
+
+function canIssueRequestInvoice(request: ClientRequestSummary) {
+  return request.type === 'OUTBOUND' && request.status === 'DONE';
 }
 
 function canCancelRequest(request: ClientRequestSummary) {
