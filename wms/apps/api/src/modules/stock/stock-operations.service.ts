@@ -389,6 +389,8 @@ export class StockOperationsService {
         throw new BadRequestException('Отгрузка доступна только после упаковки заявки.');
       }
 
+      await this.ensurePackedStockIsInShipping(tx, request, `complete-pack-before-ship:${request.id}:${baseKey}`);
+
       const plan = await this.planRequestAllocations(tx, request.clientId, request.items, StockStatus.SHIPPING);
 
       for (const line of plan.lines) {
@@ -764,6 +766,71 @@ export class StockOperationsService {
     }
 
     return { lines };
+  }
+
+  private async ensurePackedStockIsInShipping(
+    tx: Prisma.TransactionClient,
+    request: { id: string; clientId: string; title?: string | null; items: RequestItemForAllocation[] },
+    baseKey: string,
+  ) {
+    const missingItems = await this.findItemsMissingInStatus(tx, request.clientId, request.items, StockStatus.SHIPPING);
+
+    if (missingItems.length === 0) {
+      return;
+    }
+
+    const plan = await this.planRequestAllocations(tx, request.clientId, missingItems, StockStatus.PACKING);
+
+    await this.applyStatusMove(tx, {
+      request,
+      plan,
+      baseKey,
+      movementType: MovementType.PACK,
+      sourceStatus: StockStatus.PACKING,
+      targetStatus: StockStatus.SHIPPING,
+      sourceComment: `Достроена упаковка перед отгрузкой заявки ${request.title ?? request.id}`,
+      targetComment: `Передано в отгрузку перед закрытием заявки ${request.title ?? request.id}`,
+    });
+  }
+
+  private async findItemsMissingInStatus(
+    tx: Prisma.TransactionClient,
+    clientId: string,
+    items: RequestItemForAllocation[],
+    status: StockStatus,
+  ): Promise<RequestItemForAllocation[]> {
+    const remainingBySku = new Map<string, number>();
+    const missingItems: RequestItemForAllocation[] = [];
+
+    for (const item of items) {
+      const sku = await this.resolveSku(tx, {
+        clientId,
+        skuId: item.skuId ?? undefined,
+        barcode: item.barcode ?? undefined,
+      });
+      let available = remainingBySku.get(sku.id);
+
+      if (available == null) {
+        const balances = await tx.stockBalance.findMany({
+          where: {
+            clientId,
+            skuId: sku.id,
+            status,
+            quantity: { gt: 0 },
+            boxId: { not: null },
+          },
+        });
+        available = balances.reduce((sum, balance) => sum + balance.quantity, 0);
+      }
+
+      if (available < item.quantity) {
+        missingItems.push({ ...item, quantity: item.quantity - available });
+      }
+
+      remainingBySku.set(sku.id, Math.max(0, available - item.quantity));
+    }
+
+    return missingItems;
   }
 
   private async planRequestAllocations(
