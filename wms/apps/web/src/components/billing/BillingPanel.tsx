@@ -6,6 +6,7 @@ import {
   FilePlus2,
   ReceiptText,
   RefreshCw,
+  X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
@@ -87,6 +88,7 @@ export function BillingPanel({ session }: BillingPanelProps) {
   const [reconciliation, setReconciliation] = useState<BillingReportState>({ status: 'idle', data: null });
   const [error, setError] = useState<string | null>(null);
   const [documentPreview, setDocumentPreview] = useState<BillingInvoiceDocument | null>(null);
+  const [editingInvoice, setEditingInvoice] = useState<BillingInvoiceSummary | null>(null);
   const [activeTab, setActiveTab] = useState<BillingTab>('overview');
   const [invoiceStatusFilter, setInvoiceStatusFilter] = useState<InvoiceFilterStatus>('OPEN');
   const [invoiceClientFilter, setInvoiceClientFilter] = useState('');
@@ -94,6 +96,10 @@ export function BillingPanel({ session }: BillingPanelProps) {
   const [paymentInvoiceId, setPaymentInvoiceId] = useState('');
 
   const activeServices = useMemo(() => services.data.filter((service) => service.isActive), [services.data]);
+  const visibleBillingTabs = useMemo(
+    () => billingTabs.filter((tab) => tab.id !== 'create' || canWrite),
+    [canWrite],
+  );
   const dashboard = useMemo(() => buildInvoiceDashboard(invoices.data), [invoices.data]);
   const filteredInvoices = useMemo(
     () => filterInvoices(invoices.data, invoiceStatusFilter, invoiceClientFilter, invoiceQuery),
@@ -105,6 +111,12 @@ export function BillingPanel({ session }: BillingPanelProps) {
       void loadData();
     }
   }, [canRead]);
+
+  useEffect(() => {
+    if (!canWrite && activeTab === 'create') {
+      setActiveTab('overview');
+    }
+  }, [activeTab, canWrite]);
 
   if (!canRead) {
     return null;
@@ -297,7 +309,7 @@ export function BillingPanel({ session }: BillingPanelProps) {
       </div>
 
       <div className="billing-tabs" role="tablist" aria-label="Раздел биллинга">
-        {billingTabs.map((tab) => (
+        {visibleBillingTabs.map((tab) => (
           <button
             aria-selected={activeTab === tab.id}
             className={activeTab === tab.id ? 'active' : ''}
@@ -406,6 +418,7 @@ export function BillingPanel({ session }: BillingPanelProps) {
               (invoice, kind) => void downloadInvoicePdf(invoice, kind),
               changeInvoiceStatus,
               (invoice) => setPaymentInvoiceId(invoice.id),
+              canEditDraftInvoices(session.user) ? setEditingInvoice : undefined,
             )}
           </div>
         </>
@@ -440,6 +453,42 @@ export function BillingPanel({ session }: BillingPanelProps) {
               ) : null}
             </div>
           </details>
+        </div>
+      ) : null}
+
+      {editingInvoice ? (
+        <div className="billing-edit-modal" role="dialog" aria-modal="true" aria-label="Редактирование счета">
+          <div className="billing-edit-modal__content">
+            <div className="billing-edit-modal__head">
+              <div>
+                <p className="eyebrow">Редактирование черновика</p>
+                <h3>Счет № {editingInvoice.number}</h3>
+                <span>{editingInvoice.client.name}</span>
+              </div>
+              <button className="icon-button" type="button" onClick={() => setEditingInvoice(null)} aria-label="Закрыть">
+                <X size={18} aria-hidden="true" />
+              </button>
+            </div>
+            <BillingInvoiceForm
+              clients={clients.data}
+              session={session}
+              initialClientId={editingInvoice.clientId}
+              initialMode="manual"
+              initialPeriodFrom={editingInvoice.periodFrom.slice(0, 10)}
+              initialPeriodTo={editingInvoice.periodTo.slice(0, 10)}
+              initialComment={editingInvoice.comment ?? ''}
+              initialRows={invoiceRowsForForm(editingInvoice)}
+              requestId={editingInvoice.requestId ?? undefined}
+              editInvoiceId={editingInvoice.id}
+              lockClient
+              lockMode
+              submitButtonLabel="Сохранить изменения"
+              onCreated={(invoice) => {
+                setEditingInvoice(null);
+                acceptInvoice(invoice);
+              }}
+            />
+          </div>
         </div>
       ) : null}
 
@@ -494,6 +543,7 @@ function renderInvoices(
   onDownloadPdf: (invoice: BillingInvoiceSummary, kind: 'invoice' | 'act') => void,
   onStatusChange: (invoiceId: string, status: BillingInvoiceStatus) => void,
   onPayInvoice: (invoice: BillingInvoiceSummary) => void,
+  onEditInvoice?: (invoice: BillingInvoiceSummary) => void,
 ) {
   if (state.status === 'idle' || (state.status === 'loading' && state.data.length === 0)) {
     return (
@@ -520,6 +570,7 @@ function renderInvoices(
         canWrite={canWrite}
         onOpenDocument={onOpenDocument}
         onDownloadPdf={onDownloadPdf}
+        onEditInvoice={onEditInvoice}
         onStatusChange={onStatusChange}
         onPayInvoice={onPayInvoice}
       />
@@ -641,6 +692,25 @@ function filterInvoices(
 
     return matchesStatus && matchesClient && (!normalizedQuery || haystack.includes(normalizedQuery));
   });
+}
+
+function invoiceRowsForForm(invoice: BillingInvoiceSummary) {
+  return invoice.items.map((item) => ({
+    serviceId: item.charge?.serviceId ?? '',
+    description: item.description,
+    unit: item.unit,
+    quantity: item.quantity,
+    unitPriceRub: item.unitPriceRub,
+    serviceDate: item.serviceDate,
+  }));
+}
+
+function canEditDraftInvoices(user: AuthUser) {
+  return (
+    user.permissionCodes.includes('system:admin') ||
+    user.roleCodes.includes('OWNER') ||
+    user.roleCodes.includes('ADMIN')
+  );
 }
 
 function canUse(user: AuthUser, permission: string) {

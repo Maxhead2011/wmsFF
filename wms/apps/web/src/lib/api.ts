@@ -251,7 +251,7 @@ export type BillingInvoiceItemSummary = {
   unitPriceRub: string | number;
   totalRub: string | number;
   serviceDate: string;
-  charge: Pick<BillingChargeSummary, 'id' | 'description' | 'status'> | null;
+  charge: Pick<BillingChargeSummary, 'id' | 'serviceId' | 'description' | 'status'> | null;
 };
 
 export type BillingPaymentSummary = {
@@ -299,7 +299,7 @@ export type BillingInvoiceSummary = {
 
 export type IssueRequestBillingInvoicesResult = {
   requestId: string;
-  status: 'ISSUED';
+  status: 'ISSUED' | 'DRAFT_REVIEW';
   issuedCount: number;
   invoices: BillingInvoiceSummary[];
 };
@@ -496,6 +496,7 @@ export type CreateManualBillingInvoiceLinePayload = {
 
 export type CreateManualBillingInvoicePayload = {
   clientId: string;
+  requestId?: string;
   periodFrom: string;
   periodTo: string;
   dueDate?: string;
@@ -2788,6 +2789,18 @@ export async function createBillingInvoice(accessToken: string, payload: CreateB
 export async function createManualBillingInvoice(accessToken: string, payload: CreateManualBillingInvoicePayload) {
   return request<BillingInvoiceSummary>('/billing/invoices/manual', {
     method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function updateManualBillingInvoice(
+  accessToken: string,
+  invoiceId: string,
+  payload: CreateManualBillingInvoicePayload,
+) {
+  return request<BillingInvoiceSummary>(`/billing/invoices/${invoiceId}/manual`, {
+    method: 'PUT',
     body: payload,
     accessToken,
   });

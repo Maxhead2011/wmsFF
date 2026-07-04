@@ -5,6 +5,8 @@ import {
   createManualBillingInvoice,
   fetchClientBillingServices,
   generateStorageCharge,
+  updateBillingInvoiceStatus,
+  updateManualBillingInvoice,
   upsertClientBillingService,
   type AuthSession,
   type BillingInvoiceSummary,
@@ -19,6 +21,19 @@ type BillingInvoiceFormProps = {
   clients: ClientSummary[];
   session: AuthSession;
   onCreated: (invoice: BillingInvoiceSummary) => void;
+  initialClientId?: string;
+  initialMode?: InvoiceMode;
+  initialPeriodFrom?: string;
+  initialPeriodTo?: string;
+  initialComment?: string;
+  initialQuantitiesByServiceCode?: Record<string, number>;
+  initialRows?: InitialInvoiceRow[];
+  requestId?: string;
+  editInvoiceId?: string;
+  lockClient?: boolean;
+  lockMode?: boolean;
+  issueOnCreate?: boolean;
+  submitButtonLabel?: string;
 };
 
 type InvoiceMode = 'charges' | 'storage' | 'manual';
@@ -37,15 +52,41 @@ type InvoiceRow = {
   isStandard: boolean;
 };
 
+type InitialInvoiceRow = {
+  serviceId?: string | null;
+  description?: string | null;
+  unit: BillingUnit;
+  quantity: string | number;
+  unitPriceRub: string | number;
+  serviceDate: string;
+};
+
 const standardServiceCodes = ['BOX_60_40_40', 'BOX_ASSEMBLY', 'PALLET', 'PALLET_ASSEMBLY'];
 
-export function BillingInvoiceForm({ clients, session, onCreated }: BillingInvoiceFormProps) {
-  const [clientId, setClientId] = useState('');
-  const [periodFrom, setPeriodFrom] = useState(monthStart());
-  const [periodTo, setPeriodTo] = useState(today());
+export function BillingInvoiceForm({
+  clients,
+  session,
+  onCreated,
+  initialClientId,
+  initialMode,
+  initialPeriodFrom,
+  initialPeriodTo,
+  initialComment,
+  initialQuantitiesByServiceCode,
+  initialRows,
+  requestId,
+  editInvoiceId,
+  lockClient = false,
+  lockMode = false,
+  issueOnCreate = false,
+  submitButtonLabel,
+}: BillingInvoiceFormProps) {
+  const [clientId, setClientId] = useState(initialClientId ?? '');
+  const [periodFrom, setPeriodFrom] = useState(initialPeriodFrom ?? monthStart());
+  const [periodTo, setPeriodTo] = useState(initialPeriodTo ?? today());
   const [dueDate, setDueDate] = useState('');
-  const [comment, setComment] = useState('');
-  const [mode, setMode] = useState<InvoiceMode>('charges');
+  const [comment, setComment] = useState(initialComment ?? '');
+  const [mode, setMode] = useState<InvoiceMode>(initialMode ?? 'charges');
   const [services, setServices] = useState<ClientBillingServiceSummary[]>([]);
   const [rows, setRows] = useState<InvoiceRow[]>([]);
   const [activeSearchRowKey, setActiveSearchRowKey] = useState('');
@@ -75,7 +116,11 @@ export function BillingInvoiceForm({ clients, session, onCreated }: BillingInvoi
     try {
       const nextServices = await fetchClientBillingServices(session.accessToken, nextClientId);
       setServices(nextServices);
-      setRows(buildInitialRows(nextServices, periodTo));
+      setRows(
+        initialRows?.length
+          ? buildRowsFromInvoice(initialRows, nextServices)
+          : buildInitialRows(nextServices, periodTo, initialQuantitiesByServiceCode),
+      );
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -93,15 +138,14 @@ export function BillingInvoiceForm({ clients, session, onCreated }: BillingInvoi
     setError(null);
 
     try {
-      const pricedRows = rows.filter((row) => row.serviceId);
       await Promise.all(
-        pricedRows.map((row) =>
+        services.map((item) =>
           upsertClientBillingService(session.accessToken, clientId, {
-            serviceId: row.serviceId,
-            priceRub: numberFromInput(row.unitPriceRub),
-            taxMode: row.taxMode,
-            isActive: true,
-            comment: row.comment || undefined,
+            serviceId: item.service.id,
+            priceRub: numberFromInput(item.priceRub),
+            taxMode: item.taxMode,
+            isActive: item.isActive,
+            comment: item.comment || undefined,
           }),
         ),
       );
@@ -194,14 +238,21 @@ export function BillingInvoiceForm({ clients, session, onCreated }: BillingInvoi
     setError(null);
 
     try {
-      const invoice = await createManualBillingInvoice(session.accessToken, {
+      const payload = {
         clientId,
+        requestId,
         periodFrom,
         periodTo,
         dueDate: dueDate || undefined,
         rows: invoiceRows,
         comment: comment || undefined,
-      });
+      };
+      const createdInvoice = editInvoiceId
+        ? await updateManualBillingInvoice(session.accessToken, editInvoiceId, payload)
+        : await createManualBillingInvoice(session.accessToken, payload);
+      const invoice = issueOnCreate
+        ? await updateBillingInvoiceStatus(session.accessToken, createdInvoice.id, { status: 'ISSUED' })
+        : createdInvoice;
       onCreated(invoice);
       setComment('');
       setRows((current) => current.map((row) => ({ ...row, quantity: '0' })));
@@ -281,6 +332,12 @@ export function BillingInvoiceForm({ clients, session, onCreated }: BillingInvoi
     setRows((current) => current.filter((row) => row.key !== key));
   }
 
+  function updateClientService(serviceId: string, patch: Partial<ClientBillingServiceSummary>) {
+    setServices((current) =>
+      current.map((item) => (item.service.id === serviceId ? { ...item, ...patch } : item)),
+    );
+  }
+
   return (
     <form className="billing-form billing-invoice-form" onSubmit={(event) => void submit(event)}>
       <div className="billing-form-head">
@@ -294,7 +351,7 @@ export function BillingInvoiceForm({ clients, session, onCreated }: BillingInvoi
       <div className="billing-fields billing-fields--invoice">
         <label>
           <span>Клиент</span>
-          <select value={clientId} onChange={(event) => setClientId(event.target.value)}>
+          <select disabled={lockClient} value={clientId} onChange={(event) => setClientId(event.target.value)}>
             <option value="">Выберите клиента</option>
             {clients.map((client) => (
               <option key={client.id} value={client.id}>
@@ -325,29 +382,31 @@ export function BillingInvoiceForm({ clients, session, onCreated }: BillingInvoi
         </label>
       </div>
 
-      <div className="billing-mode-grid" role="radiogroup" aria-label="Способ создания счета">
-        <ModeButton
-          active={mode === 'charges'}
-          icon={<FileText size={18} />}
-          title="Из начислений"
-          text="Возьмет все утвержденные начисления клиента за период."
-          onClick={() => setMode('charges')}
-        />
-        <ModeButton
-          active={mode === 'storage'}
-          icon={<Warehouse size={18} />}
-          title="Хранение"
-          text="Посчитает хранение за период и сразу создаст счет."
-          onClick={() => setMode('storage')}
-        />
-        <ModeButton
-          active={mode === 'manual'}
-          icon={<Boxes size={18} />}
-          title="Ручной счет"
-          text="Для упаковки, коробов, паллет и дополнительных услуг."
-          onClick={() => setMode('manual')}
-        />
-      </div>
+      {lockMode ? null : (
+        <div className="billing-mode-grid" role="radiogroup" aria-label="Способ создания счета">
+          <ModeButton
+            active={mode === 'charges'}
+            icon={<FileText size={18} />}
+            title="Из начислений"
+            text="Возьмет все утвержденные начисления клиента за период."
+            onClick={() => setMode('charges')}
+          />
+          <ModeButton
+            active={mode === 'storage'}
+            icon={<Warehouse size={18} />}
+            title="Хранение"
+            text="Посчитает хранение за период и сразу создаст счет."
+            onClick={() => setMode('storage')}
+          />
+          <ModeButton
+            active={mode === 'manual'}
+            icon={<Boxes size={18} />}
+            title="Ручной счет"
+            text="Для упаковки, коробов, паллет и дополнительных услуг."
+            onClick={() => setMode('manual')}
+          />
+        </div>
+      )}
 
       {mode !== 'manual' ? (
         <p className="panel-message billing-mode-note">
@@ -355,6 +414,54 @@ export function BillingInvoiceForm({ clients, session, onCreated }: BillingInvoi
             ? 'Счет будет заполнен утвержденными начислениями, которые еще не попали в другие счета.'
             : 'Система создаст начисление хранения за выбранный период, утвердит его и добавит в счет.'}
         </p>
+      ) : null}
+
+      {clientId ? (
+        <details className="billing-client-services" open={mode === 'manual'}>
+          <summary>
+            <span>Услуги и цены клиента</span>
+            <strong>{serviceOptions.length} активных</strong>
+          </summary>
+          <div className="billing-client-services__grid">
+            {services.map((item) => (
+              <div className={item.isActive ? 'billing-client-service is-active' : 'billing-client-service'} key={item.service.id}>
+                <label className="billing-client-service__check">
+                  <input
+                    checked={item.isActive}
+                    type="checkbox"
+                    onChange={(event) => updateClientService(item.service.id, { isActive: event.target.checked })}
+                  />
+                  <span>{item.service.name}</span>
+                </label>
+                <small>{item.service.code} · {unitLabel(item.service.unit)}</small>
+                <label>
+                  <span>Цена</span>
+                  <input
+                    min="0"
+                    step="0.01"
+                    type="number"
+                    value={String(item.priceRub ?? '')}
+                    onChange={(event) => updateClientService(item.service.id, { priceRub: event.target.value })}
+                  />
+                </label>
+                <label>
+                  <span>Налог</span>
+                  <select
+                    value={item.taxMode}
+                    onChange={(event) => updateClientService(item.service.id, { taxMode: event.target.value as BillingPriceTaxMode })}
+                  >
+                    <option value="INCLUDED">В цене</option>
+                    <option value="ADD_6_PERCENT">Добавить 6%</option>
+                  </select>
+                </label>
+              </div>
+            ))}
+          </div>
+          <button className="secondary-button" disabled={isSavingPrices || services.length === 0} type="button" onClick={() => void saveClientPrices()}>
+            <Save size={16} aria-hidden="true" />
+            <span>{isSavingPrices ? 'Сохраняю' : 'Сохранить услуги и цены'}</span>
+          </button>
+        </details>
       ) : null}
 
       {mode === 'manual' ? (
@@ -473,7 +580,7 @@ export function BillingInvoiceForm({ clients, session, onCreated }: BillingInvoi
 
       <button className="primary-button billing-submit" disabled={isSubmitting || !clientId} type="submit">
         <ReceiptText size={17} aria-hidden="true" />
-        <span>{isSubmitting ? 'Формирую' : submitLabel(mode)}</span>
+        <span>{isSubmitting ? 'Формирую' : submitButtonLabel ?? submitLabel(mode, Boolean(editInvoiceId))}</span>
       </button>
     </form>
   );
@@ -501,7 +608,11 @@ function ModeButton({
   );
 }
 
-function submitLabel(mode: InvoiceMode) {
+function submitLabel(mode: InvoiceMode, isEdit = false) {
+  if (isEdit) {
+    return 'Сохранить черновик счета';
+  }
+
   if (mode === 'charges') {
     return 'Создать счет из начислений';
   }
@@ -513,23 +624,52 @@ function submitLabel(mode: InvoiceMode) {
   return 'Сформировать ручной счет';
 }
 
-function buildInitialRows(services: ClientBillingServiceSummary[], serviceDate: string): InvoiceRow[] {
+function buildRowsFromInvoice(rows: InitialInvoiceRow[], services: ClientBillingServiceSummary[]): InvoiceRow[] {
+  const servicesById = new Map(services.map((item) => [item.service.id, item]));
+  return rows.map((row) => {
+    const service = row.serviceId ? servicesById.get(row.serviceId) : null;
+    return {
+      key: `edit-${row.serviceId ?? row.description ?? 'row'}-${Date.now()}-${Math.random()}`,
+      serviceId: row.serviceId ?? '',
+      serviceSearch: service ? serviceLabel(service) : row.description ?? '',
+      description: row.description ?? service?.service.name ?? '',
+      unit: row.unit,
+      quantity: String(row.quantity),
+      unitPriceRub: String(row.unitPriceRub),
+      taxMode: service?.taxMode ?? 'INCLUDED',
+      serviceDate: dateInput(row.serviceDate),
+      comment: '',
+      isStandard: service ? standardServiceCodes.includes(service.service.code) : false,
+    };
+  });
+}
+
+function buildInitialRows(
+  services: ClientBillingServiceSummary[],
+  serviceDate: string,
+  quantitiesByServiceCode: Record<string, number> = {},
+): InvoiceRow[] {
   const standardRows = standardServiceCodes
     .map((code) => services.find((item) => item.service.code === code))
     .filter((item): item is ClientBillingServiceSummary => Boolean(item))
-    .map((item) => rowFromService(item, serviceDate, true));
+    .map((item) => rowFromService(item, serviceDate, true, quantitiesByServiceCode[item.service.code] ?? 0));
 
   return standardRows.length ? standardRows : [emptyRow(serviceDate)];
 }
 
-function rowFromService(item: ClientBillingServiceSummary, serviceDate: string, isStandard: boolean): InvoiceRow {
+function rowFromService(
+  item: ClientBillingServiceSummary,
+  serviceDate: string,
+  isStandard: boolean,
+  quantity = 0,
+): InvoiceRow {
   return {
     key: `${item.service.id}-${Date.now()}-${Math.random()}`,
     serviceId: item.service.id,
     serviceSearch: serviceLabel(item),
     description: item.service.name,
     unit: item.service.unit,
-    quantity: '0',
+    quantity: String(quantity),
     unitPriceRub: String(numberFromInput(item.priceRub)),
     taxMode: item.taxMode,
     serviceDate,
@@ -605,6 +745,10 @@ function monthStart() {
   const date = new Date();
   date.setDate(1);
   return formatDateInput(date);
+}
+
+function dateInput(value: string) {
+  return value.slice(0, 10);
 }
 
 function formatDateInput(date: Date) {

@@ -25,6 +25,9 @@ export class BillingDocumentService {
     }
 
     this.clientScopes.requireClientAccess(user, invoice.clientId, 'read');
+    if (invoice.status === BillingInvoiceStatus.DRAFT && !canForceAct(user)) {
+      throw new ForbiddenException('Черновик счета доступен только сотрудникам фулфилмента до выставления клиенту.');
+    }
 
     const rows = invoice.items.map((item, index) => ({
       position: index + 1,

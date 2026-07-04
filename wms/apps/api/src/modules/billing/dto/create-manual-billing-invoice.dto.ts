@@ -50,6 +50,10 @@ export class CreateManualBillingInvoiceDto {
   @IsString()
   clientId!: string;
 
+  @IsOptional()
+  @IsString()
+  requestId?: string;
+
   @IsDateString()
   periodFrom!: string;
 

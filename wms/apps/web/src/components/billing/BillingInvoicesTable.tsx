@@ -1,4 +1,4 @@
-import { ChevronDown, ClipboardCheck, CreditCard, FileCheck2, FileDown, ReceiptText } from 'lucide-react';
+import { ChevronDown, ClipboardCheck, CreditCard, FileCheck2, FileDown, Pencil, ReceiptText } from 'lucide-react';
 import { Fragment, useEffect, useState } from 'react';
 import type { BillingInvoiceStatus, BillingInvoiceSummary } from '../../lib/api';
 import {
@@ -13,6 +13,7 @@ type BillingInvoicesTableProps = {
   canWrite: boolean;
   onOpenDocument?: (invoice: BillingInvoiceSummary, kind: 'invoice' | 'act') => void;
   onDownloadPdf?: (invoice: BillingInvoiceSummary, kind: 'invoice' | 'act') => void;
+  onEditInvoice?: (invoice: BillingInvoiceSummary) => void;
   onPayInvoice?: (invoice: BillingInvoiceSummary) => void;
   onStatusChange: (invoiceId: string, status: BillingInvoiceStatus) => void;
 };
@@ -33,6 +34,7 @@ export function BillingInvoicesTable({
   canWrite,
   onOpenDocument,
   onDownloadPdf,
+  onEditInvoice,
   onPayInvoice,
   onStatusChange,
 }: BillingInvoicesTableProps) {
@@ -145,6 +147,12 @@ export function BillingInvoicesTable({
                           <button className="icon-text-button" type="button" onClick={() => onPayInvoice?.(invoice)}>
                             <CreditCard size={15} aria-hidden="true" />
                             <span>Оплата</span>
+                          </button>
+                        ) : null}
+                        {invoice.status === 'DRAFT' && onEditInvoice ? (
+                          <button className="icon-text-button" type="button" onClick={() => onEditInvoice(invoice)}>
+                            <Pencil size={15} aria-hidden="true" />
+                            <span>Править</span>
                           </button>
                         ) : null}
                         <label className="billing-status-select">

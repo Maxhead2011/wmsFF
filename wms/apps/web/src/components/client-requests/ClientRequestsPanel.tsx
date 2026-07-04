@@ -1,4 +1,4 @@
-import { ClipboardList, RefreshCw } from 'lucide-react';
+import { ClipboardList, RefreshCw, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import {
   cancelClientRequest,
@@ -14,6 +14,7 @@ import {
   updateClientRequestStatus,
   type AuthSession,
   type AuthUser,
+  type BillingInvoiceSummary,
   type ClientRequestDocument,
   type ClientRequestStatus,
   type ClientRequestSummary,
@@ -23,6 +24,8 @@ import {
 import { ClientRequestCreateForm } from './ClientRequestCreateForm';
 import { ClientRequestDocumentPreview } from './ClientRequestDocumentPreview';
 import { ClientRequestXlsxImportForm } from './ClientRequestXlsxImportForm';
+import '../billing/billing.css';
+import { BillingInvoiceForm } from '../billing/BillingInvoiceForm';
 import './client-requests.css';
 import { ClientRequestsTable } from './ClientRequestsTable';
 import { HtmlDocumentPreview } from '../documents/HtmlDocumentPreview';
@@ -47,6 +50,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [issuingInvoiceRequestId, setIssuingInvoiceRequestId] = useState('');
+  const [manualInvoiceRequest, setManualInvoiceRequest] = useState<ClientRequestSummary | null>(null);
   const [documentPreview, setDocumentPreview] = useState<ClientRequestDocument | null>(null);
   const [pickInstructionPreview, setPickInstructionPreview] = useState<PickInstructionDocument | null>(null);
 
@@ -219,14 +223,25 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
       const invoiceNumbers = result.invoices.map((invoice) => `№ ${invoice.number}`).join(', ');
       setNotice(
         invoiceNumbers
-          ? `Счет по заявке "${request.title}" выставлен: ${invoiceNumbers}.`
-          : `Счет по заявке "${request.title}" выставлен.`,
+          ? `Черновик счета по заявке "${request.title}" создан на согласование: ${invoiceNumbers}.`
+          : `Черновик счета по заявке "${request.title}" создан на согласование.`,
       );
     } catch (caught) {
-      setError(errorMessage(caught));
+      const message = errorMessage(caught);
+      if (shouldOpenManualInvoice(message)) {
+        setManualInvoiceRequest(request);
+        setNotice(`По заявке "${request.title}" нет автоматических начислений. Заполните счет вручную.`);
+      } else {
+        setError(message);
+      }
     } finally {
       setIssuingInvoiceRequestId('');
     }
+  }
+
+  function acceptManualInvoice(invoice: BillingInvoiceSummary) {
+    setManualInvoiceRequest(null);
+    setNotice(`Черновик счета № ${invoice.number} сохранен. Он станет образцом для следующих похожих заявок клиента.`);
   }
 
   function acceptCreated(request: ClientRequestSummary) {
@@ -295,6 +310,41 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           html={pickInstructionPreview.html}
           onClose={() => setPickInstructionPreview(null)}
         />
+      ) : null}
+
+      {manualInvoiceRequest ? (
+        <div className="client-request-invoice-modal" role="dialog" aria-modal="true" aria-label="Ручной счет по заявке">
+          <div className="client-request-invoice-modal__content">
+            <div className="client-request-invoice-modal__head">
+              <div>
+                <p className="eyebrow">Ручное заполнение счета</p>
+                <h3>{manualInvoiceRequest.title}</h3>
+                <span>
+                  {manualInvoiceRequest.client.name}
+                  {manualInvoiceRequest.destinationCity ? ` · ${manualInvoiceRequest.destinationCity}` : ''}
+                </span>
+              </div>
+              <button className="icon-button" type="button" onClick={() => setManualInvoiceRequest(null)} aria-label="Закрыть">
+                <X size={18} aria-hidden="true" />
+              </button>
+            </div>
+            <BillingInvoiceForm
+              clients={visibleClients}
+              session={session}
+              initialClientId={manualInvoiceRequest.clientId}
+              initialMode="manual"
+              initialPeriodFrom={dateInput(manualInvoiceRequest.createdAt)}
+              initialPeriodTo={dateInput(manualInvoiceRequest.updatedAt)}
+              initialComment={`Счет по заявке ${manualInvoiceRequest.title}`}
+              initialQuantitiesByServiceCode={requestBillingQuantities(manualInvoiceRequest)}
+              requestId={manualInvoiceRequest.id}
+              lockClient
+              lockMode
+              submitButtonLabel="Сохранить черновик счета"
+              onCreated={acceptManualInvoice}
+            />
+          </div>
+        </div>
       ) : null}
     </section>
   );
@@ -375,6 +425,40 @@ function downloadBlob(blob: Blob, fileName: string) {
 
 function safeDownloadName(value: string) {
   return value.replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'request';
+}
+
+function requestBillingQuantities(request: ClientRequestSummary) {
+  const counts = request.packages.reduce(
+    (result, packagePlace) => {
+      if (isPalletPackage(packagePlace.packageType)) {
+        result.pallets += 1;
+      } else {
+        result.boxes += 1;
+      }
+      return result;
+    },
+    { boxes: 0, pallets: 0 },
+  );
+
+  return {
+    BOX_60_40_40: counts.boxes,
+    BOX_ASSEMBLY: counts.boxes,
+    PALLET: counts.pallets,
+    PALLET_ASSEMBLY: counts.pallets,
+  };
+}
+
+function isPalletPackage(packageType?: string | null) {
+  return ['PALLET', 'PALLETTE', 'ПАЛЛЕТ', 'ПАЛЛЕТА'].includes((packageType ?? '').trim().toUpperCase());
+}
+
+function dateInput(value: string | null | undefined) {
+  return value ? value.slice(0, 10) : new Date().toISOString().slice(0, 10);
+}
+
+function shouldOpenManualInvoice(message: string) {
+  const normalized = message.toLocaleLowerCase('ru-RU');
+  return normalized.includes('нет счетов') || normalized.includes('начислен');
 }
 
 function errorMessage(caught: unknown) {
