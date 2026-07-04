@@ -1,4 +1,4 @@
-import { Boxes, FileText, Plus, ReceiptText, Save, Trash2, Warehouse } from 'lucide-react';
+import { Boxes, ChevronDown, FileText, Plus, ReceiptText, Save, Trash2, Warehouse } from 'lucide-react';
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import {
   createBillingInvoice,
@@ -495,37 +495,55 @@ export function BillingInvoiceForm({
               <tbody>
                 {rows.map((row) => {
                   const suggestions = filteredServiceOptions(serviceOptions, row.serviceSearch);
-                  const showSuggestions = activeSearchRowKey === row.key && suggestions.length > 0;
+                  const isSearchOpen = activeSearchRowKey === row.key;
 
                   return (
                     <tr key={row.key}>
                       <td>
                         <div className="billing-service-combobox">
-                          <input
-                            autoComplete="off"
-                            value={row.serviceSearch}
-                            onBlur={() => window.setTimeout(() => setActiveSearchRowKey(''), 120)}
-                            onChange={(event) => updateServiceSearch(row.key, event.target.value)}
-                            onFocus={() => setActiveSearchRowKey(row.key)}
-                            placeholder="Начните вводить услугу"
-                          />
-                          {showSuggestions ? (
+                          <div className="billing-service-combobox__field">
+                            <input
+                              autoComplete="off"
+                              value={row.serviceSearch}
+                              onBlur={() => window.setTimeout(() => setActiveSearchRowKey(''), 140)}
+                              onChange={(event) => updateServiceSearch(row.key, event.target.value)}
+                              onFocus={() => setActiveSearchRowKey(row.key)}
+                              placeholder="Начните вводить услугу"
+                            />
+                            <button
+                              aria-label="Показать список услуг"
+                              className="billing-service-combobox__toggle"
+                              title="Показать список услуг"
+                              type="button"
+                              onMouseDown={(event) => {
+                                event.preventDefault();
+                                setActiveSearchRowKey((current) => (current === row.key ? '' : row.key));
+                              }}
+                            >
+                              <ChevronDown size={15} aria-hidden="true" />
+                            </button>
+                          </div>
+                          {isSearchOpen ? (
                             <div className="billing-service-combobox__list">
-                              {suggestions.map((item) => (
-                                <button
-                                  key={item.service.id}
-                                  type="button"
-                                  onMouseDown={(event) => {
-                                    event.preventDefault();
-                                    selectService(row.key, item);
-                                  }}
-                                >
-                                  <strong>{item.service.name}</strong>
-                                  <span>
-                                    {item.service.code} · {unitLabel(item.service.unit)} · {formatMoney(numberFromInput(item.priceRub))} ₽
-                                  </span>
-                                </button>
-                              ))}
+                              {suggestions.length > 0 ? (
+                                suggestions.map((item) => (
+                                  <button
+                                    key={item.service.id}
+                                    type="button"
+                                    onMouseDown={(event) => {
+                                      event.preventDefault();
+                                      selectService(row.key, item);
+                                    }}
+                                  >
+                                    <strong>{item.service.name}</strong>
+                                    <span>
+                                      {item.service.code} · {unitLabel(item.service.unit)} · {formatMoney(numberFromInput(item.priceRub))} ₽
+                                    </span>
+                                  </button>
+                                ))
+                              ) : (
+                                <p>Нет активных услуг по этому поиску.</p>
+                              )}
                             </div>
                           ) : null}
                         </div>
@@ -722,7 +740,7 @@ function filteredServiceOptions(options: ClientBillingServiceSummary[], query: s
       )
     : options;
 
-  return filtered.slice(0, 8);
+  return filtered.slice(0, 20);
 }
 
 function serviceLabel(item: ClientBillingServiceSummary) {
