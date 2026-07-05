@@ -255,6 +255,6 @@ export function canOpenWorkspace(user: AuthUser, item: WorkspaceNavItem) {
 }
 
 function isClientOnlyUser(user: AuthUser) {
-  const internalRoles = ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR'];
+  const internalRoles = ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR', 'TSD'];
   return user.roleCodes.includes('CLIENT') && !user.roleCodes.some((roleCode) => internalRoles.includes(roleCode));
 }

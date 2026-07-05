@@ -426,11 +426,11 @@ function canKeepWorkspace(user: AuthUser, workspaceId: WorkspaceId) {
 }
 
 function isClientOnlyUser(user: AuthUser) {
-  const internalRoles = ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR', 'REFERRAL_PARTNER'];
+  const internalRoles = ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR', 'TSD', 'REFERRAL_PARTNER'];
   return user.roleCodes.includes('CLIENT') && !user.roleCodes.some((roleCode) => internalRoles.includes(roleCode));
 }
 
 function isReferralOnlyUser(user: AuthUser) {
-  const internalRoles = ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR', 'CLIENT'];
+  const internalRoles = ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR', 'TSD', 'CLIENT'];
   return user.roleCodes.includes('REFERRAL_PARTNER') && !user.roleCodes.some((roleCode) => internalRoles.includes(roleCode));
 }

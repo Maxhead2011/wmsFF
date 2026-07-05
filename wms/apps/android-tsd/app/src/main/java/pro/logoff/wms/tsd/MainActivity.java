@@ -81,7 +81,11 @@ public class MainActivity extends Activity {
         try {
             outbox = new OperationOutbox(TsdDatabase.get(this).operationDao());
             sessionStore = new TsdSessionStore(this);
-            renderMainScreen();
+            if (sessionStore.load() == null) {
+                renderSettingsScreen();
+            } else {
+                renderMainScreen();
+            }
             refreshQueue(null);
             if (sessionStore.load() != null) {
                 loadClients(false);
@@ -109,6 +113,10 @@ public class MainActivity extends Activity {
     }
 
     private void renderMainScreen() {
+        if (safeSession() == null) {
+            renderSettingsScreen();
+            return;
+        }
         screen = Screen.MAIN;
         LinearLayout root = baseRoot();
         root.addView(header());
@@ -146,7 +154,9 @@ public class MainActivity extends Activity {
         root.addView(deviceSecretInput);
         root.addView(primaryMenuButton("Войти на ТСД", view -> loginDevice()));
         root.addView(secondaryButton("Скачать приложение ТСД", view -> openApkDownload()));
-        root.addView(secondaryButton("Назад", view -> renderMainScreen()));
+        if (session != null) {
+            root.addView(secondaryButton("Назад", view -> renderMainScreen()));
+        }
 
         if (session != null) {
             root.addView(messageView("Сейчас: " + session.deviceName + " / " + session.deviceCode));
@@ -379,7 +389,7 @@ public class MainActivity extends Activity {
         clients.clear();
         online = false;
         statusMessage = "Вход ТСД сброшен.";
-        renderMainScreen();
+        renderSettingsScreen();
         refreshQueue(statusMessage);
     }
 
@@ -393,7 +403,7 @@ public class MainActivity extends Activity {
                     statusMessage = message;
                 }
                 refreshHeaderText();
-                if (screen == Screen.MAIN) {
+                if (screen == Screen.MAIN && safeSession() != null) {
                     renderMainScreen();
                 }
             });
@@ -595,6 +605,10 @@ public class MainActivity extends Activity {
     }
 
     private void refreshCurrentScreen() {
+        if (safeSession() == null && screen != Screen.SETTINGS) {
+            renderSettingsScreen();
+            return;
+        }
         if (screen == Screen.SETTINGS) {
             renderSettingsScreen();
         } else if (screen == Screen.RECEIPT) {

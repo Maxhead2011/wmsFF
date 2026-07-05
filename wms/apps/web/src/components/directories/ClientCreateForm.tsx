@@ -549,7 +549,7 @@ function canUse(session: AuthSession, permission: string) {
 }
 
 function isClientOnlyUser(user: UserSummary) {
-  const internalRoles = ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR'];
+  const internalRoles = ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR', 'TSD'];
   return userHasClientRole(user) && !user.roles.some((item) => internalRoles.includes(item.role.code));
 }
 

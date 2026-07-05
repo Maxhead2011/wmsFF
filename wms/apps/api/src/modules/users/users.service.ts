@@ -34,24 +34,34 @@ export class UsersService {
     const clientScopes = this.buildCreateClientScopes(dto.clientIds, dto.writableClientIds);
     await this.ensureClientsExist(clientScopes.map((scope) => scope.clientId));
 
-    // Русский комментарий: API никогда не возвращает passwordHash; пароль сохраняется только как scrypt hash.
-    const user = await this.prisma.user.create({
-      data: {
-        email: dto.email.trim().toLowerCase(),
-        name: dto.name.trim(),
-        passwordHash: await this.passwords.hash(dto.password),
-        roles: {
-          create: roles.map((role) => ({ roleId: role.id })),
+    try {
+      // Русский комментарий: API никогда не возвращает passwordHash; пароль сохраняется только как scrypt hash.
+      const user = await this.prisma.user.create({
+        data: {
+          email: dto.email.trim().toLowerCase(),
+          name: dto.name.trim(),
+          passwordHash: await this.passwords.hash(dto.password),
+          roles: {
+            create: roles.map((role) => ({ roleId: role.id })),
+          },
+          clientScopes: clientScopes.length
+            ? {
+                create: clientScopes,
+              }
+            : undefined,
         },
-        clientScopes: clientScopes.length
-          ? {
-              create: clientScopes,
-            }
-          : undefined,
-      },
-      select: this.userSummarySelect(),
-    });
-    return this.toUserSummary(user);
+        select: this.userSummarySelect(),
+      });
+      return this.toUserSummary(user);
+    } catch (caught) {
+      if (isUniqueUserEmailError(caught)) {
+        throw new BadRequestException('Пользователь с таким логином или email уже существует.');
+      }
+      if (isRecordNotFoundError(caught)) {
+        throw new BadRequestException('Одна из выбранных ролей или доступов не найдена.');
+      }
+      throw caught;
+    }
   }
 
   async updateClientScopes(userId: string, dto: UpdateUserClientScopesDto) {

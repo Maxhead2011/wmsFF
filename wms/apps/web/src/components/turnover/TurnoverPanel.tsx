@@ -1279,7 +1279,7 @@ function canUseTurnoverActions(roleCodes: string[], permissionCodes: string[]) {
     return true;
   }
 
-  const hasStaffRole = roleCodes.some((role) => ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR'].includes(role));
+  const hasStaffRole = roleCodes.some((role) => ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR', 'TSD'].includes(role));
   if (!hasStaffRole && roleCodes.includes('CLIENT')) {
     return false;
   }

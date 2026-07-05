@@ -82,6 +82,19 @@ const rolePermissions: Record<string, { name: string; permissions: string[] }> =
       'print:write',
     ],
   },
+  TSD: {
+    name: 'Сотрудник ТСД',
+    permissions: [
+      'clients:read',
+      'skus:read',
+      'warehouse:read',
+      'warehouse:write',
+      'stock:read',
+      'stock:write',
+      'client-requests:read',
+      'client-requests:status',
+    ],
+  },
   CLIENT: {
     name: 'Клиент',
     permissions: [

@@ -558,6 +558,6 @@ function clientStatusActionMessage(status: ClientStatus) {
 }
 
 function isClientOnlyUser(user: UserSummary) {
-  const internalRoles = ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR'];
+  const internalRoles = ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR', 'TSD'];
   return user.roles.some((item) => item.role.code === 'CLIENT') && !user.roles.some((item) => internalRoles.includes(item.role.code));
 }
