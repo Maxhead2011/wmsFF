@@ -12,6 +12,7 @@ import {
   PackageSearch,
   Printer,
   RefreshCw,
+  ReceiptText,
   ShieldCheck,
   Settings2,
   Truck,
@@ -32,6 +33,7 @@ export type WorkspaceId =
   | 'turnover'
   | 'requests'
   | 'catalog'
+  | 'services'
   | 'billing'
   | 'own-companies'
   | 'print'
@@ -150,6 +152,17 @@ export const workspaceNav: WorkspaceNavItem[] = [
     description: 'Загрузка остатков и тарифов через предварительную проверку.',
     permissions: ['imports:write'],
     icon: Upload,
+    status: 'ready',
+    audience: 'internal',
+  },
+  {
+    id: 'services',
+    title: 'Услуги',
+    eyebrow: 'Управление',
+    description: 'Услуги клиентов, цены, налоговый режим и активность для выставления счетов.',
+    permissions: ['billing:read', 'billing:write'],
+    permissionMode: 'all',
+    icon: ReceiptText,
     status: 'ready',
     audience: 'internal',
   },

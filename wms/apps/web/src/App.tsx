@@ -6,6 +6,7 @@ import { BillingPanel } from './components/billing/BillingPanel';
 import { CatalogPanel } from './components/catalog/CatalogPanel';
 import { ClientCabinetPanel } from './components/client-cabinet/ClientCabinetPanel';
 import { ClientRequestsPanel } from './components/client-requests/ClientRequestsPanel';
+import { ClientServicesPanel } from './components/client-services/ClientServicesPanel';
 import { DashboardDataPanel } from './components/DashboardDataPanel';
 import { DebugPanel } from './components/debug/DebugPanel';
 import { DirectoryPanel } from './components/directories/DirectoryPanel';
@@ -230,6 +231,8 @@ function renderWorkspace(
       return <ClientRequestsPanel session={session} />;
     case 'catalog':
       return <CatalogPanel session={session} />;
+    case 'services':
+      return <ClientServicesPanel session={session} />;
     case 'billing':
       return <BillingPanel session={session} />;
     case 'own-companies':
@@ -341,7 +344,16 @@ function sectionForWorkspace(id: WorkspaceId): WorkspaceSection {
     return 'operations';
   }
 
-  if (id === 'access' || id === 'directories' || id === 'billing' || id === 'own-companies' || id === 'service' || id === 'debug' || id === 'data') {
+  if (
+    id === 'access' ||
+    id === 'directories' ||
+    id === 'services' ||
+    id === 'billing' ||
+    id === 'own-companies' ||
+    id === 'service' ||
+    id === 'debug' ||
+    id === 'data'
+  ) {
     return 'management';
   }
 
@@ -392,6 +404,7 @@ function defaultWorkspaceForUser(user: AuthUser): WorkspaceId {
         'catalog',
         'access',
         'directories',
+        'services',
         'imports',
         'logistics',
         'billing',
