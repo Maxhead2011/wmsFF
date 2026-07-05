@@ -559,6 +559,14 @@ export class RequestBillingAutomationService {
     reason: string,
     tariffSetId?: string | null,
   ) {
+    const body = [
+      'Основной счет по заявке формируется без логистики.',
+      `Причина: ${reason}`,
+      tariffSetId ? `Тарифный набор: ${tariffSetId}` : null,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
     const existing = await this.prisma.clientRequestEvent.findFirst({
       where: {
         requestId: request.id,
@@ -567,16 +575,12 @@ export class RequestBillingAutomationService {
       select: { id: true },
     });
     if (existing) {
+      await this.prisma.clientRequestEvent.update({
+        where: { id: existing.id },
+        data: { body },
+      });
       return existing.id;
     }
-
-    const body = [
-      'Основной счет по заявке формируется без логистики.',
-      `Причина: ${reason}`,
-      tariffSetId ? `Тарифный набор: ${tariffSetId}` : null,
-    ]
-      .filter(Boolean)
-      .join('\n');
 
     return this.prisma.$transaction(async (tx) => {
       const event = await tx.clientRequestEvent.create({

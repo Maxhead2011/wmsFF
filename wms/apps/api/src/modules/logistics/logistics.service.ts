@@ -205,11 +205,7 @@ export class LogisticsService {
       include: { tiers: true },
     });
 
-    const direction = directions.find(
-      (item) =>
-        this.normalizePoint(item.origin) === this.normalizePoint(DEFAULT_LOGISTICS_ORIGIN) &&
-        this.normalizePoint(item.destination) === this.normalizePoint(dto.destination),
-    );
+    const direction = this.findDirection(directions, dto.destination);
 
     if (!direction) {
       throw new NotFoundException('Направление логистики не найдено в выбранном наборе тарифов.');
@@ -680,6 +676,36 @@ export class LogisticsService {
     return null;
   }
 
+  private findDirection<TDirection extends { origin: string; destination: string }>(
+    directions: TDirection[],
+    destination: string,
+  ) {
+    const normalizedOrigin = this.normalizePoint(DEFAULT_LOGISTICS_ORIGIN);
+    const normalizedDestination = this.normalizePoint(destination);
+    const exact = directions.find(
+      (item) =>
+        this.normalizePoint(item.origin) === normalizedOrigin &&
+        this.normalizePoint(item.destination) === normalizedDestination,
+    );
+    if (exact) {
+      return exact;
+    }
+
+    if (normalizedDestination.length < 5) {
+      return null;
+    }
+
+    const closeMatches = directions
+      .filter((item) => this.normalizePoint(item.origin) === normalizedOrigin)
+      .map((item) => ({
+        item,
+        distance: oneEditDistance(this.normalizePoint(item.destination), normalizedDestination),
+      }))
+      .filter((match) => match.distance >= 0 && match.distance <= 1);
+
+    return closeMatches.length === 1 ? closeMatches[0].item : null;
+  }
+
   private findActiveTariffSet(at: Date) {
     return this.prisma.logisticsTariffSet.findFirst({
       where: {
@@ -932,6 +958,48 @@ function deliverySourceKey(deliveryRequestId: string) {
 
 function isPalletPackage(packageType?: string | null) {
   return ['PALLET', 'PALLETTE', 'ПАЛЛЕТ', 'ПАЛЛЕТА'].includes((packageType ?? '').trim().toUpperCase());
+}
+
+function oneEditDistance(left: string, right: string) {
+  if (left === right) {
+    return 0;
+  }
+
+  if (Math.abs(left.length - right.length) > 1) {
+    return -1;
+  }
+
+  let edits = 0;
+  let leftIndex = 0;
+  let rightIndex = 0;
+
+  while (leftIndex < left.length && rightIndex < right.length) {
+    if (left[leftIndex] === right[rightIndex]) {
+      leftIndex += 1;
+      rightIndex += 1;
+      continue;
+    }
+
+    edits += 1;
+    if (edits > 1) {
+      return -1;
+    }
+
+    if (left.length > right.length) {
+      leftIndex += 1;
+    } else if (right.length > left.length) {
+      rightIndex += 1;
+    } else {
+      leftIndex += 1;
+      rightIndex += 1;
+    }
+  }
+
+  if (leftIndex < left.length || rightIndex < right.length) {
+    edits += 1;
+  }
+
+  return edits <= 1 ? edits : -1;
 }
 
 function deliveryStatusLabel(status: LogisticsDeliveryStatus) {

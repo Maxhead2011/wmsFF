@@ -135,6 +135,49 @@ describe('LogisticsService', () => {
     expect(quote.estimatedTotalRub).toBe(5000);
   });
 
+  it('matches a destination with one typo when the tariff city is unique', async () => {
+    const prisma = {
+      logisticsTariffSet: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'tariff-1',
+          name: 'Тариф',
+          sourceFile: null,
+        }),
+      },
+      logisticsDirection: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'direction-1',
+            tariffSetId: 'tariff-1',
+            origin: 'Москва',
+            destination: 'Электросталь',
+            note: null,
+            tiers: [
+              {
+                label: 'до 10 коробов',
+                minPallets: null,
+                maxPallets: null,
+                maxBoxes: 10,
+                pricingMode: LogisticsPricingMode.TOTAL,
+                priceRub: 5000,
+              },
+            ],
+          },
+        ]),
+      },
+    };
+    const deliveryService = new LogisticsService(prisma as never, {} as never);
+
+    const quote = await deliveryService.quote({
+      tariffSetId: 'tariff-1',
+      destination: 'Электростать',
+      boxes: 3,
+    });
+
+    expect(quote.route.destination).toBe('Электросталь');
+    expect(quote.estimatedTotalRub).toBe(5000);
+  });
+
   it('возвращает ошибку, когда подходящей ступени нет', () => {
     expect(() => service.selectRateTier([], { boxes: 2 })).toThrow(BadRequestException);
   });
