@@ -721,6 +721,8 @@ function fallbackBalanceSku(skuId: string): SkuForInstruction {
     isUnmarked: false,
     needsLabel: false,
     needsRelabel: false,
+    isDraft: false,
+    draftSource: null,
     marketplace: null,
     marketplaceProductId: null,
     marketplaceOfferId: null,

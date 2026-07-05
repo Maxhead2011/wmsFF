@@ -1,12 +1,14 @@
-import { ImageOff, Pencil, PlusCircle, RefreshCw, Save, Search, Trash2, X } from 'lucide-react';
+import { FileDown, ImageOff, Pencil, PlusCircle, RefreshCw, Save, Search, Trash2, Upload, X } from 'lucide-react';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   createSku,
   deleteSku,
+  downloadSkuDraftTemplate,
   fetchClients,
   fetchMarketplaceConnections,
   fetchSku,
   fetchSkus,
+  importSkuDraftsXlsx,
   syncMarketplaceProducts,
   updateSku,
   type AuthSession,
@@ -97,6 +99,7 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
   const [search, setSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
   const [skus, setSkus] = useState<SkuSummary[]>([]);
+  const [draftSkus, setDraftSkus] = useState<SkuSummary[]>([]);
   const [skuState, setSkuState] = useState<LoadState>('idle');
   const [connections, setConnections] = useState<MarketplaceConnectionSummary[]>([]);
   const [selectedSku, setSelectedSku] = useState<SkuDetail | null>(null);
@@ -104,6 +107,7 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
   const [manualForm, setManualForm] = useState<ManualSkuForm>(emptyManualSkuForm);
   const [isManualFormOpen, setManualFormOpen] = useState(false);
   const [isCreatingSku, setCreatingSku] = useState(false);
+  const [isImportingDrafts, setImportingDrafts] = useState(false);
   const [isEditing, setEditing] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [syncingIds, setSyncingIds] = useState<string[]>([]);
@@ -165,15 +169,17 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
       setSkuState('loading');
       setError('');
       try {
-        const [nextSkus, nextConnections] = await Promise.all([
+        const [nextSkus, nextConnections, nextDraftSkus] = await Promise.all([
           fetchSkus(session.accessToken, { clientId: selectedClientId || undefined, search: appliedSearch || undefined }),
           selectedClientId ? fetchMarketplaceConnections(session.accessToken, { clientId: selectedClientId }) : Promise.resolve([]),
+          selectedClientId ? fetchSkus(session.accessToken, { clientId: selectedClientId, draftsOnly: true }) : Promise.resolve([]),
         ]);
         if (!isActive) {
           return;
         }
         setSkus(nextSkus);
         setConnections(nextConnections);
+        setDraftSkus(nextDraftSkus);
         setSkuState('ready');
       } catch (caught) {
         if (isActive) {
@@ -242,9 +248,46 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
       setForm(formFromSku(updated));
       setEditing(false);
       setSkus((current) => current.map((sku) => (sku.id === updated.id ? updated : sku)));
+      setDraftSkus((current) => (updated.isDraft ? current.map((sku) => (sku.id === updated.id ? updated : sku)) : current.filter((sku) => sku.id !== updated.id)));
       setMessage('Карточка товара сохранена.');
     } catch (caught) {
       setError(errorMessage(caught, 'Не удалось сохранить карточку товара.'));
+    }
+  }
+
+  async function downloadDraftTemplate() {
+    setError('');
+    setMessage('');
+    try {
+      const blob = await downloadSkuDraftTemplate(session.accessToken);
+      downloadBlob(blob, 'Шаблон_заполнения_товаров_после_приемки.xlsx');
+    } catch (caught) {
+      setError(errorMessage(caught, 'Не удалось скачать шаблон.'));
+    }
+  }
+
+  async function importDraftDetails(file: File | undefined) {
+    if (!file) {
+      return;
+    }
+    if (!selectedClientId) {
+      setError('Сначала выберите клиента.');
+      return;
+    }
+
+    setImportingDrafts(true);
+    setError('');
+    setMessage('');
+    try {
+      const result = await importSkuDraftsXlsx(session.accessToken, { clientId: selectedClientId, file });
+      setMessage(
+        `Карточки загружены. Обновлено: ${result.summary.updated}. Создано: ${result.summary.created}. Закрыто черновиков: ${result.summary.completedDrafts}.`,
+      );
+      setReloadKey((current) => current + 1);
+    } catch (caught) {
+      setError(errorMessage(caught, 'Не удалось загрузить карточки товаров.'));
+    } finally {
+      setImportingDrafts(false);
     }
   }
 
@@ -374,6 +417,72 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
       {error ? <p className="form-error">{error}</p> : null}
       {message ? <p className="form-success">{message}</p> : null}
 
+      {canWrite && selectedClient ? (
+        <section className="catalog-drafts-card" aria-label="Черновики товаров после приемки">
+          <div className="catalog-drafts-card__heading">
+            <div>
+              <strong>Товары без заполненной карточки</strong>
+              <span>Появляются автоматически, когда на приемке пикают новый ШК</span>
+            </div>
+            <div className="catalog-drafts-card__actions">
+              <button className="icon-text-button" type="button" onClick={() => void downloadDraftTemplate()}>
+                <FileDown size={16} aria-hidden="true" />
+                <span>Скачать шаблон</span>
+              </button>
+              <label className="icon-text-button catalog-upload-button">
+                <Upload size={16} aria-hidden="true" />
+                <span>{isImportingDrafts ? 'Загружаю' : 'Загрузить Excel'}</span>
+                <input
+                  disabled={isImportingDrafts}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  onChange={(event) => {
+                    void importDraftDetails(event.target.files?.[0]);
+                    event.currentTarget.value = '';
+                  }}
+                />
+              </label>
+            </div>
+          </div>
+          {draftSkus.length > 0 ? (
+            <div className="catalog-drafts-table-wrap">
+              <table className="catalog-drafts-table">
+                <thead>
+                  <tr>
+                    <th>ШК</th>
+                    <th>Название</th>
+                    <th>Цвет / размер</th>
+                    <th>Артикул</th>
+                    <th>Действие</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {draftSkus.map((sku) => (
+                    <tr key={sku.id}>
+                      <td>{primaryBarcode(sku) || '-'}</td>
+                      <td>
+                        <strong>{sku.name}</strong>
+                        <span>{sku.internalSku}</span>
+                      </td>
+                      <td>{[sku.color, sku.size].filter(Boolean).join(' / ') || '-'}</td>
+                      <td>{sku.article || '-'}</td>
+                      <td>
+                        <button className="icon-text-button" type="button" onClick={() => void openSku(sku.id)}>
+                          <Pencil size={15} aria-hidden="true" />
+                          <span>Заполнить</span>
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="catalog-empty-note">Новых ШК без карточек у выбранного клиента нет.</p>
+          )}
+        </section>
+      ) : null}
+
       {canWrite ? (
         <section className="catalog-manual-card" aria-label="Ручное добавление товара">
           <div className="catalog-manual-card__heading">
@@ -460,6 +569,7 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
                 </td>
                 <td>
                   <strong>{sku.name}</strong>
+                  {sku.isDraft ? <span className="catalog-draft-badge">Черновик после приемки</span> : null}
                   <span>{[sku.internalSku, sku.article, sku.brand].filter(Boolean).join(' · ') || '-'}</span>
                 </td>
                 <td>{sku.client ? `${sku.client.code} · ${sku.client.name}` : '-'}</td>
@@ -804,6 +914,15 @@ function marketplaceLabel(type: MarketplaceType) {
 
 function canUse(user: AuthUser, permission: string) {
   return user.permissionCodes.includes('system:admin') || user.permissionCodes.includes(permission);
+}
+
+function downloadBlob(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function errorMessage(caught: unknown, fallback: string) {

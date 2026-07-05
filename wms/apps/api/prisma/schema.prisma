@@ -537,6 +537,8 @@ model Sku {
   isUnmarked         Boolean                    @default(false)
   needsLabel         Boolean                    @default(false)
   needsRelabel       Boolean                    @default(false)
+  isDraft            Boolean                    @default(false)
+  draftSource        String?
   marketplace        MarketplaceType?
   marketplaceProductId String?
   marketplaceOfferId String?
@@ -553,6 +555,7 @@ model Sku {
   updatedAt          DateTime                   @updatedAt
 
   @@unique([clientId, internalSku])
+  @@index([clientId, isDraft])
   @@index([clientId, shelfLifeUntil])
   @@index([clientId, marketplace, marketplaceProductId])
   @@index([clientId, marketplace, marketplaceOfferId])

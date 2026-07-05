@@ -27,4 +27,8 @@ export class UpdateSkuDto extends PartialType(CreateSkuDto) {
   @IsOptional()
   @IsBoolean()
   needsRelabel?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  isDraft?: boolean;
 }

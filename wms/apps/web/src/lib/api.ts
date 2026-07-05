@@ -1689,6 +1689,8 @@ export type SkuSummary = {
   isUnmarked: boolean;
   needsLabel: boolean;
   needsRelabel: boolean;
+  isDraft: boolean;
+  draftSource: string | null;
   marketplace: MarketplaceType | null;
   marketplaceProductId: string | null;
   marketplaceOfferId: string | null;
@@ -1752,6 +1754,29 @@ export type UpdateSkuPayload = Partial<CreateSkuPayload> & {
   isUnmarked?: boolean;
   needsLabel?: boolean;
   needsRelabel?: boolean;
+  isDraft?: boolean;
+};
+
+export type SkuDraftImportResult = {
+  fileName: string;
+  summary: {
+    sourceRows: number;
+    rows: number;
+    barcodes: number;
+    created: number;
+    updated: number;
+    completedDrafts: number;
+    skipped: number;
+    errors: number;
+    warnings: number;
+  };
+  issues: Array<{
+    row: number;
+    barcode?: string;
+    message: string;
+    severity: 'warning' | 'error';
+  }>;
+  items: SkuSummary[];
 };
 
 export type WarehouseBoxSummary = {
@@ -3021,10 +3046,21 @@ export async function importClientsXlsx(accessToken: string, payload: { file: Fi
   return requestMultipart<ClientImportResult>('/clients/import-xlsx', form, accessToken);
 }
 
-export async function fetchSkus(accessToken: string, filter: { clientId?: string; search?: string } = {}) {
+export async function fetchSkus(accessToken: string, filter: { clientId?: string; search?: string; draftsOnly?: boolean } = {}) {
   return request<SkuSummary[]>(withQuery('/skus', filter), {
     accessToken,
   });
+}
+
+export async function downloadSkuDraftTemplate(accessToken: string) {
+  return requestBlob('/skus/drafts/template.xlsx', accessToken);
+}
+
+export async function importSkuDraftsXlsx(accessToken: string, payload: { clientId: string; file: File }) {
+  const form = new FormData();
+  form.append('file', payload.file);
+
+  return requestMultipart<SkuDraftImportResult>(withQuery('/skus/drafts/import-xlsx', { clientId: payload.clientId }), form, accessToken);
 }
 
 export async function fetchSku(accessToken: string, skuId: string) {
@@ -3968,11 +4004,11 @@ async function request<T>(
   return (await response.json()) as T;
 }
 
-function withQuery(path: string, params: Record<string, string | undefined>) {
+function withQuery(path: string, params: Record<string, string | number | boolean | undefined>) {
   const search = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
-    if (value) {
-      search.set(key, value);
+    if (value !== undefined && value !== '' && value !== false) {
+      search.set(key, String(value));
     }
   });
 

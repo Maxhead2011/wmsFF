@@ -580,7 +580,7 @@ export class StockOperationsService {
         };
       }
 
-      const sku = await this.resolveSku(tx, dto);
+      const { createdDraft, sku } = await this.resolveOrCreateSkuForReceipt(tx, dto);
       const box = await this.ensureTargetBox(tx, dto.clientId, dto.boxCode);
       const status = dto.status ?? StockStatus.RECEIVING;
 
@@ -612,6 +612,9 @@ export class StockOperationsService {
         idempotencyKey: dto.idempotencyKey,
         status: 'APPLIED',
         skuId: sku.id,
+        skuIsDraft: sku.isDraft,
+        skuDraftCreated: createdDraft,
+        skuName: sku.name,
         box: box.code,
         quantity: dto.quantity,
         targetBalance,
@@ -1326,6 +1329,85 @@ export class StockOperationsService {
     return barcode.sku;
   }
 
+  private async resolveOrCreateSkuForReceipt(
+    tx: Prisma.TransactionClient,
+    dto: { clientId: string; skuId?: string; barcode?: string },
+  ) {
+    if (dto.skuId) {
+      return { sku: await this.resolveSku(tx, dto), createdDraft: false };
+    }
+
+    const barcodeValue = cleanBarcode(dto.barcode);
+    if (!barcodeValue) {
+      throw new BadRequestException('Для приемки нужен SKU или штрихкод товара.');
+    }
+
+    const existingBarcode = await tx.barcode.findFirst({
+      where: {
+        value: barcodeValue,
+        sku: { clientId: dto.clientId },
+      },
+      include: { sku: true },
+    });
+
+    if (existingBarcode) {
+      return { sku: existingBarcode.sku, createdDraft: false };
+    }
+
+    try {
+      const internalSku = await this.buildAutoInternalSku(tx, dto.clientId, barcodeValue);
+      const sku = await tx.sku.create({
+        data: {
+          clientId: dto.clientId,
+          internalSku,
+          name: `Новый товар без карточки: ${barcodeValue}`,
+          volumeSource: 'MANUAL',
+          isDraft: true,
+          draftSource: 'RECEIPT_SCAN',
+          barcodes: {
+            create: {
+              value: barcodeValue,
+              isPrimary: true,
+            },
+          },
+        },
+      });
+
+      return { sku, createdDraft: true };
+    } catch (caught) {
+      if (!isUniqueConstraintError(caught)) {
+        throw caught;
+      }
+
+      const createdByParallelReceipt = await tx.barcode.findFirst({
+        where: {
+          value: barcodeValue,
+          sku: { clientId: dto.clientId },
+        },
+        include: { sku: true },
+      });
+      if (createdByParallelReceipt) {
+        return { sku: createdByParallelReceipt.sku, createdDraft: false };
+      }
+
+      throw new BadRequestException('Не удалось создать карточку товара по новому штрихкоду. Повторите приемку.');
+    }
+  }
+
+  private async buildAutoInternalSku(tx: Prisma.TransactionClient, clientId: string, barcode: string) {
+    const compact = barcode.replace(/[^\p{L}\p{N}_-]+/gu, '').slice(0, 72) || `SKU-${hashText(barcode)}`;
+    const base = `AUTO-${compact}`.slice(0, 92);
+    let candidate = base;
+    let suffix = 1;
+
+    while (await tx.sku.findUnique({ where: { clientId_internalSku: { clientId, internalSku: candidate } } })) {
+      suffix += 1;
+      candidate = `${base.slice(0, 92)}-${suffix}`.slice(0, 100);
+    }
+
+    return candidate;
+  }
+
   private async resolveBox(tx: Prisma.TransactionClient, clientId: string, code: string) {
     const box = await tx.box.findUnique({
       where: { clientId_code: { clientId, code } },
@@ -1390,6 +1472,23 @@ export class StockOperationsService {
       },
     });
   }
+}
+
+function cleanBarcode(value?: string) {
+  return value?.trim() || '';
+}
+
+function isUniqueConstraintError(caught: unknown) {
+  return caught instanceof Prisma.PrismaClientKnownRequestError && caught.code === 'P2002';
+}
+
+function hashText(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+
+  return hash.toString(36).toUpperCase().padStart(6, '0').slice(0, 6);
 }
 
 const FULFILLMENT_BILLING_SERVICES = {
