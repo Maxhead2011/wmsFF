@@ -735,7 +735,7 @@ function downloadBlob(blob: Blob, fileName: string) {
 function actFileName(invoiceNumber: string) {
   return invoiceNumber.startsWith('INV-')
     ? `Акт_${safeFileName(`ACT-${invoiceNumber.slice(4)}`)}.pdf`
-    : `Акт_${safeFileName(invoiceNumber)}.pdf`;
+    : `Акт_${safeFileName(`ACT-${invoiceNumber}`)}.pdf`;
 }
 
 function safeFileName(value: string) {

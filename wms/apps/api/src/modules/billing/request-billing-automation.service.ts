@@ -522,7 +522,7 @@ export class RequestBillingAutomationService {
       const periodFrom = minDate(charges.map((charge) => charge.serviceDate)) ?? input.request.updatedAt;
       const periodTo = maxDate(charges.map((charge) => charge.serviceDate)) ?? input.request.updatedAt;
       const totalRub = roundMoney(charges.reduce((sum, charge) => sum + (decimalToNumber(charge.totalRub) ?? 0), 0));
-      const number = await nextInvoiceNumber(tx, periodFrom);
+      const number = await nextInvoiceNumber(tx, periodFrom, input.source);
 
       return tx.billingInvoice.create({
         data: {
@@ -803,8 +803,8 @@ function calculateShipmentStorageDetails(request: DoneRequestPayload, days: numb
   };
 }
 
-async function nextInvoiceNumber(tx: Prisma.TransactionClient, periodFrom: Date) {
-  const prefix = `INV-${periodFrom.getUTCFullYear()}${String(periodFrom.getUTCMonth() + 1).padStart(2, '0')}`;
+async function nextInvoiceNumber(tx: Prisma.TransactionClient, periodFrom: Date, source: BillingInvoiceSource) {
+  const prefix = `${invoiceNumberPrefix(source)}-${periodFrom.getUTCFullYear()}${String(periodFrom.getUTCMonth() + 1).padStart(2, '0')}`;
   const count = await tx.billingInvoice.count({
     where: {
       number: {
@@ -814,6 +814,10 @@ async function nextInvoiceNumber(tx: Prisma.TransactionClient, periodFrom: Date)
   });
 
   return `${prefix}-${String(count + 1).padStart(4, '0')}`;
+}
+
+function invoiceNumberPrefix(source: BillingInvoiceSource) {
+  return source === BillingInvoiceSource.LOGISTICS ? 'LOG' : 'USL';
 }
 
 function mainInvoiceSourceKey(requestId: string) {

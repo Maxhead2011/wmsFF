@@ -558,13 +558,17 @@ export class BillingService {
     }
 
     const totalRub = roundMoney(charges.reduce((sum, charge) => sum + (decimalToNumber(charge.totalRub) ?? 0), 0));
-    const number = await this.nextInvoiceNumber(periodFrom);
+    const invoiceSource = charges.every((charge) => charge.source === BillingChargeSource.LOGISTICS)
+      ? BillingInvoiceSource.LOGISTICS
+      : BillingInvoiceSource.MANUAL;
+    const number = await this.nextInvoiceNumber(periodFrom, invoiceSource);
 
     // Русский комментарий: счет фиксирует снимок начислений, чтобы дальнейшая правка услуги не меняла уже выставленный документ.
     return this.prisma.billingInvoice.create({
       data: {
         number,
         clientId: dto.clientId,
+        source: invoiceSource,
         periodFrom,
         periodTo,
         dueDate: dto.dueDate ? parseDate(dto.dueDate, 'endOfDay') : undefined,
@@ -655,7 +659,7 @@ export class BillingService {
     });
 
     const totalRub = roundMoney(rows.reduce((sum, row) => sum + row.totalRub, 0));
-    const number = await this.nextInvoiceNumber(periodFrom);
+    const number = await this.nextInvoiceNumber(periodFrom, BillingInvoiceSource.MANUAL);
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const charges: Array<{ id: string }> = [];
@@ -1131,7 +1135,7 @@ export class BillingService {
     const periodFrom = parseDate(request.createdAt.toISOString());
     const periodTo = parseDate(request.updatedAt.toISOString(), 'endOfDay');
     const totalRub = roundMoney(rows.reduce((sum, row) => sum + row.totalRub, 0));
-    const number = await this.nextInvoiceNumber(periodFrom);
+    const number = await this.nextInvoiceNumber(periodFrom, BillingInvoiceSource.MANUAL);
 
     return this.prisma.$transaction(async (tx) => {
       const charges: Array<{ id: string }> = [];
@@ -1386,8 +1390,8 @@ export class BillingService {
     );
   }
 
-  private async nextInvoiceNumber(periodFrom: Date) {
-    const prefix = `INV-${periodFrom.getUTCFullYear()}${String(periodFrom.getUTCMonth() + 1).padStart(2, '0')}`;
+  private async nextInvoiceNumber(periodFrom: Date, source: BillingInvoiceSource = BillingInvoiceSource.MANUAL) {
+    const prefix = `${invoiceNumberPrefix(source)}-${periodFrom.getUTCFullYear()}${String(periodFrom.getUTCMonth() + 1).padStart(2, '0')}`;
     const count = await this.prisma.billingInvoice.count({
       where: {
         number: {
@@ -1418,6 +1422,10 @@ export class BillingService {
 }
 
 const STORAGE_SERVICE_CODE = 'STORAGE_LITER_DAY';
+
+function invoiceNumberPrefix(source: BillingInvoiceSource) {
+  return source === BillingInvoiceSource.LOGISTICS ? 'LOG' : 'USL';
+}
 
 const STANDARD_BILLING_SERVICES = [
   {

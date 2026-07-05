@@ -28,6 +28,10 @@ export function billingAssetDataUrl(kind: 'signature' | 'stamp') {
 }
 
 export function invoiceDisplayNumber(number: string) {
+  if (/^(ACT-)?(LOG|USL)-/i.test(number)) {
+    return number;
+  }
+
   const match = number.match(/(\d{1,})$/);
   return match ? String(Number(match[1])) : number;
 }
