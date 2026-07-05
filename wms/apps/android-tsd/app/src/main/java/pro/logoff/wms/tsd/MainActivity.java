@@ -1,6 +1,7 @@
 package pro.logoff.wms.tsd;
 
 import android.app.Activity;
+import android.content.SharedPreferences;
 import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
@@ -21,7 +22,9 @@ import android.widget.TextView;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -32,6 +35,11 @@ import pro.logoff.wms.tsd.data.OperationOutboxCounts;
 import pro.logoff.wms.tsd.data.PendingOperation;
 import pro.logoff.wms.tsd.data.TsdDatabase;
 import pro.logoff.wms.tsd.network.TsdClientSummary;
+import pro.logoff.wms.tsd.network.TsdAssemblyPlan;
+import pro.logoff.wms.tsd.network.TsdAssemblyRequestSummary;
+import pro.logoff.wms.tsd.network.TsdMovementTask;
+import pro.logoff.wms.tsd.network.TsdRelabelTask;
+import pro.logoff.wms.tsd.network.TsdSearchBoxTask;
 import pro.logoff.wms.tsd.network.TsdLoginRequest;
 import pro.logoff.wms.tsd.network.TsdLoginResponse;
 import pro.logoff.wms.tsd.network.WmsApi;
@@ -43,7 +51,7 @@ import retrofit2.Response;
 public class MainActivity extends Activity {
     private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
     private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk";
-    private static final String APP_VERSION = "0.1.39";
+    private static final String APP_VERSION = "0.1.40";
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int LIGHT_GRAY = Color.rgb(226, 232, 240);
     private static final int TEXT = Color.rgb(30, 41, 59);
@@ -51,9 +59,11 @@ public class MainActivity extends Activity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final List<TsdClientSummary> clients = new ArrayList<>();
+    private final List<TsdAssemblyRequestSummary> assemblyRequests = new ArrayList<>();
 
     private OperationOutbox outbox;
     private TsdSessionStore sessionStore;
+    private SharedPreferences progressStore;
     private TextView statusView;
     private TextView sessionNameView;
     private TextView sessionCodeView;
@@ -69,6 +79,11 @@ public class MainActivity extends Activity {
     private EditText sourceDocumentInput;
     private EditText commentInput;
     private EditText scanInput;
+    private EditText assemblyScanInput;
+    private TsdAssemblyPlan assemblyPlan;
+    private TsdRelabelTask activeRelabelTask;
+    private String selectedRelabelBox = "";
+    private String selectedMoveTargetBox = "";
     private int pendingCount;
     private int rejectedCount;
     private boolean online;
@@ -82,6 +97,7 @@ public class MainActivity extends Activity {
         try {
             outbox = new OperationOutbox(TsdDatabase.get(this).operationDao());
             sessionStore = new TsdSessionStore(this);
+            progressStore = getSharedPreferences("tsd_assembly_progress", MODE_PRIVATE);
             if (sessionStore.load() == null) {
                 renderSettingsScreen();
             } else {
@@ -109,6 +125,18 @@ public class MainActivity extends Activity {
                 submitReceiptScan();
                 return true;
             }
+            if (screen == Screen.BOX_SEARCH && assemblyScanInput != null) {
+                submitBoxSearchScan();
+                return true;
+            }
+            if (screen == Screen.RELABEL_BOX && assemblyScanInput != null) {
+                submitRelabelScan();
+                return true;
+            }
+            if (screen == Screen.MOVEMENTS && assemblyScanInput != null) {
+                submitMovementScan();
+                return true;
+            }
         }
         return super.dispatchKeyEvent(event);
     }
@@ -123,7 +151,7 @@ public class MainActivity extends Activity {
         root.addView(header());
         root.addView(mainStatusLine());
         root.addView(primaryMenuButton("Приемка товара", view -> openReceipt()));
-        root.addView(primaryMenuButton("Сборка заявки", view -> renderInfoScreen("Сборка заявки", "Список активных заявок будет открыт здесь.")));
+        root.addView(primaryMenuButton("Сборка заявки", view -> openAssemblyRequests()));
         root.addView(primaryMenuButton("Инвентаризация", view -> renderInfoScreen("Инвентаризация", "Модуль инвентаризации будет открыт здесь.")));
         root.addView(secondaryButton("Синхронизировать очередь (" + pendingCount + ")", view -> syncPending()));
         root.addView(secondaryButton("Обновить клиентов", view -> loadClients(true)));
@@ -248,6 +276,410 @@ public class MainActivity extends Activity {
             loadClients(true);
         }
         renderReceiptScreen();
+    }
+
+    private void openAssemblyRequests() {
+        if (safeSession() == null) {
+            statusMessage = "Сначала выполните вход в настройках.";
+            renderSettingsScreen();
+            return;
+        }
+        loadAssemblyRequests();
+    }
+
+    private void loadAssemblyRequests() {
+        TsdSession session = safeSession();
+        if (session == null) {
+            statusMessage = "Сначала войдите на ТСД.";
+            refreshCurrentScreen();
+            return;
+        }
+
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<List<TsdAssemblyRequestSummary>> response = api.listAssemblyRequests(session.authorizationHeader()).execute();
+            if (!response.isSuccessful()) {
+                throw new IOException("HTTP " + response.code());
+            }
+            List<TsdAssemblyRequestSummary> loaded = response.body();
+            if (loaded == null) {
+                loaded = new ArrayList<>();
+            }
+            List<TsdAssemblyRequestSummary> finalLoaded = loaded;
+            mainHandler.post(() -> {
+                online = true;
+                assemblyRequests.clear();
+                assemblyRequests.addAll(finalLoaded);
+                statusMessage = assemblyRequests.isEmpty() ? "Активных заявок на сборку нет." : "Заявки загружены: " + assemblyRequests.size();
+                renderAssemblyListScreen();
+            });
+        });
+    }
+
+    private void renderAssemblyListScreen() {
+        screen = Screen.ASSEMBLY_LIST;
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title("Сборка заявки"));
+
+        if (assemblyRequests.isEmpty()) {
+            root.addView(messageView("Активных заявок на сборку нет."));
+        }
+        for (TsdAssemblyRequestSummary request : assemblyRequests) {
+            root.addView(requestButton(request));
+        }
+
+        root.addView(secondaryButton("Обновить", view -> loadAssemblyRequests()));
+        root.addView(secondaryButton("Назад", view -> renderMainScreen()));
+        if (!statusMessage.isEmpty()) {
+            root.addView(messageView(statusMessage));
+        }
+        setScrollableContent(root);
+        refreshHeaderText();
+    }
+
+    private Button requestButton(TsdAssemblyRequestSummary request) {
+        String clientName = request.client == null ? "" : request.client.name;
+        String city = emptyAsDash(request.city);
+        String inWork = request.inWorkBy == null ? "" : "\nУже в работе: " + request.inWorkBy.name;
+        String text = request.title + "\nКлиент: " + clientName + "\nГород: " + city + " · Статус: " + request.status + " · строк: " + request.rowsCount + inWork;
+        return multilineSecondaryButton(text, view -> loadAssemblyPlan(request.id));
+    }
+
+    private void loadAssemblyPlan(String requestId) {
+        TsdSession session = safeSession();
+        if (session == null) {
+            statusMessage = "Сначала войдите на ТСД.";
+            refreshCurrentScreen();
+            return;
+        }
+
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<TsdAssemblyPlan> response = api.getAssemblyRequest(session.authorizationHeader(), requestId).execute();
+            if (!response.isSuccessful()) {
+                throw new IOException("HTTP " + response.code());
+            }
+            TsdAssemblyPlan plan = response.body();
+            if (plan == null) {
+                throw new IOException("Пустая заявка от сервера");
+            }
+            mainHandler.post(() -> {
+                online = true;
+                assemblyPlan = plan;
+                activeRelabelTask = null;
+                selectedRelabelBox = "";
+                selectedMoveTargetBox = "";
+                statusMessage = "Заявка открыта.";
+                renderAssemblyDetailScreen();
+            });
+        });
+    }
+
+    private void renderAssemblyDetailScreen() {
+        screen = Screen.ASSEMBLY_DETAIL;
+        if (assemblyPlan == null) {
+            renderAssemblyListScreen();
+            return;
+        }
+
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title("Заявка " + assemblyPlan.title));
+        root.addView(messageView("Клиент: " + (assemblyPlan.client == null ? "-" : assemblyPlan.client.name)));
+        root.addView(messageView("Город: " + emptyAsDash(assemblyPlan.city)));
+        root.addView(messageView("Статус: " + assemblyPlan.status + " · строк: " + assemblyPlan.rowsCount));
+        root.addView(messageView("Единиц к отгрузке: " + assemblyPlan.totalRequested + " · коробов найти: " + safeSearchBoxes().size()));
+
+        root.addView(stageButton("1. Поиск коробов", isSearchDone(), view -> renderBoxSearchScreen()));
+        root.addView(stageButton("2. Перемаркировка", isRelabelDone(), view -> renderRelabelScreen()));
+        root.addView(stageButton("3. Перемещения", isMovementDone(), view -> renderMovementScreen()));
+        root.addView(secondaryButton("Обновить заявку", view -> loadAssemblyPlan(assemblyPlan.id)));
+        root.addView(secondaryButton("К списку заявок", view -> renderAssemblyListScreen()));
+        root.addView(secondaryButton("Назад", view -> renderMainScreen()));
+        if (!statusMessage.isEmpty()) {
+            root.addView(messageView(statusMessage));
+        }
+        setScrollableContent(root);
+        refreshHeaderText();
+    }
+
+    private Button stageButton(String text, boolean done, View.OnClickListener listener) {
+        Button button = primaryMenuButton(text, listener);
+        button.setBackgroundColor(done ? Color.rgb(22, 163, 74) : RED);
+        return button;
+    }
+
+    private void renderBoxSearchScreen() {
+        screen = Screen.BOX_SEARCH;
+        if (assemblyPlan == null) {
+            renderAssemblyListScreen();
+            return;
+        }
+
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title("Поиск коробов"));
+        List<TsdSearchBoxTask> boxes = safeSearchBoxes();
+        Set<String> found = foundBoxes();
+        root.addView(messageView("Найдено: " + found.size() + " / " + boxes.size()));
+        assemblyScanInput = input("Сканируйте короб");
+        assemblyScanInput.setOnEditorActionListener((view, actionId, event) -> {
+            submitBoxSearchScan();
+            return true;
+        });
+        root.addView(assemblyScanInput);
+
+        for (TsdSearchBoxTask box : boxes) {
+            if (found.contains(box.boxCode)) {
+                root.addView(taskRow(box.boxCode, "Найден", Color.rgb(187, 247, 208)));
+            }
+        }
+        for (TsdSearchBoxTask box : boxes) {
+            if (!found.contains(box.boxCode)) {
+                root.addView(taskRow(box.boxCode, "Нужно найти", Color.rgb(241, 245, 249)));
+            }
+        }
+
+        root.addView(secondaryButton("Обновить", view -> renderBoxSearchScreen()));
+        root.addView(secondaryButton("Назад", view -> renderAssemblyDetailScreen()));
+        if (!statusMessage.isEmpty()) {
+            root.addView(messageView(statusMessage));
+        }
+        setScrollableContent(root);
+        assemblyScanInput.requestFocus();
+        refreshHeaderText();
+    }
+
+    private void submitBoxSearchScan() {
+        String code = textValue(assemblyScanInput);
+        if (code.isEmpty() || assemblyPlan == null) {
+            return;
+        }
+        Set<String> required = new LinkedHashSet<>();
+        for (TsdSearchBoxTask box : safeSearchBoxes()) {
+            required.add(box.boxCode);
+        }
+        Set<String> found = foundBoxes();
+        if (!required.contains(code)) {
+            statusMessage = "Короб не нужен: " + code;
+        } else if (found.contains(code)) {
+            statusMessage = "Короб уже найден: " + code;
+        } else {
+            found.add(code);
+            saveStringSet(progressKey("found_boxes"), found);
+            statusMessage = "Короб найден: " + code;
+        }
+        assemblyScanInput.setText("");
+        renderBoxSearchScreen();
+    }
+
+    private void renderRelabelScreen() {
+        screen = Screen.RELABEL_LIST;
+        if (assemblyPlan == null) {
+            renderAssemblyListScreen();
+            return;
+        }
+
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title("Перемаркировка"));
+        root.addView(messageView("Заявка: " + assemblyPlan.title));
+        root.addView(messageView("Клиент: " + (assemblyPlan.client == null ? "-" : assemblyPlan.client.name)));
+        root.addView(messageView("Перемаркировка: " + doneRelabelTotal() + " / " + relabelTotal()));
+        root.addView(messageView("Выберите короб для перемаркировки:"));
+
+        Set<String> boxes = new LinkedHashSet<>();
+        for (TsdRelabelTask task : safeRelabelTasks()) {
+            if (remainingRelabel(task) > 0) {
+                boxes.add(task.sourceBox);
+            }
+        }
+        if (boxes.isEmpty()) {
+            root.addView(messageView("Перемаркировка завершена или не требуется."));
+        }
+        for (String box : boxes) {
+            int remaining = 0;
+            for (TsdRelabelTask task : safeRelabelTasks()) {
+                if (box.equals(task.sourceBox)) {
+                    remaining += Math.max(0, remainingRelabel(task));
+                }
+            }
+            root.addView(multilineSecondaryButton(box + "\nОсталось: " + remaining, view -> {
+                selectedRelabelBox = box;
+                activeRelabelTask = null;
+                renderRelabelBoxScreen();
+            }));
+        }
+
+        root.addView(secondaryButton("Обновить", view -> renderRelabelScreen()));
+        root.addView(secondaryButton("Назад", view -> renderAssemblyDetailScreen()));
+        if (!statusMessage.isEmpty()) {
+            root.addView(messageView(statusMessage));
+        }
+        setScrollableContent(root);
+        refreshHeaderText();
+    }
+
+    private void renderRelabelBoxScreen() {
+        screen = Screen.RELABEL_BOX;
+        if (assemblyPlan == null || selectedRelabelBox.isEmpty()) {
+            renderRelabelScreen();
+            return;
+        }
+
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title("Перемаркировка"));
+        root.addView(messageView("Короб: " + selectedRelabelBox));
+        root.addView(messageView(activeRelabelTask == null ? "Сканируйте старый ШК товара" : "Сканируйте новый ШК: " + activeRelabelTask.newBarcode));
+        assemblyScanInput = input(activeRelabelTask == null ? "Старый ШК" : "Новый ШК");
+        assemblyScanInput.setOnEditorActionListener((view, actionId, event) -> {
+            submitRelabelScan();
+            return true;
+        });
+        root.addView(assemblyScanInput);
+
+        for (TsdRelabelTask task : safeRelabelTasks()) {
+            if (!selectedRelabelBox.equals(task.sourceBox)) {
+                continue;
+            }
+            int remaining = remainingRelabel(task);
+            if (remaining > 0) {
+                root.addView(taskRow(task.oldBarcode + " -> " + task.newBarcode, "Осталось: " + remaining, Color.rgb(241, 245, 249)));
+            }
+        }
+
+        root.addView(secondaryButton("Назад к коробам", view -> renderRelabelScreen()));
+        root.addView(secondaryButton("Назад к заявке", view -> renderAssemblyDetailScreen()));
+        if (!statusMessage.isEmpty()) {
+            root.addView(messageView(statusMessage));
+        }
+        setScrollableContent(root);
+        assemblyScanInput.requestFocus();
+        refreshHeaderText();
+    }
+
+    private void submitRelabelScan() {
+        String code = textValue(assemblyScanInput);
+        if (code.isEmpty() || assemblyPlan == null) {
+            return;
+        }
+        if (activeRelabelTask == null) {
+            for (TsdRelabelTask task : safeRelabelTasks()) {
+                if (selectedRelabelBox.equals(task.sourceBox) && remainingRelabel(task) > 0 && code.equals(task.oldBarcode)) {
+                    activeRelabelTask = task;
+                    statusMessage = "Старый ШК принят. Сканируйте новый ШК.";
+                    assemblyScanInput.setText("");
+                    renderRelabelBoxScreen();
+                    return;
+                }
+            }
+            statusMessage = "Неверный товар для перемаркировки: " + code;
+        } else if (code.equals(activeRelabelTask.newBarcode)) {
+            int done = doneInt(relabelKey(activeRelabelTask)) + 1;
+            saveDoneInt(relabelKey(activeRelabelTask), done);
+            statusMessage = "Переклейка подтверждена: " + done + " / " + activeRelabelTask.quantity;
+            if (remainingRelabel(activeRelabelTask) <= 0) {
+                activeRelabelTask = null;
+            }
+        } else {
+            statusMessage = "Новый ШК неверный. Нужно: " + activeRelabelTask.newBarcode;
+        }
+        assemblyScanInput.setText("");
+        renderRelabelBoxScreen();
+    }
+
+    private void renderMovementScreen() {
+        screen = Screen.MOVEMENTS;
+        if (assemblyPlan == null) {
+            renderAssemblyListScreen();
+            return;
+        }
+
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title("Перемещения"));
+        root.addView(messageView("Перемещения: " + doneMovementTotal() + " / " + movementTotal()));
+        root.addView(messageView(selectedMoveTargetBox.isEmpty() ? "Сканируйте новый короб, затем товар" : "Новый короб: " + selectedMoveTargetBox));
+        assemblyScanInput = input(selectedMoveTargetBox.isEmpty() ? "Новый короб" : "ШК товара");
+        assemblyScanInput.setOnEditorActionListener((view, actionId, event) -> {
+            submitMovementScan();
+            return true;
+        });
+        root.addView(assemblyScanInput);
+
+        for (TsdMovementTask task : safeMovementTasks()) {
+            int remaining = remainingMovement(task);
+            if (remaining > 0) {
+                String label = task.sourceBox + " -> " + task.targetBox + "\n" + task.barcode;
+                root.addView(taskRow(label, "Осталось: " + remaining, Color.rgb(241, 245, 249)));
+            }
+        }
+
+        root.addView(secondaryButton("Сменить новый короб", view -> {
+            selectedMoveTargetBox = "";
+            renderMovementScreen();
+        }));
+        root.addView(secondaryButton("Назад", view -> renderAssemblyDetailScreen()));
+        if (!statusMessage.isEmpty()) {
+            root.addView(messageView(statusMessage));
+        }
+        setScrollableContent(root);
+        assemblyScanInput.requestFocus();
+        refreshHeaderText();
+    }
+
+    private void submitMovementScan() {
+        String code = textValue(assemblyScanInput);
+        if (code.isEmpty() || assemblyPlan == null) {
+            return;
+        }
+
+        for (TsdMovementTask task : safeMovementTasks()) {
+            if (remainingMovement(task) > 0 && code.equals(task.targetBox)) {
+                selectedMoveTargetBox = code;
+                statusMessage = "Новый короб выбран: " + code;
+                assemblyScanInput.setText("");
+                renderMovementScreen();
+                return;
+            }
+        }
+
+        if (selectedMoveTargetBox.isEmpty()) {
+            statusMessage = "Сначала отсканируйте новый короб для перемещения.";
+            assemblyScanInput.setText("");
+            renderMovementScreen();
+            return;
+        }
+
+        for (TsdMovementTask task : safeMovementTasks()) {
+            if (remainingMovement(task) > 0 && selectedMoveTargetBox.equals(task.targetBox) && code.equals(task.barcode)) {
+                runBackground(() -> {
+                    outbox.enqueueMove(
+                        assemblyPlan.client.id,
+                        task.barcode,
+                        task.sourceBox,
+                        task.targetBox,
+                        1,
+                        "AVAILABLE",
+                        "Перемещение по заявке " + assemblyPlan.title
+                    );
+                    mainHandler.post(() -> {
+                        int done = doneInt(movementKey(task)) + 1;
+                        saveDoneInt(movementKey(task), done);
+                        statusMessage = "Товар перемещен в очередь: " + done + " / " + task.quantity;
+                        refreshQueue(null);
+                        renderMovementScreen();
+                    });
+                });
+                return;
+            }
+        }
+
+        statusMessage = "Товар не нужен для текущего нового короба: " + code;
+        assemblyScanInput.setText("");
+        renderMovementScreen();
     }
 
     private void submitReceiptScan() {
@@ -529,6 +961,21 @@ public class MainActivity extends Activity {
         return button;
     }
 
+    private Button multilineSecondaryButton(String text, View.OnClickListener listener) {
+        Button button = secondaryButton(text, listener);
+        button.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        button.setTextSize(15f);
+        button.setPadding(dp(14), dp(10), dp(14), dp(10));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        params.setMargins(0, 0, 0, dp(10));
+        button.setLayoutParams(params);
+        button.setMinHeight(dp(86));
+        return button;
+    }
+
     private TextView title(String text) {
         TextView view = new TextView(this);
         view.setText(text);
@@ -596,6 +1043,130 @@ public class MainActivity extends Activity {
         clientSpinner.setSelection(0);
     }
 
+    private TextView taskRow(String title, String subtitle, int backgroundColor) {
+        TextView view = new TextView(this);
+        view.setText(title + "\n" + subtitle);
+        view.setTextColor(TEXT);
+        view.setTextSize(16f);
+        view.setBackgroundColor(backgroundColor);
+        view.setPadding(dp(14), dp(12), dp(14), dp(12));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        params.setMargins(0, 0, 0, dp(10));
+        view.setLayoutParams(params);
+        return view;
+    }
+
+    private List<TsdSearchBoxTask> safeSearchBoxes() {
+        return assemblyPlan == null || assemblyPlan.searchBoxes == null ? new ArrayList<>() : assemblyPlan.searchBoxes;
+    }
+
+    private List<TsdRelabelTask> safeRelabelTasks() {
+        return assemblyPlan == null || assemblyPlan.relabelTasks == null ? new ArrayList<>() : assemblyPlan.relabelTasks;
+    }
+
+    private List<TsdMovementTask> safeMovementTasks() {
+        return assemblyPlan == null || assemblyPlan.movementTasks == null ? new ArrayList<>() : assemblyPlan.movementTasks;
+    }
+
+    private boolean isSearchDone() {
+        List<TsdSearchBoxTask> boxes = safeSearchBoxes();
+        return foundBoxes().size() >= boxes.size();
+    }
+
+    private boolean isRelabelDone() {
+        return doneRelabelTotal() >= relabelTotal();
+    }
+
+    private boolean isMovementDone() {
+        return doneMovementTotal() >= movementTotal();
+    }
+
+    private Set<String> foundBoxes() {
+        return stringSet(progressKey("found_boxes"));
+    }
+
+    private int relabelTotal() {
+        int total = 0;
+        for (TsdRelabelTask task : safeRelabelTasks()) {
+            total += task.quantity;
+        }
+        return total;
+    }
+
+    private int doneRelabelTotal() {
+        int total = 0;
+        for (TsdRelabelTask task : safeRelabelTasks()) {
+            total += Math.min(task.quantity, doneInt(relabelKey(task)));
+        }
+        return total;
+    }
+
+    private int remainingRelabel(TsdRelabelTask task) {
+        return Math.max(0, task.quantity - doneInt(relabelKey(task)));
+    }
+
+    private String relabelKey(TsdRelabelTask task) {
+        return progressKey("relabel:" + task.sourceBox + "|" + task.oldBarcode + "|" + task.newBarcode + "|" + task.size);
+    }
+
+    private int movementTotal() {
+        int total = 0;
+        for (TsdMovementTask task : safeMovementTasks()) {
+            total += task.quantity;
+        }
+        return total;
+    }
+
+    private int doneMovementTotal() {
+        int total = 0;
+        for (TsdMovementTask task : safeMovementTasks()) {
+            total += Math.min(task.quantity, doneInt(movementKey(task)));
+        }
+        return total;
+    }
+
+    private int remainingMovement(TsdMovementTask task) {
+        return Math.max(0, task.quantity - doneInt(movementKey(task)));
+    }
+
+    private String movementKey(TsdMovementTask task) {
+        return progressKey("move:" + task.sourceBox + "|" + task.targetBox + "|" + task.barcode + "|" + task.size);
+    }
+
+    private String progressKey(String suffix) {
+        return assemblyPlan == null ? suffix : assemblyPlan.id + ":" + suffix;
+    }
+
+    private Set<String> stringSet(String key) {
+        if (progressStore == null) {
+            return new LinkedHashSet<>();
+        }
+        return new LinkedHashSet<>(progressStore.getStringSet(key, new LinkedHashSet<>()));
+    }
+
+    private void saveStringSet(String key, Set<String> value) {
+        if (progressStore != null) {
+            progressStore.edit().putStringSet(key, new LinkedHashSet<>(value)).apply();
+        }
+    }
+
+    private int doneInt(String key) {
+        return progressStore == null ? 0 : progressStore.getInt(key, 0);
+    }
+
+    private void saveDoneInt(String key, int value) {
+        if (progressStore != null) {
+            progressStore.edit().putInt(key, value).apply();
+        }
+    }
+
+    private String emptyAsDash(String value) {
+        return value == null || value.trim().isEmpty() ? "-" : value.trim();
+    }
+
     private String selectedClientId() {
         if (clientSpinner == null) {
             statusMessage = "Откройте приемку заново.";
@@ -627,6 +1198,18 @@ public class MainActivity extends Activity {
             renderSettingsScreen();
         } else if (screen == Screen.RECEIPT) {
             renderReceiptScreen();
+        } else if (screen == Screen.ASSEMBLY_LIST) {
+            renderAssemblyListScreen();
+        } else if (screen == Screen.ASSEMBLY_DETAIL) {
+            renderAssemblyDetailScreen();
+        } else if (screen == Screen.BOX_SEARCH) {
+            renderBoxSearchScreen();
+        } else if (screen == Screen.RELABEL_LIST) {
+            renderRelabelScreen();
+        } else if (screen == Screen.RELABEL_BOX) {
+            renderRelabelBoxScreen();
+        } else if (screen == Screen.MOVEMENTS) {
+            renderMovementScreen();
         } else if (screen == Screen.INFO) {
             renderMainScreen();
         } else {
@@ -670,6 +1253,12 @@ public class MainActivity extends Activity {
         MAIN,
         SETTINGS,
         RECEIPT,
+        ASSEMBLY_LIST,
+        ASSEMBLY_DETAIL,
+        BOX_SEARCH,
+        RELABEL_LIST,
+        RELABEL_BOX,
+        MOVEMENTS,
         INFO
     }
 

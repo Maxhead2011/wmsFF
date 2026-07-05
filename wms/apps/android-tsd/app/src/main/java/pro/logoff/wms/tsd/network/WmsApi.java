@@ -6,6 +6,7 @@ import retrofit2.Call;
 import retrofit2.http.Body;
 import retrofit2.http.GET;
 import retrofit2.http.Header;
+import retrofit2.http.Path;
 import retrofit2.http.POST;
 
 public interface WmsApi {
@@ -26,4 +27,13 @@ public interface WmsApi {
 
     @GET("api/v1/tsd/clients")
     Call<List<TsdClientSummary>> listClients(@Header("Authorization") String authorization);
+
+    @GET("api/v1/tsd/requests")
+    Call<List<TsdAssemblyRequestSummary>> listAssemblyRequests(@Header("Authorization") String authorization);
+
+    @GET("api/v1/tsd/requests/{id}")
+    Call<TsdAssemblyPlan> getAssemblyRequest(
+        @Header("Authorization") String authorization,
+        @Path("id") String id
+    );
 }

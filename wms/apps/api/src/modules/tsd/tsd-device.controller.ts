@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -6,18 +6,36 @@ import { Public } from '../auth/decorators/public.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { CreateTsdDeviceDto } from './dto/create-tsd-device.dto';
 import { LoginTsdDeviceDto } from './dto/login-tsd-device.dto';
+import { TsdAssemblyService } from './tsd-assembly.service';
 import { TsdDeviceService } from './tsd-device.service';
 
 @ApiTags('tsd')
 @Controller('tsd')
 export class TsdDeviceController {
-  constructor(private readonly devices: TsdDeviceService) {}
+  constructor(
+    private readonly devices: TsdDeviceService,
+    private readonly assembly: TsdAssemblyService,
+  ) {}
 
   @Get('clients')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
   listClients(@CurrentUser() user: AuthUser) {
     return this.devices.listClientsForDevice(user);
+  }
+
+  @Get('requests')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  listAssemblyRequests(@CurrentUser() user: AuthUser) {
+    return this.assembly.listActiveRequests(user);
+  }
+
+  @Get('requests/:id')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  getAssemblyRequest(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.assembly.getRequestPlan(id, user);
   }
 
   @Get('devices')
