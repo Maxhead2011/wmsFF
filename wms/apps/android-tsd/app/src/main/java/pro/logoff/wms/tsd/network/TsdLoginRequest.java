@@ -1,14 +1,14 @@
 package pro.logoff.wms.tsd.network;
 
 public class TsdLoginRequest {
-    public String code;
-    public String secret;
+    public String login;
+    public String password;
 
     public TsdLoginRequest() {
     }
 
-    public TsdLoginRequest(String code, String secret) {
-        this.code = code;
-        this.secret = secret;
+    public TsdLoginRequest(String login, String password) {
+        this.login = login;
+        this.password = password;
     }
 }

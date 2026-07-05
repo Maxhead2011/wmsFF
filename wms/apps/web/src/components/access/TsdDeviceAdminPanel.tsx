@@ -84,6 +84,14 @@ export function TsdDeviceAdminPanel({ session }: TsdDeviceAdminPanelProps) {
 
   return (
     <div className="access-form">
+      <AccessResultCard
+        title="Вход на ТСД"
+        lines={[
+          'Сотрудник входит в Android-приложение обычным логином и паролем WMS.',
+          'Для работы на ТСД у пользователя должно быть право stock:write или роль администратора.',
+        ]}
+      />
+
       <form className="access-form" onSubmit={submit}>
         <div className="access-fields">
           <label>

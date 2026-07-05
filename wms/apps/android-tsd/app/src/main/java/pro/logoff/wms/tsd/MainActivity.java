@@ -137,8 +137,8 @@ public class MainActivity extends Activity {
 
         baseUrlInput = input("Адрес WMS");
         baseUrlInput.setText(DEFAULT_BASE_URL);
-        deviceCodeInput = input("Код ТСД");
-        deviceSecretInput = input("Секрет ТСД");
+        deviceCodeInput = input("Логин сотрудника");
+        deviceSecretInput = input("Пароль");
         deviceSecretInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
 
         root.addView(baseUrlInput);
@@ -290,10 +290,10 @@ public class MainActivity extends Activity {
     }
 
     private void loginDevice() {
-        String code = textValue(deviceCodeInput);
-        String secret = textValue(deviceSecretInput);
-        if (code.isEmpty() || secret.isEmpty()) {
-            statusMessage = "Укажите код и секрет ТСД.";
+        String login = textValue(deviceCodeInput);
+        String password = textValue(deviceSecretInput);
+        if (login.isEmpty() || password.isEmpty()) {
+            statusMessage = "Укажите логин и пароль сотрудника.";
             refreshCurrentScreen();
             return;
         }
@@ -301,7 +301,7 @@ public class MainActivity extends Activity {
         String baseUrl = textValue(baseUrlInput);
         runBackground(() -> {
             WmsApi api = WmsApiFactory.create(baseUrl);
-            Response<TsdLoginResponse> response = api.login(new TsdLoginRequest(code, secret)).execute();
+            Response<TsdLoginResponse> response = api.login(new TsdLoginRequest(login, password)).execute();
             if (!response.isSuccessful()) {
                 throw new IOException("HTTP " + response.code());
             }

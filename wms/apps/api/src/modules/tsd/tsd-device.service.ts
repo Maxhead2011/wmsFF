@@ -114,20 +114,15 @@ export class TsdDeviceService {
   }
 
   async login(dto: LoginTsdDeviceDto) {
-    const device = await this.prisma.tsdDevice.findUnique({
-      where: { code: this.normalizeCode(dto.code) },
+    const user = await this.prisma.user.findUnique({
+      where: { email: this.normalizeLogin(dto.login) },
       include: {
-        user: {
+        roles: {
           include: {
-            clientScopes: true,
-            roles: {
+            role: {
               include: {
-                role: {
-                  include: {
-                    permissions: {
-                      include: { permission: true },
-                    },
-                  },
+                permissions: {
+                  include: { permission: true },
                 },
               },
             },
@@ -136,44 +131,53 @@ export class TsdDeviceService {
       },
     });
 
-    if (!device || !(await this.passwords.verify(dto.secret, device.secretHash))) {
-      throw new UnauthorizedException('Неверный код или секрет ТСД.');
+    if (!user || !(await this.passwords.verify(dto.password, user.passwordHash))) {
+      throw new UnauthorizedException('Неверный логин или пароль.');
     }
 
-    if (device.status !== TsdDeviceStatus.ACTIVE) {
-      throw new UnauthorizedException('ТСД заблокирован.');
-    }
-
-    if (device.user.status !== UserStatus.ACTIVE) {
-      throw new UnauthorizedException('Пользователь ТСД заблокирован.');
+    if (user.status !== UserStatus.ACTIVE) {
+      throw new UnauthorizedException('Пользователь заблокирован.');
     }
 
     const permissionCodes = [
       ...new Set(
-        device.user.roles.flatMap((item) => item.role.permissions.map((permission) => permission.permission.code)),
+        user.roles.flatMap((item) => item.role.permissions.map((permission) => permission.permission.code)),
       ),
     ];
     if (!permissionCodes.includes('stock:write') && !permissionCodes.includes('system:admin')) {
       throw new UnauthorizedException('У пользователя ТСД нет права stock:write.');
     }
 
-    await this.prisma.tsdDevice.update({
-      where: { id: device.id },
-      data: { lastLoginAt: new Date(), lastSeenAt: new Date() },
+    const device = await this.prisma.tsdDevice.findFirst({
+      where: { userId: user.id, status: TsdDeviceStatus.ACTIVE },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, code: true, name: true },
     });
 
+    if (device) {
+      await this.prisma.tsdDevice.update({
+        where: { id: device.id },
+        data: { lastLoginAt: new Date(), lastSeenAt: new Date() },
+      });
+    }
+
+    const deviceCode = device?.code ?? this.loginDeviceCode(user.email);
+
     return {
-      accessToken: this.tokens.sign(device.userId, { deviceId: device.id, deviceCode: device.code }),
+      accessToken: this.tokens.sign(user.id, {
+        ...(device ? { deviceId: device.id } : {}),
+        deviceCode,
+      }),
       tokenType: 'Bearer',
       device: {
-        id: device.id,
-        code: device.code,
-        name: device.name,
+        id: device?.id ?? user.id,
+        code: deviceCode,
+        name: device?.name ?? user.name,
       },
       user: {
-        id: device.user.id,
-        email: device.user.email,
-        name: device.user.name,
+        id: user.id,
+        email: user.email,
+        name: user.name,
         permissionCodes,
       },
     };
@@ -205,5 +209,13 @@ export class TsdDeviceService {
 
   private normalizeCode(code: string) {
     return code.trim().toUpperCase();
+  }
+
+  private normalizeLogin(login: string) {
+    return login.trim().toLowerCase();
+  }
+
+  private loginDeviceCode(login: string) {
+    return `USER:${login.trim().toLowerCase()}`;
   }
 }

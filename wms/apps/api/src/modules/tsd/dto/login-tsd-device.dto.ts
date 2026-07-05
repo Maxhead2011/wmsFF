@@ -1,11 +1,11 @@
-import { IsString, MinLength } from 'class-validator';
+import { IsString, Length } from 'class-validator';
 
 export class LoginTsdDeviceDto {
   @IsString()
-  @MinLength(2)
-  code!: string;
+  @Length(1, 200)
+  login!: string;
 
   @IsString()
-  @MinLength(8)
-  secret!: string;
+  @Length(1, 200)
+  password!: string;
 }
