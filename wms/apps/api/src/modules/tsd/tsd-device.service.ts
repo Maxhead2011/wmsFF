@@ -114,8 +114,26 @@ export class TsdDeviceService {
   }
 
   async login(dto: LoginTsdDeviceDto) {
+    if (dto.login !== undefined || dto.password !== undefined) {
+      return this.loginByUserCredentials(dto);
+    }
+
+    if (dto.code !== undefined || dto.secret !== undefined) {
+      return this.loginByDeviceSecret(dto);
+    }
+
+    throw new UnauthorizedException('Укажите логин/пароль или код/секрет ТСД.');
+  }
+
+  private async loginByUserCredentials(dto: LoginTsdDeviceDto) {
+    const login = dto.login?.trim();
+    const password = dto.password ?? '';
+    if (!login || !password) {
+      throw new UnauthorizedException('Неверный логин или пароль.');
+    }
+
     const user = await this.prisma.user.findUnique({
-      where: { email: this.normalizeLogin(dto.login) },
+      where: { email: this.normalizeLogin(login) },
       include: {
         roles: {
           include: {
@@ -131,7 +149,7 @@ export class TsdDeviceService {
       },
     });
 
-    if (!user || !(await this.passwords.verify(dto.password, user.passwordHash))) {
+    if (!user || !(await this.passwords.verify(password, user.passwordHash))) {
       throw new UnauthorizedException('Неверный логин или пароль.');
     }
 
@@ -178,6 +196,80 @@ export class TsdDeviceService {
         id: user.id,
         email: user.email,
         name: user.name,
+        permissionCodes,
+      },
+    };
+  }
+
+  private async loginByDeviceSecret(dto: LoginTsdDeviceDto) {
+    const code = dto.code?.trim();
+    const secret = dto.secret ?? '';
+    if (!code || !secret) {
+      throw new UnauthorizedException('Неверный код или секрет ТСД.');
+    }
+
+    const device = await this.prisma.tsdDevice.findUnique({
+      where: { code: this.normalizeCode(code) },
+      include: {
+        user: {
+          include: {
+            roles: {
+              include: {
+                role: {
+                  include: {
+                    permissions: {
+                      include: { permission: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!device || !(await this.passwords.verify(secret, device.secretHash))) {
+      throw new UnauthorizedException('Неверный код или секрет ТСД.');
+    }
+
+    if (device.status !== TsdDeviceStatus.ACTIVE) {
+      throw new UnauthorizedException('ТСД заблокирован.');
+    }
+
+    if (device.user.status !== UserStatus.ACTIVE) {
+      throw new UnauthorizedException('Пользователь ТСД заблокирован.');
+    }
+
+    const permissionCodes = [
+      ...new Set(
+        device.user.roles.flatMap((item) => item.role.permissions.map((permission) => permission.permission.code)),
+      ),
+    ];
+    if (!permissionCodes.includes('stock:write') && !permissionCodes.includes('system:admin')) {
+      throw new UnauthorizedException('У пользователя ТСД нет права stock:write.');
+    }
+
+    await this.prisma.tsdDevice.update({
+      where: { id: device.id },
+      data: { lastLoginAt: new Date(), lastSeenAt: new Date() },
+    });
+
+    return {
+      accessToken: this.tokens.sign(device.user.id, {
+        deviceId: device.id,
+        deviceCode: device.code,
+      }),
+      tokenType: 'Bearer',
+      device: {
+        id: device.id,
+        code: device.code,
+        name: device.name,
+      },
+      user: {
+        id: device.user.id,
+        email: device.user.email,
+        name: device.user.name,
         permissionCodes,
       },
     };

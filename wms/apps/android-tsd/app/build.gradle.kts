@@ -10,8 +10,8 @@ android {
         applicationId = "pro.logoff.wms.tsd"
         minSdk = 26
         targetSdk = 35
-        versionCode = 37
-        versionName = "0.1.37"
+        versionCode = 38
+        versionName = "0.1.34"
     }
 
     compileOptions {

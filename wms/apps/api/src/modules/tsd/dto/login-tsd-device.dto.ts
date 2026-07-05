@@ -1,11 +1,23 @@
-import { IsString, Length } from 'class-validator';
+import { IsOptional, IsString, Length } from 'class-validator';
 
 export class LoginTsdDeviceDto {
+  @IsOptional()
   @IsString()
   @Length(1, 200)
-  login!: string;
+  login?: string;
 
+  @IsOptional()
   @IsString()
   @Length(1, 200)
-  password!: string;
+  password?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 200)
+  code?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 200)
+  secret?: string;
 }

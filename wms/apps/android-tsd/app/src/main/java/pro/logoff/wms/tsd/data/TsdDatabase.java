@@ -20,7 +20,9 @@ public abstract class TsdDatabase extends RoomDatabase {
                         context.getApplicationContext(),
                         TsdDatabase.class,
                         "logoff_wms_tsd.db"
-                    ).fallbackToDestructiveMigration().build();
+                    )
+                    .fallbackToDestructiveMigration()
+                    .build();
                 }
             }
         }
