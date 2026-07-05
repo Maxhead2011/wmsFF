@@ -4,6 +4,7 @@ import {
   BillingChargeStatus,
   BillingInvoiceSource,
   BillingInvoiceStatus,
+  BillingPaymentStatus,
   BillingPriceTaxMode,
   BillingUnit,
   ClientNotificationEvent,
@@ -896,6 +897,10 @@ export class BillingService {
         paidRub: true,
         issuedAt: true,
         paidAt: true,
+        payments: {
+          where: { status: BillingPaymentStatus.RECORDED },
+          select: { amountRub: true },
+        },
       },
     });
 
@@ -905,22 +910,25 @@ export class BillingService {
 
     this.clientScopes.requireClientAccess(user, invoice.clientId, 'write');
 
-    const paidRub = decimalToNumber(invoice.paidRub) ?? 0;
     const totalRub = decimalToNumber(invoice.totalRub) ?? 0;
-    if (dto.status === BillingInvoiceStatus.CANCELLED && paidRub > 0) {
+    const recordedPaidRub = roundMoney(
+      invoice.payments.reduce((sum, payment) => sum + (decimalToNumber(payment.amountRub) ?? 0), 0),
+    );
+    if (dto.status === BillingInvoiceStatus.CANCELLED && recordedPaidRub > 0) {
       throw new BadRequestException('Нельзя отменить счет с зафиксированными оплатами.');
     }
 
-    if (dto.status === BillingInvoiceStatus.DRAFT && paidRub > 0) {
+    if (dto.status === BillingInvoiceStatus.DRAFT && recordedPaidRub > 0) {
       throw new BadRequestException('Нельзя вернуть в черновик счет с оплатами.');
     }
 
+    const nextPaidRub = dto.status === BillingInvoiceStatus.PAID ? totalRub : recordedPaidRub;
     const updated = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.billingInvoice.update({
         where: { id: invoiceId },
         data: {
           status: dto.status,
-          paidRub: dto.status === BillingInvoiceStatus.PAID ? totalRub : invoice.paidRub,
+          paidRub: nextPaidRub,
           issuedAt:
             dto.status === BillingInvoiceStatus.DRAFT
               ? null

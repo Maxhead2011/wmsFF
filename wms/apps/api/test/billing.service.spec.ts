@@ -3,6 +3,7 @@ import {
   BillingChargeSource,
   BillingChargeStatus,
   BillingInvoiceStatus,
+  BillingPaymentStatus,
   BillingUnit,
   ClientNotificationEvent,
   MovementType,
@@ -624,6 +625,7 @@ describe('BillingService', () => {
           status: BillingInvoiceStatus.ISSUED,
           issuedAt: new Date('2026-06-15T00:00:00.000Z'),
           paidAt: null,
+          payments: [],
         }),
       },
       $transaction: vi.fn((callback) => callback(tx)),
@@ -670,6 +672,7 @@ describe('BillingService', () => {
           status: BillingInvoiceStatus.DRAFT,
           issuedAt: null,
           paidAt: null,
+          payments: [],
         }),
       },
       $transaction: vi.fn((callback) => callback(tx)),
@@ -699,6 +702,103 @@ describe('BillingService', () => {
           title: 'Статус счета изменен',
           body: 'Счет № INV-202606-0001: черновик -> выставлен',
           severity: 'INFO',
+        }),
+      }),
+    );
+  });
+
+  it('resets virtual paid amount when a paid invoice is returned to issued without payment records', async () => {
+    const tx = {
+      billingInvoice: {
+        update: vi.fn().mockResolvedValue({ id: 'invoice-1', status: BillingInvoiceStatus.ISSUED }),
+      },
+      clientNotificationPreference: {
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
+      clientNotification: {
+        create: vi.fn().mockResolvedValue({ id: 'notification-1' }),
+      },
+    };
+    const prisma = {
+      billingInvoice: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'invoice-1',
+          number: 'INV-202606-0001',
+          clientId: 'client-1',
+          totalRub: '100.00',
+          paidRub: '100.00',
+          status: BillingInvoiceStatus.PAID,
+          issuedAt: new Date('2026-06-15T00:00:00.000Z'),
+          paidAt: new Date('2026-06-16T00:00:00.000Z'),
+          payments: [],
+        }),
+      },
+      $transaction: vi.fn((callback) => callback(tx)),
+    };
+    const service = new BillingService(prisma as never, clientScopes());
+
+    await service.updateInvoiceStatus(
+      'invoice-1',
+      { status: BillingInvoiceStatus.ISSUED },
+      user({ clientIds: ['client-1'], writableClientIds: ['client-1'] }),
+    );
+
+    expect(tx.billingInvoice.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: BillingInvoiceStatus.ISSUED,
+          paidRub: 0,
+          paidAt: null,
+        }),
+      }),
+    );
+  });
+
+  it('keeps recorded payment amount when a paid invoice is returned to issued', async () => {
+    const tx = {
+      billingInvoice: {
+        update: vi.fn().mockResolvedValue({ id: 'invoice-1', status: BillingInvoiceStatus.ISSUED }),
+      },
+      clientNotificationPreference: {
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
+      clientNotification: {
+        create: vi.fn().mockResolvedValue({ id: 'notification-1' }),
+      },
+    };
+    const prisma = {
+      billingInvoice: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'invoice-1',
+          number: 'INV-202606-0001',
+          clientId: 'client-1',
+          totalRub: '100.00',
+          paidRub: '100.00',
+          status: BillingInvoiceStatus.PAID,
+          issuedAt: new Date('2026-06-15T00:00:00.000Z'),
+          paidAt: new Date('2026-06-16T00:00:00.000Z'),
+          payments: [
+            { amountRub: '40.00', status: BillingPaymentStatus.RECORDED },
+            { amountRub: '20.00', status: BillingPaymentStatus.RECORDED },
+          ],
+        }),
+      },
+      $transaction: vi.fn((callback) => callback(tx)),
+    };
+    const service = new BillingService(prisma as never, clientScopes());
+
+    await service.updateInvoiceStatus(
+      'invoice-1',
+      { status: BillingInvoiceStatus.ISSUED },
+      user({ clientIds: ['client-1'], writableClientIds: ['client-1'] }),
+    );
+
+    expect(tx.billingInvoice.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: BillingInvoiceStatus.ISSUED,
+          paidRub: 60,
+          paidAt: null,
         }),
       }),
     );
