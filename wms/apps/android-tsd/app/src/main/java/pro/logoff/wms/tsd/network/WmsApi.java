@@ -1,0 +1,29 @@
+package pro.logoff.wms.tsd.network;
+
+import java.util.List;
+
+import retrofit2.Call;
+import retrofit2.http.Body;
+import retrofit2.http.GET;
+import retrofit2.http.Header;
+import retrofit2.http.POST;
+
+public interface WmsApi {
+    @POST("api/v1/tsd/login")
+    Call<TsdLoginResponse> login(@Body TsdLoginRequest request);
+
+    @POST("api/v1/tsd/operations")
+    Call<TsdOperationResponse> sendOperation(
+        @Header("Authorization") String authorization,
+        @Body TsdOperationRequest request
+    );
+
+    @POST("api/v1/tsd/sync")
+    Call<List<TsdOperationResponse>> syncOperations(
+        @Header("Authorization") String authorization,
+        @Body TsdSyncRequest request
+    );
+
+    @GET("api/v1/tsd/clients")
+    Call<List<TsdClientSummary>> listClients(@Header("Authorization") String authorization);
+}

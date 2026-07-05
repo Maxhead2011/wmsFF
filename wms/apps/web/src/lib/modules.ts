@@ -47,7 +47,7 @@ export const mvpModules: WmsModuleCard[] = [
     title: 'ТСД offline',
     status: 'in-progress',
     icon: Smartphone,
-    description: 'Native Kotlin приложение, device-login, Room outbox и batch sync API.',
+    description: 'Native Java приложение, device-login, Room outbox и batch sync API.',
   },
   {
     title: 'Печать TSC',
