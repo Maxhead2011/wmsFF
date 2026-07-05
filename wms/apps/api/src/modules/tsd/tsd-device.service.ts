@@ -1,8 +1,10 @@
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
-import { TsdDeviceStatus, UserStatus } from '@prisma/client';
+import { ClientStatus, TsdDeviceStatus, UserStatus } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AccessTokenService } from '../auth/access-token.service';
+import type { AuthUser } from '../auth/auth.types';
+import { ClientScopeService } from '../auth/client-scope.service';
 import { PasswordService } from '../auth/password.service';
 import { CreateTsdDeviceDto } from './dto/create-tsd-device.dto';
 import { LoginTsdDeviceDto } from './dto/login-tsd-device.dto';
@@ -13,6 +15,7 @@ export class TsdDeviceService {
     private readonly prisma: PrismaService,
     private readonly passwords: PasswordService,
     private readonly tokens: AccessTokenService,
+    private readonly clientScopes: ClientScopeService,
   ) {}
 
   listDevices() {
@@ -90,6 +93,24 @@ export class TsdDeviceService {
       ...device,
       deviceSecret: secret,
     };
+  }
+
+  async listClientsForDevice(user: AuthUser) {
+    await this.touchActiveDevice(user.deviceId);
+    const clientFilter = this.clientScopes.resolveClientFilter(user);
+
+    return this.prisma.client.findMany({
+      where: {
+        ...(clientFilter === undefined ? {} : { id: clientFilter }),
+        status: { not: ClientStatus.ARCHIVED },
+      },
+      orderBy: [{ name: 'asc' }, { code: 'asc' }],
+      select: {
+        id: true,
+        code: true,
+        name: true,
+      },
+    });
   }
 
   async login(dto: LoginTsdDeviceDto) {

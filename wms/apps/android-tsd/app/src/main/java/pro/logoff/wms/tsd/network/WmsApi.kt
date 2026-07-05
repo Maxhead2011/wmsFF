@@ -1,6 +1,7 @@
 package pro.logoff.wms.tsd.network
 
 import retrofit2.http.Body
+import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.POST
 import retrofit2.Retrofit
@@ -45,6 +46,12 @@ data class TsdLoginResponse(
     val device: TsdDeviceInfo,
 )
 
+data class TsdClientSummary(
+    val id: String,
+    val code: String,
+    val name: String,
+)
+
 interface WmsApi {
     @POST("api/v1/tsd/login")
     suspend fun login(@Body request: TsdLoginRequest): TsdLoginResponse
@@ -60,6 +67,11 @@ interface WmsApi {
         @Header("Authorization") authorization: String,
         @Body request: TsdSyncRequest,
     ): List<TsdOperationResponse>
+
+    @GET("api/v1/tsd/clients")
+    suspend fun listClients(
+        @Header("Authorization") authorization: String,
+    ): List<TsdClientSummary>
 }
 
 object WmsApiFactory {

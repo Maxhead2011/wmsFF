@@ -4,10 +4,12 @@ import android.os.Bundle
 import android.text.InputType
 import android.view.KeyEvent
 import android.view.View
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Spinner
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
@@ -16,6 +18,7 @@ import pro.logoff.wms.tsd.auth.TsdSessionStore
 import pro.logoff.wms.tsd.data.OperationOutbox
 import pro.logoff.wms.tsd.data.PendingOperation
 import pro.logoff.wms.tsd.data.TsdDatabase
+import pro.logoff.wms.tsd.network.TsdClientSummary
 import pro.logoff.wms.tsd.network.TsdLoginRequest
 import pro.logoff.wms.tsd.network.WmsApiFactory
 import pro.logoff.wms.tsd.sync.TsdSyncRunner
@@ -32,7 +35,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var baseUrlInput: EditText
     private lateinit var deviceCodeInput: EditText
     private lateinit var deviceSecretInput: EditText
-    private lateinit var clientIdInput: EditText
+    private lateinit var clientSpinner: Spinner
+    private lateinit var clientAdapter: ArrayAdapter<String>
     private lateinit var boxCodeInput: EditText
     private lateinit var fromBoxCodeInput: EditText
     private lateinit var toBoxCodeInput: EditText
@@ -45,9 +49,11 @@ class MainActivity : ComponentActivity() {
     private lateinit var inventoryModeButton: Button
     private lateinit var loginButton: Button
     private lateinit var logoutButton: Button
+    private lateinit var refreshClientsButton: Button
     private lateinit var syncButton: Button
     private lateinit var retryRejectedButton: Button
     private var operationMode = TsdOperationMode.RECEIPT
+    private val clients = mutableListOf<TsdClientSummary>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -71,7 +77,12 @@ class MainActivity : ComponentActivity() {
         deviceSecretInput = singleLineInput("Секрет ТСД").apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
-        clientIdInput = singleLineInput("ID клиента")
+        clientAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, mutableListOf("Выберите клиента")).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+        clientSpinner = Spinner(this).apply {
+            adapter = clientAdapter
+        }
         boxCodeInput = singleLineInput("Короб")
         fromBoxCodeInput = singleLineInput("Короб-источник")
         toBoxCodeInput = singleLineInput("Короб-приемник")
@@ -105,6 +116,11 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { clearSession() }
         }
 
+        refreshClientsButton = Button(this).apply {
+            text = "Обновить клиентов"
+            setOnClickListener { loadClients() }
+        }
+
         syncButton = Button(this).apply {
             text = "Синхронизировать"
             setOnClickListener { syncPending() }
@@ -133,13 +149,18 @@ class MainActivity : ComponentActivity() {
             addView(deviceSecretInput)
             addView(loginButton)
             addView(logoutButton)
+            addView(refreshClientsButton)
             addView(TextView(this@MainActivity).apply {
                 text = "Операция"
                 textSize = 16f
             })
             addView(modeRow)
             addView(operationHintView)
-            addView(clientIdInput)
+            addView(TextView(this@MainActivity).apply {
+                text = "Клиент"
+                textSize = 16f
+            })
+            addView(clientSpinner)
             addView(boxCodeInput)
             addView(fromBoxCodeInput)
             addView(toBoxCodeInput)
@@ -159,7 +180,11 @@ class MainActivity : ComponentActivity() {
 
         setContentView(ScrollView(this).apply { addView(root) })
         setOperationMode(TsdOperationMode.RECEIPT)
+        refreshClientOptions()
         lifecycleScope.launch { refreshQueue() }
+        if (sessionStore.load() != null) {
+            loadClients()
+        }
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -174,7 +199,7 @@ class MainActivity : ComponentActivity() {
         val barcode = scanInput.textValue()
         if (barcode.isEmpty()) return
 
-        val clientId = clientIdInput.requiredValue("Укажите ID клиента") ?: return
+        val clientId = selectedClientId() ?: return
         val stockStatus = stockStatusInput.optionalValue()
 
         lifecycleScope.launch {
@@ -246,14 +271,49 @@ class MainActivity : ComponentActivity() {
                 sessionStore.save(response)
                 deviceSecretInput.setText("")
                 refreshQueue("ТСД вошёл: ${response.device.name}")
+                loadClients()
             }.onFailure { error ->
                 refreshQueue(error.message ?: "Не удалось войти на ТСД")
             }
         }
     }
 
+    private fun loadClients() {
+        val session = sessionStore.load()
+        if (session == null) {
+            statusView.text = "Сначала войдите на ТСД, потом обновите клиентов"
+            return
+        }
+
+        refreshClientsButton.isEnabled = false
+        lifecycleScope.launch {
+            val result = runCatching {
+                val api = WmsApiFactory.create(baseUrlInput.textValue())
+                api.listClients("${session.tokenType} ${session.accessToken}")
+            }
+
+            refreshClientsButton.isEnabled = true
+            result.onSuccess { loadedClients ->
+                clients.clear()
+                clients.addAll(loadedClients)
+                refreshClientOptions()
+                refreshQueue(
+                    if (loadedClients.isEmpty()) {
+                        "Для этого ТСД нет доступных клиентов"
+                    } else {
+                        "Клиенты загружены: ${loadedClients.size}. Выберите клиента для приемки"
+                    },
+                )
+            }.onFailure { error ->
+                refreshQueue(error.message ?: "Не удалось загрузить клиентов")
+            }
+        }
+    }
+
     private fun clearSession() {
         sessionStore.clear()
+        clients.clear()
+        refreshClientOptions()
         statusView.text = "Вход ТСД сброшен"
         lifecycleScope.launch { refreshQueue() }
     }
@@ -343,6 +403,29 @@ class MainActivity : ComponentActivity() {
             text = label
             setOnClickListener { setOperationMode(mode) }
         }
+
+    private fun refreshClientOptions() {
+        clientAdapter.clear()
+        clientAdapter.add("Выберите клиента")
+        clientAdapter.addAll(clients.map { client -> "${client.name} · ${client.code}" })
+        clientAdapter.notifyDataSetChanged()
+        clientSpinner.setSelection(0)
+    }
+
+    private fun selectedClientId(): String? {
+        val selectedIndex = clientSpinner.selectedItemPosition - 1
+        if (selectedIndex < 0 || selectedIndex >= clients.size) {
+            statusView.text = if (clients.isEmpty()) {
+                "Обновите клиентов и выберите клиента приемки"
+            } else {
+                "Выберите клиента приемки"
+            }
+            clientSpinner.requestFocus()
+            return null
+        }
+
+        return clients[selectedIndex].id
+    }
 
     private fun EditText.textValue(): String = text.toString().trim()
 
