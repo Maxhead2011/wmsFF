@@ -42,6 +42,7 @@ type SkuForm = {
   lengthCm: string;
   widthCm: string;
   heightCm: string;
+  volumeLiters: string;
   needsChestnyZnak: boolean;
   isUnmarked: boolean;
   needsLabel: boolean;
@@ -75,6 +76,7 @@ const emptySkuForm: SkuForm = {
   lengthCm: '',
   widthCm: '',
   heightCm: '',
+  volumeLiters: '',
   needsChestnyZnak: false,
   isUnmarked: false,
   needsLabel: false,
@@ -416,6 +418,7 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
                 <TextField disabled={false} label="Длина, см" value={manualForm.lengthCm} onChange={(value) => setManualForm({ ...manualForm, lengthCm: value })} />
                 <TextField disabled={false} label="Ширина, см" value={manualForm.widthCm} onChange={(value) => setManualForm({ ...manualForm, widthCm: value })} />
                 <TextField disabled={false} label="Высота, см" value={manualForm.heightCm} onChange={(value) => setManualForm({ ...manualForm, heightCm: value })} />
+                <TextField disabled={false} label="Литраж, л" value={manualForm.volumeLiters} onChange={(value) => setManualForm({ ...manualForm, volumeLiters: value })} />
               </div>
               <TextAreaField disabled={false} label="Фото URL" value={manualForm.photoUrls} onChange={(value) => setManualForm({ ...manualForm, photoUrls: value })} placeholder="Одна ссылка на фото в строке" />
               <div className="catalog-card-form__checks">
@@ -573,6 +576,7 @@ function SkuModal({
               <TextField disabled={!isEditing} label="Длина, см" value={form.lengthCm} onChange={(value) => onChange({ ...form, lengthCm: value })} />
               <TextField disabled={!isEditing} label="Ширина, см" value={form.widthCm} onChange={(value) => onChange({ ...form, widthCm: value })} />
               <TextField disabled={!isEditing} label="Высота, см" value={form.heightCm} onChange={(value) => onChange({ ...form, heightCm: value })} />
+              <TextField disabled={!isEditing} label="Литраж, л" value={form.volumeLiters} onChange={(value) => onChange({ ...form, volumeLiters: value })} />
             </div>
             <TextAreaField disabled={!isEditing} label="Фото URL" value={form.photoUrls} onChange={(value) => onChange({ ...form, photoUrls: value })} placeholder="Одна ссылка на фото в строке" />
 
@@ -688,6 +692,7 @@ function formFromSku(sku: SkuDetail): SkuForm {
     lengthCm: valueToText(sku.lengthCm),
     widthCm: valueToText(sku.widthCm),
     heightCm: valueToText(sku.heightCm),
+    volumeLiters: valueToText(sku.volumeLiters),
     needsChestnyZnak: sku.needsChestnyZnak,
     isUnmarked: sku.isUnmarked,
     needsLabel: sku.needsLabel,
@@ -711,6 +716,7 @@ function payloadFromForm(form: SkuForm): UpdateSkuPayload {
     lengthCm: parseOptionalNumber(form.lengthCm),
     widthCm: parseOptionalNumber(form.widthCm),
     heightCm: parseOptionalNumber(form.heightCm),
+    volumeLiters: parseOptionalNumber(form.volumeLiters),
     needsChestnyZnak: form.needsChestnyZnak,
     isUnmarked: form.isUnmarked,
     needsLabel: form.needsLabel,
@@ -735,6 +741,7 @@ function payloadFromManualForm(form: ManualSkuForm): CreateSkuPayload {
     lengthCm: parseOptionalNumber(form.lengthCm),
     widthCm: parseOptionalNumber(form.widthCm),
     heightCm: parseOptionalNumber(form.heightCm),
+    volumeLiters: parseOptionalNumber(form.volumeLiters),
     needsChestnyZnak: form.needsChestnyZnak,
     isUnmarked: form.isUnmarked,
     needsLabel: form.needsLabel,

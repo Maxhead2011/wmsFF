@@ -1738,6 +1738,7 @@ export type CreateSkuPayload = {
   lengthCm?: number;
   widthCm?: number;
   heightCm?: number;
+  volumeLiters?: number;
   needsChestnyZnak?: boolean;
   isUnmarked?: boolean;
   needsLabel?: boolean;

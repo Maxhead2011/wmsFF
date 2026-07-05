@@ -67,6 +67,11 @@ export class CreateSkuDto {
   heightCm?: number;
 
   @IsOptional()
+  @IsNumber()
+  @Min(0.001)
+  volumeLiters?: number;
+
+  @IsOptional()
   @IsBoolean()
   needsChestnyZnak?: boolean;
 

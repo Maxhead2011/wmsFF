@@ -77,7 +77,8 @@ export class SkusService {
 
   async create(dto: CreateSkuDto, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
-    const volume = this.tryCalculateVolume(dto);
+    const manualVolumeLiters = normalizePositiveNumber(dto.volumeLiters);
+    const calculatedVolume = manualVolumeLiters == null ? this.tryCalculateVolume(dto) : null;
 
     // Русский комментарий: карточка SKU и основной штрихкод создаются одной транзакцией, чтобы не ловить "висячие" barcode.
     try {
@@ -97,8 +98,8 @@ export class SkusService {
             lengthCm: dto.lengthCm,
             widthCm: dto.widthCm,
             heightCm: dto.heightCm,
-            volumeLiters: volume?.liters,
-            volumeSource: volume ? 'CALCULATED' : 'MANUAL',
+            volumeLiters: manualVolumeLiters ?? calculatedVolume?.liters,
+            volumeSource: manualVolumeLiters != null ? 'MANUAL' : calculatedVolume ? 'CALCULATED' : 'MANUAL',
             needsChestnyZnak: dto.needsChestnyZnak ?? false,
             isUnmarked: dto.isUnmarked ?? false,
             needsLabel: dto.needsLabel ?? false,
@@ -555,8 +556,9 @@ export class SkusService {
     const nextLength = dto.lengthCm ?? decimalToNumber(existing.lengthCm);
     const nextWidth = dto.widthCm ?? decimalToNumber(existing.widthCm);
     const nextHeight = dto.heightCm ?? decimalToNumber(existing.heightCm);
-    const volume =
-      nextLength && nextWidth && nextHeight
+    const manualVolumeLiters = dto.volumeLiters === undefined ? undefined : normalizePositiveNumber(dto.volumeLiters);
+    const calculatedVolume =
+      manualVolumeLiters === undefined && nextLength && nextWidth && nextHeight
         ? this.volumes.calculateLiters({
             lengthCm: nextLength,
             widthCm: nextWidth,
@@ -577,7 +579,11 @@ export class SkusService {
       ...(dto.lengthCm === undefined ? {} : { lengthCm: dto.lengthCm ?? null }),
       ...(dto.widthCm === undefined ? {} : { widthCm: dto.widthCm ?? null }),
       ...(dto.heightCm === undefined ? {} : { heightCm: dto.heightCm ?? null }),
-      ...(volume ? { volumeLiters: volume.liters, volumeSource: 'CALCULATED' } : {}),
+      ...(manualVolumeLiters !== undefined
+        ? { volumeLiters: manualVolumeLiters, volumeSource: 'MANUAL' }
+        : calculatedVolume
+          ? { volumeLiters: calculatedVolume.liters, volumeSource: 'CALCULATED' }
+          : {}),
       ...(dto.needsChestnyZnak === undefined ? {} : { needsChestnyZnak: dto.needsChestnyZnak }),
       ...(dto.isUnmarked === undefined ? {} : { isUnmarked: dto.isUnmarked }),
       ...(dto.needsLabel === undefined ? {} : { needsLabel: dto.needsLabel }),
@@ -602,6 +608,10 @@ export class SkusService {
 function cleanOptional(value?: string) {
   const trimmed = value?.trim();
   return trimmed || undefined;
+}
+
+function normalizePositiveNumber(value?: number) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 function cleanPhotoUrls(photoUrls?: string[]) {
