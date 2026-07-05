@@ -1,10 +1,14 @@
 package pro.logoff.wms.tsd;
 
 import android.app.Activity;
+import android.content.Intent;
+import android.graphics.Color;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
+import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.widget.ArrayAdapter;
@@ -37,6 +41,12 @@ import pro.logoff.wms.tsd.sync.TsdSyncSummary;
 import retrofit2.Response;
 
 public class MainActivity extends Activity {
+    private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
+    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk";
+    private static final int RED = Color.rgb(215, 25, 32);
+    private static final int LIGHT_GRAY = Color.rgb(226, 232, 240);
+    private static final int TEXT = Color.rgb(30, 41, 59);
+
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final List<TsdClientSummary> clients = new ArrayList<>();
@@ -44,149 +54,40 @@ public class MainActivity extends Activity {
     private OperationOutbox outbox;
     private TsdSessionStore sessionStore;
     private TextView statusView;
-    private TextView sessionView;
-    private TextView countsView;
-    private TextView rejectedView;
-    private TextView operationHintView;
-    private EditText scanInput;
+    private TextView sessionNameView;
+    private TextView sessionCodeView;
+    private TextView queueView;
     private EditText baseUrlInput;
     private EditText deviceCodeInput;
     private EditText deviceSecretInput;
     private Spinner clientSpinner;
     private ArrayAdapter<String> clientAdapter;
     private EditText boxCodeInput;
-    private EditText fromBoxCodeInput;
-    private EditText toBoxCodeInput;
     private EditText quantityInput;
     private EditText stockStatusInput;
     private EditText sourceDocumentInput;
     private EditText commentInput;
-    private Button receiptModeButton;
-    private Button moveModeButton;
-    private Button inventoryModeButton;
-    private Button loginButton;
-    private Button logoutButton;
-    private Button refreshClientsButton;
-    private Button syncButton;
-    private Button retryRejectedButton;
-    private TsdOperationMode operationMode = TsdOperationMode.RECEIPT;
+    private EditText scanInput;
+    private int pendingCount;
+    private int rejectedCount;
+    private boolean online;
+    private String statusMessage = "";
+    private Screen screen = Screen.MAIN;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        outbox = new OperationOutbox(TsdDatabase.get(this).operationDao());
-        sessionStore = new TsdSessionStore(this);
-
-        statusView = new TextView(this);
-        statusView.setText("Готово к сканированию");
-        statusView.setTextSize(18f);
-
-        sessionView = new TextView(this);
-        sessionView.setTextSize(16f);
-        countsView = new TextView(this);
-        countsView.setTextSize(16f);
-        operationHintView = new TextView(this);
-        operationHintView.setTextSize(15f);
-        rejectedView = new TextView(this);
-        rejectedView.setTextSize(14f);
-
-        baseUrlInput = singleLineInput("API URL");
-        baseUrlInput.setText("https://wms.logoff.pro/");
-
-        deviceCodeInput = singleLineInput("Код ТСД");
-        deviceSecretInput = singleLineInput("Секрет ТСД");
-        deviceSecretInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-
-        clientAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new ArrayList<String>());
-        clientAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        clientSpinner = new Spinner(this);
-        clientSpinner.setAdapter(clientAdapter);
-
-        boxCodeInput = singleLineInput("Короб");
-        fromBoxCodeInput = singleLineInput("Короб-источник");
-        toBoxCodeInput = singleLineInput("Короб-приемник");
-        quantityInput = singleLineInput("Количество");
-        quantityInput.setInputType(InputType.TYPE_CLASS_NUMBER);
-        stockStatusInput = singleLineInput("Статус остатка");
-        stockStatusInput.setText("AVAILABLE");
-        sourceDocumentInput = singleLineInput("Документ-основание");
-        commentInput = singleLineInput("Комментарий");
-
-        scanInput = singleLineInput("Сканируйте штрихкод товара");
-        scanInput.setOnEditorActionListener((view, actionId, event) -> {
-            submitScan();
-            return true;
-        });
-
-        receiptModeButton = operationModeButton("Приемка", TsdOperationMode.RECEIPT);
-        moveModeButton = operationModeButton("Перемещение", TsdOperationMode.MOVE);
-        inventoryModeButton = operationModeButton("Инвентаризация", TsdOperationMode.INVENTORY);
-
-        loginButton = new Button(this);
-        loginButton.setText("Войти на ТСД");
-        loginButton.setOnClickListener(view -> loginDevice());
-
-        logoutButton = new Button(this);
-        logoutButton.setText("Сбросить вход");
-        logoutButton.setOnClickListener(view -> clearSession());
-
-        refreshClientsButton = new Button(this);
-        refreshClientsButton.setText("Обновить клиентов");
-        refreshClientsButton.setOnClickListener(view -> loadClients());
-
-        syncButton = new Button(this);
-        syncButton.setText("Синхронизировать");
-        syncButton.setOnClickListener(view -> syncPending());
-
-        retryRejectedButton = new Button(this);
-        retryRejectedButton.setText("Вернуть отклоненные в очередь");
-        retryRejectedButton.setOnClickListener(view -> requeueRejected());
-
-        LinearLayout modeRow = new LinearLayout(this);
-        modeRow.setOrientation(LinearLayout.VERTICAL);
-        modeRow.addView(receiptModeButton);
-        modeRow.addView(moveModeButton);
-        modeRow.addView(inventoryModeButton);
-
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(32, 32, 32, 32);
-        root.addView(statusView);
-        root.addView(sessionView);
-        root.addView(countsView);
-        root.addView(baseUrlInput);
-        root.addView(deviceCodeInput);
-        root.addView(deviceSecretInput);
-        root.addView(loginButton);
-        root.addView(logoutButton);
-        root.addView(refreshClientsButton);
-        root.addView(label("Операция"));
-        root.addView(modeRow);
-        root.addView(operationHintView);
-        root.addView(label("Клиент"));
-        root.addView(clientSpinner);
-        root.addView(boxCodeInput);
-        root.addView(fromBoxCodeInput);
-        root.addView(toBoxCodeInput);
-        root.addView(quantityInput);
-        root.addView(stockStatusInput);
-        root.addView(sourceDocumentInput);
-        root.addView(commentInput);
-        root.addView(scanInput);
-        root.addView(syncButton);
-        root.addView(retryRejectedButton);
-        root.addView(label("Отклоненные операции"));
-        root.addView(rejectedView);
-
-        ScrollView scrollView = new ScrollView(this);
-        scrollView.addView(root);
-        setContentView(scrollView);
-
-        setOperationMode(TsdOperationMode.RECEIPT);
-        refreshClientOptions();
-        refreshQueue(null);
-        if (sessionStore.load() != null) {
-            loadClients();
+        getWindow().setStatusBarColor(RED);
+        try {
+            outbox = new OperationOutbox(TsdDatabase.get(this).operationDao());
+            sessionStore = new TsdSessionStore(this);
+            renderMainScreen();
+            refreshQueue(null);
+            if (sessionStore.load() != null) {
+                loadClients(false);
+            }
+        } catch (Throwable error) {
+            renderFatalScreen(error);
         }
     }
 
@@ -199,15 +100,146 @@ public class MainActivity extends Activity {
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN && event.getKeyCode() == KeyEvent.KEYCODE_ENTER) {
-            submitScan();
-            return true;
+            if (screen == Screen.RECEIPT && scanInput != null) {
+                submitReceiptScan();
+                return true;
+            }
         }
         return super.dispatchKeyEvent(event);
     }
 
-    private void submitScan() {
-        String barcode = textValue(scanInput);
-        if (barcode.isEmpty()) {
+    private void renderMainScreen() {
+        screen = Screen.MAIN;
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(mainStatusLine());
+        root.addView(primaryMenuButton("Приемка товара", view -> openReceipt()));
+        root.addView(primaryMenuButton("Сборка заявки", view -> renderInfoScreen("Сборка заявки", "Список активных заявок будет открыт здесь.")));
+        root.addView(primaryMenuButton("Инвентаризация", view -> renderInfoScreen("Инвентаризация", "Модуль инвентаризации будет открыт здесь.")));
+        root.addView(secondaryButton("Синхронизировать очередь (" + pendingCount + ")", view -> syncPending()));
+        root.addView(secondaryButton("Обновить клиентов", view -> loadClients(true)));
+        root.addView(secondaryButton("Настройки / вход", view -> renderSettingsScreen()));
+        root.addView(secondaryButton("Проверить обновление", view -> openApkDownload()));
+        root.addView(secondaryButton("Сбросить вход", view -> clearSession()));
+        if (!statusMessage.isEmpty()) {
+            root.addView(messageView(statusMessage));
+        }
+        setScrollableContent(root);
+        refreshHeaderText();
+    }
+
+    private void renderSettingsScreen() {
+        screen = Screen.SETTINGS;
+        TsdSession session = safeSession();
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title("Настройки / вход"));
+
+        baseUrlInput = input("Адрес WMS");
+        baseUrlInput.setText(DEFAULT_BASE_URL);
+        deviceCodeInput = input("Код ТСД");
+        deviceSecretInput = input("Секрет ТСД");
+        deviceSecretInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+
+        root.addView(baseUrlInput);
+        root.addView(deviceCodeInput);
+        root.addView(deviceSecretInput);
+        root.addView(primaryMenuButton("Войти на ТСД", view -> loginDevice()));
+        root.addView(secondaryButton("Скачать приложение ТСД", view -> openApkDownload()));
+        root.addView(secondaryButton("Назад", view -> renderMainScreen()));
+
+        if (session != null) {
+            root.addView(messageView("Сейчас: " + session.deviceName + " / " + session.deviceCode));
+        }
+        if (!statusMessage.isEmpty()) {
+            root.addView(messageView(statusMessage));
+        }
+        setScrollableContent(root);
+        refreshHeaderText();
+    }
+
+    private void renderReceiptScreen() {
+        screen = Screen.RECEIPT;
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title("Приемка товара"));
+        root.addView(label("Клиент"));
+
+        clientAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new ArrayList<String>());
+        clientAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        clientSpinner = new Spinner(this);
+        clientSpinner.setAdapter(clientAdapter);
+        refreshClientOptions();
+        root.addView(clientSpinner);
+        root.addView(secondaryButton("Обновить клиентов", view -> loadClients(true)));
+
+        boxCodeInput = input("Короб");
+        quantityInput = input("Количество");
+        quantityInput.setInputType(InputType.TYPE_CLASS_NUMBER);
+        quantityInput.setText("1");
+        stockStatusInput = input("Статус остатка");
+        stockStatusInput.setText("AVAILABLE");
+        sourceDocumentInput = input("Документ-основание");
+        commentInput = input("Комментарий");
+        scanInput = input("Сканируйте штрихкод товара");
+        scanInput.setOnEditorActionListener((view, actionId, event) -> {
+            submitReceiptScan();
+            return true;
+        });
+
+        root.addView(boxCodeInput);
+        root.addView(quantityInput);
+        root.addView(stockStatusInput);
+        root.addView(sourceDocumentInput);
+        root.addView(commentInput);
+        root.addView(scanInput);
+        root.addView(primaryMenuButton("Сохранить скан", view -> submitReceiptScan()));
+        root.addView(secondaryButton("Синхронизировать очередь (" + pendingCount + ")", view -> syncPending()));
+        root.addView(secondaryButton("Назад", view -> renderMainScreen()));
+        if (!statusMessage.isEmpty()) {
+            root.addView(messageView(statusMessage));
+        }
+        setScrollableContent(root);
+        scanInput.requestFocus();
+        refreshHeaderText();
+    }
+
+    private void renderInfoScreen(String title, String text) {
+        screen = Screen.INFO;
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title(title));
+        root.addView(messageView(text));
+        root.addView(secondaryButton("Назад", view -> renderMainScreen()));
+        setScrollableContent(root);
+        refreshHeaderText();
+    }
+
+    private void renderFatalScreen(Throwable error) {
+        LinearLayout root = baseRoot();
+        root.addView(title("LOGOff ТСД"));
+        root.addView(messageView("Приложение не смогло открыть локальную базу. Переустановите приложение или очистите данные ТСД."));
+        root.addView(messageView(error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage()));
+        root.addView(secondaryButton("Скачать приложение заново", view -> openApkDownload()));
+        setScrollableContent(root);
+    }
+
+    private void openReceipt() {
+        if (safeSession() == null) {
+            statusMessage = "Сначала выполните вход в настройках.";
+            renderSettingsScreen();
+            return;
+        }
+        if (clients.isEmpty()) {
+            loadClients(true);
+        }
+        renderReceiptScreen();
+    }
+
+    private void submitReceiptScan() {
+        if (outbox == null) {
+            statusMessage = "Локальная очередь недоступна.";
+            refreshCurrentScreen();
             return;
         }
 
@@ -216,76 +248,44 @@ public class MainActivity extends Activity {
             return;
         }
 
-        String stockStatus = optionalValue(stockStatusInput);
-        TsdOperationMode selectedMode = operationMode;
+        String barcode = textValue(scanInput);
         String boxCode = textValue(boxCodeInput);
-        String fromBoxCode = textValue(fromBoxCodeInput);
-        String toBoxCode = textValue(toBoxCodeInput);
         String quantityText = textValue(quantityInput);
-        String sourceDocument = optionalValue(sourceDocumentInput);
-        String comment = optionalValue(commentInput);
-
-        Integer quantity;
-        if (selectedMode == TsdOperationMode.RECEIPT) {
-            if (boxCode.isEmpty()) {
-                statusView.setText("Укажите короб приемки");
-                boxCodeInput.requestFocus();
-                return;
-            }
-            quantity = parseQuantity(quantityText, "Количество должно быть больше 0", false);
-        } else if (selectedMode == TsdOperationMode.MOVE) {
-            if (fromBoxCode.isEmpty()) {
-                statusView.setText("Укажите короб-источник");
-                fromBoxCodeInput.requestFocus();
-                return;
-            }
-            if (toBoxCode.isEmpty()) {
-                statusView.setText("Укажите короб-приемник");
-                toBoxCodeInput.requestFocus();
-                return;
-            }
-            quantity = parseQuantity(quantityText, "Количество должно быть больше 0", false);
-        } else {
-            if (boxCode.isEmpty()) {
-                statusView.setText("Укажите короб инвентаризации");
-                boxCodeInput.requestFocus();
-                return;
-            }
-            quantity = parseQuantity(quantityText, "Факт может быть 0 или больше", true);
+        if (barcode.isEmpty()) {
+            statusMessage = "Сканируйте штрихкод товара.";
+            refreshCurrentScreen();
+            return;
+        }
+        if (boxCode.isEmpty()) {
+            statusMessage = "Укажите короб приемки.";
+            boxCodeInput.requestFocus();
+            refreshCurrentScreen();
+            return;
         }
 
+        Integer quantity = parseQuantity(quantityText, "Количество должно быть больше 0", false);
         if (quantity == null) {
             return;
         }
 
-        executor.execute(() -> {
-            PendingOperation operation;
-            if (selectedMode == TsdOperationMode.RECEIPT) {
-                operation = outbox.enqueueReceipt(
-                    clientId,
-                    barcode,
-                    boxCode,
-                    quantity,
-                    stockStatus,
-                    sourceDocument,
-                    comment
-                );
-            } else if (selectedMode == TsdOperationMode.MOVE) {
-                operation = outbox.enqueueMove(
-                    clientId,
-                    barcode,
-                    fromBoxCode,
-                    toBoxCode,
-                    quantity,
-                    stockStatus,
-                    comment
-                );
-            } else {
-                operation = outbox.enqueueInventory(clientId, barcode, boxCode, quantity, stockStatus);
-            }
-
-            mainHandler.post(() -> scanInput.setText(""));
-            refreshQueue(selectedMode.title + ": скан принят в offline-очередь (" + operation.operationType + ")");
+        String status = optionalValue(stockStatusInput);
+        String sourceDocument = optionalValue(sourceDocumentInput);
+        String comment = optionalValue(commentInput);
+        runBackground(() -> {
+            PendingOperation operation = outbox.enqueueReceipt(
+                clientId,
+                barcode,
+                boxCode,
+                quantity,
+                status,
+                sourceDocument,
+                comment
+            );
+            mainHandler.post(() -> {
+                scanInput.setText("");
+                statusMessage = "Приемка: скан принят в очередь (" + operation.operationType + ")";
+                refreshQueue(statusMessage);
+            });
         });
     }
 
@@ -293,183 +293,276 @@ public class MainActivity extends Activity {
         String code = textValue(deviceCodeInput);
         String secret = textValue(deviceSecretInput);
         if (code.isEmpty() || secret.isEmpty()) {
-            statusView.setText("Укажите код и секрет ТСД");
+            statusMessage = "Укажите код и секрет ТСД.";
+            refreshCurrentScreen();
             return;
         }
 
-        loginButton.setEnabled(false);
         String baseUrl = textValue(baseUrlInput);
-        executor.execute(() -> {
-            try {
-                WmsApi api = WmsApiFactory.create(baseUrl);
-                Response<TsdLoginResponse> response = api.login(new TsdLoginRequest(code, secret)).execute();
-                if (!response.isSuccessful()) {
-                    throw new IOException("HTTP " + response.code());
-                }
-                TsdLoginResponse body = response.body();
-                if (body == null) {
-                    throw new IOException("Пустой ответ сервера");
-                }
-                sessionStore.save(body);
-                mainHandler.post(() -> {
-                    loginButton.setEnabled(true);
-                    deviceSecretInput.setText("");
-                    refreshQueue("ТСД вошел: " + body.device.name);
-                    loadClients();
-                });
-            } catch (Exception error) {
-                mainHandler.post(() -> {
-                    loginButton.setEnabled(true);
-                    refreshQueue(error.getMessage() == null ? "Не удалось войти на ТСД" : error.getMessage());
-                });
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(baseUrl);
+            Response<TsdLoginResponse> response = api.login(new TsdLoginRequest(code, secret)).execute();
+            if (!response.isSuccessful()) {
+                throw new IOException("HTTP " + response.code());
             }
+            TsdLoginResponse body = response.body();
+            if (body == null || body.device == null) {
+                throw new IOException("Пустой ответ сервера");
+            }
+            sessionStore.save(body);
+            mainHandler.post(() -> {
+                online = true;
+                statusMessage = "ТСД вошел: " + body.device.name;
+                loadClients(false);
+                renderMainScreen();
+            });
         });
     }
 
-    private void loadClients() {
-        TsdSession session = sessionStore.load();
+    private void loadClients(boolean showResult) {
+        TsdSession session = safeSession();
         if (session == null) {
-            statusView.setText("Сначала войдите на ТСД, потом обновите клиентов");
+            statusMessage = "Сначала войдите на ТСД.";
+            refreshCurrentScreen();
             return;
         }
 
-        refreshClientsButton.setEnabled(false);
-        String baseUrl = textValue(baseUrlInput);
-        executor.execute(() -> {
-            try {
-                WmsApi api = WmsApiFactory.create(baseUrl);
-                Response<List<TsdClientSummary>> response = api.listClients(session.authorizationHeader()).execute();
-                if (!response.isSuccessful()) {
-                    throw new IOException("HTTP " + response.code());
-                }
-                List<TsdClientSummary> loadedClients = response.body();
-                if (loadedClients == null) {
-                    loadedClients = new ArrayList<>();
-                }
-                List<TsdClientSummary> finalLoadedClients = loadedClients;
-                mainHandler.post(() -> {
-                    refreshClientsButton.setEnabled(true);
-                    clients.clear();
-                    clients.addAll(finalLoadedClients);
-                    refreshClientOptions();
-                    if (finalLoadedClients.isEmpty()) {
-                        refreshQueue("Для этого ТСД нет доступных клиентов");
-                    } else {
-                        refreshQueue("Клиенты загружены: " + finalLoadedClients.size() + ". Выберите клиента для приемки");
-                    }
-                });
-            } catch (Exception error) {
-                mainHandler.post(() -> {
-                    refreshClientsButton.setEnabled(true);
-                    refreshQueue(error.getMessage() == null ? "Не удалось загрузить клиентов" : error.getMessage());
-                });
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<List<TsdClientSummary>> response = api.listClients(session.authorizationHeader()).execute();
+            if (!response.isSuccessful()) {
+                throw new IOException("HTTP " + response.code());
             }
+            List<TsdClientSummary> loadedClients = response.body();
+            if (loadedClients == null) {
+                loadedClients = new ArrayList<>();
+            }
+            List<TsdClientSummary> finalLoadedClients = loadedClients;
+            mainHandler.post(() -> {
+                online = true;
+                clients.clear();
+                clients.addAll(finalLoadedClients);
+                refreshClientOptions();
+                if (showResult) {
+                    statusMessage = clients.isEmpty()
+                        ? "Для этого ТСД нет доступных клиентов."
+                        : "Клиенты загружены: " + clients.size();
+                    refreshCurrentScreen();
+                }
+            });
+        });
+    }
+
+    private void syncPending() {
+        TsdSession session = safeSession();
+        if (session == null) {
+            statusMessage = "Сначала войдите на ТСД.";
+            refreshCurrentScreen();
+            return;
+        }
+
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            TsdSyncSummary summary = new TsdSyncRunner(outbox, api, session.deviceCode)
+                .syncPending(session.authorizationHeader());
+            mainHandler.post(() -> {
+                online = true;
+                statusMessage = summary.message + ": отправлено " + summary.sent + ", принято " + summary.applied +
+                    ", отклонено " + summary.rejected + ", на повтор " + summary.retried;
+                refreshQueue(statusMessage);
+            });
         });
     }
 
     private void clearSession() {
         sessionStore.clear();
         clients.clear();
-        refreshClientOptions();
-        statusView.setText("Вход ТСД сброшен");
-        refreshQueue(null);
+        online = false;
+        statusMessage = "Вход ТСД сброшен.";
+        renderMainScreen();
+        refreshQueue(statusMessage);
     }
 
-    private void syncPending() {
-        TsdSession session = sessionStore.load();
-        if (session == null) {
-            statusView.setText("Сначала войдите по коду и секрету ТСД");
-            return;
-        }
+    private void refreshQueue(String message) {
+        runBackground(() -> {
+            OperationOutboxCounts counts = outbox.counts();
+            mainHandler.post(() -> {
+                pendingCount = counts.pending;
+                rejectedCount = counts.rejected;
+                if (message != null) {
+                    statusMessage = message;
+                }
+                refreshHeaderText();
+                if (screen == Screen.MAIN) {
+                    renderMainScreen();
+                }
+            });
+        });
+    }
 
-        syncButton.setEnabled(false);
-        String baseUrl = textValue(baseUrlInput);
+    private void runBackground(ThrowingRunnable task) {
         executor.execute(() -> {
             try {
-                WmsApi api = WmsApiFactory.create(baseUrl);
-                TsdSyncSummary summary = new TsdSyncRunner(outbox, api, session.deviceCode)
-                    .syncPending(session.authorizationHeader());
+                task.run();
+            } catch (Throwable error) {
                 mainHandler.post(() -> {
-                    syncButton.setEnabled(true);
-                    refreshQueue(summary.message + ": отправлено " + summary.sent + ", принято " + summary.applied +
-                        ", отклонено " + summary.rejected + ", на повтор " + summary.retried);
-                });
-            } catch (Exception error) {
-                mainHandler.post(() -> {
-                    syncButton.setEnabled(true);
-                    refreshQueue(error.getMessage() == null ? "Ошибка синхронизации" : error.getMessage());
+                    online = false;
+                    statusMessage = error.getMessage() == null ? "Ошибка приложения" : error.getMessage();
+                    refreshCurrentScreen();
                 });
             }
         });
     }
 
-    private void requeueRejected() {
-        executor.execute(() -> {
-            int restored = outbox.requeueRejected();
-            refreshQueue("Возвращено в очередь: " + restored);
-        });
+    private LinearLayout header() {
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(0, 0, 0, dp(18));
+
+        TextView logo = new TextView(this);
+        logo.setText("ТСД");
+        logo.setGravity(Gravity.CENTER);
+        logo.setTextColor(Color.WHITE);
+        logo.setTextSize(18f);
+        logo.setTypeface(null, 1);
+        logo.setBackgroundColor(RED);
+        header.addView(logo, new LinearLayout.LayoutParams(dp(64), dp(50)));
+
+        LinearLayout names = new LinearLayout(this);
+        names.setOrientation(LinearLayout.VERTICAL);
+        names.setPadding(dp(14), 0, 0, 0);
+        sessionNameView = new TextView(this);
+        sessionNameView.setTextColor(TEXT);
+        sessionNameView.setTextSize(16f);
+        sessionCodeView = new TextView(this);
+        sessionCodeView.setTextColor(TEXT);
+        sessionCodeView.setTextSize(16f);
+        names.addView(sessionNameView);
+        names.addView(sessionCodeView);
+        header.addView(names);
+        return header;
     }
 
-    private void setOperationMode(TsdOperationMode mode) {
-        operationMode = mode;
-        operationHintView.setText(mode.hint);
-        receiptModeButton.setEnabled(mode != TsdOperationMode.RECEIPT);
-        moveModeButton.setEnabled(mode != TsdOperationMode.MOVE);
-        inventoryModeButton.setEnabled(mode != TsdOperationMode.INVENTORY);
-
-        boolean isMove = mode == TsdOperationMode.MOVE;
-        boolean isInventory = mode == TsdOperationMode.INVENTORY;
-        boxCodeInput.setVisibility(isMove ? View.GONE : View.VISIBLE);
-        fromBoxCodeInput.setVisibility(isMove ? View.VISIBLE : View.GONE);
-        toBoxCodeInput.setVisibility(isMove ? View.VISIBLE : View.GONE);
-        sourceDocumentInput.setVisibility(mode == TsdOperationMode.RECEIPT ? View.VISIBLE : View.GONE);
-        commentInput.setVisibility(isInventory ? View.GONE : View.VISIBLE);
-        quantityInput.setHint(isInventory ? "Фактическое количество" : "Количество");
-        scanInput.setHint("Сканируйте штрихкод товара");
+    private TextView mainStatusLine() {
+        queueView = new TextView(this);
+        queueView.setTextColor(TEXT);
+        queueView.setTextSize(17f);
+        queueView.setPadding(0, 0, 0, dp(16));
+        refreshHeaderText();
+        return queueView;
     }
 
-    private void refreshQueue(String message) {
-        executor.execute(() -> {
-            OperationOutboxCounts counts = outbox.counts();
-            List<PendingOperation> rejected = outbox.rejected();
-            mainHandler.post(() -> {
-                if (message != null) {
-                    statusView.setText(message);
-                }
-                TsdSession session = sessionStore.load();
-                if (session == null) {
-                    sessionView.setText("ТСД не авторизован");
-                } else {
-                    sessionView.setText("ТСД: " + session.deviceName + " (" + session.deviceCode + ")");
-                }
-                countsView.setText("В очереди: " + counts.pending + "; отклонено: " + counts.rejected);
-                rejectedView.setText(rejectedText(rejected));
-            });
-        });
+    private void refreshHeaderText() {
+        TsdSession session = safeSession();
+        if (sessionNameView != null) {
+            sessionNameView.setText(session == null ? "Вход сотрудника" : session.deviceName);
+        }
+        if (sessionCodeView != null) {
+            sessionCodeView.setText(session == null ? "не выполнен" : session.deviceCode);
+        }
+        if (queueView != null) {
+            queueView.setText((online ? "Онлайн" : "Офлайн") + " · очередь: " + pendingCount);
+        }
+    }
+
+    private LinearLayout baseRoot() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(18), dp(18), dp(18), dp(18));
+        root.setBackgroundColor(Color.rgb(248, 250, 252));
+        return root;
+    }
+
+    private void setScrollableContent(LinearLayout root) {
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(false);
+        scroll.addView(root);
+        setContentView(scroll);
+    }
+
+    private Button primaryMenuButton(String text, View.OnClickListener listener) {
+        Button button = new Button(this);
+        button.setText(text);
+        button.setTextSize(20f);
+        button.setTextColor(Color.WHITE);
+        button.setAllCaps(false);
+        button.setBackgroundColor(RED);
+        button.setOnClickListener(listener);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(86)
+        );
+        params.setMargins(0, 0, 0, dp(16));
+        button.setLayoutParams(params);
+        return button;
+    }
+
+    private Button secondaryButton(String text, View.OnClickListener listener) {
+        Button button = new Button(this);
+        button.setText(text);
+        button.setTextSize(16f);
+        button.setTextColor(TEXT);
+        button.setAllCaps(false);
+        button.setBackgroundColor(LIGHT_GRAY);
+        button.setOnClickListener(listener);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(54)
+        );
+        params.setMargins(0, 0, 0, dp(10));
+        button.setLayoutParams(params);
+        return button;
+    }
+
+    private TextView title(String text) {
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextColor(TEXT);
+        view.setTextSize(22f);
+        view.setTypeface(null, 1);
+        view.setPadding(0, 0, 0, dp(12));
+        return view;
     }
 
     private TextView label(String text) {
         TextView view = new TextView(this);
         view.setText(text);
-        view.setTextSize(16f);
+        view.setTextColor(TEXT);
+        view.setTextSize(14f);
+        view.setTypeface(null, 1);
+        view.setPadding(0, dp(8), 0, dp(4));
         return view;
     }
 
-    private EditText singleLineInput(String label) {
+    private TextView messageView(String text) {
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextColor(TEXT);
+        view.setTextSize(15f);
+        view.setPadding(0, dp(8), 0, dp(8));
+        return view;
+    }
+
+    private EditText input(String hint) {
         EditText input = new EditText(this);
-        input.setHint(label);
+        input.setHint(hint);
         input.setSingleLine(true);
+        input.setTextSize(16f);
+        input.setPadding(dp(10), 0, dp(10), 0);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(52)
+        );
+        params.setMargins(0, 0, 0, dp(10));
+        input.setLayoutParams(params);
         return input;
     }
 
-    private Button operationModeButton(String label, TsdOperationMode mode) {
-        Button button = new Button(this);
-        button.setText(label);
-        button.setOnClickListener(view -> setOperationMode(mode));
-        return button;
-    }
-
     private void refreshClientOptions() {
+        if (clientAdapter == null || clientSpinner == null) {
+            return;
+        }
         clientAdapter.clear();
         clientAdapter.add("Выберите клиента");
         for (TsdClientSummary client : clients) {
@@ -480,19 +573,41 @@ public class MainActivity extends Activity {
     }
 
     private String selectedClientId() {
+        if (clientSpinner == null) {
+            statusMessage = "Откройте приемку заново.";
+            refreshCurrentScreen();
+            return null;
+        }
         int selectedIndex = clientSpinner.getSelectedItemPosition() - 1;
         if (selectedIndex < 0 || selectedIndex >= clients.size()) {
-            statusView.setText(clients.isEmpty()
-                ? "Обновите клиентов и выберите клиента приемки"
-                : "Выберите клиента приемки");
+            statusMessage = clients.isEmpty()
+                ? "Обновите клиентов и выберите клиента приемки."
+                : "Выберите клиента приемки.";
             clientSpinner.requestFocus();
+            refreshCurrentScreen();
             return null;
         }
         return clients.get(selectedIndex).id;
     }
 
+    private TsdSession safeSession() {
+        return sessionStore == null ? null : sessionStore.load();
+    }
+
+    private void refreshCurrentScreen() {
+        if (screen == Screen.SETTINGS) {
+            renderSettingsScreen();
+        } else if (screen == Screen.RECEIPT) {
+            renderReceiptScreen();
+        } else if (screen == Screen.INFO) {
+            renderMainScreen();
+        } else {
+            renderMainScreen();
+        }
+    }
+
     private String textValue(EditText input) {
-        return input.getText().toString().trim();
+        return input == null ? "" : input.getText().toString().trim();
     }
 
     private String optionalValue(EditText input) {
@@ -509,59 +624,28 @@ public class MainActivity extends Activity {
             }
         } catch (NumberFormatException ignored) {
         }
-
-        statusView.setText(message);
+        statusMessage = message;
         quantityInput.requestFocus();
+        refreshCurrentScreen();
         return null;
     }
 
-    private String rejectedText(List<PendingOperation> rejected) {
-        if (rejected.isEmpty()) {
-            return "Отклоненных операций нет";
-        }
-
-        StringBuilder builder = new StringBuilder();
-        for (int index = 0; index < rejected.size(); index++) {
-            PendingOperation operation = rejected.get(index);
-            if (index > 0) {
-                builder.append("\n\n");
-            }
-            String barcode = operation.payload.get("barcode");
-            if (barcode == null) {
-                barcode = operation.payload.get("fromBoxCode");
-            }
-            if (barcode == null) {
-                barcode = operation.operationKey;
-            }
-            builder.append(operation.operationType)
-                .append(" / ")
-                .append(barcode)
-                .append("\n")
-                .append(operation.lastMessage == null ? "Причина не указана" : operation.lastMessage);
-        }
-        return builder.toString();
+    private void openApkDownload() {
+        startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(APK_URL)));
     }
 
-    private enum TsdOperationMode {
-        RECEIPT(
-            "Приемка",
-            "Приемка добавит товар в указанный короб через receipt_scan."
-        ),
-        MOVE(
-            "Перемещение",
-            "Перемещение перенесет количество из короба-источника в короб-приемник."
-        ),
-        INVENTORY(
-            "Инвентаризация",
-            "Инвентаризация сверит фактическое количество в коробе с остатком WMS."
-        );
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
 
-        private final String title;
-        private final String hint;
+    private enum Screen {
+        MAIN,
+        SETTINGS,
+        RECEIPT,
+        INFO
+    }
 
-        TsdOperationMode(String title, String hint) {
-            this.title = title;
-            this.hint = hint;
-        }
+    private interface ThrowingRunnable {
+        void run() throws Exception;
     }
 }

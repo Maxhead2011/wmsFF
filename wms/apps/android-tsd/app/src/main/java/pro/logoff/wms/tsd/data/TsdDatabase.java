@@ -6,7 +6,7 @@ import androidx.room.Database;
 import androidx.room.Room;
 import androidx.room.RoomDatabase;
 
-@Database(entities = {OperationEntity.class}, version = 1, exportSchema = false)
+@Database(entities = {OperationEntity.class}, version = 2, exportSchema = false)
 public abstract class TsdDatabase extends RoomDatabase {
     private static volatile TsdDatabase instance;
 
@@ -20,7 +20,7 @@ public abstract class TsdDatabase extends RoomDatabase {
                         context.getApplicationContext(),
                         TsdDatabase.class,
                         "logoff_wms_tsd.db"
-                    ).build();
+                    ).fallbackToDestructiveMigration().build();
                 }
             }
         }
