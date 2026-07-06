@@ -511,16 +511,24 @@ function scannedValue(body: Record<string, unknown> | string | undefined) {
 
   for (const key of [
     'boxCode',
+    'box_code',
+    'box-code',
     'box',
+    'boxNo',
+    'boxNum',
+    'boxId',
     'boxNumber',
     'boxBarcode',
     'boxQr',
     'boxQrCode',
+    'boxQRCode',
     'packageCode',
+    'package',
     'targetBoxCode',
     'targetBox',
     'sourceBox',
     'barcode',
+    'barCode',
     'barcodeText',
     'oldBarcode',
     'newBarcode',
@@ -530,13 +538,19 @@ function scannedValue(body: Record<string, unknown> | string | undefined) {
     'code',
     'value',
     'scan',
+    'scanCode',
+    'scanData',
     'scanText',
     'scanValue',
     'scanResult',
     'scannedCode',
+    'scannedValue',
     'qr',
     'qrCode',
+    'qrText',
     'raw',
+    'rawValue',
+    'rawText',
     'text',
     'serial',
   ]) {
@@ -551,6 +565,12 @@ function scannedValue(body: Record<string, unknown> | string | undefined) {
     return scannedValue(payload as Record<string, unknown>);
   }
 
+  for (const [key, value] of Object.entries(body)) {
+    if (looksLikeScannedKey(key, value)) {
+      return key.trim();
+    }
+  }
+
   return undefined;
 }
 
@@ -560,17 +580,58 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function textValue(body: Record<string, unknown> | undefined, key: string) {
   const value = body?.[key];
-  return typeof value === 'string' ? value.trim() : undefined;
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+  if (typeof value === 'number' || typeof value === 'bigint') {
+    return String(value).trim();
+  }
+  return undefined;
 }
 
 function normalizeScanCode(value?: string) {
-  return (value ?? '').trim().toLocaleLowerCase('ru-RU');
+  return safeDecode(value ?? '')
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .trim()
+    .toLocaleLowerCase('ru-RU');
 }
 
 function sameCode(left?: string | null, right?: string) {
   const leftCode = normalizeScanCode(left ?? undefined);
   const rightCode = normalizeScanCode(right);
-  return Boolean(leftCode && rightCode && (leftCode === rightCode || rightCode.includes(leftCode) || leftCode.includes(rightCode)));
+  const leftCompact = compactScanCode(leftCode);
+  const rightCompact = compactScanCode(rightCode);
+  return Boolean(
+    leftCode &&
+      rightCode &&
+      (leftCode === rightCode ||
+        rightCode.includes(leftCode) ||
+        leftCode.includes(rightCode) ||
+        (leftCompact && rightCompact && (leftCompact === rightCompact || rightCompact.includes(leftCompact) || leftCompact.includes(rightCompact)))),
+  );
+}
+
+function safeDecode(value: string) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function compactScanCode(value: string) {
+  return value.replace(/[^0-9a-zа-я]+/giu, '');
+}
+
+function looksLikeScannedKey(key: string, value: unknown) {
+  const normalizedKey = key.trim();
+  if (!normalizedKey || normalizedKey.length < 3) {
+    return false;
+  }
+  if (['deviceCode', 'device', 'token', 'stage', 'action'].includes(normalizedKey)) {
+    return false;
+  }
+  return value === '' || value == null || value === true || typeof value === 'number';
 }
 
 function collapseRows<T extends CollapsibleRow>(rows: T[], keyOf: (row: T) => string) {

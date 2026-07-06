@@ -57,7 +57,7 @@ export class TsdDeviceController {
   @RequirePermissions('stock:write')
   scanBoxSearch(
     @Param('id') id: string,
-    @Body() body: Record<string, unknown> | undefined,
+    @Body() body: unknown,
     @Query() query: Record<string, unknown>,
     @CurrentUser() user: AuthUser,
   ) {
@@ -69,6 +69,31 @@ export class TsdDeviceController {
   @RequirePermissions('stock:write')
   scanBoxSearchByGet(@Param('id') id: string, @Query() query: Record<string, unknown>, @CurrentUser() user: AuthUser) {
     return this.assembly.handleStageAction(id, 'box-search', 'scan', mergeActionPayload(undefined, query), user);
+  }
+
+  @Post('requests/:id/box-search/scan/:code')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  scanBoxSearchByPostPath(
+    @Param('id') id: string,
+    @Param('code') code: string,
+    @Body() body: unknown,
+    @Query() query: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.assembly.handleStageAction(id, 'box-search', 'scan', mergeActionPayload(body, query, { code }), user);
+  }
+
+  @Get('requests/:id/box-search/scan/:code')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  scanBoxSearchByGetPath(
+    @Param('id') id: string,
+    @Param('code') code: string,
+    @Query() query: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.assembly.handleStageAction(id, 'box-search', 'scan', mergeActionPayload(undefined, query, { code }), user);
   }
 
   @Get('requests/:id/relabel')
@@ -83,7 +108,7 @@ export class TsdDeviceController {
   @RequirePermissions('stock:write')
   scanRelabelSource(
     @Param('id') id: string,
-    @Body() body: Record<string, unknown> | undefined,
+    @Body() body: unknown,
     @Query() query: Record<string, unknown>,
     @CurrentUser() user: AuthUser,
   ) {
@@ -95,7 +120,7 @@ export class TsdDeviceController {
   @RequirePermissions('stock:write')
   scanRelabelTarget(
     @Param('id') id: string,
-    @Body() body: Record<string, unknown> | undefined,
+    @Body() body: unknown,
     @Query() query: Record<string, unknown>,
     @CurrentUser() user: AuthUser,
   ) {
@@ -114,7 +139,7 @@ export class TsdDeviceController {
   @RequirePermissions('stock:write')
   scanMoveTargetBox(
     @Param('id') id: string,
-    @Body() body: Record<string, unknown> | undefined,
+    @Body() body: unknown,
     @Query() query: Record<string, unknown>,
     @CurrentUser() user: AuthUser,
   ) {
@@ -126,7 +151,7 @@ export class TsdDeviceController {
   @RequirePermissions('stock:write')
   scanMoveItem(
     @Param('id') id: string,
-    @Body() body: Record<string, unknown> | undefined,
+    @Body() body: unknown,
     @Query() query: Record<string, unknown>,
     @CurrentUser() user: AuthUser,
   ) {
@@ -138,7 +163,7 @@ export class TsdDeviceController {
   @RequirePermissions('stock:write')
   finishMoves(
     @Param('id') id: string,
-    @Body() body: Record<string, unknown> | undefined,
+    @Body() body: unknown,
     @Query() query: Record<string, unknown>,
     @CurrentUser() user: AuthUser,
   ) {
@@ -157,7 +182,7 @@ export class TsdDeviceController {
   @RequirePermissions('stock:write')
   openBoxlessBox(
     @Param('id') id: string,
-    @Body() body: Record<string, unknown> | undefined,
+    @Body() body: unknown,
     @Query() query: Record<string, unknown>,
     @CurrentUser() user: AuthUser,
   ) {
@@ -169,7 +194,7 @@ export class TsdDeviceController {
   @RequirePermissions('stock:write')
   scanBoxlessItem(
     @Param('id') id: string,
-    @Body() body: Record<string, unknown> | undefined,
+    @Body() body: unknown,
     @Query() query: Record<string, unknown>,
     @CurrentUser() user: AuthUser,
   ) {
@@ -181,7 +206,7 @@ export class TsdDeviceController {
   @RequirePermissions('stock:write')
   closeBoxlessBox(
     @Param('id') id: string,
-    @Body() body: Record<string, unknown> | undefined,
+    @Body() body: unknown,
     @Query() query: Record<string, unknown>,
     @CurrentUser() user: AuthUser,
   ) {
@@ -193,7 +218,7 @@ export class TsdDeviceController {
   @RequirePermissions('stock:write')
   finishBoxlessPacking(
     @Param('id') id: string,
-    @Body() body: Record<string, unknown> | undefined,
+    @Body() body: unknown,
     @Query() query: Record<string, unknown>,
     @CurrentUser() user: AuthUser,
   ) {
@@ -232,9 +257,29 @@ export class TsdDeviceController {
   }
 }
 
-function mergeActionPayload(body: Record<string, unknown> | undefined, query: Record<string, unknown> | undefined) {
-  return {
+function mergeActionPayload(
+  body: unknown,
+  query: Record<string, unknown> | undefined,
+  extra: Record<string, unknown> | undefined = undefined,
+) {
+  const payload: Record<string, unknown> = {
     ...(query ?? {}),
-    ...(body ?? {}),
+    ...(extra ?? {}),
   };
+
+  if (body && typeof body === 'object' && !Array.isArray(body)) {
+    return {
+      ...payload,
+      ...(body as Record<string, unknown>),
+    };
+  }
+
+  if (typeof body === 'string' && body.trim()) {
+    return {
+      ...payload,
+      scan: body.trim(),
+    };
+  }
+
+  return payload;
 }
