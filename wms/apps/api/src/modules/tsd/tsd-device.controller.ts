@@ -55,8 +55,20 @@ export class TsdDeviceController {
   @Post('requests/:id/box-search/scan')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
-  scanBoxSearch(@Param('id') id: string, @Body() body: Record<string, unknown> | undefined, @CurrentUser() user: AuthUser) {
-    return this.assembly.handleStageAction(id, 'box-search', 'scan', body, user);
+  scanBoxSearch(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown> | undefined,
+    @Query() query: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.assembly.handleStageAction(id, 'box-search', 'scan', mergeActionPayload(body, query), user);
+  }
+
+  @Get('requests/:id/box-search/scan')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  scanBoxSearchByGet(@Param('id') id: string, @Query() query: Record<string, unknown>, @CurrentUser() user: AuthUser) {
+    return this.assembly.handleStageAction(id, 'box-search', 'scan', mergeActionPayload(undefined, query), user);
   }
 
   @Get('requests/:id/relabel')
@@ -69,15 +81,25 @@ export class TsdDeviceController {
   @Post('requests/:id/relabel/scan-source')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
-  scanRelabelSource(@Param('id') id: string, @Body() body: Record<string, unknown> | undefined, @CurrentUser() user: AuthUser) {
-    return this.assembly.handleStageAction(id, 'relabel', 'scan-source', body, user);
+  scanRelabelSource(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown> | undefined,
+    @Query() query: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.assembly.handleStageAction(id, 'relabel', 'scan-source', mergeActionPayload(body, query), user);
   }
 
   @Post('requests/:id/relabel/scan-target')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
-  scanRelabelTarget(@Param('id') id: string, @Body() body: Record<string, unknown> | undefined, @CurrentUser() user: AuthUser) {
-    return this.assembly.handleStageAction(id, 'relabel', 'scan-target', body, user);
+  scanRelabelTarget(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown> | undefined,
+    @Query() query: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.assembly.handleStageAction(id, 'relabel', 'scan-target', mergeActionPayload(body, query), user);
   }
 
   @Get('requests/:id/moves')
@@ -90,22 +112,37 @@ export class TsdDeviceController {
   @Post('requests/:id/moves/target-box')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
-  scanMoveTargetBox(@Param('id') id: string, @Body() body: Record<string, unknown> | undefined, @CurrentUser() user: AuthUser) {
-    return this.assembly.handleStageAction(id, 'moves', 'target-box', body, user);
+  scanMoveTargetBox(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown> | undefined,
+    @Query() query: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.assembly.handleStageAction(id, 'moves', 'target-box', mergeActionPayload(body, query), user);
   }
 
   @Post('requests/:id/moves/scan-item')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
-  scanMoveItem(@Param('id') id: string, @Body() body: Record<string, unknown> | undefined, @CurrentUser() user: AuthUser) {
-    return this.assembly.handleStageAction(id, 'moves', 'scan-item', body, user);
+  scanMoveItem(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown> | undefined,
+    @Query() query: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.assembly.handleStageAction(id, 'moves', 'scan-item', mergeActionPayload(body, query), user);
   }
 
   @Post('requests/:id/moves/finish')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
-  finishMoves(@Param('id') id: string, @Body() body: Record<string, unknown> | undefined, @CurrentUser() user: AuthUser) {
-    return this.assembly.handleStageAction(id, 'moves', 'finish', body, user);
+  finishMoves(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown> | undefined,
+    @Query() query: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.assembly.handleStageAction(id, 'moves', 'finish', mergeActionPayload(body, query), user);
   }
 
   @Get('requests/:id/boxless-packing')
@@ -118,29 +155,49 @@ export class TsdDeviceController {
   @Post('requests/:id/boxless-packing/open-box')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
-  openBoxlessBox(@Param('id') id: string, @Body() body: Record<string, unknown> | undefined, @CurrentUser() user: AuthUser) {
-    return this.assembly.handleStageAction(id, 'boxless-packing', 'open-box', body, user);
+  openBoxlessBox(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown> | undefined,
+    @Query() query: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.assembly.handleStageAction(id, 'boxless-packing', 'open-box', mergeActionPayload(body, query), user);
   }
 
   @Post('requests/:id/boxless-packing/scan-item')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
-  scanBoxlessItem(@Param('id') id: string, @Body() body: Record<string, unknown> | undefined, @CurrentUser() user: AuthUser) {
-    return this.assembly.handleStageAction(id, 'boxless-packing', 'scan-item', body, user);
+  scanBoxlessItem(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown> | undefined,
+    @Query() query: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.assembly.handleStageAction(id, 'boxless-packing', 'scan-item', mergeActionPayload(body, query), user);
   }
 
   @Post('requests/:id/boxless-packing/close-box')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
-  closeBoxlessBox(@Param('id') id: string, @Body() body: Record<string, unknown> | undefined, @CurrentUser() user: AuthUser) {
-    return this.assembly.handleStageAction(id, 'boxless-packing', 'close-box', body, user);
+  closeBoxlessBox(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown> | undefined,
+    @Query() query: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.assembly.handleStageAction(id, 'boxless-packing', 'close-box', mergeActionPayload(body, query), user);
   }
 
   @Post('requests/:id/boxless-packing/finish')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
-  finishBoxlessPacking(@Param('id') id: string, @Body() body: Record<string, unknown> | undefined, @CurrentUser() user: AuthUser) {
-    return this.assembly.handleStageAction(id, 'boxless-packing', 'finish', body, user);
+  finishBoxlessPacking(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown> | undefined,
+    @Query() query: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.assembly.handleStageAction(id, 'boxless-packing', 'finish', mergeActionPayload(body, query), user);
   }
 
   @Get('sku-by-barcode')
@@ -173,4 +230,11 @@ export class TsdDeviceController {
   login(@Body() dto: LoginTsdDeviceDto) {
     return this.devices.login(dto);
   }
+}
+
+function mergeActionPayload(body: Record<string, unknown> | undefined, query: Record<string, unknown> | undefined) {
+  return {
+    ...(query ?? {}),
+    ...(body ?? {}),
+  };
 }

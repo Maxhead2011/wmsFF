@@ -101,22 +101,24 @@ export class TsdAssemblyService {
     requestId: string,
     stage: TsdRequestStage,
     action: string,
-    body: Record<string, unknown> | undefined,
+    body: Record<string, unknown> | string | undefined,
     user: AuthUser,
   ) {
     const plan = await this.getRequestPlan(requestId, user);
     const scannedCode = scannedValue(body);
     const result = validateStageAction(plan, stage, action, scannedCode);
+    const stageData = stagePayload(plan, stage);
 
     return {
+      ...stageData,
       ...result,
       requestId,
       stage,
       action,
       scannedCode,
-      deviceCode: textValue(body, 'deviceCode'),
+      deviceCode: isRecord(body) ? textValue(body, 'deviceCode') : undefined,
       serverTime: new Date().toISOString(),
-      plan: stagePayload(plan, stage),
+      plan: stageData,
     };
   }
 
@@ -435,6 +437,9 @@ function validateStageAction(plan: Record<string, any>, stage: TsdRequestStage, 
   const code = normalizeScanCode(scannedCode);
 
   if (stage === 'box-search' && action === 'scan') {
+    if (!code) {
+      return actionResult('REJECTED', false, 'Не прочитан номер короба.');
+    }
     const found = (plan.searchBoxes ?? []).some((box: { boxCode?: string }) => sameCode(box.boxCode, code));
     return actionResult(found ? 'FOUND' : 'NOT_REQUIRED', found, found ? 'Короб найден.' : 'Короб не участвует в этой заявке.');
   }
@@ -496,13 +501,27 @@ function groupTasksByBox<T extends { sourceBox?: string; quantity?: number }>(ta
   return [...byBox.values()].sort((left, right) => left.sourceBox.localeCompare(right.sourceBox, 'ru', { numeric: true }));
 }
 
-function scannedValue(body: Record<string, unknown> | undefined) {
+function scannedValue(body: Record<string, unknown> | string | undefined) {
+  if (typeof body === 'string') {
+    return body.trim() || undefined;
+  }
+  if (!body) {
+    return undefined;
+  }
+
   for (const key of [
     'boxCode',
+    'box',
+    'boxNumber',
+    'boxBarcode',
+    'boxQr',
+    'boxQrCode',
+    'packageCode',
     'targetBoxCode',
     'targetBox',
     'sourceBox',
     'barcode',
+    'barcodeText',
     'oldBarcode',
     'newBarcode',
     'sourceBarcode',
@@ -511,14 +530,32 @@ function scannedValue(body: Record<string, unknown> | undefined) {
     'code',
     'value',
     'scan',
+    'scanText',
+    'scanValue',
+    'scanResult',
     'scannedCode',
+    'qr',
+    'qrCode',
+    'raw',
+    'text',
+    'serial',
   ]) {
     const value = textValue(body, key);
     if (value) {
       return value;
     }
   }
+
+  const payload = body?.payload;
+  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    return scannedValue(payload as Record<string, unknown>);
+  }
+
   return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
 function textValue(body: Record<string, unknown> | undefined, key: string) {
@@ -531,7 +568,9 @@ function normalizeScanCode(value?: string) {
 }
 
 function sameCode(left?: string | null, right?: string) {
-  return Boolean(left && right && normalizeScanCode(left) === normalizeScanCode(right));
+  const leftCode = normalizeScanCode(left ?? undefined);
+  const rightCode = normalizeScanCode(right);
+  return Boolean(leftCode && rightCode && (leftCode === rightCode || rightCode.includes(leftCode) || leftCode.includes(rightCode)));
 }
 
 function collapseRows<T extends CollapsibleRow>(rows: T[], keyOf: (row: T) => string) {
