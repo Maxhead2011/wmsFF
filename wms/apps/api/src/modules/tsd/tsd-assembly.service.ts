@@ -14,6 +14,8 @@ const activeAssemblyStatuses = [
   ClientRequestStatus.PACKED,
 ];
 
+type TsdRequestStage = 'box-search' | 'relabel' | 'moves' | 'boxless-packing';
+
 @Injectable()
 export class TsdAssemblyService {
   constructor(
@@ -48,14 +50,21 @@ export class TsdAssemblyService {
 
     return requests.map((request) => ({
       id: request.id,
+      requestId: request.id,
       title: request.title,
+      name: request.title,
       status: request.status,
       city: request.destinationCity,
+      destinationCity: request.destinationCity,
+      deliveryCity: request.destinationCity,
       desiredDate: request.desiredDate?.toISOString() ?? null,
       createdAt: request.createdAt.toISOString(),
       updatedAt: request.updatedAt.toISOString(),
       client: request.client,
       rowsCount: request._count.items,
+      itemsCount: request._count.items,
+      itemCount: request._count.items,
+      linesCount: request._count.items,
       inWorkBy: request.assignedTo
         ? {
             id: request.assignedTo.id,
@@ -78,6 +87,34 @@ export class TsdAssemblyService {
     this.clientScopes.requireClientAccess(user, exists.clientId, 'read');
     const document = await this.pickInstructions.getRequestInstruction(requestId, user);
     return this.toTsdPlan(document);
+  }
+
+  async getRequestStage(requestId: string, stage: TsdRequestStage, user: AuthUser) {
+    const plan = await this.getRequestPlan(requestId, user);
+    return stagePayload(plan, stage);
+  }
+
+  async handleStageAction(
+    requestId: string,
+    stage: TsdRequestStage,
+    action: string,
+    body: Record<string, unknown> | undefined,
+    user: AuthUser,
+  ) {
+    const plan = await this.getRequestPlan(requestId, user);
+    const scannedCode = scannedValue(body);
+    const result = validateStageAction(plan, stage, action, scannedCode);
+
+    return {
+      ...result,
+      requestId,
+      stage,
+      action,
+      scannedCode,
+      deviceCode: textValue(body, 'deviceCode'),
+      serverTime: new Date().toISOString(),
+      plan: stagePayload(plan, stage),
+    };
   }
 
   async findSkuByBarcode(query: { clientId?: string; barcode?: string }, user: AuthUser) {
@@ -200,22 +237,59 @@ export class TsdAssemblyService {
     const totalRelabel = relabelTasks.reduce((sum, row) => sum + row.quantity, 0);
     const totalMove = movementTasks.reduce((sum, row) => sum + row.quantity, 0);
 
+    const requestRows = document.rows.map((row) => ({
+      id: row.itemId,
+      itemId: row.itemId,
+      skuId: row.skuId,
+      internalSku: row.internalSku,
+      name: row.name,
+      barcode: row.barcode,
+      quantity: row.requestedQuantity,
+      requestedQuantity: row.requestedQuantity,
+      allocatedQuantity: row.allocatedQuantity,
+      shortageQuantity: row.shortageQuantity,
+      status: row.status,
+      statusLabel: row.statusLabel,
+      comment: row.comment,
+      allocations: row.allocations,
+    }));
+
     return {
       id: document.requestId,
+      requestId: document.requestId,
       title: document.requestTitle,
+      name: document.requestTitle,
       status: document.requestStatus,
       statusLabel: document.requestStatusLabel,
       city: document.destinationCity,
+      destinationCity: document.destinationCity,
+      deliveryCity: document.destinationCity,
       desiredDate: document.desiredDate,
       client: document.client,
       rowsCount: document.rowsCount,
+      itemsCount: document.rowsCount,
+      itemCount: document.rowsCount,
+      linesCount: document.rowsCount,
       totalRequested: document.totalRequested,
+      totalQuantity: document.totalRequested,
+      requestedQuantity: document.totalRequested,
       boxesTotal: searchBoxes.length,
+      boxesCount: searchBoxes.length,
       relabelTotal: totalRelabel,
+      relabelCount: totalRelabel,
       movementTotal: totalMove,
+      movementCount: totalMove,
+      rows: requestRows,
+      items: requestRows,
+      requestRows,
       searchBoxes,
+      boxesToSearch: searchBoxes,
+      searchTasks: searchBoxes,
       relabelTasks,
+      relabelBoxes: groupTasksByBox(relabelTasks),
       movementTasks,
+      moveTasks: movementTasks,
+      movementBoxes: groupTasksByBox(movementTasks),
     };
   }
 }
@@ -224,6 +298,183 @@ type CollapsibleRow = {
   sourceBox: string;
   quantity: number;
 };
+
+function stagePayload(plan: Record<string, any>, stage: TsdRequestStage) {
+  const requestRows = plan.requestRows ?? plan.rows ?? [];
+  const base = {
+    ...plan,
+    stage,
+    requestId: plan.requestId ?? plan.id,
+    destinationCity: plan.destinationCity ?? plan.city ?? null,
+    deliveryCity: plan.deliveryCity ?? plan.destinationCity ?? plan.city ?? null,
+    rowsCount: plan.rowsCount ?? requestRows.length,
+    itemsCount: plan.itemsCount ?? plan.rowsCount ?? requestRows.length,
+    itemCount: plan.itemCount ?? plan.rowsCount ?? requestRows.length,
+    linesCount: plan.linesCount ?? plan.rowsCount ?? requestRows.length,
+    rows: requestRows,
+    items: requestRows,
+  };
+
+  if (stage === 'box-search') {
+    const tasks = plan.searchBoxes ?? [];
+    return {
+      ...base,
+      tasks,
+      boxes: tasks,
+      searchBoxes: tasks,
+      boxesToSearch: tasks,
+      total: tasks.length,
+      totalCount: tasks.length,
+      foundCount: 0,
+      remainingCount: tasks.length,
+      foundBoxes: [],
+      remainingBoxes: tasks,
+    };
+  }
+
+  if (stage === 'relabel') {
+    const tasks = plan.relabelTasks ?? [];
+    return {
+      ...base,
+      tasks,
+      relabelTasks: tasks,
+      boxes: groupTasksByBox(tasks),
+      relabelBoxes: groupTasksByBox(tasks),
+      total: tasks.reduce((sum: number, row: { quantity?: number }) => sum + (row.quantity ?? 0), 0),
+      totalCount: tasks.length,
+      doneCount: 0,
+      remainingCount: tasks.length,
+    };
+  }
+
+  if (stage === 'moves') {
+    const tasks = plan.movementTasks ?? [];
+    return {
+      ...base,
+      tasks,
+      movementTasks: tasks,
+      moveTasks: tasks,
+      boxes: groupTasksByBox(tasks),
+      movementBoxes: groupTasksByBox(tasks),
+      total: tasks.reduce((sum: number, row: { quantity?: number }) => sum + (row.quantity ?? 0), 0),
+      totalCount: tasks.length,
+      doneCount: 0,
+      remainingCount: tasks.length,
+    };
+  }
+
+  return {
+    ...base,
+    tasks: requestRows,
+    total: plan.totalRequested ?? plan.totalQuantity ?? 0,
+    totalCount: requestRows.length,
+    packedCount: 0,
+    closedBoxes: [],
+  };
+}
+
+function validateStageAction(plan: Record<string, any>, stage: TsdRequestStage, action: string, scannedCode?: string) {
+  const code = normalizeScanCode(scannedCode);
+
+  if (stage === 'box-search' && action === 'scan') {
+    const found = (plan.searchBoxes ?? []).some((box: { boxCode?: string }) => sameCode(box.boxCode, code));
+    return actionResult(found ? 'FOUND' : 'NOT_REQUIRED', found, found ? 'Короб найден.' : 'Короб не участвует в этой заявке.');
+  }
+
+  if (stage === 'relabel' && action === 'scan-source') {
+    const found = (plan.relabelTasks ?? []).some((task: { oldBarcode?: string; barcode?: string }) =>
+      sameCode(task.oldBarcode ?? task.barcode, code),
+    );
+    return actionResult(found ? 'ACCEPTED' : 'REJECTED', found, found ? 'Старый штрихкод принят.' : 'Неверный старый штрихкод для перемаркировки.');
+  }
+
+  if (stage === 'relabel' && action === 'scan-target') {
+    const found = (plan.relabelTasks ?? []).some((task: { newBarcode?: string; barcode?: string }) =>
+      sameCode(task.newBarcode ?? task.barcode, code),
+    );
+    return actionResult(found ? 'ACCEPTED' : 'REJECTED', found, found ? 'Новый штрихкод принят.' : 'Неверный новый штрихкод для перемаркировки.');
+  }
+
+  if (stage === 'moves' && action === 'scan-item') {
+    const found = (plan.movementTasks ?? []).some((task: { barcode?: string }) => sameCode(task.barcode, code));
+    return actionResult(found ? 'ACCEPTED' : 'REJECTED', found, found ? 'Товар для перемещения принят.' : 'Товар не найден в списке перемещений.');
+  }
+
+  if (stage === 'boxless-packing' && action === 'scan-item') {
+    const rows = plan.requestRows ?? plan.rows ?? [];
+    const found = rows.some((row: { barcode?: string }) => sameCode(row.barcode, code));
+    return actionResult(found ? 'ACCEPTED' : 'REJECTED', found, found ? 'Товар принят в короб.' : 'Товар не найден в заявке.');
+  }
+
+  return actionResult('ACCEPTED', true, 'Операция принята.');
+}
+
+function actionResult(status: string, accepted: boolean, message: string) {
+  return {
+    status,
+    result: status,
+    accepted,
+    ok: accepted,
+    success: accepted,
+    found: status === 'FOUND',
+    needed: status === 'FOUND',
+    message,
+  };
+}
+
+function groupTasksByBox<T extends { sourceBox?: string; quantity?: number }>(tasks: T[]) {
+  const byBox = new Map<string, { boxCode: string; sourceBox: string; remaining: number; quantity: number; tasks: T[] }>();
+  for (const task of tasks) {
+    const sourceBox = task.sourceBox?.trim();
+    if (!sourceBox) {
+      continue;
+    }
+    const current = byBox.get(sourceBox) ?? { boxCode: sourceBox, sourceBox, remaining: 0, quantity: 0, tasks: [] };
+    current.remaining += task.quantity ?? 0;
+    current.quantity += task.quantity ?? 0;
+    current.tasks.push(task);
+    byBox.set(sourceBox, current);
+  }
+  return [...byBox.values()].sort((left, right) => left.sourceBox.localeCompare(right.sourceBox, 'ru', { numeric: true }));
+}
+
+function scannedValue(body: Record<string, unknown> | undefined) {
+  for (const key of [
+    'boxCode',
+    'targetBoxCode',
+    'targetBox',
+    'sourceBox',
+    'barcode',
+    'oldBarcode',
+    'newBarcode',
+    'sourceBarcode',
+    'targetBarcode',
+    'itemBarcode',
+    'code',
+    'value',
+    'scan',
+    'scannedCode',
+  ]) {
+    const value = textValue(body, key);
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function textValue(body: Record<string, unknown> | undefined, key: string) {
+  const value = body?.[key];
+  return typeof value === 'string' ? value.trim() : undefined;
+}
+
+function normalizeScanCode(value?: string) {
+  return (value ?? '').trim().toLocaleLowerCase('ru-RU');
+}
+
+function sameCode(left?: string | null, right?: string) {
+  return Boolean(left && right && normalizeScanCode(left) === normalizeScanCode(right));
+}
 
 function collapseRows<T extends CollapsibleRow>(rows: T[], keyOf: (row: T) => string) {
   const byKey = new Map<string, T>();

@@ -45,6 +45,104 @@ export class TsdDeviceController {
     return this.assembly.getRequestPlan(id, user);
   }
 
+  @Get('requests/:id/box-search')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  getBoxSearch(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.assembly.getRequestStage(id, 'box-search', user);
+  }
+
+  @Post('requests/:id/box-search/scan')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  scanBoxSearch(@Param('id') id: string, @Body() body: Record<string, unknown> | undefined, @CurrentUser() user: AuthUser) {
+    return this.assembly.handleStageAction(id, 'box-search', 'scan', body, user);
+  }
+
+  @Get('requests/:id/relabel')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  getRelabel(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.assembly.getRequestStage(id, 'relabel', user);
+  }
+
+  @Post('requests/:id/relabel/scan-source')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  scanRelabelSource(@Param('id') id: string, @Body() body: Record<string, unknown> | undefined, @CurrentUser() user: AuthUser) {
+    return this.assembly.handleStageAction(id, 'relabel', 'scan-source', body, user);
+  }
+
+  @Post('requests/:id/relabel/scan-target')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  scanRelabelTarget(@Param('id') id: string, @Body() body: Record<string, unknown> | undefined, @CurrentUser() user: AuthUser) {
+    return this.assembly.handleStageAction(id, 'relabel', 'scan-target', body, user);
+  }
+
+  @Get('requests/:id/moves')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  getMoves(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.assembly.getRequestStage(id, 'moves', user);
+  }
+
+  @Post('requests/:id/moves/target-box')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  scanMoveTargetBox(@Param('id') id: string, @Body() body: Record<string, unknown> | undefined, @CurrentUser() user: AuthUser) {
+    return this.assembly.handleStageAction(id, 'moves', 'target-box', body, user);
+  }
+
+  @Post('requests/:id/moves/scan-item')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  scanMoveItem(@Param('id') id: string, @Body() body: Record<string, unknown> | undefined, @CurrentUser() user: AuthUser) {
+    return this.assembly.handleStageAction(id, 'moves', 'scan-item', body, user);
+  }
+
+  @Post('requests/:id/moves/finish')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  finishMoves(@Param('id') id: string, @Body() body: Record<string, unknown> | undefined, @CurrentUser() user: AuthUser) {
+    return this.assembly.handleStageAction(id, 'moves', 'finish', body, user);
+  }
+
+  @Get('requests/:id/boxless-packing')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  getBoxlessPacking(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.assembly.getRequestStage(id, 'boxless-packing', user);
+  }
+
+  @Post('requests/:id/boxless-packing/open-box')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  openBoxlessBox(@Param('id') id: string, @Body() body: Record<string, unknown> | undefined, @CurrentUser() user: AuthUser) {
+    return this.assembly.handleStageAction(id, 'boxless-packing', 'open-box', body, user);
+  }
+
+  @Post('requests/:id/boxless-packing/scan-item')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  scanBoxlessItem(@Param('id') id: string, @Body() body: Record<string, unknown> | undefined, @CurrentUser() user: AuthUser) {
+    return this.assembly.handleStageAction(id, 'boxless-packing', 'scan-item', body, user);
+  }
+
+  @Post('requests/:id/boxless-packing/close-box')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  closeBoxlessBox(@Param('id') id: string, @Body() body: Record<string, unknown> | undefined, @CurrentUser() user: AuthUser) {
+    return this.assembly.handleStageAction(id, 'boxless-packing', 'close-box', body, user);
+  }
+
+  @Post('requests/:id/boxless-packing/finish')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  finishBoxlessPacking(@Param('id') id: string, @Body() body: Record<string, unknown> | undefined, @CurrentUser() user: AuthUser) {
+    return this.assembly.handleStageAction(id, 'boxless-packing', 'finish', body, user);
+  }
+
   @Get('sku-by-barcode')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
