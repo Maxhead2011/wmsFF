@@ -317,6 +317,8 @@ export class StockOperationsService {
         throw new BadRequestException('Упаковка доступна только после сборки заявки.');
       }
 
+      await this.ensureAvailableStockIsInPacking(tx, request, `complete-pick-before-pack:${request.id}:${baseKey}`);
+
       const plan = await this.planRequestAllocations(tx, request.clientId, request.items, StockStatus.PACKING);
 
       // Русский комментарий: упаковка переводит уже собранный товар из PACKING в SHIPPING,
@@ -815,6 +817,31 @@ export class StockOperationsService {
       targetStatus: StockStatus.SHIPPING,
       sourceComment: `Достроена упаковка перед отгрузкой заявки ${request.title ?? request.id}`,
       targetComment: `Передано в отгрузку перед закрытием заявки ${request.title ?? request.id}`,
+    });
+  }
+
+  private async ensureAvailableStockIsInPacking(
+    tx: Prisma.TransactionClient,
+    request: { id: string; clientId: string; title?: string | null; items: RequestItemForAllocation[] },
+    baseKey: string,
+  ) {
+    const missingItems = await this.findItemsMissingInStatus(tx, request.clientId, request.items, StockStatus.PACKING);
+
+    if (missingItems.length === 0) {
+      return;
+    }
+
+    const plan = await this.planRequestAllocations(tx, request.clientId, missingItems, StockStatus.AVAILABLE);
+
+    await this.applyStatusMove(tx, {
+      request,
+      plan,
+      baseKey,
+      movementType: MovementType.PICK,
+      sourceStatus: StockStatus.AVAILABLE,
+      targetStatus: StockStatus.PACKING,
+      sourceComment: `Достроена сборка перед упаковкой заявки ${request.title ?? request.id}`,
+      targetComment: `Передано в упаковку перед закрытием сборки заявки ${request.title ?? request.id}`,
     });
   }
 
