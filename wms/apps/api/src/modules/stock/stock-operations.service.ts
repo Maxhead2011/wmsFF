@@ -21,6 +21,10 @@ import { PickClientRequestDto } from './dto/pick-client-request.dto';
 import { TransferBetweenBoxesDto } from './dto/transfer-between-boxes.dto';
 import { StockBalancesService } from './stock-balances.service';
 
+type StockBalanceForAllocation = Prisma.StockBalanceGetPayload<{
+  include: { box: { select: { code: true } } };
+}>;
+
 export type ReceiveIntoBoxInput = {
   clientId: string;
   skuId?: string;
@@ -58,7 +62,7 @@ type RequestAllocationPlan = {
     skuWeightGrams: number | null;
     barcode: string | null;
     requestedQuantity: number;
-    allocations: Array<{ balance: StockBalance; quantity: number }>;
+    allocations: Array<{ balance: StockBalanceForAllocation; quantity: number }>;
   }>;
 };
 
@@ -740,6 +744,9 @@ export class StockOperationsService {
           status: { in: sourceStatuses },
           quantity: { gt: 0 },
         },
+        include: {
+          box: { select: { code: true } },
+        },
         orderBy: [{ updatedAt: 'asc' }],
       });
       balances.sort((left, right) => {
@@ -751,7 +758,7 @@ export class StockOperationsService {
       });
 
       let remaining = item.quantity;
-      const allocations: Array<{ balance: StockBalance; quantity: number }> = [];
+      const allocations: Array<{ balance: StockBalanceForAllocation; quantity: number }> = [];
 
       for (const balance of balances) {
         if (remaining <= 0) {
@@ -874,10 +881,13 @@ export class StockOperationsService {
           quantity: { gt: 0 },
           boxId: { not: null },
         },
+        include: {
+          box: { select: { code: true } },
+        },
         orderBy: [{ updatedAt: 'asc' }],
       });
       let remaining = item.quantity;
-      const allocations: Array<{ balance: StockBalance; quantity: number }> = [];
+      const allocations: Array<{ balance: StockBalanceForAllocation; quantity: number }> = [];
 
       for (const balance of balances) {
         if (remaining <= 0) {
@@ -1014,6 +1024,11 @@ export class StockOperationsService {
     const lineByItemId = new Map(plan.lines.map((line) => [line.itemId, line]));
 
     if (!dto.packages?.length) {
+      const allocationPackages = buildAllocationPackages(requestId, plan, dto);
+      if (allocationPackages.length > 0) {
+        return allocationPackages;
+      }
+
       const items = plan.lines.map((line) => ({
         requestItemId: line.itemId,
         skuId: line.skuId,
@@ -1528,6 +1543,74 @@ const FULFILLMENT_BILLING_SERVICES = {
     defaultPriceRub: 250,
   },
 } as const;
+
+function buildAllocationPackages(
+  requestId: string,
+  plan: RequestAllocationPlan,
+  dto: FulfillClientRequestDto,
+): RequestPackageInput[] {
+  const byPackage = new Map<
+    string,
+    Map<
+      string,
+      {
+        requestItemId: string;
+        skuId: string;
+        skuWeightGrams: number | null;
+        barcode: string | null;
+        quantity: number;
+      }
+    >
+  >();
+
+  for (const line of plan.lines) {
+    for (const allocation of line.allocations) {
+      const packageCode = allocation.balance.box?.code?.trim();
+      if (!packageCode) {
+        continue;
+      }
+
+      const rows = byPackage.get(packageCode) ?? new Map<string, {
+        requestItemId: string;
+        skuId: string;
+        skuWeightGrams: number | null;
+        barcode: string | null;
+        quantity: number;
+      }>();
+      const itemKey = `${line.itemId}:${line.skuId}:${line.barcode ?? ''}`;
+      const current =
+        rows.get(itemKey) ?? {
+          requestItemId: line.itemId,
+          skuId: line.skuId,
+          skuWeightGrams: line.skuWeightGrams,
+          barcode: line.barcode,
+          quantity: 0,
+        };
+      current.quantity += allocation.quantity;
+      rows.set(itemKey, current);
+      byPackage.set(packageCode, rows);
+    }
+  }
+
+  return [...byPackage.entries()]
+    .sort(([left], [right]) => left.localeCompare(right, 'ru', { numeric: true }))
+    .map(([packageCode, rows]) => {
+      const items = [...rows.values()];
+      const metadata = validateBoxWeight(packageCode, { packageType: 'BOX' }, items);
+
+      return {
+        packageCode,
+        packageType: 'BOX',
+        comment: dto.comment?.trim() || undefined,
+        metadata: {
+          ...(metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {}),
+          generatedFromPackingBalances: true,
+          requestId,
+        },
+        items: items.map(({ skuWeightGrams: _skuWeightGrams, ...item }) => item),
+      };
+    });
+}
 
 const MAX_BOX_WEIGHT_GRAMS = 25_000;
 
