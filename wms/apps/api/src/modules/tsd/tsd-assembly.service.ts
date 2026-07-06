@@ -57,6 +57,9 @@ export class TsdAssemblyService {
       city: request.destinationCity,
       destinationCity: request.destinationCity,
       deliveryCity: request.destinationCity,
+      cityName: request.destinationCity,
+      destination: request.destinationCity,
+      deliveryDestination: request.destinationCity,
       desiredDate: request.desiredDate?.toISOString() ?? null,
       createdAt: request.createdAt.toISOString(),
       updatedAt: request.updatedAt.toISOString(),
@@ -198,7 +201,7 @@ export class TsdAssemblyService {
       ...document.warehouseRows.map((row) => row.sourceBox),
       ...document.warehouseBalanceMoves.map((row) => row.sourceBox),
       ...document.warehouseWholeBoxes.map((row) => row.box),
-    ]).map((boxCode) => ({ boxCode }));
+    ]).map((boxCode) => boxEntry(boxCode));
 
     const relabelTasks = collapseRows(
       document.warehouseRows
@@ -236,6 +239,7 @@ export class TsdAssemblyService {
 
     const totalRelabel = relabelTasks.reduce((sum, row) => sum + row.quantity, 0);
     const totalMove = movementTasks.reduce((sum, row) => sum + row.quantity, 0);
+    const searchBoxCodes = searchBoxes.map((box) => box.boxCode);
 
     const requestRows = document.rows.map((row) => ({
       id: row.itemId,
@@ -264,6 +268,9 @@ export class TsdAssemblyService {
       city: document.destinationCity,
       destinationCity: document.destinationCity,
       deliveryCity: document.destinationCity,
+      cityName: document.destinationCity,
+      destination: document.destinationCity,
+      deliveryDestination: document.destinationCity,
       desiredDate: document.desiredDate,
       client: document.client,
       rowsCount: document.rowsCount,
@@ -284,7 +291,21 @@ export class TsdAssemblyService {
       requestRows,
       searchBoxes,
       boxesToSearch: searchBoxes,
+      boxesToFind: searchBoxes,
       searchTasks: searchBoxes,
+      boxTasks: searchBoxes,
+      boxCodes: searchBoxCodes,
+      searchBoxCodes,
+      boxesToSearchCodes: searchBoxCodes,
+      boxesToFindCodes: searchBoxCodes,
+      remainingBoxCodes: searchBoxCodes,
+      remainingBoxes: searchBoxes,
+      remainingBoxTasks: searchBoxes,
+      remainingCount: searchBoxes.length,
+      remaining: searchBoxes.length,
+      remainingBoxesCount: searchBoxes.length,
+      foundCount: 0,
+      found: 0,
       relabelTasks,
       relabelBoxes: groupTasksByBox(relabelTasks),
       movementTasks,
@@ -307,6 +328,10 @@ function stagePayload(plan: Record<string, any>, stage: TsdRequestStage) {
     requestId: plan.requestId ?? plan.id,
     destinationCity: plan.destinationCity ?? plan.city ?? null,
     deliveryCity: plan.deliveryCity ?? plan.destinationCity ?? plan.city ?? null,
+    city: plan.city ?? plan.destinationCity ?? null,
+    cityName: plan.cityName ?? plan.destinationCity ?? plan.city ?? null,
+    destination: plan.destination ?? plan.destinationCity ?? plan.city ?? null,
+    deliveryDestination: plan.deliveryDestination ?? plan.destinationCity ?? plan.city ?? null,
     rowsCount: plan.rowsCount ?? requestRows.length,
     itemsCount: plan.itemsCount ?? plan.rowsCount ?? requestRows.length,
     itemCount: plan.itemCount ?? plan.rowsCount ?? requestRows.length,
@@ -316,19 +341,31 @@ function stagePayload(plan: Record<string, any>, stage: TsdRequestStage) {
   };
 
   if (stage === 'box-search') {
-    const tasks = plan.searchBoxes ?? [];
+    const tasks = normalizeBoxTasks(plan.searchBoxes ?? []);
+    const boxCodes = tasks.map((box) => box.boxCode);
     return {
       ...base,
       tasks,
       boxes: tasks,
+      boxTasks: tasks,
       searchBoxes: tasks,
       boxesToSearch: tasks,
+      boxesToFind: tasks,
+      boxCodes,
+      searchBoxCodes: boxCodes,
+      boxesToSearchCodes: boxCodes,
+      boxesToFindCodes: boxCodes,
+      remainingBoxCodes: boxCodes,
       total: tasks.length,
       totalCount: tasks.length,
       foundCount: 0,
+      found: 0,
       remainingCount: tasks.length,
+      remaining: tasks.length,
+      remainingBoxesCount: tasks.length,
       foundBoxes: [],
       remainingBoxes: tasks,
+      remainingBoxTasks: tasks,
     };
   }
 
@@ -370,6 +407,27 @@ function stagePayload(plan: Record<string, any>, stage: TsdRequestStage) {
     totalCount: requestRows.length,
     packedCount: 0,
     closedBoxes: [],
+  };
+}
+
+function normalizeBoxTasks(values: Array<{ boxCode?: string; code?: string } | string>) {
+  return values
+    .map((value) => (typeof value === 'string' ? boxEntry(value) : boxEntry(value.boxCode ?? value.code ?? '')))
+    .filter((box) => box.boxCode);
+}
+
+function boxEntry(boxCode: string) {
+  const code = boxCode.trim();
+  return {
+    boxCode: code,
+    code,
+    number: code,
+    name: code,
+    title: code,
+    label: code,
+    value: code,
+    found: false,
+    isFound: false,
   };
 }
 
