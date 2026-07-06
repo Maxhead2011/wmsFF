@@ -1014,7 +1014,6 @@ export class StockOperationsService {
     const lineByItemId = new Map(plan.lines.map((line) => [line.itemId, line]));
 
     if (!dto.packages?.length) {
-      const packageCode = `PKG-${requestId.slice(0, 8)}-1`;
       const items = plan.lines.map((line) => ({
         requestItemId: line.itemId,
         skuId: line.skuId,
@@ -1022,15 +1021,27 @@ export class StockOperationsService {
         barcode: line.barcode,
         quantity: line.requestedQuantity,
       }));
-      return [
-        {
+      const boxes = Math.max(0, Math.floor(dto.boxes ?? 0));
+      const pallets = Math.max(0, Math.floor(dto.pallets ?? 0));
+      const packageCount = Math.max(1, boxes + pallets);
+      const generatedPackages: RequestPackageInput[] = [];
+
+      for (let index = 0; index < packageCount; index += 1) {
+        const packageCode = `PKG-${requestId.slice(0, 8)}-${index + 1}`;
+        const packageType = index >= boxes && pallets > 0 ? 'PALLET' : 'BOX';
+        const isPrimaryPackage = index === 0;
+        generatedPackages.push({
           packageCode,
-          packageType: 'BOX',
+          packageType,
           comment: dto.comment?.trim() || undefined,
-          metadata: validateBoxWeight(packageCode, { packageType: 'BOX' }, items),
-          items: items.map(({ skuWeightGrams: _skuWeightGrams, ...item }) => item),
-        },
-      ];
+          metadata: isPrimaryPackage
+            ? validateBoxWeight(packageCode, { packageType }, items)
+            : { generatedFromPackageCount: true },
+          items: isPrimaryPackage ? items.map(({ skuWeightGrams: _skuWeightGrams, ...item }) => item) : [],
+        });
+      }
+
+      return generatedPackages;
     }
 
     const seenCodes = new Set<string>();

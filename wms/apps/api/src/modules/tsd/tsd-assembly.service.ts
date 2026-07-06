@@ -199,45 +199,53 @@ export class TsdAssemblyService {
   }
 
   private toTsdPlan(document: PickInstructionDocument & { html?: string }) {
-    const searchBoxes = uniqueSorted([
-      ...document.warehouseRows.map((row) => row.sourceBox),
-      ...document.warehouseBalanceMoves.map((row) => row.sourceBox),
-      ...document.warehouseWholeBoxes.map((row) => row.box),
-    ]).map((boxCode) => boxEntry(boxCode));
+    const completedTsdStatuses: ClientRequestStatus[] = [ClientRequestStatus.PACKED, ClientRequestStatus.DONE];
+    const isCompletedForTsd = completedTsdStatuses.includes(document.requestStatus);
+    const searchBoxes = isCompletedForTsd
+      ? []
+      : uniqueSorted([
+          ...document.warehouseRows.map((row) => row.sourceBox),
+          ...document.warehouseBalanceMoves.map((row) => row.sourceBox),
+          ...document.warehouseWholeBoxes.map((row) => row.box),
+        ]).map((boxCode) => boxEntry(boxCode));
 
-    const relabelTasks = collapseRows(
-      document.warehouseRows
-        .filter((row) => row.sourceBox && row.quantity > 0 && row.rebrandNote)
-        .map((row) => {
-          const parsed = parseRelabelNote(row.rebrandNote);
-          return {
-            sourceBox: row.sourceBox,
-            oldBarcode: parsed.oldBarcode || row.barcodeOnBox,
-            newBarcode: parsed.newBarcode || row.barcodeOnBox,
-            barcode: parsed.newBarcode || row.barcodeOnBox,
-            name: row.artOnBox,
-            size: row.size,
-            quantity: row.quantity,
-            note: row.rebrandNote,
-          };
-        }),
-      (row) => `${row.sourceBox}|${row.oldBarcode}|${row.newBarcode}|${row.size}`,
-    );
+    const relabelTasks = isCompletedForTsd
+      ? []
+      : collapseRows(
+          document.warehouseRows
+            .filter((row) => row.sourceBox && row.quantity > 0 && row.rebrandNote)
+            .map((row) => {
+              const parsed = parseRelabelNote(row.rebrandNote);
+              return {
+                sourceBox: row.sourceBox,
+                oldBarcode: parsed.oldBarcode || row.barcodeOnBox,
+                newBarcode: parsed.newBarcode || row.barcodeOnBox,
+                barcode: parsed.newBarcode || row.barcodeOnBox,
+                name: row.artOnBox,
+                size: row.size,
+                quantity: row.quantity,
+                note: row.rebrandNote,
+              };
+            }),
+          (row) => `${row.sourceBox}|${row.oldBarcode}|${row.newBarcode}|${row.size}`,
+        );
 
-    const movementTasks = collapseRows(
-      document.warehouseBalanceMoves
-        .filter((row) => row.sourceBox && row.newBox && row.quantity > 0)
-        .map((row) => ({
-          sourceBox: row.sourceBox,
-          targetBox: row.newBox,
-          barcode: row.barcodeOnBox,
-          name: row.artOnBox,
-          size: row.size,
-          quantity: row.quantity,
-          note: row.note,
-        })),
-      (row) => `${row.sourceBox}|${row.targetBox}|${row.barcode}|${row.size}`,
-    );
+    const movementTasks = isCompletedForTsd
+      ? []
+      : collapseRows(
+          document.warehouseBalanceMoves
+            .filter((row) => row.sourceBox && row.newBox && row.quantity > 0)
+            .map((row) => ({
+              sourceBox: row.sourceBox,
+              targetBox: row.newBox,
+              barcode: row.barcodeOnBox,
+              name: row.artOnBox,
+              size: row.size,
+              quantity: row.quantity,
+              note: row.note,
+            })),
+          (row) => `${row.sourceBox}|${row.targetBox}|${row.barcode}|${row.size}`,
+        );
 
     const totalRelabel = relabelTasks.reduce((sum, row) => sum + row.quantity, 0);
     const totalMove = movementTasks.reduce((sum, row) => sum + row.quantity, 0);

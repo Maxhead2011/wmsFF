@@ -1,6 +1,7 @@
 package pro.logoff.wms.tsd.network;
 
 import java.util.List;
+import java.util.Map;
 
 import retrofit2.Call;
 import retrofit2.http.Body;
@@ -35,5 +36,11 @@ public interface WmsApi {
     Call<TsdAssemblyPlan> getAssemblyRequest(
         @Header("Authorization") String authorization,
         @Path("id") String id
+    );
+
+    @POST("api/v1/stock/fulfillment/package-request")
+    Call<Map<String, Object>> packageClientRequest(
+        @Header("Authorization") String authorization,
+        @Body Map<String, Object> request
     );
 }
