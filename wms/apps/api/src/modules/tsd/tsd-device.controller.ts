@@ -48,7 +48,10 @@ export class TsdDeviceController {
   @Get('requests/:id/box-search')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
-  getBoxSearch(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+  getBoxSearch(@Param('id') id: string, @Query() query: Record<string, unknown>, @CurrentUser() user: AuthUser) {
+    if (hasScanPayload(query)) {
+      return this.assembly.handleStageAction(id, 'box-search', 'scan', mergeActionPayload(undefined, query), user);
+    }
     return this.assembly.getRequestStage(id, 'box-search', user);
   }
 
@@ -88,6 +91,31 @@ export class TsdDeviceController {
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
   scanBoxSearchByGetPath(
+    @Param('id') id: string,
+    @Param('code') code: string,
+    @Query() query: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.assembly.handleStageAction(id, 'box-search', 'scan', mergeActionPayload(undefined, query, { code }), user);
+  }
+
+  @Post('requests/:id/box-search/:code')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  scanBoxSearchByLegacyPostPath(
+    @Param('id') id: string,
+    @Param('code') code: string,
+    @Body() body: unknown,
+    @Query() query: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.assembly.handleStageAction(id, 'box-search', 'scan', mergeActionPayload(body, query, { code }), user);
+  }
+
+  @Get('requests/:id/box-search/:code')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  scanBoxSearchByLegacyGetPath(
     @Param('id') id: string,
     @Param('code') code: string,
     @Query() query: Record<string, unknown>,
@@ -282,4 +310,12 @@ function mergeActionPayload(
   }
 
   return payload;
+}
+
+function hasScanPayload(query: Record<string, unknown> | undefined) {
+  if (!query) {
+    return false;
+  }
+  const ignored = new Set(['deviceCode', 'device', 'token', 'stage', 'action', 'ts', 'timestamp']);
+  return Object.keys(query).some((key) => !ignored.has(key) && query[key] != null && String(query[key]).trim() !== '');
 }
