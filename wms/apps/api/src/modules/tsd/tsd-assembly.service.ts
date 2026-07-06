@@ -240,7 +240,13 @@ export class TsdAssemblyService {
       ? []
       : collapseRows(
           document.warehouseBalanceMoves
-            .filter((row) => row.sourceBox && row.newBox && row.quantity > 0)
+            .filter(
+              (row) =>
+                row.sourceBox &&
+                row.newBox &&
+                row.quantity > 0 &&
+                !completedMoveTargetBoxes.has(normalizeBoxCode(row.sourceBox)),
+            )
             .map((row) => ({
               sourceBox: row.sourceBox,
               targetBox: row.newBox,
