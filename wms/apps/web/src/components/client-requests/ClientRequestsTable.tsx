@@ -1,4 +1,16 @@
-import { CheckCircle2, ClipboardList, FileDown, FileText, PackageCheck, Pencil, ReceiptText, Send, Truck, XCircle } from 'lucide-react';
+import {
+  CheckCircle2,
+  ClipboardList,
+  FileDown,
+  FileSpreadsheet,
+  FileText,
+  PackageCheck,
+  Pencil,
+  ReceiptText,
+  Send,
+  Truck,
+  XCircle,
+} from 'lucide-react';
 import { type ClientRequestStatus, type ClientRequestSummary } from '../../lib/api';
 import {
   requestPriorityLabel,
@@ -23,6 +35,8 @@ type ClientRequestsTableProps = {
   onOpenDocument?: (request: ClientRequestSummary) => void;
   onOpenPickInstruction?: (request: ClientRequestSummary) => void;
   onDownloadPickInstruction?: (request: ClientRequestSummary) => void;
+  onDownloadWbProducts?: (request: ClientRequestSummary) => void;
+  onDownloadWbPackages?: (request: ClientRequestSummary) => void;
   onPickOutbound: (request: ClientRequestSummary) => void;
   onPackageOutbound: (request: ClientRequestSummary) => void;
   onShipOutbound: (request: ClientRequestSummary) => void;
@@ -49,6 +63,8 @@ export function ClientRequestsTable({
   onOpenDocument,
   onOpenPickInstruction,
   onDownloadPickInstruction,
+  onDownloadWbProducts,
+  onDownloadWbPackages,
   onPickOutbound,
   onPackageOutbound,
   onShipOutbound,
@@ -135,6 +151,28 @@ export function ClientRequestsTable({
                           <FileDown size={15} aria-hidden="true" />
                           <span>Инструкция Excel</span>
                         </button>
+                      ) : null}
+                      {canPickOutbound && canDownloadMarketplaceTemplates(request) ? (
+                        <>
+                          <button
+                            className="client-request-action-button client-request-action-button--xlsx"
+                            type="button"
+                            onClick={() => onDownloadWbProducts?.(request)}
+                            title="Скачать шаблон товаров WB"
+                          >
+                            <FileSpreadsheet size={15} aria-hidden="true" />
+                            <span>ВБ товары</span>
+                          </button>
+                          <button
+                            className="client-request-action-button client-request-action-button--xlsx"
+                            type="button"
+                            onClick={() => onDownloadWbPackages?.(request)}
+                            title="Скачать шаблон упаковки WB"
+                          >
+                            <FileSpreadsheet size={15} aria-hidden="true" />
+                            <span>ВБ упаковка</span>
+                          </button>
+                        </>
                       ) : null}
                       {canPickOutbound && canPickRequest(request) ? (
                         <button
@@ -250,6 +288,10 @@ function canPackageRequest(request: ClientRequestSummary) {
 
 function canShipRequest(request: ClientRequestSummary) {
   return request.type === 'OUTBOUND' && request.status === 'PACKED';
+}
+
+function canDownloadMarketplaceTemplates(request: ClientRequestSummary) {
+  return request.type === 'OUTBOUND' && ['PACKED', 'DONE'].includes(request.status) && request.packages.length > 0;
 }
 
 function canRunFulfillment(request: ClientRequestSummary) {

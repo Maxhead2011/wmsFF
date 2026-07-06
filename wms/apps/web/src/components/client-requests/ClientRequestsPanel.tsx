@@ -2,6 +2,8 @@ import { ClipboardList, RefreshCw, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import {
   cancelClientRequest,
+  downloadClientRequestWbPackagesXlsx,
+  downloadClientRequestWbProductsXlsx,
   downloadPickInstructionXlsx,
   fetchClientRequestDocument,
   fetchClientRequests,
@@ -233,6 +235,30 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     }
   }
 
+  async function downloadWbProductsTemplate(request: ClientRequestSummary) {
+    setError(null);
+    setNotice(null);
+
+    try {
+      const blob = await downloadClientRequestWbProductsXlsx(session.accessToken, request.id);
+      downloadBlob(blob, `wb-products-${safeDownloadName(request.title)}-${request.id.slice(0, 8)}.xlsx`);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
+  async function downloadWbPackagesTemplate(request: ClientRequestSummary) {
+    setError(null);
+    setNotice(null);
+
+    try {
+      const blob = await downloadClientRequestWbPackagesXlsx(session.accessToken, request.id);
+      downloadBlob(blob, `wb-packages-${safeDownloadName(request.title)}-${request.id.slice(0, 8)}.xlsx`);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
   async function issueInvoiceForRequest(request: ClientRequestSummary) {
     setError(null);
     setNotice(null);
@@ -359,6 +385,8 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           (request) => void openRequestDocument(request),
           (request) => void openPickInstruction(request),
           (request) => void downloadPickInstruction(request),
+          (request) => void downloadWbProductsTemplate(request),
+          (request) => void downloadWbPackagesTemplate(request),
           (request) => void pickOutboundRequest(request),
           (request) => void packageOutboundRequest(request),
           (request) => void shipOutboundRequest(request),
@@ -458,6 +486,8 @@ function renderRequests(
   onOpenDocument: (request: ClientRequestSummary) => void,
   onOpenPickInstruction: (request: ClientRequestSummary) => void,
   onDownloadPickInstruction: (request: ClientRequestSummary) => void,
+  onDownloadWbProducts: (request: ClientRequestSummary) => void,
+  onDownloadWbPackages: (request: ClientRequestSummary) => void,
   onPickOutbound: (request: ClientRequestSummary) => void,
   onPackageOutbound: (request: ClientRequestSummary) => void,
   onShipOutbound: (request: ClientRequestSummary) => void,
@@ -497,6 +527,8 @@ function renderRequests(
         onOpenDocument={onOpenDocument}
         onOpenPickInstruction={onOpenPickInstruction}
         onDownloadPickInstruction={onDownloadPickInstruction}
+        onDownloadWbProducts={onDownloadWbProducts}
+        onDownloadWbPackages={onDownloadWbPackages}
         onPickOutbound={onPickOutbound}
         onPackageOutbound={onPackageOutbound}
         onShipOutbound={onShipOutbound}
