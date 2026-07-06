@@ -8,6 +8,7 @@ import { CreateTsdDeviceDto } from './dto/create-tsd-device.dto';
 import { LoginTsdDeviceDto } from './dto/login-tsd-device.dto';
 import { TsdAssemblyService } from './tsd-assembly.service';
 import { TsdDeviceService } from './tsd-device.service';
+import { TsdReceiptService } from './tsd-receipt.service';
 
 @ApiTags('tsd')
 @Controller('tsd')
@@ -15,6 +16,7 @@ export class TsdDeviceController {
   constructor(
     private readonly devices: TsdDeviceService,
     private readonly assembly: TsdAssemblyService,
+    private readonly receipts: TsdReceiptService,
   ) {}
 
   @Get('clients')
@@ -262,6 +264,13 @@ export class TsdDeviceController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.assembly.findSkuByBarcode({ clientId, barcode }, user);
+  }
+
+  @Post('receipts/open-box')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  openReceiptBox(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {
+    return this.receipts.openBox(body, user);
   }
 
   @Get('devices')

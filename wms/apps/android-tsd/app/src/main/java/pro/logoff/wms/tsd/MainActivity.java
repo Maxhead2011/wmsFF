@@ -21,7 +21,9 @@ import android.widget.Spinner;
 import android.widget.TextView;
 
 import java.io.IOException;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -45,6 +47,7 @@ import pro.logoff.wms.tsd.network.TsdRelabelTask;
 import pro.logoff.wms.tsd.network.TsdSearchBoxTask;
 import pro.logoff.wms.tsd.network.TsdLoginRequest;
 import pro.logoff.wms.tsd.network.TsdLoginResponse;
+import pro.logoff.wms.tsd.network.TsdSkuInfo;
 import pro.logoff.wms.tsd.network.WmsApi;
 import pro.logoff.wms.tsd.network.WmsApiFactory;
 import pro.logoff.wms.tsd.sync.TsdSyncRunner;
@@ -54,7 +57,7 @@ import retrofit2.Response;
 public class MainActivity extends Activity {
     private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
     private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk";
-    private static final String APP_VERSION = "0.1.44";
+    private static final String APP_VERSION = "0.1.45";
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int LIGHT_GRAY = Color.rgb(226, 232, 240);
     private static final int TEXT = Color.rgb(30, 41, 59);
@@ -85,6 +88,17 @@ public class MainActivity extends Activity {
     private EditText assemblyScanInput;
     private TsdAssemblyPlan assemblyPlan;
     private TsdRelabelTask activeRelabelTask;
+    private final List<ReceiptItem> receiptCurrentItems = new ArrayList<>();
+    private final Set<String> receiptSessionBoxes = new LinkedHashSet<>();
+    private final Set<String> receiptKizValues = new LinkedHashSet<>();
+    private String receiptClientId = "";
+    private String receiptSourceDocument = "";
+    private String receiptBoxCode = "";
+    private String pendingReceiptBarcode = "";
+    private TsdSkuInfo pendingReceiptSku;
+    private boolean pendingReceiptRequiresKiz;
+    private int receiptClosedBoxes;
+    private int receiptAcceptedItems;
     private String selectedRelabelBox = "";
     private String selectedMoveTargetBox = "";
     private int pendingCount;
@@ -125,7 +139,7 @@ public class MainActivity extends Activity {
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN && event.getKeyCode() == KeyEvent.KEYCODE_ENTER) {
             if (screen == Screen.RECEIPT && scanInput != null) {
-                submitReceiptScan();
+                submitReceiptInput();
                 return true;
             }
             if (screen == Screen.BOX_SEARCH && assemblyScanInput != null) {
@@ -207,44 +221,84 @@ public class MainActivity extends Activity {
         LinearLayout root = baseRoot();
         root.addView(header());
         root.addView(title("Приемка товара"));
-        root.addView(label("Клиент"));
 
-        clientAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new ArrayList<String>());
-        clientAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        clientSpinner = new Spinner(this);
-        clientSpinner.setAdapter(clientAdapter);
-        refreshClientOptions();
-        root.addView(clientSpinner);
-        root.addView(secondaryButton("Обновить клиентов", view -> loadClients(true)));
+        if (receiptClientId.isEmpty()) {
+            root.addView(label("Клиент приемки"));
+            clientAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new ArrayList<String>());
+            clientAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+            clientSpinner = new Spinner(this);
+            clientSpinner.setAdapter(clientAdapter);
+            refreshClientOptions();
+            root.addView(clientSpinner);
+            root.addView(primaryMenuButton("Выбрать клиента", view -> startReceiptForSelectedClient()));
+            root.addView(secondaryButton("Обновить клиентов", view -> loadClients(true)));
+            root.addView(secondaryButton("Назад", view -> renderMainScreen()));
+            if (!statusMessage.isEmpty()) {
+                root.addView(messageView(statusMessage));
+            }
+            setScrollableContent(root);
+            refreshHeaderText();
+            return;
+        }
 
-        boxCodeInput = input("Короб");
-        quantityInput = input("Количество");
-        quantityInput.setInputType(InputType.TYPE_CLASS_NUMBER);
-        quantityInput.setText("1");
-        stockStatusInput = input("Статус остатка");
-        stockStatusInput.setText("AVAILABLE");
-        sourceDocumentInput = input("Документ-основание");
-        commentInput = input("Комментарий");
-        scanInput = input("Сканируйте штрихкод товара");
-        scanInput.setOnEditorActionListener((view, actionId, event) -> {
-            submitReceiptScan();
-            return true;
-        });
+        root.addView(messageView("Клиент: " + receiptClientName()));
+        root.addView(messageView("Принято коробов: " + receiptClosedBoxes + " · товаров: " + receiptAcceptedItems));
 
-        root.addView(boxCodeInput);
-        root.addView(quantityInput);
-        root.addView(stockStatusInput);
-        root.addView(sourceDocumentInput);
-        root.addView(commentInput);
-        root.addView(scanInput);
-        root.addView(primaryMenuButton("Сохранить скан", view -> submitReceiptScan()));
+        if (receiptBoxCode.isEmpty()) {
+            boxCodeInput = input("Сканируйте ШК нового короба");
+            boxCodeInput.setOnEditorActionListener((view, actionId, event) -> {
+                openReceiptBoxFromInput();
+                return true;
+            });
+            scanInput = boxCodeInput;
+            root.addView(boxCodeInput);
+            root.addView(primaryMenuButton("Открыть короб", view -> openReceiptBoxFromInput()));
+            if (receiptClosedBoxes > 0) {
+                root.addView(primaryMenuButton("Закрыть приемку", view -> finishReceipt()));
+            }
+            root.addView(secondaryButton("Сменить клиента", view -> resetReceiptSession()));
+            root.addView(secondaryButton("Назад", view -> renderMainScreen()));
+            if (!statusMessage.isEmpty()) {
+                root.addView(messageView(statusMessage));
+            }
+            setScrollableContent(root);
+            boxCodeInput.requestFocus();
+            refreshHeaderText();
+            return;
+        }
+
+        root.addView(messageView("Открыт короб: " + receiptBoxCode + " · в коробе: " + receiptCurrentItems.size()));
+
+        if (!pendingReceiptBarcode.isEmpty() && pendingReceiptRequiresKiz) {
+            root.addView(messageView("Товар: " + receiptSkuDisplay(pendingReceiptSku, pendingReceiptBarcode)));
+            scanInput = input("Сканируйте КИЗ");
+            scanInput.setOnEditorActionListener((view, actionId, event) -> {
+                handleReceiptKizScan();
+                return true;
+            });
+            root.addView(scanInput);
+            root.addView(primaryMenuButton("Принять КИЗ", view -> handleReceiptKizScan()));
+            root.addView(secondaryButton("Отменить этот товар", view -> clearPendingReceiptProduct()));
+        } else {
+            scanInput = input("Сканируйте ШК товара");
+            scanInput.setOnEditorActionListener((view, actionId, event) -> {
+                handleReceiptBarcodeScan();
+                return true;
+            });
+            root.addView(scanInput);
+            root.addView(primaryMenuButton("Принять товар", view -> handleReceiptBarcodeScan()));
+        }
+
+        root.addView(secondaryButton("Закрыть короб", view -> closeReceiptBox()));
         root.addView(secondaryButton("Синхронизировать очередь (" + pendingCount + ")", view -> syncPending()));
         root.addView(secondaryButton("Назад", view -> renderMainScreen()));
         if (!statusMessage.isEmpty()) {
             root.addView(messageView(statusMessage));
         }
         setScrollableContent(root);
-        scanInput.requestFocus();
+        if (scanInput != null) {
+            scanInput.requestFocus();
+        }
         refreshHeaderText();
     }
 
@@ -835,57 +889,260 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void submitReceiptScan() {
+    private void submitReceiptInput() {
+        if (receiptClientId.isEmpty()) {
+            startReceiptForSelectedClient();
+            return;
+        }
+        if (receiptBoxCode.isEmpty()) {
+            openReceiptBoxFromInput();
+            return;
+        }
+        if (!pendingReceiptBarcode.isEmpty() && pendingReceiptRequiresKiz) {
+            handleReceiptKizScan();
+            return;
+        }
+        handleReceiptBarcodeScan();
+    }
+
+    private void startReceiptForSelectedClient() {
+        String clientId = selectedClientId();
+        if (clientId == null) {
+            return;
+        }
+        receiptClientId = clientId;
+        receiptSourceDocument = newReceiptSourceDocument();
+        receiptClosedBoxes = 0;
+        receiptAcceptedItems = 0;
+        receiptSessionBoxes.clear();
+        receiptKizValues.clear();
+        statusMessage = "Клиент выбран. Сканируйте новый короб.";
+        renderReceiptScreen();
+    }
+
+    private void openReceiptBoxFromInput() {
+        TsdSession session = safeSession();
+        if (session == null) {
+            statusMessage = "Сначала войдите на ТСД.";
+            renderSettingsScreen();
+            return;
+        }
+        if (receiptClientId.isEmpty()) {
+            statusMessage = "Выберите клиента приемки.";
+            renderReceiptScreen();
+            return;
+        }
+
+        String boxCode = textValue(boxCodeInput);
+        if (boxCode.isEmpty()) {
+            statusMessage = "Сканируйте ШК нового короба.";
+            renderReceiptScreen();
+            return;
+        }
+
+        String normalizedBox = normalizeBoxCode(boxCode);
+        if (receiptSessionBoxes.contains(normalizedBox)) {
+            statusMessage = "Этот короб уже использовался в текущей приемке.";
+            renderReceiptScreen();
+            return;
+        }
+
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("clientId", receiptClientId);
+            payload.put("boxCode", boxCode);
+            Response<Map<String, Object>> response = api.openReceiptBox(session.authorizationHeader(), payload).execute();
+            if (!response.isSuccessful()) {
+                throw new IOException("Короб не открыт: HTTP " + response.code());
+            }
+            mainHandler.post(() -> {
+                online = true;
+                receiptBoxCode = boxCode;
+                receiptCurrentItems.clear();
+                clearPendingReceiptProductFields();
+                statusMessage = "Короб открыт. Сканируйте товар.";
+                renderReceiptScreen();
+            });
+        });
+    }
+
+    private void handleReceiptBarcodeScan() {
+        TsdSession session = safeSession();
+        if (session == null) {
+            statusMessage = "Сначала войдите на ТСД.";
+            renderSettingsScreen();
+            return;
+        }
+        String barcode = textValue(scanInput);
+        if (barcode.isEmpty()) {
+            statusMessage = "Сканируйте ШК товара.";
+            renderReceiptScreen();
+            return;
+        }
+
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<TsdSkuInfo> response = api.findSkuByBarcode(session.authorizationHeader(), receiptClientId, barcode).execute();
+            if (response.isSuccessful() && response.body() != null) {
+                TsdSkuInfo sku = response.body();
+                mainHandler.post(() -> {
+                    online = true;
+                    if (sku.needsChestnyZnak && !sku.isUnmarked) {
+                        pendingReceiptBarcode = barcode;
+                        pendingReceiptSku = sku;
+                        pendingReceiptRequiresKiz = true;
+                        statusMessage = "Нужен КИЗ. Сканируйте КИЗ товара.";
+                        renderReceiptScreen();
+                    } else {
+                        addReceiptItem(barcode, null, sku);
+                    }
+                });
+                return;
+            }
+            if (response.code() == 404) {
+                mainHandler.post(() -> {
+                    online = true;
+                    pendingReceiptBarcode = barcode;
+                    pendingReceiptSku = null;
+                    pendingReceiptRequiresKiz = true;
+                    statusMessage = "Товар не найден. Будет создан черновик, сканируйте КИЗ.";
+                    renderReceiptScreen();
+                });
+                return;
+            }
+            throw new IOException("Не удалось проверить товар: HTTP " + response.code());
+        });
+    }
+
+    private void handleReceiptKizScan() {
+        String kiz = textValue(scanInput);
+        if (kiz.isEmpty()) {
+            statusMessage = "Сканируйте КИЗ.";
+            renderReceiptScreen();
+            return;
+        }
+        String normalizedKiz = kiz.trim().toUpperCase(Locale.ROOT);
+        if (receiptKizValues.contains(normalizedKiz)) {
+            statusMessage = "Этот КИЗ уже есть в текущей приемке.";
+            renderReceiptScreen();
+            return;
+        }
+        addReceiptItem(pendingReceiptBarcode, kiz, pendingReceiptSku);
+    }
+
+    private void addReceiptItem(String barcode, String kiz, TsdSkuInfo sku) {
+        receiptCurrentItems.add(new ReceiptItem(barcode, kiz, sku == null ? null : sku.name));
+        if (kiz != null && !kiz.trim().isEmpty()) {
+            receiptKizValues.add(kiz.trim().toUpperCase(Locale.ROOT));
+        }
+        clearPendingReceiptProductFields();
+        statusMessage = "Товар добавлен в короб: " + barcode + ". В коробе: " + receiptCurrentItems.size();
+        renderReceiptScreen();
+    }
+
+    private void clearPendingReceiptProduct() {
+        clearPendingReceiptProductFields();
+        statusMessage = "Скан товара отменен.";
+        renderReceiptScreen();
+    }
+
+    private void clearPendingReceiptProductFields() {
+        pendingReceiptBarcode = "";
+        pendingReceiptSku = null;
+        pendingReceiptRequiresKiz = false;
+    }
+
+    private void closeReceiptBox() {
         if (outbox == null) {
             statusMessage = "Локальная очередь недоступна.";
             refreshCurrentScreen();
             return;
         }
-
-        String clientId = selectedClientId();
-        if (clientId == null) {
+        TsdSession session = safeSession();
+        if (session == null) {
+            statusMessage = "Сначала войдите на ТСД.";
+            renderSettingsScreen();
+            return;
+        }
+        if (receiptBoxCode.isEmpty()) {
+            statusMessage = "Сначала откройте короб.";
+            renderReceiptScreen();
+            return;
+        }
+        if (!pendingReceiptBarcode.isEmpty()) {
+            statusMessage = "Сначала завершите скан товара и КИЗ или отмените этот товар.";
+            renderReceiptScreen();
+            return;
+        }
+        if (receiptCurrentItems.isEmpty()) {
+            statusMessage = "В коробе нет товара. Сканируйте товар или смените короб.";
+            renderReceiptScreen();
             return;
         }
 
-        String barcode = textValue(scanInput);
-        String boxCode = textValue(boxCodeInput);
-        String quantityText = textValue(quantityInput);
-        if (barcode.isEmpty()) {
-            statusMessage = "Сканируйте штрихкод товара.";
-            refreshCurrentScreen();
-            return;
-        }
-        if (boxCode.isEmpty()) {
-            statusMessage = "Укажите короб приемки.";
-            boxCodeInput.requestFocus();
-            refreshCurrentScreen();
-            return;
-        }
-
-        Integer quantity = parseQuantity(quantityText, "Количество должно быть больше 0", false);
-        if (quantity == null) {
-            return;
-        }
-
-        String status = optionalValue(stockStatusInput);
-        String sourceDocument = optionalValue(sourceDocumentInput);
-        String comment = optionalValue(commentInput);
+        String closedBoxCode = receiptBoxCode;
+        List<ReceiptItem> itemsToSend = new ArrayList<>(receiptCurrentItems);
         runBackground(() -> {
-            PendingOperation operation = outbox.enqueueReceipt(
-                clientId,
-                barcode,
-                boxCode,
-                quantity,
-                status,
-                sourceDocument,
-                comment
-            );
+            for (ReceiptItem item : itemsToSend) {
+                outbox.enqueueReceipt(
+                    receiptClientId,
+                    item.barcode,
+                    item.kiz,
+                    closedBoxCode,
+                    1,
+                    "AVAILABLE",
+                    receiptSourceDocument,
+                    "Приемка ТСД: короб " + closedBoxCode
+                );
+            }
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            TsdSyncSummary summary = new TsdSyncRunner(outbox, api, session.deviceCode)
+                .syncPending(session.authorizationHeader());
             mainHandler.post(() -> {
-                scanInput.setText("");
-                statusMessage = "Приемка: скан принят в очередь (" + operation.operationType + ")";
+                online = summary.retried == 0;
+                receiptClosedBoxes += 1;
+                receiptAcceptedItems += itemsToSend.size();
+                receiptSessionBoxes.add(normalizeBoxCode(closedBoxCode));
+                receiptBoxCode = "";
+                receiptCurrentItems.clear();
+                clearPendingReceiptProductFields();
+                statusMessage = summary.rejected == 0 && summary.retried == 0
+                    ? "Короб закрыт и записан в WMS: " + closedBoxCode
+                    : "Короб закрыт, но часть сканов осталась в очереди. Синхронизируйте очередь.";
                 refreshQueue(statusMessage);
             });
         });
+    }
+
+    private void finishReceipt() {
+        if (!receiptBoxCode.isEmpty() && !receiptCurrentItems.isEmpty()) {
+            statusMessage = "Сначала закройте текущий короб.";
+            renderReceiptScreen();
+            return;
+        }
+        String summary = "Приемка закрыта. Коробов: " + receiptClosedBoxes + ", товаров: " + receiptAcceptedItems + ".";
+        resetReceiptState();
+        statusMessage = summary;
+        renderMainScreen();
+    }
+
+    private void resetReceiptSession() {
+        resetReceiptState();
+        statusMessage = "Выберите клиента приемки.";
+        renderReceiptScreen();
+    }
+
+    private void resetReceiptState() {
+        receiptClientId = "";
+        receiptSourceDocument = "";
+        receiptBoxCode = "";
+        receiptClosedBoxes = 0;
+        receiptAcceptedItems = 0;
+        receiptCurrentItems.clear();
+        receiptSessionBoxes.clear();
+        receiptKizValues.clear();
+        clearPendingReceiptProductFields();
     }
 
     private void loginDevice() {
@@ -1192,11 +1449,15 @@ public class MainActivity extends Activity {
         }
         clientAdapter.clear();
         clientAdapter.add("Выберите клиента");
+        int selectedIndex = 0;
         for (TsdClientSummary client : clients) {
             clientAdapter.add(client.name + " · " + client.code);
+            if (!receiptClientId.isEmpty() && receiptClientId.equals(client.id)) {
+                selectedIndex = clientAdapter.getCount() - 1;
+            }
         }
         clientAdapter.notifyDataSetChanged();
-        clientSpinner.setSelection(0);
+        clientSpinner.setSelection(selectedIndex);
     }
 
     private TextView taskRow(String title, String subtitle, int backgroundColor) {
@@ -1405,6 +1666,28 @@ public class MainActivity extends Activity {
         return clients.get(selectedIndex).id;
     }
 
+    private String receiptClientName() {
+        for (TsdClientSummary client : clients) {
+            if (client.id.equals(receiptClientId)) {
+                return client.name;
+            }
+        }
+        return receiptClientId.isEmpty() ? "-" : receiptClientId;
+    }
+
+    private String receiptSkuDisplay(TsdSkuInfo sku, String barcode) {
+        if (sku == null) {
+            return "Новый товар без карточки\nШК " + barcode;
+        }
+        return sku.displayName(barcode);
+    }
+
+    private String newReceiptSourceDocument() {
+        String device = safeSession() == null ? "TSD" : safeSession().deviceCode.replaceAll("[^A-Za-z0-9_-]", "_");
+        String stamp = new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(new Date());
+        return "TSD-RECEIPT-" + stamp + "-" + device;
+    }
+
     private TsdSession safeSession() {
         return sessionStore == null ? null : sessionStore.load();
     }
@@ -1498,5 +1781,17 @@ public class MainActivity extends Activity {
 
     private interface ThrowingRunnable {
         void run() throws Exception;
+    }
+
+    private static class ReceiptItem {
+        final String barcode;
+        final String kiz;
+        final String name;
+
+        ReceiptItem(String barcode, String kiz, String name) {
+            this.barcode = barcode;
+            this.kiz = kiz;
+            this.name = name;
+        }
     }
 }

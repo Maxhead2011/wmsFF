@@ -29,6 +29,7 @@ export type ReceiveIntoBoxInput = {
   clientId: string;
   skuId?: string;
   barcode?: string;
+  kiz?: string;
   boxCode: string;
   quantity: number;
   status?: StockStatus;
@@ -589,6 +590,11 @@ export class StockOperationsService {
       const { createdDraft, sku } = await this.resolveOrCreateSkuForReceipt(tx, dto);
       const box = await this.ensureTargetBox(tx, dto.clientId, dto.boxCode);
       const status = dto.status ?? StockStatus.RECEIVING;
+      const kiz = dto.kiz?.trim();
+
+      if (sku.needsChestnyZnak && !sku.isUnmarked && !kiz) {
+        throw new BadRequestException('Для товара нужен КИЗ. Сканируйте КИЗ перед закрытием короба.');
+      }
 
       const targetBalance = await this.incrementTargetBalance(tx, {
         clientId: dto.clientId,
@@ -599,7 +605,7 @@ export class StockOperationsService {
         quantity: dto.quantity,
       });
 
-      await tx.stockMovement.create({
+      const movement = await tx.stockMovement.create({
         data: {
           clientId: dto.clientId,
           skuId: sku.id,
@@ -614,6 +620,27 @@ export class StockOperationsService {
         },
       });
 
+      if (kiz) {
+        try {
+          await tx.productMark.create({
+            data: {
+              clientId: dto.clientId,
+              skuId: sku.id,
+              boxId: box.id,
+              stockMovementId: movement.id,
+              value: kiz,
+              sourceDocument: dto.sourceDocument,
+              status,
+            },
+          });
+        } catch (caught) {
+          if (isUniqueConstraintError(caught)) {
+            throw new BadRequestException('КИЗ уже есть в WMS, повторная приемка запрещена.');
+          }
+          throw caught;
+        }
+      }
+
       return {
         idempotencyKey: dto.idempotencyKey,
         status: 'APPLIED',
@@ -621,6 +648,8 @@ export class StockOperationsService {
         skuIsDraft: sku.isDraft,
         skuDraftCreated: createdDraft,
         skuName: sku.name,
+        needsChestnyZnak: sku.needsChestnyZnak,
+        kiz: kiz ?? null,
         box: box.code,
         quantity: dto.quantity,
         targetBalance,

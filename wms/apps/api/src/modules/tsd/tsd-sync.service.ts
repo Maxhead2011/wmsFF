@@ -109,6 +109,7 @@ export class TsdSyncService {
           clientId: payload.clientId,
           barcode: payload.barcode,
           skuId: payload.skuId,
+          kiz: payload.kiz,
           boxCode: payload.boxCode,
           quantity: payload.quantity,
           status: payload.status,

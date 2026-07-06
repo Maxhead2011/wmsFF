@@ -9,6 +9,7 @@ import retrofit2.http.GET;
 import retrofit2.http.Header;
 import retrofit2.http.Path;
 import retrofit2.http.POST;
+import retrofit2.http.Query;
 
 public interface WmsApi {
     @POST("api/v1/tsd/login")
@@ -28,6 +29,19 @@ public interface WmsApi {
 
     @GET("api/v1/tsd/clients")
     Call<List<TsdClientSummary>> listClients(@Header("Authorization") String authorization);
+
+    @POST("api/v1/tsd/receipts/open-box")
+    Call<Map<String, Object>> openReceiptBox(
+        @Header("Authorization") String authorization,
+        @Body Map<String, Object> request
+    );
+
+    @GET("api/v1/tsd/sku-by-barcode")
+    Call<TsdSkuInfo> findSkuByBarcode(
+        @Header("Authorization") String authorization,
+        @Query("clientId") String clientId,
+        @Query("barcode") String barcode
+    );
 
     @GET("api/v1/tsd/requests")
     Call<List<TsdAssemblyRequestSummary>> listAssemblyRequests(@Header("Authorization") String authorization);

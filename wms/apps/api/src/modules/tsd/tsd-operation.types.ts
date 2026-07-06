@@ -26,6 +26,7 @@ export type ReceiptScanPayload = {
   clientId: string;
   barcode?: string;
   skuId?: string;
+  kiz?: string;
   boxCode: string;
   quantity: number;
   status?: StockStatus;

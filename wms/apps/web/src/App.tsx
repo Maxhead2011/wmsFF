@@ -224,7 +224,7 @@ function renderWorkspace(
     case 'logistics':
       return <LogisticsQuotePanel session={session} />;
     case 'warehouse':
-      return <WarehouseOpsPanel session={session} />;
+      return <WarehouseOpsPanel session={session} onOpenCatalog={() => setActiveWorkspaceId('catalog')} />;
     case 'turnover':
       return <TurnoverPanel session={session} />;
     case 'requests':

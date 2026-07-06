@@ -27,7 +27,7 @@ describe('TsdSyncService', () => {
           deviceId: 'tsd-1',
           operationKey: 'receipt-1',
           operationType: 'receipt_scan',
-          payload: { clientId: 'client-1', barcode: '4600001', boxCode: 'RCV-1', quantity: '2' },
+          payload: { clientId: 'client-1', barcode: '4600001', kiz: 'KIZ-1', boxCode: 'RCV-1', quantity: '2' },
         },
         user,
       ),
@@ -40,6 +40,7 @@ describe('TsdSyncService', () => {
       expect.objectContaining({
         clientId: 'client-1',
         barcode: '4600001',
+        kiz: 'KIZ-1',
         boxCode: 'RCV-1',
         quantity: 2,
         idempotencyKey: 'receipt-1',

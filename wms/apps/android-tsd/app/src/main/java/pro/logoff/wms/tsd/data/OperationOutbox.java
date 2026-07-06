@@ -16,6 +16,7 @@ public class OperationOutbox {
     public PendingOperation enqueueReceipt(
         String clientId,
         String barcode,
+        String kiz,
         String boxCode,
         int quantity,
         String status,
@@ -25,6 +26,7 @@ public class OperationOutbox {
         Map<String, String> payload = compactPayload();
         put(payload, "clientId", clientId);
         put(payload, "barcode", barcode);
+        put(payload, "kiz", kiz);
         put(payload, "boxCode", boxCode);
         put(payload, "quantity", String.valueOf(quantity));
         put(payload, "status", status);
