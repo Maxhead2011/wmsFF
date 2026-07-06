@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -31,11 +31,29 @@ export class TsdDeviceController {
     return this.assembly.listActiveRequests(user);
   }
 
+  @Get('requests/active')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  listActiveAssemblyRequests(@CurrentUser() user: AuthUser) {
+    return this.assembly.listActiveRequests(user);
+  }
+
   @Get('requests/:id')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
   getAssemblyRequest(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.assembly.getRequestPlan(id, user);
+  }
+
+  @Get('sku-by-barcode')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  findSkuByBarcode(
+    @Query('clientId') clientId: string | undefined,
+    @Query('barcode') barcode: string | undefined,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.assembly.findSkuByBarcode({ clientId, barcode }, user);
   }
 
   @Get('devices')

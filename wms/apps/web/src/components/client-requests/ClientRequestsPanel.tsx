@@ -285,41 +285,6 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
   }
 
   async function closeShipmentByCurrentStage(request: ClientRequestSummary, payload: ManualShipmentClosePayload) {
-    if (request.status === 'IN_WORK') {
-      const packed = await packageClientRequest(session.accessToken, {
-        requestId: request.id,
-        idempotencyKey: `manual-close-pack:${request.id}`,
-        comment: payload.managerComment,
-        packages: payload.packages,
-      });
-      await shipClientRequest(session.accessToken, {
-        requestId: request.id,
-        idempotencyKey: `manual-close-ship:${request.id}`,
-        comment: payload.managerComment,
-      });
-
-      return {
-        ...request,
-        status: 'DONE' as ClientRequestStatus,
-        managerComment: payload.managerComment,
-        packages: packed.packages ?? request.packages,
-      };
-    }
-
-    if (request.status === 'PACKED') {
-      await shipClientRequest(session.accessToken, {
-        requestId: request.id,
-        idempotencyKey: `manual-close-ship:${request.id}`,
-        comment: payload.managerComment,
-      });
-
-      return {
-        ...request,
-        status: 'DONE' as ClientRequestStatus,
-        managerComment: payload.managerComment,
-      };
-    }
-
     return updateClientRequestStatus(session.accessToken, request.id, {
       status: 'DONE',
       managerComment: payload.managerComment,

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { ClientRequestStatus, ClientRequestType } from '@prisma/client';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
@@ -78,6 +78,82 @@ export class TsdAssemblyService {
     this.clientScopes.requireClientAccess(user, exists.clientId, 'read');
     const document = await this.pickInstructions.getRequestInstruction(requestId, user);
     return this.toTsdPlan(document);
+  }
+
+  async findSkuByBarcode(query: { clientId?: string; barcode?: string }, user: AuthUser) {
+    const clientId = query.clientId?.trim();
+    const barcode = query.barcode?.trim();
+
+    if (!clientId) {
+      throw new BadRequestException('Не указан клиент для поиска товара.');
+    }
+    if (!barcode) {
+      throw new BadRequestException('Не указан штрихкод товара.');
+    }
+
+    this.clientScopes.requireClientAccess(user, clientId, 'read');
+
+    const matches = await this.prisma.barcode.findMany({
+      where: {
+        value: barcode,
+        sku: { clientId },
+      },
+      include: {
+        sku: {
+          include: {
+            barcodes: true,
+            balances: {
+              where: { quantity: { gt: 0 } },
+              select: { quantity: true, status: true },
+            },
+            client: { select: { id: true, code: true, name: true } },
+          },
+        },
+      },
+      take: 20,
+    });
+
+    const found =
+      matches.find((match) => !match.sku.isDraft && match.sku.balances.some((balance) => balance.quantity > 0)) ??
+      matches.find((match) => !match.sku.isDraft) ??
+      matches[0];
+
+    if (!found) {
+      throw new NotFoundException('Товар по штрихкоду не найден.');
+    }
+
+    const sku = found.sku;
+    const marketplacePhotos = extractMarketplacePhotos(sku.marketplacePayload);
+
+    return {
+      id: sku.id,
+      skuId: sku.id,
+      clientId: sku.clientId,
+      client: sku.client,
+      internalSku: sku.internalSku,
+      clientSku: sku.clientSku,
+      article: sku.article,
+      name: sku.name,
+      brand: sku.brand,
+      category: sku.category,
+      color: sku.color,
+      size: sku.size,
+      weightGrams: sku.weightGrams,
+      lengthCm: decimalToNumber(sku.lengthCm),
+      widthCm: decimalToNumber(sku.widthCm),
+      heightCm: decimalToNumber(sku.heightCm),
+      volumeLiters: decimalToNumber(sku.volumeLiters),
+      shelfLifeUntil: sku.shelfLifeUntil?.toISOString() ?? null,
+      barcode: found.value,
+      barcodes: sku.barcodes.map((item) => ({ value: item.value, isPrimary: item.isPrimary })),
+      availableQuantity: sku.balances.reduce((sum, balance) => sum + balance.quantity, 0),
+      marketplace: sku.marketplace,
+      marketplaceProductId: sku.marketplaceProductId,
+      marketplaceOfferId: sku.marketplaceOfferId,
+      marketplacePhotos,
+      imageUrl: marketplacePhotos[0] ?? null,
+      photoUrl: marketplacePhotos[0] ?? null,
+    };
   }
 
   private toTsdPlan(document: PickInstructionDocument & { html?: string }) {
@@ -168,6 +244,76 @@ function uniqueSorted(values: string[]) {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort((left, right) =>
     left.localeCompare(right, 'ru', { numeric: true }),
   );
+}
+
+function decimalToNumber(value: { toNumber?: () => number } | number | string | null | undefined) {
+  if (value == null) {
+    return null;
+  }
+  if (typeof value === 'number') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return typeof value.toNumber === 'function' ? value.toNumber() : null;
+}
+
+function extractMarketplacePhotos(payload: unknown) {
+  const photos: string[] = [];
+
+  visitMarketplacePayload(payload, (value, key) => {
+    const normalizedKey = key.toLowerCase();
+    if (typeof value === 'string' && looksLikeImageUrl(value)) {
+      photos.push(value);
+      return;
+    }
+
+    if (!['photo', 'photos', 'image', 'images', 'picture', 'pictures', 'media', 'primary_image'].some((name) => normalizedKey.includes(name))) {
+      return;
+    }
+
+    if (typeof value === 'string' && looksLikeImageUrl(value)) {
+      photos.push(value);
+      return;
+    }
+
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const record = value as Record<string, unknown>;
+      for (const field of ['url', 'big', 'small', 'file_name', 'link', 'c246x328', 'c516x688', 'hq', 'tm']) {
+        const candidate = record[field];
+        if (typeof candidate === 'string' && looksLikeImageUrl(candidate)) {
+          photos.push(candidate);
+        }
+      }
+    }
+  });
+
+  return [...new Set(photos)].slice(0, 20);
+}
+
+function visitMarketplacePayload(value: unknown, visit: (value: unknown, key: string) => void, key = '', depth = 0) {
+  if (depth > 6 || value == null) {
+    return;
+  }
+
+  visit(value, key);
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => visitMarketplacePayload(item, visit, `${key}.${index}`, depth + 1));
+    return;
+  }
+
+  if (typeof value === 'object') {
+    for (const [nextKey, nextValue] of Object.entries(value as Record<string, unknown>)) {
+      visitMarketplacePayload(nextValue, visit, nextKey, depth + 1);
+    }
+  }
+}
+
+function looksLikeImageUrl(value: string) {
+  return /^https?:\/\//i.test(value) && /\.(?:jpg|jpeg|png|webp)(?:\?|#|$)/i.test(value);
 }
 
 function parseRelabelNote(note: string) {
