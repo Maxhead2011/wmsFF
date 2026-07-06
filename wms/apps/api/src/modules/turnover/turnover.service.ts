@@ -286,6 +286,8 @@ export class TurnoverService {
           clientSku: true,
           article: true,
           name: true,
+          color: true,
+          size: true,
           barcodes: { select: { value: true, isPrimary: true }, orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }], take: 5 },
           balances: {
             select: {
@@ -308,7 +310,7 @@ export class TurnoverService {
         select: {
           value: true,
           isPrimary: true,
-          sku: { select: { id: true, internalSku: true, clientSku: true, article: true, name: true } },
+          sku: { select: { id: true, internalSku: true, clientSku: true, article: true, name: true, color: true, size: true } },
         },
         orderBy: { value: 'asc' },
         take: 60,
@@ -350,6 +352,8 @@ export class TurnoverService {
         internalSku: sku.internalSku,
         clientSku: sku.clientSku,
         article: sku.article,
+        color: sku.color,
+        size: sku.size,
         barcode: primaryBarcode,
         quantity: sku.balances.reduce((sum, balance) => sum + balance.quantity, 0),
         boxCode: firstBalance?.box?.code ?? null,
@@ -369,6 +373,8 @@ export class TurnoverService {
             internalSku: product.internalSku,
             clientSku: product.clientSku,
             article: product.article,
+            color: product.color,
+            size: product.size,
           })),
         ...barcodeRows.map((row) => ({
           value: row.value,
@@ -378,6 +384,8 @@ export class TurnoverService {
           internalSku: row.sku.internalSku,
           clientSku: row.sku.clientSku,
           article: row.sku.article,
+          color: row.sku.color,
+          size: row.sku.size,
         })),
       ],
       (row) => row.value,

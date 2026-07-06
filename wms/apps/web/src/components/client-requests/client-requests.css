@@ -598,7 +598,7 @@
 
 .client-request-sku-suggestions button {
   display: grid;
-  grid-template-columns: minmax(110px, 0.7fr) minmax(0, 1.5fr) minmax(120px, 0.8fr);
+  grid-template-columns: minmax(0, 1.4fr) minmax(120px, 0.8fr);
   gap: 8px;
   align-items: center;
   border: 0;
@@ -620,21 +620,36 @@
 
 .client-request-sku-suggestions strong,
 .client-request-sku-suggestions span,
-.client-request-sku-suggestions small {
+.client-request-sku-suggestions small,
+.client-request-selected-sku {
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .client-request-sku-suggestions small,
-.client-request-sku-suggestions-status {
+.client-request-sku-suggestions-status,
+.client-request-selected-sku {
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
+  line-height: 1.35;
+}
+
+.client-request-sku-suggestions small {
+  grid-column: 1 / -1;
 }
 
 .client-request-sku-suggestions-status {
   grid-column: 1 / -1;
+}
+
+.client-request-selected-sku {
+  grid-column: 1 / -1;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  padding: 6px 8px;
 }
 
 .client-request-item-availability {

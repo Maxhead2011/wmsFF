@@ -21,7 +21,10 @@ type ClientRequestItemsEditorProps = {
 type StockSuggestion = {
   skuId: string;
   internalSku: string;
+  clientSku: string | null;
   article: string | null;
+  color: string | null;
+  size: string | null;
   name: string;
   barcode: string;
   availableQuantity: number;
@@ -77,7 +80,7 @@ export function ClientRequestItemsEditor({
   function updateItem(index: number, field: keyof ClientRequestDraftItem, value: string) {
     onChange(
       items.map((item, itemIndex) =>
-        itemIndex === index ? { ...item, [field]: value, skuId: field === 'barcode' || field === 'name' ? '' : item.skuId } : item,
+        itemIndex === index ? updateDraftItem(item, field, value) : item,
       ),
     );
     if (field === 'barcode' || field === 'name') {
@@ -93,6 +96,11 @@ export function ClientRequestItemsEditor({
           ? {
               ...item,
               skuId: sku.skuId,
+              internalSku: sku.internalSku,
+              clientSku: sku.clientSku ?? '',
+              article: sku.article ?? '',
+              color: sku.color ?? '',
+              size: sku.size ?? '',
               barcode: sku.barcode,
               name: sku.name,
             }
@@ -197,13 +205,14 @@ export function ClientRequestItemsEditor({
                 <div className="client-request-sku-suggestions">
                   {suggestions.map((sku) => (
                     <button key={sku.skuId} type="button" onClick={() => selectSku(index, sku)}>
-                      <strong>{sku.internalSku}</strong>
-                      <span>{sku.name}</span>
-                      <small>{[sku.article, sku.barcode || 'без штрихкода', `${sku.availableQuantity} шт.`].filter(Boolean).join(' · ')}</small>
+                      <strong>{sku.name}</strong>
+                      <span>{sku.barcode || 'без штрихкода'}</span>
+                      <small>{skuSuggestionDetails(sku)}</small>
                     </button>
                   ))}
                 </div>
               ) : null}
+              {item.skuId ? <small className="client-request-selected-sku">{selectedSkuDetails(item)}</small> : null}
               {activeSuggest?.index === index && isSuggesting ? (
                 <small className="client-request-sku-suggestions-status">Ищу варианты.</small>
               ) : null}
@@ -242,7 +251,10 @@ function buildStockSuggestions(result: TurnoverSuggestions) {
     ...result.products.map((product) => ({
       skuId: product.skuId,
       internalSku: product.internalSku,
+      clientSku: product.clientSku,
       article: product.article,
+      color: product.color,
+      size: product.size,
       name: product.name,
       barcode: product.barcode ?? '',
       availableQuantity: product.quantity,
@@ -250,7 +262,10 @@ function buildStockSuggestions(result: TurnoverSuggestions) {
     ...result.barcodes.map((barcode) => ({
       skuId: barcode.skuId,
       internalSku: barcode.internalSku,
+      clientSku: barcode.clientSku,
       article: barcode.article,
+      color: barcode.color,
+      size: barcode.size,
       name: barcode.name,
       barcode: barcode.value,
       availableQuantity: quantitiesBySku.get(barcode.skuId) ?? 0,
@@ -276,6 +291,48 @@ function uniqueStockSuggestions(suggestions: StockSuggestion[]) {
   }
 
   return result;
+}
+
+function updateDraftItem(item: ClientRequestDraftItem, field: keyof ClientRequestDraftItem, value: string) {
+  if (field === 'barcode' || field === 'name') {
+    return {
+      ...item,
+      [field]: value,
+      skuId: '',
+      internalSku: '',
+      clientSku: '',
+      article: '',
+      color: '',
+      size: '',
+    };
+  }
+
+  return { ...item, [field]: value };
+}
+
+function skuSuggestionDetails(sku: StockSuggestion) {
+  return [
+    sku.article ? `Арт. ${sku.article}` : null,
+    sku.size ? `Размер ${sku.size}` : null,
+    sku.color ? `Цвет ${sku.color}` : null,
+    sku.clientSku ? `SKU клиента ${sku.clientSku}` : sku.internalSku,
+    `${sku.availableQuantity} шт. на остатке`,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+function selectedSkuDetails(item: ClientRequestDraftItem) {
+  return [
+    item.name,
+    item.barcode ? `ШК ${item.barcode}` : null,
+    item.article ? `Арт. ${item.article}` : null,
+    item.size ? `Размер ${item.size}` : null,
+    item.color ? `Цвет ${item.color}` : null,
+    item.clientSku ? `SKU клиента ${item.clientSku}` : item.internalSku || null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }
 
 function availabilityClassName(line: ClientRequestAvailabilityPreview['lines'][number] | undefined) {

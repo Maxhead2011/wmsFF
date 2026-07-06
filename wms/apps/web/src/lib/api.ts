@@ -535,6 +535,10 @@ export type ClientRequestItem = {
     id: string;
     internalSku: string;
     name: string;
+    clientSku: string | null;
+    article: string | null;
+    color: string | null;
+    size: string | null;
   } | null;
 };
 
@@ -1493,6 +1497,8 @@ export type TurnoverSuggestions = {
     internalSku: string;
     clientSku: string | null;
     article: string | null;
+    color: string | null;
+    size: string | null;
     barcode: string | null;
     quantity: number;
     boxCode: string | null;
@@ -1506,6 +1512,8 @@ export type TurnoverSuggestions = {
     internalSku: string;
     clientSku: string | null;
     article: string | null;
+    color: string | null;
+    size: string | null;
   }>;
   kiz: Array<{
     id: string;

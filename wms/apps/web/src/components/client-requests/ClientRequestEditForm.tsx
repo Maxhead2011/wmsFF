@@ -219,6 +219,11 @@ function requestItemsToDraft(request: ClientRequestSummary) {
 
   return request.items.map((item) => ({
     skuId: item.skuId ?? item.sku?.id ?? '',
+    internalSku: item.sku?.internalSku ?? '',
+    clientSku: item.sku?.clientSku ?? '',
+    article: item.sku?.article ?? '',
+    color: item.sku?.color ?? '',
+    size: item.sku?.size ?? '',
     barcode: item.barcode ?? '',
     name: item.name ?? item.sku?.name ?? '',
     quantity: String(item.quantity),
