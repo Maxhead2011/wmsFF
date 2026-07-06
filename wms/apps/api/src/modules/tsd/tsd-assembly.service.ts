@@ -201,13 +201,18 @@ export class TsdAssemblyService {
   private toTsdPlan(document: PickInstructionDocument & { html?: string }) {
     const completedTsdStatuses: ClientRequestStatus[] = [ClientRequestStatus.PACKED, ClientRequestStatus.DONE];
     const isCompletedForTsd = completedTsdStatuses.includes(document.requestStatus);
+    const movementTargetBoxes = new Set(
+      document.warehouseBalanceMoves.map((row) => row.newBox.trim()).filter(Boolean),
+    );
     const searchBoxes = isCompletedForTsd
       ? []
       : uniqueSorted([
           ...document.warehouseRows.map((row) => row.sourceBox),
           ...document.warehouseBalanceMoves.map((row) => row.sourceBox),
           ...document.warehouseWholeBoxes.map((row) => row.box),
-        ]).map((boxCode) => boxEntry(boxCode));
+        ])
+          .filter((boxCode) => !movementTargetBoxes.has(boxCode))
+          .map((boxCode) => boxEntry(boxCode));
 
     const relabelTasks = isCompletedForTsd
       ? []

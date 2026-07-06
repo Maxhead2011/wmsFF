@@ -54,7 +54,7 @@ import retrofit2.Response;
 public class MainActivity extends Activity {
     private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
     private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk";
-    private static final String APP_VERSION = "0.1.42";
+    private static final String APP_VERSION = "0.1.43";
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int LIGHT_GRAY = Color.rgb(226, 232, 240);
     private static final int TEXT = Color.rgb(30, 41, 59);
@@ -442,13 +442,17 @@ public class MainActivity extends Activity {
             renderAssemblyListScreen();
             return;
         }
+        if (areAssemblyStepsDone()) {
+            completeAssemblyIfReady();
+            return;
+        }
 
         LinearLayout root = baseRoot();
         root.addView(header());
         root.addView(title("Поиск коробов"));
         List<TsdSearchBoxTask> boxes = safeSearchBoxes();
         Set<String> found = foundBoxes();
-        root.addView(messageView("Найдено: " + found.size() + " / " + boxes.size()));
+        root.addView(messageView("Найдено: " + foundSearchBoxesCount(boxes, found) + " / " + boxes.size()));
         assemblyScanInput = input("Сканируйте короб");
         assemblyScanInput.setOnEditorActionListener((view, actionId, event) -> {
             submitBoxSearchScan();
@@ -1210,7 +1214,19 @@ public class MainActivity extends Activity {
     }
 
     private List<TsdSearchBoxTask> safeSearchBoxes() {
-        return assemblyPlan == null || assemblyPlan.searchBoxes == null ? new ArrayList<>() : assemblyPlan.searchBoxes;
+        List<TsdSearchBoxTask> boxes = assemblyPlan == null || assemblyPlan.searchBoxes == null ? new ArrayList<>() : assemblyPlan.searchBoxes;
+        Set<String> movementTargets = movementTargetBoxes();
+        if (boxes.isEmpty() || movementTargets.isEmpty()) {
+            return boxes;
+        }
+
+        List<TsdSearchBoxTask> filtered = new ArrayList<>();
+        for (TsdSearchBoxTask box : boxes) {
+            if (!movementTargets.contains(normalizeBoxCode(box.boxCode))) {
+                filtered.add(box);
+            }
+        }
+        return filtered;
     }
 
     private List<TsdRelabelTask> safeRelabelTasks() {
@@ -1223,7 +1239,7 @@ public class MainActivity extends Activity {
 
     private boolean isSearchDone() {
         List<TsdSearchBoxTask> boxes = safeSearchBoxes();
-        return foundBoxes().size() >= boxes.size();
+        return foundSearchBoxesCount(boxes, foundBoxes()) >= boxes.size();
     }
 
     private boolean isRelabelDone() {
@@ -1251,6 +1267,27 @@ public class MainActivity extends Activity {
             }
         }
         return normalized;
+    }
+
+    private int foundSearchBoxesCount(List<TsdSearchBoxTask> boxes, Set<String> found) {
+        int total = 0;
+        for (TsdSearchBoxTask box : boxes) {
+            if (found.contains(normalizeBoxCode(box.boxCode))) {
+                total += 1;
+            }
+        }
+        return total;
+    }
+
+    private Set<String> movementTargetBoxes() {
+        Set<String> targets = new LinkedHashSet<>();
+        for (TsdMovementTask task : safeMovementTasks()) {
+            String targetBox = normalizeBoxCode(task.targetBox);
+            if (!targetBox.isEmpty()) {
+                targets.add(targetBox);
+            }
+        }
+        return targets;
     }
 
     private int relabelTotal() {

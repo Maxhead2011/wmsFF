@@ -17,6 +17,7 @@ export function buildPickInstructionWorkbook(document: PickInstructionDocument) 
 }
 
 function searchBoxRows(document: PickInstructionDocument): CellValue[][] {
+  const movementTargetBoxes = new Set(document.warehouseBalanceMoves.map((row) => row.newBox.trim()).filter(Boolean));
   const boxCodes = [
     ...new Set(
       [
@@ -25,7 +26,7 @@ function searchBoxRows(document: PickInstructionDocument): CellValue[][] {
         ...document.warehouseWholeBoxes.map((row) => row.box),
       ]
         .map((value) => value.trim())
-        .filter(Boolean),
+        .filter((value) => value && !movementTargetBoxes.has(value)),
     ),
   ].sort((left, right) => left.localeCompare(right, 'ru', { numeric: true }));
 
