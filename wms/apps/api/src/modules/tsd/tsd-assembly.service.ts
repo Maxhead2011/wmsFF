@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { ClientRequestStatus, ClientRequestType } from '@prisma/client';
+import { ClientRequestStatus, ClientRequestType, MovementType } from '@prisma/client';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { PickInstructionService } from '../stock/pick-instruction.service';
@@ -198,20 +198,21 @@ export class TsdAssemblyService {
     };
   }
 
-  private toTsdPlan(document: PickInstructionDocument & { html?: string }) {
+  private async toTsdPlan(document: PickInstructionDocument & { html?: string }) {
     const completedTsdStatuses: ClientRequestStatus[] = [ClientRequestStatus.PACKED, ClientRequestStatus.DONE];
     const isCompletedForTsd = completedTsdStatuses.includes(document.requestStatus);
-    const movementTargetBoxes = new Set(
-      document.warehouseBalanceMoves.map((row) => row.newBox.trim()).filter(Boolean),
-    );
+    const rawSearchBoxCodes = uniqueSorted([
+      ...document.warehouseRows.map((row) => row.sourceBox),
+      ...document.warehouseBalanceMoves.map((row) => row.sourceBox),
+      ...document.warehouseWholeBoxes.map((row) => row.box),
+    ]);
+    const movementTargetBoxes = new Set(document.warehouseBalanceMoves.map((row) => normalizeBoxCode(row.newBox)).filter(Boolean));
+    const completedMoveTargetBoxes = await this.loadCompletedMoveTargetBoxes(document, rawSearchBoxCodes);
+    completedMoveTargetBoxes.forEach((boxCode) => movementTargetBoxes.add(boxCode));
     const searchBoxes = isCompletedForTsd
       ? []
-      : uniqueSorted([
-          ...document.warehouseRows.map((row) => row.sourceBox),
-          ...document.warehouseBalanceMoves.map((row) => row.sourceBox),
-          ...document.warehouseWholeBoxes.map((row) => row.box),
-        ])
-          .filter((boxCode) => !movementTargetBoxes.has(boxCode))
+      : rawSearchBoxCodes
+          .filter((boxCode) => shouldShowInTsdBoxSearch(boxCode, movementTargetBoxes))
           .map((boxCode) => boxEntry(boxCode));
 
     const relabelTasks = isCompletedForTsd
@@ -328,6 +329,32 @@ export class TsdAssemblyService {
       movementBoxes: groupTasksByBox(movementTasks),
     };
   }
+
+  private async loadCompletedMoveTargetBoxes(document: PickInstructionDocument, boxCodes: string[]) {
+    const normalizedBoxCodes = boxCodes.map((boxCode) => boxCode.trim()).filter(Boolean);
+    if (normalizedBoxCodes.length === 0 || !document.requestTitle.trim()) {
+      return new Set<string>();
+    }
+
+    const rows = await this.prisma.stockMovement.findMany({
+      where: {
+        clientId: document.client.id,
+        type: MovementType.MOVE,
+        quantity: { gt: 0 },
+        comment: { contains: document.requestTitle },
+        box: { code: { in: normalizedBoxCodes } },
+      },
+      select: {
+        box: { select: { code: true } },
+      },
+    });
+
+    return new Set(
+      rows
+        .map((row) => normalizeBoxCode(row.box?.code))
+        .filter((boxCode): boxCode is string => Boolean(boxCode)),
+    );
+  }
 }
 
 type CollapsibleRow = {
@@ -429,6 +456,26 @@ function normalizeBoxTasks(values: Array<{ boxCode?: string; code?: string } | s
   return values
     .map((value) => (typeof value === 'string' ? boxEntry(value) : boxEntry(value.boxCode ?? value.code ?? '')))
     .filter((box) => box.boxCode);
+}
+
+function normalizeBoxCode(value?: string | null) {
+  return safeDecode(value ?? '')
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .trim()
+    .toLocaleLowerCase('ru-RU');
+}
+
+function shouldShowInTsdBoxSearch(boxCode: string, movementTargetBoxes: Set<string>) {
+  const normalized = normalizeBoxCode(boxCode);
+  if (!normalized) {
+    return false;
+  }
+
+  if (movementTargetBoxes.has(normalized)) {
+    return false;
+  }
+
+  return true;
 }
 
 function boxEntry(boxCode: string) {

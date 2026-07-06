@@ -54,7 +54,7 @@ import retrofit2.Response;
 public class MainActivity extends Activity {
     private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
     private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk";
-    private static final String APP_VERSION = "0.1.43";
+    private static final String APP_VERSION = "0.1.44";
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int LIGHT_GRAY = Color.rgb(226, 232, 240);
     private static final int TEXT = Color.rgb(30, 41, 59);
@@ -686,6 +686,7 @@ public class MainActivity extends Activity {
         for (TsdMovementTask task : safeMovementTasks()) {
             if (remainingMovement(task) > 0 && code.equals(task.targetBox)) {
                 selectedMoveTargetBox = code;
+                rememberMovementTargetBox(code);
                 statusMessage = "Новый короб выбран: " + code;
                 assemblyScanInput.setText("");
                 renderMovementScreen();
@@ -732,6 +733,7 @@ public class MainActivity extends Activity {
     private boolean handleFlexibleMovementScan(String code) {
         if (selectedMoveTargetBox.isEmpty()) {
             selectedMoveTargetBox = code;
+            rememberMovementTargetBox(code);
             statusMessage = "\u041d\u043e\u0432\u044b\u0439 \u043a\u043e\u0440\u043e\u0431 \u0432\u044b\u0431\u0440\u0430\u043d: " + code;
             assemblyScanInput.setText("");
             renderMovementScreen();
@@ -1287,7 +1289,23 @@ public class MainActivity extends Activity {
                 targets.add(targetBox);
             }
         }
+        for (String value : stringSet(progressKey("movement_target_boxes"))) {
+            String targetBox = normalizeBoxCode(value);
+            if (!targetBox.isEmpty()) {
+                targets.add(targetBox);
+            }
+        }
         return targets;
+    }
+
+    private void rememberMovementTargetBox(String boxCode) {
+        String targetBox = normalizeBoxCode(boxCode);
+        if (targetBox.isEmpty()) {
+            return;
+        }
+        Set<String> targets = stringSet(progressKey("movement_target_boxes"));
+        targets.add(targetBox);
+        saveStringSet(progressKey("movement_target_boxes"), targets);
     }
 
     private int relabelTotal() {
