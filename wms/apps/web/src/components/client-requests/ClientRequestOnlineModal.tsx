@@ -309,7 +309,10 @@ function onlineSummary(data: OnlineData | null, request: ClientRequestSummary) {
   const movementTasks = movementTasksFrom(plan, instruction);
   const relabelTasks = relabelTasksFrom(plan, instruction);
   const searchBoxes = searchBoxesFrom(plan, instruction, movementTasks);
-  const foundBoxes = Math.min(searchBoxes.length, Math.max(0, Number(plan?.foundCount ?? 0)));
+  const foundBoxes = Math.min(
+    searchBoxes.length,
+    Math.max(0, Number(plan?.foundCount ?? 0), Number(plan?.activeTsdProcess?.foundCount ?? 0), foundBoxesFromPlan(plan)),
+  );
   const movementLabels = movementLabelsFrom(instruction, movementTasks);
   const relabelPrintLabels = relabelPrintLabelsFrom(instruction, relabelTasks);
   const searchRemaining = Math.max(searchBoxes.length - foundBoxes, 0);
@@ -369,6 +372,10 @@ function progressSummaryLabel(foundBoxes: number, totalBoxes: number, remainingB
     parts.push(`перемещения: ${movementCount} строк`);
   }
   return parts.join(' · ');
+}
+
+function foundBoxesFromPlan(plan: TsdAssemblyPlan | null | undefined) {
+  return normalizeBoxes([...(plan?.searchBoxes ?? []), ...(plan?.boxesToSearch ?? [])].filter((box) => box.found || box.isFound).map((box) => box.boxCode || box.code || '')).length;
 }
 
 function searchBoxesFrom(plan: TsdAssemblyPlan | null | undefined, instruction: PickInstructionDocument | null | undefined, movementTasks: MovementTask[]) {

@@ -66,6 +66,10 @@ export class TsdSyncService {
         return await this.applyReceiptScan(operation, user);
       }
 
+      if (operation.operationType === 'assembly_stage') {
+        return await this.operationLog.recordResult(operation, 'ACCEPTED', 'Этап сборки отмечен.');
+      }
+
       return await this.applyInventoryScan(operation, user);
     } catch (caught) {
       return await this.operationLog.recordResult(

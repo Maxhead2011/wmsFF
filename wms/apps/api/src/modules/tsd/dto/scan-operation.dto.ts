@@ -10,8 +10,8 @@ export class ScanOperationDto {
   @IsNotEmpty()
   operationKey!: string;
 
-  @IsIn(['receipt_scan', 'move_scan', 'inventory_scan'])
-  operationType!: 'receipt_scan' | 'move_scan' | 'inventory_scan';
+  @IsIn(['receipt_scan', 'move_scan', 'inventory_scan', 'assembly_stage'])
+  operationType!: 'receipt_scan' | 'move_scan' | 'inventory_scan' | 'assembly_stage';
 
   @IsObject()
   payload!: Record<string, unknown>;

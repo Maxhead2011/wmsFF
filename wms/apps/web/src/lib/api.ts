@@ -1092,6 +1092,16 @@ export type TsdAssemblyPlan = {
   boxesCount?: number;
   foundCount?: number;
   remainingCount?: number;
+  activeTsdProcess?: {
+    stage?: string;
+    stageLabel?: string;
+    deviceCode?: string;
+    workerName?: string | null;
+    updatedAt?: string;
+    foundCount?: number;
+    totalBoxCount?: number;
+    progressText?: string;
+  } | null;
   relabelTotal?: number;
   movementTotal?: number;
   searchBoxes?: Array<{ boxCode: string; code?: string; found?: boolean; isFound?: boolean }>;

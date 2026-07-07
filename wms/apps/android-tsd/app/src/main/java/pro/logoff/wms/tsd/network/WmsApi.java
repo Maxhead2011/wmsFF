@@ -52,6 +52,13 @@ public interface WmsApi {
         @Path("id") String id
     );
 
+    @POST("api/v1/tsd/requests/{id}/box-search/scan")
+    Call<Map<String, Object>> scanAssemblyBox(
+        @Header("Authorization") String authorization,
+        @Path("id") String id,
+        @Body Map<String, String> request
+    );
+
     @POST("api/v1/stock/fulfillment/package-request")
     Call<Map<String, Object>> packageClientRequest(
         @Header("Authorization") String authorization,

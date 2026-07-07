@@ -16,6 +16,17 @@ const activeAssemblyStatuses = [
 
 type TsdRequestStage = 'box-search' | 'relabel' | 'moves' | 'boxless-packing';
 
+type TsdProcessSummary = {
+  stage: string;
+  stageLabel: string;
+  deviceCode: string;
+  workerName: string | null;
+  updatedAt: string;
+  foundCount: number;
+  totalBoxCount?: number;
+  progressText: string;
+};
+
 @Injectable()
 export class TsdAssemblyService {
   constructor(
@@ -47,6 +58,7 @@ export class TsdAssemblyService {
         _count: { select: { items: true } },
       },
     });
+    const activeProcesses = await this.loadActiveTsdProcesses(requests.map((request) => request.id));
 
     return requests.map((request) => ({
       id: request.id,
@@ -75,6 +87,7 @@ export class TsdAssemblyService {
             email: request.assignedTo.email,
           }
         : null,
+      activeTsdProcess: activeProcesses.get(request.id) ?? null,
     }));
   }
 
@@ -280,6 +293,17 @@ export class TsdAssemblyService {
     const foundBoxes = searchBoxes.filter((box) => box.found || box.isFound);
     const remainingBoxes = searchBoxes.filter((box) => !box.found && !box.isFound);
     const remainingBoxCodes = remainingBoxes.map((box) => box.boxCode);
+    let activeTsdProcess = (await this.loadActiveTsdProcesses([document.requestId])).get(document.requestId) ?? null;
+    if (activeTsdProcess && searchBoxes.length > 0) {
+      const totalBoxCount = searchBoxes.length;
+      const activeFoundCount = Math.max(activeTsdProcess.foundCount, foundBoxes.length);
+      activeTsdProcess = {
+        ...activeTsdProcess,
+        foundCount: activeFoundCount,
+        totalBoxCount,
+        progressText: `найдено коробов: ${activeFoundCount} из ${totalBoxCount}`,
+      };
+    }
 
     const requestRows = document.rows.map((row) => ({
       id: row.itemId,
@@ -347,6 +371,7 @@ export class TsdAssemblyService {
       foundCount: foundBoxes.length,
       found: foundBoxes.length,
       foundBoxes,
+      activeTsdProcess,
       relabelTasks,
       relabelBoxes: groupTasksByBox(relabelTasks),
       movementTasks,
@@ -379,6 +404,82 @@ export class TsdAssemblyService {
         .map((row) => normalizeBoxCode(row.box?.code))
         .filter((boxCode): boxCode is string => Boolean(boxCode)),
     );
+  }
+
+  private async loadActiveTsdProcesses(requestIds: string[]) {
+    const ids = [...new Set(requestIds.filter(Boolean))];
+    if (ids.length === 0) {
+      return new Map<string, TsdProcessSummary>();
+    }
+
+    const since = new Date(Date.now() - 12 * 60 * 60 * 1000);
+    const operations = await this.prisma.tsdOperation.findMany({
+      where: {
+        status: TsdOperationStatus.ACCEPTED,
+        operationType: { in: ['assembly_stage', 'box_search_scan'] },
+        createdAt: { gte: since },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 1200,
+    });
+
+    const allowedRequestIds = new Set(ids);
+    const latestByRequest = new Map<string, (typeof operations)[number]>();
+    const foundBoxesByRequest = new Map<string, Set<string>>();
+    const userIds = new Set<string>();
+
+    for (const operation of operations) {
+      const payload = operationPayload(operation.payload);
+      const requestId = operationRequestId(operation, payload);
+      if (!requestId || !allowedRequestIds.has(requestId)) {
+        continue;
+      }
+
+      if (!latestByRequest.has(requestId)) {
+        latestByRequest.set(requestId, operation);
+      }
+
+      const userId = textValue(payload, 'userId');
+      if (userId) {
+        userIds.add(userId);
+      }
+
+      if (operation.operationType === 'box_search_scan') {
+        const boxCode = normalizeBoxCode(textValue(payload, 'boxCode') ?? operation.operationKey.split(':').pop());
+        if (boxCode) {
+          const boxes = foundBoxesByRequest.get(requestId) ?? new Set<string>();
+          boxes.add(boxCode);
+          foundBoxesByRequest.set(requestId, boxes);
+        }
+      }
+    }
+
+    const users = userIds.size
+      ? await this.prisma.user.findMany({
+          where: { id: { in: [...userIds] } },
+          select: { id: true, name: true, email: true },
+        })
+      : [];
+    const usersById = new Map(users.map((user) => [user.id, user]));
+
+    const result = new Map<string, TsdProcessSummary>();
+    for (const [requestId, operation] of latestByRequest) {
+      const payload = operationPayload(operation.payload);
+      const user = usersById.get(textValue(payload, 'userId') ?? '');
+      const stage = operationStage(operation, payload);
+      const foundCount = foundBoxesByRequest.get(requestId)?.size ?? 0;
+      result.set(requestId, {
+        stage,
+        stageLabel: stageLabel(stage),
+        deviceCode: textValue(payload, 'deviceCode') ?? operation.deviceId,
+        workerName: user?.name ?? textValue(payload, 'workerName') ?? textValue(payload, 'operatorName') ?? null,
+        updatedAt: operation.updatedAt.toISOString(),
+        foundCount,
+        progressText: foundCount > 0 ? `найдено коробов: ${foundCount}` : stageLabel(stage),
+      });
+    }
+
+    return result;
   }
 
   private async loadFoundBoxSearchCodes(requestId: string, boxCodes: string[]) {
@@ -551,6 +652,41 @@ function normalizeBoxTasks(values: Array<{ boxCode?: string; code?: string; foun
 
 function boxSearchOperationPrefix(requestId: string) {
   return `box-search:${requestId}:`;
+}
+
+function operationPayload(payload: Prisma.JsonValue): Record<string, unknown> {
+  return payload && typeof payload === 'object' && !Array.isArray(payload) ? (payload as Record<string, unknown>) : {};
+}
+
+function operationRequestId(operation: { operationKey: string; operationType: string }, payload: Record<string, unknown>) {
+  const fromPayload = textValue(payload, 'requestId');
+  if (fromPayload) {
+    return fromPayload;
+  }
+  if (operation.operationType === 'box_search_scan') {
+    const parts = operation.operationKey.split(':');
+    return parts.length >= 3 ? parts[1] : '';
+  }
+  return '';
+}
+
+function operationStage(operation: { operationType: string }, payload: Record<string, unknown>) {
+  if (operation.operationType === 'box_search_scan') {
+    return 'box-search';
+  }
+  return textValue(payload, 'stage') ?? 'open';
+}
+
+function stageLabel(stage: string) {
+  const labels: Record<string, string> = {
+    open: 'открыта заявка',
+    'box-search': 'поиск коробов',
+    relabel: 'перемаркировка',
+    moves: 'перемещения',
+    'boxless-packing': 'сборка по коробам',
+    packed: 'упаковано',
+  };
+  return labels[stage] ?? stage;
 }
 
 function normalizeBoxCode(value?: string | null) {

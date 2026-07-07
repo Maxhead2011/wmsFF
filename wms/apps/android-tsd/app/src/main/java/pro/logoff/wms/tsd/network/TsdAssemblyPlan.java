@@ -13,8 +13,11 @@ public class TsdAssemblyPlan {
     public int rowsCount;
     public int totalRequested;
     public int boxesTotal;
+    public int foundCount;
+    public int remainingCount;
     public int relabelTotal;
     public int movementTotal;
+    public TsdAssemblyProcess activeTsdProcess;
     public List<TsdSearchBoxTask> searchBoxes;
     public List<TsdRelabelTask> relabelTasks;
     public List<TsdMovementTask> movementTasks;

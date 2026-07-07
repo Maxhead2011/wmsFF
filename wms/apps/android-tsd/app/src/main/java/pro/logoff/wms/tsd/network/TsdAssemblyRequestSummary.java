@@ -11,4 +11,5 @@ public class TsdAssemblyRequestSummary {
     public TsdAssemblyClient client;
     public int rowsCount;
     public TsdAssemblyWorker inWorkBy;
+    public TsdAssemblyProcess activeTsdProcess;
 }

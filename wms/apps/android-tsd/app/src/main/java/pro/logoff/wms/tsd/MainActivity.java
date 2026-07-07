@@ -40,9 +40,11 @@ import pro.logoff.wms.tsd.data.OperationOutboxCounts;
 import pro.logoff.wms.tsd.data.PendingOperation;
 import pro.logoff.wms.tsd.data.TsdDatabase;
 import pro.logoff.wms.tsd.network.TsdClientSummary;
+import pro.logoff.wms.tsd.network.TsdAssemblyProcess;
 import pro.logoff.wms.tsd.network.TsdAssemblyPlan;
 import pro.logoff.wms.tsd.network.TsdAssemblyRequestSummary;
 import pro.logoff.wms.tsd.network.TsdMovementTask;
+import pro.logoff.wms.tsd.network.TsdOperationRequest;
 import pro.logoff.wms.tsd.network.TsdRelabelTask;
 import pro.logoff.wms.tsd.network.TsdSearchBoxTask;
 import pro.logoff.wms.tsd.network.TsdLoginRequest;
@@ -57,7 +59,7 @@ import retrofit2.Response;
 public class MainActivity extends Activity {
     private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
     private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk";
-    private static final String APP_VERSION = "0.1.46";
+    private static final String APP_VERSION = "0.1.47";
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int BOX_FOUND_GREEN = Color.rgb(187, 247, 208);
     private static final int BOX_DUPLICATE_BLUE = Color.rgb(191, 219, 254);
@@ -108,6 +110,8 @@ public class MainActivity extends Activity {
     private int rejectedCount;
     private boolean online;
     private String statusMessage = "";
+    private String lastAssemblyTouchKey = "";
+    private long lastAssemblyTouchAt = 0L;
     private int boxSearchFeedbackColor = 0;
     private Screen screen = Screen.MAIN;
 
@@ -403,8 +407,102 @@ public class MainActivity extends Activity {
         String clientName = request.client == null ? "" : request.client.name;
         String city = emptyAsDash(request.city);
         String inWork = request.inWorkBy == null ? "" : "\nУже в работе: " + request.inWorkBy.name;
-        String text = request.title + "\nКлиент: " + clientName + "\nГород: " + city + " · Статус: " + request.status + " · строк: " + request.rowsCount + inWork;
-        return multilineSecondaryButton(text, view -> loadAssemblyPlan(request.id));
+        String process = activeProcessLine(request.activeTsdProcess);
+        String text = request.title + "\nКлиент: " + clientName + "\nГород: " + city + " · Статус: " + request.status + " · строк: " + request.rowsCount + inWork + process;
+        Button button = multilineSecondaryButton(text, view -> loadAssemblyPlan(request.id));
+        if (request.activeTsdProcess != null) {
+            button.setBackgroundColor(Color.rgb(255, 251, 235));
+        }
+        return button;
+    }
+
+    private String activeProcessLine(TsdAssemblyProcess process) {
+        if (process == null) {
+            return "";
+        }
+        String worker = process.workerName == null || process.workerName.trim().isEmpty() ? "" : process.workerName.trim();
+        String device = process.deviceCode == null || process.deviceCode.trim().isEmpty() ? "" : process.deviceCode.trim();
+        String who = worker.isEmpty() ? device : worker + (device.isEmpty() ? "" : " / " + device);
+        String progress = process.progressText == null || process.progressText.trim().isEmpty() ? process.stageLabel : process.progressText;
+        if (process.totalBoxCount > 0) {
+            progress = "найдено коробов: " + process.foundCount + " из " + process.totalBoxCount;
+        } else if (process.foundCount > 0) {
+            progress = "найдено коробов: " + process.foundCount;
+        }
+        return "\nВ работе на ТСД: " + (who.isEmpty() ? "-" : who) + "\nЭтап: " + emptyAsDash(process.stageLabel) + " · " + emptyAsDash(progress);
+    }
+
+    private void touchAssemblyStage(String stage) {
+        if (assemblyPlan == null) {
+            return;
+        }
+        TsdSession session = safeSession();
+        if (session == null) {
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        String touchKey = assemblyPlan.id + ":" + stage;
+        if (touchKey.equals(lastAssemblyTouchKey) && now - lastAssemblyTouchAt < 15000L) {
+            return;
+        }
+        lastAssemblyTouchKey = touchKey;
+        lastAssemblyTouchAt = now;
+
+        String requestId = assemblyPlan.id;
+        String requestTitle = assemblyPlan.title;
+        runSilentBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Map<String, String> payload = new LinkedHashMap<>();
+            payload.put("requestId", requestId);
+            payload.put("stage", stage);
+            payload.put("stageLabel", assemblyStageLabel(stage));
+            payload.put("requestTitle", requestTitle == null ? "" : requestTitle);
+            payload.put("deviceCode", session.deviceCode);
+            payload.put("workerName", session.deviceName);
+            TsdOperationRequest operation = new TsdOperationRequest(
+                session.deviceCode,
+                "assembly-stage:" + requestId + ":" + session.deviceCode + ":" + stage + ":" + System.currentTimeMillis(),
+                "assembly_stage",
+                payload
+            );
+            api.sendOperation(session.authorizationHeader(), operation).execute();
+        });
+    }
+
+    private void sendBoxSearchScan(String boxCode) {
+        if (assemblyPlan == null) {
+            return;
+        }
+        TsdSession session = safeSession();
+        if (session == null) {
+            return;
+        }
+
+        String requestId = assemblyPlan.id;
+        runSilentBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Map<String, String> payload = new LinkedHashMap<>();
+            payload.put("boxCode", boxCode);
+            payload.put("deviceCode", session.deviceCode);
+            api.scanAssemblyBox(session.authorizationHeader(), requestId, payload).execute();
+        });
+    }
+
+    private String assemblyStageLabel(String stage) {
+        if ("box-search".equals(stage)) {
+            return "поиск коробов";
+        }
+        if ("relabel".equals(stage)) {
+            return "перемаркировка";
+        }
+        if ("moves".equals(stage)) {
+            return "перемещения";
+        }
+        if ("boxless-packing".equals(stage)) {
+            return "сборка по коробам";
+        }
+        return "открыта заявка";
     }
 
     private void loadAssemblyPlan(String requestId) {
@@ -433,6 +531,7 @@ public class MainActivity extends Activity {
                 selectedMoveTargetBox = "";
                 statusMessage = "Заявка открыта.";
                 renderAssemblyDetailScreen();
+                touchAssemblyStage("open");
             });
         });
     }
@@ -455,6 +554,9 @@ public class MainActivity extends Activity {
         root.addView(messageView("Город: " + emptyAsDash(assemblyPlan.city)));
         root.addView(messageView("Статус: " + assemblyPlan.status + " · строк: " + assemblyPlan.rowsCount));
         root.addView(messageView("Единиц к отгрузке: " + assemblyPlan.totalRequested + " · коробов найти: " + safeSearchBoxes().size()));
+        if (assemblyPlan.activeTsdProcess != null) {
+            root.addView(messageView(activeProcessLine(assemblyPlan.activeTsdProcess).trim()));
+        }
 
         root.addView(stageButton("1. Поиск коробов", isSearchDone(), view -> renderBoxSearchScreen()));
         root.addView(stageButton("2. Перемаркировка", isRelabelDone(), view -> renderRelabelScreen()));
@@ -500,6 +602,7 @@ public class MainActivity extends Activity {
             renderAssemblyListScreen();
             return;
         }
+        touchAssemblyStage("box-search");
         if (areAssemblyStepsDone()) {
             completeAssemblyIfReady();
             return;
@@ -581,6 +684,7 @@ public class MainActivity extends Activity {
             saveLastFoundBoxCode(code);
             statusMessage = "Короб найден: " + displayCode;
             boxSearchFeedbackColor = BOX_FOUND_GREEN;
+            sendBoxSearchScan(displayCode);
         }
         assemblyScanInput.setText("");
         if (areAssemblyStepsDone()) {
@@ -596,6 +700,7 @@ public class MainActivity extends Activity {
             renderAssemblyListScreen();
             return;
         }
+        touchAssemblyStage("relabel");
 
         LinearLayout root = baseRoot();
         root.addView(header());
@@ -716,6 +821,7 @@ public class MainActivity extends Activity {
             renderAssemblyListScreen();
             return;
         }
+        touchAssemblyStage("moves");
 
         LinearLayout root = baseRoot();
         root.addView(header());
@@ -1291,6 +1397,15 @@ public class MainActivity extends Activity {
                     statusMessage = error.getMessage() == null ? "Ошибка приложения" : error.getMessage();
                     refreshCurrentScreen();
                 });
+            }
+        });
+    }
+
+    private void runSilentBackground(ThrowingRunnable task) {
+        executor.execute(() -> {
+            try {
+                task.run();
+            } catch (Throwable ignored) {
             }
         });
     }
