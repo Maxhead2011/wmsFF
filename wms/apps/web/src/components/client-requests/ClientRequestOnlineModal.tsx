@@ -123,6 +123,19 @@ export function ClientRequestOnlineModal({ session, request, onClose }: ClientRe
 
         {state.data ? (
           <div className="client-request-online-modal__body">
+            <section className="client-request-online-progress" aria-label="Общий прогресс выполнения заявки">
+              <div className="client-request-online-progress__head">
+                <div>
+                  <span>Прогресс выполнения</span>
+                  <strong>{summary.progressLabel}</strong>
+                </div>
+                <b>{summary.progressPercent}%</b>
+              </div>
+              <div className="client-request-online-progress__bar" aria-hidden="true">
+                <span style={{ width: `${summary.progressPercent}%` }} />
+              </div>
+            </section>
+
             <section className="client-request-online-stage-grid" aria-label="Стадии выполнения">
               <StageCard icon={<Activity size={18} />} label="Статус WMS" value={requestStatusLabel(request.status)} tone={summary.done ? 'ready' : 'work'} />
               <StageCard
@@ -148,7 +161,11 @@ export function ClientRequestOnlineModal({ session, request, onClose }: ClientRe
             <section className="client-request-online-section">
               <div className="client-request-online-section__head">
                 <h4>Короба для поиска</h4>
-                <span>{summary.searchBoxes.length ? `Осталось: ${Math.max(summary.searchBoxes.length - summary.foundBoxes, 0)}` : 'Не требуется'}</span>
+                <span>
+                  {summary.searchBoxes.length
+                    ? `Найдено: ${summary.foundBoxes} из ${summary.searchBoxes.length} · Осталось: ${summary.searchRemaining}`
+                    : 'Не требуется'}
+                </span>
               </div>
               {summary.searchBoxes.length ? (
                 <div className="client-request-online-chip-list">
@@ -295,12 +312,28 @@ function onlineSummary(data: OnlineData | null, request: ClientRequestSummary) {
   const foundBoxes = Math.min(searchBoxes.length, Math.max(0, Number(plan?.foundCount ?? 0)));
   const movementLabels = movementLabelsFrom(instruction, movementTasks);
   const relabelPrintLabels = relabelPrintLabelsFrom(instruction, relabelTasks);
+  const searchRemaining = Math.max(searchBoxes.length - foundBoxes, 0);
+  const searchProgress = progressRatio(foundBoxes, searchBoxes.length, searchBoxes.length === 0);
+  const relabelDone = done && relabelTasks.length > 0;
+  const movementDone = done && movementTasks.length > 0;
+  const relabelProgress = progressRatio(relabelDone ? relabelTasks.length : 0, relabelTasks.length, relabelTasks.length === 0);
+  const movementProgress = progressRatio(movementDone ? movementTasks.length : 0, movementTasks.length, movementTasks.length === 0);
+  const stageProgress = [
+    ...(searchBoxes.length > 0 ? [searchProgress] : []),
+    ...(relabelTasks.length > 0 ? [relabelProgress] : []),
+    ...(movementTasks.length > 0 ? [movementProgress] : []),
+  ];
+  const progressPercent =
+    done || stageProgress.length === 0 ? 100 : Math.round((stageProgress.reduce((sum, value) => sum + value, 0) / stageProgress.length) * 100);
 
   return {
     done,
     searchBoxes,
     foundBoxes,
+    searchRemaining,
     searchDone: searchBoxes.length > 0 && foundBoxes >= searchBoxes.length,
+    progressPercent,
+    progressLabel: progressSummaryLabel(foundBoxes, searchBoxes.length, searchRemaining, relabelTasks.length, movementTasks.length, done),
     movementTasks,
     movementUnits: movementTasks.reduce((sum, task) => sum + numberValue(task.quantity), 0),
     movementLabels,
@@ -309,6 +342,33 @@ function onlineSummary(data: OnlineData | null, request: ClientRequestSummary) {
     relabelBoxes: unique(relabelTasks.map((task) => task.sourceBox).filter(Boolean)),
     relabelPrintLabels,
   };
+}
+
+function progressRatio(doneCount: number, totalCount: number, isNotRequired: boolean) {
+  if (isNotRequired) {
+    return 1;
+  }
+  if (totalCount <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.min(doneCount / totalCount, 1));
+}
+
+function progressSummaryLabel(foundBoxes: number, totalBoxes: number, remainingBoxes: number, relabelCount: number, movementCount: number, done: boolean) {
+  if (done) {
+    return 'Все этапы закрыты';
+  }
+
+  const parts = totalBoxes
+    ? [`найдено коробов ${foundBoxes} из ${totalBoxes}`, `осталось ${remainingBoxes}`]
+    : ['поиск коробов не требуется'];
+  if (relabelCount) {
+    parts.push(`переклейка: ${relabelCount} строк`);
+  }
+  if (movementCount) {
+    parts.push(`перемещения: ${movementCount} строк`);
+  }
+  return parts.join(' · ');
 }
 
 function searchBoxesFrom(plan: TsdAssemblyPlan | null | undefined, instruction: PickInstructionDocument | null | undefined, movementTasks: MovementTask[]) {

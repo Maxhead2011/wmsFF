@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { ClientRequestStatus, ClientRequestType, MovementType } from '@prisma/client';
+import { ClientRequestStatus, ClientRequestType, MovementType, Prisma, TsdOperationStatus } from '@prisma/client';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { PickInstructionService } from '../stock/pick-instruction.service';
@@ -107,7 +107,11 @@ export class TsdAssemblyService {
     const plan = await this.getRequestPlan(requestId, user);
     const scannedCode = scannedValue(body);
     const result = validateStageAction(plan, stage, action, scannedCode);
-    const stageData = stagePayload(plan, stage);
+    if (stage === 'box-search' && action === 'scan' && result.accepted && scannedCode) {
+      await this.recordFoundBoxSearch(requestId, scannedCode, body, user);
+    }
+    const nextPlan = stage === 'box-search' && action === 'scan' && result.accepted ? await this.getRequestPlan(requestId, user) : plan;
+    const stageData = stagePayload(nextPlan, stage);
 
     return {
       ...stageData,
@@ -213,11 +217,18 @@ export class TsdAssemblyService {
     const movementTargetBoxes = new Set(document.warehouseBalanceMoves.map((row) => normalizeBoxCode(row.newBox)).filter(Boolean));
     const completedMoveTargetBoxes = await this.loadCompletedMoveTargetBoxes(document, rawSearchBoxCodes);
     completedMoveTargetBoxes.forEach((boxCode) => movementTargetBoxes.add(boxCode));
-    const searchBoxes = isCompletedForTsd
+    let searchBoxes = isCompletedForTsd
       ? []
       : rawSearchBoxCodes
           .filter((boxCode) => shouldShowInTsdBoxSearch(boxCode, movementTargetBoxes))
           .map((boxCode) => boxEntry(boxCode));
+    const foundSearchBoxCodes = await this.loadFoundBoxSearchCodes(
+      document.requestId,
+      searchBoxes.map((box) => box.boxCode),
+    );
+    searchBoxes = searchBoxes.map((box) =>
+      foundSearchBoxCodes.has(normalizeBoxCode(box.boxCode)) ? { ...box, found: true, isFound: true } : box,
+    );
 
     const relabelTasks = isCompletedForTsd
       ? []
@@ -266,6 +277,9 @@ export class TsdAssemblyService {
     const totalRelabel = relabelTasks.reduce((sum, row) => sum + row.quantity, 0);
     const totalMove = movementTasks.reduce((sum, row) => sum + row.quantity, 0);
     const searchBoxCodes = searchBoxes.map((box) => box.boxCode);
+    const foundBoxes = searchBoxes.filter((box) => box.found || box.isFound);
+    const remainingBoxes = searchBoxes.filter((box) => !box.found && !box.isFound);
+    const remainingBoxCodes = remainingBoxes.map((box) => box.boxCode);
 
     const requestRows = document.rows.map((row) => ({
       id: row.itemId,
@@ -324,14 +338,15 @@ export class TsdAssemblyService {
       searchBoxCodes,
       boxesToSearchCodes: searchBoxCodes,
       boxesToFindCodes: searchBoxCodes,
-      remainingBoxCodes: searchBoxCodes,
-      remainingBoxes: searchBoxes,
-      remainingBoxTasks: searchBoxes,
-      remainingCount: searchBoxes.length,
-      remaining: searchBoxes.length,
-      remainingBoxesCount: searchBoxes.length,
-      foundCount: 0,
-      found: 0,
+      remainingBoxCodes,
+      remainingBoxes,
+      remainingBoxTasks: remainingBoxes,
+      remainingCount: remainingBoxes.length,
+      remaining: remainingBoxes.length,
+      remainingBoxesCount: remainingBoxes.length,
+      foundCount: foundBoxes.length,
+      found: foundBoxes.length,
+      foundBoxes,
       relabelTasks,
       relabelBoxes: groupTasksByBox(relabelTasks),
       movementTasks,
@@ -365,6 +380,67 @@ export class TsdAssemblyService {
         .filter((boxCode): boxCode is string => Boolean(boxCode)),
     );
   }
+
+  private async loadFoundBoxSearchCodes(requestId: string, boxCodes: string[]) {
+    const allowed = new Set(boxCodes.map((boxCode) => normalizeBoxCode(boxCode)).filter(Boolean));
+    if (!requestId || allowed.size === 0) {
+      return new Set<string>();
+    }
+
+    const prefix = boxSearchOperationPrefix(requestId);
+    const operations = await this.prisma.tsdOperation.findMany({
+      where: {
+        operationType: 'box_search_scan',
+        status: TsdOperationStatus.ACCEPTED,
+        operationKey: { startsWith: prefix },
+      },
+      select: { operationKey: true },
+    });
+
+    return new Set(
+      operations
+        .map((operation) => operation.operationKey.slice(prefix.length))
+        .filter((boxCode) => allowed.has(boxCode)),
+    );
+  }
+
+  private async recordFoundBoxSearch(
+    requestId: string,
+    scannedCode: string,
+    body: Record<string, unknown> | string | undefined,
+    user: AuthUser,
+  ) {
+    const normalizedBoxCode = normalizeScanCode(scannedCode);
+    if (!normalizedBoxCode) {
+      return;
+    }
+
+    const operationKey = `${boxSearchOperationPrefix(requestId)}${normalizedBoxCode}`;
+    const payload = {
+      requestId,
+      boxCode: scannedCode.trim(),
+      normalizedBoxCode,
+      deviceCode: isRecord(body) ? textValue(body, 'deviceCode') : user.deviceCode,
+      userId: user.id,
+    } as Prisma.InputJsonValue;
+
+    await this.prisma.tsdOperation.upsert({
+      where: { operationKey },
+      update: {
+        payload,
+        status: TsdOperationStatus.ACCEPTED,
+        serverMessage: 'Короб найден.',
+      },
+      create: {
+        deviceId: user.deviceId ?? user.id,
+        operationKey,
+        operationType: 'box_search_scan',
+        payload,
+        status: TsdOperationStatus.ACCEPTED,
+        serverMessage: 'Короб найден.',
+      },
+    });
+  }
 }
 
 type CollapsibleRow = {
@@ -395,6 +471,9 @@ function stagePayload(plan: Record<string, any>, stage: TsdRequestStage) {
   if (stage === 'box-search') {
     const tasks = normalizeBoxTasks(plan.searchBoxes ?? []);
     const boxCodes = tasks.map((box) => box.boxCode);
+    const foundBoxes = tasks.filter((box) => box.found || box.isFound);
+    const remainingBoxes = tasks.filter((box) => !box.found && !box.isFound);
+    const remainingBoxCodes = remainingBoxes.map((box) => box.boxCode);
     return {
       ...base,
       tasks,
@@ -407,17 +486,17 @@ function stagePayload(plan: Record<string, any>, stage: TsdRequestStage) {
       searchBoxCodes: boxCodes,
       boxesToSearchCodes: boxCodes,
       boxesToFindCodes: boxCodes,
-      remainingBoxCodes: boxCodes,
+      remainingBoxCodes,
       total: tasks.length,
       totalCount: tasks.length,
-      foundCount: 0,
-      found: 0,
-      remainingCount: tasks.length,
-      remaining: tasks.length,
-      remainingBoxesCount: tasks.length,
-      foundBoxes: [],
-      remainingBoxes: tasks,
-      remainingBoxTasks: tasks,
+      foundCount: foundBoxes.length,
+      found: foundBoxes.length,
+      remainingCount: remainingBoxes.length,
+      remaining: remainingBoxes.length,
+      remainingBoxesCount: remainingBoxes.length,
+      foundBoxes,
+      remainingBoxes,
+      remainingBoxTasks: remainingBoxes,
     };
   }
 
@@ -462,10 +541,16 @@ function stagePayload(plan: Record<string, any>, stage: TsdRequestStage) {
   };
 }
 
-function normalizeBoxTasks(values: Array<{ boxCode?: string; code?: string } | string>) {
+function normalizeBoxTasks(values: Array<{ boxCode?: string; code?: string; found?: boolean; isFound?: boolean } | string>) {
   return values
-    .map((value) => (typeof value === 'string' ? boxEntry(value) : boxEntry(value.boxCode ?? value.code ?? '')))
+    .map((value) =>
+      typeof value === 'string' ? boxEntry(value) : boxEntry(value.boxCode ?? value.code ?? '', Boolean(value.found ?? value.isFound)),
+    )
     .filter((box) => box.boxCode);
+}
+
+function boxSearchOperationPrefix(requestId: string) {
+  return `box-search:${requestId}:`;
 }
 
 function normalizeBoxCode(value?: string | null) {
@@ -488,7 +573,7 @@ function shouldShowInTsdBoxSearch(boxCode: string, movementTargetBoxes: Set<stri
   return true;
 }
 
-function boxEntry(boxCode: string) {
+function boxEntry(boxCode: string, found = false) {
   const code = boxCode.trim();
   return {
     boxCode: code,
@@ -498,8 +583,8 @@ function boxEntry(boxCode: string) {
     title: code,
     label: code,
     value: code,
-    found: false,
-    isFound: false,
+    found,
+    isFound: found,
   };
 }
 

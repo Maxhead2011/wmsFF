@@ -884,6 +884,63 @@
   padding: 14px 18px 18px;
 }
 
+.client-request-online-progress {
+  display: grid;
+  gap: 9px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+  padding: 12px;
+}
+
+.client-request-online-progress__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.client-request-online-progress__head div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.client-request-online-progress__head span {
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.client-request-online-progress__head strong {
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.client-request-online-progress__head b {
+  color: #1d4ed8;
+  font-size: 22px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.client-request-online-progress__bar {
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dbeafe;
+}
+
+.client-request-online-progress__bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #2563eb;
+  transition: width 0.2s ease;
+}
+
 .client-request-online-stage-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
