@@ -59,7 +59,7 @@ import retrofit2.Response;
 public class MainActivity extends Activity {
     private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
     private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk";
-    private static final String APP_VERSION = "0.1.48";
+    private static final String APP_VERSION = "0.1.49";
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int BOX_FOUND_GREEN = Color.rgb(187, 247, 208);
     private static final int BOX_DUPLICATE_BLUE = Color.rgb(191, 219, 254);
@@ -555,6 +555,7 @@ public class MainActivity extends Activity {
         root.addView(messageView("Статус: " + assemblyPlan.status + " · строк: " + assemblyPlan.rowsCount));
         List<TsdSearchBoxTask> searchBoxes = safeSearchBoxes();
         int foundSearchBoxes = foundSearchBoxesCount(searchBoxes, foundBoxes());
+        syncFoundBoxesToServer(searchBoxes, foundBoxes());
         root.addView(messageView("Единиц к отгрузке: " + assemblyPlan.totalRequested + " · коробов найти: " + searchBoxes.size()));
         root.addView(messageView("Поиск коробов: найдено " + foundSearchBoxes + " из " + searchBoxes.size()));
         if (assemblyPlan.activeTsdProcess != null) {
@@ -619,6 +620,7 @@ public class MainActivity extends Activity {
         root.addView(title("Поиск коробов"));
         List<TsdSearchBoxTask> boxes = safeSearchBoxes();
         Set<String> found = foundBoxes();
+        syncFoundBoxesToServer(boxes, found);
         String lastFoundBox = lastFoundBoxCode();
         root.addView(messageView("Найдено: " + foundSearchBoxesCount(boxes, found) + " / " + boxes.size()));
         assemblyScanInput = input("Сканируйте короб");
@@ -1688,6 +1690,17 @@ public class MainActivity extends Activity {
             }
         }
         return total;
+    }
+
+    private void syncFoundBoxesToServer(List<TsdSearchBoxTask> boxes, Set<String> found) {
+        if (boxes.isEmpty() || found.isEmpty()) {
+            return;
+        }
+        for (TsdSearchBoxTask box : boxes) {
+            if (found.contains(normalizeBoxCode(box.boxCode))) {
+                sendBoxSearchScan(box.boxCode);
+            }
+        }
     }
 
     private String lastFoundBoxCode() {
