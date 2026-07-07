@@ -707,6 +707,33 @@
   font-weight: 800;
 }
 
+.client-request-status-badge {
+  display: inline-flex;
+  width: max-content;
+  min-width: max-content;
+  min-height: 26px;
+  align-items: center;
+  overflow: visible;
+  white-space: nowrap;
+  line-height: 1.2;
+  padding: 4px 10px;
+}
+
+.client-request-status-badge.status--ready {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.client-request-status-badge.status--in-progress {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.client-request-status-badge.status--planned {
+  background: #e2e8f0;
+  color: #334155;
+}
+
 .client-request-status-select {
   display: flex;
   align-items: center;

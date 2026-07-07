@@ -448,7 +448,7 @@ function renderRequestTable(
               <td>{requestItemsSummary(request)}</td>
               <td>{formatCabinetDate(request.desiredDate)}</td>
               <td>
-                <span className={`status status--${requestStatusTone(request.status)}`}>
+                <span className={`status status--${requestStatusTone(request.status)} client-request-status-badge`}>
                   {requestStatusLabel(request.status)}
                 </span>
                 {request.managerComment ? <span>{request.managerComment}</span> : null}
