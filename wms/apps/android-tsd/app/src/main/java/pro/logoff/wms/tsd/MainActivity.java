@@ -57,8 +57,11 @@ import retrofit2.Response;
 public class MainActivity extends Activity {
     private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
     private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk";
-    private static final String APP_VERSION = "0.1.45";
+    private static final String APP_VERSION = "0.1.46";
     private static final int RED = Color.rgb(215, 25, 32);
+    private static final int BOX_FOUND_GREEN = Color.rgb(187, 247, 208);
+    private static final int BOX_DUPLICATE_BLUE = Color.rgb(191, 219, 254);
+    private static final int BOX_NOT_NEEDED_RED = Color.rgb(254, 202, 202);
     private static final int LIGHT_GRAY = Color.rgb(226, 232, 240);
     private static final int TEXT = Color.rgb(30, 41, 59);
 
@@ -105,6 +108,7 @@ public class MainActivity extends Activity {
     private int rejectedCount;
     private boolean online;
     private String statusMessage = "";
+    private int boxSearchFeedbackColor = 0;
     private Screen screen = Screen.MAIN;
 
     @Override
@@ -502,10 +506,14 @@ public class MainActivity extends Activity {
         }
 
         LinearLayout root = baseRoot();
+        if (boxSearchFeedbackColor != 0) {
+            root.setBackgroundColor(boxSearchFeedbackColor);
+        }
         root.addView(header());
         root.addView(title("Поиск коробов"));
         List<TsdSearchBoxTask> boxes = safeSearchBoxes();
         Set<String> found = foundBoxes();
+        String lastFoundBox = lastFoundBoxCode();
         root.addView(messageView("Найдено: " + foundSearchBoxesCount(boxes, found) + " / " + boxes.size()));
         assemblyScanInput = input("Сканируйте короб");
         assemblyScanInput.setOnEditorActionListener((view, actionId, event) -> {
@@ -514,9 +522,18 @@ public class MainActivity extends Activity {
         });
         root.addView(assemblyScanInput);
 
+        if (!lastFoundBox.isEmpty() && found.contains(lastFoundBox)) {
+            for (TsdSearchBoxTask box : boxes) {
+                if (lastFoundBox.equals(normalizeBoxCode(box.boxCode))) {
+                    root.addView(taskRow(box.boxCode, "Найден", BOX_FOUND_GREEN));
+                    break;
+                }
+            }
+        }
         for (TsdSearchBoxTask box : boxes) {
-            if (found.contains(normalizeBoxCode(box.boxCode))) {
-                root.addView(taskRow(box.boxCode, "Найден", Color.rgb(187, 247, 208)));
+            String normalizedBox = normalizeBoxCode(box.boxCode);
+            if (found.contains(normalizedBox) && !normalizedBox.equals(lastFoundBox)) {
+                root.addView(taskRow(box.boxCode, "Найден", BOX_FOUND_GREEN));
             }
         }
         for (TsdSearchBoxTask box : boxes) {
@@ -553,12 +570,17 @@ public class MainActivity extends Activity {
         Set<String> found = foundBoxes();
         if (!required.contains(code)) {
             statusMessage = "Короб не нужен: " + scannedCode;
+            boxSearchFeedbackColor = BOX_NOT_NEEDED_RED;
         } else if (found.contains(code)) {
             statusMessage = "Короб уже найден: " + displayCode;
+            saveLastFoundBoxCode(code);
+            boxSearchFeedbackColor = BOX_DUPLICATE_BLUE;
         } else {
             found.add(code);
             saveStringSet(progressKey("found_boxes"), found);
+            saveLastFoundBoxCode(code);
             statusMessage = "Короб найден: " + displayCode;
+            boxSearchFeedbackColor = BOX_FOUND_GREEN;
         }
         assemblyScanInput.setText("");
         if (areAssemblyStepsDone()) {
@@ -1540,6 +1562,19 @@ public class MainActivity extends Activity {
             }
         }
         return total;
+    }
+
+    private String lastFoundBoxCode() {
+        if (progressStore == null) {
+            return "";
+        }
+        return normalizeBoxCode(progressStore.getString(progressKey("last_found_box"), ""));
+    }
+
+    private void saveLastFoundBoxCode(String boxCode) {
+        if (progressStore != null) {
+            progressStore.edit().putString(progressKey("last_found_box"), normalizeBoxCode(boxCode)).apply();
+        }
     }
 
     private Set<String> movementTargetBoxes() {
