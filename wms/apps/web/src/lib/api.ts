@@ -991,6 +991,130 @@ export type PickInstructionDocument = {
   boxesCount: number;
   fullBoxesCount: number;
   html: string;
+  rows?: Array<{
+    position: number;
+    itemId: string;
+    skuId: string | null;
+    internalSku: string | null;
+    name: string | null;
+    barcode: string | null;
+    requestedQuantity: number;
+    allocatedQuantity: number;
+    shortageQuantity: number;
+    status: string;
+    statusLabel: string;
+    comment: string | null;
+    allocations: Array<{
+      balanceId: string;
+      boxId: string;
+      boxCode: string;
+      palletId: string | null;
+      palletCode: string | null;
+      quantity: number;
+    }>;
+  }>;
+  boxes?: Array<{
+    boxId: string;
+    boxCode: string;
+    palletId: string | null;
+    palletCode: string | null;
+    allocatedQuantity: number;
+    availableQuantity: number;
+    linesCount: number;
+    isFullBox: boolean;
+    comment: string;
+  }>;
+  warehouseRows?: Array<{
+    city: string;
+    sourceBox: string;
+    targetBox: string;
+    pallet: string;
+    artOnBox: string;
+    barcodeOnBox: string;
+    size: string;
+    quantity: number;
+    comment: string;
+    rebrandNote: string;
+    note: string;
+  }>;
+  warehouseWholeBoxes?: Array<{
+    box: string;
+    status: string;
+    city: string;
+    pallet: string;
+    balanceBox: string;
+  }>;
+  warehouseBalanceMoves?: Array<{
+    sourceBox: string;
+    newBox: string;
+    pallet: string;
+    artOnBox: string;
+    barcodeOnBox: string;
+    size: string;
+    quantity: number;
+    note: string;
+  }>;
+  warehouseBalanceLabels?: Array<{
+    newBox: string;
+    sourceBox: string;
+    tspl: string;
+  }>;
+  warehouseMarkRows?: Array<{
+    comment: string;
+    city: string;
+    sourceBox: string;
+    brand: string;
+    ip: string;
+    name: string;
+    article: string;
+    wbArticle: string;
+    color: string;
+    size: string;
+    barcode: string;
+    quantity: number;
+  }>;
+};
+
+export type TsdAssemblyPlan = {
+  id: string;
+  requestId: string;
+  title: string;
+  name: string;
+  status: ClientRequestStatus;
+  statusLabel?: string;
+  destinationCity: string | null;
+  city: string | null;
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  rowsCount: number;
+  totalRequested?: number;
+  totalQuantity?: number;
+  boxesTotal?: number;
+  boxesCount?: number;
+  foundCount?: number;
+  remainingCount?: number;
+  relabelTotal?: number;
+  movementTotal?: number;
+  searchBoxes?: Array<{ boxCode: string; code?: string; found?: boolean; isFound?: boolean }>;
+  boxesToSearch?: Array<{ boxCode: string; code?: string; found?: boolean; isFound?: boolean }>;
+  relabelTasks?: Array<{
+    sourceBox: string;
+    oldBarcode?: string;
+    newBarcode?: string;
+    barcode?: string;
+    name?: string;
+    size?: string;
+    quantity: number;
+    note?: string;
+  }>;
+  movementTasks?: Array<{
+    sourceBox: string;
+    targetBox: string;
+    barcode?: string;
+    name?: string;
+    size?: string;
+    quantity: number;
+    note?: string;
+  }>;
 };
 
 export type CreateClientRequestPayload = {
@@ -3515,6 +3639,12 @@ export async function fetchReferralReport(
 
 export async function fetchTsdDevices(accessToken: string) {
   return request<TsdDeviceSummary[]>('/tsd/devices', {
+    accessToken,
+  });
+}
+
+export async function fetchTsdAssemblyPlan(accessToken: string, requestId: string) {
+  return request<TsdAssemblyPlan>(`/tsd/requests/${requestId}`, {
     accessToken,
   });
 }

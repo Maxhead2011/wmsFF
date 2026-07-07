@@ -1,4 +1,5 @@
 import {
+  Activity,
   CheckCircle2,
   ClipboardList,
   FileDown,
@@ -33,6 +34,7 @@ type ClientRequestsTableProps = {
   onStatusChange: (request: ClientRequestSummary, status: ClientRequestStatus) => void;
   onEditRequest: (request: ClientRequestSummary) => void;
   onCancelRequest: (request: ClientRequestSummary) => void;
+  onOpenOnlineProgress?: (request: ClientRequestSummary) => void;
   onOpenDocument?: (request: ClientRequestSummary) => void;
   onOpenPickInstruction?: (request: ClientRequestSummary) => void;
   onDownloadPickInstruction?: (request: ClientRequestSummary) => void;
@@ -63,6 +65,7 @@ export function ClientRequestsTable({
   onStatusChange,
   onEditRequest,
   onCancelRequest,
+  onOpenOnlineProgress,
   onOpenDocument,
   onOpenPickInstruction,
   onDownloadPickInstruction,
@@ -120,6 +123,17 @@ export function ClientRequestsTable({
                   >
                     <FileText size={15} aria-hidden="true" />
                     <span>Состав</span>
+                  </button>
+                ) : null}
+                {canPickOutbound && onOpenOnlineProgress && request.type === 'OUTBOUND' ? (
+                  <button
+                    className="document-open-button client-request-online-open"
+                    type="button"
+                    onClick={() => onOpenOnlineProgress(request)}
+                    title="Открыть онлайн-состояние выполнения заявки"
+                  >
+                    <Activity size={15} aria-hidden="true" />
+                    <span>Онлайн</span>
                   </button>
                 ) : null}
               </td>

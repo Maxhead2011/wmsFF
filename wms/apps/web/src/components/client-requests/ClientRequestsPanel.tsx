@@ -28,6 +28,7 @@ import {
 import { ClientRequestCreateForm } from './ClientRequestCreateForm';
 import { ClientRequestDocumentPreview } from './ClientRequestDocumentPreview';
 import { ClientRequestEditForm } from './ClientRequestEditForm';
+import { ClientRequestOnlineModal } from './ClientRequestOnlineModal';
 import { ClientRequestXlsxImportForm } from './ClientRequestXlsxImportForm';
 import { ManualShipmentCloseModal, type ManualShipmentClosePayload } from './ManualShipmentCloseModal';
 import '../billing/billing.css';
@@ -64,6 +65,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
   const [isManualShipmentSubmitting, setManualShipmentSubmitting] = useState(false);
   const [documentPreview, setDocumentPreview] = useState<ClientRequestDocument | null>(null);
   const [pickInstructionPreview, setPickInstructionPreview] = useState<PickInstructionDocument | null>(null);
+  const [onlineRequest, setOnlineRequest] = useState<ClientRequestSummary | null>(null);
 
   const visibleClients = useMemo(() => clients.data, [clients.data]);
 
@@ -404,6 +406,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           (request, status) => void changeStatus(request, status),
           (request) => setEditingRequest(request),
           (request) => void cancelRequest(request),
+          (request) => setOnlineRequest(request),
           (request) => void openRequestDocument(request),
           (request) => void openPickInstruction(request),
           (request) => void downloadPickInstruction(request),
@@ -419,6 +422,10 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
 
       {documentPreview ? (
         <ClientRequestDocumentPreview document={documentPreview} onClose={() => setDocumentPreview(null)} />
+      ) : null}
+
+      {onlineRequest ? (
+        <ClientRequestOnlineModal session={session} request={onlineRequest} onClose={() => setOnlineRequest(null)} />
       ) : null}
 
       {pickInstructionPreview ? (
@@ -507,6 +514,7 @@ function renderRequests(
   onStatusChange: (request: ClientRequestSummary, status: ClientRequestStatus) => void,
   onEditRequest: (request: ClientRequestSummary) => void,
   onCancelRequest: (request: ClientRequestSummary) => void,
+  onOpenOnlineProgress: (request: ClientRequestSummary) => void,
   onOpenDocument: (request: ClientRequestSummary) => void,
   onOpenPickInstruction: (request: ClientRequestSummary) => void,
   onDownloadPickInstruction: (request: ClientRequestSummary) => void,
@@ -550,6 +558,7 @@ function renderRequests(
         onStatusChange={onStatusChange}
         onEditRequest={onEditRequest}
         onCancelRequest={onCancelRequest}
+        onOpenOnlineProgress={canPickOutbound ? onOpenOnlineProgress : undefined}
         onOpenDocument={onOpenDocument}
         onOpenPickInstruction={onOpenPickInstruction}
         onDownloadPickInstruction={onDownloadPickInstruction}
