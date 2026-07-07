@@ -57,6 +57,11 @@ type PrintLabel = {
   note?: string;
 };
 
+type SearchBoxStatus = {
+  code: string;
+  found: boolean;
+};
+
 export function ClientRequestOnlineModal({ session, request, onClose }: ClientRequestOnlineModalProps) {
   const [state, setState] = useState<OnlineState>({ status: 'loading', data: null });
 
@@ -174,7 +179,13 @@ export function ClientRequestOnlineModal({ session, request, onClose }: ClientRe
               {summary.searchBoxes.length ? (
                 <div className="client-request-online-chip-list">
                   {summary.searchBoxes.map((box) => (
-                    <span key={box}>{box}</span>
+                    <span
+                      key={box.code}
+                      className={`client-request-online-chip client-request-online-chip--${box.found ? 'found' : 'missing'}`}
+                      title={box.found ? 'Короб найден' : 'Короб еще не найден'}
+                    >
+                      {box.code}
+                    </span>
                   ))}
                 </div>
               ) : (
@@ -313,9 +324,10 @@ function onlineSummary(data: OnlineData | null, request: ClientRequestSummary) {
   const movementTasks = movementTasksFrom(plan, instruction);
   const relabelTasks = relabelTasksFrom(plan, instruction);
   const searchBoxes = searchBoxesFrom(plan, instruction, movementTasks);
+  const exactFoundBoxes = searchBoxes.filter((box) => box.found).length;
   const foundBoxes = Math.min(
     searchBoxes.length,
-    Math.max(0, Number(plan?.foundCount ?? 0), Number(plan?.activeTsdProcess?.foundCount ?? 0), foundBoxesFromPlan(plan)),
+    Math.max(0, Number(plan?.foundCount ?? 0), Number(plan?.activeTsdProcess?.foundCount ?? 0), exactFoundBoxes),
   );
   const movementLabels = movementLabelsFrom(instruction, movementTasks);
   const relabelPrintLabels = relabelPrintLabelsFrom(instruction, relabelTasks);
@@ -378,12 +390,8 @@ function progressSummaryLabel(foundBoxes: number, totalBoxes: number, remainingB
   return parts.join(' · ');
 }
 
-function foundBoxesFromPlan(plan: TsdAssemblyPlan | null | undefined) {
-  return normalizeBoxes([...(plan?.searchBoxes ?? []), ...(plan?.boxesToSearch ?? [])].filter((box) => box.found || box.isFound).map((box) => box.boxCode || box.code || '')).length;
-}
-
-function searchBoxesFrom(plan: TsdAssemblyPlan | null | undefined, instruction: PickInstructionDocument | null | undefined, movementTasks: MovementTask[]) {
-  const fromPlan = normalizeBoxes([...(plan?.searchBoxes ?? []), ...(plan?.boxesToSearch ?? [])].map((box) => box.boxCode || box.code || ''));
+function searchBoxesFrom(plan: TsdAssemblyPlan | null | undefined, instruction: PickInstructionDocument | null | undefined, movementTasks: MovementTask[]): SearchBoxStatus[] {
+  const fromPlan = normalizeBoxStatuses([...(plan?.searchBoxes ?? []), ...(plan?.boxesToSearch ?? [])]);
   if (fromPlan.length) {
     return fromPlan;
   }
@@ -393,7 +401,26 @@ function searchBoxesFrom(plan: TsdAssemblyPlan | null | undefined, instruction: 
     ...(instruction?.warehouseRows ?? []).map((row) => row.sourceBox),
     ...(instruction?.warehouseBalanceMoves ?? []).map((row) => row.sourceBox),
     ...(instruction?.warehouseWholeBoxes ?? []).map((row) => row.box),
-  ]).filter((box) => !movementTargets.has(normalizeKey(box)));
+  ])
+    .filter((box) => !movementTargets.has(normalizeKey(box)))
+    .map((box) => ({ code: box, found: false }));
+}
+
+function normalizeBoxStatuses(values: Array<{ boxCode?: string; code?: string; found?: boolean; isFound?: boolean }>) {
+  const byCode = new Map<string, SearchBoxStatus>();
+  for (const value of values) {
+    const code = (value.boxCode || value.code || '').trim();
+    if (!code) {
+      continue;
+    }
+    const key = normalizeKey(code);
+    const current = byCode.get(key);
+    byCode.set(key, {
+      code: current?.code ?? code,
+      found: Boolean(current?.found || value.found || value.isFound),
+    });
+  }
+  return [...byCode.values()].sort((left, right) => left.code.localeCompare(right.code, 'ru', { numeric: true }));
 }
 
 function movementTasksFrom(plan: TsdAssemblyPlan | null | undefined, instruction: PickInstructionDocument | null | undefined): MovementTask[] {
