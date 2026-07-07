@@ -62,10 +62,14 @@ export function ClientRequestOnlineModal({ session, request, onClose }: ClientRe
 
   useEffect(() => {
     void load();
+    const timer = window.setInterval(() => void load(false), 5000);
+    return () => window.clearInterval(timer);
   }, [request.id, session.accessToken]);
 
-  async function load() {
-    setState({ status: 'loading', data: null });
+  async function load(showLoading = true) {
+    if (showLoading) {
+      setState({ status: 'loading', data: null });
+    }
 
     const [planResult, instructionResult] = await Promise.allSettled([
       fetchTsdAssemblyPlan(session.accessToken, request.id),

@@ -59,7 +59,7 @@ import retrofit2.Response;
 public class MainActivity extends Activity {
     private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
     private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk";
-    private static final String APP_VERSION = "0.1.47";
+    private static final String APP_VERSION = "0.1.48";
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int BOX_FOUND_GREEN = Color.rgb(187, 247, 208);
     private static final int BOX_DUPLICATE_BLUE = Color.rgb(191, 219, 254);
@@ -553,12 +553,15 @@ public class MainActivity extends Activity {
         root.addView(messageView("Клиент: " + (assemblyPlan.client == null ? "-" : assemblyPlan.client.name)));
         root.addView(messageView("Город: " + emptyAsDash(assemblyPlan.city)));
         root.addView(messageView("Статус: " + assemblyPlan.status + " · строк: " + assemblyPlan.rowsCount));
-        root.addView(messageView("Единиц к отгрузке: " + assemblyPlan.totalRequested + " · коробов найти: " + safeSearchBoxes().size()));
+        List<TsdSearchBoxTask> searchBoxes = safeSearchBoxes();
+        int foundSearchBoxes = foundSearchBoxesCount(searchBoxes, foundBoxes());
+        root.addView(messageView("Единиц к отгрузке: " + assemblyPlan.totalRequested + " · коробов найти: " + searchBoxes.size()));
+        root.addView(messageView("Поиск коробов: найдено " + foundSearchBoxes + " из " + searchBoxes.size()));
         if (assemblyPlan.activeTsdProcess != null) {
             root.addView(messageView(activeProcessLine(assemblyPlan.activeTsdProcess).trim()));
         }
 
-        root.addView(stageButton("1. Поиск коробов", isSearchDone(), view -> renderBoxSearchScreen()));
+        root.addView(stageButton("1. Поиск коробов (" + foundSearchBoxes + "/" + searchBoxes.size() + ")", isSearchDone(), view -> renderBoxSearchScreen()));
         root.addView(stageButton("2. Перемаркировка", isRelabelDone(), view -> renderRelabelScreen()));
         root.addView(stageButton("3. Перемещения", isMovementDone(), view -> renderMovementScreen()));
         root.addView(secondaryButton("Обновить заявку", view -> loadAssemblyPlan(assemblyPlan.id)));
@@ -1660,6 +1663,14 @@ public class MainActivity extends Activity {
 
     private Set<String> foundBoxes() {
         Set<String> normalized = new LinkedHashSet<>();
+        for (TsdSearchBoxTask box : safeSearchBoxes()) {
+            if (box.found || box.isFound) {
+                String code = normalizeBoxCode(box.boxCode);
+                if (!code.isEmpty()) {
+                    normalized.add(code);
+                }
+            }
+        }
         for (String value : stringSet(progressKey("found_boxes"))) {
             String code = normalizeBoxCode(value);
             if (!code.isEmpty()) {
