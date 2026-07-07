@@ -376,7 +376,7 @@ export class PickInstructionService {
 
     const actions: WarehouseAction[] = [];
     const shipmentBoxes = new Set<string>();
-    const tolerance = 5;
+    const tolerance = 0;
     const remainingOf = (orderId: string) => demandById.get(orderId)?.remaining ?? 0;
     const decreaseRemaining = (orderId: string, amount: number) => {
       const demand = demandById.get(orderId);

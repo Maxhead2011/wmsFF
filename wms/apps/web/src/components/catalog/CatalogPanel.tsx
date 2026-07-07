@@ -98,6 +98,7 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
   const [selectedClientId, setSelectedClientId] = useState('');
   const [search, setSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
+  const [isSearchFocused, setSearchFocused] = useState(false);
   const [skus, setSkus] = useState<SkuSummary[]>([]);
   const [draftSkus, setDraftSkus] = useState<SkuSummary[]>([]);
   const [skuState, setSkuState] = useState<LoadState>('idle');
@@ -118,6 +119,8 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
     () => clients.find((client) => client.id === selectedClientId) ?? null,
     [clients, selectedClientId],
   );
+  const searchSuggestions = useMemo(() => buildSearchSuggestions(skus, search).slice(0, 8), [search, skus]);
+  const showSearchSuggestions = isSearchFocused && search.trim().length > 0 && searchSuggestions.length > 0;
 
   useEffect(() => {
     if (!canRead) {
@@ -202,6 +205,14 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
   function applySearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setAppliedSearch(search.trim());
+    setSearchFocused(false);
+  }
+
+  function selectSearchSuggestion(sku: SkuSummary) {
+    setSearch(searchSuggestionValue(sku));
+    setAppliedSearch(searchSuggestionValue(sku));
+    setSearchFocused(false);
+    void openSku(sku.id);
   }
 
   async function openSku(skuId: string) {
@@ -370,8 +381,35 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
             <span>Поиск</span>
             <div>
               <Search size={16} aria-hidden="true" />
-              <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Название, SKU, артикул или штрихкод" />
+              <input
+                value={search}
+                onBlur={() => window.setTimeout(() => setSearchFocused(false), 140)}
+                onChange={(event) => {
+                  setSearch(event.target.value);
+                  setSearchFocused(true);
+                }}
+                onFocus={() => setSearchFocused(true)}
+                placeholder="Название, SKU, артикул или штрихкод"
+                autoComplete="off"
+              />
             </div>
+            {showSearchSuggestions ? (
+              <div className="catalog-search-suggestions" role="listbox">
+                {searchSuggestions.map((sku) => (
+                  <button
+                    key={sku.id}
+                    type="button"
+                    role="option"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => selectSearchSuggestion(sku)}
+                  >
+                    <strong>{sku.name}</strong>
+                    <span>{suggestionMainLine(sku)}</span>
+                    <small>{suggestionMetaLine(sku)}</small>
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </label>
           <button className="icon-text-button" type="submit">
             <Search size={16} aria-hidden="true" />
@@ -868,6 +906,69 @@ function parsePhotoUrls(value: string) {
 
 function primaryBarcode(sku: SkuSummary) {
   return sku.barcodes.find((barcode) => barcode.isPrimary)?.value ?? sku.barcodes[0]?.value ?? '';
+}
+
+function buildSearchSuggestions(skus: SkuSummary[], value: string) {
+  const query = normalizeCatalogSearch(value);
+  if (!query) {
+    return [];
+  }
+
+  return skus
+    .map((sku) => ({
+      sku,
+      score: suggestionScore(sku, query),
+    }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || left.sku.name.localeCompare(right.sku.name, 'ru'))
+    .map((item) => item.sku);
+}
+
+function suggestionScore(sku: SkuSummary, query: string) {
+  const fields = suggestionSearchFields(sku).map(normalizeCatalogSearch).filter(Boolean);
+  if (fields.some((field) => field === query)) {
+    return 100;
+  }
+  if (fields.some((field) => field.startsWith(query))) {
+    return 70;
+  }
+  if (fields.some((field) => field.includes(query))) {
+    return 40;
+  }
+  return 0;
+}
+
+function suggestionSearchFields(sku: SkuSummary) {
+  return [
+    sku.name,
+    sku.internalSku,
+    sku.clientSku,
+    sku.article,
+    sku.brand,
+    sku.category,
+    sku.color,
+    sku.size,
+    sku.marketplaceOfferId,
+    sku.marketplaceProductId,
+    sku.client?.name,
+    ...sku.barcodes.map((barcode) => barcode.value),
+  ].filter(Boolean) as string[];
+}
+
+function normalizeCatalogSearch(value: string) {
+  return value.toLocaleLowerCase('ru-RU').replace(/\s+/g, ' ').trim();
+}
+
+function searchSuggestionValue(sku: SkuSummary) {
+  return primaryBarcode(sku) || sku.internalSku || sku.article || sku.name;
+}
+
+function suggestionMainLine(sku: SkuSummary) {
+  return [sku.internalSku, sku.article, primaryBarcode(sku)].filter(Boolean).join(' · ') || 'Без артикула и штрихкода';
+}
+
+function suggestionMetaLine(sku: SkuSummary) {
+  return [sku.color, sku.size, sku.brand, sku.client?.name].filter(Boolean).join(' · ') || 'Карточка товара';
 }
 
 function formatDimensions(sku: SkuSummary) {
