@@ -28,6 +28,7 @@ type ClientRequestsTableProps = {
   canIssueInvoice: boolean;
   canCancelRequests: boolean;
   canEditRequests: boolean;
+  canDownloadSourceFiles: boolean;
   issuingInvoiceRequestId: string;
   onStatusChange: (request: ClientRequestSummary, status: ClientRequestStatus) => void;
   onEditRequest: (request: ClientRequestSummary) => void;
@@ -35,6 +36,7 @@ type ClientRequestsTableProps = {
   onOpenDocument?: (request: ClientRequestSummary) => void;
   onOpenPickInstruction?: (request: ClientRequestSummary) => void;
   onDownloadPickInstruction?: (request: ClientRequestSummary) => void;
+  onDownloadSourceRequest?: (request: ClientRequestSummary) => void;
   onDownloadWbProducts?: (request: ClientRequestSummary) => void;
   onDownloadWbPackages?: (request: ClientRequestSummary) => void;
   onPickOutbound: (request: ClientRequestSummary) => void;
@@ -56,6 +58,7 @@ export function ClientRequestsTable({
   canIssueInvoice,
   canCancelRequests,
   canEditRequests,
+  canDownloadSourceFiles,
   issuingInvoiceRequestId,
   onStatusChange,
   onEditRequest,
@@ -63,6 +66,7 @@ export function ClientRequestsTable({
   onOpenDocument,
   onOpenPickInstruction,
   onDownloadPickInstruction,
+  onDownloadSourceRequest,
   onDownloadWbProducts,
   onDownloadWbPackages,
   onPickOutbound,
@@ -70,7 +74,7 @@ export function ClientRequestsTable({
   onShipOutbound,
   onIssueInvoice,
 }: ClientRequestsTableProps) {
-  const showOperationActions = canPickOutbound || canIssueInvoice;
+  const showOperationActions = canPickOutbound || canIssueInvoice || canDownloadSourceFiles;
 
   return (
     <div className="client-request-table-wrap">
@@ -128,8 +132,19 @@ export function ClientRequestsTable({
               </td>
               {showOperationActions ? (
                 <td>
-                  {canShowOperationActions(request, canPickOutbound, canIssueInvoice) ? (
+                  {canShowOperationActions(request, canPickOutbound, canIssueInvoice, canDownloadSourceFiles) ? (
                     <div className="client-request-actions">
+                      {canDownloadSourceFiles && onDownloadSourceRequest && request.files.length > 0 ? (
+                        <button
+                          className="client-request-action-button client-request-action-button--xlsx"
+                          type="button"
+                          onClick={() => onDownloadSourceRequest(request)}
+                          title="Скачать залитую клиентом заявку"
+                        >
+                          <FileDown size={15} aria-hidden="true" />
+                          <span>Заявка Excel</span>
+                        </button>
+                      ) : null}
                       {canPickOutbound && onOpenPickInstruction && request.type === 'OUTBOUND' ? (
                         <button
                           className="client-request-action-button client-request-action-button--instruction"
@@ -302,8 +317,17 @@ function canShowWarehouseActions(request: ClientRequestSummary) {
   return request.type === 'OUTBOUND' || canRunFulfillment(request);
 }
 
-function canShowOperationActions(request: ClientRequestSummary, canPickOutbound: boolean, canIssueInvoice: boolean) {
-  return (canPickOutbound && canShowWarehouseActions(request)) || (canIssueInvoice && canIssueRequestInvoice(request));
+function canShowOperationActions(
+  request: ClientRequestSummary,
+  canPickOutbound: boolean,
+  canIssueInvoice: boolean,
+  canDownloadSourceFiles: boolean,
+) {
+  return (
+    (canDownloadSourceFiles && request.files.length > 0) ||
+    (canPickOutbound && canShowWarehouseActions(request)) ||
+    (canIssueInvoice && canIssueRequestInvoice(request))
+  );
 }
 
 function canIssueRequestInvoice(request: ClientRequestSummary) {

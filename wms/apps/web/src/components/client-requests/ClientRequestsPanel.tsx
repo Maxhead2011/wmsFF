@@ -2,6 +2,7 @@ import { ClipboardList, RefreshCw, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import {
   cancelClientRequest,
+  downloadClientRequestFile,
   downloadClientRequestWbPackagesXlsx,
   downloadClientRequestWbProductsXlsx,
   downloadPickInstructionXlsx,
@@ -18,6 +19,7 @@ import {
   type AuthUser,
   type BillingInvoiceSummary,
   type ClientRequestDocument,
+  type ClientRequestFileSummary,
   type ClientRequestStatus,
   type ClientRequestSummary,
   type ClientSummary,
@@ -49,6 +51,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
   const canWrite = canUse(session.user, 'client-requests:write');
   const canChangeStatus = canUse(session.user, 'client-requests:status');
   const canPickOutbound = canUse(session.user, 'stock:write');
+  const canDownloadSourceFiles = canChangeStatus || canPickOutbound || canUse(session.user, 'system:admin');
   const [requests, setRequests] = useState<LoadState<ClientRequestSummary>>({ status: 'idle', data: [] });
   const [clients, setClients] = useState<LoadState<ClientSummary>>({ status: 'idle', data: [] });
   const [error, setError] = useState<string | null>(null);
@@ -259,6 +262,24 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     }
   }
 
+  async function downloadSourceRequest(request: ClientRequestSummary) {
+    setError(null);
+    setNotice(null);
+
+    const file = sourceRequestFile(request);
+    if (!file) {
+      setError('К заявке не прикреплен исходный файл.');
+      return;
+    }
+
+    try {
+      const blob = await downloadClientRequestFile(session.accessToken, request.id, file.id);
+      downloadBlob(blob, file.fileName || `source-request-${safeDownloadName(request.title)}-${request.id.slice(0, 8)}`);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
   async function issueInvoiceForRequest(request: ClientRequestSummary) {
     setError(null);
     setNotice(null);
@@ -378,6 +399,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           canPickOutbound,
           canUse(session.user, 'billing:write'),
           canWrite,
+          canDownloadSourceFiles,
           issuingInvoiceRequestId,
           (request, status) => void changeStatus(request, status),
           (request) => setEditingRequest(request),
@@ -385,6 +407,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           (request) => void openRequestDocument(request),
           (request) => void openPickInstruction(request),
           (request) => void downloadPickInstruction(request),
+          (request) => void downloadSourceRequest(request),
           (request) => void downloadWbProductsTemplate(request),
           (request) => void downloadWbPackagesTemplate(request),
           (request) => void pickOutboundRequest(request),
@@ -479,6 +502,7 @@ function renderRequests(
   canPickOutbound: boolean,
   canIssueInvoice: boolean,
   canCancelRequests: boolean,
+  canDownloadSourceFiles: boolean,
   issuingInvoiceRequestId: string,
   onStatusChange: (request: ClientRequestSummary, status: ClientRequestStatus) => void,
   onEditRequest: (request: ClientRequestSummary) => void,
@@ -486,6 +510,7 @@ function renderRequests(
   onOpenDocument: (request: ClientRequestSummary) => void,
   onOpenPickInstruction: (request: ClientRequestSummary) => void,
   onDownloadPickInstruction: (request: ClientRequestSummary) => void,
+  onDownloadSourceRequest: (request: ClientRequestSummary) => void,
   onDownloadWbProducts: (request: ClientRequestSummary) => void,
   onDownloadWbPackages: (request: ClientRequestSummary) => void,
   onPickOutbound: (request: ClientRequestSummary) => void,
@@ -520,6 +545,7 @@ function renderRequests(
         canIssueInvoice={canIssueInvoice}
         canCancelRequests={canCancelRequests}
         canEditRequests={canCancelRequests}
+        canDownloadSourceFiles={canDownloadSourceFiles}
         issuingInvoiceRequestId={issuingInvoiceRequestId}
         onStatusChange={onStatusChange}
         onEditRequest={onEditRequest}
@@ -527,6 +553,7 @@ function renderRequests(
         onOpenDocument={onOpenDocument}
         onOpenPickInstruction={onOpenPickInstruction}
         onDownloadPickInstruction={onDownloadPickInstruction}
+        onDownloadSourceRequest={onDownloadSourceRequest}
         onDownloadWbProducts={onDownloadWbProducts}
         onDownloadWbPackages={onDownloadWbPackages}
         onPickOutbound={onPickOutbound}
@@ -555,6 +582,10 @@ function downloadBlob(blob: Blob, fileName: string) {
 
 function safeDownloadName(value: string) {
   return value.replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'request';
+}
+
+function sourceRequestFile(request: ClientRequestSummary): ClientRequestFileSummary | null {
+  return request.files.find((file) => /\.(xlsx|xls|csv)$/i.test(file.fileName)) ?? request.files[0] ?? null;
 }
 
 function requestBillingQuantities(request: ClientRequestSummary) {
