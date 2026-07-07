@@ -33,10 +33,12 @@ export class ImportsController {
     @Body('clientId') clientId: string,
     @CurrentUser() user: AuthUser,
     @Body('sourceDocument') sourceDocument?: string,
+    @Body('stockDate') stockDate?: string,
   ) {
     return this.importsService.commitStockWorkbook(file.buffer, {
       clientId,
       sourceDocument: sourceDocument || file.originalname,
+      stockDate,
       user,
     });
   }

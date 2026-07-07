@@ -8,6 +8,7 @@ import {
   BillingPriceTaxMode,
   BillingUnit,
   ClientNotificationEvent,
+  ClientRequestStatus,
   MovementType,
   Prisma,
 } from '@prisma/client';
@@ -1037,6 +1038,17 @@ export class BillingService {
       include: {
         items: true,
         packages: { include: { items: true } },
+        events: {
+          where: {
+            eventType: 'STATUS_CHANGED',
+            statusTo: { in: [ClientRequestStatus.PACKED, ClientRequestStatus.DONE] },
+          },
+          select: {
+            statusTo: true,
+            createdAt: true,
+          },
+          orderBy: { createdAt: 'asc' },
+        },
       },
     });
     if (!request) {
@@ -1088,6 +1100,7 @@ export class BillingService {
       include: { service: true },
     });
     const priceByServiceId = new Map(prices.map((price) => [price.serviceId, price]));
+    const billingDate = requestBillingDate(request);
     const rows = template.items
       .map((item) => {
         const serviceId = item.charge?.serviceId;
@@ -1115,7 +1128,7 @@ export class BillingService {
           quantity,
           unitPriceRub,
           totalRub,
-          serviceDate: request.updatedAt,
+          serviceDate: billingDate,
           metadata: {
             learnedFromInvoiceId: template.id,
             learnedFromInvoiceNumber: template.number,
@@ -1132,8 +1145,8 @@ export class BillingService {
       return null;
     }
 
-    const periodFrom = parseDate(request.createdAt.toISOString());
-    const periodTo = parseDate(request.updatedAt.toISOString(), 'endOfDay');
+    const periodFrom = parseDate(billingDate.toISOString());
+    const periodTo = parseDate(billingDate.toISOString(), 'endOfDay');
     const totalRub = roundMoney(rows.reduce((sum, row) => sum + row.totalRub, 0));
     const number = await this.nextInvoiceNumber(periodFrom, BillingInvoiceSource.MANUAL);
 
@@ -2214,6 +2227,17 @@ function billingUnitFromNomenclature(unit?: string | null) {
     return BillingUnit.HOUR;
   }
   return BillingUnit.SERVICE;
+}
+
+function requestBillingDate(request: {
+  updatedAt: Date;
+  events?: Array<{ statusTo: ClientRequestStatus | null; createdAt: Date }>;
+}) {
+  return (
+    request.events?.find((event) => event.statusTo === ClientRequestStatus.PACKED)?.createdAt ??
+    request.events?.find((event) => event.statusTo === ClientRequestStatus.DONE)?.createdAt ??
+    request.updatedAt
+  );
 }
 
 function requestBillingMetrics(request: {

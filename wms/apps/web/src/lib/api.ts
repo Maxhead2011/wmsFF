@@ -3821,13 +3821,16 @@ export async function previewStockImport(accessToken: string, payload: { file: F
 
 export async function commitStockImport(
   accessToken: string,
-  payload: { file: File; clientId: string; sourceDocument?: string },
+  payload: { file: File; clientId: string; sourceDocument?: string; stockDate?: string },
 ) {
   const form = new FormData();
   form.append('file', payload.file);
   form.append('clientId', payload.clientId);
   if (payload.sourceDocument) {
     form.append('sourceDocument', payload.sourceDocument);
+  }
+  if (payload.stockDate) {
+    form.append('stockDate', payload.stockDate);
   }
 
   return requestMultipart<StockImportCommitResult>('/imports/stocks/commit', form, accessToken);

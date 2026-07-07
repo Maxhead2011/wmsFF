@@ -4,6 +4,7 @@ import {
   BillingChargeStatus,
   BillingPriceTaxMode,
   BillingUnit,
+  ClientRequestEventType,
   ClientRequestStatus,
   ClientRequestType,
   MovementType,
@@ -299,6 +300,7 @@ export class StockOperationsService {
     const baseKey = dto.idempotencyKey ?? `pack-request:${dto.requestId}`;
 
     return this.prisma.$transaction(async (tx) => {
+      const packedAt = new Date();
       const existingMovement = await tx.stockMovement.findFirst({
         where: { idempotencyKey: { startsWith: `${baseKey}:` } },
       });
@@ -345,7 +347,7 @@ export class StockOperationsService {
         request,
         packages,
         user,
-        serviceDate: new Date(),
+        serviceDate: packedAt,
       });
 
       await tx.clientRequest.update({
@@ -355,6 +357,13 @@ export class StockOperationsService {
           assignedToUserId: user.id,
           managerComment: dto.comment ?? 'Заявка упакована и готова к отгрузке.',
         },
+      });
+      await this.createRequestStatusEvent(tx, {
+        request,
+        statusTo: ClientRequestStatus.PACKED,
+        user,
+        body: dto.comment ?? 'Заявка упакована и готова к отгрузке.',
+        createdAt: packedAt,
       });
 
       return {
@@ -390,6 +399,7 @@ export class StockOperationsService {
       });
 
       if (existingMovement) {
+        const doneAt = new Date();
         await tx.clientRequest.update({
           where: { id: request.id },
           data: {
@@ -397,6 +407,13 @@ export class StockOperationsService {
             assignedToUserId: user.id,
             managerComment: dto.comment ?? 'Заявка отгружена со склада.',
           },
+        });
+        await this.createRequestStatusEvent(tx, {
+          request,
+          statusTo: ClientRequestStatus.DONE,
+          user,
+          body: dto.comment ?? 'Заявка отгружена со склада.',
+          createdAt: doneAt,
         });
 
         return {
@@ -445,6 +462,14 @@ export class StockOperationsService {
         },
       });
 
+      await this.createRequestStatusEvent(tx, {
+        request,
+        statusTo: ClientRequestStatus.DONE,
+        user,
+        body: dto.comment ?? 'Заявка отгружена со склада.',
+        createdAt: new Date(),
+      });
+
       return {
         idempotencyKey: baseKey,
         status: 'APPLIED',
@@ -465,6 +490,7 @@ export class StockOperationsService {
     const baseKey = dto.idempotencyKey ?? `manual-ship-request:${dto.requestId}`;
 
     const result = await this.prisma.$transaction(async (tx) => {
+      const doneAt = new Date();
       const existingMovement = await tx.stockMovement.findFirst({
         where: {
           OR: [
@@ -521,7 +547,7 @@ export class StockOperationsService {
         request,
         packages,
         user,
-        serviceDate: new Date(),
+        serviceDate: doneAt,
       });
 
       for (const line of plan.lines) {
@@ -552,6 +578,13 @@ export class StockOperationsService {
           assignedToUserId: user.id,
           managerComment: dto.comment ?? 'Р—Р°СЏРІРєР° СЃРґР°РЅР°; РѕСЃС‚Р°С‚РєРё СЃРїРёСЃР°РЅС‹ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё.',
         },
+      });
+      await this.createRequestStatusEvent(tx, {
+        request,
+        statusTo: ClientRequestStatus.DONE,
+        user,
+        body: dto.comment ?? 'Заявка сдана вручную; остатки списаны автоматически.',
+        createdAt: doneAt,
       });
 
       return {
@@ -1197,6 +1230,47 @@ export class StockOperationsService {
     if (counts.boxes !== dto.boxes || counts.pallets !== dto.pallets || counts.packedUnits !== dto.packedUnits) {
       throw new BadRequestException('Итоги ручного закрытия должны совпадать с составом упаковочных мест.');
     }
+  }
+
+  private async createRequestStatusEvent(
+    tx: Prisma.TransactionClient,
+    input: {
+      request: { id: string; clientId: string; status: ClientRequestStatus };
+      statusTo: ClientRequestStatus;
+      user: AuthUser;
+      body?: string;
+      createdAt: Date;
+    },
+  ) {
+    if (input.request.status === input.statusTo) {
+      return;
+    }
+
+    const existing = await tx.clientRequestEvent.findFirst({
+      where: {
+        requestId: input.request.id,
+        eventType: ClientRequestEventType.STATUS_CHANGED,
+        statusTo: input.statusTo,
+      },
+      select: { id: true },
+    });
+    if (existing) {
+      return;
+    }
+
+    await tx.clientRequestEvent.create({
+      data: {
+        requestId: input.request.id,
+        clientId: input.request.clientId,
+        eventType: ClientRequestEventType.STATUS_CHANGED,
+        title: 'Статус заявки изменен',
+        body: input.body,
+        statusFrom: input.request.status,
+        statusTo: input.statusTo,
+        createdByUserId: input.user.id,
+        createdAt: input.createdAt,
+      },
+    });
   }
 
   private async createFulfillmentBillingCharges(

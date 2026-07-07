@@ -50,6 +50,17 @@ export class RequestBillingAutomationService {
             },
           },
         },
+        events: {
+          where: {
+            eventType: ClientRequestEventType.STATUS_CHANGED,
+            statusTo: { in: [ClientRequestStatus.PACKED, ClientRequestStatus.DONE] },
+          },
+          select: {
+            statusTo: true,
+            createdAt: true,
+          },
+          orderBy: { createdAt: 'asc' },
+        },
       },
     });
 
@@ -154,6 +165,7 @@ export class RequestBillingAutomationService {
       return null;
     }
 
+    const billingDate = requestBillingDate(request);
     const unitPriceRub = applyTaxMode(priceRub, clientPrice.taxMode);
     const totalRub = roundMoney(quantity * unitPriceRub);
     const charge = await this.prisma.billingCharge.create({
@@ -167,7 +179,7 @@ export class RequestBillingAutomationService {
         unitPriceRub,
         totalRub,
         status: BillingChargeStatus.APPROVED,
-        serviceDate: request.updatedAt,
+        serviceDate: billingDate,
         source: BillingChargeSource.MANUAL,
         sourceKey,
         metadata: {
@@ -250,6 +262,7 @@ export class RequestBillingAutomationService {
         continue;
       }
 
+      const billingDate = requestBillingDate(request);
       const unitPriceRub = applyTaxMode(priceRub, clientPrice.taxMode);
       const totalRub = roundMoney(unitPriceRub * row.quantity);
       await this.prisma.billingCharge.create({
@@ -263,7 +276,7 @@ export class RequestBillingAutomationService {
           unitPriceRub,
           totalRub,
           status: BillingChargeStatus.APPROVED,
-          serviceDate: request.updatedAt,
+          serviceDate: billingDate,
           source: BillingChargeSource.MANUAL,
           sourceKey,
           metadata: {
@@ -311,8 +324,9 @@ export class RequestBillingAutomationService {
       return null;
     }
 
+    const billingDate = requestBillingDate(request);
     const periodFrom = startOfDayUtc(request.createdAt);
-    const periodTo = endOfDayUtc(request.updatedAt);
+    const periodTo = endOfDayUtc(billingDate);
     const days = countInclusiveDays(periodFrom, periodTo);
     const details = calculateShipmentStorageDetails(request, days);
     if (details.literDays <= 0) {
@@ -331,7 +345,7 @@ export class RequestBillingAutomationService {
         unitPriceRub,
         totalRub,
         status: BillingChargeStatus.APPROVED,
-        serviceDate: request.updatedAt,
+        serviceDate: billingDate,
         source: BillingChargeSource.STORAGE,
         sourceKey,
         metadata: {
@@ -374,10 +388,11 @@ export class RequestBillingAutomationService {
       return null;
     }
 
+    const billingDate = requestBillingDate(request);
     const quoteInput =
       counts.pallets > 0
-        ? { destination: request.destinationCity, pallets: counts.pallets, quoteDate: request.updatedAt.toISOString() }
-        : { destination: request.destinationCity, boxes: counts.boxes, quoteDate: request.updatedAt.toISOString() };
+        ? { destination: request.destinationCity, pallets: counts.pallets, quoteDate: billingDate.toISOString() }
+        : { destination: request.destinationCity, boxes: counts.boxes, quoteDate: billingDate.toISOString() };
 
     try {
       const quote = await this.logistics.quote(quoteInput);
@@ -404,7 +419,7 @@ export class RequestBillingAutomationService {
           unitPriceRub: totalRub,
           totalRub,
           status: BillingChargeStatus.APPROVED,
-          serviceDate: request.updatedAt,
+          serviceDate: billingDate,
           source: BillingChargeSource.LOGISTICS,
           sourceKey,
           metadata: {
@@ -519,8 +534,9 @@ export class RequestBillingAutomationService {
         return null;
       }
 
-      const periodFrom = minDate(charges.map((charge) => charge.serviceDate)) ?? input.request.updatedAt;
-      const periodTo = maxDate(charges.map((charge) => charge.serviceDate)) ?? input.request.updatedAt;
+      const fallbackDate = requestBillingDate(input.request);
+      const periodFrom = minDate(charges.map((charge) => charge.serviceDate)) ?? fallbackDate;
+      const periodTo = maxDate(charges.map((charge) => charge.serviceDate)) ?? fallbackDate;
       const totalRub = roundMoney(charges.reduce((sum, charge) => sum + (decimalToNumber(charge.totalRub) ?? 0), 0));
       const number = await nextInvoiceNumber(tx, periodFrom, input.source);
 
@@ -751,8 +767,27 @@ type DoneRequestPayload = Prisma.ClientRequestGetPayload<{
         };
       };
     };
+    events: {
+      select: {
+        statusTo: true;
+        createdAt: true;
+      };
+    };
   };
 }>;
+
+function requestBillingDate(
+  request: {
+    updatedAt: Date;
+    events?: Array<{ statusTo: ClientRequestStatus | null; createdAt: Date }>;
+  },
+) {
+  return (
+    request.events?.find((event) => event.statusTo === ClientRequestStatus.PACKED)?.createdAt ??
+    request.events?.find((event) => event.statusTo === ClientRequestStatus.DONE)?.createdAt ??
+    request.updatedAt
+  );
+}
 
 function countPackages(packages: Array<{ packageType: string | null }>) {
   return packages.reduce(

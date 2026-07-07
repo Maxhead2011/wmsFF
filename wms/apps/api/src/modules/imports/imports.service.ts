@@ -13,6 +13,7 @@ import { parseStockSheet, type SheetMatrix, type StockImportIssue, type StockImp
 type CommitStockOptions = {
   clientId: string;
   sourceDocument: string;
+  stockDate?: string;
   user: AuthUser;
 };
 
@@ -40,6 +41,19 @@ const STOCK_IMPORT_TRANSACTION_OPTIONS = {
   maxWait: 10_000,
   timeout: 180_000,
 };
+
+function parseStockDate(value?: string) {
+  if (!value?.trim()) {
+    return new Date();
+  }
+
+  const date = new Date(`${value.trim()}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) {
+    throw new BadRequestException('Некорректная дата остатков.');
+  }
+
+  return date;
+}
 
 @Injectable()
 export class ImportsService {
@@ -110,6 +124,7 @@ export class ImportsService {
 
     const parsed = await this.parseStockWorkbookWithCatalog(buffer, options.clientId);
     const errors = parsed.issues.filter((issue) => issue.severity === 'error');
+    const stockDate = parseStockDate(options.stockDate);
 
     if (errors.length > 0) {
       throw new BadRequestException({
@@ -133,7 +148,14 @@ export class ImportsService {
           const sku = await this.ensureSku(tx, item);
 
           await this.ensureBarcode(tx, sku.id, item.barcode);
-          const movementCreated = await this.createInitialMovement(tx, item, sku.id, box.id, options.sourceDocument);
+          const movementCreated = await this.createInitialMovement(
+            tx,
+            item,
+            sku.id,
+            box.id,
+            options.sourceDocument,
+            stockDate,
+          );
           await this.addToBalance(tx, item, sku.id, box.id, 'AVAILABLE');
 
           counters.boxesTouched += 1;
@@ -149,6 +171,7 @@ export class ImportsService {
 
     return {
       sourceDocument: options.sourceDocument,
+      stockDate: stockDate.toISOString(),
       summary: parsed.summary,
       suggestions: parsed.suggestions,
       warnings: parsed.issues.filter((issue) => issue.severity === 'warning'),
@@ -336,6 +359,7 @@ export class ImportsService {
     skuId: string,
     boxId: string,
     sourceDocument: string,
+    stockDate: Date,
   ) {
     const idempotencyKey = ['stock-import', sourceDocument, item.sourceRow, item.boxCode, item.barcode].join(':');
     const exists = await tx.stockMovement.findUnique({ where: { idempotencyKey } });
@@ -354,6 +378,7 @@ export class ImportsService {
         quantity: item.quantity,
         sourceDocument,
         idempotencyKey,
+        createdAt: stockDate,
         comment: 'Первичная загрузка остатков из XLSX',
       },
     });
