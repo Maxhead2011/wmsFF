@@ -607,12 +607,18 @@ h1 {
   gap: 14px;
 }
 
+.auth-downloads {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
 .mobile-app-download {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
-  margin-top: 18px;
+  margin-top: 0;
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 12px;

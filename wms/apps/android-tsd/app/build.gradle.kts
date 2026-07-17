@@ -2,6 +2,11 @@ plugins {
     id("com.android.application")
 }
 
+val tsdKeystorePath = System.getenv("TSD_KEYSTORE_PATH")
+val tsdKeystorePassword = System.getenv("TSD_KEYSTORE_PASSWORD")
+val tsdKeyAlias = System.getenv("TSD_KEY_ALIAS")
+val tsdKeyPassword = System.getenv("TSD_KEY_PASSWORD")
+
 android {
     namespace = "pro.logoff.wms.tsd"
     compileSdk = 35
@@ -10,8 +15,28 @@ android {
         applicationId = "pro.logoff.wms.tsd"
         minSdk = 26
         targetSdk = 35
-        versionCode = 61
-        versionName = "0.1.61"
+        versionCode = 62
+        versionName = "0.1.62"
+    }
+
+    signingConfigs {
+        create("logoffRelease") {
+            if (!tsdKeystorePath.isNullOrBlank()) {
+                storeFile = file(tsdKeystorePath)
+                storePassword = tsdKeystorePassword
+                keyAlias = tsdKeyAlias
+                keyPassword = tsdKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            if (!tsdKeystorePath.isNullOrBlank()) {
+                signingConfig = signingConfigs.getByName("logoffRelease")
+            }
+            isMinifyEnabled = false
+        }
     }
 
     compileOptions {
