@@ -48,6 +48,7 @@ public class OperationOutbox {
 
     public PendingOperation enqueueMove(
         String clientId,
+        String requestId,
         String barcode,
         String fromBoxCode,
         String toBoxCode,
@@ -57,6 +58,7 @@ public class OperationOutbox {
     ) {
         Map<String, String> payload = compactPayload();
         put(payload, "clientId", clientId);
+        put(payload, "requestId", requestId);
         put(payload, "barcode", barcode);
         put(payload, "fromBoxCode", fromBoxCode);
         put(payload, "toBoxCode", toBoxCode);
@@ -67,6 +69,27 @@ public class OperationOutbox {
         PendingOperation operation = new PendingOperation(
             UUID.randomUUID().toString(),
             "move_scan",
+            payload,
+            System.currentTimeMillis(),
+            OperationStatus.PENDING,
+            0,
+            null
+        );
+        dao.insert(OperationEntity.fromPending(operation));
+        return operation;
+    }
+
+    public PendingOperation enqueueAssemblyStage(Map<String, String> values) {
+        Map<String, String> payload = compactPayload();
+        if (values != null) {
+            for (Map.Entry<String, String> entry : values.entrySet()) {
+                put(payload, entry.getKey(), entry.getValue());
+            }
+        }
+
+        PendingOperation operation = new PendingOperation(
+            UUID.randomUUID().toString(),
+            "assembly_stage",
             payload,
             System.currentTimeMillis(),
             OperationStatus.PENDING,

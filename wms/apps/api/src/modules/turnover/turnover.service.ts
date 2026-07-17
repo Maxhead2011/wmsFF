@@ -1,12 +1,17 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { MovementType, Prisma, StockStatus } from '@prisma/client';
+import { ClientRequestStatus, ClientRequestType, MovementType, Prisma, StockStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
-import { ListTurnoverDto, TurnoverStatisticsDto, TurnoverSuggestionsDto } from './dto/list-turnover.dto';
+import { ListTurnoverDto, TurnoverBoxDetailsDto, TurnoverStatisticsDto, TurnoverStockExportDto, TurnoverSuggestionsDto } from './dto/list-turnover.dto';
 import { TurnoverActionDto, TurnoverActionKind } from './dto/turnover-action.dto';
-import { buildTurnoverReceiptWorkbook, turnoverReceiptXlsxMimeType } from './turnover-receipt-xlsx';
+import {
+  buildTurnoverReceiptPeriodWorkbook,
+  buildTurnoverReceiptWorkbook,
+  buildTurnoverStockWorkbook,
+  turnoverReceiptXlsxMimeType,
+} from './turnover-receipt-xlsx';
 
 type TurnoverMovement = Prisma.StockMovementGetPayload<{
   include: {
@@ -51,6 +56,11 @@ type SourceAllocation = {
   quantity: number;
 };
 
+type StockExportWorkingRow = Omit<TurnoverStockExportDocument['rows'][number], 'position'> & {
+  position: number;
+  barcodeSet: Set<string>;
+};
+
 export type TurnoverReceiptDocument = {
   movementId: string;
   sourceDocument: string | null;
@@ -74,11 +84,122 @@ export type TurnoverReceiptDocument = {
     clientSku: string | null;
     article: string | null;
     name: string;
+    color: string | null;
+    size: string | null;
     quantity: number;
     status: StockStatus;
     statusLabel: string;
     kiz: string | null;
     sourceRows: number[];
+    comment: string | null;
+  }>;
+};
+
+export type TurnoverReceiptPeriodDocument = {
+  generatedAt: string;
+  periodFrom: string | null;
+  periodTo: string | null;
+  totalQuantity: number;
+  skuCount: number;
+  boxesCount: number;
+  fileName: string;
+  client: { id: string; code: string; name: string };
+  rows: Array<{
+    position: number;
+    movementId: string;
+    date: string;
+    boxCode: string | null;
+    barcode: string | null;
+    kiz: string | null;
+    clientSku: string | null;
+    name: string;
+    color: string | null;
+    size: string | null;
+    quantity: number;
+    sourceDocument: string | null;
+  }>;
+};
+
+export type TurnoverStockExportDocument = {
+  generatedAt: string;
+  ignoreActiveRequests: boolean;
+  fileName: string;
+  client: { id: string; code: string; name: string };
+  totals: {
+    rows: number;
+    skuCount: number;
+    boxesCount: number;
+    physicalQuantity: number;
+    reservedQuantity: number;
+    exportQuantity: number;
+  };
+  rows: Array<{
+    position: number;
+    balanceId: string;
+    skuId: string;
+    boxCode: string | null;
+    palletCode: string | null;
+    internalSku: string;
+    clientSku: string | null;
+    article: string | null;
+    name: string;
+    color: string | null;
+    size: string | null;
+    barcode: string | null;
+    allBarcodes: string;
+    status: StockStatus;
+    statusLabel: string;
+    physicalQuantity: number;
+    reservedQuantity: number;
+    exportQuantity: number;
+    volumeLiters: number | null;
+    kizCount: number;
+    updatedAt: string;
+  }>;
+};
+
+export type TurnoverBoxDetails = {
+  generatedAt: string;
+  box: {
+    id: string;
+    code: string;
+    status: string;
+    client: { id: string; code: string; name: string };
+  };
+  totals: {
+    rows: number;
+    skuCount: number;
+    quantity: number;
+    kizCount: number;
+  };
+  contents: Array<{
+    balanceId: string;
+    skuId: string;
+    internalSku: string;
+    clientSku: string | null;
+    article: string | null;
+    name: string;
+    color: string | null;
+    size: string | null;
+    barcode: string | null;
+    status: StockStatus;
+    statusLabel: string;
+    quantity: number;
+    kiz: string[];
+    kizCount: number;
+  }>;
+  movements: Array<{
+    id: string;
+    date: string;
+    type: MovementType;
+    typeLabel: string;
+    status: StockStatus;
+    statusLabel: string;
+    quantity: number;
+    skuId: string;
+    name: string;
+    barcode: string | null;
+    sourceDocument: string | null;
     comment: string | null;
   }>;
 };
@@ -286,8 +407,6 @@ export class TurnoverService {
           clientSku: true,
           article: true,
           name: true,
-          color: true,
-          size: true,
           barcodes: { select: { value: true, isPrimary: true }, orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }], take: 5 },
           balances: {
             select: {
@@ -310,7 +429,7 @@ export class TurnoverService {
         select: {
           value: true,
           isPrimary: true,
-          sku: { select: { id: true, internalSku: true, clientSku: true, article: true, name: true, color: true, size: true } },
+          sku: { select: { id: true, internalSku: true, clientSku: true, article: true, name: true } },
         },
         orderBy: { value: 'asc' },
         take: 60,
@@ -352,8 +471,6 @@ export class TurnoverService {
         internalSku: sku.internalSku,
         clientSku: sku.clientSku,
         article: sku.article,
-        color: sku.color,
-        size: sku.size,
         barcode: primaryBarcode,
         quantity: sku.balances.reduce((sum, balance) => sum + balance.quantity, 0),
         boxCode: firstBalance?.box?.code ?? null,
@@ -373,8 +490,6 @@ export class TurnoverService {
             internalSku: product.internalSku,
             clientSku: product.clientSku,
             article: product.article,
-            color: product.color,
-            size: product.size,
           })),
         ...barcodeRows.map((row) => ({
           value: row.value,
@@ -384,8 +499,6 @@ export class TurnoverService {
           internalSku: row.sku.internalSku,
           clientSku: row.sku.clientSku,
           article: row.sku.article,
-          color: row.sku.color,
-          size: row.sku.size,
         })),
       ],
       (row) => row.value,
@@ -411,6 +524,138 @@ export class TurnoverService {
         code: box.code,
         status: box.status,
       })),
+    };
+  }
+
+  async boxDetails(boxCode: string, query: TurnoverBoxDetailsDto, user: AuthUser): Promise<TurnoverBoxDetails> {
+    const cleanCode = boxCode.trim();
+    if (!cleanCode) {
+      throw new BadRequestException('Укажите номер короба.');
+    }
+
+    const clientFilter = this.clientScopes.resolveClientFilter(user, query.clientId);
+    const box = await this.prisma.box.findFirst({
+      where: {
+        clientId: clientFilter,
+        code: { equals: cleanCode, mode: Prisma.QueryMode.insensitive },
+      },
+      select: {
+        id: true,
+        code: true,
+        status: true,
+        client: { select: { id: true, code: true, name: true } },
+      },
+    });
+
+    if (!box) {
+      throw new NotFoundException('Короб не найден или недоступен текущему пользователю.');
+    }
+
+    const [balances, marks, movements] = await Promise.all([
+      this.prisma.stockBalance.findMany({
+        where: {
+          clientId: box.client.id,
+          boxId: box.id,
+          quantity: { gt: 0 },
+        },
+        include: {
+          sku: {
+            include: {
+              barcodes: { orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }] },
+            },
+          },
+        },
+        orderBy: [{ sku: { name: 'asc' } }, { status: 'asc' }],
+      }),
+      this.prisma.productMark.findMany({
+        where: {
+          clientId: box.client.id,
+          boxId: box.id,
+        },
+        select: {
+          id: true,
+          value: true,
+          status: true,
+          skuId: true,
+        },
+        orderBy: [{ skuId: 'asc' }, { value: 'asc' }],
+        take: 500,
+      }),
+      this.prisma.stockMovement.findMany({
+        where: {
+          clientId: box.client.id,
+          boxId: box.id,
+        },
+        include: {
+          sku: {
+            include: {
+              barcodes: { orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }] },
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 150,
+      }),
+    ]);
+
+    const marksBySkuAndStatus = new Map<string, string[]>();
+    marks.forEach((mark) => {
+      const key = `${mark.skuId}:${mark.status}`;
+      const current = marksBySkuAndStatus.get(key) ?? [];
+      current.push(mark.value);
+      marksBySkuAndStatus.set(key, current);
+    });
+
+    const contents = balances.map((balance) => {
+      const primaryBarcode = balance.sku.barcodes.find((barcode) => barcode.isPrimary)?.value ?? balance.sku.barcodes[0]?.value ?? null;
+      const kiz = marksBySkuAndStatus.get(`${balance.skuId}:${balance.status}`) ?? [];
+
+      return {
+        balanceId: balance.id,
+        skuId: balance.skuId,
+        internalSku: balance.sku.internalSku,
+        clientSku: balance.sku.clientSku,
+        article: balance.sku.article,
+        name: balance.sku.name,
+        color: balance.sku.color,
+        size: balance.sku.size,
+        barcode: primaryBarcode,
+        status: balance.status,
+        statusLabel: stockStatusLabel(balance.status),
+        quantity: balance.quantity,
+        kiz: kiz.slice(0, 50),
+        kizCount: kiz.length,
+      };
+    });
+
+    return {
+      generatedAt: new Date().toISOString(),
+      box,
+      totals: {
+        rows: contents.length,
+        skuCount: uniqueValues(contents.map((item) => item.skuId)).length,
+        quantity: contents.reduce((sum, item) => sum + item.quantity, 0),
+        kizCount: marks.length,
+      },
+      contents,
+      movements: movements.map((movement) => {
+        const primaryBarcode = movement.sku.barcodes.find((barcode) => barcode.isPrimary)?.value ?? movement.sku.barcodes[0]?.value ?? null;
+
+        return {
+          id: movement.id,
+          date: movement.createdAt.toISOString(),
+          type: movement.type,
+          typeLabel: movementTypeLabel(movement.type),
+          status: movement.status,
+          statusLabel: stockStatusLabel(movement.status),
+          quantity: movement.quantity,
+          skuId: movement.skuId,
+          name: movement.sku.name,
+          barcode: primaryBarcode,
+          sourceDocument: movement.sourceDocument,
+          comment: movement.comment,
+        };
+      }),
     };
   }
 
@@ -574,6 +819,211 @@ export class TurnoverService {
       mimeType: turnoverReceiptXlsxMimeType(),
       content,
     };
+  }
+
+  async getReceiptPeriodXlsx(query: ListTurnoverDto, user: AuthUser) {
+    if (!query.clientId) {
+      throw new BadRequestException('Выберите клиента для выгрузки приемки.');
+    }
+
+    this.clientScopes.requireClientAccess(user, query.clientId, 'read');
+
+    const client = await this.prisma.client.findUnique({
+      where: { id: query.clientId },
+      select: { id: true, code: true, name: true },
+    });
+
+    if (!client) {
+      throw new NotFoundException('Клиент не найден.');
+    }
+
+    const movementDateRange = dateRange(query.dateFrom, query.dateTo);
+    const movements = await this.prisma.stockMovement.findMany({
+      where: {
+        clientId: client.id,
+        quantity: { gt: 0 },
+        type: { in: INCOMING_DOCUMENT_MOVEMENT_TYPES },
+        ...(movementDateRange ? { createdAt: movementDateRange } : {}),
+      },
+      include: receiptPeriodInclude,
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+
+    const document = buildReceiptPeriodDocument(client, movements, query);
+    const content = buildTurnoverReceiptPeriodWorkbook(document);
+
+    return {
+      fileName: document.fileName,
+      mimeType: turnoverReceiptXlsxMimeType(),
+      content,
+    };
+  }
+
+  async getStockXlsx(query: TurnoverStockExportDto, user: AuthUser) {
+    this.requireInternalStatisticsAccess(user);
+
+    const clientId = query.clientId?.trim();
+    if (!clientId) {
+      throw new BadRequestException('Выберите клиента для выгрузки остатков.');
+    }
+
+    this.clientScopes.requireClientAccess(user, clientId, 'read');
+
+    const client = await this.prisma.client.findUnique({
+      where: { id: clientId },
+      select: { id: true, code: true, name: true },
+    });
+
+    if (!client) {
+      throw new NotFoundException('Клиент не найден.');
+    }
+
+    const ignoreActiveRequests = parseBooleanFlag(query.ignoreActiveRequests);
+    const balances = await this.prisma.stockBalance.findMany({
+      where: {
+        clientId,
+        quantity: { gt: 0 },
+      },
+      include: stockExportBalanceInclude,
+      orderBy: [{ updatedAt: 'desc' }],
+    });
+
+    const marks = await this.prisma.productMark.groupBy({
+      by: ['skuId', 'boxId', 'status'],
+      where: { clientId },
+      _count: { _all: true },
+    });
+    const markCountByBalance = new Map(
+      marks.map((mark) => [stockExportMarkKey(mark.skuId, mark.boxId, mark.status), mark._count._all]),
+    );
+
+    const rows = balances
+      .map((balance) => {
+        const barcodes = balance.sku.barcodes.map((barcode) => barcode.value).filter(Boolean);
+        const primaryBarcode = balance.sku.barcodes.find((barcode) => barcode.isPrimary)?.value ?? barcodes[0] ?? null;
+
+        return {
+          position: 0,
+          balanceId: balance.id,
+          skuId: balance.skuId,
+          barcodeSet: new Set(barcodes),
+          boxCode: balance.box?.code ?? null,
+          palletCode: balance.pallet?.code ?? null,
+          internalSku: balance.sku.internalSku,
+          clientSku: balance.sku.clientSku,
+          article: balance.sku.article,
+          name: balance.sku.name,
+          color: balance.sku.color,
+          size: balance.sku.size,
+          barcode: primaryBarcode,
+          allBarcodes: barcodes.join(', '),
+          status: balance.status,
+          statusLabel: stockStatusLabel(balance.status),
+          physicalQuantity: balance.quantity,
+          reservedQuantity: 0,
+          exportQuantity: balance.quantity,
+          volumeLiters: nullableNumber(balance.sku.volumeLiters),
+          kizCount: markCountByBalance.get(stockExportMarkKey(balance.skuId, balance.boxId, balance.status)) ?? 0,
+          updatedAt: balance.updatedAt.toISOString(),
+        };
+      })
+      .sort(stockExportRowSort);
+
+    if (!ignoreActiveRequests && rows.length > 0) {
+      await this.applyActiveRequestReservations(clientId, rows);
+    }
+
+    const exportRows = rows
+      .filter((row) => row.exportQuantity > 0)
+      .map(({ barcodeSet: _barcodeSet, ...row }, index) => ({ ...row, position: index + 1 }));
+    const generatedAt = new Date();
+    const document: TurnoverStockExportDocument = {
+      generatedAt: generatedAt.toISOString(),
+      ignoreActiveRequests,
+      fileName: `stock-${safeFileName(client.code)}-${formatIsoDate(generatedAt)}-${ignoreActiveRequests ? 'full' : 'available'}.xlsx`,
+      client,
+      totals: {
+        rows: exportRows.length,
+        skuCount: uniqueValues(exportRows.map((row) => row.skuId)).length,
+        boxesCount: uniqueValues(exportRows.map((row) => row.boxCode).filter((boxCode): boxCode is string => Boolean(boxCode))).length,
+        physicalQuantity: rows.reduce((sum, row) => sum + row.physicalQuantity, 0),
+        reservedQuantity: rows.reduce((sum, row) => sum + row.reservedQuantity, 0),
+        exportQuantity: exportRows.reduce((sum, row) => sum + row.exportQuantity, 0),
+      },
+      rows: exportRows,
+    };
+
+    return {
+      fileName: document.fileName,
+      mimeType: turnoverReceiptXlsxMimeType(),
+      content: buildTurnoverStockWorkbook(document),
+    };
+  }
+
+  private async applyActiveRequestReservations(clientId: string, rows: StockExportWorkingRow[]) {
+    const requests = await this.prisma.clientRequest.findMany({
+      where: {
+        clientId,
+        type: ClientRequestType.OUTBOUND,
+        status: { in: ACTIVE_STOCK_EXPORT_REQUEST_STATUSES },
+      },
+      select: {
+        items: {
+          select: {
+            skuId: true,
+            barcode: true,
+            quantity: true,
+          },
+        },
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+
+    if (requests.length === 0) {
+      return;
+    }
+
+    const rowsBySkuId = new Map<string, StockExportWorkingRow[]>();
+    const rowsByBarcode = new Map<string, StockExportWorkingRow[]>();
+    rows.forEach((row) => {
+      const skuRows = rowsBySkuId.get(row.skuId) ?? [];
+      skuRows.push(row);
+      rowsBySkuId.set(row.skuId, skuRows);
+
+      row.barcodeSet.forEach((barcode) => {
+        const barcodeRows = rowsByBarcode.get(barcode) ?? [];
+        barcodeRows.push(row);
+        rowsByBarcode.set(barcode, barcodeRows);
+      });
+    });
+
+    requests.forEach((request) => {
+      request.items.forEach((item) => {
+        let remainingQuantity = Math.max(0, item.quantity);
+        if (remainingQuantity === 0) {
+          return;
+        }
+
+        const skuRows = item.skuId ? rowsBySkuId.get(item.skuId) ?? [] : [];
+        const barcodeRows = item.barcode ? rowsByBarcode.get(item.barcode) ?? [] : [];
+        const candidates = (skuRows.length > 0 ? skuRows : barcodeRows).slice().sort(stockExportReservationSort);
+
+        for (const row of candidates) {
+          if (remainingQuantity <= 0) {
+            break;
+          }
+
+          const takeQuantity = Math.min(row.exportQuantity, remainingQuantity);
+          if (takeQuantity <= 0) {
+            continue;
+          }
+
+          row.reservedQuantity += takeQuantity;
+          row.exportQuantity -= takeQuantity;
+          remainingQuantity -= takeQuantity;
+        }
+      });
+    });
   }
 
   private buildSkuWhere(query: ListTurnoverDto, clientFilter: string | { in: string[] } | undefined): Prisma.SkuWhereInput {
@@ -881,6 +1331,20 @@ const INCOMING_DOCUMENT_MOVEMENT_TYPES: MovementType[] = [
 
 const DOCUMENT_MOVEMENT_TYPES: MovementType[] = [...INCOMING_DOCUMENT_MOVEMENT_TYPES, MovementType.SHIP];
 
+const ACTIVE_STOCK_EXPORT_REQUEST_STATUSES: ClientRequestStatus[] = [
+  ClientRequestStatus.IN_WORK,
+];
+
+const stockExportBalanceInclude = {
+  sku: {
+    include: {
+      barcodes: { orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }] },
+    },
+  },
+  box: { select: { id: true, code: true, status: true } },
+  pallet: { select: { id: true, code: true, status: true } },
+} satisfies Prisma.StockBalanceInclude;
+
 const receiptDocumentInclude = {
   client: { select: { id: true, code: true, name: true } },
   sku: {
@@ -890,6 +1354,8 @@ const receiptDocumentInclude = {
       clientSku: true,
       article: true,
       name: true,
+      color: true,
+      size: true,
       barcodes: { select: { value: true, isPrimary: true }, orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }] },
     },
   },
@@ -898,6 +1364,24 @@ const receiptDocumentInclude = {
 } satisfies Prisma.StockMovementInclude;
 
 type ReceiptDocumentMovement = Prisma.StockMovementGetPayload<{ include: typeof receiptDocumentInclude }>;
+
+const receiptPeriodInclude = {
+  sku: {
+    select: {
+      id: true,
+      internalSku: true,
+      clientSku: true,
+      name: true,
+      color: true,
+      size: true,
+      barcodes: { select: { value: true, isPrimary: true }, orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }] },
+    },
+  },
+  box: { select: { id: true, code: true } },
+  productMarks: { select: { value: true }, orderBy: [{ value: 'asc' }] },
+} satisfies Prisma.StockMovementInclude;
+
+type ReceiptPeriodMovement = Prisma.StockMovementGetPayload<{ include: typeof receiptPeriodInclude }>;
 
 function buildReceiptDocument(movementId: string, movements: ReceiptDocumentMovement[], sourceDocument: string | null): TurnoverReceiptDocument {
   const first = movements[0];
@@ -916,6 +1400,8 @@ function buildReceiptDocument(movementId: string, movements: ReceiptDocumentMove
       clientSku: movement.sku.clientSku,
       article: movement.sku.article,
       name: movement.sku.name,
+      color: movement.sku.color,
+      size: movement.sku.size,
       quantity: Math.abs(movement.quantity),
       status: movement.status,
       statusLabel: stockStatusLabel(movement.status),
@@ -942,6 +1428,72 @@ function buildReceiptDocument(movementId: string, movements: ReceiptDocumentMove
     client: first.client,
     rows,
   };
+}
+
+function buildReceiptPeriodDocument(
+  client: { id: string; code: string; name: string },
+  movements: ReceiptPeriodMovement[],
+  query: ListTurnoverDto,
+): TurnoverReceiptPeriodDocument {
+  const rows = movements.flatMap((movement) => receiptPeriodRowsFromMovement(movement));
+  const periodFrom = query.dateFrom ?? movements[0]?.createdAt.toISOString() ?? null;
+  const periodTo = query.dateTo ?? movements[movements.length - 1]?.createdAt.toISOString() ?? null;
+  const periodName = [query.dateFrom || 'all', query.dateTo || query.dateFrom || 'all'].join('_');
+
+  return {
+    generatedAt: new Date().toISOString(),
+    periodFrom,
+    periodTo,
+    totalQuantity: rows.reduce((sum, row) => sum + row.quantity, 0),
+    skuCount: uniqueValues(movements.map((movement) => movement.skuId)).length,
+    boxesCount: uniqueValues(rows.map((row) => row.boxCode).filter((boxCode): boxCode is string => Boolean(boxCode))).length,
+    fileName: `receipt-${safeFileName(client.code)}-${safeFileName(periodName)}.xlsx`,
+    client,
+    rows: rows.map((row, index) => ({ ...row, position: index + 1 })),
+  };
+}
+
+function receiptPeriodRowsFromMovement(movement: ReceiptPeriodMovement): Omit<TurnoverReceiptPeriodDocument['rows'][number], 'position'>[] {
+  const primaryBarcode = movement.sku.barcodes.find((barcode) => barcode.isPrimary)?.value ?? movement.sku.barcodes[0]?.value ?? null;
+  const marks = movement.productMarks.map((mark) => mark.value).filter(Boolean);
+  const baseRow = {
+    movementId: movement.id,
+    date: movement.createdAt.toISOString(),
+    boxCode: movement.box?.code ?? null,
+    barcode: primaryBarcode,
+    name: movement.sku.name,
+    clientSku: movement.sku.clientSku,
+    color: movement.sku.color,
+    size: movement.sku.size,
+    sourceDocument: movement.sourceDocument,
+  };
+
+  if (marks.length === 0) {
+    return [
+      {
+        ...baseRow,
+        kiz: null,
+        quantity: Math.abs(movement.quantity),
+      },
+    ];
+  }
+
+  const rows: Omit<TurnoverReceiptPeriodDocument['rows'][number], 'position'>[] = marks.map((kiz) => ({
+    ...baseRow,
+    kiz,
+    quantity: 1,
+  }));
+  const quantityWithoutKiz = Math.max(0, Math.abs(movement.quantity) - marks.length);
+
+  if (quantityWithoutKiz > 0) {
+    rows.push({
+      ...baseRow,
+      kiz: null,
+      quantity: quantityWithoutKiz,
+    });
+  }
+
+  return rows;
 }
 
 function isDocumentMovement(movement: { type: MovementType; quantity: number }) {
@@ -1103,6 +1655,45 @@ function parseKizValues(value?: string) {
       .map((item) => item.trim())
       .filter(Boolean),
   );
+}
+
+function stockExportRowSort(a: StockExportWorkingRow, b: StockExportWorkingRow) {
+  return (
+    (a.boxCode ?? '').localeCompare(b.boxCode ?? '', 'ru') ||
+    a.name.localeCompare(b.name, 'ru') ||
+    (a.barcode ?? '').localeCompare(b.barcode ?? '', 'ru') ||
+    a.status.localeCompare(b.status)
+  );
+}
+
+function stockExportReservationSort(a: StockExportWorkingRow, b: StockExportWorkingRow) {
+  return (
+    stockExportReservationStatusWeight(a.status) - stockExportReservationStatusWeight(b.status) ||
+    stockExportRowSort(a, b)
+  );
+}
+
+function stockExportReservationStatusWeight(status: StockStatus) {
+  const weights: Partial<Record<StockStatus, number>> = {
+    PACKING: 0,
+    SHIPPING: 1,
+    RESERVED: 2,
+    AVAILABLE: 3,
+  };
+
+  return weights[status] ?? 9;
+}
+
+function stockExportMarkKey(skuId: string, boxId: string | null, status: StockStatus) {
+  return [skuId, boxId ?? 'no-box', status].join(':');
+}
+
+function parseBooleanFlag(value?: string) {
+  return ['true', '1', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
+}
+
+function formatIsoDate(value: Date) {
+  return value.toISOString().slice(0, 10);
 }
 
 function safeFileName(value: string) {

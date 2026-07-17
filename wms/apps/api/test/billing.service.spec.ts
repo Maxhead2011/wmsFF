@@ -3,7 +3,6 @@ import {
   BillingChargeSource,
   BillingChargeStatus,
   BillingInvoiceStatus,
-  BillingPaymentStatus,
   BillingUnit,
   ClientNotificationEvent,
   MovementType,
@@ -625,7 +624,6 @@ describe('BillingService', () => {
           status: BillingInvoiceStatus.ISSUED,
           issuedAt: new Date('2026-06-15T00:00:00.000Z'),
           paidAt: null,
-          payments: [],
         }),
       },
       $transaction: vi.fn((callback) => callback(tx)),
@@ -672,7 +670,6 @@ describe('BillingService', () => {
           status: BillingInvoiceStatus.DRAFT,
           issuedAt: null,
           paidAt: null,
-          payments: [],
         }),
       },
       $transaction: vi.fn((callback) => callback(tx)),
@@ -702,103 +699,6 @@ describe('BillingService', () => {
           title: 'Статус счета изменен',
           body: 'Счет № INV-202606-0001: черновик -> выставлен',
           severity: 'INFO',
-        }),
-      }),
-    );
-  });
-
-  it('resets virtual paid amount when a paid invoice is returned to issued without payment records', async () => {
-    const tx = {
-      billingInvoice: {
-        update: vi.fn().mockResolvedValue({ id: 'invoice-1', status: BillingInvoiceStatus.ISSUED }),
-      },
-      clientNotificationPreference: {
-        findUnique: vi.fn().mockResolvedValue(null),
-      },
-      clientNotification: {
-        create: vi.fn().mockResolvedValue({ id: 'notification-1' }),
-      },
-    };
-    const prisma = {
-      billingInvoice: {
-        findUnique: vi.fn().mockResolvedValue({
-          id: 'invoice-1',
-          number: 'INV-202606-0001',
-          clientId: 'client-1',
-          totalRub: '100.00',
-          paidRub: '100.00',
-          status: BillingInvoiceStatus.PAID,
-          issuedAt: new Date('2026-06-15T00:00:00.000Z'),
-          paidAt: new Date('2026-06-16T00:00:00.000Z'),
-          payments: [],
-        }),
-      },
-      $transaction: vi.fn((callback) => callback(tx)),
-    };
-    const service = new BillingService(prisma as never, clientScopes());
-
-    await service.updateInvoiceStatus(
-      'invoice-1',
-      { status: BillingInvoiceStatus.ISSUED },
-      user({ clientIds: ['client-1'], writableClientIds: ['client-1'] }),
-    );
-
-    expect(tx.billingInvoice.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          status: BillingInvoiceStatus.ISSUED,
-          paidRub: 0,
-          paidAt: null,
-        }),
-      }),
-    );
-  });
-
-  it('keeps recorded payment amount when a paid invoice is returned to issued', async () => {
-    const tx = {
-      billingInvoice: {
-        update: vi.fn().mockResolvedValue({ id: 'invoice-1', status: BillingInvoiceStatus.ISSUED }),
-      },
-      clientNotificationPreference: {
-        findUnique: vi.fn().mockResolvedValue(null),
-      },
-      clientNotification: {
-        create: vi.fn().mockResolvedValue({ id: 'notification-1' }),
-      },
-    };
-    const prisma = {
-      billingInvoice: {
-        findUnique: vi.fn().mockResolvedValue({
-          id: 'invoice-1',
-          number: 'INV-202606-0001',
-          clientId: 'client-1',
-          totalRub: '100.00',
-          paidRub: '100.00',
-          status: BillingInvoiceStatus.PAID,
-          issuedAt: new Date('2026-06-15T00:00:00.000Z'),
-          paidAt: new Date('2026-06-16T00:00:00.000Z'),
-          payments: [
-            { amountRub: '40.00', status: BillingPaymentStatus.RECORDED },
-            { amountRub: '20.00', status: BillingPaymentStatus.RECORDED },
-          ],
-        }),
-      },
-      $transaction: vi.fn((callback) => callback(tx)),
-    };
-    const service = new BillingService(prisma as never, clientScopes());
-
-    await service.updateInvoiceStatus(
-      'invoice-1',
-      { status: BillingInvoiceStatus.ISSUED },
-      user({ clientIds: ['client-1'], writableClientIds: ['client-1'] }),
-    );
-
-    expect(tx.billingInvoice.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          status: BillingInvoiceStatus.ISSUED,
-          paidRub: 60,
-          paidAt: null,
         }),
       }),
     );
@@ -1018,85 +918,97 @@ describe('BillingService', () => {
     });
   });
 
-  it('редактирует черновик с услугой без активной цены клиента, если цена указана в строке', async () => {
-    const invoice = {
-      id: 'invoice-1',
-      clientId: 'client-1',
-      requestId: null,
-      status: BillingInvoiceStatus.DRAFT,
+  it.each([BillingInvoiceStatus.DRAFT, BillingInvoiceStatus.ISSUED])(
+    'updates, adds, and removes rows in a %s invoice without payments',
+    async (invoiceStatus) => {
+    const invoice = billingInvoice({
+      status: invoiceStatus,
+      paidRub: '0',
       payments: [],
-      items: [{ id: 'item-old', chargeId: 'charge-old' }],
-    };
-    const serviceRow = {
-      id: 'service-clothes',
-      code: 'CLOTHES_PROCESSING',
-      name: 'Обработка одежды',
-      unit: BillingUnit.PIECE,
-      defaultPriceRub: null,
-      clientPrices: [],
+      requestId: 'request-1',
+      items: [
+        { id: 'item-keep', chargeId: 'charge-keep' },
+        { id: 'item-remove', chargeId: 'charge-remove' },
+      ],
+    });
+    const tx = {
+      billingCharge: {
+        update: vi.fn().mockResolvedValue({}),
+        create: vi.fn().mockResolvedValue({ id: 'charge-new' }),
+      },
+      billingInvoiceItem: {
+        update: vi.fn().mockResolvedValue({}),
+        create: vi.fn().mockResolvedValue({}),
+        deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
+        count: vi.fn().mockResolvedValue(0),
+      },
+      billingInvoice: {
+        update: vi.fn().mockResolvedValue({ id: 'invoice-1', totalRub: '60' }),
+      },
     };
     const prisma = {
       billingInvoice: {
         findUnique: vi.fn().mockResolvedValue(invoice),
-        update: vi.fn().mockResolvedValue({ id: 'invoice-1', totalRub: 150 }),
       },
       billingService: {
-        upsert: vi.fn().mockImplementation(async (args) => ({
-          id: `service-${args.where.code}`,
-          ...args.create,
-        })),
-        findMany: vi.fn().mockImplementation(async (args) => (args.where?.id?.in ? [serviceRow] : [])),
-      },
-      clientBillingService: {
-        upsert: vi.fn().mockResolvedValue({ id: 'client-price' }),
-      },
-      nomenclatureItem: {
+        upsert: vi.fn().mockResolvedValue({}),
         findMany: vi.fn().mockResolvedValue([]),
       },
-      billingInvoiceItem: {
-        deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
+      clientBillingService: {
+        upsert: vi.fn().mockResolvedValue({}),
       },
-      billingCharge: {
-        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
-        create: vi.fn().mockResolvedValue({ id: 'charge-new' }),
-      },
-      $transaction: vi.fn((callback) => callback(prisma)),
+      $transaction: vi.fn((callback) => callback(tx)),
     };
     const service = new BillingService(prisma as never, clientScopes());
 
-    await expect(
-      service.updateManualInvoice(
-        'invoice-1',
-        {
-          clientId: 'client-1',
-          periodFrom: '2026-07-01',
-          periodTo: '2026-07-01',
-          rows: [
-            {
-              serviceId: 'service-clothes',
-              description: 'Обработка одежды',
-              quantity: 3,
-              unitPriceRub: 50,
-              unit: BillingUnit.PIECE,
-            },
-          ],
-        },
-        user({ roleCodes: ['ADMIN'], permissionCodes: ['billing:write', 'system:admin'] }),
-      ),
-    ).resolves.toMatchObject({ id: 'invoice-1' });
+    await service.updateManualInvoice(
+      'invoice-1',
+      {
+        clientId: 'client-1',
+        periodFrom: '2026-06-01',
+        periodTo: '2026-06-30',
+        rows: [
+          {
+            invoiceItemId: 'item-keep',
+            description: 'Updated service',
+            unit: BillingUnit.SERVICE,
+            quantity: 2,
+            unitPriceRub: 25,
+          },
+          {
+            description: 'New service',
+            unit: BillingUnit.SERVICE,
+            quantity: 1,
+            unitPriceRub: 10,
+          },
+        ],
+      },
+      user({ clientIds: ['client-1'], writableClientIds: ['client-1'] }),
+    );
 
-    expect(prisma.billingCharge.create).toHaveBeenCalledWith(
+    expect(tx.billingInvoiceItem.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({
-          serviceId: 'service-clothes',
-          description: 'Обработка одежды',
-          quantity: 3,
-          unitPriceRub: 50,
-          totalRub: 150,
-        }),
+        where: { id: 'item-keep' },
+        data: expect.objectContaining({ totalRub: 50 }),
       }),
     );
-  });
+    expect(tx.billingInvoiceItem.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ invoiceId: 'invoice-1', chargeId: 'charge-new', totalRub: 10 }),
+      }),
+    );
+    expect(tx.billingInvoiceItem.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ['item-remove'] } } });
+    expect(tx.billingCharge.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'charge-remove' },
+        data: expect.objectContaining({ status: BillingChargeStatus.CANCELLED }),
+      }),
+    );
+    expect(tx.billingInvoice.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ totalRub: 60 }) }),
+    );
+    },
+  );
 });
 
 function clientScopes() {

@@ -1,0 +1,1 @@
+<selector xmlns:android="http://schemas.android.com/apk/res/android"><item android:color="@color/logoff_red" android:state_checked="true"/><item android:color="@color/logoff_text_muted"/></selector>

@@ -196,6 +196,26 @@
   gap: 8px;
 }
 
+.client-cabinet-online-receipts {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdff;
+  padding: 14px;
+}
+
+.client-cabinet-online-receipts__heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.client-cabinet-online-receipts__heading h3,
+.client-cabinet-online-receipts__heading p {
+  margin: 0;
+}
+
 .client-marketplace-panel,
 .client-cabinet-stock-import {
   display: grid;

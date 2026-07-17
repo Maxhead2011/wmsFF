@@ -4,6 +4,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { isClientNotificationEnabled } from '../client-notifications/client-notification-preferences';
+import { TelegramNotificationService } from '../client-notifications/telegram-notification.service';
 import { CreateClientRequestCommentDto } from './dto/create-client-request-comment.dto';
 
 @Injectable()
@@ -11,6 +12,7 @@ export class ClientRequestHistoryService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly clientScopes: ClientScopeService,
+    private readonly telegram?: TelegramNotificationService,
   ) {}
 
   async getTimeline(requestId: string, user: AuthUser) {
@@ -55,8 +57,13 @@ export class ClientRequestHistoryService {
       throw new BadRequestException('Комментарий не должен быть пустым.');
     }
 
+    const notifyClient =
+      !isInternal &&
+      shouldNotifyClient(user) &&
+      (await isClientNotificationEnabled(this.prisma, request.clientId, ClientNotificationEvent.REQUEST_COMMENT));
+
     // Русский комментарий: комментарий, событие и уведомление пишем одной транзакцией, чтобы история заявки не расходилась с кабинетом клиента.
-    return this.prisma.$transaction(async (tx) => {
+    const comment = await this.prisma.$transaction(async (tx) => {
       const comment = await tx.clientRequestComment.create({
         data: {
           requestId,
@@ -79,11 +86,7 @@ export class ClientRequestHistoryService {
         },
       });
 
-      if (
-        !isInternal &&
-        shouldNotifyClient(user) &&
-        (await isClientNotificationEnabled(tx, request.clientId, ClientNotificationEvent.REQUEST_COMMENT))
-      ) {
+      if (notifyClient) {
         await tx.clientNotification.create({
           data: {
             clientId: request.clientId,
@@ -98,6 +101,15 @@ export class ClientRequestHistoryService {
 
       return comment;
     });
+
+    if (notifyClient) {
+      void this.telegram?.notifyClient(
+        request.clientId,
+        ['LOGOFF WMS: новый комментарий по заявке.', `Заявка: ${request.title}`, body].join('\n'),
+      );
+    }
+
+    return comment;
   }
 
   private async getRequestForAccess(requestId: string) {

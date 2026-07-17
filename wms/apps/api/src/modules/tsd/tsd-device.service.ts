@@ -109,6 +109,7 @@ export class TsdDeviceService {
         id: true,
         code: true,
         name: true,
+        storesWithoutBoxes: true,
       },
     });
   }

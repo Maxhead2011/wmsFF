@@ -6,7 +6,6 @@ import { formatCabinetMoney, formatCabinetNumber } from './clientCabinetFormat';
 type ClientCabinetStorageWidgetProps = {
   accessToken: string;
   client: ClientSummary;
-  lastPaymentDate?: string | null;
 };
 
 type StorageWidgetState = {
@@ -15,10 +14,10 @@ type StorageWidgetState = {
   error?: string;
 };
 
-export function ClientCabinetStorageWidget({ accessToken, client, lastPaymentDate }: ClientCabinetStorageWidgetProps) {
+export function ClientCabinetStorageWidget({ accessToken, client }: ClientCabinetStorageWidgetProps) {
   const [state, setState] = useState<StorageWidgetState>({ status: 'idle', overview: null });
   const [periodTo, setPeriodTo] = useState(today());
-  const periodFrom = dateOnly(lastPaymentDate) ?? dateOnly(client.createdAt) ?? monthStart(periodTo);
+  const periodFrom = monthStart(periodTo);
 
   useEffect(() => {
     if (!client.storageAccountingEnabled) {
@@ -86,9 +85,7 @@ export function ClientCabinetStorageWidget({ accessToken, client, lastPaymentDat
 
   const overview = state.overview;
   const tariff = overview?.tariffRubPerLiterDay ?? numberValue(client.storagePriceRubPerLiterDay);
-  const periodLabel = lastPaymentDate
-    ? `с последней оплаты ${formatDate(periodFrom)} по ${formatDate(periodTo)}`
-    : `с ${formatDate(periodFrom)} по ${formatDate(periodTo)}`;
+  const periodLabel = `с ${formatDate(periodFrom)} по ${formatDate(periodTo)}`;
 
   return (
     <section className="client-storage-widget" aria-label="Хранение клиента">
@@ -152,11 +149,6 @@ function formatDate(value: string) {
 function numberValue(value: string | number | null | undefined) {
   const numeric = Number(value ?? 0);
   return Number.isFinite(numeric) ? numeric : 0;
-}
-
-function dateOnly(value: string | null | undefined) {
-  const match = value?.match(/^\d{4}-\d{2}-\d{2}/);
-  return match?.[0] ?? null;
 }
 
 function today() {

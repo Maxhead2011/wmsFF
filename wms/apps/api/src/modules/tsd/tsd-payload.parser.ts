@@ -6,10 +6,10 @@ import { InventoryScanPayload, MoveScanPayload, ReceiptScanPayload } from './tsd
 export class TsdPayloadParser {
   parseMovePayload(payload: Record<string, unknown>): MoveScanPayload {
     const clientId = this.stringValue(payload.clientId, 'clientId');
-    const fromBoxCode = this.stringValue(payload.fromBoxCode, 'fromBoxCode');
-    const toBoxCode = this.stringValue(payload.toBoxCode, 'toBoxCode');
+    const fromBoxCode = this.boxCodeValue(payload.fromBoxCode, 'fromBoxCode');
+    const toBoxCode = this.boxCodeValue(payload.toBoxCode, 'toBoxCode');
     const quantity = this.numberValue(payload.quantity, 'quantity');
-    const barcode = this.optionalStringValue(payload.barcode);
+    const barcode = this.productBarcodeValue(payload.barcode);
     const skuId = this.optionalStringValue(payload.skuId);
 
     if (!barcode && !skuId) {
@@ -30,11 +30,11 @@ export class TsdPayloadParser {
 
   parseReceiptPayload(payload: Record<string, unknown>): ReceiptScanPayload {
     const clientId = this.stringValue(payload.clientId, 'clientId');
-    const boxCode = this.stringValue(payload.boxCode ?? payload.toBoxCode, 'boxCode');
+    const boxCode = this.optionalBoxCodeValue(payload.boxCode ?? payload.toBoxCode);
     const quantity = this.numberValue(payload.quantity, 'quantity');
-    const barcode = this.optionalStringValue(payload.barcode);
+    const barcode = this.productBarcodeValue(payload.barcode);
     const skuId = this.optionalStringValue(payload.skuId);
-    const kiz = this.optionalStringValue(payload.kiz);
+    const kiz = this.kizValue(payload.kiz);
 
     if (!barcode && !skuId) {
       throw new BadRequestException('Для receipt_scan нужен barcode или skuId.');
@@ -55,9 +55,9 @@ export class TsdPayloadParser {
 
   parseInventoryPayload(payload: Record<string, unknown>): InventoryScanPayload {
     const clientId = this.stringValue(payload.clientId, 'clientId');
-    const boxCode = this.stringValue(payload.boxCode, 'boxCode');
+    const boxCode = this.boxCodeValue(payload.boxCode, 'boxCode');
     const countedQuantity = this.nonNegativeNumberValue(payload.countedQuantity ?? payload.quantity, 'countedQuantity');
-    const barcode = this.optionalStringValue(payload.barcode);
+    const barcode = this.productBarcodeValue(payload.barcode);
     const skuId = this.optionalStringValue(payload.skuId);
 
     if (!barcode && !skuId) {
@@ -84,6 +84,53 @@ export class TsdPayloadParser {
 
   private optionalStringValue(value: unknown) {
     return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  }
+
+  private boxCodeValue(value: unknown, field: string) {
+    const result = this.stringValue(value, field);
+    if (!isFflBoxCode(result)) {
+      throw new BadRequestException('Номер короба должен начинаться с FFL. Отсканируйте корректный ШК короба.');
+    }
+    return result.trim();
+  }
+
+  private optionalBoxCodeValue(value: unknown) {
+    const result = this.optionalStringValue(value);
+    if (!result) {
+      return undefined;
+    }
+    if (!isFflBoxCode(result)) {
+      throw new BadRequestException('Номер короба должен начинаться с FFL. Отсканируйте корректный ШК короба.');
+    }
+    return result;
+  }
+
+  private productBarcodeValue(value: unknown) {
+    const result = this.optionalStringValue(value);
+    if (!result) {
+      return undefined;
+    }
+    if (isFflBoxCode(result)) {
+      throw new BadRequestException('В поле ШК товара отсканирован номер короба. Отсканируйте ШК товара.');
+    }
+    if (result.length > 13) {
+      throw new BadRequestException('ШК товара не должен быть длиннее 13 символов. Возможно, отсканирован КИЗ.');
+    }
+    return result;
+  }
+
+  private kizValue(value: unknown) {
+    const result = this.optionalStringValue(value);
+    if (!result) {
+      return undefined;
+    }
+    if (isFflBoxCode(result)) {
+      throw new BadRequestException('В поле КИЗ отсканирован номер короба. Отсканируйте КИЗ товара.');
+    }
+    if (result.length <= 20) {
+      throw new BadRequestException('КИЗ должен быть длиннее 20 символов. Возможно, отсканирован ШК товара.');
+    }
+    return result;
   }
 
   private optionalStockStatus(value: unknown) {
@@ -115,4 +162,8 @@ export class TsdPayloadParser {
 
     return parsed;
   }
+}
+
+function isFflBoxCode(value: string) {
+  return value.trim().toLocaleUpperCase('ru-RU').startsWith('FFL');
 }

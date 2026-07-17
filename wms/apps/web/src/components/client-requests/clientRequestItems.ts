@@ -1,26 +1,21 @@
 export type ClientRequestDraftItem = {
   skuId: string;
-  internalSku: string;
-  clientSku: string;
-  article: string;
-  color: string;
-  size: string;
   name: string;
   barcode: string;
   quantity: string;
   comment: string;
+  internalSku?: string;
+  clientSku?: string;
+  article?: string;
+  color?: string;
+  size?: string;
 };
 
-export const MAX_CLIENT_REQUEST_ITEMS = 100;
+export const MAX_CLIENT_REQUEST_ITEMS = 300;
 
 export function emptyClientRequestItem(): ClientRequestDraftItem {
   return {
     skuId: '',
-    internalSku: '',
-    clientSku: '',
-    article: '',
-    color: '',
-    size: '',
     name: '',
     barcode: '',
     quantity: '1',
@@ -64,11 +59,6 @@ export function parseClientRequestItemsText(raw: string) {
 
     return {
       skuId: '',
-      internalSku: '',
-      clientSku: '',
-      article: '',
-      color: '',
-      size: '',
       barcode: barcode.trim(),
       name: name.trim(),
       quantity: normalizeQuantity(quantity),

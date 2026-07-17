@@ -1,20 +1,21 @@
-import { Printer, Smartphone, UserCog, UserPlus } from 'lucide-react';
+import { KeyRound, Printer, ShieldCheck, Smartphone, UserPlus } from 'lucide-react';
 import { useState } from 'react';
 import type { AuthSession, AuthUser } from '../../lib/api';
 import './access.css';
 import { TsdDeviceAdminPanel } from './TsdDeviceAdminPanel';
 import { UserCreateForm } from './UserCreateForm';
+import { UserRoleEditor } from './UserRoleEditor';
 import { UserPrinterScopeEditor } from './UserPrinterScopeEditor';
-import { UserManagementPanel } from './UserManagementPanel';
+import { UserScopeEditor } from './UserScopeEditor';
 
 type AccessAdminPanelProps = {
   session: AuthSession;
 };
 
-type AccessTab = 'users' | 'create' | 'printers' | 'tsd';
+type AccessTab = 'create' | 'roles' | 'scopes' | 'printers' | 'tsd';
 
 export function AccessAdminPanel({ session }: AccessAdminPanelProps) {
-  const [activeTab, setActiveTab] = useState<AccessTab>('users');
+  const [activeTab, setActiveTab] = useState<AccessTab>('create');
 
   if (!canUse(session.user, 'users:write')) {
     return null;
@@ -31,16 +32,6 @@ export function AccessAdminPanel({ session }: AccessAdminPanelProps) {
 
       <div className="access-tabs" role="tablist" aria-label="Раздел доступа">
         <button
-          aria-selected={activeTab === 'users'}
-          className={activeTab === 'users' ? 'active' : ''}
-          onClick={() => setActiveTab('users')}
-          role="tab"
-          type="button"
-        >
-          <UserCog size={16} aria-hidden="true" />
-          <span>Пользователи</span>
-        </button>
-        <button
           aria-selected={activeTab === 'create'}
           className={activeTab === 'create' ? 'active' : ''}
           onClick={() => setActiveTab('create')}
@@ -49,6 +40,26 @@ export function AccessAdminPanel({ session }: AccessAdminPanelProps) {
         >
           <UserPlus size={16} aria-hidden="true" />
           <span>Создать</span>
+        </button>
+        <button
+          aria-selected={activeTab === 'roles'}
+          className={activeTab === 'roles' ? 'active' : ''}
+          onClick={() => setActiveTab('roles')}
+          role="tab"
+          type="button"
+        >
+          <KeyRound size={16} aria-hidden="true" />
+          <span>Роли</span>
+        </button>
+        <button
+          aria-selected={activeTab === 'scopes'}
+          className={activeTab === 'scopes' ? 'active' : ''}
+          onClick={() => setActiveTab('scopes')}
+          role="tab"
+          type="button"
+        >
+          <ShieldCheck size={16} aria-hidden="true" />
+          <span>Доступы</span>
         </button>
         <button
           aria-selected={activeTab === 'tsd'}
@@ -72,8 +83,9 @@ export function AccessAdminPanel({ session }: AccessAdminPanelProps) {
         </button>
       </div>
 
-      {activeTab === 'users' ? <UserManagementPanel session={session} /> : null}
       {activeTab === 'create' ? <UserCreateForm session={session} /> : null}
+      {activeTab === 'roles' ? <UserRoleEditor session={session} /> : null}
+      {activeTab === 'scopes' ? <UserScopeEditor session={session} /> : null}
       {activeTab === 'printers' ? <UserPrinterScopeEditor session={session} /> : null}
       {activeTab === 'tsd' ? <TsdDeviceAdminPanel session={session} /> : null}
     </section>

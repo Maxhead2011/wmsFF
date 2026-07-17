@@ -1,5 +1,13 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { ClientRequestType, Prisma, StockStatus } from '@prisma/client';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ClientRequestEventType,
+  ClientRequestPriority,
+  ClientRequestStatus,
+  ClientRequestType,
+  PickWaveStatus,
+  Prisma,
+  StockStatus,
+} from '@prisma/client';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
@@ -24,21 +32,309 @@ import type {
   WarehouseWholeBoxRow,
 } from './pick-instruction.types';
 import { buildPickInstructionWorkbook, pickInstructionXlsxMimeType } from './pick-instruction-xlsx';
+import {
+  isManualPickInstructionFileName,
+  ManualPickInstructionParseError,
+  manualPickInstructionDisplayFilePrefix,
+  manualPickInstructionPlanFilePrefix,
+  parseManualPickInstructionWorkbook,
+  type ManualInstructionRow,
+  type ParsedManualPickInstruction,
+} from './manual-pick-instruction';
 
 type RequestForInstruction = Prisma.ClientRequestGetPayload<typeof pickInstructionRequestArgs>;
 type RequestItemForInstruction = RequestForInstruction['items'][number];
 type SkuForInstruction = NonNullable<RequestItemForInstruction['sku']>;
 type SkuCatalogForInstruction = Prisma.SkuGetPayload<typeof skuCatalogArgs>;
 type BalanceForInstruction = Prisma.StockBalanceGetPayload<typeof stockBalanceArgs>;
+type PickInstructionWithHtml = PickInstructionDocument & { html: string };
+type WarehousePlan = {
+  rows: WarehouseInstructionRow[];
+  wholeBoxes: WarehouseWholeBoxRow[];
+  balanceMoves: WarehouseBalanceMoveRow[];
+  balanceLabels: WarehouseBalanceLabelRow[];
+  markRows: WarehouseMarkRow[];
+};
+type WarehouseReservation = {
+  orderId: string;
+  balanceId: string;
+  sourceBox: string;
+  quantity: number;
+};
+type BuiltWarehousePlan = WarehousePlan & {
+  reservations: WarehouseReservation[];
+};
+export type ForcedWarehouseAllocation = {
+  orderId: string;
+  balanceId: string;
+  quantity: number;
+};
+type CompiledManualPickInstruction = {
+  version: 1;
+  originalFileName: string;
+  uploadedAt: string;
+  outboundQuantity: number;
+  balanceQuantity: number;
+  shortageQuantity: number;
+  warehousePlan: WarehousePlan;
+};
+
+const maxManualInstructionFileSizeBytes = 10 * 1024 * 1024;
+// A request starts reserving stock only after it is explicitly moved to work.
+// Draft/review requests remain previews and must not change instructions for
+// warehouse operations that are already running.
+const activeReservationStatuses = new Set<ClientRequestStatus>([ClientRequestStatus.IN_WORK]);
 
 @Injectable()
 export class PickInstructionService {
+  private readonly instructionCache = new Map<string, { expiresAt: number; promise: Promise<PickInstructionWithHtml> }>();
+  private readonly instructionCacheTtlMs = 15000;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly clientScopes: ClientScopeService,
   ) {}
 
   async getRequestInstruction(requestId: string, user: AuthUser) {
+    const now = Date.now();
+    const cacheKey = `${requestId}:${user.id}`;
+    const cached = this.instructionCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) {
+      return cached.promise;
+    }
+
+    this.pruneInstructionCache(now);
+    const promise = this.buildRequestInstruction(requestId, user);
+    this.instructionCache.set(cacheKey, { expiresAt: now + this.instructionCacheTtlMs, promise });
+
+    try {
+      return await promise;
+    } catch (error) {
+      if (this.instructionCache.get(cacheKey)?.promise === promise) {
+        this.instructionCache.delete(cacheKey);
+      }
+      throw error;
+    }
+  }
+
+  async buildWaveDraft(
+    requestIds: string[],
+    user: AuthUser,
+    forcedAllocations: ForcedWarehouseAllocation[] = [],
+  ) {
+    const ids = [...new Set(requestIds.map((id) => id.trim()).filter(Boolean))];
+    if (ids.length === 0) {
+      throw new BadRequestException('Для волны сборки нужна хотя бы одна заявка.');
+    }
+
+    const requests = await this.prisma.clientRequest.findMany({
+      where: { id: { in: ids } },
+      ...pickInstructionRequestArgs,
+    });
+    if (requests.length !== ids.length) {
+      throw new NotFoundException('Одна или несколько заявок волны не найдены.');
+    }
+
+    const clientIds = new Set(requests.map((request) => request.clientId));
+    if (clientIds.size !== 1) {
+      throw new BadRequestException('В одной волне могут находиться только заявки одного клиента.');
+    }
+
+    const clientId = requests[0].clientId;
+    const contexts: Array<{
+      request: RequestForInstruction;
+      rows: ReturnType<PickInstructionService['prepareRows']>;
+      auxiliary: WarehouseAuxiliaryData;
+    }> = [];
+    for (const request of requests.sort(compareRequestReservationOrder)) {
+      this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+      if (request.type !== ClientRequestType.OUTBOUND) {
+        throw new BadRequestException('В волну можно включить только заявки на отгрузку.');
+      }
+      const rows = this.prepareRows(request, await this.resolveMissingSkusByBarcode(request));
+      contexts.push({
+        request,
+        rows,
+        auxiliary: await this.loadWarehouseAuxiliaryData(request.clientId, request.files),
+      });
+    }
+
+    const allRows = contexts.flatMap((context) => context.rows);
+    const balances = await this.loadAvailableBalances(clientId, allRows, true);
+    const requestIdByOrderId = new Map<string, string>();
+    const destinationCityByOrderId = new Map<string, string>();
+    contexts.forEach((context) => {
+      context.rows.forEach((row) => {
+        requestIdByOrderId.set(row.item.id, context.request.id);
+        destinationCityByOrderId.set(row.item.id, context.request.destinationCity ?? '');
+      });
+    });
+
+    const plan = await this.buildWarehousePlan(
+      contexts[0].request,
+      allRows,
+      cloneBalances(balances),
+      mergeWarehouseAuxiliaryData(contexts.map((context) => context.auxiliary)),
+      { requestIdByOrderId, destinationCityByOrderId, forcedAllocations },
+    );
+    const plannedByBalanceId = new Map<string, number>();
+    plan.reservations.forEach((reservation) => {
+      plannedByBalanceId.set(
+        reservation.balanceId,
+        (plannedByBalanceId.get(reservation.balanceId) ?? 0) + reservation.quantity,
+      );
+    });
+    const involvedBoxes = new Set(plan.reservations.map((reservation) => normalizeInstructionBoxCode(reservation.sourceBox)));
+    const balanceLines = balances
+      .filter((balance) => Boolean(balance.box?.code) && involvedBoxes.has(normalizeInstructionBoxCode(balance.box!.code)))
+      .map((balance) => {
+        const plannedQuantity = plannedByBalanceId.get(balance.id) ?? 0;
+        const remainingQuantity = Math.max(0, balance.quantity - plannedQuantity);
+        return {
+          balanceId: balance.id,
+          sourceBoxId: balance.boxId,
+          sourceBoxCode: balance.box?.code ?? '',
+          skuId: balance.skuId,
+          internalSku: balance.sku.internalSku,
+          barcode: primaryBarcodeValue(balance.sku),
+          name: balance.sku.name,
+          color: balance.sku.color,
+          size: balance.sku.size,
+          originalQuantity: balance.quantity,
+          plannedQuantity,
+          remainingQuantity,
+        };
+      })
+      .filter((line) => line.remainingQuantity > 0)
+      .sort(
+        (left, right) =>
+          left.sourceBoxCode.localeCompare(right.sourceBoxCode, 'ru', { numeric: true }) ||
+          left.internalSku.localeCompare(right.internalSku, 'ru', { numeric: true }),
+      );
+
+    return {
+      client: contexts[0].request.client,
+      requests: contexts.map((context) => ({
+        id: context.request.id,
+        title: context.request.title,
+        destinationCity: context.request.destinationCity,
+        status: context.request.status,
+      })),
+      generatedAt: new Date().toISOString(),
+      plan,
+      balanceLines,
+    };
+  }
+
+  async getActiveRequestBoxOverlaps(user: AuthUser) {
+    this.requireBoxOverlapAccess(user);
+    const activeStatuses = [
+      ClientRequestStatus.SUBMITTED,
+      ClientRequestStatus.IN_REVIEW,
+      ClientRequestStatus.APPROVED,
+      ClientRequestStatus.IN_WORK,
+    ];
+    const requests = await this.prisma.clientRequest.findMany({
+      where: { type: ClientRequestType.OUTBOUND, status: { in: activeStatuses } },
+      select: {
+        id: true,
+        clientId: true,
+        title: true,
+        status: true,
+        destinationCity: true,
+        createdAt: true,
+        client: { select: { id: true, code: true, name: true } },
+      },
+      orderBy: [{ createdAt: 'asc' }],
+      take: 300,
+    });
+    const requestIds = requests.map((request) => request.id);
+    const pickedMovements = requestIds.length
+      ? await this.prisma.stockMovement.findMany({
+          where: {
+            sourceDocument: { in: requestIds },
+            type: 'PICK',
+            status: StockStatus.PACKING,
+            quantity: { gt: 0 },
+            boxId: { not: null },
+          },
+          select: { sourceDocument: true, box: { select: { code: true } } },
+        })
+      : [];
+    const pickedBoxes = new Map<string, Set<string>>();
+    for (const movement of pickedMovements) {
+      if (!movement.sourceDocument || !movement.box?.code) continue;
+      const values = pickedBoxes.get(movement.sourceDocument) ?? new Set<string>();
+      values.add(movement.box.code);
+      pickedBoxes.set(movement.sourceDocument, values);
+    }
+
+    const plans = new Map<string, Set<string>>();
+    const errors: Array<{ requestId: string; title: string; message: string }> = [];
+    for (let index = 0; index < requests.length; index += 6) {
+      const portion = requests.slice(index, index + 6);
+      const results = await Promise.allSettled(portion.map((request) => this.getRequestInstruction(request.id, user)));
+      results.forEach((result, resultIndex) => {
+        const request = portion[resultIndex];
+        if (result.status === 'rejected') {
+          errors.push({ requestId: request.id, title: request.title, message: overlapErrorMessage(result.reason) });
+          return;
+        }
+        const document = result.value;
+        const planned = instructionSourceBoxes(document);
+        const picked = pickedBoxes.get(request.id) ?? new Set<string>();
+        plans.set(
+          request.id,
+          request.status === ClientRequestStatus.IN_WORK && picked.size > 0 && document.instructionSource !== 'MANUAL'
+            ? picked
+            : new Set([...planned, ...picked]),
+        );
+      });
+    }
+
+    const boxes = new Map<string, { boxCode: string; clientId: string; requests: typeof requests }>();
+    for (const request of requests) {
+      for (const boxCode of plans.get(request.id) ?? []) {
+        const key = `${request.clientId}:${normalizeInstructionBoxCode(boxCode)}`;
+        const entry = boxes.get(key) ?? { boxCode, clientId: request.clientId, requests: [] };
+        entry.requests.push(request);
+        boxes.set(key, entry);
+      }
+    }
+    const overlaps = [...boxes.values()]
+      .filter((entry) => entry.requests.length > 1)
+      .sort((left, right) => right.requests.length - left.requests.length || left.boxCode.localeCompare(right.boxCode, 'ru'))
+      .map((entry) => ({
+        boxCode: entry.boxCode,
+        clientId: entry.clientId,
+        client: entry.requests[0].client,
+        requests: entry.requests.map((request) => ({
+          id: request.id,
+          title: request.title,
+          status: request.status,
+          destinationCity: request.destinationCity,
+          createdAt: request.createdAt,
+        })),
+      }));
+    const conflictingRequestIds = new Set(overlaps.flatMap((entry) => entry.requests.map((request) => request.id)));
+    const statusCounts = activeStatuses.map((status) => ({
+      status,
+      count: requests.filter((request) => request.status === status).length,
+    }));
+
+    return {
+      generatedAt: new Date().toISOString(),
+      activeRequestsCount: requests.length,
+      checkedRequestsCount: plans.size,
+      requestsWithOverlapsCount: conflictingRequestIds.size,
+      overlappingBoxesCount: overlaps.length,
+      statusCounts,
+      overlaps,
+      errors,
+    };
+  }
+
+  private async buildRequestInstruction(requestId: string, user: AuthUser): Promise<PickInstructionWithHtml> {
     const request = await this.prisma.clientRequest.findUnique({
       where: { id: requestId },
       ...pickInstructionRequestArgs,
@@ -56,11 +352,26 @@ export class PickInstructionService {
 
     const skuByBarcode = await this.resolveMissingSkusByBarcode(request);
     const rows = this.prepareRows(request, skuByBarcode);
+    const manualInstruction = this.readCompiledManualInstruction(request.files);
     const auxiliary = await this.loadWarehouseAuxiliaryData(request.clientId, request.files);
-    const balances = await this.loadAvailableBalances(request.clientId, rows, auxiliary.mapping.size > 0);
-    const { instructionRows, boxAllocations } = this.allocateRows(rows, balances);
-    const boxes = await this.buildBoxSummaries(request.clientId, boxAllocations);
-    const warehousePlan = await this.buildWarehousePlan(request, rows, balances, auxiliary);
+    const allBalances = await this.loadAvailableBalances(request.clientId, rows, true);
+    const planning = await this.buildActiveRequestPlanningContext(request, rows, allBalances, auxiliary);
+    const balances = planning.balances;
+    const warehousePlan = manualInstruction ? manualInstruction.warehousePlan : planning.plan;
+    const allocated = manualInstruction
+      ? this.allocateRows(rows, balances)
+      : this.allocateRowsFromWarehouseReservations(rows, balances, planning.plan.reservations);
+    const instructionRows = allocated.instructionRows;
+    const boxes = await this.buildBoxSummaries(request.clientId, allocated.boxAllocations);
+    const manualBoxCodes = manualInstruction
+      ? new Set(
+          [
+            ...warehousePlan.rows.map((row) => row.sourceBox),
+            ...warehousePlan.wholeBoxes.map((row) => row.box),
+            ...warehousePlan.balanceMoves.map((row) => row.sourceBox),
+          ].filter(Boolean),
+        )
+      : null;
 
     const document: PickInstructionDocument = {
       requestId: request.id,
@@ -77,13 +388,17 @@ export class PickInstructionService {
       destinationCity: request.destinationCity,
       deliveryAddress: request.deliveryAddress,
       totalRequested: instructionRows.reduce((sum, row) => sum + row.requestedQuantity, 0),
-      totalAllocated: instructionRows.reduce((sum, row) => sum + row.allocatedQuantity, 0),
-      totalShortage: instructionRows.reduce((sum, row) => sum + row.shortageQuantity, 0),
+      totalAllocated: manualInstruction
+        ? manualInstruction.outboundQuantity
+        : instructionRows.reduce((sum, row) => sum + row.allocatedQuantity, 0),
+      totalShortage: manualInstruction
+        ? manualInstruction.shortageQuantity
+        : instructionRows.reduce((sum, row) => sum + row.shortageQuantity, 0),
       rowsCount: instructionRows.length,
       readyRowsCount: instructionRows.filter((row) => row.status === 'READY').length,
       shortageRowsCount: instructionRows.filter((row) => row.status !== 'READY').length,
-      boxesCount: boxes.length,
-      fullBoxesCount: boxes.filter((box) => box.isFullBox).length,
+      boxesCount: manualBoxCodes?.size ?? boxes.length,
+      fullBoxesCount: manualInstruction ? warehousePlan.wholeBoxes.length : boxes.filter((box) => box.isFullBox).length,
       rows: instructionRows,
       boxes,
       warehouseRows: warehousePlan.rows,
@@ -91,12 +406,386 @@ export class PickInstructionService {
       warehouseBalanceMoves: warehousePlan.balanceMoves,
       warehouseBalanceLabels: warehousePlan.balanceLabels,
       warehouseMarkRows: warehousePlan.markRows,
+      instructionSource: manualInstruction ? 'MANUAL' : 'AUTOMATIC',
+      manualInstructionFileName: manualInstruction?.originalFileName ?? null,
+      manualInstructionUploadedAt: manualInstruction?.uploadedAt ?? null,
     };
 
     return {
       ...document,
       html: renderPickInstructionHtml(document),
     };
+  }
+
+  private pruneInstructionCache(now: number) {
+    for (const [key, value] of this.instructionCache.entries()) {
+      if (value.expiresAt <= now) {
+        this.instructionCache.delete(key);
+      }
+    }
+  }
+
+  private async buildActiveRequestPlanningContext(
+    request: RequestForInstruction,
+    rows: ReturnType<PickInstructionService['prepareRows']>,
+    allBalances: BalanceForInstruction[],
+    auxiliary: WarehouseAuxiliaryData,
+  ): Promise<{ balances: BalanceForInstruction[]; plan: BuiltWarehousePlan }> {
+    const frozenWaveLink =
+      typeof this.prisma.pickWaveRequest?.findFirst === 'function'
+        ? await this.prisma.pickWaveRequest.findFirst({
+            where: {
+              requestId: request.id,
+              wave: { status: { in: [PickWaveStatus.FROZEN, PickWaveStatus.PICKING, PickWaveStatus.DONE, PickWaveStatus.FAILED] } },
+            },
+            include: {
+              wave: {
+                select: {
+                  plan: true,
+                  requests: {
+                    select: {
+                      requestId: true,
+                      request: { select: { items: { select: { id: true } } } },
+                    },
+                    orderBy: { requestId: 'asc' },
+                  },
+                },
+              },
+            },
+            orderBy: { wave: { createdAt: 'desc' } },
+          })
+        : null;
+    const frozenPlan = readPersistedWavePlan(frozenWaveLink?.wave.plan);
+    if (frozenWaveLink && frozenPlan) {
+      const requestIdByOrderId = new Map<string, string>();
+      frozenWaveLink.wave.requests.forEach((link) => {
+        link.request.items.forEach((item) => requestIdByOrderId.set(item.id, link.requestId));
+      });
+      return {
+        balances: cloneBalances(allBalances),
+        plan: sliceJointWarehousePlan(
+          frozenPlan,
+          new Set(rows.map((row) => row.item.id)),
+          request.id,
+          requestIdByOrderId,
+          frozenWaveLink.wave.requests.map((link) => link.requestId),
+        ),
+      };
+    }
+
+    if (!activeReservationStatuses.has(request.status)) {
+      return {
+        balances: cloneBalances(allBalances),
+        plan: await this.buildWarehousePlan(request, rows, cloneBalances(allBalances), auxiliary),
+      };
+    }
+
+    const peerRequests = await this.prisma.clientRequest.findMany({
+      where: {
+        clientId: request.clientId,
+        type: ClientRequestType.OUTBOUND,
+        status: { in: [...activeReservationStatuses] },
+      },
+      ...pickInstructionRequestArgs,
+    });
+    const requests = [...new Map([request, ...peerRequests].map((candidate) => [candidate.id, candidate])).values()].sort(
+      compareRequestReservationOrder,
+    );
+    const contexts: Array<{
+      request: RequestForInstruction;
+      rows: ReturnType<PickInstructionService['prepareRows']>;
+      auxiliary: WarehouseAuxiliaryData;
+    }> = [];
+
+    for (const candidate of requests) {
+      contexts.push({
+        request: candidate,
+        rows:
+          candidate.id === request.id
+            ? rows
+            : this.prepareRows(candidate, await this.resolveMissingSkusByBarcode(candidate)),
+        auxiliary:
+          candidate.id === request.id
+            ? auxiliary
+            : await this.loadWarehouseAuxiliaryData(candidate.clientId, candidate.files),
+      });
+    }
+
+    // Automatic requests for one client must be planned as one combined shipment.
+    // Otherwise the same physical box is independently selected by every city.
+    if (!contexts.some((context) => this.readCompiledManualInstruction(context.request.files))) {
+      const planningBalances = await this.loadBalancesAtActiveBatchStart(request.clientId, requests, allBalances);
+      const requestIdByOrderId = new Map<string, string>();
+      const destinationCityByOrderId = new Map<string, string>();
+      contexts.forEach((context) => {
+        context.rows.forEach((row) => {
+          requestIdByOrderId.set(row.item.id, context.request.id);
+          destinationCityByOrderId.set(row.item.id, context.request.destinationCity ?? '');
+        });
+      });
+      const jointPlan = await this.buildWarehousePlan(
+        request,
+        contexts.flatMap((context) => context.rows),
+        cloneBalances(planningBalances),
+        mergeWarehouseAuxiliaryData(contexts.map((context) => context.auxiliary)),
+        { requestIdByOrderId, destinationCityByOrderId },
+      );
+
+      return {
+        balances: cloneBalances(planningBalances),
+        plan: sliceJointWarehousePlan(
+          jointPlan,
+          new Set(rows.map((row) => row.item.id)),
+          request.id,
+          requestIdByOrderId,
+          requests.map((candidate) => candidate.id),
+        ),
+      };
+    }
+
+    let availableBalances = cloneBalances(allBalances);
+    const entries: Array<{
+      request: RequestForInstruction;
+      rows: ReturnType<PickInstructionService['prepareRows']>;
+      auxiliary: WarehouseAuxiliaryData;
+      balances: BalanceForInstruction[];
+      plan: BuiltWarehousePlan;
+    }> = [];
+
+    for (const context of contexts) {
+      const candidate = context.request;
+      const candidateRows = context.rows;
+      const candidateAuxiliary = context.auxiliary;
+      const balancesBefore = cloneBalances(availableBalances);
+      const manualInstruction = this.readCompiledManualInstruction(candidate.files);
+      const plan = manualInstruction
+        ? {
+            ...manualInstruction.warehousePlan,
+            reservations: this.allocateRows(candidateRows, balancesBefore).instructionRows.flatMap((row) =>
+              row.allocations.map((allocation) => ({
+                orderId: row.itemId,
+                balanceId: allocation.balanceId,
+                sourceBox: allocation.boxCode,
+                quantity: allocation.quantity,
+              })),
+            ),
+          }
+        : await this.buildWarehousePlan(candidate, candidateRows, balancesBefore, candidateAuxiliary);
+
+      entries.push({ request: candidate, rows: candidateRows, auxiliary: candidateAuxiliary, balances: balancesBefore, plan });
+      availableBalances = applyWarehouseReservations(availableBalances, plan.reservations);
+    }
+
+    const current = entries.find((entry) => entry.request.id === request.id);
+    if (!current) {
+      const balances = cloneBalances(allBalances);
+      return { balances, plan: await this.buildWarehousePlan(request, rows, balances, auxiliary) };
+    }
+
+    return { balances: current.balances, plan: current.plan };
+  }
+
+  private async loadBalancesAtActiveBatchStart(
+    clientId: string,
+    requests: RequestForInstruction[],
+    currentBalances: BalanceForInstruction[],
+  ): Promise<BalanceForInstruction[]> {
+    if (
+      typeof this.prisma.clientRequestEvent?.findFirst !== 'function' ||
+      typeof this.prisma.stockMovement?.groupBy !== 'function'
+    ) {
+      return cloneBalances(currentBalances);
+    }
+
+    const firstInWorkEvent = await this.prisma.clientRequestEvent.findFirst({
+      where: {
+        requestId: { in: requests.map((candidate) => candidate.id) },
+        statusTo: ClientRequestStatus.IN_WORK,
+      },
+      orderBy: { createdAt: 'asc' },
+      select: { createdAt: true },
+    });
+    if (!firstInWorkEvent) {
+      return cloneBalances(currentBalances);
+    }
+
+    const snapshotGroups = await this.prisma.stockMovement.groupBy({
+      by: ['skuId', 'boxId', 'palletId', 'status'],
+      where: {
+        clientId,
+        status: StockStatus.AVAILABLE,
+        boxId: { not: null },
+        createdAt: { lte: firstInWorkEvent.createdAt },
+      },
+      _sum: { quantity: true },
+    });
+    const positiveGroups = snapshotGroups.filter((group) => (group._sum.quantity ?? 0) > 0 && Boolean(group.boxId));
+    if (positiveGroups.length === 0 && currentBalances.length > 0) {
+      return cloneBalances(currentBalances);
+    }
+
+    const skuIds = [...new Set(positiveGroups.map((group) => group.skuId))];
+    const boxIds = [...new Set(positiveGroups.map((group) => group.boxId).filter((id): id is string => Boolean(id)))];
+    const palletIds = [...new Set(positiveGroups.map((group) => group.palletId).filter((id): id is string => Boolean(id)))];
+    const [skus, boxes, pallets] = await Promise.all([
+      this.prisma.sku.findMany({ where: { id: { in: skuIds } }, ...skuCatalogArgs }),
+      this.prisma.box.findMany({ where: { id: { in: boxIds } }, select: { id: true, code: true } }),
+      palletIds.length > 0
+        ? this.prisma.pallet.findMany({ where: { id: { in: palletIds } }, select: { id: true, code: true } })
+        : Promise.resolve([]),
+    ]);
+    const skuById = new Map(skus.map((sku) => [sku.id, sku]));
+    const boxById = new Map(boxes.map((box) => [box.id, box]));
+    const palletById = new Map(pallets.map((pallet) => [pallet.id, pallet]));
+
+    return positiveGroups
+      .map((group): BalanceForInstruction | null => {
+        const boxId = group.boxId;
+        const sku = skuById.get(group.skuId);
+        const box = boxId ? boxById.get(boxId) : undefined;
+        if (!boxId || !sku || !box) {
+          return null;
+        }
+        const snapshotKey = `${group.skuId}:${boxId}:${group.palletId ?? ''}:${group.status}`;
+        return {
+          id: `snapshot:${snapshotKey}`,
+          balanceKey: `snapshot:${snapshotKey}`,
+          clientId,
+          skuId: group.skuId,
+          boxId,
+          palletId: group.palletId,
+          status: group.status,
+          quantity: group._sum.quantity ?? 0,
+          updatedAt: firstInWorkEvent.createdAt,
+          sku,
+          box,
+          pallet: group.palletId ? palletById.get(group.palletId) ?? null : null,
+        };
+      })
+      .filter((balance): balance is BalanceForInstruction => Boolean(balance))
+      .sort(compareInstructionBalances);
+  }
+
+  private requireBoxOverlapAccess(user: AuthUser) {
+    if (user.permissionCodes.includes('system:admin') || user.roleCodes.some((code) => code === 'ADMIN' || code === 'OWNER')) {
+      return;
+    }
+    throw new ForbiddenException('Статистика пересечений коробов доступна администраторам и владельцам.');
+  }
+
+  async refreshRequestInstruction(requestId: string, user: AuthUser) {
+    this.requireInstructionRefreshAccess(user);
+    this.invalidateRequestInstruction(requestId);
+    return this.getRequestInstruction(requestId, user);
+  }
+
+  async uploadManualRequestInstruction(requestId: string, file: Express.Multer.File | undefined, user: AuthUser) {
+    this.requireManualInstructionAccess(user);
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('Excel-файл инструкции не передан.');
+    }
+    if (file.buffer.length > maxManualInstructionFileSizeBytes) {
+      throw new BadRequestException('Файл инструкции больше 10 МБ.');
+    }
+    if (!/\.xlsx$/i.test(file.originalname || '')) {
+      throw new BadRequestException('Загрузите инструкцию в формате XLSX.');
+    }
+
+    const request = await this.prisma.clientRequest.findUnique({
+      where: { id: requestId },
+      ...pickInstructionRequestArgs,
+    });
+    if (!request) {
+      throw new NotFoundException('Клиентская заявка не найдена.');
+    }
+    this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+    if (request.type !== ClientRequestType.OUTBOUND) {
+      throw new BadRequestException('Своя складская инструкция доступна только для заявок на отгрузку.');
+    }
+    if (
+      request.status === ClientRequestStatus.DONE ||
+      request.status === ClientRequestStatus.CANCELLED ||
+      request.status === ClientRequestStatus.REJECTED
+    ) {
+      throw new BadRequestException('Нельзя перестроить завершенную, отмененную или отклоненную заявку.');
+    }
+
+    let parsed: ParsedManualPickInstruction;
+    try {
+      parsed = parseManualPickInstructionWorkbook(file.buffer);
+    } catch (error) {
+      if (error instanceof ManualPickInstructionParseError) {
+        throw new BadRequestException(error.issues.join('\n'));
+      }
+      throw error;
+    }
+
+    await this.validateManualPickInstruction(request, parsed);
+    const uploadedAt = new Date();
+    const warehousePlan = await this.buildManualWarehousePlan(parsed, request.client.name, uploadedAt);
+    const originalFileName = safeFileName(file.originalname || 'Инструкция_для_склада.xlsx');
+    const stamp = uploadedAt.toISOString().replace(/\D/g, '').slice(0, 14);
+    const compiled: CompiledManualPickInstruction = {
+      version: 1,
+      originalFileName,
+      uploadedAt: uploadedAt.toISOString(),
+      outboundQuantity: parsed.outboundQuantity,
+      balanceQuantity: parsed.balanceQuantity,
+      shortageQuantity: parsed.shortageQuantity,
+      warehousePlan,
+    };
+    const compiledContent = Buffer.from(JSON.stringify(compiled), 'utf8');
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.clientRequestFile.create({
+        data: {
+          requestId: request.id,
+          clientId: request.clientId,
+          fileName: `${manualPickInstructionDisplayFilePrefix}${stamp} - ${originalFileName}`,
+          mimeType: file.mimetype || pickInstructionXlsxMimeType(),
+          sizeBytes: file.buffer.length,
+          content: Uint8Array.from(file.buffer),
+          uploadedByUserId: user.id,
+        },
+      });
+      await tx.clientRequestFile.create({
+        data: {
+          requestId: request.id,
+          clientId: request.clientId,
+          fileName: `${manualPickInstructionPlanFilePrefix}${stamp}__${originalFileName}.json`,
+          mimeType: 'application/vnd.logoff.manual-pick-instruction+json',
+          sizeBytes: compiledContent.length,
+          content: Uint8Array.from(compiledContent),
+          uploadedByUserId: user.id,
+        },
+      });
+      await tx.clientRequestEvent.create({
+        data: {
+          requestId: request.id,
+          clientId: request.clientId,
+          eventType: ClientRequestEventType.FILE_UPLOADED,
+          title: 'Складская инструкция заменена вручную',
+          body: [
+            `Файл: ${originalFileName}`,
+            `к отправке: ${parsed.outboundQuantity} шт.`,
+            `на баланс: ${parsed.balanceQuantity} шт.`,
+            `дефицит: ${parsed.shortageQuantity} шт.`,
+          ].join('; '),
+          createdByUserId: user.id,
+        },
+      });
+    });
+
+    this.invalidateRequestInstruction(requestId);
+    return this.getRequestInstruction(requestId, user);
+  }
+
+  invalidateRequestInstruction(requestId: string) {
+    for (const key of this.instructionCache.keys()) {
+      if (key === requestId || key.startsWith(`${requestId}:`)) {
+        this.instructionCache.delete(key);
+      }
+    }
   }
 
   async getRequestInstructionXlsx(requestId: string, user: AuthUser) {
@@ -107,6 +796,21 @@ export class PickInstructionService {
       mimeType: pickInstructionXlsxMimeType(),
       content: buildPickInstructionWorkbook(document),
     };
+  }
+
+  private requireInstructionRefreshAccess(user: AuthUser) {
+    if (user.permissionCodes.includes('system:admin') || user.roleCodes.some((role) => ['ADMIN', 'OWNER', 'MANAGER'].includes(role))) {
+      return;
+    }
+
+    throw new ForbiddenException('Обновлять инструкцию может администратор, владелец или менеджер.');
+  }
+
+  private requireManualInstructionAccess(user: AuthUser) {
+    if (user.permissionCodes.includes('system:admin') || user.roleCodes.some((role) => ['ADMIN', 'OWNER'].includes(role))) {
+      return;
+    }
+    throw new ForbiddenException('Загружать свою инструкцию может только администратор или владелец.');
   }
 
   private async resolveMissingSkusByBarcode(request: RequestForInstruction) {
@@ -183,7 +887,7 @@ export class PickInstructionService {
       return [];
     }
 
-    return this.prisma.stockBalance.findMany({
+    const balances = await this.prisma.stockBalance.findMany({
       where: {
         clientId,
         skuId: includeAllClientBalances ? undefined : { in: skuIds },
@@ -192,8 +896,13 @@ export class PickInstructionService {
         boxId: { not: null },
       },
       ...stockBalanceArgs,
-      orderBy: [{ updatedAt: 'asc' }],
+      orderBy: [{ id: 'asc' }],
     });
+
+    // The reference warehouse algorithm walks the 1C stock export in box-code
+    // order. updatedAt is operational metadata and must not change which box is
+    // selected for the same request after an unrelated edit.
+    return balances.sort(compareInstructionBalances);
   }
 
   private async loadWarehouseAuxiliaryData(clientId: string, files: RequestForInstruction['files'] = []): Promise<WarehouseAuxiliaryData> {
@@ -226,7 +935,9 @@ export class PickInstructionService {
 
   private readAuxiliaryWorkbook(files: RequestForInstruction['files'] = []): WarehouseAuxiliaryData {
     const empty = emptyWarehouseAuxiliaryData();
-    const sourceFile = files.find((file) => /\.xlsx?$/i.test(file.fileName) || file.mimeType.includes('spreadsheet'));
+    const sourceFile = files.find(
+      (file) => !isManualPickInstructionFileName(file.fileName) && (/\.xlsx?$/i.test(file.fileName) || file.mimeType.includes('spreadsheet')),
+    );
     if (!sourceFile) {
       return empty;
     }
@@ -318,22 +1029,96 @@ export class PickInstructionService {
     return { instructionRows, boxAllocations };
   }
 
+  private allocateRowsFromWarehouseReservations(
+    rows: ReturnType<PickInstructionService['prepareRows']>,
+    balances: BalanceForInstruction[],
+    reservations: WarehouseReservation[],
+  ) {
+    const balancesById = new Map(balances.map((balance) => [balance.id, balance]));
+    const reservationsByOrderId = new Map<string, WarehouseReservation[]>();
+    reservations.forEach((reservation) => {
+      reservationsByOrderId.set(reservation.orderId, [
+        ...(reservationsByOrderId.get(reservation.orderId) ?? []),
+        reservation,
+      ]);
+    });
+    const boxAllocations = new Map<string, { box: BalanceForInstruction; allocatedQuantity: number; lineIds: Set<string> }>();
+    const instructionRows: PickInstructionRow[] = [];
+
+    for (const row of rows) {
+      const allocations: PickInstructionAllocation[] = [];
+      for (const reservation of reservationsByOrderId.get(row.item.id) ?? []) {
+        const balance = balancesById.get(reservation.balanceId);
+        if (!balance?.boxId || !balance.box || reservation.quantity <= 0) {
+          continue;
+        }
+        allocations.push({
+          balanceId: balance.id,
+          boxId: balance.boxId,
+          boxCode: balance.box.code,
+          palletId: balance.palletId,
+          palletCode: balance.pallet?.code ?? null,
+          quantity: reservation.quantity,
+        });
+        const boxAllocation = boxAllocations.get(balance.boxId) ?? {
+          box: balance,
+          allocatedQuantity: 0,
+          lineIds: new Set<string>(),
+        };
+        boxAllocation.allocatedQuantity += reservation.quantity;
+        boxAllocation.lineIds.add(row.item.id);
+        boxAllocations.set(balance.boxId, boxAllocation);
+      }
+
+      const allocatedQuantity = allocations.reduce((sum, allocation) => sum + allocation.quantity, 0);
+      const shortageQuantity = Math.max(0, row.requestedQuantity - allocatedQuantity);
+      const status = this.rowStatus(row, shortageQuantity);
+      instructionRows.push({
+        position: row.position,
+        itemId: row.item.id,
+        skuId: row.skuId,
+        internalSku: row.internalSku,
+        name: row.name,
+        barcode: row.barcode,
+        requestedQuantity: row.requestedQuantity,
+        allocatedQuantity,
+        shortageQuantity,
+        status,
+        statusLabel: rowStatusLabel(status),
+        comment: this.rowComment(row, shortageQuantity),
+        allocations,
+      });
+    }
+
+    return { instructionRows, boxAllocations };
+  }
+
   private async buildWarehousePlan(
     request: RequestForInstruction,
     rows: ReturnType<PickInstructionService['prepareRows']>,
     balances: BalanceForInstruction[],
     auxiliary: WarehouseAuxiliaryData,
-  ) {
-    const demands = rows.map((row) => {
+    options: {
+      requestIdByOrderId?: Map<string, string>;
+      destinationCityByOrderId?: Map<string, string>;
+      forcedAllocations?: ForcedWarehouseAllocation[];
+    } = {},
+  ): Promise<BuiltWarehousePlan> {
+    const demands = rows.map((row, demandIndex) => {
       const meta = parseRequestItemComment(row.item.comment);
+      const artSeller = meta.artSeller || instructionSkuArticle(row.sku) || row.internalSku || row.name || '';
+      const targetRecord = meta.relabelTargetBarcode ? auxiliary.shk.get(meta.relabelTargetBarcode) : undefined;
       return {
+        requestId: options.requestIdByOrderId?.get(row.item.id) ?? request.id,
         orderId: row.item.id,
+        demandIndex,
         skuId: row.skuId,
-        artSeller: meta.artSeller || row.internalSku || row.name || '',
+        artSeller,
+        targetArt: targetRecord?.article || artSeller,
         barcode: row.barcode ?? '',
         size: normalizeSize(meta.size || row.sku?.size || ''),
         name: normalizeName(row.name || row.item.name || row.sku?.name || ''),
-        city: meta.city || request.destinationCity || '',
+        city: meta.city || options.destinationCityByOrderId?.get(row.item.id) || request.destinationCity || '',
         needsRelabel: meta.needsRelabel || Boolean(row.sku?.needsRelabel),
         relabelSourceBarcode: meta.relabelSourceBarcode,
         relabelTargetBarcode: meta.relabelTargetBarcode,
@@ -342,7 +1127,29 @@ export class PickInstructionService {
       };
     });
     const demandById = new Map(demands.map((demand) => [demand.orderId, demand]));
+    const forcedByBalanceId = new Map<string, Map<string, number>>();
+    const forcedQuantityByOrderId = new Map<string, number>();
+    for (const allocation of options.forcedAllocations ?? []) {
+      if (!demandById.has(allocation.orderId) || allocation.quantity <= 0) {
+        throw new BadRequestException('В распределении балансов найдена неизвестная или пустая позиция заявки.');
+      }
+      const byOrderId = forcedByBalanceId.get(allocation.balanceId) ?? new Map<string, number>();
+      byOrderId.set(allocation.orderId, (byOrderId.get(allocation.orderId) ?? 0) + allocation.quantity);
+      forcedByBalanceId.set(allocation.balanceId, byOrderId);
+      forcedQuantityByOrderId.set(
+        allocation.orderId,
+        (forcedQuantityByOrderId.get(allocation.orderId) ?? 0) + allocation.quantity,
+      );
+    }
+    for (const demand of demands) {
+      const forcedQuantity = forcedQuantityByOrderId.get(demand.orderId) ?? 0;
+      if (forcedQuantity > demand.required) {
+        throw new BadRequestException(`Распределение баланса превышает количество позиции ${demand.artSeller || demand.barcode}.`);
+      }
+      demand.remaining -= forcedQuantity;
+    }
     const inventoryByBox = new Map<string, WarehouseInventoryItem[]>();
+    const inventoryByBalanceId = new Map<string, WarehouseInventoryItem>();
 
     balances.forEach((balance, index) => {
       if (!balance.box?.code || balance.quantity <= 0) {
@@ -356,7 +1163,8 @@ export class PickInstructionService {
         pallet: balance.pallet?.code ?? auxiliary.boxToPallet.get(balance.box.code) ?? '',
         skuId: balance.skuId,
         barcode: primaryBarcodeValue(sku),
-        artWarehouse: sku.internalSku || sku.article || sku.clientSku || sku.name,
+        barcodes: sku.barcodes.map((barcode) => barcode.value).filter(Boolean),
+        artWarehouse: instructionSkuArticle(sku) || sku.name,
         name: normalizeName(sku.name),
         size: normalizeSize(sku.size || ''),
         quantity: balance.quantity,
@@ -364,6 +1172,7 @@ export class PickInstructionService {
         suitableDemands: [],
       };
       inventoryByBox.set(item.box, [...(inventoryByBox.get(item.box) ?? []), item]);
+      inventoryByBalanceId.set(item.id, item);
     });
 
     for (const items of inventoryByBox.values()) {
@@ -374,8 +1183,23 @@ export class PickInstructionService {
       }
     }
 
+    forcedByBalanceId.forEach((allocations, balanceId) => {
+      const item = inventoryByBalanceId.get(balanceId);
+      const forcedTotal = [...allocations.values()].reduce((sum, quantity) => sum + quantity, 0);
+      if (!item || forcedTotal > item.originalQuantity) {
+        throw new BadRequestException('Выбранный остаток уже изменился или его недостаточно для распределения.');
+      }
+      allocations.forEach((_quantity, orderId) => {
+        if (!item.suitableDemands.includes(orderId)) {
+          throw new BadRequestException('Выбранный остаток не соответствует товару в заявке.');
+        }
+      });
+    });
+
     const actions: WarehouseAction[] = [];
     const shipmentBoxes = new Set<string>();
+    const shipmentMoveSourceBoxes = new Set<string>();
+    const committedForcedAllocations = new Set<string>();
     const tolerance = 0;
     const remainingOf = (orderId: string) => demandById.get(orderId)?.remaining ?? 0;
     const decreaseRemaining = (orderId: string, amount: number) => {
@@ -392,20 +1216,27 @@ export class PickInstructionService {
       }
 
       const tempRemaining = new Map(demands.map((demand) => [demand.orderId, demand.remaining]));
-      const tempAssign: Array<{ item: WarehouseInventoryItem; orderId: string; quantity: number }> = [];
+      const tempAssign: Array<{ item: WarehouseInventoryItem; orderId: string; quantity: number; forced: boolean }> = [];
 
       for (const item of items) {
         let remainingInItem = item.quantity;
+        for (const [orderId, quantity] of forcedByBalanceId.get(item.id) ?? []) {
+          if (quantity > remainingInItem) {
+            throw new BadRequestException('Выбранного остатка недостаточно для распределения по городам.');
+          }
+          remainingInItem -= quantity;
+          tempAssign.push({ item, orderId, quantity, forced: true });
+        }
         const suitable = item.suitableDemands
           .filter((orderId) => (tempRemaining.get(orderId) ?? 0) > -tolerance)
-          .sort((left, right) => (tempRemaining.get(right) ?? 0) - (tempRemaining.get(left) ?? 0));
+          .sort((left, right) => compareDemandPriority(left, right, tempRemaining, demandById));
 
         for (const orderId of suitable) {
           const take = Math.min(remainingInItem, (tempRemaining.get(orderId) ?? 0) + tolerance);
           if (take > 0) {
             tempRemaining.set(orderId, (tempRemaining.get(orderId) ?? 0) - take);
             remainingInItem -= take;
-            tempAssign.push({ item, orderId, quantity: take });
+            tempAssign.push({ item, orderId, quantity: take, forced: false });
           }
           if (remainingInItem === 0) {
             break;
@@ -414,15 +1245,30 @@ export class PickInstructionService {
       }
 
       const useful = tempAssign.reduce((sum, row) => sum + row.quantity, 0);
-      if (Math.abs(totalItems - useful) <= tolerance) {
+      const isCompletelyUsed = Math.abs(totalItems - useful) <= tolerance;
+      const isMajorityUsed = totalItems > 0 && useful / totalItems > 0.5;
+      if (useful > 0 && (isCompletelyUsed || isMajorityUsed)) {
         shipmentBoxes.add(box);
+        const wholeBoxNeedsRelabel = isCompletelyUsed && tempAssign.some((assignment) => {
+          const demand = demandById.get(assignment.orderId);
+          return Boolean(demand && needsWarehouseRelabel(assignment.item, demand));
+        });
         for (const assignment of tempAssign) {
           const demand = demandById.get(assignment.orderId)!;
-          decreaseRemaining(assignment.orderId, assignment.quantity);
+          if (assignment.forced) {
+            committedForcedAllocations.add(`${assignment.item.id}:${assignment.orderId}`);
+          } else {
+            decreaseRemaining(assignment.orderId, assignment.quantity);
+          }
           assignment.item.quantity -= assignment.quantity;
           const rebrandNote = relabelNote(assignment.item, demand);
-          const targetBox =
-            useful === totalItems ? (rebrandNote ? 'МАРК ЦЕЛЫЙ' : 'ЦЕЛЫЙ') : rebrandNote ? 'МАРК ПОСТАВКА' : 'ПОСТАВКА';
+          const targetBox = isCompletelyUsed
+            ? wholeBoxNeedsRelabel
+              ? 'МАРК ЦЕЛЫЙ'
+              : 'ЦЕЛЫЙ'
+            : rebrandNote
+              ? 'МАРК ПОСТАВКА'
+              : 'ПОСТАВКА';
           actions.push(actionFromAssignment(assignment.item, demand, assignment.quantity, targetBox, rebrandNote, ''));
         }
 
@@ -437,18 +1283,43 @@ export class PickInstructionService {
       }
     }
 
-    if (demands.some((demand) => demand.remaining > -tolerance)) {
+    if (demands.some((demand) => demand.remaining > -tolerance) || forcedByBalanceId.size > 0) {
       for (const [box, items] of inventoryByBox.entries()) {
         if (shipmentBoxes.has(box)) {
           continue;
         }
         for (const item of items) {
+          for (const [orderId, quantity] of forcedByBalanceId.get(item.id) ?? []) {
+            const forcedKey = `${item.id}:${orderId}`;
+            if (committedForcedAllocations.has(forcedKey)) {
+              continue;
+            }
+            if (quantity > item.quantity) {
+              throw new BadRequestException('Выбранный остаток уже занят другой позицией волны.');
+            }
+            const demand = demandById.get(orderId)!;
+            const rebrandNote = relabelNote(item, demand);
+            actions.push(
+              actionFromAssignment(
+                item,
+                demand,
+                quantity,
+                rebrandNote ? 'МАРК ПОСТАВКА' : 'ПОСТАВКА',
+                rebrandNote,
+                'Добавлено клиентом при проверке балансов',
+              ),
+            );
+            item.quantity -= quantity;
+            shipmentMoveSourceBoxes.add(box);
+            committedForcedAllocations.add(forcedKey);
+          }
           if (item.quantity === 0) {
             continue;
           }
+          const currentRemaining = new Map(demands.map((demand) => [demand.orderId, demand.remaining]));
           const suitable = item.suitableDemands
             .filter((orderId) => remainingOf(orderId) > -tolerance)
-            .sort((left, right) => remainingOf(right) - remainingOf(left));
+            .sort((left, right) => compareDemandPriority(left, right, currentRemaining, demandById));
           for (const orderId of suitable) {
             const demand = demandById.get(orderId)!;
             const take = Math.min(item.quantity, remainingOf(orderId) + tolerance);
@@ -457,20 +1328,9 @@ export class PickInstructionService {
               item.quantity -= take;
               const rebrandNote = relabelNote(item, demand);
               actions.push(actionFromAssignment(item, demand, take, rebrandNote ? 'МАРК ПОСТАВКА' : 'ПОСТАВКА', rebrandNote, ''));
+              shipmentMoveSourceBoxes.add(box);
             }
           }
-        }
-      }
-    }
-
-    const usedBoxes = new Set(actions.filter((action) => action.sourceBox && action.targetBox !== 'БАЛАНС').map((action) => action.sourceBox));
-    for (const [box, items] of inventoryByBox.entries()) {
-      if (!usedBoxes.has(box)) {
-        continue;
-      }
-      for (const item of items) {
-        if (item.quantity > 0) {
-          actions.push(balanceAction(item));
         }
       }
     }
@@ -478,6 +1338,9 @@ export class PickInstructionService {
     for (const demand of demands) {
       if (demand.remaining > 0) {
         actions.push({
+          requestId: demand.requestId,
+          orderId: demand.orderId,
+          balanceId: '',
           city: demand.city,
           sourceBox: '',
           pallet: '',
@@ -495,7 +1358,6 @@ export class PickInstructionService {
     }
 
     const generatedAt = new Date();
-    const usedShipmentBoxes = new Set(actions.filter((action) => action.sourceBox && action.targetBox !== 'БАЛАНС').map((action) => action.sourceBox));
     const existingBalanceBoxCodes = await this.loadExistingBalanceBoxCodes(generatedAt);
     const balanceBoxBySourceBox = assignBalanceBoxCodes(actions, existingBalanceBoxCodes, generatedAt);
     const wholeBoxCities = new Map<string, Set<string>>();
@@ -505,23 +1367,29 @@ export class PickInstructionService {
       }
     });
 
-    const warehouseRows: WarehouseInstructionRow[] = actions.map((action) => ({
-      city: action.city,
-      sourceBox: action.sourceBox,
-      targetBox: balanceBoxBySourceBox.get(action.sourceBox) ?? '',
-      pallet: action.pallet || auxiliary.boxToPallet.get(action.sourceBox) || '',
-      artOnBox: action.targetArt || action.artOnBox,
-      barcodeOnBox: action.targetBarcode || action.barcodeOnBox,
-      size: action.size,
-      quantity: action.quantity,
-      comment: warehouseActionComment(action, usedShipmentBoxes, balanceBoxBySourceBox, wholeBoxCities),
-      rebrandNote: action.rebrandNote,
-      note:
-        action.targetBox === 'БАЛАНС' && balanceBoxBySourceBox.has(action.sourceBox)
-          ? `${action.note}; новый короб ${balanceBoxBySourceBox.get(action.sourceBox)}`
-          : action.note,
-    }));
-    const balanceMoves = buildBalanceMoves(actions, balanceBoxBySourceBox, auxiliary.boxToPallet);
+    const warehouseRows: WarehouseInstructionRow[] = actions
+      .filter((action) => action.targetBox !== 'БАЛАНС')
+      .map((action) => {
+        const actionComment = warehouseActionComment(action, wholeBoxCities);
+        return {
+          orderId: action.orderId,
+          city: action.city,
+          sourceBox: action.sourceBox,
+          targetBox: balanceBoxBySourceBox.get(action.sourceBox) ?? '',
+          pallet: action.pallet || auxiliary.boxToPallet.get(action.sourceBox) || '',
+          artOnBox: action.artOnBox,
+          barcodeOnBox: action.barcodeOnBox,
+          size: instructionSize(action.size),
+          quantity: action.quantity,
+          comment: actionComment,
+          rebrandNote: action.rebrandNote,
+          note:
+            action.targetBox === 'БАЛАНС' && balanceBoxBySourceBox.has(action.sourceBox)
+              ? `${action.note}; новый короб ${balanceBoxBySourceBox.get(action.sourceBox)}`
+              : action.note,
+        };
+      });
+    const balanceMoves = buildBalanceMoves(actions, balanceBoxBySourceBox, shipmentMoveSourceBoxes, auxiliary.boxToPallet);
     const balanceLabels = buildBalanceLabels(balanceMoves, request.client.name);
 
     return {
@@ -530,6 +1398,253 @@ export class PickInstructionService {
       balanceMoves,
       balanceLabels,
       markRows: buildMarkRows(actions, auxiliary.shk),
+      reservations: collapseWarehouseReservations(
+        actions
+          .filter((action) => action.orderId && action.balanceId && action.sourceBox && action.targetBox !== 'БАЛАНС')
+          .map((action) => ({
+            orderId: action.orderId,
+            balanceId: action.balanceId,
+            sourceBox: action.sourceBox,
+            quantity: action.quantity,
+          })),
+      ),
+    };
+  }
+
+  private readCompiledManualInstruction(files: RequestForInstruction['files'] = []) {
+    const file = files.find((candidate) => candidate.fileName.startsWith(manualPickInstructionPlanFilePrefix));
+    if (!file) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(Buffer.from(file.content).toString('utf8')) as CompiledManualPickInstruction;
+      if (
+        parsed.version !== 1 ||
+        !parsed.originalFileName ||
+        !parsed.uploadedAt ||
+        !parsed.warehousePlan ||
+        !Array.isArray(parsed.warehousePlan.rows) ||
+        !Array.isArray(parsed.warehousePlan.wholeBoxes) ||
+        !Array.isArray(parsed.warehousePlan.balanceMoves) ||
+        !Array.isArray(parsed.warehousePlan.balanceLabels) ||
+        !Array.isArray(parsed.warehousePlan.markRows)
+      ) {
+        throw new Error('invalid compiled instruction');
+      }
+      return parsed;
+    } catch {
+      throw new BadRequestException('Сохраненная ручная инструкция повреждена. Загрузите исходный XLSX повторно.');
+    }
+  }
+
+  private async validateManualPickInstruction(request: RequestForInstruction, parsed: ParsedManualPickInstruction) {
+    const issues: string[] = [];
+    const requestedQuantity = request.items.reduce((sum, item) => sum + item.quantity, 0);
+    const coveredQuantity = parsed.outboundQuantity + parsed.shortageQuantity;
+    if (coveredQuantity !== requestedQuantity) {
+      issues.push(
+        `Количество по инструкции не совпадает с заявкой: в заявке ${requestedQuantity} шт., в инструкции к отправке и в дефиците ${coveredQuantity} шт.`,
+      );
+    }
+    if (parsed.outboundQuantity <= 0) {
+      issues.push('В инструкции нет товара со статусом «ЦЕЛЫЙ» или «ПОСТАВКА».');
+    }
+
+    const sourceBoxes = new Set(parsed.rows.map((row) => row.sourceBox).filter(Boolean));
+    const normalizedSourceBoxes = new Set([...sourceBoxes].map(normalizeManualCode));
+    const clientBoxes = await this.prisma.box.findMany({
+      where: { clientId: request.clientId },
+      select: { code: true },
+    });
+    const knownBoxes = new Set(clientBoxes.map((box) => normalizeManualCode(box.code)));
+    const missingBoxes = [...sourceBoxes].filter((box) => !knownBoxes.has(normalizeManualCode(box)));
+    if (missingBoxes.length > 0) {
+      issues.push(`Короба не найдены у клиента: ${missingBoxes.slice(0, 10).join(', ')}${missingBoxes.length > 10 ? '…' : ''}.`);
+    }
+
+    const rowsByBox = groupManualRowsByBox(parsed.rows);
+    for (const [box, rows] of rowsByBox) {
+      const outbound = rows.filter(isManualOutboundRow).reduce((sum, row) => sum + row.quantity, 0);
+      if (outbound <= 0) {
+        issues.push(`Короб ${box} содержит только строки баланса и не участвует в отправке.`);
+      }
+    }
+
+    const unknownWholeBoxes = parsed.wholeBoxes.filter((row) => !normalizedSourceBoxes.has(normalizeManualCode(row.box)));
+    if (unknownWholeBoxes.length > 0) {
+      issues.push(`На листе «Целые короба» нет строк состава для: ${unknownWholeBoxes.slice(0, 10).map((row) => row.box).join(', ')}.`);
+    }
+    const unknownMarkBoxes = parsed.markRows.filter((row) => !normalizedSourceBoxes.has(normalizeManualCode(row.sourceBox)));
+    if (unknownMarkBoxes.length > 0) {
+      issues.push(`На листе «МАРК» указаны короба вне инструкции: ${unknownMarkBoxes.slice(0, 10).map((row) => row.sourceBox).join(', ')}.`);
+    }
+
+    if (issues.length > 0) {
+      throw new BadRequestException(issues.slice(0, 12).join('\n'));
+    }
+  }
+
+  private async buildManualWarehousePlan(
+    parsed: ParsedManualPickInstruction,
+    clientName: string,
+    generatedAt: Date,
+  ): Promise<WarehousePlan> {
+    const rowsByBox = groupManualRowsByBox(parsed.rows);
+    const explicitWholeBoxes = new Map(parsed.wholeBoxes.map((row) => [normalizeManualCode(row.box), row]));
+    const balanceMoveSources = new Set<string>();
+    const shipmentMoveSources = new Set<string>();
+
+    for (const [box, rows] of rowsByBox) {
+      const shipmentQuantity = rows.filter(isManualOutboundRow).reduce((sum, row) => sum + row.quantity, 0);
+      const balanceQuantity = rows.filter((row) => row.kind === 'BALANCE').reduce((sum, row) => sum + row.quantity, 0);
+      if (balanceQuantity <= 0) {
+        continue;
+      }
+      if (shipmentQuantity < balanceQuantity) {
+        shipmentMoveSources.add(box);
+      } else {
+        balanceMoveSources.add(box);
+      }
+    }
+
+    const existingCodes = await this.loadExistingBalanceBoxCodes(generatedAt);
+    const balanceBoxBySourceBox = assignManualBalanceBoxCodes(balanceMoveSources, existingCodes, generatedAt);
+    const rows: WarehouseInstructionRow[] = parsed.rows.map((row) => {
+      const balanceBox = balanceBoxBySourceBox.get(row.sourceBox) ?? '';
+      let note = row.note;
+      if (row.kind === 'BALANCE' && balanceBox) {
+        note = joinNotes(note, `новый короб ${balanceBox}`);
+      } else if (isManualOutboundRow(row) && shipmentMoveSources.has(row.sourceBox)) {
+        note = joinNotes(
+          note,
+          `Меньшая часть короба уезжает: переместить ${row.quantity} ед. товара в новый FFL-короб поставки. Исходный короб остается на складе.`,
+        );
+      }
+      return {
+        city: row.city,
+        sourceBox: row.sourceBox,
+        targetBox: balanceBox,
+        pallet: row.pallet,
+        artOnBox: row.article,
+        barcodeOnBox: row.barcode,
+        size: row.size,
+        quantity: row.quantity,
+        comment: row.comment,
+        rebrandNote: manualRelabelNote(row.barcode, row.relabelNote),
+        note,
+      };
+    });
+
+    const balanceMoves: WarehouseBalanceMoveRow[] = [];
+    for (const [box, boxRows] of rowsByBox) {
+      if (balanceMoveSources.has(box)) {
+        const targetBox = balanceBoxBySourceBox.get(box) ?? '';
+        boxRows
+          .filter((row) => row.kind === 'BALANCE')
+          .forEach((row) => {
+            balanceMoves.push({
+              sourceBox: box,
+              newBox: targetBox,
+              purpose: 'BALANCE',
+              targetRole: 'STOCK',
+              pallet: row.pallet,
+              artOnBox: row.article,
+              barcodeOnBox: row.barcode,
+              size: row.size,
+              quantity: row.quantity,
+              note: row.note || 'Остаток переложить в новый короб, исходный короб уезжает.',
+            });
+          });
+      } else if (shipmentMoveSources.has(box)) {
+        boxRows.filter(isManualOutboundRow).forEach((row) => {
+          balanceMoves.push({
+            sourceBox: box,
+            newBox: '',
+            purpose: 'SHIPMENT',
+            targetRole: 'SHIPMENT',
+            pallet: row.pallet,
+            artOnBox: row.article,
+            barcodeOnBox: row.barcode,
+            size: row.size,
+            quantity: row.quantity,
+            note:
+              row.note ||
+              `Меньшая часть короба уезжает: переместить ${row.quantity} ед. товара в новый FFL-короб поставки. Исходный короб остается на складе.`,
+          });
+        });
+      }
+    }
+    balanceMoves.sort((left, right) =>
+      `${left.sourceBox}:${left.targetRole}:${left.barcodeOnBox}:${left.size}`.localeCompare(
+        `${right.sourceBox}:${right.targetRole}:${right.barcodeOnBox}:${right.size}`,
+        'ru',
+        { numeric: true },
+      ),
+    );
+
+    const wholeBoxes = new Map<string, WarehouseWholeBoxRow>();
+    for (const [box, boxRows] of rowsByBox) {
+      const normalized = normalizeManualCode(box);
+      const explicit = explicitWholeBoxes.get(normalized);
+      const balanceQuantity = boxRows.filter((row) => row.kind === 'BALANCE').reduce((sum, row) => sum + row.quantity, 0);
+      const hasWholeRow = boxRows.some((row) => row.kind === 'WHOLE');
+      if (!explicit && !hasWholeRow && balanceQuantity > 0 && !balanceMoveSources.has(box)) {
+        continue;
+      }
+      if (!explicit && !hasWholeRow && balanceQuantity === 0 && !boxRows.some(isManualOutboundRow)) {
+        continue;
+      }
+      const city = explicit?.city || boxRows.find(isManualOutboundRow)?.city || '';
+      const pallet = explicit?.pallet || boxRows.find((row) => row.pallet)?.pallet || '';
+      const balanceBox = balanceBoxBySourceBox.get(box) ?? '';
+      wholeBoxes.set(normalized, {
+        box,
+        status: balanceBox ? 'КОРОБ УЕЗЖАЕТ, ОСТАТОК ПЕРЕЛОЖИТЬ' : explicit?.status || (hasWholeRow ? 'ЦЕЛЫЙ' : 'КОРОБ УЕЗЖАЕТ'),
+        city,
+        pallet,
+        balanceBox,
+      });
+    }
+
+    const markRows: WarehouseMarkRow[] = parsed.markRows.length
+      ? parsed.markRows.map((row) => ({
+          comment: row.comment,
+          city: row.city,
+          sourceBox: row.sourceBox,
+          brand: row.brand,
+          ip: row.ip,
+          name: row.name,
+          article: row.article,
+          wbArticle: row.wbArticle,
+          color: row.color,
+          size: row.size,
+          barcode: row.barcode,
+          quantity: row.quantity,
+        }))
+      : parsed.rows
+          .filter((row) => Boolean(row.relabelNote))
+          .map((row) => ({
+            comment: row.comment,
+            city: row.city,
+            sourceBox: row.sourceBox,
+            brand: '',
+            ip: '',
+            name: row.article,
+            article: row.article,
+            wbArticle: '',
+            color: '',
+            size: row.size,
+            barcode: relabelTargetBarcode(row.relabelNote) || row.barcode,
+            quantity: row.quantity,
+          }));
+    const balanceLabels = buildBalanceLabels(balanceMoves, clientName);
+
+    return {
+      rows,
+      wholeBoxes: [...wholeBoxes.values()].sort((left, right) => left.box.localeCompare(right.box, 'ru', { numeric: true })),
+      balanceMoves,
+      balanceLabels,
+      markRows,
     };
   }
 
@@ -694,6 +1809,135 @@ function groupBalancesBySkuId(balances: BalanceForInstruction[]) {
   return result;
 }
 
+function cloneBalances(balances: BalanceForInstruction[]) {
+  return balances.map((balance) => ({ ...balance }));
+}
+
+function readPersistedWavePlan(value: Prisma.JsonValue | null | undefined): BuiltWarehousePlan | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const plan = value as Record<string, unknown>;
+  if (
+    !Array.isArray(plan.rows) ||
+    !Array.isArray(plan.wholeBoxes) ||
+    !Array.isArray(plan.balanceMoves) ||
+    !Array.isArray(plan.balanceLabels) ||
+    !Array.isArray(plan.markRows) ||
+    !Array.isArray(plan.reservations)
+  ) {
+    return null;
+  }
+  return plan as unknown as BuiltWarehousePlan;
+}
+
+function compareInstructionBalances(left: BalanceForInstruction, right: BalanceForInstruction) {
+  const leftBox = textCell(left.box?.code);
+  const rightBox = textCell(right.box?.code);
+  if (leftBox !== rightBox) {
+    return leftBox < rightBox ? -1 : 1;
+  }
+  const timeDiff = left.updatedAt.getTime() - right.updatedAt.getTime();
+  if (timeDiff !== 0) {
+    return timeDiff;
+  }
+  return left.id.localeCompare(right.id);
+}
+
+function mergeWarehouseAuxiliaryData(values: WarehouseAuxiliaryData[]): WarehouseAuxiliaryData {
+  const result = emptyWarehouseAuxiliaryData();
+  values.forEach((value) => {
+    value.mapping.forEach((sources, target) => {
+      const merged = result.mapping.get(target) ?? new Set<string>();
+      sources.forEach((source) => merged.add(source));
+      result.mapping.set(target, merged);
+    });
+    value.boxToPallet.forEach((pallet, box) => {
+      if (!result.boxToPallet.has(box)) result.boxToPallet.set(box, pallet);
+    });
+    value.shk.forEach((record, key) => {
+      if (!result.shk.has(key)) result.shk.set(key, record);
+    });
+  });
+  return result;
+}
+
+function sliceJointWarehousePlan(
+  plan: BuiltWarehousePlan,
+  orderIds: Set<string>,
+  requestId: string,
+  requestIdByOrderId: Map<string, string>,
+  requestOrder: string[],
+): BuiltWarehousePlan {
+  const rows = plan.rows.filter((row) => Boolean(row.orderId && orderIds.has(row.orderId)));
+  const relevantBoxes = new Set(rows.map((row) => row.sourceBox).filter(Boolean));
+  const quantityByBoxAndRequest = new Map<string, Map<string, number>>();
+
+  plan.rows.forEach((row) => {
+    const rowRequestId = row.orderId ? requestIdByOrderId.get(row.orderId) : null;
+    if (!row.sourceBox || !rowRequestId || row.quantity <= 0) return;
+    const quantities = quantityByBoxAndRequest.get(row.sourceBox) ?? new Map<string, number>();
+    quantities.set(rowRequestId, (quantities.get(rowRequestId) ?? 0) + row.quantity);
+    quantityByBoxAndRequest.set(row.sourceBox, quantities);
+  });
+
+  const requestRank = new Map(requestOrder.map((id, index) => [id, index]));
+  const balanceOwnerByBox = new Map<string, string>();
+  quantityByBoxAndRequest.forEach((quantities, box) => {
+    const owner = [...quantities.entries()].sort(
+      ([leftId, leftQuantity], [rightId, rightQuantity]) =>
+        rightQuantity - leftQuantity ||
+        (requestRank.get(leftId) ?? Number.MAX_SAFE_INTEGER) -
+          (requestRank.get(rightId) ?? Number.MAX_SAFE_INTEGER),
+    )[0]?.[0];
+    if (owner) balanceOwnerByBox.set(box, owner);
+  });
+
+  const balanceMoves = plan.balanceMoves.filter((move) =>
+    move.purpose === 'SHIPMENT'
+      ? Boolean(move.orderId && orderIds.has(move.orderId))
+      : balanceOwnerByBox.get(move.sourceBox) === requestId,
+  );
+
+  return {
+    rows,
+    wholeBoxes: plan.wholeBoxes.filter((row) => relevantBoxes.has(row.box)),
+    balanceMoves,
+    balanceLabels: plan.balanceLabels.filter((row) => balanceOwnerByBox.get(row.sourceBox) === requestId),
+    markRows: plan.markRows.filter((row) => Boolean(row.orderId && orderIds.has(row.orderId))),
+    reservations: plan.reservations.filter((reservation) => orderIds.has(reservation.orderId)),
+  };
+}
+
+function applyWarehouseReservations(balances: BalanceForInstruction[], reservations: WarehouseReservation[]) {
+  const reservedByBalanceId = new Map<string, number>();
+  reservations.forEach((reservation) => {
+    reservedByBalanceId.set(
+      reservation.balanceId,
+      (reservedByBalanceId.get(reservation.balanceId) ?? 0) + reservation.quantity,
+    );
+  });
+  return balances
+    .map((balance) => ({
+      ...balance,
+      quantity: Math.max(0, balance.quantity - (reservedByBalanceId.get(balance.id) ?? 0)),
+    }))
+    .filter((balance) => balance.quantity > 0);
+}
+
+function collapseWarehouseReservations(reservations: WarehouseReservation[]) {
+  const result = new Map<string, WarehouseReservation>();
+  reservations.forEach((reservation) => {
+    const key = `${reservation.orderId}:${reservation.balanceId}`;
+    const current = result.get(key);
+    result.set(key, {
+      ...reservation,
+      quantity: (current?.quantity ?? 0) + reservation.quantity,
+    });
+  });
+  return [...result.values()];
+}
+
 function primaryBarcodeValue(sku: { barcodes: Array<{ value: string; isPrimary: boolean }> }) {
   return sku.barcodes.find((barcode) => barcode.isPrimary)?.value ?? sku.barcodes[0]?.value ?? null;
 }
@@ -752,9 +1996,12 @@ type WarehouseShkRecord = {
 };
 
 type WarehouseDemand = {
+  requestId: string;
   orderId: string;
+  demandIndex: number;
   skuId: string | null;
   artSeller: string;
+  targetArt: string;
   barcode: string;
   size: string;
   name: string;
@@ -772,6 +2019,7 @@ type WarehouseInventoryItem = {
   pallet: string;
   skuId: string;
   barcode: string;
+  barcodes: string[];
   artWarehouse: string;
   name: string;
   size: string;
@@ -781,6 +2029,9 @@ type WarehouseInventoryItem = {
 };
 
 type WarehouseAction = {
+  requestId: string;
+  orderId: string;
+  balanceId: string;
   city: string;
   sourceBox: string;
   pallet: string;
@@ -867,12 +2118,39 @@ function parseShkSheet(rows: unknown[][]) {
   return result;
 }
 
+function instructionSkuArticle(
+  sku:
+    | {
+        clientSku?: string | null;
+        article?: string | null;
+        internalSku?: string | null;
+        size?: string | null;
+      }
+    | null
+    | undefined,
+) {
+  if (!sku) {
+    return '';
+  }
+  const explicit = textCell(sku.clientSku) || textCell(sku.article);
+  if (explicit) {
+    return explicit;
+  }
+
+  const internalSku = textCell(sku.internalSku);
+  const size = textCell(sku.size);
+  if (!internalSku || !size || !internalSku.toLocaleUpperCase('ru-RU').endsWith(size.toLocaleUpperCase('ru-RU'))) {
+    return internalSku;
+  }
+  return internalSku.slice(0, -size.length).replace(/[-_/\s]+$/g, '').trim();
+}
+
 function buildShkCatalogFromSkus(skus: SkuCatalogForInstruction[]) {
   const result = new Map<string, WarehouseShkRecord>();
   skus.forEach((sku) => {
     const payload = recordFromJson(sku.marketplacePayload);
     const barcode = primaryBarcodeValue(sku) ?? textFromPayload(payload, ['barcode', 'barCode', 'sku', 'offerBarcode']);
-    const article = sku.internalSku || sku.article || sku.clientSku || '';
+    const article = instructionSkuArticle(sku);
     const wbArticle =
       sku.marketplaceProductId ||
       sku.marketplaceOfferId ||
@@ -944,18 +2222,33 @@ function parseRequestItemComment(comment: string | null) {
   return result;
 }
 
+function compareDemandPriority(
+  leftOrderId: string,
+  rightOrderId: string,
+  remainingByOrderId: Map<string, number>,
+  demandById: Map<string, WarehouseDemand>,
+) {
+  const quantityDiff = (remainingByOrderId.get(rightOrderId) ?? 0) - (remainingByOrderId.get(leftOrderId) ?? 0);
+  if (quantityDiff !== 0) {
+    return quantityDiff;
+  }
+  const left = demandById.get(leftOrderId);
+  const right = demandById.get(rightOrderId);
+  if (left?.needsRelabel !== right?.needsRelabel) {
+    return left?.needsRelabel ? -1 : 1;
+  }
+  return (left?.demandIndex ?? 0) - (right?.demandIndex ?? 0);
+}
+
 function isSuitableForDemand(item: WarehouseInventoryItem, demand: WarehouseDemand, mapping: Map<string, Set<string>>) {
-  if (item.skuId === demand.skuId) {
+  const requiredBarcode = textCell(demand.needsRelabel ? demand.relabelSourceBarcode || demand.barcode : demand.barcode);
+
+  if (requiredBarcode && itemHasBarcode(item, requiredBarcode) && exactSizesMatch(item.size, demand.size)) {
     return true;
   }
-  if (isExactBarcodeMatch(item, demand)) {
-    return true;
-  }
-  if (isExactNameMatch(item, demand)) {
-    return true;
-  }
+
   const baseArts = mapping.get(demand.artSeller) ?? new Set([demand.artSeller]);
-  return baseArts.has(item.artWarehouse) && sizesMatch(item.size, demand.size);
+  return baseArts.has(item.artWarehouse) && exactSizesMatch(item.size, demand.size);
 }
 
 function actionFromAssignment(
@@ -967,12 +2260,15 @@ function actionFromAssignment(
   note: string,
 ): WarehouseAction {
   return {
+    requestId: demand.requestId,
+    orderId: demand.orderId,
+    balanceId: item.id,
     city: demand.city,
     sourceBox: item.box,
     pallet: item.pallet,
     artOnBox: item.artWarehouse,
     barcodeOnBox: item.barcode,
-    targetArt: demand.artSeller,
+    targetArt: demand.targetArt,
     targetBarcode: demand.relabelTargetBarcode || demand.barcode,
     size: item.size || demand.size,
     quantity,
@@ -982,8 +2278,11 @@ function actionFromAssignment(
   };
 }
 
-function balanceAction(item: WarehouseInventoryItem): WarehouseAction {
+function balanceAction(item: WarehouseInventoryItem, note = 'остаток на складе'): WarehouseAction {
   return {
+    requestId: '',
+    orderId: '',
+    balanceId: item.id,
     city: '',
     sourceBox: item.box,
     pallet: item.pallet,
@@ -995,8 +2294,12 @@ function balanceAction(item: WarehouseInventoryItem): WarehouseAction {
     quantity: item.quantity,
     targetBox: 'БАЛАНС',
     rebrandNote: '',
-    note: 'остаток на складе',
+    note,
   };
+}
+
+function joinNotes(...notes: Array<string | null | undefined>) {
+  return notes.map((note) => note?.trim()).filter(Boolean).join('; ');
 }
 
 function buildWholeBoxes(
@@ -1040,25 +2343,55 @@ function buildWholeBoxes(
 function buildBalanceMoves(
   actions: WarehouseAction[],
   balanceBoxBySourceBox: Map<string, string>,
+  shipmentMoveSourceBoxes: Set<string>,
   boxToPallet: Map<string, string>,
 ): WarehouseBalanceMoveRow[] {
-  return actions
+  const balanceMoves = actions
     .filter((action) => action.targetBox === 'БАЛАНС' && balanceBoxBySourceBox.has(action.sourceBox))
     .map((action) => ({
+      orderId: action.orderId,
       sourceBox: action.sourceBox,
       newBox: balanceBoxBySourceBox.get(action.sourceBox)!,
+      purpose: 'BALANCE' as const,
+      targetRole: 'STOCK' as const,
       pallet: action.pallet || boxToPallet.get(action.sourceBox) || '',
       artOnBox: action.artOnBox,
       barcodeOnBox: action.barcodeOnBox,
       size: action.size,
       quantity: action.quantity,
-      note: 'Остаток переложить в новый короб, исходный короб уезжает.',
+      note: action.note || 'Остаток переложить в новый короб, исходный короб уезжает.',
     }));
+
+  const shipmentMoves = actions
+    .filter((action) => shipmentMoveSourceBoxes.has(action.sourceBox) && action.targetBox !== 'БАЛАНС')
+    .map((action) => ({
+      orderId: action.orderId,
+      sourceBox: action.sourceBox,
+      newBox: '',
+      purpose: 'SHIPMENT' as const,
+      targetRole: 'SHIPMENT' as const,
+      pallet: action.pallet || boxToPallet.get(action.sourceBox) || '',
+      artOnBox: action.targetArt || action.artOnBox,
+      barcodeOnBox: action.targetBarcode || action.barcodeOnBox,
+      size: action.size,
+      quantity: action.quantity,
+      note:
+        action.note ||
+        `Меньшая часть короба уезжает: переместить ${action.quantity} ед. товара в новый FFL-короб поставки. Исходный короб остается на складе.`,
+    }));
+
+  return [...balanceMoves, ...shipmentMoves].sort((left, right) =>
+    `${left.sourceBox}:${left.targetRole}:${left.barcodeOnBox}:${left.size}`.localeCompare(
+      `${right.sourceBox}:${right.targetRole}:${right.barcodeOnBox}:${right.size}`,
+      'ru',
+      { numeric: true },
+    ),
+  );
 }
 
 function buildBalanceLabels(balanceMoves: WarehouseBalanceMoveRow[], clientName: string): WarehouseBalanceLabelRow[] {
   const sourceByNewBox = new Map<string, string>();
-  balanceMoves.forEach((move) => {
+  balanceMoves.filter((move) => move.purpose === 'BALANCE' && move.newBox).forEach((move) => {
     sourceByNewBox.set(move.newBox, move.sourceBox);
   });
 
@@ -1115,16 +2448,10 @@ function balanceBoxCode(date: Date, sequence: number) {
 
 function warehouseActionComment(
   action: WarehouseAction,
-  usedShipmentBoxes: Set<string>,
-  balanceBoxBySourceBox: Map<string, string>,
   wholeBoxCities: Map<string, Set<string>>,
 ) {
   if (action.targetBox === 'БАЛАНС') {
     return 'ПЕРЕЛОЖИТЬ ОСТАТОК';
-  }
-
-  if (usedShipmentBoxes.has(action.sourceBox) && balanceBoxBySourceBox.has(action.sourceBox)) {
-    return `${action.targetBox}; КОРОБ УЕЗЖАЕТ`;
   }
 
   if (['ЦЕЛЫЙ', 'МАРК ЦЕЛЫЙ'].includes(action.targetBox) && (wholeBoxCities.get(action.sourceBox)?.size ?? 0) > 1) {
@@ -1135,13 +2462,7 @@ function warehouseActionComment(
 }
 
 function needsWarehouseRelabel(item: WarehouseInventoryItem, demand: WarehouseDemand) {
-  if (demand.needsRelabel) {
-    return true;
-  }
-  if (item.skuId === demand.skuId || isExactBarcodeMatch(item, demand) || isExactNameMatch(item, demand)) {
-    return false;
-  }
-  return demand.needsRelabel || Boolean(demand.artSeller && item.artWarehouse !== demand.artSeller);
+  return demand.needsRelabel || Boolean(demand.targetArt && item.artWarehouse !== demand.targetArt);
 }
 
 function relabelNote(item: WarehouseInventoryItem, demand: WarehouseDemand) {
@@ -1149,17 +2470,24 @@ function relabelNote(item: WarehouseInventoryItem, demand: WarehouseDemand) {
     return '';
   }
 
-  const target = demand.artSeller || demand.barcode || item.artWarehouse;
-  const targetBarcode = demand.relabelTargetBarcode || target;
-  return `перемаркировать ${demand.relabelSourceBarcode || item.barcode || demand.barcode} -> ${targetBarcode}`;
+  return `переклеить на ${demand.targetArt || demand.relabelTargetBarcode || demand.artSeller || demand.barcode}`;
 }
 
 function isExactBarcodeMatch(item: WarehouseInventoryItem, demand: WarehouseDemand) {
-  return Boolean(item.barcode && demand.barcode && item.barcode === demand.barcode && sizesMatch(item.size, demand.size));
+  return Boolean(demand.barcode && itemHasBarcode(item, demand.barcode) && sizesMatch(item.size, demand.size));
 }
 
 function isExactNameMatch(item: WarehouseInventoryItem, demand: WarehouseDemand) {
   return Boolean(item.name && demand.name && item.name === demand.name && sizesMatch(item.size, demand.size));
+}
+
+function itemHasBarcode(item: WarehouseInventoryItem, barcode: string) {
+  const target = normalizeBarcode(barcode);
+  return [item.barcode, ...item.barcodes].some((value) => normalizeBarcode(value) === target);
+}
+
+function normalizeBarcode(value: string | null | undefined) {
+  return textCell(value).replace(/\s+/g, '').toLowerCase();
 }
 
 function balanceBoxTspl(boxCode: string, clientName: string) {
@@ -1183,10 +2511,11 @@ function sanitizeTsplText(value: string) {
 
 function buildMarkRows(actions: WarehouseAction[], shk: Map<string, WarehouseShkRecord>): WarehouseMarkRow[] {
   return actions
-    .filter((action) => ['МАРК ЦЕЛЫЙ', 'МАРК ПОСТАВКА'].includes(action.targetBox))
+    .filter((action) => ['МАРК ЦЕЛЫЙ', 'МАРК ПОСТАВКА'].includes(action.targetBox) && Boolean(action.rebrandNote))
     .map((action) => {
       const record = shk.get(action.targetArt) ?? shk.get(action.targetBarcode);
       return {
+        orderId: action.orderId,
         comment: action.targetBox,
         city: action.city,
         sourceBox: action.sourceBox,
@@ -1203,10 +2532,70 @@ function buildMarkRows(actions: WarehouseAction[], shk: Map<string, WarehouseShk
     });
 }
 
+function groupManualRowsByBox(rows: ManualInstructionRow[]) {
+  const result = new Map<string, ManualInstructionRow[]>();
+  rows.forEach((row) => {
+    if (!row.sourceBox || row.kind === 'SHORTAGE') {
+      return;
+    }
+    result.set(row.sourceBox, [...(result.get(row.sourceBox) ?? []), row]);
+  });
+  return result;
+}
+
+function isManualOutboundRow(row: ManualInstructionRow) {
+  return row.kind === 'WHOLE' || row.kind === 'SHIPMENT';
+}
+
+function assignManualBalanceBoxCodes(sourceBoxes: Set<string>, existingCodes: Set<string>, date: Date) {
+  const usedCodes = new Set(existingCodes);
+  const result = new Map<string, string>();
+  let sequence = 1;
+  for (const sourceBox of [...sourceBoxes].sort((left, right) => left.localeCompare(right, 'ru', { numeric: true }))) {
+    let candidate = balanceBoxCode(date, sequence);
+    while (usedCodes.has(candidate)) {
+      sequence += 1;
+      candidate = balanceBoxCode(date, sequence);
+    }
+    usedCodes.add(candidate);
+    result.set(sourceBox, candidate);
+    sequence += 1;
+  }
+  return result;
+}
+
+function normalizeManualCode(value: string) {
+  return value.trim().toLocaleUpperCase('ru-RU').replace(/\s+/g, '');
+}
+
+function manualRelabelNote(sourceBarcode: string, note: string) {
+  const normalized = note.trim();
+  if (!normalized) {
+    return '';
+  }
+  if (/(-|=)>|→/.test(normalized)) {
+    return normalized;
+  }
+  return `перемаркировать ${sourceBarcode} -> ${normalized}`;
+}
+
+function relabelTargetBarcode(note: string) {
+  const arrowParts = note.split(/(?:->|=>|→)/);
+  if (arrowParts.length > 1) {
+    return arrowParts[arrowParts.length - 1].trim();
+  }
+  const matches = note.match(/[A-Za-zА-Яа-я0-9_-]{6,}/g);
+  return matches?.[matches.length - 1] ?? '';
+}
+
 function normalizeSize(value: string | null | undefined) {
   const raw = textCell(value).toUpperCase().replace(/М/g, 'M').replace(/Х/g, 'X');
   const match = raw.match(/\(([^)]+)\)/);
   return (match?.[1] ?? raw).replace(/\s+/g, '');
+}
+
+function instructionSize(value: string | null | undefined) {
+  return normalizeSize(value).split('/')[0]?.split('-')[0] ?? '';
 }
 
 function normalizeName(value: string | null | undefined) {
@@ -1215,6 +2604,10 @@ function normalizeName(value: string | null | undefined) {
 
 function sizesMatch(left: string, right: string) {
   return !left || !right || left === right;
+}
+
+function exactSizesMatch(left: string, right: string) {
+  return normalizeSize(left) === normalizeSize(right);
 }
 
 function textCell(value: unknown) {
@@ -1236,4 +2629,68 @@ function textFromPayload(payload: Record<string, unknown>, keys: string[]) {
     }
   }
   return '';
+}
+
+function instructionSourceBoxes(document: PickInstructionDocument) {
+  return new Set(
+    [
+      ...document.boxes.map((row) => row.boxCode),
+      ...document.warehouseRows.map((row) => row.sourceBox),
+      ...document.warehouseWholeBoxes.map((row) => row.box),
+      ...document.warehouseBalanceMoves.map((row) => row.sourceBox),
+    ].filter((value): value is string => Boolean(value?.trim())),
+  );
+}
+
+function normalizeInstructionBoxCode(value: string) {
+  return value.trim().toLocaleUpperCase('ru-RU').replace(/\s+/g, '');
+}
+
+type RequestReservationOrder = {
+  id: string;
+  status: ClientRequestStatus;
+  priority: ClientRequestPriority;
+  createdAt: Date;
+};
+
+function compareRequestReservationOrder(left: RequestReservationOrder, right: RequestReservationOrder) {
+  const statusDifference = reservationStatusRank(left.status) - reservationStatusRank(right.status);
+  if (statusDifference !== 0) return statusDifference;
+  const priorityDifference = reservationPriorityRank(left.priority) - reservationPriorityRank(right.priority);
+  if (priorityDifference !== 0) return priorityDifference;
+  const dateDifference = left.createdAt.getTime() - right.createdAt.getTime();
+  return dateDifference || left.id.localeCompare(right.id);
+}
+
+function reservationStatusRank(status: ClientRequestStatus) {
+  switch (status) {
+    case ClientRequestStatus.IN_WORK:
+      return 0;
+    case ClientRequestStatus.APPROVED:
+      return 1;
+    case ClientRequestStatus.IN_REVIEW:
+      return 2;
+    case ClientRequestStatus.SUBMITTED:
+      return 3;
+    default:
+      return 4;
+  }
+}
+
+function reservationPriorityRank(priority: ClientRequestPriority) {
+  switch (priority) {
+    case ClientRequestPriority.URGENT:
+      return 0;
+    case ClientRequestPriority.HIGH:
+      return 1;
+    case ClientRequestPriority.NORMAL:
+      return 2;
+    case ClientRequestPriority.LOW:
+      return 3;
+  }
+}
+
+function overlapErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message.trim()) return error.message;
+  return 'Не удалось построить складскую инструкцию.';
 }

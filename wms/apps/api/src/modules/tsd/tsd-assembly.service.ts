@@ -1,9 +1,19 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { ClientRequestStatus, ClientRequestType, MovementType, Prisma, TsdOperationStatus } from '@prisma/client';
+import {
+  ClientRequestStatus,
+  ClientRequestType,
+  MovementType,
+  PickWaveBalanceReviewStatus,
+  PickWaveStatus,
+  Prisma,
+  TsdOperationStatus,
+} from '@prisma/client';
+import * as XLSX from 'xlsx';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { PickInstructionService } from '../stock/pick-instruction.service';
 import type { PickInstructionDocument } from '../stock/pick-instruction.types';
+import { StockOperationsService } from '../stock/stock-operations.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 
 const activeAssemblyStatuses = [
@@ -23,16 +33,33 @@ type TsdProcessSummary = {
   workerName: string | null;
   updatedAt: string;
   foundCount: number;
+  foundBoxCodes: string[];
   totalBoxCount?: number;
   progressText: string;
 };
 
+type TsdMovementPlanTask = {
+  sourceBox: string;
+  targetBox: string;
+  purpose: 'BALANCE' | 'SHIPMENT' | string;
+  targetRole: 'STOCK' | 'SHIPMENT' | string;
+  barcode?: string;
+  name?: string;
+  size?: string;
+  quantity: number;
+  note?: string;
+};
+
 @Injectable()
 export class TsdAssemblyService {
+  private readonly instructionCache = new Map<string, { expiresAt: number; promise: Promise<PickInstructionDocument & { html?: string }> }>();
+  private readonly instructionCacheTtlMs = 1000;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly clientScopes: ClientScopeService,
     private readonly pickInstructions: PickInstructionService,
+    private readonly stockOperations: StockOperationsService,
   ) {}
 
   async listActiveRequests(user: AuthUser) {
@@ -55,6 +82,13 @@ export class TsdAssemblyService {
         updatedAt: true,
         client: { select: { id: true, name: true, code: true } },
         assignedTo: { select: { id: true, name: true, email: true } },
+        pickWaveRequests: {
+          where: { wave: { status: { in: [PickWaveStatus.BALANCE_REVIEW, PickWaveStatus.FROZEN, PickWaveStatus.PICKING] } } },
+          select: {
+            wave: { select: { id: true, waveNumber: true, status: true, balanceReviewStatus: true } },
+          },
+          take: 1,
+        },
         _count: { select: { items: true } },
       },
     });
@@ -87,11 +121,214 @@ export class TsdAssemblyService {
             email: request.assignedTo.email,
           }
         : null,
-      activeTsdProcess: activeProcesses.get(request.id) ?? null,
+      activeTsdProcess: activeProcesses.get(request.id)?.[0] ?? null,
+      activeTsdProcesses: activeProcesses.get(request.id) ?? [],
+      pickWave: request.pickWaveRequests[0]?.wave ?? null,
+      balanceReviewPending:
+        request.pickWaveRequests[0]?.wave.balanceReviewStatus === PickWaveBalanceReviewStatus.PENDING ||
+        request.pickWaveRequests[0]?.wave.balanceReviewStatus === PickWaveBalanceReviewStatus.SUBMITTED,
     }));
   }
 
   async getRequestPlan(requestId: string, user: AuthUser) {
+    const exists = await this.prisma.clientRequest.findUnique({
+      where: { id: requestId },
+      select: {
+        id: true,
+        clientId: true,
+        client: { select: { storesWithoutBoxes: true } },
+        pickWaveRequests: {
+          where: { wave: { status: PickWaveStatus.BALANCE_REVIEW } },
+          select: { wave: { select: { waveNumber: true, balanceReviewStatus: true } } },
+          take: 1,
+        },
+      },
+    });
+    if (!exists) {
+      throw new NotFoundException('Заявка для ТСД не найдена.');
+    }
+
+    this.clientScopes.requireClientAccess(user, exists.clientId, 'read');
+    const pendingWave = exists.pickWaveRequests[0]?.wave;
+    if (
+      pendingWave &&
+      (pendingWave.balanceReviewStatus === PickWaveBalanceReviewStatus.PENDING ||
+        pendingWave.balanceReviewStatus === PickWaveBalanceReviewStatus.SUBMITTED)
+    ) {
+      throw new BadRequestException(
+        `Волна ${pendingWave.waveNumber} ожидает проверки балансов клиентом. Сборка еще не зафиксирована.`,
+      );
+    }
+    const document = await this.getCachedInstruction(requestId, user);
+    const plan = await this.toTsdPlan(document);
+    return {
+      ...plan,
+      storesWithoutBoxes: exists.client.storesWithoutBoxes,
+      assemblyMode: exists.client.storesWithoutBoxes ? 'BOXLESS_PACKING' : 'BOX_WORKFLOW',
+    };
+  }
+
+  async assertRelabelProgressAvailable(requestId: string, payload: Record<string, unknown>, user: AuthUser) {
+    const plan = await this.getRequestPlan(requestId, user);
+    const key = relabelPayloadProgressKey(payload);
+    const task = (plan.relabelTasks ?? []).find((item: Record<string, unknown>) => relabelTaskProgressKey(item) === key);
+    if (!task) {
+      throw new BadRequestException('Задание на перемаркировку не найдено или уже изменилось. Обновите заявку на ТСД.');
+    }
+    if (Number(task.remainingQuantity ?? task.quantity ?? 0) <= 0) {
+      throw new BadRequestException('Эта перемаркировка уже выполнена другим сборщиком. Обновите заявку на ТСД.');
+    }
+  }
+
+  async assertMovementProgressAvailable(requestId: string, payload: Record<string, unknown>, user: AuthUser) {
+    const plan = await this.getRequestPlan(requestId, user);
+    const sourceBox = normalizeBoxCode(textValue(payload, 'fromBoxCode'));
+    const barcode = normalizeScanCode(textValue(payload, 'barcode'));
+    const quantity = Math.max(1, Number(payload.quantity) || 1);
+    const rows = plan.movementProgress?.rows ?? [];
+    const remaining = rows
+      .filter(
+        (row: Record<string, unknown>) =>
+          normalizeBoxCode(textValue(row, 'sourceBox')) === sourceBox && normalizeScanCode(textValue(row, 'barcode')) === barcode,
+      )
+      .reduce((sum: number, row: Record<string, unknown>) => sum + Math.max(0, Number(row.remainingQuantity) || 0), 0);
+    if (remaining < quantity) {
+      throw new BadRequestException('Эта позиция перемещения уже выполнена другим сборщиком. Обновите заявку на ТСД.');
+    }
+  }
+
+  async assertOutgoingBoxAvailable(requestId: string, payload: Record<string, unknown>, user: AuthUser) {
+    const plan = await this.getRequestPlan(requestId, user);
+    const boxCode = normalizeBoxCode(textValue(payload, 'boxCode'));
+    if (!(plan.outgoingBoxCodes ?? []).some((value: string) => normalizeBoxCode(value) === boxCode)) {
+      throw new BadRequestException('Короб не входит в актуальный список коробов на отправку. Обновите заявку на ТСД.');
+    }
+  }
+
+  async getOutgoingBoxesXlsx(requestId: string, user: AuthUser) {
+    const document = await this.loadInstructionWithAccess(requestId, user);
+    const plan = await this.toTsdPlan(document);
+    const outgoingBoxes = Array.isArray(plan.outgoingBoxes) ? plan.outgoingBoxes : [];
+    const rows: Array<Array<string | number>> = [
+      ['№', 'Короб', 'Тип', 'Из короба', 'Статус', 'Город', 'Паллет', 'Количество'],
+      ...outgoingBoxes.map((box, index) => [
+        index + 1,
+        box.boxCode,
+        box.typeLabel,
+        box.sourceBox || '',
+        box.status || '',
+        box.city || document.destinationCity || '',
+        box.pallet || '',
+        box.quantity || '',
+      ]),
+    ];
+
+    return {
+      fileName: `outgoing-boxes-${safeFileName(document.requestTitle)}-${document.requestId.slice(0, 8)}.xlsx`,
+      mimeType: xlsxMimeType(),
+      content: buildWorkbook(rows, 'Короба на отправку', [8, 28, 20, 30, 24, 22, 18, 14]),
+    };
+  }
+
+  async getOutgoingContentsXlsx(requestId: string, user: AuthUser) {
+    const document = await this.loadInstructionWithAccess(requestId, user);
+    const plan = await this.toTsdPlan(document);
+    const actualRows = plan.movementProgress?.actualRows ?? [];
+    const wholeBoxCodes = new Set(document.warehouseWholeBoxes.map((row) => normalizeBoxCode(row.box)).filter(Boolean));
+    const rows: Array<Array<string | number>> = [
+      ['№', 'Короб', 'Тип', 'Из короба', 'ШК', 'Наименование', 'Размер', 'Количество', 'Город', 'Паллет', 'Примечание'],
+    ];
+
+    for (const row of document.warehouseRows) {
+      if (!wholeBoxCodes.has(normalizeBoxCode(row.sourceBox)) || row.quantity <= 0) {
+        continue;
+      }
+      rows.push([
+        rows.length,
+        row.sourceBox,
+        'Целый короб',
+        row.sourceBox,
+        row.barcodeOnBox,
+        row.artOnBox,
+        row.size,
+        row.quantity,
+        row.city || document.destinationCity || '',
+        row.pallet,
+        row.comment || row.note || '',
+      ]);
+    }
+
+    for (const row of actualRows) {
+      if (row.purpose !== 'SHIPMENT' || row.quantity <= 0) {
+        continue;
+      }
+      rows.push([
+        rows.length,
+        row.targetBox,
+        'Короб поставки',
+        row.sourceBox,
+        row.barcode,
+        row.name ?? '',
+        row.size ?? '',
+        row.quantity,
+        document.destinationCity ?? '',
+        '',
+        'Собран после перемещения',
+      ]);
+    }
+
+    return {
+      fileName: `outgoing-contents-${safeFileName(document.requestTitle)}-${document.requestId.slice(0, 8)}.xlsx`,
+      mimeType: xlsxMimeType(),
+      content: buildWorkbook(rows, 'Состав коробов', [8, 28, 20, 30, 22, 44, 16, 14, 22, 18, 28]),
+    };
+  }
+
+  async getMovementsXlsx(requestId: string, user: AuthUser) {
+    const document = await this.loadInstructionWithAccess(requestId, user);
+    const plan = await this.toTsdPlan(document);
+    const movementRows = plan.movementProgress?.rows ?? [];
+    const rows: Array<Array<string | number>> = [
+      [
+        '№',
+        'Из короба',
+        'Куда',
+        'ШК',
+        'Наименование',
+        'Размер',
+        'Нужно переместить',
+        'Уже перемещено',
+        'Осталось',
+        'Назначение',
+        'Примечание',
+      ],
+      ...movementRows.map((row, index) => [
+        index + 1,
+        row.sourceBox,
+        movementTargetsText(row),
+        row.barcode ?? '',
+        row.name ?? '',
+        row.size ?? '',
+        row.requiredQuantity ?? row.quantity,
+        row.movedQuantity ?? 0,
+        row.remainingQuantity ?? row.quantity,
+        movementPurposeLabel(row.purpose, row.targetRole),
+        row.note ?? '',
+      ]),
+    ];
+
+    if (rows.length === 1) {
+      rows.push(['', '', '', '', 'Перемещения по заявке не требуются', '', 0, 0, 0, '', '']);
+    }
+
+    return {
+      fileName: `movements-${safeFileName(document.requestTitle)}-${document.requestId.slice(0, 8)}.xlsx`,
+      mimeType: xlsxMimeType(),
+      content: buildWorkbook(rows, 'Перемещения', [8, 28, 30, 22, 44, 16, 16, 16, 16, 22, 42]),
+    };
+  }
+
+  private async loadInstructionWithAccess(requestId: string, user: AuthUser) {
     const exists = await this.prisma.clientRequest.findUnique({
       where: { id: requestId },
       select: { id: true, clientId: true },
@@ -101,13 +338,48 @@ export class TsdAssemblyService {
     }
 
     this.clientScopes.requireClientAccess(user, exists.clientId, 'read');
-    const document = await this.pickInstructions.getRequestInstruction(requestId, user);
-    return this.toTsdPlan(document);
+    return this.getCachedInstruction(requestId, user);
+  }
+
+  private async getCachedInstruction(requestId: string, user: AuthUser) {
+    const now = Date.now();
+    const cached = this.instructionCache.get(requestId);
+    if (cached && cached.expiresAt > now) {
+      return cached.promise;
+    }
+
+    this.pruneInstructionCache(now);
+    const promise = this.pickInstructions.getRequestInstruction(requestId, user);
+    this.instructionCache.set(requestId, { expiresAt: now + this.instructionCacheTtlMs, promise });
+
+    try {
+      return await promise;
+    } catch (error) {
+      if (this.instructionCache.get(requestId)?.promise === promise) {
+        this.instructionCache.delete(requestId);
+      }
+      throw error;
+    }
+  }
+
+  private pruneInstructionCache(now: number) {
+    for (const [key, value] of this.instructionCache.entries()) {
+      if (value.expiresAt <= now) {
+        this.instructionCache.delete(key);
+      }
+    }
+  }
+
+  private invalidateInstructionCache(requestId: string) {
+    this.instructionCache.delete(requestId);
   }
 
   async getRequestStage(requestId: string, stage: TsdRequestStage, user: AuthUser) {
     const plan = await this.getRequestPlan(requestId, user);
-    return stagePayload(plan, stage);
+    const payload = stagePayload(plan, stage);
+    return stage === 'boxless-packing'
+      ? { ...payload, packingProgress: await this.loadBoxlessPackingProgress(requestId, plan) }
+      : payload;
   }
 
   async handleStageAction(
@@ -118,13 +390,61 @@ export class TsdAssemblyService {
     user: AuthUser,
   ) {
     const plan = await this.getRequestPlan(requestId, user);
-    const scannedCode = scannedValue(body);
-    const result = validateStageAction(plan, stage, action, scannedCode);
+    const scannedCode =
+      stage === 'boxless-packing' && action === 'scan-item' && isRecord(body)
+        ? textValue(body, 'barcode')
+        : scannedValue(body);
+    let result = validateStageAction(plan, stage, action, scannedCode);
+    let actionBody = isRecord(body) ? { ...body } : {};
+    if (stage === 'boxless-packing' && result.accepted) {
+      if (!plan.storesWithoutBoxes) {
+        throw new BadRequestException('Для этого клиента используется обычная сборка по складским коробам.');
+      }
+      const progress = await this.loadBoxlessPackingProgress(requestId, plan);
+      if (action === 'scan-item') {
+        const row = (progress.rows as Array<Record<string, any>>).find((item) => sameCode(item.barcode, scannedCode ?? ''));
+        if (!row || Number(row.remainingQuantity) <= 0) {
+          result = actionResult('REJECTED', false, 'Эта позиция уже полностью упакована или отсутствует в заявке.');
+        } else {
+          actionBody = { ...actionBody, requestItemId: row.requestItemId, quantity: 1 };
+        }
+      }
+      if (result.accepted && ['open-box', 'scan-item', 'close-box'].includes(action)) {
+        await this.recordBoxlessPackingAction(requestId, action, scannedCode ?? '', actionBody, user);
+      }
+      if (result.accepted && action === 'finish') {
+        const finalProgress = await this.loadBoxlessPackingProgress(requestId, plan);
+        if (finalProgress.remainingQuantity > 0) {
+          throw new BadRequestException(`Не упаковано товаров: ${finalProgress.remainingQuantity}.`);
+        }
+        if (finalProgress.boxes.some((box) => !box.closed)) {
+          throw new BadRequestException('Перед завершением закройте все открытые короба.');
+        }
+        await this.stockOperations.packageClientRequest(
+          {
+            requestId,
+            boxes: finalProgress.boxes.length,
+            packedUnits: finalProgress.packedQuantity,
+            idempotencyKey: `tsd-boxless-pack:${requestId}`,
+            comment: 'Сборка по коробам завершена на ТСД.',
+            packages: finalProgress.boxes.map((box) => ({
+              packageCode: box.boxCode,
+              packageType: 'BOX',
+              items: box.items.map((item) => ({ requestItemId: item.requestItemId, quantity: item.quantity })),
+            })),
+          },
+          user,
+        );
+        this.invalidateInstructionCache(requestId);
+      }
+    }
     if (stage === 'box-search' && action === 'scan' && result.accepted && scannedCode) {
       await this.recordFoundBoxSearch(requestId, scannedCode, body, user);
+      this.invalidateInstructionCache(requestId);
     }
     const nextPlan = stage === 'box-search' && action === 'scan' && result.accepted ? await this.getRequestPlan(requestId, user) : plan;
     const stageData = stagePayload(nextPlan, stage);
+    const packingProgress = stage === 'boxless-packing' ? await this.loadBoxlessPackingProgress(requestId, nextPlan) : undefined;
 
     return {
       ...stageData,
@@ -136,6 +456,7 @@ export class TsdAssemblyService {
       deviceCode: isRecord(body) ? textValue(body, 'deviceCode') : undefined,
       serverTime: new Date().toISOString(),
       plan: stageData,
+      ...(packingProgress ? { packingProgress } : {}),
     };
   }
 
@@ -220,80 +541,106 @@ export class TsdAssemblyService {
   }
 
   private async toTsdPlan(document: PickInstructionDocument & { html?: string }) {
-    const completedTsdStatuses: ClientRequestStatus[] = [ClientRequestStatus.PACKED, ClientRequestStatus.DONE];
-    const isCompletedForTsd = completedTsdStatuses.includes(document.requestStatus);
     const rawSearchBoxCodes = uniqueSorted([
       ...document.warehouseRows.map((row) => row.sourceBox),
       ...document.warehouseBalanceMoves.map((row) => row.sourceBox),
       ...document.warehouseWholeBoxes.map((row) => row.box),
     ]);
     const movementTargetBoxes = new Set(document.warehouseBalanceMoves.map((row) => normalizeBoxCode(row.newBox)).filter(Boolean));
-    const completedMoveTargetBoxes = await this.loadCompletedMoveTargetBoxes(document, rawSearchBoxCodes);
-    completedMoveTargetBoxes.forEach((boxCode) => movementTargetBoxes.add(boxCode));
-    let searchBoxes = isCompletedForTsd
-      ? []
-      : rawSearchBoxCodes
-          .filter((boxCode) => shouldShowInTsdBoxSearch(boxCode, movementTargetBoxes))
-          .map((boxCode) => boxEntry(boxCode));
+    const shipmentBoxes = document.warehouseWholeBoxes.map((row) => boxEntry(row.box));
+    const shipmentBoxCodes = shipmentBoxes.map((box) => box.boxCode);
+    let searchBoxes = rawSearchBoxCodes
+      .filter((boxCode) => shouldShowInTsdBoxSearch(boxCode, movementTargetBoxes))
+      .map((boxCode) => boxEntry(boxCode));
+    const activeTsdProcesses = (await this.loadActiveTsdProcesses([document.requestId])).get(document.requestId) ?? [];
+    let activeTsdProcess = activeTsdProcesses[0] ?? null;
     const foundSearchBoxCodes = await this.loadFoundBoxSearchCodes(
       document.requestId,
       searchBoxes.map((box) => box.boxCode),
     );
+    const foundSearchBoxMatchers = [...foundSearchBoxCodes, ...(activeTsdProcess?.foundBoxCodes ?? [])];
     searchBoxes = searchBoxes.map((box) =>
-      foundSearchBoxCodes.has(normalizeBoxCode(box.boxCode)) ? { ...box, found: true, isFound: true } : box,
+      foundSearchBoxMatchers.some((boxCode) => sameCode(boxCode, box.boxCode)) ? { ...box, found: true, isFound: true } : box,
     );
 
-    const relabelTasks = isCompletedForTsd
-      ? []
-      : collapseRows(
-          document.warehouseRows
-            .filter((row) => row.sourceBox && row.quantity > 0 && row.rebrandNote)
-            .map((row) => {
-              const parsed = parseRelabelNote(row.rebrandNote);
-              return {
-                sourceBox: row.sourceBox,
-                oldBarcode: parsed.oldBarcode || row.barcodeOnBox,
-                newBarcode: parsed.newBarcode || row.barcodeOnBox,
-                barcode: parsed.newBarcode || row.barcodeOnBox,
-                name: row.artOnBox,
-                size: row.size,
-                quantity: row.quantity,
-                note: row.rebrandNote,
-              };
-            }),
-          (row) => `${row.sourceBox}|${row.oldBarcode}|${row.newBarcode}|${row.size}`,
-        );
+    const rawRelabelTasks = collapseRows(
+      document.warehouseRows
+        .filter((row) => row.sourceBox && row.quantity > 0 && row.rebrandNote)
+        .map((row) => {
+          const parsed = parseRelabelNote(row.rebrandNote);
+          return {
+            sourceBox: row.sourceBox,
+            oldBarcode: parsed.oldBarcode || row.barcodeOnBox,
+            newBarcode: parsed.newBarcode || row.barcodeOnBox,
+            barcode: parsed.newBarcode || row.barcodeOnBox,
+            name: row.artOnBox,
+            size: row.size,
+            quantity: row.quantity,
+            note: row.rebrandNote,
+          };
+        }),
+      (row) => `${row.sourceBox}|${row.oldBarcode}|${row.newBarcode}|${row.size}`,
+    );
+    const sharedProgress = await this.loadSharedAssemblyProgress(document.requestId);
+    const relabelTasks = rawRelabelTasks.map((task) => {
+      const doneQuantity = Math.min(task.quantity, sharedProgress.relabelDone.get(relabelTaskProgressKey(task)) ?? 0);
+      return {
+        ...task,
+        doneQuantity,
+        remainingQuantity: Math.max(0, task.quantity - doneQuantity),
+        done: doneQuantity >= task.quantity,
+      };
+    });
 
-    const movementTasks = isCompletedForTsd
-      ? []
-      : collapseRows(
-          document.warehouseBalanceMoves
-            .filter(
-              (row) =>
-                row.sourceBox &&
-                row.newBox &&
-                row.quantity > 0 &&
-                !completedMoveTargetBoxes.has(normalizeBoxCode(row.sourceBox)),
-            )
-            .map((row) => ({
-              sourceBox: row.sourceBox,
-              targetBox: row.newBox,
-              barcode: row.barcodeOnBox,
-              name: row.artOnBox,
-              size: row.size,
-              quantity: row.quantity,
-              note: row.note,
-            })),
-          (row) => `${row.sourceBox}|${row.targetBox}|${row.barcode}|${row.size}`,
-        );
+    const allMovementTasks = collapseRows(
+      document.warehouseBalanceMoves
+        .filter((row) => row.sourceBox && row.quantity > 0)
+        .map((row) => ({
+          sourceBox: row.sourceBox,
+          targetBox: row.newBox,
+          purpose: row.purpose ?? (row.newBox ? 'BALANCE' : 'SHIPMENT'),
+          targetRole: row.targetRole ?? (row.newBox ? 'STOCK' : 'SHIPMENT'),
+          barcode: row.barcodeOnBox,
+          name: row.artOnBox,
+          size: row.size,
+          quantity: row.quantity,
+          note: row.note,
+        })),
+      (row) => `${row.sourceBox}|${row.targetBox}|${row.purpose}|${row.targetRole}|${row.barcode}|${row.size}`,
+    );
+    searchBoxes = searchBoxes.map((box) => {
+      const requiresRelabel = relabelTasks.some((row) => sameCode(row.sourceBox, box.boxCode));
+      const requiresMovement = allMovementTasks.some((row) => sameCode(row.sourceBox, box.boxCode));
+      const shipsWhole = shipmentBoxCodes.some((boxCode) => sameCode(boxCode, box.boxCode));
+      const servesMultipleCities = document.warehouseRows.some(
+        (row) =>
+          sameCode(row.sourceBox, box.boxCode) &&
+          row.comment.toLocaleUpperCase('ru-RU').includes('НЕСКОЛЬКО ГОРОДОВ'),
+      );
+
+      return {
+        ...box,
+        ...boxSearchInstruction({ requiresRelabel, requiresMovement, shipsWhole }),
+        servesMultipleCities,
+        multiCityLabel: servesMultipleCities ? 'ТОВАР УЕЗЖАЕТ В НЕСКОЛЬКО ГОРОДОВ' : '',
+      };
+    });
+    const movementProgress = await this.loadMovementProgress(document, allMovementTasks);
+    const completedMoveSourceBoxes = new Set(
+      movementProgress.sourceBoxes.filter((box) => box.done).map((box) => normalizeBoxCode(box.sourceBox)),
+    );
+    const movementTasks = allMovementTasks.filter((row) => !completedMoveSourceBoxes.has(normalizeBoxCode(row.sourceBox)));
+    const outgoingBoxes = buildOutgoingBoxes(document, movementProgress.actualRows);
+    const outgoingBoxCodes = outgoingBoxes.map((box) => box.boxCode);
 
     const totalRelabel = relabelTasks.reduce((sum, row) => sum + row.quantity, 0);
     const totalMove = movementTasks.reduce((sum, row) => sum + row.quantity, 0);
+    const totalMoveRequired = allMovementTasks.reduce((sum, row) => sum + row.quantity, 0);
     const searchBoxCodes = searchBoxes.map((box) => box.boxCode);
     const foundBoxes = searchBoxes.filter((box) => box.found || box.isFound);
     const remainingBoxes = searchBoxes.filter((box) => !box.found && !box.isFound);
+    const foundBoxCodes = foundBoxes.map((box) => box.boxCode);
     const remainingBoxCodes = remainingBoxes.map((box) => box.boxCode);
-    let activeTsdProcess = (await this.loadActiveTsdProcesses([document.requestId])).get(document.requestId) ?? null;
     if (activeTsdProcess && searchBoxes.length > 0) {
       const totalBoxCount = searchBoxes.length;
       const activeFoundCount = Math.max(activeTsdProcess.foundCount, foundBoxes.length);
@@ -349,11 +696,16 @@ export class TsdAssemblyService {
       relabelTotal: totalRelabel,
       relabelCount: totalRelabel,
       movementTotal: totalMove,
+      movementRequiredTotal: totalMoveRequired,
       movementCount: totalMove,
       rows: requestRows,
       items: requestRows,
       requestRows,
       searchBoxes,
+      shipmentBoxes,
+      outgoingBoxes,
+      shipmentBoxCodes,
+      outgoingBoxCodes,
       boxesToSearch: searchBoxes,
       boxesToFind: searchBoxes,
       searchTasks: searchBoxes,
@@ -362,6 +714,8 @@ export class TsdAssemblyService {
       searchBoxCodes,
       boxesToSearchCodes: searchBoxCodes,
       boxesToFindCodes: searchBoxCodes,
+      foundBoxCodes,
+      foundBoxesCodes: foundBoxCodes,
       remainingBoxCodes,
       remainingBoxes,
       remainingBoxTasks: remainingBoxes,
@@ -371,52 +725,311 @@ export class TsdAssemblyService {
       foundCount: foundBoxes.length,
       found: foundBoxes.length,
       foundBoxes,
+      boxSearchProgress: {
+        total: searchBoxes.length,
+        found: foundBoxes.length,
+        remaining: remainingBoxes.length,
+        foundBoxCodes,
+        remainingBoxCodes,
+      },
       activeTsdProcess,
+      activeTsdProcesses,
+      confirmedOutgoingBoxCodes: [...sharedProgress.confirmedOutgoingBoxes],
+      relabelProgress: {
+        totalRequired: totalRelabel,
+        totalDone: relabelTasks.reduce((sum, task) => sum + task.doneQuantity, 0),
+        totalRemaining: relabelTasks.reduce((sum, task) => sum + task.remainingQuantity, 0),
+      },
       relabelTasks,
       relabelBoxes: groupTasksByBox(relabelTasks),
+      allMovementTasks,
       movementTasks,
       moveTasks: movementTasks,
       movementBoxes: groupTasksByBox(movementTasks),
+      movementProgress,
     };
   }
 
-  private async loadCompletedMoveTargetBoxes(document: PickInstructionDocument, boxCodes: string[]) {
-    const normalizedBoxCodes = boxCodes.map((boxCode) => boxCode.trim()).filter(Boolean);
-    if (normalizedBoxCodes.length === 0 || !document.requestTitle.trim()) {
-      return new Set<string>();
+  private async loadMovementProgress(document: PickInstructionDocument, tasks: TsdMovementPlanTask[]) {
+    const totalRequired = tasks.reduce((sum, task) => sum + task.quantity, 0);
+    const empty = {
+      totalRequired,
+      totalMoved: 0,
+      totalRemaining: totalRequired,
+      doneSourceBoxes: [] as string[],
+      sourceBoxes: [] as Array<{
+        sourceBox: string;
+        requiredQuantity: number;
+        movedQuantity: number;
+        remainingQuantity: number;
+        done: boolean;
+        targetBoxes: string[];
+      }>,
+      rows: [] as Array<
+        TsdMovementPlanTask & {
+          requiredQuantity: number;
+          movedQuantity: number;
+          remainingQuantity: number;
+          done: boolean;
+          actualTargetBoxes: string[];
+        }
+      >,
+      actualRows: [] as Array<{
+        sourceBox: string;
+        targetBox: string;
+        purpose: 'BALANCE' | 'SHIPMENT';
+        targetRole: 'STOCK' | 'SHIPMENT';
+        barcode: string;
+        name: string | null;
+        size: string | null;
+        quantity: number;
+        movedAt: string | null;
+      }>,
+    };
+
+    if (tasks.length === 0 || !document.requestTitle.trim()) {
+      return empty;
     }
 
-    const rows = await this.prisma.stockMovement.findMany({
+    const movements = await this.prisma.stockMovement.findMany({
       where: {
         clientId: document.client.id,
         type: MovementType.MOVE,
-        quantity: { gt: 0 },
         comment: { contains: document.requestTitle },
-        box: { code: { in: normalizedBoxCodes } },
       },
+      orderBy: { createdAt: 'asc' },
       select: {
+        idempotencyKey: true,
+        quantity: true,
+        createdAt: true,
         box: { select: { code: true } },
+        sku: {
+          select: {
+            name: true,
+            size: true,
+            barcodes: { select: { value: true, isPrimary: true } },
+          },
+        },
       },
     });
 
-    return new Set(
-      rows
-        .map((row) => normalizeBoxCode(row.box?.code))
-        .filter((boxCode): boxCode is string => Boolean(boxCode)),
+    const pairs = new Map<string, { out: typeof movements; in: typeof movements }>();
+    for (const movement of movements) {
+      const key = movementPairKey(movement.idempotencyKey);
+      const side = movementPairSide(movement.idempotencyKey, movement.quantity);
+      if (!key || !side) {
+        continue;
+      }
+      const pair = pairs.get(key) ?? { out: [], in: [] };
+      pair[side].push(movement);
+      pairs.set(key, pair);
+    }
+
+    const balanceTargetsBySourceBox = new Map<string, Set<string>>();
+    for (const task of tasks) {
+      if (!isBalanceMovementTask(task)) {
+        continue;
+      }
+      const sourceBox = normalizeBoxCode(task.sourceBox);
+      const targetBox = normalizeBoxCode(task.targetBox);
+      if (!sourceBox || !targetBox) {
+        continue;
+      }
+      const targets = balanceTargetsBySourceBox.get(sourceBox) ?? new Set<string>();
+      targets.add(targetBox);
+      balanceTargetsBySourceBox.set(sourceBox, targets);
+    }
+
+    const movedBySourceBox = new Map<string, number>();
+    for (const movement of movements) {
+      if (movement.quantity >= 0) {
+        continue;
+      }
+      const sourceBox = normalizeBoxCode(movement.box?.code);
+      if (sourceBox) {
+        movedBySourceBox.set(sourceBox, (movedBySourceBox.get(sourceBox) ?? 0) + Math.abs(movement.quantity));
+      }
+    }
+
+    const actualRows = new Map<string, (typeof empty.actualRows)[number]>();
+    for (const pair of pairs.values()) {
+      const rowsCount = Math.min(pair.out.length, pair.in.length);
+      for (let index = 0; index < rowsCount; index += 1) {
+        const outRow = pair.out[index];
+        const inRow = pair.in[index];
+        const sourceBox = outRow.box?.code?.trim() ?? '';
+        const targetBox = inRow.box?.code?.trim() ?? '';
+        const normalizedSourceBox = normalizeBoxCode(sourceBox);
+        const normalizedTargetBox = normalizeBoxCode(targetBox);
+        if (!sourceBox || !targetBox || !normalizedSourceBox || !normalizedTargetBox) {
+          continue;
+        }
+        const isBalanceTarget = balanceTargetsBySourceBox.get(normalizedSourceBox)?.has(normalizedTargetBox) ?? false;
+        const purpose = isBalanceTarget ? 'BALANCE' : 'SHIPMENT';
+        const targetRole = isBalanceTarget ? 'STOCK' : 'SHIPMENT';
+        const barcode = primaryBarcode(outRow.sku.barcodes);
+        const quantity = Math.min(Math.abs(outRow.quantity), Math.abs(inRow.quantity));
+        const key = [
+          normalizedSourceBox,
+          normalizedTargetBox,
+          normalizeScanCode(barcode),
+          outRow.sku.size?.trim().toLocaleLowerCase('ru-RU') ?? '',
+          purpose,
+        ].join('|');
+        const current =
+          actualRows.get(key) ??
+          ({
+            sourceBox,
+            targetBox,
+            purpose,
+            targetRole,
+            barcode,
+            name: outRow.sku.name,
+            size: outRow.sku.size,
+            quantity: 0,
+            movedAt: null,
+          } as (typeof empty.actualRows)[number]);
+        current.quantity += quantity;
+        current.movedAt = inRow.createdAt.toISOString();
+        actualRows.set(key, current);
+      }
+    }
+
+    const movedByTask = new Map<string, number>();
+    const actualTargetBoxesByTask = new Map<string, Set<string>>();
+    for (const actual of actualRows.values()) {
+      let remaining = actual.quantity;
+      for (const task of tasks) {
+        if (remaining <= 0 || !matchesMovementTask(task, actual)) {
+          continue;
+        }
+        const key = movementTaskKey(task);
+        const current = movedByTask.get(key) ?? 0;
+        const capacity = Math.max(0, task.quantity - current);
+        const accepted = Math.min(capacity, remaining);
+        if (accepted <= 0) {
+          continue;
+        }
+        movedByTask.set(key, current + accepted);
+        const targetBoxes = actualTargetBoxesByTask.get(key) ?? new Set<string>();
+        targetBoxes.add(actual.targetBox);
+        actualTargetBoxesByTask.set(key, targetBoxes);
+        remaining -= accepted;
+      }
+    }
+
+    const assignedBySourceBox = new Map<string, number>();
+    for (const task of tasks) {
+      const sourceBox = normalizeBoxCode(task.sourceBox);
+      if (!sourceBox) {
+        continue;
+      }
+      assignedBySourceBox.set(sourceBox, (assignedBySourceBox.get(sourceBox) ?? 0) + (movedByTask.get(movementTaskKey(task)) ?? 0));
+    }
+
+    for (const [sourceBox, movedQuantity] of movedBySourceBox) {
+      let unassignedQuantity = Math.max(0, movedQuantity - (assignedBySourceBox.get(sourceBox) ?? 0));
+      if (unassignedQuantity <= 0) {
+        continue;
+      }
+
+      for (const task of tasks) {
+        if (unassignedQuantity <= 0 || normalizeBoxCode(task.sourceBox) !== sourceBox) {
+          continue;
+        }
+        const key = movementTaskKey(task);
+        const current = movedByTask.get(key) ?? 0;
+        const capacity = Math.max(0, task.quantity - current);
+        const accepted = Math.min(capacity, unassignedQuantity);
+        if (accepted <= 0) {
+          continue;
+        }
+
+        movedByTask.set(key, current + accepted);
+        if (task.targetBox) {
+          const targetBoxes = actualTargetBoxesByTask.get(key) ?? new Set<string>();
+          targetBoxes.add(task.targetBox);
+          actualTargetBoxesByTask.set(key, targetBoxes);
+        }
+        unassignedQuantity -= accepted;
+      }
+    }
+
+    const rows = tasks.map((task) => {
+      const key = movementTaskKey(task);
+      const movedQuantity = Math.min(task.quantity, movedByTask.get(key) ?? 0);
+      const remainingQuantity = Math.max(0, task.quantity - movedQuantity);
+      return {
+        ...task,
+        requiredQuantity: task.quantity,
+        movedQuantity,
+        remainingQuantity,
+        done: remainingQuantity === 0,
+        actualTargetBoxes: [...(actualTargetBoxesByTask.get(key) ?? new Set<string>())],
+      };
+    });
+
+    const actualRowsList = [...actualRows.values()].sort((left, right) =>
+      `${left.sourceBox}:${left.targetBox}:${left.barcode}`.localeCompare(`${right.sourceBox}:${right.targetBox}:${right.barcode}`, 'ru', {
+        numeric: true,
+      }),
     );
+    const actualMovedTotal = actualRowsList.reduce((sum, row) => sum + row.quantity, 0);
+    const sourceBoxes = mergeActualMovementSourceBoxes(groupMovementProgressBySource(rows), actualRowsList);
+    const plannedMovedTotal = rows.reduce((sum, row) => sum + row.movedQuantity, 0);
+    const totalMoved = Math.max(plannedMovedTotal, actualMovedTotal);
+
+    return {
+      totalRequired,
+      totalMoved,
+      totalRemaining: Math.max(0, totalRequired - totalMoved),
+      doneSourceBoxes: sourceBoxes.filter((box) => box.done).map((box) => box.sourceBox),
+      sourceBoxes,
+      rows,
+      actualRows: actualRowsList,
+    };
+  }
+
+  private async loadSharedAssemblyProgress(requestId: string) {
+    const operations = await this.prisma.tsdOperation.findMany({
+      where: {
+        operationType: 'assembly_stage',
+        status: TsdOperationStatus.ACCEPTED,
+        payload: { path: ['requestId'], equals: requestId },
+      },
+      orderBy: { createdAt: 'asc' },
+      select: { payload: true },
+    });
+    const relabelDone = new Map<string, number>();
+    const confirmedOutgoingBoxes = new Set<string>();
+
+    for (const operation of operations) {
+      const payload = operationPayload(operation.payload);
+      const action = textValue(payload, 'action') ?? textValue(payload, 'progressKind') ?? '';
+      if (action === 'relabel-complete') {
+        const key = relabelPayloadProgressKey(payload);
+        if (key) relabelDone.set(key, (relabelDone.get(key) ?? 0) + 1);
+      }
+      if (action === 'outgoing-confirm') {
+        const boxCode = normalizeBoxCode(textValue(payload, 'boxCode'));
+        if (boxCode) confirmedOutgoingBoxes.add(boxCode);
+      }
+    }
+
+    return { relabelDone, confirmedOutgoingBoxes };
   }
 
   private async loadActiveTsdProcesses(requestIds: string[]) {
     const ids = [...new Set(requestIds.filter(Boolean))];
     if (ids.length === 0) {
-      return new Map<string, TsdProcessSummary>();
+      return new Map<string, TsdProcessSummary[]>();
     }
 
-    const since = new Date(Date.now() - 12 * 60 * 60 * 1000);
+    const since = new Date(Date.now() - 30 * 60 * 1000);
     const operations = await this.prisma.tsdOperation.findMany({
       where: {
         status: TsdOperationStatus.ACCEPTED,
-        operationType: { in: ['assembly_stage', 'box_search_scan'] },
+        operationType: { in: ['assembly_stage', 'box_search_scan', 'move_scan'] },
         createdAt: { gte: since },
       },
       orderBy: { createdAt: 'desc' },
@@ -424,7 +1037,7 @@ export class TsdAssemblyService {
     });
 
     const allowedRequestIds = new Set(ids);
-    const latestByRequest = new Map<string, (typeof operations)[number]>();
+    const latestByWorker = new Map<string, (typeof operations)[number]>();
     const foundBoxesByRequest = new Map<string, Set<string>>();
     const userIds = new Set<string>();
 
@@ -435,8 +1048,10 @@ export class TsdAssemblyService {
         continue;
       }
 
-      if (!latestByRequest.has(requestId)) {
-        latestByRequest.set(requestId, operation);
+      const payloadDevice = textValue(payload, 'deviceCode') ?? operation.deviceId;
+      const workerKey = `${requestId}|${payloadDevice}`;
+      if (!latestByWorker.has(workerKey)) {
+        latestByWorker.set(workerKey, operation);
       }
 
       const userId = textValue(payload, 'userId');
@@ -445,7 +1060,9 @@ export class TsdAssemblyService {
       }
 
       if (operation.operationType === 'box_search_scan') {
-        const boxCode = normalizeBoxCode(textValue(payload, 'boxCode') ?? operation.operationKey.split(':').pop());
+        const boxCode = normalizeBoxCode(
+          textValue(payload, 'normalizedBoxCode') ?? textValue(payload, 'boxCode') ?? operation.operationKey.split(':').pop(),
+        );
         if (boxCode) {
           const boxes = foundBoxesByRequest.get(requestId) ?? new Set<string>();
           boxes.add(boxCode);
@@ -462,21 +1079,27 @@ export class TsdAssemblyService {
       : [];
     const usersById = new Map(users.map((user) => [user.id, user]));
 
-    const result = new Map<string, TsdProcessSummary>();
-    for (const [requestId, operation] of latestByRequest) {
+    const result = new Map<string, TsdProcessSummary[]>();
+    for (const operation of latestByWorker.values()) {
       const payload = operationPayload(operation.payload);
+      const requestId = operationRequestId(operation, payload);
+      if (!requestId) continue;
       const user = usersById.get(textValue(payload, 'userId') ?? '');
       const stage = operationStage(operation, payload);
-      const foundCount = foundBoxesByRequest.get(requestId)?.size ?? 0;
-      result.set(requestId, {
+      const foundBoxCodes = [...(foundBoxesByRequest.get(requestId) ?? new Set<string>())];
+      const foundCount = foundBoxCodes.length;
+      const processes = result.get(requestId) ?? [];
+      processes.push({
         stage,
         stageLabel: stageLabel(stage),
         deviceCode: textValue(payload, 'deviceCode') ?? operation.deviceId,
         workerName: user?.name ?? textValue(payload, 'workerName') ?? textValue(payload, 'operatorName') ?? null,
         updatedAt: operation.updatedAt.toISOString(),
         foundCount,
+        foundBoxCodes,
         progressText: foundCount > 0 ? `найдено коробов: ${foundCount}` : stageLabel(stage),
       });
+      result.set(requestId, processes);
     }
 
     return result;
@@ -493,16 +1116,30 @@ export class TsdAssemblyService {
       where: {
         operationType: 'box_search_scan',
         status: TsdOperationStatus.ACCEPTED,
-        operationKey: { startsWith: prefix },
+        OR: [{ operationKey: { startsWith: prefix } }, { payload: { path: ['requestId'], equals: requestId } }],
       },
-      select: { operationKey: true },
+      select: { operationKey: true, payload: true },
     });
 
-    return new Set(
-      operations
-        .map((operation) => operation.operationKey.slice(prefix.length))
-        .filter((boxCode) => allowed.has(boxCode)),
-    );
+    const found = new Set<string>();
+    for (const operation of operations) {
+      const payload = operationPayload(operation.payload);
+      const candidates = [
+        operation.operationKey.startsWith(prefix) ? operation.operationKey.slice(prefix.length) : operation.operationKey.split(':').pop(),
+        textValue(payload, 'normalizedBoxCode'),
+        textValue(payload, 'boxCode'),
+      ];
+      for (const candidate of candidates) {
+        const normalized = normalizeBoxCode(candidate);
+        const allowedCode = [...allowed].find((boxCode) => sameCode(boxCode, normalized));
+        if (allowedCode) {
+          found.add(allowedCode);
+          break;
+        }
+      }
+    }
+
+    return found;
   }
 
   private async recordFoundBoxSearch(
@@ -542,6 +1179,138 @@ export class TsdAssemblyService {
       },
     });
   }
+
+  private async recordBoxlessPackingAction(
+    requestId: string,
+    action: string,
+    scannedCode: string,
+    body: Record<string, unknown>,
+    user: AuthUser,
+  ) {
+    const boxCode = textValue(body, 'boxCode') || (action !== 'scan-item' ? scannedCode : '');
+    if (!boxCode || !boxCode.toLocaleUpperCase('ru-RU').startsWith('FFL')) {
+      throw new BadRequestException('Сначала отсканируйте номер нового короба, начинающийся с FFL.');
+    }
+    const operationKey =
+      textValue(body, 'operationKey') ||
+      `boxless-packing:${requestId}:${action}:${user.deviceId ?? user.id}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    const payload = {
+      ...body,
+      requestId,
+      stage: 'boxless-packing',
+      action,
+      boxCode: boxCode.trim(),
+      scannedCode,
+      deviceCode: textValue(body, 'deviceCode') || user.deviceCode,
+      userId: user.id,
+    } as Prisma.InputJsonValue;
+
+    await this.prisma.tsdOperation.upsert({
+      where: { operationKey },
+      update: { payload, status: TsdOperationStatus.ACCEPTED, serverMessage: 'Операция сборки по коробам принята.' },
+      create: {
+        deviceId: user.deviceId ?? user.id,
+        operationKey,
+        operationType: 'assembly_stage',
+        payload,
+        status: TsdOperationStatus.ACCEPTED,
+        serverMessage: 'Операция сборки по коробам принята.',
+      },
+    });
+  }
+
+  private async loadBoxlessPackingProgress(requestId: string, plan: Record<string, any>) {
+    const operations = await this.prisma.tsdOperation.findMany({
+      where: {
+        operationType: 'assembly_stage',
+        status: TsdOperationStatus.ACCEPTED,
+        payload: { path: ['requestId'], equals: requestId },
+      },
+      orderBy: { createdAt: 'asc' },
+      select: { operationKey: true, payload: true, deviceId: true, createdAt: true },
+    });
+    const requestRows = (plan.requestRows ?? plan.rows ?? []) as Array<Record<string, any>>;
+    const boxes = new Map<
+      string,
+      {
+        boxCode: string;
+        closed: boolean;
+        deviceCode: string;
+        openedAt: string;
+        closedAt: string | null;
+        items: Map<string, { requestItemId: string; barcode: string; name: string; quantity: number }>;
+      }
+    >();
+
+    for (const operation of operations) {
+      const payload = operationPayload(operation.payload);
+      if (textValue(payload, 'stage') !== 'boxless-packing') continue;
+      const action = textValue(payload, 'action');
+      const rawBoxCode = textValue(payload, 'boxCode') ?? '';
+      const normalized = normalizeBoxCode(rawBoxCode);
+      if (!normalized) continue;
+      const current = boxes.get(normalized) ?? {
+        boxCode: rawBoxCode,
+        closed: false,
+        deviceCode: textValue(payload, 'deviceCode') || operation.deviceId,
+        openedAt: operation.createdAt.toISOString(),
+        closedAt: null,
+        items: new Map<string, { requestItemId: string; barcode: string; name: string; quantity: number }>(),
+      };
+      if (action === 'open-box') {
+        current.closed = false;
+        current.deviceCode = textValue(payload, 'deviceCode') || operation.deviceId;
+      }
+      if (action === 'scan-item') {
+        const requestItemId = textValue(payload, 'requestItemId');
+        const row = requestRows.find((item) => item.itemId === requestItemId || item.id === requestItemId);
+        if (requestItemId && row) {
+          const existing = current.items.get(requestItemId);
+          current.items.set(requestItemId, {
+            requestItemId,
+            barcode: textValue(row, 'barcode') ?? '',
+            name: textValue(row, 'name') ?? '',
+            quantity: (existing?.quantity ?? 0) + Math.max(1, Number(payload.quantity) || 1),
+          });
+        }
+      }
+      if (action === 'close-box') {
+        current.closed = true;
+        current.closedAt = operation.createdAt.toISOString();
+      }
+      boxes.set(normalized, current);
+    }
+
+    const packedByItem = new Map<string, number>();
+    const boxRows = [...boxes.values()].map((box) => {
+      const items = [...box.items.values()];
+      for (const item of items) packedByItem.set(item.requestItemId, (packedByItem.get(item.requestItemId) ?? 0) + item.quantity);
+      return { ...box, items, quantity: items.reduce((sum, item) => sum + item.quantity, 0) };
+    });
+    const rows = requestRows.map((row) => {
+      const requestItemId = textValue(row, 'itemId') || textValue(row, 'id') || '';
+      const requiredQuantity = Number(row.requestedQuantity ?? row.quantity) || 0;
+      const packedQuantity = Math.min(requiredQuantity, packedByItem.get(requestItemId) ?? 0);
+      return {
+        requestItemId,
+        barcode: textValue(row, 'barcode') ?? '',
+        name: textValue(row, 'name') ?? '',
+        requiredQuantity,
+        packedQuantity,
+        remainingQuantity: Math.max(0, requiredQuantity - packedQuantity),
+      };
+    });
+
+    return {
+      boxes: boxRows,
+      rows,
+      packedQuantity: rows.reduce((sum, row) => sum + row.packedQuantity, 0),
+      totalQuantity: rows.reduce((sum, row) => sum + row.requiredQuantity, 0),
+      remainingQuantity: rows.reduce((sum, row) => sum + row.remainingQuantity, 0),
+      closedBoxes: boxRows.filter((box) => box.closed).length,
+      openBoxes: boxRows.filter((box) => !box.closed).length,
+    };
+  }
 }
 
 type CollapsibleRow = {
@@ -574,6 +1343,7 @@ function stagePayload(plan: Record<string, any>, stage: TsdRequestStage) {
     const boxCodes = tasks.map((box) => box.boxCode);
     const foundBoxes = tasks.filter((box) => box.found || box.isFound);
     const remainingBoxes = tasks.filter((box) => !box.found && !box.isFound);
+    const foundBoxCodes = foundBoxes.map((box) => box.boxCode);
     const remainingBoxCodes = remainingBoxes.map((box) => box.boxCode);
     return {
       ...base,
@@ -587,6 +1357,8 @@ function stagePayload(plan: Record<string, any>, stage: TsdRequestStage) {
       searchBoxCodes: boxCodes,
       boxesToSearchCodes: boxCodes,
       boxesToFindCodes: boxCodes,
+      foundBoxCodes,
+      foundBoxesCodes: foundBoxCodes,
       remainingBoxCodes,
       total: tasks.length,
       totalCount: tasks.length,
@@ -598,6 +1370,13 @@ function stagePayload(plan: Record<string, any>, stage: TsdRequestStage) {
       foundBoxes,
       remainingBoxes,
       remainingBoxTasks: remainingBoxes,
+      boxSearchProgress: {
+        total: tasks.length,
+        found: foundBoxes.length,
+        remaining: remainingBoxes.length,
+        foundBoxCodes,
+        remainingBoxCodes,
+      },
     };
   }
 
@@ -674,7 +1453,28 @@ function operationStage(operation: { operationType: string }, payload: Record<st
   if (operation.operationType === 'box_search_scan') {
     return 'box-search';
   }
+  if (operation.operationType === 'move_scan') {
+    return 'moves';
+  }
   return textValue(payload, 'stage') ?? 'open';
+}
+
+function relabelTaskProgressKey(task: { sourceBox?: string; oldBarcode?: string; newBarcode?: string; size?: string }) {
+  return [
+    normalizeBoxCode(task.sourceBox),
+    normalizeScanCode(task.oldBarcode),
+    normalizeScanCode(task.newBarcode),
+    (task.size ?? '').trim().toLocaleLowerCase('ru-RU'),
+  ].join('|');
+}
+
+function relabelPayloadProgressKey(payload: Record<string, unknown>) {
+  return relabelTaskProgressKey({
+    sourceBox: textValue(payload, 'sourceBox'),
+    oldBarcode: textValue(payload, 'oldBarcode'),
+    newBarcode: textValue(payload, 'newBarcode'),
+    size: textValue(payload, 'size'),
+  });
 }
 
 function stageLabel(stage: string) {
@@ -687,6 +1487,12 @@ function stageLabel(stage: string) {
     packed: 'упаковано',
   };
   return labels[stage] ?? stage;
+}
+
+function requireFflScanCode(code: string) {
+  return code.toLocaleUpperCase('ru-RU').startsWith('FFL')
+    ? null
+    : actionResult('REJECTED', false, 'Номер короба должен начинаться с FFL. Отсканируйте корректный ШК короба.');
 }
 
 function normalizeBoxCode(value?: string | null) {
@@ -724,6 +1530,48 @@ function boxEntry(boxCode: string, found = false) {
   };
 }
 
+export function boxSearchInstruction(input: {
+  requiresRelabel: boolean;
+  requiresMovement: boolean;
+  shipsWhole: boolean;
+}) {
+  if (input.requiresRelabel && input.requiresMovement) {
+    return {
+      instructionType: 'RELABEL_MOVEMENT' as const,
+      instructionLabel: 'МАРК+ПЕРЕМЕЩЕНИЕ',
+      requiresRelabel: true,
+      requiresMovement: true,
+      shipsWhole: input.shipsWhole,
+    };
+  }
+  if (input.requiresRelabel) {
+    return {
+      instructionType: 'RELABEL' as const,
+      instructionLabel: 'ПЕРЕМАРКИРОВКА',
+      requiresRelabel: true,
+      requiresMovement: false,
+      shipsWhole: input.shipsWhole,
+    };
+  }
+  if (input.requiresMovement) {
+    return {
+      instructionType: 'MOVEMENT' as const,
+      instructionLabel: 'ПЕРЕМЕЩЕНИЕ',
+      requiresRelabel: false,
+      requiresMovement: true,
+      shipsWhole: input.shipsWhole,
+    };
+  }
+
+  return {
+    instructionType: 'WHOLE' as const,
+    instructionLabel: 'ЦЕЛИКОМ',
+    requiresRelabel: false,
+    requiresMovement: false,
+    shipsWhole: input.shipsWhole,
+  };
+}
+
 function validateStageAction(plan: Record<string, any>, stage: TsdRequestStage, action: string, scannedCode?: string) {
   const code = normalizeScanCode(scannedCode);
 
@@ -731,8 +1579,22 @@ function validateStageAction(plan: Record<string, any>, stage: TsdRequestStage, 
     if (!code) {
       return actionResult('REJECTED', false, 'Не прочитан номер короба.');
     }
+    const boxGuard = requireFflScanCode(code);
+    if (boxGuard) {
+      return boxGuard;
+    }
     const found = (plan.searchBoxes ?? []).some((box: { boxCode?: string }) => sameCode(box.boxCode, code));
     return actionResult(found ? 'FOUND' : 'NOT_REQUIRED', found, found ? 'Короб найден.' : 'Короб не участвует в этой заявке.');
+  }
+
+  if ((stage === 'moves' && action === 'target-box') || (stage === 'boxless-packing' && action === 'open-box')) {
+    if (!code) {
+      return actionResult('REJECTED', false, 'Не прочитан номер короба.');
+    }
+    const boxGuard = requireFflScanCode(code);
+    if (boxGuard) {
+      return boxGuard;
+    }
   }
 
   if (stage === 'relabel' && action === 'scan-source') {
@@ -801,6 +1663,362 @@ function groupTasksByBox<T extends { sourceBox?: string; quantity?: number }>(ta
     byBox.set(sourceBox, current);
   }
   return [...byBox.values()].sort((left, right) => left.sourceBox.localeCompare(right.sourceBox, 'ru', { numeric: true }));
+}
+
+function movementPairKey(value?: string | null) {
+  return value?.replace(/:(out|in)$/i, '') ?? '';
+}
+
+function movementPairSide(value: string | null | undefined, quantity: number): 'out' | 'in' | null {
+  if (value?.match(/:out$/i)) {
+    return 'out';
+  }
+  if (value?.match(/:in$/i)) {
+    return 'in';
+  }
+  if (quantity < 0) {
+    return 'out';
+  }
+  if (quantity > 0) {
+    return 'in';
+  }
+  return null;
+}
+
+function primaryBarcode(barcodes: Array<{ value: string; isPrimary: boolean }>) {
+  return barcodes.find((barcode) => barcode.isPrimary)?.value ?? barcodes[0]?.value ?? '';
+}
+
+function isBalanceMovementTask(task: Pick<TsdMovementPlanTask, 'purpose' | 'targetRole' | 'targetBox'>) {
+  const purpose = task.purpose?.trim().toUpperCase();
+  const targetRole = task.targetRole?.trim().toUpperCase();
+  return purpose === 'BALANCE' || targetRole === 'STOCK' || Boolean(task.targetBox?.trim());
+}
+
+function isShipmentMovementTask(task: Pick<TsdMovementPlanTask, 'purpose' | 'targetRole' | 'targetBox' | 'note'>) {
+  const purpose = task.purpose?.trim().toUpperCase();
+  const targetRole = task.targetRole?.trim().toUpperCase();
+  if (purpose === 'SHIPMENT' || targetRole === 'SHIPMENT') {
+    return true;
+  }
+  return !task.targetBox?.trim() || Boolean(task.note?.toLocaleLowerCase('ru-RU').includes('постав'));
+}
+
+function movementTaskKey(task: TsdMovementPlanTask) {
+  return [
+    normalizeBoxCode(task.sourceBox),
+    normalizeBoxCode(task.targetBox),
+    isShipmentMovementTask(task) ? 'SHIPMENT' : 'BALANCE',
+    normalizeScanCode(task.barcode),
+    task.size?.trim().toLocaleLowerCase('ru-RU') ?? '',
+  ].join('|');
+}
+
+function matchesMovementTask(
+  task: TsdMovementPlanTask,
+  actual: {
+    sourceBox: string;
+    targetBox: string;
+    purpose: 'BALANCE' | 'SHIPMENT';
+    barcode: string;
+    name: string | null;
+    size: string | null;
+  },
+) {
+  if (!sameCode(task.sourceBox, actual.sourceBox)) {
+    return false;
+  }
+  if (isShipmentMovementTask(task) !== (actual.purpose === 'SHIPMENT')) {
+    return false;
+  }
+  if (isBalanceMovementTask(task) && task.targetBox && !sameCode(task.targetBox, actual.targetBox)) {
+    return false;
+  }
+  const barcodeMatches = task.barcode && actual.barcode ? sameCode(task.barcode, actual.barcode) : true;
+  const sizeMatches = task.size && actual.size ? task.size.trim().toLocaleLowerCase('ru-RU') === actual.size.trim().toLocaleLowerCase('ru-RU') : true;
+  const nameMatches = task.name && actual.name ? task.name.trim().toLocaleLowerCase('ru-RU') === actual.name.trim().toLocaleLowerCase('ru-RU') : true;
+  return barcodeMatches && sizeMatches && nameMatches;
+}
+
+function groupMovementProgressBySource(
+  rows: Array<
+    TsdMovementPlanTask & {
+      requiredQuantity: number;
+      movedQuantity: number;
+      remainingQuantity: number;
+      actualTargetBoxes: string[];
+    }
+  >,
+) {
+  const bySource = new Map<
+    string,
+    {
+      sourceBox: string;
+      requiredQuantity: number;
+      movedQuantity: number;
+      remainingQuantity: number;
+      done: boolean;
+      targetBoxes: string[];
+    }
+  >();
+
+  for (const row of rows) {
+    const sourceBox = row.sourceBox.trim();
+    if (!sourceBox) {
+      continue;
+    }
+    const current =
+      bySource.get(sourceBox) ??
+      ({
+        sourceBox,
+        requiredQuantity: 0,
+        movedQuantity: 0,
+        remainingQuantity: 0,
+        done: false,
+        targetBoxes: [],
+      } as {
+        sourceBox: string;
+        requiredQuantity: number;
+        movedQuantity: number;
+        remainingQuantity: number;
+        done: boolean;
+        targetBoxes: string[];
+      });
+    current.requiredQuantity += row.requiredQuantity;
+    current.movedQuantity += row.movedQuantity;
+    current.remainingQuantity += row.remainingQuantity;
+    for (const targetBox of row.actualTargetBoxes) {
+      if (targetBox && !current.targetBoxes.some((value) => sameCode(value, targetBox))) {
+        current.targetBoxes.push(targetBox);
+      }
+    }
+    current.done = current.remainingQuantity <= 0;
+    bySource.set(sourceBox, current);
+  }
+
+  return [...bySource.values()].sort((left, right) => left.sourceBox.localeCompare(right.sourceBox, 'ru', { numeric: true }));
+}
+
+function mergeActualMovementSourceBoxes(
+  sourceBoxes: Array<{
+    sourceBox: string;
+    requiredQuantity: number;
+    movedQuantity: number;
+    remainingQuantity: number;
+    done: boolean;
+    targetBoxes: string[];
+  }>,
+  actualRows: Array<{
+    sourceBox: string;
+    targetBox: string;
+    quantity: number;
+  }>,
+) {
+  const bySource = new Map(
+    sourceBoxes.map((box) => [
+      normalizeBoxCode(box.sourceBox),
+      {
+        ...box,
+        targetBoxes: [...box.targetBoxes],
+      },
+    ]),
+  );
+  const actualBySource = new Map<string, { sourceBox: string; movedQuantity: number; targetBoxes: string[] }>();
+
+  for (const row of actualRows) {
+    const sourceKey = normalizeBoxCode(row.sourceBox);
+    if (!sourceKey) {
+      continue;
+    }
+    const current = actualBySource.get(sourceKey) ?? {
+      sourceBox: row.sourceBox,
+      movedQuantity: 0,
+      targetBoxes: [],
+    };
+    current.movedQuantity += row.quantity;
+    if (row.targetBox && !current.targetBoxes.some((value) => sameCode(value, row.targetBox))) {
+      current.targetBoxes.push(row.targetBox);
+    }
+    actualBySource.set(sourceKey, current);
+  }
+
+  for (const [sourceKey, actual] of actualBySource) {
+    const current = bySource.get(sourceKey);
+    if (!current) {
+      bySource.set(sourceKey, {
+        sourceBox: actual.sourceBox,
+        requiredQuantity: actual.movedQuantity,
+        movedQuantity: actual.movedQuantity,
+        remainingQuantity: 0,
+        done: true,
+        targetBoxes: actual.targetBoxes,
+      });
+      continue;
+    }
+
+    current.movedQuantity = Math.max(current.movedQuantity, actual.movedQuantity);
+    current.remainingQuantity = Math.max(0, current.requiredQuantity - current.movedQuantity);
+    current.done = current.remainingQuantity <= 0;
+    for (const targetBox of actual.targetBoxes) {
+      if (!current.targetBoxes.some((value) => sameCode(value, targetBox))) {
+        current.targetBoxes.push(targetBox);
+      }
+    }
+    bySource.set(sourceKey, current);
+  }
+
+  return [...bySource.values()].sort((left, right) => left.sourceBox.localeCompare(right.sourceBox, 'ru', { numeric: true }));
+}
+
+function buildOutgoingBoxes(
+  document: PickInstructionDocument,
+  actualRows: Array<{
+    sourceBox: string;
+    targetBox: string;
+    purpose: 'BALANCE' | 'SHIPMENT';
+    quantity: number;
+  }>,
+) {
+  const boxes = new Map<
+    string,
+    {
+      boxCode: string;
+      code: string;
+      number: string;
+      label: string;
+      type: 'WHOLE_BOX' | 'SHIPMENT_MOVE';
+      typeLabel: string;
+      sourceBox: string;
+      quantity: number;
+      status: string;
+      city: string | null;
+      pallet: string | null;
+    }
+  >();
+
+  const addBox = (
+    boxCode: string,
+    data: {
+      type: 'WHOLE_BOX' | 'SHIPMENT_MOVE';
+      typeLabel: string;
+      sourceBox?: string;
+      quantity?: number;
+      status?: string;
+      city?: string | null;
+      pallet?: string | null;
+    },
+  ) => {
+    const normalized = normalizeBoxCode(boxCode);
+    if (!normalized) {
+      return;
+    }
+    const safeCode = boxCode.trim();
+    const current =
+      boxes.get(normalized) ??
+      ({
+        boxCode: safeCode,
+        code: safeCode,
+        number: safeCode,
+        label: safeCode,
+        type: data.type,
+        typeLabel: data.typeLabel,
+        sourceBox: '',
+        quantity: 0,
+        status: '',
+        city: null,
+        pallet: null,
+      } as {
+        boxCode: string;
+        code: string;
+        number: string;
+        label: string;
+        type: 'WHOLE_BOX' | 'SHIPMENT_MOVE';
+        typeLabel: string;
+        sourceBox: string;
+        quantity: number;
+        status: string;
+        city: string | null;
+        pallet: string | null;
+      });
+    current.quantity += data.quantity ?? 0;
+    current.status = current.status || data.status || '';
+    current.city = current.city || data.city || null;
+    current.pallet = current.pallet || data.pallet || null;
+    if (data.sourceBox && !current.sourceBox.split(', ').some((value) => sameCode(value, data.sourceBox))) {
+      current.sourceBox = current.sourceBox ? `${current.sourceBox}, ${data.sourceBox}` : data.sourceBox;
+    }
+    if (current.type !== 'WHOLE_BOX' && data.type === 'WHOLE_BOX') {
+      current.type = data.type;
+      current.typeLabel = data.typeLabel;
+    }
+    boxes.set(normalized, current);
+  };
+
+  for (const row of document.warehouseWholeBoxes) {
+    addBox(row.box, {
+      type: 'WHOLE_BOX',
+      typeLabel: 'Целый короб',
+      sourceBox: row.box,
+      status: row.status,
+      city: row.city || null,
+      pallet: row.pallet || null,
+    });
+  }
+
+  for (const row of actualRows) {
+    if (row.purpose !== 'SHIPMENT') {
+      continue;
+    }
+    addBox(row.targetBox, {
+      type: 'SHIPMENT_MOVE',
+      typeLabel: 'Короб поставки',
+      sourceBox: row.sourceBox,
+      quantity: row.quantity,
+      status: 'Собран из перемещений',
+    });
+  }
+
+  return [...boxes.values()].sort((left, right) => left.boxCode.localeCompare(right.boxCode, 'ru', { numeric: true }));
+}
+
+function buildWorkbook(rows: Array<Array<string | number>>, sheetName: string, columnWidths: number[]) {
+  const workbook = XLSX.utils.book_new();
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  sheet['!cols'] = columnWidths.map((wch) => ({ wch }));
+  XLSX.utils.book_append_sheet(workbook, sheet, sheetName);
+  return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+}
+
+function movementTargetsText(row: { actualTargetBoxes?: string[]; targetBox?: string; purpose?: string; targetRole?: string }) {
+  if (row.actualTargetBoxes?.length) {
+    return row.actualTargetBoxes.join(', ');
+  }
+
+  if (row.targetBox) {
+    return row.targetBox;
+  }
+
+  return row.purpose === 'SHIPMENT' || row.targetRole === 'SHIPMENT' ? 'Новый короб поставки' : 'Новый короб баланса';
+}
+
+function movementPurposeLabel(purpose?: string, targetRole?: string) {
+  if (purpose === 'SHIPMENT' || targetRole === 'SHIPMENT') {
+    return 'В поставку';
+  }
+
+  if (purpose === 'BALANCE' || targetRole === 'STOCK') {
+    return 'Остаток на склад';
+  }
+
+  return [purpose, targetRole].filter(Boolean).join(' / ');
+}
+
+function xlsxMimeType() {
+  return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+}
+
+function safeFileName(value: string) {
+  return value.replace(/[^a-zA-Z0-9а-яА-ЯёЁ._-]+/g, '_').replace(/^_+|_+$/g, '') || 'request';
 }
 
 function scannedValue(body: Record<string, unknown> | string | undefined) {

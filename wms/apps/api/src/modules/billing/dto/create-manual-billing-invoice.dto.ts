@@ -14,6 +14,10 @@ import {
 export class CreateManualBillingInvoiceLineDto {
   @IsOptional()
   @IsString()
+  invoiceItemId?: string;
+
+  @IsOptional()
+  @IsString()
   serviceId?: string;
 
   @IsOptional()
@@ -49,10 +53,6 @@ export class CreateManualBillingInvoiceLineDto {
 export class CreateManualBillingInvoiceDto {
   @IsString()
   clientId!: string;
-
-  @IsOptional()
-  @IsString()
-  requestId?: string;
 
   @IsDateString()
   periodFrom!: string;

@@ -1,14 +1,12 @@
-import { FileDown, ImageOff, Pencil, PlusCircle, RefreshCw, Save, Search, Trash2, Upload, X } from 'lucide-react';
+import { ImageOff, Pencil, PlusCircle, RefreshCw, Save, Search, Trash2, X } from 'lucide-react';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   createSku,
   deleteSku,
-  downloadSkuDraftTemplate,
   fetchClients,
   fetchMarketplaceConnections,
   fetchSku,
   fetchSkus,
-  importSkuDraftsXlsx,
   syncMarketplaceProducts,
   updateSku,
   type AuthSession,
@@ -44,7 +42,6 @@ type SkuForm = {
   lengthCm: string;
   widthCm: string;
   heightCm: string;
-  volumeLiters: string;
   needsChestnyZnak: boolean;
   isUnmarked: boolean;
   needsLabel: boolean;
@@ -78,7 +75,6 @@ const emptySkuForm: SkuForm = {
   lengthCm: '',
   widthCm: '',
   heightCm: '',
-  volumeLiters: '',
   needsChestnyZnak: false,
   isUnmarked: false,
   needsLabel: false,
@@ -98,9 +94,7 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
   const [selectedClientId, setSelectedClientId] = useState('');
   const [search, setSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
-  const [isSearchFocused, setSearchFocused] = useState(false);
   const [skus, setSkus] = useState<SkuSummary[]>([]);
-  const [draftSkus, setDraftSkus] = useState<SkuSummary[]>([]);
   const [skuState, setSkuState] = useState<LoadState>('idle');
   const [connections, setConnections] = useState<MarketplaceConnectionSummary[]>([]);
   const [selectedSku, setSelectedSku] = useState<SkuDetail | null>(null);
@@ -108,7 +102,6 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
   const [manualForm, setManualForm] = useState<ManualSkuForm>(emptyManualSkuForm);
   const [isManualFormOpen, setManualFormOpen] = useState(false);
   const [isCreatingSku, setCreatingSku] = useState(false);
-  const [isImportingDrafts, setImportingDrafts] = useState(false);
   const [isEditing, setEditing] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [syncingIds, setSyncingIds] = useState<string[]>([]);
@@ -119,8 +112,6 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
     () => clients.find((client) => client.id === selectedClientId) ?? null,
     [clients, selectedClientId],
   );
-  const searchSuggestions = useMemo(() => buildSearchSuggestions(skus, search).slice(0, 8), [search, skus]);
-  const showSearchSuggestions = isSearchFocused && search.trim().length > 0 && searchSuggestions.length > 0;
 
   useEffect(() => {
     if (!canRead) {
@@ -172,17 +163,15 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
       setSkuState('loading');
       setError('');
       try {
-        const [nextSkus, nextConnections, nextDraftSkus] = await Promise.all([
+        const [nextSkus, nextConnections] = await Promise.all([
           fetchSkus(session.accessToken, { clientId: selectedClientId || undefined, search: appliedSearch || undefined }),
           selectedClientId ? fetchMarketplaceConnections(session.accessToken, { clientId: selectedClientId }) : Promise.resolve([]),
-          selectedClientId ? fetchSkus(session.accessToken, { clientId: selectedClientId, draftsOnly: true }) : Promise.resolve([]),
         ]);
         if (!isActive) {
           return;
         }
         setSkus(nextSkus);
         setConnections(nextConnections);
-        setDraftSkus(nextDraftSkus);
         setSkuState('ready');
       } catch (caught) {
         if (isActive) {
@@ -205,14 +194,6 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
   function applySearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setAppliedSearch(search.trim());
-    setSearchFocused(false);
-  }
-
-  function selectSearchSuggestion(sku: SkuSummary) {
-    setSearch(searchSuggestionValue(sku));
-    setAppliedSearch(searchSuggestionValue(sku));
-    setSearchFocused(false);
-    void openSku(sku.id);
   }
 
   async function openSku(skuId: string) {
@@ -259,46 +240,9 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
       setForm(formFromSku(updated));
       setEditing(false);
       setSkus((current) => current.map((sku) => (sku.id === updated.id ? updated : sku)));
-      setDraftSkus((current) => (updated.isDraft ? current.map((sku) => (sku.id === updated.id ? updated : sku)) : current.filter((sku) => sku.id !== updated.id)));
       setMessage('Карточка товара сохранена.');
     } catch (caught) {
       setError(errorMessage(caught, 'Не удалось сохранить карточку товара.'));
-    }
-  }
-
-  async function downloadDraftTemplate() {
-    setError('');
-    setMessage('');
-    try {
-      const blob = await downloadSkuDraftTemplate(session.accessToken);
-      downloadBlob(blob, 'Шаблон_заполнения_товаров_после_приемки.xlsx');
-    } catch (caught) {
-      setError(errorMessage(caught, 'Не удалось скачать шаблон.'));
-    }
-  }
-
-  async function importDraftDetails(file: File | undefined) {
-    if (!file) {
-      return;
-    }
-    if (!selectedClientId) {
-      setError('Сначала выберите клиента.');
-      return;
-    }
-
-    setImportingDrafts(true);
-    setError('');
-    setMessage('');
-    try {
-      const result = await importSkuDraftsXlsx(session.accessToken, { clientId: selectedClientId, file });
-      setMessage(
-        `Карточки загружены. Обновлено: ${result.summary.updated}. Создано: ${result.summary.created}. Закрыто черновиков: ${result.summary.completedDrafts}.`,
-      );
-      setReloadKey((current) => current + 1);
-    } catch (caught) {
-      setError(errorMessage(caught, 'Не удалось загрузить карточки товаров.'));
-    } finally {
-      setImportingDrafts(false);
     }
   }
 
@@ -381,35 +325,8 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
             <span>Поиск</span>
             <div>
               <Search size={16} aria-hidden="true" />
-              <input
-                value={search}
-                onBlur={() => window.setTimeout(() => setSearchFocused(false), 140)}
-                onChange={(event) => {
-                  setSearch(event.target.value);
-                  setSearchFocused(true);
-                }}
-                onFocus={() => setSearchFocused(true)}
-                placeholder="Название, SKU, артикул или штрихкод"
-                autoComplete="off"
-              />
+              <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Название, SKU, артикул или штрихкод" />
             </div>
-            {showSearchSuggestions ? (
-              <div className="catalog-search-suggestions" role="listbox">
-                {searchSuggestions.map((sku) => (
-                  <button
-                    key={sku.id}
-                    type="button"
-                    role="option"
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => selectSearchSuggestion(sku)}
-                  >
-                    <strong>{sku.name}</strong>
-                    <span>{suggestionMainLine(sku)}</span>
-                    <small>{suggestionMetaLine(sku)}</small>
-                  </button>
-                ))}
-              </div>
-            ) : null}
           </label>
           <button className="icon-text-button" type="submit">
             <Search size={16} aria-hidden="true" />
@@ -455,72 +372,6 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
       {error ? <p className="form-error">{error}</p> : null}
       {message ? <p className="form-success">{message}</p> : null}
 
-      {canWrite && selectedClient ? (
-        <section className="catalog-drafts-card" aria-label="Черновики товаров после приемки">
-          <div className="catalog-drafts-card__heading">
-            <div>
-              <strong>Товары без заполненной карточки</strong>
-              <span>Появляются автоматически, когда на приемке пикают новый ШК</span>
-            </div>
-            <div className="catalog-drafts-card__actions">
-              <button className="icon-text-button" type="button" onClick={() => void downloadDraftTemplate()}>
-                <FileDown size={16} aria-hidden="true" />
-                <span>Скачать шаблон</span>
-              </button>
-              <label className="icon-text-button catalog-upload-button">
-                <Upload size={16} aria-hidden="true" />
-                <span>{isImportingDrafts ? 'Загружаю' : 'Загрузить Excel'}</span>
-                <input
-                  disabled={isImportingDrafts}
-                  type="file"
-                  accept=".xlsx,.xls"
-                  onChange={(event) => {
-                    void importDraftDetails(event.target.files?.[0]);
-                    event.currentTarget.value = '';
-                  }}
-                />
-              </label>
-            </div>
-          </div>
-          {draftSkus.length > 0 ? (
-            <div className="catalog-drafts-table-wrap">
-              <table className="catalog-drafts-table">
-                <thead>
-                  <tr>
-                    <th>ШК</th>
-                    <th>Название</th>
-                    <th>Цвет / размер</th>
-                    <th>Артикул</th>
-                    <th>Действие</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {draftSkus.map((sku) => (
-                    <tr key={sku.id}>
-                      <td>{primaryBarcode(sku) || '-'}</td>
-                      <td>
-                        <strong>{sku.name}</strong>
-                        <span>{sku.internalSku}</span>
-                      </td>
-                      <td>{[sku.color, sku.size].filter(Boolean).join(' / ') || '-'}</td>
-                      <td>{sku.article || '-'}</td>
-                      <td>
-                        <button className="icon-text-button" type="button" onClick={() => void openSku(sku.id)}>
-                          <Pencil size={15} aria-hidden="true" />
-                          <span>Заполнить</span>
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <p className="catalog-empty-note">Новых ШК без карточек у выбранного клиента нет.</p>
-          )}
-        </section>
-      ) : null}
-
       {canWrite ? (
         <section className="catalog-manual-card" aria-label="Ручное добавление товара">
           <div className="catalog-manual-card__heading">
@@ -565,7 +416,6 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
                 <TextField disabled={false} label="Длина, см" value={manualForm.lengthCm} onChange={(value) => setManualForm({ ...manualForm, lengthCm: value })} />
                 <TextField disabled={false} label="Ширина, см" value={manualForm.widthCm} onChange={(value) => setManualForm({ ...manualForm, widthCm: value })} />
                 <TextField disabled={false} label="Высота, см" value={manualForm.heightCm} onChange={(value) => setManualForm({ ...manualForm, heightCm: value })} />
-                <TextField disabled={false} label="Литраж, л" value={manualForm.volumeLiters} onChange={(value) => setManualForm({ ...manualForm, volumeLiters: value })} />
               </div>
               <TextAreaField disabled={false} label="Фото URL" value={manualForm.photoUrls} onChange={(value) => setManualForm({ ...manualForm, photoUrls: value })} placeholder="Одна ссылка на фото в строке" />
               <div className="catalog-card-form__checks">
@@ -607,7 +457,6 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
                 </td>
                 <td>
                   <strong>{sku.name}</strong>
-                  {sku.isDraft ? <span className="catalog-draft-badge">Черновик после приемки</span> : null}
                   <span>{[sku.internalSku, sku.article, sku.brand].filter(Boolean).join(' · ') || '-'}</span>
                 </td>
                 <td>{sku.client ? `${sku.client.code} · ${sku.client.name}` : '-'}</td>
@@ -724,7 +573,6 @@ function SkuModal({
               <TextField disabled={!isEditing} label="Длина, см" value={form.lengthCm} onChange={(value) => onChange({ ...form, lengthCm: value })} />
               <TextField disabled={!isEditing} label="Ширина, см" value={form.widthCm} onChange={(value) => onChange({ ...form, widthCm: value })} />
               <TextField disabled={!isEditing} label="Высота, см" value={form.heightCm} onChange={(value) => onChange({ ...form, heightCm: value })} />
-              <TextField disabled={!isEditing} label="Литраж, л" value={form.volumeLiters} onChange={(value) => onChange({ ...form, volumeLiters: value })} />
             </div>
             <TextAreaField disabled={!isEditing} label="Фото URL" value={form.photoUrls} onChange={(value) => onChange({ ...form, photoUrls: value })} placeholder="Одна ссылка на фото в строке" />
 
@@ -840,7 +688,6 @@ function formFromSku(sku: SkuDetail): SkuForm {
     lengthCm: valueToText(sku.lengthCm),
     widthCm: valueToText(sku.widthCm),
     heightCm: valueToText(sku.heightCm),
-    volumeLiters: valueToText(sku.volumeLiters),
     needsChestnyZnak: sku.needsChestnyZnak,
     isUnmarked: sku.isUnmarked,
     needsLabel: sku.needsLabel,
@@ -864,7 +711,6 @@ function payloadFromForm(form: SkuForm): UpdateSkuPayload {
     lengthCm: parseOptionalNumber(form.lengthCm),
     widthCm: parseOptionalNumber(form.widthCm),
     heightCm: parseOptionalNumber(form.heightCm),
-    volumeLiters: parseOptionalNumber(form.volumeLiters),
     needsChestnyZnak: form.needsChestnyZnak,
     isUnmarked: form.isUnmarked,
     needsLabel: form.needsLabel,
@@ -889,7 +735,6 @@ function payloadFromManualForm(form: ManualSkuForm): CreateSkuPayload {
     lengthCm: parseOptionalNumber(form.lengthCm),
     widthCm: parseOptionalNumber(form.widthCm),
     heightCm: parseOptionalNumber(form.heightCm),
-    volumeLiters: parseOptionalNumber(form.volumeLiters),
     needsChestnyZnak: form.needsChestnyZnak,
     isUnmarked: form.isUnmarked,
     needsLabel: form.needsLabel,
@@ -906,69 +751,6 @@ function parsePhotoUrls(value: string) {
 
 function primaryBarcode(sku: SkuSummary) {
   return sku.barcodes.find((barcode) => barcode.isPrimary)?.value ?? sku.barcodes[0]?.value ?? '';
-}
-
-function buildSearchSuggestions(skus: SkuSummary[], value: string) {
-  const query = normalizeCatalogSearch(value);
-  if (!query) {
-    return [];
-  }
-
-  return skus
-    .map((sku) => ({
-      sku,
-      score: suggestionScore(sku, query),
-    }))
-    .filter((item) => item.score > 0)
-    .sort((left, right) => right.score - left.score || left.sku.name.localeCompare(right.sku.name, 'ru'))
-    .map((item) => item.sku);
-}
-
-function suggestionScore(sku: SkuSummary, query: string) {
-  const fields = suggestionSearchFields(sku).map(normalizeCatalogSearch).filter(Boolean);
-  if (fields.some((field) => field === query)) {
-    return 100;
-  }
-  if (fields.some((field) => field.startsWith(query))) {
-    return 70;
-  }
-  if (fields.some((field) => field.includes(query))) {
-    return 40;
-  }
-  return 0;
-}
-
-function suggestionSearchFields(sku: SkuSummary) {
-  return [
-    sku.name,
-    sku.internalSku,
-    sku.clientSku,
-    sku.article,
-    sku.brand,
-    sku.category,
-    sku.color,
-    sku.size,
-    sku.marketplaceOfferId,
-    sku.marketplaceProductId,
-    sku.client?.name,
-    ...sku.barcodes.map((barcode) => barcode.value),
-  ].filter(Boolean) as string[];
-}
-
-function normalizeCatalogSearch(value: string) {
-  return value.toLocaleLowerCase('ru-RU').replace(/\s+/g, ' ').trim();
-}
-
-function searchSuggestionValue(sku: SkuSummary) {
-  return primaryBarcode(sku) || sku.internalSku || sku.article || sku.name;
-}
-
-function suggestionMainLine(sku: SkuSummary) {
-  return [sku.internalSku, sku.article, primaryBarcode(sku)].filter(Boolean).join(' · ') || 'Без артикула и штрихкода';
-}
-
-function suggestionMetaLine(sku: SkuSummary) {
-  return [sku.color, sku.size, sku.brand, sku.client?.name].filter(Boolean).join(' · ') || 'Карточка товара';
 }
 
 function formatDimensions(sku: SkuSummary) {
@@ -1015,15 +797,6 @@ function marketplaceLabel(type: MarketplaceType) {
 
 function canUse(user: AuthUser, permission: string) {
   return user.permissionCodes.includes('system:admin') || user.permissionCodes.includes(permission);
-}
-
-function downloadBlob(blob: Blob, fileName: string) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = fileName;
-  link.click();
-  URL.revokeObjectURL(url);
 }
 
 function errorMessage(caught: unknown, fallback: string) {

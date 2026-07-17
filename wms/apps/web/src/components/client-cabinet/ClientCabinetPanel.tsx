@@ -44,10 +44,13 @@ import {
 } from '../../lib/api';
 import { BillingInvoiceDocumentPreview } from '../billing/BillingInvoiceDocumentPreview';
 import { ClientRequestDocumentPreview } from '../client-requests/ClientRequestDocumentPreview';
+import { OnlineReceiptPanel } from '../warehouse/OnlineReceiptPanel';
 import './client-cabinet.css';
 import { ClientCabinetExports } from './ClientCabinetExports';
 import { ClientCabinetMetrics, type ClientCabinetMetricTarget } from './ClientCabinetMetrics';
 import { ClientCabinetStorageWidget } from './ClientCabinetStorageWidget';
+import { ClientCabinetPprWidget } from './ClientCabinetPprWidget';
+import { ReceiptBatchesPanel } from '../warehouse/ReceiptBatchesPanel';
 import { ClientCabinetTables } from './ClientCabinetTables';
 import type { BrowserNotificationPermission } from './ClientCabinetNotifications';
 import { ClientMarketplaceConnections } from './ClientMarketplaceConnections';
@@ -106,6 +109,8 @@ type ClientManagementForm = {
   bankAccount: string;
   correspondentAccount: string;
   storageAccountingEnabled: boolean;
+  storesWithoutBoxes: boolean;
+  onlineReceiptVisibleToClient: boolean;
 };
 
 const clientKindOptions: Array<{ value: ClientKind; label: string }> = [
@@ -114,6 +119,10 @@ const clientKindOptions: Array<{ value: ClientKind; label: string }> = [
   { value: 'SELF_EMPLOYED', label: 'Самозанятый' },
   { value: 'INDIVIDUAL', label: 'Физическое лицо' },
 ];
+
+const stockReservationStatuses = new Set<ClientRequestSummary['status']>([
+  'IN_WORK',
+]);
 
 const emptyData: CabinetData = {
   clients: [],
@@ -198,10 +207,12 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
       (balance) => balance.updatedAt,
     );
     const visibleStock = stock.filter((balance) => stockMatchesSearch(balance, stockSearch, isInternalUser(session.user)));
+    const clientRequests = state.data.requests.filter((request) => !clientId || request.clientId === clientId);
+    const stockReservationRequests = clientRequests.filter(
+      (request) => request.type === 'OUTBOUND' && stockReservationStatuses.has(request.status),
+    );
     const requests = sortByDate(
-      state.data.requests
-        .filter((request) => !clientId || request.clientId === clientId)
-        .filter((request) => requestMatchesFilters(request, filters)),
+      clientRequests.filter((request) => requestMatchesFilters(request, filters)),
       (request) => request.createdAt,
     );
     const clientInvoices = state.data.invoices.filter((invoice) => !clientId || invoice.clientId === clientId);
@@ -227,6 +238,7 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
       client: state.data.clients.find((client) => client.id === clientId) ?? null,
       stock,
       visibleStock,
+      stockReservationRequests,
       requests,
       invoices,
       charges,
@@ -236,7 +248,6 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
       notificationPreferences: state.data.notificationPreferences.filter(
         (preference) => !clientId || preference.clientId === clientId,
       ),
-      storageLastPaymentDate: latestPaymentDate(clientInvoices),
       clientCards: state.data.clients.map((client) => buildClientSummary(client, state.data)),
       filterTotals: {
         requests: requests.length,
@@ -697,11 +708,25 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
             reconciliation={view.reconciliation}
             onNavigate={navigateToSection}
           />
-          <ClientCabinetStorageWidget
-            accessToken={session.accessToken}
-            client={view.client}
-            lastPaymentDate={view.storageLastPaymentDate}
-          />
+          <ClientCabinetStorageWidget accessToken={session.accessToken} client={view.client} />
+          <ClientCabinetPprWidget accessToken={session.accessToken} clientId={view.client.id} />
+          {view.client.onlineReceiptVisibleToClient ? (
+            <section className="client-cabinet-online-receipts" aria-label="Онлайн-приемка">
+              <div className="client-cabinet-online-receipts__heading">
+                <div>
+                  <p className="eyebrow">Онлайн-приемка</p>
+                  <h3>Что принимается на склад сейчас</h3>
+                </div>
+              </div>
+              <OnlineReceiptPanel fixedClientId={view.client.id} readOnly session={session} />
+            </section>
+          ) : null}
+          <section className="client-cabinet-online-receipts" aria-label="Партии приемки">
+            <div className="client-cabinet-online-receipts__heading">
+              <div><p className="eyebrow">Приемка</p><h3>Партии и файлы приемки</h3></div>
+            </div>
+            <ReceiptBatchesPanel fixedClientId={view.client.id} session={session} />
+          </section>
           <ClientCabinetFilters
             value={filters}
             totals={view.filterTotals}
@@ -732,6 +757,7 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
             currentUser={session.user}
             stock={view.stock}
             visibleStock={view.visibleStock}
+            stockReservationRequests={view.stockReservationRequests}
             stockSearch={stockSearch}
             onStockSearchChange={setStockSearch}
             requests={view.requests}
@@ -1013,6 +1039,24 @@ function ClientCabinetClientEditor({
           />
           <span>Вести учет хранения</span>
         </label>
+        <label className="client-cabinet-editor-checkbox">
+          <input
+            checked={form.onlineReceiptVisibleToClient}
+            type="checkbox"
+            onChange={(event) => onChange({ onlineReceiptVisibleToClient: event.target.checked })}
+          />
+          <span>Показывать онлайн-приемку клиенту</span>
+        </label>
+        <label>
+          <span>Вид приемки</span>
+          <select
+            value={form.storesWithoutBoxes ? 'WITHOUT_BOXES' : 'WITH_BOXES'}
+            onChange={(event) => onChange({ storesWithoutBoxes: event.target.value === 'WITHOUT_BOXES' })}
+          >
+            <option value="WITH_BOXES">С коробами</option>
+            <option value="WITHOUT_BOXES">Без коробов, поштучно</option>
+          </select>
+        </label>
       </div>
       <div className="client-cabinet-client-editor__actions">
         <button className="primary-button" disabled={isSubmitting || !form.name.trim()} onClick={onSave} type="button">
@@ -1074,6 +1118,8 @@ function formFromClient(client: ClientSummary): ClientManagementForm {
     bankAccount: client.bankAccount ?? '',
     correspondentAccount: client.correspondentAccount ?? '',
     storageAccountingEnabled: client.storageAccountingEnabled,
+    storesWithoutBoxes: Boolean(client.storesWithoutBoxes),
+    onlineReceiptVisibleToClient: Boolean(client.onlineReceiptVisibleToClient),
   };
 }
 
@@ -1094,6 +1140,8 @@ function compactClientPayload(form: ClientManagementForm): UpdateClientPayload {
     bankAccount: form.bankAccount.trim(),
     correspondentAccount: form.correspondentAccount.trim(),
     storageAccountingEnabled: form.storageAccountingEnabled,
+    storesWithoutBoxes: form.storesWithoutBoxes,
+    onlineReceiptVisibleToClient: form.onlineReceiptVisibleToClient,
   };
 }
 
@@ -1107,24 +1155,6 @@ function isInternalUser(user: AuthSession['user']) {
 
 function isClientUser(user: AuthSession['user']) {
   return user.roleCodes.includes('CLIENT') && !user.permissionCodes.includes('system:admin');
-}
-
-function latestPaymentDate(invoices: BillingInvoiceSummary[]) {
-  return invoices.reduce<string | null>((latest, invoice) => {
-    const paymentDates = [
-      invoice.paidAt,
-      ...invoice.payments
-        .filter((payment) => payment.status === 'RECORDED')
-        .map((payment) => payment.paidAt),
-    ].filter((value): value is string => Boolean(value));
-
-    return paymentDates.reduce((currentLatest, paidAt) => {
-      if (!currentLatest || paidAt > currentLatest) {
-        return paidAt;
-      }
-      return currentLatest;
-    }, latest);
-  }, null);
 }
 
 function browserNotificationPermissionState(): BrowserNotificationPermission {

@@ -1,0 +1,589 @@
+import {
+  ArrowRightLeft,
+  Box,
+  CirclePause,
+  CirclePlus,
+  PackageOpen,
+  RefreshCw,
+  Search,
+  Trash2,
+  X,
+} from 'lucide-react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import {
+  fetchBoxes,
+  fetchTurnoverBoxDetails,
+  runTurnoverAction,
+  type AuthSession,
+  type TurnoverActionKind,
+  type TurnoverBoxDetails,
+  type WarehouseBoxSummary,
+} from '../../lib/api';
+
+type DetailsState = {
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  data: TurnoverBoxDetails | null;
+  error?: string;
+};
+
+type BoxActionState = {
+  item: TurnoverBoxDetails['contents'][number];
+  action: TurnoverActionKind;
+  quantity: string;
+  targetBoxCode: string;
+  reason: string;
+  kiz: string;
+  comment: string;
+};
+
+const numberFormatter = new Intl.NumberFormat('ru-RU');
+const dateTimeFormatter = new Intl.DateTimeFormat('ru-RU', {
+  day: '2-digit',
+  month: '2-digit',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
+const actionLabels: Record<TurnoverActionKind, string> = {
+  ADD: 'Добавить',
+  WRITE_OFF: 'Списать',
+  TRANSFER: 'Перенести',
+  UTILIZE: 'Утилизировать',
+  HOLD: 'Отложить',
+};
+
+export function BoxManagementPanel({ session }: { session: AuthSession }) {
+  const [query, setQuery] = useState('');
+  const [suggestions, setSuggestions] = useState<WarehouseBoxSummary[]>([]);
+  const [isSearching, setSearching] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [searchError, setSearchError] = useState('');
+  const [selectedBox, setSelectedBox] = useState<WarehouseBoxSummary | null>(null);
+  const [details, setDetails] = useState<DetailsState>({ status: 'idle', data: null });
+  const [actionState, setActionState] = useState<BoxActionState | null>(null);
+  const [actionError, setActionError] = useState('');
+  const [actionMessage, setActionMessage] = useState('');
+  const [isSubmitting, setSubmitting] = useState(false);
+  const [targetSuggestions, setTargetSuggestions] = useState<WarehouseBoxSummary[]>([]);
+
+  const visibleSuggestions = useMemo(() => suggestions.slice(0, 14), [suggestions]);
+
+  useEffect(() => {
+    const cleanQuery = query.trim();
+    if (!showSuggestions || !cleanQuery) {
+      setSuggestions([]);
+      setSearching(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setSearching(true);
+      setSearchError('');
+      fetchBoxes(session.accessToken, { code: cleanQuery })
+        .then((boxes) => {
+          if (!cancelled) {
+            setSuggestions(boxes);
+          }
+        })
+        .catch((caught: unknown) => {
+          if (!cancelled) {
+            setSuggestions([]);
+            setSearchError(errorMessage(caught));
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setSearching(false);
+          }
+        });
+    }, 180);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [query, session.accessToken, showSuggestions]);
+
+  useEffect(() => {
+    const cleanCode = actionState?.targetBoxCode.trim() ?? '';
+    const clientId = details.data?.box.client.id;
+    if (!actionState || !clientId || cleanCode.length < 2) {
+      setTargetSuggestions([]);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      fetchBoxes(session.accessToken, { clientId, code: cleanCode })
+        .then((boxes) => {
+          if (!cancelled) {
+            setTargetSuggestions(boxes.slice(0, 20));
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setTargetSuggestions([]);
+          }
+        });
+    }, 180);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [actionState?.targetBoxCode, details.data?.box.client.id, session.accessToken]);
+
+  async function loadBox(box: WarehouseBoxSummary) {
+    setSelectedBox(box);
+    setQuery(box.code);
+    setShowSuggestions(false);
+    setSearchError('');
+    setActionMessage('');
+    setDetails((current) => ({ ...current, status: 'loading', error: undefined }));
+
+    try {
+      const loaded = await fetchTurnoverBoxDetails(session.accessToken, box.code, { clientId: box.clientId });
+      setDetails({ status: 'ready', data: loaded });
+    } catch (caught) {
+      setDetails({ status: 'error', data: null, error: errorMessage(caught) });
+    }
+  }
+
+  async function refreshSelectedBox() {
+    if (selectedBox) {
+      await loadBox(selectedBox);
+    }
+  }
+
+  function submitSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const normalizedQuery = query.trim().toLocaleLowerCase('ru-RU');
+    const exactMatches = suggestions.filter((box) => box.code.trim().toLocaleLowerCase('ru-RU') === normalizedQuery);
+    const candidate = exactMatches.length === 1 ? exactMatches[0] : suggestions.length === 1 ? suggestions[0] : null;
+
+    if (candidate) {
+      void loadBox(candidate);
+      return;
+    }
+
+    setShowSuggestions(true);
+    setSearchError(suggestions.length > 1 ? 'Выберите нужный короб из списка.' : 'Короб не найден.');
+  }
+
+  function startAction(item: TurnoverBoxDetails['contents'][number], action: TurnoverActionKind) {
+    const currentBox = details.data?.box.code ?? '';
+    setActionState({
+      item,
+      action,
+      quantity: '1',
+      targetBoxCode: action === 'ADD' || action === 'HOLD' ? currentBox : '',
+      reason: '',
+      kiz: '',
+      comment: '',
+    });
+    setActionError('');
+    setActionMessage('');
+  }
+
+  function updateAction<K extends keyof Omit<BoxActionState, 'item'>>(key: K, value: BoxActionState[K]) {
+    setActionState((current) => (current ? { ...current, [key]: value } : current));
+    setActionError('');
+  }
+
+  async function submitAction() {
+    const box = details.data?.box;
+    if (!actionState || !box) {
+      return;
+    }
+
+    const quantity = Number(actionState.quantity);
+    const needsTarget = ['ADD', 'TRANSFER', 'HOLD'].includes(actionState.action);
+    const needsReason = ['WRITE_OFF', 'HOLD'].includes(actionState.action);
+    const targetBoxCode = actionState.targetBoxCode.trim();
+
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      setActionError('Количество должно быть целым числом больше нуля.');
+      return;
+    }
+    if (actionState.action !== 'ADD' && quantity > actionState.item.quantity) {
+      setActionError(`В коробе доступно только ${formatNumber(actionState.item.quantity)} шт.`);
+      return;
+    }
+    if (needsTarget && !targetBoxCode) {
+      setActionError('Укажите короб назначения.');
+      return;
+    }
+    if (needsTarget && !targetBoxCode.toLocaleUpperCase('ru-RU').startsWith('FFL_')) {
+      setActionError('Номер короба назначения должен начинаться с FFL_.');
+      return;
+    }
+    if (needsReason && !actionState.reason.trim()) {
+      setActionError('Укажите причину операции.');
+      return;
+    }
+
+    setSubmitting(true);
+    setActionError('');
+
+    try {
+      await runTurnoverAction(session.accessToken, {
+        clientId: box.client.id,
+        skuId: actionState.item.skuId,
+        action: actionState.action,
+        quantity,
+        sourceBoxCode: actionState.action === 'ADD' ? undefined : box.code,
+        targetBoxCode: needsTarget ? targetBoxCode : undefined,
+        reason: actionState.reason.trim() || undefined,
+        kiz: actionState.kiz.trim() || undefined,
+        comment: actionState.comment.trim() || undefined,
+        idempotencyKey: `warehouse-box:${box.id}:${actionState.action}:${actionState.item.skuId}:${Date.now()}`,
+      });
+      setActionState(null);
+      setActionMessage(`${actionLabels[actionState.action]}: операция проведена.`);
+      await refreshSelectedBox();
+    } catch (caught) {
+      setActionError(errorMessage(caught));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="warehouse-box-manager">
+      <form className="warehouse-box-search" onSubmit={submitSearch}>
+        <label className="warehouse-box-search__field">
+          <span>Номер короба</span>
+          <div className="warehouse-box-search__input">
+            <Search size={17} aria-hidden="true" />
+            <input
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setShowSuggestions(true);
+                setSearchError('');
+              }}
+              onFocus={() => setShowSuggestions(Boolean(query.trim()))}
+              placeholder="Начните вводить FFL_..."
+              autoComplete="off"
+            />
+            {isSearching ? <RefreshCw className="is-spinning" size={16} aria-hidden="true" /> : null}
+          </div>
+
+          {showSuggestions && query.trim() ? (
+            <div className="warehouse-box-suggestions" role="listbox" aria-label="Найденные короба">
+              {visibleSuggestions.map((box) => (
+                <button key={box.id} type="button" onClick={() => void loadBox(box)}>
+                  <Box size={17} aria-hidden="true" />
+                  <span>
+                    <strong>{box.code}</strong>
+                    <small>{box.client.name} · {boxStatusLabel(box.status)}</small>
+                  </span>
+                  <em>{box._count.balances} поз.</em>
+                </button>
+              ))}
+              {!isSearching && visibleSuggestions.length === 0 ? <p>Совпадений нет.</p> : null}
+            </div>
+          ) : null}
+        </label>
+        <button className="primary-button" type="submit" disabled={!query.trim() || isSearching}>
+          <Search size={16} aria-hidden="true" />
+          <span>Открыть</span>
+        </button>
+        {selectedBox ? (
+          <button className="secondary-button" type="button" onClick={() => void refreshSelectedBox()} disabled={details.status === 'loading'}>
+            <RefreshCw size={16} aria-hidden="true" />
+            <span>Обновить</span>
+          </button>
+        ) : null}
+      </form>
+
+      {searchError ? <p className="form-error">{searchError}</p> : null}
+      {actionMessage ? <p className="form-success">{actionMessage}</p> : null}
+      {details.status === 'loading' ? <p className="warehouse-inline">Загружаю короб.</p> : null}
+      {details.error ? <p className="form-error">{details.error}</p> : null}
+
+      {details.data ? (
+        <BoxCard
+          details={details.data}
+          onAction={startAction}
+          onClose={() => {
+            setSelectedBox(null);
+            setDetails({ status: 'idle', data: null });
+            setQuery('');
+          }}
+        />
+      ) : null}
+
+      {actionState && details.data ? (
+        <BoxActionDialog
+          state={actionState}
+          box={details.data.box.code}
+          isSubmitting={isSubmitting}
+          error={actionError}
+          targetSuggestions={targetSuggestions}
+          onChange={updateAction}
+          onCancel={() => setActionState(null)}
+          onSubmit={() => void submitAction()}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function BoxCard({
+  details,
+  onAction,
+  onClose,
+}: {
+  details: TurnoverBoxDetails;
+  onAction: (item: TurnoverBoxDetails['contents'][number], action: TurnoverActionKind) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="warehouse-box-card">
+      <header className="warehouse-box-card__header">
+        <div>
+          <span>{details.box.client.name}</span>
+          <h3>{details.box.code}</h3>
+          <small>{boxStatusLabel(details.box.status)}</small>
+        </div>
+        <button className="icon-button" type="button" onClick={onClose} title="Закрыть карточку" aria-label="Закрыть карточку короба">
+          <X size={18} aria-hidden="true" />
+        </button>
+      </header>
+
+      <div className="warehouse-box-metrics">
+        <Metric label="Позиций" value={details.totals.rows} />
+        <Metric label="SKU" value={details.totals.skuCount} />
+        <Metric label="Единиц" value={details.totals.quantity} />
+        <Metric label="КИЗ" value={details.totals.kizCount} />
+      </div>
+
+      <div className="warehouse-box-table-wrap">
+        <table className="warehouse-box-table">
+          <thead>
+            <tr>
+              <th>Товар</th>
+              <th>ШК</th>
+              <th>Цвет / размер</th>
+              <th>Статус</th>
+              <th>Кол-во</th>
+              <th>КИЗ</th>
+              <th>Изменить</th>
+            </tr>
+          </thead>
+          <tbody>
+            {details.contents.length === 0 ? (
+              <tr>
+                <td colSpan={7}>В коробе нет текущего остатка.</td>
+              </tr>
+            ) : null}
+            {details.contents.map((item) => (
+              <tr key={item.balanceId}>
+                <td>
+                  <strong>{item.name}</strong>
+                  <span>{[item.internalSku, item.clientSku, item.article].filter(Boolean).join(' · ')}</span>
+                </td>
+                <td>{item.barcode ?? '-'}</td>
+                <td>{[item.color, item.size].filter(Boolean).join(' / ') || '-'}</td>
+                <td>{item.statusLabel}</td>
+                <td><strong>{formatNumber(item.quantity)}</strong></td>
+                <td>
+                  {item.kiz.length ? (
+                    <span className="warehouse-box-kiz" title={item.kiz.join('\n')}>
+                      {item.kiz.slice(0, 2).join(', ')}{item.kizCount > 2 ? ` · еще ${formatNumber(item.kizCount - 2)}` : ''}
+                    </span>
+                  ) : '-'}
+                </td>
+                <td>
+                  <div className="warehouse-box-row-actions">
+                    <button type="button" onClick={() => onAction(item, 'TRANSFER')} title="Перенести товар">
+                      <ArrowRightLeft size={14} aria-hidden="true" />
+                      <span>Перенести</span>
+                    </button>
+                    <button type="button" onClick={() => onAction(item, 'WRITE_OFF')} title="Списать товар">
+                      <Trash2 size={14} aria-hidden="true" />
+                      <span>Списать</span>
+                    </button>
+                    <button type="button" onClick={() => onAction(item, 'HOLD')} title="Отложить товар">
+                      <CirclePause size={14} aria-hidden="true" />
+                      <span>Отложить</span>
+                    </button>
+                    <button type="button" onClick={() => onAction(item, 'ADD')} title="Добавить количество">
+                      <CirclePlus size={14} aria-hidden="true" />
+                      <span>Добавить</span>
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <details className="warehouse-box-history">
+        <summary>История движений <span>{details.movements.length}</span></summary>
+        <div className="warehouse-box-table-wrap">
+          <table className="warehouse-box-table warehouse-box-table--history">
+            <thead>
+              <tr>
+                <th>Дата</th>
+                <th>Действие</th>
+                <th>Товар</th>
+                <th>Кол-во</th>
+                <th>Документ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {details.movements.length === 0 ? (
+                <tr><td colSpan={5}>Движений пока нет.</td></tr>
+              ) : null}
+              {details.movements.map((movement) => (
+                <tr key={movement.id}>
+                  <td>{formatDateTime(movement.date)}</td>
+                  <td>
+                    <strong>{movement.typeLabel}</strong>
+                    <span>{movement.comment || movement.statusLabel}</span>
+                  </td>
+                  <td>
+                    <strong>{movement.name}</strong>
+                    <span>{movement.barcode ?? '-'}</span>
+                  </td>
+                  <td className={movement.quantity < 0 ? 'is-negative' : 'is-positive'}>{formatNumber(movement.quantity)}</td>
+                  <td>{movement.sourceDocument ?? '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function BoxActionDialog({
+  state,
+  box,
+  isSubmitting,
+  error,
+  targetSuggestions,
+  onChange,
+  onCancel,
+  onSubmit,
+}: {
+  state: BoxActionState;
+  box: string;
+  isSubmitting: boolean;
+  error: string;
+  targetSuggestions: WarehouseBoxSummary[];
+  onChange: <K extends keyof Omit<BoxActionState, 'item'>>(key: K, value: BoxActionState[K]) => void;
+  onCancel: () => void;
+  onSubmit: () => void;
+}) {
+  const needsTarget = ['ADD', 'TRANSFER', 'HOLD'].includes(state.action);
+  const needsReason = ['WRITE_OFF', 'HOLD'].includes(state.action);
+
+  return (
+    <div className="warehouse-box-dialog-backdrop" role="presentation">
+      <section className="warehouse-box-dialog" role="dialog" aria-modal="true" aria-labelledby="warehouse-box-dialog-title">
+        <header>
+          <span className="warehouse-box-dialog__icon">
+            {state.action === 'WRITE_OFF' ? <Trash2 size={20} aria-hidden="true" /> : <PackageOpen size={20} aria-hidden="true" />}
+          </span>
+          <div>
+            <p>{actionLabels[state.action]}</p>
+            <h3 id="warehouse-box-dialog-title">{state.item.name}</h3>
+            <small>{box} · доступно {formatNumber(state.item.quantity)} шт.</small>
+          </div>
+          <button className="icon-button" type="button" onClick={onCancel} disabled={isSubmitting} title="Закрыть" aria-label="Закрыть">
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="warehouse-box-dialog__grid">
+          <label>
+            <span>Количество</span>
+            <input min="1" type="number" value={state.quantity} onChange={(event) => onChange('quantity', event.target.value)} />
+          </label>
+
+          {needsTarget ? (
+            <label>
+              <span>Короб назначения</span>
+              <input
+                value={state.targetBoxCode}
+                onChange={(event) => onChange('targetBoxCode', event.target.value)}
+                placeholder="FFL_..."
+                list="warehouse-box-target-suggestions"
+                autoComplete="off"
+              />
+              <datalist id="warehouse-box-target-suggestions">
+                {targetSuggestions.map((target) => <option key={target.id} value={target.code}>{target.client.name}</option>)}
+              </datalist>
+            </label>
+          ) : null}
+
+          {needsReason ? (
+            <label className="warehouse-box-dialog__wide">
+              <span>Причина</span>
+              <input value={state.reason} onChange={(event) => onChange('reason', event.target.value)} placeholder="Обязательное поле" />
+            </label>
+          ) : null}
+
+          <label className="warehouse-box-dialog__wide">
+            <span>КИЗ</span>
+            <textarea value={state.kiz} onChange={(event) => onChange('kiz', event.target.value)} placeholder="При необходимости: через запятую или с новой строки" />
+          </label>
+
+          <label className="warehouse-box-dialog__wide">
+            <span>Комментарий</span>
+            <textarea value={state.comment} onChange={(event) => onChange('comment', event.target.value)} placeholder="Комментарий к операции" />
+          </label>
+        </div>
+
+        {error ? <p className="form-error">{error}</p> : null}
+
+        <footer>
+          <button className="secondary-button" type="button" onClick={onCancel} disabled={isSubmitting}>Отмена</button>
+          <button className={state.action === 'WRITE_OFF' ? 'danger-button' : 'primary-button'} type="button" onClick={onSubmit} disabled={isSubmitting}>
+            {isSubmitting ? 'Сохраняю' : actionLabels[state.action]}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong>{formatNumber(value)}</strong>
+    </div>
+  );
+}
+
+function formatNumber(value: number) {
+  return numberFormatter.format(value);
+}
+
+function formatDateTime(value: string) {
+  return dateTimeFormatter.format(new Date(value));
+}
+
+function boxStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    available: 'На хранении',
+    receiving: 'Приемка',
+    closed: 'Закрыт',
+    packed: 'Упакован',
+    shipped: 'Отгружен',
+    deleted: 'Удален',
+  };
+  return labels[status.toLocaleLowerCase('ru-RU')] ?? status;
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : 'Не удалось выполнить операцию.';
+}

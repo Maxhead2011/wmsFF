@@ -1,0 +1,11 @@
+<resources>
+    <style name="Theme.LogoffWms" parent="Theme.Material3.Light.NoActionBar">
+        <item name="colorPrimary">@color/logoff_red</item>
+        <item name="colorOnPrimary">@color/logoff_white</item>
+        <item name="colorSecondary">@color/logoff_black</item>
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">@color/logoff_black</item>
+        <item name="android:navigationBarColor">@color/logoff_white</item>
+    </style>
+</resources>

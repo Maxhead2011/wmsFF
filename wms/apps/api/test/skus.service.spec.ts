@@ -79,4 +79,54 @@ describe('SkusService', () => {
     });
     expect(result.marketplacePhotos).toEqual(['https://cdn.example.com/photo.jpg']);
   });
+
+  it('updates an item in the shared nomenclature and clears optional fields', async () => {
+    const existing = {
+      id: 'nomenclature-1',
+      internalSku: 'SKU-OLD',
+      article: 'ART-OLD',
+      barcode: '2040000000011',
+      name: 'Старое название',
+      printName: 'Старое название для печати',
+      unit: 'шт',
+      itemType: 'Одежда',
+      color: 'черный',
+      size: 'M',
+      needsChestnyZnak: false,
+    };
+    const prisma = {
+      nomenclatureItem: {
+        findUnique: vi.fn().mockResolvedValue(existing),
+        update: vi.fn().mockResolvedValue({ ...existing, name: 'Новое название', article: null }),
+      },
+    };
+    const service = new SkusService(prisma as never, {} as never, new VolumeService());
+
+    await service.updateNomenclature('nomenclature-1', {
+      internalSku: ' SKU-NEW ',
+      article: '',
+      barcode: '2040000000028',
+      name: ' Новое название ',
+      printName: '',
+      unit: 'шт',
+      itemType: 'Костюм',
+      color: 'синий',
+      size: 'L',
+      needsChestnyZnak: true,
+    });
+
+    expect(prisma.nomenclatureItem.update).toHaveBeenCalledWith({
+      where: { id: 'nomenclature-1' },
+      data: expect.objectContaining({
+        internalSku: 'SKU-NEW',
+        article: null,
+        barcode: '2040000000028',
+        name: 'Новое название',
+        printName: null,
+        color: 'синий',
+        size: 'L',
+        needsChestnyZnak: true,
+      }),
+    });
+  });
 });

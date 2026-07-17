@@ -10,7 +10,7 @@ import {
 } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import type { AuthUser } from '../src/modules/auth/auth.types';
-import { LogisticsService } from '../src/modules/logistics/logistics.service';
+import { calculateLogisticsPalletCount, LogisticsService } from '../src/modules/logistics/logistics.service';
 
 describe('LogisticsService', () => {
   const service = new LogisticsService({} as never, {} as never);
@@ -55,6 +55,102 @@ describe('LogisticsService', () => {
     );
 
     expect(total).toBe(18000);
+  });
+
+  it('переводит короба в расчетные паллеты с допуском четыре короба', () => {
+    expect(calculateLogisticsPalletCount(17)).toBe(1);
+    expect(calculateLogisticsPalletCount(20)).toBe(1);
+    expect(calculateLogisticsPalletCount(21)).toBe(2);
+    expect(calculateLogisticsPalletCount(80)).toBe(5);
+    expect(calculateLogisticsPalletCount(163)).toBe(10);
+  });
+
+  it('сопоставляет склады одного города при разных уточнениях в скобках', async () => {
+    const prisma = {
+      logisticsTariffSet: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'tariff-1',
+          name: 'Тариф',
+          sourceFile: 'tariff.xlsx',
+          note: null,
+        }),
+      },
+      logisticsDirection: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'direction-1',
+            tariffSetId: 'tariff-1',
+            origin: 'МОСКВА',
+            destination: 'Екатеринбург (Испытателей)',
+            note: null,
+            tiers: [
+              {
+                label: '4-6 палет',
+                minPallets: 4,
+                maxPallets: 6,
+                maxBoxes: null,
+                pricingMode: LogisticsPricingMode.PER_PALLET,
+                priceRub: 10000,
+              },
+            ],
+          },
+        ]),
+      },
+    };
+    const deliveryService = new LogisticsService(prisma as never, {} as never);
+
+    const quote = await deliveryService.quote({
+      tariffSetId: 'tariff-1',
+      destination: 'Екатеринбург (Перспективная)',
+      pallets: 5,
+    });
+
+    expect(quote.route.destination).toBe('Екатеринбург (Испытателей)');
+    expect(quote.estimatedTotalRub).toBe(50000);
+  });
+
+  it('применяет паллетный тариф при прямом расчете большой партии коробов', async () => {
+    const prisma = {
+      logisticsTariffSet: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'tariff-1',
+          name: 'Тариф',
+          sourceFile: 'tariff.xlsx',
+          note: null,
+        }),
+      },
+      logisticsDirection: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'direction-1',
+            tariffSetId: 'tariff-1',
+            origin: 'МОСКВА',
+            destination: 'Краснодар (Тихорецкая)',
+            note: null,
+            tiers: [
+              {
+                label: '4-6 палет',
+                minPallets: 4,
+                maxPallets: 6,
+                maxBoxes: null,
+                pricingMode: LogisticsPricingMode.PER_PALLET,
+                priceRub: 7000,
+              },
+            ],
+          },
+        ]),
+      },
+    };
+    const deliveryService = new LogisticsService(prisma as never, {} as never);
+
+    const quote = await deliveryService.quote({
+      tariffSetId: 'tariff-1',
+      destination: 'Краснодар (Тихорецкая)',
+      boxes: 80,
+    });
+
+    expect(quote.input).toEqual({ boxes: null, pallets: 5 });
+    expect(quote.estimatedTotalRub).toBe(35000);
   });
 
   it('не делает авторасчет для неоднозначных тарифных строк', () => {
@@ -135,49 +231,6 @@ describe('LogisticsService', () => {
     expect(quote.estimatedTotalRub).toBe(5000);
   });
 
-  it('matches a destination with one typo when the tariff city is unique', async () => {
-    const prisma = {
-      logisticsTariffSet: {
-        findUnique: vi.fn().mockResolvedValue({
-          id: 'tariff-1',
-          name: 'Тариф',
-          sourceFile: null,
-        }),
-      },
-      logisticsDirection: {
-        findMany: vi.fn().mockResolvedValue([
-          {
-            id: 'direction-1',
-            tariffSetId: 'tariff-1',
-            origin: 'Москва',
-            destination: 'Электросталь',
-            note: null,
-            tiers: [
-              {
-                label: 'до 10 коробов',
-                minPallets: null,
-                maxPallets: null,
-                maxBoxes: 10,
-                pricingMode: LogisticsPricingMode.TOTAL,
-                priceRub: 5000,
-              },
-            ],
-          },
-        ]),
-      },
-    };
-    const deliveryService = new LogisticsService(prisma as never, {} as never);
-
-    const quote = await deliveryService.quote({
-      tariffSetId: 'tariff-1',
-      destination: 'Электростать',
-      boxes: 3,
-    });
-
-    expect(quote.route.destination).toBe('Электросталь');
-    expect(quote.estimatedTotalRub).toBe(5000);
-  });
-
   it('возвращает ошибку, когда подходящей ступени нет', () => {
     expect(() => service.selectRateTier([], { boxes: 2 })).toThrow(BadRequestException);
   });
@@ -244,6 +297,74 @@ describe('LogisticsService', () => {
           pallets: null,
           requiresManualReview: false,
           createdByUserId: 'user-1',
+        }),
+      }),
+    );
+  });
+
+  it('использует паллетную ступень прайса для большой партии коробов', async () => {
+    const tariffSet = {
+      id: 'tariff-1',
+      name: 'Логистика 1.04.2026',
+      sourceFile: 'Логистика 1.04.2026.xlsx',
+      note: null,
+    };
+    const prisma = {
+      clientRequest: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'request-1',
+          packages: Array.from({ length: 80 }, () => ({ packageType: 'BOX' })),
+        }),
+      },
+      logisticsTariffSet: {
+        findFirst: vi.fn().mockResolvedValue(tariffSet),
+        findUnique: vi.fn().mockResolvedValue(tariffSet),
+      },
+      logisticsDirection: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'direction-1',
+            tariffSetId: 'tariff-1',
+            origin: 'МОСКВА',
+            destination: 'Краснодар (Тихорецкая)',
+            note: null,
+            tiers: [
+              {
+                label: '4-6 палет',
+                minPallets: 4,
+                maxPallets: 6,
+                maxBoxes: null,
+                pricingMode: LogisticsPricingMode.PER_PALLET,
+                priceRub: 7000,
+              },
+            ],
+          },
+        ]),
+      },
+      logisticsDeliveryRequest: {
+        create: vi.fn().mockResolvedValue({ id: 'delivery-1' }),
+      },
+    };
+    const deliveryService = new LogisticsService(prisma as never, { requireClientAccess: vi.fn() } as never);
+
+    await deliveryService.createDeliveryRequest(
+      {
+        clientId: 'client-1',
+        requestId: 'request-1',
+        destination: 'Краснодар (Тихорецкая)',
+      },
+      user(),
+    );
+
+    expect(prisma.logisticsDeliveryRequest.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          tariffSetId: 'tariff-1',
+          boxes: 80,
+          pallets: 5,
+          estimatedTotalRub: 35000,
+          requiresManualReview: false,
+          status: LogisticsDeliveryStatus.QUOTED,
         }),
       }),
     );

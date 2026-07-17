@@ -26,15 +26,15 @@ export class LogisticsController {
     return this.logistics.listTariffSets();
   }
 
+  @Get('tariff-sets/:id')
+  getTariffSet(@Param('id') id: string) {
+    return this.logistics.getTariffSet(id);
+  }
+
   @Get('destinations')
   @RequirePermissions('client-requests:write')
   listDestinationSuggestions(@Query('search') search?: string, @Query('tariffSetId') tariffSetId?: string) {
     return this.logistics.listDestinationSuggestions({ search, tariffSetId });
-  }
-
-  @Get('tariff-sets/:id')
-  getTariffSet(@Param('id') id: string) {
-    return this.logistics.getTariffSet(id);
   }
 
   @Post('quote')

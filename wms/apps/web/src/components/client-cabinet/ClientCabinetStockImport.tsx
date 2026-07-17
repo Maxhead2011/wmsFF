@@ -20,7 +20,6 @@ type BusyAction = 'preview' | 'commit' | null;
 export function ClientCabinetStockImport({ accessToken, client, onImported }: ClientCabinetStockImportProps) {
   const [file, setFile] = useState<File | null>(null);
   const [sourceDocument, setSourceDocument] = useState('');
-  const [stockDate, setStockDate] = useState(todayInputValue);
   const [preview, setPreview] = useState<StockImportPreview | null>(null);
   const [commitResult, setCommitResult] = useState<StockImportCommitResult | null>(null);
   const [error, setError] = useState('');
@@ -41,7 +40,6 @@ export function ClientCabinetStockImport({ accessToken, client, onImported }: Cl
   function clearImport() {
     setFile(null);
     setSourceDocument('');
-    setStockDate(todayInputValue());
     setPreview(null);
     setCommitResult(null);
     setError('');
@@ -81,7 +79,6 @@ export function ClientCabinetStockImport({ accessToken, client, onImported }: Cl
           file,
           clientId: client.id,
           sourceDocument: sourceDocument.trim() || file.name,
-          stockDate,
         }),
       );
       await onImported();
@@ -110,10 +107,6 @@ export function ClientCabinetStockImport({ accessToken, client, onImported }: Cl
         <label>
           <span>Документ-источник</span>
           <input value={sourceDocument} onChange={(event) => setSourceDocument(event.target.value)} />
-        </label>
-        <label>
-          <span>Дата остатков</span>
-          <input type="date" value={stockDate} onChange={(event) => setStockDate(event.target.value)} />
         </label>
         <label className="client-cabinet-file-field">
           <UploadCloud size={18} aria-hidden="true" />
@@ -145,10 +138,4 @@ export function ClientCabinetStockImport({ accessToken, client, onImported }: Cl
       {commitResult ? <StockCommitResultBlock result={commitResult} /> : null}
     </div>
   );
-}
-
-function todayInputValue() {
-  const today = new Date();
-  today.setMinutes(today.getMinutes() - today.getTimezoneOffset());
-  return today.toISOString().slice(0, 10);
 }

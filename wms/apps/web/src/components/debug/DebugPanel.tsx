@@ -660,12 +660,14 @@ export function DebugPanel({ session, onOpenWorkspace }: DebugPanelProps) {
                 <span>Считать хранение</span>
               </label>
               <label>
-                <input
-                  checked={clientDraft.storesWithoutBoxes}
-                  type="checkbox"
-                  onChange={(event) => setClientField('storesWithoutBoxes', event.target.checked)}
-                />
-                <span>Хранение без коробов</span>
+                <span>Вид приемки</span>
+                <select
+                  value={clientDraft.storesWithoutBoxes ? 'WITHOUT_BOXES' : 'WITH_BOXES'}
+                  onChange={(event) => setClientField('storesWithoutBoxes', event.target.value === 'WITHOUT_BOXES')}
+                >
+                  <option value="WITH_BOXES">С коробами</option>
+                  <option value="WITHOUT_BOXES">Без коробов, поштучно</option>
+                </select>
               </label>
             </div>
 

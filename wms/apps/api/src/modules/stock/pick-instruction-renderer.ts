@@ -25,6 +25,7 @@ export function renderPickInstructionHtml(document: PickInstructionDocument) {
     .check { width: 20px; }
     .warn { color: #b45309; font-weight: 700; }
     .ok { color: #15803d; font-weight: 700; }
+    .manual { background: #fff7ed; border: 1px solid #fdba74; border-radius: 6px; color: #9a3412; padding: 10px 12px; }
     @media print {
       body { margin: 12mm; }
       .box { break-inside: avoid; }
@@ -35,6 +36,11 @@ export function renderPickInstructionHtml(document: PickInstructionDocument) {
 <body>
   <h1>${escapeHtml(document.title)}</h1>
   <p class="muted">${escapeHtml(document.client.code)} · ${escapeHtml(document.client.name)} · статус заявки: ${escapeHtml(document.requestStatusLabel)} · печать ${formatDateTime(document.generatedAt)}</p>
+  ${
+    document.instructionSource === 'MANUAL'
+      ? `<p class="manual"><strong>Используется ручная инструкция.</strong> Файл: ${escapeHtml(document.manualInstructionFileName ?? '-')}${document.manualInstructionUploadedAt ? ` · загружен ${formatDateTime(document.manualInstructionUploadedAt)}` : ''}</p>`
+      : ''
+  }
   <div class="grid">
     <section class="box"><span>Строк</span><strong>${formatNumber(document.rowsCount)}</strong></section>
     <section class="box"><span>К сборке</span><strong>${formatNumber(document.totalRequested)}</strong></section>

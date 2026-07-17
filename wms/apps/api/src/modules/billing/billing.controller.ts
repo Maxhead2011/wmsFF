@@ -156,14 +156,12 @@ export class BillingController {
 
   @Put('invoices/:id/manual')
   @RequirePermissions('billing:write')
-  updateManualInvoice(@Param('id') id: string, @Body() dto: CreateManualBillingInvoiceDto, @CurrentUser() user: AuthUser) {
+  updateManualInvoice(
+    @Param('id') id: string,
+    @Body() dto: CreateManualBillingInvoiceDto,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.billing.updateManualInvoice(id, dto, user);
-  }
-
-  @Post('requests/:id/issue')
-  @RequirePermissions('billing:write')
-  issueRequestInvoice(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.billing.issueRequestInvoices(id, user);
   }
 
   @Patch('invoices/:id/status')

@@ -25,7 +25,6 @@ const permissions = [
   ['billing:read', 'Просмотр услуг и начислений биллинга'],
   ['billing:write', 'Создание услуг и начислений биллинга'],
   ['print:write', 'Печать этикеток'],
-  ['referrals:read', 'Просмотр реферальной программы'],
 ] as const;
 
 const rolePermissions: Record<string, { name: string; permissions: string[] }> = {
@@ -82,19 +81,6 @@ const rolePermissions: Record<string, { name: string; permissions: string[] }> =
       'print:write',
     ],
   },
-  TSD: {
-    name: 'Сотрудник ТСД',
-    permissions: [
-      'clients:read',
-      'skus:read',
-      'warehouse:read',
-      'warehouse:write',
-      'stock:read',
-      'stock:write',
-      'client-requests:read',
-      'client-requests:status',
-    ],
-  },
   CLIENT: {
     name: 'Клиент',
     permissions: [
@@ -108,10 +94,6 @@ const rolePermissions: Record<string, { name: string; permissions: string[] }> =
       'logistics:request',
       'billing:read',
     ],
-  },
-  REFERRAL_PARTNER: {
-    name: 'Реферальный партнер',
-    permissions: ['referrals:read'],
   },
 };
 

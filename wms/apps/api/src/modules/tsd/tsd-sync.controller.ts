@@ -29,6 +29,12 @@ export class TsdSyncController {
     return this.review.listReviewHistory(user);
   }
 
+  @Get('review/receipts')
+  @RequirePermissions('stock:write')
+  listReceiptReviewDashboard(@CurrentUser() user: AuthUser) {
+    return this.review.listReceiptReviewDashboard(user);
+  }
+
   @Post('operations')
   acceptOperation(@Body() operation: ScanOperationDto, @CurrentUser() user: AuthUser) {
     return this.sync.acceptOperation(operation, user);

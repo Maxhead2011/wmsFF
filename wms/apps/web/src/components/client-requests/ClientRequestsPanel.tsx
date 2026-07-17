@@ -1,41 +1,53 @@
-import { ClipboardList, RefreshCw, X } from 'lucide-react';
+import { AlertTriangle, Boxes, ClipboardList, FileDown, FileUp, RefreshCw, Search, ShieldAlert, Truck, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import {
   cancelClientRequest,
   downloadClientRequestFile,
+  downloadClientRequestItemsXlsx,
   downloadClientRequestWbPackagesXlsx,
   downloadClientRequestWbProductsXlsx,
   downloadPickInstructionXlsx,
+  downloadTsdMovementsXlsx,
+  downloadTsdOutgoingBoxesXlsx,
+  downloadTsdOutgoingContentsXlsx,
+  emergencyCloseClientRequestFromXlsx,
   fetchClientRequestDocument,
+  fetchClientRequestBoxOverlaps,
   fetchClientRequests,
   fetchClients,
   fetchPickInstruction,
-  issueClientRequestInvoice,
+  fetchPendingPickWaveBalanceReviews,
+  fetchTsdAssemblyPlan,
   packageClientRequest,
   pickClientRequest,
+  refreshPickInstruction as refreshPickInstructionDocument,
+  rollbackEmergencyCloseClientRequest,
   shipClientRequest,
   updateClientRequestStatus,
+  uploadManualPickInstruction,
   type AuthSession,
   type AuthUser,
-  type BillingInvoiceSummary,
   type ClientRequestDocument,
+  type ClientRequestBoxOverlapStatistics,
   type ClientRequestFileSummary,
   type ClientRequestStatus,
   type ClientRequestSummary,
   type ClientSummary,
+  type EmergencyPackedXlsxResult,
   type PickInstructionDocument,
+  type PickWaveBalanceReview,
+  type TsdAssemblyPlan,
 } from '../../lib/api';
 import { ClientRequestCreateForm } from './ClientRequestCreateForm';
 import { ClientRequestDocumentPreview } from './ClientRequestDocumentPreview';
-import { ClientRequestEditForm } from './ClientRequestEditForm';
-import { ClientRequestOnlineModal } from './ClientRequestOnlineModal';
+import { ClientRequestEditModal } from './ClientRequestEditModal';
 import { ClientRequestXlsxImportForm } from './ClientRequestXlsxImportForm';
-import { ManualShipmentCloseModal, type ManualShipmentClosePayload } from './ManualShipmentCloseModal';
-import '../billing/billing.css';
-import { BillingInvoiceForm } from '../billing/BillingInvoiceForm';
 import './client-requests.css';
 import { ClientRequestsTable } from './ClientRequestsTable';
 import { HtmlDocumentPreview } from '../documents/HtmlDocumentPreview';
+import { requestStatusLabel } from './clientRequestMeta';
+import { ConfirmDialog } from '../common/ConfirmDialog';
+import { PickWaveBalanceReviewPanel } from './PickWaveBalanceReviewPanel';
 
 type LoadState<T> = {
   status: 'idle' | 'loading' | 'ready' | 'error';
@@ -47,25 +59,58 @@ type ClientRequestsPanelProps = {
   session: AuthSession;
 };
 
+type ManualCloseState = {
+  request: ClientRequestSummary;
+  boxes: string;
+  pallets: string;
+  packedUnits: string;
+  comment: string;
+  usesRecordedPackages: boolean;
+  status: 'idle' | 'submitting';
+  error?: string;
+};
+
 export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
   const canRead = canUse(session.user, 'client-requests:read');
   const canWrite = canUse(session.user, 'client-requests:write');
   const canChangeStatus = canUse(session.user, 'client-requests:status');
   const canPickOutbound = canUse(session.user, 'stock:write');
-  const canDownloadSourceFiles = canChangeStatus || canPickOutbound || canUse(session.user, 'system:admin');
+  const canEditAnyRequest = canEditRequestAnyStatus(session.user);
+  const canUploadManualInstruction = canUploadOwnInstruction(session.user);
+  const canDownloadOriginalRequest = canAdministerRequestFiles(session.user);
+  const canViewBoxOverlaps = canAdministerRequestFiles(session.user);
   const [requests, setRequests] = useState<LoadState<ClientRequestSummary>>({ status: 'idle', data: [] });
   const [clients, setClients] = useState<LoadState<ClientSummary>>({ status: 'idle', data: [] });
+  const [balanceReviews, setBalanceReviews] = useState<LoadState<PickWaveBalanceReview>>({ status: 'idle', data: [] });
+  const [boxOverlaps, setBoxOverlaps] = useState<{
+    status: 'idle' | 'loading' | 'ready' | 'error';
+    data: ClientRequestBoxOverlapStatistics | null;
+    error?: string;
+  }>({ status: 'idle', data: null });
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [issuingInvoiceRequestId, setIssuingInvoiceRequestId] = useState('');
-  const [manualInvoiceRequest, setManualInvoiceRequest] = useState<ClientRequestSummary | null>(null);
-  const [editingRequest, setEditingRequest] = useState<ClientRequestSummary | null>(null);
-  const [manualShipmentRequest, setManualShipmentRequest] = useState<ClientRequestSummary | null>(null);
-  const [manualShipmentError, setManualShipmentError] = useState<string | null>(null);
-  const [isManualShipmentSubmitting, setManualShipmentSubmitting] = useState(false);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [documentPreview, setDocumentPreview] = useState<ClientRequestDocument | null>(null);
   const [pickInstructionPreview, setPickInstructionPreview] = useState<PickInstructionDocument | null>(null);
-  const [onlineRequest, setOnlineRequest] = useState<ClientRequestSummary | null>(null);
+  const [refreshingInstructionId, setRefreshingInstructionId] = useState<string | null>(null);
+  const [editingRequest, setEditingRequest] = useState<ClientRequestSummary | null>(null);
+  const [onlinePreview, setOnlinePreview] = useState<{ request: ClientRequestSummary; plan: TsdAssemblyPlan | null; status: 'loading' | 'ready' | 'error'; error?: string } | null>(null);
+  const [emergencyUpload, setEmergencyUpload] = useState<{
+    request: ClientRequestSummary;
+    file: File | null;
+    status: 'idle' | 'submitting' | 'done';
+    error?: string;
+    result?: EmergencyPackedXlsxResult;
+  } | null>(null);
+  const [emergencyRollback, setEmergencyRollback] = useState<ClientRequestSummary | null>(null);
+  const [isRollingBackEmergency, setRollingBackEmergency] = useState(false);
+  const [manualInstructionUpload, setManualInstructionUpload] = useState<{
+    request: ClientRequestSummary;
+    file: File | null;
+    status: 'idle' | 'submitting' | 'done';
+    error?: string;
+    result?: PickInstructionDocument;
+  } | null>(null);
+  const [manualClose, setManualClose] = useState<ManualCloseState | null>(null);
 
   const visibleClients = useMemo(() => clients.data, [clients.data]);
 
@@ -75,50 +120,90 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     }
   }, [canRead]);
 
+  useEffect(() => {
+    const requestId = onlinePreview?.request.id;
+    if (!requestId) {
+      return;
+    }
+
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const plan = await fetchTsdAssemblyPlan(session.accessToken, requestId);
+        if (!cancelled) {
+          setOnlinePreview((current) =>
+            current?.request.id === requestId ? { ...current, plan, status: 'ready', error: undefined } : current,
+          );
+        }
+      } catch (caught) {
+        if (!cancelled) {
+          setOnlinePreview((current) =>
+            current?.request.id === requestId ? { ...current, status: 'error', error: errorMessage(caught) } : current,
+          );
+        }
+      }
+    };
+
+    const timer = window.setInterval(() => {
+      void refresh();
+    }, 1500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [onlinePreview?.request.id, session.accessToken]);
+
   if (!canRead) {
     return null;
   }
 
   async function loadData() {
     setError(null);
-    setNotice(null);
     setRequests((current) => ({ ...current, status: 'loading', error: undefined }));
     setClients((current) => ({ ...current, status: 'loading', error: undefined }));
+    setBalanceReviews((current) => ({ ...current, status: 'loading', error: undefined }));
+    if (canViewBoxOverlaps) {
+      setBoxOverlaps((current) => ({ ...current, status: 'loading', error: undefined }));
+      void fetchClientRequestBoxOverlaps(session.accessToken)
+        .then((data) => setBoxOverlaps({ status: 'ready', data }))
+        .catch((caught) =>
+          setBoxOverlaps((current) => ({
+            ...current,
+            status: 'error',
+            error: errorMessage(caught),
+          })),
+        );
+    }
 
     try {
-      const [nextRequests, nextClients] = await Promise.all([
+      const [nextRequests, nextClients, nextBalanceReviews] = await Promise.all([
         fetchClientRequests(session.accessToken),
         fetchClients(session.accessToken),
+        fetchPendingPickWaveBalanceReviews(session.accessToken),
       ]);
       setRequests({ status: 'ready', data: nextRequests });
       setClients({ status: 'ready', data: nextClients });
+      setBalanceReviews({ status: 'ready', data: nextBalanceReviews });
     } catch (caught) {
       const message = errorMessage(caught);
       setRequests((current) => ({ ...current, status: 'error', error: message }));
       setClients((current) => ({ ...current, status: 'error', error: message }));
+      setBalanceReviews((current) => ({ ...current, status: 'error', error: message }));
     }
   }
 
-  async function changeStatus(request: ClientRequestSummary, status: ClientRequestStatus) {
+  async function changeStatus(requestId: string, status: ClientRequestStatus) {
     setError(null);
-    setNotice(null);
-    setManualShipmentError(null);
 
-    if (request.status === status) {
-      return;
-    }
-
-    if (request.type === 'OUTBOUND' && status === 'DONE') {
-      if (request.status === 'PACKED') {
-        await shipOutboundRequest(request);
-      } else {
-        setManualShipmentRequest(request);
-      }
+    const request = requests.data.find((item) => item.id === requestId);
+    if (request?.type === 'OUTBOUND' && status === 'DONE' && request.status !== 'DONE') {
+      openManualClose(request);
       return;
     }
 
     try {
-      const updated = await updateClientRequestStatus(session.accessToken, request.id, { status });
+      const updated = await updateClientRequestStatus(session.accessToken, requestId, { status });
       setRequests((current) => ({
         ...current,
         data: current.data.map((request) => (request.id === updated.id ? updated : request)),
@@ -134,7 +219,6 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     }
 
     setError(null);
-    setNotice(null);
 
     try {
       const updated = await cancelClientRequest(session.accessToken, request.id);
@@ -149,7 +233,6 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
 
   async function pickOutboundRequest(request: ClientRequestSummary) {
     setError(null);
-    setNotice(null);
 
     try {
       await pickClientRequest(session.accessToken, {
@@ -168,7 +251,6 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
 
   async function openRequestDocument(request: ClientRequestSummary) {
     setError(null);
-    setNotice(null);
 
     try {
       setDocumentPreview(await fetchClientRequestDocument(session.accessToken, request.id));
@@ -179,7 +261,6 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
 
   async function openPickInstruction(request: ClientRequestSummary) {
     setError(null);
-    setNotice(null);
 
     try {
       setPickInstructionPreview(await fetchPickInstruction(session.accessToken, request.id));
@@ -188,9 +269,122 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     }
   }
 
+  async function downloadOriginalRequestFile(request: ClientRequestSummary, file: ClientRequestFileSummary) {
+    setError(null);
+
+    try {
+      const blob = await downloadClientRequestFile(session.accessToken, request.id, file.id);
+      downloadBlob(blob, file.fileName);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
+  function openManualClose(request: ClientRequestSummary) {
+    const recordedPackages = request.status === 'PACKED' && request.packages.length > 0;
+    const boxes = request.packages.filter((item) => !isPalletPackage(item.packageType)).length;
+    const pallets = request.packages.filter((item) => isPalletPackage(item.packageType)).length;
+    const packageUnits = request.packages.reduce(
+      (total, item) => total + item.items.reduce((itemTotal, row) => itemTotal + row.quantity, 0),
+      0,
+    );
+    const requestedUnits = request.items.reduce((total, item) => total + item.quantity, 0);
+
+    setManualClose({
+      request,
+      boxes: recordedPackages ? String(boxes) : '',
+      pallets: recordedPackages ? String(pallets) : '0',
+      packedUnits: String(packageUnits || requestedUnits),
+      comment: request.managerComment?.trim() || 'Заявка сдана вручную; остатки списаны автоматически.',
+      usesRecordedPackages: recordedPackages,
+      status: 'idle',
+    });
+  }
+
+  async function submitManualClose() {
+    if (!manualClose) return;
+
+    const boxes = parseNonNegativeInteger(manualClose.boxes);
+    const pallets = parseNonNegativeInteger(manualClose.pallets);
+    const packedUnits = parseNonNegativeInteger(manualClose.packedUnits);
+    const requestedUnits = manualClose.request.items.reduce((total, item) => total + item.quantity, 0);
+    let validationError: string | undefined;
+
+    if (boxes == null || pallets == null || packedUnits == null) {
+      validationError = 'Заполните короба, паллеты и количество товара целыми числами.';
+    } else if (boxes + pallets < 1) {
+      validationError = 'Укажите хотя бы один короб или одну паллету.';
+    } else if (!manualClose.usesRecordedPackages && packedUnits !== requestedUnits) {
+      validationError = `В составе заявки ${requestedUnits} шт. Исправьте количество или сначала отредактируйте заявку.`;
+    } else if (!manualClose.comment.trim()) {
+      validationError = 'Укажите комментарий к ручному закрытию.';
+    }
+
+    if (validationError) {
+      setManualClose((current) => (current ? { ...current, error: validationError } : current));
+      return;
+    }
+
+    setManualClose((current) => (current ? { ...current, status: 'submitting', error: undefined } : current));
+    setError(null);
+
+    try {
+      if (manualClose.usesRecordedPackages) {
+        await shipClientRequest(session.accessToken, {
+          requestId: manualClose.request.id,
+          idempotencyKey: `web-ship:${manualClose.request.id}`,
+          comment: manualClose.comment.trim(),
+        });
+      } else {
+        await updateClientRequestStatus(session.accessToken, manualClose.request.id, {
+          status: 'DONE',
+          managerComment: manualClose.comment.trim(),
+          boxes: boxes!,
+          pallets: pallets!,
+          packedUnits: packedUnits!,
+        });
+      }
+
+      setManualClose(null);
+      setActionMessage('Отгрузка закрыта. Остатки списаны, финансовые черновики сформированы.');
+      await loadData();
+    } catch (caught) {
+      setManualClose((current) =>
+        current ? { ...current, status: 'idle', error: errorMessage(caught) } : current,
+      );
+    }
+  }
+
+  async function openOnlineExecution(request: ClientRequestSummary) {
+    setOnlinePreview({ request, plan: null, status: 'loading' });
+    setError(null);
+
+    try {
+      const plan = await fetchTsdAssemblyPlan(session.accessToken, request.id);
+      setOnlinePreview({ request, plan, status: 'ready' });
+    } catch (caught) {
+      setOnlinePreview({ request, plan: null, status: 'error', error: errorMessage(caught) });
+    }
+  }
+
+  async function refreshOnlineExecution() {
+    if (!onlinePreview) {
+      return;
+    }
+
+    const request = onlinePreview.request;
+    setOnlinePreview((current) => (current ? { ...current, status: current.plan ? 'ready' : 'loading', error: undefined } : current));
+
+    try {
+      const plan = await fetchTsdAssemblyPlan(session.accessToken, request.id);
+      setOnlinePreview({ request, plan, status: 'ready' });
+    } catch (caught) {
+      setOnlinePreview({ request, plan: onlinePreview.plan, status: 'error', error: errorMessage(caught) });
+    }
+  }
+
   async function downloadPickInstruction(request: ClientRequestSummary) {
     setError(null);
-    setNotice(null);
 
     try {
       const blob = await downloadPickInstructionXlsx(session.accessToken, request.id);
@@ -200,9 +394,91 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     }
   }
 
+  async function downloadRequestItems(request: ClientRequestSummary) {
+    setError(null);
+
+    try {
+      const blob = await downloadClientRequestItemsXlsx(session.accessToken, request.id);
+      downloadBlob(blob, `sostav-${safeDownloadName(request.title)}-${request.id.slice(0, 8)}.xlsx`);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
+  async function downloadWbProductsTemplate(request: ClientRequestSummary) {
+    setError(null);
+    try {
+      const blob = await downloadClientRequestWbProductsXlsx(session.accessToken, request.id);
+      downloadBlob(blob, `wb-products-${safeDownloadName(request.title)}-${request.id.slice(0, 8)}.xlsx`);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
+  async function downloadWbPackagesTemplate(request: ClientRequestSummary) {
+    setError(null);
+    try {
+      const blob = await downloadClientRequestWbPackagesXlsx(session.accessToken, request.id);
+      downloadBlob(blob, `wb-packages-${safeDownloadName(request.title)}-${request.id.slice(0, 8)}.xlsx`);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
+  async function refreshPickInstruction(request: ClientRequestSummary) {
+    setError(null);
+    setRefreshingInstructionId(request.id);
+
+    try {
+      const document = await refreshPickInstructionDocument(session.accessToken, request.id);
+      setPickInstructionPreview(document);
+
+      if (onlinePreview?.request.id === request.id) {
+        const plan = await fetchTsdAssemblyPlan(session.accessToken, request.id);
+        setOnlinePreview({ request: onlinePreview.request, plan, status: 'ready' });
+      }
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setRefreshingInstructionId((current) => (current === request.id ? null : current));
+    }
+  }
+
+  async function downloadOnlineOutgoingBoxes(request: ClientRequestSummary) {
+    setError(null);
+
+    try {
+      const blob = await downloadTsdOutgoingBoxesXlsx(session.accessToken, request.id);
+      downloadBlob(blob, `outgoing-boxes-${safeDownloadName(request.title)}-${request.id.slice(0, 8)}.xlsx`);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
+  async function downloadOnlineOutgoingContents(request: ClientRequestSummary) {
+    setError(null);
+
+    try {
+      const blob = await downloadTsdOutgoingContentsXlsx(session.accessToken, request.id);
+      downloadBlob(blob, `outgoing-contents-${safeDownloadName(request.title)}-${request.id.slice(0, 8)}.xlsx`);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
+  async function downloadOnlineMovements(request: ClientRequestSummary) {
+    setError(null);
+
+    try {
+      const blob = await downloadTsdMovementsXlsx(session.accessToken, request.id);
+      downloadBlob(blob, `movements-${safeDownloadName(request.title)}-${request.id.slice(0, 8)}.xlsx`);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
   async function packageOutboundRequest(request: ClientRequestSummary) {
     setError(null);
-    setNotice(null);
 
     try {
       const result = await packageClientRequest(session.accessToken, {
@@ -223,7 +499,6 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
 
   async function shipOutboundRequest(request: ClientRequestSummary) {
     setError(null);
-    setNotice(null);
 
     try {
       await shipClientRequest(session.accessToken, {
@@ -240,113 +515,73 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     }
   }
 
-  async function downloadWbProductsTemplate(request: ClientRequestSummary) {
-    setError(null);
-    setNotice(null);
-
-    try {
-      const blob = await downloadClientRequestWbProductsXlsx(session.accessToken, request.id);
-      downloadBlob(blob, `wb-products-${safeDownloadName(request.title)}-${request.id.slice(0, 8)}.xlsx`);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    }
-  }
-
-  async function downloadWbPackagesTemplate(request: ClientRequestSummary) {
-    setError(null);
-    setNotice(null);
-
-    try {
-      const blob = await downloadClientRequestWbPackagesXlsx(session.accessToken, request.id);
-      downloadBlob(blob, `wb-packages-${safeDownloadName(request.title)}-${request.id.slice(0, 8)}.xlsx`);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    }
-  }
-
-  async function downloadSourceRequest(request: ClientRequestSummary) {
-    setError(null);
-    setNotice(null);
-
-    const file = sourceRequestFile(request);
-    if (!file) {
-      setError('К заявке не прикреплен исходный файл.');
+  async function submitEmergencyPackedXlsx() {
+    if (!emergencyUpload?.file) {
+      setEmergencyUpload((current) => (current ? { ...current, error: 'Выберите Excel-файл с фактическими коробами.' } : current));
       return;
     }
 
-    try {
-      const blob = await downloadClientRequestFile(session.accessToken, request.id, file.id);
-      downloadBlob(blob, file.fileName || `source-request-${safeDownloadName(request.title)}-${request.id.slice(0, 8)}`);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    }
-  }
-
-  async function issueInvoiceForRequest(request: ClientRequestSummary) {
+    const { request, file } = emergencyUpload;
     setError(null);
-    setNotice(null);
-    setIssuingInvoiceRequestId(request.id);
+    setEmergencyUpload((current) => (current ? { ...current, status: 'submitting', error: undefined } : current));
 
     try {
-      const result = await issueClientRequestInvoice(session.accessToken, request.id);
-      const invoiceNumbers = result.invoices.map((invoice) => `№ ${invoice.number}`).join(', ');
-      setNotice(
-        invoiceNumbers
-          ? `Черновик счета по заявке "${request.title}" создан на согласование: ${invoiceNumbers}.`
-          : `Черновик счета по заявке "${request.title}" создан на согласование.`,
-      );
-    } catch (caught) {
-      const message = errorMessage(caught);
-      if (shouldOpenManualInvoice(message)) {
-        setManualInvoiceRequest(request);
-        setNotice(`По заявке "${request.title}" нет автоматических начислений. Заполните счет вручную.`);
-      } else {
-        setError(message);
-      }
-    } finally {
-      setIssuingInvoiceRequestId('');
-    }
-  }
-
-  async function closeShipmentManually(payload: ManualShipmentClosePayload) {
-    if (!manualShipmentRequest) {
-      return;
-    }
-
-    setManualShipmentSubmitting(true);
-    setManualShipmentError(null);
-    setError(null);
-    setNotice(null);
-
-    try {
-      const updated = await closeShipmentByCurrentStage(manualShipmentRequest, payload);
+      const result = await emergencyCloseClientRequestFromXlsx(session.accessToken, request.id, file);
+      setEmergencyUpload({ request, file, status: 'done', result });
       setRequests((current) => ({
         ...current,
-        data: current.data.map((request) => (request.id === updated.id ? updated : request)),
+        data: current.data.map((item) => (item.id === request.id ? { ...item, status: 'PACKED' } : item)),
       }));
-      setManualShipmentRequest(null);
-      setNotice(`Заявка "${updated.title}" сдана. Остатки списаны, упаковочные места зафиксированы.`);
+      void loadData();
     } catch (caught) {
-      setManualShipmentError(errorMessage(caught));
-    } finally {
-      setManualShipmentSubmitting(false);
+      setEmergencyUpload((current) => (current ? { ...current, status: 'idle', error: errorMessage(caught) } : current));
     }
   }
 
-  async function closeShipmentByCurrentStage(request: ClientRequestSummary, payload: ManualShipmentClosePayload) {
-    return updateClientRequestStatus(session.accessToken, request.id, {
-      status: 'DONE',
-      managerComment: payload.managerComment,
-      boxes: payload.boxes,
-      pallets: payload.pallets,
-      packedUnits: payload.packedUnits,
-      packages: payload.packages,
-    });
+  async function rollbackEmergencyClose() {
+    if (!emergencyRollback) {
+      return;
+    }
+    setError(null);
+    setActionMessage(null);
+    setRollingBackEmergency(true);
+    try {
+      const result = await rollbackEmergencyCloseClientRequest(session.accessToken, emergencyRollback.id);
+      setEmergencyRollback(null);
+      setActionMessage(
+        `Аварийное закрытие отменено. Восстановлено ${result.restoredUnits} шт. в ${result.restoredBoxes} коробах.`,
+      );
+      await loadData();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setRollingBackEmergency(false);
+    }
   }
 
-  function acceptManualInvoice(invoice: BillingInvoiceSummary) {
-    setManualInvoiceRequest(null);
-    setNotice(`Черновик счета № ${invoice.number} сохранен. Он станет образцом для следующих похожих заявок клиента.`);
+  async function submitManualInstruction() {
+    if (!manualInstructionUpload?.file) {
+      setManualInstructionUpload((current) => (current ? { ...current, error: 'Выберите Excel-файл инструкции.' } : current));
+      return;
+    }
+
+    const { request, file } = manualInstructionUpload;
+    setError(null);
+    setManualInstructionUpload((current) => (current ? { ...current, status: 'submitting', error: undefined } : current));
+
+    try {
+      const result = await uploadManualPickInstruction(session.accessToken, request.id, file);
+      setManualInstructionUpload({ request, file, status: 'done', result });
+      setPickInstructionPreview(result);
+      if (onlinePreview?.request.id === request.id) {
+        const plan = await fetchTsdAssemblyPlan(session.accessToken, request.id);
+        setOnlinePreview({ request: onlinePreview.request, plan, status: 'ready' });
+      }
+    } catch (caught) {
+      setManualInstructionUpload((current) =>
+        current ? { ...current, status: 'idle', error: errorMessage(caught) } : current,
+      );
+    }
   }
 
   function acceptCreated(request: ClientRequestSummary) {
@@ -357,13 +592,12 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
   }
 
   function acceptUpdated(request: ClientRequestSummary) {
-    setEditingRequest(null);
     setRequests((current) => ({
       ...current,
       status: 'ready',
       data: current.data.map((item) => (item.id === request.id ? request : item)),
     }));
-    setNotice(`Заявка "${request.title}" обновлена.`);
+    setEditingRequest(null);
   }
 
   return (
@@ -384,6 +618,17 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
         </button>
       </div>
 
+      {canViewBoxOverlaps ? <BoxOverlapStatistics state={boxOverlaps} /> : null}
+
+      {balanceReviews.status === 'ready' ? (
+        <PickWaveBalanceReviewPanel
+          session={session}
+          reviews={balanceReviews.data}
+          canWrite={canWrite}
+          onUpdated={() => void loadData()}
+        />
+      ) : null}
+
       {canWrite && clients.status === 'ready' ? (
         <>
           <ClientRequestXlsxImportForm clients={visibleClients} session={session} onCreated={acceptCreated} />
@@ -392,31 +637,40 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
       ) : null}
 
       {error ? <p className="form-error">{error}</p> : null}
-      {notice ? <p className="inline-status">{notice}</p> : null}
+      {actionMessage ? <p className="form-success">{actionMessage}</p> : null}
 
       <div className="client-requests-panel__list">
         {renderRequests(
           requests,
           canChangeStatus,
           canPickOutbound,
-          canUse(session.user, 'billing:write'),
           canWrite,
-          canDownloadSourceFiles,
-          issuingInvoiceRequestId,
-          (request, status) => void changeStatus(request, status),
-          (request) => setEditingRequest(request),
+          canEditAnyRequest,
+          canPickOutbound && canEditAnyRequest,
+          canUploadManualInstruction,
+          refreshingInstructionId,
+          (requestId, status) => void changeStatus(requestId, status),
           (request) => void cancelRequest(request),
-          (request) => setOnlineRequest(request),
+          (request) => setEditingRequest(request),
           (request) => void openRequestDocument(request),
+          (request) => void downloadRequestItems(request),
+          canDownloadOriginalRequest
+            ? (request, file) => void downloadOriginalRequestFile(request, file)
+            : undefined,
+          canPickOutbound ? (request) => void openOnlineExecution(request) : undefined,
           (request) => void openPickInstruction(request),
+          (request) => void refreshPickInstruction(request),
           (request) => void downloadPickInstruction(request),
-          (request) => void downloadSourceRequest(request),
-          (request) => void downloadWbProductsTemplate(request),
-          (request) => void downloadWbPackagesTemplate(request),
+          canPickOutbound ? (request) => void downloadWbProductsTemplate(request) : undefined,
+          canPickOutbound ? (request) => void downloadWbPackagesTemplate(request) : undefined,
+          canUploadManualInstruction
+            ? (request) => setManualInstructionUpload({ request, file: null, status: 'idle' })
+            : undefined,
+          canUploadManualInstruction ? (request) => setEmergencyUpload({ request, file: null, status: 'idle' }) : undefined,
+          canUploadManualInstruction ? (request) => setEmergencyRollback(request) : undefined,
           (request) => void pickOutboundRequest(request),
           (request) => void packageOutboundRequest(request),
           (request) => void shipOutboundRequest(request),
-          (request) => void issueInvoiceForRequest(request),
         )}
       </div>
 
@@ -424,8 +678,14 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
         <ClientRequestDocumentPreview document={documentPreview} onClose={() => setDocumentPreview(null)} />
       ) : null}
 
-      {onlineRequest ? (
-        <ClientRequestOnlineModal session={session} request={onlineRequest} onClose={() => setOnlineRequest(null)} />
+      {editingRequest ? (
+        <ClientRequestEditModal
+          request={editingRequest}
+          session={session}
+          canBypassAvailability={canEditAnyRequest}
+          onClose={() => setEditingRequest(null)}
+          onSaved={acceptUpdated}
+        />
       ) : null}
 
       {pickInstructionPreview ? (
@@ -437,69 +697,769 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
         />
       ) : null}
 
-      {manualInvoiceRequest ? (
-        <div className="client-request-invoice-modal" role="dialog" aria-modal="true" aria-label="Ручной счет по заявке">
-          <div className="client-request-invoice-modal__content">
-            <div className="client-request-invoice-modal__head">
-              <div>
-                <p className="eyebrow">Ручное заполнение счета</p>
-                <h3>{manualInvoiceRequest.title}</h3>
-                <span>
-                  {manualInvoiceRequest.client.name}
-                  {manualInvoiceRequest.destinationCity ? ` · ${manualInvoiceRequest.destinationCity}` : ''}
-                </span>
-              </div>
-              <button className="icon-button" type="button" onClick={() => setManualInvoiceRequest(null)} aria-label="Закрыть">
-                <X size={18} aria-hidden="true" />
-              </button>
-            </div>
-            <BillingInvoiceForm
-              clients={visibleClients}
-              session={session}
-              initialClientId={manualInvoiceRequest.clientId}
-              initialMode="manual"
-              initialPeriodFrom={dateInput(manualInvoiceRequest.createdAt)}
-              initialPeriodTo={dateInput(manualInvoiceRequest.updatedAt)}
-              initialComment={`Счет по заявке ${manualInvoiceRequest.title}`}
-              initialQuantitiesByServiceCode={requestBillingQuantities(manualInvoiceRequest)}
-              requestId={manualInvoiceRequest.id}
-              lockClient
-              lockMode
-              submitButtonLabel="Сохранить черновик счета"
-              onCreated={acceptManualInvoice}
-            />
-          </div>
-        </div>
+      {onlinePreview ? (
+        <OnlineExecutionModal
+          request={onlinePreview.request}
+          plan={onlinePreview.plan}
+          status={onlinePreview.status}
+          error={onlinePreview.error}
+          onClose={() => setOnlinePreview(null)}
+          onRefresh={() => void refreshOnlineExecution()}
+          onDownloadBoxes={() => void downloadOnlineOutgoingBoxes(onlinePreview.request)}
+          onDownloadContents={() => void downloadOnlineOutgoingContents(onlinePreview.request)}
+          onDownloadMovements={() => void downloadOnlineMovements(onlinePreview.request)}
+        />
       ) : null}
 
-      {editingRequest ? (
-        <div className="client-request-edit-modal" role="dialog" aria-modal="true" aria-label="Редактирование заявки">
-          <div className="client-request-edit-modal__content">
-            <ClientRequestEditForm
-              request={editingRequest}
-              session={session}
-              onCancel={() => setEditingRequest(null)}
-              onUpdated={acceptUpdated}
-            />
-          </div>
-        </div>
+      {emergencyUpload ? (
+        <EmergencyPackedXlsxModal
+          state={emergencyUpload}
+          onFileChange={(file) => setEmergencyUpload((current) => (current ? { ...current, file, error: undefined } : current))}
+          onSubmit={() => void submitEmergencyPackedXlsx()}
+          onClose={() => setEmergencyUpload(null)}
+        />
       ) : null}
 
-      {manualShipmentRequest ? (
-        <ManualShipmentCloseModal
-          request={manualShipmentRequest}
-          isSubmitting={isManualShipmentSubmitting}
-          error={manualShipmentError}
-          onClose={() => {
-            if (!isManualShipmentSubmitting) {
-              setManualShipmentRequest(null);
-              setManualShipmentError(null);
-            }
-          }}
-          onSubmit={(payload) => void closeShipmentManually(payload)}
+      {emergencyRollback ? (
+        <ConfirmDialog
+          title="Отменить аварийное закрытие?"
+          message={`Заявка «${emergencyRollback.title}» вернется в состояние до загрузки аварийного файла.`}
+          details={[
+            'Списанные остатки и КИЗ будут восстановлены в исходных коробах.',
+            'Аварийные упаковочные места, файл и автоматически созданные финансовые черновики будут удалены.',
+            'Если счет уже выставлен или оплачен, WMS остановит откат без изменения склада.',
+          ]}
+          confirmLabel="Отменить закрытие"
+          isBusy={isRollingBackEmergency}
+          onCancel={() => setEmergencyRollback(null)}
+          onConfirm={() => void rollbackEmergencyClose()}
+        />
+      ) : null}
+
+      {manualInstructionUpload ? (
+        <ManualInstructionUploadModal
+          state={manualInstructionUpload}
+          onFileChange={(file) =>
+            setManualInstructionUpload((current) => (current ? { ...current, file, error: undefined, status: 'idle' } : current))
+          }
+          onSubmit={() => void submitManualInstruction()}
+          onClose={() => setManualInstructionUpload(null)}
+        />
+      ) : null}
+
+      {manualClose ? (
+        <ManualCloseModal
+          state={manualClose}
+          onChange={(patch) => setManualClose((current) => (current ? { ...current, ...patch, error: undefined } : current))}
+          onSubmit={() => void submitManualClose()}
+          onClose={() => setManualClose(null)}
         />
       ) : null}
     </section>
+  );
+}
+
+function ManualCloseModal({
+  state,
+  onChange,
+  onSubmit,
+  onClose,
+}: {
+  state: ManualCloseState;
+  onChange: (patch: Partial<Pick<ManualCloseState, 'boxes' | 'pallets' | 'packedUnits' | 'comment'>>) => void;
+  onSubmit: () => void;
+  onClose: () => void;
+}) {
+  const isSubmitting = state.status === 'submitting';
+  const requestedUnits = state.request.items.reduce((total, item) => total + item.quantity, 0);
+
+  return (
+    <div className="online-execution-modal" role="dialog" aria-modal="true" aria-label="Ручное закрытие отгрузки">
+      <section className="online-execution-modal__panel manual-close-modal">
+        <header className="online-execution-modal__header">
+          <div>
+            <span>Ручное закрытие отгрузки</span>
+            <h3>{state.request.title}</h3>
+            <small>{state.request.client.name} · {state.request.destinationCity || 'город не указан'}</small>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose} title="Закрыть" aria-label="Закрыть">
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+        <div className="online-execution-modal__body">
+          <div className="manual-close-modal__notice">
+            <Boxes size={20} aria-hidden="true" />
+            <div>
+              <strong>{state.usesRecordedPackages ? 'Упаковочные места уже зафиксированы.' : 'Укажите фактический результат упаковки.'}</strong>
+              <span>
+                {state.usesRecordedPackages
+                  ? 'Проверьте сводку и подтвердите сдачу. Данные ТСД и состав коробов будут сохранены.'
+                  : 'После подтверждения WMS спишет товар, создаст упаковочные места и сформирует черновики счетов.'}
+              </span>
+            </div>
+          </div>
+
+          <div className="manual-close-modal__summary">
+            <span>По заявке</span>
+            <strong>{requestedUnits} шт.</strong>
+          </div>
+
+          <div className="manual-close-modal__fields">
+            <label className="form-field">
+              <span>Фактически коробов</span>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                inputMode="numeric"
+                value={state.boxes}
+                disabled={isSubmitting || state.usesRecordedPackages}
+                onChange={(event) => onChange({ boxes: event.target.value })}
+              />
+            </label>
+            <label className="form-field">
+              <span>Фактически паллет</span>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                inputMode="numeric"
+                value={state.pallets}
+                disabled={isSubmitting || state.usesRecordedPackages}
+                onChange={(event) => onChange({ pallets: event.target.value })}
+              />
+            </label>
+            <label className="form-field">
+              <span>Упаковано, шт.</span>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                inputMode="numeric"
+                value={state.packedUnits}
+                disabled={isSubmitting || state.usesRecordedPackages}
+                onChange={(event) => onChange({ packedUnits: event.target.value })}
+              />
+            </label>
+          </div>
+
+          <label className="form-field">
+            <span>Комментарий</span>
+            <textarea
+              rows={3}
+              value={state.comment}
+              disabled={isSubmitting}
+              onChange={(event) => onChange({ comment: event.target.value })}
+            />
+          </label>
+
+          {state.error ? <p className="form-error manual-close-modal__error">{state.error}</p> : null}
+
+          <div className="emergency-xlsx-modal__actions">
+            <button className="client-request-action-button client-request-action-button--instruction" type="button" onClick={onClose} disabled={isSubmitting}>
+              Отмена
+            </button>
+            <button className="client-request-action-button client-request-action-button--ship" type="button" onClick={onSubmit} disabled={isSubmitting}>
+              <Truck size={16} aria-hidden="true" />
+              {isSubmitting ? 'Закрываю отгрузку' : 'Подтвердить и сдать'}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function BoxOverlapStatistics({
+  state,
+}: {
+  state: {
+    status: 'idle' | 'loading' | 'ready' | 'error';
+    data: ClientRequestBoxOverlapStatistics | null;
+    error?: string;
+  };
+}) {
+  if (state.status === 'idle') return null;
+  if (state.status === 'loading' && !state.data) {
+    return <section className="box-overlap-panel is-loading">Проверяю пересечения коробов в активных заявках...</section>;
+  }
+  if (state.status === 'error' && !state.data) {
+    return <section className="box-overlap-panel is-error">Не удалось проверить пересечения: {state.error}</section>;
+  }
+  const statistics = state.data;
+  if (!statistics) return null;
+  const hasOverlaps = statistics.overlappingBoxesCount > 0;
+
+  return (
+    <details className={`box-overlap-panel ${hasOverlaps ? 'has-conflicts' : 'is-clear'}`} open={hasOverlaps}>
+      <summary>
+        <span className="box-overlap-panel__icon">
+          {hasOverlaps ? <ShieldAlert size={20} aria-hidden="true" /> : <Boxes size={20} aria-hidden="true" />}
+        </span>
+        <span>
+          <strong>{hasOverlaps ? 'Обнаружены пересечения коробов' : 'Пересечений коробов нет'}</strong>
+          <small>
+            Проверено заявок: {statistics.checkedRequestsCount} из {statistics.activeRequestsCount}. Общих коробов:{' '}
+            {statistics.overlappingBoxesCount}.
+          </small>
+        </span>
+        <span className="box-overlap-panel__count">{statistics.overlappingBoxesCount}</span>
+      </summary>
+
+      <div className="box-overlap-panel__body">
+        <div className="box-overlap-metrics">
+          <article><span>Активные заявки</span><strong>{statistics.activeRequestsCount}</strong></article>
+          <article><span>Заявки с конфликтом</span><strong>{statistics.requestsWithOverlapsCount}</strong></article>
+          <article><span>Пересекающиеся короба</span><strong>{statistics.overlappingBoxesCount}</strong></article>
+          <article><span>Ошибки проверки</span><strong>{statistics.errors.length}</strong></article>
+        </div>
+
+        {statistics.overlaps.length > 0 ? (
+          <div className="box-overlap-list">
+            {statistics.overlaps.map((overlap) => (
+              <article className="box-overlap-card" key={`${overlap.clientId}-${overlap.boxCode}`}>
+                <header>
+                  <div><span>Короб</span><strong>{overlap.boxCode}</strong></div>
+                  <div><span>Клиент</span><strong>{overlap.client.name}</strong></div>
+                  <b>{overlap.requests.length} заявки</b>
+                </header>
+                <div className="box-overlap-card__requests">
+                  {overlap.requests.map((request) => (
+                    <div key={request.id}>
+                      <strong>{request.title}</strong>
+                      <span>{requestStatusLabel(request.status)}</span>
+                      <small>{request.destinationCity || 'Город не указан'} · {request.id.slice(0, 8)}</small>
+                    </div>
+                  ))}
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="box-overlap-panel__empty">Каждый складской короб сейчас закреплен только за одной активной заявкой.</p>
+        )}
+
+        {statistics.errors.length > 0 ? (
+          <div className="box-overlap-errors">
+            <strong>Не удалось проверить отдельные заявки</strong>
+            {statistics.errors.map((error) => <span key={error.requestId}>{error.title}: {error.message}</span>)}
+          </div>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
+function ManualInstructionUploadModal({
+  state,
+  onFileChange,
+  onSubmit,
+  onClose,
+}: {
+  state: {
+    request: ClientRequestSummary;
+    file: File | null;
+    status: 'idle' | 'submitting' | 'done';
+    error?: string;
+    result?: PickInstructionDocument;
+  };
+  onFileChange: (file: File | null) => void;
+  onSubmit: () => void;
+  onClose: () => void;
+}) {
+  const isSubmitting = state.status === 'submitting';
+  const movements = state.result?.warehouseBalanceMoves?.length ?? 0;
+  const relabels = state.result?.warehouseMarkRows?.reduce((sum, row) => sum + row.quantity, 0) ?? 0;
+
+  return (
+    <div
+      className="online-execution-modal manual-instruction-modal-shell"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Загрузка своей складской инструкции"
+    >
+      <section className="online-execution-modal__panel manual-instruction-modal">
+        <header className="online-execution-modal__header">
+          <div>
+            <span>Своя складская инструкция</span>
+            <h3>{state.request.title}</h3>
+            <small>{state.request.client.name}</small>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose} title="Закрыть" aria-label="Закрыть">
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+        <div className="online-execution-modal__body">
+          <div className="manual-instruction-modal__warning">
+            <AlertTriangle size={20} aria-hidden="true" />
+            <div>
+              <strong>После подтверждения план заявки будет перестроен сразу.</strong>
+              <span>
+                Система проверит листы «Инструкция», «Целые короба» и «МАРК», затем заменит поиск коробов,
+                переклейку и перемещения в ТСД. Уже выполненные совместимые действия сохранятся.
+              </span>
+            </div>
+          </div>
+          <label className="form-field">
+            <span>Инструкция XLSX</span>
+            <input
+              type="file"
+              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              disabled={isSubmitting || state.status === 'done'}
+              onChange={(event) => onFileChange(event.target.files?.[0] ?? null)}
+            />
+          </label>
+          {state.file ? <p className="manual-instruction-modal__file">Выбран файл: {state.file.name}</p> : null}
+          {state.error ? <p className="form-error manual-instruction-modal__error">{state.error}</p> : null}
+          {state.result ? (
+            <div className="manual-instruction-modal__result">
+              <strong>Инструкция загружена, план перестроен.</strong>
+              <span>Коробов в поиске: {state.result.boxesCount}</span>
+              <span>К отправке: {state.result.totalAllocated} шт.</span>
+              <span>Перемещений: {movements} строк</span>
+              <span>Переклейка: {relabels} шт.</span>
+              <span>Дефицит: {state.result.totalShortage} шт.</span>
+            </div>
+          ) : null}
+          <div className="emergency-xlsx-modal__actions">
+            <button className="client-request-action-button client-request-action-button--instruction" type="button" onClick={onClose}>
+              {state.status === 'done' ? 'Закрыть' : 'Отмена'}
+            </button>
+            <button
+              className="client-request-action-button client-request-action-button--manual-instruction"
+              type="button"
+              onClick={onSubmit}
+              disabled={isSubmitting || state.status === 'done' || !state.file}
+            >
+              <FileUp size={16} aria-hidden="true" />
+              {isSubmitting ? 'Проверяю и перестраиваю' : state.status === 'done' ? 'План перестроен' : 'Загрузить и перестроить'}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function EmergencyPackedXlsxModal({
+  state,
+  onFileChange,
+  onSubmit,
+  onClose,
+}: {
+  state: {
+    request: ClientRequestSummary;
+    file: File | null;
+    status: 'idle' | 'submitting' | 'done';
+    error?: string;
+    result?: EmergencyPackedXlsxResult;
+  };
+  onFileChange: (file: File | null) => void;
+  onSubmit: () => void;
+  onClose: () => void;
+}) {
+  const isSubmitting = state.status === 'submitting';
+
+  return (
+    <div className="online-execution-modal" role="dialog" aria-modal="true" aria-label="Аварийная упаковка заявки">
+      <section className="online-execution-modal__panel emergency-xlsx-modal">
+        <header className="online-execution-modal__header">
+          <div>
+            <span>Аварийная упаковка по Excel</span>
+            <h3>{state.request.title}</h3>
+            <small>{state.request.client.name}</small>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose} title="Закрыть">
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+        <div className="online-execution-modal__body">
+          <div className="emergency-xlsx-modal__warning">
+            <strong>Загрузите Excel со списком фактических коробов.</strong>
+            <span>В первом столбце укажите по одному номеру FFL на строку. WMS сверит фактическое содержимое коробов с заявкой, спишет его и переведет заявку в статус «Упакована».</span>
+          </div>
+          <label className="form-field">
+            <span>Excel-файл</span>
+            <input
+              type="file"
+              accept=".xlsx,.xls"
+              disabled={isSubmitting || state.status === 'done'}
+              onChange={(event) => onFileChange(event.target.files?.[0] ?? null)}
+            />
+          </label>
+          {state.file ? <p className="emergency-xlsx-modal__file">Выбран файл: {state.file.name}</p> : null}
+          {state.error ? <p className="form-error">{state.error}</p> : null}
+          {state.result ? (
+            <>
+              <p className="inline-status">
+                Упаковано: коробов {state.result.boxes}, единиц {state.result.packedUnits}, паллет {state.result.pallets}. Файлы WB готовы.
+              </p>
+              {state.result.warnings.length > 0 ? (
+                <div className="emergency-xlsx-modal__warning emergency-xlsx-modal__warning--result">
+                  <strong>Упаковано с расхождениями</strong>
+                  <span>
+                    Не сопоставлено (включая возможную перемаркировку): {state.result.shortageQuantity} шт. Излишек по фактическим коробам: {state.result.excessQuantity} шт.
+                  </span>
+                  <ul>
+                    {state.result.warnings.map((warning, index) => (
+                      <li key={`${warning.code}-${warning.boxCode ?? warning.skuId ?? index}-${index}`}>{warning.message}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </>
+          ) : null}
+          <div className="emergency-xlsx-modal__actions">
+            <button className="client-request-action-button client-request-action-button--instruction" type="button" onClick={onClose}>
+              Отмена
+            </button>
+            <button
+              className="client-request-action-button client-request-action-button--emergency"
+              type="button"
+              onClick={onSubmit}
+              disabled={isSubmitting || state.status === 'done' || !state.file}
+              aria-busy={isSubmitting}
+            >
+              {isSubmitting
+                ? 'Списываю короба и упаковываю'
+                : state.status === 'done'
+                  ? 'Заявка упакована'
+                  : 'Упаковать по списку коробов'}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+type OnlineExecutionModalProps = {
+  request: ClientRequestSummary;
+  plan: TsdAssemblyPlan | null;
+  status: 'loading' | 'ready' | 'error';
+  error?: string;
+  onClose: () => void;
+  onRefresh: () => void;
+  onDownloadBoxes: () => void;
+  onDownloadContents: () => void;
+  onDownloadMovements: () => void;
+};
+
+function OnlineExecutionModal({
+  request,
+  plan,
+  status,
+  error,
+  onClose,
+  onRefresh,
+  onDownloadBoxes,
+  onDownloadContents,
+  onDownloadMovements,
+}: OnlineExecutionModalProps) {
+  const [movementSearch, setMovementSearch] = useState('');
+  const [actualMovementSearch, setActualMovementSearch] = useState('');
+  const searchBoxes = normalizeOnlineBoxes(plan?.searchBoxes ?? plan?.boxesToSearch ?? []);
+  const foundCodes = new Set(
+    [...(plan?.boxSearchProgress?.foundBoxCodes ?? []), ...(plan?.foundBoxCodes ?? []), ...(plan?.foundBoxesCodes ?? [])].map(normalizeCode),
+  );
+  const searchTotal = plan?.boxSearchProgress?.total ?? searchBoxes.length;
+  const foundCount =
+    plan?.boxSearchProgress?.found ??
+    searchBoxes.filter((box) => box.found || box.isFound || foundCodes.has(normalizeCode(box.boxCode))).length;
+  const remainingCount = Math.max(0, searchTotal - foundCount);
+  const relabelTotal = plan?.relabelTotal ?? plan?.relabelTasks?.reduce((sum, row) => sum + row.quantity, 0) ?? 0;
+  const movementTotal = plan?.movementProgress?.totalRequired ?? plan?.movementRequiredTotal ?? plan?.movementTotal ?? 0;
+  const movementDone = plan?.movementProgress?.totalMoved ?? 0;
+  const movementRemaining = plan?.movementProgress?.totalRemaining ?? Math.max(0, movementTotal - movementDone);
+  const isClosedForOnline = plan ? ['PACKED', 'DONE'].includes(plan.status) : false;
+  const progressPercent = Math.round(
+    averageProgress([
+      progressRatio(foundCount, searchTotal),
+      relabelTotal > 0 ? (isClosedForOnline ? 1 : 0) : 1,
+      progressRatio(movementDone, movementTotal),
+    ]) * 100,
+  );
+  const movementRows = plan?.movementProgress?.rows ?? [];
+  const movementSourceBoxes = plan?.movementProgress?.sourceBoxes ?? [];
+  const actualMovements = plan?.movementProgress?.actualRows ?? [];
+  const outgoingBoxes = normalizeOutgoingBoxes(plan);
+  const filteredMovementRows = movementRows.filter((row) => movementRowMatchesSearch(row, movementSearch));
+  const filteredActualMovements = actualMovements.filter((row) => movementRowMatchesSearch(row, actualMovementSearch));
+
+  return (
+    <div className="online-execution-modal" role="dialog" aria-modal="true" aria-label="Онлайн-выполнение заявки">
+      <section className="online-execution-modal__panel">
+        <header className="online-execution-modal__header">
+          <div>
+            <span>Онлайн выполнение</span>
+            <h3>{request.title}</h3>
+            <small>
+              {request.client.name} · {request.destinationCity ?? 'город не указан'}
+            </small>
+          </div>
+          <div className="online-execution-modal__actions">
+            <button
+              className="client-request-action-button client-request-action-button--xlsx"
+              type="button"
+              onClick={onDownloadBoxes}
+              disabled={status === 'loading' || !plan}
+            >
+              <FileDown size={16} aria-hidden="true" />
+              Короба Excel
+            </button>
+            <button
+              className="client-request-action-button client-request-action-button--xlsx"
+              type="button"
+              onClick={onDownloadContents}
+              disabled={status === 'loading' || !plan}
+            >
+              <FileDown size={16} aria-hidden="true" />
+              Состав Excel
+            </button>
+            <button className="icon-button" type="button" onClick={onRefresh} title="Обновить онлайн-данные" disabled={status === 'loading'}>
+              <RefreshCw size={18} aria-hidden="true" />
+            </button>
+            <button className="icon-button" type="button" onClick={onClose} title="Закрыть">
+              <X size={18} aria-hidden="true" />
+            </button>
+          </div>
+        </header>
+
+        {status === 'loading' ? <p className="inline-status">Получаю данные выполнения.</p> : null}
+        {status === 'error' ? <p className="form-error">{error ?? 'Не удалось получить онлайн-выполнение.'}</p> : null}
+
+        {plan ? (
+          <div className="online-execution-modal__body">
+            <section className="online-execution-progress">
+              <div>
+                <strong>{progressPercent}%</strong>
+                <span>
+                  найдено коробов {foundCount} из {searchTotal} · осталось {remainingCount} · перемещено {movementDone} из {movementTotal}
+                </span>
+              </div>
+              <meter min={0} max={100} value={progressPercent} />
+            </section>
+
+            <div className="online-execution-metrics">
+              <article>
+                <span>Статус WMS</span>
+                <strong>{plan.statusLabel ?? plan.status}</strong>
+              </article>
+              <article>
+                <span>Поиск коробов</span>
+                <strong>
+                  {foundCount} / {searchTotal}
+                </strong>
+              </article>
+              <article>
+                <span>Переклейка</span>
+                <strong>{relabelTotal} шт.</strong>
+              </article>
+              <article>
+                <span>Перемещения</span>
+                <strong>
+                  {movementDone} / {movementTotal}
+                </strong>
+              </article>
+              <article>
+                <span>На отправку</span>
+                <strong>{outgoingBoxes.length}</strong>
+              </article>
+            </div>
+
+            <OnlineBoxChips
+              title="Короба для поиска"
+              subtitle={`Найдено: ${foundCount} из ${searchTotal} · осталось: ${remainingCount}`}
+              boxes={searchBoxes.map((box) => ({
+                code: box.boxCode,
+                done: box.found || box.isFound || foundCodes.has(normalizeCode(box.boxCode)),
+                doneText: ['найден', box.multiCityLabel].filter(Boolean).join(' · '),
+                todoText: ['не найден', box.multiCityLabel].filter(Boolean).join(' · '),
+              }))}
+            />
+
+            <OnlineBoxChips
+              title="Короба, где перемещения уже сделаны"
+              subtitle={movementSourceBoxes.length ? `Готово: ${movementSourceBoxes.filter((box) => box.done).length} из ${movementSourceBoxes.length}` : 'Перемещений нет'}
+              boxes={movementSourceBoxes.map((box) => ({
+                code: box.sourceBox,
+                done: box.done,
+                doneText: `готов · ${box.movedQuantity} шт.`,
+                todoText: `осталось ${box.remainingQuantity} шт.`,
+              }))}
+              emptyText="По этой заявке нет коробов с перемещениями."
+            />
+
+            <section className="online-execution-section">
+              <div className="online-execution-section__heading">
+                <h4>Перемещения</h4>
+                <span>{movementRows.length ? `${movementRows.length} строк` : 'нет строк'}</span>
+                <button
+                  className="client-request-action-button client-request-action-button--xlsx client-request-action-button--compact"
+                  type="button"
+                  onClick={onDownloadMovements}
+                  disabled={status === 'loading' || !plan}
+                  title="Скачать Excel с перемещениями"
+                >
+                  <FileDown size={14} aria-hidden="true" />
+                  <span>Excel</span>
+                </button>
+              </div>
+              <OnlineSectionSearch value={movementSearch} onChange={setMovementSearch} placeholder="Найти короб в перемещениях" />
+              {filteredMovementRows.length ? (
+                <div className="online-execution-table-wrap">
+                  <table className="online-execution-table">
+                    <thead>
+                      <tr>
+                        <th>Из короба</th>
+                        <th>В короб</th>
+                        <th>Товар</th>
+                        <th>Кол-во</th>
+                        <th>Статус</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredMovementRows.map((row, index) => (
+                        <tr key={`${row.sourceBox}-${row.barcode}-${row.targetBox}-${index}`}>
+                          <td>{row.sourceBox}</td>
+                          <td>{targetBoxesText(row)}</td>
+                          <td>
+                            <strong>{row.name ?? row.barcode ?? '-'}</strong>
+                            <span>
+                              {row.barcode ?? '-'}
+                              {row.size ? ` · ${row.size}` : ''}
+                            </span>
+                          </td>
+                          <td>
+                            {row.movedQuantity ?? 0} / {row.requiredQuantity ?? row.quantity}
+                          </td>
+                          <td>
+                            <span className={`online-execution-pill ${row.done ? 'is-done' : 'is-open'}`}>
+                              {row.done ? 'готово' : `осталось ${row.remainingQuantity ?? row.quantity}`}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="online-execution-empty">
+                  {movementRows.length ? 'По этому номеру короба перемещений не найдено.' : 'Перемещения по заявке не требуются.'}
+                </p>
+              )}
+            </section>
+
+            <section className="online-execution-section">
+              <div className="online-execution-section__heading">
+                <h4>Факт перемещений</h4>
+                <span>{actualMovements.length ? `${actualMovements.length} строк` : 'пока нет факта'}</span>
+              </div>
+              <OnlineSectionSearch value={actualMovementSearch} onChange={setActualMovementSearch} placeholder="Найти короб в выполненных перемещениях" />
+              {filteredActualMovements.length ? (
+                <div className="online-execution-table-wrap">
+                  <table className="online-execution-table">
+                    <thead>
+                      <tr>
+                        <th>Из</th>
+                        <th>В</th>
+                        <th>Что перенесено</th>
+                        <th>Кол-во</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredActualMovements.map((row, index) => (
+                        <tr key={`${row.sourceBox}-${row.targetBox}-${row.barcode}-${index}`}>
+                          <td>{row.sourceBox}</td>
+                          <td>{row.targetBox}</td>
+                          <td>
+                            <strong>{row.name ?? row.barcode ?? '-'}</strong>
+                            <span>
+                              {row.barcode ?? '-'}
+                              {row.size ? ` · ${row.size}` : ''}
+                            </span>
+                          </td>
+                          <td>{row.quantity}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="online-execution-empty">
+                  {actualMovements.length ? 'По этому номеру короба выполненных перемещений не найдено.' : 'Фактические переносы появятся после синхронизации ТСД.'}
+                </p>
+              )}
+            </section>
+
+            <OnlineBoxChips
+              title="НА ОТПРАВКУ"
+              subtitle={outgoingBoxes.length ? `Актуально коробов: ${outgoingBoxes.length}` : 'короба пока не определены'}
+              boxes={outgoingBoxes.map((box) => ({
+                code: box.boxCode,
+                done: true,
+                doneText: [box.typeLabel, box.quantity ? `${box.quantity} шт.` : '', box.sourceBox ? `из ${box.sourceBox}` : '']
+                  .filter(Boolean)
+                  .join(' · '),
+                todoText: '',
+              }))}
+              emptyText="После поиска и перемещений здесь появится актуальный список коробов, которые уезжают."
+            />
+          </div>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
+function OnlineBoxChips({
+  title,
+  subtitle,
+  boxes,
+  emptyText = 'Список пуст.',
+}: {
+  title: string;
+  subtitle: string;
+  boxes: Array<{ code: string; done: boolean; doneText: string; todoText: string }>;
+  emptyText?: string;
+}) {
+  const [search, setSearch] = useState('');
+  const filteredBoxes = boxes.filter((box) => box.code.toLocaleLowerCase('ru-RU').includes(search.trim().toLocaleLowerCase('ru-RU')));
+
+  return (
+    <section className="online-execution-section">
+      <div className="online-execution-section__heading">
+        <h4>{title}</h4>
+        <span>{subtitle}</span>
+      </div>
+      <OnlineSectionSearch value={search} onChange={setSearch} placeholder="Найти короб в этом разделе" />
+      {filteredBoxes.length ? (
+        <div className="online-execution-chips">
+          {filteredBoxes.map((box) => (
+            <span className={`online-execution-chip ${box.done ? 'is-done' : 'is-open'}`} key={`${title}-${box.code}`}>
+              <strong>{box.code}</strong>
+              <small>{box.done ? box.doneText : box.todoText}</small>
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="online-execution-empty">{boxes.length ? 'Короб с таким номером не найден.' : emptyText}</p>
+      )}
+    </section>
+  );
+}
+
+function OnlineSectionSearch({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder: string }) {
+  return (
+    <label className="online-execution-search">
+      <Search size={16} aria-hidden="true" />
+      <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
+      {value ? (
+        <button type="button" onClick={() => onChange('')} title="Очистить поиск" aria-label="Очистить поиск">
+          <X size={15} aria-hidden="true" />
+        </button>
+      ) : null}
+    </label>
   );
 }
 
@@ -507,24 +1467,29 @@ function renderRequests(
   state: LoadState<ClientRequestSummary>,
   canChangeStatus: boolean,
   canPickOutbound: boolean,
-  canIssueInvoice: boolean,
   canCancelRequests: boolean,
-  canDownloadSourceFiles: boolean,
-  issuingInvoiceRequestId: string,
-  onStatusChange: (request: ClientRequestSummary, status: ClientRequestStatus) => void,
-  onEditRequest: (request: ClientRequestSummary) => void,
+  canEditAnyRequest: boolean,
+  canRefreshPickInstruction: boolean,
+  canUploadManualInstruction: boolean,
+  refreshingInstructionId: string | null,
+  onStatusChange: (requestId: string, status: ClientRequestStatus) => void,
   onCancelRequest: (request: ClientRequestSummary) => void,
-  onOpenOnlineProgress: (request: ClientRequestSummary) => void,
+  onEditRequest: (request: ClientRequestSummary) => void,
   onOpenDocument: (request: ClientRequestSummary) => void,
+  onDownloadRequestItems: (request: ClientRequestSummary) => void,
+  onDownloadOriginalFile: ((request: ClientRequestSummary, file: ClientRequestFileSummary) => void) | undefined,
+  onOpenOnlineExecution: ((request: ClientRequestSummary) => void) | undefined,
   onOpenPickInstruction: (request: ClientRequestSummary) => void,
+  onRefreshPickInstruction: (request: ClientRequestSummary) => void,
   onDownloadPickInstruction: (request: ClientRequestSummary) => void,
-  onDownloadSourceRequest: (request: ClientRequestSummary) => void,
-  onDownloadWbProducts: (request: ClientRequestSummary) => void,
-  onDownloadWbPackages: (request: ClientRequestSummary) => void,
+  onDownloadWbProducts: ((request: ClientRequestSummary) => void) | undefined,
+  onDownloadWbPackages: ((request: ClientRequestSummary) => void) | undefined,
+  onUploadManualInstruction: ((request: ClientRequestSummary) => void) | undefined,
+  onEmergencyPackedXlsx: ((request: ClientRequestSummary) => void) | undefined,
+  onRollbackEmergencyClose: ((request: ClientRequestSummary) => void) | undefined,
   onPickOutbound: (request: ClientRequestSummary) => void,
   onPackageOutbound: (request: ClientRequestSummary) => void,
   onShipOutbound: (request: ClientRequestSummary) => void,
-  onIssueInvoice: (request: ClientRequestSummary) => void,
 ) {
   if (state.status === 'idle' || (state.status === 'loading' && state.data.length === 0)) {
     return (
@@ -550,32 +1515,155 @@ function renderRequests(
         items={state.data}
         canChangeStatus={canChangeStatus}
         canPickOutbound={canPickOutbound}
-        canIssueInvoice={canIssueInvoice}
         canCancelRequests={canCancelRequests}
-        canEditRequests={canCancelRequests}
-        canDownloadSourceFiles={canDownloadSourceFiles}
-        issuingInvoiceRequestId={issuingInvoiceRequestId}
+        canEditAnyRequest={canEditAnyRequest}
+        canRefreshPickInstruction={canRefreshPickInstruction}
+        refreshingInstructionId={refreshingInstructionId}
         onStatusChange={onStatusChange}
-        onEditRequest={onEditRequest}
         onCancelRequest={onCancelRequest}
-        onOpenOnlineProgress={canPickOutbound ? onOpenOnlineProgress : undefined}
+        onEditRequest={onEditRequest}
         onOpenDocument={onOpenDocument}
+        onDownloadRequestItems={onDownloadRequestItems}
+        onDownloadOriginalFile={onDownloadOriginalFile}
+        onOpenOnlineExecution={onOpenOnlineExecution}
         onOpenPickInstruction={onOpenPickInstruction}
+        onRefreshPickInstruction={onRefreshPickInstruction}
         onDownloadPickInstruction={onDownloadPickInstruction}
-        onDownloadSourceRequest={onDownloadSourceRequest}
         onDownloadWbProducts={onDownloadWbProducts}
         onDownloadWbPackages={onDownloadWbPackages}
+        onUploadManualInstruction={canUploadManualInstruction ? onUploadManualInstruction : undefined}
+        onEmergencyPackedXlsx={onEmergencyPackedXlsx}
+        onRollbackEmergencyClose={onRollbackEmergencyClose}
         onPickOutbound={onPickOutbound}
         onPackageOutbound={onPackageOutbound}
         onShipOutbound={onShipOutbound}
-        onIssueInvoice={onIssueInvoice}
       />
     </>
   );
 }
 
+function normalizeOnlineBoxes(
+  values: Array<{
+    boxCode?: string;
+    code?: string;
+    found?: boolean;
+    isFound?: boolean;
+    servesMultipleCities?: boolean;
+    multiCityLabel?: string;
+  }>,
+) {
+  return values
+    .map((box) => ({
+      boxCode: (box.boxCode ?? box.code ?? '').trim(),
+      found: Boolean(box.found),
+      isFound: Boolean(box.isFound),
+      servesMultipleCities: Boolean(box.servesMultipleCities),
+      multiCityLabel: box.multiCityLabel?.trim() ?? '',
+    }))
+    .filter((box) => box.boxCode);
+}
+
+function normalizeOutgoingBoxes(plan: TsdAssemblyPlan | null) {
+  if (!plan) {
+    return [];
+  }
+
+  const boxes = new Map<
+    string,
+    {
+      boxCode: string;
+      typeLabel: string;
+      sourceBox: string;
+      quantity: number;
+    }
+  >();
+
+  const addBox = (boxCode: string | undefined, typeLabel: string, sourceBox = '', quantity = 0) => {
+    const normalized = normalizeCode(boxCode);
+    if (!normalized) {
+      return;
+    }
+    const current = boxes.get(normalized) ?? {
+      boxCode: boxCode?.trim() || normalized,
+      typeLabel,
+      sourceBox: '',
+      quantity: 0,
+    };
+    current.typeLabel = current.typeLabel || typeLabel;
+    current.quantity += quantity;
+    if (sourceBox && !current.sourceBox.split(', ').some((value) => normalizeCode(value) === normalizeCode(sourceBox))) {
+      current.sourceBox = current.sourceBox ? `${current.sourceBox}, ${sourceBox}` : sourceBox;
+    }
+    boxes.set(normalized, current);
+  };
+
+  for (const box of plan.outgoingBoxes ?? []) {
+    addBox(box.boxCode ?? box.code, box.typeLabel ?? 'К отправке', box.sourceBox ?? '', box.quantity ?? 0);
+  }
+  for (const boxCode of plan.outgoingBoxCodes ?? []) {
+    addBox(boxCode, 'К отправке');
+  }
+  for (const box of plan.shipmentBoxes ?? []) {
+    addBox(box.boxCode ?? box.code, 'Целый короб');
+  }
+  for (const boxCode of plan.shipmentBoxCodes ?? []) {
+    addBox(boxCode, 'Целый короб');
+  }
+
+  return [...boxes.values()].sort((left, right) => left.boxCode.localeCompare(right.boxCode, 'ru', { numeric: true }));
+}
+
+function targetBoxesText(row: { actualTargetBoxes?: string[]; targetBox?: string; purpose?: string; targetRole?: string }) {
+  if (row.actualTargetBoxes?.length) {
+    return row.actualTargetBoxes.join(', ');
+  }
+  if (row.targetBox) {
+    return row.targetBox;
+  }
+  return row.purpose === 'SHIPMENT' || row.targetRole === 'SHIPMENT' ? 'новый короб поставки' : 'короб баланса';
+}
+
+function progressRatio(done: number, total: number) {
+  if (total <= 0) {
+    return 1;
+  }
+  return Math.max(0, Math.min(1, done / total));
+}
+
+function averageProgress(values: number[]) {
+  const safeValues = values.length ? values : [0];
+  return safeValues.reduce((sum, value) => sum + value, 0) / safeValues.length;
+}
+
+function normalizeCode(value?: string | null) {
+  return value?.trim().toLocaleLowerCase('ru-RU') ?? '';
+}
+
+function movementRowMatchesSearch(
+  row: { sourceBox?: string; targetBox?: string; actualTargetBoxes?: string[]; barcode?: string; name?: string | null },
+  query: string,
+) {
+  const normalizedQuery = normalizeCode(query);
+  if (!normalizedQuery) return true;
+  return [row.sourceBox, row.targetBox, ...(row.actualTargetBoxes ?? []), row.barcode, row.name]
+    .filter((value): value is string => Boolean(value))
+    .some((value) => normalizeCode(value).includes(normalizedQuery));
+}
+
 function canUse(user: AuthUser, permission: string) {
   return user.permissionCodes.includes('system:admin') || user.permissionCodes.includes(permission);
+}
+
+function canEditRequestAnyStatus(user: AuthUser) {
+  return user.permissionCodes.includes('system:admin') || user.roleCodes.some((role) => ['ADMIN', 'OWNER', 'MANAGER'].includes(role));
+}
+
+function canUploadOwnInstruction(user: AuthUser) {
+  return user.permissionCodes.includes('system:admin') || user.roleCodes.some((role) => ['ADMIN', 'OWNER'].includes(role));
+}
+
+function canAdministerRequestFiles(user: AuthUser) {
+  return user.permissionCodes.includes('system:admin') || user.roleCodes.some((role) => ['ADMIN', 'OWNER'].includes(role));
 }
 
 function downloadBlob(blob: Blob, fileName: string) {
@@ -593,42 +1681,14 @@ function safeDownloadName(value: string) {
   return value.replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'request';
 }
 
-function sourceRequestFile(request: ClientRequestSummary): ClientRequestFileSummary | null {
-  return request.files.find((file) => /\.(xlsx|xls|csv)$/i.test(file.fileName)) ?? request.files[0] ?? null;
-}
-
-function requestBillingQuantities(request: ClientRequestSummary) {
-  const counts = request.packages.reduce(
-    (result, packagePlace) => {
-      if (isPalletPackage(packagePlace.packageType)) {
-        result.pallets += 1;
-      } else {
-        result.boxes += 1;
-      }
-      return result;
-    },
-    { boxes: 0, pallets: 0 },
-  );
-
-  return {
-    BOX_60_40_40: counts.boxes,
-    BOX_ASSEMBLY: counts.boxes,
-    PALLET: counts.pallets,
-    PALLET_ASSEMBLY: counts.pallets,
-  };
+function parseNonNegativeInteger(value: string) {
+  if (!/^\d+$/.test(value.trim())) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function isPalletPackage(packageType?: string | null) {
   return ['PALLET', 'PALLETTE', 'ПАЛЛЕТ', 'ПАЛЛЕТА'].includes((packageType ?? '').trim().toUpperCase());
-}
-
-function dateInput(value: string | null | undefined) {
-  return value ? value.slice(0, 10) : new Date().toISOString().slice(0, 10);
-}
-
-function shouldOpenManualInvoice(message: string) {
-  const normalized = message.toLocaleLowerCase('ru-RU');
-  return normalized.includes('нет счетов') || normalized.includes('начислен');
 }
 
 function errorMessage(caught: unknown) {

@@ -1,18 +1,9 @@
+import { Activity, AlertTriangle, CheckCircle2, ClipboardList, Edit3, FileDown, FileSpreadsheet, FileText, FileUp, PackageCheck, RefreshCw, Send, Truck, Undo2, XCircle } from 'lucide-react';
 import {
-  Activity,
-  CheckCircle2,
-  ClipboardList,
-  FileDown,
-  FileSpreadsheet,
-  FileText,
-  PackageCheck,
-  Pencil,
-  ReceiptText,
-  Send,
-  Truck,
-  XCircle,
-} from 'lucide-react';
-import { type ClientRequestStatus, type ClientRequestSummary } from '../../lib/api';
+  type ClientRequestFileSummary,
+  type ClientRequestStatus,
+  type ClientRequestSummary,
+} from '../../lib/api';
 import {
   requestPriorityLabel,
   requestStatusLabel,
@@ -20,31 +11,33 @@ import {
   requestStatusTone,
   requestTypeLabel,
 } from './clientRequestMeta';
-import { canEditClientRequest } from './ClientRequestEditForm';
 
 type ClientRequestsTableProps = {
   items: ClientRequestSummary[];
   canChangeStatus: boolean;
   canPickOutbound: boolean;
-  canIssueInvoice: boolean;
   canCancelRequests: boolean;
-  canEditRequests: boolean;
-  canDownloadSourceFiles: boolean;
-  issuingInvoiceRequestId: string;
-  onStatusChange: (request: ClientRequestSummary, status: ClientRequestStatus) => void;
-  onEditRequest: (request: ClientRequestSummary) => void;
+  canEditAnyRequest: boolean;
+  canRefreshPickInstruction: boolean;
+  refreshingInstructionId?: string | null;
+  onStatusChange: (requestId: string, status: ClientRequestStatus) => void;
   onCancelRequest: (request: ClientRequestSummary) => void;
-  onOpenOnlineProgress?: (request: ClientRequestSummary) => void;
+  onEditRequest: (request: ClientRequestSummary) => void;
   onOpenDocument?: (request: ClientRequestSummary) => void;
+  onDownloadRequestItems?: (request: ClientRequestSummary) => void;
+  onDownloadOriginalFile?: (request: ClientRequestSummary, file: ClientRequestFileSummary) => void;
+  onOpenOnlineExecution?: (request: ClientRequestSummary) => void;
   onOpenPickInstruction?: (request: ClientRequestSummary) => void;
+  onRefreshPickInstruction?: (request: ClientRequestSummary) => void;
   onDownloadPickInstruction?: (request: ClientRequestSummary) => void;
-  onDownloadSourceRequest?: (request: ClientRequestSummary) => void;
   onDownloadWbProducts?: (request: ClientRequestSummary) => void;
   onDownloadWbPackages?: (request: ClientRequestSummary) => void;
+  onUploadManualInstruction?: (request: ClientRequestSummary) => void;
+  onEmergencyPackedXlsx?: (request: ClientRequestSummary) => void;
+  onRollbackEmergencyClose?: (request: ClientRequestSummary) => void;
   onPickOutbound: (request: ClientRequestSummary) => void;
   onPackageOutbound: (request: ClientRequestSummary) => void;
   onShipOutbound: (request: ClientRequestSummary) => void;
-  onIssueInvoice: (request: ClientRequestSummary) => void;
 };
 
 const dateFormatter = new Intl.DateTimeFormat('ru-RU', {
@@ -57,60 +50,80 @@ export function ClientRequestsTable({
   items,
   canChangeStatus,
   canPickOutbound,
-  canIssueInvoice,
   canCancelRequests,
-  canEditRequests,
-  canDownloadSourceFiles,
-  issuingInvoiceRequestId,
+  canEditAnyRequest,
+  canRefreshPickInstruction,
+  refreshingInstructionId,
   onStatusChange,
-  onEditRequest,
   onCancelRequest,
-  onOpenOnlineProgress,
+  onEditRequest,
   onOpenDocument,
+  onDownloadRequestItems,
+  onDownloadOriginalFile,
+  onOpenOnlineExecution,
   onOpenPickInstruction,
+  onRefreshPickInstruction,
   onDownloadPickInstruction,
-  onDownloadSourceRequest,
   onDownloadWbProducts,
   onDownloadWbPackages,
+  onUploadManualInstruction,
+  onEmergencyPackedXlsx,
+  onRollbackEmergencyClose,
   onPickOutbound,
   onPackageOutbound,
   onShipOutbound,
-  onIssueInvoice,
 }: ClientRequestsTableProps) {
-  const showOperationActions = canPickOutbound || canIssueInvoice || canDownloadSourceFiles;
-
   return (
     <div className="client-request-table-wrap">
       <table className="data-table client-request-table">
         <thead>
           <tr>
-            <th>Заявка</th>
-            <th>Клиент</th>
-            <th>Состав</th>
-            <th>Срок</th>
-            <th>Статус</th>
-            {showOperationActions ? <th>Операции</th> : null}
-            {canCancelRequests ? <th>Действия</th> : null}
-            {canChangeStatus ? <th>Процесс</th> : null}
+            <th className="client-request-table__request-heading">Заявка</th>
+            <th className="client-request-table__client-heading">Клиент</th>
+            <th className="client-request-table__composition-heading">Состав</th>
+            <th className="client-request-table__due-heading">Срок</th>
+            <th className="client-request-table__status-heading">Статус</th>
+            {canPickOutbound ? <th className="client-request-table__warehouse-heading">Склад</th> : null}
+            {canCancelRequests ? <th className="client-request-table__actions-heading">Действия</th> : null}
+            {canChangeStatus ? <th className="client-request-table__process-heading">Процесс</th> : null}
           </tr>
         </thead>
         <tbody>
-          {items.map((request) => (
+          {items.map((request) => {
+            const originalFile = findOriginalRequestFile(request);
+            const emergencyClosed = isEmergencyClosedRequest(request);
+
+            return (
             <tr key={request.id}>
-              <td>
-                <strong>{request.title}</strong>
-                <span>
+              <td className="client-request-table__request-cell" data-label="Заявка">
+                {onOpenDocument ? (
+                  <button
+                    className="client-request-title client-request-title--button"
+                    type="button"
+                    onClick={() => onOpenDocument(request)}
+                    title={`Открыть заявку: ${request.title}`}
+                    aria-label={`Открыть заявку ${request.title}`}
+                  >
+                    {request.title}
+                  </button>
+                ) : (
+                  <strong className="client-request-title" title={request.title}>{request.title}</strong>
+                )}
+                <span className="client-request-list-meta">
                   {requestTypeLabel(request.type)} · {requestPriorityLabel(request.priority)}
                 </span>
-                <span>Город: {request.destinationCity ?? '-'}</span>
-                {request.comment ? <span>{request.comment}</span> : null}
+                <span className="client-request-list-meta">Город: {request.destinationCity ?? '-'}</span>
+                {request.comment ? (
+                  <span className="client-request-list-comment" title={request.comment}>{request.comment}</span>
+                ) : null}
               </td>
-              <td>
+              <td className="client-request-table__client-cell" data-label="Клиент">
                 <strong>{request.client.code}</strong>
                 <span>{request.client.name}</span>
               </td>
-              <td>
-                <span>{itemsSummary(request)}</span>
+              <td className="client-request-table__composition-cell" data-label="Состав">
+                <span className="client-request-items-count">{itemsCountSummary(request)}</span>
+                <span className="client-request-items-preview">{itemsSummary(request)}</span>
                 {request.packages.length ? (
                   <span className="request-package-summary">{packagesSummary(request)}</span>
                 ) : null}
@@ -125,41 +138,56 @@ export function ClientRequestsTable({
                     <span>Состав</span>
                   </button>
                 ) : null}
-                {canPickOutbound && onOpenOnlineProgress && request.type === 'OUTBOUND' ? (
+                {onDownloadRequestItems ? (
                   <button
-                    className="document-open-button client-request-online-open"
+                    className="document-open-button document-open-button--source"
                     type="button"
-                    onClick={() => onOpenOnlineProgress(request)}
-                    title="Открыть онлайн-состояние выполнения заявки"
+                    onClick={() => onDownloadRequestItems(request)}
+                    title="Скачать состав заявки в Excel"
+                  >
+                    <FileSpreadsheet size={15} aria-hidden="true" />
+                    <span>Состав XLSX</span>
+                  </button>
+                ) : null}
+                {onDownloadOriginalFile && originalFile ? (
+                  <button
+                    className="document-open-button document-open-button--source"
+                    type="button"
+                    onClick={() => onDownloadOriginalFile(request, originalFile)}
+                    title={`Скачать первоначальный файл клиента: ${originalFile.fileName}`}
+                  >
+                    <FileDown size={15} aria-hidden="true" />
+                    <span>Файл клиента</span>
+                  </button>
+                ) : null}
+                {onOpenOnlineExecution && request.type === 'OUTBOUND' ? (
+                  <button
+                    className="document-open-button document-open-button--online"
+                    type="button"
+                    onClick={() => onOpenOnlineExecution(request)}
+                    title="Онлайн-выполнение заявки"
                   >
                     <Activity size={15} aria-hidden="true" />
                     <span>Онлайн</span>
                   </button>
                 ) : null}
               </td>
-              <td>{formatDate(request.desiredDate)}</td>
-              <td>
-                <span className={`status status--${requestStatusTone(request.status)} client-request-status-badge`}>
-                  {requestStatusLabel(request.status)}
+              <td className="client-request-table__due-cell" data-label="Срок">{formatDate(request.desiredDate)}</td>
+              <td className="client-request-table__status-cell" data-label="Статус">
+                <span className={`status status--${requestStatusTone(request.status)}`}>
+                  {emergencyClosed ? 'Аварийно упакована' : requestStatusLabel(request.status)}
                 </span>
-                {request.managerComment ? <span>{request.managerComment}</span> : null}
+                {request.managerComment ? (
+                  <span className="client-request-status-comment" title={request.managerComment}>
+                    {request.managerComment}
+                  </span>
+                ) : null}
               </td>
-              {showOperationActions ? (
-                <td>
-                  {canShowOperationActions(request, canPickOutbound, canIssueInvoice, canDownloadSourceFiles) ? (
+              {canPickOutbound ? (
+                <td className="client-request-table__warehouse-cell" data-label="Склад">
+                  {canShowWarehouseActions(request) ? (
                     <div className="client-request-actions">
-                      {canDownloadSourceFiles && onDownloadSourceRequest && request.files.length > 0 ? (
-                        <button
-                          className="client-request-action-button client-request-action-button--xlsx"
-                          type="button"
-                          onClick={() => onDownloadSourceRequest(request)}
-                          title="Скачать залитую клиентом заявку"
-                        >
-                          <FileDown size={15} aria-hidden="true" />
-                          <span>Заявка Excel</span>
-                        </button>
-                      ) : null}
-                      {canPickOutbound && onOpenPickInstruction && request.type === 'OUTBOUND' ? (
+                      {onOpenPickInstruction && request.type === 'OUTBOUND' ? (
                         <button
                           className="client-request-action-button client-request-action-button--instruction"
                           type="button"
@@ -170,7 +198,19 @@ export function ClientRequestsTable({
                           <span>Инструкция</span>
                         </button>
                       ) : null}
-                      {canPickOutbound && onDownloadPickInstruction && request.type === 'OUTBOUND' ? (
+                      {onRefreshPickInstruction && canRefreshPickInstruction && request.type === 'OUTBOUND' ? (
+                        <button
+                          className="client-request-action-button client-request-action-button--refresh-instruction"
+                          type="button"
+                          onClick={() => onRefreshPickInstruction(request)}
+                          disabled={refreshingInstructionId === request.id}
+                          title="Обновить складскую инструкцию"
+                        >
+                          <RefreshCw size={15} aria-hidden="true" />
+                          <span>{refreshingInstructionId === request.id ? 'Обновляю' : 'Обновить инструкцию'}</span>
+                        </button>
+                      ) : null}
+                      {onDownloadPickInstruction && request.type === 'OUTBOUND' ? (
                         <button
                           className="client-request-action-button client-request-action-button--xlsx"
                           type="button"
@@ -181,29 +221,7 @@ export function ClientRequestsTable({
                           <span>Инструкция Excel</span>
                         </button>
                       ) : null}
-                      {canPickOutbound && canDownloadMarketplaceTemplates(request) ? (
-                        <>
-                          <button
-                            className="client-request-action-button client-request-action-button--xlsx"
-                            type="button"
-                            onClick={() => onDownloadWbProducts?.(request)}
-                            title="Скачать шаблон товаров WB"
-                          >
-                            <FileSpreadsheet size={15} aria-hidden="true" />
-                            <span>ВБ товары</span>
-                          </button>
-                          <button
-                            className="client-request-action-button client-request-action-button--xlsx"
-                            type="button"
-                            onClick={() => onDownloadWbPackages?.(request)}
-                            title="Скачать шаблон упаковки WB"
-                          >
-                            <FileSpreadsheet size={15} aria-hidden="true" />
-                            <span>ВБ упаковка</span>
-                          </button>
-                        </>
-                      ) : null}
-                      {canPickOutbound && canPickRequest(request) ? (
+                      {canPickRequest(request) ? (
                         <button
                           className="client-request-action-button client-request-action-button--pick"
                           type="button"
@@ -214,7 +232,7 @@ export function ClientRequestsTable({
                           <span>Собрать</span>
                         </button>
                       ) : null}
-                      {canPickOutbound && canPackageRequest(request) ? (
+                      {canPackageRequest(request) ? (
                         <button
                           className="client-request-action-button client-request-action-button--pack"
                           type="button"
@@ -225,7 +243,7 @@ export function ClientRequestsTable({
                           <span>Упаковать</span>
                         </button>
                       ) : null}
-                      {canPickOutbound && canShipRequest(request) ? (
+                      {canShipRequest(request) ? (
                         <button
                           className="client-request-action-button client-request-action-button--ship"
                           type="button"
@@ -236,16 +254,58 @@ export function ClientRequestsTable({
                           <span>Отгрузить</span>
                         </button>
                       ) : null}
-                      {canIssueInvoice && canIssueRequestInvoice(request) ? (
+                      {canDownloadMarketplaceTemplates(request) ? (
+                        <>
+                          <button
+                            className="client-request-action-button client-request-action-button--xlsx"
+                            type="button"
+                            onClick={() => onDownloadWbProducts?.(request)}
+                            title="Скачать файл товаров для загрузки в WB"
+                          >
+                            <FileSpreadsheet size={15} aria-hidden="true" />
+                            <span>WB товары</span>
+                          </button>
+                          <button
+                            className="client-request-action-button client-request-action-button--xlsx"
+                            type="button"
+                            onClick={() => onDownloadWbPackages?.(request)}
+                            title="Скачать файл упаковки для загрузки в WB"
+                          >
+                            <FileSpreadsheet size={15} aria-hidden="true" />
+                            <span>WB упаковка</span>
+                          </button>
+                        </>
+                      ) : null}
+                      {onUploadManualInstruction && canUploadManualInstruction(request) ? (
                         <button
-                          className="client-request-action-button client-request-action-button--invoice"
-                          disabled={issuingInvoiceRequestId === request.id}
+                          className="client-request-action-button client-request-action-button--manual-instruction"
                           type="button"
-                          onClick={() => onIssueInvoice(request)}
-                          title="Выставить счет по сданной заявке"
+                          onClick={() => onUploadManualInstruction(request)}
+                          title="Загрузить свою складскую инструкцию и перестроить план заявки"
                         >
-                          <ReceiptText size={15} aria-hidden="true" />
-                          <span>{issuingInvoiceRequestId === request.id ? 'Выставляю' : 'Выставить счет'}</span>
+                          <FileUp size={15} aria-hidden="true" />
+                          <span>Своя инструкция</span>
+                        </button>
+                      ) : null}
+                      {onRollbackEmergencyClose && emergencyClosed ? (
+                        <button
+                          className="client-request-action-button client-request-action-button--emergency-rollback"
+                          type="button"
+                          onClick={() => onRollbackEmergencyClose(request)}
+                          title="Отменить аварийное закрытие и восстановить остатки"
+                        >
+                          <Undo2 size={15} aria-hidden="true" />
+                          <span>Отмена аварийного закрытия</span>
+                        </button>
+                      ) : onEmergencyPackedXlsx && canEmergencyPackRequest(request) ? (
+                        <button
+                          className="client-request-action-button client-request-action-button--emergency"
+                          type="button"
+                          onClick={() => onEmergencyPackedXlsx(request)}
+                          title="Аварийно упаковать заявку по Excel со списком коробов"
+                        >
+                          <AlertTriangle size={15} aria-hidden="true" />
+                          <span>Короба XLSX</span>
                         </button>
                       ) : null}
                     </div>
@@ -255,15 +315,16 @@ export function ClientRequestsTable({
                 </td>
               ) : null}
               {canCancelRequests ? (
-                <td>
-                  {canEditRequests && canEditClientRequest(request) ? (
+                <td className="client-request-table__actions-cell" data-label="Действия">
+                  <div className="client-request-actions client-request-actions--main">
+                  {canEditRequest(request, canEditAnyRequest) ? (
                     <button
                       className="client-request-action-button client-request-action-button--edit"
                       type="button"
                       onClick={() => onEditRequest(request)}
-                      title="Редактировать заявку до начала работы"
+                      title="Редактировать заявку"
                     >
-                      <Pencil size={15} aria-hidden="true" />
+                      <Edit3 size={15} aria-hidden="true" />
                       <span>Редактировать</span>
                     </button>
                   ) : null}
@@ -278,17 +339,20 @@ export function ClientRequestsTable({
                       <span>Отменить</span>
                     </button>
                   ) : (
-                    '-'
+                    canEditRequest(request, canEditAnyRequest) ? null : '-'
                   )}
+                  </div>
                 </td>
               ) : null}
               {canChangeStatus ? (
-                <td>
+                <td className="client-request-table__process-cell" data-label="Процесс">
                   <label className="client-request-status-select">
                     <CheckCircle2 size={15} aria-hidden="true" />
                     <select
+                      aria-label={`Статус заявки ${request.title}`}
+                      title="Изменить статус заявки"
                       value={request.status}
-                      onChange={(event) => onStatusChange(request, event.target.value as ClientRequestStatus)}
+                      onChange={(event) => onStatusChange(request.id, event.target.value as ClientRequestStatus)}
                     >
                       {requestStatusOptions.map((option) => (
                         <option key={option.value} value={option.value}>
@@ -300,7 +364,8 @@ export function ClientRequestsTable({
                 </td>
               ) : null}
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -319,10 +384,6 @@ function canShipRequest(request: ClientRequestSummary) {
   return request.type === 'OUTBOUND' && request.status === 'PACKED';
 }
 
-function canDownloadMarketplaceTemplates(request: ClientRequestSummary) {
-  return request.type === 'OUTBOUND' && ['PACKED', 'DONE'].includes(request.status) && request.packages.length > 0;
-}
-
 function canRunFulfillment(request: ClientRequestSummary) {
   return canPickRequest(request) || canPackageRequest(request) || canShipRequest(request);
 }
@@ -331,25 +392,71 @@ function canShowWarehouseActions(request: ClientRequestSummary) {
   return request.type === 'OUTBOUND' || canRunFulfillment(request);
 }
 
-function canShowOperationActions(
-  request: ClientRequestSummary,
-  canPickOutbound: boolean,
-  canIssueInvoice: boolean,
-  canDownloadSourceFiles: boolean,
-) {
+function canCancelRequest(request: ClientRequestSummary) {
+  return request.type === 'OUTBOUND' && ['SUBMITTED', 'IN_REVIEW', 'APPROVED'].includes(request.status);
+}
+
+function canDownloadMarketplaceTemplates(request: ClientRequestSummary) {
   return (
-    (canDownloadSourceFiles && request.files.length > 0) ||
-    (canPickOutbound && canShowWarehouseActions(request)) ||
-    (canIssueInvoice && canIssueRequestInvoice(request))
+    request.type === 'OUTBOUND' &&
+    ['PACKED', 'DONE'].includes(request.status) &&
+    request.packages.length > 0
   );
 }
 
-function canIssueRequestInvoice(request: ClientRequestSummary) {
-  return request.type === 'OUTBOUND' && request.status === 'DONE';
+function canEmergencyPackRequest(request: ClientRequestSummary) {
+  return request.type === 'OUTBOUND' && !['DONE', 'CANCELLED', 'REJECTED'].includes(request.status);
 }
 
-function canCancelRequest(request: ClientRequestSummary) {
-  return request.type === 'OUTBOUND' && ['SUBMITTED', 'IN_REVIEW', 'APPROVED'].includes(request.status);
+function isEmergencyClosedRequest(request: ClientRequestSummary) {
+  if (request.type !== 'OUTBOUND' || request.status !== 'PACKED') {
+    return false;
+  }
+  return request.packages.some((packagePlace) => packagePlace.comment === 'Фактический короб из аварийного Excel');
+}
+
+function findOriginalRequestFile(request: ClientRequestSummary) {
+  const requestCreatedAt = Date.parse(request.createdAt);
+  const creatorId = request.createdBy?.id;
+  const sourceWindowMs = 5 * 60 * 1000;
+  const sourceFileName = request.comment
+    ?.match(/Создано из Excel:\s*(.+?\.(?:xlsx|xlsm|xls))(?=\.\s*Позиций:|$)/i)?.[1]
+    ?.trim()
+    .toLocaleLowerCase('ru-RU');
+  const workbooks = [...request.files]
+    .filter((file) => /\.(xlsx|xlsm|xls)$/i.test(file.fileName)
+      || file.mimeType.includes('spreadsheet')
+      || file.mimeType.includes('excel'))
+    .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt));
+
+  if (sourceFileName) {
+    const matchingName = workbooks.find(
+      (file) => file.fileName.trim().toLocaleLowerCase('ru-RU') === sourceFileName,
+    );
+    if (matchingName) {
+      return matchingName;
+    }
+  }
+
+  return workbooks
+    .filter((file) => {
+      const uploadedByCreator = !creatorId || file.uploadedByUserId === creatorId;
+      const fileCreatedAt = Date.parse(file.createdAt);
+      const uploadedWithRequest = Number.isFinite(requestCreatedAt)
+        && Number.isFinite(fileCreatedAt)
+        && Math.abs(fileCreatedAt - requestCreatedAt) <= sourceWindowMs;
+
+      return uploadedByCreator && uploadedWithRequest;
+    })
+    [0] ?? null;
+}
+
+function canUploadManualInstruction(request: ClientRequestSummary) {
+  return request.type === 'OUTBOUND' && !['DONE', 'CANCELLED', 'REJECTED'].includes(request.status);
+}
+
+function canEditRequest(request: ClientRequestSummary, canEditAnyRequest: boolean) {
+  return canEditAnyRequest || ['SUBMITTED', 'IN_REVIEW', 'APPROVED'].includes(request.status);
 }
 
 function itemsSummary(request: ClientRequestSummary) {
@@ -357,12 +464,25 @@ function itemsSummary(request: ClientRequestSummary) {
     return '-';
   }
 
-  return request.items
+  const previewItems = request.items.slice(0, 4);
+  const restCount = request.items.length - previewItems.length;
+  const preview = previewItems
     .map((item) => {
       const itemName = item.sku?.internalSku ?? item.name ?? item.barcode ?? 'позиция';
       return `${itemName} x ${item.quantity}`;
     })
     .join(', ');
+
+  return restCount > 0 ? `${preview} · еще ${restCount}` : preview;
+}
+
+function itemsCountSummary(request: ClientRequestSummary) {
+  if (request.items.length === 0) {
+    return '0 позиций';
+  }
+
+  const totalQuantity = request.items.reduce((sum, item) => sum + item.quantity, 0);
+  return `${request.items.length} позиций · ${totalQuantity} шт.`;
 }
 
 function packagesSummary(request: ClientRequestSummary) {

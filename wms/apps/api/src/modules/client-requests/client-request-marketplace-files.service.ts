@@ -28,10 +28,9 @@ export class ClientRequestMarketplaceFilesService {
     request.packages.forEach((packagePlace) => {
       packagePlace.items.forEach((item) => {
         const barcode = resolveItemBarcode(item);
-        if (!barcode) {
-          return;
+        if (barcode) {
+          totals.set(barcode, (totals.get(barcode) ?? 0) + item.quantity);
         }
-        totals.set(barcode, (totals.get(barcode) ?? 0) + item.quantity);
       });
     });
 
@@ -39,7 +38,6 @@ export class ClientRequestMarketplaceFilesService {
     [...totals.entries()]
       .sort(([left], [right]) => left.localeCompare(right, 'ru', { numeric: true }))
       .forEach(([barcode, quantity]) => rows.push([barcode, quantity]));
-
     if (rows.length === 1) {
       throw new BadRequestException('В упакованной заявке нет строк с баркодами для шаблона товаров WB.');
     }
@@ -72,7 +70,6 @@ export class ClientRequestMarketplaceFilesService {
           ]);
         });
       });
-
     if (rows.length === 1) {
       throw new BadRequestException('В упакованной заявке нет строк с коробами для шаблона упаковки WB.');
     }
@@ -89,21 +86,16 @@ export class ClientRequestMarketplaceFilesService {
       where: { id: requestId },
       ...marketplaceRequestArgs,
     });
-
     if (!request) {
       throw new NotFoundException('Клиентская заявка не найдена.');
     }
-
     this.clientScopes.requireClientAccess(user, request.clientId, 'read');
-
     if (request.type !== ClientRequestType.OUTBOUND) {
       throw new BadRequestException('Файлы WB доступны только для заявок на отгрузку.');
     }
-
     if (!marketplaceReadyStatuses.has(request.status)) {
       throw new BadRequestException('Файлы WB доступны после упаковки заявки.');
     }
-
     if (request.packages.length === 0) {
       throw new BadRequestException('Сначала зафиксируйте упаковочные места по заявке.');
     }
@@ -131,40 +123,25 @@ const skuForMarketplaceSelect = {
 
 const marketplaceRequestArgs = {
   include: {
-    client: {
-      select: {
-        id: true,
-        code: true,
-        name: true,
-      },
-    },
     packages: {
       include: {
         items: {
           include: {
-            sku: {
-              select: skuForMarketplaceSelect,
-            },
+            sku: { select: skuForMarketplaceSelect },
             requestItem: {
               select: {
                 id: true,
                 barcode: true,
                 name: true,
                 quantity: true,
-                sku: {
-                  select: skuForMarketplaceSelect,
-                },
+                sku: { select: skuForMarketplaceSelect },
               },
             },
           },
-          orderBy: {
-            id: 'asc',
-          },
+          orderBy: { id: 'asc' },
         },
       },
-      orderBy: {
-        createdAt: 'asc',
-      },
+      orderBy: { createdAt: 'asc' },
     },
   },
 } satisfies Prisma.ClientRequestDefaultArgs;
@@ -173,7 +150,6 @@ function buildWorkbook(sheetName: string, rows: CellValue[][], widths: number[])
   const workbook = XLSX.utils.book_new();
   const sheet = XLSX.utils.aoa_to_sheet(rows);
   sheet['!cols'] = widths.map((width) => ({ wch: width }));
-
   for (const address of Object.keys(sheet)) {
     if (!address.startsWith('!')) {
       const cell = sheet[address];
@@ -183,7 +159,6 @@ function buildWorkbook(sheetName: string, rows: CellValue[][], widths: number[])
       }
     }
   }
-
   XLSX.utils.book_append_sheet(workbook, sheet, sheetName);
   return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
 }
@@ -206,7 +181,6 @@ function formatDate(value: Date | null) {
   if (!value) {
     return '';
   }
-
   return new Intl.DateTimeFormat('ru-RU', {
     day: '2-digit',
     month: '2-digit',

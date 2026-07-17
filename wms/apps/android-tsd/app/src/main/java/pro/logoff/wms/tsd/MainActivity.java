@@ -8,7 +8,9 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.Editable;
 import android.text.InputType;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
@@ -43,12 +45,14 @@ import pro.logoff.wms.tsd.network.TsdClientSummary;
 import pro.logoff.wms.tsd.network.TsdAssemblyProcess;
 import pro.logoff.wms.tsd.network.TsdAssemblyPlan;
 import pro.logoff.wms.tsd.network.TsdAssemblyRequestSummary;
+import pro.logoff.wms.tsd.network.TsdBoxlessPackingResponse;
 import pro.logoff.wms.tsd.network.TsdMovementTask;
 import pro.logoff.wms.tsd.network.TsdOperationRequest;
 import pro.logoff.wms.tsd.network.TsdRelabelTask;
 import pro.logoff.wms.tsd.network.TsdSearchBoxTask;
 import pro.logoff.wms.tsd.network.TsdLoginRequest;
 import pro.logoff.wms.tsd.network.TsdLoginResponse;
+import pro.logoff.wms.tsd.network.TsdKizCheckResponse;
 import pro.logoff.wms.tsd.network.TsdSkuInfo;
 import pro.logoff.wms.tsd.network.WmsApi;
 import pro.logoff.wms.tsd.network.WmsApiFactory;
@@ -58,12 +62,15 @@ import retrofit2.Response;
 
 public class MainActivity extends Activity {
     private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
-    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk";
-    private static final String APP_VERSION = "0.1.49";
+    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.60";
+    private static final String APP_VERSION = "0.1.60";
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int BOX_FOUND_GREEN = Color.rgb(187, 247, 208);
     private static final int BOX_DUPLICATE_BLUE = Color.rgb(191, 219, 254);
     private static final int BOX_NOT_NEEDED_RED = Color.rgb(254, 202, 202);
+    private static final int BOX_RELABEL_PURPLE = Color.rgb(221, 214, 254);
+    private static final int BOX_MOVEMENT_BLUE = Color.rgb(147, 197, 253);
+    private static final int BOX_RELABEL_MOVEMENT_CYAN = Color.rgb(165, 243, 252);
     private static final int LIGHT_GRAY = Color.rgb(226, 232, 240);
     private static final int TEXT = Color.rgb(30, 41, 59);
 
@@ -92,27 +99,35 @@ public class MainActivity extends Activity {
     private EditText scanInput;
     private EditText assemblyScanInput;
     private TsdAssemblyPlan assemblyPlan;
+    private TsdBoxlessPackingResponse boxlessPacking;
     private TsdRelabelTask activeRelabelTask;
     private final List<ReceiptItem> receiptCurrentItems = new ArrayList<>();
     private final Set<String> receiptSessionBoxes = new LinkedHashSet<>();
     private final Set<String> receiptKizValues = new LinkedHashSet<>();
+    private final Map<String, String> receiptKizBoxes = new LinkedHashMap<>();
     private String receiptClientId = "";
     private String receiptSourceDocument = "";
     private String receiptBoxCode = "";
     private String pendingReceiptBarcode = "";
     private TsdSkuInfo pendingReceiptSku;
     private boolean pendingReceiptRequiresKiz;
+    private boolean receiptCheckingKiz;
     private int receiptClosedBoxes;
     private int receiptAcceptedItems;
     private String selectedRelabelBox = "";
+    private String selectedMoveSourceBox = "";
     private String selectedMoveTargetBox = "";
     private int pendingCount;
     private int rejectedCount;
     private boolean online;
     private String statusMessage = "";
+    private Runnable receiptBoxAutoOpenTask;
+    private boolean receiptOpeningBox;
     private String lastAssemblyTouchKey = "";
     private long lastAssemblyTouchAt = 0L;
     private int boxSearchFeedbackColor = 0;
+    private int movementFeedbackColor = 0;
+    private int receiptFeedbackColor = 0;
     private Screen screen = Screen.MAIN;
 
     @Override
@@ -160,6 +175,10 @@ public class MainActivity extends Activity {
             }
             if (screen == Screen.MOVEMENTS && assemblyScanInput != null) {
                 submitMovementScan();
+                return true;
+            }
+            if (screen == Screen.OUTGOING_CONTROL && assemblyScanInput != null) {
+                submitOutgoingBoxScan();
                 return true;
             }
         }
@@ -227,8 +246,12 @@ public class MainActivity extends Activity {
     private void renderReceiptScreen() {
         screen = Screen.RECEIPT;
         LinearLayout root = baseRoot();
+        applyScreenFeedback(root, receiptFeedbackColor);
         root.addView(header());
         root.addView(title("Приемка товара"));
+        if (!statusMessage.isEmpty()) {
+            root.addView(receiptFeedbackColor == 0 ? messageView(statusMessage) : feedbackView(statusMessage, receiptFeedbackColor));
+        }
 
         if (receiptClientId.isEmpty()) {
             root.addView(label("Клиент приемки"));
@@ -241,22 +264,85 @@ public class MainActivity extends Activity {
             root.addView(primaryMenuButton("Выбрать клиента", view -> startReceiptForSelectedClient()));
             root.addView(secondaryButton("Обновить клиентов", view -> loadClients(true)));
             root.addView(secondaryButton("Назад", view -> renderMainScreen()));
-            if (!statusMessage.isEmpty()) {
-                root.addView(messageView(statusMessage));
-            }
             setScrollableContent(root);
             refreshHeaderText();
             return;
         }
 
         root.addView(messageView("Клиент: " + receiptClientName()));
-        root.addView(messageView("Принято коробов: " + receiptClosedBoxes + " · товаров: " + receiptAcceptedItems));
+        root.addView(messageView(receiptWithoutBoxes()
+            ? "Режим: без коробов · принято товаров: " + receiptAcceptedItems
+            : "Принято коробов: " + receiptClosedBoxes + " · товаров: " + receiptAcceptedItems));
+
+        if (receiptWithoutBoxes()) {
+            if (!pendingReceiptBarcode.isEmpty() && pendingReceiptRequiresKiz) {
+                root.addView(messageView("Товар: " + receiptSkuDisplay(pendingReceiptSku, pendingReceiptBarcode)));
+                scanInput = input("Сканируйте КИЗ");
+                scanInput.setOnEditorActionListener((view, actionId, event) -> {
+                    handleReceiptKizScan();
+                    return true;
+                });
+                root.addView(scanInput);
+                root.addView(primaryMenuButton("Принять КИЗ", view -> handleReceiptKizScan()));
+                root.addView(secondaryButton("Отменить этот товар", view -> clearPendingReceiptProduct()));
+            } else {
+                scanInput = input("Сканируйте ШК товара");
+                scanInput.setOnEditorActionListener((view, actionId, event) -> {
+                    handleReceiptBarcodeScan();
+                    return true;
+                });
+                root.addView(scanInput);
+                root.addView(primaryMenuButton("Принять товар", view -> handleReceiptBarcodeScan()));
+            }
+            if (receiptAcceptedItems > 0 || pendingCount > 0) {
+                root.addView(primaryMenuButton("Закрыть приемку", view -> finishReceipt()));
+            }
+            root.addView(secondaryButton("Синхронизировать очередь (" + pendingCount + ")", view -> syncPending()));
+            root.addView(secondaryButton("Сменить клиента", view -> resetReceiptSession()));
+            root.addView(secondaryButton("Назад", view -> renderMainScreen()));
+            setScrollableContent(root);
+            if (scanInput != null) {
+                scanInput.requestFocus();
+            }
+            refreshHeaderText();
+            return;
+        }
 
         if (receiptBoxCode.isEmpty()) {
             boxCodeInput = input("Сканируйте ШК нового короба");
             boxCodeInput.setOnEditorActionListener((view, actionId, event) -> {
                 openReceiptBoxFromInput();
                 return true;
+            });
+            boxCodeInput.addTextChangedListener(new TextWatcher() {
+                @Override
+                public void beforeTextChanged(CharSequence text, int start, int count, int after) {
+                }
+
+                @Override
+                public void onTextChanged(CharSequence text, int start, int before, int count) {
+                }
+
+                @Override
+                public void afterTextChanged(Editable editable) {
+                    if (receiptBoxAutoOpenTask != null) {
+                        mainHandler.removeCallbacks(receiptBoxAutoOpenTask);
+                    }
+                    String value = editable.toString().trim();
+                    if (!isFflBoxCode(value) || normalizeBoxCode(value).length() < 6) {
+                        return;
+                    }
+                    receiptBoxAutoOpenTask = () -> {
+                        if (screen == Screen.RECEIPT
+                            && receiptBoxCode.isEmpty()
+                            && boxCodeInput != null
+                            && !receiptOpeningBox
+                            && !textValue(boxCodeInput).isEmpty()) {
+                            openReceiptBoxFromInput();
+                        }
+                    };
+                    mainHandler.postDelayed(receiptBoxAutoOpenTask, 350);
+                }
             });
             scanInput = boxCodeInput;
             root.addView(boxCodeInput);
@@ -266,9 +352,6 @@ public class MainActivity extends Activity {
             }
             root.addView(secondaryButton("Сменить клиента", view -> resetReceiptSession()));
             root.addView(secondaryButton("Назад", view -> renderMainScreen()));
-            if (!statusMessage.isEmpty()) {
-                root.addView(messageView(statusMessage));
-            }
             setScrollableContent(root);
             boxCodeInput.requestFocus();
             refreshHeaderText();
@@ -300,9 +383,6 @@ public class MainActivity extends Activity {
         root.addView(secondaryButton("Закрыть короб", view -> closeReceiptBox()));
         root.addView(secondaryButton("Синхронизировать очередь (" + pendingCount + ")", view -> syncPending()));
         root.addView(secondaryButton("Назад", view -> renderMainScreen()));
-        if (!statusMessage.isEmpty()) {
-            root.addView(messageView(statusMessage));
-        }
         setScrollableContent(root);
         if (scanInput != null) {
             scanInput.requestFocus();
@@ -407,13 +487,165 @@ public class MainActivity extends Activity {
         String clientName = request.client == null ? "" : request.client.name;
         String city = emptyAsDash(request.city);
         String inWork = request.inWorkBy == null ? "" : "\nУже в работе: " + request.inWorkBy.name;
-        String process = activeProcessLine(request.activeTsdProcess);
+        String process = activeProcessesText(request.activeTsdProcesses, request.activeTsdProcess);
         String text = request.title + "\nКлиент: " + clientName + "\nГород: " + city + " · Статус: " + request.status + " · строк: " + request.rowsCount + inWork + process;
         Button button = multilineSecondaryButton(text, view -> loadAssemblyPlan(request.id));
-        if (request.activeTsdProcess != null) {
-            button.setBackgroundColor(Color.rgb(255, 251, 235));
+        if ((request.activeTsdProcesses != null && !request.activeTsdProcesses.isEmpty()) || request.activeTsdProcess != null) {
+            button.setBackgroundColor(Color.rgb(219, 234, 254));
+        } else if ("IN_WORK".equals(request.status)) {
+            button.setBackgroundColor(Color.rgb(224, 242, 254));
         }
         return button;
+    }
+
+    private void loadBoxlessPacking() {
+        TsdSession session = safeSession();
+        if (session == null || assemblyPlan == null) {
+            renderAssemblyListScreen();
+            return;
+        }
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<TsdBoxlessPackingResponse> response = api
+                .getBoxlessPacking(session.authorizationHeader(), assemblyPlan.id)
+                .execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException("HTTP " + response.code());
+            }
+            TsdBoxlessPackingResponse loaded = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                boxlessPacking = loaded;
+                renderBoxlessPackingScreen();
+            });
+        });
+    }
+
+    private void renderBoxlessPackingScreen() {
+        screen = Screen.BOXLESS_PACKING;
+        if (assemblyPlan == null || boxlessPacking == null || boxlessPacking.packingProgress == null) {
+            loadAssemblyPlan(assemblyPlan == null ? "" : assemblyPlan.id);
+            return;
+        }
+        TsdBoxlessPackingResponse.PackingProgress progress = boxlessPacking.packingProgress;
+        TsdBoxlessPackingResponse.PackingBox currentBox = currentBoxlessPackingBox(progress);
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title("Сборка по коробам"));
+        root.addView(messageView("Заявка: " + assemblyPlan.title));
+        root.addView(messageView("Упаковано: " + progress.packedQuantity + " из " + progress.totalQuantity + " · осталось: " + progress.remainingQuantity));
+
+        if (!statusMessage.isEmpty()) {
+            root.addView(receiptFeedbackColor == 0 ? messageView(statusMessage) : feedbackView(statusMessage, receiptFeedbackColor));
+        }
+
+        if (currentBox == null) {
+            scanInput = input("Сканируйте ШК нового короба");
+            scanInput.setOnEditorActionListener((view, actionId, event) -> {
+                sendBoxlessPackingAction("open-box", textValue(scanInput), null);
+                return true;
+            });
+            root.addView(scanInput);
+            root.addView(primaryMenuButton("Открыть короб", view -> sendBoxlessPackingAction("open-box", textValue(scanInput), null)));
+        } else {
+            root.addView(messageView("Открыт короб: " + currentBox.boxCode + " · товаров: " + currentBox.quantity));
+            scanInput = input("Сканируйте ШК товара");
+            scanInput.setOnEditorActionListener((view, actionId, event) -> {
+                sendBoxlessPackingAction("scan-item", textValue(scanInput), currentBox.boxCode);
+                return true;
+            });
+            root.addView(scanInput);
+            root.addView(primaryMenuButton("Добавить товар", view -> sendBoxlessPackingAction("scan-item", textValue(scanInput), currentBox.boxCode)));
+            root.addView(secondaryButton("Закрыть короб", view -> sendBoxlessPackingAction("close-box", currentBox.boxCode, currentBox.boxCode)));
+        }
+
+        root.addView(label("Короба"));
+        if (progress.boxes != null) {
+            for (TsdBoxlessPackingResponse.PackingBox box : progress.boxes) {
+                root.addView(taskRow(box.boxCode, (box.closed ? "Закрыт" : "Открыт") + " · " + box.quantity + " шт · " + emptyAsDash(box.deviceCode), box.closed ? BOX_FOUND_GREEN : LIGHT_GRAY));
+            }
+        }
+        root.addView(label("Осталось упаковать"));
+        if (progress.rows != null) {
+            for (TsdBoxlessPackingResponse.PackingRow row : progress.rows) {
+                if (row.remainingQuantity > 0) {
+                    root.addView(taskRow(emptyAsDash(row.barcode), row.name + " · осталось " + row.remainingQuantity, LIGHT_GRAY));
+                }
+            }
+        }
+        if (progress.remainingQuantity == 0 && progress.openBoxes == 0 && progress.closedBoxes > 0) {
+            root.addView(primaryMenuButton("Завершить упаковку", view -> sendBoxlessPackingAction("finish", "", null)));
+        }
+        root.addView(secondaryButton("Обновить", view -> loadBoxlessPacking()));
+        root.addView(secondaryButton("Назад к заявке", view -> renderAssemblyDetailScreen()));
+        setScrollableContent(root);
+        if (scanInput != null) scanInput.requestFocus();
+        refreshHeaderText();
+    }
+
+    private TsdBoxlessPackingResponse.PackingBox currentBoxlessPackingBox(TsdBoxlessPackingResponse.PackingProgress progress) {
+        TsdSession session = safeSession();
+        if (progress.boxes == null || session == null) return null;
+        for (TsdBoxlessPackingResponse.PackingBox box : progress.boxes) {
+            if (!box.closed && session.deviceCode.equals(box.deviceCode)) return box;
+        }
+        return null;
+    }
+
+    private void sendBoxlessPackingAction(String action, String code, String boxCode) {
+        TsdSession session = safeSession();
+        if (session == null || assemblyPlan == null) return;
+        String scanned = code == null ? "" : code.trim();
+        if ("open-box".equals(action) && !isFflBoxCode(scanned)) {
+            receiptFeedbackColor = BOX_NOT_NEEDED_RED;
+            statusMessage = "Номер короба должен начинаться с FFL.";
+            renderBoxlessPackingScreen();
+            return;
+        }
+        if ("scan-item".equals(action)) {
+            String error = receiptBarcodeError(scanned);
+            if (!error.isEmpty()) {
+                receiptFeedbackColor = BOX_NOT_NEEDED_RED;
+                statusMessage = error;
+                renderBoxlessPackingScreen();
+                return;
+            }
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("deviceCode", session.deviceCode);
+        payload.put("operationKey", "boxless-" + assemblyPlan.id + "-" + action + "-" + System.currentTimeMillis());
+        if (boxCode != null && !boxCode.trim().isEmpty()) payload.put("boxCode", boxCode.trim());
+        if ("open-box".equals(action)) payload.put("boxCode", scanned);
+        if ("scan-item".equals(action)) payload.put("barcode", scanned);
+
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<TsdBoxlessPackingResponse> response;
+            if ("open-box".equals(action)) {
+                response = api.openBoxlessPackingBox(session.authorizationHeader(), assemblyPlan.id, payload).execute();
+            } else if ("scan-item".equals(action)) {
+                response = api.scanBoxlessPackingItem(session.authorizationHeader(), assemblyPlan.id, payload).execute();
+            } else if ("close-box".equals(action)) {
+                response = api.closeBoxlessPackingBox(session.authorizationHeader(), assemblyPlan.id, payload).execute();
+            } else {
+                response = api.finishBoxlessPacking(session.authorizationHeader(), assemblyPlan.id, payload).execute();
+            }
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException("HTTP " + response.code());
+            }
+            TsdBoxlessPackingResponse updated = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                receiptFeedbackColor = 0;
+                statusMessage = "finish".equals(action) ? "Заявка упакована." : "Операция принята.";
+                if ("finish".equals(action)) {
+                    loadAssemblyPlan(assemblyPlan.id);
+                } else {
+                    boxlessPacking = updated;
+                    renderBoxlessPackingScreen();
+                }
+            });
+        });
     }
 
     private String activeProcessLine(TsdAssemblyProcess process) {
@@ -430,6 +662,27 @@ public class MainActivity extends Activity {
             progress = "найдено коробов: " + process.foundCount;
         }
         return "\nВ работе на ТСД: " + (who.isEmpty() ? "-" : who) + "\nЭтап: " + emptyAsDash(process.stageLabel) + " · " + emptyAsDash(progress);
+    }
+
+    private String activeProcessesText(List<TsdAssemblyProcess> processes, TsdAssemblyProcess fallback) {
+        List<TsdAssemblyProcess> visible = processes == null ? new ArrayList<>() : processes;
+        if (visible.isEmpty() && fallback != null) {
+            visible = new ArrayList<>();
+            visible.add(fallback);
+        }
+        if (visible.isEmpty()) {
+            return "";
+        }
+        StringBuilder result = new StringBuilder("\nСейчас работают: ");
+        int limit = Math.min(visible.size(), 4);
+        for (int index = 0; index < limit; index++) {
+            TsdAssemblyProcess process = visible.get(index);
+            if (index > 0) result.append("; ");
+            String worker = process.workerName == null || process.workerName.trim().isEmpty() ? process.deviceCode : process.workerName.trim();
+            result.append(worker).append(" — ").append(emptyAsDash(process.stageLabel));
+        }
+        if (visible.size() > limit) result.append("; еще ").append(visible.size() - limit);
+        return result.toString();
     }
 
     private void touchAssemblyStage(String stage) {
@@ -470,6 +723,36 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void enqueueAssemblyProgress(Map<String, String> values) {
+        if (assemblyPlan == null) return;
+        TsdSession session = safeSession();
+        if (session == null) return;
+        String requestId = assemblyPlan.id;
+        Map<String, String> payload = new LinkedHashMap<>(values);
+        payload.put("requestId", requestId);
+        payload.put("deviceCode", session.deviceCode);
+        payload.put("workerName", session.deviceName);
+
+        runBackground(() -> {
+            outbox.enqueueAssemblyStage(payload);
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            TsdSyncSummary summary = new TsdSyncRunner(outbox, api, session.deviceCode)
+                .syncPending(session.authorizationHeader());
+            Response<TsdAssemblyPlan> response = api.getAssemblyRequest(session.authorizationHeader(), requestId).execute();
+            TsdAssemblyPlan freshPlan = response.isSuccessful() ? response.body() : null;
+            mainHandler.post(() -> {
+                online = summary.retried == 0;
+                if (freshPlan != null) assemblyPlan = freshPlan;
+                if (summary.rejected > 0) {
+                    statusMessage = "Операция уже выполнена другим сборщиком или отклонена WMS. Обновите заявку.";
+                    movementFeedbackColor = BOX_NOT_NEEDED_RED;
+                }
+                refreshQueue(null);
+                refreshCurrentScreen();
+            });
+        });
+    }
+
     private void sendBoxSearchScan(String boxCode) {
         if (assemblyPlan == null) {
             return;
@@ -485,7 +768,25 @@ public class MainActivity extends Activity {
             Map<String, String> payload = new LinkedHashMap<>();
             payload.put("boxCode", boxCode);
             payload.put("deviceCode", session.deviceCode);
-            api.scanAssemblyBox(session.authorizationHeader(), requestId, payload).execute();
+            Response<Map<String, Object>> scanResponse = api.scanAssemblyBox(session.authorizationHeader(), requestId, payload).execute();
+            if (!scanResponse.isSuccessful()) {
+                online = false;
+                return;
+            }
+            Response<TsdAssemblyPlan> planResponse = api.getAssemblyRequest(session.authorizationHeader(), requestId).execute();
+            if (!planResponse.isSuccessful() || planResponse.body() == null) {
+                return;
+            }
+            TsdAssemblyPlan freshPlan = planResponse.body();
+            mainHandler.post(() -> {
+                assemblyPlan = freshPlan;
+                online = true;
+                if (screen == Screen.BOX_SEARCH) {
+                    renderBoxSearchScreen();
+                } else {
+                    refreshHeaderText();
+                }
+            });
         });
     }
 
@@ -498,6 +799,9 @@ public class MainActivity extends Activity {
         }
         if ("moves".equals(stage)) {
             return "перемещения";
+        }
+        if ("outgoing-control".equals(stage)) {
+            return "контроль отгрузки";
         }
         if ("boxless-packing".equals(stage)) {
             return "сборка по коробам";
@@ -528,6 +832,7 @@ public class MainActivity extends Activity {
                 assemblyPlan = plan;
                 activeRelabelTask = null;
                 selectedRelabelBox = "";
+                selectedMoveSourceBox = "";
                 selectedMoveTargetBox = "";
                 statusMessage = "Заявка открыта.";
                 renderAssemblyDetailScreen();
@@ -558,13 +863,33 @@ public class MainActivity extends Activity {
         syncFoundBoxesToServer(searchBoxes, foundBoxes());
         root.addView(messageView("Единиц к отгрузке: " + assemblyPlan.totalRequested + " · коробов найти: " + searchBoxes.size()));
         root.addView(messageView("Поиск коробов: найдено " + foundSearchBoxes + " из " + searchBoxes.size()));
-        if (assemblyPlan.activeTsdProcess != null) {
-            root.addView(messageView(activeProcessLine(assemblyPlan.activeTsdProcess).trim()));
+        String activeWorkers = activeProcessesText(assemblyPlan.activeTsdProcesses, assemblyPlan.activeTsdProcess).trim();
+        if (!activeWorkers.isEmpty()) {
+            root.addView(messageView(activeWorkers));
+        }
+
+        if (assemblyPlan.storesWithoutBoxes) {
+            root.addView(stageButton("1. Сборка по коробам", false, view -> loadBoxlessPacking()));
+            root.addView(secondaryButton("Обновить заявку", view -> loadAssemblyPlan(assemblyPlan.id)));
+            root.addView(secondaryButton("К списку заявок", view -> renderAssemblyListScreen()));
+            root.addView(secondaryButton("Назад", view -> renderMainScreen()));
+            if (!statusMessage.isEmpty()) {
+                root.addView(messageView(statusMessage));
+            }
+            setScrollableContent(root);
+            refreshHeaderText();
+            return;
         }
 
         root.addView(stageButton("1. Поиск коробов (" + foundSearchBoxes + "/" + searchBoxes.size() + ")", isSearchDone(), view -> renderBoxSearchScreen()));
         root.addView(stageButton("2. Перемаркировка", isRelabelDone(), view -> renderRelabelScreen()));
         root.addView(stageButton("3. Перемещения", isMovementDone(), view -> renderMovementScreen()));
+        if (areAssemblyStepsDone()) {
+            root.addView(stageButton("4. Контроль отгрузки (" + confirmedOutgoingBoxesCount() + "/" + outgoingBoxCodes().size() + ")", areOutgoingBoxesConfirmed(), view -> renderOutgoingControlScreen()));
+        }
+        if (areAssemblyStepsDone() && areOutgoingBoxesConfirmed()) {
+            root.addView(primaryMenuButton("Заявка упакована", view -> completeAssemblyIfReady()));
+        }
         root.addView(secondaryButton("Обновить заявку", view -> loadAssemblyPlan(assemblyPlan.id)));
         root.addView(secondaryButton("К списку заявок", view -> renderAssemblyListScreen()));
         root.addView(secondaryButton("Назад", view -> renderMainScreen()));
@@ -607,15 +932,9 @@ public class MainActivity extends Activity {
             return;
         }
         touchAssemblyStage("box-search");
-        if (areAssemblyStepsDone()) {
-            completeAssemblyIfReady();
-            return;
-        }
 
         LinearLayout root = baseRoot();
-        if (boxSearchFeedbackColor != 0) {
-            root.setBackgroundColor(boxSearchFeedbackColor);
-        }
+        applyScreenFeedback(root, boxSearchFeedbackColor);
         root.addView(header());
         root.addView(title("Поиск коробов"));
         List<TsdSearchBoxTask> boxes = safeSearchBoxes();
@@ -623,6 +942,7 @@ public class MainActivity extends Activity {
         syncFoundBoxesToServer(boxes, found);
         String lastFoundBox = lastFoundBoxCode();
         root.addView(messageView("Найдено: " + foundSearchBoxesCount(boxes, found) + " / " + boxes.size()));
+        addFeedbackMessage(root, boxSearchFeedbackColor);
         assemblyScanInput = input("Сканируйте короб");
         assemblyScanInput.setOnEditorActionListener((view, actionId, event) -> {
             submitBoxSearchScan();
@@ -633,7 +953,7 @@ public class MainActivity extends Activity {
         if (!lastFoundBox.isEmpty() && found.contains(lastFoundBox)) {
             for (TsdSearchBoxTask box : boxes) {
                 if (lastFoundBox.equals(normalizeBoxCode(box.boxCode))) {
-                    root.addView(taskRow(box.boxCode, "Найден", BOX_FOUND_GREEN));
+                    root.addView(taskRow(box.boxCode, "Найден · " + boxInstructionLabel(box), BOX_FOUND_GREEN));
                     break;
                 }
             }
@@ -641,20 +961,17 @@ public class MainActivity extends Activity {
         for (TsdSearchBoxTask box : boxes) {
             String normalizedBox = normalizeBoxCode(box.boxCode);
             if (found.contains(normalizedBox) && !normalizedBox.equals(lastFoundBox)) {
-                root.addView(taskRow(box.boxCode, "Найден", BOX_FOUND_GREEN));
+                root.addView(taskRow(box.boxCode, "Найден · " + boxInstructionLabel(box), BOX_FOUND_GREEN));
             }
         }
         for (TsdSearchBoxTask box : boxes) {
             if (!found.contains(normalizeBoxCode(box.boxCode))) {
-                root.addView(taskRow(box.boxCode, "Нужно найти", Color.rgb(241, 245, 249)));
+                root.addView(taskRow(box.boxCode, "Нужно найти · " + boxInstructionLabel(box), Color.rgb(241, 245, 249)));
             }
         }
 
         root.addView(secondaryButton("Обновить", view -> renderBoxSearchScreen()));
         root.addView(secondaryButton("Назад", view -> renderAssemblyDetailScreen()));
-        if (!statusMessage.isEmpty()) {
-            root.addView(messageView(statusMessage));
-        }
         setScrollableContent(root);
         assemblyScanInput.requestFocus();
         refreshHeaderText();
@@ -666,13 +983,22 @@ public class MainActivity extends Activity {
         if (code.isEmpty() || assemblyPlan == null) {
             return;
         }
+        if (!isFflBoxCode(scannedCode)) {
+            statusMessage = "Ошибка: номер короба должен начинаться с FFL.";
+            boxSearchFeedbackColor = BOX_NOT_NEEDED_RED;
+            assemblyScanInput.setText("");
+            renderBoxSearchScreen();
+            return;
+        }
         Set<String> required = new LinkedHashSet<>();
         String displayCode = scannedCode;
+        TsdSearchBoxTask matchedTask = null;
         for (TsdSearchBoxTask box : safeSearchBoxes()) {
             String normalizedBoxCode = normalizeBoxCode(box.boxCode);
             required.add(normalizedBoxCode);
             if (normalizedBoxCode.equals(code)) {
                 displayCode = box.boxCode;
+                matchedTask = box;
             }
         }
         Set<String> found = foundBoxes();
@@ -680,23 +1006,21 @@ public class MainActivity extends Activity {
             statusMessage = "Короб не нужен: " + scannedCode;
             boxSearchFeedbackColor = BOX_NOT_NEEDED_RED;
         } else if (found.contains(code)) {
-            statusMessage = "Короб уже найден: " + displayCode;
+            statusMessage = boxInstructionLabel(matchedTask) + "\nКороб уже найден: " + displayCode;
             saveLastFoundBoxCode(code);
-            boxSearchFeedbackColor = BOX_DUPLICATE_BLUE;
+            boxSearchFeedbackColor = boxInstructionColor(matchedTask);
         } else {
             found.add(code);
-            saveStringSet(progressKey("found_boxes"), found);
+            Set<String> localFound = localFoundBoxes();
+            localFound.add(code);
+            saveStringSet(progressKey("found_boxes"), localFound);
             saveLastFoundBoxCode(code);
-            statusMessage = "Короб найден: " + displayCode;
-            boxSearchFeedbackColor = BOX_FOUND_GREEN;
+            statusMessage = boxInstructionLabel(matchedTask) + "\nКороб найден: " + displayCode;
+            boxSearchFeedbackColor = boxInstructionColor(matchedTask);
             sendBoxSearchScan(displayCode);
         }
         assemblyScanInput.setText("");
-        if (areAssemblyStepsDone()) {
-            completeAssemblyIfReady();
-        } else {
-            renderBoxSearchScreen();
-        }
+        renderBoxSearchScreen();
     }
 
     private void renderRelabelScreen() {
@@ -803,8 +1127,17 @@ public class MainActivity extends Activity {
             }
             statusMessage = "Неверный товар для перемаркировки: " + code;
         } else if (code.equals(activeRelabelTask.newBarcode)) {
-            int done = doneInt(relabelKey(activeRelabelTask)) + 1;
-            saveDoneInt(relabelKey(activeRelabelTask), done);
+            TsdRelabelTask completedTask = activeRelabelTask;
+            int done = Math.max(completedTask.doneQuantity, doneInt(relabelKey(completedTask))) + 1;
+            saveDoneInt(relabelKey(completedTask), done);
+            Map<String, String> progress = new LinkedHashMap<>();
+            progress.put("stage", "relabel");
+            progress.put("action", "relabel-complete");
+            progress.put("sourceBox", completedTask.sourceBox);
+            progress.put("oldBarcode", completedTask.oldBarcode);
+            progress.put("newBarcode", completedTask.newBarcode);
+            progress.put("size", completedTask.size == null ? "" : completedTask.size);
+            enqueueAssemblyProgress(progress);
             statusMessage = "Переклейка подтверждена: " + done + " / " + activeRelabelTask.quantity;
             if (remainingRelabel(activeRelabelTask) <= 0) {
                 activeRelabelTask = null;
@@ -813,11 +1146,7 @@ public class MainActivity extends Activity {
             statusMessage = "Новый ШК неверный. Нужно: " + activeRelabelTask.newBarcode;
         }
         assemblyScanInput.setText("");
-        if (areAssemblyStepsDone()) {
-            completeAssemblyIfReady();
-        } else {
-            renderRelabelBoxScreen();
-        }
+        renderRelabelBoxScreen();
     }
 
     private void renderMovementScreen() {
@@ -832,78 +1161,265 @@ public class MainActivity extends Activity {
         root.addView(header());
         root.addView(title("Перемещения"));
         root.addView(messageView("Перемещения: " + doneMovementTotal() + " / " + movementTotal()));
-        root.addView(messageView(selectedMoveTargetBox.isEmpty() ? "Сканируйте новый короб, затем товар" : "Новый короб: " + selectedMoveTargetBox));
-        assemblyScanInput = input(selectedMoveTargetBox.isEmpty() ? "Новый короб" : "ШК товара");
+        addFeedbackMessage(root, movementFeedbackColor);
+
+        if (isMovementDone()) {
+            renderOutgoingControlScreen();
+            return;
+        }
+
+        String instruction;
+        String inputHint;
+        if (selectedMoveSourceBox.isEmpty()) {
+            instruction = selectedMoveTargetBox.isEmpty()
+                ? "Сканируйте короб, из которого нужно переместить товар."
+                : "Новый короб открыт: " + selectedMoveTargetBox + ". Сканируйте следующий исходный короб.";
+            inputHint = "Исходный короб";
+        } else if (selectedMoveTargetBox.isEmpty()) {
+            instruction = isShipmentMovementSource(selectedMoveSourceBox)
+                ? "Исходный короб: " + selectedMoveSourceBox + ". Сканируйте новый короб поставки, он должен начинаться с FFL."
+                : "Исходный короб: " + selectedMoveSourceBox + ". Сканируйте новый короб баланса, он должен начинаться с FFL.";
+            inputHint = "Новый короб FFL";
+        } else {
+            instruction = "Исходный короб: " + selectedMoveSourceBox + " · новый короб: " + selectedMoveTargetBox + ". Сканируйте товар.";
+            inputHint = "ШК товара";
+        }
+        root.addView(messageView(instruction));
+
+        assemblyScanInput = input(inputHint);
         assemblyScanInput.setOnEditorActionListener((view, actionId, event) -> {
             submitMovementScan();
             return true;
         });
         root.addView(assemblyScanInput);
 
-        for (TsdMovementTask task : safeMovementTasks()) {
-            int remaining = remainingMovement(task);
-            if (remaining > 0) {
-                String label = task.sourceBox + " -> " + task.targetBox + "\n" + task.barcode;
-                root.addView(taskRow(label, "Осталось: " + remaining, Color.rgb(241, 245, 249)));
+        if (selectedMoveSourceBox.isEmpty()) {
+            root.addView(messageView("Короба, из которых нужно переместить товар:"));
+            for (String sourceBox : movementSourceBoxes()) {
+                boolean done = isMovementSourceDone(sourceBox);
+                String purpose = isShipmentMovementSource(sourceBox) ? "в новый короб поставки" : "остаток на баланс";
+                root.addView(taskRow(sourceBox, done ? "Обработан" : purpose + " · осталось: " + remainingMovementForSource(sourceBox), done ? BOX_FOUND_GREEN : Color.rgb(241, 245, 249)));
+            }
+        } else {
+            root.addView(messageView("Что нужно переложить из этого короба:"));
+            for (TsdMovementTask task : safeMovementTasks()) {
+                if (!sameBox(task.sourceBox, selectedMoveSourceBox)) {
+                    continue;
+                }
+                int remaining = remainingMovement(task);
+                if (remaining > 0) {
+                    String label = task.barcode + "\n" + emptyAsDash(task.name) + " · " + emptyAsDash(task.size);
+                    String purpose = isShipmentMovementTask(task) ? "в новый короб поставки" : "на баланс";
+                    root.addView(taskRow(label, purpose + " · осталось: " + remaining, Color.rgb(241, 245, 249)));
+                }
             }
         }
 
-        root.addView(secondaryButton("Сменить новый короб", view -> {
+        if (!selectedMoveSourceBox.isEmpty() && !selectedMoveTargetBox.isEmpty()) {
+            root.addView(secondaryButton("Продолжить заполнять короб", view -> {
+                selectedMoveSourceBox = "";
+                movementFeedbackColor = 0;
+                statusMessage = "Сканируйте следующий исходный короб для нового короба " + selectedMoveTargetBox + ".";
+                renderMovementScreen();
+            }));
+        }
+        if (!selectedMoveSourceBox.isEmpty()) {
+            root.addView(secondaryButton("Выбрать другой исходный короб", view -> {
+                selectedMoveSourceBox = "";
+                movementFeedbackColor = 0;
+                renderMovementScreen();
+            }));
+        }
+        if (!selectedMoveTargetBox.isEmpty()) {
+            root.addView(secondaryButton("Сменить новый короб", view -> {
+                selectedMoveTargetBox = "";
+                movementFeedbackColor = 0;
+                renderMovementScreen();
+            }));
+        }
+        root.addView(secondaryButton("Сбросить выбор", view -> {
+            selectedMoveSourceBox = "";
             selectedMoveTargetBox = "";
+            movementFeedbackColor = 0;
             renderMovementScreen();
         }));
         root.addView(secondaryButton("Назад", view -> renderAssemblyDetailScreen()));
-        if (!statusMessage.isEmpty()) {
-            root.addView(messageView(statusMessage));
-        }
         setScrollableContent(root);
         assemblyScanInput.requestFocus();
         refreshHeaderText();
     }
 
+    private void renderOutgoingControlScreen() {
+        screen = Screen.OUTGOING_CONTROL;
+        if (assemblyPlan == null) {
+            renderAssemblyListScreen();
+            return;
+        }
+        touchAssemblyStage("outgoing-control");
+
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title("Контроль отгрузки"));
+        addFeedbackMessage(root, movementFeedbackColor);
+
+        if (!areAssemblyStepsDone()) {
+            root.addView(messageView("Контроль отгрузки откроется после поиска коробов, перемаркировки и перемещений."));
+            root.addView(secondaryButton("Назад к заявке", view -> renderAssemblyDetailScreen()));
+            if (!statusMessage.isEmpty()) {
+                root.addView(messageView(statusMessage));
+            }
+            setScrollableContent(root);
+            refreshHeaderText();
+            return;
+        }
+
+        List<String> outgoingBoxes = outgoingBoxCodes();
+        Set<String> confirmedBoxes = confirmedOutgoingBoxes();
+        int confirmedCount = confirmedOutgoingBoxesCount();
+        root.addView(messageView("Отпикайте все короба, которые уезжают в поставку."));
+        root.addView(messageView("Короба к отгрузке: " + outgoingBoxes.size() + " · подтверждено: " + confirmedCount + " · паллет примерно: " + ((outgoingBoxes.size() + 15) / 16) + " · единиц: " + assemblyPlan.totalRequested));
+
+        assemblyScanInput = input("Сканируйте короб к отгрузке");
+        assemblyScanInput.setOnEditorActionListener((view, actionId, event) -> {
+            submitOutgoingBoxScan();
+            return true;
+        });
+        root.addView(assemblyScanInput);
+
+        List<String> displayBoxes = new ArrayList<>(outgoingBoxes);
+        displayBoxes.sort((left, right) -> {
+            boolean leftConfirmed = confirmedBoxes.contains(normalizeBoxCode(left));
+            boolean rightConfirmed = confirmedBoxes.contains(normalizeBoxCode(right));
+            if (leftConfirmed != rightConfirmed) {
+                return leftConfirmed ? -1 : 1;
+            }
+            return left.compareToIgnoreCase(right);
+        });
+
+        for (String boxCode : displayBoxes) {
+            boolean confirmed = confirmedBoxes.contains(normalizeBoxCode(boxCode));
+            root.addView(taskRow(boxCode, confirmed ? "Подтвержден, уезжает" : "Нужно отпикать перед упаковкой", confirmed ? BOX_FOUND_GREEN : BOX_NOT_NEEDED_RED));
+        }
+        if (areOutgoingBoxesConfirmed()) {
+            root.addView(primaryMenuButton("Заявка упакована", view -> completeAssemblyIfReady()));
+        }
+        root.addView(secondaryButton("Назад к заявке", view -> renderAssemblyDetailScreen()));
+        setScrollableContent(root);
+        if (assemblyScanInput != null) {
+            assemblyScanInput.requestFocus();
+        }
+        refreshHeaderText();
+    }
+
     private void submitMovementScan() {
+        if (isMovementDone()) {
+            renderOutgoingControlScreen();
+            return;
+        }
+
         String code = textValue(assemblyScanInput);
         if (code.isEmpty() || assemblyPlan == null) {
             return;
         }
-        if (handleFlexibleMovementScan(code)) {
-            return;
-        }
 
-        for (TsdMovementTask task : safeMovementTasks()) {
-            if (remainingMovement(task) > 0 && code.equals(task.targetBox)) {
-                selectedMoveTargetBox = code;
-                rememberMovementTargetBox(code);
-                statusMessage = "Новый короб выбран: " + code;
+        if (selectedMoveSourceBox.isEmpty()) {
+            String sourceBox = displayMovementSourceBox(code);
+            if (sourceBox.isEmpty()) {
+                statusMessage = "Этот короб не участвует в перемещении: " + code;
+                movementFeedbackColor = BOX_NOT_NEEDED_RED;
                 assemblyScanInput.setText("");
                 renderMovementScreen();
                 return;
             }
+            if (isMovementSourceDone(sourceBox)) {
+                statusMessage = "Этот короб уже обработан: " + sourceBox;
+                movementFeedbackColor = BOX_DUPLICATE_BLUE;
+                assemblyScanInput.setText("");
+                renderMovementScreen();
+                return;
+            }
+            selectedMoveSourceBox = sourceBox;
+            movementFeedbackColor = 0;
+            statusMessage = isShipmentMovementSource(sourceBox)
+                ? "Исходный короб выбран: " + sourceBox + ". Сканируйте новый короб поставки."
+                : "Исходный короб выбран: " + sourceBox + ". Сканируйте новый короб баланса.";
+            assemblyScanInput.setText("");
+            renderMovementScreen();
+            return;
         }
 
         if (selectedMoveTargetBox.isEmpty()) {
-            statusMessage = "Сначала отсканируйте новый короб для перемещения.";
+            if (!isFflBoxCode(code)) {
+                statusMessage = "Ошибка: номер нового короба должен начинаться с FFL.";
+                movementFeedbackColor = BOX_NOT_NEEDED_RED;
+                assemblyScanInput.setText("");
+                renderMovementScreen();
+                return;
+            }
+            selectedMoveTargetBox = code;
+            if (isShipmentMovementSource(selectedMoveSourceBox)) {
+                rememberOutgoingShipmentBox(code);
+            } else {
+                rememberMovementTargetBox(code);
+            }
+            movementFeedbackColor = 0;
+            statusMessage = "Новый короб выбран: " + code + ". Сканируйте товар из " + selectedMoveSourceBox + ".";
             assemblyScanInput.setText("");
             renderMovementScreen();
             return;
         }
 
         for (TsdMovementTask task : safeMovementTasks()) {
-            if (remainingMovement(task) > 0 && selectedMoveTargetBox.equals(task.targetBox) && code.equals(task.barcode)) {
+            if (sameBox(task.sourceBox, selectedMoveSourceBox) && remainingMovement(task) > 0 && code.equals(task.barcode)) {
+                String sourceBox = selectedMoveSourceBox;
+                String targetBox = selectedMoveTargetBox;
+                TsdSession session = safeSession();
                 runBackground(() -> {
                     outbox.enqueueMove(
                         assemblyPlan.client.id,
+                        assemblyPlan.id,
                         task.barcode,
-                        task.sourceBox,
-                        task.targetBox,
+                        sourceBox,
+                        targetBox,
                         1,
                         "AVAILABLE",
                         "Перемещение по заявке " + assemblyPlan.title
                     );
+                    TsdSyncSummary summary = null;
+                    if (session != null) {
+                        WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+                        summary = new TsdSyncRunner(outbox, api, session.deviceCode)
+                            .syncPending(session.authorizationHeader());
+                    }
+                    TsdSyncSummary finalSummary = summary;
+                    TsdAssemblyPlan freshPlan = null;
+                    if (session != null && summary != null && summary.retried == 0) {
+                        Response<TsdAssemblyPlan> planResponse = WmsApiFactory.create(DEFAULT_BASE_URL)
+                            .getAssemblyRequest(session.authorizationHeader(), assemblyPlan.id)
+                            .execute();
+                        if (planResponse.isSuccessful()) freshPlan = planResponse.body();
+                    }
+                    TsdAssemblyPlan finalFreshPlan = freshPlan;
                     mainHandler.post(() -> {
-                        int done = doneInt(movementKey(task)) + 1;
-                        saveDoneInt(movementKey(task), done);
-                        statusMessage = "Товар перемещен в очередь: " + done + " / " + task.quantity;
+                        if (finalFreshPlan != null) assemblyPlan = finalFreshPlan;
+                        boolean rejected = finalSummary != null && finalSummary.rejected > 0;
+                        int done = doneInt(movementKey(task));
+                        if (!rejected) {
+                            done += 1;
+                            saveDoneInt(movementKey(task), done);
+                        }
+                        movementFeedbackColor = 0;
+                        online = finalSummary == null || finalSummary.retried == 0;
+                        statusMessage = finalSummary == null || finalSummary.rejected > 0 || finalSummary.retried > 0
+                            ? "Товар перемещен локально: " + done + " / " + task.quantity + ". Проверьте очередь: отправлено " +
+                                (finalSummary == null ? 0 : finalSummary.sent) + ", принято " +
+                                (finalSummary == null ? 0 : finalSummary.applied) + ", отклонено " +
+                                (finalSummary == null ? 0 : finalSummary.rejected) + ", на повтор " +
+                                (finalSummary == null ? 0 : finalSummary.retried) + "."
+                            : "Товар перемещен и записан в WMS: " + done + " / " + task.quantity;
+                        if (isMovementSourceDone(sourceBox)) {
+                            statusMessage = "Исходный короб обработан: " + sourceBox + ". Можно продолжить заполнять новый короб или выбрать другой.";
+                        }
                         refreshQueue(null);
                         renderMovementScreen();
                     });
@@ -912,58 +1428,72 @@ public class MainActivity extends Activity {
             }
         }
 
-        statusMessage = "Товар не нужен для текущего нового короба: " + code;
+        statusMessage = "Этот товар не нужен из короба " + selectedMoveSourceBox + ": " + code;
+        movementFeedbackColor = BOX_NOT_NEEDED_RED;
         assemblyScanInput.setText("");
         renderMovementScreen();
     }
 
-    private boolean handleFlexibleMovementScan(String code) {
-        if (selectedMoveTargetBox.isEmpty()) {
-            selectedMoveTargetBox = code;
-            rememberMovementTargetBox(code);
-            statusMessage = "\u041d\u043e\u0432\u044b\u0439 \u043a\u043e\u0440\u043e\u0431 \u0432\u044b\u0431\u0440\u0430\u043d: " + code;
-            assemblyScanInput.setText("");
-            renderMovementScreen();
-            return true;
+    private void submitOutgoingBoxScan() {
+        String code = textValue(assemblyScanInput);
+        if (code.isEmpty() || assemblyPlan == null) {
+            return;
         }
 
-        for (TsdMovementTask task : safeMovementTasks()) {
-            if (remainingMovement(task) > 0 && code.equals(task.barcode)) {
-                String targetBox = selectedMoveTargetBox;
-                runBackground(() -> {
-                    outbox.enqueueMove(
-                        assemblyPlan.client.id,
-                        task.barcode,
-                        task.sourceBox,
-                        targetBox,
-                        1,
-                        "AVAILABLE",
-                        "\u041f\u0435\u0440\u0435\u043c\u0435\u0449\u0435\u043d\u0438\u0435 \u043f\u043e \u0437\u0430\u044f\u0432\u043a\u0435 " + assemblyPlan.title
-                    );
-                    mainHandler.post(() -> {
-                        int done = doneInt(movementKey(task)) + 1;
-                        saveDoneInt(movementKey(task), done);
-                        statusMessage = "\u0422\u043e\u0432\u0430\u0440 \u043f\u0435\u0440\u0435\u043c\u0435\u0449\u0435\u043d \u0432 \u043e\u0447\u0435\u0440\u0435\u0434\u044c: " + done + " / " + task.quantity;
-                        refreshQueue(null);
-                        if (areAssemblyStepsDone()) {
-                            completeAssemblyIfReady();
-                        } else {
-                            renderMovementScreen();
-                        }
-                    });
-                });
-                return true;
+        String normalizedCode = normalizeBoxCode(code);
+        if (!isFflBoxCode(code)) {
+            statusMessage = "Ошибка: номер короба к отгрузке должен начинаться с FFL.";
+            movementFeedbackColor = BOX_NOT_NEEDED_RED;
+            assemblyScanInput.setText("");
+            renderOutgoingControlScreen();
+            return;
+        }
+
+        String matchedBox = "";
+        for (String boxCode : outgoingBoxCodes()) {
+            if (sameBox(boxCode, code)) {
+                matchedBox = boxCode;
+                break;
             }
         }
 
-        statusMessage = "\u0422\u043e\u0432\u0430\u0440 \u043d\u0435 \u043d\u0443\u0436\u0435\u043d \u0434\u043b\u044f \u043f\u0435\u0440\u0435\u043c\u0435\u0449\u0435\u043d\u0438\u044f: " + code;
+        if (matchedBox.isEmpty()) {
+            statusMessage = "Этот короб не входит в отгрузку: " + code;
+            movementFeedbackColor = BOX_NOT_NEEDED_RED;
+            assemblyScanInput.setText("");
+            renderOutgoingControlScreen();
+            return;
+        }
+
+        Set<String> confirmed = stringSet(progressKey("outgoing_confirmed_boxes"));
+        if (confirmed.contains(normalizedCode)) {
+            statusMessage = "Короб уже подтвержден к отгрузке: " + matchedBox;
+            movementFeedbackColor = BOX_DUPLICATE_BLUE;
+            assemblyScanInput.setText("");
+            renderOutgoingControlScreen();
+            return;
+        }
+
+        confirmed.add(normalizedCode);
+        saveStringSet(progressKey("outgoing_confirmed_boxes"), confirmed);
+        Map<String, String> progress = new LinkedHashMap<>();
+        progress.put("stage", "outgoing-control");
+        progress.put("action", "outgoing-confirm");
+        progress.put("boxCode", matchedBox);
+        enqueueAssemblyProgress(progress);
+        movementFeedbackColor = BOX_FOUND_GREEN;
+        statusMessage = "Короб к отгрузке подтвержден: " + matchedBox;
         assemblyScanInput.setText("");
-        renderMovementScreen();
-        return true;
+        renderOutgoingControlScreen();
     }
 
     private void completeAssemblyIfReady() {
         if (assemblyPlan == null || isAssemblyPackedOnServer() || !areAssemblyStepsDone()) {
+            return;
+        }
+        if (!areOutgoingBoxesConfirmed()) {
+            statusMessage = "Сначала отпикайте все короба, которые уезжают в поставку.";
+            renderOutgoingControlScreen();
             return;
         }
 
@@ -982,8 +1512,9 @@ public class MainActivity extends Activity {
         }
 
         String requestId = assemblyPlan.id;
-        int boxes = Math.max(1, safeSearchBoxes().size());
-        int packedUnits = Math.max(1, assemblyPlan.totalRequested);
+        int boxes = outgoingBoxCodes().size();
+        int pallets = boxes <= 0 ? 0 : (boxes + 15) / 16;
+        int packedUnits = Math.max(0, assemblyPlan.totalRequested);
         statusMessage = "\u0412\u0441\u0435 \u044d\u0442\u0430\u043f\u044b \u0432\u044b\u043f\u043e\u043b\u043d\u0435\u043d\u044b. \u0424\u0438\u043a\u0441\u0438\u0440\u0443\u044e \u0441\u0431\u043e\u0440\u043a\u0443 \u0432 WMS...";
         renderAssemblyDetailScreen();
 
@@ -1003,7 +1534,7 @@ public class MainActivity extends Activity {
             payload.put("idempotencyKey", "tsd-pack:" + requestId);
             payload.put("comment", "\u0421\u0431\u043e\u0440\u043a\u0430 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0430 \u043d\u0430 \u0422\u0421\u0414.");
             payload.put("boxes", boxes);
-            payload.put("pallets", 0);
+            payload.put("pallets", pallets);
             payload.put("packedUnits", packedUnits);
 
             Response<Map<String, Object>> response = api
@@ -1049,11 +1580,19 @@ public class MainActivity extends Activity {
         receiptAcceptedItems = 0;
         receiptSessionBoxes.clear();
         receiptKizValues.clear();
-        statusMessage = "Клиент выбран. Сканируйте новый короб.";
+        receiptKizBoxes.clear();
+        receiptFeedbackColor = 0;
+        statusMessage = receiptWithoutBoxes()
+            ? "Клиент выбран. Сканируйте ШК товара."
+            : "Клиент выбран. Сканируйте новый короб.";
         renderReceiptScreen();
     }
 
     private void openReceiptBoxFromInput() {
+        if (receiptBoxAutoOpenTask != null) {
+            mainHandler.removeCallbacks(receiptBoxAutoOpenTask);
+            receiptBoxAutoOpenTask = null;
+        }
         TsdSession session = safeSession();
         if (session == null) {
             statusMessage = "Сначала войдите на ТСД.";
@@ -1074,29 +1613,70 @@ public class MainActivity extends Activity {
         }
 
         String normalizedBox = normalizeBoxCode(boxCode);
+        if (!isFflBoxCode(boxCode)) {
+            statusMessage = "Ошибка: номер короба должен начинаться с FFL.";
+            boxCodeInput.setText("");
+            renderReceiptScreen();
+            return;
+        }
         if (receiptSessionBoxes.contains(normalizedBox)) {
             statusMessage = "Этот короб уже использовался в текущей приемке.";
             renderReceiptScreen();
             return;
         }
+        if (receiptOpeningBox) {
+            return;
+        }
 
-        runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
-            Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("clientId", receiptClientId);
-            payload.put("boxCode", boxCode);
-            Response<Map<String, Object>> response = api.openReceiptBox(session.authorizationHeader(), payload).execute();
-            if (!response.isSuccessful()) {
-                throw new IOException("Короб не открыт: HTTP " + response.code());
+        receiptOpeningBox = true;
+        receiptBoxCode = boxCode;
+        receiptCurrentItems.clear();
+        clearPendingReceiptProductFields();
+        receiptFeedbackColor = 0;
+        statusMessage = "Короб открыт. Сканируйте товар.";
+        renderReceiptScreen();
+
+        executor.execute(() -> {
+            try {
+                WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("clientId", receiptClientId);
+                payload.put("boxCode", boxCode);
+                payload.put("sourceDocument", receiptSourceDocument);
+                Response<Map<String, Object>> response = api.openReceiptBox(session.authorizationHeader(), payload).execute();
+                if (!response.isSuccessful()) {
+                    mainHandler.post(() -> {
+                        online = false;
+                        receiptOpeningBox = false;
+                        statusMessage = "Короб не открыт в WMS: HTTP " + response.code();
+                        if (sameBox(receiptBoxCode, boxCode) && receiptCurrentItems.isEmpty()) {
+                            receiptBoxCode = "";
+                            clearPendingReceiptProductFields();
+                        }
+                        renderReceiptScreen();
+                    });
+                    return;
+                }
+                mainHandler.post(() -> {
+                    online = true;
+                    receiptOpeningBox = false;
+                    if (sameBox(receiptBoxCode, boxCode)) {
+                        statusMessage = "Короб открыт в WMS. Сканируйте товар.";
+                        refreshHeaderText();
+                    }
+                });
+            } catch (Throwable error) {
+                mainHandler.post(() -> {
+                    online = false;
+                    receiptOpeningBox = false;
+                    statusMessage = error.getMessage() == null ? "Короб не открыт в WMS." : error.getMessage();
+                    if (sameBox(receiptBoxCode, boxCode) && receiptCurrentItems.isEmpty()) {
+                        receiptBoxCode = "";
+                        clearPendingReceiptProductFields();
+                    }
+                    renderReceiptScreen();
+                });
             }
-            mainHandler.post(() -> {
-                online = true;
-                receiptBoxCode = boxCode;
-                receiptCurrentItems.clear();
-                clearPendingReceiptProductFields();
-                statusMessage = "Короб открыт. Сканируйте товар.";
-                renderReceiptScreen();
-            });
         });
     }
 
@@ -1113,6 +1693,14 @@ public class MainActivity extends Activity {
             renderReceiptScreen();
             return;
         }
+        String barcodeError = receiptBarcodeError(barcode);
+        if (!barcodeError.isEmpty()) {
+            statusMessage = barcodeError;
+            scanInput.setText("");
+            renderReceiptScreen();
+            return;
+        }
+        receiptFeedbackColor = 0;
 
         runBackground(() -> {
             WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
@@ -1136,11 +1724,7 @@ public class MainActivity extends Activity {
             if (response.code() == 404) {
                 mainHandler.post(() -> {
                     online = true;
-                    pendingReceiptBarcode = barcode;
-                    pendingReceiptSku = null;
-                    pendingReceiptRequiresKiz = true;
-                    statusMessage = "Товар не найден. Будет создан черновик, сканируйте КИЗ.";
-                    renderReceiptScreen();
+                    addReceiptItem(barcode, null, null, "Товар не найден. Создается черновик без обязательного КИЗ.");
                 });
                 return;
             }
@@ -1149,29 +1733,152 @@ public class MainActivity extends Activity {
     }
 
     private void handleReceiptKizScan() {
+        if (receiptCheckingKiz) {
+            return;
+        }
         String kiz = textValue(scanInput);
         if (kiz.isEmpty()) {
             statusMessage = "Сканируйте КИЗ.";
             renderReceiptScreen();
             return;
         }
-        String normalizedKiz = kiz.trim().toUpperCase(Locale.ROOT);
-        if (receiptKizValues.contains(normalizedKiz)) {
-            statusMessage = "Этот КИЗ уже есть в текущей приемке.";
+        String kizError = receiptKizError(kiz);
+        if (!kizError.isEmpty()) {
+            statusMessage = kizError;
+            scanInput.setText("");
             renderReceiptScreen();
             return;
         }
-        addReceiptItem(pendingReceiptBarcode, kiz, pendingReceiptSku);
+        String normalizedKiz = kiz.trim().toUpperCase(Locale.ROOT);
+        if (receiptKizValues.contains(normalizedKiz)) {
+            String duplicateBox = receiptKizBoxes.get(normalizedKiz);
+            statusMessage = duplicateKizMessage(kiz, duplicateBox, true);
+            receiptFeedbackColor = BOX_NOT_NEEDED_RED;
+            scanInput.setText("");
+            renderReceiptScreen();
+            return;
+        }
+
+        TsdSession session = safeSession();
+        if (session == null) {
+            statusMessage = "Сначала войдите на ТСД.";
+            renderSettingsScreen();
+            return;
+        }
+
+        String barcode = pendingReceiptBarcode;
+        TsdSkuInfo sku = pendingReceiptSku;
+        receiptCheckingKiz = true;
+        if (scanInput != null) {
+            scanInput.setEnabled(false);
+        }
+        executor.execute(() -> {
+            try {
+                WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+                Response<TsdKizCheckResponse> response = api
+                    .checkReceiptKiz(session.authorizationHeader(), receiptClientId, kiz)
+                    .execute();
+                if (!response.isSuccessful() || response.body() == null) {
+                    throw new IOException("HTTP " + response.code());
+                }
+                TsdKizCheckResponse result = response.body();
+                mainHandler.post(() -> {
+                    receiptCheckingKiz = false;
+                    online = true;
+                    if (result.duplicate) {
+                        statusMessage = result.message == null || result.message.trim().isEmpty()
+                            ? duplicateKizMessage(kiz, result.boxCode, false)
+                            : result.message + "\nКИЗ: " + kiz;
+                        receiptFeedbackColor = BOX_NOT_NEEDED_RED;
+                        renderReceiptScreen();
+                        return;
+                    }
+                    addReceiptItem(barcode, kiz, sku);
+                });
+            } catch (Throwable error) {
+                mainHandler.post(() -> {
+                    receiptCheckingKiz = false;
+                    online = false;
+                    addReceiptItem(
+                        barcode,
+                        kiz,
+                        sku,
+                        "Товар принят офлайн. КИЗ будет повторно проверен при синхронизации с WMS."
+                    );
+                });
+            }
+        });
     }
 
     private void addReceiptItem(String barcode, String kiz, TsdSkuInfo sku) {
+        addReceiptItem(barcode, kiz, sku, null);
+    }
+
+    private void addReceiptItem(String barcode, String kiz, TsdSkuInfo sku, String message) {
+        if (receiptWithoutBoxes()) {
+            enqueueUnboxedReceiptItem(barcode, kiz, sku, message);
+            return;
+        }
         receiptCurrentItems.add(new ReceiptItem(barcode, kiz, sku == null ? null : sku.name));
         if (kiz != null && !kiz.trim().isEmpty()) {
-            receiptKizValues.add(kiz.trim().toUpperCase(Locale.ROOT));
+            String normalizedKiz = kiz.trim().toUpperCase(Locale.ROOT);
+            receiptKizValues.add(normalizedKiz);
+            receiptKizBoxes.put(normalizedKiz, receiptBoxCode);
         }
         clearPendingReceiptProductFields();
-        statusMessage = "Товар добавлен в короб: " + barcode + ". В коробе: " + receiptCurrentItems.size();
+        receiptFeedbackColor = 0;
+        statusMessage = message == null
+            ? "Товар добавлен в короб: " + barcode + ". В коробе: " + receiptCurrentItems.size()
+            : message;
         renderReceiptScreen();
+    }
+
+    private void enqueueUnboxedReceiptItem(String barcode, String kiz, TsdSkuInfo sku, String message) {
+        TsdSession session = safeSession();
+        if (outbox == null || session == null) {
+            statusMessage = "Локальная очередь приемки недоступна.";
+            renderReceiptScreen();
+            return;
+        }
+        if (kiz != null && !kiz.trim().isEmpty()) {
+            String normalizedKiz = kiz.trim().toUpperCase(Locale.ROOT);
+            receiptKizValues.add(normalizedKiz);
+            receiptKizBoxes.put(normalizedKiz, "Без короба");
+        }
+        clearPendingReceiptProductFields();
+        outbox.enqueueReceipt(
+            receiptClientId,
+            barcode,
+            kiz,
+            null,
+            1,
+            "AVAILABLE",
+            receiptSourceDocument,
+            "Поштучная приемка ТСД без коробов"
+        );
+        statusMessage = message == null ? "Товар добавлен: " + barcode : message;
+        renderReceiptScreen();
+
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            TsdSyncSummary summary = new TsdSyncRunner(outbox, api, session.deviceCode)
+                .syncPending(session.authorizationHeader());
+            mainHandler.post(() -> {
+                online = summary.retried == 0;
+                if (summary.rejected > 0) {
+                    receiptFeedbackColor = BOX_NOT_NEEDED_RED;
+                    statusMessage = "ОШИБКА ПРИЕМКИ\n" + summary.message;
+                } else {
+                    receiptAcceptedItems += 1;
+                    receiptFeedbackColor = 0;
+                    statusMessage = summary.retried > 0
+                        ? "Товар сохранен в очереди и будет передан в WMS после восстановления связи."
+                        : "Товар принят в WMS: " + barcode;
+                }
+                renderReceiptScreen();
+                refreshQueue(null);
+            });
+        });
     }
 
     private void clearPendingReceiptProduct() {
@@ -1184,6 +1891,7 @@ public class MainActivity extends Activity {
         pendingReceiptBarcode = "";
         pendingReceiptSku = null;
         pendingReceiptRequiresKiz = false;
+        receiptCheckingKiz = false;
     }
 
     private void closeReceiptBox() {
@@ -1234,16 +1942,22 @@ public class MainActivity extends Activity {
                 .syncPending(session.authorizationHeader());
             mainHandler.post(() -> {
                 online = summary.retried == 0;
-                receiptClosedBoxes += 1;
-                receiptAcceptedItems += itemsToSend.size();
+                receiptClosedBoxes += summary.rejected == 0 ? 1 : 0;
+                receiptAcceptedItems += summary.applied;
                 receiptSessionBoxes.add(normalizeBoxCode(closedBoxCode));
                 receiptBoxCode = "";
                 receiptCurrentItems.clear();
                 clearPendingReceiptProductFields();
-                statusMessage = summary.rejected == 0 && summary.retried == 0
-                    ? "Короб закрыт и записан в WMS: " + closedBoxCode
-                    : "Короб закрыт, но часть сканов осталась в очереди. Синхронизируйте очередь.";
-                refreshQueue(statusMessage);
+                receiptFeedbackColor = summary.rejected > 0 ? BOX_NOT_NEEDED_RED : 0;
+                if (summary.rejected > 0) {
+                    statusMessage = "ДУБЛЬ КИЗ / ОШИБКА ПРИЕМКИ\n" + summary.message + "\nКороб: " + closedBoxCode;
+                } else if (summary.retried > 0) {
+                    statusMessage = "Короб сохранен в очереди: " + closedBoxCode + ". КИЗ будут проверены при синхронизации.";
+                } else {
+                    statusMessage = "Короб закрыт и записан в WMS: " + closedBoxCode;
+                }
+                renderReceiptScreen();
+                refreshQueue(null);
             });
         });
     }
@@ -1254,7 +1968,9 @@ public class MainActivity extends Activity {
             renderReceiptScreen();
             return;
         }
-        String summary = "Приемка закрыта. Коробов: " + receiptClosedBoxes + ", товаров: " + receiptAcceptedItems + ".";
+        String summary = receiptWithoutBoxes()
+            ? "Приемка закрыта. Товаров: " + receiptAcceptedItems + "."
+            : "Приемка закрыта. Коробов: " + receiptClosedBoxes + ", товаров: " + receiptAcceptedItems + ".";
         resetReceiptState();
         statusMessage = summary;
         renderMainScreen();
@@ -1275,6 +1991,9 @@ public class MainActivity extends Activity {
         receiptCurrentItems.clear();
         receiptSessionBoxes.clear();
         receiptKizValues.clear();
+        receiptKizBoxes.clear();
+        receiptCheckingKiz = false;
+        receiptFeedbackColor = 0;
         clearPendingReceiptProductFields();
     }
 
@@ -1359,9 +2078,6 @@ public class MainActivity extends Activity {
                 statusMessage = summary.message + ": отправлено " + summary.sent + ", принято " + summary.applied +
                     ", отклонено " + summary.rejected + ", на повтор " + summary.retried;
                 refreshQueue(statusMessage);
-                if (summary.rejected == 0 && summary.retried == 0 && areAssemblyStepsDone()) {
-                    completeAssemblyIfReady();
-                }
             });
         });
     }
@@ -1618,6 +2334,105 @@ public class MainActivity extends Activity {
         return view;
     }
 
+    private void addFeedbackMessage(LinearLayout root, int backgroundColor) {
+        if (!statusMessage.isEmpty()) {
+            root.addView(feedbackView(statusMessage, backgroundColor));
+        }
+    }
+
+    private TextView feedbackView(String text, int backgroundColor) {
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextColor(TEXT);
+        view.setTextSize(16f);
+        view.setTypeface(null, 1);
+        view.setBackgroundColor(backgroundColor == 0 ? Color.rgb(241, 245, 249) : backgroundColor);
+        view.setPadding(dp(14), dp(12), dp(14), dp(12));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        params.setMargins(0, 0, 0, dp(10));
+        view.setLayoutParams(params);
+        return view;
+    }
+
+    private void applyScreenFeedback(LinearLayout root, int backgroundColor) {
+        if (backgroundColor != 0) {
+            root.setBackgroundColor(backgroundColor);
+        }
+    }
+
+    private String boxInstructionLabel(TsdSearchBoxTask box) {
+        if (box != null && box.instructionLabel != null && !box.instructionLabel.trim().isEmpty()) {
+            return box.instructionLabel.trim().toUpperCase(Locale.ROOT);
+        }
+        boolean relabel = boxRequiresRelabel(box);
+        boolean movement = boxRequiresMovement(box);
+        if (relabel && movement) {
+            return "МАРК+ПЕРЕМЕЩЕНИЕ";
+        }
+        if (relabel) {
+            return "ПЕРЕМАРКИРОВКА";
+        }
+        if (movement) {
+            return "ПЕРЕМЕЩЕНИЕ";
+        }
+        return "ЦЕЛИКОМ";
+    }
+
+    private int boxInstructionColor(TsdSearchBoxTask box) {
+        boolean relabel = boxRequiresRelabel(box);
+        boolean movement = boxRequiresMovement(box);
+        if (relabel && movement) {
+            return BOX_RELABEL_MOVEMENT_CYAN;
+        }
+        if (relabel) {
+            return BOX_RELABEL_PURPLE;
+        }
+        if (movement) {
+            return BOX_MOVEMENT_BLUE;
+        }
+        return BOX_FOUND_GREEN;
+    }
+
+    private boolean boxRequiresRelabel(TsdSearchBoxTask box) {
+        if (box == null) {
+            return false;
+        }
+        if (box.requiresRelabel || "RELABEL".equals(box.instructionType) || "RELABEL_MOVEMENT".equals(box.instructionType)) {
+            return true;
+        }
+        for (TsdRelabelTask task : safeRelabelTasks()) {
+            if (sameBox(task.sourceBox, box.boxCode)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean boxRequiresMovement(TsdSearchBoxTask box) {
+        if (box == null) {
+            return false;
+        }
+        if (box.requiresMovement || "MOVEMENT".equals(box.instructionType) || "RELABEL_MOVEMENT".equals(box.instructionType)) {
+            return true;
+        }
+        for (TsdMovementTask task : safeMovementTasks()) {
+            if (sameBox(task.sourceBox, box.boxCode)) {
+                return true;
+            }
+        }
+        if (assemblyPlan != null && assemblyPlan.movementProgress != null && assemblyPlan.movementProgress.rows != null) {
+            for (TsdAssemblyPlan.TsdMovementProgressRow row : assemblyPlan.movementProgress.rows) {
+                if (sameBox(row.sourceBox, box.boxCode)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private List<TsdSearchBoxTask> safeSearchBoxes() {
         List<TsdSearchBoxTask> boxes = assemblyPlan == null || assemblyPlan.searchBoxes == null ? new ArrayList<>() : assemblyPlan.searchBoxes;
         Set<String> movementTargets = movementTargetBoxes();
@@ -1640,6 +2455,65 @@ public class MainActivity extends Activity {
 
     private List<TsdMovementTask> safeMovementTasks() {
         return assemblyPlan == null || assemblyPlan.movementTasks == null ? new ArrayList<>() : assemblyPlan.movementTasks;
+    }
+
+    private Set<String> movementSourceBoxes() {
+        Set<String> boxes = new LinkedHashSet<>();
+        if (assemblyPlan != null && assemblyPlan.movementProgress != null && assemblyPlan.movementProgress.sourceBoxes != null) {
+            for (TsdAssemblyPlan.TsdMovementSourceBox box : assemblyPlan.movementProgress.sourceBoxes) {
+                if (box.sourceBox != null && !box.sourceBox.trim().isEmpty()) {
+                    boxes.add(box.sourceBox);
+                }
+            }
+        }
+        for (TsdMovementTask task : safeMovementTasks()) {
+            if (task.sourceBox != null && !task.sourceBox.trim().isEmpty()) {
+                boxes.add(task.sourceBox);
+            }
+        }
+        return boxes;
+    }
+
+    private String displayMovementSourceBox(String scannedBox) {
+        String normalized = normalizeBoxCode(scannedBox);
+        if (normalized.isEmpty()) {
+            return "";
+        }
+        for (String sourceBox : movementSourceBoxes()) {
+            if (normalizeBoxCode(sourceBox).equals(normalized)) {
+                return sourceBox;
+            }
+        }
+        return "";
+    }
+
+    private boolean sameBox(String left, String right) {
+        String normalizedLeft = normalizeBoxCode(left);
+        String normalizedRight = normalizeBoxCode(right);
+        return !normalizedLeft.isEmpty() && normalizedLeft.equals(normalizedRight);
+    }
+
+    private int remainingMovementForSource(String sourceBox) {
+        int remaining = 0;
+        for (TsdMovementTask task : safeMovementTasks()) {
+            if (sameBox(task.sourceBox, sourceBox)) {
+                remaining += Math.max(0, remainingMovement(task));
+            }
+        }
+        TsdAssemblyPlan.TsdMovementSourceBox server = serverMovementSource(sourceBox);
+        if (server != null) {
+            int serverRemaining = Math.max(0, server.remainingQuantity);
+            return remaining <= 0 ? serverRemaining : Math.min(remaining, serverRemaining);
+        }
+        return remaining;
+    }
+
+    private boolean isMovementSourceDone(String sourceBox) {
+        TsdAssemblyPlan.TsdMovementSourceBox server = serverMovementSource(sourceBox);
+        if (server != null && server.done) {
+            return true;
+        }
+        return remainingMovementForSource(sourceBox) <= 0;
     }
 
     private boolean isSearchDone() {
@@ -1673,6 +2547,14 @@ public class MainActivity extends Activity {
                 }
             }
         }
+        if (assemblyPlan != null && assemblyPlan.foundBoxCodes != null) {
+            for (String value : assemblyPlan.foundBoxCodes) {
+                String code = normalizeBoxCode(value);
+                if (!code.isEmpty()) {
+                    normalized.add(code);
+                }
+            }
+        }
         for (String value : stringSet(progressKey("found_boxes"))) {
             String code = normalizeBoxCode(value);
             if (!code.isEmpty()) {
@@ -1696,11 +2578,34 @@ public class MainActivity extends Activity {
         if (boxes.isEmpty() || found.isEmpty()) {
             return;
         }
+        Set<String> localFound = localFoundBoxes();
+        if (localFound.isEmpty()) {
+            return;
+        }
+        Set<String> synced = stringSet(progressKey("found_boxes_synced"));
+        boolean changed = false;
         for (TsdSearchBoxTask box : boxes) {
-            if (found.contains(normalizeBoxCode(box.boxCode))) {
+            String normalizedBoxCode = normalizeBoxCode(box.boxCode);
+            if (found.contains(normalizedBoxCode) && localFound.contains(normalizedBoxCode) && !synced.contains(normalizedBoxCode)) {
+                synced.add(normalizedBoxCode);
+                changed = true;
                 sendBoxSearchScan(box.boxCode);
             }
         }
+        if (changed) {
+            saveStringSet(progressKey("found_boxes_synced"), synced);
+        }
+    }
+
+    private Set<String> localFoundBoxes() {
+        Set<String> normalized = new LinkedHashSet<>();
+        for (String value : stringSet(progressKey("found_boxes"))) {
+            String code = normalizeBoxCode(value);
+            if (!code.isEmpty()) {
+                normalized.add(code);
+            }
+        }
+        return normalized;
     }
 
     private String lastFoundBoxCode() {
@@ -1743,6 +2648,110 @@ public class MainActivity extends Activity {
         saveStringSet(progressKey("movement_target_boxes"), targets);
     }
 
+    private boolean isShipmentMovementTask(TsdMovementTask task) {
+        String purpose = task.purpose == null ? "" : task.purpose.trim().toUpperCase(Locale.ROOT);
+        String targetRole = task.targetRole == null ? "" : task.targetRole.trim().toUpperCase(Locale.ROOT);
+        if ("SHIPMENT".equals(purpose) || "SHIPMENT".equals(targetRole)) {
+            return true;
+        }
+        String note = task.note == null ? "" : task.note.toLowerCase(Locale.ROOT);
+        return note.contains("постав");
+    }
+
+    private boolean isShipmentMovementSource(String sourceBox) {
+        for (TsdMovementTask task : safeMovementTasks()) {
+            if (sameBox(task.sourceBox, sourceBox) && remainingMovement(task) > 0 && isShipmentMovementTask(task)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void rememberOutgoingShipmentBox(String boxCode) {
+        String targetBox = boxCode == null ? "" : boxCode.trim();
+        if (normalizeBoxCode(targetBox).isEmpty()) {
+            return;
+        }
+        Set<String> targets = stringSet(progressKey("outgoing_movement_boxes"));
+        targets.add(targetBox);
+        saveStringSet(progressKey("outgoing_movement_boxes"), targets);
+    }
+
+    private List<String> outgoingBoxCodes() {
+        Map<String, String> boxes = new LinkedHashMap<>();
+        addOutgoingBoxes(boxes, assemblyPlan == null ? null : assemblyPlan.shipmentBoxes);
+        addOutgoingBoxes(boxes, assemblyPlan == null ? null : assemblyPlan.outgoingBoxes);
+        addOutgoingBoxStrings(boxes, assemblyPlan == null ? null : assemblyPlan.shipmentBoxCodes);
+        addOutgoingBoxStrings(boxes, assemblyPlan == null ? null : assemblyPlan.outgoingBoxCodes);
+        addOutgoingBoxStrings(boxes, stringSet(progressKey("outgoing_movement_boxes")));
+
+        if (boxes.isEmpty()) {
+            for (TsdSearchBoxTask box : safeSearchBoxes()) {
+                addOutgoingBox(boxes, box.boxCode);
+            }
+        }
+
+        return new ArrayList<>(boxes.values());
+    }
+
+    private void addOutgoingBoxes(Map<String, String> boxes, List<TsdSearchBoxTask> values) {
+        if (values == null) {
+            return;
+        }
+        for (TsdSearchBoxTask box : values) {
+            addOutgoingBox(boxes, box.boxCode);
+        }
+    }
+
+    private void addOutgoingBoxStrings(Map<String, String> boxes, Iterable<String> values) {
+        if (values == null) {
+            return;
+        }
+        for (String boxCode : values) {
+            addOutgoingBox(boxes, boxCode);
+        }
+    }
+
+    private void addOutgoingBox(Map<String, String> boxes, String boxCode) {
+        String normalized = normalizeBoxCode(boxCode);
+        if (!normalized.isEmpty() && !boxes.containsKey(normalized)) {
+            boxes.put(normalized, boxCode == null ? normalized : boxCode.trim());
+        }
+    }
+
+    private Set<String> confirmedOutgoingBoxes() {
+        Set<String> result = new LinkedHashSet<>();
+        if (assemblyPlan != null && assemblyPlan.confirmedOutgoingBoxCodes != null) {
+            for (String value : assemblyPlan.confirmedOutgoingBoxCodes) {
+                String normalized = normalizeBoxCode(value);
+                if (!normalized.isEmpty()) result.add(normalized);
+            }
+        }
+        for (String value : stringSet(progressKey("outgoing_confirmed_boxes"))) {
+            String normalized = normalizeBoxCode(value);
+            if (!normalized.isEmpty()) {
+                result.add(normalized);
+            }
+        }
+        return result;
+    }
+
+    private int confirmedOutgoingBoxesCount() {
+        Set<String> confirmed = confirmedOutgoingBoxes();
+        int count = 0;
+        for (String boxCode : outgoingBoxCodes()) {
+            if (confirmed.contains(normalizeBoxCode(boxCode))) {
+                count += 1;
+            }
+        }
+        return count;
+    }
+
+    private boolean areOutgoingBoxesConfirmed() {
+        List<String> boxes = outgoingBoxCodes();
+        return confirmedOutgoingBoxesCount() >= boxes.size();
+    }
+
     private int relabelTotal() {
         int total = 0;
         for (TsdRelabelTask task : safeRelabelTasks()) {
@@ -1754,13 +2763,13 @@ public class MainActivity extends Activity {
     private int doneRelabelTotal() {
         int total = 0;
         for (TsdRelabelTask task : safeRelabelTasks()) {
-            total += Math.min(task.quantity, doneInt(relabelKey(task)));
+            total += Math.min(task.quantity, Math.max(task.doneQuantity, doneInt(relabelKey(task))));
         }
         return total;
     }
 
     private int remainingRelabel(TsdRelabelTask task) {
-        return Math.max(0, task.quantity - doneInt(relabelKey(task)));
+        return Math.max(0, task.quantity - Math.max(task.doneQuantity, doneInt(relabelKey(task))));
     }
 
     private String relabelKey(TsdRelabelTask task) {
@@ -1768,6 +2777,9 @@ public class MainActivity extends Activity {
     }
 
     private int movementTotal() {
+        if (assemblyPlan != null && assemblyPlan.movementProgress != null && assemblyPlan.movementProgress.totalRequired > 0) {
+            return assemblyPlan.movementProgress.totalRequired;
+        }
         int total = 0;
         for (TsdMovementTask task : safeMovementTasks()) {
             total += task.quantity;
@@ -1780,11 +2792,62 @@ public class MainActivity extends Activity {
         for (TsdMovementTask task : safeMovementTasks()) {
             total += Math.min(task.quantity, doneInt(movementKey(task)));
         }
-        return total;
+        return Math.max(total, serverMovedTotal());
     }
 
     private int remainingMovement(TsdMovementTask task) {
-        return Math.max(0, task.quantity - doneInt(movementKey(task)));
+        int done = Math.max(doneInt(movementKey(task)), serverMovedForTask(task));
+        return Math.max(0, task.quantity - done);
+    }
+
+    private int serverMovedTotal() {
+        return assemblyPlan == null || assemblyPlan.movementProgress == null ? 0 : Math.max(0, assemblyPlan.movementProgress.totalMoved);
+    }
+
+    private int serverMovedForTask(TsdMovementTask task) {
+        if (assemblyPlan == null || assemblyPlan.movementProgress == null || assemblyPlan.movementProgress.rows == null) {
+            return 0;
+        }
+        int moved = 0;
+        for (TsdAssemblyPlan.TsdMovementProgressRow row : assemblyPlan.movementProgress.rows) {
+            if (matchesMovementRow(task, row)) {
+                moved = Math.max(moved, row.movedQuantity);
+            }
+        }
+        return moved;
+    }
+
+    private boolean matchesMovementRow(TsdMovementTask task, TsdAssemblyPlan.TsdMovementProgressRow row) {
+        if (!sameBox(task.sourceBox, row.sourceBox)) {
+            return false;
+        }
+        if (!sameNullableText(task.barcode, row.barcode) || !sameNullableText(task.size, row.size)) {
+            return false;
+        }
+        String taskTarget = normalizeBoxCode(task.targetBox);
+        String rowTarget = normalizeBoxCode(row.targetBox);
+        if (!taskTarget.isEmpty()) {
+            return taskTarget.equals(rowTarget);
+        }
+        return sameNullableText(task.purpose, row.purpose) && sameNullableText(task.targetRole, row.targetRole);
+    }
+
+    private TsdAssemblyPlan.TsdMovementSourceBox serverMovementSource(String sourceBox) {
+        if (assemblyPlan == null || assemblyPlan.movementProgress == null || assemblyPlan.movementProgress.sourceBoxes == null) {
+            return null;
+        }
+        for (TsdAssemblyPlan.TsdMovementSourceBox box : assemblyPlan.movementProgress.sourceBoxes) {
+            if (sameBox(box.sourceBox, sourceBox)) {
+                return box;
+            }
+        }
+        return null;
+    }
+
+    private boolean sameNullableText(String left, String right) {
+        String normalizedLeft = left == null ? "" : left.trim().toLowerCase(Locale.ROOT);
+        String normalizedRight = right == null ? "" : right.trim().toLowerCase(Locale.ROOT);
+        return normalizedLeft.equals(normalizedRight);
     }
 
     private String movementKey(TsdMovementTask task) {
@@ -1849,6 +2912,15 @@ public class MainActivity extends Activity {
         return receiptClientId.isEmpty() ? "-" : receiptClientId;
     }
 
+    private boolean receiptWithoutBoxes() {
+        for (TsdClientSummary client : clients) {
+            if (client.id != null && client.id.equals(receiptClientId)) {
+                return client.storesWithoutBoxes;
+            }
+        }
+        return false;
+    }
+
     private String receiptSkuDisplay(TsdSkuInfo sku, String barcode) {
         if (sku == null) {
             return "Новый товар без карточки\nШК " + barcode;
@@ -1887,6 +2959,10 @@ public class MainActivity extends Activity {
             renderRelabelBoxScreen();
         } else if (screen == Screen.MOVEMENTS) {
             renderMovementScreen();
+        } else if (screen == Screen.OUTGOING_CONTROL) {
+            renderOutgoingControlScreen();
+        } else if (screen == Screen.BOXLESS_PACKING) {
+            renderBoxlessPackingScreen();
         } else if (screen == Screen.INFO) {
             renderMainScreen();
         } else {
@@ -1896,6 +2972,50 @@ public class MainActivity extends Activity {
 
     private String textValue(EditText input) {
         return input == null ? "" : input.getText().toString().trim();
+    }
+
+    private boolean isFflBoxCode(String value) {
+        return normalizeBoxCode(value).startsWith("FFL");
+    }
+
+    private String receiptBarcodeError(String value) {
+        String trimmed = value == null ? "" : value.trim();
+        if (trimmed.isEmpty()) {
+            return "";
+        }
+        if (isFflBoxCode(trimmed)) {
+            return "Ошибка: в поле ШК товара отсканирован номер короба.";
+        }
+        if (trimmed.length() > 13) {
+            return "Ошибка: ШК товара не должен быть длиннее 13 символов. Возможно, отсканирован КИЗ.";
+        }
+        return "";
+    }
+
+    private String receiptKizError(String value) {
+        String trimmed = value == null ? "" : value.trim();
+        if (trimmed.isEmpty()) {
+            return "";
+        }
+        if (isFflBoxCode(trimmed)) {
+            return "Ошибка: в поле КИЗ отсканирован номер короба.";
+        }
+        if (trimmed.length() <= 20) {
+            return "Ошибка: КИЗ должен быть длиннее 20 символов. Возможно, отсканирован ШК товара.";
+        }
+        return "";
+    }
+
+    private String duplicateKizMessage(String kiz, String boxCode, boolean currentReceipt) {
+        String location;
+        if (boxCode != null && !boxCode.trim().isEmpty()) {
+            location = "Короб с дублем: " + boxCode.trim() + ".";
+        } else if (currentReceipt) {
+            location = "Дубль найден в текущей приемке.";
+        } else {
+            location = "Дубль уже есть в WMS.";
+        }
+        return "ДУБЛЬ КИЗ\n" + location + "\nКИЗ: " + kiz;
     }
 
     private String normalizeBoxCode(String value) {
@@ -1933,7 +3053,41 @@ public class MainActivity extends Activity {
     }
 
     private void openApkDownload() {
-        startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(APK_URL)));
+        TsdSession session = safeSession();
+        if (session == null) {
+            statusMessage = "Перед обновлением войдите на ТСД и синхронизируйте операции.";
+            refreshCurrentScreen();
+            return;
+        }
+        OperationOutboxCounts beforeSync = outbox.counts();
+        if (beforeSync.pending == 0) {
+            statusMessage = "Очередь синхронизирована. Открываю обновление " + APP_VERSION + ".";
+            refreshCurrentScreen();
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(APK_URL)));
+            return;
+        }
+        statusMessage = "Проверяю очередь и синхронизирую данные перед обновлением...";
+        refreshCurrentScreen();
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            TsdSyncSummary summary = new TsdSyncRunner(outbox, api, session.deviceCode)
+                .syncPending(session.authorizationHeader());
+            OperationOutboxCounts counts = outbox.counts();
+            mainHandler.post(() -> {
+                pendingCount = counts.pending;
+                rejectedCount = counts.rejected;
+                if (counts.pending > 0 || summary.retried > 0) {
+                    statusMessage = "Обновление остановлено: не отправлено операций — " + counts.pending + ". Проверьте интернет и повторите синхронизацию.";
+                    refreshCurrentScreen();
+                    return;
+                }
+                statusMessage = counts.rejected > 0
+                    ? "Очередь отправлена. Отклоненные операции сохранены на ТСД и в разборе WMS."
+                    : "Все данные синхронизированы. Открываю обновление.";
+                refreshCurrentScreen();
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(APK_URL)));
+            });
+        });
     }
 
     private int dp(int value) {
@@ -1950,6 +3104,8 @@ public class MainActivity extends Activity {
         RELABEL_LIST,
         RELABEL_BOX,
         MOVEMENTS,
+        OUTGOING_CONTROL,
+        BOXLESS_PACKING,
         INFO
     }
 

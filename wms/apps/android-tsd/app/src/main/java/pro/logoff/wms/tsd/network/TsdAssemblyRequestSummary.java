@@ -1,5 +1,7 @@
 package pro.logoff.wms.tsd.network;
 
+import java.util.List;
+
 public class TsdAssemblyRequestSummary {
     public String id;
     public String title;
@@ -12,4 +14,5 @@ public class TsdAssemblyRequestSummary {
     public int rowsCount;
     public TsdAssemblyWorker inWorkBy;
     public TsdAssemblyProcess activeTsdProcess;
+    public List<TsdAssemblyProcess> activeTsdProcesses;
 }

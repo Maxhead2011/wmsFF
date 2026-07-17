@@ -144,13 +144,23 @@ export class TelegramNotificationService {
       });
 
       if (!response.ok) {
-        return { sent: false, reason: `Telegram HTTP ${response.status}` };
+        return { sent: false, reason: await telegramErrorReason(response) };
       }
 
       return { sent: true };
     } catch (error) {
       return { sent: false, reason: error instanceof Error ? error.message : 'Не удалось отправить Telegram.' };
     }
+  }
+}
+
+async function telegramErrorReason(response: Response) {
+  try {
+    const payload = (await response.json()) as { description?: unknown };
+    const description = typeof payload.description === 'string' ? payload.description : '';
+    return description ? `Telegram HTTP ${response.status}: ${description}` : `Telegram HTTP ${response.status}`;
+  } catch {
+    return `Telegram HTTP ${response.status}`;
   }
 }
 

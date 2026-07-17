@@ -4,6 +4,8 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { isClientNotificationEnabled } from '../client-notifications/client-notification-preferences';
+import { TelegramNotificationService } from '../client-notifications/telegram-notification.service';
+import { manualPickInstructionPlanFilePrefix } from '../stock/manual-pick-instruction';
 
 const maxFileSizeBytes = 10 * 1024 * 1024;
 
@@ -12,17 +14,19 @@ export class ClientRequestFilesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly clientScopes: ClientScopeService,
+    private readonly telegram?: TelegramNotificationService,
   ) {}
 
   async listForRequest(requestId: string, user: AuthUser) {
     const request = await this.getRequestForAccess(requestId);
     this.clientScopes.requireClientAccess(user, request.clientId, 'read');
 
-    return this.prisma.clientRequestFile.findMany({
-      where: { requestId },
+    const files = await this.prisma.clientRequestFile.findMany({
+      where: { requestId, NOT: { fileName: { startsWith: manualPickInstructionPlanFilePrefix } } },
       select: clientRequestFileSummarySelect,
       orderBy: { createdAt: 'desc' },
     });
+    return files.map((file) => ({ ...file, fileName: normalizeFileName(file.fileName) }));
   }
 
   async uploadToRequest(requestId: string, file: Express.Multer.File | undefined, user: AuthUser) {
@@ -36,9 +40,10 @@ export class ClientRequestFilesService {
 
     const request = await this.getRequestForAccess(requestId);
     this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+    const notifyClient = await isClientNotificationEnabled(this.prisma, request.clientId, ClientNotificationEvent.REQUEST_FILE_UPLOADED);
 
     // Русский комментарий: файл хранится рядом с заявкой, чтобы клиент видел вложения без внешнего файлового сервиса.
-    return this.prisma.$transaction(async (tx) => {
+    const savedFile = await this.prisma.$transaction(async (tx) => {
       const savedFile = await tx.clientRequestFile.create({
         data: {
           requestId,
@@ -52,7 +57,7 @@ export class ClientRequestFilesService {
         select: clientRequestFileSummarySelect,
       });
 
-      if (await isClientNotificationEnabled(tx, request.clientId, ClientNotificationEvent.REQUEST_FILE_UPLOADED)) {
+      if (notifyClient) {
         await tx.clientNotification.create({
           data: {
             clientId: request.clientId,
@@ -78,6 +83,15 @@ export class ClientRequestFilesService {
 
       return savedFile;
     });
+
+    if (notifyClient) {
+      void this.telegram?.notifyClient(
+        request.clientId,
+        ['LOGOFF WMS: файл добавлен к заявке.', `Заявка: ${request.title}`, `Файл: ${savedFile.fileName}`].join('\n'),
+      );
+    }
+
+    return savedFile;
   }
 
   async getFileContent(requestId: string, fileId: string, user: AuthUser) {
@@ -93,8 +107,12 @@ export class ClientRequestFilesService {
       throw new NotFoundException('Файл заявки не найден.');
     }
 
+    if (file.fileName.startsWith(manualPickInstructionPlanFilePrefix)) {
+      throw new NotFoundException('Файл заявки не найден.');
+    }
+
     this.clientScopes.requireClientAccess(user, file.clientId, 'read');
-    return file;
+    return { ...file, fileName: normalizeFileName(file.fileName) };
   }
 
   private async getRequestForAccess(requestId: string) {
@@ -130,6 +148,13 @@ export const clientRequestFileSummarySelect = {
 } satisfies Prisma.ClientRequestFileSelect;
 
 function normalizeFileName(value?: string) {
-  const normalized = value?.replace(/[\\/:*?"<>|]+/g, '_').trim();
+  const source = value?.trim() ?? '';
+  const mojibakeStart = source.search(/[ÃÐÑ]/);
+  const decoded =
+    mojibakeStart >= 0
+      ? `${source.slice(0, mojibakeStart)}${Buffer.from(source.slice(mojibakeStart), 'latin1').toString('utf8')}`
+      : source;
+  const readable = decoded.includes('�') ? source : decoded;
+  const normalized = readable.replace(/[\\/:*?"<>|]+/g, '_').trim();
   return normalized || 'attachment.bin';
 }

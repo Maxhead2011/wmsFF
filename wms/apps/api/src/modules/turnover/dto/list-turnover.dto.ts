@@ -53,3 +53,19 @@ export class TurnoverSuggestionsDto {
   @IsString()
   search?: string;
 }
+
+export class TurnoverBoxDetailsDto {
+  @IsOptional()
+  @IsString()
+  clientId?: string;
+}
+
+export class TurnoverStockExportDto {
+  @IsOptional()
+  @IsString()
+  clientId?: string;
+
+  @IsOptional()
+  @IsString()
+  ignoreActiveRequests?: string;
+}

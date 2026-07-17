@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
-import { BillingModule } from '../billing/billing.module';
 import { AuthModule } from '../auth/auth.module';
+import { RequestBillingAutomationService } from '../billing/request-billing-automation.service';
+import { ClientNotificationsModule } from '../client-notifications/client-notifications.module';
+import { LogisticsModule } from '../logistics/logistics.module';
 import { FulfillmentWaveService } from './fulfillment-wave.service';
 import { PickInstructionService } from './pick-instruction.service';
 import { PickWaveDocumentService } from './pick-wave-document.service';
@@ -12,13 +14,14 @@ import { StorageOverviewService } from './storage-overview.service';
 import { VolumeService } from './volume.service';
 
 @Module({
-  imports: [AuthModule, BillingModule],
+  imports: [AuthModule, ClientNotificationsModule, LogisticsModule],
   controllers: [StockController],
   providers: [
     StockBalancesService,
     StockLedgerService,
     StockOperationsService,
     StorageOverviewService,
+    RequestBillingAutomationService,
     FulfillmentWaveService,
     PickInstructionService,
     PickWaveDocumentService,
@@ -33,6 +36,7 @@ import { VolumeService } from './volume.service';
     PickInstructionService,
     PickWaveDocumentService,
     VolumeService,
+    RequestBillingAutomationService,
   ],
 })
 export class StockModule {}

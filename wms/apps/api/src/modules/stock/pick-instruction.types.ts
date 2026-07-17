@@ -40,6 +40,7 @@ export type PickInstructionBoxSummary = {
 };
 
 export type WarehouseInstructionRow = {
+  orderId?: string;
   city: string;
   sourceBox: string;
   targetBox: string;
@@ -62,8 +63,11 @@ export type WarehouseWholeBoxRow = {
 };
 
 export type WarehouseBalanceMoveRow = {
+  orderId?: string;
   sourceBox: string;
   newBox: string;
+  purpose: 'BALANCE' | 'SHIPMENT';
+  targetRole: 'STOCK' | 'SHIPMENT';
   pallet: string;
   artOnBox: string;
   barcodeOnBox: string;
@@ -79,6 +83,7 @@ export type WarehouseBalanceLabelRow = {
 };
 
 export type WarehouseMarkRow = {
+  orderId?: string;
   comment: string;
   city: string;
   sourceBox: string;
@@ -126,4 +131,7 @@ export type PickInstructionDocument = {
   warehouseBalanceMoves: WarehouseBalanceMoveRow[];
   warehouseBalanceLabels: WarehouseBalanceLabelRow[];
   warehouseMarkRows: WarehouseMarkRow[];
+  instructionSource: 'AUTOMATIC' | 'MANUAL';
+  manualInstructionFileName: string | null;
+  manualInstructionUploadedAt: string | null;
 };

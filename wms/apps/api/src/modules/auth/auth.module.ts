@@ -14,8 +14,8 @@ import { PasswordService } from './password.service';
   providers: [
     AccessModelService,
     AccessTokenService,
-    AuthGuard,
     AuthService,
+    AuthGuard,
     ClientScopeService,
     PrinterScopeService,
     PasswordService,
@@ -24,6 +24,7 @@ import { PasswordService } from './password.service';
   exports: [
     AccessModelService,
     AccessTokenService,
+    AuthService,
     AuthGuard,
     ClientScopeService,
     PrinterScopeService,

@@ -4,7 +4,7 @@ import type { Response } from 'express';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
-import { ListTurnoverDto, TurnoverStatisticsDto, TurnoverSuggestionsDto } from './dto/list-turnover.dto';
+import { ListTurnoverDto, TurnoverBoxDetailsDto, TurnoverStatisticsDto, TurnoverStockExportDto, TurnoverSuggestionsDto } from './dto/list-turnover.dto';
 import { TurnoverActionDto } from './dto/turnover-action.dto';
 import { TurnoverService } from './turnover.service';
 
@@ -17,6 +17,39 @@ export class TurnoverController {
   @Get('suggestions')
   suggestions(@Query() query: TurnoverSuggestionsDto, @CurrentUser() user: AuthUser) {
     return this.turnover.suggestions(query, user);
+  }
+
+  @Get('receipts.xlsx')
+  async receiptPeriodXlsx(
+    @Query() query: ListTurnoverDto,
+    @CurrentUser() user: AuthUser,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const file = await this.turnover.getReceiptPeriodXlsx(query, user);
+    response.setHeader('Content-Type', file.mimeType);
+    response.setHeader('Content-Length', String(file.content.length));
+    response.setHeader('Content-Disposition', contentDisposition(file.fileName));
+
+    return new StreamableFile(file.content);
+  }
+
+  @Get('stock.xlsx')
+  async stockXlsx(
+    @Query() query: TurnoverStockExportDto,
+    @CurrentUser() user: AuthUser,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const file = await this.turnover.getStockXlsx(query, user);
+    response.setHeader('Content-Type', file.mimeType);
+    response.setHeader('Content-Length', String(file.content.length));
+    response.setHeader('Content-Disposition', contentDisposition(file.fileName));
+
+    return new StreamableFile(file.content);
+  }
+
+  @Get('boxes/:boxCode')
+  boxDetails(@Param('boxCode') boxCode: string, @Query() query: TurnoverBoxDetailsDto, @CurrentUser() user: AuthUser) {
+    return this.turnover.boxDetails(boxCode, query, user);
   }
 
   @Get()

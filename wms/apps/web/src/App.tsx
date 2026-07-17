@@ -1,12 +1,12 @@
 import { CheckCircle2, ChevronRight, LogOut, PanelLeft, ShieldCheck, UsersRound } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AccessAdminPanel } from './components/access/AccessAdminPanel';
 import { AuthPanel } from './components/AuthPanel';
 import { BillingPanel } from './components/billing/BillingPanel';
+import { ServicesWorkspacePanel } from './components/billing/ServicesWorkspacePanel';
 import { CatalogPanel } from './components/catalog/CatalogPanel';
 import { ClientCabinetPanel } from './components/client-cabinet/ClientCabinetPanel';
 import { ClientRequestsPanel } from './components/client-requests/ClientRequestsPanel';
-import { ClientServicesPanel } from './components/client-services/ClientServicesPanel';
 import { DashboardDataPanel } from './components/DashboardDataPanel';
 import { DebugPanel } from './components/debug/DebugPanel';
 import { DirectoryPanel } from './components/directories/DirectoryPanel';
@@ -14,7 +14,6 @@ import { ImportPanel } from './components/imports/ImportPanel';
 import { LogisticsQuotePanel } from './components/logistics/LogisticsQuotePanel';
 import { OwnCompaniesPanel } from './components/own-companies/OwnCompaniesPanel';
 import { PrintPanel } from './components/print/PrintPanel';
-import { ReferralPanel } from './components/referrals/ReferralPanel';
 import { ServiceCenterPanel } from './components/service/ServiceCenterPanel';
 import { TurnoverPanel } from './components/turnover/TurnoverPanel';
 import { WarehouseOpsPanel } from './components/warehouse/WarehouseOpsPanel';
@@ -33,6 +32,7 @@ const workspaceSections = [
   { id: 'client', title: 'Клиентский контур' },
   { id: 'operations', title: 'Склад и операции' },
   { id: 'management', title: 'Управление' },
+  { id: 'control', title: 'Контроль' },
 ] as const;
 
 type WorkspaceSection = (typeof workspaceSections)[number]['id'];
@@ -45,6 +45,7 @@ export function App() {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<WorkspaceId>(() =>
     initialSession ? defaultWorkspaceForUser(initialSession.user) : 'overview',
   );
+  const workspaceContentRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     let isActive = true;
@@ -101,6 +102,10 @@ export function App() {
     }
   }, [activeWorkspaceId, availableWorkspaces, session]);
 
+  useEffect(() => {
+    workspaceContentRef.current?.scrollTo({ top: 0, left: 0 });
+  }, [activeWorkspaceId]);
+
   function acceptSession(nextSession: AuthSession) {
     setSession(nextSession);
     storeSession(nextSession);
@@ -128,9 +133,10 @@ export function App() {
   }
 
   const activeWorkspace = availableWorkspaces.find((item) => item.id === activeWorkspaceId) ?? availableWorkspaces[0];
+  const appLayoutClassName = hasWinxCursor(session.user) ? 'app-layout winx-cursor' : 'app-layout';
 
   return (
-    <div className="app-layout">
+    <div className={appLayoutClassName}>
       <aside className="app-sidebar" aria-label="Навигация WMS">
         <div className="app-sidebar__brand">
           <span>LOGOFF</span>
@@ -191,7 +197,7 @@ export function App() {
           </div>
         </header>
 
-        <section className="workspace-content" aria-label={activeWorkspace.title}>
+        <section ref={workspaceContentRef} className="workspace-content" aria-label={activeWorkspace.title}>
           {renderWorkspace(activeWorkspace.id, session, availableWorkspaces, setActiveWorkspaceId)}
         </section>
 
@@ -204,6 +210,12 @@ export function App() {
   );
 }
 
+function hasWinxCursor(user: AuthUser) {
+  const userSignature = `${user.name} ${user.email}`.toLocaleLowerCase('ru-RU');
+
+  return userSignature.includes('\u044d\u043b\u0435\u043e\u043d\u043e\u0440\u0430') || userSignature.includes('\u044d\u043b\u044f');
+}
+
 function renderWorkspace(
   activeWorkspaceId: WorkspaceId,
   session: AuthSession,
@@ -213,8 +225,6 @@ function renderWorkspace(
   switch (activeWorkspaceId) {
     case 'cabinet':
       return <ClientCabinetPanel session={session} />;
-    case 'referrals':
-      return <ReferralPanel session={session} />;
     case 'access':
       return <AccessAdminPanel session={session} />;
     case 'directories':
@@ -224,17 +234,17 @@ function renderWorkspace(
     case 'logistics':
       return <LogisticsQuotePanel session={session} />;
     case 'warehouse':
-      return <WarehouseOpsPanel session={session} onOpenCatalog={() => setActiveWorkspaceId('catalog')} />;
+      return <WarehouseOpsPanel session={session} />;
     case 'turnover':
       return <TurnoverPanel session={session} />;
     case 'requests':
       return <ClientRequestsPanel session={session} />;
     case 'catalog':
       return <CatalogPanel session={session} />;
-    case 'services':
-      return <ClientServicesPanel session={session} />;
     case 'billing':
       return <BillingPanel session={session} />;
+    case 'services':
+      return <ServicesWorkspacePanel session={session} />;
     case 'own-companies':
       return <OwnCompaniesPanel session={session} />;
     case 'print':
@@ -336,7 +346,7 @@ function sectionForWorkspace(id: WorkspaceId): WorkspaceSection {
     return 'main';
   }
 
-  if (id === 'cabinet' || id === 'referrals' || id === 'requests' || id === 'catalog') {
+  if (id === 'cabinet' || id === 'requests' || id === 'catalog') {
     return 'client';
   }
 
@@ -344,20 +354,11 @@ function sectionForWorkspace(id: WorkspaceId): WorkspaceSection {
     return 'operations';
   }
 
-  if (
-    id === 'access' ||
-    id === 'directories' ||
-    id === 'services' ||
-    id === 'billing' ||
-    id === 'own-companies' ||
-    id === 'service' ||
-    id === 'debug' ||
-    id === 'data'
-  ) {
+  if (id === 'access' || id === 'directories' || id === 'services' || id === 'billing' || id === 'own-companies') {
     return 'management';
   }
 
-  return 'management';
+  return 'control';
 }
 
 function audienceLabel(item: WorkspaceNavItem) {
@@ -393,9 +394,7 @@ function permissionTitle(item: WorkspaceNavItem) {
 }
 
 function defaultWorkspaceForUser(user: AuthUser): WorkspaceId {
-  const preferredOrder: WorkspaceId[] = isReferralOnlyUser(user)
-    ? ['referrals', 'overview']
-    : isClientOnlyUser(user)
+  const preferredOrder: WorkspaceId[] = isClientOnlyUser(user)
     ? ['cabinet', 'requests', 'catalog', 'turnover', 'logistics', 'billing', 'overview']
     : [
         'turnover',
@@ -404,11 +403,10 @@ function defaultWorkspaceForUser(user: AuthUser): WorkspaceId {
         'catalog',
         'access',
         'directories',
-        'services',
         'imports',
         'logistics',
+        'services',
         'billing',
-        'referrals',
         'own-companies',
         'print',
         'service',
@@ -426,11 +424,6 @@ function canKeepWorkspace(user: AuthUser, workspaceId: WorkspaceId) {
 }
 
 function isClientOnlyUser(user: AuthUser) {
-  const internalRoles = ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR', 'TSD', 'REFERRAL_PARTNER'];
+  const internalRoles = ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR'];
   return user.roleCodes.includes('CLIENT') && !user.roleCodes.some((roleCode) => internalRoles.includes(roleCode));
-}
-
-function isReferralOnlyUser(user: AuthUser) {
-  const internalRoles = ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR', 'TSD', 'CLIENT'];
-  return user.roleCodes.includes('REFERRAL_PARTNER') && !user.roleCodes.some((roleCode) => internalRoles.includes(roleCode));
 }

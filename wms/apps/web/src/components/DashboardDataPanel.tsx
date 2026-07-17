@@ -15,6 +15,7 @@ import {
   fetchLogisticsTariffSets,
   fetchRoles,
   fetchStockBalances,
+  fetchTsdReceiptReviewDashboard,
   fetchTsdReviewHistory,
   fetchTsdReviewQueue,
   resolveTsdReviewOperation,
@@ -27,8 +28,10 @@ import {
   type StockBalance,
   type TsdReviewOperation,
   type TsdReviewReason,
+  type TsdReceiptReviewDashboard,
 } from '../lib/api';
 import { stockStatusLabel } from './client-cabinet/clientCabinetFormat';
+import { TsdReceiptReviewPanel } from './tsd/TsdReceiptReviewPanel';
 
 const dataTabs = [
   { id: 'clients', label: 'Клиенты', permission: 'clients:read', icon: UsersRound },
@@ -58,6 +61,12 @@ type LoadState<T> = {
   error?: string;
 };
 
+type DashboardLoadState<T> = {
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  data: T | null;
+  error?: string;
+};
+
 type DashboardDataPanelProps = {
   session: AuthSession;
 };
@@ -73,6 +82,10 @@ export function DashboardDataPanel({ session }: DashboardDataPanelProps) {
   const [clients, setClients] = useState<LoadState<ClientSummary>>({ status: 'idle', data: [] });
   const [stock, setStock] = useState<LoadState<StockBalance>>({ status: 'idle', data: [] });
   const [tsdReview, setTsdReview] = useState<LoadState<TsdReviewOperation>>({ status: 'idle', data: [] });
+  const [tsdReceiptReview, setTsdReceiptReview] = useState<DashboardLoadState<TsdReceiptReviewDashboard>>({
+    status: 'idle',
+    data: null,
+  });
   const [tsdHistory, setTsdHistory] = useState<LoadState<TsdReviewOperation>>({ status: 'idle', data: [] });
   const [roles, setRoles] = useState<LoadState<RoleSummary>>({ status: 'idle', data: [] });
   const [tariffs, setTariffs] = useState<LoadState<LogisticsTariffSetSummary>>({ status: 'idle', data: [] });
@@ -124,15 +137,22 @@ export function DashboardDataPanel({ session }: DashboardDataPanelProps) {
     }
 
     if (tab === 'tsdReview') {
-      if (!force && tsdReview.status !== 'idle') {
+      if (!force && tsdReview.status !== 'idle' && tsdReceiptReview.status !== 'idle') {
         return;
       }
 
       setTsdReview((current) => ({ ...current, status: 'loading', error: undefined }));
+      setTsdReceiptReview((current) => ({ ...current, status: 'loading', error: undefined }));
       try {
-        setTsdReview({ status: 'ready', data: await fetchTsdReviewQueue(session.accessToken) });
+        const [queue, receiptDashboard] = await Promise.all([
+          fetchTsdReviewQueue(session.accessToken),
+          fetchTsdReceiptReviewDashboard(session.accessToken),
+        ]);
+        setTsdReview({ status: 'ready', data: queue });
+        setTsdReceiptReview({ status: 'ready', data: receiptDashboard });
       } catch (caught) {
         setTsdReview((current) => ({ ...current, status: 'error', error: errorMessage(caught) }));
+        setTsdReceiptReview((current) => ({ ...current, status: 'error', error: errorMessage(caught) }));
       }
     }
 
@@ -187,15 +207,14 @@ export function DashboardDataPanel({ session }: DashboardDataPanelProps) {
       await resolveTsdReviewOperation(session.accessToken, operation.id, {
         action,
         comment:
-          action === 'APPLY_INVENTORY_ADJUSTMENT'
+          action === 'ACCEPT_RECEIPT_WITH_ERROR'
+            ? 'Фактическое наличие товара в коробе подтверждено администратором.'
+            : action === 'APPLY_INVENTORY_ADJUSTMENT'
             ? 'Подтверждено оператором WMS.'
             : 'Отклонено оператором WMS.',
         reason: action === 'REJECT' ? reason ?? defaultRejectReason(operation) : undefined,
       });
-      setTsdReview((current) => ({
-        status: 'ready',
-        data: current.data.filter((item) => item.id !== operation.id),
-      }));
+      await loadTab('tsdReview', true);
       setRejectReasons((current) => {
         const next = { ...current };
         delete next[operation.id];
@@ -203,6 +222,8 @@ export function DashboardDataPanel({ session }: DashboardDataPanelProps) {
       });
     } catch (caught) {
       setTsdReview((current) => ({ ...current, status: 'error', error: errorMessage(caught) }));
+      setTsdReceiptReview((current) => ({ ...current, status: 'error', error: errorMessage(caught) }));
+      throw caught;
     }
   }
 
@@ -220,17 +241,39 @@ export function DashboardDataPanel({ session }: DashboardDataPanelProps) {
     }
 
     if (activeTab === 'tsdReview') {
-      return renderLoadState(tsdReview, 'Операций ТСД на разборе нет.', (items) =>
-        renderTsdReview(
-          items,
-          rejectReasons,
-          (operation, reason) =>
-            setRejectReasons((current) => ({
-              ...current,
-              [operation.id]: reason,
-            })),
-          (operation, action, reason) => void resolveReview(operation, action, reason),
-        ),
+      const otherOperations = tsdReview.data.filter((operation) => operation.operationType !== 'receipt_scan');
+      return (
+        <>
+          <TsdReceiptReviewPanel
+            dashboard={tsdReceiptReview.data}
+            error={tsdReceiptReview.error}
+            isLoading={tsdReceiptReview.status === 'idle' || tsdReceiptReview.status === 'loading'}
+            onRefresh={() => void loadTab('tsdReview', true)}
+            onAcceptWithError={(item) =>
+              resolveReview(
+                {
+                  id: item.id,
+                } as TsdReviewOperation,
+                'ACCEPT_RECEIPT_WITH_ERROR',
+              )
+            }
+          />
+          {otherOperations.length ? (
+            <div className="tsd-review-other">
+              <h3>Прочие операции ТСД</h3>
+              {renderTsdReview(
+                otherOperations,
+                rejectReasons,
+                (operation, reason) =>
+                  setRejectReasons((current) => ({
+                    ...current,
+                    [operation.id]: reason,
+                  })),
+                (operation, action, reason) => void resolveReview(operation, action, reason),
+              )}
+            </div>
+          ) : null}
+        </>
       );
     }
 

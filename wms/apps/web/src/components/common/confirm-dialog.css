@@ -11,11 +11,13 @@
 .confirm-dialog {
   display: grid;
   width: min(520px, calc(100vw - 40px));
+  max-width: calc(100vw - 40px);
   gap: 14px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface);
   box-shadow: 0 24px 80px rgb(15 23 42 / 0.24);
+  overflow: hidden;
   padding: 16px;
 }
 
@@ -24,6 +26,11 @@
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 12px;
   align-items: start;
+}
+
+.confirm-dialog__header > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .confirm-dialog__icon {
@@ -53,6 +60,9 @@
 
 .confirm-dialog__details {
   display: grid;
+  min-width: 0;
+  max-height: 46vh;
+  overflow: auto;
   gap: 7px;
   margin: 0;
   border: 1px solid #fed7aa;
@@ -64,10 +74,13 @@
 
 .confirm-dialog__details li {
   line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .confirm-dialog__actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 10px;
 }

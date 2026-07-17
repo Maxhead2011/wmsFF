@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { ClientRequestPriority, ClientRequestStatus, ClientRequestType, Prisma } from '@prisma/client';
+import * as XLSX from 'xlsx';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
@@ -32,6 +33,8 @@ export class ClientRequestDocumentService {
       article: item.sku?.article ?? null,
       barcode: item.barcode,
       name: item.name ?? item.sku?.name ?? null,
+      color: item.sku?.color ?? null,
+      size: item.sku?.size ?? null,
       quantity: item.quantity,
       comment: item.comment,
     }));
@@ -107,6 +110,38 @@ export class ClientRequestDocumentService {
       html: renderRequestHtml(payload),
     };
   }
+
+  async getRequestItemsXlsx(requestId: string, user: AuthUser): Promise<{ fileName: string; mimeType: string; content: Buffer }> {
+    const document = await this.getRequestDocument(requestId, user);
+    const rows = [
+      ['№', 'ШК товара', 'SKU клиента', 'SKU WMS', 'Артикул', 'Наименование', 'Цвет', 'Размер', 'Количество', 'Комментарий'],
+      ...document.rows.map((row) => [
+        row.position,
+        row.barcode ?? '',
+        row.clientSku ?? '',
+        row.internalSku ?? '',
+        row.article ?? '',
+        row.name ?? '',
+        row.color ?? '',
+        row.size ?? '',
+        row.quantity,
+        row.comment ?? '',
+      ]),
+      [],
+      ['', '', '', '', '', '', '', 'Итого', document.totalQuantity, `${document.rowsCount} позиций`],
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    const sheet = XLSX.utils.aoa_to_sheet(rows);
+    sheet['!cols'] = [6, 20, 18, 18, 18, 46, 16, 14, 12, 36].map((wch) => ({ wch }));
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Состав заявки');
+
+    return {
+      fileName: `${safeFileName(`sostav-${document.title}-${requestId.slice(0, 8)}`)}.xlsx`,
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      content: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer,
+    };
+  }
 }
 
 type ClientRequestDocumentPayload = {
@@ -149,6 +184,8 @@ type ClientRequestDocumentPayload = {
     article: string | null;
     barcode: string | null;
     name: string | null;
+    color: string | null;
+    size: string | null;
     quantity: number;
     comment: string | null;
   }>;
@@ -223,6 +260,8 @@ const requestDocumentInclude = {
           clientSku: true,
           article: true,
           name: true,
+          color: true,
+          size: true,
         },
       },
     },

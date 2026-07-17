@@ -79,6 +79,10 @@ export class CreateClientDto {
   storesWithoutBoxes?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  onlineReceiptVisibleToClient?: boolean;
+
+  @IsOptional()
   @IsString()
   fulfillmentManagerUserId?: string;
 }

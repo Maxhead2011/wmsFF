@@ -41,7 +41,7 @@ export class ClientNotificationsService {
     await this.ensureNotificationEventEnabled(dto.clientId, ClientNotificationEvent.MANUAL);
 
     // Русский комментарий: уведомление видно клиенту сразу в кабинете, а статус read хранится отдельно от заявки.
-    return this.prisma.clientNotification.create({
+    const notification = await this.prisma.clientNotification.create({
       data: {
         clientId: dto.clientId,
         requestId: normalizeText(dto.requestId),
@@ -52,6 +52,10 @@ export class ClientNotificationsService {
       },
       include: clientNotificationInclude,
     });
+
+    void this.telegram.notifyClient(dto.clientId, telegramNotificationText(notification.title, notification.body));
+
+    return notification;
   }
 
   async markRead(id: string, user: AuthUser) {
@@ -264,4 +268,8 @@ export const clientNotificationPreferenceInclude = {
 function normalizeText(value?: string) {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
+}
+
+function telegramNotificationText(title: string, body?: string | null) {
+  return ['LOGOFF WMS: уведомление для клиента.', title, body ?? ''].filter(Boolean).join('\n');
 }

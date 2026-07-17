@@ -1,5 +1,5 @@
-import { ClipboardPaste, Plus, Trash2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { ClipboardPaste, Database, Plus, Search, Trash2, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { fetchTurnoverSuggestions, type ClientRequestAvailabilityPreview, type TurnoverSuggestions } from '../../lib/api';
 import {
   emptyClientRequestItem,
@@ -13,6 +13,8 @@ type ClientRequestItemsEditorProps = {
   accessToken: string;
   clientId: string;
   availability?: ClientRequestAvailabilityPreview | null;
+  showQuickSearch?: boolean;
+  showDatabasePicker?: boolean;
   onChange: (items: ClientRequestDraftItem[]) => void;
   onAvailabilityCheck?: (items: ClientRequestDraftItem[]) => void;
   onError: (message: string | null) => void;
@@ -35,6 +37,8 @@ export function ClientRequestItemsEditor({
   accessToken,
   clientId,
   availability,
+  showQuickSearch = false,
+  showDatabasePicker = false,
   onChange,
   onAvailabilityCheck,
   onError,
@@ -43,7 +47,20 @@ export function ClientRequestItemsEditor({
   const [activeSuggest, setActiveSuggest] = useState<{ index: number; query: string } | null>(null);
   const [suggestions, setSuggestions] = useState<StockSuggestion[]>([]);
   const [isSuggesting, setSuggesting] = useState(false);
+  const [itemSearch, setItemSearch] = useState('');
+  const [isDatabasePickerOpen, setDatabasePickerOpen] = useState(false);
+  const [databaseSearch, setDatabaseSearch] = useState('');
+  const [databaseSuggestions, setDatabaseSuggestions] = useState<StockSuggestion[]>([]);
+  const [databaseQuantities, setDatabaseQuantities] = useState<Record<string, string>>({});
+  const [databaseMessage, setDatabaseMessage] = useState<string | null>(null);
+  const [isDatabaseSuggesting, setDatabaseSuggesting] = useState(false);
   const availabilityByIndex = new Map((availability?.lines ?? []).map((line) => [line.index, line]));
+  const visibleItems = useMemo(
+    () => items
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => matchesItemSearch(item, itemSearch)),
+    [itemSearch, items],
+  );
 
   useEffect(() => {
     const query = activeSuggest?.query.trim() ?? '';
@@ -64,6 +81,24 @@ export function ClientRequestItemsEditor({
   }, [accessToken, activeSuggest, clientId]);
 
   useEffect(() => {
+    if (!clientId || !isDatabasePickerOpen) {
+      setDatabaseSuggestions([]);
+      return;
+    }
+
+    const query = databaseSearch.trim();
+    const timeoutId = window.setTimeout(() => {
+      setDatabaseSuggesting(true);
+      fetchTurnoverSuggestions(accessToken, { clientId, search: query || undefined })
+        .then((result) => setDatabaseSuggestions(buildStockSuggestions(result).slice(0, 20)))
+        .catch(() => setDatabaseSuggestions([]))
+        .finally(() => setDatabaseSuggesting(false));
+    }, 220);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [accessToken, clientId, databaseSearch, isDatabasePickerOpen]);
+
+  useEffect(() => {
     if (!clientId || !onAvailabilityCheck) {
       return;
     }
@@ -80,7 +115,7 @@ export function ClientRequestItemsEditor({
   function updateItem(index: number, field: keyof ClientRequestDraftItem, value: string) {
     onChange(
       items.map((item, itemIndex) =>
-        itemIndex === index ? updateDraftItem(item, field, value) : item,
+        itemIndex === index ? { ...item, [field]: value, skuId: field === 'barcode' || field === 'name' ? '' : item.skuId } : item,
       ),
     );
     if (field === 'barcode' || field === 'name') {
@@ -96,13 +131,13 @@ export function ClientRequestItemsEditor({
           ? {
               ...item,
               skuId: sku.skuId,
+              barcode: sku.barcode,
+              name: sku.name,
               internalSku: sku.internalSku,
               clientSku: sku.clientSku ?? '',
               article: sku.article ?? '',
               color: sku.color ?? '',
               size: sku.size ?? '',
-              barcode: sku.barcode,
-              name: sku.name,
             }
           : item,
       ),
@@ -119,6 +154,60 @@ export function ClientRequestItemsEditor({
 
     onError(null);
     onChange([...items, emptyClientRequestItem()]);
+  }
+
+  function addDatabaseItem(sku: StockSuggestion) {
+    const key = stockSuggestionKey(sku);
+    const quantity = normalizeDatabaseQuantity(databaseQuantities[key]);
+    const existingIndex = items.findIndex((item) =>
+      (sku.skuId && item.skuId === sku.skuId) || (sku.barcode && item.barcode.trim() === sku.barcode),
+    );
+
+    if (existingIndex === -1 && items.length >= MAX_CLIENT_REQUEST_ITEMS) {
+      onError(`В заявке может быть не больше ${MAX_CLIENT_REQUEST_ITEMS} позиций.`);
+      return;
+    }
+
+    const nextItems = existingIndex >= 0
+      ? items.map((item, index) =>
+          index === existingIndex
+            ? {
+                ...item,
+                skuId: sku.skuId,
+                barcode: sku.barcode,
+                name: sku.name,
+                internalSku: sku.internalSku,
+                clientSku: sku.clientSku ?? '',
+                article: sku.article ?? '',
+                color: sku.color ?? '',
+                size: sku.size ?? '',
+                quantity: String(normalizeDatabaseQuantity(item.quantity) + quantity),
+              }
+            : item,
+        )
+      : [
+          ...items,
+          {
+            ...emptyClientRequestItem(),
+            skuId: sku.skuId,
+            barcode: sku.barcode,
+            name: sku.name,
+            internalSku: sku.internalSku,
+            clientSku: sku.clientSku ?? '',
+            article: sku.article ?? '',
+            color: sku.color ?? '',
+            size: sku.size ?? '',
+            quantity: String(quantity),
+          },
+        ];
+
+    onError(null);
+    onChange(nextItems);
+    setDatabaseMessage(
+      existingIndex >= 0
+        ? `Количество увеличено: ${sku.internalSku || sku.barcode || sku.name}.`
+        : `Товар добавлен: ${sku.internalSku || sku.barcode || sku.name}.`,
+    );
   }
 
   function removeItem(index: number) {
@@ -155,6 +244,126 @@ export function ClientRequestItemsEditor({
         </button>
       </div>
 
+      {showDatabasePicker ? (
+        <div className="client-request-database-picker">
+          <div className="client-request-database-picker__bar">
+            <button
+              className="secondary-action client-request-small-button"
+              type="button"
+              onClick={() => {
+                setDatabasePickerOpen((current) => !current);
+                setDatabaseMessage(null);
+              }}
+            >
+              <Database size={15} aria-hidden="true" />
+              <span>Добавить из базы</span>
+            </button>
+            <span>Поиск берет товары и остатки выбранного клиента.</span>
+          </div>
+
+          {isDatabasePickerOpen ? (
+            <div className="client-request-database-picker__panel">
+              <label className="client-request-database-picker__search">
+                <Search size={17} aria-hidden="true" />
+                <input
+                  type="search"
+                  value={databaseSearch}
+                  onChange={(event) => {
+                    setDatabaseSearch(event.target.value);
+                    setDatabaseMessage(null);
+                  }}
+                  placeholder="Начните вводить ШК, название, SKU или артикул"
+                  aria-label="Поиск товара в базе клиента"
+                />
+                {databaseSearch ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDatabaseSearch('');
+                      setDatabaseMessage(null);
+                    }}
+                    title="Очистить поиск"
+                    aria-label="Очистить поиск товара"
+                  >
+                    <X size={16} aria-hidden="true" />
+                  </button>
+                ) : null}
+              </label>
+
+              {databaseMessage ? <p className="client-request-database-picker__message">{databaseMessage}</p> : null}
+              {isDatabaseSuggesting ? <p className="client-request-database-picker__message">Ищу товары в базе клиента.</p> : null}
+
+              <div className="client-request-database-picker__results" role="list">
+                {databaseSuggestions.map((sku) => {
+                  const key = stockSuggestionKey(sku);
+                  const alreadyInRequest = items.some((item) =>
+                    (sku.skuId && item.skuId === sku.skuId) || (sku.barcode && item.barcode.trim() === sku.barcode),
+                  );
+
+                  return (
+                    <div className="client-request-database-picker__result" key={key} role="listitem">
+                      <div className="client-request-database-picker__product">
+                        <strong>{sku.internalSku || sku.clientSku || sku.barcode || 'Товар без SKU'}</strong>
+                        <span>{sku.name}</span>
+                        <small>
+                          {[
+                            sku.barcode ? `ШК ${sku.barcode}` : 'без штрихкода',
+                            sku.article,
+                            sku.color,
+                            sku.size,
+                            `остаток ${sku.availableQuantity} шт.`,
+                            alreadyInRequest ? 'уже в заявке' : '',
+                          ].filter(Boolean).join(' · ')}
+                        </small>
+                      </div>
+                      <input
+                        aria-label={`Количество для добавления ${sku.internalSku || sku.name}`}
+                        min="1"
+                        type="number"
+                        value={databaseQuantities[key] ?? '1'}
+                        onChange={(event) => setDatabaseQuantities((current) => ({ ...current, [key]: event.target.value }))}
+                      />
+                      <button
+                        className="primary-button client-request-database-picker__add"
+                        type="button"
+                        onClick={() => addDatabaseItem(sku)}
+                      >
+                        <Plus size={15} aria-hidden="true" />
+                        <span>{alreadyInRequest ? 'Добавить еще' : 'Добавить'}</span>
+                      </button>
+                    </div>
+                  );
+                })}
+                {!isDatabaseSuggesting && databaseSuggestions.length === 0 ? (
+                  <div className="client-request-database-picker__empty" role="status">
+                    {databaseSearch.trim() ? 'Товар не найден в базе клиента.' : 'Введите запрос или выберите товар из списка.'}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {showQuickSearch ? (
+        <div className="client-request-item-search">
+          <Search size={17} aria-hidden="true" />
+          <input
+            type="search"
+            value={itemSearch}
+            onChange={(event) => setItemSearch(event.target.value)}
+            placeholder="ШК, название, SKU или артикул"
+            aria-label="Быстрый поиск по составу заявки"
+          />
+          <span>{itemSearch.trim() ? `Найдено ${visibleItems.length} из ${items.length}` : `Всего ${items.length}`}</span>
+          {itemSearch ? (
+            <button type="button" onClick={() => setItemSearch('')} title="Очистить поиск" aria-label="Очистить поиск">
+              <X size={16} aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
       <div className="client-request-items-grid" role="table" aria-label="Позиции заявки">
         <div className="client-request-items-grid__header" role="row">
           <span>Штрихкод</span>
@@ -163,7 +372,7 @@ export function ClientRequestItemsEditor({
           <span>Комментарий</span>
           <span />
         </div>
-        {items.map((item, index) => {
+        {visibleItems.map(({ item, index }) => {
           const line = availabilityByIndex.get(index);
           return (
             <div className={`client-request-items-grid__row ${availabilityClassName(line)}`} key={index} role="row">
@@ -205,14 +414,13 @@ export function ClientRequestItemsEditor({
                 <div className="client-request-sku-suggestions">
                   {suggestions.map((sku) => (
                     <button key={sku.skuId} type="button" onClick={() => selectSku(index, sku)}>
-                      <strong>{sku.name}</strong>
-                      <span>{sku.barcode || 'без штрихкода'}</span>
-                      <small>{skuSuggestionDetails(sku)}</small>
+                      <strong>{sku.internalSku}</strong>
+                      <span>{sku.name}</span>
+                      <small>{[sku.article, sku.barcode || 'без штрихкода', `${sku.availableQuantity} шт.`].filter(Boolean).join(' · ')}</small>
                     </button>
                   ))}
                 </div>
               ) : null}
-              {item.skuId ? <small className="client-request-selected-sku">{selectedSkuDetails(item)}</small> : null}
               {activeSuggest?.index === index && isSuggesting ? (
                 <small className="client-request-sku-suggestions-status">Ищу варианты.</small>
               ) : null}
@@ -220,6 +428,13 @@ export function ClientRequestItemsEditor({
             </div>
           );
         })}
+        {visibleItems.length === 0 ? (
+          <div className="client-request-items-grid__empty" role="status">
+            <strong>Позиции не найдены</strong>
+            <span>Измените запрос или очистите поиск.</span>
+            <button type="button" onClick={() => setItemSearch('')}>Показать все</button>
+          </div>
+        ) : null}
       </div>
 
       <div className="client-request-paste">
@@ -276,6 +491,44 @@ function buildStockSuggestions(result: TurnoverSuggestions) {
     .sort((left, right) => right.availableQuantity - left.availableQuantity);
 }
 
+function matchesItemSearch(item: ClientRequestDraftItem, rawQuery: string) {
+  const query = normalizeItemSearch(rawQuery);
+  if (!query) {
+    return true;
+  }
+
+  const values = [
+    item.barcode,
+    item.name,
+    item.internalSku,
+    item.clientSku,
+    item.article,
+    item.color,
+    item.size,
+  ];
+  const searchIndex = normalizeItemSearch(values.filter(Boolean).join(' '));
+  const compactQuery = query.replace(/\s+/g, '');
+
+  return searchIndex.includes(query) || searchIndex.replace(/\s+/g, '').includes(compactQuery);
+}
+
+function normalizeItemSearch(value: string) {
+  return value.trim().toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
+}
+
+function normalizeDatabaseQuantity(value: string | undefined) {
+  const quantity = Number(value ?? 1);
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    return 1;
+  }
+
+  return Math.floor(quantity);
+}
+
+function stockSuggestionKey(sku: StockSuggestion) {
+  return `${sku.skuId}:${sku.barcode || 'no-barcode'}`;
+}
+
 function uniqueStockSuggestions(suggestions: StockSuggestion[]) {
   const seen = new Set<string>();
   const result: StockSuggestion[] = [];
@@ -291,48 +544,6 @@ function uniqueStockSuggestions(suggestions: StockSuggestion[]) {
   }
 
   return result;
-}
-
-function updateDraftItem(item: ClientRequestDraftItem, field: keyof ClientRequestDraftItem, value: string) {
-  if (field === 'barcode' || field === 'name') {
-    return {
-      ...item,
-      [field]: value,
-      skuId: '',
-      internalSku: '',
-      clientSku: '',
-      article: '',
-      color: '',
-      size: '',
-    };
-  }
-
-  return { ...item, [field]: value };
-}
-
-function skuSuggestionDetails(sku: StockSuggestion) {
-  return [
-    sku.article ? `Арт. ${sku.article}` : null,
-    sku.size ? `Размер ${sku.size}` : null,
-    sku.color ? `Цвет ${sku.color}` : null,
-    sku.clientSku ? `SKU клиента ${sku.clientSku}` : sku.internalSku,
-    `${sku.availableQuantity} шт. на остатке`,
-  ]
-    .filter(Boolean)
-    .join(' · ');
-}
-
-function selectedSkuDetails(item: ClientRequestDraftItem) {
-  return [
-    item.name,
-    item.barcode ? `ШК ${item.barcode}` : null,
-    item.article ? `Арт. ${item.article}` : null,
-    item.size ? `Размер ${item.size}` : null,
-    item.color ? `Цвет ${item.color}` : null,
-    item.clientSku ? `SKU клиента ${item.clientSku}` : item.internalSku || null,
-  ]
-    .filter(Boolean)
-    .join(' · ');
 }
 
 function availabilityClassName(line: ClientRequestAvailabilityPreview['lines'][number] | undefined) {

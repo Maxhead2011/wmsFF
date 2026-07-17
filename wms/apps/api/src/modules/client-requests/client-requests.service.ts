@@ -188,24 +188,13 @@ export class ClientRequestsService {
       ].join('\n'),
     );
 
-    if (!(await this.hasLogisticsTariffForDestination(destinationCity))) {
-      await this.createLogisticsCostRequestEvent(created, user, 'Новый город поставки отсутствует в тарифах логистики.');
-    }
-
     return created;
   }
 
   async update(id: string, dto: UpdateClientRequestDto, user: AuthUser) {
     const request = await this.prisma.clientRequest.findUnique({
       where: { id },
-      select: {
-        id: true,
-        clientId: true,
-        type: true,
-        status: true,
-        title: true,
-        destinationCity: true,
-      },
+      select: { id: true, clientId: true, status: true },
     });
 
     if (!request) {
@@ -214,103 +203,63 @@ export class ClientRequestsService {
 
     this.clientScopes.requireClientAccess(user, request.clientId, 'write');
 
-    if (!clientEditableStatuses.has(request.status)) {
-      throw new BadRequestException('Заявку нельзя редактировать: склад уже начал обработку.');
+    if (!canEditClientRequestAnyStatus(user) && !clientEditableStatuses.has(request.status)) {
+      throw new BadRequestException('Заявку можно редактировать только до начала работы склада.');
     }
 
     await this.ensureSkuItemsBelongToClient(request.clientId, dto.items ?? []);
 
-    const updateData: Prisma.ClientRequestUpdateInput = {};
-    if (dto.type !== undefined) {
-      updateData.type = dto.type;
-    }
-    if (dto.priority !== undefined) {
-      updateData.priority = dto.priority;
-    }
-    if (dto.title !== undefined) {
-      updateData.title = normalizeRequiredText(dto.title, 'Название заявки обязательно.');
-    }
-    if (dto.comment !== undefined) {
-      updateData.comment = normalizeText(dto.comment);
-    }
-    if (dto.contactName !== undefined) {
-      updateData.contactName = normalizeText(dto.contactName);
-    }
-    if (dto.contactPhone !== undefined) {
-      updateData.contactPhone = normalizeText(dto.contactPhone);
-    }
-    if (dto.destinationCity !== undefined) {
-      updateData.destinationCity = normalizeRequiredText(dto.destinationCity, 'Город поставки обязателен.');
-    }
-    if (dto.deliveryAddress !== undefined) {
-      updateData.deliveryAddress = normalizeText(dto.deliveryAddress);
-    }
-    if (dto.desiredDate !== undefined) {
-      updateData.desiredDate = dto.desiredDate ? new Date(dto.desiredDate) : null;
-    }
+    const data: Prisma.ClientRequestUpdateInput = {
+      ...(dto.type !== undefined ? { type: dto.type } : {}),
+      ...(dto.priority !== undefined ? { priority: dto.priority } : {}),
+      ...(dto.title !== undefined ? { title: normalizeRequiredText(dto.title, 'Название заявки обязательно.') } : {}),
+      ...(dto.comment !== undefined ? { comment: normalizeText(dto.comment) ?? null } : {}),
+      ...(dto.contactName !== undefined ? { contactName: normalizeText(dto.contactName) ?? null } : {}),
+      ...(dto.contactPhone !== undefined ? { contactPhone: normalizeText(dto.contactPhone) ?? null } : {}),
+      ...(dto.destinationCity !== undefined
+        ? { destinationCity: normalizeRequiredText(dto.destinationCity, 'Город поставки обязателен.') }
+        : {}),
+      ...(dto.deliveryAddress !== undefined ? { deliveryAddress: normalizeText(dto.deliveryAddress) ?? null } : {}),
+      ...(dto.desiredDate !== undefined ? { desiredDate: dto.desiredDate ? new Date(dto.desiredDate) : null } : {}),
+    };
 
-    const updated = await this.prisma.$transaction(async (tx) => {
-      if (dto.items) {
+    return this.prisma.$transaction(async (tx) => {
+      if (dto.items !== undefined) {
         await tx.clientRequestItem.deleteMany({ where: { requestId: id } });
-        if (dto.items.length > 0) {
-          await tx.clientRequestItem.createMany({
-            data: dto.items.map((item) => ({
-              requestId: id,
-              skuId: normalizeText(item.skuId),
-              barcode: normalizeText(item.barcode),
-              name: normalizeText(item.name),
-              quantity: item.quantity,
-              comment: normalizeText(item.comment),
-            })),
-          });
-        }
+        data.items = {
+          create: dto.items.map((item) => ({
+            skuId: normalizeText(item.skuId),
+            barcode: normalizeText(item.barcode),
+            name: normalizeText(item.name),
+            quantity: item.quantity,
+            comment: normalizeText(item.comment),
+          })),
+        };
       }
 
-      const updatedRequest = await tx.clientRequest.update({
+      return tx.clientRequest.update({
         where: { id },
-        data: updateData,
+        data,
         include: clientRequestInclude,
       });
-
-      await tx.clientRequestEvent.create({
-        data: {
-          requestId: id,
-          clientId: request.clientId,
-          eventType: ClientRequestEventType.COMMENT,
-          title: 'Заявка изменена до начала работы',
-          body: this.updateRequestEventBody(request, updatedRequest),
-          createdByUserId: user.id,
-        },
-      });
-
-      return updatedRequest;
     });
-
-    void this.telegram?.notifyFulfillment(
-      [
-        'LOGOFF WMS: клиент изменил заявку до начала работы.',
-        `Заявка: ${updated.title}`,
-        `Клиент: ${updated.client.name}`,
-        `Город: ${updated.destinationCity ?? '-'}`,
-        `Строк: ${updated.items.length}`,
-      ].join('\n'),
-    );
-
-    if (
-      updated.destinationCity &&
-      this.normalizePoint(updated.destinationCity) !== this.normalizePoint(request.destinationCity ?? '') &&
-      !(await this.hasLogisticsTariffForDestination(updated.destinationCity))
-    ) {
-      await this.createLogisticsCostRequestEvent(updated, user, 'Город поставки изменен и отсутствует в тарифах логистики.');
-    }
-
-    return updated;
   }
 
   async updateStatus(id: string, dto: UpdateClientRequestStatusDto, user: AuthUser) {
     const request = await this.prisma.clientRequest.findUnique({
       where: { id },
-      select: { id: true, clientId: true, type: true, status: true, title: true },
+      select: {
+        id: true,
+        clientId: true,
+        type: true,
+        status: true,
+        title: true,
+        packages: {
+          where: { comment: 'Фактический короб из аварийного Excel' },
+          select: { id: true },
+          take: 1,
+        },
+      },
     });
 
     if (!request) {
@@ -321,7 +270,7 @@ export class ClientRequestsService {
     this.clientScopes.requireClientAccess(user, request.clientId, 'write');
 
     const shouldFinalizeOutbound =
-      request.type === ClientRequestType.OUTBOUND && request.status !== dto.status && dto.status === ClientRequestStatus.DONE;
+      request.type === ClientRequestType.OUTBOUND && dto.status === ClientRequestStatus.DONE;
 
     const updated = shouldFinalizeOutbound
       ? await this.finalizeOutboundByManualStatus(request, dto, user)
@@ -383,24 +332,34 @@ export class ClientRequestsService {
   }
 
   private async finalizeOutboundByManualStatus(
-    request: { id: string; clientId: string; status: ClientRequestStatus; title: string },
+    request: {
+      id: string;
+      clientId: string;
+      status: ClientRequestStatus;
+      title: string;
+      packages: Array<{ id: string }>;
+    },
     dto: UpdateClientRequestStatusDto,
     user: AuthUser,
   ) {
     const comment = normalizeText(dto.managerComment) ?? 'Заявка сдана вручную; остатки списаны автоматически.';
 
-    await this.stockOperations.shipClientRequestFromCurrentStock(
-      {
-        requestId: request.id,
-        idempotencyKey: `manual-status-done:${request.id}`,
-        comment,
-        boxes: dto.boxes,
-        pallets: dto.pallets,
-        packedUnits: dto.packedUnits,
-        packages: dto.packages,
-      },
-      user,
-    );
+    const fulfillment = {
+      requestId: request.id,
+      idempotencyKey: `manual-status-done:${request.id}`,
+      comment,
+      boxes: dto.boxes,
+      pallets: dto.pallets,
+      packedUnits: dto.packedUnits,
+      packages: dto.packages,
+    };
+    if (request.status === ClientRequestStatus.PACKED && request.packages.length > 0) {
+      // Аварийное закрытие уже зафиксировало фактические короба, их состав и складские движения.
+      // При сдаче повторно ничего не подбираем из остатков: начисления и логистика берутся из этих упаковочных мест.
+      await this.stockOperations.shipClientRequest(fulfillment, user);
+    } else {
+      await this.stockOperations.shipClientRequestFromCurrentStock(fulfillment, user);
+    }
 
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.clientRequest.update({
@@ -412,6 +371,10 @@ export class ClientRequestsService {
         },
         include: clientRequestInclude,
       });
+
+      if (request.status === ClientRequestStatus.DONE) {
+        return updated;
+      }
 
       await tx.clientRequestEvent.create({
         data: {
@@ -463,7 +426,8 @@ export class ClientRequestsService {
       throw new BadRequestException('Заявку нельзя отменить: склад уже начал обработку.');
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const notifyClient = await isClientNotificationEnabled(this.prisma, request.clientId, ClientNotificationEvent.REQUEST_STATUS_CHANGED);
+    const updated = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.clientRequest.update({
         where: { id },
         data: {
@@ -487,7 +451,7 @@ export class ClientRequestsService {
         },
       });
 
-      if (await isClientNotificationEnabled(tx, request.clientId, ClientNotificationEvent.REQUEST_STATUS_CHANGED)) {
+      if (notifyClient) {
         await tx.clientNotification.create({
           data: {
             clientId: request.clientId,
@@ -502,82 +466,15 @@ export class ClientRequestsService {
 
       return updated;
     });
-  }
 
-  private updateRequestEventBody(
-    previous: { title: string; destinationCity: string | null },
-    updated: { title: string; destinationCity: string | null; items: Array<{ quantity: number }> },
-  ) {
-    return [
-      previous.title !== updated.title ? `Название: ${previous.title} -> ${updated.title}` : null,
-      this.normalizePoint(previous.destinationCity ?? '') !== this.normalizePoint(updated.destinationCity ?? '')
-        ? `Город: ${previous.destinationCity ?? '-'} -> ${updated.destinationCity ?? '-'}`
-        : null,
-      `Строк: ${updated.items.length}`,
-      `Количество: ${updated.items.reduce((sum, item) => sum + item.quantity, 0)}`,
-    ]
-      .filter(Boolean)
-      .join('\n');
-  }
+    if (notifyClient) {
+      void this.telegram?.notifyClient(
+        request.clientId,
+        ['LOGOFF WMS: заявка отменена.', `Заявка: ${updated.title}`, `Статус: ${request.status} -> ${ClientRequestStatus.CANCELLED}`].join('\n'),
+      );
+    }
 
-  private async hasLogisticsTariffForDestination(destinationCity: string) {
-    const normalizedDestination = this.normalizePoint(destinationCity);
-    const activeTariffSet = await this.prisma.logisticsTariffSet.findFirst({
-      where: {
-        AND: [
-          { OR: [{ activeFrom: null }, { activeFrom: { lte: new Date() } }] },
-          { OR: [{ activeTo: null }, { activeTo: { gte: new Date() } }] },
-        ],
-      },
-      orderBy: [{ activeFrom: 'desc' }, { createdAt: 'desc' }],
-      select: { id: true },
-    });
-    const directions = await this.prisma.logisticsDirection.findMany({
-      where: {
-        tariffSetId: activeTariffSet?.id,
-      },
-      select: { destination: true },
-      take: 2000,
-    });
-
-    return directions.some((direction) => this.normalizePoint(direction.destination) === normalizedDestination);
-  }
-
-  private async createLogisticsCostRequestEvent(
-    request: {
-      id: string;
-      clientId: string;
-      title: string;
-      destinationCity: string | null;
-      client?: { name: string };
-    },
-    user: AuthUser,
-    reason: string,
-  ) {
-    await this.prisma.clientRequestEvent.create({
-      data: {
-        requestId: request.id,
-        clientId: request.clientId,
-        eventType: ClientRequestEventType.COMMENT,
-        title: 'Нужен расчет логистики',
-        body: `${reason}\nГород: ${request.destinationCity ?? '-'}`,
-        createdByUserId: user.id,
-      },
-    });
-
-    void this.telegram?.notifyFulfillment(
-      [
-        'LOGOFF WMS: нужен расчет логистики.',
-        `Заявка: ${request.title}`,
-        `Клиент: ${request.client?.name ?? request.clientId}`,
-        `Город: ${request.destinationCity ?? '-'}`,
-        reason,
-      ].join('\n'),
-    );
-  }
-
-  private normalizePoint(value: string) {
-    return value.toLowerCase().replace(/\s*,\s*/g, ', ').replace(/\s+/g, ' ').trim();
+    return updated;
   }
 
   private async ensureSkuItemsBelongToClient(clientId: string, items: Array<{ skuId?: string }>) {
@@ -676,12 +573,7 @@ export class ClientRequestsService {
     return new Map(stockRows.map((row) => [row.skuId, Number(row._sum.quantity ?? 0)]));
   }
 
-  private async activeReservationBySkuId(
-    clientId: string,
-    skuIds: string[],
-    barcodes: string[],
-    excludeRequestId?: string,
-  ) {
+  private async activeReservationBySkuId(clientId: string, skuIds: string[], barcodes: string[], excludeRequestId?: string) {
     const empty = new Map<string, { quantity: number; requests: ClientRequestAvailabilityConflict[] }>();
     if (skuIds.length === 0 && barcodes.length === 0) {
       return empty;
@@ -689,8 +581,8 @@ export class ClientRequestsService {
 
     const requests = await this.prisma.clientRequest.findMany({
       where: {
-        id: excludeRequestId ? { not: excludeRequestId } : undefined,
         clientId,
+        ...(excludeRequestId?.trim() ? { id: { not: excludeRequestId.trim() } } : {}),
         type: ClientRequestType.OUTBOUND,
         status: { in: activeRequestStatuses },
         items: {
@@ -820,17 +712,21 @@ const activeRequestStatuses = [
   ClientRequestStatus.PACKED,
 ];
 
+const clientCancelableStatuses = new Set<ClientRequestStatus>([
+  ClientRequestStatus.SUBMITTED,
+  ClientRequestStatus.IN_REVIEW,
+  ClientRequestStatus.APPROVED,
+]);
+
 const clientEditableStatuses = new Set<ClientRequestStatus>([
   ClientRequestStatus.SUBMITTED,
   ClientRequestStatus.IN_REVIEW,
   ClientRequestStatus.APPROVED,
 ]);
 
-const clientCancelableStatuses = new Set<ClientRequestStatus>([
-  ClientRequestStatus.SUBMITTED,
-  ClientRequestStatus.IN_REVIEW,
-  ClientRequestStatus.APPROVED,
-]);
+function canEditClientRequestAnyStatus(user: AuthUser) {
+  return user.permissionCodes.includes('system:admin') || user.roleCodes.some((role) => ['ADMIN', 'OWNER', 'MANAGER'].includes(role));
+}
 
 const clientRequestInclude = {
   client: {
@@ -861,10 +757,6 @@ const clientRequestInclude = {
           id: true,
           internalSku: true,
           name: true,
-          clientSku: true,
-          article: true,
-          color: true,
-          size: true,
         },
       },
     },

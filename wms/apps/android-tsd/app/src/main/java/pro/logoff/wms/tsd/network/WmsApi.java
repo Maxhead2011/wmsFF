@@ -43,6 +43,13 @@ public interface WmsApi {
         @Query("barcode") String barcode
     );
 
+    @GET("api/v1/tsd/receipts/check-kiz")
+    Call<TsdKizCheckResponse> checkReceiptKiz(
+        @Header("Authorization") String authorization,
+        @Query("clientId") String clientId,
+        @Query("kiz") String kiz
+    );
+
     @GET("api/v1/tsd/requests")
     Call<List<TsdAssemblyRequestSummary>> listAssemblyRequests(@Header("Authorization") String authorization);
 
@@ -50,6 +57,40 @@ public interface WmsApi {
     Call<TsdAssemblyPlan> getAssemblyRequest(
         @Header("Authorization") String authorization,
         @Path("id") String id
+    );
+
+    @GET("api/v1/tsd/requests/{id}/boxless-packing")
+    Call<TsdBoxlessPackingResponse> getBoxlessPacking(
+        @Header("Authorization") String authorization,
+        @Path("id") String id
+    );
+
+    @POST("api/v1/tsd/requests/{id}/boxless-packing/open-box")
+    Call<TsdBoxlessPackingResponse> openBoxlessPackingBox(
+        @Header("Authorization") String authorization,
+        @Path("id") String id,
+        @Body Map<String, Object> request
+    );
+
+    @POST("api/v1/tsd/requests/{id}/boxless-packing/scan-item")
+    Call<TsdBoxlessPackingResponse> scanBoxlessPackingItem(
+        @Header("Authorization") String authorization,
+        @Path("id") String id,
+        @Body Map<String, Object> request
+    );
+
+    @POST("api/v1/tsd/requests/{id}/boxless-packing/close-box")
+    Call<TsdBoxlessPackingResponse> closeBoxlessPackingBox(
+        @Header("Authorization") String authorization,
+        @Path("id") String id,
+        @Body Map<String, Object> request
+    );
+
+    @POST("api/v1/tsd/requests/{id}/boxless-packing/finish")
+    Call<TsdBoxlessPackingResponse> finishBoxlessPacking(
+        @Header("Authorization") String authorization,
+        @Path("id") String id,
+        @Body Map<String, Object> request
     );
 
     @POST("api/v1/tsd/requests/{id}/box-search/scan")

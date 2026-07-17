@@ -13,7 +13,6 @@ import {
 import { ClientRequestItemsEditor } from './ClientRequestItemsEditor';
 import { emptyClientRequestItem, normalizeClientRequestItems, type ClientRequestDraftItem } from './clientRequestItems';
 import { requestPriorityOptions, requestTypeOptions } from './clientRequestMeta';
-import { useLogisticsDestinationOptions } from './useLogisticsDestinationOptions';
 
 type ClientRequestCreateFormProps = {
   clients: ClientSummary[];
@@ -44,7 +43,6 @@ export function ClientRequestCreateForm({ clients, session, onCreated }: ClientR
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setSubmitting] = useState(false);
   const [isCheckingAvailability, setCheckingAvailability] = useState(false);
-  const destinationOptions = useLogisticsDestinationOptions(session.accessToken);
 
   const checkAvailability = useCallback(async (nextItems = items) => {
     const requestItems = normalizeClientRequestItems(nextItems);
@@ -179,23 +177,7 @@ export function ClientRequestCreateForm({ clients, session, onCreated }: ClientR
 
         <label>
           <span>Город поставки</span>
-          <input
-            list="client-request-destination-options"
-            required
-            value={destinationCity}
-            onFocus={(event) => destinationOptions.search(event.currentTarget.value)}
-            onChange={(event) => {
-              setDestinationCity(event.target.value);
-              destinationOptions.search(event.target.value);
-            }}
-          />
-          <datalist id="client-request-destination-options">
-            {destinationOptions.options.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.description}
-              </option>
-            ))}
-          </datalist>
+          <input required value={destinationCity} onChange={(event) => setDestinationCity(event.target.value)} />
         </label>
 
         <label className="client-request-fields__wide">

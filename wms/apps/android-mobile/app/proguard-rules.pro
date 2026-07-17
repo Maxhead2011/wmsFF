@@ -1,0 +1,3 @@
+-keepattributes Signature
+-keepattributes *Annotation*
+-dontwarn javax.annotation.**

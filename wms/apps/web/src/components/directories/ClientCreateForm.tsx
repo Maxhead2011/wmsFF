@@ -8,9 +8,7 @@ import {
   updateUserClientScopes,
   type AuthSession,
   type ClientKind,
-  type ClientLogisticsInvoiceMode,
   type ClientSummary,
-  type ClientStorageBillingMode,
   type CreateClientPayload,
   type UserSummary,
 } from '../../lib/api';
@@ -25,17 +23,6 @@ const clientKindOptions: Array<{ value: ClientKind; label: string }> = [
   { value: 'INDIVIDUAL_ENTREPRENEUR', label: 'Индивидуальный предприниматель' },
   { value: 'SELF_EMPLOYED', label: 'Самозанятый' },
   { value: 'INDIVIDUAL', label: 'Физическое лицо' },
-];
-
-const logisticsInvoiceModeOptions: Array<{ value: ClientLogisticsInvoiceMode; label: string }> = [
-  { value: 'SEPARATE', label: 'Логистика отдельным счетом' },
-  { value: 'SAME_INVOICE', label: 'Логистика в общем счете' },
-  { value: 'DISABLED', label: 'Не выставлять автоматически' },
-];
-
-const storageBillingModeOptions: Array<{ value: ClientStorageBillingMode; label: string }> = [
-  { value: 'MONTHLY', label: 'Хранение раз в месяц' },
-  { value: 'ON_SHIPMENT', label: 'Хранение по отгрузке' },
 ];
 
 const emptyClientForm = {
@@ -54,8 +41,8 @@ const emptyClientForm = {
   bankAccount: '',
   correspondentAccount: '',
   storageAccountingEnabled: false,
-  logisticsInvoiceMode: 'SEPARATE' as ClientLogisticsInvoiceMode,
-  storageBillingMode: 'MONTHLY' as ClientStorageBillingMode,
+  storesWithoutBoxes: false,
+  onlineReceiptVisibleToClient: false,
   fulfillmentManagerUserId: '',
 };
 
@@ -276,6 +263,24 @@ export function ClientCreateForm({ session }: ClientCreateFormProps) {
               onChange={(event) => setForm({ ...form, email: event.target.value })}
             />
           </label>
+          <label className="directory-checkbox">
+            <input
+              checked={form.onlineReceiptVisibleToClient}
+              type="checkbox"
+              onChange={(event) => setForm({ ...form, onlineReceiptVisibleToClient: event.target.checked })}
+            />
+            <span>Показывать онлайн-приемку клиенту</span>
+          </label>
+          <label>
+            <span>Вид приемки</span>
+            <select
+              value={form.storesWithoutBoxes ? 'WITHOUT_BOXES' : 'WITH_BOXES'}
+              onChange={(event) => setForm({ ...form, storesWithoutBoxes: event.target.value === 'WITHOUT_BOXES' })}
+            >
+              <option value="WITH_BOXES">С коробами</option>
+              <option value="WITHOUT_BOXES">Без коробов, поштучно</option>
+            </select>
+          </label>
           <label>
             <span>Менеджер фулфилмента</span>
             <select
@@ -298,32 +303,6 @@ export function ClientCreateForm({ session }: ClientCreateFormProps) {
               onChange={(event) => setForm({ ...form, storageAccountingEnabled: event.target.checked })}
             />
             <span>Вести учет хранения</span>
-          </label>
-          <label>
-            <span>Счета логистики</span>
-            <select
-              value={form.logisticsInvoiceMode}
-              onChange={(event) => setForm({ ...form, logisticsInvoiceMode: event.target.value as ClientLogisticsInvoiceMode })}
-            >
-              {logisticsInvoiceModeOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Начисление хранения</span>
-            <select
-              value={form.storageBillingMode}
-              onChange={(event) => setForm({ ...form, storageBillingMode: event.target.value as ClientStorageBillingMode })}
-            >
-              {storageBillingModeOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
           </label>
           <label>
             <span>Юр. адрес</span>
@@ -370,8 +349,6 @@ export function ClientCreateForm({ session }: ClientCreateFormProps) {
               `${createdClient.code} - ${createdClient.name}`,
               `${clientKindLabel(createdClient.clientKind)} · ИНН ${createdClient.inn}`,
               createdClient.storageAccountingEnabled ? 'Учет хранения включен' : 'Учет хранения отключен',
-              logisticsInvoiceModeLabel(createdClient.logisticsInvoiceMode),
-              storageBillingModeLabel(createdClient.storageBillingMode),
               selectedFulfillmentManager ? `Менеджер фулфилмента: ${selectedFulfillmentManager.name}` : 'Менеджер фулфилмента не назначен',
             ]}
           />
@@ -521,8 +498,8 @@ function compactPayload(form: typeof emptyClientForm): CreateClientPayload {
     ...optionalString('bankAccount', form.bankAccount),
     ...optionalString('correspondentAccount', form.correspondentAccount),
     storageAccountingEnabled: form.storageAccountingEnabled,
-    logisticsInvoiceMode: form.logisticsInvoiceMode,
-    storageBillingMode: form.storageBillingMode,
+    storesWithoutBoxes: form.storesWithoutBoxes,
+    onlineReceiptVisibleToClient: form.onlineReceiptVisibleToClient,
     ...optionalString('fulfillmentManagerUserId', form.fulfillmentManagerUserId),
   };
 }
@@ -536,20 +513,12 @@ function clientKindLabel(kind: ClientKind) {
   return clientKindOptions.find((option) => option.value === kind)?.label ?? kind;
 }
 
-function logisticsInvoiceModeLabel(mode: ClientLogisticsInvoiceMode) {
-  return logisticsInvoiceModeOptions.find((option) => option.value === mode)?.label ?? mode;
-}
-
-function storageBillingModeLabel(mode: ClientStorageBillingMode) {
-  return storageBillingModeOptions.find((option) => option.value === mode)?.label ?? mode;
-}
-
 function canUse(session: AuthSession, permission: string) {
   return session.user.permissionCodes.includes('system:admin') || session.user.permissionCodes.includes(permission);
 }
 
 function isClientOnlyUser(user: UserSummary) {
-  const internalRoles = ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR', 'TSD'];
+  const internalRoles = ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR'];
   return userHasClientRole(user) && !user.roles.some((item) => internalRoles.includes(item.role.code));
 }
 

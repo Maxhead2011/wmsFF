@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Optional } from '@nestjs/common';
 import { StockStatus, TsdReviewReason } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
@@ -6,12 +6,15 @@ import { ClientScopeService } from '../auth/client-scope.service';
 import { StockOperationsService } from '../stock/stock-operations.service';
 import { ScanOperationDto, SyncTsdOperationsDto } from './dto/scan-operation.dto';
 import { TsdDeviceService } from './tsd-device.service';
+import { TsdAssemblyService } from './tsd-assembly.service';
 import { TsdOperationLogService } from './tsd-operation-log.service';
 import { TsdOperationResult } from './tsd-operation.types';
 import { TsdPayloadParser } from './tsd-payload.parser';
 
 @Injectable()
 export class TsdSyncService {
+  private readonly requestLocks = new Map<string, Promise<void>>();
+
   constructor(
     private readonly stockOperations: StockOperationsService,
     private readonly devices: TsdDeviceService,
@@ -19,6 +22,7 @@ export class TsdSyncService {
     private readonly clientScopes: ClientScopeService,
     private readonly payloadParser: TsdPayloadParser,
     private readonly operationLog: TsdOperationLogService,
+    @Optional() private readonly assembly?: TsdAssemblyService,
   ) {}
 
   async acceptOperation(operation: ScanOperationDto, user: AuthUser) {
@@ -59,7 +63,13 @@ export class TsdSyncService {
       }
 
       if (operation.operationType === 'move_scan') {
-        return await this.applyMoveScan(operation, user);
+        const requestId = optionalText(operation.payload.requestId);
+        return requestId
+          ? await this.withRequestLock(requestId, async () => {
+              await this.assembly?.assertMovementProgressAvailable(requestId, operation.payload, user);
+              return this.applyMoveScan(operation, user);
+            })
+          : await this.applyMoveScan(operation, user);
       }
 
       if (operation.operationType === 'receipt_scan') {
@@ -67,7 +77,7 @@ export class TsdSyncService {
       }
 
       if (operation.operationType === 'assembly_stage') {
-        return await this.operationLog.recordResult(operation, 'ACCEPTED', 'Этап сборки отмечен.');
+        return await this.applyAssemblyProgress(operation, user);
       }
 
       return await this.applyInventoryScan(operation, user);
@@ -78,6 +88,40 @@ export class TsdSyncService {
         caught instanceof Error ? caught.message : 'Операция ТСД отклонена.',
         TsdReviewReason.VALIDATION_ERROR,
       );
+    }
+  }
+
+  private async applyAssemblyProgress(operation: ScanOperationDto, user: AuthUser) {
+    const requestId = optionalText(operation.payload.requestId);
+    const action = optionalText(operation.payload.action) ?? optionalText(operation.payload.progressKind);
+    if (!requestId || !action || !['relabel-complete', 'outgoing-confirm'].includes(action)) {
+      return this.operationLog.recordResult(operation, 'ACCEPTED');
+    }
+
+    return this.withRequestLock(requestId, async () => {
+      if (action === 'relabel-complete') {
+        await this.assembly?.assertRelabelProgressAvailable(requestId, operation.payload, user);
+      } else {
+        await this.assembly?.assertOutgoingBoxAvailable(requestId, operation.payload, user);
+      }
+      return this.operationLog.recordResult(operation, 'ACCEPTED');
+    });
+  }
+
+  private async withRequestLock<T>(requestId: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.requestLocks.get(requestId) ?? Promise.resolve();
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = previous.then(() => gate);
+    this.requestLocks.set(requestId, tail);
+    await previous;
+    try {
+      return await task();
+    } finally {
+      release();
+      if (this.requestLocks.get(requestId) === tail) this.requestLocks.delete(requestId);
     }
   }
 
@@ -108,13 +152,24 @@ export class TsdSyncService {
     const payload = this.payloadParser.parseReceiptPayload(operation.payload);
 
     try {
+      const client = await this.prisma.client.findUnique({
+        where: { id: payload.clientId },
+        select: { storesWithoutBoxes: true },
+      });
+      if (!client) {
+        throw new BadRequestException('Клиент приемки не найден.');
+      }
+      if (!client.storesWithoutBoxes && !payload.boxCode) {
+        throw new BadRequestException('Для этого клиента приемка выполняется с коробами. Сначала отсканируйте номер короба.');
+      }
+
       const receipt = await this.stockOperations.receiveIntoBox(
         {
           clientId: payload.clientId,
           barcode: payload.barcode,
           skuId: payload.skuId,
           kiz: payload.kiz,
-          boxCode: payload.boxCode,
+          boxCode: client.storesWithoutBoxes ? undefined : payload.boxCode,
           quantity: payload.quantity,
           status: payload.status,
           sourceDocument: payload.sourceDocument,
@@ -202,4 +257,8 @@ export class TsdSyncService {
       })
       .then((barcode) => barcode?.sku ?? null);
   }
+}
+
+function optionalText(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }

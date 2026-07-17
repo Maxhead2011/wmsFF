@@ -27,7 +27,7 @@ describe('TsdSyncService', () => {
           deviceId: 'tsd-1',
           operationKey: 'receipt-1',
           operationType: 'receipt_scan',
-          payload: { clientId: 'client-1', barcode: '4600001', kiz: 'KIZ-1', boxCode: 'RCV-1', quantity: '2' },
+          payload: { clientId: 'client-1', barcode: '4600001', boxCode: 'FFL_RCV_1', quantity: '2' },
         },
         user,
       ),
@@ -40,11 +40,34 @@ describe('TsdSyncService', () => {
       expect.objectContaining({
         clientId: 'client-1',
         barcode: '4600001',
-        kiz: 'KIZ-1',
-        boxCode: 'RCV-1',
+        boxCode: 'FFL_RCV_1',
         quantity: 2,
         idempotencyKey: 'receipt-1',
       }),
+      user,
+    );
+  });
+
+  it('принимает товар без короба для клиента с поштучной приемкой', async () => {
+    const receiveIntoBox = vi.fn().mockResolvedValue({ status: 'APPLIED' });
+    const service = createService({
+      receiveIntoBox,
+      prisma: { client: { findUnique: vi.fn().mockResolvedValue({ storesWithoutBoxes: true }) } },
+    });
+
+    const result = await service.acceptOperation(
+      {
+        deviceId: 'tsd-1',
+        operationKey: 'receipt-unboxed-1',
+        operationType: 'receipt_scan',
+        payload: { clientId: 'client-1', barcode: '4600003', quantity: 1 },
+      },
+      user,
+    );
+
+    expect(result.status).toBe('APPLIED');
+    expect(receiveIntoBox).toHaveBeenCalledWith(
+      expect.objectContaining({ clientId: 'client-1', barcode: '4600003', boxCode: undefined, quantity: 1 }),
       user,
     );
   });
@@ -63,8 +86,8 @@ describe('TsdSyncService', () => {
             payload: {
               clientId: 'client-1',
               barcode: '4600001',
-              fromBoxCode: 'BOX-1',
-              toBoxCode: 'BOX-2',
+              fromBoxCode: 'FFL_BOX_1',
+              toBoxCode: 'FFL_BOX_2',
               quantity: '3',
             },
           },
@@ -78,8 +101,8 @@ describe('TsdSyncService', () => {
       expect.objectContaining({
         clientId: 'client-1',
         barcode: '4600001',
-        fromBoxCode: 'BOX-1',
-        toBoxCode: 'BOX-2',
+        fromBoxCode: 'FFL_BOX_1',
+        toBoxCode: 'FFL_BOX_2',
         quantity: 3,
         idempotencyKey: 'move-1',
       }),
@@ -104,7 +127,7 @@ describe('TsdSyncService', () => {
             deviceId: 'tsd-1',
             operationKey: 'receipt-2',
             operationType: 'receipt_scan',
-            payload: { clientId: 'client-1', barcode: '4600002', boxCode: 'RCV-1', quantity: 1 },
+            payload: { clientId: 'client-1', barcode: '4600002', boxCode: 'FFL_RCV_1', quantity: 1 },
           },
         ],
       },
@@ -138,7 +161,7 @@ describe('TsdSyncService', () => {
             deviceId: 'tsd-1',
             operationKey: 'inventory-mismatch',
             operationType: 'inventory_scan',
-            payload: { clientId: 'client-1', barcode: '4600002', boxCode: 'BOX-1', countedQuantity: 3 },
+            payload: { clientId: 'client-1', barcode: '4600002', boxCode: 'FFL_BOX_1', countedQuantity: 3 },
           },
         ],
       },
@@ -196,7 +219,7 @@ describe('TsdSyncService', () => {
             deviceId: 'tsd-1',
             operationKey: 'inventory-reviewed',
             operationType: 'inventory_scan',
-            payload: { clientId: 'client-1', barcode: '4600002', boxCode: 'BOX-1', countedQuantity: 3 },
+            payload: { clientId: 'client-1', barcode: '4600002', boxCode: 'FFL_BOX_1', countedQuantity: 3 },
           },
         ],
       },
@@ -211,6 +234,43 @@ describe('TsdSyncService', () => {
       resolutionMessage: 'Отклонено: нужен повторный пересчет',
     });
   });
+
+  it('последовательно проверяет одну позицию при параллельной работе двух ТСД', async () => {
+    let remaining = 1;
+    let activeChecks = 0;
+    let maxActiveChecks = 0;
+    const assertRelabelProgressAvailable = vi.fn().mockImplementation(async () => {
+      activeChecks += 1;
+      maxActiveChecks = Math.max(maxActiveChecks, activeChecks);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      activeChecks -= 1;
+      if (remaining <= 0) throw new Error('Уже выполнено другим сборщиком');
+      remaining -= 1;
+    });
+    const service = createService({
+      assembly: { assertRelabelProgressAvailable, assertOutgoingBoxAvailable: vi.fn(), assertMovementProgressAvailable: vi.fn() },
+    });
+    const operation = (deviceId: string, operationKey: string) => ({
+      deviceId,
+      operationKey,
+      operationType: 'assembly_stage' as const,
+      payload: {
+        requestId: 'request-1',
+        action: 'relabel-complete',
+        sourceBox: 'FFL_BOX_1',
+        oldBarcode: '4600001',
+        newBarcode: '4600002',
+      },
+    });
+
+    const [first, second] = await Promise.all([
+      service.acceptOperation(operation('tsd-1', 'relabel-1'), user),
+      service.acceptOperation(operation('tsd-2', 'relabel-2'), user),
+    ]);
+
+    expect([first.status, second.status].sort()).toEqual(['ACCEPTED', 'REJECTED']);
+    expect(maxActiveChecks).toBe(1);
+  });
 });
 
 function createService(
@@ -218,6 +278,7 @@ function createService(
     transferBetweenBoxes?: ReturnType<typeof vi.fn>;
     receiveIntoBox?: ReturnType<typeof vi.fn>;
     prisma?: Record<string, unknown>;
+    assembly?: Record<string, unknown>;
   } = {},
 ) {
   const prisma = {
@@ -237,6 +298,9 @@ function createService(
     stockBalance: {
       findFirst: vi.fn().mockResolvedValue(null),
     },
+    client: {
+      findUnique: vi.fn().mockResolvedValue({ storesWithoutBoxes: false }),
+    },
     ...overrides.prisma,
   };
 
@@ -255,5 +319,6 @@ function createService(
     clientScopes as never,
     new TsdPayloadParser(),
     new TsdOperationLogService(prisma as never, clientScopes as never),
+    overrides.assembly as never,
   );
 }

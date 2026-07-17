@@ -435,6 +435,11 @@
   display: block;
 }
 
+.sku-directory-table__actions {
+  width: 48px;
+  text-align: right;
+}
+
 .sku-directory-table__name + span {
   margin-top: 2px;
   color: var(--muted);
@@ -519,6 +524,89 @@
   color: var(--muted);
   font-size: 13px;
   font-weight: 700;
+}
+
+.sku-details-card__actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.nomenclature-edit-backdrop {
+  position: fixed;
+  z-index: 90;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  background: rgb(15 23 42 / 0.5);
+  padding: 20px;
+}
+
+.nomenclature-edit-dialog {
+  display: grid;
+  width: min(820px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 20px 52px rgb(15 23 42 / 0.22);
+  padding: 16px;
+}
+
+.nomenclature-edit-dialog > header,
+.nomenclature-edit-dialog > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.nomenclature-edit-dialog > header span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.nomenclature-edit-dialog > header h3 {
+  margin: 3px 0 0;
+  font-size: 18px;
+}
+
+.nomenclature-edit-dialog__fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.nomenclature-edit-dialog__fields label:not(.directory-checkbox) {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.nomenclature-edit-dialog__fields label > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.nomenclature-edit-dialog__fields input[type='text'],
+.nomenclature-edit-dialog__fields input:not([type]) {
+  width: 100%;
+}
+
+.nomenclature-edit-dialog__wide {
+  grid-column: 1 / -1;
+}
+
+.nomenclature-edit-dialog > footer {
+  justify-content: flex-end;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
 }
 
 .sku-details-card__facts,
@@ -651,6 +739,20 @@
   .sku-details-card__facts,
   .sku-details-card__properties,
   .sku-details-card__metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .nomenclature-edit-backdrop {
+    align-items: start;
+    padding: 10px;
+  }
+
+  .nomenclature-edit-dialog {
+    max-height: calc(100vh - 20px);
+    padding: 12px;
+  }
+
+  .nomenclature-edit-dialog__fields {
     grid-template-columns: 1fr;
   }
 

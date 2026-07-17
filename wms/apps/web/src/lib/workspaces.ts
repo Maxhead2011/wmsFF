@@ -1,5 +1,4 @@
 import {
-  BadgePercent,
   BriefcaseBusiness,
   Building2,
   Boxes,
@@ -8,11 +7,11 @@ import {
   ClipboardList,
   Database,
   FolderCog,
+  HandCoins,
   LayoutDashboard,
   PackageSearch,
   Printer,
   RefreshCw,
-  ReceiptText,
   ShieldCheck,
   Settings2,
   Truck,
@@ -24,7 +23,6 @@ import type { AuthUser } from './api';
 export type WorkspaceId =
   | 'overview'
   | 'cabinet'
-  | 'referrals'
   | 'access'
   | 'directories'
   | 'imports'
@@ -33,8 +31,8 @@ export type WorkspaceId =
   | 'turnover'
   | 'requests'
   | 'catalog'
-  | 'services'
   | 'billing'
+  | 'services'
   | 'own-companies'
   | 'print'
   | 'service'
@@ -74,16 +72,6 @@ export const workspaceNav: WorkspaceNavItem[] = [
     icon: BriefcaseBusiness,
     status: 'in-progress',
     audience: 'client',
-  },
-  {
-    id: 'referrals',
-    title: 'Рефералка',
-    eyebrow: 'Партнер',
-    description: 'Виджет по назначенным клиентам: услуги ФФ, процент и сумма реферальной программы.',
-    permissions: ['referrals:read'],
-    icon: BadgePercent,
-    status: 'ready',
-    audience: 'all',
   },
   {
     id: 'access',
@@ -156,17 +144,6 @@ export const workspaceNav: WorkspaceNavItem[] = [
     audience: 'internal',
   },
   {
-    id: 'services',
-    title: 'Услуги',
-    eyebrow: 'Управление',
-    description: 'Услуги клиентов, цены, налоговый режим и активность для выставления счетов.',
-    permissions: ['billing:read', 'billing:write'],
-    permissionMode: 'all',
-    icon: ReceiptText,
-    status: 'ready',
-    audience: 'internal',
-  },
-  {
     id: 'logistics',
     title: 'Логистика',
     eyebrow: 'Тарифы',
@@ -175,6 +152,16 @@ export const workspaceNav: WorkspaceNavItem[] = [
     icon: Truck,
     status: 'ready',
     audience: 'all',
+  },
+  {
+    id: 'services',
+    title: 'Услуги',
+    eyebrow: 'Цены клиентов',
+    description: 'Подключение услуг клиенту, индивидуальные цены и учет налога.',
+    permissions: ['billing:write'],
+    icon: HandCoins,
+    status: 'ready',
+    audience: 'internal',
   },
   {
     id: 'billing',
@@ -219,7 +206,7 @@ export const workspaceNav: WorkspaceNavItem[] = [
   {
     id: 'debug',
     title: 'Отладка',
-    eyebrow: 'Управление',
+    eyebrow: 'Контроль',
     description: 'Быстрое редактирование клиентов, пользователей, операторов и служебных параметров БД.',
     permissions: ['system:admin'],
     icon: Bug,
@@ -229,7 +216,7 @@ export const workspaceNav: WorkspaceNavItem[] = [
   {
     id: 'data',
     title: 'Данные',
-    eyebrow: 'Управление',
+    eyebrow: 'Контроль',
     description: 'Таблицы остатков, клиентов, SKU и очередь разбора ТСД.',
     permissions: ['clients:read', 'skus:read', 'stock:read'],
     icon: Database,
@@ -255,6 +242,6 @@ export function canOpenWorkspace(user: AuthUser, item: WorkspaceNavItem) {
 }
 
 function isClientOnlyUser(user: AuthUser) {
-  const internalRoles = ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR', 'TSD'];
+  const internalRoles = ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR'];
   return user.roleCodes.includes('CLIENT') && !user.roleCodes.some((roleCode) => internalRoles.includes(roleCode));
 }

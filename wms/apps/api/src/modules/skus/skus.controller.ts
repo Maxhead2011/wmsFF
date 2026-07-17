@@ -1,7 +1,6 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, StreamableFile, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
-import type { Response } from 'express';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
@@ -24,7 +23,7 @@ export class SkusController {
     @Query('search') search?: string,
     @Query('draftsOnly') draftsOnly?: string,
   ) {
-    return this.skus.list({ clientId, search, draftsOnly: draftsOnly === 'true' || draftsOnly === '1' }, user);
+    return this.skus.list({ clientId, search, draftsOnly: draftsOnly === 'true' }, user);
   }
 
   @Get('nomenclature')
@@ -36,6 +35,12 @@ export class SkusController {
   @RequirePermissions('skus:write')
   createNomenclature(@Body() dto: CreateNomenclatureItemDto) {
     return this.skus.createNomenclature(dto);
+  }
+
+  @Patch('nomenclature/:id')
+  @RequirePermissions('skus:write')
+  updateNomenclature(@Param('id') id: string, @Body() dto: CreateNomenclatureItemDto) {
+    return this.skus.updateNomenclature(id, dto);
   }
 
   @Post('nomenclature/import-xlsx')
@@ -71,29 +76,6 @@ export class SkusController {
     return this.skus.importArticleMappingsWorkbook(clientId, file, user);
   }
 
-  @Get('drafts/template.xlsx')
-  downloadDraftTemplate(@Res({ passthrough: true }) response: Response) {
-    const file = this.skus.buildDraftTemplateWorkbook();
-    response.setHeader('Content-Type', file.mimeType);
-    response.setHeader('Content-Length', String(file.content.length));
-    response.setHeader('Content-Disposition', contentDisposition(file.fileName));
-
-    return new StreamableFile(file.content);
-  }
-
-  @Post('drafts/import-xlsx')
-  @RequirePermissions('skus:write')
-  @ApiConsumes('multipart/form-data')
-  @ApiBody({ description: 'Excel-файл дозаполнения товаров после приемки' })
-  @UseInterceptors(FileInterceptor('file'))
-  importDraftsXlsx(
-    @UploadedFile() file: Express.Multer.File,
-    @Query('clientId') clientId: string,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.skus.importDraftWorkbook(clientId, file, user);
-  }
-
   @Get(':id')
   get(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.skus.get(id, user);
@@ -125,9 +107,4 @@ export class SkusController {
   importXlsx(@UploadedFile() file: Express.Multer.File) {
     return this.skus.importNomenclatureWorkbook(file);
   }
-}
-
-function contentDisposition(fileName: string) {
-  const asciiName = fileName.replace(/[^\x20-\x7E]+/g, '_').replace(/"/g, '');
-  return `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
 }

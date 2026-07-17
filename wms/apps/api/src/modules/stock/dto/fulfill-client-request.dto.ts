@@ -59,14 +59,6 @@ export class FulfillClientRequestDto {
   requestId!: string;
 
   @IsOptional()
-  @IsString()
-  idempotencyKey?: string;
-
-  @IsOptional()
-  @IsString()
-  comment?: string;
-
-  @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(0)
@@ -81,8 +73,16 @@ export class FulfillClientRequestDto {
   @IsOptional()
   @Type(() => Number)
   @IsInt()
-  @Min(1)
+  @Min(0)
   packedUnits?: number;
+
+  @IsOptional()
+  @IsString()
+  idempotencyKey?: string;
+
+  @IsOptional()
+  @IsString()
+  comment?: string;
 
   @IsOptional()
   @IsArray()

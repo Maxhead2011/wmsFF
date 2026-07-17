@@ -113,10 +113,19 @@ enum MovementType {
 
 enum PickWaveStatus {
   PLANNED
+  BALANCE_REVIEW
+  FROZEN
   PICKING
   DONE
   FAILED
   CANCELLED
+}
+
+enum PickWaveBalanceReviewStatus {
+  PENDING
+  SUBMITTED
+  APPROVED
+  NOT_REQUIRED
 }
 
 enum PickWaveRequestStatus {
@@ -281,8 +290,77 @@ model User {
   updatedReferralClients         UserReferralClient[]           @relation("UserReferralUpdatedBy")
   systemSettings                 SystemSetting[]
   auditLogs                      AuditLog[]
+  mobileDevices                  MobileDevice[]
+  mobileSessions                 MobileSession[]
+  mobileCommands                 MobileCommand[]
   createdAt                      DateTime                       @default(now())
   updatedAt                      DateTime                       @updatedAt
+}
+
+model MobileDevice {
+  id             String               @id @default(uuid())
+  userId         String
+  installationId String               @unique
+  name           String?
+  platform       String               @default("ANDROID")
+  appVersion     String?
+  fcmToken       String?              @unique
+  isActive       Boolean              @default(true)
+  lastSeenAt     DateTime             @default(now())
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions       MobileSession[]
+  pushDeliveries MobilePushDelivery[]
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  @@index([userId, isActive])
+  @@index([lastSeenAt])
+}
+
+model MobilePushDelivery {
+  id             String       @id @default(uuid())
+  deviceId       String
+  notificationId String
+  status         String       @default("SENT")
+  error          String?
+  device         MobileDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+
+  @@unique([deviceId, notificationId])
+  @@index([notificationId])
+}
+
+model MobileSession {
+  id               String       @id @default(uuid())
+  userId           String
+  deviceId         String
+  refreshTokenHash String       @unique
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  lastUsedAt       DateTime     @default(now())
+  user             User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device           MobileDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@index([userId, revokedAt, expiresAt])
+  @@index([deviceId, revokedAt])
+}
+
+model MobileCommand {
+  id             String   @id @default(uuid())
+  userId         String
+  idempotencyKey String
+  action         String
+  status         String   @default("COMPLETED")
+  response       Json?
+  expiresAt      DateTime
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([userId, idempotencyKey])
+  @@index([expiresAt])
 }
 
 model SystemSetting {
@@ -336,17 +414,17 @@ model UserClient {
 model UserReferralClient {
   userId          String
   clientId        String
-  percent         Decimal  @db.Decimal(5, 2)
-  isActive        Boolean  @default(true)
-  startsAt        DateTime @default(now())
+  percent         Decimal   @db.Decimal(5, 2)
+  isActive        Boolean   @default(true)
+  startsAt        DateTime  @default(now())
   expiresAt       DateTime?
   termMonths      Int?
   updatedByUserId String?
-  user            User     @relation("UserReferralAssignments", fields: [userId], references: [id], onDelete: Cascade)
-  client          Client   @relation(fields: [clientId], references: [id])
-  updatedBy       User?    @relation("UserReferralUpdatedBy", fields: [updatedByUserId], references: [id])
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  user            User      @relation("UserReferralAssignments", fields: [userId], references: [id], onDelete: Cascade)
+  client          Client    @relation(fields: [clientId], references: [id])
+  updatedBy       User?     @relation("UserReferralUpdatedBy", fields: [updatedByUserId], references: [id])
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   @@id([userId, clientId])
   @@index([clientId])
@@ -377,87 +455,88 @@ model RolePermission {
 }
 
 model Client {
-  id                       String                         @id @default(uuid())
-  code                     String                         @unique
-  name                     String
-  isDemo                   Boolean                        @default(false)
-  clientKind               ClientKind                     @default(LEGAL_ENTITY)
-  legalName                String?
-  inn                      String?
-  kpp                      String?
-  ogrn                     String?
-  legalAddress             String?
-  actualAddress            String?
-  phone                    String?
-  email                    String?
-  telegramChatId           String?
-  bankName                 String?
-  bankBik                  String?
-  bankAccount              String?
-  correspondentAccount     String?
-  storageAccountingEnabled Boolean                        @default(false)
-  storagePriceRubPerLiterDay Decimal?                       @db.Decimal(12, 4)
-  logisticsInvoiceMode     ClientLogisticsInvoiceMode     @default(SEPARATE)
-  storageBillingMode       ClientStorageBillingMode       @default(MONTHLY)
-  storesWithoutBoxes       Boolean                        @default(false)
-  fulfillmentManagerUserId String?
-  status                   ClientStatus                   @default(ACTIVE)
-  fulfillmentManager       User?                          @relation("ClientFulfillmentManager", fields: [fulfillmentManagerUserId], references: [id])
-  skus                     Sku[]
-  boxes                    Box[]
-  pallets                  Pallet[]
-  movements                StockMovement[]
-  userScopes               UserClient[]
-  requests                 ClientRequest[]
-  billingCharges           BillingCharge[]
-  billingInvoices          BillingInvoice[]
-  billingPayments          BillingPayment[]
-  billingServicePrices      ClientBillingService[]
-  deliveryRequests         LogisticsDeliveryRequest[]
-  requestFiles             ClientRequestFile[]
-  requestPackages          ClientRequestPackage[]
-  notifications            ClientNotification[]
-  notificationPreferences  ClientNotificationPreference[]
-  marketplaceConnections   ClientMarketplaceConnection[]
-  articleMappings          ClientArticleMapping[]
-  allowedIps               ClientAllowedIp[]
-  productMarks             ProductMark[]
-  referralUsers            UserReferralClient[]
-  requestComments          ClientRequestComment[]
-  requestEvents            ClientRequestEvent[]
-  createdAt                DateTime                       @default(now())
-  updatedAt                DateTime                       @updatedAt
+  id                           String                         @id @default(uuid())
+  code                         String                         @unique
+  name                         String
+  isDemo                       Boolean                        @default(false)
+  clientKind                   ClientKind                     @default(LEGAL_ENTITY)
+  legalName                    String?
+  inn                          String?
+  kpp                          String?
+  ogrn                         String?
+  legalAddress                 String?
+  actualAddress                String?
+  phone                        String?
+  email                        String?
+  telegramChatId               String?
+  bankName                     String?
+  bankBik                      String?
+  bankAccount                  String?
+  correspondentAccount         String?
+  storageAccountingEnabled     Boolean                        @default(false)
+  storagePriceRubPerLiterDay   Decimal?                       @db.Decimal(12, 4)
+  logisticsInvoiceMode         ClientLogisticsInvoiceMode     @default(SEPARATE)
+  storageBillingMode           ClientStorageBillingMode       @default(MONTHLY)
+  storesWithoutBoxes           Boolean                        @default(false)
+  onlineReceiptVisibleToClient Boolean                        @default(false)
+  fulfillmentManagerUserId     String?
+  status                       ClientStatus                   @default(ACTIVE)
+  fulfillmentManager           User?                          @relation("ClientFulfillmentManager", fields: [fulfillmentManagerUserId], references: [id])
+  skus                         Sku[]
+  boxes                        Box[]
+  pallets                      Pallet[]
+  movements                    StockMovement[]
+  userScopes                   UserClient[]
+  requests                     ClientRequest[]
+  billingCharges               BillingCharge[]
+  billingInvoices              BillingInvoice[]
+  billingPayments              BillingPayment[]
+  billingServicePrices         ClientBillingService[]
+  deliveryRequests             LogisticsDeliveryRequest[]
+  requestFiles                 ClientRequestFile[]
+  requestPackages              ClientRequestPackage[]
+  notifications                ClientNotification[]
+  notificationPreferences      ClientNotificationPreference[]
+  marketplaceConnections       ClientMarketplaceConnection[]
+  articleMappings              ClientArticleMapping[]
+  allowedIps                   ClientAllowedIp[]
+  productMarks                 ProductMark[]
+  referralUsers                UserReferralClient[]
+  requestComments              ClientRequestComment[]
+  requestEvents                ClientRequestEvent[]
+  createdAt                    DateTime                       @default(now())
+  updatedAt                    DateTime                       @updatedAt
 
   @@index([fulfillmentManagerUserId])
 }
 
 model UserSession {
-  id             String    @id @default(uuid())
-  userId         String
-  accessTokenId  String?   @unique
-  ipAddress      String?
-  userAgent      String?
-  appName        String    @default("WMS")
-  browserName    String    @default("Unknown")
-  startedAt      DateTime  @default(now())
-  lastSeenAt     DateTime  @default(now())
-  expiresAt      DateTime?
-  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @default(now()) @updatedAt
+  id            String    @id @default(uuid())
+  userId        String
+  accessTokenId String?   @unique
+  ipAddress     String?
+  userAgent     String?
+  appName       String    @default("WMS")
+  browserName   String    @default("Unknown")
+  startedAt     DateTime  @default(now())
+  lastSeenAt    DateTime  @default(now())
+  expiresAt     DateTime?
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @default(now()) @updatedAt
 
   @@index([userId, lastSeenAt])
   @@index([expiresAt])
 }
 
 model ClientAllowedIp {
-  id              String   @id @default(uuid())
-  clientId        String
-  ipAddress       String
-  comment         String?
-  client          Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id        String   @id @default(uuid())
+  clientId  String
+  ipAddress String
+  comment   String?
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([clientId, ipAddress])
   @@index([clientId])
@@ -491,8 +570,8 @@ model ClientMarketplaceConnection {
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
-  @@index([clientId])
   @@unique([clientId, marketplace, accountName])
+  @@index([clientId])
 }
 
 model Warehouse {
@@ -516,43 +595,43 @@ model Zone {
 }
 
 model Sku {
-  id                 String                     @id @default(uuid())
-  clientId           String
-  internalSku        String
-  clientSku          String?
-  article            String?
-  name               String
-  brand              String?
-  category           String?
-  color              String?
-  size               String?
-  weightGrams        Int?
-  lengthCm           Decimal?                   @db.Decimal(10, 2)
-  widthCm            Decimal?                   @db.Decimal(10, 2)
-  heightCm           Decimal?                   @db.Decimal(10, 2)
-  volumeLiters       Decimal?                   @db.Decimal(12, 3)
-  volumeSource       VolumeSource               @default(CALCULATED)
-  shelfLifeUntil     DateTime?
-  needsChestnyZnak   Boolean                    @default(false)
-  isUnmarked         Boolean                    @default(false)
-  needsLabel         Boolean                    @default(false)
-  needsRelabel       Boolean                    @default(false)
-  isDraft            Boolean                    @default(false)
-  draftSource        String?
-  marketplace        MarketplaceType?
+  id                   String                     @id @default(uuid())
+  clientId             String
+  internalSku          String
+  clientSku            String?
+  article              String?
+  name                 String
+  brand                String?
+  category             String?
+  color                String?
+  size                 String?
+  weightGrams          Int?
+  lengthCm             Decimal?                   @db.Decimal(10, 2)
+  widthCm              Decimal?                   @db.Decimal(10, 2)
+  heightCm             Decimal?                   @db.Decimal(10, 2)
+  volumeLiters         Decimal?                   @db.Decimal(12, 3)
+  volumeSource         VolumeSource               @default(CALCULATED)
+  shelfLifeUntil       DateTime?
+  needsChestnyZnak     Boolean                    @default(false)
+  isUnmarked           Boolean                    @default(false)
+  needsLabel           Boolean                    @default(false)
+  needsRelabel         Boolean                    @default(false)
+  isDraft              Boolean                    @default(false)
+  draftSource          String?
+  marketplace          MarketplaceType?
   marketplaceProductId String?
-  marketplaceOfferId String?
-  marketplacePayload Json?
-  marketplaceSyncedAt DateTime?
-  client             Client                     @relation(fields: [clientId], references: [id])
-  barcodes           Barcode[]
-  movements          StockMovement[]
-  balances           StockBalance[]
-  clientRequestItems ClientRequestItem[]
-  packageItems       ClientRequestPackageItem[]
-  productMarks       ProductMark[]
-  createdAt          DateTime                   @default(now())
-  updatedAt          DateTime                   @updatedAt
+  marketplaceOfferId   String?
+  marketplacePayload   Json?
+  marketplaceSyncedAt  DateTime?
+  client               Client                     @relation(fields: [clientId], references: [id])
+  barcodes             Barcode[]
+  movements            StockMovement[]
+  balances             StockBalance[]
+  clientRequestItems   ClientRequestItem[]
+  packageItems         ClientRequestPackageItem[]
+  productMarks         ProductMark[]
+  createdAt            DateTime                   @default(now())
+  updatedAt            DateTime                   @updatedAt
 
   @@unique([clientId, internalSku])
   @@index([clientId, isDraft])
@@ -562,19 +641,19 @@ model Sku {
 }
 
 model NomenclatureItem {
-  id                 String   @id @default(uuid())
-  internalSku        String   @unique
-  article            String?
-  barcode            String?  @unique
-  name               String
-  printName          String?
-  unit               String?
-  itemType           String?
-  color              String?
-  size               String?
-  needsChestnyZnak   Boolean  @default(false)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id               String   @id @default(uuid())
+  internalSku      String   @unique
+  article          String?
+  barcode          String?  @unique
+  name             String
+  printName        String?
+  unit             String?
+  itemType         String?
+  color            String?
+  size             String?
+  needsChestnyZnak Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   @@index([name])
   @@index([article])
@@ -591,17 +670,17 @@ model Barcode {
 }
 
 model Box {
-  id        String          @id @default(uuid())
-  clientId  String
-  zoneId    String?
-  palletId  String?
-  code      String
-  status    String          @default("active")
-  client    Client          @relation(fields: [clientId], references: [id])
-  zone      Zone?           @relation(fields: [zoneId], references: [id])
-  pallet    Pallet?         @relation(fields: [palletId], references: [id])
-  movements StockMovement[]
-  balances  StockBalance[]
+  id           String          @id @default(uuid())
+  clientId     String
+  zoneId       String?
+  palletId     String?
+  code         String
+  status       String          @default("active")
+  client       Client          @relation(fields: [clientId], references: [id])
+  zone         Zone?           @relation(fields: [zoneId], references: [id])
+  pallet       Pallet?         @relation(fields: [palletId], references: [id])
+  movements    StockMovement[]
+  balances     StockBalance[]
   productMarks ProductMark[]
 
   @@unique([clientId, code])
@@ -622,7 +701,7 @@ model Pallet {
 }
 
 model StockMovement {
-  id             String       @id @default(uuid())
+  id             String        @id @default(uuid())
   clientId       String
   skuId          String
   boxId          String?
@@ -631,16 +710,41 @@ model StockMovement {
   status         StockStatus
   quantity       Int
   sourceDocument String?
-  idempotencyKey String?      @unique
+  idempotencyKey String?       @unique
   comment        String?
-  client         Client       @relation(fields: [clientId], references: [id])
-  sku            Sku          @relation(fields: [skuId], references: [id])
-  box            Box?         @relation(fields: [boxId], references: [id])
+  client         Client        @relation(fields: [clientId], references: [id])
+  sku            Sku           @relation(fields: [skuId], references: [id])
+  box            Box?          @relation(fields: [boxId], references: [id])
   productMarks   ProductMark[]
-  createdAt      DateTime     @default(now())
+  createdAt      DateTime      @default(now())
 
   @@index([clientId, skuId, status])
   @@index([boxId])
+}
+
+model StockTransferBatch {
+  id               String    @id @default(uuid())
+  clientId         String
+  fileName         String
+  mimeType         String
+  sizeBytes        Int
+  content          Bytes
+  status           String    @default("APPLIED")
+  rowCount         Int
+  appliedRowCount  Int
+  rejectedRowCount Int
+  quantity         Int
+  rows             Json
+  uploadedByUserId String?
+  uploadedByName   String?
+  reversedByUserId String?
+  reversedByName   String?
+  reversedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([clientId, createdAt])
+  @@index([status, createdAt])
 }
 
 model ProductMark {
@@ -738,21 +842,76 @@ model ClientRequestItem {
 }
 
 model PickWave {
-  id                   String            @id @default(uuid())
-  waveNumber           String            @unique
-  status               PickWaveStatus    @default(PLANNED)
-  comment              String?
-  createdByUserId      String?
-  assignedPickerUserId String?
-  createdBy            User?             @relation("PickWaveCreatedBy", fields: [createdByUserId], references: [id])
-  assignedPicker       User?             @relation("PickWaveAssignedPicker", fields: [assignedPickerUserId], references: [id])
-  requests             PickWaveRequest[]
-  createdAt            DateTime          @default(now())
-  updatedAt            DateTime          @updatedAt
+  id                             String                      @id @default(uuid())
+  waveNumber                     String                      @unique
+  status                         PickWaveStatus              @default(PLANNED)
+  comment                        String?
+  plan                           Json?
+  planVersion                    Int                         @default(1)
+  planGeneratedAt                DateTime?
+  planFrozenAt                   DateTime?
+  balanceReviewStatus            PickWaveBalanceReviewStatus @default(NOT_REQUIRED)
+  balanceReviewSubmittedAt       DateTime?
+  balanceReviewSubmittedByUserId String?
+  createdByUserId                String?
+  assignedPickerUserId           String?
+  createdBy                      User?                       @relation("PickWaveCreatedBy", fields: [createdByUserId], references: [id])
+  assignedPicker                 User?                       @relation("PickWaveAssignedPicker", fields: [assignedPickerUserId], references: [id])
+  requests                       PickWaveRequest[]
+  balanceLines                   PickWaveBalanceLine[]
+  createdAt                      DateTime                    @default(now())
+  updatedAt                      DateTime                    @updatedAt
 
   @@index([status, createdAt])
   @@index([createdByUserId])
   @@index([assignedPickerUserId])
+}
+
+model PickWaveBalanceLine {
+  id                String                      @id @default(uuid())
+  waveId            String
+  balanceId         String
+  sourceBoxId       String?
+  sourceBoxCode     String
+  skuId             String
+  internalSku       String
+  barcode           String?
+  name              String
+  color             String?
+  size              String?
+  originalQuantity  Int
+  plannedQuantity   Int
+  remainingQuantity Int
+  keepQuantity      Int?
+  isReviewed        Boolean                     @default(false)
+  comment           String?
+  wave              PickWave                    @relation(fields: [waveId], references: [id], onDelete: Cascade)
+  allocations       PickWaveBalanceAllocation[]
+  createdAt         DateTime                    @default(now())
+  updatedAt         DateTime                    @updatedAt
+
+  @@unique([waveId, balanceId])
+  @@index([waveId, isReviewed])
+  @@index([sourceBoxCode])
+  @@index([skuId])
+}
+
+model PickWaveBalanceAllocation {
+  id                   String              @id @default(uuid())
+  lineId               String
+  requestId            String
+  quantity             Int
+  needsRelabel         Boolean             @default(false)
+  targetBarcode        String?
+  comment              String?
+  appliedRequestItemId String?
+  line                 PickWaveBalanceLine @relation(fields: [lineId], references: [id], onDelete: Cascade)
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  @@index([lineId])
+  @@index([requestId])
+  @@index([appliedRequestItemId])
 }
 
 model PickWaveRequest {
@@ -904,16 +1063,16 @@ model ClientNotificationPreference {
 }
 
 model BillingService {
-  id              String          @id @default(uuid())
-  code            String          @unique
+  id              String                 @id @default(uuid())
+  code            String                 @unique
   name            String
-  unit            BillingUnit     @default(SERVICE)
-  defaultPriceRub Decimal?        @db.Decimal(12, 2)
-  isActive        Boolean         @default(true)
+  unit            BillingUnit            @default(SERVICE)
+  defaultPriceRub Decimal?               @db.Decimal(12, 2)
+  isActive        Boolean                @default(true)
   charges         BillingCharge[]
   clientPrices    ClientBillingService[]
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
 }
 
 model ClientBillingService {
@@ -921,7 +1080,7 @@ model ClientBillingService {
   clientId        String
   serviceId       String
   priceRub        Decimal             @db.Decimal(12, 2)
-  taxMode         BillingPriceTaxMode  @default(INCLUDED)
+  taxMode         BillingPriceTaxMode @default(INCLUDED)
   isActive        Boolean             @default(true)
   comment         String?
   updatedByUserId String?
@@ -1045,25 +1204,25 @@ model BillingPayment {
 }
 
 model OwnCompany {
-  id                     String                  @id @default(uuid())
-  shortName              String
-  fullName               String
-  inn                    String
-  kpp                    String?
-  ogrn                   String?
-  legalAddress           String?
-  bankName               String?
-  bankBik                String?
-  bankAccount            String?
-  correspondentAccount   String?
-  paymentCode            String?
-  paymentPurposeCode     String?
-  isDefault              Boolean                 @default(false)
-  isActive               Boolean                 @default(true)
-  comment                String?
-  bankAccounts           OwnCompanyBankAccount[]
-  createdAt              DateTime                @default(now())
-  updatedAt              DateTime                @updatedAt
+  id                   String                  @id @default(uuid())
+  shortName            String
+  fullName             String
+  inn                  String
+  kpp                  String?
+  ogrn                 String?
+  legalAddress         String?
+  bankName             String?
+  bankBik              String?
+  bankAccount          String?
+  correspondentAccount String?
+  paymentCode          String?
+  paymentPurposeCode   String?
+  isDefault            Boolean                 @default(false)
+  isActive             Boolean                 @default(true)
+  comment              String?
+  bankAccounts         OwnCompanyBankAccount[]
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
 
   @@index([isDefault, isActive])
   @@index([inn])

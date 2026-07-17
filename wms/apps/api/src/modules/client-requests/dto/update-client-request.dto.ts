@@ -5,11 +5,34 @@ import {
   IsArray,
   IsDateString,
   IsEnum,
+  IsInt,
   IsOptional,
   IsString,
+  Min,
   ValidateNested,
 } from 'class-validator';
-import { CreateClientRequestItemDto } from './create-client-request.dto';
+
+export class UpdateClientRequestItemDto {
+  @IsOptional()
+  @IsString()
+  skuId?: string;
+
+  @IsOptional()
+  @IsString()
+  barcode?: string;
+
+  @IsOptional()
+  @IsString()
+  name?: string;
+
+  @IsInt()
+  @Min(1)
+  quantity!: number;
+
+  @IsOptional()
+  @IsString()
+  comment?: string;
+}
 
 export class UpdateClientRequestDto {
   @IsOptional()
@@ -52,6 +75,6 @@ export class UpdateClientRequestDto {
   @IsArray()
   @ArrayMaxSize(1000)
   @ValidateNested({ each: true })
-  @Type(() => CreateClientRequestItemDto)
-  items?: CreateClientRequestItemDto[];
+  @Type(() => UpdateClientRequestItemDto)
+  items?: UpdateClientRequestItemDto[];
 }

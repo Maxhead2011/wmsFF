@@ -13,7 +13,6 @@ type KnownValueInputProps = {
   options: KnownValueOption[];
   placeholder?: string;
   disabled?: boolean;
-  required?: boolean;
   multiline?: boolean;
   maxVisible?: number;
   onChange: (value: string) => void;
@@ -27,7 +26,6 @@ export function KnownValueInput({
   options,
   placeholder,
   disabled,
-  required,
   multiline,
   maxVisible = 12,
   onChange,
@@ -64,7 +62,6 @@ export function KnownValueInput({
       value={value}
       placeholder={placeholder}
       disabled={disabled}
-      required={required}
       onFocus={() => openList()}
       onChange={(event) => changeValue(event.target.value)}
       onBlur={() => window.setTimeout(() => setOpen(false), 120)}
@@ -74,7 +71,6 @@ export function KnownValueInput({
       value={value}
       placeholder={placeholder}
       disabled={disabled}
-      required={required}
       onFocus={() => openList()}
       onChange={(event) => changeValue(event.target.value)}
       onBlur={() => window.setTimeout(() => setOpen(false), 120)}

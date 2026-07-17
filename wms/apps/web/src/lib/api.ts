@@ -39,6 +39,7 @@ export type ClientSummary = {
   logisticsInvoiceMode: ClientLogisticsInvoiceMode;
   storageBillingMode: ClientStorageBillingMode;
   storesWithoutBoxes?: boolean;
+  onlineReceiptVisibleToClient?: boolean;
   fulfillmentManagerUserId: string | null;
   fulfillmentManager: {
     id: string;
@@ -71,7 +72,16 @@ export type ClientRequestStatus =
   | 'CANCELLED'
   | 'REJECTED';
 
-export type PickWaveStatus = 'PLANNED' | 'PICKING' | 'DONE' | 'FAILED' | 'CANCELLED';
+export type PickWaveStatus =
+  | 'PLANNED'
+  | 'BALANCE_REVIEW'
+  | 'FROZEN'
+  | 'PICKING'
+  | 'DONE'
+  | 'FAILED'
+  | 'CANCELLED';
+
+export type PickWaveBalanceReviewStatus = 'PENDING' | 'SUBMITTED' | 'APPROVED' | 'NOT_REQUIRED';
 
 export type PickWaveRequestStatus = 'PLANNED' | 'PICKED' | 'FAILED';
 
@@ -484,6 +494,7 @@ export type UpsertOwnCompanyPayload = {
 };
 
 export type CreateManualBillingInvoiceLinePayload = {
+  invoiceItemId?: string;
   serviceId?: string;
   description?: string;
   unit?: BillingUnit;
@@ -720,6 +731,67 @@ export type ClientRequestSummary = {
   packages: ClientRequestPackage[];
 };
 
+export type ClientRequestBoxOverlapStatistics = {
+  generatedAt: string;
+  activeRequestsCount: number;
+  checkedRequestsCount: number;
+  requestsWithOverlapsCount: number;
+  overlappingBoxesCount: number;
+  statusCounts: Array<{ status: ClientRequestStatus; count: number }>;
+  overlaps: Array<{
+    boxCode: string;
+    clientId: string;
+    client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+    requests: Array<{
+      id: string;
+      title: string;
+      status: ClientRequestStatus;
+      destinationCity: string | null;
+      createdAt: string;
+    }>;
+  }>;
+  errors: Array<{ requestId: string; title: string; message: string }>;
+};
+
+export type EmergencyPackedXlsxResult = {
+  status: 'APPLIED' | 'ALREADY_APPLIED';
+  requestId: string;
+  boxes: number;
+  pallets: number;
+  packedUnits: number;
+  rows: number;
+  wbFilesReady?: boolean;
+  shortageQuantity: number;
+  excessQuantity: number;
+  warnings: Array<{
+    code: 'SHORTAGE' | 'RELABEL_DIFFERENCE' | 'EXCESS' | 'UNLISTED_ITEM' | 'EMPTY_BOX';
+    message: string;
+    quantity: number;
+    boxCode?: string;
+    skuId?: string;
+    barcode?: string | null;
+  }>;
+  packages?: Array<{
+    packageCode: string;
+    packageType: string;
+    items: Array<{ requestItemId: string; quantity: number }>;
+  }>;
+};
+
+export type EmergencyPackedXlsxRollbackResult = {
+  status: 'REVERSED';
+  requestId: string;
+  restoredStatus: ClientRequestStatus;
+  restoredBoxes: number;
+  restoredUnits: number;
+  removedPackages: number;
+  restoredPackages: number;
+  removedAutoItems: number;
+  removedInvoices: number;
+  removedDeliveryRequests: number;
+  removedBillingCharges: number;
+};
+
 export type OutboundRequestXlsxIssue = {
   row: number;
   barcode?: string;
@@ -897,6 +969,11 @@ export type PickWaveSummary = {
   comment: string | null;
   createdByUserId: string | null;
   assignedPickerUserId: string | null;
+  planVersion: number;
+  planGeneratedAt: string | null;
+  planFrozenAt: string | null;
+  balanceReviewStatus: PickWaveBalanceReviewStatus;
+  balanceReviewSubmittedAt: string | null;
   createdAt: string;
   updatedAt: string;
   createdBy: {
@@ -910,6 +987,80 @@ export type PickWaveSummary = {
     name: string;
   } | null;
   requests: PickWaveRequestSummary[];
+  balanceLines: Array<{
+    id: string;
+    isReviewed: boolean;
+    remainingQuantity: number;
+  }>;
+};
+
+export type PickWaveBalanceReviewAllocation = {
+  id: string;
+  requestId: string;
+  quantity: number;
+  needsRelabel: boolean;
+  targetBarcode: string | null;
+  comment: string | null;
+};
+
+export type PickWaveBalanceReview = {
+  id: string;
+  waveNumber: string;
+  status: PickWaveStatus;
+  balanceReviewStatus: PickWaveBalanceReviewStatus;
+  planVersion: number;
+  planGeneratedAt: string | null;
+  planFrozenAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'> | null;
+  requests: Array<{
+    id: string;
+    title: string;
+    status: ClientRequestStatus;
+    destinationCity: string | null;
+  }>;
+  summary: {
+    lines: number;
+    reviewedLines: number;
+    pendingLines: number;
+    totalRemaining: number;
+    allocatedQuantity: number;
+    keepQuantity: number;
+    smallBalanceLines: number;
+  };
+  lines: Array<{
+    id: string;
+    balanceId: string;
+    sourceBoxCode: string;
+    skuId: string;
+    internalSku: string;
+    barcode: string | null;
+    name: string;
+    color: string | null;
+    size: string | null;
+    originalQuantity: number;
+    plannedQuantity: number;
+    remainingQuantity: number;
+    keepQuantity: number | null;
+    isReviewed: boolean;
+    isSmallBalance: boolean;
+    comment: string | null;
+    allocations: PickWaveBalanceReviewAllocation[];
+  }>;
+};
+
+export type PickWaveBalanceDecisionInput = {
+  lineId: string;
+  keepQuantity: number;
+  comment?: string;
+  allocations: Array<{
+    requestId: string;
+    quantity: number;
+    needsRelabel?: boolean;
+    targetBarcode?: string;
+    comment?: string;
+  }>;
 };
 
 export type PickWaveRunResult = {
@@ -990,6 +1141,9 @@ export type PickInstructionDocument = {
   shortageRowsCount: number;
   boxesCount: number;
   fullBoxesCount: number;
+  instructionSource: 'AUTOMATIC' | 'MANUAL';
+  manualInstructionFileName: string | null;
+  manualInstructionUploadedAt: string | null;
   html: string;
   rows?: Array<{
     position: number;
@@ -1104,12 +1258,55 @@ export type TsdAssemblyPlan = {
   } | null;
   relabelTotal?: number;
   movementTotal?: number;
-  searchBoxes?: Array<{ boxCode: string; code?: string; found?: boolean; isFound?: boolean }>;
-  boxesToSearch?: Array<{ boxCode: string; code?: string; found?: boolean; isFound?: boolean }>;
+  movementRequiredTotal?: number;
+  searchBoxes?: Array<{
+    boxCode?: string;
+    code?: string;
+    found?: boolean;
+    isFound?: boolean;
+    servesMultipleCities?: boolean;
+    multiCityLabel?: string;
+  }>;
+  shipmentBoxes?: Array<{ boxCode?: string; code?: string; found?: boolean; isFound?: boolean }>;
+  outgoingBoxes?: Array<{
+    boxCode?: string;
+    code?: string;
+    type?: string;
+    typeLabel?: string;
+    sourceBox?: string;
+    quantity?: number;
+    status?: string;
+    city?: string | null;
+    pallet?: string | null;
+  }>;
+  shipmentBoxCodes?: string[];
+  outgoingBoxCodes?: string[];
+  boxesToSearch?: Array<{ boxCode?: string; code?: string; found?: boolean; isFound?: boolean }>;
+  foundBoxes?: Array<{ boxCode?: string; code?: string; found?: boolean; isFound?: boolean }>;
+  foundBoxCodes?: string[];
+  foundBoxesCodes?: string[];
+  boxSearchProgress?: {
+    total?: number;
+    found?: number;
+    remaining?: number;
+    foundBoxCodes?: string[];
+    remainingBoxCodes?: string[];
+  };
   relabelTasks?: Array<{
     sourceBox: string;
     oldBarcode?: string;
     newBarcode?: string;
+    barcode?: string;
+    name?: string;
+    size?: string;
+      quantity: number;
+      note?: string;
+  }>;
+  allMovementTasks?: Array<{
+    sourceBox: string;
+    targetBox: string;
+    purpose?: string;
+    targetRole?: string;
     barcode?: string;
     name?: string;
     size?: string;
@@ -1119,12 +1316,55 @@ export type TsdAssemblyPlan = {
   movementTasks?: Array<{
     sourceBox: string;
     targetBox: string;
+    purpose?: string;
+    targetRole?: string;
     barcode?: string;
     name?: string;
     size?: string;
     quantity: number;
     note?: string;
   }>;
+  movementProgress?: {
+    totalRequired?: number;
+    totalMoved?: number;
+    totalRemaining?: number;
+    doneSourceBoxes?: string[];
+    sourceBoxes?: Array<{
+      sourceBox: string;
+      requiredQuantity: number;
+      movedQuantity: number;
+      remainingQuantity: number;
+      done: boolean;
+      targetBoxes: string[];
+    }>;
+    rows?: Array<{
+      sourceBox: string;
+      targetBox: string;
+      purpose?: string;
+      targetRole?: string;
+      barcode?: string;
+      name?: string;
+      size?: string;
+      quantity: number;
+      requiredQuantity?: number;
+      movedQuantity?: number;
+      remainingQuantity?: number;
+      done?: boolean;
+      note?: string;
+      actualTargetBoxes?: string[];
+    }>;
+    actualRows?: Array<{
+      sourceBox: string;
+      targetBox: string;
+      purpose?: string;
+      targetRole?: string;
+      barcode?: string;
+      name?: string | null;
+      size?: string | null;
+      quantity: number;
+      movedAt?: string | null;
+    }>;
+  };
 };
 
 export type CreateClientRequestPayload = {
@@ -1186,6 +1426,7 @@ export type CreateClientPayload = {
   logisticsInvoiceMode?: ClientLogisticsInvoiceMode;
   storageBillingMode?: ClientStorageBillingMode;
   storesWithoutBoxes?: boolean;
+  onlineReceiptVisibleToClient?: boolean;
   fulfillmentManagerUserId?: string;
 };
 
@@ -1668,6 +1909,52 @@ export type TurnoverSuggestions = {
   }>;
 };
 
+export type TurnoverBoxDetails = {
+  generatedAt: string;
+  box: {
+    id: string;
+    code: string;
+    status: string;
+    client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  };
+  totals: {
+    rows: number;
+    skuCount: number;
+    quantity: number;
+    kizCount: number;
+  };
+  contents: Array<{
+    balanceId: string;
+    skuId: string;
+    internalSku: string;
+    clientSku: string | null;
+    article: string | null;
+    name: string;
+    color: string | null;
+    size: string | null;
+    barcode: string | null;
+    status: string;
+    statusLabel: string;
+    quantity: number;
+    kiz: string[];
+    kizCount: number;
+  }>;
+  movements: Array<{
+    id: string;
+    date: string;
+    type: TurnoverMovementType;
+    typeLabel: string;
+    status: string;
+    statusLabel: string;
+    quantity: number;
+    skuId: string;
+    name: string;
+    barcode: string | null;
+    sourceDocument: string | null;
+    comment: string | null;
+  }>;
+};
+
 export type TurnoverMovementDocument = {
   movementId: string;
   sourceDocument: string | null;
@@ -1967,6 +2254,123 @@ export type WarehousePalletSummary = {
   };
 };
 
+export type OnlineReceiptOverview = {
+  clientId: string;
+  generatedAt: string;
+  receipts: Array<{
+    sourceDocument: string;
+    boxes: number;
+    quantity: number;
+    kizCount: number;
+    firstSeenAt: string | null;
+    lastSeenAt: string | null;
+    operators: string[];
+    devices: string[];
+  }>;
+  boxes: OnlineReceiptBoxSummary[];
+  deletedBoxes?: OnlineReceiptBoxSummary[];
+};
+
+export type ReceiptBatchSummary = {
+  id: string;
+  date: string;
+  title: string;
+  boxes: number;
+  quantity: number;
+  kizCount: number;
+  boxCodes: string[];
+};
+
+export type GoodsArrivalSummary = {
+  id: string;
+  clientId: string;
+  arrivalDate: string;
+  bagCount: number;
+  boxCount: number;
+  comment: string | null;
+  status: string;
+  billingInvoiceId: string | null;
+  createdByName: string | null;
+  createdAt: string;
+};
+
+export type GoodsArrivalEstimate = {
+  clientId: string;
+  periodFrom: string;
+  periodTo: string;
+  bagCount: number;
+  boxCount: number;
+  bagPriceRub: number;
+  boxPriceRub: number;
+  estimatedRub: number;
+  pricesConfigured: boolean;
+};
+
+export type OnlineReceiptBoxSummary = {
+  key: string;
+  boxId: string | null;
+  boxCode: string;
+  sourceDocument: string;
+  status: string;
+  firstSeenAt: string | null;
+  lastSeenAt: string | null;
+  openedAt: string | null;
+  closedAt: string | null;
+  deletedAt?: string | null;
+  operator: string | null;
+  deviceCode: string | null;
+  sourceDocuments?: string[];
+  totalQuantity: number;
+  kizCount: number;
+  items: OnlineReceiptItemSummary[];
+  currentBalances: Array<{
+    balanceId: string;
+    skuId: string;
+    barcode: string;
+    name: string;
+    quantity: number;
+    status: string;
+  }>;
+  kizValues: Array<{
+    id: string;
+    skuId: string;
+    value: string;
+    status: string;
+  }>;
+};
+
+export type OnlineReceiptItemSummary = {
+  movementId: string;
+  skuId: string;
+  barcode: string;
+  name: string;
+  article: string;
+  color: string | null;
+  size: string | null;
+  quantity: number;
+  kiz: string | null;
+  kizId: string | null;
+  hasError: boolean;
+  errorMessage: string | null;
+  duplicateBoxCode: string | null;
+  status: string;
+  sourceDocument: string;
+  createdAt: string;
+  operatorName: string | null;
+  deviceCode: string | null;
+};
+
+export type OnlineReceiptItemPayload = {
+  clientId: string;
+  boxCode: string;
+  sourceDocument?: string;
+  barcode?: string;
+  skuId?: string;
+  kiz?: string;
+  quantity?: number;
+  comment?: string;
+};
+
 export type TransferBetweenBoxesPayload = {
   clientId: string;
   skuId?: string;
@@ -1997,6 +2401,66 @@ export type TransferBetweenBoxesResult = {
     quantity: number;
     updatedAt: string;
   };
+};
+
+export type BoxTransferPreviewRow = {
+  rowNumber: number;
+  fromBoxCode: string;
+  barcode: string;
+  toBoxCode: string;
+  quantity: number;
+  status: 'READY' | 'ERROR' | 'APPLIED' | 'REJECTED';
+  message: string;
+  errors: string[];
+  skuId?: string;
+  skuName?: string;
+  internalSku?: string;
+  availableQuantity: number;
+  targetBoxExists: boolean;
+  stockStatus?: string;
+  idempotencyKey?: string;
+};
+
+export type BoxTransferPreview = {
+  clientId: string;
+  fileName: string;
+  summary: {
+    rows: number;
+    readyRows: number;
+    errorRows: number;
+    quantity: number;
+  };
+  rows: BoxTransferPreviewRow[];
+};
+
+export type StockTransferBatch = {
+  id: string;
+  clientId: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  status: 'APPLIED' | 'APPLIED_WITH_ERRORS' | 'REVERSED' | string;
+  rowCount: number;
+  appliedRowCount: number;
+  rejectedRowCount: number;
+  quantity: number;
+  rows: BoxTransferPreviewRow[];
+  uploadedByUserId: string | null;
+  uploadedByName: string | null;
+  reversedByUserId: string | null;
+  reversedByName: string | null;
+  reversedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type BoxTransferCommitResult = {
+  status: 'APPLIED' | 'APPLIED_WITH_ERRORS';
+  rows: number;
+  quantity: number;
+  results: Array<TransferBetweenBoxesResult & { rowNumber: number }>;
+  preview: BoxTransferPreview;
+  batch: StockTransferBatch;
 };
 
 type FulfillmentAllocation = {
@@ -2239,9 +2703,75 @@ export type TsdReviewOperation = {
 };
 
 export type ResolveTsdReviewPayload = {
-  action: 'APPLY_INVENTORY_ADJUSTMENT' | 'REJECT';
+  action: 'APPLY_INVENTORY_ADJUSTMENT' | 'ACCEPT_RECEIPT_WITH_ERROR' | 'REJECT';
   comment?: string;
   reason?: TsdReviewReason;
+};
+
+export type TsdReceiptReviewResult = 'ACCEPTED' | 'NOT_ACCEPTED' | 'ACCEPTED_WITH_ERROR' | 'REJECTED';
+
+export type TsdReceiptReviewItem = {
+  id: string;
+  operationKey: string;
+  result: TsdReceiptReviewResult;
+  client: { id: string; code: string; name: string };
+  boxCode: string;
+  sourceDocument: string;
+  quantity: number;
+  barcode: string;
+  kiz: string;
+  sku: {
+    id: string;
+    internalSku: string;
+    article: string | null;
+    name: string;
+    color: string | null;
+    size: string | null;
+    barcode: string;
+  } | null;
+  duplicate: {
+    markId: string;
+    boxCode: string | null;
+    skuId: string;
+    name: string;
+    article: string;
+    color: string | null;
+    size: string | null;
+    barcode: string;
+  } | null;
+  reviewReason: TsdReviewReason | null;
+  message: string | null;
+  deviceCode: string;
+  operatorName: string | null;
+  createdAt: string;
+  reviewedAt: string | null;
+};
+
+export type TsdReceiptReviewBoxCheck = {
+  client: { id: string; code: string; name: string };
+  boxCode: string;
+  boxExists: boolean;
+  accountedQuantity: number;
+  notAcceptedQuantity: number;
+  maximumPhysicalQuantity: number;
+  issueOperations: number;
+  duplicateKizQuantity: number;
+  lastIssueAt: string;
+};
+
+export type TsdReceiptReviewDashboard = {
+  generatedAt: string;
+  periodFrom: string;
+  stats: {
+    acceptedQuantity: number;
+    notAcceptedQuantity: number;
+    acceptedWithErrorQuantity: number;
+    duplicateKizQuantity: number;
+    totalOperations: number;
+    shownOperations: number;
+  };
+  boxesToCheck: TsdReceiptReviewBoxCheck[];
+  items: TsdReceiptReviewItem[];
 };
 
 export type ResolveTsdReviewResult = {
@@ -2257,6 +2787,16 @@ export type ResolveTsdReviewResult = {
       countedQuantity?: number;
       delta?: number;
     };
+    receipt?: {
+      status: 'APPLIED' | 'ALREADY_APPLIED';
+      box?: string;
+      quantity?: number;
+      skuId?: string;
+    };
+    duplicate?: {
+      boxCode: string | null;
+      skuName: string;
+    } | null;
   };
 };
 
@@ -3038,6 +3578,10 @@ export async function createManualBillingInvoice(accessToken: string, payload: C
   });
 }
 
+export async function fetchClientRequestBoxOverlaps(accessToken: string) {
+  return request<ClientRequestBoxOverlapStatistics>('/client-requests/box-overlaps', { accessToken });
+}
+
 export async function updateManualBillingInvoice(
   accessToken: string,
   invoiceId: string,
@@ -3145,6 +3689,20 @@ export async function updateClientRequestStatus(
 
 export async function cancelClientRequest(accessToken: string, requestId: string) {
   return request<ClientRequestSummary>(`/client-requests/${requestId}/cancel`, {
+    method: 'POST',
+    accessToken,
+  });
+}
+
+export async function emergencyCloseClientRequestFromXlsx(accessToken: string, requestId: string, file: File) {
+  const form = new FormData();
+  form.append('file', file);
+
+  return requestMultipart<EmergencyPackedXlsxResult>(`/client-requests/${requestId}/emergency-packed-xlsx`, form, accessToken);
+}
+
+export async function rollbackEmergencyCloseClientRequest(accessToken: string, requestId: string) {
+  return request<EmergencyPackedXlsxRollbackResult>(`/client-requests/${requestId}/emergency-packed-xlsx/rollback`, {
     method: 'POST',
     accessToken,
   });
@@ -3303,6 +3861,30 @@ export async function fetchTurnoverSuggestions(
   });
 }
 
+export async function updateNomenclatureItem(
+  accessToken: string,
+  nomenclatureId: string,
+  payload: CreateNomenclaturePayload,
+) {
+  return request<NomenclatureSummary>(`/skus/nomenclature/${nomenclatureId}`, {
+    method: 'PATCH',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function fetchTurnoverBoxDetails(
+  accessToken: string,
+  boxCode: string,
+  filter: { clientId?: string } = {},
+) {
+  return request<TurnoverBoxDetails>(withQuery(`/turnover/boxes/${encodeURIComponent(boxCode)}`, {
+    clientId: filter.clientId,
+  }), {
+    accessToken,
+  });
+}
+
 export async function fetchTurnoverStatistics(
   accessToken: string,
   filter: {
@@ -3330,6 +3912,27 @@ export async function fetchTurnoverMovementDocument(accessToken: string, movemen
 
 export async function downloadTurnoverMovementDocumentXlsx(accessToken: string, movementId: string) {
   return requestBlob(`/turnover/movements/${movementId}/document.xlsx`, accessToken);
+}
+
+export async function downloadTurnoverReceiptPeriodXlsx(
+  accessToken: string,
+  filter: { clientId?: string; dateFrom?: string; dateTo?: string } = {},
+) {
+  return requestBlob(withQuery('/turnover/receipts.xlsx', {
+    clientId: filter.clientId,
+    dateFrom: filter.dateFrom,
+    dateTo: filter.dateTo,
+  }), accessToken);
+}
+
+export async function downloadTurnoverStockXlsx(
+  accessToken: string,
+  filter: { clientId?: string; ignoreActiveRequests?: boolean } = {},
+) {
+  return requestBlob(withQuery('/turnover/stock.xlsx', {
+    clientId: filter.clientId,
+    ignoreActiveRequests: filter.ignoreActiveRequests ? 'true' : 'false',
+  }), accessToken);
 }
 
 export async function runTurnoverAction(accessToken: string, payload: TurnoverActionPayload) {
@@ -3536,6 +4139,129 @@ export async function fetchBoxes(accessToken: string, filter: { clientId?: strin
   });
 }
 
+export async function fetchOnlineReceipts(accessToken: string, filter: { clientId?: string } = {}) {
+  return request<OnlineReceiptOverview>(withQuery('/warehouse/online-receipts', filter), {
+    accessToken,
+  });
+}
+
+export async function fetchReceiptBatches(accessToken: string, clientId: string) {
+  return request<ReceiptBatchSummary[]>(withQuery('/warehouse/receipt-batches', { clientId }), { accessToken });
+}
+
+export async function fetchGoodsArrivals(
+  accessToken: string,
+  filter: { clientId: string; periodFrom?: string; periodTo?: string },
+) {
+  return request<GoodsArrivalSummary[]>(withQuery('/warehouse/goods-arrivals', filter), { accessToken });
+}
+
+export async function fetchGoodsArrivalEstimate(accessToken: string, clientId: string) {
+  return request<GoodsArrivalEstimate>(withQuery('/warehouse/goods-arrivals/summary', { clientId }), { accessToken });
+}
+
+export async function createGoodsArrival(
+  accessToken: string,
+  payload: { clientId: string; arrivalDate: string; bagCount: number; boxCount: number; comment?: string },
+) {
+  return request<GoodsArrivalSummary>('/warehouse/goods-arrivals', { method: 'POST', accessToken, body: payload });
+}
+
+export async function deleteGoodsArrival(accessToken: string, id: string) {
+  return request<GoodsArrivalSummary>(`/warehouse/goods-arrivals/${id}`, { method: 'DELETE', accessToken });
+}
+
+export async function billGoodsArrivals(
+  accessToken: string,
+  payload: { clientId: string; periodFrom: string; periodTo: string },
+) {
+  return request<BillingInvoiceSummary>('/warehouse/goods-arrivals/bill', { method: 'POST', accessToken, body: payload });
+}
+
+export async function openOnlineReceiptBox(accessToken: string, payload: Pick<OnlineReceiptItemPayload, 'clientId' | 'boxCode' | 'sourceDocument' | 'comment'>) {
+  return request<{ boxId: string; boxCode: string; status: string; sourceDocument: string }>('/warehouse/online-receipts/boxes/open', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function closeOnlineReceiptBox(accessToken: string, payload: Pick<OnlineReceiptItemPayload, 'clientId' | 'boxCode' | 'sourceDocument' | 'comment'>) {
+  return request<{ boxId: string; boxCode: string; status: string }>('/warehouse/online-receipts/boxes/close', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function closeAllOnlineReceiptBoxes(accessToken: string, payload: Pick<OnlineReceiptItemPayload, 'clientId' | 'comment'>) {
+  return request<{ closed: number; boxes: string[]; status: string }>('/warehouse/online-receipts/boxes/close-open', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function finishOnlineReceipt(accessToken: string, payload: Pick<OnlineReceiptItemPayload, 'clientId' | 'comment'>) {
+  return request<{
+    finished: boolean;
+    finishedAt: string;
+    boxes: number;
+    closedBoxes: number;
+    quantity: number;
+    kizCount: number;
+    telegram: { sent: boolean; reason?: string };
+  }>('/warehouse/online-receipts/finish', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function deleteOnlineReceiptBox(accessToken: string, payload: Pick<OnlineReceiptItemPayload, 'clientId' | 'boxCode' | 'sourceDocument' | 'comment'>) {
+  return request<{ boxCode: string; status: string }>('/warehouse/online-receipts/boxes', {
+    method: 'DELETE',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function restoreOnlineReceiptBox(accessToken: string, payload: Pick<OnlineReceiptItemPayload, 'clientId' | 'boxCode' | 'sourceDocument' | 'comment'>) {
+  return request<{ boxCode: string; status: string; restoredItems: number }>('/warehouse/online-receipts/boxes/restore', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function addOnlineReceiptItem(accessToken: string, payload: OnlineReceiptItemPayload) {
+  return request<{ status: string }>('/warehouse/online-receipts/items', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function updateOnlineReceiptItem(
+  accessToken: string,
+  movementId: string,
+  payload: { quantity?: number; kiz?: string; comment?: string },
+) {
+  return request<{ id: string; updated: true }>(`/warehouse/online-receipts/items/${movementId}`, {
+    method: 'PATCH',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function deleteOnlineReceiptItem(accessToken: string, movementId: string, payload: { comment?: string } = {}) {
+  return request<{ id: string; deleted: true }>(`/warehouse/online-receipts/items/${movementId}`, {
+    method: 'DELETE',
+    body: payload,
+    accessToken,
+  });
+}
+
 export async function fetchPallets(accessToken: string, filter: { clientId?: string } = {}) {
   return request<WarehousePalletSummary[]>(withQuery('/warehouse/pallets', filter), {
     accessToken,
@@ -3659,6 +4385,18 @@ export async function fetchTsdAssemblyPlan(accessToken: string, requestId: strin
   });
 }
 
+export async function downloadTsdOutgoingBoxesXlsx(accessToken: string, requestId: string) {
+  return requestBlob(`/tsd/requests/${requestId}/outgoing-boxes.xlsx`, accessToken);
+}
+
+export async function downloadTsdOutgoingContentsXlsx(accessToken: string, requestId: string) {
+  return requestBlob(`/tsd/requests/${requestId}/outgoing-contents.xlsx`, accessToken);
+}
+
+export async function downloadTsdMovementsXlsx(accessToken: string, requestId: string) {
+  return requestBlob(`/tsd/requests/${requestId}/movements.xlsx`, accessToken);
+}
+
 export async function createTsdDevice(accessToken: string, payload: CreateTsdDevicePayload) {
   return request<CreatedTsdDevice>('/tsd/devices', {
     method: 'POST',
@@ -3699,6 +4437,12 @@ export async function fetchLogisticsTariffSets(accessToken: string) {
 
 export async function fetchLogisticsTariffSet(accessToken: string, tariffSetId: string) {
   return request<LogisticsTariffSetDetail>(`/logistics/tariff-sets/${tariffSetId}`, {
+    accessToken,
+  });
+}
+
+export async function fetchTsdReceiptReviewDashboard(accessToken: string) {
+  return request<TsdReceiptReviewDashboard>('/tsd/review/receipts', {
     accessToken,
   });
 }
@@ -4032,6 +4776,61 @@ export async function transferBetweenBoxes(accessToken: string, payload: Transfe
   });
 }
 
+export async function importBoxTransfersXlsx(accessToken: string, clientId: string, file: File) {
+  const form = new FormData();
+  form.append('file', file);
+
+  return requestMultipart<BoxTransferCommitResult>(
+    withQuery('/stock/transfers/box-to-box/import-xlsx', { clientId }),
+    form,
+    accessToken,
+  );
+}
+
+export async function previewBoxTransfersXlsx(accessToken: string, clientId: string, file: File) {
+  const form = new FormData();
+  form.append('file', file);
+
+  return requestMultipart<BoxTransferPreview>(
+    withQuery('/stock/transfers/box-to-box/preview-xlsx', { clientId }),
+    form,
+    accessToken,
+  );
+}
+
+export async function commitBoxTransfersXlsx(accessToken: string, clientId: string, file: File) {
+  const form = new FormData();
+  form.append('file', file);
+
+  return requestMultipart<BoxTransferCommitResult>(
+    withQuery('/stock/transfers/box-to-box/commit-xlsx', { clientId }),
+    form,
+    accessToken,
+  );
+}
+
+export async function fetchBoxTransferBatches(accessToken: string, clientId: string) {
+  return request<StockTransferBatch[]>(withQuery('/stock/transfers/box-to-box/batches', { clientId }), {
+    accessToken,
+  });
+}
+
+export async function downloadBoxTransferBatchFile(accessToken: string, batchId: string) {
+  return requestBlob(`/stock/transfers/box-to-box/batches/${batchId}/file`, accessToken);
+}
+
+export async function reverseBoxTransferBatch(accessToken: string, batchId: string) {
+  return request<{
+    status: 'REVERSED' | 'ALREADY_REVERSED';
+    reversedRows?: number;
+    quantity?: number;
+    batch: StockTransferBatch;
+  }>(`/stock/transfers/box-to-box/batches/${batchId}`, {
+    method: 'DELETE',
+    accessToken,
+  });
+}
+
 export async function pickClientRequest(
   accessToken: string,
   payload: { requestId: string; idempotencyKey?: string; comment?: string },
@@ -4039,6 +4838,37 @@ export async function pickClientRequest(
   return request<PickClientRequestResult>('/stock/fulfillment/pick-request', {
     method: 'POST',
     body: payload,
+    accessToken,
+  });
+}
+
+export async function fetchPendingPickWaveBalanceReviews(accessToken: string) {
+  return request<PickWaveBalanceReview[]>('/client-requests/balance-reviews/pending', {
+    accessToken,
+  });
+}
+
+export async function fetchPickWaveBalanceReview(accessToken: string, waveId: string) {
+  return request<PickWaveBalanceReview>(`/client-requests/balance-reviews/${waveId}`, {
+    accessToken,
+  });
+}
+
+export async function savePickWaveBalanceReview(
+  accessToken: string,
+  waveId: string,
+  decisions: PickWaveBalanceDecisionInput[],
+) {
+  return request<PickWaveBalanceReview>(`/client-requests/balance-reviews/${waveId}`, {
+    method: 'PATCH',
+    body: { decisions },
+    accessToken,
+  });
+}
+
+export async function submitPickWaveBalanceReview(accessToken: string, waveId: string) {
+  return request<PickWaveBalanceReview>(`/client-requests/balance-reviews/${waveId}/submit`, {
+    method: 'POST',
     accessToken,
   });
 }
@@ -4088,8 +4918,25 @@ export async function fetchPickInstruction(accessToken: string, requestId: strin
   });
 }
 
+export async function refreshPickInstruction(accessToken: string, requestId: string) {
+  return request<PickInstructionDocument>(`/client-requests/${requestId}/pick-instruction/refresh`, {
+    method: 'POST',
+    accessToken,
+  });
+}
+
+export async function uploadManualPickInstruction(accessToken: string, requestId: string, file: File) {
+  const form = new FormData();
+  form.append('file', file);
+  return requestMultipart<PickInstructionDocument>(`/client-requests/${requestId}/pick-instruction/manual`, form, accessToken);
+}
+
 export async function downloadPickInstructionXlsx(accessToken: string, requestId: string) {
   return requestBlob(`/client-requests/${requestId}/pick-instruction.xlsx`, accessToken);
+}
+
+export async function downloadClientRequestItemsXlsx(accessToken: string, requestId: string) {
+  return requestBlob(`/client-requests/${requestId}/items.xlsx`, accessToken);
 }
 
 export async function downloadClientRequestWbProductsXlsx(accessToken: string, requestId: string) {

@@ -3,11 +3,13 @@ import {
   Bell,
   CheckCircle2,
   Database,
+  Download,
   Eraser,
   Lock,
   RefreshCw,
   Search,
   ShieldAlert,
+  Smartphone,
   Trash2,
   Users,
 } from 'lucide-react';
@@ -305,6 +307,18 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
           <h2>Управление системными данными</h2>
         </div>
         <ShieldAlert size={22} aria-hidden="true" />
+      </div>
+
+      <div className="service-mobile-app">
+        <span className="service-mobile-app__icon"><Smartphone size={22} aria-hidden="true" /></span>
+        <span>
+          <strong>LOGOff WMS Mobile</strong>
+          <small>Клиентский кабинет и административный инструмент для Android</small>
+        </span>
+        <a className="secondary-button" href="/downloads/logoff-wms-mobile.apk" download>
+          <Download size={16} aria-hidden="true" />
+          Скачать APK
+        </a>
       </div>
 
       <div className="service-tabs" role="tablist" aria-label="Разделы сервисного меню">

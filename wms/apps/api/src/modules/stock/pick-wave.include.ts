@@ -25,6 +25,7 @@ export const pickWaveInclude = {
           type: true,
           status: true,
           priority: true,
+          destinationCity: true,
           client: {
             select: {
               id: true,
@@ -52,5 +53,13 @@ export const pickWaveInclude = {
     orderBy: {
       requestId: 'asc',
     },
+  },
+  balanceLines: {
+    select: {
+      id: true,
+      isReviewed: true,
+      remainingQuantity: true,
+    },
+    orderBy: [{ sourceBoxCode: 'asc' }, { internalSku: 'asc' }],
   },
 } satisfies Prisma.PickWaveInclude;

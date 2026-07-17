@@ -46,6 +46,7 @@ type ClientCabinetTablesProps = {
   currentUser: AuthUser;
   stock: StockBalance[];
   visibleStock: StockBalance[];
+  stockReservationRequests: ClientRequestSummary[];
   stockSearch: string;
   requests: ClientRequestSummary[];
   invoices: BillingInvoiceSummary[];
@@ -87,6 +88,7 @@ export function ClientCabinetTables({
   currentUser,
   stock,
   visibleStock,
+  stockReservationRequests,
   stockSearch,
   requests,
   invoices,
@@ -194,7 +196,7 @@ export function ClientCabinetTables({
           <button
             className="icon-text-button"
             type="button"
-            onClick={() => downloadClientCabinetStockExcel(client, visibleStock, canSeeStoragePlaces)}
+            onClick={() => downloadClientCabinetStockExcel(client, visibleStock, canSeeStoragePlaces, stockReservationRequests)}
             disabled={visibleStock.length === 0}
           >
             <FileSpreadsheet size={15} aria-hidden="true" />

@@ -1,0 +1,14 @@
+<resources>
+    <string name="app_name">LOGOff WMS</string>
+    <string name="login_title">Вход в LOGOff WMS</string>
+    <string name="login_hint">Логин</string>
+    <string name="password_hint">Пароль</string>
+    <string name="login_button">Войти</string>
+    <string name="home">Главная</string>
+    <string name="requests">Заявки</string>
+    <string name="receipts">Приемка</string>
+    <string name="finance">Финансы</string>
+    <string name="more">Еще</string>
+    <string name="overview">Обзор</string>
+    <string name="management">Управление</string>
+</resources>

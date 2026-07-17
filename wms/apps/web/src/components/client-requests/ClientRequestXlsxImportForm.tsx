@@ -3,6 +3,7 @@ import { useMemo, useState, type FormEvent } from 'react';
 import {
   createClientRequest,
   previewOutboundRequestXlsx,
+  uploadClientRequestFile,
   type AuthSession,
   type ClientRequestPriority,
   type ClientRequestSummary,
@@ -13,7 +14,6 @@ import {
   type OutboundRequestXlsxPreview,
 } from '../../lib/api';
 import { requestPriorityOptions } from './clientRequestMeta';
-import { useLogisticsDestinationOptions } from './useLogisticsDestinationOptions';
 
 type ClientRequestXlsxImportFormProps = {
   clients: ClientSummary[];
@@ -44,7 +44,6 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
   const [message, setMessage] = useState('');
   const [isPreviewing, setPreviewing] = useState(false);
   const [isCommitting, setCommitting] = useState(false);
-  const destinationOptions = useLogisticsDestinationOptions(session.accessToken);
 
   if (writableClients.length === 0) {
     return null;
@@ -112,9 +111,10 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
     setCommitting(true);
     setError(null);
     setMessage('');
+    let createdRequest: ClientRequestSummary | null = null;
 
     try {
-      const request = await createClientRequest(session.accessToken, {
+      createdRequest = await createClientRequest(session.accessToken, {
         clientId,
         type: 'OUTBOUND',
         priority,
@@ -124,21 +124,33 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
         desiredDate: desiredDate || undefined,
         items: validLines.flatMap((line) => requestItemsFromLine(line)),
       });
-      onCreated(request);
-      setTitle('');
-      setDesiredDate('');
-      setDestinationCity('');
-      setFile(null);
-      setPreview(null);
-      setEditableLines([]);
-      setConfirmedRelabels({});
-      setFileInputKey((current) => current + 1);
-      setMessage(`Заявка ${request.title} создана.`);
+      const sourceFile = await uploadClientRequestFile(session.accessToken, createdRequest.id, file);
+      onCreated({ ...createdRequest, files: [sourceFile, ...createdRequest.files] });
+      resetImportForm();
+      setMessage(`Заявка ${createdRequest.title} создана. Исходный Excel сохранен.`);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Не удалось создать заявку из файла.');
+      const message = caught instanceof Error ? caught.message : 'Не удалось создать заявку из файла.';
+      if (createdRequest) {
+        onCreated(createdRequest);
+        resetImportForm();
+        setError(`Заявка ${createdRequest.title} создана, но исходный Excel не сохранился: ${message}`);
+      } else {
+        setError(message);
+      }
     } finally {
       setCommitting(false);
     }
+  }
+
+  function resetImportForm() {
+    setTitle('');
+    setDesiredDate('');
+    setDestinationCity('');
+    setFile(null);
+    setPreview(null);
+    setEditableLines([]);
+    setConfirmedRelabels({});
+    setFileInputKey((current) => current + 1);
   }
 
   const issues = preview?.issues ?? [];
@@ -186,23 +198,7 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
         </label>
         <label>
           <span>Город поставки</span>
-          <input
-            list="client-request-xlsx-destination-options"
-            required
-            value={destinationCity}
-            onFocus={(event) => destinationOptions.search(event.currentTarget.value)}
-            onChange={(event) => {
-              setDestinationCity(event.target.value);
-              destinationOptions.search(event.target.value);
-            }}
-          />
-          <datalist id="client-request-xlsx-destination-options">
-            {destinationOptions.options.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.description}
-              </option>
-            ))}
-          </datalist>
+          <input required value={destinationCity} onChange={(event) => setDestinationCity(event.target.value)} />
         </label>
         <label className="client-request-fields__wide">
           <span>Название</span>

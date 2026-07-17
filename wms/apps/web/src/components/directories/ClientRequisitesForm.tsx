@@ -38,6 +38,8 @@ type ClientRequisitesFormState = {
   bankAccount: string;
   correspondentAccount: string;
   storageAccountingEnabled: boolean;
+  storesWithoutBoxes: boolean;
+  onlineReceiptVisibleToClient: boolean;
   logisticsInvoiceMode: ClientLogisticsInvoiceMode;
   storageBillingMode: ClientStorageBillingMode;
   fulfillmentManagerUserId: string;
@@ -59,6 +61,8 @@ const emptyForm: ClientRequisitesFormState = {
   bankAccount: '',
   correspondentAccount: '',
   storageAccountingEnabled: false,
+  storesWithoutBoxes: false,
+  onlineReceiptVisibleToClient: false,
   logisticsInvoiceMode: 'SEPARATE',
   storageBillingMode: 'MONTHLY',
   fulfillmentManagerUserId: '',
@@ -325,6 +329,24 @@ export function ClientRequisitesForm({ session }: ClientRequisitesFormProps) {
       ) : null}
 
       <div className="directory-fields directory-fields--client">
+        <label className="directory-checkbox">
+            <input
+              checked={form.onlineReceiptVisibleToClient}
+            type="checkbox"
+            onChange={(event) => setForm({ ...form, onlineReceiptVisibleToClient: event.target.checked })}
+          />
+            <span>Показывать онлайн-приемку клиенту</span>
+          </label>
+        <label>
+          <span>Вид приемки</span>
+          <select
+            value={form.storesWithoutBoxes ? 'WITHOUT_BOXES' : 'WITH_BOXES'}
+            onChange={(event) => setForm({ ...form, storesWithoutBoxes: event.target.value === 'WITHOUT_BOXES' })}
+          >
+            <option value="WITH_BOXES">С коробами</option>
+            <option value="WITHOUT_BOXES">Без коробов, поштучно</option>
+          </select>
+        </label>
         <label>
           <span>Тип клиента</span>
           <select value={form.clientKind} onChange={(event) => setForm({ ...form, clientKind: event.target.value as ClientKind })}>
@@ -498,6 +520,8 @@ function formFromClient(client: ClientSummary): ClientRequisitesFormState {
     bankAccount: client.bankAccount ?? '',
     correspondentAccount: client.correspondentAccount ?? '',
     storageAccountingEnabled: client.storageAccountingEnabled,
+    storesWithoutBoxes: Boolean(client.storesWithoutBoxes),
+    onlineReceiptVisibleToClient: Boolean(client.onlineReceiptVisibleToClient),
     logisticsInvoiceMode: client.logisticsInvoiceMode,
     storageBillingMode: client.storageBillingMode,
     fulfillmentManagerUserId: client.fulfillmentManagerUserId ?? '',
@@ -521,6 +545,8 @@ function compactPayload(form: ClientRequisitesFormState): UpdateClientPayload {
     bankAccount: form.bankAccount,
     correspondentAccount: form.correspondentAccount,
     storageAccountingEnabled: form.storageAccountingEnabled,
+    storesWithoutBoxes: form.storesWithoutBoxes,
+    onlineReceiptVisibleToClient: form.onlineReceiptVisibleToClient,
     logisticsInvoiceMode: form.logisticsInvoiceMode,
     storageBillingMode: form.storageBillingMode,
     fulfillmentManagerUserId: form.fulfillmentManagerUserId,

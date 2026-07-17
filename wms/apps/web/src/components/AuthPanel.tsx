@@ -46,7 +46,7 @@ export function AuthPanel({ onSession }: AuthPanelProps) {
       <section className="auth-panel" aria-label="Вход в LOGOFF WMS">
         <div className="auth-panel__brand">
           <p className="eyebrow">Фулфилмент LOGOFF</p>
-          <h1>WMS Фулфилмент LOGOff</h1>
+          <h1>WMS операционный контур</h1>
         </div>
 
         <div className="segmented-control" role="tablist" aria-label="Режим входа">
@@ -59,15 +59,6 @@ export function AuthPanel({ onSession }: AuthPanelProps) {
             <span>Первый админ</span>
           </button>
         </div>
-
-        <a className="auth-tsd-download" href="/downloads/logoff-tsd.apk" download>
-          <Smartphone size={18} aria-hidden="true" />
-          <span>
-            <strong>Скачать приложение ТСД</strong>
-            <small>APK для приемки, сборки и инвентаризации</small>
-          </span>
-          <Download size={18} aria-hidden="true" />
-        </a>
 
         <form className="auth-form" onSubmit={submit}>
           {mode === 'bootstrap' ? (
@@ -122,6 +113,15 @@ export function AuthPanel({ onSession }: AuthPanelProps) {
             <span>{isSubmitting ? 'Проверка' : mode === 'login' ? 'Войти' : 'Создать администратора'}</span>
           </button>
         </form>
+
+        <a className="mobile-app-download" href="/downloads/logoff-wms-mobile.apk" download>
+          <Smartphone size={20} aria-hidden="true" />
+          <span>
+            <strong>LOGOff WMS для Android</strong>
+            <small>Кабинет клиента и мобильное управление</small>
+          </span>
+          <Download size={18} aria-hidden="true" />
+        </a>
       </section>
     </main>
   );

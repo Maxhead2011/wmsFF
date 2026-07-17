@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Res, StreamableFile } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, StreamableFile, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiConsumes, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -71,6 +72,68 @@ export class StockController {
   @RequirePermissions('stock:write')
   transferBetweenBoxes(@Body() dto: TransferBetweenBoxesDto, @CurrentUser() user: AuthUser) {
     return this.operations.transferBetweenBoxes(dto, user);
+  }
+
+  @Post('transfers/box-to-box/import-xlsx')
+  @RequirePermissions('stock:write')
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FileInterceptor('file'))
+  importBoxTransfersXlsx(
+    @UploadedFile() file: Express.Multer.File,
+    @Query('clientId') clientId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.operations.importBoxTransfersXlsx(clientId, file, user);
+  }
+
+  @Post('transfers/box-to-box/preview-xlsx')
+  @RequirePermissions('stock:write')
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FileInterceptor('file'))
+  previewBoxTransfersXlsx(
+    @UploadedFile() file: Express.Multer.File,
+    @Query('clientId') clientId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.operations.previewBoxTransfersXlsx(clientId, file, user);
+  }
+
+  @Post('transfers/box-to-box/commit-xlsx')
+  @RequirePermissions('stock:write')
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FileInterceptor('file'))
+  commitBoxTransfersXlsx(
+    @UploadedFile() file: Express.Multer.File,
+    @Query('clientId') clientId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.operations.commitBoxTransfersXlsx(clientId, file, user);
+  }
+
+  @Get('transfers/box-to-box/batches')
+  @RequirePermissions('stock:write')
+  listBoxTransferBatches(@Query('clientId') clientId: string, @CurrentUser() user: AuthUser) {
+    return this.operations.listBoxTransferBatches(clientId, user);
+  }
+
+  @Get('transfers/box-to-box/batches/:id/file')
+  @RequirePermissions('stock:write')
+  async downloadBoxTransferBatchFile(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUser,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const file = await this.operations.getBoxTransferBatchFile(id, user);
+    response.setHeader('Content-Type', file.mimeType);
+    response.setHeader('Content-Length', String(file.content.length));
+    response.setHeader('Content-Disposition', contentDisposition(file.fileName));
+    return new StreamableFile(file.content);
+  }
+
+  @Delete('transfers/box-to-box/batches/:id')
+  @RequirePermissions('stock:write')
+  reverseBoxTransferBatch(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.operations.reverseBoxTransferBatch(id, user);
   }
 
   @Post('fulfillment/pick-request')

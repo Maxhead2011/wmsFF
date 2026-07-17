@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Res, StreamableFile } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import type { Response } from 'express';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
@@ -45,6 +46,54 @@ export class TsdDeviceController {
   @RequirePermissions('stock:write')
   getAssemblyRequest(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.assembly.getRequestPlan(id, user);
+  }
+
+  @Get('requests/:id/outgoing-boxes.xlsx')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  async downloadOutgoingBoxes(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUser,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const file = await this.assembly.getOutgoingBoxesXlsx(id, user);
+    response.setHeader('Content-Type', file.mimeType);
+    response.setHeader('Content-Length', String(file.content.length));
+    response.setHeader('Content-Disposition', contentDisposition(file.fileName));
+
+    return new StreamableFile(file.content);
+  }
+
+  @Get('requests/:id/outgoing-contents.xlsx')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  async downloadOutgoingContents(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUser,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const file = await this.assembly.getOutgoingContentsXlsx(id, user);
+    response.setHeader('Content-Type', file.mimeType);
+    response.setHeader('Content-Length', String(file.content.length));
+    response.setHeader('Content-Disposition', contentDisposition(file.fileName));
+
+    return new StreamableFile(file.content);
+  }
+
+  @Get('requests/:id/movements.xlsx')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  async downloadMovements(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUser,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const file = await this.assembly.getMovementsXlsx(id, user);
+    response.setHeader('Content-Type', file.mimeType);
+    response.setHeader('Content-Length', String(file.content.length));
+    response.setHeader('Content-Disposition', contentDisposition(file.fileName));
+
+    return new StreamableFile(file.content);
   }
 
   @Get('requests/:id/box-search')
@@ -266,6 +315,17 @@ export class TsdDeviceController {
     return this.assembly.findSkuByBarcode({ clientId, barcode }, user);
   }
 
+  @Get('receipts/check-kiz')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  checkReceiptKiz(
+    @Query('clientId') clientId: string | undefined,
+    @Query('kiz') kiz: string | undefined,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.receipts.checkKiz(clientId, kiz, user);
+  }
+
   @Post('receipts/open-box')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
@@ -327,4 +387,9 @@ function hasScanPayload(query: Record<string, unknown> | undefined) {
   }
   const ignored = new Set(['deviceCode', 'device', 'token', 'stage', 'action', 'ts', 'timestamp']);
   return Object.keys(query).some((key) => !ignored.has(key) && query[key] != null && String(query[key]).trim() !== '');
+}
+
+function contentDisposition(fileName: string) {
+  const asciiName = fileName.replace(/[^\x20-\x7E]+/g, '_').replace(/"/g, '');
+  return `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
 }

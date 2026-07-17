@@ -23,7 +23,6 @@ export function StockImportForm({ session }: StockImportFormProps) {
   const [selectedClientId, setSelectedClientId] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [sourceDocument, setSourceDocument] = useState('');
-  const [stockDate, setStockDate] = useState(todayInputValue);
   const [preview, setPreview] = useState<StockImportPreview | null>(null);
   const [commitResult, setCommitResult] = useState<StockImportCommitResult | null>(null);
   const [error, setError] = useState('');
@@ -71,7 +70,6 @@ export function StockImportForm({ session }: StockImportFormProps) {
   function clearImport() {
     setFile(null);
     setSourceDocument('');
-    setStockDate(todayInputValue());
     setPreview(null);
     setCommitResult(null);
     setError('');
@@ -120,7 +118,6 @@ export function StockImportForm({ session }: StockImportFormProps) {
           file,
           clientId: selectedClientId,
           sourceDocument: sourceDocument.trim() || file.name,
-          stockDate,
         }),
       );
     } catch (caught) {
@@ -152,11 +149,6 @@ export function StockImportForm({ session }: StockImportFormProps) {
         <label>
           <span>Документ-источник</span>
           <input value={sourceDocument} onChange={(event) => setSourceDocument(event.target.value)} />
-        </label>
-
-        <label>
-          <span>Дата остатков</span>
-          <input type="date" value={stockDate} onChange={(event) => setStockDate(event.target.value)} />
         </label>
 
         <label className="file-field">
@@ -193,10 +185,4 @@ export function StockImportForm({ session }: StockImportFormProps) {
       {commitResult ? <StockCommitResultBlock result={commitResult} /> : null}
     </div>
   );
-}
-
-function todayInputValue() {
-  const today = new Date();
-  today.setMinutes(today.getMinutes() - today.getTimezoneOffset());
-  return today.toISOString().slice(0, 10);
 }

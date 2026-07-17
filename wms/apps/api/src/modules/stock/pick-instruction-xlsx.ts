@@ -11,7 +11,7 @@ export function buildPickInstructionWorkbook(document: PickInstructionDocument) 
   XLSX.utils.book_append_sheet(workbook, sheetFromRows(searchBoxRows(document), [24]), 'Короба для поиска');
   XLSX.utils.book_append_sheet(workbook, sheetFromRows(warehouseRows(document), [18, 20, 18, 28, 18, 12, 12, 28, 28, 42]), 'Поиск коробов');
   XLSX.utils.book_append_sheet(workbook, sheetFromRows(markRows(document), [18, 18, 20, 18, 18, 34, 28, 16, 16, 12, 18, 18]), 'Перемаркировка');
-  XLSX.utils.book_append_sheet(workbook, sheetFromRows(balanceMoveRows(document), [20, 20, 18, 28, 18, 12, 12, 42]), 'Перемещения');
+  XLSX.utils.book_append_sheet(workbook, sheetFromRows(balanceMoveRows(document), [20, 20, 18, 18, 28, 18, 12, 12, 48]), 'Перемещения');
 
   return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
 }
@@ -56,7 +56,7 @@ function warehouseRows(document: PickInstructionDocument): CellValue[][] {
     ],
   ];
 
-  document.warehouseRows.forEach((row) => {
+  document.warehouseRows.filter((row) => row.sourceBox.trim()).forEach((row) => {
     rows.push([
       row.city,
       row.sourceBox,
@@ -89,13 +89,14 @@ function wholeBoxRows(document: PickInstructionDocument): CellValue[][] {
 
 function balanceMoveRows(document: PickInstructionDocument): CellValue[][] {
   const rows: CellValue[][] = [
-    ['Исходный короб', 'Новый короб', 'Палета', 'Артикул', 'Баркод', 'Размер', 'Количество', 'Примечание'],
+    ['Исходный короб', 'Новый короб', 'Тип', 'Палета', 'Артикул', 'Баркод', 'Размер', 'Количество', 'Примечание'],
   ];
 
   document.warehouseBalanceMoves.forEach((row) => {
     rows.push([
       row.sourceBox,
       row.newBox,
+      row.purpose === 'SHIPMENT' ? 'В поставку' : 'На баланс',
       row.pallet,
       row.artOnBox,
       row.barcodeOnBox,
@@ -106,7 +107,7 @@ function balanceMoveRows(document: PickInstructionDocument): CellValue[][] {
   });
 
   if (rows.length === 1) {
-    rows.push(['', '', '', '', '', '', '', 'Перемещений остатков в новые короба нет.']);
+    rows.push(['', '', '', '', '', '', '', '', 'Перемещений нет.']);
   }
 
   return rows;

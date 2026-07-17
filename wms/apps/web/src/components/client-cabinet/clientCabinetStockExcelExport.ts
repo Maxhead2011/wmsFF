@@ -1,9 +1,15 @@
-import type { ClientSummary, StockBalance } from '../../lib/api';
+import type { ClientRequestSummary, ClientSummary, StockBalance } from '../../lib/api';
 import { formatCabinetDate, formatCabinetNumber, primaryBarcode, stockStatusLabel } from './clientCabinetFormat';
 
-export function downloadClientCabinetStockExcel(client: ClientSummary, stock: StockBalance[], canSeeStoragePlaces: boolean) {
+export function downloadClientCabinetStockExcel(
+  client: ClientSummary,
+  stock: StockBalance[],
+  canSeeStoragePlaces: boolean,
+  activeRequests: ClientRequestSummary[] = [],
+) {
   const stockHeader = ['SKU', 'Наименование', 'Штрихкод', 'Статус', 'Количество', 'Обновлено'];
-  const stockRows = aggregateStockRows(stock).map((row) => [
+  const stockRows = aggregateStockRows(stock, activeRequests);
+  const stockExportRows = stockRows.map((row) => [
     row.internalSku,
     row.name,
     row.barcode,
@@ -16,10 +22,10 @@ export function downloadClientCabinetStockExcel(client: ClientSummary, stock: St
     ['Клиент', client.code, client.name],
     ['Дата выгрузки', new Date().toLocaleString('ru-RU')],
     ['Строк остатков', stockRows.length],
-    ['Единиц на остатке', formatCabinetNumber(stock.reduce((sum, balance) => sum + Number(balance.quantity), 0))],
+    ['Единиц на остатке', formatCabinetNumber(stockRows.reduce((sum, row) => sum + row.quantity, 0))],
     [],
     stockHeader,
-    ...stockRows,
+    ...stockExportRows,
   ];
   const headerRowIndex = rows.indexOf(stockHeader);
 
@@ -48,10 +54,19 @@ type AggregatedStockRow = {
   status: string;
   quantity: number;
   updatedAt: string;
+  skuIds: Set<string>;
 };
 
-function aggregateStockRows(stock: StockBalance[]) {
-  const byBarcode = new Map<string, AggregatedStockRow & { internalSkus: Set<string>; names: Set<string>; statuses: Set<string> }>();
+function aggregateStockRows(stock: StockBalance[], activeRequests: ClientRequestSummary[]) {
+  const byBarcode = new Map<
+    string,
+    AggregatedStockRow & {
+      barcodes: Set<string>;
+      internalSkus: Set<string>;
+      names: Set<string>;
+      statuses: Set<string>;
+    }
+  >();
 
   stock.forEach((balance) => {
     const barcode = primaryBarcode(balance) || `SKU:${balance.sku.id}`;
@@ -62,11 +77,19 @@ function aggregateStockRows(stock: StockBalance[]) {
       status: '',
       quantity: 0,
       updatedAt: balance.updatedAt,
+      skuIds: new Set<string>(),
+      barcodes: new Set<string>(),
       internalSkus: new Set<string>(),
       names: new Set<string>(),
       statuses: new Set<string>(),
     };
 
+    existing.skuIds.add(balance.skuId);
+    balance.sku.barcodes.forEach((skuBarcode) => {
+      if (skuBarcode.value.trim()) {
+        existing.barcodes.add(skuBarcode.value.trim());
+      }
+    });
     existing.internalSkus.add(balance.sku.internalSku);
     existing.names.add(balance.sku.name);
     existing.statuses.add(stockStatusLabel(balance.status));
@@ -79,10 +102,69 @@ function aggregateStockRows(stock: StockBalance[]) {
     byBarcode.set(barcode, existing);
   });
 
+  applyActiveRequestReservations(byBarcode, activeRequests);
+
   return [...byBarcode.values()]
-    .map(({ internalSkus, names, statuses, ...row }) => row)
+    .filter((row) => row.quantity > 0)
+    .map(({ barcodes, internalSkus, names, statuses, skuIds, ...row }) => row)
     .sort((left, right) => left.name.localeCompare(right.name, 'ru') || left.barcode.localeCompare(right.barcode, 'ru'));
 }
+
+function applyActiveRequestReservations(
+  rows: Map<
+    string,
+    AggregatedStockRow & {
+      barcodes: Set<string>;
+      internalSkus: Set<string>;
+      names: Set<string>;
+      statuses: Set<string>;
+    }
+  >,
+  requests: ClientRequestSummary[],
+) {
+  const orderedRows = [...rows.values()].sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+
+  requests
+    .filter((request) => request.type === 'OUTBOUND' && activeRequestStatuses.has(request.status))
+    .flatMap((request) => request.items)
+    .forEach((item) => {
+      let remaining = Number(item.quantity);
+      if (remaining <= 0) {
+        return;
+      }
+
+      if (item.skuId) {
+        for (const row of orderedRows.filter((candidate) => candidate.skuIds.has(item.skuId as string))) {
+          remaining = deductFromRow(row, remaining);
+          if (remaining <= 0) {
+            return;
+          }
+        }
+      }
+
+      const barcode = item.barcode?.trim();
+      if (!barcode) {
+        return;
+      }
+
+      for (const row of orderedRows.filter((candidate) => candidate.barcode === barcode || candidate.barcodes.has(barcode))) {
+        remaining = deductFromRow(row, remaining);
+        if (remaining <= 0) {
+          return;
+        }
+      }
+    });
+}
+
+function deductFromRow(row: AggregatedStockRow, quantity: number) {
+  const taken = Math.min(row.quantity, quantity);
+  row.quantity -= taken;
+  return quantity - taken;
+}
+
+const activeRequestStatuses = new Set<ClientRequestSummary['status']>([
+  'IN_WORK',
+]);
 
 function latestDateString(left: string, right: string) {
   return new Date(left).getTime() >= new Date(right).getTime() ? left : right;

@@ -155,6 +155,7 @@ describe('ClientRequestsService', () => {
           type: ClientRequestType.OUTBOUND,
           status: ClientRequestStatus.PACKED,
           title: 'Отгрузка',
+          packages: [],
         }),
       },
       $transaction: vi.fn((callback) => callback(tx)),
@@ -163,7 +164,13 @@ describe('ClientRequestsService', () => {
 
     const updated = await service.updateStatus(
       'request-1',
-      { status: ClientRequestStatus.DONE, managerComment: 'Сдано' },
+      {
+        status: ClientRequestStatus.DONE,
+        managerComment: 'Сдано',
+        boxes: 2,
+        pallets: 1,
+        packedUnits: 30,
+      },
       user({
         clientIds: ['client-1'],
         writableClientIds: ['client-1'],
@@ -176,6 +183,9 @@ describe('ClientRequestsService', () => {
         requestId: 'request-1',
         idempotencyKey: 'manual-status-done:request-1',
         comment: 'Сдано',
+        boxes: 2,
+        pallets: 1,
+        packedUnits: 30,
       }),
       expect.any(Object),
     );
@@ -201,6 +211,62 @@ describe('ClientRequestsService', () => {
     expect(updated).toMatchObject({ id: 'request-1', status: ClientRequestStatus.DONE });
   });
 
+  it('сдает аварийно упакованную заявку по ее фактическим коробам без повторного ручного списания', async () => {
+    const stock = {
+      shipClientRequest: vi.fn().mockResolvedValue({ status: 'ALREADY_APPLIED', requestId: 'request-1' }),
+      shipClientRequestFromCurrentStock: vi.fn(),
+    };
+    const tx = {
+      clientRequest: {
+        update: vi.fn().mockResolvedValue({
+          id: 'request-1',
+          clientId: 'client-1',
+          type: ClientRequestType.OUTBOUND,
+          status: ClientRequestStatus.DONE,
+          title: 'Аварийная отгрузка',
+          destinationCity: 'Казань',
+          items: [],
+          files: [],
+          packages: [],
+          client: { id: 'client-1', code: 'CL-1', name: 'Клиент' },
+        }),
+      },
+      clientRequestEvent: { create: vi.fn().mockResolvedValue({ id: 'event-1' }) },
+      clientNotificationPreference: { findUnique: vi.fn().mockResolvedValue(null) },
+      clientNotification: { create: vi.fn().mockResolvedValue({ id: 'notification-1' }) },
+    };
+    const prisma = {
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'request-1',
+          clientId: 'client-1',
+          type: ClientRequestType.OUTBOUND,
+          status: ClientRequestStatus.PACKED,
+          title: 'Аварийная отгрузка',
+          packages: [{ id: 'emergency-package-1' }],
+        }),
+      },
+      $transaction: vi.fn((callback) => callback(tx)),
+    };
+    const service = new ClientRequestsService(prisma as never, new ClientScopeService(), stock as never);
+
+    await service.updateStatus(
+      'request-1',
+      { status: ClientRequestStatus.DONE, managerComment: 'Сдано после аварийного закрытия' },
+      user({ clientIds: ['client-1'], writableClientIds: ['client-1'] }),
+    );
+
+    expect(stock.shipClientRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: 'request-1',
+        idempotencyKey: 'manual-status-done:request-1',
+        comment: 'Сдано после аварийного закрытия',
+      }),
+      expect.any(Object),
+    );
+    expect(stock.shipClientRequestFromCurrentStock).not.toHaveBeenCalled();
+  });
+
   it('позволяет клиенту отменить свою заявку до начала сборки', async () => {
     const tx = {
       clientRequest: {
@@ -224,6 +290,9 @@ describe('ClientRequestsService', () => {
           status: ClientRequestStatus.SUBMITTED,
           title: 'Сборка',
         }),
+      },
+      clientNotificationPreference: {
+        findUnique: vi.fn().mockResolvedValue(null),
       },
       $transaction: vi.fn((callback) => callback(tx)),
     };
@@ -289,6 +358,7 @@ function user(overrides: Partial<AuthUser>): AuthUser {
 
 function stockOperations() {
   return {
+    shipClientRequest: vi.fn(),
     shipClientRequestFromCurrentStock: vi.fn(),
   };
 }

@@ -172,6 +172,9 @@ export class ClientsService {
           ...(dto.logisticsInvoiceMode === undefined ? {} : { logisticsInvoiceMode: dto.logisticsInvoiceMode }),
           ...(dto.storageBillingMode === undefined ? {} : { storageBillingMode: dto.storageBillingMode }),
           ...(dto.storesWithoutBoxes === undefined ? {} : { storesWithoutBoxes: dto.storesWithoutBoxes }),
+          ...(dto.onlineReceiptVisibleToClient === undefined
+            ? {}
+            : { onlineReceiptVisibleToClient: dto.onlineReceiptVisibleToClient }),
           ...nullableUpdateClientData(dto),
         },
         select: this.clientSummarySelect(),
@@ -283,6 +286,7 @@ export class ClientsService {
             logisticsInvoiceMode: dto.logisticsInvoiceMode ?? ClientLogisticsInvoiceMode.SEPARATE,
             storageBillingMode: dto.storageBillingMode ?? ClientStorageBillingMode.MONTHLY,
             storesWithoutBoxes: dto.storesWithoutBoxes ?? false,
+            onlineReceiptVisibleToClient: dto.onlineReceiptVisibleToClient ?? false,
             fulfillmentManagerUserId: normalizeNullableString(dto.fulfillmentManagerUserId),
           },
           select: this.clientSummarySelect(),
@@ -390,6 +394,7 @@ export class ClientsService {
       logisticsInvoiceMode: true,
       storageBillingMode: true,
       storesWithoutBoxes: true,
+      onlineReceiptVisibleToClient: true,
       fulfillmentManagerUserId: true,
       fulfillmentManager: {
         select: {

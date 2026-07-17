@@ -1,6 +1,7 @@
-import { ImageOff, RefreshCw, Search, X } from 'lucide-react';
+import { ImageOff, Pencil, RefreshCw, Search, X } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { fetchNomenclature, type AuthSession, type NomenclatureSummary } from '../../lib/api';
+import { NomenclatureEditDialog } from './NomenclatureEditDialog';
 
 type SkuDirectoryTableProps = {
   session: AuthSession;
@@ -25,6 +26,7 @@ export function SkuDirectoryTable({ session, reloadKey }: SkuDirectoryTableProps
   const [localReloadKey, setLocalReloadKey] = useState(0);
   const [skus, setSkus] = useState<NomenclatureSummary[]>([]);
   const [selectedSku, setSelectedSku] = useState<NomenclatureSummary | null>(null);
+  const [editingSku, setEditingSku] = useState<NomenclatureSummary | null>(null);
   const [error, setError] = useState('');
   const [isLoading, setLoading] = useState(false);
 
@@ -63,6 +65,12 @@ export function SkuDirectoryTable({ session, reloadKey }: SkuDirectoryTableProps
   function applySearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setAppliedSearch(search.trim());
+  }
+
+  function acceptEditedSku(saved: NomenclatureSummary) {
+    setSkus((current) => current.map((sku) => (sku.id === saved.id ? saved : sku)));
+    setSelectedSku((current) => (current?.id === saved.id ? saved : current));
+    setEditingSku(null);
   }
 
   return (
@@ -111,6 +119,7 @@ export function SkuDirectoryTable({ session, reloadKey }: SkuDirectoryTableProps
               <th>Тип</th>
               <th>Цвет</th>
               <th>Размер</th>
+              <th aria-label="Действия" />
             </tr>
           </thead>
           <tbody>
@@ -138,23 +147,47 @@ export function SkuDirectoryTable({ session, reloadKey }: SkuDirectoryTableProps
                 <td>{sku.itemType || '-'}</td>
                 <td>{sku.color || '-'}</td>
                 <td>{sku.size || '-'}</td>
+                <td className="sku-directory-table__actions">
+                  <button
+                    className="icon-button"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setEditingSku(sku);
+                    }}
+                    title="Редактировать"
+                    aria-label={`Редактировать ${sku.name}`}
+                  >
+                    <Pencil size={15} aria-hidden="true" />
+                  </button>
+                </td>
               </tr>
             ))}
             {skus.length === 0 ? (
               <tr>
-                <td colSpan={8}>{isLoading ? 'Загрузка...' : 'Номенклатура не найдена'}</td>
+                <td colSpan={9}>{isLoading ? 'Загрузка...' : 'Номенклатура не найдена'}</td>
               </tr>
             ) : null}
           </tbody>
         </table>
       </div>
 
-      {selectedSku ? <SkuDetailsCard sku={selectedSku} onClose={() => setSelectedSku(null)} /> : null}
+      {selectedSku ? (
+        <SkuDetailsCard sku={selectedSku} onClose={() => setSelectedSku(null)} onEdit={() => setEditingSku(selectedSku)} />
+      ) : null}
+      {editingSku ? (
+        <NomenclatureEditDialog
+          item={editingSku}
+          session={session}
+          onClose={() => setEditingSku(null)}
+          onSaved={acceptEditedSku}
+        />
+      ) : null}
     </div>
   );
 }
 
-function SkuDetailsCard({ sku, onClose }: { sku: NomenclatureSummary; onClose: () => void }) {
+function SkuDetailsCard({ sku, onClose, onEdit }: { sku: NomenclatureSummary; onClose: () => void; onEdit: () => void }) {
   const details = sku as NomenclatureWithDetails;
   const dimensions = [
     { label: 'Длина', value: details.lengthCm, suffix: 'см' },
@@ -185,9 +218,14 @@ function SkuDetailsCard({ sku, onClose }: { sku: NomenclatureSummary; onClose: (
             <h3>{details.name}</h3>
             {details.printName ? <p>{details.printName}</p> : null}
           </div>
-          <button className="icon-button" type="button" onClick={onClose} aria-label="Закрыть карточку">
-            <X size={16} aria-hidden="true" />
-          </button>
+          <div className="sku-details-card__actions">
+            <button className="icon-button" type="button" onClick={onEdit} title="Редактировать" aria-label="Редактировать номенклатуру">
+              <Pencil size={16} aria-hidden="true" />
+            </button>
+            <button className="icon-button" type="button" onClick={onClose} aria-label="Закрыть карточку">
+              <X size={16} aria-hidden="true" />
+            </button>
+          </div>
         </div>
 
         <dl className="sku-details-card__facts">

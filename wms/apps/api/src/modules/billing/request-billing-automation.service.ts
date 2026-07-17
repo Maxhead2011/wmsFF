@@ -4,932 +4,207 @@ import {
   BillingChargeStatus,
   BillingInvoiceSource,
   BillingInvoiceStatus,
-  BillingPriceTaxMode,
-  BillingUnit,
   ClientLogisticsInvoiceMode,
-  ClientNotificationEvent,
-  ClientRequestEventType,
-  ClientRequestStatus,
-  ClientRequestType,
-  ClientStorageBillingMode,
   Prisma,
 } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
-import { ClientScopeService } from '../auth/client-scope.service';
-import { isClientNotificationEnabled } from '../client-notifications/client-notification-preferences';
-import { LogisticsService } from '../logistics/logistics.service';
+
+type ApprovedCharge = Prisma.BillingChargeGetPayload<{
+  select: {
+    id: true;
+    clientId: true;
+    requestId: true;
+    description: true;
+    unit: true;
+    quantity: true;
+    unitPriceRub: true;
+    totalRub: true;
+    serviceDate: true;
+    source: true;
+  };
+}>;
 
 @Injectable()
 export class RequestBillingAutomationService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly clientScopes: ClientScopeService,
-    private readonly logistics: LogisticsService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   async generateForDoneRequest(requestId: string, user: AuthUser) {
     const request = await this.prisma.clientRequest.findUnique({
       where: { id: requestId },
-      include: {
-        client: true,
-        items: true,
-        packages: {
-          include: {
-            items: {
-              include: {
-                sku: {
-                  select: {
-                    id: true,
-                    internalSku: true,
-                    name: true,
-                    volumeLiters: true,
-                  },
-                },
-              },
-            },
-          },
-        },
-        events: {
-          where: {
-            eventType: ClientRequestEventType.STATUS_CHANGED,
-            statusTo: { in: [ClientRequestStatus.PACKED, ClientRequestStatus.DONE] },
-          },
-          select: {
-            statusTo: true,
-            createdAt: true,
-          },
-          orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        clientId: true,
+        title: true,
+        updatedAt: true,
+        client: {
+          select: { logisticsInvoiceMode: true },
         },
       },
     });
-
-    if (!request || request.type !== ClientRequestType.OUTBOUND || request.status !== ClientRequestStatus.DONE) {
-      return { status: 'SKIPPED', reason: 'REQUEST_NOT_DONE_OUTBOUND' as const };
-    }
-
-    this.clientScopes.requireClientAccess(user, request.clientId, 'write');
-
-    if (request.client.isDemo) {
-      return { status: 'SKIPPED', reason: 'DEMO_CLIENT' as const };
-    }
-
-    await this.ensureFulfillmentPackageCharges(request, user);
-    await this.ensureItemProcessingCharge(request, user);
-    await this.ensureOnShipmentStorageCharge(request, user);
-
-    const logisticsMode = request.client.logisticsInvoiceMode;
-    let logisticsChargeId: string | null = null;
-    if (logisticsMode !== ClientLogisticsInvoiceMode.DISABLED) {
-      logisticsChargeId = await this.ensureLogisticsChargeOrManualReview(request, user);
-    }
-
-    const mainInvoice = await this.createRequestInvoice({
-      request,
-      source: BillingInvoiceSource.REQUEST_DONE,
-      sourceKey: mainInvoiceSourceKey(request.id),
-      includeLogistics: logisticsMode === ClientLogisticsInvoiceMode.SAME_INVOICE,
-      comment:
-        logisticsMode === ClientLogisticsInvoiceMode.SAME_INVOICE && logisticsChargeId
-          ? 'Автоматический счет по выполненной заявке с логистикой.'
-          : 'Автоматический счет по выполненной заявке.',
-      user,
-    });
-
-    const logisticsInvoice =
-      logisticsMode === ClientLogisticsInvoiceMode.SEPARATE && logisticsChargeId
-        ? await this.createRequestInvoice({
-            request,
-            source: BillingInvoiceSource.LOGISTICS,
-            sourceKey: logisticsInvoiceSourceKey(request.id),
-            onlyChargeIds: [logisticsChargeId],
-            includeLogistics: true,
-            comment: 'Автоматический счет логистики по выполненной заявке.',
-            user,
-          })
-        : null;
-
-    return {
-      status: 'APPLIED',
-      requestId: request.id,
-      mainInvoiceId: mainInvoice?.id ?? null,
-      logisticsInvoiceId: logisticsInvoice?.id ?? null,
-    };
-  }
-
-  private async ensureItemProcessingCharge(
-    request: DoneRequestPayload,
-    user: AuthUser,
-  ) {
-    const sourceKey = itemProcessingSourceKey(request.id);
-    const existing = await this.prisma.billingCharge.findFirst({
-      where: { sourceKey },
-      select: { id: true },
-    });
-    if (existing) {
-      return existing.id;
-    }
-
-    const quantity = request.packages.reduce(
-      (sum, pack) => sum + pack.items.reduce((packSum, item) => packSum + item.quantity, 0),
-      0,
-    );
-    if (quantity <= 0) {
-      return null;
-    }
-
-    const service = await this.prisma.billingService.upsert({
-      where: { code: ITEM_PROCESSING_SERVICE.code },
-      update: {
-        name: ITEM_PROCESSING_SERVICE.name,
-        unit: ITEM_PROCESSING_SERVICE.unit,
-        isActive: true,
-      },
-      create: ITEM_PROCESSING_SERVICE,
-    });
-
-    const clientPrice = await this.prisma.clientBillingService.findUnique({
-      where: {
-        clientId_serviceId: {
-          clientId: request.clientId,
-          serviceId: service.id,
-        },
-      },
-    });
-    if (!clientPrice?.isActive) {
-      return null;
-    }
-
-    const priceRub = decimalToNumber(clientPrice.priceRub);
-    if (priceRub == null || priceRub <= 0) {
-      return null;
-    }
-
-    const billingDate = requestBillingDate(request);
-    const unitPriceRub = applyTaxMode(priceRub, clientPrice.taxMode);
-    const totalRub = roundMoney(quantity * unitPriceRub);
-    const charge = await this.prisma.billingCharge.create({
-      data: {
-        clientId: request.clientId,
-        serviceId: service.id,
-        requestId: request.id,
-        description: `Обработка товара по заявке ${request.title}`,
-        unit: BillingUnit.PIECE,
-        quantity,
-        unitPriceRub,
-        totalRub,
-        status: BillingChargeStatus.APPROVED,
-        serviceDate: billingDate,
-        source: BillingChargeSource.MANUAL,
-        sourceKey,
-        metadata: {
-          requestId: request.id,
-          itemProcessing: true,
-          packedPieces: quantity,
-          taxMode: clientPrice.taxMode,
-          priceBeforeTaxRub: priceRub,
-        },
-        comment: 'Автоматически создано при закрытии заявки.',
-        createdByUserId: user.id,
-        approvedByUserId: user.id,
-        approvedAt: new Date(),
-      },
-      select: { id: true },
-    });
-
-    return charge.id;
-  }
-
-  private async ensureFulfillmentPackageCharges(request: DoneRequestPayload, user: AuthUser) {
-    const counts = countPackages(request.packages);
-    const rows = [
-      { ...FULFILLMENT_BILLING_SERVICES.BOX_60_40_40, quantity: counts.boxes },
-      { ...FULFILLMENT_BILLING_SERVICES.BOX_ASSEMBLY, quantity: counts.boxes },
-      { ...FULFILLMENT_BILLING_SERVICES.PALLET, quantity: counts.pallets },
-      { ...FULFILLMENT_BILLING_SERVICES.PALLET_ASSEMBLY, quantity: counts.pallets },
-    ].filter((row) => row.quantity > 0);
-
-    for (const row of rows) {
-      const sourceKey = fulfillmentPackageSourceKey(request.id, row.code);
-      const existing = await this.prisma.billingCharge.findFirst({
-        where: { sourceKey },
-        select: { id: true },
-      });
-      if (existing) {
-        continue;
-      }
-
-      const service = await this.prisma.billingService.upsert({
-        where: { code: row.code },
-        update: {
-          name: row.name,
-          unit: row.unit,
-          defaultPriceRub: row.defaultPriceRub,
-          isActive: true,
-        },
-        create: {
-          code: row.code,
-          name: row.name,
-          unit: row.unit,
-          defaultPriceRub: row.defaultPriceRub,
-          isActive: true,
-        },
-      });
-
-      const clientPrice = await this.prisma.clientBillingService.upsert({
-        where: {
-          clientId_serviceId: {
-            clientId: request.clientId,
-            serviceId: service.id,
-          },
-        },
-        update: {},
-        create: {
-          clientId: request.clientId,
-          serviceId: service.id,
-          priceRub: row.defaultPriceRub,
-          taxMode: BillingPriceTaxMode.INCLUDED,
-          isActive: true,
-          updatedByUserId: user.id,
-        },
-      });
-      if (!clientPrice.isActive) {
-        continue;
-      }
-
-      const priceRub = decimalToNumber(clientPrice.priceRub);
-      if (priceRub == null || priceRub <= 0) {
-        continue;
-      }
-
-      const billingDate = requestBillingDate(request);
-      const unitPriceRub = applyTaxMode(priceRub, clientPrice.taxMode);
-      const totalRub = roundMoney(unitPriceRub * row.quantity);
-      await this.prisma.billingCharge.create({
-        data: {
-          clientId: request.clientId,
-          serviceId: service.id,
-          requestId: request.id,
-          description: `${row.name} по заявке ${request.title}`,
-          unit: row.unit,
-          quantity: row.quantity,
-          unitPriceRub,
-          totalRub,
-          status: BillingChargeStatus.APPROVED,
-          serviceDate: billingDate,
-          source: BillingChargeSource.MANUAL,
-          sourceKey,
-          metadata: {
-            requestId: request.id,
-            packageBilling: true,
-            packagesCount: request.packages.length,
-            boxes: counts.boxes,
-            pallets: counts.pallets,
-            taxMode: clientPrice.taxMode,
-            priceBeforeTaxRub: priceRub,
-          },
-          comment: 'Автоматически создано при закрытии заявки.',
-          createdByUserId: user.id,
-          approvedByUserId: user.id,
-          approvedAt: new Date(),
-        },
-      });
-    }
-  }
-
-  private async ensureOnShipmentStorageCharge(
-    request: DoneRequestPayload,
-    user: AuthUser,
-  ) {
-    if (
-      request.client.storageBillingMode !== ClientStorageBillingMode.ON_SHIPMENT ||
-      !request.client.storageAccountingEnabled
-    ) {
-      return null;
-    }
-
-    const sourceKey = storageOnShipmentSourceKey(request.id);
-    const existing = await this.prisma.billingCharge.findFirst({
-      where: { sourceKey },
-      select: { id: true },
-    });
-    if (existing) {
-      return existing.id;
-    }
-
-    const storageService = await this.ensureStorageService();
-    const unitPriceRub =
-      decimalToNumber(request.client.storagePriceRubPerLiterDay) ?? decimalToNumber(storageService.defaultPriceRub);
-    if (unitPriceRub == null) {
-      return null;
-    }
-
-    const billingDate = requestBillingDate(request);
-    const periodFrom = startOfDayUtc(request.createdAt);
-    const periodTo = endOfDayUtc(billingDate);
-    const days = countInclusiveDays(periodFrom, periodTo);
-    const details = calculateShipmentStorageDetails(request, days);
-    if (details.literDays <= 0) {
-      return null;
-    }
-
-    const totalRub = roundMoney(details.literDays * unitPriceRub);
-    const charge = await this.prisma.billingCharge.create({
-      data: {
-        clientId: request.clientId,
-        serviceId: storageService.id,
-        requestId: request.id,
-        description: `Хранение до отгрузки по заявке ${request.title}`,
-        unit: BillingUnit.LITER_DAY,
-        quantity: details.literDays,
-        unitPriceRub,
-        totalRub,
-        status: BillingChargeStatus.APPROVED,
-        serviceDate: billingDate,
-        source: BillingChargeSource.STORAGE,
-        sourceKey,
-        metadata: {
-          requestId: request.id,
-          periodFrom: formatDateKey(periodFrom),
-          periodTo: formatDateKey(periodTo),
-          days,
-          totalLiters: details.totalLiters,
-          literDays: details.literDays,
-          skippedWithoutVolume: details.skippedWithoutVolume,
-          skuTotals: details.skuTotals,
-        },
-        comment: 'Автоматически создано при закрытии заявки.',
-        createdByUserId: user.id,
-        approvedByUserId: user.id,
-        approvedAt: new Date(),
-      },
-      select: { id: true },
-    });
-
-    return charge.id;
-  }
-
-  private async ensureLogisticsChargeOrManualReview(
-    request: DoneRequestPayload,
-    user: AuthUser,
-  ) {
-    const sourceKey = logisticsChargeSourceKey(request.id);
-    const existing = await this.prisma.billingCharge.findFirst({
-      where: { sourceKey },
-      select: { id: true },
-    });
-    if (existing) {
-      return existing.id;
-    }
-
-    const counts = await this.resolveLogisticsPackageCounts(request);
-    if (!request.destinationCity || (counts.boxes <= 0 && counts.pallets <= 0)) {
-      await this.createManualLogisticsReview(request, user, 'Не указан город назначения или нет упаковочных мест.');
-      return null;
-    }
-
-    const billingDate = requestBillingDate(request);
-    const quoteInput =
-      counts.pallets > 0
-        ? { destination: request.destinationCity, pallets: counts.pallets, quoteDate: billingDate.toISOString() }
-        : { destination: request.destinationCity, boxes: counts.boxes, quoteDate: billingDate.toISOString() };
-
-    try {
-      const quote = await this.logistics.quote(quoteInput);
-      if (quote.requiresManualReview || quote.estimatedTotalRub == null) {
-        await this.createManualLogisticsReview(
-          request,
-          user,
-          quote.note ?? 'Тариф требует ручной проверки.',
-          quote.tariffSet.id,
-        );
-        return null;
-      }
-
-      const service = await this.ensureDeliveryBillingService();
-      const totalRub = roundMoney(quote.estimatedTotalRub);
-      const charge = await this.prisma.billingCharge.create({
-        data: {
-          clientId: request.clientId,
-          serviceId: service.id,
-          requestId: request.id,
-          description: `Доставка Москва -> ${quote.route.destination}`,
-          unit: BillingUnit.SERVICE,
-          quantity: 1,
-          unitPriceRub: totalRub,
-          totalRub,
-          status: BillingChargeStatus.APPROVED,
-          serviceDate: billingDate,
-          source: BillingChargeSource.LOGISTICS,
-          sourceKey,
-          metadata: {
-            requestId: request.id,
-            route: quote.route,
-            boxes: counts.boxes,
-            pallets: counts.pallets,
-            billedBy: counts.pallets > 0 ? 'PALLETS' : 'BOXES',
-            tariffSetId: quote.tariffSet.id,
-            tariffSetName: quote.tariffSet.name,
-            tier: quote.tier,
-          },
-          comment: 'Автоматически создано при закрытии заявки.',
-          createdByUserId: user.id,
-          approvedByUserId: user.id,
-          approvedAt: new Date(),
-        },
-        select: { id: true },
-      });
-
-      return charge.id;
-    } catch (caught) {
-      const reason = caught instanceof Error ? caught.message : 'Тариф логистики не найден.';
-      await this.createManualLogisticsReview(request, user, reason);
-      return null;
-    }
-  }
-
-  private async resolveLogisticsPackageCounts(request: DoneRequestPayload) {
-    const packageCounts = countPackages(request.packages);
-    if (packageCounts.boxes > 0 || packageCounts.pallets > 0) {
-      return packageCounts;
+    if (!request) {
+      return { status: 'FAILED' as const, created: 0 };
     }
 
     const charges = await this.prisma.billingCharge.findMany({
       where: {
-        requestId: request.id,
-        status: { not: BillingChargeStatus.CANCELLED },
-        service: {
-          code: {
-            in: LOGISTICS_PACKAGE_SERVICE_CODES,
-          },
-        },
-      },
-      select: {
-        quantity: true,
-        service: {
-          select: {
-            code: true,
-          },
-        },
-      },
-    });
-
-    let boxes = 0;
-    let pallets = 0;
-    for (const charge of charges) {
-      const quantity = Math.ceil(decimalToNumber(charge.quantity) ?? 0);
-      if (quantity <= 0) {
-        continue;
-      }
-      if (LOGISTICS_BOX_SERVICE_CODES.includes(charge.service?.code ?? '')) {
-        boxes = Math.max(boxes, quantity);
-      }
-      if (LOGISTICS_PALLET_SERVICE_CODES.includes(charge.service?.code ?? '')) {
-        pallets = Math.max(pallets, quantity);
-      }
-    }
-
-    return { boxes, pallets };
-  }
-
-  private async createRequestInvoice(input: {
-    request: DoneRequestPayload;
-    source: BillingInvoiceSource;
-    sourceKey: string;
-    includeLogistics: boolean;
-    onlyChargeIds?: string[];
-    comment: string;
-    user: AuthUser;
-  }) {
-    return this.prisma.$transaction(async (tx) => {
-      const existing = await tx.billingInvoice.findFirst({
-        where: { sourceKey: input.sourceKey },
-        include: billingInvoiceInclude,
-      });
-      if (existing) {
-        return existing;
-      }
-
-      const charges = await tx.billingCharge.findMany({
-        where: {
-          clientId: input.request.clientId,
-          requestId: input.request.id,
-          id: input.onlyChargeIds ? { in: input.onlyChargeIds } : undefined,
-          status: BillingChargeStatus.APPROVED,
-          source: input.includeLogistics ? undefined : { not: BillingChargeSource.LOGISTICS },
-          invoiceItems: {
-            none: {
-              invoice: {
-                status: {
-                  not: BillingInvoiceStatus.CANCELLED,
-                },
-              },
+        requestId,
+        status: BillingChargeStatus.APPROVED,
+        invoiceItems: {
+          none: {
+            invoice: {
+              status: { not: BillingInvoiceStatus.CANCELLED },
             },
           },
         },
-        orderBy: [{ serviceDate: 'asc' }, { createdAt: 'asc' }],
-      });
+      },
+      select: {
+        id: true,
+        clientId: true,
+        requestId: true,
+        description: true,
+        unit: true,
+        quantity: true,
+        unitPriceRub: true,
+        totalRub: true,
+        serviceDate: true,
+        source: true,
+      },
+      orderBy: [{ serviceDate: 'asc' }, { createdAt: 'asc' }],
+    });
+    if (!charges.length) {
+      return { status: 'APPLIED' as const, created: 0 };
+    }
 
-      if (charges.length === 0) {
-        return null;
+    const logisticsCharges = charges.filter((charge) => charge.source === BillingChargeSource.LOGISTICS);
+    const serviceCharges = charges.filter((charge) => charge.source !== BillingChargeSource.LOGISTICS);
+    let mainInvoiceId: string | undefined;
+    let logisticsInvoiceId: string | undefined;
+    const mode = request.client.logisticsInvoiceMode;
+
+    if (mode === ClientLogisticsInvoiceMode.SAME_INVOICE) {
+      const invoice = await this.createDraftInvoice({
+        request,
+        charges,
+        prefix: 'USL',
+        source: BillingInvoiceSource.REQUEST_DONE,
+        sourceKey: `request:${request.id}:all-services`,
+        user,
+      });
+      if (invoice) {
+        mainInvoiceId = invoice.id;
+      }
+    } else {
+      const serviceInvoice = await this.createDraftInvoice({
+        request,
+        charges: serviceCharges,
+        prefix: 'USL',
+        source: BillingInvoiceSource.REQUEST_DONE,
+        sourceKey: `request:${request.id}:services`,
+        user,
+      });
+      if (serviceInvoice) {
+        mainInvoiceId = serviceInvoice.id;
       }
 
-      const fallbackDate = requestBillingDate(input.request);
-      const periodFrom = minDate(charges.map((charge) => charge.serviceDate)) ?? fallbackDate;
-      const periodTo = maxDate(charges.map((charge) => charge.serviceDate)) ?? fallbackDate;
-      const totalRub = roundMoney(charges.reduce((sum, charge) => sum + (decimalToNumber(charge.totalRub) ?? 0), 0));
-      const number = await nextInvoiceNumber(tx, periodFrom, input.source);
+      if (mode !== ClientLogisticsInvoiceMode.DISABLED) {
+        const logisticsInvoice = await this.createDraftInvoice({
+          request,
+          charges: logisticsCharges,
+          prefix: 'LOG',
+          source: BillingInvoiceSource.LOGISTICS,
+          sourceKey: `request:${request.id}:logistics`,
+          user,
+        });
+        if (logisticsInvoice) {
+          logisticsInvoiceId = logisticsInvoice.id;
+        }
+      }
+    }
 
-      return tx.billingInvoice.create({
-        data: {
-          number,
-          clientId: input.request.clientId,
-          requestId: input.request.id,
-          source: input.source,
-          sourceKey: input.sourceKey,
-          periodFrom,
-          periodTo: endOfDayUtc(periodTo),
-          totalRub,
-          comment: input.comment,
-          createdByUserId: input.user.id,
-          items: {
-            create: charges.map((charge) => ({
-              chargeId: charge.id,
-              description: charge.description,
-              unit: charge.unit,
-              quantity: charge.quantity,
-              unitPriceRub: charge.unitPriceRub,
-              totalRub: charge.totalRub,
-              serviceDate: charge.serviceDate,
-            })),
-          },
-        },
-        include: billingInvoiceInclude,
-      });
-    });
+    return {
+      status: 'APPLIED' as const,
+      created: [mainInvoiceId, logisticsInvoiceId].filter(Boolean).length,
+      mainInvoiceId,
+      logisticsInvoiceId,
+    };
   }
 
-  private async createManualLogisticsReview(
-    request: DoneRequestPayload,
-    user: AuthUser,
-    reason: string,
-    tariffSetId?: string | null,
-  ) {
-    const body = [
-      'Основной счет по заявке формируется без логистики.',
-      `Причина: ${reason}`,
-      tariffSetId ? `Тарифный набор: ${tariffSetId}` : null,
-    ]
-      .filter(Boolean)
-      .join('\n');
+  private async createDraftInvoice(input: {
+    request: { id: string; clientId: string; title: string; updatedAt: Date };
+    charges: ApprovedCharge[];
+    prefix: 'USL' | 'LOG';
+    source: BillingInvoiceSource;
+    sourceKey: string;
+    user: AuthUser;
+  }) {
+    if (!input.charges.length) {
+      return null;
+    }
 
-    const existing = await this.prisma.clientRequestEvent.findFirst({
-      where: {
-        requestId: request.id,
-        title: 'Требуется ручной расчет логистики',
-      },
+    const existing = await this.prisma.billingInvoice.findUnique({
+      where: { sourceKey: input.sourceKey },
       select: { id: true },
     });
     if (existing) {
-      await this.prisma.clientRequestEvent.update({
-        where: { id: existing.id },
-        data: { body },
-      });
-      return existing.id;
+      return null;
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      const event = await tx.clientRequestEvent.create({
-        data: {
-          requestId: request.id,
-          clientId: request.clientId,
-          eventType: ClientRequestEventType.COMMENT,
-          title: 'Требуется ручной расчет логистики',
-          body,
-          createdByUserId: user.id,
-        },
-        select: { id: true },
-      });
+    const periodFrom = minDate(input.charges.map((charge) => charge.serviceDate)) ?? input.request.updatedAt;
+    const periodTo = maxDate(input.charges.map((charge) => charge.serviceDate)) ?? input.request.updatedAt;
+    const totalRub = roundMoney(input.charges.reduce((sum, charge) => sum + decimalToNumber(charge.totalRub), 0));
+    const number = await this.nextInvoiceNumber(input.prefix, periodTo);
 
-      if (await isClientNotificationEnabled(tx, request.clientId, ClientNotificationEvent.MANUAL)) {
-        await tx.clientNotification.create({
-          data: {
-            clientId: request.clientId,
-            requestId: request.id,
-            title: 'Требуется ручной расчет логистики',
-            body,
-            severity: 'WARNING',
-            createdByUserId: user.id,
-          },
-        });
-      }
-
-      return event.id;
-    });
-  }
-
-  private ensureStorageService() {
-    return this.prisma.billingService.upsert({
-      where: { code: STORAGE_SERVICE_CODE },
-      update: {
-        name: 'Хранение по литражу',
-        unit: BillingUnit.LITER_DAY,
-        isActive: true,
-      },
-      create: {
-        code: STORAGE_SERVICE_CODE,
-        name: 'Хранение по литражу',
-        unit: BillingUnit.LITER_DAY,
-        isActive: true,
-      },
-    });
-  }
-
-  private ensureDeliveryBillingService() {
-    return this.prisma.billingService.upsert({
-      where: { code: DELIVERY_SERVICE_CODE },
-      update: {
-        name: 'Доставка по заявке',
-        unit: BillingUnit.SERVICE,
-        isActive: true,
-      },
-      create: {
-        code: DELIVERY_SERVICE_CODE,
-        name: 'Доставка по заявке',
-        unit: BillingUnit.SERVICE,
-        isActive: true,
-      },
-    });
-  }
-}
-
-const STORAGE_SERVICE_CODE = 'STORAGE_LITER_DAY';
-const DELIVERY_SERVICE_CODE = 'LOGISTICS_DELIVERY';
-const ITEM_PROCESSING_SERVICE = {
-  code: 'ITEM_PROCESSING',
-  name: 'Обработка товара',
-  unit: BillingUnit.PIECE,
-  isActive: true,
-} satisfies Prisma.BillingServiceUncheckedCreateInput;
-const FULFILLMENT_BILLING_SERVICES = {
-  BOX_60_40_40: {
-    code: 'BOX_60_40_40',
-    name: 'Короб 60*40*40',
-    unit: BillingUnit.PIECE,
-    defaultPriceRub: 100,
-  },
-  BOX_ASSEMBLY: {
-    code: 'BOX_ASSEMBLY',
-    name: 'Сборка короба',
-    unit: BillingUnit.PIECE,
-    defaultPriceRub: 40,
-  },
-  PALLET: {
-    code: 'PALLET',
-    name: 'Паллет',
-    unit: BillingUnit.PALLET,
-    defaultPriceRub: 350,
-  },
-  PALLET_ASSEMBLY: {
-    code: 'PALLET_ASSEMBLY',
-    name: 'Сборка паллета',
-    unit: BillingUnit.PALLET,
-    defaultPriceRub: 250,
-  },
-} satisfies Record<string, Prisma.BillingServiceUncheckedCreateInput & { defaultPriceRub: number }>;
-const LOGISTICS_BOX_SERVICE_CODES = [
-  FULFILLMENT_BILLING_SERVICES.BOX_60_40_40.code,
-  FULFILLMENT_BILLING_SERVICES.BOX_ASSEMBLY.code,
-];
-const LOGISTICS_PALLET_SERVICE_CODES = [
-  FULFILLMENT_BILLING_SERVICES.PALLET.code,
-  FULFILLMENT_BILLING_SERVICES.PALLET_ASSEMBLY.code,
-];
-const LOGISTICS_PACKAGE_SERVICE_CODES = [...LOGISTICS_BOX_SERVICE_CODES, ...LOGISTICS_PALLET_SERVICE_CODES];
-
-const billingInvoiceInclude = {
-  client: {
-    select: {
-      id: true,
-      code: true,
-      name: true,
-    },
-  },
-  request: {
-    select: {
-      id: true,
-      title: true,
-      type: true,
-      status: true,
-    },
-  },
-  createdBy: {
-    select: {
-      id: true,
-      email: true,
-      name: true,
-    },
-  },
-  items: {
-    include: {
-      charge: {
-        select: {
-          id: true,
-          description: true,
-          status: true,
-        },
-      },
-    },
-    orderBy: [{ serviceDate: 'asc' }, { id: 'asc' }],
-  },
-  payments: {
-    orderBy: [{ paidAt: 'desc' }, { createdAt: 'desc' }],
-  },
-} satisfies Prisma.BillingInvoiceInclude;
-
-type DoneRequestPayload = Prisma.ClientRequestGetPayload<{
-  include: {
-    client: true;
-    items: true;
-    packages: {
-      include: {
+    return this.prisma.billingInvoice.create({
+      data: {
+        number,
+        clientId: input.request.clientId,
+        requestId: input.request.id,
+        periodFrom,
+        periodTo,
+        status: BillingInvoiceStatus.DRAFT,
+        source: input.source,
+        sourceKey: input.sourceKey,
+        totalRub,
+        comment: `Автоматический черновик по заявке ${input.request.title}`,
+        createdByUserId: input.user.id,
         items: {
-          include: {
-            sku: {
-              select: {
-                id: true;
-                internalSku: true;
-                name: true;
-                volumeLiters: true;
-              };
-            };
-          };
-        };
-      };
-    };
-    events: {
-      select: {
-        statusTo: true;
-        createdAt: true;
-      };
-    };
-  };
-}>;
-
-function requestBillingDate(
-  request: {
-    updatedAt: Date;
-    events?: Array<{ statusTo: ClientRequestStatus | null; createdAt: Date }>;
-  },
-) {
-  return (
-    request.events?.find((event) => event.statusTo === ClientRequestStatus.PACKED)?.createdAt ??
-    request.events?.find((event) => event.statusTo === ClientRequestStatus.DONE)?.createdAt ??
-    request.updatedAt
-  );
-}
-
-function countPackages(packages: Array<{ packageType: string | null }>) {
-  return packages.reduce(
-    (result, pack) => {
-      if (isPalletPackage(pack.packageType)) {
-        result.pallets += 1;
-      } else {
-        result.boxes += 1;
-      }
-      return result;
-    },
-    { boxes: 0, pallets: 0 },
-  );
-}
-
-function calculateShipmentStorageDetails(request: DoneRequestPayload, days: number) {
-  const skuTotals = new Map<string, { name: string; quantity: number; volumeLiters: number; totalLiters: number }>();
-  let totalLiters = 0;
-  let skippedWithoutVolume = 0;
-
-  for (const pack of request.packages) {
-    for (const item of pack.items) {
-      const volumeLiters = decimalToNumber(item.sku?.volumeLiters);
-      if (volumeLiters == null || volumeLiters <= 0) {
-        skippedWithoutVolume += item.quantity;
-        continue;
-      }
-
-      const key = item.sku?.id ?? item.requestItemId;
-      const existing = skuTotals.get(key) ?? {
-        name: item.sku?.name ?? item.sku?.internalSku ?? key,
-        quantity: 0,
-        volumeLiters,
-        totalLiters: 0,
-      };
-      existing.quantity += item.quantity;
-      existing.totalLiters = roundQuantity(existing.totalLiters + item.quantity * volumeLiters);
-      skuTotals.set(key, existing);
-      totalLiters = roundQuantity(totalLiters + item.quantity * volumeLiters);
-    }
-  }
-
-  return {
-    totalLiters,
-    literDays: roundQuantity(totalLiters * days),
-    skippedWithoutVolume,
-    skuTotals: [...skuTotals.values()],
-  };
-}
-
-async function nextInvoiceNumber(tx: Prisma.TransactionClient, periodFrom: Date, source: BillingInvoiceSource) {
-  const prefix = `${invoiceNumberPrefix(source)}-${periodFrom.getUTCFullYear()}${String(periodFrom.getUTCMonth() + 1).padStart(2, '0')}`;
-  const count = await tx.billingInvoice.count({
-    where: {
-      number: {
-        startsWith: prefix,
+          create: input.charges.map((charge) => ({
+            chargeId: charge.id,
+            description: charge.description,
+            unit: charge.unit,
+            quantity: charge.quantity,
+            unitPriceRub: charge.unitPriceRub,
+            totalRub: charge.totalRub,
+            serviceDate: charge.serviceDate,
+          })),
+        },
       },
-    },
-  });
-
-  return `${prefix}-${String(count + 1).padStart(4, '0')}`;
-}
-
-function invoiceNumberPrefix(source: BillingInvoiceSource) {
-  return source === BillingInvoiceSource.LOGISTICS ? 'LOG' : 'USL';
-}
-
-function mainInvoiceSourceKey(requestId: string) {
-  return `request-done:${requestId}:main`;
-}
-
-function logisticsInvoiceSourceKey(requestId: string) {
-  return `request-done:${requestId}:logistics`;
-}
-
-function itemProcessingSourceKey(requestId: string) {
-  return `request-done:${requestId}:item-processing`;
-}
-
-function fulfillmentPackageSourceKey(requestId: string, code: string) {
-  return `fulfillment-package:${requestId}:${code}`;
-}
-
-function storageOnShipmentSourceKey(requestId: string) {
-  return `request-done:${requestId}:storage-on-shipment`;
-}
-
-function logisticsChargeSourceKey(requestId: string) {
-  return `request-done:${requestId}:logistics-charge`;
-}
-
-function isPalletPackage(packageType?: string | null) {
-  return ['PALLET', 'PALLETTE', 'ПАЛЛЕТ', 'ПАЛЛЕТА'].includes((packageType ?? '').trim().toUpperCase());
-}
-
-function applyTaxMode(unitPriceRub: number, taxMode: BillingPriceTaxMode) {
-  if (taxMode === BillingPriceTaxMode.ADD_6_PERCENT) {
-    return roundMoney((unitPriceRub / 94) * 100);
+      select: { id: true },
+    });
   }
 
-  return roundMoney(unitPriceRub);
+  private async nextInvoiceNumber(prefix: 'USL' | 'LOG', date: Date) {
+    const datePrefix = `${prefix}-${date.getUTCFullYear()}${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+    const count = await this.prisma.billingInvoice.count({
+      where: { number: { startsWith: datePrefix } },
+    });
+    return `${datePrefix}-${String(count + 1).padStart(4, '0')}`;
+  }
 }
 
-function decimalToNumber(value?: Prisma.Decimal | number | string | null) {
-  if (value == null) {
-    return null;
-  }
-
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
+function decimalToNumber(value: Prisma.Decimal | string | number | null | undefined) {
+  return value == null ? 0 : Number(value);
 }
 
 function roundMoney(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
-function roundQuantity(value: number) {
-  return Math.round((value + Number.EPSILON) * 1000) / 1000;
+function minDate(dates: Date[]) {
+  return dates.reduce<Date | null>((current, date) => (!current || date < current ? date : current), null);
 }
 
-function startOfDayUtc(value: Date) {
-  return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
-}
-
-function endOfDayUtc(value: Date) {
-  return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate(), 23, 59, 59, 999));
-}
-
-function countInclusiveDays(periodFrom: Date, periodTo: Date) {
-  const start = startOfDayUtc(periodFrom).getTime();
-  const end = startOfDayUtc(periodTo).getTime();
-  return Math.max(1, Math.floor((end - start) / 86_400_000) + 1);
-}
-
-function formatDateKey(value: Date) {
-  return value.toISOString().slice(0, 10);
-}
-
-function minDate(values: Date[]) {
-  return values.reduce<Date | null>((result, value) => (!result || value < result ? value : result), null);
-}
-
-function maxDate(values: Date[]) {
-  return values.reduce<Date | null>((result, value) => (!result || value > result ? value : result), null);
+function maxDate(dates: Date[]) {
+  return dates.reduce<Date | null>((current, date) => (!current || date > current ? date : current), null);
 }

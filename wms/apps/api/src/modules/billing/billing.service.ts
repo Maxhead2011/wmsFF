@@ -2,13 +2,10 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import {
   BillingChargeSource,
   BillingChargeStatus,
-  BillingInvoiceSource,
   BillingInvoiceStatus,
-  BillingPaymentStatus,
   BillingPriceTaxMode,
   BillingUnit,
   ClientNotificationEvent,
-  ClientRequestStatus,
   MovementType,
   Prisma,
 } from '@prisma/client';
@@ -17,7 +14,6 @@ import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { isClientNotificationEnabled } from '../client-notifications/client-notification-preferences';
 import { TelegramNotificationService } from '../client-notifications/telegram-notification.service';
-import { RequestBillingAutomationService } from './request-billing-automation.service';
 import { CreateBillingChargeDto } from './dto/create-billing-charge.dto';
 import { CreateBillingInvoiceDto } from './dto/create-billing-invoice.dto';
 import { CreateBillingPaymentDto } from './dto/create-billing-payment.dto';
@@ -37,13 +33,11 @@ export class BillingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly clientScopes: ClientScopeService,
-    private readonly requestBillingAutomation: RequestBillingAutomationService,
     private readonly telegram?: TelegramNotificationService,
   ) {}
 
   async listServices() {
     await this.ensureStandardBillingServices();
-    await this.syncNomenclatureBillingServices();
     return this.prisma.billingService.findMany({
       orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
     });
@@ -67,7 +61,6 @@ export class BillingService {
   async listClientServices(clientId: string, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, clientId, 'read');
     await this.ensureStandardClientBillingServices(clientId, user.id);
-    await this.syncNomenclatureBillingServices();
 
     const services = await this.prisma.billingService.findMany({
       where: { isActive: true },
@@ -97,7 +90,6 @@ export class BillingService {
   async upsertClientService(clientId: string, dto: UpsertClientBillingServiceDto, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, clientId, 'write');
     await this.ensureStandardBillingServices();
-    await this.syncNomenclatureBillingServices();
 
     const service = await this.prisma.billingService.findUnique({
       where: { id: dto.serviceId },
@@ -506,9 +498,6 @@ export class BillingService {
       periodFrom: query.periodFrom ? { gte: parseDate(query.periodFrom) } : undefined,
       periodTo: query.periodTo ? { lte: parseDate(query.periodTo, 'endOfDay') } : undefined,
     };
-    if (!canReviewDraftInvoices(user)) {
-      where.NOT = { status: BillingInvoiceStatus.DRAFT };
-    }
 
     return this.prisma.billingInvoice.findMany({
       where,
@@ -559,17 +548,13 @@ export class BillingService {
     }
 
     const totalRub = roundMoney(charges.reduce((sum, charge) => sum + (decimalToNumber(charge.totalRub) ?? 0), 0));
-    const invoiceSource = charges.every((charge) => charge.source === BillingChargeSource.LOGISTICS)
-      ? BillingInvoiceSource.LOGISTICS
-      : BillingInvoiceSource.MANUAL;
-    const number = await this.nextInvoiceNumber(periodFrom, invoiceSource);
+    const number = await this.nextInvoiceNumber(periodFrom);
 
     // Русский комментарий: счет фиксирует снимок начислений, чтобы дальнейшая правка услуги не меняла уже выставленный документ.
     return this.prisma.billingInvoice.create({
       data: {
         number,
         clientId: dto.clientId,
-        source: invoiceSource,
         periodFrom,
         periodTo,
         dueDate: dto.dueDate ? parseDate(dto.dueDate, 'endOfDay') : undefined,
@@ -594,7 +579,6 @@ export class BillingService {
 
   async createManualInvoice(dto: CreateManualBillingInvoiceDto, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
-    await this.ensureRequestBelongsToClient(dto.clientId, dto.requestId);
     if (!dto.rows?.length) {
       throw new BadRequestException('Для счета нужна хотя бы одна строка.');
     }
@@ -660,7 +644,7 @@ export class BillingService {
     });
 
     const totalRub = roundMoney(rows.reduce((sum, row) => sum + row.totalRub, 0));
-    const number = await this.nextInvoiceNumber(periodFrom, BillingInvoiceSource.MANUAL);
+    const number = await this.nextInvoiceNumber(periodFrom);
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const charges: Array<{ id: string }> = [];
@@ -670,7 +654,6 @@ export class BillingService {
             data: {
               clientId: dto.clientId,
               serviceId: row.serviceId,
-              requestId: dto.requestId,
               description: row.description,
               unit: row.unit,
               quantity: row.quantity,
@@ -693,7 +676,6 @@ export class BillingService {
         data: {
           number,
           clientId: dto.clientId,
-          requestId: dto.requestId,
           periodFrom,
           periodTo,
           dueDate: dto.dueDate ? parseDate(dto.dueDate, 'endOfDay') : undefined,
@@ -715,46 +697,33 @@ export class BillingService {
         include: billingInvoiceInclude,
       });
     });
-
-    if (updated.requestId) {
-      await this.requestBillingAutomation?.generateForDoneRequest(updated.requestId, user);
-    }
-
     return updated;
   }
 
   async updateManualInvoice(invoiceId: string, dto: CreateManualBillingInvoiceDto, user: AuthUser) {
-    if (!canEditDraftInvoice(user)) {
-      throw new BadRequestException('Редактировать черновики счетов может только владелец или администратор.');
-    }
-
-    const invoice = await this.prisma.billingInvoice.findUnique({
-      where: { id: invoiceId },
-      include: {
-        items: true,
-        payments: true,
-      },
-    });
-    if (!invoice) {
-      throw new NotFoundException('Счет не найден.');
-    }
-    if (invoice.status !== BillingInvoiceStatus.DRAFT) {
-      throw new BadRequestException('Редактировать можно только черновик счета до выставления клиенту.');
-    }
-    if (invoice.payments.length > 0) {
-      throw new BadRequestException('Нельзя редактировать счет, по которому уже есть оплаты.');
-    }
-    if (invoice.clientId !== dto.clientId) {
-      throw new BadRequestException('Клиент счета не совпадает с выбранным клиентом.');
-    }
     if (!dto.rows?.length) {
       throw new BadRequestException('Для счета нужна хотя бы одна строка.');
     }
 
+    const invoice = await this.prisma.billingInvoice.findUnique({
+      where: { id: invoiceId },
+      include: billingInvoiceInclude,
+    });
+    if (!invoice) {
+      throw new NotFoundException('Счет не найден.');
+    }
     this.clientScopes.requireClientAccess(user, invoice.clientId, 'write');
-    await this.ensureRequestBelongsToClient(invoice.clientId, dto.requestId ?? invoice.requestId ?? undefined);
-    await this.ensureStandardClientBillingServices(invoice.clientId, user.id);
+    if (invoice.clientId !== dto.clientId) {
+      throw new BadRequestException('Клиента чернового счета менять нельзя.');
+    }
+    if (invoice.status !== BillingInvoiceStatus.DRAFT && invoice.status !== BillingInvoiceStatus.ISSUED) {
+      throw new BadRequestException('Редактировать можно счет в статусе «Черновик» или «Выставлен».');
+    }
+    if ((decimalToNumber(invoice.paidRub) ?? 0) > 0 || invoice.payments.length > 0) {
+      throw new BadRequestException('Нельзя редактировать счет, по которому уже есть оплата.');
+    }
 
+    await this.ensureStandardClientBillingServices(dto.clientId, user.id);
     const periodFrom = parseDate(dto.periodFrom);
     const periodTo = parseDate(dto.periodTo, 'endOfDay');
     if (periodFrom > periodTo) {
@@ -767,10 +736,7 @@ export class BillingService {
           where: { id: { in: serviceIds } },
           include: {
             clientPrices: {
-              where: {
-                clientId: invoice.clientId,
-                isActive: true,
-              },
+              where: { clientId: dto.clientId, isActive: true },
               take: 1,
             },
           },
@@ -781,16 +747,23 @@ export class BillingService {
       throw new BadRequestException('Одна или несколько услуг счета не найдены.');
     }
 
+    const existingItems = new Map(invoice.items.map((item) => [item.id, item]));
+    const requestedItemIds = new Set<string>();
     const rows = dto.rows.map((row) => {
+      if (row.invoiceItemId) {
+        if (requestedItemIds.has(row.invoiceItemId) || !existingItems.has(row.invoiceItemId)) {
+          throw new BadRequestException('Одна из строк не принадлежит редактируемому счету.');
+        }
+        requestedItemIds.add(row.invoiceItemId);
+      }
+
       const service = row.serviceId ? servicesById.get(row.serviceId) : null;
       const clientPrice = service?.clientPrices[0] ?? null;
-
       const baseUnitPriceRub =
         row.unitPriceRub ?? decimalToNumber(clientPrice?.priceRub) ?? decimalToNumber(service?.defaultPriceRub);
       if (baseUnitPriceRub == null) {
         throw new BadRequestException('Для каждой строки счета нужна цена.');
       }
-
       const taxMode = row.taxMode ?? clientPrice?.taxMode ?? BillingPriceTaxMode.INCLUDED;
       const unitPriceRub = applyTaxMode(baseUnitPriceRub, taxMode);
       const description = normalizeText(row.description) ?? service?.name;
@@ -798,96 +771,104 @@ export class BillingService {
         throw new BadRequestException('Для каждой строки счета нужно описание или услуга.');
       }
 
-      const totalRub = roundMoney(row.quantity * unitPriceRub);
       return {
+        invoiceItemId: row.invoiceItemId,
         serviceId: row.serviceId,
         description,
         unit: row.unit ?? service?.unit ?? BillingUnit.SERVICE,
         quantity: row.quantity,
         unitPriceRub,
-        totalRub,
+        totalRub: roundMoney(row.quantity * unitPriceRub),
         serviceDate: row.serviceDate ? parseDate(row.serviceDate) : periodTo,
         comment: normalizeText(row.comment),
-        metadata: {
-          editedInvoiceId: invoice.id,
-          priceBeforeTaxRub: baseUnitPriceRub,
-          taxMode,
-        },
+        metadata: { priceBeforeTaxRub: baseUnitPriceRub, taxMode },
       };
     });
-
     const totalRub = roundMoney(rows.reduce((sum, row) => sum + row.totalRub, 0));
-    const previousChargeIds = invoice.items.map((item) => item.chargeId).filter((id): id is string => Boolean(id));
 
-    const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.billingInvoiceItem.deleteMany({ where: { invoiceId } });
-      if (previousChargeIds.length > 0) {
-        await tx.billingCharge.updateMany({
-          where: { id: { in: previousChargeIds } },
-          data: {
-            status: BillingChargeStatus.CANCELLED,
-            comment: 'Заменено при редактировании черновика счета.',
-          },
-        });
+    return this.prisma.$transaction(async (tx) => {
+      for (const row of rows) {
+        const existingItem = row.invoiceItemId ? existingItems.get(row.invoiceItemId) : null;
+        let chargeId = existingItem?.chargeId ?? null;
+        const chargeData = {
+          clientId: invoice.clientId,
+          requestId: invoice.requestId,
+          serviceId: row.serviceId,
+          description: row.description,
+          unit: row.unit,
+          quantity: row.quantity,
+          unitPriceRub: row.unitPriceRub,
+          totalRub: row.totalRub,
+          status: BillingChargeStatus.APPROVED,
+          serviceDate: row.serviceDate,
+          metadata: row.metadata,
+          comment: row.comment,
+          approvedByUserId: user.id,
+          approvedAt: new Date(),
+        };
+
+        if (chargeId) {
+          await tx.billingCharge.update({ where: { id: chargeId }, data: chargeData });
+        } else {
+          const charge = await tx.billingCharge.create({
+            data: {
+              ...chargeData,
+              source: BillingChargeSource.MANUAL,
+              createdByUserId: user.id,
+            },
+            select: { id: true },
+          });
+          chargeId = charge.id;
+        }
+
+        const itemData = {
+          chargeId,
+          description: row.description,
+          unit: row.unit,
+          quantity: row.quantity,
+          unitPriceRub: row.unitPriceRub,
+          totalRub: row.totalRub,
+          serviceDate: row.serviceDate,
+        };
+        if (existingItem) {
+          await tx.billingInvoiceItem.update({ where: { id: existingItem.id }, data: itemData });
+        } else {
+          await tx.billingInvoiceItem.create({ data: { invoiceId: invoice.id, ...itemData } });
+        }
       }
 
-      const charges: Array<{ id: string }> = [];
-      for (const [index, row] of rows.entries()) {
-        charges.push(
-          await tx.billingCharge.create({
-            data: {
-              clientId: invoice.clientId,
-              serviceId: row.serviceId,
-              requestId: dto.requestId ?? invoice.requestId,
-              description: row.description,
-              unit: row.unit,
-              quantity: row.quantity,
-              unitPriceRub: row.unitPriceRub,
-              totalRub: row.totalRub,
-              status: BillingChargeStatus.APPROVED,
-              serviceDate: row.serviceDate,
-              source: BillingChargeSource.MANUAL,
-              sourceKey: `invoice-edit:${invoiceId}:${Date.now()}:${index + 1}`,
-              metadata: row.metadata,
-              comment: row.comment,
-              createdByUserId: user.id,
-              approvedByUserId: user.id,
-              approvedAt: new Date(),
-            },
-          }),
-        );
+      const removedItems = invoice.items.filter((item) => !requestedItemIds.has(item.id));
+      if (removedItems.length > 0) {
+        await tx.billingInvoiceItem.deleteMany({ where: { id: { in: removedItems.map((item) => item.id) } } });
+        for (const removed of removedItems) {
+          if (!removed.chargeId) {
+            continue;
+          }
+          const linkedItems = await tx.billingInvoiceItem.count({ where: { chargeId: removed.chargeId } });
+          if (linkedItems === 0) {
+            await tx.billingCharge.update({
+              where: { id: removed.chargeId },
+              data: {
+                status: BillingChargeStatus.CANCELLED,
+                comment: 'Строка удалена при редактировании счета.',
+              },
+            });
+          }
+        }
       }
 
       return tx.billingInvoice.update({
-        where: { id: invoiceId },
+        where: { id: invoice.id },
         data: {
-          requestId: dto.requestId ?? invoice.requestId,
           periodFrom,
           periodTo,
           dueDate: dto.dueDate ? parseDate(dto.dueDate, 'endOfDay') : null,
           totalRub,
           comment: normalizeText(dto.comment),
-          items: {
-            create: rows.map((row, index) => ({
-              chargeId: charges[index].id,
-              description: row.description,
-              unit: row.unit,
-              quantity: row.quantity,
-              unitPriceRub: row.unitPriceRub,
-              totalRub: row.totalRub,
-              serviceDate: row.serviceDate,
-            })),
-          },
         },
         include: billingInvoiceInclude,
       });
     });
-
-    if (updated.requestId) {
-      await this.requestBillingAutomation?.generateForDoneRequest(updated.requestId, user);
-    }
-
-    return updated;
   }
 
   async updateInvoiceStatus(invoiceId: string, dto: UpdateBillingInvoiceStatusDto, user: AuthUser) {
@@ -902,10 +883,6 @@ export class BillingService {
         paidRub: true,
         issuedAt: true,
         paidAt: true,
-        payments: {
-          where: { status: BillingPaymentStatus.RECORDED },
-          select: { amountRub: true },
-        },
       },
     });
 
@@ -915,25 +892,22 @@ export class BillingService {
 
     this.clientScopes.requireClientAccess(user, invoice.clientId, 'write');
 
+    const paidRub = decimalToNumber(invoice.paidRub) ?? 0;
     const totalRub = decimalToNumber(invoice.totalRub) ?? 0;
-    const recordedPaidRub = roundMoney(
-      invoice.payments.reduce((sum, payment) => sum + (decimalToNumber(payment.amountRub) ?? 0), 0),
-    );
-    if (dto.status === BillingInvoiceStatus.CANCELLED && recordedPaidRub > 0) {
+    if (dto.status === BillingInvoiceStatus.CANCELLED && paidRub > 0) {
       throw new BadRequestException('Нельзя отменить счет с зафиксированными оплатами.');
     }
 
-    if (dto.status === BillingInvoiceStatus.DRAFT && recordedPaidRub > 0) {
+    if (dto.status === BillingInvoiceStatus.DRAFT && paidRub > 0) {
       throw new BadRequestException('Нельзя вернуть в черновик счет с оплатами.');
     }
 
-    const nextPaidRub = dto.status === BillingInvoiceStatus.PAID ? totalRub : recordedPaidRub;
     const updated = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.billingInvoice.update({
         where: { id: invoiceId },
         data: {
           status: dto.status,
-          paidRub: nextPaidRub,
+          paidRub: dto.status === BillingInvoiceStatus.PAID ? totalRub : invoice.paidRub,
           issuedAt:
             dto.status === BillingInvoiceStatus.DRAFT
               ? null
@@ -975,236 +949,6 @@ export class BillingService {
     }
 
     return updated;
-  }
-
-  async issueRequestInvoices(requestId: string, user: AuthUser) {
-    const generation = await this.requestBillingAutomation.generateForDoneRequest(requestId, user);
-    if (generation.status !== 'APPLIED') {
-      throw new BadRequestException('Счет можно выставить только по сданной исходящей заявке с начислениями.');
-    }
-
-    const generatedInvoiceIds = [generation.mainInvoiceId, generation.logisticsInvoiceId].filter(Boolean) as string[];
-    const candidates = await this.prisma.billingInvoice.findMany({
-      where: {
-        requestId,
-        source: { in: [BillingInvoiceSource.REQUEST_DONE, BillingInvoiceSource.LOGISTICS, BillingInvoiceSource.MANUAL] },
-        status: { not: BillingInvoiceStatus.CANCELLED },
-      },
-      include: billingInvoiceInclude,
-      orderBy: [{ createdAt: 'asc' }, { number: 'asc' }],
-    });
-    const invoicesById = new Map(candidates.map((invoice) => [invoice.id, invoice]));
-    const invoices = [
-      ...generatedInvoiceIds.map((id) => invoicesById.get(id)).filter((invoice): invoice is BillingInvoiceWithInclude => Boolean(invoice)),
-      ...candidates.filter((invoice) => !generatedInvoiceIds.includes(invoice.id)),
-    ];
-
-    if (invoices.length === 0) {
-      const learnedInvoice = await this.createLearnedRequestInvoice(requestId, user);
-      if (learnedInvoice) {
-        return {
-          requestId,
-          status: 'DRAFT_REVIEW',
-          issuedCount: 0,
-          invoices: [learnedInvoice],
-        };
-      }
-
-      throw new BadRequestException('По заявке нет счетов для выставления. Проверьте начисления по заявке.');
-    }
-
-    return {
-      requestId,
-      status: 'DRAFT_REVIEW',
-      issuedCount: 0,
-      invoices,
-    };
-  }
-
-  private async createLearnedRequestInvoice(requestId: string, user: AuthUser) {
-    const existing = await this.prisma.billingInvoice.findFirst({
-      where: {
-        sourceKey: learnedInvoiceSourceKey(requestId),
-        status: { not: BillingInvoiceStatus.CANCELLED },
-      },
-      include: billingInvoiceInclude,
-    });
-    if (existing) {
-      return existing;
-    }
-
-    const request = await this.prisma.clientRequest.findUnique({
-      where: { id: requestId },
-      include: {
-        items: true,
-        packages: { include: { items: true } },
-        events: {
-          where: {
-            eventType: 'STATUS_CHANGED',
-            statusTo: { in: [ClientRequestStatus.PACKED, ClientRequestStatus.DONE] },
-          },
-          select: {
-            statusTo: true,
-            createdAt: true,
-          },
-          orderBy: { createdAt: 'asc' },
-        },
-      },
-    });
-    if (!request) {
-      return null;
-    }
-
-    this.clientScopes.requireClientAccess(user, request.clientId, 'write');
-
-    const template = await this.prisma.billingInvoice.findFirst({
-      where: {
-        clientId: request.clientId,
-        requestId: { not: null },
-        source: BillingInvoiceSource.MANUAL,
-        status: { not: BillingInvoiceStatus.CANCELLED },
-        NOT: { requestId },
-      },
-      include: {
-        items: {
-          include: {
-            charge: {
-              include: {
-                service: true,
-              },
-            },
-          },
-          orderBy: [{ serviceDate: 'asc' }, { id: 'asc' }],
-        },
-      },
-      orderBy: [{ createdAt: 'desc' }],
-    });
-    if (!template?.items.length) {
-      return null;
-    }
-
-    const metrics = requestBillingMetrics(request);
-    const serviceIds = [
-      ...new Set(template.items.map((item) => item.charge?.serviceId).filter((id): id is string => Boolean(id))),
-    ];
-    if (serviceIds.length === 0) {
-      return null;
-    }
-
-    const prices = await this.prisma.clientBillingService.findMany({
-      where: {
-        clientId: request.clientId,
-        serviceId: { in: serviceIds },
-        isActive: true,
-      },
-      include: { service: true },
-    });
-    const priceByServiceId = new Map(prices.map((price) => [price.serviceId, price]));
-    const billingDate = requestBillingDate(request);
-    const rows = template.items
-      .map((item) => {
-        const serviceId = item.charge?.serviceId;
-        const price = serviceId ? priceByServiceId.get(serviceId) : null;
-        if (!serviceId || !price) {
-          return null;
-        }
-
-        const quantity = learnedQuantityForService(
-          price.service.code,
-          price.service.unit,
-          metrics,
-          decimalToNumber(item.quantity) ?? 0,
-        );
-        if (quantity <= 0) {
-          return null;
-        }
-
-        const unitPriceRub = applyTaxMode(decimalToNumber(price.priceRub) ?? 0, price.taxMode);
-        const totalRub = roundMoney(quantity * unitPriceRub);
-        return {
-          serviceId,
-          description: price.service.name,
-          unit: price.service.unit,
-          quantity,
-          unitPriceRub,
-          totalRub,
-          serviceDate: billingDate,
-          metadata: {
-            learnedFromInvoiceId: template.id,
-            learnedFromInvoiceNumber: template.number,
-            requestId,
-            quantitySource: learnedQuantitySource(price.service.code, price.service.unit),
-            taxMode: price.taxMode,
-            priceBeforeTaxRub: decimalToNumber(price.priceRub) ?? 0,
-          },
-        };
-      })
-      .filter((row): row is NonNullable<typeof row> => Boolean(row));
-
-    if (rows.length === 0) {
-      return null;
-    }
-
-    const periodFrom = parseDate(billingDate.toISOString());
-    const periodTo = parseDate(billingDate.toISOString(), 'endOfDay');
-    const totalRub = roundMoney(rows.reduce((sum, row) => sum + row.totalRub, 0));
-    const number = await this.nextInvoiceNumber(periodFrom, BillingInvoiceSource.MANUAL);
-
-    return this.prisma.$transaction(async (tx) => {
-      const charges: Array<{ id: string }> = [];
-      for (const [index, row] of rows.entries()) {
-        charges.push(
-          await tx.billingCharge.create({
-            data: {
-              clientId: request.clientId,
-              serviceId: row.serviceId,
-              requestId,
-              description: row.description,
-              unit: row.unit,
-              quantity: row.quantity,
-              unitPriceRub: row.unitPriceRub,
-              totalRub: row.totalRub,
-              status: BillingChargeStatus.APPROVED,
-              serviceDate: row.serviceDate,
-              source: BillingChargeSource.MANUAL,
-              sourceKey: `${learnedInvoiceSourceKey(requestId)}:charge:${index + 1}`,
-              metadata: row.metadata,
-              comment: 'Автоматически создано по обученному шаблону счета.',
-              createdByUserId: user.id,
-              approvedByUserId: user.id,
-              approvedAt: new Date(),
-            },
-          }),
-        );
-      }
-
-      return tx.billingInvoice.create({
-        data: {
-          number,
-          clientId: request.clientId,
-          requestId,
-          source: BillingInvoiceSource.MANUAL,
-          sourceKey: learnedInvoiceSourceKey(requestId),
-          periodFrom,
-          periodTo,
-          totalRub,
-          comment: `Черновик на согласование. Создан по образцу счета № ${template.number}.`,
-          createdByUserId: user.id,
-          items: {
-            create: rows.map((row, index) => ({
-              chargeId: charges[index].id,
-              description: row.description,
-              unit: row.unit,
-              quantity: row.quantity,
-              unitPriceRub: row.unitPriceRub,
-              totalRub: row.totalRub,
-              serviceDate: row.serviceDate,
-            })),
-          },
-        },
-        include: billingInvoiceInclude,
-      });
-    });
   }
 
   async createPayment(dto: CreateBillingPaymentDto, user: AuthUser) {
@@ -1332,7 +1076,6 @@ export class BillingService {
 
   private async ensureStandardClientBillingServices(clientId: string, userId?: string) {
     await this.ensureStandardBillingServices();
-    await this.syncNomenclatureBillingServices();
     const services = await this.prisma.billingService.findMany({
       where: {
         code: { in: STANDARD_BILLING_SERVICES.map((service) => service.code) },
@@ -1354,7 +1097,7 @@ export class BillingService {
             serviceId: service.id,
             priceRub: service.defaultPriceRub ?? 0,
             taxMode: BillingPriceTaxMode.INCLUDED,
-            isActive: service.defaultPriceRub != null,
+            isActive: true,
             updatedByUserId: userId,
           },
         }),
@@ -1362,49 +1105,8 @@ export class BillingService {
     );
   }
 
-  private async syncNomenclatureBillingServices() {
-    const items = await this.prisma.nomenclatureItem.findMany({
-      where: {
-        OR: [
-          { itemType: { contains: 'услуг', mode: 'insensitive' } },
-          { itemType: { contains: 'service', mode: 'insensitive' } },
-        ],
-      },
-      select: {
-        internalSku: true,
-        name: true,
-        printName: true,
-        unit: true,
-      },
-      take: 500,
-    });
-
-    if (items.length === 0) {
-      return;
-    }
-
-    await Promise.all(
-      items.map((item) =>
-        this.prisma.billingService.upsert({
-          where: { code: nomenclatureBillingServiceCode(item.internalSku) },
-          update: {
-            name: item.printName ?? item.name,
-            unit: billingUnitFromNomenclature(item.unit),
-            isActive: true,
-          },
-          create: {
-            code: nomenclatureBillingServiceCode(item.internalSku),
-            name: item.printName ?? item.name,
-            unit: billingUnitFromNomenclature(item.unit),
-            isActive: true,
-          },
-        }),
-      ),
-    );
-  }
-
-  private async nextInvoiceNumber(periodFrom: Date, source: BillingInvoiceSource = BillingInvoiceSource.MANUAL) {
-    const prefix = `${invoiceNumberPrefix(source)}-${periodFrom.getUTCFullYear()}${String(periodFrom.getUTCMonth() + 1).padStart(2, '0')}`;
+  private async nextInvoiceNumber(periodFrom: Date) {
+    const prefix = `INV-${periodFrom.getUTCFullYear()}${String(periodFrom.getUTCMonth() + 1).padStart(2, '0')}`;
     const count = await this.prisma.billingInvoice.count({
       where: {
         number: {
@@ -1436,10 +1138,6 @@ export class BillingService {
 
 const STORAGE_SERVICE_CODE = 'STORAGE_LITER_DAY';
 
-function invoiceNumberPrefix(source: BillingInvoiceSource) {
-  return source === BillingInvoiceSource.LOGISTICS ? 'LOG' : 'USL';
-}
-
 const STANDARD_BILLING_SERVICES = [
   {
     code: 'BOX_60_40_40',
@@ -1467,13 +1165,6 @@ const STANDARD_BILLING_SERVICES = [
     name: 'Сборка паллета',
     unit: BillingUnit.PALLET,
     defaultPriceRub: 250,
-    isActive: true,
-  },
-  {
-    code: 'ITEM_PROCESSING',
-    name: 'Обработка товара',
-    unit: BillingUnit.PIECE,
-    defaultPriceRub: null,
     isActive: true,
   },
 ] satisfies Prisma.BillingServiceUncheckedCreateInput[];
@@ -1555,7 +1246,6 @@ const billingReconciliationInvoiceInclude = {
 } satisfies Prisma.BillingInvoiceInclude;
 
 type BillingChargeWithRelations = Prisma.BillingChargeGetPayload<{ include: typeof billingChargeInclude }>;
-type BillingInvoiceWithInclude = Prisma.BillingInvoiceGetPayload<{ include: typeof billingInvoiceInclude }>;
 type BillingInvoiceForReconciliation = Prisma.BillingInvoiceGetPayload<{
   include: typeof billingReconciliationInvoiceInclude;
 }>;
@@ -2177,136 +1867,4 @@ function sourceCode(source: BillingChargeSource) {
   }
 
   return 'MANUAL';
-}
-
-function canEditDraftInvoice(user: AuthUser) {
-  return (
-    user.permissionCodes.includes('system:admin') ||
-    user.roleCodes.includes('OWNER') ||
-    user.roleCodes.includes('ADMIN')
-  );
-}
-
-function canReviewDraftInvoices(user: AuthUser) {
-  return (
-    canEditDraftInvoice(user) ||
-    user.permissionCodes.includes('billing:write') ||
-    user.roleCodes.includes('MANAGER')
-  );
-}
-
-function learnedInvoiceSourceKey(requestId: string) {
-  return `request-learned:${requestId}`;
-}
-
-function nomenclatureBillingServiceCode(internalSku: string) {
-  return `NOM_${internalSku.trim().toUpperCase().replace(/[^A-Z0-9А-ЯЁ_-]+/giu, '_').slice(0, 56)}`;
-}
-
-function billingUnitFromNomenclature(unit?: string | null) {
-  const normalized = (unit ?? '').trim().toLocaleLowerCase('ru-RU');
-  if (['шт', 'штука', 'штуки', 'ед', 'единица', 'piece', 'pcs'].some((value) => normalized.includes(value))) {
-    return BillingUnit.PIECE;
-  }
-  if (['короб', 'box'].some((value) => normalized.includes(value))) {
-    return BillingUnit.BOX;
-  }
-  if (['паллет', 'pallet'].some((value) => normalized.includes(value))) {
-    return BillingUnit.PALLET;
-  }
-  if (['литр-день', 'литро-день', 'литродень', 'liter_day'].some((value) => normalized.includes(value))) {
-    return BillingUnit.LITER_DAY;
-  }
-  if (['литр', 'liter'].some((value) => normalized.includes(value))) {
-    return BillingUnit.LITER;
-  }
-  if (['день', 'day'].some((value) => normalized.includes(value))) {
-    return BillingUnit.DAY;
-  }
-  if (['час', 'hour'].some((value) => normalized.includes(value))) {
-    return BillingUnit.HOUR;
-  }
-  return BillingUnit.SERVICE;
-}
-
-function requestBillingDate(request: {
-  updatedAt: Date;
-  events?: Array<{ statusTo: ClientRequestStatus | null; createdAt: Date }>;
-}) {
-  return (
-    request.events?.find((event) => event.statusTo === ClientRequestStatus.PACKED)?.createdAt ??
-    request.events?.find((event) => event.statusTo === ClientRequestStatus.DONE)?.createdAt ??
-    request.updatedAt
-  );
-}
-
-function requestBillingMetrics(request: {
-  items: Array<{ quantity: Prisma.Decimal | number | string }>;
-  packages: Array<{ packageType: string | null; items: Array<{ quantity: Prisma.Decimal | number | string }> }>;
-}) {
-  const packageCounts = request.packages.reduce(
-    (result, packagePlace) => {
-      if (isPalletPackage(packagePlace.packageType)) {
-        result.pallets += 1;
-      } else {
-        result.boxes += 1;
-      }
-      result.packageUnits += packagePlace.items.reduce((sum, item) => sum + (decimalToNumber(item.quantity) ?? 0), 0);
-      return result;
-    },
-    { boxes: 0, pallets: 0, packageUnits: 0 },
-  );
-  const requestUnits = request.items.reduce((sum, item) => sum + (decimalToNumber(item.quantity) ?? 0), 0);
-
-  return {
-    boxes: packageCounts.boxes,
-    pallets: packageCounts.pallets,
-    units: packageCounts.packageUnits > 0 ? packageCounts.packageUnits : requestUnits,
-  };
-}
-
-function learnedQuantityForService(
-  serviceCode: string,
-  unit: BillingUnit,
-  metrics: { boxes: number; pallets: number; units: number },
-  fallbackQuantity: number,
-) {
-  const code = serviceCode.toUpperCase();
-  if (code === 'BOX_60_40_40' || code === 'BOX_ASSEMBLY') {
-    return metrics.boxes;
-  }
-  if (code === 'PALLET' || code === 'PALLET_ASSEMBLY') {
-    return metrics.pallets;
-  }
-  if (code === 'ITEM_PROCESSING') {
-    return metrics.units;
-  }
-  if (unit === BillingUnit.BOX) {
-    return metrics.boxes;
-  }
-  if (unit === BillingUnit.PALLET) {
-    return metrics.pallets;
-  }
-  if (unit === BillingUnit.PIECE) {
-    return metrics.units;
-  }
-  return fallbackQuantity;
-}
-
-function learnedQuantitySource(serviceCode: string, unit: BillingUnit) {
-  const code = serviceCode.toUpperCase();
-  if (code === 'BOX_60_40_40' || code === 'BOX_ASSEMBLY' || unit === BillingUnit.BOX) {
-    return 'BOXES';
-  }
-  if (code === 'PALLET' || code === 'PALLET_ASSEMBLY' || unit === BillingUnit.PALLET) {
-    return 'PALLETS';
-  }
-  if (code === 'ITEM_PROCESSING' || unit === BillingUnit.PIECE) {
-    return 'UNITS';
-  }
-  return 'TEMPLATE_QUANTITY';
-}
-
-function isPalletPackage(packageType?: string | null) {
-  return ['PALLET', 'PALLETTE', 'ПАЛЛЕТ', 'ПАЛЛЕТА'].includes((packageType ?? '').trim().toUpperCase());
 }

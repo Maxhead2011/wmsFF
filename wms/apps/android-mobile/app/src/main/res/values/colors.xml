@@ -1,0 +1,11 @@
+<resources>
+    <color name="logoff_red">#C8102E</color>
+    <color name="logoff_red_dark">#93001F</color>
+    <color name="logoff_black">#15171A</color>
+    <color name="logoff_surface">#F5F6F8</color>
+    <color name="logoff_white">#FFFFFF</color>
+    <color name="logoff_text_muted">#62666D</color>
+    <color name="logoff_border">#DADDE2</color>
+    <color name="logoff_success">#198754</color>
+    <color name="logoff_warning">#B35C00</color>
+</resources>

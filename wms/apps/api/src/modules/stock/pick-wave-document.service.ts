@@ -500,6 +500,8 @@ function zoneSummary(allocations: WaveAllocation[]) {
 function waveStatusLabel(value: PickWaveStatus) {
   const labels: Record<PickWaveStatus, string> = {
     PLANNED: 'План',
+    BALANCE_REVIEW: 'Проверка балансов',
+    FROZEN: 'План зафиксирован',
     PICKING: 'Сборка',
     DONE: 'Готово',
     FAILED: 'Ошибка',

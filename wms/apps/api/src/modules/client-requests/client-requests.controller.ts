@@ -18,7 +18,10 @@ import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { PickInstructionService } from '../stock/pick-instruction.service';
+import { FulfillmentWaveService } from '../stock/fulfillment-wave.service';
+import { UpdatePickWaveBalanceReviewDto } from '../stock/dto/update-pick-wave-balance-review.dto';
 import { ClientRequestFilesService } from './client-request-files.service';
+import { ClientRequestEmergencyService } from './client-request-emergency.service';
 import { ClientRequestHistoryService } from './client-request-history.service';
 import { ClientRequestMarketplaceFilesService } from './client-request-marketplace-files.service';
 import { ClientRequestDocumentService } from './client-request-document.service';
@@ -42,15 +45,49 @@ export class ClientRequestsController {
     private readonly documents: ClientRequestDocumentService,
     private readonly pdf: ClientRequestPdfService,
     private readonly files: ClientRequestFilesService,
-    private readonly history: ClientRequestHistoryService,
+    private readonly emergency: ClientRequestEmergencyService,
     private readonly marketplaceFiles: ClientRequestMarketplaceFilesService,
+    private readonly history: ClientRequestHistoryService,
     private readonly xlsx: ClientRequestXlsxService,
     private readonly pickInstructions: PickInstructionService,
+    private readonly waves: FulfillmentWaveService,
   ) {}
 
   @Get()
   list(@Query() query: ListClientRequestsDto, @CurrentUser() user: AuthUser) {
     return this.clientRequests.list(query, user);
+  }
+
+  @Get('box-overlaps')
+  @RequirePermissions('system:admin')
+  boxOverlaps(@CurrentUser() user: AuthUser) {
+    return this.pickInstructions.getActiveRequestBoxOverlaps(user);
+  }
+
+  @Get('balance-reviews/pending')
+  listBalanceReviews(@CurrentUser() user: AuthUser) {
+    return this.waves.listBalanceReviews(user);
+  }
+
+  @Get('balance-reviews/:waveId')
+  getBalanceReview(@Param('waveId') waveId: string, @CurrentUser() user: AuthUser) {
+    return this.waves.getBalanceReview(waveId, user);
+  }
+
+  @Patch('balance-reviews/:waveId')
+  @RequirePermissions('client-requests:write')
+  saveBalanceReview(
+    @Param('waveId') waveId: string,
+    @Body() dto: UpdatePickWaveBalanceReviewDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.waves.saveBalanceReview(waveId, dto, user);
+  }
+
+  @Post('balance-reviews/:waveId/submit')
+  @RequirePermissions('client-requests:write')
+  submitBalanceReview(@Param('waveId') waveId: string, @CurrentUser() user: AuthUser) {
+    return this.waves.submitBalanceReview(waveId, user);
   }
 
   @Get(':id')
@@ -77,6 +114,20 @@ export class ClientRequestsController {
     return new StreamableFile(file.buffer);
   }
 
+  @Get(':id/items.xlsx')
+  async downloadRequestItemsXlsx(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUser,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const file = await this.documents.getRequestItemsXlsx(id, user);
+    response.setHeader('Content-Type', file.mimeType);
+    response.setHeader('Content-Length', String(file.content.length));
+    response.setHeader('Content-Disposition', contentDisposition(file.fileName));
+
+    return new StreamableFile(file.content);
+  }
+
   @Get(':id/pick-instruction')
   @RequirePermissions('stock:write')
   getPickInstruction(@Param('id') id: string, @CurrentUser() user: AuthUser) {
@@ -96,6 +147,12 @@ export class ClientRequestsController {
     response.setHeader('Content-Disposition', contentDisposition(file.fileName));
 
     return new StreamableFile(file.content);
+  }
+
+  @Post(':id/pick-instruction/refresh')
+  @RequirePermissions('stock:write')
+  refreshPickInstruction(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.pickInstructions.refreshRequestInstruction(id, user);
   }
 
   @Get(':id/marketplace/wb-products.xlsx')
@@ -126,6 +183,19 @@ export class ClientRequestsController {
     response.setHeader('Content-Disposition', contentDisposition(file.fileName));
 
     return new StreamableFile(file.content);
+  }
+
+  @Post(':id/pick-instruction/manual')
+  @RequirePermissions('stock:write')
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ description: 'Ручная складская инструкция XLSX, которая немедленно заменяет автоматический план заявки.' })
+  @UseInterceptors(FileInterceptor('file'))
+  uploadManualPickInstruction(
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.pickInstructions.uploadManualRequestInstruction(id, file, user);
   }
 
   @Get(':id/files')
@@ -208,6 +278,25 @@ export class ClientRequestsController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.files.uploadToRequest(id, file, user);
+  }
+
+  @Post(':id/emergency-packed-xlsx')
+  @RequirePermissions('stock:write')
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ description: 'Аварийная упаковка заявки: XLSX со списком фактических коробов FFL.' })
+  @UseInterceptors(FileInterceptor('file'))
+  emergencyPackedXlsx(
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.emergency.closeFromPackedXlsx(id, file, user);
+  }
+
+  @Post(':id/emergency-packed-xlsx/rollback')
+  @RequirePermissions('stock:write')
+  rollbackEmergencyPackedXlsx(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.emergency.rollbackPackedXlsx(id, user);
   }
 
   @Post(':id/comments')

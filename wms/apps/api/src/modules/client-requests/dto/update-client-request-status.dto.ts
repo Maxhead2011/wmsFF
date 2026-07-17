@@ -26,7 +26,7 @@ export class UpdateClientRequestStatusDto {
   @IsOptional()
   @Type(() => Number)
   @IsInt()
-  @Min(1)
+  @Min(0)
   packedUnits?: number;
 
   @IsOptional()

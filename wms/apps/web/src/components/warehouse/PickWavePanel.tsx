@@ -27,7 +27,7 @@ type LoadState<T> = {
   error?: string;
 };
 
-const eligibleStatuses = ['SUBMITTED', 'IN_REVIEW', 'APPROVED'];
+const eligibleStatuses = ['SUBMITTED', 'IN_REVIEW', 'APPROVED', 'IN_WORK'];
 
 export function PickWavePanel({ session }: PickWavePanelProps) {
   const [requests, setRequests] = useState<LoadState<ClientRequestSummary>>({ status: 'idle', data: [] });
@@ -297,12 +297,14 @@ function waveFailedCount(wave: PickWaveSummary) {
 }
 
 function canRunWave(wave: PickWaveSummary) {
-  return wave.status === 'PLANNED' || wave.status === 'FAILED' || wave.status === 'PICKING';
+  return wave.status === 'FROZEN' || wave.status === 'FAILED' || wave.status === 'PICKING';
 }
 
 function waveStatusLabel(status: PickWaveSummary['status']) {
   const labels: Record<PickWaveSummary['status'], string> = {
     PLANNED: 'план',
+    BALANCE_REVIEW: 'проверка балансов',
+    FROZEN: 'план зафиксирован',
     PICKING: 'сборка',
     DONE: 'готово',
     FAILED: 'ошибка',

@@ -91,6 +91,10 @@ describe('StockOperationsService', () => {
         }),
         update: vi.fn().mockResolvedValue(undefined),
       },
+      clientRequestEvent: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ id: 'event-packed' }),
+      },
       sku: {
         findFirst: vi.fn().mockResolvedValue({ id: 'sku-1', internalSku: 'SKU-1' }),
       },
@@ -239,6 +243,10 @@ describe('StockOperationsService', () => {
         }),
         update: vi.fn().mockResolvedValue(undefined),
       },
+      clientRequestEvent: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ id: 'event-packed-places' }),
+      },
       sku: {
         findFirst: vi.fn().mockResolvedValue({ id: 'sku-1', internalSku: 'SKU-1' }),
       },
@@ -378,6 +386,10 @@ describe('StockOperationsService', () => {
         }),
         update: vi.fn().mockResolvedValue(undefined),
       },
+      clientRequestEvent: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ id: 'event-done' }),
+      },
       sku: {
         findFirst: vi.fn().mockResolvedValue({ id: 'sku-1', internalSku: 'SKU-1' }),
       },
@@ -476,6 +488,10 @@ describe('StockOperationsService', () => {
         }),
         update: vi.fn().mockResolvedValue(undefined),
       },
+      clientRequestEvent: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ id: 'event-shipped' }),
+      },
       sku: {
         findFirst: vi.fn().mockResolvedValue({ id: 'sku-1', internalSku: 'SKU-1' }),
       },
@@ -545,41 +561,7 @@ describe('StockOperationsService', () => {
     );
   });
 
-  it('блокирует ручное закрытие outbound-заявки без фактических упаковочных мест', async () => {
-    const tx = {
-      stockMovement: {
-        findFirst: vi.fn().mockResolvedValue(null),
-      },
-      clientRequest: {
-        findUnique: vi.fn().mockResolvedValue({
-          id: 'request-1',
-          clientId: 'client-1',
-          type: 'OUTBOUND',
-          status: 'APPROVED',
-          title: 'Ручная сдача',
-          items: [{ id: 'item-1', skuId: 'sku-1', barcode: null, quantity: 3 }],
-        }),
-      },
-    };
-    const shipService = new StockOperationsService(
-      { $transaction: (callback: (tx: typeof tx) => unknown) => callback(tx) } as never,
-      { requireClientAccess: vi.fn() } as never,
-      { balanceKey: vi.fn() } as never,
-    );
-
-    await expect(
-      shipService.shipClientRequestFromCurrentStock(
-        {
-          requestId: 'request-1',
-          idempotencyKey: 'manual-done',
-          comment: 'Сдано вручную',
-        },
-        user(),
-      ),
-    ).rejects.toThrow(BadRequestException);
-  });
-
-  it('ручное закрытие outbound-заявки с упаковочными местами списывает товар и создает пакеты', async () => {
+  it('ручное закрытие outbound-заявки списывает товар из текущего доступного остатка', async () => {
     const tx = {
       stockMovement: {
         findFirst: vi.fn().mockResolvedValue(null),
@@ -596,21 +578,16 @@ describe('StockOperationsService', () => {
         }),
         update: vi.fn().mockResolvedValue(undefined),
       },
-      sku: {
-        findFirst: vi.fn().mockResolvedValue({ id: 'sku-1', internalSku: 'SKU-1', weightGrams: 500 }),
-      },
       clientRequestPackage: {
-        create: vi.fn().mockResolvedValue({ id: 'package-1', packageType: 'BOX' }),
+        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+        create: vi.fn().mockResolvedValue({ id: 'package-1', items: [] }),
       },
-      billingService: {
-        upsert: vi.fn().mockResolvedValue({ id: 'service-box', defaultPriceRub: 100 }),
-      },
-      clientBillingService: {
-        upsert: vi.fn().mockResolvedValue({ priceRub: 100, taxMode: 'INCLUDED', isActive: true }),
-      },
-      billingCharge: {
+      clientRequestEvent: {
         findFirst: vi.fn().mockResolvedValue(null),
-        create: vi.fn().mockResolvedValue({ id: 'charge-1' }),
+        create: vi.fn().mockResolvedValue({ id: 'event-1' }),
+      },
+      sku: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'sku-1', internalSku: 'SKU-1' }),
       },
       stockBalance: {
         findMany: vi.fn().mockResolvedValue([
@@ -645,14 +622,6 @@ describe('StockOperationsService', () => {
           boxes: 1,
           pallets: 0,
           packedUnits: 3,
-          packages: [
-            {
-              packageCode: 'BOX-1',
-              packageType: 'BOX',
-              weightGrams: 1500,
-              items: [{ requestItemId: 'item-1', quantity: 3 }],
-            },
-          ],
         },
         user(),
       ),
@@ -669,14 +638,6 @@ describe('StockOperationsService', () => {
       ],
     });
 
-    expect(tx.clientRequestPackage.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          packageCode: 'BOX-1',
-          weightGrams: 1500,
-        }),
-      }),
-    );
     expect(tx.stockBalance.delete).toHaveBeenCalledWith({ where: { id: 'available-balance' } });
     expect(tx.stockMovement.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -695,120 +656,6 @@ describe('StockOperationsService', () => {
           status: 'DONE',
           assignedToUserId: 'user-1',
           managerComment: 'Сдано вручную',
-        }),
-      }),
-    );
-  });
-
-  it('repairs missing SHIPPING stock from PACKING before closing a packed outbound request', async () => {
-    const tx = {
-      stockMovement: {
-        findFirst: vi.fn().mockResolvedValue(null),
-        create: vi.fn().mockResolvedValue(undefined),
-      },
-      clientRequest: {
-        findUnique: vi.fn().mockResolvedValue({
-          id: 'request-1',
-          clientId: 'client-1',
-          type: 'OUTBOUND',
-          status: 'PACKED',
-          title: 'Packed request',
-          items: [{ id: 'item-1', skuId: 'sku-1', barcode: null, quantity: 2 }],
-        }),
-        update: vi.fn().mockResolvedValue(undefined),
-      },
-      sku: {
-        findFirst: vi.fn().mockResolvedValue({ id: 'sku-1', internalSku: 'SKU-1' }),
-      },
-      stockBalance: {
-        findMany: vi
-          .fn()
-          .mockResolvedValueOnce([])
-          .mockResolvedValueOnce([
-            {
-              id: 'packing-balance',
-              balanceKey: 'client-1:sku-1:box-1:PACKING',
-              clientId: 'client-1',
-              skuId: 'sku-1',
-              boxId: 'box-1',
-              palletId: null,
-              status: 'PACKING',
-              quantity: 2,
-            },
-          ])
-          .mockResolvedValueOnce([
-            {
-              id: 'shipping-balance',
-              balanceKey: 'client-1:sku-1:box-1:SHIPPING',
-              clientId: 'client-1',
-              skuId: 'sku-1',
-              boxId: 'box-1',
-              palletId: null,
-              status: 'SHIPPING',
-              quantity: 2,
-            },
-          ]),
-        update: vi
-          .fn()
-          .mockResolvedValueOnce({ id: 'packing-balance', quantity: 0 })
-          .mockResolvedValueOnce({ id: 'shipping-balance', quantity: 0 }),
-        delete: vi.fn().mockResolvedValue(undefined),
-        upsert: vi.fn().mockResolvedValue({ id: 'shipping-balance' }),
-      },
-    };
-    const shipService = new StockOperationsService(
-      { $transaction: (callback: (tx: typeof tx) => unknown) => callback(tx) } as never,
-      { requireClientAccess: vi.fn() } as never,
-      { balanceKey: vi.fn().mockReturnValue('client-1:sku-1:box-1:SHIPPING') } as never,
-    );
-
-    await expect(
-      shipService.shipClientRequest(
-        {
-          requestId: 'request-1',
-          idempotencyKey: 'ship-1',
-        },
-        user(),
-      ),
-    ).resolves.toMatchObject({
-      status: 'APPLIED',
-      requestId: 'request-1',
-    });
-
-    expect(tx.stockMovement.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          type: 'PACK',
-          status: 'PACKING',
-          quantity: -2,
-          sourceDocument: 'request-1',
-        }),
-      }),
-    );
-    expect(tx.stockMovement.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          type: 'PACK',
-          status: 'SHIPPING',
-          quantity: 2,
-          sourceDocument: 'request-1',
-        }),
-      }),
-    );
-    expect(tx.stockMovement.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          type: 'SHIP',
-          status: 'SHIPPING',
-          quantity: -2,
-          sourceDocument: 'request-1',
-        }),
-      }),
-    );
-    expect(tx.clientRequest.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          status: 'DONE',
         }),
       }),
     );

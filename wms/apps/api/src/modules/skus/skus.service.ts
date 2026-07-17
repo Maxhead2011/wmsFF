@@ -12,7 +12,6 @@ import { UpdateSkuDto } from './dto/update-sku.dto';
 import {
   parseNomenclatureSheet,
   type NomenclatureImportItem,
-  type SheetCell,
   type SheetMatrix,
 } from './nomenclature-xlsx.parser';
 
@@ -32,9 +31,6 @@ export class SkusService {
         ? [
             { name: { contains: filter.search, mode: 'insensitive' } },
             { internalSku: { contains: filter.search, mode: 'insensitive' } },
-            { article: { contains: filter.search, mode: 'insensitive' } },
-            { color: { contains: filter.search, mode: 'insensitive' } },
-            { size: { contains: filter.search, mode: 'insensitive' } },
             { barcodes: { some: { value: { contains: filter.search } } } },
           ]
         : undefined,
@@ -82,8 +78,7 @@ export class SkusService {
 
   async create(dto: CreateSkuDto, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
-    const manualVolumeLiters = normalizePositiveNumber(dto.volumeLiters);
-    const calculatedVolume = manualVolumeLiters == null ? this.tryCalculateVolume(dto) : null;
+    const volume = this.tryCalculateVolume(dto);
 
     // Русский комментарий: карточка SKU и основной штрихкод создаются одной транзакцией, чтобы не ловить "висячие" barcode.
     try {
@@ -103,8 +98,8 @@ export class SkusService {
             lengthCm: dto.lengthCm,
             widthCm: dto.widthCm,
             heightCm: dto.heightCm,
-            volumeLiters: manualVolumeLiters ?? calculatedVolume?.liters,
-            volumeSource: manualVolumeLiters != null ? 'MANUAL' : calculatedVolume ? 'CALCULATED' : 'MANUAL',
+            volumeLiters: volume?.liters,
+            volumeSource: volume ? 'CALCULATED' : 'MANUAL',
             needsChestnyZnak: dto.needsChestnyZnak ?? false,
             isUnmarked: dto.isUnmarked ?? false,
             needsLabel: dto.needsLabel ?? false,
@@ -308,6 +303,37 @@ export class SkusService {
     }
   }
 
+  async updateNomenclature(id: string, dto: CreateNomenclatureItemDto) {
+    const existing = await this.prisma.nomenclatureItem.findUnique({ where: { id } });
+    if (!existing) {
+      throw new NotFoundException('Номенклатура не найдена.');
+    }
+
+    try {
+      return await this.prisma.nomenclatureItem.update({
+        where: { id },
+        data: {
+          internalSku: (dto.internalSku ?? existing.internalSku).trim(),
+          article: dto.article === undefined ? existing.article : cleanOptional(dto.article) ?? null,
+          barcode: dto.barcode === undefined ? existing.barcode : cleanOptional(dto.barcode) ?? null,
+          name: dto.name.trim(),
+          printName: dto.printName === undefined ? existing.printName : cleanOptional(dto.printName) ?? null,
+          unit: dto.unit === undefined ? existing.unit : cleanOptional(dto.unit) ?? null,
+          itemType: dto.itemType === undefined ? existing.itemType : cleanOptional(dto.itemType) ?? null,
+          color: dto.color === undefined ? existing.color : cleanOptional(dto.color) ?? null,
+          size: dto.size === undefined ? existing.size : cleanOptional(dto.size) ?? null,
+          needsChestnyZnak: dto.needsChestnyZnak ?? existing.needsChestnyZnak,
+        },
+      });
+    } catch (caught) {
+      if (isUniqueConstraintError(caught)) {
+        throw new BadRequestException('Такой внутренний SKU или штрихкод уже используется в общей номенклатуре.');
+      }
+
+      throw caught;
+    }
+  }
+
   async listArticleMappings(clientId: string, user: AuthUser) {
     if (!clientId) {
       throw new BadRequestException('Не выбран клиент для справочника соответствий.');
@@ -482,161 +508,6 @@ export class SkusService {
     };
   }
 
-  buildDraftTemplateWorkbook() {
-    const workbook = XLSX.utils.book_new();
-    const sheet = XLSX.utils.aoa_to_sheet([['ШК', 'Название', 'Цвет', 'Размер', 'Артикул']]);
-    sheet['!cols'] = [{ wch: 22 }, { wch: 46 }, { wch: 18 }, { wch: 18 }, { wch: 24 }];
-    sheet['!freeze'] = { xSplit: 0, ySplit: 1 };
-    XLSX.utils.book_append_sheet(workbook, sheet, 'Товары');
-
-    const help = XLSX.utils.aoa_to_sheet([
-      ['Как заполнить'],
-      ['ШК обязателен. Остальные поля можно заполнить частично.'],
-      ['Если ШК уже появился после приемки на ТСД, WMS обновит черновик и снимет признак черновика.'],
-      ['Если ШК еще нет в каталоге клиента, WMS создаст карточку по этой строке.'],
-    ]);
-    help['!cols'] = [{ wch: 90 }];
-    XLSX.utils.book_append_sheet(workbook, help, 'Инструкция');
-
-    return {
-      fileName: 'Шаблон_заполнения_товаров_после_приемки.xlsx',
-      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      content: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer,
-    };
-  }
-
-  async importDraftWorkbook(clientId: string, file: Express.Multer.File, user: AuthUser) {
-    if (!clientId) {
-      throw new BadRequestException('Выберите клиента для загрузки карточек товаров.');
-    }
-    if (!file) {
-      throw new BadRequestException('Не выбран Excel-файл с карточками товаров.');
-    }
-
-    this.clientScopes.requireClientAccess(user, clientId, 'write');
-    const parsed = parseSkuDraftRows(this.readFirstSheet(file.buffer));
-
-    if (parsed.items.length === 0) {
-      throw new BadRequestException({
-        message: 'В файле не найдено строк с товарами.',
-        errors: parsed.issues.filter((issue) => issue.severity === 'error'),
-        summary: parsed.summary,
-      });
-    }
-
-    const counters = {
-      created: 0,
-      updated: 0,
-      completedDrafts: 0,
-      skipped: 0,
-      errors: parsed.issues.filter((issue) => issue.severity === 'error').length,
-      warnings: parsed.issues.filter((issue) => issue.severity === 'warning').length,
-    };
-    const savedSkus = [];
-
-    for (const item of parsed.items) {
-      try {
-        const result = await this.upsertDraftSkuFromImport(clientId, item);
-        counters[result.created ? 'created' : 'updated'] += 1;
-        if (result.completedDraft) {
-          counters.completedDrafts += 1;
-        }
-        savedSkus.push(result.sku);
-      } catch (caught) {
-        counters.skipped += 1;
-        counters.errors += 1;
-        parsed.issues.push({
-          row: item.sourceRow,
-          barcode: item.barcode,
-          message: caught instanceof Error ? caught.message : 'Не удалось сохранить товар.',
-          severity: 'error',
-        });
-      }
-    }
-
-    return {
-      fileName: file.originalname,
-      summary: {
-        ...parsed.summary,
-        ...counters,
-      },
-      issues: parsed.issues,
-      items: savedSkus,
-    };
-  }
-
-  private async upsertDraftSkuFromImport(clientId: string, item: SkuDraftImportItem) {
-    return this.prisma.$transaction(async (tx) => {
-      const existingBarcode = await tx.barcode.findFirst({
-        where: {
-          value: item.barcode,
-          sku: { clientId },
-        },
-        include: { sku: true },
-      });
-      const updateData = importedSkuDraftUpdateData(item);
-      const hasDetails = skuDraftHasDetails(item);
-
-      if (existingBarcode) {
-        const wasDraft = existingBarcode.sku.isDraft;
-        const sku = await tx.sku.update({
-          where: { id: existingBarcode.sku.id },
-          data: updateData,
-          include: { barcodes: true },
-        });
-
-        return {
-          sku: enrichSkuMarketplaceData(sku),
-          created: false,
-          completedDraft: wasDraft && hasDetails && !sku.isDraft,
-        };
-      }
-
-      const internalSku = await this.buildImportedInternalSku(tx, clientId, item);
-      const sku = await tx.sku.create({
-        data: {
-          clientId,
-          internalSku,
-          clientSku: item.article,
-          article: item.article,
-          name: item.name || `Новый товар без карточки: ${item.barcode}`,
-          color: item.color,
-          size: item.size,
-          volumeSource: 'MANUAL',
-          isDraft: !hasDetails,
-          draftSource: hasDetails ? null : 'DRAFT_IMPORT',
-          barcodes: {
-            create: {
-              value: item.barcode,
-              isPrimary: true,
-            },
-          },
-        },
-        include: { barcodes: true },
-      });
-
-      return {
-        sku: enrichSkuMarketplaceData(sku),
-        created: true,
-        completedDraft: false,
-      };
-    });
-  }
-
-  private async buildImportedInternalSku(tx: Prisma.TransactionClient, clientId: string, item: SkuDraftImportItem) {
-    const source = item.article || item.barcode || item.name || 'SKU';
-    const base = buildLimitedInternalSku(source);
-    let candidate = base;
-    let suffix = 1;
-
-    while (await tx.sku.findUnique({ where: { clientId_internalSku: { clientId, internalSku: candidate } } })) {
-      suffix += 1;
-      candidate = `${base.slice(0, 92)}-${suffix}`.slice(0, 100);
-    }
-
-    return candidate;
-  }
-
   private async upsertImportedNomenclature(item: NomenclatureImportItem) {
     const existingByBarcode = item.barcode
       ? await this.prisma.nomenclatureItem.findUnique({
@@ -710,24 +581,20 @@ export class SkusService {
       isUnmarked: boolean;
       needsLabel: boolean;
       needsRelabel: boolean;
-      isDraft: boolean;
-      draftSource: string | null;
       marketplacePayload: Prisma.JsonValue | null;
     },
   ): Prisma.SkuUncheckedUpdateInput {
     const nextLength = dto.lengthCm ?? decimalToNumber(existing.lengthCm);
     const nextWidth = dto.widthCm ?? decimalToNumber(existing.widthCm);
     const nextHeight = dto.heightCm ?? decimalToNumber(existing.heightCm);
-    const manualVolumeLiters = dto.volumeLiters === undefined ? undefined : normalizePositiveNumber(dto.volumeLiters);
-    const calculatedVolume =
-      manualVolumeLiters === undefined && nextLength && nextWidth && nextHeight
+    const volume =
+      nextLength && nextWidth && nextHeight
         ? this.volumes.calculateLiters({
             lengthCm: nextLength,
             widthCm: nextWidth,
             heightCm: nextHeight,
           })
         : null;
-    const completesDraft = existing.isDraft && dto.isDraft === undefined && hasDraftCompletionData(dto);
 
     return {
       ...(dto.internalSku === undefined ? {} : { internalSku: dto.internalSku.trim() }),
@@ -742,20 +609,11 @@ export class SkusService {
       ...(dto.lengthCm === undefined ? {} : { lengthCm: dto.lengthCm ?? null }),
       ...(dto.widthCm === undefined ? {} : { widthCm: dto.widthCm ?? null }),
       ...(dto.heightCm === undefined ? {} : { heightCm: dto.heightCm ?? null }),
-      ...(manualVolumeLiters !== undefined
-        ? { volumeLiters: manualVolumeLiters, volumeSource: 'MANUAL' }
-        : calculatedVolume
-          ? { volumeLiters: calculatedVolume.liters, volumeSource: 'CALCULATED' }
-          : {}),
+      ...(volume ? { volumeLiters: volume.liters, volumeSource: 'CALCULATED' } : {}),
       ...(dto.needsChestnyZnak === undefined ? {} : { needsChestnyZnak: dto.needsChestnyZnak }),
       ...(dto.isUnmarked === undefined ? {} : { isUnmarked: dto.isUnmarked }),
       ...(dto.needsLabel === undefined ? {} : { needsLabel: dto.needsLabel }),
       ...(dto.needsRelabel === undefined ? {} : { needsRelabel: dto.needsRelabel }),
-      ...(dto.isDraft === undefined
-        ? completesDraft
-          ? { isDraft: false, draftSource: null }
-          : {}
-        : { isDraft: dto.isDraft, draftSource: dto.isDraft ? existing.draftSource : null }),
       ...(dto.photoUrls === undefined ? {} : { marketplacePayload: mergeManualPhotos(existing.marketplacePayload, dto.photoUrls) }),
     };
   }
@@ -776,213 +634,6 @@ export class SkusService {
 function cleanOptional(value?: string) {
   const trimmed = value?.trim();
   return trimmed || undefined;
-}
-
-type SkuDraftImportItem = {
-  barcode: string;
-  name?: string;
-  color?: string;
-  size?: string;
-  article?: string;
-  sourceRow: number;
-};
-
-type SkuDraftColumnMap = {
-  barcode: number;
-  name: number;
-  color: number;
-  size: number;
-  article: number;
-};
-
-type SkuDraftImportIssue = {
-  row: number;
-  barcode?: string;
-  message: string;
-  severity: 'warning' | 'error';
-};
-
-const DEFAULT_DRAFT_COLUMNS: SkuDraftColumnMap = {
-  barcode: 0,
-  name: 1,
-  color: 2,
-  size: 3,
-  article: 4,
-};
-
-function parseSkuDraftRows(rows: SheetMatrix) {
-  const columns = detectSkuDraftColumns(rows);
-  const items: SkuDraftImportItem[] = [];
-  const issues: SkuDraftImportIssue[] = [];
-  const seenBarcodes = new Set<string>();
-
-  rows.forEach((row, index) => {
-    const sourceRow = index + 1;
-    if (looksLikeSkuDraftHeader(row)) {
-      return;
-    }
-
-    const barcode = draftCell(row, columns.barcode);
-    const name = draftCell(row, columns.name);
-    const color = draftCell(row, columns.color);
-    const size = draftCell(row, columns.size);
-    const article = draftCell(row, columns.article);
-
-    if (!barcode && !name && !color && !size && !article) {
-      return;
-    }
-
-    if (!barcode) {
-      issues.push({
-        row: sourceRow,
-        message: 'Не заполнен ШК товара.',
-        severity: 'error',
-      });
-      return;
-    }
-
-    if (seenBarcodes.has(barcode)) {
-      issues.push({
-        row: sourceRow,
-        barcode,
-        message: 'Дубль ШК в файле, строка пропущена.',
-        severity: 'warning',
-      });
-      return;
-    }
-    seenBarcodes.add(barcode);
-
-    items.push({
-      barcode,
-      name: name || undefined,
-      color: color || undefined,
-      size: size || undefined,
-      article: article || undefined,
-      sourceRow,
-    });
-  });
-
-  return {
-    items,
-    issues,
-    summary: {
-      sourceRows: Math.max(rows.length - 1, 0),
-      rows: items.length,
-      barcodes: seenBarcodes.size,
-    },
-  };
-}
-
-function detectSkuDraftColumns(rows: SheetMatrix): SkuDraftColumnMap {
-  for (const row of rows) {
-    const normalized = row.map((cell) => normalizeDraftHeader(draftText(cell)));
-    const barcodeIndex = findDraftColumn(normalized, ['шк', 'штрихкод', 'штрих код', 'баркод', 'barcode']);
-    if (barcodeIndex === undefined) {
-      continue;
-    }
-
-    return {
-      barcode: barcodeIndex,
-      name: findDraftColumn(normalized, ['название', 'наименование', 'товар', 'name']) ?? DEFAULT_DRAFT_COLUMNS.name,
-      color: findDraftColumn(normalized, ['цвет', 'color']) ?? DEFAULT_DRAFT_COLUMNS.color,
-      size: findDraftColumn(normalized, ['размер', 'size']) ?? DEFAULT_DRAFT_COLUMNS.size,
-      article: findDraftColumn(normalized, ['артикул', 'article', 'vendor code']) ?? DEFAULT_DRAFT_COLUMNS.article,
-    };
-  }
-
-  return DEFAULT_DRAFT_COLUMNS;
-}
-
-function findDraftColumn(cells: string[], needles: string[]) {
-  const index = cells.findIndex((cell) => needles.some((needle) => cell === needle || cell.includes(needle)));
-  return index >= 0 ? index : undefined;
-}
-
-function looksLikeSkuDraftHeader(row: SheetCell[]) {
-  const normalized = row.map((cell) => normalizeDraftHeader(draftText(cell)));
-  return normalized.some((cell) => ['шк', 'штрихкод', 'штрих код', 'баркод', 'barcode'].includes(cell));
-}
-
-function draftCell(row: SheetCell[], index: number) {
-  if (index < 0) {
-    return '';
-  }
-
-  const value = draftText(row[index]);
-  if (!value || value === '#N/A' || value.toUpperCase() === 'N/A') {
-    return '';
-  }
-
-  return value;
-}
-
-function draftText(value: SheetCell) {
-  return value == null ? '' : String(value).trim();
-}
-
-function normalizeDraftHeader(value: string) {
-  return value.toLowerCase().replace(/\s+/g, ' ').trim();
-}
-
-function importedSkuDraftUpdateData(item: SkuDraftImportItem): Prisma.SkuUncheckedUpdateInput {
-  const hasDetails = skuDraftHasDetails(item);
-
-  return {
-    ...(item.name ? { name: item.name } : {}),
-    ...(item.article ? { article: item.article } : {}),
-    ...(item.color ? { color: item.color } : {}),
-    ...(item.size ? { size: item.size } : {}),
-    ...(hasDetails ? { isDraft: false, draftSource: null } : {}),
-  };
-}
-
-function skuDraftHasDetails(item: SkuDraftImportItem) {
-  return Boolean(item.name || item.article || item.color || item.size);
-}
-
-function hasDraftCompletionData(dto: UpdateSkuDto) {
-  const name = cleanOptional(dto.name);
-  return Boolean(
-    (name && !isAutoDraftName(name)) ||
-      cleanOptional(dto.clientSku) ||
-      cleanOptional(dto.article) ||
-      cleanOptional(dto.brand) ||
-      cleanOptional(dto.category) ||
-      cleanOptional(dto.color) ||
-      cleanOptional(dto.size) ||
-      normalizePositiveNumber(dto.weightGrams) ||
-      normalizePositiveNumber(dto.lengthCm) ||
-      normalizePositiveNumber(dto.widthCm) ||
-      normalizePositiveNumber(dto.heightCm) ||
-      normalizePositiveNumber(dto.volumeLiters) ||
-      cleanPhotoUrls(dto.photoUrls).length > 0,
-  );
-}
-
-function isAutoDraftName(value: string) {
-  return value.trim().toLowerCase().startsWith('новый товар без карточки:');
-}
-
-function buildLimitedInternalSku(value: string) {
-  const compact = value.replace(/\s+/g, ' ').trim();
-  if (compact.length <= 100) {
-    return compact;
-  }
-
-  return `${compact.slice(0, 83)}-${hashText(compact)}`;
-}
-
-function hashText(value: string) {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
-  }
-
-  return hash.toString(36).toUpperCase().padStart(6, '0').slice(0, 6);
-}
-
-function normalizePositiveNumber(value?: number) {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 function cleanPhotoUrls(photoUrls?: string[]) {

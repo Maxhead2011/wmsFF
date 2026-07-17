@@ -13,6 +13,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { isClientNotificationEnabled } from '../client-notifications/client-notification-preferences';
+import { TelegramNotificationService } from '../client-notifications/telegram-notification.service';
 import type { LogisticsDirection as ParsedLogisticsDirection } from '../imports/parsers/logistics-xlsx.parser';
 import { AssignDeliveryTripDto } from './dto/assign-delivery-trip.dto';
 import { CreateDeliveryRequestDto } from './dto/create-delivery-request.dto';
@@ -48,12 +49,16 @@ type RateTierLike = {
 };
 
 const DEFAULT_LOGISTICS_ORIGIN = 'Москва';
+const MAX_BOXES_FOR_BOX_TARIFF = 10;
+const BOXES_PER_PALLET = 16;
+const EXTRA_BOXES_PER_PALLET = 4;
 
 @Injectable()
 export class LogisticsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly clientScopes: ClientScopeService,
+    private readonly telegram?: TelegramNotificationService,
   ) {}
 
   listTariffSets() {
@@ -63,67 +68,6 @@ export class LogisticsService {
         _count: { select: { directions: true } },
       },
     });
-  }
-
-  async listDestinationSuggestions(query: { search?: string; tariffSetId?: string } = {}) {
-    const search = normalizeText(query.search)?.toLowerCase();
-    const activeTariffSet = query.tariffSetId ? null : await this.findActiveTariffSet(new Date());
-    const tariffSetId = query.tariffSetId ?? activeTariffSet?.id;
-    const rows = await this.prisma.logisticsDirection.findMany({
-      where: {
-        tariffSetId: tariffSetId ?? undefined,
-      },
-      select: {
-        origin: true,
-        destination: true,
-        tariffSetId: true,
-        tariffSet: {
-          select: {
-            name: true,
-            sourceFile: true,
-          },
-        },
-      },
-      orderBy: [{ destination: 'asc' }, { origin: 'asc' }],
-      take: 2000,
-    });
-    const suggestions = new Map<string, {
-      value: string;
-      label: string;
-      description: string;
-      origin: string;
-      destination: string;
-      tariffSetId: string;
-      tariffSetName: string;
-      sourceFile: string | null;
-    }>();
-
-    rows.forEach((row) => {
-      const destination = row.destination.trim();
-      if (!destination) {
-        return;
-      }
-
-      const normalizedDestination = this.normalizePoint(destination);
-      if (search && !normalizedDestination.includes(search)) {
-        return;
-      }
-
-      if (!suggestions.has(normalizedDestination)) {
-        suggestions.set(normalizedDestination, {
-          value: destination,
-          label: destination,
-          description: [row.origin, row.tariffSet.name].filter(Boolean).join(' -> '),
-          origin: row.origin,
-          destination,
-          tariffSetId: row.tariffSetId,
-          tariffSetName: row.tariffSet.name,
-          sourceFile: row.tariffSet.sourceFile,
-        });
-      }
-    });
-
-    return [...suggestions.values()].slice(0, 80);
   }
 
   getTariffSet(id: string) {
@@ -137,6 +81,54 @@ export class LogisticsService {
         },
       },
     });
+  }
+
+  async listDestinationSuggestions(filter: { search?: string; tariffSetId?: string }) {
+    const search = normalizeText(filter.search);
+    const tariffSetId = normalizeText(filter.tariffSetId);
+    const directions = await this.prisma.logisticsDirection.findMany({
+      where: {
+        ...(tariffSetId ? { tariffSetId } : {}),
+        ...(search
+          ? {
+              OR: [
+                { destination: { contains: search, mode: 'insensitive' } },
+                { origin: { contains: search, mode: 'insensitive' } },
+              ],
+            }
+          : {}),
+      },
+      include: {
+        tariffSet: {
+          select: {
+            id: true,
+            name: true,
+            sourceFile: true,
+          },
+        },
+      },
+      orderBy: [{ destination: 'asc' }, { origin: 'asc' }],
+      take: 200,
+    });
+
+    const unique = new Map<string, (typeof directions)[number]>();
+    directions.forEach((direction) => {
+      const key = [direction.tariffSetId, this.normalizePoint(direction.origin), this.normalizePoint(direction.destination)].join('|');
+      if (!unique.has(key)) {
+        unique.set(key, direction);
+      }
+    });
+
+    return [...unique.values()].slice(0, 50).map((direction) => ({
+      value: direction.destination,
+      label: direction.destination,
+      description: `${direction.origin} -> ${direction.destination} · ${direction.tariffSet.name}`,
+      origin: direction.origin,
+      destination: direction.destination,
+      tariffSetId: direction.tariffSet.id,
+      tariffSetName: direction.tariffSet.name,
+      sourceFile: direction.tariffSet.sourceFile,
+    }));
   }
 
   async commitTariffSet(parsed: ParsedLogisticsTariffSet, options: CommitLogisticsTariffSetOptions) {
@@ -205,14 +197,20 @@ export class LogisticsService {
       include: { tiers: true },
     });
 
-    const direction = this.findDirection(directions, dto.destination);
+    const direction = this.findTariffDirection(
+      directions.filter((item) => this.normalizePoint(item.origin) === this.normalizePoint(DEFAULT_LOGISTICS_ORIGIN)),
+      dto.destination,
+    );
 
     if (!direction) {
       throw new NotFoundException('Направление логистики не найдено в выбранном наборе тарифов.');
     }
 
-    const tier = this.selectRateTier(direction.tiers, { boxes: dto.boxes, pallets: dto.pallets });
-    const estimatedTotalRub = this.calculateQuoteTotal(tier, dto.pallets);
+    const pricingInput = dto.boxes != null && dto.boxes > MAX_BOXES_FOR_BOX_TARIFF
+      ? { boxes: undefined, pallets: calculateLogisticsPalletCount(dto.boxes) }
+      : { boxes: dto.boxes, pallets: dto.pallets };
+    const tier = this.selectRateTier(direction.tiers, pricingInput);
+    const estimatedTotalRub = this.calculateQuoteTotal(tier, pricingInput.pallets);
 
     return {
       tariffSet: {
@@ -225,8 +223,8 @@ export class LogisticsService {
         destination: direction.destination,
       },
       input: {
-        boxes: dto.boxes ?? null,
-        pallets: dto.pallets ?? null,
+        boxes: pricingInput.boxes ?? null,
+        pallets: pricingInput.pallets ?? null,
       },
       tier: this.serializeTier(tier),
       estimatedTotalRub,
@@ -389,6 +387,57 @@ export class LogisticsService {
     });
   }
 
+  async ensurePackedRequestBilling(requestId: string, user: AuthUser) {
+    const clientRequest = await this.prisma.clientRequest.findUnique({
+      where: { id: requestId },
+      select: {
+        id: true,
+        clientId: true,
+        title: true,
+        destinationCity: true,
+        desiredDate: true,
+      },
+    });
+    if (!clientRequest) {
+      throw new NotFoundException('Клиентская заявка не найдена.');
+    }
+    this.clientScopes.requireClientAccess(user, clientRequest.clientId, 'write');
+    const destination = normalizeText(clientRequest.destinationCity ?? undefined);
+    if (!destination) {
+      return { status: 'REQUIRES_DESTINATION' as const, deliveryRequest: null };
+    }
+
+    let deliveryRequest = await this.prisma.logisticsDeliveryRequest.findFirst({
+      where: {
+        requestId,
+        status: { not: LogisticsDeliveryStatus.CANCELLED },
+      },
+      include: deliveryRequestInclude,
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!deliveryRequest) {
+      deliveryRequest = await this.createDeliveryRequest(
+        {
+          clientId: clientRequest.clientId,
+          requestId,
+          destination,
+          desiredShipDate: clientRequest.desiredDate?.toISOString(),
+          comment: `Автоматически создано после упаковки заявки ${clientRequest.title}.`,
+        },
+        user,
+      );
+    }
+
+    if (!deliveryRequest.billingChargeId) {
+      deliveryRequest = await this.generateDeliveryBillingCharge(deliveryRequest.id, user);
+    }
+
+    return {
+      status: deliveryRequest.requiresManualReview ? ('PRICE_REVIEW' as const) : ('READY' as const),
+      deliveryRequest,
+    };
+  }
+
   async assignDeliveryTrip(id: string, dto: AssignDeliveryTripDto, user: AuthUser) {
     const request = await this.prisma.logisticsDeliveryRequest.findUnique({
       where: { id },
@@ -471,8 +520,15 @@ export class LogisticsService {
     }
 
     this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+    const notifyClient =
+      request.status !== dto.status &&
+      (await isClientNotificationEnabled(
+        this.prisma,
+        request.clientId,
+        ClientNotificationEvent.LOGISTICS_DELIVERY_STATUS_CHANGED,
+      ));
 
-    return this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.logisticsDeliveryRequest.update({
         where: { id },
         data: {
@@ -483,14 +539,7 @@ export class LogisticsService {
         include: deliveryRequestInclude,
       });
 
-      if (
-        request.status !== dto.status &&
-        (await isClientNotificationEnabled(
-          tx,
-          request.clientId,
-          ClientNotificationEvent.LOGISTICS_DELIVERY_STATUS_CHANGED,
-        ))
-      ) {
+      if (notifyClient) {
         await tx.clientNotification.create({
           data: {
             clientId: request.clientId,
@@ -505,6 +554,19 @@ export class LogisticsService {
 
       return updated;
     });
+
+    if (notifyClient) {
+      void this.telegram?.notifyClient(
+        request.clientId,
+        [
+          'LOGOFF WMS: изменен статус доставки.',
+          `${request.origin} -> ${request.destination}`,
+          `Статус: ${deliveryStatusLabel(request.status)} -> ${deliveryStatusLabel(dto.status)}`,
+        ].join('\n'),
+      );
+    }
+
+    return updated;
   }
 
   async finalizeDeliveryQuote(id: string, dto: FinalizeDeliveryQuoteDto, user: AuthUser) {
@@ -572,19 +634,15 @@ export class LogisticsService {
       });
     }
 
-    if (request.status !== LogisticsDeliveryStatus.DELIVERED) {
-      throw new BadRequestException('Начисление доставки можно создать только после статуса "Доставлена".');
-    }
-
-    if (request.requiresManualReview || request.estimatedTotalRub == null) {
-      throw new BadRequestException('Для доставки нужен финальный расчет тарифа перед начислением.');
+    if (request.status === LogisticsDeliveryStatus.CANCELLED) {
+      throw new BadRequestException('Нельзя создать начисление для отмененной доставки.');
     }
 
     const sourceKey = deliverySourceKey(request.id);
-    const totalRub = Number(request.estimatedTotalRub);
-    if (!Number.isFinite(totalRub) || totalRub <= 0) {
-      throw new BadRequestException('Некорректная сумма доставки для начисления.');
-    }
+    const quotedTotalRub = Number(request.estimatedTotalRub);
+    const priceRequiresConfirmation =
+      request.requiresManualReview || request.estimatedTotalRub == null || !Number.isFinite(quotedTotalRub) || quotedTotalRub <= 0;
+    const totalRub = priceRequiresConfirmation ? 0 : quotedTotalRub;
 
     return this.prisma.$transaction(async (tx) => {
       const existingCharge = await tx.billingCharge.findFirst({
@@ -599,7 +657,9 @@ export class LogisticsService {
             clientId: request.clientId,
             serviceId: (await ensureDeliveryBillingService(tx)).id,
             requestId: request.requestId,
-            description: `Доставка ${request.origin} -> ${request.destination}`,
+            description: `Доставка ${request.origin} -> ${request.destination}${
+              priceRequiresConfirmation ? ' (цена требует согласования)' : ''
+            }`,
             unit: BillingUnit.SERVICE,
             quantity: 1,
             unitPriceRub: totalRub,
@@ -619,8 +679,12 @@ export class LogisticsService {
               tariffSetId: request.tariffSetId,
               tariffSetName: request.tariffSet?.name ?? null,
               clientRequestId: request.requestId,
+              priceRequiresConfirmation,
             },
-            comment: request.managerComment ?? request.comment,
+            comment:
+              request.managerComment ??
+              request.comment ??
+              (priceRequiresConfirmation ? 'Тариф не найден. Укажите цену в черновом счете перед выставлением.' : null),
             createdByUserId: user.id,
             approvedByUserId: user.id,
             approvedAt: new Date(),
@@ -676,36 +740,6 @@ export class LogisticsService {
     return null;
   }
 
-  private findDirection<TDirection extends { origin: string; destination: string }>(
-    directions: TDirection[],
-    destination: string,
-  ) {
-    const normalizedOrigin = this.normalizePoint(DEFAULT_LOGISTICS_ORIGIN);
-    const normalizedDestination = this.normalizePoint(destination);
-    const exact = directions.find(
-      (item) =>
-        this.normalizePoint(item.origin) === normalizedOrigin &&
-        this.normalizePoint(item.destination) === normalizedDestination,
-    );
-    if (exact) {
-      return exact;
-    }
-
-    if (normalizedDestination.length < 5) {
-      return null;
-    }
-
-    const closeMatches = directions
-      .filter((item) => this.normalizePoint(item.origin) === normalizedOrigin)
-      .map((item) => ({
-        item,
-        distance: oneEditDistance(this.normalizePoint(item.destination), normalizedDestination),
-      }))
-      .filter((match) => match.distance >= 0 && match.distance <= 1);
-
-    return closeMatches.length === 1 ? closeMatches[0].item : null;
-  }
-
   private findActiveTariffSet(at: Date) {
     return this.prisma.logisticsTariffSet.findFirst({
       where: {
@@ -747,9 +781,18 @@ export class LogisticsService {
   }
 
   private async tryQuoteForDelivery(dto: CreateDeliveryRequestDto) {
+    const quoteDate = dto.desiredShipDate ? new Date(dto.desiredShipDate) : new Date();
+    const tariffSet = dto.tariffSetId
+      ? await this.prisma.logisticsTariffSet.findUnique({ where: { id: dto.tariffSetId } })
+      : await this.findActiveTariffSet(quoteDate);
+
     try {
+      if (!tariffSet) {
+        throw new NotFoundException('Активный набор тарифов логистики не найден.');
+      }
+
       const quote = await this.quote({
-        tariffSetId: dto.tariffSetId,
+        tariffSetId: tariffSet.id,
         destination: dto.destination,
         boxes: dto.boxes,
         pallets: dto.pallets,
@@ -767,7 +810,7 @@ export class LogisticsService {
       const message = `Требуется ручной расчет фулфилментом: ${details}`;
 
       return {
-        tariffSetId: dto.tariffSetId,
+        tariffSetId: tariffSet?.id ?? dto.tariffSetId,
         estimatedTotalRub: null,
         requiresManualReview: true,
         note: message,
@@ -795,12 +838,14 @@ export class LogisticsService {
         },
         { boxes: 0, pallets: 0 },
       );
+      const calculatedPallets = Math.max(counts.pallets, calculateLogisticsPalletCount(counts.boxes));
+      const usePalletTariff = counts.pallets > 0 || counts.boxes > MAX_BOXES_FOR_BOX_TARIFF;
 
       return {
         boxes: counts.boxes || null,
-        pallets: counts.pallets || null,
-        quoteBoxes: counts.pallets > 0 ? undefined : counts.boxes || undefined,
-        quotePallets: counts.pallets > 0 ? counts.pallets : undefined,
+        pallets: usePalletTariff ? calculatedPallets || null : null,
+        quoteBoxes: usePalletTariff ? undefined : counts.boxes || undefined,
+        quotePallets: usePalletTariff ? calculatedPallets || undefined : undefined,
       };
     }
 
@@ -808,16 +853,38 @@ export class LogisticsService {
       throw new BadRequestException('Для доставки передайте ровно одно значение: короба или паллеты.');
     }
 
+    const calculatedPallets = dto.boxes != null && dto.boxes > MAX_BOXES_FOR_BOX_TARIFF
+      ? calculateLogisticsPalletCount(dto.boxes)
+      : dto.pallets;
+    const usePalletTariff = dto.pallets != null || calculatedPallets != null;
+
     return {
       boxes: dto.boxes ?? null,
-      pallets: dto.pallets ?? null,
-      quoteBoxes: dto.boxes,
-      quotePallets: dto.pallets,
+      pallets: usePalletTariff ? calculatedPallets ?? null : null,
+      quoteBoxes: usePalletTariff ? undefined : dto.boxes,
+      quotePallets: usePalletTariff ? calculatedPallets : undefined,
     };
   }
 
   private normalizePoint(value: string) {
-    return value.toLowerCase().replace(/\s*,\s*/g, ', ').replace(/\s+/g, ' ').trim();
+    return value.normalize('NFKC').toLowerCase().replace(/ё/g, 'е').replace(/\s*,\s*/g, ', ').replace(/\s+/g, ' ').trim();
+  }
+
+  private normalizeCity(value: string) {
+    return this.normalizePoint(value.replace(/\([^)]*\)/g, ' '));
+  }
+
+  private findTariffDirection<T extends { destination: string }>(directions: T[], destination: string) {
+    const exact = directions.find(
+      (item) => this.normalizePoint(item.destination) === this.normalizePoint(destination),
+    );
+    if (exact) {
+      return exact;
+    }
+
+    const city = this.normalizeCity(destination);
+    const cityMatches = directions.filter((item) => this.normalizeCity(item.destination) === city);
+    return cityMatches.length === 1 ? cityMatches[0] : undefined;
   }
 
   private parseDate(value?: string) {
@@ -960,46 +1027,15 @@ function isPalletPackage(packageType?: string | null) {
   return ['PALLET', 'PALLETTE', 'ПАЛЛЕТ', 'ПАЛЛЕТА'].includes((packageType ?? '').trim().toUpperCase());
 }
 
-function oneEditDistance(left: string, right: string) {
-  if (left === right) {
+export function calculateLogisticsPalletCount(boxes: number) {
+  if (!Number.isFinite(boxes) || boxes <= 0) {
     return 0;
   }
 
-  if (Math.abs(left.length - right.length) > 1) {
-    return -1;
-  }
-
-  let edits = 0;
-  let leftIndex = 0;
-  let rightIndex = 0;
-
-  while (leftIndex < left.length && rightIndex < right.length) {
-    if (left[leftIndex] === right[rightIndex]) {
-      leftIndex += 1;
-      rightIndex += 1;
-      continue;
-    }
-
-    edits += 1;
-    if (edits > 1) {
-      return -1;
-    }
-
-    if (left.length > right.length) {
-      leftIndex += 1;
-    } else if (right.length > left.length) {
-      rightIndex += 1;
-    } else {
-      leftIndex += 1;
-      rightIndex += 1;
-    }
-  }
-
-  if (leftIndex < left.length || rightIndex < right.length) {
-    edits += 1;
-  }
-
-  return edits <= 1 ? edits : -1;
+  const normalizedBoxes = Math.floor(boxes);
+  const fullPallets = Math.floor(normalizedBoxes / BOXES_PER_PALLET);
+  const remainder = normalizedBoxes % BOXES_PER_PALLET;
+  return fullPallets + (remainder > EXTRA_BOXES_PER_PALLET ? 1 : 0);
 }
 
 function deliveryStatusLabel(status: LogisticsDeliveryStatus) {
