@@ -84,6 +84,7 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
   const [statistics, setStatistics] = useState<LoadState<TurnoverStatistics | null>>({ status: 'idle', data: null });
   const [suggestions, setSuggestions] = useState<LoadState<TurnoverSuggestions | null>>({ status: 'idle', data: null });
   const [suggestionQuery, setSuggestionQuery] = useState('');
+  const [suggestionScope, setSuggestionScope] = useState<'client' | 'barcode'>('client');
   const [selectedClientId, setSelectedClientId] = useState('');
   const [search, setSearch] = useState('');
   const [movementSearch, setMovementSearch] = useState('');
@@ -146,11 +147,11 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
     }
 
     const timer = window.setTimeout(() => {
-      void loadSuggestions(suggestionQuery);
+      void loadSuggestions(suggestionQuery, suggestionScope);
     }, 180);
 
     return () => window.clearTimeout(timer);
-  }, [selectedClientId, suggestionQuery]);
+  }, [selectedClientId, suggestionQuery, suggestionScope]);
 
   useEffect(() => {
     if (
@@ -248,7 +249,7 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
     }
   }
 
-  async function loadSuggestions(query: string) {
+  async function loadSuggestions(query: string, scope: 'client' | 'barcode' = 'client') {
     if (!selectedClientId) {
       return;
     }
@@ -258,6 +259,7 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
       const loaded = await fetchTurnoverSuggestions(session.accessToken, {
         clientId: selectedClientId,
         search: query.trim() || undefined,
+        scope,
       });
       setSuggestions({ status: 'ready', data: loaded });
     } catch (caught) {
@@ -312,7 +314,8 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
   }
 
   async function submitAction() {
-    if (!selectedClientId || !actionForm.skuId) {
+    const actionClientId = actionReportItem?.client.id ?? selectedClientId;
+    if (!actionClientId || !actionForm.skuId) {
       return;
     }
 
@@ -328,7 +331,7 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
 
     try {
       const result = await runTurnoverAction(session.accessToken, {
-        clientId: selectedClientId,
+        clientId: actionClientId,
         skuId: actionForm.skuId,
         action: actionForm.action,
         quantity,
@@ -457,7 +460,10 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
             options={productOptions}
             placeholder="Название, SKU, артикул"
             onChange={setSearch}
-            onSearch={setSuggestionQuery}
+            onSearch={(value) => {
+              setSuggestionScope('client');
+              setSuggestionQuery(value);
+            }}
             onSelect={(option) => {
               setSearch(option.label ?? option.value);
               setSuggestionQuery(option.value);
@@ -475,10 +481,17 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
             options={barcodeOptions}
             placeholder="ШК товара"
             onChange={setBarcode}
-            onSearch={setSuggestionQuery}
+            onSearch={(value) => {
+              setSuggestionScope('barcode');
+              setSuggestionQuery(value);
+            }}
             onSelect={(option) => {
               setBarcode(option.value);
               setSearch(optionDataString(option, 'name') || option.label || option.value);
+              const clientId = optionDataString(option, 'clientId');
+              if (clientId) {
+                setSelectedClientId(clientId);
+              }
               const skuId = optionDataString(option, 'skuId');
               if (skuId) {
                 setSelectedSkuId(skuId);
@@ -492,7 +505,10 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
             options={kizOptions}
             placeholder="Номер или фрагмент"
             onChange={setKiz}
-            onSearch={setSuggestionQuery}
+            onSearch={(value) => {
+              setSuggestionScope('client');
+              setSuggestionQuery(value);
+            }}
             onSelect={(option) => {
               setKiz(option.value);
               setSearch(optionDataString(option, 'name') || option.label || option.value);
@@ -513,7 +529,10 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
             options={boxOptions}
             placeholder="Номер короба или ячейки"
             onChange={setBoxSearch}
-            onSearch={setSuggestionQuery}
+            onSearch={(value) => {
+              setSuggestionScope('client');
+              setSuggestionQuery(value);
+            }}
             onSelect={(option) => {
               setBoxSearch(option.value);
               void loadBoxDetails(option.value);
@@ -548,6 +567,7 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
 
         {clients.error ? <p className="form-error">{clients.error}</p> : null}
         {report.error ? <p className="form-error">{report.error}</p> : null}
+        {barcode.trim() ? <p className="inline-status">Поиск по ШК выполняется по всем доступным клиентам.</p> : null}
       </section>
 
       <section className="turnover-tiles" aria-label="Разделы товарооборота">
@@ -1002,6 +1022,7 @@ function MovementSection({
           <table className="turnover-table">
             <thead>
               <tr>
+                <th>Клиент</th>
                 <th>Товар</th>
                 <th>ШК</th>
                 <th>Остаток</th>
@@ -1012,11 +1033,15 @@ function MovementSection({
             <tbody>
               {filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={5}>По такому запросу товар не найден.</td>
+                  <td colSpan={6}>По такому запросу товар не найден.</td>
                 </tr>
               ) : null}
               {filteredItems.map((item) => (
                 <tr className={item.skuId === selected?.skuId ? 'is-active' : ''} key={item.skuId} onClick={() => onSelect(item.skuId)}>
+                  <td>
+                    <strong>{item.client.name}</strong>
+                    <span>{item.client.code}</span>
+                  </td>
                   <td>
                     <strong>{item.name}</strong>
                     <span>{item.internalSku}</span>
@@ -1052,6 +1077,7 @@ function MovementDetails({
         <div>
           <p className="eyebrow">Карточка движения</p>
           <h3>{item.name}</h3>
+          <small>{item.client.name} · {item.client.code}</small>
         </div>
         <span>{item.primaryBarcode ?? item.internalSku}</span>
       </div>
@@ -1615,6 +1641,8 @@ function buildBarcodeOptions(items: TurnoverSkuReport[], barcodes: TurnoverSugge
         label: barcode,
         description: `${item.name} · остаток ${formatNumber(item.currentQuantity)} шт`,
         data: {
+          clientId: item.client.id,
+          clientName: item.client.name,
           skuId: item.skuId,
           name: item.name,
           internalSku: item.internalSku,
@@ -1628,8 +1656,10 @@ function buildBarcodeOptions(items: TurnoverSkuReport[], barcodes: TurnoverSugge
     ...barcodes.map((barcode) => ({
       value: barcode.value,
       label: barcode.value,
-      description: `${barcode.name} · ${barcode.internalSku}`,
+      description: `${barcode.client.name} · ${barcode.name} · ${barcode.internalSku}`,
       data: {
+        clientId: barcode.client.id,
+        clientName: barcode.client.name,
         skuId: barcode.skuId,
         name: barcode.name,
         internalSku: barcode.internalSku,
@@ -1638,7 +1668,7 @@ function buildBarcodeOptions(items: TurnoverSkuReport[], barcodes: TurnoverSugge
         barcode: barcode.value,
       },
     })),
-  ]);
+  ], (option) => `${option.value}:${optionDataString(option, 'clientId')}:${optionDataString(option, 'skuId')}`);
 }
 
 function buildKizOptions(items: TurnoverSkuReport[], kiz: TurnoverSuggestions['kiz']): KnownValueOption[] {
@@ -1693,16 +1723,17 @@ function buildCellOptions(
   ]);
 }
 
-function uniqueOptions(options: KnownValueOption[]) {
+function uniqueOptions(options: KnownValueOption[], keyOf: (option: KnownValueOption) => string = (option) => option.value) {
   const seen = new Set<string>();
   const result: KnownValueOption[] = [];
 
   for (const option of options) {
-    if (!option.value || seen.has(option.value)) {
+    const key = keyOf(option);
+    if (!option.value || seen.has(key)) {
       continue;
     }
 
-    seen.add(option.value);
+    seen.add(key);
     result.push(option);
   }
 

@@ -212,7 +212,8 @@ export class TurnoverService {
   ) {}
 
   async list(query: ListTurnoverDto, user: AuthUser) {
-    const clientFilter = this.clientScopes.resolveClientFilter(user, query.clientId);
+    // Exact barcode lookup is intentionally cross-client, but still respects the user's accessible client scope.
+    const clientFilter = this.clientScopes.resolveClientFilter(user, query.barcode?.trim() ? undefined : query.clientId);
     const skuWhere = this.buildSkuWhere(query, clientFilter);
     const movementDateRange = dateRange(query.dateFrom, query.dateTo);
     const kiz = query.kiz?.trim();
@@ -277,7 +278,7 @@ export class TurnoverService {
   async statistics(query: TurnoverStatisticsDto, user: AuthUser) {
     this.requireInternalStatisticsAccess(user);
 
-    const clientFilter = this.clientScopes.resolveClientFilter(user, query.clientId);
+    const clientFilter = this.clientScopes.resolveClientFilter(user, query.barcode?.trim() ? undefined : query.clientId);
     const skuWhere = this.buildSkuWhere(query, clientFilter);
     const movementDateRange = dateRange(query.dateFrom, query.dateTo);
     const groupBy = query.groupBy ?? 'month';
@@ -381,7 +382,7 @@ export class TurnoverService {
   }
 
   async suggestions(query: TurnoverSuggestionsDto, user: AuthUser) {
-    const clientFilter = this.clientScopes.resolveClientFilter(user, query.clientId);
+    const clientFilter = this.clientScopes.resolveClientFilter(user, query.scope === 'barcode' ? undefined : query.clientId);
     const search = query.search?.trim();
     const searchText = search ? { contains: search, mode: Prisma.QueryMode.insensitive } : undefined;
 
@@ -403,6 +404,7 @@ export class TurnoverService {
         },
         select: {
           id: true,
+          client: { select: { id: true, code: true, name: true } },
           internalSku: true,
           clientSku: true,
           article: true,
@@ -429,7 +431,16 @@ export class TurnoverService {
         select: {
           value: true,
           isPrimary: true,
-          sku: { select: { id: true, internalSku: true, clientSku: true, article: true, name: true } },
+          sku: {
+            select: {
+              id: true,
+              client: { select: { id: true, code: true, name: true } },
+              internalSku: true,
+              clientSku: true,
+              article: true,
+              name: true,
+            },
+          },
         },
         orderBy: { value: 'asc' },
         take: 60,
@@ -466,6 +477,7 @@ export class TurnoverService {
 
       return {
         skuId: sku.id,
+        client: sku.client,
         label: [sku.name, primaryBarcode ? `ШК ${primaryBarcode}` : null].filter(Boolean).join(' · '),
         name: sku.name,
         internalSku: sku.internalSku,
@@ -486,6 +498,7 @@ export class TurnoverService {
             value: product.barcode!,
             label: product.barcode!,
             skuId: product.skuId,
+            client: product.client,
             name: product.name,
             internalSku: product.internalSku,
             clientSku: product.clientSku,
@@ -495,13 +508,14 @@ export class TurnoverService {
           value: row.value,
           label: row.value,
           skuId: row.sku.id,
+          client: row.sku.client,
           name: row.sku.name,
           internalSku: row.sku.internalSku,
           clientSku: row.sku.clientSku,
           article: row.sku.article,
         })),
       ],
-      (row) => row.value,
+      (row) => `${row.client.id}:${row.skuId}:${row.value}`,
     ).slice(0, 60);
 
     return {

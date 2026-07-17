@@ -52,6 +52,10 @@ export class TurnoverSuggestionsDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  @IsOptional()
+  @IsIn(['client', 'barcode'])
+  scope?: 'client' | 'barcode';
 }
 
 export class TurnoverBoxDetailsDto {

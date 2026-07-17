@@ -1867,6 +1867,7 @@ export type TurnoverActionResult = {
 export type TurnoverSuggestions = {
   products: Array<{
     skuId: string;
+    client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
     label: string;
     name: string;
     internalSku: string;
@@ -1883,6 +1884,7 @@ export type TurnoverSuggestions = {
     value: string;
     label: string;
     skuId: string;
+    client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
     name: string;
     internalSku: string;
     clientSku: string | null;
@@ -3869,11 +3871,12 @@ export async function fetchTurnoverReport(
 
 export async function fetchTurnoverSuggestions(
   accessToken: string,
-  filter: { clientId?: string; search?: string } = {},
+  filter: { clientId?: string; search?: string; scope?: 'client' | 'barcode' } = {},
 ) {
   return request<TurnoverSuggestions>(withQuery('/turnover/suggestions', {
     clientId: filter.clientId,
     search: filter.search,
+    scope: filter.scope,
   }), {
     accessToken,
   });
