@@ -1006,9 +1006,9 @@ public class MainActivity extends Activity {
             statusMessage = "Короб не нужен: " + scannedCode;
             boxSearchFeedbackColor = BOX_NOT_NEEDED_RED;
         } else if (found.contains(code)) {
-            statusMessage = boxInstructionLabel(matchedTask) + "\nКороб уже найден: " + displayCode;
+            statusMessage = "Повторный скан отклонен. Короб уже был пропикан: " + displayCode;
             saveLastFoundBoxCode(code);
-            boxSearchFeedbackColor = boxInstructionColor(matchedTask);
+            boxSearchFeedbackColor = BOX_DUPLICATE_BLUE;
         } else {
             found.add(code);
             Set<String> localFound = localFoundBoxes();

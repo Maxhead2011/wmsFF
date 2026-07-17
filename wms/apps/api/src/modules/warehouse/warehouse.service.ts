@@ -614,22 +614,30 @@ export class WarehouseService {
     const sourceDocument = optionalString(dto.sourceDocument) || `WEB-RECEIPT-${dateStamp()}-${boxCode}`;
     this.clientScopes.requireClientAccess(user, clientId, 'write');
 
-    const box = await this.prisma.$transaction(async (tx) => {
-      const existingBox = await tx.box.findUnique({
-        where: { clientId_code: { clientId, code: boxCode } },
-        select: { id: true, status: true },
+    let box: { id: string; code: string; status: string };
+    try {
+      box = await this.prisma.$transaction(async (tx) => {
+        const existingBox = await tx.box.findFirst({
+          where: { code: boxCode },
+          select: { id: true, clientId: true, status: true },
+        });
+
+        if (existingBox) {
+          throw new BadRequestException(
+            existingBox.status === 'deleted'
+              ? `Номер короба ${boxCode} уже использовался и был удален. Восстановите его или отсканируйте новый уникальный номер.`
+              : `Короб ${boxCode} уже был пропикан. Повторное использование номера запрещено.`,
+          );
+        }
+
+        return tx.box.create({ data: { clientId, code: boxCode, status: 'receiving' } });
       });
-
-      if (existingBox?.status === 'deleted') {
-        await removeOnlineReceiptBoxData(tx, existingBox.id);
+    } catch (caught) {
+      if (isPrismaUniqueConflict(caught)) {
+        throw new BadRequestException(`Короб ${boxCode} уже был пропикан. Повторное использование номера запрещено.`);
       }
-
-      if (existingBox && existingBox.status !== 'deleted') {
-        return tx.box.update({ where: { id: existingBox.id }, data: { status: 'receiving' } });
-      }
-
-      return tx.box.create({ data: { clientId, code: boxCode, status: 'receiving' } });
-    });
+      throw caught;
+    }
     await this.recordReceiptAdminOperation('receipt_open_box', user, {
       clientId,
       boxCode,
@@ -1705,7 +1713,11 @@ function text(value: unknown) {
 }
 
 function normalizeBoxCode(value: string) {
-  return value.trim();
+  return value.trim().toLocaleUpperCase('ru-RU');
+}
+
+function isPrismaUniqueConflict(value: unknown) {
+  return Boolean(value && typeof value === 'object' && 'code' in value && value.code === 'P2002');
 }
 
 function requireFflBoxCode(value: string) {

@@ -674,7 +674,7 @@ model Box {
   clientId     String
   zoneId       String?
   palletId     String?
-  code         String
+  code         String          @unique
   status       String          @default("active")
   client       Client          @relation(fields: [clientId], references: [id])
   zone         Zone?           @relation(fields: [zoneId], references: [id])

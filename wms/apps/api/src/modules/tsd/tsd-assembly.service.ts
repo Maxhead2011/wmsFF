@@ -203,6 +203,9 @@ export class TsdAssemblyService {
     if (!(plan.outgoingBoxCodes ?? []).some((value: string) => normalizeBoxCode(value) === boxCode)) {
       throw new BadRequestException('Короб не входит в актуальный список коробов на отправку. Обновите заявку на ТСД.');
     }
+    if ((plan.confirmedOutgoingBoxCodes ?? []).some((value: string) => normalizeBoxCode(value) === boxCode)) {
+      throw new BadRequestException('Этот короб уже был пропикан и подтвержден к отгрузке. Повторный скан отклонен.');
+    }
   }
 
   async getOutgoingBoxesXlsx(requestId: string, user: AuthUser) {
@@ -1162,22 +1165,23 @@ export class TsdAssemblyService {
       userId: user.id,
     } as Prisma.InputJsonValue;
 
-    await this.prisma.tsdOperation.upsert({
-      where: { operationKey },
-      update: {
-        payload,
-        status: TsdOperationStatus.ACCEPTED,
-        serverMessage: 'Короб найден.',
-      },
-      create: {
-        deviceId: user.deviceId ?? user.id,
-        operationKey,
-        operationType: 'box_search_scan',
-        payload,
-        status: TsdOperationStatus.ACCEPTED,
-        serverMessage: 'Короб найден.',
-      },
-    });
+    try {
+      await this.prisma.tsdOperation.create({
+        data: {
+          deviceId: user.deviceId ?? user.id,
+          operationKey,
+          operationType: 'box_search_scan',
+          payload,
+          status: TsdOperationStatus.ACCEPTED,
+          serverMessage: 'Короб найден.',
+        },
+      });
+    } catch (caught) {
+      if (isPrismaUniqueConflict(caught)) {
+        throw new BadRequestException('Этот короб уже был пропикан в данной заявке. Повторный скан отклонен.');
+      }
+      throw caught;
+    }
   }
 
   private async recordBoxlessPackingAction(
@@ -1572,7 +1576,7 @@ export function boxSearchInstruction(input: {
   };
 }
 
-function validateStageAction(plan: Record<string, any>, stage: TsdRequestStage, action: string, scannedCode?: string) {
+export function validateStageAction(plan: Record<string, any>, stage: TsdRequestStage, action: string, scannedCode?: string) {
   const code = normalizeScanCode(scannedCode);
 
   if (stage === 'box-search' && action === 'scan') {
@@ -1583,8 +1587,11 @@ function validateStageAction(plan: Record<string, any>, stage: TsdRequestStage, 
     if (boxGuard) {
       return boxGuard;
     }
-    const found = (plan.searchBoxes ?? []).some((box: { boxCode?: string }) => sameCode(box.boxCode, code));
-    return actionResult(found ? 'FOUND' : 'NOT_REQUIRED', found, found ? 'Короб найден.' : 'Короб не участвует в этой заявке.');
+    const matched = (plan.searchBoxes ?? []).find((box: { boxCode?: string }) => sameCode(box.boxCode, code));
+    if (matched?.found || matched?.isFound) {
+      return actionResult('DUPLICATE', false, 'Этот короб уже был пропикан в данной заявке. Повторный скан отклонен.');
+    }
+    return actionResult(matched ? 'FOUND' : 'NOT_REQUIRED', Boolean(matched), matched ? 'Короб найден.' : 'Короб не участвует в этой заявке.');
   }
 
   if ((stage === 'moves' && action === 'target-box') || (stage === 'boxless-packing' && action === 'open-box')) {
@@ -2129,6 +2136,10 @@ function sameCode(left?: string | null, right?: string) {
         leftCode.includes(rightCode) ||
         (leftCompact && rightCompact && (leftCompact === rightCompact || rightCompact.includes(leftCompact) || leftCompact.includes(rightCompact)))),
   );
+}
+
+function isPrismaUniqueConflict(value: unknown) {
+  return Boolean(value && typeof value === 'object' && 'code' in value && value.code === 'P2002');
 }
 
 function safeDecode(value: string) {
