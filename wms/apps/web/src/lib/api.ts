@@ -3326,7 +3326,7 @@ export async function fetchClients(accessToken: string, options: { includeArchiv
 
 export async function fetchClientRequests(
   accessToken: string,
-  filter: { clientId?: string; status?: ClientRequestStatus; type?: ClientRequestType } = {},
+  filter: { clientId?: string; status?: ClientRequestStatus; type?: ClientRequestType; archive?: boolean } = {},
 ) {
   return request<ClientRequestSummary[]>(withQuery('/client-requests', filter), {
     accessToken,

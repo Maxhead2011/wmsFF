@@ -74,6 +74,7 @@ export function BillingPanel({ session }: BillingPanelProps) {
   const [documentPreview, setDocumentPreview] = useState<BillingInvoiceDocument | null>(null);
   const [editingInvoice, setEditingInvoice] = useState<BillingInvoiceSummary | null>(null);
   const [activeTab, setActiveTab] = useState<BillingTab>('overview');
+  const [selectedClientId, setSelectedClientId] = useState('');
 
   const activeServices = useMemo(() => services.data.filter((service) => service.isActive), [services.data]);
 
@@ -81,7 +82,7 @@ export function BillingPanel({ session }: BillingPanelProps) {
     if (canRead) {
       void loadData();
     }
-  }, [canRead]);
+  }, [canRead, selectedClientId]);
 
   if (!canRead) {
     return null;
@@ -98,12 +99,12 @@ export function BillingPanel({ session }: BillingPanelProps) {
 
     try {
       const [nextCharges, nextInvoices, nextServices, nextClients, nextRequests, nextReconciliation] = await Promise.all([
-        fetchBillingCharges(session.accessToken),
-        fetchBillingInvoices(session.accessToken),
+        fetchBillingCharges(session.accessToken, { clientId: selectedClientId || undefined }),
+        fetchBillingInvoices(session.accessToken, { clientId: selectedClientId || undefined }),
         fetchBillingServices(session.accessToken),
         fetchClients(session.accessToken),
         fetchClientRequests(session.accessToken),
-        fetchBillingReconciliation(session.accessToken),
+        fetchBillingReconciliation(session.accessToken, { clientId: selectedClientId || undefined }),
       ]);
       setCharges({ status: 'ready', data: nextCharges });
       setInvoices({ status: 'ready', data: nextInvoices });
@@ -125,7 +126,12 @@ export function BillingPanel({ session }: BillingPanelProps) {
   async function refreshReconciliation() {
     try {
       setReconciliation((current) => ({ ...current, status: 'loading', error: undefined }));
-      setReconciliation({ status: 'ready', data: await fetchBillingReconciliation(session.accessToken) });
+      setReconciliation({
+        status: 'ready',
+        data: await fetchBillingReconciliation(session.accessToken, {
+          clientId: selectedClientId || undefined,
+        }),
+      });
     } catch (caught) {
       setReconciliation((current) => ({ ...current, status: 'error', error: errorMessage(caught) }));
     }
@@ -154,6 +160,9 @@ export function BillingPanel({ session }: BillingPanelProps) {
   }
 
   function acceptCharge(charge: BillingChargeSummary) {
+    if (selectedClientId && charge.client.id !== selectedClientId) {
+      return;
+    }
     setCharges((current) => ({
       status: 'ready',
       data: [charge, ...current.data],
@@ -220,15 +229,32 @@ export function BillingPanel({ session }: BillingPanelProps) {
           <p className="eyebrow">Биллинг</p>
           <h2>Финансы и начисления</h2>
         </div>
-        <button
-          className="icon-button"
-          type="button"
-          onClick={() => void loadData()}
-          title="Обновить"
-          aria-label="Обновить биллинг"
-        >
-          <RefreshCw size={18} aria-hidden="true" />
-        </button>
+        <div className="billing-panel__heading-actions">
+          <label className="billing-client-filter">
+            <span>Клиент</span>
+            <select
+              value={selectedClientId}
+              onChange={(event) => setSelectedClientId(event.target.value)}
+              disabled={clients.status === 'loading' && clients.data.length === 0}
+            >
+              <option value="">Все клиенты</option>
+              {clients.data.map((client) => (
+                <option key={client.id} value={client.id}>
+                  {client.name} ({client.code})
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            className="icon-button"
+            type="button"
+            onClick={() => void loadData()}
+            title="Обновить"
+            aria-label="Обновить биллинг"
+          >
+            <RefreshCw size={18} aria-hidden="true" />
+          </button>
+        </div>
       </div>
 
       <div className="billing-tabs" role="tablist" aria-label="Раздел биллинга">

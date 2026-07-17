@@ -1,4 +1,4 @@
-import { AlertTriangle, Boxes, ClipboardList, FileDown, FileUp, RefreshCw, Search, ShieldAlert, Truck, X } from 'lucide-react';
+import { AlertTriangle, Archive, ArrowLeft, Boxes, ClipboardList, FileDown, FileUp, RefreshCw, Search, ShieldAlert, Truck, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import {
   cancelClientRequest,
@@ -111,14 +111,22 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     result?: PickInstructionDocument;
   } | null>(null);
   const [manualClose, setManualClose] = useState<ManualCloseState | null>(null);
+  const [showArchive, setShowArchive] = useState(false);
 
   const visibleClients = useMemo(() => clients.data, [clients.data]);
+  const displayedRequests = useMemo(
+    () => ({
+      ...requests,
+      data: requests.data.filter((request) => (showArchive ? request.status === 'DONE' : request.status !== 'DONE')),
+    }),
+    [requests, showArchive],
+  );
 
   useEffect(() => {
     if (canRead) {
       void loadData();
     }
-  }, [canRead]);
+  }, [canRead, showArchive]);
 
   useEffect(() => {
     const requestId = onlinePreview?.request.id;
@@ -178,7 +186,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
 
     try {
       const [nextRequests, nextClients, nextBalanceReviews] = await Promise.all([
-        fetchClientRequests(session.accessToken),
+        fetchClientRequests(session.accessToken, { archive: showArchive || undefined }),
         fetchClients(session.accessToken),
         fetchPendingPickWaveBalanceReviews(session.accessToken),
       ]);
@@ -605,22 +613,32 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
       <div className="section-heading client-requests-panel__heading">
         <div>
           <p className="eyebrow">Клиентские заявки</p>
-          <h2>Клиентские заявки</h2>
+          <h2>{showArchive ? 'Архив заявок' : 'Клиентские заявки'}</h2>
         </div>
-        <button
-          className="icon-button"
-          type="button"
-          onClick={() => void loadData()}
-          title="Обновить"
-          aria-label="Обновить заявки"
-        >
-          <RefreshCw size={18} aria-hidden="true" />
-        </button>
+        <div className="client-requests-panel__heading-actions">
+          <button
+            className={`client-request-archive-toggle ${showArchive ? 'is-active' : ''}`}
+            type="button"
+            onClick={() => setShowArchive((current) => !current)}
+          >
+            {showArchive ? <ArrowLeft size={17} aria-hidden="true" /> : <Archive size={17} aria-hidden="true" />}
+            <span>{showArchive ? 'К активным заявкам' : 'Архив заявок'}</span>
+          </button>
+          <button
+            className="icon-button"
+            type="button"
+            onClick={() => void loadData()}
+            title="Обновить"
+            aria-label="Обновить заявки"
+          >
+            <RefreshCw size={18} aria-hidden="true" />
+          </button>
+        </div>
       </div>
 
-      {canViewBoxOverlaps ? <BoxOverlapStatistics state={boxOverlaps} /> : null}
+      {!showArchive && canViewBoxOverlaps ? <BoxOverlapStatistics state={boxOverlaps} /> : null}
 
-      {balanceReviews.status === 'ready' ? (
+      {!showArchive && balanceReviews.status === 'ready' ? (
         <PickWaveBalanceReviewPanel
           session={session}
           reviews={balanceReviews.data}
@@ -629,7 +647,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
         />
       ) : null}
 
-      {canWrite && clients.status === 'ready' ? (
+      {!showArchive && canWrite && clients.status === 'ready' ? (
         <>
           <ClientRequestXlsxImportForm clients={visibleClients} session={session} onCreated={acceptCreated} />
           <ClientRequestCreateForm clients={visibleClients} session={session} onCreated={acceptCreated} />
@@ -641,7 +659,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
 
       <div className="client-requests-panel__list">
         {renderRequests(
-          requests,
+          displayedRequests,
           canChangeStatus,
           canPickOutbound,
           canWrite,

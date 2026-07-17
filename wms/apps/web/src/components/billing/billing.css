@@ -11,6 +11,34 @@
   margin-bottom: 14px;
 }
 
+.billing-panel__heading-actions {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+}
+
+.billing-client-filter {
+  display: grid;
+  min-width: min(320px, 55vw);
+  gap: 4px;
+}
+
+.billing-client-filter span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.billing-client-filter select {
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0 10px;
+}
+
 .billing-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -245,6 +273,22 @@
 
 .billing-status-select svg {
   flex: 0 0 auto;
+}
+
+@media (max-width: 680px) {
+  .billing-panel__heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .billing-panel__heading-actions,
+  .billing-client-filter {
+    width: 100%;
+  }
+
+  .billing-client-filter {
+    min-width: 0;
+  }
 }
 
 .billing-breakdown-button {

@@ -20,6 +20,27 @@ describe('ClientRequestsService', () => {
       expect.objectContaining({
         where: expect.objectContaining({
           clientId: { in: ['client-1', 'client-2'] },
+          status: { not: ClientRequestStatus.DONE },
+        }),
+      }),
+    );
+  });
+
+  it('показывает в архиве только сданные заявки', async () => {
+    const prisma = {
+      clientRequest: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+    };
+    const service = new ClientRequestsService(prisma as never, new ClientScopeService(), stockOperations() as never);
+
+    await service.list({ archive: true }, user({ clientIds: ['client-1'] }));
+
+    expect(prisma.clientRequest.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          clientId: { in: ['client-1'] },
+          status: ClientRequestStatus.DONE,
         }),
       }),
     );

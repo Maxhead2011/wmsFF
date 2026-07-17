@@ -26,7 +26,11 @@ export class ClientRequestsService {
   list(query: ListClientRequestsDto, user: AuthUser) {
     const where: Prisma.ClientRequestWhereInput = {
       clientId: this.clientScopes.resolveClientFilter(user, query.clientId),
-      status: query.status,
+      status:
+        query.status ??
+        (query.archive
+          ? ClientRequestStatus.DONE
+          : { not: ClientRequestStatus.DONE }),
       type: query.type,
     };
 

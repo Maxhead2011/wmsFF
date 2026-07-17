@@ -1,5 +1,6 @@
 import { ClientRequestStatus, ClientRequestType } from '@prisma/client';
-import { IsEnum, IsOptional, IsString } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsBoolean, IsEnum, IsOptional, IsString } from 'class-validator';
 
 export class ListClientRequestsDto {
   @IsOptional()
@@ -13,4 +14,9 @@ export class ListClientRequestsDto {
   @IsOptional()
   @IsEnum(ClientRequestType)
   type?: ClientRequestType;
+
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true')
+  @IsBoolean()
+  archive?: boolean;
 }
