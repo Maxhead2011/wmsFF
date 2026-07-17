@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
+  FileSpreadsheet,
   PackageCheck,
   RefreshCw,
   Search,
@@ -26,6 +27,7 @@ type TsdReceiptReviewPanelProps = {
   error?: string;
   isLoading: boolean;
   onAcceptWithError: (item: TsdReceiptReviewItem) => Promise<void>;
+  onDownloadBoxesXlsx: (clientId?: string) => Promise<Blob>;
   onRefresh: () => void;
 };
 
@@ -44,6 +46,7 @@ export function TsdReceiptReviewPanel({
   error,
   isLoading,
   onAcceptWithError,
+  onDownloadBoxesXlsx,
   onRefresh,
 }: TsdReceiptReviewPanelProps) {
   const [query, setQuery] = useState('');
@@ -55,6 +58,8 @@ export function TsdReceiptReviewPanel({
   const [isConfirming, setConfirming] = useState(false);
   const [expandedBoxKey, setExpandedBoxKey] = useState<string | null>(null);
   const [showAllBoxesToCheck, setShowAllBoxesToCheck] = useState(false);
+  const [isDownloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const clients = useMemo(() => {
     const map = new Map<string, TsdReceiptReviewItem['client']>();
@@ -135,6 +140,23 @@ export function TsdReceiptReviewPanel({
     setPage(1);
   }
 
+  async function downloadBoxesXlsx() {
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      const blob = await onDownloadBoxesXlsx(clientId || undefined);
+      const selectedClient = clients.find((client) => client.id === clientId);
+      downloadBlob(
+        blob,
+        `proverka-korobov-tsd${selectedClient?.code ? `-${safeFileName(selectedClient.code)}` : ''}-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      );
+    } catch (caught) {
+      setDownloadError(caught instanceof Error ? caught.message : 'Не удалось скачать Excel для проверки коробов.');
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   if (!dashboard && isLoading) {
     return <p className="panel-message">Загружаю данные приемки ТСД.</p>;
   }
@@ -152,6 +174,7 @@ export function TsdReceiptReviewPanel({
       </div>
 
       {error ? <p className="panel-message panel-message--error">{error}</p> : null}
+      {downloadError ? <p className="panel-message panel-message--error">{downloadError}</p> : null}
       {isLoading && dashboard ? <p className="inline-status">Обновляю данные.</p> : null}
 
       <div className="tsd-receipt-review__stats">
@@ -201,7 +224,18 @@ export function TsdReceiptReviewPanel({
               <p>Здесь собраны короба, в которых сканы товара не попали в остатки WMS.</p>
             </div>
           </div>
-          <strong className="tsd-box-checks__count">{filteredBoxesToCheck.length}</strong>
+          <div className="tsd-box-checks__head-actions">
+            <button
+              className="review-action review-action--xlsx"
+              type="button"
+              onClick={() => void downloadBoxesXlsx()}
+              disabled={isDownloading}
+            >
+              <FileSpreadsheet size={16} aria-hidden="true" />
+              <span>{isDownloading ? 'Готовлю Excel…' : 'Скачать Excel'}</span>
+            </button>
+            <strong className="tsd-box-checks__count">{filteredBoxesToCheck.length}</strong>
+          </div>
         </div>
 
         <div className="tsd-box-checks__table-wrap">
@@ -278,7 +312,10 @@ export function TsdReceiptReviewPanel({
                                   </div>
                                   <div>
                                     <code>{item.kiz || 'КИЗ не указан'}</code>
-                                    <span>{item.message || 'Причина не указана'}</span>
+                                    <strong className={`tsd-kiz-assessment tsd-kiz-assessment--${assessmentTone(item)}`}>
+                                      {item.kizAssessment.label}
+                                    </strong>
+                                    <span>{item.kizAssessment.guidance}</span>
                                   </div>
                                 </div>
                               ))}
@@ -390,6 +427,13 @@ export function TsdReceiptReviewPanel({
                   </td>
                   <td>
                     <code>{item.kiz || 'КИЗ не указан'}</code>
+                    <div className={`tsd-kiz-assessment tsd-kiz-assessment--${assessmentTone(item)}`}>
+                      <strong>{item.kizAssessment.label}</strong>
+                      <span>{item.kizAssessment.guidance}</span>
+                      {item.kizAssessment.scanOccurrences > 1 ? (
+                        <span>Сканов этого КИЗ: {item.kizAssessment.scanOccurrences}</span>
+                      ) : null}
+                    </div>
                     {item.duplicate ? (
                       <div className="tsd-receipt-review__duplicate">
                         <strong>Уже числится: {item.duplicate.boxCode || 'короб не указан'}</strong>
@@ -501,11 +545,26 @@ function searchableText(item: TsdReceiptReviewItem) {
     item.duplicate?.name,
     item.duplicate?.article,
     item.message,
-    item.duplicate ? 'ДУБЛЬ КИЗ' : '',
+    item.kizAssessment.label,
+    item.kizAssessment.guidance,
+    ...item.kizAssessment.scannedBoxCodes,
+    item.duplicate || (item.kizAssessment.kind !== 'NOT_PROVIDED' && item.kizAssessment.kind !== 'UNCONFIRMED')
+      ? 'ДУБЛЬ КИЗ'
+      : '',
   ]
     .filter(Boolean)
     .join(' ')
     .toLocaleLowerCase('ru-RU');
+}
+
+function assessmentTone(item: TsdReceiptReviewItem) {
+  if (item.kizAssessment.likelyAccidental === true) {
+    return 'repeat';
+  }
+  if (item.kizAssessment.likelyAccidental === false) {
+    return 'conflict';
+  }
+  return 'unknown';
 }
 
 function productDetails(item: TsdReceiptReviewItem) {
@@ -572,4 +631,19 @@ function pluralizeIssue(value: number) {
 
 function formatDateTime(value?: string | null) {
   return value ? dateTimeFormatter.format(new Date(value)) : '-';
+}
+
+function downloadBlob(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function safeFileName(value: string) {
+  return value.replace(/[\\/:*?"<>|]+/g, '-').trim() || 'client';
 }

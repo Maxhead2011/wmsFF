@@ -15,6 +15,7 @@ import {
   fetchLogisticsTariffSets,
   fetchRoles,
   fetchStockBalances,
+  downloadTsdReceiptReviewBoxesXlsx,
   fetchTsdReceiptReviewDashboard,
   fetchTsdReviewHistory,
   fetchTsdReviewQueue,
@@ -249,6 +250,9 @@ export function DashboardDataPanel({ session }: DashboardDataPanelProps) {
             error={tsdReceiptReview.error}
             isLoading={tsdReceiptReview.status === 'idle' || tsdReceiptReview.status === 'loading'}
             onRefresh={() => void loadTab('tsdReview', true)}
+            onDownloadBoxesXlsx={(clientId) =>
+              downloadTsdReceiptReviewBoxesXlsx(session.accessToken, clientId)
+            }
             onAcceptWithError={(item) =>
               resolveReview(
                 {

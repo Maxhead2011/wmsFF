@@ -1,5 +1,6 @@
 import { TsdOperationStatus, TsdReviewReason } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
+import * as XLSX from 'xlsx';
 import type { AuthUser } from '../src/modules/auth/auth.types';
 import { TsdPayloadParser } from '../src/modules/tsd/tsd-payload.parser';
 import { TsdReviewService } from '../src/modules/tsd/tsd-review.service';
@@ -289,6 +290,12 @@ describe('TsdReviewService', () => {
             name: 'Костюм, где уже записан КИЗ',
             barcode: '2042311717000',
           },
+          kizAssessment: {
+            kind: 'REGISTERED_IN_OTHER_BOX',
+            likelyAccidental: false,
+            registeredBoxCode: 'FFL_OLD_BOX',
+            guidance: expect.stringContaining('Проверить короба FFL_NEW_BOX и FFL_OLD_BOX'),
+          },
         },
       ],
       boxesToCheck: [
@@ -304,6 +311,71 @@ describe('TsdReviewService', () => {
       ],
     });
     expect(clientScopes.requireGlobalClientAccess).toHaveBeenCalled();
+
+    const file = await service.getReceiptReviewBoxesXlsx(user());
+    const workbook = XLSX.read(file.content, { type: 'buffer' });
+    expect(workbook.SheetNames).toEqual(['Короба на проверку', 'Проблемные КИЗ', 'Инструкция']);
+    const kizRows = XLSX.utils.sheet_to_json<Array<string | number>>(workbook.Sheets['Проблемные КИЗ'], {
+      header: 1,
+    });
+    expect(kizRows.flat().join(' ')).toContain('КИЗ числится в другом коробе: FFL_OLD_BOX');
+    expect(kizRows.flat().join(' ')).toContain('Проверить короба FFL_NEW_BOX и FFL_OLD_BOX');
+  });
+
+  it('отличает вероятный повтор сканирования от КИЗ в другом коробе', async () => {
+    const first = receiptReviewOperation();
+    const second = {
+      ...receiptReviewOperation(),
+      id: 'receipt-operation-2',
+      operationKey: 'receipt-duplicate-2',
+      createdAt: new Date(first.createdAt.getTime() + 1_000),
+    };
+    const prisma = {
+      tsdOperation: { findMany: vi.fn().mockResolvedValue([first, second]) },
+      client: { findMany: vi.fn().mockResolvedValue([{ id: 'client-1', code: 'CL-1', name: 'Тестовый клиент' }]) },
+      sku: { findMany: vi.fn().mockResolvedValue([]) },
+      productMark: {
+        findMany: vi.fn().mockResolvedValue([{
+          id: 'mark-1',
+          clientId: 'client-1',
+          value: '0104680992590237215SSMBHDEDWKWW91',
+          box: { code: 'FFL_NEW_BOX' },
+          sku: {
+            id: 'sku-1',
+            internalSku: 'SKU-1',
+            article: 'ART-1',
+            name: 'Товар с КИЗ',
+            color: null,
+            size: null,
+            barcodes: [],
+          },
+        }]),
+      },
+      tsdDevice: { findMany: vi.fn().mockResolvedValue([]) },
+      box: {
+        findMany: vi.fn().mockResolvedValue([{
+          clientId: 'client-1',
+          code: 'FFL_NEW_BOX',
+          balances: [{ quantity: 1 }],
+        }]),
+      },
+    };
+    const service = new TsdReviewService(
+      prisma as never,
+      { requireGlobalClientAccess: vi.fn() } as never,
+      {} as never,
+      new TsdPayloadParser(),
+    );
+
+    const dashboard = await service.listReceiptReviewDashboard(user());
+    expect(dashboard.items).toHaveLength(2);
+    expect(dashboard.items[0].kizAssessment).toMatchObject({
+      kind: 'ALREADY_IN_TARGET_BOX',
+      likelyAccidental: true,
+      scanOccurrences: 2,
+      registeredBoxCode: 'FFL_NEW_BOX',
+    });
+    expect(dashboard.items[0].kizAssessment.guidance).toContain('это повторный скан');
   });
 });
 

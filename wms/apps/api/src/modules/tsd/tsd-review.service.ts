@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, TsdOperationStatus, TsdReviewReason } from '@prisma/client';
+import * as XLSX from 'xlsx';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
@@ -152,6 +153,18 @@ export class TsdReviewService {
         box.balances.reduce((sum, balance) => sum + Math.max(0, balance.quantity), 0),
       ]),
     );
+    const scansByKiz = new Map<string, Array<{ boxCode: string; deviceId: string; createdAt: Date }>>();
+    operations.forEach((operation, index) => {
+      const payload = payloads[index];
+      if (!payload.clientId || !payload.kiz) {
+        return;
+      }
+      const key = receiptLookupKey(payload.clientId, payload.kiz);
+      scansByKiz.set(key, [
+        ...(scansByKiz.get(key) ?? []),
+        { boxCode: payload.boxCode, deviceId: operation.deviceId, createdAt: operation.createdAt },
+      ]);
+    });
 
     const items = operations.map((operation, index) => {
       const payload = payloads[index];
@@ -161,8 +174,17 @@ export class TsdReviewService {
         (payload.barcode ? skuByBarcode.get(receiptLookupKey(payload.clientId, payload.barcode)) : undefined) ??
         null;
       const duplicate = payload.kiz ? markByKiz.get(receiptLookupKey(payload.clientId, payload.kiz)) ?? null : null;
+      const relatedScans = payload.kiz
+        ? scansByKiz.get(receiptLookupKey(payload.clientId, payload.kiz)) ?? []
+        : [];
       const result = receiptReviewResult(operation);
       const actor = actorByDevice.get(operation.deviceId);
+      const kizAssessment = assessReceiptKiz({
+        kiz: payload.kiz,
+        targetBoxCode: payload.boxCode,
+        duplicate,
+        relatedScans,
+      });
 
       return {
         id: operation.id,
@@ -198,6 +220,7 @@ export class TsdReviewService {
                 barcode: primaryBarcode(duplicate.sku.barcodes),
               }
             : null,
+        kizAssessment,
         reviewReason: operation.reviewReason,
         message: operation.resolutionMessage ?? operation.serverMessage,
         deviceCode: actor?.code ?? operation.deviceId,
@@ -237,7 +260,7 @@ export class TsdReviewService {
       };
       current.notAcceptedQuantity += item.quantity;
       current.issueOperations += 1;
-      current.duplicateKizQuantity += item.duplicate ? item.quantity : 0;
+      current.duplicateKizQuantity += isKizConflict(item.kizAssessment) ? item.quantity : 0;
       current.lastIssueAt = current.lastIssueAt > item.createdAt ? current.lastIssueAt : item.createdAt;
       boxesToCheckMap.set(key, current);
     });
@@ -274,6 +297,108 @@ export class TsdReviewService {
       },
       boxesToCheck,
       items,
+    };
+  }
+
+  async getReceiptReviewBoxesXlsx(user: AuthUser, clientId?: string) {
+    const dashboard = await this.listReceiptReviewDashboard(user);
+    const selectedClientId = clientId?.trim();
+    const boxes = dashboard.boxesToCheck.filter((box) => !selectedClientId || box.client.id === selectedClientId);
+    const issueItems = dashboard.items.filter(
+      (item) =>
+        (!selectedClientId || item.client.id === selectedClientId) &&
+        (item.result === 'NOT_ACCEPTED' || item.result === 'REJECTED'),
+    );
+    const workbook = XLSX.utils.book_new();
+
+    const boxRows: Array<Array<string | number>> = [[
+      'Клиент',
+      'Код клиента',
+      'Короб',
+      'Учтено в WMS, шт.',
+      'Не принято, шт.',
+      'Максимум физически, шт.',
+      'Ошибок',
+      'Проблемных КИЗ, шт.',
+      'Что проверить',
+      'Последняя ошибка',
+    ]];
+    boxes.forEach((box) => {
+      const boxIssues = issueItems.filter(
+        (item) => item.client.id === box.client.id && normalizeText(item.boxCode) === normalizeText(box.boxCode),
+      );
+      boxRows.push([
+        box.client.name,
+        box.client.code,
+        box.boxCode,
+        box.accountedQuantity,
+        box.notAcceptedQuantity,
+        box.maximumPhysicalQuantity,
+        box.issueOperations,
+        box.duplicateKizQuantity,
+        boxCheckGuidance(box, boxIssues),
+        formatExcelDate(box.lastIssueAt),
+      ]);
+    });
+    appendReviewSheet(workbook, 'Короба на проверку', boxRows, [28, 15, 22, 18, 17, 24, 10, 22, 70, 20]);
+
+    const kizRows: Array<Array<string | number>> = [[
+      'Клиент',
+      'Короб сканирования',
+      'КИЗ',
+      'Товар',
+      'Артикул',
+      'Штрихкод',
+      'Количество',
+      'Вывод по КИЗ',
+      'Вероятный случайный повтор',
+      'Сканов КИЗ за период',
+      'Короба в сканах',
+      'Где КИЗ числится в WMS',
+      'Что проверить',
+      'Ошибка WMS',
+      'Оператор',
+      'ТСД',
+      'Дата скана',
+    ]];
+    issueItems.forEach((item) => {
+      kizRows.push([
+        item.client.name,
+        item.boxCode || '',
+        item.kiz || '',
+        item.sku?.name || item.duplicate?.name || '',
+        item.sku?.article || item.sku?.internalSku || item.duplicate?.article || '',
+        item.barcode || item.sku?.barcode || item.duplicate?.barcode || '',
+        item.quantity,
+        item.kizAssessment.label,
+        item.kizAssessment.likelyAccidental === true
+          ? 'Да'
+          : item.kizAssessment.likelyAccidental === false
+            ? 'Нет, требуется физическая проверка'
+            : 'Не определено',
+        item.kizAssessment.scanOccurrences,
+        item.kizAssessment.scannedBoxCodes.join(', '),
+        item.kizAssessment.registeredBoxCode || '',
+        item.kizAssessment.guidance,
+        item.message || '',
+        item.operatorName || '',
+        item.deviceCode,
+        formatExcelDate(item.createdAt),
+      ]);
+    });
+    appendReviewSheet(
+      workbook,
+      'Проблемные КИЗ',
+      kizRows,
+      [28, 22, 34, 36, 20, 22, 12, 34, 26, 20, 32, 26, 75, 50, 24, 18, 20],
+    );
+
+    appendReviewSheet(workbook, 'Инструкция', receiptReviewInstructionRows(), [28, 105]);
+    const generatedDate = dashboard.generatedAt.slice(0, 10);
+    return {
+      fileName: `proverka-korobov-tsd-${generatedDate}.xlsx`,
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      content: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer,
     };
   }
 
@@ -574,4 +699,143 @@ function isDuplicateReceiptOperation(operation: {
   resolutionMessage: string | null;
 }) {
   return /(?:ДУБЛ|КИЗ уже|КИЗ.*короб)/iu.test(`${operation.serverMessage ?? ''} ${operation.resolutionMessage ?? ''}`);
+}
+
+type ReceiptKizAssessmentKind =
+  | 'NOT_PROVIDED'
+  | 'ALREADY_IN_TARGET_BOX'
+  | 'REGISTERED_IN_OTHER_BOX'
+  | 'REGISTERED_WITHOUT_BOX'
+  | 'REPEATED_SCAN'
+  | 'SCANNED_IN_MULTIPLE_BOXES'
+  | 'UNCONFIRMED';
+
+function assessReceiptKiz(input: {
+  kiz: string;
+  targetBoxCode: string;
+  duplicate: { box: { code: string } | null } | null;
+  relatedScans: Array<{ boxCode: string; deviceId: string; createdAt: Date }>;
+}) {
+  const scannedBoxCodes = unique(input.relatedScans.map((scan) => scan.boxCode));
+  const registeredBoxCode = input.duplicate?.box?.code ?? null;
+  let kind: ReceiptKizAssessmentKind;
+  let label: string;
+  let likelyAccidental: boolean | null;
+  let guidance: string;
+
+  if (!input.kiz) {
+    kind = 'NOT_PROVIDED';
+    label = 'КИЗ не передан';
+    likelyAccidental = null;
+    guidance = 'Проверить товар, штрихкод и фактическое количество в коробе. Для маркируемого товара сверить КИЗ на упаковке.';
+  } else if (registeredBoxCode && normalizeText(registeredBoxCode) === normalizeText(input.targetBoxCode)) {
+    kind = 'ALREADY_IN_TARGET_BOX';
+    label = 'КИЗ уже учтен в этом коробе';
+    likelyAccidental = true;
+    guidance = `Найти КИЗ физически в коробе ${input.targetBoxCode}. Если единица одна, это повторный скан — повторно товар не принимать. Если упаковок две с одинаковым КИЗ, изолировать их и проверить маркировку.`;
+  } else if (registeredBoxCode) {
+    kind = 'REGISTERED_IN_OTHER_BOX';
+    label = `КИЗ числится в другом коробе: ${registeredBoxCode}`;
+    likelyAccidental = false;
+    guidance = `Проверить короба ${input.targetBoxCode || 'сканирования'} и ${registeredBoxCode}. Найти упаковку с этим КИЗ и установить фактический короб до принятия решения.`;
+  } else if (input.duplicate) {
+    kind = 'REGISTERED_WITHOUT_BOX';
+    label = 'КИЗ есть в WMS без короба';
+    likelyAccidental = false;
+    guidance = 'КИЗ уже зарегистрирован в WMS, но короб не указан. Найти товар физически и восстановить его фактическое местоположение.';
+  } else if (input.relatedScans.length > 1 && scannedBoxCodes.length > 1) {
+    kind = 'SCANNED_IN_MULTIPLE_BOXES';
+    label = 'Один КИЗ сканировали в разных коробах';
+    likelyAccidental = false;
+    guidance = `Проверить все короба из сканов: ${scannedBoxCodes.join(', ')}. Один физический КИЗ должен находиться только в одном коробе.`;
+  } else if (input.relatedScans.length > 1) {
+    kind = 'REPEATED_SCAN';
+    label = 'Вероятный повтор сканирования';
+    likelyAccidental = true;
+    guidance = `КИЗ отсканирован ${input.relatedScans.length} раз${input.targetBoxCode ? ` в короб ${input.targetBoxCode}` : ''}. Пересчитать товар и убедиться, что упаковка с этим КИЗ физически одна.`;
+  } else {
+    kind = 'UNCONFIRMED';
+    label = 'Дубль КИЗ не подтвержден';
+    likelyAccidental = null;
+    guidance = 'В текущем реестре WMS этот КИЗ не найден. Проверить исходную ошибку, товар, короб и читаемость маркировки.';
+  }
+
+  return {
+    kind,
+    label,
+    likelyAccidental,
+    scanOccurrences: input.relatedScans.length,
+    scannedBoxCodes,
+    registeredBoxCode,
+    guidance,
+  };
+}
+
+function boxCheckGuidance(
+  box: { boxCode: string; accountedQuantity: number; maximumPhysicalQuantity: number },
+  issues: Array<{ kizAssessment: ReturnType<typeof assessReceiptKiz> }>,
+) {
+  const otherBoxes = unique(
+    issues
+      .filter((item) => item.kizAssessment.kind === 'REGISTERED_IN_OTHER_BOX')
+      .map((item) => item.kizAssessment.registeredBoxCode ?? ''),
+  );
+  const repeated = issues.filter((item) => item.kizAssessment.likelyAccidental === true).length;
+  const parts = [
+    `Полностью пересчитать короб ${box.boxCode}: ожидаемый диапазон ${box.accountedQuantity}–${box.maximumPhysicalQuantity} шт.`,
+    'Сверить каждый проблемный КИЗ с физической упаковкой.',
+  ];
+  if (repeated) {
+    parts.push(`Для ${repeated} строк возможен случайный повтор сканирования: проверить, что упаковка с КИЗ одна.`);
+  }
+  if (otherBoxes.length) {
+    parts.push(`Дополнительно проверить короба, где КИЗ уже числятся в WMS: ${otherBoxes.join(', ')}.`);
+  }
+  return parts.join(' ');
+}
+
+function isKizConflict(assessment: ReturnType<typeof assessReceiptKiz>) {
+  return assessment.kind !== 'NOT_PROVIDED' && assessment.kind !== 'UNCONFIRMED';
+}
+
+function appendReviewSheet(
+  workbook: XLSX.WorkBook,
+  name: string,
+  rows: Array<Array<string | number>>,
+  widths: number[],
+) {
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  sheet['!cols'] = widths.map((wch) => ({ wch }));
+  if (rows.length > 0 && rows[0].length > 0) {
+    sheet['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: Math.max(0, rows.length - 1), c: rows[0].length - 1 } }) };
+  }
+  XLSX.utils.book_append_sheet(workbook, sheet, name);
+}
+
+function receiptReviewInstructionRows(): Array<Array<string | number>> {
+  return [
+    ['Шаг', 'Что делать'],
+    [1, 'Открыть лист «Короба на проверку» и взять короб в работу. Полностью пересчитать его физическое содержимое.'],
+    [2, 'Сравнить пересчет с колонками «Учтено в WMS» и «Максимум физически». Верхняя граница предполагает, что каждый непринятый скан был отдельной единицей.'],
+    [3, 'На листе «Проблемные КИЗ» найти строки этого короба и сверить каждый КИЗ с кодом на физической упаковке.'],
+    [4, '«КИЗ уже учтен в этом коробе» или «Вероятный повтор сканирования»: если физическая упаковка одна, повторно товар не принимать.'],
+    [5, '«КИЗ числится в другом коробе»: проверить оба короба и определить, где упаковка находится фактически. До этого не принимать строку с ошибкой.'],
+    [6, 'Если физически найдены две упаковки с одинаковым КИЗ, изолировать обе и передать ответственному за маркировку — один КИЗ не должен обозначать две единицы.'],
+    [7, 'После проверки зафиксировать фактический короб и количество, затем принять с ошибкой только подтвержденную физическую единицу или отклонить ошибочный повтор.'],
+    ['', 'Важно: вывод «вероятный случайный повтор» является подсказкой по данным WMS, а не заменяет физическую проверку.'],
+  ];
+}
+
+function normalizeText(value: string) {
+  return value.trim().toUpperCase();
+}
+
+function formatExcelDate(value: string) {
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value));
 }

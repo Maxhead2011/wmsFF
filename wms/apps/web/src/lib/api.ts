@@ -2710,6 +2710,15 @@ export type ResolveTsdReviewPayload = {
 
 export type TsdReceiptReviewResult = 'ACCEPTED' | 'NOT_ACCEPTED' | 'ACCEPTED_WITH_ERROR' | 'REJECTED';
 
+export type TsdReceiptKizAssessmentKind =
+  | 'NOT_PROVIDED'
+  | 'ALREADY_IN_TARGET_BOX'
+  | 'REGISTERED_IN_OTHER_BOX'
+  | 'REGISTERED_WITHOUT_BOX'
+  | 'REPEATED_SCAN'
+  | 'SCANNED_IN_MULTIPLE_BOXES'
+  | 'UNCONFIRMED';
+
 export type TsdReceiptReviewItem = {
   id: string;
   operationKey: string;
@@ -2739,6 +2748,15 @@ export type TsdReceiptReviewItem = {
     size: string | null;
     barcode: string;
   } | null;
+  kizAssessment: {
+    kind: TsdReceiptKizAssessmentKind;
+    label: string;
+    likelyAccidental: boolean | null;
+    scanOccurrences: number;
+    scannedBoxCodes: string[];
+    registeredBoxCode: string | null;
+    guidance: string;
+  };
   reviewReason: TsdReviewReason | null;
   message: string | null;
   deviceCode: string;
@@ -4439,6 +4457,10 @@ export async function fetchLogisticsTariffSet(accessToken: string, tariffSetId: 
   return request<LogisticsTariffSetDetail>(`/logistics/tariff-sets/${tariffSetId}`, {
     accessToken,
   });
+}
+
+export async function downloadTsdReceiptReviewBoxesXlsx(accessToken: string, clientId?: string) {
+  return requestBlob(withQuery('/tsd/review/receipts.xlsx', { clientId }), accessToken);
 }
 
 export async function fetchTsdReceiptReviewDashboard(accessToken: string) {

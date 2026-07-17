@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, Res, StreamableFile } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import type { Response } from 'express';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
@@ -35,6 +36,20 @@ export class TsdSyncController {
     return this.review.listReceiptReviewDashboard(user);
   }
 
+  @Get('review/receipts.xlsx')
+  @RequirePermissions('stock:write')
+  async downloadReceiptReviewBoxes(
+    @Query('clientId') clientId: string | undefined,
+    @CurrentUser() user: AuthUser,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const file = await this.review.getReceiptReviewBoxesXlsx(user, clientId);
+    response.setHeader('Content-Type', file.mimeType);
+    response.setHeader('Content-Length', String(file.content.length));
+    response.setHeader('Content-Disposition', contentDisposition(file.fileName));
+    return new StreamableFile(file.content);
+  }
+
   @Post('operations')
   acceptOperation(@Body() operation: ScanOperationDto, @CurrentUser() user: AuthUser) {
     return this.sync.acceptOperation(operation, user);
@@ -54,4 +69,9 @@ export class TsdSyncController {
   ) {
     return this.review.resolveReviewOperation(id, dto, user);
   }
+}
+
+function contentDisposition(fileName: string) {
+  const asciiName = fileName.replace(/[^\x20-\x7E]+/g, '_').replace(/"/g, '');
+  return `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
 }
