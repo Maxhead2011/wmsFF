@@ -6,6 +6,7 @@ COPY apps/web/package.json apps/web/package.json
 COPY apps/api/package.json apps/api/package.json
 RUN pnpm install --frozen-lockfile
 COPY apps/web apps/web
+RUN chmod -R a+rX apps/web/public
 RUN pnpm --filter @logoff/wms-web build
 
 FROM nginx:1.27-alpine AS runtime
