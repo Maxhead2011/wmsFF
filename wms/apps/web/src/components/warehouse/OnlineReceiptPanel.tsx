@@ -716,11 +716,11 @@ function onlineReceiptItemsForDisplay(box: OnlineReceiptBoxSummary): OnlineRecei
     return box.items;
   }
 
-  return box.currentBalances.map((balance) => {
-    const kiz = box.kizValues
+  return box.currentBalances.flatMap((balance) => {
+    const kizMarks = box.kizValues
       .filter((mark) => mark.skuId === balance.skuId && mark.status === balance.status)
-      .map((mark) => mark.value);
-    return {
+      .sort((left, right) => left.value.localeCompare(right.value));
+    const baseItem: OnlineReceiptItemSummary = {
       movementId: `balance:${balance.balanceId}`,
       skuId: balance.skuId,
       barcode: balance.barcode,
@@ -729,7 +729,7 @@ function onlineReceiptItemsForDisplay(box: OnlineReceiptBoxSummary): OnlineRecei
       color: null,
       size: null,
       quantity: balance.quantity,
-      kiz: kiz.length ? kiz.join('; ') : null,
+      kiz: null,
       kizId: null,
       hasError: false,
       errorMessage: null,
@@ -740,6 +740,17 @@ function onlineReceiptItemsForDisplay(box: OnlineReceiptBoxSummary): OnlineRecei
       operatorName: box.operator,
       deviceCode: box.deviceCode,
     };
+    const markedItems = kizMarks.map((mark) => ({
+      ...baseItem,
+      movementId: `balance:${balance.balanceId}:kiz:${mark.id}`,
+      quantity: 1,
+      kiz: mark.value,
+      kizId: mark.id,
+    }));
+    const quantityWithoutKiz = Math.max(0, balance.quantity - kizMarks.length);
+    return quantityWithoutKiz > 0
+      ? [...markedItems, { ...baseItem, quantity: quantityWithoutKiz }]
+      : markedItems;
   });
 }
 

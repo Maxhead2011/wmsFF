@@ -269,8 +269,8 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
 
   async function loadBoxDetails(nextBoxCode = boxSearch) {
     const cleanBoxCode = nextBoxCode.trim();
-    if (!selectedClientId || !cleanBoxCode) {
-      setBoxDetails({ status: 'error', data: null, error: 'Выберите клиента и укажите номер короба.' });
+    if (!cleanBoxCode) {
+      setBoxDetails({ status: 'error', data: null, error: 'Укажите номер короба.' });
       return;
     }
 
@@ -278,7 +278,7 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
     setBoxDetails((current) => ({ ...current, status: 'loading', error: undefined }));
 
     try {
-      const loaded = await fetchTurnoverBoxDetails(session.accessToken, cleanBoxCode, { clientId: selectedClientId });
+      const loaded = await fetchTurnoverBoxDetails(session.accessToken, cleanBoxCode);
       setBoxDetails({ status: 'ready', data: loaded });
     } catch (caught) {
       setBoxDetails({ status: 'error', data: null, error: errorMessage(caught) });
@@ -558,7 +558,7 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
             className="secondary-action"
             type="button"
             onClick={() => void loadBoxDetails()}
-            disabled={!selectedClientId || !boxSearch.trim() || boxDetails.status === 'loading'}
+            disabled={!boxSearch.trim() || boxDetails.status === 'loading'}
           >
             <Search size={16} aria-hidden="true" />
             <span>Найти короб</span>
