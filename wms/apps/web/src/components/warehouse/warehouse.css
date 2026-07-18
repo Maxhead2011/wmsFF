@@ -765,6 +765,51 @@
   gap: 8px;
 }
 
+.transfer-history__search {
+  display: flex;
+  width: min(100%, 620px);
+  min-height: 42px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfdff;
+  padding: 0 10px;
+}
+
+.transfer-history__search:focus-within {
+  border-color: var(--red-dark);
+  outline: 3px solid rgb(215 25 32 / 0.14);
+}
+
+.transfer-history__search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+}
+
+.transfer-history__search button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.transfer-history__search span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
 .transfer-history__table-wrap {
   border: 1px solid var(--line);
   border-radius: 8px;

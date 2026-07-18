@@ -6,8 +6,10 @@ import {
   Download,
   FileSpreadsheet,
   RefreshCw,
+  Search,
   SendHorizontal,
   Trash2,
+  X,
   XCircle,
 } from 'lucide-react';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
@@ -64,6 +66,7 @@ export function BoxTransferForm({ session }: BoxTransferFormProps) {
   const [selectedBatchIds, setSelectedBatchIds] = useState<string[]>([]);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isDeletingBatches, setDeletingBatches] = useState(false);
+  const [transferBoxSearch, setTransferBoxSearch] = useState('');
 
   const selectedBalance = useMemo(
     () => balances.find((balance) => balance.id === selectedBalanceId) ?? null,
@@ -160,6 +163,7 @@ export function BoxTransferForm({ session }: BoxTransferFormProps) {
     setBatches([]);
     setSelectedBatchIds([]);
     setExpandedBatchIds([]);
+    setTransferBoxSearch('');
   }
 
   function changeBalance(balanceId: string) {
@@ -412,6 +416,7 @@ export function BoxTransferForm({ session }: BoxTransferFormProps) {
 
       <TransferBatchHistory
         batches={batches}
+        boxSearch={transferBoxSearch}
         canDelete={canDeleteBatches}
         expandedIds={expandedBatchIds}
         isLoading={isLoadingBatches}
@@ -430,6 +435,7 @@ export function BoxTransferForm({ session }: BoxTransferFormProps) {
           )
         }
         onToggleAll={(ids) => setSelectedBatchIds(ids)}
+        onBoxSearchChange={setTransferBoxSearch}
       />
 
       {showDeleteConfirm ? (
@@ -480,30 +486,38 @@ function TransferImportPreviewPanel({
 
 function TransferBatchHistory({
   batches,
+  boxSearch,
   canDelete,
   expandedIds,
   isLoading,
   onDelete,
   onDownload,
   onRefresh,
+  onBoxSearchChange,
   onToggleAll,
   onToggleExpanded,
   onToggleSelected,
   selectedIds,
 }: {
   batches: StockTransferBatch[];
+  boxSearch: string;
   canDelete: boolean;
   expandedIds: string[];
   isLoading: boolean;
   onDelete: () => void;
   onDownload: (batch: StockTransferBatch) => void;
   onRefresh: () => void;
+  onBoxSearchChange: (value: string) => void;
   onToggleAll: (ids: string[]) => void;
   onToggleExpanded: (id: string) => void;
   onToggleSelected: (id: string) => void;
   selectedIds: string[];
 }) {
-  const deletableIds = batches.filter((batch) => batch.status !== 'REVERSED').map((batch) => batch.id);
+  const normalizedBoxSearch = normalizeBoxSearch(boxSearch);
+  const visibleBatches = normalizedBoxSearch
+    ? batches.filter((batch) => batch.rows.some((row) => transferRowMatchesBox(row, normalizedBoxSearch)))
+    : batches;
+  const deletableIds = visibleBatches.filter((batch) => batch.status !== 'REVERSED').map((batch) => batch.id);
   const allSelected = deletableIds.length > 0 && deletableIds.every((id) => selectedIds.includes(id));
 
   return (
@@ -527,8 +541,26 @@ function TransferBatchHistory({
         </div>
       </header>
 
+      <label className="transfer-history__search">
+        <Search size={17} aria-hidden="true" />
+        <input
+          value={boxSearch}
+          onChange={(event) => onBoxSearchChange(event.target.value)}
+          placeholder="Найти исходный или целевой короб в перемещениях"
+          aria-label="Номер короба в перемещениях"
+        />
+        {boxSearch ? (
+          <button type="button" onClick={() => onBoxSearchChange('')} title="Очистить поиск" aria-label="Очистить поиск перемещений">
+            <X size={15} aria-hidden="true" />
+          </button>
+        ) : null}
+        {normalizedBoxSearch ? <span>найдено файлов: {visibleBatches.length}</span> : null}
+      </label>
+
       {batches.length === 0 ? (
         <p className="warehouse-inline">Для клиента еще нет файлов перемещений.</p>
+      ) : visibleBatches.length === 0 ? (
+        <p className="warehouse-inline">По этому номеру короба перемещений не найдено.</p>
       ) : (
         <div className="transfer-history__table-wrap">
           <table className="transfer-history__table">
@@ -554,8 +586,11 @@ function TransferBatchHistory({
               </tr>
             </thead>
             <tbody>
-              {batches.map((batch) => {
-                const expanded = expandedIds.includes(batch.id);
+              {visibleBatches.map((batch) => {
+                const expanded = normalizedBoxSearch ? true : expandedIds.includes(batch.id);
+                const visibleRows = normalizedBoxSearch
+                  ? batch.rows.filter((row) => transferRowMatchesBox(row, normalizedBoxSearch))
+                  : batch.rows;
                 return (
                   <Fragment key={batch.id}>
                     <tr className={batch.status === 'REVERSED' ? 'transfer-history__row--reversed' : undefined}>
@@ -602,7 +637,7 @@ function TransferBatchHistory({
                               {batch.reversedByName ? `, оператор: ${batch.reversedByName}` : ''}.
                             </p>
                           ) : null}
-                          <TransferRowsTable rows={batch.rows} />
+                          <TransferRowsTable rows={visibleRows} />
                         </td>
                       </tr>
                     ) : null}
@@ -614,6 +649,16 @@ function TransferBatchHistory({
         </div>
       )}
     </section>
+  );
+}
+
+function normalizeBoxSearch(value: string) {
+  return value.trim().toLocaleUpperCase('ru-RU');
+}
+
+function transferRowMatchesBox(row: BoxTransferPreviewRow, normalizedSearch: string) {
+  return [row.fromBoxCode, row.toBoxCode].some((code) =>
+    code.trim().toLocaleUpperCase('ru-RU').includes(normalizedSearch),
   );
 }
 

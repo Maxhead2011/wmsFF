@@ -19,4 +19,8 @@ export class ListClientRequestsDto {
   @Transform(({ value }) => value === true || value === 'true')
   @IsBoolean()
   archive?: boolean;
+
+  @IsOptional()
+  @IsString()
+  boxCode?: string;
 }

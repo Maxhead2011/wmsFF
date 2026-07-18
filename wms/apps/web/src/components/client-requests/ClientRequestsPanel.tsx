@@ -112,6 +112,8 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
   } | null>(null);
   const [manualClose, setManualClose] = useState<ManualCloseState | null>(null);
   const [showArchive, setShowArchive] = useState(false);
+  const [archiveBoxSearch, setArchiveBoxSearch] = useState('');
+  const [appliedArchiveBoxSearch, setAppliedArchiveBoxSearch] = useState('');
 
   const visibleClients = useMemo(() => clients.data, [clients.data]);
   const displayedRequests = useMemo(
@@ -126,7 +128,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     if (canRead) {
       void loadData();
     }
-  }, [canRead, showArchive]);
+  }, [canRead, showArchive, appliedArchiveBoxSearch]);
 
   useEffect(() => {
     const requestId = onlinePreview?.request.id;
@@ -186,7 +188,10 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
 
     try {
       const [nextRequests, nextClients, nextBalanceReviews] = await Promise.all([
-        fetchClientRequests(session.accessToken, { archive: showArchive || undefined }),
+        fetchClientRequests(session.accessToken, {
+          archive: showArchive || undefined,
+          boxCode: showArchive ? appliedArchiveBoxSearch || undefined : undefined,
+        }),
         fetchClients(session.accessToken),
         fetchPendingPickWaveBalanceReviews(session.accessToken),
       ]);
@@ -656,6 +661,54 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
 
       {error ? <p className="form-error">{error}</p> : null}
       {actionMessage ? <p className="form-success">{actionMessage}</p> : null}
+
+      {showArchive ? (
+        <form
+          className="client-request-archive-search"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const nextSearch = archiveBoxSearch.trim();
+            if (nextSearch === appliedArchiveBoxSearch) {
+              void loadData();
+            } else {
+              setAppliedArchiveBoxSearch(nextSearch);
+            }
+          }}
+        >
+          <label>
+            <Search size={17} aria-hidden="true" />
+            <input
+              value={archiveBoxSearch}
+              onChange={(event) => setArchiveBoxSearch(event.target.value)}
+              placeholder="Найти короб в архиве заявок"
+              aria-label="Номер короба в архиве"
+            />
+            {archiveBoxSearch ? (
+              <button
+                className="client-request-archive-search__clear"
+                type="button"
+                title="Очистить поиск"
+                aria-label="Очистить поиск по архиву"
+                onClick={() => {
+                  setArchiveBoxSearch('');
+                  setAppliedArchiveBoxSearch('');
+                }}
+              >
+                <X size={15} aria-hidden="true" />
+              </button>
+            ) : null}
+          </label>
+          <button className="primary-button" type="submit">
+            <Search size={16} aria-hidden="true" />
+            <span>Найти короб</span>
+          </button>
+          {appliedArchiveBoxSearch ? (
+            <span className="client-request-archive-search__result">
+              Поиск: {appliedArchiveBoxSearch} · найдено заявок: {displayedRequests.data.length}
+            </span>
+          ) : null}
+        </form>
+      ) : null}
 
       <div className="client-requests-panel__list">
         {renderRequests(

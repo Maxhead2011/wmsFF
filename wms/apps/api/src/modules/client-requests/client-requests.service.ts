@@ -24,6 +24,7 @@ export class ClientRequestsService {
   ) {}
 
   list(query: ListClientRequestsDto, user: AuthUser) {
+    const boxCode = query.boxCode?.trim();
     const where: Prisma.ClientRequestWhereInput = {
       clientId: this.clientScopes.resolveClientFilter(user, query.clientId),
       status:
@@ -32,6 +33,34 @@ export class ClientRequestsService {
           ? ClientRequestStatus.DONE
           : { not: ClientRequestStatus.DONE }),
       type: query.type,
+      AND: boxCode
+        ? [
+            {
+              OR: [
+                {
+                  packages: {
+                    some: {
+                      packageCode: { contains: boxCode, mode: 'insensitive' },
+                    },
+                  },
+                },
+                {
+                  pickWaveRequests: {
+                    some: {
+                      wave: {
+                        balanceLines: {
+                          some: {
+                            sourceBoxCode: { contains: boxCode, mode: 'insensitive' },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          ]
+        : undefined,
     };
 
     return this.prisma.clientRequest.findMany({
