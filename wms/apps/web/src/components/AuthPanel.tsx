@@ -1,4 +1,4 @@
-import { Download, KeyRound, LogIn, ScanBarcode, ShieldPlus, Smartphone } from 'lucide-react';
+import { Download, Eye, KeyRound, LogIn, ScanBarcode, ShieldPlus, Smartphone } from 'lucide-react';
 import { FormEvent, useState } from 'react';
 import { bootstrapAdmin, login, type AuthSession } from '../lib/api';
 
@@ -36,6 +36,19 @@ export function AuthPanel({ onSession }: AuthPanelProps) {
       onSession(session);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Не удалось выполнить вход.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function enterDemo() {
+    setError('');
+    setSubmitting(true);
+
+    try {
+      onSession(await login({ email: 'demo', password: 'demo' }));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Не удалось открыть демо-кабинет.');
     } finally {
       setSubmitting(false);
     }
@@ -113,6 +126,16 @@ export function AuthPanel({ onSession }: AuthPanelProps) {
             <span>{isSubmitting ? 'Проверка' : mode === 'login' ? 'Войти' : 'Создать администратора'}</span>
           </button>
         </form>
+
+        {mode === 'login' ? (
+          <button className="demo-login-button" type="button" disabled={isSubmitting} onClick={() => void enterDemo()}>
+            <Eye size={18} aria-hidden="true" />
+            <span>
+              <strong>Открыть демо-кабинет</strong>
+              <small>Один клиент · демонстрационные данные изолированы от рабочих</small>
+            </span>
+          </button>
+        ) : null}
 
         <div className="auth-downloads">
           <a className="mobile-app-download" href="/downloads/logoff-tsd.apk" download>

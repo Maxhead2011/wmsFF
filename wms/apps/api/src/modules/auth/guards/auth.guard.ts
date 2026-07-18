@@ -64,9 +64,10 @@ export class AuthGuard implements CanActivate {
       id: user.id,
       email: user.email,
       name: user.name,
+      isDemo: user.isDemo,
       roleCodes,
       permissionCodes,
-      clientScopeMode: this.clientScopeMode(roleCodes, permissionCodes, user.clientScopes.length),
+      clientScopeMode: user.isDemo ? 'LIMITED' : this.clientScopeMode(roleCodes, permissionCodes, user.clientScopes.length),
       clientIds: user.clientScopes.filter((scope) => scope.canRead).map((scope) => scope.clientId),
       writableClientIds: user.clientScopes.filter((scope) => scope.canWrite).map((scope) => scope.clientId),
       printerGroups: user.printerScopes.map((scope) => ({

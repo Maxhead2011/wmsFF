@@ -42,6 +42,10 @@ export class ClientScopeService {
   }
 
   private hasGlobalClientAccess(user: AuthUser) {
+    if (user.isDemo) {
+      return false;
+    }
+
     // Русский комментарий: system:admin всегда обходит клиентские scope; остальные зависят от режима, собранного AuthGuard.
     return user.permissionCodes.includes('system:admin') || user.clientScopeMode === 'ALL';
   }

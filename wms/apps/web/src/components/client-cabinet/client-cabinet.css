@@ -23,6 +23,32 @@
   gap: 10px;
 }
 
+.client-cabinet-demo-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1e3a8a;
+  padding: 11px 14px;
+}
+
+.client-cabinet-demo-banner strong {
+  border-radius: 999px;
+  background: #1d4ed8;
+  color: #fff;
+  padding: 4px 9px;
+  font-size: 12px;
+}
+
+.client-cabinet-demo-banner span {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 650;
+}
+
 .client-cabinet-client-select {
   display: grid;
   min-width: min(100%, 260px);

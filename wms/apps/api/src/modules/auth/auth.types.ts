@@ -2,6 +2,7 @@ export type AuthUser = {
   id: string;
   email: string;
   name: string;
+  isDemo?: boolean;
   roleCodes: string[];
   permissionCodes: string[];
   clientScopeMode: 'ALL' | 'LIMITED';

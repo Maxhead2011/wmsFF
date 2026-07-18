@@ -620,6 +620,13 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
         <>
           {state.status === 'loading' ? <p className="inline-status">Обновляю кабинет.</p> : null}
 
+          {session.user.isDemo ? (
+            <div className="client-cabinet-demo-banner" role="status">
+              <strong>Демо-режим</strong>
+              <span>Вы видите кабинет одного демонстрационного клиента. Эти данные изолированы от рабочего контура.</span>
+            </div>
+          ) : null}
+
           {showClientOverview ? (
             <ClientCabinetClientTable
               cards={view.clientCards}
