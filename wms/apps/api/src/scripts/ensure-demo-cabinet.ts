@@ -171,11 +171,12 @@ async function main() {
     code: `DEMO-BOX-${String(index + 1).padStart(3, '0')}`,
   }));
   for (const box of boxes) {
-    await prisma.box.upsert({
-      where: { id: box.id },
+    const savedBox = await prisma.box.upsert({
+      where: { code: box.code },
       update: { clientId: client.id, code: box.code, status: 'active' },
       create: { ...box, clientId: client.id, status: 'active' },
     });
+    box.id = savedBox.id;
   }
 
   const balanceRows = [
