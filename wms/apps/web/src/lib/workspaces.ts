@@ -118,7 +118,7 @@ export const workspaceNav: WorkspaceNavItem[] = [
   },
   {
     id: 'turnover',
-    title: 'ТОВАРООБОРОТ',
+    title: 'Товарооборот',
     eyebrow: 'Движение товаров',
     description: 'История товара от приемки до списания, ручные действия и статистика по штрихкодам.',
     permissions: ['stock:read'],
