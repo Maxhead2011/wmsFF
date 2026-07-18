@@ -109,6 +109,15 @@ export function InventoryPanel({ session }: { session: AuthSession }) {
     void load();
   }, [session.accessToken]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void fetchInventoryDashboard(session.accessToken)
+        .then(setDashboard)
+        .catch(() => undefined);
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [session.accessToken]);
+
   async function approveRescan(request: InventoryBoxRescanRequest) {
     setApprovingRescanId(request.id);
     setMessage('');
