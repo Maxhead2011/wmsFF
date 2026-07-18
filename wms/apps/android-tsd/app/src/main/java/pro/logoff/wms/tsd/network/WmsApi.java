@@ -9,6 +9,7 @@ import retrofit2.http.GET;
 import retrofit2.http.Header;
 import retrofit2.http.Path;
 import retrofit2.http.POST;
+import retrofit2.http.PATCH;
 import retrofit2.http.Query;
 
 public interface WmsApi {
@@ -104,5 +105,53 @@ public interface WmsApi {
     Call<Map<String, Object>> packageClientRequest(
         @Header("Authorization") String authorization,
         @Body Map<String, Object> request
+    );
+
+    @GET("api/v1/inventory/dashboard")
+    Call<TsdInventoryDashboard> inventoryDashboard(@Header("Authorization") String authorization);
+
+    @POST("api/v1/inventory/sessions")
+    Call<TsdInventorySession> startInventory(
+        @Header("Authorization") String authorization,
+        @Body Map<String, Object> request
+    );
+
+    @GET("api/v1/inventory/sessions/{id}")
+    Call<TsdInventorySession> getInventory(
+        @Header("Authorization") String authorization,
+        @Path("id") String id
+    );
+
+    @POST("api/v1/inventory/sessions/{id}/boxes/open")
+    Call<TsdInventoryBox> openInventoryBox(
+        @Header("Authorization") String authorization,
+        @Path("id") String id,
+        @Body Map<String, Object> request
+    );
+
+    @POST("api/v1/inventory/boxes/{id}/scan")
+    Call<TsdInventoryLine> scanInventoryItem(
+        @Header("Authorization") String authorization,
+        @Path("id") String id,
+        @Body Map<String, Object> request
+    );
+
+    @PATCH("api/v1/inventory/boxes/{id}/count")
+    Call<TsdInventoryLine> setInventoryCount(
+        @Header("Authorization") String authorization,
+        @Path("id") String id,
+        @Body Map<String, Object> request
+    );
+
+    @POST("api/v1/inventory/boxes/{id}/finish")
+    Call<TsdInventoryBox> finishInventoryBox(
+        @Header("Authorization") String authorization,
+        @Path("id") String id
+    );
+
+    @POST("api/v1/inventory/sessions/{id}/review")
+    Call<TsdInventorySession> finishInventory(
+        @Header("Authorization") String authorization,
+        @Path("id") String id
     );
 }

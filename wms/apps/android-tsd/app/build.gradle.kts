@@ -15,8 +15,8 @@ android {
         applicationId = "pro.logoff.wms.tsd"
         minSdk = 26
         targetSdk = 35
-        versionCode = 62
-        versionName = "0.1.62"
+        versionCode = 63
+        versionName = "0.1.63"
     }
 
     signingConfigs {

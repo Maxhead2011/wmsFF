@@ -53,6 +53,10 @@ import pro.logoff.wms.tsd.network.TsdSearchBoxTask;
 import pro.logoff.wms.tsd.network.TsdLoginRequest;
 import pro.logoff.wms.tsd.network.TsdLoginResponse;
 import pro.logoff.wms.tsd.network.TsdKizCheckResponse;
+import pro.logoff.wms.tsd.network.TsdInventoryBox;
+import pro.logoff.wms.tsd.network.TsdInventoryDashboard;
+import pro.logoff.wms.tsd.network.TsdInventoryLine;
+import pro.logoff.wms.tsd.network.TsdInventorySession;
 import pro.logoff.wms.tsd.network.TsdSkuInfo;
 import pro.logoff.wms.tsd.network.WmsApi;
 import pro.logoff.wms.tsd.network.WmsApiFactory;
@@ -62,8 +66,8 @@ import retrofit2.Response;
 
 public class MainActivity extends Activity {
     private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
-    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.62";
-    private static final String APP_VERSION = "0.1.62";
+    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.63";
+    private static final String APP_VERSION = "0.1.63";
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int BOX_FOUND_GREEN = Color.rgb(187, 247, 208);
     private static final int BOX_DUPLICATE_BLUE = Color.rgb(191, 219, 254);
@@ -82,6 +86,7 @@ public class MainActivity extends Activity {
     private OperationOutbox outbox;
     private TsdSessionStore sessionStore;
     private SharedPreferences progressStore;
+    private SharedPreferences uiStore;
     private TextView statusView;
     private TextView sessionNameView;
     private TextView sessionCodeView;
@@ -90,6 +95,7 @@ public class MainActivity extends Activity {
     private EditText deviceCodeInput;
     private EditText deviceSecretInput;
     private Spinner clientSpinner;
+    private Spinner languageSpinner;
     private ArrayAdapter<String> clientAdapter;
     private EditText boxCodeInput;
     private EditText quantityInput;
@@ -98,9 +104,18 @@ public class MainActivity extends Activity {
     private EditText commentInput;
     private EditText scanInput;
     private EditText assemblyScanInput;
+    private EditText inventoryBoxInput;
+    private EditText inventoryItemInput;
+    private EditText inventoryQuantityInput;
     private TsdAssemblyPlan assemblyPlan;
     private TsdBoxlessPackingResponse boxlessPacking;
     private TsdRelabelTask activeRelabelTask;
+    private TsdInventorySession activeInventory;
+    private TsdInventoryBox activeInventoryBox;
+    private TsdInventoryDashboard inventoryDashboard;
+    private String inventoryType = "";
+    private String inventoryClientId = "";
+    private String uiLanguage = "ru";
     private final List<ReceiptItem> receiptCurrentItems = new ArrayList<>();
     private final Set<String> receiptSessionBoxes = new LinkedHashSet<>();
     private final Set<String> receiptKizValues = new LinkedHashSet<>();
@@ -138,6 +153,8 @@ public class MainActivity extends Activity {
             outbox = new OperationOutbox(TsdDatabase.get(this).operationDao());
             sessionStore = new TsdSessionStore(this);
             progressStore = getSharedPreferences("tsd_assembly_progress", MODE_PRIVATE);
+            uiStore = getSharedPreferences("tsd_ui_preferences", MODE_PRIVATE);
+            uiLanguage = uiStore.getString("language", "ru");
             if (sessionStore.load() == null) {
                 renderSettingsScreen();
             } else {
@@ -181,6 +198,14 @@ public class MainActivity extends Activity {
                 submitOutgoingBoxScan();
                 return true;
             }
+            if (screen == Screen.INVENTORY_COUNT) {
+                if (activeInventoryBox == null && inventoryBoxInput != null) {
+                    openInventoryBox();
+                } else if (inventoryItemInput != null) {
+                    scanInventoryItem();
+                }
+                return true;
+            }
         }
         return super.dispatchKeyEvent(event);
     }
@@ -194,14 +219,14 @@ public class MainActivity extends Activity {
         LinearLayout root = baseRoot();
         root.addView(header());
         root.addView(mainStatusLine());
-        root.addView(primaryMenuButton("Приемка товара", view -> openReceipt()));
-        root.addView(primaryMenuButton("Сборка заявки", view -> openAssemblyRequests()));
-        root.addView(primaryMenuButton("Инвентаризация", view -> renderInfoScreen("Инвентаризация", "Модуль инвентаризации будет открыт здесь.")));
-        root.addView(secondaryButton("Синхронизировать очередь (" + pendingCount + ")", view -> syncPending()));
-        root.addView(secondaryButton("Обновить клиентов", view -> loadClients(true)));
-        root.addView(secondaryButton("Настройки / вход", view -> renderSettingsScreen()));
-        root.addView(secondaryButton("Проверить обновление", view -> openApkDownload()));
-        root.addView(secondaryButton("Сбросить вход", view -> clearSession()));
+        root.addView(primaryMenuButton(tr("Приемка товара", "Tovarni qabul qilish"), view -> openReceipt()));
+        root.addView(primaryMenuButton(tr("Сборка заявки", "Buyurtmani yig‘ish"), view -> openAssemblyRequests()));
+        root.addView(primaryMenuButton(tr("Инвентаризация", "Inventarizatsiya"), view -> renderInventoryMenu()));
+        root.addView(secondaryButton(tr("Синхронизировать очередь", "Navbatni sinxronlash") + " (" + pendingCount + ")", view -> syncPending()));
+        root.addView(secondaryButton(tr("Обновить клиентов", "Mijozlarni yangilash"), view -> loadClients(true)));
+        root.addView(secondaryButton(tr("Настройки / вход", "Sozlamalar / kirish"), view -> renderSettingsScreen()));
+        root.addView(secondaryButton(tr("Проверить обновление", "Yangilanishni tekshirish"), view -> openApkDownload()));
+        root.addView(secondaryButton(tr("Сбросить вход", "Kirishni bekor qilish"), view -> clearSession()));
         if (!statusMessage.isEmpty()) {
             root.addView(messageView(statusMessage));
         }
@@ -215,25 +240,38 @@ public class MainActivity extends Activity {
         TsdSession session = safeSession();
         LinearLayout root = baseRoot();
         root.addView(header());
-        root.addView(title("Настройки / вход"));
+        root.addView(title(tr("Настройки / вход", "Sozlamalar / kirish")));
 
-        baseUrlInput = input("Адрес WMS");
+        root.addView(label(tr("Язык интерфейса", "Interfeys tili")));
+        languageSpinner = new Spinner(this);
+        ArrayAdapter<String> languageAdapter = new ArrayAdapter<>(
+            this,
+            android.R.layout.simple_spinner_item,
+            new String[]{"Русский", "O‘zbekcha"}
+        );
+        languageAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        languageSpinner.setAdapter(languageAdapter);
+        languageSpinner.setSelection("uz".equals(uiLanguage) ? 1 : 0);
+        root.addView(languageSpinner);
+        root.addView(secondaryButton(tr("Сохранить язык", "Tilni saqlash"), view -> saveLanguage()));
+
+        baseUrlInput = input(tr("Адрес WMS", "WMS manzili"));
         baseUrlInput.setText(DEFAULT_BASE_URL);
-        deviceCodeInput = input("Логин сотрудника");
-        deviceSecretInput = input("Пароль");
+        deviceCodeInput = input(tr("Логин сотрудника", "Xodim logini"));
+        deviceSecretInput = input(tr("Пароль", "Parol"));
         deviceSecretInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
 
         root.addView(baseUrlInput);
         root.addView(deviceCodeInput);
         root.addView(deviceSecretInput);
-        root.addView(primaryMenuButton("Войти на ТСД", view -> loginDevice()));
-        root.addView(secondaryButton("Скачать приложение ТСД", view -> openApkDownload()));
+        root.addView(primaryMenuButton(tr("Войти на ТСД", "TSD tizimiga kirish"), view -> loginDevice()));
+        root.addView(secondaryButton(tr("Скачать приложение ТСД", "TSD ilovasini yuklab olish"), view -> openApkDownload()));
         if (session != null) {
-            root.addView(secondaryButton("Назад", view -> renderMainScreen()));
+            root.addView(secondaryButton(tr("Назад", "Orqaga"), view -> renderMainScreen()));
         }
 
         if (session != null) {
-            root.addView(messageView("Сейчас: " + session.deviceName + " / " + session.deviceCode));
+            root.addView(messageView(tr("Сейчас", "Hozir") + ": " + session.deviceName + " / " + session.deviceCode));
         }
         if (!statusMessage.isEmpty()) {
             root.addView(messageView(statusMessage));
@@ -241,6 +279,544 @@ public class MainActivity extends Activity {
         root.addView(versionView());
         setScrollableContent(root);
         refreshHeaderText();
+    }
+
+    private void saveLanguage() {
+        uiLanguage = languageSpinner != null && languageSpinner.getSelectedItemPosition() == 1 ? "uz" : "ru";
+        uiStore.edit().putString("language", uiLanguage).apply();
+        statusMessage = tr("Язык сохранён.", "Til saqlandi.");
+        renderSettingsScreen();
+    }
+
+    private String tr(String russian, String uzbek) {
+        return "uz".equals(uiLanguage) ? uzbek : russian;
+    }
+
+    private void renderInventoryMenu() {
+        screen = Screen.INVENTORY_MENU;
+        activeInventory = null;
+        activeInventoryBox = null;
+        inventoryDashboard = null;
+        inventoryType = "";
+        inventoryClientId = "";
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title(tr("Инвентаризация", "Inventarizatsiya")));
+        root.addView(messageView(tr(
+            "Выберите режим. Актуализация расхождений выполняется менеджером в веб-версии WMS.",
+            "Rejimni tanlang. Tafovutlarni tuzatish menejer tomonidan WMS veb-versiyasida bajariladi."
+        )));
+        root.addView(primaryMenuButton(
+            tr("1. Полная инвентаризация", "1. To‘liq inventarizatsiya"),
+            view -> openInventoryMode("FULL")
+        ));
+        root.addView(primaryMenuButton(
+            tr("2. Частичная инвентаризация", "2. Qisman inventarizatsiya"),
+            view -> openInventoryMode("PARTIAL")
+        ));
+        root.addView(primaryMenuButton(
+            tr("3. Проверка содержимого короба", "3. Quti tarkibini tekshirish"),
+            view -> openInventoryMode("BOX_CHECK")
+        ));
+        root.addView(secondaryButton(tr("Назад", "Orqaga"), view -> renderMainScreen()));
+        if (!statusMessage.isEmpty()) {
+            root.addView(messageView(statusMessage));
+        }
+        root.addView(versionView());
+        setScrollableContent(root);
+        refreshHeaderText();
+    }
+
+    private void openInventoryMode(String type) {
+        inventoryType = type;
+        activeInventory = null;
+        activeInventoryBox = null;
+        statusMessage = tr("Загружаю активные инвентаризации…", "Faol inventarizatsiyalar yuklanmoqda…");
+        screen = Screen.INVENTORY_START;
+        renderInventoryStartScreen();
+        TsdSession session = safeSession();
+        if (session == null) {
+            return;
+        }
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<TsdInventoryDashboard> response = api.inventoryDashboard(session.authorizationHeader()).execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException("HTTP " + response.code());
+            }
+            TsdInventoryDashboard loaded = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                inventoryDashboard = loaded;
+                statusMessage = "";
+                renderInventoryStartScreen();
+            });
+        });
+    }
+
+    private void renderInventoryStartScreen() {
+        screen = Screen.INVENTORY_START;
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title(inventoryTypeTitle()));
+
+        if (!statusMessage.isEmpty()) {
+            root.addView(messageView(statusMessage));
+        }
+
+        List<TsdInventorySession> active = activeInventorySessions();
+        if (!active.isEmpty()) {
+            root.addView(label(tr("Продолжить активную проверку", "Faol tekshiruvni davom ettirish")));
+            for (TsdInventorySession item : active) {
+                String progress = item.progress == null
+                    ? ""
+                    : "\n" + tr("Проверено коробов", "Tekshirilgan qutilar") + ": " + item.progress.checkedBoxes;
+                root.addView(multilineSecondaryButton(
+                    safeText(item.title) + progress,
+                    view -> loadInventorySession(item.id)
+                ));
+            }
+        }
+
+        if ("FULL".equals(inventoryType)) {
+            if (active.isEmpty()) {
+                root.addView(messageView(tr(
+                    "После запуска все движения товара будут заблокированы до завершения инвентаризации в вебе.",
+                    "Ishga tushirilgandan so‘ng vebda inventarizatsiya yakunlangunga qadar barcha tovar harakatlari bloklanadi."
+                )));
+                root.addView(primaryMenuButton(
+                    tr("Начать полную инвентаризацию", "To‘liq inventarizatsiyani boshlash"),
+                    view -> startInventory()
+                ));
+            }
+        } else {
+            root.addView(label(tr("Клиент", "Mijoz")));
+            clientAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new ArrayList<String>());
+            clientAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+            clientSpinner = new Spinner(this);
+            clientSpinner.setAdapter(clientAdapter);
+            root.addView(clientSpinner);
+            refreshInventoryClientOptions();
+            root.addView(primaryMenuButton(
+                "PARTIAL".equals(inventoryType)
+                    ? tr("Начать частичную инвентаризацию", "Qisman inventarizatsiyani boshlash")
+                    : tr("Начать проверку коробов", "Qutilarni tekshirishni boshlash"),
+                view -> startInventory()
+            ));
+        }
+        root.addView(secondaryButton(tr("Назад", "Orqaga"), view -> renderInventoryMenu()));
+        root.addView(versionView());
+        setScrollableContent(root);
+        refreshHeaderText();
+    }
+
+    private void refreshInventoryClientOptions() {
+        if (clientAdapter == null || clientSpinner == null) {
+            return;
+        }
+        clientAdapter.clear();
+        clientAdapter.add(tr("Выберите клиента", "Mijozni tanlang"));
+        for (TsdClientSummary client : clients) {
+            clientAdapter.add(client.name + " · " + client.code);
+        }
+        clientAdapter.notifyDataSetChanged();
+    }
+
+    private List<TsdInventorySession> activeInventorySessions() {
+        List<TsdInventorySession> result = new ArrayList<>();
+        if (inventoryDashboard == null || inventoryDashboard.activeSessions == null) {
+            return result;
+        }
+        Set<String> ids = new LinkedHashSet<>();
+        for (TsdInventorySession item : inventoryDashboard.activeSessions) {
+            if (item != null && inventoryType.equals(item.type) && ids.add(item.id)) {
+                result.add(item);
+            }
+        }
+        return result;
+    }
+
+    private void startInventory() {
+        TsdSession session = safeSession();
+        if (session == null) {
+            statusMessage = tr("Сначала войдите на ТСД.", "Avval TSD tizimiga kiring.");
+            renderSettingsScreen();
+            return;
+        }
+        if (!"FULL".equals(inventoryType)) {
+            int selected = clientSpinner == null ? 0 : clientSpinner.getSelectedItemPosition();
+            if (selected <= 0 || selected > clients.size()) {
+                statusMessage = tr("Выберите клиента.", "Mijozni tanlang.");
+                renderInventoryStartScreen();
+                return;
+            }
+            inventoryClientId = clients.get(selected - 1).id;
+        }
+        statusMessage = tr("Запускаю инвентаризацию…", "Inventarizatsiya boshlanmoqda…");
+        renderInventoryStartScreen();
+        runBackground(() -> {
+            Map<String, Object> request = new LinkedHashMap<>();
+            request.put("type", inventoryType);
+            if (!"FULL".equals(inventoryType)) {
+                request.put("clientId", inventoryClientId);
+            }
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<TsdInventorySession> response = api.startInventory(session.authorizationHeader(), request).execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException(inventoryHttpError(response));
+            }
+            TsdInventorySession created = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                activeInventory = created;
+                activeInventoryBox = null;
+                statusMessage = "";
+                renderInventoryCountScreen();
+            });
+        });
+    }
+
+    private void loadInventorySession(String id) {
+        TsdSession session = safeSession();
+        if (session == null) {
+            return;
+        }
+        statusMessage = tr("Открываю инвентаризацию…", "Inventarizatsiya ochilmoqda…");
+        renderInventoryStartScreen();
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<TsdInventorySession> response = api.getInventory(session.authorizationHeader(), id).execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException(inventoryHttpError(response));
+            }
+            TsdInventorySession loaded = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                activeInventory = loaded;
+                activeInventoryBox = null;
+                statusMessage = "";
+                renderInventoryCountScreen();
+            });
+        });
+    }
+
+    private void renderInventoryCountScreen() {
+        screen = Screen.INVENTORY_COUNT;
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title(inventoryTypeTitle()));
+        if (activeInventory == null) {
+            root.addView(messageView(tr("Инвентаризация не открыта.", "Inventarizatsiya ochilmagan.")));
+            root.addView(secondaryButton(tr("Назад", "Orqaga"), view -> openInventoryMode(inventoryType)));
+            setScrollableContent(root);
+            return;
+        }
+
+        root.addView(messageView(safeText(activeInventory.title)));
+        if (activeInventory.progress != null) {
+            String total = activeInventory.progress.totalBoxes == null ? "" : " / " + activeInventory.progress.totalBoxes;
+            root.addView(messageView(
+                tr("Проверено коробов", "Tekshirilgan qutilar") + ": " +
+                    activeInventory.progress.checkedBoxes + total + " · " +
+                    tr("Расхождений", "Tafovutlar") + ": " + activeInventory.progress.mismatchBoxes
+            ));
+        }
+        if (!statusMessage.isEmpty()) {
+            root.addView(messageView(statusMessage));
+        }
+
+        if (activeInventoryBox == null) {
+            inventoryBoxInput = input(tr("Номер короба", "Quti raqami"));
+            root.addView(inventoryBoxInput);
+            root.addView(primaryMenuButton(
+                tr("Открыть короб", "Qutini ochish"),
+                view -> openInventoryBox()
+            ));
+            inventoryBoxInput.requestFocus();
+        } else {
+            root.addView(label(
+                tr("Короб", "Quti") + " " + safeText(activeInventoryBox.boxCode) +
+                    " · " + safeText(activeInventoryBox.clientName)
+            ));
+            addInventoryLines(root, activeInventoryBox);
+            if ("COUNTING".equals(activeInventoryBox.status)) {
+                inventoryItemInput = input(tr("Штрихкод товара", "Tovar shtrix-kodi"));
+                inventoryQuantityInput = input(tr("Количество (по умолчанию 1)", "Miqdor (odatda 1)"));
+                inventoryQuantityInput.setInputType(InputType.TYPE_CLASS_NUMBER);
+                inventoryQuantityInput.setText("1");
+                root.addView(inventoryItemInput);
+                root.addView(inventoryQuantityInput);
+                root.addView(primaryMenuButton(
+                    tr("Учесть товар", "Tovarni hisobga olish"),
+                    view -> scanInventoryItem()
+                ));
+                root.addView(secondaryButton(
+                    tr("Завершить подсчёт короба", "Quti sanog‘ini yakunlash"),
+                    view -> finishInventoryBox()
+                ));
+                inventoryItemInput.requestFocus();
+            } else {
+                addInventoryResult(root, activeInventoryBox);
+                root.addView(primaryMenuButton(
+                    tr("Проверить следующий короб", "Keyingi qutini tekshirish"),
+                    view -> {
+                        activeInventoryBox = null;
+                        statusMessage = "";
+                        reloadInventorySession(false);
+                    }
+                ));
+            }
+        }
+
+        root.addView(secondaryButton(
+            "BOX_CHECK".equals(inventoryType)
+                ? tr("Завершить проверку", "Tekshiruvni yakunlash")
+                : tr("Передать на актуализацию", "Tuzatish uchun yuborish"),
+            view -> finishInventorySession()
+        ));
+        root.addView(secondaryButton(tr("Назад к режимам", "Rejimlarga qaytish"), view -> renderInventoryMenu()));
+        root.addView(versionView());
+        setScrollableContent(root);
+        refreshHeaderText();
+    }
+
+    private void addInventoryLines(LinearLayout root, TsdInventoryBox box) {
+        root.addView(label(tr("Содержимое короба", "Quti tarkibi")));
+        if (box.lines == null || box.lines.isEmpty()) {
+            root.addView(messageView(tr(
+                "По данным WMS короб пуст. Отсканированный товар будет показан как излишек.",
+                "WMS bo‘yicha quti bo‘sh. Skanerlangan tovar ortiqcha sifatida ko‘rsatiladi."
+            )));
+            return;
+        }
+        for (TsdInventoryLine line : box.lines) {
+            int difference = line.countedQuantity - line.expectedQuantity;
+            String subtitle =
+                tr("ШК", "ShK") + ": " + safeText(line.barcode) + "\n" +
+                "WMS: " + line.expectedQuantity + " · " +
+                tr("Факт", "Amalda") + ": " + line.countedQuantity + " · " +
+                tr("Разница", "Farq") + ": " + (difference > 0 ? "+" : "") + difference;
+            int color = difference == 0 ? Color.rgb(240, 253, 244) : Color.rgb(255, 237, 213);
+            root.addView(taskRow(safeText(line.skuName), subtitle, color));
+        }
+    }
+
+    private void addInventoryResult(LinearLayout root, TsdInventoryBox box) {
+        int mismatches = 0;
+        if (box.lines != null) {
+            for (TsdInventoryLine line : box.lines) {
+                if (line.difference != 0) {
+                    mismatches++;
+                }
+            }
+        }
+        if (mismatches == 0) {
+            root.addView(feedbackView(
+                tr("Всё в порядке. Содержимое полностью совпадает с WMS.", "Hammasi to‘g‘ri. Tarkib WMS bilan to‘liq mos."),
+                BOX_FOUND_GREEN
+            ));
+        } else {
+            root.addView(feedbackView(
+                tr("Содержимое отличается. Расхождений", "Tarkib farq qiladi. Tafovutlar") + ": " + mismatches +
+                    ". " + tr("Точные значения показаны выше.", "Aniq qiymatlar yuqorida ko‘rsatilgan."),
+                Color.rgb(254, 215, 170)
+            ));
+        }
+    }
+
+    private void openInventoryBox() {
+        TsdSession session = safeSession();
+        if (session == null || activeInventory == null) {
+            return;
+        }
+        String boxCode = textValue(inventoryBoxInput);
+        if (boxCode.isEmpty()) {
+            statusMessage = tr("Пропикайте номер короба.", "Quti raqamini skanerlang.");
+            renderInventoryCountScreen();
+            return;
+        }
+        statusMessage = tr("Открываю короб…", "Quti ochilmoqda…");
+        renderInventoryCountScreen();
+        runBackground(() -> {
+            Map<String, Object> request = new LinkedHashMap<>();
+            request.put("boxCode", boxCode);
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<TsdInventoryBox> response = api.openInventoryBox(
+                session.authorizationHeader(),
+                activeInventory.id,
+                request
+            ).execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException(inventoryHttpError(response));
+            }
+            TsdInventoryBox loaded = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                activeInventoryBox = loaded;
+                statusMessage = "";
+                renderInventoryCountScreen();
+            });
+        });
+    }
+
+    private void scanInventoryItem() {
+        TsdSession session = safeSession();
+        if (session == null || activeInventoryBox == null) {
+            return;
+        }
+        String barcode = textValue(inventoryItemInput);
+        if (barcode.isEmpty()) {
+            statusMessage = tr("Пропикайте штрихкод товара.", "Tovar shtrix-kodini skanerlang.");
+            renderInventoryCountScreen();
+            return;
+        }
+        int quantity = 1;
+        try {
+            quantity = Math.max(1, Integer.parseInt(textValue(inventoryQuantityInput)));
+        } catch (NumberFormatException ignored) {
+        }
+        int finalQuantity = quantity;
+        statusMessage = tr("Учитываю товар…", "Tovar hisobga olinmoqda…");
+        renderInventoryCountScreen();
+        runBackground(() -> {
+            Map<String, Object> request = new LinkedHashMap<>();
+            request.put("barcode", barcode);
+            request.put("quantity", finalQuantity);
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<TsdInventoryLine> response = api.scanInventoryItem(
+                session.authorizationHeader(),
+                activeInventoryBox.id,
+                request
+            ).execute();
+            if (!response.isSuccessful()) {
+                throw new IOException(inventoryHttpError(response));
+            }
+            mainHandler.post(() -> {
+                online = true;
+                statusMessage = tr("Товар учтён: ", "Tovar hisobga olindi: ") + barcode;
+                reloadInventorySession(true);
+            });
+        });
+    }
+
+    private void finishInventoryBox() {
+        TsdSession session = safeSession();
+        if (session == null || activeInventoryBox == null) {
+            return;
+        }
+        String boxId = activeInventoryBox.id;
+        statusMessage = tr("Сверяю короб…", "Quti solishtirilmoqda…");
+        renderInventoryCountScreen();
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<TsdInventoryBox> response = api.finishInventoryBox(
+                session.authorizationHeader(),
+                boxId
+            ).execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException(inventoryHttpError(response));
+            }
+            TsdInventoryBox finished = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                activeInventoryBox = finished;
+                statusMessage = "";
+                renderInventoryCountScreen();
+            });
+        });
+    }
+
+    private void reloadInventorySession(boolean keepBox) {
+        TsdSession session = safeSession();
+        if (session == null || activeInventory == null) {
+            return;
+        }
+        String sessionId = activeInventory.id;
+        String boxId = keepBox && activeInventoryBox != null ? activeInventoryBox.id : "";
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<TsdInventorySession> response = api.getInventory(session.authorizationHeader(), sessionId).execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException(inventoryHttpError(response));
+            }
+            TsdInventorySession loaded = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                activeInventory = loaded;
+                activeInventoryBox = boxId.isEmpty() ? null : findInventoryBox(loaded, boxId);
+                renderInventoryCountScreen();
+            });
+        });
+    }
+
+    private TsdInventoryBox findInventoryBox(TsdInventorySession session, String id) {
+        if (session.boxes != null) {
+            for (TsdInventoryBox box : session.boxes) {
+                if (box != null && id.equals(box.id)) {
+                    return box;
+                }
+            }
+        }
+        return null;
+    }
+
+    private void finishInventorySession() {
+        TsdSession session = safeSession();
+        if (session == null || activeInventory == null) {
+            return;
+        }
+        if (activeInventoryBox != null && "COUNTING".equals(activeInventoryBox.status)) {
+            statusMessage = tr("Сначала завершите подсчёт открытого короба.", "Avval ochiq quti sanog‘ini yakunlang.");
+            renderInventoryCountScreen();
+            return;
+        }
+        statusMessage = tr("Завершаю инвентаризацию…", "Inventarizatsiya yakunlanmoqda…");
+        renderInventoryCountScreen();
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<TsdInventorySession> response = api.finishInventory(
+                session.authorizationHeader(),
+                activeInventory.id
+            ).execute();
+            if (!response.isSuccessful()) {
+                throw new IOException(inventoryHttpError(response));
+            }
+            mainHandler.post(() -> {
+                online = true;
+                statusMessage = "BOX_CHECK".equals(inventoryType)
+                    ? tr("Проверка завершена.", "Tekshiruv yakunlandi.")
+                    : tr("Инвентаризация передана менеджеру на актуализацию.", "Inventarizatsiya tuzatish uchun menejerga yuborildi.");
+                renderInventoryMenu();
+            });
+        });
+    }
+
+    private String inventoryTypeTitle() {
+        if ("FULL".equals(inventoryType)) {
+            return tr("Полная инвентаризация", "To‘liq inventarizatsiya");
+        }
+        if ("PARTIAL".equals(inventoryType)) {
+            return tr("Частичная инвентаризация", "Qisman inventarizatsiya");
+        }
+        return tr("Проверка содержимого короба", "Quti tarkibini tekshirish");
+    }
+
+    private String inventoryHttpError(Response<?> response) {
+        String prefix = tr("Ошибка WMS", "WMS xatosi") + " HTTP " + response.code();
+        try {
+            if (response.errorBody() != null) {
+                String body = response.errorBody().string();
+                if (!body.trim().isEmpty()) {
+                    return prefix + ": " + body;
+                }
+            }
+        } catch (IOException ignored) {
+        }
+        return prefix;
+    }
+
+    private String safeText(String value) {
+        return value == null || value.trim().isEmpty() ? "—" : value.trim();
     }
 
     private void renderReceiptScreen() {
@@ -2963,6 +3539,12 @@ public class MainActivity extends Activity {
             renderOutgoingControlScreen();
         } else if (screen == Screen.BOXLESS_PACKING) {
             renderBoxlessPackingScreen();
+        } else if (screen == Screen.INVENTORY_MENU) {
+            renderInventoryMenu();
+        } else if (screen == Screen.INVENTORY_START) {
+            renderInventoryStartScreen();
+        } else if (screen == Screen.INVENTORY_COUNT) {
+            renderInventoryCountScreen();
         } else if (screen == Screen.INFO) {
             renderMainScreen();
         } else {
@@ -3106,6 +3688,9 @@ public class MainActivity extends Activity {
         MOVEMENTS,
         OUTGOING_CONTROL,
         BOXLESS_PACKING,
+        INVENTORY_MENU,
+        INVENTORY_START,
+        INVENTORY_COUNT,
         INFO
     }
 
