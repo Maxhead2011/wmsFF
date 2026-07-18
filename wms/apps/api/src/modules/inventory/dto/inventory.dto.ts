@@ -1,6 +1,13 @@
 import { InventoryLineDecision, InventorySessionType } from '@prisma/client';
 import { IsEnum, IsInt, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
 
+export enum InventoryResolutionAction {
+  APPLY_ACTUAL = 'APPLY_ACTUAL',
+  DELETE_FROM_BOX = 'DELETE_FROM_BOX',
+  ACCEPT_AS_IS = 'ACCEPT_AS_IS',
+  LEAVE_FOR_LATER = 'LEAVE_FOR_LATER',
+}
+
 export class StartInventoryDto {
   @IsEnum(InventorySessionType)
   type!: InventorySessionType;
@@ -47,8 +54,13 @@ export class SetInventoryCountDto {
 }
 
 export class InventoryDecisionDto {
+  @IsOptional()
   @IsEnum(InventoryLineDecision)
-  decision!: InventoryLineDecision;
+  decision?: InventoryLineDecision;
+
+  @IsOptional()
+  @IsEnum(InventoryResolutionAction)
+  action?: InventoryResolutionAction;
 
   @IsOptional()
   @IsString()

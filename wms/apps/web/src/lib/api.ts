@@ -59,6 +59,7 @@ export type InventorySessionType = 'FULL' | 'PARTIAL' | 'BOX_CHECK';
 export type InventorySessionStatus = 'ACTIVE' | 'REVIEW' | 'COMPLETED' | 'CANCELLED';
 export type InventoryBoxStatus = 'COUNTING' | 'MATCHED' | 'MISMATCH' | 'RESOLVED';
 export type InventoryLineDecision = 'PENDING' | 'APPLY_ACTUAL' | 'KEEP_SYSTEM';
+export type InventoryResolutionAction = 'APPLY_ACTUAL' | 'DELETE_FROM_BOX' | 'ACCEPT_AS_IS' | 'LEAVE_FOR_LATER';
 
 export type InventoryAuditLine = {
   id: string;
@@ -70,6 +71,7 @@ export type InventoryAuditLine = {
   countedQuantity: number;
   difference: number;
   decision: InventoryLineDecision;
+  resolutionAction?: InventoryResolutionAction;
   decisionComment: string | null;
   decidedByName: string | null;
   decidedAt: string | null;
@@ -3726,12 +3728,12 @@ export function sendInventoryToReview(accessToken: string, sessionId: string) {
 export function decideInventoryLine(
   accessToken: string,
   lineId: string,
-  decision: Exclude<InventoryLineDecision, 'PENDING'>,
+  action: InventoryResolutionAction,
   comment?: string,
 ) {
   return request<InventoryAuditBox>(`/inventory/lines/${lineId}/decision`, {
     method: 'PATCH',
-    body: { decision, comment },
+    body: { action, comment },
     accessToken,
   });
 }

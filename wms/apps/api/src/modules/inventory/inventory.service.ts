@@ -14,6 +14,7 @@ import { StockBalancesService } from '../stock/stock-balances.service';
 import {
   CountInventoryItemDto,
   InventoryDecisionDto,
+  InventoryResolutionAction,
   SetInventoryCountDto,
   StartInventoryDto,
 } from './dto/inventory.dto';
@@ -52,7 +53,7 @@ export class InventoryService {
       }),
       this.prisma.inventorySession.findMany({
         where: {
-          type: { in: [InventorySessionType.FULL, InventorySessionType.PARTIAL] },
+          type: { in: [InventorySessionType.FULL, InventorySessionType.PARTIAL, InventorySessionType.BOX_CHECK] },
           status: InventorySessionStatus.REVIEW,
         },
         include: sessionInclude,
@@ -60,9 +61,7 @@ export class InventoryService {
         take: 30,
       }),
       this.prisma.inventorySession.findMany({
-        where: {
-          type: { in: [InventorySessionType.FULL, InventorySessionType.PARTIAL] },
-        },
+        where: {},
         include: sessionInclude,
         orderBy: { updatedAt: 'desc' },
         take: 100,
@@ -322,21 +321,24 @@ export class InventoryService {
 
   async sendToReview(id: string, user: AuthUser) {
     const session = await this.requireActiveSession(id);
-    if (session.type === InventorySessionType.BOX_CHECK) {
-      return this.prisma.inventorySession.update({
-        where: { id },
-        data: {
-          status: InventorySessionStatus.COMPLETED,
-          completedAt: new Date(),
-          completedByUserId: user.id,
-          completedByName: user.name,
-        },
-        include: sessionInclude,
-      });
-    }
     const counting = await this.prisma.inventoryAuditBox.count({ where: { sessionId: id, status: InventoryBoxStatus.COUNTING } });
     if (counting > 0) {
       throw new BadRequestException('Сначала завершите подсчёт во всех открытых коробах.');
+    }
+    if (session.type === InventorySessionType.BOX_CHECK) {
+      const unresolved = await this.prisma.inventoryAuditLine.count({
+        where: { auditBox: { sessionId: id }, difference: { not: 0 }, decision: InventoryLineDecision.PENDING },
+      });
+      return this.prisma.inventorySession.update({
+        where: { id },
+        data: {
+          status: unresolved > 0 ? InventorySessionStatus.REVIEW : InventorySessionStatus.COMPLETED,
+          completedAt: unresolved > 0 ? null : new Date(),
+          completedByUserId: unresolved > 0 ? null : user.id,
+          completedByName: unresolved > 0 ? null : user.name,
+        },
+        include: sessionInclude,
+      });
     }
     if (session.type === InventorySessionType.FULL) {
       const [totalBoxes, checkedBoxes] = await Promise.all([
@@ -360,8 +362,15 @@ export class InventoryService {
 
   async decideLine(lineId: string, dto: InventoryDecisionDto, user: AuthUser) {
     this.requireManager(user);
-    if (dto.decision === InventoryLineDecision.PENDING) {
-      throw new BadRequestException('Выберите действие: принять факт или оставить остаток WMS.');
+    const action =
+      dto.action ??
+      (dto.decision === InventoryLineDecision.APPLY_ACTUAL
+        ? InventoryResolutionAction.APPLY_ACTUAL
+        : dto.decision === InventoryLineDecision.KEEP_SYSTEM
+          ? InventoryResolutionAction.ACCEPT_AS_IS
+          : undefined);
+    if (!action) {
+      throw new BadRequestException('Выберите действие по расхождению.');
     }
     const line = await this.prisma.inventoryAuditLine.findUnique({
       where: { id: lineId },
@@ -370,15 +379,42 @@ export class InventoryService {
     if (!line) {
       throw new NotFoundException('Позиция инвентаризации не найдена.');
     }
+    const canResolveCompletedBoxCheck =
+      line.auditBox.session.type === InventorySessionType.BOX_CHECK &&
+      line.auditBox.session.status === InventorySessionStatus.COMPLETED;
     if (
       line.auditBox.session.status !== InventorySessionStatus.ACTIVE &&
-      line.auditBox.session.status !== InventorySessionStatus.REVIEW
+      line.auditBox.session.status !== InventorySessionStatus.REVIEW &&
+      !canResolveCompletedBoxCheck
     ) {
       throw new BadRequestException('Эта инвентаризация уже закрыта.');
     }
     this.clientScopes.requireClientAccess(user, line.auditBox.clientId, 'write');
 
-    if (dto.decision === InventoryLineDecision.APPLY_ACTUAL && line.countedQuantity !== line.expectedQuantity) {
+    if (action === InventoryResolutionAction.LEAVE_FOR_LATER) {
+      await this.prisma.inventoryAuditLine.update({
+        where: { id: line.id },
+        data: {
+          decision: InventoryLineDecision.PENDING,
+          decisionComment: resolutionComment(action, dto.comment),
+          decidedByUserId: null,
+          decidedByName: null,
+          decidedAt: null,
+        },
+      });
+      return this.prisma.inventoryAuditBox.findUnique({
+        where: { id: line.auditBoxId },
+        include: { lines: { orderBy: [{ skuName: 'asc' }, { internalSku: 'asc' }] } },
+      });
+    }
+
+    const shouldAdjustStock =
+      action === InventoryResolutionAction.APPLY_ACTUAL ||
+      action === InventoryResolutionAction.DELETE_FROM_BOX;
+    const targetQuantity =
+      action === InventoryResolutionAction.DELETE_FROM_BOX ? 0 : line.countedQuantity;
+
+    if (shouldAdjustStock) {
       const box = await this.prisma.box.findUnique({ where: { id: line.auditBox.boxId } });
       if (!box) {
         throw new NotFoundException('Исходный короб не найден.');
@@ -393,12 +429,12 @@ export class InventoryService {
           },
         });
         const current = balance?.quantity ?? 0;
-        const delta = line.countedQuantity - current;
-        if (balance && line.countedQuantity === 0) {
+        const delta = targetQuantity - current;
+        if (balance && targetQuantity === 0) {
           await tx.stockBalance.delete({ where: { id: balance.id } });
         } else if (balance) {
-          await tx.stockBalance.update({ where: { id: balance.id }, data: { quantity: line.countedQuantity } });
-        } else if (line.countedQuantity > 0) {
+          await tx.stockBalance.update({ where: { id: balance.id }, data: { quantity: targetQuantity } });
+        } else if (targetQuantity > 0) {
           await tx.stockBalance.create({
             data: {
               balanceKey: this.balances.balanceKey({
@@ -413,7 +449,7 @@ export class InventoryService {
               boxId: box.id,
               palletId: box.palletId,
               status: StockStatus.AVAILABLE,
-              quantity: line.countedQuantity,
+              quantity: targetQuantity,
             },
           });
         }
@@ -429,7 +465,11 @@ export class InventoryService {
               quantity: delta,
               idempotencyKey: `web-inventory:${line.id}`,
               sourceDocument: line.auditBox.session.title,
-              comment: dto.comment?.trim() || `Актуализация по коробу ${line.auditBox.boxCode}`,
+              comment:
+                dto.comment?.trim() ||
+                (action === InventoryResolutionAction.DELETE_FROM_BOX
+                  ? `Удаление позиции из короба ${line.auditBox.boxCode} по инвентаризации`
+                  : `Актуализация по коробу ${line.auditBox.boxCode}`),
             },
           });
         }
@@ -439,8 +479,11 @@ export class InventoryService {
     await this.prisma.inventoryAuditLine.update({
       where: { id: line.id },
       data: {
-        decision: dto.decision,
-        decisionComment: dto.comment?.trim() || null,
+        decision:
+          action === InventoryResolutionAction.ACCEPT_AS_IS
+            ? InventoryLineDecision.KEEP_SYSTEM
+            : InventoryLineDecision.APPLY_ACTUAL,
+        decisionComment: resolutionComment(action, dto.comment),
         decidedByUserId: user.id,
         decidedByName: user.name,
         decidedAt: new Date(),
@@ -549,7 +592,7 @@ export class InventoryService {
     }
   }
 
-  private decorateSession<T extends { boxes: Array<{ status: InventoryBoxStatus; lines: Array<{ difference: number; decision: InventoryLineDecision }> }> }>(
+  private decorateSession<T extends { boxes: Array<{ status: InventoryBoxStatus; lines: Array<{ difference: number; decision: InventoryLineDecision; decisionComment?: string | null }> }> }>(
     session: T,
     totalBoxes?: number,
   ) {
@@ -560,6 +603,13 @@ export class InventoryService {
     );
     return {
       ...session,
+      boxes: session.boxes.map((box) => ({
+        ...box,
+        lines: box.lines.map((line) => ({
+          ...line,
+          resolutionAction: resolutionActionFromComment(line.decisionComment, line.decision),
+        })),
+      })),
       progress: {
         totalBoxes: totalBoxes ?? null,
         checkedBoxes: session.boxes.filter((box) => box.status !== InventoryBoxStatus.COUNTING).length,
@@ -568,6 +618,25 @@ export class InventoryService {
       },
     };
   }
+}
+
+function resolutionComment(action: InventoryResolutionAction, comment?: string) {
+  const text = comment?.trim();
+  return `[${action}]${text ? ` ${text}` : ''}`;
+}
+
+function resolutionActionFromComment(comment: string | null | undefined, decision: InventoryLineDecision) {
+  const match = comment?.match(/^\[(APPLY_ACTUAL|DELETE_FROM_BOX|ACCEPT_AS_IS|LEAVE_FOR_LATER)\]/);
+  if (match) {
+    return match[1] as InventoryResolutionAction;
+  }
+  if (decision === InventoryLineDecision.APPLY_ACTUAL) {
+    return InventoryResolutionAction.APPLY_ACTUAL;
+  }
+  if (decision === InventoryLineDecision.KEEP_SYSTEM) {
+    return InventoryResolutionAction.ACCEPT_AS_IS;
+  }
+  return InventoryResolutionAction.LEAVE_FOR_LATER;
 }
 
 function canManageInventory(user: AuthUser) {

@@ -29,6 +29,8 @@ import {
   type ClientSummary,
   type InventoryAuditBox,
   type InventoryDashboard,
+  type InventoryLineDecision,
+  type InventoryResolutionAction,
   type InventorySession,
   type InventorySessionType,
 } from '../../lib/api';
@@ -589,8 +591,21 @@ function Reconciliation({
     .filter((box) => box.status !== 'COUNTING');
   const matchedBoxes = checkedBoxes.filter((box) => box.status === 'MATCHED').length;
 
+  async function resolveLine(lineId: string, action: InventoryResolutionAction) {
+    setBusyLine(lineId);
+    setMessage('');
+    try {
+      await decideInventoryLine(session.accessToken, lineId, action);
+      await onChanged();
+    } catch (caught) {
+      setMessage(errorMessage(caught));
+    } finally {
+      setBusyLine('');
+    }
+  }
+
   if (history.length === 0) {
-    return <div className="inventory-empty"><ClipboardCheck size={28} /><strong>Проверок пока нет</strong><span>Здесь появятся все полные и частичные инвентаризации, включая проверки без расхождений.</span></div>;
+    return <div className="inventory-empty"><ClipboardCheck size={28} /><strong>Проверок пока нет</strong><span>Здесь появятся полные, частичные инвентаризации и проверки содержимого коробов.</span></div>;
   }
 
   return (
@@ -601,8 +616,8 @@ function Reconciliation({
       <div className="inventory-history-summary">
         <div>
           <p className="eyebrow">Журнал проверок</p>
-          <strong>Все полные и частичные инвентаризации</strong>
-          <span>Отображаются и расхождения, и полностью совпавшие проверки — как зафиксированный факт.</span>
+          <strong>Все инвентаризации и проверки коробов</strong>
+          <span>Для каждого короба отображаются ожидаемый состав WMS, фактический подсчёт и точная разница.</span>
         </div>
         <div className="inventory-metrics">
           <span><small>Проверок</small><strong>{history.length}</strong></span>
@@ -624,7 +639,12 @@ function Reconciliation({
               <div className="inventory-box-heading">
                 <div>
                   <p className="eyebrow">{box.clientName}</p>
-                  <h4>Короб {box.boxCode}</h4>
+                  <h4>
+                    Короб {box.boxCode}
+                    {box.lines.some((line) => line.difference !== 0)
+                      ? ` · расхождений ${box.lines.filter((line) => line.difference !== 0).length}`
+                      : ' · без расхождений'}
+                  </h4>
                   <p className="inventory-audit-meta">
                     {box.countedByName ? `Проверил ${box.countedByName}` : 'Проверка начата'}
                     {' · '}{formatDate(box.completedAt ?? box.startedAt)}
@@ -648,46 +668,52 @@ function Reconciliation({
                               <CheckCircle2 size={15} />
                               Совпало
                             </span>
-                          ) : line.decision === 'PENDING' && dashboard.canManage && review.status === 'REVIEW' ? (
+                          ) : line.decision === 'PENDING' && dashboard.canManage && (
+                            review.status === 'REVIEW' ||
+                            (review.type === 'BOX_CHECK' && (
+                              review.status === 'ACTIVE' ||
+                              review.status === 'COMPLETED'
+                            ))
+                          ) ? (
                             <div className="inventory-decision">
                               <button
                                 className="primary-button"
                                 type="button"
                                 disabled={busyLine === line.id}
-                                onClick={async () => {
-                                  setBusyLine(line.id);
-                                  setMessage('');
-                                  try {
-                                    await decideInventoryLine(session.accessToken, line.id, 'APPLY_ACTUAL');
-                                    await onChanged();
-                                  } catch (caught) { setMessage(errorMessage(caught)); }
-                                  finally { setBusyLine(''); }
-                                }}
-                              >Принять факт</button>
+                                title="Записать в WMS фактическое количество после подсчёта"
+                                onClick={() => void resolveLine(line.id, 'APPLY_ACTUAL')}
+                              >Актуализировать</button>
+                              <button
+                                className="secondary-button inventory-delete-action"
+                                type="button"
+                                disabled={busyLine === line.id}
+                                title="Обнулить остаток этой позиции в проверяемом коробе"
+                                onClick={() => void resolveLine(line.id, 'DELETE_FROM_BOX')}
+                              >Удалить из короба</button>
                               <button
                                 className="secondary-button"
                                 type="button"
                                 disabled={busyLine === line.id}
-                                onClick={async () => {
-                                  setBusyLine(line.id);
-                                  setMessage('');
-                                  try {
-                                    await decideInventoryLine(session.accessToken, line.id, 'KEEP_SYSTEM');
-                                    await onChanged();
-                                  } catch (caught) { setMessage(errorMessage(caught)); }
-                                  finally { setBusyLine(''); }
-                                }}
-                              >Оставить WMS</button>
+                                title="Признать расхождение проверенным, но не менять остаток WMS"
+                                onClick={() => void resolveLine(line.id, 'ACCEPT_AS_IS')}
+                              >Принять как есть</button>
+                              <button
+                                className="secondary-button"
+                                type="button"
+                                disabled={busyLine === line.id}
+                                title="Не принимать решение сейчас и оставить строку на разборе"
+                                onClick={() => void resolveLine(line.id, 'LEAVE_FOR_LATER')}
+                              >Оставить как есть</button>
                             </div>
                           ) : line.decision === 'PENDING' ? (
                             <span className="inventory-decision-pending">
                               <AlertTriangle size={15} />
-                              Ожидает решения
+                              {line.resolutionAction === 'LEAVE_FOR_LATER' ? 'Оставлено на разборе' : 'Ожидает решения'}
                             </span>
                           ) : (
                             <span className="inventory-decision-done">
                               <CheckCircle2 size={15} />
-                              {line.decision === 'APPLY_ACTUAL' ? 'Принят факт' : 'Оставлен WMS'}
+                              {resolutionActionLabel(line.resolutionAction, line.decision)}
                               {line.decidedByName ? ` · ${line.decidedByName}` : ''}
                               {line.decidedAt ? ` · ${formatDate(line.decidedAt)}` : ''}
                             </span>
@@ -732,6 +758,16 @@ function statusLabel(status: InventorySession['status']) {
 
 function boxStatusLabel(status: InventoryAuditBox['status']) {
   return { COUNTING: 'Подсчёт', MATCHED: 'Всё совпало', MISMATCH: 'Есть расхождения', RESOLVED: 'Разобран' }[status];
+}
+
+function resolutionActionLabel(
+  action: InventoryResolutionAction | undefined,
+  decision: InventoryLineDecision,
+) {
+  if (action === 'DELETE_FROM_BOX') return 'Удалено из короба';
+  if (action === 'APPLY_ACTUAL') return 'Остаток актуализирован';
+  if (action === 'ACCEPT_AS_IS') return 'Принято без изменения WMS';
+  return decision === 'APPLY_ACTUAL' ? 'Остаток актуализирован' : 'Оставлен остаток WMS';
 }
 
 function formatDate(value: string) {
