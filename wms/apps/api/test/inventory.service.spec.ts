@@ -85,4 +85,68 @@ describe('InventoryService box checks', () => {
       data: expect.objectContaining({ status: InventoryBoxStatus.RESOLVED }),
     }));
   });
+
+  it('does not allow a completed box to be checked again', async () => {
+    const prisma = {
+      inventorySession: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'session-1',
+          clientId: 'client-1',
+          status: InventorySessionStatus.ACTIVE,
+        }),
+      },
+      box: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'box-1',
+          clientId: 'client-1',
+          code: 'FFL_BOX_1',
+          status: 'active',
+          client: { id: 'client-1', name: 'Клиент' },
+        }),
+      },
+      inventoryAuditBox: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'audit-box-1',
+          status: InventoryBoxStatus.MATCHED,
+          lines: [],
+        }),
+      },
+    };
+    const scopes = { requireClientAccess: vi.fn() };
+    const service = new InventoryService(prisma as never, scopes as never, {} as never);
+
+    await expect(service.openBox('session-1', 'FFL_BOX_1', manager))
+      .rejects.toThrow('Короб FFL_BOX_1 уже проверен. Повторная проверка запрещена.');
+  });
+
+  it('resolves inventory items only by a registered product barcode', async () => {
+    const findFirst = vi.fn().mockResolvedValue(null);
+    const prisma = {
+      inventoryAuditBox: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'audit-box-1',
+          clientId: 'client-1',
+          clientName: 'Клиент',
+          status: InventoryBoxStatus.COUNTING,
+          session: { status: InventorySessionStatus.ACTIVE },
+        }),
+      },
+      sku: { findFirst },
+    };
+    const scopes = { requireClientAccess: vi.fn() };
+    const service = new InventoryService(prisma as never, scopes as never, {} as never);
+
+    await expect(service.scanItem(
+      'audit-box-1',
+      { barcode: 'INTERNAL-SKU' },
+      manager,
+    )).rejects.toThrow('При инвентаризации сканируйте только ШК товара');
+
+    expect(findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        clientId: 'client-1',
+        barcodes: { some: { value: 'INTERNAL-SKU' } },
+      },
+    }));
+  });
 });

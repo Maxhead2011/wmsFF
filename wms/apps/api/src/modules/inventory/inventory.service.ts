@@ -190,7 +190,24 @@ export class InventoryService {
       include: { lines: { orderBy: [{ skuName: 'asc' }, { internalSku: 'asc' }] } },
     });
     if (existing) {
+      if (existing.status !== InventoryBoxStatus.COUNTING) {
+        throw new BadRequestException(
+          `Короб ${boxCode} уже проверен. Повторная проверка запрещена.`,
+        );
+      }
       return existing;
+    }
+    const previousCheck = await this.prisma.inventoryAuditBox.findFirst({
+      where: { boxId: box.id },
+      select: { id: true, status: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (previousCheck) {
+      throw new BadRequestException(
+        previousCheck.status === InventoryBoxStatus.COUNTING
+          ? `Короб ${boxCode} уже находится на проверке. Повторно открыть его нельзя.`
+          : `Короб ${boxCode} уже проверен. Повторная проверка запрещена.`,
+      );
     }
 
     const stock = await this.prisma.stockBalance.findMany({
@@ -237,12 +254,14 @@ export class InventoryService {
     const sku = await this.prisma.sku.findFirst({
       where: {
         clientId: auditBox.clientId,
-        OR: [{ internalSku: value }, { barcodes: { some: { value } } }],
+        barcodes: { some: { value } },
       },
       include: { barcodes: true },
     });
     if (!sku) {
-      throw new NotFoundException(`Штрихкод ${value} не найден у клиента ${auditBox.clientName}.`);
+      throw new NotFoundException(
+        `ШК товара ${value} не найден у клиента ${auditBox.clientName}. При инвентаризации сканируйте только ШК товара, не КИЗ и не внутренний SKU.`,
+      );
     }
     const quantity = dto.quantity ?? 1;
     const existing = await this.prisma.inventoryAuditLine.findUnique({

@@ -26,6 +26,8 @@ import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
 
+import org.json.JSONObject;
+
 import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -75,8 +77,8 @@ import retrofit2.Response;
 public class MainActivity extends Activity {
     private static final int CAMERA_PERMISSION_REQUEST = 4201;
     private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
-    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.66";
-    private static final String APP_VERSION = "0.1.66";
+    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.67";
+    private static final String APP_VERSION = "0.1.67";
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int BOX_FOUND_GREEN = Color.rgb(187, 247, 208);
     private static final int BOX_DUPLICATE_BLUE = Color.rgb(191, 219, 254);
@@ -718,6 +720,12 @@ public class MainActivity extends Activity {
                 request
             ).execute();
             if (!response.isSuccessful() || response.body() == null) {
+                if (response.code() == 404) {
+                    throw new IOException(tr(
+                        "Короб " + boxCode + " в системе не найден.",
+                        boxCode + " qutisi tizimda topilmadi."
+                    ));
+                }
                 throw new IOException(inventoryHttpError(response));
             }
             TsdInventoryBox loaded = response.body();
@@ -740,6 +748,16 @@ public class MainActivity extends Activity {
         String barcode = textValue(inventoryItemInput);
         if (barcode.isEmpty()) {
             statusMessage = tr("Пропикайте штрихкод товара.", "Tovar shtrix-kodini skanerlang.");
+            renderInventoryCountScreen();
+            return;
+        }
+        String barcodeError = receiptBarcodeError(barcode);
+        if (!barcodeError.isEmpty()) {
+            statusMessage = tr(
+                "При инвентаризации можно сканировать только ШК товара. " + barcodeError,
+                "Inventarizatsiyada faqat tovar shtrix-kodini skanerlash mumkin."
+            );
+            inventoryItemInput.setText("");
             renderInventoryCountScreen();
             return;
         }
@@ -989,17 +1007,33 @@ public class MainActivity extends Activity {
     }
 
     private String inventoryHttpError(Response<?> response) {
-        String prefix = tr("Ошибка WMS", "WMS xatosi") + " HTTP " + response.code();
         try {
             if (response.errorBody() != null) {
                 String body = response.errorBody().string();
                 if (!body.trim().isEmpty()) {
-                    return prefix + ": " + body;
+                    JSONObject payload = new JSONObject(body);
+                    Object message = payload.opt("message");
+                    if (message instanceof String && !((String) message).trim().isEmpty()) {
+                        return ((String) message).trim();
+                    }
+                    if (message != null) {
+                        String normalized = String.valueOf(message)
+                            .replace("[\"", "")
+                            .replace("\"]", "")
+                            .replace("\",\"", ". ")
+                            .trim();
+                        if (!normalized.isEmpty()) {
+                            return normalized;
+                        }
+                    }
                 }
             }
-        } catch (IOException ignored) {
+        } catch (Throwable ignored) {
         }
-        return prefix;
+        return tr(
+            "Не удалось выполнить операцию в WMS. Повторите попытку.",
+            "WMS amalini bajarib bo‘lmadi. Qayta urinib ko‘ring."
+        );
     }
 
     private String safeText(String value) {
@@ -1882,6 +1916,13 @@ public class MainActivity extends Activity {
         if (code.isEmpty() || assemblyPlan == null) {
             return;
         }
+        String barcodeError = receiptBarcodeError(code);
+        if (!barcodeError.isEmpty()) {
+            statusMessage = barcodeError;
+            assemblyScanInput.setText("");
+            renderRelabelBoxScreen();
+            return;
+        }
         if (activeRelabelTask == null) {
             for (TsdRelabelTask task : safeRelabelTasks()) {
                 if (selectedRelabelBox.equals(task.sourceBox) && remainingRelabel(task) > 0 && code.equals(task.oldBarcode)) {
@@ -2133,6 +2174,15 @@ public class MainActivity extends Activity {
             }
             movementFeedbackColor = 0;
             statusMessage = "Новый короб выбран: " + code + ". Сканируйте товар из " + selectedMoveSourceBox + ".";
+            assemblyScanInput.setText("");
+            renderMovementScreen();
+            return;
+        }
+
+        String barcodeError = receiptBarcodeError(code);
+        if (!barcodeError.isEmpty()) {
+            statusMessage = barcodeError;
+            movementFeedbackColor = BOX_NOT_NEEDED_RED;
             assemblyScanInput.setText("");
             renderMovementScreen();
             return;

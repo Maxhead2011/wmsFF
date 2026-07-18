@@ -35,7 +35,7 @@ export class OpenInventoryBoxDto {
 
 export class CountInventoryItemDto {
   @IsString()
-  @MaxLength(220)
+  @MaxLength(13, { message: 'В поле ШК товара отсканирован КИЗ. При инвентаризации сканируйте только ШК товара.' })
   barcode!: string;
 
   @IsOptional()
