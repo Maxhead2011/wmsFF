@@ -396,37 +396,11 @@ function permissionTitle(item: WorkspaceNavItem) {
   return item.permissions.join(', ');
 }
 
-function defaultWorkspaceForUser(user: AuthUser): WorkspaceId {
-  const preferredOrder: WorkspaceId[] = isClientOnlyUser(user)
-    ? ['cabinet', 'requests', 'catalog', 'turnover', 'logistics', 'billing', 'overview']
-    : [
-        'turnover',
-        'warehouse',
-        'requests',
-        'catalog',
-        'access',
-        'directories',
-        'imports',
-        'logistics',
-        'services',
-        'billing',
-        'own-companies',
-        'print',
-        'service',
-        'debug',
-        'data',
-        'overview',
-      ];
-
-  return preferredOrder.find((id) => canKeepWorkspace(user, id)) ?? 'overview';
+function defaultWorkspaceForUser(_user: AuthUser): WorkspaceId {
+  return 'overview';
 }
 
 function canKeepWorkspace(user: AuthUser, workspaceId: WorkspaceId) {
   const item = workspaceNav.find((candidate) => candidate.id === workspaceId);
-  return Boolean(item && item.id !== 'overview' && canOpenWorkspace(user, item));
-}
-
-function isClientOnlyUser(user: AuthUser) {
-  const internalRoles = ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR'];
-  return user.roleCodes.includes('CLIENT') && !user.roleCodes.some((roleCode) => internalRoles.includes(roleCode));
+  return Boolean(item && canOpenWorkspace(user, item));
 }
