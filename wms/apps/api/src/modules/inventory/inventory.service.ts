@@ -35,7 +35,7 @@ export class InventoryService {
 
   async dashboard(user: AuthUser) {
     const globalAccess = hasGlobalInventoryAccess(user);
-    const [activeFull, activeSessions, reviewSessions] = await Promise.all([
+    const [activeFull, activeSessions, reviewSessions, historySessions] = await Promise.all([
       this.prisma.inventorySession.findFirst({
         where: {
           type: InventorySessionType.FULL,
@@ -59,6 +59,14 @@ export class InventoryService {
         orderBy: { updatedAt: 'desc' },
         take: 30,
       }),
+      this.prisma.inventorySession.findMany({
+        where: {
+          type: { in: [InventorySessionType.FULL, InventorySessionType.PARTIAL] },
+        },
+        include: sessionInclude,
+        orderBy: { updatedAt: 'desc' },
+        take: 100,
+      }),
     ]);
 
     const totalBoxes = activeFull
@@ -79,6 +87,9 @@ export class InventoryService {
         .filter((session) => canSeeInventorySession(user, session.clientId))
         .map((session) => this.decorateSession(session)),
       reviewSessions: reviewSessions
+        .filter((session) => canSeeInventorySession(user, session.clientId))
+        .map((session) => this.decorateSession(session)),
+      historySessions: historySessions
         .filter((session) => canSeeInventorySession(user, session.clientId))
         .map((session) => this.decorateSession(session)),
       canManage: canManageInventory(user),

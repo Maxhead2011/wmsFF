@@ -584,37 +584,71 @@ function Reconciliation({
 }) {
   const [busyLine, setBusyLine] = useState('');
   const [message, setMessage] = useState('');
-  const reviews = dashboard.reviewSessions;
+  const history = dashboard.historySessions ?? dashboard.reviewSessions;
+  const checkedBoxes = history.flatMap((inventory) => inventory.boxes)
+    .filter((box) => box.status !== 'COUNTING');
+  const matchedBoxes = checkedBoxes.filter((box) => box.status === 'MATCHED').length;
 
-  if (!dashboard.canManage) {
-    return <div className="inventory-alert"><ShieldAlert size={20} /><div><strong>Только для менеджера или администратора</strong><span>Сборщик видит результат проверки, но изменение учётных остатков требует управленческого решения.</span></div></div>;
-  }
-  if (reviews.length === 0) {
-    return <div className="inventory-empty"><ClipboardCheck size={28} /><strong>Очередь актуализации пуста</strong><span>Сюда попадут расхождения после полной и частичной инвентаризации.</span></div>;
+  if (history.length === 0) {
+    return <div className="inventory-empty"><ClipboardCheck size={28} /><strong>Проверок пока нет</strong><span>Здесь появятся все полные и частичные инвентаризации, включая проверки без расхождений.</span></div>;
   }
 
   return (
     <div className="inventory-reconciliation">
-      {reviews.map((review) => (
+      {!dashboard.canManage ? (
+        <div className="inventory-alert"><ShieldAlert size={20} /><div><strong>Журнал доступен только для просмотра</strong><span>Решения по расхождениям может принимать менеджер или администратор.</span></div></div>
+      ) : null}
+      <div className="inventory-history-summary">
+        <div>
+          <p className="eyebrow">Журнал проверок</p>
+          <strong>Все полные и частичные инвентаризации</strong>
+          <span>Отображаются и расхождения, и полностью совпавшие проверки — как зафиксированный факт.</span>
+        </div>
+        <div className="inventory-metrics">
+          <span><small>Проверок</small><strong>{history.length}</strong></span>
+          <span><small>Коробов проверено</small><strong>{checkedBoxes.length}</strong></span>
+          <span><small>Без расхождений</small><strong>{matchedBoxes}</strong></span>
+        </div>
+      </div>
+      {history.map((review) => (
         <article className="inventory-review" key={review.id}>
           <SessionHeader current={review} />
-          {review.boxes.filter((box) => box.status === 'MISMATCH' || box.status === 'RESOLVED').map((box) => (
+          {review.boxes.length === 0 ? (
+            <div className="inventory-empty inventory-empty--compact">
+              <ClipboardCheck size={22} />
+              <strong>Короба ещё не проверялись</strong>
+              <span>Сессия зафиксирована в журнале, но результатов подсчёта пока нет.</span>
+            </div>
+          ) : review.boxes.map((box) => (
             <div className="inventory-review-box" key={box.id}>
               <div className="inventory-box-heading">
-                <div><p className="eyebrow">{box.clientName}</p><h4>Короб {box.boxCode}</h4></div>
+                <div>
+                  <p className="eyebrow">{box.clientName}</p>
+                  <h4>Короб {box.boxCode}</h4>
+                  <p className="inventory-audit-meta">
+                    {box.countedByName ? `Проверил ${box.countedByName}` : 'Проверка начата'}
+                    {' · '}{formatDate(box.completedAt ?? box.startedAt)}
+                    {box.resolvedByName && box.resolvedAt ? ` · Решение: ${box.resolvedByName}, ${formatDate(box.resolvedAt)}` : ''}
+                  </p>
+                </div>
                 <span className={`inventory-status inventory-status--${box.status.toLowerCase()}`}>{boxStatusLabel(box.status)}</span>
               </div>
-              <div className="inventory-table-wrap">
+              {box.lines.length > 0 ? <div className="inventory-table-wrap">
                 <table className="inventory-table">
-                  <thead><tr><th>Товар</th><th>WMS</th><th>Факт</th><th>Разница</th><th>Решение</th></tr></thead>
+                  <thead><tr><th>Товар</th><th>WMS</th><th>Факт</th><th>Разница</th><th>Результат / решение</th></tr></thead>
                   <tbody>
-                    {box.lines.filter((line) => line.difference !== 0).map((line) => (
-                      <tr key={line.id}>
+                    {box.lines.map((line) => (
+                      <tr className={line.difference !== 0 ? 'inventory-table__mismatch' : undefined} key={line.id}>
                         <td><strong>{line.skuName}</strong><small>{line.barcode || line.internalSku}</small></td>
                         <td>{line.expectedQuantity}</td><td>{line.countedQuantity}</td>
-                        <td className="inventory-diff--bad">{line.difference > 0 ? `+${line.difference}` : line.difference}</td>
+                        <td className={line.difference === 0 ? 'inventory-diff--ok' : 'inventory-diff--bad'}>{line.difference > 0 ? `+${line.difference}` : line.difference}</td>
                         <td>
-                          {line.decision === 'PENDING' ? (
+                          {line.difference === 0 ? (
+                            <span className="inventory-decision-done">
+                              <CheckCircle2 size={15} />
+                              Совпало
+                            </span>
+                          ) : line.decision === 'PENDING' && dashboard.canManage && review.status === 'REVIEW' ? (
                             <div className="inventory-decision">
                               <button
                                 className="primary-button"
@@ -645,11 +679,17 @@ function Reconciliation({
                                 }}
                               >Оставить WMS</button>
                             </div>
+                          ) : line.decision === 'PENDING' ? (
+                            <span className="inventory-decision-pending">
+                              <AlertTriangle size={15} />
+                              Ожидает решения
+                            </span>
                           ) : (
                             <span className="inventory-decision-done">
                               <CheckCircle2 size={15} />
                               {line.decision === 'APPLY_ACTUAL' ? 'Принят факт' : 'Оставлен WMS'}
                               {line.decidedByName ? ` · ${line.decidedByName}` : ''}
+                              {line.decidedAt ? ` · ${formatDate(line.decidedAt)}` : ''}
                             </span>
                           )}
                         </td>
@@ -657,10 +697,12 @@ function Reconciliation({
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </div> : (
+                <p className="inventory-box-empty">В коробе не зафиксировано товарных позиций.</p>
+              )}
             </div>
           ))}
-          <div className="inventory-session__actions">
+          {dashboard.canManage && review.status === 'REVIEW' ? <div className="inventory-session__actions">
             <button
               className="primary-button"
               type="button"
@@ -676,7 +718,7 @@ function Reconciliation({
               Завершить инвентаризацию
             </button>
             <span className="muted">Неразобранных позиций: {review.progress?.unresolvedLines ?? 0}</span>
-          </div>
+          </div> : null}
         </article>
       ))}
       {message ? <p className="form-error">{message}</p> : null}

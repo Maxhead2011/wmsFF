@@ -121,6 +121,7 @@ export type InventoryDashboard = {
   activeFull: InventorySession | null;
   activeSessions: InventorySession[];
   reviewSessions: InventorySession[];
+  historySessions: InventorySession[];
   canManage: boolean;
 };
 
