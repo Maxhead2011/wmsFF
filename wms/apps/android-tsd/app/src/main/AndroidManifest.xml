@@ -5,8 +5,17 @@
 
     <application
         android:allowBackup="false"
+        android:hardwareAccelerated="true"
         android:label="LOGOFF WMS TSD"
         android:theme="@style/AppTheme">
+        <activity
+            android:name=".PhoneScannerActivity"
+            android:exported="false"
+            android:hardwareAccelerated="true"
+            android:screenOrientation="fullSensor"
+            android:stateNotNeeded="true"
+            android:theme="@style/zxing_CaptureTheme"
+            android:windowSoftInputMode="stateAlwaysHidden" />
         <activity
             android:name=".MainActivity"
             android:exported="true">

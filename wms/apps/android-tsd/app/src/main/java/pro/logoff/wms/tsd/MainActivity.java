@@ -1,8 +1,10 @@
 package pro.logoff.wms.tsd;
 
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
 import android.content.SharedPreferences;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
@@ -69,8 +71,8 @@ import retrofit2.Response;
 
 public class MainActivity extends Activity {
     private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
-    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.64";
-    private static final String APP_VERSION = "0.1.64";
+    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.65";
+    private static final String APP_VERSION = "0.1.65";
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int BOX_FOUND_GREEN = Color.rgb(187, 247, 208);
     private static final int BOX_DUPLICATE_BLUE = Color.rgb(191, 219, 254);
@@ -2985,12 +2987,32 @@ public class MainActivity extends Activity {
             refreshCurrentScreen();
             return;
         }
-        IntentIntegrator integrator = new IntentIntegrator(this);
-        integrator.setDesiredBarcodeFormats(IntentIntegrator.ALL_CODE_TYPES);
-        integrator.setPrompt(tr("Наведите камеру на штрихкод или КИЗ", "Kamerani shtrix-kod yoki KIZga qarating"));
-        integrator.setBeepEnabled(true);
-        integrator.setOrientationLocked(false);
-        integrator.initiateScan();
+        if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
+            statusMessage = tr("На устройстве не найдена камера.", "Qurilmada kamera topilmadi.");
+            refreshCurrentScreen();
+            return;
+        }
+        try {
+            IntentIntegrator integrator = new IntentIntegrator(this);
+            integrator.setCaptureActivity(PhoneScannerActivity.class);
+            integrator.setDesiredBarcodeFormats(IntentIntegrator.ALL_CODE_TYPES);
+            integrator.setPrompt(tr("Наведите камеру на штрихкод или КИЗ", "Kamerani shtrix-kod yoki KIZga qarating"));
+            integrator.setBeepEnabled(true);
+            integrator.setOrientationLocked(false);
+            integrator.initiateScan();
+        } catch (ActivityNotFoundException | SecurityException error) {
+            statusMessage = tr(
+                "Не удалось открыть камеру. Проверьте разрешение камеры в настройках приложения.",
+                "Kamerani ochib bo‘lmadi. Ilova sozlamalarida kamera ruxsatini tekshiring."
+            );
+            refreshCurrentScreen();
+        } catch (RuntimeException error) {
+            statusMessage = tr(
+                "Камера временно недоступна. Закройте другие приложения с камерой и повторите.",
+                "Kamera vaqtincha ishlamayapti. Kameradan foydalanayotgan boshqa ilovalarni yoping va qayta urinib ko‘ring."
+            );
+            refreshCurrentScreen();
+        }
     }
 
     private void submitPhoneCameraScan() {
