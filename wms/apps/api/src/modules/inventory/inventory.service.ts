@@ -34,6 +34,7 @@ export class InventoryService {
   ) {}
 
   async dashboard(user: AuthUser) {
+    const globalAccess = hasGlobalInventoryAccess(user);
     const [activeFull, activeSessions, reviewSessions] = await Promise.all([
       this.prisma.inventorySession.findFirst({
         where: {
@@ -73,9 +74,13 @@ export class InventoryService {
             createdByName: activeFull.createdByName,
           }
         : { active: false },
-      activeFull: activeFull ? this.decorateSession(activeFull, totalBoxes) : null,
-      activeSessions: activeSessions.map((session) => this.decorateSession(session)),
-      reviewSessions: reviewSessions.map((session) => this.decorateSession(session)),
+      activeFull: activeFull && globalAccess ? this.decorateSession(activeFull, totalBoxes) : null,
+      activeSessions: activeSessions
+        .filter((session) => canSeeInventorySession(user, session.clientId))
+        .map((session) => this.decorateSession(session)),
+      reviewSessions: reviewSessions
+        .filter((session) => canSeeInventorySession(user, session.clientId))
+        .map((session) => this.decorateSession(session)),
       canManage: canManageInventory(user),
     };
   }
@@ -88,7 +93,7 @@ export class InventoryService {
     return this.prisma.inventorySession.findMany({
       where: {
         type: parsedType,
-        ...(clientFilter ? { OR: [{ clientId: clientFilter }, { clientId: null }] } : {}),
+        ...(clientFilter ? { clientId: clientFilter } : {}),
       },
       include: sessionInclude,
       orderBy: { createdAt: 'desc' },
@@ -103,6 +108,8 @@ export class InventoryService {
     }
     if (session.clientId) {
       this.clientScopes.requireClientAccess(user, session.clientId, 'read');
+    } else {
+      this.clientScopes.requireGlobalClientAccess(user);
     }
     const totalBoxes =
       session.type === InventorySessionType.FULL
@@ -557,4 +564,15 @@ function canManageInventory(user: AuthUser) {
     user.permissionCodes.includes('system:admin') ||
     user.roleCodes.some((role) => ['ADMIN', 'OWNER', 'MANAGER'].includes(role))
   );
+}
+
+function hasGlobalInventoryAccess(user: AuthUser) {
+  return user.permissionCodes.includes('system:admin') || user.clientScopeMode === 'ALL';
+}
+
+function canSeeInventorySession(user: AuthUser, clientId: string | null) {
+  if (clientId == null) {
+    return hasGlobalInventoryAccess(user);
+  }
+  return hasGlobalInventoryAccess(user) || user.clientIds.includes(clientId);
 }
