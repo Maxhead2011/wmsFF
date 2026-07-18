@@ -64,6 +64,12 @@ export class InventoryController {
     return this.inventory.finishBox(id, user);
   }
 
+  @Post('rescan-requests/:id/approve')
+  @RequirePermissions('stock:write')
+  approveRescan(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.inventory.approveRescanRequest(id, user);
+  }
+
   @Post('sessions/:id/review')
   @RequirePermissions('stock:write')
   review(@Param('id') id: string, @CurrentUser() user: AuthUser) {

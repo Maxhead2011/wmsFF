@@ -113,6 +113,25 @@ export type InventorySession = {
   };
 };
 
+export type InventoryBoxRescanRequest = {
+  id: string;
+  boxId: string;
+  boxCode: string;
+  clientId: string;
+  clientName: string;
+  sessionId: string;
+  sessionTitle: string;
+  requestedByUserId: string;
+  requestedByName: string;
+  status: 'PENDING' | 'APPROVED' | 'CONSUMED';
+  approvedByUserId: string | null;
+  approvedByName: string | null;
+  approvedAt: string | null;
+  consumedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type InventoryDashboard = {
   movementLock: {
     active: boolean;
@@ -125,6 +144,8 @@ export type InventoryDashboard = {
   activeSessions: InventorySession[];
   reviewSessions: InventorySession[];
   historySessions: InventorySession[];
+  pendingRescanRequests: InventoryBoxRescanRequest[];
+  canApproveRescan: boolean;
   canManage: boolean;
 };
 
@@ -3713,6 +3734,13 @@ export function setInventoryCount(accessToken: string, auditBoxId: string, lineI
 
 export function finishInventoryBox(accessToken: string, auditBoxId: string) {
   return request<InventoryAuditBox>(`/inventory/boxes/${auditBoxId}/finish`, {
+    method: 'POST',
+    accessToken,
+  });
+}
+
+export function approveInventoryBoxRescan(accessToken: string, requestId: string) {
+  return request<InventoryBoxRescanRequest>(`/inventory/rescan-requests/${requestId}/approve`, {
     method: 'POST',
     accessToken,
   });

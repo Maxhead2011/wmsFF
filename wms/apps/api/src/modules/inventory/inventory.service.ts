@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   InventoryBoxStatus,
   InventoryLineDecision,
@@ -36,7 +36,7 @@ export class InventoryService {
 
   async dashboard(user: AuthUser) {
     const globalAccess = hasGlobalInventoryAccess(user);
-    const [activeFull, activeSessions, reviewSessions, historySessions] = await Promise.all([
+    const [activeFull, activeSessions, reviewSessions, historySessions, pendingRescanRequests] = await Promise.all([
       this.prisma.inventorySession.findFirst({
         where: {
           type: InventorySessionType.FULL,
@@ -66,6 +66,13 @@ export class InventoryService {
         orderBy: { updatedAt: 'desc' },
         take: 100,
       }),
+      canApproveInventoryRescan(user)
+        ? this.prisma.inventoryBoxRescanRequest.findMany({
+            where: { status: 'PENDING' },
+            orderBy: { createdAt: 'asc' },
+            take: 100,
+          })
+        : Promise.resolve([]),
     ]);
 
     const totalBoxes = activeFull
@@ -91,6 +98,10 @@ export class InventoryService {
       historySessions: historySessions
         .filter((session) => canSeeInventorySession(user, session.clientId))
         .map((session) => this.decorateSession(session)),
+      pendingRescanRequests: pendingRescanRequests.filter((request) =>
+        canSeeInventorySession(user, request.clientId),
+      ),
+      canApproveRescan: canApproveInventoryRescan(user),
       canManage: canManageInventory(user),
     };
   }
@@ -189,24 +200,37 @@ export class InventoryService {
       where: { sessionId_boxId: { sessionId, boxId: box.id } },
       include: { lines: { orderBy: [{ skuName: 'asc' }, { internalSku: 'asc' }] } },
     });
+    const approvedRescan = await this.prisma.inventoryBoxRescanRequest.findFirst({
+      where: {
+        boxId: box.id,
+        sessionId,
+        status: 'APPROVED',
+        consumedAt: null,
+      },
+      orderBy: { approvedAt: 'asc' },
+    });
     if (existing) {
-      if (existing.status !== InventoryBoxStatus.COUNTING) {
-        throw new BadRequestException(
-          `Короб ${boxCode} уже проверен. Повторная проверка запрещена.`,
+      if (existing.status === InventoryBoxStatus.COUNTING) {
+        return existing;
+      }
+      if (!approvedRescan) {
+        await this.ensureRescanRequest(session, box, user);
+        throw new ConflictException(
+          `Короб ${boxCode} уже проверен. Запрос на повторную проверку отправлен администратору.`,
         );
       }
-      return existing;
     }
     const previousCheck = await this.prisma.inventoryAuditBox.findFirst({
       where: { boxId: box.id },
       select: { id: true, status: true },
       orderBy: { createdAt: 'desc' },
     });
-    if (previousCheck) {
-      throw new BadRequestException(
+    if (previousCheck && !approvedRescan) {
+      await this.ensureRescanRequest(session, box, user);
+      throw new ConflictException(
         previousCheck.status === InventoryBoxStatus.COUNTING
-          ? `Короб ${boxCode} уже находится на проверке. Повторно открыть его нельзя.`
-          : `Короб ${boxCode} уже проверен. Повторная проверка запрещена.`,
+          ? `Короб ${boxCode} уже находится на проверке. Запрос на повторную проверку отправлен администратору.`
+          : `Короб ${boxCode} уже проверен. Запрос на повторную проверку отправлен администратору.`,
       );
     }
 
@@ -223,27 +247,84 @@ export class InventoryService {
         expected.set(balance.skuId, { ...balance, total: balance.quantity });
       }
     }
+    const lineData = [...expected.values()].map((item) => ({
+      skuId: item.skuId,
+      skuName: item.sku.name,
+      internalSku: item.sku.internalSku,
+      barcode: item.sku.barcodes.find((barcode) => barcode.isPrimary)?.value ?? item.sku.barcodes[0]?.value ?? null,
+      expectedQuantity: item.total,
+    }));
 
-    return this.prisma.inventoryAuditBox.create({
-      data: {
-        sessionId,
-        boxId: box.id,
-        boxCode: box.code,
-        clientId: box.clientId,
-        clientName: box.client.name,
-        countedByUserId: user.id,
-        countedByName: user.name,
-        lines: {
-          create: [...expected.values()].map((item) => ({
-            skuId: item.skuId,
-            skuName: item.sku.name,
-            internalSku: item.sku.internalSku,
-            barcode: item.sku.barcodes.find((barcode) => barcode.isPrimary)?.value ?? item.sku.barcodes[0]?.value ?? null,
-            expectedQuantity: item.total,
-          })),
+    if (existing && approvedRescan) {
+      return this.prisma.$transaction(async (tx) => {
+        await tx.inventoryAuditLine.deleteMany({ where: { auditBoxId: existing.id } });
+        const reopened = await tx.inventoryAuditBox.update({
+          where: { id: existing.id },
+          data: {
+            status: InventoryBoxStatus.COUNTING,
+            countedByUserId: user.id,
+            countedByName: user.name,
+            startedAt: new Date(),
+            completedAt: null,
+            resolvedAt: null,
+            resolvedByName: null,
+            comment: `Повторная проверка разрешена администратором ${approvedRescan.approvedByName ?? ''}`.trim(),
+            lines: { create: lineData },
+          },
+          include: { lines: { orderBy: [{ skuName: 'asc' }, { internalSku: 'asc' }] } },
+        });
+        await tx.inventoryBoxRescanRequest.update({
+          where: { id: approvedRescan.id },
+          data: { status: 'CONSUMED', consumedAt: new Date() },
+        });
+        return reopened;
+      });
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const created = await tx.inventoryAuditBox.create({
+        data: {
+          sessionId,
+          boxId: box.id,
+          boxCode: box.code,
+          clientId: box.clientId,
+          clientName: box.client.name,
+          countedByUserId: user.id,
+          countedByName: user.name,
+          lines: { create: lineData },
         },
+        include: { lines: { orderBy: [{ skuName: 'asc' }, { internalSku: 'asc' }] } },
+      });
+      if (approvedRescan) {
+        await tx.inventoryBoxRescanRequest.update({
+          where: { id: approvedRescan.id },
+          data: { status: 'CONSUMED', consumedAt: new Date() },
+        });
+      }
+      return created;
+    });
+  }
+
+  async approveRescanRequest(id: string, user: AuthUser) {
+    if (!canApproveInventoryRescan(user)) {
+      throw new ForbiddenException('Повторную проверку короба может разрешить только администратор или владелец.');
+    }
+    const request = await this.prisma.inventoryBoxRescanRequest.findUnique({ where: { id } });
+    if (!request) {
+      throw new NotFoundException('Запрос на повторную проверку не найден.');
+    }
+    this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+    if (request.status !== 'PENDING') {
+      throw new BadRequestException('Этот запрос уже обработан.');
+    }
+    return this.prisma.inventoryBoxRescanRequest.update({
+      where: { id },
+      data: {
+        status: 'APPROVED',
+        approvedByUserId: user.id,
+        approvedByName: user.name,
+        approvedAt: new Date(),
       },
-      include: { lines: { orderBy: [{ skuName: 'asc' }, { internalSku: 'asc' }] } },
     });
   }
 
@@ -568,6 +649,35 @@ export class InventoryService {
     });
   }
 
+  private async ensureRescanRequest(
+    session: { id: string; title: string },
+    box: { id: string; code: string; clientId: string; client: { name: string } },
+    user: AuthUser,
+  ) {
+    const pending = await this.prisma.inventoryBoxRescanRequest.findFirst({
+      where: {
+        boxId: box.id,
+        sessionId: session.id,
+        status: 'PENDING',
+      },
+    });
+    if (pending) {
+      return pending;
+    }
+    return this.prisma.inventoryBoxRescanRequest.create({
+      data: {
+        boxId: box.id,
+        boxCode: box.code,
+        clientId: box.clientId,
+        clientName: box.client.name,
+        sessionId: session.id,
+        sessionTitle: session.title,
+        requestedByUserId: user.id,
+        requestedByName: user.name,
+      },
+    });
+  }
+
   private async requireActiveSession(id: string) {
     const session = await this.prisma.inventorySession.findUnique({ where: { id } });
     if (!session) {
@@ -662,6 +772,13 @@ function canManageInventory(user: AuthUser) {
   return (
     user.permissionCodes.includes('system:admin') ||
     user.roleCodes.some((role) => ['ADMIN', 'OWNER', 'MANAGER'].includes(role))
+  );
+}
+
+function canApproveInventoryRescan(user: AuthUser) {
+  return (
+    user.permissionCodes.includes('system:admin') ||
+    user.roleCodes.some((role) => ['ADMIN', 'OWNER'].includes(role))
   );
 }
 

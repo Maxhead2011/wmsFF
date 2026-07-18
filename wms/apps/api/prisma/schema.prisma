@@ -882,6 +882,29 @@ model InventoryAuditLine {
   @@index([auditBoxId, decision])
 }
 
+model InventoryBoxRescanRequest {
+  id                  String   @id @default(uuid())
+  boxId               String
+  boxCode             String
+  clientId            String
+  clientName          String
+  sessionId           String
+  sessionTitle        String
+  requestedByUserId   String
+  requestedByName     String
+  status              String   @default("PENDING")
+  approvedByUserId    String?
+  approvedByName      String?
+  approvedAt          DateTime?
+  consumedAt          DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([status, createdAt])
+  @@index([boxId, sessionId, status])
+  @@index([clientId, status])
+}
+
 model ClientRequest {
   id               String                     @id @default(uuid())
   clientId         String

@@ -86,11 +86,13 @@ describe('InventoryService box checks', () => {
     }));
   });
 
-  it('does not allow a completed box to be checked again', async () => {
+  it('requests administrator approval before a completed box can be checked again', async () => {
+    const createRescanRequest = vi.fn().mockResolvedValue({ id: 'rescan-1' });
     const prisma = {
       inventorySession: {
         findUnique: vi.fn().mockResolvedValue({
           id: 'session-1',
+          title: 'Проверка коробов',
           clientId: 'client-1',
           status: InventorySessionStatus.ACTIVE,
         }),
@@ -111,12 +113,23 @@ describe('InventoryService box checks', () => {
           lines: [],
         }),
       },
+      inventoryBoxRescanRequest: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: createRescanRequest,
+      },
     };
     const scopes = { requireClientAccess: vi.fn() };
     const service = new InventoryService(prisma as never, scopes as never, {} as never);
 
     await expect(service.openBox('session-1', 'FFL_BOX_1', manager))
-      .rejects.toThrow('Короб FFL_BOX_1 уже проверен. Повторная проверка запрещена.');
+      .rejects.toThrow('Запрос на повторную проверку отправлен администратору.');
+    expect(createRescanRequest).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        boxCode: 'FFL_BOX_1',
+        sessionId: 'session-1',
+        requestedByUserId: manager.id,
+      }),
+    }));
   });
 
   it('resolves inventory items only by a registered product barcode', async () => {

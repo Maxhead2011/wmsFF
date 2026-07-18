@@ -8,12 +8,14 @@ import {
   RefreshCw,
   ScanLine,
   Settings2,
+  ShieldCheck,
   ShieldAlert,
   UnlockKeyhole,
 } from 'lucide-react';
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   cancelInventorySession,
+  approveInventoryBoxRescan,
   completeInventorySession,
   decideInventoryLine,
   fetchClients,
@@ -28,6 +30,7 @@ import {
   type AuthSession,
   type ClientSummary,
   type InventoryAuditBox,
+  type InventoryBoxRescanRequest,
   type InventoryDashboard,
   type InventoryLineDecision,
   type InventoryResolutionAction,
@@ -83,6 +86,7 @@ export function InventoryPanel({ session }: { session: AuthSession }) {
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
+  const [approvingRescanId, setApprovingRescanId] = useState('');
 
   async function load() {
     setLoading(true);
@@ -104,6 +108,19 @@ export function InventoryPanel({ session }: { session: AuthSession }) {
   useEffect(() => {
     void load();
   }, [session.accessToken]);
+
+  async function approveRescan(request: InventoryBoxRescanRequest) {
+    setApprovingRescanId(request.id);
+    setMessage('');
+    try {
+      await approveInventoryBoxRescan(session.accessToken, request.id);
+      await load();
+    } catch (caught) {
+      setMessage(errorMessage(caught));
+    } finally {
+      setApprovingRescanId('');
+    }
+  }
 
   return (
     <div className="inventory">
@@ -133,6 +150,38 @@ export function InventoryPanel({ session }: { session: AuthSession }) {
             </span>
           </div>
         </div>
+      ) : null}
+
+      {dashboard?.canApproveRescan && dashboard.pendingRescanRequests.length ? (
+        <section className="inventory-rescan-requests" aria-label="Запросы повторной проверки коробов">
+          <div className="inventory-rescan-requests__heading">
+            <ShieldCheck size={21} />
+            <div>
+              <strong>Нужно разрешение на повторную проверку</strong>
+              <span>Сборщик повторно отсканировал уже проверенный короб. Без подтверждения короб не откроется.</span>
+            </div>
+          </div>
+          <div className="inventory-rescan-requests__list">
+            {dashboard.pendingRescanRequests.map((request) => (
+              <article key={request.id}>
+                <div>
+                  <strong>{request.boxCode}</strong>
+                  <span>{request.clientName} · {request.sessionTitle}</span>
+                  <small>Запросил {request.requestedByName} · {formatDate(request.createdAt)}</small>
+                </div>
+                <button
+                  className="primary-button"
+                  type="button"
+                  disabled={Boolean(approvingRescanId)}
+                  onClick={() => void approveRescan(request)}
+                >
+                  <ShieldCheck size={16} />
+                  {approvingRescanId === request.id ? 'Подтверждаю…' : 'Разрешить один повторный скан'}
+                </button>
+              </article>
+            ))}
+          </div>
+        </section>
       ) : null}
 
       <div className="inventory-mode-grid">
