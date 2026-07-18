@@ -25,6 +25,7 @@ import { LogisticsService } from '../logistics/logistics.service';
 import { FulfillClientRequestDto } from './dto/fulfill-client-request.dto';
 import { PickClientRequestDto } from './dto/pick-client-request.dto';
 import { TransferBetweenBoxesDto } from './dto/transfer-between-boxes.dto';
+import { TransferWholeBoxDto } from './dto/transfer-whole-box.dto';
 import { StockBalancesService } from './stock-balances.service';
 
 type StockBalanceForAllocation = Prisma.StockBalanceGetPayload<{
@@ -113,6 +114,157 @@ export class StockOperationsService {
     await this.inventoryLock?.assertStockMovementsAllowed();
 
     return this.prisma.$transaction((tx) => this.applyTransferBetweenBoxes(tx, dto));
+  }
+
+  async transferWholeBox(dto: TransferWholeBoxDto, user: AuthUser) {
+    this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+    await this.inventoryLock?.assertStockMovementsAllowed();
+
+    const fromBoxCode = dto.fromBoxCode.trim();
+    const toBoxCode = dto.toBoxCode.trim();
+    if (!fromBoxCode || !toBoxCode) {
+      throw new BadRequestException('Укажите исходный и целевой короба.');
+    }
+    if (fromBoxCode.toLocaleUpperCase('ru-RU') === toBoxCode.toLocaleUpperCase('ru-RU')) {
+      throw new BadRequestException('Исходный и целевой короба совпадают.');
+    }
+    if (!toBoxCode.toLocaleUpperCase('ru-RU').startsWith('FFL')) {
+      throw new BadRequestException('Номер целевого короба должен начинаться с FFL.');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const alreadyApplied = await tx.stockMovement.findFirst({
+        where: { idempotencyKey: { startsWith: `${dto.idempotencyKey}:` } },
+        select: { id: true },
+      });
+      if (alreadyApplied) {
+        return {
+          idempotencyKey: dto.idempotencyKey,
+          status: 'ALREADY_APPLIED' as const,
+        };
+      }
+
+      const sourceBox = await tx.box.findUnique({
+        where: { clientId_code: { clientId: dto.clientId, code: fromBoxCode } },
+        include: {
+          balances: {
+            where: { quantity: { gt: 0 } },
+            orderBy: [{ skuId: 'asc' }, { status: 'asc' }],
+          },
+          productMarks: {
+            select: { id: true, skuId: true, status: true },
+          },
+        },
+      });
+      if (!sourceBox || sourceBox.status !== 'active') {
+        throw new NotFoundException(`Исходный короб ${fromBoxCode} не найден в активных остатках.`);
+      }
+      if (sourceBox.balances.length === 0) {
+        throw new BadRequestException(`В коробе ${sourceBox.code} нет остатка для перемещения.`);
+      }
+
+      const existingTarget = await tx.box.findUnique({
+        where: { clientId_code: { clientId: dto.clientId, code: toBoxCode } },
+      });
+      if (existingTarget && existingTarget.status !== 'active') {
+        throw new BadRequestException(`Короб ${toBoxCode} не является активным и не может принять остаток.`);
+      }
+      const targetBox =
+        existingTarget ??
+        (await tx.box.create({
+          data: { clientId: dto.clientId, code: toBoxCode, status: 'active' },
+        }));
+
+      const balanceKeys = new Set(sourceBox.balances.map((balance) => `${balance.skuId}:${balance.status}`));
+      const orphanMark = sourceBox.productMarks.find((mark) => !balanceKeys.has(`${mark.skuId}:${mark.status}`));
+      if (orphanMark) {
+        throw new BadRequestException(
+          `Короб ${sourceBox.code} содержит КИЗ без соответствующего остатка. Перемещение остановлено для проверки.`,
+        );
+      }
+
+      let totalQuantity = 0;
+      let movedMarks = 0;
+      for (const [index, balance] of sourceBox.balances.entries()) {
+        const quantity = balance.quantity;
+        const lineKey = `${dto.idempotencyKey}:${index + 1}:${balance.id}`;
+        await this.decrementSourceBalance(tx, balance, quantity);
+        await this.incrementTargetBalance(tx, {
+          clientId: dto.clientId,
+          skuId: balance.skuId,
+          boxId: targetBox.id,
+          palletId: targetBox.palletId,
+          status: balance.status,
+          quantity,
+        });
+
+        await tx.stockMovement.create({
+          data: {
+            clientId: dto.clientId,
+            skuId: balance.skuId,
+            boxId: sourceBox.id,
+            palletId: sourceBox.palletId,
+            type: MovementType.MOVE,
+            status: balance.status,
+            quantity: -quantity,
+            sourceDocument: 'TSD-BOX-CONSOLIDATION',
+            idempotencyKey: `${lineKey}:out`,
+            comment: dto.comment?.trim() || `Объединение остатков: перенос в короб ${targetBox.code}`,
+          },
+        });
+        const inboundMovement = await tx.stockMovement.create({
+          data: {
+            clientId: dto.clientId,
+            skuId: balance.skuId,
+            boxId: targetBox.id,
+            palletId: targetBox.palletId,
+            type: MovementType.MOVE,
+            status: balance.status,
+            quantity,
+            sourceDocument: 'TSD-BOX-CONSOLIDATION',
+            idempotencyKey: `${lineKey}:in`,
+            comment: dto.comment?.trim() || `Объединение остатков: перенос из короба ${sourceBox.code}`,
+          },
+        });
+        const marks = await tx.productMark.updateMany({
+          where: {
+            boxId: sourceBox.id,
+            skuId: balance.skuId,
+            status: balance.status,
+          },
+          data: {
+            boxId: targetBox.id,
+            stockMovementId: inboundMovement.id,
+          },
+        });
+        movedMarks += marks.count;
+        totalQuantity += quantity;
+      }
+
+      const [remainingBalances, remainingMarks] = await Promise.all([
+        tx.stockBalance.count({ where: { boxId: sourceBox.id, quantity: { gt: 0 } } }),
+        tx.productMark.count({ where: { boxId: sourceBox.id } }),
+      ]);
+      const sourceArchived = remainingBalances === 0 && remainingMarks === 0;
+      if (sourceArchived) {
+        await tx.box.update({
+          where: { id: sourceBox.id },
+          data: { status: 'archived' },
+        });
+      }
+
+      return {
+        idempotencyKey: dto.idempotencyKey,
+        status: 'APPLIED' as const,
+        fromBox: sourceBox.code,
+        toBox: targetBox.code,
+        targetCreated: !existingTarget,
+        lines: sourceBox.balances.length,
+        quantity: totalQuantity,
+        movedMarks,
+        sourceArchived,
+      };
+    });
   }
 
   async previewBoxTransfersXlsx(clientId: string, file: Express.Multer.File | undefined, user: AuthUser) {
@@ -2249,19 +2401,21 @@ export class StockOperationsService {
       where: { clientId_code: { clientId, code } },
     });
 
-    if (!box) {
+    if (!box || ['deleted', 'archived'].includes(box.status)) {
       throw new NotFoundException(`Короб ${code} не найден.`);
     }
 
     return box;
   }
 
-  private ensureTargetBox(tx: Prisma.TransactionClient, clientId: string, code: string) {
-    return tx.box.upsert({
+  private async ensureTargetBox(tx: Prisma.TransactionClient, clientId: string, code: string) {
+    const existing = await tx.box.findUnique({
       where: { clientId_code: { clientId, code } },
-      update: {},
-      create: { clientId, code },
     });
+    if (existing && ['deleted', 'archived'].includes(existing.status)) {
+      throw new BadRequestException(`Короб ${code} находится в архиве и не может быть переиспользован.`);
+    }
+    return existing ?? tx.box.create({ data: { clientId, code } });
   }
 
   private async decrementSourceBalance(tx: Prisma.TransactionClient, balance: StockBalance, quantity: number) {

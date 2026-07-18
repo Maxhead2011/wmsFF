@@ -13,6 +13,7 @@ import { ListStockBalancesDto } from './dto/list-stock-balances.dto';
 import { PickClientRequestDto } from './dto/pick-client-request.dto';
 import { RunPickWaveDto } from './dto/run-pick-wave.dto';
 import { TransferBetweenBoxesDto } from './dto/transfer-between-boxes.dto';
+import { TransferWholeBoxDto } from './dto/transfer-whole-box.dto';
 import { UpdateStorageTariffDto } from './dto/update-storage-tariff.dto';
 import { FulfillmentWaveService } from './fulfillment-wave.service';
 import { PickInstructionService } from './pick-instruction.service';
@@ -72,6 +73,12 @@ export class StockController {
   @RequirePermissions('stock:write')
   transferBetweenBoxes(@Body() dto: TransferBetweenBoxesDto, @CurrentUser() user: AuthUser) {
     return this.operations.transferBetweenBoxes(dto, user);
+  }
+
+  @Post('transfers/whole-box')
+  @RequirePermissions('stock:write')
+  transferWholeBox(@Body() dto: TransferWholeBoxDto, @CurrentUser() user: AuthUser) {
+    return this.operations.transferWholeBox(dto, user);
   }
 
   @Post('transfers/box-to-box/import-xlsx')

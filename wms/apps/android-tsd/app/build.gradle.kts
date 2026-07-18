@@ -15,8 +15,8 @@ android {
         applicationId = "pro.logoff.wms.tsd"
         minSdk = 26
         targetSdk = 35
-        versionCode = 63
-        versionName = "0.1.63"
+        versionCode = 64
+        versionName = "0.1.64"
     }
 
     signingConfigs {
@@ -47,6 +47,7 @@ android {
 
 dependencies {
     implementation("androidx.room:room-runtime:2.7.1")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     implementation("com.squareup.retrofit2:retrofit:2.11.0")
     implementation("com.squareup.retrofit2:converter-moshi:2.11.0")
     annotationProcessor("androidx.room:room-compiler:2.7.1")

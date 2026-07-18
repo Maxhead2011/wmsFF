@@ -154,4 +154,10 @@ public interface WmsApi {
         @Header("Authorization") String authorization,
         @Path("id") String id
     );
+
+    @POST("api/v1/stock/transfers/whole-box")
+    Call<Map<String, Object>> transferWholeBox(
+        @Header("Authorization") String authorization,
+        @Body Map<String, Object> request
+    );
 }

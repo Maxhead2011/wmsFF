@@ -35,6 +35,9 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import com.google.zxing.integration.android.IntentIntegrator;
+import com.google.zxing.integration.android.IntentResult;
+
 import pro.logoff.wms.tsd.auth.TsdSession;
 import pro.logoff.wms.tsd.auth.TsdSessionStore;
 import pro.logoff.wms.tsd.data.OperationOutbox;
@@ -66,8 +69,8 @@ import retrofit2.Response;
 
 public class MainActivity extends Activity {
     private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
-    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.63";
-    private static final String APP_VERSION = "0.1.63";
+    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.64";
+    private static final String APP_VERSION = "0.1.64";
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int BOX_FOUND_GREEN = Color.rgb(187, 247, 208);
     private static final int BOX_DUPLICATE_BLUE = Color.rgb(191, 219, 254);
@@ -107,6 +110,7 @@ public class MainActivity extends Activity {
     private EditText inventoryBoxInput;
     private EditText inventoryItemInput;
     private EditText inventoryQuantityInput;
+    private EditText inventoryTransferTargetInput;
     private TsdAssemblyPlan assemblyPlan;
     private TsdBoxlessPackingResponse boxlessPacking;
     private TsdRelabelTask activeRelabelTask;
@@ -115,7 +119,11 @@ public class MainActivity extends Activity {
     private TsdInventoryDashboard inventoryDashboard;
     private String inventoryType = "";
     private String inventoryClientId = "";
+    private String transferredInventoryBoxId = "";
+    private boolean inventoryTransferMode;
     private String uiLanguage = "ru";
+    private boolean phoneMode;
+    private EditText phoneCameraTarget;
     private final List<ReceiptItem> receiptCurrentItems = new ArrayList<>();
     private final Set<String> receiptSessionBoxes = new LinkedHashSet<>();
     private final Set<String> receiptKizValues = new LinkedHashSet<>();
@@ -155,6 +163,7 @@ public class MainActivity extends Activity {
             progressStore = getSharedPreferences("tsd_assembly_progress", MODE_PRIVATE);
             uiStore = getSharedPreferences("tsd_ui_preferences", MODE_PRIVATE);
             uiLanguage = uiStore.getString("language", "ru");
+            phoneMode = uiStore.getBoolean("phone_mode", false);
             if (sessionStore.load() == null) {
                 renderSettingsScreen();
             } else {
@@ -210,6 +219,24 @@ public class MainActivity extends Activity {
         return super.dispatchKeyEvent(event);
     }
 
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        IntentResult result = IntentIntegrator.parseActivityResult(requestCode, resultCode, data);
+        if (result != null) {
+            String scanned = result.getContents();
+            if (scanned != null && phoneCameraTarget != null) {
+                phoneCameraTarget.setText(scanned);
+                phoneCameraTarget.setSelection(phoneCameraTarget.length());
+                submitPhoneCameraScan();
+            } else if (scanned == null) {
+                statusMessage = tr("Сканирование отменено.", "Skanerlash bekor qilindi.");
+                refreshCurrentScreen();
+            }
+            return;
+        }
+        super.onActivityResult(requestCode, resultCode, data);
+    }
+
     private void renderMainScreen() {
         if (safeSession() == null) {
             renderSettingsScreen();
@@ -222,6 +249,12 @@ public class MainActivity extends Activity {
         root.addView(primaryMenuButton(tr("Приемка товара", "Tovarni qabul qilish"), view -> openReceipt()));
         root.addView(primaryMenuButton(tr("Сборка заявки", "Buyurtmani yig‘ish"), view -> openAssemblyRequests()));
         root.addView(primaryMenuButton(tr("Инвентаризация", "Inventarizatsiya"), view -> renderInventoryMenu()));
+        root.addView(primaryMenuButton(
+            phoneMode
+                ? tr("Телефон: камера включена", "Telefon: kamera yoqilgan")
+                : tr("Телефон", "Telefon"),
+            view -> togglePhoneMode()
+        ));
         root.addView(secondaryButton(tr("Синхронизировать очередь", "Navbatni sinxronlash") + " (" + pendingCount + ")", view -> syncPending()));
         root.addView(secondaryButton(tr("Обновить клиентов", "Mijozlarni yangilash"), view -> loadClients(true)));
         root.addView(secondaryButton(tr("Настройки / вход", "Sozlamalar / kirish"), view -> renderSettingsScreen()));
@@ -299,6 +332,8 @@ public class MainActivity extends Activity {
         inventoryDashboard = null;
         inventoryType = "";
         inventoryClientId = "";
+        transferredInventoryBoxId = "";
+        inventoryTransferMode = false;
         LinearLayout root = baseRoot();
         root.addView(header());
         root.addView(title(tr("Инвентаризация", "Inventarizatsiya")));
@@ -331,6 +366,8 @@ public class MainActivity extends Activity {
         inventoryType = type;
         activeInventory = null;
         activeInventoryBox = null;
+        transferredInventoryBoxId = "";
+        inventoryTransferMode = false;
         statusMessage = tr("Загружаю активные инвентаризации…", "Faol inventarizatsiyalar yuklanmoqda…");
         screen = Screen.INVENTORY_START;
         renderInventoryStartScreen();
@@ -502,6 +539,9 @@ public class MainActivity extends Activity {
 
     private void renderInventoryCountScreen() {
         screen = Screen.INVENTORY_COUNT;
+        inventoryBoxInput = null;
+        inventoryItemInput = null;
+        inventoryTransferTargetInput = null;
         LinearLayout root = baseRoot();
         root.addView(header());
         root.addView(title(inventoryTypeTitle()));
@@ -557,10 +597,13 @@ public class MainActivity extends Activity {
                 inventoryItemInput.requestFocus();
             } else {
                 addInventoryResult(root, activeInventoryBox);
+                addInventoryTransferAction(root, activeInventoryBox);
                 root.addView(primaryMenuButton(
                     tr("Проверить следующий короб", "Keyingi qutini tekshirish"),
                     view -> {
                         activeInventoryBox = null;
+                        transferredInventoryBoxId = "";
+                        inventoryTransferMode = false;
                         statusMessage = "";
                         reloadInventorySession(false);
                     }
@@ -653,6 +696,8 @@ public class MainActivity extends Activity {
             mainHandler.post(() -> {
                 online = true;
                 activeInventoryBox = loaded;
+                transferredInventoryBoxId = "";
+                inventoryTransferMode = false;
                 statusMessage = "";
                 renderInventoryCountScreen();
             });
@@ -720,7 +765,121 @@ public class MainActivity extends Activity {
             mainHandler.post(() -> {
                 online = true;
                 activeInventoryBox = finished;
+                inventoryTransferMode = false;
                 statusMessage = "";
+                renderInventoryCountScreen();
+            });
+        });
+    }
+
+    private void addInventoryTransferAction(LinearLayout root, TsdInventoryBox box) {
+        if ("FULL".equals(inventoryType)) {
+            return;
+        }
+        if (!"MATCHED".equals(box.status) && !"RESOLVED".equals(box.status)) {
+            root.addView(messageView(tr(
+                "Перемещение доступно после устранения расхождений.",
+                "Ko‘chirish tafovutlar bartaraf etilgandan keyin mavjud."
+            )));
+            return;
+        }
+        if (safeText(box.id).equals(transferredInventoryBoxId)) {
+            root.addView(feedbackView(
+                tr("Остаток перемещён. Исходный короб отправлен в архив.", "Qoldiq ko‘chirildi. Manba quti arxivga yuborildi."),
+                BOX_FOUND_GREEN
+            ));
+            return;
+        }
+        if (!inventoryTransferMode) {
+            root.addView(primaryMenuButton(
+                tr("Переместить эти товары в другой короб", "Bu tovarlarni boshqa qutiga ko‘chirish"),
+                view -> {
+                    inventoryTransferMode = true;
+                    statusMessage = "";
+                    renderInventoryCountScreen();
+                }
+            ));
+            return;
+        }
+
+        inventoryTransferTargetInput = input(tr(
+            "Пропикайте целевой короб (новый или существующий)",
+            "Maqsad qutini skanerlang (yangi yoki mavjud)"
+        ));
+        inventoryTransferTargetInput.setOnEditorActionListener((view, actionId, event) -> {
+            transferInventoryBox();
+            return true;
+        });
+        root.addView(inventoryTransferTargetInput);
+        root.addView(primaryMenuButton(
+            tr("Переместить весь остаток", "Barcha qoldiqni ko‘chirish"),
+            view -> transferInventoryBox()
+        ));
+        root.addView(secondaryButton(
+            tr("Отмена", "Bekor qilish"),
+            view -> {
+                inventoryTransferMode = false;
+                statusMessage = "";
+                renderInventoryCountScreen();
+            }
+        ));
+        inventoryTransferTargetInput.requestFocus();
+    }
+
+    private void transferInventoryBox() {
+        TsdSession session = safeSession();
+        if (session == null || activeInventoryBox == null || inventoryTransferTargetInput == null) {
+            return;
+        }
+        String targetBoxCode = textValue(inventoryTransferTargetInput);
+        if (!isFflBoxCode(targetBoxCode)) {
+            statusMessage = tr(
+                "Ошибка: номер целевого короба должен начинаться с FFL.",
+                "Xato: maqsad quti raqami FFL bilan boshlanishi kerak."
+            );
+            renderInventoryCountScreen();
+            return;
+        }
+        if (sameBox(activeInventoryBox.boxCode, targetBoxCode)) {
+            statusMessage = tr("Исходный и целевой короба совпадают.", "Manba va maqsad qutilar bir xil.");
+            renderInventoryCountScreen();
+            return;
+        }
+
+        String auditBoxId = activeInventoryBox.id;
+        String sourceBoxCode = activeInventoryBox.boxCode;
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("clientId", activeInventoryBox.clientId);
+        request.put("fromBoxCode", sourceBoxCode);
+        request.put("toBoxCode", targetBoxCode);
+        request.put("idempotencyKey", "tsd-inventory-consolidation:" + auditBoxId + ":" + normalizeBoxCode(targetBoxCode));
+        request.put("comment", "Объединение остатков после проверки короба " + sourceBoxCode);
+
+        statusMessage = tr("Перемещаю остаток…", "Qoldiq ko‘chirilmoqda…");
+        renderInventoryCountScreen();
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<Map<String, Object>> response = api.transferWholeBox(
+                session.authorizationHeader(),
+                request
+            ).execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException(inventoryHttpError(response));
+            }
+            Map<String, Object> result = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                inventoryTransferMode = false;
+                transferredInventoryBoxId = auditBoxId;
+                Object quantityValue = result.get("quantity");
+                int quantity = quantityValue instanceof Number ? ((Number) quantityValue).intValue() : 0;
+                boolean archived = Boolean.TRUE.equals(result.get("sourceArchived"));
+                statusMessage = tr(
+                    "Перемещено " + quantity + " шт. в короб " + targetBoxCode +
+                        (archived ? ". Исходный короб отправлен в архив." : "."),
+                    quantity + " dona " + targetBoxCode + " qutiga ko‘chirildi" +
+                        (archived ? ". Manba quti arxivga yuborildi." : ".")
+                );
                 renderInventoryCountScreen();
             });
         });
@@ -821,6 +980,7 @@ public class MainActivity extends Activity {
 
     private void renderReceiptScreen() {
         screen = Screen.RECEIPT;
+        scanInput = null;
         LinearLayout root = baseRoot();
         applyScreenFeedback(root, receiptFeedbackColor);
         root.addView(header());
@@ -1099,6 +1259,7 @@ public class MainActivity extends Activity {
 
     private void renderBoxlessPackingScreen() {
         screen = Screen.BOXLESS_PACKING;
+        scanInput = null;
         if (assemblyPlan == null || boxlessPacking == null || boxlessPacking.packingProgress == null) {
             loadAssemblyPlan(assemblyPlan == null ? "" : assemblyPlan.id);
             return;
@@ -1503,6 +1664,7 @@ public class MainActivity extends Activity {
 
     private void renderBoxSearchScreen() {
         screen = Screen.BOX_SEARCH;
+        assemblyScanInput = null;
         if (assemblyPlan == null) {
             renderAssemblyListScreen();
             return;
@@ -1649,6 +1811,7 @@ public class MainActivity extends Activity {
 
     private void renderRelabelBoxScreen() {
         screen = Screen.RELABEL_BOX;
+        assemblyScanInput = null;
         if (assemblyPlan == null || selectedRelabelBox.isEmpty()) {
             renderRelabelScreen();
             return;
@@ -1727,6 +1890,7 @@ public class MainActivity extends Activity {
 
     private void renderMovementScreen() {
         screen = Screen.MOVEMENTS;
+        assemblyScanInput = null;
         if (assemblyPlan == null) {
             renderAssemblyListScreen();
             return;
@@ -1827,6 +1991,7 @@ public class MainActivity extends Activity {
 
     private void renderOutgoingControlScreen() {
         screen = Screen.OUTGOING_CONTROL;
+        assemblyScanInput = null;
         if (assemblyPlan == null) {
             renderAssemblyListScreen();
             return;
@@ -2768,10 +2933,93 @@ public class MainActivity extends Activity {
     }
 
     private void setScrollableContent(LinearLayout root) {
+        phoneCameraTarget = activePhoneCameraTarget();
+        if (phoneMode && phoneCameraTarget != null) {
+            root.addView(primaryMenuButton(
+                tr("Сканировать камерой телефона", "Telefon kamerasi bilan skanerlash"),
+                view -> startPhoneCameraScan()
+            ));
+        }
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(false);
         scroll.addView(root);
         setContentView(scroll);
+    }
+
+    private void togglePhoneMode() {
+        phoneMode = !phoneMode;
+        uiStore.edit().putBoolean("phone_mode", phoneMode).apply();
+        statusMessage = phoneMode
+            ? tr(
+                "Режим телефона включён. На рабочих экранах используйте кнопку сканирования камерой.",
+                "Telefon rejimi yoqildi. Ish ekranlarida kamera orqali skanerlash tugmasidan foydalaning."
+            )
+            : tr("Режим аппаратного ТСД включён.", "Apparat TSD rejimi yoqildi.");
+        renderMainScreen();
+    }
+
+    private EditText activePhoneCameraTarget() {
+        if (screen == Screen.RECEIPT || screen == Screen.BOXLESS_PACKING) {
+            return scanInput;
+        }
+        if (
+            screen == Screen.BOX_SEARCH ||
+            screen == Screen.RELABEL_BOX ||
+            screen == Screen.MOVEMENTS ||
+            screen == Screen.OUTGOING_CONTROL
+        ) {
+            return assemblyScanInput;
+        }
+        if (screen == Screen.INVENTORY_COUNT) {
+            if (inventoryTransferMode && inventoryTransferTargetInput != null) {
+                return inventoryTransferTargetInput;
+            }
+            return activeInventoryBox == null ? inventoryBoxInput : inventoryItemInput;
+        }
+        return null;
+    }
+
+    private void startPhoneCameraScan() {
+        if (phoneCameraTarget == null) {
+            statusMessage = tr("На этом экране нет активного поля сканирования.", "Bu ekranda faol skanerlash maydoni yo‘q.");
+            refreshCurrentScreen();
+            return;
+        }
+        IntentIntegrator integrator = new IntentIntegrator(this);
+        integrator.setDesiredBarcodeFormats(IntentIntegrator.ALL_CODE_TYPES);
+        integrator.setPrompt(tr("Наведите камеру на штрихкод или КИЗ", "Kamerani shtrix-kod yoki KIZga qarating"));
+        integrator.setBeepEnabled(true);
+        integrator.setOrientationLocked(false);
+        integrator.initiateScan();
+    }
+
+    private void submitPhoneCameraScan() {
+        if (screen == Screen.RECEIPT) {
+            submitReceiptInput();
+        } else if (screen == Screen.BOX_SEARCH) {
+            submitBoxSearchScan();
+        } else if (screen == Screen.RELABEL_BOX) {
+            submitRelabelScan();
+        } else if (screen == Screen.MOVEMENTS) {
+            submitMovementScan();
+        } else if (screen == Screen.OUTGOING_CONTROL) {
+            submitOutgoingBoxScan();
+        } else if (screen == Screen.BOXLESS_PACKING && boxlessPacking != null && boxlessPacking.packingProgress != null) {
+            TsdBoxlessPackingResponse.PackingBox currentBox = currentBoxlessPackingBox(boxlessPacking.packingProgress);
+            if (currentBox == null) {
+                sendBoxlessPackingAction("open-box", textValue(scanInput), null);
+            } else {
+                sendBoxlessPackingAction("scan-item", textValue(scanInput), currentBox.boxCode);
+            }
+        } else if (screen == Screen.INVENTORY_COUNT) {
+            if (inventoryTransferMode) {
+                transferInventoryBox();
+            } else if (activeInventoryBox == null) {
+                openInventoryBox();
+            } else {
+                scanInventoryItem();
+            }
+        }
     }
 
     private Button primaryMenuButton(String text, View.OnClickListener listener) {

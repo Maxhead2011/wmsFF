@@ -70,7 +70,7 @@ export class InventoryService {
     ]);
 
     const totalBoxes = activeFull
-      ? await this.prisma.box.count({ where: { status: { not: 'deleted' } } })
+      ? await this.prisma.box.count({ where: { status: { notIn: ['deleted', 'archived'] } } })
       : 0;
     return {
       movementLock: activeFull
@@ -124,7 +124,7 @@ export class InventoryService {
     }
     const totalBoxes =
       session.type === InventorySessionType.FULL
-        ? await this.prisma.box.count({ where: { status: { not: 'deleted' } } })
+        ? await this.prisma.box.count({ where: { status: { notIn: ['deleted', 'archived'] } } })
         : undefined;
     return this.decorateSession(session, totalBoxes);
   }
@@ -178,7 +178,7 @@ export class InventoryService {
       where: { code: boxCode },
       include: { client: { select: { id: true, name: true } } },
     });
-    if (!box || box.status === 'deleted') {
+    if (!box || ['deleted', 'archived'].includes(box.status)) {
       throw new NotFoundException(`Короб ${boxCode} не найден.`);
     }
     if (session.clientId && session.clientId !== box.clientId) {
@@ -340,7 +340,7 @@ export class InventoryService {
     }
     if (session.type === InventorySessionType.FULL) {
       const [totalBoxes, checkedBoxes] = await Promise.all([
-        this.prisma.box.count({ where: { status: { not: 'deleted' } } }),
+        this.prisma.box.count({ where: { status: { notIn: ['deleted', 'archived'] } } }),
         this.prisma.inventoryAuditBox.count({
           where: { sessionId: id, status: { not: InventoryBoxStatus.COUNTING } },
         }),

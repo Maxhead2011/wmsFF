@@ -64,7 +64,7 @@ export class WarehouseService {
     const where: Prisma.BoxWhereInput = {
       clientId: this.clientScopes.resolveClientFilter(user, filter.clientId),
       code: filter.code ? { contains: filter.code, mode: 'insensitive' } : undefined,
-      status: { not: 'deleted' },
+      status: { notIn: ['deleted', 'archived'] },
     };
 
     return this.prisma.box.findMany({
@@ -391,7 +391,7 @@ export class WarehouseService {
         items: box.items.sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
       }));
     const resultBoxes = allBoxes
-      .filter((box) => box.status !== 'deleted')
+      .filter((box) => !['deleted', 'archived'].includes(box.status))
       .sort(compareOnlineReceiptBoxes);
     const activeBoxCodes = new Set(resultBoxes.map((box) => box.boxCode));
     const deletedBoxes = allBoxes
@@ -713,7 +713,7 @@ export class WarehouseService {
     const boxes = await this.prisma.box.findMany({
       where: {
         clientId,
-        status: { not: 'deleted' },
+        status: { notIn: ['deleted', 'archived'] },
         OR: [
           { status: 'receiving' },
           {
