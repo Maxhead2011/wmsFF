@@ -236,6 +236,7 @@ async function main() {
 
   await ensureRequests(client.id, user.id, skuDefinitions);
   const services = await ensureBillingServices(client.id, user.id);
+  await ensureGoodsArrivals(client.id, user.id);
   const charges = await ensureCharges(client.id, user.id, services);
   await ensureInvoices(client.id, user.id, charges);
   await ensureDeliveries(client.id, user.id);
@@ -417,6 +418,8 @@ async function ensureBillingServices(clientId: string, userId: string) {
     ['DEMO-LABEL', 'Маркировка', BillingUnit.PIECE, 6],
     ['DEMO-STORAGE', 'Хранение', BillingUnit.LITER_DAY, 0.08],
     ['DEMO-DELIVERY', 'Доставка', BillingUnit.SERVICE, 3200],
+    ['PPR_BAGS', 'ПРР: услуги грузчика, мешки', BillingUnit.PIECE, 35],
+    ['PPR_BOXES', 'ПРР: услуги грузчика, короба', BillingUnit.BOX, 55],
   ] as const;
   const result = new Map<string, string>();
   for (const [code, name, unit, price] of definitions) {
@@ -433,6 +436,31 @@ async function ensureBillingServices(clientId: string, userId: string) {
     });
   }
   return result;
+}
+
+async function ensureGoodsArrivals(clientId: string, userId: string) {
+  const definitions = [
+    [1, -12, 8, 14, 'Поступление летней коллекции'],
+    [2, -7, 5, 9, 'Поставка текстиля и товаров для дома'],
+    [3, -2, 3, 6, 'Пополнение остатков маркетплейса'],
+  ] as const;
+  for (const [index, day, bagCount, boxCount, comment] of definitions) {
+    const id = `d4900000-0000-4000-8000-${String(index).padStart(12, '0')}`;
+    const payload = {
+      clientId,
+      arrivalDate: daysFromNow(day).toISOString().slice(0, 10),
+      bagCount,
+      boxCount,
+      comment,
+      status: 'ACTIVE',
+      createdByName: 'Демо-пользователь',
+    };
+    await prisma.auditLog.upsert({
+      where: { id },
+      update: { userId, action: 'warehouse.goods-arrival', entity: 'goods-arrival', entityId: clientId, payload },
+      create: { id, userId, action: 'warehouse.goods-arrival', entity: 'goods-arrival', entityId: clientId, payload, createdAt: daysFromNow(day) },
+    });
+  }
 }
 
 async function ensureCharges(clientId: string, userId: string, services: Map<string, string>) {
