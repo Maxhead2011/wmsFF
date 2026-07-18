@@ -77,8 +77,8 @@ import retrofit2.Response;
 public class MainActivity extends Activity {
     private static final int CAMERA_PERMISSION_REQUEST = 4201;
     private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
-    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.67";
-    private static final String APP_VERSION = "0.1.67";
+    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.68";
+    private static final String APP_VERSION = "0.1.68";
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int BOX_FOUND_GREEN = Color.rgb(187, 247, 208);
     private static final int BOX_DUPLICATE_BLUE = Color.rgb(191, 219, 254);
@@ -665,6 +665,7 @@ public class MainActivity extends Activity {
         for (TsdInventoryLine line : box.lines) {
             int difference = line.countedQuantity - line.expectedQuantity;
             String subtitle =
+                tr("Артикул", "Artikul") + ": " + safeText(line.internalSku) + "\n" +
                 tr("ШК", "ShK") + ": " + safeText(line.barcode) + "\n" +
                 "WMS: " + line.expectedQuantity + " · " +
                 tr("Факт", "Amalda") + ": " + line.countedQuantity + " · " +
@@ -678,7 +679,7 @@ public class MainActivity extends Activity {
         int mismatches = 0;
         if (box.lines != null) {
             for (TsdInventoryLine line : box.lines) {
-                if (line.difference != 0) {
+                if (line.countedQuantity != line.expectedQuantity) {
                     mismatches++;
                 }
             }

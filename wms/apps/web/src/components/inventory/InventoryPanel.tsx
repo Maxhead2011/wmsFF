@@ -617,7 +617,7 @@ function InventoryLinesTable({
 }
 
 function BoxResult({ box }: { box: InventoryAuditBox }) {
-  const mismatches = box.lines.filter((line) => line.difference !== 0);
+  const mismatches = box.lines.filter((line) => line.countedQuantity !== line.expectedQuantity);
   return (
     <div className={`inventory-result ${mismatches.length ? 'inventory-result--bad' : 'inventory-result--ok'}`}>
       {mismatches.length ? <AlertTriangle size={22} /> : <CheckCircle2 size={22} />}
@@ -699,8 +699,8 @@ function Reconciliation({
                   <p className="eyebrow">{box.clientName}</p>
                   <h4>
                     Короб {box.boxCode}
-                    {box.lines.some((line) => line.difference !== 0)
-                      ? ` · расхождений ${box.lines.filter((line) => line.difference !== 0).length}`
+                    {box.lines.some((line) => line.countedQuantity !== line.expectedQuantity)
+                      ? ` · расхождений ${box.lines.filter((line) => line.countedQuantity !== line.expectedQuantity).length}`
                       : ' · без расхождений'}
                   </h4>
                   <p className="inventory-audit-meta">
@@ -715,13 +715,19 @@ function Reconciliation({
                 <table className="inventory-table">
                   <thead><tr><th>Товар</th><th>WMS</th><th>Факт</th><th>Разница</th><th>Результат / решение</th></tr></thead>
                   <tbody>
-                    {box.lines.map((line) => (
-                      <tr className={line.difference !== 0 ? 'inventory-table__mismatch' : undefined} key={line.id}>
-                        <td><strong>{line.skuName}</strong><small>{line.barcode || line.internalSku}</small></td>
-                        <td>{line.expectedQuantity}</td><td>{line.countedQuantity}</td>
-                        <td className={line.difference === 0 ? 'inventory-diff--ok' : 'inventory-diff--bad'}>{line.difference > 0 ? `+${line.difference}` : line.difference}</td>
+                    {box.lines.map((line) => {
+                      const difference = line.countedQuantity - line.expectedQuantity;
+                      return (
+                      <tr className={difference !== 0 ? 'inventory-table__mismatch' : undefined} key={line.id}>
                         <td>
-                          {line.difference === 0 ? (
+                          <strong>{line.skuName}</strong>
+                          <small>Артикул: {line.internalSku}</small>
+                          <small>ШК: {line.barcode || '—'}</small>
+                        </td>
+                        <td>{line.expectedQuantity}</td><td>{line.countedQuantity}</td>
+                        <td className={difference === 0 ? 'inventory-diff--ok' : 'inventory-diff--bad'}>{difference > 0 ? `+${difference}` : difference}</td>
+                        <td>
+                          {difference === 0 ? (
                             <span className="inventory-decision-done">
                               <CheckCircle2 size={15} />
                               Совпало
@@ -778,7 +784,8 @@ function Reconciliation({
                           )}
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div> : (

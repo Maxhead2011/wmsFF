@@ -253,6 +253,7 @@ export class InventoryService {
       internalSku: item.sku.internalSku,
       barcode: item.sku.barcodes.find((barcode) => barcode.isPrimary)?.value ?? item.sku.barcodes[0]?.value ?? null,
       expectedQuantity: item.total,
+      difference: -item.total,
     }));
 
     if (existing && approvedRescan) {
