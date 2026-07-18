@@ -390,31 +390,40 @@ export class WarehouseService {
         kizCount: box.kizValues.length || box.items.filter((item) => Boolean(item.kiz)).length,
         items: box.items.sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
       }));
-    const resultBoxes = allBoxes
+    const receiptBoxes = allBoxes
       .filter((box) => !['deleted', 'archived'].includes(box.status))
       .sort(compareOnlineReceiptBoxes);
+    const currentBatchDate = receiptBoxes[0]
+      ? receiptDateFromBoxCode(receiptBoxes[0].boxCode, onlineReceiptActivityDate(receiptBoxes[0]))
+      : null;
+    const resultBoxes = currentBatchDate
+      ? receiptBoxes.filter(
+          (box) => receiptDateFromBoxCode(box.boxCode, onlineReceiptActivityDate(box)) === currentBatchDate,
+        )
+      : [];
     const activeBoxCodes = new Set(resultBoxes.map((box) => box.boxCode));
     const deletedBoxes = allBoxes
       .filter((box) => box.status === 'deleted' && !activeBoxCodes.has(box.boxCode))
       .sort((left, right) => (right.deletedAt ?? right.lastSeenAt ?? '').localeCompare(left.deletedAt ?? left.lastSeenAt ?? ''));
 
     const receipts = [...new Map(resultBoxes.map((box) => [box.sourceDocument || box.key, box])).keys()].map((sourceDocument) => {
-      const receiptBoxes = resultBoxes.filter((box) => (box.sourceDocument || box.key) === sourceDocument);
+      const sourceBoxes = resultBoxes.filter((box) => (box.sourceDocument || box.key) === sourceDocument);
       return {
         sourceDocument,
-        boxes: receiptBoxes.length,
-        quantity: receiptBoxes.reduce((sum, box) => sum + box.totalQuantity, 0),
-        kizCount: receiptBoxes.reduce((sum, box) => sum + box.kizCount, 0),
-        firstSeenAt: receiptBoxes.reduce<string | null>((value, box) => minIso(value, box.firstSeenAt), null),
-        lastSeenAt: receiptBoxes.reduce<string | null>((value, box) => maxIso(value, box.lastSeenAt), null),
-        operators: [...new Set(receiptBoxes.map((box) => box.operator).filter(Boolean))],
-        devices: [...new Set(receiptBoxes.map((box) => box.deviceCode).filter(Boolean))],
+        boxes: sourceBoxes.length,
+        quantity: sourceBoxes.reduce((sum, box) => sum + box.totalQuantity, 0),
+        kizCount: sourceBoxes.reduce((sum, box) => sum + box.kizCount, 0),
+        firstSeenAt: sourceBoxes.reduce<string | null>((value, box) => minIso(value, box.firstSeenAt), null),
+        lastSeenAt: sourceBoxes.reduce<string | null>((value, box) => maxIso(value, box.lastSeenAt), null),
+        operators: [...new Set(sourceBoxes.map((box) => box.operator).filter(Boolean))],
+        devices: [...new Set(sourceBoxes.map((box) => box.deviceCode).filter(Boolean))],
       };
     });
 
     return {
       clientId,
       generatedAt: new Date().toISOString(),
+      currentBatchDate,
       receipts,
       boxes: resultBoxes,
       deletedBoxes,
@@ -662,11 +671,15 @@ export class WarehouseService {
     const clientId = stringField(dto.clientId, 'clientId');
     this.clientScopes.requireClientAccess(user, clientId, 'write');
 
-    const boxes = await this.prisma.box.findMany({
+    const requestedBatchDate = optionalString(dto.batchDate);
+    const candidateBoxes = await this.prisma.box.findMany({
       where: { clientId, status: 'receiving' },
       select: { id: true, code: true },
       orderBy: { code: 'asc' },
     });
+    const boxes = requestedBatchDate
+      ? candidateBoxes.filter((box) => receiptDateFromBoxCode(box.code, new Date()) === requestedBatchDate)
+      : candidateBoxes;
     if (boxes.length === 0) {
       return { closed: 0, boxes: [] };
     }
@@ -710,7 +723,8 @@ export class WarehouseService {
     }
 
     const todayStart = moscowDayStartUtc(new Date());
-    const boxes = await this.prisma.box.findMany({
+    const requestedBatchDate = optionalString(dto.batchDate);
+    const candidateBoxes = await this.prisma.box.findMany({
       where: {
         clientId,
         status: { notIn: ['deleted', 'archived'] },
@@ -730,6 +744,9 @@ export class WarehouseService {
       select: { id: true, code: true, status: true },
       orderBy: { code: 'asc' },
     });
+    const boxes = requestedBatchDate
+      ? candidateBoxes.filter((box) => receiptDateFromBoxCode(box.code, new Date()) === requestedBatchDate)
+      : candidateBoxes;
     if (boxes.length === 0) {
       throw new BadRequestException('Нет открытых или сегодняшних коробов приемки для завершения.');
     }

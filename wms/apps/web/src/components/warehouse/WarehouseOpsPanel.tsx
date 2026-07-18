@@ -42,9 +42,9 @@ export function WarehouseOpsPanel({ onOpenCatalog, session }: WarehouseOpsPanelP
         <GoodsArrivalPanel session={session} />
       </section>
 
-      <section className="warehouse-panel warehouse-panel--receipt-batches" aria-label="Партии приемки">
+      <section className="warehouse-panel warehouse-panel--receipt-batches" aria-label="Файлы приемки">
         <div className="section-heading warehouse-panel__heading">
-          <div><p className="eyebrow">Документы приемки</p><h2>Партии приемки</h2></div>
+          <div><p className="eyebrow">Документы приемки</p><h2>Файлы приемки</h2></div>
           <PackageCheck size={20} aria-hidden="true" />
         </div>
         <ReceiptBatchesPanel session={session} />

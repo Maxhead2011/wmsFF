@@ -2354,6 +2354,7 @@ export type WarehousePalletSummary = {
 export type OnlineReceiptOverview = {
   clientId: string;
   generatedAt: string;
+  currentBatchDate: string | null;
   receipts: Array<{
     sourceDocument: string;
     boxes: number;
@@ -4399,7 +4400,10 @@ export async function closeOnlineReceiptBox(accessToken: string, payload: Pick<O
   });
 }
 
-export async function closeAllOnlineReceiptBoxes(accessToken: string, payload: Pick<OnlineReceiptItemPayload, 'clientId' | 'comment'>) {
+export async function closeAllOnlineReceiptBoxes(
+  accessToken: string,
+  payload: Pick<OnlineReceiptItemPayload, 'clientId' | 'comment'> & { batchDate?: string },
+) {
   return request<{ closed: number; boxes: string[]; status: string }>('/warehouse/online-receipts/boxes/close-open', {
     method: 'POST',
     body: payload,
@@ -4407,7 +4411,10 @@ export async function closeAllOnlineReceiptBoxes(accessToken: string, payload: P
   });
 }
 
-export async function finishOnlineReceipt(accessToken: string, payload: Pick<OnlineReceiptItemPayload, 'clientId' | 'comment'>) {
+export async function finishOnlineReceipt(
+  accessToken: string,
+  payload: Pick<OnlineReceiptItemPayload, 'clientId' | 'comment'> & { batchDate?: string },
+) {
   return request<{
     finished: boolean;
     finishedAt: string;

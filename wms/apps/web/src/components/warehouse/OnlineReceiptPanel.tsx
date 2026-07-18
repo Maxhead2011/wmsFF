@@ -270,6 +270,7 @@ export function OnlineReceiptPanel({ fixedClientId, readOnly = false, session }:
                 action: () =>
                   closeAllOnlineReceiptBoxes(session.accessToken, {
                     clientId,
+                    batchDate: overview?.currentBatchDate ?? undefined,
                     comment: 'Массовое закрытие открытых коробов из онлайн-приемки WMS.',
                   }),
                 success: `Открытые короба закрыты: ${openBoxes.length}.`,
@@ -300,6 +301,7 @@ export function OnlineReceiptPanel({ fixedClientId, readOnly = false, session }:
                 action: () =>
                   finishOnlineReceipt(session.accessToken, {
                     clientId,
+                    batchDate: overview?.currentBatchDate ?? undefined,
                     comment: 'Приемка завершена из онлайн-приемки WMS.',
                   }),
                 success: 'Приемка завершена. Клиенту отправлено уведомление, если Telegram включен.',
@@ -318,6 +320,13 @@ export function OnlineReceiptPanel({ fixedClientId, readOnly = false, session }:
         <Stat label="КИЗ" value={totals.kiz} />
         <Stat label="Открыто" value={totals.receiving} />
       </div>
+
+      {overview?.currentBatchDate ? (
+        <p className="warehouse-inline">
+          Текущая приемка: {formatBatchDate(overview.currentBatchDate)}. При появлении короба с другой датой
+          счетчики и список начинаются заново, а предыдущая приемка остается в разделе «Файлы приемки».
+        </p>
+      ) : null}
 
       {message ? <p className="warehouse-inline">{message}</p> : null}
 
@@ -783,6 +792,11 @@ function formatDateTime(value?: string | null) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value));
+}
+
+function formatBatchDate(value: string) {
+  const [year, month, day] = value.split('-');
+  return day && month && year ? `${day}.${month}.${year}` : value;
 }
 
 function primaryBarcode(sku: SkuSummary) {

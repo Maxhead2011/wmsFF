@@ -34,7 +34,7 @@ export function ReceiptBatchesPanel({ fixedClientId, session }: { fixedClientId?
     try {
       setBatches(await fetchReceiptBatches(session.accessToken, clientId));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Не удалось загрузить партии приемки.');
+      setMessage(error instanceof Error ? error.message : 'Не удалось загрузить файлы приемки.');
     } finally {
       setLoading(false);
     }
@@ -85,7 +85,7 @@ export function ReceiptBatchesPanel({ fixedClientId, session }: { fixedClientId?
             </button>
           </div>
         ))}
-        {!loading && clientId && batches.length === 0 ? <p className="warehouse-inline">Партий приемки пока нет.</p> : null}
+        {!loading && clientId && batches.length === 0 ? <p className="warehouse-inline">Файлов приемки пока нет.</p> : null}
       </div>
     </div>
   );
