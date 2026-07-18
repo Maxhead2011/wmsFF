@@ -685,32 +685,32 @@ function Reconciliation({
       </div>
       {history.map((review) => (
         <article className="inventory-review" key={review.id}>
-          <SessionHeader current={review} />
-          {review.boxes.length === 0 ? (
-            <div className="inventory-empty inventory-empty--compact">
-              <ClipboardCheck size={22} />
-              <strong>Короба ещё не проверялись</strong>
-              <span>Сессия зафиксирована в журнале, но результатов подсчёта пока нет.</span>
-            </div>
-          ) : review.boxes.map((box) => (
-            <div className="inventory-review-box" key={box.id}>
-              <div className="inventory-box-heading">
-                <div>
-                  <p className="eyebrow">{box.clientName}</p>
-                  <h4>
-                    Короб {box.boxCode}
-                    {box.lines.some((line) => line.countedQuantity !== line.expectedQuantity)
-                      ? ` · расхождений ${box.lines.filter((line) => line.countedQuantity !== line.expectedQuantity).length}`
-                      : ' · без расхождений'}
-                  </h4>
-                  <p className="inventory-audit-meta">
-                    {box.countedByName ? `Проверил ${box.countedByName}` : 'Проверка начата'}
-                    {' · '}{formatDate(box.completedAt ?? box.startedAt)}
-                    {box.resolvedByName && box.resolvedAt ? ` · Решение: ${box.resolvedByName}, ${formatDate(box.resolvedAt)}` : ''}
-                  </p>
-                </div>
+          {review.boxes.map((box) => {
+            const mismatches = box.lines.filter((line) => line.countedQuantity !== line.expectedQuantity);
+            const missingQuantity = mismatches.reduce(
+              (sum, line) => sum + Math.max(0, line.expectedQuantity - line.countedQuantity),
+              0,
+            );
+            const excessQuantity = mismatches.reduce(
+              (sum, line) => sum + Math.max(0, line.countedQuantity - line.expectedQuantity),
+              0,
+            );
+            return (
+            <details className="inventory-review-box" key={box.id}>
+              <summary className="inventory-review-box__summary">
+                <strong>Короб {box.boxCode}</strong>
+                <span className={mismatches.length ? 'inventory-review-box__mismatch' : 'inventory-review-box__matched'}>
+                  {mismatches.length
+                    ? `Расхождения: ${mismatches.length} поз. · недостача ${missingQuantity} шт.${excessQuantity ? ` · излишек ${excessQuantity} шт.` : ''}`
+                    : 'Без расхождений'}
+                </span>
+                <span className="inventory-review-box__meta">
+                  {box.countedByName ? box.countedByName : 'Проверка начата'}
+                  {' · '}{formatDate(box.completedAt ?? box.startedAt)}
+                </span>
                 <span className={`inventory-status inventory-status--${box.status.toLowerCase()}`}>{boxStatusLabel(box.status)}</span>
-              </div>
+              </summary>
+              <div className="inventory-review-box__details">
               {box.lines.length > 0 ? <div className="inventory-table-wrap">
                 <table className="inventory-table">
                   <thead><tr><th>Товар</th><th>WMS</th><th>Факт</th><th>Разница</th><th>Результат / решение</th></tr></thead>
@@ -791,8 +791,10 @@ function Reconciliation({
               </div> : (
                 <p className="inventory-box-empty">В коробе не зафиксировано товарных позиций.</p>
               )}
-            </div>
-          ))}
+              </div>
+            </details>
+            );
+          })}
           {dashboard.canManage && review.status === 'REVIEW' ? <div className="inventory-session__actions">
             <button
               className="primary-button"

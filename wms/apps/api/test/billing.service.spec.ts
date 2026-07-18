@@ -192,6 +192,27 @@ describe('BillingService', () => {
     );
   });
 
+  it('hides invoices of demo clients from administrators', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const prisma = { billingInvoice: { findMany } };
+    const service = new BillingService(prisma as never, clientScopes());
+
+    await service.listInvoices(
+      {},
+      user({
+        roleCodes: ['ADMIN'],
+        permissionCodes: ['system:admin', 'billing:read'],
+        clientScopeMode: 'ALL',
+      }),
+    );
+
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        client: { isDemo: false },
+      }),
+    }));
+  });
+
   it('СЃС‡РёС‚Р°РµС‚ С…СЂР°РЅРµРЅРёРµ СЃ РґРЅСЏ РїРѕСЃР»Рµ РїСЂРёРµРјРєРё Рё РґРѕ РґРЅСЏ РѕС‚РіСЂСѓР·РєРё РІРєР»СЋС‡РёС‚РµР»СЊРЅРѕ', async () => {
     const prisma = {
       client: {

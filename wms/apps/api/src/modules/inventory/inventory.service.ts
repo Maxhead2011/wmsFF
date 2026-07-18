@@ -61,7 +61,7 @@ export class InventoryService {
         take: 30,
       }),
       this.prisma.inventorySession.findMany({
-        where: {},
+        where: { boxes: { some: {} } },
         include: sessionInclude,
         orderBy: { updatedAt: 'desc' },
         take: 100,
@@ -422,9 +422,18 @@ export class InventoryService {
 
   async sendToReview(id: string, user: AuthUser) {
     const session = await this.requireActiveSession(id);
-    const counting = await this.prisma.inventoryAuditBox.count({ where: { sessionId: id, status: InventoryBoxStatus.COUNTING } });
+    const [counting, auditedBoxes] = await Promise.all([
+      this.prisma.inventoryAuditBox.count({ where: { sessionId: id, status: InventoryBoxStatus.COUNTING } }),
+      this.prisma.inventoryAuditBox.count({ where: { sessionId: id } }),
+    ]);
     if (counting > 0) {
       throw new BadRequestException('Сначала завершите подсчёт во всех открытых коробах.');
+    }
+    if (session.type !== InventorySessionType.FULL && auditedBoxes === 0) {
+      return this.prisma.inventorySession.delete({
+        where: { id },
+        include: sessionInclude,
+      });
     }
     if (session.type === InventorySessionType.BOX_CHECK) {
       const unresolved = await this.prisma.inventoryAuditLine.count({

@@ -32,7 +32,11 @@ describe('InventoryService box checks', () => {
         }),
         update,
       },
-      inventoryAuditBox: { count: vi.fn().mockResolvedValue(0) },
+      inventoryAuditBox: {
+        count: vi.fn().mockImplementation(({ where }) =>
+          Promise.resolve(where.status === InventoryBoxStatus.COUNTING ? 0 : 1),
+        ),
+      },
       inventoryAuditLine: { count: vi.fn().mockResolvedValue(2) },
     };
     const service = new InventoryService(prisma as never, {} as never, {} as never);
@@ -42,6 +46,31 @@ describe('InventoryService box checks', () => {
     expect(update).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ status: InventorySessionStatus.REVIEW, completedAt: null }),
     }));
+  });
+
+  it('deletes an empty box-check session when it is finished', async () => {
+    const remove = vi.fn().mockResolvedValue({ id: 'session-empty', boxes: [] });
+    const update = vi.fn();
+    const prisma = {
+      inventorySession: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'session-empty',
+          type: InventorySessionType.BOX_CHECK,
+          status: InventorySessionStatus.ACTIVE,
+        }),
+        delete: remove,
+        update,
+      },
+      inventoryAuditBox: { count: vi.fn().mockResolvedValue(0) },
+    };
+    const service = new InventoryService(prisma as never, {} as never, {} as never);
+
+    await service.sendToReview('session-empty', manager);
+
+    expect(remove).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'session-empty' },
+    }));
+    expect(update).not.toHaveBeenCalled();
   });
 
   it('allows a manager to resolve a mismatch from an already completed box check', async () => {

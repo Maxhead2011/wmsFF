@@ -178,6 +178,7 @@ export class BillingService {
     const invoices = await this.prisma.billingInvoice.findMany({
       where: {
         clientId: this.clientScopes.resolveClientFilter(user, query.clientId),
+        client: isBillingAdministrator(user) ? { isDemo: false } : undefined,
         status: { not: BillingInvoiceStatus.CANCELLED },
         periodFrom: periodFrom ? { gte: periodFrom } : undefined,
         periodTo: periodTo ? { lte: periodTo } : undefined,
@@ -494,6 +495,7 @@ export class BillingService {
   listInvoices(query: ListBillingInvoicesDto, user: AuthUser) {
     const where: Prisma.BillingInvoiceWhereInput = {
       clientId: this.clientScopes.resolveClientFilter(user, query.clientId),
+      client: isBillingAdministrator(user) ? { isDemo: false } : undefined,
       status: query.status,
       periodFrom: query.periodFrom ? { gte: parseDate(query.periodFrom) } : undefined,
       periodTo: query.periodTo ? { lte: parseDate(query.periodTo, 'endOfDay') } : undefined,
@@ -1137,6 +1139,13 @@ export class BillingService {
 }
 
 const STORAGE_SERVICE_CODE = 'STORAGE_LITER_DAY';
+
+function isBillingAdministrator(user: AuthUser) {
+  return (
+    user.permissionCodes.includes('system:admin') ||
+    user.roleCodes.some((role) => role === 'ADMIN' || role === 'OWNER')
+  );
+}
 
 const STANDARD_BILLING_SERVICES = [
   {
