@@ -1,7 +1,8 @@
 package pro.logoff.wms.tsd;
 
+import android.Manifest;
 import android.app.Activity;
-import android.content.ActivityNotFoundException;
+import android.app.Dialog;
 import android.content.SharedPreferences;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -16,6 +17,7 @@ import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
+import android.view.Window;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
@@ -37,8 +39,9 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import com.google.zxing.integration.android.IntentIntegrator;
-import com.google.zxing.integration.android.IntentResult;
+import com.journeyapps.barcodescanner.BarcodeCallback;
+import com.journeyapps.barcodescanner.BarcodeResult;
+import com.journeyapps.barcodescanner.DecoratedBarcodeView;
 
 import pro.logoff.wms.tsd.auth.TsdSession;
 import pro.logoff.wms.tsd.auth.TsdSessionStore;
@@ -70,9 +73,10 @@ import pro.logoff.wms.tsd.sync.TsdSyncSummary;
 import retrofit2.Response;
 
 public class MainActivity extends Activity {
+    private static final int CAMERA_PERMISSION_REQUEST = 4201;
     private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
-    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.65";
-    private static final String APP_VERSION = "0.1.65";
+    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.66";
+    private static final String APP_VERSION = "0.1.66";
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int BOX_FOUND_GREEN = Color.rgb(187, 247, 208);
     private static final int BOX_DUPLICATE_BLUE = Color.rgb(191, 219, 254);
@@ -126,6 +130,8 @@ public class MainActivity extends Activity {
     private String uiLanguage = "ru";
     private boolean phoneMode;
     private EditText phoneCameraTarget;
+    private Dialog phoneScannerDialog;
+    private DecoratedBarcodeView phoneBarcodeView;
     private final List<ReceiptItem> receiptCurrentItems = new ArrayList<>();
     private final Set<String> receiptSessionBoxes = new LinkedHashSet<>();
     private final Set<String> receiptKizValues = new LinkedHashSet<>();
@@ -222,21 +228,41 @@ public class MainActivity extends Activity {
     }
 
     @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        IntentResult result = IntentIntegrator.parseActivityResult(requestCode, resultCode, data);
-        if (result != null) {
-            String scanned = result.getContents();
-            if (scanned != null && phoneCameraTarget != null) {
-                phoneCameraTarget.setText(scanned);
-                phoneCameraTarget.setSelection(phoneCameraTarget.length());
-                submitPhoneCameraScan();
-            } else if (scanned == null) {
-                statusMessage = tr("Сканирование отменено.", "Skanerlash bekor qilindi.");
-                refreshCurrentScreen();
-            }
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != CAMERA_PERMISSION_REQUEST) {
             return;
         }
-        super.onActivityResult(requestCode, resultCode, data);
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            openPhoneCameraDialog();
+            return;
+        }
+        statusMessage = tr(
+            "Доступ к камере запрещён. Разрешите камеру в настройках приложения.",
+            "Kameraga kirish taqiqlangan. Ilova sozlamalarida kameraga ruxsat bering."
+        );
+        refreshCurrentScreen();
+    }
+
+    @Override
+    protected void onPause() {
+        if (phoneBarcodeView != null) {
+            phoneBarcodeView.pause();
+        }
+        super.onPause();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (
+            phoneBarcodeView != null &&
+            phoneScannerDialog != null &&
+            phoneScannerDialog.isShowing() &&
+            checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        ) {
+            phoneBarcodeView.resume();
+        }
     }
 
     private void renderMainScreen() {
@@ -2992,21 +3018,80 @@ public class MainActivity extends Activity {
             refreshCurrentScreen();
             return;
         }
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST);
+            return;
+        }
+        openPhoneCameraDialog();
+    }
+
+    private void openPhoneCameraDialog() {
+        if (phoneScannerDialog != null && phoneScannerDialog.isShowing()) {
+            return;
+        }
         try {
-            IntentIntegrator integrator = new IntentIntegrator(this);
-            integrator.setCaptureActivity(PhoneScannerActivity.class);
-            integrator.setDesiredBarcodeFormats(IntentIntegrator.ALL_CODE_TYPES);
-            integrator.setPrompt(tr("Наведите камеру на штрихкод или КИЗ", "Kamerani shtrix-kod yoki KIZga qarating"));
-            integrator.setBeepEnabled(true);
-            integrator.setOrientationLocked(false);
-            integrator.initiateScan();
-        } catch (ActivityNotFoundException | SecurityException error) {
-            statusMessage = tr(
-                "Не удалось открыть камеру. Проверьте разрешение камеры в настройках приложения.",
-                "Kamerani ochib bo‘lmadi. Ilova sozlamalarida kamera ruxsatini tekshiring."
+            Dialog dialog = new Dialog(this);
+            LinearLayout content = new LinearLayout(this);
+            content.setOrientation(LinearLayout.VERTICAL);
+            content.setPadding(dp(12), dp(12), dp(12), dp(12));
+            content.setBackgroundColor(Color.BLACK);
+
+            DecoratedBarcodeView barcodeView = new DecoratedBarcodeView(this);
+            barcodeView.setStatusText(tr(
+                "Наведите камеру на штрихкод или КИЗ",
+                "Kamerani shtrix-kod yoki KIZga qarating"
+            ));
+            content.addView(
+                barcodeView,
+                new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
             );
-            refreshCurrentScreen();
-        } catch (RuntimeException error) {
+
+            Button closeButton = secondaryButton(tr("Закрыть камеру", "Kamerani yopish"), view -> dialog.dismiss());
+            content.addView(closeButton);
+            dialog.setContentView(content);
+            dialog.setCancelable(true);
+            dialog.setOnDismissListener(ignored -> {
+                barcodeView.pause();
+                phoneBarcodeView = null;
+                phoneScannerDialog = null;
+            });
+
+            phoneScannerDialog = dialog;
+            phoneBarcodeView = barcodeView;
+            barcodeView.decodeSingle(new BarcodeCallback() {
+                @Override
+                public void barcodeResult(BarcodeResult result) {
+                    String scanned = result == null ? null : result.getText();
+                    if (scanned == null || scanned.trim().isEmpty()) {
+                        return;
+                    }
+                    EditText target = phoneCameraTarget;
+                    dialog.dismiss();
+                    if (target == null) {
+                        return;
+                    }
+                    target.setText(scanned);
+                    target.setSelection(target.length());
+                    submitPhoneCameraScan();
+                }
+
+                @Override
+                public void possibleResultPoints(List<com.google.zxing.ResultPoint> resultPoints) {
+                    // Preview hints are intentionally ignored.
+                }
+            });
+            dialog.show();
+            Window window = dialog.getWindow();
+            if (window != null) {
+                window.setLayout(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT);
+            }
+            barcodeView.resume();
+        } catch (Throwable error) {
+            if (phoneScannerDialog != null) {
+                phoneScannerDialog.dismiss();
+            }
+            phoneBarcodeView = null;
+            phoneScannerDialog = null;
             statusMessage = tr(
                 "Камера временно недоступна. Закройте другие приложения с камерой и повторите.",
                 "Kamera vaqtincha ishlamayapti. Kameradan foydalanayotgan boshqa ilovalarni yoping va qayta urinib ko‘ring."
