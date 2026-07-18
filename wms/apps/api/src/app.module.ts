@@ -11,6 +11,7 @@ import { PermissionsGuard } from './modules/auth/guards/permissions.guard';
 import { HealthController } from './modules/health/health.controller';
 import { ClientsModule } from './modules/clients/clients.module';
 import { ImportsModule } from './modules/imports/imports.module';
+import { InventoryModule } from './modules/inventory/inventory.module';
 import { LogisticsModule } from './modules/logistics/logistics.module';
 import { MarketplaceConnectionsModule } from './modules/marketplace-connections/marketplace-connections.module';
 import { MobileModule } from './modules/mobile/mobile.module';
@@ -43,6 +44,7 @@ import { WarehouseModule } from './modules/warehouse/warehouse.module';
     MobileModule,
     OwnCompaniesModule,
     ImportsModule,
+    InventoryModule,
     PrintModule,
     ServiceCenterModule,
     TsdModule,

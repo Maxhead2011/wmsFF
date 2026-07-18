@@ -16,6 +16,7 @@ import {
   TsdOperationStatus,
 } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { RequestBillingAutomationService } from '../billing/request-billing-automation.service';
@@ -104,10 +105,12 @@ export class StockOperationsService {
     private readonly balances: StockBalancesService,
     private readonly billingAutomation?: RequestBillingAutomationService,
     private readonly logistics?: LogisticsService,
+    private readonly inventoryLock?: InventoryLockService,
   ) {}
 
-  transferBetweenBoxes(dto: TransferBetweenBoxesDto, user: AuthUser) {
+  async transferBetweenBoxes(dto: TransferBetweenBoxesDto, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+    await this.inventoryLock?.assertStockMovementsAllowed();
 
     return this.prisma.$transaction((tx) => this.applyTransferBetweenBoxes(tx, dto));
   }
@@ -120,6 +123,7 @@ export class StockOperationsService {
 
   async commitBoxTransfersXlsx(clientId: string, file: Express.Multer.File | undefined, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, clientId, 'write');
+    await this.inventoryLock?.assertStockMovementsAllowed();
     const parsedRows = parseBoxTransferImportRows(file);
     const batchId = randomUUID();
     const sourceFileName = fileName(file);
@@ -246,6 +250,7 @@ export class StockOperationsService {
       throw new NotFoundException('Файл перемещений не найден.');
     }
     this.clientScopes.requireClientAccess(user, existing.clientId, 'write');
+    await this.inventoryLock?.assertStockMovementsAllowed();
 
     return this.prisma.$transaction(
       async (tx) => {
@@ -487,7 +492,8 @@ export class StockOperationsService {
     };
   }
 
-  pickClientRequest(dto: PickClientRequestDto, user: AuthUser) {
+  async pickClientRequest(dto: PickClientRequestDto, user: AuthUser) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
     const baseKey = dto.idempotencyKey ?? `pick-request:${dto.requestId}`;
 
     return this.prisma.$transaction(async (tx) => {
@@ -605,7 +611,8 @@ export class StockOperationsService {
     });
   }
 
-  packageClientRequest(dto: FulfillClientRequestDto, user: AuthUser) {
+  async packageClientRequest(dto: FulfillClientRequestDto, user: AuthUser) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
     const baseKey = dto.idempotencyKey ?? `pack-request:${dto.requestId}`;
 
     return this.prisma.$transaction(async (tx) => {
@@ -688,6 +695,7 @@ export class StockOperationsService {
   }
 
   async shipClientRequest(dto: FulfillClientRequestDto, user: AuthUser) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
     const baseKey = dto.idempotencyKey ?? `ship-request:${dto.requestId}`;
 
     const result = await this.prisma.$transaction(async (tx) => {
@@ -815,6 +823,7 @@ export class StockOperationsService {
   }
 
   async shipClientRequestFromCurrentStock(dto: FulfillClientRequestDto, user: AuthUser) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
     const baseKey = dto.idempotencyKey ?? `manual-ship-request:${dto.requestId}`;
 
     const result = await this.prisma.$transaction(async (tx) => {
@@ -959,8 +968,9 @@ export class StockOperationsService {
     }
   }
 
-  receiveIntoBox(dto: ReceiveIntoBoxInput, user: AuthUser) {
+  async receiveIntoBox(dto: ReceiveIntoBoxInput, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+    await this.inventoryLock?.assertStockMovementsAllowed();
 
     return this.prisma.$transaction(async (tx) => {
       const existingMovement = await tx.stockMovement.findUnique({
@@ -1058,8 +1068,9 @@ export class StockOperationsService {
     });
   }
 
-  adjustInventoryToCounted(dto: AdjustInventoryInput, user: AuthUser) {
+  async adjustInventoryToCounted(dto: AdjustInventoryInput, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+    await this.inventoryLock?.assertStockMovementsAllowed();
 
     return this.prisma.$transaction(async (tx) => {
       const existingMovement = await tx.stockMovement.findUnique({

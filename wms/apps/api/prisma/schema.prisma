@@ -92,6 +92,32 @@ enum StockStatus {
   NEEDS_RELABEL
 }
 
+enum InventorySessionType {
+  FULL
+  PARTIAL
+  BOX_CHECK
+}
+
+enum InventorySessionStatus {
+  ACTIVE
+  REVIEW
+  COMPLETED
+  CANCELLED
+}
+
+enum InventoryBoxStatus {
+  COUNTING
+  MATCHED
+  MISMATCH
+  RESOLVED
+}
+
+enum InventoryLineDecision {
+  PENDING
+  APPLY_ACTUAL
+  KEEP_SYSTEM
+}
+
 enum VolumeSource {
   MANUAL
   CALCULATED
@@ -785,6 +811,75 @@ model StockBalance {
 
   @@index([clientId, skuId, status])
   @@index([boxId])
+}
+
+model InventorySession {
+  id                String                 @id @default(uuid())
+  type              InventorySessionType
+  status            InventorySessionStatus @default(ACTIVE)
+  clientId          String?
+  title             String
+  comment           String?
+  createdByUserId   String
+  createdByName     String
+  completedByUserId String?
+  completedByName   String?
+  startedAt         DateTime               @default(now())
+  completedAt       DateTime?
+  boxes             InventoryAuditBox[]
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  @@index([type, status])
+  @@index([clientId, createdAt])
+}
+
+model InventoryAuditBox {
+  id              String             @id @default(uuid())
+  sessionId       String
+  boxId           String
+  boxCode         String
+  clientId        String
+  clientName      String
+  status          InventoryBoxStatus @default(COUNTING)
+  countedByUserId String?
+  countedByName   String?
+  startedAt       DateTime           @default(now())
+  completedAt     DateTime?
+  resolvedAt      DateTime?
+  resolvedByName  String?
+  comment         String?
+  session         InventorySession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  lines           InventoryAuditLine[]
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@unique([sessionId, boxId])
+  @@index([sessionId, status])
+  @@index([boxCode])
+}
+
+model InventoryAuditLine {
+  id               String                @id @default(uuid())
+  auditBoxId       String
+  skuId            String
+  skuName          String
+  internalSku      String
+  barcode          String?
+  expectedQuantity Int
+  countedQuantity  Int                   @default(0)
+  difference       Int                   @default(0)
+  decision         InventoryLineDecision @default(PENDING)
+  decisionComment  String?
+  decidedByUserId  String?
+  decidedByName    String?
+  decidedAt        DateTime?
+  auditBox         InventoryAuditBox     @relation(fields: [auditBoxId], references: [id], onDelete: Cascade)
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  @@unique([auditBoxId, skuId])
+  @@index([auditBoxId, decision])
 }
 
 model ClientRequest {

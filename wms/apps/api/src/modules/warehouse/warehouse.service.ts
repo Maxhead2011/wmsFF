@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { BillingUnit, MovementType, Prisma, StockStatus, TsdOperationStatus, TsdReviewReason } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { BillingService } from '../billing/billing.service';
@@ -21,6 +22,7 @@ export class WarehouseService {
     private readonly stockOperations: StockOperationsService,
     private readonly telegram: TelegramNotificationService,
     private readonly billing: BillingService,
+    private readonly inventoryLock?: InventoryLockService,
   ) {}
 
   listWarehouses() {
@@ -609,6 +611,7 @@ export class WarehouseService {
   }
 
   async openOnlineReceiptBox(dto: Record<string, unknown>, user: AuthUser) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
     const clientId = stringField(dto.clientId, 'clientId');
     const boxCode = requireFflBoxCode(stringField(dto.boxCode, 'boxCode'));
     const sourceDocument = optionalString(dto.sourceDocument) || `WEB-RECEIPT-${dateStamp()}-${boxCode}`;
@@ -650,10 +653,12 @@ export class WarehouseService {
   }
 
   async closeOnlineReceiptBox(dto: Record<string, unknown>, user: AuthUser) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
     return this.setOnlineReceiptBoxStatus(dto, user, 'active');
   }
 
   async closeOpenOnlineReceiptBoxes(dto: Record<string, unknown>, user: AuthUser) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
     const clientId = stringField(dto.clientId, 'clientId');
     this.clientScopes.requireClientAccess(user, clientId, 'write');
 
@@ -692,6 +697,7 @@ export class WarehouseService {
   }
 
   async finishOnlineReceipt(dto: Record<string, unknown>, user: AuthUser) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
     const clientId = stringField(dto.clientId, 'clientId');
     this.clientScopes.requireClientAccess(user, clientId, 'write');
 
@@ -858,6 +864,7 @@ export class WarehouseService {
   }
 
   async deleteOnlineReceiptBox(dto: Record<string, unknown>, user: AuthUser) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
     const clientId = stringField(dto.clientId, 'clientId');
     const boxCode = requireFflBoxCode(stringField(dto.boxCode, 'boxCode'));
     this.clientScopes.requireClientAccess(user, clientId, 'write');
@@ -907,6 +914,7 @@ export class WarehouseService {
   }
 
   async restoreOnlineReceiptBox(dto: Record<string, unknown>, user: AuthUser) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
     const clientId = stringField(dto.clientId, 'clientId');
     const boxCode = requireFflBoxCode(stringField(dto.boxCode, 'boxCode'));
     this.clientScopes.requireClientAccess(user, clientId, 'write');
@@ -972,6 +980,7 @@ export class WarehouseService {
   }
 
   async addOnlineReceiptItem(dto: Record<string, unknown>, user: AuthUser) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
     const clientId = stringField(dto.clientId, 'clientId');
     const boxCode = requireFflBoxCode(stringField(dto.boxCode, 'boxCode'));
     const barcode = optionalString(dto.barcode);
@@ -1021,6 +1030,7 @@ export class WarehouseService {
   }
 
   async updateOnlineReceiptItem(id: string, dto: Record<string, unknown>, user: AuthUser) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
     const quantity = dto.quantity === undefined ? undefined : positiveInteger(dto.quantity, 'quantity');
     const kiz = dto.kiz === undefined ? undefined : optionalString(dto.kiz) ?? '';
     validateReceiptKiz(kiz || undefined);
@@ -1088,6 +1098,7 @@ export class WarehouseService {
   }
 
   async deleteOnlineReceiptItem(id: string, dto: Record<string, unknown>, user: AuthUser) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
     return this.prisma.$transaction(async (tx) => {
       const movement = await tx.stockMovement.findUnique({
         where: { id },

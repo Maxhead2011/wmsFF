@@ -12,6 +12,7 @@ import {
 } from '@prisma/client';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { RequestBillingAutomationService } from '../billing/request-billing-automation.service';
@@ -139,9 +140,11 @@ export class ClientRequestEmergencyService {
     private readonly clientScopes: ClientScopeService,
     private readonly logistics?: LogisticsService,
     private readonly billingAutomation?: RequestBillingAutomationService,
+    private readonly inventoryLock?: InventoryLockService,
   ) {}
 
   async closeFromPackedXlsx(requestId: string, file: Express.Multer.File | undefined, user: AuthUser) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
     validateFile(file);
     requireEmergencyAccess(user);
     const boxCodes = parseEmergencyBoxCodes(file!.buffer);
@@ -395,6 +398,7 @@ export class ClientRequestEmergencyService {
   }
 
   async rollbackPackedXlsx(requestId: string, user: AuthUser) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
     requireEmergencyAccess(user);
     const requestAccess = await this.prisma.clientRequest.findUnique({
       where: { id: requestId },

@@ -2,6 +2,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma, StockStatus } from '@prisma/client';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { LogisticsService } from '../logistics/logistics.service';
@@ -48,6 +49,7 @@ export class ImportsService {
     private readonly balances: StockBalancesService,
     private readonly clientScopes: ClientScopeService,
     private readonly logistics: LogisticsService,
+    private readonly inventoryLock?: InventoryLockService,
   ) {}
 
   async previewStockWorkbook(buffer: Buffer, clientId: string, user: AuthUser) {
@@ -106,6 +108,7 @@ export class ImportsService {
   }
 
   async commitStockWorkbook(buffer: Buffer, options: CommitStockOptions) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
     this.clientScopes.requireClientAccess(options.user, options.clientId, 'write');
 
     const parsed = await this.parseStockWorkbookWithCatalog(buffer, options.clientId);
@@ -171,6 +174,7 @@ export class ImportsService {
   }
 
   async commitReceiptWorkbook(buffer: Buffer, options: CommitStockOptions) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
     this.clientScopes.requireClientAccess(options.user, options.clientId, 'write');
 
     const rows = this.readReceiptSheet(buffer);

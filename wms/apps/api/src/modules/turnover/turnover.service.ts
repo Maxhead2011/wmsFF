@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { ClientRequestStatus, ClientRequestType, MovementType, Prisma, StockStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { ListTurnoverDto, TurnoverBoxDetailsDto, TurnoverStatisticsDto, TurnoverStockExportDto, TurnoverSuggestionsDto } from './dto/list-turnover.dto';
@@ -209,6 +210,7 @@ export class TurnoverService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly clientScopes: ClientScopeService,
+    private readonly inventoryLock?: InventoryLockService,
   ) {}
 
   async list(query: ListTurnoverDto, user: AuthUser) {
@@ -674,6 +676,7 @@ export class TurnoverService {
   }
 
   async runAction(dto: TurnoverActionDto, user: AuthUser) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
     const idempotencyKey = dto.idempotencyKey?.trim() || `turnover:${dto.action}:${randomUUID()}`;
 

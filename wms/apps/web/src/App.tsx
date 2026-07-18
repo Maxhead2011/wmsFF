@@ -11,6 +11,7 @@ import { DashboardDataPanel } from './components/DashboardDataPanel';
 import { DebugPanel } from './components/debug/DebugPanel';
 import { DirectoryPanel } from './components/directories/DirectoryPanel';
 import { ImportPanel } from './components/imports/ImportPanel';
+import { InventoryPanel } from './components/inventory/InventoryPanel';
 import { LogisticsQuotePanel } from './components/logistics/LogisticsQuotePanel';
 import { OwnCompaniesPanel } from './components/own-companies/OwnCompaniesPanel';
 import { PrintPanel } from './components/print/PrintPanel';
@@ -235,6 +236,8 @@ function renderWorkspace(
       return <LogisticsQuotePanel session={session} />;
     case 'warehouse':
       return <WarehouseOpsPanel session={session} />;
+    case 'inventory':
+      return <InventoryPanel session={session} />;
     case 'turnover':
       return <TurnoverPanel session={session} />;
     case 'requests':
@@ -350,7 +353,7 @@ function sectionForWorkspace(id: WorkspaceId): WorkspaceSection {
     return 'client';
   }
 
-  if (id === 'warehouse' || id === 'turnover' || id === 'imports' || id === 'logistics' || id === 'print') {
+  if (id === 'warehouse' || id === 'inventory' || id === 'turnover' || id === 'imports' || id === 'logistics' || id === 'print') {
     return 'operations';
   }
 

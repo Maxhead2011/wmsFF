@@ -4,6 +4,7 @@ import {
   Boxes,
   Bug,
   Calculator,
+  ClipboardCheck,
   ClipboardList,
   Database,
   FolderCog,
@@ -28,6 +29,7 @@ export type WorkspaceId =
   | 'imports'
   | 'logistics'
   | 'warehouse'
+  | 'inventory'
   | 'turnover'
   | 'requests'
   | 'catalog'
@@ -101,6 +103,17 @@ export const workspaceNav: WorkspaceNavItem[] = [
     permissions: ['warehouse:read', 'warehouse:write', 'stock:write'],
     icon: Boxes,
     status: 'in-progress',
+    audience: 'internal',
+  },
+  {
+    id: 'inventory',
+    title: 'Инвентаризация',
+    eyebrow: 'Складской контроль',
+    description: 'Полная и частичная инвентаризация, проверка коробов и актуализация расхождений.',
+    permissions: ['stock:read', 'stock:write'],
+    permissionMode: 'all',
+    icon: ClipboardCheck,
+    status: 'ready',
     audience: 'internal',
   },
   {

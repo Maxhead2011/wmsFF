@@ -54,6 +54,76 @@ export type ClientKind = 'LEGAL_ENTITY' | 'INDIVIDUAL_ENTREPRENEUR' | 'SELF_EMPL
 
 export type ClientStatus = 'ACTIVE' | 'PAUSED' | 'ARCHIVED';
 
+export type InventorySessionType = 'FULL' | 'PARTIAL' | 'BOX_CHECK';
+export type InventorySessionStatus = 'ACTIVE' | 'REVIEW' | 'COMPLETED' | 'CANCELLED';
+export type InventoryBoxStatus = 'COUNTING' | 'MATCHED' | 'MISMATCH' | 'RESOLVED';
+export type InventoryLineDecision = 'PENDING' | 'APPLY_ACTUAL' | 'KEEP_SYSTEM';
+
+export type InventoryAuditLine = {
+  id: string;
+  skuId: string;
+  skuName: string;
+  internalSku: string;
+  barcode: string | null;
+  expectedQuantity: number;
+  countedQuantity: number;
+  difference: number;
+  decision: InventoryLineDecision;
+  decisionComment: string | null;
+  decidedByName: string | null;
+  decidedAt: string | null;
+};
+
+export type InventoryAuditBox = {
+  id: string;
+  sessionId: string;
+  boxId: string;
+  boxCode: string;
+  clientId: string;
+  clientName: string;
+  status: InventoryBoxStatus;
+  countedByName: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  resolvedAt: string | null;
+  resolvedByName: string | null;
+  lines: InventoryAuditLine[];
+};
+
+export type InventorySession = {
+  id: string;
+  type: InventorySessionType;
+  status: InventorySessionStatus;
+  clientId: string | null;
+  title: string;
+  comment: string | null;
+  createdByName: string;
+  completedByName: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  boxes: InventoryAuditBox[];
+  progress?: {
+    totalBoxes: number | null;
+    checkedBoxes: number;
+    mismatchBoxes: number;
+    unresolvedLines: number;
+  };
+};
+
+export type InventoryDashboard = {
+  movementLock: {
+    active: boolean;
+    sessionId?: string;
+    title?: string;
+    startedAt?: string;
+    createdByName?: string;
+  };
+  activeFull: InventorySession | null;
+  activeSessions: InventorySession[];
+  reviewSessions: InventorySession[];
+  canManage: boolean;
+};
+
 export type ClientLogisticsInvoiceMode = 'SEPARATE' | 'SAME_INVOICE' | 'DISABLED';
 
 export type ClientStorageBillingMode = 'MONTHLY' | 'ON_SHIPMENT';
@@ -3594,6 +3664,88 @@ export async function createManualBillingInvoice(accessToken: string, payload: C
   return request<BillingInvoiceSummary>('/billing/invoices/manual', {
     method: 'POST',
     body: payload,
+    accessToken,
+  });
+}
+
+export function fetchInventoryDashboard(accessToken: string) {
+  return request<InventoryDashboard>('/inventory/dashboard', { accessToken });
+}
+
+export function fetchInventorySession(accessToken: string, id: string) {
+  return request<InventorySession>(`/inventory/sessions/${id}`, { accessToken });
+}
+
+export function startInventorySession(
+  accessToken: string,
+  payload: { type: InventorySessionType; clientId?: string; title?: string; comment?: string },
+) {
+  return request<InventorySession>('/inventory/sessions', { method: 'POST', body: payload, accessToken });
+}
+
+export function openInventoryBox(accessToken: string, sessionId: string, boxCode: string) {
+  return request<InventoryAuditBox>(`/inventory/sessions/${sessionId}/boxes/open`, {
+    method: 'POST',
+    body: { boxCode },
+    accessToken,
+  });
+}
+
+export function scanInventoryItem(accessToken: string, auditBoxId: string, barcode: string, quantity = 1) {
+  return request<InventoryAuditLine>(`/inventory/boxes/${auditBoxId}/scan`, {
+    method: 'POST',
+    body: { barcode, quantity },
+    accessToken,
+  });
+}
+
+export function setInventoryCount(accessToken: string, auditBoxId: string, lineId: string, countedQuantity: number) {
+  return request<InventoryAuditLine>(`/inventory/boxes/${auditBoxId}/count`, {
+    method: 'PATCH',
+    body: { lineId, countedQuantity },
+    accessToken,
+  });
+}
+
+export function finishInventoryBox(accessToken: string, auditBoxId: string) {
+  return request<InventoryAuditBox>(`/inventory/boxes/${auditBoxId}/finish`, {
+    method: 'POST',
+    accessToken,
+  });
+}
+
+export function sendInventoryToReview(accessToken: string, sessionId: string) {
+  return request<InventorySession>(`/inventory/sessions/${sessionId}/review`, {
+    method: 'POST',
+    accessToken,
+  });
+}
+
+export function decideInventoryLine(
+  accessToken: string,
+  lineId: string,
+  decision: Exclude<InventoryLineDecision, 'PENDING'>,
+  comment?: string,
+) {
+  return request<InventoryAuditBox>(`/inventory/lines/${lineId}/decision`, {
+    method: 'PATCH',
+    body: { decision, comment },
+    accessToken,
+  });
+}
+
+export function completeInventorySession(accessToken: string, sessionId: string, comment?: string) {
+  return request<InventorySession>(`/inventory/sessions/${sessionId}/complete`, {
+    method: 'POST',
+    body: { comment },
+    accessToken,
+  });
+}
+
+export function cancelInventorySession(accessToken: string, sessionId: string, comment?: string) {
+  return request<InventorySession>(`/inventory/sessions/${sessionId}/cancel`, {
+    method: 'POST',
+    body: { comment },
     accessToken,
   });
 }
