@@ -39,6 +39,9 @@ public class ListFragment extends Fragment {
     public static final String INVOICES = "invoices";
     public static final String NOTIFICATIONS = "notifications";
     private static final String ARG_KIND = "kind";
+    private static final String[] REQUEST_STATUSES = {
+            "SUBMITTED", "IN_REVIEW", "APPROVED", "IN_WORK", "PACKED", "DONE", "CANCELLED", "REJECTED"
+    };
     private final Handler debounce = new Handler(Looper.getMainLooper());
     private FragmentListBinding binding;
     private LogoffApplication app;
@@ -141,23 +144,28 @@ public class ListFragment extends Fragment {
     }
 
     private void markAllRead() {
+        if (binding == null || !isAdded()) return;
         binding.bulkActionButton.setEnabled(false);
         Map<String, Object> body = new java.util.LinkedHashMap<>();
         String clientId = app.state().selectedClientId();
         if (clientId != null && !clientId.isBlank()) body.put("clientId", clientId);
         app.repository().api().markAllNotificationsRead(body).enqueue(new Callback<>() {
             @Override public void onResponse(Call<Map<String, Object>> call, Response<Map<String, Object>> response) {
+                if (!isAdded() || binding == null || getActivity() == null) return;
                 if (!response.isSuccessful()) {
                     error(MobileRepository.errorMessage(response));
                     binding.bulkActionButton.setEnabled(true);
                     return;
                 }
                 long updated = response.body() == null ? 0 : integer(response.body().get("updated"));
-                if (requireActivity() instanceof pro.logoff.wms.mobile.MainActivity main) main.setNotificationCount(0);
-                Toast.makeText(requireContext(), "Прочитано уведомлений: " + updated, Toast.LENGTH_SHORT).show();
+                if (getActivity() instanceof pro.logoff.wms.mobile.MainActivity main) main.setNotificationCount(0);
+                if (getContext() != null) {
+                    Toast.makeText(getContext(), "Прочитано уведомлений: " + updated, Toast.LENGTH_SHORT).show();
+                }
                 load();
             }
             @Override public void onFailure(Call<Map<String, Object>> call, Throwable failure) {
+                if (!isAdded() || binding == null) return;
                 binding.bulkActionButton.setEnabled(true);
                 error(MobileRepository.readable(failure));
             }
@@ -217,15 +225,25 @@ public class ListFragment extends Fragment {
     private void showRequestActions(JsonRowAdapter.Row row, Map<String, Object> request) {
         String status = string(request.get("status"));
         boolean editable = app.state().isAdmin() || Arrays.asList("SUBMITTED", "IN_REVIEW", "APPROVED").contains(status);
-        if (!editable) {
+        boolean canChangeStatus = app.state().can("client-requests:status");
+        if (!editable && !canChangeStatus) {
             new com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext()).setTitle(row.title()).setMessage(row.subtitle() + "\n\nСтатус: " + StatusLabels.label(status)).setPositiveButton("Закрыть", null).show();
             return;
         }
-        String[] actions = new String[]{"Редактировать", "Отменить заявку", "Показать карточку"};
-        new com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext()).setTitle(row.title()).setItems(actions, (dialog, which) -> {
-            if (which == 0) {
+
+        List<String> actions = new ArrayList<>();
+        if (editable) actions.add("Редактировать");
+        if (canChangeStatus) actions.add("Изменить статус");
+        if (Arrays.asList("SUBMITTED", "IN_REVIEW", "APPROVED").contains(status)) actions.add("Отменить заявку");
+        actions.add("Показать карточку");
+
+        new com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext()).setTitle(row.title()).setItems(actions.toArray(new String[0]), (dialog, which) -> {
+            String action = actions.get(which);
+            if ("Редактировать".equals(action)) {
                 Intent intent = new Intent(requireContext(), RequestFormActivity.class); intent.putExtra("requestId", row.id()); intent.putExtra("title", string(request.get("title"))); intent.putExtra("city", string(request.get("destinationCity"))); intent.putExtra("comment", string(request.get("comment"))); startActivity(intent);
-            } else if (which == 1) {
+            } else if ("Изменить статус".equals(action)) {
+                showRequestStatusPicker(row, status);
+            } else if ("Отменить заявку".equals(action)) {
                 new com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext()).setTitle("Отменить заявку?").setMessage("Заявка останется в истории со статусом «Отменена».").setNegativeButton("Нет", null).setPositiveButton("Отменить", (confirm, button) -> cancelRequest(row.id())).show();
             } else {
                 new com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
@@ -235,6 +253,53 @@ public class ListFragment extends Fragment {
                         .show();
             }
         }).setNegativeButton("Закрыть", null).show();
+    }
+
+    private void showRequestStatusPicker(JsonRowAdapter.Row row, String currentStatus) {
+        List<String> statuses = new ArrayList<>();
+        List<String> labels = new ArrayList<>();
+        for (String status : REQUEST_STATUSES) {
+            if (status.equals(currentStatus)) continue;
+            statuses.add(status);
+            labels.add(StatusLabels.label(status));
+        }
+        new com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
+                .setTitle("Изменить статус заявки")
+                .setItems(labels.toArray(new String[0]), (dialog, which) ->
+                        confirmRequestStatusChange(row, currentStatus, statuses.get(which)))
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private void confirmRequestStatusChange(JsonRowAdapter.Row row, String currentStatus, String nextStatus) {
+        String message = "Статус изменится: «" + StatusLabels.label(currentStatus) + "» → «" + StatusLabels.label(nextStatus) + "».";
+        if ("DONE".equals(nextStatus)) {
+            message += "\n\nДля исходящей заявки система выполнит предусмотренное складской логикой завершение и списание.";
+        }
+        new com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
+                .setTitle("Подтвердить изменение?")
+                .setMessage(message)
+                .setNegativeButton("Отмена", null)
+                .setPositiveButton("Изменить", (dialog, which) -> updateRequestStatus(row.id(), nextStatus))
+                .show();
+    }
+
+    private void updateRequestStatus(String id, String status) {
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("status", status);
+        app.repository().api().updateRequestStatus(id, body).enqueue(new Callback<>() {
+            @Override public void onResponse(Call<Map<String, Object>> call, Response<Map<String, Object>> response) {
+                if (!response.isSuccessful()) {
+                    error(MobileRepository.errorMessage(response));
+                    return;
+                }
+                Toast.makeText(requireContext(), "Статус изменён на «" + StatusLabels.label(status) + "»", Toast.LENGTH_SHORT).show();
+                load();
+            }
+            @Override public void onFailure(Call<Map<String, Object>> call, Throwable failure) {
+                error(MobileRepository.readable(failure));
+            }
+        });
     }
 
     private void cancelRequest(String id) {

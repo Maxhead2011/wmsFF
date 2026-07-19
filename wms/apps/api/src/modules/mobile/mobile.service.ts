@@ -927,7 +927,7 @@ export class MobileService {
       apkUrl: stringValue(value.apkUrl, '/downloads/logoff-wms-mobile.apk'),
       releaseNotes: stringValue(
         value.releaseNotes,
-        'Предварительное хранение в приложении теперь однозначно показывается денежной суммой в рублях.',
+        'Предварительное хранение показывается суммой в рублях; заявки «Сдано» выделяются зелёным, а ответственные сотрудники могут менять статусы заявок.',
       ),
       updatedAt: setting?.updatedAt ?? null,
     };

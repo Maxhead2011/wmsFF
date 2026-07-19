@@ -32,6 +32,7 @@ public interface MobileApi {
     @GET("mobile/app-version") Call<Map<String, Object>> appVersion();
     @POST("client-requests") Call<Map<String, Object>> createRequest(@Body Map<String, Object> body);
     @PATCH("client-requests/{id}") Call<Map<String, Object>> updateRequest(@Path("id") String id, @Body Map<String, Object> body);
+    @PATCH("client-requests/{id}/status") Call<Map<String, Object>> updateRequestStatus(@Path("id") String id, @Body Map<String, Object> body);
     @POST("client-requests/{id}/cancel") Call<Map<String, Object>> cancelRequest(@Path("id") String id, @Body Map<String, Object> body);
     @Multipart @POST("client-requests/outbound-xlsx/commit")
     Call<Map<String, Object>> uploadRequest(@Part MultipartBody.Part file, @Part("clientId") RequestBody clientId, @Part("title") RequestBody title, @Part("destinationCity") RequestBody city, @Part("comment") RequestBody comment);

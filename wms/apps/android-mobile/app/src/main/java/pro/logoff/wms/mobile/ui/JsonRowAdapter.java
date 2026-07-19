@@ -52,11 +52,11 @@ public class JsonRowAdapter extends RecyclerView.Adapter<JsonRowAdapter.Holder> 
             binding.subtitle.setVisibility(row.subtitle().isEmpty() ? View.GONE : View.VISIBLE);
             binding.status.setText(StatusLabels.label(row.status()));
             binding.status.setVisibility(row.status().isEmpty() ? View.GONE : View.VISIBLE);
-            boolean paid = "PAID".equals(row.status());
-            binding.status.setBackgroundResource(paid ? pro.logoff.wms.mobile.R.drawable.status_background_success : pro.logoff.wms.mobile.R.drawable.status_background);
-            binding.status.setTextColor(ContextCompat.getColor(binding.getRoot().getContext(), paid ? pro.logoff.wms.mobile.R.color.logoff_success : pro.logoff.wms.mobile.R.color.logoff_red_dark));
-            binding.getRoot().setCardBackgroundColor(ContextCompat.getColor(binding.getRoot().getContext(), paid ? pro.logoff.wms.mobile.R.color.logoff_success_surface : pro.logoff.wms.mobile.R.color.logoff_card));
-            binding.getRoot().setStrokeColor(ContextCompat.getColor(binding.getRoot().getContext(), paid ? pro.logoff.wms.mobile.R.color.logoff_success : pro.logoff.wms.mobile.R.color.logoff_border));
+            boolean success = "PAID".equals(row.status()) || "DONE".equals(row.status());
+            binding.status.setBackgroundResource(success ? pro.logoff.wms.mobile.R.drawable.status_background_success : pro.logoff.wms.mobile.R.drawable.status_background);
+            binding.status.setTextColor(ContextCompat.getColor(binding.getRoot().getContext(), success ? pro.logoff.wms.mobile.R.color.logoff_success : pro.logoff.wms.mobile.R.color.logoff_red_dark));
+            binding.getRoot().setCardBackgroundColor(ContextCompat.getColor(binding.getRoot().getContext(), success ? pro.logoff.wms.mobile.R.color.logoff_success_surface : pro.logoff.wms.mobile.R.color.logoff_card));
+            binding.getRoot().setStrokeColor(ContextCompat.getColor(binding.getRoot().getContext(), success ? pro.logoff.wms.mobile.R.color.logoff_success : pro.logoff.wms.mobile.R.color.logoff_border));
             binding.getRoot().setOnClickListener(view -> listener.onClick(row));
         }
     }
