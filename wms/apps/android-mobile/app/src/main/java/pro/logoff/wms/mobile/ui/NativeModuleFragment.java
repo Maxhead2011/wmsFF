@@ -60,7 +60,8 @@ public class NativeModuleFragment extends Fragment {
         binding.list.setLayoutManager(new LinearLayoutManager(requireContext()));
         binding.list.setAdapter(adapter);
         binding.actionButton.setVisibility(View.GONE);
-        binding.search.setHint(searchHint(module));
+        binding.search.setHint(null);
+        binding.searchLayout.setHint(searchHint(module));
         binding.swipe.setOnRefreshListener(this::load);
         binding.search.addTextChangedListener(new android.text.TextWatcher() {
             @Override public void beforeTextChanged(CharSequence value, int start, int count, int after) {}
@@ -162,10 +163,14 @@ public class NativeModuleFragment extends Fragment {
             fields.put("Количество", numberWithSuffix(details.get("quantity"), " шт."));
         } else if ("catalog".equals(module)) {
             fields.put("Артикул", first(text(details.get("article")), text(details.get("internalSku"))));
+            fields.put("Штрихкоды", barcodes(details.get("barcodes")));
             fields.put("Бренд", text(details.get("brand")));
             fields.put("Категория", text(details.get("category")));
             fields.put("Цвет", text(details.get("color")));
             fields.put("Размер", text(details.get("size")));
+            fields.put("Вес", numberWithSuffix(details.get("weightGrams"), " г"));
+            fields.put("Габариты", dimensions(details));
+            fields.put("Объем", decimalWithSuffix(details.get("volumeLiters"), " л"));
             fields.put("Остаток", numberWithSuffix(details.get("quantity"), " шт."));
         } else if ("inventory".equals(module)) {
             fields.put("Комментарий", text(details.get("comment")));
@@ -228,7 +233,44 @@ public class NativeModuleFragment extends Fragment {
                 lines.add(field.getKey() + ": " + field.getValue());
             }
         }
+        if ("warehouse".equals(module)) appendBoxContents(lines, details.get("contents"));
+        if ("catalog".equals(module)) appendProductBalances(lines, details.get("balances"));
         return String.join("\n\n", lines);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void appendBoxContents(List<String> lines, Object raw) {
+        if (!(raw instanceof List<?>)) return;
+        List<String> contents = new ArrayList<>();
+        int index = 1;
+        for (Object value : (List<?>) raw) {
+            if (!(value instanceof Map<?, ?>)) continue;
+            Map<String, Object> item = (Map<String, Object>) value;
+            String name = fallback(item.get("name"), "Товар");
+            String article = text(item.get("article"));
+            String barcode = text(item.get("barcode"));
+            String color = text(item.get("color"));
+            String size = text(item.get("size"));
+            String quantity = numberWithSuffix(item.get("quantity"), " шт.");
+            String attributes = joinNonEmpty(" · ", article, barcode, color, size, quantity);
+            contents.add(index + ". " + name + (attributes.isEmpty() ? "" : "\n" + attributes));
+            index++;
+        }
+        if (!contents.isEmpty()) lines.add("Содержимое короба:\n\n" + String.join("\n\n", contents));
+    }
+
+    @SuppressWarnings("unchecked")
+    private void appendProductBalances(List<String> lines, Object raw) {
+        if (!(raw instanceof List<?>)) return;
+        List<String> balances = new ArrayList<>();
+        for (Object value : (List<?>) raw) {
+            if (!(value instanceof Map<?, ?>)) continue;
+            Map<String, Object> item = (Map<String, Object>) value;
+            String place = first(nested(item, "box", "code"), nested(item, "pallet", "code"));
+            if (place.isEmpty()) place = "Без короба";
+            balances.add(place + " · " + numberWithSuffix(item.get("quantity"), " шт.") + " · " + StatusLabels.label(text(item.get("status"))));
+        }
+        if (!balances.isEmpty()) lines.add("Размещение:\n" + String.join("\n", balances));
     }
 
     private String searchHint(String module) {
@@ -259,6 +301,35 @@ public class NativeModuleFragment extends Fragment {
     private String number(Object value) { return value instanceof Number ? NumberFormat.getIntegerInstance(new Locale("ru", "RU")).format(((Number) value).longValue()) : ""; }
     private String numberWithSuffix(Object value, String suffix) { String result = number(value); return result.isEmpty() ? "" : result + suffix; }
     private String money(Object value) { return value instanceof Number ? NumberFormat.getCurrencyInstance(new Locale("ru", "RU")).format(((Number) value).doubleValue()) : ""; }
+    @SuppressWarnings("unchecked")
+    private String barcodes(Object value) {
+        if (!(value instanceof List<?>)) return "";
+        List<String> result = new ArrayList<>();
+        for (Object item : (List<?>) value) {
+            if (item instanceof Map<?, ?>) {
+                String barcode = text(((Map<String, Object>) item).get("value"));
+                if (!barcode.isEmpty()) result.add(barcode);
+            }
+        }
+        return String.join(", ", result);
+    }
+    private String dimensions(Map<String, Object> details) {
+        String length = decimal(details.get("lengthCm"));
+        String width = decimal(details.get("widthCm"));
+        String height = decimal(details.get("heightCm"));
+        if (length.isEmpty() && width.isEmpty() && height.isEmpty()) return "";
+        return first(length, "0") + " × " + first(width, "0") + " × " + first(height, "0") + " см";
+    }
+    private String decimalWithSuffix(Object value, String suffix) { String result = decimal(value); return result.isEmpty() ? "" : result + suffix; }
+    private String decimal(Object value) {
+        if (value instanceof Number) return NumberFormat.getNumberInstance(new Locale("ru", "RU")).format(((Number) value).doubleValue());
+        return text(value);
+    }
+    private String joinNonEmpty(String separator, String... values) {
+        List<String> result = new ArrayList<>();
+        for (String value : values) if (value != null && !value.isEmpty()) result.add(value);
+        return String.join(separator, result);
+    }
     private String date(Object value) {
         String raw = text(value);
         if (raw.isEmpty()) return "";

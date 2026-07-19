@@ -4,8 +4,6 @@
             <TextView android:id="@+id/greeting" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="@color/logoff_black" android:textSize="24sp" android:textStyle="bold" />
             <TextView android:id="@+id/updated" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:textColor="@color/logoff_text_muted" android:textSize="13sp" />
             <GridLayout android:id="@+id/metrics" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:columnCount="2" android:useDefaultMargins="true" />
-            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="20dp" android:text="Последние события" android:textColor="@color/logoff_black" android:textSize="18sp" android:textStyle="bold" />
-            <LinearLayout android:id="@+id/recent" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="vertical" />
         </LinearLayout>
     </ScrollView>
 </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>

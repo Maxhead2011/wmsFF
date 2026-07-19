@@ -7,5 +7,6 @@
     <color name="logoff_text_muted">#62666D</color>
     <color name="logoff_border">#DADDE2</color>
     <color name="logoff_success">#198754</color>
+    <color name="logoff_success_surface">#EAF7EF</color>
     <color name="logoff_warning">#B35C00</color>
 </resources>

@@ -17,7 +17,7 @@ export class MobileService {
 
   async bootstrap(user: AuthUser) {
     const clientIds = await this.resolveClientIds(user);
-    const [clients, dashboard, appVersion] = await Promise.all([
+    const [clients, appVersion] = await Promise.all([
       this.prisma.client.findMany({
         where: { id: { in: clientIds }, status: { not: 'ARCHIVED' } },
         select: {
@@ -32,7 +32,6 @@ export class MobileService {
         },
         orderBy: { name: 'asc' },
       }),
-      this.dashboard(user),
       this.appVersion(),
     ]);
 
@@ -40,7 +39,7 @@ export class MobileService {
       user,
       mode: isClientOnly(user) ? 'CLIENT' : 'ADMIN',
       clients,
-      dashboard,
+      dashboard: null,
       appVersion,
       features: {
         requestCreate: user.permissionCodes.includes('client-requests:write'),
@@ -66,16 +65,25 @@ export class MobileService {
         ? { in: [BillingInvoiceStatus.ISSUED, BillingInvoiceStatus.PAID] }
         : undefined,
     };
-    const [requestGroups, stock, invoiceGroups, unreadNotifications, openBoxes, recentRequests, recentInvoices] = await Promise.all([
+    const estimateClientId = clientId && clientIds.length === 1 ? clientIds[0] : null;
+    const monthStart = moscowMonthStart();
+    const [requestGroups, stockRows, invoiceGroups, unreadNotifications, openBoxes, estimateClient, goodsArrivals, pprPrices] = await Promise.all([
       this.prisma.clientRequest.groupBy({
         by: ['status'],
         where: requestWhere,
         _count: { _all: true },
       }),
-      this.prisma.stockBalance.aggregate({
-        where: { clientId: { in: clientIds }, status: StockStatus.AVAILABLE, quantity: { gt: 0 } },
-        _sum: { quantity: true },
-        _count: { _all: true },
+      this.prisma.stockBalance.findMany({
+        where: {
+          clientId: { in: clientIds },
+          status: { in: [StockStatus.AVAILABLE, StockStatus.PACKING, StockStatus.SHIPPING] },
+          quantity: { gt: 0 },
+        },
+        select: {
+          quantity: true,
+          status: true,
+          sku: { select: { volumeLiters: true } },
+        },
       }),
       this.prisma.billingInvoice.groupBy({
         by: ['status'],
@@ -85,19 +93,72 @@ export class MobileService {
       }),
       this.prisma.clientNotification.count({ where: { clientId: { in: clientIds }, isRead: false } }),
       this.prisma.box.count({ where: { clientId: { in: clientIds }, status: 'receiving' } }),
-      this.prisma.clientRequest.findMany({
-        where: requestWhere,
-        select: { id: true, title: true, status: true, destinationCity: true, updatedAt: true, client: { select: { id: true, name: true } } },
-        orderBy: { updatedAt: 'desc' },
-        take: 5,
-      }),
-      this.prisma.billingInvoice.findMany({
-        where: invoiceWhere,
-        select: { id: true, number: true, status: true, totalRub: true, paidRub: true, updatedAt: true, client: { select: { id: true, name: true } } },
-        orderBy: { updatedAt: 'desc' },
-        take: 5,
-      }),
+      estimateClientId
+        ? this.prisma.client.findUnique({
+            where: { id: estimateClientId },
+            select: { storageAccountingEnabled: true, storagePriceRubPerLiterDay: true },
+          })
+        : Promise.resolve(null),
+      estimateClientId
+        ? this.prisma.auditLog.findMany({
+            where: {
+              entity: 'goods-arrival',
+              entityId: estimateClientId,
+              action: 'warehouse.goods-arrival',
+              createdAt: { gte: monthStart },
+            },
+            select: { payload: true },
+            orderBy: { createdAt: 'desc' },
+            take: 500,
+          })
+        : Promise.resolve([]),
+      estimateClientId
+        ? this.prisma.clientBillingService.findMany({
+            where: {
+              clientId: estimateClientId,
+              isActive: true,
+              service: { code: { in: ['PPR_BAGS', 'PPR_BOXES'] } },
+            },
+            select: {
+              priceRub: true,
+              taxMode: true,
+              service: { select: { code: true } },
+            },
+          })
+        : Promise.resolve([]),
     ]);
+
+    const availableStockRows = stockRows.filter((row) => row.status === StockStatus.AVAILABLE);
+    const storageLiters = stockRows.reduce(
+      (sum, row) => sum + row.quantity * decimal(row.sku.volumeLiters),
+      0,
+    );
+    const storageTariff = estimateClient?.storageAccountingEnabled
+      ? decimal(estimateClient.storagePriceRubPerLiterDay)
+      : 0;
+    const storageRub = roundMobileMoney(storageLiters * storageTariff * moscowDayOfMonth());
+    const arrivalTotals = goodsArrivals.reduce(
+      (totals, row) => {
+        const payload = asRecord(row.payload);
+        if (payload.status === 'CANCELLED' || typeof payload.billingInvoiceId === 'string') return totals;
+        totals.bags += mobileInteger(payload.bagCount);
+        totals.boxes += mobileInteger(payload.boxCount);
+        return totals;
+      },
+      { bags: 0, boxes: 0 },
+    );
+    const pprPriceByCode = new Map(
+      pprPrices.map((price) => [
+        price.service.code,
+        price.taxMode === 'ADD_6_PERCENT'
+          ? roundMobileMoney((decimal(price.priceRub) / 94) * 100)
+          : decimal(price.priceRub),
+      ]),
+    );
+    const pprRub = roundMobileMoney(
+      arrivalTotals.bags * (pprPriceByCode.get('PPR_BAGS') ?? 0) +
+        arrivalTotals.boxes * (pprPriceByCode.get('PPR_BOXES') ?? 0),
+    );
 
     const invoices = invoiceGroups.reduce(
       (result, group) => {
@@ -116,12 +177,23 @@ export class MobileService {
       activeRequests: requestGroups
         .filter((group) => !terminalRequestStatuses.has(group.status))
         .reduce((sum, group) => sum + group._count._all, 0),
-      stock: { units: stock._sum.quantity ?? 0, skuRows: stock._count._all },
+      stock: {
+        units: availableStockRows.reduce((sum, row) => sum + row.quantity, 0),
+        skuRows: availableStockRows.length,
+      },
       invoices: { ...invoices, debtRub: Math.max(0, invoices.totalRub - invoices.paidRub) },
       unreadNotifications,
       receivingBoxes: openBoxes,
-      recentRequests,
-      recentInvoices: recentInvoices.map((invoice) => ({ ...invoice, totalRub: decimal(invoice.totalRub), paidRub: decimal(invoice.paidRub) })),
+      estimates: {
+        storageRub,
+        storageLiters: roundMobileQuantity(storageLiters),
+        storageTariffRubPerLiterDay: storageTariff,
+        pprRub,
+        pprBags: arrivalTotals.bags,
+        pprBoxes: arrivalTotals.boxes,
+        periodFrom: monthStart.toISOString(),
+        periodTo: new Date().toISOString(),
+      },
       adminQueue: isClientOnly(user) ? null : await this.adminQueue(user, clientIds),
       updatedAt: new Date(),
     };
@@ -393,7 +465,15 @@ export class MobileService {
         include: {
           client: { select: { name: true } },
           barcodes: { select: { value: true, isPrimary: true } },
-          balances: { where: { quantity: { gt: 0 } }, select: { quantity: true, status: true } },
+          balances: {
+            where: { quantity: { gt: 0 } },
+            select: {
+              quantity: true,
+              status: true,
+              box: { select: { code: true } },
+              pallet: { select: { code: true } },
+            },
+          },
         },
         orderBy: { updatedAt: 'desc' },
         take,
@@ -422,14 +502,33 @@ export class MobileService {
       const rows = await this.prisma.box.findMany({
         where: {
           clientId: { in: clientIds },
+          balances: { some: { quantity: { gt: 0 } } },
           OR: contains ? [{ code: contains }, { client: { name: contains } }] : undefined,
         },
         include: {
           client: { select: { name: true } },
           zone: { select: { code: true, name: true } },
           pallet: { select: { code: true } },
-          balances: { where: { quantity: { gt: 0 } }, select: { quantity: true, status: true } },
-          _count: { select: { productMarks: true } },
+          balances: {
+            where: { quantity: { gt: 0 } },
+            select: {
+              id: true,
+              quantity: true,
+              status: true,
+              sku: {
+                select: {
+                  id: true,
+                  name: true,
+                  article: true,
+                  internalSku: true,
+                  color: true,
+                  size: true,
+                  barcodes: { select: { value: true, isPrimary: true } },
+                },
+              },
+            },
+          },
+          _count: { select: { productMarks: { where: { status: StockStatus.AVAILABLE } } } },
         },
         orderBy: { code: 'asc' },
         take,
@@ -449,7 +548,21 @@ export class MobileService {
               row.pallet?.code ? `Паллета ${row.pallet.code}` : null,
             ].filter(Boolean).join(' · '),
             row.status,
-            { ...row, quantity },
+            {
+              ...row,
+              quantity,
+              contents: row.balances.map((balance) => ({
+                id: balance.id,
+                skuId: balance.sku.id,
+                name: balance.sku.name,
+                article: balance.sku.article || balance.sku.internalSku,
+                barcode: primaryMobileBarcode(balance.sku.barcodes),
+                color: balance.sku.color,
+                size: balance.sku.size,
+                quantity: balance.quantity,
+                status: balance.status,
+              })),
+            },
           );
         }),
       );
@@ -791,13 +904,13 @@ export class MobileService {
     const setting = await this.prisma.systemSetting.findUnique({ where: { key: 'mobile.android.version' } });
     const value = asRecord(setting?.value);
     return {
-      currentVersion: stringValue(value.currentVersion, '0.2.0'),
+      currentVersion: stringValue(value.currentVersion, '0.2.1'),
       minimumVersion: stringValue(value.minimumVersion, '0.1.0'),
       mandatory: value.mandatory === true,
       apkUrl: stringValue(value.apkUrl, '/downloads/logoff-wms-mobile.apk'),
       releaseNotes: stringValue(
         value.releaseNotes,
-        'Полностью нативная WMS без WebView: склад, инвентаризация, товарооборот, каталог, остатки и управление.',
+        'Исправлен поиск, добавлены карточки коробов и товаров, активные плитки, суммы хранения/ПРР и ускоренная загрузка.',
       ),
       updatedAt: setting?.updatedAt ?? null,
     };
@@ -848,7 +961,26 @@ function decimal(value: { toNumber(): number } | number | null | undefined) {
 }
 
 function emptyDashboard() {
-  return { requests: {}, activeRequests: 0, stock: { units: 0, skuRows: 0 }, invoices: { count: 0, drafts: 0, issued: 0, totalRub: 0, paidRub: 0, debtRub: 0 }, unreadNotifications: 0, receivingBoxes: 0, recentRequests: [], recentInvoices: [], adminQueue: null, updatedAt: new Date() };
+  return {
+    requests: {},
+    activeRequests: 0,
+    stock: { units: 0, skuRows: 0 },
+    invoices: { count: 0, drafts: 0, issued: 0, totalRub: 0, paidRub: 0, debtRub: 0 },
+    unreadNotifications: 0,
+    receivingBoxes: 0,
+    estimates: {
+      storageRub: 0,
+      storageLiters: 0,
+      storageTariffRubPerLiterDay: 0,
+      pprRub: 0,
+      pprBags: 0,
+      pprBoxes: 0,
+      periodFrom: null,
+      periodTo: null,
+    },
+    adminQueue: null,
+    updatedAt: new Date(),
+  };
 }
 
 function parseCursorDate(value?: string) {
@@ -950,4 +1082,36 @@ function billingUnitLabel(value: string) {
 
 function hasAnyPermission(user: AuthUser, permissions: string[]) {
   return user.permissionCodes.includes('system:admin') || permissions.some((permission) => user.permissionCodes.includes(permission));
+}
+
+function moscowDateParts(value = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Moscow',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(value);
+  return Object.fromEntries(parts.map((part) => [part.type, part.value])) as Record<string, string>;
+}
+
+function moscowMonthStart() {
+  const parts = moscowDateParts();
+  return new Date(`${parts.year}-${parts.month}-01T00:00:00+03:00`);
+}
+
+function moscowDayOfMonth() {
+  return Number(moscowDateParts().day) || 1;
+}
+
+function mobileInteger(value: unknown) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function roundMobileMoney(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function roundMobileQuantity(value: number) {
+  return Math.round((value + Number.EPSILON) * 1000) / 1000;
 }

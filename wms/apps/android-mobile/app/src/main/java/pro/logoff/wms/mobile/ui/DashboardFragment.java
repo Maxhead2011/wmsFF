@@ -15,12 +15,12 @@ import androidx.fragment.app.Fragment;
 
 import java.text.NumberFormat;
 import java.util.Collections;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
 import pro.logoff.wms.mobile.AppState;
 import pro.logoff.wms.mobile.LogoffApplication;
+import pro.logoff.wms.mobile.MainActivity;
 import pro.logoff.wms.mobile.R;
 import pro.logoff.wms.mobile.databinding.FragmentDashboardBinding;
 import pro.logoff.wms.mobile.network.DataCallback;
@@ -65,32 +65,35 @@ public class DashboardFragment extends Fragment {
         binding.swipe.setRefreshing(false);
         String name = AppState.string(app.state().user().get("name"));
         binding.greeting.setText((app.state().isAdmin() ? "Рабочий обзор" : "Здравствуйте, " + name));
-        binding.updated.setText(cached ? "Сохраненные данные, нет связи" : "Данные обновлены");
+        binding.updated.setText(cached ? "Сохраненные данные · обновляю…" : "Данные обновлены");
         binding.metrics.removeAllViews();
         Map<String, Object> stock = map(data.get("stock"));
         Map<String, Object> invoices = map(data.get("invoices"));
-        addMetric("Активные заявки", number(data.get("activeRequests")), R.color.logoff_red);
-        addMetric("Единиц на складе", number(stock.get("units")), R.color.logoff_black);
-        addMetric("К оплате", money(invoices.get("debtRub")), R.color.logoff_warning);
-        addMetric("Новых уведомлений", number(data.get("unreadNotifications")), R.color.logoff_success);
+        Map<String, Object> estimates = map(data.get("estimates"));
+        addMetric("Активные заявки", number(data.get("activeRequests")), R.color.logoff_red, () -> openList(ListFragment.REQUESTS));
+        addMetric("Единиц на складе", number(stock.get("units")), R.color.logoff_black, () -> openModule("stock", "Остатки"));
+        addMetric("К оплате", money(invoices.get("debtRub")), R.color.logoff_warning, () -> openList(ListFragment.INVOICES));
+        addMetric("Новых уведомлений", number(data.get("unreadNotifications")), R.color.logoff_success, () -> openList(ListFragment.NOTIFICATIONS));
+        addMetric("Хранение предварительно", money(estimates.get("storageRub")), R.color.logoff_warning, () -> openModule("stock", "Остатки и хранение"));
+        addMetric("ПРР предварительно", money(estimates.get("pprRub")), R.color.logoff_red, () -> openList(ListFragment.RECEIPTS));
         if (app.state().isAdmin()) {
             Map<String, Object> queue = map(data.get("adminQueue"));
-            addMetric("Очередь задач", number(queue.get("total")), R.color.logoff_red);
-            addMetric("Приемка: открыто", number(data.get("receivingBoxes")), R.color.logoff_black);
+            addMetric("Очередь задач", number(queue.get("total")), R.color.logoff_red, () -> openModule(app.state().can("system:admin") ? "service" : "inventory", "Очередь задач"));
+            addMetric("Приемка: открыто", number(data.get("receivingBoxes")), R.color.logoff_black, () -> openList(ListFragment.RECEIPTS));
         }
-        binding.recent.removeAllViews();
-        Object recent = data.get("recentRequests");
-        if (recent instanceof List<?>) {
-            for (Object item : (List<?>) recent) if (item instanceof Map<?, ?>) addRecent((Map<String, Object>) item);
-        }
-        if (binding.recent.getChildCount() == 0) addPlain(binding.recent, "Последних событий пока нет.", false);
     }
 
-    private void addMetric(String label, String value, int accent) {
+    private void addMetric(String label, String value, int accent, Runnable action) {
         LinearLayout card = new LinearLayout(requireContext());
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(14), dp(13), dp(14), dp(13));
         card.setBackgroundResource(R.drawable.status_background);
+        card.setClickable(true);
+        card.setFocusable(true);
+        card.setOnClickListener(view -> action.run());
+        android.util.TypedValue selectable = new android.util.TypedValue();
+        requireContext().getTheme().resolveAttribute(android.R.attr.selectableItemBackground, selectable, true);
+        card.setForeground(androidx.appcompat.content.res.AppCompatResources.getDrawable(requireContext(), selectable.resourceId));
         TextView title = new TextView(requireContext()); title.setText(label); title.setTextColor(getResources().getColor(R.color.logoff_text_muted, null)); title.setTextSize(13);
         TextView amount = new TextView(requireContext()); amount.setText(value); amount.setTextColor(getResources().getColor(accent, null)); amount.setTextSize(23); amount.setTypeface(null, android.graphics.Typeface.BOLD);
         card.addView(title); card.addView(amount);
@@ -99,19 +102,23 @@ public class DashboardFragment extends Fragment {
         binding.metrics.addView(card, params);
     }
 
-    private void addRecent(Map<String, Object> item) {
-        String title = AppState.string(item.get("title"));
-        String status = AppState.string(item.get("status"));
-        addPlain(binding.recent, title + (status.isEmpty() ? "" : "\n" + statusLabel(status)), true);
+    private void openList(String kind) {
+        ((MainActivity) requireActivity()).showNative(ListFragment.newInstance(kind), listTitle(kind));
     }
 
-    private void addPlain(LinearLayout parent, String text, boolean strong) {
-        TextView view = new TextView(requireContext()); view.setText(text); view.setTextSize(15); view.setTextColor(getResources().getColor(R.color.logoff_black, null)); view.setPadding(dp(12), dp(12), dp(12), dp(12)); if (strong) view.setTypeface(null, android.graphics.Typeface.BOLD); parent.addView(view, new LinearLayout.LayoutParams(-1, -2));
+    private void openModule(String module, String title) {
+        ((MainActivity) requireActivity()).showNative(NativeModuleFragment.newInstance(module, title), title);
+    }
+
+    private String listTitle(String kind) {
+        if (ListFragment.REQUESTS.equals(kind)) return "Заявки";
+        if (ListFragment.INVOICES.equals(kind)) return "Финансы";
+        if (ListFragment.NOTIFICATIONS.equals(kind)) return "Уведомления";
+        return "Онлайн приемка";
     }
 
     @SuppressWarnings("unchecked") private Map<String, Object> map(Object value) { return value instanceof Map<?, ?> ? (Map<String, Object>) value : Collections.emptyMap(); }
     private String number(Object value) { return NumberFormat.getIntegerInstance(new Locale("ru", "RU")).format(value instanceof Number ? ((Number) value).longValue() : 0); }
     private String money(Object value) { return NumberFormat.getCurrencyInstance(new Locale("ru", "RU")).format(value instanceof Number ? ((Number) value).doubleValue() : 0); }
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
-    private String statusLabel(String status) { return StatusLabels.label(status); }
 }

@@ -24,13 +24,33 @@ public class MobileRepository {
     public MobileApi api() { return api; }
 
     public void bootstrap(DataCallback<Map<String, Object>> callback) { cached("bootstrap", api.bootstrap(), callback); }
-    public void dashboard(String clientId, DataCallback<Map<String, Object>> callback) { cached("dashboard:" + safe(clientId), api.dashboard(clientId), callback); }
-    public void requests(String clientId, String search, DataCallback<Map<String, Object>> callback) { cached("requests:" + safe(clientId) + ":" + safe(search), api.requests(clientId, blank(search), null, 100), callback); }
-    public void invoices(String clientId, String search, DataCallback<Map<String, Object>> callback) { cached("invoices:" + safe(clientId) + ":" + safe(search), api.invoices(clientId, blank(search), null, 100), callback); }
+    public void dashboard(String clientId, DataCallback<Map<String, Object>> callback) { cachedFast("dashboard:" + safe(clientId), api.dashboard(clientId), callback); }
+    public void requests(String clientId, String search, DataCallback<Map<String, Object>> callback) { cachedFast("requests:" + safe(clientId) + ":" + safe(search), api.requests(clientId, blank(search), null, 100), callback); }
+    public void invoices(String clientId, String search, DataCallback<Map<String, Object>> callback) { cachedFast("invoices:" + safe(clientId) + ":" + safe(search), api.invoices(clientId, blank(search), null, 100), callback); }
     public void notifications(String clientId, DataCallback<Map<String, Object>> callback) { cached("notifications:" + safe(clientId), api.notifications(clientId, false, 100), callback); }
-    public void nativeModule(String module, String clientId, String search, DataCallback<Map<String, Object>> callback) { cached("module:" + safe(module) + ":" + safe(clientId) + ":" + safe(search), api.nativeModule(module, clientId, blank(search), 100), callback); }
+    public void nativeModule(String module, String clientId, String search, DataCallback<Map<String, Object>> callback) { cachedFast("module:" + safe(module) + ":" + safe(clientId) + ":" + safe(search), api.nativeModule(module, clientId, blank(search), 100), callback); }
 
     private void cached(String key, Call<Map<String, Object>> call, DataCallback<Map<String, Object>> callback) {
+        executeNetwork(key, call, callback);
+    }
+
+    private void cachedFast(String key, Call<Map<String, Object>> call, DataCallback<Map<String, Object>> callback) {
+        io.execute(() -> {
+            CacheEntry entry = cache.get(key);
+            if (entry != null && System.currentTimeMillis() - entry.updatedAt < 15 * 60 * 1000L) {
+                try {
+                    Object parsed = json.fromJson(entry.json);
+                    if (parsed instanceof Map<?, ?>) {
+                        @SuppressWarnings("unchecked") Map<String, Object> value = (Map<String, Object>) parsed;
+                        callback.onSuccess(value, true);
+                    }
+                } catch (IOException ignored) {}
+            }
+            executeNetwork(key, call, callback);
+        });
+    }
+
+    private void executeNetwork(String key, Call<Map<String, Object>> call, DataCallback<Map<String, Object>> callback) {
         call.enqueue(new Callback<>() {
             @Override public void onResponse(Call<Map<String, Object>> request, Response<Map<String, Object>> response) {
                 if (response.isSuccessful() && response.body() != null) {

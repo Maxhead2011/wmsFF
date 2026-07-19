@@ -57,7 +57,8 @@ public class ListFragment extends Fragment {
         binding.list.setLayoutManager(new LinearLayoutManager(requireContext()));
         binding.list.setAdapter(adapter);
         binding.swipe.setOnRefreshListener(this::load);
-        binding.search.setHint(searchHint());
+        binding.search.setHint(null);
+        binding.searchLayout.setHint(searchHint());
         binding.search.addTextChangedListener(new android.text.TextWatcher() {
             @Override public void beforeTextChanged(CharSequence value, int start, int count, int after) {}
             @Override public void onTextChanged(CharSequence value, int start, int before, int count) { debounce.removeCallbacksAndMessages(null); debounce.postDelayed(ListFragment.this::load, 350); }
