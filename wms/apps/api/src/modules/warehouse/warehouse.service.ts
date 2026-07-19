@@ -96,19 +96,22 @@ export class WarehouseService {
     }
 
     const since = new Date(Date.now() - 1000 * 60 * 60 * 72);
-    const operations = await this.prisma.tsdOperation.findMany({
-      where: {
-        operationType: { in: ['receipt_open_box', 'receipt_box_status', 'receipt_scan'] },
-        OR: [
-          { createdAt: { gte: since } },
-          { operationType: 'receipt_open_box' },
-          { operationType: 'receipt_box_status' },
-        ],
-        payload: { path: ['clientId'], equals: clientId },
-      },
-      orderBy: { createdAt: 'asc' },
-      take: 3000,
-    });
+    const operations = (
+      await this.prisma.tsdOperation.findMany({
+        where: {
+          operationType: { in: ['receipt_open_box', 'receipt_box_status', 'receipt_scan'] },
+          OR: [
+            { createdAt: { gte: since } },
+            { operationType: 'receipt_open_box' },
+            { operationType: 'receipt_box_status' },
+          ],
+          payload: { path: ['clientId'], equals: clientId },
+        },
+        // Fetch newest rows first so the operation cap cannot hide the current receipt batch.
+        orderBy: { createdAt: 'desc' },
+        take: 10000,
+      })
+    ).reverse();
 
     const sourceDocuments = [
       ...new Set(operations.map((operation) => stringFromPayload(operation.payload, 'sourceDocument')).filter(Boolean)),

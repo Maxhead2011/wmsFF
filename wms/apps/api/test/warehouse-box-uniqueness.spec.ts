@@ -24,4 +24,42 @@ describe('WarehouseService: уникальность номера короба',
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(tx.box.create).not.toHaveBeenCalled();
   });
+
+  it('берёт последние операции онлайн-приёмки, чтобы новая партия не терялась за лимитом', async () => {
+    const prisma = {
+      client: {
+        findUnique: vi.fn().mockResolvedValue({ id: 'client-1', onlineReceiptVisibleToClient: true }),
+      },
+      tsdOperation: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      box: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      stockMovement: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+    };
+    const clientScopes = { requireClientAccess: vi.fn() };
+    const service = new WarehouseService(
+      prisma as never,
+      clientScopes as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await service.listOnlineReceipts(
+      { clientId: 'client-1' },
+      { id: 'user-1', permissionCodes: [], roleCodes: ['CLIENT'] } as never,
+    );
+
+    expect(prisma.tsdOperation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderBy: { createdAt: 'desc' },
+        take: 10000,
+      }),
+    );
+  });
 });

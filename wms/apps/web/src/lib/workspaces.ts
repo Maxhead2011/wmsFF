@@ -14,6 +14,7 @@ import {
   Printer,
   RefreshCw,
   ShieldCheck,
+  ShoppingBasket,
   Settings2,
   Truck,
   Upload,
@@ -32,6 +33,7 @@ export type WorkspaceId =
   | 'inventory'
   | 'turnover'
   | 'requests'
+  | 'fbs'
   | 'catalog'
   | 'billing'
   | 'services'
@@ -133,6 +135,16 @@ export const workspaceNav: WorkspaceNavItem[] = [
     description: 'Заявки клиентов, статусы и операционный процесс.',
     permissions: ['client-requests:read', 'client-requests:write', 'client-requests:status'],
     icon: ClipboardList,
+    status: 'in-progress',
+    audience: 'all',
+  },
+  {
+    id: 'fbs',
+    title: 'FBS',
+    eyebrow: 'Клиентский контур',
+    description: 'Заказы FBS, отгрузки, стоимость обработки и архив.',
+    permissions: ['client-requests:read', 'billing:read'],
+    icon: ShoppingBasket,
     status: 'in-progress',
     audience: 'all',
   },

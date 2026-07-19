@@ -10,6 +10,7 @@ import { ClientRequestsPanel } from './components/client-requests/ClientRequests
 import { DashboardDataPanel } from './components/DashboardDataPanel';
 import { DebugPanel } from './components/debug/DebugPanel';
 import { DirectoryPanel } from './components/directories/DirectoryPanel';
+import { FbsPanel } from './components/fbs/FbsPanel';
 import { ImportPanel } from './components/imports/ImportPanel';
 import { InventoryPanel } from './components/inventory/InventoryPanel';
 import { LogisticsQuotePanel } from './components/logistics/LogisticsQuotePanel';
@@ -242,6 +243,8 @@ function renderWorkspace(
       return <TurnoverPanel session={session} />;
     case 'requests':
       return <ClientRequestsPanel session={session} />;
+    case 'fbs':
+      return <FbsPanel session={session} />;
     case 'catalog':
       return <CatalogPanel session={session} />;
     case 'billing':
@@ -349,7 +352,7 @@ function sectionForWorkspace(id: WorkspaceId): WorkspaceSection {
     return 'main';
   }
 
-  if (id === 'cabinet' || id === 'requests' || id === 'catalog') {
+  if (id === 'cabinet' || id === 'requests' || id === 'fbs' || id === 'catalog') {
     return 'client';
   }
 
