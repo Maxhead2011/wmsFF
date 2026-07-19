@@ -795,7 +795,10 @@ export class MobileService {
       minimumVersion: stringValue(value.minimumVersion, '0.1.0'),
       mandatory: value.mandatory === true,
       apkUrl: stringValue(value.apkUrl, '/downloads/logoff-wms-mobile.apk'),
-      releaseNotes: stringValue(value.releaseNotes, 'Первый мобильный релиз LOGOff WMS.'),
+      releaseNotes: stringValue(
+        value.releaseNotes,
+        'Полностью нативная WMS без WebView: склад, инвентаризация, товарооборот, каталог, остатки и управление.',
+      ),
       updatedAt: setting?.updatedAt ?? null,
     };
   }
