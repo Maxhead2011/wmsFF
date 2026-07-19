@@ -256,6 +256,11 @@ enum BillingPaymentStatus {
   CANCELLED
 }
 
+enum FbsDeliveryDestination {
+  PICKUP_POINT
+  VNUKOVO_SORTING_CENTER
+}
+
 enum LabelTemplateType {
   BOX
   SKU
@@ -518,6 +523,7 @@ model Client {
   billingInvoices              BillingInvoice[]
   billingPayments              BillingPayment[]
   billingServicePrices         ClientBillingService[]
+  fbsBillingSettings           ClientFbsBillingSettings?
   deliveryRequests             LogisticsDeliveryRequest[]
   requestFiles                 ClientRequestFile[]
   requestPackages              ClientRequestPackage[]
@@ -1181,16 +1187,19 @@ model ClientNotificationPreference {
 }
 
 model BillingService {
-  id              String                 @id @default(uuid())
-  code            String                 @unique
-  name            String
-  unit            BillingUnit            @default(SERVICE)
-  defaultPriceRub Decimal?               @db.Decimal(12, 2)
-  isActive        Boolean                @default(true)
-  charges         BillingCharge[]
-  clientPrices    ClientBillingService[]
-  createdAt       DateTime               @default(now())
-  updatedAt       DateTime               @updatedAt
+  id                       String                       @id @default(uuid())
+  code                     String                       @unique
+  name                     String
+  unit                     BillingUnit                  @default(SERVICE)
+  defaultPriceRub          Decimal?                     @db.Decimal(12, 2)
+  isActive                 Boolean                      @default(true)
+  charges                  BillingCharge[]
+  clientPrices             ClientBillingService[]
+  fbsAdditionalSelections  ClientFbsAdditionalService[]
+  fbsBoxFormationSettings  ClientFbsBillingSettings[]   @relation("FbsBoxFormationService")
+  fbsBoxMaterialSettings   ClientFbsBillingSettings[]   @relation("FbsBoxMaterialService")
+  createdAt                DateTime                     @default(now())
+  updatedAt                DateTime                     @updatedAt
 }
 
 model ClientBillingService {
@@ -1212,6 +1221,43 @@ model ClientBillingService {
   @@index([clientId, isActive])
   @@index([serviceId])
   @@index([updatedByUserId])
+}
+
+model ClientFbsBillingSettings {
+  id                        String                       @id @default(uuid())
+  clientId                  String                       @unique
+  defaultDeliveryDestination FbsDeliveryDestination     @default(PICKUP_POINT)
+  pickupPointBasePriceRub   Decimal                      @default(500) @db.Decimal(12, 2)
+  vnukovoBasePriceRub       Decimal                      @default(1500) @db.Decimal(12, 2)
+  baseIncludedItems         Int                          @default(5)
+  extraBlockItems           Int                          @default(5)
+  extraBlockPriceRub        Decimal                      @default(250) @db.Decimal(12, 2)
+  boxCapacityItems          Int                          @default(16)
+  boxFormationServiceId     String?
+  boxMaterialServiceId      String?
+  client                    Client                       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  boxFormationService       BillingService?              @relation("FbsBoxFormationService", fields: [boxFormationServiceId], references: [id])
+  boxMaterialService        BillingService?              @relation("FbsBoxMaterialService", fields: [boxMaterialServiceId], references: [id])
+  additionalServices        ClientFbsAdditionalService[]
+  createdAt                 DateTime                     @default(now())
+  updatedAt                 DateTime                     @updatedAt
+
+  @@index([boxFormationServiceId])
+  @@index([boxMaterialServiceId])
+}
+
+model ClientFbsAdditionalService {
+  id                 String                   @id @default(uuid())
+  settingsId         String
+  serviceId          String
+  quantityMultiplier Decimal                  @default(1) @db.Decimal(10, 3)
+  settings           ClientFbsBillingSettings @relation(fields: [settingsId], references: [id], onDelete: Cascade)
+  service            BillingService           @relation(fields: [serviceId], references: [id])
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+
+  @@unique([settingsId, serviceId])
+  @@index([serviceId])
 }
 
 model BillingCharge {

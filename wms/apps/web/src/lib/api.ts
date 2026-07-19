@@ -1685,6 +1685,7 @@ export type MarketplaceProductSyncResult = {
 };
 
 export type FbsOrderCategory = 'active' | 'shipped' | 'archive';
+export type FbsDeliveryDestination = 'PICKUP_POINT' | 'VNUKOVO_SORTING_CENTER';
 
 export type FbsOrderSummary = {
   id: string;
@@ -1700,6 +1701,7 @@ export type FbsOrderSummary = {
   nmId: string | null;
   chrtId: string | null;
   barcodes: string[];
+  itemCount: number;
   product: {
     id: string;
     name: string;
@@ -1729,6 +1731,17 @@ export type FbsOrderSummary = {
     totalRub: number;
     invoiceNumber: string | null;
     invoiceStatus: BillingInvoiceStatus | null;
+    breakdown: {
+      fbsProcessingRub: number;
+      additionalServicesRub: number;
+      deliveryRub: number;
+      boxFormationRub: number;
+      boxMaterialRub: number;
+      shipmentKey: string;
+      shipmentItems: number;
+      boxCount: number;
+      deliveryDestination: FbsDeliveryDestination;
+    };
   } | null;
 };
 
@@ -1749,6 +1762,39 @@ export type ClientFbsOrders = {
   };
   orders: FbsOrderSummary[];
 };
+
+export type FbsBillingSettings = {
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  settings: {
+    id: string;
+    defaultDeliveryDestination: FbsDeliveryDestination;
+    pickupPointBasePriceRub: number;
+    vnukovoBasePriceRub: number;
+    baseIncludedItems: number;
+    extraBlockItems: number;
+    extraBlockPriceRub: number;
+    boxCapacityItems: number;
+    fbsProcessingPriceRub: number;
+    boxFormationServiceId: string | null;
+    boxMaterialServiceId: string | null;
+    additionalServices: Array<{
+      serviceId: string;
+      quantityMultiplier: number;
+    }>;
+  };
+  serviceOptions: Array<{
+    id: string;
+    code: string;
+    name: string;
+    unit: BillingUnit;
+    priceRub: number;
+    isActive: boolean;
+    quantityMultiplier: number;
+  }>;
+  excludedRule: string;
+};
+
+export type UpdateFbsBillingSettingsPayload = Omit<FbsBillingSettings['settings'], 'id'>;
 
 export type UpsertMarketplaceConnectionPayload = {
   clientId: string;
@@ -4445,6 +4491,24 @@ export async function createFbsMarketplaceConnection(
 ) {
   return request<MarketplaceConnectionSummary>('/marketplace-connections/fbs/connections', {
     method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function fetchFbsBillingSettings(accessToken: string, clientId: string) {
+  return request<FbsBillingSettings>(`/marketplace-connections/fbs/billing-settings/${clientId}`, {
+    accessToken,
+  });
+}
+
+export async function updateFbsBillingSettings(
+  accessToken: string,
+  clientId: string,
+  payload: UpdateFbsBillingSettingsPayload,
+) {
+  return request<FbsBillingSettings>(`/marketplace-connections/fbs/billing-settings/${clientId}`, {
+    method: 'PUT',
     body: payload,
     accessToken,
   });

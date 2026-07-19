@@ -10,6 +10,7 @@ import {
   BillingChargeSource,
   BillingChargeStatus,
   BillingUnit,
+  FbsDeliveryDestination,
   MarketplaceType,
   Prisma,
   VolumeSource,
@@ -17,6 +18,7 @@ import {
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
+import { UpdateFbsBillingSettingsDto } from './dto/update-fbs-billing-settings.dto';
 import { UpsertMarketplaceConnectionDto } from './dto/upsert-marketplace-connection.dto';
 
 type MarketplaceConnectionWithClient = Prisma.ClientMarketplaceConnectionGetPayload<{
@@ -67,6 +69,7 @@ type FbsOrderSummary = {
   nmId: string | null;
   chrtId: string | null;
   barcodes: string[];
+  itemCount: number;
   product: {
     id: string;
     name: string;
@@ -92,6 +95,17 @@ type FbsOrderSummary = {
     totalRub: number;
     invoiceNumber: string | null;
     invoiceStatus: string | null;
+    breakdown: {
+      fbsProcessingRub: number;
+      additionalServicesRub: number;
+      deliveryRub: number;
+      boxFormationRub: number;
+      boxMaterialRub: number;
+      shipmentKey: string;
+      shipmentItems: number;
+      boxCount: number;
+      deliveryDestination: FbsDeliveryDestination;
+    };
   } | null;
 };
 
@@ -201,6 +215,293 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       value,
     });
     return value;
+  }
+
+  async getFbsBillingSettings(clientId: string, user: AuthUser) {
+    this.clientScopes.requireGlobalClientAccess(user);
+    return this.loadFbsBillingSettingsView(clientId);
+  }
+
+  async updateFbsBillingSettings(
+    clientId: string,
+    dto: UpdateFbsBillingSettingsDto,
+    user: AuthUser,
+  ) {
+    this.clientScopes.requireGlobalClientAccess(user);
+    const { client, fbsService, boxFormationService, boxMaterialService } =
+      await this.ensureFbsBillingBase(clientId);
+
+    const requestedServiceIds = uniqueStrings([
+      ...(dto.additionalServices ?? []).map((service) => service.serviceId),
+      dto.boxFormationServiceId ?? '',
+      dto.boxMaterialServiceId ?? '',
+    ]);
+    const requestedServices =
+      requestedServiceIds.length > 0
+        ? await this.prisma.billingService.findMany({
+            where: { id: { in: requestedServiceIds }, isActive: true },
+            include: {
+              clientPrices: {
+                where: { clientId, isActive: true },
+                take: 1,
+              },
+            },
+          })
+        : [];
+    const requestedById = new Map(requestedServices.map((service) => [service.id, service]));
+
+    for (const serviceId of requestedServiceIds) {
+      const service = requestedById.get(serviceId);
+      if (!service) {
+        throw new BadRequestException('Одна из выбранных услуг клиента недоступна.');
+      }
+      if (isPalletBillingService(service)) {
+        throw new BadRequestException('Паллеты и поддоны нельзя добавлять в расчёт FBS.');
+      }
+      if (
+        service.id !== boxFormationService.id &&
+        service.id !== boxMaterialService.id &&
+        service.clientPrices.length === 0
+      ) {
+        throw new BadRequestException(`Сначала подключите услугу «${service.name}» клиенту.`);
+      }
+    }
+
+    const additionalServices = dto.additionalServices.filter(
+      (selection) =>
+        selection.serviceId !== fbsService.id &&
+        selection.serviceId !== dto.boxFormationServiceId &&
+        selection.serviceId !== dto.boxMaterialServiceId,
+    );
+
+    await this.prisma.$transaction(async (tx) => {
+      const settings = await tx.clientFbsBillingSettings.upsert({
+        where: { clientId },
+        update: {
+          defaultDeliveryDestination: dto.defaultDeliveryDestination,
+          pickupPointBasePriceRub: dto.pickupPointBasePriceRub,
+          vnukovoBasePriceRub: dto.vnukovoBasePriceRub,
+          baseIncludedItems: dto.baseIncludedItems,
+          extraBlockItems: dto.extraBlockItems,
+          extraBlockPriceRub: dto.extraBlockPriceRub,
+          boxCapacityItems: dto.boxCapacityItems,
+          boxFormationServiceId: dto.boxFormationServiceId || null,
+          boxMaterialServiceId: dto.boxMaterialServiceId || null,
+        },
+        create: {
+          clientId: client.id,
+          defaultDeliveryDestination: dto.defaultDeliveryDestination,
+          pickupPointBasePriceRub: dto.pickupPointBasePriceRub,
+          vnukovoBasePriceRub: dto.vnukovoBasePriceRub,
+          baseIncludedItems: dto.baseIncludedItems,
+          extraBlockItems: dto.extraBlockItems,
+          extraBlockPriceRub: dto.extraBlockPriceRub,
+          boxCapacityItems: dto.boxCapacityItems,
+          boxFormationServiceId: dto.boxFormationServiceId || null,
+          boxMaterialServiceId: dto.boxMaterialServiceId || null,
+        },
+      });
+      await tx.clientFbsAdditionalService.deleteMany({
+        where: { settingsId: settings.id },
+      });
+      if (additionalServices.length > 0) {
+        await tx.clientFbsAdditionalService.createMany({
+          data: additionalServices.map((selection) => ({
+            settingsId: settings.id,
+            serviceId: selection.serviceId,
+            quantityMultiplier: selection.quantityMultiplier,
+          })),
+        });
+      }
+      await tx.clientBillingService.upsert({
+        where: {
+          clientId_serviceId: {
+            clientId,
+            serviceId: fbsService.id,
+          },
+        },
+        update: {
+          priceRub: dto.fbsProcessingPriceRub,
+          isActive: true,
+          updatedByUserId: user.id,
+        },
+        create: {
+          clientId,
+          serviceId: fbsService.id,
+          priceRub: dto.fbsProcessingPriceRub,
+          isActive: true,
+          updatedByUserId: user.id,
+        },
+      });
+    });
+
+    this.fbsOrdersCache.delete(clientId);
+    return this.loadFbsBillingSettingsView(clientId);
+  }
+
+  private async loadFbsBillingSettingsView(clientId: string) {
+    const { client, settings, fbsService } = await this.ensureFbsBillingBase(clientId);
+    const services = await this.prisma.billingService.findMany({
+      where: { isActive: true },
+      include: {
+        clientPrices: {
+          where: { clientId },
+          take: 1,
+        },
+      },
+      orderBy: [{ name: 'asc' }],
+    });
+    const fbsClientPrice = services.find((service) => service.id === fbsService.id)?.clientPrices[0];
+    const additionalById = new Map(
+      settings.additionalServices.map((selection) => [
+        selection.serviceId,
+        Number(selection.quantityMultiplier),
+      ]),
+    );
+
+    return {
+      client,
+      settings: {
+        id: settings.id,
+        defaultDeliveryDestination: settings.defaultDeliveryDestination,
+        pickupPointBasePriceRub: Number(settings.pickupPointBasePriceRub),
+        vnukovoBasePriceRub: Number(settings.vnukovoBasePriceRub),
+        baseIncludedItems: settings.baseIncludedItems,
+        extraBlockItems: settings.extraBlockItems,
+        extraBlockPriceRub: Number(settings.extraBlockPriceRub),
+        boxCapacityItems: settings.boxCapacityItems,
+        fbsProcessingPriceRub: Number(
+          fbsClientPrice?.priceRub ?? fbsService.defaultPriceRub ?? 0,
+        ),
+        boxFormationServiceId: settings.boxFormationServiceId,
+        boxMaterialServiceId: settings.boxMaterialServiceId,
+        additionalServices: settings.additionalServices.map((selection) => ({
+          serviceId: selection.serviceId,
+          quantityMultiplier: Number(selection.quantityMultiplier),
+        })),
+      },
+      serviceOptions: services
+        .filter((service) => service.id !== fbsService.id && !isPalletBillingService(service))
+        .map((service) => {
+          const clientPrice = service.clientPrices[0] ?? null;
+          return {
+            id: service.id,
+            code: service.code,
+            name: service.name,
+            unit: service.unit,
+            priceRub: Number(clientPrice?.priceRub ?? service.defaultPriceRub ?? 0),
+            isActive: clientPrice?.isActive ?? false,
+            quantityMultiplier: additionalById.get(service.id) ?? 1,
+          };
+        }),
+      excludedRule: 'Паллеты и поддоны в стоимость FBS не включаются.',
+    };
+  }
+
+  private async ensureFbsBillingBase(clientId: string) {
+    const client = await this.prisma.client.findUnique({
+      where: { id: clientId },
+      select: { id: true, code: true, name: true },
+    });
+    if (!client) {
+      throw new NotFoundException('Клиент не найден.');
+    }
+
+    const [fbsService, boxFormationService, boxMaterialService] = await Promise.all([
+      this.prisma.billingService.upsert({
+        where: { code: FBS_PROCESSING_SERVICE_CODE },
+        update: {
+          name: 'Обработка заказа FBS',
+          unit: BillingUnit.PIECE,
+          isActive: true,
+        },
+        create: {
+          code: FBS_PROCESSING_SERVICE_CODE,
+          name: 'Обработка заказа FBS',
+          unit: BillingUnit.PIECE,
+          defaultPriceRub: 0,
+          isActive: true,
+        },
+      }),
+      this.prisma.billingService.upsert({
+        where: { code: FBS_BOX_FORMATION_SERVICE_CODE },
+        update: {
+          name: 'Сборка короба',
+          unit: BillingUnit.PIECE,
+          isActive: true,
+        },
+        create: {
+          code: FBS_BOX_FORMATION_SERVICE_CODE,
+          name: 'Сборка короба',
+          unit: BillingUnit.PIECE,
+          defaultPriceRub: 40,
+          isActive: true,
+        },
+      }),
+      this.prisma.billingService.upsert({
+        where: { code: FBS_BOX_MATERIAL_SERVICE_CODE },
+        update: {
+          name: 'Короб 60*40*40',
+          unit: BillingUnit.PIECE,
+          isActive: true,
+        },
+        create: {
+          code: FBS_BOX_MATERIAL_SERVICE_CODE,
+          name: 'Короб 60*40*40',
+          unit: BillingUnit.PIECE,
+          defaultPriceRub: 100,
+          isActive: true,
+        },
+      }),
+    ]);
+
+    await Promise.all(
+      [fbsService, boxFormationService, boxMaterialService].map((service) =>
+        this.prisma.clientBillingService.upsert({
+          where: {
+            clientId_serviceId: {
+              clientId,
+              serviceId: service.id,
+            },
+          },
+          update: {},
+          create: {
+            clientId,
+            serviceId: service.id,
+            priceRub: service.defaultPriceRub ?? 0,
+            isActive: true,
+          },
+        }),
+      ),
+    );
+
+    const settings = await this.prisma.clientFbsBillingSettings.upsert({
+      where: { clientId },
+      update: {},
+      create: {
+        clientId,
+        defaultDeliveryDestination: FbsDeliveryDestination.PICKUP_POINT,
+        pickupPointBasePriceRub: 500,
+        vnukovoBasePriceRub: 1500,
+        baseIncludedItems: 5,
+        extraBlockItems: 5,
+        extraBlockPriceRub: 250,
+        boxCapacityItems: 16,
+        boxFormationServiceId: boxFormationService.id,
+        boxMaterialServiceId: boxMaterialService.id,
+      },
+      include: {
+        additionalServices: true,
+      },
+    });
+
+    return {
+      client,
+      settings,
+      fbsService,
+      boxFormationService,
+      boxMaterialService,
+    };
   }
 
   private async loadFbsOrders(clientId: string): Promise<FbsOrdersResponse> {
@@ -325,6 +626,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           nmId: textValue(order.nmId) || null,
           chrtId: textValue(order.chrtId) || null,
           barcodes: orderBarcodes,
+          itemCount: Math.max(1, Math.trunc(numberValue(order.itemCount)) || 1),
           product: sku
             ? {
                 id: sku.id,
@@ -441,6 +743,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         connectionId: connection.id,
         accountName: connection.accountName,
         marketplace: MarketplaceType.WILDBERRIES,
+        itemCount: 1,
         supplierStatus: status?.supplierStatus || 'new',
         wbStatus: status?.wbStatus || 'waiting',
       } satisfies WildberriesFbsOrder;
@@ -486,6 +789,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return postings.map((posting) => {
       const products = asArray<Record<string, unknown>>(posting.products);
       const product = products[0] ?? {};
+      const itemCount = Math.max(
+        1,
+        products.reduce(
+          (sum, currentProduct) => sum + Math.max(1, Math.trunc(numberValue(currentProduct.quantity)) || 1),
+          0,
+        ),
+      );
       const status = textValue(posting.status);
       const analytics = asRecord(posting.analytics_data);
       return {
@@ -509,6 +819,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         cargoType: '',
         requiredMeta: [],
         optionalMeta: [],
+        itemCount,
         connectionId: connection.id,
         accountName: connection.accountName,
         marketplace: MarketplaceType.OZON,
@@ -524,71 +835,144 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       return result;
     }
 
-    const service = await this.prisma.billingService.upsert({
-      where: { code: FBS_PROCESSING_SERVICE_CODE },
-      update: {
-        name: 'Обработка заказа FBS',
-        unit: BillingUnit.PIECE,
-        isActive: true,
-      },
-      create: {
-        code: FBS_PROCESSING_SERVICE_CODE,
-        name: 'Обработка заказа FBS',
-        unit: BillingUnit.PIECE,
-        defaultPriceRub: 0,
-        isActive: true,
-      },
-    });
-    const clientPrice = await this.prisma.clientBillingService.findUnique({
-      where: {
-        clientId_serviceId: {
-          clientId,
-          serviceId: service.id,
+    const { settings, fbsService } = await this.ensureFbsBillingBase(clientId);
+    const serviceIds = uniqueStrings([
+      fbsService.id,
+      settings.boxFormationServiceId ?? '',
+      settings.boxMaterialServiceId ?? '',
+      ...settings.additionalServices.map((selection) => selection.serviceId),
+    ]);
+    const pricedServices = await this.prisma.billingService.findMany({
+      where: { id: { in: serviceIds }, isActive: true },
+      include: {
+        clientPrices: {
+          where: { clientId },
+          take: 1,
         },
       },
-      select: { priceRub: true, isActive: true },
     });
-    const unitPriceRub =
-      clientPrice?.isActive === false
-        ? 0
-        : Number(clientPrice?.priceRub ?? service.defaultPriceRub ?? 0);
+    const serviceById = new Map(pricedServices.map((service) => [service.id, service]));
+    const servicePrice = (serviceId: string | null) => {
+      if (!serviceId) return 0;
+      const service = serviceById.get(serviceId);
+      if (!service || isPalletBillingService(service)) return 0;
+      const clientPrice = service.clientPrices[0] ?? null;
+      if (clientPrice?.isActive === false) return 0;
+      return Number(clientPrice?.priceRub ?? service.defaultPriceRub ?? 0);
+    };
+    const fbsProcessingPerItemRub = servicePrice(fbsService.id);
+    const additionalServices = settings.additionalServices
+      .map((selection) => {
+        const service = serviceById.get(selection.serviceId);
+        const quantityMultiplier = Number(selection.quantityMultiplier);
+        return service && !isPalletBillingService(service)
+          ? {
+              serviceId: service.id,
+              code: service.code,
+              name: service.name,
+              quantityMultiplier,
+              unitPriceRub: servicePrice(service.id),
+            }
+          : null;
+      })
+      .filter(Boolean) as Array<{
+        serviceId: string;
+        code: string;
+        name: string;
+        quantityMultiplier: number;
+        unitPriceRub: number;
+      }>;
+    const additionalPerItemRub = additionalServices.reduce(
+      (sum, service) => sum + service.unitPriceRub * service.quantityMultiplier,
+      0,
+    );
+    const batches = groupFbsOrdersByShipment(orders);
 
-    for (const order of orders) {
-      const sourceKey = `fbs:${order.marketplace.toLowerCase()}:${order.connectionId}:${order.id}`;
-      const existing = await this.prisma.billingCharge.findUnique({
-        where: { sourceKey },
-        include: {
-          invoiceItems: {
-            where: { invoice: { status: { not: 'CANCELLED' } } },
-            select: {
-              invoice: { select: { number: true, status: true } },
-            },
-            take: 1,
+    for (const batchOrders of batches.values()) {
+      const shipmentItems = batchOrders.reduce(
+        (sum, order) => sum + Math.max(1, order.itemCount),
+        0,
+      );
+      const weights = batchOrders.map((order) => Math.max(1, order.itemCount));
+      const destinationBasePriceRub =
+        settings.defaultDeliveryDestination === FbsDeliveryDestination.VNUKOVO_SORTING_CENTER
+          ? Number(settings.vnukovoBasePriceRub)
+          : Number(settings.pickupPointBasePriceRub);
+      const extraBlocks = Math.ceil(
+        Math.max(0, shipmentItems - settings.baseIncludedItems) /
+          Math.max(1, settings.extraBlockItems),
+      );
+      const deliveryTotalRub = round(
+        destinationBasePriceRub + extraBlocks * Number(settings.extraBlockPriceRub),
+        2,
+      );
+      const boxCount = Math.ceil(shipmentItems / Math.max(1, settings.boxCapacityItems));
+      const boxFormationTotalRub = round(
+        boxCount * servicePrice(settings.boxFormationServiceId),
+        2,
+      );
+      const boxMaterialTotalRub = round(
+        boxCount * servicePrice(settings.boxMaterialServiceId),
+        2,
+      );
+
+      for (const [orderIndex, order] of batchOrders.entries()) {
+        const itemCount = Math.max(1, order.itemCount);
+        const fbsProcessingRub = round(fbsProcessingPerItemRub * itemCount, 2);
+        const additionalServicesRub = round(additionalPerItemRub * itemCount, 2);
+        const deliveryRub = allocateRub(deliveryTotalRub, weights, orderIndex);
+        const boxFormationRub = allocateRub(boxFormationTotalRub, weights, orderIndex);
+        const boxMaterialRub = allocateRub(boxMaterialTotalRub, weights, orderIndex);
+        const totalRub = round(
+          fbsProcessingRub +
+            additionalServicesRub +
+            deliveryRub +
+            boxFormationRub +
+            boxMaterialRub,
+          2,
+        );
+        const unitPriceRub = round(totalRub / itemCount, 2);
+        const shipmentKey = fbsShipmentKey(order);
+        const breakdown: NonNullable<FbsOrderSummary['billing']>['breakdown'] = {
+          fbsProcessingRub,
+          additionalServicesRub,
+          deliveryRub,
+          boxFormationRub,
+          boxMaterialRub,
+          shipmentKey,
+          shipmentItems,
+          boxCount,
+          deliveryDestination: settings.defaultDeliveryDestination,
+        };
+        const description = `Комплексная обработка FBS-заказа ${marketplaceShortLabel(order.marketplace)} №${order.id}`;
+        const chargeMetadata = cleanJson({
+          kind: 'FBS',
+          pricingVersion: 2,
+          marketplace: order.marketplace,
+          connectionId: order.connectionId,
+          orderId: order.id,
+          supplyId: order.supplyId,
+          itemCount,
+          fbsProcessingPerItemRub,
+          additionalServices,
+          breakdown,
+          deliveryRules: {
+            destination: settings.defaultDeliveryDestination,
+            destinationBasePriceRub,
+            baseIncludedItems: settings.baseIncludedItems,
+            extraBlockItems: settings.extraBlockItems,
+            extraBlockPriceRub: Number(settings.extraBlockPriceRub),
           },
-        },
-      });
-      const charge = !existing
-        ? await this.prisma.billingCharge.create({
-          data: {
-            clientId,
-            serviceId: service.id,
-            description: `Обработка FBS-заказа ${marketplaceShortLabel(order.marketplace)} №${order.id}`,
-            unit: BillingUnit.PIECE,
-            quantity: 1,
-            unitPriceRub,
-            totalRub: unitPriceRub,
-            status: BillingChargeStatus.DRAFT,
-            serviceDate: validDate(order.createdAt) ?? new Date(),
-            source: BillingChargeSource.MANUAL,
-            sourceKey,
-            metadata: {
-              kind: 'FBS',
-              marketplace: order.marketplace,
-              connectionId: order.connectionId,
-              orderId: order.id,
-              supplyId: order.supplyId,
-            },
+          boxRules: {
+            capacityItems: settings.boxCapacityItems,
+            formationServiceId: settings.boxFormationServiceId,
+            materialServiceId: settings.boxMaterialServiceId,
           },
+          palletsIncluded: false,
+        });
+        const sourceKey = `fbs:${order.marketplace.toLowerCase()}:${order.connectionId}:${order.id}`;
+        const existing = await this.prisma.billingCharge.findUnique({
+          where: { sourceKey },
           include: {
             invoiceItems: {
               where: { invoice: { status: { not: 'CANCELLED' } } },
@@ -598,15 +982,35 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               take: 1,
             },
           },
-          })
-        : existing.status === BillingChargeStatus.DRAFT &&
-            existing.invoiceItems.length === 0 &&
-            Number(existing.unitPriceRub) !== unitPriceRub
-          ? await this.prisma.billingCharge.update({
-              where: { id: existing.id },
+        });
+        const shouldUpdate =
+          existing?.status === BillingChargeStatus.DRAFT &&
+          existing.invoiceItems.length === 0 &&
+          (existing.serviceId !== fbsService.id ||
+            existing.description !== description ||
+            Number(existing.quantity) !== itemCount ||
+            Number(existing.unitPriceRub) !== unitPriceRub ||
+            Number(existing.totalRub) !== totalRub ||
+            JSON.stringify(existing.metadata ?? null) !== JSON.stringify(chargeMetadata));
+        const charge = !existing
+          ? await this.prisma.billingCharge.create({
               data: {
+                clientId,
+                serviceId: fbsService.id,
+                description,
+                unit: BillingUnit.PIECE,
+                quantity: itemCount,
                 unitPriceRub,
-                totalRub: unitPriceRub,
+                totalRub,
+                status: BillingChargeStatus.DRAFT,
+                serviceDate:
+                  validDate(order.deliveryDate) ??
+                  validDate(order.sellerDate) ??
+                  validDate(order.createdAt) ??
+                  new Date(),
+                source: BillingChargeSource.MANUAL,
+                sourceKey,
+                metadata: chargeMetadata,
               },
               include: {
                 invoiceItems: {
@@ -618,16 +1022,39 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
                 },
               },
             })
-          : existing;
-      const invoice = charge.invoiceItems[0]?.invoice ?? null;
-      result.set(fbsOrderKey(order), {
-        chargeId: charge.id,
-        status: charge.status,
-        unitPriceRub: Number(charge.unitPriceRub),
-        totalRub: Number(charge.totalRub),
-        invoiceNumber: invoice?.number ?? null,
-        invoiceStatus: invoice?.status ?? null,
-      });
+          : shouldUpdate
+            ? await this.prisma.billingCharge.update({
+              where: { id: existing.id },
+              data: {
+                serviceId: fbsService.id,
+                description,
+                quantity: itemCount,
+                unitPriceRub,
+                totalRub,
+                metadata: chargeMetadata,
+              },
+              include: {
+                invoiceItems: {
+                  where: { invoice: { status: { not: 'CANCELLED' } } },
+                  select: {
+                    invoice: { select: { number: true, status: true } },
+                  },
+                  take: 1,
+                },
+              },
+            })
+            : existing;
+        const invoice = charge.invoiceItems[0]?.invoice ?? null;
+        result.set(fbsOrderKey(order), {
+          chargeId: charge.id,
+          status: charge.status,
+          unitPriceRub: Number(charge.unitPriceRub),
+          totalRub: Number(charge.totalRub),
+          invoiceNumber: invoice?.number ?? null,
+          invoiceStatus: invoice?.status ?? null,
+          breakdown,
+        });
+      }
     }
 
     return result;
@@ -1466,4 +1893,52 @@ function validDate(value: string | null | undefined) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+function fbsShipmentKey(order: FbsOrderSummary) {
+  const supply = order.supplyId?.trim();
+  const date = (order.deliveryDate || order.sellerDate || order.createdAt || '').slice(0, 10);
+  const batch = supply ? `supply:${supply}` : date ? `date:${date}` : `order:${order.id}`;
+  return `${order.marketplace}:${order.connectionId}:${batch}`;
+}
+
+function groupFbsOrdersByShipment(orders: FbsOrderSummary[]) {
+  const groups = new Map<string, FbsOrderSummary[]>();
+  for (const order of orders) {
+    const key = fbsShipmentKey(order);
+    const group = groups.get(key) ?? [];
+    group.push(order);
+    groups.set(key, group);
+  }
+  for (const group of groups.values()) {
+    group.sort((left, right) => left.id.localeCompare(right.id, 'ru-RU', { numeric: true }));
+  }
+  return groups;
+}
+
+function allocateRub(totalRub: number, weights: number[], index: number) {
+  const totalCents = Math.round(totalRub * 100);
+  const normalizedWeights = weights.map((weight) => Math.max(1, Math.trunc(weight) || 1));
+  const totalWeight = normalizedWeights.reduce((sum, weight) => sum + weight, 0);
+  const allocations = normalizedWeights.map((weight) =>
+    Math.floor((totalCents * weight) / totalWeight),
+  );
+  let remainder = totalCents - allocations.reduce((sum, value) => sum + value, 0);
+  for (let allocationIndex = 0; remainder > 0; allocationIndex = (allocationIndex + 1) % allocations.length) {
+    allocations[allocationIndex] += 1;
+    remainder -= 1;
+  }
+  return (allocations[index] ?? 0) / 100;
+}
+
+function isPalletBillingService(service: { code: string; name: string; unit: BillingUnit }) {
+  const text = `${service.code} ${service.name}`.toLocaleUpperCase('ru-RU');
+  return (
+    service.unit === BillingUnit.PALLET ||
+    text.includes('PALLET') ||
+    text.includes('ПАЛЛЕТ') ||
+    text.includes('ПОДДОН')
+  );
+}
+
 const FBS_PROCESSING_SERVICE_CODE = 'FBS_PROCESSING';
+const FBS_BOX_FORMATION_SERVICE_CODE = 'BOX_ASSEMBLY';
+const FBS_BOX_MATERIAL_SERVICE_CODE = 'BOX_60_40_40';

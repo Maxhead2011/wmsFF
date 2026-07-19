@@ -9,7 +9,9 @@ import {
   PackageCheck,
   PlugZap,
   RefreshCw,
+  Save,
   Search,
+  Settings2,
   ShoppingBasket,
   Truck,
 } from 'lucide-react';
@@ -17,11 +19,16 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 're
 import {
   createFbsMarketplaceConnection,
   fetchClients,
+  fetchFbsBillingSettings,
   fetchFbsOrders,
+  updateFbsBillingSettings,
   type AuthSession,
   type ClientFbsOrders,
   type ClientSummary,
+  type FbsBillingSettings,
+  type FbsDeliveryDestination,
   type FbsOrderSummary,
+  type UpdateFbsBillingSettingsPayload,
 } from '../../lib/api';
 import './fbs.css';
 
@@ -29,7 +36,7 @@ type FbsPanelProps = {
   session: AuthSession;
 };
 
-type FbsView = 'active' | 'shipped' | 'cost' | 'archive';
+type FbsView = 'active' | 'shipped' | 'cost' | 'archive' | 'pricing';
 type OrdersState =
   | { status: 'idle'; data: null; error: '' }
   | { status: 'loading'; data: ClientFbsOrders | null; error: '' }
@@ -65,6 +72,13 @@ const fbsViews = [
     icon: Archive,
     accent: 'slate',
   },
+  {
+    id: 'pricing' as const,
+    title: 'Назначение стоимости обработки',
+    description: 'Услуги клиента, доставка, шаг доплаты и комплектация коробов.',
+    icon: Settings2,
+    accent: 'violet',
+  },
 ];
 
 export function FbsPanel({ session }: FbsPanelProps) {
@@ -83,6 +97,13 @@ export function FbsPanel({ session }: FbsPanelProps) {
   const [connectionError, setConnectionError] = useState('');
   const [isConnecting, setConnecting] = useState(false);
   const loadSequence = useRef(0);
+  const canManagePricing =
+    session.user.permissionCodes.includes('system:admin') ||
+    session.user.permissionCodes.includes('billing:write') ||
+    session.user.roleCodes.some((role) => role === 'ADMIN' || role === 'OWNER');
+  const visibleViews = canManagePricing
+    ? fbsViews
+    : fbsViews.filter((view) => view.id !== 'pricing');
 
   useEffect(() => {
     let active = true;
@@ -144,13 +165,14 @@ export function FbsPanel({ session }: FbsPanelProps) {
     () => clients.find((client) => client.id === selectedClientId) ?? null,
     [clients, selectedClientId],
   );
-  const activeConfig = fbsViews.find((view) => view.id === activeView) ?? fbsViews[0];
+  const activeConfig = visibleViews.find((view) => view.id === activeView) ?? visibleViews[0];
   const data = ordersState.data;
-  const tileCounts: Record<FbsView, number> = {
+  const tileCounts: Record<FbsView, number | string> = {
     active: data?.counts.active ?? 0,
     shipped: data?.counts.shipped ?? 0,
     cost: data?.counts.shipped ?? 0,
     archive: data?.counts.archive ?? 0,
+    pricing: 'тарифы',
   };
 
   async function connectMarketplace(event: FormEvent<HTMLFormElement>) {
@@ -200,7 +222,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
       </header>
 
       <div className="fbs-tiles" role="tablist" aria-label="Разделы FBS">
-        {fbsViews.map((view, index) => {
+        {visibleViews.map((view, index) => {
           const Icon = view.icon;
           const isActive = activeView === view.id;
           return (
@@ -247,7 +269,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
                 </select>
               </label>
             ) : null}
-            {activeView !== 'cost' ? (
+            {activeView !== 'cost' && activeView !== 'pricing' ? (
               <label className="fbs-workspace__search">
                 <span>Поиск</span>
                 <span>
@@ -260,20 +282,28 @@ export function FbsPanel({ session }: FbsPanelProps) {
                 </span>
               </label>
             ) : null}
-            <button
-              className="fbs-refresh-button"
-              type="button"
-              onClick={() => void loadOrders(true)}
-              disabled={!selectedClientId || ordersState.status === 'loading'}
-            >
-              <RefreshCw size={16} aria-hidden="true" />
-              <span>{ordersState.status === 'loading' ? 'Обновляю' : 'Обновить'}</span>
-            </button>
+            {activeView !== 'pricing' ? (
+              <button
+                className="fbs-refresh-button"
+                type="button"
+                onClick={() => void loadOrders(true)}
+                disabled={!selectedClientId || ordersState.status === 'loading'}
+              >
+                <RefreshCw size={16} aria-hidden="true" />
+                <span>{ordersState.status === 'loading' ? 'Обновляю' : 'Обновить'}</span>
+              </button>
+            ) : null}
           </div>
         </div>
 
         {!selectedClientId ? (
           <FbsNotice icon={Boxes} title="Выберите клиента" text="Заказы загружаются отдельно для каждого клиентского кабинета." />
+        ) : activeView === 'pricing' && canManagePricing ? (
+          <FbsPricingSettings
+            clientId={selectedClientId}
+            session={session}
+            onSaved={() => void loadOrders(true)}
+          />
         ) : ordersState.status === 'error' ? (
           <FbsNotice icon={AlertTriangle} title="Не удалось получить заказы" text={ordersState.error} tone="error" />
         ) : data && !data.connected ? (
@@ -297,11 +327,11 @@ export function FbsPanel({ session }: FbsPanelProps) {
           <FbsNotice icon={RefreshCw} title="Получаю заказы" text="Проверяем подключённые кабинеты Wildberries и Ozon." />
         ) : activeView === 'cost' ? (
           <FbsCostView data={data} />
-        ) : (
+        ) : activeView === 'active' || activeView === 'shipped' || activeView === 'archive' ? (
           <FbsOrdersView data={data} view={activeView} search={search} />
-        )}
+        ) : null}
 
-        {data?.connected ? (
+        {data?.connected && activeView !== 'pricing' ? (
           <div className="fbs-source-line">
             <span>
               <Link2 size={14} aria-hidden="true" />
@@ -323,7 +353,7 @@ function FbsOrdersView({
 }: {
   data: ClientFbsOrders | null;
   search: string;
-  view: Exclude<FbsView, 'cost'>;
+  view: Exclude<FbsView, 'cost' | 'pricing'>;
 }) {
   const category = view;
   const orders = (data?.orders ?? []).filter((order) => order.category === category);
@@ -345,7 +375,7 @@ function FbsOrdersView({
           .some((value) => String(value).toLowerCase().includes(normalizedSearch)),
       )
     : orders;
-  const itemsCount = visibleOrders.reduce((sum, order) => sum + Math.max(1, order.barcodes.length), 0);
+  const itemsCount = visibleOrders.reduce((sum, order) => sum + Math.max(1, order.itemCount), 0);
   const emptyCopy = {
     active: {
       icon: Clock3,
@@ -432,7 +462,11 @@ function FbsOrderRow({ order, showBoxes }: { order: FbsOrderSummary; showBoxes: 
       </td>
       <td>
         <strong>{order.product?.name || order.article || `Товар ${order.nmId ?? ''}`}</strong>
-        <small>{[order.article, order.nmId ? `nmID ${order.nmId}` : null].filter(Boolean).join(' · ')}</small>
+        <small>
+          {[order.article, order.nmId ? `nmID ${order.nmId}` : null, `${Math.max(1, order.itemCount)} ед.`]
+            .filter(Boolean)
+            .join(' · ')}
+        </small>
       </td>
       <td>
         <span className="fbs-mono">{order.barcodes.join(', ') || 'не передан'}</span>
@@ -520,6 +554,18 @@ function FbsCostView({ data }: { data: ClientFbsOrders | null }) {
                           : 'черновик'
                         : 'нужно настроить тариф FBS'}
                     </small>
+                    {order.billing?.breakdown ? (
+                      <small>
+                        обработка {formatMoney(
+                          order.billing.breakdown.fbsProcessingRub +
+                            order.billing.breakdown.additionalServicesRub,
+                        )} ₽ · доставка {formatMoney(order.billing.breakdown.deliveryRub)} ₽ · короб{' '}
+                        {formatMoney(
+                          order.billing.breakdown.boxFormationRub +
+                            order.billing.breakdown.boxMaterialRub,
+                        )} ₽
+                      </small>
+                    ) : null}
                   </td>
                   <td>
                     <strong>{order.billing?.invoiceNumber || 'не выставлен'}</strong>
@@ -541,6 +587,365 @@ function FbsCostView({ data }: { data: ClientFbsOrders | null }) {
         ) : null}
       </div>
     </>
+  );
+}
+
+function FbsPricingSettings({
+  clientId,
+  session,
+  onSaved,
+}: {
+  clientId: string;
+  session: AuthSession;
+  onSaved: () => void;
+}) {
+  const [data, setData] = useState<FbsBillingSettings | null>(null);
+  const [form, setForm] = useState<UpdateFbsBillingSettingsPayload | null>(null);
+  const [isLoading, setLoading] = useState(true);
+  const [isSaving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError('');
+    setSaved(false);
+    void fetchFbsBillingSettings(session.accessToken, clientId)
+      .then((next) => {
+        if (!active) return;
+        setData(next);
+        setForm(editableFbsSettings(next));
+      })
+      .catch((caught) => {
+        if (!active) return;
+        setData(null);
+        setForm(null);
+        setError(caught instanceof Error ? caught.message : 'Не удалось загрузить тарифы FBS.');
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [clientId, session.accessToken]);
+
+  if (isLoading && !form) {
+    return <FbsNotice icon={RefreshCw} title="Загружаю тарифы FBS" text="Получаем услуги и цены выбранного клиента." />;
+  }
+  if (!form || !data) {
+    return <FbsNotice icon={AlertTriangle} title="Не удалось загрузить настройки" text={error || 'Повторите попытку.'} tone="error" />;
+  }
+
+  const availableServices = data.serviceOptions.filter((service) => service.isActive);
+  const additionalOptions = availableServices.filter(
+    (service) =>
+      service.id !== form.boxFormationServiceId &&
+      service.id !== form.boxMaterialServiceId &&
+      service.code !== 'BOX_ASSEMBLY' &&
+      service.code !== 'BOX_60_40_40',
+  );
+  const preview = [5, 6, 10, form.boxCapacityItems].filter(
+    (items, index, all) => items > 0 && all.indexOf(items) === index,
+  );
+
+  function patch<K extends keyof UpdateFbsBillingSettingsPayload>(
+    key: K,
+    value: UpdateFbsBillingSettingsPayload[K],
+  ) {
+    setForm((current) => (current ? { ...current, [key]: value } : current));
+    setSaved(false);
+  }
+
+  function toggleAdditionalService(serviceId: string, checked: boolean) {
+    patch(
+      'additionalServices',
+      checked
+        ? [...form!.additionalServices, { serviceId, quantityMultiplier: 1 }]
+        : form!.additionalServices.filter((selection) => selection.serviceId !== serviceId),
+    );
+  }
+
+  function changeMultiplier(serviceId: string, quantityMultiplier: number) {
+    patch(
+      'additionalServices',
+      form!.additionalServices.map((selection) =>
+        selection.serviceId === serviceId
+          ? { ...selection, quantityMultiplier: Math.max(0.001, quantityMultiplier || 1) }
+          : selection,
+      ),
+    );
+  }
+
+  async function saveSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    setError('');
+    setSaved(false);
+    try {
+      const next = await updateFbsBillingSettings(session.accessToken, clientId, form!);
+      setData(next);
+      setForm(editableFbsSettings(next));
+      setSaved(true);
+      onSaved();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Не удалось сохранить тарифы FBS.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form className="fbs-pricing" onSubmit={saveSettings}>
+      <div className="fbs-pricing__intro">
+        <div>
+          <span>
+            <Settings2 size={19} aria-hidden="true" />
+          </span>
+          <div>
+            <strong>{data.client.code} · {data.client.name}</strong>
+            <p>Настройки применяются к новым и ещё не выставленным начислениям FBS.</p>
+          </div>
+        </div>
+        <span className="fbs-pricing__no-pallets">Паллеты не начисляются</span>
+      </div>
+
+      <section className="fbs-pricing__section">
+        <header>
+          <div>
+            <span>01</span>
+            <div>
+              <h4>Обработка каждой единицы</h4>
+              <p>Базовая цена FBS плюс выбранные действующие услуги клиента.</p>
+            </div>
+          </div>
+        </header>
+        <div className="fbs-pricing__fields fbs-pricing__fields--processing">
+          <label>
+            <span>Обработка FBS за единицу, ₽</span>
+            <input
+              min="0"
+              step="0.01"
+              type="number"
+              value={form.fbsProcessingPriceRub}
+              onChange={(event) => patch('fbsProcessingPriceRub', nonNegativeNumber(event.target.value))}
+              required
+            />
+          </label>
+          <div className="fbs-pricing__service-picker">
+            <span>Дополнительные услуги клиента</span>
+            <div>
+              {additionalOptions.map((service) => {
+                const selected = form.additionalServices.find(
+                  (selection) => selection.serviceId === service.id,
+                );
+                return (
+                  <label className={selected ? 'is-selected' : undefined} key={service.id}>
+                    <input
+                      checked={Boolean(selected)}
+                      type="checkbox"
+                      onChange={(event) => toggleAdditionalService(service.id, event.target.checked)}
+                    />
+                    <span>
+                      <strong>{service.name}</strong>
+                      <small>{service.code} · {formatMoney(service.priceRub)} ₽</small>
+                    </span>
+                    {selected ? (
+                      <input
+                        aria-label={`Количество услуги ${service.name} на единицу`}
+                        min="0.001"
+                        step="0.001"
+                        type="number"
+                        value={selected.quantityMultiplier}
+                        onChange={(event) => changeMultiplier(service.id, Number(event.target.value))}
+                      />
+                    ) : null}
+                  </label>
+                );
+              })}
+              {additionalOptions.length === 0 ? (
+                <p>Сначала подключите клиенту основные услуги в разделе «Биллинг».</p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="fbs-pricing__section">
+        <header>
+          <div>
+            <span>02</span>
+            <div>
+              <h4>Доставка партии FBS</h4>
+              <p>Базовый выезд включает заданное количество единиц, затем цена растёт блоками.</p>
+            </div>
+          </div>
+        </header>
+        <div className="fbs-pricing__fields">
+          <label>
+            <span>Маршрут по умолчанию</span>
+            <select
+              value={form.defaultDeliveryDestination}
+              onChange={(event) =>
+                patch('defaultDeliveryDestination', event.target.value as FbsDeliveryDestination)
+              }
+            >
+              <option value="PICKUP_POINT">Ближайший ПВЗ</option>
+              <option value="VNUKOVO_SORTING_CENTER">СЦ Внуково</option>
+            </select>
+          </label>
+          <label>
+            <span>Базовый выезд на ПВЗ, ₽</span>
+            <input
+              min="0"
+              step="0.01"
+              type="number"
+              value={form.pickupPointBasePriceRub}
+              onChange={(event) => patch('pickupPointBasePriceRub', nonNegativeNumber(event.target.value))}
+              required
+            />
+          </label>
+          <label>
+            <span>Базовый выезд в СЦ Внуково, ₽</span>
+            <input
+              min="0"
+              step="0.01"
+              type="number"
+              value={form.vnukovoBasePriceRub}
+              onChange={(event) => patch('vnukovoBasePriceRub', nonNegativeNumber(event.target.value))}
+              required
+            />
+          </label>
+          <label>
+            <span>Единиц входит в базовый выезд</span>
+            <input
+              min="1"
+              step="1"
+              type="number"
+              value={form.baseIncludedItems}
+              onChange={(event) => patch('baseIncludedItems', positiveInteger(event.target.value))}
+              required
+            />
+          </label>
+          <label>
+            <span>Размер следующего блока, ед.</span>
+            <input
+              min="1"
+              step="1"
+              type="number"
+              value={form.extraBlockItems}
+              onChange={(event) => patch('extraBlockItems', positiveInteger(event.target.value))}
+              required
+            />
+          </label>
+          <label>
+            <span>Доплата за каждый блок, ₽</span>
+            <input
+              min="0"
+              step="0.01"
+              type="number"
+              value={form.extraBlockPriceRub}
+              onChange={(event) => patch('extraBlockPriceRub', nonNegativeNumber(event.target.value))}
+              required
+            />
+          </label>
+        </div>
+      </section>
+
+      <section className="fbs-pricing__section">
+        <header>
+          <div>
+            <span>03</span>
+            <div>
+              <h4>Формирование и стоимость коробов</h4>
+              <p>Количество коробов считается автоматически по вместимости.</p>
+            </div>
+          </div>
+        </header>
+        <div className="fbs-pricing__fields">
+          <label>
+            <span>Средняя вместимость короба, ед.</span>
+            <input
+              min="1"
+              step="1"
+              type="number"
+              value={form.boxCapacityItems}
+              onChange={(event) => patch('boxCapacityItems', positiveInteger(event.target.value))}
+              required
+            />
+            <small>Например, для костюмов Лукина — 16 шт.</small>
+          </label>
+          <label>
+            <span>Услуга формирования короба</span>
+            <select
+              value={form.boxFormationServiceId ?? ''}
+              onChange={(event) => patch('boxFormationServiceId', event.target.value || null)}
+            >
+              <option value="">Не начислять</option>
+              {availableServices.map((service) => (
+                <option key={`formation:${service.id}`} value={service.id}>
+                  {service.name} · {formatMoney(service.priceRub)} ₽
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Стоимость самого короба</span>
+            <select
+              value={form.boxMaterialServiceId ?? ''}
+              onChange={(event) => patch('boxMaterialServiceId', event.target.value || null)}
+            >
+              <option value="">Не начислять</option>
+              {availableServices.map((service) => (
+                <option key={`material:${service.id}`} value={service.id}>
+                  {service.name} · {formatMoney(service.priceRub)} ₽
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <section className="fbs-pricing__preview">
+        <header>
+          <div>
+            <span>
+              <BadgeRussianRuble size={18} aria-hidden="true" />
+            </span>
+            <div>
+              <h4>Предварительный расчёт партии</h4>
+              <p>Показывает, как будут складываться начисления при текущих параметрах.</p>
+            </div>
+          </div>
+        </header>
+        <div>
+          {preview.map((items) => {
+            const calculation = calculateFbsPreview(form, data.serviceOptions, items);
+            return (
+              <article key={items}>
+                <span>{items} ед.</span>
+                <strong>{formatMoney(calculation.totalRub)} ₽</strong>
+                <small>
+                  обработка {formatMoney(calculation.processingRub)} · доставка{' '}
+                  {formatMoney(calculation.deliveryRub)} · {calculation.boxCount} кор.
+                </small>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+
+      {error ? <p className="form-error">{error}</p> : null}
+      {saved ? <p className="fbs-pricing__success">Настройки сохранены. Черновые начисления пересчитаются автоматически.</p> : null}
+      <footer className="fbs-pricing__footer">
+        <p>{data.excludedRule}</p>
+        <button className="primary-button" type="submit" disabled={isSaving}>
+          <Save size={17} aria-hidden="true" />
+          {isSaving ? 'Сохраняю' : 'Сохранить стоимость обработки'}
+        </button>
+      </footer>
+    </form>
   );
 }
 
@@ -656,6 +1061,69 @@ function FbsNotice({
       <p>{text}</p>
     </div>
   );
+}
+
+function editableFbsSettings(data: FbsBillingSettings): UpdateFbsBillingSettingsPayload {
+  return {
+    defaultDeliveryDestination: data.settings.defaultDeliveryDestination,
+    pickupPointBasePriceRub: Number(data.settings.pickupPointBasePriceRub),
+    vnukovoBasePriceRub: Number(data.settings.vnukovoBasePriceRub),
+    baseIncludedItems: Number(data.settings.baseIncludedItems),
+    extraBlockItems: Number(data.settings.extraBlockItems),
+    extraBlockPriceRub: Number(data.settings.extraBlockPriceRub),
+    boxCapacityItems: Number(data.settings.boxCapacityItems),
+    fbsProcessingPriceRub: Number(data.settings.fbsProcessingPriceRub),
+    boxFormationServiceId: data.settings.boxFormationServiceId,
+    boxMaterialServiceId: data.settings.boxMaterialServiceId,
+    additionalServices: data.settings.additionalServices.map((selection) => ({ ...selection })),
+  };
+}
+
+function calculateFbsPreview(
+  settings: UpdateFbsBillingSettingsPayload,
+  serviceOptions: FbsBillingSettings['serviceOptions'],
+  items: number,
+) {
+  const servicePriceById = new Map(
+    serviceOptions.map((service) => [service.id, service.isActive ? Number(service.priceRub) : 0]),
+  );
+  const processingPerItemRub =
+    settings.fbsProcessingPriceRub +
+    settings.additionalServices.reduce(
+      (sum, selection) =>
+        sum +
+        (servicePriceById.get(selection.serviceId) ?? 0) * selection.quantityMultiplier,
+      0,
+    );
+  const baseDeliveryRub =
+    settings.defaultDeliveryDestination === 'VNUKOVO_SORTING_CENTER'
+      ? settings.vnukovoBasePriceRub
+      : settings.pickupPointBasePriceRub;
+  const extraBlocks = Math.ceil(
+    Math.max(0, items - settings.baseIncludedItems) / Math.max(1, settings.extraBlockItems),
+  );
+  const deliveryRub = baseDeliveryRub + extraBlocks * settings.extraBlockPriceRub;
+  const boxCount = Math.ceil(items / Math.max(1, settings.boxCapacityItems));
+  const boxesRub =
+    boxCount *
+    ((servicePriceById.get(settings.boxFormationServiceId ?? '') ?? 0) +
+      (servicePriceById.get(settings.boxMaterialServiceId ?? '') ?? 0));
+  const processingRub = processingPerItemRub * items;
+  return {
+    processingRub,
+    deliveryRub,
+    boxesRub,
+    boxCount,
+    totalRub: processingRub + deliveryRub + boxesRub,
+  };
+}
+
+function nonNegativeNumber(value: string) {
+  return Math.max(0, Number(value) || 0);
+}
+
+function positiveInteger(value: string) {
+  return Math.max(1, Math.trunc(Number(value)) || 1);
 }
 
 function marketplaceLabel(marketplace: 'WILDBERRIES' | 'OZON') {

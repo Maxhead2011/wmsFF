@@ -1,8 +1,9 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
+import { UpdateFbsBillingSettingsDto } from './dto/update-fbs-billing-settings.dto';
 import { UpdateMarketplaceConnectionDto } from './dto/update-marketplace-connection.dto';
 import { UpsertMarketplaceConnectionDto } from './dto/upsert-marketplace-connection.dto';
 import { MarketplaceConnectionsService } from './marketplace-connections.service';
@@ -32,6 +33,22 @@ export class MarketplaceConnectionsController {
   @RequirePermissions()
   createFbsConnection(@Body() dto: UpsertMarketplaceConnectionDto, @CurrentUser() user: AuthUser) {
     return this.connections.createFbsConnection(dto, user);
+  }
+
+  @Get('fbs/billing-settings/:clientId')
+  @RequirePermissions('billing:write')
+  getFbsBillingSettings(@Param('clientId') clientId: string, @CurrentUser() user: AuthUser) {
+    return this.connections.getFbsBillingSettings(clientId, user);
+  }
+
+  @Put('fbs/billing-settings/:clientId')
+  @RequirePermissions('billing:write')
+  updateFbsBillingSettings(
+    @Param('clientId') clientId: string,
+    @Body() dto: UpdateFbsBillingSettingsDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.connections.updateFbsBillingSettings(clientId, dto, user);
   }
 
   @Post()

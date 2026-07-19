@@ -242,18 +242,59 @@ describe('MarketplaceConnectionsService', () => {
   });
 
   it('creates an idempotent FBS processing charge when an order is shipped', async () => {
+    const fbsService = {
+      id: 'service-fbs',
+      code: 'FBS_PROCESSING',
+      name: 'Обработка заказа FBS',
+      unit: 'PIECE',
+      defaultPriceRub: new Prisma.Decimal(0),
+      clientPrices: [{ priceRub: new Prisma.Decimal(75), isActive: true }],
+    };
+    const formationService = {
+      id: 'service-formation',
+      code: 'BOX_ASSEMBLY',
+      name: 'Сборка короба',
+      unit: 'PIECE',
+      defaultPriceRub: new Prisma.Decimal(40),
+      clientPrices: [{ priceRub: new Prisma.Decimal(40), isActive: true }],
+    };
+    const boxService = {
+      id: 'service-box',
+      code: 'BOX_60_40_40',
+      name: 'Короб 60*40*40',
+      unit: 'PIECE',
+      defaultPriceRub: new Prisma.Decimal(100),
+      clientPrices: [{ priceRub: new Prisma.Decimal(100), isActive: true }],
+    };
     const prisma = {
+      client: {
+        findUnique: vi.fn().mockResolvedValue({ id: 'client-1', code: 'CL-1', name: 'Клиент' }),
+      },
       billingService: {
-        upsert: vi.fn().mockResolvedValue({
-          id: 'service-fbs',
-          code: 'FBS_PROCESSING',
-          defaultPriceRub: new Prisma.Decimal(0),
+        upsert: vi.fn().mockImplementation(async ({ where }) => {
+          if (where.code === 'BOX_ASSEMBLY') return formationService;
+          if (where.code === 'BOX_60_40_40') return boxService;
+          return fbsService;
         }),
+        findMany: vi.fn().mockResolvedValue([fbsService, formationService, boxService]),
       },
       clientBillingService: {
-        findUnique: vi.fn().mockResolvedValue({
-          priceRub: new Prisma.Decimal(75),
-          isActive: true,
+        upsert: vi.fn(),
+      },
+      clientFbsBillingSettings: {
+        upsert: vi.fn().mockResolvedValue({
+          id: 'settings-1',
+          clientId: 'client-1',
+          defaultDeliveryDestination: 'PICKUP_POINT',
+          pickupPointBasePriceRub: new Prisma.Decimal(500),
+          vnukovoBasePriceRub: new Prisma.Decimal(1500),
+          baseIncludedItems: 5,
+          extraBlockItems: 5,
+          extraBlockPriceRub: new Prisma.Decimal(250),
+          boxCapacityItems: 16,
+          boxFormationServiceId: formationService.id,
+          boxMaterialServiceId: boxService.id,
+          additionalServices: [],
         }),
       },
       billingCharge: {
@@ -274,7 +315,10 @@ describe('MarketplaceConnectionsService', () => {
         marketplace: MarketplaceType.WILDBERRIES,
         connectionId: 'connection-1',
         category: 'shipped',
+        itemCount: 1,
         createdAt: '2026-07-19T10:00:00Z',
+        sellerDate: '2026-07-19T11:00:00Z',
+        deliveryDate: '2026-07-19T12:00:00Z',
         supplyId: 'WB-GI-1',
       },
     ]);
@@ -285,19 +329,56 @@ describe('MarketplaceConnectionsService', () => {
           clientId: 'client-1',
           serviceId: 'service-fbs',
           sourceKey: 'fbs:wildberries:connection-1:1001',
-          unitPriceRub: 75,
-          totalRub: 75,
+          unitPriceRub: 715,
+          totalRub: 715,
           metadata: expect.objectContaining({
             kind: 'FBS',
+            pricingVersion: 2,
             orderId: '1001',
+            palletsIncluded: false,
+            breakdown: expect.objectContaining({
+              fbsProcessingRub: 75,
+              deliveryRub: 500,
+              boxFormationRub: 40,
+              boxMaterialRub: 100,
+            }),
           }),
         }),
       }),
     );
     expect(result.get('WILDBERRIES:connection-1:1001')).toMatchObject({
       chargeId: 'charge-1',
-      totalRub: 75,
+      totalRub: 715,
       invoiceNumber: null,
+      breakdown: expect.objectContaining({
+        deliveryRub: 500,
+        boxCount: 1,
+      }),
     });
+
+    prisma.billingCharge.create.mockClear();
+    await (service as any).ensureFbsProcessingCharges(
+      'client-1',
+      Array.from({ length: 6 }, (_value, index) => ({
+        id: String(2001 + index),
+        marketplace: MarketplaceType.WILDBERRIES,
+        connectionId: 'connection-1',
+        category: 'shipped',
+        itemCount: 1,
+        createdAt: '2026-07-19T10:00:00Z',
+        sellerDate: '2026-07-19T11:00:00Z',
+        deliveryDate: '2026-07-19T12:00:00Z',
+        supplyId: 'WB-GI-2',
+      })),
+    );
+    const batchCharges = prisma.billingCharge.create.mock.calls.map((call) => call[0].data);
+    expect(batchCharges).toHaveLength(6);
+    expect(
+      batchCharges.reduce(
+        (sum, charge) => sum + Number(charge.metadata.breakdown.deliveryRub),
+        0,
+      ),
+    ).toBe(750);
+    expect(batchCharges.reduce((sum, charge) => sum + Number(charge.totalRub), 0)).toBe(1340);
   });
 });
