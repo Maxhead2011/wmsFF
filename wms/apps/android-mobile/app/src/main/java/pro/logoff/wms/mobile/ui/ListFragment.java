@@ -69,6 +69,7 @@ public class ListFragment extends Fragment {
     }
 
     @Override public void onResume() { super.onResume(); if (binding != null) load(); }
+    public void refresh() { if (binding != null) load(); }
 
     private void load() {
         binding.swipe.setRefreshing(true);
@@ -164,14 +165,18 @@ public class ListFragment extends Fragment {
             new com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext()).setTitle(row.title()).setMessage(row.subtitle() + "\n\nСтатус: " + StatusLabels.label(status)).setPositiveButton("Закрыть", null).show();
             return;
         }
-        String[] actions = app.state().isAdmin() ? new String[]{"Редактировать", "Отменить заявку", "Открыть полную карточку"} : new String[]{"Редактировать", "Отменить заявку"};
+        String[] actions = new String[]{"Редактировать", "Отменить заявку", "Показать карточку"};
         new com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext()).setTitle(row.title()).setItems(actions, (dialog, which) -> {
             if (which == 0) {
                 Intent intent = new Intent(requireContext(), RequestFormActivity.class); intent.putExtra("requestId", row.id()); intent.putExtra("title", string(request.get("title"))); intent.putExtra("city", string(request.get("destinationCity"))); intent.putExtra("comment", string(request.get("comment"))); startActivity(intent);
             } else if (which == 1) {
                 new com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext()).setTitle("Отменить заявку?").setMessage("Заявка останется в истории со статусом «Отменена».").setNegativeButton("Нет", null).setPositiveButton("Отменить", (confirm, button) -> cancelRequest(row.id())).show();
             } else {
-                startActivity(new Intent(requireContext(), pro.logoff.wms.mobile.AdminWebActivity.class));
+                new com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
+                        .setTitle(row.title())
+                        .setMessage(row.subtitle() + "\n\nСтатус: " + StatusLabels.label(status))
+                        .setPositiveButton("Закрыть", null)
+                        .show();
             }
         }).setNegativeButton("Закрыть", null).show();
     }

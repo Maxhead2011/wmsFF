@@ -253,6 +253,524 @@ export class MobileService {
     return this.warehouse.listOnlineReceipts({ clientId }, user);
   }
 
+  async nativeModule(user: AuthUser, module: string, query: MobileListDto) {
+    const supported = new Set([
+      'stock',
+      'catalog',
+      'warehouse',
+      'inventory',
+      'turnover',
+      'clients',
+      'access',
+      'logistics',
+      'services',
+      'imports',
+      'print',
+      'service',
+      'own-companies',
+      'profile',
+    ]);
+    if (!supported.has(module)) throw new NotFoundException('Раздел мобильного приложения не найден.');
+
+    const adminOnly = new Set(['clients', 'access', 'imports', 'print', 'service', 'own-companies']);
+    if (adminOnly.has(module) && isClientOnly(user)) {
+      throw new ForbiddenException('Раздел доступен только сотрудникам WMS.');
+    }
+    const requiredPermissions: Record<string, string[]> = {
+      stock: ['stock:read'],
+      catalog: ['skus:read'],
+      warehouse: ['warehouse:read', 'stock:read'],
+      inventory: ['stock:read'],
+      turnover: ['stock:read'],
+      clients: ['clients:read'],
+      access: ['users:read'],
+      logistics: ['logistics:read'],
+      services: ['billing:read'],
+      imports: ['imports:write'],
+      print: ['print:write'],
+      service: ['system:admin'],
+      'own-companies': ['billing:read'],
+      profile: ['clients:read'],
+    };
+    if (!hasAnyPermission(user, requiredPermissions[module])) {
+      throw new ForbiddenException('Недостаточно прав для просмотра раздела.');
+    }
+
+    const clientIds = await this.resolveClientIds(user, query.clientId);
+    const search = clean(query.search);
+    const contains = search ? { contains: search, mode: Prisma.QueryMode.insensitive } : undefined;
+    const take = query.limit;
+
+    if (module === 'profile') {
+      const rows = await this.prisma.client.findMany({
+        where: { id: { in: clientIds } },
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          legalName: true,
+          inn: true,
+          phone: true,
+          email: true,
+          status: true,
+          storageAccountingEnabled: true,
+          storesWithoutBoxes: true,
+          onlineReceiptVisibleToClient: true,
+        },
+        orderBy: { name: 'asc' },
+        take,
+      });
+      return mobilePage(
+        module,
+        rows.map((row) =>
+          mobileRow(
+            row.id,
+            row.name,
+            [row.code, row.legalName, row.inn ? `ИНН ${row.inn}` : null, row.phone, row.email].filter(Boolean).join('\n'),
+            row.status,
+            row,
+          ),
+        ),
+      );
+    }
+
+    if (module === 'stock') {
+      const rows = await this.prisma.stockBalance.findMany({
+        where: {
+          clientId: { in: clientIds },
+          quantity: { gt: 0 },
+          OR: contains
+            ? [
+                { sku: { name: contains } },
+                { sku: { internalSku: contains } },
+                { sku: { article: contains } },
+                { sku: { barcodes: { some: { value: { contains: search } } } } },
+                { box: { code: contains } },
+              ]
+            : undefined,
+        },
+        include: {
+          sku: { include: { barcodes: { select: { value: true, isPrimary: true } } } },
+          box: { select: { code: true } },
+          pallet: { select: { code: true } },
+        },
+        orderBy: { updatedAt: 'desc' },
+        take,
+      });
+      return mobilePage(
+        module,
+        rows.map((row) =>
+          mobileRow(
+            row.id,
+            row.sku.name,
+            [
+              row.sku.article || row.sku.internalSku,
+              primaryMobileBarcode(row.sku.barcodes),
+              row.box?.code ? `Короб ${row.box.code}` : row.pallet?.code ? `Паллета ${row.pallet.code}` : 'Без короба',
+              `${row.quantity} шт.`,
+            ].filter(Boolean).join(' · '),
+            row.status,
+            row,
+          ),
+        ),
+      );
+    }
+
+    if (module === 'catalog') {
+      const rows = await this.prisma.sku.findMany({
+        where: {
+          clientId: { in: clientIds },
+          OR: contains
+            ? [
+                { name: contains },
+                { internalSku: contains },
+                { article: contains },
+                { clientSku: contains },
+                { barcodes: { some: { value: { contains: search } } } },
+              ]
+            : undefined,
+        },
+        include: {
+          client: { select: { name: true } },
+          barcodes: { select: { value: true, isPrimary: true } },
+          balances: { where: { quantity: { gt: 0 } }, select: { quantity: true, status: true } },
+        },
+        orderBy: { updatedAt: 'desc' },
+        take,
+      });
+      return mobilePage(
+        module,
+        rows.map((row) => {
+          const quantity = row.balances.reduce((sum, balance) => sum + balance.quantity, 0);
+          return mobileRow(
+            row.id,
+            row.name,
+            [
+              row.client.name,
+              row.article || row.internalSku,
+              primaryMobileBarcode(row.barcodes),
+              `Остаток ${quantity} шт.`,
+            ].filter(Boolean).join(' · '),
+            row.isDraft ? 'Черновик' : row.needsRelabel ? 'Нужна перемаркировка' : 'Активен',
+            { ...row, quantity },
+          );
+        }),
+      );
+    }
+
+    if (module === 'warehouse') {
+      const rows = await this.prisma.box.findMany({
+        where: {
+          clientId: { in: clientIds },
+          OR: contains ? [{ code: contains }, { client: { name: contains } }] : undefined,
+        },
+        include: {
+          client: { select: { name: true } },
+          zone: { select: { code: true, name: true } },
+          pallet: { select: { code: true } },
+          balances: { where: { quantity: { gt: 0 } }, select: { quantity: true, status: true } },
+          _count: { select: { productMarks: true } },
+        },
+        orderBy: { code: 'asc' },
+        take,
+      });
+      return mobilePage(
+        module,
+        rows.map((row) => {
+          const quantity = row.balances.reduce((sum, balance) => sum + balance.quantity, 0);
+          return mobileRow(
+            row.id,
+            row.code,
+            [
+              row.client.name,
+              `${quantity} шт.`,
+              `КИЗ ${row._count.productMarks}`,
+              row.zone?.name || row.zone?.code,
+              row.pallet?.code ? `Паллета ${row.pallet.code}` : null,
+            ].filter(Boolean).join(' · '),
+            row.status,
+            { ...row, quantity },
+          );
+        }),
+      );
+    }
+
+    if (module === 'inventory') {
+      const rows = await this.prisma.inventorySession.findMany({
+        where: {
+          clientId: { in: clientIds },
+          OR: contains ? [{ title: contains }, { comment: contains }, { boxes: { some: { boxCode: contains } } }] : undefined,
+        },
+        include: {
+          _count: { select: { boxes: true } },
+          boxes: { select: { status: true } },
+        },
+        orderBy: { startedAt: 'desc' },
+        take,
+      });
+      return mobilePage(
+        module,
+        rows.map((row) => {
+          const mismatches = row.boxes.filter((box) => box.status === 'MISMATCH').length;
+          return mobileRow(
+            row.id,
+            row.title,
+            [
+              inventoryTypeLabel(row.type),
+              `${row._count.boxes} коробов`,
+              mismatches ? `Расхождений ${mismatches}` : 'Без расхождений',
+              row.createdByName,
+            ].join(' · '),
+            row.status,
+            { ...row, mismatchBoxes: mismatches },
+          );
+        }),
+      );
+    }
+
+    if (module === 'turnover') {
+      const rows = await this.prisma.stockMovement.findMany({
+        where: {
+          clientId: { in: clientIds },
+          OR: contains
+            ? [
+                { sourceDocument: contains },
+                { comment: contains },
+                { box: { code: contains } },
+                { sku: { name: contains } },
+                { sku: { internalSku: contains } },
+                { sku: { article: contains } },
+                { sku: { barcodes: { some: { value: { contains: search } } } } },
+              ]
+            : undefined,
+        },
+        include: {
+          client: { select: { name: true } },
+          sku: { select: { name: true, article: true, internalSku: true } },
+          box: { select: { code: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take,
+      });
+      return mobilePage(
+        module,
+        rows.map((row) =>
+          mobileRow(
+            row.id,
+            row.sku.name,
+            [
+              movementTypeLabel(row.type),
+              `${row.quantity} шт.`,
+              row.box?.code,
+              row.sourceDocument,
+              row.client.name,
+            ].filter(Boolean).join(' · '),
+            row.status,
+            row,
+          ),
+        ),
+      );
+    }
+
+    if (module === 'clients') {
+      const rows = await this.prisma.client.findMany({
+        where: {
+          id: { in: clientIds },
+          isDemo: false,
+          OR: contains ? [{ name: contains }, { code: contains }, { legalName: contains }, { inn: contains }] : undefined,
+        },
+        include: {
+          _count: { select: { skus: true, boxes: true, requests: true, billingInvoices: true, userScopes: true } },
+        },
+        orderBy: { name: 'asc' },
+        take,
+      });
+      return mobilePage(
+        module,
+        rows.map((row) =>
+          mobileRow(
+            row.id,
+            row.name,
+            [
+              row.code,
+              row.inn ? `ИНН ${row.inn}` : null,
+              `SKU ${row._count.skus}`,
+              `Коробов ${row._count.boxes}`,
+              `Заявок ${row._count.requests}`,
+              `Пользователей ${row._count.userScopes}`,
+            ].filter(Boolean).join(' · '),
+            row.status,
+            row,
+          ),
+        ),
+      );
+    }
+
+    if (module === 'access') {
+      const rows = await this.prisma.user.findMany({
+        where: {
+          isDemo: false,
+          OR: contains ? [{ name: contains }, { email: contains }] : undefined,
+        },
+        include: {
+          roles: { include: { role: { select: { code: true, name: true } } } },
+          clientScopes: { include: { client: { select: { id: true, code: true, name: true } } } },
+        },
+        orderBy: { name: 'asc' },
+        take,
+      });
+      return mobilePage(
+        module,
+        rows.map((row) =>
+          mobileRow(
+            row.id,
+            row.name,
+            [
+              row.email,
+              row.roles.map((role) => role.role.name).join(', ') || 'Без роли',
+              row.clientScopes.length ? `Клиентов ${row.clientScopes.length}` : 'Все доступные клиенты',
+            ].join(' · '),
+            row.status,
+            row,
+          ),
+        ),
+      );
+    }
+
+    if (module === 'logistics') {
+      const rows = await this.prisma.logisticsDeliveryRequest.findMany({
+        where: {
+          clientId: { in: clientIds },
+          OR: contains
+            ? [
+                { origin: contains },
+                { destination: contains },
+                { comment: contains },
+                { client: { name: contains } },
+                { trip: { code: contains } },
+              ]
+            : undefined,
+        },
+        include: {
+          client: { select: { name: true } },
+          trip: { select: { code: true, plannedDate: true, status: true, vehicleNumber: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take,
+      });
+      return mobilePage(
+        module,
+        rows.map((row) =>
+          mobileRow(
+            row.id,
+            `${row.origin} → ${row.destination}`,
+            [
+              row.client.name,
+              row.boxes != null ? `${row.boxes} коробов` : null,
+              row.pallets != null ? `${row.pallets} паллет` : null,
+              row.estimatedTotalRub != null ? `${decimal(row.estimatedTotalRub).toFixed(2)} ₽` : null,
+              row.trip?.code,
+              row.requiresManualReview ? 'Нужна проверка' : null,
+            ].filter(Boolean).join(' · '),
+            row.status,
+            row,
+          ),
+        ),
+      );
+    }
+
+    if (module === 'services') {
+      const rows = await this.prisma.clientBillingService.findMany({
+        where: {
+          clientId: { in: clientIds },
+          OR: contains ? [{ service: { name: contains } }, { service: { code: contains } }, { client: { name: contains } }] : undefined,
+        },
+        include: {
+          client: { select: { name: true } },
+          service: { select: { code: true, name: true, unit: true } },
+        },
+        orderBy: [{ client: { name: 'asc' } }, { service: { name: 'asc' } }],
+        take,
+      });
+      return mobilePage(
+        module,
+        rows.map((row) =>
+          mobileRow(
+            row.id,
+            row.service.name,
+            `${row.client.name} · ${decimal(row.priceRub).toFixed(2)} ₽ · ${billingUnitLabel(row.service.unit)}`,
+            row.isActive ? 'Активна' : 'Отключена',
+            row,
+          ),
+        ),
+      );
+    }
+
+    if (module === 'imports') {
+      const rows = await this.prisma.stockTransferBatch.findMany({
+        where: {
+          clientId: { in: clientIds },
+          OR: contains ? [{ fileName: contains }, { uploadedByName: contains }] : undefined,
+        },
+        orderBy: { createdAt: 'desc' },
+        take,
+      });
+      return mobilePage(
+        module,
+        rows.map((row) =>
+          mobileRow(
+            row.id,
+            row.fileName,
+            `Строк ${row.rowCount} · Выполнено ${row.appliedRowCount} · Ошибок ${row.rejectedRowCount} · ${row.quantity} шт.`,
+            row.status,
+            { ...row, content: undefined },
+          ),
+        ),
+      );
+    }
+
+    if (module === 'print') {
+      const rows = await this.prisma.printJob.findMany({
+        where: {
+          OR: contains ? [{ printerCode: contains }, { labelType: contains }, { status: contains }] : undefined,
+        },
+        orderBy: { createdAt: 'desc' },
+        take,
+      });
+      return mobilePage(
+        module,
+        rows.map((row) =>
+          mobileRow(
+            row.id,
+            `${row.labelType} · ${row.printerCode}`,
+            `Попыток ${row.attempts} · ${row.processedAt ? 'обработано' : 'ожидает обработки'}`,
+            row.status,
+            { ...row, tspl: undefined },
+          ),
+        ),
+      );
+    }
+
+    if (module === 'service') {
+      const rows = await this.prisma.tsdOperation.findMany({
+        where: {
+          OR: contains
+            ? [
+                { operationType: contains },
+                { operationKey: contains },
+                { serverMessage: contains },
+                { resolutionMessage: contains },
+              ]
+            : undefined,
+        },
+        include: {
+          reviewedBy: { select: { name: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take,
+      });
+      return mobilePage(
+        module,
+        rows.map((row) =>
+          mobileRow(
+            row.id,
+            row.operationType,
+            [
+              row.deviceId,
+              row.reviewReason,
+              row.serverMessage,
+              row.resolutionMessage,
+              row.reviewedBy?.name,
+            ].filter(Boolean).join(' · '),
+            row.status,
+            { ...row, payload: undefined },
+          ),
+        ),
+      );
+    }
+
+    const rows = await this.prisma.ownCompany.findMany({
+      where: {
+        OR: contains ? [{ shortName: contains }, { fullName: contains }, { inn: contains }] : undefined,
+      },
+      include: { bankAccounts: true },
+      orderBy: [{ isDefault: 'desc' }, { shortName: 'asc' }],
+      take,
+    });
+    return mobilePage(
+      module,
+      rows.map((row) =>
+        mobileRow(
+          row.id,
+          row.shortName,
+          [row.fullName, `ИНН ${row.inn}`, row.bankName, row.bankAccount].filter(Boolean).join(' · '),
+          row.isActive ? (row.isDefault ? 'Основная' : 'Активна') : 'Отключена',
+          row,
+        ),
+      ),
+    );
+  }
+
   async registerDevice(user: AuthUser, dto: MobileDeviceDto) {
     if (!user.deviceId) throw new ForbiddenException('Запрос выполнен не из мобильной сессии.');
     const token = clean(dto.fcmToken);
@@ -273,7 +791,7 @@ export class MobileService {
     const setting = await this.prisma.systemSetting.findUnique({ where: { key: 'mobile.android.version' } });
     const value = asRecord(setting?.value);
     return {
-      currentVersion: stringValue(value.currentVersion, '0.1.1'),
+      currentVersion: stringValue(value.currentVersion, '0.2.0'),
       minimumVersion: stringValue(value.minimumVersion, '0.1.0'),
       mandatory: value.mandatory === true,
       apkUrl: stringValue(value.apkUrl, '/downloads/logoff-wms-mobile.apk'),
@@ -364,4 +882,69 @@ function stringValue(value: unknown, fallback: string) {
 function clean(value?: string) {
   const result = value?.trim();
   return result || undefined;
+}
+
+function mobilePage(module: string, data: Array<Record<string, unknown>>) {
+  return {
+    module,
+    data,
+    count: data.length,
+    updatedAt: new Date(),
+  };
+}
+
+function mobileRow(
+  id: string,
+  title: string,
+  subtitle: string,
+  status: string,
+  details: unknown,
+): Record<string, unknown> {
+  return { id, title, subtitle, status, details };
+}
+
+function primaryMobileBarcode(barcodes: Array<{ value: string; isPrimary: boolean }>) {
+  return barcodes.find((barcode) => barcode.isPrimary)?.value ?? barcodes[0]?.value ?? '';
+}
+
+function inventoryTypeLabel(value: string) {
+  const labels: Record<string, string> = {
+    FULL: 'Полная',
+    PARTIAL: 'Частичная',
+    BOX_CHECK: 'Проверка короба',
+  };
+  return labels[value] ?? value;
+}
+
+function movementTypeLabel(value: string) {
+  const labels: Record<string, string> = {
+    INITIAL_IMPORT: 'Начальный остаток',
+    RECEIPT: 'Приемка',
+    MOVE: 'Перемещение',
+    RESERVE: 'Резерв',
+    PICK: 'Отбор',
+    PACK: 'Упаковка',
+    SHIP: 'Отгрузка',
+    RETURN: 'Возврат',
+    INVENTORY_ADJUSTMENT: 'Инвентаризация',
+  };
+  return labels[value] ?? value;
+}
+
+function billingUnitLabel(value: string) {
+  const labels: Record<string, string> = {
+    SERVICE: 'услуга',
+    PIECE: 'штука',
+    BOX: 'короб',
+    PALLET: 'паллета',
+    LITER: 'литр',
+    LITER_DAY: 'литро-день',
+    DAY: 'день',
+    HOUR: 'час',
+  };
+  return labels[value] ?? value;
+}
+
+function hasAnyPermission(user: AuthUser, permissions: string[]) {
+  return user.permissionCodes.includes('system:admin') || permissions.some((permission) => user.permissionCodes.includes(permission));
 }

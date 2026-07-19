@@ -86,6 +86,12 @@ export class MobileController {
     return this.mobile.onlineReceipts(user, clientId);
   }
 
+  @Get('modules/:module')
+  @ApiBearerAuth()
+  nativeModule(@CurrentUser() user: AuthUser, @Param('module') module: string, @Query() query: MobileListDto) {
+    return this.mobile.nativeModule(user, module, query);
+  }
+
   @Get('notifications')
   @ApiBearerAuth()
   notifications(@CurrentUser() user: AuthUser, @Query() query: MobileListDto) {

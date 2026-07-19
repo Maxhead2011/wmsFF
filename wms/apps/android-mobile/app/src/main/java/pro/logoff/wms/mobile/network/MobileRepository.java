@@ -28,6 +28,7 @@ public class MobileRepository {
     public void requests(String clientId, String search, DataCallback<Map<String, Object>> callback) { cached("requests:" + safe(clientId) + ":" + safe(search), api.requests(clientId, blank(search), null, 100), callback); }
     public void invoices(String clientId, String search, DataCallback<Map<String, Object>> callback) { cached("invoices:" + safe(clientId) + ":" + safe(search), api.invoices(clientId, blank(search), null, 100), callback); }
     public void notifications(String clientId, DataCallback<Map<String, Object>> callback) { cached("notifications:" + safe(clientId), api.notifications(clientId, false, 100), callback); }
+    public void nativeModule(String module, String clientId, String search, DataCallback<Map<String, Object>> callback) { cached("module:" + safe(module) + ":" + safe(clientId) + ":" + safe(search), api.nativeModule(module, clientId, blank(search), 100), callback); }
 
     private void cached(String key, Call<Map<String, Object>> call, DataCallback<Map<String, Object>> callback) {
         call.enqueue(new Callback<>() {

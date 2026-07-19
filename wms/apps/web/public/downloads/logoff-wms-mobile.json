@@ -1,8 +1,8 @@
 {
-  "versionCode": 2,
-  "versionName": "0.1.1",
+  "versionCode": 3,
+  "versionName": "0.2.0",
   "minimumVersion": "0.1.0",
   "mandatory": false,
   "apkUrl": "/downloads/logoff-wms-mobile.apk",
-  "releaseNotes": "Исправлено падение после входа и повышена совместимость с Android 8."
+  "releaseNotes": "Полностью нативная WMS без WebView: склад, инвентаризация, товарооборот, каталог, остатки, клиенты, доступы, логистика, услуги, импорт, печать и сервис."
 }

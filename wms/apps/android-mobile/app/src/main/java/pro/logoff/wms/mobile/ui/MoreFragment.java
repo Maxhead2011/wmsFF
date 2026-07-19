@@ -15,13 +15,10 @@ import androidx.fragment.app.Fragment;
 
 import com.google.android.material.button.MaterialButton;
 
-import java.util.Arrays;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 
 import pro.logoff.wms.mobile.AppState;
-import pro.logoff.wms.mobile.AdminWebActivity;
 import pro.logoff.wms.mobile.BuildConfig;
 import pro.logoff.wms.mobile.LogoffApplication;
 import pro.logoff.wms.mobile.MainActivity;
@@ -45,13 +42,37 @@ public class MoreFragment extends Fragment {
 
     private void addModules() {
         if (app.state().isAdmin()) {
-            for (String name : Arrays.asList("Клиенты и пользователи", "Склад и товарооборот", "Каталог и номенклатура", "Логистика", "Сервис и контроль")) addButton(name, () -> openWeb());
+            addModuleIfAllowed("Склад и короба", "warehouse", "warehouse:read");
+            addModuleIfAllowed("Инвентаризация", "inventory", "stock:read");
+            addModuleIfAllowed("Товарооборот", "turnover", "stock:read");
+            addModuleIfAllowed("Каталог и номенклатура", "catalog", "skus:read");
+            addModuleIfAllowed("Остатки", "stock", "stock:read");
+            addModuleIfAllowed("Клиенты", "clients", "clients:read");
+            addModuleIfAllowed("Пользователи и доступы", "access", "users:read");
+            addModuleIfAllowed("Логистика", "logistics", "logistics:read");
+            addModuleIfAllowed("Услуги и тарифы", "services", "billing:read");
+            addModuleIfAllowed("Импорт остатков", "imports", "imports:write");
+            addModuleIfAllowed("Печать", "print", "print:write");
+            addModuleIfAllowed("Сервис и контроль ТСД", "service", "system:admin");
+            addModuleIfAllowed("Собственные компании", "own-companies", "billing:read");
         } else {
             addButton("Уведомления", () -> ((MainActivity) requireActivity()).show(ListFragment.newInstance(ListFragment.NOTIFICATIONS)));
-            addButton("Остатки и каталог", this::openWeb);
-            addButton("Хранение", this::openWeb);
-            addButton("Telegram и профиль", this::openWeb);
+            addModule("Остатки", "stock");
+            addModule("Каталог товаров", "catalog");
+            addModule("Короба и хранение", "warehouse");
+            addModule("Товарооборот", "turnover");
+            addModule("Логистика", "logistics");
+            addModule("Услуги и тарифы", "services");
+            addModule("Профиль компании", "profile");
         }
+    }
+
+    private void addModule(String title, String module) {
+        addButton(title, () -> ((MainActivity) requireActivity()).showNative(NativeModuleFragment.newInstance(module, title), title));
+    }
+
+    private void addModuleIfAllowed(String title, String module, String permission) {
+        if (app.state().can(permission)) addModule(title, module);
     }
 
     private void addButton(String title, Runnable action) {
@@ -80,6 +101,5 @@ public class MoreFragment extends Fragment {
             @Override public void onFailure(Call<Map<String, Object>> call, Throwable error) { ((MainActivity) requireActivity()).returnToLogin(); }
         });
     }
-    private void openWeb() { startActivity(new Intent(requireContext(), AdminWebActivity.class)); }
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
 }

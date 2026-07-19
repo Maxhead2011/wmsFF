@@ -10,7 +10,6 @@
         android:label="LOGOff WMS"
         android:supportsRtl="true"
         android:theme="@style/Theme.LogoffWms">
-        <activity android:name=".AdminWebActivity" android:exported="false" />
         <activity android:name=".RequestFormActivity" android:exported="false" />
         <activity android:name=".MainActivity" android:exported="false" />
         <activity android:name=".LoginActivity" android:exported="true">

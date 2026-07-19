@@ -41,6 +41,8 @@ public class MainActivity extends AppCompatActivity {
             return false;
         });
         binding.bottomNavigation.setOnItemSelectedListener(item -> {
+            getSupportFragmentManager().popBackStack(null, androidx.fragment.app.FragmentManager.POP_BACK_STACK_INCLUSIVE);
+            restoreToolbar();
             if (item.getItemId() == R.id.nav_home) show(new DashboardFragment());
             else if (item.getItemId() == R.id.nav_requests) show(ListFragment.newInstance(ListFragment.REQUESTS));
             else if (item.getItemId() == R.id.nav_receipts) show(ListFragment.newInstance(ListFragment.RECEIPTS));
@@ -88,6 +90,10 @@ public class MainActivity extends AppCompatActivity {
                 app.state().selectClient(clientId);
                 Fragment current = getSupportFragmentManager().findFragmentById(R.id.content);
                 if (current instanceof DashboardFragment) show(new DashboardFragment());
+                else if (current instanceof ListFragment) ((ListFragment) current).refresh();
+                else if (current instanceof pro.logoff.wms.mobile.ui.NativeModuleFragment) {
+                    ((pro.logoff.wms.mobile.ui.NativeModuleFragment) current).refresh();
+                }
             }
             @Override public void onNothingSelected(android.widget.AdapterView<?> parent) {}
         });
@@ -100,6 +106,25 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void show(Fragment fragment) { getSupportFragmentManager().beginTransaction().replace(R.id.content, fragment).commitAllowingStateLoss(); }
+    public void showNative(Fragment fragment, String title) {
+        binding.toolbar.setTitle(title);
+        binding.toolbar.setNavigationIcon(R.drawable.ic_back);
+        binding.toolbar.setNavigationOnClickListener(view -> getSupportFragmentManager().popBackStack());
+        getSupportFragmentManager()
+                .beginTransaction()
+                .replace(R.id.content, fragment)
+                .addToBackStack("native-module")
+                .commitAllowingStateLoss();
+        getSupportFragmentManager().addOnBackStackChangedListener(() -> {
+            if (getSupportFragmentManager().getBackStackEntryCount() == 0) restoreToolbar();
+        });
+    }
+    private void restoreToolbar() {
+        if (binding == null) return;
+        binding.toolbar.setTitle(R.string.app_name);
+        binding.toolbar.setNavigationIcon(null);
+        binding.toolbar.setNavigationOnClickListener(null);
+    }
     public void returnToLogin() { app.sessions().clear(); startActivity(new Intent(this, LoginActivity.class)); finish(); }
     private void requestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= 33 && ActivityCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.POST_NOTIFICATIONS}, 42);

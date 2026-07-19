@@ -18,6 +18,12 @@ public class AppState {
     public String selectedClientId() { return selectedClientId; }
     public void selectClient(String id) { selectedClientId = id; }
     public boolean isAdmin() { return bootstrap != null && "ADMIN".equals(string(bootstrap.get("mode"))); }
+    public boolean can(String permission) {
+        Object value = user().get("permissionCodes");
+        if (!(value instanceof List<?>)) return false;
+        List<?> permissions = (List<?>) value;
+        return permissions.contains("system:admin") || permissions.contains(permission);
+    }
 
     @SuppressWarnings("unchecked")
     public List<Map<String, Object>> clients() {
