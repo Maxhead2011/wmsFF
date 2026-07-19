@@ -15,6 +15,7 @@ import retrofit2.http.Part;
 import retrofit2.http.Path;
 import retrofit2.http.Query;
 import retrofit2.http.Streaming;
+import retrofit2.http.PUT;
 
 public interface MobileApi {
     @POST("mobile/auth/login") Call<Map<String, Object>> login(@Body Map<String, Object> body);
@@ -28,6 +29,10 @@ public interface MobileApi {
     @PATCH("mobile/notifications/read-all") Call<Map<String, Object>> markAllNotificationsRead(@Body Map<String, Object> body);
     @GET("mobile/online-receipts") Call<Object> onlineReceipts(@Query("clientId") String clientId);
     @GET("mobile/modules/{module}") Call<Map<String, Object>> nativeModule(@Path("module") String module, @Query("clientId") String clientId, @Query("search") String search, @Query("limit") int limit);
+    @GET("marketplace-connections/fbs/orders") Call<Map<String, Object>> fbsOrders(@Query("clientId") String clientId, @Query("refresh") Integer refresh);
+    @POST("marketplace-connections/fbs/connections") Call<Map<String, Object>> createFbsConnection(@Body Map<String, Object> body);
+    @GET("marketplace-connections/fbs/billing-settings/{clientId}") Call<Map<String, Object>> fbsBillingSettings(@Path("clientId") String clientId);
+    @PUT("marketplace-connections/fbs/billing-settings/{clientId}") Call<Map<String, Object>> updateFbsBillingSettings(@Path("clientId") String clientId, @Body Map<String, Object> body);
     @POST("mobile/devices") Call<Map<String, Object>> registerDevice(@Body Map<String, Object> body);
     @GET("mobile/app-version") Call<Map<String, Object>> appVersion();
     @POST("client-requests") Call<Map<String, Object>> createRequest(@Body Map<String, Object> body);

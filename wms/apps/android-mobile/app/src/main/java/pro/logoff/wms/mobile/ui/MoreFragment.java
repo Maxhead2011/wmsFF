@@ -56,6 +56,7 @@ public class MoreFragment extends Fragment {
 
     private void addModules() {
         if (app.state().isAdmin()) {
+            addButton("FBS", () -> ((MainActivity) requireActivity()).showNative(FbsFragment.newInstance(), "FBS"));
             addModuleIfAllowed("Склад и короба", "warehouse", "warehouse:read");
             addModuleIfAllowed("Инвентаризация", "inventory", "stock:read");
             addModuleIfAllowed("Товарооборот", "turnover", "stock:read");
@@ -71,6 +72,7 @@ public class MoreFragment extends Fragment {
             addModuleIfAllowed("Собственные компании", "own-companies", "billing:read");
         } else {
             addButton("Уведомления", () -> ((MainActivity) requireActivity()).show(ListFragment.newInstance(ListFragment.NOTIFICATIONS)));
+            addButton("FBS", () -> ((MainActivity) requireActivity()).showNative(FbsFragment.newInstance(), "FBS"));
             addModule("Остатки", "stock");
             addModule("Каталог товаров", "catalog");
             addModule("Короба и хранение", "warehouse");

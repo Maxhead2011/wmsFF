@@ -13,8 +13,8 @@ import android.os.Build;
 import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationCompat;
 
+import java.util.Collections;
 import java.util.LinkedHashSet;
-import java.util.Set;
 
 import pro.logoff.wms.mobile.MainActivity;
 import pro.logoff.wms.mobile.R;
@@ -77,7 +77,9 @@ public final class NotificationCenter {
     public static void remember(Context context, String id) {
         if (id == null || id.isBlank()) return;
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        LinkedHashSet<String> ids = new LinkedHashSet<>(prefs.getStringSet(SHOWN, Set.of()));
+        LinkedHashSet<String> ids = new LinkedHashSet<>(
+                prefs.getStringSet(SHOWN, Collections.emptySet())
+        );
         ids.remove(id);
         ids.add(id);
         while (ids.size() > MAX_REMEMBERED) ids.remove(ids.iterator().next());
@@ -86,7 +88,7 @@ public final class NotificationCenter {
 
     private static boolean wasShown(Context context, String id) {
         return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .getStringSet(SHOWN, Set.of())
+                .getStringSet(SHOWN, Collections.emptySet())
                 .contains(id);
     }
 }

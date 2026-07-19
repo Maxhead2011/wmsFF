@@ -30,6 +30,7 @@ import pro.logoff.wms.mobile.network.DataCallback;
 import pro.logoff.wms.mobile.push.NotificationCenter;
 import pro.logoff.wms.mobile.push.NotificationWorker;
 import pro.logoff.wms.mobile.ui.DashboardFragment;
+import pro.logoff.wms.mobile.ui.FbsFragment;
 import pro.logoff.wms.mobile.ui.ListFragment;
 import pro.logoff.wms.mobile.ui.MoreFragment;
 import retrofit2.Call;
@@ -141,6 +142,8 @@ public class MainActivity extends AppCompatActivity {
                 else if (current instanceof ListFragment) ((ListFragment) current).refresh();
                 else if (current instanceof pro.logoff.wms.mobile.ui.NativeModuleFragment) {
                     ((pro.logoff.wms.mobile.ui.NativeModuleFragment) current).refresh();
+                } else if (current instanceof FbsFragment) {
+                    ((FbsFragment) current).refresh();
                 }
             }
             @Override public void onNothingSelected(android.widget.AdapterView<?> parent) {}

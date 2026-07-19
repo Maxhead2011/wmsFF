@@ -83,6 +83,7 @@ public class DashboardFragment extends Fragment {
                 : estimates.get("storageRub");
         addMetric("Предварительная сумма хранения", money(storageAmountRub), R.color.logoff_warning, () -> openModule("stock", "Остатки и хранение"));
         addMetric("ПРР предварительно", money(estimates.get("pprRub")), R.color.logoff_red, () -> openList(ListFragment.RECEIPTS));
+        addMetric("FBS", "Заказы и обработка", R.color.logoff_blue, this::openFbs);
         if (app.state().isAdmin()) {
             Map<String, Object> queue = map(data.get("adminQueue"));
             addMetric("Очередь задач", number(queue.get("total")), R.color.logoff_red, () -> openModule(app.state().can("system:admin") ? "service" : "inventory", "Очередь задач"));
@@ -158,6 +159,10 @@ public class DashboardFragment extends Fragment {
 
     private void openModule(String module, String title) {
         ((MainActivity) requireActivity()).showNative(NativeModuleFragment.newInstance(module, title), title);
+    }
+
+    private void openFbs() {
+        ((MainActivity) requireActivity()).showNative(FbsFragment.newInstance(), "FBS");
     }
 
     private String listTitle(String kind) {
