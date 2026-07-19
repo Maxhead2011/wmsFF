@@ -108,7 +108,6 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:background="@android:color/transparent"
-            app:itemActiveIndicatorColor="@color/logoff_red_soft"
             app:itemIconSize="23dp"
             app:itemIconTint="@color/bottom_nav_tint"
             app:itemTextColor="@color/bottom_nav_tint"
