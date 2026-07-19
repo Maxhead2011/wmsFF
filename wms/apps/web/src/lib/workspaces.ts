@@ -143,10 +143,10 @@ export const workspaceNav: WorkspaceNavItem[] = [
     title: 'FBS',
     eyebrow: 'Клиентский контур',
     description: 'Заказы FBS, отгрузки, стоимость обработки и архив.',
-    permissions: ['client-requests:read', 'billing:read'],
+    permissions: [],
     icon: ShoppingBasket,
     status: 'in-progress',
-    audience: 'all',
+    audience: 'client',
   },
   {
     id: 'catalog',
