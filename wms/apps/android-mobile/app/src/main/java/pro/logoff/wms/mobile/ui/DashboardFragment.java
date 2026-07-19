@@ -78,7 +78,10 @@ public class DashboardFragment extends Fragment {
         addMetric("Единиц на складе", number(stock.get("units")), R.color.logoff_black, () -> openModule("stock", "Остатки"));
         addMetric("К оплате", money(invoices.get("debtRub")), R.color.logoff_warning, () -> openList(ListFragment.INVOICES));
         addMetric("Новых уведомлений", number(data.get("unreadNotifications")), R.color.logoff_success, () -> openList(ListFragment.NOTIFICATIONS));
-        addMetric("Хранение предварительно", money(estimates.get("storageRub")), R.color.logoff_warning, () -> openModule("stock", "Остатки и хранение"));
+        Object storageAmountRub = estimates.containsKey("storageAmountRub")
+                ? estimates.get("storageAmountRub")
+                : estimates.get("storageRub");
+        addMetric("Предварительная сумма хранения", money(storageAmountRub), R.color.logoff_warning, () -> openModule("stock", "Остатки и хранение"));
         addMetric("ПРР предварительно", money(estimates.get("pprRub")), R.color.logoff_red, () -> openList(ListFragment.RECEIPTS));
         if (app.state().isAdmin()) {
             Map<String, Object> queue = map(data.get("adminQueue"));

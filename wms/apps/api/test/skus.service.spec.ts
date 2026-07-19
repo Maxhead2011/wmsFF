@@ -183,7 +183,7 @@ describe('SkusService', () => {
     }));
   });
 
-  it('keeps a manual volume when editing fields unrelated to dimensions', async () => {
+  it('keeps a manual volume when an API update brings new card dimensions', async () => {
     const existing = {
       id: 'sku-1',
       clientId: 'client-1',
@@ -228,10 +228,24 @@ describe('SkusService', () => {
     };
     const service = new SkusService(prisma as never, scopes as never, new VolumeService());
 
-    await service.update('sku-1', { name: 'Новое название' }, {} as never);
+    await service.update(
+      'sku-1',
+      {
+        name: 'Новое название',
+        lengthCm: 30,
+        widthCm: 20,
+        heightCm: 10,
+      },
+      {} as never,
+    );
 
     const data = tx.sku.update.mock.calls[0][0].data;
     expect(data.name).toBe('Новое название');
+    expect(data).toMatchObject({
+      lengthCm: 30,
+      widthCm: 20,
+      heightCm: 10,
+    });
     expect(data).not.toHaveProperty('volumeLiters');
     expect(data).not.toHaveProperty('volumeSource');
   });

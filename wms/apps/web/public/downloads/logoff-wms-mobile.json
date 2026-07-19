@@ -1,8 +1,8 @@
 {
-  "versionCode": 6,
-  "versionName": "0.3.1",
+  "versionCode": 7,
+  "versionName": "0.3.2",
   "minimumVersion": "0.1.0",
   "mandatory": false,
   "apkUrl": "/downloads/logoff-wms-mobile.apk",
-  "releaseNotes": "Добавлены массовое прочтение уведомлений и выбор светлой или тёмной темы."
+  "releaseNotes": "Предварительное хранение в приложении теперь однозначно показывается денежной суммой в рублях."
 }

@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { MarketplaceType, Prisma } from '@prisma/client';
+import { MarketplaceType, Prisma, VolumeSource } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
@@ -387,7 +387,9 @@ export class MarketplaceConnectionsService {
         },
       }));
 
-    const data = marketplaceSkuData(clientId, product);
+    const preserveManualVolume =
+      existing?.volumeSource === VolumeSource.MANUAL && Number(existing.volumeLiters) > 0;
+    const data = marketplaceSkuData(clientId, product, preserveManualVolume);
     const sku = existing
       ? await this.prisma.sku.update({
           where: { id: existing.id },
@@ -600,7 +602,11 @@ function mapOzonProduct(
   };
 }
 
-function marketplaceSkuData(clientId: string, product: MarketplaceProductSyncItem): Prisma.SkuUncheckedCreateInput {
+function marketplaceSkuData(
+  clientId: string,
+  product: MarketplaceProductSyncItem,
+  preserveManualVolume = false,
+): Prisma.SkuUncheckedCreateInput {
   const volumeLiters = calculateVolumeLiters(product);
 
   return {
@@ -617,7 +623,7 @@ function marketplaceSkuData(clientId: string, product: MarketplaceProductSyncIte
     lengthCm: product.lengthCm,
     widthCm: product.widthCm,
     heightCm: product.heightCm,
-    ...(volumeLiters ? { volumeLiters, volumeSource: 'CALCULATED' } : {}),
+    ...(!preserveManualVolume && volumeLiters ? { volumeLiters, volumeSource: 'CALCULATED' } : {}),
     needsChestnyZnak: product.needsChestnyZnak ?? false,
     marketplace: product.marketplace,
     marketplaceProductId: product.productId,

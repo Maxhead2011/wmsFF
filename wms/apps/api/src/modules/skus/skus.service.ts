@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, VolumeSource } from '@prisma/client';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
@@ -695,6 +695,8 @@ export class SkusService {
       lengthCm: Prisma.Decimal | null;
       widthCm: Prisma.Decimal | null;
       heightCm: Prisma.Decimal | null;
+      volumeLiters: Prisma.Decimal | null;
+      volumeSource: VolumeSource;
       needsChestnyZnak: boolean;
       isUnmarked: boolean;
       needsLabel: boolean;
@@ -706,8 +708,10 @@ export class SkusService {
     const nextWidth = dto.widthCm ?? decimalToNumber(existing.widthCm);
     const nextHeight = dto.heightCm ?? decimalToNumber(existing.heightCm);
     const dimensionsChanged = dto.lengthCm !== undefined || dto.widthCm !== undefined || dto.heightCm !== undefined;
+    const hasManualVolumeOverride =
+      existing.volumeSource === VolumeSource.MANUAL && (decimalToNumber(existing.volumeLiters) ?? 0) > 0;
     const volume =
-      dimensionsChanged && nextLength && nextWidth && nextHeight
+      !hasManualVolumeOverride && dimensionsChanged && nextLength && nextWidth && nextHeight
         ? this.volumes.calculateLiters({
             lengthCm: nextLength,
             widthCm: nextWidth,

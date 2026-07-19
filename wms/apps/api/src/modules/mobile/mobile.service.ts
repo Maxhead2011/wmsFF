@@ -185,6 +185,7 @@ export class MobileService {
       unreadNotifications,
       receivingBoxes: openBoxes,
       estimates: {
+        storageAmountRub: storageRub,
         storageRub,
         storageLiters: roundMobileQuantity(storageLiters),
         storageTariffRubPerLiterDay: storageTariff,
@@ -920,13 +921,13 @@ export class MobileService {
     const setting = await this.prisma.systemSetting.findUnique({ where: { key: 'mobile.android.version' } });
     const value = asRecord(setting?.value);
     return {
-      currentVersion: stringValue(value.currentVersion, '0.3.1'),
+      currentVersion: stringValue(value.currentVersion, '0.3.2'),
       minimumVersion: stringValue(value.minimumVersion, '0.1.0'),
       mandatory: value.mandatory === true,
       apkUrl: stringValue(value.apkUrl, '/downloads/logoff-wms-mobile.apk'),
       releaseNotes: stringValue(
         value.releaseNotes,
-        'Добавлены массовое прочтение уведомлений и выбор светлой или тёмной темы.',
+        'Предварительное хранение в приложении теперь однозначно показывается денежной суммой в рублях.',
       ),
       updatedAt: setting?.updatedAt ?? null,
     };
@@ -985,6 +986,7 @@ function emptyDashboard() {
     unreadNotifications: 0,
     receivingBoxes: 0,
     estimates: {
+      storageAmountRub: 0,
       storageRub: 0,
       storageLiters: 0,
       storageTariffRubPerLiterDay: 0,

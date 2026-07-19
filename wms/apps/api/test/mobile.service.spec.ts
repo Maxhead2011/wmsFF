@@ -8,17 +8,31 @@ describe('MobileService', () => {
   it('ограничивает клиентский dashboard назначенным клиентом и скрывает черновики счетов', async () => {
     const prisma = {
       clientRequest: { groupBy: vi.fn().mockResolvedValue([]), findMany: vi.fn().mockResolvedValue([]) },
-      stockBalance: { aggregate: vi.fn().mockResolvedValue({ _sum: { quantity: 25 }, _count: { _all: 2 } }) },
+      stockBalance: {
+        findMany: vi.fn().mockResolvedValue([
+          { quantity: 25, status: 'AVAILABLE', sku: { volumeLiters: 2 } },
+        ]),
+      },
       billingInvoice: { groupBy: vi.fn().mockResolvedValue([]), findMany: vi.fn().mockResolvedValue([]) },
       clientNotification: { count: vi.fn().mockResolvedValue(1) },
       box: { count: vi.fn().mockResolvedValue(0) },
+      client: {
+        findUnique: vi.fn().mockResolvedValue({
+          storageAccountingEnabled: true,
+          storagePriceRubPerLiterDay: 0.06,
+        }),
+      },
+      auditLog: { findMany: vi.fn().mockResolvedValue([]) },
+      clientBillingService: { findMany: vi.fn().mockResolvedValue([]) },
     };
     const service = new MobileService(prisma as never, new ClientScopeService(), {} as never);
     const user = clientUser();
 
-    const result = await service.dashboard(user);
+    const result = await service.dashboard(user, 'client-1');
 
     expect(result.stock.units).toBe(25);
+    expect(result.estimates.storageAmountRub).toBe(result.estimates.storageRub);
+    expect(result.estimates.storageAmountRub).toBeGreaterThan(0);
     expect(prisma.clientRequest.groupBy).toHaveBeenCalledWith(
       expect.objectContaining({ where: { clientId: { in: ['client-1'] } } }),
     );
