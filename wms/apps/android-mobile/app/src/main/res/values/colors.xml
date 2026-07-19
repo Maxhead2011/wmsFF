@@ -6,6 +6,7 @@
     <color name="logoff_ink_soft">#252932</color>
     <color name="logoff_surface">#F2F4F7</color>
     <color name="logoff_surface_alt">#E9EDF2</color>
+    <color name="logoff_card">#FFFFFF</color>
     <color name="logoff_white">#FFFFFF</color>
     <color name="logoff_text_muted">#6E7480</color>
     <color name="logoff_border">#E0E4EA</color>

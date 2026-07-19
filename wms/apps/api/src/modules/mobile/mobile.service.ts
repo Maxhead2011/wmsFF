@@ -301,6 +301,16 @@ export class MobileService {
     return this.prisma.clientNotification.update({ where: { id }, data: { isRead: true, readAt: new Date() } });
   }
 
+  async markAllNotificationsRead(user: AuthUser, clientId?: string) {
+    const clientIds = await this.resolveClientIds(user, clientId);
+    const readAt = new Date();
+    const result = await this.prisma.clientNotification.updateMany({
+      where: { clientId: { in: clientIds }, isRead: false },
+      data: { isRead: true, readAt },
+    });
+    return { updated: result.count, readAt };
+  }
+
   async events(user: AuthUser, query: MobileEventListDto) {
     const since = parseCursorDate(query.cursor);
     if (isClientOnly(user)) {
@@ -910,13 +920,13 @@ export class MobileService {
     const setting = await this.prisma.systemSetting.findUnique({ where: { key: 'mobile.android.version' } });
     const value = asRecord(setting?.value);
     return {
-      currentVersion: stringValue(value.currentVersion, '0.3.0'),
+      currentVersion: stringValue(value.currentVersion, '0.3.1'),
       minimumVersion: stringValue(value.minimumVersion, '0.1.0'),
       mandatory: value.mandatory === true,
       apkUrl: stringValue(value.apkUrl, '/downloads/logoff-wms-mobile.apk'),
       releaseNotes: stringValue(
         value.releaseNotes,
-        'Рабочие системные уведомления со счетчиком и переходами, фоновая синхронизация и полностью обновленный современный дизайн.',
+        'Добавлены массовое прочтение уведомлений и выбор светлой или тёмной темы.',
       ),
       updatedAt: setting?.updatedAt ?? null,
     };

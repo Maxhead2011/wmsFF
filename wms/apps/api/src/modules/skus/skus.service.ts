@@ -5,6 +5,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { VolumeService } from '../stock/volume.service';
+import { BulkUpdateSkuVolumeDto } from './dto/bulk-update-sku-volume.dto';
 import { CreateArticleMappingDto } from './dto/create-article-mapping.dto';
 import { CreateNomenclatureItemDto } from './dto/create-nomenclature-item.dto';
 import { CreateSkuDto } from './dto/create-sku.dto';
@@ -74,6 +75,123 @@ export class SkusService {
     }
 
     return enrichSkuMarketplaceData(sku);
+  }
+
+  async listBulkVolume(
+    filter: { clientId?: string; sourceVolumeFrom?: string; sourceVolumeTo?: string },
+    user: AuthUser,
+  ) {
+    if (!filter.clientId) {
+      throw new BadRequestException('Выберите клиента для массового изменения литража.');
+    }
+    this.clientScopes.requireClientAccess(user, filter.clientId, 'read');
+    const client = await this.prisma.client.findUnique({
+      where: { id: filter.clientId },
+      select: { id: true, code: true, name: true },
+    });
+    if (!client) {
+      throw new NotFoundException('Клиент не найден.');
+    }
+
+    const groups = await this.prisma.sku.groupBy({
+      by: ['volumeLiters'],
+      where: { clientId: filter.clientId },
+      _count: { _all: true },
+      orderBy: { volumeLiters: 'asc' },
+    });
+    const hasRange = filter.sourceVolumeFrom !== undefined || filter.sourceVolumeTo !== undefined;
+    if (hasRange && (filter.sourceVolumeFrom === undefined || filter.sourceVolumeTo === undefined)) {
+      return {
+        client,
+        volumes: groups.map((group) => ({
+          key: group.volumeLiters === null ? 'EMPTY' : group.volumeLiters.toString(),
+          value: group.volumeLiters === null ? null : Number(group.volumeLiters),
+          count: group._count._all,
+        })),
+        items: [],
+        total: 0,
+      };
+    }
+    const sourceWhere = hasRange
+      ? skuVolumeRange(filter.sourceVolumeFrom!, filter.sourceVolumeTo!)
+      : null;
+    const items = sourceWhere
+      ? await this.prisma.sku.findMany({
+          where: { clientId: filter.clientId, ...sourceWhere },
+          orderBy: [{ name: 'asc' }, { internalSku: 'asc' }],
+          select: {
+            id: true,
+            internalSku: true,
+            clientSku: true,
+            article: true,
+            name: true,
+            lengthCm: true,
+            widthCm: true,
+            heightCm: true,
+            volumeLiters: true,
+            volumeSource: true,
+            barcodes: { orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }], select: { id: true, value: true, isPrimary: true } },
+          },
+          take: 5000,
+        })
+      : [];
+
+    return {
+      client,
+      volumes: groups.map((group) => ({
+        key: group.volumeLiters === null ? 'EMPTY' : group.volumeLiters.toString(),
+        value: group.volumeLiters === null ? null : Number(group.volumeLiters),
+        count: group._count._all,
+      })),
+      items,
+      total: items.length,
+    };
+  }
+
+  async updateBulkVolume(dto: BulkUpdateSkuVolumeDto, user: AuthUser) {
+    this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+    const skuIds = [...new Set(dto.skuIds)];
+    if (skuIds.length !== dto.skuIds.length) {
+      throw new BadRequestException('В списке товаров есть повторяющиеся позиции.');
+    }
+    const sourceWhere = skuVolumeRange(dto.sourceVolumeFrom, dto.sourceVolumeTo);
+    const matching = await this.prisma.sku.count({
+      where: { id: { in: skuIds }, clientId: dto.clientId, ...sourceWhere },
+    });
+    if (matching !== skuIds.length) {
+      throw new BadRequestException('Часть товаров уже изменилась или не относится к выбранному клиенту. Обновите список.');
+    }
+
+    const volume = new Prisma.Decimal(dto.newVolumeLiters.toFixed(3));
+    return this.prisma.$transaction(async (tx) => {
+      const result = await tx.sku.updateMany({
+        where: { id: { in: skuIds }, clientId: dto.clientId, ...sourceWhere },
+        data: { volumeLiters: volume, volumeSource: 'MANUAL' },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'sku.bulk-volume-update',
+          entity: 'sku',
+          entityId: dto.clientId,
+          payload: {
+            clientId: dto.clientId,
+            sourceVolumeFrom: dto.sourceVolumeFrom,
+            sourceVolumeTo: dto.sourceVolumeTo,
+            newVolumeLiters: dto.newVolumeLiters,
+            updated: result.count,
+            skuIds,
+          },
+        },
+      });
+      return {
+        clientId: dto.clientId,
+        sourceVolumeFrom: dto.sourceVolumeFrom,
+        sourceVolumeTo: dto.sourceVolumeTo,
+        newVolumeLiters: Number(volume),
+        updated: result.count,
+      };
+    });
   }
 
   async create(dto: CreateSkuDto, user: AuthUser) {
@@ -587,8 +705,9 @@ export class SkusService {
     const nextLength = dto.lengthCm ?? decimalToNumber(existing.lengthCm);
     const nextWidth = dto.widthCm ?? decimalToNumber(existing.widthCm);
     const nextHeight = dto.heightCm ?? decimalToNumber(existing.heightCm);
+    const dimensionsChanged = dto.lengthCm !== undefined || dto.widthCm !== undefined || dto.heightCm !== undefined;
     const volume =
-      nextLength && nextWidth && nextHeight
+      dimensionsChanged && nextLength && nextWidth && nextHeight
         ? this.volumes.calculateLiters({
             lengthCm: nextLength,
             widthCm: nextWidth,
@@ -634,6 +753,23 @@ export class SkusService {
 function cleanOptional(value?: string) {
   const trimmed = value?.trim();
   return trimmed || undefined;
+}
+
+function skuVolumeRange(sourceVolumeFrom: string | number, sourceVolumeTo: string | number): Prisma.SkuWhereInput {
+  const from = Number(String(sourceVolumeFrom).trim().replace(',', '.'));
+  const to = Number(String(sourceVolumeTo).trim().replace(',', '.'));
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0 || to <= 0 || from > 1_000_000 || to > 1_000_000) {
+    throw new BadRequestException('Некорректный диапазон литража.');
+  }
+  if (from > to) {
+    throw new BadRequestException('Начало диапазона литража не может быть больше окончания.');
+  }
+  return {
+    volumeLiters: {
+      gte: new Prisma.Decimal(from.toFixed(3)),
+      lte: new Prisma.Decimal(to.toFixed(3)),
+    },
+  };
 }
 
 function cleanPhotoUrls(photoUrls?: string[]) {

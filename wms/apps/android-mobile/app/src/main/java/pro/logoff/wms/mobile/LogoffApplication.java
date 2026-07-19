@@ -30,6 +30,7 @@ public class LogoffApplication extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
+        ThemeStore.applySaved(this);
         sessionStore = new SessionStore(this);
         database = AppDatabase.get(this);
         repository = new MobileRepository(NetworkFactory.create(sessionStore), database.cacheDao());

@@ -4,6 +4,7 @@ import { ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
+import { BulkUpdateSkuVolumeDto } from './dto/bulk-update-sku-volume.dto';
 import { CreateArticleMappingDto } from './dto/create-article-mapping.dto';
 import { CreateNomenclatureItemDto } from './dto/create-nomenclature-item.dto';
 import { CreateSkuDto } from './dto/create-sku.dto';
@@ -74,6 +75,22 @@ export class SkusController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.skus.importArticleMappingsWorkbook(clientId, file, user);
+  }
+
+  @Get('bulk-volume')
+  listBulkVolume(
+    @CurrentUser() user: AuthUser,
+    @Query('clientId') clientId?: string,
+    @Query('sourceVolumeFrom') sourceVolumeFrom?: string,
+    @Query('sourceVolumeTo') sourceVolumeTo?: string,
+  ) {
+    return this.skus.listBulkVolume({ clientId, sourceVolumeFrom, sourceVolumeTo }, user);
+  }
+
+  @Patch('bulk-volume')
+  @RequirePermissions('skus:write')
+  updateBulkVolume(@Body() dto: BulkUpdateSkuVolumeDto, @CurrentUser() user: AuthUser) {
+    return this.skus.updateBulkVolume(dto, user);
   }
 
   @Get(':id')

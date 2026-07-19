@@ -2250,6 +2250,36 @@ export type SkuDetail = SkuSummary & {
   }>;
 };
 
+export type BulkSkuVolumeItem = Pick<
+  SkuSummary,
+  | 'id'
+  | 'internalSku'
+  | 'clientSku'
+  | 'article'
+  | 'name'
+  | 'lengthCm'
+  | 'widthCm'
+  | 'heightCm'
+  | 'volumeLiters'
+  | 'volumeSource'
+  | 'barcodes'
+>;
+
+export type BulkSkuVolumeData = {
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  volumes: Array<{ key: string; value: number | null; count: number }>;
+  items: BulkSkuVolumeItem[];
+  total: number;
+};
+
+export type BulkSkuVolumeResult = {
+  clientId: string;
+  sourceVolumeFrom: number;
+  sourceVolumeTo: number;
+  newVolumeLiters: number;
+  updated: number;
+};
+
 export type CreateSkuPayload = {
   clientId: string;
   internalSku: string;
@@ -3953,6 +3983,32 @@ export async function importClientsXlsx(accessToken: string, payload: { file: Fi
 
 export async function fetchSkus(accessToken: string, filter: { clientId?: string; search?: string; draftsOnly?: boolean } = {}) {
   return request<SkuSummary[]>(withQuery('/skus', filter), {
+    accessToken,
+  });
+}
+
+export async function fetchBulkSkuVolume(
+  accessToken: string,
+  filter: { clientId: string; sourceVolumeFrom?: number; sourceVolumeTo?: number },
+) {
+  return request<BulkSkuVolumeData>(withQuery('/skus/bulk-volume', filter), {
+    accessToken,
+  });
+}
+
+export async function updateBulkSkuVolume(
+  accessToken: string,
+  payload: {
+    clientId: string;
+    sourceVolumeFrom: number;
+    sourceVolumeTo: number;
+    skuIds: string[];
+    newVolumeLiters: number;
+  },
+) {
+  return request<BulkSkuVolumeResult>('/skus/bulk-volume', {
+    method: 'PATCH',
+    body: payload,
     accessToken,
   });
 }

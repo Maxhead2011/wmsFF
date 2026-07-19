@@ -1,9 +1,9 @@
 <resources>
-    <style name="Theme.LogoffWms" parent="Theme.Material3.Light.NoActionBar">
+    <style name="Theme.LogoffWms" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/logoff_red</item>
         <item name="colorOnPrimary">@color/logoff_white</item>
         <item name="colorSecondary">@color/logoff_black</item>
-        <item name="colorSurface">@color/logoff_white</item>
+        <item name="colorSurface">@color/logoff_card</item>
         <item name="colorOnSurface">@color/logoff_black</item>
         <item name="colorSurfaceVariant">@color/logoff_surface_alt</item>
         <item name="colorOutline">@color/logoff_border</item>

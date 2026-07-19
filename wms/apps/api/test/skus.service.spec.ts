@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import { SkusService } from '../src/modules/skus/skus.service';
 import { VolumeService } from '../src/modules/stock/volume.service';
@@ -128,5 +129,110 @@ describe('SkusService', () => {
         needsChestnyZnak: true,
       }),
     });
+  });
+
+  it('mass updates selected SKU volume as a manual override and writes audit', async () => {
+    const tx = {
+      sku: {
+        updateMany: vi.fn().mockResolvedValue({ count: 2 }),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue({ id: 'audit-1' }),
+      },
+    };
+    const prisma = {
+      sku: {
+        count: vi.fn().mockResolvedValue(2),
+      },
+      $transaction: vi.fn((callback) => callback(tx)),
+    };
+    const clientScopes = {
+      requireClientAccess: vi.fn(),
+    };
+    const service = new SkusService(prisma as never, clientScopes as never, new VolumeService());
+
+    const result = await service.updateBulkVolume(
+      {
+        clientId: 'client-1',
+        sourceVolumeFrom: 3,
+        sourceVolumeTo: 4,
+        skuIds: ['d1000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000002'],
+        newVolumeLiters: 4.25,
+      },
+      { id: 'user-1' } as never,
+    );
+
+    expect(clientScopes.requireClientAccess).toHaveBeenCalledWith({ id: 'user-1' }, 'client-1', 'write');
+    expect(tx.sku.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        clientId: 'client-1',
+        id: { in: ['d1000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000002'] },
+      }),
+      data: expect.objectContaining({
+        volumeSource: 'MANUAL',
+      }),
+    });
+    const update = tx.sku.updateMany.mock.calls[0][0];
+    expect(Number(update.data.volumeLiters)).toBe(4.25);
+    expect(tx.auditLog.create).toHaveBeenCalledOnce();
+    expect(result).toEqual(expect.objectContaining({
+      updated: 2,
+      sourceVolumeFrom: 3,
+      sourceVolumeTo: 4,
+      newVolumeLiters: 4.25,
+    }));
+  });
+
+  it('keeps a manual volume when editing fields unrelated to dimensions', async () => {
+    const existing = {
+      id: 'sku-1',
+      clientId: 'client-1',
+      internalSku: 'SKU-1',
+      clientSku: null,
+      article: null,
+      name: 'Старое название',
+      brand: null,
+      category: null,
+      color: null,
+      size: null,
+      weightGrams: null,
+      lengthCm: new Prisma.Decimal(20),
+      widthCm: new Prisma.Decimal(10),
+      heightCm: new Prisma.Decimal(5),
+      volumeLiters: new Prisma.Decimal(7.5),
+      volumeSource: 'MANUAL',
+      needsChestnyZnak: false,
+      isUnmarked: false,
+      needsLabel: false,
+      needsRelabel: false,
+      marketplacePayload: null,
+      barcodes: [],
+    };
+    const tx = {
+      sku: {
+        update: vi.fn().mockResolvedValue({}),
+        findUniqueOrThrow: vi.fn().mockResolvedValue({ ...existing, name: 'Новое название' }),
+      },
+      barcode: {
+        deleteMany: vi.fn(),
+        upsert: vi.fn(),
+      },
+    };
+    const prisma = {
+      sku: { findFirst: vi.fn().mockResolvedValue(existing) },
+      $transaction: vi.fn((callback) => callback(tx)),
+    };
+    const scopes = {
+      resolveClientFilter: vi.fn().mockReturnValue(undefined),
+      requireClientAccess: vi.fn(),
+    };
+    const service = new SkusService(prisma as never, scopes as never, new VolumeService());
+
+    await service.update('sku-1', { name: 'Новое название' }, {} as never);
+
+    const data = tx.sku.update.mock.calls[0][0].data;
+    expect(data.name).toBe('Новое название');
+    expect(data).not.toHaveProperty('volumeLiters');
+    expect(data).not.toHaveProperty('volumeSource');
   });
 });

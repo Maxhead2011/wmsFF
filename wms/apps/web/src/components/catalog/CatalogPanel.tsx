@@ -19,6 +19,7 @@ import {
   type SkuSummary,
   type UpdateSkuPayload,
 } from '../../lib/api';
+import { BulkVolumeEditor } from './BulkVolumeEditor';
 import './catalog.css';
 
 type CatalogPanelProps = {
@@ -371,6 +372,15 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
 
       {error ? <p className="form-error">{error}</p> : null}
       {message ? <p className="form-success">{message}</p> : null}
+
+      {canWrite ? (
+        <BulkVolumeEditor
+          clients={clients}
+          defaultClientId={selectedClientId}
+          onApplied={() => setReloadKey((current) => current + 1)}
+          session={session}
+        />
+      ) : null}
 
       {canWrite ? (
         <section className="catalog-manual-card" aria-label="Ручное добавление товара">

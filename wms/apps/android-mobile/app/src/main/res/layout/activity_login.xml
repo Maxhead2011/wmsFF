@@ -62,7 +62,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="32dp"
-            app:cardBackgroundColor="@color/logoff_white"
+            app:cardBackgroundColor="@color/logoff_card"
             app:cardCornerRadius="28dp"
             app:cardElevation="10dp">
 

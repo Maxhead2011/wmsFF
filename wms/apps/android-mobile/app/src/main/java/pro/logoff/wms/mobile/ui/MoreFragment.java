@@ -23,6 +23,8 @@ import pro.logoff.wms.mobile.AppState;
 import pro.logoff.wms.mobile.BuildConfig;
 import pro.logoff.wms.mobile.LogoffApplication;
 import pro.logoff.wms.mobile.MainActivity;
+import pro.logoff.wms.mobile.R;
+import pro.logoff.wms.mobile.ThemeStore;
 import pro.logoff.wms.mobile.databinding.FragmentMoreBinding;
 import retrofit2.Call;
 import retrofit2.Callback;
@@ -35,10 +37,21 @@ public class MoreFragment extends Fragment {
         binding = FragmentMoreBinding.inflate(inflater, container, false); app = (LogoffApplication) requireActivity().getApplication();
         binding.account.setText(AppState.string(app.state().user().get("name")));
         binding.roles.setText("Роли: " + AppState.string(app.state().user().get("roleCodes")));
+        configureTheme();
         addModules();
         binding.checkUpdate.setOnClickListener(view -> checkUpdate());
         binding.logout.setOnClickListener(view -> logout());
         return binding.getRoot();
+    }
+
+    private void configureTheme() {
+        binding.themeToggle.check(ThemeStore.isDark(requireContext()) ? R.id.darkTheme : R.id.lightTheme);
+        binding.themeToggle.addOnButtonCheckedListener((group, checkedId, isChecked) -> {
+            if (!isChecked) return;
+            boolean dark = checkedId == R.id.darkTheme;
+            if (ThemeStore.isDark(requireContext()) == dark) return;
+            ThemeStore.setDark(requireContext(), dark);
+        });
     }
 
     private void addModules() {
@@ -82,7 +95,7 @@ public class MoreFragment extends Fragment {
         button.setAllCaps(false);
         button.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICAL);
         button.setTextColor(ContextCompat.getColor(requireContext(), pro.logoff.wms.mobile.R.color.logoff_black));
-        button.setBackgroundColor(ContextCompat.getColor(requireContext(), pro.logoff.wms.mobile.R.color.logoff_white));
+        button.setBackgroundColor(ContextCompat.getColor(requireContext(), pro.logoff.wms.mobile.R.color.logoff_card));
         button.setStrokeColorResource(pro.logoff.wms.mobile.R.color.logoff_border);
         button.setStrokeWidth(dp(1));
         button.setCornerRadius(dp(18));

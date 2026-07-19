@@ -1,0 +1,12 @@
+<resources>
+    <color name="logoff_black">#F5F6F8</color>
+    <color name="logoff_surface">#101217</color>
+    <color name="logoff_surface_alt">#171A20</color>
+    <color name="logoff_card">#1C1F26</color>
+    <color name="logoff_ink_soft">#252932</color>
+    <color name="logoff_text_muted">#A8AEB9</color>
+    <color name="logoff_border">#343842</color>
+    <color name="logoff_red_soft">#3A1822</color>
+    <color name="logoff_success_surface">#153126</color>
+    <color name="logoff_blue_soft">#1B2442</color>
+</resources>

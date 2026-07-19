@@ -65,6 +65,12 @@ public class ListFragment extends Fragment {
             @Override public void afterTextChanged(android.text.Editable value) {}
         });
         if (REQUESTS.equals(kind)) { binding.actionButton.setVisibility(View.VISIBLE); binding.actionButton.setOnClickListener(view -> startActivity(new Intent(requireContext(), RequestFormActivity.class))); }
+        if (NOTIFICATIONS.equals(kind)) {
+            binding.searchLayout.setVisibility(View.GONE);
+            binding.actionButton.setVisibility(View.GONE);
+            binding.bulkActionButton.setVisibility(View.VISIBLE);
+            binding.bulkActionButton.setOnClickListener(view -> confirmMarkAllRead());
+        }
         load();
         return binding.getRoot();
     }
@@ -117,8 +123,45 @@ public class ListFragment extends Fragment {
                 }
             }
             main.setNotificationCount(unread);
+            binding.bulkActionButton.setEnabled(unread > 0);
+            binding.bulkActionButton.setText(unread > 0
+                    ? "Отметить все прочитанными · " + unread
+                    : "Все уведомления прочитаны");
         }
         if (cached) Toast.makeText(requireContext(), "Сохраненные данные", Toast.LENGTH_SHORT).show();
+    }
+
+    private void confirmMarkAllRead() {
+        new com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
+                .setTitle("Прочитать все уведомления?")
+                .setMessage("Все непрочитанные уведомления выбранного клиента будут отмечены прочитанными.")
+                .setNegativeButton("Отмена", null)
+                .setPositiveButton("Прочитать все", (dialog, which) -> markAllRead())
+                .show();
+    }
+
+    private void markAllRead() {
+        binding.bulkActionButton.setEnabled(false);
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        String clientId = app.state().selectedClientId();
+        if (clientId != null && !clientId.isBlank()) body.put("clientId", clientId);
+        app.repository().api().markAllNotificationsRead(body).enqueue(new Callback<>() {
+            @Override public void onResponse(Call<Map<String, Object>> call, Response<Map<String, Object>> response) {
+                if (!response.isSuccessful()) {
+                    error(MobileRepository.errorMessage(response));
+                    binding.bulkActionButton.setEnabled(true);
+                    return;
+                }
+                long updated = response.body() == null ? 0 : integer(response.body().get("updated"));
+                if (requireActivity() instanceof pro.logoff.wms.mobile.MainActivity main) main.setNotificationCount(0);
+                Toast.makeText(requireContext(), "Прочитано уведомлений: " + updated, Toast.LENGTH_SHORT).show();
+                load();
+            }
+            @Override public void onFailure(Call<Map<String, Object>> call, Throwable failure) {
+                binding.bulkActionButton.setEnabled(true);
+                error(MobileRepository.readable(failure));
+            }
+        });
     }
 
     @SuppressWarnings("unchecked")

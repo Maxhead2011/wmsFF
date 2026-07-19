@@ -89,7 +89,7 @@ public class DashboardFragment extends Fragment {
 
     private void addMetric(String label, String value, int accent, Runnable action) {
         MaterialCardView card = new MaterialCardView(requireContext());
-        card.setCardBackgroundColor(ContextCompat.getColor(requireContext(), R.color.logoff_white));
+        card.setCardBackgroundColor(ContextCompat.getColor(requireContext(), R.color.logoff_card));
         card.setRadius(dp(20));
         card.setCardElevation(0);
         card.setStrokeWidth(dp(1));

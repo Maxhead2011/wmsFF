@@ -7,7 +7,7 @@
     android:clickable="true"
     android:focusable="true"
     android:foreground="?attr/selectableItemBackground"
-    app:cardBackgroundColor="@color/logoff_white"
+    app:cardBackgroundColor="@color/logoff_card"
     app:cardCornerRadius="20dp"
     app:cardElevation="0dp"
     app:strokeColor="@color/logoff_border"

@@ -1,8 +1,8 @@
 {
-  "versionCode": 5,
-  "versionName": "0.3.0",
+  "versionCode": 6,
+  "versionName": "0.3.1",
   "minimumVersion": "0.1.0",
   "mandatory": false,
   "apkUrl": "/downloads/logoff-wms-mobile.apk",
-  "releaseNotes": "Рабочие системные уведомления со счетчиком и переходами, фоновая синхронизация и полностью обновленный современный дизайн."
+  "releaseNotes": "Добавлены массовое прочтение уведомлений и выбор светлой или тёмной темы."
 }

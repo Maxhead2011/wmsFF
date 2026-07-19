@@ -25,6 +25,7 @@ public interface MobileApi {
     @GET("mobile/invoices") Call<Map<String, Object>> invoices(@Query("clientId") String clientId, @Query("search") String search, @Query("status") String status, @Query("limit") int limit);
     @GET("mobile/notifications") Call<Map<String, Object>> notifications(@Query("clientId") String clientId, @Query("unreadOnly") boolean unreadOnly, @Query("limit") int limit);
     @PATCH("mobile/notifications/{id}/read") Call<Map<String, Object>> markNotificationRead(@Path("id") String id);
+    @PATCH("mobile/notifications/read-all") Call<Map<String, Object>> markAllNotificationsRead(@Body Map<String, Object> body);
     @GET("mobile/online-receipts") Call<Object> onlineReceipts(@Query("clientId") String clientId);
     @GET("mobile/modules/{module}") Call<Map<String, Object>> nativeModule(@Path("module") String module, @Query("clientId") String clientId, @Query("search") String search, @Query("limit") int limit);
     @POST("mobile/devices") Call<Map<String, Object>> registerDevice(@Body Map<String, Object> body);

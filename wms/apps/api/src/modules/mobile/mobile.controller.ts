@@ -104,6 +104,12 @@ export class MobileController {
     return this.mobile.markNotificationRead(user, id);
   }
 
+  @Patch('notifications/read-all')
+  @ApiBearerAuth()
+  markAllNotificationsRead(@CurrentUser() user: AuthUser, @Body('clientId') clientId?: string) {
+    return this.mobile.markAllNotificationsRead(user, clientId);
+  }
+
   @Get('events')
   @ApiBearerAuth()
   events(@CurrentUser() user: AuthUser, @Query() query: MobileEventListDto) {

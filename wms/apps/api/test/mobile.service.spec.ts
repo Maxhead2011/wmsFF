@@ -61,6 +61,23 @@ describe('MobileService', () => {
     );
     expect(prisma.mobileSession.create).toHaveBeenCalledOnce();
   });
+
+  it('отмечает все доступные уведомления клиента прочитанными', async () => {
+    const prisma = {
+      clientNotification: {
+        updateMany: vi.fn().mockResolvedValue({ count: 8 }),
+      },
+    };
+    const service = new MobileService(prisma as never, new ClientScopeService(), {} as never);
+
+    const result = await service.markAllNotificationsRead(clientUser(), 'client-1');
+
+    expect(prisma.clientNotification.updateMany).toHaveBeenCalledWith({
+      where: { clientId: { in: ['client-1'] }, isRead: false },
+      data: { isRead: true, readAt: expect.any(Date) },
+    });
+    expect(result.updated).toBe(8);
+  });
 });
 
 function clientUser(): AuthUser {
