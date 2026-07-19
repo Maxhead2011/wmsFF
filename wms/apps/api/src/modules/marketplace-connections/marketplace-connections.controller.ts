@@ -18,6 +18,22 @@ export class MarketplaceConnectionsController {
     return this.connections.list(clientId, user);
   }
 
+  @Get('fbs/orders')
+  @RequirePermissions()
+  listFbsOrders(
+    @CurrentUser() user: AuthUser,
+    @Query('clientId') clientId: string,
+    @Query('refresh') refresh?: string,
+  ) {
+    return this.connections.listFbsOrders(clientId, user, refresh === 'true' || refresh === '1');
+  }
+
+  @Post('fbs/connections')
+  @RequirePermissions()
+  createFbsConnection(@Body() dto: UpsertMarketplaceConnectionDto, @CurrentUser() user: AuthUser) {
+    return this.connections.createFbsConnection(dto, user);
+  }
+
   @Post()
   @RequirePermissions('clients:write')
   create(@Body() dto: UpsertMarketplaceConnectionDto, @CurrentUser() user: AuthUser) {

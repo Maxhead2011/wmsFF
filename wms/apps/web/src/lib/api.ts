@@ -356,7 +356,12 @@ export type BillingInvoiceItemSummary = {
   unitPriceRub: string | number;
   totalRub: string | number;
   serviceDate: string;
-  charge: Pick<BillingChargeSummary, 'id' | 'serviceId' | 'description' | 'status'> | null;
+  charge:
+    | (Pick<BillingChargeSummary, 'id' | 'serviceId' | 'description' | 'status'> & {
+        sourceKey: string | null;
+        metadata: unknown | null;
+      })
+    | null;
 };
 
 export type BillingPaymentSummary = {
@@ -1677,6 +1682,72 @@ export type MarketplaceProductSyncResult = {
     offerId: string;
     message: string;
   }>;
+};
+
+export type FbsOrderCategory = 'active' | 'shipped' | 'archive';
+
+export type FbsOrderSummary = {
+  id: string;
+  orderUid: string | null;
+  connectionId: string;
+  accountName: string | null;
+  marketplace: 'WILDBERRIES' | 'OZON';
+  category: FbsOrderCategory;
+  supplierStatus: string;
+  wbStatus: string;
+  statusLabel: string;
+  article: string | null;
+  nmId: string | null;
+  chrtId: string | null;
+  barcodes: string[];
+  product: {
+    id: string;
+    name: string;
+    internalSku: string;
+    clientSku: string | null;
+    article: string | null;
+  } | null;
+  storageBoxes: Array<{
+    code: string;
+    quantity: number;
+    status: string;
+  }>;
+  createdAt: string | null;
+  sellerDate: string | null;
+  deliveryDate: string | null;
+  supplyId: string | null;
+  warehouseId: string | null;
+  officeId: string | null;
+  cargoType: string | null;
+  requiredMeta: string[];
+  optionalMeta: string[];
+  comment: string | null;
+  billing: {
+    chargeId: string;
+    status: BillingChargeStatus;
+    unitPriceRub: number;
+    totalRub: number;
+    invoiceNumber: string | null;
+    invoiceStatus: BillingInvoiceStatus | null;
+  } | null;
+};
+
+export type ClientFbsOrders = {
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  connected: boolean;
+  connections: Array<{
+    id: string;
+    marketplace: 'WILDBERRIES' | 'OZON';
+    accountName: string | null;
+  }>;
+  fetchedAt: string;
+  counts: {
+    active: number;
+    shipped: number;
+    archive: number;
+    all: number;
+  };
+  orders: FbsOrderSummary[];
 };
 
 export type UpsertMarketplaceConnectionPayload = {
@@ -4354,6 +4425,27 @@ export async function updateStorageTariff(
 
 export async function fetchMarketplaceConnections(accessToken: string, filter: { clientId?: string } = {}) {
   return request<MarketplaceConnectionSummary[]>(withQuery('/marketplace-connections', filter), {
+    accessToken,
+  });
+}
+
+export async function fetchFbsOrders(accessToken: string, clientId: string, refresh = false) {
+  return request<ClientFbsOrders>(
+    withQuery('/marketplace-connections/fbs/orders', {
+      clientId,
+      refresh: refresh ? '1' : undefined,
+    }),
+    { accessToken },
+  );
+}
+
+export async function createFbsMarketplaceConnection(
+  accessToken: string,
+  payload: UpsertMarketplaceConnectionPayload & { marketplace: 'WILDBERRIES' | 'OZON' },
+) {
+  return request<MarketplaceConnectionSummary>('/marketplace-connections/fbs/connections', {
+    method: 'POST',
+    body: payload,
     accessToken,
   });
 }

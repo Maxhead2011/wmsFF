@@ -1,4 +1,4 @@
-import { Boxes, ClipboardList, PackageCheck, ReceiptText } from 'lucide-react';
+import { BadgeRussianRuble, Boxes, ClipboardList, PackageCheck, ReceiptText } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type {
   BillingChargeSummary,
@@ -32,6 +32,16 @@ export function ClientCabinetMetrics({ stock, requests, invoices, charges, recon
       .filter((invoice) => invoice.status !== 'CANCELLED')
       .reduce((sum, invoice) => sum + Math.max(0, Number(invoice.totalRub) - Number(invoice.paidRub)), 0);
   const debtRub = invoiceDebtRub + unbilledApprovedChargesRub(charges, invoices);
+  const fbsInvoicesRub = invoices
+    .filter((invoice) => invoice.status === 'ISSUED' || invoice.status === 'PAID')
+    .reduce(
+      (sum, invoice) =>
+        sum +
+        invoice.items
+          .filter((item) => item.charge?.sourceKey?.startsWith('fbs:'))
+          .reduce((invoiceSum, item) => invoiceSum + Number(item.totalRub), 0),
+      0,
+    );
 
   return (
     <div className="client-cabinet-metrics" aria-label="Сводка клиента">
@@ -52,6 +62,12 @@ export function ClientCabinetMetrics({ stock, requests, invoices, charges, recon
         icon={ReceiptText}
         label="К оплате"
         value={`${formatCabinetMoney(debtRub)} ₽`}
+        onClick={() => onNavigate('invoices')}
+      />
+      <MetricTile
+        icon={BadgeRussianRuble}
+        label="Выставлено по FBS"
+        value={`${formatCabinetMoney(fbsInvoicesRub)} ₽`}
         onClick={() => onNavigate('invoices')}
       />
     </div>

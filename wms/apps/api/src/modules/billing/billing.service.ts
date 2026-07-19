@@ -1149,6 +1149,13 @@ function isBillingAdministrator(user: AuthUser) {
 
 const STANDARD_BILLING_SERVICES = [
   {
+    code: 'FBS_PROCESSING',
+    name: 'Обработка заказа FBS',
+    unit: BillingUnit.PIECE,
+    defaultPriceRub: 0,
+    isActive: true,
+  },
+  {
     code: 'BOX_60_40_40',
     name: 'Короб 60*40*40',
     unit: BillingUnit.PIECE,
@@ -1234,6 +1241,8 @@ const billingInvoiceInclude = {
           serviceId: true,
           description: true,
           status: true,
+          sourceKey: true,
+          metadata: true,
         },
       },
     },

@@ -196,6 +196,26 @@
   max-width: 280px;
 }
 
+.fbs-refresh-button {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid #d5dce5;
+  border-radius: 12px;
+  background: #fff;
+  padding: 0 13px;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.fbs-refresh-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .fbs-workspace__search > span:last-child {
   display: flex;
   min-width: 250px;
@@ -283,6 +303,89 @@
   text-transform: uppercase;
 }
 
+.fbs-table td {
+  border-bottom: 1px solid #edf0f3;
+  padding: 13px;
+  color: #334155;
+  font-size: 12px;
+  vertical-align: top;
+}
+
+.fbs-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.fbs-table td strong,
+.fbs-table td small {
+  display: block;
+}
+
+.fbs-table td strong {
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.fbs-table td small {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.fbs-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+}
+
+.fbs-box-list {
+  display: flex;
+  max-width: 300px;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.fbs-box-list span {
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  padding: 5px 7px;
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.fbs-missing-box {
+  color: #b45309;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.fbs-status {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 5px 8px;
+  font-size: 10px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.fbs-status--active {
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.fbs-status--shipped {
+  background: #ecfdf3;
+  color: #15803d;
+}
+
+.fbs-status--archive {
+  background: #f1f5f9;
+  color: #475569;
+}
+
 .fbs-empty {
   display: grid;
   min-height: 220px;
@@ -312,6 +415,11 @@
   line-height: 1.5;
 }
 
+.fbs-empty--error > span {
+  background: #fff1f2;
+  color: #be123c;
+}
+
 .fbs-cost-empty {
   display: flex;
   align-items: center;
@@ -327,6 +435,110 @@
   display: block;
   margin-bottom: 5px;
   color: var(--ink);
+}
+
+.fbs-source-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  border-top: 1px solid #edf0f3;
+  padding-top: 13px;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.fbs-source-line span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.fbs-connect-empty {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 15px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 16px;
+  background: #fafbfc;
+  padding: 24px;
+}
+
+.fbs-connect-empty > span {
+  display: grid;
+  width: 54px;
+  height: 54px;
+  place-items: center;
+  border-radius: 17px;
+  background: #fff1f2;
+  color: #be123c;
+}
+
+.fbs-connect-empty strong {
+  display: block;
+  margin-bottom: 5px;
+}
+
+.fbs-connect-empty p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.fbs-connect-form {
+  display: grid;
+  gap: 15px;
+  border: 1px solid #dbe2ea;
+  border-radius: 16px;
+  background: #fafbfc;
+  padding: 18px;
+}
+
+.fbs-connect-form__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+}
+
+.fbs-connect-form__heading h4 {
+  margin: 2px 0 0;
+  font-size: 18px;
+}
+
+.fbs-connect-form__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.fbs-connect-form label {
+  display: grid;
+  gap: 5px;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.fbs-connect-form input,
+.fbs-connect-form select {
+  min-height: 42px;
+  border: 1px solid #d5dce5;
+  border-radius: 12px;
+  background: #fff;
+  padding: 0 12px;
+  color: var(--ink);
+}
+
+.fbs-connect-form__key {
+  grid-column: span 2;
+}
+
+.fbs-connect-form > .primary-button {
+  justify-self: start;
 }
 
 @media (max-width: 1180px) {
@@ -363,6 +575,10 @@
     display: grid;
   }
 
+  .fbs-refresh-button {
+    width: 100%;
+  }
+
   .fbs-workspace__filters select {
     width: 100%;
     max-width: none;
@@ -371,6 +587,18 @@
   .fbs-order-summary,
   .fbs-cost-summary {
     grid-template-columns: 1fr;
+  }
+
+  .fbs-connect-empty {
+    grid-template-columns: 1fr;
+  }
+
+  .fbs-connect-form__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .fbs-connect-form__key {
+    grid-column: auto;
   }
 }
 
