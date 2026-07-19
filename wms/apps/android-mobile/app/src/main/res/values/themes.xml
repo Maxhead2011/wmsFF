@@ -3,9 +3,27 @@
         <item name="colorPrimary">@color/logoff_red</item>
         <item name="colorOnPrimary">@color/logoff_white</item>
         <item name="colorSecondary">@color/logoff_black</item>
-        <item name="android:fontFamily">sans</item>
+        <item name="colorSurface">@color/logoff_white</item>
+        <item name="colorOnSurface">@color/logoff_black</item>
+        <item name="colorSurfaceVariant">@color/logoff_surface_alt</item>
+        <item name="colorOutline">@color/logoff_border</item>
+        <item name="android:fontFamily">sans-serif</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:statusBarColor">@color/logoff_black</item>
-        <item name="android:navigationBarColor">@color/logoff_white</item>
+        <item name="android:navigationBarColor">@color/logoff_surface</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="shapeAppearanceSmallComponent">@style/ShapeAppearance.Logoff.Small</item>
+        <item name="shapeAppearanceMediumComponent">@style/ShapeAppearance.Logoff.Medium</item>
+        <item name="shapeAppearanceLargeComponent">@style/ShapeAppearance.Logoff.Large</item>
+    </style>
+    <style name="ShapeAppearance.Logoff.Small" parent="ShapeAppearance.Material3.Corner.Medium">
+        <item name="cornerSize">12dp</item>
+    </style>
+    <style name="ShapeAppearance.Logoff.Medium" parent="ShapeAppearance.Material3.Corner.Large">
+        <item name="cornerSize">18dp</item>
+    </style>
+    <style name="ShapeAppearance.Logoff.Large" parent="ShapeAppearance.Material3.Corner.ExtraLarge">
+        <item name="cornerSize">26dp</item>
     </style>
 </resources>

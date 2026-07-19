@@ -11,7 +11,10 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
+
+import com.google.android.material.card.MaterialCardView;
 
 import java.text.NumberFormat;
 import java.util.Collections;
@@ -70,6 +73,7 @@ public class DashboardFragment extends Fragment {
         Map<String, Object> stock = map(data.get("stock"));
         Map<String, Object> invoices = map(data.get("invoices"));
         Map<String, Object> estimates = map(data.get("estimates"));
+        ((MainActivity) requireActivity()).setNotificationCount((int) integer(data.get("unreadNotifications")));
         addMetric("Активные заявки", number(data.get("activeRequests")), R.color.logoff_red, () -> openList(ListFragment.REQUESTS));
         addMetric("Единиц на складе", number(stock.get("units")), R.color.logoff_black, () -> openModule("stock", "Остатки"));
         addMetric("К оплате", money(invoices.get("debtRub")), R.color.logoff_warning, () -> openList(ListFragment.INVOICES));
@@ -84,21 +88,64 @@ public class DashboardFragment extends Fragment {
     }
 
     private void addMetric(String label, String value, int accent, Runnable action) {
-        LinearLayout card = new LinearLayout(requireContext());
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(14), dp(13), dp(14), dp(13));
-        card.setBackgroundResource(R.drawable.status_background);
+        MaterialCardView card = new MaterialCardView(requireContext());
+        card.setCardBackgroundColor(ContextCompat.getColor(requireContext(), R.color.logoff_white));
+        card.setRadius(dp(20));
+        card.setCardElevation(0);
+        card.setStrokeWidth(dp(1));
+        card.setStrokeColor(ContextCompat.getColor(requireContext(), R.color.logoff_border));
         card.setClickable(true);
         card.setFocusable(true);
         card.setOnClickListener(view -> action.run());
         android.util.TypedValue selectable = new android.util.TypedValue();
         requireContext().getTheme().resolveAttribute(android.R.attr.selectableItemBackground, selectable, true);
         card.setForeground(androidx.appcompat.content.res.AppCompatResources.getDrawable(requireContext(), selectable.resourceId));
-        TextView title = new TextView(requireContext()); title.setText(label); title.setTextColor(getResources().getColor(R.color.logoff_text_muted, null)); title.setTextSize(13);
-        TextView amount = new TextView(requireContext()); amount.setText(value); amount.setTextColor(getResources().getColor(accent, null)); amount.setTextSize(23); amount.setTypeface(null, android.graphics.Typeface.BOLD);
-        card.addView(title); card.addView(amount);
+
+        LinearLayout content = new LinearLayout(requireContext());
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setMinimumHeight(dp(126));
+        content.setPadding(dp(16), dp(15), dp(14), dp(14));
+
+        LinearLayout top = new LinearLayout(requireContext());
+        top.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        TextView dot = new TextView(requireContext());
+        dot.setText("●");
+        dot.setTextColor(ContextCompat.getColor(requireContext(), accent));
+        dot.setTextSize(13);
+        TextView arrow = new TextView(requireContext());
+        arrow.setText("↗");
+        arrow.setGravity(android.view.Gravity.END);
+        arrow.setTextColor(ContextCompat.getColor(requireContext(), R.color.logoff_text_muted));
+        arrow.setTextSize(18);
+        top.addView(dot, new LinearLayout.LayoutParams(0, -2, 1f));
+        top.addView(arrow, new LinearLayout.LayoutParams(-2, -2));
+
+        TextView amount = new TextView(requireContext());
+        amount.setText(value);
+        amount.setTextColor(ContextCompat.getColor(requireContext(), R.color.logoff_black));
+        amount.setTextSize(22);
+        amount.setTypeface(null, android.graphics.Typeface.BOLD);
+        amount.setMaxLines(1);
+        amount.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams amountParams = new LinearLayout.LayoutParams(-1, -2);
+        amountParams.topMargin = dp(10);
+
+        TextView title = new TextView(requireContext());
+        title.setText(label);
+        title.setTextColor(ContextCompat.getColor(requireContext(), R.color.logoff_text_muted));
+        title.setTextSize(12);
+        title.setMaxLines(2);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(-1, -2);
+        titleParams.topMargin = dp(4);
+
+        content.addView(top);
+        content.addView(amount, amountParams);
+        content.addView(title, titleParams);
+        card.addView(content);
         GridLayout.LayoutParams params = new GridLayout.LayoutParams();
-        params.width = 0; params.columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f); params.setMargins(dp(4), dp(4), dp(4), dp(4));
+        params.width = 0;
+        params.columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f);
+        params.setMargins(dp(5), dp(5), dp(5), dp(5));
         binding.metrics.addView(card, params);
     }
 
@@ -118,6 +165,7 @@ public class DashboardFragment extends Fragment {
     }
 
     @SuppressWarnings("unchecked") private Map<String, Object> map(Object value) { return value instanceof Map<?, ?> ? (Map<String, Object>) value : Collections.emptyMap(); }
+    private long integer(Object value) { return value instanceof Number ? ((Number) value).longValue() : 0; }
     private String number(Object value) { return NumberFormat.getIntegerInstance(new Locale("ru", "RU")).format(value instanceof Number ? ((Number) value).longValue() : 0); }
     private String money(Object value) { return NumberFormat.getCurrencyInstance(new Locale("ru", "RU")).format(value instanceof Number ? ((Number) value).doubleValue() : 0); }
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }

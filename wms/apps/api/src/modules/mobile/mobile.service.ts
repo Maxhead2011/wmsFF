@@ -895,7 +895,13 @@ export class MobileService {
     }
     return this.prisma.mobileDevice.update({
       where: { id: user.deviceId },
-      data: { fcmToken: token, name: clean(dto.name), appVersion: clean(dto.appVersion), isActive: true, lastSeenAt: new Date() },
+      data: {
+        ...(dto.fcmToken !== undefined ? { fcmToken: token } : {}),
+        ...(dto.name !== undefined ? { name: clean(dto.name) } : {}),
+        ...(dto.appVersion !== undefined ? { appVersion: clean(dto.appVersion) } : {}),
+        isActive: true,
+        lastSeenAt: new Date(),
+      },
       select: { id: true, name: true, appVersion: true, isActive: true, lastSeenAt: true },
     });
   }
@@ -904,13 +910,13 @@ export class MobileService {
     const setting = await this.prisma.systemSetting.findUnique({ where: { key: 'mobile.android.version' } });
     const value = asRecord(setting?.value);
     return {
-      currentVersion: stringValue(value.currentVersion, '0.2.1'),
+      currentVersion: stringValue(value.currentVersion, '0.3.0'),
       minimumVersion: stringValue(value.minimumVersion, '0.1.0'),
       mandatory: value.mandatory === true,
       apkUrl: stringValue(value.apkUrl, '/downloads/logoff-wms-mobile.apk'),
       releaseNotes: stringValue(
         value.releaseNotes,
-        'Исправлен поиск, добавлены карточки коробов и товаров, активные плитки, суммы хранения/ПРР и ускоренная загрузка.',
+        'Рабочие системные уведомления со счетчиком и переходами, фоновая синхронизация и полностью обновленный современный дизайн.',
       ),
       updatedAt: setting?.updatedAt ?? null,
     };

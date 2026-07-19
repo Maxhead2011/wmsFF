@@ -2,6 +2,9 @@ plugins {
     id("com.android.application")
 }
 
+fun firebaseValue(name: String): String =
+    (System.getenv(name) ?: "").replace("\\", "\\\\").replace("\"", "\\\"")
+
 android {
     namespace = "pro.logoff.wms.mobile"
     compileSdk = 35
@@ -10,10 +13,14 @@ android {
         applicationId = "pro.logoff.wms.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.2.1"
+        versionCode = 5
+        versionName = "0.3.0"
         buildConfigField("String", "API_BASE_URL", "\"https://wms.logoff.pro/api/v1/\"")
         buildConfigField("String", "APK_URL", "\"https://wms.logoff.pro/downloads/logoff-wms-mobile.apk\"")
+        buildConfigField("String", "FIREBASE_APPLICATION_ID", "\"${firebaseValue("MOBILE_FIREBASE_APPLICATION_ID")}\"")
+        buildConfigField("String", "FIREBASE_API_KEY", "\"${firebaseValue("MOBILE_FIREBASE_API_KEY")}\"")
+        buildConfigField("String", "FIREBASE_PROJECT_ID", "\"${firebaseValue("MOBILE_FIREBASE_PROJECT_ID")}\"")
+        buildConfigField("String", "FIREBASE_SENDER_ID", "\"${firebaseValue("MOBILE_FIREBASE_SENDER_ID")}\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

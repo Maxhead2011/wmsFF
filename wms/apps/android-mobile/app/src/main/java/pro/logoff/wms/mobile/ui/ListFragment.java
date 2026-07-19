@@ -109,6 +109,15 @@ public class ListFragment extends Fragment {
             for (Object item : (List<?>) raw) if (item instanceof Map<?, ?>) rows.add(toRow((Map<String, Object>) item));
         }
         adapter.submit(rows); binding.empty.setVisibility(rows.isEmpty() ? View.VISIBLE : View.GONE);
+        if (NOTIFICATIONS.equals(kind) && requireActivity() instanceof pro.logoff.wms.mobile.MainActivity main) {
+            int unread = 0;
+            if (raw instanceof List<?>) {
+                for (Object item : (List<?>) raw) {
+                    if (item instanceof Map<?, ?> map && !Boolean.TRUE.equals(map.get("isRead"))) unread++;
+                }
+            }
+            main.setNotificationCount(unread);
+        }
         if (cached) Toast.makeText(requireContext(), "Сохраненные данные", Toast.LENGTH_SHORT).show();
     }
 
@@ -145,7 +154,10 @@ public class ListFragment extends Fragment {
             showRequestActions(row, (Map<String, Object>) row.source());
         } else if (NOTIFICATIONS.equals(kind) && row.source() instanceof Map<?, ?> source && !Boolean.TRUE.equals(((Map<String, Object>) source).get("isRead"))) {
             app.repository().api().markNotificationRead(row.id()).enqueue(new Callback<>() {
-                @Override public void onResponse(Call<Map<String, Object>> call, Response<Map<String, Object>> response) { load(); }
+                @Override public void onResponse(Call<Map<String, Object>> call, Response<Map<String, Object>> response) {
+                    if (requireActivity() instanceof pro.logoff.wms.mobile.MainActivity main) main.refreshNotificationBadge();
+                    load();
+                }
                 @Override public void onFailure(Call<Map<String, Object>> call, Throwable error) { Toast.makeText(requireContext(), MobileRepository.readable(error), Toast.LENGTH_SHORT).show(); }
             });
         } else if (INVOICES.equals(kind)) {

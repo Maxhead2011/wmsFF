@@ -11,6 +11,7 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 
 import com.google.android.material.button.MaterialButton;
@@ -77,8 +78,21 @@ public class MoreFragment extends Fragment {
 
     private void addButton(String title, Runnable action) {
         MaterialButton button = new MaterialButton(requireContext(), null, com.google.android.material.R.attr.materialButtonOutlinedStyle);
-        button.setText(title); button.setAllCaps(false); button.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICAL); button.setOnClickListener(view -> action.run());
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(52)); params.bottomMargin = dp(8); binding.moduleButtons.addView(button, params);
+        button.setText(title + "   ›");
+        button.setAllCaps(false);
+        button.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICAL);
+        button.setTextColor(ContextCompat.getColor(requireContext(), pro.logoff.wms.mobile.R.color.logoff_black));
+        button.setBackgroundColor(ContextCompat.getColor(requireContext(), pro.logoff.wms.mobile.R.color.logoff_white));
+        button.setStrokeColorResource(pro.logoff.wms.mobile.R.color.logoff_border);
+        button.setStrokeWidth(dp(1));
+        button.setCornerRadius(dp(18));
+        button.setInsetTop(0);
+        button.setInsetBottom(0);
+        button.setPadding(dp(18), 0, dp(18), 0);
+        button.setOnClickListener(view -> action.run());
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(58));
+        params.bottomMargin = dp(9);
+        binding.moduleButtons.addView(button, params);
     }
 
     private void checkUpdate() {
