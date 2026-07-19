@@ -43,7 +43,9 @@ export class MobileService {
       appVersion,
       features: {
         requestCreate: user.permissionCodes.includes('client-requests:write'),
-        requestStatus: user.permissionCodes.includes('client-requests:status'),
+        requestStatus:
+          user.permissionCodes.includes('client-requests:status') ||
+          user.permissionCodes.includes('system:admin'),
         onlineReceipts: user.permissionCodes.includes('warehouse:read') || user.permissionCodes.includes('stock:read'),
         billingWrite: user.permissionCodes.includes('billing:write') || user.permissionCodes.includes('system:admin'),
         dangerousActions: user.permissionCodes.includes('system:admin'),
