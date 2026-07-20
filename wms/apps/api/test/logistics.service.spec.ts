@@ -220,7 +220,26 @@ describe('LogisticsService', () => {
     const deliveryService = new LogisticsService(prisma as never, {} as never);
 
     await expect(deliveryService.listFbsCalculatorDestinations()).resolves.toEqual({
-      destinations: ['Воронеж', 'Казань'],
+      destinations: ['Внуково', 'Воронеж', 'Кавказский Бульвар', 'Казань'],
+    });
+  });
+
+  it('считает специальные направления Внуково и Кавказский Бульвар', async () => {
+    const deliveryService = new LogisticsService({} as never, {} as never);
+
+    await expect(
+      deliveryService.quoteFbsCalculator({ quantity: 14, destination: 'Внуково' }),
+    ).resolves.toEqual({
+      destination: 'Внуково',
+      totalWithTax: 2109.57,
+      requiresManualReview: false,
+    });
+    await expect(
+      deliveryService.quoteFbsCalculator({ quantity: 14, destination: 'Кавказский Бульвар' }),
+    ).resolves.toEqual({
+      destination: 'Кавказский Бульвар',
+      totalWithTax: 3705.32,
+      requiresManualReview: false,
     });
   });
 

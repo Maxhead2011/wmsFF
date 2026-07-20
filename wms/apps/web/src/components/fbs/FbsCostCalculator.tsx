@@ -14,6 +14,8 @@ import {
 
 const MAX_QUANTITY = 3000;
 const ITEMS_PER_BOX = 14;
+const BOXES_PER_PALLET = 16;
+const SPECIAL_DESTINATIONS = ['Внуково', 'Кавказский Бульвар'] as const;
 
 const moneyFormatter = new Intl.NumberFormat('ru-RU', {
   style: 'currency',
@@ -50,7 +52,8 @@ type CalculatorDisplayResult =
       quantity: number;
       services: FbsServicesCalculation;
       calculation: FbsDirectionCalculation;
-      logistics: LogisticsQuoteResult;
+      destination: string;
+      tariffName: string;
     };
 
 type FbsCostCalculatorProps = {
@@ -206,6 +209,18 @@ export function FbsCostCalculator({ session, isAdmin }: FbsCostCalculatorProps) 
     setResult(null);
     try {
       const services = calculateServices(quantity);
+      const specialCalculation = calculateSpecialDirection(quantity, destination, services);
+      if (specialCalculation) {
+        setResult({
+          mode: 'admin',
+          quantity,
+          services,
+          calculation: specialCalculation,
+          destination,
+          tariffName: 'Специальный тариф FBS',
+        });
+        return;
+      }
       const logistics = await quoteLogistics(session.accessToken, {
         tariffSetId,
         destination,
@@ -218,8 +233,9 @@ export function FbsCostCalculator({ session, isAdmin }: FbsCostCalculatorProps) 
         mode: 'admin',
         quantity,
         services,
-        logistics,
         calculation: calculateQuotedDirection(services, logistics),
+        destination: logistics.route.destination,
+        tariffName: logistics.tariffSet.name,
       });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Не удалось рассчитать выбранный город.');
@@ -349,13 +365,13 @@ export function FbsCostCalculator({ session, isAdmin }: FbsCostCalculatorProps) 
             </div>
             <div>
               <span>Тариф WMS</span>
-              <strong>{result.logistics.tariffSet.name}</strong>
+              <strong>{result.tariffName}</strong>
             </div>
           </div>
 
           <div className="fbs-calculator__directions fbs-calculator__directions--single">
             <DirectionResult
-              name={result.logistics.route.destination}
+              name={result.destination}
               tone="blue"
               calculation={result.calculation}
             />
@@ -507,6 +523,49 @@ function calculateServices(quantity: number): FbsServicesCalculation {
   };
 }
 
+function calculateSpecialDirection(
+  quantity: number,
+  destination: string,
+  services: FbsServicesCalculation,
+) {
+  const normalized = normalizeLogisticsPoint(destination).replace(/ё/g, 'е');
+  const isVnukovo = normalized.includes('внуково');
+  const isKavkaz = normalized.includes('кавказ');
+  if (!isVnukovo && !isKavkaz) return null;
+
+  let palletsCount = 0;
+  let palletPrice = 0;
+  let deliveryPrice = isVnukovo ? 1500 : 3000;
+  let deliveryType: FbsDirectionCalculation['deliveryType'] = 'fixed';
+  if (quantity > 1000) {
+    palletsCount = Math.ceil(services.boxesCount / BOXES_PER_PALLET);
+    palletPrice = isVnukovo
+      ? palletsCount <= 2
+        ? 1500
+        : 1200
+      : getKavkazPalletPrice(palletsCount);
+    deliveryPrice = palletsCount * palletPrice;
+    deliveryType = 'pallet';
+  }
+  return buildDirectionCalculation(
+    services,
+    deliveryPrice,
+    palletsCount,
+    palletPrice,
+    deliveryType,
+  );
+}
+
+function getKavkazPalletPrice(palletsCount: number) {
+  if (palletsCount === 1) return 3500;
+  if (palletsCount === 2) return 3000;
+  if (palletsCount === 3) return 2800;
+  if (palletsCount === 4) return 2500;
+  if (palletsCount === 5) return 2300;
+  if (palletsCount === 6) return 2200;
+  return 2000;
+}
+
 function calculateQuotedDirection(
   services: FbsServicesCalculation,
   logistics: LogisticsQuoteResult,
@@ -552,6 +611,7 @@ function buildDestinationOptions(tariffSet: LogisticsTariffSetDetail | null) {
     const city = direction.destination.trim();
     if (city) options.set(normalizeLogisticsPoint(city), city);
   });
+  SPECIAL_DESTINATIONS.forEach((city) => options.set(normalizeLogisticsPoint(city), city));
   return [...options.values()].sort((left, right) => left.localeCompare(right, 'ru'));
 }
 
