@@ -611,15 +611,21 @@
   line-height: 1.45;
 }
 
-.fbs-pricing__no-pallets {
-  border: 1px solid #d8b4fe;
+.fbs-pricing__pallet-status {
+  border: 1px solid #d9d4e2;
   border-radius: 999px;
-  background: #faf5ff;
-  color: #7e22ce;
+  background: #f8f7fa;
+  color: #6b647d;
   padding: 7px 11px;
   font-size: 11px;
   font-weight: 850;
   white-space: nowrap;
+}
+
+.fbs-pricing__pallet-status.is-enabled {
+  border-color: #86efac;
+  background: #f0fdf4;
+  color: #15803d;
 }
 
 .fbs-pricing__section,
@@ -742,6 +748,56 @@
   padding: 12px;
   color: #756e82;
   font-size: 11px;
+}
+
+.fbs-pricing__pallets {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.8fr) minmax(0, 2.2fr);
+  gap: 12px;
+}
+
+.fbs-pricing__pallets > label {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  border: 1px solid #e3dfea;
+  border-radius: 13px;
+  background: #fbfafc;
+  padding: 12px;
+  cursor: pointer;
+}
+
+.fbs-pricing__pallets > label.is-enabled {
+  border-color: #86efac;
+  background: #f0fdf4;
+  box-shadow: inset 3px 0 0 #22c55e;
+}
+
+.fbs-pricing__pallets > label > input {
+  width: 19px;
+  min-height: 19px;
+  flex: 0 0 19px;
+  accent-color: #16a34a;
+}
+
+.fbs-pricing__pallets > label > span {
+  display: grid;
+  gap: 4px;
+}
+
+.fbs-pricing__pallets > label strong {
+  color: #282132;
+  font-size: 12px;
+}
+
+.fbs-pricing__pallets > label small {
+  color: #756e82;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.fbs-pricing__pallets .fbs-pricing__fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .fbs-pricing__preview {
@@ -1261,7 +1317,9 @@
   }
 
   .fbs-pricing__fields,
-  .fbs-pricing__fields--processing {
+  .fbs-pricing__fields--processing,
+  .fbs-pricing__pallets,
+  .fbs-pricing__pallets .fbs-pricing__fields {
     grid-template-columns: 1fr;
   }
 

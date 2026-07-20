@@ -1779,9 +1779,11 @@ export type FbsOrderSummary = {
       deliveryRub: number;
       boxFormationRub: number;
       boxMaterialRub: number;
+      palletRub: number;
       shipmentKey: string;
       shipmentItems: number;
       boxCount: number;
+      palletCount: number;
       deliveryDestination: FbsDeliveryDestination;
     };
   } | null;
@@ -1816,9 +1818,12 @@ export type FbsBillingSettings = {
     extraBlockItems: number;
     extraBlockPriceRub: number;
     boxCapacityItems: number;
+    palletsEnabled: boolean;
+    boxesPerPallet: number;
     fbsProcessingPriceRub: number;
     boxFormationServiceId: string | null;
     boxMaterialServiceId: string | null;
+    palletServiceId: string | null;
     additionalServices: Array<{
       serviceId: string;
       quantityMultiplier: number;
@@ -1831,6 +1836,7 @@ export type FbsBillingSettings = {
     unit: BillingUnit;
     priceRub: number;
     isActive: boolean;
+    isPallet: boolean;
     quantityMultiplier: number;
   }>;
   excludedRule: string;

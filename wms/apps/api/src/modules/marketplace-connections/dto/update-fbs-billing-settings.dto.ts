@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayUnique,
   IsArray,
+  IsBoolean,
   IsEnum,
   IsInt,
   IsNumber,
@@ -68,6 +69,19 @@ export class UpdateFbsBillingSettingsDto {
   @ValidateIf((_object, value) => value !== null && value !== '')
   @IsString()
   boxMaterialServiceId?: string | null;
+
+  @IsBoolean()
+  palletsEnabled!: boolean;
+
+  @IsInt()
+  @Min(1)
+  @Max(100000)
+  boxesPerPallet!: number;
+
+  @IsOptional()
+  @ValidateIf((_object, value) => value !== null && value !== '')
+  @IsString()
+  palletServiceId?: string | null;
 
   @IsArray()
   @ArrayUnique((service: FbsAdditionalServiceDto) => service.serviceId)

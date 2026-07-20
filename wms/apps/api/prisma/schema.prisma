@@ -1199,6 +1199,7 @@ model BillingService {
   fbsAdditionalSelections  ClientFbsAdditionalService[]
   fbsBoxFormationSettings  ClientFbsBillingSettings[]   @relation("FbsBoxFormationService")
   fbsBoxMaterialSettings   ClientFbsBillingSettings[]   @relation("FbsBoxMaterialService")
+  fbsPalletSettings        ClientFbsBillingSettings[]   @relation("FbsPalletService")
   createdAt                DateTime                     @default(now())
   updatedAt                DateTime                     @updatedAt
 }
@@ -1236,15 +1237,20 @@ model ClientFbsBillingSettings {
   boxCapacityItems          Int                          @default(16)
   boxFormationServiceId     String?
   boxMaterialServiceId      String?
+  palletsEnabled            Boolean                      @default(false)
+  boxesPerPallet            Int                          @default(16)
+  palletServiceId           String?
   client                    Client                       @relation(fields: [clientId], references: [id], onDelete: Cascade)
   boxFormationService       BillingService?              @relation("FbsBoxFormationService", fields: [boxFormationServiceId], references: [id])
   boxMaterialService        BillingService?              @relation("FbsBoxMaterialService", fields: [boxMaterialServiceId], references: [id])
+  palletService             BillingService?              @relation("FbsPalletService", fields: [palletServiceId], references: [id])
   additionalServices        ClientFbsAdditionalService[]
   createdAt                 DateTime                     @default(now())
   updatedAt                 DateTime                     @updatedAt
 
   @@index([boxFormationServiceId])
   @@index([boxMaterialServiceId])
+  @@index([palletServiceId])
 }
 
 model ClientFbsAdditionalService {

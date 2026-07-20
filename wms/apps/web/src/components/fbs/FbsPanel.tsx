@@ -170,7 +170,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
     () => clients.find((client) => client.id === selectedClientId) ?? null,
     [clients, selectedClientId],
   );
-  const calculatorEnabled = Boolean(selectedClient?.fbsCalculatorEnabled);
+  const calculatorEnabled = canManagePricing || Boolean(selectedClient?.fbsCalculatorEnabled);
   const roleVisibleViews = canManagePricing
     ? fbsViews
     : fbsViews.filter((view) => view.id !== 'pricing');
@@ -588,6 +588,9 @@ function FbsCostView({ data }: { data: ClientFbsOrders | null }) {
                           order.billing.breakdown.boxFormationRub +
                             order.billing.breakdown.boxMaterialRub,
                         )} ₽
+                        {order.billing.breakdown.palletRub > 0
+                          ? ` · паллеты ${formatMoney(order.billing.breakdown.palletRub)} ₽`
+                          : ''}
                       </small>
                     ) : null}
                   </td>
@@ -663,14 +666,23 @@ function FbsPricingSettings({
   }
 
   const availableServices = data.serviceOptions.filter((service) => service.isActive);
-  const additionalOptions = availableServices.filter(
+  const palletOptions = availableServices.filter((service) => service.isPallet);
+  const boxServices = availableServices.filter((service) => !service.isPallet);
+  const additionalOptions = boxServices.filter(
     (service) =>
       service.id !== form.boxFormationServiceId &&
       service.id !== form.boxMaterialServiceId &&
       service.code !== 'BOX_ASSEMBLY' &&
       service.code !== 'BOX_60_40_40',
   );
-  const preview = [5, 6, 10, form.boxCapacityItems].filter(
+  const palletCapacityItems = form.boxCapacityItems * form.boxesPerPallet;
+  const preview = [
+    5,
+    6,
+    10,
+    form.boxCapacityItems,
+    ...(form.palletsEnabled ? [palletCapacityItems, palletCapacityItems + 1] : []),
+  ].filter(
     (items, index, all) => items > 0 && all.indexOf(items) === index,
   );
 
@@ -704,6 +716,11 @@ function FbsPricingSettings({
 
   async function saveSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (form!.palletsEnabled && !form!.palletServiceId) {
+      setError('Для начисления паллет выберите услугу паллеты.');
+      setSaved(false);
+      return;
+    }
     setSaving(true);
     setError('');
     setSaved(false);
@@ -732,7 +749,11 @@ function FbsPricingSettings({
             <p>Настройки применяются к новым и ещё не выставленным начислениям FBS.</p>
           </div>
         </div>
-        <span className="fbs-pricing__no-pallets">Паллеты не начисляются</span>
+        <span
+          className={`fbs-pricing__pallet-status${form.palletsEnabled ? ' is-enabled' : ''}`}
+        >
+          {form.palletsEnabled ? 'Паллеты включены' : 'Паллеты отключены'}
+        </span>
       </div>
 
       <section className="fbs-pricing__section">
@@ -907,7 +928,7 @@ function FbsPricingSettings({
               onChange={(event) => patch('boxFormationServiceId', event.target.value || null)}
             >
               <option value="">Не начислять</option>
-              {availableServices.map((service) => (
+              {boxServices.map((service) => (
                 <option key={`formation:${service.id}`} value={service.id}>
                   {service.name} · {formatMoney(service.priceRub)} ₽
                 </option>
@@ -921,13 +942,73 @@ function FbsPricingSettings({
               onChange={(event) => patch('boxMaterialServiceId', event.target.value || null)}
             >
               <option value="">Не начислять</option>
-              {availableServices.map((service) => (
+              {boxServices.map((service) => (
                 <option key={`material:${service.id}`} value={service.id}>
                   {service.name} · {formatMoney(service.priceRub)} ₽
                 </option>
               ))}
             </select>
           </label>
+        </div>
+      </section>
+
+      <section className="fbs-pricing__section">
+        <header>
+          <div>
+            <span>04</span>
+            <div>
+              <h4>Учёт паллет</h4>
+              <p>Паллеты можно включить отдельно для клиента и считать по количеству коробов.</p>
+            </div>
+          </div>
+        </header>
+        <div className="fbs-pricing__pallets">
+          <label className={form.palletsEnabled ? 'is-enabled' : undefined}>
+            <input
+              checked={form.palletsEnabled}
+              type="checkbox"
+              onChange={(event) => patch('palletsEnabled', event.target.checked)}
+            />
+            <span>
+              <strong>Начислять паллеты в FBS</strong>
+              <small>
+                В выключенном состоянии паллетные услуги не попадут в начисления клиента.
+              </small>
+            </span>
+          </label>
+          <div className="fbs-pricing__fields">
+            <label>
+              <span>Коробов на одной паллете</span>
+              <input
+                disabled={!form.palletsEnabled}
+                min="1"
+                step="1"
+                type="number"
+                value={form.boxesPerPallet}
+                onChange={(event) => patch('boxesPerPallet', positiveInteger(event.target.value))}
+                required
+              />
+            </label>
+            <label>
+              <span>Услуга паллеты</span>
+              <select
+                disabled={!form.palletsEnabled}
+                value={form.palletServiceId ?? ''}
+                onChange={(event) => patch('palletServiceId', event.target.value || null)}
+                required={form.palletsEnabled}
+              >
+                <option value="">Выберите услугу</option>
+                {palletOptions.map((service) => (
+                  <option key={`pallet:${service.id}`} value={service.id}>
+                    {service.name} · {formatMoney(service.priceRub)} ₽
+                  </option>
+                ))}
+              </select>
+              {palletOptions.length === 0 ? (
+                <small>Сначала подключите клиенту паллетную услугу в разделе «Биллинг».</small>
+              ) : null}
+            </label>
+          </div>
         </div>
       </section>
 
@@ -953,6 +1034,9 @@ function FbsPricingSettings({
                 <small>
                   обработка {formatMoney(calculation.processingRub)} · доставка{' '}
                   {formatMoney(calculation.deliveryRub)} · {calculation.boxCount} кор.
+                  {form.palletsEnabled
+                    ? ` · ${calculation.palletCount} пал. (${formatMoney(calculation.palletRub)} ₽)`
+                    : ''}
                 </small>
               </article>
             );
@@ -1096,9 +1180,12 @@ function editableFbsSettings(data: FbsBillingSettings): UpdateFbsBillingSettings
     extraBlockItems: Number(data.settings.extraBlockItems),
     extraBlockPriceRub: Number(data.settings.extraBlockPriceRub),
     boxCapacityItems: Number(data.settings.boxCapacityItems),
+    palletsEnabled: Boolean(data.settings.palletsEnabled),
+    boxesPerPallet: Number(data.settings.boxesPerPallet),
     fbsProcessingPriceRub: Number(data.settings.fbsProcessingPriceRub),
     boxFormationServiceId: data.settings.boxFormationServiceId,
     boxMaterialServiceId: data.settings.boxMaterialServiceId,
+    palletServiceId: data.settings.palletServiceId,
     additionalServices: data.settings.additionalServices.map((selection) => ({ ...selection })),
   };
 }
@@ -1132,13 +1219,21 @@ function calculateFbsPreview(
     boxCount *
     ((servicePriceById.get(settings.boxFormationServiceId ?? '') ?? 0) +
       (servicePriceById.get(settings.boxMaterialServiceId ?? '') ?? 0));
+  const palletCount =
+    settings.palletsEnabled && settings.palletServiceId
+      ? Math.ceil(boxCount / Math.max(1, settings.boxesPerPallet))
+      : 0;
+  const palletRub =
+    palletCount * (servicePriceById.get(settings.palletServiceId ?? '') ?? 0);
   const processingRub = processingPerItemRub * items;
   return {
     processingRub,
     deliveryRub,
     boxesRub,
     boxCount,
-    totalRub: processingRub + deliveryRub + boxesRub,
+    palletRub,
+    palletCount,
+    totalRub: processingRub + deliveryRub + boxesRub + palletRub,
   };
 }
 

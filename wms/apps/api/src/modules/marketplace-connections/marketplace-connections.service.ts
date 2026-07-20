@@ -101,9 +101,11 @@ type FbsOrderSummary = {
       deliveryRub: number;
       boxFormationRub: number;
       boxMaterialRub: number;
+      palletRub: number;
       shipmentKey: string;
       shipmentItems: number;
       boxCount: number;
+      palletCount: number;
       deliveryDestination: FbsDeliveryDestination;
     };
   } | null;
@@ -235,7 +237,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       ...(dto.additionalServices ?? []).map((service) => service.serviceId),
       dto.boxFormationServiceId ?? '',
       dto.boxMaterialServiceId ?? '',
+      dto.palletServiceId ?? '',
     ]);
+    if (dto.palletsEnabled && !dto.palletServiceId) {
+      throw new BadRequestException('Для начисления паллет выберите услугу паллеты.');
+    }
     const requestedServices =
       requestedServiceIds.length > 0
         ? await this.prisma.billingService.findMany({
@@ -256,7 +262,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         throw new BadRequestException('Одна из выбранных услуг клиента недоступна.');
       }
       if (isPalletBillingService(service)) {
-        throw new BadRequestException('Паллеты и поддоны нельзя добавлять в расчёт FBS.');
+        const selectedAsPallet =
+          service.id === dto.palletServiceId &&
+          service.id !== dto.boxFormationServiceId &&
+          service.id !== dto.boxMaterialServiceId &&
+          !(dto.additionalServices ?? []).some((selection) => selection.serviceId === service.id);
+        if (!selectedAsPallet) {
+          throw new BadRequestException(
+            'Паллетную услугу можно выбрать только в блоке «Учёт паллет».',
+          );
+        }
+      } else if (service.id === dto.palletServiceId) {
+        throw new BadRequestException('В блоке «Учёт паллет» выберите услугу паллеты или поддона.');
       }
       if (
         service.id !== boxFormationService.id &&
@@ -271,7 +288,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       (selection) =>
         selection.serviceId !== fbsService.id &&
         selection.serviceId !== dto.boxFormationServiceId &&
-        selection.serviceId !== dto.boxMaterialServiceId,
+        selection.serviceId !== dto.boxMaterialServiceId &&
+        selection.serviceId !== dto.palletServiceId,
     );
 
     await this.prisma.$transaction(async (tx) => {
@@ -287,6 +305,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           boxCapacityItems: dto.boxCapacityItems,
           boxFormationServiceId: dto.boxFormationServiceId || null,
           boxMaterialServiceId: dto.boxMaterialServiceId || null,
+          palletsEnabled: dto.palletsEnabled,
+          boxesPerPallet: dto.boxesPerPallet,
+          palletServiceId: dto.palletServiceId || null,
         },
         create: {
           clientId: client.id,
@@ -299,6 +320,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           boxCapacityItems: dto.boxCapacityItems,
           boxFormationServiceId: dto.boxFormationServiceId || null,
           boxMaterialServiceId: dto.boxMaterialServiceId || null,
+          palletsEnabled: dto.palletsEnabled,
+          boxesPerPallet: dto.boxesPerPallet,
+          palletServiceId: dto.palletServiceId || null,
         },
       });
       await tx.clientFbsAdditionalService.deleteMany({
@@ -370,18 +394,21 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         extraBlockItems: settings.extraBlockItems,
         extraBlockPriceRub: Number(settings.extraBlockPriceRub),
         boxCapacityItems: settings.boxCapacityItems,
+        palletsEnabled: settings.palletsEnabled,
+        boxesPerPallet: settings.boxesPerPallet,
         fbsProcessingPriceRub: Number(
           fbsClientPrice?.priceRub ?? fbsService.defaultPriceRub ?? 0,
         ),
         boxFormationServiceId: settings.boxFormationServiceId,
         boxMaterialServiceId: settings.boxMaterialServiceId,
+        palletServiceId: settings.palletServiceId,
         additionalServices: settings.additionalServices.map((selection) => ({
           serviceId: selection.serviceId,
           quantityMultiplier: Number(selection.quantityMultiplier),
         })),
       },
       serviceOptions: services
-        .filter((service) => service.id !== fbsService.id && !isPalletBillingService(service))
+        .filter((service) => service.id !== fbsService.id)
         .map((service) => {
           const clientPrice = service.clientPrices[0] ?? null;
           return {
@@ -391,10 +418,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             unit: service.unit,
             priceRub: Number(clientPrice?.priceRub ?? service.defaultPriceRub ?? 0),
             isActive: clientPrice?.isActive ?? false,
+            isPallet: isPalletBillingService(service),
             quantityMultiplier: additionalById.get(service.id) ?? 1,
           };
         }),
-      excludedRule: 'Паллеты и поддоны в стоимость FBS не включаются.',
+      excludedRule:
+        'Паллеты начисляются только при включённой настройке и выбранной паллетной услуге.',
     };
   }
 
@@ -489,6 +518,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         boxCapacityItems: 16,
         boxFormationServiceId: boxFormationService.id,
         boxMaterialServiceId: boxMaterialService.id,
+        palletsEnabled: false,
+        boxesPerPallet: 16,
+        palletServiceId: null,
       },
       include: {
         additionalServices: true,
@@ -836,10 +868,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
 
     const { settings, fbsService } = await this.ensureFbsBillingBase(clientId);
+    const palletsEnabled = settings.palletsEnabled === true;
+    const boxesPerPallet = Math.max(1, Number(settings.boxesPerPallet) || 16);
+    const palletServiceId = settings.palletServiceId ?? null;
     const serviceIds = uniqueStrings([
       fbsService.id,
       settings.boxFormationServiceId ?? '',
       settings.boxMaterialServiceId ?? '',
+      palletServiceId ?? '',
       ...settings.additionalServices.map((selection) => selection.serviceId),
     ]);
     const pricedServices = await this.prisma.billingService.findMany({
@@ -855,7 +891,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const servicePrice = (serviceId: string | null) => {
       if (!serviceId) return 0;
       const service = serviceById.get(serviceId);
-      if (!service || isPalletBillingService(service)) return 0;
+      if (!service) return 0;
       const clientPrice = service.clientPrices[0] ?? null;
       if (clientPrice?.isActive === false) return 0;
       return Number(clientPrice?.priceRub ?? service.defaultPriceRub ?? 0);
@@ -915,6 +951,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         boxCount * servicePrice(settings.boxMaterialServiceId),
         2,
       );
+      const palletCount =
+        palletsEnabled && palletServiceId
+          ? Math.ceil(boxCount / boxesPerPallet)
+          : 0;
+      const palletTotalRub = round(
+        palletCount * servicePrice(palletServiceId),
+        2,
+      );
 
       for (const [orderIndex, order] of batchOrders.entries()) {
         const itemCount = Math.max(1, order.itemCount);
@@ -923,12 +967,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         const deliveryRub = allocateRub(deliveryTotalRub, weights, orderIndex);
         const boxFormationRub = allocateRub(boxFormationTotalRub, weights, orderIndex);
         const boxMaterialRub = allocateRub(boxMaterialTotalRub, weights, orderIndex);
+        const palletRub = allocateRub(palletTotalRub, weights, orderIndex);
         const totalRub = round(
           fbsProcessingRub +
             additionalServicesRub +
             deliveryRub +
             boxFormationRub +
-            boxMaterialRub,
+            boxMaterialRub +
+            palletRub,
           2,
         );
         const unitPriceRub = round(totalRub / itemCount, 2);
@@ -939,15 +985,17 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           deliveryRub,
           boxFormationRub,
           boxMaterialRub,
+          palletRub,
           shipmentKey,
           shipmentItems,
           boxCount,
+          palletCount,
           deliveryDestination: settings.defaultDeliveryDestination,
         };
         const description = `Комплексная обработка FBS-заказа ${marketplaceShortLabel(order.marketplace)} №${order.id}`;
         const chargeMetadata = cleanJson({
           kind: 'FBS',
-          pricingVersion: 2,
+          pricingVersion: 3,
           marketplace: order.marketplace,
           connectionId: order.connectionId,
           orderId: order.id,
@@ -968,7 +1016,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             formationServiceId: settings.boxFormationServiceId,
             materialServiceId: settings.boxMaterialServiceId,
           },
-          palletsIncluded: false,
+          palletRules: {
+            enabled: palletsEnabled,
+            boxesPerPallet,
+            serviceId: palletServiceId,
+          },
+          palletsIncluded: palletsEnabled,
         });
         const sourceKey = `fbs:${order.marketplace.toLowerCase()}:${order.connectionId}:${order.id}`;
         const existing = await this.prisma.billingCharge.findUnique({
