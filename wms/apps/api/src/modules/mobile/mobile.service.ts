@@ -29,6 +29,7 @@ export class MobileService {
           onlineReceiptVisibleToClient: true,
           storageAccountingEnabled: true,
           storesWithoutBoxes: true,
+          fbsCalculatorEnabled: true,
         },
         orderBy: { name: 'asc' },
       }),
@@ -923,13 +924,13 @@ export class MobileService {
     const setting = await this.prisma.systemSetting.findUnique({ where: { key: 'mobile.android.version' } });
     const value = asRecord(setting?.value);
     return {
-      currentVersion: stringValue(value.currentVersion, '0.3.4'),
+      currentVersion: stringValue(value.currentVersion, '0.3.5'),
       minimumVersion: stringValue(value.minimumVersion, '0.1.0'),
       mandatory: value.mandatory === true,
       apkUrl: stringValue(value.apkUrl, '/downloads/logoff-wms-mobile.apk'),
       releaseNotes: stringValue(
         value.releaseNotes,
-        'Заявки получили отдельную цветовую маркировку: сданные — зелёные, отменённые — красные, в работе — синие.',
+        'В приложение добавлены все функции FBS: калькулятор по городам, административный расчёт по тарифам WMS, паллетные настройки и детализация начислений.',
       ),
       updatedAt: setting?.updatedAt ?? null,
     };

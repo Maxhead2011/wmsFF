@@ -50,16 +50,26 @@ public class FbsFragment extends Fragment {
     private static final String SHIPPED = "shipped";
     private static final String COST = "cost";
     private static final String ARCHIVE = "archive";
+    private static final String CALCULATOR = "calculator";
     private static final String PRICING = "pricing";
+    private static final int CALCULATOR_MAX_QUANTITY = 3000;
+    private static final int CALCULATOR_ITEMS_PER_BOX = 14;
+    private static final int CALCULATOR_BOXES_PER_PALLET = 16;
 
     private FragmentFbsBinding binding;
     private LogoffApplication app;
     private String section = ACTIVE;
     private Map<String, Object> orderData = Collections.emptyMap();
     private Map<String, Object> settingsData = Collections.emptyMap();
+    private List<Map<String, Object>> calculatorTariffSets = Collections.emptyList();
+    private Map<String, Object> calculatorTariffDetail = Collections.emptyMap();
+    private List<String> calculatorDestinations = Collections.emptyList();
+    private String calculatorTariffId = "";
     private boolean loadingOrders;
     private boolean loadingSettings;
+    private boolean loadingCalculator;
     private PricingForm pricingForm;
+    private CalculatorForm calculatorForm;
 
     public static FbsFragment newInstance() {
         return new FbsFragment();
@@ -79,7 +89,7 @@ public class FbsFragment extends Fragment {
         binding.search.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence value, int start, int count, int after) {}
             @Override public void onTextChanged(CharSequence value, int start, int before, int count) {
-                if (!PRICING.equals(section)) renderOrders();
+                if (isOrderSection()) renderOrders();
             }
             @Override public void afterTextChanged(Editable value) {}
         });
@@ -91,12 +101,17 @@ public class FbsFragment extends Fragment {
     public void refresh() {
         orderData = Collections.emptyMap();
         settingsData = Collections.emptyMap();
+        calculatorTariffSets = Collections.emptyList();
+        calculatorTariffDetail = Collections.emptyMap();
+        calculatorDestinations = Collections.emptyList();
+        calculatorTariffId = "";
         refresh(false);
     }
 
     private void refresh(boolean force) {
         loadOrders(force);
         if (PRICING.equals(section) && canManagePricing()) loadSettings(force);
+        if (CALCULATOR.equals(section) && calculatorEnabled()) loadCalculatorOptions(force);
     }
 
     private void loadOrders(boolean force) {
@@ -116,8 +131,8 @@ public class FbsFragment extends Fragment {
                 if (response.isSuccessful() && response.body() != null) {
                     orderData = response.body();
                     renderSections();
-                    if (!PRICING.equals(section)) renderOrders();
-                } else if (!PRICING.equals(section)) {
+                    if (isOrderSection()) renderOrders();
+                } else if (isOrderSection()) {
                     showEmpty(readableError(response));
                 }
                 updateLoading();
@@ -127,7 +142,7 @@ public class FbsFragment extends Fragment {
             public void onFailure(Call<Map<String, Object>> call, Throwable error) {
                 if (!isAdded() || binding == null) return;
                 loadingOrders = false;
-                if (!PRICING.equals(section)) showEmpty(MobileRepository.readable(error));
+                if (isOrderSection()) showEmpty(MobileRepository.readable(error));
                 updateLoading();
             }
         });
@@ -170,6 +185,125 @@ public class FbsFragment extends Fragment {
         });
     }
 
+    private void loadCalculatorOptions(boolean force) {
+        if (!calculatorEnabled()) return;
+        if (canManagePricing()) {
+            if (!force && !calculatorTariffSets.isEmpty()) {
+                if (calculatorTariffDetail.isEmpty() && !calculatorTariffId.isBlank()) {
+                    loadCalculatorTariff(calculatorTariffId);
+                } else {
+                    renderCalculator();
+                }
+                return;
+            }
+            loadingCalculator = true;
+            updateLoading();
+            app.repository().api().logisticsTariffSets().enqueue(new Callback<>() {
+                @Override
+                public void onResponse(
+                        Call<List<Map<String, Object>>> call,
+                        Response<List<Map<String, Object>>> response
+                ) {
+                    if (!isAdded() || binding == null) return;
+                    if (response.isSuccessful() && response.body() != null) {
+                        calculatorTariffSets = response.body();
+                        boolean selectedExists = false;
+                        for (Map<String, Object> tariff : calculatorTariffSets) {
+                            if (calculatorTariffId.equals(AppState.string(tariff.get("id")))) {
+                                selectedExists = true;
+                                break;
+                            }
+                        }
+                        if (!selectedExists) {
+                            calculatorTariffId = calculatorTariffSets.isEmpty()
+                                    ? "" : AppState.string(calculatorTariffSets.get(0).get("id"));
+                        }
+                        if (calculatorTariffId.isBlank()) {
+                            loadingCalculator = false;
+                            if (CALCULATOR.equals(section)) showEmpty("Тарифы логистики пока не настроены.");
+                            updateLoading();
+                        } else {
+                            loadCalculatorTariff(calculatorTariffId);
+                        }
+                    } else {
+                        loadingCalculator = false;
+                        if (CALCULATOR.equals(section)) showEmpty(readableError(response));
+                        updateLoading();
+                    }
+                }
+
+                @Override
+                public void onFailure(Call<List<Map<String, Object>>> call, Throwable error) {
+                    if (!isAdded() || binding == null) return;
+                    loadingCalculator = false;
+                    if (CALCULATOR.equals(section)) showEmpty(MobileRepository.readable(error));
+                    updateLoading();
+                }
+            });
+            return;
+        }
+
+        if (!force && !calculatorDestinations.isEmpty()) {
+            renderCalculator();
+            return;
+        }
+        loadingCalculator = true;
+        updateLoading();
+        app.repository().api().fbsCalculatorDestinations().enqueue(new Callback<>() {
+            @Override
+            public void onResponse(Call<Map<String, Object>> call, Response<Map<String, Object>> response) {
+                if (!isAdded() || binding == null) return;
+                loadingCalculator = false;
+                if (response.isSuccessful() && response.body() != null) {
+                    calculatorDestinations = strings(response.body().get("destinations"));
+                    if (CALCULATOR.equals(section)) renderCalculator();
+                } else if (CALCULATOR.equals(section)) {
+                    showEmpty(readableError(response));
+                }
+                updateLoading();
+            }
+
+            @Override
+            public void onFailure(Call<Map<String, Object>> call, Throwable error) {
+                if (!isAdded() || binding == null) return;
+                loadingCalculator = false;
+                if (CALCULATOR.equals(section)) showEmpty(MobileRepository.readable(error));
+                updateLoading();
+            }
+        });
+    }
+
+    private void loadCalculatorTariff(String tariffId) {
+        if (tariffId == null || tariffId.isBlank()) return;
+        calculatorTariffId = tariffId;
+        calculatorTariffDetail = Collections.emptyMap();
+        loadingCalculator = true;
+        updateLoading();
+        app.repository().api().logisticsTariffSet(tariffId).enqueue(new Callback<>() {
+            @Override
+            public void onResponse(Call<Map<String, Object>> call, Response<Map<String, Object>> response) {
+                if (!isAdded() || binding == null || !calculatorTariffId.equals(tariffId)) return;
+                loadingCalculator = false;
+                if (response.isSuccessful() && response.body() != null) {
+                    calculatorTariffDetail = response.body();
+                    calculatorDestinations = buildCalculatorDestinations(calculatorTariffDetail);
+                    if (CALCULATOR.equals(section)) renderCalculator();
+                } else if (CALCULATOR.equals(section)) {
+                    showEmpty(readableError(response));
+                }
+                updateLoading();
+            }
+
+            @Override
+            public void onFailure(Call<Map<String, Object>> call, Throwable error) {
+                if (!isAdded() || binding == null || !calculatorTariffId.equals(tariffId)) return;
+                loadingCalculator = false;
+                if (CALCULATOR.equals(section)) showEmpty(MobileRepository.readable(error));
+                updateLoading();
+            }
+        });
+    }
+
     private void renderSections() {
         if (binding == null) return;
         binding.sections.removeAllViews();
@@ -178,6 +312,15 @@ public class FbsFragment extends Fragment {
         addSectionCard("Отгруженные", count(counts.get("shipped")), SHIPPED, R.color.logoff_success, false);
         addSectionCard("Стоимость обработки", "Расчёт", COST, R.color.logoff_warning, false);
         addSectionCard("Архив", count(counts.get("archive")), ARCHIVE, R.color.logoff_black, false);
+        if (calculatorEnabled()) {
+            addSectionCard(
+                    "Калькулятор FBS",
+                    canManagePricing() ? "Город и тариф WMS" : "Стоимость с налогом",
+                    CALCULATOR,
+                    R.color.logoff_success,
+                    false
+            );
+        }
         if (canManagePricing()) {
             addSectionCard(
                     "Назначение стоимости обработки",
@@ -238,14 +381,16 @@ public class FbsFragment extends Fragment {
     private void selectSection(String next) {
         section = next;
         pricingForm = null;
+        calculatorForm = null;
         renderSections();
-        binding.searchLayout.setVisibility(PRICING.equals(section) ? View.GONE : View.VISIBLE);
+        binding.searchLayout.setVisibility(isOrderSection() ? View.VISIBLE : View.GONE);
         if (PRICING.equals(section)) loadSettings(false);
+        else if (CALCULATOR.equals(section)) loadCalculatorOptions(false);
         else renderOrders();
     }
 
     private void renderOrders() {
-        if (binding == null || PRICING.equals(section)) return;
+        if (binding == null || !isOrderSection()) return;
         binding.content.removeAllViews();
         binding.empty.setVisibility(View.GONE);
         binding.heroTitle.setText(titleForSection());
@@ -491,6 +636,12 @@ public class FbsFragment extends Fragment {
         addPriceLine(content, "Доставка", breakdown.get("deliveryRub"));
         addPriceLine(content, "Формирование коробов", breakdown.get("boxFormationRub"));
         addPriceLine(content, "Короба", breakdown.get("boxMaterialRub"));
+        if (numberValue(breakdown.get("palletRub")) > 0) {
+            String palletLabel = numberValue(breakdown.get("palletCount")) > 0
+                    ? "Паллеты · " + count(breakdown.get("palletCount")) + " шт."
+                    : "Паллеты";
+            addPriceLine(content, palletLabel, breakdown.get("palletRub"));
+        }
         addPriceLine(content, "Итого", billing.get("totalRub"), true);
         String invoice = AppState.string(billing.get("invoiceNumber"));
         if (!invoice.isBlank()) {
@@ -559,6 +710,301 @@ public class FbsFragment extends Fragment {
                 .show();
     }
 
+    private void renderCalculator() {
+        if (binding == null || !CALCULATOR.equals(section)) return;
+        binding.content.removeAllViews();
+        binding.empty.setVisibility(View.GONE);
+        binding.heroTitle.setText("Калькулятор FBS");
+        binding.heroSubtitle.setText(canManagePricing()
+                ? "Расчёт по городам и тарифам логистики WMS"
+                : "Предварительная стоимость с налогом");
+
+        if (loadingCalculator && calculatorDestinations.isEmpty()) return;
+        if (calculatorDestinations.isEmpty()) {
+            showEmpty("Для калькулятора пока нет доступных городов.");
+            return;
+        }
+
+        calculatorForm = new CalculatorForm();
+        MaterialCardView card = pricingCard("₽", "Рассчитайте партию FBS",
+                canManagePricing()
+                        ? "Выберите тариф и город. Приложение покажет услуги, логистику и налог."
+                        : "Выберите город и количество товаров. Будет показана только итоговая стоимость с налогом.");
+        LinearLayout body = (LinearLayout) card.getChildAt(0);
+        calculatorForm.quantity = addLabeledField(body, "Количество товаров, ед.", "", true);
+        calculatorForm.quantity.setHint("От 1 до 3000");
+
+        if (canManagePricing()) {
+            calculatorForm.tariffIds = new ArrayList<>();
+            List<String> tariffLabels = new ArrayList<>();
+            for (Map<String, Object> tariff : calculatorTariffSets) {
+                calculatorForm.tariffIds.add(AppState.string(tariff.get("id")));
+                tariffLabels.add(firstNonBlank(AppState.string(tariff.get("name")), "Тариф WMS"));
+            }
+            body.addView(sectionLabel("Набор тарифов логистики"));
+            calculatorForm.tariff = spinner(tariffLabels);
+            calculatorForm.tariff.setSelection(indexOf(calculatorForm.tariffIds, calculatorTariffId));
+            body.addView(calculatorForm.tariff, fieldParams());
+        }
+
+        body.addView(sectionLabel("Город доставки"));
+        calculatorForm.destinations = new ArrayList<>(calculatorDestinations);
+        calculatorForm.destination = spinner(calculatorForm.destinations);
+        body.addView(calculatorForm.destination, fieldParams());
+
+        MaterialButton calculate = primaryButton("Рассчитать стоимость");
+        calculatorForm.calculate = calculate;
+        LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(-1, dp(54));
+        buttonParams.topMargin = dp(17);
+        body.addView(calculate, buttonParams);
+
+        calculatorForm.result = new LinearLayout(requireContext());
+        calculatorForm.result.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams resultParams = new LinearLayout.LayoutParams(-1, -2);
+        resultParams.topMargin = dp(16);
+        body.addView(calculatorForm.result, resultParams);
+        binding.content.addView(card, cardParams());
+
+        calculate.setOnClickListener(view -> calculateFbs());
+        if (calculatorForm.tariff != null) {
+            calculatorForm.tariff.setOnItemSelectedListener(new SimpleItemSelectedListener(position -> {
+                if (calculatorForm == null || position < 0
+                        || position >= calculatorForm.tariffIds.size()) return;
+                String selectedId = calculatorForm.tariffIds.get(position);
+                if (!selectedId.equals(calculatorTariffId)) loadCalculatorTariff(selectedId);
+            }));
+        }
+    }
+
+    private void calculateFbs() {
+        if (calculatorForm == null) return;
+        String quantityText = AppState.string(calculatorForm.quantity.getText()).trim();
+        int quantity;
+        try {
+            quantity = Integer.parseInt(quantityText);
+        } catch (NumberFormatException ignored) {
+            calculatorForm.quantity.setError("Введите целое количество от 1 до 3000");
+            return;
+        }
+        if (quantity < 1 || quantity > CALCULATOR_MAX_QUANTITY) {
+            calculatorForm.quantity.setError("Введите целое количество от 1 до 3000");
+            return;
+        }
+        int destinationIndex = calculatorForm.destination.getSelectedItemPosition();
+        if (destinationIndex < 0 || destinationIndex >= calculatorForm.destinations.size()) {
+            Toast.makeText(requireContext(), "Выберите город доставки", Toast.LENGTH_LONG).show();
+            return;
+        }
+        String destination = calculatorForm.destinations.get(destinationIndex);
+        calculatorForm.calculate.setEnabled(false);
+        calculatorForm.calculate.setText("Рассчитываю…");
+        calculatorForm.result.removeAllViews();
+
+        if (!canManagePricing()) {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("quantity", quantity);
+            body.put("destination", destination);
+            app.repository().api().fbsCalculatorQuote(body).enqueue(new Callback<>() {
+                @Override
+                public void onResponse(Call<Map<String, Object>> call, Response<Map<String, Object>> response) {
+                    finishCalculatorLoading();
+                    if (!isAdded() || binding == null || calculatorForm == null) return;
+                    if (response.isSuccessful() && response.body() != null) {
+                        Map<String, Object> quote = response.body();
+                        if (Boolean.TRUE.equals(quote.get("requiresManualReview"))
+                                || quote.get("totalWithTax") == null) {
+                            showCalculatorError("Для выбранного города стоимость требует ручного расчёта.");
+                            return;
+                        }
+                        renderClientCalculatorResult(
+                                firstNonBlank(AppState.string(quote.get("destination")), destination),
+                                numberValue(quote.get("totalWithTax"))
+                        );
+                    } else {
+                        showCalculatorError(readableError(response));
+                    }
+                }
+
+                @Override
+                public void onFailure(Call<Map<String, Object>> call, Throwable error) {
+                    finishCalculatorLoading();
+                    showCalculatorError(MobileRepository.readable(error));
+                }
+            });
+            return;
+        }
+
+        CalculatorCosts costs = calculatorCosts(quantity);
+        Double specialDelivery = specialDeliveryPrice(quantity, destination, costs.boxes);
+        if (specialDelivery != null) {
+            finishCalculatorLoading();
+            renderAdminCalculatorResult(quantity, destination, "Специальный тариф FBS",
+                    costs, specialDelivery, quantity > 1000
+                            ? (int) Math.ceil(costs.boxes / (double) CALCULATOR_BOXES_PER_PALLET) : 0);
+            return;
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("tariffSetId", calculatorTariffId);
+        body.put("destination", destination);
+        body.put("boxes", costs.boxes);
+        app.repository().api().logisticsQuote(body).enqueue(new Callback<>() {
+            @Override
+            public void onResponse(Call<Map<String, Object>> call, Response<Map<String, Object>> response) {
+                finishCalculatorLoading();
+                if (!isAdded() || binding == null || calculatorForm == null) return;
+                if (!response.isSuccessful() || response.body() == null) {
+                    showCalculatorError(readableError(response));
+                    return;
+                }
+                Map<String, Object> quote = response.body();
+                if (Boolean.TRUE.equals(quote.get("requiresManualReview"))
+                        || quote.get("estimatedTotalRub") == null) {
+                    showCalculatorError("Для выбранного города тариф требует ручного расчёта логистики.");
+                    return;
+                }
+                Map<String, Object> route = map(quote.get("route"));
+                Map<String, Object> tariffSet = map(quote.get("tariffSet"));
+                Map<String, Object> input = map(quote.get("input"));
+                renderAdminCalculatorResult(
+                        quantity,
+                        firstNonBlank(AppState.string(route.get("destination")), destination),
+                        firstNonBlank(AppState.string(tariffSet.get("name")), "Тариф WMS"),
+                        costs,
+                        numberValue(quote.get("estimatedTotalRub")),
+                        (int) Math.round(numberValue(input.get("pallets")))
+                );
+            }
+
+            @Override
+            public void onFailure(Call<Map<String, Object>> call, Throwable error) {
+                finishCalculatorLoading();
+                showCalculatorError(MobileRepository.readable(error));
+            }
+        });
+    }
+
+    private void renderClientCalculatorResult(String destination, double totalWithTax) {
+        if (calculatorForm == null) return;
+        LinearLayout result = calculatorForm.result;
+        result.removeAllViews();
+        result.setPadding(dp(16), dp(15), dp(16), dp(15));
+        result.setBackgroundResource(R.drawable.status_background_success);
+        result.addView(text(destination, 13, R.color.logoff_success, Typeface.BOLD));
+        TextView label = text("Стоимость с налогом", 13, R.color.logoff_text_muted, Typeface.NORMAL);
+        LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(-1, -2);
+        labelParams.topMargin = dp(6);
+        result.addView(label, labelParams);
+        TextView total = text(money(totalWithTax), 27, R.color.logoff_black, Typeface.BOLD);
+        LinearLayout.LayoutParams totalParams = new LinearLayout.LayoutParams(-1, -2);
+        totalParams.topMargin = dp(3);
+        result.addView(total, totalParams);
+    }
+
+    private void renderAdminCalculatorResult(
+            int quantity,
+            String destination,
+            String tariffName,
+            CalculatorCosts costs,
+            double delivery,
+            int pallets
+    ) {
+        if (calculatorForm == null) return;
+        LinearLayout result = calculatorForm.result;
+        result.removeAllViews();
+        result.setPadding(dp(16), dp(15), dp(16), dp(15));
+        result.setBackgroundResource(R.drawable.bg_empty_state);
+        result.addView(text(destination, 18, R.color.logoff_black, Typeface.BOLD));
+        TextView tariff = text(tariffName + " · " + quantity + " ед. · " + costs.boxes + " кор."
+                        + (pallets > 0 ? " · " + pallets + " пал." : ""),
+                12, R.color.logoff_text_muted, Typeface.NORMAL);
+        LinearLayout.LayoutParams tariffParams = new LinearLayout.LayoutParams(-1, -2);
+        tariffParams.topMargin = dp(4);
+        tariffParams.bottomMargin = dp(8);
+        result.addView(tariff, tariffParams);
+        addPriceLine(result, "Обработка", costs.processing);
+        addPriceLine(result, "Стикеры", costs.stickers);
+        addPriceLine(result, "Короба", costs.boxMaterials);
+        addPriceLine(result, "Формирование коробов", costs.boxAssembly);
+        addPriceLine(result, "Услуги с наценкой 50%", costs.servicesWithMarkup);
+        addPriceLine(result, "Логистика без налога", delivery);
+        double deliveryWithTax = addCalculatorTax(delivery);
+        addPriceLine(result, "Налог на логистику", deliveryWithTax - delivery);
+        addPriceLine(result, "Итого с налогом",
+                addCalculatorTax(costs.servicesWithMarkup + delivery), true);
+    }
+
+    private void finishCalculatorLoading() {
+        if (!isAdded() || calculatorForm == null) return;
+        calculatorForm.calculate.setEnabled(true);
+        calculatorForm.calculate.setText("Рассчитать стоимость");
+    }
+
+    private void showCalculatorError(String message) {
+        if (!isAdded() || calculatorForm == null) return;
+        calculatorForm.result.removeAllViews();
+        calculatorForm.result.setPadding(dp(14), dp(12), dp(14), dp(12));
+        calculatorForm.result.setBackgroundResource(R.drawable.bg_empty_state);
+        calculatorForm.result.addView(text(cleanError(message), 13, R.color.logoff_red, Typeface.BOLD));
+    }
+
+    private CalculatorCosts calculatorCosts(int quantity) {
+        int boxes = (int) Math.ceil(quantity / (double) CALCULATOR_ITEMS_PER_BOX);
+        double processing = quantity * 10d;
+        double stickers = quantity * 3d;
+        double boxMaterials = boxes * 100d;
+        double boxAssembly = boxes * 40d;
+        return new CalculatorCosts(boxes, processing, stickers, boxMaterials, boxAssembly,
+                (processing + stickers + boxMaterials + boxAssembly) * 1.5d);
+    }
+
+    private Double specialDeliveryPrice(int quantity, String destination, int boxes) {
+        String normalized = normalizePoint(destination).replace('ё', 'е');
+        boolean vnukovo = normalized.contains("внуково");
+        boolean kavkaz = normalized.contains("кавказ");
+        if (!vnukovo && !kavkaz) return null;
+        if (quantity <= 1000) return vnukovo ? 1500d : 3000d;
+        int pallets = (int) Math.ceil(boxes / (double) CALCULATOR_BOXES_PER_PALLET);
+        if (vnukovo) return pallets * (pallets <= 2 ? 1500d : 1200d);
+        double perPallet = pallets == 1 ? 3500d
+                : pallets == 2 ? 3000d
+                : pallets == 3 ? 2800d
+                : pallets == 4 ? 2500d
+                : pallets == 5 ? 2300d
+                : pallets == 6 ? 2200d : 2000d;
+        return pallets * perPallet;
+    }
+
+    private double addCalculatorTax(double value) {
+        return value / 94d * 100d;
+    }
+
+    private List<String> buildCalculatorDestinations(Map<String, Object> tariff) {
+        List<Map<String, Object>> directions = maps(tariff.get("directions"));
+        List<Map<String, Object>> source = new ArrayList<>();
+        for (Map<String, Object> direction : directions) {
+            String origin = normalizePoint(AppState.string(direction.get("origin")));
+            if ("москва".equals(origin) || "moscow".equals(origin)) source.add(direction);
+        }
+        if (source.isEmpty()) source = directions;
+        Map<String, String> unique = new LinkedHashMap<>();
+        for (Map<String, Object> direction : source) {
+            String city = AppState.string(direction.get("destination")).trim();
+            if (!city.isBlank()) unique.put(normalizePoint(city), city);
+        }
+        unique.put(normalizePoint("Внуково"), "Внуково");
+        unique.put(normalizePoint("Кавказский Бульвар"), "Кавказский Бульвар");
+        List<String> result = new ArrayList<>(unique.values());
+        result.sort(String::compareToIgnoreCase);
+        return result;
+    }
+
+    private String normalizePoint(String value) {
+        return value.toLowerCase(new Locale("ru", "RU"))
+                .replaceAll("\\s*,\\s*", ", ")
+                .replaceAll("\\s+", " ")
+                .trim();
+    }
+
     private void renderPricing() {
         if (binding == null || !PRICING.equals(section)) return;
         binding.content.removeAllViews();
@@ -582,6 +1028,7 @@ public class FbsFragment extends Fragment {
         addProcessingSection(settings, services);
         addDeliverySection(settings);
         addBoxesSection(settings, services);
+        addPalletSection(settings, services);
         addPreviewSection(services);
 
         TextView excluded = text(
@@ -614,7 +1061,7 @@ public class FbsFragment extends Fragment {
                 Typeface.BOLD
         ));
         TextView note = text(
-                "Настройки применяются к новым и ещё не выставленным начислениям. Паллеты не добавляются.",
+                "Настройки применяются к новым и ещё не выставленным начислениям. Паллеты можно включить отдельно.",
                 13,
                 R.color.logoff_text_muted,
                 Typeface.NORMAL
@@ -641,6 +1088,7 @@ public class FbsFragment extends Fragment {
             String id = AppState.string(service.get("id"));
             String code = AppState.string(service.get("code"));
             if (id.equals(formationId) || id.equals(materialId)
+                    || Boolean.TRUE.equals(service.get("isPallet"))
                     || "BOX_ASSEMBLY".equals(code) || "BOX_60_40_40".equals(code)) continue;
             Map<String, Object> selected = findById(selections, "serviceId", id);
             addAdditionalService(body, service, selected);
@@ -682,6 +1130,7 @@ public class FbsFragment extends Fragment {
         serviceLabels.add("Не начислять");
         pricingForm.serviceIds.add("");
         for (Map<String, Object> service : services) {
+            if (Boolean.TRUE.equals(service.get("isPallet"))) continue;
             serviceLabels.add(AppState.string(service.get("name")) + " · " + money(service.get("priceRub")));
             pricingForm.serviceIds.add(AppState.string(service.get("id")));
         }
@@ -697,6 +1146,45 @@ public class FbsFragment extends Fragment {
         pricingForm.material.setSelection(indexOf(pricingForm.serviceIds,
                 AppState.string(settings.get("boxMaterialServiceId"))));
         body.addView(pricingForm.material, fieldParams());
+        binding.content.addView(card, cardParams());
+    }
+
+    private void addPalletSection(Map<String, Object> settings, List<Map<String, Object>> services) {
+        MaterialCardView card = pricingCard("04", "Паллеты FBS",
+                "При включении паллеты начисляются по количеству сформированных коробов.");
+        LinearLayout body = (LinearLayout) card.getChildAt(0);
+        pricingForm.palletsEnabled = new CheckBox(requireContext());
+        pricingForm.palletsEnabled.setText("Начислять паллеты в FBS");
+        pricingForm.palletsEnabled.setTextColor(ContextCompat.getColor(requireContext(), R.color.logoff_black));
+        pricingForm.palletsEnabled.setTextSize(14);
+        pricingForm.palletsEnabled.setChecked(Boolean.TRUE.equals(settings.get("palletsEnabled")));
+        LinearLayout.LayoutParams checkParams = new LinearLayout.LayoutParams(-1, -2);
+        checkParams.topMargin = dp(12);
+        body.addView(pricingForm.palletsEnabled, checkParams);
+        pricingForm.boxesPerPallet = addLabeledField(body, "Коробов на одной паллете",
+                integerText(settings.get("boxesPerPallet")), true);
+
+        List<String> palletLabels = new ArrayList<>();
+        pricingForm.palletServiceIds = new ArrayList<>();
+        palletLabels.add("Выберите паллетную услугу");
+        pricingForm.palletServiceIds.add("");
+        for (Map<String, Object> service : services) {
+            if (!Boolean.TRUE.equals(service.get("isPallet"))) continue;
+            palletLabels.add(AppState.string(service.get("name")) + " · " + money(service.get("priceRub")));
+            pricingForm.palletServiceIds.add(AppState.string(service.get("id")));
+        }
+        body.addView(sectionLabel("Паллетная услуга"));
+        pricingForm.palletService = spinner(palletLabels);
+        pricingForm.palletService.setSelection(indexOf(pricingForm.palletServiceIds,
+                AppState.string(settings.get("palletServiceId"))));
+        body.addView(pricingForm.palletService, fieldParams());
+        pricingForm.palletsEnabled.setOnCheckedChangeListener((button, checked) -> {
+            pricingForm.boxesPerPallet.setEnabled(checked);
+            pricingForm.palletService.setEnabled(checked);
+            updatePreview(pricingForm.services);
+        });
+        pricingForm.boxesPerPallet.setEnabled(pricingForm.palletsEnabled.isChecked());
+        pricingForm.palletService.setEnabled(pricingForm.palletsEnabled.isChecked());
         binding.content.addView(card, cardParams());
     }
 
@@ -762,7 +1250,8 @@ public class FbsFragment extends Fragment {
                 pricingForm.baseItems,
                 pricingForm.blockItems,
                 pricingForm.blockPrice,
-                pricingForm.capacity
+                pricingForm.capacity,
+                pricingForm.boxesPerPallet
         )) field.addTextChangedListener(watcher);
         for (AdditionalSelection selection : pricingForm.additional.values()) {
             selection.multiplier.addTextChangedListener(watcher);
@@ -772,6 +1261,8 @@ public class FbsFragment extends Fragment {
         pricingForm.formation.setOnItemSelectedListener(new SimpleItemSelectedListener(
                 position -> updatePreview(pricingForm.services)));
         pricingForm.material.setOnItemSelectedListener(new SimpleItemSelectedListener(
+                position -> updatePreview(pricingForm.services)));
+        pricingForm.palletService.setOnItemSelectedListener(new SimpleItemSelectedListener(
                 position -> updatePreview(pricingForm.services)));
     }
 
@@ -795,12 +1286,16 @@ public class FbsFragment extends Fragment {
             int boxes = (int) Math.ceil(items / (double) Math.max(1, capacity));
             double boxPrice = servicePrice(services, selectedServiceId(pricingForm.formation))
                     + servicePrice(services, selectedServiceId(pricingForm.material));
-            double total = processing * items + delivery + boxes * boxPrice;
+            int pallets = pricingForm.palletsEnabled.isChecked()
+                    ? (int) Math.ceil(boxes / (double) positiveInt(pricingForm.boxesPerPallet, 16)) : 0;
+            double palletPrice = servicePrice(services, selectedPalletServiceId());
+            double total = processing * items + delivery + boxes * boxPrice + pallets * palletPrice;
 
             LinearLayout row = new LinearLayout(requireContext());
             row.setGravity(Gravity.CENTER_VERTICAL);
             row.setPadding(0, dp(8), 0, 0);
-            TextView description = text(items + " ед. · " + boxes + " кор.", 13,
+            TextView description = text(items + " ед. · " + boxes + " кор."
+                            + (pallets > 0 ? " · " + pallets + " пал." : ""), 13,
                     R.color.logoff_text_muted, Typeface.NORMAL);
             TextView totalView = text(money(total), 15, R.color.logoff_black, Typeface.BOLD);
             totalView.setGravity(Gravity.END);
@@ -814,10 +1309,16 @@ public class FbsFragment extends Fragment {
         if (pricingForm == null) return;
         String formationId = selectedServiceId(pricingForm.formation);
         String materialId = selectedServiceId(pricingForm.material);
+        String palletServiceId = selectedPalletServiceId();
+        if (pricingForm.palletsEnabled.isChecked() && palletServiceId.isBlank()) {
+            Toast.makeText(requireContext(), "Выберите паллетную услугу", Toast.LENGTH_LONG).show();
+            return;
+        }
         List<Map<String, Object>> additional = new ArrayList<>();
         for (Map.Entry<String, AdditionalSelection> entry : pricingForm.additional.entrySet()) {
             if (!entry.getValue().check.isChecked()) continue;
-            if (entry.getKey().equals(formationId) || entry.getKey().equals(materialId)) continue;
+            if (entry.getKey().equals(formationId) || entry.getKey().equals(materialId)
+                    || entry.getKey().equals(palletServiceId)) continue;
             Map<String, Object> selection = new LinkedHashMap<>();
             selection.put("serviceId", entry.getKey());
             selection.put("quantityMultiplier", positiveDouble(entry.getValue().multiplier, 1));
@@ -837,6 +1338,9 @@ public class FbsFragment extends Fragment {
         body.put("fbsProcessingPriceRub", nonNegative(pricingForm.processing));
         body.put("boxFormationServiceId", formationId.isBlank() ? null : formationId);
         body.put("boxMaterialServiceId", materialId.isBlank() ? null : materialId);
+        body.put("palletsEnabled", pricingForm.palletsEnabled.isChecked());
+        body.put("boxesPerPallet", positiveInt(pricingForm.boxesPerPallet, 16));
+        body.put("palletServiceId", palletServiceId.isBlank() ? null : palletServiceId);
         body.put("additionalServices", additional);
 
         save.setEnabled(false);
@@ -1009,13 +1513,25 @@ public class FbsFragment extends Fragment {
 
     private void updateLoading() {
         if (binding == null) return;
-        boolean loading = loadingOrders || (PRICING.equals(section) && loadingSettings);
+        boolean loading = loadingOrders
+                || (PRICING.equals(section) && loadingSettings)
+                || (CALCULATOR.equals(section) && loadingCalculator);
         binding.progress.setVisibility(loading && binding.content.getChildCount() == 0 ? View.VISIBLE : View.GONE);
         binding.swipe.setRefreshing(loading);
     }
 
     private boolean canManagePricing() {
         return app != null && app.state().isAdmin() && app.state().can("billing:write");
+    }
+
+    private boolean calculatorEnabled() {
+        return canManagePricing() || (app != null
+                && Boolean.TRUE.equals(app.state().selectedClient().get("fbsCalculatorEnabled")));
+    }
+
+    private boolean isOrderSection() {
+        return ACTIVE.equals(section) || SHIPPED.equals(section)
+                || COST.equals(section) || ARCHIVE.equals(section);
     }
 
     private String titleForSection() {
@@ -1047,6 +1563,14 @@ public class FbsFragment extends Fragment {
         int index = spinner.getSelectedItemPosition();
         return index >= 0 && index < pricingForm.serviceIds.size()
                 ? pricingForm.serviceIds.get(index) : "";
+    }
+
+    private String selectedPalletServiceId() {
+        if (pricingForm == null || pricingForm.palletService == null
+                || pricingForm.palletServiceIds == null) return "";
+        int index = pricingForm.palletService.getSelectedItemPosition();
+        return index >= 0 && index < pricingForm.palletServiceIds.size()
+                ? pricingForm.palletServiceIds.get(index) : "";
     }
 
     private double additionalUnitPrice(List<Map<String, Object>> services) {
@@ -1215,6 +1739,7 @@ public class FbsFragment extends Fragment {
     public void onDestroyView() {
         binding = null;
         pricingForm = null;
+        calculatorForm = null;
         super.onDestroyView();
     }
 
@@ -1226,13 +1751,52 @@ public class FbsFragment extends Fragment {
         EditText blockItems;
         EditText blockPrice;
         EditText capacity;
+        EditText boxesPerPallet;
+        CheckBox palletsEnabled;
         Spinner route;
         Spinner formation;
         Spinner material;
+        Spinner palletService;
         LinearLayout preview;
         List<String> serviceIds;
+        List<String> palletServiceIds;
         List<Map<String, Object>> services = Collections.emptyList();
         Map<String, AdditionalSelection> additional = new LinkedHashMap<>();
+    }
+
+    private static class CalculatorForm {
+        EditText quantity;
+        Spinner tariff;
+        Spinner destination;
+        MaterialButton calculate;
+        LinearLayout result;
+        List<String> tariffIds = Collections.emptyList();
+        List<String> destinations = Collections.emptyList();
+    }
+
+    private static class CalculatorCosts {
+        final int boxes;
+        final double processing;
+        final double stickers;
+        final double boxMaterials;
+        final double boxAssembly;
+        final double servicesWithMarkup;
+
+        CalculatorCosts(
+                int boxes,
+                double processing,
+                double stickers,
+                double boxMaterials,
+                double boxAssembly,
+                double servicesWithMarkup
+        ) {
+            this.boxes = boxes;
+            this.processing = processing;
+            this.stickers = stickers;
+            this.boxMaterials = boxMaterials;
+            this.boxAssembly = boxAssembly;
+            this.servicesWithMarkup = servicesWithMarkup;
+        }
     }
 
     private static class AdditionalSelection {

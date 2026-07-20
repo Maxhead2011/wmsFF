@@ -1,5 +1,6 @@
 package pro.logoff.wms.mobile.network;
 
+import java.util.List;
 import java.util.Map;
 
 import okhttp3.MultipartBody;
@@ -31,8 +32,13 @@ public interface MobileApi {
     @GET("mobile/modules/{module}") Call<Map<String, Object>> nativeModule(@Path("module") String module, @Query("clientId") String clientId, @Query("search") String search, @Query("limit") int limit);
     @GET("marketplace-connections/fbs/orders") Call<Map<String, Object>> fbsOrders(@Query("clientId") String clientId, @Query("refresh") Integer refresh);
     @POST("marketplace-connections/fbs/connections") Call<Map<String, Object>> createFbsConnection(@Body Map<String, Object> body);
+    @GET("marketplace-connections/fbs/calculator/destinations") Call<Map<String, Object>> fbsCalculatorDestinations();
+    @POST("marketplace-connections/fbs/calculator/quote") Call<Map<String, Object>> fbsCalculatorQuote(@Body Map<String, Object> body);
     @GET("marketplace-connections/fbs/billing-settings/{clientId}") Call<Map<String, Object>> fbsBillingSettings(@Path("clientId") String clientId);
     @PUT("marketplace-connections/fbs/billing-settings/{clientId}") Call<Map<String, Object>> updateFbsBillingSettings(@Path("clientId") String clientId, @Body Map<String, Object> body);
+    @GET("logistics/tariff-sets") Call<List<Map<String, Object>>> logisticsTariffSets();
+    @GET("logistics/tariff-sets/{id}") Call<Map<String, Object>> logisticsTariffSet(@Path("id") String id);
+    @POST("logistics/quote") Call<Map<String, Object>> logisticsQuote(@Body Map<String, Object> body);
     @POST("mobile/devices") Call<Map<String, Object>> registerDevice(@Body Map<String, Object> body);
     @GET("mobile/app-version") Call<Map<String, Object>> appVersion();
     @POST("client-requests") Call<Map<String, Object>> createRequest(@Body Map<String, Object> body);

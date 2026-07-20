@@ -17,6 +17,12 @@ public class AppState {
     public Map<String, Object> bootstrap() { return bootstrap; }
     public String selectedClientId() { return selectedClientId; }
     public void selectClient(String id) { selectedClientId = id; }
+    public Map<String, Object> selectedClient() {
+        for (Map<String, Object> client : clients()) {
+            if (selectedClientId != null && selectedClientId.equals(string(client.get("id")))) return client;
+        }
+        return Collections.emptyMap();
+    }
     public boolean isAdmin() { return bootstrap != null && "ADMIN".equals(string(bootstrap.get("mode"))); }
     public boolean can(String permission) {
         Object value = user().get("permissionCodes");
