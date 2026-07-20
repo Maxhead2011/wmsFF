@@ -43,6 +43,7 @@ const emptyClientForm = {
   storageAccountingEnabled: false,
   storesWithoutBoxes: false,
   onlineReceiptVisibleToClient: false,
+  fbsCalculatorEnabled: false,
   fulfillmentManagerUserId: '',
 };
 
@@ -270,6 +271,14 @@ export function ClientCreateForm({ session }: ClientCreateFormProps) {
               onChange={(event) => setForm({ ...form, onlineReceiptVisibleToClient: event.target.checked })}
             />
             <span>Показывать онлайн-приемку клиенту</span>
+          </label>
+          <label className="directory-checkbox">
+            <input
+              checked={form.fbsCalculatorEnabled}
+              type="checkbox"
+              onChange={(event) => setForm({ ...form, fbsCalculatorEnabled: event.target.checked })}
+            />
+            <span>Показывать калькулятор стоимости в FBS</span>
           </label>
           <label>
             <span>Вид приемки</span>
@@ -500,6 +509,7 @@ function compactPayload(form: typeof emptyClientForm): CreateClientPayload {
     storageAccountingEnabled: form.storageAccountingEnabled,
     storesWithoutBoxes: form.storesWithoutBoxes,
     onlineReceiptVisibleToClient: form.onlineReceiptVisibleToClient,
+    fbsCalculatorEnabled: form.fbsCalculatorEnabled,
     ...optionalString('fulfillmentManagerUserId', form.fulfillmentManagerUserId),
   };
 }

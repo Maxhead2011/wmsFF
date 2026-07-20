@@ -41,6 +41,7 @@ export type ClientSummary = {
   storageBillingMode: ClientStorageBillingMode;
   storesWithoutBoxes?: boolean;
   onlineReceiptVisibleToClient?: boolean;
+  fbsCalculatorEnabled?: boolean;
   fulfillmentManagerUserId: string | null;
   fulfillmentManager: {
     id: string;
@@ -1567,6 +1568,7 @@ export type CreateClientPayload = {
   storageBillingMode?: ClientStorageBillingMode;
   storesWithoutBoxes?: boolean;
   onlineReceiptVisibleToClient?: boolean;
+  fbsCalculatorEnabled?: boolean;
   fulfillmentManagerUserId?: string;
 };
 

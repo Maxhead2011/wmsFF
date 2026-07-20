@@ -510,6 +510,7 @@ model Client {
   storageBillingMode           ClientStorageBillingMode       @default(MONTHLY)
   storesWithoutBoxes           Boolean                        @default(false)
   onlineReceiptVisibleToClient Boolean                        @default(false)
+  fbsCalculatorEnabled         Boolean                        @default(false)
   fulfillmentManagerUserId     String?
   status                       ClientStatus                   @default(ACTIVE)
   fulfillmentManager           User?                          @relation("ClientFulfillmentManager", fields: [fulfillmentManagerUserId], references: [id])

@@ -175,6 +175,9 @@ export class ClientsService {
           ...(dto.onlineReceiptVisibleToClient === undefined
             ? {}
             : { onlineReceiptVisibleToClient: dto.onlineReceiptVisibleToClient }),
+          ...(dto.fbsCalculatorEnabled === undefined
+            ? {}
+            : { fbsCalculatorEnabled: dto.fbsCalculatorEnabled }),
           ...nullableUpdateClientData(dto),
         },
         select: this.clientSummarySelect(),
@@ -287,6 +290,7 @@ export class ClientsService {
             storageBillingMode: dto.storageBillingMode ?? ClientStorageBillingMode.MONTHLY,
             storesWithoutBoxes: dto.storesWithoutBoxes ?? false,
             onlineReceiptVisibleToClient: dto.onlineReceiptVisibleToClient ?? false,
+            fbsCalculatorEnabled: dto.fbsCalculatorEnabled ?? false,
             fulfillmentManagerUserId: normalizeNullableString(dto.fulfillmentManagerUserId),
           },
           select: this.clientSummarySelect(),
@@ -395,6 +399,7 @@ export class ClientsService {
       storageBillingMode: true,
       storesWithoutBoxes: true,
       onlineReceiptVisibleToClient: true,
+      fbsCalculatorEnabled: true,
       fulfillmentManagerUserId: true,
       fulfillmentManager: {
         select: {

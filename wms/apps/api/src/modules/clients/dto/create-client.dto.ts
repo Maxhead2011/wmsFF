@@ -83,6 +83,10 @@ export class CreateClientDto {
   onlineReceiptVisibleToClient?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  fbsCalculatorEnabled?: boolean;
+
+  @IsOptional()
   @IsString()
   fulfillmentManagerUserId?: string;
 }

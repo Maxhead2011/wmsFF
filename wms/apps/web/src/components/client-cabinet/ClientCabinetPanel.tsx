@@ -116,6 +116,7 @@ type ClientManagementForm = {
   storageAccountingEnabled: boolean;
   storesWithoutBoxes: boolean;
   onlineReceiptVisibleToClient: boolean;
+  fbsCalculatorEnabled: boolean;
 };
 
 const clientKindOptions: Array<{ value: ClientKind; label: string }> = [
@@ -1107,6 +1108,14 @@ function ClientCabinetClientEditor({
           />
           <span>Показывать онлайн-приемку клиенту</span>
         </label>
+        <label className="client-cabinet-editor-checkbox">
+          <input
+            checked={form.fbsCalculatorEnabled}
+            type="checkbox"
+            onChange={(event) => onChange({ fbsCalculatorEnabled: event.target.checked })}
+          />
+          <span>Показывать калькулятор стоимости в FBS</span>
+        </label>
         <label>
           <span>Вид приемки</span>
           <select
@@ -1183,6 +1192,7 @@ function formFromClient(client: ClientSummary): ClientManagementForm {
     storageAccountingEnabled: client.storageAccountingEnabled,
     storesWithoutBoxes: Boolean(client.storesWithoutBoxes),
     onlineReceiptVisibleToClient: Boolean(client.onlineReceiptVisibleToClient),
+    fbsCalculatorEnabled: Boolean(client.fbsCalculatorEnabled),
   };
 }
 
@@ -1205,6 +1215,7 @@ function compactClientPayload(form: ClientManagementForm): UpdateClientPayload {
     storageAccountingEnabled: form.storageAccountingEnabled,
     storesWithoutBoxes: form.storesWithoutBoxes,
     onlineReceiptVisibleToClient: form.onlineReceiptVisibleToClient,
+    fbsCalculatorEnabled: form.fbsCalculatorEnabled,
   };
 }
 

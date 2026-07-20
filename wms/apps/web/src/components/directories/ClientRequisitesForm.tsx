@@ -40,6 +40,7 @@ type ClientRequisitesFormState = {
   storageAccountingEnabled: boolean;
   storesWithoutBoxes: boolean;
   onlineReceiptVisibleToClient: boolean;
+  fbsCalculatorEnabled: boolean;
   logisticsInvoiceMode: ClientLogisticsInvoiceMode;
   storageBillingMode: ClientStorageBillingMode;
   fulfillmentManagerUserId: string;
@@ -63,6 +64,7 @@ const emptyForm: ClientRequisitesFormState = {
   storageAccountingEnabled: false,
   storesWithoutBoxes: false,
   onlineReceiptVisibleToClient: false,
+  fbsCalculatorEnabled: false,
   logisticsInvoiceMode: 'SEPARATE',
   storageBillingMode: 'MONTHLY',
   fulfillmentManagerUserId: '',
@@ -330,13 +332,21 @@ export function ClientRequisitesForm({ session }: ClientRequisitesFormProps) {
 
       <div className="directory-fields directory-fields--client">
         <label className="directory-checkbox">
-            <input
-              checked={form.onlineReceiptVisibleToClient}
+          <input
+            checked={form.onlineReceiptVisibleToClient}
             type="checkbox"
             onChange={(event) => setForm({ ...form, onlineReceiptVisibleToClient: event.target.checked })}
           />
-            <span>Показывать онлайн-приемку клиенту</span>
-          </label>
+          <span>Показывать онлайн-приемку клиенту</span>
+        </label>
+        <label className="directory-checkbox">
+          <input
+            checked={form.fbsCalculatorEnabled}
+            type="checkbox"
+            onChange={(event) => setForm({ ...form, fbsCalculatorEnabled: event.target.checked })}
+          />
+          <span>Показывать калькулятор стоимости в FBS</span>
+        </label>
         <label>
           <span>Вид приемки</span>
           <select
@@ -522,6 +532,7 @@ function formFromClient(client: ClientSummary): ClientRequisitesFormState {
     storageAccountingEnabled: client.storageAccountingEnabled,
     storesWithoutBoxes: Boolean(client.storesWithoutBoxes),
     onlineReceiptVisibleToClient: Boolean(client.onlineReceiptVisibleToClient),
+    fbsCalculatorEnabled: Boolean(client.fbsCalculatorEnabled),
     logisticsInvoiceMode: client.logisticsInvoiceMode,
     storageBillingMode: client.storageBillingMode,
     fulfillmentManagerUserId: client.fulfillmentManagerUserId ?? '',
@@ -547,6 +558,7 @@ function compactPayload(form: ClientRequisitesFormState): UpdateClientPayload {
     storageAccountingEnabled: form.storageAccountingEnabled,
     storesWithoutBoxes: form.storesWithoutBoxes,
     onlineReceiptVisibleToClient: form.onlineReceiptVisibleToClient,
+    fbsCalculatorEnabled: form.fbsCalculatorEnabled,
     logisticsInvoiceMode: form.logisticsInvoiceMode,
     storageBillingMode: form.storageBillingMode,
     fulfillmentManagerUserId: form.fulfillmentManagerUserId,

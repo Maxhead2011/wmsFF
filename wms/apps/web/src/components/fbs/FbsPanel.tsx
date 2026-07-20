@@ -3,6 +3,7 @@ import {
   Archive,
   BadgeRussianRuble,
   Boxes,
+  Calculator,
   CircleCheckBig,
   Clock3,
   Link2,
@@ -30,13 +31,14 @@ import {
   type FbsOrderSummary,
   type UpdateFbsBillingSettingsPayload,
 } from '../../lib/api';
+import { FbsCostCalculator } from './FbsCostCalculator';
 import './fbs.css';
 
 type FbsPanelProps = {
   session: AuthSession;
 };
 
-type FbsView = 'active' | 'shipped' | 'cost' | 'archive' | 'pricing';
+type FbsView = 'active' | 'shipped' | 'cost' | 'calculator' | 'archive' | 'pricing';
 type OrdersState =
   | { status: 'idle'; data: null; error: '' }
   | { status: 'loading'; data: ClientFbsOrders | null; error: '' }
@@ -64,6 +66,13 @@ const fbsViews = [
     description: 'Отгруженные заказы, тарифы, начисления и выставленные счета.',
     icon: BadgeRussianRuble,
     accent: 'amber',
+  },
+  {
+    id: 'calculator' as const,
+    title: 'Калькулятор стоимости',
+    description: 'Предварительный расчёт обработки и доставки партии FBS.',
+    icon: Calculator,
+    accent: 'blue',
   },
   {
     id: 'archive' as const,
@@ -101,10 +110,6 @@ export function FbsPanel({ session }: FbsPanelProps) {
     session.user.permissionCodes.includes('system:admin') ||
     session.user.permissionCodes.includes('billing:write') ||
     session.user.roleCodes.some((role) => role === 'ADMIN' || role === 'OWNER');
-  const visibleViews = canManagePricing
-    ? fbsViews
-    : fbsViews.filter((view) => view.id !== 'pricing');
-
   useEffect(() => {
     let active = true;
     void fetchClients(session.accessToken)
@@ -165,12 +170,27 @@ export function FbsPanel({ session }: FbsPanelProps) {
     () => clients.find((client) => client.id === selectedClientId) ?? null,
     [clients, selectedClientId],
   );
+  const calculatorEnabled = Boolean(selectedClient?.fbsCalculatorEnabled);
+  const roleVisibleViews = canManagePricing
+    ? fbsViews
+    : fbsViews.filter((view) => view.id !== 'pricing');
+  const visibleViews = calculatorEnabled
+    ? roleVisibleViews
+    : roleVisibleViews.filter((view) => view.id !== 'calculator');
+
+  useEffect(() => {
+    if (activeView === 'calculator' && !calculatorEnabled) {
+      setActiveView('active');
+    }
+  }, [activeView, calculatorEnabled]);
+
   const activeConfig = visibleViews.find((view) => view.id === activeView) ?? visibleViews[0];
   const data = ordersState.data;
   const tileCounts: Record<FbsView, number | string> = {
     active: data?.counts.active ?? 0,
     shipped: data?.counts.shipped ?? 0,
     cost: data?.counts.shipped ?? 0,
+    calculator: '1–3000',
     archive: data?.counts.archive ?? 0,
     pricing: 'тарифы',
   };
@@ -213,7 +233,9 @@ export function FbsPanel({ session }: FbsPanelProps) {
           <p>Заказы Wildberries и Ozon, складские короба, статусы отгрузки и стоимость обработки.</p>
         </div>
         <span className="fbs-panel__scope">
-          {selectedClient
+          {activeView === 'calculator'
+            ? 'Предварительный расчёт'
+            : selectedClient
             ? `${selectedClient.code} · ${selectedClient.name}`
             : selectedClientId
               ? 'Клиент загружается'
@@ -255,7 +277,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
             <h3>{activeConfig.title}</h3>
             <p>{activeConfig.description}</p>
           </div>
-          <div className="fbs-workspace__filters">
+          {activeView !== 'calculator' ? <div className="fbs-workspace__filters">
             {clients.length > 1 ? (
               <label>
                 <span>Клиент</span>
@@ -293,10 +315,12 @@ export function FbsPanel({ session }: FbsPanelProps) {
                 <span>{ordersState.status === 'loading' ? 'Обновляю' : 'Обновить'}</span>
               </button>
             ) : null}
-          </div>
+          </div> : null}
         </div>
 
-        {!selectedClientId ? (
+        {activeView === 'calculator' ? (
+          <FbsCostCalculator />
+        ) : !selectedClientId ? (
           <FbsNotice icon={Boxes} title="Выберите клиента" text="Заказы загружаются отдельно для каждого клиентского кабинета." />
         ) : activeView === 'pricing' && canManagePricing ? (
           <FbsPricingSettings
@@ -331,7 +355,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
           <FbsOrdersView data={data} view={activeView} search={search} />
         ) : null}
 
-        {data?.connected && activeView !== 'pricing' ? (
+        {data?.connected && activeView !== 'pricing' && activeView !== 'calculator' ? (
           <div className="fbs-source-line">
             <span>
               <Link2 size={14} aria-hidden="true" />
@@ -353,7 +377,7 @@ function FbsOrdersView({
 }: {
   data: ClientFbsOrders | null;
   search: string;
-  view: Exclude<FbsView, 'cost' | 'pricing'>;
+  view: Exclude<FbsView, 'cost' | 'calculator' | 'pricing'>;
 }) {
   const category = view;
   const orders = (data?.orders ?? []).filter((order) => order.category === category);

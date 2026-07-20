@@ -22,6 +22,7 @@ describe('ClientsService', () => {
         legalName: ' ООО "Клиент" ',
         email: '',
         bankAccount: ' 40702810000000000001 ',
+        fbsCalculatorEnabled: true,
       },
       user(),
     );
@@ -34,10 +35,12 @@ describe('ClientsService', () => {
         legalName: 'ООО "Клиент"',
         email: null,
         bankAccount: '40702810000000000001',
+        fbsCalculatorEnabled: true,
       },
       select: expect.objectContaining({
         code: true,
         clientKind: true,
+        fbsCalculatorEnabled: true,
         fulfillmentManagerUserId: true,
       }),
     });
