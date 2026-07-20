@@ -1388,6 +1388,21 @@ h1 {
   color: var(--ok);
 }
 
+.status--done {
+  background: #bbf7d0;
+  color: #166534;
+}
+
+.status--cancelled {
+  background: #ffe4e6;
+  color: #be123c;
+}
+
+.status--in-work {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
 .status--in-progress {
   background: #fef3c7;
   color: var(--work);
@@ -2174,6 +2189,18 @@ button:disabled {
 
 .status--ready::before {
   background: #16a34a;
+}
+
+.status--done::before {
+  background: #15803d;
+}
+
+.status--cancelled::before {
+  background: #e11d48;
+}
+
+.status--in-work::before {
+  background: #2563eb;
 }
 
 .status--in-progress::before {

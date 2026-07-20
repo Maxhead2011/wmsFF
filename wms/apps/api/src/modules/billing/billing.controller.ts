@@ -7,6 +7,7 @@ import { RequirePermissions } from '../auth/decorators/require-permissions.decor
 import { BillingDocumentService } from './billing-document.service';
 import { BillingPdfService } from './billing-pdf.service';
 import { BillingService } from './billing.service';
+import { CreateBillingAdvanceDto } from './dto/create-billing-advance.dto';
 import { CreateBillingChargeDto } from './dto/create-billing-charge.dto';
 import { CreateBillingInvoiceDto } from './dto/create-billing-invoice.dto';
 import { CreateBillingPaymentDto } from './dto/create-billing-payment.dto';
@@ -70,6 +71,23 @@ export class BillingController {
   @Get('reconciliation')
   listReconciliation(@Query() query: ListBillingReconciliationDto, @CurrentUser() user: AuthUser) {
     return this.billing.listReconciliation(query, user);
+  }
+
+  @Get('advances')
+  listAdvances(@Query('clientId') clientId: string | undefined, @CurrentUser() user: AuthUser) {
+    return this.billing.listAdvances(clientId, user);
+  }
+
+  @Post('advances')
+  @RequirePermissions('billing:write')
+  createAdvance(@Body() dto: CreateBillingAdvanceDto, @CurrentUser() user: AuthUser) {
+    return this.billing.createAdvance(dto, user);
+  }
+
+  @Patch('advances/:id/cancel')
+  @RequirePermissions('billing:write')
+  cancelAdvance(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.billing.cancelAdvance(id, user);
   }
 
   @Post('charges')

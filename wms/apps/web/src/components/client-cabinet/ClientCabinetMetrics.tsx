@@ -1,4 +1,4 @@
-import { BadgeRussianRuble, Boxes, ClipboardList, PackageCheck, ReceiptText } from 'lucide-react';
+import { BadgeRussianRuble, Boxes, ClipboardList, HandCoins, PackageCheck, ReceiptText } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type {
   BillingChargeSummary,
@@ -17,21 +17,32 @@ type ClientCabinetMetricsProps = {
   invoices: BillingInvoiceSummary[];
   charges: BillingChargeSummary[];
   reconciliation: BillingReconciliation | null;
+  advanceRub: number;
   onNavigate: (target: ClientCabinetMetricTarget) => void;
+  onOpenAdvance: () => void;
 };
 
 const closedRequestStatuses = ['DONE', 'CANCELLED', 'REJECTED'];
 
-export function ClientCabinetMetrics({ stock, requests, invoices, charges, reconciliation, onNavigate }: ClientCabinetMetricsProps) {
+export function ClientCabinetMetrics({
+  stock,
+  requests,
+  invoices,
+  charges,
+  reconciliation,
+  advanceRub,
+  onNavigate,
+  onOpenAdvance,
+}: ClientCabinetMetricsProps) {
   const uniqueSkuCount = new Set(stock.map((balance) => balance.skuId)).size;
   const totalQuantity = stock.reduce((sum, balance) => sum + Number(balance.quantity), 0);
   const activeRequests = requests.filter((request) => !closedRequestStatuses.includes(request.status)).length;
-  const invoiceDebtRub =
-    reconciliation?.totals.debtRub ??
+  const invoiceGrossDebtRub =
+    reconciliation?.totals.grossDebtRub ??
     invoices
       .filter((invoice) => invoice.status !== 'CANCELLED')
       .reduce((sum, invoice) => sum + Math.max(0, Number(invoice.totalRub) - Number(invoice.paidRub)), 0);
-  const debtRub = invoiceDebtRub + unbilledApprovedChargesRub(charges, invoices);
+  const debtRub = Math.max(0, invoiceGrossDebtRub + unbilledApprovedChargesRub(charges, invoices) - advanceRub);
   const fbsInvoicesRub = invoices
     .filter((invoice) => invoice.status === 'ISSUED' || invoice.status === 'PAID')
     .reduce(
@@ -63,6 +74,12 @@ export function ClientCabinetMetrics({ stock, requests, invoices, charges, recon
         label="К оплате"
         value={`${formatCabinetMoney(debtRub)} ₽`}
         onClick={() => onNavigate('invoices')}
+      />
+      <MetricTile
+        icon={HandCoins}
+        label="Авансирование"
+        value={`${formatCabinetMoney(advanceRub)} ₽`}
+        onClick={onOpenAdvance}
       />
       <MetricTile
         icon={BadgeRussianRuble}

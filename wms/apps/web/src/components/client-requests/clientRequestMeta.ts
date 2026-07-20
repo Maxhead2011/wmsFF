@@ -40,11 +40,23 @@ export function requestPriorityLabel(value: ClientRequestPriority) {
 }
 
 export function requestStatusTone(status: ClientRequestStatus) {
-  if (status === 'DONE' || status === 'APPROVED' || status === 'PACKED') {
+  if (status === 'DONE') {
+    return 'done';
+  }
+
+  if (status === 'CANCELLED' || status === 'REJECTED') {
+    return 'cancelled';
+  }
+
+  if (status === 'IN_WORK') {
+    return 'in-work';
+  }
+
+  if (status === 'APPROVED' || status === 'PACKED') {
     return 'ready';
   }
 
-  if (status === 'IN_WORK' || status === 'IN_REVIEW') {
+  if (status === 'IN_REVIEW') {
     return 'in-progress';
   }
 

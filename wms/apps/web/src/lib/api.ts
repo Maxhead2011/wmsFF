@@ -322,7 +322,11 @@ export type BillingReconciliationClient = {
   overdueInvoicesCount: number;
   totalRub: number;
   paidRub: number;
+  grossDebtRub: number;
+  advanceRub: number;
   debtRub: number;
+  creditRub: number;
+  grossOverdueRub: number;
   overdueRub: number;
   nearestDueDate: string | null;
   latestInvoiceDate: string | null;
@@ -340,7 +344,11 @@ export type BillingReconciliation = {
     overdueInvoicesCount: number;
     totalRub: number;
     paidRub: number;
+    grossDebtRub: number;
+    advanceRub: number;
     debtRub: number;
+    creditRub: number;
+    grossOverdueRub: number;
     overdueRub: number;
   };
   clients: BillingReconciliationClient[];
@@ -366,7 +374,7 @@ export type BillingInvoiceItemSummary = {
 
 export type BillingPaymentSummary = {
   id: string;
-  invoiceId: string;
+  invoiceId: string | null;
   clientId: string;
   amountRub: string | number;
   paidAt: string;
@@ -405,6 +413,29 @@ export type BillingInvoiceSummary = {
     email: string;
     name: string;
   } | null;
+};
+
+export type BillingAdvanceEntry = BillingPaymentSummary & {
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  createdBy: {
+    id: string;
+    email: string;
+    name: string;
+  } | null;
+};
+
+export type BillingAdvanceClientSummary = {
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  balanceRub: number;
+  recordedCount: number;
+  cancelledCount: number;
+  latestPaidAt: string | null;
+};
+
+export type BillingAdvancesOverview = {
+  totalBalanceRub: number;
+  clients: BillingAdvanceClientSummary[];
+  entries: BillingAdvanceEntry[];
 };
 
 export type IssueRequestBillingInvoicesResult = {
@@ -651,6 +682,15 @@ export type ClientRequestItem = {
     color: string | null;
     size: string | null;
   } | null;
+};
+
+export type CreateBillingAdvancePayload = {
+  clientId: string;
+  amountRub: number;
+  paidAt?: string;
+  method?: string;
+  reference?: string;
+  comment?: string;
 };
 
 export type OwnCompanySellerSnapshot = {
@@ -3837,6 +3877,27 @@ export async function createManualBillingInvoice(accessToken: string, payload: C
   return request<BillingInvoiceSummary>('/billing/invoices/manual', {
     method: 'POST',
     body: payload,
+    accessToken,
+  });
+}
+
+export async function fetchBillingAdvances(accessToken: string, clientId?: string) {
+  return request<BillingAdvancesOverview>(withQuery('/billing/advances', { clientId }), {
+    accessToken,
+  });
+}
+
+export async function createBillingAdvance(accessToken: string, payload: CreateBillingAdvancePayload) {
+  return request<BillingAdvanceEntry>('/billing/advances', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function cancelBillingAdvance(accessToken: string, advanceId: string) {
+  return request<BillingAdvanceEntry>(`/billing/advances/${advanceId}/cancel`, {
+    method: 'PATCH',
     accessToken,
   });
 }

@@ -441,7 +441,10 @@ function renderRequestTable(
         </thead>
         <tbody>
           {items.map((request) => (
-            <tr key={request.id}>
+            <tr
+              className={`client-cabinet-request-row client-cabinet-request-row--${requestStatusTone(request.status)}`}
+              key={request.id}
+            >
               <td>
                 <strong>{request.title}</strong>
                 {request.comment ? <span>{request.comment}</span> : null}

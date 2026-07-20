@@ -1,4 +1,4 @@
-import { AlertTriangle, CalendarClock, ReceiptText, WalletCards } from 'lucide-react';
+import { AlertTriangle, CalendarClock, HandCoins, ReceiptText, WalletCards } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { BillingReconciliation, BillingReconciliationClient } from '../../lib/api';
 import { billingInvoiceStatusLabel, billingInvoiceStatusTone } from './billingMeta';
@@ -39,6 +39,7 @@ export function BillingReconciliationPanel({
       <div className="billing-reconciliation__metrics">
         <ReconciliationMetric icon={ReceiptText} label="Выставлено" value={`${formatMoney(totals.totalRub)} ₽`} />
         <ReconciliationMetric icon={WalletCards} label="Оплачено" value={`${formatMoney(totals.paidRub)} ₽`} />
+        <ReconciliationMetric icon={HandCoins} label="Аванс" value={`${formatMoney(totals.advanceRub)} ₽`} />
         <ReconciliationMetric icon={CalendarClock} label="К оплате" value={`${formatMoney(totals.debtRub)} ₽`} />
         <ReconciliationMetric icon={AlertTriangle} label="Просрочено" value={`${formatMoney(totals.overdueRub)} ₽`} />
       </div>
@@ -91,6 +92,10 @@ function ClientDebtCard({ item }: { item: BillingReconciliationClient }) {
           <span>долг, {numberFormatter.format(item.openInvoicesCount)} счетов</span>
         </div>
         <div>
+          <strong>{formatMoney(item.advanceRub)} ₽</strong>
+          <span>{item.creditRub > 0 ? `остаток аванса ${formatMoney(item.creditRub)} ₽` : 'учтено в общем долге'}</span>
+        </div>
+        <div>
           <strong>{formatMoney(item.overdueRub)} ₽</strong>
           <span>просрочка, {numberFormatter.format(item.overdueInvoicesCount)} счетов</span>
         </div>
@@ -133,10 +138,11 @@ function buildTotals(items: BillingReconciliationClient[]) {
     (totals, item) => ({
       totalRub: roundMoney(totals.totalRub + item.totalRub),
       paidRub: roundMoney(totals.paidRub + item.paidRub),
+      advanceRub: roundMoney(totals.advanceRub + item.advanceRub),
       debtRub: roundMoney(totals.debtRub + item.debtRub),
       overdueRub: roundMoney(totals.overdueRub + item.overdueRub),
     }),
-    { totalRub: 0, paidRub: 0, debtRub: 0, overdueRub: 0 },
+    { totalRub: 0, paidRub: 0, advanceRub: 0, debtRub: 0, overdueRub: 0 },
   );
 }
 

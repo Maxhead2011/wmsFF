@@ -1347,7 +1347,7 @@ model BillingInvoiceItem {
 
 model BillingPayment {
   id              String               @id @default(uuid())
-  invoiceId       String
+  invoiceId       String?
   clientId        String
   amountRub       Decimal              @db.Decimal(14, 2)
   paidAt          DateTime             @default(now())
@@ -1356,7 +1356,7 @@ model BillingPayment {
   comment         String?
   status          BillingPaymentStatus @default(RECORDED)
   createdByUserId String?
-  invoice         BillingInvoice       @relation(fields: [invoiceId], references: [id])
+  invoice         BillingInvoice?      @relation(fields: [invoiceId], references: [id])
   client          Client               @relation(fields: [clientId], references: [id])
   createdBy       User?                @relation("BillingPaymentCreatedBy", fields: [createdByUserId], references: [id])
   createdAt       DateTime             @default(now())

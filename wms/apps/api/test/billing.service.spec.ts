@@ -3,6 +3,7 @@ import {
   BillingChargeSource,
   BillingChargeStatus,
   BillingInvoiceStatus,
+  BillingPaymentStatus,
   BillingUnit,
   ClientNotificationEvent,
   MovementType,
@@ -826,6 +827,18 @@ describe('BillingService', () => {
           }),
         ]),
       },
+      billingPayment: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'advance-1',
+            invoiceId: null,
+            clientId: 'client-1',
+            amountRub: '200.00',
+            status: BillingPaymentStatus.RECORDED,
+            client: { id: 'client-1', code: 'CLIENT', name: 'Client' },
+          },
+        ]),
+      },
     };
     const service = new BillingService(prisma as never, clientScopes());
 
@@ -851,13 +864,17 @@ describe('BillingService', () => {
       overdueInvoicesCount: 1,
       totalRub: 1300,
       paidRub: 550,
-      debtRub: 750,
-      overdueRub: 750,
+      grossDebtRub: 750,
+      advanceRub: 200,
+      debtRub: 550,
+      overdueRub: 550,
     });
     expect(report.clients[0]).toMatchObject({
       client: { id: 'client-1', code: 'CLIENT', name: 'Client' },
-      debtRub: 750,
-      overdueRub: 750,
+      grossDebtRub: 750,
+      advanceRub: 200,
+      debtRub: 550,
+      overdueRub: 550,
       nearestDueDate: '2020-06-01T23:59:59.999Z',
     });
     expect(report.clients[0].invoices[0]).toMatchObject({

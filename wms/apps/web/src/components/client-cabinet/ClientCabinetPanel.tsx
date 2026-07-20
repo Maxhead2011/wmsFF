@@ -2,6 +2,7 @@ import { Ban, CheckCircle2, Pencil, RefreshCw, Save, Trash2, X } from 'lucide-re
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   deleteClient,
+  fetchBillingAdvances,
   fetchBillingCharges,
   fetchBillingInvoiceDocument,
   fetchBillingInvoices,
@@ -22,6 +23,7 @@ import {
   uploadClientRequestFile,
   createClientRequestComment,
   type AuthSession,
+  type BillingAdvancesOverview,
   type BillingChargeSummary,
   type BillingInvoiceDocument,
   type BillingInvoiceSummary,
@@ -48,6 +50,7 @@ import { OnlineReceiptPanel } from '../warehouse/OnlineReceiptPanel';
 import './client-cabinet.css';
 import { ClientCabinetExports } from './ClientCabinetExports';
 import { ClientCabinetMetrics, type ClientCabinetMetricTarget } from './ClientCabinetMetrics';
+import { ClientCabinetAdvanceWidget } from './ClientCabinetAdvanceWidget';
 import { ClientCabinetStorageWidget } from './ClientCabinetStorageWidget';
 import { ClientCabinetPprWidget } from './ClientCabinetPprWidget';
 import { ReceiptBatchesPanel } from '../warehouse/ReceiptBatchesPanel';
@@ -69,6 +72,7 @@ type CabinetData = {
   requests: ClientRequestSummary[];
   invoices: BillingInvoiceSummary[];
   charges: BillingChargeSummary[];
+  advances: BillingAdvancesOverview;
   reconciliation: BillingReconciliation | null;
   serviceHistory: BillingServiceHistory | null;
   notifications: ClientNotificationSummary[];
@@ -90,6 +94,7 @@ type ClientCabinetClientSummary = {
   skuCount: number;
   totalQuantity: number;
   activeRequests: number;
+  advanceRub: number;
   debtRub: number;
 };
 
@@ -130,6 +135,11 @@ const emptyData: CabinetData = {
   requests: [],
   invoices: [],
   charges: [],
+  advances: {
+    totalBalanceRub: 0,
+    clients: [],
+    entries: [],
+  },
   reconciliation: null,
   serviceHistory: null,
   notifications: [],
@@ -242,6 +252,7 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
       requests,
       invoices,
       charges,
+      advance: state.data.advances.clients.find((item) => item.client.id === clientId) ?? null,
       reconciliation: filterReconciliation(state.data.reconciliation, clientId, filters),
       serviceHistory: filterServiceHistory(state.data.serviceHistory, clientId, filters, hideCancelledBilling),
       notifications,
@@ -272,6 +283,7 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
         requests,
         invoices,
         charges,
+        advances,
         reconciliation,
         serviceHistory,
         notifications,
@@ -282,6 +294,7 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
         fetchClientRequests(session.accessToken),
         fetchBillingInvoices(session.accessToken),
         fetchBillingCharges(session.accessToken),
+        fetchBillingAdvances(session.accessToken),
         fetchBillingReconciliation(session.accessToken),
         fetchBillingServiceHistory(session.accessToken),
         fetchClientNotifications(session.accessToken),
@@ -296,6 +309,7 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
           requests,
           invoices,
           charges,
+          advances,
           reconciliation,
           serviceHistory,
           notifications,
@@ -324,6 +338,23 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
     } catch {
       // Тихое обновление уведомлений не должно мешать работе кабинета.
     }
+  }
+
+  async function refreshAdvanceData() {
+    const [advances, reconciliation, notifications] = await Promise.all([
+      fetchBillingAdvances(session.accessToken),
+      fetchBillingReconciliation(session.accessToken),
+      fetchClientNotifications(session.accessToken),
+    ]);
+    setState((current) => ({
+      ...current,
+      data: {
+        ...current.data,
+        advances,
+        reconciliation,
+        notifications,
+      },
+    }));
   }
 
   async function enableBrowserNotifications() {
@@ -570,8 +601,15 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
     }, 60);
   }
 
+  function scrollToAdvance() {
+    window.setTimeout(() => {
+      document.getElementById('client-cabinet-advance')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 40);
+  }
+
   const showClientOverview = isInternalUser(session.user) && state.data.clients.length > 1;
   const canManageClients = canUse(session.user, 'clients:write');
+  const canManageAdvances = canUse(session.user, 'billing:write');
 
   return (
     <section className="client-cabinet-panel" aria-label="Кабинет клиента">
@@ -713,7 +751,16 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
             invoices={view.invoices}
             charges={view.charges}
             reconciliation={view.reconciliation}
+            advanceRub={Number(view.advance?.balanceRub ?? 0)}
             onNavigate={navigateToSection}
+            onOpenAdvance={scrollToAdvance}
+          />
+          <ClientCabinetAdvanceWidget
+            accessToken={session.accessToken}
+            client={view.client}
+            overview={state.data.advances}
+            canManage={canManageAdvances}
+            onChanged={refreshAdvanceData}
           />
           <ClientCabinetStorageWidget accessToken={session.accessToken} client={view.client} />
           <ClientCabinetPprWidget accessToken={session.accessToken} clientId={view.client.id} />
@@ -849,6 +896,7 @@ function ClientCabinetClientTable({
             <th>SKU</th>
             <th>Остатки</th>
             <th>Заявки</th>
+            <th>Аванс</th>
             <th>К оплате</th>
             <th>Действия</th>
           </tr>
@@ -884,6 +932,11 @@ function ClientCabinetClientTable({
               <td>
                 <button className="client-cabinet-row-metric" type="button" onClick={() => onSelect(card.client.id, 'requests')}>
                   {formatCabinetNumber(card.activeRequests)}
+                </button>
+              </td>
+              <td>
+                <button className="client-cabinet-row-metric" type="button" onClick={() => onSelect(card.client.id)}>
+                  {formatCabinetMoney(card.advanceRub)} ₽
                 </button>
               </td>
               <td>
@@ -1082,6 +1135,10 @@ function buildClientSummary(client: ClientSummary, data: CabinetData): ClientCab
   const stock = data.stock.filter((balance) => balance.clientId === client.id);
   const invoices = data.invoices.filter((invoice) => invoice.clientId === client.id && invoice.status !== 'CANCELLED');
   const charges = data.charges.filter((charge) => charge.clientId === client.id);
+  const advanceRub = Number(data.advances.clients.find((item) => item.client.id === client.id)?.balanceRub ?? 0);
+  const grossDebtRub =
+    invoices.reduce((sum, invoice) => sum + Math.max(0, Number(invoice.totalRub) - Number(invoice.paidRub)), 0) +
+    unbilledApprovedChargesRub(charges, invoices);
 
   return {
     client,
@@ -1090,9 +1147,8 @@ function buildClientSummary(client: ClientSummary, data: CabinetData): ClientCab
     activeRequests: data.requests.filter(
       (request) => request.clientId === client.id && !['DONE', 'CANCELLED', 'REJECTED'].includes(request.status),
     ).length,
-    debtRub:
-      invoices.reduce((sum, invoice) => sum + Math.max(0, Number(invoice.totalRub) - Number(invoice.paidRub)), 0) +
-      unbilledApprovedChargesRub(charges, invoices),
+    advanceRub,
+    debtRub: Math.max(0, grossDebtRub - advanceRub),
   };
 }
 
@@ -1297,7 +1353,7 @@ function filterReconciliation(
   const clients = report.clients
     .filter((item) => !clientId || item.client.id === clientId)
     .map((item) => rebuildReconciliationClient(item, item.invoices.filter((invoice) => periodMatchesRange(invoice.periodFrom, invoice.periodTo, filters))))
-    .filter((item) => item.invoicesCount > 0);
+    .filter((item) => item.invoicesCount > 0 || item.advanceRub > 0);
 
   return {
     ...report,
@@ -1309,7 +1365,11 @@ function filterReconciliation(
         overdueInvoicesCount: totals.overdueInvoicesCount + item.overdueInvoicesCount,
         totalRub: roundMoney(totals.totalRub + item.totalRub),
         paidRub: roundMoney(totals.paidRub + item.paidRub),
+        grossDebtRub: roundMoney(totals.grossDebtRub + item.grossDebtRub),
+        advanceRub: roundMoney(totals.advanceRub + item.advanceRub),
         debtRub: roundMoney(totals.debtRub + item.debtRub),
+        creditRub: roundMoney(totals.creditRub + item.creditRub),
+        grossOverdueRub: roundMoney(totals.grossOverdueRub + item.grossOverdueRub),
         overdueRub: roundMoney(totals.overdueRub + item.overdueRub),
       }),
       {
@@ -1319,7 +1379,11 @@ function filterReconciliation(
         overdueInvoicesCount: 0,
         totalRub: 0,
         paidRub: 0,
+        grossDebtRub: 0,
+        advanceRub: 0,
         debtRub: 0,
+        creditRub: 0,
+        grossOverdueRub: 0,
         overdueRub: 0,
       },
     ),
@@ -1333,6 +1397,11 @@ function rebuildReconciliationClient(
 ): BillingReconciliationClient {
   const openInvoices = invoices.filter((invoice) => invoice.remainingRub > 0 && invoice.status !== 'PAID');
   const overdueInvoices = invoices.filter((invoice) => invoice.overdueDays > 0);
+  const grossDebtRub = invoices.reduce((sum, invoice) => roundMoney(sum + invoice.remainingRub), 0);
+  const grossOverdueRub = overdueInvoices.reduce((sum, invoice) => roundMoney(sum + invoice.remainingRub), 0);
+  const debtRub = roundMoney(Math.max(0, grossDebtRub - item.advanceRub));
+  const creditRub = roundMoney(Math.max(0, item.advanceRub - grossDebtRub));
+  const overdueRub = roundMoney(Math.max(0, grossOverdueRub - item.advanceRub));
   const invoiceDates = invoices
     .map((invoice) => invoice.issuedAt ?? invoice.periodTo)
     .filter((value): value is string => Boolean(value))
@@ -1347,8 +1416,11 @@ function rebuildReconciliationClient(
     overdueInvoicesCount: overdueInvoices.length,
     totalRub: invoices.reduce((sum, invoice) => roundMoney(sum + invoice.totalRub), 0),
     paidRub: invoices.reduce((sum, invoice) => roundMoney(sum + invoice.paidRub), 0),
-    debtRub: invoices.reduce((sum, invoice) => roundMoney(sum + invoice.remainingRub), 0),
-    overdueRub: overdueInvoices.reduce((sum, invoice) => roundMoney(sum + invoice.remainingRub), 0),
+    grossDebtRub,
+    debtRub,
+    creditRub,
+    grossOverdueRub,
+    overdueRub,
     nearestDueDate:
       openInvoices
         .map((invoice) => invoice.dueDate)

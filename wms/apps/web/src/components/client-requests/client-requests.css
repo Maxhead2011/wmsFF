@@ -913,6 +913,30 @@
   vertical-align: top;
 }
 
+.client-request-table tbody tr.client-request-row--done > td {
+  background: #f0fdf4;
+}
+
+.client-request-table tbody tr.client-request-row--cancelled > td {
+  background: #fff1f2;
+}
+
+.client-request-table tbody tr.client-request-row--in-work > td {
+  background: #eff6ff;
+}
+
+.client-request-table tbody tr.client-request-row--done > td:first-child {
+  box-shadow: inset 3px 0 #16a34a;
+}
+
+.client-request-table tbody tr.client-request-row--cancelled > td:first-child {
+  box-shadow: inset 3px 0 #e11d48;
+}
+
+.client-request-table tbody tr.client-request-row--in-work > td:first-child {
+  box-shadow: inset 3px 0 #2563eb;
+}
+
 .client-request-title {
   display: -webkit-box;
   max-width: 100%;

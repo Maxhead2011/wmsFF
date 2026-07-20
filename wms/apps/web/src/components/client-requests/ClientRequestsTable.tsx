@@ -94,7 +94,10 @@ export function ClientRequestsTable({
             const emergencyClosed = isEmergencyClosedRequest(request);
 
             return (
-            <tr key={request.id}>
+            <tr
+              className={`client-request-row client-request-row--${requestStatusTone(request.status)}`}
+              key={request.id}
+            >
               <td className="client-request-table__request-cell" data-label="Заявка">
                 {onOpenDocument ? (
                   <button

@@ -3,6 +3,7 @@ import {
   BillingChargeSource,
   BillingChargeStatus,
   BillingInvoiceStatus,
+  BillingPaymentStatus,
   BillingPriceTaxMode,
   BillingUnit,
   ClientNotificationEvent,
@@ -14,6 +15,7 @@ import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { isClientNotificationEnabled } from '../client-notifications/client-notification-preferences';
 import { TelegramNotificationService } from '../client-notifications/telegram-notification.service';
+import { CreateBillingAdvanceDto } from './dto/create-billing-advance.dto';
 import { CreateBillingChargeDto } from './dto/create-billing-charge.dto';
 import { CreateBillingInvoiceDto } from './dto/create-billing-invoice.dto';
 import { CreateBillingPaymentDto } from './dto/create-billing-payment.dto';
@@ -175,20 +177,122 @@ export class BillingService {
       throw new BadRequestException('Дата начала периода не может быть позже даты окончания.');
     }
 
-    const invoices = await this.prisma.billingInvoice.findMany({
+    const clientId = this.clientScopes.resolveClientFilter(user, query.clientId);
+    const [invoices, advances] = await Promise.all([
+      this.prisma.billingInvoice.findMany({
+        where: {
+          clientId,
+          client: isBillingAdministrator(user) ? { isDemo: false } : undefined,
+          status: { not: BillingInvoiceStatus.CANCELLED },
+          periodFrom: periodFrom ? { gte: periodFrom } : undefined,
+          periodTo: periodTo ? { lte: periodTo } : undefined,
+        },
+        include: billingReconciliationInvoiceInclude,
+        orderBy: [{ dueDate: 'asc' }, { periodFrom: 'desc' }, { createdAt: 'desc' }],
+        take: 500,
+      }),
+      this.prisma.billingPayment.findMany({
+        where: {
+          clientId,
+          invoiceId: null,
+          status: BillingPaymentStatus.RECORDED,
+          client: isBillingAdministrator(user) ? { isDemo: false } : undefined,
+        },
+        include: billingAdvanceInclude,
+        orderBy: [{ paidAt: 'desc' }, { createdAt: 'desc' }],
+      }),
+    ]);
+
+    return buildBillingReconciliation(invoices, advances, periodFrom, periodTo);
+  }
+
+  async listAdvances(clientId: string | undefined, user: AuthUser) {
+    const payments = await this.prisma.billingPayment.findMany({
       where: {
-        clientId: this.clientScopes.resolveClientFilter(user, query.clientId),
+        clientId: this.clientScopes.resolveClientFilter(user, clientId),
+        invoiceId: null,
         client: isBillingAdministrator(user) ? { isDemo: false } : undefined,
-        status: { not: BillingInvoiceStatus.CANCELLED },
-        periodFrom: periodFrom ? { gte: periodFrom } : undefined,
-        periodTo: periodTo ? { lte: periodTo } : undefined,
       },
-      include: billingReconciliationInvoiceInclude,
-      orderBy: [{ dueDate: 'asc' }, { periodFrom: 'desc' }, { createdAt: 'desc' }],
+      include: billingAdvanceInclude,
+      orderBy: [{ paidAt: 'desc' }, { createdAt: 'desc' }],
       take: 500,
     });
 
-    return buildBillingReconciliation(invoices, periodFrom, periodTo);
+    return buildBillingAdvances(payments);
+  }
+
+  async createAdvance(dto: CreateBillingAdvanceDto, user: AuthUser) {
+    this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+    const client = await this.prisma.client.findUnique({
+      where: { id: dto.clientId },
+      select: { id: true, code: true, name: true },
+    });
+    if (!client) {
+      throw new NotFoundException('Клиент не найден.');
+    }
+
+    const paidAt = dto.paidAt ? parseDate(dto.paidAt) : new Date();
+    const payment = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.billingPayment.create({
+        data: {
+          invoiceId: null,
+          clientId: dto.clientId,
+          amountRub: roundMoney(dto.amountRub),
+          paidAt,
+          method: normalizeText(dto.method) ?? 'Банковский перевод',
+          reference: normalizeText(dto.reference),
+          comment: normalizeText(dto.comment),
+          createdByUserId: user.id,
+        },
+        include: billingAdvanceInclude,
+      });
+
+      if (await isClientNotificationEnabled(tx, dto.clientId, ClientNotificationEvent.BILLING_PAYMENT_RECORDED)) {
+        await tx.clientNotification.create({
+          data: {
+            clientId: dto.clientId,
+            title: 'Аванс зачислен',
+            body: `Зачислен аванс ${formatRub(dto.amountRub)} руб. без привязки к счету.`,
+            severity: 'SUCCESS',
+            createdByUserId: user.id,
+          },
+        });
+      }
+
+      return created;
+    });
+
+    void this.telegram?.notifyClient(
+      dto.clientId,
+      [
+        'LOGOFF WMS: зачислен аванс.',
+        `Сумма: ${formatRub(dto.amountRub)} руб.`,
+        'Платеж не привязан к счету и уменьшает общий долг.',
+      ].join('\n'),
+    );
+
+    return payment;
+  }
+
+  async cancelAdvance(id: string, user: AuthUser) {
+    const payment = await this.prisma.billingPayment.findFirst({
+      where: { id, invoiceId: null },
+      select: { id: true, clientId: true, status: true },
+    });
+    if (!payment) {
+      throw new NotFoundException('Авансовый платеж не найден.');
+    }
+
+    this.clientScopes.requireClientAccess(user, payment.clientId, 'write');
+    if (payment.status === BillingPaymentStatus.CANCELLED) {
+      throw new BadRequestException('Авансовый платеж уже отменен.');
+    }
+
+    return this.prisma.billingPayment.update({
+      where: { id },
+      data: { status: BillingPaymentStatus.CANCELLED },
+      include: billingAdvanceInclude,
+    });
   }
 
   async createCharge(dto: CreateBillingChargeDto, user: AuthUser) {
@@ -1263,9 +1367,29 @@ const billingReconciliationInvoiceInclude = {
   },
 } satisfies Prisma.BillingInvoiceInclude;
 
+const billingAdvanceInclude = {
+  client: {
+    select: {
+      id: true,
+      code: true,
+      name: true,
+    },
+  },
+  createdBy: {
+    select: {
+      id: true,
+      email: true,
+      name: true,
+    },
+  },
+} satisfies Prisma.BillingPaymentInclude;
+
 type BillingChargeWithRelations = Prisma.BillingChargeGetPayload<{ include: typeof billingChargeInclude }>;
 type BillingInvoiceForReconciliation = Prisma.BillingInvoiceGetPayload<{
   include: typeof billingReconciliationInvoiceInclude;
+}>;
+type BillingAdvanceWithRelations = Prisma.BillingPaymentGetPayload<{
+  include: typeof billingAdvanceInclude;
 }>;
 
 type ServiceHistoryGroup = {
@@ -1371,8 +1495,70 @@ function buildServiceHistory(charges: BillingChargeWithRelations[], periodFrom?:
   };
 }
 
+function buildBillingAdvances(payments: BillingAdvanceWithRelations[]) {
+  const clients = new Map<
+    string,
+    {
+      client: { id: string; code: string; name: string };
+      balanceRub: number;
+      recordedCount: number;
+      cancelledCount: number;
+      latestPaidAt: string | null;
+    }
+  >();
+
+  payments.forEach((payment) => {
+    let client = clients.get(payment.clientId);
+    if (!client) {
+      client = {
+        client: payment.client,
+        balanceRub: 0,
+        recordedCount: 0,
+        cancelledCount: 0,
+        latestPaidAt: null,
+      };
+      clients.set(payment.clientId, client);
+    }
+
+    const amountRub = decimalToNumber(payment.amountRub) ?? 0;
+    if (payment.status === BillingPaymentStatus.RECORDED) {
+      client.balanceRub = roundMoney(client.balanceRub + amountRub);
+      client.recordedCount += 1;
+      const paidAt = payment.paidAt.toISOString();
+      client.latestPaidAt = !client.latestPaidAt || paidAt > client.latestPaidAt ? paidAt : client.latestPaidAt;
+    } else {
+      client.cancelledCount += 1;
+    }
+  });
+
+  const summaries = [...clients.values()].sort(
+    (left, right) => right.balanceRub - left.balanceRub || left.client.code.localeCompare(right.client.code),
+  );
+
+  return {
+    totalBalanceRub: roundMoney(summaries.reduce((sum, client) => sum + client.balanceRub, 0)),
+    clients: summaries,
+    entries: payments.map((payment) => ({
+      id: payment.id,
+      clientId: payment.clientId,
+      invoiceId: payment.invoiceId,
+      amountRub: decimalToNumber(payment.amountRub) ?? 0,
+      paidAt: payment.paidAt.toISOString(),
+      method: payment.method,
+      reference: payment.reference,
+      comment: payment.comment,
+      status: payment.status,
+      createdAt: payment.createdAt.toISOString(),
+      updatedAt: payment.updatedAt.toISOString(),
+      client: payment.client,
+      createdBy: payment.createdBy,
+    })),
+  };
+}
+
 function buildBillingReconciliation(
   invoices: BillingInvoiceForReconciliation[],
+  advances: BillingAdvanceWithRelations[],
   periodFrom?: Date,
   periodTo?: Date,
   now = new Date(),
@@ -1387,7 +1573,11 @@ function buildBillingReconciliation(
       overdueInvoicesCount: number;
       totalRub: number;
       paidRub: number;
+      grossDebtRub: number;
+      advanceRub: number;
       debtRub: number;
+      creditRub: number;
+      grossOverdueRub: number;
       overdueRub: number;
       nearestDueDate: string | null;
       latestInvoiceDate: string | null;
@@ -1415,7 +1605,11 @@ function buildBillingReconciliation(
     overdueInvoicesCount: 0,
     totalRub: 0,
     paidRub: 0,
+    grossDebtRub: 0,
+    advanceRub: 0,
     debtRub: 0,
+    creditRub: 0,
+    grossOverdueRub: 0,
     overdueRub: 0,
   };
 
@@ -1439,7 +1633,11 @@ function buildBillingReconciliation(
         overdueInvoicesCount: 0,
         totalRub: 0,
         paidRub: 0,
+        grossDebtRub: 0,
+        advanceRub: 0,
         debtRub: 0,
+        creditRub: 0,
+        grossOverdueRub: 0,
         overdueRub: 0,
         nearestDueDate: null,
         latestInvoiceDate: null,
@@ -1454,8 +1652,8 @@ function buildBillingReconciliation(
     client.overdueInvoicesCount += isOverdue ? 1 : 0;
     client.totalRub = roundMoney(client.totalRub + totalRub);
     client.paidRub = roundMoney(client.paidRub + paidRub);
-    client.debtRub = roundMoney(client.debtRub + remainingRub);
-    client.overdueRub = roundMoney(client.overdueRub + (isOverdue ? remainingRub : 0));
+    client.grossDebtRub = roundMoney(client.grossDebtRub + remainingRub);
+    client.grossOverdueRub = roundMoney(client.grossOverdueRub + (isOverdue ? remainingRub : 0));
     client.nearestDueDate =
       isOpen && dueDate && (!client.nearestDueDate || dueDate < client.nearestDueDate) ? dueDate : client.nearestDueDate;
     client.latestInvoiceDate =
@@ -1481,25 +1679,71 @@ function buildBillingReconciliation(
     totals.overdueInvoicesCount += isOverdue ? 1 : 0;
     totals.totalRub = roundMoney(totals.totalRub + totalRub);
     totals.paidRub = roundMoney(totals.paidRub + paidRub);
-    totals.debtRub = roundMoney(totals.debtRub + remainingRub);
-    totals.overdueRub = roundMoney(totals.overdueRub + (isOverdue ? remainingRub : 0));
+    totals.grossDebtRub = roundMoney(totals.grossDebtRub + remainingRub);
+    totals.grossOverdueRub = roundMoney(totals.grossOverdueRub + (isOverdue ? remainingRub : 0));
   });
+
+  advances.forEach((advance) => {
+    let client = clients.get(advance.clientId);
+    if (!client) {
+      client = {
+        client: advance.client,
+        invoicesCount: 0,
+        openInvoicesCount: 0,
+        paidInvoicesCount: 0,
+        overdueInvoicesCount: 0,
+        totalRub: 0,
+        paidRub: 0,
+        grossDebtRub: 0,
+        advanceRub: 0,
+        debtRub: 0,
+        creditRub: 0,
+        grossOverdueRub: 0,
+        overdueRub: 0,
+        nearestDueDate: null,
+        latestInvoiceDate: null,
+        invoices: [],
+      };
+      clients.set(advance.clientId, client);
+    }
+    client.advanceRub = roundMoney(client.advanceRub + (decimalToNumber(advance.amountRub) ?? 0));
+  });
+
+  const reconciledClients = [...clients.values()]
+    .map((client) => {
+      const debtRub = roundMoney(Math.max(0, client.grossDebtRub - client.advanceRub));
+      const creditRub = roundMoney(Math.max(0, client.advanceRub - client.grossDebtRub));
+      const overdueRub = roundMoney(Math.max(0, client.grossOverdueRub - client.advanceRub));
+      totals.advanceRub = roundMoney(totals.advanceRub + client.advanceRub);
+      totals.debtRub = roundMoney(totals.debtRub + debtRub);
+      totals.creditRub = roundMoney(totals.creditRub + creditRub);
+      totals.overdueRub = roundMoney(totals.overdueRub + overdueRub);
+
+      return {
+        ...client,
+        debtRub,
+        creditRub,
+        overdueRub,
+        invoices: client.invoices.sort((left, right) => {
+          const leftDue = left.dueDate ?? '9999-12-31';
+          const rightDue = right.dueDate ?? '9999-12-31';
+          return leftDue.localeCompare(rightDue) || right.periodFrom.localeCompare(left.periodFrom);
+        }),
+      };
+    })
+    .sort(
+      (left, right) =>
+        right.debtRub - left.debtRub ||
+        right.overdueRub - left.overdueRub ||
+        left.client.code.localeCompare(right.client.code),
+    );
 
   return {
     periodFrom: periodFrom?.toISOString() ?? null,
     periodTo: periodTo?.toISOString() ?? null,
     generatedAt: now.toISOString(),
     totals,
-    clients: [...clients.values()]
-      .map((client) => ({
-        ...client,
-        invoices: client.invoices.sort((left, right) => {
-          const leftDue = left.dueDate ?? '9999-12-31';
-          const rightDue = right.dueDate ?? '9999-12-31';
-          return leftDue.localeCompare(rightDue) || right.periodFrom.localeCompare(left.periodFrom);
-        }),
-      }))
-      .sort((left, right) => right.debtRub - left.debtRub || right.overdueRub - left.overdueRub || left.client.code.localeCompare(right.client.code)),
+    clients: reconciledClients,
   };
 }
 
