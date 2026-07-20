@@ -319,7 +319,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
         </div>
 
         {activeView === 'calculator' ? (
-          <FbsCostCalculator />
+          <FbsCostCalculator session={session} isAdmin={canManagePricing} />
         ) : !selectedClientId ? (
           <FbsNotice icon={Boxes} title="Выберите клиента" text="Заказы загружаются отдельно для каждого клиентского кабинета." />
         ) : activeView === 'pricing' && canManagePricing ? (
