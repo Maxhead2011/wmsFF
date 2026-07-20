@@ -1,8 +1,10 @@
 import { Boxes, Calculator, PackageCheck, Percent, Sticker, Truck } from 'lucide-react';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
+  fetchFbsCalculatorDestinations,
   fetchLogisticsTariffSet,
   fetchLogisticsTariffSets,
+  quoteFbsCalculator,
   quoteLogistics,
   type AuthSession,
   type LogisticsQuoteResult,
@@ -11,9 +13,7 @@ import {
 } from '../../lib/api';
 
 const MAX_QUANTITY = 3000;
-const FIXED_DELIVERY_LIMIT = 1000;
 const ITEMS_PER_BOX = 14;
-const BOXES_PER_PALLET = 16;
 
 const moneyFormatter = new Intl.NumberFormat('ru-RU', {
   style: 'currency',
@@ -43,15 +43,8 @@ type FbsServicesCalculation = {
   servicesWithMarkup: number;
 };
 
-type FbsCalculatorResult = {
-  quantity: number;
-  services: FbsServicesCalculation;
-  kavkaz: FbsDirectionCalculation;
-  vnukovo: FbsDirectionCalculation;
-};
-
 type CalculatorDisplayResult =
-  | { mode: 'client'; calculation: FbsCalculatorResult }
+  | { mode: 'client'; destination: string; totalWithTax: number }
   | {
       mode: 'admin';
       quantity: number;
@@ -72,9 +65,32 @@ export function FbsCostCalculator({ session, isAdmin }: FbsCostCalculatorProps) 
   const [tariffSets, setTariffSets] = useState<LogisticsTariffSetSummary[]>([]);
   const [tariffSetId, setTariffSetId] = useState('');
   const [tariffDetail, setTariffDetail] = useState<LogisticsTariffSetDetail | null>(null);
+  const [clientDestinations, setClientDestinations] = useState<string[]>([]);
   const [destination, setDestination] = useState('');
   const [isLoadingTariffs, setLoadingTariffs] = useState(false);
   const [isCalculating, setCalculating] = useState(false);
+
+  useEffect(() => {
+    if (isAdmin) return;
+    let active = true;
+    setLoadingTariffs(true);
+    void fetchFbsCalculatorDestinations(session.accessToken)
+      .then(({ destinations }) => {
+        if (!active) return;
+        setClientDestinations(destinations);
+        setDestination((current) => current || destinations[0] || '');
+      })
+      .catch((caught) => {
+        if (!active) return;
+        setError(caught instanceof Error ? caught.message : 'Не удалось загрузить список городов.');
+      })
+      .finally(() => {
+        if (active) setLoadingTariffs(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [isAdmin, session.accessToken]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -133,8 +149,8 @@ export function FbsCostCalculator({ session, isAdmin }: FbsCostCalculatorProps) 
   }, [isAdmin, session.accessToken, tariffSetId]);
 
   const destinationOptions = useMemo(
-    () => buildDestinationOptions(tariffDetail),
-    [tariffDetail],
+    () => (isAdmin ? buildDestinationOptions(tariffDetail) : clientDestinations),
+    [clientDestinations, isAdmin, tariffDetail],
   );
 
   async function calculate(event: FormEvent<HTMLFormElement>) {
@@ -151,14 +167,36 @@ export function FbsCostCalculator({ session, isAdmin }: FbsCostCalculatorProps) 
       return;
     }
 
-    if (!isAdmin) {
-      setError('');
-      setResult({ mode: 'client', calculation: calculateFbsCost(quantity) });
+    if (!destination) {
+      setError('Выберите город доставки.');
+      setResult(null);
       return;
     }
 
-    if (!tariffSetId || !destination) {
-      setError('Выберите набор тарифов и город доставки.');
+    if (!isAdmin) {
+      setCalculating(true);
+      setError('');
+      setResult(null);
+      try {
+        const calculation = await quoteFbsCalculator(session.accessToken, { quantity, destination });
+        if (calculation.totalWithTax == null || calculation.requiresManualReview) {
+          throw new Error('Для выбранного города стоимость требует ручного расчёта.');
+        }
+        setResult({
+          mode: 'client',
+          destination: calculation.destination,
+          totalWithTax: calculation.totalWithTax,
+        });
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : 'Не удалось рассчитать выбранный город.');
+      } finally {
+        setCalculating(false);
+      }
+      return;
+    }
+
+    if (!tariffSetId) {
+      setError('Выберите набор тарифов логистики.');
       setResult(null);
       return;
     }
@@ -215,7 +253,7 @@ export function FbsCostCalculator({ session, isAdmin }: FbsCostCalculatorProps) 
         </div>
 
         <form
-          className={`fbs-calculator__form${isAdmin ? ' fbs-calculator__form--admin' : ''}`}
+          className={`fbs-calculator__form${isAdmin ? ' fbs-calculator__form--admin' : ' fbs-calculator__form--client'}`}
           onSubmit={calculate}
           noValidate
         >
@@ -255,27 +293,27 @@ export function FbsCostCalculator({ session, isAdmin }: FbsCostCalculatorProps) 
                   ))}
                 </select>
               </label>
-              <label htmlFor="fbs-calculator-city">
-                <span>Город доставки</span>
-                <select
-                  id="fbs-calculator-city"
-                  value={destination}
-                  onChange={(event) => {
-                    setDestination(event.target.value);
-                    setResult(null);
-                    setError('');
-                  }}
-                  disabled={isLoadingTariffs || destinationOptions.length === 0}
-                  required
-                >
-                  <option value="">Выберите город</option>
-                  {destinationOptions.map((city) => (
-                    <option key={normalizeLogisticsPoint(city)} value={city}>{city}</option>
-                  ))}
-                </select>
-              </label>
             </>
           ) : null}
+          <label htmlFor="fbs-calculator-city">
+            <span>Город доставки</span>
+            <select
+              id="fbs-calculator-city"
+              value={destination}
+              onChange={(event) => {
+                setDestination(event.target.value);
+                setResult(null);
+                setError('');
+              }}
+              disabled={isLoadingTariffs || destinationOptions.length === 0}
+              required
+            >
+              <option value="">Выберите город</option>
+              {destinationOptions.map((city) => (
+                <option key={normalizeLogisticsPoint(city)} value={city}>{city}</option>
+              ))}
+            </select>
+          </label>
           <button type="submit" disabled={isCalculating || (isAdmin && isLoadingTariffs)}>
             <Calculator size={18} aria-hidden="true" />
             {isCalculating ? 'Рассчитываю' : 'Рассчитать стоимость'}
@@ -296,8 +334,7 @@ export function FbsCostCalculator({ session, isAdmin }: FbsCostCalculatorProps) 
 
       {result?.mode === 'client' ? (
         <section className="fbs-calculator__client-results" aria-live="polite">
-          <ClientTotal name="Кавказский Бульвар" value={result.calculation.kavkaz.totalWithTax} />
-          <ClientTotal name="Внуково" value={result.calculation.vnukovo.totalWithTax} />
+          <ClientTotal name={result.destination} value={result.totalWithTax} />
         </section>
       ) : result?.mode === 'admin' ? (
         <section className="fbs-calculator__results" aria-live="polite">
@@ -451,16 +488,6 @@ function BreakdownRow({ label, value, total = false }: { label: string; value: n
   );
 }
 
-export function calculateFbsCost(quantity: number): FbsCalculatorResult {
-  const services = calculateServices(quantity);
-  return {
-    quantity,
-    services,
-    kavkaz: calculateDirection(quantity, services, 3000, getKavkazPalletPrice),
-    vnukovo: calculateDirection(quantity, services, 1500, getVnukovoPalletPrice),
-  };
-}
-
 function calculateServices(quantity: number): FbsServicesCalculation {
   const boxesCount = Math.ceil(quantity / ITEMS_PER_BOX);
   const processingCost = quantity * 10;
@@ -478,27 +505,6 @@ function calculateServices(quantity: number): FbsServicesCalculation {
     servicesCost,
     servicesWithMarkup: servicesCost * 1.5,
   };
-}
-
-function calculateDirection(
-  quantity: number,
-  services: FbsServicesCalculation,
-  fixedDeliveryPrice: number,
-  getPalletPrice: (palletsCount: number) => number,
-): FbsDirectionCalculation {
-  let palletsCount = 0;
-  let palletPrice = 0;
-  let deliveryPrice = fixedDeliveryPrice;
-  let deliveryType: FbsDirectionCalculation['deliveryType'] = 'fixed';
-
-  if (quantity > FIXED_DELIVERY_LIMIT) {
-    palletsCount = Math.ceil(services.boxesCount / BOXES_PER_PALLET);
-    palletPrice = getPalletPrice(palletsCount);
-    deliveryPrice = palletsCount * palletPrice;
-    deliveryType = 'pallet';
-  }
-
-  return buildDirectionCalculation(services, deliveryPrice, palletsCount, palletPrice, deliveryType);
 }
 
 function calculateQuotedDirection(
@@ -535,20 +541,6 @@ function buildDirectionCalculation(
 
 function addTax(amount: number) {
   return (amount / 94) * 100;
-}
-
-function getKavkazPalletPrice(palletsCount: number) {
-  if (palletsCount === 1) return 3500;
-  if (palletsCount === 2) return 3000;
-  if (palletsCount === 3) return 2800;
-  if (palletsCount === 4) return 2500;
-  if (palletsCount === 5) return 2300;
-  if (palletsCount === 6) return 2200;
-  return 2000;
-}
-
-function getVnukovoPalletPrice(palletsCount: number) {
-  return palletsCount <= 2 ? 1500 : 1200;
 }
 
 function buildDestinationOptions(tariffSet: LogisticsTariffSetDetail | null) {

@@ -1844,6 +1844,12 @@ export type FbsBillingSettings = {
 
 export type UpdateFbsBillingSettingsPayload = Omit<FbsBillingSettings['settings'], 'id'>;
 
+export type FbsCalculatorQuote = {
+  destination: string;
+  totalWithTax: number | null;
+  requiresManualReview: boolean;
+};
+
 export type UpsertMarketplaceConnectionPayload = {
   clientId: string;
   marketplace: MarketplaceType;
@@ -4578,6 +4584,23 @@ export async function updateFbsBillingSettings(
 ) {
   return request<FbsBillingSettings>(`/marketplace-connections/fbs/billing-settings/${clientId}`, {
     method: 'PUT',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function fetchFbsCalculatorDestinations(accessToken: string) {
+  return request<{ destinations: string[] }>('/marketplace-connections/fbs/calculator/destinations', {
+    accessToken,
+  });
+}
+
+export async function quoteFbsCalculator(
+  accessToken: string,
+  payload: { quantity: number; destination: string },
+) {
+  return request<FbsCalculatorQuote>('/marketplace-connections/fbs/calculator/quote', {
+    method: 'POST',
     body: payload,
     accessToken,
   });

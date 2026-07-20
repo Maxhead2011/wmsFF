@@ -153,6 +153,77 @@ describe('LogisticsService', () => {
     expect(quote.estimatedTotalRub).toBe(35000);
   });
 
+  it('возвращает клиенту FBS только город и итоговую стоимость с налогом', async () => {
+    const prisma = {
+      logisticsTariffSet: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'tariff-active',
+          name: 'Действующий тариф',
+          sourceFile: 'tariff.xlsx',
+          note: null,
+        }),
+      },
+      logisticsDirection: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'direction-1',
+            tariffSetId: 'tariff-active',
+            origin: 'Москва',
+            destination: 'Казань',
+            note: null,
+            tiers: [
+              {
+                label: 'до 10 коробов',
+                minPallets: null,
+                maxPallets: null,
+                maxBoxes: 10,
+                pricingMode: LogisticsPricingMode.TOTAL,
+                priceRub: 5000,
+              },
+            ],
+          },
+        ]),
+      },
+    };
+    const deliveryService = new LogisticsService(prisma as never, {} as never);
+
+    const result = await deliveryService.quoteFbsCalculator({
+      quantity: 14,
+      destination: 'Казань',
+    });
+
+    expect(result).toEqual({
+      destination: 'Казань',
+      totalWithTax: 5832.98,
+      requiresManualReview: false,
+    });
+    expect(Object.keys(result).sort()).toEqual([
+      'destination',
+      'requiresManualReview',
+      'totalWithTax',
+    ]);
+  });
+
+  it('отдаёт клиентскому FBS-калькулятору только города активного тарифа', async () => {
+    const prisma = {
+      logisticsTariffSet: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'tariff-active' }),
+      },
+      logisticsDirection: {
+        findMany: vi.fn().mockResolvedValue([
+          { destination: 'Казань' },
+          { destination: 'КАЗАНЬ' },
+          { destination: 'Воронеж' },
+        ]),
+      },
+    };
+    const deliveryService = new LogisticsService(prisma as never, {} as never);
+
+    await expect(deliveryService.listFbsCalculatorDestinations()).resolves.toEqual({
+      destinations: ['Воронеж', 'Казань'],
+    });
+  });
+
   it('не делает авторасчет для неоднозначных тарифных строк', () => {
     const total = service.calculateQuoteTotal(
       {

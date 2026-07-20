@@ -52,6 +52,7 @@ const DEFAULT_LOGISTICS_ORIGIN = 'Москва';
 const MAX_BOXES_FOR_BOX_TARIFF = 10;
 const BOXES_PER_PALLET = 16;
 const EXTRA_BOXES_PER_PALLET = 4;
+const FBS_ITEMS_PER_BOX = 14;
 
 @Injectable()
 export class LogisticsService {
@@ -230,6 +231,66 @@ export class LogisticsService {
       estimatedTotalRub,
       requiresManualReview: tier.pricingMode === LogisticsPricingMode.MANUAL_REVIEW,
       note: tier.pricingMode === LogisticsPricingMode.MANUAL_REVIEW ? direction.note : tariffSet.note,
+    };
+  }
+
+  async listFbsCalculatorDestinations() {
+    const tariffSet = await this.findActiveTariffSet(new Date());
+    if (!tariffSet) {
+      throw new NotFoundException('Активный набор тарифов логистики не найден.');
+    }
+
+    const directions = await this.prisma.logisticsDirection.findMany({
+      where: {
+        tariffSetId: tariffSet.id,
+        origin: { equals: DEFAULT_LOGISTICS_ORIGIN, mode: 'insensitive' },
+      },
+      select: { destination: true },
+      orderBy: { destination: 'asc' },
+    });
+    const unique = new Map<string, string>();
+    directions.forEach((direction) => {
+      const destination = direction.destination.trim();
+      const key = this.normalizePoint(destination);
+      if (destination && !unique.has(key)) {
+        unique.set(key, destination);
+      }
+    });
+    const destinations = [...unique.values()].sort((left, right) =>
+      left.localeCompare(right, 'ru'),
+    );
+
+    return { destinations };
+  }
+
+  async quoteFbsCalculator(dto: { quantity: number; destination: string }) {
+    const boxes = Math.ceil(dto.quantity / FBS_ITEMS_PER_BOX);
+    const logistics = await this.quote({
+      destination: dto.destination,
+      boxes,
+    });
+    if (logistics.estimatedTotalRub == null) {
+      return {
+        destination: logistics.route.destination,
+        totalWithTax: null,
+        requiresManualReview: true,
+      };
+    }
+
+    const processingCost = dto.quantity * 10;
+    const stickersCost = dto.quantity * 3;
+    const boxesCost = boxes * 100;
+    const assemblyCost = boxes * 40;
+    const servicesWithMarkup =
+      (processingCost + stickersCost + boxesCost + assemblyCost) * 1.5;
+    const totalWithTax = Number(
+      (((servicesWithMarkup + logistics.estimatedTotalRub) / 94) * 100).toFixed(2),
+    );
+
+    return {
+      destination: logistics.route.destination,
+      totalWithTax,
+      requiresManualReview: false,
     };
   }
 

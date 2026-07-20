@@ -3,6 +3,8 @@ import { ApiTags } from '@nestjs/swagger';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
+import { LogisticsService } from '../logistics/logistics.service';
+import { QuoteFbsCalculatorDto } from './dto/quote-fbs-calculator.dto';
 import { UpdateFbsBillingSettingsDto } from './dto/update-fbs-billing-settings.dto';
 import { UpdateMarketplaceConnectionDto } from './dto/update-marketplace-connection.dto';
 import { UpsertMarketplaceConnectionDto } from './dto/upsert-marketplace-connection.dto';
@@ -12,7 +14,10 @@ import { MarketplaceConnectionsService } from './marketplace-connections.service
 @RequirePermissions('clients:read')
 @Controller('marketplace-connections')
 export class MarketplaceConnectionsController {
-  constructor(private readonly connections: MarketplaceConnectionsService) {}
+  constructor(
+    private readonly connections: MarketplaceConnectionsService,
+    private readonly logistics: LogisticsService,
+  ) {}
 
   @Get()
   list(@CurrentUser() user: AuthUser, @Query('clientId') clientId?: string) {
@@ -33,6 +38,18 @@ export class MarketplaceConnectionsController {
   @RequirePermissions()
   createFbsConnection(@Body() dto: UpsertMarketplaceConnectionDto, @CurrentUser() user: AuthUser) {
     return this.connections.createFbsConnection(dto, user);
+  }
+
+  @Get('fbs/calculator/destinations')
+  @RequirePermissions()
+  listFbsCalculatorDestinations() {
+    return this.logistics.listFbsCalculatorDestinations();
+  }
+
+  @Post('fbs/calculator/quote')
+  @RequirePermissions()
+  quoteFbsCalculator(@Body() dto: QuoteFbsCalculatorDto) {
+    return this.logistics.quoteFbsCalculator(dto);
   }
 
   @Get('fbs/billing-settings/:clientId')
