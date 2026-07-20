@@ -923,13 +923,13 @@ export class MobileService {
     const setting = await this.prisma.systemSetting.findUnique({ where: { key: 'mobile.android.version' } });
     const value = asRecord(setting?.value);
     return {
-      currentVersion: stringValue(value.currentVersion, '0.3.3'),
+      currentVersion: stringValue(value.currentVersion, '0.3.4'),
       minimumVersion: stringValue(value.minimumVersion, '0.1.0'),
       mandatory: value.mandatory === true,
       apkUrl: stringValue(value.apkUrl, '/downloads/logoff-wms-mobile.apk'),
       releaseNotes: stringValue(
         value.releaseNotes,
-        'Добавлен нативный модуль FBS: заказы, стоимость обработки, архив и настройка тарифов по выбранному клиенту.',
+        'Заявки получили отдельную цветовую маркировку: сданные — зелёные, отменённые — красные, в работе — синие.',
       ),
       updatedAt: setting?.updatedAt ?? null,
     };

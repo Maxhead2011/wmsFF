@@ -52,11 +52,30 @@ public class JsonRowAdapter extends RecyclerView.Adapter<JsonRowAdapter.Holder> 
             binding.subtitle.setVisibility(row.subtitle().isEmpty() ? View.GONE : View.VISIBLE);
             binding.status.setText(StatusLabels.label(row.status()));
             binding.status.setVisibility(row.status().isEmpty() ? View.GONE : View.VISIBLE);
-            boolean success = "PAID".equals(row.status()) || "DONE".equals(row.status());
-            binding.status.setBackgroundResource(success ? pro.logoff.wms.mobile.R.drawable.status_background_success : pro.logoff.wms.mobile.R.drawable.status_background);
-            binding.status.setTextColor(ContextCompat.getColor(binding.getRoot().getContext(), success ? pro.logoff.wms.mobile.R.color.logoff_success : pro.logoff.wms.mobile.R.color.logoff_red_dark));
-            binding.getRoot().setCardBackgroundColor(ContextCompat.getColor(binding.getRoot().getContext(), success ? pro.logoff.wms.mobile.R.color.logoff_success_surface : pro.logoff.wms.mobile.R.color.logoff_card));
-            binding.getRoot().setStrokeColor(ContextCompat.getColor(binding.getRoot().getContext(), success ? pro.logoff.wms.mobile.R.color.logoff_success : pro.logoff.wms.mobile.R.color.logoff_border));
+            int badgeBackground = pro.logoff.wms.mobile.R.drawable.status_background;
+            int statusColor = pro.logoff.wms.mobile.R.color.logoff_red_dark;
+            int cardBackground = pro.logoff.wms.mobile.R.color.logoff_card;
+            int strokeColor = pro.logoff.wms.mobile.R.color.logoff_border;
+            if ("PAID".equals(row.status()) || "DONE".equals(row.status())) {
+                badgeBackground = pro.logoff.wms.mobile.R.drawable.status_background_success;
+                statusColor = pro.logoff.wms.mobile.R.color.logoff_success;
+                cardBackground = pro.logoff.wms.mobile.R.color.logoff_success_surface;
+                strokeColor = pro.logoff.wms.mobile.R.color.logoff_success;
+            } else if ("IN_WORK".equals(row.status())) {
+                badgeBackground = pro.logoff.wms.mobile.R.drawable.status_background_work;
+                statusColor = pro.logoff.wms.mobile.R.color.logoff_blue;
+                cardBackground = pro.logoff.wms.mobile.R.color.logoff_blue_soft;
+                strokeColor = pro.logoff.wms.mobile.R.color.logoff_blue;
+            } else if ("CANCELLED".equals(row.status()) || "REJECTED".equals(row.status())) {
+                badgeBackground = pro.logoff.wms.mobile.R.drawable.status_background;
+                statusColor = pro.logoff.wms.mobile.R.color.logoff_red_dark;
+                cardBackground = pro.logoff.wms.mobile.R.color.logoff_red_soft;
+                strokeColor = pro.logoff.wms.mobile.R.color.logoff_red;
+            }
+            binding.status.setBackgroundResource(badgeBackground);
+            binding.status.setTextColor(ContextCompat.getColor(binding.getRoot().getContext(), statusColor));
+            binding.getRoot().setCardBackgroundColor(ContextCompat.getColor(binding.getRoot().getContext(), cardBackground));
+            binding.getRoot().setStrokeColor(ContextCompat.getColor(binding.getRoot().getContext(), strokeColor));
             binding.getRoot().setOnClickListener(view -> listener.onClick(row));
         }
     }
