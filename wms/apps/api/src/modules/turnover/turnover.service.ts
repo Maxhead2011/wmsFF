@@ -3,6 +3,7 @@ import { ClientRequestStatus, ClientRequestType, MovementType, Prisma, StockStat
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
+import { receiptBoxCodePrefixForDate, receiptDateFromBoxCode } from '../../common/receipt-batches';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { ListTurnoverDto, TurnoverBoxDetailsDto, TurnoverStatisticsDto, TurnoverStockExportDto, TurnoverSuggestionsDto } from './dto/list-turnover.dto';
@@ -854,17 +855,33 @@ export class TurnoverService {
       throw new NotFoundException('Клиент не найден.');
     }
 
-    const movementDateRange = dateRange(query.dateFrom, query.dateTo);
-    const movements = await this.prisma.stockMovement.findMany({
+    const receiptBatchDate = query.receiptBatchDate?.trim() || null;
+    const receiptBoxPrefix = receiptBatchDate ? receiptBoxCodePrefixForDate(receiptBatchDate) : null;
+    if (receiptBatchDate && !receiptBoxPrefix) {
+      throw new BadRequestException('Дата партии приемки должна быть корректной датой в формате ГГГГ-ММ-ДД.');
+    }
+
+    const movementDateRange = receiptBatchDate ? undefined : dateRange(query.dateFrom, query.dateTo);
+    const candidateMovements = await this.prisma.stockMovement.findMany({
       where: {
         clientId: client.id,
         quantity: { gt: 0 },
-        type: { in: INCOMING_DOCUMENT_MOVEMENT_TYPES },
+        type: receiptBatchDate ? MovementType.RECEIPT : { in: INCOMING_DOCUMENT_MOVEMENT_TYPES },
         ...(movementDateRange ? { createdAt: movementDateRange } : {}),
+        ...(receiptBoxPrefix
+          ? { box: { code: { startsWith: receiptBoxPrefix, mode: Prisma.QueryMode.insensitive } } }
+          : {}),
       },
       include: receiptPeriodInclude,
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
+    const movements = receiptBatchDate
+      ? candidateMovements.filter(
+          (movement) =>
+            Boolean(movement.box?.code) &&
+            receiptDateFromBoxCode(movement.box!.code, movement.createdAt) === receiptBatchDate,
+        )
+      : candidateMovements;
 
     const document = buildReceiptPeriodDocument(client, movements, query);
     const content = buildTurnoverReceiptPeriodWorkbook(document);
@@ -1453,9 +1470,11 @@ function buildReceiptPeriodDocument(
   query: ListTurnoverDto,
 ): TurnoverReceiptPeriodDocument {
   const rows = movements.flatMap((movement) => receiptPeriodRowsFromMovement(movement));
-  const periodFrom = query.dateFrom ?? movements[0]?.createdAt.toISOString() ?? null;
-  const periodTo = query.dateTo ?? movements[movements.length - 1]?.createdAt.toISOString() ?? null;
-  const periodName = [query.dateFrom || 'all', query.dateTo || query.dateFrom || 'all'].join('_');
+  const periodFrom = query.receiptBatchDate ?? query.dateFrom ?? movements[0]?.createdAt.toISOString() ?? null;
+  const periodTo = query.receiptBatchDate ?? query.dateTo ?? movements[movements.length - 1]?.createdAt.toISOString() ?? null;
+  const periodName = query.receiptBatchDate
+    ? `batch-${query.receiptBatchDate}`
+    : [query.dateFrom || 'all', query.dateTo || query.dateFrom || 'all'].join('_');
 
   return {
     generatedAt: new Date().toISOString(),

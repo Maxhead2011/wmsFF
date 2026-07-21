@@ -45,8 +45,7 @@ export function ReceiptBatchesPanel({ fixedClientId, session }: { fixedClientId?
     try {
       const blob = await downloadTurnoverReceiptPeriodXlsx(session.accessToken, {
         clientId,
-        dateFrom: batch.date,
-        dateTo: batch.date,
+        receiptBatchDate: batch.date,
       });
       downloadBlob(blob, `${batch.title}.xlsx`);
     } catch (error) {

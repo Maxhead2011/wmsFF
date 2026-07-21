@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { BillingUnit, MovementType, Prisma, StockStatus, TsdOperationStatus, TsdReviewReason } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
+import { receiptDateFromBoxCode } from '../../common/receipt-batches';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { BillingService } from '../billing/billing.service';
@@ -1707,18 +1708,6 @@ function goodsArrivalFromAudit(row: { id: string; payload: Prisma.JsonValue | nu
     createdByUserId: row.userId,
     createdAt: row.createdAt.toISOString(),
   };
-}
-
-function receiptDateFromBoxCode(boxCode: string, fallback: Date) {
-  const match = boxCode.toLocaleUpperCase('ru-RU').match(/^FFL_LKB(\d{2})(\d{2})(\d{2})?(?:_|$)/);
-  if (!match) return moscowDateKey(fallback);
-  const year = match[3] ? 2000 + Number(match[3]) : Number(moscowDateKey(fallback).slice(0, 4));
-  const month = Number(match[2]);
-  const day = Number(match[1]);
-  const candidate = new Date(Date.UTC(year, month - 1, day));
-  return candidate.getUTCFullYear() === year && candidate.getUTCMonth() === month - 1 && candidate.getUTCDate() === day
-    ? toIsoDate(candidate)
-    : moscowDateKey(fallback);
 }
 
 function formatReceiptDate(value: string) {

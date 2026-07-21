@@ -31,6 +31,10 @@ export class ListTurnoverDto {
   dateTo?: string;
 
   @IsOptional()
+  @IsString()
+  receiptBatchDate?: string;
+
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)

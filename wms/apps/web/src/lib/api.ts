@@ -4429,12 +4429,13 @@ export async function downloadTurnoverMovementDocumentXlsx(accessToken: string, 
 
 export async function downloadTurnoverReceiptPeriodXlsx(
   accessToken: string,
-  filter: { clientId?: string; dateFrom?: string; dateTo?: string } = {},
+  filter: { clientId?: string; dateFrom?: string; dateTo?: string; receiptBatchDate?: string } = {},
 ) {
   return requestBlob(withQuery('/turnover/receipts.xlsx', {
     clientId: filter.clientId,
     dateFrom: filter.dateFrom,
     dateTo: filter.dateTo,
+    receiptBatchDate: filter.receiptBatchDate,
   }), accessToken);
 }
 
