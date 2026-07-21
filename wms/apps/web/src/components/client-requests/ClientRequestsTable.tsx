@@ -232,10 +232,12 @@ export function ClientRequestsTable({
                           className="client-request-action-button client-request-action-button--xlsx"
                           type="button"
                           onClick={() => onDownloadPickInstruction(request)}
-                          title="Скачать Excel-инструкцию сборки"
+                          title={isFbsRequest(request)
+                            ? 'Скачать лист подбора с QR/ШК, полученными из Wildberries'
+                            : 'Скачать Excel-инструкцию сборки'}
                         >
                           <FileDown size={15} aria-hidden="true" />
-                          <span>Инструкция Excel</span>
+                          <span>{isFbsRequest(request) ? 'Лист подбора' : 'Инструкция Excel'}</span>
                         </button>
                       ) : null}
                       {canPickRequest(request) ? (
@@ -411,6 +413,11 @@ function canShowWarehouseActions(request: ClientRequestSummary) {
 
 function canCancelRequest(request: ClientRequestSummary) {
   return request.type === 'OUTBOUND' && ['SUBMITTED', 'IN_REVIEW', 'APPROVED'].includes(request.status);
+}
+
+function isFbsRequest(request: ClientRequestSummary) {
+  return request.title.trim().toLocaleUpperCase('ru-RU').startsWith('FBS')
+    || request.comment?.toLocaleLowerCase('ru-RU').includes('создано из fbs-заказов:') === true;
 }
 
 function canSelectManualBoxes(request: ClientRequestSummary) {

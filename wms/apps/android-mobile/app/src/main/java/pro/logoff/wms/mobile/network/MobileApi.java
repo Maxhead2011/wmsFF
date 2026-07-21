@@ -36,6 +36,8 @@ public interface MobileApi {
     @POST("marketplace-connections/fbs/orders/request") Call<Map<String, Object>> createFbsRequest(@Body Map<String, Object> body);
     @Streaming @POST("marketplace-connections/fbs/orders/stickers.pdf") Call<ResponseBody> fbsOrderStickers(@Body Map<String, Object> body);
     @Streaming @POST("marketplace-connections/fbs/orders/cargo-place-stickers.pdf") Call<ResponseBody> fbsCargoPlaceStickers(@Body Map<String, Object> body);
+    @Streaming @POST("marketplace-connections/fbs/orders/supply-stickers.pdf") Call<ResponseBody> fbsSupplyStickers(@Body Map<String, Object> body);
+    @Streaming @GET("marketplace-connections/fbs/requests/{requestId}/pick-list.pdf") Call<ResponseBody> fbsRequestPickList(@Path("requestId") String requestId);
     @POST("marketplace-connections/fbs/connections") Call<Map<String, Object>> createFbsConnection(@Body Map<String, Object> body);
     @GET("marketplace-connections/fbs/calculator/destinations") Call<Map<String, Object>> fbsCalculatorDestinations();
     @POST("marketplace-connections/fbs/calculator/quote") Call<Map<String, Object>> fbsCalculatorQuote(@Body Map<String, Object> body);

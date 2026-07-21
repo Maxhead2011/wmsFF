@@ -4709,6 +4709,20 @@ export async function downloadFbsCargoPlaceStickersPdf(
   });
 }
 
+export async function downloadFbsSupplyStickersPdf(
+  accessToken: string,
+  payload: FbsOrderSelectionPayload,
+) {
+  return requestBlob('/marketplace-connections/fbs/orders/supply-stickers.pdf', accessToken, {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function downloadFbsRequestPickListPdf(accessToken: string, requestId: string) {
+  return requestBlob(`/marketplace-connections/fbs/requests/${requestId}/pick-list.pdf`, accessToken);
+}
+
 export async function createFbsMarketplaceConnection(
   accessToken: string,
   payload: UpsertMarketplaceConnectionPayload & { marketplace: 'WILDBERRIES' | 'OZON' },

@@ -495,6 +495,41 @@
   background: #fff7f7;
 }
 
+.fbs-table__shipment-group > tr:not(.fbs-table__shipment-heading) > td {
+  background: #f0fdf4;
+  border-bottom-color: #bbf7d0;
+}
+
+.fbs-table__shipment-group > .fbs-table__row--selected > td {
+  background: #dcfce7;
+}
+
+.fbs-table__shipment-heading td {
+  border-top: 2px solid #22c55e;
+  border-bottom: 1px solid #86efac;
+  background: #dcfce7;
+  color: #166534;
+  padding-block: 8px;
+}
+
+.fbs-table__shipment-heading td > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.fbs-table__shipment-heading td strong {
+  color: #166534;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.fbs-table__shipment-heading td span {
+  color: #15803d;
+  font-size: 11px;
+  font-weight: 750;
+}
+
 .fbs-table td strong,
 .fbs-table td small {
   display: block;

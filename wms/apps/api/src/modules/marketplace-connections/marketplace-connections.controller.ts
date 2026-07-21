@@ -82,6 +82,34 @@ export class MarketplaceConnectionsController {
     return new StreamableFile(file.buffer);
   }
 
+  @Post('fbs/orders/supply-stickers.pdf')
+  @RequirePermissions()
+  async getFbsSupplyStickersPdf(
+    @Body() dto: FbsOrderSelectionDto,
+    @CurrentUser() user: AuthUser,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const file = await this.connections.getFbsSupplyStickersPdf(dto, user);
+    response.setHeader('Content-Type', file.contentType);
+    response.setHeader('Content-Length', String(file.buffer.length));
+    response.setHeader('Content-Disposition', `attachment; filename="${file.fileName}"`);
+    return new StreamableFile(file.buffer);
+  }
+
+  @Get('fbs/requests/:requestId/pick-list.pdf')
+  @RequirePermissions()
+  async getFbsRequestPickListPdf(
+    @Param('requestId') requestId: string,
+    @CurrentUser() user: AuthUser,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const file = await this.connections.getFbsRequestPickListPdf(requestId, user);
+    response.setHeader('Content-Type', file.contentType);
+    response.setHeader('Content-Length', String(file.buffer.length));
+    response.setHeader('Content-Disposition', `attachment; filename="${file.fileName}"`);
+    return new StreamableFile(file.buffer);
+  }
+
   @Post('fbs/connections')
   @RequirePermissions()
   createFbsConnection(@Body() dto: UpsertMarketplaceConnectionDto, @CurrentUser() user: AuthUser) {

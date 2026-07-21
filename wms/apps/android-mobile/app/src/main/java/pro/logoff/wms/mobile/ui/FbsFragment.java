@@ -1,6 +1,7 @@
 package pro.logoff.wms.mobile.ui;
 
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.InputType;
@@ -469,8 +470,14 @@ public class FbsFragment extends Fragment {
                     : "По вашему запросу ничего не найдено.");
             return;
         }
-        if (ACTIVE.equals(section)) addOrderActions(visible);
-        for (Map<String, Object> order : visible) addOrderCard(order);
+        if (ACTIVE.equals(section) || SHIPPED.equals(section)) addOrderActions(visible);
+        Map<String, List<Map<String, Object>>> groups = groupOrdersBySupply(visible);
+        for (List<Map<String, Object>> group : groups.values()) {
+            String supplyId = AppState.string(group.get(0).get("supplyId"));
+            boolean jointShipment = !supplyId.isBlank() && group.size() > 1;
+            if (jointShipment) addJointShipmentHeader(supplyId, group.size());
+            for (Map<String, Object> order : group) addOrderCard(order, jointShipment);
+        }
     }
 
     private void addOrdersSummary(int size, boolean connected) {
@@ -563,37 +570,42 @@ public class FbsFragment extends Fragment {
             List<Map<String, Object>> requests = filterOrders(selectedValues, "request");
             List<Map<String, Object>> stickers = filterOrders(selectedValues, "stickers");
             List<Map<String, Object>> cargo = filterOrders(selectedValues, "cargo");
+            List<Map<String, Object>> supply = filterOrders(selectedValues, "supply");
 
-            MaterialButton assemble = primaryButton("Собрать (" + assembly.size() + ")");
-            assemble.setEnabled(!orderActionRunning && !assembly.isEmpty());
-            assemble.setOnClickListener(view -> confirmAssemble(assembly));
-            addActionButton(content, assemble);
+            if (ACTIVE.equals(section)) {
+                MaterialButton assemble = primaryButton("Собрать (" + assembly.size() + ")");
+                assemble.setEnabled(!orderActionRunning && !assembly.isEmpty());
+                assemble.setOnClickListener(view -> confirmAssemble(assembly));
+                addActionButton(content, assemble);
 
-            MaterialButton request = outlinedButton("Создать заявку (" + requests.size() + ")");
-            request.setEnabled(!orderActionRunning && !requests.isEmpty());
-            request.setOnClickListener(view -> confirmCreateRequest(requests));
-            addActionButton(content, request);
+                MaterialButton request = outlinedButton("Создать заявку (" + requests.size() + ")");
+                request.setEnabled(!orderActionRunning && !requests.isEmpty());
+                request.setOnClickListener(view -> confirmCreateRequest(requests));
+                addActionButton(content, request);
+            }
 
-            MaterialButton stickersButton = outlinedButton("Скачать ШК (" + stickers.size() + ")");
+            MaterialButton stickersButton = outlinedButton("ШК заказов (" + stickers.size() + ")");
             stickersButton.setEnabled(!orderActionRunning && !stickers.isEmpty());
             stickersButton.setOnClickListener(view -> downloadOrderStickers(stickers));
             addActionButton(content, stickersButton);
 
-            if (requiresCargoPlaces()) {
-                MaterialButton cargoButton = outlinedButton("QR грузомест (" + cargo.size() + ")");
-                cargoButton.setEnabled(!orderActionRunning && !cargo.isEmpty());
-                cargoButton.setOnClickListener(view -> downloadCargoPlaceStickers(cargo));
-                addActionButton(content, cargoButton);
-            }
+            MaterialButton cargoButton = outlinedButton("ШК для ПВЗ (" + cargo.size() + ")");
+            cargoButton.setEnabled(!orderActionRunning && !cargo.isEmpty());
+            cargoButton.setOnClickListener(view -> downloadCargoPlaceStickers(cargo));
+            addActionButton(content, cargoButton);
+
+            MaterialButton supplyButton = outlinedButton("ШК для СЦ (" + supply.size() + ")");
+            supplyButton.setEnabled(!orderActionRunning && !supply.isEmpty());
+            supplyButton.setOnClickListener(view -> downloadSupplyStickers(supply));
+            addActionButton(content, supplyButton);
         }
 
         Map<String, Object> deliveryPlan = map(orderData.get("deliveryPlan"));
         int itemsPerCargoPlace = Math.max(1, (int) Math.round(numberValue(deliveryPlan.get("itemsPerCargoPlace"))));
         TextView cargoHint = text(
                 requiresCargoPlaces()
-                        ? "Сдача в ПВЗ: одно грузоместо на каждые " + itemsPerCargoPlace
-                                + " единиц. QR общий для всей поставки."
-                        : "Сдача в сортировочный центр: грузоместа WB не создаются.",
+                        ? "ПВЗ: печатаются QR грузомест — одно на каждые " + itemsPerCargoPlace + " единиц."
+                        : "СЦ: QR поставки печатается после передачи поставки в доставку.",
                 11,
                 R.color.logoff_text_muted,
                 Typeface.BOLD
@@ -703,19 +715,41 @@ public class FbsFragment extends Fragment {
         dialog.show();
     }
 
-    private void addOrderCard(Map<String, Object> order) {
+    private void addJointShipmentHeader(String supplyId, int orderCount) {
+        TextView header = text(
+                "ОТГРУЖЕНЫ ВМЕСТЕ  ·  Поставка " + supplyId + "  ·  " + orderCount + " заказов",
+                12,
+                R.color.logoff_success,
+                Typeface.BOLD
+        );
+        header.setPadding(dp(14), dp(11), dp(14), dp(11));
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(ContextCompat.getColor(requireContext(), R.color.logoff_success_surface));
+        background.setStroke(dp(1), ContextCompat.getColor(requireContext(), R.color.logoff_success));
+        background.setCornerRadius(dp(12));
+        header.setBackground(background);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        params.topMargin = dp(10);
+        params.bottomMargin = dp(2);
+        binding.content.addView(header, params);
+    }
+
+    private void addOrderCard(Map<String, Object> order, boolean jointShipment) {
         MaterialCardView card = baseCard();
         Map<String, Object> product = map(order.get("product"));
         Map<String, Object> billing = map(order.get("billing"));
         boolean paid = "PAID".equals(AppState.string(billing.get("invoiceStatus")));
-        if (paid || SHIPPED.equals(section)) {
+        if (jointShipment) {
+            card.setCardBackgroundColor(ContextCompat.getColor(requireContext(), R.color.logoff_success_surface));
+            card.setStrokeColor(ContextCompat.getColor(requireContext(), R.color.logoff_success));
+        } else if (paid || SHIPPED.equals(section)) {
             card.setStrokeColor(ContextCompat.getColor(requireContext(), R.color.logoff_success));
         }
         LinearLayout content = cardContent();
 
         LinearLayout top = new LinearLayout(requireContext());
         top.setGravity(Gravity.CENTER_VERTICAL);
-        if (ACTIVE.equals(section)) {
+        if (ACTIVE.equals(section) || SHIPPED.equals(section)) {
             CheckBox selection = new CheckBox(requireContext());
             selection.setContentDescription("Выбрать FBS-заказ");
             selection.setChecked(selectedOrders.containsKey(orderKey(order)));
@@ -811,21 +845,31 @@ public class FbsFragment extends Fragment {
         }
         addActionButton(content, sticker);
 
-        if (requiresCargoPlaces()) {
-            MaterialButton cargo = outlinedButton("QR грузомест поставки");
-            boolean cargoAvailable = isEligible(order, "cargo");
-            cargo.setEnabled(cargoAvailable && !orderActionRunning);
-            cargo.setOnClickListener(view -> downloadCargoPlaceStickers(Collections.singletonList(order)));
-            if (!cargoAvailable) {
-                cargo.setContentDescription("QR появится после создания поставки и грузомест");
-            }
-            addActionButton(content, cargo);
-        } else {
-            TextView noCargo = text("Без грузомест: сдача в сортировочный центр", 11,
-                    R.color.logoff_text_muted, Typeface.BOLD);
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
-            params.topMargin = dp(8);
-            content.addView(noCargo, params);
+        MaterialButton cargo = outlinedButton("ШК для ПВЗ");
+        boolean cargoAvailable = isEligible(order, "cargo");
+        cargo.setEnabled(cargoAvailable && !orderActionRunning);
+        cargo.setOnClickListener(view -> downloadCargoPlaceStickers(Collections.singletonList(order)));
+        cargo.setContentDescription(cargoAvailable
+                ? "Скачать QR грузомест для ПВЗ"
+                : "ШК для ПВЗ появится после создания грузомест");
+        addActionButton(content, cargo);
+
+        MaterialButton supply = outlinedButton("ШК для СЦ");
+        boolean supplyAvailable = isEligible(order, "supply");
+        supply.setEnabled(supplyAvailable && !orderActionRunning);
+        supply.setOnClickListener(view -> downloadSupplyStickers(Collections.singletonList(order)));
+        supply.setContentDescription(supplyAvailable
+                ? "Скачать QR поставки для сортировочного центра"
+                : "ШК для СЦ появится после передачи поставки в доставку");
+        addActionButton(content, supply);
+
+        Map<String, Object> request = map(order.get("request"));
+        if (!request.isEmpty() && !"CANCELLED".equals(AppState.string(request.get("status")))) {
+            MaterialButton pickList = outlinedButton("Лист подбора");
+            pickList.setEnabled(!orderActionRunning);
+            pickList.setOnClickListener(view -> downloadPickList(request));
+            pickList.setContentDescription("Лист подбора с QR и ШК Wildberries");
+            addActionButton(content, pickList);
         }
     }
 
@@ -1022,6 +1066,31 @@ public class FbsFragment extends Fragment {
         );
     }
 
+    private void downloadSupplyStickers(List<Map<String, Object>> orders) {
+        if (orders.isEmpty()) return;
+        beginOrderAction();
+        String supply = orders.size() == 1
+                ? AppState.string(orders.get(0).get("supplyId"))
+                : String.valueOf(orders.size()) + "_заказов";
+        saveFbsPdf(
+                app.repository().api().fbsSupplyStickers(selectionPayload(orders)),
+                "FBS_WB_ШК_для_СЦ_" + firstNonBlank(supply, "поставки") + ".pdf",
+                "ШК поставки для СЦ сохранён в Загрузки/LOGOff WMS"
+        );
+    }
+
+    private void downloadPickList(Map<String, Object> request) {
+        String requestId = AppState.string(request.get("id"));
+        if (requestId.isBlank()) return;
+        beginOrderAction();
+        String requestNumber = AppState.string(request.get("number"));
+        saveFbsPdf(
+                app.repository().api().fbsRequestPickList(requestId),
+                "Лист_подбора_FBS_" + firstNonBlank(requestNumber, requestId) + ".pdf",
+                "Лист подбора с QR/ШК Wildberries сохранён в Загрузки/LOGOff WMS"
+        );
+    }
+
     private void saveFbsPdf(Call<ResponseBody> call, String fileName, String successMessage) {
         call.enqueue(new Callback<>() {
             @Override
@@ -1121,6 +1190,10 @@ public class FbsFragment extends Fragment {
             return requiresCargoPlaces() && wildberries && "confirm".equals(supplierStatus)
                     && !AppState.string(order.get("supplyId")).isBlank();
         }
+        if ("supply".equals(action)) {
+            return !requiresCargoPlaces() && wildberries && "complete".equals(supplierStatus)
+                    && !AppState.string(order.get("supplyId")).isBlank();
+        }
         if ("request".equals(action)) {
             Map<String, Object> request = map(order.get("request"));
             return ACTIVE.equals(AppState.string(order.get("category")))
@@ -1135,6 +1208,18 @@ public class FbsFragment extends Fragment {
 
     private String orderKey(Map<String, Object> order) {
         return AppState.string(order.get("connectionId")) + ":" + AppState.string(order.get("id"));
+    }
+
+    private Map<String, List<Map<String, Object>>> groupOrdersBySupply(List<Map<String, Object>> orders) {
+        Map<String, List<Map<String, Object>>> groups = new LinkedHashMap<>();
+        for (Map<String, Object> order : orders) {
+            String supplyId = AppState.string(order.get("supplyId"));
+            String key = supplyId.isBlank()
+                    ? "order:" + orderKey(order)
+                    : "supply:" + AppState.string(order.get("connectionId")) + ":" + supplyId;
+            groups.computeIfAbsent(key, ignored -> new ArrayList<>()).add(order);
+        }
+        return groups;
     }
 
     private void pruneSelectedOrders() {

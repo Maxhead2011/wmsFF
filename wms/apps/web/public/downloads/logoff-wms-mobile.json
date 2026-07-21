@@ -1,8 +1,8 @@
 {
-  "versionCode": 11,
-  "versionName": "0.3.6",
+  "versionCode": 12,
+  "versionName": "0.3.7",
   "minimumVersion": "0.1.0",
   "mandatory": false,
   "apkUrl": "/downloads/logoff-wms-mobile.apk",
-  "releaseNotes": "Добавлены инструменты FBS: выбор клиентов с активными заказами, массовая сборка, создание заявки, скачивание ШК каждого заказа и QR грузомест по 14 единиц."
+  "releaseNotes": "Добавлены отдельная печать ШК для ПВЗ и СЦ, лист подбора FBS с товарами, коробами и QR/ШК Wildberries, а совместно отгруженные заказы объединены в зелёные блоки."
 }

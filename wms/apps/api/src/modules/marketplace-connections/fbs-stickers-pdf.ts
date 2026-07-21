@@ -8,6 +8,16 @@ export type FbsStickerImage = {
   file: string;
 };
 
+export type FbsPickListRow = {
+  orderId: string;
+  productName: string;
+  article: string;
+  barcodes: string[];
+  quantity: number;
+  boxes: Array<{ code: string; quantity: number }>;
+  sticker: FbsStickerImage;
+};
+
 const LABEL_WIDTH_PT = 58 * 2.8346456693;
 const LABEL_HEIGHT_PT = 40 * 2.8346456693;
 
@@ -23,6 +33,79 @@ export async function buildFbsCargoPlaceStickersPdf(stickers: FbsStickerImage[])
     title: `FBS WB cargo place stickers (${stickers.length})`,
     subject: 'QR-коды грузомест FBS Wildberries',
   });
+}
+
+export async function buildFbsSupplyStickersPdf(stickers: FbsStickerImage[]) {
+  return buildStickerPdf(stickers, {
+    title: `FBS WB supply stickers (${stickers.length})`,
+    subject: 'QR-коды поставок FBS Wildberries для сортировочного центра',
+  });
+}
+
+export async function buildFbsPickListPdf(input: {
+  requestNumber: number;
+  requestTitle: string;
+  clientName: string;
+  rows: FbsPickListRow[];
+}) {
+  configurePdfMake();
+  const tableBody: Content[][] = [
+    [
+      { text: 'Заказ WB', bold: true },
+      { text: 'Товар', bold: true },
+      { text: 'Короб хранения', bold: true },
+      { text: 'Кол-во', bold: true },
+      { text: 'QR / ШК Wildberries', bold: true },
+    ],
+    ...input.rows.map((row) => [
+      { text: row.orderId, bold: true },
+      {
+        stack: [
+          { text: row.productName, bold: true },
+          { text: `Артикул: ${row.article || '—'}`, fontSize: 8 },
+          { text: `ШК товара: ${row.barcodes.join(', ') || '—'}`, fontSize: 8 },
+        ],
+      },
+      {
+        text: row.boxes.length
+          ? row.boxes.map((box) => `${box.code} — ${box.quantity} шт.`).join('\n')
+          : 'Короб не найден',
+        fontSize: 8,
+      },
+      { text: String(row.quantity), bold: true, alignment: 'center' as const },
+      {
+        image: `data:image/png;base64,${row.sticker.file}`,
+        width: LABEL_WIDTH_PT,
+        height: LABEL_HEIGHT_PT,
+      },
+    ]),
+  ];
+  const definition: TDocumentDefinitions = {
+    pageSize: 'A4',
+    pageOrientation: 'landscape',
+    pageMargins: [18, 18, 18, 18],
+    info: {
+      title: `FBS pick list ${input.requestNumber}`,
+      subject: 'Лист подбора FBS с QR/ШК Wildberries',
+      author: 'LOGOFF WMS',
+      creator: 'LOGOFF WMS',
+    },
+    defaultStyle: { font: 'DejaVuSans', fontSize: 9 },
+    content: [
+      { text: `Лист подбора FBS · заявка №${String(input.requestNumber).padStart(6, '0')}`, fontSize: 16, bold: true },
+      { text: `${input.clientName} · ${input.requestTitle}`, margin: [0, 3, 0, 10], color: '#555555' },
+      {
+        table: {
+          headerRows: 1,
+          widths: [62, '*', 112, 42, LABEL_WIDTH_PT],
+          body: tableBody,
+        },
+        layout: 'lightHorizontalLines',
+      },
+    ],
+  };
+
+  return pdfMake.createPdf(definition).getBuffer();
 }
 
 async function buildStickerPdf(

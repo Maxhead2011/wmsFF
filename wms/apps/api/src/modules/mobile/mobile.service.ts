@@ -924,13 +924,13 @@ export class MobileService {
     const setting = await this.prisma.systemSetting.findUnique({ where: { key: 'mobile.android.version' } });
     const value = asRecord(setting?.value);
     return {
-      currentVersion: stringValue(value.currentVersion, '0.3.6'),
+      currentVersion: stringValue(value.currentVersion, '0.3.7'),
       minimumVersion: stringValue(value.minimumVersion, '0.1.0'),
       mandatory: value.mandatory === true,
       apkUrl: stringValue(value.apkUrl, '/downloads/logoff-wms-mobile.apk'),
       releaseNotes: stringValue(
         value.releaseNotes,
-        'Добавлены инструменты FBS: выбор клиентов с активными заказами, массовая сборка, создание заявки, скачивание ШК каждого заказа и QR грузомест по 14 единиц.',
+        'Добавлены отдельная печать ШК для ПВЗ и СЦ, лист подбора FBS с товарами, коробами и QR/ШК Wildberries, а совместно отгруженные заказы объединены в зелёные блоки.',
       ),
       updatedAt: setting?.updatedAt ?? null,
     };

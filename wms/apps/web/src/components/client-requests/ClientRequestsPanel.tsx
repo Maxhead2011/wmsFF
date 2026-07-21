@@ -6,6 +6,7 @@ import {
   downloadClientRequestItemsXlsx,
   downloadClientRequestWbPackagesXlsx,
   downloadClientRequestWbProductsXlsx,
+  downloadFbsRequestPickListPdf,
   downloadPickInstructionXlsx,
   downloadTsdMovementsXlsx,
   downloadTsdOutgoingBoxesXlsx,
@@ -504,8 +505,13 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     setError(null);
 
     try {
-      const blob = await downloadPickInstructionXlsx(session.accessToken, request.id);
-      downloadBlob(blob, `pick-instruction-${safeDownloadName(request.title)}-${request.id.slice(0, 8)}.xlsx`);
+      if (isFbsRequest(request)) {
+        const blob = await downloadFbsRequestPickListPdf(session.accessToken, request.id);
+        downloadBlob(blob, `Лист_подбора_FBS_${String(request.number).padStart(6, '0')}.pdf`);
+      } else {
+        const blob = await downloadPickInstructionXlsx(session.accessToken, request.id);
+        downloadBlob(blob, `pick-instruction-${safeDownloadName(request.title)}-${request.id.slice(0, 8)}.xlsx`);
+      }
     } catch (caught) {
       setError(errorMessage(caught));
     }
@@ -943,6 +949,11 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
       ) : null}
     </section>
   );
+}
+
+function isFbsRequest(request: ClientRequestSummary) {
+  return request.title.trim().toLocaleUpperCase('ru-RU').startsWith('FBS')
+    || request.comment?.toLocaleLowerCase('ru-RU').includes('создано из fbs-заказов:') === true;
 }
 
 function ManualBoxSelectionModal({

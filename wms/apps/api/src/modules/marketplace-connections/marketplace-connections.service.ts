@@ -27,6 +27,8 @@ import { UpsertMarketplaceConnectionDto } from './dto/upsert-marketplace-connect
 import { DEFAULT_FBS_ITEMS_PER_CARGO_PLACE } from './fbs.constants';
 import {
   buildFbsCargoPlaceStickersPdf,
+  buildFbsPickListPdf,
+  buildFbsSupplyStickersPdf,
   buildFbsStickersPdf,
   type FbsStickerImage,
 } from './fbs-stickers-pdf';
@@ -584,6 +586,170 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       contentType: 'application/pdf' as const,
       buffer,
       count: stickers.length,
+    };
+  }
+
+  async getFbsSupplyStickersPdf(dto: FbsOrderSelectionDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    this.clientScopes.requireClientAccess(user, clientId, 'read');
+    const [{ orders }, deliveryPlan] = await Promise.all([
+      this.resolveSelectedFbsOrders(clientId, dto.orders),
+      this.loadFbsDeliveryPlan(clientId),
+    ]);
+    if (deliveryPlan.requiresCargoPlaces) {
+      throw new BadRequestException(
+        'Для выбранного клиента настроена сдача в ПВЗ. Используйте кнопку «ШК для ПВЗ».',
+      );
+    }
+
+    const unavailable = orders.filter(
+      (order) =>
+        order.marketplace !== MarketplaceType.WILDBERRIES ||
+        order.supplierStatus !== 'complete' ||
+        !order.supplyId,
+    );
+    if (unavailable.length > 0) {
+      throw new BadRequestException(
+        `ШК поставки для сортировочного центра можно скачать после передачи поставки в доставку. Проверьте заказы: ${unavailable
+          .map((order) => order.id)
+          .join(', ')}.`,
+      );
+    }
+
+    const connections = await this.loadSelectedConnections(clientId, orders);
+    const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
+    const supplies = new Map<string, { connectionId: string; supplyId: string }>();
+    for (const order of orders) {
+      const supplyId = order.supplyId!;
+      supplies.set(`${order.connectionId}:${supplyId}`, {
+        connectionId: order.connectionId,
+        supplyId,
+      });
+    }
+
+    const stickers: FbsStickerImage[] = [];
+    for (const supply of supplies.values()) {
+      const connection = connectionById.get(supply.connectionId);
+      if (!connection) {
+        throw new BadRequestException(`Подключение WB для поставки ${supply.supplyId} не найдено.`);
+      }
+      const response = await marketplaceJson(
+        `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(supply.supplyId)}/barcode?type=png`,
+        { method: 'GET', headers: wbHeaders(connection.apiKey) },
+      );
+      const file = textValue(response.file);
+      if (!file) {
+        throw new BadRequestException(`Wildberries не вернул ШК поставки ${supply.supplyId}.`);
+      }
+      stickers.push({
+        orderId: supply.supplyId,
+        barcode: textValue(response.barcode),
+        file,
+      });
+    }
+
+    const buffer = await buildFbsSupplyStickersPdf(stickers);
+    return {
+      fileName: `fbs-wb-supply-qr-sc-${fileTimestamp(new Date())}.pdf`,
+      contentType: 'application/pdf' as const,
+      buffer,
+      count: stickers.length,
+    };
+  }
+
+  async getFbsRequestPickListPdf(requestId: string, user: AuthUser) {
+    const request = await this.prisma.clientRequest.findUnique({
+      where: { id: requestId },
+      select: {
+        id: true,
+        clientId: true,
+        number: true,
+        title: true,
+        client: { select: { code: true, name: true } },
+      },
+    });
+    if (!request) throw new NotFoundException('Заявка не найдена.');
+    this.clientScopes.requireClientAccess(user, request.clientId, 'read');
+
+    const links = await this.prisma.fbsOrderRequestLink.findMany({
+      where: { requestId },
+      select: { connectionId: true, orderId: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (links.length === 0) {
+      throw new BadRequestException('Лист подбора с QR доступен только для заявки, созданной из FBS-заказов.');
+    }
+
+    const { orders } = await this.resolveSelectedFbsOrders(
+      request.clientId,
+      links.map((link) => ({ connectionId: link.connectionId, id: link.orderId })),
+    );
+    const unavailable = orders.filter(
+      (order) =>
+        order.marketplace !== MarketplaceType.WILDBERRIES ||
+        !['confirm', 'complete'].includes(order.supplierStatus),
+    );
+    if (unavailable.length > 0) {
+      throw new BadRequestException(
+        `QR/ШК Wildberries появится после перевода всех заказов в сборку. Проверьте: ${unavailable
+          .map((order) => order.id)
+          .join(', ')}.`,
+      );
+    }
+
+    const connections = await this.loadSelectedConnections(request.clientId, orders);
+    const ordersByConnection = new Map<string, FbsOrderSummary[]>();
+    for (const order of orders) {
+      const group = ordersByConnection.get(order.connectionId) ?? [];
+      group.push(order);
+      ordersByConnection.set(order.connectionId, group);
+    }
+    const stickersByOrderId = new Map<string, FbsStickerImage>();
+    for (const connection of connections) {
+      const connectionOrders = ordersByConnection.get(connection.id) ?? [];
+      for (const orderChunk of chunks(connectionOrders, 100)) {
+        const response = await marketplaceJson(
+          'https://marketplace-api.wildberries.ru/api/v3/orders/stickers?type=png&width=58&height=40',
+          {
+            method: 'POST',
+            headers: wbHeaders(connection.apiKey),
+            body: JSON.stringify({ orders: orderChunk.map((order) => numericWbOrderId(order.id)) }),
+          },
+        );
+        for (const sticker of asArray<Record<string, unknown>>(response.stickers)) {
+          const orderId = textValue(sticker.orderId);
+          const file = textValue(sticker.file);
+          if (orderId && file) {
+            stickersByOrderId.set(orderId, { orderId, barcode: textValue(sticker.barcode), file });
+          }
+        }
+      }
+    }
+    const missing = orders.filter((order) => !stickersByOrderId.has(order.id));
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        `Wildberries пока не сформировал QR/ШК для заказов: ${missing.map((order) => order.id).join(', ')}.`,
+      );
+    }
+
+    const buffer = await buildFbsPickListPdf({
+      requestNumber: request.number,
+      requestTitle: request.title,
+      clientName: [request.client.code, request.client.name].filter(Boolean).join(' · '),
+      rows: orders.map((order) => ({
+        orderId: order.id,
+        productName: order.product?.name || order.article || `Товар ${order.nmId ?? ''}`,
+        article: order.product?.article || order.article || '',
+        barcodes: order.barcodes,
+        quantity: Math.max(1, order.itemCount),
+        boxes: order.storageBoxes.map((box) => ({ code: box.code, quantity: box.quantity })),
+        sticker: stickersByOrderId.get(order.id)!,
+      })),
+    });
+    return {
+      fileName: `fbs-pick-list-${String(request.number).padStart(6, '0')}-${fileTimestamp(new Date())}.pdf`,
+      contentType: 'application/pdf' as const,
+      buffer,
     };
   }
 
