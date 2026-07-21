@@ -11,6 +11,7 @@ import {
   downloadTsdOutgoingBoxesXlsx,
   downloadTsdOutgoingContentsXlsx,
   emergencyCloseClientRequestFromXlsx,
+  fetchClientRequestManualBoxSelection,
   fetchClientRequestDocument,
   fetchClientRequestBoxOverlaps,
   fetchClientRequests,
@@ -22,6 +23,7 @@ import {
   pickClientRequest,
   refreshPickInstruction as refreshPickInstructionDocument,
   rollbackEmergencyCloseClientRequest,
+  saveClientRequestManualBoxSelection,
   shipClientRequest,
   updateClientRequestStatus,
   uploadManualPickInstruction,
@@ -29,6 +31,7 @@ import {
   type AuthUser,
   type ClientRequestDocument,
   type ClientRequestBoxOverlapStatistics,
+  type ClientRequestManualBoxSelection,
   type ClientRequestFileSummary,
   type ClientRequestStatus,
   type ClientRequestSummary,
@@ -67,6 +70,13 @@ type ManualCloseState = {
   comment: string;
   usesRecordedPackages: boolean;
   status: 'idle' | 'submitting';
+  error?: string;
+};
+
+type ManualBoxSelectionState = {
+  request: ClientRequestSummary;
+  status: 'loading' | 'ready' | 'saving';
+  data: ClientRequestManualBoxSelection | null;
   error?: string;
 };
 
@@ -111,6 +121,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     result?: PickInstructionDocument;
   } | null>(null);
   const [manualClose, setManualClose] = useState<ManualCloseState | null>(null);
+  const [manualBoxSelection, setManualBoxSelection] = useState<ManualBoxSelectionState | null>(null);
   const [showArchive, setShowArchive] = useState(false);
   const [archiveBoxSearch, setArchiveBoxSearch] = useState('');
   const [appliedArchiveBoxSearch, setAppliedArchiveBoxSearch] = useState('');
@@ -282,6 +293,99 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     }
   }
 
+  async function openManualBoxSelection(request: ClientRequestSummary) {
+    setManualBoxSelection({ request, status: 'loading', data: null });
+    setError(null);
+
+    try {
+      const data = await fetchClientRequestManualBoxSelection(session.accessToken, request.id);
+      setManualBoxSelection({ request, status: 'ready', data });
+    } catch (caught) {
+      setManualBoxSelection({ request, status: 'ready', data: null, error: errorMessage(caught) });
+    }
+  }
+
+  function changeManualBoxQuantity(requestItemId: string, boxId: string, rawValue: string) {
+    const parsed = Number.parseInt(rawValue, 10);
+    const quantity = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+    setManualBoxSelection((current) => {
+      if (!current?.data || current.status === 'saving') return current;
+      const items = current.data.items.map((item) => {
+        if (item.requestItemId !== requestItemId) return item;
+        const boxes = item.boxes.map((box) =>
+          box.boxId === boxId
+            ? { ...box, selectedQuantity: Math.min(quantity, box.availableQuantity) }
+            : box,
+        );
+        return {
+          ...item,
+          boxes,
+          selectedQuantity: boxes.reduce((sum, box) => sum + box.selectedQuantity, 0),
+        };
+      });
+      return {
+        ...current,
+        error: undefined,
+        data: {
+          ...current.data,
+          items,
+          summary: {
+            ...current.data.summary,
+            selectedQuantity: items.reduce((sum, item) => sum + item.selectedQuantity, 0),
+          },
+        },
+      };
+    });
+  }
+
+  async function saveManualBoxSelection(clear = false) {
+    if (!manualBoxSelection?.data) return;
+    const data = manualBoxSelection.data;
+    const invalidItem = !clear
+      ? data.items.find((item) => item.selectedQuantity !== item.requestedQuantity)
+      : undefined;
+    if (invalidItem) {
+      const label = invalidItem.sku?.internalSku ?? invalidItem.requestedBarcode ?? invalidItem.requestedName ?? 'позиции';
+      setManualBoxSelection((current) =>
+        current
+          ? {
+              ...current,
+              error: `Для ${label} нужно выбрать ${invalidItem.requestedQuantity} шт., сейчас выбрано ${invalidItem.selectedQuantity} шт.`,
+            }
+          : current,
+      );
+      return;
+    }
+
+    const selections = clear
+      ? []
+      : data.items.flatMap((item) =>
+          item.boxes
+            .filter((box) => box.selectedQuantity > 0)
+            .map((box) => ({
+              requestItemId: item.requestItemId,
+              boxId: box.boxId,
+              quantity: box.selectedQuantity,
+            })),
+        );
+    setManualBoxSelection((current) => (current ? { ...current, status: 'saving', error: undefined } : current));
+    try {
+      const saved = await saveClientRequestManualBoxSelection(
+        session.accessToken,
+        manualBoxSelection.request.id,
+        selections,
+      );
+      setManualBoxSelection((current) =>
+        current ? { ...current, status: 'ready', data: saved, error: undefined } : current,
+      );
+      setActionMessage(clear ? 'Выбор коробов очищен.' : 'Короба для списания сохранены. Остатки пока не изменены.');
+    } catch (caught) {
+      setManualBoxSelection((current) =>
+        current ? { ...current, status: 'ready', error: errorMessage(caught) } : current,
+      );
+    }
+  }
+
   async function downloadOriginalRequestFile(request: ClientRequestSummary, file: ClientRequestFileSummary) {
     setError(null);
 
@@ -359,7 +463,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
       }
 
       setManualClose(null);
-      setActionMessage('Отгрузка закрыта. Остатки списаны, финансовые черновики сформированы.');
+      setActionMessage('Отгрузка закрыта. Остатки списаны, начисления за обработку и черновик счета сформированы.');
       await loadData();
     } catch (caught) {
       setManualClose((current) =>
@@ -729,6 +833,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
             ? (request, file) => void downloadOriginalRequestFile(request, file)
             : undefined,
           canPickOutbound ? (request) => void openOnlineExecution(request) : undefined,
+          canPickOutbound ? (request) => void openManualBoxSelection(request) : undefined,
           (request) => void openPickInstruction(request),
           (request) => void refreshPickInstruction(request),
           (request) => void downloadPickInstruction(request),
@@ -826,8 +931,174 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           onClose={() => setManualClose(null)}
         />
       ) : null}
+
+      {manualBoxSelection ? (
+        <ManualBoxSelectionModal
+          state={manualBoxSelection}
+          onQuantityChange={changeManualBoxQuantity}
+          onSave={() => void saveManualBoxSelection(false)}
+          onClear={() => void saveManualBoxSelection(true)}
+          onClose={() => setManualBoxSelection(null)}
+        />
+      ) : null}
     </section>
   );
+}
+
+function ManualBoxSelectionModal({
+  state,
+  onQuantityChange,
+  onSave,
+  onClear,
+  onClose,
+}: {
+  state: ManualBoxSelectionState;
+  onQuantityChange: (requestItemId: string, boxId: string, value: string) => void;
+  onSave: () => void;
+  onClear: () => void;
+  onClose: () => void;
+}) {
+  const isBusy = state.status === 'loading' || state.status === 'saving';
+  const isComplete = Boolean(
+    state.data?.items.length &&
+      state.data.items.every((item) => item.selectedQuantity === item.requestedQuantity),
+  );
+
+  return (
+    <div className="online-execution-modal" role="dialog" aria-modal="true" aria-label="Выбор коробов для заявки">
+      <section className="online-execution-modal__panel manual-box-selection-modal">
+        <header className="online-execution-modal__header">
+          <div>
+            <span>Ручной выбор остатков</span>
+            <h3>{state.request.title}</h3>
+            <small>{state.request.client.name} · списание только при статусе «Сдано»</small>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose} title="Закрыть" aria-label="Закрыть">
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="online-execution-modal__body manual-box-selection-modal__body">
+          {state.status === 'loading' ? (
+            <p className="panel-message"><RefreshCw size={18} aria-hidden="true" /> Загружаю остатки по коробам.</p>
+          ) : state.data ? (
+            <>
+              <div className="manual-box-selection-modal__notice">
+                <Boxes size={21} aria-hidden="true" />
+                <div>
+                  <strong>Выберите точные короба и количество.</strong>
+                  <span>Сохранение только фиксирует выбор. Фактическое списание произойдет после перевода заявки в «Сдано».</span>
+                </div>
+              </div>
+
+              <div className={`manual-box-selection-modal__summary ${isComplete ? 'is-complete' : 'is-incomplete'}`}>
+                <span>Выбрано по заявке</span>
+                <strong>{state.data.summary.selectedQuantity} / {state.data.summary.requestedQuantity} шт.</strong>
+              </div>
+
+              <div className="manual-box-selection-items">
+                {state.data.items.map((item) => {
+                  const itemLabel = item.sku?.name ?? item.requestedName ?? 'Товар не сопоставлен';
+                  const itemCode = item.sku?.article ?? item.sku?.internalSku ?? item.requestedBarcode ?? 'без артикула';
+                  const remaining = Math.max(0, item.requestedQuantity - item.selectedQuantity);
+                  const complete = item.selectedQuantity === item.requestedQuantity;
+                  return (
+                    <article className={`manual-box-selection-item ${complete ? 'is-complete' : 'is-incomplete'}`} key={item.requestItemId}>
+                      <header>
+                        <div>
+                          <h4>{itemLabel}</h4>
+                          <span>Артикул: {itemCode}</span>
+                          <span>ШК: {item.sku?.barcodes.join(', ') || item.requestedBarcode || 'не указан'}</span>
+                        </div>
+                        <strong>{item.selectedQuantity} / {item.requestedQuantity} шт.</strong>
+                      </header>
+
+                      {item.boxes.length ? (
+                        <div className="manual-box-selection-boxes">
+                          {item.boxes.map((box) => {
+                            const checked = box.selectedQuantity > 0;
+                            const suggestedQuantity = Math.min(box.availableQuantity, remaining || box.availableQuantity);
+                            return (
+                              <label className={`manual-box-selection-box ${checked ? 'is-selected' : ''}`} key={box.boxId}>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  disabled={isBusy || !state.data?.editable}
+                                  onChange={(event) =>
+                                    onQuantityChange(
+                                      item.requestItemId,
+                                      box.boxId,
+                                      event.target.checked ? String(suggestedQuantity) : '0',
+                                    )
+                                  }
+                                />
+                                <div>
+                                  <strong>{box.boxCode}</strong>
+                                  <span>
+                                    Доступно {box.availableQuantity} шт. ·{' '}
+                                    {box.statuses.map((row) => `${stockStatusLabel(row.status)} ${row.quantity}`).join(', ') || 'остаток изменился'}
+                                  </span>
+                                </div>
+                                <input
+                                  className="manual-box-selection-box__quantity"
+                                  type="number"
+                                  min="0"
+                                  max={box.availableQuantity}
+                                  step="1"
+                                  inputMode="numeric"
+                                  value={box.selectedQuantity || ''}
+                                  placeholder="0"
+                                  disabled={isBusy || !state.data?.editable}
+                                  aria-label={`Количество из короба ${box.boxCode}`}
+                                  onChange={(event) => onQuantityChange(item.requestItemId, box.boxId, event.target.value)}
+                                />
+                              </label>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="manual-box-selection-item__empty">В активных коробах нет доступного остатка этой позиции.</p>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+
+              {!state.data.editable ? (
+                <p className="form-error">Для текущего статуса выбор доступен только для просмотра.</p>
+              ) : null}
+            </>
+          ) : null}
+
+          {state.error ? <p className="form-error manual-box-selection-modal__error">{state.error}</p> : null}
+
+          <div className="emergency-xlsx-modal__actions">
+            <button className="client-request-action-button client-request-action-button--instruction" type="button" onClick={onClose} disabled={state.status === 'saving'}>
+              Закрыть
+            </button>
+            {state.data?.editable && state.data.summary.selectedQuantity > 0 ? (
+              <button className="client-request-action-button client-request-action-button--cancel" type="button" onClick={onClear} disabled={isBusy}>
+                Очистить выбор
+              </button>
+            ) : null}
+            {state.data?.editable ? (
+              <button className="client-request-action-button client-request-action-button--box-selection" type="button" onClick={onSave} disabled={isBusy || !isComplete}>
+                <Boxes size={16} aria-hidden="true" />
+                {state.status === 'saving' ? 'Сохраняю' : 'Сохранить короба'}
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function stockStatusLabel(status: string) {
+  if (status === 'AVAILABLE') return 'доступно';
+  if (status === 'PACKING') return 'в сборке';
+  if (status === 'SHIPPING') return 'к отгрузке';
+  return status;
 }
 
 function ManualCloseModal({
@@ -1550,6 +1821,7 @@ function renderRequests(
   onDownloadRequestItems: (request: ClientRequestSummary) => void,
   onDownloadOriginalFile: ((request: ClientRequestSummary, file: ClientRequestFileSummary) => void) | undefined,
   onOpenOnlineExecution: ((request: ClientRequestSummary) => void) | undefined,
+  onSelectManualBoxes: ((request: ClientRequestSummary) => void) | undefined,
   onOpenPickInstruction: (request: ClientRequestSummary) => void,
   onRefreshPickInstruction: (request: ClientRequestSummary) => void,
   onDownloadPickInstruction: (request: ClientRequestSummary) => void,
@@ -1597,6 +1869,7 @@ function renderRequests(
         onDownloadRequestItems={onDownloadRequestItems}
         onDownloadOriginalFile={onDownloadOriginalFile}
         onOpenOnlineExecution={onOpenOnlineExecution}
+        onSelectManualBoxes={onSelectManualBoxes}
         onOpenPickInstruction={onOpenPickInstruction}
         onRefreshPickInstruction={onRefreshPickInstruction}
         onDownloadPickInstruction={onDownloadPickInstruction}

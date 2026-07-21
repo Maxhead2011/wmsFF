@@ -1210,6 +1210,13 @@
   color: #334155;
 }
 
+.client-request-action-button--box-selection {
+  grid-column: span 2;
+  border-color: #99f6e4;
+  background: #f0fdfa;
+  color: #0f766e;
+}
+
 .client-request-action-button--refresh-instruction {
   border-color: #d7dde5;
   background: #f8fafc;
@@ -1466,6 +1473,197 @@
 }
 
 .manual-close-modal__error {
+  white-space: pre-line;
+}
+
+.manual-box-selection-modal {
+  width: min(980px, 100%);
+}
+
+.manual-box-selection-modal__body {
+  background: #f8fafc;
+}
+
+.manual-box-selection-modal__notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  border: 1px solid #99f6e4;
+  border-radius: 10px;
+  background: #f0fdfa;
+  color: #0f766e;
+  padding: 13px 14px;
+}
+
+.manual-box-selection-modal__notice svg {
+  flex: 0 0 auto;
+}
+
+.manual-box-selection-modal__notice div {
+  display: grid;
+  gap: 3px;
+}
+
+.manual-box-selection-modal__notice span {
+  color: #115e59;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.manual-box-selection-modal__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #fed7aa;
+  border-radius: 9px;
+  background: #fff7ed;
+  color: #9a3412;
+  padding: 11px 14px;
+}
+
+.manual-box-selection-modal__summary.is-complete {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.manual-box-selection-modal__summary span {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.manual-box-selection-modal__summary strong {
+  font-size: 18px;
+}
+
+.manual-box-selection-items {
+  display: grid;
+  gap: 12px;
+}
+
+.manual-box-selection-item {
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-left: 4px solid #fb923c;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.manual-box-selection-item.is-complete {
+  border-left-color: #22c55e;
+}
+
+.manual-box-selection-item > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 12px 14px;
+}
+
+.manual-box-selection-item > header > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.manual-box-selection-item h4 {
+  margin: 0 0 2px;
+  overflow-wrap: anywhere;
+  font-size: 15px;
+}
+
+.manual-box-selection-item header span {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.manual-box-selection-item > header > strong {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #c2410c;
+  padding: 5px 9px;
+  font-size: 13px;
+}
+
+.manual-box-selection-item.is-complete > header > strong {
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+.manual-box-selection-boxes {
+  display: grid;
+  gap: 7px;
+  padding: 10px 12px 12px;
+}
+
+.manual-box-selection-box {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) 84px;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 9px 10px;
+  cursor: pointer;
+}
+
+.manual-box-selection-box.is-selected {
+  border-color: #5eead4;
+  background: #f0fdfa;
+  box-shadow: 0 0 0 1px rgb(45 212 191 / 0.12);
+}
+
+.manual-box-selection-box > input[type='checkbox'] {
+  width: 17px;
+  height: 17px;
+  accent-color: #0f766e;
+}
+
+.manual-box-selection-box > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.manual-box-selection-box > div strong {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.manual-box-selection-box > div span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.manual-box-selection-box__quantity {
+  width: 84px;
+  min-height: 34px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0 8px;
+  text-align: right;
+  font-weight: 900;
+}
+
+.manual-box-selection-item__empty {
+  margin: 0;
+  color: #b91c1c;
+  padding: 12px 14px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.manual-box-selection-modal__error {
   white-space: pre-line;
 }
 
@@ -1965,6 +2163,21 @@
 
   .manual-close-modal__fields {
     grid-template-columns: 1fr;
+  }
+
+  .manual-box-selection-box {
+    grid-template-columns: 20px minmax(0, 1fr);
+  }
+
+  .manual-box-selection-box__quantity {
+    grid-column: 2;
+    width: 100%;
+  }
+
+  .manual-box-selection-item > header,
+  .manual-box-selection-modal__summary {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .online-execution-modal__actions {

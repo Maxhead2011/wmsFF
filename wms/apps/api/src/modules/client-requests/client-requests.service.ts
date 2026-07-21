@@ -12,6 +12,7 @@ import { CreateClientRequestDto } from './dto/create-client-request.dto';
 import { ListClientRequestsDto } from './dto/list-client-requests.dto';
 import { PreviewClientRequestAvailabilityDto } from './dto/preview-client-request-availability.dto';
 import { UpdateClientRequestDto } from './dto/update-client-request.dto';
+import { UpdateClientRequestBoxSelectionDto } from './dto/update-client-request-box-selection.dto';
 import { UpdateClientRequestStatusDto } from './dto/update-client-request-status.dto';
 
 @Injectable()
@@ -278,6 +279,293 @@ export class ClientRequestsService {
     });
   }
 
+  async getManualBoxSelection(id: string, user: AuthUser) {
+    const request = await this.prisma.clientRequest.findUnique({
+      where: { id },
+      include: {
+        items: {
+          include: {
+            sku: {
+              include: { barcodes: { orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }] } },
+            },
+          },
+          orderBy: { id: 'asc' },
+        },
+        pickWaveRequests: {
+          include: { wave: { select: { status: true } } },
+        },
+      },
+    });
+    if (!request) {
+      throw new NotFoundException('Клиентская заявка не найдена.');
+    }
+    this.clientScopes.requireClientAccess(user, request.clientId, 'read');
+    assertManualBoxSelectionRequest(request);
+
+    const resolvedItems = await Promise.all(
+      request.items.map(async (item) => ({
+        item,
+        sku:
+          item.sku ??
+          (item.barcode
+            ? (
+                await this.prisma.barcode.findFirst({
+                  where: { value: item.barcode, sku: { clientId: request.clientId } },
+                  include: {
+                    sku: {
+                      include: { barcodes: { orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }] } },
+                    },
+                  },
+                })
+              )?.sku
+            : null),
+      })),
+    );
+    const skuIds = [...new Set(resolvedItems.map((row) => row.sku?.id).filter((value): value is string => Boolean(value)))];
+    const [balances, savedSelections] = await Promise.all([
+      skuIds.length
+        ? this.prisma.stockBalance.findMany({
+            where: {
+              clientId: request.clientId,
+              skuId: { in: skuIds },
+              status: { in: manualSelectionStockStatuses },
+              quantity: { gt: 0 },
+              box: { status: { notIn: ['deleted', 'archived'] } },
+            },
+            include: { box: { select: { id: true, code: true, status: true } } },
+            orderBy: [{ box: { code: 'asc' } }, { status: 'asc' }],
+          })
+        : Promise.resolve([]),
+      this.prisma.clientRequestBoxSelection.findMany({
+        where: { requestItem: { requestId: request.id } },
+        include: { box: { select: { id: true, code: true, status: true } } },
+        orderBy: [{ box: { code: 'asc' } }],
+      }),
+    ]);
+
+    return {
+      request: {
+        id: request.id,
+        title: request.title,
+        status: request.status,
+        clientId: request.clientId,
+      },
+      editable: manualBoxSelectionEditableStatuses.has(request.status),
+      summary: {
+        items: request.items.length,
+        requestedQuantity: request.items.reduce((sum, item) => sum + item.quantity, 0),
+        selectedQuantity: savedSelections.reduce((sum, selection) => sum + selection.quantity, 0),
+      },
+      items: resolvedItems.map(({ item, sku }) => {
+        const itemSelections = savedSelections.filter((selection) => selection.requestItemId === item.id);
+        const boxes = new Map<
+          string,
+          {
+            boxId: string;
+            boxCode: string;
+            boxStatus: string;
+            availableQuantity: number;
+            selectedQuantity: number;
+            statuses: Array<{ status: StockStatus; quantity: number }>;
+          }
+        >();
+        balances
+          .filter((balance) => balance.skuId === sku?.id && balance.box)
+          .forEach((balance) => {
+            const current = boxes.get(balance.box!.id) ?? {
+              boxId: balance.box!.id,
+              boxCode: balance.box!.code,
+              boxStatus: balance.box!.status,
+              availableQuantity: 0,
+              selectedQuantity: 0,
+              statuses: [],
+            };
+            current.availableQuantity += balance.quantity;
+            current.statuses.push({ status: balance.status, quantity: balance.quantity });
+            boxes.set(balance.box!.id, current);
+          });
+        itemSelections.forEach((selection) => {
+          const current = boxes.get(selection.boxId) ?? {
+            boxId: selection.boxId,
+            boxCode: selection.box.code,
+            boxStatus: selection.box.status,
+            availableQuantity: 0,
+            selectedQuantity: 0,
+            statuses: [],
+          };
+          current.selectedQuantity = selection.quantity;
+          boxes.set(selection.boxId, current);
+        });
+        const selectedQuantity = itemSelections.reduce((sum, selection) => sum + selection.quantity, 0);
+        return {
+          requestItemId: item.id,
+          requestedQuantity: item.quantity,
+          selectedQuantity,
+          sku: sku
+            ? {
+                id: sku.id,
+                internalSku: sku.internalSku,
+                article: sku.article,
+                name: sku.name,
+                barcodes: sku.barcodes.map((barcode) => barcode.value),
+              }
+            : null,
+          requestedBarcode: item.barcode,
+          requestedName: item.name,
+          boxes: [...boxes.values()].sort((left, right) => left.boxCode.localeCompare(right.boxCode, 'ru')),
+        };
+      }),
+    };
+  }
+
+  async saveManualBoxSelection(id: string, dto: UpdateClientRequestBoxSelectionDto, user: AuthUser) {
+    await this.prisma.$transaction(async (tx) => {
+      const request = await tx.clientRequest.findUnique({
+        where: { id },
+        include: {
+          items: { include: { sku: true } },
+          pickWaveRequests: { include: { wave: { select: { status: true } } } },
+        },
+      });
+      if (!request) {
+        throw new NotFoundException('Клиентская заявка не найдена.');
+      }
+      this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+      assertManualBoxSelectionRequest(request);
+      if (!manualBoxSelectionEditableStatuses.has(request.status)) {
+        throw new BadRequestException('Короба можно выбирать только до упаковки и сдачи заявки.');
+      }
+
+      if (dto.selections.length === 0) {
+        await tx.clientRequestBoxSelection.deleteMany({ where: { requestItem: { requestId: request.id } } });
+        await tx.clientRequestEvent.create({
+          data: {
+            requestId: request.id,
+            clientId: request.clientId,
+            eventType: ClientRequestEventType.COMMENT,
+            title: 'Выбор коробов очищен',
+            body: 'Ручной выбор коробов для списания удалён.',
+            createdByUserId: user.id,
+          },
+        });
+        return;
+      }
+
+      const duplicateKeys = new Set<string>();
+      for (const selection of dto.selections) {
+        const key = `${selection.requestItemId}:${selection.boxId}`;
+        if (duplicateKeys.has(key)) {
+          throw new BadRequestException('Один короб нельзя добавить к одной позиции дважды.');
+        }
+        duplicateKeys.add(key);
+      }
+
+      const itemById = new Map(request.items.map((item) => [item.id, item]));
+      const resolvedSkuByItem = new Map<string, { id: string; internalSku: string }>();
+      for (const item of request.items) {
+        const sku =
+          item.sku ??
+          (item.barcode
+            ? (
+                await tx.barcode.findFirst({
+                  where: { value: item.barcode, sku: { clientId: request.clientId } },
+                  include: { sku: true },
+                })
+              )?.sku
+            : null);
+        if (!sku) {
+          throw new BadRequestException(`Позиция ${item.name ?? item.barcode ?? item.id} не сопоставлена с товаром WMS.`);
+        }
+        resolvedSkuByItem.set(item.id, { id: sku.id, internalSku: sku.internalSku });
+      }
+
+      const requestedBoxIds = [...new Set(dto.selections.map((selection) => selection.boxId))];
+      const balances = await tx.stockBalance.findMany({
+        where: {
+          clientId: request.clientId,
+          boxId: { in: requestedBoxIds },
+          skuId: { in: [...new Set([...resolvedSkuByItem.values()].map((sku) => sku.id))] },
+          status: { in: manualSelectionStockStatuses },
+          quantity: { gt: 0 },
+          box: { status: { notIn: ['deleted', 'archived'] } },
+        },
+        include: { box: { select: { id: true, code: true } } },
+      });
+      const availableBySkuBox = new Map<string, { quantity: number; boxCode: string }>();
+      balances.forEach((balance) => {
+        if (!balance.box) return;
+        const key = `${balance.skuId}:${balance.box.id}`;
+        const current = availableBySkuBox.get(key) ?? { quantity: 0, boxCode: balance.box.code };
+        current.quantity += balance.quantity;
+        availableBySkuBox.set(key, current);
+      });
+
+      const selectedByItem = new Map<string, number>();
+      const selectedBySkuBox = new Map<string, number>();
+      for (const selection of dto.selections) {
+        const item = itemById.get(selection.requestItemId);
+        if (!item) {
+          throw new BadRequestException('В выборе коробов найдена позиция, которой нет в заявке.');
+        }
+        const sku = resolvedSkuByItem.get(item.id)!;
+        const skuBoxKey = `${sku.id}:${selection.boxId}`;
+        const available = availableBySkuBox.get(skuBoxKey);
+        if (!available) {
+          throw new BadRequestException(`В выбранном коробе нет доступного остатка позиции ${sku.internalSku}.`);
+        }
+        selectedByItem.set(item.id, (selectedByItem.get(item.id) ?? 0) + selection.quantity);
+        selectedBySkuBox.set(skuBoxKey, (selectedBySkuBox.get(skuBoxKey) ?? 0) + selection.quantity);
+      }
+      for (const item of request.items) {
+        const selected = selectedByItem.get(item.id) ?? 0;
+        if (selected !== item.quantity) {
+          const sku = resolvedSkuByItem.get(item.id)!;
+          throw new BadRequestException(
+            `Для позиции ${sku.internalSku} нужно выбрать ${item.quantity} шт., сейчас выбрано ${selected} шт.`,
+          );
+        }
+      }
+      for (const [key, selected] of selectedBySkuBox) {
+        const available = availableBySkuBox.get(key)!;
+        if (selected > available.quantity) {
+          throw new BadRequestException(
+            `В коробе ${available.boxCode} доступно ${available.quantity} шт., выбрано ${selected} шт.`,
+          );
+        }
+      }
+
+      await tx.clientRequestBoxSelection.deleteMany({ where: { requestItem: { requestId: request.id } } });
+      await tx.clientRequestBoxSelection.createMany({
+        data: dto.selections.map((selection) => ({
+          requestItemId: selection.requestItemId,
+          skuId: resolvedSkuByItem.get(selection.requestItemId)!.id,
+          boxId: selection.boxId,
+          quantity: selection.quantity,
+        })),
+      });
+      const selectedBoxes = [...new Set(
+        dto.selections
+          .map((selection) => {
+            const sku = resolvedSkuByItem.get(selection.requestItemId)!;
+            return availableBySkuBox.get(`${sku.id}:${selection.boxId}`)?.boxCode;
+          })
+          .filter((value): value is string => Boolean(value)),
+      )];
+      await tx.clientRequestEvent.create({
+        data: {
+          requestId: request.id,
+          clientId: request.clientId,
+          eventType: ClientRequestEventType.COMMENT,
+          title: 'Выбраны короба для списания',
+          body: `${selectedBoxes.length} кор.: ${selectedBoxes.join(', ')}`,
+          createdByUserId: user.id,
+        },
+      });
+    });
+
+    return this.getManualBoxSelection(id, user);
+  }
+
   async updateStatus(id: string, dto: UpdateClientRequestStatusDto, user: AuthUser) {
     const request = await this.prisma.clientRequest.findUnique({
       where: { id },
@@ -287,6 +575,7 @@ export class ClientRequestsService {
         type: true,
         status: true,
         title: true,
+        comment: true,
         packages: {
           where: { comment: 'Фактический короб из аварийного Excel' },
           select: { id: true },
@@ -368,14 +657,30 @@ export class ClientRequestsService {
     request: {
       id: string;
       clientId: string;
+      type: ClientRequestType;
       status: ClientRequestStatus;
       title: string;
+      comment: string | null;
       packages: Array<{ id: string }>;
     },
     dto: UpdateClientRequestStatusDto,
     user: AuthUser,
   ) {
     const comment = normalizeText(dto.managerComment) ?? 'Заявка сдана вручную; остатки списаны автоматически.';
+    const usesRecordedPackages = request.status === ClientRequestStatus.PACKED && request.packages.length > 0;
+
+    if (
+      !usesRecordedPackages &&
+      request.status !== ClientRequestStatus.DONE &&
+      isManuallyCreatedOutboundRequest(request)
+    ) {
+      const selectedBoxes = await this.prisma.clientRequestBoxSelection.count({
+        where: { requestItem: { requestId: request.id } },
+      });
+      if (selectedBoxes === 0) {
+        throw new BadRequestException('Сначала нажмите «Выбрать короба» и укажите, откуда списывать товары заявки.');
+      }
+    }
 
     const fulfillment = {
       requestId: request.id,
@@ -386,7 +691,7 @@ export class ClientRequestsService {
       packedUnits: dto.packedUnits,
       packages: dto.packages,
     };
-    if (request.status === ClientRequestStatus.PACKED && request.packages.length > 0) {
+    if (usesRecordedPackages) {
       // Аварийное закрытие уже зафиксировало фактические короба, их состав и складские движения.
       // При сдаче повторно ничего не подбираем из остатков: начисления и логистика берутся из этих упаковочных мест.
       await this.stockOperations.shipClientRequest(fulfillment, user);
@@ -756,6 +1061,43 @@ const clientEditableStatuses = new Set<ClientRequestStatus>([
   ClientRequestStatus.IN_REVIEW,
   ClientRequestStatus.APPROVED,
 ]);
+
+const manualBoxSelectionEditableStatuses = new Set<ClientRequestStatus>([
+  ClientRequestStatus.SUBMITTED,
+  ClientRequestStatus.IN_REVIEW,
+  ClientRequestStatus.APPROVED,
+  ClientRequestStatus.IN_WORK,
+]);
+
+const manualSelectionStockStatuses: StockStatus[] = [
+  StockStatus.SHIPPING,
+  StockStatus.PACKING,
+  StockStatus.AVAILABLE,
+];
+
+function isManuallyCreatedOutboundRequest(request: { type: ClientRequestType; comment?: string | null }) {
+  return (
+    request.type === ClientRequestType.OUTBOUND &&
+    !request.comment?.toLocaleLowerCase('ru-RU').includes('создано из excel:')
+  );
+}
+
+function assertManualBoxSelectionRequest(request: {
+  type: ClientRequestType;
+  comment?: string | null;
+  pickWaveRequests?: Array<{ wave: { status: string } }>;
+}) {
+  if (!isManuallyCreatedOutboundRequest(request)) {
+    throw new BadRequestException('Ручной выбор коробов доступен только для заявок на отгрузку, созданных вручную.');
+  }
+
+  const hasActiveWave = request.pickWaveRequests?.some(
+    ({ wave }) => wave.status !== 'DONE' && wave.status !== 'CANCELLED',
+  );
+  if (hasActiveWave) {
+    throw new BadRequestException('Заявка уже включена в волну сборки. Выбор коробов нужно выполнять до запуска волны.');
+  }
+}
 
 function canEditClientRequestAnyStatus(user: AuthUser) {
   return user.permissionCodes.includes('system:admin') || user.roleCodes.some((role) => ['ADMIN', 'OWNER', 'MANAGER'].includes(role));

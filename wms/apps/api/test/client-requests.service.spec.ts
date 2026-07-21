@@ -179,6 +179,9 @@ describe('ClientRequestsService', () => {
           packages: [],
         }),
       },
+      clientRequestBoxSelection: {
+        count: vi.fn().mockResolvedValue(1),
+      },
       $transaction: vi.fn((callback) => callback(tx)),
     };
     const service = new ClientRequestsService(prisma as never, new ClientScopeService(), stock as never);
@@ -230,6 +233,38 @@ describe('ClientRequestsService', () => {
       }),
     );
     expect(updated).toMatchObject({ id: 'request-1', status: ClientRequestStatus.DONE });
+  });
+
+  it('не сдает ручную outbound-заявку, пока для нее не выбраны короба', async () => {
+    const stock = {
+      shipClientRequestFromCurrentStock: vi.fn(),
+    };
+    const prisma = {
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'request-1',
+          clientId: 'client-1',
+          type: ClientRequestType.OUTBOUND,
+          status: ClientRequestStatus.APPROVED,
+          title: 'Ручная заявка',
+          comment: null,
+          packages: [],
+        }),
+      },
+      clientRequestBoxSelection: {
+        count: vi.fn().mockResolvedValue(0),
+      },
+    };
+    const service = new ClientRequestsService(prisma as never, new ClientScopeService(), stock as never);
+
+    await expect(
+      service.updateStatus(
+        'request-1',
+        { status: ClientRequestStatus.DONE, boxes: 1, pallets: 0, packedUnits: 1 },
+        user({ clientIds: ['client-1'], writableClientIds: ['client-1'] }),
+      ),
+    ).rejects.toThrow('Сначала нажмите «Выбрать короба»');
+    expect(stock.shipClientRequestFromCurrentStock).not.toHaveBeenCalled();
   });
 
   it('сдает аварийно упакованную заявку по ее фактическим коробам без повторного ручного списания', async () => {

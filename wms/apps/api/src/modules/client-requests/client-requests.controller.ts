@@ -5,6 +5,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   Res,
   StreamableFile,
@@ -34,6 +35,7 @@ import { ImportOutboundRequestXlsxDto } from './dto/import-outbound-request-xlsx
 import { ListClientRequestsDto } from './dto/list-client-requests.dto';
 import { PreviewClientRequestAvailabilityDto } from './dto/preview-client-request-availability.dto';
 import { UpdateClientRequestDto } from './dto/update-client-request.dto';
+import { UpdateClientRequestBoxSelectionDto } from './dto/update-client-request-box-selection.dto';
 import { UpdateClientRequestStatusDto } from './dto/update-client-request-status.dto';
 
 @ApiTags('client-requests')
@@ -88,6 +90,22 @@ export class ClientRequestsController {
   @RequirePermissions('client-requests:write')
   submitBalanceReview(@Param('waveId') waveId: string, @CurrentUser() user: AuthUser) {
     return this.waves.submitBalanceReview(waveId, user);
+  }
+
+  @Get(':id/manual-box-selection')
+  @RequirePermissions('stock:write')
+  getManualBoxSelection(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.clientRequests.getManualBoxSelection(id, user);
+  }
+
+  @Put(':id/manual-box-selection')
+  @RequirePermissions('stock:write')
+  saveManualBoxSelection(
+    @Param('id') id: string,
+    @Body() dto: UpdateClientRequestBoxSelectionDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.clientRequests.saveManualBoxSelection(id, dto, user);
   }
 
   @Get(':id')

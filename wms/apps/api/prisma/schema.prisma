@@ -628,7 +628,7 @@ model Zone {
 }
 
 model Sku {
-  id                   String                     @id @default(uuid())
+  id                   String                      @id @default(uuid())
   clientId             String
   internalSku          String
   clientSku            String?
@@ -639,32 +639,33 @@ model Sku {
   color                String?
   size                 String?
   weightGrams          Int?
-  lengthCm             Decimal?                   @db.Decimal(10, 2)
-  widthCm              Decimal?                   @db.Decimal(10, 2)
-  heightCm             Decimal?                   @db.Decimal(10, 2)
-  volumeLiters         Decimal?                   @db.Decimal(12, 3)
-  volumeSource         VolumeSource               @default(CALCULATED)
+  lengthCm             Decimal?                    @db.Decimal(10, 2)
+  widthCm              Decimal?                    @db.Decimal(10, 2)
+  heightCm             Decimal?                    @db.Decimal(10, 2)
+  volumeLiters         Decimal?                    @db.Decimal(12, 3)
+  volumeSource         VolumeSource                @default(CALCULATED)
   shelfLifeUntil       DateTime?
-  needsChestnyZnak     Boolean                    @default(false)
-  isUnmarked           Boolean                    @default(false)
-  needsLabel           Boolean                    @default(false)
-  needsRelabel         Boolean                    @default(false)
-  isDraft              Boolean                    @default(false)
+  needsChestnyZnak     Boolean                     @default(false)
+  isUnmarked           Boolean                     @default(false)
+  needsLabel           Boolean                     @default(false)
+  needsRelabel         Boolean                     @default(false)
+  isDraft              Boolean                     @default(false)
   draftSource          String?
   marketplace          MarketplaceType?
   marketplaceProductId String?
   marketplaceOfferId   String?
   marketplacePayload   Json?
   marketplaceSyncedAt  DateTime?
-  client               Client                     @relation(fields: [clientId], references: [id])
+  client               Client                      @relation(fields: [clientId], references: [id])
   barcodes             Barcode[]
   movements            StockMovement[]
   balances             StockBalance[]
   clientRequestItems   ClientRequestItem[]
+  requestBoxSelections ClientRequestBoxSelection[]
   packageItems         ClientRequestPackageItem[]
   productMarks         ProductMark[]
-  createdAt            DateTime                   @default(now())
-  updatedAt            DateTime                   @updatedAt
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
 
   @@unique([clientId, internalSku])
   @@index([clientId, isDraft])
@@ -703,18 +704,19 @@ model Barcode {
 }
 
 model Box {
-  id           String          @id @default(uuid())
-  clientId     String
-  zoneId       String?
-  palletId     String?
-  code         String          @unique
-  status       String          @default("active")
-  client       Client          @relation(fields: [clientId], references: [id])
-  zone         Zone?           @relation(fields: [zoneId], references: [id])
-  pallet       Pallet?         @relation(fields: [palletId], references: [id])
-  movements    StockMovement[]
-  balances     StockBalance[]
-  productMarks ProductMark[]
+  id                   String                      @id @default(uuid())
+  clientId             String
+  zoneId               String?
+  palletId             String?
+  code                 String                      @unique
+  status               String                      @default("active")
+  client               Client                      @relation(fields: [clientId], references: [id])
+  zone                 Zone?                       @relation(fields: [zoneId], references: [id])
+  pallet               Pallet?                     @relation(fields: [palletId], references: [id])
+  movements            StockMovement[]
+  balances             StockBalance[]
+  productMarks         ProductMark[]
+  requestBoxSelections ClientRequestBoxSelection[]
 
   @@unique([clientId, code])
 }
@@ -842,24 +844,24 @@ model InventorySession {
 }
 
 model InventoryAuditBox {
-  id              String             @id @default(uuid())
+  id              String               @id @default(uuid())
   sessionId       String
   boxId           String
   boxCode         String
   clientId        String
   clientName      String
-  status          InventoryBoxStatus @default(COUNTING)
+  status          InventoryBoxStatus   @default(COUNTING)
   countedByUserId String?
   countedByName   String?
-  startedAt       DateTime           @default(now())
+  startedAt       DateTime             @default(now())
   completedAt     DateTime?
   resolvedAt      DateTime?
   resolvedByName  String?
   comment         String?
-  session         InventorySession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  session         InventorySession     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   lines           InventoryAuditLine[]
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
 
   @@unique([sessionId, boxId])
   @@index([sessionId, status])
@@ -890,22 +892,22 @@ model InventoryAuditLine {
 }
 
 model InventoryBoxRescanRequest {
-  id                  String   @id @default(uuid())
-  boxId               String
-  boxCode             String
-  clientId            String
-  clientName          String
-  sessionId           String
-  sessionTitle        String
-  requestedByUserId   String
-  requestedByName     String
-  status              String   @default("PENDING")
-  approvedByUserId    String?
-  approvedByName      String?
-  approvedAt          DateTime?
-  consumedAt          DateTime?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  id                String    @id @default(uuid())
+  boxId             String
+  boxCode           String
+  clientId          String
+  clientName        String
+  sessionId         String
+  sessionTitle      String
+  requestedByUserId String
+  requestedByName   String
+  status            String    @default("PENDING")
+  approvedByUserId  String?
+  approvedByName    String?
+  approvedAt        DateTime?
+  consumedAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   @@index([status, createdAt])
   @@index([boxId, sessionId, status])
@@ -951,16 +953,17 @@ model ClientRequest {
 }
 
 model ClientRequestItem {
-  id           String                     @id @default(uuid())
-  requestId    String
-  skuId        String?
-  barcode      String?
-  name         String?
-  quantity     Int
-  comment      String?
-  request      ClientRequest              @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  sku          Sku?                       @relation(fields: [skuId], references: [id])
-  packageItems ClientRequestPackageItem[]
+  id            String                      @id @default(uuid())
+  requestId     String
+  skuId         String?
+  barcode       String?
+  name          String?
+  quantity      Int
+  comment       String?
+  request       ClientRequest               @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  sku           Sku?                        @relation(fields: [skuId], references: [id])
+  packageItems  ClientRequestPackageItem[]
+  boxSelections ClientRequestBoxSelection[]
 
   @@index([requestId])
   @@index([skuId])
@@ -1188,20 +1191,37 @@ model ClientNotificationPreference {
 }
 
 model BillingService {
-  id                       String                       @id @default(uuid())
-  code                     String                       @unique
-  name                     String
-  unit                     BillingUnit                  @default(SERVICE)
-  defaultPriceRub          Decimal?                     @db.Decimal(12, 2)
-  isActive                 Boolean                      @default(true)
-  charges                  BillingCharge[]
-  clientPrices             ClientBillingService[]
-  fbsAdditionalSelections  ClientFbsAdditionalService[]
-  fbsBoxFormationSettings  ClientFbsBillingSettings[]   @relation("FbsBoxFormationService")
-  fbsBoxMaterialSettings   ClientFbsBillingSettings[]   @relation("FbsBoxMaterialService")
-  fbsPalletSettings        ClientFbsBillingSettings[]   @relation("FbsPalletService")
-  createdAt                DateTime                     @default(now())
-  updatedAt                DateTime                     @updatedAt
+  id                      String                       @id @default(uuid())
+  code                    String                       @unique
+  name                    String
+  unit                    BillingUnit                  @default(SERVICE)
+  defaultPriceRub         Decimal?                     @db.Decimal(12, 2)
+  isActive                Boolean                      @default(true)
+  charges                 BillingCharge[]
+  clientPrices            ClientBillingService[]
+  fbsAdditionalSelections ClientFbsAdditionalService[]
+  fbsBoxFormationSettings ClientFbsBillingSettings[]   @relation("FbsBoxFormationService")
+  fbsBoxMaterialSettings  ClientFbsBillingSettings[]   @relation("FbsBoxMaterialService")
+  fbsPalletSettings       ClientFbsBillingSettings[]   @relation("FbsPalletService")
+  createdAt               DateTime                     @default(now())
+  updatedAt               DateTime                     @updatedAt
+}
+
+model ClientRequestBoxSelection {
+  id            String            @id @default(uuid())
+  requestItemId String
+  skuId         String
+  boxId         String
+  quantity      Int
+  requestItem   ClientRequestItem @relation(fields: [requestItemId], references: [id], onDelete: Cascade)
+  sku           Sku               @relation(fields: [skuId], references: [id])
+  box           Box               @relation(fields: [boxId], references: [id])
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@unique([requestItemId, boxId])
+  @@index([boxId])
+  @@index([skuId])
 }
 
 model ClientBillingService {
@@ -1226,27 +1246,27 @@ model ClientBillingService {
 }
 
 model ClientFbsBillingSettings {
-  id                        String                       @id @default(uuid())
-  clientId                  String                       @unique
-  defaultDeliveryDestination FbsDeliveryDestination     @default(PICKUP_POINT)
-  pickupPointBasePriceRub   Decimal                      @default(500) @db.Decimal(12, 2)
-  vnukovoBasePriceRub       Decimal                      @default(1500) @db.Decimal(12, 2)
-  baseIncludedItems         Int                          @default(5)
-  extraBlockItems           Int                          @default(5)
-  extraBlockPriceRub        Decimal                      @default(250) @db.Decimal(12, 2)
-  boxCapacityItems          Int                          @default(16)
-  boxFormationServiceId     String?
-  boxMaterialServiceId      String?
-  palletsEnabled            Boolean                      @default(false)
-  boxesPerPallet            Int                          @default(16)
-  palletServiceId           String?
-  client                    Client                       @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  boxFormationService       BillingService?              @relation("FbsBoxFormationService", fields: [boxFormationServiceId], references: [id])
-  boxMaterialService        BillingService?              @relation("FbsBoxMaterialService", fields: [boxMaterialServiceId], references: [id])
-  palletService             BillingService?              @relation("FbsPalletService", fields: [palletServiceId], references: [id])
-  additionalServices        ClientFbsAdditionalService[]
-  createdAt                 DateTime                     @default(now())
-  updatedAt                 DateTime                     @updatedAt
+  id                         String                       @id @default(uuid())
+  clientId                   String                       @unique
+  defaultDeliveryDestination FbsDeliveryDestination       @default(PICKUP_POINT)
+  pickupPointBasePriceRub    Decimal                      @default(500) @db.Decimal(12, 2)
+  vnukovoBasePriceRub        Decimal                      @default(1500) @db.Decimal(12, 2)
+  baseIncludedItems          Int                          @default(5)
+  extraBlockItems            Int                          @default(5)
+  extraBlockPriceRub         Decimal                      @default(250) @db.Decimal(12, 2)
+  boxCapacityItems           Int                          @default(16)
+  boxFormationServiceId      String?
+  boxMaterialServiceId       String?
+  palletsEnabled             Boolean                      @default(false)
+  boxesPerPallet             Int                          @default(16)
+  palletServiceId            String?
+  client                     Client                       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  boxFormationService        BillingService?              @relation("FbsBoxFormationService", fields: [boxFormationServiceId], references: [id])
+  boxMaterialService         BillingService?              @relation("FbsBoxMaterialService", fields: [boxMaterialServiceId], references: [id])
+  palletService              BillingService?              @relation("FbsPalletService", fields: [palletServiceId], references: [id])
+  additionalServices         ClientFbsAdditionalService[]
+  createdAt                  DateTime                     @default(now())
+  updatedAt                  DateTime                     @updatedAt
 
   @@index([boxFormationServiceId])
   @@index([boxMaterialServiceId])

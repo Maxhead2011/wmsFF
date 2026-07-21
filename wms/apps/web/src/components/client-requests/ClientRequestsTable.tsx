@@ -1,4 +1,4 @@
-import { Activity, AlertTriangle, CheckCircle2, ClipboardList, Edit3, FileDown, FileSpreadsheet, FileText, FileUp, PackageCheck, RefreshCw, Send, Truck, Undo2, XCircle } from 'lucide-react';
+import { Activity, AlertTriangle, Boxes, CheckCircle2, ClipboardList, Edit3, FileDown, FileSpreadsheet, FileText, FileUp, PackageCheck, RefreshCw, Send, Truck, Undo2, XCircle } from 'lucide-react';
 import {
   type ClientRequestFileSummary,
   type ClientRequestStatus,
@@ -27,6 +27,7 @@ type ClientRequestsTableProps = {
   onDownloadRequestItems?: (request: ClientRequestSummary) => void;
   onDownloadOriginalFile?: (request: ClientRequestSummary, file: ClientRequestFileSummary) => void;
   onOpenOnlineExecution?: (request: ClientRequestSummary) => void;
+  onSelectManualBoxes?: (request: ClientRequestSummary) => void;
   onOpenPickInstruction?: (request: ClientRequestSummary) => void;
   onRefreshPickInstruction?: (request: ClientRequestSummary) => void;
   onDownloadPickInstruction?: (request: ClientRequestSummary) => void;
@@ -61,6 +62,7 @@ export function ClientRequestsTable({
   onDownloadRequestItems,
   onDownloadOriginalFile,
   onOpenOnlineExecution,
+  onSelectManualBoxes,
   onOpenPickInstruction,
   onRefreshPickInstruction,
   onDownloadPickInstruction,
@@ -190,7 +192,18 @@ export function ClientRequestsTable({
                 <td className="client-request-table__warehouse-cell" data-label="Склад">
                   {canShowWarehouseActions(request) ? (
                     <div className="client-request-actions">
-                      {onOpenPickInstruction && request.type === 'OUTBOUND' ? (
+                       {onSelectManualBoxes && canSelectManualBoxes(request) ? (
+                         <button
+                           className="client-request-action-button client-request-action-button--box-selection"
+                           type="button"
+                           onClick={() => onSelectManualBoxes(request)}
+                           title="Выбрать короба, из которых будет списан товар"
+                         >
+                           <Boxes size={15} aria-hidden="true" />
+                           <span>Выбрать короба</span>
+                         </button>
+                       ) : null}
+                       {onOpenPickInstruction && request.type === 'OUTBOUND' ? (
                         <button
                           className="client-request-action-button client-request-action-button--instruction"
                           type="button"
@@ -397,6 +410,14 @@ function canShowWarehouseActions(request: ClientRequestSummary) {
 
 function canCancelRequest(request: ClientRequestSummary) {
   return request.type === 'OUTBOUND' && ['SUBMITTED', 'IN_REVIEW', 'APPROVED'].includes(request.status);
+}
+
+function canSelectManualBoxes(request: ClientRequestSummary) {
+  return (
+    request.type === 'OUTBOUND' &&
+    ['SUBMITTED', 'IN_REVIEW', 'APPROVED', 'IN_WORK'].includes(request.status) &&
+    !request.comment?.toLocaleLowerCase('ru-RU').includes('создано из excel:')
+  );
 }
 
 function canDownloadMarketplaceTemplates(request: ClientRequestSummary) {

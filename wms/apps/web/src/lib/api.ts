@@ -872,6 +872,43 @@ export type ClientRequestSummary = {
   packages: ClientRequestPackage[];
 };
 
+export type ClientRequestManualBoxSelection = {
+  request: {
+    id: string;
+    title: string;
+    status: ClientRequestStatus;
+    clientId: string;
+  };
+  editable: boolean;
+  summary: {
+    items: number;
+    requestedQuantity: number;
+    selectedQuantity: number;
+  };
+  items: Array<{
+    requestItemId: string;
+    requestedQuantity: number;
+    selectedQuantity: number;
+    sku: {
+      id: string;
+      internalSku: string;
+      article: string | null;
+      name: string;
+      barcodes: string[];
+    } | null;
+    requestedBarcode: string | null;
+    requestedName: string | null;
+    boxes: Array<{
+      boxId: string;
+      boxCode: string;
+      boxStatus: string;
+      availableQuantity: number;
+      selectedQuantity: number;
+      statuses: Array<{ status: string; quantity: number }>;
+    }>;
+  }>;
+};
+
 export type ClientRequestBoxOverlapStatistics = {
   generatedAt: string;
   activeRequestsCount: number;
@@ -3628,6 +3665,24 @@ export async function fetchClientRequests(
   filter: { clientId?: string; status?: ClientRequestStatus; type?: ClientRequestType; archive?: boolean; boxCode?: string } = {},
 ) {
   return request<ClientRequestSummary[]>(withQuery('/client-requests', filter), {
+    accessToken,
+  });
+}
+
+export async function fetchClientRequestManualBoxSelection(accessToken: string, requestId: string) {
+  return request<ClientRequestManualBoxSelection>(`/client-requests/${requestId}/manual-box-selection`, {
+    accessToken,
+  });
+}
+
+export async function saveClientRequestManualBoxSelection(
+  accessToken: string,
+  requestId: string,
+  selections: Array<{ requestItemId: string; boxId: string; quantity: number }>,
+) {
+  return request<ClientRequestManualBoxSelection>(`/client-requests/${requestId}/manual-box-selection`, {
+    method: 'PUT',
+    body: { selections },
     accessToken,
   });
 }

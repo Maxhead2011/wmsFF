@@ -561,7 +561,7 @@ describe('StockOperationsService', () => {
     );
   });
 
-  it('ручное закрытие outbound-заявки списывает товар из текущего доступного остатка', async () => {
+  it('ручное закрытие outbound-заявки списывает товар из выбранного короба и запускает формирование счета', async () => {
     const tx = {
       stockMovement: {
         findFirst: vi.fn().mockResolvedValue(null),
@@ -586,31 +586,60 @@ describe('StockOperationsService', () => {
         findFirst: vi.fn().mockResolvedValue(null),
         create: vi.fn().mockResolvedValue({ id: 'event-1' }),
       },
+      clientRequestBoxSelection: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'selection-1',
+            requestItemId: 'item-1',
+            skuId: 'sku-1',
+            boxId: 'box-selected',
+            quantity: 3,
+            box: { code: 'FFL_SELECTED' },
+          },
+        ]),
+      },
       sku: {
         findFirst: vi.fn().mockResolvedValue({ id: 'sku-1', internalSku: 'SKU-1' }),
       },
       stockBalance: {
         findMany: vi.fn().mockResolvedValue([
           {
-            id: 'available-balance',
-            balanceKey: 'client-1:sku-1:no-box:no-pallet:AVAILABLE',
+            id: 'other-balance',
+            balanceKey: 'client-1:sku-1:box-other:no-pallet:AVAILABLE',
             clientId: 'client-1',
             skuId: 'sku-1',
-            boxId: null,
+            boxId: 'box-other',
+            palletId: null,
+            status: 'AVAILABLE',
+            quantity: 20,
+            updatedAt: new Date('2026-07-01T00:00:00.000Z'),
+            box: { code: 'FFL_OTHER' },
+          },
+          {
+            id: 'selected-balance',
+            balanceKey: 'client-1:sku-1:box-selected:no-pallet:AVAILABLE',
+            clientId: 'client-1',
+            skuId: 'sku-1',
+            boxId: 'box-selected',
             palletId: null,
             status: 'AVAILABLE',
             quantity: 3,
             updatedAt: new Date('2026-07-03T00:00:00.000Z'),
+            box: { code: 'FFL_SELECTED' },
           },
         ]),
-        update: vi.fn().mockResolvedValue({ id: 'available-balance', quantity: 0 }),
+        update: vi.fn().mockResolvedValue({ id: 'selected-balance', quantity: 0 }),
         delete: vi.fn().mockResolvedValue(undefined),
       },
+    };
+    const billingAutomation = {
+      generateForDoneRequest: vi.fn().mockResolvedValue({ status: 'APPLIED', created: 1, mainInvoiceId: 'invoice-1' }),
     };
     const shipService = new StockOperationsService(
       { $transaction: (callback: (tx: typeof tx) => unknown) => callback(tx) } as never,
       { requireClientAccess: vi.fn() } as never,
       { balanceKey: vi.fn() } as never,
+      billingAutomation as never,
     );
 
     await expect(
@@ -638,7 +667,8 @@ describe('StockOperationsService', () => {
       ],
     });
 
-    expect(tx.stockBalance.delete).toHaveBeenCalledWith({ where: { id: 'available-balance' } });
+    expect(tx.stockBalance.delete).toHaveBeenCalledWith({ where: { id: 'selected-balance' } });
+    expect(tx.stockBalance.delete).not.toHaveBeenCalledWith({ where: { id: 'other-balance' } });
     expect(tx.stockMovement.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -646,7 +676,8 @@ describe('StockOperationsService', () => {
           status: 'AVAILABLE',
           quantity: -3,
           sourceDocument: 'request-1',
-          idempotencyKey: 'manual-done:item-1:available-balance:out',
+          boxId: 'box-selected',
+          idempotencyKey: 'manual-done:item-1:selected-balance:out',
         }),
       }),
     );
@@ -659,6 +690,7 @@ describe('StockOperationsService', () => {
         }),
       }),
     );
+    expect(billingAutomation.generateForDoneRequest).toHaveBeenCalledWith('request-1', expect.any(Object));
   });
 });
 

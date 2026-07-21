@@ -32,6 +32,10 @@ type StockBalanceForAllocation = Prisma.StockBalanceGetPayload<{
   include: { box: { select: { code: true } } };
 }>;
 
+type RequestBoxSelectionForAllocation = Prisma.ClientRequestBoxSelectionGetPayload<{
+  include: { box: { select: { code: true } } };
+}>;
+
 type TransferExecutionInput = TransferBetweenBoxesDto & {
   sourceDocument?: string;
 };
@@ -696,7 +700,16 @@ export class StockOperationsService {
         throw new BadRequestException('В заявке нет товарных позиций для сборки.');
       }
 
-      const plan = await this.planRequestPick(tx, request.clientId, request.items);
+      const savedSelections = await this.loadRequestBoxSelections(tx, request.id);
+      const plan = savedSelections.length
+        ? await this.planRequestAllocationsFromSelections(
+            tx,
+            request.clientId,
+            request.items,
+            savedSelections,
+            [StockStatus.AVAILABLE],
+          )
+        : await this.planRequestPick(tx, request.clientId, request.items);
 
       // Русский комментарий: сначала строим полный план по всем строкам, и только потом меняем остатки,
       // чтобы нехватка по одной позиции не оставила заявку частично собранной.
@@ -790,7 +803,16 @@ export class StockOperationsService {
 
       await this.ensureAvailableStockIsInPacking(tx, request, `complete-pick-before-pack:${request.id}:${baseKey}`);
 
-      const plan = await this.planRequestAllocations(tx, request.clientId, request.items, StockStatus.PACKING);
+      const savedSelections = await this.loadRequestBoxSelections(tx, request.id);
+      const plan = savedSelections.length
+        ? await this.planRequestAllocationsFromSelections(
+            tx,
+            request.clientId,
+            request.items,
+            savedSelections,
+            [StockStatus.PACKING],
+          )
+        : await this.planRequestAllocations(tx, request.clientId, request.items, StockStatus.PACKING);
 
       // Русский комментарий: упаковка переводит уже собранный товар из PACKING в SHIPPING,
       // чтобы отгрузка работала только с упакованным остатком.
@@ -913,7 +935,16 @@ export class StockOperationsService {
 
       await this.ensurePackedStockIsInShipping(tx, request, `complete-pack-before-ship:${request.id}:${baseKey}`);
 
-      const plan = await this.planRequestAllocations(tx, request.clientId, request.items, StockStatus.SHIPPING);
+      const savedSelections = await this.loadRequestBoxSelections(tx, request.id);
+      const plan = savedSelections.length
+        ? await this.planRequestAllocationsFromSelections(
+            tx,
+            request.clientId,
+            request.items,
+            savedSelections,
+            [StockStatus.SHIPPING],
+          )
+        : await this.planRequestAllocations(tx, request.clientId, request.items, StockStatus.SHIPPING);
 
       for (const line of plan.lines) {
         for (const allocation of line.allocations) {
@@ -1030,7 +1061,16 @@ export class StockOperationsService {
         dto,
         request.items.reduce((total, item) => total + item.quantity, 0),
       );
-      const plan = await this.planRequestShipment(tx, request.clientId, request.items);
+      const savedSelections = await this.loadRequestBoxSelections(tx, request.id);
+      const plan = savedSelections.length
+        ? await this.planRequestAllocationsFromSelections(
+            tx,
+            request.clientId,
+            request.items,
+            savedSelections,
+            [StockStatus.SHIPPING, StockStatus.PACKING, StockStatus.AVAILABLE],
+          )
+        : await this.planRequestShipment(tx, request.clientId, request.items);
       await tx.clientRequestPackage.deleteMany({ where: { requestId: request.id } });
       const packages = await this.createRequestPackages(tx, {
         request,
@@ -1373,6 +1413,110 @@ export class StockOperationsService {
 
       if (remaining > 0) {
         throw new BadRequestException(`Недостаточно остатка для списания позиции ${sku.internalSku}.`);
+      }
+
+      lines.push({
+        itemId: item.id,
+        skuId: sku.id,
+        skuWeightGrams: sku.weightGrams,
+        barcode: item.barcode,
+        requestedQuantity: item.quantity,
+        allocations,
+      });
+    }
+
+    return { lines };
+  }
+
+  private loadRequestBoxSelections(tx: Prisma.TransactionClient, requestId: string) {
+    // Некоторые старые импорты и тестовые адаптеры могут не иметь новой таблицы до синхронизации схемы.
+    if (!('clientRequestBoxSelection' in tx)) {
+      return Promise.resolve([] as RequestBoxSelectionForAllocation[]);
+    }
+    return tx.clientRequestBoxSelection.findMany({
+      where: { requestItem: { requestId } },
+      include: { box: { select: { code: true } } },
+      orderBy: [{ createdAt: 'asc' }],
+    });
+  }
+
+  private async planRequestAllocationsFromSelections(
+    tx: Prisma.TransactionClient,
+    clientId: string,
+    items: RequestItemForAllocation[],
+    selections: RequestBoxSelectionForAllocation[],
+    sourceStatuses: StockStatus[],
+  ): Promise<RequestAllocationPlan> {
+    const resolvedItems: Array<{
+      item: RequestItemForAllocation;
+      sku: { id: string; internalSku: string; weightGrams: number | null };
+      selections: RequestBoxSelectionForAllocation[];
+    }> = [];
+
+    for (const item of items) {
+      const sku = await this.resolveSku(tx, {
+        clientId,
+        skuId: item.skuId ?? undefined,
+        barcode: item.barcode ?? undefined,
+      });
+      const itemSelections = selections.filter((selection) => selection.requestItemId === item.id);
+      const selectedQuantity = itemSelections.reduce((sum, selection) => sum + selection.quantity, 0);
+      if (selectedQuantity !== item.quantity) {
+        throw new BadRequestException(
+          `Для позиции ${sku.internalSku} нужно выбрать ${item.quantity} шт., сейчас выбрано ${selectedQuantity} шт.`,
+        );
+      }
+      if (itemSelections.some((selection) => selection.skuId !== sku.id)) {
+        throw new BadRequestException(`Сохраненный выбор коробов для позиции ${sku.internalSku} устарел.`);
+      }
+      resolvedItems.push({ item, sku, selections: itemSelections });
+    }
+
+    const skuIds = [...new Set(resolvedItems.map(({ sku }) => sku.id))];
+    const boxIds = [...new Set(selections.map((selection) => selection.boxId))];
+    const balances = await tx.stockBalance.findMany({
+      where: {
+        clientId,
+        skuId: { in: skuIds },
+        boxId: { in: boxIds },
+        status: { in: sourceStatuses },
+        quantity: { gt: 0 },
+        box: { status: { notIn: ['deleted', 'archived'] } },
+      },
+      include: { box: { select: { code: true } } },
+      orderBy: [{ updatedAt: 'asc' }],
+    });
+    balances.sort((left, right) => {
+      const statusPriority = sourceStatuses.indexOf(left.status) - sourceStatuses.indexOf(right.status);
+      if (statusPriority !== 0) {
+        return statusPriority;
+      }
+      return (left.updatedAt?.getTime?.() ?? 0) - (right.updatedAt?.getTime?.() ?? 0);
+    });
+
+    const balanceRemaining = new Map<string, number>();
+    const lines: RequestAllocationPlan['lines'] = [];
+    for (const { item, sku, selections: itemSelections } of resolvedItems) {
+      const allocations: Array<{ balance: StockBalanceForAllocation; quantity: number }> = [];
+      for (const selection of itemSelections) {
+        let remaining = selection.quantity;
+        const matchingBalances = balances.filter(
+          (balance) => balance.skuId === sku.id && balance.boxId === selection.boxId,
+        );
+        for (const balance of matchingBalances) {
+          if (remaining <= 0) break;
+          const available = balanceRemaining.has(balance.id) ? balanceRemaining.get(balance.id)! : balance.quantity;
+          if (available <= 0) continue;
+          const quantity = Math.min(available, remaining);
+          allocations.push({ balance, quantity });
+          balanceRemaining.set(balance.id, available - quantity);
+          remaining -= quantity;
+        }
+        if (remaining > 0) {
+          throw new BadRequestException(
+            `В коробе ${selection.box.code} уже недостаточно товара ${sku.internalSku}. Обновите выбор коробов.`,
+          );
+        }
       }
 
       lines.push({
