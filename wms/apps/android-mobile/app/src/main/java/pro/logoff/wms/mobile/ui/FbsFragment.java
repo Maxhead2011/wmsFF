@@ -38,9 +38,12 @@ import java.util.Map;
 
 import pro.logoff.wms.mobile.AppState;
 import pro.logoff.wms.mobile.LogoffApplication;
+import pro.logoff.wms.mobile.MainActivity;
 import pro.logoff.wms.mobile.R;
 import pro.logoff.wms.mobile.databinding.FragmentFbsBinding;
+import pro.logoff.wms.mobile.files.DocumentSaver;
 import pro.logoff.wms.mobile.network.MobileRepository;
+import okhttp3.ResponseBody;
 import retrofit2.Call;
 import retrofit2.Callback;
 import retrofit2.Response;
@@ -60,12 +63,16 @@ public class FbsFragment extends Fragment {
     private LogoffApplication app;
     private String section = ACTIVE;
     private Map<String, Object> orderData = Collections.emptyMap();
+    private List<Map<String, Object>> activeClients = Collections.emptyList();
+    private final Map<String, Map<String, Object>> selectedOrders = new LinkedHashMap<>();
     private Map<String, Object> settingsData = Collections.emptyMap();
     private List<Map<String, Object>> calculatorTariffSets = Collections.emptyList();
     private Map<String, Object> calculatorTariffDetail = Collections.emptyMap();
     private List<String> calculatorDestinations = Collections.emptyList();
     private String calculatorTariffId = "";
     private boolean loadingOrders;
+    private boolean loadingActiveClients;
+    private boolean orderActionRunning;
     private boolean loadingSettings;
     private boolean loadingCalculator;
     private PricingForm pricingForm;
@@ -100,6 +107,8 @@ public class FbsFragment extends Fragment {
 
     public void refresh() {
         orderData = Collections.emptyMap();
+        activeClients = Collections.emptyList();
+        selectedOrders.clear();
         settingsData = Collections.emptyMap();
         calculatorTariffSets = Collections.emptyList();
         calculatorTariffDetail = Collections.emptyMap();
@@ -110,6 +119,7 @@ public class FbsFragment extends Fragment {
 
     private void refresh(boolean force) {
         loadOrders(force);
+        loadActiveClients(force);
         if (PRICING.equals(section) && canManagePricing()) loadSettings(force);
         if (CALCULATOR.equals(section) && calculatorEnabled()) loadCalculatorOptions(force);
     }
@@ -130,6 +140,7 @@ public class FbsFragment extends Fragment {
                 loadingOrders = false;
                 if (response.isSuccessful() && response.body() != null) {
                     orderData = response.body();
+                    pruneSelectedOrders();
                     renderSections();
                     if (isOrderSection()) renderOrders();
                 } else if (isOrderSection()) {
@@ -143,6 +154,34 @@ public class FbsFragment extends Fragment {
                 if (!isAdded() || binding == null) return;
                 loadingOrders = false;
                 if (isOrderSection()) showEmpty(MobileRepository.readable(error));
+                updateLoading();
+            }
+        });
+    }
+
+    private void loadActiveClients(boolean force) {
+        if (!force && !activeClients.isEmpty()) return;
+        loadingActiveClients = true;
+        updateLoading();
+        app.repository().api().fbsActiveClients().enqueue(new Callback<>() {
+            @Override
+            public void onResponse(
+                    Call<List<Map<String, Object>>> call,
+                    Response<List<Map<String, Object>>> response
+            ) {
+                if (!isAdded() || binding == null) return;
+                loadingActiveClients = false;
+                if (response.isSuccessful() && response.body() != null) {
+                    activeClients = response.body();
+                    if (ACTIVE.equals(section) && !orderData.isEmpty()) renderOrders();
+                }
+                updateLoading();
+            }
+
+            @Override
+            public void onFailure(Call<List<Map<String, Object>>> call, Throwable error) {
+                if (!isAdded() || binding == null) return;
+                loadingActiveClients = false;
                 updateLoading();
             }
         });
@@ -419,6 +458,7 @@ public class FbsFragment extends Fragment {
         }
 
         addOrdersSummary(visible.size(), connected);
+        if (ACTIVE.equals(section)) addActiveClientShortcuts();
         if (!connected && visible.isEmpty()) {
             addConnectionPrompt();
             return;
@@ -429,6 +469,7 @@ public class FbsFragment extends Fragment {
                     : "По вашему запросу ничего не найдено.");
             return;
         }
+        if (ACTIVE.equals(section)) addOrderActions(visible);
         for (Map<String, Object> order : visible) addOrderCard(order);
     }
 
@@ -443,6 +484,131 @@ public class FbsFragment extends Fragment {
         summary.addView(title, new LinearLayout.LayoutParams(0, -2, 1f));
         summary.addView(badge, new LinearLayout.LayoutParams(-2, -2));
         binding.content.addView(summary);
+    }
+
+    private void addActiveClientShortcuts() {
+        if (app.state().clients().size() <= 1 || activeClients.isEmpty()) return;
+        MaterialCardView card = baseCard();
+        LinearLayout content = cardContent();
+        content.addView(text("Клиенты с активными заказами", 15, R.color.logoff_black, Typeface.BOLD));
+        TextView note = text("Нажмите на клиента, чтобы сразу открыть его FBS-заказы.", 12,
+                R.color.logoff_text_muted, Typeface.NORMAL);
+        LinearLayout.LayoutParams noteParams = new LinearLayout.LayoutParams(-1, -2);
+        noteParams.topMargin = dp(5);
+        noteParams.bottomMargin = dp(8);
+        content.addView(note, noteParams);
+
+        for (Map<String, Object> row : activeClients) {
+            Map<String, Object> client = map(row.get("client"));
+            String clientId = AppState.string(client.get("id"));
+            if (clientId.isBlank()) continue;
+            String label = firstNonBlank(AppState.string(client.get("name")), "Клиент")
+                    + " · " + count(row.get("activeOrders"));
+            MaterialButton button = outlinedButton(label);
+            if (clientId.equals(app.state().selectedClientId())) {
+                button.setStrokeColorResource(R.color.logoff_red);
+                button.setTextColor(ContextCompat.getColor(requireContext(), R.color.logoff_red));
+            }
+            button.setOnClickListener(view ->
+                    ((MainActivity) requireActivity()).selectClientFromModule(clientId));
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(46));
+            params.topMargin = dp(6);
+            content.addView(button, params);
+        }
+        card.addView(content);
+        binding.content.addView(card, cardParams());
+    }
+
+    private void addOrderActions(List<Map<String, Object>> visibleOrders) {
+        MaterialCardView card = baseCard();
+        card.setStrokeColor(ContextCompat.getColor(requireContext(), R.color.logoff_blue));
+        LinearLayout content = cardContent();
+        content.addView(text("Инструменты FBS", 16, R.color.logoff_black, Typeface.BOLD));
+
+        int selectedCount = selectedOrders.size();
+        TextView selected = text(
+                selectedCount == 0
+                        ? "Выберите заказы для сборки, заявки или массового скачивания."
+                        : "Выбрано заказов: " + selectedCount,
+                12,
+                R.color.logoff_text_muted,
+                Typeface.NORMAL
+        );
+        LinearLayout.LayoutParams selectedParams = new LinearLayout.LayoutParams(-1, -2);
+        selectedParams.topMargin = dp(5);
+        content.addView(selected, selectedParams);
+
+        boolean allVisibleSelected = !visibleOrders.isEmpty();
+        for (Map<String, Object> order : visibleOrders) {
+            if (!selectedOrders.containsKey(orderKey(order))) {
+                allVisibleSelected = false;
+                break;
+            }
+        }
+        MaterialButton selectAll = outlinedButton(allVisibleSelected ? "Снять выбор" : "Выбрать все показанные");
+        selectAll.setEnabled(!orderActionRunning);
+        boolean finalAllVisibleSelected = allVisibleSelected;
+        selectAll.setOnClickListener(view -> {
+            for (Map<String, Object> order : visibleOrders) {
+                if (finalAllVisibleSelected) selectedOrders.remove(orderKey(order));
+                else selectedOrders.put(orderKey(order), order);
+            }
+            renderOrders();
+        });
+        addActionButton(content, selectAll);
+
+        if (selectedCount > 0) {
+            List<Map<String, Object>> selectedValues = new ArrayList<>(selectedOrders.values());
+            List<Map<String, Object>> assembly = filterOrders(selectedValues, "assemble");
+            List<Map<String, Object>> requests = filterOrders(selectedValues, "request");
+            List<Map<String, Object>> stickers = filterOrders(selectedValues, "stickers");
+            List<Map<String, Object>> cargo = filterOrders(selectedValues, "cargo");
+
+            MaterialButton assemble = primaryButton("Собрать (" + assembly.size() + ")");
+            assemble.setEnabled(!orderActionRunning && !assembly.isEmpty());
+            assemble.setOnClickListener(view -> confirmAssemble(assembly));
+            addActionButton(content, assemble);
+
+            MaterialButton request = outlinedButton("Создать заявку (" + requests.size() + ")");
+            request.setEnabled(!orderActionRunning && !requests.isEmpty());
+            request.setOnClickListener(view -> confirmCreateRequest(requests));
+            addActionButton(content, request);
+
+            MaterialButton stickersButton = outlinedButton("Скачать ШК (" + stickers.size() + ")");
+            stickersButton.setEnabled(!orderActionRunning && !stickers.isEmpty());
+            stickersButton.setOnClickListener(view -> downloadOrderStickers(stickers));
+            addActionButton(content, stickersButton);
+
+            if (requiresCargoPlaces()) {
+                MaterialButton cargoButton = outlinedButton("QR грузомест (" + cargo.size() + ")");
+                cargoButton.setEnabled(!orderActionRunning && !cargo.isEmpty());
+                cargoButton.setOnClickListener(view -> downloadCargoPlaceStickers(cargo));
+                addActionButton(content, cargoButton);
+            }
+        }
+
+        Map<String, Object> deliveryPlan = map(orderData.get("deliveryPlan"));
+        int itemsPerCargoPlace = Math.max(1, (int) Math.round(numberValue(deliveryPlan.get("itemsPerCargoPlace"))));
+        TextView cargoHint = text(
+                requiresCargoPlaces()
+                        ? "Сдача в ПВЗ: одно грузоместо на каждые " + itemsPerCargoPlace
+                                + " единиц. QR общий для всей поставки."
+                        : "Сдача в сортировочный центр: грузоместа WB не создаются.",
+                11,
+                R.color.logoff_text_muted,
+                Typeface.BOLD
+        );
+        LinearLayout.LayoutParams hintParams = new LinearLayout.LayoutParams(-1, -2);
+        hintParams.topMargin = dp(10);
+        content.addView(cargoHint, hintParams);
+        card.addView(content);
+        binding.content.addView(card, cardParams());
+    }
+
+    private void addActionButton(LinearLayout content, MaterialButton button) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(48));
+        params.topMargin = dp(8);
+        content.addView(button, params);
     }
 
     private void addConnectionPrompt() {
@@ -549,6 +715,17 @@ public class FbsFragment extends Fragment {
 
         LinearLayout top = new LinearLayout(requireContext());
         top.setGravity(Gravity.CENTER_VERTICAL);
+        if (ACTIVE.equals(section)) {
+            CheckBox selection = new CheckBox(requireContext());
+            selection.setContentDescription("Выбрать FBS-заказ");
+            selection.setChecked(selectedOrders.containsKey(orderKey(order)));
+            selection.setOnCheckedChangeListener((button, checked) -> {
+                if (checked) selectedOrders.put(orderKey(order), order);
+                else selectedOrders.remove(orderKey(order));
+                renderOrders();
+            });
+            top.addView(selection, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        }
         String orderNumber = firstNonBlank(
                 AppState.string(order.get("orderUid")),
                 AppState.string(order.get("id"))
@@ -609,10 +786,47 @@ public class FbsFragment extends Fragment {
         statusParams.topMargin = dp(11);
         content.addView(status, statusParams);
 
+        addOrderDocumentActions(content, order);
+
         if (COST.equals(section)) addBillingBreakdown(content, billing);
         card.addView(content);
         card.setOnClickListener(view -> showOrderDetails(order));
         binding.content.addView(card, cardParams());
+    }
+
+    private void addOrderDocumentActions(LinearLayout content, Map<String, Object> order) {
+        View divider = new View(requireContext());
+        divider.setBackgroundColor(ContextCompat.getColor(requireContext(), R.color.logoff_border));
+        LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(-1, dp(1));
+        dividerParams.topMargin = dp(13);
+        dividerParams.bottomMargin = dp(5);
+        content.addView(divider, dividerParams);
+
+        MaterialButton sticker = outlinedButton("Скачать ШК заказа");
+        boolean stickerAvailable = isEligible(order, "stickers");
+        sticker.setEnabled(stickerAvailable && !orderActionRunning);
+        sticker.setOnClickListener(view -> downloadOrderStickers(Collections.singletonList(order)));
+        if (!stickerAvailable) {
+            sticker.setContentDescription("ШК станет доступен после перевода заказа в сборку");
+        }
+        addActionButton(content, sticker);
+
+        if (requiresCargoPlaces()) {
+            MaterialButton cargo = outlinedButton("QR грузомест поставки");
+            boolean cargoAvailable = isEligible(order, "cargo");
+            cargo.setEnabled(cargoAvailable && !orderActionRunning);
+            cargo.setOnClickListener(view -> downloadCargoPlaceStickers(Collections.singletonList(order)));
+            if (!cargoAvailable) {
+                cargo.setContentDescription("QR появится после создания поставки и грузомест");
+            }
+            addActionButton(content, cargo);
+        } else {
+            TextView noCargo = text("Без грузомест: сдача в сортировочный центр", 11,
+                    R.color.logoff_text_muted, Typeface.BOLD);
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+            params.topMargin = dp(8);
+            content.addView(noCargo, params);
+        }
     }
 
     private void addBillingBreakdown(LinearLayout content, Map<String, Object> billing) {
@@ -708,6 +922,233 @@ public class FbsFragment extends Fragment {
                 .setMessage(String.join("\n\n", lines))
                 .setPositiveButton("Закрыть", null)
                 .show();
+    }
+
+    private void confirmAssemble(List<Map<String, Object>> orders) {
+        if (orders.isEmpty()) return;
+        new MaterialAlertDialogBuilder(requireContext())
+                .setTitle("Перевести заказы в сборку?")
+                .setMessage("Wildberries создаст поставку, добавит " + orders.size()
+                        + " заказ(а/ов) и при сдаче через ПВЗ создаст грузоместа по 14 единиц.")
+                .setNegativeButton("Отмена", null)
+                .setPositiveButton("Собрать", (dialog, which) -> assembleOrders(orders))
+                .show();
+    }
+
+    private void assembleOrders(List<Map<String, Object>> orders) {
+        beginOrderAction();
+        app.repository().api().assembleFbsOrders(selectionPayload(orders)).enqueue(new Callback<>() {
+            @Override
+            public void onResponse(Call<Map<String, Object>> call, Response<Map<String, Object>> response) {
+                if (!isAdded() || binding == null) return;
+                if (!response.isSuccessful() || response.body() == null) {
+                    failOrderAction(readableError(response));
+                    return;
+                }
+                Map<String, Object> result = response.body();
+                int cargoPlaces = 0;
+                for (Map<String, Object> supply : maps(result.get("supplies"))) {
+                    cargoPlaces += (int) Math.round(numberValue(supply.get("cargoPlaceCount")));
+                }
+                applyOrderActionResult(result, "Заказы переведены в сборку: "
+                        + count(result.get("assembled")) + ". Грузомест создано: " + cargoPlaces + ".");
+            }
+
+            @Override
+            public void onFailure(Call<Map<String, Object>> call, Throwable error) {
+                failOrderAction(MobileRepository.readable(error));
+            }
+        });
+    }
+
+    private void confirmCreateRequest(List<Map<String, Object>> orders) {
+        if (orders.isEmpty()) return;
+        new MaterialAlertDialogBuilder(requireContext())
+                .setTitle("Создать складскую заявку?")
+                .setMessage("В одну заявку войдут выбранные FBS-заказы: " + orders.size() + ".")
+                .setNegativeButton("Отмена", null)
+                .setPositiveButton("Создать", (dialog, which) -> createRequest(orders))
+                .show();
+    }
+
+    private void createRequest(List<Map<String, Object>> orders) {
+        beginOrderAction();
+        app.repository().api().createFbsRequest(selectionPayload(orders)).enqueue(new Callback<>() {
+            @Override
+            public void onResponse(Call<Map<String, Object>> call, Response<Map<String, Object>> response) {
+                if (!isAdded() || binding == null) return;
+                if (!response.isSuccessful() || response.body() == null) {
+                    failOrderAction(readableError(response));
+                    return;
+                }
+                Map<String, Object> result = response.body();
+                Map<String, Object> request = map(result.get("request"));
+                String number = AppState.string(request.get("number"));
+                applyOrderActionResult(result, "Создана заявка"
+                        + (number.isBlank() ? "" : " №" + number)
+                        + ": " + count(result.get("linkedOrders")) + " FBS-заказ(а/ов)." );
+            }
+
+            @Override
+            public void onFailure(Call<Map<String, Object>> call, Throwable error) {
+                failOrderAction(MobileRepository.readable(error));
+            }
+        });
+    }
+
+    private void downloadOrderStickers(List<Map<String, Object>> orders) {
+        if (orders.isEmpty()) return;
+        beginOrderAction();
+        String suffix = orders.size() == 1
+                ? AppState.string(orders.get(0).get("id"))
+                : String.valueOf(orders.size()) + "_заказов";
+        saveFbsPdf(
+                app.repository().api().fbsOrderStickers(selectionPayload(orders)),
+                "FBS_WB_ШК_" + suffix + ".pdf",
+                "ШК заказов сохранены в Загрузки/LOGOff WMS"
+        );
+    }
+
+    private void downloadCargoPlaceStickers(List<Map<String, Object>> orders) {
+        if (orders.isEmpty()) return;
+        beginOrderAction();
+        String supply = orders.size() == 1
+                ? AppState.string(orders.get(0).get("supplyId"))
+                : String.valueOf(orders.size()) + "_заказов";
+        saveFbsPdf(
+                app.repository().api().fbsCargoPlaceStickers(selectionPayload(orders)),
+                "FBS_WB_QR_грузомест_" + firstNonBlank(supply, "поставки") + ".pdf",
+                "QR грузомест сохранены в Загрузки/LOGOff WMS"
+        );
+    }
+
+    private void saveFbsPdf(Call<ResponseBody> call, String fileName, String successMessage) {
+        call.enqueue(new Callback<>() {
+            @Override
+            public void onResponse(Call<ResponseBody> request, Response<ResponseBody> response) {
+                if (!isAdded() || binding == null) return;
+                if (!response.isSuccessful() || response.body() == null) {
+                    failOrderAction(readableError(response));
+                    return;
+                }
+                DocumentSaver.save(
+                        requireContext().getApplicationContext(),
+                        fileName,
+                        response.body(),
+                        new DocumentSaver.Callback() {
+                            @Override public void saved(android.net.Uri uri) {
+                                if (getActivity() == null) return;
+                                requireActivity().runOnUiThread(() -> {
+                                    finishOrderAction();
+                                    if (isAdded()) Toast.makeText(requireContext(), successMessage, Toast.LENGTH_LONG).show();
+                                });
+                            }
+
+                            @Override public void failed(String message) {
+                                failOrderAction(message);
+                            }
+                        }
+                );
+            }
+
+            @Override
+            public void onFailure(Call<ResponseBody> request, Throwable error) {
+                failOrderAction(MobileRepository.readable(error));
+            }
+        });
+    }
+
+    private void beginOrderAction() {
+        orderActionRunning = true;
+        if (binding != null && isOrderSection()) renderOrders();
+    }
+
+    private void finishOrderAction() {
+        orderActionRunning = false;
+        if (binding != null && isOrderSection()) renderOrders();
+    }
+
+    private void failOrderAction(String message) {
+        if (getActivity() == null) return;
+        requireActivity().runOnUiThread(() -> {
+            if (!isAdded() || binding == null) return;
+            finishOrderAction();
+            Toast.makeText(requireContext(), cleanError(message), Toast.LENGTH_LONG).show();
+        });
+    }
+
+    private void applyOrderActionResult(Map<String, Object> result, String message) {
+        Map<String, Object> refreshed = map(result.get("orders"));
+        if (!refreshed.isEmpty()) orderData = refreshed;
+        selectedOrders.clear();
+        orderActionRunning = false;
+        renderSections();
+        renderOrders();
+        loadActiveClients(true);
+        Toast.makeText(requireContext(), message, Toast.LENGTH_LONG).show();
+    }
+
+    private Map<String, Object> selectionPayload(List<Map<String, Object>> orders) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("clientId", app.state().selectedClientId());
+        List<Map<String, Object>> values = new ArrayList<>();
+        for (Map<String, Object> order : orders) {
+            Map<String, Object> value = new LinkedHashMap<>();
+            value.put("connectionId", AppState.string(order.get("connectionId")));
+            value.put("id", AppState.string(order.get("id")));
+            values.add(value);
+        }
+        body.put("orders", values);
+        return body;
+    }
+
+    private List<Map<String, Object>> filterOrders(List<Map<String, Object>> orders, String action) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Map<String, Object> order : orders) {
+            if (isEligible(order, action)) result.add(order);
+        }
+        return result;
+    }
+
+    private boolean isEligible(Map<String, Object> order, String action) {
+        boolean wildberries = "WILDBERRIES".equals(AppState.string(order.get("marketplace")));
+        String supplierStatus = AppState.string(order.get("supplierStatus"));
+        if ("assemble".equals(action)) return wildberries && "new".equals(supplierStatus);
+        if ("stickers".equals(action)) {
+            return wildberries && ("confirm".equals(supplierStatus) || "complete".equals(supplierStatus));
+        }
+        if ("cargo".equals(action)) {
+            return requiresCargoPlaces() && wildberries && "confirm".equals(supplierStatus)
+                    && !AppState.string(order.get("supplyId")).isBlank();
+        }
+        if ("request".equals(action)) {
+            Map<String, Object> request = map(order.get("request"));
+            return ACTIVE.equals(AppState.string(order.get("category")))
+                    && (request.isEmpty() || "CANCELLED".equals(AppState.string(request.get("status"))));
+        }
+        return false;
+    }
+
+    private boolean requiresCargoPlaces() {
+        return Boolean.TRUE.equals(map(orderData.get("deliveryPlan")).get("requiresCargoPlaces"));
+    }
+
+    private String orderKey(Map<String, Object> order) {
+        return AppState.string(order.get("connectionId")) + ":" + AppState.string(order.get("id"));
+    }
+
+    private void pruneSelectedOrders() {
+        Map<String, Map<String, Object>> fresh = new LinkedHashMap<>();
+        for (Map<String, Object> order : maps(orderData.get("orders"))) {
+            fresh.put(orderKey(order), order);
+        }
+        List<String> stale = new ArrayList<>();
+        for (String key : selectedOrders.keySet()) {
+            Map<String, Object> current = fresh.get(key);
+            if (current == null) stale.add(key);
+            else selectedOrders.put(key, current);
+        }
+        for (String key : stale) selectedOrders.remove(key);
     }
 
     private void renderCalculator() {
@@ -1491,6 +1932,25 @@ public class FbsFragment extends Fragment {
         return button;
     }
 
+    private MaterialButton outlinedButton(String title) {
+        MaterialButton button = new MaterialButton(
+                requireContext(),
+                null,
+                com.google.android.material.R.attr.materialButtonOutlinedStyle
+        );
+        button.setText(title);
+        button.setAllCaps(false);
+        button.setTextColor(ContextCompat.getColor(requireContext(), R.color.logoff_black));
+        button.setTextSize(13);
+        button.setTypeface(null, Typeface.BOLD);
+        button.setStrokeColorResource(R.color.logoff_border);
+        button.setStrokeWidth(dp(1));
+        button.setCornerRadius(dp(16));
+        button.setInsetTop(0);
+        button.setInsetBottom(0);
+        return button;
+    }
+
     private TextView label(String value) {
         return text(value, 12, R.color.logoff_text_muted, Typeface.BOLD);
     }
@@ -1514,6 +1974,8 @@ public class FbsFragment extends Fragment {
     private void updateLoading() {
         if (binding == null) return;
         boolean loading = loadingOrders
+                || loadingActiveClients
+                || orderActionRunning
                 || (PRICING.equals(section) && loadingSettings)
                 || (CALCULATOR.equals(section) && loadingCalculator);
         binding.progress.setVisibility(loading && binding.content.getChildCount() == 0 ? View.VISIBLE : View.GONE);

@@ -150,6 +150,31 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    public void selectClientFromModule(String clientId) {
+        if (binding == null || clientId == null || clientId.isBlank()) return;
+        List<Map<String, Object>> clients = app.state().clients();
+        int selectedIndex = -1;
+        for (int index = 0; index < clients.size(); index++) {
+            if (clientId.equals(AppState.string(clients.get(index).get("id")))) {
+                selectedIndex = index;
+                break;
+            }
+        }
+        if (selectedIndex < 0) return;
+
+        app.state().selectClient(clientId);
+        binding.clientSelector.setSelection(selectedIndex);
+        refreshNotificationBadge();
+        Fragment current = getSupportFragmentManager().findFragmentById(R.id.content);
+        if (current instanceof DashboardFragment) show(new DashboardFragment());
+        else if (current instanceof ListFragment) ((ListFragment) current).refresh();
+        else if (current instanceof pro.logoff.wms.mobile.ui.NativeModuleFragment) {
+            ((pro.logoff.wms.mobile.ui.NativeModuleFragment) current).refresh();
+        } else if (current instanceof FbsFragment) {
+            ((FbsFragment) current).refresh();
+        }
+    }
+
     private void registerPushToken() {
         registerDevice("");
         if (FirebaseApp.getApps(this).isEmpty()) return;

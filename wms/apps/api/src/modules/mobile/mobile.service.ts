@@ -924,13 +924,13 @@ export class MobileService {
     const setting = await this.prisma.systemSetting.findUnique({ where: { key: 'mobile.android.version' } });
     const value = asRecord(setting?.value);
     return {
-      currentVersion: stringValue(value.currentVersion, '0.3.5'),
+      currentVersion: stringValue(value.currentVersion, '0.3.6'),
       minimumVersion: stringValue(value.minimumVersion, '0.1.0'),
       mandatory: value.mandatory === true,
       apkUrl: stringValue(value.apkUrl, '/downloads/logoff-wms-mobile.apk'),
       releaseNotes: stringValue(
         value.releaseNotes,
-        'В приложение добавлены все функции FBS: калькулятор по городам, административный расчёт по тарифам WMS, паллетные настройки и детализация начислений.',
+        'Добавлены инструменты FBS: выбор клиентов с активными заказами, массовая сборка, создание заявки, скачивание ШК каждого заказа и QR грузомест по 14 единиц.',
       ),
       updatedAt: setting?.updatedAt ?? null,
     };

@@ -31,6 +31,11 @@ public interface MobileApi {
     @GET("mobile/online-receipts") Call<Object> onlineReceipts(@Query("clientId") String clientId);
     @GET("mobile/modules/{module}") Call<Map<String, Object>> nativeModule(@Path("module") String module, @Query("clientId") String clientId, @Query("search") String search, @Query("limit") int limit);
     @GET("marketplace-connections/fbs/orders") Call<Map<String, Object>> fbsOrders(@Query("clientId") String clientId, @Query("refresh") Integer refresh);
+    @GET("marketplace-connections/fbs/active-clients") Call<List<Map<String, Object>>> fbsActiveClients();
+    @POST("marketplace-connections/fbs/orders/assemble") Call<Map<String, Object>> assembleFbsOrders(@Body Map<String, Object> body);
+    @POST("marketplace-connections/fbs/orders/request") Call<Map<String, Object>> createFbsRequest(@Body Map<String, Object> body);
+    @Streaming @POST("marketplace-connections/fbs/orders/stickers.pdf") Call<ResponseBody> fbsOrderStickers(@Body Map<String, Object> body);
+    @Streaming @POST("marketplace-connections/fbs/orders/cargo-place-stickers.pdf") Call<ResponseBody> fbsCargoPlaceStickers(@Body Map<String, Object> body);
     @POST("marketplace-connections/fbs/connections") Call<Map<String, Object>> createFbsConnection(@Body Map<String, Object> body);
     @GET("marketplace-connections/fbs/calculator/destinations") Call<Map<String, Object>> fbsCalculatorDestinations();
     @POST("marketplace-connections/fbs/calculator/quote") Call<Map<String, Object>> fbsCalculatorQuote(@Body Map<String, Object> body);
