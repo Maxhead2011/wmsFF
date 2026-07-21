@@ -6,6 +6,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { LogisticsService } from '../logistics/logistics.service';
 import { FbsOrderSelectionDto } from './dto/fbs-order-selection.dto';
+import { FbsPassDto } from './dto/fbs-pass.dto';
 import { QuoteFbsCalculatorDto } from './dto/quote-fbs-calculator.dto';
 import { UpdateFbsBillingSettingsDto } from './dto/update-fbs-billing-settings.dto';
 import { UpdateMarketplaceConnectionDto } from './dto/update-marketplace-connection.dto';
@@ -46,6 +47,24 @@ export class MarketplaceConnectionsController {
   @RequirePermissions()
   assembleFbsOrders(@Body() dto: FbsOrderSelectionDto, @CurrentUser() user: AuthUser) {
     return this.connections.assembleFbsOrders(dto, user);
+  }
+
+  @Post('fbs/orders/reship')
+  @RequirePermissions()
+  reshipFbsOrders(@Body() dto: FbsOrderSelectionDto, @CurrentUser() user: AuthUser) {
+    return this.connections.reshipFbsOrders(dto, user);
+  }
+
+  @Post('fbs/orders/cancel')
+  @RequirePermissions()
+  cancelFbsOrders(@Body() dto: FbsOrderSelectionDto, @CurrentUser() user: AuthUser) {
+    return this.connections.cancelFbsOrders(dto, user);
+  }
+
+  @Post('fbs/supplies/deliver')
+  @RequirePermissions()
+  deliverFbsSupplies(@Body() dto: FbsOrderSelectionDto, @CurrentUser() user: AuthUser) {
+    return this.connections.deliverFbsSupplies(dto, user);
   }
 
   @Post('fbs/orders/request')
@@ -114,6 +133,43 @@ export class MarketplaceConnectionsController {
   @RequirePermissions()
   createFbsConnection(@Body() dto: UpsertMarketplaceConnectionDto, @CurrentUser() user: AuthUser) {
     return this.connections.createFbsConnection(dto, user);
+  }
+
+  @Get('fbs/passes')
+  @RequirePermissions()
+  listFbsPasses(
+    @CurrentUser() user: AuthUser,
+    @Query('clientId') clientId: string,
+    @Query('connectionId') connectionId?: string,
+  ) {
+    return this.connections.listFbsPasses(clientId, connectionId, user);
+  }
+
+  @Post('fbs/passes')
+  @RequirePermissions()
+  createFbsPass(@Body() dto: FbsPassDto, @CurrentUser() user: AuthUser) {
+    return this.connections.createFbsPass(dto, user);
+  }
+
+  @Put('fbs/passes/:passId')
+  @RequirePermissions()
+  updateFbsPass(
+    @Param('passId') passId: string,
+    @Body() dto: FbsPassDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.connections.updateFbsPass(passId, dto, user);
+  }
+
+  @Delete('fbs/passes/:passId')
+  @RequirePermissions()
+  deleteFbsPass(
+    @Param('passId') passId: string,
+    @Query('clientId') clientId: string,
+    @Query('connectionId') connectionId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.connections.deleteFbsPass(passId, clientId, connectionId, user);
   }
 
   @Get('fbs/calculator/destinations')

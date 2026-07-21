@@ -1806,6 +1806,7 @@ export type FbsOrderSummary = {
   cargoType: string | null;
   crossBorderType: string | null;
   pickupPointShipmentAllowed: boolean;
+  requiresReshipment: boolean;
   shipmentPlan: {
     destination: FbsDeliveryDestination;
     itemsPerCargoPlace: number;
@@ -1882,6 +1883,7 @@ export type FbsOrderSelectionPayload = {
 
 export type AssembleFbsOrdersResult = {
   assembled: number;
+  reshipped: number;
   deliveryPlan: ClientFbsOrders['deliveryPlan'];
   supplies: Array<{
     id: string;
@@ -1892,6 +1894,47 @@ export type AssembleFbsOrdersResult = {
     cargoPlaceIds: string[];
   }>;
   orders: ClientFbsOrders;
+};
+
+export type FbsOrderActionResult = {
+  cancelled?: number;
+  delivered?: number;
+  failed: Array<{ id?: string; supplyId?: string; message: string }>;
+  orders: ClientFbsOrders;
+};
+
+export type FbsPassOffice = {
+  id: number;
+  name: string;
+  address: string;
+};
+
+export type FbsPass = {
+  id: number;
+  firstName: string;
+  lastName: string;
+  carModel: string;
+  carNumber: string;
+  officeId: number;
+  officeName?: string;
+  dateEnd: string;
+};
+
+export type FbsPassesResponse = {
+  connections: Array<{ id: string; accountName: string | null }>;
+  selectedConnectionId: string | null;
+  offices: FbsPassOffice[];
+  passes: FbsPass[];
+};
+
+export type FbsPassPayload = {
+  clientId: string;
+  connectionId: string;
+  firstName: string;
+  lastName: string;
+  carModel: string;
+  carNumber: string;
+  officeId: number;
 };
 
 export type CreateFbsRequestResult = {
@@ -4692,6 +4735,30 @@ export async function assembleFbsOrders(accessToken: string, payload: FbsOrderSe
   });
 }
 
+export async function reshipFbsOrders(accessToken: string, payload: FbsOrderSelectionPayload) {
+  return request<AssembleFbsOrdersResult>('/marketplace-connections/fbs/orders/reship', {
+    method: 'POST',
+    accessToken,
+    body: payload,
+  });
+}
+
+export async function cancelFbsOrders(accessToken: string, payload: FbsOrderSelectionPayload) {
+  return request<FbsOrderActionResult>('/marketplace-connections/fbs/orders/cancel', {
+    method: 'POST',
+    accessToken,
+    body: payload,
+  });
+}
+
+export async function deliverFbsSupplies(accessToken: string, payload: FbsOrderSelectionPayload) {
+  return request<FbsOrderActionResult>('/marketplace-connections/fbs/supplies/deliver', {
+    method: 'POST',
+    accessToken,
+    body: payload,
+  });
+}
+
 export async function createFbsRequest(accessToken: string, payload: FbsOrderSelectionPayload) {
   return request<CreateFbsRequestResult>('/marketplace-connections/fbs/orders/request', {
     method: 'POST',
@@ -4740,6 +4807,41 @@ export async function createFbsMarketplaceConnection(
     body: payload,
     accessToken,
   });
+}
+
+export async function fetchFbsPasses(accessToken: string, clientId: string, connectionId?: string) {
+  return request<FbsPassesResponse>(
+    withQuery('/marketplace-connections/fbs/passes', { clientId, connectionId }),
+    { accessToken },
+  );
+}
+
+export async function createFbsPass(accessToken: string, payload: FbsPassPayload) {
+  return request<{ id: number; created: boolean }>('/marketplace-connections/fbs/passes', {
+    method: 'POST',
+    accessToken,
+    body: payload,
+  });
+}
+
+export async function updateFbsPass(accessToken: string, passId: number, payload: FbsPassPayload) {
+  return request<{ id: number; updated: boolean }>(`/marketplace-connections/fbs/passes/${passId}`, {
+    method: 'PUT',
+    accessToken,
+    body: payload,
+  });
+}
+
+export async function deleteFbsPass(
+  accessToken: string,
+  passId: number,
+  clientId: string,
+  connectionId: string,
+) {
+  return request<{ id: number; deleted: boolean }>(
+    withQuery(`/marketplace-connections/fbs/passes/${passId}`, { clientId, connectionId }),
+    { method: 'DELETE', accessToken },
+  );
 }
 
 export async function fetchFbsBillingSettings(accessToken: string, clientId: string) {

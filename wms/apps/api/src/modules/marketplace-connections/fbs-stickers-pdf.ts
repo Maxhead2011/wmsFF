@@ -1,5 +1,6 @@
 import pdfMake = require('pdfmake');
 import type { Content, TDocumentDefinitions } from 'pdfmake/interfaces';
+import { PDFDocument } from 'pdf-lib';
 import { configurePdfMake } from '../../common/pdf/pdfmake';
 
 export type FbsStickerImage = {
@@ -40,6 +41,24 @@ export async function buildFbsSupplyStickersPdf(stickers: FbsStickerImage[]) {
     title: `FBS WB supply stickers (${stickers.length})`,
     subject: 'QR-коды поставок FBS Wildberries для сортировочного центра',
   });
+}
+
+export async function mergeFbsStickerPdfs(buffers: Buffer[]) {
+  const documents = buffers.filter((buffer) => buffer.length > 0);
+  if (documents.length === 0) {
+    throw new Error('Нет PDF-этикеток для объединения.');
+  }
+  if (documents.length === 1) {
+    return documents[0];
+  }
+
+  const merged = await PDFDocument.create();
+  for (const buffer of documents) {
+    const source = await PDFDocument.load(buffer);
+    const pages = await merged.copyPages(source, source.getPageIndices());
+    pages.forEach((page) => merged.addPage(page));
+  }
+  return Buffer.from(await merged.save());
 }
 
 export async function buildFbsPickListPdf(input: {

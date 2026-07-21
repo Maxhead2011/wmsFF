@@ -9,6 +9,8 @@ import {
 import {
   BillingChargeSource,
   BillingChargeStatus,
+  BillingInvoiceSource,
+  BillingInvoiceStatus,
   BillingUnit,
   ClientRequestEventType,
   ClientRequestStatus,
@@ -22,6 +24,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import type { FbsOrderSelectionDto } from './dto/fbs-order-selection.dto';
+import type { FbsPassDto } from './dto/fbs-pass.dto';
 import { UpdateFbsBillingSettingsDto } from './dto/update-fbs-billing-settings.dto';
 import { UpsertMarketplaceConnectionDto } from './dto/upsert-marketplace-connection.dto';
 import { DEFAULT_FBS_ITEMS_PER_CARGO_PLACE } from './fbs.constants';
@@ -30,6 +33,7 @@ import {
   buildFbsPickListPdf,
   buildFbsSupplyStickersPdf,
   buildFbsStickersPdf,
+  mergeFbsStickerPdfs,
   type FbsStickerImage,
 } from './fbs-stickers-pdf';
 
@@ -99,6 +103,7 @@ type FbsOrderSummary = {
   cargoType: string | null;
   crossBorderType: string | null;
   pickupPointShipmentAllowed: boolean;
+  requiresReshipment: boolean;
   shipmentPlan: {
     destination: FbsDeliveryDestination;
     itemsPerCargoPlace: number;
@@ -298,8 +303,20 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   async assembleFbsOrders(dto: FbsOrderSelectionDto, user: AuthUser) {
+    return this.moveFbsOrdersToSupply(dto, user, 'assemble');
+  }
+
+  async reshipFbsOrders(dto: FbsOrderSelectionDto, user: AuthUser) {
+    return this.moveFbsOrdersToSupply(dto, user, 'reship');
+  }
+
+  private async moveFbsOrdersToSupply(
+    dto: FbsOrderSelectionDto,
+    user: AuthUser,
+    mode: 'assemble' | 'reship',
+  ) {
     const clientId = dto.clientId.trim();
-    this.clientScopes.requireClientAccess(user, clientId, 'read');
+    this.clientScopes.requireClientAccess(user, clientId, 'write');
     const { response, orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders);
     const defaultDeliveryPlan = await this.loadFbsDeliveryPlan(clientId);
     const destination = dto.deliveryDestination ?? defaultDeliveryPlan.destination;
@@ -313,10 +330,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (unsupported.length > 0) {
       throw new BadRequestException('Массовая сборка сейчас доступна только для заказов Wildberries.');
     }
-    const unavailable = orders.filter((order) => order.supplierStatus !== 'new');
+    const unavailable = orders.filter((order) =>
+      mode === 'assemble' ? order.supplierStatus !== 'new' : !order.requiresReshipment,
+    );
     if (unavailable.length > 0) {
       throw new BadRequestException(
-        `В сборку можно перевести только новые заказы. Проверьте: ${unavailable.map((order) => order.id).join(', ')}.`,
+        mode === 'assemble'
+          ? `В сборку можно перевести только новые заказы. Проверьте: ${unavailable.map((order) => order.id).join(', ')}.`
+          : `Повторная отгрузка доступна только для заказов, которые WB вернул в переотгрузку. Проверьте: ${unavailable.map((order) => order.id).join(', ')}.`,
       );
     }
     if (deliveryPlan.requiresCargoPlaces) {
@@ -478,10 +499,192 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const refreshedOrders = await this.refreshFbsOrdersCache(clientId);
     return {
       assembled: orders.length,
+      reshipped: mode === 'reship' ? orders.length : 0,
       deliveryPlan,
       supplies,
       orders: refreshedOrders,
     };
+  }
+
+  async cancelFbsOrders(dto: FbsOrderSelectionDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const { orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders);
+    const unavailable = orders.filter(
+      (order) =>
+        order.marketplace !== MarketplaceType.WILDBERRIES ||
+        !['new', 'confirm'].includes(order.supplierStatus),
+    );
+    if (unavailable.length > 0) {
+      throw new BadRequestException(
+        `Отменить можно только новые или находящиеся на сборке заказы WB. Проверьте: ${unavailable.map((order) => order.id).join(', ')}.`,
+      );
+    }
+
+    const connections = await this.loadSelectedConnections(clientId, orders);
+    const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
+    const cancelled: string[] = [];
+    const failed: Array<{ id: string; message: string }> = [];
+    const batches = chunks(orders, 20);
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+      await Promise.all(
+        batches[batchIndex].map(async (order) => {
+          const connection = connectionById.get(order.connectionId);
+          if (!connection) return;
+          try {
+            await marketplaceJson(
+              `https://marketplace-api.wildberries.ru/api/v3/orders/${numericWbOrderId(order.id)}/cancel`,
+              { method: 'PATCH', headers: wbHeaders(connection.apiKey) },
+            );
+            cancelled.push(order.id);
+          } catch (caught) {
+            failed.push({
+              id: order.id,
+              message: caught instanceof Error ? caught.message : 'Wildberries не отменил заказ.',
+            });
+          }
+        }),
+      );
+      if (batchIndex < batches.length - 1) await delay(12_000);
+    }
+
+    const refreshedOrders = await this.refreshFbsOrdersCache(clientId);
+    return { cancelled: cancelled.length, failed, orders: refreshedOrders };
+  }
+
+  async deliverFbsSupplies(dto: FbsOrderSelectionDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const { orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders);
+    const unavailable = orders.filter(
+      (order) =>
+        order.marketplace !== MarketplaceType.WILDBERRIES ||
+        order.supplierStatus !== 'confirm' ||
+        !order.supplyId,
+    );
+    if (unavailable.length > 0) {
+      throw new BadRequestException(
+        `Передать в доставку можно только поставки WB со статусом «На сборке». Проверьте: ${unavailable.map((order) => order.id).join(', ')}.`,
+      );
+    }
+
+    const connections = await this.loadSelectedConnections(clientId, orders);
+    const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
+    const supplies = new Map<string, { connectionId: string; supplyId: string }>();
+    orders.forEach((order) => {
+      supplies.set(`${order.connectionId}:${order.supplyId}`, {
+        connectionId: order.connectionId,
+        supplyId: order.supplyId!,
+      });
+    });
+    const delivered: string[] = [];
+    const failed: Array<{ supplyId: string; message: string }> = [];
+    await Promise.all(
+      [...supplies.values()].map(async (supply) => {
+        const connection = connectionById.get(supply.connectionId);
+        if (!connection) return;
+        try {
+          await marketplaceJson(
+            `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(supply.supplyId)}/deliver`,
+            { method: 'PATCH', headers: wbHeaders(connection.apiKey) },
+          );
+          delivered.push(supply.supplyId);
+        } catch (caught) {
+          failed.push({
+            supplyId: supply.supplyId,
+            message: caught instanceof Error ? caught.message : 'Wildberries не принял поставку в доставку.',
+          });
+        }
+      }),
+    );
+
+    const refreshedOrders = await this.refreshFbsOrdersCache(clientId);
+    return { delivered: delivered.length, failed, orders: refreshedOrders };
+  }
+
+  async listFbsPasses(clientId: string, connectionId: string | undefined, user: AuthUser) {
+    const normalizedClientId = clientId?.trim();
+    if (!normalizedClientId) throw new BadRequestException('Выберите клиента.');
+    this.clientScopes.requireClientAccess(user, normalizedClientId, 'read');
+    const connections = await this.prisma.clientMarketplaceConnection.findMany({
+      where: { clientId: normalizedClientId, marketplace: MarketplaceType.WILDBERRIES, isActive: true },
+      orderBy: [{ accountName: 'asc' }, { createdAt: 'asc' }],
+      include: { client: { select: { id: true, code: true, name: true } } },
+    });
+    const selected = connections.find((connection) => connection.id === connectionId) ?? connections[0];
+    if (!selected) {
+      return { connections: [], selectedConnectionId: null, offices: [], passes: [] };
+    }
+    const headers = wbHeaders(selected.apiKey);
+    const [offices, passes] = await Promise.all([
+      marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/passes/offices', { method: 'GET', headers }),
+      marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/passes', { method: 'GET', headers }),
+    ]);
+    return {
+      connections: connections.map((connection) => ({
+        id: connection.id,
+        accountName: connection.accountName,
+      })),
+      selectedConnectionId: selected.id,
+      offices: asArray<Record<string, unknown>>(offices),
+      passes: asArray<Record<string, unknown>>(passes),
+    };
+  }
+
+  async createFbsPass(dto: FbsPassDto, user: AuthUser) {
+    const connection = await this.loadFbsPassConnection(dto.clientId, dto.connectionId, user, 'write');
+    const created = await marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/passes', {
+      method: 'POST',
+      headers: wbHeaders(connection.apiKey),
+      body: JSON.stringify(fbsPassPayload(dto)),
+    });
+    return { id: numberValue(created.id), created: true };
+  }
+
+  async updateFbsPass(passId: string, dto: FbsPassDto, user: AuthUser) {
+    const connection = await this.loadFbsPassConnection(dto.clientId, dto.connectionId, user, 'write');
+    await marketplaceJson(`https://marketplace-api.wildberries.ru/api/v3/passes/${numericPositiveId(passId, 'пропуска')}`, {
+      method: 'PUT',
+      headers: wbHeaders(connection.apiKey),
+      body: JSON.stringify(fbsPassPayload(dto)),
+    });
+    return { id: numericPositiveId(passId, 'пропуска'), updated: true };
+  }
+
+  async deleteFbsPass(
+    passId: string,
+    clientId: string,
+    connectionId: string,
+    user: AuthUser,
+  ) {
+    const connection = await this.loadFbsPassConnection(clientId, connectionId, user, 'write');
+    const id = numericPositiveId(passId, 'пропуска');
+    await marketplaceJson(`https://marketplace-api.wildberries.ru/api/v3/passes/${id}`, {
+      method: 'DELETE',
+      headers: wbHeaders(connection.apiKey),
+    });
+    return { id, deleted: true };
+  }
+
+  private async loadFbsPassConnection(
+    clientId: string,
+    connectionId: string,
+    user: AuthUser,
+    mode: 'read' | 'write',
+  ) {
+    const normalizedClientId = clientId.trim();
+    this.clientScopes.requireClientAccess(user, normalizedClientId, mode);
+    const connection = await this.prisma.clientMarketplaceConnection.findFirst({
+      where: {
+        id: connectionId.trim(),
+        clientId: normalizedClientId,
+        marketplace: MarketplaceType.WILDBERRIES,
+        isActive: true,
+      },
+      include: { client: { select: { id: true, code: true, name: true } } },
+    });
+    if (!connection) throw new NotFoundException('Подключение Wildberries не найдено или отключено.');
+    return connection;
   }
 
   async getFbsOrderStickersPdf(dto: FbsOrderSelectionDto, user: AuthUser) {
@@ -511,9 +714,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
 
     const stickersByOrderId = new Map<string, FbsStickerImage>();
+    const crossBorderPdfByOrderId = new Map<string, Buffer>();
     for (const connection of connections) {
       const connectionOrders = ordersByConnection.get(connection.id) ?? [];
-      for (const orderChunk of chunks(connectionOrders, 100)) {
+      const regularOrders = connectionOrders.filter((order) => numberValue(order.crossBorderType) === 0);
+      const crossBorderOrders = connectionOrders.filter((order) => numberValue(order.crossBorderType) !== 0);
+      for (const orderChunk of chunks(regularOrders, 100)) {
         const response = await marketplaceJson(
           'https://marketplace-api.wildberries.ru/api/v3/orders/stickers?type=png&width=58&height=40',
           {
@@ -534,21 +740,48 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           }
         }
       }
+      for (const orderChunk of chunks(crossBorderOrders, 100)) {
+        const response = await marketplaceJson(
+          'https://marketplace-api.wildberries.ru/api/v3/orders/stickers/cross-border',
+          {
+            method: 'POST',
+            headers: wbHeaders(connection.apiKey),
+            body: JSON.stringify({ orders: orderChunk.map((order) => numericWbOrderId(order.id)) }),
+          },
+        );
+        for (const sticker of asArray<Record<string, unknown>>(response.stickers)) {
+          const orderId = textValue(sticker.orderId);
+          const file = textValue(sticker.file);
+          if (orderId && file && textValue(sticker.status) === 'ready') {
+            crossBorderPdfByOrderId.set(orderId, Buffer.from(file, 'base64'));
+          }
+        }
+      }
     }
 
-    const missingOrderIds = orders.map((order) => order.id).filter((orderId) => !stickersByOrderId.has(orderId));
+    const missingOrderIds = orders
+      .map((order) => order.id)
+      .filter((orderId) => !stickersByOrderId.has(orderId) && !crossBorderPdfByOrderId.has(orderId));
     if (missingOrderIds.length > 0) {
       throw new BadRequestException(
         `Wildberries пока не сформировал ШК для заказов: ${missingOrderIds.join(', ')}. Обновите статусы и повторите.`,
       );
     }
-    const stickers = orders.map((order) => stickersByOrderId.get(order.id)!);
-    const buffer = await buildFbsStickersPdf(stickers);
+    const regularStickers = orders
+      .map((order) => stickersByOrderId.get(order.id))
+      .filter((sticker): sticker is FbsStickerImage => Boolean(sticker));
+    const pdfParts: Buffer[] = [];
+    if (regularStickers.length > 0) pdfParts.push(await buildFbsStickersPdf(regularStickers));
+    orders.forEach((order) => {
+      const crossBorderPdf = crossBorderPdfByOrderId.get(order.id);
+      if (crossBorderPdf) pdfParts.push(crossBorderPdf);
+    });
+    const buffer = await mergeFbsStickerPdfs(pdfParts);
     return {
       fileName: `fbs-wb-order-stickers-${fileTimestamp(new Date())}.pdf`,
       contentType: 'application/pdf' as const,
       buffer,
-      count: stickers.length,
+      count: orders.length,
     };
   }
 
@@ -1468,6 +1701,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           cargoType: textValue(order.cargoType) || null,
           crossBorderType: textValue(order.crossBorderType) || null,
           pickupPointShipmentAllowed: toBoolean(order.isPickupPointShipmentAllowed),
+          requiresReshipment: toBoolean(order.requiresReshipment),
           shipmentPlan: null,
           requiredMeta: uniqueStrings(asArray<unknown>(order.requiredMeta).map(textValue)),
           optionalMeta: uniqueStrings(asArray<unknown>(order.optionalMeta).map(textValue)),
@@ -1557,13 +1791,23 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       Authorization: connection.apiKey,
       'Content-Type': 'application/json',
     };
-    const [newResponse, historicalOrders] = await Promise.all([
+    const [newResponse, historicalOrders, reshipmentResponse] = await Promise.all([
       marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/orders/new', {
         method: 'GET',
         headers,
       }),
       fetchWildberriesFbsHistory(headers),
+      marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/supplies/orders/reshipment', {
+        method: 'GET',
+        headers,
+      }),
     ]);
+    const reshipmentByOrderId = new Map(
+      asArray<Record<string, unknown>>(reshipmentResponse.orders).map((item) => [
+        textValue(item.orderID) || textValue(item.orderId),
+        textValue(item.supplyID) || textValue(item.supplyId),
+      ]),
+    );
 
     const ordersById = new Map<string, Record<string, unknown>>();
     for (const order of historicalOrders) {
@@ -1608,6 +1852,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         accountName: connection.accountName,
         marketplace: MarketplaceType.WILDBERRIES,
         itemCount: 1,
+        requiresReshipment: reshipmentByOrderId.has(id),
+        reshipmentSupplyId: reshipmentByOrderId.get(id) || null,
         supplierStatus: status?.supplierStatus || 'new',
         wbStatus: status?.wbStatus || 'waiting',
       } satisfies WildberriesFbsOrder;
@@ -1683,6 +1929,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         cargoType: '',
         requiredMeta: [],
         optionalMeta: [],
+        requiresReshipment: false,
         itemCount,
         connectionId: connection.id,
         accountName: connection.accountName,
@@ -1944,7 +2191,104 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
     }
 
+    await this.ensureFbsShipmentInvoices(clientId, orders, result);
     return result;
+  }
+
+  private async ensureFbsShipmentInvoices(
+    clientId: string,
+    orders: FbsOrderSummary[],
+    billingByOrder: Map<string, NonNullable<FbsOrderSummary['billing']>>,
+  ) {
+    const eligibleOrders = orders.filter((order) => order.shipmentPlan && order.supplyId);
+    const shipments = groupFbsOrdersByShipment(eligibleOrders);
+    for (const [shipmentKey, shipmentOrders] of shipments) {
+      const alreadyLinked = shipmentOrders
+        .map((order) => billingByOrder.get(fbsOrderKey(order)))
+        .find((billing) => Boolean(billing?.invoiceNumber));
+      if (alreadyLinked?.invoiceNumber) {
+        shipmentOrders.forEach((order) => {
+          const billing = billingByOrder.get(fbsOrderKey(order));
+          if (billing && !billing.invoiceNumber) {
+            billingByOrder.set(fbsOrderKey(order), {
+              ...billing,
+              invoiceNumber: alreadyLinked.invoiceNumber,
+              invoiceStatus: alreadyLinked.invoiceStatus,
+            });
+          }
+        });
+        continue;
+      }
+      const sourceKey = `fbs-invoice:${clientId}:${shipmentKey}`;
+      let invoice = await this.prisma.billingInvoice.findUnique({
+        where: { sourceKey },
+        select: { id: true, number: true, status: true },
+      });
+      if (!invoice) {
+        const chargeIds = uniqueStrings(
+          shipmentOrders.map((order) => billingByOrder.get(fbsOrderKey(order))?.chargeId ?? ''),
+        );
+        const charges = await this.prisma.billingCharge.findMany({
+          where: { id: { in: chargeIds }, clientId },
+          orderBy: [{ serviceDate: 'asc' }, { createdAt: 'asc' }],
+        });
+        if (charges.length === 0) continue;
+        const periodFrom = charges.reduce((date, charge) => (charge.serviceDate < date ? charge.serviceDate : date), charges[0].serviceDate);
+        const periodTo = charges.reduce((date, charge) => (charge.serviceDate > date ? charge.serviceDate : date), charges[0].serviceDate);
+        const totalRub = round(charges.reduce((sum, charge) => sum + Number(charge.totalRub), 0), 2);
+        const number = await this.nextFbsInvoiceNumber(periodTo);
+        try {
+          invoice = await this.prisma.billingInvoice.create({
+            data: {
+              number,
+              clientId,
+              periodFrom,
+              periodTo,
+              status: BillingInvoiceStatus.DRAFT,
+              source: BillingInvoiceSource.MANUAL,
+              sourceKey,
+              totalRub,
+              comment: `Автоматический черновик счёта за обработку FBS-поставки ${shipmentOrders[0].supplyId}.`,
+              items: {
+                create: charges.map((charge) => ({
+                  chargeId: charge.id,
+                  description: charge.description,
+                  unit: charge.unit,
+                  quantity: charge.quantity,
+                  unitPriceRub: charge.unitPriceRub,
+                  totalRub: charge.totalRub,
+                  serviceDate: charge.serviceDate,
+                })),
+              },
+            },
+            select: { id: true, number: true, status: true },
+          });
+        } catch (caught) {
+          if (!(caught instanceof Prisma.PrismaClientKnownRequestError) || caught.code !== 'P2002') throw caught;
+          invoice = await this.prisma.billingInvoice.findUnique({
+            where: { sourceKey },
+            select: { id: true, number: true, status: true },
+          });
+        }
+      }
+      if (!invoice) continue;
+      shipmentOrders.forEach((order) => {
+        const billing = billingByOrder.get(fbsOrderKey(order));
+        if (billing) {
+          billingByOrder.set(fbsOrderKey(order), {
+            ...billing,
+            invoiceNumber: invoice!.number,
+            invoiceStatus: invoice!.status,
+          });
+        }
+      });
+    }
+  }
+
+  private async nextFbsInvoiceNumber(date: Date) {
+    const prefix = `FBS-${date.getUTCFullYear()}${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+    const count = await this.prisma.billingInvoice.count({ where: { number: { startsWith: prefix } } });
+    return `${prefix}-${String(count + 1).padStart(4, '0')}`;
   }
 
   async createFbsConnection(dto: UpsertMarketplaceConnectionDto, user: AuthUser) {
@@ -2440,6 +2784,28 @@ function numericWbOrderId(value: string) {
     throw new BadRequestException(`Некорректный номер заказа Wildberries: ${value}.`);
   }
   return result;
+}
+
+function numericPositiveId(value: string, label: string) {
+  const result = Number(value);
+  if (!Number.isSafeInteger(result) || result <= 0) {
+    throw new BadRequestException(`Некорректный номер ${label}: ${value}.`);
+  }
+  return result;
+}
+
+function fbsPassPayload(dto: FbsPassDto) {
+  return {
+    firstName: dto.firstName.trim(),
+    lastName: dto.lastName.trim(),
+    carModel: dto.carModel.trim(),
+    carNumber: dto.carNumber.trim().toUpperCase(),
+    officeId: dto.officeId,
+  };
+}
+
+function delay(milliseconds: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function selectionKey(connectionId: string, orderId: string) {

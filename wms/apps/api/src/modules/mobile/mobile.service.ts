@@ -924,13 +924,13 @@ export class MobileService {
     const setting = await this.prisma.systemSetting.findUnique({ where: { key: 'mobile.android.version' } });
     const value = asRecord(setting?.value);
     return {
-      currentVersion: stringValue(value.currentVersion, '0.3.8'),
+      currentVersion: stringValue(value.currentVersion, '0.3.9'),
       minimumVersion: stringValue(value.minimumVersion, '0.1.0'),
       mandatory: value.mandatory === true,
       apkUrl: stringValue(value.apkUrl, '/downloads/logoff-wms-mobile.apk'),
       releaseNotes: stringValue(
         value.releaseNotes,
-        'При сборке FBS теперь выбирается место сдачи: ПВЗ с автоматическим созданием грузомест по 14 единиц или сортировочный центр без грузомест. Выбор сохраняется у поставки.',
+        'FBS: передача поставок WB, отмена и повторная отгрузка заказов, пакетные действия по поставке, пропуска WB и автоматические счета за обработку. Передача КИЗ не используется.',
       ),
       updatedAt: setting?.updatedAt ?? null,
     };

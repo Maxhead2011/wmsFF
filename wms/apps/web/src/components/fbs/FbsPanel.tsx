@@ -4,6 +4,7 @@ import {
   BadgeRussianRuble,
   Boxes,
   Calculator,
+  CarFront,
   CircleCheckBig,
   ClipboardList,
   Clock3,
@@ -16,17 +17,24 @@ import {
   PlugZap,
   QrCode,
   RefreshCw,
+  RotateCcw,
   Save,
   Search,
+  Send,
   Settings2,
   ShoppingBasket,
   Truck,
+  XCircle,
 } from 'lucide-react';
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   assembleFbsOrders,
+  cancelFbsOrders,
+  createFbsPass,
   createFbsMarketplaceConnection,
   createFbsRequest,
+  deleteFbsPass,
+  deliverFbsSupplies,
   downloadFbsCargoPlaceStickersPdf,
   downloadFbsOrderStickersPdf,
   downloadFbsRequestPickListPdf,
@@ -35,6 +43,9 @@ import {
   fetchFbsActiveClients,
   fetchFbsBillingSettings,
   fetchFbsOrders,
+  fetchFbsPasses,
+  reshipFbsOrders,
+  updateFbsPass,
   updateFbsBillingSettings,
   type AuthSession,
   type ClientFbsOrders,
@@ -43,6 +54,9 @@ import {
   type FbsBillingSettings,
   type FbsDeliveryDestination,
   type FbsOrderSummary,
+  type FbsPass,
+  type FbsPassPayload,
+  type FbsPassesResponse,
   type UpdateFbsBillingSettingsPayload,
 } from '../../lib/api';
 import { FbsCostCalculator } from './FbsCostCalculator';
@@ -52,7 +66,7 @@ type FbsPanelProps = {
   session: AuthSession;
 };
 
-type FbsView = 'active' | 'shipped' | 'cost' | 'calculator' | 'archive' | 'pricing';
+type FbsView = 'active' | 'shipped' | 'cost' | 'calculator' | 'archive' | 'passes' | 'pricing';
 type OrdersState =
   | { status: 'idle'; data: null; error: '' }
   | { status: 'loading'; data: ClientFbsOrders | null; error: '' }
@@ -96,6 +110,13 @@ const fbsViews = [
     accent: 'slate',
   },
   {
+    id: 'passes' as const,
+    title: 'Пропуска WB',
+    description: 'Пропуска водителей и автомобилей на склады Wildberries.',
+    icon: CarFront,
+    accent: 'blue',
+  },
+  {
     id: 'pricing' as const,
     title: 'Назначение стоимости обработки',
     description: 'Услуги клиента, доставка, шаг доплаты и комплектация коробов.',
@@ -116,7 +137,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
   const [ordersState, setOrdersState] = useState<OrdersState>({ status: 'idle', data: null, error: '' });
   const [selectedOrderKeys, setSelectedOrderKeys] = useState<Set<string>>(() => new Set());
   const [orderAction, setOrderAction] = useState<
-    'assemble' | 'stickers' | 'cargo' | 'supply' | 'request' | 'pick-list' | null
+    'assemble' | 'reship' | 'deliver' | 'cancel' | 'stickers' | 'cargo' | 'supply' | 'request' | 'pick-list' | null
   >(null);
   const [rowActionKey, setRowActionKey] = useState<string | null>(null);
   const [orderActionMessage, setOrderActionMessage] = useState('');
@@ -124,6 +145,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
   const [assemblyDialog, setAssemblyDialog] = useState<{
     orders: FbsOrderSummary[];
     destination: FbsDeliveryDestination;
+    mode: 'assemble' | 'reship';
   } | null>(null);
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [connectionMarketplace, setConnectionMarketplace] = useState<'WILDBERRIES' | 'OZON'>('WILDBERRIES');
@@ -246,6 +268,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
     cost: data?.counts.shipped ?? 0,
     calculator: '1–3000',
     archive: data?.counts.archive ?? 0,
+    passes: '48 ч',
     pricing: 'тарифы',
   };
 
@@ -254,19 +277,29 @@ export function FbsPanel({ session }: FbsPanelProps) {
     setAssemblyDialog({
       orders,
       destination: data?.deliveryPlan.destination ?? 'PICKUP_POINT',
+      mode: 'assemble',
+    });
+  }
+
+  async function reshipSelectedOrders(orders: FbsOrderSummary[]) {
+    if (!selectedClientId || orders.length === 0) return;
+    setAssemblyDialog({
+      orders,
+      destination: data?.deliveryPlan.destination ?? 'PICKUP_POINT',
+      mode: 'reship',
     });
   }
 
   async function submitAssemblyDirection() {
     if (!selectedClientId || !assemblyDialog || assemblyDialog.orders.length === 0) return;
-    const { orders, destination } = assemblyDialog;
+    const { orders, destination, mode } = assemblyDialog;
     setAssemblyDialog(null);
 
-    setOrderAction('assemble');
+    setOrderAction(mode);
     setOrderActionMessage('');
     setOrderActionError('');
     try {
-      const result = await assembleFbsOrders(session.accessToken, {
+      const result = await (mode === 'reship' ? reshipFbsOrders : assembleFbsOrders)(session.accessToken, {
         clientId: selectedClientId,
         orders: orders.map((order) => ({ connectionId: order.connectionId, id: order.id })),
         deliveryDestination: destination,
@@ -277,11 +310,59 @@ export function FbsPanel({ session }: FbsPanelProps) {
       const cargoPlaceCount = result.supplies.reduce((sum, supply) => sum + supply.cargoPlaceCount, 0);
       setOrderActionMessage(
         result.deliveryPlan.requiresCargoPlaces
-          ? `${result.assembled} заказ(а/ов) переведено в сборку. Создано грузомест: ${cargoPlaceCount} — по ${result.deliveryPlan.itemsPerCargoPlace} единиц. Теперь скачайте ШК заказов и QR грузомест.`
-          : `${result.assembled} заказ(а/ов) переведено в сборку. Поставка идёт в сортировочный центр, поэтому грузоместа WB не создавались. Теперь можно скачать ШК заказов.`,
+          ? `${result.assembled} заказ(а/ов) ${mode === 'reship' ? 'переведено в повторную отгрузку' : 'переведено в сборку'}. Создано грузомест: ${cargoPlaceCount} — по ${result.deliveryPlan.itemsPerCargoPlace} единиц. Теперь скачайте ШК заказов и QR грузомест.`
+          : `${result.assembled} заказ(а/ов) ${mode === 'reship' ? 'переведено в повторную отгрузку' : 'переведено в сборку'}. Поставка идёт в сортировочный центр, поэтому грузоместа WB не создавались. Теперь можно скачать ШК заказов.`,
       );
     } catch (caught) {
-      setOrderActionError(caught instanceof Error ? caught.message : 'Не удалось перевести заказы в сборку.');
+      setOrderActionError(caught instanceof Error ? caught.message : mode === 'reship' ? 'Не удалось создать повторную отгрузку.' : 'Не удалось перевести заказы в сборку.');
+    } finally {
+      setOrderAction(null);
+    }
+  }
+
+  async function cancelSelectedOrders(orders: FbsOrderSummary[]) {
+    if (!selectedClientId || orders.length === 0) return;
+    if (!window.confirm(`Отменить ${orders.length} FBS-заказ(а/ов) у продавца? Действие изменит статус в Wildberries.`)) return;
+    setOrderAction('cancel');
+    setOrderActionMessage('');
+    setOrderActionError('');
+    try {
+      const result = await cancelFbsOrders(session.accessToken, {
+        clientId: selectedClientId,
+        orders: orders.map((order) => ({ connectionId: order.connectionId, id: order.id })),
+      });
+      ++loadSequence.current;
+      setOrdersState({ status: 'ready', data: result.orders, error: '' });
+      setSelectedOrderKeys(new Set());
+      setOrderActionMessage(`Отменено заказов: ${result.cancelled ?? 0}.${result.failed.length ? ` Не удалось: ${result.failed.length}.` : ''}`);
+      if (result.failed.length) setOrderActionError(result.failed.map((item) => `${item.id}: ${item.message}`).join(' '));
+      void loadActiveClients();
+    } catch (caught) {
+      setOrderActionError(caught instanceof Error ? caught.message : 'Не удалось отменить заказы.');
+    } finally {
+      setOrderAction(null);
+    }
+  }
+
+  async function deliverSelectedSupplies(orders: FbsOrderSummary[]) {
+    if (!selectedClientId || orders.length === 0) return;
+    const supplyCount = new Set(orders.map((order) => `${order.connectionId}:${order.supplyId}`)).size;
+    if (!window.confirm(`Передать в доставку ${supplyCount} поставк(у/и)? После закрытия в неё нельзя будет добавить заказы.`)) return;
+    setOrderAction('deliver');
+    setOrderActionMessage('');
+    setOrderActionError('');
+    try {
+      const result = await deliverFbsSupplies(session.accessToken, {
+        clientId: selectedClientId,
+        orders: orders.map((order) => ({ connectionId: order.connectionId, id: order.id })),
+      });
+      ++loadSequence.current;
+      setOrdersState({ status: 'ready', data: result.orders, error: '' });
+      setSelectedOrderKeys(new Set());
+      setOrderActionMessage(`Передано в доставку поставок: ${result.delivered ?? 0}.${result.failed.length ? ` Не удалось: ${result.failed.length}.` : ' Счёт за обработку будет создан автоматически.'}`);
+      if (result.failed.length) setOrderActionError(result.failed.map((item) => `${item.supplyId}: ${item.message}`).join(' '));
+    } catch (caught) {
+      setOrderActionError(caught instanceof Error ? caught.message : 'Не удалось передать поставки в доставку.');
     } finally {
       setOrderAction(null);
     }
@@ -524,7 +605,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
                 </select>
               </label>
             ) : null}
-            {activeView !== 'cost' && activeView !== 'pricing' ? (
+            {activeView !== 'cost' && activeView !== 'pricing' && activeView !== 'passes' ? (
               <label className="fbs-workspace__search">
                 <span>Поиск</span>
                 <span>
@@ -537,7 +618,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
                 </span>
               </label>
             ) : null}
-            {activeView !== 'pricing' ? (
+            {activeView !== 'pricing' && activeView !== 'passes' ? (
               <button
                 className="fbs-refresh-button"
                 type="button"
@@ -561,6 +642,8 @@ export function FbsPanel({ session }: FbsPanelProps) {
             session={session}
             onSaved={() => void loadOrders(true)}
           />
+        ) : activeView === 'passes' ? (
+          <FbsPassesView clientId={selectedClientId} session={session} />
         ) : ordersState.status === 'error' ? (
           <FbsNotice icon={AlertTriangle} title="Не удалось получить заказы" text={ordersState.error} tone="error" />
         ) : data && !data.connected ? (
@@ -596,6 +679,9 @@ export function FbsPanel({ session }: FbsPanelProps) {
             actionMessage={orderActionMessage}
             actionError={orderActionError}
             onAssemble={assembleSelectedOrders}
+            onReship={reshipSelectedOrders}
+            onDeliver={deliverSelectedSupplies}
+            onCancel={cancelSelectedOrders}
             onDownloadStickers={downloadSelectedOrderStickers}
             onDownloadCargoStickers={downloadSelectedCargoPlaceStickers}
             onDownloadSupplyStickers={downloadSelectedSupplyStickers}
@@ -605,7 +691,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
           />
         ) : null}
 
-        {data?.connected && activeView !== 'pricing' && activeView !== 'calculator' ? (
+        {data?.connected && activeView !== 'pricing' && activeView !== 'calculator' && activeView !== 'passes' ? (
           <div className="fbs-source-line">
             <span>
               <Link2 size={14} aria-hidden="true" />
@@ -620,7 +706,8 @@ export function FbsPanel({ session }: FbsPanelProps) {
         <FbsAssemblyDestinationDialog
           orders={assemblyDialog.orders}
           destination={assemblyDialog.destination}
-          isSubmitting={orderAction === 'assemble'}
+          mode={assemblyDialog.mode}
+          isSubmitting={orderAction === 'assemble' || orderAction === 'reship'}
           onDestinationChange={(destination) =>
             setAssemblyDialog((current) => (current ? { ...current, destination } : current))
           }
@@ -635,6 +722,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
 function FbsAssemblyDestinationDialog({
   orders,
   destination,
+  mode,
   isSubmitting,
   onDestinationChange,
   onCancel,
@@ -642,6 +730,7 @@ function FbsAssemblyDestinationDialog({
 }: {
   orders: FbsOrderSummary[];
   destination: FbsDeliveryDestination;
+  mode: 'assemble' | 'reship';
   isSubmitting: boolean;
   onDestinationChange: (destination: FbsDeliveryDestination) => void;
   onCancel: () => void;
@@ -659,7 +748,7 @@ function FbsAssemblyDestinationDialog({
           <Truck size={24} aria-hidden="true" />
         </div>
         <div className="fbs-assembly-dialog__heading">
-          <p className="eyebrow">Новая поставка FBS</p>
+          <p className="eyebrow">{mode === 'reship' ? 'Повторная отгрузка FBS' : 'Новая поставка FBS'}</p>
           <h3 id="fbs-assembly-title">Куда сдаём выбранные заказы?</h3>
           <p>{orders.length} заказов · {itemCount} единиц товара</p>
         </div>
@@ -702,11 +791,164 @@ function FbsAssemblyDestinationDialog({
           </button>
           <button type="button" className="button button-primary" onClick={onSubmit} disabled={pickupBlocked || isSubmitting}>
             {isSubmitting ? 'Создаю поставку…' : destination === 'PICKUP_POINT'
-              ? `Собрать и создать ${cargoPlaceCount} мест`
-              : 'Собрать для СЦ'}
+              ? `${mode === 'reship' ? 'Переотгрузить' : 'Собрать'} и создать ${cargoPlaceCount} мест`
+              : mode === 'reship' ? 'Переотгрузить через СЦ' : 'Собрать для СЦ'}
           </button>
         </div>
       </section>
+    </div>
+  );
+}
+
+type FbsPassForm = Pick<FbsPassPayload, 'firstName' | 'lastName' | 'carModel' | 'carNumber'> & {
+  officeId: string;
+};
+
+const emptyFbsPassForm: FbsPassForm = {
+  firstName: '',
+  lastName: '',
+  carModel: '',
+  carNumber: '',
+  officeId: '',
+};
+
+function FbsPassesView({ clientId, session }: { clientId: string; session: AuthSession }) {
+  const [state, setState] = useState<{ status: 'loading' | 'ready' | 'error'; data: FbsPassesResponse | null; error: string }>({
+    status: 'loading',
+    data: null,
+    error: '',
+  });
+  const [connectionId, setConnectionId] = useState('');
+  const [editingPass, setEditingPass] = useState<FbsPass | null>(null);
+  const [form, setForm] = useState<FbsPassForm>(emptyFbsPassForm);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+
+  const loadPasses = useCallback(async (requestedConnectionId?: string) => {
+    setState((current) => ({ status: 'loading', data: current.data, error: '' }));
+    try {
+      const data = await fetchFbsPasses(session.accessToken, clientId, requestedConnectionId || undefined);
+      setConnectionId(data.selectedConnectionId ?? '');
+      setState({ status: 'ready', data, error: '' });
+    } catch (caught) {
+      setState((current) => ({
+        status: 'error',
+        data: current.data,
+        error: caught instanceof Error ? caught.message : 'Не удалось загрузить пропуска Wildberries.',
+      }));
+    }
+  }, [clientId, session.accessToken]);
+
+  useEffect(() => {
+    setEditingPass(null);
+    setForm(emptyFbsPassForm);
+    void loadPasses();
+  }, [loadPasses]);
+
+  function updatePassForm(field: keyof FbsPassForm, value: string) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function startEditing(pass: FbsPass) {
+    setEditingPass(pass);
+    setForm({
+      firstName: pass.firstName,
+      lastName: pass.lastName,
+      carModel: pass.carModel,
+      carNumber: pass.carNumber,
+      officeId: String(pass.officeId),
+    });
+    setMessage('');
+  }
+
+  function resetPassForm() {
+    setEditingPass(null);
+    setForm(emptyFbsPassForm);
+  }
+
+  async function submitPass(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!connectionId || !form.officeId) return;
+    setSaving(true);
+    setMessage('');
+    const payload: FbsPassPayload = {
+      clientId,
+      connectionId,
+      firstName: form.firstName.trim(),
+      lastName: form.lastName.trim(),
+      carModel: form.carModel.trim(),
+      carNumber: form.carNumber.trim().toUpperCase(),
+      officeId: Number(form.officeId),
+    };
+    try {
+      if (editingPass) await updateFbsPass(session.accessToken, editingPass.id, payload);
+      else await createFbsPass(session.accessToken, payload);
+      setMessage(editingPass ? 'Пропуск обновлён.' : 'Пропуск создан и передан в Wildberries.');
+      resetPassForm();
+      await loadPasses(connectionId);
+    } catch (caught) {
+      setMessage(caught instanceof Error ? caught.message : 'Не удалось сохранить пропуск.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removePass(pass: FbsPass) {
+    if (!window.confirm(`Удалить пропуск для автомобиля ${pass.carNumber}?`)) return;
+    setSaving(true);
+    setMessage('');
+    try {
+      await deleteFbsPass(session.accessToken, pass.id, clientId, connectionId);
+      if (editingPass?.id === pass.id) resetPassForm();
+      setMessage('Пропуск удалён.');
+      await loadPasses(connectionId);
+    } catch (caught) {
+      setMessage(caught instanceof Error ? caught.message : 'Не удалось удалить пропуск.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const data = state.data;
+  if (state.status === 'loading' && !data) {
+    return <FbsNotice icon={RefreshCw} title="Загружаю пропуска" text="Получаем склады и действующие пропуска из Wildberries." />;
+  }
+  if (state.status === 'error' && !data) {
+    return <FbsNotice icon={AlertTriangle} title="Не удалось загрузить пропуска" text={state.error} tone="error" />;
+  }
+  if (!data?.selectedConnectionId) {
+    return <FbsNotice icon={CarFront} title="Нет подключения Wildberries" text="Сначала подключите API Wildberries для выбранного клиента." />;
+  }
+
+  return (
+    <div className="fbs-passes">
+      <div className="fbs-passes__intro">
+        <div><CarFront size={22} aria-hidden="true" /><div><strong>Пропуска на склады WB</strong><span>Данные синхронизируются напрямую с кабинетом Wildberries.</span></div></div>
+        {data.connections.length > 1 ? (
+          <label>Кабинет<select value={connectionId} onChange={(event) => void loadPasses(event.target.value)}>{data.connections.map((connection) => <option key={connection.id} value={connection.id}>{connection.accountName || 'Wildberries'}</option>)}</select></label>
+        ) : null}
+      </div>
+      <form className="fbs-passes__form" onSubmit={submitPass}>
+        <h3>{editingPass ? `Изменить пропуск №${editingPass.id}` : 'Новый пропуск'}</h3>
+        <label>Имя<input required value={form.firstName} onChange={(event) => updatePassForm('firstName', event.target.value)} /></label>
+        <label>Фамилия<input required value={form.lastName} onChange={(event) => updatePassForm('lastName', event.target.value)} /></label>
+        <label>Модель автомобиля<input required value={form.carModel} onChange={(event) => updatePassForm('carModel', event.target.value)} /></label>
+        <label>Госномер<input required value={form.carNumber} onChange={(event) => updatePassForm('carNumber', event.target.value)} placeholder="А123ВС77" /></label>
+        <label>Склад WB<select required value={form.officeId} onChange={(event) => updatePassForm('officeId', event.target.value)}><option value="">Выберите склад</option>{data.offices.map((office) => <option key={office.id} value={office.id}>{office.name} · {office.address}</option>)}</select></label>
+        <div className="fbs-passes__form-actions">
+          <button className="button button-primary" type="submit" disabled={saving}>{saving ? 'Сохраняю…' : editingPass ? 'Сохранить' : 'Создать пропуск'}</button>
+          {editingPass ? <button className="button button-secondary" type="button" onClick={resetPassForm}>Отмена</button> : null}
+        </div>
+      </form>
+      {message ? <p className="fbs-passes__message">{message}</p> : null}
+      <div className="fbs-passes__list">
+        {data.passes.length === 0 ? <p>Действующих пропусков нет.</p> : data.passes.map((pass) => (
+          <article key={pass.id}>
+            <div><strong>{pass.carNumber} · {pass.carModel}</strong><span>{pass.firstName} {pass.lastName}</span><span>{pass.officeName || `Склад №${pass.officeId}`} · до {formatDateTime(pass.dateEnd)}</span></div>
+            <div><button type="button" className="button button-secondary" disabled={saving} onClick={() => startEditing(pass)}>Изменить</button><button type="button" className="button button-secondary fbs-order-actions__danger" disabled={saving} onClick={() => void removePass(pass)}>Удалить</button></div>
+          </article>
+        ))}
+      </div>
     </div>
   );
 }
@@ -722,6 +964,9 @@ function FbsOrdersView({
   actionMessage,
   actionError,
   onAssemble,
+  onReship,
+  onDeliver,
+  onCancel,
   onDownloadStickers,
   onDownloadCargoStickers,
   onDownloadSupplyStickers,
@@ -731,14 +976,17 @@ function FbsOrdersView({
 }: {
   data: ClientFbsOrders | null;
   search: string;
-  view: Exclude<FbsView, 'cost' | 'calculator' | 'pricing'>;
+  view: Exclude<FbsView, 'cost' | 'calculator' | 'pricing' | 'passes'>;
   selectedOrderKeys: Set<string>;
   onSelectionChange: (keys: Set<string>) => void;
-  orderAction: 'assemble' | 'stickers' | 'cargo' | 'supply' | 'request' | 'pick-list' | null;
+  orderAction: 'assemble' | 'reship' | 'deliver' | 'cancel' | 'stickers' | 'cargo' | 'supply' | 'request' | 'pick-list' | null;
   rowActionKey: string | null;
   actionMessage: string;
   actionError: string;
   onAssemble: (orders: FbsOrderSummary[]) => Promise<void>;
+  onReship: (orders: FbsOrderSummary[]) => Promise<void>;
+  onDeliver: (orders: FbsOrderSummary[]) => Promise<void>;
+  onCancel: (orders: FbsOrderSummary[]) => Promise<void>;
   onDownloadStickers: (orders: FbsOrderSummary[]) => Promise<void>;
   onDownloadCargoStickers: (orders: FbsOrderSummary[]) => Promise<void>;
   onDownloadSupplyStickers: (orders: FbsOrderSummary[]) => Promise<void>;
@@ -773,6 +1021,15 @@ function FbsOrdersView({
   const selectedOrders = visibleOrders.filter((order) => selectedOrderKeys.has(fbsOrderSelectionKey(order)));
   const assemblyOrders = selectedOrders.filter(
     (order) => order.marketplace === 'WILDBERRIES' && order.supplierStatus === 'new',
+  );
+  const reshipOrders = selectedOrders.filter(
+    (order) => order.marketplace === 'WILDBERRIES' && order.requiresReshipment,
+  );
+  const deliverOrders = selectedOrders.filter(
+    (order) => order.marketplace === 'WILDBERRIES' && order.supplierStatus === 'confirm' && Boolean(order.supplyId),
+  );
+  const cancelOrders = selectedOrders.filter(
+    (order) => order.marketplace === 'WILDBERRIES' && ['new', 'confirm'].includes(order.supplierStatus),
   );
   const stickerOrders = selectedOrders.filter(
     (order) => order.marketplace === 'WILDBERRIES' && ['confirm', 'complete'].includes(order.supplierStatus),
@@ -874,11 +1131,38 @@ function FbsOrdersView({
                 <button
                   type="button"
                   className="button button-secondary"
+                  disabled={reshipOrders.length === 0 || orderAction !== null}
+                  onClick={() => void onReship(reshipOrders)}
+                >
+                  <RotateCcw size={16} aria-hidden="true" />
+                  {orderAction === 'reship' ? 'Переотгружаю…' : `Переотгрузить (${reshipOrders.length})`}
+                </button>
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  disabled={deliverOrders.length === 0 || orderAction !== null}
+                  onClick={() => void onDeliver(deliverOrders)}
+                >
+                  <Send size={16} aria-hidden="true" />
+                  {orderAction === 'deliver' ? 'Передаю…' : `Передать WB (${deliverOrders.length})`}
+                </button>
+                <button
+                  type="button"
+                  className="button button-secondary"
                   disabled={requestOrders.length === 0 || orderAction !== null}
                   onClick={() => void onCreateRequest(requestOrders)}
                 >
                   <FilePlus2 size={16} aria-hidden="true" />
                   {orderAction === 'request' ? 'Создаю…' : `Заявка (${requestOrders.length})`}
+                </button>
+                <button
+                  type="button"
+                  className="button button-secondary fbs-order-actions__danger"
+                  disabled={cancelOrders.length === 0 || orderAction !== null}
+                  onClick={() => void onCancel(cancelOrders)}
+                >
+                  <XCircle size={16} aria-hidden="true" />
+                  {orderAction === 'cancel' ? 'Отменяю…' : `Отменить (${cancelOrders.length})`}
                 </button>
               </>
             ) : null}
@@ -945,7 +1229,17 @@ function FbsOrdersView({
               <th>{view === 'active' ? 'Создан' : 'Отгрузка'}</th>
             </tr>
           </thead>
-          {orderGroups.map((group) => (
+          {orderGroups.map((group) => {
+            const groupStickerOrders = group.orders.filter(
+              (order) => order.marketplace === 'WILDBERRIES' && ['confirm', 'complete'].includes(order.supplierStatus),
+            );
+            const groupDeliverOrders = group.orders.filter(
+              (order) => order.marketplace === 'WILDBERRIES' && order.supplierStatus === 'confirm' && Boolean(order.supplyId),
+            );
+            const groupCargoOrders = group.orders.filter(
+              (order) => fbsOrderRequiresCargoPlaces(order, data?.deliveryPlan.requiresCargoPlaces === true),
+            );
+            return (
             <tbody
               key={group.key}
               className={group.isJointShipment ? 'fbs-table__shipment-group' : undefined}
@@ -953,13 +1247,37 @@ function FbsOrdersView({
               {group.isJointShipment ? (
                 <tr className="fbs-table__shipment-heading">
                   <td colSpan={tableColumnCount}>
-                    <div>
-                      <PackageCheck size={15} aria-hidden="true" />
-                      <strong>Отгружены вместе</strong>
-                      <span>
-                        Поставка {group.supplyId} · {group.orders.length} заказов ·{' '}
-                        {fbsShipmentDestinationLabel(group.orders[0], data?.deliveryPlan.requiresCargoPlaces === true)}
-                      </span>
+                    <div className="fbs-table__shipment-heading-content">
+                      <div>
+                        <PackageCheck size={15} aria-hidden="true" />
+                        <strong>Отгружены вместе</strong>
+                        <span>
+                          Поставка {group.supplyId} · {group.orders.length} заказов ·{' '}
+                          {fbsShipmentDestinationLabel(group.orders[0], data?.deliveryPlan.requiresCargoPlaces === true)}
+                        </span>
+                      </div>
+                      <div className="fbs-table__shipment-actions">
+                        <button type="button" onClick={() => {
+                          const next = new Set(selectedOrderKeys);
+                          group.orders.forEach((order) => next.add(fbsOrderSelectionKey(order)));
+                          onSelectionChange(next);
+                        }}>
+                          Выбрать поставку
+                        </button>
+                        <button type="button" disabled={groupStickerOrders.length === 0 || orderAction !== null} onClick={() => void onDownloadStickers(groupStickerOrders)}>
+                          <Download size={13} aria-hidden="true" /> ШК заказов
+                        </button>
+                        {groupCargoOrders.length > 0 ? (
+                          <button type="button" disabled={orderAction !== null} onClick={() => void onDownloadCargoStickers(groupCargoOrders)}>
+                            <QrCode size={13} aria-hidden="true" /> QR грузомест
+                          </button>
+                        ) : null}
+                        {groupDeliverOrders.length > 0 ? (
+                          <button type="button" disabled={orderAction !== null} onClick={() => void onDeliver(groupDeliverOrders)}>
+                            <Send size={13} aria-hidden="true" /> Передать WB
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
                   </td>
                 </tr>
@@ -989,7 +1307,8 @@ function FbsOrdersView({
                 />
               ))}
             </tbody>
-          ))}
+            );
+          })}
         </table>
         {visibleOrders.length === 0 ? (
           <div className="fbs-empty">

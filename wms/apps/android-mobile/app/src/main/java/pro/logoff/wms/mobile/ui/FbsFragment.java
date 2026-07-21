@@ -56,6 +56,7 @@ public class FbsFragment extends Fragment {
     private static final String ARCHIVE = "archive";
     private static final String CALCULATOR = "calculator";
     private static final String PRICING = "pricing";
+    private static final String PASSES = "passes";
     private static final int CALCULATOR_MAX_QUANTITY = 3000;
     private static final int CALCULATOR_ITEMS_PER_BOX = 14;
     private static final int CALCULATOR_BOXES_PER_PALLET = 16;
@@ -67,6 +68,7 @@ public class FbsFragment extends Fragment {
     private List<Map<String, Object>> activeClients = Collections.emptyList();
     private final Map<String, Map<String, Object>> selectedOrders = new LinkedHashMap<>();
     private Map<String, Object> settingsData = Collections.emptyMap();
+    private Map<String, Object> passesData = Collections.emptyMap();
     private List<Map<String, Object>> calculatorTariffSets = Collections.emptyList();
     private Map<String, Object> calculatorTariffDetail = Collections.emptyMap();
     private List<String> calculatorDestinations = Collections.emptyList();
@@ -75,6 +77,7 @@ public class FbsFragment extends Fragment {
     private boolean loadingActiveClients;
     private boolean orderActionRunning;
     private boolean loadingSettings;
+    private boolean loadingPasses;
     private boolean loadingCalculator;
     private PricingForm pricingForm;
     private CalculatorForm calculatorForm;
@@ -111,6 +114,7 @@ public class FbsFragment extends Fragment {
         activeClients = Collections.emptyList();
         selectedOrders.clear();
         settingsData = Collections.emptyMap();
+        passesData = Collections.emptyMap();
         calculatorTariffSets = Collections.emptyList();
         calculatorTariffDetail = Collections.emptyMap();
         calculatorDestinations = Collections.emptyList();
@@ -123,6 +127,41 @@ public class FbsFragment extends Fragment {
         loadActiveClients(force);
         if (PRICING.equals(section) && canManagePricing()) loadSettings(force);
         if (CALCULATOR.equals(section) && calculatorEnabled()) loadCalculatorOptions(force);
+        if (PASSES.equals(section)) loadPasses(force, null);
+    }
+
+    private void loadPasses(boolean force, @Nullable String connectionId) {
+        String clientId = app.state().selectedClientId();
+        if (clientId == null || clientId.isBlank()) {
+            showEmpty("Сначала выберите клиента.");
+            return;
+        }
+        if (!force && !passesData.isEmpty() && connectionId == null) {
+            renderPasses();
+            return;
+        }
+        loadingPasses = true;
+        updateLoading();
+        app.repository().api().fbsPasses(clientId, connectionId).enqueue(new Callback<>() {
+            @Override
+            public void onResponse(Call<Map<String, Object>> call, Response<Map<String, Object>> response) {
+                if (!isAdded() || binding == null) return;
+                loadingPasses = false;
+                if (response.isSuccessful() && response.body() != null) {
+                    passesData = response.body();
+                    if (PASSES.equals(section)) renderPasses();
+                } else if (PASSES.equals(section)) showEmpty(readableError(response));
+                updateLoading();
+            }
+
+            @Override
+            public void onFailure(Call<Map<String, Object>> call, Throwable error) {
+                if (!isAdded() || binding == null) return;
+                loadingPasses = false;
+                if (PASSES.equals(section)) showEmpty(MobileRepository.readable(error));
+                updateLoading();
+            }
+        });
     }
 
     private void loadOrders(boolean force) {
@@ -352,6 +391,7 @@ public class FbsFragment extends Fragment {
         addSectionCard("Отгруженные", count(counts.get("shipped")), SHIPPED, R.color.logoff_success, false);
         addSectionCard("Стоимость обработки", "Расчёт", COST, R.color.logoff_warning, false);
         addSectionCard("Архив", count(counts.get("archive")), ARCHIVE, R.color.logoff_black, false);
+        addSectionCard("Пропуска WB", "Автомобили и склады", PASSES, R.color.logoff_blue, false);
         if (calculatorEnabled()) {
             addSectionCard(
                     "Калькулятор FBS",
@@ -426,6 +466,7 @@ public class FbsFragment extends Fragment {
         binding.searchLayout.setVisibility(isOrderSection() ? View.VISIBLE : View.GONE);
         if (PRICING.equals(section)) loadSettings(false);
         else if (CALCULATOR.equals(section)) loadCalculatorOptions(false);
+        else if (PASSES.equals(section)) loadPasses(false, null);
         else renderOrders();
     }
 
@@ -475,7 +516,7 @@ public class FbsFragment extends Fragment {
         for (List<Map<String, Object>> group : groups.values()) {
             String supplyId = AppState.string(group.get(0).get("supplyId"));
             boolean jointShipment = !supplyId.isBlank() && group.size() > 1;
-            if (jointShipment) addJointShipmentHeader(group.get(0), supplyId, group.size());
+            if (jointShipment) addJointShipmentHeader(group, supplyId);
             for (Map<String, Object> order : group) addOrderCard(order, jointShipment);
         }
     }
@@ -567,6 +608,9 @@ public class FbsFragment extends Fragment {
         if (selectedCount > 0) {
             List<Map<String, Object>> selectedValues = new ArrayList<>(selectedOrders.values());
             List<Map<String, Object>> assembly = filterOrders(selectedValues, "assemble");
+            List<Map<String, Object>> reship = filterOrders(selectedValues, "reship");
+            List<Map<String, Object>> deliver = filterOrders(selectedValues, "deliver");
+            List<Map<String, Object>> cancel = filterOrders(selectedValues, "cancel");
             List<Map<String, Object>> requests = filterOrders(selectedValues, "request");
             List<Map<String, Object>> stickers = filterOrders(selectedValues, "stickers");
             List<Map<String, Object>> cargo = filterOrders(selectedValues, "cargo");
@@ -575,13 +619,29 @@ public class FbsFragment extends Fragment {
             if (ACTIVE.equals(section)) {
                 MaterialButton assemble = primaryButton("Собрать (" + assembly.size() + ")");
                 assemble.setEnabled(!orderActionRunning && !assembly.isEmpty());
-                assemble.setOnClickListener(view -> confirmAssemble(assembly));
+                assemble.setOnClickListener(view -> confirmAssemble(assembly, false));
                 addActionButton(content, assemble);
+
+                MaterialButton reshipButton = outlinedButton("Переотгрузить (" + reship.size() + ")");
+                reshipButton.setEnabled(!orderActionRunning && !reship.isEmpty());
+                reshipButton.setOnClickListener(view -> confirmAssemble(reship, true));
+                addActionButton(content, reshipButton);
+
+                MaterialButton deliverButton = outlinedButton("Передать WB (" + deliver.size() + ")");
+                deliverButton.setEnabled(!orderActionRunning && !deliver.isEmpty());
+                deliverButton.setOnClickListener(view -> confirmDeliver(deliver));
+                addActionButton(content, deliverButton);
 
                 MaterialButton request = outlinedButton("Создать заявку (" + requests.size() + ")");
                 request.setEnabled(!orderActionRunning && !requests.isEmpty());
                 request.setOnClickListener(view -> confirmCreateRequest(requests));
                 addActionButton(content, request);
+
+                MaterialButton cancelButton = outlinedButton("Отменить (" + cancel.size() + ")");
+                cancelButton.setEnabled(!orderActionRunning && !cancel.isEmpty());
+                cancelButton.setTextColor(ContextCompat.getColor(requireContext(), R.color.logoff_red));
+                cancelButton.setOnClickListener(view -> confirmCancelOrders(cancel));
+                addActionButton(content, cancelButton);
             }
 
             MaterialButton stickersButton = outlinedButton("ШК заказов (" + stickers.size() + ")");
@@ -715,19 +775,42 @@ public class FbsFragment extends Fragment {
         dialog.show();
     }
 
-    private void addJointShipmentHeader(Map<String, Object> order, String supplyId, int orderCount) {
+    private void addJointShipmentHeader(List<Map<String, Object>> orders, String supplyId) {
+        Map<String, Object> order = orders.get(0);
         Map<String, Object> shipmentPlan = map(order.get("shipmentPlan"));
         boolean pickupPoint = requiresCargoPlaces(order);
         int cargoPlaceCount = (int) Math.round(numberValue(shipmentPlan.get("cargoPlaceCount")));
         String destination = pickupPoint
                 ? "ПВЗ" + (cargoPlaceCount > 0 ? " · " + cargoPlaceCount + " грузомест" : "")
                 : "Сортировочный центр WB";
-        TextView header = text(
-                "ОТГРУЖЕНЫ ВМЕСТЕ  ·  Поставка " + supplyId + "  ·  " + orderCount + " заказов  ·  " + destination,
+        LinearLayout header = new LinearLayout(requireContext());
+        header.setOrientation(LinearLayout.VERTICAL);
+        header.addView(text(
+                "ОТГРУЖЕНЫ ВМЕСТЕ  ·  Поставка " + supplyId + "  ·  " + orders.size() + " заказов  ·  " + destination,
                 12,
                 R.color.logoff_success,
                 Typeface.BOLD
-        );
+        ));
+        MaterialButton select = outlinedButton("Выбрать всю поставку");
+        select.setOnClickListener(view -> {
+            for (Map<String, Object> value : orders) selectedOrders.put(orderKey(value), value);
+            renderOrders();
+        });
+        addActionButton(header, select);
+        List<Map<String, Object>> stickers = filterOrders(orders, "stickers");
+        if (!stickers.isEmpty()) {
+            MaterialButton print = outlinedButton("ШК всех заказов поставки");
+            print.setEnabled(!orderActionRunning);
+            print.setOnClickListener(view -> downloadOrderStickers(stickers));
+            addActionButton(header, print);
+        }
+        List<Map<String, Object>> deliver = filterOrders(orders, "deliver");
+        if (!deliver.isEmpty()) {
+            MaterialButton send = outlinedButton("Передать поставку WB");
+            send.setEnabled(!orderActionRunning);
+            send.setOnClickListener(view -> confirmDeliver(deliver));
+            addActionButton(header, send);
+        }
         header.setPadding(dp(14), dp(11), dp(14), dp(11));
         GradientDrawable background = new GradientDrawable();
         background.setColor(ContextCompat.getColor(requireContext(), R.color.logoff_success_surface));
@@ -825,6 +908,13 @@ public class FbsFragment extends Fragment {
         LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(-1, -2);
         statusParams.topMargin = dp(11);
         content.addView(status, statusParams);
+        if (Boolean.TRUE.equals(order.get("requiresReshipment"))) {
+            TextView reshipment = text("Требуется повторная отгрузка", 11,
+                    R.color.logoff_red, Typeface.BOLD);
+            LinearLayout.LayoutParams reshipmentParams = new LinearLayout.LayoutParams(-1, -2);
+            reshipmentParams.topMargin = dp(4);
+            content.addView(reshipment, reshipmentParams);
+        }
 
         String supplyId = AppState.string(order.get("supplyId"));
         if (!supplyId.isBlank()) {
@@ -882,6 +972,26 @@ public class FbsFragment extends Fragment {
                 ? "Скачать QR поставки для сортировочного центра"
                 : "ШК для СЦ появится после передачи поставки в доставку");
         addActionButton(content, supply);
+
+        if (isEligible(order, "reship")) {
+            MaterialButton reship = outlinedButton("Переотгрузить заказ");
+            reship.setEnabled(!orderActionRunning);
+            reship.setOnClickListener(view -> confirmAssemble(Collections.singletonList(order), true));
+            addActionButton(content, reship);
+        }
+        if (isEligible(order, "deliver")) {
+            MaterialButton deliver = outlinedButton("Передать поставку WB");
+            deliver.setEnabled(!orderActionRunning);
+            deliver.setOnClickListener(view -> confirmDeliver(Collections.singletonList(order)));
+            addActionButton(content, deliver);
+        }
+        if (isEligible(order, "cancel")) {
+            MaterialButton cancel = outlinedButton("Отменить заказ WB");
+            cancel.setEnabled(!orderActionRunning);
+            cancel.setTextColor(ContextCompat.getColor(requireContext(), R.color.logoff_red));
+            cancel.setOnClickListener(view -> confirmCancelOrders(Collections.singletonList(order)));
+            addActionButton(content, cancel);
+        }
 
         Map<String, Object> request = map(order.get("request"));
         if (!request.isEmpty() && !"CANCELLED".equals(AppState.string(request.get("status")))) {
@@ -988,7 +1098,7 @@ public class FbsFragment extends Fragment {
                 .show();
     }
 
-    private void confirmAssemble(List<Map<String, Object>> orders) {
+    private void confirmAssemble(List<Map<String, Object>> orders, boolean reship) {
         if (orders.isEmpty()) return;
         String defaultDestination = AppState.string(map(orderData.get("deliveryPlan")).get("destination"));
         int[] selected = {"VNUKOVO_SORTING_CENTER".equals(defaultDestination) ? 1 : 0};
@@ -998,11 +1108,11 @@ public class FbsFragment extends Fragment {
         };
         int cargoPlaces = estimateCargoPlaces(orders);
         androidx.appcompat.app.AlertDialog dialog = new MaterialAlertDialogBuilder(requireContext())
-                .setTitle("Куда сдаём FBS-поставку?")
+                .setTitle(reship ? "Куда переотгружаем FBS-заказы?" : "Куда сдаём FBS-поставку?")
                 .setMessage(orders.size() + " заказ(а/ов). Для ПВЗ будет создано грузомест: " + cargoPlaces + ".")
                 .setSingleChoiceItems(choices, selected[0], (target, which) -> selected[0] = which)
                 .setNegativeButton("Отмена", null)
-                .setPositiveButton("Создать поставку", null)
+                .setPositiveButton(reship ? "Переотгрузить" : "Создать поставку", null)
                 .create();
         dialog.setOnShowListener(ignored -> dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE)
                 .setOnClickListener(view -> {
@@ -1023,16 +1133,19 @@ public class FbsFragment extends Fragment {
                         }
                     }
                     dialog.dismiss();
-                    assembleOrders(orders, destination);
+                    assembleOrders(orders, destination, reship);
                 }));
         dialog.show();
     }
 
-    private void assembleOrders(List<Map<String, Object>> orders, String deliveryDestination) {
+    private void assembleOrders(List<Map<String, Object>> orders, String deliveryDestination, boolean reship) {
         beginOrderAction();
         Map<String, Object> body = selectionPayload(orders);
         body.put("deliveryDestination", deliveryDestination);
-        app.repository().api().assembleFbsOrders(body).enqueue(new Callback<>() {
+        Call<Map<String, Object>> call = reship
+                ? app.repository().api().reshipFbsOrders(body)
+                : app.repository().api().assembleFbsOrders(body);
+        call.enqueue(new Callback<>() {
             @Override
             public void onResponse(Call<Map<String, Object>> call, Response<Map<String, Object>> response) {
                 if (!isAdded() || binding == null) return;
@@ -1045,12 +1158,61 @@ public class FbsFragment extends Fragment {
                 for (Map<String, Object> supply : maps(result.get("supplies"))) {
                     cargoPlaces += (int) Math.round(numberValue(supply.get("cargoPlaceCount")));
                 }
-                applyOrderActionResult(result, "Заказы переведены в сборку: "
-                        + count(result.get("assembled")) + ". Грузомест создано: " + cargoPlaces + ".");
+                applyOrderActionResult(result, reship
+                        ? "Заказы переотгружены: " + count(result.get("reshipped")) + ". Грузомест создано: " + cargoPlaces + "."
+                        : "Заказы переведены в сборку: " + count(result.get("assembled")) + ". Грузомест создано: " + cargoPlaces + ".");
             }
 
             @Override
             public void onFailure(Call<Map<String, Object>> call, Throwable error) {
+                failOrderAction(MobileRepository.readable(error));
+            }
+        });
+    }
+
+    private void confirmDeliver(List<Map<String, Object>> orders) {
+        if (orders.isEmpty()) return;
+        new MaterialAlertDialogBuilder(requireContext())
+                .setTitle("Передать поставку в доставку WB?")
+                .setMessage("Wildberries закроет выбранные поставки. После этого заказы перейдут в отгруженные, а WMS сформирует начисления и счёт.")
+                .setNegativeButton("Отмена", null)
+                .setPositiveButton("Передать", (dialog, which) -> runSimpleOrderAction(
+                        app.repository().api().deliverFbsSupplies(selectionPayload(orders)),
+                        "Поставок передано WB: ", "delivered"))
+                .show();
+    }
+
+    private void confirmCancelOrders(List<Map<String, Object>> orders) {
+        if (orders.isEmpty()) return;
+        new MaterialAlertDialogBuilder(requireContext())
+                .setTitle("Отменить FBS-заказы?")
+                .setMessage("Выбранные заказы: " + orders.size() + ". Отмена будет сразу передана в Wildberries.")
+                .setNegativeButton("Не отменять", null)
+                .setPositiveButton("Отменить", (dialog, which) -> runSimpleOrderAction(
+                        app.repository().api().cancelFbsOrders(selectionPayload(orders)),
+                        "Заказов отменено: ", "cancelled"))
+                .show();
+    }
+
+    private void runSimpleOrderAction(Call<Map<String, Object>> call, String successPrefix, String countKey) {
+        beginOrderAction();
+        call.enqueue(new Callback<>() {
+            @Override
+            public void onResponse(Call<Map<String, Object>> request, Response<Map<String, Object>> response) {
+                if (!isAdded() || binding == null) return;
+                if (!response.isSuccessful() || response.body() == null) {
+                    failOrderAction(readableError(response));
+                    return;
+                }
+                Map<String, Object> result = response.body();
+                List<Map<String, Object>> failed = maps(result.get("failed"));
+                String message = successPrefix + count(result.get(countKey))
+                        + (failed.isEmpty() ? "." : ". Ошибок: " + failed.size() + ".");
+                applyOrderActionResult(result, message);
+            }
+
+            @Override
+            public void onFailure(Call<Map<String, Object>> request, Throwable error) {
                 failOrderAction(MobileRepository.readable(error));
             }
         });
@@ -1234,6 +1396,11 @@ public class FbsFragment extends Fragment {
         boolean wildberries = "WILDBERRIES".equals(AppState.string(order.get("marketplace")));
         String supplierStatus = AppState.string(order.get("supplierStatus"));
         if ("assemble".equals(action)) return wildberries && "new".equals(supplierStatus);
+        if ("reship".equals(action)) return wildberries && Boolean.TRUE.equals(order.get("requiresReshipment"));
+        if ("deliver".equals(action)) return wildberries && "confirm".equals(supplierStatus)
+                && !AppState.string(order.get("supplyId")).isBlank();
+        if ("cancel".equals(action)) return wildberries
+                && ("new".equals(supplierStatus) || "confirm".equals(supplierStatus));
         if ("stickers".equals(action)) {
             return wildberries && ("confirm".equals(supplierStatus) || "complete".equals(supplierStatus));
         }
@@ -1310,6 +1477,189 @@ public class FbsFragment extends Fragment {
             else selectedOrders.put(key, current);
         }
         for (String key : stale) selectedOrders.remove(key);
+    }
+
+    private void renderPasses() {
+        if (binding == null || !PASSES.equals(section)) return;
+        binding.content.removeAllViews();
+        binding.empty.setVisibility(View.GONE);
+        binding.heroTitle.setText("Пропуска WB");
+        binding.heroSubtitle.setText("Автомобили, водители и склады Wildberries");
+        if (passesData.isEmpty()) {
+            if (!loadingPasses) showEmpty("Пропуска пока не загружены.");
+            return;
+        }
+        String connectionId = AppState.string(passesData.get("selectedConnectionId"));
+        if (connectionId.isBlank()) {
+            showEmpty("Сначала подключите API Wildberries для выбранного клиента.");
+            return;
+        }
+
+        List<Map<String, Object>> connections = maps(passesData.get("connections"));
+        if (connections.size() > 1) {
+            MaterialCardView accountsCard = baseCard();
+            LinearLayout accounts = cardContent();
+            accounts.addView(text("Кабинет Wildberries", 15, R.color.logoff_black, Typeface.BOLD));
+            for (Map<String, Object> connection : connections) {
+                String id = AppState.string(connection.get("id"));
+                MaterialButton button = outlinedButton(firstNonBlank(
+                        AppState.string(connection.get("accountName")), "Wildberries"));
+                button.setEnabled(!id.equals(connectionId));
+                button.setOnClickListener(view -> loadPasses(true, id));
+                addActionButton(accounts, button);
+            }
+            accountsCard.addView(accounts);
+            binding.content.addView(accountsCard, cardParams());
+        }
+
+        MaterialButton create = primaryButton("Создать пропуск WB");
+        create.setOnClickListener(view -> showPassDialog(null));
+        binding.content.addView(create, new LinearLayout.LayoutParams(-1, dp(54)));
+
+        List<Map<String, Object>> passes = maps(passesData.get("passes"));
+        if (passes.isEmpty()) {
+            TextView empty = text("Действующих пропусков нет.", 13, R.color.logoff_text_muted, Typeface.NORMAL);
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+            params.topMargin = dp(14);
+            binding.content.addView(empty, params);
+            return;
+        }
+        for (Map<String, Object> pass : passes) {
+            MaterialCardView card = baseCard();
+            LinearLayout body = cardContent();
+            body.addView(text(firstNonBlank(AppState.string(pass.get("carNumber")), "Без госномера")
+                    + " · " + firstNonBlank(AppState.string(pass.get("carModel")), "Автомобиль"),
+                    16, R.color.logoff_black, Typeface.BOLD));
+            TextView details = text(
+                    joinNonBlank(AppState.string(pass.get("firstName")), AppState.string(pass.get("lastName")))
+                            + "\n" + firstNonBlank(AppState.string(pass.get("officeName")),
+                            "Склад №" + count(pass.get("officeId")))
+                            + "\nДействует до: " + firstNonBlank(AppState.string(pass.get("dateEnd")), "не указано"),
+                    12, R.color.logoff_text_muted, Typeface.NORMAL);
+            LinearLayout.LayoutParams detailParams = new LinearLayout.LayoutParams(-1, -2);
+            detailParams.topMargin = dp(7);
+            body.addView(details, detailParams);
+            MaterialButton edit = outlinedButton("Изменить");
+            edit.setOnClickListener(view -> showPassDialog(pass));
+            addActionButton(body, edit);
+            MaterialButton delete = outlinedButton("Удалить");
+            delete.setTextColor(ContextCompat.getColor(requireContext(), R.color.logoff_red));
+            delete.setOnClickListener(view -> confirmDeletePass(pass));
+            addActionButton(body, delete);
+            card.addView(body);
+            binding.content.addView(card, cardParams());
+        }
+    }
+
+    private void showPassDialog(@Nullable Map<String, Object> pass) {
+        List<Map<String, Object>> offices = maps(passesData.get("offices"));
+        if (offices.isEmpty()) {
+            Toast.makeText(requireContext(), "Wildberries не вернул доступные склады для пропусков.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        LinearLayout form = new LinearLayout(requireContext());
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(20), 0, dp(20), 0);
+        EditText firstName = addLabeledField(form, "Имя", pass == null ? "" : AppState.string(pass.get("firstName")), false);
+        EditText lastName = addLabeledField(form, "Фамилия", pass == null ? "" : AppState.string(pass.get("lastName")), false);
+        EditText carModel = addLabeledField(form, "Модель автомобиля", pass == null ? "" : AppState.string(pass.get("carModel")), false);
+        EditText carNumber = addLabeledField(form, "Госномер", pass == null ? "" : AppState.string(pass.get("carNumber")), false);
+        form.addView(sectionLabel("Склад WB"));
+        List<String> labels = new ArrayList<>();
+        int selectedOffice = 0;
+        long currentOfficeId = pass == null ? 0 : Math.round(numberValue(pass.get("officeId")));
+        for (int index = 0; index < offices.size(); index++) {
+            Map<String, Object> office = offices.get(index);
+            labels.add(firstNonBlank(AppState.string(office.get("name")), "Склад №" + count(office.get("id")))
+                    + " · " + AppState.string(office.get("address")));
+            if (Math.round(numberValue(office.get("id"))) == currentOfficeId) selectedOffice = index;
+        }
+        Spinner office = spinner(labels);
+        office.setSelection(selectedOffice);
+        form.addView(office, fieldParams());
+
+        new MaterialAlertDialogBuilder(requireContext())
+                .setTitle(pass == null ? "Новый пропуск WB" : "Изменить пропуск")
+                .setView(form)
+                .setNegativeButton("Отмена", null)
+                .setPositiveButton("Сохранить", (dialog, which) -> {
+                    String first = AppState.string(firstName.getText()).trim();
+                    String last = AppState.string(lastName.getText()).trim();
+                    String model = AppState.string(carModel.getText()).trim();
+                    String number = AppState.string(carNumber.getText()).trim().toUpperCase(new Locale("ru", "RU"));
+                    if (first.isBlank() || last.isBlank() || model.isBlank() || number.isBlank()) {
+                        Toast.makeText(requireContext(), "Заполните имя, фамилию, автомобиль и госномер.", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    savePass(pass, first, last, model, number, offices.get(office.getSelectedItemPosition()));
+                })
+                .show();
+    }
+
+    private void savePass(
+            @Nullable Map<String, Object> pass,
+            String firstName,
+            String lastName,
+            String carModel,
+            String carNumber,
+            Map<String, Object> office
+    ) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("clientId", app.state().selectedClientId());
+        body.put("connectionId", AppState.string(passesData.get("selectedConnectionId")));
+        body.put("firstName", firstName);
+        body.put("lastName", lastName);
+        body.put("carModel", carModel);
+        body.put("carNumber", carNumber);
+        body.put("officeId", Math.round(numberValue(office.get("id"))));
+        loadingPasses = true;
+        updateLoading();
+        Call<Map<String, Object>> call = pass == null
+                ? app.repository().api().createFbsPass(body)
+                : app.repository().api().updateFbsPass(Math.round(numberValue(pass.get("id"))), body);
+        call.enqueue(passMutationCallback(pass == null ? "Пропуск создан." : "Пропуск обновлён."));
+    }
+
+    private void confirmDeletePass(Map<String, Object> pass) {
+        new MaterialAlertDialogBuilder(requireContext())
+                .setTitle("Удалить пропуск?")
+                .setMessage("Автомобиль " + AppState.string(pass.get("carNumber")) + " будет удалён из Wildberries.")
+                .setNegativeButton("Отмена", null)
+                .setPositiveButton("Удалить", (dialog, which) -> {
+                    loadingPasses = true;
+                    updateLoading();
+                    app.repository().api().deleteFbsPass(
+                            Math.round(numberValue(pass.get("id"))),
+                            app.state().selectedClientId(),
+                            AppState.string(passesData.get("selectedConnectionId"))
+                    ).enqueue(passMutationCallback("Пропуск удалён."));
+                })
+                .show();
+    }
+
+    private Callback<Map<String, Object>> passMutationCallback(String successMessage) {
+        return new Callback<>() {
+            @Override
+            public void onResponse(Call<Map<String, Object>> call, Response<Map<String, Object>> response) {
+                if (!isAdded() || binding == null) return;
+                loadingPasses = false;
+                if (!response.isSuccessful()) {
+                    Toast.makeText(requireContext(), cleanError(readableError(response)), Toast.LENGTH_LONG).show();
+                    updateLoading();
+                    return;
+                }
+                Toast.makeText(requireContext(), successMessage, Toast.LENGTH_LONG).show();
+                loadPasses(true, AppState.string(passesData.get("selectedConnectionId")));
+            }
+
+            @Override
+            public void onFailure(Call<Map<String, Object>> call, Throwable error) {
+                if (!isAdded() || binding == null) return;
+                loadingPasses = false;
+                Toast.makeText(requireContext(), MobileRepository.readable(error), Toast.LENGTH_LONG).show();
+                updateLoading();
+            }
+        };
     }
 
     private void renderCalculator() {
@@ -2138,6 +2488,7 @@ public class FbsFragment extends Fragment {
                 || loadingActiveClients
                 || orderActionRunning
                 || (PRICING.equals(section) && loadingSettings)
+                || (PASSES.equals(section) && loadingPasses)
                 || (CALCULATOR.equals(section) && loadingCalculator);
         binding.progress.setVisibility(loading && binding.content.getChildCount() == 0 ? View.VISIBLE : View.GONE);
         binding.swipe.setRefreshing(loading);
