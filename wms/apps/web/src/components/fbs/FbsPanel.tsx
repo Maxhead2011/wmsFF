@@ -112,6 +112,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
   const [ordersState, setOrdersState] = useState<OrdersState>({ status: 'idle', data: null, error: '' });
   const [selectedOrderKeys, setSelectedOrderKeys] = useState<Set<string>>(() => new Set());
   const [orderAction, setOrderAction] = useState<'assemble' | 'stickers' | 'cargo' | 'request' | null>(null);
+  const [rowActionKey, setRowActionKey] = useState<string | null>(null);
   const [orderActionMessage, setOrderActionMessage] = useState('');
   const [orderActionError, setOrderActionError] = useState('');
   const [connectionOpen, setConnectionOpen] = useState(false);
@@ -202,6 +203,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
 
   useEffect(() => {
     setSelectedOrderKeys(new Set());
+    setRowActionKey(null);
     setOrderActionMessage('');
     setOrderActionError('');
   }, [selectedClientId]);
@@ -267,6 +269,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
   async function downloadSelectedCargoPlaceStickers(orders: FbsOrderSummary[]) {
     if (!selectedClientId || orders.length === 0) return;
     setOrderAction('cargo');
+    setRowActionKey(orders.length === 1 ? fbsOrderSelectionKey(orders[0]) : null);
     setOrderActionMessage('');
     setOrderActionError('');
     try {
@@ -280,12 +283,14 @@ export function FbsPanel({ session }: FbsPanelProps) {
       setOrderActionError(caught instanceof Error ? caught.message : 'Не удалось скачать QR грузомест.');
     } finally {
       setOrderAction(null);
+      setRowActionKey(null);
     }
   }
 
   async function downloadSelectedOrderStickers(orders: FbsOrderSummary[]) {
     if (!selectedClientId || orders.length === 0) return;
     setOrderAction('stickers');
+    setRowActionKey(orders.length === 1 ? fbsOrderSelectionKey(orders[0]) : null);
     setOrderActionMessage('');
     setOrderActionError('');
     try {
@@ -299,6 +304,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
       setOrderActionError(caught instanceof Error ? caught.message : 'Не удалось скачать ШК заказов.');
     } finally {
       setOrderAction(null);
+      setRowActionKey(null);
     }
   }
 
@@ -523,6 +529,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
             selectedOrderKeys={selectedOrderKeys}
             onSelectionChange={setSelectedOrderKeys}
             orderAction={orderAction}
+            rowActionKey={rowActionKey}
             actionMessage={orderActionMessage}
             actionError={orderActionError}
             onAssemble={assembleSelectedOrders}
@@ -554,6 +561,7 @@ function FbsOrdersView({
   selectedOrderKeys,
   onSelectionChange,
   orderAction,
+  rowActionKey,
   actionMessage,
   actionError,
   onAssemble,
@@ -567,6 +575,7 @@ function FbsOrdersView({
   selectedOrderKeys: Set<string>;
   onSelectionChange: (keys: Set<string>) => void;
   orderAction: 'assemble' | 'stickers' | 'cargo' | 'request' | null;
+  rowActionKey: string | null;
   actionMessage: string;
   actionError: string;
   onAssemble: (orders: FbsOrderSummary[]) => Promise<void>;
@@ -744,6 +753,7 @@ function FbsOrdersView({
               <th>ШК</th>
               {view === 'active' ? <th>Короб хранения</th> : null}
               <th>Статус API</th>
+              <th>Документы</th>
               <th>{view === 'active' ? 'Создан' : 'Отгрузка'}</th>
             </tr>
           </thead>
@@ -757,6 +767,12 @@ function FbsOrdersView({
                   selectable={view === 'active'}
                   selected={selectedOrderKeys.has(fbsOrderSelectionKey(order))}
                   onToggle={() => toggleOrder(order)}
+                  actionsDisabled={orderAction !== null}
+                  stickerBusy={orderAction === 'stickers' && rowActionKey === fbsOrderSelectionKey(order)}
+                  cargoBusy={orderAction === 'cargo' && rowActionKey === fbsOrderSelectionKey(order)}
+                  requiresCargoPlaces={data?.deliveryPlan.requiresCargoPlaces === true}
+                  onDownloadSticker={() => void onDownloadStickers([order])}
+                  onDownloadCargoStickers={() => void onDownloadCargoStickers([order])}
                 />
               ))}
             </tbody>
@@ -782,13 +798,33 @@ function FbsOrderRow({
   selectable,
   selected,
   onToggle,
+  actionsDisabled,
+  stickerBusy,
+  cargoBusy,
+  requiresCargoPlaces,
+  onDownloadSticker,
+  onDownloadCargoStickers,
 }: {
   order: FbsOrderSummary;
   showBoxes: boolean;
   selectable: boolean;
   selected: boolean;
   onToggle: () => void;
+  actionsDisabled: boolean;
+  stickerBusy: boolean;
+  cargoBusy: boolean;
+  requiresCargoPlaces: boolean;
+  onDownloadSticker: () => void;
+  onDownloadCargoStickers: () => void;
 }) {
+  const canDownloadSticker =
+    order.marketplace === 'WILDBERRIES' && ['confirm', 'complete'].includes(order.supplierStatus);
+  const canDownloadCargoStickers =
+    requiresCargoPlaces &&
+    order.marketplace === 'WILDBERRIES' &&
+    order.supplierStatus === 'confirm' &&
+    Boolean(order.supplyId);
+
   return (
     <tr className={selected ? 'fbs-table__row--selected' : undefined}>
       {selectable ? (
@@ -839,6 +875,44 @@ function FbsOrderRow({
       <td>
         <span className={`fbs-status fbs-status--${order.category}`}>{order.statusLabel}</span>
         <small>{order.supplierStatus}</small>
+      </td>
+      <td>
+        <div className="fbs-order-documents">
+          <button
+            type="button"
+            className="fbs-order-document-button"
+            disabled={!canDownloadSticker || actionsDisabled}
+            onClick={onDownloadSticker}
+            title={
+              canDownloadSticker
+                ? `Скачать ШК заказа ${order.id}`
+                : order.marketplace === 'WILDBERRIES'
+                  ? 'ШК появится после перевода заказа в сборку'
+                  : 'Скачивание ШК в этом модуле пока доступно для Wildberries'
+            }
+          >
+            <Download size={14} aria-hidden="true" />
+            {stickerBusy ? 'Формирую…' : 'Скачать ШК'}
+          </button>
+          {requiresCargoPlaces ? (
+            <button
+              type="button"
+              className="fbs-order-document-button fbs-order-document-button--cargo"
+              disabled={!canDownloadCargoStickers || actionsDisabled}
+              onClick={onDownloadCargoStickers}
+              title={
+                canDownloadCargoStickers
+                  ? `Скачать все QR грузомест поставки ${order.supplyId}`
+                  : 'QR грузомест появится после создания поставки и перевода заказа в сборку'
+              }
+            >
+              <QrCode size={14} aria-hidden="true" />
+              {cargoBusy ? 'Формирую…' : 'QR грузомест'}
+            </button>
+          ) : (
+            <small className="fbs-order-documents__note">Без грузомест: сдача в СЦ</small>
+          )}
+        </div>
       </td>
       <td>
         <strong>{formatDateTime(order.createdAt)}</strong>

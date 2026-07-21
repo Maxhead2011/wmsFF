@@ -518,6 +518,60 @@
   font-size: 11px;
 }
 
+.fbs-order-documents {
+  display: grid;
+  min-width: 132px;
+  gap: 6px;
+}
+
+.fbs-order-document-button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #fecaca;
+  border-radius: 9px;
+  background: #fff7f7;
+  color: #b91c1c;
+  padding: 6px 9px;
+  font-size: 10px;
+  font-weight: 850;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.fbs-order-document-button:hover:not(:disabled) {
+  border-color: #f87171;
+  background: #fff1f2;
+}
+
+.fbs-order-document-button--cargo {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.fbs-order-document-button--cargo:hover:not(:disabled) {
+  border-color: #60a5fa;
+  background: #dbeafe;
+}
+
+.fbs-order-document-button:disabled {
+  border-color: #e2e8f0;
+  background: #f8fafc;
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.fbs-table td .fbs-order-documents__note {
+  margin: 0;
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 750;
+  text-align: center;
+}
+
 .fbs-box-list {
   display: flex;
   max-width: 300px;
