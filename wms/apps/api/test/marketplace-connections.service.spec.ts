@@ -78,6 +78,9 @@ describe('MarketplaceConnectionsService', () => {
           },
         ]),
       },
+      clientFbsBillingSettings: {
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
       fbsOrderRequestLink: {
         findMany: vi.fn().mockResolvedValue([]),
       },
@@ -307,7 +310,7 @@ describe('MarketplaceConnectionsService', () => {
           baseIncludedItems: 5,
           extraBlockItems: 5,
           extraBlockPriceRub: new Prisma.Decimal(250),
-          boxCapacityItems: 16,
+          boxCapacityItems: 14,
           boxFormationServiceId: formationService.id,
           boxMaterialServiceId: boxService.id,
           palletsEnabled: false,
@@ -409,7 +412,7 @@ describe('MarketplaceConnectionsService', () => {
       baseIncludedItems: 5,
       extraBlockItems: 5,
       extraBlockPriceRub: new Prisma.Decimal(250),
-      boxCapacityItems: 16,
+      boxCapacityItems: 14,
       boxFormationServiceId: formationService.id,
       boxMaterialServiceId: boxService.id,
       palletsEnabled: true,
@@ -473,47 +476,83 @@ describe('MarketplaceConnectionsService', () => {
       clientMarketplaceConnection: {
         findMany: vi.fn().mockResolvedValue([connection]),
       },
+      clientFbsBillingSettings: {
+        findUnique: vi.fn().mockResolvedValue({
+          defaultDeliveryDestination: 'PICKUP_POINT',
+          boxCapacityItems: 14,
+        }),
+      },
     };
     const clientScopes = { requireClientAccess: vi.fn() };
     const service = new MarketplaceConnectionsService(prisma as never, clientScopes as never);
+    const selectedOrders = Array.from({ length: 15 }, (_value, index) => ({
+      id: String(1001 + index),
+      connectionId: connection.id,
+      marketplace: MarketplaceType.WILDBERRIES,
+      supplierStatus: 'new',
+      cargoType: '1',
+      warehouseId: '1693195',
+      crossBorderType: null,
+      pickupPointShipmentAllowed: true,
+      itemCount: 1,
+    }));
     vi.spyOn(service as any, 'resolveSelectedFbsOrders').mockResolvedValue({
       response: { client: connection.client },
-      orders: [
-        {
-          id: '1001',
-          connectionId: connection.id,
-          marketplace: MarketplaceType.WILDBERRIES,
-          supplierStatus: 'new',
-          cargoType: '1',
-          warehouseId: '1693195',
-          crossBorderType: null,
-        },
-      ],
+      orders: selectedOrders,
     });
     vi.spyOn(service as any, 'refreshFbsOrdersCache').mockResolvedValue({ orders: [] });
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => ({
         ok: true,
-        status: 200,
-        json: async () => (url.endsWith('/api/v3/supplies') ? { id: 'supply-1' } : {}),
+        status: url.endsWith('/trbx') ? 201 : 200,
+        json: async () =>
+          url.endsWith('/api/v3/supplies')
+            ? { id: 'supply-1' }
+            : url.endsWith('/trbx')
+              ? { trbxIds: ['WB-TRBX-1', 'WB-TRBX-2'] }
+              : {},
       } as Response)),
     );
 
     const result = await service.assembleFbsOrders(
-      { clientId: 'client-1', orders: [{ connectionId: connection.id, id: '1001' }] },
+      {
+        clientId: 'client-1',
+        orders: selectedOrders.map((order) => ({ connectionId: order.connectionId, id: order.id })),
+      },
       { id: 'user-1' } as never,
     );
 
     expect(result).toMatchObject({
-      assembled: 1,
-      supplies: [{ id: 'supply-1', connectionId: connection.id, orderIds: ['1001'] }],
+      assembled: 15,
+      deliveryPlan: {
+        destination: 'PICKUP_POINT',
+        itemsPerCargoPlace: 14,
+        requiresCargoPlaces: true,
+      },
+      supplies: [
+        {
+          id: 'supply-1',
+          connectionId: connection.id,
+          orderIds: selectedOrders.map((order) => order.id),
+          itemCount: 15,
+          cargoPlaceCount: 2,
+          cargoPlaceIds: ['WB-TRBX-1', 'WB-TRBX-2'],
+        },
+      ],
     });
     expect(fetch).toHaveBeenCalledWith(
       'https://marketplace-api.wildberries.ru/api/marketplace/v3/supplies/supply-1/orders',
       expect.objectContaining({
         method: 'PATCH',
-        body: JSON.stringify({ orders: [1001] }),
+        body: JSON.stringify({ orders: selectedOrders.map((order) => Number(order.id)) }),
+      }),
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      'https://marketplace-api.wildberries.ru/api/v3/supplies/supply-1/trbx',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ amount: 2 }),
       }),
     );
   });

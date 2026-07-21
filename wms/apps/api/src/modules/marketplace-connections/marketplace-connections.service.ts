@@ -24,7 +24,12 @@ import { ClientScopeService } from '../auth/client-scope.service';
 import type { FbsOrderSelectionDto } from './dto/fbs-order-selection.dto';
 import { UpdateFbsBillingSettingsDto } from './dto/update-fbs-billing-settings.dto';
 import { UpsertMarketplaceConnectionDto } from './dto/upsert-marketplace-connection.dto';
-import { buildFbsStickersPdf, type FbsStickerImage } from './fbs-stickers-pdf';
+import { DEFAULT_FBS_ITEMS_PER_CARGO_PLACE } from './fbs.constants';
+import {
+  buildFbsCargoPlaceStickersPdf,
+  buildFbsStickersPdf,
+  type FbsStickerImage,
+} from './fbs-stickers-pdf';
 
 type MarketplaceConnectionWithClient = Prisma.ClientMarketplaceConnectionGetPayload<{
   include: { client: { select: { id: true; code: true; name: true } } };
@@ -91,6 +96,7 @@ type FbsOrderSummary = {
   officeId: string | null;
   cargoType: string | null;
   crossBorderType: string | null;
+  pickupPointShipmentAllowed: boolean;
   requiredMeta: string[];
   optionalMeta: string[];
   comment: string | null;
@@ -128,6 +134,11 @@ type FbsOrdersResponse = {
   connected: boolean;
   connections: Array<{ id: string; marketplace: MarketplaceType; accountName: string | null }>;
   fetchedAt: string;
+  deliveryPlan: {
+    destination: FbsDeliveryDestination;
+    itemsPerCargoPlace: number;
+    requiresCargoPlaces: boolean;
+  };
   counts: { active: number; shipped: number; archive: number; all: number };
   orders: FbsOrderSummary[];
 };
@@ -235,6 +246,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'read');
     const { response, orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders);
+    const deliveryPlan = await this.loadFbsDeliveryPlan(clientId);
 
     const unsupported = orders.filter((order) => order.marketplace !== MarketplaceType.WILDBERRIES);
     if (unsupported.length > 0) {
@@ -245,6 +257,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new BadRequestException(
         `В сборку можно перевести только новые заказы. Проверьте: ${unavailable.map((order) => order.id).join(', ')}.`,
       );
+    }
+    if (deliveryPlan.requiresCargoPlaces) {
+      const pickupPointUnavailable = orders.filter((order) => !order.pickupPointShipmentAllowed);
+      if (pickupPointUnavailable.length > 0) {
+        throw new BadRequestException(
+          `Wildberries не разрешает отгрузку выбранных заказов через ПВЗ: ${pickupPointUnavailable
+            .map((order) => order.id)
+            .join(', ')}. Выберите в тарифах клиента доставку в сортировочный центр.`,
+        );
+      }
     }
 
     const connections = await this.loadSelectedConnections(clientId, orders);
@@ -262,7 +284,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       groupedOrders.set(groupKey, group);
     }
 
-    const supplies: Array<{ id: string; connectionId: string; orderIds: string[] }> = [];
+    const supplies: Array<{
+      id: string;
+      connectionId: string;
+      orderIds: string[];
+      itemCount: number;
+      cargoPlaceCount: number;
+      cargoPlaceIds: string[];
+    }> = [];
     let supplyIndex = 0;
     for (const group of groupedOrders.values()) {
       supplyIndex += 1;
@@ -308,16 +337,48 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         );
       }
 
+      const itemCount = group.reduce((sum, order) => sum + Math.max(1, order.itemCount), 0);
+      let cargoPlaceIds: string[] = [];
+      if (deliveryPlan.requiresCargoPlaces) {
+        const cargoPlaceCount = Math.ceil(itemCount / deliveryPlan.itemsPerCargoPlace);
+        try {
+          const cargoResponse = await marketplaceJson(
+            `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(supplyId)}/trbx`,
+            {
+              method: 'POST',
+              headers,
+              body: JSON.stringify({ amount: cargoPlaceCount }),
+            },
+          );
+          cargoPlaceIds = uniqueStrings(asArray<unknown>(cargoResponse.trbxIds).map(textValue));
+          if (cargoPlaceIds.length !== cargoPlaceCount) {
+            throw new Error(
+              `ожидалось ${cargoPlaceCount}, Wildberries вернул ${cargoPlaceIds.length}`,
+            );
+          }
+        } catch (caught) {
+          const message = caught instanceof Error ? caught.message : 'неизвестная ошибка Wildberries';
+          throw new BadRequestException(
+            `Заказы уже добавлены в поставку ${supplyId}, но грузоместа не созданы: ${message}. ` +
+              `Создайте ${cargoPlaceCount} грузомест в кабинете WB для этой же поставки.`,
+          );
+        }
+      }
+
       supplies.push({
         id: supplyId,
         connectionId: connection.id,
         orderIds: group.map((order) => order.id),
+        itemCount,
+        cargoPlaceCount: cargoPlaceIds.length,
+        cargoPlaceIds,
       });
     }
 
     const refreshedOrders = await this.refreshFbsOrdersCache(clientId);
     return {
       assembled: orders.length,
+      deliveryPlan,
       supplies,
       orders: refreshedOrders,
     };
@@ -385,6 +446,95 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const buffer = await buildFbsStickersPdf(stickers);
     return {
       fileName: `fbs-wb-order-stickers-${fileTimestamp(new Date())}.pdf`,
+      contentType: 'application/pdf' as const,
+      buffer,
+      count: stickers.length,
+    };
+  }
+
+  async getFbsCargoPlaceStickersPdf(dto: FbsOrderSelectionDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    this.clientScopes.requireClientAccess(user, clientId, 'read');
+    const [{ orders }, deliveryPlan] = await Promise.all([
+      this.resolveSelectedFbsOrders(clientId, dto.orders),
+      this.loadFbsDeliveryPlan(clientId),
+    ]);
+    if (!deliveryPlan.requiresCargoPlaces) {
+      throw new BadRequestException(
+        'QR грузомест нужны только при сдаче поставки в ПВЗ. Для выбранного клиента настроена сдача в сортировочный центр.',
+      );
+    }
+
+    const unavailable = orders.filter(
+      (order) =>
+        order.marketplace !== MarketplaceType.WILDBERRIES ||
+        order.supplierStatus !== 'confirm' ||
+        !order.supplyId,
+    );
+    if (unavailable.length > 0) {
+      throw new BadRequestException(
+        `QR грузомест можно скачать только для заказов WB в открытой поставке «На сборке»: ${unavailable
+          .map((order) => order.id)
+          .join(', ')}.`,
+      );
+    }
+
+    const connections = await this.loadSelectedConnections(clientId, orders);
+    const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
+    const supplies = new Map<string, { connectionId: string; supplyId: string }>();
+    for (const order of orders) {
+      const supplyId = order.supplyId!;
+      supplies.set(`${order.connectionId}:${supplyId}`, {
+        connectionId: order.connectionId,
+        supplyId,
+      });
+    }
+
+    const stickers: FbsStickerImage[] = [];
+    for (const supply of supplies.values()) {
+      const connection = connectionById.get(supply.connectionId);
+      if (!connection) {
+        throw new BadRequestException(`Подключение WB для поставки ${supply.supplyId} не найдено.`);
+      }
+      const headers = wbHeaders(connection.apiKey);
+      const cargoResponse = await marketplaceJson(
+        `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(supply.supplyId)}/trbx`,
+        { method: 'GET', headers },
+      );
+      const cargoPlaceIds = uniqueStrings(
+        asArray<Record<string, unknown>>(cargoResponse.trbxes).map((cargoPlace) => textValue(cargoPlace.id)),
+      );
+      if (cargoPlaceIds.length === 0) {
+        throw new BadRequestException(
+          `В поставке ${supply.supplyId} нет грузомест. Сначала добавьте их из расчёта ${deliveryPlan.itemsPerCargoPlace} единиц товара на одно грузоместо.`,
+        );
+      }
+      const stickerResponse = await marketplaceJson(
+        `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(supply.supplyId)}/trbx/stickers?type=png`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ trbxIds: cargoPlaceIds }),
+        },
+      );
+      const supplyStickers = asArray<Record<string, unknown>>(stickerResponse.stickers)
+        .map((sticker, index) => ({
+          orderId: `${supply.supplyId}-${index + 1}`,
+          barcode: textValue(sticker.barcode),
+          file: textValue(sticker.file),
+        }))
+        .filter((sticker) => sticker.file);
+      if (supplyStickers.length !== cargoPlaceIds.length) {
+        throw new BadRequestException(
+          `Wildberries вернул ${supplyStickers.length} QR вместо ${cargoPlaceIds.length} для поставки ${supply.supplyId}.`,
+        );
+      }
+      stickers.push(...supplyStickers);
+    }
+
+    const buffer = await buildFbsCargoPlaceStickersPdf(stickers);
+    return {
+      fileName: `fbs-wb-cargo-place-qr-${fileTimestamp(new Date())}.pdf`,
       contentType: 'application/pdf' as const,
       buffer,
       count: stickers.length,
@@ -873,7 +1023,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         baseIncludedItems: 5,
         extraBlockItems: 5,
         extraBlockPriceRub: 250,
-        boxCapacityItems: 16,
+        boxCapacityItems: DEFAULT_FBS_ITEMS_PER_CARGO_PLACE,
         boxFormationServiceId: boxFormationService.id,
         boxMaterialServiceId: boxMaterialService.id,
         palletsEnabled: false,
@@ -894,8 +1044,27 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
+  private async loadFbsDeliveryPlan(clientId: string): Promise<FbsOrdersResponse['deliveryPlan']> {
+    const settings = await this.prisma.clientFbsBillingSettings.findUnique({
+      where: { clientId },
+      select: {
+        defaultDeliveryDestination: true,
+        boxCapacityItems: true,
+      },
+    });
+    const destination = settings?.defaultDeliveryDestination ?? FbsDeliveryDestination.PICKUP_POINT;
+    return {
+      destination,
+      itemsPerCargoPlace: Math.max(
+        1,
+        settings?.boxCapacityItems ?? DEFAULT_FBS_ITEMS_PER_CARGO_PLACE,
+      ),
+      requiresCargoPlaces: destination === FbsDeliveryDestination.PICKUP_POINT,
+    };
+  }
+
   private async loadFbsOrders(clientId: string): Promise<FbsOrdersResponse> {
-    const [client, connections] = await Promise.all([
+    const [client, connections, deliveryPlan] = await Promise.all([
       this.prisma.client.findUnique({
         where: { id: clientId },
         select: { id: true, code: true, name: true },
@@ -913,6 +1082,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           },
         },
       }),
+      this.loadFbsDeliveryPlan(clientId),
     ]);
 
     if (!client) {
@@ -926,6 +1096,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         connected: false,
         connections: [],
         fetchedAt,
+        deliveryPlan,
         counts: { active: 0, shipped: 0, archive: 0, all: 0 },
         orders: [],
       };
@@ -1044,6 +1215,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           officeId: textValue(order.officeId) || null,
           cargoType: textValue(order.cargoType) || null,
           crossBorderType: textValue(order.crossBorderType) || null,
+          pickupPointShipmentAllowed: toBoolean(order.isPickupPointShipmentAllowed),
           requiredMeta: uniqueStrings(asArray<unknown>(order.requiredMeta).map(textValue)),
           optionalMeta: uniqueStrings(asArray<unknown>(order.optionalMeta).map(textValue)),
           comment: textValue(order.comment) || null,
@@ -1088,6 +1260,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         accountName: connection.accountName,
       })),
       fetchedAt,
+      deliveryPlan,
       counts: {
         active: orders.filter((order) => order.category === 'active').length,
         shipped: orders.filter((order) => order.category === 'shipped').length,

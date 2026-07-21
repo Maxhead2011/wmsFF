@@ -12,6 +12,7 @@ import {
   ListChecks,
   PackageCheck,
   PlugZap,
+  QrCode,
   RefreshCw,
   Save,
   Search,
@@ -24,6 +25,7 @@ import {
   assembleFbsOrders,
   createFbsMarketplaceConnection,
   createFbsRequest,
+  downloadFbsCargoPlaceStickersPdf,
   downloadFbsOrderStickersPdf,
   fetchClients,
   fetchFbsBillingSettings,
@@ -105,7 +107,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
   const [search, setSearch] = useState('');
   const [ordersState, setOrdersState] = useState<OrdersState>({ status: 'idle', data: null, error: '' });
   const [selectedOrderKeys, setSelectedOrderKeys] = useState<Set<string>>(() => new Set());
-  const [orderAction, setOrderAction] = useState<'assemble' | 'stickers' | 'request' | null>(null);
+  const [orderAction, setOrderAction] = useState<'assemble' | 'stickers' | 'cargo' | 'request' | null>(null);
   const [orderActionMessage, setOrderActionMessage] = useState('');
   const [orderActionError, setOrderActionError] = useState('');
   const [connectionOpen, setConnectionOpen] = useState(false);
@@ -225,11 +227,33 @@ export function FbsPanel({ session }: FbsPanelProps) {
       });
       ++loadSequence.current;
       setOrdersState({ status: 'ready', data: result.orders, error: '' });
+      const cargoPlaceCount = result.supplies.reduce((sum, supply) => sum + supply.cargoPlaceCount, 0);
       setOrderActionMessage(
-        `${result.assembled} заказ(а/ов) переведено в сборку. Теперь можно скачать сформированные ШК заказов.`,
+        result.deliveryPlan.requiresCargoPlaces
+          ? `${result.assembled} заказ(а/ов) переведено в сборку. Создано грузомест: ${cargoPlaceCount} — по ${result.deliveryPlan.itemsPerCargoPlace} единиц. Теперь скачайте ШК заказов и QR грузомест.`
+          : `${result.assembled} заказ(а/ов) переведено в сборку. Поставка идёт в сортировочный центр, поэтому грузоместа WB не создавались. Теперь можно скачать ШК заказов.`,
       );
     } catch (caught) {
       setOrderActionError(caught instanceof Error ? caught.message : 'Не удалось перевести заказы в сборку.');
+    } finally {
+      setOrderAction(null);
+    }
+  }
+
+  async function downloadSelectedCargoPlaceStickers(orders: FbsOrderSummary[]) {
+    if (!selectedClientId || orders.length === 0) return;
+    setOrderAction('cargo');
+    setOrderActionMessage('');
+    setOrderActionError('');
+    try {
+      const blob = await downloadFbsCargoPlaceStickersPdf(session.accessToken, {
+        clientId: selectedClientId,
+        orders: orders.map((order) => ({ connectionId: order.connectionId, id: order.id })),
+      });
+      downloadFbsBlob(blob, `FBS_WB_QR_грузомест_${fileDateTime(new Date())}.pdf`);
+      setOrderActionMessage('Скачан PDF с QR-кодами грузомест выбранных поставок.');
+    } catch (caught) {
+      setOrderActionError(caught instanceof Error ? caught.message : 'Не удалось скачать QR грузомест.');
     } finally {
       setOrderAction(null);
     }
@@ -446,6 +470,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
             actionError={orderActionError}
             onAssemble={assembleSelectedOrders}
             onDownloadStickers={downloadSelectedOrderStickers}
+            onDownloadCargoStickers={downloadSelectedCargoPlaceStickers}
             onCreateRequest={createRequestFromSelectedOrders}
           />
         ) : null}
@@ -476,6 +501,7 @@ function FbsOrdersView({
   actionError,
   onAssemble,
   onDownloadStickers,
+  onDownloadCargoStickers,
   onCreateRequest,
 }: {
   data: ClientFbsOrders | null;
@@ -483,11 +509,12 @@ function FbsOrdersView({
   view: Exclude<FbsView, 'cost' | 'calculator' | 'pricing'>;
   selectedOrderKeys: Set<string>;
   onSelectionChange: (keys: Set<string>) => void;
-  orderAction: 'assemble' | 'stickers' | 'request' | null;
+  orderAction: 'assemble' | 'stickers' | 'cargo' | 'request' | null;
   actionMessage: string;
   actionError: string;
   onAssemble: (orders: FbsOrderSummary[]) => Promise<void>;
   onDownloadStickers: (orders: FbsOrderSummary[]) => Promise<void>;
+  onDownloadCargoStickers: (orders: FbsOrderSummary[]) => Promise<void>;
   onCreateRequest: (orders: FbsOrderSummary[]) => Promise<void>;
 }) {
   const category = view;
@@ -518,6 +545,10 @@ function FbsOrdersView({
   );
   const stickerOrders = selectedOrders.filter(
     (order) => order.marketplace === 'WILDBERRIES' && ['confirm', 'complete'].includes(order.supplierStatus),
+  );
+  const cargoStickerOrders = selectedOrders.filter(
+    (order) =>
+      order.marketplace === 'WILDBERRIES' && order.supplierStatus === 'confirm' && Boolean(order.supplyId),
   );
   const requestOrders = selectedOrders.filter(
     (order) => order.category === 'active' && (!order.request || order.request.status === 'CANCELLED'),
@@ -615,7 +646,23 @@ function FbsOrdersView({
               <Download size={16} aria-hidden="true" />
               {orderAction === 'stickers' ? 'Формирую…' : `Скачать ШК (${stickerOrders.length})`}
             </button>
+            {data?.deliveryPlan.requiresCargoPlaces ? (
+              <button
+                type="button"
+                className="button button-secondary"
+                disabled={cargoStickerOrders.length === 0 || orderAction !== null}
+                onClick={() => void onDownloadCargoStickers(cargoStickerOrders)}
+              >
+                <QrCode size={16} aria-hidden="true" />
+                {orderAction === 'cargo' ? 'Формирую…' : 'QR грузомест'}
+              </button>
+            ) : null}
           </div>
+          <p className="fbs-order-actions__hint">
+            {data?.deliveryPlan.requiresCargoPlaces
+              ? `Сдача в ПВЗ: одно грузоместо на каждые ${data.deliveryPlan.itemsPerCargoPlace} единиц товара.`
+              : 'Сдача в сортировочный центр: грузоместа WB не применяются.'}
+          </p>
           {actionMessage ? <p className="fbs-order-actions__message">{actionMessage}</p> : null}
           {actionError ? <p className="fbs-order-actions__error">{actionError}</p> : null}
         </div>
@@ -1141,7 +1188,7 @@ function FbsPricingSettings({
               onChange={(event) => patch('boxCapacityItems', positiveInteger(event.target.value))}
               required
             />
-            <small>Например, для костюмов Лукина — 16 шт.</small>
+            <small>Текущий норматив — 14 единиц товара на короб.</small>
           </label>
           <label>
             <span>Услуга формирования короба</span>

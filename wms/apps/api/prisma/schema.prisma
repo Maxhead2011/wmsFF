@@ -1273,7 +1273,7 @@ model ClientFbsBillingSettings {
   baseIncludedItems          Int                          @default(5)
   extraBlockItems            Int                          @default(5)
   extraBlockPriceRub         Decimal                      @default(250) @db.Decimal(12, 2)
-  boxCapacityItems           Int                          @default(16)
+  boxCapacityItems           Int                          @default(14)
   boxFormationServiceId      String?
   boxMaterialServiceId       String?
   palletsEnabled             Boolean                      @default(false)

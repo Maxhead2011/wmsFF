@@ -62,6 +62,20 @@ export class MarketplaceConnectionsController {
     return new StreamableFile(file.buffer);
   }
 
+  @Post('fbs/orders/cargo-place-stickers.pdf')
+  @RequirePermissions()
+  async getFbsCargoPlaceStickersPdf(
+    @Body() dto: FbsOrderSelectionDto,
+    @CurrentUser() user: AuthUser,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const file = await this.connections.getFbsCargoPlaceStickersPdf(dto, user);
+    response.setHeader('Content-Type', file.contentType);
+    response.setHeader('Content-Length', String(file.buffer.length));
+    response.setHeader('Content-Disposition', `attachment; filename="${file.fileName}"`);
+    return new StreamableFile(file.buffer);
+  }
+
   @Post('fbs/connections')
   @RequirePermissions()
   createFbsConnection(@Body() dto: UpsertMarketplaceConnectionDto, @CurrentUser() user: AuthUser) {

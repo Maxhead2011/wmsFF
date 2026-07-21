@@ -1,0 +1,1 @@
+export const DEFAULT_FBS_ITEMS_PER_CARGO_PLACE = 14;

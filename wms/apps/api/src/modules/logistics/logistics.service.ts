@@ -15,6 +15,7 @@ import { ClientScopeService } from '../auth/client-scope.service';
 import { isClientNotificationEnabled } from '../client-notifications/client-notification-preferences';
 import { TelegramNotificationService } from '../client-notifications/telegram-notification.service';
 import type { LogisticsDirection as ParsedLogisticsDirection } from '../imports/parsers/logistics-xlsx.parser';
+import { DEFAULT_FBS_ITEMS_PER_CARGO_PLACE } from '../marketplace-connections/fbs.constants';
 import { AssignDeliveryTripDto } from './dto/assign-delivery-trip.dto';
 import { CreateDeliveryRequestDto } from './dto/create-delivery-request.dto';
 import { CreateLogisticsCarrierDto } from './dto/create-logistics-carrier.dto';
@@ -52,7 +53,6 @@ const DEFAULT_LOGISTICS_ORIGIN = 'Москва';
 const MAX_BOXES_FOR_BOX_TARIFF = 10;
 const BOXES_PER_PALLET = 16;
 const EXTRA_BOXES_PER_PALLET = 4;
-const FBS_ITEMS_PER_BOX = 14;
 const FBS_BOXES_PER_PALLET = 16;
 const FBS_FIXED_DELIVERY_LIMIT = 1000;
 const FBS_VNUKOVO = 'Внуково';
@@ -271,7 +271,7 @@ export class LogisticsService {
   }
 
   async quoteFbsCalculator(dto: { quantity: number; destination: string }) {
-    const boxes = Math.ceil(dto.quantity / FBS_ITEMS_PER_BOX);
+    const boxes = Math.ceil(dto.quantity / DEFAULT_FBS_ITEMS_PER_CARGO_PLACE);
     const specialDeliveryPrice = calculateSpecialFbsDelivery(
       dto.destination,
       dto.quantity,

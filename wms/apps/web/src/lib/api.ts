@@ -1805,6 +1805,7 @@ export type FbsOrderSummary = {
   officeId: string | null;
   cargoType: string | null;
   crossBorderType: string | null;
+  pickupPointShipmentAllowed: boolean;
   requiredMeta: string[];
   optionalMeta: string[];
   comment: string | null;
@@ -1846,6 +1847,11 @@ export type ClientFbsOrders = {
     accountName: string | null;
   }>;
   fetchedAt: string;
+  deliveryPlan: {
+    destination: FbsDeliveryDestination;
+    itemsPerCargoPlace: number;
+    requiresCargoPlaces: boolean;
+  };
   counts: {
     active: number;
     shipped: number;
@@ -1862,7 +1868,15 @@ export type FbsOrderSelectionPayload = {
 
 export type AssembleFbsOrdersResult = {
   assembled: number;
-  supplies: Array<{ id: string; connectionId: string; orderIds: string[] }>;
+  deliveryPlan: ClientFbsOrders['deliveryPlan'];
+  supplies: Array<{
+    id: string;
+    connectionId: string;
+    orderIds: string[];
+    itemCount: number;
+    cargoPlaceCount: number;
+    cargoPlaceIds: string[];
+  }>;
   orders: ClientFbsOrders;
 };
 
@@ -4668,6 +4682,16 @@ export async function createFbsRequest(accessToken: string, payload: FbsOrderSel
 
 export async function downloadFbsOrderStickersPdf(accessToken: string, payload: FbsOrderSelectionPayload) {
   return requestBlob('/marketplace-connections/fbs/orders/stickers.pdf', accessToken, {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function downloadFbsCargoPlaceStickersPdf(
+  accessToken: string,
+  payload: FbsOrderSelectionPayload,
+) {
+  return requestBlob('/marketplace-connections/fbs/orders/cargo-place-stickers.pdf', accessToken, {
     method: 'POST',
     body: payload,
   });
