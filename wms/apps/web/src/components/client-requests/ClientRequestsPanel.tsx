@@ -221,7 +221,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     setError(null);
 
     const request = requests.data.find((item) => item.id === requestId);
-    if (request?.type === 'OUTBOUND' && status === 'DONE' && request.status !== 'DONE') {
+    if (request && isManualStockClosingRequest(request) && status === 'DONE' && request.status !== 'DONE') {
       openManualClose(request);
       return;
     }
@@ -970,7 +970,7 @@ function ManualBoxSelectionModal({
         <header className="online-execution-modal__header">
           <div>
             <span>Ручной выбор остатков</span>
-            <h3>{state.request.title}</h3>
+            <h3>№{String(state.request.number).padStart(6, '0')} · {state.request.title}</h3>
             <small>{state.request.client.name} · списание только при статусе «Сдано»</small>
           </div>
           <button className="icon-button" type="button" onClick={onClose} title="Закрыть" aria-label="Закрыть">
@@ -1883,6 +1883,14 @@ function renderRequests(
         onShipOutbound={onShipOutbound}
       />
     </>
+  );
+}
+
+function isManualStockClosingRequest(request: ClientRequestSummary) {
+  return (
+    (request.type === 'OUTBOUND' || request.type === 'DELIVERY') &&
+    request.items.length > 0 &&
+    !request.comment?.toLocaleLowerCase('ru-RU').includes('создано из excel:')
   );
 }
 

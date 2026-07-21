@@ -24,7 +24,7 @@ describe('ClientRequestDocumentService', () => {
     expect(document.rows).toHaveLength(2);
     expect(document.totalQuantity).toBe(7);
     expect(document.packages).toHaveLength(1);
-    expect(document.html).toContain('Заявка Отгрузка &quot;WB&quot;');
+    expect(document.html).toContain('Заявка №000042');
     expect(document.html).toContain('SKU-1');
     expect(document.html).toContain('PKG-1');
     expect(document.html).not.toContain('<script>');
@@ -45,6 +45,7 @@ describe('ClientRequestDocumentService', () => {
 function requestFixture() {
   return {
     id: 'request-1',
+    number: 42,
     clientId: 'client-1',
     type: ClientRequestType.OUTBOUND,
     status: ClientRequestStatus.PACKED,

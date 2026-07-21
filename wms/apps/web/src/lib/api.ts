@@ -508,6 +508,7 @@ export type BillingInvoiceDocument = {
 
 export type ClientRequestDocument = {
   requestId: string;
+  requestNumber: number;
   title: string;
   fileName: string;
   type: ClientRequestType;
@@ -829,6 +830,7 @@ export type ClientRequestEventSummary = {
 export type ClientRequestTimeline = {
   request: {
     id: string;
+    number: number;
     clientId: string;
     title: string;
     type: ClientRequestType;
@@ -842,6 +844,7 @@ export type ClientRequestTimeline = {
 
 export type ClientRequestSummary = {
   id: string;
+  number: number;
   clientId: string;
   type: ClientRequestType;
   status: ClientRequestStatus;
@@ -875,6 +878,7 @@ export type ClientRequestSummary = {
 export type ClientRequestManualBoxSelection = {
   request: {
     id: string;
+    number: number;
     title: string;
     status: ClientRequestStatus;
     clientId: string;

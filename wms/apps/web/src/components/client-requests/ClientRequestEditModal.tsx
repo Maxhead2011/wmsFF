@@ -106,7 +106,7 @@ export function ClientRequestEditModal({
         <header className="client-request-edit-modal__header">
           <div>
             <span>Редактирование заявки</span>
-            <h3>{request.title}</h3>
+            <h3>№{String(request.number).padStart(6, '0')} · {request.title}</h3>
             <small>{request.client.name} · {request.status}</small>
           </div>
           <button className="icon-button" type="button" onClick={onClose} title="Закрыть">

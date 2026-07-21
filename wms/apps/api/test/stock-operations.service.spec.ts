@@ -561,7 +561,7 @@ describe('StockOperationsService', () => {
     );
   });
 
-  it('ручное закрытие outbound-заявки списывает товар из выбранного короба и запускает формирование счета', async () => {
+  it('ручное закрытие товарной DELIVERY-заявки списывает товар из выбранного короба и запускает формирование счета', async () => {
     const tx = {
       stockMovement: {
         findFirst: vi.fn().mockResolvedValue(null),
@@ -571,7 +571,7 @@ describe('StockOperationsService', () => {
         findUnique: vi.fn().mockResolvedValue({
           id: 'request-1',
           clientId: 'client-1',
-          type: 'OUTBOUND',
+          type: 'DELIVERY',
           status: 'APPROVED',
           title: 'Ручная сдача',
           items: [{ id: 'item-1', skuId: 'sku-1', barcode: null, quantity: 3 }],

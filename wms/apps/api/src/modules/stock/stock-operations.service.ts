@@ -1024,7 +1024,7 @@ export class StockOperationsService {
         },
       });
 
-      const request = await this.loadOutboundRequest(tx, dto.requestId, user, 'Отгрузка');
+      const request = await this.loadOutboundRequest(tx, dto.requestId, user, 'Отгрузка', true);
 
       if (request.status === ClientRequestStatus.DONE) {
         await this.ensureRequestFulfillmentBillingCharges(tx, request, user, doneAt);
@@ -1697,6 +1697,7 @@ export class StockOperationsService {
     requestId: string,
     user: AuthUser,
     operationName: string,
+    allowDelivery = false,
   ) {
     const request = await tx.clientRequest.findUnique({
       where: { id: requestId },
@@ -1711,8 +1712,15 @@ export class StockOperationsService {
 
     this.clientScopes.requireClientAccess(user, request.clientId, 'write');
 
-    if (request.type !== ClientRequestType.OUTBOUND) {
-      throw new BadRequestException(`${operationName} доступна только для заявок на отгрузку.`);
+    const supportedType =
+      request.type === ClientRequestType.OUTBOUND ||
+      (allowDelivery && request.type === ClientRequestType.DELIVERY);
+    if (!supportedType) {
+      throw new BadRequestException(
+        allowDelivery
+          ? `${operationName} доступна только для товарных заявок «Отгрузка» и «Доставка».`
+          : `${operationName} доступна только для заявок на отгрузку.`,
+      );
     }
 
     return request;

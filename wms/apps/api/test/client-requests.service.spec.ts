@@ -267,6 +267,124 @@ describe('ClientRequestsService', () => {
     expect(stock.shipClientRequestFromCurrentStock).not.toHaveBeenCalled();
   });
 
+  it('предлагает остатки по коробам для ручной товарной DELIVERY-заявки', async () => {
+    const prisma = {
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'request-delivery',
+          number: 42,
+          clientId: 'client-1',
+          type: ClientRequestType.DELIVERY,
+          status: ClientRequestStatus.IN_WORK,
+          title: 'Яндекс',
+          comment: 'Доставка четырех костюмов',
+          items: [
+            {
+              id: 'item-1',
+              quantity: 1,
+              barcode: '2052467953793',
+              name: 'Костюм',
+              sku: {
+                id: 'sku-1',
+                internalSku: 'SKU-1',
+                article: 'ART-1',
+                name: 'Костюм',
+                barcodes: [{ value: '2052467953793' }],
+              },
+            },
+          ],
+          pickWaveRequests: [],
+        }),
+      },
+      stockBalance: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            skuId: 'sku-1',
+            status: 'AVAILABLE',
+            quantity: 3,
+            box: { id: 'box-1', code: 'FFL_LKB1807_114', status: 'active' },
+          },
+        ]),
+      },
+      clientRequestBoxSelection: { findMany: vi.fn().mockResolvedValue([]) },
+    };
+    const service = new ClientRequestsService(prisma as never, new ClientScopeService(), stockOperations() as never);
+
+    const selection = await service.getManualBoxSelection(
+      'request-delivery',
+      user({ clientIds: ['client-1'], writableClientIds: ['client-1'] }),
+    );
+
+    expect(selection.request).toMatchObject({ number: 42, title: 'Яндекс' });
+    expect(selection.items[0].boxes).toEqual([
+      expect.objectContaining({ boxCode: 'FFL_LKB1807_114', availableQuantity: 3 }),
+    ]);
+  });
+
+  it('закрывает товарную DELIVERY-заявку через выбранные короба', async () => {
+    const stock = {
+      shipClientRequestFromCurrentStock: vi.fn().mockResolvedValue({ status: 'APPLIED', requestId: 'request-delivery' }),
+    };
+    const tx = {
+      clientRequest: {
+        update: vi.fn().mockResolvedValue({
+          id: 'request-delivery',
+          clientId: 'client-1',
+          type: ClientRequestType.DELIVERY,
+          status: ClientRequestStatus.DONE,
+          title: 'Яндекс',
+          destinationCity: 'Москва',
+          items: [],
+          files: [],
+          packages: [],
+          client: { id: 'client-1', code: 'CL-1', name: 'Клиент' },
+        }),
+      },
+      clientRequestEvent: { create: vi.fn().mockResolvedValue({ id: 'event-1' }) },
+      clientNotificationPreference: { findUnique: vi.fn().mockResolvedValue(null) },
+      clientNotification: { create: vi.fn().mockResolvedValue({ id: 'notification-1' }) },
+    };
+    const prisma = {
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'request-delivery',
+          clientId: 'client-1',
+          type: ClientRequestType.DELIVERY,
+          status: ClientRequestStatus.IN_WORK,
+          title: 'Яндекс',
+          comment: 'Доставка четырех костюмов',
+          items: [{ id: 'item-1' }],
+          packages: [],
+        }),
+      },
+      clientRequestBoxSelection: { count: vi.fn().mockResolvedValue(4) },
+      $transaction: vi.fn((callback) => callback(tx)),
+    };
+    const service = new ClientRequestsService(prisma as never, new ClientScopeService(), stock as never);
+
+    await service.updateStatus(
+      'request-delivery',
+      {
+        status: ClientRequestStatus.DONE,
+        managerComment: 'Сдано в Яндекс',
+        boxes: 1,
+        pallets: 0,
+        packedUnits: 4,
+      },
+      user({ clientIds: ['client-1'], writableClientIds: ['client-1'] }),
+    );
+
+    expect(stock.shipClientRequestFromCurrentStock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: 'request-delivery',
+        boxes: 1,
+        pallets: 0,
+        packedUnits: 4,
+      }),
+      expect.any(Object),
+    );
+  });
+
   it('сдает аварийно упакованную заявку по ее фактическим коробам без повторного ручного списания', async () => {
     const stock = {
       shipClientRequest: vi.fn().mockResolvedValue({ status: 'ALREADY_APPLIED', requestId: 'request-1' }),

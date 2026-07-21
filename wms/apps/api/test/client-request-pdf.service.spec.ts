@@ -24,6 +24,7 @@ describe('ClientRequestPdfService', () => {
 function printableDocument(): ClientRequestPrintableDocument {
   return {
     requestId: 'request-1',
+    requestNumber: 42,
     title: 'Заявка Отгрузка WB',
     fileName: 'request-outbound-0001.html',
     type: ClientRequestType.OUTBOUND,

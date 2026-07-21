@@ -84,7 +84,7 @@ export function ClientRequestTimelineModal({ timeline, onClose, onAddComment }: 
         <header className="client-request-timeline-modal__header">
           <div>
             <span>{requestTypeLabel(timeline.request.type)}</span>
-            <h2>{timeline.request.title}</h2>
+            <h2>№{String(timeline.request.number).padStart(6, '0')} · {timeline.request.title}</h2>
             <small>
               {timeline.request.client.code} · {requestStatusLabel(timeline.request.status)}
             </small>

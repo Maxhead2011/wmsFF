@@ -346,6 +346,7 @@ export class ClientRequestsService {
     return {
       request: {
         id: request.id,
+        number: request.number,
         title: request.title,
         status: request.status,
         clientId: request.clientId,
@@ -576,6 +577,7 @@ export class ClientRequestsService {
         status: true,
         title: true,
         comment: true,
+        items: { select: { id: true }, take: 1 },
         packages: {
           where: { comment: 'Фактический короб из аварийного Excel' },
           select: { id: true },
@@ -591,10 +593,14 @@ export class ClientRequestsService {
     // Русский комментарий: даже менеджер с ограниченным scope не меняет статусы чужого клиента.
     this.clientScopes.requireClientAccess(user, request.clientId, 'write');
 
-    const shouldFinalizeOutbound =
-      request.type === ClientRequestType.OUTBOUND && dto.status === ClientRequestStatus.DONE;
+    const shouldFinalizeStockRequest =
+      dto.status === ClientRequestStatus.DONE &&
+      (request.type === ClientRequestType.OUTBOUND ||
+        (request.type === ClientRequestType.DELIVERY &&
+          request.items.length > 0 &&
+          isManuallyCreatedStockRequest(request)));
 
-    const updated = shouldFinalizeOutbound
+    const updated = shouldFinalizeStockRequest
       ? await this.finalizeOutboundByManualStatus(request, dto, user)
       : await this.prisma.$transaction(async (tx) => {
       const updated = await tx.clientRequest.update({
@@ -672,7 +678,7 @@ export class ClientRequestsService {
     if (
       !usesRecordedPackages &&
       request.status !== ClientRequestStatus.DONE &&
-      isManuallyCreatedOutboundRequest(request)
+      isManuallyCreatedStockRequest(request)
     ) {
       const selectedBoxes = await this.prisma.clientRequestBoxSelection.count({
         where: { requestItem: { requestId: request.id } },
@@ -1075,9 +1081,9 @@ const manualSelectionStockStatuses: StockStatus[] = [
   StockStatus.AVAILABLE,
 ];
 
-function isManuallyCreatedOutboundRequest(request: { type: ClientRequestType; comment?: string | null }) {
+function isManuallyCreatedStockRequest(request: { type: ClientRequestType; comment?: string | null }) {
   return (
-    request.type === ClientRequestType.OUTBOUND &&
+    (request.type === ClientRequestType.OUTBOUND || request.type === ClientRequestType.DELIVERY) &&
     !request.comment?.toLocaleLowerCase('ru-RU').includes('создано из excel:')
   );
 }
@@ -1085,10 +1091,11 @@ function isManuallyCreatedOutboundRequest(request: { type: ClientRequestType; co
 function assertManualBoxSelectionRequest(request: {
   type: ClientRequestType;
   comment?: string | null;
+  items?: Array<unknown>;
   pickWaveRequests?: Array<{ wave: { status: string } }>;
 }) {
-  if (!isManuallyCreatedOutboundRequest(request)) {
-    throw new BadRequestException('Ручной выбор коробов доступен только для заявок на отгрузку, созданных вручную.');
+  if (!isManuallyCreatedStockRequest(request) || !request.items?.length) {
+    throw new BadRequestException('Ручной выбор коробов доступен для товарных заявок «Отгрузка» и «Доставка», созданных вручную.');
   }
 
   const hasActiveWave = request.pickWaveRequests?.some(

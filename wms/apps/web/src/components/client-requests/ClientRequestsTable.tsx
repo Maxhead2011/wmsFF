@@ -101,6 +101,7 @@ export function ClientRequestsTable({
               key={request.id}
             >
               <td className="client-request-table__request-cell" data-label="Заявка">
+                <span className="client-request-number">№{formatRequestNumber(request.number)}</span>
                 {onOpenDocument ? (
                   <button
                     className="client-request-title client-request-title--button"
@@ -405,7 +406,7 @@ function canRunFulfillment(request: ClientRequestSummary) {
 }
 
 function canShowWarehouseActions(request: ClientRequestSummary) {
-  return request.type === 'OUTBOUND' || canRunFulfillment(request);
+  return request.type === 'OUTBOUND' || canSelectManualBoxes(request) || canRunFulfillment(request);
 }
 
 function canCancelRequest(request: ClientRequestSummary) {
@@ -414,10 +415,15 @@ function canCancelRequest(request: ClientRequestSummary) {
 
 function canSelectManualBoxes(request: ClientRequestSummary) {
   return (
-    request.type === 'OUTBOUND' &&
+    (request.type === 'OUTBOUND' || request.type === 'DELIVERY') &&
+    request.items.length > 0 &&
     ['SUBMITTED', 'IN_REVIEW', 'APPROVED', 'IN_WORK'].includes(request.status) &&
     !request.comment?.toLocaleLowerCase('ru-RU').includes('создано из excel:')
   );
+}
+
+function formatRequestNumber(value: number) {
+  return String(value).padStart(6, '0');
 }
 
 function canDownloadMarketplaceTemplates(request: ClientRequestSummary) {

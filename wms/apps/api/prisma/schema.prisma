@@ -916,6 +916,7 @@ model InventoryBoxRescanRequest {
 
 model ClientRequest {
   id               String                     @id @default(uuid())
+  number           Int                        @unique @default(autoincrement())
   clientId         String
   type             ClientRequestType
   status           ClientRequestStatus        @default(SUBMITTED)

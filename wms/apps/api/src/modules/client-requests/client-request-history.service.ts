@@ -117,6 +117,7 @@ export class ClientRequestHistoryService {
       where: { id: requestId },
       select: {
         id: true,
+        number: true,
         clientId: true,
         title: true,
         type: true,

@@ -40,8 +40,9 @@ export class ClientRequestDocumentService {
     }));
     const payload = {
       requestId: request.id,
-      title: `Заявка ${request.title}`,
-      fileName: `${safeFileName(`request-${request.title}-${request.id.slice(0, 8)}`)}.html`,
+      requestNumber: request.number,
+      title: `Заявка №${formatRequestNumber(request.number)} — ${request.title}`,
+      fileName: `${safeFileName(`request-${formatRequestNumber(request.number)}-${request.title}`)}.html`,
       type: request.type,
       typeLabel: requestTypeLabel(request.type),
       status: request.status,
@@ -146,6 +147,7 @@ export class ClientRequestDocumentService {
 
 type ClientRequestDocumentPayload = {
   requestId: string;
+  requestNumber: number;
   title: string;
   fileName: string;
   type: ClientRequestType;
@@ -461,6 +463,10 @@ function formatDate(value: string | null) {
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 3 }).format(value);
+}
+
+function formatRequestNumber(value: number) {
+  return String(value).padStart(6, '0');
 }
 
 function safeFileName(value: string) {

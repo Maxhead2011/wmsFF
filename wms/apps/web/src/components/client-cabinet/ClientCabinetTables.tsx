@@ -446,6 +446,7 @@ function renderRequestTable(
               key={request.id}
             >
               <td>
+                <span className="client-request-number">№{String(request.number).padStart(6, '0')}</span>
                 <strong>{request.title}</strong>
                 {request.comment ? <span>{request.comment}</span> : null}
               </td>
