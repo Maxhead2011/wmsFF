@@ -4,6 +4,7 @@ import {
   ClientRequestStatus,
   ClientRequestType,
   ClientNotificationSeverity,
+  MovementType,
   PickWaveBalanceReviewStatus,
   PickWaveRequestStatus,
   PickWaveStatus,
@@ -440,6 +441,7 @@ export class FulfillmentWaveService {
     if (!wave) {
       throw new NotFoundException('Волна сборки не найдена.');
     }
+    this.requireWaveClientAccess(wave, user, 'write');
     if (wave.status === PickWaveStatus.CANCELLED) {
       throw new BadRequestException('Отмененную волну сборки нельзя запускать.');
     }
@@ -454,10 +456,13 @@ export class FulfillmentWaveService {
       throw new BadRequestException('Сначала клиент должен проверить и подтвердить складские балансы волны.');
     }
 
-    await this.prisma.pickWave.update({
-      where: { id: wave.id },
+    const locked = await this.prisma.pickWave.updateMany({
+      where: { id: wave.id, status: wave.status },
       data: { status: PickWaveStatus.PICKING },
     });
+    if (locked.count !== 1) {
+      throw new BadRequestException('Состояние волны изменилось. Обновите список и повторите действие.');
+    }
 
     const runResults = [];
     let failedCount = 0;
@@ -525,6 +530,138 @@ export class FulfillmentWaveService {
     };
   }
 
+  async cancelWave(waveId: string, user: AuthUser) {
+    const wave = await this.prisma.pickWave.findUnique({
+      where: { id: waveId },
+      include: pickWaveInclude,
+    });
+    if (!wave) {
+      throw new NotFoundException('Волна сборки не найдена.');
+    }
+    this.requireWaveClientAccess(wave, user, 'write');
+
+    if (wave.status === PickWaveStatus.CANCELLED) {
+      return wave;
+    }
+    if (wave.status === PickWaveStatus.DONE) {
+      throw new BadRequestException('Завершённую волну отменить нельзя.');
+    }
+    if (wave.status === PickWaveStatus.PICKING) {
+      throw new BadRequestException('Сборка этой волны уже выполняется. Дождитесь её завершения.');
+    }
+    if (wave.requests.some((link) => link.status === PickWaveRequestStatus.PICKED)) {
+      throw new BadRequestException('В волне уже есть собранные заявки. Отмена может повредить складские остатки.');
+    }
+
+    const requestIds = wave.requests.map((link) => link.requestId);
+    const movementCount = await this.prisma.stockMovement.count({
+      where: {
+        type: MovementType.PICK,
+        sourceDocument: { in: requestIds },
+        idempotencyKey: { contains: wave.id },
+      },
+    });
+    if (movementCount > 0) {
+      throw new BadRequestException('По волне уже проведены складские движения. Безопасная отмена невозможна.');
+    }
+
+    const [statusEvents, appliedAllocations] = await Promise.all([
+      this.prisma.clientRequestEvent.findMany({
+        where: {
+          requestId: { in: requestIds },
+          eventType: ClientRequestEventType.STATUS_CHANGED,
+          title: `Заявка включена в волну ${wave.waveNumber}`,
+          statusTo: ClientRequestStatus.IN_WORK,
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.pickWaveBalanceAllocation.findMany({
+        where: {
+          line: { waveId },
+          appliedRequestItemId: { not: null },
+        },
+        select: { id: true, appliedRequestItemId: true },
+      }),
+    ]);
+    const previousStatusByRequest = new Map<string, ClientRequestStatus>();
+    for (const event of statusEvents) {
+      if (event.statusFrom && !previousStatusByRequest.has(event.requestId)) {
+        previousStatusByRequest.set(event.requestId, event.statusFrom);
+      }
+    }
+    const appliedRequestItemIds = appliedAllocations
+      .map((allocation) => allocation.appliedRequestItemId)
+      .filter((id): id is string => Boolean(id));
+    if (appliedRequestItemIds.length > 0) {
+      const usedAppliedItems = await this.prisma.clientRequestItem.count({
+        where: {
+          id: { in: appliedRequestItemIds },
+          OR: [{ packageItems: { some: {} } }, { boxSelections: { some: {} } }],
+        },
+      });
+      if (usedAppliedItems > 0) {
+        throw new BadRequestException('Добавленные при согласовании позиции уже используются в сборке. Отмена невозможна.');
+      }
+    }
+    const cancelledAt = new Date();
+    const cancellationNote = `Отменена ${cancelledAt.toLocaleString('ru-RU')} пользователем ${user.name}.`;
+
+    await this.prisma.$transaction(async (tx) => {
+      const locked = await tx.pickWave.updateMany({
+        where: { id: wave.id, status: wave.status },
+        data: {
+          status: PickWaveStatus.CANCELLED,
+          balanceReviewStatus: PickWaveBalanceReviewStatus.NOT_REQUIRED,
+          comment: [wave.comment?.trim(), cancellationNote].filter(Boolean).join('\n'),
+        },
+      });
+      if (locked.count !== 1) {
+        throw new BadRequestException('Состояние волны изменилось. Обновите список и повторите отмену.');
+      }
+
+      if (appliedAllocations.length > 0) {
+        await tx.pickWaveBalanceAllocation.updateMany({
+          where: { id: { in: appliedAllocations.map((allocation) => allocation.id) } },
+          data: { appliedRequestItemId: null },
+        });
+      }
+      if (appliedRequestItemIds.length > 0) {
+        await tx.clientRequestItem.deleteMany({ where: { id: { in: appliedRequestItemIds } } });
+      }
+
+      for (const link of wave.requests) {
+        const previousStatus = previousStatusByRequest.get(link.requestId);
+        const canRestore = link.request.status === ClientRequestStatus.IN_WORK && previousStatus !== undefined;
+        if (canRestore) {
+          await tx.clientRequest.update({
+            where: { id: link.requestId },
+            data: { status: previousStatus },
+          });
+        }
+        await tx.clientRequestEvent.create({
+          data: {
+            requestId: link.requestId,
+            clientId: link.request.clientId,
+            eventType: canRestore ? ClientRequestEventType.STATUS_CHANGED : ClientRequestEventType.COMMENT,
+            title: `Волна ${wave.waveNumber} отменена`,
+            body: canRestore
+              ? 'Заявка освобождена и снова доступна для включения в волну.'
+              : 'Волна отменена без изменения текущего статуса заявки.',
+            statusFrom: canRestore ? link.request.status : undefined,
+            statusTo: canRestore ? previousStatus : undefined,
+            createdByUserId: user.id,
+          },
+        });
+      }
+    });
+
+    requestIds.forEach((requestId) => this.pickInstructions.invalidateRequestInstruction(requestId));
+    return this.prisma.pickWave.findUniqueOrThrow({
+      where: { id: wave.id },
+      include: pickWaveInclude,
+    });
+  }
+
   private async loadBalanceReview(waveId: string) {
     const wave = await this.prisma.pickWave.findUnique({
       where: { id: waveId },
@@ -536,7 +673,11 @@ export class FulfillmentWaveService {
     return wave;
   }
 
-  private requireWaveClientAccess(wave: BalanceReviewWave, user: AuthUser, mode: 'read' | 'write') {
+  private requireWaveClientAccess(
+    wave: { requests: Array<{ request: { clientId: string } }> },
+    user: AuthUser,
+    mode: 'read' | 'write',
+  ) {
     const clientIds = [...new Set(wave.requests.map((link) => link.request.clientId))];
     if (clientIds.length !== 1) {
       throw new BadRequestException('В волне обнаружены заявки разных клиентов.');

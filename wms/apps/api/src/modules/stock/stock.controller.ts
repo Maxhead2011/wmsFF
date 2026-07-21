@@ -167,6 +167,12 @@ export class StockController {
     return this.waves.runWave(id, dto, user);
   }
 
+  @Post('fulfillment/waves/:id/cancel')
+  @RequirePermissions('stock:write')
+  cancelPickWave(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.waves.cancelWave(id, user);
+  }
+
   @Get('fulfillment/waves/:id/document')
   @RequirePermissions('stock:write')
   getPickWaveDocument(@Param('id') id: string, @CurrentUser() user: AuthUser) {

@@ -5493,6 +5493,13 @@ export async function fetchPickInstruction(accessToken: string, requestId: strin
   });
 }
 
+export async function cancelPickWave(accessToken: string, waveId: string) {
+  return request<PickWaveSummary>(`/stock/fulfillment/waves/${waveId}/cancel`, {
+    method: 'POST',
+    accessToken,
+  });
+}
+
 export async function refreshPickInstruction(accessToken: string, requestId: string) {
   return request<PickInstructionDocument>(`/client-requests/${requestId}/pick-instruction/refresh`, {
     method: 'POST',

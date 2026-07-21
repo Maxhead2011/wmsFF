@@ -129,6 +129,7 @@ describe('FulfillmentWaveService', () => {
     const prisma = {
       pickWave: {
         findUnique: vi.fn().mockResolvedValue(wave),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
         update: vi.fn().mockImplementation(({ data }) => Promise.resolve({ ...wave, ...data })),
       },
       pickWaveRequest: {

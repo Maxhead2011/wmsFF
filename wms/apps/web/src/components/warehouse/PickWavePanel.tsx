@@ -1,6 +1,7 @@
-import { Boxes, FileDown, FileText, Play, RefreshCw } from 'lucide-react';
+import { Ban, Boxes, FileDown, FileText, Play, RefreshCw } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import {
+  cancelPickWave,
   createPickWave,
   downloadPickWaveDocumentXlsx,
   fetchClientRequests,
@@ -40,6 +41,7 @@ export function PickWavePanel({ session }: PickWavePanelProps) {
   const [isSubmitting, setSubmitting] = useState(false);
   const [isLoadingDocumentId, setLoadingDocumentId] = useState('');
   const [isDownloadingXlsxId, setDownloadingXlsxId] = useState('');
+  const [isCancellingWaveId, setCancellingWaveId] = useState('');
   const [documentPreview, setDocumentPreview] = useState<PickWaveDocument | null>(null);
 
   const eligibleRequests = useMemo(
@@ -130,6 +132,27 @@ export function PickWavePanel({ session }: PickWavePanelProps) {
       setMessage(errorMessage(caught));
     } finally {
       setLoadingDocumentId('');
+    }
+  }
+
+  async function cancelWave(wave: PickWaveSummary) {
+    if (!window.confirm(`Отменить волну ${wave.waveNumber}? Заявки снова станут доступны для новой волны.`)) {
+      return;
+    }
+    setCancellingWaveId(wave.id);
+    setMessage(null);
+    try {
+      const cancelled = await cancelPickWave(session.accessToken, wave.id);
+      setWaves((current) => ({
+        status: 'ready',
+        data: current.data.map((item) => (item.id === wave.id ? cancelled : item)),
+      }));
+      await loadData();
+      setMessage(`Волна ${cancelled.waveNumber} отменена. Заявки освобождены.`);
+    } catch (caught) {
+      setMessage(errorMessage(caught));
+    } finally {
+      setCancellingWaveId('');
     }
   }
 
@@ -262,6 +285,17 @@ export function PickWavePanel({ session }: PickWavePanelProps) {
                         <span>Запустить</span>
                       </button>
                     ) : null}
+                    {canCancelWave(wave) ? (
+                      <button
+                        className="review-action review-action--reject"
+                        type="button"
+                        onClick={() => void cancelWave(wave)}
+                        disabled={isCancellingWaveId === wave.id || isSubmitting}
+                      >
+                        <Ban size={14} aria-hidden="true" />
+                        <span>{isCancellingWaveId === wave.id ? 'Отменяю' : 'Отменить волну'}</span>
+                      </button>
+                    ) : null}
                   </div>
                 </article>
               ))}
@@ -298,6 +332,10 @@ function waveFailedCount(wave: PickWaveSummary) {
 
 function canRunWave(wave: PickWaveSummary) {
   return wave.status === 'FROZEN' || wave.status === 'FAILED' || wave.status === 'PICKING';
+}
+
+function canCancelWave(wave: PickWaveSummary) {
+  return ['PLANNED', 'BALANCE_REVIEW', 'FROZEN', 'FAILED'].includes(wave.status);
 }
 
 function waveStatusLabel(status: PickWaveSummary['status']) {
