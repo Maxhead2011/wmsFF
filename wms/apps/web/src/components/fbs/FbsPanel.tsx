@@ -28,12 +28,14 @@ import {
   downloadFbsCargoPlaceStickersPdf,
   downloadFbsOrderStickersPdf,
   fetchClients,
+  fetchFbsActiveClients,
   fetchFbsBillingSettings,
   fetchFbsOrders,
   updateFbsBillingSettings,
   type AuthSession,
   type ClientFbsOrders,
   type ClientSummary,
+  type FbsActiveClientSummary,
   type FbsBillingSettings,
   type FbsDeliveryDestination,
   type FbsOrderSummary,
@@ -101,6 +103,8 @@ const fbsViews = [
 export function FbsPanel({ session }: FbsPanelProps) {
   const [activeView, setActiveView] = useState<FbsView>('active');
   const [clients, setClients] = useState<ClientSummary[]>([]);
+  const [activeClients, setActiveClients] = useState<FbsActiveClientSummary[]>([]);
+  const [activeClientsLoading, setActiveClientsLoading] = useState(true);
   const [selectedClientId, setSelectedClientId] = useState(
     session.user.clientIds.length === 1 ? session.user.clientIds[0] : '',
   );
@@ -122,6 +126,18 @@ export function FbsPanel({ session }: FbsPanelProps) {
     session.user.permissionCodes.includes('system:admin') ||
     session.user.permissionCodes.includes('billing:write') ||
     session.user.roleCodes.some((role) => role === 'ADMIN' || role === 'OWNER');
+
+  const loadActiveClients = useCallback(async () => {
+    setActiveClientsLoading(true);
+    try {
+      setActiveClients(await fetchFbsActiveClients(session.accessToken));
+    } catch {
+      setActiveClients([]);
+    } finally {
+      setActiveClientsLoading(false);
+    }
+  }, [session.accessToken]);
+
   useEffect(() => {
     let active = true;
     void fetchClients(session.accessToken)
@@ -138,6 +154,12 @@ export function FbsPanel({ session }: FbsPanelProps) {
       active = false;
     };
   }, [session.accessToken]);
+
+  useEffect(() => {
+    void loadActiveClients();
+    const timer = window.setInterval(() => void loadActiveClients(), 60_000);
+    return () => window.clearInterval(timer);
+  }, [loadActiveClients]);
 
   const loadOrders = useCallback(
     async (refresh = false) => {
@@ -204,8 +226,9 @@ export function FbsPanel({ session }: FbsPanelProps) {
 
   const activeConfig = visibleViews.find((view) => view.id === activeView) ?? visibleViews[0];
   const data = ordersState.data;
+  const activeOrdersTotal = activeClients.reduce((sum, item) => sum + item.activeOrders, 0);
   const tileCounts: Record<FbsView, number | string> = {
-    active: data?.counts.active ?? 0,
+    active: activeOrdersTotal,
     shipped: data?.counts.shipped ?? 0,
     cost: data?.counts.shipped ?? 0,
     calculator: '1–3000',
@@ -227,6 +250,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
       });
       ++loadSequence.current;
       setOrdersState({ status: 'ready', data: result.orders, error: '' });
+      void loadActiveClients();
       const cargoPlaceCount = result.supplies.reduce((sum, supply) => sum + supply.cargoPlaceCount, 0);
       setOrderActionMessage(
         result.deliveryPlan.requiresCargoPlaces
@@ -321,6 +345,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
       setSellerId('');
       setApiKey('');
       await loadOrders(true);
+      void loadActiveClients();
     } catch (caught) {
       setConnectionError(caught instanceof Error ? caught.message : 'Не удалось подключить API маркетплейса.');
     } finally {
@@ -355,24 +380,56 @@ export function FbsPanel({ session }: FbsPanelProps) {
           const Icon = view.icon;
           const isActive = activeView === view.id;
           return (
-            <button
-              className={`fbs-tile fbs-tile--${view.accent}${isActive ? ' is-active' : ''}`}
+            <div
+              className={`fbs-tile fbs-tile--${view.accent}${isActive ? ' is-active' : ''}${
+                view.id === 'active' ? ' fbs-tile--has-clients' : ''
+              }`}
               key={view.id}
-              type="button"
-              role="tab"
-              aria-selected={isActive}
-              onClick={() => setActiveView(view.id)}
             >
-              <span className="fbs-tile__icon">
-                <Icon size={22} aria-hidden="true" />
-              </span>
-              <span className="fbs-tile__content">
-                <span className="fbs-tile__number">{index + 1}</span>
-                <strong>{view.title}</strong>
-                <small>{view.description}</small>
-              </span>
-              <span className="fbs-tile__count">{tileCounts[view.id]}</span>
-            </button>
+              <button
+                className="fbs-tile__open"
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => setActiveView(view.id)}
+              >
+                <span className="fbs-tile__icon">
+                  <Icon size={22} aria-hidden="true" />
+                </span>
+                <span className="fbs-tile__content">
+                  <span className="fbs-tile__number">{index + 1}</span>
+                  <strong>{view.title}</strong>
+                  <small>{view.description}</small>
+                </span>
+                <span className="fbs-tile__count">{tileCounts[view.id]}</span>
+              </button>
+              {view.id === 'active' ? (
+                <div className="fbs-tile__clients" aria-label="Клиенты с активными заказами FBS">
+                  <span className="fbs-tile__clients-title">Клиенты с заказами</span>
+                  {activeClientsLoading ? (
+                    <span className="fbs-tile__clients-empty">Обновляю список…</span>
+                  ) : activeClients.length > 0 ? (
+                    activeClients.map((item) => (
+                      <button
+                        key={item.client.id}
+                        type="button"
+                        className={item.client.id === selectedClientId ? 'is-selected' : undefined}
+                        onClick={() => {
+                          setSelectedClientId(item.client.id);
+                          setActiveView('active');
+                          setSearch('');
+                        }}
+                      >
+                        <span>{item.client.name}</span>
+                        <strong>{item.activeOrders}</strong>
+                      </button>
+                    ))
+                  ) : (
+                    <span className="fbs-tile__clients-empty">Активных заказов нет</span>
+                  )}
+                </div>
+              ) : null}
+            </div>
           );
         })}
       </div>

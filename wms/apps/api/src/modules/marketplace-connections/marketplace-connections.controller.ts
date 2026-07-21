@@ -36,6 +36,12 @@ export class MarketplaceConnectionsController {
     return this.connections.listFbsOrders(clientId, user, refresh === 'true' || refresh === '1');
   }
 
+  @Get('fbs/active-clients')
+  @RequirePermissions()
+  listFbsActiveClients(@CurrentUser() user: AuthUser) {
+    return this.connections.listFbsActiveClients(user);
+  }
+
   @Post('fbs/orders/assemble')
   @RequirePermissions()
   assembleFbsOrders(@Body() dto: FbsOrderSelectionDto, @CurrentUser() user: AuthUser) {

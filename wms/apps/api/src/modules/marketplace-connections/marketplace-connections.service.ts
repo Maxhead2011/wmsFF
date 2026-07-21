@@ -242,6 +242,52 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return value;
   }
 
+  async listFbsActiveClients(user: AuthUser) {
+    const clientFilter = this.clientScopes.resolveClientFilter(user);
+    const connections = await this.prisma.clientMarketplaceConnection.findMany({
+      where: {
+        clientId: clientFilter,
+        marketplace: { in: [MarketplaceType.WILDBERRIES, MarketplaceType.OZON] },
+        isActive: true,
+      },
+      select: {
+        client: { select: { id: true, code: true, name: true } },
+      },
+      orderBy: { client: { name: 'asc' } },
+    });
+    const clients = new Map(connections.map((connection) => [connection.client.id, connection.client]));
+    const result: Array<{
+      client: { id: string; code: string; name: string };
+      activeOrders: number;
+      fetchedAt: string;
+    }> = [];
+
+    for (const client of clients.values()) {
+      try {
+        const cached = this.fbsOrdersCache.get(client.id);
+        const orders = cached?.value ?? (await this.loadFbsOrders(client.id));
+        if (!cached) {
+          this.fbsOrdersCache.set(client.id, { expiresAt: Date.now() + 30_000, value: orders });
+        }
+        if (orders.counts.active > 0) {
+          result.push({
+            client,
+            activeOrders: orders.counts.active,
+            fetchedAt: orders.fetchedAt,
+          });
+        }
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : 'Unknown marketplace API error';
+        this.logger.warn(`FBS active clients summary failed for client ${client.id}: ${message}`);
+      }
+    }
+
+    return result.sort(
+      (left, right) =>
+        right.activeOrders - left.activeOrders || left.client.name.localeCompare(right.client.name, 'ru-RU'),
+    );
+  }
+
   async assembleFbsOrders(dto: FbsOrderSelectionDto, user: AuthUser) {
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'read');

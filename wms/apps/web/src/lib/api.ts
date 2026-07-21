@@ -1861,6 +1861,12 @@ export type ClientFbsOrders = {
   orders: FbsOrderSummary[];
 };
 
+export type FbsActiveClientSummary = {
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  activeOrders: number;
+  fetchedAt: string;
+};
+
 export type FbsOrderSelectionPayload = {
   clientId: string;
   orders: Array<{ connectionId: string; id: string }>;
@@ -4662,6 +4668,12 @@ export async function fetchFbsOrders(accessToken: string, clientId: string, refr
     }),
     { accessToken },
   );
+}
+
+export async function fetchFbsActiveClients(accessToken: string) {
+  return request<FbsActiveClientSummary[]>('/marketplace-connections/fbs/active-clients', {
+    accessToken,
+  });
 }
 
 export async function assembleFbsOrders(accessToken: string, payload: FbsOrderSelectionPayload) {

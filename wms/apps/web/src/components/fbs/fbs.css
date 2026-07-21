@@ -54,23 +54,42 @@
 .fbs-tiles {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  align-items: start;
   gap: 12px;
 }
 
 .fbs-tile {
   position: relative;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   min-height: 174px;
-  align-content: start;
-  gap: 12px;
   overflow: hidden;
   border: 1px solid #dce2e9;
   border-radius: 18px;
   background: #fff;
-  padding: 16px;
-  text-align: left;
   transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.fbs-tile__open {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  min-height: 172px;
+  align-content: start;
+  gap: 12px;
+  border: 0;
+  background: transparent;
+  padding: 16px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fbs-tile__open:focus-visible,
+.fbs-tile__clients button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--fbs-accent) 35%, transparent);
+  outline-offset: -3px;
 }
 
 .fbs-tile:hover,
@@ -161,6 +180,71 @@
   padding: 0 9px;
   font-size: 12px;
   font-weight: 900;
+}
+
+.fbs-tile__clients {
+  display: grid;
+  max-height: 150px;
+  gap: 6px;
+  overflow-y: auto;
+  border-top: 1px solid #e5e7eb;
+  background: linear-gradient(180deg, #fafafa, #fff);
+  padding: 10px 12px 12px;
+}
+
+.fbs-tile__clients-title {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.fbs-tile__clients button {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+  padding: 7px 8px;
+  color: #334155;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fbs-tile__clients button:hover,
+.fbs-tile__clients button.is-selected {
+  border-color: color-mix(in srgb, var(--fbs-accent) 45%, #e2e8f0);
+  background: var(--fbs-soft);
+  color: var(--fbs-accent);
+}
+
+.fbs-tile__clients button span {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fbs-tile__clients button strong {
+  display: grid;
+  min-width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--fbs-soft);
+  color: var(--fbs-accent);
+  font-size: 11px;
+}
+
+.fbs-tile__clients-empty {
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .fbs-workspace {

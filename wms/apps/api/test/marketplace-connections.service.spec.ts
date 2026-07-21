@@ -247,6 +247,47 @@ describe('MarketplaceConnectionsService', () => {
     expect(result).not.toHaveProperty('apiKey');
   });
 
+  it('lists only accessible clients that currently have active FBS orders', async () => {
+    const clientOne = { id: 'client-1', code: 'CL-1', name: 'Первый клиент' };
+    const clientTwo = { id: 'client-2', code: 'CL-2', name: 'Второй клиент' };
+    const prisma = {
+      clientMarketplaceConnection: {
+        findMany: vi.fn().mockResolvedValue([
+          { client: clientOne },
+          { client: clientOne },
+          { client: clientTwo },
+        ]),
+      },
+    };
+    const clientScopes = {
+      resolveClientFilter: vi.fn().mockReturnValue({ in: ['client-1', 'client-2'] }),
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, clientScopes as never);
+    vi.spyOn(service as any, 'loadFbsOrders').mockImplementation(async (clientId: string) => ({
+      client: clientId === clientOne.id ? clientOne : clientTwo,
+      counts: { active: clientId === clientOne.id ? 3 : 0, shipped: 0, archive: 0, all: 3 },
+      fetchedAt: '2026-07-21T18:00:00.000Z',
+      orders: [],
+    }));
+
+    const result = await service.listFbsActiveClients({ id: 'user-1' } as never);
+
+    expect(clientScopes.resolveClientFilter).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }));
+    expect(prisma.clientMarketplaceConnection.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ clientId: { in: ['client-1', 'client-2'] }, isActive: true }),
+      }),
+    );
+    expect(result).toEqual([
+      {
+        client: clientOne,
+        activeOrders: 3,
+        fetchedAt: '2026-07-21T18:00:00.000Z',
+      },
+    ]);
+    expect((service as any).loadFbsOrders).toHaveBeenCalledTimes(2);
+  });
+
   it('creates an idempotent FBS processing charge when an order is shipped', async () => {
     const fbsService = {
       id: 'service-fbs',
