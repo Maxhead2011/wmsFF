@@ -1804,9 +1804,16 @@ export type FbsOrderSummary = {
   warehouseId: string | null;
   officeId: string | null;
   cargoType: string | null;
+  crossBorderType: string | null;
   requiredMeta: string[];
   optionalMeta: string[];
   comment: string | null;
+  request: {
+    id: string;
+    number: number;
+    title: string;
+    status: ClientRequestStatus;
+  } | null;
   billing: {
     chargeId: string;
     status: BillingChargeStatus;
@@ -1846,6 +1853,29 @@ export type ClientFbsOrders = {
     all: number;
   };
   orders: FbsOrderSummary[];
+};
+
+export type FbsOrderSelectionPayload = {
+  clientId: string;
+  orders: Array<{ connectionId: string; id: string }>;
+};
+
+export type AssembleFbsOrdersResult = {
+  assembled: number;
+  supplies: Array<{ id: string; connectionId: string; orderIds: string[] }>;
+  orders: ClientFbsOrders;
+};
+
+export type CreateFbsRequestResult = {
+  request: {
+    id: string;
+    number: number;
+    title: string;
+    status: ClientRequestStatus;
+    items: Array<{ id: string; skuId: string | null; name: string | null; quantity: number }>;
+  };
+  linkedOrders: number;
+  orders: ClientFbsOrders;
 };
 
 export type FbsBillingSettings = {
@@ -4620,6 +4650,29 @@ export async function fetchFbsOrders(accessToken: string, clientId: string, refr
   );
 }
 
+export async function assembleFbsOrders(accessToken: string, payload: FbsOrderSelectionPayload) {
+  return request<AssembleFbsOrdersResult>('/marketplace-connections/fbs/orders/assemble', {
+    method: 'POST',
+    accessToken,
+    body: payload,
+  });
+}
+
+export async function createFbsRequest(accessToken: string, payload: FbsOrderSelectionPayload) {
+  return request<CreateFbsRequestResult>('/marketplace-connections/fbs/orders/request', {
+    method: 'POST',
+    accessToken,
+    body: payload,
+  });
+}
+
+export async function downloadFbsOrderStickersPdf(accessToken: string, payload: FbsOrderSelectionPayload) {
+  return requestBlob('/marketplace-connections/fbs/orders/stickers.pdf', accessToken, {
+    method: 'POST',
+    body: payload,
+  });
+}
+
 export async function createFbsMarketplaceConnection(
   accessToken: string,
   payload: UpsertMarketplaceConnectionPayload & { marketplace: 'WILDBERRIES' | 'OZON' },
@@ -5671,11 +5724,14 @@ async function requestMultipart<T>(path: string, body: FormData, accessToken: st
   return (await response.json()) as T;
 }
 
-async function requestBlob(path: string, accessToken: string) {
+async function requestBlob(path: string, accessToken: string, init: { method?: string; body?: unknown } = {}) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: init.method,
     headers: {
       Authorization: `Bearer ${accessToken}`,
+      ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }),
     },
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
 
   if (!response.ok) {

@@ -78,6 +78,9 @@ describe('MarketplaceConnectionsService', () => {
           },
         ]),
       },
+      fbsOrderRequestLink: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       sku: {
         findMany: vi.fn().mockResolvedValue([
           {
@@ -455,5 +458,116 @@ describe('MarketplaceConnectionsService', () => {
         palletRub: 300,
       }),
     });
+  });
+
+  it('moves selected new WB orders to a supply and refreshes their statuses', async () => {
+    const connection = {
+      id: 'connection-1',
+      clientId: 'client-1',
+      marketplace: MarketplaceType.WILDBERRIES,
+      apiKey: 'secret-key',
+      isActive: true,
+      client: { id: 'client-1', code: 'CL-1', name: 'Клиент' },
+    };
+    const prisma = {
+      clientMarketplaceConnection: {
+        findMany: vi.fn().mockResolvedValue([connection]),
+      },
+    };
+    const clientScopes = { requireClientAccess: vi.fn() };
+    const service = new MarketplaceConnectionsService(prisma as never, clientScopes as never);
+    vi.spyOn(service as any, 'resolveSelectedFbsOrders').mockResolvedValue({
+      response: { client: connection.client },
+      orders: [
+        {
+          id: '1001',
+          connectionId: connection.id,
+          marketplace: MarketplaceType.WILDBERRIES,
+          supplierStatus: 'new',
+          cargoType: '1',
+          warehouseId: '1693195',
+          crossBorderType: null,
+        },
+      ],
+    });
+    vi.spyOn(service as any, 'refreshFbsOrdersCache').mockResolvedValue({ orders: [] });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => ({
+        ok: true,
+        status: 200,
+        json: async () => (url.endsWith('/api/v3/supplies') ? { id: 'supply-1' } : {}),
+      } as Response)),
+    );
+
+    const result = await service.assembleFbsOrders(
+      { clientId: 'client-1', orders: [{ connectionId: connection.id, id: '1001' }] },
+      { id: 'user-1' } as never,
+    );
+
+    expect(result).toMatchObject({
+      assembled: 1,
+      supplies: [{ id: 'supply-1', connectionId: connection.id, orderIds: ['1001'] }],
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      'https://marketplace-api.wildberries.ru/api/marketplace/v3/supplies/supply-1/orders',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ orders: [1001] }),
+      }),
+    );
+  });
+
+  it('creates one outbound request and persistently links every selected FBS order', async () => {
+    const tx = {
+      clientRequest: {
+        create: vi.fn().mockResolvedValue({
+          id: 'request-1',
+          number: 42,
+          title: 'FBS — 2 заказ(а/ов)',
+          status: 'SUBMITTED',
+          items: [{ id: 'item-1', skuId: 'sku-1', name: 'Костюм', quantity: 2 }],
+        }),
+      },
+      clientRequestEvent: { create: vi.fn().mockResolvedValue({}) },
+      fbsOrderRequestLink: { create: vi.fn().mockResolvedValue({}), update: vi.fn() },
+    };
+    const prisma = {
+      fbsOrderRequestLink: { findMany: vi.fn().mockResolvedValue([]) },
+      $transaction: vi.fn(async (callback: (value: typeof tx) => unknown) => callback(tx)),
+    };
+    const clientScopes = { requireClientAccess: vi.fn() };
+    const service = new MarketplaceConnectionsService(prisma as never, clientScopes as never);
+    const orders = ['1001', '1002'].map((id) => ({
+      id,
+      connectionId: 'connection-1',
+      marketplace: MarketplaceType.WILDBERRIES,
+      category: 'active',
+      itemCount: 1,
+      barcodes: ['460000000001'],
+      product: { id: 'sku-1', name: 'Костюм', internalSku: 'SKU-1', clientSku: null, article: null },
+    }));
+    vi.spyOn(service as any, 'resolveSelectedFbsOrders').mockResolvedValue({ response: {}, orders });
+    vi.spyOn(service as any, 'refreshFbsOrdersCache').mockResolvedValue({ orders: [] });
+
+    const result = await service.createFbsRequest(
+      {
+        clientId: 'client-1',
+        orders: orders.map((order) => ({ connectionId: order.connectionId, id: order.id })),
+      },
+      { id: 'user-1' } as never,
+    );
+
+    expect(clientScopes.requireClientAccess).toHaveBeenCalledWith(expect.anything(), 'client-1', 'write');
+    expect(tx.clientRequest.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: 'OUTBOUND',
+          items: { create: [expect.objectContaining({ skuId: 'sku-1', quantity: 2 })] },
+        }),
+      }),
+    );
+    expect(tx.fbsOrderRequestLink.create).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ request: { id: 'request-1', number: 42 }, linkedOrders: 2 });
   });
 });

@@ -944,6 +944,7 @@ model ClientRequest {
   billingCharges   BillingCharge[]
   billingInvoices  BillingInvoice[]
   deliveryRequests LogisticsDeliveryRequest[]
+  fbsOrderLinks     FbsOrderRequestLink[]
   createdAt        DateTime                   @default(now())
   updatedAt        DateTime                   @updatedAt
 
@@ -951,6 +952,23 @@ model ClientRequest {
   @@index([type, status])
   @@index([createdByUserId])
   @@index([assignedToUserId])
+}
+
+model FbsOrderRequestLink {
+  id              String           @id @default(uuid())
+  clientId        String
+  marketplace     MarketplaceType
+  connectionId    String
+  orderId         String
+  requestId       String
+  createdByUserId String?
+  request         ClientRequest    @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@unique([marketplace, connectionId, orderId])
+  @@index([clientId, requestId])
+  @@index([connectionId, orderId])
 }
 
 model ClientRequestItem {

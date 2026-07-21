@@ -6,7 +6,10 @@ import {
   Calculator,
   CircleCheckBig,
   Clock3,
+  Download,
+  FilePlus2,
   Link2,
+  ListChecks,
   PackageCheck,
   PlugZap,
   RefreshCw,
@@ -18,7 +21,10 @@ import {
 } from 'lucide-react';
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  assembleFbsOrders,
   createFbsMarketplaceConnection,
+  createFbsRequest,
+  downloadFbsOrderStickersPdf,
   fetchClients,
   fetchFbsBillingSettings,
   fetchFbsOrders,
@@ -98,6 +104,10 @@ export function FbsPanel({ session }: FbsPanelProps) {
   );
   const [search, setSearch] = useState('');
   const [ordersState, setOrdersState] = useState<OrdersState>({ status: 'idle', data: null, error: '' });
+  const [selectedOrderKeys, setSelectedOrderKeys] = useState<Set<string>>(() => new Set());
+  const [orderAction, setOrderAction] = useState<'assemble' | 'stickers' | 'request' | null>(null);
+  const [orderActionMessage, setOrderActionMessage] = useState('');
+  const [orderActionError, setOrderActionError] = useState('');
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [connectionMarketplace, setConnectionMarketplace] = useState<'WILDBERRIES' | 'OZON'>('WILDBERRIES');
   const [connectionName, setConnectionName] = useState('');
@@ -166,6 +176,12 @@ export function FbsPanel({ session }: FbsPanelProps) {
     return () => window.clearInterval(timer);
   }, [loadOrders, selectedClientId]);
 
+  useEffect(() => {
+    setSelectedOrderKeys(new Set());
+    setOrderActionMessage('');
+    setOrderActionError('');
+  }, [selectedClientId]);
+
   const selectedClient = useMemo(
     () => clients.find((client) => client.id === selectedClientId) ?? null,
     [clients, selectedClientId],
@@ -194,6 +210,73 @@ export function FbsPanel({ session }: FbsPanelProps) {
     archive: data?.counts.archive ?? 0,
     pricing: 'тарифы',
   };
+
+  async function assembleSelectedOrders(orders: FbsOrderSummary[]) {
+    if (!selectedClientId || orders.length === 0) return;
+    if (!window.confirm(`Перевести ${orders.length} заказ(а/ов) Wildberries в статус «На сборке»?`)) return;
+
+    setOrderAction('assemble');
+    setOrderActionMessage('');
+    setOrderActionError('');
+    try {
+      const result = await assembleFbsOrders(session.accessToken, {
+        clientId: selectedClientId,
+        orders: orders.map((order) => ({ connectionId: order.connectionId, id: order.id })),
+      });
+      ++loadSequence.current;
+      setOrdersState({ status: 'ready', data: result.orders, error: '' });
+      setOrderActionMessage(
+        `${result.assembled} заказ(а/ов) переведено в сборку. Теперь можно скачать сформированные ШК заказов.`,
+      );
+    } catch (caught) {
+      setOrderActionError(caught instanceof Error ? caught.message : 'Не удалось перевести заказы в сборку.');
+    } finally {
+      setOrderAction(null);
+    }
+  }
+
+  async function downloadSelectedOrderStickers(orders: FbsOrderSummary[]) {
+    if (!selectedClientId || orders.length === 0) return;
+    setOrderAction('stickers');
+    setOrderActionMessage('');
+    setOrderActionError('');
+    try {
+      const blob = await downloadFbsOrderStickersPdf(session.accessToken, {
+        clientId: selectedClientId,
+        orders: orders.map((order) => ({ connectionId: order.connectionId, id: order.id })),
+      });
+      downloadFbsBlob(blob, `FBS_WB_ШК_заказов_${fileDateTime(new Date())}.pdf`);
+      setOrderActionMessage(`Скачан PDF со ШК: ${orders.length} заказ(а/ов).`);
+    } catch (caught) {
+      setOrderActionError(caught instanceof Error ? caught.message : 'Не удалось скачать ШК заказов.');
+    } finally {
+      setOrderAction(null);
+    }
+  }
+
+  async function createRequestFromSelectedOrders(orders: FbsOrderSummary[]) {
+    if (!selectedClientId || orders.length === 0) return;
+    if (!window.confirm(`Создать одну заявку на отгрузку из ${orders.length} выбранных FBS-заказов?`)) return;
+
+    setOrderAction('request');
+    setOrderActionMessage('');
+    setOrderActionError('');
+    try {
+      const result = await createFbsRequest(session.accessToken, {
+        clientId: selectedClientId,
+        orders: orders.map((order) => ({ connectionId: order.connectionId, id: order.id })),
+      });
+      ++loadSequence.current;
+      setOrdersState({ status: 'ready', data: result.orders, error: '' });
+      setOrderActionMessage(
+        `Создана заявка №${String(result.request.number).padStart(6, '0')}: ${result.linkedOrders} FBS-заказ(а/ов).`,
+      );
+    } catch (caught) {
+      setOrderActionError(caught instanceof Error ? caught.message : 'Не удалось создать заявку из FBS-заказов.');
+    } finally {
+      setOrderAction(null);
+    }
+  }
 
   async function connectMarketplace(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -352,7 +435,19 @@ export function FbsPanel({ session }: FbsPanelProps) {
         ) : activeView === 'cost' ? (
           <FbsCostView data={data} />
         ) : activeView === 'active' || activeView === 'shipped' || activeView === 'archive' ? (
-          <FbsOrdersView data={data} view={activeView} search={search} />
+          <FbsOrdersView
+            data={data}
+            view={activeView}
+            search={search}
+            selectedOrderKeys={selectedOrderKeys}
+            onSelectionChange={setSelectedOrderKeys}
+            orderAction={orderAction}
+            actionMessage={orderActionMessage}
+            actionError={orderActionError}
+            onAssemble={assembleSelectedOrders}
+            onDownloadStickers={downloadSelectedOrderStickers}
+            onCreateRequest={createRequestFromSelectedOrders}
+          />
         ) : null}
 
         {data?.connected && activeView !== 'pricing' && activeView !== 'calculator' ? (
@@ -374,10 +469,26 @@ function FbsOrdersView({
   data,
   search,
   view,
+  selectedOrderKeys,
+  onSelectionChange,
+  orderAction,
+  actionMessage,
+  actionError,
+  onAssemble,
+  onDownloadStickers,
+  onCreateRequest,
 }: {
   data: ClientFbsOrders | null;
   search: string;
   view: Exclude<FbsView, 'cost' | 'calculator' | 'pricing'>;
+  selectedOrderKeys: Set<string>;
+  onSelectionChange: (keys: Set<string>) => void;
+  orderAction: 'assemble' | 'stickers' | 'request' | null;
+  actionMessage: string;
+  actionError: string;
+  onAssemble: (orders: FbsOrderSummary[]) => Promise<void>;
+  onDownloadStickers: (orders: FbsOrderSummary[]) => Promise<void>;
+  onCreateRequest: (orders: FbsOrderSummary[]) => Promise<void>;
 }) {
   const category = view;
   const orders = (data?.orders ?? []).filter((order) => order.category === category);
@@ -400,6 +511,33 @@ function FbsOrdersView({
       )
     : orders;
   const itemsCount = visibleOrders.reduce((sum, order) => sum + Math.max(1, order.itemCount), 0);
+  const visibleKeys = visibleOrders.map(fbsOrderSelectionKey);
+  const selectedOrders = visibleOrders.filter((order) => selectedOrderKeys.has(fbsOrderSelectionKey(order)));
+  const assemblyOrders = selectedOrders.filter(
+    (order) => order.marketplace === 'WILDBERRIES' && order.supplierStatus === 'new',
+  );
+  const stickerOrders = selectedOrders.filter(
+    (order) => order.marketplace === 'WILDBERRIES' && ['confirm', 'complete'].includes(order.supplierStatus),
+  );
+  const requestOrders = selectedOrders.filter(
+    (order) => order.category === 'active' && (!order.request || order.request.status === 'CANCELLED'),
+  );
+  const allVisibleSelected = visibleKeys.length > 0 && visibleKeys.every((key) => selectedOrderKeys.has(key));
+
+  function toggleAllVisible() {
+    const next = new Set(selectedOrderKeys);
+    if (allVisibleSelected) visibleKeys.forEach((key) => next.delete(key));
+    else visibleKeys.forEach((key) => next.add(key));
+    onSelectionChange(next);
+  }
+
+  function toggleOrder(order: FbsOrderSummary) {
+    const key = fbsOrderSelectionKey(order);
+    const next = new Set(selectedOrderKeys);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    onSelectionChange(next);
+  }
   const emptyCopy = {
     active: {
       icon: Clock3,
@@ -443,10 +581,60 @@ function FbsOrdersView({
         </article>
       </div>
 
+      {view === 'active' && visibleOrders.length > 0 ? (
+        <div className="fbs-order-actions">
+          <div className="fbs-order-actions__selection">
+            <strong>Выбрано: {selectedOrders.length}</strong>
+            <span>Можно собирать, скачать ШК или создать одну складскую заявку.</span>
+          </div>
+          <div className="fbs-order-actions__buttons">
+            <button
+              type="button"
+              className="button button-primary"
+              disabled={assemblyOrders.length === 0 || orderAction !== null}
+              onClick={() => void onAssemble(assemblyOrders)}
+            >
+              <ListChecks size={16} aria-hidden="true" />
+              {orderAction === 'assemble' ? 'Перевожу…' : `Собрать (${assemblyOrders.length})`}
+            </button>
+            <button
+              type="button"
+              className="button button-secondary"
+              disabled={requestOrders.length === 0 || orderAction !== null}
+              onClick={() => void onCreateRequest(requestOrders)}
+            >
+              <FilePlus2 size={16} aria-hidden="true" />
+              {orderAction === 'request' ? 'Создаю…' : `Заявка (${requestOrders.length})`}
+            </button>
+            <button
+              type="button"
+              className="button button-secondary"
+              disabled={stickerOrders.length === 0 || orderAction !== null}
+              onClick={() => void onDownloadStickers(stickerOrders)}
+            >
+              <Download size={16} aria-hidden="true" />
+              {orderAction === 'stickers' ? 'Формирую…' : `Скачать ШК (${stickerOrders.length})`}
+            </button>
+          </div>
+          {actionMessage ? <p className="fbs-order-actions__message">{actionMessage}</p> : null}
+          {actionError ? <p className="fbs-order-actions__error">{actionError}</p> : null}
+        </div>
+      ) : null}
+
       <div className="fbs-table-wrap">
         <table className="fbs-table">
           <thead>
             <tr>
+              {view === 'active' ? (
+                <th className="fbs-table__check">
+                  <input
+                    type="checkbox"
+                    aria-label="Выбрать все показанные заказы"
+                    checked={allVisibleSelected}
+                    onChange={toggleAllVisible}
+                  />
+                </th>
+              ) : null}
               <th>Заказ</th>
               <th>Товар</th>
               <th>ШК</th>
@@ -458,7 +646,14 @@ function FbsOrdersView({
           {visibleOrders.length > 0 ? (
             <tbody>
               {visibleOrders.map((order) => (
-                <FbsOrderRow key={`${order.marketplace}:${order.connectionId}:${order.id}`} order={order} showBoxes={view === 'active'} />
+                <FbsOrderRow
+                  key={`${order.marketplace}:${order.connectionId}:${order.id}`}
+                  order={order}
+                  showBoxes={view === 'active'}
+                  selectable={view === 'active'}
+                  selected={selectedOrderKeys.has(fbsOrderSelectionKey(order))}
+                  onToggle={() => toggleOrder(order)}
+                />
               ))}
             </tbody>
           ) : null}
@@ -477,12 +672,39 @@ function FbsOrdersView({
   );
 }
 
-function FbsOrderRow({ order, showBoxes }: { order: FbsOrderSummary; showBoxes: boolean }) {
+function FbsOrderRow({
+  order,
+  showBoxes,
+  selectable,
+  selected,
+  onToggle,
+}: {
+  order: FbsOrderSummary;
+  showBoxes: boolean;
+  selectable: boolean;
+  selected: boolean;
+  onToggle: () => void;
+}) {
   return (
-    <tr>
+    <tr className={selected ? 'fbs-table__row--selected' : undefined}>
+      {selectable ? (
+        <td className="fbs-table__check">
+          <input
+            type="checkbox"
+            aria-label={`Выбрать заказ ${order.id}`}
+            checked={selected}
+            onChange={onToggle}
+          />
+        </td>
+      ) : null}
       <td>
         <strong>№ {order.id}</strong>
         <small>{marketplaceLabel(order.marketplace)}</small>
+        {order.request ? (
+          <span className={`fbs-request-link ${order.request.status === 'CANCELLED' ? 'fbs-request-link--cancelled' : ''}`}>
+            {order.request.status === 'CANCELLED' ? 'Отменённая заявка' : 'Уже в заявке'} №{String(order.request.number).padStart(6, '0')}
+          </span>
+        ) : null}
       </td>
       <td>
         <strong>{order.product?.name || order.article || `Товар ${order.nmId ?? ''}`}</strong>
@@ -1247,6 +1469,26 @@ function positiveInteger(value: string) {
 
 function marketplaceLabel(marketplace: 'WILDBERRIES' | 'OZON') {
   return marketplace === 'WILDBERRIES' ? 'Wildberries' : 'Ozon';
+}
+
+function fbsOrderSelectionKey(order: Pick<FbsOrderSummary, 'connectionId' | 'id'>) {
+  return `${order.connectionId}:${order.id}`;
+}
+
+function downloadFbsBlob(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function fileDateTime(value: Date) {
+  const part = (number: number) => String(number).padStart(2, '0');
+  return `${value.getFullYear()}-${part(value.getMonth() + 1)}-${part(value.getDate())}_${part(value.getHours())}-${part(value.getMinutes())}`;
 }
 
 function formatDateTime(value: string | null | undefined) {

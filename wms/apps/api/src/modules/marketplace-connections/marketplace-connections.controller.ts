@@ -1,9 +1,11 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Res, StreamableFile } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import type { Response } from 'express';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { LogisticsService } from '../logistics/logistics.service';
+import { FbsOrderSelectionDto } from './dto/fbs-order-selection.dto';
 import { QuoteFbsCalculatorDto } from './dto/quote-fbs-calculator.dto';
 import { UpdateFbsBillingSettingsDto } from './dto/update-fbs-billing-settings.dto';
 import { UpdateMarketplaceConnectionDto } from './dto/update-marketplace-connection.dto';
@@ -32,6 +34,32 @@ export class MarketplaceConnectionsController {
     @Query('refresh') refresh?: string,
   ) {
     return this.connections.listFbsOrders(clientId, user, refresh === 'true' || refresh === '1');
+  }
+
+  @Post('fbs/orders/assemble')
+  @RequirePermissions()
+  assembleFbsOrders(@Body() dto: FbsOrderSelectionDto, @CurrentUser() user: AuthUser) {
+    return this.connections.assembleFbsOrders(dto, user);
+  }
+
+  @Post('fbs/orders/request')
+  @RequirePermissions()
+  createFbsRequest(@Body() dto: FbsOrderSelectionDto, @CurrentUser() user: AuthUser) {
+    return this.connections.createFbsRequest(dto, user);
+  }
+
+  @Post('fbs/orders/stickers.pdf')
+  @RequirePermissions()
+  async getFbsOrderStickersPdf(
+    @Body() dto: FbsOrderSelectionDto,
+    @CurrentUser() user: AuthUser,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const file = await this.connections.getFbsOrderStickersPdf(dto, user);
+    response.setHeader('Content-Type', file.contentType);
+    response.setHeader('Content-Length', String(file.buffer.length));
+    response.setHeader('Content-Disposition', `attachment; filename="${file.fileName}"`);
+    return new StreamableFile(file.buffer);
   }
 
   @Post('fbs/connections')
