@@ -1,4 +1,3 @@
-import { MovementType, StockStatus } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import { StorageOverviewService } from '../src/modules/stock/storage-overview.service';
 
@@ -18,28 +17,25 @@ describe('StorageOverviewService', () => {
         findMany: vi.fn().mockResolvedValue([]),
       },
       stockMovement: {
+        groupBy: vi
+          .fn()
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([{ skuId: 'sku-1', _min: { createdAt: new Date('2026-06-01T09:00:00.000Z') } }]),
         findMany: vi.fn().mockResolvedValue([
           {
-            id: 'move-1',
-            clientId: 'client-1',
             skuId: 'sku-1',
-            type: MovementType.RECEIPT,
-            status: StockStatus.AVAILABLE,
             quantity: 10,
             createdAt: new Date('2026-06-01T09:00:00.000Z'),
-            sku: sku(),
           },
           {
-            id: 'move-2',
-            clientId: 'client-1',
             skuId: 'sku-1',
-            type: MovementType.SHIP,
-            status: StockStatus.SHIPPING,
             quantity: -10,
             createdAt: new Date('2026-06-02T15:00:00.000Z'),
-            sku: sku(),
           },
         ]),
+      },
+      sku: {
+        findMany: vi.fn().mockResolvedValue([sku()]),
       },
     };
     const service = new StorageOverviewService(prisma as never, {
@@ -67,6 +63,7 @@ describe('StorageOverviewService', () => {
       literDays: 20,
       storageCostRub: 10,
     });
+    expect(overview.dailyRows).toEqual([]);
     expect(overview.rows[0]).toEqual(
       expect.objectContaining({
         skuId: 'sku-1',
@@ -93,18 +90,20 @@ describe('StorageOverviewService', () => {
         findMany: vi.fn().mockResolvedValue([]),
       },
       stockMovement: {
+        groupBy: vi
+          .fn()
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([{ skuId: 'sku-1', _min: { createdAt: new Date('2026-06-01T09:00:00.000Z') } }]),
         findMany: vi.fn().mockResolvedValue([
           {
-            id: 'move-1',
-            clientId: 'client-1',
             skuId: 'sku-1',
-            type: MovementType.RECEIPT,
-            status: StockStatus.AVAILABLE,
             quantity: 10,
             createdAt: new Date('2026-06-01T09:00:00.000Z'),
-            sku: sku(),
           },
         ]),
+      },
+      sku: {
+        findMany: vi.fn().mockResolvedValue([sku()]),
       },
     };
     const service = new StorageOverviewService(prisma as never, {
@@ -141,6 +140,10 @@ describe('StorageOverviewService', () => {
       },
       stockMovement: {
         findMany: vi.fn(),
+        groupBy: vi.fn(),
+      },
+      sku: {
+        findMany: vi.fn(),
       },
     };
     const service = new StorageOverviewService(prisma as never, {
@@ -170,6 +173,8 @@ describe('StorageOverviewService', () => {
     expect(overview.dailyRows).toEqual([]);
     expect(prisma.stockBalance.findMany).not.toHaveBeenCalled();
     expect(prisma.stockMovement.findMany).not.toHaveBeenCalled();
+    expect(prisma.stockMovement.groupBy).not.toHaveBeenCalled();
+    expect(prisma.sku.findMany).not.toHaveBeenCalled();
   });
 });
 

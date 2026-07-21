@@ -7,6 +7,34 @@ import { ListStorageOverviewDto } from './dto/list-storage-overview.dto';
 import { UpdateStorageTariffDto } from './dto/update-storage-tariff.dto';
 import { buildStorageOverviewWorkbook, storageOverviewXlsxMimeType } from './storage-overview-xlsx';
 
+const storageSkuSelect = {
+  id: true,
+  internalSku: true,
+  clientSku: true,
+  article: true,
+  name: true,
+  size: true,
+  lengthCm: true,
+  widthCm: true,
+  heightCm: true,
+  volumeLiters: true,
+  marketplaceOfferId: true,
+  marketplaceProductId: true,
+  barcodes: {
+    select: {
+      value: true,
+      isPrimary: true,
+    },
+  },
+} satisfies Prisma.SkuSelect;
+
+const storageBalanceSelect = {
+  skuId: true,
+  quantity: true,
+  box: { select: { code: true } },
+  pallet: { select: { code: true } },
+} satisfies Prisma.StockBalanceSelect;
+
 @Injectable()
 export class StorageOverviewService {
   constructor(
@@ -14,7 +42,11 @@ export class StorageOverviewService {
     private readonly clientScopes: ClientScopeService,
   ) {}
 
-  async getOverview(query: ListStorageOverviewDto, user: AuthUser) {
+  async getOverview(
+    query: ListStorageOverviewDto,
+    user: AuthUser,
+    options: { includeDailyRows?: boolean } = {},
+  ) {
     this.clientScopes.requireClientAccess(user, query.clientId, 'read');
     const period = normalizePeriod(query.periodFrom, query.periodTo);
     const client = await this.prisma.client.findUnique({
@@ -37,34 +69,67 @@ export class StorageOverviewService {
       return emptyStorageOverview(client, period.periodFrom, period.periodTo, tariff);
     }
 
-    const [balances, movements] = await Promise.all([
+    const periodStart = startOfUtcDay(period.periodFrom);
+    const relevantMovementWhere = storageRelevantMovementWhere(query.clientId);
+    const [balances, openingBalances, movements, firstReceipts] = await Promise.all([
       this.prisma.stockBalance.findMany({
         where: {
           clientId: query.clientId,
           quantity: { gt: 0 },
           status: { in: [StockStatus.AVAILABLE, StockStatus.PACKING, StockStatus.SHIPPING] },
         },
-        include: {
-          sku: { include: { barcodes: true } },
-          box: { select: { id: true, code: true } },
-          pallet: { select: { id: true, code: true } },
+        select: storageBalanceSelect,
+      }),
+      this.prisma.stockMovement.groupBy({
+        by: ['skuId'],
+        where: {
+          ...relevantMovementWhere,
+          createdAt: { lt: periodStart },
         },
-        orderBy: [{ updatedAt: 'desc' }],
+        _sum: { quantity: true },
       }),
       this.prisma.stockMovement.findMany({
         where: {
+          ...relevantMovementWhere,
+          createdAt: { gte: periodStart, lte: period.periodTo },
+        },
+        select: { skuId: true, quantity: true, createdAt: true },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      }),
+      this.prisma.stockMovement.groupBy({
+        by: ['skuId'],
+        where: {
           clientId: query.clientId,
           createdAt: { lte: period.periodTo },
+          quantity: { gt: 0 },
+          type: { notIn: [MovementType.PICK, MovementType.PACK, MovementType.MOVE, MovementType.SHIP] },
         },
-        include: {
-          sku: { include: { barcodes: true } },
-        },
-        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        _min: { createdAt: true },
       }),
     ]);
 
-    const currentBySku = groupCurrentStorage(balances);
-    const history = calculateStorageHistory(movements, period.periodFrom, period.periodTo);
+    const skuIds = new Set<string>();
+    balances.forEach((row) => skuIds.add(row.skuId));
+    openingBalances.forEach((row) => skuIds.add(row.skuId));
+    movements.forEach((row) => skuIds.add(row.skuId));
+    const skus = skuIds.size
+      ? await this.prisma.sku.findMany({
+          where: { clientId: query.clientId, id: { in: [...skuIds] } },
+          select: storageSkuSelect,
+        })
+      : [];
+    const skusById = new Map(skus.map((sku) => [sku.id, sku]));
+
+    const currentBySku = groupCurrentStorage(balances, skusById);
+    const history = calculateStorageHistory(
+      openingBalances,
+      movements,
+      firstReceipts,
+      skusById,
+      period.periodFrom,
+      period.periodTo,
+      options.includeDailyRows === true,
+    );
     const tariff = decimalToNumber(client.storagePriceRubPerLiterDay) ?? 0;
     const rows = [...new Set([...currentBySku.keys(), ...history.skuTotals.keys()])]
       .map((skuId) => {
@@ -140,7 +205,7 @@ export class StorageOverviewService {
   }
 
   async getOverviewXlsx(query: ListStorageOverviewDto, user: AuthUser) {
-    const overview = await this.getOverview(query, user);
+    const overview = await this.getOverview(query, user, { includeDailyRows: true });
     const fileName = `storage-${safeFileName(overview.client.code)}-${formatDateKey(new Date(overview.periodFrom))}-${formatDateKey(new Date(overview.periodTo))}.xlsx`;
 
     return {
@@ -151,19 +216,11 @@ export class StorageOverviewService {
   }
 }
 
-type StorageBalanceForOverview = Prisma.StockBalanceGetPayload<{
-  include: {
-    sku: { include: { barcodes: true } };
-    box: { select: { id: true; code: true } };
-    pallet: { select: { id: true; code: true } };
-  };
-}>;
-
-type StorageMovementForOverview = Prisma.StockMovementGetPayload<{
-  include: {
-    sku: { include: { barcodes: true } };
-  };
-}>;
+type StorageSku = Prisma.SkuGetPayload<{ select: typeof storageSkuSelect }>;
+type StorageBalanceForOverview = Prisma.StockBalanceGetPayload<{ select: typeof storageBalanceSelect }>;
+type StorageMovementForOverview = Pick<Prisma.StockMovementGetPayload<object>, 'skuId' | 'quantity' | 'createdAt'>;
+type StorageOpeningBalance = { skuId: string; _sum: { quantity: number | null } };
+type StorageFirstReceipt = { skuId: string; _min: { createdAt: Date | null } };
 
 function emptyStorageOverview(
   client: {
@@ -196,21 +253,27 @@ function emptyStorageOverview(
   };
 }
 
-function groupCurrentStorage(balances: StorageBalanceForOverview[]) {
+function groupCurrentStorage(balances: StorageBalanceForOverview[], skusById: Map<string, StorageSku>) {
   const result = new Map<string, StorageOverviewRow>();
+  const boxesBySku = new Map<string, Set<string>>();
+  const palletsBySku = new Map<string, Set<string>>();
 
   balances.forEach((balance) => {
-    const volumeLiters = calculateSkuVolumeLiters(balance.sku);
+    const sku = skusById.get(balance.skuId);
+    if (!sku) {
+      return;
+    }
+    const volumeLiters = calculateSkuVolumeLiters(sku);
     const existing = result.get(balance.skuId) ?? {
       skuId: balance.skuId,
-      barcode: primaryBarcode(balance.sku),
-      name: balance.sku.name,
-      internalSku: balance.sku.internalSku,
-      marketplaceArticle: marketplaceArticle(balance.sku),
-      size: balance.sku.size ?? '',
-      lengthCm: decimalToNumber(balance.sku.lengthCm),
-      widthCm: decimalToNumber(balance.sku.widthCm),
-      heightCm: decimalToNumber(balance.sku.heightCm),
+      barcode: primaryBarcode(sku),
+      name: sku.name,
+      internalSku: sku.internalSku,
+      marketplaceArticle: marketplaceArticle(sku),
+      size: sku.size ?? '',
+      lengthCm: decimalToNumber(sku.lengthCm),
+      widthCm: decimalToNumber(sku.widthCm),
+      heightCm: decimalToNumber(sku.heightCm),
       volumeLiters,
       quantity: 0,
       totalLiters: 0,
@@ -222,8 +285,8 @@ function groupCurrentStorage(balances: StorageBalanceForOverview[]) {
       literDays: 0,
       storageCostRub: 0,
     };
-    const boxCodes = new Set(existing.boxCodes);
-    const palletCodes = new Set(existing.palletCodes);
+    const boxCodes = boxesBySku.get(balance.skuId) ?? new Set<string>();
+    const palletCodes = palletsBySku.get(balance.skuId) ?? new Set<string>();
     if (balance.box?.code) {
       boxCodes.add(balance.box.code);
     }
@@ -237,27 +300,45 @@ function groupCurrentStorage(balances: StorageBalanceForOverview[]) {
     existing.palletCodes = [...palletCodes].sort((left, right) => left.localeCompare(right, 'ru')).slice(0, 8);
     existing.boxesCount = boxCodes.size;
     existing.palletsCount = palletCodes.size;
+    boxesBySku.set(balance.skuId, boxCodes);
+    palletsBySku.set(balance.skuId, palletCodes);
     result.set(balance.skuId, existing);
   });
 
   return result;
 }
 
-function calculateStorageHistory(movements: StorageMovementForOverview[], periodFrom: Date, periodTo: Date) {
-  const storageMovements = movements.filter(isStorageRelevantMovement);
+function calculateStorageHistory(
+  openingBalances: StorageOpeningBalance[],
+  movements: StorageMovementForOverview[],
+  firstReceipts: StorageFirstReceipt[],
+  skusById: Map<string, StorageSku>,
+  periodFrom: Date,
+  periodTo: Date,
+  includeDailyRows: boolean,
+) {
   const state = new Map<string, StorageState>();
   const skuTotals = new Map<string, StorageOverviewRow>();
-  const firstReceiptBySku = new Map<string, Date>();
+  const firstReceiptBySku = new Map(
+    firstReceipts
+      .filter((row): row is StorageFirstReceipt & { _min: { createdAt: Date } } => Boolean(row._min.createdAt))
+      .map((row) => [row.skuId, row._min.createdAt]),
+  );
   const daily: Array<{ date: string; totalLiters: number; literDays: number; positions: number }> = [];
   const dailyRows: StorageOverviewDailyRow[] = [];
   const days = listPeriodDays(periodFrom, periodTo);
 
-  storageMovements
-    .filter((movement) => movement.createdAt < startOfUtcDay(periodFrom))
-    .forEach((movement) => applyStorageMovement(state, movement, firstReceiptBySku));
+  openingBalances.forEach((opening) => {
+    const sku = skusById.get(opening.skuId);
+    if (!sku) {
+      return;
+    }
+    state.set(opening.skuId, storageStateFromSku(sku, opening._sum.quantity ?? 0));
+  });
+
+  let movementIndex = 0;
 
   days.forEach((day) => {
-    const dayStart = startOfUtcDay(day);
     const dayEnd = endOfUtcDay(day);
 
     let totalLiters = 0;
@@ -269,19 +350,21 @@ function calculateStorageHistory(movements: StorageMovementForOverview[], period
       const rowLiters = row.quantity * row.volumeLiters;
       totalLiters += rowLiters;
       positions += 1;
-      dailyRows.push({
-        date: formatDateKey(day),
-        skuId: row.skuId,
-        barcode: row.barcode,
-        name: row.name,
-        internalSku: row.internalSku,
-        marketplaceArticle: row.marketplaceArticle,
-        size: row.size,
-        quantity: row.quantity,
-        volumeLiters: row.volumeLiters,
-        totalLiters: roundQuantity(rowLiters),
-        literDays: roundQuantity(rowLiters),
-      });
+      if (includeDailyRows) {
+        dailyRows.push({
+          date: formatDateKey(day),
+          skuId: row.skuId,
+          barcode: row.barcode,
+          name: row.name,
+          internalSku: row.internalSku,
+          marketplaceArticle: row.marketplaceArticle,
+          size: row.size,
+          quantity: row.quantity,
+          volumeLiters: row.volumeLiters,
+          totalLiters: roundQuantity(rowLiters),
+          literDays: roundQuantity(rowLiters),
+        });
+      }
       const total = skuTotals.get(row.skuId) ?? {
         skuId: row.skuId,
         barcode: row.barcode,
@@ -315,50 +398,45 @@ function calculateStorageHistory(movements: StorageMovementForOverview[], period
       positions,
     });
 
-    storageMovements
-      .filter((movement) => movement.createdAt >= dayStart && movement.createdAt <= dayEnd)
-      .forEach((movement) => applyStorageMovement(state, movement, firstReceiptBySku));
+    while (movementIndex < movements.length && movements[movementIndex].createdAt <= dayEnd) {
+      applyStorageMovement(state, movements[movementIndex], skusById);
+      movementIndex += 1;
+    }
   });
 
   return { skuTotals, firstReceiptBySku, daily, dailyRows };
 }
 
-function isStorageRelevantMovement(movement: StorageMovementForOverview) {
-  if (movement.type === MovementType.PICK || movement.type === MovementType.PACK || movement.type === MovementType.MOVE) {
-    return false;
-  }
-  if (movement.type === MovementType.SHIP) {
-    return movement.quantity < 0;
-  }
-  return movement.quantity !== 0;
-}
-
 function applyStorageMovement(
   state: Map<string, StorageState>,
   movement: StorageMovementForOverview,
-  firstReceiptBySku: Map<string, Date>,
+  skusById: Map<string, StorageSku>,
 ) {
-  const volumeLiters = calculateSkuVolumeLiters(movement.sku);
-  const current = state.get(movement.skuId) ?? {
-    skuId: movement.skuId,
-    barcode: primaryBarcode(movement.sku),
-    name: movement.sku.name,
-    internalSku: movement.sku.internalSku,
-    marketplaceArticle: marketplaceArticle(movement.sku),
-    size: movement.sku.size ?? '',
-    lengthCm: decimalToNumber(movement.sku.lengthCm),
-    widthCm: decimalToNumber(movement.sku.widthCm),
-    heightCm: decimalToNumber(movement.sku.heightCm),
-    quantity: 0,
-    volumeLiters,
-  };
+  const sku = skusById.get(movement.skuId);
+  if (!sku) {
+    return;
+  }
+  const volumeLiters = calculateSkuVolumeLiters(sku);
+  const current = state.get(movement.skuId) ?? storageStateFromSku(sku, 0);
   current.quantity += movement.quantity;
   current.volumeLiters = volumeLiters || current.volumeLiters;
   state.set(movement.skuId, current);
+}
 
-  if (movement.quantity > 0 && !firstReceiptBySku.has(movement.skuId)) {
-    firstReceiptBySku.set(movement.skuId, movement.createdAt);
-  }
+function storageStateFromSku(sku: StorageSku, quantity: number): StorageState {
+  return {
+    skuId: sku.id,
+    barcode: primaryBarcode(sku),
+    name: sku.name,
+    internalSku: sku.internalSku,
+    marketplaceArticle: marketplaceArticle(sku),
+    size: sku.size ?? '',
+    lengthCm: decimalToNumber(sku.lengthCm),
+    widthCm: decimalToNumber(sku.widthCm),
+    heightCm: decimalToNumber(sku.heightCm),
+    quantity,
+    volumeLiters: calculateSkuVolumeLiters(sku),
+  };
 }
 
 type StorageState = {
@@ -419,6 +497,22 @@ type StorageOverviewDailyRow = {
   totalLiters: number;
   literDays: number;
 };
+
+function storageRelevantMovementWhere(clientId: string): Prisma.StockMovementWhereInput {
+  return {
+    clientId,
+    OR: [
+      {
+        type: { notIn: [MovementType.PICK, MovementType.PACK, MovementType.MOVE, MovementType.SHIP] },
+        quantity: { not: 0 },
+      },
+      {
+        type: MovementType.SHIP,
+        quantity: { lt: 0 },
+      },
+    ],
+  };
+}
 
 function safeFileName(value: string) {
   return value.replace(/[^a-zA-Z0-9а-яА-ЯёЁ._-]+/g, '_');
