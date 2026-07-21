@@ -1,4 +1,4 @@
-import { MarketplaceType, Prisma, VolumeSource } from '@prisma/client';
+import { FbsDeliveryDestination, MarketplaceType, Prisma, VolumeSource } from '@prisma/client';
 import { ForbiddenException } from '@nestjs/common';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MarketplaceConnectionsService } from '../src/modules/marketplace-connections/marketplace-connections.service';
@@ -523,6 +523,10 @@ describe('MarketplaceConnectionsService', () => {
           boxCapacityItems: 14,
         }),
       },
+      fbsSupplyPlan: {
+        upsert: vi.fn().mockResolvedValue({ id: 'plan-1' }),
+        update: vi.fn().mockResolvedValue({ id: 'plan-1' }),
+      },
     };
     const clientScopes = { requireClientAccess: vi.fn() };
     const service = new MarketplaceConnectionsService(prisma as never, clientScopes as never);
@@ -596,6 +600,95 @@ describe('MarketplaceConnectionsService', () => {
         body: JSON.stringify({ amount: 2 }),
       }),
     );
+    expect(prisma.fbsSupplyPlan.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          supplyId: 'supply-1',
+          deliveryDestination: 'PICKUP_POINT',
+          itemsPerCargoPlace: 14,
+          orderIds: selectedOrders.map((order) => order.id),
+        }),
+      }),
+    );
+    expect(prisma.fbsSupplyPlan.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: {
+          cargoPlaceCount: 2,
+          cargoPlaceIds: ['WB-TRBX-1', 'WB-TRBX-2'],
+        },
+      }),
+    );
+  });
+
+  it('persists sorting-center selection and does not create cargo places', async () => {
+    const connection = {
+      id: 'connection-1',
+      clientId: 'client-1',
+      marketplace: MarketplaceType.WILDBERRIES,
+      apiKey: 'secret-key',
+      isActive: true,
+      client: { id: 'client-1', code: 'CL-1', name: 'Клиент' },
+    };
+    const prisma = {
+      clientMarketplaceConnection: { findMany: vi.fn().mockResolvedValue([connection]) },
+      clientFbsBillingSettings: {
+        findUnique: vi.fn().mockResolvedValue({ defaultDeliveryDestination: 'PICKUP_POINT' }),
+      },
+      fbsSupplyPlan: {
+        upsert: vi.fn().mockResolvedValue({ id: 'plan-1' }),
+        update: vi.fn(),
+      },
+    };
+    const service = new MarketplaceConnectionsService(
+      prisma as never,
+      { requireClientAccess: vi.fn() } as never,
+    );
+    const selectedOrder = {
+      id: '2001',
+      connectionId: connection.id,
+      marketplace: MarketplaceType.WILDBERRIES,
+      supplierStatus: 'new',
+      cargoType: '1',
+      warehouseId: '1693195',
+      crossBorderType: null,
+      pickupPointShipmentAllowed: false,
+      itemCount: 1,
+    };
+    vi.spyOn(service as any, 'resolveSelectedFbsOrders').mockResolvedValue({
+      response: { client: connection.client },
+      orders: [selectedOrder],
+    });
+    vi.spyOn(service as any, 'refreshFbsOrdersCache').mockResolvedValue({ orders: [] });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => ({
+        ok: true,
+        status: 200,
+        json: async () => url.endsWith('/api/v3/supplies') ? { id: 'supply-sc-1' } : {},
+      } as Response)),
+    );
+
+    const result = await service.assembleFbsOrders(
+      {
+        clientId: 'client-1',
+        deliveryDestination: FbsDeliveryDestination.VNUKOVO_SORTING_CENTER,
+        orders: [{ connectionId: connection.id, id: selectedOrder.id }],
+      },
+      { id: 'user-1' } as never,
+    );
+
+    expect(result.deliveryPlan).toMatchObject({
+      destination: 'VNUKOVO_SORTING_CENTER',
+      requiresCargoPlaces: false,
+    });
+    expect(result.supplies[0]).toMatchObject({ cargoPlaceCount: 0, cargoPlaceIds: [] });
+    expect(prisma.fbsSupplyPlan.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ deliveryDestination: 'VNUKOVO_SORTING_CENTER' }),
+      }),
+    );
+    expect(prisma.fbsSupplyPlan.update).not.toHaveBeenCalled();
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith('/trbx'))).toBe(false);
   });
 
   it('creates one outbound request and persistently links every selected FBS order', async () => {

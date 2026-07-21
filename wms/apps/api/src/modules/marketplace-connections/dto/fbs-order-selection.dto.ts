@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsString, Length, ValidateNested } from 'class-validator';
+import { FbsDeliveryDestination } from '@prisma/client';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsEnum, IsOptional, IsString, Length, ValidateNested } from 'class-validator';
 
 export class FbsOrderSelectionItemDto {
   @IsString()
@@ -22,4 +23,8 @@ export class FbsOrderSelectionDto {
   @ValidateNested({ each: true })
   @Type(() => FbsOrderSelectionItemDto)
   orders!: FbsOrderSelectionItemDto[];
+
+  @IsOptional()
+  @IsEnum(FbsDeliveryDestination)
+  deliveryDestination?: FbsDeliveryDestination;
 }

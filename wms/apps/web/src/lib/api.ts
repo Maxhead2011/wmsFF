@@ -1806,6 +1806,13 @@ export type FbsOrderSummary = {
   cargoType: string | null;
   crossBorderType: string | null;
   pickupPointShipmentAllowed: boolean;
+  shipmentPlan: {
+    destination: FbsDeliveryDestination;
+    itemsPerCargoPlace: number;
+    requiresCargoPlaces: boolean;
+    cargoPlaceCount: number;
+    cargoPlaceIds: string[];
+  } | null;
   requiredMeta: string[];
   optionalMeta: string[];
   comment: string | null;
@@ -1870,6 +1877,7 @@ export type FbsActiveClientSummary = {
 export type FbsOrderSelectionPayload = {
   clientId: string;
   orders: Array<{ connectionId: string; id: string }>;
+  deliveryDestination?: FbsDeliveryDestination;
 };
 
 export type AssembleFbsOrdersResult = {

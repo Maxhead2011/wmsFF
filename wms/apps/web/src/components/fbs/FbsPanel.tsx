@@ -11,6 +11,7 @@ import {
   FilePlus2,
   Link2,
   ListChecks,
+  MapPin,
   PackageCheck,
   PlugZap,
   QrCode,
@@ -120,6 +121,10 @@ export function FbsPanel({ session }: FbsPanelProps) {
   const [rowActionKey, setRowActionKey] = useState<string | null>(null);
   const [orderActionMessage, setOrderActionMessage] = useState('');
   const [orderActionError, setOrderActionError] = useState('');
+  const [assemblyDialog, setAssemblyDialog] = useState<{
+    orders: FbsOrderSummary[];
+    destination: FbsDeliveryDestination;
+  } | null>(null);
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [connectionMarketplace, setConnectionMarketplace] = useState<'WILDBERRIES' | 'OZON'>('WILDBERRIES');
   const [connectionName, setConnectionName] = useState('');
@@ -246,7 +251,16 @@ export function FbsPanel({ session }: FbsPanelProps) {
 
   async function assembleSelectedOrders(orders: FbsOrderSummary[]) {
     if (!selectedClientId || orders.length === 0) return;
-    if (!window.confirm(`Перевести ${orders.length} заказ(а/ов) Wildberries в статус «На сборке»?`)) return;
+    setAssemblyDialog({
+      orders,
+      destination: data?.deliveryPlan.destination ?? 'PICKUP_POINT',
+    });
+  }
+
+  async function submitAssemblyDirection() {
+    if (!selectedClientId || !assemblyDialog || assemblyDialog.orders.length === 0) return;
+    const { orders, destination } = assemblyDialog;
+    setAssemblyDialog(null);
 
     setOrderAction('assemble');
     setOrderActionMessage('');
@@ -255,6 +269,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
       const result = await assembleFbsOrders(session.accessToken, {
         clientId: selectedClientId,
         orders: orders.map((order) => ({ connectionId: order.connectionId, id: order.id })),
+        deliveryDestination: destination,
       });
       ++loadSequence.current;
       setOrdersState({ status: 'ready', data: result.orders, error: '' });
@@ -601,7 +616,98 @@ export function FbsPanel({ session }: FbsPanelProps) {
           </div>
         ) : null}
       </section>
+      {assemblyDialog ? (
+        <FbsAssemblyDestinationDialog
+          orders={assemblyDialog.orders}
+          destination={assemblyDialog.destination}
+          isSubmitting={orderAction === 'assemble'}
+          onDestinationChange={(destination) =>
+            setAssemblyDialog((current) => (current ? { ...current, destination } : current))
+          }
+          onCancel={() => setAssemblyDialog(null)}
+          onSubmit={() => void submitAssemblyDirection()}
+        />
+      ) : null}
     </section>
+  );
+}
+
+function FbsAssemblyDestinationDialog({
+  orders,
+  destination,
+  isSubmitting,
+  onDestinationChange,
+  onCancel,
+  onSubmit,
+}: {
+  orders: FbsOrderSummary[];
+  destination: FbsDeliveryDestination;
+  isSubmitting: boolean;
+  onDestinationChange: (destination: FbsDeliveryDestination) => void;
+  onCancel: () => void;
+  onSubmit: () => void;
+}) {
+  const itemCount = orders.reduce((sum, order) => sum + Math.max(1, order.itemCount), 0);
+  const cargoPlaceCount = estimateFbsCargoPlaces(orders);
+  const pickupPointUnavailable = orders.filter((order) => !order.pickupPointShipmentAllowed);
+  const pickupBlocked = destination === 'PICKUP_POINT' && pickupPointUnavailable.length > 0;
+
+  return (
+    <div className="fbs-assembly-dialog-backdrop" role="presentation">
+      <section className="fbs-assembly-dialog" role="dialog" aria-modal="true" aria-labelledby="fbs-assembly-title">
+        <div className="fbs-assembly-dialog__icon">
+          <Truck size={24} aria-hidden="true" />
+        </div>
+        <div className="fbs-assembly-dialog__heading">
+          <p className="eyebrow">Новая поставка FBS</p>
+          <h3 id="fbs-assembly-title">Куда сдаём выбранные заказы?</h3>
+          <p>{orders.length} заказов · {itemCount} единиц товара</p>
+        </div>
+
+        <div className="fbs-assembly-dialog__choices">
+          <button
+            type="button"
+            className={destination === 'PICKUP_POINT' ? 'is-selected' : undefined}
+            onClick={() => onDestinationChange('PICKUP_POINT')}
+          >
+            <MapPin size={21} aria-hidden="true" />
+            <span>
+              <strong>Пункт выдачи заказов</strong>
+              <small>WMS создаст {cargoPlaceCount} грузомест по 14 единиц и получит для них QR.</small>
+            </span>
+          </button>
+          <button
+            type="button"
+            className={destination === 'VNUKOVO_SORTING_CENTER' ? 'is-selected' : undefined}
+            onClick={() => onDestinationChange('VNUKOVO_SORTING_CENTER')}
+          >
+            <Boxes size={21} aria-hidden="true" />
+            <span>
+              <strong>Сортировочный центр WB</strong>
+              <small>Грузоместа не создаются. После передачи в доставку станет доступен QR поставки.</small>
+            </span>
+          </button>
+        </div>
+
+        {pickupBlocked ? (
+          <p className="fbs-assembly-dialog__warning">
+            Wildberries не разрешает сдачу через ПВЗ для заказов: {pickupPointUnavailable.map((order) => order.id).join(', ')}.
+            Выберите сортировочный центр.
+          </p>
+        ) : null}
+
+        <div className="fbs-assembly-dialog__actions">
+          <button type="button" className="button button-secondary" onClick={onCancel} disabled={isSubmitting}>
+            Отмена
+          </button>
+          <button type="button" className="button button-primary" onClick={onSubmit} disabled={pickupBlocked || isSubmitting}>
+            {isSubmitting ? 'Создаю поставку…' : destination === 'PICKUP_POINT'
+              ? `Собрать и создать ${cargoPlaceCount} мест`
+              : 'Собрать для СЦ'}
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -673,14 +779,14 @@ function FbsOrdersView({
   );
   const cargoStickerOrders = selectedOrders.filter(
     (order) =>
-      data?.deliveryPlan.requiresCargoPlaces === true &&
+      fbsOrderRequiresCargoPlaces(order, data?.deliveryPlan.requiresCargoPlaces === true) &&
       order.marketplace === 'WILDBERRIES' &&
       order.supplierStatus === 'confirm' &&
       Boolean(order.supplyId),
   );
   const supplyStickerOrders = selectedOrders.filter(
     (order) =>
-      data?.deliveryPlan.requiresCargoPlaces === false &&
+      !fbsOrderRequiresCargoPlaces(order, data?.deliveryPlan.requiresCargoPlaces === true) &&
       order.marketplace === 'WILDBERRIES' &&
       order.supplierStatus === 'complete' &&
       Boolean(order.supplyId),
@@ -850,7 +956,10 @@ function FbsOrdersView({
                     <div>
                       <PackageCheck size={15} aria-hidden="true" />
                       <strong>Отгружены вместе</strong>
-                      <span>Поставка {group.supplyId} · {group.orders.length} заказов</span>
+                      <span>
+                        Поставка {group.supplyId} · {group.orders.length} заказов ·{' '}
+                        {fbsShipmentDestinationLabel(group.orders[0], data?.deliveryPlan.requiresCargoPlaces === true)}
+                      </span>
                     </div>
                   </td>
                 </tr>
@@ -868,7 +977,10 @@ function FbsOrdersView({
                   cargoBusy={orderAction === 'cargo' && rowActionKey === fbsOrderSelectionKey(order)}
                   supplyBusy={orderAction === 'supply' && rowActionKey === fbsOrderSelectionKey(order)}
                   pickListBusy={orderAction === 'pick-list' && rowActionKey === fbsOrderSelectionKey(order)}
-                  requiresCargoPlaces={data?.deliveryPlan.requiresCargoPlaces === true}
+                  requiresCargoPlaces={fbsOrderRequiresCargoPlaces(
+                    order,
+                    data?.deliveryPlan.requiresCargoPlaces === true,
+                  )}
                   canDownloadPickList={canDownloadPickList}
                   onDownloadSticker={() => void onDownloadStickers([order])}
                   onDownloadCargoStickers={() => void onDownloadCargoStickers([order])}
@@ -992,6 +1104,13 @@ function FbsOrderRow({
       <td>
         <span className={`fbs-status fbs-status--${order.category}`}>{order.statusLabel}</span>
         <small>{order.supplierStatus}</small>
+        {order.supplyId ? (
+          <small>
+            Поставка {order.supplyId} · {requiresCargoPlaces
+              ? `ПВЗ${order.shipmentPlan?.cargoPlaceCount ? ` · ${order.shipmentPlan.cargoPlaceCount} мест` : ''}`
+              : 'Сортировочный центр WB'}
+          </small>
+        ) : null}
       </td>
       <td>
         <div className="fbs-order-documents">
@@ -1811,6 +1930,31 @@ function groupFbsOrdersBySupply(orders: FbsOrderSummary[]) {
     ...group,
     isJointShipment: Boolean(group.supplyId) && group.orders.length > 1,
   }));
+}
+
+function estimateFbsCargoPlaces(orders: FbsOrderSummary[]) {
+  const groups = new Map<string, number>();
+  for (const order of orders) {
+    const key = [
+      order.connectionId,
+      order.cargoType ?? 'unknown-cargo',
+      order.warehouseId ?? 'unknown-warehouse',
+      order.crossBorderType ?? 'regular',
+    ].join(':');
+    groups.set(key, (groups.get(key) ?? 0) + Math.max(1, order.itemCount));
+  }
+  return Array.from(groups.values()).reduce((sum, quantity) => sum + Math.ceil(quantity / 14), 0);
+}
+
+function fbsOrderRequiresCargoPlaces(order: FbsOrderSummary, fallback: boolean) {
+  return order.shipmentPlan?.requiresCargoPlaces ?? fallback;
+}
+
+function fbsShipmentDestinationLabel(order: FbsOrderSummary, fallbackRequiresCargoPlaces: boolean) {
+  const requiresCargoPlaces = fbsOrderRequiresCargoPlaces(order, fallbackRequiresCargoPlaces);
+  if (!requiresCargoPlaces) return 'Сортировочный центр WB';
+  const cargoPlaceCount = order.shipmentPlan?.cargoPlaceCount ?? 0;
+  return `ПВЗ${cargoPlaceCount > 0 ? ` · ${cargoPlaceCount} грузомест` : ''}`;
 }
 
 function downloadFbsBlob(blob: Blob, fileName: string) {

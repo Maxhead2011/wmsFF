@@ -475,7 +475,7 @@ public class FbsFragment extends Fragment {
         for (List<Map<String, Object>> group : groups.values()) {
             String supplyId = AppState.string(group.get(0).get("supplyId"));
             boolean jointShipment = !supplyId.isBlank() && group.size() > 1;
-            if (jointShipment) addJointShipmentHeader(supplyId, group.size());
+            if (jointShipment) addJointShipmentHeader(group.get(0), supplyId, group.size());
             for (Map<String, Object> order : group) addOrderCard(order, jointShipment);
         }
     }
@@ -715,9 +715,15 @@ public class FbsFragment extends Fragment {
         dialog.show();
     }
 
-    private void addJointShipmentHeader(String supplyId, int orderCount) {
+    private void addJointShipmentHeader(Map<String, Object> order, String supplyId, int orderCount) {
+        Map<String, Object> shipmentPlan = map(order.get("shipmentPlan"));
+        boolean pickupPoint = requiresCargoPlaces(order);
+        int cargoPlaceCount = (int) Math.round(numberValue(shipmentPlan.get("cargoPlaceCount")));
+        String destination = pickupPoint
+                ? "ПВЗ" + (cargoPlaceCount > 0 ? " · " + cargoPlaceCount + " грузомест" : "")
+                : "Сортировочный центр WB";
         TextView header = text(
-                "ОТГРУЖЕНЫ ВМЕСТЕ  ·  Поставка " + supplyId + "  ·  " + orderCount + " заказов",
+                "ОТГРУЖЕНЫ ВМЕСТЕ  ·  Поставка " + supplyId + "  ·  " + orderCount + " заказов  ·  " + destination,
                 12,
                 R.color.logoff_success,
                 Typeface.BOLD
@@ -819,6 +825,20 @@ public class FbsFragment extends Fragment {
         LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(-1, -2);
         statusParams.topMargin = dp(11);
         content.addView(status, statusParams);
+
+        String supplyId = AppState.string(order.get("supplyId"));
+        if (!supplyId.isBlank()) {
+            Map<String, Object> shipmentPlan = map(order.get("shipmentPlan"));
+            int cargoPlaceCount = (int) Math.round(numberValue(shipmentPlan.get("cargoPlaceCount")));
+            String destination = requiresCargoPlaces(order)
+                    ? "ПВЗ" + (cargoPlaceCount > 0 ? " · " + cargoPlaceCount + " мест" : "")
+                    : "Сортировочный центр WB";
+            TextView shipment = text("Поставка " + supplyId + " · " + destination, 11,
+                    R.color.logoff_success, Typeface.BOLD);
+            LinearLayout.LayoutParams shipmentParams = new LinearLayout.LayoutParams(-1, -2);
+            shipmentParams.topMargin = dp(5);
+            content.addView(shipment, shipmentParams);
+        }
 
         addOrderDocumentActions(content, order);
 
@@ -970,18 +990,49 @@ public class FbsFragment extends Fragment {
 
     private void confirmAssemble(List<Map<String, Object>> orders) {
         if (orders.isEmpty()) return;
-        new MaterialAlertDialogBuilder(requireContext())
-                .setTitle("Перевести заказы в сборку?")
-                .setMessage("Wildberries создаст поставку, добавит " + orders.size()
-                        + " заказ(а/ов) и при сдаче через ПВЗ создаст грузоместа по 14 единиц.")
+        String defaultDestination = AppState.string(map(orderData.get("deliveryPlan")).get("destination"));
+        int[] selected = {"VNUKOVO_SORTING_CENTER".equals(defaultDestination) ? 1 : 0};
+        String[] choices = {
+                "Пункт выдачи заказов — создать грузоместа по 14 единиц",
+                "Сортировочный центр WB — без грузомест"
+        };
+        int cargoPlaces = estimateCargoPlaces(orders);
+        androidx.appcompat.app.AlertDialog dialog = new MaterialAlertDialogBuilder(requireContext())
+                .setTitle("Куда сдаём FBS-поставку?")
+                .setMessage(orders.size() + " заказ(а/ов). Для ПВЗ будет создано грузомест: " + cargoPlaces + ".")
+                .setSingleChoiceItems(choices, selected[0], (target, which) -> selected[0] = which)
                 .setNegativeButton("Отмена", null)
-                .setPositiveButton("Собрать", (dialog, which) -> assembleOrders(orders))
-                .show();
+                .setPositiveButton("Создать поставку", null)
+                .create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(view -> {
+                    String destination = selected[0] == 0 ? "PICKUP_POINT" : "VNUKOVO_SORTING_CENTER";
+                    if ("PICKUP_POINT".equals(destination)) {
+                        List<String> unavailable = new ArrayList<>();
+                        for (Map<String, Object> order : orders) {
+                            if (!Boolean.TRUE.equals(order.get("pickupPointShipmentAllowed"))) {
+                                unavailable.add(AppState.string(order.get("id")));
+                            }
+                        }
+                        if (!unavailable.isEmpty()) {
+                            Toast.makeText(requireContext(),
+                                    "WB не разрешает сдачу через ПВЗ для заказов: " + String.join(", ", unavailable)
+                                            + ". Выберите сортировочный центр.",
+                                    Toast.LENGTH_LONG).show();
+                            return;
+                        }
+                    }
+                    dialog.dismiss();
+                    assembleOrders(orders, destination);
+                }));
+        dialog.show();
     }
 
-    private void assembleOrders(List<Map<String, Object>> orders) {
+    private void assembleOrders(List<Map<String, Object>> orders, String deliveryDestination) {
         beginOrderAction();
-        app.repository().api().assembleFbsOrders(selectionPayload(orders)).enqueue(new Callback<>() {
+        Map<String, Object> body = selectionPayload(orders);
+        body.put("deliveryDestination", deliveryDestination);
+        app.repository().api().assembleFbsOrders(body).enqueue(new Callback<>() {
             @Override
             public void onResponse(Call<Map<String, Object>> call, Response<Map<String, Object>> response) {
                 if (!isAdded() || binding == null) return;
@@ -1187,11 +1238,11 @@ public class FbsFragment extends Fragment {
             return wildberries && ("confirm".equals(supplierStatus) || "complete".equals(supplierStatus));
         }
         if ("cargo".equals(action)) {
-            return requiresCargoPlaces() && wildberries && "confirm".equals(supplierStatus)
+            return requiresCargoPlaces(order) && wildberries && "confirm".equals(supplierStatus)
                     && !AppState.string(order.get("supplyId")).isBlank();
         }
         if ("supply".equals(action)) {
-            return !requiresCargoPlaces() && wildberries && "complete".equals(supplierStatus)
+            return !requiresCargoPlaces(order) && wildberries && "complete".equals(supplierStatus)
                     && !AppState.string(order.get("supplyId")).isBlank();
         }
         if ("request".equals(action)) {
@@ -1204,6 +1255,31 @@ public class FbsFragment extends Fragment {
 
     private boolean requiresCargoPlaces() {
         return Boolean.TRUE.equals(map(orderData.get("deliveryPlan")).get("requiresCargoPlaces"));
+    }
+
+    private boolean requiresCargoPlaces(Map<String, Object> order) {
+        Map<String, Object> shipmentPlan = map(order.get("shipmentPlan"));
+        if (shipmentPlan.containsKey("requiresCargoPlaces")) {
+            return Boolean.TRUE.equals(shipmentPlan.get("requiresCargoPlaces"));
+        }
+        return requiresCargoPlaces();
+    }
+
+    private int estimateCargoPlaces(List<Map<String, Object>> orders) {
+        Map<String, Integer> quantities = new LinkedHashMap<>();
+        for (Map<String, Object> order : orders) {
+            String key = String.join(":",
+                    AppState.string(order.get("connectionId")),
+                    firstNonBlank(AppState.string(order.get("cargoType")), "unknown-cargo"),
+                    firstNonBlank(AppState.string(order.get("warehouseId")), "unknown-warehouse"),
+                    firstNonBlank(AppState.string(order.get("crossBorderType")), "regular")
+            );
+            int itemCount = Math.max(1, (int) Math.round(numberValue(order.get("itemCount"))));
+            quantities.put(key, quantities.getOrDefault(key, 0) + itemCount);
+        }
+        int result = 0;
+        for (int quantity : quantities.values()) result += (int) Math.ceil(quantity / 14d);
+        return result;
     }
 
     private String orderKey(Map<String, Object> order) {

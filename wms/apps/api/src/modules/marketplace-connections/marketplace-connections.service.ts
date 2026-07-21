@@ -99,6 +99,13 @@ type FbsOrderSummary = {
   cargoType: string | null;
   crossBorderType: string | null;
   pickupPointShipmentAllowed: boolean;
+  shipmentPlan: {
+    destination: FbsDeliveryDestination;
+    itemsPerCargoPlace: number;
+    requiresCargoPlaces: boolean;
+    cargoPlaceCount: number;
+    cargoPlaceIds: string[];
+  } | null;
   requiredMeta: string[];
   optionalMeta: string[];
   comment: string | null;
@@ -294,7 +301,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'read');
     const { response, orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders);
-    const deliveryPlan = await this.loadFbsDeliveryPlan(clientId);
+    const defaultDeliveryPlan = await this.loadFbsDeliveryPlan(clientId);
+    const destination = dto.deliveryDestination ?? defaultDeliveryPlan.destination;
+    const deliveryPlan: FbsOrdersResponse['deliveryPlan'] = {
+      destination,
+      itemsPerCargoPlace: DEFAULT_FBS_ITEMS_PER_CARGO_PLACE,
+      requiresCargoPlaces: destination === FbsDeliveryDestination.PICKUP_POINT,
+    };
 
     const unsupported = orders.filter((order) => order.marketplace !== MarketplaceType.WILDBERRIES);
     if (unsupported.length > 0) {
@@ -387,6 +400,32 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
       const itemCount = group.reduce((sum, order) => sum + Math.max(1, order.itemCount), 0);
       let cargoPlaceIds: string[] = [];
+      await this.prisma.fbsSupplyPlan.upsert({
+        where: {
+          marketplace_connectionId_supplyId: {
+            marketplace: MarketplaceType.WILDBERRIES,
+            connectionId: connection.id,
+            supplyId,
+          },
+        },
+        create: {
+          clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          connectionId: connection.id,
+          supplyId,
+          deliveryDestination: destination,
+          itemsPerCargoPlace: deliveryPlan.itemsPerCargoPlace,
+          cargoPlaceCount: 0,
+          cargoPlaceIds: [],
+          orderIds: group.map((order) => order.id),
+          createdByUserId: user.id,
+        },
+        update: {
+          deliveryDestination: destination,
+          itemsPerCargoPlace: deliveryPlan.itemsPerCargoPlace,
+          orderIds: group.map((order) => order.id),
+        },
+      });
       if (deliveryPlan.requiresCargoPlaces) {
         const cargoPlaceCount = Math.ceil(itemCount / deliveryPlan.itemsPerCargoPlace);
         try {
@@ -404,6 +443,19 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               `ожидалось ${cargoPlaceCount}, Wildberries вернул ${cargoPlaceIds.length}`,
             );
           }
+          await this.prisma.fbsSupplyPlan.update({
+            where: {
+              marketplace_connectionId_supplyId: {
+                marketplace: MarketplaceType.WILDBERRIES,
+                connectionId: connection.id,
+                supplyId,
+              },
+            },
+            data: {
+              cargoPlaceCount: cargoPlaceIds.length,
+              cargoPlaceIds,
+            },
+          });
         } catch (caught) {
           const message = caught instanceof Error ? caught.message : 'неизвестная ошибка Wildberries';
           throw new BadRequestException(
@@ -507,21 +559,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       this.resolveSelectedFbsOrders(clientId, dto.orders),
       this.loadFbsDeliveryPlan(clientId),
     ]);
-    if (!deliveryPlan.requiresCargoPlaces) {
-      throw new BadRequestException(
-        'QR грузомест нужны только при сдаче поставки в ПВЗ. Для выбранного клиента настроена сдача в сортировочный центр.',
-      );
-    }
-
     const unavailable = orders.filter(
       (order) =>
         order.marketplace !== MarketplaceType.WILDBERRIES ||
         order.supplierStatus !== 'confirm' ||
-        !order.supplyId,
+        !order.supplyId ||
+        !fbsOrderDeliveryPlan(order, deliveryPlan).requiresCargoPlaces,
     );
     if (unavailable.length > 0) {
       throw new BadRequestException(
-        `QR грузомест можно скачать только для заказов WB в открытой поставке «На сборке»: ${unavailable
+        `ШК для ПВЗ можно скачать только для заказов WB из поставки, созданной с направлением «ПВЗ», в статусе «На сборке»: ${unavailable
           .map((order) => order.id)
           .join(', ')}.`,
       );
@@ -529,12 +576,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
     const connections = await this.loadSelectedConnections(clientId, orders);
     const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
-    const supplies = new Map<string, { connectionId: string; supplyId: string }>();
+    const supplies = new Map<string, { connectionId: string; supplyId: string; itemsPerCargoPlace: number }>();
     for (const order of orders) {
       const supplyId = order.supplyId!;
+      const orderPlan = fbsOrderDeliveryPlan(order, deliveryPlan);
       supplies.set(`${order.connectionId}:${supplyId}`, {
         connectionId: order.connectionId,
         supplyId,
+        itemsPerCargoPlace: orderPlan.itemsPerCargoPlace,
       });
     }
 
@@ -554,7 +603,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
       if (cargoPlaceIds.length === 0) {
         throw new BadRequestException(
-          `В поставке ${supply.supplyId} нет грузомест. Сначала добавьте их из расчёта ${deliveryPlan.itemsPerCargoPlace} единиц товара на одно грузоместо.`,
+          `В поставке ${supply.supplyId} нет грузомест. Сначала добавьте их из расчёта ${supply.itemsPerCargoPlace} единиц товара на одно грузоместо.`,
         );
       }
       const stickerResponse = await marketplaceJson(
@@ -596,21 +645,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       this.resolveSelectedFbsOrders(clientId, dto.orders),
       this.loadFbsDeliveryPlan(clientId),
     ]);
-    if (deliveryPlan.requiresCargoPlaces) {
-      throw new BadRequestException(
-        'Для выбранного клиента настроена сдача в ПВЗ. Используйте кнопку «ШК для ПВЗ».',
-      );
-    }
-
     const unavailable = orders.filter(
       (order) =>
         order.marketplace !== MarketplaceType.WILDBERRIES ||
         order.supplierStatus !== 'complete' ||
-        !order.supplyId,
+        !order.supplyId ||
+        fbsOrderDeliveryPlan(order, deliveryPlan).requiresCargoPlaces,
     );
     if (unavailable.length > 0) {
       throw new BadRequestException(
-        `ШК поставки для сортировочного центра можно скачать после передачи поставки в доставку. Проверьте заказы: ${unavailable
+        `ШК для СЦ можно скачать только для поставки с направлением «Сортировочный центр» после её передачи в доставку. Проверьте заказы: ${unavailable
           .map((order) => order.id)
           .join(', ')}.`,
       );
@@ -1261,16 +1305,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       where: { clientId },
       select: {
         defaultDeliveryDestination: true,
-        boxCapacityItems: true,
       },
     });
     const destination = settings?.defaultDeliveryDestination ?? FbsDeliveryDestination.PICKUP_POINT;
     return {
       destination,
-      itemsPerCargoPlace: Math.max(
-        1,
-        settings?.boxCapacityItems ?? DEFAULT_FBS_ITEMS_PER_CARGO_PLACE,
-      ),
+      itemsPerCargoPlace: DEFAULT_FBS_ITEMS_PER_CARGO_PLACE,
       requiresCargoPlaces: destination === FbsDeliveryDestination.PICKUP_POINT,
     };
   }
@@ -1428,6 +1468,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           cargoType: textValue(order.cargoType) || null,
           crossBorderType: textValue(order.crossBorderType) || null,
           pickupPointShipmentAllowed: toBoolean(order.isPickupPointShipmentAllowed),
+          shipmentPlan: null,
           requiredMeta: uniqueStrings(asArray<unknown>(order.requiredMeta).map(textValue)),
           optionalMeta: uniqueStrings(asArray<unknown>(order.optionalMeta).map(textValue)),
           comment: textValue(order.comment) || null,
@@ -1436,17 +1477,45 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         };
       })
       .sort((left, right) => (right.createdAt ?? '').localeCompare(left.createdAt ?? ''));
+    const supplyIds = uniqueStrings(ordersWithoutBilling.map((order) => order.supplyId ?? ''));
+    const supplyPlans = supplyIds.length > 0
+      ? await this.prisma.fbsSupplyPlan.findMany({
+          where: {
+            clientId,
+            supplyId: { in: supplyIds },
+            connectionId: { in: uniqueStrings(ordersWithoutBilling.map((order) => order.connectionId)) },
+          },
+        })
+      : [];
+    const supplyPlanByKey = new Map(
+      supplyPlans.map((plan) => [
+        fbsSupplyPlanKey(plan.marketplace, plan.connectionId, plan.supplyId),
+        {
+          destination: plan.deliveryDestination,
+          itemsPerCargoPlace: Math.max(1, plan.itemsPerCargoPlace),
+          requiresCargoPlaces: plan.deliveryDestination === FbsDeliveryDestination.PICKUP_POINT,
+          cargoPlaceCount: Math.max(0, plan.cargoPlaceCount),
+          cargoPlaceIds: uniqueStrings(asArray<unknown>(plan.cargoPlaceIds).map(textValue)),
+        },
+      ]),
+    );
+    const ordersWithShipmentPlans = ordersWithoutBilling.map((order) => ({
+      ...order,
+      shipmentPlan: order.supplyId
+        ? supplyPlanByKey.get(fbsSupplyPlanKey(order.marketplace, order.connectionId, order.supplyId)) ?? null
+        : null,
+    }));
     const [billingByOrder, requestLinks] = await Promise.all([
       this.ensureFbsProcessingCharges(
         clientId,
-        ordersWithoutBilling.filter((order) => order.category === 'shipped'),
+        ordersWithShipmentPlans.filter((order) => order.category === 'shipped'),
       ),
-      ordersWithoutBilling.length > 0
+      ordersWithShipmentPlans.length > 0
         ? this.prisma.fbsOrderRequestLink.findMany({
             where: {
               clientId,
-              connectionId: { in: uniqueStrings(ordersWithoutBilling.map((order) => order.connectionId)) },
-              orderId: { in: uniqueStrings(ordersWithoutBilling.map((order) => order.id)) },
+              connectionId: { in: uniqueStrings(ordersWithShipmentPlans.map((order) => order.connectionId)) },
+              orderId: { in: uniqueStrings(ordersWithShipmentPlans.map((order) => order.id)) },
             },
             include: {
               request: { select: { id: true, number: true, title: true, status: true } },
@@ -1457,7 +1526,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const requestByOrder = new Map(
       requestLinks.map((link) => [selectionKey(link.connectionId, link.orderId), link.request]),
     );
-    const orders = ordersWithoutBilling.map((order) => ({
+    const orders = ordersWithShipmentPlans.map((order) => ({
       ...order,
       request: requestByOrder.get(selectionKey(order.connectionId, order.id)) ?? null,
       billing: billingByOrder.get(fbsOrderKey(order)) ?? null,
@@ -1693,8 +1762,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         0,
       );
       const weights = batchOrders.map((order) => Math.max(1, order.itemCount));
+      const deliveryDestination =
+        batchOrders[0]?.shipmentPlan?.destination ?? settings.defaultDeliveryDestination;
       const destinationBasePriceRub =
-        settings.defaultDeliveryDestination === FbsDeliveryDestination.VNUKOVO_SORTING_CENTER
+        deliveryDestination === FbsDeliveryDestination.VNUKOVO_SORTING_CENTER
           ? Number(settings.vnukovoBasePriceRub)
           : Number(settings.pickupPointBasePriceRub);
       const extraBlocks = Math.ceil(
@@ -1753,7 +1824,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           shipmentItems,
           boxCount,
           palletCount,
-          deliveryDestination: settings.defaultDeliveryDestination,
+          deliveryDestination,
         };
         const description = `Комплексная обработка FBS-заказа ${marketplaceShortLabel(order.marketplace)} №${order.id}`;
         const chargeMetadata = cleanJson({
@@ -1768,7 +1839,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           additionalServices,
           breakdown,
           deliveryRules: {
-            destination: settings.defaultDeliveryDestination,
+            destination: deliveryDestination,
             destinationBasePriceRub,
             baseIncludedItems: settings.baseIncludedItems,
             extraBlockItems: settings.extraBlockItems,
@@ -2375,6 +2446,10 @@ function selectionKey(connectionId: string, orderId: string) {
   return `${connectionId.trim()}:${orderId.trim()}`;
 }
 
+function fbsSupplyPlanKey(marketplace: MarketplaceType, connectionId: string, supplyId: string) {
+  return `${marketplace}:${connectionId.trim()}:${supplyId.trim()}`;
+}
+
 function fbsSupplyName(clientCode: string, index: number, total: number) {
   const suffix = total > 1 ? ` ${index}-${total}` : '';
   return `LOGOFF ${clientCode} ${fileTimestamp(new Date())}${suffix}`.slice(0, 128);
@@ -2765,6 +2840,19 @@ function fbsShipmentKey(order: FbsOrderSummary) {
   const date = (order.deliveryDate || order.sellerDate || order.createdAt || '').slice(0, 10);
   const batch = supply ? `supply:${supply}` : date ? `date:${date}` : `order:${order.id}`;
   return `${order.marketplace}:${order.connectionId}:${batch}`;
+}
+
+function fbsOrderDeliveryPlan(
+  order: FbsOrderSummary,
+  fallback: FbsOrdersResponse['deliveryPlan'],
+): FbsOrdersResponse['deliveryPlan'] {
+  return order.shipmentPlan
+    ? {
+        destination: order.shipmentPlan.destination,
+        itemsPerCargoPlace: order.shipmentPlan.itemsPerCargoPlace,
+        requiresCargoPlaces: order.shipmentPlan.requiresCargoPlaces,
+      }
+    : fallback;
 }
 
 function groupFbsOrdersByShipment(orders: FbsOrderSummary[]) {

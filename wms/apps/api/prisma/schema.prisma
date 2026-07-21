@@ -531,6 +531,7 @@ model Client {
   notifications                ClientNotification[]
   notificationPreferences      ClientNotificationPreference[]
   marketplaceConnections       ClientMarketplaceConnection[]
+  fbsSupplyPlans               FbsSupplyPlan[]
   articleMappings              ClientArticleMapping[]
   allowedIps                   ClientAllowedIp[]
   productMarks                 ProductMark[]
@@ -1304,6 +1305,27 @@ model ClientFbsAdditionalService {
 
   @@unique([settingsId, serviceId])
   @@index([serviceId])
+}
+
+model FbsSupplyPlan {
+  id                         String                 @id @default(uuid())
+  clientId                   String
+  marketplace                MarketplaceType        @default(WILDBERRIES)
+  connectionId               String
+  supplyId                   String
+  deliveryDestination        FbsDeliveryDestination
+  itemsPerCargoPlace         Int                    @default(14)
+  cargoPlaceCount            Int                    @default(0)
+  cargoPlaceIds              Json?
+  orderIds                   Json
+  createdByUserId            String?
+  client                     Client                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdAt                  DateTime               @default(now())
+  updatedAt                  DateTime               @updatedAt
+
+  @@unique([marketplace, connectionId, supplyId])
+  @@index([clientId, createdAt])
+  @@index([connectionId, supplyId])
 }
 
 model BillingCharge {
