@@ -63,6 +63,14 @@ type StockExportWorkingRow = Omit<TurnoverStockExportDocument['rows'][number], '
   barcodeSet: Set<string>;
 };
 
+type TurnoverMovementAggregate = {
+  skuId: string;
+  period: string;
+  receivedQuantity: bigint | number;
+  shippedQuantity: bigint | number;
+  writtenOffQuantity: bigint | number;
+};
+
 export type TurnoverReceiptDocument = {
   movementId: string;
   sourceDocument: string | null;
@@ -301,33 +309,65 @@ export class TurnoverService {
       return emptyStatistics(query, groupBy);
     }
 
-    const [movements, balances] = await Promise.all([
-      this.prisma.stockMovement.findMany({
+    const movementConditions: Prisma.Sql[] = [
+      Prisma.sql`movement."skuId" IN (${Prisma.join(skuIds)})`,
+    ];
+    if (typeof clientFilter === 'string') {
+      movementConditions.push(Prisma.sql`movement."clientId" = ${clientFilter}`);
+    } else if (clientFilter?.in.length) {
+      movementConditions.push(Prisma.sql`movement."clientId" IN (${Prisma.join(clientFilter.in)})`);
+    }
+    if (movementDateRange?.gte) {
+      movementConditions.push(Prisma.sql`movement."createdAt" >= ${movementDateRange.gte}`);
+    }
+    if (movementDateRange?.lte) {
+      movementConditions.push(Prisma.sql`movement."createdAt" <= ${movementDateRange.lte}`);
+    }
+    const periodExpression = turnoverStatisticsPeriodSql(groupBy);
+
+    const [movementAggregates, balances] = await Promise.all([
+      this.prisma.$queryRaw<TurnoverMovementAggregate[]>(Prisma.sql`
+        SELECT
+          movement."skuId" AS "skuId",
+          ${periodExpression} AS "period",
+          SUM(
+            CASE
+              WHEN movement."quantity" > 0
+                AND movement."type" IN ('INITIAL_IMPORT', 'RECEIPT', 'RETURN', 'INVENTORY_ADJUSTMENT')
+              THEN movement."quantity"
+              ELSE 0
+            END
+          )::bigint AS "receivedQuantity",
+          SUM(
+            CASE
+              WHEN movement."type" = 'SHIP' AND movement."quantity" < 0
+              THEN -movement."quantity"
+              ELSE 0
+            END
+          )::bigint AS "shippedQuantity",
+          SUM(
+            CASE
+              WHEN movement."type" = 'INVENTORY_ADJUSTMENT' AND movement."quantity" < 0
+              THEN -movement."quantity"
+              ELSE 0
+            END
+          )::bigint AS "writtenOffQuantity"
+        FROM "StockMovement" movement
+        WHERE ${Prisma.join(movementConditions, ' AND ')}
+        GROUP BY movement."skuId", 2
+      `),
+      this.prisma.stockBalance.groupBy({
+        by: ['skuId'],
         where: {
           clientId: clientFilter,
           skuId: { in: skuIds },
-          ...(movementDateRange ? { createdAt: movementDateRange } : {}),
         },
-        include: {
-          sku: {
-            include: {
-              client: { select: { id: true, code: true, name: true } },
-              barcodes: { orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }] },
-            },
-          },
-        },
-        orderBy: { createdAt: 'asc' },
-      }),
-      this.prisma.stockBalance.findMany({
-        where: {
-          clientId: clientFilter,
-          skuId: { in: skuIds },
-        },
+        _sum: { quantity: true },
       }),
     ]);
 
     const currentBySkuId = new Map<string, number>();
-    balances.forEach((balance) => currentBySkuId.set(balance.skuId, (currentBySkuId.get(balance.skuId) ?? 0) + balance.quantity));
+    balances.forEach((balance) => currentBySkuId.set(balance.skuId, balance._sum.quantity ?? 0));
 
     const rows = new Map<string, ReturnType<typeof emptyStatisticsRow>>();
     skus.forEach((sku) => {
@@ -336,29 +376,27 @@ export class TurnoverService {
 
     const trend = new Map<string, { period: string; receivedQuantity: number; shippedQuantity: number; writtenOffQuantity: number }>();
 
-    for (const movement of movements) {
-      const row = rows.get(movement.skuId) ?? emptyStatisticsRow(movement.sku, currentBySkuId.get(movement.skuId) ?? 0);
-      const bucket = bucketKey(movement.createdAt, groupBy);
-      const trendRow = trend.get(bucket) ?? { period: bucket, receivedQuantity: 0, shippedQuantity: 0, writtenOffQuantity: 0 };
+    for (const aggregate of movementAggregates) {
+      const row = rows.get(aggregate.skuId);
+      if (!row) continue;
+      const receivedQuantity = Number(aggregate.receivedQuantity);
+      const shippedQuantity = Number(aggregate.shippedQuantity);
+      const writtenOffQuantity = Number(aggregate.writtenOffQuantity);
+      const trendRow = trend.get(aggregate.period) ?? {
+        period: aggregate.period,
+        receivedQuantity: 0,
+        shippedQuantity: 0,
+        writtenOffQuantity: 0,
+      };
 
-      if (isReceiptMovement(movement)) {
-        row.receivedQuantity += movement.quantity;
-        trendRow.receivedQuantity += movement.quantity;
-      }
+      row.receivedQuantity += receivedQuantity;
+      row.shippedQuantity += shippedQuantity;
+      row.writtenOffQuantity += writtenOffQuantity;
+      trendRow.receivedQuantity += receivedQuantity;
+      trendRow.shippedQuantity += shippedQuantity;
+      trendRow.writtenOffQuantity += writtenOffQuantity;
 
-      if (movement.type === MovementType.SHIP && movement.quantity < 0) {
-        const quantity = Math.abs(movement.quantity);
-        row.shippedQuantity += quantity;
-        trendRow.shippedQuantity += quantity;
-      }
-
-      if (movement.type === MovementType.INVENTORY_ADJUSTMENT && movement.quantity < 0) {
-        const quantity = Math.abs(movement.quantity);
-        row.writtenOffQuantity += quantity;
-        trendRow.writtenOffQuantity += quantity;
-      }
-
-      trend.set(bucket, trendRow);
+      trend.set(aggregate.period, trendRow);
       rows.set(row.skuId, row);
     }
 
@@ -1783,21 +1821,15 @@ function emptyStatisticsRow(sku: {
   };
 }
 
-function bucketKey(date: Date, groupBy: 'day' | 'month' | 'quarter' | 'year') {
-  const year = date.getFullYear();
-  const month = date.getMonth() + 1;
-
+function turnoverStatisticsPeriodSql(groupBy: 'day' | 'month' | 'quarter' | 'year') {
   if (groupBy === 'day') {
-    return `${year}-${String(month).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    return Prisma.sql`to_char(movement."createdAt", 'YYYY-MM-DD')`;
   }
-
   if (groupBy === 'month') {
-    return `${year}-${String(month).padStart(2, '0')}`;
+    return Prisma.sql`to_char(movement."createdAt", 'YYYY-MM')`;
   }
-
   if (groupBy === 'quarter') {
-    return `${year}-Q${Math.floor((month - 1) / 3) + 1}`;
+    return Prisma.sql`to_char(movement."createdAt", 'YYYY') || '-Q' || EXTRACT(QUARTER FROM movement."createdAt")::int::text`;
   }
-
-  return String(year);
+  return Prisma.sql`to_char(movement."createdAt", 'YYYY')`;
 }
