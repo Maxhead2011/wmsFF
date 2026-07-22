@@ -7,6 +7,7 @@ public class TsdFbsAssemblyResponse {
     public String message;
     public Task task;
     public Progress progress;
+    public KizMoveProposal kizMoveProposal;
 
     public static class Task {
         public String id;
@@ -33,6 +34,14 @@ public class TsdFbsAssemblyResponse {
         public String partB;
         public String barcode;
         public String imageBase64;
+    }
+
+    public static class KizMoveProposal {
+        public String kiz;
+        public String fromBoxCode;
+        public String toBoxCode;
+        public String productName;
+        public String article;
     }
 
     public static class Client {

@@ -88,8 +88,8 @@ import retrofit2.Response;
 public class MainActivity extends Activity {
     private static final int CAMERA_PERMISSION_REQUEST = 4201;
     private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
-    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.71";
-    private static final String APP_VERSION = "0.1.71";
+    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.72";
+    private static final String APP_VERSION = "0.1.72";
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int BOX_FOUND_GREEN = Color.rgb(187, 247, 208);
     private static final int BOX_DUPLICATE_BLUE = Color.rgb(191, 219, 254);
@@ -1403,6 +1403,29 @@ public class MainActivity extends Activity {
                 tr("Передать КИЗ в WB", "KIZni WBga yuborish"),
                 view -> submitFbsScan()
             ));
+        } else if ("CONFIRM_KIZ_MOVE".equals(state)) {
+            TsdFbsAssemblyResponse.KizMoveProposal proposal = fbsAssembly.kizMoveProposal;
+            String fromBox = proposal == null ? "-" : nonEmpty(proposal.fromBoxCode, "-");
+            String toBox = proposal == null ? nonEmpty(task.scannedBoxCode, "-") : nonEmpty(proposal.toBoxCode, "-");
+            root.addView(feedbackView(
+                tr("КИЗ НАЙДЕН В ДРУГОМ КОРОБЕ", "KIZ BOSHQA QUTIDA TOPILDI"),
+                Color.rgb(254, 240, 138)
+            ));
+            root.addView(feedbackView(
+                tr("Сейчас числится: ", "Hozirgi quti: ") + fromBox + "\n" +
+                    tr("Переместить в открытый короб: ", "Ochiq qutiga ko‘chirish: ") + toBox + "\n" +
+                    tr("Товар: ", "Mahsulot: ") + productName + "\n" +
+                    tr("Артикул: ", "Artikul: ") + article,
+                BOX_MOVEMENT_BLUE
+            ));
+            root.addView(primaryMenuButton(
+                tr("ПЕРЕМЕСТИТЬ И ПРИНЯТЬ КИЗ", "KO‘CHIRISH VA KIZNI QABUL QILISH"),
+                view -> confirmFbsKizMove()
+            ));
+            root.addView(secondaryButton(
+                tr("Нет — отсканировать другой КИЗ", "Yo‘q — boshqa KIZni skanerlash"),
+                view -> cancelFbsKizMove()
+            ));
         } else if ("READY_TO_COMPLETE".equals(state)) {
             String readyText = task.requiresKiz
                 ? tr("ШК и КИЗ подтверждены Wildberries.", "SHK va KIZ Wildberries tomonidan tasdiqlandi.")
@@ -1526,6 +1549,20 @@ public class MainActivity extends Activity {
         executeFbsAction("complete", null, null);
     }
 
+    private void confirmFbsKizMove() {
+        if (fbsAssembly == null || fbsAssembly.kizMoveProposal == null || fbsBusy) return;
+        executeFbsAction("scan-kiz-move", "kiz", fbsAssembly.kizMoveProposal.kiz);
+    }
+
+    private void cancelFbsKizMove() {
+        if (fbsAssembly == null || fbsBusy) return;
+        fbsAssembly.state = "SCAN_KIZ";
+        fbsAssembly.kizMoveProposal = null;
+        fbsFeedbackColor = 0;
+        statusMessage = tr("Отсканируйте другой КИЗ.", "Boshqa KIZni skanerlang.");
+        renderFbsAssemblyScreen();
+    }
+
     private ImageView fbsOrderStickerView(String encodedImage) {
         try {
             byte[] bytes = Base64.decode(encodedImage, Base64.DEFAULT);
@@ -1577,12 +1614,13 @@ public class MainActivity extends Activity {
             WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
             Map<String, Object> payload = new LinkedHashMap<>();
             if (field != null) payload.put(field, value);
+            if ("scan-kiz-move".equals(action)) payload.put("confirmBoxMove", true);
             Response<TsdFbsAssemblyResponse> response;
             if ("scan-box".equals(action)) {
                 response = api.scanFbsBox(session.authorizationHeader(), taskId, payload).execute();
             } else if ("scan-barcode".equals(action)) {
                 response = api.scanFbsBarcode(session.authorizationHeader(), taskId, payload).execute();
-            } else if ("scan-kiz".equals(action)) {
+            } else if ("scan-kiz".equals(action) || "scan-kiz-move".equals(action)) {
                 response = api.scanFbsKiz(session.authorizationHeader(), taskId, payload).execute();
             } else if ("release".equals(action)) {
                 response = api.releaseFbsAssembly(session.authorizationHeader(), taskId).execute();
@@ -1602,9 +1640,10 @@ public class MainActivity extends Activity {
                 online = true;
                 fbsBusy = false;
                 fbsAssembly = updated;
-                fbsFeedbackColor = BOX_FOUND_GREEN;
                 statusMessage = nonEmpty(updated.message, tr("Принято.", "Qabul qilindi."));
-                playFbsSuccess();
+                boolean needsMoveConfirmation = "CONFIRM_KIZ_MOVE".equals(updated.state);
+                fbsFeedbackColor = needsMoveConfirmation ? Color.rgb(254, 240, 138) : BOX_FOUND_GREEN;
+                if (!needsMoveConfirmation) playFbsSuccess();
                 renderFbsAssemblyScreen();
                 if ("COMPLETED".equals(updated.state)) {
                     String completedTaskId = taskId;

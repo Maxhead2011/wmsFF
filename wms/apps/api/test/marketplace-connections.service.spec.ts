@@ -1140,4 +1140,146 @@ describe('MarketplaceConnectionsService', () => {
     });
   });
 
+  it('asks the TSD to confirm moving a known KIZ from another box', async () => {
+    const kiz = '010590000000001221MOVE123456';
+    const task = {
+      id: 'task-1',
+      clientId: 'client-1',
+      connectionId: 'connection-1',
+      orderId: '1001',
+      requestId: 'request-1',
+      skuId: 'sku-1',
+      productName: 'Костюм',
+      article: 'ART-1',
+      requiresKiz: true,
+      status: 'IN_PROGRESS',
+      boxId: 'box-target',
+      boxCode: 'FFL_TARGET_001',
+      barcode: '4600000000012',
+      barcodes: ['4600000000012'],
+      kiz: null,
+      wbMetaStatus: 'PENDING',
+    };
+    const prisma = {
+      productMark: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'mark-1',
+          clientId: 'client-1',
+          skuId: 'sku-1',
+          boxId: 'box-source',
+          status: 'AVAILABLE',
+          box: { code: 'FFL_SOURCE_001' },
+          sku: { name: 'Костюм' },
+        }),
+      },
+      fbsTsdAssembly: { findFirst: vi.fn().mockResolvedValue(null) },
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    vi.spyOn(service as any, 'loadOwnedFbsTsdAssembly').mockResolvedValue(task);
+    vi.spyOn(service as any, 'formatFbsTsdAssembly').mockResolvedValue({ task, progress: {} });
+
+    const result = await service.scanFbsTsdKiz('task-1', { kiz }, { id: 'user-1' } as never);
+
+    expect(result).toMatchObject({
+      state: 'CONFIRM_KIZ_MOVE',
+      kizMoveProposal: {
+        kiz,
+        fromBoxCode: 'FFL_SOURCE_001',
+        toBoxCode: 'FFL_TARGET_001',
+        productName: 'Костюм',
+        article: 'ART-1',
+      },
+    });
+  });
+
+  it('moves exactly one marked FBS item into the opened box and records the movement', async () => {
+    const task = {
+      id: 'task-1',
+      clientId: 'client-1',
+      orderId: '1001',
+      requestId: 'request-1',
+      skuId: 'sku-1',
+      boxId: 'box-target',
+      boxCode: 'FFL_TARGET_001',
+      workerName: 'Сборщик',
+      deviceCode: 'TSD-1',
+    };
+    const updatedTask = { ...task, kiz: 'KIZ-1', wbMetaStatus: 'ACCEPTED' };
+    const tx = {
+      fbsTsdAssembly: {
+        findUnique: vi.fn().mockResolvedValue(task),
+        update: vi.fn().mockResolvedValue(updatedTask),
+      },
+      productMark: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'mark-1',
+          clientId: 'client-1',
+          skuId: 'sku-1',
+          boxId: 'box-source',
+          status: 'AVAILABLE',
+          box: { id: 'box-source', code: 'FFL_SOURCE_001', palletId: null },
+        }),
+        update: vi.fn().mockResolvedValue({}),
+        count: vi.fn().mockResolvedValue(1),
+      },
+      box: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'box-target',
+          code: 'FFL_TARGET_001',
+          palletId: null,
+          status: 'active',
+        }),
+        update: vi.fn(),
+      },
+      stockBalance: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'balance-source', quantity: 2 }),
+        update: vi.fn().mockResolvedValue({ quantity: 1 }),
+        delete: vi.fn(),
+        upsert: vi.fn().mockResolvedValue({}),
+        count: vi.fn().mockResolvedValue(1),
+      },
+      stockMovement: {
+        create: vi.fn()
+          .mockResolvedValueOnce({ id: 'movement-out' })
+          .mockResolvedValueOnce({ id: 'movement-in' }),
+      },
+      clientRequestEvent: { create: vi.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (value: typeof tx) => unknown) => callback(tx)),
+    };
+    const inventoryLock = { assertStockMovementsAllowed: vi.fn().mockResolvedValue(undefined) };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never, inventoryLock as never);
+
+    const result = await (service as any).moveExistingFbsKizToOpenedBox(
+      task,
+      'mark-1',
+      'box-source',
+      'KIZ-1',
+      { id: 'user-1' },
+    );
+
+    expect(inventoryLock.assertStockMovementsAllowed).toHaveBeenCalled();
+    expect(tx.stockBalance.update).toHaveBeenCalledWith({
+      where: { id: 'balance-source' },
+      data: { quantity: { decrement: 1 } },
+    });
+    expect(tx.stockBalance.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ boxId: 'box-target', skuId: 'sku-1', quantity: 1 }),
+      update: { quantity: { increment: 1 } },
+    }));
+    expect(tx.stockMovement.create).toHaveBeenCalledTimes(2);
+    expect(tx.productMark.update).toHaveBeenCalledWith({
+      where: { id: 'mark-1' },
+      data: { boxId: 'box-target', stockMovementId: 'movement-in' },
+    });
+    expect(tx.clientRequestEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        requestId: 'request-1',
+        title: 'КИЗ перемещён при сборке FBS',
+      }),
+    });
+    expect(result).toEqual(updatedTask);
+  });
+
 });

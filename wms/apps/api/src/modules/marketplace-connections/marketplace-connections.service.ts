@@ -17,10 +17,12 @@ import {
   ClientRequestType,
   FbsDeliveryDestination,
   MarketplaceType,
+  MovementType,
   Prisma,
   StockStatus,
   VolumeSource,
 } from '@prisma/client';
+import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
@@ -184,6 +186,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   constructor(
     private readonly prisma: PrismaService,
     private readonly clientScopes: ClientScopeService,
+    private readonly inventoryLock?: InventoryLockService,
   ) {}
 
   onModuleInit() {
@@ -755,6 +758,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       return this.formatFbsTsdAssembly(task, user, 'КИЗ уже принят Wildberries.');
     }
     const kiz = requiredFbsTsdText(payload.kiz, 'Отсканируйте КИЗ товара.');
+    const confirmBoxMove = payload.confirmBoxMove === true;
     if (task.kiz && task.wbMetaStatus === 'PENDING' && task.kiz.toLowerCase() !== kiz.toLowerCase()) {
       throw new BadRequestException(
         'Для этого заказа уже сохранён другой КИЗ и ожидается подтверждение Wildberries. Повторно отсканируйте тот же товар.',
@@ -787,9 +791,6 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (mark && mark.skuId !== task.skuId) {
       throw new BadRequestException(`Этот КИЗ относится к другому товару: ${mark.sku.name}.`);
     }
-    if (mark && mark.boxId !== task.boxId) {
-      throw new BadRequestException(`Этот КИЗ числится в коробе ${mark.box?.code ?? 'без номера'}, а открыт ${task.boxCode}.`);
-    }
     if (mark && mark.status !== StockStatus.AVAILABLE) {
       throw new BadRequestException('Этот КИЗ уже находится в сборке или был отгружен. Возьмите другую единицу.');
     }
@@ -803,6 +804,31 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     });
     if (duplicate) {
       throw new BadRequestException(`Этот КИЗ уже привязан к FBS-заказу ${duplicate.orderId}. Возьмите другую единицу.`);
+    }
+
+    const markNeedsBoxMove = Boolean(mark && mark.boxId !== task.boxId);
+    if (mark && markNeedsBoxMove && !confirmBoxMove) {
+      const fromBoxCode = mark.box?.code ?? 'без номера';
+      const toBoxCode = task.boxCode ?? 'открытый короб';
+      const formatted = await this.formatFbsTsdAssembly(
+        task,
+        user,
+        `КИЗ числится в коробе ${fromBoxCode}, а товар взят из ${toBoxCode}. Подтвердите перенос одной единицы.`,
+      );
+      return {
+        ...formatted,
+        state: 'CONFIRM_KIZ_MOVE',
+        kizMoveProposal: {
+          kiz,
+          fromBoxCode,
+          toBoxCode,
+          productName: task.productName,
+          article: task.article,
+        },
+      };
+    }
+    if (mark && markNeedsBoxMove) {
+      await this.inventoryLock?.assertStockMovementsAllowed();
     }
 
     let registeredHistoricalMarkId: string | null = null;
@@ -900,17 +926,169 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new BadRequestException(`Wildberries не принял КИЗ: ${message}`);
     }
 
-    const updated = await this.prisma.fbsTsdAssembly.update({
-      where: { id: task.id },
-      data: { kiz, wbMetaStatus: 'ACCEPTED', errorMessage: null },
-    });
+    const updated = mark && markNeedsBoxMove
+      ? await this.moveExistingFbsKizToOpenedBox(task, mark.id, mark.boxId, kiz, user)
+      : await this.prisma.fbsTsdAssembly.update({
+          where: { id: task.id },
+          data: { kiz, wbMetaStatus: 'ACCEPTED', errorMessage: null },
+        });
     return this.formatFbsTsdAssembly(
       updated,
       user,
-      registeredHistoricalMarkId
+      mark && markNeedsBoxMove
+        ? `КИЗ принят Wildberries. Товар перемещён из короба ${mark.box?.code ?? 'без номера'} в ${task.boxCode}. Подтвердите сборку заказа.`
+        : registeredHistoricalMarkId
         ? 'КИЗ принят Wildberries и зарегистрирован в остатках WMS. Подтвердите сборку заказа.'
         : 'КИЗ принят Wildberries. Подтвердите сборку заказа.',
     );
+  }
+
+  private async moveExistingFbsKizToOpenedBox(
+    task: FbsTsdAssemblyRecord,
+    markId: string,
+    expectedSourceBoxId: string | null,
+    kiz: string,
+    user: AuthUser,
+  ) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
+    return this.prisma.$transaction(async (tx) => {
+      const [freshTask, freshMark] = await Promise.all([
+        tx.fbsTsdAssembly.findUnique({ where: { id: task.id } }),
+        tx.productMark.findUnique({
+          where: { id: markId },
+          include: { box: { select: { id: true, code: true, palletId: true } } },
+        }),
+      ]);
+      if (!freshTask?.boxId || !freshTask.boxCode) {
+        throw new BadRequestException('Открытый короб изменился. Обновите задание и повторите сканирование.');
+      }
+      if (freshTask.boxId !== task.boxId) {
+        throw new BadRequestException('Открытый короб изменился после подтверждения. Обновите задание и повторите сканирование.');
+      }
+      if (!freshMark || freshMark.clientId !== freshTask.clientId || freshMark.skuId !== freshTask.skuId) {
+        throw new BadRequestException('Данные КИЗа изменились. Обновите задание и повторите сканирование.');
+      }
+      if (freshMark.status !== StockStatus.AVAILABLE) {
+        throw new BadRequestException('Этот КИЗ уже находится в сборке или был отгружен. Возьмите другую единицу.');
+      }
+      if (freshMark.boxId !== expectedSourceBoxId && freshMark.boxId !== freshTask.boxId) {
+        throw new BadRequestException('Короб КИЗа изменился после подтверждения. Обновите задание и повторите сканирование.');
+      }
+      if (freshMark.boxId === freshTask.boxId) {
+        return tx.fbsTsdAssembly.update({
+          where: { id: freshTask.id },
+          data: { kiz, wbMetaStatus: 'ACCEPTED', errorMessage: null },
+        });
+      }
+      if (!freshMark.boxId || !freshMark.box) {
+        throw new BadRequestException('У КИЗа не указан исходный короб. Передайте товар менеджеру.');
+      }
+
+      const targetBox = await tx.box.findUnique({
+        where: { id: freshTask.boxId },
+        select: { id: true, code: true, palletId: true, status: true },
+      });
+      if (!targetBox || ['deleted', 'archived'].includes(targetBox.status)) {
+        throw new BadRequestException(`Короб ${freshTask.boxCode} больше недоступен. Обновите задание.`);
+      }
+      const sourceBalance = await tx.stockBalance.findFirst({
+        where: {
+          clientId: freshTask.clientId,
+          skuId: freshTask.skuId,
+          boxId: freshMark.boxId,
+          status: StockStatus.AVAILABLE,
+        },
+      });
+      if (!sourceBalance || sourceBalance.quantity < 1) {
+        throw new BadRequestException(
+          `В коробе ${freshMark.box.code} нет доступного остатка для этого КИЗа. Передайте товар менеджеру.`,
+        );
+      }
+
+      if (sourceBalance.quantity === 1) {
+        await tx.stockBalance.delete({ where: { id: sourceBalance.id } });
+      } else {
+        await tx.stockBalance.update({
+          where: { id: sourceBalance.id },
+          data: { quantity: { decrement: 1 } },
+        });
+      }
+      const targetBalanceKey = fbsStockBalanceKey({
+        clientId: freshTask.clientId,
+        skuId: freshTask.skuId,
+        boxId: targetBox.id,
+        palletId: targetBox.palletId,
+        status: StockStatus.AVAILABLE,
+      });
+      await tx.stockBalance.upsert({
+        where: { balanceKey: targetBalanceKey },
+        update: { quantity: { increment: 1 } },
+        create: {
+          balanceKey: targetBalanceKey,
+          clientId: freshTask.clientId,
+          skuId: freshTask.skuId,
+          boxId: targetBox.id,
+          palletId: targetBox.palletId,
+          status: StockStatus.AVAILABLE,
+          quantity: 1,
+        },
+      });
+      const movementKey = `fbs-kiz-move:${freshTask.id}:${freshMark.id}`;
+      await tx.stockMovement.create({
+        data: {
+          clientId: freshTask.clientId,
+          skuId: freshTask.skuId,
+          boxId: freshMark.boxId,
+          palletId: freshMark.box.palletId,
+          type: MovementType.MOVE,
+          status: StockStatus.AVAILABLE,
+          quantity: -1,
+          sourceDocument: `FBS TSD, заказ ${freshTask.orderId}`,
+          idempotencyKey: `${movementKey}:out`,
+          comment: `КИЗ перемещён в короб ${targetBox.code} при сборке FBS`,
+        },
+      });
+      const inboundMovement = await tx.stockMovement.create({
+        data: {
+          clientId: freshTask.clientId,
+          skuId: freshTask.skuId,
+          boxId: targetBox.id,
+          palletId: targetBox.palletId,
+          type: MovementType.MOVE,
+          status: StockStatus.AVAILABLE,
+          quantity: 1,
+          sourceDocument: `FBS TSD, заказ ${freshTask.orderId}`,
+          idempotencyKey: `${movementKey}:in`,
+          comment: `КИЗ перемещён из короба ${freshMark.box.code} при сборке FBS`,
+        },
+      });
+      await tx.productMark.update({
+        where: { id: freshMark.id },
+        data: { boxId: targetBox.id, stockMovementId: inboundMovement.id },
+      });
+      await tx.clientRequestEvent.create({
+        data: {
+          requestId: freshTask.requestId,
+          clientId: freshTask.clientId,
+          eventType: ClientRequestEventType.COMMENT,
+          title: 'КИЗ перемещён при сборке FBS',
+          body: `Заказ ${freshTask.orderId}; КИЗ ${printableFbsKiz(kiz)}; ${freshMark.box.code} → ${targetBox.code}; сотрудник ${freshTask.workerName ?? freshTask.deviceCode}.`,
+          createdByUserId: user.id,
+        },
+      });
+      const updatedTask = await tx.fbsTsdAssembly.update({
+        where: { id: freshTask.id },
+        data: { kiz, wbMetaStatus: 'ACCEPTED', errorMessage: null },
+      });
+      const [remainingBalances, remainingMarks] = await Promise.all([
+        tx.stockBalance.count({ where: { boxId: freshMark.boxId, quantity: { gt: 0 } } }),
+        tx.productMark.count({ where: { boxId: freshMark.boxId } }),
+      ]);
+      if (remainingBalances === 0 && remainingMarks === 0) {
+        await tx.box.update({ where: { id: freshMark.boxId }, data: { status: 'archived' } });
+      }
+      return updatedTask;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
   async completeFbsTsdAssembly(taskId: string, user: AuthUser) {
@@ -4179,6 +4357,16 @@ function printableFbsKiz(value: string) {
     .replace(/[\u0000-\u001c\u001e-\u001f\u007f]/g, (symbol) =>
       `<0x${symbol.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}>`,
     );
+}
+
+function fbsStockBalanceKey(input: {
+  clientId: string;
+  skuId: string;
+  boxId: string | null;
+  palletId: string | null;
+  status: StockStatus;
+}) {
+  return [input.clientId, input.skuId, input.boxId ?? 'no-box', input.palletId ?? 'no-pallet', input.status].join(':');
 }
 
 function validDate(value: string | null | undefined) {
