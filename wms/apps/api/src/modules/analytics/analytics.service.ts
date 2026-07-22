@@ -750,6 +750,7 @@ function buildRegionalAnalytics(
 ) {
   const targetDays = 30;
   const excessDays = 60;
+  const detailedDemandAvailable = regionalSales.length > 0;
   const productMap = new Map(products.map((product) => [product.nmId, product]));
   const regionSales = new Map<string, { currentQty: number; currentAmount: number; pastQty: number; pastAmount: number }>();
   for (const sale of regionalSales) {
@@ -773,12 +774,21 @@ function buildRegionalAnalytics(
   }
 
   const names = [...new Set([...regionStock.keys(), ...regionSales.keys()])];
-  const totalSalesQty = sum([...regionSales.values()], (region) => region.currentQty);
+  const totalSalesQty = detailedDemandAvailable
+    ? sum([...regionSales.values()], (region) => region.currentQty)
+    : sum([...regionStock.values()], (region) =>
+        region.saleRateDays && region.saleRateDays > 0 ? (region.stockCount / region.saleRateDays) * periodDays : 0,
+      );
   const totalRegionalStock = sum([...regionStock.values()], (region) => region.stockCount);
   const regionRows = names
     .map((regionName) => {
       const stock = regionStock.get(regionName);
-      const sales = regionSales.get(regionName) ?? { currentQty: 0, currentAmount: 0, pastQty: 0, pastAmount: 0 };
+      const directSales = regionSales.get(regionName);
+      const fallbackDemand =
+        !directSales && stock?.saleRateDays && stock.saleRateDays > 0
+          ? (stock.stockCount / stock.saleRateDays) * periodDays
+          : 0;
+      const sales = directSales ?? { currentQty: fallbackDemand, currentAmount: 0, pastQty: 0, pastAmount: 0 };
       const dailyDemand = periodDays > 0 ? sales.currentQty / periodDays : 0;
       const coverageDays = dailyDemand > 0 ? (stock?.stockCount ?? 0) / dailyDemand : stock?.saleRateDays ?? null;
       const targetStock = Math.ceil(dailyDemand * targetDays);
@@ -791,7 +801,7 @@ function buildRegionalAnalytics(
         salesQty: roundMetric(sales.currentQty),
         salesAmount: roundMetric(sales.currentAmount),
         pastSalesQty: roundMetric(sales.pastQty),
-        salesDynamicPercent: percentDynamic(sales.currentQty, sales.pastQty),
+        salesDynamicPercent: directSales ? percentDynamic(sales.currentQty, sales.pastQty) : 0,
         salesSharePercent: totalSalesQty > 0 ? (sales.currentQty / totalSalesQty) * 100 : 0,
         stockCount: stock?.stockCount ?? 0,
         stockSharePercent: totalRegionalStock > 0 ? ((stock?.stockCount ?? 0) / totalRegionalStock) * 100 : 0,
@@ -871,11 +881,17 @@ function buildRegionalAnalytics(
     }));
 
   return {
-    available: regionalSales.length > 0,
+    available: regionRows.length > 0,
     periodDays,
     targetDays,
+    demandSource: detailedDemandAvailable ? ('REGIONAL_SALES' as const) : ('WB_SALE_RATE' as const),
+    dynamicsAvailable: detailedDemandAvailable,
+    productActionsAvailable: detailedDemandAvailable,
     exactProductWarehouseStockAvailable: false,
     limitation:
+      (detailedDemandAvailable
+        ? ''
+        : 'Региональный спрос временно рассчитан по оборачиваемости WB; динамика и товарная детализация появятся после снятия лимита Statistics API. ') +
       'Точный остаток каждого товара по складам требует персональный или сервисный токен WB. С текущим базовым токеном распределение товара по регионам является расчётной оценкой.',
     summary: {
       regions: regionRows.length,

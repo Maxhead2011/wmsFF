@@ -254,14 +254,14 @@ export function AnalyticsPanel({ session }: AnalyticsPanelProps) {
             <>
               <section className="analytics-card analytics-regional-intelligence">
                 <div className="analytics-card__heading analytics-regional-heading">
-                  <div><MapPinned size={18} /><span><strong>Провалы и потенциал по регионам</strong><small>Спрос за {dashboard.regionalAnalytics.periodDays} дней, фактический остаток WB и цель покрытия {dashboard.regionalAnalytics.targetDays} дней</small></span></div>
+                  <div><MapPinned size={18} /><span><strong>Провалы и потенциал по регионам</strong><small>{dashboard.regionalAnalytics.demandSource === 'REGIONAL_SALES' ? 'Фактические продажи' : 'Расчётный спрос по оборачиваемости WB'} за {dashboard.regionalAnalytics.periodDays} дней, остаток WB и цель покрытия {dashboard.regionalAnalytics.targetDays} дней</small></span></div>
                   <span className="analytics-model-badge">Модель поставки</span>
                 </div>
                 <div className="analytics-regional-summary">
                   <article><small>Регионов с дефицитом</small><strong>{integer(dashboard.regionalAnalytics.summary.shortageRegions)}</strong><em>из {integer(dashboard.regionalAnalytics.summary.regions)}</em></article>
                   <article><small>Рекомендуется поставить</small><strong>{integer(dashboard.regionalAnalytics.summary.recommendedSupply)} шт.</strong><em>до покрытия {dashboard.regionalAnalytics.targetDays} дней</em></article>
                   <article><small>Избыточный запас</small><strong>{integer(dashboard.regionalAnalytics.summary.excessStock)} шт.</strong><em>покрытие более 60 дней</em></article>
-                  <article><small>Продажи по регионам</small><strong>{integer(dashboard.regionalAnalytics.summary.salesQty)} шт.</strong><em>{money(dashboard.regionalAnalytics.summary.salesAmount, dashboard.sync.currency)}</em></article>
+                  <article><small>{dashboard.regionalAnalytics.demandSource === 'REGIONAL_SALES' ? 'Продажи по регионам' : 'Расчётный спрос'}</small><strong>{integer(dashboard.regionalAnalytics.summary.salesQty)} шт.</strong><em>{dashboard.regionalAnalytics.demandSource === 'REGIONAL_SALES' ? money(dashboard.regionalAnalytics.summary.salesAmount, dashboard.sync.currency) : 'оценка на базе saleRate WB'}</em></article>
                 </div>
                 <div className="analytics-table-wrap analytics-region-table-wrap">
                   <table className="analytics-table analytics-region-table">
@@ -271,7 +271,7 @@ export function AnalyticsPanel({ session }: AnalyticsPanelProps) {
                         <tr key={region.regionName}>
                           <td><strong>{region.regionName}</strong><small className="analytics-cell-note">спрос {decimal(region.salesSharePercent)}% · запас {decimal(region.stockSharePercent)}%</small></td>
                           <td>{integer(region.salesQty)} шт.<small className="analytics-cell-note">{money(region.salesAmount, dashboard.sync?.currency || 'RUB')}</small></td>
-                          <td><DynamicValue value={region.salesDynamicPercent} /></td>
+                          <td>{dashboard.regionalAnalytics.dynamicsAvailable ? <DynamicValue value={region.salesDynamicPercent} /> : '—'}</td>
                           <td>{integer(region.stockCount)} шт.</td>
                           <td>{region.coverageDays === null ? '—' : `${decimal(region.coverageDays)} дн.`}</td>
                           <td><strong className={region.recommendedSupply > 0 ? 'analytics-supply-positive' : ''}>{region.recommendedSupply > 0 ? `${integer(region.recommendedSupply)} шт.` : '—'}</strong></td>
@@ -290,7 +290,9 @@ export function AnalyticsPanel({ session }: AnalyticsPanelProps) {
                   <span className="analytics-count">{dashboard.regionalAnalytics.productActions.length}</span>
                 </div>
                 <div className="analytics-model-note"><TriangleAlert size={15} /><span>{dashboard.regionalAnalytics.limitation}</span></div>
-                {dashboard.regionalAnalytics.productActions.length ? (
+                {!dashboard.regionalAnalytics.productActionsAvailable ? (
+                  <AnalyticsEmpty text="WB временно ограничил выгрузку фактических продаж. Региональные дефициты уже рассчитаны; товарная детализация заполнится при следующем успешном обновлении." />
+                ) : dashboard.regionalAnalytics.productActions.length ? (
                   <div className="analytics-placement-list">
                     {dashboard.regionalAnalytics.productActions.slice(0, 30).map((action) => (
                       <article key={`${action.nmId}:${action.regionName}`}>

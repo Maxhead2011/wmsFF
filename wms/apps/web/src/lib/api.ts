@@ -194,6 +194,9 @@ export type AnalyticsDashboard = {
     available: boolean;
     periodDays: number;
     targetDays: number;
+    demandSource: 'REGIONAL_SALES' | 'WB_SALE_RATE';
+    dynamicsAvailable: boolean;
+    productActionsAvailable: boolean;
     exactProductWarehouseStockAvailable: boolean;
     limitation: string;
     summary: {
