@@ -9,6 +9,7 @@ describe('AnalyticsAutoSyncService', () => {
   it('обновляет активное подключение после начальной задержки', async () => {
     vi.useFakeTimers();
     const sync = vi.fn().mockResolvedValue({ sync: { status: 'READY' } });
+    const syncRegionalDemand = vi.fn().mockResolvedValue({ rows: 100, source: 'REGION_SALE' });
     const analyticsPrisma = {
       analyticsConnection: { findMany: vi.fn().mockResolvedValue([{ clientId: 'client-1' }]) },
       analyticsSyncState: { findUnique: vi.fn().mockResolvedValue({ periodDays: 30, lastStartedAt: null }) },
@@ -19,15 +20,13 @@ describe('AnalyticsAutoSyncService', () => {
           ? '60000'
           : undefined,
     };
-    const service = new AnalyticsAutoSyncService({ sync } as never, analyticsPrisma as never, config as never);
+    const service = new AnalyticsAutoSyncService({ sync, syncRegionalDemand } as never, analyticsPrisma as never, config as never);
 
     service.onModuleInit();
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(sync).toHaveBeenCalledWith(
-      { clientId: 'client-1', periodDays: 30 },
-      expect.objectContaining({ analyticsEnabled: true, clientScopeMode: 'ALL' }),
-    );
+    expect(syncRegionalDemand).toHaveBeenCalledWith('client-1', 30);
+    expect(sync).not.toHaveBeenCalled();
     service.onModuleDestroy();
   });
 });

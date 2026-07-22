@@ -4,7 +4,7 @@ import type { AuthUser } from '../auth/auth.types';
 import { AnalyticsPrismaService } from './analytics-prisma.service';
 import { AnalyticsService } from './analytics.service';
 
-const DEFAULT_INTERVAL_MS = 60 * 60_000;
+const DEFAULT_INTERVAL_MS = 30 * 60_000;
 const DEFAULT_INITIAL_DELAY_MS = 15 * 60_000;
 const MINIMUM_RETRY_AGE_MS = 15 * 60_000;
 
@@ -25,6 +25,7 @@ export class AnalyticsAutoSyncService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AnalyticsAutoSyncService.name);
   private timer?: NodeJS.Timeout;
   private running = false;
+  private regionalPhase = true;
 
   constructor(
     private readonly analytics: AnalyticsService,
@@ -62,8 +63,13 @@ export class AnalyticsAutoSyncService implements OnModuleInit, OnModuleDestroy {
         if (state?.lastStartedAt && Date.now() - state.lastStartedAt.getTime() < MINIMUM_RETRY_AGE_MS) continue;
         const periodDays = state?.periodDays === 7 || state?.periodDays === 90 ? state.periodDays : 30;
         try {
-          const result = await this.analytics.sync({ clientId: connection.clientId, periodDays }, AUTO_SYNC_USER);
-          this.logger.log(`Аналитика клиента ${connection.clientId} обновлена: ${result.sync?.status ?? 'READY'}.`);
+          if (this.regionalPhase) {
+            const result = await this.analytics.syncRegionalDemand(connection.clientId, periodDays);
+            this.logger.log(`Региональная аналитика клиента ${connection.clientId} обновлена: ${result.rows} строк.`);
+          } else {
+            const result = await this.analytics.sync({ clientId: connection.clientId, periodDays }, AUTO_SYNC_USER);
+            this.logger.log(`Основная аналитика клиента ${connection.clientId} обновлена: ${result.sync?.status ?? 'READY'}.`);
+          }
         } catch (caught) {
           const message = caught instanceof Error ? caught.message : 'неизвестная ошибка';
           this.logger.warn(`Автообновление аналитики клиента ${connection.clientId} не выполнено: ${message}`);
@@ -74,6 +80,7 @@ export class AnalyticsAutoSyncService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(`Цикл автообновления аналитики не выполнен: ${message}`);
     } finally {
       this.running = false;
+      this.regionalPhase = !this.regionalPhase;
       this.schedule(this.duration('ANALYTICS_AUTO_SYNC_INTERVAL_MS', DEFAULT_INTERVAL_MS));
     }
   }

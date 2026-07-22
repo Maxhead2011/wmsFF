@@ -254,6 +254,46 @@ export class AnalyticsService {
     }
   }
 
+  async syncRegionalDemand(clientId: string, periodDays = 30) {
+    const [connection, state] = await Promise.all([
+      this.analytics.analyticsConnection.findUnique({ where: { clientId } }),
+      this.analytics.analyticsSyncState.findUnique({ where: { clientId } }),
+    ]);
+    if (!connection?.isActive) throw new BadRequestException('Для клиента не подключён API-ключ аналитики Wildberries.');
+    const apiKey = this.crypto.decrypt(connection.apiKeyEncrypted);
+    const periods = analyticsPeriods(Math.min(periodDays, 30));
+    const fetched = await this.fetchRegionalSales(apiKey, periods, 0, 10_500);
+    const syncedAt = new Date();
+    const rows = mapRegionalSales(clientId, fetched.current, fetched.past, syncedAt);
+    if (rows.length === 0) throw new BadGatewayException('Wildberries не вернул продажи по регионам за выбранные периоды.');
+    const previousStatus = asRecord(state?.sourceStatus);
+    const sourceStatus: JsonRecord = { ...previousStatus, regionalSales: `READY_${fetched.source}` };
+    const coreCached = ['products', 'funnel', 'regions'].some((key) => textValue(sourceStatus[key]).startsWith('CACHED'));
+    await this.analytics.$transaction([
+      this.analytics.analyticsRegionalSale.deleteMany({ where: { clientId } }),
+      this.analytics.analyticsRegionalSale.createMany({ data: rows }),
+      this.analytics.analyticsSyncState.upsert({
+        where: { clientId },
+        create: {
+          clientId,
+          status: coreCached ? 'READY_WITH_WARNINGS' : 'READY',
+          periodDays,
+          productCount: 0,
+          lastSyncedAt: syncedAt,
+          lastError: coreCached ? 'Региональные продажи обновлены; основные показатели временно сохранены из кэша WB.' : null,
+          sourceStatus: sourceStatus as AnalyticsPrisma.InputJsonValue,
+        },
+        update: {
+          status: coreCached ? 'READY_WITH_WARNINGS' : 'READY',
+          lastSyncedAt: syncedAt,
+          lastError: coreCached ? 'Региональные продажи обновлены; основные показатели временно сохранены из кэша WB.' : null,
+          sourceStatus: sourceStatus as AnalyticsPrisma.InputJsonValue,
+        },
+      }),
+    ]);
+    return { rows: rows.length, source: fetched.source, syncedAt };
+  }
+
   async dashboard(query: AnalyticsDashboardQueryDto, user: AuthUser) {
     this.assertAnalyticsAccess(user);
     this.clientScopes.requireClientAccess(user, query.clientId, 'read');
@@ -406,11 +446,16 @@ export class AnalyticsService {
     return asArray(asRecord(response.data).regions).map(asRecord);
   }
 
-  private async fetchRegionalSales(apiKey: string, periods: AnalyticsPeriods) {
+  private async fetchRegionalSales(
+    apiKey: string,
+    periods: AnalyticsPeriods,
+    analyticsInitialDelayMs = 20_500,
+    analyticsPeriodDelayMs = 20_500,
+  ) {
     try {
       return await this.fetchRegionalSalesFromStatistics(apiKey, periods);
     } catch {
-      return this.fetchRegionalSalesFromAnalytics(apiKey, periods);
+      return this.fetchRegionalSalesFromAnalytics(apiKey, periods, analyticsInitialDelayMs, analyticsPeriodDelayMs);
     }
   }
 
@@ -440,15 +485,20 @@ export class AnalyticsService {
     return { current, past, source: 'STATISTICS_SALES' as const };
   }
 
-  private async fetchRegionalSalesFromAnalytics(apiKey: string, periods: AnalyticsPeriods) {
+  private async fetchRegionalSalesFromAnalytics(
+    apiKey: string,
+    periods: AnalyticsPeriods,
+    initialDelayMs: number,
+    periodDelayMs: number,
+  ) {
     // WB applies a seller-wide limiter across analytics methods. Let the core
     // product requests finish, then keep the two region periods apart.
-    await delay(20_500);
+    if (initialDelayMs > 0) await delay(initialDelayMs);
     const current = await wbJson(
       `${WB_ANALYTICS_URL}/api/v1/analytics/region-sale?${periodQuery(periods.selected)}`,
       apiKey,
     );
-    await delay(20_500);
+    await delay(periodDelayMs);
     const past = await wbJson(
       `${WB_ANALYTICS_URL}/api/v1/analytics/region-sale?${periodQuery(periods.past)}`,
       apiKey,
