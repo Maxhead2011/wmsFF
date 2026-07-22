@@ -629,8 +629,17 @@ export class ClientRequestsService {
   async getFbsBoxSearchXlsx(id: string, user: AuthUser) {
     const data = await this.getFbsBoxSearch(id, user);
     const workbook = XLSX.utils.book_new();
-    const generatedAt = new Date();
-    const summaryRows: Array<Array<string | number | Date>> = [
+    const generatedAt = new Intl.DateTimeFormat('ru-RU', {
+      timeZone: 'Europe/Moscow',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(new Date());
+    const summaryRows: Array<Array<string | number>> = [
       ['Совпадающие короба FBS'],
       ['Заявка', `№${String(data.request.number).padStart(6, '0')} · ${data.request.title}`],
       ['Клиент', `${data.request.client.code} · ${data.request.client.name}`],
@@ -643,7 +652,6 @@ export class ClientRequestsService {
     ];
     const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
     summarySheet['!cols'] = [{ wch: 27 }, { wch: 92 }];
-    if (summarySheet.B7) summarySheet.B7.z = 'dd.mm.yyyy hh:mm';
     XLSX.utils.book_append_sheet(workbook, summarySheet, 'Сводка');
 
     const detailsRows: Array<Array<string | number>> = [
