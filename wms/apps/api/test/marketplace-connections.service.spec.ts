@@ -196,6 +196,71 @@ describe('MarketplaceConnectionsService', () => {
     expect(prisma.client.findUnique).not.toHaveBeenCalled();
   });
 
+  it('keeps the TSD queue in the last completed WB supply before moving to another request', async () => {
+    const fbsTsdAssembly = {
+      findFirst: vi.fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ requestId: 'request-31', supplyId: 'WB-GI-31' }),
+      findUnique: vi.fn().mockResolvedValue(null),
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ id: 'task-new', ...data })),
+    };
+    const prisma = {
+      fbsTsdAssembly,
+      clientMarketplaceConnection: { findMany: vi.fn().mockResolvedValue([{ clientId: 'client-1' }]) },
+      clientRequestItem: { findFirst: vi.fn().mockResolvedValue({ id: 'request-item-31' }) },
+    };
+    const clientScopes = {
+      resolveClientFilter: vi.fn().mockReturnValue('client-1'),
+      requireClientAccess: vi.fn(),
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, clientScopes as never);
+    const order = (id: string, requestId: string, supplyId: string, createdAt: string) => ({
+      id,
+      connectionId: 'connection-1',
+      marketplace: MarketplaceType.WILDBERRIES,
+      category: 'active',
+      supplierStatus: 'confirm',
+      product: {
+        id: `sku-${requestId}`,
+        name: `Товар ${requestId}`,
+        article: requestId,
+        clientSku: null,
+        internalSku: requestId,
+        needsChestnyZnak: false,
+        isUnmarked: true,
+      },
+      request: { id: requestId, status: 'SUBMITTED' },
+      supplyId,
+      storageBoxes: [{ code: 'FFL_TEST_001', quantity: 1, status: 'AVAILABLE' }],
+      requiredMeta: [],
+      optionalMeta: [],
+      barcodes: ['4600000000012'],
+      itemCount: 1,
+      createdAt,
+    });
+    vi.spyOn(service as any, 'loadFbsOrders').mockResolvedValue({
+      orders: [
+        order('order-from-next-request', 'request-32', 'WB-GI-32', '2026-07-22T10:00:00Z'),
+        order('order-from-current-supply', 'request-31', 'WB-GI-31', '2026-07-22T11:00:00Z'),
+      ],
+    });
+    vi.spyOn(service as any, 'formatFbsTsdAssembly').mockImplementation(async (task: unknown) => task);
+
+    const result = await service.getNextFbsTsdAssembly(undefined, {
+      id: 'worker-1',
+      name: 'Сборщик',
+    } as never);
+
+    expect(fbsTsdAssembly.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        orderId: 'order-from-current-supply',
+        requestId: 'request-31',
+        supplyId: 'WB-GI-31',
+      }),
+    });
+    expect(result).toMatchObject({ orderId: 'order-from-current-supply' });
+  });
+
   it('allows a client to connect their own WB API without granting client editing rights', async () => {
     const created = {
       id: 'connection-1',

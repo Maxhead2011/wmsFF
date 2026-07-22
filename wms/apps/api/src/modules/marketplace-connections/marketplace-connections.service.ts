@@ -318,6 +318,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       return this.formatFbsTsdAssembly(current, user, 'Продолжите начатый заказ.');
     }
 
+    const previousBatch = await this.prisma.fbsTsdAssembly.findFirst({
+      where: { deviceCode, status: 'COMPLETED' },
+      orderBy: { completedAt: 'desc' },
+      select: { requestId: true, supplyId: true },
+    });
+
     const clientFilter = this.clientScopes.resolveClientFilter(user);
     const connections = await this.prisma.clientMarketplaceConnection.findMany({
       where: {
@@ -355,8 +361,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               ),
           )
           .sort((left, right) => (left.createdAt ?? '').localeCompare(right.createdAt ?? ''));
+        const sameBatchCandidates = previousBatch
+          ? candidates.filter((order) =>
+              previousBatch.supplyId
+                ? order.supplyId === previousBatch.supplyId
+                : order.request?.id === previousBatch.requestId,
+            )
+          : [];
+        const orderedCandidates = sameBatchCandidates.length > 0 ? sameBatchCandidates : candidates;
 
-        for (const order of candidates) {
+        for (const order of orderedCandidates) {
           const product = order.product!;
           const request = order.request!;
           const requestItem = await this.prisma.clientRequestItem.findFirst({
