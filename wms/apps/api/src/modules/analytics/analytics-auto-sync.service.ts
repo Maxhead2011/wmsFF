@@ -5,7 +5,8 @@ import { AnalyticsPrismaService } from './analytics-prisma.service';
 import { AnalyticsService } from './analytics.service';
 
 const DEFAULT_INTERVAL_MS = 30 * 60_000;
-const DEFAULT_INITIAL_DELAY_MS = 15 * 60_000;
+const DEFAULT_INITIAL_DELAY_MS = 5 * 60_000;
+const DEFAULT_FAILED_RETRY_MS = 10 * 60_000;
 const MINIMUM_RETRY_AGE_MS = 15 * 60_000;
 
 const AUTO_SYNC_USER: AuthUser = {
@@ -53,6 +54,7 @@ export class AnalyticsAutoSyncService implements OnModuleInit, OnModuleDestroy {
   private async run() {
     if (this.running) return;
     this.running = true;
+    let phaseSucceeded = true;
     try {
       const connections = await this.analyticsPrisma.analyticsConnection.findMany({
         where: { isActive: true },
@@ -60,7 +62,9 @@ export class AnalyticsAutoSyncService implements OnModuleInit, OnModuleDestroy {
       });
       for (const connection of connections) {
         const state = await this.analyticsPrisma.analyticsSyncState.findUnique({ where: { clientId: connection.clientId } });
-        if (state?.lastStartedAt && Date.now() - state.lastStartedAt.getTime() < MINIMUM_RETRY_AGE_MS) continue;
+        if (!this.regionalPhase && state?.lastStartedAt && Date.now() - state.lastStartedAt.getTime() < MINIMUM_RETRY_AGE_MS) {
+          continue;
+        }
         const periodDays = state?.periodDays === 7 || state?.periodDays === 90 ? state.periodDays : 30;
         try {
           if (this.regionalPhase) {
@@ -71,17 +75,24 @@ export class AnalyticsAutoSyncService implements OnModuleInit, OnModuleDestroy {
             this.logger.log(`Основная аналитика клиента ${connection.clientId} обновлена: ${result.sync?.status ?? 'READY'}.`);
           }
         } catch (caught) {
+          phaseSucceeded = false;
           const message = caught instanceof Error ? caught.message : 'неизвестная ошибка';
           this.logger.warn(`Автообновление аналитики клиента ${connection.clientId} не выполнено: ${message}`);
         }
       }
     } catch (caught) {
+      phaseSucceeded = false;
       const message = caught instanceof Error ? caught.message : 'неизвестная ошибка';
       this.logger.warn(`Цикл автообновления аналитики не выполнен: ${message}`);
     } finally {
       this.running = false;
-      this.regionalPhase = !this.regionalPhase;
-      this.schedule(this.duration('ANALYTICS_AUTO_SYNC_INTERVAL_MS', DEFAULT_INTERVAL_MS));
+      if (phaseSucceeded) this.regionalPhase = !this.regionalPhase;
+      this.schedule(
+        this.duration(
+          phaseSucceeded ? 'ANALYTICS_AUTO_SYNC_INTERVAL_MS' : 'ANALYTICS_AUTO_SYNC_FAILED_RETRY_MS',
+          phaseSucceeded ? DEFAULT_INTERVAL_MS : DEFAULT_FAILED_RETRY_MS,
+        ),
+      );
     }
   }
 
