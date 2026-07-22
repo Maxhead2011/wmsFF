@@ -104,6 +104,20 @@ export class ClientRequestsController {
     return this.clientRequests.getFbsBoxSearch(id, user);
   }
 
+  @Get(':id/fbs-box-search.xlsx')
+  @RequirePermissions('stock:write')
+  async downloadFbsBoxSearchXlsx(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUser,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const file = await this.clientRequests.getFbsBoxSearchXlsx(id, user);
+    response.setHeader('Content-Type', file.mimeType);
+    response.setHeader('Content-Length', String(file.content.length));
+    response.setHeader('Content-Disposition', contentDisposition(file.fileName));
+    return new StreamableFile(file.content);
+  }
+
   @Put(':id/manual-box-selection')
   @RequirePermissions('stock:write')
   saveManualBoxSelection(

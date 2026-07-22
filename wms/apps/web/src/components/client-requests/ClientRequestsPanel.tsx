@@ -4,6 +4,7 @@ import {
   cancelClientRequest,
   downloadClientRequestFile,
   downloadClientRequestItemsXlsx,
+  downloadClientRequestFbsBoxSearchXlsx,
   downloadClientRequestWbPackagesXlsx,
   downloadClientRequestWbProductsXlsx,
   downloadFbsRequestPickListPdf,
@@ -972,7 +973,14 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
       ) : null}
 
       {fbsBoxSearch ? (
-        <FbsBoxSearchModal state={fbsBoxSearch} onClose={() => setFbsBoxSearch(null)} />
+        <FbsBoxSearchModal
+          state={fbsBoxSearch}
+          onDownload={async () => {
+            const blob = await downloadClientRequestFbsBoxSearchXlsx(session.accessToken, fbsBoxSearch.request.id);
+            downloadBlob(blob, `Совпадающие_короба_FBS_${String(fbsBoxSearch.request.number).padStart(6, '0')}.xlsx`);
+          }}
+          onClose={() => setFbsBoxSearch(null)}
+        />
       ) : null}
     </section>
   );
@@ -983,8 +991,18 @@ function isFbsRequest(request: ClientRequestSummary) {
     || request.comment?.toLocaleLowerCase('ru-RU').includes('создано из fbs-заказов:') === true;
 }
 
-function FbsBoxSearchModal({ state, onClose }: { state: FbsBoxSearchState; onClose: () => void }) {
+function FbsBoxSearchModal({
+  state,
+  onDownload,
+  onClose,
+}: {
+  state: FbsBoxSearchState;
+  onDownload: () => Promise<void>;
+  onClose: () => void;
+}) {
   const [search, setSearch] = useState('');
+  const [downloadStatus, setDownloadStatus] = useState<'idle' | 'downloading'>('idle');
+  const [downloadError, setDownloadError] = useState('');
   const normalizedSearch = search.trim().toLocaleLowerCase('ru-RU');
   const boxes = (state.data?.boxes ?? []).filter((box) => {
     if (!normalizedSearch) return true;
@@ -1086,10 +1104,32 @@ function FbsBoxSearchModal({ state, onClose }: { state: FbsBoxSearchState; onClo
           ) : null}
 
           {state.error ? <p className="form-error">{state.error}</p> : null}
+          {downloadError ? <p className="form-error">{downloadError}</p> : null}
           <div className="emergency-xlsx-modal__actions">
             <button className="client-request-action-button client-request-action-button--instruction" type="button" onClick={onClose}>
               Закрыть
             </button>
+            {state.data?.boxes.length ? (
+              <button
+                className="client-request-action-button client-request-action-button--xlsx"
+                type="button"
+                disabled={downloadStatus === 'downloading'}
+                onClick={async () => {
+                  setDownloadStatus('downloading');
+                  setDownloadError('');
+                  try {
+                    await onDownload();
+                  } catch (caught) {
+                    setDownloadError(errorMessage(caught));
+                  } finally {
+                    setDownloadStatus('idle');
+                  }
+                }}
+              >
+                <FileDown size={16} aria-hidden="true" />
+                {downloadStatus === 'downloading' ? 'Формирую Excel' : 'Скачать Excel'}
+              </button>
+            ) : null}
           </div>
         </div>
       </section>

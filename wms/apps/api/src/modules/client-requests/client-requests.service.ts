@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { ClientNotificationEvent, ClientRequestEventType, ClientRequestStatus, ClientRequestType, Prisma, StockStatus } from '@prisma/client';
+import * as XLSX from 'xlsx';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
@@ -622,6 +623,81 @@ export class ClientRequestsService {
       },
       boxes: resultBoxes,
       unmatchedOrderIds: [...linkedOrderIds].filter((orderId) => !foundOrderIds.has(orderId)).sort(naturalOrderIdCompare),
+    };
+  }
+
+  async getFbsBoxSearchXlsx(id: string, user: AuthUser) {
+    const data = await this.getFbsBoxSearch(id, user);
+    const workbook = XLSX.utils.book_new();
+    const generatedAt = new Date();
+    const summaryRows: Array<Array<string | number | Date>> = [
+      ['Совпадающие короба FBS'],
+      ['Заявка', `№${String(data.request.number).padStart(6, '0')} · ${data.request.title}`],
+      ['Клиент', `${data.request.client.code} · ${data.request.client.name}`],
+      ['Заказов в заявке', data.summary.orders],
+      ['Совпадающих коробов', data.summary.boxes],
+      ['Подтверждено через ТСД', data.summary.confirmedOrders],
+      ['Сформировано', generatedAt],
+      [],
+      ['Проверка', 'В файл включены только короба, общие для нескольких FBS-заказов, и короба, точно подтвержденные через ТСД.'],
+    ];
+    const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
+    summarySheet['!cols'] = [{ wch: 27 }, { wch: 92 }];
+    if (summarySheet.B7) summarySheet.B7.z = 'dd.mm.yyyy hh:mm';
+    XLSX.utils.book_append_sheet(workbook, summarySheet, 'Сводка');
+
+    const detailsRows: Array<Array<string | number>> = [
+      [
+        'Короб',
+        'Заказы WB',
+        'Подтверждение',
+        'Товар',
+        'Артикул',
+        'Штрихкоды',
+        'Заказы по товару',
+        'Доступно, шт.',
+        'Свободно, шт.',
+      ],
+      ...data.boxes.flatMap((box) =>
+        box.items.map((item) => [
+          box.boxCode,
+          formatFbsOrderIds(box.orderIds),
+          box.confirmedOrderIds.length > 0
+            ? `Подтверждено ТСД: ${formatFbsOrderIds(box.confirmedOrderIds)}`
+            : 'Совпадение по остаткам',
+          item.productName,
+          item.article ?? '',
+          item.barcodes.join(', '),
+          formatFbsOrderIds(item.orderIds),
+          item.availableQuantity,
+          item.freeQuantity,
+        ]),
+      ),
+    ];
+    const detailsSheet = XLSX.utils.aoa_to_sheet(detailsRows);
+    detailsSheet['!cols'] = [
+      { wch: 24 },
+      { wch: 34 },
+      { wch: 32 },
+      { wch: 46 },
+      { wch: 22 },
+      { wch: 34 },
+      { wch: 34 },
+      { wch: 15 },
+      { wch: 15 },
+    ];
+    detailsSheet['!autofilter'] = {
+      ref: XLSX.utils.encode_range({
+        s: { r: 0, c: 0 },
+        e: { r: Math.max(0, detailsRows.length - 1), c: detailsRows[0].length - 1 },
+      }),
+    };
+    XLSX.utils.book_append_sheet(workbook, detailsSheet, 'Совпадающие короба');
+
+    return {
+      fileName: `fbs-shared-boxes-${String(data.request.number).padStart(6, '0')}.xlsx`,
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      content: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer,
     };
   }
 
@@ -1326,6 +1402,10 @@ function parseFbsOrderIds(comment: string | null) {
 
 function naturalOrderIdCompare(left: string, right: string) {
   return left.localeCompare(right, 'ru-RU', { numeric: true, sensitivity: 'base' });
+}
+
+function formatFbsOrderIds(orderIds: string[]) {
+  return orderIds.map((orderId) => `№${orderId}`).join(', ');
 }
 
 const clientRequestInclude = {

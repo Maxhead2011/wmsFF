@@ -3825,6 +3825,10 @@ export async function fetchClientRequestFbsBoxSearch(accessToken: string, reques
   });
 }
 
+export async function downloadClientRequestFbsBoxSearchXlsx(accessToken: string, requestId: string) {
+  return requestBlob(`/client-requests/${requestId}/fbs-box-search.xlsx`, accessToken);
+}
+
 export async function saveClientRequestManualBoxSelection(
   accessToken: string,
   requestId: string,
