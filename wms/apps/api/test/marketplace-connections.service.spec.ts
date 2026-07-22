@@ -721,6 +721,102 @@ describe('MarketplaceConnectionsService', () => {
     );
   });
 
+  it('switches an untouched TSD task when the scanned box belongs to another pending order in the same request', async () => {
+    const currentTask = {
+      id: 'task-current',
+      clientId: 'client-1',
+      marketplace: MarketplaceType.WILDBERRIES,
+      connectionId: 'connection-1',
+      orderId: 'order-current',
+      requestId: 'request-32',
+      deviceCode: 'USER:worker',
+      status: 'IN_PROGRESS',
+      boxId: null,
+      barcode: null,
+      kiz: null,
+    };
+    const createdTask = {
+      ...currentTask,
+      id: 'task-matching-box',
+      orderId: '5355467854',
+      skuId: 'sku-black',
+      boxId: 'box-101',
+      boxCode: 'FFL_LKB1705_101',
+    };
+    const tx = {
+      fbsTsdAssembly: {
+        findUnique: vi.fn()
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce(currentTask),
+        update: vi.fn().mockResolvedValue({ ...currentTask, status: 'RELEASED' }),
+        create: vi.fn().mockResolvedValue(createdTask),
+      },
+    };
+    const prisma = {
+      clientRequestItem: { findFirst: vi.fn().mockResolvedValue({ id: 'request-item-black' }) },
+      fbsTsdAssembly: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { itemCount: 0 } }),
+      },
+      stockBalance: { aggregate: vi.fn().mockResolvedValue({ _sum: { quantity: 30 } }) },
+      $transaction: vi.fn(async (callback: (client: typeof tx) => Promise<unknown>) => callback(tx)),
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    vi.spyOn(service as any, 'loadFbsOrders').mockResolvedValue({
+      orders: [{
+        id: '5355467854',
+        marketplace: MarketplaceType.WILDBERRIES,
+        connectionId: 'connection-1',
+        category: 'active',
+        supplierStatus: 'confirm',
+        request: { id: 'request-32', status: 'SUBMITTED' },
+        product: {
+          id: 'sku-black',
+          name: 'Костюм летний брючный оверсайз',
+          article: 'Корея_2черный',
+          clientSku: null,
+          internalSku: 'Корея_2черный',
+          needsChestnyZnak: true,
+          isUnmarked: false,
+        },
+        storageBoxes: [{ code: 'FFL_LKB1705_101', status: 'AVAILABLE', quantity: 30 }],
+        requiredMeta: ['sgtin'],
+        optionalMeta: [],
+        barcodes: ['4600000000001'],
+        itemCount: 1,
+        supplyId: 'WB-GI-32',
+        createdAt: '2026-07-22T10:00:00Z',
+      }],
+    });
+    vi.spyOn(service as any, 'formatFbsTsdAssembly').mockImplementation(
+      async (task: unknown, _user: unknown, message: string) => ({ task, message }),
+    );
+
+    const result = await (service as any).switchFbsTsdAssemblyToBox(
+      currentTask,
+      { id: 'box-101', code: 'FFL_LKB1705_101' },
+      { id: 'worker-1', name: 'Сборщик' },
+    );
+
+    expect(tx.fbsTsdAssembly.update).toHaveBeenCalledWith({
+      where: { id: 'task-current' },
+      data: expect.objectContaining({ status: 'RELEASED' }),
+    });
+    expect(tx.fbsTsdAssembly.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        orderId: '5355467854',
+        requestId: 'request-32',
+        boxId: 'box-101',
+        boxCode: 'FFL_LKB1705_101',
+        status: 'IN_PROGRESS',
+      }),
+    });
+    expect(result).toMatchObject({
+      task: { orderId: '5355467854', boxCode: 'FFL_LKB1705_101' },
+      message: expect.stringContaining('Короб FFL_LKB1705_101 нужен заявке'),
+    });
+  });
+
   it('moves selected new WB orders to a supply and refreshes their statuses', async () => {
     const connection = {
       id: 'connection-1',

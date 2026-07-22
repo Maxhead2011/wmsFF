@@ -543,9 +543,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     });
     const freeQuantity = (available._sum.quantity ?? 0) - (reserved._sum.itemCount ?? 0);
     if (freeQuantity < task.itemCount) {
-      throw new BadRequestException(
-        `Короб ${box.code} не нужен для заказа №${task.orderId}: в нём нет свободного остатка нужного товара. Отсканируйте короб, указанный на экране.`,
-      );
+      const switched = await this.switchFbsTsdAssemblyToBox(task, box, user);
+      if (switched) return switched;
+      throw new BadRequestException(`Короб ${box.code} не нужен для текущей FBS-заявки.`);
     }
 
     const updated = await this.prisma.fbsTsdAssembly.update({
@@ -553,6 +553,168 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       data: { boxId: box.id, boxCode: box.code, errorMessage: null },
     });
     return this.formatFbsTsdAssembly(updated, user, `Короб ${box.code} принят. Теперь сканируйте ШК товара.`);
+  }
+
+  private async switchFbsTsdAssemblyToBox(
+    currentTask: FbsTsdAssemblyRecord,
+    box: { id: string; code: string },
+    user: AuthUser,
+  ) {
+    const cached = this.fbsOrdersCache.get(currentTask.clientId);
+    const response = cached && cached.expiresAt > Date.now()
+      ? cached.value
+      : await this.loadFbsOrders(currentTask.clientId);
+    if (!cached || cached.expiresAt <= Date.now()) {
+      this.fbsOrdersCache.set(currentTask.clientId, {
+        expiresAt: Date.now() + 30_000,
+        value: response,
+      });
+    }
+
+    const candidates = response.orders
+      .filter(
+        (order) =>
+          order.id !== currentTask.orderId &&
+          order.marketplace === currentTask.marketplace &&
+          order.connectionId === currentTask.connectionId &&
+          order.category === 'active' &&
+          order.supplierStatus === 'confirm' &&
+          order.request?.id === currentTask.requestId &&
+          Boolean(order.product) &&
+          order.storageBoxes.some(
+            (storageBox) =>
+              storageBox.code.toLocaleUpperCase('ru-RU') === box.code.toLocaleUpperCase('ru-RU') &&
+              storageBox.status === StockStatus.AVAILABLE &&
+              storageBox.quantity > 0,
+          ),
+      )
+      .sort((left, right) => (left.createdAt ?? '').localeCompare(right.createdAt ?? ''));
+
+    for (const order of candidates) {
+      const product = order.product!;
+      const [requestItem, existing, available, reserved] = await Promise.all([
+        this.prisma.clientRequestItem.findFirst({
+          where: { requestId: currentTask.requestId, skuId: product.id },
+          select: { id: true },
+        }),
+        this.prisma.fbsTsdAssembly.findUnique({
+          where: {
+            marketplace_connectionId_orderId: {
+              marketplace: order.marketplace,
+              connectionId: order.connectionId,
+              orderId: order.id,
+            },
+          },
+        }),
+        this.prisma.stockBalance.aggregate({
+          where: {
+            clientId: currentTask.clientId,
+            skuId: product.id,
+            boxId: box.id,
+            status: StockStatus.AVAILABLE,
+          },
+          _sum: { quantity: true },
+        }),
+        this.prisma.fbsTsdAssembly.aggregate({
+          where: {
+            clientId: currentTask.clientId,
+            skuId: product.id,
+            boxId: box.id,
+            status: { in: ['IN_PROGRESS', 'COMPLETED'] },
+          },
+          _sum: { itemCount: true },
+        }),
+      ]);
+      if (
+        !requestItem ||
+        existing?.status === 'COMPLETED' ||
+        existing?.status === 'IN_PROGRESS' ||
+        (available._sum.quantity ?? 0) - (reserved._sum.itemCount ?? 0) < Math.max(1, order.itemCount)
+      ) {
+        continue;
+      }
+
+      const storageBoxes = order.storageBoxes.filter(
+        (storageBox) => storageBox.quantity > 0 && storageBox.status === StockStatus.AVAILABLE,
+      );
+      const metadata = uniqueStrings([...order.requiredMeta, ...order.optionalMeta]).map((item) =>
+        item.toLowerCase(),
+      );
+      const requiresKiz = metadata.includes('sgtin') || (product.needsChestnyZnak && !product.isUnmarked);
+      const taskData = {
+        clientId: currentTask.clientId,
+        marketplace: order.marketplace,
+        connectionId: order.connectionId,
+        orderId: order.id,
+        supplyId: order.supplyId,
+        requestId: currentTask.requestId,
+        requestItemId: requestItem.id,
+        skuId: product.id,
+        productName: product.name,
+        article: product.article ?? product.clientSku ?? product.internalSku,
+        barcodes: order.barcodes as Prisma.InputJsonValue,
+        storageBoxes: storageBoxes as Prisma.InputJsonValue,
+        itemCount: Math.max(1, order.itemCount),
+        requiresKiz,
+        status: 'IN_PROGRESS',
+        deviceCode: currentTask.deviceCode,
+        workerUserId: user.id,
+        workerName: user.name,
+        boxId: box.id,
+        boxCode: box.code,
+        barcode: null,
+        kiz: null,
+        wbMetaStatus: requiresKiz ? 'PENDING' : 'NOT_REQUIRED',
+        errorMessage: null,
+        completedAt: null,
+      };
+
+      try {
+        const switched = await this.prisma.$transaction(async (tx) => {
+          const target = await tx.fbsTsdAssembly.findUnique({
+            where: {
+              marketplace_connectionId_orderId: {
+                marketplace: order.marketplace,
+                connectionId: order.connectionId,
+                orderId: order.id,
+              },
+            },
+          });
+          if (target?.status === 'COMPLETED' || target?.status === 'IN_PROGRESS') return null;
+          const freshCurrent = await tx.fbsTsdAssembly.findUnique({ where: { id: currentTask.id } });
+          if (
+            !freshCurrent ||
+            freshCurrent.status !== 'IN_PROGRESS' ||
+            freshCurrent.boxId ||
+            freshCurrent.barcode ||
+            freshCurrent.kiz
+          ) {
+            throw new BadRequestException('Задание на ТСД уже изменилось. Нажмите «Обновить» и повторите сканирование.');
+          }
+          await tx.fbsTsdAssembly.update({
+            where: { id: currentTask.id },
+            data: {
+              status: 'RELEASED',
+              errorMessage: `Сотрудник выбрал короб ${box.code}; задание возвращено в очередь.`,
+            },
+          });
+          return target
+            ? tx.fbsTsdAssembly.update({ where: { id: target.id }, data: taskData })
+            : tx.fbsTsdAssembly.create({ data: taskData });
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+        if (!switched) continue;
+        return this.formatFbsTsdAssembly(
+          switched,
+          user,
+          `Короб ${box.code} нужен заявке. Переключено на заказ №${order.id}. Теперь сканируйте ШК товара.`,
+        );
+      } catch (caught) {
+        if (caught instanceof Prisma.PrismaClientKnownRequestError && caught.code === 'P2002') continue;
+        throw caught;
+      }
+    }
+
+    return null;
   }
 
   async scanFbsTsdBarcode(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
