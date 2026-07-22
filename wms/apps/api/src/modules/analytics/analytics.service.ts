@@ -354,20 +354,29 @@ export class AnalyticsService {
 
   private async wmsStock(clientId: string, nmIds: string[]) {
     if (nmIds.length === 0) return new Map<string, { quantity: number; skuCount: number }>();
+    const requestedNmIds = new Set(nmIds);
     const skus = await this.prisma.sku.findMany({
-      where: { clientId, marketplace: MarketplaceType.WILDBERRIES, marketplaceProductId: { in: nmIds } },
+      where: {
+        clientId,
+        marketplace: MarketplaceType.WILDBERRIES,
+        marketplaceProductId: { not: null },
+        balances: { some: { status: StockStatus.AVAILABLE, quantity: { gt: 0 } } },
+      },
       select: {
         marketplaceProductId: true,
-        balances: { where: { status: StockStatus.AVAILABLE }, select: { quantity: true } },
+        balances: { where: { status: StockStatus.AVAILABLE, quantity: { gt: 0 } }, select: { quantity: true } },
       },
     });
     const result = new Map<string, { quantity: number; skuCount: number }>();
     for (const sku of skus) {
       if (!sku.marketplaceProductId) continue;
-      const current = result.get(sku.marketplaceProductId) ?? { quantity: 0, skuCount: 0 };
+      // WB stores the product and size as "nmId:sizeId" in the WMS card; analytics is aggregated by nmId.
+      const nmId = sku.marketplaceProductId.split(':', 1)[0];
+      if (!requestedNmIds.has(nmId)) continue;
+      const current = result.get(nmId) ?? { quantity: 0, skuCount: 0 };
       current.quantity += sku.balances.reduce((sum, balance) => sum + balance.quantity, 0);
       current.skuCount += 1;
-      result.set(sku.marketplaceProductId, current);
+      result.set(nmId, current);
     }
     return result;
   }
