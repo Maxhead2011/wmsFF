@@ -1692,6 +1692,7 @@ function OnlineExecutionModal({
 }: OnlineExecutionModalProps) {
   const [movementSearch, setMovementSearch] = useState('');
   const [actualMovementSearch, setActualMovementSearch] = useState('');
+  const [fbsAssemblySearch, setFbsAssemblySearch] = useState('');
   const searchBoxes = normalizeOnlineBoxes(plan?.searchBoxes ?? plan?.boxesToSearch ?? []);
   const foundCodes = new Set(
     [...(plan?.boxSearchProgress?.foundBoxCodes ?? []), ...(plan?.foundBoxCodes ?? []), ...(plan?.foundBoxesCodes ?? [])].map(normalizeCode),
@@ -1716,6 +1717,21 @@ function OnlineExecutionModal({
   const movementRows = plan?.movementProgress?.rows ?? [];
   const movementSourceBoxes = plan?.movementProgress?.sourceBoxes ?? [];
   const actualMovements = plan?.movementProgress?.actualRows ?? [];
+  const fbsAssembly = plan?.fbsAssembly ?? null;
+  const normalizedFbsAssemblySearch = fbsAssemblySearch.trim().toLocaleLowerCase('ru-RU');
+  const filteredFbsAssemblyRows = (fbsAssembly?.rows ?? []).filter((row) =>
+    !normalizedFbsAssemblySearch ||
+    [
+      row.sourceBoxCode,
+      row.orderId,
+      row.productBarcode,
+      row.size,
+      row.wbStickerPartB,
+      row.wbStickerBarcode,
+      row.productName,
+      row.article,
+    ].some((value) => value?.toLocaleLowerCase('ru-RU').includes(normalizedFbsAssemblySearch)),
+  );
   const outgoingBoxes = normalizeOutgoingBoxes(plan);
   const filteredMovementRows = movementRows.filter((row) => movementRowMatchesSearch(row, movementSearch));
   const filteredActualMovements = actualMovements.filter((row) => movementRowMatchesSearch(row, actualMovementSearch));
@@ -1800,6 +1816,66 @@ function OnlineExecutionModal({
                 <strong>{outgoingBoxes.length}</strong>
               </article>
             </div>
+
+            {fbsAssembly ? (
+              <section className="online-execution-section online-execution-section--fbs-fact">
+                <div className="online-execution-section__heading">
+                  <h4>Фактическая сборка FBS</h4>
+                  <span>
+                    собрано {fbsAssembly.completedOrders} из {fbsAssembly.totalOrders} · в работе {Math.max(0, fbsAssembly.startedOrders - fbsAssembly.completedOrders)}
+                  </span>
+                </div>
+                <OnlineSectionSearch
+                  value={fbsAssemblySearch}
+                  onChange={setFbsAssemblySearch}
+                  placeholder="Найти заказ, короб, ШК товара или ШК WB"
+                />
+                {filteredFbsAssemblyRows.length ? (
+                  <div className="online-execution-table-wrap online-execution-table-wrap--fbs-fact">
+                    <table className="online-execution-table online-execution-table--fbs-fact">
+                      <thead>
+                        <tr>
+                          <th>Короб, откуда взят</th>
+                          <th>Номер заказа</th>
+                          <th>ШК товара</th>
+                          <th>Размер</th>
+                          <th>ШК WB — большие 4 цифры</th>
+                          <th>Статус</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredFbsAssemblyRows.map((row) => (
+                          <tr key={row.id}>
+                            <td><strong>{row.sourceBoxCode ?? 'ещё не выбран'}</strong></td>
+                            <td>
+                              <strong>№{row.orderId}</strong>
+                              <span>{row.productName}{row.article ? ` · арт. ${row.article}` : ''}</span>
+                            </td>
+                            <td>{row.productBarcode ?? 'ещё не пропикан'}</td>
+                            <td><strong>{row.size ?? 'не указан'}</strong></td>
+                            <td>
+                              <strong className="online-execution-wb-digits">{row.wbStickerPartB ?? '—'}</strong>
+                              <span>{row.wbStickerBarcode ? `полный ШК: ${row.wbStickerBarcode}` : 'появится после получения наклейки WB'}</span>
+                            </td>
+                            <td>
+                              <span className={`online-execution-pill ${row.status === 'COMPLETED' ? 'is-done' : 'is-open'}`}>
+                                {row.statusLabel}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="online-execution-empty">
+                    {fbsAssembly.rows.length
+                      ? 'По этому запросу строки фактической сборки не найдены.'
+                      : 'Фактические данные появятся после начала сборки заказов на ТСД.'}
+                  </p>
+                )}
+              </section>
+            ) : null}
 
             <OnlineBoxChips
               title="Короба для поиска"

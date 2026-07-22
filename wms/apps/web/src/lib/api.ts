@@ -1785,6 +1785,27 @@ export type TsdAssemblyPlan = {
       movedAt?: string | null;
     }>;
   };
+  fbsAssembly?: {
+    totalOrders: number;
+    startedOrders: number;
+    completedOrders: number;
+    rows: Array<{
+      id: string;
+      orderId: string;
+      sourceBoxCode: string | null;
+      productName: string;
+      article: string | null;
+      productBarcode: string | null;
+      size: string | null;
+      wbStickerPartB: string | null;
+      wbStickerBarcode: string | null;
+      status: string;
+      statusLabel: string;
+      workerName: string | null;
+      completedAt: string | null;
+      updatedAt: string;
+    }>;
+  } | null;
 };
 
 export type CreateClientRequestPayload = {

@@ -2185,6 +2185,28 @@
   font-weight: 700;
 }
 
+.online-execution-section--fbs-fact {
+  border-color: #bfdbfe;
+  background: linear-gradient(135deg, #eff6ff 0%, #ffffff 58%);
+}
+
+.online-execution-table-wrap--fbs-fact {
+  max-height: 420px;
+  background: #ffffff;
+}
+
+.online-execution-table--fbs-fact {
+  min-width: 980px;
+}
+
+.online-execution-wb-digits {
+  color: #1d4ed8;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 22px;
+  letter-spacing: 0.12em;
+  line-height: 1.15;
+}
+
 @media (max-width: 1280px) {
   .client-request-table,
   .client-request-table tbody {

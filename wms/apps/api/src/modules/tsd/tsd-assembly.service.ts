@@ -555,7 +555,11 @@ export class TsdAssemblyService {
     let searchBoxes = rawSearchBoxCodes
       .filter((boxCode) => shouldShowInTsdBoxSearch(boxCode, movementTargetBoxes))
       .map((boxCode) => boxEntry(boxCode));
-    const activeTsdProcesses = (await this.loadActiveTsdProcesses([document.requestId])).get(document.requestId) ?? [];
+    const [activeProcessesByRequest, fbsAssembly] = await Promise.all([
+      this.loadActiveTsdProcesses([document.requestId]),
+      this.loadFbsAssemblyFacts(document.requestId),
+    ]);
+    const activeTsdProcesses = activeProcessesByRequest.get(document.requestId) ?? [];
     let activeTsdProcess = activeTsdProcesses[0] ?? null;
     const foundSearchBoxCodes = await this.loadFoundBoxSearchCodes(
       document.requestId,
@@ -750,6 +754,69 @@ export class TsdAssemblyService {
       moveTasks: movementTasks,
       movementBoxes: groupTasksByBox(movementTasks),
       movementProgress,
+      fbsAssembly,
+    };
+  }
+
+  private async loadFbsAssemblyFacts(requestId: string) {
+    const [links, rows] = await Promise.all([
+      this.prisma.fbsOrderRequestLink.findMany({
+        where: { requestId },
+        select: { orderId: true },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.fbsTsdAssembly.findMany({
+        where: { requestId, status: { not: 'RELEASED' } },
+        select: {
+          id: true,
+          orderId: true,
+          skuId: true,
+          productName: true,
+          article: true,
+          boxCode: true,
+          barcode: true,
+          stickerPartB: true,
+          stickerBarcode: true,
+          status: true,
+          workerName: true,
+          completedAt: true,
+          updatedAt: true,
+        },
+        orderBy: [{ completedAt: 'desc' }, { updatedAt: 'desc' }],
+      }),
+    ]);
+    if (links.length === 0) {
+      return null;
+    }
+    const skuIds = uniqueSorted(rows.map((row) => row.skuId));
+    const skus = skuIds.length > 0
+      ? await this.prisma.sku.findMany({
+          where: { id: { in: skuIds } },
+          select: { id: true, size: true },
+        })
+      : [];
+    const sizeBySkuId = new Map(skus.map((sku) => [sku.id, sku.size]));
+    const facts = rows.map((row) => ({
+      id: row.id,
+      orderId: row.orderId,
+      sourceBoxCode: row.boxCode,
+      productName: row.productName,
+      article: row.article,
+      productBarcode: row.barcode,
+      size: sizeBySkuId.get(row.skuId) ?? null,
+      wbStickerPartB: row.stickerPartB,
+      wbStickerBarcode: row.stickerBarcode,
+      status: row.status,
+      statusLabel: fbsAssemblyStatusLabel(row.status),
+      workerName: row.workerName,
+      completedAt: row.completedAt?.toISOString() ?? null,
+      updatedAt: row.updatedAt.toISOString(),
+    }));
+    return {
+      totalOrders: links.length,
+      startedOrders: facts.length,
+      completedOrders: facts.filter((row) => row.status === 'COMPLETED').length,
+      rows: facts,
     };
   }
 
@@ -2184,6 +2251,14 @@ function uniqueSorted(values: string[]) {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort((left, right) =>
     left.localeCompare(right, 'ru', { numeric: true }),
   );
+}
+
+function fbsAssemblyStatusLabel(status: string) {
+  return ({
+    IN_PROGRESS: 'В работе',
+    COMPLETED: 'Собрано',
+    RELEASED: 'Отложено',
+  } as Record<string, string>)[status] ?? status;
 }
 
 function decimalToNumber(value: { toNumber?: () => number } | number | string | null | undefined) {
