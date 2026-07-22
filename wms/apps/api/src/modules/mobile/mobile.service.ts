@@ -924,13 +924,13 @@ export class MobileService {
     const setting = await this.prisma.systemSetting.findUnique({ where: { key: 'mobile.android.version' } });
     const value = asRecord(setting?.value);
     return {
-      currentVersion: stringValue(value.currentVersion, '0.3.9'),
+      currentVersion: stringValue(value.currentVersion, '0.3.10'),
       minimumVersion: stringValue(value.minimumVersion, '0.1.0'),
       mandatory: value.mandatory === true,
       apkUrl: stringValue(value.apkUrl, '/downloads/logoff-wms-mobile.apk'),
       releaseNotes: stringValue(
         value.releaseNotes,
-        'FBS: передача поставок WB, отмена и повторная отгрузка заказов, пакетные действия по поставке, пропуска WB и автоматические счета за обработку. Передача КИЗ не используется.',
+        'В FBS добавлен отдельный раздел «Отменённые заказы». Отмены продавца, покупателя и перевозчика больше не смешиваются с завершёнными заказами в архиве.',
       ),
       updatedAt: setting?.updatedAt ?? null,
     };

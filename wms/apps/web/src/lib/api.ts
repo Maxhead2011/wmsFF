@@ -1767,7 +1767,7 @@ export type MarketplaceProductSyncResult = {
   }>;
 };
 
-export type FbsOrderCategory = 'active' | 'shipped' | 'archive';
+export type FbsOrderCategory = 'active' | 'shipped' | 'cancelled' | 'archive';
 export type FbsDeliveryDestination = 'PICKUP_POINT' | 'VNUKOVO_SORTING_CENTER';
 
 export type FbsOrderSummary = {
@@ -1863,6 +1863,7 @@ export type ClientFbsOrders = {
   counts: {
     active: number;
     shipped: number;
+    cancelled: number;
     archive: number;
     all: number;
   };

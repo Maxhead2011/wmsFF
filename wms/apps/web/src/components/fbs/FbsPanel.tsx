@@ -66,7 +66,7 @@ type FbsPanelProps = {
   session: AuthSession;
 };
 
-type FbsView = 'active' | 'shipped' | 'cost' | 'calculator' | 'archive' | 'passes' | 'pricing';
+type FbsView = 'active' | 'shipped' | 'cancelled' | 'cost' | 'calculator' | 'archive' | 'passes' | 'pricing';
 type OrdersState =
   | { status: 'idle'; data: null; error: '' }
   | { status: 'loading'; data: ClientFbsOrders | null; error: '' }
@@ -89,6 +89,13 @@ const fbsViews = [
     accent: 'green',
   },
   {
+    id: 'cancelled' as const,
+    title: 'Отменённые заказы',
+    description: 'Заказы, отменённые продавцом, покупателем или перевозчиком.',
+    icon: XCircle,
+    accent: 'red',
+  },
+  {
     id: 'cost' as const,
     title: 'Стоимость обработки FBS',
     description: 'Отгруженные заказы, тарифы, начисления и выставленные счета.',
@@ -105,7 +112,7 @@ const fbsViews = [
   {
     id: 'archive' as const,
     title: 'Архив',
-    description: 'Завершённые и отменённые заказы.',
+    description: 'Завершённые заказы, полученные покупателями.',
     icon: Archive,
     accent: 'slate',
   },
@@ -265,6 +272,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
   const tileCounts: Record<FbsView, number | string> = {
     active: activeOrdersTotal,
     shipped: data?.counts.shipped ?? 0,
+    cancelled: data?.counts.cancelled ?? 0,
     cost: data?.counts.shipped ?? 0,
     calculator: '1–3000',
     archive: data?.counts.archive ?? 0,
@@ -667,7 +675,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
           <FbsNotice icon={RefreshCw} title="Получаю заказы" text="Проверяем подключённые кабинеты Wildberries и Ozon." />
         ) : activeView === 'cost' ? (
           <FbsCostView data={data} />
-        ) : activeView === 'active' || activeView === 'shipped' || activeView === 'archive' ? (
+        ) : activeView === 'active' || activeView === 'shipped' || activeView === 'cancelled' || activeView === 'archive' ? (
           <FbsOrdersView
             data={data}
             view={activeView}
@@ -1014,8 +1022,9 @@ function FbsOrdersView({
           .some((value) => String(value).toLowerCase().includes(normalizedSearch)),
       )
     : orders;
+  const readOnlyView = view === 'archive' || view === 'cancelled';
   const orderGroups = groupFbsOrdersBySupply(visibleOrders);
-  const tableColumnCount = 6 + (view !== 'archive' ? 1 : 0) + (view === 'active' ? 1 : 0);
+  const tableColumnCount = 6 + (!readOnlyView ? 1 : 0) + (view === 'active' ? 1 : 0);
   const itemsCount = visibleOrders.reduce((sum, order) => sum + Math.max(1, order.itemCount), 0);
   const visibleKeys = visibleOrders.map(fbsOrderSelectionKey);
   const selectedOrders = visibleOrders.filter((order) => selectedOrderKeys.has(fbsOrderSelectionKey(order)));
@@ -1081,7 +1090,12 @@ function FbsOrdersView({
     archive: {
       icon: Archive,
       title: 'Архив FBS пока пуст',
-      text: 'Отменённые и закрытые заказы за последние 30 дней будут храниться здесь.',
+      text: 'Завершённые заказы за последние 30 дней будут храниться здесь.',
+    },
+    cancelled: {
+      icon: XCircle,
+      title: 'Отменённых FBS-заказов пока нет',
+      text: 'Заказы, отменённые продавцом, покупателем или перевозчиком, будут собраны здесь.',
     },
   }[view];
   const EmptyIcon = emptyCopy.icon;
@@ -1110,7 +1124,7 @@ function FbsOrdersView({
         </article>
       </div>
 
-      {view !== 'archive' && visibleOrders.length > 0 ? (
+      {!readOnlyView && visibleOrders.length > 0 ? (
         <div className="fbs-order-actions">
           <div className="fbs-order-actions__selection">
             <strong>Выбрано: {selectedOrders.length}</strong>
@@ -1210,7 +1224,7 @@ function FbsOrdersView({
         <table className="fbs-table">
           <thead>
             <tr>
-              {view !== 'archive' ? (
+              {!readOnlyView ? (
                 <th className="fbs-table__check">
                   <input
                     type="checkbox"
@@ -1287,7 +1301,7 @@ function FbsOrdersView({
                   key={`${order.marketplace}:${order.connectionId}:${order.id}`}
                   order={order}
                   showBoxes={view === 'active'}
-                  selectable={view !== 'archive'}
+                  selectable={!readOnlyView}
                   selected={selectedOrderKeys.has(fbsOrderSelectionKey(order))}
                   onToggle={() => toggleOrder(order)}
                   actionsDisabled={orderAction !== null}

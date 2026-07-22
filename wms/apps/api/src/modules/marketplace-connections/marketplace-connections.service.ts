@@ -77,7 +77,7 @@ type FbsOrderSummary = {
   connectionId: string;
   accountName: string | null;
   marketplace: MarketplaceType;
-  category: 'active' | 'shipped' | 'archive';
+  category: 'active' | 'shipped' | 'cancelled' | 'archive';
   supplierStatus: string;
   wbStatus: string;
   statusLabel: string;
@@ -153,7 +153,7 @@ type FbsOrdersResponse = {
     itemsPerCargoPlace: number;
     requiresCargoPlaces: boolean;
   };
-  counts: { active: number; shipped: number; archive: number; all: number };
+  counts: { active: number; shipped: number; cancelled: number; archive: number; all: number };
   orders: FbsOrderSummary[];
 };
 
@@ -1582,7 +1582,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         connections: [],
         fetchedAt,
         deliveryPlan,
-        counts: { active: 0, shipped: 0, archive: 0, all: 0 },
+        counts: { active: 0, shipped: 0, cancelled: 0, archive: 0, all: 0 },
         orders: [],
       };
     }
@@ -1779,6 +1779,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       counts: {
         active: orders.filter((order) => order.category === 'active').length,
         shipped: orders.filter((order) => order.category === 'shipped').length,
+        cancelled: orders.filter((order) => order.category === 'cancelled').length,
         archive: orders.filter((order) => order.category === 'archive').length,
         all: orders.length,
       },
@@ -2873,19 +2874,19 @@ async function fetchWildberriesFbsHistory(headers: Record<string, string>) {
   return orders;
 }
 
-function fbsOrderCategory(supplierStatus: string, wbStatus: string): 'active' | 'shipped' | 'archive' {
-  const archiveSupplierStatuses = new Set(['cancel', 'cancel_carrier', 'cancelled', 'canceled']);
-  const archiveWbStatuses = new Set([
-    'sold',
+function fbsOrderCategory(supplierStatus: string, wbStatus: string): 'active' | 'shipped' | 'cancelled' | 'archive' {
+  const cancelledSupplierStatuses = new Set(['cancel', 'cancel_carrier', 'cancelled', 'canceled']);
+  const cancelledWbStatuses = new Set([
     'canceled',
     'canceled_by_client',
     'declined_by_client',
     'defect',
     'canceled_by_carrier',
   ]);
-  if (archiveSupplierStatuses.has(supplierStatus) || archiveWbStatuses.has(wbStatus)) {
-    return 'archive';
+  if (cancelledSupplierStatuses.has(supplierStatus) || cancelledWbStatuses.has(wbStatus)) {
+    return 'cancelled';
   }
+  if (wbStatus === 'sold') return 'archive';
   if (['complete', 'delivering', 'delivered'].includes(supplierStatus)) {
     return 'shipped';
   }

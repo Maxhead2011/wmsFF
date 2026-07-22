@@ -54,6 +54,7 @@ public class FbsFragment extends Fragment {
     private static final String SHIPPED = "shipped";
     private static final String COST = "cost";
     private static final String ARCHIVE = "archive";
+    private static final String CANCELLED = "cancelled";
     private static final String CALCULATOR = "calculator";
     private static final String PRICING = "pricing";
     private static final String PASSES = "passes";
@@ -389,6 +390,7 @@ public class FbsFragment extends Fragment {
         Map<String, Object> counts = map(orderData.get("counts"));
         addSectionCard("Активные заказы", count(counts.get("active")), ACTIVE, R.color.logoff_red, false);
         addSectionCard("Отгруженные", count(counts.get("shipped")), SHIPPED, R.color.logoff_success, false);
+        addSectionCard("Отменённые заказы", count(counts.get("cancelled")), CANCELLED, R.color.logoff_red, false);
         addSectionCard("Стоимость обработки", "Расчёт", COST, R.color.logoff_warning, false);
         addSectionCard("Архив", count(counts.get("archive")), ARCHIVE, R.color.logoff_black, false);
         addSectionCard("Пропуска WB", "Автомобили и склады", PASSES, R.color.logoff_blue, false);
@@ -902,7 +904,9 @@ public class FbsFragment extends Fragment {
                 firstNonBlank(AppState.string(order.get("statusLabel")), "Статус уточняется"),
                 12,
                 SHIPPED.equals(AppState.string(order.get("category")))
-                        ? R.color.logoff_success : R.color.logoff_warning,
+                        ? R.color.logoff_success
+                        : CANCELLED.equals(AppState.string(order.get("category")))
+                        ? R.color.logoff_red : R.color.logoff_warning,
                 Typeface.BOLD
         );
         LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(-1, -2);
@@ -2505,12 +2509,13 @@ public class FbsFragment extends Fragment {
 
     private boolean isOrderSection() {
         return ACTIVE.equals(section) || SHIPPED.equals(section)
-                || COST.equals(section) || ARCHIVE.equals(section);
+                || COST.equals(section) || CANCELLED.equals(section) || ARCHIVE.equals(section);
     }
 
     private String titleForSection() {
         if (SHIPPED.equals(section)) return "Отгруженные";
         if (COST.equals(section)) return "Стоимость обработки FBS";
+        if (CANCELLED.equals(section)) return "Отменённые заказы FBS";
         if (ARCHIVE.equals(section)) return "Архив FBS";
         return "Активные заказы FBS";
     }
