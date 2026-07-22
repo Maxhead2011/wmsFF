@@ -238,7 +238,13 @@ export function AnalyticsPanel({ session }: AnalyticsPanelProps) {
             <MetricCard icon={DollarSign} label="Заказы, сумма" value={money(dashboard.totals.ordersSum, dashboard.sync.currency)} detail={`${integer(dashboard.totals.orders)} заказов`} tone="violet" />
             <MetricCard icon={PackageCheck} label="Выкупы" value={`${decimal(dashboard.totals.buyoutPercent)}%`} detail={money(dashboard.totals.buyoutsSum, dashboard.sync.currency)} tone="green" />
             <MetricCard icon={Warehouse} label="Остаток на WB" value={`${integer(dashboard.totals.wbStock)} шт.`} detail={`${integer(dashboard.totals.products)} карточек`} tone="blue" />
-            <MetricCard icon={Boxes} label="Остаток в LOGOFF" value={`${integer(dashboard.totals.wmsStock)} шт.`} detail="Доступный остаток WMS" tone="cyan" />
+              <MetricCard
+                icon={Boxes}
+                label="Остаток в LOGOFF"
+                value={`${integer(dashboard.totals.wmsStock)} шт.`}
+                detail={`Связано с WB: ${integer(dashboard.totals.wmsMatchedStock)} · вне отчёта WB: ${integer(dashboard.totals.wmsUnlinkedStock)}`}
+                tone="cyan"
+              />
             <MetricCard icon={TriangleAlert} label="Упущенные заказы" value={money(dashboard.totals.lostOrdersSum, dashboard.sync.currency)} detail={`${dashboard.totals.outOfStock} без остатка · ${dashboard.totals.lowStock} дефицит`} tone="orange" />
           </section>
 

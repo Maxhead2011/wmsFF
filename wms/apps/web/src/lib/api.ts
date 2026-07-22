@@ -167,6 +167,9 @@ export type AnalyticsDashboard = {
     activeProducts: number;
     wbStock: number;
     wmsStock: number;
+    wmsMatchedStock: number;
+    wmsUnlinkedStock: number;
+    wmsMatchPercent: number;
     orders: number;
     ordersSum: number;
     buyouts: number;

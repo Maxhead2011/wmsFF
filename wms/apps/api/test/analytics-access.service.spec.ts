@@ -20,4 +20,71 @@ describe('AnalyticsService access', () => {
       }),
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
+
+  it('показывает полный остаток WMS отдельно от сопоставленной с отчётом WB части', async () => {
+    const prisma = {
+      client: { findUnique: async () => ({ id: 'client-1', code: 'CL-1', name: 'Клиент' }) },
+      stockBalance: { aggregate: async () => ({ _sum: { quantity: 27_337 } }) },
+      sku: {
+        findMany: async () => [
+          { marketplaceProductId: '100:1', balances: [{ quantity: 10_000 }] },
+          { marketplaceProductId: '100:2', balances: [{ quantity: 6_363 }] },
+          { marketplaceProductId: '999:1', balances: [{ quantity: 10_973 }] },
+        ],
+      },
+    };
+    const analytics = {
+      analyticsConnection: { findUnique: async () => null },
+      analyticsSyncState: { findUnique: async () => null },
+      analyticsProduct: {
+        findMany: async () => [
+          {
+            nmId: '100',
+            name: 'Товар',
+            vendorCode: null,
+            brandName: null,
+            subjectName: null,
+            photoUrl: null,
+            availability: null,
+            stockCount: 1,
+            stockSum: 0,
+            avgOrders: 0,
+            orderCount: 0,
+            orderSum: 0,
+            funnelBuyoutCount: 0,
+            funnelBuyoutSum: 0,
+            lostOrdersCount: 0,
+            lostOrdersSum: 0,
+            cartToOrderPercent: 0,
+            openCount: 0,
+            orderCountDynamic: 0,
+          },
+        ],
+      },
+      analyticsRegion: { findMany: async () => [] },
+      analyticsDailySummary: { findMany: async () => [] },
+    };
+    const clientScopes = { requireClientAccess: () => undefined };
+    const service = new AnalyticsService(prisma as never, analytics as never, clientScopes as never, {} as never);
+
+    const result = await service.dashboard(
+      { clientId: 'client-1', periodDays: 30, limit: 100, offset: 0 },
+      {
+        id: 'admin-1',
+        email: 'admin',
+        name: 'Администратор',
+        analyticsEnabled: true,
+        roleCodes: ['ADMIN'],
+        permissionCodes: ['system:admin'],
+        clientScopeMode: 'ALL',
+        clientIds: [],
+        writableClientIds: [],
+      },
+    );
+
+    expect(result.totals.wmsStock).toBe(27_337);
+    expect(result.totals.wmsMatchedStock).toBe(16_363);
+    expect(result.totals.wmsUnlinkedStock).toBe(10_974);
+    expect(result.products.items[0].wmsStock).toBe(16_363);
+  });
 });

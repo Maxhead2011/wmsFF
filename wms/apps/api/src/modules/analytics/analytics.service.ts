@@ -21,6 +21,7 @@ import { UpsertAnalyticsConnectionDto } from './dto/upsert-analytics-connection.
 const WB_ANALYTICS_URL = 'https://seller-analytics-api.wildberries.ru';
 const WB_COMMON_URL = 'https://common-api.wildberries.ru';
 const PAGE_LIMIT = 1000;
+const WMS_STOCK_STATUSES: StockStatus[] = [StockStatus.AVAILABLE, StockStatus.PACKING, StockStatus.SHIPPING];
 
 @Injectable()
 export class AnalyticsService {
@@ -216,13 +217,13 @@ export class AnalyticsService {
     ]);
     if (!client) throw new NotFoundException('Клиент не найден.');
 
-    const wmsStockMap = await this.wmsStock(query.clientId, storedProducts.map((product) => product.nmId));
+    const wmsStock = await this.wmsStock(query.clientId, storedProducts.map((product) => product.nmId));
     const products = storedProducts.map((product) => ({
       ...product,
-      wmsStock: wmsStockMap.get(product.nmId)?.quantity ?? 0,
-      wmsSkuCount: wmsStockMap.get(product.nmId)?.skuCount ?? 0,
+      wmsStock: wmsStock.byNmId.get(product.nmId)?.quantity ?? 0,
+      wmsSkuCount: wmsStock.byNmId.get(product.nmId)?.skuCount ?? 0,
     }));
-    const totals = dashboardTotals(products);
+    const totals = dashboardTotals(products, wmsStock);
     const recommendations = buildRecommendations(products);
     const filtered = products.filter((product) => matchesProduct(product, query.search, query.availability));
     const offset = query.offset ?? 0;
@@ -353,32 +354,49 @@ export class AnalyticsService {
   }
 
   private async wmsStock(clientId: string, nmIds: string[]) {
-    if (nmIds.length === 0) return new Map<string, { quantity: number; skuCount: number }>();
     const requestedNmIds = new Set(nmIds);
-    const skus = await this.prisma.sku.findMany({
-      where: {
-        clientId,
-        marketplace: MarketplaceType.WILDBERRIES,
-        marketplaceProductId: { not: null },
-        balances: { some: { status: StockStatus.AVAILABLE, quantity: { gt: 0 } } },
-      },
-      select: {
-        marketplaceProductId: true,
-        balances: { where: { status: StockStatus.AVAILABLE, quantity: { gt: 0 } }, select: { quantity: true } },
-      },
-    });
-    const result = new Map<string, { quantity: number; skuCount: number }>();
+    const [total, skus] = await Promise.all([
+      this.prisma.stockBalance.aggregate({
+        where: { clientId, quantity: { gt: 0 }, status: { in: WMS_STOCK_STATUSES } },
+        _sum: { quantity: true },
+      }),
+      this.prisma.sku.findMany({
+        where: {
+          clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          marketplaceProductId: { not: null },
+          balances: { some: { status: { in: WMS_STOCK_STATUSES }, quantity: { gt: 0 } } },
+        },
+        select: {
+          marketplaceProductId: true,
+          balances: {
+            where: { status: { in: WMS_STOCK_STATUSES }, quantity: { gt: 0 } },
+            select: { quantity: true },
+          },
+        },
+      }),
+    ]);
+    const byNmId = new Map<string, { quantity: number; skuCount: number }>();
+    let matchedQuantity = 0;
     for (const sku of skus) {
       if (!sku.marketplaceProductId) continue;
       // WB stores the product and size as "nmId:sizeId" in the WMS card; analytics is aggregated by nmId.
       const nmId = sku.marketplaceProductId.split(':', 1)[0];
       if (!requestedNmIds.has(nmId)) continue;
-      const current = result.get(nmId) ?? { quantity: 0, skuCount: 0 };
-      current.quantity += sku.balances.reduce((sum, balance) => sum + balance.quantity, 0);
+      const current = byNmId.get(nmId) ?? { quantity: 0, skuCount: 0 };
+      const quantity = sku.balances.reduce((sum, balance) => sum + balance.quantity, 0);
+      current.quantity += quantity;
       current.skuCount += 1;
-      result.set(nmId, current);
+      matchedQuantity += quantity;
+      byNmId.set(nmId, current);
     }
-    return result;
+    const totalQuantity = total._sum.quantity ?? 0;
+    return {
+      byNmId,
+      totalQuantity,
+      matchedQuantity,
+      unlinkedQuantity: Math.max(0, totalQuantity - matchedQuantity),
+    };
   }
 
   private assertAnalyticsAccess(user: AuthUser) {
@@ -555,14 +573,19 @@ type DashboardProduct = Awaited<ReturnType<AnalyticsPrismaService['analyticsProd
   wmsSkuCount: number;
 };
 
-function dashboardTotals(products: DashboardProduct[]) {
+type WmsStockSnapshot = Awaited<ReturnType<AnalyticsService['wmsStock']>>;
+
+function dashboardTotals(products: DashboardProduct[], wmsStock: WmsStockSnapshot) {
   const orderCount = sum(products, (product) => product.orderCount);
   const buyoutCount = sum(products, (product) => product.funnelBuyoutCount);
   return {
     products: products.length,
     activeProducts: products.filter((product) => product.orderCount > 0).length,
     wbStock: sum(products, (product) => product.stockCount),
-    wmsStock: sum(products, (product) => product.wmsStock),
+    wmsStock: wmsStock.totalQuantity,
+    wmsMatchedStock: wmsStock.matchedQuantity,
+    wmsUnlinkedStock: wmsStock.unlinkedQuantity,
+    wmsMatchPercent: wmsStock.totalQuantity > 0 ? (wmsStock.matchedQuantity / wmsStock.totalQuantity) * 100 : 100,
     orders: orderCount,
     ordersSum: sum(products, (product) => product.orderSum),
     buyouts: buyoutCount,
