@@ -900,10 +900,19 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     }
     const mapping = { ...existing };
+    stickers.forEach((sticker, index) => {
+      const barcode = textValue(sticker.barcode);
+      const id = cargoPlaceIdFromWbBarcode(cargoPlaceIds, barcode) ?? cargoPlaceIds[index];
+      if (id && barcode) mapping[id] = barcode;
+    });
     cargoPlaceIds.forEach((id, index) => {
+      if (mapping[id]) return;
       const barcode = textValue(stickers[index]?.barcode);
       if (barcode) mapping[id] = barcode;
     });
+    if (cargoPlaceIds.some((id) => !mapping[id])) {
+      throw new BadRequestException(`Не удалось сопоставить QR с грузоместами поставки ${plan.supplyId}.`);
+    }
     await this.prisma.fbsSupplyPlan.update({
       where: { id: plan.id },
       data: { cargoPlaceBarcodes: mapping as Prisma.InputJsonValue },
@@ -4452,6 +4461,12 @@ function cargoBarcodeMap(value: Prisma.JsonValue | null | undefined) {
     if (normalizedId && normalizedBarcode) result[normalizedId] = normalizedBarcode;
     return result;
   }, {});
+}
+
+function cargoPlaceIdFromWbBarcode(cargoPlaceIds: string[], barcode: string) {
+  const suffix = barcode.split(':').pop()?.trim();
+  if (!suffix) return undefined;
+  return cargoPlaceIds.find((id) => id.match(/(\d+)$/)?.[1] === suffix);
 }
 
 function formatFbsCargoPacking(
