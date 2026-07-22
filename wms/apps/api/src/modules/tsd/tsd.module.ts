@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { StockModule } from '../stock/stock.module';
+import { MarketplaceConnectionsModule } from '../marketplace-connections/marketplace-connections.module';
 import { TsdDeviceController } from './tsd-device.controller';
 import { TsdAssemblyService } from './tsd-assembly.service';
 import { TsdDeviceService } from './tsd-device.service';
@@ -12,7 +13,7 @@ import { TsdSyncController } from './tsd-sync.controller';
 import { TsdSyncService } from './tsd-sync.service';
 
 @Module({
-  imports: [AuthModule, StockModule],
+  imports: [AuthModule, StockModule, MarketplaceConnectionsModule],
   controllers: [TsdDeviceController, TsdSyncController],
   providers: [
     TsdAssemblyService,

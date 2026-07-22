@@ -8,5 +8,6 @@ import { MarketplaceConnectionsService } from './marketplace-connections.service
   imports: [AuthModule, LogisticsModule],
   controllers: [MarketplaceConnectionsController],
   providers: [MarketplaceConnectionsService],
+  exports: [MarketplaceConnectionsService],
 })
 export class MarketplaceConnectionsModule {}

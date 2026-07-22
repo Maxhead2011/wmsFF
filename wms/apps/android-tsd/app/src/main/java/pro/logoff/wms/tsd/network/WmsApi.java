@@ -31,6 +31,45 @@ public interface WmsApi {
     @GET("api/v1/tsd/clients")
     Call<List<TsdClientSummary>> listClients(@Header("Authorization") String authorization);
 
+    @GET("api/v1/tsd/fbs/next")
+    Call<TsdFbsAssemblyResponse> nextFbsAssembly(
+        @Header("Authorization") String authorization,
+        @Query("deviceCode") String deviceCode
+    );
+
+    @POST("api/v1/tsd/fbs/tasks/{id}/scan-box")
+    Call<TsdFbsAssemblyResponse> scanFbsBox(
+        @Header("Authorization") String authorization,
+        @Path("id") String id,
+        @Body Map<String, Object> request
+    );
+
+    @POST("api/v1/tsd/fbs/tasks/{id}/scan-barcode")
+    Call<TsdFbsAssemblyResponse> scanFbsBarcode(
+        @Header("Authorization") String authorization,
+        @Path("id") String id,
+        @Body Map<String, Object> request
+    );
+
+    @POST("api/v1/tsd/fbs/tasks/{id}/scan-kiz")
+    Call<TsdFbsAssemblyResponse> scanFbsKiz(
+        @Header("Authorization") String authorization,
+        @Path("id") String id,
+        @Body Map<String, Object> request
+    );
+
+    @POST("api/v1/tsd/fbs/tasks/{id}/complete")
+    Call<TsdFbsAssemblyResponse> completeFbsAssembly(
+        @Header("Authorization") String authorization,
+        @Path("id") String id
+    );
+
+    @POST("api/v1/tsd/fbs/tasks/{id}/release")
+    Call<TsdFbsAssemblyResponse> releaseFbsAssembly(
+        @Header("Authorization") String authorization,
+        @Path("id") String id
+    );
+
     @POST("api/v1/tsd/receipts/open-box")
     Call<Map<String, Object>> openReceiptBox(
         @Header("Authorization") String authorization,

@@ -2,15 +2,21 @@ package pro.logoff.wms.tsd;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.Dialog;
+import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.media.AudioManager;
+import android.media.ToneGenerator;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
@@ -56,6 +62,7 @@ import pro.logoff.wms.tsd.network.TsdAssemblyProcess;
 import pro.logoff.wms.tsd.network.TsdAssemblyPlan;
 import pro.logoff.wms.tsd.network.TsdAssemblyRequestSummary;
 import pro.logoff.wms.tsd.network.TsdBoxlessPackingResponse;
+import pro.logoff.wms.tsd.network.TsdFbsAssemblyResponse;
 import pro.logoff.wms.tsd.network.TsdMovementTask;
 import pro.logoff.wms.tsd.network.TsdOperationRequest;
 import pro.logoff.wms.tsd.network.TsdRelabelTask;
@@ -77,8 +84,8 @@ import retrofit2.Response;
 public class MainActivity extends Activity {
     private static final int CAMERA_PERMISSION_REQUEST = 4201;
     private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
-    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.68";
-    private static final String APP_VERSION = "0.1.68";
+    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.69";
+    private static final String APP_VERSION = "0.1.69";
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int BOX_FOUND_GREEN = Color.rgb(187, 247, 208);
     private static final int BOX_DUPLICATE_BLUE = Color.rgb(191, 219, 254);
@@ -119,12 +126,14 @@ public class MainActivity extends Activity {
     private EditText inventoryItemInput;
     private EditText inventoryQuantityInput;
     private EditText inventoryTransferTargetInput;
+    private EditText fbsScanInput;
     private TsdAssemblyPlan assemblyPlan;
     private TsdBoxlessPackingResponse boxlessPacking;
     private TsdRelabelTask activeRelabelTask;
     private TsdInventorySession activeInventory;
     private TsdInventoryBox activeInventoryBox;
     private TsdInventoryDashboard inventoryDashboard;
+    private TsdFbsAssemblyResponse fbsAssembly;
     private String inventoryType = "";
     private String inventoryClientId = "";
     private String transferredInventoryBoxId = "";
@@ -156,6 +165,8 @@ public class MainActivity extends Activity {
     private String statusMessage = "";
     private Runnable receiptBoxAutoOpenTask;
     private boolean receiptOpeningBox;
+    private boolean fbsBusy;
+    private int fbsFeedbackColor;
     private String lastAssemblyTouchKey = "";
     private long lastAssemblyTouchAt = 0L;
     private int boxSearchFeedbackColor = 0;
@@ -215,6 +226,10 @@ public class MainActivity extends Activity {
             }
             if (screen == Screen.OUTGOING_CONTROL && assemblyScanInput != null) {
                 submitOutgoingBoxScan();
+                return true;
+            }
+            if (screen == Screen.FBS_ASSEMBLY && fbsScanInput != null) {
+                submitFbsScan();
                 return true;
             }
             if (screen == Screen.INVENTORY_COUNT) {
@@ -278,6 +293,7 @@ public class MainActivity extends Activity {
         root.addView(mainStatusLine());
         root.addView(primaryMenuButton(tr("Приемка товара", "Tovarni qabul qilish"), view -> openReceipt()));
         root.addView(primaryMenuButton(tr("Сборка заявки", "Buyurtmani yig‘ish"), view -> openAssemblyRequests()));
+        root.addView(primaryMenuButton(tr("Сборка FBS", "FBS buyurtmasini yig‘ish"), view -> openFbsAssembly()));
         root.addView(primaryMenuButton(tr("Инвентаризация", "Inventarizatsiya"), view -> renderInventoryMenu()));
         root.addView(primaryMenuButton(
             phoneMode
@@ -1208,6 +1224,317 @@ public class MainActivity extends Activity {
         root.addView(secondaryButton("Скачать приложение заново", view -> openApkDownload()));
         root.addView(versionView());
         setScrollableContent(root);
+    }
+
+    private void openFbsAssembly() {
+        if (safeSession() == null) {
+            statusMessage = tr("Сначала выполните вход в настройках.", "Avval sozlamalarda tizimga kiring.");
+            renderSettingsScreen();
+            return;
+        }
+        fbsAssembly = null;
+        fbsFeedbackColor = 0;
+        statusMessage = tr("Получаю следующий заказ...", "Keyingi buyurtma olinmoqda...");
+        loadNextFbsAssembly();
+    }
+
+    private void loadNextFbsAssembly() {
+        TsdSession session = safeSession();
+        if (session == null) {
+            renderSettingsScreen();
+            return;
+        }
+        screen = Screen.FBS_ASSEMBLY;
+        fbsBusy = true;
+        renderFbsAssemblyScreen();
+        runBackground(() -> {
+            Response<TsdFbsAssemblyResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                .nextFbsAssembly(session.authorizationHeader(), session.deviceCode)
+                .execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                String message = responseErrorMessage(response, tr(
+                    "Не удалось получить очередь FBS. Повторите через минуту.",
+                    "FBS navbatini olib bo‘lmadi. Bir daqiqadan so‘ng takrorlang."
+                ));
+                mainHandler.post(() -> showFbsError(message, response.code() < 500));
+                return;
+            }
+            TsdFbsAssemblyResponse loaded = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                fbsBusy = false;
+                fbsFeedbackColor = 0;
+                fbsAssembly = loaded;
+                statusMessage = nonEmpty(loaded.message, tr("Следуйте подсказке.", "Ko‘rsatmaga amal qiling."));
+                renderFbsAssemblyScreen();
+            });
+        });
+    }
+
+    private void renderFbsAssemblyScreen() {
+        screen = Screen.FBS_ASSEMBLY;
+        fbsScanInput = null;
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title(tr("Сборка FBS", "FBS buyurtmasini yig‘ish")));
+        int completedToday = fbsAssembly != null && fbsAssembly.progress != null
+            ? fbsAssembly.progress.completedToday
+            : 0;
+        root.addView(messageView(tr("Собрано сегодня: ", "Bugun yig‘ildi: ") + completedToday));
+
+        if (fbsBusy) {
+            root.addView(feedbackView(
+                tr("Подождите, загружаю заказ...", "Kutib turing, buyurtma yuklanmoqda..."),
+                BOX_DUPLICATE_BLUE
+            ));
+        }
+
+        TsdFbsAssemblyResponse.Task task = fbsAssembly == null ? null : fbsAssembly.task;
+        if (task == null) {
+            if (!fbsBusy) {
+                root.addView(feedbackView(
+                    nonEmpty(statusMessage, tr("Готовых заказов пока нет.", "Hozircha tayyor buyurtmalar yo‘q.")),
+                    fbsFeedbackColor == 0 ? LIGHT_GRAY : fbsFeedbackColor
+                ));
+                root.addView(primaryMenuButton(
+                    tr("Проверить ещё раз", "Yana tekshirish"),
+                    view -> loadNextFbsAssembly()
+                ));
+            }
+            root.addView(secondaryButton(tr("Назад", "Orqaga"), view -> renderMainScreen()));
+            setScrollableContent(root);
+            refreshHeaderText();
+            return;
+        }
+
+        String clientName = task.client == null ? "-" : nonEmpty(task.client.name, task.client.code);
+        String productName = task.product == null ? "-" : nonEmpty(task.product.name, "-");
+        String article = task.product == null ? "-" : nonEmpty(task.product.article, "-");
+        root.addView(taskRow(
+            tr("Заказ WB №", "WB buyurtmasi №") + nonEmpty(task.orderId, "-"),
+            tr("Клиент: ", "Mijoz: ") + clientName + "\n" +
+                productName + " · " + tr("арт. ", "art. ") + article,
+            LIGHT_GRAY
+        ));
+        if (fbsFeedbackColor != 0 && !statusMessage.isEmpty()) {
+            root.addView(feedbackView(statusMessage, fbsFeedbackColor));
+        } else if (!statusMessage.isEmpty()) {
+            root.addView(messageView(statusMessage));
+        }
+
+        String state = nonEmpty(fbsAssembly.state, "SCAN_BOX");
+        if ("SCAN_BOX".equals(state)) {
+            String boxCode = nonEmpty(task.recommendedBoxCode, "-");
+            root.addView(feedbackView(
+                tr("1. НАЙДИТЕ И ОТСКАНИРУЙТЕ КОРОБ\n", "1. QUTINI TOPING VA SKANERLANG\n") + boxCode,
+                BOX_MOVEMENT_BLUE
+            ));
+            root.addView(messageView(
+                tr("В коробе есть нужный товар: ", "Qutida kerakli mahsulot bor: ") + productName
+            ));
+            fbsScanInput = input(tr("Сканируйте номер короба", "Quti raqamini skanerlang"));
+            root.addView(fbsScanInput);
+            root.addView(primaryMenuButton(
+                tr("Подтвердить короб", "Qutini tasdiqlash"),
+                view -> submitFbsScan()
+            ));
+        } else if ("SCAN_BARCODE".equals(state)) {
+            root.addView(feedbackView(
+                tr("Короб подтверждён: ", "Quti tasdiqlandi: ") + nonEmpty(task.scannedBoxCode, "-"),
+                BOX_FOUND_GREEN
+            ));
+            root.addView(feedbackView(
+                tr("2. ВОЗЬМИТЕ ТОВАР И ОТСКАНИРУЙТЕ ЕГО ШК\n", "2. MAHSULOTNI OLING VA SHKNI SKANERLANG\n") +
+                    productName + "\n" + tr("Артикул: ", "Artikul: ") + article,
+                BOX_MOVEMENT_BLUE
+            ));
+            fbsScanInput = input(tr("Сканируйте ШК товара", "Mahsulot SHK sini skanerlang"));
+            root.addView(fbsScanInput);
+            root.addView(primaryMenuButton(
+                tr("Подтвердить товар", "Mahsulotni tasdiqlash"),
+                view -> submitFbsScan()
+            ));
+        } else if ("SCAN_KIZ".equals(state)) {
+            root.addView(feedbackView(
+                tr("Товар подтверждён", "Mahsulot tasdiqlandi"),
+                BOX_FOUND_GREEN
+            ));
+            root.addView(feedbackView(
+                tr("3. ТЕПЕРЬ ОТСКАНИРУЙТЕ КИЗ DATA MATRIX\nНе сканируйте обычный ШК повторно.",
+                    "3. ENDI DATA MATRIX KIZNI SKANERLANG\nOddiy SHKni qayta skanerlamang."),
+                Color.rgb(254, 240, 138)
+            ));
+            fbsScanInput = input(tr("Сканируйте КИЗ", "KIZni skanerlang"));
+            root.addView(fbsScanInput);
+            root.addView(primaryMenuButton(
+                tr("Передать КИЗ в WB", "KIZni WBga yuborish"),
+                view -> submitFbsScan()
+            ));
+        } else if ("READY_TO_COMPLETE".equals(state)) {
+            String readyText = task.requiresKiz
+                ? tr("ШК и КИЗ подтверждены Wildberries.", "SHK va KIZ Wildberries tomonidan tasdiqlandi.")
+                : tr("Товар подтверждён. КИЗ не требуется.", "Mahsulot tasdiqlandi. KIZ talab qilinmaydi.");
+            root.addView(feedbackView(
+                tr("ВСЁ ВЕРНО\n", "HAMMASI TO‘G‘RI\n") + readyText,
+                BOX_FOUND_GREEN
+            ));
+            root.addView(primaryMenuButton(
+                tr("Готово — заказ собран", "Tayyor — buyurtma yig‘ildi"),
+                view -> completeFbsAssembly()
+            ));
+        } else if ("COMPLETED".equals(state)) {
+            root.addView(feedbackView(
+                tr("ГОТОВО\nЗаказ собран и записан в заявку.", "TAYYOR\nBuyurtma yig‘ildi va arizaga yozildi."),
+                BOX_FOUND_GREEN
+            ));
+            root.addView(primaryMenuButton(
+                tr("Следующий заказ", "Keyingi buyurtma"),
+                view -> loadNextFbsAssembly()
+            ));
+        }
+
+        if (!"COMPLETED".equals(state) && !task.kizAccepted) {
+            root.addView(secondaryButton(
+                tr("Проблема с товаром — отложить", "Mahsulotda muammo — keyinga qoldirish"),
+                view -> confirmReleaseFbsAssembly()
+            ));
+        }
+        root.addView(secondaryButton(tr("Обновить", "Yangilash"), view -> loadNextFbsAssembly()));
+        root.addView(secondaryButton(tr("В главное меню", "Bosh menyuga"), view -> renderMainScreen()));
+        setScrollableContent(root);
+        if (fbsScanInput != null) fbsScanInput.requestFocus();
+        refreshHeaderText();
+    }
+
+    private void submitFbsScan() {
+        if (fbsBusy || fbsAssembly == null || fbsAssembly.task == null) return;
+        String value = textValue(fbsScanInput);
+        if (value.isEmpty()) {
+            showFbsError(tr("Сначала отсканируйте код.", "Avval kodni skanerlang."), true);
+            return;
+        }
+        String state = nonEmpty(fbsAssembly.state, "");
+        if ("SCAN_BOX".equals(state)) {
+            executeFbsAction("scan-box", "boxCode", value);
+        } else if ("SCAN_BARCODE".equals(state)) {
+            executeFbsAction("scan-barcode", "barcode", value);
+        } else if ("SCAN_KIZ".equals(state)) {
+            executeFbsAction("scan-kiz", "kiz", value);
+        }
+    }
+
+    private void completeFbsAssembly() {
+        executeFbsAction("complete", null, null);
+    }
+
+    private void confirmReleaseFbsAssembly() {
+        if (fbsAssembly == null || fbsAssembly.task == null || fbsBusy) return;
+        new AlertDialog.Builder(this)
+            .setTitle(tr("Отложить заказ?", "Buyurtmani keyinga qoldirasizmi?"))
+            .setMessage(tr(
+                "Заказ вернётся в очередь. Используйте это только если товар или короб найти невозможно.",
+                "Buyurtma navbatga qaytadi. Faqat mahsulot yoki qutini topib bo‘lmasa foydalaning."
+            ))
+            .setNegativeButton(tr("Нет", "Yo‘q"), null)
+            .setPositiveButton(tr("Отложить", "Keyinga qoldirish"), (dialog, which) ->
+                executeFbsAction("release", null, null)
+            )
+            .show();
+    }
+
+    private void executeFbsAction(String action, String field, String value) {
+        TsdSession session = safeSession();
+        TsdFbsAssemblyResponse.Task currentTask = fbsAssembly == null ? null : fbsAssembly.task;
+        if (session == null || currentTask == null || fbsBusy) return;
+        fbsBusy = true;
+        fbsFeedbackColor = BOX_DUPLICATE_BLUE;
+        statusMessage = tr("Проверяю...", "Tekshirilmoqda...");
+        renderFbsAssemblyScreen();
+        String taskId = currentTask.id;
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Map<String, Object> payload = new LinkedHashMap<>();
+            if (field != null) payload.put(field, value);
+            Response<TsdFbsAssemblyResponse> response;
+            if ("scan-box".equals(action)) {
+                response = api.scanFbsBox(session.authorizationHeader(), taskId, payload).execute();
+            } else if ("scan-barcode".equals(action)) {
+                response = api.scanFbsBarcode(session.authorizationHeader(), taskId, payload).execute();
+            } else if ("scan-kiz".equals(action)) {
+                response = api.scanFbsKiz(session.authorizationHeader(), taskId, payload).execute();
+            } else if ("release".equals(action)) {
+                response = api.releaseFbsAssembly(session.authorizationHeader(), taskId).execute();
+            } else {
+                response = api.completeFbsAssembly(session.authorizationHeader(), taskId).execute();
+            }
+            if (!response.isSuccessful() || response.body() == null) {
+                String message = responseErrorMessage(response, tr(
+                    "Операция не выполнена. Повторите сканирование.",
+                    "Amal bajarilmadi. Qayta skanerlang."
+                ));
+                mainHandler.post(() -> showFbsError(message, response.code() < 500));
+                return;
+            }
+            TsdFbsAssemblyResponse updated = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                fbsBusy = false;
+                fbsAssembly = updated;
+                fbsFeedbackColor = BOX_FOUND_GREEN;
+                statusMessage = nonEmpty(updated.message, tr("Принято.", "Qabul qilindi."));
+                playFbsSuccess();
+                renderFbsAssemblyScreen();
+                if ("COMPLETED".equals(updated.state)) {
+                    String completedTaskId = taskId;
+                    mainHandler.postDelayed(() -> {
+                        if (
+                            screen == Screen.FBS_ASSEMBLY &&
+                            fbsAssembly != null &&
+                            fbsAssembly.task != null &&
+                            completedTaskId.equals(fbsAssembly.task.id) &&
+                            "COMPLETED".equals(fbsAssembly.state)
+                        ) {
+                            loadNextFbsAssembly();
+                        }
+                    }, 1200L);
+                } else if ("release".equals(action)) {
+                    loadNextFbsAssembly();
+                }
+            });
+        });
+    }
+
+    private void showFbsError(String message, boolean keepOnline) {
+        online = keepOnline;
+        fbsBusy = false;
+        fbsFeedbackColor = BOX_NOT_NEEDED_RED;
+        statusMessage = message;
+        playFbsError();
+        renderFbsAssemblyScreen();
+    }
+
+    private void playFbsSuccess() {
+        playFbsTone(ToneGenerator.TONE_PROP_ACK, 120, 45);
+    }
+
+    private void playFbsError() {
+        playFbsTone(ToneGenerator.TONE_PROP_NACK, 260, 180);
+    }
+
+    private void playFbsTone(int tone, int durationMs, long vibrationMs) {
+        try {
+            ToneGenerator generator = new ToneGenerator(AudioManager.STREAM_NOTIFICATION, 85);
+            generator.startTone(tone, durationMs);
+            mainHandler.postDelayed(generator::release, durationMs + 100L);
+        } catch (Throwable ignored) {
+        }
+        try {
+            Vibrator vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+            if (vibrator != null && vibrator.hasVibrator()) {
+                vibrator.vibrate(VibrationEffect.createOneShot(vibrationMs, VibrationEffect.DEFAULT_AMPLITUDE));
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     private void openReceipt() {
@@ -2934,6 +3261,16 @@ public class MainActivity extends Activity {
                 task.run();
             } catch (Throwable error) {
                 mainHandler.post(() -> {
+                    if (screen == Screen.FBS_ASSEMBLY) {
+                        showFbsError(
+                            tr(
+                                "Нет связи с WMS. Проверьте интернет и повторите.",
+                                "WMS bilan aloqa yo‘q. Internetni tekshirib, qayta urinib ko‘ring."
+                            ),
+                            false
+                        );
+                        return;
+                    }
                     online = false;
                     statusMessage = error.getMessage() == null ? "Ошибка приложения" : error.getMessage();
                     refreshCurrentScreen();
@@ -3040,6 +3377,9 @@ public class MainActivity extends Activity {
     private EditText activePhoneCameraTarget() {
         if (screen == Screen.RECEIPT || screen == Screen.BOXLESS_PACKING) {
             return scanInput;
+        }
+        if (screen == Screen.FBS_ASSEMBLY) {
+            return fbsScanInput;
         }
         if (
             screen == Screen.BOX_SEARCH ||
@@ -3169,6 +3509,8 @@ public class MainActivity extends Activity {
             } else {
                 sendBoxlessPackingAction("scan-item", textValue(scanInput), currentBox.boxCode);
             }
+        } else if (screen == Screen.FBS_ASSEMBLY) {
+            submitFbsScan();
         } else if (screen == Screen.INVENTORY_COUNT) {
             if (inventoryTransferMode) {
                 transferInventoryBox();
@@ -3945,6 +4287,8 @@ public class MainActivity extends Activity {
             renderOutgoingControlScreen();
         } else if (screen == Screen.BOXLESS_PACKING) {
             renderBoxlessPackingScreen();
+        } else if (screen == Screen.FBS_ASSEMBLY) {
+            renderFbsAssemblyScreen();
         } else if (screen == Screen.INVENTORY_MENU) {
             renderInventoryMenu();
         } else if (screen == Screen.INVENTORY_START) {
@@ -3960,6 +4304,26 @@ public class MainActivity extends Activity {
 
     private String textValue(EditText input) {
         return input == null ? "" : input.getText().toString().trim();
+    }
+
+    private String nonEmpty(String value, String fallback) {
+        return value == null || value.trim().isEmpty() ? fallback : value.trim();
+    }
+
+    private String responseErrorMessage(Response<?> response, String fallback) {
+        try {
+            if (response.errorBody() == null) return fallback;
+            String body = response.errorBody().string();
+            if (body == null || body.trim().isEmpty()) return fallback;
+            JSONObject payload = new JSONObject(body);
+            Object message = payload.opt("message");
+            if (message != null && !JSONObject.NULL.equals(message)) {
+                String text = String.valueOf(message).trim();
+                if (!text.isEmpty()) return text;
+            }
+        } catch (Throwable ignored) {
+        }
+        return fallback;
     }
 
     private boolean isFflBoxCode(String value) {
@@ -4094,6 +4458,7 @@ public class MainActivity extends Activity {
         MOVEMENTS,
         OUTGOING_CONTROL,
         BOXLESS_PACKING,
+        FBS_ASSEMBLY,
         INVENTORY_MENU,
         INVENTORY_START,
         INVENTORY_COUNT,

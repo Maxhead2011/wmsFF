@@ -1328,6 +1328,43 @@ model FbsSupplyPlan {
   @@index([connectionId, supplyId])
 }
 
+model FbsTsdAssembly {
+  id             String          @id @default(uuid())
+  clientId       String
+  marketplace    MarketplaceType @default(WILDBERRIES)
+  connectionId   String
+  orderId        String
+  supplyId       String?
+  requestId      String
+  requestItemId  String
+  skuId          String
+  productName    String
+  article        String?
+  barcodes       Json
+  storageBoxes   Json
+  itemCount      Int             @default(1)
+  requiresKiz    Boolean         @default(false)
+  status         String          @default("IN_PROGRESS")
+  deviceCode     String
+  workerUserId   String?
+  workerName     String?
+  boxId          String?
+  boxCode        String?
+  barcode        String?
+  kiz            String?
+  wbMetaStatus   String          @default("NOT_REQUIRED")
+  errorMessage   String?
+  completedAt    DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@unique([marketplace, connectionId, orderId])
+  @@unique([clientId, kiz])
+  @@index([deviceCode, status, updatedAt])
+  @@index([requestId, status])
+  @@index([clientId, status])
+}
+
 model BillingCharge {
   id               String                     @id @default(uuid())
   clientId         String
