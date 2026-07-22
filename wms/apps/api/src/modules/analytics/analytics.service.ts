@@ -20,6 +20,7 @@ import { UpsertAnalyticsConnectionDto } from './dto/upsert-analytics-connection.
 
 const WB_ANALYTICS_URL = 'https://seller-analytics-api.wildberries.ru';
 const WB_COMMON_URL = 'https://common-api.wildberries.ru';
+const WB_STATISTICS_URL = 'https://statistics-api.wildberries.ru';
 const PAGE_LIMIT = 1000;
 const WMS_STOCK_STATUSES: StockStatus[] = [StockStatus.AVAILABLE, StockStatus.PACKING, StockStatus.SHIPPING];
 
@@ -183,8 +184,9 @@ export class AnalyticsService {
       const sourceStatus = {
         products: stockResult.status === 'fulfilled' ? 'READY' : 'CACHED_RATE_LIMITED',
         funnel: funnelResult.status === 'fulfilled' ? 'READY' : 'CACHED_RATE_LIMITED',
-        regions: regionsResult.status === 'fulfilled' ? 'READY' : 'UNAVAILABLE',
-        regionalSales: regionalSalesResult.status === 'fulfilled' ? 'READY' : 'UNAVAILABLE',
+        regions: regionsResult.status === 'fulfilled' ? 'READY' : 'CACHED_RATE_LIMITED',
+        regionalSales:
+          regionalSalesResult.status === 'fulfilled' ? `READY_${regionalSalesResult.value.source}` : 'CACHED_RATE_LIMITED',
         exactWarehouseProductStock: 'REQUIRES_PERSONAL_OR_SERVICE_TOKEN',
       };
       const warnings = [
@@ -200,14 +202,26 @@ export class AnalyticsService {
             this.analytics.analyticsProduct.deleteMany({ where: { clientId: dto.clientId } }),
             this.analytics.analyticsProduct.createMany({ data: products as AnalyticsPrisma.AnalyticsProductCreateManyInput[] }),
           ];
+      const regionWrites =
+        regionsResult.status === 'fulfilled'
+          ? [
+              this.analytics.analyticsRegion.deleteMany({ where: { clientId: dto.clientId } }),
+              this.analytics.analyticsRegion.createMany({ data: regions }),
+            ]
+          : [];
+      const regionalSalesWrites =
+        regionalSalesResult.status === 'fulfilled'
+          ? [
+              this.analytics.analyticsRegionalSale.deleteMany({ where: { clientId: dto.clientId } }),
+              this.analytics.analyticsRegionalSale.createMany({ data: regionalSales }),
+            ]
+          : [];
 
       await this.analytics.$transaction(
         [
           ...productWrites,
-          this.analytics.analyticsRegion.deleteMany({ where: { clientId: dto.clientId } }),
-          this.analytics.analyticsRegion.createMany({ data: regions }),
-          this.analytics.analyticsRegionalSale.deleteMany({ where: { clientId: dto.clientId } }),
-          this.analytics.analyticsRegionalSale.createMany({ data: regionalSales }),
+          ...regionWrites,
+          ...regionalSalesWrites,
           this.analytics.analyticsDailySummary.upsert({
             where: { clientId_snapshotDate: { clientId: dto.clientId, snapshotDate } },
             create: { clientId: dto.clientId, snapshotDate, periodDays: dto.periodDays, ...totals },
@@ -393,6 +407,40 @@ export class AnalyticsService {
   }
 
   private async fetchRegionalSales(apiKey: string, periods: AnalyticsPeriods) {
+    try {
+      return await this.fetchRegionalSalesFromStatistics(apiKey, periods);
+    } catch {
+      return this.fetchRegionalSalesFromAnalytics(apiKey, periods);
+    }
+  }
+
+  private async fetchRegionalSalesFromStatistics(apiKey: string, periods: AnalyticsPeriods) {
+    const dateFrom = `${periods.past.start}T00:00:00`;
+    const rows = await wbArray(
+      `${WB_STATISTICS_URL}/api/v1/supplier/sales?${new URLSearchParams({ dateFrom, flag: '0' })}`,
+      apiKey,
+    );
+    const current: JsonRecord[] = [];
+    const past: JsonRecord[] = [];
+    for (const row of rows.map(asRecord)) {
+      if (textValue(row.saleID).toLocaleUpperCase('en-US').startsWith('R')) continue;
+      const date = textValue(row.date).slice(0, 10);
+      const target = dateInPeriod(date, periods.selected) ? current : dateInPeriod(date, periods.past) ? past : null;
+      if (!target) continue;
+      target.push({
+        cityName: '',
+        countryName: row.countryName,
+        foName: row.oblastOkrugName,
+        regionName: row.regionName,
+        nmID: row.nmId,
+        saleInvoiceCostPrice: numberValue(row.finishedPrice) || numberValue(row.priceWithDisc),
+        saleItemInvoiceQty: 1,
+      });
+    }
+    return { current, past, source: 'STATISTICS_SALES' as const };
+  }
+
+  private async fetchRegionalSalesFromAnalytics(apiKey: string, periods: AnalyticsPeriods) {
     // WB applies a seller-wide limiter across analytics methods. Let the core
     // product requests finish, then keep the two region periods apart.
     await delay(20_500);
@@ -408,6 +456,7 @@ export class AnalyticsService {
     return {
       current: asArray(current.report).map(asRecord),
       past: asArray(past.report).map(asRecord),
+      source: 'REGION_SALE' as const,
     };
   }
 
@@ -679,7 +728,7 @@ function mapRegionalSales(
 
 function normalizeDemandRegion(row: JsonRecord) {
   const country = textValue(row.countryName);
-  const district = textValue(row.foName);
+  const district = textValue(row.foName) || textValue(row.oblastOkrugName);
   if (country && country !== 'Россия') return country;
   if (district.includes('Централь')) return 'Центральный';
   if (district.includes('Южн') || district.includes('Северо-Кавказ')) return 'Южный и Северо-Кавказский';
@@ -866,6 +915,10 @@ function periodQuery(period: DatePeriod) {
   return new URLSearchParams({ dateFrom: period.start, dateTo: period.end }).toString();
 }
 
+function dateInPeriod(value: string, period: DatePeriod) {
+  return value >= period.start && value <= period.end;
+}
+
 function roundMetric(value: number) {
   return Math.round(value * 100) / 100;
 }
@@ -985,6 +1038,27 @@ async function wbJson(url: string, apiKey: string, body?: JsonRecord) {
     const message = textValue(payload.detail) || textValue(payload.message) || textValue(payload.error) || `HTTP ${response.status}`;
     throw new BadGatewayException(`Wildberries: ${message}`);
   }
+  return payload;
+}
+
+async function wbArray(url: string, apiKey: string) {
+  const response = await fetch(url, {
+    headers: { Authorization: apiKey },
+    signal: AbortSignal.timeout(60_000),
+  });
+  const raw = await response.text();
+  let payload: unknown;
+  try {
+    payload = raw ? JSON.parse(raw) : [];
+  } catch {
+    payload = { message: raw.slice(0, 500) };
+  }
+  if (!response.ok) {
+    const error = asRecord(payload);
+    const message = textValue(error.detail) || textValue(error.message) || textValue(error.error) || `HTTP ${response.status}`;
+    throw new BadGatewayException(`Wildberries: ${message}`);
+  }
+  if (!Array.isArray(payload)) throw new BadGatewayException('Wildberries вернул неожиданный формат статистики продаж.');
   return payload;
 }
 
