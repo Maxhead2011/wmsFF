@@ -151,36 +151,59 @@ export class AnalyticsService {
         this.fetchRegionalSales(apiKey, analyticsPeriods(Math.min(dto.periodDays, 30))),
       ]);
 
-      if (stockResult.status === 'rejected') throw sourceError('остатки и показатели товаров', stockResult.reason);
-      if (funnelResult.status === 'rejected') throw sourceError('воронка продаж', funnelResult.reason);
-
       const syncedAt = new Date();
-      const products = mergeProducts(dto.clientId, stockResult.value, funnelResult.value, syncedAt);
+      const cachedCoreAllowed =
+        (stockResult.status === 'rejected' && isGlobalLimiterError(stockResult.reason)) ||
+        (funnelResult.status === 'rejected' && isGlobalLimiterError(funnelResult.reason));
+      const cachedProducts = cachedCoreAllowed
+        ? await this.analytics.analyticsProduct.findMany({ where: { clientId: dto.clientId } })
+        : [];
+      if (stockResult.status === 'rejected' && (!isGlobalLimiterError(stockResult.reason) || cachedProducts.length === 0)) {
+        throw sourceError('остатки и показатели товаров', stockResult.reason);
+      }
+      if (funnelResult.status === 'rejected' && (!isGlobalLimiterError(funnelResult.reason) || cachedProducts.length === 0)) {
+        throw sourceError('воронка продаж', funnelResult.reason);
+      }
+
+      const usingCachedProducts = stockResult.status === 'rejected' || funnelResult.status === 'rejected';
+      const products = usingCachedProducts
+        ? cachedProducts
+        : mergeProducts(dto.clientId, stockResult.value, funnelResult.value, syncedAt);
       const regions = regionsResult.status === 'fulfilled' ? mapRegions(dto.clientId, regionsResult.value, syncedAt) : [];
       const regionalSales =
         regionalSalesResult.status === 'fulfilled'
           ? mapRegionalSales(dto.clientId, regionalSalesResult.value.current, regionalSalesResult.value.past, syncedAt)
           : [];
-      const currency = funnelResult.value.currency || stockResult.value.currency || 'RUB';
+      const currency =
+        (funnelResult.status === 'fulfilled' ? funnelResult.value.currency : null) ||
+        (stockResult.status === 'fulfilled' ? stockResult.value.currency : null) ||
+        currentState?.currency ||
+        'RUB';
       const totals = productTotals(products);
       const sourceStatus = {
-        products: 'READY',
-        funnel: 'READY',
+        products: stockResult.status === 'fulfilled' ? 'READY' : 'CACHED_RATE_LIMITED',
+        funnel: funnelResult.status === 'fulfilled' ? 'READY' : 'CACHED_RATE_LIMITED',
         regions: regionsResult.status === 'fulfilled' ? 'READY' : 'UNAVAILABLE',
         regionalSales: regionalSalesResult.status === 'fulfilled' ? 'READY' : 'UNAVAILABLE',
         exactWarehouseProductStock: 'REQUIRES_PERSONAL_OR_SERVICE_TOKEN',
       };
       const warnings = [
+        usingCachedProducts ? 'Товары: WB исчерпал лимит запросов, сохранены последние успешно загруженные данные.' : null,
         regionsResult.status === 'rejected' ? `Склады: ${safeErrorMessage(regionsResult.reason)}` : null,
         regionalSalesResult.status === 'rejected' ? `Продажи по регионам: ${safeErrorMessage(regionalSalesResult.reason)}` : null,
       ].filter((value): value is string => Boolean(value));
       const regionalWarning = warnings.join(' · ') || null;
       const snapshotDate = new Date(`${periods.today}T00:00:00.000Z`);
+      const productWrites = usingCachedProducts
+        ? []
+        : [
+            this.analytics.analyticsProduct.deleteMany({ where: { clientId: dto.clientId } }),
+            this.analytics.analyticsProduct.createMany({ data: products as AnalyticsPrisma.AnalyticsProductCreateManyInput[] }),
+          ];
 
       await this.analytics.$transaction(
         [
-          this.analytics.analyticsProduct.deleteMany({ where: { clientId: dto.clientId } }),
-          this.analytics.analyticsProduct.createMany({ data: products }),
+          ...productWrites,
           this.analytics.analyticsRegion.deleteMany({ where: { clientId: dto.clientId } }),
           this.analytics.analyticsRegion.createMany({ data: regions }),
           this.analytics.analyticsRegionalSale.deleteMany({ where: { clientId: dto.clientId } }),
@@ -372,12 +395,12 @@ export class AnalyticsService {
   private async fetchRegionalSales(apiKey: string, periods: AnalyticsPeriods) {
     // WB applies a seller-wide limiter across analytics methods. Let the core
     // product requests finish, then keep the two region periods apart.
-    await delay(5_000);
+    await delay(20_500);
     const current = await wbJsonWithLimiterRetry(
       `${WB_ANALYTICS_URL}/api/v1/analytics/region-sale?${periodQuery(periods.selected)}`,
       apiKey,
     );
-    await delay(10_500);
+    await delay(20_500);
     const past = await wbJsonWithLimiterRetry(
       `${WB_ANALYTICS_URL}/api/v1/analytics/region-sale?${periodQuery(periods.past)}`,
       apiKey,
@@ -847,7 +870,17 @@ function roundMetric(value: number) {
   return Math.round(value * 100) / 100;
 }
 
-function productTotals(products: AnalyticsPrisma.AnalyticsProductCreateManyInput[]) {
+function productTotals(
+  products: Array<{
+    stockCount?: number;
+    stockSum?: number;
+    orderCount?: number;
+    orderSum?: number;
+    funnelBuyoutCount?: number;
+    funnelBuyoutSum?: number;
+    lostOrdersSum?: number;
+  }>,
+) {
   return {
     productCount: products.length,
     stockCount: sum(products, (product) => product.stockCount ?? 0),
@@ -962,10 +995,14 @@ async function wbJsonWithLimiterRetry(url: string, apiKey: string) {
     } catch (caught) {
       const limited = safeErrorMessage(caught).toLocaleLowerCase('en-US').includes('limited by global limiter');
       if (!limited || attempt === 2) throw caught;
-      await delay(10_500);
+      await delay(20_500);
     }
   }
   throw new BadGatewayException('Wildberries: исчерпаны попытки получения региональной аналитики.');
+}
+
+function isGlobalLimiterError(value: unknown) {
+  return safeErrorMessage(value).toLocaleLowerCase('en-US').includes('limited by global limiter');
 }
 
 function sourceError(source: string, reason: unknown) {
