@@ -81,6 +81,15 @@ describe('AnalyticsService access', () => {
             toClientCount: 0,
             fromClientCount: 0,
           },
+          {
+            regionName: 'Нет данных',
+            officeName: null,
+            stockCount: 1,
+            stockSum: 1_000,
+            saleRateDays: -0.04,
+            toClientCount: 0,
+            fromClientCount: 0,
+          },
         ],
       },
       analyticsRegionalSale: {
@@ -131,6 +140,10 @@ describe('AnalyticsService access', () => {
       regionName: 'Центральный',
       recommendedQty: 29,
       confidence: 'ESTIMATE',
+    });
+    expect(result.regionalAnalytics.regions.find((region) => region.regionName === 'Нет данных')).toMatchObject({
+      coverageDays: null,
+      wbSaleRateDays: null,
     });
   });
 });

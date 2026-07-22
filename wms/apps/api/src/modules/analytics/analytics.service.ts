@@ -834,13 +834,14 @@ function buildRegionalAnalytics(
     .map((regionName) => {
       const stock = regionStock.get(regionName);
       const directSales = regionSales.get(regionName);
+      const wbSaleRateDays = stock?.saleRateDays && stock.saleRateDays > 0 ? stock.saleRateDays : null;
       const fallbackDemand =
-        !directSales && stock?.saleRateDays && stock.saleRateDays > 0
-          ? (stock.stockCount / stock.saleRateDays) * periodDays
+        !directSales && wbSaleRateDays
+          ? ((stock?.stockCount ?? 0) / wbSaleRateDays) * periodDays
           : 0;
       const sales = directSales ?? { currentQty: fallbackDemand, currentAmount: 0, pastQty: 0, pastAmount: 0 };
       const dailyDemand = periodDays > 0 ? sales.currentQty / periodDays : 0;
-      const coverageDays = dailyDemand > 0 ? (stock?.stockCount ?? 0) / dailyDemand : stock?.saleRateDays ?? null;
+      const coverageDays = dailyDemand > 0 ? (stock?.stockCount ?? 0) / dailyDemand : wbSaleRateDays;
       const targetStock = Math.ceil(dailyDemand * targetDays);
       const recommendedSupply = Math.max(0, targetStock - Math.round(stock?.stockCount ?? 0));
       const excessStock = Math.max(0, Math.round((stock?.stockCount ?? 0) - dailyDemand * excessDays));
@@ -856,7 +857,7 @@ function buildRegionalAnalytics(
         stockCount: stock?.stockCount ?? 0,
         stockSharePercent: totalRegionalStock > 0 ? ((stock?.stockCount ?? 0) / totalRegionalStock) * 100 : 0,
         coverageDays: coverageDays === null ? null : roundMetric(coverageDays),
-        wbSaleRateDays: stock?.saleRateDays ?? null,
+        wbSaleRateDays,
         targetStock,
         recommendedSupply,
         excessStock,
