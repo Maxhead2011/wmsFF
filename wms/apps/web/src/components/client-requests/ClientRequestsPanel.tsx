@@ -13,6 +13,7 @@ import {
   downloadTsdOutgoingContentsXlsx,
   emergencyCloseClientRequestFromXlsx,
   fetchClientRequestManualBoxSelection,
+  fetchClientRequestFbsBoxSearch,
   fetchClientRequestDocument,
   fetchClientRequestBoxOverlaps,
   fetchClientRequests,
@@ -33,6 +34,7 @@ import {
   type ClientRequestDocument,
   type ClientRequestBoxOverlapStatistics,
   type ClientRequestManualBoxSelection,
+  type ClientRequestFbsBoxSearch,
   type ClientRequestFileSummary,
   type ClientRequestStatus,
   type ClientRequestSummary,
@@ -81,6 +83,13 @@ type ManualBoxSelectionState = {
   error?: string;
 };
 
+type FbsBoxSearchState = {
+  request: ClientRequestSummary;
+  status: 'loading' | 'ready';
+  data: ClientRequestFbsBoxSearch | null;
+  error?: string;
+};
+
 export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
   const canRead = canUse(session.user, 'client-requests:read');
   const canWrite = canUse(session.user, 'client-requests:write');
@@ -123,6 +132,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
   } | null>(null);
   const [manualClose, setManualClose] = useState<ManualCloseState | null>(null);
   const [manualBoxSelection, setManualBoxSelection] = useState<ManualBoxSelectionState | null>(null);
+  const [fbsBoxSearch, setFbsBoxSearch] = useState<FbsBoxSearchState | null>(null);
   const [showArchive, setShowArchive] = useState(false);
   const [archiveBoxSearch, setArchiveBoxSearch] = useState('');
   const [appliedArchiveBoxSearch, setAppliedArchiveBoxSearch] = useState('');
@@ -303,6 +313,18 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
       setManualBoxSelection({ request, status: 'ready', data });
     } catch (caught) {
       setManualBoxSelection({ request, status: 'ready', data: null, error: errorMessage(caught) });
+    }
+  }
+
+  async function openFbsBoxSearch(request: ClientRequestSummary) {
+    setFbsBoxSearch({ request, status: 'loading', data: null });
+    setError(null);
+
+    try {
+      const data = await fetchClientRequestFbsBoxSearch(session.accessToken, request.id);
+      setFbsBoxSearch({ request, status: 'ready', data });
+    } catch (caught) {
+      setFbsBoxSearch({ request, status: 'ready', data: null, error: errorMessage(caught) });
     }
   }
 
@@ -840,6 +862,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
             : undefined,
           canPickOutbound ? (request) => void openOnlineExecution(request) : undefined,
           canPickOutbound ? (request) => void openManualBoxSelection(request) : undefined,
+          canPickOutbound ? (request) => void openFbsBoxSearch(request) : undefined,
           (request) => void openPickInstruction(request),
           (request) => void refreshPickInstruction(request),
           (request) => void downloadPickInstruction(request),
@@ -947,6 +970,10 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           onClose={() => setManualBoxSelection(null)}
         />
       ) : null}
+
+      {fbsBoxSearch ? (
+        <FbsBoxSearchModal state={fbsBoxSearch} onClose={() => setFbsBoxSearch(null)} />
+      ) : null}
     </section>
   );
 }
@@ -954,6 +981,120 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
 function isFbsRequest(request: ClientRequestSummary) {
   return request.title.trim().toLocaleUpperCase('ru-RU').startsWith('FBS')
     || request.comment?.toLocaleLowerCase('ru-RU').includes('создано из fbs-заказов:') === true;
+}
+
+function FbsBoxSearchModal({ state, onClose }: { state: FbsBoxSearchState; onClose: () => void }) {
+  const [search, setSearch] = useState('');
+  const normalizedSearch = search.trim().toLocaleLowerCase('ru-RU');
+  const boxes = (state.data?.boxes ?? []).filter((box) => {
+    if (!normalizedSearch) return true;
+    return [
+      box.boxCode,
+      ...box.orderIds,
+      ...box.items.flatMap((item) => [item.productName, item.article ?? '', ...item.barcodes]),
+    ].some((value) => value.toLocaleLowerCase('ru-RU').includes(normalizedSearch));
+  });
+
+  return (
+    <div className="online-execution-modal" role="dialog" aria-modal="true" aria-label="Поиск коробов для FBS-заявки">
+      <section className="online-execution-modal__panel fbs-box-search-modal">
+        <header className="online-execution-modal__header">
+          <div>
+            <span>Короба для поиска FBS</span>
+            <h3>№{String(state.request.number).padStart(6, '0')} · {state.request.title}</h3>
+            <small>{state.request.client.name} · номера заказов указаны рядом с каждым коробом</small>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose} title="Закрыть" aria-label="Закрыть">
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="online-execution-modal__body fbs-box-search-modal__body">
+          {state.status === 'loading' ? (
+            <p className="panel-message"><RefreshCw size={18} aria-hidden="true" /> Ищу остатки по коробам.</p>
+          ) : state.data ? (
+            <>
+              <div className="fbs-box-search-modal__summary">
+                <span><small>Заказов в заявке</small><strong>{state.data.summary.orders}</strong></span>
+                <span><small>Подходящих коробов</small><strong>{state.data.summary.boxes}</strong></span>
+                <span><small>Подтверждено ТСД</small><strong>{state.data.summary.confirmedOrders}</strong></span>
+              </div>
+
+              <label className="fbs-box-search-modal__search">
+                <Search size={17} aria-hidden="true" />
+                <input
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Номер короба, заказа, ШК или товар"
+                  autoFocus
+                />
+                {search ? (
+                  <button type="button" onClick={() => setSearch('')} title="Очистить поиск" aria-label="Очистить поиск">
+                    <X size={15} aria-hidden="true" />
+                  </button>
+                ) : null}
+              </label>
+
+              {boxes.length ? (
+                <div className="fbs-box-search-results">
+                  {boxes.map((box) => (
+                    <article className={`fbs-box-search-card ${box.confirmedOrderIds.length ? 'is-confirmed' : ''}`} key={box.boxId}>
+                      <header>
+                        <div>
+                          <Boxes size={19} aria-hidden="true" />
+                          <strong>{box.boxCode}</strong>
+                        </div>
+                        <span>{box.items.reduce((sum, item) => sum + item.availableQuantity, 0)} шт. совпавшего товара</span>
+                      </header>
+                      <div className="fbs-box-search-card__orders">
+                        <strong>Заказы №{box.orderIds.join(', №')}</strong>
+                        {box.confirmedOrderIds.length ? (
+                          <span className="is-confirmed">Точно подтверждено ТСД: №{box.confirmedOrderIds.join(', №')}</span>
+                        ) : (
+                          <span>Короб подходит по товару для этих заказов</span>
+                        )}
+                      </div>
+                      <div className="fbs-box-search-card__items">
+                        {box.items.map((item) => (
+                          <div key={`${box.boxId}-${item.requestItemId}`}>
+                            <span>
+                              <strong>{item.productName}</strong>
+                              <small>Арт. {item.article || '—'} · ШК {item.barcodes.join(', ') || '—'}</small>
+                            </span>
+                            <span>
+                              <strong>{item.availableQuantity} шт.</strong>
+                              <small>{item.freeQuantity > 0 ? `свободно ${item.freeQuantity}` : 'зарезервировано'}</small>
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="panel-message">
+                  {state.data.boxes.length ? 'По этому запросу короб не найден.' : 'В активных коробах нет доступного товара для заказов этой заявки.'}
+                </p>
+              )}
+
+              {state.data.unmatchedOrderIds.length ? (
+                <p className="form-error fbs-box-search-modal__unmatched">
+                  Не найдены в активных коробах заказы №{state.data.unmatchedOrderIds.join(', №')}.
+                </p>
+              ) : null}
+            </>
+          ) : null}
+
+          {state.error ? <p className="form-error">{state.error}</p> : null}
+          <div className="emergency-xlsx-modal__actions">
+            <button className="client-request-action-button client-request-action-button--instruction" type="button" onClick={onClose}>
+              Закрыть
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
 }
 
 function ManualBoxSelectionModal({
@@ -1833,6 +1974,7 @@ function renderRequests(
   onDownloadOriginalFile: ((request: ClientRequestSummary, file: ClientRequestFileSummary) => void) | undefined,
   onOpenOnlineExecution: ((request: ClientRequestSummary) => void) | undefined,
   onSelectManualBoxes: ((request: ClientRequestSummary) => void) | undefined,
+  onOpenFbsBoxSearch: ((request: ClientRequestSummary) => void) | undefined,
   onOpenPickInstruction: (request: ClientRequestSummary) => void,
   onRefreshPickInstruction: (request: ClientRequestSummary) => void,
   onDownloadPickInstruction: (request: ClientRequestSummary) => void,
@@ -1881,6 +2023,7 @@ function renderRequests(
         onDownloadOriginalFile={onDownloadOriginalFile}
         onOpenOnlineExecution={onOpenOnlineExecution}
         onSelectManualBoxes={onSelectManualBoxes}
+        onOpenFbsBoxSearch={onOpenFbsBoxSearch}
         onOpenPickInstruction={onOpenPickInstruction}
         onRefreshPickInstruction={onRefreshPickInstruction}
         onDownloadPickInstruction={onDownloadPickInstruction}

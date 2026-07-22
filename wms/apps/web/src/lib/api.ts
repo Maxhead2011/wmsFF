@@ -913,6 +913,44 @@ export type ClientRequestManualBoxSelection = {
   }>;
 };
 
+export type ClientRequestFbsBoxSearch = {
+  request: {
+    id: string;
+    number: number;
+    title: string;
+    status: ClientRequestStatus;
+    client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  };
+  summary: {
+    boxes: number;
+    orders: number;
+    confirmedOrders: number;
+    unmatchedOrders: number;
+  };
+  boxes: Array<{
+    boxId: string;
+    boxCode: string;
+    boxStatus: string;
+    orderIds: string[];
+    confirmedOrderIds: string[];
+    candidateOrderIds: string[];
+    items: Array<{
+      requestItemId: string;
+      skuId: string;
+      productName: string;
+      article: string | null;
+      barcodes: string[];
+      requestedQuantity: number;
+      availableQuantity: number;
+      freeQuantity: number;
+      orderIds: string[];
+      confirmedOrderIds: string[];
+      candidateOrderIds: string[];
+    }>;
+  }>;
+  unmatchedOrderIds: string[];
+};
+
 export type ClientRequestBoxOverlapStatistics = {
   generatedAt: string;
   activeRequestsCount: number;
@@ -3777,6 +3815,12 @@ export async function fetchClientRequests(
 
 export async function fetchClientRequestManualBoxSelection(accessToken: string, requestId: string) {
   return request<ClientRequestManualBoxSelection>(`/client-requests/${requestId}/manual-box-selection`, {
+    accessToken,
+  });
+}
+
+export async function fetchClientRequestFbsBoxSearch(accessToken: string, requestId: string) {
+  return request<ClientRequestFbsBoxSearch>(`/client-requests/${requestId}/fbs-box-search`, {
     accessToken,
   });
 }

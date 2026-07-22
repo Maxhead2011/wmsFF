@@ -1,4 +1,4 @@
-import { Activity, AlertTriangle, Boxes, CheckCircle2, ClipboardList, Edit3, FileDown, FileSpreadsheet, FileText, FileUp, PackageCheck, RefreshCw, Send, Truck, Undo2, XCircle } from 'lucide-react';
+import { Activity, AlertTriangle, Boxes, CheckCircle2, ClipboardList, Edit3, FileDown, FileSpreadsheet, FileText, FileUp, PackageCheck, RefreshCw, Search, Send, Truck, Undo2, XCircle } from 'lucide-react';
 import {
   type ClientRequestFileSummary,
   type ClientRequestStatus,
@@ -28,6 +28,7 @@ type ClientRequestsTableProps = {
   onDownloadOriginalFile?: (request: ClientRequestSummary, file: ClientRequestFileSummary) => void;
   onOpenOnlineExecution?: (request: ClientRequestSummary) => void;
   onSelectManualBoxes?: (request: ClientRequestSummary) => void;
+  onOpenFbsBoxSearch?: (request: ClientRequestSummary) => void;
   onOpenPickInstruction?: (request: ClientRequestSummary) => void;
   onRefreshPickInstruction?: (request: ClientRequestSummary) => void;
   onDownloadPickInstruction?: (request: ClientRequestSummary) => void;
@@ -63,6 +64,7 @@ export function ClientRequestsTable({
   onDownloadOriginalFile,
   onOpenOnlineExecution,
   onSelectManualBoxes,
+  onOpenFbsBoxSearch,
   onOpenPickInstruction,
   onRefreshPickInstruction,
   onDownloadPickInstruction,
@@ -193,6 +195,17 @@ export function ClientRequestsTable({
                 <td className="client-request-table__warehouse-cell" data-label="Склад">
                   {canShowWarehouseActions(request) ? (
                     <div className="client-request-actions">
+                       {onOpenFbsBoxSearch && isFbsRequest(request) ? (
+                         <button
+                           className="client-request-action-button client-request-action-button--fbs-box-search"
+                           type="button"
+                           onClick={() => onOpenFbsBoxSearch(request)}
+                           title="Показать короба и номера FBS-заказов, товар которых в них хранится"
+                         >
+                           <Search size={15} aria-hidden="true" />
+                           <span>Найти короба FBS</span>
+                         </button>
+                       ) : null}
                        {onSelectManualBoxes && canSelectManualBoxes(request) ? (
                          <button
                            className="client-request-action-button client-request-action-button--box-selection"

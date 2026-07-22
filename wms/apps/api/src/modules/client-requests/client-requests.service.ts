@@ -419,6 +419,209 @@ export class ClientRequestsService {
     };
   }
 
+  async getFbsBoxSearch(id: string, user: AuthUser) {
+    const request = await this.prisma.clientRequest.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        number: true,
+        title: true,
+        status: true,
+        clientId: true,
+        client: { select: { id: true, code: true, name: true } },
+        items: {
+          select: {
+            id: true,
+            skuId: true,
+            barcode: true,
+            name: true,
+            quantity: true,
+            comment: true,
+            sku: {
+              select: {
+                id: true,
+                internalSku: true,
+                article: true,
+                name: true,
+                barcodes: { orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }], select: { value: true } },
+              },
+            },
+          },
+          orderBy: { id: 'asc' },
+        },
+        fbsOrderLinks: {
+          select: { orderId: true },
+          orderBy: { createdAt: 'asc' },
+        },
+      },
+    });
+    if (!request) {
+      throw new NotFoundException('Клиентская заявка не найдена.');
+    }
+    this.clientScopes.requireClientAccess(user, request.clientId, 'read');
+    if (request.fbsOrderLinks.length === 0) {
+      throw new BadRequestException('Поиск коробов доступен только для заявки, созданной из FBS-заказов.');
+    }
+
+    const linkedOrderIds = new Set(request.fbsOrderLinks.map((link) => link.orderId));
+    const skuIds = [...new Set(request.items.map((item) => item.skuId).filter((value): value is string => Boolean(value)))];
+    const [balances, requestTasks, reservations] = await Promise.all([
+      skuIds.length
+        ? this.prisma.stockBalance.findMany({
+            where: {
+              clientId: request.clientId,
+              skuId: { in: skuIds },
+              status: StockStatus.AVAILABLE,
+              quantity: { gt: 0 },
+              boxId: { not: null },
+              box: { status: { notIn: ['deleted', 'archived'] } },
+            },
+            select: {
+              skuId: true,
+              boxId: true,
+              quantity: true,
+              box: { select: { id: true, code: true, status: true } },
+            },
+          })
+        : Promise.resolve([]),
+      this.prisma.fbsTsdAssembly.findMany({
+        where: { requestId: request.id, status: { not: 'RELEASED' } },
+        select: { orderId: true, requestItemId: true, skuId: true, boxId: true, boxCode: true, itemCount: true, status: true },
+      }),
+      skuIds.length
+        ? this.prisma.fbsTsdAssembly.findMany({
+            where: {
+              clientId: request.clientId,
+              skuId: { in: skuIds },
+              boxId: { not: null },
+              status: { in: ['IN_PROGRESS', 'COMPLETED'] },
+            },
+            select: { skuId: true, boxId: true, itemCount: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const reservedBySkuBox = new Map<string, number>();
+    reservations.forEach((reservation) => {
+      if (!reservation.boxId) return;
+      const key = `${reservation.skuId}:${reservation.boxId}`;
+      reservedBySkuBox.set(key, (reservedBySkuBox.get(key) ?? 0) + reservation.itemCount);
+    });
+    const exactTaskByOrderId = new Map(
+      requestTasks
+        .filter((task) => task.boxId && linkedOrderIds.has(task.orderId))
+        .map((task) => [task.orderId, task] as const),
+    );
+    const boxes = new Map<
+      string,
+      {
+        boxId: string;
+        boxCode: string;
+        boxStatus: string;
+        orderIds: Set<string>;
+        confirmedOrderIds: Set<string>;
+        candidateOrderIds: Set<string>;
+        items: Array<{
+          requestItemId: string;
+          skuId: string;
+          productName: string;
+          article: string | null;
+          barcodes: string[];
+          requestedQuantity: number;
+          availableQuantity: number;
+          freeQuantity: number;
+          orderIds: string[];
+          confirmedOrderIds: string[];
+          candidateOrderIds: string[];
+        }>;
+      }
+    >();
+
+    for (const item of request.items) {
+      if (!item.skuId || !item.sku) continue;
+      const parsedOrderIds = parseFbsOrderIds(item.comment).filter((orderId) => linkedOrderIds.has(orderId));
+      const itemOrderIds = parsedOrderIds.length > 0
+        ? parsedOrderIds
+        : request.items.length === 1
+          ? [...linkedOrderIds]
+          : requestTasks.filter((task) => task.requestItemId === item.id).map((task) => task.orderId);
+      const uniqueItemOrderIds = [...new Set(itemOrderIds)];
+      const unassignedOrderIds = uniqueItemOrderIds.filter((orderId) => !exactTaskByOrderId.get(orderId)?.boxId);
+      const itemBalances = balances.filter((balance) => balance.skuId === item.skuId && balance.boxId && balance.box);
+
+      for (const balance of itemBalances) {
+        const boxId = balance.boxId!;
+        const confirmedOrderIds = uniqueItemOrderIds.filter(
+          (orderId) => exactTaskByOrderId.get(orderId)?.boxId === boxId,
+        );
+        const freeQuantity = Math.max(0, balance.quantity - (reservedBySkuBox.get(`${item.skuId}:${boxId}`) ?? 0));
+        const candidateOrderIds = freeQuantity > 0 ? unassignedOrderIds : [];
+        const matchingOrderIds = [...new Set([...confirmedOrderIds, ...candidateOrderIds])];
+        if (matchingOrderIds.length === 0) continue;
+
+        const row = boxes.get(boxId) ?? {
+          boxId,
+          boxCode: balance.box!.code,
+          boxStatus: balance.box!.status,
+          orderIds: new Set<string>(),
+          confirmedOrderIds: new Set<string>(),
+          candidateOrderIds: new Set<string>(),
+          items: [],
+        };
+        matchingOrderIds.forEach((orderId) => row.orderIds.add(orderId));
+        confirmedOrderIds.forEach((orderId) => row.confirmedOrderIds.add(orderId));
+        candidateOrderIds.forEach((orderId) => row.candidateOrderIds.add(orderId));
+        row.items.push({
+          requestItemId: item.id,
+          skuId: item.skuId,
+          productName: item.sku.name || item.name || 'Товар без наименования',
+          article: item.sku.article ?? item.sku.internalSku,
+          barcodes: item.sku.barcodes.map((barcode) => barcode.value),
+          requestedQuantity: item.quantity,
+          availableQuantity: balance.quantity,
+          freeQuantity,
+          orderIds: matchingOrderIds,
+          confirmedOrderIds,
+          candidateOrderIds,
+        });
+        boxes.set(boxId, row);
+      }
+    }
+
+    const resultBoxes = [...boxes.values()]
+      .map((box) => ({
+        ...box,
+        orderIds: [...box.orderIds].sort(naturalOrderIdCompare),
+        confirmedOrderIds: [...box.confirmedOrderIds].sort(naturalOrderIdCompare),
+        candidateOrderIds: [...box.candidateOrderIds].sort(naturalOrderIdCompare),
+        items: box.items.sort((left, right) => left.productName.localeCompare(right.productName, 'ru-RU')),
+      }))
+      .sort((left, right) => {
+        const leftConfirmed = left.confirmedOrderIds.length > 0 ? 0 : 1;
+        const rightConfirmed = right.confirmedOrderIds.length > 0 ? 0 : 1;
+        return leftConfirmed - rightConfirmed || left.boxCode.localeCompare(right.boxCode, 'ru-RU');
+      });
+    const foundOrderIds = new Set(resultBoxes.flatMap((box) => box.orderIds));
+
+    return {
+      request: {
+        id: request.id,
+        number: request.number,
+        title: request.title,
+        status: request.status,
+        client: request.client,
+      },
+      summary: {
+        boxes: resultBoxes.length,
+        orders: linkedOrderIds.size,
+        confirmedOrders: new Set(resultBoxes.flatMap((box) => box.confirmedOrderIds)).size,
+        unmatchedOrders: [...linkedOrderIds].filter((orderId) => !foundOrderIds.has(orderId)).length,
+      },
+      boxes: resultBoxes,
+      unmatchedOrderIds: [...linkedOrderIds].filter((orderId) => !foundOrderIds.has(orderId)).sort(naturalOrderIdCompare),
+    };
+  }
+
   async saveManualBoxSelection(id: string, dto: UpdateClientRequestBoxSelectionDto, user: AuthUser) {
     await this.prisma.$transaction(async (tx) => {
       const request = await tx.clientRequest.findUnique({
@@ -1108,6 +1311,18 @@ function assertManualBoxSelectionRequest(request: {
 
 function canEditClientRequestAnyStatus(user: AuthUser) {
   return user.permissionCodes.includes('system:admin') || user.roleCodes.some((role) => ['ADMIN', 'OWNER', 'MANAGER'].includes(role));
+}
+
+function parseFbsOrderIds(comment: string | null) {
+  const value = comment?.match(/FBS-(?:заказы|orders)\s*:\s*(.+)$/iu)?.[1] ?? '';
+  return value
+    .split(',')
+    .map((orderId) => orderId.trim())
+    .filter(Boolean);
+}
+
+function naturalOrderIdCompare(left: string, right: string) {
+  return left.localeCompare(right, 'ru-RU', { numeric: true, sensitivity: 'base' });
 }
 
 const clientRequestInclude = {

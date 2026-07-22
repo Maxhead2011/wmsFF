@@ -98,6 +98,12 @@ export class ClientRequestsController {
     return this.clientRequests.getManualBoxSelection(id, user);
   }
 
+  @Get(':id/fbs-box-search')
+  @RequirePermissions('stock:write')
+  getFbsBoxSearch(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.clientRequests.getFbsBoxSearch(id, user);
+  }
+
   @Put(':id/manual-box-selection')
   @RequirePermissions('stock:write')
   saveManualBoxSelection(

@@ -1229,6 +1229,13 @@
   color: #0f766e;
 }
 
+.client-request-action-button--fbs-box-search {
+  grid-column: span 2;
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
 .client-request-action-button--refresh-instruction {
   border-color: #d7dde5;
   background: #f8fafc;
@@ -1677,6 +1684,196 @@
 
 .manual-box-selection-modal__error {
   white-space: pre-line;
+}
+
+.fbs-box-search-modal {
+  width: min(1040px, 100%);
+}
+
+.fbs-box-search-modal__body {
+  background: #f8fafc;
+}
+
+.fbs-box-search-modal__summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.fbs-box-search-modal__summary > span {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: #eff6ff;
+  color: #1e3a8a;
+  padding: 10px 12px;
+}
+
+.fbs-box-search-modal__summary small {
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.fbs-box-search-modal__summary strong {
+  font-size: 21px;
+}
+
+.fbs-box-search-modal__search {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
+  background: #fff;
+  padding: 0 12px;
+}
+
+.fbs-box-search-modal__search > svg {
+  color: #64748b;
+}
+
+.fbs-box-search-modal__search input {
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+}
+
+.fbs-box-search-modal__search button {
+  display: inline-flex;
+  border: 0;
+  background: transparent;
+  color: #64748b;
+  padding: 4px;
+  cursor: pointer;
+}
+
+.fbs-box-search-results {
+  display: grid;
+  gap: 10px;
+}
+
+.fbs-box-search-card {
+  overflow: hidden;
+  border: 1px solid #bfdbfe;
+  border-left: 5px solid #3b82f6;
+  border-radius: 11px;
+  background: #fff;
+}
+
+.fbs-box-search-card.is-confirmed {
+  border-color: #86efac;
+  border-left-color: #22c55e;
+}
+
+.fbs-box-search-card > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 11px 13px;
+}
+
+.fbs-box-search-card > header > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: #1d4ed8;
+}
+
+.fbs-box-search-card.is-confirmed > header > div {
+  color: #15803d;
+}
+
+.fbs-box-search-card > header strong {
+  overflow-wrap: anywhere;
+  font-size: 16px;
+}
+
+.fbs-box-search-card > header > span {
+  flex: 0 0 auto;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.fbs-box-search-card__orders {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: #eff6ff;
+  color: #1e40af;
+  padding: 9px 13px;
+}
+
+.fbs-box-search-card.is-confirmed .fbs-box-search-card__orders {
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.fbs-box-search-card__orders strong {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.fbs-box-search-card__orders span {
+  flex: 0 0 auto;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.fbs-box-search-card__orders span.is-confirmed {
+  color: #15803d;
+}
+
+.fbs-box-search-card__items {
+  display: grid;
+}
+
+.fbs-box-search-card__items > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  padding: 10px 13px;
+}
+
+.fbs-box-search-card__items > div + div {
+  border-top: 1px solid #e2e8f0;
+}
+
+.fbs-box-search-card__items span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.fbs-box-search-card__items span:last-child {
+  text-align: right;
+}
+
+.fbs-box-search-card__items strong {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.fbs-box-search-card__items small {
+  color: #64748b;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.fbs-box-search-modal__unmatched {
+  margin: 0;
 }
 
 .emergency-xlsx-modal__warning {
@@ -2907,6 +3104,20 @@
 }
 
 @media (max-width: 760px) {
+  .fbs-box-search-modal__summary {
+    grid-template-columns: 1fr;
+  }
+
+  .fbs-box-search-card > header,
+  .fbs-box-search-card__orders {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .fbs-box-search-card__orders span {
+    flex: initial;
+  }
+
   .balance-review-card,
   .balance-review-line {
     grid-template-columns: 1fr;
