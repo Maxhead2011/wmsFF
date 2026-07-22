@@ -1676,7 +1676,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   private async formatFbsTsdAssembly(task: FbsTsdAssemblyRecord, user: AuthUser, message: string) {
     const state = fbsTsdStage(task);
-    const [client, skuDetails, balances, reservations, completedToday, requestSummary, orderSticker, recentStickers] = await Promise.all([
+    const [client, skuDetails, balances, reservations, completedToday, requestSummary, orderSticker, recentStickers, sourceBoxUsage] = await Promise.all([
       this.prisma.client.findUnique({
         where: { id: task.clientId },
         select: { id: true, code: true, name: true },
@@ -1721,6 +1721,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }),
       state === 'READY_TO_COMPLETE' ? this.loadFbsTsdOrderSticker(task) : Promise.resolve(null),
       this.fbsTsdStickerHistory(task.deviceCode, user),
+      this.fbsTsdSourceBoxUsage(task),
     ]);
     const reservedByBox = new Map<string, number>();
     reservations.forEach((reservation) => {
@@ -1773,6 +1774,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         recommendedBoxCode,
         storageBoxes,
         scannedBoxCode: task.boxCode,
+        sourceBoxUsage,
         scannedBarcode: task.barcode,
         kizAccepted: Boolean(task.kiz && task.wbMetaStatus === 'ACCEPTED'),
         wbMetaStatus: task.wbMetaStatus,
@@ -1788,6 +1790,62 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         requestRemainingItems: Math.max(0, requestTotalItems - requestCompletedItems),
         recentStickers,
       },
+    };
+  }
+
+  private async fbsTsdSourceBoxUsage(task: FbsTsdAssemblyRecord) {
+    if (!task.boxId || !task.boxCode) return null;
+
+    const [requestItems, balances] = await Promise.all([
+      this.prisma.clientRequestItem.findMany({
+        where: { requestId: task.requestId },
+        select: {
+          skuId: true,
+          quantity: true,
+          boxSelections: { select: { quantity: true } },
+        },
+      }),
+      this.prisma.stockBalance.findMany({
+        where: {
+          clientId: task.clientId,
+          boxId: task.boxId,
+          status: StockStatus.AVAILABLE,
+          quantity: { gt: 0 },
+        },
+        select: { skuId: true, quantity: true },
+      }),
+    ]);
+
+    const availableBySku = new Map<string, number>();
+    balances.forEach((balance) => {
+      availableBySku.set(
+        balance.skuId,
+        (availableBySku.get(balance.skuId) ?? 0) + balance.quantity,
+      );
+    });
+
+    const remainingBySku = new Map<string, number>();
+    requestItems.forEach((item) => {
+      if (!item.skuId) return;
+      const completed = item.boxSelections.reduce((sum, selection) => sum + selection.quantity, 0);
+      const remaining = Math.max(0, item.quantity - completed);
+      if (remaining === 0) return;
+      remainingBySku.set(item.skuId, (remainingBySku.get(item.skuId) ?? 0) + remaining);
+    });
+
+    let units = 0;
+    let positions = 0;
+    remainingBySku.forEach((remaining, skuId) => {
+      const planned = Math.min(remaining, availableBySku.get(skuId) ?? 0);
+      if (planned <= 0) return;
+      units += planned;
+      positions += 1;
+    });
+
+    return {
+      boxCode: task.boxCode,
+      units,
+      positions,
     };
   }
 

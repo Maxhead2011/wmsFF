@@ -89,8 +89,8 @@ import retrofit2.Response;
 public class MainActivity extends Activity {
     private static final int CAMERA_PERMISSION_REQUEST = 4201;
     private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
-    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.73";
-    private static final String APP_VERSION = "0.1.73";
+    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.74";
+    private static final String APP_VERSION = "0.1.74";
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int BOX_FOUND_GREEN = Color.rgb(187, 247, 208);
     private static final int BOX_DUPLICATE_BLUE = Color.rgb(191, 219, 254);
@@ -1387,6 +1387,14 @@ public class MainActivity extends Activity {
                 tr("Короб подтверждён: ", "Quti tasdiqlandi: ") + nonEmpty(task.scannedBoxCode, "-"),
                 BOX_FOUND_GREEN
             ));
+            if (task.sourceBoxUsage != null) {
+                root.addView(feedbackView(
+                    tr("ИЗ ЭТОГО КОРОБА БУДЕТ ВЗЯТО\n", "BU QUTIDAN OLINADI\n") +
+                        task.sourceBoxUsage.units + tr(" ЕДИНИЦ ТОВАРА · ", " DONA · ") +
+                        task.sourceBoxUsage.positions + tr(" ПОЗИЦИЙ", " TA POZITSIYA"),
+                    Color.rgb(219, 234, 254)
+                ));
+            }
             root.addView(feedbackView(
                 tr("2. ВОЗЬМИТЕ ТОВАР И ОТСКАНИРУЙТЕ ЕГО ШК\n", "2. MAHSULOTNI OLING VA SHKNI SKANERLANG\n") +
                     tr("Название: ", "Nomi: ") + productName + "\n" +

@@ -21,12 +21,19 @@ public class TsdFbsAssemblyResponse {
         public String recommendedBoxCode;
         public List<StorageBox> storageBoxes;
         public String scannedBoxCode;
+        public SourceBoxUsage sourceBoxUsage;
         public String scannedBarcode;
         public boolean kizAccepted;
         public String wbMetaStatus;
         public OrderSticker orderSticker;
         public String errorMessage;
         public String status;
+    }
+
+    public static class SourceBoxUsage {
+        public String boxCode;
+        public int units;
+        public int positions;
     }
 
     public static class OrderSticker {

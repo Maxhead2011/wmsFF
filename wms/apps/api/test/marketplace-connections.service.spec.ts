@@ -1463,4 +1463,36 @@ describe('MarketplaceConnectionsService', () => {
     expect(prisma.fbsTsdAssembly.updateMany).not.toHaveBeenCalled();
   });
 
+  it('calculates how many units and unique product positions will be taken from a scanned FBS box', async () => {
+    const prisma = {
+      clientRequestItem: {
+        findMany: vi.fn().mockResolvedValue([
+          { skuId: 'sku-1', quantity: 5, boxSelections: [{ quantity: 2 }] },
+          { skuId: 'sku-2', quantity: 4, boxSelections: [] },
+          { skuId: 'sku-3', quantity: 1, boxSelections: [] },
+        ]),
+      },
+      stockBalance: {
+        findMany: vi.fn().mockResolvedValue([
+          { skuId: 'sku-1', quantity: 10 },
+          { skuId: 'sku-2', quantity: 2 },
+        ]),
+      },
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+
+    const result = await (service as any).fbsTsdSourceBoxUsage({
+      requestId: 'request-1',
+      clientId: 'client-1',
+      boxId: 'box-1',
+      boxCode: 'FFL_TEST_001',
+    });
+
+    expect(result).toEqual({
+      boxCode: 'FFL_TEST_001',
+      units: 5,
+      positions: 2,
+    });
+  });
+
 });
