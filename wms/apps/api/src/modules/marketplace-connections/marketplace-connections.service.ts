@@ -535,6 +535,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       return this.formatFbsTsdAssembly(task, user, 'КИЗ уже принят Wildberries.');
     }
     const kiz = requiredFbsTsdText(payload.kiz, 'Отсканируйте КИЗ товара.');
+    if (task.kiz && task.wbMetaStatus === 'PENDING' && task.kiz.toLowerCase() !== kiz.toLowerCase()) {
+      throw new BadRequestException(
+        'Для этого заказа уже сохранён другой КИЗ и ожидается подтверждение Wildberries. Повторно отсканируйте тот же товар.',
+      );
+    }
     if (kiz.length < 16 || kiz.length > 135) {
       throw new BadRequestException('Отсканирован не КИЗ. Нужен код Data Matrix длиной от 16 до 135 символов.');
     }
@@ -544,11 +549,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
     const mark = await this.prisma.productMark.findFirst({
       where: {
-        clientId: task.clientId,
         value: { equals: kiz, mode: Prisma.QueryMode.insensitive },
       },
       select: {
         id: true,
+        clientId: true,
         skuId: true,
         boxId: true,
         status: true,
@@ -556,22 +561,21 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         sku: { select: { name: true } },
       },
     });
-    if (!mark) {
-      throw new BadRequestException('Этот КИЗ не найден в остатках WMS. Отложите товар и возьмите другой.');
+    if (mark && mark.clientId !== task.clientId) {
+      throw new BadRequestException('Этот КИЗ уже зарегистрирован в WMS у другого клиента. Передайте товар менеджеру.');
     }
-    if (mark.skuId !== task.skuId) {
+    if (mark && mark.skuId !== task.skuId) {
       throw new BadRequestException(`Этот КИЗ относится к другому товару: ${mark.sku.name}.`);
     }
-    if (mark.boxId !== task.boxId) {
+    if (mark && mark.boxId !== task.boxId) {
       throw new BadRequestException(`Этот КИЗ числится в коробе ${mark.box?.code ?? 'без номера'}, а открыт ${task.boxCode}.`);
     }
-    if (mark.status !== StockStatus.AVAILABLE) {
+    if (mark && mark.status !== StockStatus.AVAILABLE) {
       throw new BadRequestException('Этот КИЗ уже находится в сборке или был отгружен. Возьмите другую единицу.');
     }
     const duplicate = await this.prisma.fbsTsdAssembly.findFirst({
       where: {
         id: { not: task.id },
-        clientId: task.clientId,
         kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
         status: { not: 'RELEASED' },
       },
@@ -579,6 +583,68 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     });
     if (duplicate) {
       throw new BadRequestException(`Этот КИЗ уже привязан к FBS-заказу ${duplicate.orderId}. Возьмите другую единицу.`);
+    }
+
+    let registeredHistoricalMarkId: string | null = null;
+    if (!mark) {
+      const scannedGtin = extractGtinFromKiz(kiz);
+      const allowedBarcodes = uniqueStrings([task.barcode, ...jsonStringArray(task.barcodes)]);
+      if (!scannedGtin || !allowedBarcodes.some((barcode) => gtinMatchesBarcode(scannedGtin, barcode))) {
+        throw new BadRequestException(
+          `КИЗ не соответствует товару «${task.productName}». Верните товар в короб и отсканируйте КИЗ с той же единицы, чей ШК был подтверждён.`,
+        );
+      }
+
+      try {
+        registeredHistoricalMarkId = await this.prisma.$transaction(async (tx) => {
+          const [available, registeredMarks] = await Promise.all([
+            tx.stockBalance.aggregate({
+              where: {
+                clientId: task.clientId,
+                skuId: task.skuId,
+                boxId: task.boxId,
+                status: StockStatus.AVAILABLE,
+              },
+              _sum: { quantity: true },
+            }),
+            tx.productMark.count({
+              where: {
+                clientId: task.clientId,
+                skuId: task.skuId,
+                boxId: task.boxId,
+                status: StockStatus.AVAILABLE,
+              },
+            }),
+          ]);
+          if ((available._sum.quantity ?? 0) <= registeredMarks) {
+            throw new BadRequestException(
+              `В коробе ${task.boxCode} нет свободной единицы этого товара без зарегистрированного КИЗа. Передайте короб менеджеру для сверки.`,
+            );
+          }
+
+          const created = await tx.productMark.create({
+            data: {
+              clientId: task.clientId,
+              skuId: task.skuId,
+              boxId: task.boxId,
+              value: kiz,
+              sourceDocument: `FBS TSD, заказ ${task.orderId}: КИЗ восстановлен по фактическому товару`,
+              status: StockStatus.AVAILABLE,
+            },
+            select: { id: true },
+          });
+          await tx.fbsTsdAssembly.update({
+            where: { id: task.id },
+            data: { kiz, wbMetaStatus: 'PENDING', errorMessage: null },
+          });
+          return created.id;
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      } catch (caught) {
+        if (isUniqueError(caught)) {
+          throw new BadRequestException('Этот КИЗ уже успели зарегистрировать в WMS. Обновите задание и проверьте товар.');
+        }
+        throw caught;
+      }
     }
 
     const connection = await this.prisma.clientMarketplaceConnection.findFirst({
@@ -603,10 +669,22 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : 'Wildberries не принял КИЗ.';
-      await this.prisma.fbsTsdAssembly.update({
-        where: { id: task.id },
-        data: { wbMetaStatus: 'REJECTED', errorMessage: message },
-      });
+      if (registeredHistoricalMarkId) {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.productMark.deleteMany({
+            where: { id: registeredHistoricalMarkId!, clientId: task.clientId, value: kiz },
+          });
+          await tx.fbsTsdAssembly.updateMany({
+            where: { id: task.id, kiz, wbMetaStatus: 'PENDING' },
+            data: { kiz: null, wbMetaStatus: 'REJECTED', errorMessage: message },
+          });
+        });
+      } else {
+        await this.prisma.fbsTsdAssembly.update({
+          where: { id: task.id },
+          data: { wbMetaStatus: 'REJECTED', errorMessage: message },
+        });
+      }
       throw new BadRequestException(`Wildberries не принял КИЗ: ${message}`);
     }
 
@@ -614,7 +692,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       where: { id: task.id },
       data: { kiz, wbMetaStatus: 'ACCEPTED', errorMessage: null },
     });
-    return this.formatFbsTsdAssembly(updated, user, 'КИЗ принят Wildberries. Подтвердите сборку заказа.');
+    return this.formatFbsTsdAssembly(
+      updated,
+      user,
+      registeredHistoricalMarkId
+        ? 'КИЗ принят Wildberries и зарегистрирован в остатках WMS. Подтвердите сборку заказа.'
+        : 'КИЗ принят Wildberries. Подтвердите сборку заказа.',
+    );
   }
 
   async completeFbsTsdAssembly(taskId: string, user: AuthUser) {
@@ -3289,6 +3373,20 @@ function requiredFbsTsdText(value: unknown, message: string) {
 
 function jsonStringArray(value: Prisma.JsonValue): string[] {
   return Array.isArray(value) ? uniqueStrings(value.map(textValue)) : [];
+}
+
+function extractGtinFromKiz(value: string) {
+  const normalized = value.trim().replace(/^\]d2/i, '').replace(/^\(01\)/, '01');
+  const match = normalized.match(/^01(\d{14})/);
+  return match?.[1] ?? null;
+}
+
+function gtinMatchesBarcode(gtin: string, barcode: string) {
+  const digits = barcode.replace(/\D/g, '');
+  if (![8, 12, 13, 14].includes(digits.length)) {
+    return false;
+  }
+  return digits.padStart(14, '0') === gtin;
 }
 
 function fbsTsdStage(task: FbsTsdAssemblyRecord) {
