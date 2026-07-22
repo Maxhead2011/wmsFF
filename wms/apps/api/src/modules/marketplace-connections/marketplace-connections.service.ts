@@ -963,7 +963,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           clientId: fresh.clientId,
           eventType: ClientRequestEventType.COMMENT,
           title: 'FBS-заказ собран на ТСД',
-          body: `Заказ ${fresh.orderId}; короб ${fresh.boxCode}; сотрудник ${fresh.workerName ?? fresh.deviceCode}${fresh.kiz ? '; КИЗ передан WB' : ''}.`,
+          body: `Заказ ${fresh.orderId}; короб ${fresh.boxCode}; сотрудник ${fresh.workerName ?? fresh.deviceCode}${fresh.kiz ? `; КИЗ ${printableFbsKiz(fresh.kiz)}` : ''}${fresh.stickerPartB ? `; наклейка WB ${fresh.stickerPartB}` : ''}.`,
           createdByUserId: user.id,
         },
       });
@@ -1010,21 +1010,28 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   private async emptyFbsTsdAssembly(deviceCode: string, user: AuthUser, message: string) {
-    const completedToday = await this.fbsTsdCompletedToday(deviceCode, user);
+    const [completedToday, recentStickers] = await Promise.all([
+      this.fbsTsdCompletedToday(deviceCode, user),
+      this.fbsTsdStickerHistory(deviceCode, user),
+    ]);
     return {
       state: 'EMPTY',
       message,
       task: null,
-      progress: { completedToday },
+      progress: { completedToday, recentStickers },
     };
   }
 
   private async formatFbsTsdAssembly(task: FbsTsdAssemblyRecord, user: AuthUser, message: string) {
     const state = fbsTsdStage(task);
-    const [client, balances, reservations, completedToday, requestSummary, orderSticker] = await Promise.all([
+    const [client, skuDetails, balances, reservations, completedToday, requestSummary, orderSticker, recentStickers] = await Promise.all([
       this.prisma.client.findUnique({
         where: { id: task.clientId },
         select: { id: true, code: true, name: true },
+      }),
+      this.prisma.sku.findUnique({
+        where: { id: task.skuId },
+        select: { color: true, size: true },
       }),
       this.prisma.stockBalance.findMany({
         where: {
@@ -1061,6 +1068,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         },
       }),
       state === 'READY_TO_COMPLETE' ? this.loadFbsTsdOrderSticker(task) : Promise.resolve(null),
+      this.fbsTsdStickerHistory(task.deviceCode, user),
     ]);
     const reservedByBox = new Map<string, number>();
     reservations.forEach((reservation) => {
@@ -1104,6 +1112,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           id: task.skuId,
           name: task.productName,
           article: task.article,
+          color: skuDetails?.color ?? null,
+          size: skuDetails?.size ?? null,
           barcodes: jsonStringArray(task.barcodes),
         },
         itemCount: task.itemCount,
@@ -1124,6 +1134,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         requestTotalItems,
         requestCompletedItems,
         requestRemainingItems: Math.max(0, requestTotalItems - requestCompletedItems),
+        recentStickers,
       },
     };
   }
@@ -1131,7 +1142,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   private async loadFbsTsdOrderSticker(task: FbsTsdAssemblyRecord) {
     const cacheKey = `${task.connectionId}:${task.orderId}`;
     const cached = this.fbsTsdStickerCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) return cached.value;
+    if (cached && cached.expiresAt > Date.now()) {
+      await this.persistFbsTsdOrderSticker(task.id, cached.value);
+      return cached.value;
+    }
 
     const connection = await this.prisma.clientMarketplaceConnection.findFirst({
       where: {
@@ -1168,12 +1182,74 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         expiresAt: Date.now() + 30 * 60 * 1_000,
         value,
       });
+      await this.persistFbsTsdOrderSticker(task.id, value);
       return value;
     } catch (caught) {
       const reason = caught instanceof Error ? caught.message : 'неизвестная ошибка';
       this.logger.warn(`WB sticker is temporarily unavailable for FBS TSD order ${task.orderId}: ${reason}`);
       return null;
     }
+  }
+
+  private async persistFbsTsdOrderSticker(
+    taskId: string,
+    sticker: { partA: string; partB: string; barcode: string },
+  ) {
+    await this.prisma.fbsTsdAssembly.updateMany({
+      where: { id: taskId },
+      data: {
+        stickerPartA: sticker.partA || null,
+        stickerPartB: sticker.partB || null,
+        stickerBarcode: sticker.barcode || null,
+      },
+    });
+  }
+
+  private async fbsTsdStickerHistory(deviceCode: string, user: AuthUser) {
+    const clientFilter = this.clientScopes.resolveClientFilter(user);
+    const rows = await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        deviceCode,
+        clientId: clientFilter,
+        status: 'COMPLETED',
+        OR: [
+          { stickerPartB: { not: null } },
+          { stickerBarcode: { not: null } },
+        ],
+      },
+      select: {
+        orderId: true,
+        requestId: true,
+        productName: true,
+        article: true,
+        boxCode: true,
+        stickerPartA: true,
+        stickerPartB: true,
+        stickerBarcode: true,
+        completedAt: true,
+      },
+      orderBy: { completedAt: 'desc' },
+      take: 50,
+    });
+    const requestIds = uniqueStrings(rows.map((row) => row.requestId));
+    const requests = requestIds.length > 0
+      ? await this.prisma.clientRequest.findMany({
+          where: { id: { in: requestIds } },
+          select: { id: true, number: true },
+        })
+      : [];
+    const requestNumberById = new Map(requests.map((request) => [request.id, request.number]));
+    return rows.map((row) => ({
+      orderId: row.orderId,
+      requestNumber: requestNumberById.get(row.requestId) ?? null,
+      productName: row.productName,
+      article: row.article,
+      boxCode: row.boxCode,
+      partA: row.stickerPartA,
+      partB: row.stickerPartB,
+      barcode: row.stickerBarcode,
+      completedAt: row.completedAt?.toISOString() ?? null,
+    }));
   }
 
   private async fbsTsdCompletedToday(deviceCode: string, user: AuthUser) {
@@ -4095,6 +4171,14 @@ function round(value: number, digits: number) {
 
 function cleanJson(value: Record<string, unknown>) {
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonObject;
+}
+
+function printableFbsKiz(value: string) {
+  return value
+    .replace(/\u001d/gi, '<GS>')
+    .replace(/[\u0000-\u001c\u001e-\u001f\u007f]/g, (symbol) =>
+      `<0x${symbol.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}>`,
+    );
 }
 
 function validDate(value: string | null | undefined) {

@@ -687,6 +687,9 @@ describe('MarketplaceConnectionsService', () => {
       clientMarketplaceConnection: {
         findFirst: vi.fn().mockResolvedValue({ apiKey: 'secret-key' }),
       },
+      fbsTsdAssembly: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
     };
     vi.stubGlobal(
       'fetch',
@@ -701,6 +704,7 @@ describe('MarketplaceConnectionsService', () => {
     const service = new MarketplaceConnectionsService(prisma as never, {} as never);
 
     const result = await (service as any).loadFbsTsdOrderSticker({
+      id: 'task-1',
       clientId: 'client-1',
       connectionId: 'connection-1',
       orderId: '5355080461',
@@ -719,6 +723,14 @@ describe('MarketplaceConnectionsService', () => {
         body: JSON.stringify({ orders: [5355080461] }),
       }),
     );
+    expect(prisma.fbsTsdAssembly.updateMany).toHaveBeenCalledWith({
+      where: { id: 'task-1' },
+      data: {
+        stickerPartA: '12345',
+        stickerPartB: '9753',
+        stickerBarcode: 'WB123',
+      },
+    });
   });
 
   it('switches an untouched TSD task when the scanned box belongs to another pending order in the same request', async () => {

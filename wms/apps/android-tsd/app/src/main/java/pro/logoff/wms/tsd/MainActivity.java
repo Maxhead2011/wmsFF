@@ -88,8 +88,8 @@ import retrofit2.Response;
 public class MainActivity extends Activity {
     private static final int CAMERA_PERMISSION_REQUEST = 4201;
     private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
-    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.70";
-    private static final String APP_VERSION = "0.1.70";
+    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.71";
+    private static final String APP_VERSION = "0.1.71";
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int BOX_FOUND_GREEN = Color.rgb(187, 247, 208);
     private static final int BOX_DUPLICATE_BLUE = Color.rgb(191, 219, 254);
@@ -1285,6 +1285,14 @@ public class MainActivity extends Activity {
             ? fbsAssembly.progress.completedToday
             : 0;
         root.addView(messageView(tr("Собрано сегодня: ", "Bugun yig‘ildi: ") + completedToday));
+        int stickerHistoryCount = fbsAssembly != null && fbsAssembly.progress != null &&
+            fbsAssembly.progress.recentStickers != null
+            ? fbsAssembly.progress.recentStickers.size()
+            : 0;
+        root.addView(secondaryButton(
+            tr("История наклеек", "Stikerlar tarixi") + " (" + stickerHistoryCount + ")",
+            view -> showFbsStickerHistory()
+        ));
 
         if (fbsBusy) {
             root.addView(feedbackView(
@@ -1314,12 +1322,19 @@ public class MainActivity extends Activity {
         String clientName = task.client == null ? "-" : nonEmpty(task.client.name, task.client.code);
         String productName = task.product == null ? "-" : nonEmpty(task.product.name, "-");
         String article = task.product == null ? "-" : nonEmpty(task.product.article, "-");
+        String color = task.product == null ? "-" : nonEmpty(task.product.color, tr("не указан", "ko‘rsatilmagan"));
+        String size = task.product == null ? "-" : nonEmpty(task.product.size, tr("не указан", "ko‘rsatilmagan"));
+        String state = nonEmpty(fbsAssembly.state, "SCAN_BOX");
         root.addView(taskRow(
             tr("Заказ WB №", "WB buyurtmasi №") + nonEmpty(task.orderId, "-"),
             tr("Клиент: ", "Mijoz: ") + clientName + "\n" +
                 productName + " · " + tr("арт. ", "art. ") + article,
             LIGHT_GRAY
         ));
+        boolean orderStickerReady = false;
+        if ("READY_TO_COMPLETE".equals(state)) {
+            orderStickerReady = renderFbsOrderSticker(root, task);
+        }
         if (fbsAssembly.progress != null && fbsAssembly.progress.requestTotalItems > 0) {
             String requestNumber = fbsAssembly.progress.requestNumber > 0
                 ? String.format(Locale.US, "%06d", fbsAssembly.progress.requestNumber)
@@ -1338,7 +1353,6 @@ public class MainActivity extends Activity {
             root.addView(messageView(statusMessage));
         }
 
-        String state = nonEmpty(fbsAssembly.state, "SCAN_BOX");
         if ("SCAN_BOX".equals(state)) {
             String boxCode = nonEmpty(task.recommendedBoxCode, "-");
             root.addView(feedbackView(
@@ -1361,7 +1375,10 @@ public class MainActivity extends Activity {
             ));
             root.addView(feedbackView(
                 tr("2. ВОЗЬМИТЕ ТОВАР И ОТСКАНИРУЙТЕ ЕГО ШК\n", "2. MAHSULOTNI OLING VA SHKNI SKANERLANG\n") +
-                    productName + "\n" + tr("Артикул: ", "Artikul: ") + article,
+                    tr("Название: ", "Nomi: ") + productName + "\n" +
+                    tr("Артикул: ", "Artikul: ") + article + "\n" +
+                    tr("Цвет: ", "Rang: ") + color + "\n" +
+                    tr("РАЗМЕР: ", "O‘LCHAM: ") + size,
                 BOX_MOVEMENT_BLUE
             ));
             fbsScanInput = input(tr("Сканируйте ШК товара", "Mahsulot SHK sini skanerlang"));
@@ -1394,30 +1411,10 @@ public class MainActivity extends Activity {
                 tr("ВСЁ ВЕРНО\n", "HAMMASI TO‘G‘RI\n") + readyText,
                 BOX_FOUND_GREEN
             ));
-            if (task.orderSticker != null && !nonEmpty(task.orderSticker.imageBase64, "").isEmpty()) {
-                String largeDigits = nonEmpty(task.orderSticker.partB, "—");
-                root.addView(feedbackView(
-                    tr("НАКЛЕЙТЕ ШК ЗАКАЗА WB\nИЩИТЕ НАКЛЕЙКУ С КРУПНЫМИ ЦИФРАМИ: ",
-                        "WB BUYURTMA SHK STIKERINI YOPISHTIRING\nKATTA RAQAMLI STIKERNI TOPING: ") +
-                        largeDigits,
-                    Color.rgb(254, 240, 138)
-                ));
-                ImageView stickerView = fbsOrderStickerView(task.orderSticker.imageBase64);
-                if (stickerView != null) root.addView(stickerView);
-                root.addView(messageView(
-                    tr("Наклейка для заказа №", "Buyurtma stikeri №") + nonEmpty(task.orderId, "-") +
-                        " · " + tr("часть A: ", "A qismi: ") + nonEmpty(task.orderSticker.partA, "-") +
-                        " · " + tr("часть B: ", "B qismi: ") + largeDigits
-                ));
+            if (orderStickerReady) {
                 root.addView(primaryMenuButton(
                     tr("Готово — наклейка нанесена", "Tayyor — stiker yopishtirildi"),
                     view -> completeFbsAssembly()
-                ));
-            } else {
-                root.addView(feedbackView(
-                    tr("Наклейка WB временно не загрузилась. Нажмите «Обновить» и не завершайте заказ без правильной наклейки.",
-                        "WB stikeri vaqtincha yuklanmadi. «Yangilash»ni bosing va to‘g‘ri stikersiz buyurtmani yakunlamang."),
-                    Color.rgb(254, 226, 226)
                 ));
             }
         } else if ("COMPLETED".equals(state)) {
@@ -1442,6 +1439,70 @@ public class MainActivity extends Activity {
         setScrollableContent(root);
         if (fbsScanInput != null) fbsScanInput.requestFocus();
         refreshHeaderText();
+    }
+
+    private boolean renderFbsOrderSticker(LinearLayout root, TsdFbsAssemblyResponse.Task task) {
+        if (task.orderSticker == null || nonEmpty(task.orderSticker.imageBase64, "").isEmpty()) {
+            root.addView(feedbackView(
+                tr("Наклейка WB временно не загрузилась. Нажмите «Обновить» и не завершайте заказ без правильной наклейки.",
+                    "WB stikeri vaqtincha yuklanmadi. «Yangilash»ni bosing va to‘g‘ri stikersiz buyurtmani yakunlamang."),
+                Color.rgb(254, 226, 226)
+            ));
+            return false;
+        }
+        String largeDigits = nonEmpty(task.orderSticker.partB, "—");
+        root.addView(feedbackView(
+            tr("НАКЛЕЙТЕ ШК ЗАКАЗА WB\nИЩИТЕ НАКЛЕЙКУ С КРУПНЫМИ ЦИФРАМИ: ",
+                "WB BUYURTMA SHK STIKERINI YOPISHTIRING\nKATTA RAQAMLI STIKERNI TOPING: ") + largeDigits,
+            Color.rgb(254, 240, 138)
+        ));
+        ImageView stickerView = fbsOrderStickerView(task.orderSticker.imageBase64);
+        if (stickerView != null) root.addView(stickerView);
+        root.addView(messageView(
+            tr("Наклейка для заказа №", "Buyurtma stikeri №") + nonEmpty(task.orderId, "-") +
+                " · " + tr("часть A: ", "A qismi: ") + nonEmpty(task.orderSticker.partA, "-") +
+                " · " + tr("часть B: ", "B qismi: ") + largeDigits
+        ));
+        return stickerView != null;
+    }
+
+    private void showFbsStickerHistory() {
+        List<TsdFbsAssemblyResponse.StickerHistoryItem> history =
+            fbsAssembly != null && fbsAssembly.progress != null
+                ? fbsAssembly.progress.recentStickers
+                : null;
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(8), dp(8), dp(8), dp(8));
+        if (history == null || history.isEmpty()) {
+            content.addView(messageView(tr(
+                "Наклеенных ШК пока нет.",
+                "Hozircha yopishtirilgan SHK yo‘q."
+            )));
+        } else {
+            for (TsdFbsAssemblyResponse.StickerHistoryItem item : history) {
+                String requestNumber = item.requestNumber > 0
+                    ? String.format(Locale.US, "%06d", item.requestNumber)
+                    : "-";
+                String largeDigits = nonEmpty(item.partB, "—");
+                content.addView(taskRow(
+                    tr("КРУПНЫЕ ЦИФРЫ: ", "KATTA RAQAMLAR: ") + largeDigits,
+                    tr("Заказ WB №", "WB buyurtmasi №") + nonEmpty(item.orderId, "-") +
+                        " · " + tr("заявка №", "ariza №") + requestNumber + "\n" +
+                        nonEmpty(item.productName, "-") + " · " + tr("арт. ", "art. ") + nonEmpty(item.article, "-") + "\n" +
+                        tr("Короб: ", "Quti: ") + nonEmpty(item.boxCode, "-") + "\n" +
+                        tr("ШК наклейки: ", "Stiker SHK: ") + nonEmpty(item.barcode, "-"),
+                    BOX_FOUND_GREEN
+                ));
+            }
+        }
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(content);
+        new AlertDialog.Builder(this)
+            .setTitle(tr("История наклеек FBS", "FBS stikerlar tarixi"))
+            .setView(scroll)
+            .setPositiveButton(tr("Закрыть", "Yopish"), null)
+            .show();
     }
 
     private void submitFbsScan() {

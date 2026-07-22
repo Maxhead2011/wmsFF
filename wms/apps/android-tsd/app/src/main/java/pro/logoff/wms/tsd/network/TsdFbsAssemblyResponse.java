@@ -45,6 +45,8 @@ public class TsdFbsAssemblyResponse {
         public String id;
         public String name;
         public String article;
+        public String color;
+        public String size;
         public List<String> barcodes;
     }
 
@@ -60,5 +62,18 @@ public class TsdFbsAssemblyResponse {
         public int requestTotalItems;
         public int requestCompletedItems;
         public int requestRemainingItems;
+        public List<StickerHistoryItem> recentStickers;
+    }
+
+    public static class StickerHistoryItem {
+        public String orderId;
+        public int requestNumber;
+        public String productName;
+        public String article;
+        public String boxCode;
+        public String partA;
+        public String partB;
+        public String barcode;
+        public String completedAt;
     }
 }

@@ -1354,6 +1354,9 @@ model FbsTsdAssembly {
   barcode       String?
   kiz           String?
   wbMetaStatus  String          @default("NOT_REQUIRED")
+  stickerPartA   String?
+  stickerPartB   String?
+  stickerBarcode String?
   errorMessage  String?
   completedAt   DateTime?
   createdAt     DateTime        @default(now())
