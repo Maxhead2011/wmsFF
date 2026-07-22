@@ -370,10 +370,18 @@ export class AnalyticsService {
   }
 
   private async fetchRegionalSales(apiKey: string, periods: AnalyticsPeriods) {
-    const [current, past] = await Promise.all([
-      wbJson(`${WB_ANALYTICS_URL}/api/v1/analytics/region-sale?${periodQuery(periods.selected)}`, apiKey),
-      wbJson(`${WB_ANALYTICS_URL}/api/v1/analytics/region-sale?${periodQuery(periods.past)}`, apiKey),
-    ]);
+    // WB applies a seller-wide limiter across analytics methods. Let the core
+    // product requests finish, then keep the two region periods apart.
+    await delay(5_000);
+    const current = await wbJsonWithLimiterRetry(
+      `${WB_ANALYTICS_URL}/api/v1/analytics/region-sale?${periodQuery(periods.selected)}`,
+      apiKey,
+    );
+    await delay(10_500);
+    const past = await wbJsonWithLimiterRetry(
+      `${WB_ANALYTICS_URL}/api/v1/analytics/region-sale?${periodQuery(periods.past)}`,
+      apiKey,
+    );
     return {
       current: asArray(current.report).map(asRecord),
       past: asArray(past.report).map(asRecord),
@@ -945,6 +953,19 @@ async function wbJson(url: string, apiKey: string, body?: JsonRecord) {
     throw new BadGatewayException(`Wildberries: ${message}`);
   }
   return payload;
+}
+
+async function wbJsonWithLimiterRetry(url: string, apiKey: string) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await wbJson(url, apiKey);
+    } catch (caught) {
+      const limited = safeErrorMessage(caught).toLocaleLowerCase('en-US').includes('limited by global limiter');
+      if (!limited || attempt === 2) throw caught;
+      await delay(10_500);
+    }
+  }
+  throw new BadGatewayException('Wildberries: исчерпаны попытки получения региональной аналитики.');
 }
 
 function sourceError(source: string, reason: unknown) {
