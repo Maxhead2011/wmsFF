@@ -8,6 +8,8 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.media.AudioManager;
 import android.media.ToneGenerator;
@@ -20,6 +22,7 @@ import android.os.Vibrator;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
+import android.util.Base64;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
@@ -27,6 +30,7 @@ import android.view.Window;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
@@ -84,8 +88,8 @@ import retrofit2.Response;
 public class MainActivity extends Activity {
     private static final int CAMERA_PERMISSION_REQUEST = 4201;
     private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
-    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.69";
-    private static final String APP_VERSION = "0.1.69";
+    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.70";
+    private static final String APP_VERSION = "0.1.70";
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int BOX_FOUND_GREEN = Color.rgb(187, 247, 208);
     private static final int BOX_DUPLICATE_BLUE = Color.rgb(191, 219, 254);
@@ -1316,6 +1320,18 @@ public class MainActivity extends Activity {
                 productName + " · " + tr("арт. ", "art. ") + article,
             LIGHT_GRAY
         ));
+        if (fbsAssembly.progress != null && fbsAssembly.progress.requestTotalItems > 0) {
+            String requestNumber = fbsAssembly.progress.requestNumber > 0
+                ? String.format(Locale.US, "%06d", fbsAssembly.progress.requestNumber)
+                : "-";
+            root.addView(feedbackView(
+                tr("ЗАЯВКА №", "ARIZA №") + requestNumber + "\n" +
+                    tr("Осталось положить: ", "Joylash qoldi: ") +
+                    fbsAssembly.progress.requestRemainingItems + " " +
+                    tr("из ", "/ ") + fbsAssembly.progress.requestTotalItems,
+                Color.rgb(219, 234, 254)
+            ));
+        }
         if (fbsFeedbackColor != 0 && !statusMessage.isEmpty()) {
             root.addView(feedbackView(statusMessage, fbsFeedbackColor));
         } else if (!statusMessage.isEmpty()) {
@@ -1378,10 +1394,32 @@ public class MainActivity extends Activity {
                 tr("ВСЁ ВЕРНО\n", "HAMMASI TO‘G‘RI\n") + readyText,
                 BOX_FOUND_GREEN
             ));
-            root.addView(primaryMenuButton(
-                tr("Готово — заказ собран", "Tayyor — buyurtma yig‘ildi"),
-                view -> completeFbsAssembly()
-            ));
+            if (task.orderSticker != null && !nonEmpty(task.orderSticker.imageBase64, "").isEmpty()) {
+                String largeDigits = nonEmpty(task.orderSticker.partB, "—");
+                root.addView(feedbackView(
+                    tr("НАКЛЕЙТЕ ШК ЗАКАЗА WB\nИЩИТЕ НАКЛЕЙКУ С КРУПНЫМИ ЦИФРАМИ: ",
+                        "WB BUYURTMA SHK STIKERINI YOPISHTIRING\nKATTA RAQAMLI STIKERNI TOPING: ") +
+                        largeDigits,
+                    Color.rgb(254, 240, 138)
+                ));
+                ImageView stickerView = fbsOrderStickerView(task.orderSticker.imageBase64);
+                if (stickerView != null) root.addView(stickerView);
+                root.addView(messageView(
+                    tr("Наклейка для заказа №", "Buyurtma stikeri №") + nonEmpty(task.orderId, "-") +
+                        " · " + tr("часть A: ", "A qismi: ") + nonEmpty(task.orderSticker.partA, "-") +
+                        " · " + tr("часть B: ", "B qismi: ") + largeDigits
+                ));
+                root.addView(primaryMenuButton(
+                    tr("Готово — наклейка нанесена", "Tayyor — stiker yopishtirildi"),
+                    view -> completeFbsAssembly()
+                ));
+            } else {
+                root.addView(feedbackView(
+                    tr("Наклейка WB временно не загрузилась. Нажмите «Обновить» и не завершайте заказ без правильной наклейки.",
+                        "WB stikeri vaqtincha yuklanmadi. «Yangilash»ni bosing va to‘g‘ri stikersiz buyurtmani yakunlamang."),
+                    Color.rgb(254, 226, 226)
+                ));
+            }
         } else if ("COMPLETED".equals(state)) {
             root.addView(feedbackView(
                 tr("ГОТОВО\nЗаказ собран и записан в заявку.", "TAYYOR\nBuyurtma yig‘ildi va arizaga yozildi."),
@@ -1425,6 +1463,29 @@ public class MainActivity extends Activity {
 
     private void completeFbsAssembly() {
         executeFbsAction("complete", null, null);
+    }
+
+    private ImageView fbsOrderStickerView(String encodedImage) {
+        try {
+            byte[] bytes = Base64.decode(encodedImage, Base64.DEFAULT);
+            Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+            if (bitmap == null) return null;
+            ImageView image = new ImageView(this);
+            image.setImageBitmap(bitmap);
+            image.setAdjustViewBounds(true);
+            image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            image.setBackgroundColor(Color.WHITE);
+            image.setPadding(dp(12), dp(12), dp(12), dp(12));
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            );
+            params.setMargins(dp(16), dp(6), dp(16), dp(10));
+            image.setLayoutParams(params);
+            return image;
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
     }
 
     private void confirmReleaseFbsAssembly() {

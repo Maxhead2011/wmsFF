@@ -24,6 +24,10 @@ import {
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
+import {
+  FBS_VNUKOVO,
+  quoteFixedFbsCalculator,
+} from '../logistics/fbs-calculator';
 import type { FbsOrderSelectionDto } from './dto/fbs-order-selection.dto';
 import type { FbsPassDto } from './dto/fbs-pass.dto';
 import { UpdateFbsBillingSettingsDto } from './dto/update-fbs-billing-settings.dto';
@@ -167,6 +171,13 @@ const FBS_TSD_STALE_UNSTARTED_TASK_MS = 2 * 60 * 60 * 1_000;
 export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MarketplaceConnectionsService.name);
   private readonly fbsOrdersCache = new Map<string, { expiresAt: number; value: FbsOrdersResponse }>();
+  private readonly fbsTsdStickerCache = new Map<
+    string,
+    {
+      expiresAt: number;
+      value: { partA: string; partB: string; barcode: string; imageBase64: string };
+    }
+  >();
   private fbsRefreshTimer: ReturnType<typeof setInterval> | undefined;
   private fbsBackgroundRefreshRunning = false;
 
@@ -533,7 +544,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const freeQuantity = (available._sum.quantity ?? 0) - (reserved._sum.itemCount ?? 0);
     if (freeQuantity < task.itemCount) {
       throw new BadRequestException(
-        `В коробе ${box.code} нет свободного остатка нужного товара. Возьмите короб, указанный на экране.`,
+        `Короб ${box.code} не нужен для заказа №${task.orderId}: в нём нет свободного остатка нужного товара. Отсканируйте короб, указанный на экране.`,
       );
     }
 
@@ -847,7 +858,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   private async formatFbsTsdAssembly(task: FbsTsdAssemblyRecord, user: AuthUser, message: string) {
-    const [client, balances, reservations, completedToday] = await Promise.all([
+    const state = fbsTsdStage(task);
+    const [client, balances, reservations, completedToday, requestSummary, orderSticker] = await Promise.all([
       this.prisma.client.findUnique({
         where: { id: task.clientId },
         select: { id: true, code: true, name: true },
@@ -874,6 +886,19 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         select: { boxId: true, itemCount: true },
       }),
       this.fbsTsdCompletedToday(task.deviceCode, user),
+      this.prisma.clientRequest.findUnique({
+        where: { id: task.requestId },
+        select: {
+          number: true,
+          items: {
+            select: {
+              quantity: true,
+              boxSelections: { select: { quantity: true } },
+            },
+          },
+        },
+      }),
+      state === 'READY_TO_COMPLETE' ? this.loadFbsTsdOrderSticker(task) : Promise.resolve(null),
     ]);
     const reservedByBox = new Map<string, number>();
     reservations.forEach((reservation) => {
@@ -899,7 +924,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       .filter((box) => box.quantity >= task.itemCount || box.id === task.boxId)
       .sort((left, right) => left.quantity - right.quantity || left.code.localeCompare(right.code, 'ru-RU'));
     const recommendedBoxCode = task.boxCode ?? storageBoxes[0]?.code ?? null;
-    const state = fbsTsdStage(task);
+    const requestTotalItems = requestSummary?.items.reduce((sum, item) => sum + item.quantity, 0) ?? 0;
+    const requestCompletedItems = requestSummary?.items.reduce(
+      (sum, item) => sum + item.boxSelections.reduce((itemSum, selection) => itemSum + selection.quantity, 0),
+      0,
+    ) ?? 0;
     return {
       state,
       message,
@@ -923,11 +952,66 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         scannedBarcode: task.barcode,
         kizAccepted: Boolean(task.kiz && task.wbMetaStatus === 'ACCEPTED'),
         wbMetaStatus: task.wbMetaStatus,
+        orderSticker,
         errorMessage: task.errorMessage,
         status: task.status,
       },
-      progress: { completedToday },
+      progress: {
+        completedToday,
+        requestNumber: requestSummary?.number ?? null,
+        requestTotalItems,
+        requestCompletedItems,
+        requestRemainingItems: Math.max(0, requestTotalItems - requestCompletedItems),
+      },
     };
+  }
+
+  private async loadFbsTsdOrderSticker(task: FbsTsdAssemblyRecord) {
+    const cacheKey = `${task.connectionId}:${task.orderId}`;
+    const cached = this.fbsTsdStickerCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+    const connection = await this.prisma.clientMarketplaceConnection.findFirst({
+      where: {
+        id: task.connectionId,
+        clientId: task.clientId,
+        marketplace: MarketplaceType.WILDBERRIES,
+        isActive: true,
+      },
+      select: { apiKey: true },
+    });
+    if (!connection) return null;
+
+    try {
+      const response = await marketplaceJson(
+        'https://marketplace-api.wildberries.ru/api/v3/orders/stickers?type=png&width=58&height=40',
+        {
+          method: 'POST',
+          headers: wbHeaders(connection.apiKey),
+          body: JSON.stringify({ orders: [numericWbOrderId(task.orderId)] }),
+        },
+      );
+      const sticker = asArray<Record<string, unknown>>(response.stickers).find(
+        (item) => textValue(item.orderId) === task.orderId,
+      );
+      const imageBase64 = textValue(sticker?.file);
+      if (!sticker || !imageBase64) return null;
+      const value = {
+        partA: textValue(sticker.partA),
+        partB: textValue(sticker.partB),
+        barcode: textValue(sticker.barcode),
+        imageBase64,
+      };
+      this.fbsTsdStickerCache.set(cacheKey, {
+        expiresAt: Date.now() + 30 * 60 * 1_000,
+        value,
+      });
+      return value;
+    } catch (caught) {
+      const reason = caught instanceof Error ? caught.message : 'неизвестная ошибка';
+      this.logger.warn(`WB sticker is temporarily unavailable for FBS TSD order ${task.orderId}: ${reason}`);
+      return null;
+    }
   }
 
   private async fbsTsdCompletedToday(deviceCode: string, user: AuthUser) {
@@ -2385,30 +2469,31 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         ? supplyPlanByKey.get(fbsSupplyPlanKey(order.marketplace, order.connectionId, order.supplyId)) ?? null
         : null,
     }));
-    const [billingByOrder, requestLinks] = await Promise.all([
-      this.ensureFbsProcessingCharges(
-        clientId,
-        ordersWithShipmentPlans.filter((order) => order.category === 'shipped'),
-      ),
-      ordersWithShipmentPlans.length > 0
-        ? this.prisma.fbsOrderRequestLink.findMany({
-            where: {
-              clientId,
-              connectionId: { in: uniqueStrings(ordersWithShipmentPlans.map((order) => order.connectionId)) },
-              orderId: { in: uniqueStrings(ordersWithShipmentPlans.map((order) => order.id)) },
-            },
-            include: {
-              request: { select: { id: true, number: true, title: true, status: true } },
-            },
-          })
-        : Promise.resolve([]),
-    ]);
+    const requestLinks = ordersWithShipmentPlans.length > 0
+      ? await this.prisma.fbsOrderRequestLink.findMany({
+          where: {
+            clientId,
+            connectionId: { in: uniqueStrings(ordersWithShipmentPlans.map((order) => order.connectionId)) },
+            orderId: { in: uniqueStrings(ordersWithShipmentPlans.map((order) => order.id)) },
+          },
+          include: {
+            request: { select: { id: true, number: true, title: true, status: true } },
+          },
+        })
+      : [];
     const requestByOrder = new Map(
       requestLinks.map((link) => [selectionKey(link.connectionId, link.orderId), link.request]),
     );
-    const orders = ordersWithShipmentPlans.map((order) => ({
+    const ordersWithRequests = ordersWithShipmentPlans.map((order) => ({
       ...order,
       request: requestByOrder.get(selectionKey(order.connectionId, order.id)) ?? null,
+    }));
+    const billingByOrder = await this.ensureFbsProcessingCharges(
+      clientId,
+      ordersWithRequests.filter((order) => order.category === 'shipped'),
+    );
+    const orders = ordersWithRequests.map((order) => ({
+      ...order,
       billing: billingByOrder.get(fbsOrderKey(order)) ?? null,
     }));
 
@@ -2593,244 +2678,186 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       return result;
     }
 
-    const { settings, fbsService } = await this.ensureFbsBillingBase(clientId);
-    const palletsEnabled = settings.palletsEnabled === true;
-    const boxesPerPallet = Math.max(1, Number(settings.boxesPerPallet) || 16);
-    const palletServiceId = settings.palletServiceId ?? null;
-    const serviceIds = uniqueStrings([
-      fbsService.id,
-      settings.boxFormationServiceId ?? '',
-      settings.boxMaterialServiceId ?? '',
-      palletServiceId ?? '',
-      ...settings.additionalServices.map((selection) => selection.serviceId),
-    ]);
-    const pricedServices = await this.prisma.billingService.findMany({
-      where: { id: { in: serviceIds }, isActive: true },
-      include: {
-        clientPrices: {
-          where: { clientId },
-          take: 1,
-        },
-      },
-    });
-    const serviceById = new Map(pricedServices.map((service) => [service.id, service]));
-    const servicePrice = (serviceId: string | null) => {
-      if (!serviceId) return 0;
-      const service = serviceById.get(serviceId);
-      if (!service) return 0;
-      const clientPrice = service.clientPrices[0] ?? null;
-      if (clientPrice?.isActive === false) return 0;
-      return Number(clientPrice?.priceRub ?? service.defaultPriceRub ?? 0);
-    };
-    const fbsProcessingPerItemRub = servicePrice(fbsService.id);
-    const additionalServices = settings.additionalServices
-      .map((selection) => {
-        const service = serviceById.get(selection.serviceId);
-        const quantityMultiplier = Number(selection.quantityMultiplier);
-        return service && !isPalletBillingService(service)
-          ? {
-              serviceId: service.id,
-              code: service.code,
-              name: service.name,
-              quantityMultiplier,
-              unitPriceRub: servicePrice(service.id),
-            }
-          : null;
-      })
-      .filter(Boolean) as Array<{
-        serviceId: string;
-        code: string;
-        name: string;
-        quantityMultiplier: number;
-        unitPriceRub: number;
-      }>;
-    const additionalPerItemRub = additionalServices.reduce(
-      (sum, service) => sum + service.unitPriceRub * service.quantityMultiplier,
-      0,
-    );
+    const { fbsService } = await this.ensureFbsBillingBase(clientId);
     const batches = groupFbsOrdersByShipment(orders);
 
-    for (const batchOrders of batches.values()) {
+    for (const [shipmentKey, batchOrders] of batches) {
       const shipmentItems = batchOrders.reduce(
         (sum, order) => sum + Math.max(1, order.itemCount),
         0,
       );
       const weights = batchOrders.map((order) => Math.max(1, order.itemCount));
-      const deliveryDestination =
-        batchOrders[0]?.shipmentPlan?.destination ?? settings.defaultDeliveryDestination;
-      const destinationBasePriceRub =
-        deliveryDestination === FbsDeliveryDestination.VNUKOVO_SORTING_CENTER
-          ? Number(settings.vnukovoBasePriceRub)
-          : Number(settings.pickupPointBasePriceRub);
-      const extraBlocks = Math.ceil(
-        Math.max(0, shipmentItems - settings.baseIncludedItems) /
-          Math.max(1, settings.extraBlockItems),
-      );
-      const deliveryTotalRub = round(
-        destinationBasePriceRub + extraBlocks * Number(settings.extraBlockPriceRub),
-        2,
-      );
-      const boxCount = Math.ceil(shipmentItems / Math.max(1, settings.boxCapacityItems));
-      const boxFormationTotalRub = round(
-        boxCount * servicePrice(settings.boxFormationServiceId),
-        2,
-      );
-      const boxMaterialTotalRub = round(
-        boxCount * servicePrice(settings.boxMaterialServiceId),
-        2,
-      );
-      const palletCount =
-        palletsEnabled && palletServiceId
-          ? Math.ceil(boxCount / boxesPerPallet)
-          : 0;
-      const palletTotalRub = round(
-        palletCount * servicePrice(palletServiceId),
-        2,
-      );
+      const quote = quoteFixedFbsCalculator(shipmentItems, FBS_VNUKOVO);
+      if (!quote) throw new BadRequestException('Не удалось рассчитать обработку FBS по тарифу Внуково.');
+      const requestIds = uniqueStrings(batchOrders.map((order) => order.request?.id ?? ''));
+      const requestId = requestIds.length === 1 ? requestIds[0] : null;
+      const invoiceSourceKey = `fbs-invoice:${clientId}:${shipmentKey}`;
+      const lockedInvoice = await this.prisma.billingInvoice.findUnique({
+        where: { sourceKey: invoiceSourceKey },
+        select: {
+          id: true,
+          number: true,
+          status: true,
+          totalRub: true,
+          items: { select: { chargeId: true }, take: 1 },
+        },
+      });
+      if (lockedInvoice && lockedInvoice.status !== BillingInvoiceStatus.DRAFT) {
+        const lockedTotalRub = Number(lockedInvoice.totalRub);
+        batchOrders.forEach((order, orderIndex) => {
+          const totalRub = allocateRub(lockedTotalRub, weights, orderIndex);
+          result.set(fbsOrderKey(order), {
+            chargeId: lockedInvoice.items[0]?.chargeId ?? `invoice:${lockedInvoice.id}`,
+            status: BillingChargeStatus.APPROVED,
+            unitPriceRub: round(totalRub / Math.max(1, order.itemCount), 2),
+            totalRub,
+            invoiceNumber: lockedInvoice.number,
+            invoiceStatus: lockedInvoice.status,
+            breakdown: {
+              fbsProcessingRub: totalRub,
+              additionalServicesRub: 0,
+              deliveryRub: 0,
+              boxFormationRub: 0,
+              boxMaterialRub: 0,
+              palletRub: 0,
+              shipmentKey,
+              shipmentItems,
+              boxCount: quote.boxes,
+              palletCount: 0,
+              deliveryDestination: FbsDeliveryDestination.VNUKOVO_SORTING_CENTER,
+            },
+          });
+        });
+        continue;
+      }
+
+      const description = 'Обработка заказов по FBS';
+      const sourceKey = `fbs-calculator:${clientId}:${shipmentKey}`;
+      const serviceDate = batchOrders
+        .map((order) =>
+          validDate(order.deliveryDate) ??
+          validDate(order.sellerDate) ??
+          validDate(order.createdAt),
+        )
+        .filter((date): date is Date => Boolean(date))
+        .sort((left, right) => left.getTime() - right.getTime())[0] ?? new Date();
+      const chargeMetadata = cleanJson({
+        kind: 'FBS',
+        pricingVersion: 4,
+        calculator: 'BUILT_IN',
+        calculatorDestination: FBS_VNUKOVO,
+        marketplace: batchOrders[0].marketplace,
+        connectionId: batchOrders[0].connectionId,
+        supplyId: batchOrders[0].supplyId,
+        shipmentKey,
+        requestIds,
+        orderIds: batchOrders.map((order) => order.id),
+        quantity: shipmentItems,
+        quote,
+      });
+      const existing = await this.prisma.billingCharge.findUnique({
+        where: { sourceKey },
+        include: {
+          invoiceItems: {
+            where: { invoice: { status: { not: 'CANCELLED' } } },
+            select: { invoice: { select: { number: true, status: true } } },
+            take: 1,
+          },
+        },
+      });
+      const unitPriceRub = round(quote.totalWithTax / shipmentItems, 2);
+      const shouldUpdate =
+        existing?.status === BillingChargeStatus.DRAFT &&
+        existing.invoiceItems.every((item) => item.invoice.status === BillingInvoiceStatus.DRAFT) &&
+        (existing.serviceId !== fbsService.id ||
+          existing.requestId !== requestId ||
+          existing.description !== description ||
+          Number(existing.quantity) !== shipmentItems ||
+          Number(existing.unitPriceRub) !== unitPriceRub ||
+          Number(existing.totalRub) !== quote.totalWithTax ||
+          JSON.stringify(existing.metadata ?? null) !== JSON.stringify(chargeMetadata));
+      const charge = !existing
+        ? await this.prisma.billingCharge.create({
+            data: {
+              clientId,
+              serviceId: fbsService.id,
+              requestId,
+              description,
+              unit: BillingUnit.PIECE,
+              quantity: shipmentItems,
+              unitPriceRub,
+              totalRub: quote.totalWithTax,
+              status: BillingChargeStatus.DRAFT,
+              serviceDate,
+              source: BillingChargeSource.MANUAL,
+              sourceKey,
+              metadata: chargeMetadata,
+            },
+            include: {
+              invoiceItems: {
+                where: { invoice: { status: { not: 'CANCELLED' } } },
+                select: { invoice: { select: { number: true, status: true } } },
+                take: 1,
+              },
+            },
+          })
+        : shouldUpdate
+          ? await this.prisma.billingCharge.update({
+              where: { id: existing.id },
+              data: {
+                serviceId: fbsService.id,
+                requestId,
+                description,
+                quantity: shipmentItems,
+                unitPriceRub,
+                totalRub: quote.totalWithTax,
+                serviceDate,
+                metadata: chargeMetadata,
+              },
+              include: {
+                invoiceItems: {
+                  where: { invoice: { status: { not: 'CANCELLED' } } },
+                  select: { invoice: { select: { number: true, status: true } } },
+                  take: 1,
+                },
+              },
+            })
+          : existing;
+      const invoice = charge.invoiceItems[0]?.invoice ?? null;
 
       for (const [orderIndex, order] of batchOrders.entries()) {
         const itemCount = Math.max(1, order.itemCount);
-        const fbsProcessingRub = round(fbsProcessingPerItemRub * itemCount, 2);
-        const additionalServicesRub = round(additionalPerItemRub * itemCount, 2);
-        const deliveryRub = allocateRub(deliveryTotalRub, weights, orderIndex);
-        const boxFormationRub = allocateRub(boxFormationTotalRub, weights, orderIndex);
-        const boxMaterialRub = allocateRub(boxMaterialTotalRub, weights, orderIndex);
-        const palletRub = allocateRub(palletTotalRub, weights, orderIndex);
-        const totalRub = round(
-          fbsProcessingRub +
-            additionalServicesRub +
-            deliveryRub +
-            boxFormationRub +
-            boxMaterialRub +
-            palletRub,
+        const totalRub = allocateRub(quote.totalWithTax, weights, orderIndex);
+        const fbsProcessingRub = allocateRub(
+          (quote.processingCost + quote.stickersCost) * 1.5,
+          weights,
+          orderIndex,
+        );
+        const deliveryRub = allocateRub(quote.deliveryPrice, weights, orderIndex);
+        const boxFormationRub = allocateRub(quote.assemblyCost * 1.5, weights, orderIndex);
+        const boxMaterialRub = allocateRub(quote.boxesCost * 1.5, weights, orderIndex);
+        const additionalServicesRub = round(
+          totalRub - fbsProcessingRub - deliveryRub - boxFormationRub - boxMaterialRub,
           2,
         );
-        const unitPriceRub = round(totalRub / itemCount, 2);
-        const shipmentKey = fbsShipmentKey(order);
         const breakdown: NonNullable<FbsOrderSummary['billing']>['breakdown'] = {
           fbsProcessingRub,
           additionalServicesRub,
           deliveryRub,
           boxFormationRub,
           boxMaterialRub,
-          palletRub,
+          palletRub: 0,
           shipmentKey,
           shipmentItems,
-          boxCount,
-          palletCount,
-          deliveryDestination,
+          boxCount: quote.boxes,
+          palletCount: 0,
+          deliveryDestination: FbsDeliveryDestination.VNUKOVO_SORTING_CENTER,
         };
-        const description = `Комплексная обработка FBS-заказа ${marketplaceShortLabel(order.marketplace)} №${order.id}`;
-        const chargeMetadata = cleanJson({
-          kind: 'FBS',
-          pricingVersion: 3,
-          marketplace: order.marketplace,
-          connectionId: order.connectionId,
-          orderId: order.id,
-          supplyId: order.supplyId,
-          itemCount,
-          fbsProcessingPerItemRub,
-          additionalServices,
-          breakdown,
-          deliveryRules: {
-            destination: deliveryDestination,
-            destinationBasePriceRub,
-            baseIncludedItems: settings.baseIncludedItems,
-            extraBlockItems: settings.extraBlockItems,
-            extraBlockPriceRub: Number(settings.extraBlockPriceRub),
-          },
-          boxRules: {
-            capacityItems: settings.boxCapacityItems,
-            formationServiceId: settings.boxFormationServiceId,
-            materialServiceId: settings.boxMaterialServiceId,
-          },
-          palletRules: {
-            enabled: palletsEnabled,
-            boxesPerPallet,
-            serviceId: palletServiceId,
-          },
-          palletsIncluded: palletsEnabled,
-        });
-        const sourceKey = `fbs:${order.marketplace.toLowerCase()}:${order.connectionId}:${order.id}`;
-        const existing = await this.prisma.billingCharge.findUnique({
-          where: { sourceKey },
-          include: {
-            invoiceItems: {
-              where: { invoice: { status: { not: 'CANCELLED' } } },
-              select: {
-                invoice: { select: { number: true, status: true } },
-              },
-              take: 1,
-            },
-          },
-        });
-        const shouldUpdate =
-          existing?.status === BillingChargeStatus.DRAFT &&
-          existing.invoiceItems.length === 0 &&
-          (existing.serviceId !== fbsService.id ||
-            existing.description !== description ||
-            Number(existing.quantity) !== itemCount ||
-            Number(existing.unitPriceRub) !== unitPriceRub ||
-            Number(existing.totalRub) !== totalRub ||
-            JSON.stringify(existing.metadata ?? null) !== JSON.stringify(chargeMetadata));
-        const charge = !existing
-          ? await this.prisma.billingCharge.create({
-              data: {
-                clientId,
-                serviceId: fbsService.id,
-                description,
-                unit: BillingUnit.PIECE,
-                quantity: itemCount,
-                unitPriceRub,
-                totalRub,
-                status: BillingChargeStatus.DRAFT,
-                serviceDate:
-                  validDate(order.deliveryDate) ??
-                  validDate(order.sellerDate) ??
-                  validDate(order.createdAt) ??
-                  new Date(),
-                source: BillingChargeSource.MANUAL,
-                sourceKey,
-                metadata: chargeMetadata,
-              },
-              include: {
-                invoiceItems: {
-                  where: { invoice: { status: { not: 'CANCELLED' } } },
-                  select: {
-                    invoice: { select: { number: true, status: true } },
-                  },
-                  take: 1,
-                },
-              },
-            })
-          : shouldUpdate
-            ? await this.prisma.billingCharge.update({
-              where: { id: existing.id },
-              data: {
-                serviceId: fbsService.id,
-                description,
-                quantity: itemCount,
-                unitPriceRub,
-                totalRub,
-                metadata: chargeMetadata,
-              },
-              include: {
-                invoiceItems: {
-                  where: { invoice: { status: { not: 'CANCELLED' } } },
-                  select: {
-                    invoice: { select: { number: true, status: true } },
-                  },
-                  take: 1,
-                },
-              },
-            })
-            : existing;
-        const invoice = charge.invoiceItems[0]?.invoice ?? null;
         result.set(fbsOrderKey(order), {
           chargeId: charge.id,
           status: charge.status,
-          unitPriceRub: Number(charge.unitPriceRub),
-          totalRub: Number(charge.totalRub),
+          unitPriceRub: round(totalRub / itemCount, 2),
+          totalRub,
           invoiceNumber: invoice?.number ?? null,
           invoiceStatus: invoice?.status ?? null,
           breakdown,
@@ -2850,39 +2877,44 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const eligibleOrders = orders.filter((order) => order.shipmentPlan && order.supplyId);
     const shipments = groupFbsOrdersByShipment(eligibleOrders);
     for (const [shipmentKey, shipmentOrders] of shipments) {
-      const alreadyLinked = shipmentOrders
-        .map((order) => billingByOrder.get(fbsOrderKey(order)))
-        .find((billing) => Boolean(billing?.invoiceNumber));
-      if (alreadyLinked?.invoiceNumber) {
-        shipmentOrders.forEach((order) => {
-          const billing = billingByOrder.get(fbsOrderKey(order));
-          if (billing && !billing.invoiceNumber) {
-            billingByOrder.set(fbsOrderKey(order), {
-              ...billing,
-              invoiceNumber: alreadyLinked.invoiceNumber,
-              invoiceStatus: alreadyLinked.invoiceStatus,
-            });
-          }
-        });
-        continue;
-      }
       const sourceKey = `fbs-invoice:${clientId}:${shipmentKey}`;
       let invoice = await this.prisma.billingInvoice.findUnique({
         where: { sourceKey },
         select: { id: true, number: true, status: true },
       });
-      if (!invoice) {
-        const chargeIds = uniqueStrings(
-          shipmentOrders.map((order) => billingByOrder.get(fbsOrderKey(order))?.chargeId ?? ''),
-        );
-        const charges = await this.prisma.billingCharge.findMany({
-          where: { id: { in: chargeIds }, clientId },
-          orderBy: [{ serviceDate: 'asc' }, { createdAt: 'asc' }],
+      if (invoice && invoice.status !== BillingInvoiceStatus.DRAFT) {
+        shipmentOrders.forEach((order) => {
+          const billing = billingByOrder.get(fbsOrderKey(order));
+          if (billing) {
+            billingByOrder.set(fbsOrderKey(order), {
+              ...billing,
+              invoiceNumber: invoice!.number,
+              invoiceStatus: invoice!.status,
+            });
+          }
         });
-        if (charges.length === 0) continue;
-        const periodFrom = charges.reduce((date, charge) => (charge.serviceDate < date ? charge.serviceDate : date), charges[0].serviceDate);
-        const periodTo = charges.reduce((date, charge) => (charge.serviceDate > date ? charge.serviceDate : date), charges[0].serviceDate);
-        const totalRub = round(charges.reduce((sum, charge) => sum + Number(charge.totalRub), 0), 2);
+        continue;
+      }
+      const chargeIds = uniqueStrings(
+        shipmentOrders.map((order) => billingByOrder.get(fbsOrderKey(order))?.chargeId ?? ''),
+      );
+      const charges = await this.prisma.billingCharge.findMany({
+        where: { id: { in: chargeIds }, clientId },
+        orderBy: [{ serviceDate: 'asc' }, { createdAt: 'asc' }],
+      });
+      if (charges.length === 0) continue;
+      const periodFrom = charges.reduce(
+        (date, charge) => (charge.serviceDate < date ? charge.serviceDate : date),
+        charges[0].serviceDate,
+      );
+      const periodTo = charges.reduce(
+        (date, charge) => (charge.serviceDate > date ? charge.serviceDate : date),
+        charges[0].serviceDate,
+      );
+      const totalRub = round(charges.reduce((sum, charge) => sum + Number(charge.totalRub), 0), 2);
+      const requestIds = uniqueStrings(shipmentOrders.map((order) => order.request?.id ?? ''));
+      const requestId = requestIds.length === 1 ? requestIds[0] : null;
+      if (!invoice) {
         const number = await this.nextFbsInvoiceNumber(periodTo);
         try {
           invoice = await this.prisma.billingInvoice.create({
@@ -2894,6 +2926,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               status: BillingInvoiceStatus.DRAFT,
               source: BillingInvoiceSource.MANUAL,
               sourceKey,
+              requestId,
               totalRub,
               comment: `Автоматический черновик счёта за обработку FBS-поставки ${shipmentOrders[0].supplyId}.`,
               items: {
@@ -2917,6 +2950,53 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             select: { id: true, number: true, status: true },
           });
         }
+      } else {
+        const previousItems = await this.prisma.billingInvoiceItem.findMany({
+          where: { invoiceId: invoice.id },
+          select: { chargeId: true },
+        });
+        const previousChargeIds = uniqueStrings(previousItems.map((item) => item.chargeId ?? ''))
+          .filter((chargeId) => !chargeIds.includes(chargeId));
+        await this.prisma.$transaction(async (tx) => {
+          const editableInvoice = await tx.billingInvoice.findFirst({
+            where: { id: invoice!.id, status: BillingInvoiceStatus.DRAFT },
+            select: { id: true },
+          });
+          if (!editableInvoice) return;
+          await tx.billingInvoiceItem.deleteMany({ where: { invoiceId: invoice!.id } });
+          await tx.billingInvoiceItem.createMany({
+            data: charges.map((charge) => ({
+              invoiceId: invoice!.id,
+              chargeId: charge.id,
+              description: charge.description,
+              unit: charge.unit,
+              quantity: charge.quantity,
+              unitPriceRub: charge.unitPriceRub,
+              totalRub: charge.totalRub,
+              serviceDate: charge.serviceDate,
+            })),
+          });
+          await tx.billingInvoice.update({
+            where: { id: invoice!.id },
+            data: {
+              periodFrom,
+              periodTo,
+              requestId,
+              totalRub,
+              comment: `Автоматический черновик счёта за обработку FBS-поставки ${shipmentOrders[0].supplyId}.`,
+            },
+          });
+          if (previousChargeIds.length > 0) {
+            await tx.billingCharge.updateMany({
+              where: {
+                id: { in: previousChargeIds },
+                clientId,
+                status: BillingChargeStatus.DRAFT,
+              },
+              data: { status: BillingChargeStatus.CANCELLED },
+            });
+          }
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
       }
       if (!invoice) continue;
       shipmentOrders.forEach((order) => {
@@ -3591,10 +3671,6 @@ function fbsStatusLabel(supplierStatus: string, wbStatus: string) {
 
 function fbsOrderKey(order: Pick<FbsOrderSummary, 'marketplace' | 'connectionId' | 'id'>) {
   return `${order.marketplace}:${order.connectionId}:${order.id}`;
-}
-
-function marketplaceShortLabel(marketplace: MarketplaceType) {
-  return marketplace === MarketplaceType.WILDBERRIES ? 'WB' : marketplace === MarketplaceType.OZON ? 'Ozon' : marketplace;
 }
 
 function mapWildberriesCard(card: Record<string, unknown>, size: Record<string, unknown> | null): MarketplaceProductSyncItem {

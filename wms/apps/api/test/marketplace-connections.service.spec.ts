@@ -460,6 +460,9 @@ describe('MarketplaceConnectionsService', () => {
         })),
         update: vi.fn(),
       },
+      billingInvoice: {
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
     };
     const service = new MarketplaceConnectionsService(prisma as never, {} as never);
 
@@ -482,19 +485,22 @@ describe('MarketplaceConnectionsService', () => {
         data: expect.objectContaining({
           clientId: 'client-1',
           serviceId: 'service-fbs',
-          sourceKey: 'fbs:wildberries:connection-1:1001',
-          unitPriceRub: 715,
-          totalRub: 715,
+          requestId: null,
+          description: 'Обработка заказов по FBS',
+          sourceKey: 'fbs-calculator:client-1:WILDBERRIES:connection-1:supply:WB-GI-1',
+          unitPriceRub: 1839.89,
+          totalRub: 1839.89,
           metadata: expect.objectContaining({
             kind: 'FBS',
-            pricingVersion: 3,
-            orderId: '1001',
-            palletsIncluded: false,
-            breakdown: expect.objectContaining({
-              fbsProcessingRub: 75,
-              deliveryRub: 500,
-              boxFormationRub: 40,
-              boxMaterialRub: 100,
+            pricingVersion: 4,
+            calculator: 'BUILT_IN',
+            calculatorDestination: 'Внуково',
+            orderIds: ['1001'],
+            quote: expect.objectContaining({
+              quantity: 1,
+              boxes: 1,
+              deliveryPrice: 1500,
+              totalWithTax: 1839.89,
             }),
           }),
         }),
@@ -502,11 +508,12 @@ describe('MarketplaceConnectionsService', () => {
     );
     expect(result.get('WILDBERRIES:connection-1:1001')).toMatchObject({
       chargeId: 'charge-1',
-      totalRub: 715,
+      totalRub: 1839.89,
       invoiceNumber: null,
       breakdown: expect.objectContaining({
-        deliveryRub: 500,
+        deliveryRub: 1500,
         boxCount: 1,
+        deliveryDestination: 'VNUKOVO_SORTING_CENTER',
       }),
     });
 
@@ -526,14 +533,16 @@ describe('MarketplaceConnectionsService', () => {
       })),
     );
     const batchCharges = prisma.billingCharge.create.mock.calls.map((call) => call[0].data);
-    expect(batchCharges).toHaveLength(6);
-    expect(
-      batchCharges.reduce(
-        (sum, charge) => sum + Number(charge.metadata.breakdown.deliveryRub),
-        0,
-      ),
-    ).toBe(750);
-    expect(batchCharges.reduce((sum, charge) => sum + Number(charge.totalRub), 0)).toBe(1340);
+    expect(batchCharges).toHaveLength(1);
+    expect(batchCharges[0]).toMatchObject({
+      description: 'Обработка заказов по FBS',
+      quantity: 6,
+      totalRub: 1943.62,
+      metadata: expect.objectContaining({
+        orderIds: ['2001', '2002', '2003', '2004', '2005', '2006'],
+        quote: expect.objectContaining({ deliveryPrice: 1500, totalWithTax: 1943.62 }),
+      }),
+    });
 
     prisma.clientFbsBillingSettings.upsert.mockResolvedValue({
       id: 'settings-1',
@@ -569,30 +578,147 @@ describe('MarketplaceConnectionsService', () => {
     expect(prisma.billingCharge.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          totalRub: 3105,
+          totalRub: 2395.21,
           metadata: expect.objectContaining({
-            palletsIncluded: true,
-            palletRules: {
-              enabled: true,
-              boxesPerPallet: 2,
-              serviceId: 'service-pallet',
-            },
-            breakdown: expect.objectContaining({
-              boxCount: 2,
-              palletCount: 1,
-              palletRub: 300,
+            pricingVersion: 4,
+            quote: expect.objectContaining({
+              boxes: 2,
+              deliveryPrice: 1500,
+              totalWithTax: 2395.21,
             }),
           }),
         }),
       }),
     );
     expect(palletResult.get('WILDBERRIES:connection-1:3001')).toMatchObject({
-      totalRub: 3105,
+      totalRub: 2395.21,
       breakdown: expect.objectContaining({
-        palletCount: 1,
-        palletRub: 300,
+        boxCount: 2,
+        palletCount: 0,
+        palletRub: 0,
       }),
     });
+  });
+
+  it('rebuilds a draft FBS invoice into one calculator line and cancels legacy draft charges', async () => {
+    const tx = {
+      billingInvoiceItem: {
+        deleteMany: vi.fn().mockResolvedValue({ count: 2 }),
+        createMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      billingInvoice: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'invoice-1' }),
+        update: vi.fn().mockResolvedValue({ id: 'invoice-1' }),
+      },
+      billingCharge: { updateMany: vi.fn().mockResolvedValue({ count: 2 }) },
+    };
+    const charge = {
+      id: 'calculator-charge',
+      clientId: 'client-1',
+      description: 'Обработка заказов по FBS',
+      unit: 'PIECE',
+      quantity: new Prisma.Decimal(14),
+      unitPriceRub: new Prisma.Decimal(150.68),
+      totalRub: new Prisma.Decimal(2109.57),
+      serviceDate: new Date('2026-07-22T10:00:00Z'),
+      createdAt: new Date('2026-07-22T10:00:00Z'),
+    };
+    const prisma = {
+      billingInvoice: {
+        findUnique: vi.fn().mockResolvedValue({ id: 'invoice-1', number: 'FBS-202607-0001', status: 'DRAFT' }),
+      },
+      billingCharge: { findMany: vi.fn().mockResolvedValue([charge]) },
+      billingInvoiceItem: {
+        findMany: vi.fn().mockResolvedValue([
+          { chargeId: 'legacy-charge-1' },
+          { chargeId: 'legacy-charge-2' },
+        ]),
+      },
+      $transaction: vi.fn(async (callback: (client: typeof tx) => Promise<unknown>) => callback(tx)),
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    const orders = ['1001', '1002'].map((id) => ({
+      id,
+      marketplace: MarketplaceType.WILDBERRIES,
+      connectionId: 'connection-1',
+      supplyId: 'WB-GI-1',
+      shipmentPlan: { destination: 'VNUKOVO_SORTING_CENTER' },
+      request: { id: 'request-1' },
+    }));
+    const billingByOrder = new Map(
+      orders.map((order) => [
+        `WILDBERRIES:connection-1:${order.id}`,
+        {
+          chargeId: charge.id,
+          status: 'DRAFT',
+          unitPriceRub: 150.68,
+          totalRub: 1054.785,
+          invoiceNumber: null,
+          invoiceStatus: null,
+          breakdown: {},
+        },
+      ]),
+    );
+
+    await (service as any).ensureFbsShipmentInvoices('client-1', orders, billingByOrder);
+
+    expect(tx.billingInvoiceItem.deleteMany).toHaveBeenCalledWith({ where: { invoiceId: 'invoice-1' } });
+    expect(tx.billingInvoiceItem.createMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({
+        invoiceId: 'invoice-1',
+        chargeId: 'calculator-charge',
+        description: 'Обработка заказов по FBS',
+        quantity: charge.quantity,
+        totalRub: charge.totalRub,
+      })],
+    });
+    expect(tx.billingInvoice.update).toHaveBeenCalledWith({
+      where: { id: 'invoice-1' },
+      data: expect.objectContaining({ requestId: 'request-1', totalRub: 2109.57 }),
+    });
+    expect(tx.billingCharge.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({ id: { in: ['legacy-charge-1', 'legacy-charge-2'] }, status: 'DRAFT' }),
+      data: { status: 'CANCELLED' },
+    });
+  });
+
+  it('loads the exact WB sticker and its large four-digit part for the TSD', async () => {
+    const prisma = {
+      clientMarketplaceConnection: {
+        findFirst: vi.fn().mockResolvedValue({ apiKey: 'secret-key' }),
+      },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          stickers: [{ orderId: 5355080461, partA: 12345, partB: 9753, barcode: 'WB123', file: 'aW1hZ2U=' }],
+        }),
+      } as Response)),
+    );
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+
+    const result = await (service as any).loadFbsTsdOrderSticker({
+      clientId: 'client-1',
+      connectionId: 'connection-1',
+      orderId: '5355080461',
+    });
+
+    expect(result).toEqual({
+      partA: '12345',
+      partB: '9753',
+      barcode: 'WB123',
+      imageBase64: 'aW1hZ2U=',
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      'https://marketplace-api.wildberries.ru/api/v3/orders/stickers?type=png&width=58&height=40',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ orders: [5355080461] }),
+      }),
+    );
   });
 
   it('moves selected new WB orders to a supply and refreshes their statuses', async () => {

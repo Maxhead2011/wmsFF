@@ -1027,6 +1027,10 @@ function FbsOrdersView({
   const tableColumnCount = 6 + (!readOnlyView ? 1 : 0) + (view === 'active' ? 1 : 0);
   const itemsCount = visibleOrders.reduce((sum, order) => sum + Math.max(1, order.itemCount), 0);
   const visibleKeys = visibleOrders.map(fbsOrderSelectionKey);
+  const bulkSelectableOrders = visibleOrders.filter(
+    (order) => !order.request || order.request.status === 'CANCELLED',
+  );
+  const bulkSelectableKeys = bulkSelectableOrders.map(fbsOrderSelectionKey);
   const selectedOrders = visibleOrders.filter((order) => selectedOrderKeys.has(fbsOrderSelectionKey(order)));
   const assemblyOrders = selectedOrders.filter(
     (order) => order.marketplace === 'WILDBERRIES' && order.supplierStatus === 'new',
@@ -1060,12 +1064,13 @@ function FbsOrdersView({
   const requestOrders = selectedOrders.filter(
     (order) => order.category === 'active' && (!order.request || order.request.status === 'CANCELLED'),
   );
-  const allVisibleSelected = visibleKeys.length > 0 && visibleKeys.every((key) => selectedOrderKeys.has(key));
+  const allVisibleSelected =
+    bulkSelectableKeys.length > 0 && bulkSelectableKeys.every((key) => selectedOrderKeys.has(key));
 
   function toggleAllVisible() {
     const next = new Set(selectedOrderKeys);
-    if (allVisibleSelected) visibleKeys.forEach((key) => next.delete(key));
-    else visibleKeys.forEach((key) => next.add(key));
+    visibleKeys.forEach((key) => next.delete(key));
+    if (!allVisibleSelected) bulkSelectableKeys.forEach((key) => next.add(key));
     onSelectionChange(next);
   }
 
@@ -1273,7 +1278,11 @@ function FbsOrdersView({
                       <div className="fbs-table__shipment-actions">
                         <button type="button" onClick={() => {
                           const next = new Set(selectedOrderKeys);
-                          group.orders.forEach((order) => next.add(fbsOrderSelectionKey(order)));
+                          group.orders.forEach((order) => {
+                            const key = fbsOrderSelectionKey(order);
+                            if (!order.request || order.request.status === 'CANCELLED') next.add(key);
+                            else next.delete(key);
+                          });
                           onSelectionChange(next);
                         }}>
                           Выбрать поставку

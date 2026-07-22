@@ -23,8 +23,16 @@ public class TsdFbsAssemblyResponse {
         public String scannedBarcode;
         public boolean kizAccepted;
         public String wbMetaStatus;
+        public OrderSticker orderSticker;
         public String errorMessage;
         public String status;
+    }
+
+    public static class OrderSticker {
+        public String partA;
+        public String partB;
+        public String barcode;
+        public String imageBase64;
     }
 
     public static class Client {
@@ -48,5 +56,9 @@ public class TsdFbsAssemblyResponse {
 
     public static class Progress {
         public int completedToday;
+        public int requestNumber;
+        public int requestTotalItems;
+        public int requestCompletedItems;
+        public int requestRemainingItems;
     }
 }

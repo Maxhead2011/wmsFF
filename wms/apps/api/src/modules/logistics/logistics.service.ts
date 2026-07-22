@@ -15,7 +15,13 @@ import { ClientScopeService } from '../auth/client-scope.service';
 import { isClientNotificationEnabled } from '../client-notifications/client-notification-preferences';
 import { TelegramNotificationService } from '../client-notifications/telegram-notification.service';
 import type { LogisticsDirection as ParsedLogisticsDirection } from '../imports/parsers/logistics-xlsx.parser';
-import { DEFAULT_FBS_ITEMS_PER_CARGO_PLACE } from '../marketplace-connections/fbs.constants';
+import {
+  buildFbsCalculatorTotal,
+  calculateFbsBoxes,
+  FBS_KAVKAZ,
+  FBS_VNUKOVO,
+  quoteFixedFbsCalculator,
+} from './fbs-calculator';
 import { AssignDeliveryTripDto } from './dto/assign-delivery-trip.dto';
 import { CreateDeliveryRequestDto } from './dto/create-delivery-request.dto';
 import { CreateLogisticsCarrierDto } from './dto/create-logistics-carrier.dto';
@@ -53,10 +59,6 @@ const DEFAULT_LOGISTICS_ORIGIN = 'Москва';
 const MAX_BOXES_FOR_BOX_TARIFF = 10;
 const BOXES_PER_PALLET = 16;
 const EXTRA_BOXES_PER_PALLET = 4;
-const FBS_BOXES_PER_PALLET = 16;
-const FBS_FIXED_DELIVERY_LIMIT = 1000;
-const FBS_VNUKOVO = 'Внуково';
-const FBS_KAVKAZ = 'Кавказский Бульвар';
 
 @Injectable()
 export class LogisticsService {
@@ -271,19 +273,14 @@ export class LogisticsService {
   }
 
   async quoteFbsCalculator(dto: { quantity: number; destination: string }) {
-    const boxes = Math.ceil(dto.quantity / DEFAULT_FBS_ITEMS_PER_CARGO_PLACE);
-    const specialDeliveryPrice = calculateSpecialFbsDelivery(
-      dto.destination,
-      dto.quantity,
-      boxes,
-    );
-    if (specialDeliveryPrice != null) {
-      return this.buildFbsCalculatorTotal(
-        dto.quantity,
-        boxes,
-        dto.destination,
-        specialDeliveryPrice,
-      );
+    const boxes = calculateFbsBoxes(dto.quantity);
+    const fixedQuote = quoteFixedFbsCalculator(dto.quantity, dto.destination);
+    if (fixedQuote) {
+      return {
+        destination: fixedQuote.destination,
+        totalWithTax: fixedQuote.totalWithTax,
+        requiresManualReview: false,
+      };
     }
     const logistics = await this.quote({
       destination: dto.destination,
@@ -297,33 +294,15 @@ export class LogisticsService {
       };
     }
 
-    return this.buildFbsCalculatorTotal(
+    const quote = buildFbsCalculatorTotal(
       dto.quantity,
       boxes,
       logistics.route.destination,
       logistics.estimatedTotalRub,
     );
-  }
-
-  private buildFbsCalculatorTotal(
-    quantity: number,
-    boxes: number,
-    destination: string,
-    deliveryPrice: number,
-  ) {
-    const processingCost = quantity * 10;
-    const stickersCost = quantity * 3;
-    const boxesCost = boxes * 100;
-    const assemblyCost = boxes * 40;
-    const servicesWithMarkup =
-      (processingCost + stickersCost + boxesCost + assemblyCost) * 1.5;
-    const totalWithTax = Number(
-      (((servicesWithMarkup + deliveryPrice) / 94) * 100).toFixed(2),
-    );
-
     return {
-      destination,
-      totalWithTax,
+      destination: quote.destination,
+      totalWithTax: quote.totalWithTax,
       requiresManualReview: false,
     };
   }
@@ -1120,36 +1099,6 @@ function deliverySourceKey(deliveryRequestId: string) {
 
 function isPalletPackage(packageType?: string | null) {
   return ['PALLET', 'PALLETTE', 'ПАЛЛЕТ', 'ПАЛЛЕТА'].includes((packageType ?? '').trim().toUpperCase());
-}
-
-function calculateSpecialFbsDelivery(destination: string, quantity: number, boxes: number) {
-  const normalized = destination.toLocaleLowerCase('ru-RU').replace(/ё/g, 'е').trim();
-  const isVnukovo = normalized.includes('внуково');
-  const isKavkaz = normalized.includes('кавказ');
-  if (!isVnukovo && !isKavkaz) return null;
-  if (quantity <= FBS_FIXED_DELIVERY_LIMIT) {
-    return isVnukovo ? 1500 : 3000;
-  }
-
-  const pallets = Math.ceil(boxes / FBS_BOXES_PER_PALLET);
-  if (isVnukovo) {
-    return pallets * (pallets <= 2 ? 1500 : 1200);
-  }
-  const pricePerPallet =
-    pallets === 1
-      ? 3500
-      : pallets === 2
-        ? 3000
-        : pallets === 3
-          ? 2800
-          : pallets === 4
-            ? 2500
-            : pallets === 5
-              ? 2300
-              : pallets === 6
-                ? 2200
-                : 2000;
-  return pallets * pricePerPallet;
 }
 
 export function calculateLogisticsPalletCount(boxes: number) {
