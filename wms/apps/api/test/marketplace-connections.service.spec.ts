@@ -744,9 +744,9 @@ describe('MarketplaceConnectionsService', () => {
     expect(result).toMatchObject({ request: { id: 'request-1', number: 42 }, linkedOrders: 2 });
   });
 
-  it('registers a scanned FBS KIZ against an unmarked historical balance before sending it to WB', async () => {
+  it('registers a scanned FBS KIZ against an unmarked historical balance without forcing GTIN to equal the order barcode', async () => {
     const barcode = '4600000000012';
-    const kiz = '010460000000001221SERIAL123456';
+    const kiz = '010590000000001221SERIAL123456';
     const task = {
       id: 'task-1',
       clientId: 'client-1',
@@ -815,40 +815,4 @@ describe('MarketplaceConnectionsService', () => {
     });
   });
 
-  it('rejects an unknown FBS KIZ when its GTIN belongs to another product', async () => {
-    const task = {
-      id: 'task-1',
-      clientId: 'client-1',
-      orderId: '1001',
-      skuId: 'sku-1',
-      productName: 'Костюм',
-      requiresKiz: true,
-      status: 'IN_PROGRESS',
-      boxId: 'box-1',
-      boxCode: 'FFL_TEST_001',
-      barcode: '4600000000012',
-      barcodes: ['4600000000012'],
-      kiz: null,
-      wbMetaStatus: 'PENDING',
-    };
-    const prisma = {
-      productMark: { findFirst: vi.fn().mockResolvedValue(null) },
-      fbsTsdAssembly: { findFirst: vi.fn().mockResolvedValue(null) },
-      $transaction: vi.fn(),
-    };
-    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
-    vi.spyOn(service as any, 'loadOwnedFbsTsdAssembly').mockResolvedValue(task);
-    const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
-
-    await expect(
-      service.scanFbsTsdKiz(
-        'task-1',
-        { kiz: '010590000000001221SERIAL123456' },
-        { id: 'user-1' } as never,
-      ),
-    ).rejects.toThrow('КИЗ не соответствует товару «Костюм»');
-    expect(prisma.$transaction).not.toHaveBeenCalled();
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
 });

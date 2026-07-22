@@ -587,14 +587,6 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
     let registeredHistoricalMarkId: string | null = null;
     if (!mark) {
-      const scannedGtin = extractGtinFromKiz(kiz);
-      const allowedBarcodes = uniqueStrings([task.barcode, ...jsonStringArray(task.barcodes)]);
-      if (!scannedGtin || !allowedBarcodes.some((barcode) => gtinMatchesBarcode(scannedGtin, barcode))) {
-        throw new BadRequestException(
-          `КИЗ не соответствует товару «${task.productName}». Верните товар в короб и отсканируйте КИЗ с той же единицы, чей ШК был подтверждён.`,
-        );
-      }
-
       try {
         registeredHistoricalMarkId = await this.prisma.$transaction(async (tx) => {
           const [available, registeredMarks] = await Promise.all([
@@ -3373,20 +3365,6 @@ function requiredFbsTsdText(value: unknown, message: string) {
 
 function jsonStringArray(value: Prisma.JsonValue): string[] {
   return Array.isArray(value) ? uniqueStrings(value.map(textValue)) : [];
-}
-
-function extractGtinFromKiz(value: string) {
-  const normalized = value.trim().replace(/^\]d2/i, '').replace(/^\(01\)/, '01');
-  const match = normalized.match(/^01(\d{14})/);
-  return match?.[1] ?? null;
-}
-
-function gtinMatchesBarcode(gtin: string, barcode: string) {
-  const digits = barcode.replace(/\D/g, '');
-  if (![8, 12, 13, 14].includes(digits.length)) {
-    return false;
-  }
-  return digits.padStart(14, '0') === gtin;
 }
 
 function fbsTsdStage(task: FbsTsdAssemblyRecord) {
