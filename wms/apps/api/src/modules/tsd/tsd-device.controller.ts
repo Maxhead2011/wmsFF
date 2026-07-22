@@ -39,6 +39,48 @@ export class TsdDeviceController {
     return this.marketplace.getNextFbsTsdAssembly(deviceCode, user);
   }
 
+  @Get('fbs/cargo')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  getFbsCargoPacking(
+    @Query('deviceCode') deviceCode: string | undefined,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.marketplace.getFbsCargoPackingQueue(deviceCode, user);
+  }
+
+  @Post('fbs/cargo/open')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  openFbsCargoPacking(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {
+    return this.marketplace.openFbsCargoPacking(body, user);
+  }
+
+  @Post('fbs/cargo/:id/scan-order')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  scanFbsCargoOrder(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.marketplace.scanFbsCargoOrder(id, body, user);
+  }
+
+  @Post('fbs/cargo/:id/undo-last')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  undoLastFbsCargoOrder(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.marketplace.undoLastFbsCargoOrder(id, user);
+  }
+
+  @Post('fbs/cargo/:id/close')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  closeFbsCargoPacking(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.marketplace.closeFbsCargoPacking(id, user);
+  }
+
   @Post('fbs/tasks/:id/scan-box')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')

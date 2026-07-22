@@ -67,6 +67,7 @@ import pro.logoff.wms.tsd.network.TsdAssemblyPlan;
 import pro.logoff.wms.tsd.network.TsdAssemblyRequestSummary;
 import pro.logoff.wms.tsd.network.TsdBoxlessPackingResponse;
 import pro.logoff.wms.tsd.network.TsdFbsAssemblyResponse;
+import pro.logoff.wms.tsd.network.TsdFbsCargoPackingResponse;
 import pro.logoff.wms.tsd.network.TsdMovementTask;
 import pro.logoff.wms.tsd.network.TsdOperationRequest;
 import pro.logoff.wms.tsd.network.TsdRelabelTask;
@@ -88,8 +89,8 @@ import retrofit2.Response;
 public class MainActivity extends Activity {
     private static final int CAMERA_PERMISSION_REQUEST = 4201;
     private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
-    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.72";
-    private static final String APP_VERSION = "0.1.72";
+    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.73";
+    private static final String APP_VERSION = "0.1.73";
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int BOX_FOUND_GREEN = Color.rgb(187, 247, 208);
     private static final int BOX_DUPLICATE_BLUE = Color.rgb(191, 219, 254);
@@ -131,6 +132,7 @@ public class MainActivity extends Activity {
     private EditText inventoryQuantityInput;
     private EditText inventoryTransferTargetInput;
     private EditText fbsScanInput;
+    private EditText fbsCargoScanInput;
     private TsdAssemblyPlan assemblyPlan;
     private TsdBoxlessPackingResponse boxlessPacking;
     private TsdRelabelTask activeRelabelTask;
@@ -138,6 +140,8 @@ public class MainActivity extends Activity {
     private TsdInventoryBox activeInventoryBox;
     private TsdInventoryDashboard inventoryDashboard;
     private TsdFbsAssemblyResponse fbsAssembly;
+    private TsdFbsCargoPackingResponse fbsCargoPacking;
+    private String selectedFbsCargoPlanId = "";
     private String inventoryType = "";
     private String inventoryClientId = "";
     private String transferredInventoryBoxId = "";
@@ -170,7 +174,9 @@ public class MainActivity extends Activity {
     private Runnable receiptBoxAutoOpenTask;
     private boolean receiptOpeningBox;
     private boolean fbsBusy;
+    private boolean fbsCargoBusy;
     private int fbsFeedbackColor;
+    private int fbsCargoFeedbackColor;
     private String lastAssemblyTouchKey = "";
     private long lastAssemblyTouchAt = 0L;
     private int boxSearchFeedbackColor = 0;
@@ -236,6 +242,10 @@ public class MainActivity extends Activity {
                 submitFbsScan();
                 return true;
             }
+            if (screen == Screen.FBS_CARGO && fbsCargoScanInput != null) {
+                submitFbsCargoScan();
+                return true;
+            }
             if (screen == Screen.INVENTORY_COUNT) {
                 if (activeInventoryBox == null && inventoryBoxInput != null) {
                     openInventoryBox();
@@ -298,6 +308,10 @@ public class MainActivity extends Activity {
         root.addView(primaryMenuButton(tr("Приемка товара", "Tovarni qabul qilish"), view -> openReceipt()));
         root.addView(primaryMenuButton(tr("Сборка заявки", "Buyurtmani yig‘ish"), view -> openAssemblyRequests()));
         root.addView(primaryMenuButton(tr("Сборка FBS", "FBS buyurtmasini yig‘ish"), view -> openFbsAssembly()));
+        root.addView(primaryMenuButton(
+            tr("Упаковка грузомест FBS", "FBS yuk joylarini qadoqlash"),
+            view -> openFbsCargoPacking()
+        ));
         root.addView(primaryMenuButton(tr("Инвентаризация", "Inventarizatsiya"), view -> renderInventoryMenu()));
         root.addView(primaryMenuButton(
             phoneMode
@@ -1696,6 +1710,285 @@ public class MainActivity extends Activity {
             }
         } catch (Throwable ignored) {
         }
+    }
+
+    private void openFbsCargoPacking() {
+        if (safeSession() == null) {
+            statusMessage = tr("Сначала выполните вход в настройках.", "Avval sozlamalarda tizimga kiring.");
+            renderSettingsScreen();
+            return;
+        }
+        fbsCargoPacking = null;
+        selectedFbsCargoPlanId = "";
+        fbsCargoFeedbackColor = 0;
+        statusMessage = tr("Загружаю поставки для ПВЗ...", "PVZ uchun yetkazib berishlar yuklanmoqda...");
+        loadFbsCargoPacking();
+    }
+
+    private void loadFbsCargoPacking() {
+        TsdSession session = safeSession();
+        if (session == null) {
+            renderSettingsScreen();
+            return;
+        }
+        screen = Screen.FBS_CARGO;
+        fbsCargoBusy = true;
+        renderFbsCargoPackingScreen();
+        runBackground(() -> {
+            Response<TsdFbsCargoPackingResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                .getFbsCargoPacking(session.authorizationHeader(), session.deviceCode)
+                .execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                String message = responseErrorMessage(response, tr(
+                    "Не удалось загрузить грузоместа FBS.",
+                    "FBS yuk joylarini yuklab bo‘lmadi."
+                ));
+                mainHandler.post(() -> showFbsCargoError(message, response.code() < 500));
+                return;
+            }
+            TsdFbsCargoPackingResponse loaded = response.body();
+            mainHandler.post(() -> applyFbsCargoResponse(loaded, false));
+        });
+    }
+
+    private void renderFbsCargoPackingScreen() {
+        screen = Screen.FBS_CARGO;
+        fbsCargoScanInput = null;
+        LinearLayout root = baseRoot();
+        applyScreenFeedback(root, fbsCargoFeedbackColor);
+        root.addView(header());
+        root.addView(title(tr("Упаковка грузомест FBS", "FBS yuk joylarini qadoqlash")));
+        if (!statusMessage.isEmpty()) {
+            root.addView(fbsCargoFeedbackColor == 0
+                ? messageView(statusMessage)
+                : feedbackView(statusMessage, fbsCargoFeedbackColor));
+        }
+        if (fbsCargoBusy && fbsCargoPacking == null) {
+            root.addView(messageView(tr("Загрузка...", "Yuklanmoqda...")));
+            root.addView(secondaryButton(tr("В главное меню", "Bosh menyuga"), view -> renderMainScreen()));
+            setScrollableContent(root);
+            refreshHeaderText();
+            return;
+        }
+
+        TsdFbsCargoPackingResponse.Packing current = fbsCargoPacking == null ? null : fbsCargoPacking.packing;
+        if (current != null) {
+            root.addView(feedbackView(
+                tr("ОТКРЫТО ГРУЗОМЕСТО\n", "YUK JOYI OCHILDI\n") + safeText(current.cargoPlaceId) +
+                    "\n" + tr("Заполнено: ", "To‘ldirildi: ") + current.packedItems + " / " + current.capacityItems,
+                BOX_MOVEMENT_BLUE
+            ));
+            root.addView(messageView(tr(
+                "Сканируйте полный ШК с наклейки заказа WB. Один заказ нельзя уложить дважды или в другое грузоместо.",
+                "WB buyurtma stikeridagi to‘liq SHKni skanerlang. Bir buyurtmani ikki marta yoki boshqa joyga qo‘yib bo‘lmaydi."
+            )));
+            fbsCargoScanInput = input(tr("Сканируйте ШК заказа WB", "WB buyurtma SHK sini skanerlang"));
+            root.addView(fbsCargoScanInput);
+            root.addView(primaryMenuButton(
+                tr("Добавить заказ в грузоместо", "Buyurtmani yuk joyiga qo‘shish"),
+                view -> submitFbsCargoScan()
+            ));
+            if (current.orders != null && !current.orders.isEmpty()) {
+                root.addView(label(tr("Последние уложенные заказы", "Oxirgi joylangan buyurtmalar")));
+                int shown = 0;
+                for (TsdFbsCargoPackingResponse.Order order : current.orders) {
+                    if (shown++ >= 8) break;
+                    String details = tr("Товар: ", "Mahsulot: ") + safeText(order.productName) +
+                        "\n" + tr("Артикул: ", "Artikul: ") + safeText(order.article) +
+                        (safeText(order.color).equals("—") ? "" : " · " + tr("цвет: ", "rang: ") + safeText(order.color)) +
+                        (safeText(order.size).equals("—") ? "" : " · " + tr("размер: ", "o‘lcham: ") + safeText(order.size)) +
+                        "\n" + tr("Большие цифры WB: ", "WB katta raqamlari: ") + safeText(order.wbStickerPartB);
+                    root.addView(taskRow(tr("Заказ №", "Buyurtma №") + safeText(order.orderId), details, BOX_FOUND_GREEN));
+                }
+                root.addView(secondaryButton(
+                    tr("Отменить последнее сканирование", "Oxirgi skanerlashni bekor qilish"),
+                    view -> undoLastFbsCargoOrder()
+                ));
+            }
+            root.addView(primaryMenuButton(
+                tr("Закрыть грузоместо", "Yuk joyini yopish"),
+                view -> confirmCloseFbsCargoPacking()
+            ));
+        } else {
+            TsdFbsCargoPackingResponse.Supply selected = selectedFbsCargoSupply();
+            if (selected != null) {
+                root.addView(feedbackView(
+                    tr("ПОСТАВКА ", "YETKAZIB BERISH ") + safeText(selected.supplyId) +
+                        "\n" + safeText(selected.client == null ? null : selected.client.name) +
+                        "\n" + tr("Упаковано: ", "Qadoqlandi: ") + selected.packedItems + " / " + selected.totalPlannedItems +
+                        " · " + tr("мест закрыто: ", "yopilgan joylar: ") + selected.closedCargoPlaces + " / " + selected.cargoPlaceCount,
+                    BOX_DUPLICATE_BLUE
+                ));
+                root.addView(messageView(tr(
+                    "Возьмите пустой физический короб, наклейте на него QR грузоместа WB и отсканируйте этот QR.",
+                    "Bo‘sh qutini oling, WB yuk joyi QR stikerini yopishtiring va QRni skanerlang."
+                )));
+                fbsCargoScanInput = input(tr("Сканируйте QR грузоместа WB", "WB yuk joyi QR kodini skanerlang"));
+                root.addView(fbsCargoScanInput);
+                root.addView(primaryMenuButton(
+                    tr("Открыть грузоместо", "Yuk joyini ochish"),
+                    view -> submitFbsCargoScan()
+                ));
+                root.addView(secondaryButton(
+                    tr("Выбрать другую поставку", "Boshqa yetkazib berishni tanlash"),
+                    view -> {
+                        selectedFbsCargoPlanId = "";
+                        fbsCargoFeedbackColor = 0;
+                        statusMessage = tr("Выберите поставку.", "Yetkazib berishni tanlang.");
+                        renderFbsCargoPackingScreen();
+                    }
+                ));
+            } else {
+                List<TsdFbsCargoPackingResponse.Supply> supplies = fbsCargoPacking == null
+                    ? null
+                    : fbsCargoPacking.supplies;
+                if (supplies == null || supplies.isEmpty()) {
+                    root.addView(messageView(tr(
+                        "Нет поставок в ПВЗ для упаковки. Сначала соберите заказы FBS.",
+                        "Qadoqlash uchun PVZ yetkazib berishlari yo‘q. Avval FBS buyurtmalarini yig‘ing."
+                    )));
+                } else {
+                    root.addView(label(tr("Выберите поставку", "Yetkazib berishni tanlang")));
+                    for (TsdFbsCargoPackingResponse.Supply supply : supplies) {
+                        String clientName = supply.client == null ? "" : safeText(supply.client.name);
+                        String stateText = supply.readyToDeliver
+                            ? tr("ГОТОВА К ПЕРЕДАЧЕ", "TOPSHIRISHGA TAYYOR")
+                            : tr("уложить: ", "joylash: ") + supply.remainingToPack +
+                                " · " + tr("ещё собирается: ", "hali yig‘ilmoqda: ") + supply.waitingAssembly;
+                        root.addView(multilineSecondaryButton(
+                            safeText(supply.supplyId) + "\n" + clientName + "\n" +
+                                supply.packedItems + " / " + supply.totalPlannedItems + " · " + stateText,
+                            view -> {
+                                if (supply.readyToDeliver) {
+                                    statusMessage = tr("Эта поставка уже полностью упакована.", "Bu yetkazib berish to‘liq qadoqlangan.");
+                                    fbsCargoFeedbackColor = BOX_FOUND_GREEN;
+                                    renderFbsCargoPackingScreen();
+                                    return;
+                                }
+                                selectedFbsCargoPlanId = supply.id;
+                                fbsCargoFeedbackColor = 0;
+                                statusMessage = tr("Теперь отсканируйте QR грузоместа.", "Endi yuk joyi QR kodini skanerlang.");
+                                renderFbsCargoPackingScreen();
+                            }
+                        ));
+                    }
+                }
+            }
+        }
+        root.addView(secondaryButton(tr("Обновить", "Yangilash"), view -> loadFbsCargoPacking()));
+        root.addView(secondaryButton(tr("В главное меню", "Bosh menyuga"), view -> renderMainScreen()));
+        root.addView(versionView());
+        setScrollableContent(root);
+        if (fbsCargoScanInput != null) fbsCargoScanInput.requestFocus();
+        refreshHeaderText();
+    }
+
+    private TsdFbsCargoPackingResponse.Supply selectedFbsCargoSupply() {
+        if (selectedFbsCargoPlanId.isEmpty() || fbsCargoPacking == null || fbsCargoPacking.supplies == null) return null;
+        for (TsdFbsCargoPackingResponse.Supply supply : fbsCargoPacking.supplies) {
+            if (selectedFbsCargoPlanId.equals(supply.id)) return supply;
+        }
+        selectedFbsCargoPlanId = "";
+        return null;
+    }
+
+    private void submitFbsCargoScan() {
+        if (fbsCargoBusy) return;
+        String value = textValue(fbsCargoScanInput);
+        if (value.isEmpty()) {
+            showFbsCargoError(tr("Сначала отсканируйте код.", "Avval kodni skanerlang."), true);
+            return;
+        }
+        TsdFbsCargoPackingResponse.Packing current = fbsCargoPacking == null ? null : fbsCargoPacking.packing;
+        if (current == null) {
+            if (selectedFbsCargoPlanId.isEmpty()) {
+                showFbsCargoError(tr("Сначала выберите поставку.", "Avval yetkazib berishni tanlang."), true);
+                return;
+            }
+            executeFbsCargoAction("open", value);
+        } else {
+            executeFbsCargoAction("scan", value);
+        }
+    }
+
+    private void undoLastFbsCargoOrder() {
+        executeFbsCargoAction("undo", null);
+    }
+
+    private void confirmCloseFbsCargoPacking() {
+        TsdFbsCargoPackingResponse.Packing current = fbsCargoPacking == null ? null : fbsCargoPacking.packing;
+        if (current == null || fbsCargoBusy) return;
+        new AlertDialog.Builder(this)
+            .setTitle(tr("Закрыть грузоместо?", "Yuk joyini yopasizmi?"))
+            .setMessage(tr("Внутри зафиксировано: ", "Ichida qayd etilgan: ") + current.packedItems +
+                " / " + current.capacityItems + tr(" единиц. После закрытия повторное сканирование запрещено.",
+                    " dona. Yopilgandan keyin qayta skanerlash taqiqlanadi."))
+            .setNegativeButton(tr("Нет", "Yo‘q"), null)
+            .setPositiveButton(tr("Закрыть", "Yopish"), (dialog, which) -> executeFbsCargoAction("close", null))
+            .show();
+    }
+
+    private void executeFbsCargoAction(String action, String value) {
+        TsdSession session = safeSession();
+        if (session == null || fbsCargoBusy) return;
+        TsdFbsCargoPackingResponse.Packing current = fbsCargoPacking == null ? null : fbsCargoPacking.packing;
+        if (!"open".equals(action) && current == null) return;
+        fbsCargoBusy = true;
+        fbsCargoFeedbackColor = BOX_DUPLICATE_BLUE;
+        statusMessage = tr("Проверяю...", "Tekshirilmoqda...");
+        renderFbsCargoPackingScreen();
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<TsdFbsCargoPackingResponse> response;
+            if ("open".equals(action)) {
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("planId", selectedFbsCargoPlanId);
+                payload.put("cargoCode", value);
+                payload.put("deviceCode", session.deviceCode);
+                response = api.openFbsCargoPacking(session.authorizationHeader(), payload).execute();
+            } else if ("scan".equals(action)) {
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("orderCode", value);
+                response = api.scanFbsCargoOrder(session.authorizationHeader(), current.id, payload).execute();
+            } else if ("undo".equals(action)) {
+                response = api.undoLastFbsCargoOrder(session.authorizationHeader(), current.id).execute();
+            } else {
+                response = api.closeFbsCargoPacking(session.authorizationHeader(), current.id).execute();
+            }
+            if (!response.isSuccessful() || response.body() == null) {
+                String message = responseErrorMessage(response, tr(
+                    "Операция не выполнена. Повторите сканирование.",
+                    "Amal bajarilmadi. Qayta skanerlang."
+                ));
+                mainHandler.post(() -> showFbsCargoError(message, response.code() < 500));
+                return;
+            }
+            TsdFbsCargoPackingResponse updated = response.body();
+            mainHandler.post(() -> {
+                boolean closed = "close".equals(action);
+                if (closed) selectedFbsCargoPlanId = "";
+                applyFbsCargoResponse(updated, true);
+            });
+        });
+    }
+
+    private void applyFbsCargoResponse(TsdFbsCargoPackingResponse response, boolean success) {
+        online = true;
+        fbsCargoBusy = false;
+        fbsCargoPacking = response;
+        statusMessage = nonEmpty(response.message, tr("Готово.", "Tayyor."));
+        fbsCargoFeedbackColor = success ? BOX_FOUND_GREEN : 0;
+        if (success) playFbsSuccess();
+        renderFbsCargoPackingScreen();
+    }
+
+    private void showFbsCargoError(String message, boolean keepOnline) {
+        online = keepOnline;
+        fbsCargoBusy = false;
+        fbsCargoFeedbackColor = BOX_NOT_NEEDED_RED;
+        statusMessage = message;
+        playFbsError();
+        renderFbsCargoPackingScreen();
     }
 
     private void openReceipt() {
@@ -3432,6 +3725,16 @@ public class MainActivity extends Activity {
                         );
                         return;
                     }
+                    if (screen == Screen.FBS_CARGO) {
+                        showFbsCargoError(
+                            tr(
+                                "Нет связи с WMS. Проверьте интернет и повторите.",
+                                "WMS bilan aloqa yo‘q. Internetni tekshirib, qayta urinib ko‘ring."
+                            ),
+                            false
+                        );
+                        return;
+                    }
                     online = false;
                     statusMessage = error.getMessage() == null ? "Ошибка приложения" : error.getMessage();
                     refreshCurrentScreen();
@@ -3541,6 +3844,9 @@ public class MainActivity extends Activity {
         }
         if (screen == Screen.FBS_ASSEMBLY) {
             return fbsScanInput;
+        }
+        if (screen == Screen.FBS_CARGO) {
+            return fbsCargoScanInput;
         }
         if (
             screen == Screen.BOX_SEARCH ||
@@ -3672,6 +3978,8 @@ public class MainActivity extends Activity {
             }
         } else if (screen == Screen.FBS_ASSEMBLY) {
             submitFbsScan();
+        } else if (screen == Screen.FBS_CARGO) {
+            submitFbsCargoScan();
         } else if (screen == Screen.INVENTORY_COUNT) {
             if (inventoryTransferMode) {
                 transferInventoryBox();
@@ -4450,6 +4758,8 @@ public class MainActivity extends Activity {
             renderBoxlessPackingScreen();
         } else if (screen == Screen.FBS_ASSEMBLY) {
             renderFbsAssemblyScreen();
+        } else if (screen == Screen.FBS_CARGO) {
+            renderFbsCargoPackingScreen();
         } else if (screen == Screen.INVENTORY_MENU) {
             renderInventoryMenu();
         } else if (screen == Screen.INVENTORY_START) {
@@ -4620,6 +4930,7 @@ public class MainActivity extends Activity {
         OUTGOING_CONTROL,
         BOXLESS_PACKING,
         FBS_ASSEMBLY,
+        FBS_CARGO,
         INVENTORY_MENU,
         INVENTORY_START,
         INVENTORY_COUNT,

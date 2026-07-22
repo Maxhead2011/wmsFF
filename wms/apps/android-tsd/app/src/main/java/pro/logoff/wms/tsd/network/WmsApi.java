@@ -70,6 +70,37 @@ public interface WmsApi {
         @Path("id") String id
     );
 
+    @GET("api/v1/tsd/fbs/cargo")
+    Call<TsdFbsCargoPackingResponse> getFbsCargoPacking(
+        @Header("Authorization") String authorization,
+        @Query("deviceCode") String deviceCode
+    );
+
+    @POST("api/v1/tsd/fbs/cargo/open")
+    Call<TsdFbsCargoPackingResponse> openFbsCargoPacking(
+        @Header("Authorization") String authorization,
+        @Body Map<String, Object> request
+    );
+
+    @POST("api/v1/tsd/fbs/cargo/{id}/scan-order")
+    Call<TsdFbsCargoPackingResponse> scanFbsCargoOrder(
+        @Header("Authorization") String authorization,
+        @Path("id") String id,
+        @Body Map<String, Object> request
+    );
+
+    @POST("api/v1/tsd/fbs/cargo/{id}/undo-last")
+    Call<TsdFbsCargoPackingResponse> undoLastFbsCargoOrder(
+        @Header("Authorization") String authorization,
+        @Path("id") String id
+    );
+
+    @POST("api/v1/tsd/fbs/cargo/{id}/close")
+    Call<TsdFbsCargoPackingResponse> closeFbsCargoPacking(
+        @Header("Authorization") String authorization,
+        @Path("id") String id
+    );
+
     @POST("api/v1/tsd/receipts/open-box")
     Call<Map<String, Object>> openReceiptBox(
         @Header("Authorization") String authorization,

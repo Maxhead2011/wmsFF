@@ -1318,6 +1318,7 @@ model FbsSupplyPlan {
   itemsPerCargoPlace  Int                    @default(14)
   cargoPlaceCount     Int                    @default(0)
   cargoPlaceIds       Json?
+  cargoPlaceBarcodes  Json?
   orderIds            Json
   createdByUserId     String?
   client              Client                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
@@ -1327,6 +1328,32 @@ model FbsSupplyPlan {
   @@unique([marketplace, connectionId, supplyId])
   @@index([clientId, createdAt])
   @@index([connectionId, supplyId])
+}
+
+model FbsCargoPlacePacking {
+  id                 String          @id @default(uuid())
+  clientId           String
+  marketplace        MarketplaceType @default(WILDBERRIES)
+  connectionId       String
+  supplyId           String
+  cargoPlaceId       String
+  cargoPlaceBarcode  String?
+  capacityItems      Int             @default(14)
+  status             String          @default("OPEN")
+  deviceCode         String
+  openedByUserId     String?
+  openedByName       String?
+  openedAt           DateTime        @default(now())
+  closedByUserId     String?
+  closedByName       String?
+  closedAt           DateTime?
+  assemblies         FbsTsdAssembly[]
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  @@unique([marketplace, connectionId, supplyId, cargoPlaceId])
+  @@index([clientId, supplyId, status])
+  @@index([deviceCode, status, updatedAt])
 }
 
 model FbsTsdAssembly {
@@ -1357,16 +1384,22 @@ model FbsTsdAssembly {
   stickerPartA   String?
   stickerPartB   String?
   stickerBarcode String?
+  cargoPackingId String?
+  cargoPackedAt  DateTime?
+  cargoPackedByUserId String?
+  cargoPackedByName String?
   errorMessage  String?
   completedAt   DateTime?
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
+  cargoPacking  FbsCargoPlacePacking? @relation(fields: [cargoPackingId], references: [id], onDelete: SetNull)
 
   @@unique([marketplace, connectionId, orderId])
   @@unique([clientId, kiz])
   @@index([deviceCode, status, updatedAt])
   @@index([requestId, status])
   @@index([clientId, status])
+  @@index([cargoPackingId, cargoPackedAt])
 }
 
 model BillingCharge {

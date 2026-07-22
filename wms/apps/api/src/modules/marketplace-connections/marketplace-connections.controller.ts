@@ -43,6 +43,12 @@ export class MarketplaceConnectionsController {
     return this.connections.listFbsActiveClients(user);
   }
 
+  @Get('fbs/cargo-packings')
+  @RequirePermissions()
+  listFbsCargoPackings(@CurrentUser() user: AuthUser, @Query('clientId') clientId: string) {
+    return this.connections.listFbsCargoPackings(clientId, user);
+  }
+
   @Post('fbs/orders/assemble')
   @RequirePermissions()
   assembleFbsOrders(@Body() dto: FbsOrderSelectionDto, @CurrentUser() user: AuthUser) {

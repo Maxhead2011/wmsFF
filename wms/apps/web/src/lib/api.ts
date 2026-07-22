@@ -2135,6 +2135,62 @@ export type FbsActiveClientSummary = {
   fetchedAt: string;
 };
 
+export type FbsCargoPackingOrder = {
+  orderId: string;
+  requestId: string;
+  productName: string;
+  article: string | null;
+  color: string | null;
+  size: string | null;
+  productBarcode: string | null;
+  wbStickerPartB: string | null;
+  wbStickerBarcode: string | null;
+  sourceBoxCode: string | null;
+  quantity: number;
+  packedByName: string | null;
+  packedAt: string | null;
+};
+
+export type FbsCargoPackingPlace = {
+  id: string | null;
+  cargoPlaceId: string;
+  cargoPlaceBarcode: string | null;
+  capacityItems: number;
+  packedItems: number;
+  status: 'NOT_STARTED' | 'OPEN' | 'CLOSED';
+  deviceCode: string | null;
+  openedByName: string | null;
+  openedAt: string | null;
+  closedByName: string | null;
+  closedAt: string | null;
+  orders: FbsCargoPackingOrder[];
+};
+
+export type FbsCargoPackingSupply = {
+  id: string;
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  connectionId: string;
+  supplyId: string;
+  itemsPerCargoPlace: number;
+  cargoPlaceCount: number;
+  totalPlannedItems: number;
+  completedItems: number;
+  packedItems: number;
+  remainingToPack: number;
+  waitingAssembly: number;
+  closedCargoPlaces: number;
+  readyToDeliver: boolean;
+  cargoPlaces: FbsCargoPackingPlace[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type FbsCargoPackingsResponse = {
+  clientId: string;
+  fetchedAt: string;
+  supplies: FbsCargoPackingSupply[];
+};
+
 export type FbsOrderSelectionPayload = {
   clientId: string;
   orders: Array<{ connectionId: string; id: string }>;
@@ -5027,6 +5083,13 @@ export async function fetchFbsActiveClients(accessToken: string) {
   return request<FbsActiveClientSummary[]>('/marketplace-connections/fbs/active-clients', {
     accessToken,
   });
+}
+
+export async function fetchFbsCargoPackings(accessToken: string, clientId: string) {
+  return request<FbsCargoPackingsResponse>(
+    withQuery('/marketplace-connections/fbs/cargo-packings', { clientId }),
+    { accessToken },
+  );
 }
 
 export async function assembleFbsOrders(accessToken: string, payload: FbsOrderSelectionPayload) {

@@ -167,6 +167,12 @@ type FbsOrdersResponse = {
 };
 
 type FbsTsdAssemblyRecord = Prisma.FbsTsdAssemblyGetPayload<{}>;
+type FbsSupplyPlanWithClient = Prisma.FbsSupplyPlanGetPayload<{
+  include: { client: { select: { id: true; code: true; name: true } } };
+}>;
+type FbsCargoPackingWithAssemblies = Prisma.FbsCargoPlacePackingGetPayload<{
+  include: { assemblies: true };
+}>;
 const FBS_TSD_STALE_UNSTARTED_TASK_MS = 2 * 60 * 60 * 1_000;
 
 @Injectable()
@@ -498,6 +504,411 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           ? `В текущей поставке остался заказ ${blockedBatchOrder.orderId}, но он закреплён за сотрудником ${blockedBatchOrder.workerName}. Продолжите его на том ТСД или отложите там задание.`
           : 'Готовых заказов нет. Заказы появятся после создания заявки и перевода поставки в статус «На сборке».',
     );
+  }
+
+  async getFbsCargoPackingQueue(deviceCodeValue: unknown, user: AuthUser) {
+    const deviceCode = this.fbsTsdDeviceCode(deviceCodeValue, user);
+    return this.buildFbsCargoPackingResponse(deviceCode, user);
+  }
+
+  async listFbsCargoPackings(clientIdValue: string, user: AuthUser) {
+    const clientId = textValue(clientIdValue);
+    if (!clientId) throw new BadRequestException('Выберите клиента.');
+    this.clientScopes.requireClientAccess(user, clientId, 'read');
+    const data = await this.loadFbsCargoPackingData(clientId);
+    return {
+      clientId,
+      fetchedAt: new Date().toISOString(),
+      supplies: data.summaries,
+    };
+  }
+
+  async openFbsCargoPacking(payload: Record<string, unknown>, user: AuthUser) {
+    const planId = requiredFbsTsdText(payload.planId, 'Выберите поставку для ПВЗ.');
+    const cargoCode = requiredFbsTsdText(payload.cargoCode, 'Отсканируйте QR грузоместа.');
+    const deviceCode = this.fbsTsdDeviceCode(payload.deviceCode, user);
+    const plan = await this.prisma.fbsSupplyPlan.findUnique({
+      where: { id: planId },
+      include: { client: { select: { id: true, code: true, name: true } } },
+    });
+    if (!plan || plan.deliveryDestination !== FbsDeliveryDestination.PICKUP_POINT) {
+      throw new NotFoundException('Поставка для ПВЗ не найдена. Обновите список.');
+    }
+    this.clientScopes.requireClientAccess(user, plan.clientId, 'write');
+
+    const otherOpen = await this.prisma.fbsCargoPlacePacking.findFirst({
+      where: { deviceCode, status: 'OPEN' },
+      select: { id: true, cargoPlaceId: true },
+    });
+    if (otherOpen) {
+      throw new BadRequestException(`Сначала закройте открытое грузоместо ${otherOpen.cargoPlaceId}.`);
+    }
+
+    const cargoPlaceIds = uniqueStrings(asArray<unknown>(plan.cargoPlaceIds).map(textValue));
+    let cargoPlaceId = cargoPlaceIds.find((id) => id.toLowerCase() === cargoCode.toLowerCase()) ?? '';
+    let cargoPlaceBarcodes = cargoBarcodeMap(plan.cargoPlaceBarcodes);
+    if (!cargoPlaceId) {
+      cargoPlaceBarcodes = await this.syncFbsCargoPlaceBarcodes(plan);
+      cargoPlaceId =
+        Object.entries(cargoPlaceBarcodes).find(([, barcode]) => barcode === cargoCode)?.[0] ?? '';
+    }
+    if (!cargoPlaceId) {
+      throw new BadRequestException(
+        `QR ${cargoCode} не относится к выбранной поставке ${plan.supplyId}. Проверьте наклейку грузоместа.`,
+      );
+    }
+
+    const existing = await this.prisma.fbsCargoPlacePacking.findFirst({
+      where: {
+        marketplace: plan.marketplace,
+        connectionId: plan.connectionId,
+        supplyId: plan.supplyId,
+        cargoPlaceId,
+      },
+      include: { assemblies: true },
+    });
+    if (existing?.status === 'CLOSED') {
+      throw new BadRequestException(`Грузоместо ${cargoPlaceId} уже закрыто и повторно не принимается.`);
+    }
+    if (existing && existing.deviceCode !== deviceCode) {
+      throw new BadRequestException(
+        `Грузоместо ${cargoPlaceId} уже открыто сотрудником ${existing.openedByName ?? existing.deviceCode}.`,
+      );
+    }
+    if (!existing) {
+      try {
+        await this.prisma.fbsCargoPlacePacking.create({
+          data: {
+            clientId: plan.clientId,
+            marketplace: plan.marketplace,
+            connectionId: plan.connectionId,
+            supplyId: plan.supplyId,
+            cargoPlaceId,
+            cargoPlaceBarcode: cargoPlaceBarcodes[cargoPlaceId] || cargoCode,
+            capacityItems: Math.max(1, plan.itemsPerCargoPlace),
+            status: 'OPEN',
+            deviceCode,
+            openedByUserId: user.id,
+            openedByName: user.name,
+          },
+        });
+      } catch (caught) {
+        if (caught instanceof Prisma.PrismaClientKnownRequestError && caught.code === 'P2002') {
+          throw new BadRequestException(`Грузоместо ${cargoPlaceId} уже открыто на другом ТСД.`);
+        }
+        throw caught;
+      }
+    }
+    return this.buildFbsCargoPackingResponse(
+      deviceCode,
+      user,
+      `Грузоместо ${cargoPlaceId} открыто. Сканируйте ШК заказов WB.`,
+    );
+  }
+
+  async scanFbsCargoOrder(packingId: string, payload: Record<string, unknown>, user: AuthUser) {
+    const packing = await this.loadOwnedFbsCargoPacking(packingId, user);
+    const orderCode = requiredFbsTsdText(payload.orderCode, 'Отсканируйте ШК заказа Wildberries.');
+    const candidates = await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        clientId: packing.clientId,
+        marketplace: packing.marketplace,
+        connectionId: packing.connectionId,
+        supplyId: packing.supplyId,
+        status: 'COMPLETED',
+        OR: [
+          { orderId: orderCode },
+          { stickerBarcode: orderCode },
+          { stickerPartB: orderCode },
+        ],
+      },
+      orderBy: { completedAt: 'asc' },
+    });
+    const exact = candidates.filter(
+      (task) => task.orderId === orderCode || task.stickerBarcode === orderCode,
+    );
+    const matched = exact.length === 1 ? exact[0] : candidates.length === 1 ? candidates[0] : null;
+    if (!matched) {
+      if (candidates.length > 1) {
+        throw new BadRequestException(
+          `Цифры ${orderCode} встречаются на нескольких наклейках. Отсканируйте полный ШК заказа WB.`,
+        );
+      }
+      throw new BadRequestException(
+        `Заказ по ШК ${orderCode} не найден в поставке ${packing.supplyId} или ещё не собран на ТСД.`,
+      );
+    }
+    if (matched.cargoPackingId === packing.id) {
+      return this.buildFbsCargoPackingResponse(
+        packing.deviceCode,
+        user,
+        `Заказ ${matched.orderId} уже находится в этом грузоместе. Повтор не добавлен.`,
+      );
+    }
+    if (matched.cargoPackingId) {
+      const other = await this.prisma.fbsCargoPlacePacking.findUnique({
+        where: { id: matched.cargoPackingId },
+        select: { cargoPlaceId: true },
+      });
+      throw new BadRequestException(
+        `Заказ ${matched.orderId} уже уложен в грузоместо ${other?.cargoPlaceId ?? 'другое'}. Повтор запрещён.`,
+      );
+    }
+    const packed = await this.prisma.fbsTsdAssembly.aggregate({
+      where: { cargoPackingId: packing.id },
+      _sum: { itemCount: true },
+    });
+    const packedItems = packed._sum.itemCount ?? 0;
+    if (packedItems + matched.itemCount > packing.capacityItems) {
+      throw new BadRequestException(
+        `Грузоместо заполнено: ${packedItems} из ${packing.capacityItems}. Закройте его и откройте следующее.`,
+      );
+    }
+    const updated = await this.prisma.fbsTsdAssembly.updateMany({
+      where: { id: matched.id, cargoPackingId: null },
+      data: {
+        cargoPackingId: packing.id,
+        cargoPackedAt: new Date(),
+        cargoPackedByUserId: user.id,
+        cargoPackedByName: user.name,
+      },
+    });
+    if (updated.count !== 1) {
+      throw new BadRequestException(`Заказ ${matched.orderId} уже был уложен на другом ТСД. Обновите экран.`);
+    }
+    return this.buildFbsCargoPackingResponse(
+      packing.deviceCode,
+      user,
+      `Заказ ${matched.orderId} добавлен в грузоместо ${packing.cargoPlaceId}.`,
+    );
+  }
+
+  async undoLastFbsCargoOrder(packingId: string, user: AuthUser) {
+    const packing = await this.loadOwnedFbsCargoPacking(packingId, user);
+    const last = await this.prisma.fbsTsdAssembly.findFirst({
+      where: { cargoPackingId: packing.id },
+      orderBy: { cargoPackedAt: 'desc' },
+      select: { id: true, orderId: true },
+    });
+    if (!last) throw new BadRequestException('В грузоместе пока нет заказов.');
+    await this.prisma.fbsTsdAssembly.update({
+      where: { id: last.id },
+      data: {
+        cargoPackingId: null,
+        cargoPackedAt: null,
+        cargoPackedByUserId: null,
+        cargoPackedByName: null,
+      },
+    });
+    return this.buildFbsCargoPackingResponse(
+      packing.deviceCode,
+      user,
+      `Последний заказ ${last.orderId} удалён из грузоместа.`,
+    );
+  }
+
+  async closeFbsCargoPacking(packingId: string, user: AuthUser) {
+    const packing = await this.loadOwnedFbsCargoPacking(packingId, user);
+    const packed = await this.prisma.fbsTsdAssembly.aggregate({
+      where: { cargoPackingId: packing.id },
+      _sum: { itemCount: true },
+    });
+    const packedItems = packed._sum.itemCount ?? 0;
+    if (packedItems === 0) throw new BadRequestException('Пустое грузоместо закрыть нельзя.');
+    await this.prisma.fbsCargoPlacePacking.update({
+      where: { id: packing.id },
+      data: {
+        status: 'CLOSED',
+        closedAt: new Date(),
+        closedByUserId: user.id,
+        closedByName: user.name,
+      },
+    });
+    return this.buildFbsCargoPackingResponse(
+      packing.deviceCode,
+      user,
+      `Грузоместо ${packing.cargoPlaceId} закрыто: ${packedItems} из ${packing.capacityItems} единиц.`,
+    );
+  }
+
+  private async loadOwnedFbsCargoPacking(packingId: string, user: AuthUser) {
+    const packing = await this.prisma.fbsCargoPlacePacking.findUnique({ where: { id: packingId } });
+    if (!packing) throw new NotFoundException('Грузоместо не найдено. Обновите список.');
+    this.clientScopes.requireClientAccess(user, packing.clientId, 'write');
+    if (packing.status !== 'OPEN') throw new BadRequestException(`Грузоместо ${packing.cargoPlaceId} уже закрыто.`);
+    const deviceCode = this.fbsTsdDeviceCode(undefined, user);
+    if (packing.deviceCode !== deviceCode) {
+      throw new BadRequestException('Это грузоместо открыто на другом ТСД.');
+    }
+    return packing;
+  }
+
+  private async buildFbsCargoPackingResponse(deviceCode: string, user: AuthUser, message = '') {
+    const clientFilter = this.clientScopes.resolveClientFilter(user);
+    const data = await this.loadFbsCargoPackingData(clientFilter);
+    const current = data.packings.find(
+      (packing) => packing.deviceCode === deviceCode && packing.status === 'OPEN',
+    );
+    return {
+      state: current ? 'SCAN_ORDER' : data.summaries.length > 0 ? 'SELECT_SUPPLY' : 'EMPTY',
+      message: message || (current
+        ? `Продолжите грузоместо ${current.cargoPlaceId}.`
+        : data.summaries.length > 0
+          ? 'Выберите поставку и отсканируйте QR грузоместа.'
+          : 'Поставок в ПВЗ для упаковки сейчас нет.'),
+      supplies: data.summaries,
+      packing: current ? formatFbsCargoPacking(current, data.skuById) : null,
+    };
+  }
+
+  private async loadFbsCargoPackingData(clientFilter: string | { in: string[] } | undefined) {
+    const plans = await this.prisma.fbsSupplyPlan.findMany({
+      where: {
+        clientId: clientFilter,
+        marketplace: MarketplaceType.WILDBERRIES,
+        deliveryDestination: FbsDeliveryDestination.PICKUP_POINT,
+      },
+      include: { client: { select: { id: true, code: true, name: true } } },
+      orderBy: { updatedAt: 'desc' },
+      take: 100,
+    });
+    if (plans.length === 0) {
+      return {
+        plans,
+        packings: [] as FbsCargoPackingWithAssemblies[],
+        summaries: [],
+        skuById: new Map<string, { color: string | null; size: string | null }>(),
+      };
+    }
+    const supplyIds = uniqueStrings(plans.map((plan) => plan.supplyId));
+    const connectionIds = uniqueStrings(plans.map((plan) => plan.connectionId));
+    const [assemblies, packings] = await Promise.all([
+      this.prisma.fbsTsdAssembly.findMany({
+        where: {
+          clientId: clientFilter,
+          marketplace: MarketplaceType.WILDBERRIES,
+          connectionId: { in: connectionIds },
+          supplyId: { in: supplyIds },
+          status: 'COMPLETED',
+        },
+      }),
+      this.prisma.fbsCargoPlacePacking.findMany({
+        where: {
+          clientId: clientFilter,
+          marketplace: MarketplaceType.WILDBERRIES,
+          connectionId: { in: connectionIds },
+          supplyId: { in: supplyIds },
+        },
+        include: { assemblies: { orderBy: { cargoPackedAt: 'desc' } } },
+        orderBy: { openedAt: 'asc' },
+      }),
+    ]);
+    const skuRows = assemblies.length > 0
+      ? await this.prisma.sku.findMany({
+          where: { id: { in: uniqueStrings(assemblies.map((task) => task.skuId)) } },
+          select: { id: true, color: true, size: true },
+        })
+      : [];
+    const skuById = new Map(skuRows.map((sku) => [sku.id, { color: sku.color, size: sku.size }]));
+    const summaries = plans.map((plan) => {
+      const key = fbsSupplyPlanKey(plan.marketplace, plan.connectionId, plan.supplyId);
+      const planAssemblies = assemblies.filter(
+        (task) => fbsSupplyPlanKey(task.marketplace, task.connectionId, task.supplyId ?? '') === key,
+      );
+      const planPackings = packings.filter(
+        (packing) => fbsSupplyPlanKey(packing.marketplace, packing.connectionId, packing.supplyId) === key,
+      );
+      const totalPlannedItems = uniqueStrings(asArray<unknown>(plan.orderIds).map(textValue)).length;
+      const completedItems = planAssemblies.reduce((sum, task) => sum + Math.max(1, task.itemCount), 0);
+      const packedItems = planAssemblies
+        .filter((task) => Boolean(task.cargoPackingId))
+        .reduce((sum, task) => sum + Math.max(1, task.itemCount), 0);
+      const cargoPlaceIds = uniqueStrings(asArray<unknown>(plan.cargoPlaceIds).map(textValue));
+      const closedIds = new Set(
+        planPackings.filter((packing) => packing.status === 'CLOSED').map((packing) => packing.cargoPlaceId),
+      );
+      return {
+        id: plan.id,
+        client: plan.client,
+        connectionId: plan.connectionId,
+        supplyId: plan.supplyId,
+        itemsPerCargoPlace: Math.max(1, plan.itemsPerCargoPlace),
+        cargoPlaceCount: cargoPlaceIds.length,
+        totalPlannedItems,
+        completedItems,
+        packedItems,
+        remainingToPack: Math.max(0, completedItems - packedItems),
+        waitingAssembly: Math.max(0, totalPlannedItems - completedItems),
+        closedCargoPlaces: closedIds.size,
+        readyToDeliver:
+          totalPlannedItems > 0 &&
+          packedItems >= totalPlannedItems &&
+          cargoPlaceIds.length > 0 &&
+          cargoPlaceIds.every((id) => closedIds.has(id)),
+        cargoPlaces: cargoPlaceIds.map((cargoPlaceId) => {
+          const packing = planPackings.find((item) => item.cargoPlaceId === cargoPlaceId);
+          return packing
+            ? formatFbsCargoPacking(packing, skuById)
+            : {
+                id: null,
+                cargoPlaceId,
+                cargoPlaceBarcode: cargoBarcodeMap(plan.cargoPlaceBarcodes)[cargoPlaceId] ?? null,
+                capacityItems: Math.max(1, plan.itemsPerCargoPlace),
+                packedItems: 0,
+                status: 'NOT_STARTED',
+                deviceCode: null,
+                openedByName: null,
+                openedAt: null,
+                closedByName: null,
+                closedAt: null,
+                orders: [],
+              };
+        }),
+        createdAt: plan.createdAt.toISOString(),
+        updatedAt: plan.updatedAt.toISOString(),
+      };
+    });
+    return { plans, packings, summaries, skuById };
+  }
+
+  private async syncFbsCargoPlaceBarcodes(plan: FbsSupplyPlanWithClient) {
+    const cargoPlaceIds = uniqueStrings(asArray<unknown>(plan.cargoPlaceIds).map(textValue));
+    const existing = cargoBarcodeMap(plan.cargoPlaceBarcodes);
+    if (cargoPlaceIds.length > 0 && cargoPlaceIds.every((id) => Boolean(existing[id]))) return existing;
+    const connection = await this.prisma.clientMarketplaceConnection.findFirst({
+      where: {
+        id: plan.connectionId,
+        clientId: plan.clientId,
+        marketplace: MarketplaceType.WILDBERRIES,
+        isActive: true,
+      },
+      select: { apiKey: true },
+    });
+    if (!connection) throw new BadRequestException('Подключение Wildberries для поставки не найдено.');
+    const response = await marketplaceJson(
+      `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(plan.supplyId)}/trbx/stickers?type=png`,
+      {
+        method: 'POST',
+        headers: wbHeaders(connection.apiKey),
+        body: JSON.stringify({ trbxIds: cargoPlaceIds }),
+      },
+    );
+    const stickers = asArray<Record<string, unknown>>(response.stickers);
+    if (stickers.length !== cargoPlaceIds.length) {
+      throw new BadRequestException(
+        `Wildberries вернул ${stickers.length} QR вместо ${cargoPlaceIds.length} для поставки ${plan.supplyId}.`,
+      );
+    }
+    const mapping = { ...existing };
+    cargoPlaceIds.forEach((id, index) => {
+      const barcode = textValue(stickers[index]?.barcode);
+      if (barcode) mapping[id] = barcode;
+    });
+    await this.prisma.fbsSupplyPlan.update({
+      where: { id: plan.id },
+      data: { cargoPlaceBarcodes: mapping as Prisma.InputJsonValue },
+    });
+    return mapping;
   }
 
   async scanFbsTsdBox(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
@@ -1751,7 +2162,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   async deliverFbsSupplies(dto: FbsOrderSelectionDto, user: AuthUser) {
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'write');
-    const { orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders);
+    const { response, orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders);
     const unavailable = orders.filter(
       (order) =>
         order.marketplace !== MarketplaceType.WILDBERRIES ||
@@ -1773,6 +2184,67 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         supplyId: order.supplyId!,
       });
     });
+    for (const supply of supplies.values()) {
+      const plan = await this.prisma.fbsSupplyPlan.findFirst({
+        where: {
+          clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          connectionId: supply.connectionId,
+          supplyId: supply.supplyId,
+        },
+      });
+      if (!plan || plan.deliveryDestination !== FbsDeliveryDestination.PICKUP_POINT) continue;
+      const expectedOrderIds = uniqueStrings(
+        response.orders
+          .filter(
+            (order) =>
+              order.connectionId === supply.connectionId &&
+              order.supplyId === supply.supplyId &&
+              order.supplierStatus === 'confirm',
+          )
+          .map((order) => order.id),
+      );
+      const packedTasks = expectedOrderIds.length > 0
+        ? await this.prisma.fbsTsdAssembly.findMany({
+            where: {
+              clientId,
+              marketplace: MarketplaceType.WILDBERRIES,
+              connectionId: supply.connectionId,
+              supplyId: supply.supplyId,
+              orderId: { in: expectedOrderIds },
+              status: 'COMPLETED',
+              cargoPackingId: { not: null },
+            },
+            select: { orderId: true },
+          })
+        : [];
+      const packedIds = new Set(packedTasks.map((task) => task.orderId));
+      const missingOrderIds = expectedOrderIds.filter((orderId) => !packedIds.has(orderId));
+      if (missingOrderIds.length > 0) {
+        throw new BadRequestException(
+          `Поставка ${supply.supplyId} не готова: разложите по грузоместам ещё ${missingOrderIds.length} заказ(а/ов) на ТСД.`,
+        );
+      }
+      const cargoPlaceIds = uniqueStrings(asArray<unknown>(plan.cargoPlaceIds).map(textValue));
+      const closedPlaces = await this.prisma.fbsCargoPlacePacking.findMany({
+        where: {
+          clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          connectionId: supply.connectionId,
+          supplyId: supply.supplyId,
+          cargoPlaceId: { in: cargoPlaceIds },
+          status: 'CLOSED',
+        },
+        select: { cargoPlaceId: true },
+      });
+      const closedIds = new Set(closedPlaces.map((packing) => packing.cargoPlaceId));
+      const openCargoPlaces = cargoPlaceIds.filter((id) => !closedIds.has(id));
+      if (openCargoPlaces.length > 0) {
+        throw new BadRequestException(
+          `Поставка ${supply.supplyId} не готова: закройте грузоместа ${openCargoPlaces.join(', ')} на ТСД.`,
+        );
+      }
+    }
     const delivered: string[] = [];
     const failed: Array<{ supplyId: string; message: string }> = [];
     await Promise.all(
@@ -3970,6 +4442,50 @@ function fbsTsdStage(task: FbsTsdAssemblyRecord) {
   if (!task.barcode) return 'SCAN_BARCODE';
   if (task.requiresKiz && (!task.kiz || task.wbMetaStatus !== 'ACCEPTED')) return 'SCAN_KIZ';
   return 'READY_TO_COMPLETE';
+}
+
+function cargoBarcodeMap(value: Prisma.JsonValue | null | undefined) {
+  const source = asRecord(value);
+  return Object.entries(source).reduce<Record<string, string>>((result, [cargoPlaceId, barcode]) => {
+    const normalizedId = textValue(cargoPlaceId);
+    const normalizedBarcode = textValue(barcode);
+    if (normalizedId && normalizedBarcode) result[normalizedId] = normalizedBarcode;
+    return result;
+  }, {});
+}
+
+function formatFbsCargoPacking(
+  packing: FbsCargoPackingWithAssemblies,
+  skuById = new Map<string, { color: string | null; size: string | null }>(),
+) {
+  return {
+    id: packing.id,
+    cargoPlaceId: packing.cargoPlaceId,
+    cargoPlaceBarcode: packing.cargoPlaceBarcode,
+    capacityItems: packing.capacityItems,
+    packedItems: packing.assemblies.reduce((sum, task) => sum + Math.max(1, task.itemCount), 0),
+    status: packing.status,
+    deviceCode: packing.deviceCode,
+    openedByName: packing.openedByName,
+    openedAt: packing.openedAt.toISOString(),
+    closedByName: packing.closedByName,
+    closedAt: packing.closedAt?.toISOString() ?? null,
+    orders: packing.assemblies.map((task) => ({
+      orderId: task.orderId,
+      requestId: task.requestId,
+      productName: task.productName,
+      article: task.article,
+      color: skuById.get(task.skuId)?.color ?? null,
+      size: skuById.get(task.skuId)?.size ?? null,
+      productBarcode: task.barcode,
+      wbStickerPartB: task.stickerPartB,
+      wbStickerBarcode: task.stickerBarcode,
+      sourceBoxCode: task.boxCode,
+      quantity: Math.max(1, task.itemCount),
+      packedByName: task.cargoPackedByName,
+      packedAt: task.cargoPackedAt?.toISOString() ?? null,
+    })),
+  };
 }
 
 async function marketplaceJson(url: string, init: RequestInit) {

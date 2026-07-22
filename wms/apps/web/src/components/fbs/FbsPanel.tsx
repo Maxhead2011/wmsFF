@@ -42,6 +42,7 @@ import {
   fetchClients,
   fetchFbsActiveClients,
   fetchFbsBillingSettings,
+  fetchFbsCargoPackings,
   fetchFbsOrders,
   fetchFbsPasses,
   reshipFbsOrders,
@@ -52,6 +53,7 @@ import {
   type ClientSummary,
   type FbsActiveClientSummary,
   type FbsBillingSettings,
+  type FbsCargoPackingsResponse,
   type FbsDeliveryDestination,
   type FbsOrderSummary,
   type FbsPass,
@@ -66,7 +68,7 @@ type FbsPanelProps = {
   session: AuthSession;
 };
 
-type FbsView = 'active' | 'shipped' | 'cancelled' | 'cost' | 'calculator' | 'archive' | 'passes' | 'pricing';
+type FbsView = 'active' | 'cargo' | 'shipped' | 'cancelled' | 'cost' | 'calculator' | 'archive' | 'passes' | 'pricing';
 type OrdersState =
   | { status: 'idle'; data: null; error: '' }
   | { status: 'loading'; data: ClientFbsOrders | null; error: '' }
@@ -87,6 +89,13 @@ const fbsViews = [
     description: 'Переданные заказы со статусами, автоматически получаемыми из API.',
     icon: Truck,
     accent: 'green',
+  },
+  {
+    id: 'cargo' as const,
+    title: 'Упаковка грузомест ПВЗ',
+    description: 'Точный состав каждого грузоместа, заполнение по 14 единиц и готовность поставки.',
+    icon: Boxes,
+    accent: 'blue',
   },
   {
     id: 'cancelled' as const,
@@ -142,6 +151,11 @@ export function FbsPanel({ session }: FbsPanelProps) {
   );
   const [search, setSearch] = useState('');
   const [ordersState, setOrdersState] = useState<OrdersState>({ status: 'idle', data: null, error: '' });
+  const [cargoState, setCargoState] = useState<{
+    status: 'idle' | 'loading' | 'ready' | 'error';
+    data: FbsCargoPackingsResponse | null;
+    error: string;
+  }>({ status: 'idle', data: null, error: '' });
   const [selectedOrderKeys, setSelectedOrderKeys] = useState<Set<string>>(() => new Set());
   const [orderAction, setOrderAction] = useState<
     'assemble' | 'reship' | 'deliver' | 'cancel' | 'stickers' | 'cargo' | 'supply' | 'request' | 'pick-list' | null
@@ -228,6 +242,24 @@ export function FbsPanel({ session }: FbsPanelProps) {
     [selectedClientId, session.accessToken],
   );
 
+  const loadCargoPackings = useCallback(async () => {
+    if (!selectedClientId) {
+      setCargoState({ status: 'idle', data: null, error: '' });
+      return;
+    }
+    setCargoState((current) => ({ status: 'loading', data: current.data, error: '' }));
+    try {
+      const cargo = await fetchFbsCargoPackings(session.accessToken, selectedClientId);
+      setCargoState({ status: 'ready', data: cargo, error: '' });
+    } catch (caught) {
+      setCargoState((current) => ({
+        status: 'error',
+        data: current.data,
+        error: caught instanceof Error ? caught.message : 'Не удалось загрузить состав грузомест.',
+      }));
+    }
+  }, [selectedClientId, session.accessToken]);
+
   useEffect(() => {
     setConnectionOpen(false);
     setConnectionError('');
@@ -240,6 +272,13 @@ export function FbsPanel({ session }: FbsPanelProps) {
     }, 60_000);
     return () => window.clearInterval(timer);
   }, [loadOrders, selectedClientId]);
+
+  useEffect(() => {
+    if (activeView !== 'cargo' || !selectedClientId) return;
+    void loadCargoPackings();
+    const timer = window.setInterval(() => void loadCargoPackings(), 20_000);
+    return () => window.clearInterval(timer);
+  }, [activeView, loadCargoPackings, selectedClientId]);
 
   useEffect(() => {
     setSelectedOrderKeys(new Set());
@@ -271,6 +310,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
   const activeOrdersTotal = activeClients.reduce((sum, item) => sum + item.activeOrders, 0);
   const tileCounts: Record<FbsView, number | string> = {
     active: activeOrdersTotal,
+    cargo: cargoState.data?.supplies.filter((supply) => !supply.readyToDeliver).length ?? 0,
     shipped: data?.counts.shipped ?? 0,
     cancelled: data?.counts.cancelled ?? 0,
     cost: data?.counts.shipped ?? 0,
@@ -630,11 +670,18 @@ export function FbsPanel({ session }: FbsPanelProps) {
               <button
                 className="fbs-refresh-button"
                 type="button"
-                onClick={() => void loadOrders(true)}
-                disabled={!selectedClientId || ordersState.status === 'loading'}
+                onClick={() => void (activeView === 'cargo' ? loadCargoPackings() : loadOrders(true))}
+                disabled={
+                  !selectedClientId ||
+                  (activeView === 'cargo' ? cargoState.status === 'loading' : ordersState.status === 'loading')
+                }
               >
                 <RefreshCw size={16} aria-hidden="true" />
-                <span>{ordersState.status === 'loading' ? 'Обновляю' : 'Обновить'}</span>
+                <span>
+                  {(activeView === 'cargo' ? cargoState.status : ordersState.status) === 'loading'
+                    ? 'Обновляю'
+                    : 'Обновить'}
+                </span>
               </button>
             ) : null}
           </div> : null}
@@ -652,6 +699,8 @@ export function FbsPanel({ session }: FbsPanelProps) {
           />
         ) : activeView === 'passes' ? (
           <FbsPassesView clientId={selectedClientId} session={session} />
+        ) : activeView === 'cargo' ? (
+          <FbsCargoPackingView state={cargoState} search={search} />
         ) : ordersState.status === 'error' ? (
           <FbsNotice icon={AlertTriangle} title="Не удалось получить заказы" text={ordersState.error} tone="error" />
         ) : data && !data.connected ? (
@@ -961,6 +1010,148 @@ function FbsPassesView({ clientId, session }: { clientId: string; session: AuthS
   );
 }
 
+function FbsCargoPackingView({
+  state,
+  search,
+}: {
+  state: {
+    status: 'idle' | 'loading' | 'ready' | 'error';
+    data: FbsCargoPackingsResponse | null;
+    error: string;
+  };
+  search: string;
+}) {
+  if (state.status === 'loading' && !state.data) {
+    return <FbsNotice icon={RefreshCw} title="Загружаю грузоместа" text="Проверяю упаковку поставок для ПВЗ." />;
+  }
+  if (state.status === 'error' && !state.data) {
+    return <FbsNotice icon={AlertTriangle} title="Не удалось загрузить грузоместа" text={state.error} tone="error" />;
+  }
+  const query = search.trim().toLowerCase();
+  const supplies = (state.data?.supplies ?? []).filter((supply) => {
+    if (!query) return true;
+    return [
+      supply.supplyId,
+      supply.client.name,
+      ...supply.cargoPlaces.flatMap((place) => [
+        place.cargoPlaceId,
+        place.cargoPlaceBarcode ?? '',
+        ...place.orders.flatMap((order) => [
+          order.orderId,
+          order.productName,
+          order.article ?? '',
+          order.productBarcode ?? '',
+          order.wbStickerPartB ?? '',
+          order.sourceBoxCode ?? '',
+        ]),
+      ]),
+    ].some((value) => value.toLowerCase().includes(query));
+  });
+
+  if (supplies.length === 0) {
+    return (
+      <FbsNotice
+        icon={Boxes}
+        title={query ? 'Поиск ничего не нашёл' : 'Нет поставок для упаковки'}
+        text={query ? 'Измените номер заказа, поставки, грузоместа или ШК.' : 'Здесь появятся поставки, созданные с направлением сдачи в ПВЗ.'}
+      />
+    );
+  }
+
+  return (
+    <div className="fbs-cargo-supplies">
+      {state.error ? <p className="fbs-order-actions__error">{state.error}</p> : null}
+      {supplies.map((supply) => (
+        <details className={`fbs-cargo-supply${supply.readyToDeliver ? ' is-ready' : ''}`} key={supply.id} open={!supply.readyToDeliver}>
+          <summary>
+            <span>
+              <strong>Поставка {supply.supplyId}</strong>
+              <small>{supply.client.code} · {supply.client.name}</small>
+            </span>
+            <span className="fbs-cargo-supply__progress">
+              <strong>{supply.packedItems} / {supply.totalPlannedItems} ед.</strong>
+              <small>{supply.closedCargoPlaces} / {supply.cargoPlaceCount} мест закрыто</small>
+            </span>
+            <span className={`fbs-status ${supply.readyToDeliver ? 'fbs-status--shipped' : 'fbs-status--active'}`}>
+              {supply.readyToDeliver
+                ? 'Готова к передаче WB'
+                : supply.waitingAssembly > 0
+                  ? `Ещё собирается: ${supply.waitingAssembly}`
+                  : `Разложить: ${supply.remainingToPack}`}
+            </span>
+          </summary>
+          <div className="fbs-cargo-places">
+            {supply.cargoPlaces.map((place, index) => (
+              <details className={`fbs-cargo-place fbs-cargo-place--${place.status.toLowerCase()}`} key={place.cargoPlaceId}>
+                <summary>
+                  <span className="fbs-cargo-place__number">{index + 1}</span>
+                  <span>
+                    <strong>{place.cargoPlaceId}</strong>
+                    <small className="fbs-mono">{place.cargoPlaceBarcode || 'QR ещё не сканировался'}</small>
+                  </span>
+                  <span>
+                    <strong>{place.packedItems} / {place.capacityItems} ед.</strong>
+                    <small>
+                      {place.status === 'CLOSED'
+                        ? `Закрыто · ${place.closedByName || place.deviceCode || 'ТСД'}`
+                        : place.status === 'OPEN'
+                          ? `Открыто · ${place.openedByName || place.deviceCode || 'ТСД'}`
+                          : 'Не начато'}
+                    </small>
+                  </span>
+                </summary>
+                {place.orders.length > 0 ? (
+                  <div className="fbs-table-wrap fbs-cargo-place__table">
+                    <table className="fbs-table">
+                      <thead>
+                        <tr>
+                          <th>Заказ WB</th>
+                          <th>Товар</th>
+                          <th>ШК товара</th>
+                          <th>Короб WMS</th>
+                          <th>Наклейка WB</th>
+                          <th>Упаковал</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {place.orders.map((order) => (
+                          <tr key={order.orderId}>
+                            <td><strong>№ {order.orderId}</strong></td>
+                            <td>
+                              <strong>{order.productName}</strong>
+                              <small>
+                                {[order.article, order.color, order.size ? `размер ${order.size}` : null]
+                                  .filter(Boolean)
+                                  .join(' · ') || '—'}
+                              </small>
+                            </td>
+                            <td><span className="fbs-mono">{order.productBarcode || '—'}</span></td>
+                            <td><span className="fbs-mono">{order.sourceBoxCode || '—'}</span></td>
+                            <td>
+                              <strong>{order.wbStickerPartB || '—'}</strong>
+                              <small className="fbs-mono">{order.wbStickerBarcode || '—'}</small>
+                            </td>
+                            <td>
+                              <strong>{order.packedByName || 'ТСД'}</strong>
+                              <small>{formatDateTime(order.packedAt)}</small>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="fbs-cargo-place__empty">На ТСД ещё не отсканирован ни один заказ.</p>
+                )}
+              </details>
+            ))}
+          </div>
+        </details>
+      ))}
+    </div>
+  );
+}
+
 function FbsOrdersView({
   data,
   search,
@@ -984,7 +1175,7 @@ function FbsOrdersView({
 }: {
   data: ClientFbsOrders | null;
   search: string;
-  view: Exclude<FbsView, 'cost' | 'calculator' | 'pricing' | 'passes'>;
+  view: Exclude<FbsView, 'cargo' | 'cost' | 'calculator' | 'pricing' | 'passes'>;
   selectedOrderKeys: Set<string>;
   onSelectionChange: (keys: Set<string>) => void;
   orderAction: 'assemble' | 'reship' | 'deliver' | 'cancel' | 'stickers' | 'cargo' | 'supply' | 'request' | 'pick-list' | null;

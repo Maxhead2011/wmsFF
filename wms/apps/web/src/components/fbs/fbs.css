@@ -579,6 +579,128 @@
   border-radius: 15px;
 }
 
+.fbs-cargo-supplies,
+.fbs-cargo-places {
+  display: grid;
+  gap: 14px;
+}
+
+.fbs-cargo-supply,
+.fbs-cargo-place {
+  overflow: hidden;
+  border: 1px solid #dbe3ee;
+  border-radius: 18px;
+  background: #fff;
+}
+
+.fbs-cargo-supply.is-ready {
+  border-color: #86d5aa;
+  box-shadow: 0 12px 32px rgba(22, 163, 74, 0.1);
+}
+
+.fbs-cargo-supply > summary,
+.fbs-cargo-place > summary {
+  display: grid;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.fbs-cargo-supply > summary {
+  grid-template-columns: minmax(220px, 1fr) auto auto;
+  background: linear-gradient(135deg, #f8fafc, #eff6ff);
+}
+
+.fbs-cargo-supply.is-ready > summary {
+  background: linear-gradient(135deg, #f0fdf4, #dcfce7);
+}
+
+.fbs-cargo-supply > summary::-webkit-details-marker,
+.fbs-cargo-place > summary::-webkit-details-marker {
+  display: none;
+}
+
+.fbs-cargo-supply summary span,
+.fbs-cargo-place summary span {
+  display: grid;
+  gap: 3px;
+}
+
+.fbs-cargo-supply summary small,
+.fbs-cargo-place summary small {
+  color: #64748b;
+}
+
+.fbs-cargo-supply__progress {
+  text-align: right;
+}
+
+.fbs-cargo-places {
+  padding: 16px;
+  background: #f8fafc;
+}
+
+.fbs-cargo-place {
+  border-radius: 14px;
+}
+
+.fbs-cargo-place--closed {
+  border-color: #86d5aa;
+}
+
+.fbs-cargo-place--open {
+  border-color: #93c5fd;
+  box-shadow: 0 8px 24px rgba(37, 99, 235, 0.08);
+}
+
+.fbs-cargo-place > summary {
+  grid-template-columns: 42px minmax(220px, 1fr) auto;
+}
+
+.fbs-cargo-place__number {
+  display: inline-grid !important;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 11px;
+  color: #fff;
+  background: #2563eb;
+  font-weight: 800;
+}
+
+.fbs-cargo-place--closed .fbs-cargo-place__number {
+  background: #16a34a;
+}
+
+.fbs-cargo-place__table {
+  border-top: 1px solid #e2e8f0;
+  border-radius: 0;
+}
+
+.fbs-cargo-place__empty {
+  margin: 0;
+  padding: 18px 20px;
+  border-top: 1px solid #e2e8f0;
+  color: #64748b;
+}
+
+@media (max-width: 860px) {
+  .fbs-cargo-supply > summary,
+  .fbs-cargo-place > summary {
+    grid-template-columns: 1fr;
+  }
+
+  .fbs-cargo-supply__progress {
+    text-align: left;
+  }
+
+  .fbs-cargo-place__number {
+    display: none !important;
+  }
+}
+
 .fbs-table {
   width: 100%;
   border-collapse: collapse;
