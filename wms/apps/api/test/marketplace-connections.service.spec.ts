@@ -1348,4 +1348,119 @@ describe('MarketplaceConnectionsService', () => {
     expect(result).toEqual({ task: updatedTask, mode: 'RELINKED' });
   });
 
+  it('matches WB cargo QR barcodes to cargo place ids even when WB returns stickers in another order', async () => {
+    const prisma = {
+      clientMarketplaceConnection: { findFirst: vi.fn().mockResolvedValue({ apiKey: 'secret-key' }) },
+      fbsSupplyPlan: { update: vi.fn().mockResolvedValue({}) },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          stickers: [
+            { barcode: '$WBMP:1:4119610:46511279', file: 'second' },
+            { barcode: '$WBMP:1:4119610:46511278', file: 'first' },
+          ],
+        }),
+      } as Response)),
+    );
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    const plan = {
+      id: 'plan-1',
+      clientId: 'client-1',
+      marketplace: MarketplaceType.WILDBERRIES,
+      connectionId: 'connection-1',
+      supplyId: 'WB-GI-1',
+      cargoPlaceIds: ['WB-MP-46511278', 'WB-MP-46511279'],
+      cargoPlaceBarcodes: null,
+    };
+
+    const mapping = await (service as any).syncFbsCargoPlaceBarcodes(plan);
+
+    expect(mapping).toEqual({
+      'WB-MP-46511278': '$WBMP:1:4119610:46511278',
+      'WB-MP-46511279': '$WBMP:1:4119610:46511279',
+    });
+    expect(prisma.fbsSupplyPlan.update).toHaveBeenCalledWith({
+      where: { id: 'plan-1' },
+      data: { cargoPlaceBarcodes: mapping },
+    });
+  });
+
+  it('packs a completed FBS order into an open cargo place and records the operator', async () => {
+    const packing = {
+      id: 'packing-1',
+      clientId: 'client-1',
+      marketplace: MarketplaceType.WILDBERRIES,
+      connectionId: 'connection-1',
+      supplyId: 'WB-GI-1',
+      cargoPlaceId: 'WB-MP-1',
+      capacityItems: 14,
+      deviceCode: 'TSD-1',
+      status: 'OPEN',
+    };
+    const task = {
+      id: 'task-1',
+      orderId: '5355000001',
+      stickerBarcode: '!order-barcode',
+      stickerPartB: '1234',
+      itemCount: 1,
+      cargoPackingId: null,
+    };
+    const prisma = {
+      fbsTsdAssembly: {
+        findMany: vi.fn().mockResolvedValue([task]),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { itemCount: 13 } }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    vi.spyOn(service as any, 'loadOwnedFbsCargoPacking').mockResolvedValue(packing);
+    vi.spyOn(service as any, 'buildFbsCargoPackingResponse').mockResolvedValue({ state: 'SCAN_ORDER' });
+
+    await service.scanFbsCargoOrder(
+      'packing-1',
+      { orderCode: '!order-barcode' },
+      { id: 'user-1', name: 'Сборщик' } as never,
+    );
+
+    expect(prisma.fbsTsdAssembly.updateMany).toHaveBeenCalledWith({
+      where: { id: 'task-1', cargoPackingId: null },
+      data: expect.objectContaining({
+        cargoPackingId: 'packing-1',
+        cargoPackedByUserId: 'user-1',
+        cargoPackedByName: 'Сборщик',
+      }),
+    });
+  });
+
+  it('does not allow a cargo place to exceed its configured 14-item capacity', async () => {
+    const prisma = {
+      fbsTsdAssembly: {
+        findMany: vi.fn().mockResolvedValue([{ id: 'task-1', orderId: '5355000001', itemCount: 1, cargoPackingId: null }]),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { itemCount: 14 } }),
+        updateMany: vi.fn(),
+      },
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    vi.spyOn(service as any, 'loadOwnedFbsCargoPacking').mockResolvedValue({
+      id: 'packing-1',
+      clientId: 'client-1',
+      marketplace: MarketplaceType.WILDBERRIES,
+      connectionId: 'connection-1',
+      supplyId: 'WB-GI-1',
+      cargoPlaceId: 'WB-MP-1',
+      capacityItems: 14,
+      deviceCode: 'TSD-1',
+      status: 'OPEN',
+    });
+
+    await expect(
+      service.scanFbsCargoOrder('packing-1', { orderCode: '5355000001' }, { id: 'user-1' } as never),
+    ).rejects.toThrow('Грузоместо заполнено: 14 из 14');
+    expect(prisma.fbsTsdAssembly.updateMany).not.toHaveBeenCalled();
+  });
+
 });
