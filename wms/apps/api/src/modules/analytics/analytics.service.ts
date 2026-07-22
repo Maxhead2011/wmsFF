@@ -9,7 +9,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { MarketplaceType, StockStatus } from '@prisma/client';
-import { Prisma as AnalyticsPrisma } from '../../generated/analytics-client';
+import { Prisma as AnalyticsPrisma } from '@logoff/analytics-client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ClientScopeService } from '../auth/client-scope.service';
 import type { AuthUser } from '../auth/auth.types';
