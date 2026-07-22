@@ -926,17 +926,20 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new BadRequestException(`Wildberries не принял КИЗ: ${message}`);
     }
 
-    const updated = mark && markNeedsBoxMove
+    const boxCorrection = mark && markNeedsBoxMove
       ? await this.moveExistingFbsKizToOpenedBox(task, mark.id, mark.boxId, kiz, user)
-      : await this.prisma.fbsTsdAssembly.update({
+      : null;
+    const updated = boxCorrection?.task ?? await this.prisma.fbsTsdAssembly.update({
           where: { id: task.id },
           data: { kiz, wbMetaStatus: 'ACCEPTED', errorMessage: null },
         });
     return this.formatFbsTsdAssembly(
       updated,
       user,
-      mark && markNeedsBoxMove
-        ? `КИЗ принят Wildberries. Товар перемещён из короба ${mark.box?.code ?? 'без номера'} в ${task.boxCode}. Подтвердите сборку заказа.`
+      boxCorrection?.mode === 'RELINKED'
+        ? `КИЗ принят Wildberries и перепривязан к фактической единице в коробе ${task.boxCode}. Количество товара не изменялось. Подтвердите сборку заказа.`
+        : boxCorrection
+        ? `КИЗ принят Wildberries. Товар перемещён из короба ${mark?.box?.code ?? 'без номера'} в ${task.boxCode}. Подтвердите сборку заказа.`
         : registeredHistoricalMarkId
         ? 'КИЗ принят Wildberries и зарегистрирован в остатках WMS. Подтвердите сборку заказа.'
         : 'КИЗ принят Wildberries. Подтвердите сборку заказа.',
@@ -975,10 +978,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         throw new BadRequestException('Короб КИЗа изменился после подтверждения. Обновите задание и повторите сканирование.');
       }
       if (freshMark.boxId === freshTask.boxId) {
-        return tx.fbsTsdAssembly.update({
+        const updatedTask = await tx.fbsTsdAssembly.update({
           where: { id: freshTask.id },
           data: { kiz, wbMetaStatus: 'ACCEPTED', errorMessage: null },
         });
+        return { task: updatedTask, mode: 'ALREADY_IN_TARGET' as const };
       }
       if (!freshMark.boxId || !freshMark.box) {
         throw new BadRequestException('У КИЗа не указан исходный короб. Передайте товар менеджеру.');
@@ -1000,9 +1004,59 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         },
       });
       if (!sourceBalance || sourceBalance.quantity < 1) {
-        throw new BadRequestException(
-          `В коробе ${freshMark.box.code} нет доступного остатка для этого КИЗа. Передайте товар менеджеру.`,
-        );
+        const [targetBalance, targetMarks] = await Promise.all([
+          tx.stockBalance.findFirst({
+            where: {
+              clientId: freshTask.clientId,
+              skuId: freshTask.skuId,
+              boxId: targetBox.id,
+              status: StockStatus.AVAILABLE,
+            },
+          }),
+          tx.productMark.count({
+            where: {
+              clientId: freshTask.clientId,
+              skuId: freshTask.skuId,
+              boxId: targetBox.id,
+              status: StockStatus.AVAILABLE,
+            },
+          }),
+        ]);
+        if (!targetBalance || targetBalance.quantity <= targetMarks) {
+          throw new BadRequestException(
+            `В открытом коробе ${targetBox.code} нет свободной единицы этого товара без КИЗа. Передайте товар менеджеру.`,
+          );
+        }
+        await tx.productMark.update({
+          where: { id: freshMark.id },
+          data: {
+            boxId: targetBox.id,
+            stockMovementId: null,
+            sourceDocument: `FBS TSD, заказ ${freshTask.orderId}: КИЗ перепривязан к фактическому коробу без изменения количества`,
+          },
+        });
+        await tx.clientRequestEvent.create({
+          data: {
+            requestId: freshTask.requestId,
+            clientId: freshTask.clientId,
+            eventType: ClientRequestEventType.COMMENT,
+            title: 'КИЗ перепривязан при сборке FBS',
+            body: `Заказ ${freshTask.orderId}; КИЗ ${printableFbsKiz(kiz)}; запись перенесена ${freshMark.box.code} → ${targetBox.code} без изменения количества; сотрудник ${freshTask.workerName ?? freshTask.deviceCode}.`,
+            createdByUserId: user.id,
+          },
+        });
+        const updatedTask = await tx.fbsTsdAssembly.update({
+          where: { id: freshTask.id },
+          data: { kiz, wbMetaStatus: 'ACCEPTED', errorMessage: null },
+        });
+        const [remainingBalances, remainingMarks] = await Promise.all([
+          tx.stockBalance.count({ where: { boxId: freshMark.boxId, quantity: { gt: 0 } } }),
+          tx.productMark.count({ where: { boxId: freshMark.boxId } }),
+        ]);
+        if (remainingBalances === 0 && remainingMarks === 0) {
+          await tx.box.update({ where: { id: freshMark.boxId }, data: { status: 'archived' } });
+        }
+        return { task: updatedTask, mode: 'RELINKED' as const };
       }
 
       if (sourceBalance.quantity === 1) {
@@ -1087,7 +1141,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       if (remainingBalances === 0 && remainingMarks === 0) {
         await tx.box.update({ where: { id: freshMark.boxId }, data: { status: 'archived' } });
       }
-      return updatedTask;
+      return { task: updatedTask, mode: 'MOVED' as const };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 

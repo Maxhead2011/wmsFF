@@ -1279,7 +1279,73 @@ describe('MarketplaceConnectionsService', () => {
         title: 'КИЗ перемещён при сборке FBS',
       }),
     });
-    expect(result).toEqual(updatedTask);
+    expect(result).toEqual({ task: updatedTask, mode: 'MOVED' });
+  });
+
+  it('relinks an orphan KIZ to a free unmarked unit in the opened box without changing quantities', async () => {
+    const task = {
+      id: 'task-1', clientId: 'client-1', orderId: '1001', requestId: 'request-1', skuId: 'sku-1',
+      boxId: 'box-target', boxCode: 'FFL_LKB0106_039', workerName: 'Сборщик', deviceCode: 'TSD-1',
+    };
+    const updatedTask = { ...task, kiz: 'KIZ-ORPHAN', wbMetaStatus: 'ACCEPTED' };
+    const tx = {
+      fbsTsdAssembly: {
+        findUnique: vi.fn().mockResolvedValue(task),
+        update: vi.fn().mockResolvedValue(updatedTask),
+      },
+      productMark: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'mark-1', clientId: 'client-1', skuId: 'sku-1', boxId: 'box-source', status: 'AVAILABLE',
+          box: { id: 'box-source', code: 'FFL_LKB1007_304', palletId: null },
+        }),
+        update: vi.fn().mockResolvedValue({}),
+        count: vi.fn().mockResolvedValueOnce(0).mockResolvedValueOnce(9),
+      },
+      box: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'box-target', code: 'FFL_LKB0106_039', palletId: null, status: 'active',
+        }),
+        update: vi.fn(),
+      },
+      stockBalance: {
+        findFirst: vi.fn()
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce({ id: 'target-balance', quantity: 2 }),
+        update: vi.fn(),
+        delete: vi.fn(),
+        upsert: vi.fn(),
+        count: vi.fn().mockResolvedValue(0),
+      },
+      stockMovement: { create: vi.fn() },
+      clientRequestEvent: { create: vi.fn().mockResolvedValue({}) },
+    };
+    const prisma = { $transaction: vi.fn(async (callback: (value: typeof tx) => unknown) => callback(tx)) };
+    const inventoryLock = { assertStockMovementsAllowed: vi.fn().mockResolvedValue(undefined) };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never, inventoryLock as never);
+
+    const result = await (service as any).moveExistingFbsKizToOpenedBox(
+      task, 'mark-1', 'box-source', 'KIZ-ORPHAN', { id: 'user-1' },
+    );
+
+    expect(tx.stockBalance.update).not.toHaveBeenCalled();
+    expect(tx.stockBalance.delete).not.toHaveBeenCalled();
+    expect(tx.stockBalance.upsert).not.toHaveBeenCalled();
+    expect(tx.stockMovement.create).not.toHaveBeenCalled();
+    expect(tx.productMark.update).toHaveBeenCalledWith({
+      where: { id: 'mark-1' },
+      data: expect.objectContaining({
+        boxId: 'box-target',
+        stockMovementId: null,
+        sourceDocument: expect.stringContaining('без изменения количества'),
+      }),
+    });
+    expect(tx.clientRequestEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        title: 'КИЗ перепривязан при сборке FBS',
+        body: expect.stringContaining('без изменения количества'),
+      }),
+    });
+    expect(result).toEqual({ task: updatedTask, mode: 'RELINKED' });
   });
 
 });
