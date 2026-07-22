@@ -8,6 +8,7 @@ wms/**/dist/
 wms/**/.turbo/
 wms/**/.vite/
 wms/**/coverage/
+wms/apps/api/src/generated/
 wms/**/.gradle/
 wms/**/.kotlin/
 wms/**/build/

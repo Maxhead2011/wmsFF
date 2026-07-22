@@ -1,5 +1,5 @@
 import { UserStatus } from '@prisma/client';
-import { IsEnum, IsOptional, IsString, Length, ValidateIf } from 'class-validator';
+import { IsBoolean, IsEnum, IsOptional, IsString, Length, ValidateIf } from 'class-validator';
 
 export class UpdateUserProfileDto {
   @IsOptional()
@@ -23,4 +23,8 @@ export class UpdateUserProfileDto {
   @IsOptional()
   @IsEnum(UserStatus)
   status?: UserStatus;
+
+  @IsOptional()
+  @IsBoolean()
+  analyticsEnabled?: boolean;
 }

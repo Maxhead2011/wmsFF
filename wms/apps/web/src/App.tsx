@@ -1,5 +1,5 @@
 import { CheckCircle2, ChevronRight, LogOut, PanelLeft, ShieldCheck, UsersRound } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { AccessAdminPanel } from './components/access/AccessAdminPanel';
 import { AuthPanel } from './components/AuthPanel';
 import { BillingPanel } from './components/billing/BillingPanel';
@@ -22,6 +22,8 @@ import { WarehouseOpsPanel } from './components/warehouse/WarehouseOpsPanel';
 import { fetchMe, type AuthSession, type AuthUser } from './lib/api';
 import { clearStoredSession, loadStoredSession, storeSession } from './lib/session';
 import { canOpenWorkspace, workspaceNav, type WorkspaceId, type WorkspaceNavItem } from './lib/workspaces';
+
+const AnalyticsPanel = lazy(() => import('./components/analytics/AnalyticsPanel').then((module) => ({ default: module.AnalyticsPanel })));
 
 const statusLabel = {
   ready: 'готово',
@@ -227,6 +229,8 @@ function renderWorkspace(
   switch (activeWorkspaceId) {
     case 'cabinet':
       return <ClientCabinetPanel session={session} />;
+    case 'analytics':
+      return <Suspense fallback={<div className="workspace-loading">Загружаю аналитику…</div>}><AnalyticsPanel session={session} /></Suspense>;
     case 'access':
       return <AccessAdminPanel session={session} />;
     case 'directories':
@@ -352,7 +356,7 @@ function sectionForWorkspace(id: WorkspaceId): WorkspaceSection {
     return 'main';
   }
 
-  if (id === 'cabinet' || id === 'requests' || id === 'fbs' || id === 'catalog') {
+  if (id === 'cabinet' || id === 'analytics' || id === 'requests' || id === 'fbs' || id === 'catalog') {
     return 'client';
   }
 

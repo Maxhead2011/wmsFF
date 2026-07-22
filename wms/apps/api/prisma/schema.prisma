@@ -294,6 +294,7 @@ model User {
   name                           String
   status                         UserStatus                     @default(ACTIVE)
   isDemo                         Boolean                        @default(false)
+  analyticsEnabled               Boolean                        @default(false)
   roles                          UserRole[]
   clientScopes                   UserClient[]
   printerScopes                  UserPrinterGroup[]
@@ -945,7 +946,7 @@ model ClientRequest {
   billingCharges   BillingCharge[]
   billingInvoices  BillingInvoice[]
   deliveryRequests LogisticsDeliveryRequest[]
-  fbsOrderLinks     FbsOrderRequestLink[]
+  fbsOrderLinks    FbsOrderRequestLink[]
   createdAt        DateTime                   @default(now())
   updatedAt        DateTime                   @updatedAt
 
@@ -956,16 +957,16 @@ model ClientRequest {
 }
 
 model FbsOrderRequestLink {
-  id              String           @id @default(uuid())
+  id              String          @id @default(uuid())
   clientId        String
   marketplace     MarketplaceType
   connectionId    String
   orderId         String
   requestId       String
   createdByUserId String?
-  request         ClientRequest    @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  request         ClientRequest   @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 
   @@unique([marketplace, connectionId, orderId])
   @@index([clientId, requestId])
@@ -1308,20 +1309,20 @@ model ClientFbsAdditionalService {
 }
 
 model FbsSupplyPlan {
-  id                         String                 @id @default(uuid())
-  clientId                   String
-  marketplace                MarketplaceType        @default(WILDBERRIES)
-  connectionId               String
-  supplyId                   String
-  deliveryDestination        FbsDeliveryDestination
-  itemsPerCargoPlace         Int                    @default(14)
-  cargoPlaceCount            Int                    @default(0)
-  cargoPlaceIds              Json?
-  orderIds                   Json
-  createdByUserId            String?
-  client                     Client                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  createdAt                  DateTime               @default(now())
-  updatedAt                  DateTime               @updatedAt
+  id                  String                 @id @default(uuid())
+  clientId            String
+  marketplace         MarketplaceType        @default(WILDBERRIES)
+  connectionId        String
+  supplyId            String
+  deliveryDestination FbsDeliveryDestination
+  itemsPerCargoPlace  Int                    @default(14)
+  cargoPlaceCount     Int                    @default(0)
+  cargoPlaceIds       Json?
+  orderIds            Json
+  createdByUserId     String?
+  client              Client                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
 
   @@unique([marketplace, connectionId, supplyId])
   @@index([clientId, createdAt])
@@ -1329,34 +1330,34 @@ model FbsSupplyPlan {
 }
 
 model FbsTsdAssembly {
-  id             String          @id @default(uuid())
-  clientId       String
-  marketplace    MarketplaceType @default(WILDBERRIES)
-  connectionId   String
-  orderId        String
-  supplyId       String?
-  requestId      String
-  requestItemId  String
-  skuId          String
-  productName    String
-  article        String?
-  barcodes       Json
-  storageBoxes   Json
-  itemCount      Int             @default(1)
-  requiresKiz    Boolean         @default(false)
-  status         String          @default("IN_PROGRESS")
-  deviceCode     String
-  workerUserId   String?
-  workerName     String?
-  boxId          String?
-  boxCode        String?
-  barcode        String?
-  kiz            String?
-  wbMetaStatus   String          @default("NOT_REQUIRED")
-  errorMessage   String?
-  completedAt    DateTime?
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
+  id            String          @id @default(uuid())
+  clientId      String
+  marketplace   MarketplaceType @default(WILDBERRIES)
+  connectionId  String
+  orderId       String
+  supplyId      String?
+  requestId     String
+  requestItemId String
+  skuId         String
+  productName   String
+  article       String?
+  barcodes      Json
+  storageBoxes  Json
+  itemCount     Int             @default(1)
+  requiresKiz   Boolean         @default(false)
+  status        String          @default("IN_PROGRESS")
+  deviceCode    String
+  workerUserId  String?
+  workerName    String?
+  boxId         String?
+  boxCode       String?
+  barcode       String?
+  kiz           String?
+  wbMetaStatus  String          @default("NOT_REQUIRED")
+  errorMessage  String?
+  completedAt   DateTime?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
 
   @@unique([marketplace, connectionId, orderId])
   @@unique([clientId, kiz])

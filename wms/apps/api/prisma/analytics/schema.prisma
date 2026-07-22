@@ -1,0 +1,132 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../src/generated/analytics-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("ANALYTICS_DATABASE_URL")
+}
+
+model AnalyticsConnection {
+  clientId        String    @id @map("client_id")
+  marketplace     String    @default("WILDBERRIES")
+  accountName     String?   @map("account_name")
+  sellerSid       String?   @map("seller_sid")
+  apiKeyEncrypted String    @map("api_key_encrypted")
+  isActive        Boolean   @default(true) @map("is_active")
+  lastVerifiedAt  DateTime? @map("last_verified_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@map("analytics_connection")
+}
+
+model AnalyticsSyncState {
+  clientId      String    @id @map("client_id")
+  marketplace   String    @default("WILDBERRIES")
+  status        String    @default("IDLE")
+  periodDays    Int       @default(30) @map("period_days")
+  currency      String    @default("RUB")
+  productCount  Int       @default(0) @map("product_count")
+  lastStartedAt DateTime? @map("last_started_at")
+  lastSyncedAt  DateTime? @map("last_synced_at")
+  lastError     String?   @map("last_error")
+  sourceStatus  Json?     @map("source_status")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@map("analytics_sync_state")
+}
+
+model AnalyticsProduct {
+  clientId            String   @map("client_id")
+  nmId                String   @map("nm_id")
+  name                String
+  vendorCode          String?  @map("vendor_code")
+  brandName           String?  @map("brand_name")
+  subjectName         String?  @map("subject_name")
+  photoUrl            String?  @map("photo_url")
+  availability        String?
+  stockCount          Float    @default(0) @map("stock_count")
+  stockSum            Float    @default(0) @map("stock_sum")
+  avgOrders           Float    @default(0) @map("avg_orders")
+  ordersCount         Float    @default(0) @map("orders_count")
+  ordersSum           Float    @default(0) @map("orders_sum")
+  buyoutCount         Float    @default(0) @map("buyout_count")
+  buyoutSum           Float    @default(0) @map("buyout_sum")
+  buyoutPercent       Float    @default(0) @map("buyout_percent")
+  lostOrdersCount     Float    @default(0) @map("lost_orders_count")
+  lostOrdersSum       Float    @default(0) @map("lost_orders_sum")
+  lostBuyoutsCount    Float    @default(0) @map("lost_buyouts_count")
+  lostBuyoutsSum      Float    @default(0) @map("lost_buyouts_sum")
+  turnoverDays        Float?   @map("turnover_days")
+  saleRateDays        Float?   @map("sale_rate_days")
+  currentPriceMin     Float?   @map("current_price_min")
+  currentPriceMax     Float?   @map("current_price_max")
+  openCount           Float    @default(0) @map("open_count")
+  cartCount           Float    @default(0) @map("cart_count")
+  orderCount          Float    @default(0) @map("order_count")
+  orderSum            Float    @default(0) @map("order_sum")
+  funnelBuyoutCount   Float    @default(0) @map("funnel_buyout_count")
+  funnelBuyoutSum     Float    @default(0) @map("funnel_buyout_sum")
+  cancelCount         Float    @default(0) @map("cancel_count")
+  cancelSum           Float    @default(0) @map("cancel_sum")
+  addToCartPercent    Float    @default(0) @map("add_to_cart_percent")
+  cartToOrderPercent  Float    @default(0) @map("cart_to_order_percent")
+  funnelBuyoutPercent Float    @default(0) @map("funnel_buyout_percent")
+  orderCountDynamic   Float    @default(0) @map("order_count_dynamic")
+  orderSumDynamic     Float    @default(0) @map("order_sum_dynamic")
+  openCountDynamic    Float    @default(0) @map("open_count_dynamic")
+  cartCountDynamic    Float    @default(0) @map("cart_count_dynamic")
+  selectedMetrics     Json?    @map("selected_metrics")
+  pastMetrics         Json?    @map("past_metrics")
+  comparisonMetrics   Json?    @map("comparison_metrics")
+  stockMetrics        Json?    @map("stock_metrics")
+  syncedAt            DateTime @map("synced_at")
+
+  @@id([clientId, nmId])
+  @@index([clientId, availability])
+  @@index([clientId, orderSum])
+  @@index([clientId, stockCount])
+  @@map("analytics_product")
+}
+
+model AnalyticsRegion {
+  clientId        String   @map("client_id")
+  regionKey       String   @map("region_key")
+  regionName      String   @map("region_name")
+  officeId        String?  @map("office_id")
+  officeName      String?  @map("office_name")
+  stockCount      Float    @default(0) @map("stock_count")
+  stockSum        Float    @default(0) @map("stock_sum")
+  toClientCount   Float    @default(0) @map("to_client_count")
+  fromClientCount Float    @default(0) @map("from_client_count")
+  saleRateDays    Float?   @map("sale_rate_days")
+  metrics         Json?
+  syncedAt        DateTime @map("synced_at")
+
+  @@id([clientId, regionKey])
+  @@index([clientId, stockCount])
+  @@map("analytics_region")
+}
+
+model AnalyticsDailySummary {
+  clientId      String   @map("client_id")
+  snapshotDate  DateTime @map("snapshot_date") @db.Date
+  periodDays    Int      @map("period_days")
+  productCount  Int      @map("product_count")
+  stockCount    Float    @map("stock_count")
+  stockSum      Float    @map("stock_sum")
+  ordersCount   Float    @map("orders_count")
+  ordersSum     Float    @map("orders_sum")
+  buyoutCount   Float    @map("buyout_count")
+  buyoutSum     Float    @map("buyout_sum")
+  lostOrdersSum Float    @map("lost_orders_sum")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@id([clientId, snapshotDate])
+  @@index([clientId, snapshotDate])
+  @@map("analytics_daily_summary")
+}

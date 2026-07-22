@@ -54,6 +54,7 @@ fi
 
 if [ ! -f "$ENV_FILE" ]; then
   DB_PASSWORD="$(openssl rand -hex 18)"
+  ANALYTICS_DB_PASSWORD="$(openssl rand -hex 18)"
   JWT_ACCESS="$(openssl rand -hex 32)"
   JWT_REFRESH="$(openssl rand -hex 32)"
   cat > "$ENV_FILE" <<EOF
@@ -65,6 +66,12 @@ POSTGRES_DB=wms
 POSTGRES_USER=wms
 POSTGRES_PASSWORD=$DB_PASSWORD
 DATABASE_URL=postgresql://wms:$DB_PASSWORD@postgres:5432/wms?schema=public
+
+ANALYTICS_POSTGRES_DB=logoff_analytics
+ANALYTICS_POSTGRES_USER=logoff_analytics
+ANALYTICS_POSTGRES_PASSWORD=$ANALYTICS_DB_PASSWORD
+ANALYTICS_DATABASE_URL=postgresql://logoff_analytics:$ANALYTICS_DB_PASSWORD@analytics-postgres:5432/logoff_analytics?schema=public
+ANALYTICS_CREDENTIALS_SECRET=$(openssl rand -hex 32)
 
 REDIS_URL=redis://redis:6379
 JWT_ACCESS_SECRET=$JWT_ACCESS
@@ -79,14 +86,24 @@ if ! grep -q '^BOOTSTRAP_ADMIN_SECRET=' "$ENV_FILE"; then
   printf '\nBOOTSTRAP_ADMIN_SECRET=%s\n' "$(openssl rand -hex 24)" >> "$ENV_FILE"
 fi
 
+if ! grep -q '^ANALYTICS_DATABASE_URL=' "$ENV_FILE"; then
+  ANALYTICS_DB_PASSWORD="$(openssl rand -hex 18)"
+  printf '\nANALYTICS_POSTGRES_DB=logoff_analytics\n' >> "$ENV_FILE"
+  printf 'ANALYTICS_POSTGRES_USER=logoff_analytics\n' >> "$ENV_FILE"
+  printf 'ANALYTICS_POSTGRES_PASSWORD=%s\n' "$ANALYTICS_DB_PASSWORD" >> "$ENV_FILE"
+  printf 'ANALYTICS_DATABASE_URL=postgresql://logoff_analytics:%s@analytics-postgres:5432/logoff_analytics?schema=public\n' "$ANALYTICS_DB_PASSWORD" >> "$ENV_FILE"
+  printf 'ANALYTICS_CREDENTIALS_SECRET=%s\n' "$(openssl rand -hex 32)" >> "$ENV_FILE"
+fi
+
 cd "$COMPOSE_DIR"
 docker compose --env-file ../.env build
-docker compose --env-file ../.env up -d postgres redis
+docker compose --env-file ../.env up -d postgres analytics-postgres redis
 docker compose --env-file ../.env up -d api web
 docker compose --env-file ../.env --profile compose-nginx rm -sf nginx >/dev/null 2>&1 || true
 
 # Русский комментарий: для первого bootstrap используем db push; после появления миграций заменим на migrate deploy.
 docker compose --env-file ../.env exec -T api pnpm --filter @logoff/wms-api prisma:push
+docker compose --env-file ../.env exec -T api pnpm --filter @logoff/wms-api prisma:analytics:push
 docker compose --env-file ../.env exec -T api pnpm --filter @logoff/wms-api ensure:admin
 
 if [ -f "$HOST_NGINX_AVAILABLE" ]; then

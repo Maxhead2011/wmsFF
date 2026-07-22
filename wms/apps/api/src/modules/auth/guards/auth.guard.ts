@@ -65,6 +65,7 @@ export class AuthGuard implements CanActivate {
       email: user.email,
       name: user.name,
       isDemo: user.isDemo,
+      analyticsEnabled: user.analyticsEnabled,
       roleCodes,
       permissionCodes,
       clientScopeMode: user.isDemo ? 'LIMITED' : this.clientScopeMode(roleCodes, permissionCodes, user.clientScopes.length),

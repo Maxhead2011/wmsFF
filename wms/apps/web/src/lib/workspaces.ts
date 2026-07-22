@@ -1,5 +1,6 @@
 import {
   BriefcaseBusiness,
+  BarChart3,
   Building2,
   Boxes,
   Bug,
@@ -25,6 +26,7 @@ import type { AuthUser } from './api';
 export type WorkspaceId =
   | 'overview'
   | 'cabinet'
+  | 'analytics'
   | 'access'
   | 'directories'
   | 'imports'
@@ -53,6 +55,7 @@ export type WorkspaceNavItem = {
   icon: LucideIcon;
   status: 'ready' | 'in-progress' | 'planned';
   audience?: 'all' | 'internal' | 'client';
+  requiresAnalyticsAccess?: boolean;
 };
 
 export const workspaceNav: WorkspaceNavItem[] = [
@@ -147,6 +150,17 @@ export const workspaceNav: WorkspaceNavItem[] = [
     icon: ShoppingBasket,
     status: 'in-progress',
     audience: 'client',
+  },
+  {
+    id: 'analytics',
+    title: 'Аналитика',
+    eyebrow: 'Клиентский контур',
+    description: 'Продажи и воронка WB, остатки на маркетплейсе и в LOGOFF, дефицит, неликвид и рекомендации.',
+    permissions: [],
+    icon: BarChart3,
+    status: 'ready',
+    audience: 'client',
+    requiresAnalyticsAccess: true,
   },
   {
     id: 'catalog',
@@ -251,6 +265,10 @@ export const workspaceNav: WorkspaceNavItem[] = [
 ];
 
 export function canOpenWorkspace(user: AuthUser, item: WorkspaceNavItem) {
+  if (item.requiresAnalyticsAccess && !user.analyticsEnabled) {
+    return false;
+  }
+
   if (isClientOnlyUser(user) && item.audience === 'internal') {
     return false;
   }

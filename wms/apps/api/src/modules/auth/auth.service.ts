@@ -15,6 +15,7 @@ type UserWithAccess = {
   email: string;
   name: string;
   isDemo: boolean;
+  analyticsEnabled: boolean;
   passwordHash: string;
   status: UserStatus;
   clientScopes: Array<{ clientId: string; canRead: boolean; canWrite: boolean }>;
@@ -132,6 +133,7 @@ export class AuthService {
       email: user.email,
       name: user.name,
       isDemo: user.isDemo,
+      analyticsEnabled: user.analyticsEnabled,
       roleCodes,
       permissionCodes,
       clientScopeMode: this.clientScopeMode(roleCodes, permissionCodes, user.clientScopes.length),

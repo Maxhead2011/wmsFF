@@ -3,6 +3,7 @@ export type AuthUser = {
   email: string;
   name: string;
   isDemo?: boolean;
+  analyticsEnabled?: boolean;
   roleCodes: string[];
   permissionCodes: string[];
   clientScopeMode: 'ALL' | 'LIMITED';

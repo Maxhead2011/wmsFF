@@ -3,6 +3,7 @@ export type AuthUser = {
   email: string;
   name: string;
   isDemo?: boolean;
+  analyticsEnabled?: boolean;
   roleCodes: string[];
   permissionCodes: string[];
   clientScopeMode: 'ALL' | 'LIMITED';
@@ -76,6 +77,144 @@ export type InventoryAuditLine = {
   decisionComment: string | null;
   decidedByName: string | null;
   decidedAt: string | null;
+};
+
+export type AnalyticsClientSummary = {
+  id: string;
+  code: string;
+  name: string;
+  connection: {
+    connected: boolean;
+    marketplace: string;
+    accountName: string | null;
+    lastVerifiedAt: string | null;
+  };
+  sync: {
+    status: string;
+    periodDays: number;
+    productCount: number;
+    lastSyncedAt: string | null;
+    lastError: string | null;
+  } | null;
+};
+
+export type AnalyticsProduct = {
+  clientId: string;
+  nmId: string;
+  name: string;
+  vendorCode: string | null;
+  brandName: string | null;
+  subjectName: string | null;
+  photoUrl: string | null;
+  availability: string | null;
+  stockCount: number;
+  stockSum: number;
+  avgOrders: number;
+  ordersCount: number;
+  ordersSum: number;
+  buyoutCount: number;
+  buyoutSum: number;
+  buyoutPercent: number;
+  lostOrdersCount: number;
+  lostOrdersSum: number;
+  lostBuyoutsCount: number;
+  lostBuyoutsSum: number;
+  turnoverDays: number | null;
+  saleRateDays: number | null;
+  currentPriceMin: number | null;
+  currentPriceMax: number | null;
+  openCount: number;
+  cartCount: number;
+  orderCount: number;
+  orderSum: number;
+  funnelBuyoutCount: number;
+  funnelBuyoutSum: number;
+  cancelCount: number;
+  cancelSum: number;
+  addToCartPercent: number;
+  cartToOrderPercent: number;
+  funnelBuyoutPercent: number;
+  orderCountDynamic: number;
+  orderSumDynamic: number;
+  openCountDynamic: number;
+  cartCountDynamic: number;
+  syncedAt: string;
+  wmsStock: number;
+  wmsSkuCount: number;
+};
+
+export type AnalyticsDashboard = {
+  generatedAt: string;
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  access: {
+    analyticsEnabled: boolean;
+    canManageConnection: boolean;
+    canSync: boolean;
+  };
+  connection: AnalyticsClientSummary['connection'];
+  sync: {
+    status: string;
+    periodDays: number;
+    currency: string;
+    productCount: number;
+    lastStartedAt: string | null;
+    lastSyncedAt: string | null;
+    lastError: string | null;
+    sourceStatus: unknown;
+  } | null;
+  totals: {
+    products: number;
+    activeProducts: number;
+    wbStock: number;
+    wmsStock: number;
+    orders: number;
+    ordersSum: number;
+    buyouts: number;
+    buyoutsSum: number;
+    buyoutPercent: number;
+    lostOrdersSum: number;
+    outOfStock: number;
+    lowStock: number;
+    overstock: number;
+  };
+  recommendations: Array<{
+    nmId: string;
+    name: string;
+    vendorCode: string | null;
+    photoUrl: string | null;
+    kind: string;
+    severity: 'CRITICAL' | 'WARNING' | 'INFO' | 'POSITIVE';
+    value: number;
+    message: string;
+  }>;
+  products: {
+    total: number;
+    limit: number;
+    offset: number;
+    items: AnalyticsProduct[];
+  };
+  regions: Array<{
+    regionName: string;
+    officeId: string | null;
+    officeName: string | null;
+    stockCount: number;
+    stockSum: number;
+    toClientCount: number;
+    fromClientCount: number;
+    saleRateDays: number | null;
+  }>;
+  history: Array<{
+    date: string;
+    periodDays: number;
+    productCount: number;
+    stockCount: number;
+    stockSum: number;
+    ordersCount: number;
+    ordersSum: number;
+    buyoutCount: number;
+    buyoutSum: number;
+    lostOrdersSum: number;
+  }>;
 };
 
 export type InventoryAuditBox = {
@@ -3013,6 +3152,7 @@ export type UserSummary = {
   email: string;
   name: string;
   status: string;
+  analyticsEnabled: boolean;
   createdAt?: string;
   hasTsdActivationCode?: boolean;
   roles: Array<{
@@ -3112,6 +3252,7 @@ export type UpdateUserProfilePayload = {
   name?: string;
   password?: string;
   status?: string;
+  analyticsEnabled?: boolean;
 };
 
 export type UpdateUserPrinterScopesPayload = {
@@ -4757,6 +4898,36 @@ export async function updateStorageTariff(
 export async function fetchMarketplaceConnections(accessToken: string, filter: { clientId?: string } = {}) {
   return request<MarketplaceConnectionSummary[]>(withQuery('/marketplace-connections', filter), {
     accessToken,
+  });
+}
+
+export async function fetchAnalyticsClients(accessToken: string) {
+  return request<AnalyticsClientSummary[]>('/analytics/clients', { accessToken });
+}
+
+export async function fetchAnalyticsDashboard(accessToken: string, clientId: string) {
+  return request<AnalyticsDashboard>(withQuery('/analytics/dashboard', { clientId, limit: 500 }), { accessToken });
+}
+
+export async function syncAnalyticsDashboard(accessToken: string, clientId: string, periodDays: 7 | 30 | 90) {
+  return request<AnalyticsDashboard>('/analytics/sync', {
+    method: 'POST',
+    accessToken,
+    body: { clientId, periodDays },
+  });
+}
+
+export async function connectAnalyticsApi(accessToken: string, clientId: string, apiKey: string) {
+  return request<{
+    client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+    connected: boolean;
+    marketplace: string;
+    accountName: string | null;
+    lastVerifiedAt: string | null;
+  }>(`/analytics/connections/${clientId}`, {
+    method: 'PUT',
+    accessToken,
+    body: { apiKey },
   });
 }
 

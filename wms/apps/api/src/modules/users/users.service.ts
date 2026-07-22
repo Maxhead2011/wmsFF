@@ -121,6 +121,7 @@ export class UsersService {
           ...(dto.name === undefined ? {} : { name: dto.name.trim() }),
           ...(dto.password === undefined ? {} : { passwordHash: await this.passwords.hash(dto.password) }),
           ...(dto.status === undefined ? {} : { status: dto.status }),
+          ...(dto.analyticsEnabled === undefined ? {} : { analyticsEnabled: dto.analyticsEnabled }),
         },
         select: this.userSummarySelect(),
       });
@@ -318,6 +319,7 @@ export class UsersService {
       email: true,
       name: true,
       status: true,
+      analyticsEnabled: true,
       tsdActivationCodeHash: true,
       createdAt: true,
       roles: {

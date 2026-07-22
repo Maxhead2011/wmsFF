@@ -69,6 +69,7 @@ type UserDraft = {
   name: string;
   password: string;
   status: string;
+  analyticsEnabled: boolean;
 };
 
 const tabs: Array<{ id: DebugTab; label: string; icon: typeof Building2 }> = [
@@ -156,6 +157,7 @@ const emptyUserDraft: UserDraft = {
   name: '',
   password: '',
   status: 'ACTIVE',
+  analyticsEnabled: false,
 };
 
 export function DebugPanel({ session, onOpenWorkspace }: DebugPanelProps) {
@@ -395,6 +397,7 @@ export function DebugPanel({ session, onOpenWorkspace }: DebugPanelProps) {
         email: userDraft.email,
         name: userDraft.name,
         status: userDraft.status,
+        analyticsEnabled: userDraft.analyticsEnabled,
         ...(userDraft.password.trim() ? { password: userDraft.password.trim() } : {}),
       });
       const currentRoleCodes = selectedUser.roles.map((item) => item.role.code).sort().join('|');
@@ -764,6 +767,17 @@ export function DebugPanel({ session, onOpenWorkspace }: DebugPanelProps) {
                   onChange={(event) => setUserField('password', event.target.value)}
                 />
               </label>
+              <label className="debug-access-toggle">
+                <span>Доступ к аналитике</span>
+                <span className="debug-access-toggle__control">
+                  <input
+                    checked={userDraft.analyticsEnabled}
+                    type="checkbox"
+                    onChange={(event) => setUserField('analyticsEnabled', event.target.checked)}
+                  />
+                  <strong>{userDraft.analyticsEnabled ? 'Плитка видна' : 'Плитка скрыта'}</strong>
+                </span>
+              </label>
             </div>
 
             <div className="debug-role-grid">
@@ -936,6 +950,7 @@ function userToDraft(user: UserSummary): UserDraft {
     name: user.name,
     password: '',
     status: user.status,
+    analyticsEnabled: user.analyticsEnabled,
   };
 }
 
