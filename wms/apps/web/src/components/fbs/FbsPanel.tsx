@@ -84,18 +84,18 @@ const fbsViews = [
     accent: 'red',
   },
   {
-    id: 'shipped' as const,
-    title: 'Отгруженные',
-    description: 'Переданные заказы со статусами, автоматически получаемыми из API.',
-    icon: Truck,
-    accent: 'green',
-  },
-  {
     id: 'cargo' as const,
     title: 'Упаковка грузомест ПВЗ',
     description: 'Точный состав каждого грузоместа, заполнение по 14 единиц и готовность поставки.',
     icon: Boxes,
     accent: 'blue',
+  },
+  {
+    id: 'shipped' as const,
+    title: 'Отгруженные',
+    description: 'Переданные заказы со статусами, автоматически получаемыми из API.',
+    icon: Truck,
+    accent: 'green',
   },
   {
     id: 'cancelled' as const,
