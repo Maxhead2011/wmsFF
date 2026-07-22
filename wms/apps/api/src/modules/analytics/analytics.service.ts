@@ -409,7 +409,8 @@ export class AnalyticsService {
   private async fetchRegionalSales(apiKey: string, periods: AnalyticsPeriods) {
     try {
       return await this.fetchRegionalSalesFromStatistics(apiKey, periods);
-    } catch {
+    } catch (caught) {
+      if (isGlobalLimiterError(caught)) throw caught;
       return this.fetchRegionalSalesFromAnalytics(apiKey, periods);
     }
   }
