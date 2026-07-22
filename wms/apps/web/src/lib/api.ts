@@ -190,6 +190,61 @@ export type AnalyticsDashboard = {
     value: number;
     message: string;
   }>;
+  regionalAnalytics: {
+    available: boolean;
+    periodDays: number;
+    targetDays: number;
+    exactProductWarehouseStockAvailable: boolean;
+    limitation: string;
+    summary: {
+      regions: number;
+      shortageRegions: number;
+      recommendedSupply: number;
+      excessStock: number;
+      salesQty: number;
+      salesAmount: number;
+    };
+    regions: Array<{
+      regionName: string;
+      salesQty: number;
+      salesAmount: number;
+      pastSalesQty: number;
+      salesDynamicPercent: number;
+      salesSharePercent: number;
+      stockCount: number;
+      stockSharePercent: number;
+      coverageDays: number | null;
+      wbSaleRateDays: number | null;
+      targetStock: number;
+      recommendedSupply: number;
+      excessStock: number;
+      toClientCount: number;
+      fromClientCount: number;
+      estimatedLostSales: number;
+      topWarehouse: string | null;
+      topWarehouseStock: number;
+      status: 'CRITICAL' | 'SHORTAGE' | 'OVERSTOCK' | 'BALANCED' | 'NO_DEMAND' | 'NO_DATA';
+    }>;
+    productActions: Array<{
+      nmId: string;
+      name: string;
+      vendorCode: string | null;
+      photoUrl: string | null;
+      regionName: string;
+      salesQty: number;
+      pastSalesQty: number;
+      salesDynamicPercent: number;
+      demandSharePercent: number;
+      estimatedRegionStock: number;
+      targetRegionStock: number;
+      gap: number;
+      wmsStock: number;
+      recommendedQty: number;
+      uncoveredQty: number;
+      confidence: 'ESTIMATE';
+      reason: string;
+    }>;
+  };
   products: {
     total: number;
     limit: number;

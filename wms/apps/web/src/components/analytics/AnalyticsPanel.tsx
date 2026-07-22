@@ -5,12 +5,14 @@ import {
   DollarSign,
   Eye,
   KeyRound,
+  MapPinned,
   PackageCheck,
   RefreshCw,
   Search,
   ShieldCheck,
   ShoppingCart,
   Sparkles,
+  Target,
   TrendingUp,
   TriangleAlert,
   Warehouse,
@@ -248,6 +250,68 @@ export function AnalyticsPanel({ session }: AnalyticsPanelProps) {
             <MetricCard icon={TriangleAlert} label="Упущенные заказы" value={money(dashboard.totals.lostOrdersSum, dashboard.sync.currency)} detail={`${dashboard.totals.outOfStock} без остатка · ${dashboard.totals.lowStock} дефицит`} tone="orange" />
           </section>
 
+          {dashboard.regionalAnalytics.available ? (
+            <>
+              <section className="analytics-card analytics-regional-intelligence">
+                <div className="analytics-card__heading analytics-regional-heading">
+                  <div><MapPinned size={18} /><span><strong>Провалы и потенциал по регионам</strong><small>Спрос за {dashboard.regionalAnalytics.periodDays} дней, фактический остаток WB и цель покрытия {dashboard.regionalAnalytics.targetDays} дней</small></span></div>
+                  <span className="analytics-model-badge">Модель поставки</span>
+                </div>
+                <div className="analytics-regional-summary">
+                  <article><small>Регионов с дефицитом</small><strong>{integer(dashboard.regionalAnalytics.summary.shortageRegions)}</strong><em>из {integer(dashboard.regionalAnalytics.summary.regions)}</em></article>
+                  <article><small>Рекомендуется поставить</small><strong>{integer(dashboard.regionalAnalytics.summary.recommendedSupply)} шт.</strong><em>до покрытия {dashboard.regionalAnalytics.targetDays} дней</em></article>
+                  <article><small>Избыточный запас</small><strong>{integer(dashboard.regionalAnalytics.summary.excessStock)} шт.</strong><em>покрытие более 60 дней</em></article>
+                  <article><small>Продажи по регионам</small><strong>{integer(dashboard.regionalAnalytics.summary.salesQty)} шт.</strong><em>{money(dashboard.regionalAnalytics.summary.salesAmount, dashboard.sync.currency)}</em></article>
+                </div>
+                <div className="analytics-table-wrap analytics-region-table-wrap">
+                  <table className="analytics-table analytics-region-table">
+                    <thead><tr><th>Регион</th><th>Продажи</th><th>Динамика</th><th>Остаток WB</th><th>Покрытие</th><th>Поставить</th><th>Главный склад</th><th>Статус</th></tr></thead>
+                    <tbody>
+                      {dashboard.regionalAnalytics.regions.map((region) => (
+                        <tr key={region.regionName}>
+                          <td><strong>{region.regionName}</strong><small className="analytics-cell-note">спрос {decimal(region.salesSharePercent)}% · запас {decimal(region.stockSharePercent)}%</small></td>
+                          <td>{integer(region.salesQty)} шт.<small className="analytics-cell-note">{money(region.salesAmount, dashboard.sync?.currency || 'RUB')}</small></td>
+                          <td><DynamicValue value={region.salesDynamicPercent} /></td>
+                          <td>{integer(region.stockCount)} шт.</td>
+                          <td>{region.coverageDays === null ? '—' : `${decimal(region.coverageDays)} дн.`}</td>
+                          <td><strong className={region.recommendedSupply > 0 ? 'analytics-supply-positive' : ''}>{region.recommendedSupply > 0 ? `${integer(region.recommendedSupply)} шт.` : '—'}</strong></td>
+                          <td>{region.topWarehouse || '—'}<small className="analytics-cell-note">{region.topWarehouse ? `${integer(region.topWarehouseStock)} шт.` : ''}</small></td>
+                          <td><RegionalStatusBadge value={region.status} /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section className="analytics-card analytics-placement-actions">
+                <div className="analytics-card__heading analytics-regional-heading">
+                  <div><Target size={18} /><span><strong>Куда и какой товар поставить</strong><small>Приоритетные поставки из доступного остатка LOGOFF</small></span></div>
+                  <span className="analytics-count">{dashboard.regionalAnalytics.productActions.length}</span>
+                </div>
+                <div className="analytics-model-note"><TriangleAlert size={15} /><span>{dashboard.regionalAnalytics.limitation}</span></div>
+                {dashboard.regionalAnalytics.productActions.length ? (
+                  <div className="analytics-placement-list">
+                    {dashboard.regionalAnalytics.productActions.slice(0, 30).map((action) => (
+                      <article key={`${action.nmId}:${action.regionName}`}>
+                        <div className="analytics-placement-product">
+                          {action.photoUrl ? <img src={action.photoUrl} alt="" loading="lazy" /> : <span><Boxes size={17} /></span>}
+                          <span><strong>{action.name}</strong><small>{action.vendorCode || `WB ${action.nmId}`}</small></span>
+                        </div>
+                        <div><small>Регион</small><strong>{action.regionName}</strong><em>{decimal(action.demandSharePercent)}% спроса товара</em></div>
+                        <div><small>Расчётный провал</small><strong>{integer(action.gap)} шт.</strong><em>цель {integer(action.targetRegionStock)} · оценка остатка {integer(action.estimatedRegionStock)}</em></div>
+                        <div><small>Поставить сейчас</small><strong className="analytics-supply-positive">{integer(action.recommendedQty)} шт.</strong><em>в LOGOFF {integer(action.wmsStock)} шт.</em></div>
+                        <div><small>Динамика спроса</small><DynamicValue value={action.salesDynamicPercent} /><em>{action.reason}</em></div>
+                      </article>
+                    ))}
+                  </div>
+                ) : <AnalyticsEmpty text="По текущему спросу и доступному остатку LOGOFF срочных региональных поставок не найдено." />}
+              </section>
+            </>
+          ) : (
+            <div className="analytics-alert analytics-alert--warning"><TriangleAlert size={17} />Обновите данные WB, чтобы загрузить продажи по регионам и рекомендации по поставкам.</div>
+          )}
+
           <div className="analytics-grid analytics-grid--insights">
             <section className="analytics-card analytics-recommendations">
               <div className="analytics-card__heading">
@@ -372,6 +436,10 @@ function AvailabilityBadge({ value }: { value: string | null }) {
   return <span className={`analytics-availability availability-${value || 'unknown'}`}>{availabilityLabel(value)}</span>;
 }
 
+function RegionalStatusBadge({ value }: { value: AnalyticsDashboard['regionalAnalytics']['regions'][number]['status'] }) {
+  return <span className={`analytics-region-status status-${value.toLowerCase()}`}>{regionalStatusLabel(value)}</span>;
+}
+
 function DynamicValue({ value }: { value: number }) {
   const className = value > 0 ? 'positive' : value < 0 ? 'negative' : 'neutral';
   return <span className={`analytics-dynamic ${className}`}>{value > 0 ? '+' : ''}{decimal(value)}%</span>;
@@ -415,6 +483,18 @@ function recommendationValue(kind: string, value: number, currency: string) {
 
 function availabilityLabel(value: string | null) {
   return ({ outOfStock: 'Нет остатка', deficient: 'Дефицит', actual: 'Хорошо продаётся', balanced: 'Баланс', nonActual: 'Слабые продажи', nonLiquid: 'Неликвид', invalidData: 'Нет данных' } as Record<string, string>)[value || ''] || 'Без оценки';
+}
+
+function regionalStatusLabel(value: AnalyticsDashboard['regionalAnalytics']['regions'][number]['status']) {
+  const labels = {
+    CRITICAL: 'Критический дефицит',
+    SHORTAGE: 'Нужно пополнить',
+    OVERSTOCK: 'Избыток',
+    BALANCED: 'Баланс',
+    NO_DEMAND: 'Нет спроса',
+    NO_DATA: 'Нет данных',
+  } as const;
+  return labels[value];
 }
 
 function money(value: number, currency = 'RUB') {

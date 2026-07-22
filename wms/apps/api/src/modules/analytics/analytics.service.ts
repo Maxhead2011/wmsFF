@@ -144,10 +144,11 @@ export class AnalyticsService {
     try {
       const apiKey = this.crypto.decrypt(connection.apiKeyEncrypted);
       const periods = analyticsPeriods(dto.periodDays);
-      const [stockResult, funnelResult, regionsResult] = await Promise.allSettled([
+      const [stockResult, funnelResult, regionsResult, regionalSalesResult] = await Promise.allSettled([
         this.fetchStockProducts(apiKey, periods.selected),
         this.fetchFunnelProducts(apiKey, periods),
         this.fetchRegions(apiKey, periods.selected),
+        this.fetchRegionalSales(apiKey, analyticsPeriods(Math.min(dto.periodDays, 30))),
       ]);
 
       if (stockResult.status === 'rejected') throw sourceError('остатки и показатели товаров', stockResult.reason);
@@ -156,14 +157,24 @@ export class AnalyticsService {
       const syncedAt = new Date();
       const products = mergeProducts(dto.clientId, stockResult.value, funnelResult.value, syncedAt);
       const regions = regionsResult.status === 'fulfilled' ? mapRegions(dto.clientId, regionsResult.value, syncedAt) : [];
+      const regionalSales =
+        regionalSalesResult.status === 'fulfilled'
+          ? mapRegionalSales(dto.clientId, regionalSalesResult.value.current, regionalSalesResult.value.past, syncedAt)
+          : [];
       const currency = funnelResult.value.currency || stockResult.value.currency || 'RUB';
       const totals = productTotals(products);
       const sourceStatus = {
         products: 'READY',
         funnel: 'READY',
         regions: regionsResult.status === 'fulfilled' ? 'READY' : 'UNAVAILABLE',
+        regionalSales: regionalSalesResult.status === 'fulfilled' ? 'READY' : 'UNAVAILABLE',
+        exactWarehouseProductStock: 'REQUIRES_PERSONAL_OR_SERVICE_TOKEN',
       };
-      const regionWarning = regionsResult.status === 'rejected' ? safeErrorMessage(regionsResult.reason) : null;
+      const warnings = [
+        regionsResult.status === 'rejected' ? `Склады: ${safeErrorMessage(regionsResult.reason)}` : null,
+        regionalSalesResult.status === 'rejected' ? `Продажи по регионам: ${safeErrorMessage(regionalSalesResult.reason)}` : null,
+      ].filter((value): value is string => Boolean(value));
+      const regionalWarning = warnings.join(' · ') || null;
       const snapshotDate = new Date(`${periods.today}T00:00:00.000Z`);
 
       await this.analytics.$transaction(
@@ -172,6 +183,8 @@ export class AnalyticsService {
           this.analytics.analyticsProduct.createMany({ data: products }),
           this.analytics.analyticsRegion.deleteMany({ where: { clientId: dto.clientId } }),
           this.analytics.analyticsRegion.createMany({ data: regions }),
+          this.analytics.analyticsRegionalSale.deleteMany({ where: { clientId: dto.clientId } }),
+          this.analytics.analyticsRegionalSale.createMany({ data: regionalSales }),
           this.analytics.analyticsDailySummary.upsert({
             where: { clientId_snapshotDate: { clientId: dto.clientId, snapshotDate } },
             create: { clientId: dto.clientId, snapshotDate, periodDays: dto.periodDays, ...totals },
@@ -180,12 +193,12 @@ export class AnalyticsService {
           this.analytics.analyticsSyncState.update({
             where: { clientId: dto.clientId },
             data: {
-              status: regionWarning ? 'READY_WITH_WARNINGS' : 'READY',
+              status: regionalWarning ? 'READY_WITH_WARNINGS' : 'READY',
               periodDays: dto.periodDays,
               currency,
               productCount: products.length,
               lastSyncedAt: syncedAt,
-              lastError: regionWarning,
+              lastError: regionalWarning,
               sourceStatus: sourceStatus as AnalyticsPrisma.InputJsonValue,
             },
           }),
@@ -207,12 +220,13 @@ export class AnalyticsService {
   async dashboard(query: AnalyticsDashboardQueryDto, user: AuthUser) {
     this.assertAnalyticsAccess(user);
     this.clientScopes.requireClientAccess(user, query.clientId, 'read');
-    const [client, connection, state, storedProducts, regions, history] = await Promise.all([
+    const [client, connection, state, storedProducts, regions, regionalSales, history] = await Promise.all([
       this.prisma.client.findUnique({ where: { id: query.clientId }, select: { id: true, code: true, name: true } }),
       this.analytics.analyticsConnection.findUnique({ where: { clientId: query.clientId } }),
       this.analytics.analyticsSyncState.findUnique({ where: { clientId: query.clientId } }),
       this.analytics.analyticsProduct.findMany({ where: { clientId: query.clientId }, orderBy: [{ orderSum: 'desc' }, { stockCount: 'asc' }] }),
       this.analytics.analyticsRegion.findMany({ where: { clientId: query.clientId }, orderBy: [{ stockCount: 'desc' }, { officeName: 'asc' }] }),
+      this.analytics.analyticsRegionalSale.findMany({ where: { clientId: query.clientId }, orderBy: { currentQty: 'desc' } }),
       this.analytics.analyticsDailySummary.findMany({ where: { clientId: query.clientId }, orderBy: { snapshotDate: 'asc' }, take: 90 }),
     ]);
     if (!client) throw new NotFoundException('Клиент не найден.');
@@ -225,6 +239,7 @@ export class AnalyticsService {
     }));
     const totals = dashboardTotals(products, wmsStock);
     const recommendations = buildRecommendations(products);
+    const regionalAnalytics = buildRegionalAnalytics(products, regions, regionalSales, Math.min(state?.periodDays ?? 30, 30));
     const filtered = products.filter((product) => matchesProduct(product, query.search, query.availability));
     const offset = query.offset ?? 0;
     const limit = query.limit ?? 100;
@@ -259,6 +274,7 @@ export class AnalyticsService {
         : null,
       totals,
       recommendations,
+      regionalAnalytics,
       products: {
         total: filtered.length,
         limit,
@@ -351,6 +367,17 @@ export class AnalyticsService {
       skipDeletedNm: true,
     });
     return asArray(asRecord(response.data).regions).map(asRecord);
+  }
+
+  private async fetchRegionalSales(apiKey: string, periods: AnalyticsPeriods) {
+    const [current, past] = await Promise.all([
+      wbJson(`${WB_ANALYTICS_URL}/api/v1/analytics/region-sale?${periodQuery(periods.selected)}`, apiKey),
+      wbJson(`${WB_ANALYTICS_URL}/api/v1/analytics/region-sale?${periodQuery(periods.past)}`, apiKey),
+    ]);
+    return {
+      current: asArray(current.report).map(asRecord),
+      past: asArray(past.report).map(asRecord),
+    };
   }
 
   private async wmsStock(clientId: string, nmIds: string[]) {
@@ -553,6 +580,263 @@ function regionRow(
     metrics: metrics as AnalyticsPrisma.InputJsonValue,
     syncedAt,
   };
+}
+
+function mapRegionalSales(
+  clientId: string,
+  currentRows: JsonRecord[],
+  pastRows: JsonRecord[],
+  syncedAt: Date,
+): AnalyticsPrisma.AnalyticsRegionalSaleCreateManyInput[] {
+  type Bucket = {
+    regionKey: string;
+    regionName: string;
+    nmId: string;
+    currentQty: number;
+    currentAmount: number;
+    pastQty: number;
+    pastAmount: number;
+    locations: Set<string>;
+  };
+  const buckets = new Map<string, Bucket>();
+
+  const add = (row: JsonRecord, period: 'current' | 'past') => {
+    const nmId = textValue(row.nmID);
+    if (!nmId) return;
+    const regionName = normalizeDemandRegion(row);
+    const regionKey = regionName.toLocaleLowerCase('ru-RU');
+    const key = `${regionKey}:${nmId}`;
+    const bucket = buckets.get(key) ?? {
+      regionKey,
+      regionName,
+      nmId,
+      currentQty: 0,
+      currentAmount: 0,
+      pastQty: 0,
+      pastAmount: 0,
+      locations: new Set<string>(),
+    };
+    const quantity = Math.max(0, numberValue(row.saleItemInvoiceQty));
+    const amount = Math.max(0, numberValue(row.saleInvoiceCostPrice) * quantity);
+    if (period === 'current') {
+      bucket.currentQty += quantity;
+      bucket.currentAmount += amount;
+      bucket.locations.add([textValue(row.countryName), textValue(row.regionName), textValue(row.cityName)].join('|'));
+    } else {
+      bucket.pastQty += quantity;
+      bucket.pastAmount += amount;
+    }
+    buckets.set(key, bucket);
+  };
+
+  currentRows.forEach((row) => add(row, 'current'));
+  pastRows.forEach((row) => add(row, 'past'));
+
+  return [...buckets.values()].map((bucket) => ({
+    clientId,
+    regionKey: bucket.regionKey,
+    regionName: bucket.regionName,
+    nmId: bucket.nmId,
+    currentQty: roundMetric(bucket.currentQty),
+    currentAmount: roundMetric(bucket.currentAmount),
+    pastQty: roundMetric(bucket.pastQty),
+    pastAmount: roundMetric(bucket.pastAmount),
+    locationsCount: bucket.locations.size,
+    syncedAt,
+  }));
+}
+
+function normalizeDemandRegion(row: JsonRecord) {
+  const country = textValue(row.countryName);
+  const district = textValue(row.foName);
+  if (country && country !== 'Россия') return country;
+  if (district.includes('Централь')) return 'Центральный';
+  if (district.includes('Южн') || district.includes('Северо-Кавказ')) return 'Южный и Северо-Кавказский';
+  if (district.includes('Приволж')) return 'Приволжский';
+  if (district.includes('Ураль')) return 'Уральский';
+  if (district.includes('Северо-Запад')) return 'Северо-Западный';
+  if (district.includes('Сибир') || district.includes('Дальневост')) return 'Дальневосточный и Сибирский';
+  return country || district || 'Другие регионы';
+}
+
+type DashboardRegion = Awaited<ReturnType<AnalyticsPrismaService['analyticsRegion']['findMany']>>[number];
+type DashboardRegionalSale = Awaited<ReturnType<AnalyticsPrismaService['analyticsRegionalSale']['findMany']>>[number];
+
+function buildRegionalAnalytics(
+  products: DashboardProduct[],
+  regions: DashboardRegion[],
+  regionalSales: DashboardRegionalSale[],
+  periodDays: number,
+) {
+  const targetDays = 30;
+  const excessDays = 60;
+  const productMap = new Map(products.map((product) => [product.nmId, product]));
+  const regionSales = new Map<string, { currentQty: number; currentAmount: number; pastQty: number; pastAmount: number }>();
+  for (const sale of regionalSales) {
+    const current = regionSales.get(sale.regionName) ?? { currentQty: 0, currentAmount: 0, pastQty: 0, pastAmount: 0 };
+    current.currentQty += sale.currentQty;
+    current.currentAmount += sale.currentAmount;
+    current.pastQty += sale.pastQty;
+    current.pastAmount += sale.pastAmount;
+    regionSales.set(sale.regionName, current);
+  }
+
+  const regionStock = new Map(
+    regions
+      .filter((region) => !region.officeName && region.regionName !== 'Маркетплейс')
+      .map((region) => [region.regionName, region]),
+  );
+  const topWarehouse = new Map<string, DashboardRegion>();
+  for (const office of regions.filter((region) => Boolean(region.officeName))) {
+    const current = topWarehouse.get(office.regionName);
+    if (!current || office.stockCount > current.stockCount) topWarehouse.set(office.regionName, office);
+  }
+
+  const names = [...new Set([...regionStock.keys(), ...regionSales.keys()])];
+  const totalSalesQty = sum([...regionSales.values()], (region) => region.currentQty);
+  const totalRegionalStock = sum([...regionStock.values()], (region) => region.stockCount);
+  const regionRows = names
+    .map((regionName) => {
+      const stock = regionStock.get(regionName);
+      const sales = regionSales.get(regionName) ?? { currentQty: 0, currentAmount: 0, pastQty: 0, pastAmount: 0 };
+      const dailyDemand = periodDays > 0 ? sales.currentQty / periodDays : 0;
+      const coverageDays = dailyDemand > 0 ? (stock?.stockCount ?? 0) / dailyDemand : stock?.saleRateDays ?? null;
+      const targetStock = Math.ceil(dailyDemand * targetDays);
+      const recommendedSupply = Math.max(0, targetStock - Math.round(stock?.stockCount ?? 0));
+      const excessStock = Math.max(0, Math.round((stock?.stockCount ?? 0) - dailyDemand * excessDays));
+      const status = regionalStatus(coverageDays, sales.currentQty, stock?.stockCount ?? 0);
+      const warehouse = topWarehouse.get(regionName);
+      return {
+        regionName,
+        salesQty: roundMetric(sales.currentQty),
+        salesAmount: roundMetric(sales.currentAmount),
+        pastSalesQty: roundMetric(sales.pastQty),
+        salesDynamicPercent: percentDynamic(sales.currentQty, sales.pastQty),
+        salesSharePercent: totalSalesQty > 0 ? (sales.currentQty / totalSalesQty) * 100 : 0,
+        stockCount: stock?.stockCount ?? 0,
+        stockSharePercent: totalRegionalStock > 0 ? ((stock?.stockCount ?? 0) / totalRegionalStock) * 100 : 0,
+        coverageDays: coverageDays === null ? null : roundMetric(coverageDays),
+        wbSaleRateDays: stock?.saleRateDays ?? null,
+        targetStock,
+        recommendedSupply,
+        excessStock,
+        toClientCount: stock?.toClientCount ?? 0,
+        fromClientCount: stock?.fromClientCount ?? 0,
+        estimatedLostSales: totalSalesQty > 0 ? roundMetric(productLostSales(products) * (sales.currentQty / totalSalesQty)) : 0,
+        topWarehouse: warehouse?.officeName ?? null,
+        topWarehouseStock: warehouse?.stockCount ?? 0,
+        status,
+      };
+    })
+    .sort((left, right) => regionalStatusRank(left.status) - regionalStatusRank(right.status) || right.recommendedSupply - left.recommendedSupply);
+
+  const stockShare = new Map(regionRows.map((region) => [region.regionName, region.stockSharePercent / 100]));
+  const productRegionalTotal = new Map<string, number>();
+  for (const sale of regionalSales) productRegionalTotal.set(sale.nmId, (productRegionalTotal.get(sale.nmId) ?? 0) + sale.currentQty);
+  const candidates = regionalSales
+    .map((sale) => {
+      const product = productMap.get(sale.nmId);
+      const totalProductSales = productRegionalTotal.get(sale.nmId) ?? 0;
+      if (!product || totalProductSales <= 0 || sale.currentQty <= 0) return null;
+      const demandShare = sale.currentQty / totalProductSales;
+      const estimatedRegionStock = Math.max(0, Math.round(product.stockCount * (stockShare.get(sale.regionName) ?? 0)));
+      const targetRegionStock = Math.ceil((sale.currentQty / periodDays) * targetDays);
+      const gap = Math.max(0, targetRegionStock - estimatedRegionStock);
+      if (gap <= 0) return null;
+      return {
+        nmId: sale.nmId,
+        name: product.name,
+        vendorCode: product.vendorCode,
+        photoUrl: product.photoUrl,
+        regionName: sale.regionName,
+        salesQty: sale.currentQty,
+        pastSalesQty: sale.pastQty,
+        salesDynamicPercent: percentDynamic(sale.currentQty, sale.pastQty),
+        demandSharePercent: demandShare * 100,
+        estimatedRegionStock,
+        targetRegionStock,
+        gap,
+        wmsStock: product.wmsStock,
+        recommendedQty: 0,
+        uncoveredQty: gap,
+        confidence: 'ESTIMATE' as const,
+      };
+    })
+    .filter((value): value is NonNullable<typeof value> => Boolean(value));
+
+  const byProduct = new Map<string, typeof candidates>();
+  for (const candidate of candidates) {
+    const list = byProduct.get(candidate.nmId) ?? [];
+    list.push(candidate);
+    byProduct.set(candidate.nmId, list);
+  }
+  for (const list of byProduct.values()) {
+    let available = list[0]?.wmsStock ?? 0;
+    list.sort((left, right) => right.gap - left.gap || right.salesQty - left.salesQty);
+    for (const candidate of list) {
+      candidate.recommendedQty = Math.min(candidate.gap, Math.max(0, Math.floor(available)));
+      candidate.uncoveredQty = candidate.gap - candidate.recommendedQty;
+      available -= candidate.recommendedQty;
+    }
+  }
+  const productActions = candidates
+    .sort((left, right) => right.recommendedQty - left.recommendedQty || right.uncoveredQty - left.uncoveredQty || right.salesQty - left.salesQty)
+    .slice(0, 60)
+    .map((candidate) => ({
+      ...candidate,
+      reason:
+        candidate.recommendedQty > 0
+          ? `Покрыть расчётный дефицит на ${targetDays} дней из доступного остатка LOGOFF.`
+          : 'Есть расчётный региональный дефицит, но сопоставленного свободного остатка LOGOFF недостаточно.',
+    }));
+
+  return {
+    available: regionalSales.length > 0,
+    periodDays,
+    targetDays,
+    exactProductWarehouseStockAvailable: false,
+    limitation:
+      'Точный остаток каждого товара по складам требует персональный или сервисный токен WB. С текущим базовым токеном распределение товара по регионам является расчётной оценкой.',
+    summary: {
+      regions: regionRows.length,
+      shortageRegions: regionRows.filter((region) => region.status === 'CRITICAL' || region.status === 'SHORTAGE').length,
+      recommendedSupply: sum(regionRows, (region) => region.recommendedSupply),
+      excessStock: sum(regionRows, (region) => region.excessStock),
+      salesQty: totalSalesQty,
+      salesAmount: sum([...regionSales.values()], (region) => region.currentAmount),
+    },
+    regions: regionRows,
+    productActions,
+  };
+}
+
+function regionalStatus(coverageDays: number | null, salesQty: number, stockCount: number) {
+  if (salesQty <= 0) return stockCount > 0 ? 'NO_DEMAND' : 'NO_DATA';
+  if (stockCount <= 0 || coverageDays === null || coverageDays < 14) return 'CRITICAL';
+  if (coverageDays < 30) return 'SHORTAGE';
+  if (coverageDays > 60) return 'OVERSTOCK';
+  return 'BALANCED';
+}
+
+function regionalStatusRank(value: string) {
+  return value === 'CRITICAL' ? 0 : value === 'SHORTAGE' ? 1 : value === 'OVERSTOCK' ? 2 : value === 'BALANCED' ? 3 : 4;
+}
+
+function productLostSales(products: DashboardProduct[]) {
+  return sum(products, (product) => product.lostOrdersSum);
+}
+
+function percentDynamic(current: number, past: number) {
+  if (past <= 0) return current > 0 ? 100 : 0;
+  return ((current - past) / past) * 100;
+}
+
+function periodQuery(period: DatePeriod) {
+  return new URLSearchParams({ dateFrom: period.start, dateTo: period.end }).toString();
+}
+
+function roundMetric(value: number) {
+  return Math.round(value * 100) / 100;
 }
 
 function productTotals(products: AnalyticsPrisma.AnalyticsProductCreateManyInput[]) {

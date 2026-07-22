@@ -61,7 +61,40 @@ describe('AnalyticsService access', () => {
           },
         ],
       },
-      analyticsRegion: { findMany: async () => [] },
+      analyticsRegion: {
+        findMany: async () => [
+          {
+            regionName: 'Центральный',
+            officeName: null,
+            stockCount: 20,
+            stockSum: 20_000,
+            saleRateDays: 20,
+            toClientCount: 2,
+            fromClientCount: 1,
+          },
+          {
+            regionName: 'Центральный',
+            officeName: 'Коледино',
+            stockCount: 15,
+            stockSum: 15_000,
+            saleRateDays: 15,
+            toClientCount: 0,
+            fromClientCount: 0,
+          },
+        ],
+      },
+      analyticsRegionalSale: {
+        findMany: async () => [
+          {
+            regionName: 'Центральный',
+            nmId: '100',
+            currentQty: 30,
+            currentAmount: 30_000,
+            pastQty: 15,
+            pastAmount: 15_000,
+          },
+        ],
+      },
       analyticsDailySummary: { findMany: async () => [] },
     };
     const clientScopes = { requireClientAccess: () => undefined };
@@ -86,5 +119,18 @@ describe('AnalyticsService access', () => {
     expect(result.totals.wmsMatchedStock).toBe(16_363);
     expect(result.totals.wmsUnlinkedStock).toBe(10_974);
     expect(result.products.items[0].wmsStock).toBe(16_363);
+    expect(result.regionalAnalytics.regions[0]).toMatchObject({
+      regionName: 'Центральный',
+      salesDynamicPercent: 100,
+      recommendedSupply: 10,
+      topWarehouse: 'Коледино',
+      status: 'SHORTAGE',
+    });
+    expect(result.regionalAnalytics.productActions[0]).toMatchObject({
+      nmId: '100',
+      regionName: 'Центральный',
+      recommendedQty: 29,
+      confidence: 'ESTIMATE',
+    });
   });
 });

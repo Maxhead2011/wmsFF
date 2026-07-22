@@ -111,6 +111,25 @@ model AnalyticsRegion {
   @@map("analytics_region")
 }
 
+model AnalyticsRegionalSale {
+  clientId       String   @map("client_id")
+  regionKey      String   @map("region_key")
+  regionName     String   @map("region_name")
+  nmId           String   @map("nm_id")
+  currentQty     Float    @default(0) @map("current_qty")
+  currentAmount  Float    @default(0) @map("current_amount")
+  pastQty        Float    @default(0) @map("past_qty")
+  pastAmount     Float    @default(0) @map("past_amount")
+  locationsCount Int      @default(0) @map("locations_count")
+  syncedAt       DateTime @map("synced_at")
+
+  @@id([clientId, regionKey, nmId])
+  @@index([clientId, regionName])
+  @@index([clientId, currentQty])
+  @@index([clientId, nmId])
+  @@map("analytics_regional_sale")
+}
+
 model AnalyticsDailySummary {
   clientId      String   @map("client_id")
   snapshotDate  DateTime @map("snapshot_date") @db.Date
