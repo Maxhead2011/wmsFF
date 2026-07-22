@@ -588,7 +588,7 @@ export class ClientRequestsService {
       }
     }
 
-    const resultBoxes = [...boxes.values()]
+    const allCandidateBoxes = [...boxes.values()]
       .map((box) => ({
         ...box,
         orderIds: [...box.orderIds].sort(naturalOrderIdCompare),
@@ -601,7 +601,10 @@ export class ClientRequestsService {
         const rightConfirmed = right.confirmedOrderIds.length > 0 ? 0 : 1;
         return leftConfirmed - rightConfirmed || left.boxCode.localeCompare(right.boxCode, 'ru-RU');
       });
-    const foundOrderIds = new Set(resultBoxes.flatMap((box) => box.orderIds));
+    const resultBoxes = allCandidateBoxes.filter(
+      (box) => box.orderIds.length > 1 || box.confirmedOrderIds.length > 0,
+    );
+    const foundOrderIds = new Set(allCandidateBoxes.flatMap((box) => box.orderIds));
 
     return {
       request: {

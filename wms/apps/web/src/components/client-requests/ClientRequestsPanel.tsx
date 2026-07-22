@@ -1000,9 +1000,9 @@ function FbsBoxSearchModal({ state, onClose }: { state: FbsBoxSearchState; onClo
       <section className="online-execution-modal__panel fbs-box-search-modal">
         <header className="online-execution-modal__header">
           <div>
-            <span>Короба для поиска FBS</span>
+            <span>Совпадающие короба FBS</span>
             <h3>№{String(state.request.number).padStart(6, '0')} · {state.request.title}</h3>
-            <small>{state.request.client.name} · номера заказов указаны рядом с каждым коробом</small>
+            <small>{state.request.client.name} · показаны только короба, общие для нескольких заказов</small>
           </div>
           <button className="icon-button" type="button" onClick={onClose} title="Закрыть" aria-label="Закрыть">
             <X size={18} aria-hidden="true" />
@@ -1016,7 +1016,7 @@ function FbsBoxSearchModal({ state, onClose }: { state: FbsBoxSearchState; onClo
             <>
               <div className="fbs-box-search-modal__summary">
                 <span><small>Заказов в заявке</small><strong>{state.data.summary.orders}</strong></span>
-                <span><small>Подходящих коробов</small><strong>{state.data.summary.boxes}</strong></span>
+                <span><small>Совпадающих коробов</small><strong>{state.data.summary.boxes}</strong></span>
                 <span><small>Подтверждено ТСД</small><strong>{state.data.summary.confirmedOrders}</strong></span>
               </div>
 
@@ -1051,7 +1051,7 @@ function FbsBoxSearchModal({ state, onClose }: { state: FbsBoxSearchState; onClo
                         {box.confirmedOrderIds.length ? (
                           <span className="is-confirmed">Точно подтверждено ТСД: №{box.confirmedOrderIds.join(', №')}</span>
                         ) : (
-                          <span>Короб подходит по товару для этих заказов</span>
+                          <span>В этом коробе совпали товары нескольких заказов</span>
                         )}
                       </div>
                       <div className="fbs-box-search-card__items">
@@ -1073,7 +1073,7 @@ function FbsBoxSearchModal({ state, onClose }: { state: FbsBoxSearchState; onClo
                 </div>
               ) : (
                 <p className="panel-message">
-                  {state.data.boxes.length ? 'По этому запросу короб не найден.' : 'В активных коробах нет доступного товара для заказов этой заявки.'}
+                  {state.data.boxes.length ? 'По этому запросу короб не найден.' : 'Общих коробов для нескольких заказов этой заявки нет.'}
                 </p>
               )}
 
