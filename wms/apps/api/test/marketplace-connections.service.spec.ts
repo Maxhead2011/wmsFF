@@ -196,13 +196,26 @@ describe('MarketplaceConnectionsService', () => {
     expect(prisma.client.findUnique).not.toHaveBeenCalled();
   });
 
-  it('keeps the TSD queue in the last completed WB supply before moving to another request', async () => {
+  it('keeps the TSD queue in the last WB supply and reassigns a stale unstarted task', async () => {
+    const staleUpdatedAt = new Date('2026-07-22T06:00:00Z');
     const fbsTsdAssembly = {
       findFirst: vi.fn()
         .mockResolvedValueOnce(null)
         .mockResolvedValueOnce({ requestId: 'request-31', supplyId: 'WB-GI-31' }),
-      findUnique: vi.fn().mockResolvedValue(null),
-      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ id: 'task-new', ...data })),
+      findUnique: vi.fn().mockResolvedValue({
+        id: 'stale-task',
+        orderId: 'order-from-current-supply',
+        status: 'IN_PROGRESS',
+        deviceCode: 'USER:old-worker',
+        workerName: 'Старый сборщик',
+        boxId: null,
+        barcode: null,
+        kiz: null,
+        updatedAt: staleUpdatedAt,
+      }),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ id: 'stale-task', ...data })),
+      create: vi.fn(),
     };
     const prisma = {
       fbsTsdAssembly,
@@ -251,13 +264,26 @@ describe('MarketplaceConnectionsService', () => {
       name: 'Сборщик',
     } as never);
 
-    expect(fbsTsdAssembly.create).toHaveBeenCalledWith({
+    expect(fbsTsdAssembly.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        id: 'stale-task',
+        status: 'IN_PROGRESS',
+        updatedAt: staleUpdatedAt,
+        boxId: null,
+        barcode: null,
+        kiz: null,
+      }),
+      data: expect.objectContaining({ status: 'RELEASED' }),
+    });
+    expect(fbsTsdAssembly.update).toHaveBeenCalledWith({
+      where: { id: 'stale-task' },
       data: expect.objectContaining({
         orderId: 'order-from-current-supply',
         requestId: 'request-31',
         supplyId: 'WB-GI-31',
       }),
     });
+    expect(fbsTsdAssembly.create).not.toHaveBeenCalled();
     expect(result).toMatchObject({ orderId: 'order-from-current-supply' });
   });
 

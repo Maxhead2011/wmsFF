@@ -161,6 +161,7 @@ type FbsOrdersResponse = {
 };
 
 type FbsTsdAssemblyRecord = Prisma.FbsTsdAssemblyGetPayload<{}>;
+const FBS_TSD_STALE_UNSTARTED_TASK_MS = 2 * 60 * 60 * 1_000;
 
 @Injectable()
 export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDestroy {
@@ -336,6 +337,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     });
     const clientIds = uniqueStrings(connections.map((connection) => connection.clientId));
     let lastMarketplaceError = '';
+    let blockedBatchOrder: { orderId: string; workerName: string } | null = null;
 
     for (const clientId of clientIds) {
       try {
@@ -388,7 +390,36 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               },
             },
           });
-          if (existing?.status === 'COMPLETED' || existing?.status === 'IN_PROGRESS') continue;
+          if (existing?.status === 'COMPLETED') continue;
+          if (existing?.status === 'IN_PROGRESS') {
+            const staleUnstarted =
+              !existing.boxId &&
+              !existing.barcode &&
+              !existing.kiz &&
+              existing.updatedAt.getTime() <= Date.now() - FBS_TSD_STALE_UNSTARTED_TASK_MS;
+            if (!staleUnstarted) {
+              blockedBatchOrder = {
+                orderId: existing.orderId,
+                workerName: existing.workerName ?? existing.deviceCode,
+              };
+              continue;
+            }
+            const released = await this.prisma.fbsTsdAssembly.updateMany({
+              where: {
+                id: existing.id,
+                status: 'IN_PROGRESS',
+                updatedAt: existing.updatedAt,
+                boxId: null,
+                barcode: null,
+                kiz: null,
+              },
+              data: {
+                status: 'RELEASED',
+                errorMessage: `Пустое задание автоматически возвращено в очередь спустя ${FBS_TSD_STALE_UNSTARTED_TASK_MS / 3_600_000} ч. без сканирования.`,
+              },
+            });
+            if (released.count === 0) continue;
+          }
 
           const storageBoxes = order.storageBoxes.filter(
             (box) => box.quantity > 0 && box.status === StockStatus.AVAILABLE,
@@ -449,7 +480,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       user,
       lastMarketplaceError
         ? 'Не удалось обновить очередь Wildberries. Повторите через минуту.'
-        : 'Готовых заказов нет. Заказы появятся после создания заявки и перевода поставки в статус «На сборке».',
+        : blockedBatchOrder
+          ? `В текущей поставке остался заказ ${blockedBatchOrder.orderId}, но он закреплён за сотрудником ${blockedBatchOrder.workerName}. Продолжите его на том ТСД или отложите там задание.`
+          : 'Готовых заказов нет. Заказы появятся после создания заявки и перевода поставки в статус «На сборке».',
     );
   }
 
