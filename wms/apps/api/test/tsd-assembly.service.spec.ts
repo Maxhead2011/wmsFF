@@ -37,6 +37,7 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
           {
             id: 'task-1',
             orderId: '5355303495',
+            requestItemId: 'item-1',
             skuId: 'sku-1',
             productName: 'Костюм',
             article: 'ART-1',
@@ -45,6 +46,7 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
             stickerPartB: '9753',
             stickerBarcode: 'WB-FULL-BARCODE',
             status: 'COMPLETED',
+            itemCount: 1,
             workerName: 'Сборщик',
             completedAt: new Date('2026-07-23T08:00:00.000Z'),
             updatedAt: new Date('2026-07-23T08:00:00.000Z'),
@@ -52,12 +54,30 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
         ]),
       },
       sku: {
-        findMany: vi.fn().mockResolvedValue([{ id: 'sku-1', size: '52' }]),
+        findMany: vi.fn().mockResolvedValue([{
+          id: 'sku-1',
+          internalSku: 'SKU-1',
+          clientSku: 'ART-1',
+          article: 'ART-1',
+          color: 'Чёрный',
+          size: '52',
+        }]),
       },
     };
     const service = new TsdAssemblyService(prisma as never, {} as never, {} as never, {} as never);
 
-    const result = await (service as any).loadFbsAssemblyFacts('request-1');
+    const result = await (service as any).loadFbsAssemblyFacts('request-1', [
+      {
+        itemId: 'item-1',
+        skuId: 'sku-1',
+        internalSku: 'SKU-1',
+        name: 'Костюм',
+        barcode: '2047945700181',
+        requestedQuantity: 2,
+        comment: 'FBS-заказы: 5355303495, 5355303496',
+        allocations: [{ boxCode: 'FFL_LKB0106_039', quantity: 2 }],
+      },
+    ]);
 
     expect(result).toMatchObject({
       totalOrders: 2,
@@ -74,6 +94,25 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
           statusLabel: 'Собрано',
         },
       ],
+      notCollected: {
+        remainingOrders: 1,
+        remainingPositions: 1,
+        remainingUnits: 1,
+        pendingOrderIds: ['5355303496'],
+        rows: [
+          expect.objectContaining({
+            requestItemId: 'item-1',
+            name: 'Костюм',
+            article: 'ART-1',
+            color: 'Чёрный',
+            size: '52',
+            collectedQuantity: 1,
+            remainingQuantity: 1,
+            orderIds: ['5355303496'],
+            availableBoxes: [{ boxCode: 'FFL_LKB0106_039', quantity: 2 }],
+          }),
+        ],
+      },
     });
   });
 });

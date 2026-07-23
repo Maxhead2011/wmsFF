@@ -557,7 +557,7 @@ export class TsdAssemblyService {
       .map((boxCode) => boxEntry(boxCode));
     const [activeProcessesByRequest, fbsAssembly] = await Promise.all([
       this.loadActiveTsdProcesses([document.requestId]),
-      this.loadFbsAssemblyFacts(document.requestId),
+      this.loadFbsAssemblyFacts(document.requestId, document.rows),
     ]);
     const activeTsdProcesses = activeProcessesByRequest.get(document.requestId) ?? [];
     let activeTsdProcess = activeTsdProcesses[0] ?? null;
@@ -758,7 +758,7 @@ export class TsdAssemblyService {
     };
   }
 
-  private async loadFbsAssemblyFacts(requestId: string) {
+  private async loadFbsAssemblyFacts(requestId: string, requestRows: PickInstructionDocument['rows']) {
     const [links, rows] = await Promise.all([
       this.prisma.fbsOrderRequestLink.findMany({
         where: { requestId },
@@ -770,6 +770,7 @@ export class TsdAssemblyService {
         select: {
           id: true,
           orderId: true,
+          requestItemId: true,
           skuId: true,
           productName: true,
           article: true,
@@ -778,6 +779,7 @@ export class TsdAssemblyService {
           stickerPartB: true,
           stickerBarcode: true,
           status: true,
+          itemCount: true,
           workerName: true,
           completedAt: true,
           updatedAt: true,
@@ -788,14 +790,24 @@ export class TsdAssemblyService {
     if (links.length === 0) {
       return null;
     }
-    const skuIds = uniqueSorted(rows.map((row) => row.skuId));
+    const skuIds = uniqueSorted([
+      ...rows.map((row) => row.skuId),
+      ...requestRows.map((row) => row.skuId).filter((value): value is string => Boolean(value)),
+    ]);
     const skus = skuIds.length > 0
       ? await this.prisma.sku.findMany({
           where: { id: { in: skuIds } },
-          select: { id: true, size: true },
+          select: {
+            id: true,
+            internalSku: true,
+            clientSku: true,
+            article: true,
+            color: true,
+            size: true,
+          },
         })
       : [];
-    const sizeBySkuId = new Map(skus.map((sku) => [sku.id, sku.size]));
+    const skuById = new Map(skus.map((sku) => [sku.id, sku]));
     const facts = rows.map((row) => ({
       id: row.id,
       orderId: row.orderId,
@@ -803,7 +815,7 @@ export class TsdAssemblyService {
       productName: row.productName,
       article: row.article,
       productBarcode: row.barcode,
-      size: sizeBySkuId.get(row.skuId) ?? null,
+      size: skuById.get(row.skuId)?.size ?? null,
       wbStickerPartB: row.stickerPartB,
       wbStickerBarcode: row.stickerBarcode,
       status: row.status,
@@ -812,11 +824,58 @@ export class TsdAssemblyService {
       completedAt: row.completedAt?.toISOString() ?? null,
       updatedAt: row.updatedAt.toISOString(),
     }));
+    const completedRows = rows.filter((row) => row.status === 'COMPLETED');
+    const completedOrderIds = new Set(completedRows.map((row) => row.orderId));
+    const linkedOrderIds = new Set(links.map((link) => link.orderId));
+    const pendingOrderIds = links
+      .map((link) => link.orderId)
+      .filter((orderId) => !completedOrderIds.has(orderId));
+    const completedByRequestItem = new Map<string, number>();
+    completedRows.forEach((row) => {
+      completedByRequestItem.set(
+        row.requestItemId,
+        (completedByRequestItem.get(row.requestItemId) ?? 0) + Math.max(1, row.itemCount),
+      );
+    });
+    const notCollectedRows = requestRows
+      .map((row) => {
+        const requiredQuantity = Math.max(0, row.requestedQuantity);
+        const collectedQuantity = Math.min(requiredQuantity, completedByRequestItem.get(row.itemId) ?? 0);
+        const remainingQuantity = Math.max(0, requiredQuantity - collectedQuantity);
+        const sku = row.skuId ? skuById.get(row.skuId) : null;
+        const orderIds = (row.comment?.match(/\d{6,}/g) ?? [])
+          .filter((orderId) => linkedOrderIds.has(orderId) && !completedOrderIds.has(orderId));
+        return {
+          requestItemId: row.itemId,
+          skuId: row.skuId,
+          name: row.name,
+          article: sku?.article ?? sku?.clientSku ?? sku?.internalSku ?? row.internalSku,
+          color: sku?.color ?? null,
+          size: sku?.size ?? null,
+          barcode: row.barcode,
+          requiredQuantity,
+          collectedQuantity,
+          remainingQuantity,
+          orderIds: uniqueSorted(orderIds),
+          availableBoxes: row.allocations.map((allocation) => ({
+            boxCode: allocation.boxCode,
+            quantity: allocation.quantity,
+          })),
+        };
+      })
+      .filter((row) => row.remainingQuantity > 0);
     return {
       totalOrders: links.length,
       startedOrders: facts.length,
       completedOrders: facts.filter((row) => row.status === 'COMPLETED').length,
       rows: facts,
+      notCollected: {
+        remainingOrders: pendingOrderIds.length,
+        remainingPositions: notCollectedRows.length,
+        remainingUnits: notCollectedRows.reduce((sum, row) => sum + row.remainingQuantity, 0),
+        pendingOrderIds,
+        rows: notCollectedRows,
+      },
     };
   }
 

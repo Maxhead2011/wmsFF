@@ -1693,6 +1693,7 @@ function OnlineExecutionModal({
   const [movementSearch, setMovementSearch] = useState('');
   const [actualMovementSearch, setActualMovementSearch] = useState('');
   const [fbsAssemblySearch, setFbsAssemblySearch] = useState('');
+  const [notCollectedSearch, setNotCollectedSearch] = useState('');
   const searchBoxes = normalizeOnlineBoxes(plan?.searchBoxes ?? plan?.boxesToSearch ?? []);
   const foundCodes = new Set(
     [...(plan?.boxSearchProgress?.foundBoxCodes ?? []), ...(plan?.foundBoxCodes ?? []), ...(plan?.foundBoxesCodes ?? [])].map(normalizeCode),
@@ -1718,6 +1719,7 @@ function OnlineExecutionModal({
   const movementSourceBoxes = plan?.movementProgress?.sourceBoxes ?? [];
   const actualMovements = plan?.movementProgress?.actualRows ?? [];
   const fbsAssembly = plan?.fbsAssembly ?? null;
+  const notCollected = fbsAssembly?.notCollected ?? null;
   const normalizedFbsAssemblySearch = fbsAssemblySearch.trim().toLocaleLowerCase('ru-RU');
   const filteredFbsAssemblyRows = (fbsAssembly?.rows ?? []).filter((row) =>
     !normalizedFbsAssemblySearch ||
@@ -1731,6 +1733,19 @@ function OnlineExecutionModal({
       row.productName,
       row.article,
     ].some((value) => value?.toLocaleLowerCase('ru-RU').includes(normalizedFbsAssemblySearch)),
+  );
+  const normalizedNotCollectedSearch = notCollectedSearch.trim().toLocaleLowerCase('ru-RU');
+  const filteredNotCollectedRows = (notCollected?.rows ?? []).filter((row) =>
+    !normalizedNotCollectedSearch ||
+    [
+      row.name,
+      row.article,
+      row.color,
+      row.size,
+      row.barcode,
+      ...row.orderIds,
+      ...row.availableBoxes.map((box) => box.boxCode),
+    ].some((value) => value?.toLocaleLowerCase('ru-RU').includes(normalizedNotCollectedSearch)),
   );
   const outgoingBoxes = normalizeOutgoingBoxes(plan);
   const filteredMovementRows = movementRows.filter((row) => movementRowMatchesSearch(row, movementSearch));
@@ -1815,66 +1830,139 @@ function OnlineExecutionModal({
                 <span>На отправку</span>
                 <strong>{outgoingBoxes.length}</strong>
               </article>
+              {notCollected ? (
+                <article className={notCollected.remainingUnits > 0 ? 'is-warning' : 'is-done'}>
+                  <span>Не собрано</span>
+                  <strong>{notCollected.remainingUnits} шт.</strong>
+                </article>
+              ) : null}
             </div>
 
             {fbsAssembly ? (
-              <section className="online-execution-section online-execution-section--fbs-fact">
-                <div className="online-execution-section__heading">
-                  <h4>Фактическая сборка FBS</h4>
-                  <span>
-                    собрано {fbsAssembly.completedOrders} из {fbsAssembly.totalOrders} · в работе {Math.max(0, fbsAssembly.startedOrders - fbsAssembly.completedOrders)}
-                  </span>
-                </div>
-                <OnlineSectionSearch
-                  value={fbsAssemblySearch}
-                  onChange={setFbsAssemblySearch}
-                  placeholder="Найти заказ, короб, ШК товара или ШК WB"
-                />
-                {filteredFbsAssemblyRows.length ? (
-                  <div className="online-execution-table-wrap online-execution-table-wrap--fbs-fact">
-                    <table className="online-execution-table online-execution-table--fbs-fact">
-                      <thead>
-                        <tr>
-                          <th>Короб, откуда взят</th>
-                          <th>Номер заказа</th>
-                          <th>ШК товара</th>
-                          <th>Размер</th>
-                          <th>ШК WB — большие 4 цифры</th>
-                          <th>Статус</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredFbsAssemblyRows.map((row) => (
-                          <tr key={row.id}>
-                            <td><strong>{row.sourceBoxCode ?? 'ещё не выбран'}</strong></td>
-                            <td>
-                              <strong>№{row.orderId}</strong>
-                              <span>{row.productName}{row.article ? ` · арт. ${row.article}` : ''}</span>
-                            </td>
-                            <td>{row.productBarcode ?? 'ещё не пропикан'}</td>
-                            <td><strong>{row.size ?? 'не указан'}</strong></td>
-                            <td>
-                              <strong className="online-execution-wb-digits">{row.wbStickerPartB ?? '—'}</strong>
-                              <span>{row.wbStickerBarcode ? `полный ШК: ${row.wbStickerBarcode}` : 'появится после получения наклейки WB'}</span>
-                            </td>
-                            <td>
-                              <span className={`online-execution-pill ${row.status === 'COMPLETED' ? 'is-done' : 'is-open'}`}>
-                                {row.statusLabel}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+              <>
+                <section className="online-execution-section online-execution-section--not-collected">
+                  <div className="online-execution-section__heading">
+                    <h4>Что ещё не собрано</h4>
+                    <span>
+                      {notCollected?.remainingUnits ?? 0} шт. · {notCollected?.remainingPositions ?? 0} позиций · {notCollected?.remainingOrders ?? 0} заказов
+                    </span>
                   </div>
-                ) : (
-                  <p className="online-execution-empty">
-                    {fbsAssembly.rows.length
-                      ? 'По этому запросу строки фактической сборки не найдены.'
-                      : 'Фактические данные появятся после начала сборки заказов на ТСД.'}
-                  </p>
-                )}
-              </section>
+                  {notCollected && notCollected.rows.length > 0 ? (
+                    <>
+                      <OnlineSectionSearch
+                        value={notCollectedSearch}
+                        onChange={setNotCollectedSearch}
+                        placeholder="Найти товар, заказ, ШК или короб"
+                      />
+                      {filteredNotCollectedRows.length > 0 ? (
+                        <div className="online-execution-table-wrap online-execution-table-wrap--not-collected">
+                          <table className="online-execution-table online-execution-table--not-collected">
+                            <thead>
+                              <tr>
+                                <th>Товар</th>
+                                <th>Заказы WB</th>
+                                <th>Где лежит</th>
+                                <th>Нужно</th>
+                                <th>Собрано</th>
+                                <th>Осталось</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {filteredNotCollectedRows.map((row) => (
+                                <tr key={row.requestItemId}>
+                                  <td>
+                                    <strong>{row.name ?? 'Товар без названия'}</strong>
+                                    <span>
+                                      {[row.article ? `арт. ${row.article}` : '', row.color, row.size ? `размер ${row.size}` : '', row.barcode ? `ШК ${row.barcode}` : '']
+                                        .filter(Boolean)
+                                        .join(' · ')}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    {row.orderIds.length > 0
+                                      ? row.orderIds.map((orderId) => `№${orderId}`).join(', ')
+                                      : 'номер уточняется'}
+                                  </td>
+                                  <td>
+                                    {row.availableBoxes.length > 0
+                                      ? row.availableBoxes.map((box) => `${box.boxCode} — ${box.quantity} шт.`).join(', ')
+                                      : 'доступный короб не найден'}
+                                  </td>
+                                  <td>{row.requiredQuantity}</td>
+                                  <td>{row.collectedQuantity}</td>
+                                  <td><strong className="online-execution-remaining-quantity">{row.remainingQuantity}</strong></td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <p className="online-execution-empty">По этому запросу несобранные позиции не найдены.</p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="online-execution-empty online-execution-empty--done">Все товары этой заявки собраны.</p>
+                  )}
+                </section>
+
+                <section className="online-execution-section online-execution-section--fbs-fact">
+                  <div className="online-execution-section__heading">
+                    <h4>Фактическая сборка FBS</h4>
+                    <span>
+                      собрано {fbsAssembly.completedOrders} из {fbsAssembly.totalOrders} · в работе {Math.max(0, fbsAssembly.startedOrders - fbsAssembly.completedOrders)}
+                    </span>
+                  </div>
+                  <OnlineSectionSearch
+                    value={fbsAssemblySearch}
+                    onChange={setFbsAssemblySearch}
+                    placeholder="Найти заказ, короб, ШК товара или ШК WB"
+                  />
+                  {filteredFbsAssemblyRows.length ? (
+                    <div className="online-execution-table-wrap online-execution-table-wrap--fbs-fact">
+                      <table className="online-execution-table online-execution-table--fbs-fact">
+                        <thead>
+                          <tr>
+                            <th>Короб, откуда взят</th>
+                            <th>Номер заказа</th>
+                            <th>ШК товара</th>
+                            <th>Размер</th>
+                            <th>ШК WB — большие 4 цифры</th>
+                            <th>Статус</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredFbsAssemblyRows.map((row) => (
+                            <tr key={row.id}>
+                              <td><strong>{row.sourceBoxCode ?? 'ещё не выбран'}</strong></td>
+                              <td>
+                                <strong>№{row.orderId}</strong>
+                                <span>{row.productName}{row.article ? ` · арт. ${row.article}` : ''}</span>
+                              </td>
+                              <td>{row.productBarcode ?? 'ещё не пропикан'}</td>
+                              <td><strong>{row.size ?? 'не указан'}</strong></td>
+                              <td>
+                                <strong className="online-execution-wb-digits">{row.wbStickerPartB ?? '—'}</strong>
+                                <span>{row.wbStickerBarcode ? `полный ШК: ${row.wbStickerBarcode}` : 'появится после получения наклейки WB'}</span>
+                              </td>
+                              <td>
+                                <span className={`online-execution-pill ${row.status === 'COMPLETED' ? 'is-done' : 'is-open'}`}>
+                                  {row.statusLabel}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="online-execution-empty">
+                      {fbsAssembly.rows.length
+                        ? 'По этому запросу строки фактической сборки не найдены.'
+                        : 'Фактические данные появятся после начала сборки заказов на ТСД.'}
+                    </p>
+                  )}
+                </section>
+              </>
             ) : null}
 
             <OnlineBoxChips

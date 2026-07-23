@@ -2005,7 +2005,7 @@
 
 .online-execution-metrics {
   display: grid;
-  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  grid-template-columns: repeat(6, minmax(110px, 1fr));
   gap: 10px;
 }
 
@@ -2020,6 +2020,25 @@
   display: grid;
   gap: 4px;
   padding: 11px;
+}
+
+.online-execution-metrics article.is-warning {
+  border-color: rgba(245, 158, 11, 0.45);
+  background: rgba(255, 247, 237, 0.92);
+}
+
+.online-execution-metrics article.is-warning strong,
+.online-execution-remaining-quantity {
+  color: #b45309;
+}
+
+.online-execution-metrics article.is-done {
+  border-color: rgba(34, 197, 94, 0.35);
+  background: rgba(240, 253, 244, 0.92);
+}
+
+.online-execution-metrics article.is-done strong {
+  color: #15803d;
 }
 
 .online-execution-metrics span {
@@ -2188,6 +2207,24 @@
 .online-execution-section--fbs-fact {
   border-color: #bfdbfe;
   background: linear-gradient(135deg, #eff6ff 0%, #ffffff 58%);
+}
+
+.online-execution-section--not-collected {
+  border-color: rgba(245, 158, 11, 0.35);
+  background: linear-gradient(145deg, rgba(255, 251, 235, 0.96), rgba(255, 247, 237, 0.88));
+}
+
+.online-execution-table-wrap--not-collected {
+  max-height: 360px;
+}
+
+.online-execution-table--not-collected {
+  min-width: 1040px;
+}
+
+.online-execution-empty--done {
+  color: #15803d;
+  background: rgba(240, 253, 244, 0.9);
 }
 
 .online-execution-table-wrap--fbs-fact {
