@@ -1491,6 +1491,173 @@ describe('MarketplaceConnectionsService', () => {
     });
   });
 
+  it('replaces an unused historical KIZ when the opened box has no unmarked quantity', async () => {
+    const barcode = '2047945838075';
+    const kiz = '010590000000001221PHYSICAL123456';
+    const previousKiz = '010590000000001221STALE12345678';
+    const task = {
+      id: 'task-1',
+      clientId: 'client-1',
+      connectionId: 'connection-1',
+      orderId: '5360364181',
+      skuId: 'sku-1',
+      productName: 'Спортивный костюм оверсайз с брюками',
+      requiresKiz: true,
+      status: 'IN_PROGRESS',
+      boxId: 'box-1',
+      boxCode: 'FFL_LKB0207_222',
+      barcode,
+      barcodes: [barcode],
+      kiz: null,
+      wbMetaStatus: 'PENDING',
+    };
+    const productMark = {
+      findFirst: vi.fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          id: 'stale-mark-1',
+          value: previousKiz,
+          sourceDocument: 'Историческая загрузка',
+        }),
+      count: vi.fn().mockResolvedValue(10),
+      create: vi.fn(),
+      update: vi.fn().mockResolvedValue({}),
+      updateMany: vi.fn(),
+      deleteMany: vi.fn(),
+    };
+    const fbsTsdAssembly = {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([{ kiz: '010590000000001221ALREADYUSED123' }]),
+      update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ ...task, ...data })),
+      updateMany: vi.fn(),
+    };
+    const tx = {
+      productMark,
+      stockBalance: { aggregate: vi.fn().mockResolvedValue({ _sum: { quantity: 10 } }) },
+      fbsTsdAssembly,
+    };
+    const prisma = {
+      ...tx,
+      clientMarketplaceConnection: { findFirst: vi.fn().mockResolvedValue({ apiKey: 'secret-key' }) },
+      $transaction: vi.fn(async (callback: (value: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    vi.spyOn(service as any, 'loadOwnedFbsTsdAssembly').mockResolvedValue(task);
+    vi.spyOn(service as any, 'formatFbsTsdAssembly').mockImplementation(
+      async (updated: unknown, _user: unknown, message: string) => ({ task: updated, message }),
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 204, json: async () => ({}) } as Response)),
+    );
+
+    const result = await service.scanFbsTsdKiz('task-1', { kiz }, { id: 'user-1' } as never);
+
+    expect(productMark.update).toHaveBeenCalledWith({
+      where: { id: 'stale-mark-1' },
+      data: expect.objectContaining({
+        value: kiz,
+        sourceDocument: expect.stringContaining('без изменения количества'),
+      }),
+    });
+    expect(productMark.create).not.toHaveBeenCalled();
+    expect(productMark.findFirst).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          clientId: 'client-1',
+          skuId: 'sku-1',
+          boxId: 'box-1',
+          status: 'AVAILABLE',
+          value: { notIn: ['010590000000001221ALREADYUSED123'] },
+        }),
+      }),
+    );
+    expect(result).toMatchObject({
+      message: 'КИЗ принят Wildberries и заменил устаревшую запись в коробе FFL_LKB0207_222. Количество товара не изменилось. Подтвердите сборку заказа.',
+    });
+  });
+
+  it('restores the historical KIZ when Wildberries rejects its physical replacement', async () => {
+    const barcode = '2047945838075';
+    const kiz = '010590000000001221REJECTED123456';
+    const previousKiz = '010590000000001221STALE12345678';
+    const task = {
+      id: 'task-1',
+      clientId: 'client-1',
+      connectionId: 'connection-1',
+      orderId: '5360364181',
+      skuId: 'sku-1',
+      productName: 'Спортивный костюм оверсайз с брюками',
+      requiresKiz: true,
+      status: 'IN_PROGRESS',
+      boxId: 'box-1',
+      boxCode: 'FFL_LKB0207_222',
+      barcode,
+      barcodes: [barcode],
+      kiz: null,
+      wbMetaStatus: 'PENDING',
+    };
+    const productMark = {
+      findFirst: vi.fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          id: 'stale-mark-1',
+          value: previousKiz,
+          sourceDocument: 'Историческая загрузка',
+        }),
+      count: vi.fn().mockResolvedValue(10),
+      create: vi.fn(),
+      update: vi.fn().mockResolvedValue({}),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      deleteMany: vi.fn(),
+    };
+    const fbsTsdAssembly = {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+      update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ ...task, ...data })),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+    };
+    const tx = {
+      productMark,
+      stockBalance: { aggregate: vi.fn().mockResolvedValue({ _sum: { quantity: 10 } }) },
+      fbsTsdAssembly,
+    };
+    const prisma = {
+      ...tx,
+      clientMarketplaceConnection: { findFirst: vi.fn().mockResolvedValue({ apiKey: 'secret-key' }) },
+      $transaction: vi.fn(async (callback: (value: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    vi.spyOn(service as any, 'loadOwnedFbsTsdAssembly').mockResolvedValue(task);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 400,
+        json: async () => ({ message: 'КИЗ не подходит заказу' }),
+      } as Response)),
+    );
+
+    await expect(service.scanFbsTsdKiz('task-1', { kiz }, { id: 'user-1' } as never))
+      .rejects.toThrow('Wildberries не принял КИЗ');
+
+    expect(productMark.updateMany).toHaveBeenCalledWith({
+      where: { id: 'stale-mark-1', clientId: 'client-1', value: kiz },
+      data: {
+        value: previousKiz,
+        sourceDocument: 'Историческая загрузка',
+      },
+    });
+    expect(fbsTsdAssembly.updateMany).toHaveBeenCalledWith({
+      where: { id: 'task-1', kiz, wbMetaStatus: 'PENDING' },
+      data: {
+        kiz: null,
+        wbMetaStatus: 'REJECTED',
+        errorMessage: expect.stringContaining('КИЗ не подходит заказу'),
+      },
+    });
+  });
+
   it('asks the TSD to confirm moving a known KIZ from another box', async () => {
     const kiz = '010590000000001221MOVE123456';
     const task = {

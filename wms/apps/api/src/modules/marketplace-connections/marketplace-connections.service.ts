@@ -1428,10 +1428,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       await this.inventoryLock?.assertStockMovementsAllowed();
     }
 
-    let registeredHistoricalMarkId: string | null = null;
+    let historicalMarkRegistration:
+      | { mode: 'CREATED'; id: string }
+      | { mode: 'REPLACED'; id: string; previousValue: string; previousSourceDocument: string | null }
+      | null = null;
     if (!mark) {
       try {
-        registeredHistoricalMarkId = await this.prisma.$transaction(async (tx) => {
+        historicalMarkRegistration = await this.prisma.$transaction(async (tx) => {
           const [available, registeredMarks] = await Promise.all([
             tx.stockBalance.aggregate({
               where: {
@@ -1452,9 +1455,52 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             }),
           ]);
           if ((available._sum.quantity ?? 0) <= registeredMarks) {
-            throw new BadRequestException(
-              `В коробе ${task.boxCode} нет свободной единицы этого товара без зарегистрированного КИЗа. Передайте короб менеджеру для сверки.`,
-            );
+            const usedMarks = await tx.fbsTsdAssembly.findMany({
+              where: {
+                id: { not: task.id },
+                clientId: task.clientId,
+                skuId: task.skuId,
+                kiz: { not: null },
+                status: { not: 'RELEASED' },
+              },
+              select: { kiz: true },
+            });
+            const usedKizValues = usedMarks
+              .map((item) => item.kiz)
+              .filter((value): value is string => Boolean(value));
+            const replaceable = await tx.productMark.findFirst({
+              where: {
+                clientId: task.clientId,
+                skuId: task.skuId,
+                boxId: task.boxId,
+                status: StockStatus.AVAILABLE,
+                ...(usedKizValues.length > 0 ? { value: { notIn: usedKizValues } } : {}),
+              },
+              orderBy: { createdAt: 'asc' },
+              select: { id: true, value: true, sourceDocument: true },
+            });
+            if (!replaceable) {
+              throw new BadRequestException(
+                `В коробе ${task.boxCode} нет доступной единицы этого товара: все зарегистрированные КИЗы уже используются в других FBS-заказах. Передайте короб менеджеру для сверки.`,
+              );
+            }
+            await tx.productMark.update({
+              where: { id: replaceable.id },
+              data: {
+                value: kiz,
+                sourceDocument: `FBS TSD, заказ ${task.orderId}: фактический КИЗ заменил устаревшую запись ${printableFbsKiz(replaceable.value)} без изменения количества`,
+              },
+            });
+            await tx.fbsTsdAssembly.update({
+              where: { id: task.id },
+              data: { kiz, wbMetaStatus: 'PENDING', errorMessage: null },
+            });
+            return {
+              mode: 'REPLACED' as const,
+              id: replaceable.id,
+              previousValue: replaceable.value,
+              previousSourceDocument: replaceable.sourceDocument,
+            };
           }
 
           const created = await tx.productMark.create({
@@ -1472,7 +1518,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             where: { id: task.id },
             data: { kiz, wbMetaStatus: 'PENDING', errorMessage: null },
           });
-          return created.id;
+          return { mode: 'CREATED' as const, id: created.id };
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
       } catch (caught) {
         if (isUniqueError(caught)) {
@@ -1504,11 +1550,21 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : 'Wildberries не принял КИЗ.';
-      if (registeredHistoricalMarkId) {
+      if (historicalMarkRegistration) {
         await this.prisma.$transaction(async (tx) => {
-          await tx.productMark.deleteMany({
-            where: { id: registeredHistoricalMarkId!, clientId: task.clientId, value: kiz },
-          });
+          if (historicalMarkRegistration!.mode === 'CREATED') {
+            await tx.productMark.deleteMany({
+              where: { id: historicalMarkRegistration!.id, clientId: task.clientId, value: kiz },
+            });
+          } else {
+            await tx.productMark.updateMany({
+              where: { id: historicalMarkRegistration!.id, clientId: task.clientId, value: kiz },
+              data: {
+                value: historicalMarkRegistration!.previousValue,
+                sourceDocument: historicalMarkRegistration!.previousSourceDocument,
+              },
+            });
+          }
           await tx.fbsTsdAssembly.updateMany({
             where: { id: task.id, kiz, wbMetaStatus: 'PENDING' },
             data: { kiz: null, wbMetaStatus: 'REJECTED', errorMessage: message },
@@ -1537,7 +1593,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         ? `КИЗ принят Wildberries и перепривязан к фактической единице в коробе ${task.boxCode}. Количество товара не изменялось. Подтвердите сборку заказа.`
         : boxCorrection
         ? `КИЗ принят Wildberries. Товар перемещён из короба ${mark?.box?.code ?? 'без номера'} в ${task.boxCode}. Подтвердите сборку заказа.`
-        : registeredHistoricalMarkId
+        : historicalMarkRegistration?.mode === 'REPLACED'
+        ? `КИЗ принят Wildberries и заменил устаревшую запись в коробе ${task.boxCode}. Количество товара не изменилось. Подтвердите сборку заказа.`
+        : historicalMarkRegistration?.mode === 'CREATED'
         ? 'КИЗ принят Wildberries и зарегистрирован в остатках WMS. Подтвердите сборку заказа.'
         : 'КИЗ принят Wildberries. Подтвердите сборку заказа.',
     );
