@@ -547,23 +547,30 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     }
   }
 
-  async function moveOnlineFbsOrder(
+  async function moveOnlineFbsOrders(
     request: ClientRequestSummary,
-    order: { id: string; connectionId: string },
+    selectedOrders: Array<{ id: string; connectionId: string }>,
   ) {
+    const orders = [...new Map(
+      selectedOrders.map((order) => [`${order.connectionId}:${order.id}`, order]),
+    ).values()];
+    if (orders.length === 0) return;
+    const orderDescription = orders.length === 1
+      ? `несобранный заказ №${orders[0]!.id}`
+      : `${orders.length} выбранных несобранных заказов`;
     if (!window.confirm(
-      `Перенести несобранный заказ №${order.id} в новую поставку WB?\n\n` +
-      'Для него будет создана отдельная заявка WMS, а текущая заявка пересчитается автоматически.',
+      `Перенести ${orderDescription} в новую поставку WB?\n\n` +
+      'Для них будет создана отдельная заявка WMS, а текущая заявка пересчитается автоматически.',
     )) return;
 
-    setOnlineFbsMove({ orderId: order.id });
+    setOnlineFbsMove({ orderId: orders.length === 1 ? orders[0]!.id : '__bulk__' });
     try {
       const result = await moveFbsOrdersToNewSupply(session.accessToken, {
         clientId: request.clientId,
-        orders: [{ id: order.id, connectionId: order.connectionId }],
+        orders,
       });
       const message =
-        `Заказ №${order.id} перенесён в поставку ${result.targetSupply.id} ` +
+        `${orders.length === 1 ? `Заказ №${orders[0]!.id} перенесён` : `${orders.length} заказов перенесены`} в поставку ${result.targetSupply.id} ` +
         `и заявку №${String(result.targetRequest.number).padStart(6, '0')}.`;
       setOnlineFbsMove({ orderId: null, message });
       setActionMessage(message);
@@ -584,6 +591,13 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
         error: errorMessage(caught),
       });
     }
+  }
+
+  async function moveOnlineFbsOrder(
+    request: ClientRequestSummary,
+    order: { id: string; connectionId: string },
+  ) {
+    return moveOnlineFbsOrders(request, [order]);
   }
 
   async function downloadRequestItems(request: ClientRequestSummary) {
@@ -961,6 +975,11 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           onMoveOrder={
             canWrite
               ? (order) => void moveOnlineFbsOrder(onlinePreview.request, order)
+              : undefined
+          }
+          onMoveOrders={
+            canWrite
+              ? (orders) => void moveOnlineFbsOrders(onlinePreview.request, orders)
               : undefined
           }
           onClose={() => {
@@ -1733,6 +1752,7 @@ type OnlineExecutionModalProps = {
   moveMessage?: string;
   moveError?: string;
   onMoveOrder?: (order: { id: string; connectionId: string }) => void;
+  onMoveOrders?: (orders: Array<{ id: string; connectionId: string }>) => void;
   onClose: () => void;
   onRefresh: () => void;
   onDownloadBoxes: () => void;
@@ -1749,6 +1769,7 @@ function OnlineExecutionModal({
   moveMessage,
   moveError,
   onMoveOrder,
+  onMoveOrders,
   onClose,
   onRefresh,
   onDownloadBoxes,
@@ -1759,6 +1780,7 @@ function OnlineExecutionModal({
   const [actualMovementSearch, setActualMovementSearch] = useState('');
   const [fbsAssemblySearch, setFbsAssemblySearch] = useState('');
   const [notCollectedSearch, setNotCollectedSearch] = useState('');
+  const [selectedNotCollectedOrders, setSelectedNotCollectedOrders] = useState<string[]>([]);
   const searchBoxes = normalizeOnlineBoxes(plan?.searchBoxes ?? plan?.boxesToSearch ?? []);
   const foundCodes = new Set(
     [...(plan?.boxSearchProgress?.foundBoxCodes ?? []), ...(plan?.foundBoxCodes ?? []), ...(plan?.foundBoxesCodes ?? [])].map(normalizeCode),
@@ -1813,6 +1835,23 @@ function OnlineExecutionModal({
       ...row.availableBoxes.map((box) => box.boxCode),
     ].some((value) => value?.toLocaleLowerCase('ru-RU').includes(normalizedNotCollectedSearch)),
   );
+  const notCollectedOrders = [...new Map(
+    (notCollected?.rows ?? [])
+      .flatMap((row) => row.orders)
+      .map((order) => [onlineFbsOrderKey(order), order]),
+  ).values()];
+  const notCollectedOrderKeys = notCollectedOrders.map(onlineFbsOrderKey);
+  const selectedNotCollectedOrderRows = notCollectedOrders.filter((order) =>
+    selectedNotCollectedOrders.includes(onlineFbsOrderKey(order)),
+  );
+  const allNotCollectedOrdersSelected =
+    notCollectedOrderKeys.length > 0 &&
+    notCollectedOrderKeys.every((key) => selectedNotCollectedOrders.includes(key));
+  useEffect(() => {
+    setSelectedNotCollectedOrders((current) =>
+      current.filter((key) => notCollectedOrderKeys.includes(key)),
+    );
+  }, [notCollectedOrderKeys.join('|')]);
   const outgoingBoxes = normalizeOutgoingBoxes(plan);
   const filteredMovementRows = movementRows.filter((row) => movementRowMatchesSearch(row, movementSearch));
   const filteredActualMovements = actualMovements.filter((row) => movementRowMatchesSearch(row, actualMovementSearch));
@@ -1976,6 +2015,34 @@ function OnlineExecutionModal({
                         onChange={setNotCollectedSearch}
                         placeholder="Найти товар, заказ, ШК или короб"
                       />
+                      {onMoveOrders && notCollectedOrders.length > 0 ? (
+                        <div className="online-execution-bulk-move">
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={allNotCollectedOrdersSelected}
+                              onChange={(event) =>
+                                setSelectedNotCollectedOrders(
+                                  event.target.checked ? notCollectedOrderKeys : [],
+                                )
+                              }
+                              disabled={Boolean(movingOrderId)}
+                            />
+                            <span>Выбрать все несобранные заказы</span>
+                            <strong>{notCollectedOrders.length}</strong>
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => onMoveOrders(selectedNotCollectedOrderRows)}
+                            disabled={selectedNotCollectedOrderRows.length === 0 || Boolean(movingOrderId)}
+                          >
+                            <ArrowRightLeft size={16} aria-hidden="true" />
+                            {movingOrderId
+                              ? 'Переношу заказы…'
+                              : `Перенести выбранные в новую поставку (${selectedNotCollectedOrderRows.length})`}
+                          </button>
+                        </div>
+                      ) : null}
                       {filteredNotCollectedRows.length > 0 ? (
                         <div className="online-execution-table-wrap online-execution-table-wrap--not-collected">
                           <table className="online-execution-table online-execution-table--not-collected">
@@ -2005,7 +2072,23 @@ function OnlineExecutionModal({
                                       <div className="online-execution-order-actions">
                                         {row.orders.map((order) => (
                                           <div key={`${order.connectionId}:${order.id}`}>
-                                            <strong>№{order.id}</strong>
+                                            <label className="online-execution-order-select">
+                                              <input
+                                                type="checkbox"
+                                                checked={selectedNotCollectedOrders.includes(onlineFbsOrderKey(order))}
+                                                onChange={(event) => {
+                                                  const key = onlineFbsOrderKey(order);
+                                                  setSelectedNotCollectedOrders((current) =>
+                                                    event.target.checked
+                                                      ? [...new Set([...current, key])]
+                                                      : current.filter((item) => item !== key),
+                                                  );
+                                                }}
+                                                disabled={Boolean(movingOrderId)}
+                                                aria-label={`Выбрать заказ №${order.id}`}
+                                              />
+                                              <strong>№{order.id}</strong>
+                                            </label>
                                             {onMoveOrder ? (
                                               <button
                                                 type="button"
@@ -2500,6 +2583,10 @@ function averageProgress(values: number[]) {
 
 function normalizeCode(value?: string | null) {
   return value?.trim().toLocaleLowerCase('ru-RU') ?? '';
+}
+
+function onlineFbsOrderKey(order: { id: string; connectionId: string }) {
+  return `${order.connectionId}:${order.id}`;
 }
 
 function movementRowMatchesSearch(

@@ -765,7 +765,7 @@ export class TsdAssemblyService {
           requestId,
           syncStatus: { in: ['ACTIVE', 'RETURN_REQUIRED'] },
         },
-        select: { orderId: true, connectionId: true },
+        select: { orderId: true, connectionId: true, lastSkuId: true },
         orderBy: { createdAt: 'asc' },
       }),
       this.prisma.fbsTsdAssembly.findMany({
@@ -842,6 +842,14 @@ export class TsdAssemblyService {
     const pendingOrderIds = links
       .map((link) => link.orderId)
       .filter((orderId) => !handledOrderIds.has(orderId));
+    const pendingLinksBySku = new Map<string, typeof links>();
+    links.forEach((link) => {
+      if (!link.lastSkuId || handledOrderIds.has(link.orderId)) return;
+      pendingLinksBySku.set(
+        link.lastSkuId,
+        [...(pendingLinksBySku.get(link.lastSkuId) ?? []), link],
+      );
+    });
     const handledByRequestItem = new Map<string, number>();
     handledRows.forEach((row) => {
       handledByRequestItem.set(
@@ -855,8 +863,12 @@ export class TsdAssemblyService {
         const collectedQuantity = Math.min(requiredQuantity, handledByRequestItem.get(row.itemId) ?? 0);
         const remainingQuantity = Math.max(0, requiredQuantity - collectedQuantity);
         const sku = row.skuId ? skuById.get(row.skuId) : null;
-        const orderIds = (row.comment?.match(/\d{6,}/g) ?? [])
+        const linkedSkuOrderIds = row.skuId
+          ? (pendingLinksBySku.get(row.skuId) ?? []).map((link) => link.orderId)
+          : [];
+        const commentOrderIds = (row.comment?.match(/\d{6,}/g) ?? [])
           .filter((orderId) => linkedOrderIds.has(orderId) && !handledOrderIds.has(orderId));
+        const orderIds = uniqueSorted([...linkedSkuOrderIds, ...commentOrderIds]);
         return {
           requestItemId: row.itemId,
           skuId: row.skuId,
@@ -868,8 +880,8 @@ export class TsdAssemblyService {
           requiredQuantity,
           collectedQuantity,
           remainingQuantity,
-          orderIds: uniqueSorted(orderIds),
-          orders: uniqueSorted(orderIds)
+          orderIds,
+          orders: orderIds
             .map((orderId) => {
               const link = linkByOrderId.get(orderId);
               return link

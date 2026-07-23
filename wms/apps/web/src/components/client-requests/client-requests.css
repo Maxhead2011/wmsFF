@@ -2274,6 +2274,71 @@
   min-width: 1040px;
 }
 
+.online-execution-bulk-move {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.86);
+  padding: 10px 12px;
+}
+
+.online-execution-bulk-move label,
+.online-execution-order-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.online-execution-bulk-move input,
+.online-execution-order-select input {
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  accent-color: #2563eb;
+}
+
+.online-execution-bulk-move label > span {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.online-execution-bulk-move label > strong {
+  display: inline-grid;
+  min-width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 999px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 12px;
+}
+
+.online-execution-bulk-move button {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid #1d4ed8;
+  border-radius: 7px;
+  background: #2563eb;
+  color: #ffffff;
+  cursor: pointer;
+  padding: 8px 13px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.online-execution-bulk-move button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .online-execution-action-message,
 .online-execution-action-error {
   margin: 10px 16px 0;
@@ -2307,6 +2372,14 @@
 .online-execution-order-actions > div:last-child {
   border-bottom: 0;
   padding-bottom: 0;
+}
+
+.online-execution-order-select {
+  min-width: 0;
+}
+
+.online-execution-order-select strong {
+  white-space: nowrap;
 }
 
 .online-execution-order-actions button {
@@ -2523,6 +2596,15 @@
   .online-execution-section__heading {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .online-execution-bulk-move {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .online-execution-bulk-move button {
+    width: 100%;
   }
 
   .manual-instruction-modal-shell {

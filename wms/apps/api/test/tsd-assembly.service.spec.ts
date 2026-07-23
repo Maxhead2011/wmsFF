@@ -31,8 +31,8 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
     const prisma = {
       fbsOrderRequestLink: {
         findMany: vi.fn().mockResolvedValue([
-          { orderId: '5355303495', connectionId: 'connection-1' },
-          { orderId: '5355303496', connectionId: 'connection-1' },
+          { orderId: '5355303495', connectionId: 'connection-1', lastSkuId: 'sku-1' },
+          { orderId: '5355303496', connectionId: 'connection-1', lastSkuId: 'sku-1' },
         ]),
       },
       fbsTsdAssembly: {
@@ -77,7 +77,7 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
         name: 'Костюм',
         barcode: '2047945700181',
         requestedQuantity: 2,
-        comment: 'FBS-заказы: 5355303495, 5355303496',
+        comment: null,
         allocations: [{ boxCode: 'FFL_LKB0106_039', quantity: 2 }],
       },
     ]);
@@ -124,7 +124,7 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
     const prisma = {
       fbsOrderRequestLink: {
         findMany: vi.fn().mockResolvedValue([
-          { orderId: '5355303495', connectionId: 'connection-1' },
+          { orderId: '5355303495', connectionId: 'connection-1', lastSkuId: 'sku-1' },
         ]),
       },
       fbsTsdAssembly: {
