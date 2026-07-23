@@ -765,7 +765,7 @@ export class TsdAssemblyService {
           requestId,
           syncStatus: { in: ['ACTIVE', 'RETURN_REQUIRED'] },
         },
-        select: { orderId: true },
+        select: { orderId: true, connectionId: true },
         orderBy: { createdAt: 'asc' },
       }),
       this.prisma.fbsTsdAssembly.findMany({
@@ -836,6 +836,9 @@ export class TsdAssemblyService {
     const handledRows = [...completedRows, ...returnRequiredRows];
     const handledOrderIds = new Set(handledRows.map((row) => row.orderId));
     const linkedOrderIds = new Set(links.map((link) => link.orderId));
+    const linkByOrderId = new Map(
+      links.map((link) => [link.orderId, link]),
+    );
     const pendingOrderIds = links
       .map((link) => link.orderId)
       .filter((orderId) => !handledOrderIds.has(orderId));
@@ -866,6 +869,19 @@ export class TsdAssemblyService {
           collectedQuantity,
           remainingQuantity,
           orderIds: uniqueSorted(orderIds),
+          orders: uniqueSorted(orderIds)
+            .map((orderId) => {
+              const link = linkByOrderId.get(orderId);
+              return link
+                ? { id: orderId, connectionId: link.connectionId }
+                : null;
+            })
+            .filter(
+              (
+                order,
+              ): order is { id: string; connectionId: string } =>
+                Boolean(order),
+            ),
           availableBoxes: row.allocations.map((allocation) => ({
             boxCode: allocation.boxCode,
             quantity: allocation.quantity,

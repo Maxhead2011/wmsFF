@@ -1828,6 +1828,7 @@ export type TsdAssemblyPlan = {
         collectedQuantity: number;
         remainingQuantity: number;
         orderIds: string[];
+        orders: Array<{ id: string; connectionId: string }>;
         availableBoxes: Array<{ boxCode: string; quantity: number }>;
       }>;
     };

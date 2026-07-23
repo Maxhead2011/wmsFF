@@ -1,4 +1,4 @@
-import { AlertTriangle, Archive, ArrowLeft, Boxes, ClipboardList, FileDown, FileUp, RefreshCw, Search, ShieldAlert, Truck, X } from 'lucide-react';
+import { AlertTriangle, Archive, ArrowLeft, ArrowRightLeft, Boxes, ClipboardList, FileDown, FileUp, RefreshCw, Search, ShieldAlert, Truck, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import {
   cancelClientRequest,
@@ -22,6 +22,7 @@ import {
   fetchPickInstruction,
   fetchPendingPickWaveBalanceReviews,
   fetchTsdAssemblyPlan,
+  moveFbsOrdersToNewSupply,
   packageClientRequest,
   pickClientRequest,
   refreshPickInstruction as refreshPickInstructionDocument,
@@ -115,6 +116,11 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
   const [refreshingInstructionId, setRefreshingInstructionId] = useState<string | null>(null);
   const [editingRequest, setEditingRequest] = useState<ClientRequestSummary | null>(null);
   const [onlinePreview, setOnlinePreview] = useState<{ request: ClientRequestSummary; plan: TsdAssemblyPlan | null; status: 'loading' | 'ready' | 'error'; error?: string } | null>(null);
+  const [onlineFbsMove, setOnlineFbsMove] = useState<{
+    orderId: string | null;
+    message?: string;
+    error?: string;
+  }>({ orderId: null });
   const [emergencyUpload, setEmergencyUpload] = useState<{
     request: ClientRequestSummary;
     file: File | null;
@@ -498,6 +504,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
 
   async function openOnlineExecution(request: ClientRequestSummary) {
     setOnlinePreview({ request, plan: null, status: 'loading' });
+    setOnlineFbsMove({ orderId: null });
     setError(null);
 
     try {
@@ -537,6 +544,45 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
       }
     } catch (caught) {
       setError(errorMessage(caught));
+    }
+  }
+
+  async function moveOnlineFbsOrder(
+    request: ClientRequestSummary,
+    order: { id: string; connectionId: string },
+  ) {
+    if (!window.confirm(
+      `Перенести несобранный заказ №${order.id} в новую поставку WB?\n\n` +
+      'Для него будет создана отдельная заявка WMS, а текущая заявка пересчитается автоматически.',
+    )) return;
+
+    setOnlineFbsMove({ orderId: order.id });
+    try {
+      const result = await moveFbsOrdersToNewSupply(session.accessToken, {
+        clientId: request.clientId,
+        orders: [{ id: order.id, connectionId: order.connectionId }],
+      });
+      const message =
+        `Заказ №${order.id} перенесён в поставку ${result.targetSupply.id} ` +
+        `и заявку №${String(result.targetRequest.number).padStart(6, '0')}.`;
+      setOnlineFbsMove({ orderId: null, message });
+      setActionMessage(message);
+      try {
+        const plan = await fetchTsdAssemblyPlan(session.accessToken, request.id);
+        setOnlinePreview((current) =>
+          current?.request.id === request.id
+            ? { ...current, plan, status: 'ready', error: undefined }
+            : current,
+        );
+      } catch {
+        setOnlinePreview(null);
+      }
+      void loadData();
+    } catch (caught) {
+      setOnlineFbsMove({
+        orderId: null,
+        error: errorMessage(caught),
+      });
     }
   }
 
@@ -909,7 +955,18 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           plan={onlinePreview.plan}
           status={onlinePreview.status}
           error={onlinePreview.error}
-          onClose={() => setOnlinePreview(null)}
+          movingOrderId={onlineFbsMove.orderId}
+          moveMessage={onlineFbsMove.message}
+          moveError={onlineFbsMove.error}
+          onMoveOrder={
+            canWrite
+              ? (order) => void moveOnlineFbsOrder(onlinePreview.request, order)
+              : undefined
+          }
+          onClose={() => {
+            setOnlinePreview(null);
+            setOnlineFbsMove({ orderId: null });
+          }}
           onRefresh={() => void refreshOnlineExecution()}
           onDownloadBoxes={() => void downloadOnlineOutgoingBoxes(onlinePreview.request)}
           onDownloadContents={() => void downloadOnlineOutgoingContents(onlinePreview.request)}
@@ -1672,6 +1729,10 @@ type OnlineExecutionModalProps = {
   plan: TsdAssemblyPlan | null;
   status: 'loading' | 'ready' | 'error';
   error?: string;
+  movingOrderId: string | null;
+  moveMessage?: string;
+  moveError?: string;
+  onMoveOrder?: (order: { id: string; connectionId: string }) => void;
   onClose: () => void;
   onRefresh: () => void;
   onDownloadBoxes: () => void;
@@ -1684,6 +1745,10 @@ function OnlineExecutionModal({
   plan,
   status,
   error,
+  movingOrderId,
+  moveMessage,
+  moveError,
+  onMoveOrder,
   onClose,
   onRefresh,
   onDownloadBoxes,
@@ -1793,6 +1858,8 @@ function OnlineExecutionModal({
 
         {status === 'loading' ? <p className="inline-status">Получаю данные выполнения.</p> : null}
         {status === 'error' ? <p className="form-error">{error ?? 'Не удалось получить онлайн-выполнение.'}</p> : null}
+        {moveMessage ? <p className="online-execution-action-message">{moveMessage}</p> : null}
+        {moveError ? <p className="form-error online-execution-action-error">{moveError}</p> : null}
 
         {plan ? (
           <div className="online-execution-modal__body">
@@ -1915,7 +1982,7 @@ function OnlineExecutionModal({
                             <thead>
                               <tr>
                                 <th>Товар</th>
-                                <th>Заказы WB</th>
+                                <th>Заказы WB / действия</th>
                                 <th>Где лежит</th>
                                 <th>Нужно</th>
                                 <th>Собрано</th>
@@ -1934,9 +2001,32 @@ function OnlineExecutionModal({
                                     </span>
                                   </td>
                                   <td>
-                                    {row.orderIds.length > 0
-                                      ? row.orderIds.map((orderId) => `№${orderId}`).join(', ')
-                                      : 'номер уточняется'}
+                                    {row.orders.length > 0 ? (
+                                      <div className="online-execution-order-actions">
+                                        {row.orders.map((order) => (
+                                          <div key={`${order.connectionId}:${order.id}`}>
+                                            <strong>№{order.id}</strong>
+                                            {onMoveOrder ? (
+                                              <button
+                                                type="button"
+                                                onClick={() => onMoveOrder(order)}
+                                                disabled={Boolean(movingOrderId)}
+                                                title="Перенести этот несобранный заказ в новую поставку WB и отдельную заявку WMS"
+                                              >
+                                                <ArrowRightLeft size={14} aria-hidden="true" />
+                                                {movingOrderId === order.id
+                                                  ? 'Переношу…'
+                                                  : 'В новую поставку'}
+                                              </button>
+                                            ) : null}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ) : row.orderIds.length > 0 ? (
+                                      row.orderIds.map((orderId) => `№${orderId}`).join(', ')
+                                    ) : (
+                                      'номер уточняется'
+                                    )}
                                   </td>
                                   <td>
                                     {row.availableBoxes.length > 0

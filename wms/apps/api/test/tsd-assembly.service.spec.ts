@@ -30,7 +30,10 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
   it('возвращает короб, заказ, ШК товара, размер и четыре цифры наклейки WB', async () => {
     const prisma = {
       fbsOrderRequestLink: {
-        findMany: vi.fn().mockResolvedValue([{ orderId: '5355303495' }, { orderId: '5355303496' }]),
+        findMany: vi.fn().mockResolvedValue([
+          { orderId: '5355303495', connectionId: 'connection-1' },
+          { orderId: '5355303496', connectionId: 'connection-1' },
+        ]),
       },
       fbsTsdAssembly: {
         findMany: vi.fn().mockResolvedValue([
@@ -109,6 +112,7 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
             collectedQuantity: 1,
             remainingQuantity: 1,
             orderIds: ['5355303496'],
+            orders: [{ id: '5355303496', connectionId: 'connection-1' }],
             availableBoxes: [{ boxCode: 'FFL_LKB0106_039', quantity: 2 }],
           }),
         ],
@@ -119,7 +123,9 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
   it('показывает изменённый после сборки заказ как требующий решения и не считает его несобранным', async () => {
     const prisma = {
       fbsOrderRequestLink: {
-        findMany: vi.fn().mockResolvedValue([{ orderId: '5355303495' }]),
+        findMany: vi.fn().mockResolvedValue([
+          { orderId: '5355303495', connectionId: 'connection-1' },
+        ]),
       },
       fbsTsdAssembly: {
         findMany: vi.fn().mockResolvedValue([
