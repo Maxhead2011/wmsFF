@@ -173,7 +173,29 @@ type FbsSupplyPlanWithClient = Prisma.FbsSupplyPlanGetPayload<{
 type FbsCargoPackingWithAssemblies = Prisma.FbsCargoPlacePackingGetPayload<{
   include: { assemblies: true };
 }>;
+type FbsRequestDesiredItem = {
+  skuId: string;
+  barcode: string | null;
+  name: string;
+  quantity: number;
+  orderIds: string[];
+};
 const FBS_TSD_STALE_UNSTARTED_TASK_MS = 2 * 60 * 60 * 1_000;
+const FBS_REQUEST_LINK_ACTIVE = 'ACTIVE';
+const FBS_REQUEST_LINK_REMOVED = 'REMOVED';
+const FBS_REQUEST_LINK_RETURN_REQUIRED = 'RETURN_REQUIRED';
+const FBS_TSD_RETURN_REQUIRED = 'RETURN_REQUIRED';
+const FBS_REQUEST_CLOSED_STATUSES = new Set<ClientRequestStatus>([
+  ClientRequestStatus.DONE,
+  ClientRequestStatus.CANCELLED,
+  ClientRequestStatus.REJECTED,
+]);
+const FBS_REQUEST_COMPOSITION_STATUSES = new Set<ClientRequestStatus>([
+  ClientRequestStatus.SUBMITTED,
+  ClientRequestStatus.IN_REVIEW,
+  ClientRequestStatus.APPROVED,
+  ClientRequestStatus.IN_WORK,
+]);
 
 @Injectable()
 export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDestroy {
@@ -410,7 +432,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               },
             },
           });
-          if (existing?.status === 'COMPLETED') continue;
+          if (existing?.status === 'COMPLETED' || existing?.status === FBS_TSD_RETURN_REQUIRED) continue;
           if (existing?.status === 'IN_PROGRESS') {
             const staleUnstarted =
               !existing.boxId &&
@@ -922,6 +944,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   async scanFbsTsdBox(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
     const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    requireFbsTaskWithoutSyncConflict(task);
     if (task.status === 'COMPLETED') return this.formatFbsTsdAssembly(task, user, 'Заказ уже собран.');
     const boxCode = requiredFbsTsdText(payload.boxCode, 'Отсканируйте номер короба.');
     if (!boxCode.toUpperCase().startsWith('FFL')) {
@@ -960,7 +983,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         clientId: task.clientId,
         skuId: task.skuId,
         boxId: box.id,
-        status: { in: ['IN_PROGRESS', 'COMPLETED'] },
+        status: { in: ['IN_PROGRESS', 'COMPLETED', FBS_TSD_RETURN_REQUIRED] },
       },
       _sum: { itemCount: true },
     });
@@ -1043,7 +1066,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             clientId: currentTask.clientId,
             skuId: product.id,
             boxId: box.id,
-            status: { in: ['IN_PROGRESS', 'COMPLETED'] },
+            status: { in: ['IN_PROGRESS', 'COMPLETED', FBS_TSD_RETURN_REQUIRED] },
           },
           _sum: { itemCount: true },
         }),
@@ -1051,6 +1074,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       if (
         !requestItem ||
         existing?.status === 'COMPLETED' ||
+        existing?.status === FBS_TSD_RETURN_REQUIRED ||
         existing?.status === 'IN_PROGRESS' ||
         (available._sum.quantity ?? 0) - (reserved._sum.itemCount ?? 0) < Math.max(1, order.itemCount)
       ) {
@@ -1142,6 +1166,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   async scanFbsTsdBarcode(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
     const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    requireFbsTaskWithoutSyncConflict(task);
     if (!task.boxId) throw new BadRequestException('Сначала отсканируйте короб, указанный на экране.');
     if (task.barcode) return this.formatFbsTsdAssembly(task, user, 'Товар уже подтверждён.');
     const barcode = requiredFbsTsdText(payload.barcode, 'Отсканируйте ШК товара.');
@@ -1170,6 +1195,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   async scanFbsTsdKiz(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
     const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    requireFbsTaskWithoutSyncConflict(task);
     if (!task.requiresKiz) throw new BadRequestException('Для этого товара КИЗ не требуется.');
     if (!task.boxId || !task.barcode) {
       throw new BadRequestException('Сначала подтвердите короб и ШК товара.');
@@ -1567,6 +1593,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   async completeFbsTsdAssembly(taskId: string, user: AuthUser) {
     const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    requireFbsTaskWithoutSyncConflict(task);
     if (task.status === 'COMPLETED') return this.formatFbsTsdAssembly(task, user, 'Заказ уже собран.');
     if (!task.boxId || !task.barcode) throw new BadRequestException('Сначала подтвердите короб и товар.');
     if (task.requiresKiz && (!task.kiz || task.wbMetaStatus !== 'ACCEPTED')) {
@@ -1629,6 +1656,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   async releaseFbsTsdAssembly(taskId: string, user: AuthUser) {
     const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    requireFbsTaskWithoutSyncConflict(task);
     if (task.status === 'COMPLETED') throw new BadRequestException('Собранный заказ нельзя отложить.');
     if (task.kiz || task.wbMetaStatus === 'ACCEPTED') {
       throw new BadRequestException('КИЗ уже передан Wildberries. Для замены обратитесь к администратору.');
@@ -1702,7 +1730,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           clientId: task.clientId,
           skuId: task.skuId,
           boxId: { not: null },
-          status: { in: ['IN_PROGRESS', 'COMPLETED'] },
+          status: { in: ['IN_PROGRESS', 'COMPLETED', FBS_TSD_RETURN_REQUIRED] },
         },
         select: { boxId: true, itemCount: true },
       }),
@@ -2982,7 +3010,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         request: { select: { id: true, number: true, status: true } },
       },
     });
-    const activeLinks = links.filter((link) => link.request.status !== ClientRequestStatus.CANCELLED);
+    const activeLinks = links.filter(
+      (link) =>
+        link.request.status !== ClientRequestStatus.CANCELLED &&
+        link.syncStatus !== FBS_REQUEST_LINK_REMOVED,
+    );
     if (activeLinks.length > 0) {
       throw new BadRequestException(
         `Заказы уже включены в заявку: ${activeLinks
@@ -3066,7 +3098,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           if (existing) {
             await tx.fbsOrderRequestLink.update({
               where: { id: existing.id },
-              data: { requestId: created.id, createdByUserId: user.id },
+              data: {
+                requestId: created.id,
+                createdByUserId: user.id,
+                ...fbsOrderLinkSnapshot(order),
+                syncStatus: FBS_REQUEST_LINK_ACTIVE,
+                syncIssue: null,
+              },
             });
           } else {
             await tx.fbsOrderRequestLink.create({
@@ -3077,6 +3115,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
                 orderId: order.id,
                 requestId: created.id,
                 createdByUserId: user.id,
+                ...fbsOrderLinkSnapshot(order),
+                syncStatus: FBS_REQUEST_LINK_ACTIVE,
               },
             });
           }
@@ -3458,6 +3498,558 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
+  private async syncFbsRequestsFromMarketplace(clientId: string, orders: FbsOrderSummary[]) {
+    const links = await this.prisma.fbsOrderRequestLink.findMany({
+      where: { clientId },
+      include: {
+        request: {
+          select: {
+            id: true,
+            number: true,
+            status: true,
+          },
+        },
+      },
+    });
+    const openLinks = links.filter((link) => !FBS_REQUEST_CLOSED_STATUSES.has(link.request.status));
+    if (openLinks.length === 0) {
+      return;
+    }
+
+    const orderByKey = new Map(
+      orders.map((order) => [selectionKey(order.connectionId, order.id), order]),
+    );
+    const linkByKey = new Map(
+      links.map((link) => [selectionKey(link.connectionId, link.orderId), link]),
+    );
+    const requestWithMissingOrders = new Set<string>();
+    for (const link of openLinks) {
+      if (
+        link.syncStatus !== FBS_REQUEST_LINK_REMOVED &&
+        !orderByKey.has(selectionKey(link.connectionId, link.orderId))
+      ) {
+        requestWithMissingOrders.add(link.requestId);
+      }
+    }
+
+    const supplyOwners = new Map<string, Set<string>>();
+    for (const link of openLinks) {
+      if (
+        link.syncStatus === FBS_REQUEST_LINK_REMOVED ||
+        !FBS_REQUEST_COMPOSITION_STATUSES.has(link.request.status)
+      ) {
+        continue;
+      }
+      const order = orderByKey.get(selectionKey(link.connectionId, link.orderId));
+      if (!order?.supplyId || order.category === 'cancelled') {
+        continue;
+      }
+      const supplyKey = fbsSupplyPlanKey(order.marketplace, order.connectionId, order.supplyId);
+      const owners = supplyOwners.get(supplyKey) ?? new Set<string>();
+      owners.add(link.requestId);
+      supplyOwners.set(supplyKey, owners);
+    }
+
+    const additionsByRequest = new Map<string, FbsOrderSummary[]>();
+    for (const order of orders) {
+      if (order.category !== 'active' || !order.supplyId || !order.product) {
+        continue;
+      }
+      const currentLink = linkByKey.get(selectionKey(order.connectionId, order.id));
+      if (
+        currentLink &&
+        currentLink.syncStatus !== FBS_REQUEST_LINK_REMOVED &&
+        !FBS_REQUEST_CLOSED_STATUSES.has(currentLink.request.status)
+      ) {
+        continue;
+      }
+      if (currentLink && currentLink.request.status !== ClientRequestStatus.CANCELLED) {
+        continue;
+      }
+      const owners = supplyOwners.get(
+        fbsSupplyPlanKey(order.marketplace, order.connectionId, order.supplyId),
+      );
+      if (!owners || owners.size !== 1) {
+        continue;
+      }
+      const requestId = [...owners][0]!;
+      if (requestWithMissingOrders.has(requestId)) {
+        continue;
+      }
+      const additions = additionsByRequest.get(requestId) ?? [];
+      additions.push(order);
+      additionsByRequest.set(requestId, additions);
+    }
+
+    const requestIds = uniqueStrings(openLinks.map((link) => link.requestId));
+    for (const requestId of requestIds) {
+      if (requestWithMissingOrders.has(requestId)) {
+        this.logger.warn(
+          `FBS request sync skipped for request ${requestId}: one or more linked orders were absent from the marketplace response.`,
+        );
+        continue;
+      }
+      try {
+        const result = await this.syncOneFbsRequest(
+          clientId,
+          requestId,
+          orderByKey,
+          additionsByRequest.get(requestId) ?? [],
+        );
+        if (result.changed) {
+          this.logger.log(
+            `FBS request ${requestId} synchronized: ${result.summary}`,
+          );
+        }
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : 'Unknown FBS request sync error';
+        this.logger.warn(`FBS request sync failed for request ${requestId}: ${message}`);
+      }
+    }
+  }
+
+  private async syncOneFbsRequest(
+    clientId: string,
+    requestId: string,
+    orderByKey: Map<string, FbsOrderSummary>,
+    additions: FbsOrderSummary[],
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const requestHeader = await tx.clientRequest.findUnique({
+        where: { id: requestId },
+        select: { id: true, status: true },
+      });
+      if (!requestHeader || FBS_REQUEST_CLOSED_STATUSES.has(requestHeader.status)) {
+        return { changed: false, summary: 'заявка уже закрыта' };
+      }
+
+      if (FBS_REQUEST_COMPOSITION_STATUSES.has(requestHeader.status)) {
+        for (const order of additions) {
+          const existing = await tx.fbsOrderRequestLink.findUnique({
+            where: {
+              marketplace_connectionId_orderId: {
+                marketplace: order.marketplace,
+                connectionId: order.connectionId,
+                orderId: order.id,
+              },
+            },
+            include: { request: { select: { status: true } } },
+          });
+          if (
+            existing &&
+            existing.requestId !== requestId &&
+            existing.request.status !== ClientRequestStatus.CANCELLED
+          ) {
+            continue;
+          }
+          const data = {
+            clientId,
+            requestId,
+            marketplace: order.marketplace,
+            connectionId: order.connectionId,
+            orderId: order.id,
+            createdByUserId: existing?.createdByUserId ?? null,
+            ...fbsOrderLinkSnapshot(order),
+            syncStatus: FBS_REQUEST_LINK_ACTIVE,
+            syncIssue: null,
+          };
+          if (existing) {
+            await tx.fbsOrderRequestLink.update({
+              where: { id: existing.id },
+              data,
+            });
+          } else {
+            await tx.fbsOrderRequestLink.create({ data });
+          }
+        }
+      }
+
+      const request = await tx.clientRequest.findUnique({
+        where: { id: requestId },
+        include: {
+          fbsOrderLinks: {
+            orderBy: { createdAt: 'asc' },
+          },
+          items: {
+            select: {
+              id: true,
+              skuId: true,
+              barcode: true,
+              name: true,
+              quantity: true,
+              comment: true,
+              packageItems: { select: { id: true } },
+              boxSelections: { select: { id: true, quantity: true } },
+            },
+          },
+        },
+      });
+      if (!request || FBS_REQUEST_CLOSED_STATUSES.has(request.status)) {
+        return { changed: false, summary: 'заявка уже закрыта' };
+      }
+
+      const liveLinks = request.fbsOrderLinks.filter((link) =>
+        orderByKey.has(selectionKey(link.connectionId, link.orderId)),
+      );
+      if (liveLinks.length !== request.fbsOrderLinks.length) {
+        return { changed: false, summary: 'не все связанные заказы присутствуют в ответе маркетплейса' };
+      }
+      const currentOrders = liveLinks.map((link) =>
+        orderByKey.get(selectionKey(link.connectionId, link.orderId))!,
+      );
+      if (
+        currentOrders.some(
+          (order) => order.category !== 'cancelled' && !order.product,
+        )
+      ) {
+        return { changed: false, summary: 'не для всех заказов найдена карточка товара WMS' };
+      }
+
+      const tasks = await tx.fbsTsdAssembly.findMany({
+        where: { requestId },
+      });
+      const taskByKey = new Map(
+        tasks.map((task) => [selectionKey(task.connectionId, task.orderId), task]),
+      );
+
+      const desiredItems = new Map<string, FbsRequestDesiredItem>();
+      const desiredSkuByOrder = new Map<string, string>();
+      const removedOrderIds: string[] = [];
+      const addedOrderIds = additions
+        .filter((order) =>
+          request.fbsOrderLinks.some(
+            (link) =>
+              link.connectionId === order.connectionId &&
+              link.orderId === order.id,
+          ),
+        )
+        .map((order) => order.id);
+      const statusChanges: string[] = [];
+      const conflicts: string[] = [];
+      let compositionLocked = request.status === ClientRequestStatus.PACKED;
+
+      for (const link of liveLinks) {
+        const order = orderByKey.get(selectionKey(link.connectionId, link.orderId))!;
+        const task = taskByKey.get(selectionKey(link.connectionId, link.orderId));
+        const hadSnapshot = Boolean(link.lastSeenAt);
+        if (hadSnapshot && fbsOrderLinkChanged(link, order)) {
+          statusChanges.push(fbsOrderLinkChangeText(link, order));
+        }
+
+        if (order.category === 'cancelled') {
+          const physicallyHandled = task ? fbsTsdTaskWasPhysicallyHandled(task) : false;
+          if (physicallyHandled || request.status === ClientRequestStatus.PACKED) {
+            const issue = `Заказ ${order.id} изменён на «${order.statusLabel}» после начала сборки. Товар нужно вернуть или подтвердить решение менеджера.`;
+            const conflictWasNew =
+              link.syncStatus !== FBS_REQUEST_LINK_RETURN_REQUIRED ||
+              link.syncIssue !== issue;
+            if (task && task.status !== FBS_TSD_RETURN_REQUIRED) {
+              await tx.fbsTsdAssembly.update({
+                where: { id: task.id },
+                data: {
+                  status: FBS_TSD_RETURN_REQUIRED,
+                  errorMessage: issue,
+                },
+              });
+            }
+            await tx.fbsOrderRequestLink.update({
+              where: { id: link.id },
+              data: {
+                ...fbsOrderLinkSnapshot(order),
+                syncStatus: FBS_REQUEST_LINK_RETURN_REQUIRED,
+                syncIssue: issue,
+              },
+            });
+            if (conflictWasNew) {
+              conflicts.push(issue);
+            }
+            if (task) {
+              addFbsDesiredItem(desiredItems, desiredSkuByOrder, {
+                orderId: order.id,
+                skuId: task.skuId,
+                barcode: jsonStringArray(task.barcodes)[0] ?? task.barcode,
+                name: task.productName,
+                quantity: Math.max(1, task.itemCount),
+              });
+            } else {
+              compositionLocked = true;
+            }
+          } else {
+            if (link.syncStatus !== FBS_REQUEST_LINK_REMOVED) {
+              removedOrderIds.push(order.id);
+            }
+            await tx.fbsOrderRequestLink.update({
+              where: { id: link.id },
+              data: {
+                ...fbsOrderLinkSnapshot(order),
+                syncStatus: FBS_REQUEST_LINK_REMOVED,
+                syncIssue: null,
+              },
+            });
+            if (task && task.status !== 'RELEASED') {
+              await tx.fbsTsdAssembly.update({
+                where: { id: task.id },
+                data: {
+                  status: 'RELEASED',
+                  boxId: null,
+                  boxCode: null,
+                  barcode: null,
+                  errorMessage: `Заказ ${order.id} удалён из заявки после отмены в маркетплейсе.`,
+                },
+              });
+            }
+          }
+          continue;
+        }
+
+        const product = order.product!;
+        const taskChangedAfterHandling =
+          task &&
+          fbsTsdTaskWasPhysicallyHandled(task) &&
+          (task.skuId !== product.id || task.itemCount !== Math.max(1, order.itemCount));
+        if (taskChangedAfterHandling) {
+          const issue =
+            `Заказ ${order.id} изменил товар или количество после начала сборки. ` +
+            'Товар нужно вернуть или подтвердить решение менеджера.';
+          const conflictWasNew =
+            link.syncStatus !== FBS_REQUEST_LINK_RETURN_REQUIRED ||
+            link.syncIssue !== issue;
+          if (task.status !== FBS_TSD_RETURN_REQUIRED) {
+            await tx.fbsTsdAssembly.update({
+              where: { id: task.id },
+              data: {
+                status: FBS_TSD_RETURN_REQUIRED,
+                errorMessage: issue,
+              },
+            });
+          }
+          await tx.fbsOrderRequestLink.update({
+            where: { id: link.id },
+            data: {
+              ...fbsOrderLinkSnapshot(order),
+              syncStatus: FBS_REQUEST_LINK_RETURN_REQUIRED,
+              syncIssue: issue,
+            },
+          });
+          if (conflictWasNew) {
+            conflicts.push(issue);
+          }
+          addFbsDesiredItem(desiredItems, desiredSkuByOrder, {
+            orderId: order.id,
+            skuId: task.skuId,
+            barcode: jsonStringArray(task.barcodes)[0] ?? task.barcode,
+            name: task.productName,
+            quantity: Math.max(1, task.itemCount),
+          });
+          continue;
+        }
+
+        await tx.fbsOrderRequestLink.update({
+          where: { id: link.id },
+          data: {
+            ...fbsOrderLinkSnapshot(order),
+            syncStatus: FBS_REQUEST_LINK_ACTIVE,
+            syncIssue: null,
+          },
+        });
+        addFbsDesiredItem(desiredItems, desiredSkuByOrder, {
+          orderId: order.id,
+          skuId: product.id,
+          barcode: order.barcodes[0] ?? null,
+          name: product.name,
+          quantity: Math.max(1, order.itemCount),
+        });
+      }
+
+      const itemChanges: string[] = [];
+      if (!compositionLocked) {
+        const itemBySku = new Map(
+          request.items
+            .filter((item): item is (typeof request.items)[number] & { skuId: string } => Boolean(item.skuId))
+            .map((item) => [item.skuId, item]),
+        );
+        const requestItemIdBySku = new Map<string, string>();
+        for (const desired of desiredItems.values()) {
+          desired.orderIds.sort(naturalFbsIdCompare);
+          const comment = fbsRequestItemComment(desired.orderIds);
+          const existing = itemBySku.get(desired.skuId);
+          if (existing) {
+            requestItemIdBySku.set(desired.skuId, existing.id);
+            if (
+              existing.quantity !== desired.quantity ||
+              existing.name !== desired.name ||
+              existing.barcode !== desired.barcode ||
+              existing.comment !== comment
+            ) {
+              await tx.clientRequestItem.update({
+                where: { id: existing.id },
+                data: {
+                  quantity: desired.quantity,
+                  name: desired.name,
+                  barcode: desired.barcode,
+                  comment,
+                },
+              });
+              itemChanges.push(
+                `${desired.name}: ${existing.quantity} → ${desired.quantity} шт.`,
+              );
+            }
+          } else {
+            const created = await tx.clientRequestItem.create({
+              data: {
+                requestId,
+                skuId: desired.skuId,
+                barcode: desired.barcode,
+                name: desired.name,
+                quantity: desired.quantity,
+                comment,
+              },
+              select: { id: true },
+            });
+            requestItemIdBySku.set(desired.skuId, created.id);
+            itemChanges.push(`${desired.name}: добавлено ${desired.quantity} шт.`);
+          }
+        }
+
+        for (const item of request.items) {
+          if (!item.skuId || desiredItems.has(item.skuId)) {
+            continue;
+          }
+          if (item.packageItems.length > 0 || item.boxSelections.length > 0) {
+            compositionLocked = true;
+            conflicts.push(
+              `Позиция ${item.name ?? item.barcode ?? item.id} сохранена: по ней уже есть упаковка или отбор.`,
+            );
+            continue;
+          }
+          await tx.clientRequestItem.delete({ where: { id: item.id } });
+          itemChanges.push(`${item.name ?? item.barcode ?? item.id}: удалено из состава.`);
+        }
+
+        for (const task of tasks) {
+          const liveOrder = orderByKey.get(selectionKey(task.connectionId, task.orderId));
+          const desiredSkuId = desiredSkuByOrder.get(task.orderId);
+          const requestItemId = desiredSkuId ? requestItemIdBySku.get(desiredSkuId) : null;
+          if (
+            !liveOrder ||
+            !liveOrder.product ||
+            !requestItemId ||
+            task.status === FBS_TSD_RETURN_REQUIRED ||
+            fbsTsdTaskWasPhysicallyHandled(task)
+          ) {
+            continue;
+          }
+          await tx.fbsTsdAssembly.update({
+            where: { id: task.id },
+            data: {
+              requestItemId,
+              skuId: liveOrder.product.id,
+              productName: liveOrder.product.name,
+              article:
+                liveOrder.product.article ??
+                liveOrder.product.clientSku ??
+                liveOrder.product.internalSku,
+              barcodes: liveOrder.barcodes as Prisma.InputJsonValue,
+              storageBoxes: liveOrder.storageBoxes as Prisma.InputJsonValue,
+              itemCount: Math.max(1, liveOrder.itemCount),
+              supplyId: liveOrder.supplyId,
+            },
+          });
+        }
+      }
+
+      const effectiveOrderIds = uniqueStrings(
+        [...desiredItems.values()].flatMap((item) => item.orderIds),
+      ).sort(naturalFbsIdCompare);
+      const nextTitle = `FBS — ${effectiveOrderIds.length} заказ(а/ов)`;
+      const nextComment = `Создано из FBS-заказов: ${effectiveOrderIds.join(', ')}`;
+      const requestData: Prisma.ClientRequestUpdateInput = {};
+      if (!compositionLocked && request.title !== nextTitle) {
+        requestData.title = nextTitle;
+      }
+      if (!compositionLocked && request.comment !== nextComment) {
+        requestData.comment = nextComment;
+      }
+      if (
+        !compositionLocked &&
+        effectiveOrderIds.length === 0 &&
+        request.status !== ClientRequestStatus.PACKED
+      ) {
+        requestData.status = ClientRequestStatus.CANCELLED;
+      }
+      if (Object.keys(requestData).length > 0) {
+        await tx.clientRequest.update({
+          where: { id: requestId },
+          data: requestData,
+        });
+      }
+
+      const changes = [
+        addedOrderIds.length > 0 ? `Добавлены заказы: ${addedOrderIds.map((id) => `№${id}`).join(', ')}.` : '',
+        removedOrderIds.length > 0 ? `Удалены отменённые заказы: ${removedOrderIds.map((id) => `№${id}`).join(', ')}.` : '',
+        statusChanges.length > 0 ? `Изменения статусов: ${statusChanges.join('; ')}.` : '',
+        itemChanges.length > 0 ? `Состав: ${itemChanges.join('; ')}` : '',
+      ].filter(Boolean);
+      if (changes.length > 0) {
+        await tx.clientRequestEvent.create({
+          data: {
+            requestId,
+            clientId,
+            eventType: ClientRequestEventType.COMMENT,
+            title: 'Заявка синхронизирована с группой FBS',
+            body: changes.join(' '),
+          },
+        });
+      }
+      if (conflicts.length > 0) {
+        const body = conflicts.join(' ');
+        await tx.clientRequestEvent.create({
+          data: {
+            requestId,
+            clientId,
+            eventType: ClientRequestEventType.COMMENT,
+            title: 'Изменение FBS требует решения менеджера',
+            body,
+          },
+        });
+        await tx.clientNotification.create({
+          data: {
+            clientId,
+            requestId,
+            title: 'В заявке FBS требуется решение',
+            body,
+            severity: 'WARNING',
+          },
+        });
+      }
+      if (
+        requestData.status === ClientRequestStatus.CANCELLED &&
+        request.status !== ClientRequestStatus.CANCELLED
+      ) {
+        await tx.clientRequestEvent.create({
+          data: {
+            requestId,
+            clientId,
+            eventType: ClientRequestEventType.STATUS_CHANGED,
+            title: 'Заявка отменена после синхронизации FBS',
+            body: 'Все заказы группы отменены до начала физической сборки.',
+            statusFrom: request.status,
+            statusTo: ClientRequestStatus.CANCELLED,
+          },
+        });
+      }
+
+      const changed =
+        changes.length > 0 ||
+        conflicts.length > 0 ||
+        Object.keys(requestData).length > 0;
+      return {
+        changed,
+        summary: [...changes, ...conflicts].join(' ') || 'изменений нет',
+      };
+    });
+  }
+
   private async loadFbsDeliveryPlan(clientId: string): Promise<FbsOrdersResponse['deliveryPlan']> {
     const settings = await this.prisma.clientFbsBillingSettings.findUnique({
       where: { clientId },
@@ -3668,6 +4260,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         ? supplyPlanByKey.get(fbsSupplyPlanKey(order.marketplace, order.connectionId, order.supplyId)) ?? null
         : null,
     }));
+    await this.syncFbsRequestsFromMarketplace(clientId, ordersWithShipmentPlans);
     const requestLinks = ordersWithShipmentPlans.length > 0
       ? await this.prisma.fbsOrderRequestLink.findMany({
           where: {
@@ -4866,6 +5459,143 @@ async function fetchWildberriesFbsHistory(headers: Record<string, string>) {
   }
 
   return orders;
+}
+
+function fbsOrderLinkSnapshot(order: FbsOrderSummary) {
+  return {
+    lastCategory: order.category,
+    lastSupplierStatus: order.supplierStatus,
+    lastWbStatus: order.wbStatus,
+    lastSupplyId: order.supplyId,
+    lastSkuId: order.product?.id ?? null,
+    lastItemCount: Math.max(1, order.itemCount),
+    lastSeenAt: new Date(),
+  };
+}
+
+function fbsOrderLinkChanged(
+  link: {
+    lastCategory: string | null;
+    lastSupplierStatus: string | null;
+    lastWbStatus: string | null;
+    lastSupplyId: string | null;
+    lastSkuId: string | null;
+    lastItemCount: number | null;
+  },
+  order: FbsOrderSummary,
+) {
+  return (
+    link.lastCategory !== order.category ||
+    link.lastSupplierStatus !== order.supplierStatus ||
+    link.lastWbStatus !== order.wbStatus ||
+    link.lastSupplyId !== order.supplyId ||
+    link.lastSkuId !== (order.product?.id ?? null) ||
+    link.lastItemCount !== Math.max(1, order.itemCount)
+  );
+}
+
+function fbsOrderLinkChangeText(
+  link: {
+    orderId: string;
+    lastCategory: string | null;
+    lastSupplierStatus: string | null;
+    lastWbStatus: string | null;
+    lastSupplyId: string | null;
+    lastSkuId: string | null;
+    lastItemCount: number | null;
+  },
+  order: FbsOrderSummary,
+) {
+  const details: string[] = [];
+  if (
+    link.lastCategory !== order.category ||
+    link.lastSupplierStatus !== order.supplierStatus ||
+    link.lastWbStatus !== order.wbStatus
+  ) {
+    const previous = [link.lastSupplierStatus, link.lastWbStatus].filter(Boolean).join('/');
+    details.push(`статус ${previous || 'не указан'} → ${order.statusLabel}`);
+  }
+  if (link.lastSupplyId !== order.supplyId) {
+    details.push(`поставка ${link.lastSupplyId || 'без поставки'} → ${order.supplyId || 'без поставки'}`);
+  }
+  if (link.lastSkuId !== (order.product?.id ?? null)) {
+    details.push('изменён товар');
+  }
+  if (link.lastItemCount !== Math.max(1, order.itemCount)) {
+    details.push(`количество ${link.lastItemCount ?? '—'} → ${Math.max(1, order.itemCount)}`);
+  }
+  return `№${order.id}: ${details.join(', ')}`;
+}
+
+function addFbsDesiredItem(
+  groups: Map<string, FbsRequestDesiredItem>,
+  skuByOrder: Map<string, string>,
+  item: {
+    orderId: string;
+    skuId: string;
+    barcode: string | null;
+    name: string;
+    quantity: number;
+  },
+) {
+  const current = groups.get(item.skuId);
+  if (current) {
+    current.quantity += Math.max(1, item.quantity);
+    current.orderIds.push(item.orderId);
+  } else {
+    groups.set(item.skuId, {
+      skuId: item.skuId,
+      barcode: item.barcode,
+      name: item.name,
+      quantity: Math.max(1, item.quantity),
+      orderIds: [item.orderId],
+    });
+  }
+  skuByOrder.set(item.orderId, item.skuId);
+}
+
+function fbsRequestItemComment(orderIds: string[]) {
+  return `FBS-заказы: ${orderIds.join(', ')}`;
+}
+
+function naturalFbsIdCompare(left: string, right: string) {
+  return left.localeCompare(right, 'ru-RU', { numeric: true, sensitivity: 'base' });
+}
+
+function fbsTsdTaskWasPhysicallyHandled(task: {
+  status: string;
+  boxId: string | null;
+  barcode: string | null;
+  kiz: string | null;
+  stickerPartA: string | null;
+  stickerPartB: string | null;
+  stickerBarcode: string | null;
+  cargoPackingId: string | null;
+  completedAt: Date | null;
+}) {
+  return (
+    task.status === 'COMPLETED' ||
+    task.status === FBS_TSD_RETURN_REQUIRED ||
+    Boolean(
+      task.boxId ||
+      task.barcode ||
+      task.kiz ||
+      task.stickerPartA ||
+      task.stickerPartB ||
+      task.stickerBarcode ||
+      task.cargoPackingId ||
+      task.completedAt,
+    )
+  );
+}
+
+function requireFbsTaskWithoutSyncConflict(task: { status: string; errorMessage: string | null }) {
+  if (task.status === FBS_TSD_RETURN_REQUIRED) {
+    throw new BadRequestException(
+      task.errorMessage ??
+        'Заказ изменился в маркетплейсе после начала сборки. Передайте товар менеджеру.',
+    );
+  }
 }
 
 function fbsOrderCategory(supplierStatus: string, wbStatus: string): 'active' | 'shipped' | 'cancelled' | 'archive' {

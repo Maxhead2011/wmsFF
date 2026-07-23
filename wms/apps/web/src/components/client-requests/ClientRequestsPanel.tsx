@@ -1720,6 +1720,7 @@ function OnlineExecutionModal({
   const actualMovements = plan?.movementProgress?.actualRows ?? [];
   const fbsAssembly = plan?.fbsAssembly ?? null;
   const notCollected = fbsAssembly?.notCollected ?? null;
+  const returnRequired = fbsAssembly?.returnRequired ?? null;
   const normalizedFbsAssemblySearch = fbsAssemblySearch.trim().toLocaleLowerCase('ru-RU');
   const filteredFbsAssemblyRows = (fbsAssembly?.rows ?? []).filter((row) =>
     !normalizedFbsAssemblySearch ||
@@ -1836,10 +1837,64 @@ function OnlineExecutionModal({
                   <strong>{notCollected.remainingUnits} шт.</strong>
                 </article>
               ) : null}
+              {returnRequired && returnRequired.orders > 0 ? (
+                <article className="is-danger">
+                  <span>Требует решения</span>
+                  <strong>{returnRequired.orders}</strong>
+                </article>
+              ) : null}
             </div>
 
             {fbsAssembly ? (
               <>
+                {returnRequired && returnRequired.rows.length > 0 ? (
+                  <section className="online-execution-section online-execution-section--sync-conflict">
+                    <div className="online-execution-section__heading">
+                      <div>
+                        <h4>
+                          <AlertTriangle size={17} aria-hidden="true" />
+                          Изменения FBS после начала сборки
+                        </h4>
+                        <span>
+                          Эти товары нельзя молча убрать из заявки: верните их на склад или подтвердите решение менеджера.
+                        </span>
+                      </div>
+                      <strong>{returnRequired.units} шт.</strong>
+                    </div>
+                    <div className="online-execution-table-wrap online-execution-table-wrap--sync-conflict">
+                      <table className="online-execution-table online-execution-table--sync-conflict">
+                        <thead>
+                          <tr>
+                            <th>Заказ</th>
+                            <th>Товар</th>
+                            <th>Короб</th>
+                            <th>КИЗ</th>
+                            <th>Что изменилось</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {returnRequired.rows.map((row) => (
+                            <tr key={row.id}>
+                              <td><strong>№{row.orderId}</strong></td>
+                              <td>
+                                <strong>{row.productName}</strong>
+                                <span>
+                                  {[row.article ? `арт. ${row.article}` : '', row.size ? `размер ${row.size}` : '', row.productBarcode ? `ШК ${row.productBarcode}` : '']
+                                    .filter(Boolean)
+                                    .join(' · ')}
+                                </span>
+                              </td>
+                              <td><strong>{row.sourceBoxCode ?? 'не выбран'}</strong></td>
+                              <td>{row.kiz ?? 'не пропикан'}</td>
+                              <td><strong>{row.syncIssue ?? 'Требуется решение менеджера.'}</strong></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                ) : null}
+
                 <section className="online-execution-section online-execution-section--not-collected">
                   <div className="online-execution-section__heading">
                     <h4>Что ещё не собрано</h4>
@@ -1945,7 +2000,15 @@ function OnlineExecutionModal({
                                 <span>{row.wbStickerBarcode ? `полный ШК: ${row.wbStickerBarcode}` : 'появится после получения наклейки WB'}</span>
                               </td>
                               <td>
-                                <span className={`online-execution-pill ${row.status === 'COMPLETED' ? 'is-done' : 'is-open'}`}>
+                                <span
+                                  className={`online-execution-pill ${
+                                    row.status === 'COMPLETED'
+                                      ? 'is-done'
+                                      : row.status === 'RETURN_REQUIRED'
+                                        ? 'is-danger'
+                                        : 'is-open'
+                                  }`}
+                                >
                                   {row.statusLabel}
                                 </span>
                               </td>

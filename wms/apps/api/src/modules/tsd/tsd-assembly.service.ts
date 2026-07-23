@@ -761,7 +761,10 @@ export class TsdAssemblyService {
   private async loadFbsAssemblyFacts(requestId: string, requestRows: PickInstructionDocument['rows']) {
     const [links, rows] = await Promise.all([
       this.prisma.fbsOrderRequestLink.findMany({
-        where: { requestId },
+        where: {
+          requestId,
+          syncStatus: { in: ['ACTIVE', 'RETURN_REQUIRED'] },
+        },
         select: { orderId: true },
         orderBy: { createdAt: 'asc' },
       }),
@@ -776,9 +779,11 @@ export class TsdAssemblyService {
           article: true,
           boxCode: true,
           barcode: true,
+          kiz: true,
           stickerPartB: true,
           stickerBarcode: true,
           status: true,
+          errorMessage: true,
           itemCount: true,
           workerName: true,
           completedAt: true,
@@ -815,36 +820,40 @@ export class TsdAssemblyService {
       productName: row.productName,
       article: row.article,
       productBarcode: row.barcode,
+      kiz: row.kiz,
       size: skuById.get(row.skuId)?.size ?? null,
       wbStickerPartB: row.stickerPartB,
       wbStickerBarcode: row.stickerBarcode,
       status: row.status,
       statusLabel: fbsAssemblyStatusLabel(row.status),
+      syncIssue: row.errorMessage,
       workerName: row.workerName,
       completedAt: row.completedAt?.toISOString() ?? null,
       updatedAt: row.updatedAt.toISOString(),
     }));
     const completedRows = rows.filter((row) => row.status === 'COMPLETED');
-    const completedOrderIds = new Set(completedRows.map((row) => row.orderId));
+    const returnRequiredRows = rows.filter((row) => row.status === 'RETURN_REQUIRED');
+    const handledRows = [...completedRows, ...returnRequiredRows];
+    const handledOrderIds = new Set(handledRows.map((row) => row.orderId));
     const linkedOrderIds = new Set(links.map((link) => link.orderId));
     const pendingOrderIds = links
       .map((link) => link.orderId)
-      .filter((orderId) => !completedOrderIds.has(orderId));
-    const completedByRequestItem = new Map<string, number>();
-    completedRows.forEach((row) => {
-      completedByRequestItem.set(
+      .filter((orderId) => !handledOrderIds.has(orderId));
+    const handledByRequestItem = new Map<string, number>();
+    handledRows.forEach((row) => {
+      handledByRequestItem.set(
         row.requestItemId,
-        (completedByRequestItem.get(row.requestItemId) ?? 0) + Math.max(1, row.itemCount),
+        (handledByRequestItem.get(row.requestItemId) ?? 0) + Math.max(1, row.itemCount),
       );
     });
     const notCollectedRows = requestRows
       .map((row) => {
         const requiredQuantity = Math.max(0, row.requestedQuantity);
-        const collectedQuantity = Math.min(requiredQuantity, completedByRequestItem.get(row.itemId) ?? 0);
+        const collectedQuantity = Math.min(requiredQuantity, handledByRequestItem.get(row.itemId) ?? 0);
         const remainingQuantity = Math.max(0, requiredQuantity - collectedQuantity);
         const sku = row.skuId ? skuById.get(row.skuId) : null;
         const orderIds = (row.comment?.match(/\d{6,}/g) ?? [])
-          .filter((orderId) => linkedOrderIds.has(orderId) && !completedOrderIds.has(orderId));
+          .filter((orderId) => linkedOrderIds.has(orderId) && !handledOrderIds.has(orderId));
         return {
           requestItemId: row.itemId,
           skuId: row.skuId,
@@ -868,6 +877,11 @@ export class TsdAssemblyService {
       totalOrders: links.length,
       startedOrders: facts.length,
       completedOrders: facts.filter((row) => row.status === 'COMPLETED').length,
+      returnRequired: {
+        orders: returnRequiredRows.length,
+        units: returnRequiredRows.reduce((sum, row) => sum + Math.max(1, row.itemCount), 0),
+        rows: facts.filter((row) => row.status === 'RETURN_REQUIRED'),
+      },
       rows: facts,
       notCollected: {
         remainingOrders: pendingOrderIds.length,
@@ -2317,6 +2331,7 @@ function fbsAssemblyStatusLabel(status: string) {
     IN_PROGRESS: 'В работе',
     COMPLETED: 'Собрано',
     RELEASED: 'Отложено',
+    RETURN_REQUIRED: 'Требуется решение',
   } as Record<string, string>)[status] ?? status;
 }
 

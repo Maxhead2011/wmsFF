@@ -1789,6 +1789,28 @@ export type TsdAssemblyPlan = {
     totalOrders: number;
     startedOrders: number;
     completedOrders: number;
+    returnRequired: {
+      orders: number;
+      units: number;
+      rows: Array<{
+        id: string;
+        orderId: string;
+        sourceBoxCode: string | null;
+        productName: string;
+        article: string | null;
+        productBarcode: string | null;
+        kiz: string | null;
+        size: string | null;
+        wbStickerPartB: string | null;
+        wbStickerBarcode: string | null;
+        status: string;
+        statusLabel: string;
+        syncIssue: string | null;
+        workerName: string | null;
+        completedAt: string | null;
+        updatedAt: string;
+      }>;
+    };
     notCollected: {
       remainingOrders: number;
       remainingPositions: number;
@@ -1816,11 +1838,13 @@ export type TsdAssemblyPlan = {
       productName: string;
       article: string | null;
       productBarcode: string | null;
+      kiz: string | null;
       size: string | null;
       wbStickerPartB: string | null;
       wbStickerBarcode: string | null;
       status: string;
       statusLabel: string;
+      syncIssue: string | null;
       workerName: string | null;
       completedAt: string | null;
       updatedAt: string;

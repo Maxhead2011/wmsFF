@@ -957,20 +957,30 @@ model ClientRequest {
 }
 
 model FbsOrderRequestLink {
-  id              String          @id @default(uuid())
-  clientId        String
-  marketplace     MarketplaceType
-  connectionId    String
-  orderId         String
-  requestId       String
-  createdByUserId String?
-  request         ClientRequest   @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  id                 String          @id @default(uuid())
+  clientId           String
+  marketplace        MarketplaceType
+  connectionId       String
+  orderId            String
+  requestId          String
+  createdByUserId    String?
+  syncStatus         String          @default("ACTIVE")
+  syncIssue          String?
+  lastCategory       String?
+  lastSupplierStatus String?
+  lastWbStatus       String?
+  lastSupplyId       String?
+  lastSkuId          String?
+  lastItemCount      Int?
+  lastSeenAt         DateTime?
+  request            ClientRequest   @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
 
   @@unique([marketplace, connectionId, orderId])
   @@index([clientId, requestId])
   @@index([connectionId, orderId])
+  @@index([requestId, syncStatus])
 }
 
 model ClientRequestItem {

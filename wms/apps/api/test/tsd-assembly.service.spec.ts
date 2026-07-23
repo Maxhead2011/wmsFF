@@ -115,4 +115,80 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
       },
     });
   });
+
+  it('показывает изменённый после сборки заказ как требующий решения и не считает его несобранным', async () => {
+    const prisma = {
+      fbsOrderRequestLink: {
+        findMany: vi.fn().mockResolvedValue([{ orderId: '5355303495' }]),
+      },
+      fbsTsdAssembly: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'task-1',
+            orderId: '5355303495',
+            requestItemId: 'item-1',
+            skuId: 'sku-1',
+            productName: 'Костюм',
+            article: 'ART-1',
+            boxCode: 'FFL_LKB0106_039',
+            barcode: '2047945700181',
+            kiz: '010204794570018121SERIAL',
+            stickerPartB: '9753',
+            stickerBarcode: 'WB-FULL-BARCODE',
+            status: 'RETURN_REQUIRED',
+            errorMessage: 'Заказ отменён после начала сборки.',
+            itemCount: 1,
+            workerName: 'Сборщик',
+            completedAt: new Date('2026-07-23T08:00:00.000Z'),
+            updatedAt: new Date('2026-07-23T08:10:00.000Z'),
+          },
+        ]),
+      },
+      sku: {
+        findMany: vi.fn().mockResolvedValue([{
+          id: 'sku-1',
+          internalSku: 'SKU-1',
+          clientSku: 'ART-1',
+          article: 'ART-1',
+          color: 'Чёрный',
+          size: '52',
+        }]),
+      },
+    };
+    const service = new TsdAssemblyService(prisma as never, {} as never, {} as never, {} as never);
+
+    const result = await (service as any).loadFbsAssemblyFacts('request-1', [
+      {
+        itemId: 'item-1',
+        skuId: 'sku-1',
+        internalSku: 'SKU-1',
+        name: 'Костюм',
+        barcode: '2047945700181',
+        requestedQuantity: 1,
+        comment: 'FBS-заказы: 5355303495',
+        allocations: [{ boxCode: 'FFL_LKB0106_039', quantity: 1 }],
+      },
+    ]);
+
+    expect(result).toMatchObject({
+      completedOrders: 0,
+      returnRequired: {
+        orders: 1,
+        units: 1,
+        rows: [
+          expect.objectContaining({
+            orderId: '5355303495',
+            kiz: '010204794570018121SERIAL',
+            statusLabel: 'Требуется решение',
+            syncIssue: 'Заказ отменён после начала сборки.',
+          }),
+        ],
+      },
+      notCollected: {
+        remainingOrders: 0,
+        remainingPositions: 0,
+        remainingUnits: 0,
+      },
+    });
+  });
 });
