@@ -182,6 +182,7 @@ type FbsRequestDesiredItem = {
 };
 const FBS_TSD_STALE_UNSTARTED_TASK_MS = 2 * 60 * 60 * 1_000;
 const FBS_REQUEST_LINK_ACTIVE = 'ACTIVE';
+const FBS_REQUEST_LINK_MOVING = 'MOVING';
 const FBS_REQUEST_LINK_REMOVED = 'REMOVED';
 const FBS_REQUEST_LINK_RETURN_REQUIRED = 'RETURN_REQUIRED';
 const FBS_TSD_RETURN_REQUIRED = 'RETURN_REQUIRED';
@@ -2012,6 +2013,612 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return this.moveFbsOrdersToSupply(dto, user, 'reship');
   }
 
+  async moveFbsOrdersToNewSupply(dto: FbsOrderSelectionDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const { response, orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders);
+    const unavailable = orders.filter(
+      (order) =>
+        order.marketplace !== MarketplaceType.WILDBERRIES ||
+        order.category !== 'active' ||
+        order.supplierStatus !== 'confirm' ||
+        !order.supplyId ||
+        !order.product,
+    );
+    if (unavailable.length > 0) {
+      throw new BadRequestException(
+        `Перенести можно только активные заказы WB со статусом «На сборке» и найденным товаром WMS. Проверьте: ${unavailable
+          .map((order) => order.id)
+          .join(', ')}.`,
+      );
+    }
+
+    const sourceKeys = new Set(
+      orders.map((order) => `${order.connectionId}:${order.supplyId}`),
+    );
+    if (sourceKeys.size !== 1) {
+      throw new BadRequestException(
+        'Выберите заказы только из одной поставки Wildberries.',
+      );
+    }
+    const connectionId = orders[0]!.connectionId;
+    const sourceSupplyId = orders[0]!.supplyId!;
+    const selectedKeys = new Set(
+      orders.map((order) => selectionKey(order.connectionId, order.id)),
+    );
+    const links = await this.prisma.fbsOrderRequestLink.findMany({
+      where: {
+        clientId,
+        marketplace: MarketplaceType.WILDBERRIES,
+        connectionId,
+        orderId: { in: uniqueStrings(orders.map((order) => order.id)) },
+      },
+      include: {
+        request: {
+          select: { id: true, number: true, status: true },
+        },
+      },
+    });
+    const activeLinks = links.filter(
+      (link) =>
+        selectedKeys.has(selectionKey(link.connectionId, link.orderId)) &&
+        link.syncStatus !== FBS_REQUEST_LINK_REMOVED,
+    );
+    if (activeLinks.length !== orders.length) {
+      throw new BadRequestException(
+        'Все выбранные заказы должны находиться в действующей заявке WMS.',
+      );
+    }
+    const requestIds = new Set(activeLinks.map((link) => link.requestId));
+    if (requestIds.size !== 1) {
+      throw new BadRequestException(
+        'Выберите заказы только из одной заявки WMS.',
+      );
+    }
+    const sourceRequest = activeLinks[0]!.request;
+    if (!FBS_REQUEST_COMPOSITION_STATUSES.has(sourceRequest.status)) {
+      throw new BadRequestException(
+        `Заявка №${String(sourceRequest.number).padStart(6, '0')} уже упакована, закрыта или отменена. Перенос из неё недоступен.`,
+      );
+    }
+    const syncConflicts = activeLinks.filter(
+      (link) => link.syncStatus !== FBS_REQUEST_LINK_ACTIVE,
+    );
+    if (syncConflicts.length > 0) {
+      throw new BadRequestException(
+        `По заказам ${syncConflicts.map((link) => link.orderId).join(', ')} есть незавершённые изменения синхронизации. Сначала обновите FBS или примите решение менеджера.`,
+      );
+    }
+
+    const tasks = await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        clientId,
+        marketplace: MarketplaceType.WILDBERRIES,
+        connectionId,
+        orderId: { in: orders.map((order) => order.id) },
+      },
+    });
+    const handledTasks = tasks.filter(fbsTsdTaskWasPhysicallyHandled);
+    if (handledTasks.length > 0) {
+      throw new BadRequestException(
+        `Нельзя перенести заказы, по которым уже сканировали товар, короб, КИЗ или наклейку: ${handledTasks
+          .map((task) => task.orderId)
+          .join(', ')}. Сначала оформите возврат товара менеджером.`,
+      );
+    }
+
+    const sourcePlan = await this.prisma.fbsSupplyPlan.findUnique({
+      where: {
+        marketplace_connectionId_supplyId: {
+          marketplace: MarketplaceType.WILDBERRIES,
+          connectionId,
+          supplyId: sourceSupplyId,
+        },
+      },
+    });
+    if (!sourcePlan || sourcePlan.clientId !== clientId) {
+      throw new BadRequestException(
+        `План поставки ${sourceSupplyId} не найден в WMS.`,
+      );
+    }
+    const sourceSupplyOrders = response.orders.filter(
+      (order) =>
+        order.marketplace === MarketplaceType.WILDBERRIES &&
+        order.connectionId === connectionId &&
+        order.supplyId === sourceSupplyId &&
+        order.category === 'active' &&
+        order.supplierStatus === 'confirm',
+    );
+    const remainingSourceOrders = sourceSupplyOrders.filter(
+      (order) => !selectedKeys.has(selectionKey(order.connectionId, order.id)),
+    );
+    const sourcePackingStarted =
+      sourcePlan.deliveryDestination === FbsDeliveryDestination.PICKUP_POINT
+        ? await this.prisma.fbsCargoPlacePacking.count({
+            where: {
+              clientId,
+              marketplace: MarketplaceType.WILDBERRIES,
+              connectionId,
+              supplyId: sourceSupplyId,
+              status: { not: 'CANCELLED' },
+            },
+          })
+        : 0;
+    if (sourcePackingStarted > 0) {
+      throw new BadRequestException(
+        `По поставке ${sourceSupplyId} уже начата упаковка грузомест ПВЗ. Сначала расформируйте упаковку.`,
+      );
+    }
+
+    const connections = await this.loadSelectedConnections(clientId, orders);
+    const connection = connections.find((item) => item.id === connectionId);
+    if (!connection) {
+      throw new BadRequestException('Подключение Wildberries не найдено или отключено.');
+    }
+    const headers = wbHeaders(connection.apiKey);
+    const requiresCargoPlaces =
+      sourcePlan.deliveryDestination === FbsDeliveryDestination.PICKUP_POINT;
+    let originalSourceCargoPlaceIds: string[] = [];
+    if (requiresCargoPlaces) {
+      const cargoResponse = await marketplaceJson(
+        `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(sourceSupplyId)}/trbx`,
+        { method: 'GET', headers },
+      );
+      originalSourceCargoPlaceIds = uniqueStrings(
+        asArray<Record<string, unknown>>(cargoResponse.trbxes).map((cargoPlace) =>
+          textValue(cargoPlace.id),
+        ),
+      );
+    }
+
+    const createdSupply = await marketplaceJson(
+      'https://marketplace-api.wildberries.ru/api/v3/supplies',
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          name: `${fbsSupplyName(response.client.code, 1, 1)} перенос`.slice(0, 128),
+        }),
+      },
+    );
+    const targetSupplyId = textValue(createdSupply.id);
+    if (!targetSupplyId) {
+      throw new BadRequestException(
+        'Wildberries создал новую поставку без номера. Повторите операцию позже.',
+      );
+    }
+
+    let targetCargoPlaceIds: string[] = [];
+    let sourceCargoPlaceIds = [...originalSourceCargoPlaceIds];
+    let sourceCargoChanged = false;
+    const movedRemoteOrders: FbsOrderSummary[] = [];
+    let databaseCommitted = false;
+    const restoreMarketplaceState = async () => {
+      try {
+        if (movedRemoteOrders.length > 0) {
+          for (const orderChunk of chunks(movedRemoteOrders, 100)) {
+            await marketplaceJson(
+              `https://marketplace-api.wildberries.ru/api/marketplace/v3/supplies/${encodeURIComponent(sourceSupplyId)}/orders`,
+              {
+                method: 'PATCH',
+                headers,
+                body: JSON.stringify({
+                  orders: orderChunk.map((order) => numericWbOrderId(order.id)),
+                }),
+              },
+            );
+          }
+        }
+        if (targetCargoPlaceIds.length > 0) {
+          await marketplaceJson(
+            `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(targetSupplyId)}/trbx`,
+            {
+              method: 'DELETE',
+              headers,
+              body: JSON.stringify({ trbxIds: targetCargoPlaceIds }),
+            },
+          );
+        }
+        if (sourceCargoChanged) {
+          const currentCargoResponse = await marketplaceJson(
+            `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(sourceSupplyId)}/trbx`,
+            { method: 'GET', headers },
+          );
+          const currentCargoIds = uniqueStrings(
+            asArray<Record<string, unknown>>(currentCargoResponse.trbxes).map((cargoPlace) =>
+              textValue(cargoPlace.id),
+            ),
+          );
+          if (currentCargoIds.length > originalSourceCargoPlaceIds.length) {
+            await marketplaceJson(
+              `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(sourceSupplyId)}/trbx`,
+              {
+                method: 'DELETE',
+                headers,
+                body: JSON.stringify({
+                  trbxIds: currentCargoIds.slice(originalSourceCargoPlaceIds.length),
+                }),
+              },
+            );
+          } else if (currentCargoIds.length < originalSourceCargoPlaceIds.length) {
+            await marketplaceJson(
+              `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(sourceSupplyId)}/trbx`,
+              {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                  amount: originalSourceCargoPlaceIds.length - currentCargoIds.length,
+                }),
+              },
+            );
+          }
+        }
+      } catch {
+        // The original error remains primary; a manager can reconcile the WB supply manually.
+      }
+      await deleteEmptyWbSupply(targetSupplyId, headers);
+    };
+
+    try {
+      for (const orderChunk of chunks(orders, 100)) {
+        await marketplaceJson(
+          `https://marketplace-api.wildberries.ru/api/marketplace/v3/supplies/${encodeURIComponent(targetSupplyId)}/orders`,
+          {
+            method: 'PATCH',
+            headers,
+            body: JSON.stringify({
+              orders: orderChunk.map((order) => numericWbOrderId(order.id)),
+            }),
+          },
+        );
+        movedRemoteOrders.push(...orderChunk);
+      }
+
+      if (requiresCargoPlaces) {
+        const targetItemCount = orders.reduce(
+          (sum, order) => sum + Math.max(1, order.itemCount),
+          0,
+        );
+        const targetCargoPlaceCount = Math.ceil(
+          targetItemCount / Math.max(1, sourcePlan.itemsPerCargoPlace),
+        );
+        const targetCargoResponse = await marketplaceJson(
+          `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(targetSupplyId)}/trbx`,
+          {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ amount: targetCargoPlaceCount }),
+          },
+        );
+        targetCargoPlaceIds = uniqueStrings(
+          asArray<unknown>(targetCargoResponse.trbxIds).map(textValue),
+        );
+        if (targetCargoPlaceIds.length !== targetCargoPlaceCount) {
+          throw new Error(
+            `для новой поставки ожидалось ${targetCargoPlaceCount} грузомест, WB создал ${targetCargoPlaceIds.length}`,
+          );
+        }
+
+        const remainingItemCount = remainingSourceOrders.reduce(
+          (sum, order) => sum + Math.max(1, order.itemCount),
+          0,
+        );
+        const requiredSourceCargoPlaces =
+          remainingItemCount > 0
+            ? Math.ceil(
+                remainingItemCount / Math.max(1, sourcePlan.itemsPerCargoPlace),
+              )
+            : 0;
+        if (sourceCargoPlaceIds.length > requiredSourceCargoPlaces) {
+          const extraIds = sourceCargoPlaceIds.slice(requiredSourceCargoPlaces);
+          await marketplaceJson(
+            `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(sourceSupplyId)}/trbx`,
+            {
+              method: 'DELETE',
+              headers,
+              body: JSON.stringify({ trbxIds: extraIds }),
+            },
+          );
+          sourceCargoPlaceIds = sourceCargoPlaceIds.slice(
+            0,
+            requiredSourceCargoPlaces,
+          );
+          sourceCargoChanged = true;
+        } else if (sourceCargoPlaceIds.length < requiredSourceCargoPlaces) {
+          const cargoResponse = await marketplaceJson(
+            `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(sourceSupplyId)}/trbx`,
+            {
+              method: 'POST',
+              headers,
+              body: JSON.stringify({
+                amount: requiredSourceCargoPlaces - sourceCargoPlaceIds.length,
+              }),
+            },
+          );
+          const addedIds = uniqueStrings(
+            asArray<unknown>(cargoResponse.trbxIds).map(textValue),
+          );
+          sourceCargoPlaceIds = uniqueStrings([
+            ...sourceCargoPlaceIds,
+            ...addedIds,
+          ]);
+          sourceCargoChanged = true;
+          if (sourceCargoPlaceIds.length !== requiredSourceCargoPlaces) {
+            throw new Error(
+              `для исходной поставки требуется ${requiredSourceCargoPlaces} грузомест, WB вернул ${sourceCargoPlaceIds.length}`,
+            );
+          }
+        }
+      }
+
+      const orderIds = orders.map((order) => order.id);
+      const itemGroups = new Map<
+        string,
+        {
+          skuId: string;
+          barcode: string | null;
+          name: string;
+          quantity: number;
+          orderIds: string[];
+        }
+      >();
+      for (const order of orders) {
+        const product = order.product!;
+        const current = itemGroups.get(product.id);
+        if (current) {
+          current.quantity += Math.max(1, order.itemCount);
+          current.orderIds.push(order.id);
+        } else {
+          itemGroups.set(product.id, {
+            skuId: product.id,
+            barcode: order.barcodes[0] ?? null,
+            name: product.name,
+            quantity: Math.max(1, order.itemCount),
+            orderIds: [order.id],
+          });
+        }
+      }
+
+      const targetRequest = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.clientRequest.create({
+          data: {
+            clientId,
+            type: ClientRequestType.OUTBOUND,
+            status: ClientRequestStatus.SUBMITTED,
+            priority: 'NORMAL',
+            title: `FBS — ${orders.length} заказ(а/ов)`,
+            destinationCity: 'Маркетплейс FBS',
+            comment:
+              `Перенесено из заявки №${String(sourceRequest.number).padStart(6, '0')} ` +
+              `в поставку ${targetSupplyId}: ${orderIds.join(', ')}`,
+            createdByUserId: user.id,
+            items: {
+              create: [...itemGroups.values()].map((item) => ({
+                skuId: item.skuId,
+                barcode: item.barcode,
+                name: item.name,
+                quantity: item.quantity,
+                comment: fbsRequestItemComment(item.orderIds),
+              })),
+            },
+          },
+          select: {
+            id: true,
+            number: true,
+            title: true,
+            status: true,
+            items: {
+              select: { id: true, skuId: true, name: true, quantity: true },
+            },
+          },
+        });
+        const requestItemIdBySku = new Map(
+          created.items
+            .filter(
+              (item): item is (typeof created.items)[number] & { skuId: string } =>
+                Boolean(item.skuId),
+            )
+            .map((item) => [item.skuId, item.id]),
+        );
+
+        await tx.clientRequestEvent.create({
+          data: {
+            requestId: created.id,
+            clientId,
+            eventType: ClientRequestEventType.CREATED,
+            title: 'Заявка создана переносом FBS-заказов',
+            body:
+              `Из заявки №${String(sourceRequest.number).padStart(6, '0')}, ` +
+              `поставка ${sourceSupplyId} → ${targetSupplyId}. Заказы: ${orderIds.join(', ')}`,
+            statusTo: ClientRequestStatus.SUBMITTED,
+            createdByUserId: user.id,
+          },
+        });
+        await tx.clientRequestEvent.create({
+          data: {
+            requestId: sourceRequest.id,
+            clientId,
+            eventType: ClientRequestEventType.COMMENT,
+            title: 'Часть FBS-заказов перенесена в новую заявку',
+            body:
+              `Новая заявка №${String(created.number).padStart(6, '0')}, ` +
+              `поставка ${targetSupplyId}. Заказы: ${orderIds.join(', ')}`,
+            createdByUserId: user.id,
+          },
+        });
+
+        for (const order of orders) {
+          const link = activeLinks.find(
+            (item) =>
+              item.connectionId === order.connectionId &&
+              item.orderId === order.id,
+          )!;
+          await tx.fbsOrderRequestLink.update({
+            where: { id: link.id },
+            data: {
+              requestId: created.id,
+              createdByUserId: user.id,
+              ...fbsOrderLinkSnapshot(order),
+              lastSupplyId: targetSupplyId,
+              syncStatus: FBS_REQUEST_LINK_MOVING,
+              syncIssue: null,
+            },
+          });
+          const task = tasks.find(
+            (item) =>
+              item.connectionId === order.connectionId &&
+              item.orderId === order.id,
+          );
+          if (task) {
+            const requestItemId = requestItemIdBySku.get(order.product!.id);
+            if (!requestItemId) {
+              throw new Error(
+                `Не создана позиция заявки для заказа ${order.id}.`,
+              );
+            }
+            await tx.fbsTsdAssembly.update({
+              where: { id: task.id },
+              data: {
+                supplyId: targetSupplyId,
+                requestId: created.id,
+                requestItemId,
+                status: 'RELEASED',
+                workerUserId: null,
+                workerName: null,
+                boxId: null,
+                boxCode: null,
+                barcode: null,
+                kiz: null,
+                errorMessage: `Заказ перенесён в заявку №${String(created.number).padStart(6, '0')} и поставку ${targetSupplyId}.`,
+              },
+            });
+          }
+        }
+
+        const sourceCargoBarcodes = cargoBarcodeMap(
+          sourcePlan.cargoPlaceBarcodes,
+        );
+        const retainedSourceCargoBarcodes = sourceCargoPlaceIds.reduce<
+          Record<string, string>
+        >((result, cargoPlaceId) => {
+          const barcode = sourceCargoBarcodes[cargoPlaceId];
+          if (barcode) result[cargoPlaceId] = barcode;
+          return result;
+        }, {});
+        await tx.fbsSupplyPlan.update({
+          where: { id: sourcePlan.id },
+          data: {
+            orderIds: remainingSourceOrders.map((order) => order.id),
+            cargoPlaceCount: sourceCargoPlaceIds.length,
+            cargoPlaceIds: sourceCargoPlaceIds,
+            cargoPlaceBarcodes:
+              retainedSourceCargoBarcodes as Prisma.InputJsonValue,
+          },
+        });
+        await tx.fbsSupplyPlan.create({
+          data: {
+            clientId,
+            marketplace: MarketplaceType.WILDBERRIES,
+            connectionId,
+            supplyId: targetSupplyId,
+            deliveryDestination: sourcePlan.deliveryDestination,
+            itemsPerCargoPlace: sourcePlan.itemsPerCargoPlace,
+            cargoPlaceCount: targetCargoPlaceIds.length,
+            cargoPlaceIds: targetCargoPlaceIds,
+            cargoPlaceBarcodes: {},
+            orderIds,
+            createdByUserId: user.id,
+          },
+        });
+        return created;
+      });
+      databaseCommitted = true;
+
+      const targetShipmentPlan: FbsOrderSummary['shipmentPlan'] = {
+        destination: sourcePlan.deliveryDestination,
+        itemsPerCargoPlace: Math.max(1, sourcePlan.itemsPerCargoPlace),
+        requiresCargoPlaces,
+        cargoPlaceCount: targetCargoPlaceIds.length,
+        cargoPlaceIds: targetCargoPlaceIds,
+      };
+      const targetRequestSummary = {
+        id: targetRequest.id,
+        number: targetRequest.number,
+        title: targetRequest.title,
+        status: targetRequest.status,
+      };
+      const patchedOrders = response.orders.map((order) =>
+        selectedKeys.has(selectionKey(order.connectionId, order.id))
+          ? {
+              ...order,
+              supplyId: targetSupplyId,
+              shipmentPlan: targetShipmentPlan,
+              request: targetRequestSummary,
+            }
+          : order.connectionId === connectionId &&
+              order.supplyId === sourceSupplyId
+            ? {
+                ...order,
+                shipmentPlan: {
+                  destination: sourcePlan.deliveryDestination,
+                  itemsPerCargoPlace: Math.max(
+                    1,
+                    sourcePlan.itemsPerCargoPlace,
+                  ),
+                  requiresCargoPlaces,
+                  cargoPlaceCount: sourceCargoPlaceIds.length,
+                  cargoPlaceIds: sourceCargoPlaceIds,
+                },
+              }
+          : order,
+      );
+      try {
+        await this.syncFbsRequestsFromMarketplace(clientId, patchedOrders);
+      } catch (caught) {
+        const message =
+          caught instanceof Error ? caught.message : 'unknown synchronization error';
+        this.logger.warn(
+          `FBS move ${sourceSupplyId} -> ${targetSupplyId} completed, but immediate request sync failed: ${message}`,
+        );
+      }
+      const patchedResponse: FbsOrdersResponse = {
+        ...response,
+        fetchedAt: new Date().toISOString(),
+        orders: patchedOrders,
+      };
+      this.fbsOrdersCache.set(clientId, {
+        expiresAt: Date.now() + 30_000,
+        value: patchedResponse,
+      });
+      return {
+        moved: orders.length,
+        sourceSupplyId,
+        targetSupply: {
+          id: targetSupplyId,
+          cargoPlaceCount: targetCargoPlaceIds.length,
+          cargoPlaceIds: targetCargoPlaceIds,
+        },
+        sourceRequest: {
+          id: sourceRequest.id,
+          number: sourceRequest.number,
+        },
+        targetRequest: targetRequestSummary,
+        orders: patchedResponse,
+      };
+    } catch (caught) {
+      if (!databaseCommitted) {
+        await restoreMarketplaceState();
+      }
+      const message =
+        caught instanceof Error ? caught.message : 'неизвестная ошибка переноса';
+      throw new BadRequestException(
+        databaseCommitted
+          ? `Заказы перенесены, но экран не удалось обновить: ${message}. Обновите страницу.`
+          : `Заказы не перенесены: ${message}`,
+      );
+    }
+  }
+
   private async moveFbsOrdersToSupply(
     dto: FbsOrderSelectionDto,
     user: AuthUser,
@@ -3535,7 +4142,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const supplyOwners = new Map<string, Set<string>>();
     for (const link of openLinks) {
       if (
-        link.syncStatus === FBS_REQUEST_LINK_REMOVED ||
+        link.syncStatus !== FBS_REQUEST_LINK_ACTIVE ||
         !FBS_REQUEST_COMPOSITION_STATUSES.has(link.request.status)
       ) {
         continue;
@@ -3731,6 +4338,23 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       for (const link of liveLinks) {
         const order = orderByKey.get(selectionKey(link.connectionId, link.orderId))!;
         const task = taskByKey.get(selectionKey(link.connectionId, link.orderId));
+        if (
+          link.syncStatus === FBS_REQUEST_LINK_MOVING &&
+          order.supplyId !== link.lastSupplyId
+        ) {
+          if (order.category !== 'cancelled' && order.product) {
+            addFbsDesiredItem(desiredItems, desiredSkuByOrder, {
+              orderId: order.id,
+              skuId: order.product.id,
+              barcode: order.barcodes[0] ?? null,
+              name: order.product.name,
+              quantity: Math.max(1, order.itemCount),
+            });
+          } else {
+            compositionLocked = true;
+          }
+          continue;
+        }
         const hadSnapshot = Boolean(link.lastSeenAt);
         if (hadSnapshot && fbsOrderLinkChanged(link, order)) {
           statusChanges.push(fbsOrderLinkChangeText(link, order));
@@ -4267,6 +4891,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             clientId,
             connectionId: { in: uniqueStrings(ordersWithShipmentPlans.map((order) => order.connectionId)) },
             orderId: { in: uniqueStrings(ordersWithShipmentPlans.map((order) => order.id)) },
+            syncStatus: {
+              in: [FBS_REQUEST_LINK_ACTIVE, FBS_REQUEST_LINK_RETURN_REQUIRED],
+            },
           },
           include: {
             request: { select: { id: true, number: true, title: true, status: true } },

@@ -2256,6 +2256,24 @@ export type AssembleFbsOrdersResult = {
   orders: ClientFbsOrders;
 };
 
+export type MoveFbsOrdersToNewSupplyResult = {
+  moved: number;
+  sourceSupplyId: string;
+  targetSupply: {
+    id: string;
+    cargoPlaceCount: number;
+    cargoPlaceIds: string[];
+  };
+  sourceRequest: { id: string; number: number };
+  targetRequest: {
+    id: string;
+    number: number;
+    title: string;
+    status: ClientRequestStatus;
+  };
+  orders: ClientFbsOrders;
+};
+
 export type FbsOrderActionResult = {
   cancelled?: number;
   delivered?: number;
@@ -5165,6 +5183,20 @@ export async function reshipFbsOrders(accessToken: string, payload: FbsOrderSele
     accessToken,
     body: payload,
   });
+}
+
+export async function moveFbsOrdersToNewSupply(
+  accessToken: string,
+  payload: FbsOrderSelectionPayload,
+) {
+  return request<MoveFbsOrdersToNewSupplyResult>(
+    '/marketplace-connections/fbs/orders/move-to-new-supply',
+    {
+      method: 'POST',
+      accessToken,
+      body: payload,
+    },
+  );
 }
 
 export async function cancelFbsOrders(accessToken: string, payload: FbsOrderSelectionPayload) {

@@ -1022,6 +1022,229 @@ describe('MarketplaceConnectionsService', () => {
     expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith('/trbx'))).toBe(false);
   });
 
+  it('moves unstarted FBS orders to a new WB supply and creates a separate WMS request', async () => {
+    const order = {
+      id: '5355000001',
+      connectionId: 'connection-1',
+      marketplace: MarketplaceType.WILDBERRIES,
+      category: 'active',
+      supplierStatus: 'confirm',
+      wbStatus: 'waiting',
+      statusLabel: 'На сборке',
+      supplyId: 'WB-GI-OLD',
+      itemCount: 1,
+      barcodes: ['460000000001'],
+      product: {
+        id: 'sku-1',
+        name: 'Костюм',
+        internalSku: 'SKU-1',
+        clientSku: null,
+        article: 'ART-1',
+      },
+    };
+    const sourceRequest = {
+      id: 'request-old',
+      number: 31,
+      status: ClientRequestStatus.IN_WORK,
+    };
+    const tx = {
+      clientRequest: {
+        create: vi.fn().mockResolvedValue({
+          id: 'request-new',
+          number: 32,
+          title: 'FBS — 1 заказ(а/ов)',
+          status: ClientRequestStatus.SUBMITTED,
+          items: [{ id: 'item-new', skuId: 'sku-1', name: 'Костюм', quantity: 1 }],
+        }),
+      },
+      clientRequestEvent: { create: vi.fn().mockResolvedValue({}) },
+      fbsOrderRequestLink: { update: vi.fn().mockResolvedValue({}) },
+      fbsTsdAssembly: { update: vi.fn() },
+      fbsSupplyPlan: {
+        update: vi.fn().mockResolvedValue({}),
+        create: vi.fn().mockResolvedValue({}),
+      },
+    };
+    const prisma = {
+      fbsOrderRequestLink: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'link-1',
+            clientId: 'client-1',
+            marketplace: MarketplaceType.WILDBERRIES,
+            connectionId: 'connection-1',
+            orderId: order.id,
+            requestId: sourceRequest.id,
+            syncStatus: 'ACTIVE',
+            request: sourceRequest,
+          },
+        ]),
+      },
+      fbsTsdAssembly: { findMany: vi.fn().mockResolvedValue([]) },
+      fbsSupplyPlan: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'plan-old',
+          clientId: 'client-1',
+          marketplace: MarketplaceType.WILDBERRIES,
+          connectionId: 'connection-1',
+          supplyId: 'WB-GI-OLD',
+          deliveryDestination: FbsDeliveryDestination.VNUKOVO_SORTING_CENTER,
+          itemsPerCargoPlace: 14,
+          cargoPlaceIds: [],
+          cargoPlaceBarcodes: {},
+        }),
+      },
+      clientMarketplaceConnection: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'connection-1',
+            clientId: 'client-1',
+            marketplace: MarketplaceType.WILDBERRIES,
+            apiKey: 'secret-key',
+            isActive: true,
+            client: { id: 'client-1', code: 'CL-1', name: 'Клиент' },
+          },
+        ]),
+      },
+      $transaction: vi.fn(async (callback: (value: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new MarketplaceConnectionsService(
+      prisma as never,
+      { requireClientAccess: vi.fn() } as never,
+    );
+    vi.spyOn(service as any, 'resolveSelectedFbsOrders').mockResolvedValue({
+      response: {
+        client: { id: 'client-1', code: 'CL-1', name: 'Клиент' },
+        connected: true,
+        connections: [],
+        fetchedAt: new Date().toISOString(),
+        deliveryPlan: {
+          destination: FbsDeliveryDestination.VNUKOVO_SORTING_CENTER,
+          itemsPerCargoPlace: 14,
+          requiresCargoPlaces: false,
+        },
+        counts: { active: 1, shipped: 0, cancelled: 0, archive: 0, all: 1 },
+        orders: [order],
+      },
+      orders: [order],
+    });
+    vi.spyOn(service as any, 'syncFbsRequestsFromMarketplace').mockResolvedValue(undefined);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => ({
+        ok: true,
+        status: 200,
+        json: async () =>
+          url.endsWith('/api/v3/supplies') ? { id: 'WB-GI-NEW' } : {},
+      } as Response)),
+    );
+
+    const result = await service.moveFbsOrdersToNewSupply(
+      {
+        clientId: 'client-1',
+        orders: [{ connectionId: 'connection-1', id: order.id }],
+      },
+      { id: 'user-1', name: 'Администратор' } as never,
+    );
+
+    expect(result).toMatchObject({
+      moved: 1,
+      sourceSupplyId: 'WB-GI-OLD',
+      targetSupply: { id: 'WB-GI-NEW', cargoPlaceCount: 0 },
+      sourceRequest: { id: 'request-old', number: 31 },
+      targetRequest: { id: 'request-new', number: 32 },
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      'https://marketplace-api.wildberries.ru/api/marketplace/v3/supplies/WB-GI-NEW/orders',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ orders: [5355000001] }),
+      }),
+    );
+    expect(tx.fbsOrderRequestLink.update).toHaveBeenCalledWith({
+      where: { id: 'link-1' },
+      data: expect.objectContaining({
+        requestId: 'request-new',
+        lastSupplyId: 'WB-GI-NEW',
+        syncStatus: 'MOVING',
+      }),
+    });
+    expect(tx.fbsSupplyPlan.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        supplyId: 'WB-GI-NEW',
+        orderIds: [order.id],
+      }),
+    });
+  });
+
+  it('blocks moving an FBS order after any physical scan', async () => {
+    const order = {
+      id: '5355000001',
+      connectionId: 'connection-1',
+      marketplace: MarketplaceType.WILDBERRIES,
+      category: 'active',
+      supplierStatus: 'confirm',
+      supplyId: 'WB-GI-OLD',
+      itemCount: 1,
+      product: { id: 'sku-1', name: 'Костюм' },
+    };
+    const prisma = {
+      fbsOrderRequestLink: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'link-1',
+            connectionId: 'connection-1',
+            orderId: order.id,
+            requestId: 'request-old',
+            syncStatus: 'ACTIVE',
+            request: {
+              id: 'request-old',
+              number: 31,
+              status: ClientRequestStatus.IN_WORK,
+            },
+          },
+        ]),
+      },
+      fbsTsdAssembly: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            orderId: order.id,
+            status: 'IN_PROGRESS',
+            boxId: 'box-1',
+            barcode: null,
+            kiz: null,
+            stickerPartA: null,
+            stickerPartB: null,
+            stickerBarcode: null,
+            cargoPackingId: null,
+            completedAt: null,
+          },
+        ]),
+      },
+    };
+    const service = new MarketplaceConnectionsService(
+      prisma as never,
+      { requireClientAccess: vi.fn() } as never,
+    );
+    vi.spyOn(service as any, 'resolveSelectedFbsOrders').mockResolvedValue({
+      response: { orders: [order] },
+      orders: [order],
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      service.moveFbsOrdersToNewSupply(
+        {
+          clientId: 'client-1',
+          orders: [{ connectionId: 'connection-1', id: order.id }],
+        },
+        { id: 'user-1' } as never,
+      ),
+    ).rejects.toThrow('уже сканировали');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('creates one outbound request and persistently links every selected FBS order', async () => {
     const tx = {
       clientRequest: {

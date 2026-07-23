@@ -47,6 +47,7 @@ import {
   fetchFbsCargoPackings,
   fetchFbsOrders,
   fetchFbsPasses,
+  moveFbsOrdersToNewSupply,
   reshipFbsOrders,
   updateFbsPass,
   updateFbsBillingSettings,
@@ -160,7 +161,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
   }>({ status: 'idle', data: null, error: '' });
   const [selectedOrderKeys, setSelectedOrderKeys] = useState<Set<string>>(() => new Set());
   const [orderAction, setOrderAction] = useState<
-    'assemble' | 'reship' | 'deliver' | 'change-destination' | 'cancel' | 'stickers' | 'cargo' | 'supply' | 'request' | 'pick-list' | null
+    'assemble' | 'reship' | 'move' | 'deliver' | 'change-destination' | 'cancel' | 'stickers' | 'cargo' | 'supply' | 'request' | 'pick-list' | null
   >(null);
   const [rowActionKey, setRowActionKey] = useState<string | null>(null);
   const [orderActionMessage, setOrderActionMessage] = useState('');
@@ -457,6 +458,50 @@ export function FbsPanel({ session }: FbsPanelProps) {
       void loadCargoPackings();
     } catch (caught) {
       setOrderActionError(caught instanceof Error ? caught.message : 'Не удалось сменить направление поставки.');
+    } finally {
+      setOrderAction(null);
+    }
+  }
+
+  async function moveSelectedOrdersToNewSupply(orders: FbsOrderSummary[]) {
+    if (!selectedClientId || orders.length === 0) return;
+    const sourceSupplyId = orders[0]?.supplyId;
+    const sourceRequestNumber = orders[0]?.request?.number;
+    if (!window.confirm(
+      `Перенести ${orders.length} заказ(а/ов) из поставки ${sourceSupplyId} в новую поставку WB?\n\n` +
+      `Для них будет создана отдельная заявка WMS. Заявка №${String(sourceRequestNumber ?? '').padStart(6, '0')} ` +
+      'автоматически пересчитается. Статус заказов в WB останется «На сборке».',
+    )) return;
+
+    setOrderAction('move');
+    setOrderActionMessage('');
+    setOrderActionError('');
+    try {
+      const result = await moveFbsOrdersToNewSupply(session.accessToken, {
+        clientId: selectedClientId,
+        orders: orders.map((order) => ({
+          connectionId: order.connectionId,
+          id: order.id,
+        })),
+      });
+      ++loadSequence.current;
+      setOrdersState({ status: 'ready', data: result.orders, error: '' });
+      setSelectedOrderKeys(new Set());
+      setOrderActionMessage(
+        `Перенесено заказов: ${result.moved}. Новая поставка: ${result.targetSupply.id}. ` +
+        `Создана заявка №${String(result.targetRequest.number).padStart(6, '0')}. ` +
+        (result.targetSupply.cargoPlaceCount > 0
+          ? `Создано грузомест ПВЗ: ${result.targetSupply.cargoPlaceCount}.`
+          : 'Направление и параметры исходной поставки сохранены.'),
+      );
+      void loadActiveClients();
+      void loadCargoPackings();
+    } catch (caught) {
+      setOrderActionError(
+        caught instanceof Error
+          ? caught.message
+          : 'Не удалось перенести заказы в новую поставку.',
+      );
     } finally {
       setOrderAction(null);
     }
@@ -785,6 +830,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
             onReship={reshipSelectedOrders}
             onDeliver={deliverSelectedSupplies}
             onChangeDestination={changeSelectedSuppliesToSortingCenter}
+            onMoveToNewSupply={moveSelectedOrdersToNewSupply}
             onCancel={cancelSelectedOrders}
             onDownloadStickers={downloadSelectedOrderStickers}
             onDownloadCargoStickers={downloadSelectedCargoPlaceStickers}
@@ -1213,6 +1259,7 @@ function FbsOrdersView({
   onReship,
   onDeliver,
   onChangeDestination,
+  onMoveToNewSupply,
   onCancel,
   onDownloadStickers,
   onDownloadCargoStickers,
@@ -1226,7 +1273,7 @@ function FbsOrdersView({
   view: Exclude<FbsView, 'cargo' | 'cost' | 'calculator' | 'pricing' | 'passes'>;
   selectedOrderKeys: Set<string>;
   onSelectionChange: (keys: Set<string>) => void;
-  orderAction: 'assemble' | 'reship' | 'deliver' | 'change-destination' | 'cancel' | 'stickers' | 'cargo' | 'supply' | 'request' | 'pick-list' | null;
+  orderAction: 'assemble' | 'reship' | 'move' | 'deliver' | 'change-destination' | 'cancel' | 'stickers' | 'cargo' | 'supply' | 'request' | 'pick-list' | null;
   rowActionKey: string | null;
   actionMessage: string;
   actionError: string;
@@ -1234,6 +1281,7 @@ function FbsOrdersView({
   onReship: (orders: FbsOrderSummary[]) => Promise<void>;
   onDeliver: (orders: FbsOrderSummary[]) => Promise<void>;
   onChangeDestination: (orders: FbsOrderSummary[]) => Promise<void>;
+  onMoveToNewSupply: (orders: FbsOrderSummary[]) => Promise<void>;
   onCancel: (orders: FbsOrderSummary[]) => Promise<void>;
   onDownloadStickers: (orders: FbsOrderSummary[]) => Promise<void>;
   onDownloadCargoStickers: (orders: FbsOrderSummary[]) => Promise<void>;
@@ -1267,9 +1315,7 @@ function FbsOrdersView({
   const tableColumnCount = 6 + (!readOnlyView ? 1 : 0) + (view === 'active' ? 1 : 0);
   const itemsCount = visibleOrders.reduce((sum, order) => sum + Math.max(1, order.itemCount), 0);
   const visibleKeys = visibleOrders.map(fbsOrderSelectionKey);
-  const bulkSelectableOrders = visibleOrders.filter(
-    (order) => !order.request || order.request.status === 'CANCELLED',
-  );
+  const bulkSelectableOrders = visibleOrders;
   const bulkSelectableKeys = bulkSelectableOrders.map(fbsOrderSelectionKey);
   const selectedOrders = visibleOrders.filter((order) => selectedOrderKeys.has(fbsOrderSelectionKey(order)));
   const assemblyOrders = selectedOrders.filter(
@@ -1294,6 +1340,24 @@ function FbsOrdersView({
   const changeDestinationSupplyCount = new Set(
     changeDestinationOrders.map((order) => `${order.connectionId}:${order.supplyId}`),
   ).size;
+  const moveOrders = selectedOrders.filter(
+    (order) =>
+      order.marketplace === 'WILDBERRIES' &&
+      order.category === 'active' &&
+      order.supplierStatus === 'confirm' &&
+      Boolean(order.supplyId) &&
+      Boolean(order.request) &&
+      !['PACKED', 'DONE', 'CANCELLED', 'REJECTED'].includes(order.request?.status ?? ''),
+  );
+  const moveSourceCount = new Set(
+    moveOrders.map(
+      (order) => `${order.connectionId}:${order.supplyId}:${order.request?.id}`,
+    ),
+  ).size;
+  const canMoveSelectedOrders =
+    selectedOrders.length > 0 &&
+    moveOrders.length === selectedOrders.length &&
+    moveSourceCount === 1;
   const stickerOrders = selectedOrders.filter(
     (order) => order.marketplace === 'WILDBERRIES' && ['confirm', 'complete'].includes(order.supplierStatus),
   );
@@ -1430,6 +1494,18 @@ function FbsOrdersView({
                 <button
                   type="button"
                   className="button button-secondary"
+                  disabled={!canMoveSelectedOrders || orderAction !== null}
+                  onClick={() => void onMoveToNewSupply(moveOrders)}
+                  title="Перенести выбранные несобранные заказы одной поставки в новую поставку WB и отдельную заявку WMS"
+                >
+                  <ArrowRightLeft size={16} aria-hidden="true" />
+                  {orderAction === 'move'
+                    ? 'Переношу…'
+                    : `В новую поставку (${moveOrders.length})`}
+                </button>
+                <button
+                  type="button"
+                  className="button button-secondary"
                   disabled={requestOrders.length === 0 || orderAction !== null}
                   onClick={() => void onCreateRequest(requestOrders)}
                 >
@@ -1549,8 +1625,7 @@ function FbsOrdersView({
                           const next = new Set(selectedOrderKeys);
                           group.orders.forEach((order) => {
                             const key = fbsOrderSelectionKey(order);
-                            if (!order.request || order.request.status === 'CANCELLED') next.add(key);
-                            else next.delete(key);
+                            next.add(key);
                           });
                           onSelectionChange(next);
                         }}>

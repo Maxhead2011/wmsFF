@@ -61,6 +61,12 @@ export class MarketplaceConnectionsController {
     return this.connections.reshipFbsOrders(dto, user);
   }
 
+  @Post('fbs/orders/move-to-new-supply')
+  @RequirePermissions()
+  moveFbsOrdersToNewSupply(@Body() dto: FbsOrderSelectionDto, @CurrentUser() user: AuthUser) {
+    return this.connections.moveFbsOrdersToNewSupply(dto, user);
+  }
+
   @Post('fbs/orders/cancel')
   @RequirePermissions()
   cancelFbsOrders(@Body() dto: FbsOrderSelectionDto, @CurrentUser() user: AuthUser) {
