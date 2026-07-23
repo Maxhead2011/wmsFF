@@ -692,6 +692,113 @@ describe('StockOperationsService', () => {
     );
     expect(billingAutomation.generateForDoneRequest).toHaveBeenCalledWith('request-1', expect.any(Object));
   });
+
+  it('восстанавливает недостающий резерв уже собранного FBS после инвентаризации короба', async () => {
+    const tx = {
+      fbsTsdAssembly: {
+        findMany: vi.fn().mockResolvedValue(
+          Array.from({ length: 7 }, () => ({
+            requestItemId: 'item-1',
+            skuId: 'sku-1',
+            boxId: 'box-1',
+            itemCount: 1,
+          })),
+        ),
+      },
+      stockBalance: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            skuId: 'sku-1',
+            boxId: 'box-1',
+            quantity: 1,
+          },
+        ]),
+        upsert: vi.fn().mockResolvedValue({ id: 'shipping-balance' }),
+      },
+      box: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'box-1',
+            code: 'FFL_LKB1107_213',
+            palletId: null,
+          },
+        ]),
+      },
+      stockMovement: {
+        create: vi.fn().mockResolvedValue({ id: 'recovery-movement' }),
+      },
+    };
+    const recoveryService = new StockOperationsService(
+      {} as never,
+      {} as never,
+      {
+        balanceKey: vi.fn().mockReturnValue('client-1:sku-1:box-1:no-pallet:SHIPPING'),
+      } as never,
+    );
+
+    await (recoveryService as unknown as {
+      restoreCompletedFbsSelectionShortages: (
+        tx: typeof tx,
+        request: {
+          id: string;
+          clientId: string;
+          items: Array<{ id: string; skuId: string; barcode: null; quantity: number }>;
+        },
+        selections: Array<{
+          id: string;
+          requestItemId: string;
+          skuId: string;
+          boxId: string;
+          quantity: number;
+          box: { code: string };
+        }>,
+        baseKey: string,
+      ) => Promise<void>;
+    }).restoreCompletedFbsSelectionShortages(
+      tx,
+      {
+        id: 'request-32',
+        clientId: 'client-1',
+        items: [{ id: 'item-1', skuId: 'sku-1', barcode: null, quantity: 7 }],
+      },
+      [
+        {
+          id: 'selection-1',
+          requestItemId: 'item-1',
+          skuId: 'sku-1',
+          boxId: 'box-1',
+          quantity: 7,
+          box: { code: 'FFL_LKB1107_213' },
+        },
+      ],
+      'manual-status-done:request-32',
+    );
+
+    expect(tx.stockBalance.upsert).toHaveBeenCalledWith({
+      where: { balanceKey: 'client-1:sku-1:box-1:no-pallet:SHIPPING' },
+      update: { quantity: { increment: 6 } },
+      create: {
+        balanceKey: 'client-1:sku-1:box-1:no-pallet:SHIPPING',
+        clientId: 'client-1',
+        skuId: 'sku-1',
+        boxId: 'box-1',
+        palletId: null,
+        status: 'SHIPPING',
+        quantity: 6,
+      },
+    });
+    expect(tx.stockMovement.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: 'INVENTORY_ADJUSTMENT',
+          status: 'SHIPPING',
+          quantity: 6,
+          sourceDocument: 'request-32',
+          idempotencyKey: 'manual-status-done:request-32:fbs-reconciled:selection-1',
+        }),
+      }),
+    );
+  });
 });
 
 function user(): AuthUser {

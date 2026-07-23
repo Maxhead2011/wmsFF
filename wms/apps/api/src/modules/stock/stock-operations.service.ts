@@ -1062,6 +1062,14 @@ export class StockOperationsService {
         request.items.reduce((total, item) => total + item.quantity, 0),
       );
       const savedSelections = await this.loadRequestBoxSelections(tx, request.id);
+      if (savedSelections.length) {
+        await this.restoreCompletedFbsSelectionShortages(
+          tx,
+          request,
+          savedSelections,
+          baseKey,
+        );
+      }
       const plan = savedSelections.length
         ? await this.planRequestAllocationsFromSelections(
             tx,
@@ -1438,6 +1446,117 @@ export class StockOperationsService {
       include: { box: { select: { code: true } } },
       orderBy: [{ createdAt: 'asc' }],
     });
+  }
+
+  private async restoreCompletedFbsSelectionShortages(
+    tx: Prisma.TransactionClient,
+    request: {
+      id: string;
+      clientId: string;
+      items: RequestItemForAllocation[];
+    },
+    selections: RequestBoxSelectionForAllocation[],
+    baseKey: string,
+  ) {
+    // Старые/тестовые Prisma-адаптеры могут не содержать FBS-таблицу.
+    if (!('fbsTsdAssembly' in tx) || selections.length === 0) return;
+
+    const completedTasks = await tx.fbsTsdAssembly.findMany({
+      where: {
+        requestId: request.id,
+        status: 'COMPLETED',
+        requestItemId: { in: [...new Set(selections.map((selection) => selection.requestItemId))] },
+        boxId: { in: [...new Set(selections.map((selection) => selection.boxId))] },
+      },
+      select: {
+        requestItemId: true,
+        skuId: true,
+        boxId: true,
+        itemCount: true,
+      },
+    });
+    if (completedTasks.length === 0) return;
+
+    const completedBySelection = new Map<string, number>();
+    for (const task of completedTasks) {
+      if (!task.boxId) continue;
+      const key = `${task.requestItemId}:${task.skuId}:${task.boxId}`;
+      completedBySelection.set(key, (completedBySelection.get(key) ?? 0) + Math.max(1, task.itemCount));
+    }
+
+    const selectedSkuIds = [...new Set(selections.map((selection) => selection.skuId))];
+    const selectedBoxIds = [...new Set(selections.map((selection) => selection.boxId))];
+    const [balances, boxes] = await Promise.all([
+      tx.stockBalance.findMany({
+        where: {
+          clientId: request.clientId,
+          skuId: { in: selectedSkuIds },
+          boxId: { in: selectedBoxIds },
+          status: { in: [StockStatus.SHIPPING, StockStatus.PACKING, StockStatus.AVAILABLE] },
+          quantity: { gt: 0 },
+        },
+        select: {
+          skuId: true,
+          boxId: true,
+          quantity: true,
+        },
+      }),
+      tx.box.findMany({
+        where: { id: { in: selectedBoxIds } },
+        select: { id: true, code: true, palletId: true },
+      }),
+    ]);
+    const boxById = new Map(boxes.map((box) => [box.id, box]));
+    const balanceBySelection = new Map<string, number>();
+    for (const balance of balances) {
+      if (!balance.boxId) continue;
+      const key = `${balance.skuId}:${balance.boxId}`;
+      balanceBySelection.set(key, (balanceBySelection.get(key) ?? 0) + balance.quantity);
+    }
+
+    for (const selection of selections) {
+      const completedQuantity =
+        completedBySelection.get(`${selection.requestItemId}:${selection.skuId}:${selection.boxId}`) ?? 0;
+      if (completedQuantity < selection.quantity) continue;
+
+      const balanceKey = `${selection.skuId}:${selection.boxId}`;
+      const availableQuantity = balanceBySelection.get(balanceKey) ?? 0;
+      const shortage = Math.max(0, selection.quantity - availableQuantity);
+      if (shortage === 0) continue;
+
+      const box = boxById.get(selection.boxId);
+      if (!box) {
+        throw new BadRequestException(
+          `Короб ${selection.box.code} собранной FBS-заявки больше не найден в WMS.`,
+        );
+      }
+
+      await this.incrementTargetBalance(tx, {
+        clientId: request.clientId,
+        skuId: selection.skuId,
+        boxId: selection.boxId,
+        palletId: box.palletId,
+        status: StockStatus.SHIPPING,
+        quantity: shortage,
+      });
+      await tx.stockMovement.create({
+        data: {
+          clientId: request.clientId,
+          skuId: selection.skuId,
+          boxId: selection.boxId,
+          palletId: box.palletId,
+          type: MovementType.INVENTORY_ADJUSTMENT,
+          status: StockStatus.SHIPPING,
+          quantity: shortage,
+          sourceDocument: request.id,
+          idempotencyKey: `${baseKey}:fbs-reconciled:${selection.id}`,
+          comment:
+            `Восстановлен резерв ${shortage} шт. уже собранного товара FBS после пересчёта ` +
+            `короба ${box.code}; резерв будет списан при закрытии заявки.`,
+        },
+      });
+      balanceBySelection.set(balanceKey, availableQuantity + shortage);
+    }
   }
 
   private async planRequestAllocationsFromSelections(
