@@ -181,6 +181,7 @@ type FbsRequestDesiredItem = {
   orderIds: string[];
 };
 const FBS_TSD_STALE_UNSTARTED_TASK_MS = 2 * 60 * 60 * 1_000;
+const FBS_TSD_REQUEST_FALLBACK_CACHE_MS = 2 * 60 * 1_000;
 const FBS_REQUEST_LINK_ACTIVE = 'ACTIVE';
 const FBS_REQUEST_LINK_MOVING = 'MOVING';
 const FBS_REQUEST_LINK_REMOVED = 'REMOVED';
@@ -202,6 +203,10 @@ const FBS_REQUEST_COMPOSITION_STATUSES = new Set<ClientRequestStatus>([
 export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MarketplaceConnectionsService.name);
   private readonly fbsOrdersCache = new Map<string, { expiresAt: number; value: FbsOrdersResponse }>();
+  private readonly fbsTsdRequestFallbackCache = new Map<
+    string,
+    { expiresAt: number; value: FbsOrdersResponse }
+  >();
   private readonly fbsTsdStickerCache = new Map<
     string,
     {
@@ -385,11 +390,32 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     for (const clientId of clientIds) {
       try {
         const cached = this.fbsOrdersCache.get(clientId);
-        const response = cached && cached.expiresAt > Date.now()
-          ? cached.value
-          : await this.loadFbsOrders(clientId);
-        if (!cached || cached.expiresAt <= Date.now()) {
-          this.fbsOrdersCache.set(clientId, { expiresAt: Date.now() + 30_000, value: response });
+        const requestFallback = this.fbsTsdRequestFallbackCache.get(clientId);
+        let response: FbsOrdersResponse;
+        if (cached && cached.expiresAt > Date.now()) {
+          response = cached.value;
+        } else if (requestFallback && requestFallback.expiresAt > Date.now()) {
+          response = requestFallback.value;
+        } else {
+          try {
+            response = await this.loadFbsOrders(clientId);
+            this.fbsOrdersCache.set(clientId, { expiresAt: Date.now() + 30_000, value: response });
+            this.fbsTsdRequestFallbackCache.delete(clientId);
+          } catch (caught) {
+            response = await this.loadFbsTsdRequestOrders(clientId);
+            if (response.orders.length === 0) {
+              throw caught;
+            }
+            this.fbsTsdRequestFallbackCache.set(clientId, {
+              expiresAt: Date.now() + FBS_TSD_REQUEST_FALLBACK_CACHE_MS,
+              value: response,
+            });
+            const message =
+              caught instanceof Error ? caught.message : 'Wildberries временно недоступен';
+            this.logger.warn(
+              `FBS TSD queue for client ${clientId} is using ${response.orders.length} synced request orders: ${message}`,
+            );
+          }
         }
 
         const candidates = response.orders
@@ -4686,6 +4712,159 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       destination,
       itemsPerCargoPlace: DEFAULT_FBS_ITEMS_PER_CARGO_PLACE,
       requiresCargoPlaces: destination === FbsDeliveryDestination.PICKUP_POINT,
+    };
+  }
+
+  private async loadFbsTsdRequestOrders(clientId: string): Promise<FbsOrdersResponse> {
+    const [client, connections, deliveryPlan, links] = await Promise.all([
+      this.prisma.client.findUnique({
+        where: { id: clientId },
+        select: { id: true, code: true, name: true },
+      }),
+      this.prisma.clientMarketplaceConnection.findMany({
+        where: {
+          clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          isActive: true,
+        },
+        select: { id: true, marketplace: true, accountName: true },
+        orderBy: [{ accountName: 'asc' }, { createdAt: 'asc' }],
+      }),
+      this.loadFbsDeliveryPlan(clientId),
+      this.prisma.fbsOrderRequestLink.findMany({
+        where: {
+          clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          syncStatus: FBS_REQUEST_LINK_ACTIVE,
+          lastCategory: 'active',
+          lastSupplierStatus: 'confirm',
+          lastSkuId: { not: null },
+          request: {
+            status: {
+              notIn: [
+                ClientRequestStatus.DONE,
+                ClientRequestStatus.CANCELLED,
+                ClientRequestStatus.REJECTED,
+              ],
+            },
+          },
+        },
+        include: {
+          request: { select: { id: true, number: true, title: true, status: true } },
+        },
+        orderBy: { createdAt: 'asc' },
+      }),
+    ]);
+
+    if (!client) {
+      throw new NotFoundException('Клиент не найден.');
+    }
+
+    const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
+    const relevantLinks = links.filter((link) => connectionById.has(link.connectionId));
+    const skuIds = uniqueStrings(relevantLinks.map((link) => link.lastSkuId ?? ''));
+    const skus = skuIds.length > 0
+      ? await this.prisma.sku.findMany({
+          where: { clientId, id: { in: skuIds } },
+          select: {
+            id: true,
+            name: true,
+            internalSku: true,
+            clientSku: true,
+            article: true,
+            needsChestnyZnak: true,
+            isUnmarked: true,
+            barcodes: { select: { value: true } },
+            balances: {
+              where: {
+                quantity: { gt: 0 },
+                boxId: { not: null },
+              },
+              select: {
+                quantity: true,
+                status: true,
+                box: { select: { code: true } },
+              },
+            },
+          },
+        })
+      : [];
+    const skuById = new Map(skus.map((sku) => [sku.id, sku]));
+
+    const orders: FbsOrderSummary[] = relevantLinks.flatMap((link) => {
+      const sku = link.lastSkuId ? skuById.get(link.lastSkuId) : undefined;
+      const connection = connectionById.get(link.connectionId);
+      if (!sku || !connection) {
+        return [];
+      }
+      const supplierStatus = link.lastSupplierStatus || 'confirm';
+      const wbStatus = link.lastWbStatus || 'waiting';
+      return [{
+        id: link.orderId,
+        orderUid: null,
+        connectionId: link.connectionId,
+        accountName: connection.accountName,
+        marketplace: link.marketplace,
+        category: 'active' as const,
+        supplierStatus,
+        wbStatus,
+        statusLabel: fbsStatusLabel(supplierStatus, wbStatus),
+        article: sku.article,
+        nmId: null,
+        chrtId: null,
+        barcodes: uniqueStrings(sku.barcodes.map((barcode) => barcode.value)),
+        itemCount: Math.max(1, link.lastItemCount ?? 1),
+        product: {
+          id: sku.id,
+          name: sku.name,
+          internalSku: sku.internalSku,
+          clientSku: sku.clientSku,
+          article: sku.article,
+          needsChestnyZnak: sku.needsChestnyZnak,
+          isUnmarked: sku.isUnmarked,
+        },
+        storageBoxes: sku.balances
+          .filter((balance) => balance.box)
+          .map((balance) => ({
+            code: balance.box!.code,
+            quantity: balance.quantity,
+            status: balance.status,
+          }))
+          .sort((left, right) => left.code.localeCompare(right.code)),
+        createdAt: link.createdAt.toISOString(),
+        sellerDate: null,
+        deliveryDate: null,
+        supplyId: link.lastSupplyId,
+        warehouseId: null,
+        officeId: null,
+        cargoType: null,
+        crossBorderType: null,
+        pickupPointShipmentAllowed: false,
+        requiresReshipment: false,
+        shipmentPlan: null,
+        requiredMeta: [],
+        optionalMeta: [],
+        comment: 'Очередь восстановлена из синхронизированной заявки WMS.',
+        request: link.request,
+        billing: null,
+      }];
+    });
+    const fetchedAt = new Date().toISOString();
+
+    return {
+      client,
+      connected: connections.length > 0,
+      connections,
+      fetchedAt,
+      deliveryPlan,
+      counts: {
+        active: orders.length,
+        shipped: 0,
+        cancelled: 0,
+        archive: 0,
+        all: orders.length,
+      },
+      orders,
     };
   }
 

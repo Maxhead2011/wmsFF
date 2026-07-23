@@ -293,6 +293,80 @@ describe('MarketplaceConnectionsService', () => {
     expect(result).toMatchObject({ orderId: 'order-from-current-supply' });
   });
 
+  it('continues the TSD queue from a synced WMS request when the WB API is temporarily unavailable', async () => {
+    const fbsTsdAssembly = {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findUnique: vi.fn().mockResolvedValue(null),
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
+        id: 'fallback-task',
+        ...data,
+      })),
+    };
+    const prisma = {
+      fbsTsdAssembly,
+      clientMarketplaceConnection: {
+        findMany: vi.fn().mockResolvedValue([{ clientId: 'client-1' }]),
+      },
+      clientRequestItem: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'request-item-33' }),
+      },
+    };
+    const clientScopes = {
+      resolveClientFilter: vi.fn().mockReturnValue('client-1'),
+      requireClientAccess: vi.fn(),
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, clientScopes as never);
+    vi.spyOn(service as any, 'loadFbsOrders').mockRejectedValue(
+      new Error('Wildberries global rate limit'),
+    );
+    vi.spyOn(service as any, 'loadFbsTsdRequestOrders').mockResolvedValue({
+      orders: [{
+        id: '5359402675',
+        connectionId: 'connection-1',
+        marketplace: MarketplaceType.WILDBERRIES,
+        category: 'active',
+        supplierStatus: 'confirm',
+        product: {
+          id: 'sku-33',
+          name: 'Костюм',
+          article: 'ARTICLE-33',
+          clientSku: null,
+          internalSku: 'SKU-33',
+          needsChestnyZnak: true,
+          isUnmarked: false,
+        },
+        request: { id: 'request-33', number: 33, status: ClientRequestStatus.IN_WORK },
+        supplyId: 'WB-GI-33',
+        storageBoxes: [{ code: 'FFL_LKB1705_101', quantity: 4, status: 'AVAILABLE' }],
+        requiredMeta: [],
+        optionalMeta: [],
+        barcodes: ['4600000000033'],
+        itemCount: 1,
+        createdAt: '2026-07-23T10:00:00Z',
+      }],
+    });
+    vi.spyOn(service as any, 'formatFbsTsdAssembly').mockImplementation(async (task: unknown) => task);
+
+    const result = await service.getNextFbsTsdAssembly('USER:worker', {
+      id: 'worker-1',
+      name: 'Сборщик',
+    } as never);
+
+    expect(fbsTsdAssembly.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        orderId: '5359402675',
+        requestId: 'request-33',
+        supplyId: 'WB-GI-33',
+        deviceCode: 'USER:worker',
+      }),
+    });
+    expect(result).toMatchObject({
+      id: 'fallback-task',
+      orderId: '5359402675',
+      requestId: 'request-33',
+    });
+  });
+
   it('allows a client to connect their own WB API without granting client editing rights', async () => {
     const created = {
       id: 'connection-1',
