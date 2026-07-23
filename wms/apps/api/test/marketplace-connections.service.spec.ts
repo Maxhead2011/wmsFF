@@ -367,6 +367,54 @@ describe('MarketplaceConnectionsService', () => {
     });
   });
 
+  it('restores an untouched FBS task when the same worker logs in with another TSD code', async () => {
+    const task = {
+      id: 'task-33',
+      clientId: 'client-1',
+      orderId: '5359402675',
+      requestId: 'request-33',
+      status: 'IN_PROGRESS',
+      deviceCode: 'USER:old-code',
+      workerUserId: 'worker-1',
+      workerName: 'Сборщик',
+      boxId: null,
+      barcode: null,
+      kiz: null,
+    };
+    const prisma = {
+      fbsTsdAssembly: {
+        findFirst: vi.fn().mockResolvedValue(task),
+        update: vi.fn().mockResolvedValue({
+          ...task,
+          deviceCode: 'USER:new-code',
+        }),
+      },
+    };
+    const clientScopes = { requireClientAccess: vi.fn() };
+    const service = new MarketplaceConnectionsService(prisma as never, clientScopes as never);
+    vi.spyOn(service as any, 'formatFbsTsdAssembly').mockImplementation(async (value: unknown) => value);
+
+    const result = await service.getNextFbsTsdAssembly('USER:new-code', {
+      id: 'worker-1',
+      name: 'Сборщик',
+    } as never);
+
+    expect(prisma.fbsTsdAssembly.update).toHaveBeenCalledWith({
+      where: { id: 'task-33' },
+      data: {
+        deviceCode: 'USER:new-code',
+        workerUserId: 'worker-1',
+        workerName: 'Сборщик',
+        errorMessage: null,
+      },
+    });
+    expect(result).toMatchObject({
+      id: 'task-33',
+      orderId: '5359402675',
+      deviceCode: 'USER:new-code',
+    });
+  });
+
   it('allows a client to connect their own WB API without granting client editing rights', async () => {
     const created = {
       id: 'connection-1',
@@ -1713,6 +1761,11 @@ describe('MarketplaceConnectionsService', () => {
       cargoPackingId: null,
     };
     const prisma = {
+      fbsSupplyPlan: {
+        findUnique: vi.fn().mockResolvedValue({
+          deliveryDestination: FbsDeliveryDestination.PICKUP_POINT,
+        }),
+      },
       fbsTsdAssembly: {
         findMany: vi.fn().mockResolvedValue([task]),
         aggregate: vi.fn().mockResolvedValue({ _sum: { itemCount: 13 } }),
@@ -1741,6 +1794,11 @@ describe('MarketplaceConnectionsService', () => {
 
   it('does not allow a cargo place to exceed its configured 14-item capacity', async () => {
     const prisma = {
+      fbsSupplyPlan: {
+        findUnique: vi.fn().mockResolvedValue({
+          deliveryDestination: FbsDeliveryDestination.PICKUP_POINT,
+        }),
+      },
       fbsTsdAssembly: {
         findMany: vi.fn().mockResolvedValue([{ id: 'task-1', orderId: '5355000001', itemCount: 1, cargoPackingId: null }]),
         aggregate: vi.fn().mockResolvedValue({ _sum: { itemCount: 14 } }),
@@ -1764,6 +1822,116 @@ describe('MarketplaceConnectionsService', () => {
       service.scanFbsCargoOrder('packing-1', { orderCode: '5355000001' }, { id: 'user-1' } as never),
     ).rejects.toThrow('Грузоместо заполнено: 14 из 14');
     expect(prisma.fbsTsdAssembly.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('opens a physical FFL box for a sorting-center supply without requesting WB cargo stickers', async () => {
+    const prisma = {
+      fbsSupplyPlan: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'plan-sc',
+          clientId: 'client-1',
+          marketplace: MarketplaceType.WILDBERRIES,
+          connectionId: 'connection-1',
+          supplyId: 'WB-GI-SC',
+          deliveryDestination: FbsDeliveryDestination.VNUKOVO_SORTING_CENTER,
+          itemsPerCargoPlace: 14,
+          cargoPlaceIds: null,
+          cargoPlaceBarcodes: null,
+          client: { id: 'client-1', code: 'CL-1', name: 'Клиент' },
+        }),
+      },
+      fbsCargoPlacePacking: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ id: 'packing-sc' }),
+      },
+    };
+    const clientScopes = { requireClientAccess: vi.fn() };
+    const service = new MarketplaceConnectionsService(prisma as never, clientScopes as never);
+    const syncStickers = vi.spyOn(service as any, 'syncFbsCargoPlaceBarcodes');
+    vi.spyOn(service as any, 'buildFbsCargoPackingResponse').mockResolvedValue({
+      state: 'SCAN_ORDER',
+    });
+
+    await service.openFbsCargoPacking(
+      { planId: 'plan-sc', cargoCode: 'ffl_out_001', deviceCode: 'TSD-1' },
+      { id: 'user-1', name: 'Сборщик' } as never,
+    );
+
+    expect(syncStickers).not.toHaveBeenCalled();
+    expect(prisma.fbsCargoPlacePacking.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        supplyId: 'WB-GI-SC',
+        cargoPlaceId: 'FFL_OUT_001',
+        cargoPlaceBarcode: 'FFL_OUT_001',
+        capacityItems: 14,
+        deviceCode: 'TSD-1',
+      }),
+    });
+  });
+
+  it('packs the next assembled sorting-center item by its product barcode', async () => {
+    const packing = {
+      id: 'packing-sc',
+      clientId: 'client-1',
+      marketplace: MarketplaceType.WILDBERRIES,
+      connectionId: 'connection-1',
+      supplyId: 'WB-GI-SC',
+      cargoPlaceId: 'FFL_OUT_001',
+      capacityItems: 14,
+      deviceCode: 'TSD-1',
+      status: 'OPEN',
+    };
+    const alreadyPacked = {
+      id: 'task-packed',
+      orderId: '5355000001',
+      skuId: 'sku-1',
+      barcode: '2040000000001',
+      itemCount: 1,
+      cargoPackingId: 'another-packing',
+    };
+    const nextItem = {
+      id: 'task-next',
+      orderId: '5355000002',
+      skuId: 'sku-1',
+      barcode: '2040000000001',
+      itemCount: 1,
+      cargoPackingId: null,
+    };
+    const prisma = {
+      fbsSupplyPlan: {
+        findUnique: vi.fn().mockResolvedValue({
+          deliveryDestination: FbsDeliveryDestination.VNUKOVO_SORTING_CENTER,
+        }),
+      },
+      barcode: {
+        findFirst: vi.fn().mockResolvedValue({ skuId: 'sku-1' }),
+      },
+      fbsTsdAssembly: {
+        findMany: vi.fn().mockResolvedValue([alreadyPacked, nextItem]),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { itemCount: 3 } }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    vi.spyOn(service as any, 'loadOwnedFbsCargoPacking').mockResolvedValue(packing);
+    vi.spyOn(service as any, 'buildFbsCargoPackingResponse').mockResolvedValue({
+      state: 'SCAN_ORDER',
+    });
+
+    await service.scanFbsCargoOrder(
+      'packing-sc',
+      { orderCode: '2040000000001' },
+      { id: 'user-1', name: 'Сборщик' } as never,
+    );
+
+    expect(prisma.fbsTsdAssembly.updateMany).toHaveBeenCalledWith({
+      where: { id: 'task-next', cargoPackingId: null },
+      data: expect.objectContaining({
+        cargoPackingId: 'packing-sc',
+        cargoPackedByUserId: 'user-1',
+        cargoPackedByName: 'Сборщик',
+      }),
+    });
   });
 
   it('changes an active FBS supply from pickup point to sorting center without cancelling assembled orders', async () => {

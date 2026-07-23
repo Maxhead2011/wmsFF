@@ -309,7 +309,7 @@ public class MainActivity extends Activity {
         root.addView(primaryMenuButton(tr("Сборка заявки", "Buyurtmani yig‘ish"), view -> openAssemblyRequests()));
         root.addView(primaryMenuButton(tr("Сборка FBS", "FBS buyurtmasini yig‘ish"), view -> openFbsAssembly()));
         root.addView(primaryMenuButton(
-            tr("Упаковка грузомест FBS", "FBS yuk joylarini qadoqlash"),
+            tr("Упаковка FBS", "FBS qadoqlash"),
             view -> openFbsCargoPacking()
         ));
         root.addView(primaryMenuButton(tr("Инвентаризация", "Inventarizatsiya"), view -> renderInventoryMenu()));
@@ -1729,7 +1729,7 @@ public class MainActivity extends Activity {
         fbsCargoPacking = null;
         selectedFbsCargoPlanId = "";
         fbsCargoFeedbackColor = 0;
-        statusMessage = tr("Загружаю поставки для ПВЗ...", "PVZ uchun yetkazib berishlar yuklanmoqda...");
+        statusMessage = tr("Загружаю поставки FBS для упаковки...", "FBS qadoqlash yetkazib berishlari yuklanmoqda...");
         loadFbsCargoPacking();
     }
 
@@ -1765,7 +1765,7 @@ public class MainActivity extends Activity {
         LinearLayout root = baseRoot();
         applyScreenFeedback(root, fbsCargoFeedbackColor);
         root.addView(header());
-        root.addView(title(tr("Упаковка грузомест FBS", "FBS yuk joylarini qadoqlash")));
+        root.addView(title(tr("Упаковка FBS", "FBS qadoqlash")));
         if (!statusMessage.isEmpty()) {
             root.addView(fbsCargoFeedbackColor == 0
                 ? messageView(statusMessage)
@@ -1781,23 +1781,37 @@ public class MainActivity extends Activity {
 
         TsdFbsCargoPackingResponse.Packing current = fbsCargoPacking == null ? null : fbsCargoPacking.packing;
         if (current != null) {
+            boolean sortingCenterBox = isSortingCenterPacking(current);
             root.addView(feedbackView(
-                tr("ОТКРЫТО ГРУЗОМЕСТО\n", "YUK JOYI OCHILDI\n") + safeText(current.cargoPlaceId) +
+                (sortingCenterBox
+                    ? tr("ОТКРЫТ КОРОБ\n", "QUTI OCHILDI\n")
+                    : tr("ОТКРЫТО ГРУЗОМЕСТО\n", "YUK JOYI OCHILDI\n")) + safeText(current.cargoPlaceId) +
                     "\n" + tr("Заполнено: ", "To‘ldirildi: ") + current.packedItems + " / " + current.capacityItems,
                 BOX_MOVEMENT_BLUE
             ));
-            root.addView(messageView(tr(
-                "Сканируйте полный ШК с наклейки заказа WB. Один заказ нельзя уложить дважды или в другое грузоместо.",
-                "WB buyurtma stikeridagi to‘liq SHKni skanerlang. Bir buyurtmani ikki marta yoki boshqa joyga qo‘yib bo‘lmaydi."
-            )));
-            fbsCargoScanInput = input(tr("Сканируйте ШК заказа WB", "WB buyurtma SHK sini skanerlang"));
+            root.addView(messageView(sortingCenterBox
+                ? tr(
+                    "Кладите товар в этот короб и сканируйте ШК каждой положенной единицы. Не собранный товар сначала отпикайте в заявке FBS.",
+                    "Tovarni shu qutiga joylang va har bir birlik SHKini skanerlang. Yig‘ilmagan tovarni avval FBS buyurtmasida yig‘ing."
+                )
+                : tr(
+                    "Сканируйте полный ШК с наклейки заказа WB. Один заказ нельзя уложить дважды или в другое грузоместо.",
+                    "WB buyurtma stikeridagi to‘liq SHKni skanerlang. Bir buyurtmani ikki marta yoki boshqa joyga qo‘yib bo‘lmaydi."
+                )));
+            fbsCargoScanInput = input(sortingCenterBox
+                ? tr("Сканируйте ШК товара", "Tovar SHKini skanerlang")
+                : tr("Сканируйте ШК заказа WB", "WB buyurtma SHK sini skanerlang"));
             root.addView(fbsCargoScanInput);
             root.addView(primaryMenuButton(
-                tr("Добавить заказ в грузоместо", "Buyurtmani yuk joyiga qo‘shish"),
+                sortingCenterBox
+                    ? tr("Положить товар в короб", "Tovarni qutiga joylash")
+                    : tr("Добавить заказ в грузоместо", "Buyurtmani yuk joyiga qo‘shish"),
                 view -> submitFbsCargoScan()
             ));
             if (current.orders != null && !current.orders.isEmpty()) {
-                root.addView(label(tr("Последние уложенные заказы", "Oxirgi joylangan buyurtmalar")));
+                root.addView(label(sortingCenterBox
+                    ? tr("Последние уложенные товары", "Oxirgi joylangan tovarlar")
+                    : tr("Последние уложенные заказы", "Oxirgi joylangan buyurtmalar")));
                 int shown = 0;
                 for (TsdFbsCargoPackingResponse.Order order : current.orders) {
                     if (shown++ >= 8) break;
@@ -1814,27 +1828,43 @@ public class MainActivity extends Activity {
                 ));
             }
             root.addView(primaryMenuButton(
-                tr("Закрыть грузоместо", "Yuk joyini yopish"),
+                sortingCenterBox
+                    ? tr("Закрыть короб", "Qutini yopish")
+                    : tr("Закрыть грузоместо", "Yuk joyini yopish"),
                 view -> confirmCloseFbsCargoPacking()
             ));
         } else {
             TsdFbsCargoPackingResponse.Supply selected = selectedFbsCargoSupply();
             if (selected != null) {
+                boolean sortingCenterBox = isSortingCenterSupply(selected);
                 root.addView(feedbackView(
                     tr("ПОСТАВКА ", "YETKAZIB BERISH ") + safeText(selected.supplyId) +
                         "\n" + safeText(selected.client == null ? null : selected.client.name) +
+                        "\n" + fbsDeliveryDestinationLabel(selected.deliveryDestination) +
                         "\n" + tr("Упаковано: ", "Qadoqlandi: ") + selected.packedItems + " / " + selected.totalPlannedItems +
-                        " · " + tr("мест закрыто: ", "yopilgan joylar: ") + selected.closedCargoPlaces + " / " + selected.cargoPlaceCount,
+                        " · " + (sortingCenterBox
+                            ? tr("коробов закрыто: ", "yopilgan qutilar: ")
+                            : tr("мест закрыто: ", "yopilgan joylar: ")) +
+                        selected.closedCargoPlaces + " / " + selected.cargoPlaceCount,
                     BOX_DUPLICATE_BLUE
                 ));
-                root.addView(messageView(tr(
-                    "Возьмите пустой физический короб, наклейте на него QR грузоместа WB и отсканируйте этот QR.",
-                    "Bo‘sh qutini oling, WB yuk joyi QR stikerini yopishtiring va QRni skanerlang."
-                )));
-                fbsCargoScanInput = input(tr("Сканируйте QR грузоместа WB", "WB yuk joyi QR kodini skanerlang"));
+                root.addView(messageView(sortingCenterBox
+                    ? tr(
+                        "Возьмите пустой короб для поставки на СЦ и отсканируйте его номер. Затем кладите товары и сканируйте их ШК.",
+                        "Saralash markazi uchun bo‘sh qutini oling va raqamini skanerlang. Keyin tovarlarni joylab, SHKlarini skanerlang."
+                    )
+                    : tr(
+                        "Возьмите пустой физический короб, наклейте на него QR грузоместа WB и отсканируйте этот QR.",
+                        "Bo‘sh qutini oling, WB yuk joyi QR stikerini yopishtiring va QRni skanerlang."
+                    )));
+                fbsCargoScanInput = input(sortingCenterBox
+                    ? tr("Сканируйте номер короба FFL", "FFL quti raqamini skanerlang")
+                    : tr("Сканируйте QR грузоместа WB", "WB yuk joyi QR kodini skanerlang"));
                 root.addView(fbsCargoScanInput);
                 root.addView(primaryMenuButton(
-                    tr("Открыть грузоместо", "Yuk joyini ochish"),
+                    sortingCenterBox
+                        ? tr("Открыть короб", "Qutini ochish")
+                        : tr("Открыть грузоместо", "Yuk joyini ochish"),
                     view -> submitFbsCargoScan()
                 ));
                 root.addView(secondaryButton(
@@ -1852,8 +1882,8 @@ public class MainActivity extends Activity {
                     : fbsCargoPacking.supplies;
                 if (supplies == null || supplies.isEmpty()) {
                     root.addView(messageView(tr(
-                        "Нет поставок в ПВЗ для упаковки. Сначала соберите заказы FBS.",
-                        "Qadoqlash uchun PVZ yetkazib berishlari yo‘q. Avval FBS buyurtmalarini yig‘ing."
+                        "Нет поставок FBS для упаковки. Сначала сформируйте поставку и соберите заказы.",
+                        "Qadoqlash uchun FBS yetkazib berishlari yo‘q. Avval yetkazib berishni yarating va buyurtmalarni yig‘ing."
                     )));
                 } else {
                     root.addView(label(tr("Выберите поставку", "Yetkazib berishni tanlang")));
@@ -1864,7 +1894,8 @@ public class MainActivity extends Activity {
                             : tr("уложить: ", "joylash: ") + supply.remainingToPack +
                                 " · " + tr("ещё собирается: ", "hali yig‘ilmoqda: ") + supply.waitingAssembly;
                         root.addView(multilineSecondaryButton(
-                            safeText(supply.supplyId) + "\n" + clientName + "\n" +
+                            safeText(supply.supplyId) + "\n" + clientName + " · " +
+                                fbsDeliveryDestinationLabel(supply.deliveryDestination) + "\n" +
                                 supply.packedItems + " / " + supply.totalPlannedItems + " · " + stateText,
                             view -> {
                                 if (supply.readyToDeliver) {
@@ -1875,7 +1906,9 @@ public class MainActivity extends Activity {
                                 }
                                 selectedFbsCargoPlanId = supply.id;
                                 fbsCargoFeedbackColor = 0;
-                                statusMessage = tr("Теперь отсканируйте QR грузоместа.", "Endi yuk joyi QR kodini skanerlang.");
+                                statusMessage = isSortingCenterSupply(supply)
+                                    ? tr("Теперь отсканируйте номер пустого короба FFL.", "Endi bo‘sh FFL quti raqamini skanerlang.")
+                                    : tr("Теперь отсканируйте QR грузоместа.", "Endi yuk joyi QR kodini skanerlang.");
                                 renderFbsCargoPackingScreen();
                             }
                         ));
@@ -1926,14 +1959,37 @@ public class MainActivity extends Activity {
     private void confirmCloseFbsCargoPacking() {
         TsdFbsCargoPackingResponse.Packing current = fbsCargoPacking == null ? null : fbsCargoPacking.packing;
         if (current == null || fbsCargoBusy) return;
+        boolean sortingCenterBox = isSortingCenterPacking(current);
         new AlertDialog.Builder(this)
-            .setTitle(tr("Закрыть грузоместо?", "Yuk joyini yopasizmi?"))
+            .setTitle(sortingCenterBox
+                ? tr("Закрыть короб?", "Qutini yopasizmi?")
+                : tr("Закрыть грузоместо?", "Yuk joyini yopasizmi?"))
             .setMessage(tr("Внутри зафиксировано: ", "Ichida qayd etilgan: ") + current.packedItems +
                 " / " + current.capacityItems + tr(" единиц. После закрытия повторное сканирование запрещено.",
                     " dona. Yopilgandan keyin qayta skanerlash taqiqlanadi."))
             .setNegativeButton(tr("Нет", "Yo‘q"), null)
             .setPositiveButton(tr("Закрыть", "Yopish"), (dialog, which) -> executeFbsCargoAction("close", null))
             .show();
+    }
+
+    private boolean isSortingCenterSupply(TsdFbsCargoPackingResponse.Supply supply) {
+        return supply != null && (
+            "SORTING_CENTER_BOX".equals(supply.packingMode) ||
+            "VNUKOVO_SORTING_CENTER".equals(supply.deliveryDestination)
+        );
+    }
+
+    private boolean isSortingCenterPacking(TsdFbsCargoPackingResponse.Packing packing) {
+        return packing != null && (
+            "SORTING_CENTER_BOX".equals(packing.packingMode) ||
+            "VNUKOVO_SORTING_CENTER".equals(packing.deliveryDestination)
+        );
+    }
+
+    private String fbsDeliveryDestinationLabel(String destination) {
+        return "VNUKOVO_SORTING_CENTER".equals(destination)
+            ? tr("СЦ Внуково", "Vnukovo saralash markazi")
+            : tr("ПВЗ", "PVZ");
     }
 
     private void executeFbsCargoAction(String action, String value) {

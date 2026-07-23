@@ -13,6 +13,8 @@ public class TsdFbsCargoPackingResponse {
         public Client client;
         public String connectionId;
         public String supplyId;
+        public String deliveryDestination;
+        public String packingMode;
         public int itemsPerCargoPlace;
         public int cargoPlaceCount;
         public int totalPlannedItems;
@@ -35,6 +37,8 @@ public class TsdFbsCargoPackingResponse {
         public String id;
         public String cargoPlaceId;
         public String cargoPlaceBarcode;
+        public String deliveryDestination;
+        public String packingMode;
         public int capacityItems;
         public int packedItems;
         public String status;

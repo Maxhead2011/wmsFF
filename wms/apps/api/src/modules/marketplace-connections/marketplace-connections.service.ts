@@ -358,12 +358,34 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   async getNextFbsTsdAssembly(deviceCodeValue: unknown, user: AuthUser) {
     const deviceCode = this.fbsTsdDeviceCode(deviceCodeValue, user);
-    const current = await this.prisma.fbsTsdAssembly.findFirst({
-      where: { deviceCode, status: 'IN_PROGRESS' },
+    let current = await this.prisma.fbsTsdAssembly.findFirst({
+      where: {
+        status: 'IN_PROGRESS',
+        OR: [
+          { deviceCode },
+          {
+            workerUserId: user.id,
+            boxId: null,
+            barcode: null,
+            kiz: null,
+          },
+        ],
+      },
       orderBy: { updatedAt: 'desc' },
     });
     if (current) {
       this.clientScopes.requireClientAccess(user, current.clientId, 'write');
+      if (current.deviceCode !== deviceCode) {
+        current = await this.prisma.fbsTsdAssembly.update({
+          where: { id: current.id },
+          data: {
+            deviceCode,
+            workerUserId: user.id,
+            workerName: user.name,
+            errorMessage: null,
+          },
+        });
+      }
       return this.formatFbsTsdAssembly(current, user, 'Продолжите начатый заказ.');
     }
 
@@ -564,7 +586,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const clientId = textValue(clientIdValue);
     if (!clientId) throw new BadRequestException('Выберите клиента.');
     this.clientScopes.requireClientAccess(user, clientId, 'read');
-    const data = await this.loadFbsCargoPackingData(clientId);
+    const data = await this.loadFbsCargoPackingData(clientId, FbsDeliveryDestination.PICKUP_POINT);
     return {
       clientId,
       fetchedAt: new Date().toISOString(),
@@ -573,17 +595,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   async openFbsCargoPacking(payload: Record<string, unknown>, user: AuthUser) {
-    const planId = requiredFbsTsdText(payload.planId, 'Выберите поставку для ПВЗ.');
-    const cargoCode = requiredFbsTsdText(payload.cargoCode, 'Отсканируйте QR грузоместа.');
+    const planId = requiredFbsTsdText(payload.planId, 'Выберите поставку FBS.');
+    const cargoCode = requiredFbsTsdText(payload.cargoCode, 'Отсканируйте номер короба или QR грузоместа.');
     const deviceCode = this.fbsTsdDeviceCode(payload.deviceCode, user);
     const plan = await this.prisma.fbsSupplyPlan.findUnique({
       where: { id: planId },
       include: { client: { select: { id: true, code: true, name: true } } },
     });
-    if (!plan || plan.deliveryDestination !== FbsDeliveryDestination.PICKUP_POINT) {
-      throw new NotFoundException('Поставка для ПВЗ не найдена. Обновите список.');
+    if (!plan) {
+      throw new NotFoundException('Поставка FBS не найдена. Обновите список.');
     }
     this.clientScopes.requireClientAccess(user, plan.clientId, 'write');
+    const isPickupPoint = plan.deliveryDestination === FbsDeliveryDestination.PICKUP_POINT;
 
     const otherOpen = await this.prisma.fbsCargoPlacePacking.findFirst({
       where: { deviceCode, status: 'OPEN' },
@@ -593,18 +616,29 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new BadRequestException(`Сначала закройте открытое грузоместо ${otherOpen.cargoPlaceId}.`);
     }
 
-    const cargoPlaceIds = uniqueStrings(asArray<unknown>(plan.cargoPlaceIds).map(textValue));
-    let cargoPlaceId = cargoPlaceIds.find((id) => id.toLowerCase() === cargoCode.toLowerCase()) ?? '';
-    let cargoPlaceBarcodes = cargoBarcodeMap(plan.cargoPlaceBarcodes);
-    if (!cargoPlaceId) {
-      cargoPlaceBarcodes = await this.syncFbsCargoPlaceBarcodes(plan);
-      cargoPlaceId =
-        Object.entries(cargoPlaceBarcodes).find(([, barcode]) => barcode === cargoCode)?.[0] ?? '';
-    }
-    if (!cargoPlaceId) {
-      throw new BadRequestException(
-        `QR ${cargoCode} не относится к выбранной поставке ${plan.supplyId}. Проверьте наклейку грузоместа.`,
-      );
+    let cargoPlaceId = cargoCode.trim();
+    let cargoPlaceBarcodes: Record<string, string> = {};
+    if (isPickupPoint) {
+      const cargoPlaceIds = uniqueStrings(asArray<unknown>(plan.cargoPlaceIds).map(textValue));
+      cargoPlaceId = cargoPlaceIds.find((id) => id.toLowerCase() === cargoCode.toLowerCase()) ?? '';
+      cargoPlaceBarcodes = cargoBarcodeMap(plan.cargoPlaceBarcodes);
+      if (!cargoPlaceId) {
+        cargoPlaceBarcodes = await this.syncFbsCargoPlaceBarcodes(plan);
+        cargoPlaceId =
+          Object.entries(cargoPlaceBarcodes).find(([, barcode]) => barcode === cargoCode)?.[0] ?? '';
+      }
+      if (!cargoPlaceId) {
+        throw new BadRequestException(
+          `QR ${cargoCode} не относится к выбранной поставке ${plan.supplyId}. Проверьте наклейку грузоместа.`,
+        );
+      }
+    } else {
+      if (!cargoPlaceId.toUpperCase().startsWith('FFL')) {
+        throw new BadRequestException(
+          'Для поставки на СЦ сначала отсканируйте номер физического короба с префиксом FFL.',
+        );
+      }
+      cargoPlaceId = cargoPlaceId.toUpperCase();
     }
 
     const existing = await this.prisma.fbsCargoPlacePacking.findFirst({
@@ -633,7 +667,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             connectionId: plan.connectionId,
             supplyId: plan.supplyId,
             cargoPlaceId,
-            cargoPlaceBarcode: cargoPlaceBarcodes[cargoPlaceId] || cargoCode,
+            cargoPlaceBarcode: isPickupPoint ? cargoPlaceBarcodes[cargoPlaceId] || cargoCode : cargoPlaceId,
             capacityItems: Math.max(1, plan.itemsPerCargoPlace),
             status: 'OPEN',
             deviceCode,
@@ -651,40 +685,97 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return this.buildFbsCargoPackingResponse(
       deviceCode,
       user,
-      `Грузоместо ${cargoPlaceId} открыто. Сканируйте ШК заказов WB.`,
+      isPickupPoint
+        ? `Грузоместо ${cargoPlaceId} открыто. Сканируйте ШК заказов WB.`
+        : `Короб ${cargoPlaceId} открыт. Сканируйте ШК товаров, которые кладёте в него.`,
     );
   }
 
   async scanFbsCargoOrder(packingId: string, payload: Record<string, unknown>, user: AuthUser) {
     const packing = await this.loadOwnedFbsCargoPacking(packingId, user);
-    const orderCode = requiredFbsTsdText(payload.orderCode, 'Отсканируйте ШК заказа Wildberries.');
-    const candidates = await this.prisma.fbsTsdAssembly.findMany({
+    const plan = await this.prisma.fbsSupplyPlan.findUnique({
       where: {
-        clientId: packing.clientId,
-        marketplace: packing.marketplace,
-        connectionId: packing.connectionId,
-        supplyId: packing.supplyId,
-        status: 'COMPLETED',
-        OR: [
-          { orderId: orderCode },
-          { stickerBarcode: orderCode },
-          { stickerPartB: orderCode },
-        ],
+        marketplace_connectionId_supplyId: {
+          marketplace: packing.marketplace,
+          connectionId: packing.connectionId,
+          supplyId: packing.supplyId,
+        },
       },
-      orderBy: { completedAt: 'asc' },
+      select: { deliveryDestination: true },
     });
-    const exact = candidates.filter(
-      (task) => task.orderId === orderCode || task.stickerBarcode === orderCode,
+    if (!plan) {
+      throw new NotFoundException(`План поставки ${packing.supplyId} не найден.`);
+    }
+    const isSortingCenter = plan.deliveryDestination === FbsDeliveryDestination.VNUKOVO_SORTING_CENTER;
+    const orderCode = requiredFbsTsdText(
+      payload.orderCode,
+      isSortingCenter ? 'Отсканируйте ШК товара.' : 'Отсканируйте ШК заказа Wildberries.',
     );
-    const matched = exact.length === 1 ? exact[0] : candidates.length === 1 ? candidates[0] : null;
+    let matched: FbsTsdAssemblyRecord | null = null;
+    let candidates: FbsTsdAssemblyRecord[] = [];
+
+    if (isSortingCenter) {
+      const barcode = await this.prisma.barcode.findFirst({
+        where: {
+          value: orderCode,
+          sku: { clientId: packing.clientId },
+        },
+        select: { skuId: true },
+      });
+      candidates = await this.prisma.fbsTsdAssembly.findMany({
+        where: {
+          clientId: packing.clientId,
+          marketplace: packing.marketplace,
+          connectionId: packing.connectionId,
+          supplyId: packing.supplyId,
+          status: 'COMPLETED',
+          OR: [
+            { barcode: orderCode },
+            ...(barcode ? [{ skuId: barcode.skuId }] : []),
+          ],
+        },
+        orderBy: { completedAt: 'asc' },
+      });
+      matched = candidates.find((task) => !task.cargoPackingId) ?? null;
+      if (!matched && candidates.length > 0) {
+        return this.buildFbsCargoPackingResponse(
+          packing.deviceCode,
+          user,
+          `Все собранные товары с ШК ${orderCode} уже разложены по коробам. Если есть ещё единица, сначала соберите её в заявке FBS.`,
+        );
+      }
+    } else {
+      candidates = await this.prisma.fbsTsdAssembly.findMany({
+        where: {
+          clientId: packing.clientId,
+          marketplace: packing.marketplace,
+          connectionId: packing.connectionId,
+          supplyId: packing.supplyId,
+          status: 'COMPLETED',
+          OR: [
+            { orderId: orderCode },
+            { stickerBarcode: orderCode },
+            { stickerPartB: orderCode },
+          ],
+        },
+        orderBy: { completedAt: 'asc' },
+      });
+      const exact = candidates.filter(
+        (task) => task.orderId === orderCode || task.stickerBarcode === orderCode,
+      );
+      matched = exact.length === 1 ? exact[0] : candidates.length === 1 ? candidates[0] : null;
+    }
+
     if (!matched) {
-      if (candidates.length > 1) {
+      if (!isSortingCenter && candidates.length > 1) {
         throw new BadRequestException(
           `Цифры ${orderCode} встречаются на нескольких наклейках. Отсканируйте полный ШК заказа WB.`,
         );
       }
       throw new BadRequestException(
-        `Заказ по ШК ${orderCode} не найден в поставке ${packing.supplyId} или ещё не собран на ТСД.`,
+        isSortingCenter
+          ? `Товар с ШК ${orderCode} не найден среди собранных заказов поставки ${packing.supplyId}. Сначала отпикайте его в заявке FBS.`
+          : `Заказ по ШК ${orderCode} не найден в поставке ${packing.supplyId} или ещё не собран на ТСД.`,
       );
     }
     if (matched.cargoPackingId === packing.id) {
@@ -710,7 +801,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const packedItems = packed._sum.itemCount ?? 0;
     if (packedItems + matched.itemCount > packing.capacityItems) {
       throw new BadRequestException(
-        `Грузоместо заполнено: ${packedItems} из ${packing.capacityItems}. Закройте его и откройте следующее.`,
+        isSortingCenter
+          ? `Короб заполнен: ${packedItems} из ${packing.capacityItems}. Закройте его и откройте следующий.`
+          : `Грузоместо заполнено: ${packedItems} из ${packing.capacityItems}. Закройте его и откройте следующее.`,
       );
     }
     const updated = await this.prisma.fbsTsdAssembly.updateMany({
@@ -728,7 +821,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return this.buildFbsCargoPackingResponse(
       packing.deviceCode,
       user,
-      `Заказ ${matched.orderId} добавлен в грузоместо ${packing.cargoPlaceId}.`,
+      isSortingCenter
+        ? `Товар по заказу ${matched.orderId} добавлен в короб ${packing.cargoPlaceId}.`
+        : `Заказ ${matched.orderId} добавлен в грузоместо ${packing.cargoPlaceId}.`,
     );
   }
 
@@ -739,7 +834,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       orderBy: { cargoPackedAt: 'desc' },
       select: { id: true, orderId: true },
     });
-    if (!last) throw new BadRequestException('В грузоместе пока нет заказов.');
+    if (!last) throw new BadRequestException('В этой упаковке пока нет товаров.');
     await this.prisma.fbsTsdAssembly.update({
       where: { id: last.id },
       data: {
@@ -752,7 +847,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return this.buildFbsCargoPackingResponse(
       packing.deviceCode,
       user,
-      `Последний заказ ${last.orderId} удалён из грузоместа.`,
+      `Последний товар по заказу ${last.orderId} удалён из упаковки.`,
     );
   }
 
@@ -763,7 +858,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       _sum: { itemCount: true },
     });
     const packedItems = packed._sum.itemCount ?? 0;
-    if (packedItems === 0) throw new BadRequestException('Пустое грузоместо закрыть нельзя.');
+    if (packedItems === 0) throw new BadRequestException('Пустой короб или грузоместо закрыть нельзя.');
     await this.prisma.fbsCargoPlacePacking.update({
       where: { id: packing.id },
       data: {
@@ -776,7 +871,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return this.buildFbsCargoPackingResponse(
       packing.deviceCode,
       user,
-      `Грузоместо ${packing.cargoPlaceId} закрыто: ${packedItems} из ${packing.capacityItems} единиц.`,
+      `Упаковка ${packing.cargoPlaceId} закрыта: ${packedItems} из ${packing.capacityItems} единиц.`,
     );
   }
 
@@ -798,24 +893,45 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const current = data.packings.find(
       (packing) => packing.deviceCode === deviceCode && packing.status === 'OPEN',
     );
+    const currentPlan = current
+      ? data.plans.find(
+          (plan) =>
+            plan.marketplace === current.marketplace &&
+            plan.connectionId === current.connectionId &&
+            plan.supplyId === current.supplyId,
+        )
+      : undefined;
+    const currentIsSortingCenter =
+      currentPlan?.deliveryDestination === FbsDeliveryDestination.VNUKOVO_SORTING_CENTER;
     return {
       state: current ? 'SCAN_ORDER' : data.summaries.length > 0 ? 'SELECT_SUPPLY' : 'EMPTY',
       message: message || (current
-        ? `Продолжите грузоместо ${current.cargoPlaceId}.`
+        ? currentIsSortingCenter
+          ? `Продолжите упаковку короба ${current.cargoPlaceId}: сканируйте ШК товаров.`
+          : `Продолжите грузоместо ${current.cargoPlaceId}.`
         : data.summaries.length > 0
-          ? 'Выберите поставку и отсканируйте QR грузоместа.'
-          : 'Поставок в ПВЗ для упаковки сейчас нет.'),
+          ? 'Выберите поставку и отсканируйте номер короба или QR грузоместа.'
+          : 'Поставок FBS для упаковки сейчас нет.'),
       supplies: data.summaries,
-      packing: current ? formatFbsCargoPacking(current, data.skuById) : null,
+      packing: current
+        ? formatFbsCargoPacking(
+            current,
+            data.skuById,
+            currentPlan?.deliveryDestination ?? FbsDeliveryDestination.PICKUP_POINT,
+          )
+        : null,
     };
   }
 
-  private async loadFbsCargoPackingData(clientFilter: string | { in: string[] } | undefined) {
+  private async loadFbsCargoPackingData(
+    clientFilter: string | { in: string[] } | undefined,
+    deliveryDestination?: FbsDeliveryDestination,
+  ) {
     const plans = await this.prisma.fbsSupplyPlan.findMany({
       where: {
         clientId: clientFilter,
         marketplace: MarketplaceType.WILDBERRIES,
-        deliveryDestination: FbsDeliveryDestination.PICKUP_POINT,
+        ...(deliveryDestination ? { deliveryDestination } : {}),
       },
       include: { client: { select: { id: true, code: true, name: true } } },
       orderBy: { updatedAt: 'desc' },
@@ -872,15 +988,25 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const packedItems = planAssemblies
         .filter((task) => Boolean(task.cargoPackingId))
         .reduce((sum, task) => sum + Math.max(1, task.itemCount), 0);
-      const cargoPlaceIds = uniqueStrings(asArray<unknown>(plan.cargoPlaceIds).map(textValue));
       const closedIds = new Set(
         planPackings.filter((packing) => packing.status === 'CLOSED').map((packing) => packing.cargoPlaceId),
       );
+      const isPickupPoint = plan.deliveryDestination === FbsDeliveryDestination.PICKUP_POINT;
+      const cargoPlaceIds = isPickupPoint
+        ? uniqueStrings(asArray<unknown>(plan.cargoPlaceIds).map(textValue))
+        : uniqueStrings(planPackings.map((packing) => packing.cargoPlaceId));
+      const readyToDeliver =
+        totalPlannedItems > 0 &&
+        packedItems >= totalPlannedItems &&
+        cargoPlaceIds.length > 0 &&
+        cargoPlaceIds.every((id) => closedIds.has(id));
       return {
         id: plan.id,
         client: plan.client,
         connectionId: plan.connectionId,
         supplyId: plan.supplyId,
+        deliveryDestination: plan.deliveryDestination,
+        packingMode: isPickupPoint ? 'WB_CARGO_PLACE' : 'SORTING_CENTER_BOX',
         itemsPerCargoPlace: Math.max(1, plan.itemsPerCargoPlace),
         cargoPlaceCount: cargoPlaceIds.length,
         totalPlannedItems,
@@ -889,19 +1015,17 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         remainingToPack: Math.max(0, completedItems - packedItems),
         waitingAssembly: Math.max(0, totalPlannedItems - completedItems),
         closedCargoPlaces: closedIds.size,
-        readyToDeliver:
-          totalPlannedItems > 0 &&
-          packedItems >= totalPlannedItems &&
-          cargoPlaceIds.length > 0 &&
-          cargoPlaceIds.every((id) => closedIds.has(id)),
+        readyToDeliver,
         cargoPlaces: cargoPlaceIds.map((cargoPlaceId) => {
           const packing = planPackings.find((item) => item.cargoPlaceId === cargoPlaceId);
           return packing
-            ? formatFbsCargoPacking(packing, skuById)
+            ? formatFbsCargoPacking(packing, skuById, plan.deliveryDestination)
             : {
                 id: null,
                 cargoPlaceId,
                 cargoPlaceBarcode: cargoBarcodeMap(plan.cargoPlaceBarcodes)[cargoPlaceId] ?? null,
+                deliveryDestination: plan.deliveryDestination,
+                packingMode: 'WB_CARGO_PLACE',
                 capacityItems: Math.max(1, plan.itemsPerCargoPlace),
                 packedItems: 0,
                 status: 'NOT_STARTED',
@@ -6119,11 +6243,17 @@ function cargoPlaceIdFromWbBarcode(cargoPlaceIds: string[], barcode: string) {
 function formatFbsCargoPacking(
   packing: FbsCargoPackingWithAssemblies,
   skuById = new Map<string, { color: string | null; size: string | null }>(),
+  deliveryDestination: FbsDeliveryDestination = FbsDeliveryDestination.PICKUP_POINT,
 ) {
   return {
     id: packing.id,
     cargoPlaceId: packing.cargoPlaceId,
     cargoPlaceBarcode: packing.cargoPlaceBarcode,
+    deliveryDestination,
+    packingMode:
+      deliveryDestination === FbsDeliveryDestination.PICKUP_POINT
+        ? 'WB_CARGO_PLACE'
+        : 'SORTING_CENTER_BOX',
     capacityItems: packing.capacityItems,
     packedItems: packing.assemblies.reduce((sum, task) => sum + Math.max(1, task.itemCount), 0),
     status: packing.status,
