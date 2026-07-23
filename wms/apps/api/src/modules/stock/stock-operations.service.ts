@@ -1473,20 +1473,26 @@ export class StockOperationsService {
         skuId: true,
         boxId: true,
         itemCount: true,
+        completedAt: true,
       },
     });
     if (completedTasks.length === 0) return;
 
     const completedBySelection = new Map<string, number>();
+    const completedAtBySelection = new Map<string, Date>();
     for (const task of completedTasks) {
       if (!task.boxId) continue;
       const key = `${task.requestItemId}:${task.skuId}:${task.boxId}`;
       completedBySelection.set(key, (completedBySelection.get(key) ?? 0) + Math.max(1, task.itemCount));
+      if (task.completedAt) {
+        const current = completedAtBySelection.get(key);
+        if (!current || task.completedAt < current) completedAtBySelection.set(key, task.completedAt);
+      }
     }
 
     const selectedSkuIds = [...new Set(selections.map((selection) => selection.skuId))];
     const selectedBoxIds = [...new Set(selections.map((selection) => selection.boxId))];
-    const [balances, boxes] = await Promise.all([
+    const [balances, boxes, inventoryAdjustments] = await Promise.all([
       tx.stockBalance.findMany({
         where: {
           clientId: request.clientId,
@@ -1498,6 +1504,7 @@ export class StockOperationsService {
         select: {
           skuId: true,
           boxId: true,
+          status: true,
           quantity: true,
         },
       }),
@@ -1505,13 +1512,34 @@ export class StockOperationsService {
         where: { id: { in: selectedBoxIds } },
         select: { id: true, code: true, palletId: true },
       }),
+      tx.stockMovement.findMany({
+        where: {
+          clientId: request.clientId,
+          skuId: { in: selectedSkuIds },
+          boxId: { in: selectedBoxIds },
+          type: MovementType.INVENTORY_ADJUSTMENT,
+          quantity: { lt: 0 },
+        },
+        select: {
+          skuId: true,
+          boxId: true,
+          createdAt: true,
+        },
+      }),
     ]);
     const boxById = new Map(boxes.map((box) => [box.id, box]));
     const balanceBySelection = new Map<string, number>();
+    const inProcessBalanceBySelection = new Map<string, number>();
     for (const balance of balances) {
       if (!balance.boxId) continue;
       const key = `${balance.skuId}:${balance.boxId}`;
       balanceBySelection.set(key, (balanceBySelection.get(key) ?? 0) + balance.quantity);
+      if (balance.status !== StockStatus.AVAILABLE) {
+        inProcessBalanceBySelection.set(
+          key,
+          (inProcessBalanceBySelection.get(key) ?? 0) + balance.quantity,
+        );
+      }
     }
 
     for (const selection of selections) {
@@ -1520,8 +1548,24 @@ export class StockOperationsService {
       if (completedQuantity < selection.quantity) continue;
 
       const balanceKey = `${selection.skuId}:${selection.boxId}`;
-      const availableQuantity = balanceBySelection.get(balanceKey) ?? 0;
-      const shortage = Math.max(0, selection.quantity - availableQuantity);
+      const completedAt = completedAtBySelection.get(
+        `${selection.requestItemId}:${selection.skuId}:${selection.boxId}`,
+      );
+      const recountedAfterCollection = Boolean(
+        completedAt &&
+          inventoryAdjustments.some(
+            (movement) =>
+              movement.skuId === selection.skuId &&
+              movement.boxId === selection.boxId &&
+              movement.createdAt >= completedAt,
+          ),
+      );
+      // После физической сборки инвентаризация считает только то, что осталось в исходном коробе.
+      // Такой AVAILABLE-остаток нельзя повторно относить к уже собранной заявке.
+      const reservedQuantity = recountedAfterCollection
+        ? inProcessBalanceBySelection.get(balanceKey) ?? 0
+        : balanceBySelection.get(balanceKey) ?? 0;
+      const shortage = Math.max(0, selection.quantity - reservedQuantity);
       if (shortage === 0) continue;
 
       const box = boxById.get(selection.boxId);
@@ -1555,7 +1599,8 @@ export class StockOperationsService {
             `короба ${box.code}; резерв будет списан при закрытии заявки.`,
         },
       });
-      balanceBySelection.set(balanceKey, availableQuantity + shortage);
+      balanceBySelection.set(balanceKey, (balanceBySelection.get(balanceKey) ?? 0) + shortage);
+      inProcessBalanceBySelection.set(balanceKey, reservedQuantity + shortage);
     }
   }
 

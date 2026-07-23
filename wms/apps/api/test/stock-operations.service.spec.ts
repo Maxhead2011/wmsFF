@@ -702,6 +702,7 @@ describe('StockOperationsService', () => {
             skuId: 'sku-1',
             boxId: 'box-1',
             itemCount: 1,
+            completedAt: new Date('2026-07-22T20:00:00.000Z'),
           })),
         ),
       },
@@ -710,6 +711,7 @@ describe('StockOperationsService', () => {
           {
             skuId: 'sku-1',
             boxId: 'box-1',
+            status: 'AVAILABLE',
             quantity: 1,
           },
         ]),
@@ -725,6 +727,13 @@ describe('StockOperationsService', () => {
         ]),
       },
       stockMovement: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            skuId: 'sku-1',
+            boxId: 'box-1',
+            createdAt: new Date('2026-07-23T12:00:00.000Z'),
+          },
+        ]),
         create: vi.fn().mockResolvedValue({ id: 'recovery-movement' }),
       },
     };
@@ -776,7 +785,7 @@ describe('StockOperationsService', () => {
 
     expect(tx.stockBalance.upsert).toHaveBeenCalledWith({
       where: { balanceKey: 'client-1:sku-1:box-1:no-pallet:SHIPPING' },
-      update: { quantity: { increment: 6 } },
+      update: { quantity: { increment: 7 } },
       create: {
         balanceKey: 'client-1:sku-1:box-1:no-pallet:SHIPPING',
         clientId: 'client-1',
@@ -784,7 +793,7 @@ describe('StockOperationsService', () => {
         boxId: 'box-1',
         palletId: null,
         status: 'SHIPPING',
-        quantity: 6,
+        quantity: 7,
       },
     });
     expect(tx.stockMovement.create).toHaveBeenCalledWith(
@@ -792,7 +801,7 @@ describe('StockOperationsService', () => {
         data: expect.objectContaining({
           type: 'INVENTORY_ADJUSTMENT',
           status: 'SHIPPING',
-          quantity: 6,
+          quantity: 7,
           sourceDocument: 'request-32',
           idempotencyKey: 'manual-status-done:request-32:fbs-reconciled:selection-1',
         }),
