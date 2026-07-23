@@ -1463,6 +1463,117 @@ describe('MarketplaceConnectionsService', () => {
     expect(prisma.fbsTsdAssembly.updateMany).not.toHaveBeenCalled();
   });
 
+  it('changes an active FBS supply from pickup point to sorting center without cancelling assembled orders', async () => {
+    const orders = [
+      {
+        id: '5355000001',
+        connectionId: 'connection-1',
+        marketplace: MarketplaceType.WILDBERRIES,
+        supplierStatus: 'confirm',
+        supplyId: 'WB-GI-1',
+      },
+      {
+        id: '5355000002',
+        connectionId: 'connection-1',
+        marketplace: MarketplaceType.WILDBERRIES,
+        supplierStatus: 'confirm',
+        supplyId: 'WB-GI-1',
+      },
+    ];
+    const prisma: any = {
+      fbsSupplyPlan: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'plan-1',
+          clientId: 'client-1',
+          deliveryDestination: FbsDeliveryDestination.PICKUP_POINT,
+        }),
+        update: vi.fn().mockResolvedValue({}),
+      },
+      fbsOrderRequestLink: {
+        findMany: vi.fn().mockResolvedValue([{ requestId: 'request-1' }]),
+      },
+      fbsTsdAssembly: {
+        updateMany: vi.fn().mockResolvedValue({ count: 2 }),
+      },
+      fbsCargoPlacePacking: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      clientRequestEvent: {
+        createMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+    prisma.$transaction = vi.fn(async (callback: (tx: typeof prisma) => Promise<unknown>) => callback(prisma));
+    const clientScopes = { requireClientAccess: vi.fn() };
+    const service = new MarketplaceConnectionsService(prisma as never, clientScopes as never);
+    vi.spyOn(service as any, 'resolveSelectedFbsOrders').mockResolvedValue({
+      response: { orders },
+      orders,
+    });
+    vi.spyOn(service as any, 'loadSelectedConnections').mockResolvedValue([
+      { id: 'connection-1', apiKey: 'wb-secret' },
+    ]);
+    vi.spyOn(service as any, 'refreshFbsOrdersCache').mockResolvedValue({ orders: [] });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ trbxes: [{ id: 'WB-TRBX-1' }, { id: 'WB-TRBX-2' }] }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 204,
+          json: async () => ({}),
+        }),
+    );
+
+    const result = await service.changeFbsSuppliesDestination(
+      {
+        clientId: 'client-1',
+        deliveryDestination: FbsDeliveryDestination.VNUKOVO_SORTING_CENTER,
+        orders: orders.map((order) => ({ connectionId: order.connectionId, id: order.id })),
+      },
+      { id: 'user-1', name: 'Администратор' } as never,
+    );
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      'https://marketplace-api.wildberries.ru/api/v3/supplies/WB-GI-1/trbx',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      'https://marketplace-api.wildberries.ru/api/v3/supplies/WB-GI-1/trbx',
+      expect.objectContaining({
+        method: 'DELETE',
+        body: JSON.stringify({ trbxIds: ['WB-TRBX-1', 'WB-TRBX-2'] }),
+      }),
+    );
+    expect(prisma.fbsTsdAssembly.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ cargoPackingId: null }),
+    }));
+    expect(prisma.fbsCargoPlacePacking.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: 'CANCELLED' }),
+    }));
+    expect(prisma.fbsSupplyPlan.update).toHaveBeenCalledWith({
+      where: { id: 'plan-1' },
+      data: {
+        deliveryDestination: FbsDeliveryDestination.VNUKOVO_SORTING_CENTER,
+        cargoPlaceCount: 0,
+        cargoPlaceIds: [],
+        cargoPlaceBarcodes: {},
+      },
+    });
+    expect(result).toMatchObject({
+      changed: 1,
+      removedCargoPlaces: 2,
+      detachedOrders: 2,
+      cancelledPackings: 1,
+      failed: [],
+    });
+  });
+
   it('calculates how many units and unique product positions will be taken from a scanned FBS box', async () => {
     const prisma = {
       clientRequestItem: {

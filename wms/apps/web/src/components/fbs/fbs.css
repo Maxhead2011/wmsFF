@@ -417,6 +417,17 @@
   background: #fef2f2 !important;
 }
 
+.fbs-order-actions__change-destination {
+  border-color: #fbbf24 !important;
+  background: #fffbeb !important;
+  color: #92400e !important;
+}
+
+.fbs-order-actions__change-destination:hover:not(:disabled) {
+  border-color: #f59e0b !important;
+  background: #fef3c7 !important;
+}
+
 .fbs-order-actions__message,
 .fbs-order-actions__error {
   grid-column: 1 / -1;

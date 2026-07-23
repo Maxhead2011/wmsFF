@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  ArrowRightLeft,
   Archive,
   BadgeRussianRuble,
   Boxes,
@@ -30,6 +31,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 're
 import {
   assembleFbsOrders,
   cancelFbsOrders,
+  changeFbsSuppliesDestination,
   createFbsPass,
   createFbsMarketplaceConnection,
   createFbsRequest,
@@ -158,7 +160,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
   }>({ status: 'idle', data: null, error: '' });
   const [selectedOrderKeys, setSelectedOrderKeys] = useState<Set<string>>(() => new Set());
   const [orderAction, setOrderAction] = useState<
-    'assemble' | 'reship' | 'deliver' | 'cancel' | 'stickers' | 'cargo' | 'supply' | 'request' | 'pick-list' | null
+    'assemble' | 'reship' | 'deliver' | 'change-destination' | 'cancel' | 'stickers' | 'cargo' | 'supply' | 'request' | 'pick-list' | null
   >(null);
   const [rowActionKey, setRowActionKey] = useState<string | null>(null);
   const [orderActionMessage, setOrderActionMessage] = useState('');
@@ -411,6 +413,50 @@ export function FbsPanel({ session }: FbsPanelProps) {
       if (result.failed.length) setOrderActionError(result.failed.map((item) => `${item.supplyId}: ${item.message}`).join(' '));
     } catch (caught) {
       setOrderActionError(caught instanceof Error ? caught.message : 'Не удалось передать поставки в доставку.');
+    } finally {
+      setOrderAction(null);
+    }
+  }
+
+  async function changeSelectedSuppliesToSortingCenter(orders: FbsOrderSummary[]) {
+    if (!selectedClientId || orders.length === 0) return;
+    const supplyCount = new Set(orders.map((order) => `${order.connectionId}:${order.supplyId}`)).size;
+    const cargoPlaceCount = new Map(
+      orders.map((order) => [
+        `${order.connectionId}:${order.supplyId}`,
+        order.shipmentPlan?.cargoPlaceCount ?? 0,
+      ]),
+    );
+    const totalCargoPlaces = [...cargoPlaceCount.values()].reduce((sum, count) => sum + count, 0);
+    if (!window.confirm(
+      `Сменить направление ${supplyCount} поставк(и) с ПВЗ на сортировочный центр?\n\n` +
+      `Будут удалены грузоместа WB: ${totalCargoPlaces}. Упаковка грузомест будет расформирована. ` +
+      'Заказы, собранные товары, КИЗ и наклейки заказов останутся без изменений.',
+    )) return;
+
+    setOrderAction('change-destination');
+    setOrderActionMessage('');
+    setOrderActionError('');
+    try {
+      const result = await changeFbsSuppliesDestination(session.accessToken, {
+        clientId: selectedClientId,
+        orders: orders.map((order) => ({ connectionId: order.connectionId, id: order.id })),
+        deliveryDestination: 'VNUKOVO_SORTING_CENTER',
+      });
+      ++loadSequence.current;
+      setOrdersState({ status: 'ready', data: result.orders, error: '' });
+      setSelectedOrderKeys(new Set());
+      setOrderActionMessage(
+        `Направление изменено у ${result.changed} поставк(и). Удалено грузомест WB: ${result.removedCargoPlaces}. ` +
+        `Заказы и сборка сохранены, дальнейшая логистика будет рассчитана по тарифу СЦ. ` +
+        `После завершения передайте поставку WB и скачайте ШК для СЦ.`,
+      );
+      if (result.failed.length > 0) {
+        setOrderActionError(result.failed.map((item) => `${item.supplyId}: ${item.message}`).join(' '));
+      }
+      void loadCargoPackings();
+    } catch (caught) {
+      setOrderActionError(caught instanceof Error ? caught.message : 'Не удалось сменить направление поставки.');
     } finally {
       setOrderAction(null);
     }
@@ -738,6 +784,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
             onAssemble={assembleSelectedOrders}
             onReship={reshipSelectedOrders}
             onDeliver={deliverSelectedSupplies}
+            onChangeDestination={changeSelectedSuppliesToSortingCenter}
             onCancel={cancelSelectedOrders}
             onDownloadStickers={downloadSelectedOrderStickers}
             onDownloadCargoStickers={downloadSelectedCargoPlaceStickers}
@@ -1165,6 +1212,7 @@ function FbsOrdersView({
   onAssemble,
   onReship,
   onDeliver,
+  onChangeDestination,
   onCancel,
   onDownloadStickers,
   onDownloadCargoStickers,
@@ -1178,13 +1226,14 @@ function FbsOrdersView({
   view: Exclude<FbsView, 'cargo' | 'cost' | 'calculator' | 'pricing' | 'passes'>;
   selectedOrderKeys: Set<string>;
   onSelectionChange: (keys: Set<string>) => void;
-  orderAction: 'assemble' | 'reship' | 'deliver' | 'cancel' | 'stickers' | 'cargo' | 'supply' | 'request' | 'pick-list' | null;
+  orderAction: 'assemble' | 'reship' | 'deliver' | 'change-destination' | 'cancel' | 'stickers' | 'cargo' | 'supply' | 'request' | 'pick-list' | null;
   rowActionKey: string | null;
   actionMessage: string;
   actionError: string;
   onAssemble: (orders: FbsOrderSummary[]) => Promise<void>;
   onReship: (orders: FbsOrderSummary[]) => Promise<void>;
   onDeliver: (orders: FbsOrderSummary[]) => Promise<void>;
+  onChangeDestination: (orders: FbsOrderSummary[]) => Promise<void>;
   onCancel: (orders: FbsOrderSummary[]) => Promise<void>;
   onDownloadStickers: (orders: FbsOrderSummary[]) => Promise<void>;
   onDownloadCargoStickers: (orders: FbsOrderSummary[]) => Promise<void>;
@@ -1235,6 +1284,16 @@ function FbsOrdersView({
   const cancelOrders = selectedOrders.filter(
     (order) => order.marketplace === 'WILDBERRIES' && ['new', 'confirm'].includes(order.supplierStatus),
   );
+  const changeDestinationOrders = selectedOrders.filter(
+    (order) =>
+      order.marketplace === 'WILDBERRIES' &&
+      order.supplierStatus === 'confirm' &&
+      Boolean(order.supplyId) &&
+      fbsOrderRequiresCargoPlaces(order, data?.deliveryPlan.requiresCargoPlaces === true),
+  );
+  const changeDestinationSupplyCount = new Set(
+    changeDestinationOrders.map((order) => `${order.connectionId}:${order.supplyId}`),
+  ).size;
   const stickerOrders = selectedOrders.filter(
     (order) => order.marketplace === 'WILDBERRIES' && ['confirm', 'complete'].includes(order.supplierStatus),
   );
@@ -1358,6 +1417,18 @@ function FbsOrdersView({
                 </button>
                 <button
                   type="button"
+                  className="button button-secondary fbs-order-actions__change-destination"
+                  disabled={changeDestinationOrders.length === 0 || orderAction !== null}
+                  onClick={() => void onChangeDestination(changeDestinationOrders)}
+                  title="Удалить грузоместа ПВЗ и сохранить эту же поставку для сдачи в сортировочный центр"
+                >
+                  <ArrowRightLeft size={16} aria-hidden="true" />
+                  {orderAction === 'change-destination'
+                    ? 'Меняю направление…'
+                    : `ПВЗ → СЦ (${changeDestinationSupplyCount})`}
+                </button>
+                <button
+                  type="button"
                   className="button button-secondary"
                   disabled={requestOrders.length === 0 || orderAction !== null}
                   onClick={() => void onCreateRequest(requestOrders)}
@@ -1449,6 +1520,13 @@ function FbsOrdersView({
             const groupCargoOrders = group.orders.filter(
               (order) => fbsOrderRequiresCargoPlaces(order, data?.deliveryPlan.requiresCargoPlaces === true),
             );
+            const groupChangeDestinationOrders = group.orders.filter(
+              (order) =>
+                order.marketplace === 'WILDBERRIES' &&
+                order.supplierStatus === 'confirm' &&
+                Boolean(order.supplyId) &&
+                fbsOrderRequiresCargoPlaces(order, data?.deliveryPlan.requiresCargoPlaces === true),
+            );
             return (
             <tbody
               key={group.key}
@@ -1484,6 +1562,16 @@ function FbsOrdersView({
                         {groupCargoOrders.length > 0 ? (
                           <button type="button" disabled={orderAction !== null} onClick={() => void onDownloadCargoStickers(groupCargoOrders)}>
                             <QrCode size={13} aria-hidden="true" /> QR грузомест
+                          </button>
+                        ) : null}
+                        {groupChangeDestinationOrders.length > 0 ? (
+                          <button
+                            type="button"
+                            disabled={orderAction !== null}
+                            onClick={() => void onChangeDestination(groupChangeDestinationOrders)}
+                            title="Исправить ошибочный выбор ПВЗ и сохранить заказы для сдачи в СЦ"
+                          >
+                            <ArrowRightLeft size={13} aria-hidden="true" /> ПВЗ → СЦ
                           </button>
                         ) : null}
                         {groupDeliverOrders.length > 0 ? (

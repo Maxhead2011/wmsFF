@@ -2337,6 +2337,196 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return { delivered: delivered.length, failed, orders: refreshedOrders };
   }
 
+  async changeFbsSuppliesDestination(dto: FbsOrderSelectionDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    this.clientScopes.requireClientAccess(user, clientId, 'write');
+    if (dto.deliveryDestination !== FbsDeliveryDestination.VNUKOVO_SORTING_CENTER) {
+      throw new BadRequestException('Сейчас поддерживается исправление направления только с ПВЗ на сортировочный центр.');
+    }
+
+    const { response, orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders);
+    const unavailable = orders.filter(
+      (order) =>
+        order.marketplace !== MarketplaceType.WILDBERRIES ||
+        order.supplierStatus !== 'confirm' ||
+        !order.supplyId,
+    );
+    if (unavailable.length > 0) {
+      throw new BadRequestException(
+        `Сменить направление можно только у поставки WB в статусе «На сборке». Проверьте: ${unavailable
+          .map((order) => order.id)
+          .join(', ')}.`,
+      );
+    }
+
+    const connections = await this.loadSelectedConnections(clientId, orders);
+    const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
+    const supplies = new Map<string, { connectionId: string; supplyId: string }>();
+    orders.forEach((order) => {
+      supplies.set(`${order.connectionId}:${order.supplyId}`, {
+        connectionId: order.connectionId,
+        supplyId: order.supplyId!,
+      });
+    });
+
+    const changed: Array<{
+      supplyId: string;
+      removedCargoPlaces: number;
+      detachedOrders: number;
+      cancelledPackings: number;
+    }> = [];
+    const failed: Array<{ supplyId: string; message: string }> = [];
+
+    for (const supply of supplies.values()) {
+      const connection = connectionById.get(supply.connectionId);
+      if (!connection) continue;
+      try {
+        const plan = await this.prisma.fbsSupplyPlan.findUnique({
+          where: {
+            marketplace_connectionId_supplyId: {
+              marketplace: MarketplaceType.WILDBERRIES,
+              connectionId: supply.connectionId,
+              supplyId: supply.supplyId,
+            },
+          },
+        });
+        if (!plan || plan.clientId !== clientId) {
+          throw new BadRequestException(`План поставки ${supply.supplyId} не найден в WMS.`);
+        }
+        if (plan.deliveryDestination === FbsDeliveryDestination.VNUKOVO_SORTING_CENTER) {
+          changed.push({
+            supplyId: supply.supplyId,
+            removedCargoPlaces: 0,
+            detachedOrders: 0,
+            cancelledPackings: 0,
+          });
+          continue;
+        }
+        if (plan.deliveryDestination !== FbsDeliveryDestination.PICKUP_POINT) {
+          throw new BadRequestException(`У поставки ${supply.supplyId} указано неподдерживаемое направление.`);
+        }
+
+        const supplyOrders = response.orders.filter(
+          (order) =>
+            order.connectionId === supply.connectionId &&
+            order.supplyId === supply.supplyId &&
+            order.supplierStatus === 'confirm',
+        );
+
+        const headers = wbHeaders(connection.apiKey);
+        const cargoResponse = await marketplaceJson(
+          `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(supply.supplyId)}/trbx`,
+          { method: 'GET', headers },
+        );
+        const remoteCargoPlaceIds = uniqueStrings(
+          asArray<Record<string, unknown>>(cargoResponse.trbxes).map((cargoPlace) => textValue(cargoPlace.id)),
+        );
+        if (remoteCargoPlaceIds.length > 0) {
+          await marketplaceJson(
+            `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(supply.supplyId)}/trbx`,
+            {
+              method: 'DELETE',
+              headers,
+              body: JSON.stringify({ trbxIds: remoteCargoPlaceIds }),
+            },
+          );
+        }
+
+        const orderIds = uniqueStrings(supplyOrders.map((order) => order.id));
+        const requestLinks = orderIds.length > 0
+          ? await this.prisma.fbsOrderRequestLink.findMany({
+              where: {
+                clientId,
+                connectionId: supply.connectionId,
+                orderId: { in: orderIds },
+              },
+              select: { requestId: true },
+            })
+          : [];
+        const requestIds = uniqueStrings(requestLinks.map((link) => link.requestId));
+        const result = await this.prisma.$transaction(async (tx) => {
+          const detached = await tx.fbsTsdAssembly.updateMany({
+            where: {
+              clientId,
+              marketplace: MarketplaceType.WILDBERRIES,
+              connectionId: supply.connectionId,
+              supplyId: supply.supplyId,
+              cargoPackingId: { not: null },
+            },
+            data: {
+              cargoPackingId: null,
+              cargoPackedAt: null,
+              cargoPackedByUserId: null,
+              cargoPackedByName: null,
+            },
+          });
+          const packings = await tx.fbsCargoPlacePacking.updateMany({
+            where: {
+              clientId,
+              marketplace: MarketplaceType.WILDBERRIES,
+              connectionId: supply.connectionId,
+              supplyId: supply.supplyId,
+              status: { not: 'CANCELLED' },
+            },
+            data: {
+              status: 'CANCELLED',
+              closedAt: new Date(),
+              closedByUserId: user.id,
+              closedByName: user.name,
+            },
+          });
+          await tx.fbsSupplyPlan.update({
+            where: { id: plan.id },
+            data: {
+              deliveryDestination: FbsDeliveryDestination.VNUKOVO_SORTING_CENTER,
+              cargoPlaceCount: 0,
+              cargoPlaceIds: [],
+              cargoPlaceBarcodes: {},
+            },
+          });
+          if (requestIds.length > 0) {
+            await tx.clientRequestEvent.createMany({
+              data: requestIds.map((requestId) => ({
+                requestId,
+                clientId,
+                eventType: ClientRequestEventType.COMMENT,
+                title: 'Изменён маршрут FBS-поставки',
+                body:
+                  `Поставка ${supply.supplyId}: ПВЗ → сортировочный центр. ` +
+                  `Грузоместа WB удалены: ${remoteCargoPlaceIds.length}. Заказы, сборка, КИЗ и ШК товаров сохранены.`,
+                createdByUserId: user.id,
+              })),
+            });
+          }
+          return { detached: detached.count, packings: packings.count };
+        });
+
+        changed.push({
+          supplyId: supply.supplyId,
+          removedCargoPlaces: remoteCargoPlaceIds.length,
+          detachedOrders: result.detached,
+          cancelledPackings: result.packings,
+        });
+      } catch (caught) {
+        failed.push({
+          supplyId: supply.supplyId,
+          message: caught instanceof Error ? caught.message : 'Не удалось изменить направление поставки.',
+        });
+      }
+    }
+
+    const refreshedOrders = await this.refreshFbsOrdersCache(clientId);
+    return {
+      changed: changed.length,
+      removedCargoPlaces: changed.reduce((sum, supply) => sum + supply.removedCargoPlaces, 0),
+      detachedOrders: changed.reduce((sum, supply) => sum + supply.detachedOrders, 0),
+      cancelledPackings: changed.reduce((sum, supply) => sum + supply.cancelledPackings, 0),
+      supplies: changed,
+      failed,
+      orders: refreshedOrders,
+    };
+  }
+
   async listFbsPasses(clientId: string, connectionId: string | undefined, user: AuthUser) {
     const normalizedClientId = clientId?.trim();
     if (!normalizedClientId) throw new BadRequestException('Выберите клиента.');

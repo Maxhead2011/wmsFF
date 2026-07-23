@@ -73,6 +73,12 @@ export class MarketplaceConnectionsController {
     return this.connections.deliverFbsSupplies(dto, user);
   }
 
+  @Post('fbs/supplies/change-destination')
+  @RequirePermissions()
+  changeFbsSuppliesDestination(@Body() dto: FbsOrderSelectionDto, @CurrentUser() user: AuthUser) {
+    return this.connections.changeFbsSuppliesDestination(dto, user);
+  }
+
   @Post('fbs/orders/request')
   @RequirePermissions()
   createFbsRequest(@Body() dto: FbsOrderSelectionDto, @CurrentUser() user: AuthUser) {

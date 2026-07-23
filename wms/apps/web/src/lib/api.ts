@@ -2239,6 +2239,21 @@ export type FbsOrderActionResult = {
   orders: ClientFbsOrders;
 };
 
+export type ChangeFbsSupplyDestinationResult = {
+  changed: number;
+  removedCargoPlaces: number;
+  detachedOrders: number;
+  cancelledPackings: number;
+  supplies: Array<{
+    supplyId: string;
+    removedCargoPlaces: number;
+    detachedOrders: number;
+    cancelledPackings: number;
+  }>;
+  failed: Array<{ supplyId: string; message: string }>;
+  orders: ClientFbsOrders;
+};
+
 export type FbsPassOffice = {
   id: number;
   name: string;
@@ -5138,6 +5153,17 @@ export async function cancelFbsOrders(accessToken: string, payload: FbsOrderSele
 
 export async function deliverFbsSupplies(accessToken: string, payload: FbsOrderSelectionPayload) {
   return request<FbsOrderActionResult>('/marketplace-connections/fbs/supplies/deliver', {
+    method: 'POST',
+    accessToken,
+    body: payload,
+  });
+}
+
+export async function changeFbsSuppliesDestination(
+  accessToken: string,
+  payload: FbsOrderSelectionPayload,
+) {
+  return request<ChangeFbsSupplyDestinationResult>('/marketplace-connections/fbs/supplies/change-destination', {
     method: 'POST',
     accessToken,
     body: payload,
