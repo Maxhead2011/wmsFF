@@ -633,12 +633,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         );
       }
     } else {
-      if (!cargoPlaceId.toUpperCase().startsWith('FFL')) {
+      cargoPlaceId = normalizeFbsPhysicalBoxCode(cargoPlaceId);
+      if (!cargoPlaceId) {
         throw new BadRequestException(
-          'Для поставки на СЦ сначала отсканируйте номер физического короба с префиксом FFL.',
+          'Отсканированный код не является номером физического короба. Для поставки на СЦ нужен номер короба с префиксом FFL.',
         );
       }
-      cargoPlaceId = cargoPlaceId.toUpperCase();
     }
 
     const existing = await this.prisma.fbsCargoPlacePacking.findFirst({
@@ -6268,6 +6268,14 @@ function requiredFbsTsdText(value: unknown, message: string) {
     throw new BadRequestException(message);
   }
   return value.trim();
+}
+
+function normalizeFbsPhysicalBoxCode(value: string) {
+  const normalized = value
+    .normalize('NFKC')
+    .toUpperCase()
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200d\u2060\ufeff]/g, '');
+  return normalized.match(/FFL[A-Z0-9_-]{3,}/)?.[0] ?? '';
 }
 
 function jsonStringArray(value: Prisma.JsonValue): string[] {

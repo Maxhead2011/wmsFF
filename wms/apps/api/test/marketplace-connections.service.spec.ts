@@ -2020,7 +2020,7 @@ describe('MarketplaceConnectionsService', () => {
     });
 
     await service.openFbsCargoPacking(
-      { planId: 'plan-sc', cargoCode: 'ffl_out_001', deviceCode: 'TSD-1' },
+      { planId: 'plan-sc', cargoCode: '\u0002]C1ffl_out_001\r', deviceCode: 'TSD-1' },
       { id: 'user-1', name: 'Сборщик' } as never,
     );
 
