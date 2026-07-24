@@ -1353,12 +1353,17 @@ public class MainActivity extends Activity {
             String requestNumber = fbsAssembly.progress.requestNumber > 0
                 ? String.format(Locale.US, "%06d", fbsAssembly.progress.requestNumber)
                 : "-";
+            boolean requestCompleted = fbsAssembly.progress.requestRemainingItems == 0;
             root.addView(feedbackView(
                 tr("ЗАЯВКА №", "ARIZA №") + requestNumber + "\n" +
-                    tr("Осталось положить: ", "Joylash qoldi: ") +
-                    fbsAssembly.progress.requestRemainingItems + " " +
-                    tr("из ", "/ ") + fbsAssembly.progress.requestTotalItems,
-                Color.rgb(219, 234, 254)
+                    (requestCompleted
+                        ? tr("ОТРАБОТАНА · СОБРАНО: ", "BAJARILDI · YIG‘ILDI: ") +
+                            fbsAssembly.progress.requestCompletedItems + " " +
+                            tr("из ", "/ ") + fbsAssembly.progress.requestTotalItems
+                        : tr("Осталось положить: ", "Joylash qoldi: ") +
+                            fbsAssembly.progress.requestRemainingItems + " " +
+                            tr("из ", "/ ") + fbsAssembly.progress.requestTotalItems),
+                requestCompleted ? BOX_FOUND_GREEN : Color.rgb(219, 234, 254)
             ));
         }
         if (fbsFeedbackColor != 0 && !statusMessage.isEmpty()) {
@@ -1893,7 +1898,7 @@ public class MainActivity extends Activity {
                             ? tr("ГОТОВА К ПЕРЕДАЧЕ", "TOPSHIRISHGA TAYYOR")
                             : tr("уложить: ", "joylash: ") + supply.remainingToPack +
                                 " · " + tr("ещё собирается: ", "hali yig‘ilmoqda: ") + supply.waitingAssembly;
-                        root.addView(multilineSecondaryButton(
+                        Button supplyButton = multilineSecondaryButton(
                             safeText(supply.supplyId) + "\n" + clientName + " · " +
                                 fbsDeliveryDestinationLabel(supply.deliveryDestination) + "\n" +
                                 supply.packedItems + " / " + supply.totalPlannedItems + " · " + stateText,
@@ -1911,7 +1916,12 @@ public class MainActivity extends Activity {
                                     : tr("Теперь отсканируйте QR грузоместа.", "Endi yuk joyi QR kodini skanerlang.");
                                 renderFbsCargoPackingScreen();
                             }
-                        ));
+                        );
+                        if (supply.readyToDeliver) {
+                            supplyButton.setBackgroundColor(BOX_FOUND_GREEN);
+                            supplyButton.setTextColor(TEXT);
+                        }
+                        root.addView(supplyButton);
                     }
                 }
             }

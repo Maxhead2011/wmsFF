@@ -1,6 +1,6 @@
 {
-  "versionCode": 74,
-  "versionName": "0.1.74",
+  "versionCode": 76,
+  "versionName": "0.1.76",
   "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd.apk",
-  "releaseNotes": "После сканирования короба в сборке FBS показано, сколько единиц товара и сколько товарных позиций будет взято из него для текущей заявки."
+  "releaseNotes": "Полностью отработанные FBS-заявки и полностью упакованные FBS-поставки помечаются зелёным цветом."
 }
