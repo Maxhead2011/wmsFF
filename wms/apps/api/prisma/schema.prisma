@@ -533,6 +533,7 @@ model Client {
   notificationPreferences      ClientNotificationPreference[]
   marketplaceConnections       ClientMarketplaceConnection[]
   fbsSupplyPlans               FbsSupplyPlan[]
+  fbsStockPublications         FbsStockPublication[]
   articleMappings              ClientArticleMapping[]
   allowedIps                   ClientAllowedIp[]
   productMarks                 ProductMark[]
@@ -602,6 +603,7 @@ model ClientMarketplaceConnection {
   isActive    Boolean         @default(true)
   comment     String?
   client      Client          @relation(fields: [clientId], references: [id])
+  fbsStockPublications FbsStockPublication[]
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
@@ -666,6 +668,7 @@ model Sku {
   requestBoxSelections ClientRequestBoxSelection[]
   packageItems         ClientRequestPackageItem[]
   productMarks         ProductMark[]
+  fbsStockPublications FbsStockPublication[]
   createdAt            DateTime                    @default(now())
   updatedAt            DateTime                    @updatedAt
 
@@ -1338,6 +1341,29 @@ model FbsSupplyPlan {
   @@unique([marketplace, connectionId, supplyId])
   @@index([clientId, createdAt])
   @@index([connectionId, supplyId])
+}
+
+model FbsStockPublication {
+  id               String                      @id @default(uuid())
+  clientId         String
+  connectionId     String
+  skuId            String
+  warehouseId      String
+  enabled          Boolean                     @default(false)
+  lastWmsAmount    Int?
+  lastWbAmount     Int?
+  lastSyncedAmount Int?
+  lastSyncedAt     DateTime?
+  lastError        String?
+  client           Client                      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  connection       ClientMarketplaceConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  sku              Sku                         @relation(fields: [skuId], references: [id], onDelete: Cascade)
+  createdAt        DateTime                    @default(now())
+  updatedAt        DateTime                    @updatedAt
+
+  @@unique([connectionId, warehouseId, skuId])
+  @@index([clientId, warehouseId, enabled])
+  @@index([skuId])
 }
 
 model FbsCargoPlacePacking {

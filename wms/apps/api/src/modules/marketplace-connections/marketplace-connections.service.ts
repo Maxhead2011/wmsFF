@@ -32,6 +32,8 @@ import {
 } from '../logistics/fbs-calculator';
 import type { FbsOrderSelectionDto } from './dto/fbs-order-selection.dto';
 import type { FbsPassDto } from './dto/fbs-pass.dto';
+import type { FbsStockPublicationDto } from './dto/fbs-stock-publication.dto';
+import type { FbsStockSyncDto } from './dto/fbs-stock-sync.dto';
 import { UpdateFbsBillingSettingsDto } from './dto/update-fbs-billing-settings.dto';
 import { UpsertMarketplaceConnectionDto } from './dto/upsert-marketplace-connection.dto';
 import { DEFAULT_FBS_ITEMS_PER_CARGO_PLACE } from './fbs.constants';
@@ -179,6 +181,20 @@ type FbsRequestDesiredItem = {
   name: string;
   quantity: number;
   orderIds: string[];
+};
+type FbsStockWarehouse = {
+  id: string;
+  name: string;
+  officeId: string | null;
+  cargoType: number | null;
+  deliveryType: number | null;
+};
+type FbsStockQuantity = {
+  skuId: string;
+  chrtId: number;
+  available: number;
+  reserved: number;
+  sellable: number;
 };
 const FBS_TSD_STALE_UNSTARTED_TASK_MS = 2 * 60 * 60 * 1_000;
 const FBS_TSD_REQUEST_FALLBACK_CACHE_MS = 2 * 60 * 1_000;
@@ -592,6 +608,597 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       fetchedAt: new Date().toISOString(),
       supplies: data.summaries,
     };
+  }
+
+  async listFbsStocks(
+    clientIdValue: string,
+    connectionIdValue: string | undefined,
+    warehouseIdValue: string | undefined,
+    user: AuthUser,
+  ) {
+    const clientId = requiredFbsTsdText(clientIdValue, 'Выберите клиента.');
+    this.clientScopes.requireClientAccess(user, clientId, 'read');
+    const context = await this.loadFbsStockContext(clientId, connectionIdValue, warehouseIdValue);
+    if (!context.connection || !context.warehouse) {
+      return {
+        client: context.client,
+        connected: context.connections.length > 0,
+        connections: context.connections.map(fbsStockConnectionSummary),
+        selectedConnectionId: context.connection?.id ?? null,
+        warehouses: context.warehouses,
+        selectedWarehouseId: context.warehouse?.id ?? null,
+        fetchedAt: new Date().toISOString(),
+        summary: {
+          products: 0,
+          enabled: 0,
+          disabled: 0,
+          unmanaged: 0,
+          wmsAvailable: 0,
+          sellable: 0,
+          wbAmount: 0,
+          differences: 0,
+        },
+        items: [],
+      };
+    }
+
+    return this.buildFbsStocksResponse(
+      context.client,
+      context.connections,
+      context.connection,
+      context.warehouses,
+      context.warehouse,
+    );
+  }
+
+  async updateFbsStockPublication(dto: FbsStockPublicationDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    this.clientScopes.requireClientAccess(
+      user,
+      clientId,
+      user.roleCodes.includes('CLIENT') ? 'read' : 'write',
+    );
+    const context = await this.loadFbsStockContext(clientId, dto.connectionId, dto.warehouseId);
+    if (!context.connection || !context.warehouse) {
+      throw new BadRequestException('Выберите действующее подключение и склад Wildberries.');
+    }
+
+    const sku = await this.prisma.sku.findFirst({
+      where: {
+        id: dto.skuId,
+        clientId,
+        marketplace: MarketplaceType.WILDBERRIES,
+      },
+      select: { id: true, marketplaceProductId: true },
+    });
+    const ids = sku ? wildberriesStockIds(sku.marketplaceProductId) : null;
+    if (!sku || !ids) {
+      throw new BadRequestException('Товар не связан с размером карточки Wildberries. Обновите карточки клиента.');
+    }
+
+    const quantities = await this.calculateFbsStockQuantities(clientId, [sku.id]);
+    const quantity = quantities.get(sku.id) ?? {
+      skuId: sku.id,
+      chrtId: ids.chrtId,
+      available: 0,
+      reserved: 0,
+      sellable: 0,
+    };
+    const amount = dto.enabled ? quantity.sellable : 0;
+    const publicationKey = {
+      connectionId_warehouseId_skuId: {
+        connectionId: context.connection.id,
+        warehouseId: context.warehouse.id,
+        skuId: sku.id,
+      },
+    };
+    const publication = await this.prisma.fbsStockPublication.upsert({
+      where: publicationKey,
+      create: {
+        clientId,
+        connectionId: context.connection.id,
+        warehouseId: context.warehouse.id,
+        skuId: sku.id,
+        enabled: dto.enabled,
+        lastWmsAmount: quantity.sellable,
+        lastError: null,
+      },
+      update: {
+        enabled: dto.enabled,
+        lastWmsAmount: quantity.sellable,
+        lastError: null,
+      },
+    });
+
+    try {
+      await this.putWildberriesStocks(context.connection.apiKey, context.warehouse.id, [
+        { chrtId: ids.chrtId, amount },
+      ]);
+      const syncedAt = new Date();
+      await this.prisma.$transaction([
+        this.prisma.fbsStockPublication.update({
+          where: { id: publication.id },
+          data: {
+            lastWmsAmount: quantity.sellable,
+            lastWbAmount: amount,
+            lastSyncedAmount: amount,
+            lastSyncedAt: syncedAt,
+            lastError: null,
+          },
+        }),
+        this.prisma.auditLog.create({
+          data: {
+            userId: user.id,
+            action: 'FBS_STOCK_PUBLICATION_UPDATED',
+            entity: 'FbsStockPublication',
+            entityId: publication.id,
+            payload: {
+              clientId,
+              connectionId: context.connection.id,
+              warehouseId: context.warehouse.id,
+              skuId: sku.id,
+              chrtId: ids.chrtId,
+              enabled: dto.enabled,
+              amount,
+            },
+          },
+        }),
+      ]);
+      return {
+        updated: true,
+        skuId: sku.id,
+        enabled: dto.enabled,
+        amount,
+        syncedAt: syncedAt.toISOString(),
+      };
+    } catch (caught) {
+      const message = marketplaceErrorText(caught);
+      await this.prisma.fbsStockPublication.update({
+        where: { id: publication.id },
+        data: { lastWmsAmount: quantity.sellable, lastError: message },
+      });
+      throw caught;
+    }
+  }
+
+  async syncFbsStocks(dto: FbsStockSyncDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    this.clientScopes.requireClientAccess(
+      user,
+      clientId,
+      user.roleCodes.includes('CLIENT') ? 'read' : 'write',
+    );
+    const context = await this.loadFbsStockContext(clientId, dto.connectionId, dto.warehouseId);
+    if (!context.connection || !context.warehouse) {
+      throw new BadRequestException('Выберите действующее подключение и склад Wildberries.');
+    }
+    const publications = await this.prisma.fbsStockPublication.findMany({
+      where: {
+        clientId,
+        connectionId: context.connection.id,
+        warehouseId: context.warehouse.id,
+      },
+      include: {
+        sku: {
+          select: { id: true, marketplaceProductId: true },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (publications.length === 0) {
+      throw new BadRequestException('Сначала укажите хотя бы для одного товара статус «Продавать» или «Не продавать».');
+    }
+
+    const quantities = await this.calculateFbsStockQuantities(
+      clientId,
+      publications.map((publication) => publication.skuId),
+    );
+    const prepared = publications
+      .map((publication) => {
+        const ids = wildberriesStockIds(publication.sku.marketplaceProductId);
+        if (!ids) return null;
+        const quantity = quantities.get(publication.skuId);
+        return {
+          publication,
+          chrtId: ids.chrtId,
+          wmsAmount: quantity?.sellable ?? 0,
+          amount: publication.enabled ? quantity?.sellable ?? 0 : 0,
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => Boolean(item));
+    if (prepared.length === 0) {
+      throw new BadRequestException('У выбранных товаров отсутствуют ID размеров Wildberries.');
+    }
+
+    let synced = 0;
+    for (const batch of chunks(prepared, 1000)) {
+      try {
+        await this.putWildberriesStocks(
+          context.connection.apiKey,
+          context.warehouse.id,
+          batch.map((item) => ({ chrtId: item.chrtId, amount: item.amount })),
+        );
+        const syncedAt = new Date();
+        await this.prisma.$transaction(
+          batch.map((item) =>
+            this.prisma.fbsStockPublication.update({
+              where: { id: item.publication.id },
+              data: {
+                lastWmsAmount: item.wmsAmount,
+                lastWbAmount: item.amount,
+                lastSyncedAmount: item.amount,
+                lastSyncedAt: syncedAt,
+                lastError: null,
+              },
+            }),
+          ),
+        );
+        synced += batch.length;
+      } catch (caught) {
+        const message = marketplaceErrorText(caught);
+        await this.prisma.$transaction(
+          batch.map((item) =>
+            this.prisma.fbsStockPublication.update({
+              where: { id: item.publication.id },
+              data: { lastWmsAmount: item.wmsAmount, lastError: message },
+            }),
+          ),
+        );
+        throw caught;
+      }
+    }
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId: user.id,
+        action: 'FBS_STOCKS_SYNCED',
+        entity: 'ClientMarketplaceConnection',
+        entityId: context.connection.id,
+        payload: {
+          clientId,
+          connectionId: context.connection.id,
+          warehouseId: context.warehouse.id,
+          synced,
+        },
+      },
+    });
+    return {
+      synced,
+      warehouseId: context.warehouse.id,
+      syncedAt: new Date().toISOString(),
+    };
+  }
+
+  private async loadFbsStockContext(
+    clientId: string,
+    connectionIdValue?: string,
+    warehouseIdValue?: string,
+  ) {
+    const [client, connections] = await Promise.all([
+      this.prisma.client.findUnique({
+        where: { id: clientId },
+        select: { id: true, code: true, name: true },
+      }),
+      this.prisma.clientMarketplaceConnection.findMany({
+        where: {
+          clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          isActive: true,
+        },
+        include: { client: { select: { id: true, code: true, name: true } } },
+        orderBy: [{ accountName: 'asc' }, { createdAt: 'asc' }],
+      }),
+    ]);
+    if (!client) throw new NotFoundException('Клиент не найден.');
+
+    const connectionId = textValue(connectionIdValue);
+    const connection = connectionId
+      ? connections.find((item) => item.id === connectionId)
+      : connections[0];
+    if (connectionId && !connection) {
+      throw new BadRequestException('Подключение Wildberries не найдено у выбранного клиента.');
+    }
+    const warehouses = connection
+      ? await this.fetchWildberriesStockWarehouses(connection.apiKey)
+      : [];
+    const requestedWarehouseId = textValue(warehouseIdValue);
+    let rememberedWarehouseId = '';
+    if (connection && !requestedWarehouseId) {
+      rememberedWarehouseId =
+        (
+          await this.prisma.fbsStockPublication.findFirst({
+            where: { clientId, connectionId: connection.id },
+            orderBy: { updatedAt: 'desc' },
+            select: { warehouseId: true },
+          })
+        )?.warehouseId ?? '';
+    }
+    const warehouseId =
+      requestedWarehouseId ||
+      rememberedWarehouseId ||
+      warehouses.find((item) => /(^|\s)(FBS|ФБС)(\s|$)/i.test(item.name))?.id ||
+      warehouses[0]?.id ||
+      '';
+    const warehouse = warehouses.find((item) => item.id === warehouseId);
+    if (requestedWarehouseId && !warehouse) {
+      throw new BadRequestException('Склад не найден в подключённом кабинете Wildberries.');
+    }
+    return { client, connections, connection, warehouses, warehouse };
+  }
+
+  private async fetchWildberriesStockWarehouses(apiKey: string): Promise<FbsStockWarehouse[]> {
+    const response = await marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/warehouses', {
+      method: 'GET',
+      headers: wbHeaders(apiKey),
+    });
+    return asArray<Record<string, unknown>>(response)
+      .map((warehouse) => ({
+        id: textValue(warehouse.id),
+        name: textValue(warehouse.name) || `Склад ${textValue(warehouse.id)}`,
+        officeId: textValue(warehouse.officeId) || null,
+        cargoType: nullableNumber(warehouse.cargoType),
+        deliveryType: nullableNumber(warehouse.deliveryType),
+      }))
+      .filter((warehouse) => Boolean(warehouse.id))
+      .sort((left, right) => {
+        const leftFbs = /(^|\s)(FBS|ФБС)(\s|$)/i.test(left.name) ? 0 : 1;
+        const rightFbs = /(^|\s)(FBS|ФБС)(\s|$)/i.test(right.name) ? 0 : 1;
+        return leftFbs - rightFbs || left.name.localeCompare(right.name, 'ru-RU');
+      });
+  }
+
+  private async buildFbsStocksResponse(
+    client: { id: string; code: string; name: string },
+    connections: MarketplaceConnectionWithClient[],
+    connection: MarketplaceConnectionWithClient,
+    warehouses: FbsStockWarehouse[],
+    warehouse: FbsStockWarehouse,
+  ) {
+    const skus = await this.prisma.sku.findMany({
+      where: {
+        clientId: client.id,
+        marketplace: MarketplaceType.WILDBERRIES,
+        marketplaceProductId: { not: null },
+        isDraft: false,
+      },
+      select: {
+        id: true,
+        internalSku: true,
+        clientSku: true,
+        article: true,
+        name: true,
+        color: true,
+        size: true,
+        marketplaceProductId: true,
+        barcodes: {
+          select: { value: true, isPrimary: true },
+          orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }],
+        },
+      },
+      orderBy: [{ name: 'asc' }, { size: 'asc' }, { internalSku: 'asc' }],
+    });
+    const mappedSkus = skus
+      .map((sku) => ({ sku, ids: wildberriesStockIds(sku.marketplaceProductId) }))
+      .filter((item): item is { sku: typeof skus[number]; ids: { nmId: string; chrtId: number } } =>
+        Boolean(item.ids),
+      );
+    const skuIds = mappedSkus.map((item) => item.sku.id);
+    const [quantities, publications] = await Promise.all([
+      this.calculateFbsStockQuantities(client.id, skuIds),
+      this.prisma.fbsStockPublication.findMany({
+        where: {
+          clientId: client.id,
+          connectionId: connection.id,
+          warehouseId: warehouse.id,
+          skuId: { in: skuIds },
+        },
+      }),
+    ]);
+    const wbAmounts = await this.fetchWildberriesStockAmounts(
+      connection.apiKey,
+      warehouse.id,
+      mappedSkus.map((item) => item.ids.chrtId),
+    );
+    const publicationBySku = new Map(publications.map((publication) => [publication.skuId, publication]));
+    const items = mappedSkus.map(({ sku, ids }) => {
+      const quantity = quantities.get(sku.id) ?? {
+        skuId: sku.id,
+        chrtId: ids.chrtId,
+        available: 0,
+        reserved: 0,
+        sellable: 0,
+      };
+      const publication = publicationBySku.get(sku.id);
+      const wbAmount = wbAmounts.get(ids.chrtId) ?? 0;
+      const targetAmount = publication ? (publication.enabled ? quantity.sellable : 0) : null;
+      return {
+        skuId: sku.id,
+        internalSku: sku.internalSku,
+        clientSku: sku.clientSku,
+        article: sku.article,
+        name: sku.name,
+        color: sku.color,
+        size: sku.size,
+        barcode: sku.barcodes[0]?.value ?? null,
+        nmId: ids.nmId,
+        chrtId: String(ids.chrtId),
+        status: publication ? (publication.enabled ? 'SELLING' : 'STOPPED') : 'UNMANAGED',
+        enabled: publication?.enabled ?? null,
+        wmsAvailable: quantity.available,
+        reserved: quantity.reserved,
+        sellable: quantity.sellable,
+        wbAmount,
+        targetAmount,
+        difference: targetAmount == null ? null : wbAmount - targetAmount,
+        lastSyncedAmount: publication?.lastSyncedAmount ?? null,
+        lastSyncedAt: publication?.lastSyncedAt?.toISOString() ?? null,
+        lastError: publication?.lastError ?? null,
+      };
+    });
+    return {
+      client,
+      connected: true,
+      connections: connections.map(fbsStockConnectionSummary),
+      selectedConnectionId: connection.id,
+      warehouses,
+      selectedWarehouseId: warehouse.id,
+      fetchedAt: new Date().toISOString(),
+      summary: {
+        products: items.length,
+        enabled: items.filter((item) => item.status === 'SELLING').length,
+        disabled: items.filter((item) => item.status === 'STOPPED').length,
+        unmanaged: items.filter((item) => item.status === 'UNMANAGED').length,
+        wmsAvailable: items.reduce((sum, item) => sum + item.wmsAvailable, 0),
+        sellable: items.reduce((sum, item) => sum + item.sellable, 0),
+        wbAmount: items.reduce((sum, item) => sum + item.wbAmount, 0),
+        differences: items.filter((item) => item.difference != null && item.difference !== 0).length,
+      },
+      items,
+    };
+  }
+
+  private async calculateFbsStockQuantities(clientId: string, skuIds: string[]) {
+    const result = new Map<string, FbsStockQuantity>();
+    if (skuIds.length === 0) return result;
+    const [skus, balances, requestItems] = await Promise.all([
+      this.prisma.sku.findMany({
+        where: { id: { in: skuIds }, clientId },
+        select: { id: true, marketplaceProductId: true },
+      }),
+      this.prisma.stockBalance.findMany({
+        where: {
+          clientId,
+          skuId: { in: skuIds },
+          status: StockStatus.AVAILABLE,
+          quantity: { gt: 0 },
+        },
+        select: {
+          skuId: true,
+          quantity: true,
+          box: { select: { status: true } },
+        },
+      }),
+      this.prisma.clientRequestItem.findMany({
+        where: {
+          skuId: { in: skuIds },
+          request: {
+            clientId,
+            OR: [
+              {
+                status: {
+                  in: [
+                    ClientRequestStatus.SUBMITTED,
+                    ClientRequestStatus.IN_REVIEW,
+                    ClientRequestStatus.APPROVED,
+                  ],
+                },
+              },
+              {
+                status: ClientRequestStatus.IN_WORK,
+                fbsOrderLinks: {
+                  some: {
+                    syncStatus: {
+                      in: [FBS_REQUEST_LINK_ACTIVE, FBS_REQUEST_LINK_RETURN_REQUIRED],
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+        select: { skuId: true, quantity: true },
+      }),
+    ]);
+    const availableBySku = new Map<string, number>();
+    balances.forEach((balance) => {
+      const boxStatus = textValue(balance.box?.status).toLowerCase();
+      if (boxStatus === 'deleted' || boxStatus === 'archived') return;
+      availableBySku.set(balance.skuId, (availableBySku.get(balance.skuId) ?? 0) + balance.quantity);
+    });
+    const reservedBySku = new Map<string, number>();
+    requestItems.forEach((item) => {
+      if (!item.skuId) return;
+      reservedBySku.set(item.skuId, (reservedBySku.get(item.skuId) ?? 0) + Math.max(0, item.quantity));
+    });
+
+    const cachedOrders = this.fbsOrdersCache.get(clientId);
+    const fbsOrders = cachedOrders?.value ?? (await this.loadFbsOrders(clientId));
+    if (!cachedOrders) {
+      this.fbsOrdersCache.set(clientId, { expiresAt: Date.now() + 30_000, value: fbsOrders });
+    }
+    fbsOrders.orders.forEach((order) => {
+      if (
+        order.marketplace !== MarketplaceType.WILDBERRIES ||
+        order.category !== 'active' ||
+        order.request ||
+        !order.product?.id ||
+        !skuIds.includes(order.product.id)
+      ) {
+        return;
+      }
+      reservedBySku.set(
+        order.product.id,
+        (reservedBySku.get(order.product.id) ?? 0) + Math.max(1, order.itemCount),
+      );
+    });
+
+    skus.forEach((sku) => {
+      const ids = wildberriesStockIds(sku.marketplaceProductId);
+      if (!ids) return;
+      const available = availableBySku.get(sku.id) ?? 0;
+      const reserved = reservedBySku.get(sku.id) ?? 0;
+      result.set(sku.id, {
+        skuId: sku.id,
+        chrtId: ids.chrtId,
+        available,
+        reserved,
+        sellable: Math.max(0, available - reserved),
+      });
+    });
+    return result;
+  }
+
+  private async fetchWildberriesStockAmounts(apiKey: string, warehouseId: string, chrtIds: number[]) {
+    const result = new Map<number, number>();
+    for (const batch of chunks(chrtIds, 1000)) {
+      if (batch.length === 0) continue;
+      const response = await marketplaceJson(
+        `https://marketplace-api.wildberries.ru/api/v3/stocks/${numericPositiveId(warehouseId, 'склада WB')}`,
+        {
+          method: 'POST',
+          headers: wbHeaders(apiKey),
+          body: JSON.stringify({ chrtIds: batch }),
+        },
+      );
+      asArray<Record<string, unknown>>(response.stocks).forEach((stock) => {
+        const chrtId = numberValue(stock.chrtId);
+        if (Number.isSafeInteger(chrtId) && chrtId > 0) {
+          result.set(chrtId, Math.max(0, Math.trunc(numberValue(stock.amount))));
+        }
+      });
+    }
+    return result;
+  }
+
+  private async putWildberriesStocks(
+    apiKey: string,
+    warehouseId: string,
+    stocks: Array<{ chrtId: number; amount: number }>,
+  ) {
+    if (stocks.length === 0) return;
+    await marketplaceJson(
+      `https://marketplace-api.wildberries.ru/api/v3/stocks/${numericPositiveId(warehouseId, 'склада WB')}`,
+      {
+        method: 'PUT',
+        headers: wbHeaders(apiKey),
+        body: JSON.stringify({
+          stocks: stocks.map((stock) => ({
+            chrtId: stock.chrtId,
+            amount: Math.max(0, Math.trunc(stock.amount)),
+          })),
+        }),
+      },
+    );
   }
 
   async openFbsCargoPacking(payload: Record<string, unknown>, user: AuthUser) {
@@ -6268,6 +6875,40 @@ function requiredFbsTsdText(value: unknown, message: string) {
     throw new BadRequestException(message);
   }
   return value.trim();
+}
+
+function fbsStockConnectionSummary(connection: MarketplaceConnectionWithClient) {
+  return {
+    id: connection.id,
+    marketplace: connection.marketplace,
+    accountName: connection.accountName,
+  };
+}
+
+function wildberriesStockIds(value: string | null | undefined) {
+  const [nmId = '', chrtIdText = ''] = textValue(value).split(':');
+  const chrtId = Number(chrtIdText);
+  if (!nmId || !Number.isSafeInteger(chrtId) || chrtId <= 0) return null;
+  return { nmId, chrtId };
+}
+
+function nullableNumber(value: unknown) {
+  if (value == null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function marketplaceErrorText(caught: unknown) {
+  if (caught instanceof BadRequestException) {
+    const response = caught.getResponse();
+    if (typeof response === 'string') return response;
+    if (response && typeof response === 'object') {
+      const message = (response as { message?: unknown }).message;
+      if (Array.isArray(message)) return message.map(textValue).filter(Boolean).join('; ');
+      if (message) return textValue(message);
+    }
+  }
+  return caught instanceof Error ? caught.message : 'Wildberries не принял обновление остатков.';
 }
 
 function normalizeFbsPhysicalBoxCode(value: string) {

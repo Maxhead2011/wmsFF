@@ -7,6 +7,8 @@ import { RequirePermissions } from '../auth/decorators/require-permissions.decor
 import { LogisticsService } from '../logistics/logistics.service';
 import { FbsOrderSelectionDto } from './dto/fbs-order-selection.dto';
 import { FbsPassDto } from './dto/fbs-pass.dto';
+import { FbsStockPublicationDto } from './dto/fbs-stock-publication.dto';
+import { FbsStockSyncDto } from './dto/fbs-stock-sync.dto';
 import { QuoteFbsCalculatorDto } from './dto/quote-fbs-calculator.dto';
 import { UpdateFbsBillingSettingsDto } from './dto/update-fbs-billing-settings.dto';
 import { UpdateMarketplaceConnectionDto } from './dto/update-marketplace-connection.dto';
@@ -47,6 +49,29 @@ export class MarketplaceConnectionsController {
   @RequirePermissions()
   listFbsCargoPackings(@CurrentUser() user: AuthUser, @Query('clientId') clientId: string) {
     return this.connections.listFbsCargoPackings(clientId, user);
+  }
+
+  @Get('fbs/stocks')
+  @RequirePermissions()
+  listFbsStocks(
+    @CurrentUser() user: AuthUser,
+    @Query('clientId') clientId: string,
+    @Query('connectionId') connectionId?: string,
+    @Query('warehouseId') warehouseId?: string,
+  ) {
+    return this.connections.listFbsStocks(clientId, connectionId, warehouseId, user);
+  }
+
+  @Put('fbs/stocks/publication')
+  @RequirePermissions()
+  updateFbsStockPublication(@Body() dto: FbsStockPublicationDto, @CurrentUser() user: AuthUser) {
+    return this.connections.updateFbsStockPublication(dto, user);
+  }
+
+  @Post('fbs/stocks/sync')
+  @RequirePermissions()
+  syncFbsStocks(@Body() dto: FbsStockSyncDto, @CurrentUser() user: AuthUser) {
+    return this.connections.syncFbsStocks(dto, user);
   }
 
   @Post('fbs/orders/assemble')

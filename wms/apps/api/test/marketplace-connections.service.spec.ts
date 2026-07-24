@@ -62,6 +62,167 @@ describe('MarketplaceConnectionsService', () => {
     expect(data).not.toHaveProperty('volumeSource');
   });
 
+  it('lets a scoped client stop an FBS product and sends zero stock to Wildberries', async () => {
+    const publication = {
+      id: 'publication-1',
+      clientId: 'client-1',
+      connectionId: 'connection-1',
+      warehouseId: '1693195',
+      skuId: 'sku-1',
+      enabled: false,
+    };
+    const prisma = {
+      sku: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'sku-1',
+          marketplaceProductId: '100500:200600',
+        }),
+      },
+      fbsStockPublication: {
+        upsert: vi.fn().mockResolvedValue(publication),
+        update: vi.fn().mockResolvedValue(publication),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue({ id: 'audit-1' }),
+      },
+      $transaction: vi.fn(async (operations: Array<Promise<unknown>>) => Promise.all(operations)),
+    };
+    const clientScopes = { requireClientAccess: vi.fn() };
+    const service = new MarketplaceConnectionsService(prisma as never, clientScopes as never);
+    vi.spyOn(service as any, 'loadFbsStockContext').mockResolvedValue({
+      client: { id: 'client-1', code: 'CL-1', name: 'Клиент' },
+      connections: [],
+      connection: { id: 'connection-1', apiKey: 'secret' },
+      warehouses: [],
+      warehouse: { id: '1693195', name: 'Мой склад FBS тест' },
+    });
+    vi.spyOn(service as any, 'calculateFbsStockQuantities').mockResolvedValue(
+      new Map([
+        [
+          'sku-1',
+          {
+            skuId: 'sku-1',
+            chrtId: 200600,
+            available: 18,
+            reserved: 3,
+            sellable: 15,
+          },
+        ],
+      ]),
+    );
+    const putStocks = vi.spyOn(service as any, 'putWildberriesStocks').mockResolvedValue(undefined);
+
+    const result = await service.updateFbsStockPublication(
+      {
+        clientId: 'client-1',
+        connectionId: 'connection-1',
+        warehouseId: '1693195',
+        skuId: 'sku-1',
+        enabled: false,
+      },
+      {
+        id: 'user-1',
+        email: 'client@example.test',
+        name: 'Клиент',
+        roleCodes: ['CLIENT'],
+        permissionCodes: ['stock:read'],
+        clientScopeMode: 'LIMITED',
+        clientIds: ['client-1'],
+        writableClientIds: [],
+      },
+    );
+
+    expect(clientScopes.requireClientAccess).toHaveBeenCalledWith(expect.anything(), 'client-1', 'read');
+    expect(putStocks).toHaveBeenCalledWith('secret', '1693195', [
+      { chrtId: 200600, amount: 0 },
+    ]);
+    expect(prisma.fbsStockPublication.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ enabled: false, lastWmsAmount: 15 }),
+        update: expect.objectContaining({ enabled: false, lastWmsAmount: 15 }),
+      }),
+    );
+    expect(result).toMatchObject({ updated: true, enabled: false, amount: 0 });
+  });
+
+  it('publishes only the free WMS quantity when FBS sale is enabled', async () => {
+    const publication = {
+      id: 'publication-1',
+      clientId: 'client-1',
+      connectionId: 'connection-1',
+      warehouseId: '1693195',
+      skuId: 'sku-1',
+      enabled: true,
+    };
+    const prisma = {
+      sku: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'sku-1',
+          marketplaceProductId: '100500:200600',
+        }),
+      },
+      fbsStockPublication: {
+        upsert: vi.fn().mockResolvedValue(publication),
+        update: vi.fn().mockResolvedValue(publication),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue({ id: 'audit-1' }),
+      },
+      $transaction: vi.fn(async (operations: Array<Promise<unknown>>) => Promise.all(operations)),
+    };
+    const service = new MarketplaceConnectionsService(
+      prisma as never,
+      { requireClientAccess: vi.fn() } as never,
+    );
+    vi.spyOn(service as any, 'loadFbsStockContext').mockResolvedValue({
+      client: { id: 'client-1', code: 'CL-1', name: 'Клиент' },
+      connections: [],
+      connection: { id: 'connection-1', apiKey: 'secret' },
+      warehouses: [],
+      warehouse: { id: '1693195', name: 'Мой склад FBS тест' },
+    });
+    vi.spyOn(service as any, 'calculateFbsStockQuantities').mockResolvedValue(
+      new Map([
+        [
+          'sku-1',
+          {
+            skuId: 'sku-1',
+            chrtId: 200600,
+            available: 18,
+            reserved: 3,
+            sellable: 15,
+          },
+        ],
+      ]),
+    );
+    const putStocks = vi.spyOn(service as any, 'putWildberriesStocks').mockResolvedValue(undefined);
+
+    const result = await service.updateFbsStockPublication(
+      {
+        clientId: 'client-1',
+        connectionId: 'connection-1',
+        warehouseId: '1693195',
+        skuId: 'sku-1',
+        enabled: true,
+      },
+      {
+        id: 'admin-1',
+        email: 'admin@example.test',
+        name: 'Администратор',
+        roleCodes: ['ADMIN'],
+        permissionCodes: ['system:admin'],
+        clientScopeMode: 'ALL',
+        clientIds: [],
+        writableClientIds: [],
+      },
+    );
+
+    expect(putStocks).toHaveBeenCalledWith('secret', '1693195', [
+      { chrtId: 200600, amount: 15 },
+    ]);
+    expect(result).toMatchObject({ updated: true, enabled: true, amount: 15 });
+  });
+
   it('loads real WB FBS orders for the selected client and adds storage boxes', async () => {
     const prisma = {
       client: {

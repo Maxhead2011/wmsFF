@@ -16,6 +16,8 @@ import {
   MapPin,
   PackageCheck,
   PlugZap,
+  Power,
+  PowerOff,
   QrCode,
   RefreshCw,
   RotateCcw,
@@ -25,6 +27,7 @@ import {
   Settings2,
   ShoppingBasket,
   Truck,
+  Warehouse,
   XCircle,
 } from 'lucide-react';
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -47,10 +50,13 @@ import {
   fetchFbsCargoPackings,
   fetchFbsOrders,
   fetchFbsPasses,
+  fetchFbsStocks,
   moveFbsOrdersToNewSupply,
   reshipFbsOrders,
+  syncFbsStocks,
   updateFbsPass,
   updateFbsBillingSettings,
+  updateFbsStockPublication,
   type AuthSession,
   type ClientFbsOrders,
   type ClientSummary,
@@ -62,6 +68,7 @@ import {
   type FbsPass,
   type FbsPassPayload,
   type FbsPassesResponse,
+  type FbsStocksResponse,
   type UpdateFbsBillingSettingsPayload,
 } from '../../lib/api';
 import { FbsCostCalculator } from './FbsCostCalculator';
@@ -71,7 +78,17 @@ type FbsPanelProps = {
   session: AuthSession;
 };
 
-type FbsView = 'active' | 'cargo' | 'shipped' | 'cancelled' | 'cost' | 'calculator' | 'archive' | 'passes' | 'pricing';
+type FbsView =
+  | 'active'
+  | 'stocks'
+  | 'cargo'
+  | 'shipped'
+  | 'cancelled'
+  | 'cost'
+  | 'calculator'
+  | 'archive'
+  | 'passes'
+  | 'pricing';
 type OrdersState =
   | { status: 'idle'; data: null; error: '' }
   | { status: 'loading'; data: ClientFbsOrders | null; error: '' }
@@ -85,6 +102,13 @@ const fbsViews = [
     description: 'Новые заказы, сборка, упаковка и готовность к передаче.',
     icon: ShoppingBasket,
     accent: 'red',
+  },
+  {
+    id: 'stocks' as const,
+    title: 'Остатки FBS',
+    description: 'Выбор товаров для продажи и передача доступных остатков WMS в Wildberries.',
+    icon: Warehouse,
+    accent: 'green',
   },
   {
     id: 'cargo' as const,
@@ -313,6 +337,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
   const activeOrdersTotal = activeClients.reduce((sum, item) => sum + item.activeOrders, 0);
   const tileCounts: Record<FbsView, number | string> = {
     active: activeOrdersTotal,
+    stocks: 'WMS → WB',
     cargo: cargoState.data?.supplies.filter((supply) => !supply.readyToDeliver).length ?? 0,
     shipped: data?.counts.shipped ?? 0,
     cancelled: data?.counts.cancelled ?? 0,
@@ -757,7 +782,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
                 </span>
               </label>
             ) : null}
-            {activeView !== 'pricing' && activeView !== 'passes' ? (
+            {activeView !== 'pricing' && activeView !== 'passes' && activeView !== 'stocks' ? (
               <button
                 className="fbs-refresh-button"
                 type="button"
@@ -790,6 +815,8 @@ export function FbsPanel({ session }: FbsPanelProps) {
           />
         ) : activeView === 'passes' ? (
           <FbsPassesView clientId={selectedClientId} session={session} />
+        ) : activeView === 'stocks' ? (
+          <FbsStocksView clientId={selectedClientId} session={session} search={search} />
         ) : activeView === 'cargo' ? (
           <FbsCargoPackingView state={cargoState} search={search} />
         ) : ordersState.status === 'error' ? (
@@ -841,7 +868,11 @@ export function FbsPanel({ session }: FbsPanelProps) {
           />
         ) : null}
 
-        {data?.connected && activeView !== 'pricing' && activeView !== 'calculator' && activeView !== 'passes' ? (
+        {data?.connected &&
+        activeView !== 'pricing' &&
+        activeView !== 'calculator' &&
+        activeView !== 'passes' &&
+        activeView !== 'stocks' ? (
           <div className="fbs-source-line">
             <span>
               <Link2 size={14} aria-hidden="true" />
@@ -947,6 +978,387 @@ function FbsAssemblyDestinationDialog({
         </div>
       </section>
     </div>
+  );
+}
+
+function FbsStocksView({
+  clientId,
+  session,
+  search,
+}: {
+  clientId: string;
+  session: AuthSession;
+  search: string;
+}) {
+  const [state, setState] = useState<{
+    status: 'loading' | 'ready' | 'error';
+    data: FbsStocksResponse | null;
+    error: string;
+  }>({
+    status: 'loading',
+    data: null,
+    error: '',
+  });
+  const [actionSkuId, setActionSkuId] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [message, setMessage] = useState('');
+  const [page, setPage] = useState(0);
+
+  const loadStocks = useCallback(async (connectionId?: string, warehouseId?: string) => {
+    setState((current) => ({ status: 'loading', data: current.data, error: '' }));
+    try {
+      const data = await fetchFbsStocks(
+        session.accessToken,
+        clientId,
+        connectionId || undefined,
+        warehouseId || undefined,
+      );
+      setState({ status: 'ready', data, error: '' });
+      setPage(0);
+    } catch (caught) {
+      setState((current) => ({
+        status: 'error',
+        data: current.data,
+        error: caught instanceof Error ? caught.message : 'Не удалось загрузить остатки FBS.',
+      }));
+    }
+  }, [clientId, session.accessToken]);
+
+  useEffect(() => {
+    setMessage('');
+    setActionSkuId(null);
+    void loadStocks();
+  }, [loadStocks]);
+
+  useEffect(() => {
+    setPage(0);
+  }, [search]);
+
+  const filteredItems = useMemo(() => {
+    const normalizedSearch = search.trim().toLocaleLowerCase('ru-RU');
+    const items = state.data?.items ?? [];
+    if (!normalizedSearch) {
+      return items;
+    }
+
+    return items.filter((item) =>
+      [
+        item.name,
+        item.article,
+        item.internalSku,
+        item.clientSku,
+        item.barcode,
+        item.nmId,
+        item.chrtId,
+        item.color,
+        item.size,
+        item.status === 'SELLING'
+          ? 'продавать'
+          : item.status === 'STOPPED'
+            ? 'не продавать'
+            : 'не настроено',
+      ].some((value) => value?.toLocaleLowerCase('ru-RU').includes(normalizedSearch)),
+    );
+  }, [search, state.data?.items]);
+
+  const pageSize = 100;
+  const pageCount = Math.max(1, Math.ceil(filteredItems.length / pageSize));
+  const currentPage = Math.min(page, pageCount - 1);
+  const visibleItems = filteredItems.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+  const selectedConnectionId = state.data?.selectedConnectionId ?? '';
+  const selectedWarehouseId = state.data?.selectedWarehouseId ?? '';
+
+  async function setPublication(skuId: string, enabled: boolean) {
+    if (!selectedConnectionId || !selectedWarehouseId) {
+      return;
+    }
+
+    setActionSkuId(skuId);
+    setMessage('');
+    try {
+      const result = await updateFbsStockPublication(session.accessToken, {
+        clientId,
+        connectionId: selectedConnectionId,
+        warehouseId: selectedWarehouseId,
+        skuId,
+        enabled,
+      });
+      setMessage(
+        enabled
+          ? `Товар включён в продажу. В Wildberries передано: ${result.amount.toLocaleString('ru-RU')} шт.`
+          : 'Продажа товара остановлена. В Wildberries передан остаток 0 шт.',
+      );
+      await loadStocks(selectedConnectionId, selectedWarehouseId);
+    } catch (caught) {
+      setState((current) => ({
+        status: 'error',
+        data: current.data,
+        error: caught instanceof Error ? caught.message : 'Не удалось изменить статус продажи.',
+      }));
+    } finally {
+      setActionSkuId(null);
+    }
+  }
+
+  async function synchronizeManagedStocks() {
+    if (!selectedConnectionId || !selectedWarehouseId) {
+      return;
+    }
+    if (!window.confirm('Передать в Wildberries актуальные остатки всех настроенных товаров?')) {
+      return;
+    }
+
+    setSyncing(true);
+    setMessage('');
+    try {
+      const result = await syncFbsStocks(session.accessToken, {
+        clientId,
+        connectionId: selectedConnectionId,
+        warehouseId: selectedWarehouseId,
+      });
+      setMessage(`Синхронизировано товаров: ${result.synced.toLocaleString('ru-RU')}.`);
+      await loadStocks(selectedConnectionId, selectedWarehouseId);
+    } catch (caught) {
+      setState((current) => ({
+        status: 'error',
+        data: current.data,
+        error: caught instanceof Error ? caught.message : 'Не удалось синхронизировать остатки.',
+      }));
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  if (state.status === 'loading' && !state.data) {
+    return <FbsNotice icon={RefreshCw} title="Получаю остатки" text="Сверяем товары WMS с кабинетом Wildberries." />;
+  }
+
+  if (state.status === 'error' && !state.data) {
+    return <FbsNotice icon={AlertTriangle} title="Не удалось получить остатки" text={state.error} tone="error" />;
+  }
+
+  const data = state.data;
+  if (!data?.connected) {
+    return (
+      <FbsNotice
+        icon={PlugZap}
+        title="Wildberries не подключён"
+        text="Подключите API Wildberries в настройках клиента, чтобы управлять остатками FBS."
+      />
+    );
+  }
+
+  if (!selectedWarehouseId) {
+    return (
+      <FbsNotice
+        icon={Warehouse}
+        title="Склад Wildberries не найден"
+        text="Создайте склад FBS в кабинете продавца Wildberries, затем снова откройте раздел."
+      />
+    );
+  }
+
+  return (
+    <section className="fbs-stocks">
+      <div className="fbs-stocks__intro">
+        <div>
+          <p className="eyebrow">Остатки WMS → Wildberries</p>
+          <h3>Какие товары продавать по FBS</h3>
+          <p>
+            WMS передаёт только количество. Карточки, цены и другие настройки товара не изменяются.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="button button-primary fbs-stocks__sync"
+          onClick={() => void synchronizeManagedStocks()}
+          disabled={syncing || actionSkuId !== null || data.summary.enabled + data.summary.disabled === 0}
+        >
+          <RefreshCw size={16} aria-hidden="true" className={syncing ? 'is-spinning' : undefined} />
+          {syncing ? 'Синхронизирую' : 'Синхронизировать выбранные'}
+        </button>
+      </div>
+
+      <div className="fbs-stocks__selectors">
+        <label>
+          <span>Подключение WB</span>
+          <select
+            value={selectedConnectionId}
+            disabled={syncing || actionSkuId !== null}
+            onChange={(event) => void loadStocks(event.target.value)}
+          >
+            {data.connections.map((connection) => (
+              <option key={connection.id} value={connection.id}>
+                {connection.accountName || 'Wildberries'}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Склад WB</span>
+          <select
+            value={selectedWarehouseId}
+            disabled={syncing || actionSkuId !== null}
+            onChange={(event) => void loadStocks(selectedConnectionId, event.target.value)}
+          >
+            {data.warehouses.map((warehouse) => (
+              <option key={warehouse.id} value={warehouse.id}>
+                {warehouse.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div className="fbs-stocks__summary">
+        <div>
+          <span>Товаров сопоставлено</span>
+          <strong>{data.summary.products.toLocaleString('ru-RU')}</strong>
+        </div>
+        <div className="is-green">
+          <span>Продаются</span>
+          <strong>{data.summary.enabled.toLocaleString('ru-RU')}</strong>
+        </div>
+        <div className="is-red">
+          <span>Остановлены</span>
+          <strong>{data.summary.disabled.toLocaleString('ru-RU')}</strong>
+        </div>
+        <div>
+          <span>Не настроено</span>
+          <strong>{data.summary.unmanaged.toLocaleString('ru-RU')}</strong>
+        </div>
+        <div>
+          <span>Доступно к продаже</span>
+          <strong>{data.summary.sellable.toLocaleString('ru-RU')} шт.</strong>
+        </div>
+        <div className={data.summary.differences > 0 ? 'is-amber' : 'is-green'}>
+          <span>Расхождений с WB</span>
+          <strong>{data.summary.differences.toLocaleString('ru-RU')}</strong>
+        </div>
+      </div>
+
+      <div className="fbs-stocks__rule">
+        <CircleCheckBig size={18} aria-hidden="true" />
+        <span>
+          «Продавать» передаёт свободный остаток WMS. «Не продавать» передаёт 0. Товары со статусом
+          «Не настроено» WMS не меняет.
+        </span>
+      </div>
+
+      {message ? <p className="fbs-stocks__message">{message}</p> : null}
+      {state.status === 'error' && state.error ? <p className="form-error">{state.error}</p> : null}
+
+      <div className="fbs-table-wrap fbs-stocks__table-wrap">
+        <table className="fbs-table fbs-stocks__table">
+          <thead>
+            <tr>
+              <th>Товар</th>
+              <th>Идентификаторы</th>
+              <th>WMS</th>
+              <th>Резерв</th>
+              <th>К продаже</th>
+              <th>В WB</th>
+              <th>Статус и действие</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visibleItems.map((item) => {
+              const busy = actionSkuId === item.skuId;
+              return (
+                <tr key={item.skuId}>
+                  <td>
+                    <strong>{item.name}</strong>
+                    <small>
+                      {[item.article, item.color, item.size].filter(Boolean).join(' · ') || item.internalSku}
+                    </small>
+                  </td>
+                  <td>
+                    <strong>{item.barcode || item.clientSku || item.internalSku}</strong>
+                    <small>nmID {item.nmId} · chrtID {item.chrtId}</small>
+                  </td>
+                  <td><strong>{item.wmsAvailable.toLocaleString('ru-RU')}</strong></td>
+                  <td><strong>{item.reserved.toLocaleString('ru-RU')}</strong></td>
+                  <td><strong>{item.sellable.toLocaleString('ru-RU')}</strong></td>
+                  <td>
+                    <strong>{item.wbAmount.toLocaleString('ru-RU')}</strong>
+                    {item.difference !== null && item.difference !== 0 ? (
+                      <small className="fbs-stocks__difference">
+                        нужно передать {item.targetAmount?.toLocaleString('ru-RU')}
+                      </small>
+                    ) : null}
+                  </td>
+                  <td>
+                    <span className={`fbs-stocks__status fbs-stocks__status--${item.status.toLocaleLowerCase()}`}>
+                      {item.status === 'SELLING'
+                        ? 'Продавать'
+                        : item.status === 'STOPPED'
+                          ? 'Не продавать'
+                          : 'Не настроено'}
+                    </span>
+                    <div className="fbs-stocks__actions">
+                      <button
+                        type="button"
+                        className="fbs-stocks__action fbs-stocks__action--on"
+                        disabled={busy || actionSkuId !== null || syncing || item.status === 'SELLING'}
+                        onClick={() => void setPublication(item.skuId, true)}
+                      >
+                        <Power size={14} aria-hidden="true" />
+                        Продавать
+                      </button>
+                      <button
+                        type="button"
+                        className="fbs-stocks__action fbs-stocks__action--off"
+                        disabled={busy || actionSkuId !== null || syncing || item.status === 'STOPPED'}
+                        onClick={() => void setPublication(item.skuId, false)}
+                      >
+                        <PowerOff size={14} aria-hidden="true" />
+                        Не продавать
+                      </button>
+                    </div>
+                    {item.lastError ? <small className="fbs-stocks__row-error">{item.lastError}</small> : null}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {visibleItems.length === 0 ? (
+          <div className="fbs-empty">
+            <span><Search size={27} aria-hidden="true" /></span>
+            <strong>{search.trim() ? `По запросу «${search.trim()}» ничего не найдено` : 'Нет сопоставленных товаров'}</strong>
+            <p>
+              {search.trim()
+                ? 'Измените поисковый запрос.'
+                : 'Проверьте штрихкоды и артикулы товаров в WMS и Wildberries.'}
+            </p>
+          </div>
+        ) : null}
+      </div>
+
+      {pageCount > 1 ? (
+        <div className="fbs-stocks__pager">
+          <button
+            type="button"
+            className="button button-secondary"
+            disabled={currentPage === 0}
+            onClick={() => setPage((value) => Math.max(0, value - 1))}
+          >
+            Назад
+          </button>
+          <span>
+            Страница {currentPage + 1} из {pageCount} · найдено {filteredItems.length.toLocaleString('ru-RU')}
+          </span>
+          <button
+            type="button"
+            className="button button-secondary"
+            disabled={currentPage >= pageCount - 1}
+            onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))}
+          >
+            Далее
+          </button>
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -1270,7 +1682,7 @@ function FbsOrdersView({
 }: {
   data: ClientFbsOrders | null;
   search: string;
-  view: Exclude<FbsView, 'cargo' | 'cost' | 'calculator' | 'pricing' | 'passes'>;
+  view: Exclude<FbsView, 'stocks' | 'cargo' | 'cost' | 'calculator' | 'pricing' | 'passes'>;
   selectedOrderKeys: Set<string>;
   onSelectionChange: (keys: Set<string>) => void;
   orderAction: 'assemble' | 'reship' | 'move' | 'deliver' | 'change-destination' | 'cancel' | 'stickers' | 'cargo' | 'supply' | 'request' | 'pick-list' | null;

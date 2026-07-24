@@ -2236,6 +2236,61 @@ export type FbsCargoPackingsResponse = {
   supplies: FbsCargoPackingSupply[];
 };
 
+export type FbsStockItem = {
+  skuId: string;
+  internalSku: string;
+  clientSku: string | null;
+  article: string | null;
+  name: string;
+  color: string | null;
+  size: string | null;
+  barcode: string | null;
+  nmId: string;
+  chrtId: string;
+  status: 'SELLING' | 'STOPPED' | 'UNMANAGED';
+  enabled: boolean | null;
+  wmsAvailable: number;
+  reserved: number;
+  sellable: number;
+  wbAmount: number;
+  targetAmount: number | null;
+  difference: number | null;
+  lastSyncedAmount: number | null;
+  lastSyncedAt: string | null;
+  lastError: string | null;
+};
+
+export type FbsStocksResponse = {
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  connected: boolean;
+  connections: Array<{
+    id: string;
+    marketplace: 'WILDBERRIES';
+    accountName: string | null;
+  }>;
+  selectedConnectionId: string | null;
+  warehouses: Array<{
+    id: string;
+    name: string;
+    officeId: string | null;
+    cargoType: number | null;
+    deliveryType: number | null;
+  }>;
+  selectedWarehouseId: string | null;
+  fetchedAt: string;
+  summary: {
+    products: number;
+    enabled: number;
+    disabled: number;
+    unmanaged: number;
+    wmsAvailable: number;
+    sellable: number;
+    wbAmount: number;
+    differences: number;
+  };
+  items: FbsStockItem[];
+};
+
 export type FbsOrderSelectionPayload = {
   clientId: string;
   orders: Array<{ connectionId: string; id: string }>;
@@ -5167,6 +5222,44 @@ export async function fetchFbsCargoPackings(accessToken: string, clientId: strin
   return request<FbsCargoPackingsResponse>(
     withQuery('/marketplace-connections/fbs/cargo-packings', { clientId }),
     { accessToken },
+  );
+}
+
+export async function fetchFbsStocks(
+  accessToken: string,
+  clientId: string,
+  connectionId?: string,
+  warehouseId?: string,
+) {
+  return request<FbsStocksResponse>(
+    withQuery('/marketplace-connections/fbs/stocks', { clientId, connectionId, warehouseId }),
+    { accessToken },
+  );
+}
+
+export async function updateFbsStockPublication(
+  accessToken: string,
+  payload: {
+    clientId: string;
+    connectionId: string;
+    warehouseId: string;
+    skuId: string;
+    enabled: boolean;
+  },
+) {
+  return request<{ updated: boolean; skuId: string; enabled: boolean; amount: number; syncedAt: string }>(
+    '/marketplace-connections/fbs/stocks/publication',
+    { method: 'PUT', accessToken, body: payload },
+  );
+}
+
+export async function syncFbsStocks(
+  accessToken: string,
+  payload: { clientId: string; connectionId: string; warehouseId: string },
+) {
+  return request<{ synced: number; warehouseId: string; syncedAt: string }>(
+    '/marketplace-connections/fbs/stocks/sync',
+    { method: 'POST', accessToken, body: payload },
   );
 }
 
