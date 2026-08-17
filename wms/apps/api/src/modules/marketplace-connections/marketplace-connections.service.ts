@@ -19373,16 +19373,22 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         order,
       ]),
     );
-    const existingTasks = await this.prisma.fbsTsdAssembly.findMany({
-      where: {
-        clientId,
-        marketplace: MarketplaceType.WILDBERRIES,
-        OR: relevantOrders.map((order) => ({
-          connectionId: order.connectionId,
-          orderId: order.id,
-        })),
-      },
-    });
+    const existingTaskBatches = [];
+    // FIX: each composite OR branch adds two bind variables. Large WB cabinets
+    // can exceed PostgreSQL's 32767-variable limit unless the lookup is batched.
+    for (const orderBatch of chunks(relevantOrders, 4_000)) {
+      existingTaskBatches.push(await this.prisma.fbsTsdAssembly.findMany({
+        where: {
+          clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          OR: orderBatch.map((order) => ({
+            connectionId: order.connectionId,
+            orderId: order.id,
+          })),
+        },
+      }));
+    }
+    const existingTasks = existingTaskBatches.flat();
     const taskByKey = new Map(
       existingTasks.map((task) => [
         selectionKey(task.connectionId, task.orderId),
@@ -19835,27 +19841,31 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
     }
 
-    const tasks = await this.prisma.fbsTsdAssembly.findMany({
-      where: {
-        clientId,
-        marketplace: MarketplaceType.WILDBERRIES,
-        OR: relevantOrders.map((order) => ({
-          connectionId: order.connectionId,
-          orderId: order.id,
-        })),
-      },
-      select: {
-        connectionId: true,
-        orderId: true,
-        status: true,
-        reservedBoxId: true,
-        reservedBoxCode: true,
-        reservedAt: true,
-        boxId: true,
-        boxCode: true,
-        errorMessage: true,
-      },
-    });
+    const taskBatches = [];
+    for (const orderBatch of chunks(relevantOrders, 4_000)) {
+      taskBatches.push(await this.prisma.fbsTsdAssembly.findMany({
+        where: {
+          clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          OR: orderBatch.map((order) => ({
+            connectionId: order.connectionId,
+            orderId: order.id,
+          })),
+        },
+        select: {
+          connectionId: true,
+          orderId: true,
+          status: true,
+          reservedBoxId: true,
+          reservedBoxCode: true,
+          reservedAt: true,
+          boxId: true,
+          boxCode: true,
+          errorMessage: true,
+        },
+      }));
+    }
+    const tasks = taskBatches.flat();
     const locationBoxIds = uniqueStrings(
       tasks.map((task) => task.reservedBoxId ?? task.boxId ?? ''),
     );

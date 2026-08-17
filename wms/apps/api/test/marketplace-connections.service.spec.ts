@@ -7403,6 +7403,38 @@ describe('MarketplaceConnectionsService', () => {
     ).rejects.toMatchObject({ name: 'FbsWarehouseExcludedError' });
   });
 
+  it('batches large pallet-sort reservation lookups below the PostgreSQL bind-variable limit', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const prisma = {
+      client: {
+        findUnique: vi.fn().mockResolvedValue({ storesWithoutBoxes: false }),
+      },
+      stockBalance: {
+        findMany: vi.fn(),
+      },
+      fbsTsdAssembly: {
+        findMany,
+      },
+      storagePalletBox: {
+        findMany: vi.fn(),
+      },
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    const orders = Array.from({ length: 8_001 }, (_, index) =>
+      fbsOrder({ id: String(5_400_000_000 + index), category: 'cancelled' }),
+    );
+
+    await expect(
+      (service as any).syncFbsPalletSortReservations('client-1', orders),
+    ).resolves.toBeInstanceOf(Map);
+
+    // ADDED: three batches for the initial lookup and three for the final snapshot.
+    expect(findMany).toHaveBeenCalledTimes(6);
+    for (const [query] of findMany.mock.calls) {
+      expect(query.where.OR.length).toBeLessThanOrEqual(4_000);
+    }
+  });
+
 });
 
 function fbsOrder(overrides: Record<string, unknown> = {}) {
