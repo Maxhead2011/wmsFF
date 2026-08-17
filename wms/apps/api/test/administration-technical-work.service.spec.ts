@@ -70,4 +70,21 @@ describe('AdministrationTechnicalWorkService: confirmation boundary', () => {
     expect(auditLog.write).toHaveBeenCalledTimes(1);
     expect(result).toEqual(expect.objectContaining({ applied: true, verified: true }));
   });
+
+  // ADDED: An unavailable route audit must never be rendered as an empty healthy result.
+  it('не скрывает сбой анализа маршрута сообщением об отсутствии проблем', async () => {
+    const auditFailure = new Error('База временно недоступна');
+    const service = new AdministrationTechnicalWorkService(
+      {} as never,
+      {} as never,
+      {} as never,
+      {
+        listActiveRequests: vi.fn().mockResolvedValue([{ id: 'request-1' }]),
+        auditRequest: vi.fn().mockRejectedValue(auditFailure),
+      } as never,
+      {} as never,
+    );
+
+    await expect(service.diagnose('REQUESTS', owner)).rejects.toBe(auditFailure);
+  });
 });
