@@ -4653,10 +4653,16 @@ public class MainActivity extends Activity {
                     !previousBoxCode.isEmpty() && "release".equals(action);
                 boolean switchedToAnotherTask =
                     updated.task == null || !taskId.equals(nonEmpty(updated.task.id, ""));
-                if (
-                    previousBoxWasLocallyConfirmed &&
-                    (problemWasReportedAfterBoxScan || (previousBoxWasNotPicked && switchedToAnotherTask))
-                ) {
+                // FIX: не отправляем сотрудника в обязательную инвентаризацию,
+                // если ШК переключил заказ на другой нужный товар из того же короба.
+                if (FbsTaskSafety.shouldQueueMandatoryAuditAfterTaskSwitch(
+                    previousBoxWasLocallyConfirmed,
+                    previousBoxWasNotPicked,
+                    problemWasReportedAfterBoxScan,
+                    taskId,
+                    previousBoxCode,
+                    updated.task
+                )) {
                     queueMandatoryFbsAudit(
                         currentTask.client == null ? "" : currentTask.client.id,
                         previousBoxCode

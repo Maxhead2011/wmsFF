@@ -2,6 +2,8 @@ package pro.logoff.wms.tsd;
 
 import java.util.Locale;
 
+import pro.logoff.wms.tsd.network.TsdFbsAssemblyResponse;
+
 final class FbsTaskSafety {
     private FbsTaskSafety() {
     }
@@ -37,6 +39,45 @@ final class FbsTaskSafety {
         String scannedBox = normalizeBox(scannedValue);
         String responseBox = normalizeBox(responseBoxCode);
         return !scannedBox.isEmpty() && scannedBox.equals(responseBox);
+    }
+
+    static boolean shouldQueueMandatoryAuditAfterTaskSwitch(
+        boolean previousBoxWasLocallyConfirmed,
+        boolean previousBoxWasNotPicked,
+        boolean releaseAction,
+        String previousTaskId,
+        String previousBoxCode,
+        TsdFbsAssemblyResponse.Task updatedTask
+    ) {
+        if (!previousBoxWasLocallyConfirmed) return false;
+        if (releaseAction) return !normalizeBox(previousBoxCode).isEmpty();
+
+        boolean switchedToAnotherTask = updatedTask == null
+            || !nonEmpty(previousTaskId).equals(nonEmpty(updatedTask.id));
+        if (!previousBoxWasNotPicked || !switchedToAnotherTask) return false;
+
+        // FIX: скан другого нужного размера может законно переключить FBS-заказ,
+        // но физический короб остаётся тем же. В этом случае инвентаризация не нужна.
+        return !taskCanUseBox(updatedTask, previousBoxCode);
+    }
+
+    private static boolean taskCanUseBox(
+        TsdFbsAssemblyResponse.Task task,
+        String boxCode
+    ) {
+        if (task == null || normalizeBox(boxCode).isEmpty()) return false;
+        if (normalizeBox(boxCode).equals(normalizeBox(task.scannedBoxCode))) return true;
+        if (task.storageBoxes == null) return false;
+        for (TsdFbsAssemblyResponse.StorageBox storageBox : task.storageBoxes) {
+            if (
+                storageBox != null
+                    && storageBox.quantity > 0
+                    && normalizeBox(boxCode).equals(normalizeBox(storageBox.code))
+            ) {
+                return true;
+            }
+        }
+        return false;
     }
 
     static boolean mandatoryAuditCanResume(
