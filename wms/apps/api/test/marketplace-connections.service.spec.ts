@@ -7159,6 +7159,96 @@ describe('MarketplaceConnectionsService', () => {
     expect(formatPallet).toHaveBeenCalledWith(task, pallet, expect.any(Object));
   });
 
+  // ADDED: Regression for a physical box whose pallet-sort placement is being rebuilt.
+  it('accepts a required FBS box when its pallet-sort link is temporarily missing', async () => {
+    const task = {
+      id: 'task-1',
+      clientId: 'client-1',
+      requestId: 'request-255',
+      skuId: 'sku-needed',
+      sourceSkuId: null,
+      status: 'IN_PROGRESS',
+      itemCount: 1,
+      relabelRequired: false,
+      reservedAt: null,
+      boxId: null,
+      boxCode: null,
+      sourceBarcode: null,
+      barcode: null,
+      kiz: null,
+      relabelConfirmedAt: null,
+      workerUserId: 'user-1',
+      workerName: 'Надежда',
+      deviceCode: 'TSD-1',
+      errorMessage: null,
+    };
+    const accepted = {
+      ...task,
+      reservedBoxId: 'box-physical',
+      reservedBoxCode: 'FFL_LKB2107_55',
+      boxId: 'box-physical',
+      boxCode: 'FFL_LKB2107_55',
+    };
+    const prisma = {
+      storagePallet: { findFirst: vi.fn().mockResolvedValue(null) },
+      box: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'box-physical',
+          code: 'FFL_LKB2107_55',
+          storagePlacement: null,
+        }),
+      },
+      stockBalance: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { quantity: 1 } }),
+      },
+      fbsTsdAssembly: {
+        update: vi.fn().mockResolvedValue(accepted),
+      },
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    vi.spyOn(service as any, 'loadOwnedFbsTsdAssembly').mockResolvedValue(task);
+    vi.spyOn(service as any, 'fbsTsdReservationRows').mockResolvedValue([]);
+    vi.spyOn(service as any, 'formatFbsTsdAssembly').mockImplementation(
+      async (updated: unknown, _user: unknown, message: string) => ({ task: updated, message }),
+    );
+
+    await expect(
+      service.scanFbsTsdBox(
+        'task-1',
+        { boxCode: 'FFL_LKB2107_55' },
+        {
+          id: 'user-1',
+          email: 'nadezhda@example.test',
+          name: 'Надежда',
+          deviceCode: 'TSD-1',
+          roleCodes: ['OPERATOR'],
+          permissionCodes: ['stock:write'],
+          clientScopeMode: 'ALL',
+          clientIds: [],
+          writableClientIds: [],
+        } as never,
+      ),
+    ).resolves.toMatchObject({
+      task: accepted,
+      message: expect.stringContaining('Теперь сканируйте ШК товара'),
+    });
+    expect(prisma.box.findFirst).toHaveBeenCalledWith({
+      where: {
+        clientId: 'client-1',
+        code: { equals: 'FFL_LKB2107_55', mode: Prisma.QueryMode.insensitive },
+        status: { notIn: ['deleted', 'archived'] },
+      },
+      select: expect.any(Object),
+    });
+    expect(prisma.fbsTsdAssembly.update).toHaveBeenCalledWith({
+      where: { id: 'task-1' },
+      data: expect.objectContaining({
+        boxId: 'box-physical',
+        boxCode: 'FFL_LKB2107_55',
+      }),
+    });
+  });
+
   it('показывает на паллетсорте только короба, закреплённые за текущей FBS-заявкой', async () => {
     const prisma = {
       fbsTsdAssembly: {

@@ -7058,7 +7058,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         clientId: task.clientId,
         code: { equals: boxCode, mode: Prisma.QueryMode.insensitive },
         status: { notIn: ['deleted', 'archived'] },
-        storagePlacement: { isNot: null },
+        // FIX: A temporarily missing pallet-sort link must not hide a real box
+        // whose free stock is still required by this FBS request. The stock and
+        // request checks below remain authoritative before the box is accepted.
       },
       select: {
         id: true,
