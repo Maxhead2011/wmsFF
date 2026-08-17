@@ -1718,6 +1718,68 @@ describe('MarketplaceConnectionsService', () => {
     expect(merge).toHaveBeenCalledWith('client-1', liveResponse);
   });
 
+  // TEST: ручное обновление использует имеющийся снимок и не грузит всю
+  // историю WB заново.
+  it('uses an incremental cache-only load for a forced FBS refresh', async () => {
+    const service = new MarketplaceConnectionsService(
+      {} as never,
+      { requireClientAccess: vi.fn() } as never,
+    );
+    const cachedResponse = {
+      client: { id: 'client-1', code: 'CL-1', name: 'Клиент' },
+      connected: true,
+      connections: [],
+      fetchedAt: '2026-08-17T10:00:00.000Z',
+      deliveryPlan: {
+        destination: FbsDeliveryDestination.VNUKOVO_SORTING_CENTER,
+        itemsPerCargoPlace: FBS_UNLIMITED_CARGO_PLACE_CAPACITY,
+        requiresCargoPlaces: false,
+      },
+      counts: { active: 1, shipped: 0, cancelled: 0, archive: 0, all: 1 },
+      orders: [
+        {
+          id: '1001',
+          connectionId: 'connection-1',
+          supplierStatus: 'new',
+          wbStatus: 'waiting',
+          supplyId: null,
+          requiresReshipment: false,
+          warehouseId: 'warehouse-1',
+          category: 'active',
+        },
+      ],
+    };
+    (service as any).fbsOrdersCache.set('client-1', {
+      expiresAt: Date.now() + 60_000,
+      value: cachedResponse,
+    });
+    const loadOrders = vi
+      .spyOn(service as any, 'loadFbsOrders')
+      .mockResolvedValue({ ...cachedResponse, orders: [] });
+    vi.spyOn(service as any, 'mergeSyncedFbsTsdRequestOrders').mockImplementation(
+      async (_clientId: string, response: unknown) => response,
+    );
+
+    await service.listFbsOrders(
+      'client-1',
+      {
+        id: 'admin-1',
+        permissionCodes: ['system:admin'],
+        roleCodes: ['ADMIN'],
+      } as never,
+      true,
+    );
+
+    expect(loadOrders).toHaveBeenCalledWith(
+      'client-1',
+      expect.any(Map),
+      { historyMode: 'cache-only' },
+    );
+    expect(loadOrders.mock.calls[0]?.[1]).toEqual(
+      new Map([['connection-1:1001', 'new|waiting||0|warehouse-1']]),
+    );
+  });
+
   it('forces a fresh FBS order load when reserves are refreshed', async () => {
     const clientScopes = { requireClientAccess: vi.fn() };
     const service = new MarketplaceConnectionsService({} as never, clientScopes as never);
@@ -3633,6 +3695,59 @@ describe('MarketplaceConnectionsService', () => {
     });
   });
 
+  // TEST: интерактивная сборка берет выбранный заказ из экранного снимка и
+  // не присоединяется к полной фоновой загрузке кабинета.
+  it('starts selected WB assembly from cache without a full order load', async () => {
+    const service = new MarketplaceConnectionsService(
+      {} as never,
+      { requireClientAccess: vi.fn() } as never,
+    );
+    const order = {
+      id: '1001',
+      connectionId: 'connection-1',
+      marketplace: MarketplaceType.WILDBERRIES,
+      supplierStatus: 'new',
+    };
+    const cachedResponse = {
+      client: { id: 'client-1', code: 'CL-1', name: 'Клиент' },
+      connected: true,
+      connections: [],
+      fetchedAt: '2026-08-17T10:00:00.000Z',
+      deliveryPlan: {
+        destination: FbsDeliveryDestination.VNUKOVO_SORTING_CENTER,
+        itemsPerCargoPlace: FBS_UNLIMITED_CARGO_PLACE_CAPACITY,
+        requiresCargoPlaces: false,
+      },
+      counts: { active: 1, shipped: 0, cancelled: 0, archive: 0, all: 1 },
+      orders: [order],
+    };
+    (service as any).fbsOrdersCache.set('client-1', {
+      expiresAt: Date.now() + 60_000,
+      value: cachedResponse,
+    });
+    const loadOrders = vi
+      .spyOn(service as any, 'loadFbsOrders')
+      .mockRejectedValue(new Error('full load must not start'));
+    const move = vi
+      .spyOn(service as any, 'moveFbsOrdersToSupply')
+      .mockResolvedValue({ assembled: 1 });
+    const dto = {
+      clientId: 'client-1',
+      orders: [{ connectionId: 'connection-1', id: '1001' }],
+    };
+    const user = { id: 'admin-1' } as never;
+
+    await service.assembleFbsOrders(dto, user);
+
+    expect(loadOrders).not.toHaveBeenCalled();
+    expect(move).toHaveBeenCalledWith(
+      dto,
+      user,
+      'assemble',
+      { response: cachedResponse, orders: [order] },
+    );
+  });
+
   it('moves selected new WB orders to a supply and refreshes their statuses', async () => {
     const connection = {
       id: 'connection-1',
@@ -3671,17 +3786,39 @@ describe('MarketplaceConnectionsService', () => {
       itemCount: 1,
     }));
     vi.spyOn(service as any, 'resolveSelectedFbsOrders').mockResolvedValue({
-      response: { client: connection.client },
+      response: {
+        client: connection.client,
+        connected: true,
+        connections: [],
+        fetchedAt: '2026-08-17T10:00:00.000Z',
+        deliveryPlan: {
+          destination: FbsDeliveryDestination.PICKUP_POINT,
+          itemsPerCargoPlace: FBS_UNLIMITED_CARGO_PLACE_CAPACITY,
+          requiresCargoPlaces: true,
+        },
+        counts: { active: 15, shipped: 0, cancelled: 0, archive: 0, all: 15 },
+        orders: selectedOrders,
+      },
       orders: selectedOrders,
     });
-    vi.spyOn(service as any, 'refreshFbsOrdersCache').mockResolvedValue({ orders: [] });
+    const refreshAll = vi.spyOn(service as any, 'refreshFbsOrdersCache');
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (url: string) => ({
+      vi.fn(async (url: string, init?: RequestInit) => ({
         ok: true,
         status: url.endsWith('/trbx') ? 201 : 200,
         json: async () =>
-          url.endsWith('/api/v3/supplies')
+          url.endsWith('/orders/status')
+            ? {
+                orders: (JSON.parse(String(init?.body)).orders as number[]).map((id) => ({
+                  id,
+                  supplierStatus: 'new',
+                  wbStatus: 'waiting',
+                })),
+              }
+            : url.endsWith('/order-ids')
+              ? { orderIds: selectedOrders.map((order) => Number(order.id)) }
+          : url.endsWith('/api/v3/supplies')
             ? { id: 'supply-1' }
             : url.endsWith('/trbx')
               ? { trbxIds: ['WB-TRBX-1'] }
@@ -3747,6 +3884,7 @@ describe('MarketplaceConnectionsService', () => {
         },
       }),
     );
+    expect(refreshAll).not.toHaveBeenCalled();
   });
 
   it('persists sorting-center selection and does not create cargo places', async () => {
@@ -3784,16 +3922,41 @@ describe('MarketplaceConnectionsService', () => {
       itemCount: 1,
     };
     vi.spyOn(service as any, 'resolveSelectedFbsOrders').mockResolvedValue({
-      response: { client: connection.client },
+      response: {
+        client: connection.client,
+        connected: true,
+        connections: [],
+        fetchedAt: '2026-08-17T10:00:00.000Z',
+        deliveryPlan: {
+          destination: FbsDeliveryDestination.VNUKOVO_SORTING_CENTER,
+          itemsPerCargoPlace: FBS_UNLIMITED_CARGO_PLACE_CAPACITY,
+          requiresCargoPlaces: false,
+        },
+        counts: { active: 1, shipped: 0, cancelled: 0, archive: 0, all: 1 },
+        orders: [selectedOrder],
+      },
       orders: [selectedOrder],
     });
-    vi.spyOn(service as any, 'refreshFbsOrdersCache').mockResolvedValue({ orders: [] });
+    const refreshAll = vi.spyOn(service as any, 'refreshFbsOrdersCache');
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (url: string) => ({
+      vi.fn(async (url: string, init?: RequestInit) => ({
         ok: true,
         status: 200,
-        json: async () => url.endsWith('/api/v3/supplies') ? { id: 'supply-sc-1' } : {},
+        json: async () =>
+          url.endsWith('/orders/status')
+            ? {
+                orders: (JSON.parse(String(init?.body)).orders as number[]).map((id) => ({
+                  id,
+                  supplierStatus: 'new',
+                  wbStatus: 'waiting',
+                })),
+              }
+            : url.endsWith('/order-ids')
+              ? { orderIds: [Number(selectedOrder.id)] }
+              : url.endsWith('/api/v3/supplies')
+                ? { id: 'supply-sc-1' }
+                : {},
       } as Response)),
     );
 
@@ -3818,6 +3981,7 @@ describe('MarketplaceConnectionsService', () => {
     );
     expect(prisma.fbsSupplyPlan.update).not.toHaveBeenCalled();
     expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith('/trbx'))).toBe(false);
+    expect(refreshAll).not.toHaveBeenCalled();
   });
 
   it('moves unstarted FBS orders to a new WB supply and creates a separate WMS request', async () => {

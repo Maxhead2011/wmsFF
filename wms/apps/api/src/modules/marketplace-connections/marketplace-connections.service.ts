@@ -1297,7 +1297,27 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
     }
 
-    const liveValue = await this.loadFbsOrders(normalizedClientId);
+    // FIX: ручное «Обновить API WB» не должно заново обрабатывать всю
+    // многолетнюю историю кабинета. При наличии снимка обновляем только
+    // изменившиеся активные заказы; полный холодный старт остается прежним.
+    const liveValue = cached
+      ? {
+          ...this.mergeIncrementalFbsOrders(
+            cached.value,
+            await this.loadFbsOrders(
+              normalizedClientId,
+              new Map(
+                cached.value.orders.map((order) => [
+                  selectionKey(order.connectionId, order.id),
+                  fbsOrderRefreshFingerprint(order),
+                ]),
+              ),
+              { historyMode: 'cache-only' },
+            ),
+          ),
+          fetchedAt: new Date().toISOString(),
+        }
+      : await this.loadFbsOrders(normalizedClientId);
     const value = await this.mergeSyncedFbsTsdRequestOrders(normalizedClientId, liveValue);
     this.fbsOrdersCache.set(normalizedClientId, {
       expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
@@ -14034,11 +14054,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   async assembleFbsOrders(dto: FbsOrderSelectionDto, user: AuthUser) {
     const clientId = dto.clientId.trim();
-    const selected = await this.resolveSelectedFbsOrders(clientId, dto.orders);
+    // FIX: выбранные оператором заказы уже есть в экранном снимке. Не
+    // присоединяем четыре заказа к фоновому пересчету всего кабинета.
+    const selected = await this.resolveSelectedFbsOrders(
+      clientId,
+      dto.orders,
+      undefined,
+      true,
+    );
     if (selected.orders.every((order) => order.marketplace === MarketplaceType.OZON)) {
       return this.submitOzonFbsOrders(clientId, selected.orders, user);
     }
-    return this.moveFbsOrdersToSupply(dto, user, 'assemble');
+    return this.moveFbsOrdersToSupply(dto, user, 'assemble', selected);
   }
 
   private async submitOzonFbsOrders(
@@ -15899,10 +15926,22 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     dto: FbsOrderSelectionDto,
     user: AuthUser,
     mode: 'assemble' | 'reship',
+    selectedOverride?: { response: FbsOrdersResponse; orders: FbsOrderSummary[] },
   ) {
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'write');
-    const { response, orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders);
+    const selected =
+      selectedOverride ??
+      (await this.resolveSelectedFbsOrders(
+        clientId,
+        dto.orders,
+        undefined,
+        // FIX: повторная отгрузка сохраняет прежнюю полную проверку; быстрый
+        // снимок допустим только для обычной сборки с точечной live-проверкой.
+        mode === 'assemble',
+      ));
+    const { response } = selected;
+    let orders = selected.orders;
     const defaultDeliveryPlan = await this.loadFbsDeliveryPlan(clientId);
     const destination = dto.deliveryDestination ?? defaultDeliveryPlan.destination;
     const deliveryPlan: FbsOrdersResponse['deliveryPlan'] = {
@@ -15914,6 +15953,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const unsupported = orders.filter((order) => order.marketplace !== MarketplaceType.WILDBERRIES);
     if (unsupported.length > 0) {
       throw new BadRequestException('Массовая сборка сейчас доступна только для заказов Wildberries.');
+    }
+    const connections = await this.loadSelectedConnections(clientId, orders);
+    const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
+    if (mode === 'assemble') {
+      // FIX: кеш используется только для карточки заказа. Разрешение на
+      // изменение проверяем точечно и непосредственно в WB.
+      orders = await this.refreshSelectedWildberriesStatuses(
+        orders,
+        connectionById,
+      );
     }
     const unavailable = orders.filter((order) =>
       mode === 'assemble' ? order.supplierStatus !== 'new' : !order.requiresReshipment,
@@ -15936,8 +15985,6 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
     }
 
-    const connections = await this.loadSelectedConnections(clientId, orders);
-    const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
     const groupedOrders = new Map<string, FbsOrderSummary[]>();
     for (const order of orders) {
       const groupKey = [
@@ -16118,12 +16165,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       });
     }
 
-    const refreshedOrders = await this.refreshFbsOrdersCache(clientId, {
-      invalidateHistory: false,
-    });
+    // FIX: состав новой поставки уже проверен через WB order-ids. Не держим
+    // HTTP-ответ еще несколько минут ради полного пересчета 17 тысяч заказов.
     const stabilizedOrders = this.preserveNewFbsSupplyAssignments(
       response,
-      refreshedOrders,
+      response,
       supplies,
     );
     this.fbsOrdersCache.set(clientId, {
@@ -17824,8 +17870,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     clientId: string,
     selections: Array<{ connectionId: string; id: string }>,
     responseOverride?: FbsOrdersResponse,
+    preferCachedResponse = false,
   ) {
-    const response = responseOverride ?? (await this.loadFbsOrders(clientId));
+    const response =
+      responseOverride ??
+      (preferCachedResponse
+        ? this.fbsOrdersCache.get(clientId)?.value
+        : undefined) ??
+      (await this.loadFbsOrders(clientId));
     const orderByKey = new Map(response.orders.map((order) => [selectionKey(order.connectionId, order.id), order]));
     const uniqueSelections = new Map(
       selections.map((selection) => [selectionKey(selection.connectionId, selection.id), selection]),
@@ -17841,6 +17893,79 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new BadRequestException(`Заказы не найдены в выбранном кабинете: ${missing.join(', ')}.`);
     }
     return { response, orders };
+  }
+
+  private async refreshSelectedWildberriesStatuses(
+    orders: FbsOrderSummary[],
+    connectionById: Map<string, { apiKey: string }>,
+  ) {
+    const statusByOrder = new Map<
+      string,
+      { supplierStatus: string; wbStatus: string }
+    >();
+    const ordersByConnection = new Map<string, FbsOrderSummary[]>();
+    for (const order of orders) {
+      const group = ordersByConnection.get(order.connectionId) ?? [];
+      group.push(order);
+      ordersByConnection.set(order.connectionId, group);
+    }
+    for (const [connectionId, connectionOrders] of ordersByConnection) {
+      const connection = connectionById.get(connectionId);
+      if (!connection) {
+        throw new BadRequestException(
+          `Подключение WB для заказа ${connectionOrders[0]?.id ?? ''} не найдено или отключено.`,
+        );
+      }
+      for (const orderChunk of chunks(connectionOrders, 1000)) {
+        const response = await marketplaceJson(
+          'https://marketplace-api.wildberries.ru/api/v3/orders/status',
+          {
+            method: 'POST',
+            headers: wbHeaders(connection.apiKey),
+            body: JSON.stringify({
+              orders: orderChunk.map((order) => numericWbOrderId(order.id)),
+            }),
+          },
+        );
+        for (const status of asArray<Record<string, unknown>>(response.orders)) {
+          const id = textValue(status.id);
+          if (!id) continue;
+          statusByOrder.set(selectionKey(connectionId, id), {
+            supplierStatus: textValue(status.supplierStatus),
+            wbStatus: textValue(status.wbStatus),
+          });
+        }
+      }
+    }
+    const missing = orders.filter(
+      (order) =>
+        !statusByOrder.has(selectionKey(order.connectionId, order.id)),
+    );
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        `Wildberries не вернул актуальный статус заказов: ${missing
+          .map((order) => order.id)
+          .join(', ')}. Повторите действие позже.`,
+      );
+    }
+    return orders.map((order) => {
+      const status = statusByOrder.get(
+        selectionKey(order.connectionId, order.id),
+      )!;
+      return {
+        ...order,
+        supplierStatus: status.supplierStatus,
+        wbStatus: status.wbStatus,
+        category: fbsOrderCategory(
+          status.supplierStatus,
+          status.wbStatus,
+        ),
+        statusLabel: fbsStatusLabel(
+          status.supplierStatus,
+          status.wbStatus,
+        ),
+      };
+    });
   }
 
   private async prepareFbsDeliveryRecovery(
