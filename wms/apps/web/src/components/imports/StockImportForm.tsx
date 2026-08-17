@@ -10,6 +10,7 @@ import {
   type StockImportPreview,
 } from '../../lib/api';
 import { StockCommitResultBlock, StockPreviewResult } from './ImportResultBlocks';
+import { useRememberedClientId } from '../../lib/rememberedClient';
 
 type StockImportFormProps = {
   session: AuthSession;
@@ -20,7 +21,7 @@ type BusyAction = 'preview' | 'commit' | null;
 export function StockImportForm({ session }: StockImportFormProps) {
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [clientsError, setClientsError] = useState('');
-  const [selectedClientId, setSelectedClientId] = useState('');
+  const [selectedClientId, setSelectedClientId] = useRememberedClientId(session.user.id);
   const [file, setFile] = useState<File | null>(null);
   const [sourceDocument, setSourceDocument] = useState('');
   const [preview, setPreview] = useState<StockImportPreview | null>(null);

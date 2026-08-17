@@ -13,6 +13,7 @@
     "prisma:analytics:generate": "prisma generate --schema prisma/analytics/schema.prisma",
     "prisma:analytics:push": "prisma db push --skip-generate --schema prisma/analytics/schema.prisma",
     "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:push": "prisma db push",
     "ensure:admin": "node dist/scripts/ensure-default-admin.js",
     "ensure:demo": "node dist/scripts/ensure-demo-cabinet.js"
@@ -29,6 +30,7 @@
     "dejavu-fonts-ttf": "^2.37.3",
     "firebase-admin": "13.0.0",
     "multer": "^1.4.5-lts.1",
+    "pdf-parse": "^2.4.5",
     "pdf-lib": "^1.17.1",
     "pdfmake": "^0.3.11",
     "reflect-metadata": "^0.2.2",

@@ -11,6 +11,7 @@ import {
   type ClientSummary,
   type StorageOverview,
 } from '../../lib/api';
+import { useRememberedClientId, validRememberedClientId } from '../../lib/rememberedClient';
 
 type StoragePanelProps = {
   session: AuthSession;
@@ -18,7 +19,7 @@ type StoragePanelProps = {
 
 export function StoragePanel({ session }: StoragePanelProps) {
   const [clients, setClients] = useState<ClientSummary[]>([]);
-  const [clientId, setClientId] = useState('');
+  const [clientId, setClientId] = useRememberedClientId(session.user.id);
   const [periodFrom, setPeriodFrom] = useState(monthStart());
   const [periodTo, setPeriodTo] = useState(today());
   const [tariff, setTariff] = useState('0');
@@ -43,7 +44,7 @@ export function StoragePanel({ session }: StoragePanelProps) {
           return;
         }
         setClients(list);
-        setClientId((current) => (list.some((client) => client.id === current) ? current : list[0]?.id ?? ''));
+        setClientId((current) => validRememberedClientId(current, list));
       } catch (caught) {
         if (isActive) {
           setError(caught instanceof Error ? caught.message : 'Не удалось загрузить клиентов.');

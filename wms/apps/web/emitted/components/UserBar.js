@@ -1,0 +1,5 @@
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+import { LogOut, ShieldCheck } from 'lucide-react';
+export function UserBar({ user, onLogout }) {
+    return (_jsxs("div", { className: "userbar", "aria-label": "\u0422\u0435\u043A\u0443\u0449\u0438\u0439 \u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u0435\u043B\u044C", children: [_jsxs("div", { className: "userbar__identity", children: [_jsx(ShieldCheck, { size: 18, "aria-hidden": "true" }), _jsxs("div", { children: [_jsx("strong", { children: user.name }), _jsx("span", { children: user.email })] })] }), _jsxs("div", { className: "userbar__meta", children: [_jsx("span", { className: "status status--ready", children: user.clientScopeMode }), _jsx("span", { className: "status status--planned", children: user.roleCodes.join(', ') || 'нет роли' })] }), _jsx("button", { className: "icon-button", type: "button", onClick: onLogout, title: "\u0412\u044B\u0439\u0442\u0438", "aria-label": "\u0412\u044B\u0439\u0442\u0438", children: _jsx(LogOut, { size: 18, "aria-hidden": "true" }) })] }));
+}

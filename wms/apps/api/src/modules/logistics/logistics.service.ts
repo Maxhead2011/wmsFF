@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   BillingChargeSource,
   BillingChargeStatus,
@@ -307,17 +307,25 @@ export class LogisticsService {
     };
   }
 
-  listCarriers() {
+  listCarriers(user: AuthUser) {
+    const warehouseId = this.scopedWarehouseId(user, 'read');
     return this.prisma.logisticsCarrier.findMany({
       where: { isActive: true },
       include: {
-        _count: { select: { trips: true } },
+        _count: {
+          select: {
+            trips: warehouseId
+              ? { where: { deliveries: { some: { warehouseId } } } }
+              : true,
+          },
+        },
       },
       orderBy: [{ name: 'asc' }],
     });
   }
 
-  createCarrier(dto: CreateLogisticsCarrierDto) {
+  createCarrier(dto: CreateLogisticsCarrierDto, user: AuthUser) {
+    this.requireNetworkLogisticsWrite(user);
     const name = normalizeRequiredText(dto.name, 'Название перевозчика обязательно.');
 
     return this.prisma.logisticsCarrier.create({
@@ -333,19 +341,30 @@ export class LogisticsService {
     });
   }
 
-  listTrips(query: ListLogisticsTripsDto) {
+  listTrips(query: ListLogisticsTripsDto, user: AuthUser) {
+    const warehouseId = this.scopedWarehouseId(user, 'read');
     return this.prisma.logisticsTrip.findMany({
       where: {
         carrierId: query.carrierId,
         status: query.status,
+        deliveries: warehouseId ? { some: { warehouseId } } : undefined,
       },
-      include: logisticsTripInclude,
+      include: warehouseId
+        ? {
+            ...logisticsTripInclude,
+            deliveries: {
+              ...logisticsTripInclude.deliveries,
+              where: { warehouseId },
+            },
+          }
+        : logisticsTripInclude,
       orderBy: [{ plannedDate: 'desc' }, { createdAt: 'desc' }],
       take: 200,
     });
   }
 
-  async createTrip(dto: CreateLogisticsTripDto) {
+  async createTrip(dto: CreateLogisticsTripDto, user: AuthUser) {
+    this.requireNetworkLogisticsWrite(user);
     const carrierId = normalizeText(dto.carrierId);
     const plannedDate = this.parseDate(dto.plannedDate);
 
@@ -374,7 +393,8 @@ export class LogisticsService {
     });
   }
 
-  async updateTripStatus(id: string, dto: UpdateLogisticsTripStatusDto) {
+  async updateTripStatus(id: string, dto: UpdateLogisticsTripStatusDto, user: AuthUser) {
+    this.requireNetworkLogisticsWrite(user);
     const trip = await this.prisma.logisticsTrip.findUnique({
       where: { id },
       select: { id: true },
@@ -395,9 +415,11 @@ export class LogisticsService {
   }
 
   listDeliveryRequests(query: ListDeliveryRequestsDto, user: AuthUser) {
+    const warehouseId = this.scopedWarehouseId(user, 'read');
     return this.prisma.logisticsDeliveryRequest.findMany({
       where: {
         clientId: this.clientScopes.resolveClientFilter(user, query.clientId),
+        warehouseId: warehouseId ?? undefined,
         status: query.status,
       },
       include: deliveryRequestInclude,
@@ -415,7 +437,8 @@ export class LogisticsService {
             id: dto.requestId,
             clientId: dto.clientId,
           },
-          include: {
+          select: {
+            warehouseId: true,
             packages: {
               select: {
                 packageType: true,
@@ -429,6 +452,11 @@ export class LogisticsService {
       throw new BadRequestException('Связанная клиентская заявка не найдена у выбранного клиента.');
     }
 
+    const warehouseId = await this.resolveDeliveryWarehouseId(
+      user,
+      dto.clientId,
+      clientRequest?.warehouseId ?? null,
+    );
     const actualQuantity = this.resolveDeliveryQuantity(dto, clientRequest?.packages ?? []);
     const quote = await this.tryQuoteForDelivery({
       ...dto,
@@ -443,6 +471,7 @@ export class LogisticsService {
     return this.prisma.logisticsDeliveryRequest.create({
       data: {
         clientId: dto.clientId,
+        warehouseId,
         requestId: dto.requestId,
         tariffSetId: quote.tariffSetId ?? dto.tariffSetId,
         origin: DEFAULT_LOGISTICS_ORIGIN,
@@ -467,6 +496,7 @@ export class LogisticsService {
       select: {
         id: true,
         clientId: true,
+        warehouseId: true,
         title: true,
         destinationCity: true,
         desiredDate: true,
@@ -476,6 +506,7 @@ export class LogisticsService {
       throw new NotFoundException('Клиентская заявка не найдена.');
     }
     this.clientScopes.requireClientAccess(user, clientRequest.clientId, 'write');
+    this.requireDeliveryWarehouseAccess(user, clientRequest.warehouseId, 'write');
     const destination = normalizeText(clientRequest.destinationCity ?? undefined);
     if (!destination) {
       return { status: 'REQUIRES_DESTINATION' as const, deliveryRequest: null };
@@ -484,6 +515,7 @@ export class LogisticsService {
     let deliveryRequest = await this.prisma.logisticsDeliveryRequest.findFirst({
       where: {
         requestId,
+        warehouseId: clientRequest.warehouseId,
         status: { not: LogisticsDeliveryStatus.CANCELLED },
       },
       include: deliveryRequestInclude,
@@ -518,6 +550,7 @@ export class LogisticsService {
       select: {
         id: true,
         clientId: true,
+        warehouseId: true,
         status: true,
         plannedShipDate: true,
       },
@@ -528,6 +561,7 @@ export class LogisticsService {
     }
 
     this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+    this.requireDeliveryWarehouseAccess(user, request.warehouseId, 'write');
 
     const tripId = normalizeText(dto.tripId ?? undefined);
     if (!tripId) {
@@ -583,6 +617,7 @@ export class LogisticsService {
       select: {
         id: true,
         clientId: true,
+        warehouseId: true,
         status: true,
         origin: true,
         destination: true,
@@ -594,6 +629,7 @@ export class LogisticsService {
     }
 
     this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+    this.requireDeliveryWarehouseAccess(user, request.warehouseId, 'write');
     const notifyClient =
       request.status !== dto.status &&
       (await isClientNotificationEnabled(
@@ -649,6 +685,7 @@ export class LogisticsService {
       select: {
         id: true,
         clientId: true,
+        warehouseId: true,
         status: true,
         billingChargeId: true,
       },
@@ -659,6 +696,7 @@ export class LogisticsService {
     }
 
     this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+    this.requireDeliveryWarehouseAccess(user, request.warehouseId, 'write');
 
     if (request.billingChargeId) {
       throw new BadRequestException('Доставка уже связана с начислением, сумму нельзя менять.');
@@ -700,6 +738,7 @@ export class LogisticsService {
     }
 
     this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+    this.requireDeliveryWarehouseAccess(user, request.warehouseId, 'write');
 
     if (request.billingChargeId) {
       return this.prisma.logisticsDeliveryRequest.findUniqueOrThrow({
@@ -773,6 +812,85 @@ export class LogisticsService {
         include: deliveryRequestInclude,
       });
     });
+  }
+
+  private scopedWarehouseId(user: AuthUser, mode: 'read' | 'write') {
+    if (
+      user.permissionCodes?.includes('system:admin') ||
+      user.roleCodes?.includes('CLIENT') ||
+      (user.warehouseIds?.length ?? 0) === 0
+    ) {
+      return null;
+    }
+
+    const warehouseId = user.activeWarehouseId?.trim() ?? '';
+    const allowedIds = mode === 'write' ? user.writableWarehouseIds : user.warehouseIds;
+    if (!warehouseId || !allowedIds?.includes(warehouseId)) {
+      throw new ForbiddenException('Нет доступа к логистике выбранного филиала.');
+    }
+    return warehouseId;
+  }
+
+  private requireNetworkLogisticsWrite(user: AuthUser) {
+    if (
+      !user.permissionCodes?.includes('system:admin') &&
+      !user.roleCodes?.includes('CLIENT') &&
+      (user.warehouseIds?.length ?? 0) > 0
+    ) {
+      throw new ForbiddenException(
+        'Общие рейсы и перевозчиков изменяет только администратор сети.',
+      );
+    }
+  }
+
+  private requireDeliveryWarehouseAccess(
+    user: AuthUser,
+    warehouseId: string | null | undefined,
+    mode: 'read' | 'write',
+  ) {
+    const scopedWarehouseId = this.scopedWarehouseId(user, mode);
+    if (scopedWarehouseId && warehouseId !== scopedWarehouseId) {
+      throw new NotFoundException('Заявка на доставку не найдена в выбранном филиале.');
+    }
+  }
+
+  private async resolveDeliveryWarehouseId(
+    user: AuthUser,
+    clientId: string,
+    requestWarehouseId: string | null,
+  ) {
+    const scopedWarehouseId = this.scopedWarehouseId(user, 'write');
+    if (scopedWarehouseId) {
+      if (requestWarehouseId && requestWarehouseId !== scopedWarehouseId) {
+        throw new NotFoundException('Связанная заявка не относится к выбранному филиалу.');
+      }
+      const link = await this.prisma.warehouseClient.findFirst({
+        where: {
+          warehouseId: scopedWarehouseId,
+          clientId,
+          status: 'ACTIVE',
+        },
+        select: { clientId: true },
+      });
+      if (!link) {
+        throw new ForbiddenException('Клиент не закреплён за выбранным филиалом.');
+      }
+      return scopedWarehouseId;
+    }
+
+    if (requestWarehouseId) return requestWarehouseId;
+    const activeWarehouseId = user.activeWarehouseId?.trim();
+    if (activeWarehouseId) return activeWarehouseId;
+
+    const links = await this.prisma.warehouseClient.findMany({
+      where: { clientId, status: 'ACTIVE', warehouse: { isActive: true } },
+      select: { warehouseId: true },
+      take: 2,
+    });
+    if (links.length === 1) return links[0].warehouseId;
+    throw new BadRequestException(
+      'Не удалось однозначно определить филиал доставки. Выберите филиал или свяжите доставку с заявкой.',
+    );
   }
 
   selectRateTier(tiers: RateTierLike[], input: { boxes?: number; pallets?: number }) {

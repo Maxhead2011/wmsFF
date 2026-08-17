@@ -1,8 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ClientNotificationEvent, Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
-import { ClientScopeService } from '../auth/client-scope.service';
+import { ClientScopeService, type ClientFilter } from '../auth/client-scope.service';
 import {
   clientNotificationEvents,
   isClientNotificationEnabled,
@@ -23,11 +23,13 @@ export class ClientNotificationsService {
 
   list(query: ListClientNotificationsDto, user: AuthUser) {
     const clientId = this.clientScopes.resolveClientFilter(user, query.clientId);
+    const warehouseId = this.scopedWarehouseId(user);
 
     return this.prisma.clientNotification.findMany({
       where: {
         clientId,
         isRead: query.unreadOnly ? false : undefined,
+        request: warehouseId ? { is: { warehouseId } } : undefined,
       },
       include: clientNotificationInclude,
       orderBy: { createdAt: 'desc' },
@@ -37,7 +39,11 @@ export class ClientNotificationsService {
 
   async create(dto: CreateClientNotificationDto, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
-    await this.ensureRequestBelongsToClient(dto.clientId, dto.requestId);
+    const warehouseId = this.scopedWarehouseId(user);
+    if (warehouseId && !dto.requestId) {
+      throw new BadRequestException('Для уведомления филиала выберите заявку этого филиала.');
+    }
+    await this.ensureRequestBelongsToClient(dto.clientId, dto.requestId, warehouseId);
     await this.ensureNotificationEventEnabled(dto.clientId, ClientNotificationEvent.MANUAL);
 
     // Русский комментарий: уведомление видно клиенту сразу в кабинете, а статус read хранится отдельно от заявки.
@@ -61,7 +67,12 @@ export class ClientNotificationsService {
   async markRead(id: string, user: AuthUser) {
     const notification = await this.prisma.clientNotification.findUnique({
       where: { id },
-      select: { id: true, clientId: true, isRead: true },
+      select: {
+        id: true,
+        clientId: true,
+        isRead: true,
+        request: { select: { warehouseId: true } },
+      },
     });
 
     if (!notification) {
@@ -69,6 +80,10 @@ export class ClientNotificationsService {
     }
 
     this.clientScopes.requireClientAccess(user, notification.clientId, 'read');
+    const warehouseId = this.scopedWarehouseId(user);
+    if (warehouseId && notification.request?.warehouseId !== warehouseId) {
+      throw new NotFoundException('Уведомление не найдено в выбранном филиале.');
+    }
 
     if (notification.isRead) {
       return this.prisma.clientNotification.findUniqueOrThrow({
@@ -89,6 +104,10 @@ export class ClientNotificationsService {
 
   async listPreferences(query: ListClientNotificationPreferencesDto, user: AuthUser) {
     const clientId = this.clientScopes.resolveClientFilter(user, query.clientId);
+    const warehouseId = this.scopedWarehouseId(user);
+    if (warehouseId) {
+      await this.ensureBranchLocalClientFilter(clientId, warehouseId);
+    }
 
     const [clients, preferences] = await Promise.all([
       this.prisma.client.findMany({
@@ -131,6 +150,10 @@ export class ClientNotificationsService {
   async updatePreference(dto: UpdateClientNotificationPreferenceDto, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'read');
     await this.ensureClientExists(dto.clientId);
+    const warehouseId = this.scopedWarehouseId(user);
+    if (warehouseId) {
+      await this.ensureBranchLocalClient(dto.clientId, warehouseId);
+    }
 
     return this.prisma.clientNotificationPreference.upsert({
       where: {
@@ -155,6 +178,10 @@ export class ClientNotificationsService {
 
   async getTelegramSettings(clientId: string | undefined, user: AuthUser) {
     const resolvedClientId = this.resolveWritableClientId(clientId, user, 'read');
+    const warehouseId = this.scopedWarehouseId(user);
+    if (warehouseId) {
+      await this.ensureBranchLocalClient(resolvedClientId, warehouseId);
+    }
     return this.telegram.getClientSettings(resolvedClientId);
   }
 
@@ -164,28 +191,79 @@ export class ClientNotificationsService {
   ) {
     const clientId = this.resolveWritableClientId(dto.clientId, user, 'write');
     await this.ensureClientExists(clientId);
+    const warehouseId = this.scopedWarehouseId(user);
+    if (warehouseId) {
+      await this.ensureBranchLocalClient(clientId, warehouseId);
+    }
+    const current = await this.telegram.getClientSettings(clientId);
     return this.telegram.updateClientSettings(
       clientId,
       {
         enabled: dto.enabled === true,
         chatId: dto.chatId ?? '',
+        sections: current.sections,
       },
       user,
     );
   }
 
-  private async ensureRequestBelongsToClient(clientId: string, requestId?: string) {
+  private async ensureRequestBelongsToClient(clientId: string, requestId?: string, warehouseId?: string | null) {
     if (!requestId) {
       return;
     }
 
     const request = await this.prisma.clientRequest.findUnique({
       where: { id: requestId },
-      select: { id: true, clientId: true },
+      select: { id: true, clientId: true, warehouseId: true },
     });
 
-    if (!request || request.clientId !== clientId) {
+    if (!request || request.clientId !== clientId || (warehouseId && request.warehouseId !== warehouseId)) {
       throw new BadRequestException('Заявка не принадлежит выбранному клиенту.');
+    }
+  }
+
+  private scopedWarehouseId(user: AuthUser) {
+    if (user.permissionCodes.includes('system:admin') || user.roleCodes.includes('CLIENT')) {
+      return null;
+    }
+    if (!(user.warehouseIds?.length)) {
+      return null;
+    }
+    const warehouseId = user.activeWarehouseId?.trim();
+    if (!warehouseId || !user.warehouseIds.includes(warehouseId)) {
+      throw new ForbiddenException('Не выбран доступный филиал.');
+    }
+    return warehouseId;
+  }
+
+  private async ensureBranchLocalClient(clientId: string, warehouseId: string) {
+    const client = await this.prisma.client.findFirst({
+      where: {
+        id: clientId,
+        warehouseLinks: {
+          some: { warehouseId, status: 'ACTIVE' },
+          none: { status: 'ACTIVE', warehouseId: { not: warehouseId } },
+        },
+      },
+      select: { id: true },
+    });
+    if (!client) {
+      throw new ForbiddenException('Общие настройки клиента доступны только администратору сети.');
+    }
+  }
+
+  private async ensureBranchLocalClientFilter(
+    clientId: ClientFilter,
+    warehouseId: string,
+  ) {
+    const ids =
+      typeof clientId === 'string'
+        ? [clientId]
+        : clientId && 'in' in clientId && Array.isArray(clientId.in)
+          ? clientId.in.filter((value): value is string => typeof value === 'string')
+          : [];
+    for (const id of ids) {
+      await this.ensureBranchLocalClient(id, warehouseId);
     }
   }
 

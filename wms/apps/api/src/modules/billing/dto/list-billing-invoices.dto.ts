@@ -1,5 +1,6 @@
 import { BillingInvoiceStatus } from '@prisma/client';
-import { IsDateString, IsEnum, IsOptional, IsString } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsBoolean, IsDateString, IsEnum, IsOptional, IsString } from 'class-validator';
 
 export class ListBillingInvoicesDto {
   @IsOptional()
@@ -17,4 +18,9 @@ export class ListBillingInvoicesDto {
   @IsOptional()
   @IsDateString()
   periodTo?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true')
+  @IsBoolean()
+  unpaidOnly?: boolean;
 }

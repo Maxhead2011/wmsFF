@@ -1,4 +1,4 @@
-import { ClientKind, ClientLogisticsInvoiceMode, ClientStorageBillingMode } from '@prisma/client';
+import { ClientKind, ClientLogisticsInvoiceMode, ClientStockBalanceMode, ClientStorageBillingMode } from '@prisma/client';
 import { IsBoolean, IsEmail, IsEnum, IsOptional, IsString, Length, ValidateIf } from 'class-validator';
 
 export class CreateClientDto {
@@ -79,6 +79,10 @@ export class CreateClientDto {
   storesWithoutBoxes?: boolean;
 
   @IsOptional()
+  @IsEnum(ClientStockBalanceMode)
+  stockBalanceMode?: ClientStockBalanceMode;
+
+  @IsOptional()
   @IsBoolean()
   onlineReceiptVisibleToClient?: boolean;
 
@@ -87,6 +91,26 @@ export class CreateClientDto {
   fbsCalculatorEnabled?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  relabelingEnabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  factoryEnabled?: boolean;
+
+  @IsOptional()
+  @IsString()
+  factoryName?: string;
+
+  @IsOptional()
+  @IsString()
+  factoryCode?: string;
+
+  @IsOptional()
   @IsString()
   fulfillmentManagerUserId?: string;
+
+  @IsOptional()
+  @IsString()
+  ownCompanyId?: string;
 }

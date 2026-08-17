@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import { SkusService } from '../src/modules/skus/skus.service';
@@ -248,5 +249,73 @@ describe('SkusService', () => {
     });
     expect(data).not.toHaveProperty('volumeLiters');
     expect(data).not.toHaveProperty('volumeSource');
+  });
+
+  it('adds a product pair to the client relabeling table', async () => {
+    const saved = {
+      id: 'mapping-1',
+      clientId: 'client-1',
+      sourceArticle: 'Корея_2голубой',
+      targetArticle: 'новый_корея_2голубой',
+      comment: 'Переклейка для WB',
+    };
+    const prisma = {
+      clientArticleMapping: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue(saved),
+        update: vi.fn(),
+      },
+    };
+    const scopes = { requireClientAccess: vi.fn() };
+    const service = new SkusService(
+      prisma as never,
+      scopes as never,
+      new VolumeService(),
+    );
+
+    const result = await service.createArticleMapping(
+      {
+        clientId: 'client-1',
+        sourceArticle: '  Корея_2голубой ',
+        targetArticle: ' новый_корея_2голубой ',
+        comment: 'Переклейка для WB',
+      },
+      {} as never,
+    );
+
+    expect(scopes.requireClientAccess).toHaveBeenCalledWith(
+      {},
+      'client-1',
+      'write',
+    );
+    expect(prisma.clientArticleMapping.create).toHaveBeenCalledWith({
+      data: {
+        clientId: 'client-1',
+        sourceArticle: 'Корея_2голубой',
+        targetArticle: 'новый_корея_2голубой',
+        comment: 'Переклейка для WB',
+      },
+    });
+    expect(result).toEqual(saved);
+  });
+
+  it('does not allow the same product on both sides of relabeling', async () => {
+    const scopes = { requireClientAccess: vi.fn() };
+    const service = new SkusService(
+      { clientArticleMapping: {} } as never,
+      scopes as never,
+      new VolumeService(),
+    );
+
+    await expect(
+      service.createArticleMapping(
+        {
+          clientId: 'client-1',
+          sourceArticle: 'Костюм Ёлка',
+          targetArticle: ' костюм елка ',
+        },
+        {} as never,
+      ),
+    ).rejects.toThrow(BadRequestException);
   });
 });

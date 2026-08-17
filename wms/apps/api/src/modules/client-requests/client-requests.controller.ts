@@ -20,6 +20,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { PickInstructionService } from '../stock/pick-instruction.service';
 import { FulfillmentWaveService } from '../stock/fulfillment-wave.service';
+import { MarketplaceConnectionsService } from '../marketplace-connections/marketplace-connections.service';
 import { UpdatePickWaveBalanceReviewDto } from '../stock/dto/update-pick-wave-balance-review.dto';
 import { ClientRequestFilesService } from './client-request-files.service';
 import { ClientRequestEmergencyService } from './client-request-emergency.service';
@@ -33,10 +34,12 @@ import { CreateClientRequestCommentDto } from './dto/create-client-request-comme
 import { CreateClientRequestDto } from './dto/create-client-request.dto';
 import { ImportOutboundRequestXlsxDto } from './dto/import-outbound-request-xlsx.dto';
 import { ListClientRequestsDto } from './dto/list-client-requests.dto';
+import { MergeFbsRequestTailsDto } from './dto/merge-fbs-request-tails.dto';
 import { PreviewClientRequestAvailabilityDto } from './dto/preview-client-request-availability.dto';
 import { UpdateClientRequestDto } from './dto/update-client-request.dto';
 import { UpdateClientRequestBoxSelectionDto } from './dto/update-client-request-box-selection.dto';
 import { UpdateClientRequestStatusDto } from './dto/update-client-request-status.dto';
+import { ResolveFbsSynchronizationDto } from './dto/resolve-fbs-synchronization.dto';
 
 @ApiTags('client-requests')
 @RequirePermissions('client-requests:read')
@@ -53,6 +56,7 @@ export class ClientRequestsController {
     private readonly xlsx: ClientRequestXlsxService,
     private readonly pickInstructions: PickInstructionService,
     private readonly waves: FulfillmentWaveService,
+    private readonly marketplace: MarketplaceConnectionsService,
   ) {}
 
   @Get()
@@ -90,6 +94,24 @@ export class ClientRequestsController {
   @RequirePermissions('client-requests:write')
   submitBalanceReview(@Param('waveId') waveId: string, @CurrentUser() user: AuthUser) {
     return this.waves.submitBalanceReview(waveId, user);
+  }
+
+  @Post('fbs/merge-tails')
+  @RequirePermissions('client-requests:write')
+  mergeFbsRequestTails(
+    @Body() dto: MergeFbsRequestTailsDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.marketplace.mergeFbsRequestTails(dto, user);
+  }
+
+  @Post('fbs/merge-tails/preview')
+  @RequirePermissions('client-requests:write')
+  previewFbsRequestTails(
+    @Body() dto: MergeFbsRequestTailsDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.marketplace.previewFbsRequestTails(dto, user);
   }
 
   @Get(':id/manual-box-selection')
@@ -191,6 +213,26 @@ export class ClientRequestsController {
   @RequirePermissions('stock:write')
   refreshPickInstruction(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.pickInstructions.refreshRequestInstruction(id, user);
+  }
+
+  @Post(':id/sync-tsd')
+  @RequirePermissions('stock:write')
+  async syncToTsd(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    const fbsResult = await this.marketplace.syncFbsRequestForTsd(id, user);
+    if (fbsResult) {
+      return fbsResult;
+    }
+
+    // The regular queue is read by the TSD on demand. Rebuilding the current
+    // instruction here makes a newly created request immediately available on
+    // the next list refresh without changing its workflow status.
+    this.pickInstructions.invalidateRequestInstruction(id);
+    const instruction = await this.pickInstructions.getRequestInstruction(id, user);
+    return {
+      mode: 'OUTBOUND',
+      requestId: id,
+      message: `Заявка подготовлена для ТСД: ${instruction.rows.length} строк. Обновите список заявок на устройстве.`,
+    };
   }
 
   @Get(':id/marketplace/wb-products.xlsx')
@@ -361,6 +403,16 @@ export class ClientRequestsController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.clientRequests.updateStatus(id, dto, user);
+  }
+
+  @Post(':id/fbs-synchronization/resolve')
+  @RequirePermissions('client-requests:status')
+  resolveFbsSynchronization(
+    @Param('id') id: string,
+    @Body() dto: ResolveFbsSynchronizationDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.clientRequests.resolveFbsSynchronization(id, dto.action, dto.requestNumber, user);
   }
 }
 

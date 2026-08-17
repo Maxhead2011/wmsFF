@@ -7,39 +7,96 @@ import { CreateWarehouseDto } from './dto/create-warehouse.dto';
 import { CreateZoneDto } from './dto/create-zone.dto';
 import { UpsertBoxDto } from './dto/upsert-box.dto';
 import { UpsertPalletDto } from './dto/upsert-pallet.dto';
+import { WarehouseBoxIntegrityService } from './warehouse-box-integrity.service';
+import { WarehouseShipmentHistoryService } from './warehouse-shipment-history.service';
 import { WarehouseService } from './warehouse.service';
 
 @ApiTags('warehouse')
 @RequirePermissions('warehouse:read')
 @Controller('warehouse')
 export class WarehouseController {
-  constructor(private readonly warehouse: WarehouseService) {}
+  constructor(
+    private readonly warehouse: WarehouseService,
+    private readonly boxIntegrity: WarehouseBoxIntegrityService,
+    private readonly shipmentHistory: WarehouseShipmentHistoryService,
+  ) {}
 
   @Get('warehouses')
-  listWarehouses() {
-    return this.warehouse.listWarehouses();
+  listWarehouses(@CurrentUser() user: AuthUser) {
+    return this.warehouse.listWarehouses(user);
   }
 
   @Post('warehouses')
   @RequirePermissions('warehouse:write')
-  createWarehouse(@Body() dto: CreateWarehouseDto) {
-    return this.warehouse.createWarehouse(dto);
+  createWarehouse(@Body() dto: CreateWarehouseDto, @CurrentUser() user: AuthUser) {
+    return this.warehouse.createWarehouse(dto, user);
   }
 
   @Get('zones')
-  listZones(@Query('warehouseId') warehouseId?: string) {
-    return this.warehouse.listZones(warehouseId);
+  listZones(@CurrentUser() user: AuthUser, @Query('warehouseId') warehouseId?: string) {
+    return this.warehouse.listZones(user, warehouseId);
   }
 
   @Post('zones')
   @RequirePermissions('warehouse:write')
-  createZone(@Body() dto: CreateZoneDto) {
-    return this.warehouse.createZone(dto);
+  createZone(@Body() dto: CreateZoneDto, @CurrentUser() user: AuthUser) {
+    return this.warehouse.createZone(dto, user);
   }
 
   @Get('boxes')
-  listBoxes(@CurrentUser() user: AuthUser, @Query('clientId') clientId?: string, @Query('code') code?: string) {
-    return this.warehouse.listBoxes({ clientId, code }, user);
+  listBoxes(
+    @CurrentUser() user: AuthUser,
+    @Query('clientId') clientId?: string,
+    @Query('code') code?: string,
+    @Query('archive') archive?: string,
+  ) {
+    return this.warehouse.listBoxes({ clientId, code, archive: archive === 'true' }, user);
+  }
+
+  @Get('box-checks')
+  listBoxChecks(@CurrentUser() user: AuthUser, @Query('clientId') clientId?: string) {
+    return this.boxIntegrity.listChecks(user, clientId);
+  }
+
+  @Get('box-checks/:id')
+  getBoxCheck(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.boxIntegrity.getCheck(id, user);
+  }
+
+  @Post('box-checks')
+  @RequirePermissions('warehouse:write')
+  runBoxCheck(@Body() dto: Record<string, unknown>, @CurrentUser() user: AuthUser) {
+    return this.boxIntegrity.runCheck(dto, user);
+  }
+
+  @Post('box-check-rows/:id/decision')
+  @RequirePermissions('warehouse:write')
+  decideBoxCheckRow(
+    @Param('id') id: string,
+    @Body() dto: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.boxIntegrity.decideRow(id, dto, user);
+  }
+
+  @Get('shipment-history')
+  shipmentHistoryList(
+    @CurrentUser() user: AuthUser,
+    @Query('clientId') clientId?: string,
+    @Query('periodFrom') periodFrom?: string,
+    @Query('periodTo') periodTo?: string,
+    @Query('search') search?: string,
+  ) {
+    return this.shipmentHistory.list({ clientId, periodFrom, periodTo, search }, user);
+  }
+
+  @Post('shipment-history/sync')
+  @RequirePermissions('warehouse:write')
+  syncShipmentHistory(@Body() dto: Record<string, unknown>, @CurrentUser() user: AuthUser) {
+    return this.shipmentHistory.sync(
+      user,
+      typeof dto.clientId === 'string' ? dto.clientId : undefined,
+    );
   }
 
   @Get('online-receipts')

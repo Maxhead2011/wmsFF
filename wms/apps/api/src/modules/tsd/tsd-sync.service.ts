@@ -159,7 +159,8 @@ export class TsdSyncService {
       if (!client) {
         throw new BadRequestException('Клиент приемки не найден.');
       }
-      if (!client.storesWithoutBoxes && !payload.boxCode) {
+      const receiptUsesBoxes = payload.receiptMode === 'BOXES' || !client.storesWithoutBoxes;
+      if (receiptUsesBoxes && !payload.boxCode) {
         throw new BadRequestException('Для этого клиента приемка выполняется с коробами. Сначала отсканируйте номер короба.');
       }
 
@@ -169,7 +170,7 @@ export class TsdSyncService {
           barcode: payload.barcode,
           skuId: payload.skuId,
           kiz: payload.kiz,
-          boxCode: client.storesWithoutBoxes ? undefined : payload.boxCode,
+          boxCode: receiptUsesBoxes ? payload.boxCode : undefined,
           quantity: payload.quantity,
           status: payload.status,
           sourceDocument: payload.sourceDocument,

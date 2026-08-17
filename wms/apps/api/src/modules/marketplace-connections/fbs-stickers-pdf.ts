@@ -16,7 +16,7 @@ export type FbsPickListRow = {
   barcodes: string[];
   quantity: number;
   boxes: Array<{ code: string; quantity: number }>;
-  sticker: FbsStickerImage;
+  sticker?: FbsStickerImage | null;
 };
 
 const LABEL_WIDTH_PT = 58 * 2.8346456693;
@@ -65,16 +65,18 @@ export async function buildFbsPickListPdf(input: {
   requestNumber: number;
   requestTitle: string;
   clientName: string;
+  marketplaceLabel?: string;
   rows: FbsPickListRow[];
 }) {
   configurePdfMake();
+  const marketplaceLabel = input.marketplaceLabel?.trim() || 'маркетплейс';
   const tableBody: Content[][] = [
     [
-      { text: 'Заказ WB', bold: true },
+      { text: `Заказ ${marketplaceLabel}`, bold: true },
       { text: 'Товар', bold: true },
       { text: 'Короб хранения', bold: true },
       { text: 'Кол-во', bold: true },
-      { text: 'QR / ШК Wildberries', bold: true },
+      { text: `QR / ШК ${marketplaceLabel}`, bold: true },
     ],
     ...input.rows.map((row) => [
       { text: row.orderId, bold: true },
@@ -92,11 +94,17 @@ export async function buildFbsPickListPdf(input: {
         fontSize: 8,
       },
       { text: String(row.quantity), bold: true, alignment: 'center' as const },
-      {
-        image: `data:image/png;base64,${row.sticker.file}`,
-        width: LABEL_WIDTH_PT,
-        height: LABEL_HEIGHT_PT,
-      },
+      row.sticker?.file
+        ? {
+            image: `data:image/png;base64,${row.sticker.file}`,
+            width: LABEL_WIDTH_PT,
+            height: LABEL_HEIGHT_PT,
+          }
+        : {
+            text: `Этикетка ${marketplaceLabel} будет доступна после завершения сборки отправления.`,
+            fontSize: 8,
+            color: '#666666',
+          },
     ]),
   ];
   const definition: TDocumentDefinitions = {
@@ -105,7 +113,7 @@ export async function buildFbsPickListPdf(input: {
     pageMargins: [18, 18, 18, 18],
     info: {
       title: `FBS pick list ${input.requestNumber}`,
-      subject: 'Лист подбора FBS с QR/ШК Wildberries',
+      subject: `Лист подбора FBS ${marketplaceLabel}`,
       author: 'LOGOFF WMS',
       creator: 'LOGOFF WMS',
     },

@@ -1,4 +1,4 @@
-import { CheckCircle2, Info, Trash2, X } from 'lucide-react';
+import { CheckCircle2, Info, Trash2, Truck, X } from 'lucide-react';
 import { useState } from 'react';
 import {
   deleteBillingStorageBreakdownDay,
@@ -14,6 +14,7 @@ type BillingChargesTableProps = {
   charges: BillingChargeSummary[];
   canWrite: boolean;
   onStatusChange: (chargeId: string, status: BillingChargeStatus) => void;
+  onFbsLogisticsTripChange: (chargeId: string, extraTrip: boolean) => Promise<void>;
 };
 
 const dateFormatter = new Intl.DateTimeFormat('ru-RU', {
@@ -27,9 +28,16 @@ const moneyFormatter = new Intl.NumberFormat('ru-RU', {
   minimumFractionDigits: 2,
 });
 
-export function BillingChargesTable({ accessToken, charges, canWrite, onStatusChange }: BillingChargesTableProps) {
+export function BillingChargesTable({
+  accessToken,
+  charges,
+  canWrite,
+  onStatusChange,
+  onFbsLogisticsTripChange,
+}: BillingChargesTableProps) {
   const [breakdown, setBreakdown] = useState<BillingStorageBreakdown | null>(null);
   const [breakdownError, setBreakdownError] = useState<string | null>(null);
+  const [tripBusy, setTripBusy] = useState<string | null>(null);
 
   async function openStorageBreakdown(charge: BillingChargeSummary) {
     setBreakdownError(null);
@@ -69,13 +77,41 @@ export function BillingChargesTable({ accessToken, charges, canWrite, onStatusCh
             </tr>
           </thead>
           <tbody>
-            {charges.map((charge) => (
+            {charges.map((charge) => {
+              const trip = fbsLogisticsTrip(charge);
+              return (
               <tr key={charge.id}>
                 <td>
                   <strong>{charge.description}</strong>
                   <span>{charge.request?.title ?? charge.service?.code ?? 'ручное начисление'}</span>
                   <span>{chargeSourceLabel(charge)}</span>
                   <span>{formatDate(charge.serviceDate)}</span>
+                  {trip ? (
+                    <div className={`billing-fbs-trip billing-fbs-trip--${trip.charged ? 'charged' : 'combined'}`}>
+                      <span>
+                        <Truck size={14} aria-hidden="true" />
+                        {trip.automaticPrimary
+                          ? 'Основной выезд клиента за день'
+                          : trip.extraTripOverride
+                            ? 'Отдельный выезд указан вручную'
+                            : 'Объединено с выездом клиента за этот день'}
+                      </span>
+                      {canWrite && charge.status === 'DRAFT' && !trip.automaticPrimary ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTripBusy(charge.id);
+                            Promise.resolve(
+                              onFbsLogisticsTripChange(charge.id, !trip.extraTripOverride),
+                            ).finally(() => setTripBusy((current) => current === charge.id ? null : current));
+                          }}
+                          disabled={tripBusy === charge.id}
+                        >
+                          {trip.extraTripOverride ? 'Объединить выезд' : 'Считать отдельным выездом'}
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {charge.source === 'STORAGE' ? (
                     <button className="icon-text-button billing-breakdown-button" type="button" onClick={() => void openStorageBreakdown(charge)}>
                       <Info size={15} aria-hidden="true" />
@@ -118,7 +154,8 @@ export function BillingChargesTable({ accessToken, charges, canWrite, onStatusCh
                   </td>
                 ) : null}
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -222,6 +259,19 @@ function chargeSourceLabel(charge: BillingChargeSummary) {
   }
 
   return 'ручное';
+}
+
+function fbsLogisticsTrip(charge: BillingChargeSummary) {
+  const value = charge.metadata?.logisticsTrip;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const trip = value as Record<string, unknown>;
+  return {
+    automaticPrimary: trip.automaticPrimary === true,
+    extraTripOverride: trip.extraTripOverride === true,
+    charged: trip.charged === true,
+  };
 }
 
 function errorMessage(caught: unknown) {

@@ -13,9 +13,10 @@ android {
         applicationId = "pro.logoff.wms.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "0.3.10"
+        versionCode = 18
+        versionName = "0.4.0"
         buildConfigField("String", "API_BASE_URL", "\"https://wms.logoff.pro/api/v1/\"")
+        buildConfigField("String", "WEB_BASE_URL", "\"https://wms.logoff.pro/\"")
         buildConfigField("String", "APK_URL", "\"https://wms.logoff.pro/downloads/logoff-wms-mobile.apk\"")
         buildConfigField("String", "FIREBASE_APPLICATION_ID", "\"${firebaseValue("MOBILE_FIREBASE_APPLICATION_ID")}\"")
         buildConfigField("String", "FIREBASE_API_KEY", "\"${firebaseValue("MOBILE_FIREBASE_API_KEY")}\"")

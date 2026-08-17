@@ -38,6 +38,7 @@ import {
   type InventorySessionType,
 } from '../../lib/api';
 import './inventory.css';
+import { useRememberedClientId } from '../../lib/rememberedClient';
 
 type InventoryMode = InventorySessionType | 'RECONCILIATION';
 
@@ -87,6 +88,16 @@ export function InventoryPanel({ session }: { session: AuthSession }) {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const [approvingRescanId, setApprovingRescanId] = useState('');
+  const dashboardSignatureRef = useRef('');
+
+  function acceptDashboard(nextDashboard: InventoryDashboard) {
+    const nextSignature = JSON.stringify(nextDashboard);
+    if (dashboardSignatureRef.current === nextSignature) {
+      return;
+    }
+    dashboardSignatureRef.current = nextSignature;
+    setDashboard(nextDashboard);
+  }
 
   async function load() {
     setLoading(true);
@@ -96,7 +107,7 @@ export function InventoryPanel({ session }: { session: AuthSession }) {
         fetchInventoryDashboard(session.accessToken),
         fetchClients(session.accessToken),
       ]);
-      setDashboard(nextDashboard);
+      acceptDashboard(nextDashboard);
       setClients(nextClients.filter((client) => client.status !== 'ARCHIVED'));
     } catch (caught) {
       setMessage(errorMessage(caught));
@@ -105,15 +116,25 @@ export function InventoryPanel({ session }: { session: AuthSession }) {
     }
   }
 
+  async function refreshDashboard(reportError = true) {
+    try {
+      acceptDashboard(await fetchInventoryDashboard(session.accessToken));
+    } catch (caught) {
+      if (reportError) {
+        setMessage(errorMessage(caught));
+      }
+    }
+  }
+
   useEffect(() => {
+    dashboardSignatureRef.current = '';
+    setDashboard(null);
     void load();
   }, [session.accessToken]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
-      void fetchInventoryDashboard(session.accessToken)
-        .then(setDashboard)
-        .catch(() => undefined);
+      void refreshDashboard(false);
     }, 5000);
     return () => window.clearInterval(timer);
   }, [session.accessToken]);
@@ -123,7 +144,7 @@ export function InventoryPanel({ session }: { session: AuthSession }) {
     setMessage('');
     try {
       await approveInventoryBoxRescan(session.accessToken, request.id);
-      await load();
+      await refreshDashboard();
     } catch (caught) {
       setMessage(errorMessage(caught));
     } finally {
@@ -222,7 +243,7 @@ export function InventoryPanel({ session }: { session: AuthSession }) {
               <p className="eyebrow">Рабочая зона</p>
               <h3>{modes.find((item) => item.id === mode)?.title}</h3>
             </div>
-            <button className="secondary-button" type="button" onClick={() => void load()}>
+            <button className="secondary-button" type="button" onClick={() => void refreshDashboard()}>
               <RefreshCw size={16} />
               Обновить
             </button>
@@ -232,7 +253,7 @@ export function InventoryPanel({ session }: { session: AuthSession }) {
             <Reconciliation
               dashboard={dashboard}
               session={session}
-              onChanged={load}
+              onChanged={refreshDashboard}
             />
           ) : (
             <InventoryOperation
@@ -240,7 +261,7 @@ export function InventoryPanel({ session }: { session: AuthSession }) {
               dashboard={dashboard}
               clients={clients}
               session={session}
-              onChanged={load}
+              onChanged={refreshDashboard}
             />
           )}
         </section>
@@ -265,7 +286,9 @@ function InventoryOperation({
   const candidates = dashboard.activeSessions.filter((item) => item.type === type);
   const [activeId, setActiveId] = useState(candidates[0]?.id ?? '');
   const [current, setCurrent] = useState<InventorySession | null>(candidates[0] ?? null);
-  const [clientId, setClientId] = useState(clients[0]?.id ?? '');
+  const [clientId, setClientId] = useRememberedClientId(session.user.id, {
+    initialClientId: clients[0]?.id ?? '',
+  });
   const [title, setTitle] = useState('');
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
@@ -643,22 +666,57 @@ function Reconciliation({
   onChanged: () => Promise<void>;
 }) {
   const [busyLine, setBusyLine] = useState('');
+  const [busyAction, setBusyAction] = useState<InventoryResolutionAction | null>(null);
+  const [lineFeedback, setLineFeedback] = useState<Record<string, { tone: 'success' | 'error'; text: string }>>({});
   const [message, setMessage] = useState('');
   const history = dashboard.historySessions ?? dashboard.reviewSessions;
   const checkedBoxes = history.flatMap((inventory) => inventory.boxes)
     .filter((box) => box.status !== 'COUNTING');
   const matchedBoxes = checkedBoxes.filter((box) => box.status === 'MATCHED').length;
+  const visibleReviews = history
+    .map((review) => {
+      const visibleBoxes = review.type === 'BOX_CHECK'
+        ? review.boxes.filter((box) => box.lines.some(
+          (line) => line.countedQuantity !== line.expectedQuantity,
+        ))
+        : review.boxes;
+      return {
+        review,
+        boxes: [...visibleBoxes].sort(
+          (left, right) => Number(boxNeedsResolution(right)) - Number(boxNeedsResolution(left)),
+        ),
+      };
+    })
+    .filter(({ review, boxes }) => review.type !== 'BOX_CHECK' || boxes.length > 0)
+    .sort(
+      (left, right) =>
+        Number(right.boxes.some(boxNeedsResolution)) - Number(left.boxes.some(boxNeedsResolution)),
+    );
 
   async function resolveLine(lineId: string, action: InventoryResolutionAction) {
     setBusyLine(lineId);
+    setBusyAction(action);
     setMessage('');
+    setLineFeedback((current) => {
+      const next = { ...current };
+      delete next[lineId];
+      return next;
+    });
     try {
       await decideInventoryLine(session.accessToken, lineId, action);
+      setLineFeedback((current) => ({
+        ...current,
+        [lineId]: { tone: 'success', text: resolutionSuccessMessage(action) },
+      }));
       await onChanged();
     } catch (caught) {
-      setMessage(errorMessage(caught));
+      setLineFeedback((current) => ({
+        ...current,
+        [lineId]: { tone: 'error', text: errorMessage(caught) },
+      }));
     } finally {
       setBusyLine('');
+      setBusyAction(null);
     }
   }
 
@@ -675,7 +733,7 @@ function Reconciliation({
         <div>
           <p className="eyebrow">Журнал проверок</p>
           <strong>Все инвентаризации и проверки коробов</strong>
-          <span>Для каждого короба отображаются ожидаемый состав WMS, фактический подсчёт и точная разница.</span>
+          <span>В проверке содержимого показаны только короба с ошибками. Успешные проверки скрыты.</span>
         </div>
         <div className="inventory-metrics">
           <span><small>Проверок</small><strong>{history.length}</strong></span>
@@ -683,9 +741,16 @@ function Reconciliation({
           <span><small>Без расхождений</small><strong>{matchedBoxes}</strong></span>
         </div>
       </div>
-      {history.map((review) => (
+      {visibleReviews.length === 0 ? (
+        <div className="inventory-empty">
+          <CheckCircle2 size={28} />
+          <strong>Коробов с ошибками нет</strong>
+          <span>Все успешно прошедшие проверки скрыты из списка.</span>
+        </div>
+      ) : null}
+      {visibleReviews.map(({ review, boxes }) => (
         <article className="inventory-review" key={review.id}>
-          {review.boxes.map((box) => {
+          {boxes.map((box) => {
             const mismatches = box.lines.filter((line) => line.countedQuantity !== line.expectedQuantity);
             const missingQuantity = mismatches.reduce(
               (sum, line) => sum + Math.max(0, line.expectedQuantity - line.countedQuantity),
@@ -727,6 +792,7 @@ function Reconciliation({
                         <td>{line.expectedQuantity}</td><td>{line.countedQuantity}</td>
                         <td className={difference === 0 ? 'inventory-diff--ok' : 'inventory-diff--bad'}>{difference > 0 ? `+${difference}` : difference}</td>
                         <td>
+                          <div className="inventory-decision-cell">
                           {difference === 0 ? (
                             <span className="inventory-decision-done">
                               <CheckCircle2 size={15} />
@@ -743,31 +809,35 @@ function Reconciliation({
                               <button
                                 className="primary-button"
                                 type="button"
-                                disabled={busyLine === line.id}
+                                disabled={Boolean(busyLine)}
+                                aria-busy={busyLine === line.id && busyAction === 'APPLY_ACTUAL'}
                                 title="Записать в WMS фактическое количество после подсчёта"
                                 onClick={() => void resolveLine(line.id, 'APPLY_ACTUAL')}
-                              >Актуализировать</button>
+                              >{busyLine === line.id && busyAction === 'APPLY_ACTUAL' ? 'Актуализирую…' : 'Актуализировать'}</button>
                               <button
                                 className="secondary-button inventory-delete-action"
                                 type="button"
-                                disabled={busyLine === line.id}
+                                disabled={Boolean(busyLine)}
+                                aria-busy={busyLine === line.id && busyAction === 'DELETE_FROM_BOX'}
                                 title="Обнулить остаток этой позиции в проверяемом коробе"
                                 onClick={() => void resolveLine(line.id, 'DELETE_FROM_BOX')}
-                              >Удалить из короба</button>
+                              >{busyLine === line.id && busyAction === 'DELETE_FROM_BOX' ? 'Удаляю…' : 'Удалить из короба'}</button>
                               <button
                                 className="secondary-button"
                                 type="button"
-                                disabled={busyLine === line.id}
+                                disabled={Boolean(busyLine)}
+                                aria-busy={busyLine === line.id && busyAction === 'ACCEPT_AS_IS'}
                                 title="Признать расхождение проверенным, но не менять остаток WMS"
                                 onClick={() => void resolveLine(line.id, 'ACCEPT_AS_IS')}
-                              >Принять как есть</button>
+                              >{busyLine === line.id && busyAction === 'ACCEPT_AS_IS' ? 'Принимаю…' : 'Принять как есть'}</button>
                               <button
                                 className="secondary-button"
                                 type="button"
-                                disabled={busyLine === line.id}
+                                disabled={Boolean(busyLine)}
+                                aria-busy={busyLine === line.id && busyAction === 'LEAVE_FOR_LATER'}
                                 title="Не принимать решение сейчас и оставить строку на разборе"
                                 onClick={() => void resolveLine(line.id, 'LEAVE_FOR_LATER')}
-                              >Оставить как есть</button>
+                              >{busyLine === line.id && busyAction === 'LEAVE_FOR_LATER' ? 'Оставляю…' : 'Оставить на разбор'}</button>
                             </div>
                           ) : line.decision === 'PENDING' ? (
                             <span className="inventory-decision-pending">
@@ -782,6 +852,17 @@ function Reconciliation({
                               {line.decidedAt ? ` · ${formatDate(line.decidedAt)}` : ''}
                             </span>
                           )}
+                          {lineFeedback[line.id] ? (
+                            <span
+                              className={`inventory-action-feedback inventory-action-feedback--${lineFeedback[line.id].tone}`}
+                              role={lineFeedback[line.id].tone === 'error' ? 'alert' : 'status'}
+                              aria-live="polite"
+                            >
+                              {lineFeedback[line.id].tone === 'success' ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
+                              {lineFeedback[line.id].text}
+                            </span>
+                          ) : null}
+                          </div>
                         </td>
                       </tr>
                       );
@@ -819,6 +900,14 @@ function Reconciliation({
   );
 }
 
+function boxNeedsResolution(box: InventoryAuditBox) {
+  return box.lines.some(
+    (line) =>
+      line.countedQuantity !== line.expectedQuantity &&
+      line.decision === 'PENDING',
+  );
+}
+
 function statusLabel(status: InventorySession['status']) {
   return { ACTIVE: 'Идёт подсчёт', REVIEW: 'Актуализация', COMPLETED: 'Завершена', CANCELLED: 'Отменена' }[status];
 }
@@ -835,6 +924,13 @@ function resolutionActionLabel(
   if (action === 'APPLY_ACTUAL') return 'Остаток актуализирован';
   if (action === 'ACCEPT_AS_IS') return 'Принято без изменения WMS';
   return decision === 'APPLY_ACTUAL' ? 'Остаток актуализирован' : 'Оставлен остаток WMS';
+}
+
+function resolutionSuccessMessage(action: InventoryResolutionAction) {
+  if (action === 'DELETE_FROM_BOX') return 'Позиция удалена из остатков этого короба.';
+  if (action === 'ACCEPT_AS_IS') return 'Расхождение принято, остаток WMS оставлен без изменений.';
+  if (action === 'LEAVE_FOR_LATER') return 'Позиция оставлена на разборе, остаток не изменён.';
+  return 'Остаток в коробе актуализирован по факту.';
 }
 
 function formatDate(value: string) {

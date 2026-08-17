@@ -10,6 +10,7 @@ import {
   type ClientSummary,
 } from '../../lib/api';
 import { billingUnitOptions } from './billingMeta';
+import { useRememberedClientId } from '../../lib/rememberedClient';
 
 type BillingChargeFormProps = {
   clients: ClientSummary[];
@@ -28,7 +29,9 @@ export function BillingChargeForm({ clients, requests, services, session, onCrea
     return new Set(session.user.writableClientIds);
   }, [clients, session.user]);
   const writableClients = clients.filter((client) => writableClientIds.has(client.id));
-  const [clientId, setClientId] = useState(writableClients[0]?.id ?? '');
+  const [clientId, setClientId] = useRememberedClientId(session.user.id, {
+    initialClientId: writableClients[0]?.id ?? '',
+  });
   const [serviceId, setServiceId] = useState('');
   const [requestId, setRequestId] = useState('');
   const [description, setDescription] = useState('');

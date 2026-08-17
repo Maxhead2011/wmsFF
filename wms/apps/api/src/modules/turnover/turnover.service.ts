@@ -3,9 +3,10 @@ import { ClientRequestStatus, ClientRequestType, MovementType, Prisma, StockStat
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
+import { BoxCodePolicyService } from '../../common/boxes/box-code-policy.service';
 import { receiptBoxCodePrefixForDate, receiptDateFromBoxCode } from '../../common/receipt-batches';
 import type { AuthUser } from '../auth/auth.types';
-import { ClientScopeService } from '../auth/client-scope.service';
+import { ClientScopeService, type ClientFilter } from '../auth/client-scope.service';
 import { ListTurnoverDto, TurnoverBoxDetailsDto, TurnoverStatisticsDto, TurnoverStockExportDto, TurnoverSuggestionsDto } from './dto/list-turnover.dto';
 import { TurnoverActionDto, TurnoverActionKind } from './dto/turnover-action.dto';
 import {
@@ -28,8 +29,34 @@ type TurnoverSku = Prisma.SkuGetPayload<{
     barcodes: { orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }] };
     balances: {
       include: {
-        box: { select: { id: true; code: true; status: true } };
-        pallet: { select: { id: true; code: true; status: true } };
+        box: {
+          select: {
+            id: true;
+            code: true;
+            status: true;
+            zone: { select: { id: true; code: true; name: true } };
+            storagePlacement: {
+              select: {
+                source: true;
+                pallet: {
+                  select: {
+                    id: true;
+                    code: true;
+                    zone: { select: { id: true; code: true; name: true } };
+                  };
+                };
+              };
+            };
+          };
+        };
+        pallet: {
+          select: {
+            id: true;
+            code: true;
+            status: true;
+            zone: { select: { id: true; code: true; name: true } };
+          };
+        };
       };
     };
     productMarks: { select: { id: true; value: true; status: true; boxId: true; createdAt: true }; take: 30 };
@@ -69,6 +96,21 @@ type TurnoverMovementAggregate = {
   receivedQuantity: bigint | number;
   shippedQuantity: bigint | number;
   writtenOffQuantity: bigint | number;
+};
+
+type TurnoverStoragePlacement = {
+  source: string;
+  pallet: {
+    id: string;
+    code: string;
+    zone: { id: string; code: string; name: string } | null;
+  };
+};
+
+type TurnoverWarehouseScope = {
+  warehouseId: string;
+  boxlessClientIds: string[];
+  legacyBoxlessClientIds: string[];
 };
 
 export type TurnoverReceiptDocument = {
@@ -175,6 +217,15 @@ export type TurnoverBoxDetails = {
     code: string;
     status: string;
     client: { id: string; code: string; name: string };
+    storagePlacement: {
+      source: string;
+      scannedAt: Date;
+      pallet: {
+        id: string;
+        code: string;
+        zone: { id: string; code: string; name: string } | null;
+      };
+    } | null;
   };
   totals: {
     rows: number;
@@ -220,6 +271,7 @@ export class TurnoverService {
     private readonly prisma: PrismaService,
     private readonly clientScopes: ClientScopeService,
     private readonly inventoryLock?: InventoryLockService,
+    private readonly boxCodes?: BoxCodePolicyService,
   ) {}
 
   async list(query: ListTurnoverDto, user: AuthUser) {
@@ -228,30 +280,90 @@ export class TurnoverService {
     const skuWhere = this.buildSkuWhere(query, clientFilter);
     const movementDateRange = dateRange(query.dateFrom, query.dateTo);
     const kiz = query.kiz?.trim();
+    const warehouseScope = await this.resolveWarehouseScope(user, clientFilter);
+    const movementScopeWhere = this.movementWarehouseWhere(warehouseScope);
+    const balanceScopeWhere = this.balanceWarehouseWhere(warehouseScope);
+    const markScopeWhere = this.markWarehouseWhere(warehouseScope);
 
     const skus = await this.prisma.sku.findMany({
       where: {
         ...skuWhere,
-        ...(movementDateRange ? { movements: { some: { createdAt: movementDateRange } } } : {}),
+        ...(movementDateRange
+          ? {
+              movements: {
+                some: {
+                  AND: [
+                    { createdAt: movementDateRange },
+                    ...(movementScopeWhere ? [movementScopeWhere] : []),
+                  ],
+                },
+              },
+            }
+          : {}),
       },
       include: {
         client: { select: { id: true, code: true, name: true } },
         barcodes: { orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }] },
         balances: {
+          ...(balanceScopeWhere ? { where: balanceScopeWhere } : {}),
           include: {
-            box: { select: { id: true, code: true, status: true } },
-            pallet: { select: { id: true, code: true, status: true } },
+            box: {
+              select: {
+                id: true,
+                code: true,
+                status: true,
+                zone: { select: { id: true, code: true, name: true } },
+                storagePlacement: {
+                  select: {
+                    source: true,
+                    pallet: {
+                      select: {
+                        id: true,
+                        code: true,
+                        zone: { select: { id: true, code: true, name: true } },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            pallet: {
+              select: {
+                id: true,
+                code: true,
+                status: true,
+                zone: { select: { id: true, code: true, name: true } },
+              },
+            },
           },
           orderBy: [{ updatedAt: 'desc' }],
         },
         productMarks: {
-          ...(kiz ? { where: { value: { contains: kiz, mode: Prisma.QueryMode.insensitive } } } : {}),
+          ...(kiz || markScopeWhere
+            ? {
+                where: {
+                  AND: [
+                    ...(kiz ? [{ value: { contains: kiz, mode: Prisma.QueryMode.insensitive } }] : []),
+                    ...(markScopeWhere ? [markScopeWhere] : []),
+                  ],
+                },
+              }
+            : {}),
           select: { id: true, value: true, status: true, boxId: true, createdAt: true },
           orderBy: { updatedAt: 'desc' },
           take: 30,
         },
         movements: {
-          ...(movementDateRange ? { where: { createdAt: movementDateRange } } : {}),
+          ...(movementDateRange || movementScopeWhere
+            ? {
+                where: {
+                  AND: [
+                    ...(movementDateRange ? [{ createdAt: movementDateRange }] : []),
+                    ...(movementScopeWhere ? [movementScopeWhere] : []),
+                  ],
+                },
+              }
+            : {}),
           include: {
             box: { select: { id: true, code: true, status: true } },
             productMarks: { select: { id: true, value: true, status: true } },
@@ -264,9 +376,12 @@ export class TurnoverService {
       ...(query.limit ? { take: query.limit } : {}),
     });
 
-    const requestMap = await this.loadRequestMap(skus.flatMap((sku) => sku.movements));
+    const [requestMap, storagePlacementMap] = await Promise.all([
+      this.loadRequestMap(skus.flatMap((sku) => sku.movements)),
+      this.loadStoragePlacementMap(skus),
+    ]);
 
-    const items = skus.map((sku) => this.mapSkuReport(sku, requestMap));
+    const items = skus.map((sku) => this.mapSkuReport(sku, requestMap, storagePlacementMap));
     const totals = items.reduce(
       (acc, item) => ({
         skuCount: acc.skuCount + 1,
@@ -314,8 +429,10 @@ export class TurnoverService {
     ];
     if (typeof clientFilter === 'string') {
       movementConditions.push(Prisma.sql`movement."clientId" = ${clientFilter}`);
-    } else if (clientFilter?.in.length) {
+    } else if (clientFilter && 'in' in clientFilter && clientFilter.in.length) {
       movementConditions.push(Prisma.sql`movement."clientId" IN (${Prisma.join(clientFilter.in)})`);
+    } else if (clientFilter && 'notIn' in clientFilter && clientFilter.notIn.length) {
+      movementConditions.push(Prisma.sql`movement."clientId" NOT IN (${Prisma.join(clientFilter.notIn)})`);
     }
     if (movementDateRange?.gte) {
       movementConditions.push(Prisma.sql`movement."createdAt" >= ${movementDateRange.gte}`);
@@ -426,6 +543,10 @@ export class TurnoverService {
     const clientFilter = this.clientScopes.resolveClientFilter(user, query.scope === 'barcode' ? undefined : query.clientId);
     const search = query.search?.trim();
     const searchText = search ? { contains: search, mode: Prisma.QueryMode.insensitive } : undefined;
+    const warehouseScope = await this.resolveWarehouseScope(user, clientFilter);
+    const balanceScopeWhere = this.balanceWarehouseWhere(warehouseScope);
+    const markScopeWhere = this.markWarehouseWhere(warehouseScope);
+    const boxScopeWhere = this.boxWarehouseWhere(warehouseScope);
 
     const [skus, barcodeRows, marks, boxes] = await Promise.all([
       this.prisma.sku.findMany({
@@ -438,6 +559,7 @@ export class TurnoverService {
                   { internalSku: searchText },
                   { clientSku: searchText },
                   { article: searchText },
+                  { size: searchText },
                   { barcodes: { some: { value: { contains: search } } } },
                 ],
               }
@@ -450,8 +572,11 @@ export class TurnoverService {
           clientSku: true,
           article: true,
           name: true,
+          color: true,
+          size: true,
           barcodes: { select: { value: true, isPrimary: true }, orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }], take: 5 },
           balances: {
+            ...(balanceScopeWhere ? { where: balanceScopeWhere } : {}),
             select: {
               quantity: true,
               status: true,
@@ -480,6 +605,8 @@ export class TurnoverService {
               clientSku: true,
               article: true,
               name: true,
+              color: true,
+              size: true,
             },
           },
         },
@@ -490,6 +617,7 @@ export class TurnoverService {
         where: {
           clientId: clientFilter,
           ...(search ? { value: searchText } : {}),
+          ...(markScopeWhere ? { AND: [markScopeWhere] } : {}),
         },
         select: {
           id: true,
@@ -505,6 +633,7 @@ export class TurnoverService {
         where: {
           clientId: clientFilter,
           ...(search ? { code: searchText } : {}),
+          ...(boxScopeWhere ?? {}),
         },
         select: { id: true, code: true, status: true },
         orderBy: { code: 'asc' },
@@ -524,6 +653,8 @@ export class TurnoverService {
         internalSku: sku.internalSku,
         clientSku: sku.clientSku,
         article: sku.article,
+        color: sku.color,
+        size: sku.size,
         barcode: primaryBarcode,
         quantity: sku.balances.reduce((sum, balance) => sum + balance.quantity, 0),
         boxCode: firstBalance?.box?.code ?? null,
@@ -544,6 +675,8 @@ export class TurnoverService {
             internalSku: product.internalSku,
             clientSku: product.clientSku,
             article: product.article,
+            color: product.color,
+            size: product.size,
           })),
         ...barcodeRows.map((row) => ({
           value: row.value,
@@ -554,6 +687,8 @@ export class TurnoverService {
           internalSku: row.sku.internalSku,
           clientSku: row.sku.clientSku,
           article: row.sku.article,
+          color: row.sku.color,
+          size: row.sku.size,
         })),
       ],
       (row) => `${row.client.id}:${row.skuId}:${row.value}`,
@@ -589,16 +724,31 @@ export class TurnoverService {
     }
 
     const clientFilter = this.clientScopes.resolveClientFilter(user, query.clientId);
+    const warehouseScope = await this.resolveWarehouseScope(user, clientFilter);
     const box = await this.prisma.box.findFirst({
       where: {
         clientId: clientFilter,
         code: { equals: cleanCode, mode: Prisma.QueryMode.insensitive },
+        ...(this.boxWarehouseWhere(warehouseScope) ?? {}),
       },
       select: {
         id: true,
         code: true,
         status: true,
         client: { select: { id: true, code: true, name: true } },
+        storagePlacement: {
+          select: {
+            source: true,
+            scannedAt: true,
+            pallet: {
+              select: {
+                id: true,
+                code: true,
+                zone: { select: { id: true, code: true, name: true } },
+              },
+            },
+          },
+        },
       },
     });
 
@@ -718,10 +868,14 @@ export class TurnoverService {
     await this.inventoryLock?.assertStockMovementsAllowed();
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
     const idempotencyKey = dto.idempotencyKey?.trim() || `turnover:${dto.action}:${randomUUID()}`;
+    const warehouseScope = await this.resolveWarehouseScope(user, dto.clientId);
 
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.stockMovement.findFirst({
-        where: { idempotencyKey: { startsWith: `${idempotencyKey}:` } },
+        where: {
+          idempotencyKey: { startsWith: `${idempotencyKey}:` },
+          ...(this.movementWarehouseWhere(warehouseScope) ?? {}),
+        },
       });
 
       if (existing) {
@@ -731,10 +885,24 @@ export class TurnoverService {
       const sku = await this.resolveSku(tx, dto.clientId, dto.skuId, dto.barcode);
       const comment = this.actionComment(dto, user);
       const kizValues = parseKizValues(dto.kiz);
+      await this.assertKizValuesInWarehouse(tx, dto.clientId, kizValues, warehouseScope);
 
       if (dto.action === TurnoverActionKind.ADD) {
-        const targetBox = dto.targetBoxCode ? await this.ensureBox(tx, dto.clientId, dto.targetBoxCode) : null;
+        const targetBox = dto.targetBoxCode
+          ? await this.ensureBox(tx, dto.clientId, dto.targetBoxCode, warehouseScope)
+          : null;
+        if (!targetBox) {
+          this.assertUnambiguousBoxlessClient(dto.clientId, warehouseScope);
+        }
+        const targetWarehouseId =
+          targetBox?.warehouseId ?? warehouseScope?.warehouseId ?? user.activeWarehouseId ?? null;
+        if (!targetWarehouseId) {
+          throw new BadRequestException(
+            'Выберите филиал перед добавлением остатка без короба.',
+          );
+        }
         await this.incrementBalance(tx, {
+          warehouseId: targetWarehouseId,
           clientId: dto.clientId,
           skuId: sku.id,
           boxId: targetBox?.id ?? null,
@@ -744,6 +912,7 @@ export class TurnoverService {
         });
         const movement = await tx.stockMovement.create({
           data: {
+            warehouseId: targetWarehouseId,
             clientId: dto.clientId,
             skuId: sku.id,
             boxId: targetBox?.id ?? null,
@@ -765,9 +934,16 @@ export class TurnoverService {
           throw new BadRequestException('Укажите ячейку или короб, куда переносим товар.');
         }
 
-        const targetBox = await this.ensureBox(tx, dto.clientId, dto.targetBoxCode);
+        const targetBox = await this.ensureBox(tx, dto.clientId, dto.targetBoxCode, warehouseScope);
         const targetStatus = dto.action === TurnoverActionKind.HOLD ? StockStatus.BLOCKED : StockStatus.AVAILABLE;
-        const allocations = await this.decrementAvailable(tx, dto.clientId, sku.id, dto.quantity, dto.sourceBoxCode);
+        const allocations = await this.decrementAvailable(
+          tx,
+          dto.clientId,
+          sku.id,
+          dto.quantity,
+          dto.sourceBoxCode,
+          warehouseScope,
+        );
 
         for (const allocation of allocations) {
           await tx.stockMovement.create({
@@ -786,7 +962,13 @@ export class TurnoverService {
           });
         }
 
+        const targetWarehouseId =
+          targetBox.warehouseId ?? warehouseScope?.warehouseId ?? user.activeWarehouseId ?? null;
+        if (!targetWarehouseId) {
+          throw new BadRequestException('Не удалось определить филиал целевого короба.');
+        }
         await this.incrementBalance(tx, {
+          warehouseId: targetWarehouseId,
           clientId: dto.clientId,
           skuId: sku.id,
           boxId: targetBox.id,
@@ -796,6 +978,7 @@ export class TurnoverService {
         });
         const movement = await tx.stockMovement.create({
           data: {
+            warehouseId: targetWarehouseId,
             clientId: dto.clientId,
             skuId: sku.id,
             boxId: targetBox.id,
@@ -812,7 +995,14 @@ export class TurnoverService {
         return this.actionResult('APPLIED', idempotencyKey, sku, dto.quantity, targetBox.code);
       }
 
-      const allocations = await this.decrementAvailable(tx, dto.clientId, sku.id, dto.quantity, dto.sourceBoxCode);
+      const allocations = await this.decrementAvailable(
+        tx,
+        dto.clientId,
+        sku.id,
+        dto.quantity,
+        dto.sourceBoxCode,
+        warehouseScope,
+      );
       for (const allocation of allocations) {
         const movement = await tx.stockMovement.create({
           data: {
@@ -837,8 +1027,15 @@ export class TurnoverService {
   }
 
   async getReceiptDocument(movementId: string, user: AuthUser): Promise<TurnoverReceiptDocument> {
-    const seed = await this.prisma.stockMovement.findUnique({
-      where: { id: movementId },
+    const clientFilter = this.clientScopes.resolveClientFilter(user);
+    const warehouseScope = await this.resolveWarehouseScope(user, clientFilter);
+    const movementScopeWhere = this.movementWarehouseWhere(warehouseScope);
+    const seed = await this.prisma.stockMovement.findFirst({
+      where: {
+        id: movementId,
+        clientId: clientFilter,
+        ...(movementScopeWhere ? { AND: [movementScopeWhere] } : {}),
+      },
       include: receiptDocumentInclude,
     });
 
@@ -858,7 +1055,12 @@ export class TurnoverService {
         ? documentGroupWhere(seed, sourceDocument)
         : { id: seed.id };
     const movements = await this.prisma.stockMovement.findMany({
-      where: documentWhere,
+      where: {
+        AND: [
+          documentWhere,
+          ...(movementScopeWhere ? [movementScopeWhere] : []),
+        ],
+      },
       include: receiptDocumentInclude,
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
@@ -883,6 +1085,8 @@ export class TurnoverService {
     }
 
     this.clientScopes.requireClientAccess(user, query.clientId, 'read');
+    const warehouseScope = await this.resolveWarehouseScope(user, query.clientId);
+    const movementScopeWhere = this.movementWarehouseWhere(warehouseScope);
 
     const client = await this.prisma.client.findUnique({
       where: { id: query.clientId },
@@ -894,7 +1098,12 @@ export class TurnoverService {
     }
 
     const receiptBatchDate = query.receiptBatchDate?.trim() || null;
-    const receiptBoxPrefix = receiptBatchDate ? receiptBoxCodePrefixForDate(receiptBatchDate) : null;
+    const configuredReceiptPrefix = this.boxCodes
+      ? (await this.boxCodes.getPolicy()).receiptPrefix
+      : 'FFL_LKB';
+    const receiptBoxPrefix = receiptBatchDate
+      ? receiptBoxCodePrefixForDate(receiptBatchDate, configuredReceiptPrefix)
+      : null;
     if (receiptBatchDate && !receiptBoxPrefix) {
       throw new BadRequestException('Дата партии приемки должна быть корректной датой в формате ГГГГ-ММ-ДД.');
     }
@@ -902,13 +1111,18 @@ export class TurnoverService {
     const movementDateRange = receiptBatchDate ? undefined : dateRange(query.dateFrom, query.dateTo);
     const candidateMovements = await this.prisma.stockMovement.findMany({
       where: {
-        clientId: client.id,
-        quantity: { gt: 0 },
-        type: receiptBatchDate ? MovementType.RECEIPT : { in: INCOMING_DOCUMENT_MOVEMENT_TYPES },
-        ...(movementDateRange ? { createdAt: movementDateRange } : {}),
-        ...(receiptBoxPrefix
-          ? { box: { code: { startsWith: receiptBoxPrefix, mode: Prisma.QueryMode.insensitive } } }
-          : {}),
+        AND: [
+          {
+            clientId: client.id,
+            quantity: { gt: 0 },
+            type: receiptBatchDate ? MovementType.RECEIPT : { in: INCOMING_DOCUMENT_MOVEMENT_TYPES },
+            ...(movementDateRange ? { createdAt: movementDateRange } : {}),
+            ...(receiptBoxPrefix
+              ? { box: { code: { startsWith: receiptBoxPrefix, mode: Prisma.QueryMode.insensitive } } }
+              : {}),
+          },
+          ...(movementScopeWhere ? [movementScopeWhere] : []),
+        ],
       },
       include: receiptPeriodInclude,
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -917,7 +1131,11 @@ export class TurnoverService {
       ? candidateMovements.filter(
           (movement) =>
             Boolean(movement.box?.code) &&
-            receiptDateFromBoxCode(movement.box!.code, movement.createdAt) === receiptBatchDate,
+            receiptDateFromBoxCode(
+              movement.box!.code,
+              movement.createdAt,
+              configuredReceiptPrefix,
+            ) === receiptBatchDate,
         )
       : candidateMovements;
 
@@ -951,10 +1169,14 @@ export class TurnoverService {
     }
 
     const ignoreActiveRequests = parseBooleanFlag(query.ignoreActiveRequests);
+    const warehouseScope = await this.resolveWarehouseScope(user, clientId);
+    const balanceScopeWhere = this.balanceWarehouseWhere(warehouseScope);
+    const markScopeWhere = this.markWarehouseWhere(warehouseScope);
     const balances = await this.prisma.stockBalance.findMany({
       where: {
         clientId,
         quantity: { gt: 0 },
+        ...(balanceScopeWhere ? { AND: [balanceScopeWhere] } : {}),
       },
       include: stockExportBalanceInclude,
       orderBy: [{ updatedAt: 'desc' }],
@@ -962,7 +1184,10 @@ export class TurnoverService {
 
     const marks = await this.prisma.productMark.groupBy({
       by: ['skuId', 'boxId', 'status'],
-      where: { clientId },
+      where: {
+        clientId,
+        ...(markScopeWhere ? { AND: [markScopeWhere] } : {}),
+      },
       _count: { _all: true },
     });
     const markCountByBalance = new Map(
@@ -1002,7 +1227,7 @@ export class TurnoverService {
       .sort(stockExportRowSort);
 
     if (!ignoreActiveRequests && rows.length > 0) {
-      await this.applyActiveRequestReservations(clientId, rows);
+      await this.applyActiveRequestReservations(clientId, rows, warehouseScope?.warehouseId);
     }
 
     const exportRows = rows
@@ -1032,10 +1257,15 @@ export class TurnoverService {
     };
   }
 
-  private async applyActiveRequestReservations(clientId: string, rows: StockExportWorkingRow[]) {
+  private async applyActiveRequestReservations(
+    clientId: string,
+    rows: StockExportWorkingRow[],
+    warehouseId?: string,
+  ) {
     const requests = await this.prisma.clientRequest.findMany({
       where: {
         clientId,
+        ...(warehouseId ? { warehouseId } : {}),
         type: ClientRequestType.OUTBOUND,
         status: { in: ACTIVE_STOCK_EXPORT_REQUEST_STATUSES },
       },
@@ -1098,7 +1328,7 @@ export class TurnoverService {
     });
   }
 
-  private buildSkuWhere(query: ListTurnoverDto, clientFilter: string | { in: string[] } | undefined): Prisma.SkuWhereInput {
+  private buildSkuWhere(query: ListTurnoverDto, clientFilter: ClientFilter): Prisma.SkuWhereInput {
     const search = query.search?.trim();
     const barcode = query.barcode?.trim();
     const kiz = query.kiz?.trim();
@@ -1136,9 +1366,52 @@ export class TurnoverService {
     return new Map(requests.map((request) => [request.id, request]));
   }
 
+  private async loadStoragePlacementMap(skus: TurnoverSku[]) {
+    const boxIds = uniqueValues(
+      skus.flatMap((sku) => sku.balances.map((balance) => balance.boxId).filter((id): id is string => Boolean(id))),
+    );
+    const boxCodes = uniqueValues(
+      skus.flatMap((sku) => sku.balances.map((balance) => balance.box?.code).filter((code): code is string => Boolean(code))),
+    );
+
+    if (boxIds.length === 0 && boxCodes.length === 0) {
+      return new Map<string, TurnoverStoragePlacement>();
+    }
+
+    const placements = await this.prisma.storagePalletBox.findMany({
+      where: {
+        OR: [
+          ...(boxIds.length ? [{ boxId: { in: boxIds } }] : []),
+          ...(boxCodes.length ? [{ boxCode: { in: boxCodes } }] : []),
+        ],
+      },
+      select: {
+        boxId: true,
+        boxCode: true,
+        source: true,
+        pallet: {
+          select: {
+            id: true,
+            code: true,
+            zone: { select: { id: true, code: true, name: true } },
+          },
+        },
+      },
+    });
+
+    const result = new Map<string, TurnoverStoragePlacement>();
+    placements.forEach((placement) => {
+      const value = { source: placement.source, pallet: placement.pallet };
+      if (placement.boxId) result.set(`id:${placement.boxId}`, value);
+      result.set(`code:${placement.boxCode.trim().toLocaleUpperCase('ru-RU')}`, value);
+    });
+    return result;
+  }
+
   private mapSkuReport(
     sku: TurnoverSku,
     requestMap: Map<string, { id: string; title: string; status: string; destinationCity: string | null; createdAt: Date }>,
+    storagePlacementMap: Map<string, TurnoverStoragePlacement>,
   ) {
     const firstReceipt = sku.movements.find(isReceiptMovement) ?? null;
     const latestShip = [...sku.movements].reverse().find((movement) => movement.type === MovementType.SHIP && movement.quantity < 0) ?? null;
@@ -1162,6 +1435,8 @@ export class TurnoverService {
       clientSku: sku.clientSku,
       article: sku.article,
       name: sku.name,
+      color: sku.color,
+      size: sku.size,
       primaryBarcode: sku.barcodes[0]?.value ?? null,
       barcodes: sku.barcodes.map((barcode) => barcode.value),
       volumeLiters: nullableNumber(sku.volumeLiters),
@@ -1175,13 +1450,26 @@ export class TurnoverService {
       shippedQuantity,
       writtenOffQuantity,
       currentQuantity,
-      currentCells: sku.balances.map((balance) => ({
-        boxId: balance.boxId,
-        boxCode: balance.box?.code ?? 'Без короба',
-        palletCode: balance.pallet?.code ?? null,
-        status: balance.status,
-        quantity: balance.quantity,
-      })),
+      currentCells: sku.balances.map((balance) => {
+        const storagePlacement = balance.box?.storagePlacement
+          ?? (balance.boxId ? storagePlacementMap.get(`id:${balance.boxId}`) : null)
+          ?? (balance.box?.code
+            ? storagePlacementMap.get(`code:${balance.box.code.trim().toLocaleUpperCase('ru-RU')}`)
+            : null)
+          ?? null;
+        const storageZone = storagePlacement?.pallet.zone ?? balance.box?.zone ?? balance.pallet?.zone ?? null;
+
+        return {
+          boxId: balance.boxId,
+          boxCode: balance.box?.code ?? 'Без короба',
+          palletCode: balance.pallet?.code ?? null,
+          palletSortCode: storagePlacement?.pallet.code ?? null,
+          storageZone,
+          placementSource: storagePlacement?.source ?? null,
+          status: balance.status,
+          quantity: balance.quantity,
+        };
+      }),
       kiz: sku.productMarks.map((mark) => ({
         id: mark.id,
         value: mark.value,
@@ -1215,11 +1503,118 @@ export class TurnoverService {
       return;
     }
 
-    if (user.roleCodes.some((role) => ['ADMIN', 'OWNER', 'MANAGER'].includes(role))) {
+    if (user.roleCodes.some((role) => ['ADMIN', 'OWNER', 'MANAGER', 'BRANCH_MANAGER'].includes(role))) {
       return;
     }
 
     throw new ForbiddenException('Статистика товарооборота доступна администратору, владельцу и менеджеру.');
+  }
+
+  private async resolveWarehouseScope(
+    user: AuthUser,
+    clientFilter: ClientFilter,
+  ): Promise<TurnoverWarehouseScope | null> {
+    const warehouseId = warehouseScopedInternalWarehouseId(user);
+    if (!warehouseId) return null;
+
+    const clients = await this.prisma.client.findMany({
+      where: { id: clientFilter, storesWithoutBoxes: true },
+      select: {
+        id: true,
+        warehouseLinks: {
+          where: { status: 'ACTIVE' },
+          select: { warehouseId: true },
+        },
+      },
+    });
+    return {
+      warehouseId,
+      boxlessClientIds: clients
+        .filter(
+          (client) =>
+            client.warehouseLinks.some((link) => link.warehouseId === warehouseId),
+        )
+        .map((client) => client.id),
+      legacyBoxlessClientIds: clients
+        .filter(
+          (client) =>
+            client.warehouseLinks.length === 1 &&
+            client.warehouseLinks[0].warehouseId === warehouseId,
+        )
+        .map((client) => client.id),
+    };
+  }
+
+  private balanceWarehouseWhere(
+    scope: TurnoverWarehouseScope | null,
+  ): Prisma.StockBalanceWhereInput | undefined {
+    if (!scope) return undefined;
+    return {
+      OR: [
+        { warehouseId: scope.warehouseId },
+        {
+          warehouseId: null,
+          boxId: { not: null },
+          box: { warehouseId: scope.warehouseId },
+        },
+        {
+          warehouseId: null,
+          boxId: null,
+          palletId: { not: null },
+          pallet: { zone: { warehouseId: scope.warehouseId } },
+        },
+      ],
+    };
+  }
+
+  private movementWarehouseWhere(
+    scope: TurnoverWarehouseScope | null,
+  ): Prisma.StockMovementWhereInput | undefined {
+    if (!scope) return undefined;
+    return {
+      OR: [
+        { warehouseId: scope.warehouseId },
+        {
+          warehouseId: null,
+          boxId: { not: null },
+          box: { warehouseId: scope.warehouseId },
+        },
+        ...(scope.legacyBoxlessClientIds.length
+          ? [{ warehouseId: null, boxId: null, palletId: null, clientId: { in: scope.legacyBoxlessClientIds } }]
+          : []),
+      ],
+    };
+  }
+
+  private markWarehouseWhere(
+    scope: TurnoverWarehouseScope | null,
+  ): Prisma.ProductMarkWhereInput | undefined {
+    if (!scope) return undefined;
+    return {
+      OR: [
+        { boxId: { not: null }, box: { warehouseId: scope.warehouseId } },
+        ...(scope.legacyBoxlessClientIds.length
+          ? [{ boxId: null, clientId: { in: scope.legacyBoxlessClientIds } }]
+          : []),
+      ],
+    };
+  }
+
+  private boxWarehouseWhere(
+    scope: TurnoverWarehouseScope | null,
+  ): Prisma.BoxWhereInput | undefined {
+    return scope ? { warehouseId: scope.warehouseId } : undefined;
+  }
+
+  private assertUnambiguousBoxlessClient(
+    clientId: string,
+    scope: TurnoverWarehouseScope | null,
+  ) {
+    if (scope && !scope.boxlessClientIds.includes(clientId)) {
+      throw new BadRequestException(
+        'Операция без короба недоступна: клиент работает более чем в одном филиале.',
+      );
+    }
   }
 
   private async resolveSku(tx: Prisma.TransactionClient, clientId: string, skuId?: string, barcode?: string) {
@@ -1240,16 +1635,32 @@ export class TurnoverService {
     return sku;
   }
 
-  private ensureBox(tx: Prisma.TransactionClient, clientId: string, code: string) {
+  private async ensureBox(
+    tx: Prisma.TransactionClient,
+    clientId: string,
+    code: string,
+    warehouseScope: TurnoverWarehouseScope | null,
+  ) {
     const cleanCode = code.trim();
     if (!cleanCode) {
       throw new BadRequestException('Укажите номер ячейки или короба.');
     }
 
-    return tx.box.upsert({
+    const existing = await tx.box.findUnique({
       where: { clientId_code: { clientId, code: cleanCode } },
-      update: {},
-      create: { clientId, code: cleanCode },
+    });
+    if (existing) {
+      if (warehouseScope && existing.warehouseId !== warehouseScope.warehouseId) {
+        throw new NotFoundException('Короб не найден в текущем филиале.');
+      }
+      return existing;
+    }
+    return tx.box.create({
+      data: {
+        clientId,
+        code: cleanCode,
+        ...(warehouseScope ? { warehouseId: warehouseScope.warehouseId } : {}),
+      },
     });
   }
 
@@ -1259,6 +1670,7 @@ export class TurnoverService {
     skuId: string,
     quantity: number,
     sourceBoxCode?: string,
+    warehouseScope: TurnoverWarehouseScope | null = null,
   ): Promise<SourceAllocation[]> {
     const sourceBox = sourceBoxCode?.trim()
       ? await tx.box.findUnique({ where: { clientId_code: { clientId, code: sourceBoxCode.trim() } } })
@@ -1268,6 +1680,10 @@ export class TurnoverService {
       throw new NotFoundException('Исходная ячейка или короб не найдены.');
     }
 
+    if (sourceBox && warehouseScope && sourceBox.warehouseId !== warehouseScope.warehouseId) {
+      throw new NotFoundException('Исходный короб не найден в текущем филиале.');
+    }
+
     const balances = await tx.stockBalance.findMany({
       where: {
         clientId,
@@ -1275,6 +1691,7 @@ export class TurnoverService {
         quantity: { gt: 0 },
         boxId: sourceBoxCode?.trim() ? sourceBox?.id : undefined,
         status: { in: [StockStatus.AVAILABLE, StockStatus.RECEIVING, StockStatus.UNMARKED, StockStatus.NEEDS_LABEL, StockStatus.NEEDS_RELABEL] },
+        ...(this.balanceWarehouseWhere(warehouseScope) ?? {}),
       },
       include: {
         box: { select: { id: true, code: true, status: true, palletId: true } },
@@ -1315,15 +1732,37 @@ export class TurnoverService {
 
   private incrementBalance(
     tx: Prisma.TransactionClient,
-    input: { clientId: string; skuId: string; boxId: string | null; palletId: string | null; status: StockStatus; quantity: number },
+    input: {
+      warehouseId: string;
+      clientId: string;
+      skuId: string;
+      boxId: string | null;
+      palletId: string | null;
+      status: StockStatus;
+      quantity: number;
+    },
   ) {
-    const balanceKey = [input.clientId, input.skuId, input.boxId ?? 'no-box', input.palletId ?? 'no-pallet', input.status].join(':');
+    const keyParts = [
+      input.clientId,
+      input.skuId,
+      input.boxId ?? 'no-box',
+      input.palletId ?? 'no-pallet',
+      input.status,
+    ];
+    if (!input.boxId && !input.palletId) {
+      keyParts.push('warehouse', input.warehouseId);
+    }
+    const balanceKey = keyParts.join(':');
 
     return tx.stockBalance.upsert({
       where: { balanceKey },
-      update: { quantity: { increment: input.quantity } },
+      update: {
+        quantity: { increment: input.quantity },
+        warehouseId: input.warehouseId,
+      },
       create: {
         balanceKey,
+        warehouseId: input.warehouseId,
         clientId: input.clientId,
         skuId: input.skuId,
         boxId: input.boxId,
@@ -1383,6 +1822,32 @@ export class TurnoverService {
     });
   }
 
+  private async assertKizValuesInWarehouse(
+    tx: Prisma.TransactionClient,
+    clientId: string,
+    values: string[],
+    scope: TurnoverWarehouseScope | null,
+  ) {
+    if (!scope || values.length === 0) return;
+
+    const existingMarks = await tx.productMark.findMany({
+      where: { clientId, value: { in: values } },
+      select: {
+        value: true,
+        boxId: true,
+        box: { select: { warehouseId: true } },
+      },
+    });
+    const hasForeignMark = existingMarks.some((mark) =>
+      mark.boxId
+        ? mark.box?.warehouseId !== scope.warehouseId
+        : !scope.boxlessClientIds.includes(clientId),
+    );
+    if (hasForeignMark) {
+      throw new NotFoundException('КИЗ не найден в текущем филиале.');
+    }
+  }
+
   private actionResult(status: 'APPLIED' | 'ALREADY_APPLIED', idempotencyKey: string, sku: { id: string; name: string }, quantity?: number, targetBoxCode?: string | null) {
     return {
       status,
@@ -1400,6 +1865,16 @@ const INCOMING_DOCUMENT_MOVEMENT_TYPES: MovementType[] = [
   MovementType.RECEIPT,
   MovementType.RETURN,
 ];
+
+function warehouseScopedInternalWarehouseId(user: AuthUser) {
+  if (
+    !user.activeWarehouseId ||
+    user.roleCodes.includes('CLIENT')
+  ) {
+    return null;
+  }
+  return user.activeWarehouseId;
+}
 
 const DOCUMENT_MOVEMENT_TYPES: MovementType[] = [...INCOMING_DOCUMENT_MOVEMENT_TYPES, MovementType.SHIP];
 
@@ -1670,6 +2145,7 @@ function movementTypeLabel(type: MovementType) {
 function stockStatusLabel(status: StockStatus) {
   const labels: Record<StockStatus, string> = {
     AVAILABLE: 'Доступно',
+    IN_TRANSIT: 'В пути между филиалами',
     RESERVED: 'Резерв',
     RECEIVING: 'Приемка',
     PACKING: 'Сборка',

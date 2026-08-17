@@ -323,7 +323,7 @@ function PeriodDetailColumn({
 function buildPeriodGroups(invoices: BillingInvoiceSummary[], charges: BillingChargeSummary[]) {
   const groups = new Map<string, PeriodGroup>();
 
-  charges.forEach((charge) => {
+  charges.filter((charge) => charge.status !== 'CANCELLED').forEach((charge) => {
     const group = ensurePeriod(groups, charge.serviceDate);
     group.chargesCount += 1;
     group.chargesRub += Number(charge.totalRub);
@@ -331,7 +331,7 @@ function buildPeriodGroups(invoices: BillingInvoiceSummary[], charges: BillingCh
     group.charges.push(charge);
   });
 
-  invoices.forEach((invoice) => {
+  invoices.filter((invoice) => invoice.status !== 'CANCELLED').forEach((invoice) => {
     const group = ensurePeriod(groups, invoice.periodFrom);
     group.invoicesCount += 1;
     group.paymentsCount += invoice.payments.length;

@@ -1,4 +1,4 @@
-import { IsArray, IsDateString, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsDateString, IsOptional, IsString, IsUUID } from 'class-validator';
 
 export class CreateBillingInvoiceDto {
   @IsString()
@@ -13,6 +13,10 @@ export class CreateBillingInvoiceDto {
   @IsOptional()
   @IsDateString()
   dueDate?: string;
+
+  @IsOptional()
+  @IsUUID('4')
+  paymentBankAccountId?: string;
 
   @IsOptional()
   @IsArray()

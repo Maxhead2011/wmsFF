@@ -27,6 +27,7 @@ const passwords = new PasswordService();
 
 const DEMO_CLIENT_CODE = 'DEMO-LOGOFF';
 const DEMO_LOGIN = 'demo';
+const DEMO_PLUS_LOGIN = 'demo-plus';
 
 function daysFromNow(days: number, hour = 10) {
   const date = new Date();
@@ -112,6 +113,54 @@ async function main() {
 
   await ensureDemoAccess(user.id, client.id);
 
+  const existingPlusUser = await prisma.user.findUnique({ where: { email: DEMO_PLUS_LOGIN } });
+  if (existingPlusUser && !existingPlusUser.isDemo) {
+    throw new Error(`Пользователь ${DEMO_PLUS_LOGIN} существует, но не помечен как демонстрационный.`);
+  }
+  const plusUser = await prisma.user.upsert({
+    where: { email: DEMO_PLUS_LOGIN },
+    update: {
+      name: 'Демо плюс · Администратор',
+      passwordHash: await passwords.hash('demo-plus'),
+      status: UserStatus.ACTIVE,
+      isDemo: true,
+      analyticsEnabled: true,
+    },
+    create: {
+      email: DEMO_PLUS_LOGIN,
+      name: 'Демо плюс · Администратор',
+      passwordHash: await passwords.hash('demo-plus'),
+      status: UserStatus.ACTIVE,
+      isDemo: true,
+      analyticsEnabled: true,
+    },
+  });
+  await ensureDemoPlusAccess(plusUser.id, client.id);
+
+  const [moscowBranch, krasnodarBranch] = await Promise.all([
+    prisma.warehouse.upsert({
+      where: { code: 'MSK' },
+      update: { name: 'ФФ Москва', city: 'Москва', isActive: true, sortOrder: 10 },
+      create: { code: 'MSK', name: 'ФФ Москва', city: 'Москва', isActive: true, sortOrder: 10 },
+    }),
+    prisma.warehouse.upsert({
+      where: { code: 'KRD' },
+      update: { name: 'ФФ Краснодар', city: 'Краснодар', isActive: true, sortOrder: 20 },
+      create: { code: 'KRD', name: 'ФФ Краснодар', city: 'Краснодар', isActive: true, sortOrder: 20 },
+    }),
+  ]);
+  await prisma.warehouseClient.createMany({
+    data: [
+      { warehouseId: moscowBranch.id, clientId: client.id },
+      { warehouseId: krasnodarBranch.id, clientId: client.id },
+    ],
+    skipDuplicates: true,
+  });
+  await prisma.user.updateMany({
+    where: { id: { in: [user.id, plusUser.id] } },
+    data: { activeWarehouseId: moscowBranch.id },
+  });
+
   const skuDefinitions = [
     ['d1000000-0000-4000-8000-000000000001', 'DEMO-SKU-001', 'HOME-PLD-GRY', 'Плед хлопковый «Уют»', 'Дом и текстиль', 'Серый', '150×200', 3.6, false],
     ['d1000000-0000-4000-8000-000000000002', 'DEMO-SKU-002', 'KITCH-BTL-750', 'Термобутылка Urban 750 мл', 'Посуда', 'Синий', '750 мл', 1.1, false],
@@ -171,10 +220,11 @@ async function main() {
     code: `DEMO-BOX-${String(index + 1).padStart(3, '0')}`,
   }));
   for (const box of boxes) {
+    const warehouseId = Number(box.code.slice(-3)) >= 8 ? krasnodarBranch.id : moscowBranch.id;
     const savedBox = await prisma.box.upsert({
       where: { code: box.code },
-      update: { clientId: client.id, code: box.code, status: 'active' },
-      create: { ...box, clientId: client.id, status: 'active' },
+      update: { clientId: client.id, warehouseId, code: box.code, status: 'active' },
+      create: { ...box, clientId: client.id, warehouseId, status: 'active' },
     });
     box.id = savedBox.id;
   }
@@ -282,6 +332,12 @@ async function ensureDemoAccess(userId: string, clientId: string) {
       create: { roleId: role.id, permissionId: permission.id },
     });
   }
+  await prisma.rolePermission.deleteMany({
+    where: {
+      roleId: role.id,
+      permission: { code: 'administration:demo' },
+    },
+  });
   await prisma.userRole.deleteMany({ where: { userId, roleId: { not: role.id } } });
   await prisma.userRole.upsert({
     where: { userId_roleId: { userId, roleId: role.id } },
@@ -293,6 +349,64 @@ async function ensureDemoAccess(userId: string, clientId: string) {
     where: { userId_clientId: { userId, clientId } },
     update: { canRead: true, canWrite: true },
     create: { userId, clientId, canRead: true, canWrite: true },
+  });
+}
+
+async function ensureDemoPlusAccess(userId: string, clientId: string) {
+  const permissionDefinitions = [
+    ['administration:demo', 'Изолированный административный контур Демо плюс'],
+    ['users:read', 'Просмотр пользователей и ролей'],
+    ['users:write', 'Создание и изменение пользователей'],
+    ['clients:read', 'Просмотр клиентов'],
+    ['clients:write', 'Создание и изменение клиентов'],
+    ['skus:read', 'Просмотр SKU'],
+    ['skus:write', 'Создание и изменение SKU'],
+    ['warehouse:read', 'Просмотр складской структуры'],
+    ['warehouse:write', 'Изменение коробов, паллет и зон'],
+    ['stock:read', 'Просмотр остатков'],
+    ['stock:write', 'Складские операции и ledger'],
+    ['client-requests:read', 'Просмотр клиентских заявок'],
+    ['client-requests:write', 'Создание клиентских заявок'],
+    ['client-requests:status', 'Изменение статусов клиентских заявок'],
+    ['client-notifications:read', 'Просмотр уведомлений клиента'],
+    ['client-notifications:write', 'Создание уведомлений клиента'],
+    ['imports:write', 'Загрузка XLSX-импортов'],
+    ['logistics:read', 'Просмотр тарифов и расчет логистики'],
+    ['logistics:request', 'Создание заявок на доставку'],
+    ['logistics:write', 'Загрузка и изменение тарифов логистики'],
+    ['billing:read', 'Просмотр услуг и начислений биллинга'],
+    ['billing:write', 'Создание услуг и начислений биллинга'],
+    ['expenses:read', 'Просмотр расходов, материалов и задолженности клиентов'],
+    ['expenses:write', 'Управление расходами, материалами и правилами списания'],
+    ['print:write', 'Печать этикеток'],
+  ] as const;
+  const role = await prisma.role.upsert({
+    where: { code: 'DEMO_PLUS' },
+    update: { name: 'Демо плюс · Управление' },
+    create: { code: 'DEMO_PLUS', name: 'Демо плюс · Управление' },
+  });
+  const permissions = [];
+  for (const [code, name] of permissionDefinitions) {
+    permissions.push(
+      await prisma.permission.upsert({
+        where: { code },
+        update: { name },
+        create: { code, name },
+      }),
+    );
+  }
+  await prisma.rolePermission.deleteMany({ where: { roleId: role.id } });
+  await prisma.rolePermission.createMany({
+    data: permissions.map((permission) => ({ roleId: role.id, permissionId: permission.id })),
+    skipDuplicates: true,
+  });
+  await prisma.userRole.deleteMany({ where: { userId } });
+  await prisma.userRole.create({
+    data: { userId, roleId: role.id },
+  });
+  await prisma.userClient.deleteMany({ where: { userId } });
+  await prisma.userClient.create({
+    data: { userId, clientId, canRead: true, canWrite: true },
   });
 }
 
@@ -310,6 +424,7 @@ async function ensureRequests(
     [6, ClientRequestType.DELIVERY, ClientRequestStatus.IN_WORK, ClientRequestPriority.NORMAL, 'Доставка на РЦ Ozon', '6 коробов, слот подтверждён на утро.'],
     [7, ClientRequestType.INBOUND, ClientRequestStatus.DONE, ClientRequestPriority.NORMAL, 'Приёмка партии текстиля', 'Поставка принята и размещена по коробам.'],
     [8, ClientRequestType.OUTBOUND, ClientRequestStatus.CANCELLED, ClientRequestPriority.LOW, 'Тестовая отгрузка образцов', 'Отменена клиентом до начала сборки.'],
+    [9, ClientRequestType.OTHER, ClientRequestStatus.REJECTED, ClientRequestPriority.LOW, 'Нестандартный заказ на обработку', 'Отклонён после проверки: требуется согласовать отдельный технологический процесс.'],
   ] as const;
 
   for (const [index, type, status, priority, title, comment] of definitions) {

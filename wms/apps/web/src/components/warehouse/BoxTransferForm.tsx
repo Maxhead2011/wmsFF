@@ -33,6 +33,7 @@ import {
   type WarehouseBoxSummary,
 } from '../../lib/api';
 import { ConfirmDialog } from '../common/ConfirmDialog';
+import { useRememberedClientId, validRememberedClientId } from '../../lib/rememberedClient';
 import { TransferPreview, TransferResult } from './TransferStatusBlocks';
 
 type BoxTransferFormProps = {
@@ -46,7 +47,7 @@ export function BoxTransferForm({ session }: BoxTransferFormProps) {
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [balances, setBalances] = useState<StockBalance[]>([]);
   const [boxes, setBoxes] = useState<WarehouseBoxSummary[]>([]);
-  const [selectedClientId, setSelectedClientId] = useState('');
+  const [selectedClientId, setSelectedClientId] = useRememberedClientId(session.user.id);
   const [selectedBalanceId, setSelectedBalanceId] = useState('');
   const [toBoxCode, setToBoxCode] = useState('');
   const [quantity, setQuantity] = useState('1');
@@ -95,7 +96,7 @@ export function BoxTransferForm({ session }: BoxTransferFormProps) {
     try {
       const list = await fetchClients(session.accessToken);
       setClients(list);
-      setSelectedClientId((current) => current || list[0]?.id || '');
+      setSelectedClientId((current) => validRememberedClientId(current, list));
       if (list.length === 0) {
         setLoadState('ready');
       }

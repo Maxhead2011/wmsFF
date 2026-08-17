@@ -2,8 +2,10 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { RequestBillingAutomationService } from '../billing/request-billing-automation.service';
 import { ClientNotificationsModule } from '../client-notifications/client-notifications.module';
+import { ExpensesModule } from '../expenses/expenses.module';
 import { LogisticsModule } from '../logistics/logistics.module';
 import { FulfillmentWaveService } from './fulfillment-wave.service';
+import { FbsRequestBoxAuditService } from './fbs-request-box-audit.service';
 import { PickInstructionService } from './pick-instruction.service';
 import { PickWaveDocumentService } from './pick-wave-document.service';
 import { StockController } from './stock.controller';
@@ -14,7 +16,7 @@ import { StorageOverviewService } from './storage-overview.service';
 import { VolumeService } from './volume.service';
 
 @Module({
-  imports: [AuthModule, ClientNotificationsModule, LogisticsModule],
+  imports: [AuthModule, ClientNotificationsModule, ExpensesModule, LogisticsModule],
   controllers: [StockController],
   providers: [
     StockBalancesService,
@@ -23,6 +25,7 @@ import { VolumeService } from './volume.service';
     StorageOverviewService,
     RequestBillingAutomationService,
     FulfillmentWaveService,
+    FbsRequestBoxAuditService,
     PickInstructionService,
     PickWaveDocumentService,
     VolumeService,
@@ -33,6 +36,7 @@ import { VolumeService } from './volume.service';
     StockOperationsService,
     StorageOverviewService,
     FulfillmentWaveService,
+    FbsRequestBoxAuditService,
     PickInstructionService,
     PickWaveDocumentService,
     VolumeService,

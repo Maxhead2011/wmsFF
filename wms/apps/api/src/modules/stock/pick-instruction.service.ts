@@ -13,6 +13,11 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import {
+  assertWarehouseAccess,
+  effectiveWarehouseId,
+  warehouseScopeWhere,
+} from '../client-requests/client-request-warehouse-scope';
+import {
   renderPickInstructionHtml,
   requestPriorityLabel,
   requestStatusLabel,
@@ -84,11 +89,25 @@ const maxManualInstructionFileSizeBytes = 10 * 1024 * 1024;
 // Draft/review requests remain previews and must not change instructions for
 // warehouse operations that are already running.
 const activeReservationStatuses = new Set<ClientRequestStatus>([ClientRequestStatus.IN_WORK]);
+const forcedInstructionRefreshEventTitle = 'Принудительный пересчёт заявки по текущим остаткам';
 
 @Injectable()
 export class PickInstructionService {
   private readonly instructionCache = new Map<string, { expiresAt: number; promise: Promise<PickInstructionWithHtml> }>();
   private readonly instructionCacheTtlMs = 15000;
+  private readonly warehouseAuxiliaryCache = new Map<
+    string,
+    { expiresAt: number; promise: Promise<WarehouseAuxiliaryData> }
+  >();
+  private readonly warehouseAuxiliaryCacheTtlMs = 60_000;
+  private activeRequestBoxOverlapCache:
+    | {
+        expiresAt: number;
+        promise: ReturnType<PickInstructionService['calculateActiveRequestBoxOverlaps']>;
+        stalePromise?: ReturnType<PickInstructionService['calculateActiveRequestBoxOverlaps']>;
+      }
+    | undefined;
+  private readonly activeRequestBoxOverlapCacheTtlMs = 5 * 60_000;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -96,6 +115,7 @@ export class PickInstructionService {
   ) {}
 
   async getRequestInstruction(requestId: string, user: AuthUser) {
+    await this.requireRequestWarehouseAccess(requestId, user, 'read');
     const now = Date.now();
     const cacheKey = `${requestId}:${user.id}`;
     const cached = this.instructionCache.get(cacheKey);
@@ -140,6 +160,12 @@ export class PickInstructionService {
       throw new BadRequestException('В одной волне могут находиться только заявки одного клиента.');
     }
 
+    const warehouseIds = new Set(requests.map((request) => request.warehouseId));
+    if (warehouseIds.size !== 1 || !requests[0].warehouseId) {
+      throw new BadRequestException('Все заявки волны должны относиться к одному выбранному филиалу.');
+    }
+    const warehouseId = requests[0].warehouseId;
+
     const clientId = requests[0].clientId;
     const contexts: Array<{
       request: RequestForInstruction;
@@ -148,6 +174,7 @@ export class PickInstructionService {
     }> = [];
     for (const request of requests.sort(compareRequestReservationOrder)) {
       this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+      assertWarehouseAccess(user, request, 'write', 'Заявка волны не найдена в выбранном филиале.');
       if (request.type !== ClientRequestType.OUTBOUND) {
         throw new BadRequestException('В волну можно включить только заявки на отгрузку.');
       }
@@ -160,7 +187,7 @@ export class PickInstructionService {
     }
 
     const allRows = contexts.flatMap((context) => context.rows);
-    const balances = await this.loadAvailableBalances(clientId, allRows, true);
+    const balances = await this.loadAvailableBalances(clientId, warehouseId, allRows, true);
     const requestIdByOrderId = new Map<string, string>();
     const destinationCityByOrderId = new Map<string, string>();
     contexts.forEach((context) => {
@@ -228,6 +255,58 @@ export class PickInstructionService {
 
   async getActiveRequestBoxOverlaps(user: AuthUser) {
     this.requireBoxOverlapAccess(user);
+    if (effectiveWarehouseId(user, 'read')) {
+      return this.calculateActiveRequestBoxOverlaps(user);
+    }
+    const now = Date.now();
+    const cached = this.activeRequestBoxOverlapCache;
+    if (cached && cached.expiresAt > now) {
+      return cached.stalePromise ?? cached.promise;
+    }
+    if (cached) {
+      const promise = this.calculateActiveRequestBoxOverlaps(user);
+      this.activeRequestBoxOverlapCache = {
+        expiresAt: now + this.activeRequestBoxOverlapCacheTtlMs,
+        promise,
+        stalePromise: cached.promise,
+      };
+      void promise
+        .then(() => {
+          const current = this.activeRequestBoxOverlapCache;
+          if (current?.promise === promise) {
+            this.activeRequestBoxOverlapCache = {
+              expiresAt: current.expiresAt,
+              promise,
+            };
+          }
+        })
+        .catch(() => {
+          if (this.activeRequestBoxOverlapCache?.promise === promise) {
+            this.activeRequestBoxOverlapCache = {
+              expiresAt: Date.now() + 30_000,
+              promise: cached.promise,
+            };
+          }
+        });
+      return cached.promise;
+    }
+
+    const promise = this.calculateActiveRequestBoxOverlaps(user);
+    this.activeRequestBoxOverlapCache = {
+      expiresAt: now + this.activeRequestBoxOverlapCacheTtlMs,
+      promise,
+    };
+    try {
+      return await promise;
+    } catch (error) {
+      if (this.activeRequestBoxOverlapCache?.promise === promise) {
+        this.activeRequestBoxOverlapCache = undefined;
+      }
+      throw error;
+    }
+  }
+
+  private async calculateActiveRequestBoxOverlaps(user: AuthUser) {
     const activeStatuses = [
       ClientRequestStatus.SUBMITTED,
       ClientRequestStatus.IN_REVIEW,
@@ -235,32 +314,49 @@ export class PickInstructionService {
       ClientRequestStatus.IN_WORK,
     ];
     const requests = await this.prisma.clientRequest.findMany({
-      where: { type: ClientRequestType.OUTBOUND, status: { in: activeStatuses } },
+      where: {
+        type: ClientRequestType.OUTBOUND,
+        status: { in: activeStatuses },
+        ...warehouseScopeWhere(user),
+      },
       select: {
         id: true,
+        number: true,
         clientId: true,
+        warehouseId: true,
         title: true,
         status: true,
         destinationCity: true,
         createdAt: true,
         client: { select: { id: true, code: true, name: true } },
+        items: { select: { id: true } },
+        files: { select: { fileName: true } },
       },
       orderBy: [{ createdAt: 'asc' }],
       take: 300,
     });
     const requestIds = requests.map((request) => request.id);
-    const pickedMovements = requestIds.length
-      ? await this.prisma.stockMovement.findMany({
-          where: {
-            sourceDocument: { in: requestIds },
-            type: 'PICK',
-            status: StockStatus.PACKING,
-            quantity: { gt: 0 },
-            boxId: { not: null },
-          },
-          select: { sourceDocument: true, box: { select: { code: true } } },
-        })
-      : [];
+    const [pickedMovements, selectedBoxes] = requestIds.length
+      ? await Promise.all([
+          this.prisma.stockMovement.findMany({
+            where: {
+              sourceDocument: { in: requestIds },
+              type: 'PICK',
+              status: StockStatus.PACKING,
+              quantity: { gt: 0 },
+              boxId: { not: null },
+            },
+            select: { sourceDocument: true, box: { select: { code: true } } },
+          }),
+          this.prisma.clientRequestBoxSelection.findMany({
+            where: { requestItem: { requestId: { in: requestIds } } },
+            select: {
+              requestItem: { select: { requestId: true } },
+              box: { select: { code: true } },
+            },
+          }),
+        ])
+      : [[], []];
     const pickedBoxes = new Map<string, Set<string>>();
     for (const movement of pickedMovements) {
       if (!movement.sourceDocument || !movement.box?.code) continue;
@@ -268,34 +364,104 @@ export class PickInstructionService {
       values.add(movement.box.code);
       pickedBoxes.set(movement.sourceDocument, values);
     }
+    const explicitlySelectedBoxes = new Map<string, Set<string>>();
+    for (const selection of selectedBoxes) {
+      const requestId = selection.requestItem.requestId;
+      const values = explicitlySelectedBoxes.get(requestId) ?? new Set<string>();
+      values.add(selection.box.code);
+      explicitlySelectedBoxes.set(requestId, values);
+    }
 
     const plans = new Map<string, Set<string>>();
     const errors: Array<{ requestId: string; title: string; message: string }> = [];
-    for (let index = 0; index < requests.length; index += 6) {
-      const portion = requests.slice(index, index + 6);
-      const results = await Promise.allSettled(portion.map((request) => this.getRequestInstruction(request.id, user)));
-      results.forEach((result, resultIndex) => {
-        const request = portion[resultIndex];
-        if (result.status === 'rejected') {
-          errors.push({ requestId: request.id, title: request.title, message: overlapErrorMessage(result.reason) });
-          return;
-        }
-        const document = result.value;
-        const planned = instructionSourceBoxes(document);
-        const picked = pickedBoxes.get(request.id) ?? new Set<string>();
-        plans.set(
-          request.id,
-          request.status === ClientRequestStatus.IN_WORK && picked.size > 0 && document.instructionSource !== 'MANUAL'
-            ? picked
-            : new Set([...planned, ...picked]),
+
+    for (const request of requests) {
+      const picked = pickedBoxes.get(request.id) ?? new Set<string>();
+      const selected = explicitlySelectedBoxes.get(request.id) ?? new Set<string>();
+      if (picked.size > 0 || selected.size > 0) {
+        plans.set(request.id, new Set([...picked, ...selected]));
+      }
+    }
+
+    const unresolvedManualRequests = requests.filter(
+      (request) =>
+        !plans.has(request.id) &&
+        request.files.some((file) =>
+          file.fileName.startsWith(manualPickInstructionPlanFilePrefix),
+        ),
+    );
+    const manualResults = await Promise.allSettled(
+      unresolvedManualRequests.map((request) =>
+        this.getRequestInstruction(request.id, user),
+      ),
+    );
+    manualResults.forEach((result, index) => {
+      const request = unresolvedManualRequests[index];
+      if (result.status === 'rejected') {
+        errors.push({
+          requestId: request.id,
+          title: request.title,
+          message: overlapErrorMessage(result.reason),
+        });
+        return;
+      }
+      plans.set(request.id, instructionSourceBoxes(result.value));
+    });
+
+    const automaticRequestsByClient = new Map<string, typeof requests>();
+    for (const request of requests) {
+      const hasManualPlan = request.files.some((file) =>
+        file.fileName.startsWith(manualPickInstructionPlanFilePrefix),
+      );
+      if (hasManualPlan) continue;
+      const clientWarehouseKey = `${request.clientId}:${request.warehouseId ?? ''}`;
+      automaticRequestsByClient.set(clientWarehouseKey, [
+        ...(automaticRequestsByClient.get(clientWarehouseKey) ?? []),
+        request,
+      ]);
+    }
+    for (const clientRequests of automaticRequestsByClient.values()) {
+      const unresolved = clientRequests.filter((request) => !plans.has(request.id));
+      if (unresolved.length === 0) continue;
+      try {
+        const draft = await this.buildWaveDraft(
+          clientRequests.map((request) => request.id),
+          user,
         );
-      });
+        const requestIdByItemId = new Map(
+          clientRequests.flatMap((request) =>
+            request.items.map((item) => [item.id, request.id] as const),
+          ),
+        );
+        const boxesByRequestId = new Map<string, Set<string>>();
+        for (const reservation of draft.plan.reservations) {
+          const requestId = requestIdByItemId.get(reservation.orderId);
+          if (!requestId || !reservation.sourceBox) continue;
+          const values = boxesByRequestId.get(requestId) ?? new Set<string>();
+          values.add(reservation.sourceBox);
+          boxesByRequestId.set(requestId, values);
+        }
+        for (const request of unresolved) {
+          plans.set(
+            request.id,
+            boxesByRequestId.get(request.id) ?? new Set<string>(),
+          );
+        }
+      } catch (error) {
+        for (const request of unresolved) {
+          errors.push({
+            requestId: request.id,
+            title: request.title,
+            message: overlapErrorMessage(error),
+          });
+        }
+      }
     }
 
     const boxes = new Map<string, { boxCode: string; clientId: string; requests: typeof requests }>();
     for (const request of requests) {
       for (const boxCode of plans.get(request.id) ?? []) {
-        const key = `${request.clientId}:${normalizeInstructionBoxCode(boxCode)}`;
+        const key = `${request.clientId}:${request.warehouseId ?? ''}:${normalizeInstructionBoxCode(boxCode)}`;
         const entry = boxes.get(key) ?? { boxCode, clientId: request.clientId, requests: [] };
         entry.requests.push(request);
         boxes.set(key, entry);
@@ -310,6 +476,7 @@ export class PickInstructionService {
         client: entry.requests[0].client,
         requests: entry.requests.map((request) => ({
           id: request.id,
+          number: request.number,
           title: request.title,
           status: request.status,
           destinationCity: request.destinationCity,
@@ -345,6 +512,7 @@ export class PickInstructionService {
     }
 
     this.clientScopes.requireClientAccess(user, request.clientId, 'read');
+    assertWarehouseAccess(user, request, 'read', 'Заявка не найдена в выбранном филиале.');
 
     if (request.type !== ClientRequestType.OUTBOUND) {
       throw new BadRequestException('Складская инструкция доступна только для заявок на отгрузку.');
@@ -354,7 +522,12 @@ export class PickInstructionService {
     const rows = this.prepareRows(request, skuByBarcode);
     const manualInstruction = this.readCompiledManualInstruction(request.files);
     const auxiliary = await this.loadWarehouseAuxiliaryData(request.clientId, request.files);
-    const allBalances = await this.loadAvailableBalances(request.clientId, rows, true);
+    const allBalances = await this.loadAvailableBalances(
+      request.clientId,
+      request.warehouseId,
+      rows,
+      true,
+    );
     const planning = await this.buildActiveRequestPlanningContext(request, rows, allBalances, auxiliary);
     const balances = planning.balances;
     const warehousePlan = manualInstruction ? manualInstruction.warehousePlan : planning.plan;
@@ -436,7 +609,10 @@ export class PickInstructionService {
         ? await this.prisma.pickWaveRequest.findFirst({
             where: {
               requestId: request.id,
-              wave: { status: { in: [PickWaveStatus.FROZEN, PickWaveStatus.PICKING, PickWaveStatus.DONE, PickWaveStatus.FAILED] } },
+              wave: {
+                warehouseId: request.warehouseId,
+                status: { in: [PickWaveStatus.FROZEN, PickWaveStatus.PICKING, PickWaveStatus.DONE, PickWaveStatus.FAILED] },
+              },
             },
             include: {
               wave: {
@@ -483,6 +659,7 @@ export class PickInstructionService {
     const peerRequests = await this.prisma.clientRequest.findMany({
       where: {
         clientId: request.clientId,
+        warehouseId: request.warehouseId,
         type: ClientRequestType.OUTBOUND,
         status: { in: [...activeReservationStatuses] },
       },
@@ -514,7 +691,12 @@ export class PickInstructionService {
     // Automatic requests for one client must be planned as one combined shipment.
     // Otherwise the same physical box is independently selected by every city.
     if (!contexts.some((context) => this.readCompiledManualInstruction(context.request.files))) {
-      const planningBalances = await this.loadBalancesAtActiveBatchStart(request.clientId, requests, allBalances);
+      const planningBalances = await this.loadBalancesAtActiveBatchStart(
+        request.clientId,
+        request.warehouseId,
+        requests,
+        allBalances,
+      );
       const requestIdByOrderId = new Map<string, string>();
       const destinationCityByOrderId = new Map<string, string>();
       contexts.forEach((context) => {
@@ -587,6 +769,7 @@ export class PickInstructionService {
 
   private async loadBalancesAtActiveBatchStart(
     clientId: string,
+    warehouseId: string | null,
     requests: RequestForInstruction[],
     currentBalances: BalanceForInstruction[],
   ): Promise<BalanceForInstruction[]> {
@@ -597,25 +780,42 @@ export class PickInstructionService {
       return cloneBalances(currentBalances);
     }
 
-    const firstInWorkEvent = await this.prisma.clientRequestEvent.findFirst({
-      where: {
-        requestId: { in: requests.map((candidate) => candidate.id) },
-        statusTo: ClientRequestStatus.IN_WORK,
-      },
-      orderBy: { createdAt: 'asc' },
-      select: { createdAt: true },
-    });
+    const requestIds = requests.map((candidate) => candidate.id);
+    const [firstInWorkEvent, latestForcedRefreshEvent] = await Promise.all([
+      this.prisma.clientRequestEvent.findFirst({
+        where: {
+          requestId: { in: requestIds },
+          statusTo: ClientRequestStatus.IN_WORK,
+        },
+        orderBy: { createdAt: 'asc' },
+        select: { createdAt: true },
+      }),
+      this.prisma.clientRequestEvent.findFirst({
+        where: {
+          requestId: { in: requestIds },
+          eventType: ClientRequestEventType.COMMENT,
+          title: forcedInstructionRefreshEventTitle,
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
+      }),
+    ]);
     if (!firstInWorkEvent) {
       return cloneBalances(currentBalances);
     }
+    const snapshotAt =
+      latestForcedRefreshEvent && latestForcedRefreshEvent.createdAt > firstInWorkEvent.createdAt
+        ? latestForcedRefreshEvent.createdAt
+        : firstInWorkEvent.createdAt;
 
     const snapshotGroups = await this.prisma.stockMovement.groupBy({
       by: ['skuId', 'boxId', 'palletId', 'status'],
       where: {
         clientId,
+        warehouseId: warehouseId ?? undefined,
         status: StockStatus.AVAILABLE,
         boxId: { not: null },
-        createdAt: { lte: firstInWorkEvent.createdAt },
+        createdAt: { lte: snapshotAt },
       },
       _sum: { quantity: true },
     });
@@ -629,7 +829,13 @@ export class PickInstructionService {
     const palletIds = [...new Set(positiveGroups.map((group) => group.palletId).filter((id): id is string => Boolean(id)))];
     const [skus, boxes, pallets] = await Promise.all([
       this.prisma.sku.findMany({ where: { id: { in: skuIds } }, ...skuCatalogArgs }),
-      this.prisma.box.findMany({ where: { id: { in: boxIds } }, select: { id: true, code: true } }),
+      this.prisma.box.findMany({
+        where: {
+          id: { in: boxIds },
+          status: { notIn: ['deleted', 'archived'] },
+        },
+        select: { id: true, code: true, warehouseId: true },
+      }),
       palletIds.length > 0
         ? this.prisma.pallet.findMany({ where: { id: { in: palletIds } }, select: { id: true, code: true } })
         : Promise.resolve([]),
@@ -650,13 +856,14 @@ export class PickInstructionService {
         return {
           id: `snapshot:${snapshotKey}`,
           balanceKey: `snapshot:${snapshotKey}`,
+          warehouseId: box.warehouseId,
           clientId,
           skuId: group.skuId,
           boxId,
           palletId: group.palletId,
           status: group.status,
           quantity: group._sum.quantity ?? 0,
-          updatedAt: firstInWorkEvent.createdAt,
+          updatedAt: snapshotAt,
           sku,
           box,
           pallet: group.palletId ? palletById.get(group.palletId) ?? null : null,
@@ -664,6 +871,23 @@ export class PickInstructionService {
       })
       .filter((balance): balance is BalanceForInstruction => Boolean(balance))
       .sort(compareInstructionBalances);
+  }
+
+  private async requireRequestWarehouseAccess(
+    requestId: string,
+    user: AuthUser,
+    mode: 'read' | 'write',
+  ) {
+    const request = await this.prisma.clientRequest.findUnique({
+      where: { id: requestId },
+      select: { id: true, clientId: true, warehouseId: true },
+    });
+    if (!request) {
+      throw new NotFoundException('Клиентская заявка не найдена.');
+    }
+    this.clientScopes.requireClientAccess(user, request.clientId, mode);
+    assertWarehouseAccess(user, request, mode, 'Заявка не найдена в выбранном филиале.');
+    return request;
   }
 
   private requireBoxOverlapAccess(user: AuthUser) {
@@ -675,7 +899,57 @@ export class PickInstructionService {
 
   async refreshRequestInstruction(requestId: string, user: AuthUser) {
     this.requireInstructionRefreshAccess(user);
-    this.invalidateRequestInstruction(requestId);
+    const request = await this.prisma.clientRequest.findUnique({
+      where: { id: requestId },
+      select: {
+        id: true,
+        clientId: true,
+        warehouseId: true,
+        number: true,
+        type: true,
+        status: true,
+      },
+    });
+    if (!request) {
+      throw new NotFoundException('Клиентская заявка не найдена.');
+    }
+    this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+    assertWarehouseAccess(user, request, 'write', 'Заявка не найдена в выбранном филиале.');
+    if (request.type !== ClientRequestType.OUTBOUND) {
+      throw new BadRequestException('Принудительный пересчёт доступен только для заявок на отгрузку.');
+    }
+    if (
+      request.status === ClientRequestStatus.DONE ||
+      request.status === ClientRequestStatus.CANCELLED ||
+      request.status === ClientRequestStatus.REJECTED
+    ) {
+      throw new BadRequestException('Завершённую, отменённую или отклонённую заявку пересчитывать нельзя.');
+    }
+
+    await this.prisma.clientRequestEvent.create({
+      data: {
+        requestId: request.id,
+        clientId: request.clientId,
+        eventType: ClientRequestEventType.COMMENT,
+        title: forcedInstructionRefreshEventTitle,
+        body:
+          'Оставшийся план сборки пересчитан по текущим остаткам. Архивные и удалённые короба исключены; уже выполненные действия сохранены в истории.',
+        createdByUserId: user.id,
+      },
+    });
+
+    const activePeerRequests = await this.prisma.clientRequest.findMany({
+      where: {
+        clientId: request.clientId,
+        warehouseId: request.warehouseId,
+        type: ClientRequestType.OUTBOUND,
+        status: { in: [...activeReservationStatuses] },
+      },
+      select: { id: true },
+    });
+    const affectedRequestIds = new Set([requestId, ...activePeerRequests.map((candidate) => candidate.id)]);
+    affectedRequestIds.forEach((id) => this.invalidateRequestInstruction(id));
+    this.warehouseAuxiliaryCache.delete(request.clientId);
     return this.getRequestInstruction(requestId, user);
   }
 
@@ -699,6 +973,7 @@ export class PickInstructionService {
       throw new NotFoundException('Клиентская заявка не найдена.');
     }
     this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+    assertWarehouseAccess(user, request, 'write', 'Заявка не найдена в выбранном филиале.');
     if (request.type !== ClientRequestType.OUTBOUND) {
       throw new BadRequestException('Своя складская инструкция доступна только для заявок на отгрузку.');
     }
@@ -785,6 +1060,9 @@ export class PickInstructionService {
       if (key === requestId || key.startsWith(`${requestId}:`)) {
         this.instructionCache.delete(key);
       }
+    }
+    if (this.activeRequestBoxOverlapCache) {
+      this.activeRequestBoxOverlapCache.expiresAt = 0;
     }
   }
 
@@ -881,7 +1159,12 @@ export class PickInstructionService {
     });
   }
 
-  private async loadAvailableBalances(clientId: string, rows: Array<{ skuId: string | null }>, includeAllClientBalances = false) {
+  private async loadAvailableBalances(
+    clientId: string,
+    warehouseId: string | null,
+    rows: Array<{ skuId: string | null }>,
+    includeAllClientBalances = false,
+  ) {
     const skuIds = [...new Set(rows.map((row) => row.skuId).filter((skuId): skuId is string => Boolean(skuId)))];
     if (!includeAllClientBalances && skuIds.length === 0) {
       return [];
@@ -890,10 +1173,14 @@ export class PickInstructionService {
     const balances = await this.prisma.stockBalance.findMany({
       where: {
         clientId,
+        warehouseId: warehouseId ?? undefined,
         skuId: includeAllClientBalances ? undefined : { in: skuIds },
         status: StockStatus.AVAILABLE,
         quantity: { gt: 0 },
         boxId: { not: null },
+        box: {
+          status: { notIn: ['deleted', 'archived'] },
+        },
       },
       ...stockBalanceArgs,
       orderBy: [{ id: 'asc' }],
@@ -907,6 +1194,40 @@ export class PickInstructionService {
 
   private async loadWarehouseAuxiliaryData(clientId: string, files: RequestForInstruction['files'] = []): Promise<WarehouseAuxiliaryData> {
     const legacyWorkbookData = this.readAuxiliaryWorkbook(files);
+    const catalog = await this.loadWarehouseAuxiliaryCatalog(clientId);
+    const shk = new Map(catalog.shk);
+    mergeMissingShkRecords(shk, legacyWorkbookData.shk);
+
+    return {
+      mapping: catalog.mapping.size > 0 ? catalog.mapping : legacyWorkbookData.mapping,
+      boxToPallet: legacyWorkbookData.boxToPallet,
+      shk,
+    };
+  }
+
+  private async loadWarehouseAuxiliaryCatalog(clientId: string): Promise<WarehouseAuxiliaryData> {
+    const now = Date.now();
+    const cached = this.warehouseAuxiliaryCache.get(clientId);
+    if (cached && cached.expiresAt > now) {
+      return cached.promise;
+    }
+
+    const promise = this.buildWarehouseAuxiliaryCatalog(clientId);
+    this.warehouseAuxiliaryCache.set(clientId, {
+      expiresAt: now + this.warehouseAuxiliaryCacheTtlMs,
+      promise,
+    });
+    try {
+      return await promise;
+    } catch (error) {
+      if (this.warehouseAuxiliaryCache.get(clientId)?.promise === promise) {
+        this.warehouseAuxiliaryCache.delete(clientId);
+      }
+      throw error;
+    }
+  }
+
+  private async buildWarehouseAuxiliaryCatalog(clientId: string): Promise<WarehouseAuxiliaryData> {
     const [articleMappings, skus] = await Promise.all([
       this.prisma.clientArticleMapping.findMany({
         where: { clientId },
@@ -924,10 +1245,9 @@ export class PickInstructionService {
     });
 
     const shk = buildShkCatalogFromSkus(skus);
-    mergeMissingShkRecords(shk, legacyWorkbookData.shk);
 
     return {
-      mapping: mapping.size > 0 ? mapping : legacyWorkbookData.mapping,
+      mapping,
       boxToPallet: new Map(),
       shk,
     };
@@ -1453,7 +1773,10 @@ export class PickInstructionService {
     const sourceBoxes = new Set(parsed.rows.map((row) => row.sourceBox).filter(Boolean));
     const normalizedSourceBoxes = new Set([...sourceBoxes].map(normalizeManualCode));
     const clientBoxes = await this.prisma.box.findMany({
-      where: { clientId: request.clientId },
+      where: {
+        clientId: request.clientId,
+        warehouseId: request.warehouseId ?? undefined,
+      },
       select: { code: true },
     });
     const knownBoxes = new Set(clientBoxes.map((box) => normalizeManualCode(box.code)));

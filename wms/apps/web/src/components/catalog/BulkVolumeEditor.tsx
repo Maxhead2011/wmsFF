@@ -7,6 +7,7 @@ import {
   type BulkSkuVolumeData,
   type ClientSummary,
 } from '../../lib/api';
+import { useRememberedClientId } from '../../lib/rememberedClient';
 
 type BulkVolumeEditorProps = {
   clients: ClientSummary[];
@@ -23,7 +24,9 @@ const emptyData: BulkSkuVolumeData = {
 };
 
 export function BulkVolumeEditor({ clients, defaultClientId, onApplied, session }: BulkVolumeEditorProps) {
-  const [clientId, setClientId] = useState(defaultClientId);
+  const [clientId, setClientId] = useRememberedClientId(session.user.id, {
+    initialClientId: defaultClientId,
+  });
   const [sourceVolumeFrom, setSourceVolumeFrom] = useState('');
   const [sourceVolumeTo, setSourceVolumeTo] = useState('');
   const [targetVolume, setTargetVolume] = useState('');

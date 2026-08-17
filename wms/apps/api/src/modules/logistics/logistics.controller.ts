@@ -43,31 +43,35 @@ export class LogisticsController {
   }
 
   @Get('carriers')
-  listCarriers() {
-    return this.logistics.listCarriers();
+  listCarriers(@CurrentUser() user: AuthUser) {
+    return this.logistics.listCarriers(user);
   }
 
   @Post('carriers')
   @RequirePermissions('logistics:write')
-  createCarrier(@Body() dto: CreateLogisticsCarrierDto) {
-    return this.logistics.createCarrier(dto);
+  createCarrier(@Body() dto: CreateLogisticsCarrierDto, @CurrentUser() user: AuthUser) {
+    return this.logistics.createCarrier(dto, user);
   }
 
   @Get('trips')
-  listTrips(@Query() query: ListLogisticsTripsDto) {
-    return this.logistics.listTrips(query);
+  listTrips(@Query() query: ListLogisticsTripsDto, @CurrentUser() user: AuthUser) {
+    return this.logistics.listTrips(query, user);
   }
 
   @Post('trips')
   @RequirePermissions('logistics:write')
-  createTrip(@Body() dto: CreateLogisticsTripDto) {
-    return this.logistics.createTrip(dto);
+  createTrip(@Body() dto: CreateLogisticsTripDto, @CurrentUser() user: AuthUser) {
+    return this.logistics.createTrip(dto, user);
   }
 
   @Patch('trips/:id/status')
   @RequirePermissions('logistics:write')
-  updateTripStatus(@Param('id') id: string, @Body() dto: UpdateLogisticsTripStatusDto) {
-    return this.logistics.updateTripStatus(id, dto);
+  updateTripStatus(
+    @Param('id') id: string,
+    @Body() dto: UpdateLogisticsTripStatusDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.logistics.updateTripStatus(id, dto, user);
   }
 
   @Get('delivery-requests')

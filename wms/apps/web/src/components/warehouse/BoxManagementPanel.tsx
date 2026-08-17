@@ -1,4 +1,5 @@
 import {
+  Archive,
   ArrowRightLeft,
   Box,
   CirclePause,
@@ -54,6 +55,7 @@ const actionLabels: Record<TurnoverActionKind, string> = {
 };
 
 export function BoxManagementPanel({ session }: { session: AuthSession }) {
+  const [showArchive, setShowArchive] = useState(false);
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState<WarehouseBoxSummary[]>([]);
   const [isSearching, setSearching] = useState(false);
@@ -81,7 +83,7 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
     const timer = window.setTimeout(() => {
       setSearching(true);
       setSearchError('');
-      fetchBoxes(session.accessToken, { code: cleanQuery })
+      fetchBoxes(session.accessToken, { code: cleanQuery, archive: showArchive })
         .then((boxes) => {
           if (!cancelled) {
             setSuggestions(boxes);
@@ -104,7 +106,7 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [query, session.accessToken, showSuggestions]);
+  }, [query, session.accessToken, showArchive, showSuggestions]);
 
   useEffect(() => {
     const cleanCode = actionState?.targetBoxCode.trim() ?? '';
@@ -187,6 +189,19 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
     setActionMessage('');
   }
 
+  function switchArchive(nextArchive: boolean) {
+    setShowArchive(nextArchive);
+    setQuery('');
+    setSuggestions([]);
+    setShowSuggestions(false);
+    setSearchError('');
+    setSelectedBox(null);
+    setDetails({ status: 'idle', data: null });
+    setActionState(null);
+    setActionError('');
+    setActionMessage('');
+  }
+
   function updateAction<K extends keyof Omit<BoxActionState, 'item'>>(key: K, value: BoxActionState[K]) {
     setActionState((current) => (current ? { ...current, [key]: value } : current));
     setActionError('');
@@ -213,10 +228,6 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
     }
     if (needsTarget && !targetBoxCode) {
       setActionError('Укажите короб назначения.');
-      return;
-    }
-    if (needsTarget && !targetBoxCode.toLocaleUpperCase('ru-RU').startsWith('FFL_')) {
-      setActionError('Номер короба назначения должен начинаться с FFL_.');
       return;
     }
     if (needsReason && !actionState.reason.trim()) {
@@ -252,6 +263,29 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
 
   return (
     <div className="warehouse-box-manager">
+      <div className="warehouse-box-view-toggle" role="group" aria-label="Режим просмотра коробов">
+        <button
+          className={!showArchive ? 'is-active' : ''}
+          type="button"
+          onClick={() => switchArchive(false)}
+        >
+          <Box size={16} aria-hidden="true" />
+          Короба на складе
+        </button>
+        <button
+          className={showArchive ? 'is-active' : ''}
+          type="button"
+          onClick={() => switchArchive(true)}
+        >
+          <Archive size={16} aria-hidden="true" />
+          Архив коробов
+        </button>
+      </div>
+      <p className="warehouse-box-view-note">
+        {showArchive
+          ? 'Найдите удалённый или архивный короб по номеру и откройте сохранённую историю его движений.'
+          : 'Поиск действующих коробов, просмотр содержимого и складские операции.'}
+      </p>
       <form className="warehouse-box-search" onSubmit={submitSearch}>
         <label className="warehouse-box-search__field">
           <span>Номер короба</span>
@@ -265,7 +299,7 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
                 setSearchError('');
               }}
               onFocus={() => setShowSuggestions(Boolean(query.trim()))}
-              placeholder="Начните вводить FFL_..."
+              placeholder={showArchive ? 'Номер короба из архива' : 'Начните вводить номер короба…'}
               autoComplete="off"
             />
             {isSearching ? <RefreshCw className="is-spinning" size={16} aria-hidden="true" /> : null}
@@ -278,7 +312,12 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
                   <Box size={17} aria-hidden="true" />
                   <span>
                     <strong>{box.code}</strong>
-                    <small>{box.client.name} · {boxStatusLabel(box.status)}</small>
+                    <small>
+                      {box.client.name} · {boxStatusLabel(box.status)}
+                      {box.storagePlacement
+                        ? ` · ${box.storagePlacement.pallet.zone?.name ?? 'Без зоны'} / ${box.storagePlacement.pallet.code}`
+                        : ' · место не задано'}
+                    </small>
                   </span>
                   <em>{box._count.balances} поз.</em>
                 </button>
@@ -307,6 +346,7 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
       {details.data ? (
         <BoxCard
           details={details.data}
+          readOnly={showArchive}
           onAction={startAction}
           onClose={() => {
             setSelectedBox(null);
@@ -316,7 +356,7 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
         />
       ) : null}
 
-      {actionState && details.data ? (
+      {!showArchive && actionState && details.data ? (
         <BoxActionDialog
           state={actionState}
           box={details.data.box.code}
@@ -334,10 +374,12 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
 
 function BoxCard({
   details,
+  readOnly,
   onAction,
   onClose,
 }: {
   details: TurnoverBoxDetails;
+  readOnly: boolean;
   onAction: (item: TurnoverBoxDetails['contents'][number], action: TurnoverActionKind) => void;
   onClose: () => void;
 }) {
@@ -348,6 +390,11 @@ function BoxCard({
           <span>{details.box.client.name}</span>
           <h3>{details.box.code}</h3>
           <small>{boxStatusLabel(details.box.status)}</small>
+          <small>
+            {details.box.storagePlacement
+              ? `Место: ${details.box.storagePlacement.pallet.zone?.name ?? 'без зоны'} / ${details.box.storagePlacement.pallet.code}`
+              : 'Место хранения не задано'}
+          </small>
         </div>
         <button className="icon-button" type="button" onClick={onClose} title="Закрыть карточку" aria-label="Закрыть карточку короба">
           <X size={18} aria-hidden="true" />
@@ -371,13 +418,13 @@ function BoxCard({
               <th>Статус</th>
               <th>Кол-во</th>
               <th>КИЗ</th>
-              <th>Изменить</th>
+              {!readOnly ? <th>Изменить</th> : null}
             </tr>
           </thead>
           <tbody>
             {details.contents.length === 0 ? (
               <tr>
-                <td colSpan={7}>В коробе нет текущего остатка.</td>
+                <td colSpan={readOnly ? 6 : 7}>В коробе нет текущего остатка.</td>
               </tr>
             ) : null}
             {details.contents.map((item) => (
@@ -397,7 +444,7 @@ function BoxCard({
                     </span>
                   ) : '-'}
                 </td>
-                <td>
+                {!readOnly ? <td>
                   <div className="warehouse-box-row-actions">
                     <button type="button" onClick={() => onAction(item, 'TRANSFER')} title="Перенести товар">
                       <ArrowRightLeft size={14} aria-hidden="true" />
@@ -416,14 +463,14 @@ function BoxCard({
                       <span>Добавить</span>
                     </button>
                   </div>
-                </td>
+                </td> : null}
               </tr>
             ))}
           </tbody>
         </table>
       </div>
 
-      <details className="warehouse-box-history">
+      <details className="warehouse-box-history" open={readOnly ? true : undefined}>
         <summary>История движений <span>{details.movements.length}</span></summary>
         <div className="warehouse-box-table-wrap">
           <table className="warehouse-box-table warehouse-box-table--history">
@@ -514,7 +561,7 @@ function BoxActionDialog({
               <input
                 value={state.targetBoxCode}
                 onChange={(event) => onChange('targetBoxCode', event.target.value)}
-                placeholder="FFL_..."
+                placeholder="Номер короба назначения"
                 list="warehouse-box-target-suggestions"
                 autoComplete="off"
               />
@@ -580,6 +627,7 @@ function boxStatusLabel(status: string) {
     packed: 'Упакован',
     shipped: 'Отгружен',
     deleted: 'Удален',
+    archived: 'В архиве',
   };
   return labels[status.toLocaleLowerCase('ru-RU')] ?? status;
 }

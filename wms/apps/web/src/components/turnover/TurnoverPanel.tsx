@@ -1,7 +1,9 @@
 import {
   Archive,
+  ArrowLeft,
   ArrowRightLeft,
   BarChart3,
+  ChevronRight,
   Download,
   History,
   PackagePlus,
@@ -34,6 +36,7 @@ import {
 } from '../../lib/api';
 import { KnownValueInput, type KnownValueOption } from '../common/KnownValueInput';
 import './turnover.css';
+import { useRememberedClientId, validRememberedClientId } from '../../lib/rememberedClient';
 
 type LoadState<T> = {
   status: 'idle' | 'loading' | 'ready' | 'error';
@@ -41,7 +44,7 @@ type LoadState<T> = {
   error?: string;
 };
 
-type ActiveTile = 'movement' | 'receipts' | 'stockExport' | 'actions' | 'stats';
+type ActiveTile = 'home' | 'lookup' | 'movement' | 'receipts' | 'stockExport' | 'actions' | 'stats';
 
 type ActionForm = {
   action: TurnoverActionKind;
@@ -78,14 +81,14 @@ const actionOptions: Array<{ value: TurnoverActionKind; label: string; hint: str
 ];
 
 export function TurnoverPanel({ session }: { session: AuthSession }) {
-  const [activeTile, setActiveTile] = useState<ActiveTile>('movement');
+  const [activeTile, setActiveTile] = useState<ActiveTile>('home');
   const [clients, setClients] = useState<LoadState<ClientSummary[]>>({ status: 'idle', data: [] });
   const [report, setReport] = useState<LoadState<TurnoverReport | null>>({ status: 'idle', data: null });
   const [statistics, setStatistics] = useState<LoadState<TurnoverStatistics | null>>({ status: 'idle', data: null });
   const [suggestions, setSuggestions] = useState<LoadState<TurnoverSuggestions | null>>({ status: 'idle', data: null });
   const [suggestionQuery, setSuggestionQuery] = useState('');
   const [suggestionScope, setSuggestionScope] = useState<'client' | 'barcode'>('client');
-  const [selectedClientId, setSelectedClientId] = useState('');
+  const [selectedClientId, setSelectedClientId] = useRememberedClientId(session.user.id);
   const [search, setSearch] = useState('');
   const [movementSearch, setMovementSearch] = useState('');
   const [barcode, setBarcode] = useState('');
@@ -204,6 +207,7 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
     try {
       const loaded = await fetchClients(session.accessToken);
       setClients({ status: 'ready', data: loaded });
+      setSelectedClientId((current) => validRememberedClientId(current, loaded));
       setSelectedClientId((current) => current || loaded[0]?.id || '');
       if (!loaded[0]) {
         setReport({ status: 'ready', data: null });
@@ -311,6 +315,28 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
     setActionMessage('');
     setActionError('');
     setBoxDetails({ status: 'idle', data: null });
+  }
+
+  function startSkuAction(action: TurnoverActionKind) {
+    if (!selectedReportItem) {
+      return;
+    }
+    const sourceBoxCode = selectedReportItem.currentCells.find((cell) => cell.quantity > 0)?.boxCode ?? '';
+    setActiveTile('actions');
+    setActionForm({
+      action,
+      skuId: selectedReportItem.skuId,
+      skuText: productText(selectedReportItem),
+      quantity: '1',
+      sourceBoxCode: action === 'ADD' ? '' : sourceBoxCode,
+      targetBoxCode: action === 'ADD' || action === 'HOLD' ? sourceBoxCode : '',
+      reason: '',
+      kiz: '',
+      photoFileName: '',
+      comment: '',
+    });
+    setActionMessage('');
+    setActionError('');
   }
 
   async function submitAction() {
@@ -440,6 +466,22 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
 
   return (
     <div className="turnover-workspace">
+      {activeTile === 'home' ? (
+        <section className="turnover-topic-intro" aria-label="Разделы товарооборота">
+          <div>
+            <p className="eyebrow">Товары и остатки</p>
+            <h2>Выберите задачу</h2>
+          </div>
+          <span>Поиск, движения, выгрузки и действия с товаром открываются отдельно.</span>
+        </section>
+      ) : (
+        <button className="turnover-topic-back" type="button" onClick={() => setActiveTile('home')}>
+          <ArrowLeft size={16} aria-hidden="true" />
+          <span>Разделы товарооборота</span>
+        </button>
+      )}
+
+      {activeTile !== 'home' ? <>
       <section className="turnover-panel turnover-panel--filters" aria-label="Фильтр товарооборота">
         <div className="turnover-filter-grid">
           <label>
@@ -570,54 +612,123 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
         {barcode.trim() ? <p className="inline-status">Поиск по ШК выполняется по всем доступным клиентам.</p> : null}
       </section>
 
-      <section className="turnover-tiles" aria-label="Разделы товарооборота">
+      <section className="turnover-summary-tiles" aria-label="Сводка товарооборота">
+        <TurnoverSummaryTile label="SKU в выборке" value={formatNumber(totals?.skuCount ?? 0)} icon={<Archive size={18} aria-hidden="true" />} tone="neutral" />
+        <TurnoverSummaryTile label="Остаток сейчас" value={`${formatNumber(totals?.currentQuantity ?? 0)} шт`} icon={<History size={18} aria-hidden="true" />} tone="stock" />
+        <TurnoverSummaryTile label="Принято за период" value={`${formatNumber(totals?.receivedQuantity ?? 0)} шт`} icon={<PackagePlus size={18} aria-hidden="true" />} tone="receipt" />
+        <TurnoverSummaryTile label="Отгружено за период" value={`${formatNumber(totals?.shippedQuantity ?? 0)} шт`} icon={<ArrowRightLeft size={18} aria-hidden="true" />} tone="shipment" />
+        <TurnoverSummaryTile label="Списано за период" value={`${formatNumber(totals?.writtenOffQuantity ?? 0)} шт`} icon={<Trash2 size={18} aria-hidden="true" />} tone="writeoff" />
+      </section>
+
+      <section className="turnover-quick-tool" aria-label="Быстрый поиск товара и управление">
+        <header>
+          <div>
+            <p className="eyebrow">Быстрый инструмент</p>
+            <h3>Где лежит товар</h3>
+            <p>Выберите клиента и найдите товар по названию, артикулу, ШК или КИЗ — размещение покажем сразу.</p>
+          </div>
+          <span>{selectedClient?.name ?? 'Клиент не выбран'}</span>
+        </header>
+        {selectedReportItem ? (
+          <div className="turnover-quick-tool__result">
+            <div className="turnover-quick-tool__product">
+              <span>{selectedReportItem.primaryBarcode ?? 'ШК'}</span>
+              <strong>{selectedReportItem.name}</strong>
+              <small>{selectedReportItem.internalSku} · на остатке {formatNumber(selectedReportItem.currentQuantity)} шт</small>
+            </div>
+            <div className="turnover-quick-tool__locations">
+              {selectedReportItem.currentCells.length === 0 ? <span className="turnover-quick-tool__empty">На складе нет доступного остатка.</span> : null}
+              {selectedReportItem.currentCells.map((cell) => (
+                <button type="button" key={`${cell.boxId ?? cell.boxCode}-${cell.status}-${cell.palletSortCode ?? ''}`} onClick={() => void loadBoxDetails(cell.boxCode)}>
+                  <strong>{cell.boxCode}</strong>
+                  <span>{storageZoneLabel(cell)} · {cell.palletSortCode ?? cell.palletCode ?? 'без палет-сорта'}</span>
+                  <small>{formatNumber(cell.quantity)} шт · {stockStatusLabel(cell.status)}</small>
+                </button>
+              ))}
+            </div>
+            {canUseActions ? (
+              <div className="turnover-quick-tool__actions">
+                <button className="secondary-action" type="button" onClick={() => startSkuAction('ADD')}><PackagePlus size={16} />Добавить</button>
+                <button className="secondary-action" type="button" onClick={() => startSkuAction('WRITE_OFF')}><Trash2 size={16} />Списать</button>
+                <button className="secondary-action" type="button" onClick={() => startSkuAction('TRANSFER')}><ArrowRightLeft size={16} />Переместить</button>
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <p className="turnover-quick-tool__empty">Начните вводить название товара, ШК или КИЗ в поиске выше.</p>
+        )}
+      </section>
+
+      </> : null}
+
+      {activeTile === 'home' ? <section className="turnover-tiles" aria-label="Разделы товарооборота">
         <TurnoverTile
-          active={activeTile === 'movement'}
+          active={false}
+          index={1}
+          icon={<Search size={22} aria-hidden="true" />}
+          title="Найти товар"
+          text="Название, артикул, ШК или КИЗ — покажем короб, зону и паллет-сорт."
+          value="Быстрый поиск"
+          tone="lookup"
+          onClick={() => setActiveTile('lookup')}
+        />
+        <TurnoverTile
+          active={false}
+          index={2}
           icon={<History size={22} aria-hidden="true" />}
           title="Товаро-движение"
           text="Приемка, ячейки, КИЗ, перемещения, заявки и списание."
           value={totals ? `${formatNumber(totals.currentQuantity)} шт` : '0 шт'}
+          tone="stock"
           onClick={() => setActiveTile('movement')}
         />
         <TurnoverTile
-          active={activeTile === 'receipts'}
+          active={false}
+          index={3}
           icon={<Download size={22} aria-hidden="true" />}
           title="Выгрузка приемки"
           text="Один Excel по выбранному клиенту и периоду."
           value={receiptPeriodLabel(dateFrom, dateTo)}
+          tone="receipt"
           onClick={() => setActiveTile('receipts')}
         />
         {canSeeStatistics ? (
           <TurnoverTile
-            active={activeTile === 'stockExport'}
+            active={false}
+            index={4}
             icon={<Archive size={22} aria-hidden="true" />}
-            title="Остатки Excel"
-            text="Короба, паллеты, SKU, ШК, КИЗ и доступный остаток на текущую дату."
+            title="Остатки"
+            text="Положительные остатки по штрихкодам и местам хранения. Здесь же доступна выгрузка Excel."
             value={ignoreActiveStockRequests ? 'Полностью' : 'Минус заявки'}
+            tone="export"
             onClick={() => setActiveTile('stockExport')}
           />
         ) : null}
         {canUseActions ? (
           <TurnoverTile
-            active={activeTile === 'actions'}
+            active={false}
+            index={5}
             icon={<ArrowRightLeft size={22} aria-hidden="true" />}
             title="Действия с товарами"
             text="Добавить, списать, перенести, утилизировать или отложить."
             value={selectedClient?.name ?? 'Клиент'}
+            tone="action"
             onClick={() => setActiveTile('actions')}
           />
         ) : null}
         {canSeeStatistics ? (
           <TurnoverTile
-            active={activeTile === 'stats'}
+            active={false}
+            index={6}
             icon={<BarChart3 size={22} aria-hidden="true" />}
             title="Статистика"
             text="Приход, отгрузка и тенденции по дням, месяцам, кварталам."
             value="Доступно"
+            tone="stats"
             onClick={() => setActiveTile('stats')}
           />
         ) : null}
-      </section>
+      </section> : null}
 
       {report.status === 'loading' ? <p className="inline-status">Загружаю товарооборот.</p> : null}
       {boxDetails.status !== 'idle' ? (
@@ -656,11 +767,13 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
       {activeTile === 'stockExport' && canSeeStatistics ? (
         <StockExportSection
           client={selectedClient}
+          items={report.data?.items ?? []}
           ignoreActiveRequests={ignoreActiveStockRequests}
           error={stockExportError}
           isDownloading={isDownloadingStockExport}
           onIgnoreActiveRequestsChange={setIgnoreActiveStockRequests}
           onDownload={() => void downloadStockExport()}
+          onOpenBox={(boxCode) => void loadBoxDetails(boxCode)}
         />
       ) : null}
       {activeTile === 'movement' ? (
@@ -715,28 +828,54 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
 
 function TurnoverTile({
   active,
+  index,
   icon,
   title,
   text,
   value,
+  tone,
   onClick,
 }: {
   active: boolean;
+  index: number;
   icon: React.ReactNode;
   title: string;
   text: string;
   value: string;
+  tone: 'lookup' | 'stock' | 'receipt' | 'export' | 'action' | 'stats';
   onClick: () => void;
 }) {
   return (
-    <button className={`turnover-tile ${active ? 'is-active' : ''}`} type="button" onClick={onClick}>
+    <button className={`turnover-tile turnover-tile--${tone} ${active ? 'is-active' : ''}`} type="button" onClick={onClick}>
+      <span className="turnover-tile__index">{index}</span>
       <span className="turnover-tile__icon">{icon}</span>
-      <span>
+      <span className="turnover-tile__content">
+        <small>{value}</small>
         <strong>{title}</strong>
-        <small>{text}</small>
+        <span>{text}</span>
       </span>
-      <em>{value}</em>
+      <ChevronRight size={22} aria-hidden="true" />
     </button>
+  );
+}
+
+function TurnoverSummaryTile({
+  label,
+  value,
+  icon,
+  tone,
+}: {
+  label: string;
+  value: string;
+  icon: React.ReactNode;
+  tone: 'neutral' | 'stock' | 'receipt' | 'shipment' | 'writeoff';
+}) {
+  return (
+    <div className={`turnover-summary-tile turnover-summary-tile--${tone}`}>
+      <span className="turnover-summary-tile__icon">{icon}</span>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }
 
@@ -787,19 +926,30 @@ function ReceiptExportSection({
 
 function StockExportSection({
   client,
+  items,
   ignoreActiveRequests,
   isDownloading,
   error,
   onIgnoreActiveRequestsChange,
   onDownload,
+  onOpenBox,
 }: {
   client: ClientSummary | null;
+  items: TurnoverSkuReport[];
   ignoreActiveRequests: boolean;
   isDownloading: boolean;
   error: string;
   onIgnoreActiveRequestsChange: (value: boolean) => void;
   onDownload: () => void;
+  onOpenBox: (boxCode: string) => void;
 }) {
+  const positiveRows = items.flatMap((item) => {
+    const barcodes = item.barcodes.length > 0 ? item.barcodes : item.primaryBarcode ? [item.primaryBarcode] : [];
+    return item.currentCells
+      .filter((cell) => cell.quantity > 0)
+      .flatMap((cell) => barcodes.map((barcode) => ({ item, cell, barcode })));
+  });
+
   return (
     <section className="turnover-panel turnover-receipt-export turnover-stock-export" aria-label="Выгрузка остатков">
       <div className="turnover-details__heading">
@@ -836,6 +986,35 @@ function StockExportSection({
       </div>
 
       {error ? <p className="form-error">{error}</p> : null}
+
+      <div className="turnover-positive-stock">
+        <header className="turnover-positive-stock__heading">
+          <div>
+            <p className="eyebrow">Фактические остатки</p>
+            <h3>Баркоды с положительным остатком</h3>
+          </div>
+          <span>{formatNumber(positiveRows.length)} строк</span>
+        </header>
+        <div className="turnover-table-wrap">
+          <table className="turnover-table turnover-positive-stock__table">
+            <thead><tr><th>Штрихкод</th><th>Товар</th><th>Артикул / размер</th><th>Остаток</th><th>Короб</th><th>Паллет-сорт</th><th>Зона хранения</th></tr></thead>
+            <tbody>
+              {positiveRows.length === 0 ? <tr><td colSpan={7}>Положительных остатков по выбранному клиенту нет.</td></tr> : null}
+              {positiveRows.map(({ item, cell, barcode }) => (
+                <tr key={`${item.skuId}-${barcode}-${cell.boxId ?? cell.boxCode}-${cell.status}`}>
+                  <td><strong className="turnover-positive-stock__barcode">{barcode}</strong></td>
+                  <td><strong>{item.name}</strong><span>{item.internalSku}</span></td>
+                  <td>{[item.article, item.size].filter(Boolean).join(' · ') || '—'}</td>
+                  <td><strong>{formatNumber(cell.quantity)} шт</strong></td>
+                  <td><button className="turnover-positive-stock__box" type="button" onClick={() => onOpenBox(cell.boxCode)}>{cell.boxCode}</button></td>
+                  <td>{cell.palletSortCode ?? cell.palletCode ?? 'Без паллет-сорта'}</td>
+                  <td>{storageZoneLabel(cell)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </section>
   );
 }
@@ -1026,6 +1205,7 @@ function MovementSection({
                 <th>Товар</th>
                 <th>ШК</th>
                 <th>Остаток</th>
+                <th>Размещение</th>
                 <th>Принято</th>
                 <th>Отгружено</th>
               </tr>
@@ -1033,7 +1213,7 @@ function MovementSection({
             <tbody>
               {filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={6}>По такому запросу товар не найден.</td>
+                  <td colSpan={7}>По такому запросу товар не найден.</td>
                 </tr>
               ) : null}
               {filteredItems.map((item) => (
@@ -1048,6 +1228,16 @@ function MovementSection({
                   </td>
                   <td>{item.primaryBarcode ?? 'нет'}</td>
                   <td>{formatNumber(item.currentQuantity)}</td>
+                  <td className="turnover-placement-cell">
+                    {item.currentCells.length === 0 ? <span>Нет остатка</span> : null}
+                    {item.currentCells.slice(0, 2).map((cell) => (
+                      <span className="turnover-placement-cell__item" key={`${cell.boxId ?? cell.boxCode}-${cell.status}-${cell.palletSortCode ?? ''}`}>
+                        <strong>{cell.boxCode}</strong>
+                        <small>{placementSummary(cell)}</small>
+                      </span>
+                    ))}
+                    {item.currentCells.length > 2 ? <small>Ещё размещений: {item.currentCells.length - 2}</small> : null}
+                  </td>
                   <td>{formatNumber(item.receivedQuantity)}</td>
                   <td>{formatNumber(item.shippedQuantity)}</td>
                 </tr>
@@ -1082,6 +1272,32 @@ function MovementDetails({
         <span>{item.primaryBarcode ?? item.internalSku}</span>
       </div>
 
+      <div className="turnover-current-placement">
+        <div className="turnover-current-placement__heading">
+          <strong>Текущее размещение</strong>
+          <span>{item.currentCells.length} мест</span>
+        </div>
+        <div className="turnover-cells">
+          {item.currentCells.length === 0 ? <span>На складе сейчас нет остатка.</span> : null}
+          {item.currentCells.map((cell) => (
+            <button
+              className="turnover-cell-card"
+              type="button"
+              key={`${cell.boxId ?? cell.boxCode}-${cell.status}-${cell.palletSortCode ?? ''}`}
+              onClick={() => onOpenBox(cell.boxCode)}
+              title={`Открыть содержимое короба ${cell.boxCode}`}
+            >
+              <strong>{cell.boxCode}</strong>
+              <span className="turnover-cell-card__placement">
+                <span>Зона хранения: <b>{storageZoneLabel(cell)}</b></span>
+                <span>Палет-сорт: <b>{cell.palletSortCode ?? cell.palletCode ?? 'не указан'}</b></span>
+              </span>
+              <small>{formatNumber(cell.quantity)} шт · {stockStatusLabel(cell.status)}</small>
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="turnover-metrics">
         <Metric label="Первый приход" value={formatDate(item.firstReceiptAt)} />
         <Metric
@@ -1091,22 +1307,6 @@ function MovementDetails({
         />
         <Metric label="Дней хранения" value={String(item.storageDays)} />
         <Metric label="КИЗ" value={String(item.kiz.length)} />
-      </div>
-
-      <div className="turnover-cells">
-        {item.currentCells.length === 0 ? <span>На складе сейчас нет остатка.</span> : null}
-        {item.currentCells.map((cell) => (
-          <button
-            className="turnover-cell-card"
-            type="button"
-            key={`${cell.boxCode}-${cell.status}`}
-            onClick={() => onOpenBox(cell.boxCode)}
-            title={`Открыть содержимое короба ${cell.boxCode}`}
-          >
-            <strong>{cell.boxCode}</strong>
-            <small>{formatNumber(cell.quantity)} шт · {stockStatusLabel(cell.status)}</small>
-          </button>
-        ))}
       </div>
 
       <div className="turnover-table-wrap turnover-table-wrap--compact">
@@ -1595,6 +1795,20 @@ function productTextFromOption(option: KnownValueOption) {
   return [name || option.label || option.value, barcode ? `ШК ${barcode}` : internalSku].filter(Boolean).join(' · ');
 }
 
+function productSearchOptionLabel(item: {
+  article?: string | null;
+  clientSku?: string | null;
+  internalSku: string;
+  size?: string | null;
+  barcode?: string | null;
+}) {
+  const article = item.article?.trim() || item.clientSku?.trim() || item.internalSku;
+  const articleAndSize = item.size?.trim() ? `${article}-${item.size.trim()}` : article;
+  return [articleAndSize, item.barcode?.trim() ? `ШК ${item.barcode.trim()}` : null]
+    .filter(Boolean)
+    .join(' · ');
+}
+
 function optionDataString(option: KnownValueOption, key: string) {
   const value = option.data?.[key];
   return value === null || value === undefined ? '' : String(value);
@@ -1603,8 +1817,8 @@ function optionDataString(option: KnownValueOption, key: string) {
 function buildProductOptions(items: TurnoverSkuReport[], products: TurnoverSuggestions['products']): KnownValueOption[] {
   return uniqueOptions([
     ...items.map((item) => ({
-      value: productText(item),
-      label: productText(item),
+      value: productSearchOptionLabel({ ...item, barcode: item.primaryBarcode }),
+      label: productSearchOptionLabel({ ...item, barcode: item.primaryBarcode }),
       description: `Остаток ${formatNumber(item.currentQuantity)} шт · ${item.article ?? item.internalSku}`,
       data: {
         skuId: item.skuId,
@@ -1612,20 +1826,24 @@ function buildProductOptions(items: TurnoverSkuReport[], products: TurnoverSugge
         internalSku: item.internalSku,
         clientSku: item.clientSku,
         article: item.article,
+        color: item.color,
+        size: item.size,
         barcode: item.primaryBarcode,
         boxCode: item.currentCells.find((cell) => cell.quantity > 0)?.boxCode ?? item.firstCell,
       },
     })),
     ...products.map((product) => ({
-      value: product.label,
-      label: product.label,
-      description: `Остаток ${formatNumber(product.quantity)} шт · ${product.article ?? product.internalSku}`,
+      value: productSearchOptionLabel(product),
+      label: productSearchOptionLabel(product),
+      description: `${product.name} · остаток ${formatNumber(product.quantity)} шт`,
       data: {
         skuId: product.skuId,
         name: product.name,
         internalSku: product.internalSku,
         clientSku: product.clientSku,
         article: product.article,
+        color: product.color,
+        size: product.size,
         barcode: product.barcode,
         boxCode: product.boxCode,
       },
@@ -1831,6 +2049,7 @@ function formatDateTime(value?: string | null) {
 function stockStatusLabel(status: string) {
   const labels: Record<string, string> = {
     AVAILABLE: 'Доступно',
+    IN_TRANSIT: 'В пути между филиалами',
     RECEIVING: 'Приемка',
     RESERVED: 'Зарезервировано',
     PACKING: 'В сборке',
@@ -1841,6 +2060,18 @@ function stockStatusLabel(status: string) {
   };
 
   return labels[status] ?? status;
+}
+
+function storageZoneLabel(cell: TurnoverSkuReport['currentCells'][number]) {
+  if (!cell.storageZone) return 'не указана';
+  return cell.storageZone.name && cell.storageZone.name !== cell.storageZone.code
+    ? `${cell.storageZone.code} · ${cell.storageZone.name}`
+    : cell.storageZone.code;
+}
+
+function placementSummary(cell: TurnoverSkuReport['currentCells'][number]) {
+  const palletSort = cell.palletSortCode ?? cell.palletCode ?? 'без палет-сорта';
+  return `${storageZoneLabel(cell)} · ${palletSort}`;
 }
 
 function buildActionKey(action: string, skuId: string) {

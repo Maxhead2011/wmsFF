@@ -1,5 +1,5 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { ClientNotificationEvent, ClientRequestEventType, ClientRequestStatus, ClientRequestType, Prisma, StockStatus } from '@prisma/client';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ClientNotificationEvent, ClientRequestEventType, ClientRequestStatus, ClientRequestType, MovementType, Prisma, StockStatus } from '@prisma/client';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
@@ -9,12 +9,21 @@ import { TelegramNotificationService } from '../client-notifications/telegram-no
 import { StockOperationsService } from '../stock/stock-operations.service';
 import { clientRequestFileSummarySelect } from './client-request-files.service';
 import { clientRequestPackageInclude } from './client-request-packages.include';
+import {
+  assertWarehouseAccess,
+  effectiveWarehouseId,
+  warehouseScopeWhere,
+} from './client-request-warehouse-scope';
 import { CreateClientRequestDto } from './dto/create-client-request.dto';
 import { ListClientRequestsDto } from './dto/list-client-requests.dto';
 import { PreviewClientRequestAvailabilityDto } from './dto/preview-client-request-availability.dto';
 import { UpdateClientRequestDto } from './dto/update-client-request.dto';
 import { UpdateClientRequestBoxSelectionDto } from './dto/update-client-request-box-selection.dto';
 import { UpdateClientRequestStatusDto } from './dto/update-client-request-status.dto';
+import type { FbsSynchronizationResolutionAction } from './dto/resolve-fbs-synchronization.dto';
+
+const FBS_NO_BOX_CODE = 'БЕЗ КОРОБА';
+const fbsStockReservationStatuses = ['RESERVED', 'IN_PROGRESS', 'COMPLETED', 'RETURN_REQUIRED'];
 
 @Injectable()
 export class ClientRequestsService {
@@ -25,15 +34,20 @@ export class ClientRequestsService {
     private readonly telegram?: TelegramNotificationService,
   ) {}
 
-  list(query: ListClientRequestsDto, user: AuthUser) {
+  async list(query: ListClientRequestsDto, user: AuthUser) {
     const boxCode = query.boxCode?.trim();
     const where: Prisma.ClientRequestWhereInput = {
       clientId: this.clientScopes.resolveClientFilter(user, query.clientId),
+      warehouseId:
+        user.activeWarehouseId && !user.roleCodes.includes('CLIENT')
+          ? user.activeWarehouseId
+          : undefined,
+      ...warehouseScopeWhere(user),
       status:
         query.status ??
         (query.archive
-          ? ClientRequestStatus.DONE
-          : { not: ClientRequestStatus.DONE }),
+          ? { in: [ClientRequestStatus.DONE, ClientRequestStatus.CANCELLED] }
+          : { notIn: [ClientRequestStatus.DONE, ClientRequestStatus.CANCELLED] }),
       type: query.type,
       AND: boxCode
         ? [
@@ -65,11 +79,73 @@ export class ClientRequestsService {
         : undefined,
     };
 
-    return this.prisma.clientRequest.findMany({
+    const requests = await this.prisma.clientRequest.findMany({
       where,
       include: clientRequestInclude,
       orderBy: [{ updatedAt: 'desc' }],
       take: 200,
+    });
+    const fbsRequestIds = requests
+      .filter((request) => request._count.fbsOrderLinks > 0)
+      .map((request) => request.id);
+    if (fbsRequestIds.length === 0) {
+      return requests;
+    }
+
+    const [links, assemblies] = await Promise.all([
+      this.prisma.fbsOrderRequestLink.findMany({
+        where: {
+          requestId: { in: fbsRequestIds },
+          syncStatus: { notIn: ['REMOVED', 'MOVING'] },
+          lastCategory: { not: 'cancelled' },
+        },
+        select: { requestId: true, orderId: true },
+      }),
+      this.prisma.fbsTsdAssembly.findMany({
+        where: { requestId: { in: fbsRequestIds } },
+        select: { requestId: true, orderId: true, status: true, completedAt: true },
+      }),
+    ]);
+    const emergencyAssemblyAtByRequest = new Map(
+      requests.map((request) => [request.id, request.fbsEmergencyAssemblyAt?.getTime() ?? null]),
+    );
+    const activeOrdersByRequest = new Map<string, Set<string>>();
+    for (const link of links) {
+      const orders = activeOrdersByRequest.get(link.requestId) ?? new Set<string>();
+      orders.add(link.orderId);
+      activeOrdersByRequest.set(link.requestId, orders);
+    }
+    const completedOrdersByRequest = new Map<string, Set<string>>();
+    for (const assembly of assemblies) {
+      if (
+        assembly.status !== 'COMPLETED' ||
+        !activeOrdersByRequest.get(assembly.requestId)?.has(assembly.orderId) ||
+        (emergencyAssemblyAtByRequest.get(assembly.requestId) !== null &&
+          (!assembly.completedAt ||
+            assembly.completedAt.getTime() < (emergencyAssemblyAtByRequest.get(assembly.requestId) ?? 0)))
+      ) {
+        continue;
+      }
+      const orders = completedOrdersByRequest.get(assembly.requestId) ?? new Set<string>();
+      orders.add(assembly.orderId);
+      completedOrdersByRequest.set(assembly.requestId, orders);
+    }
+
+    return requests.map((request) => {
+      const totalOrders = activeOrdersByRequest.get(request.id)?.size ?? 0;
+      if (totalOrders === 0) {
+        return request;
+      }
+      const completedOrders = completedOrdersByRequest.get(request.id)?.size ?? 0;
+      return {
+        ...request,
+        fbsCompletion: {
+          totalOrders,
+          completedOrders,
+          percent: Math.min(100, Math.round((completedOrders / totalOrders) * 100)),
+          completed: completedOrders === totalOrders,
+        },
+      };
     });
   }
 
@@ -84,11 +160,24 @@ export class ClientRequestsService {
     }
 
     this.clientScopes.requireClientAccess(user, request.clientId, 'read');
+    assertWarehouseAccess(user, request, 'read', 'Заявка не найдена в выбранном филиале.');
+    if (
+      user.activeWarehouseId &&
+      !user.roleCodes.includes('CLIENT') &&
+      request.warehouseId !== user.activeWarehouseId
+    ) {
+      throw new NotFoundException('Заявка не найдена в выбранном филиале.');
+    }
     return request;
   }
 
   async previewAvailability(dto: PreviewClientRequestAvailabilityDto, user: AuthUser): Promise<ClientRequestAvailabilityPreview> {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+    const warehouseId = await this.resolveRequestWarehouse(
+      dto.clientId,
+      dto.warehouseId,
+      user,
+    );
     const items = dto.items ?? [];
 
     if (dto.type !== ClientRequestType.OUTBOUND || items.length === 0) {
@@ -112,8 +201,21 @@ export class ClientRequestsService {
     const resolved = await this.resolveAvailabilityItems(dto.clientId, items);
     const skuIds = [...new Set(resolved.map((line) => line.skuId).filter(Boolean))] as string[];
     const barcodes = [...new Set(resolved.map((line) => line.barcode).filter(Boolean))] as string[];
-    const stockBySkuId = await this.stockQuantityBySkuId(dto.clientId, skuIds);
-    const reservationsBySkuId = await this.activeReservationBySkuId(dto.clientId, skuIds, barcodes, dto.excludeRequestId);
+    const includeLegacyMoscowRows = await this.isPrimaryMoscowWarehouse(warehouseId);
+    const stockBySkuId = await this.stockQuantityBySkuId(
+      dto.clientId,
+      skuIds,
+      warehouseId,
+      includeLegacyMoscowRows,
+    );
+    const reservationsBySkuId = await this.activeReservationBySkuId(
+      dto.clientId,
+      skuIds,
+      barcodes,
+      dto.excludeRequestId,
+      warehouseId,
+      includeLegacyMoscowRows,
+    );
 
     const lines = resolved.map((line) => {
       if (!line.skuId) {
@@ -164,6 +266,11 @@ export class ClientRequestsService {
 
   async create(dto: CreateClientRequestDto, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+    const warehouseId = await this.resolveRequestWarehouse(
+      dto.clientId,
+      dto.warehouseId,
+      user,
+    );
     await this.ensureSkuItemsBelongToClient(dto.clientId, dto.items ?? []);
     const destinationCity = normalizeRequiredText(dto.destinationCity, 'Город поставки обязателен.');
 
@@ -172,6 +279,7 @@ export class ClientRequestsService {
       const request = await tx.clientRequest.create({
         data: {
           clientId: dto.clientId,
+          warehouseId,
           type: dto.type,
           status: ClientRequestStatus.SUBMITTED,
           priority: dto.priority ?? 'NORMAL',
@@ -229,7 +337,7 @@ export class ClientRequestsService {
   async update(id: string, dto: UpdateClientRequestDto, user: AuthUser) {
     const request = await this.prisma.clientRequest.findUnique({
       where: { id },
-      select: { id: true, clientId: true, status: true },
+      select: { id: true, clientId: true, warehouseId: true, status: true },
     });
 
     if (!request) {
@@ -237,6 +345,7 @@ export class ClientRequestsService {
     }
 
     this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+    assertWarehouseAccess(user, request, 'write', 'Заявка не найдена в выбранном филиале.');
 
     if (!canEditClientRequestAnyStatus(user) && !clientEditableStatuses.has(request.status)) {
       throw new BadRequestException('Заявку можно редактировать только до начала работы склада.');
@@ -301,7 +410,8 @@ export class ClientRequestsService {
       throw new NotFoundException('Клиентская заявка не найдена.');
     }
     this.clientScopes.requireClientAccess(user, request.clientId, 'read');
-    assertManualBoxSelectionRequest(request);
+    assertWarehouseAccess(user, request, 'read', 'Заявка не найдена в выбранном филиале.');
+    assertStockSourceResolutionRequest(request);
 
     const resolvedItems = await Promise.all(
       request.items.map(async (item) => ({
@@ -323,11 +433,12 @@ export class ClientRequestsService {
       })),
     );
     const skuIds = [...new Set(resolvedItems.map((row) => row.sku?.id).filter((value): value is string => Boolean(value)))];
-    const [balances, savedSelections] = await Promise.all([
+    const [balances, savedSelections, fbsOrderLinks, fbsTasks] = await Promise.all([
       skuIds.length
         ? this.prisma.stockBalance.findMany({
             where: {
               clientId: request.clientId,
+              warehouseId: request.warehouseId ?? undefined,
               skuId: { in: skuIds },
               status: { in: manualSelectionStockStatuses },
               quantity: { gt: 0 },
@@ -342,7 +453,38 @@ export class ClientRequestsService {
         include: { box: { select: { id: true, code: true, status: true } } },
         orderBy: [{ box: { code: 'asc' } }],
       }),
+      this.prisma.fbsOrderRequestLink.findMany({
+        where: {
+          requestId: request.id,
+          syncStatus: { not: 'REMOVED' },
+        },
+        select: {
+          connectionId: true,
+          orderId: true,
+          lastSkuId: true,
+          lastCategory: true,
+          lastSupplierStatus: true,
+          lastWbStatus: true,
+        },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.fbsTsdAssembly.findMany({
+        where: { requestId: request.id },
+        select: {
+          connectionId: true,
+          orderId: true,
+          status: true,
+          boxCode: true,
+          reservedBoxCode: true,
+          sourceBoxPending: true,
+          barcode: true,
+          stickerPartB: true,
+        },
+      }),
     ]);
+    const fbsTaskByOrder = new Map(
+      fbsTasks.map((task) => [`${task.connectionId}:${task.orderId}`, task]),
+    );
 
     return {
       request: {
@@ -414,7 +556,35 @@ export class ClientRequestsService {
             : null,
           requestedBarcode: item.barcode,
           requestedName: item.name,
-          boxes: [...boxes.values()].sort((left, right) => left.boxCode.localeCompare(right.boxCode, 'ru')),
+          itemComment: item.comment,
+          fbsOrders: fbsOrderLinks
+            .filter((link) => link.lastSkuId === sku?.id)
+            .map((link) => {
+              const task = fbsTaskByOrder.get(`${link.connectionId}:${link.orderId}`);
+              return {
+                orderId: link.orderId,
+                assemblyStatus: task?.status ?? 'NOT_STARTED',
+                sourceBoxPending: task?.sourceBoxPending ?? false,
+                boxCode:
+                  task?.boxCode ?? task?.reservedBoxCode ?? null,
+                barcode: task?.barcode ?? null,
+                stickerPartB: task?.stickerPartB ?? null,
+                wbStatus:
+                  link.lastWbStatus ??
+                  link.lastSupplierStatus ??
+                  link.lastCategory ??
+                  null,
+              };
+            }),
+          boxes: [...boxes.values()].sort((left, right) => {
+            if (left.selectedQuantity !== right.selectedQuantity) {
+              return right.selectedQuantity - left.selectedQuantity;
+            }
+            if (left.availableQuantity !== right.availableQuantity) {
+              return right.availableQuantity - left.availableQuantity;
+            }
+            return left.boxCode.localeCompare(right.boxCode, 'ru');
+          }),
         };
       }),
     };
@@ -429,7 +599,8 @@ export class ClientRequestsService {
         title: true,
         status: true,
         clientId: true,
-        client: { select: { id: true, code: true, name: true } },
+        warehouseId: true,
+        client: { select: { id: true, code: true, name: true, storesWithoutBoxes: true } },
         items: {
           select: {
             id: true,
@@ -460,17 +631,160 @@ export class ClientRequestsService {
       throw new NotFoundException('Клиентская заявка не найдена.');
     }
     this.clientScopes.requireClientAccess(user, request.clientId, 'read');
+    assertWarehouseAccess(user, request, 'read', 'Заявка не найдена в выбранном филиале.');
     if (request.fbsOrderLinks.length === 0) {
       throw new BadRequestException('Поиск коробов доступен только для заявки, созданной из FBS-заказов.');
     }
 
     const linkedOrderIds = new Set(request.fbsOrderLinks.map((link) => link.orderId));
     const skuIds = [...new Set(request.items.map((item) => item.skuId).filter((value): value is string => Boolean(value)))];
+    const warehouseRequestIds = request.warehouseId
+      ? (
+          await this.prisma.clientRequest.findMany({
+            where: { clientId: request.clientId, warehouseId: request.warehouseId },
+            select: { id: true },
+          })
+        ).map((candidate) => candidate.id)
+      : undefined;
+    if (request.client.storesWithoutBoxes) {
+      const [balances, reservations] = await Promise.all([
+        skuIds.length
+          ? this.prisma.stockBalance.findMany({
+              where: {
+                clientId: request.clientId,
+                warehouseId: request.warehouseId ?? undefined,
+                skuId: { in: skuIds },
+                status: StockStatus.AVAILABLE,
+                quantity: { gt: 0 },
+                boxId: null,
+              },
+              select: {
+                skuId: true,
+                quantity: true,
+              },
+            })
+          : Promise.resolve([]),
+        skuIds.length
+          ? this.prisma.fbsTsdAssembly.findMany({
+              where: {
+                clientId: request.clientId,
+                requestId: warehouseRequestIds ? { in: warehouseRequestIds } : undefined,
+                skuId: { in: skuIds },
+                boxId: null,
+                reservedBoxId: null,
+                boxCode: FBS_NO_BOX_CODE,
+                status: { in: fbsStockReservationStatuses },
+              },
+              select: {
+                orderId: true,
+                requestId: true,
+                requestItemId: true,
+                skuId: true,
+                itemCount: true,
+                status: true,
+              },
+            })
+          : Promise.resolve([]),
+      ]);
+      const availableBySku = new Map<string, number>();
+      for (const balance of balances) {
+        availableBySku.set(
+          balance.skuId,
+          (availableBySku.get(balance.skuId) ?? 0) + balance.quantity,
+        );
+      }
+      const reservedBySku = new Map<string, number>();
+      for (const reservation of reservations) {
+        reservedBySku.set(
+          reservation.skuId,
+          (reservedBySku.get(reservation.skuId) ?? 0) + reservation.itemCount,
+        );
+      }
+      const warehouseStock = request.items.flatMap((item) => {
+        if (!item.skuId || !item.sku) return [];
+        const parsedOrderIds = parseFbsOrderIds(item.comment).filter((orderId) =>
+          linkedOrderIds.has(orderId),
+        );
+        const itemOrderIds = parsedOrderIds.length > 0
+          ? parsedOrderIds
+          : request.items.length === 1
+            ? [...linkedOrderIds]
+            : reservations
+                .filter(
+                  (reservation) =>
+                    reservation.requestId === request.id &&
+                    reservation.requestItemId === item.id,
+                )
+                .map((reservation) => reservation.orderId);
+        const orderIds = [...new Set(itemOrderIds)].sort(naturalOrderIdCompare);
+        const reservedOrderIds = [
+          ...new Set(
+            reservations
+              .filter(
+                (reservation) =>
+                  reservation.requestId === request.id &&
+                  reservation.skuId === item.skuId &&
+                  orderIds.includes(reservation.orderId),
+              )
+              .map((reservation) => reservation.orderId),
+          ),
+        ].sort(naturalOrderIdCompare);
+        const availableQuantity = availableBySku.get(item.skuId) ?? 0;
+        const reservedQuantity = reservedBySku.get(item.skuId) ?? 0;
+        return [{
+          requestItemId: item.id,
+          skuId: item.skuId,
+          productName: item.sku.name || item.name || 'Товар без наименования',
+          article: item.sku.article ?? item.sku.internalSku,
+          barcodes: item.sku.barcodes.map((barcode) => barcode.value),
+          requestedQuantity: item.quantity,
+          availableQuantity,
+          reservedQuantity,
+          freeQuantity: Math.max(0, availableQuantity - reservedQuantity),
+          orderIds,
+          reservedOrderIds,
+        }];
+      });
+      const foundOrderIds = new Set(
+        warehouseStock
+          .filter((item) => item.availableQuantity > 0)
+          .flatMap((item) => item.orderIds),
+      );
+      const confirmedOrderIds = new Set(
+        warehouseStock.flatMap((item) => item.reservedOrderIds),
+      );
+      const { storesWithoutBoxes: _storesWithoutBoxes, ...client } = request.client;
+      return {
+        stockMode: 'WITHOUT_BOXES' as const,
+        request: {
+          id: request.id,
+          number: request.number,
+          title: request.title,
+          status: request.status,
+          client,
+        },
+        summary: {
+          boxes: 0,
+          orders: linkedOrderIds.size,
+          confirmedOrders: confirmedOrderIds.size,
+          unmatchedOrders: [...linkedOrderIds].filter(
+            (orderId) => !foundOrderIds.has(orderId),
+          ).length,
+        },
+        warehouseStock,
+        boxes: [],
+        unmatchedOrderIds: [...linkedOrderIds]
+          .filter((orderId) => !foundOrderIds.has(orderId))
+          .sort(naturalOrderIdCompare),
+      };
+    }
+
     const [balances, requestTasks, reservations] = await Promise.all([
       skuIds.length
         ? this.prisma.stockBalance.findMany({
             where: {
               clientId: request.clientId,
+              warehouseId: request.warehouseId ?? undefined,
               skuId: { in: skuIds },
               status: StockStatus.AVAILABLE,
               quantity: { gt: 0 },
@@ -493,19 +807,29 @@ export class ClientRequestsService {
         ? this.prisma.fbsTsdAssembly.findMany({
             where: {
               clientId: request.clientId,
+              requestId: warehouseRequestIds ? { in: warehouseRequestIds } : undefined,
               skuId: { in: skuIds },
-              boxId: { not: null },
-              status: { in: ['IN_PROGRESS', 'COMPLETED'] },
+              OR: [
+                { boxId: { not: null } },
+                { reservedBoxId: { not: null } },
+              ],
+              status: { in: ['RESERVED', 'IN_PROGRESS', 'COMPLETED'] },
             },
-            select: { skuId: true, boxId: true, itemCount: true },
+            select: {
+              skuId: true,
+              boxId: true,
+              reservedBoxId: true,
+              itemCount: true,
+            },
           })
         : Promise.resolve([]),
     ]);
 
     const reservedBySkuBox = new Map<string, number>();
     reservations.forEach((reservation) => {
-      if (!reservation.boxId) return;
-      const key = `${reservation.skuId}:${reservation.boxId}`;
+      const boxId = reservation.boxId ?? reservation.reservedBoxId;
+      if (!boxId) return;
+      const key = `${reservation.skuId}:${boxId}`;
       reservedBySkuBox.set(key, (reservedBySkuBox.get(key) ?? 0) + reservation.itemCount);
     });
     const exactTaskByOrderId = new Map(
@@ -607,13 +931,15 @@ export class ClientRequestsService {
     );
     const foundOrderIds = new Set(allCandidateBoxes.flatMap((box) => box.orderIds));
 
+    const { storesWithoutBoxes: _storesWithoutBoxes, ...client } = request.client;
     return {
+      stockMode: 'BOXES' as const,
       request: {
         id: request.id,
         number: request.number,
         title: request.title,
         status: request.status,
-        client: request.client,
+        client,
       },
       summary: {
         boxes: resultBoxes.length,
@@ -621,6 +947,7 @@ export class ClientRequestsService {
         confirmedOrders: new Set(resultBoxes.flatMap((box) => box.confirmedOrderIds)).size,
         unmatchedOrders: [...linkedOrderIds].filter((orderId) => !foundOrderIds.has(orderId)).length,
       },
+      warehouseStock: [],
       boxes: resultBoxes,
       unmatchedOrderIds: [...linkedOrderIds].filter((orderId) => !foundOrderIds.has(orderId)).sort(naturalOrderIdCompare),
     };
@@ -639,6 +966,70 @@ export class ClientRequestsService {
       second: '2-digit',
       hour12: false,
     }).format(new Date());
+    if (data.stockMode === 'WITHOUT_BOXES') {
+      const summaryRows: Array<Array<string | number>> = [
+        ['Остатки склада FBS без коробов'],
+        ['Заявка', `№${String(data.request.number).padStart(6, '0')} · ${data.request.title}`],
+        ['Клиент', `${data.request.client.code} · ${data.request.client.name}`],
+        ['Заказов в заявке', data.summary.orders],
+        ['Товарных позиций', data.warehouseStock.length],
+        ['Зарезервировано заказов', data.summary.confirmedOrders],
+        ['Сформировано', generatedAt],
+        [],
+        ['Режим хранения', 'Поштучный остаток без привязки к коробам и палет-сортам.'],
+      ];
+      const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
+      summarySheet['!cols'] = [{ wch: 27 }, { wch: 92 }];
+      XLSX.utils.book_append_sheet(workbook, summarySheet, 'Сводка');
+
+      const detailsRows: Array<Array<string | number>> = [
+        [
+          'Товар',
+          'Артикул',
+          'Штрихкоды',
+          'Заказы WB',
+          'Нужно по заявке, шт.',
+          'Остаток на складе, шт.',
+          'Зарезервировано, шт.',
+          'Свободно, шт.',
+        ],
+        ...data.warehouseStock.map((item) => [
+          item.productName,
+          item.article ?? '',
+          item.barcodes.join(', '),
+          formatFbsOrderIds(item.orderIds),
+          item.requestedQuantity,
+          item.availableQuantity,
+          item.reservedQuantity,
+          item.freeQuantity,
+        ]),
+      ];
+      const detailsSheet = XLSX.utils.aoa_to_sheet(detailsRows);
+      detailsSheet['!cols'] = [
+        { wch: 46 },
+        { wch: 24 },
+        { wch: 34 },
+        { wch: 34 },
+        { wch: 20 },
+        { wch: 24 },
+        { wch: 22 },
+        { wch: 16 },
+      ];
+      detailsSheet['!autofilter'] = {
+        ref: XLSX.utils.encode_range({
+          s: { r: 0, c: 0 },
+          e: { r: Math.max(0, detailsRows.length - 1), c: detailsRows[0].length - 1 },
+        }),
+      };
+      XLSX.utils.book_append_sheet(workbook, detailsSheet, 'Остатки склада');
+
+      return {
+        fileName: `fbs-warehouse-stock-${String(data.request.number).padStart(6, '0')}.xlsx`,
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        content: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer,
+      };
+    }
+
     const summaryRows: Array<Array<string | number>> = [
       ['Совпадающие короба FBS'],
       ['Заявка', `№${String(data.request.number).padStart(6, '0')} · ${data.request.title}`],
@@ -722,6 +1113,7 @@ export class ClientRequestsService {
         throw new NotFoundException('Клиентская заявка не найдена.');
       }
       this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+      assertWarehouseAccess(user, request, 'write', 'Заявка не найдена в выбранном филиале.');
       assertManualBoxSelectionRequest(request);
       if (!manualBoxSelectionEditableStatuses.has(request.status)) {
         throw new BadRequestException('Короба можно выбирать только до упаковки и сдачи заявки.');
@@ -774,6 +1166,7 @@ export class ClientRequestsService {
       const balances = await tx.stockBalance.findMany({
         where: {
           clientId: request.clientId,
+          warehouseId: request.warehouseId ?? undefined,
           boxId: { in: requestedBoxIds },
           skuId: { in: [...new Set([...resolvedSkuByItem.values()].map((sku) => sku.id))] },
           status: { in: manualSelectionStockStatuses },
@@ -863,6 +1256,7 @@ export class ClientRequestsService {
       select: {
         id: true,
         clientId: true,
+        warehouseId: true,
         type: true,
         status: true,
         title: true,
@@ -882,6 +1276,7 @@ export class ClientRequestsService {
 
     // Русский комментарий: даже менеджер с ограниченным scope не меняет статусы чужого клиента.
     this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+    assertWarehouseAccess(user, request, 'write', 'Заявка не найдена в выбранном филиале.');
 
     const shouldFinalizeStockRequest =
       dto.status === ClientRequestStatus.DONE &&
@@ -949,6 +1344,133 @@ export class ClientRequestsService {
     return updated;
   }
 
+  /**
+   * Resolves a marketplace-status discrepancy without using the marketplace
+   * as a warehouse ledger. CONFIRM_DELIVERED is allowed only when an exact,
+   * idempotent physical SHIP movement for the WMS request already exists.
+   */
+  async resolveFbsSynchronization(
+    id: string,
+    action: FbsSynchronizationResolutionAction,
+    requestNumber: number,
+    user: AuthUser,
+  ) {
+    const request = await this.prisma.clientRequest.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        number: true,
+        title: true,
+        clientId: true,
+        warehouseId: true,
+        status: true,
+        type: true,
+        items: { select: { quantity: true } },
+        fbsOrderLinks: {
+          where: { syncStatus: { notIn: ['REMOVED', 'MOVING'] } },
+          select: {
+            lastCategory: true,
+            lastSupplierStatus: true,
+          },
+        },
+      },
+    });
+    if (!request) {
+      throw new NotFoundException('FBS-заявка не найдена.');
+    }
+    this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+    assertWarehouseAccess(user, request, 'write', 'Заявка не найдена в выбранном филиале.');
+    if (requestNumber !== request.number) {
+      throw new BadRequestException('Введите номер именно этой заявки для подтверждения действия.');
+    }
+    if (request.type !== ClientRequestType.OUTBOUND || request.fbsOrderLinks.length === 0) {
+      throw new BadRequestException('Действие доступно только для FBS-заявки.');
+    }
+
+    const hasUndeliveredMarketplaceOrder = request.fbsOrderLinks.some(
+      (link) => !['archive', 'cancelled'].includes(link.lastCategory ?? ''),
+    );
+    if (hasUndeliveredMarketplaceOrder) {
+      throw new BadRequestException(
+        'В заявке есть заказы, которые ещё не доставлены покупателю. Заявка остаётся в работе.',
+      );
+    }
+
+    // Marketplace statuses are informational and must never be the source of
+    // truth for warehouse balances. A request may be confirmed as delivered
+    // by the reconciliation tool only after the physical WMS shipment has
+    // already written off exactly the quantity recorded in the request.
+    if (action === 'CONFIRM_DELIVERED') {
+      const shipped = await this.prisma.stockMovement.aggregate({
+        where: {
+          sourceDocument: request.id,
+          type: MovementType.SHIP,
+          quantity: { lt: 0 },
+        },
+        _sum: { quantity: true },
+      });
+      const requestQuantity = request.items.reduce(
+        (sum, item) => sum + Math.max(0, item.quantity),
+        0,
+      );
+      const shippedQuantity = Math.abs(shipped._sum.quantity ?? 0);
+      if (shippedQuantity !== requestQuantity) {
+        throw new BadRequestException(
+          `Статус Wildberries не может изменить остатки WMS. ` +
+            `В заявке ${requestQuantity} ед., физически списано ${shippedQuantity} ед. ` +
+            'Закройте заявку действием «Сдано»: WMS спишет товары по фактическому составу заявки. ' +
+            'Последующие статусы, отмены и возвраты Wildberries остатки не изменят.',
+        );
+      }
+    }
+
+    const nextStatus =
+      action === 'CONFIRM_DELIVERED'
+        ? ClientRequestStatus.DONE
+        : ClientRequestStatus.IN_WORK;
+    const comment =
+      action === 'CONFIRM_DELIVERED'
+        ? 'Сдача подтверждена после проверки физического списания WMS. Статусы маркетплейса остатки не изменяли.'
+        : 'Заявка возвращена в работу по результату проверки FBS. Статусы маркетплейса и остатки не изменялись.';
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.clientRequest.update({
+        where: { id: request.id },
+        data: {
+          status: nextStatus,
+          managerComment: comment,
+          assignedToUserId: nextStatus === ClientRequestStatus.IN_WORK ? user.id : undefined,
+        },
+        include: clientRequestInclude,
+      });
+      if (request.status !== nextStatus) {
+        await tx.clientRequestEvent.create({
+          data: {
+            requestId: request.id,
+            clientId: request.clientId,
+            eventType: ClientRequestEventType.STATUS_CHANGED,
+            title:
+              action === 'CONFIRM_DELIVERED'
+                ? 'Сдача FBS-заявки подтверждена'
+                : 'FBS-заявка возвращена в работу',
+            body: comment,
+            statusFrom: request.status,
+            statusTo: nextStatus,
+            createdByUserId: user.id,
+          },
+        });
+      }
+      return result;
+    });
+
+    return {
+      request: updated,
+      action,
+      stockChanged: false,
+      message: comment,
+    };
+  }
+
   private async finalizeOutboundByManualStatus(
     request: {
       id: string;
@@ -964,6 +1486,31 @@ export class ClientRequestsService {
   ) {
     const comment = normalizeText(dto.managerComment) ?? 'Заявка сдана вручную; остатки списаны автоматически.';
     const usesRecordedPackages = request.status === ClientRequestStatus.PACKED && request.packages.length > 0;
+    const pendingSourceTasks = this.prisma.fbsTsdAssembly?.findMany
+      ? await this.prisma.fbsTsdAssembly.findMany({
+          where: {
+            requestId: request.id,
+            status: 'COMPLETED',
+            sourceBoxPending: true,
+          },
+          select: { id: true, orderId: true, requestItemId: true },
+        })
+      : [];
+    if (pendingSourceTasks.length > 0) {
+      const sourceItemIds = new Set(
+        (dto.stockSources ?? [])
+          .filter((source) => source.quantity > 0)
+          .map((source) => source.requestItemId),
+      );
+      const unresolved = pendingSourceTasks.filter(
+        (task) => !sourceItemIds.has(task.requestItemId),
+      );
+      if (unresolved.length > 0) {
+        throw new BadRequestException(
+          `Для заказов №${unresolved.map((task) => task.orderId).join(', №')} товар был вложен без исходного короба. Укажите фактический короб, откуда он был взят, и повторите закрытие заявки.`,
+        );
+      }
+    }
 
     if (
       !usesRecordedPackages &&
@@ -973,7 +1520,7 @@ export class ClientRequestsService {
       const selectedBoxes = await this.prisma.clientRequestBoxSelection.count({
         where: { requestItem: { requestId: request.id } },
       });
-      if (selectedBoxes === 0) {
+      if (selectedBoxes === 0 && !dto.stockSources?.length) {
         throw new BadRequestException('Сначала нажмите «Выбрать короба» и укажите, откуда списывать товары заявки.');
       }
     }
@@ -987,15 +1534,36 @@ export class ClientRequestsService {
       packedUnits: dto.packedUnits,
       packages: dto.packages,
     };
-    if (usesRecordedPackages) {
+    if (pendingSourceTasks.length > 0 && dto.stockSources?.length) {
+      await this.stockOperations.shipClientRequestFromCurrentStock(
+        fulfillment,
+        user,
+        dto.stockSources,
+      );
+    } else if (usesRecordedPackages) {
       // Аварийное закрытие уже зафиксировало фактические короба, их состав и складские движения.
       // При сдаче повторно ничего не подбираем из остатков: начисления и логистика берутся из этих упаковочных мест.
       await this.stockOperations.shipClientRequest(fulfillment, user);
+    } else if (dto.stockSources?.length) {
+      await this.stockOperations.shipClientRequestFromCurrentStock(
+        fulfillment,
+        user,
+        dto.stockSources,
+      );
     } else {
       await this.stockOperations.shipClientRequestFromCurrentStock(fulfillment, user);
     }
 
     return this.prisma.$transaction(async (tx) => {
+      if (pendingSourceTasks.length > 0) {
+        await tx.fbsTsdAssembly.updateMany({
+          where: {
+            id: { in: pendingSourceTasks.map((task) => task.id) },
+            sourceBoxPending: true,
+          },
+          data: { sourceBoxPending: false },
+        });
+      }
       const updated = await tx.clientRequest.update({
         where: { id: request.id },
         data: {
@@ -1043,7 +1611,7 @@ export class ClientRequestsService {
   async cancel(id: string, user: AuthUser) {
     const request = await this.prisma.clientRequest.findUnique({
       where: { id },
-      select: { id: true, clientId: true, status: true, title: true },
+      select: { id: true, clientId: true, warehouseId: true, status: true, title: true },
     });
 
     if (!request) {
@@ -1051,6 +1619,7 @@ export class ClientRequestsService {
     }
 
     this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+    assertWarehouseAccess(user, request, 'write', 'Заявка не найдена в выбранном филиале.');
 
     if (request.status === ClientRequestStatus.CANCELLED) {
       return this.get(id, user);
@@ -1188,7 +1757,12 @@ export class ClientRequestsService {
     });
   }
 
-  private async stockQuantityBySkuId(clientId: string, skuIds: string[]) {
+  private async stockQuantityBySkuId(
+    clientId: string,
+    skuIds: string[],
+    warehouseId: string,
+    includeLegacyUnassigned = false,
+  ) {
     if (skuIds.length === 0) {
       return new Map<string, number>();
     }
@@ -1200,6 +1774,14 @@ export class ClientRequestsService {
         skuId: { in: skuIds },
         status: StockStatus.AVAILABLE,
         quantity: { gt: 0 },
+        ...(includeLegacyUnassigned
+          ? {
+              OR: [
+                { box: { warehouseId } },
+                { box: { warehouseId: null } },
+              ],
+            }
+          : { box: { warehouseId } }),
       },
       _sum: { quantity: true },
     });
@@ -1207,7 +1789,14 @@ export class ClientRequestsService {
     return new Map(stockRows.map((row) => [row.skuId, Number(row._sum.quantity ?? 0)]));
   }
 
-  private async activeReservationBySkuId(clientId: string, skuIds: string[], barcodes: string[], excludeRequestId?: string) {
+  private async activeReservationBySkuId(
+    clientId: string,
+    skuIds: string[],
+    barcodes: string[],
+    excludeRequestId: string | undefined,
+    warehouseId: string,
+    includeLegacyUnassigned = false,
+  ) {
     const empty = new Map<string, { quantity: number; requests: ClientRequestAvailabilityConflict[] }>();
     if (skuIds.length === 0 && barcodes.length === 0) {
       return empty;
@@ -1216,6 +1805,9 @@ export class ClientRequestsService {
     const requests = await this.prisma.clientRequest.findMany({
       where: {
         clientId,
+        ...(includeLegacyUnassigned
+          ? { OR: [{ warehouseId }, { warehouseId: null }] }
+          : { warehouseId }),
         ...(excludeRequestId?.trim() ? { id: { not: excludeRequestId.trim() } } : {}),
         type: ClientRequestType.OUTBOUND,
         status: { in: activeRequestStatuses },
@@ -1281,6 +1873,49 @@ export class ClientRequestsService {
     });
 
     return result;
+  }
+
+  private async isPrimaryMoscowWarehouse(warehouseId: string) {
+    const primaryWarehouse = await this.prisma.warehouse.findUnique({
+      where: { code: 'MSK' },
+      select: { id: true },
+    });
+    return primaryWarehouse?.id === warehouseId;
+  }
+
+  private async resolveRequestWarehouse(
+    clientId: string,
+    requestedWarehouseId: string | undefined,
+    user: AuthUser,
+  ) {
+    const scopedWarehouseId = effectiveWarehouseId(user, 'write');
+    const warehouseId = scopedWarehouseId ?? (user.roleCodes.includes('CLIENT')
+      ? requestedWarehouseId?.trim()
+      : user.activeWarehouseId || requestedWarehouseId?.trim());
+    if (!warehouseId) {
+      throw new BadRequestException('Выберите филиал для заявки.');
+    }
+    if (
+      !user.roleCodes.includes('CLIENT') &&
+      user.activeWarehouseId &&
+      requestedWarehouseId &&
+      requestedWarehouseId !== user.activeWarehouseId
+    ) {
+      throw new ForbiddenException('Заявку можно создать только в выбранном филиале.');
+    }
+    const link = await this.prisma.warehouseClient.findFirst({
+      where: {
+        warehouseId,
+        clientId,
+        status: 'ACTIVE',
+        warehouse: { isActive: true },
+      },
+      select: { clientId: true },
+    });
+    if (!link) {
+      throw new BadRequestException('Клиент не активен в выбранном филиале.');
+    }
+    return warehouseId;
   }
 
   private async barcodeToSkuId(clientId: string, barcodes: string[]) {
@@ -1396,6 +2031,21 @@ function assertManualBoxSelectionRequest(request: {
   }
 }
 
+function assertStockSourceResolutionRequest(request: {
+  type: ClientRequestType;
+  items?: Array<unknown>;
+}) {
+  if (
+    (request.type !== ClientRequestType.OUTBOUND &&
+      request.type !== ClientRequestType.DELIVERY) ||
+    !request.items?.length
+  ) {
+    throw new BadRequestException(
+      'Фактический источник можно указать только для товарной заявки «Отгрузка» или «Доставка».',
+    );
+  }
+}
+
 function canEditClientRequestAnyStatus(user: AuthUser) {
   return user.permissionCodes.includes('system:admin') || user.roleCodes.some((role) => ['ADMIN', 'OWNER', 'MANAGER'].includes(role));
 }
@@ -1417,11 +2067,20 @@ function formatFbsOrderIds(orderIds: string[]) {
 }
 
 const clientRequestInclude = {
+  warehouse: {
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      city: true,
+    },
+  },
   client: {
     select: {
       id: true,
       code: true,
       name: true,
+      storesWithoutBoxes: true,
     },
   },
   createdBy: {
@@ -1462,6 +2121,11 @@ const clientRequestInclude = {
     include: clientRequestPackageInclude,
     orderBy: {
       createdAt: 'asc',
+    },
+  },
+  _count: {
+    select: {
+      fbsOrderLinks: true,
     },
   },
 } satisfies Prisma.ClientRequestInclude;

@@ -1,11 +1,20 @@
 import 'reflect-metadata';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const requestBodyLimit = process.env.API_REQUEST_BODY_LIMIT?.trim() || '10mb';
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    bodyParser: false,
+  });
+  app.useBodyParser('json', { limit: requestBodyLimit });
+  app.useBodyParser('urlencoded', {
+    limit: requestBodyLimit,
+    extended: true,
+  });
 
   // Русский комментарий: единая валидация защищает API от "грязных" данных из web, ТСД и интеграций.
   app.useGlobalPipes(

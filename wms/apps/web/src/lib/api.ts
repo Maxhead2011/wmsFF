@@ -4,11 +4,17 @@ export type AuthUser = {
   name: string;
   isDemo?: boolean;
   analyticsEnabled?: boolean;
+  relabelingEnabled?: boolean;
+  administrationEnabled?: boolean;
+  workspaceVisibility?: Record<string, boolean>;
   roleCodes: string[];
   permissionCodes: string[];
   clientScopeMode: 'ALL' | 'LIMITED';
   clientIds: string[];
   writableClientIds: string[];
+  activeWarehouseId?: string | null;
+  warehouseIds?: string[];
+  writableWarehouseIds?: string[];
   printerGroups?: UserPrinterScope[];
 };
 
@@ -20,6 +26,15 @@ export type AuthSession = {
 
 export type ClientSummary = {
   id: string;
+  ownCompanyId?: string | null;
+  ownCompany?: {
+    id: string;
+    shortName: string;
+    fullName: string;
+    inn: string;
+    isDefault: boolean;
+    isActive: boolean;
+  } | null;
   code: string;
   name: string;
   clientKind: ClientKind;
@@ -41,8 +56,13 @@ export type ClientSummary = {
   logisticsInvoiceMode: ClientLogisticsInvoiceMode;
   storageBillingMode: ClientStorageBillingMode;
   storesWithoutBoxes?: boolean;
+  stockBalanceMode?: ClientStockBalanceMode;
   onlineReceiptVisibleToClient?: boolean;
   fbsCalculatorEnabled?: boolean;
+  relabelingEnabled?: boolean;
+  factoryEnabled?: boolean;
+  factoryName?: string;
+  factoryCode?: string;
   fulfillmentManagerUserId: string | null;
   fulfillmentManager: {
     id: string;
@@ -56,6 +76,80 @@ export type ClientSummary = {
 export type ClientKind = 'LEGAL_ENTITY' | 'INDIVIDUAL_ENTREPRENEUR' | 'SELF_EMPLOYED' | 'INDIVIDUAL';
 
 export type ClientStatus = 'ACTIVE' | 'PAUSED' | 'ARCHIVED';
+
+export type ClientStockBalanceMode = 'PALLET_SORT' | 'BOXES';
+
+export type ContractClientOption = {
+  id: string;
+  code: string;
+  name: string;
+  legalName: string | null;
+  inn: string | null;
+  suggestedLogin: string;
+};
+
+export type ClientContractAttachmentSummary = {
+  id: string;
+  fileName: string;
+  fileSize: number;
+  createdAt: string;
+  uploadedBy: { id: string; name: string; email: string } | null;
+};
+
+export type ClientContractSummary = {
+  id: string;
+  number: string;
+  clientId: string;
+  contractDate: string;
+  fileName: string;
+  fileSize: number;
+  wmsUrl: string;
+  wmsLogin: string;
+  signedFileName: string | null;
+  signedFileSize: number | null;
+  signedUploadedAt: string | null;
+  archivedAt: string | null;
+  createdAt: string;
+  status: 'AWAITING_SIGNATURE' | 'SIGNED';
+  client: { id: string; code: string; name: string; legalName: string | null };
+  createdBy: { id: string; name: string; email: string } | null;
+  signedUploadedBy: { id: string; name: string; email: string } | null;
+  attachments: ClientContractAttachmentSummary[];
+};
+
+export type CreateClientContractPayload = {
+  clientId: string;
+  contractDate?: string;
+  contractNumber?: string;
+  wmsUrl?: string;
+  wmsLogin: string;
+  wmsPassword: string;
+};
+
+export type ClientContractRequisiteChange = {
+  party: 'CLIENT' | 'EXECUTOR';
+  field: string;
+  label: string;
+  oldValue: string | null;
+  newValue: string | null;
+};
+
+export type ClientContractRequisitesCheck = {
+  contractId: string;
+  contractNumber: string;
+  checkedAt: string;
+  upToDate: boolean;
+  signedFilePresent: boolean;
+  signedFileWillBePreserved: boolean;
+  fingerprint: string;
+  changes: ClientContractRequisiteChange[];
+};
+
+export type RefreshClientContractRequisitesResult = {
+  contract: ClientContractSummary;
+  appliedChanges: ClientContractRequisiteChange[];
+  signedFilePreserved: boolean;
+};
 
 export type InventorySessionType = 'FULL' | 'PARTIAL' | 'BOX_CHECK';
 export type InventorySessionStatus = 'ACTIVE' | 'REVIEW' | 'COMPLETED' | 'CANCELLED';
@@ -555,6 +649,164 @@ export type BillingReconciliation = {
   clients: BillingReconciliationClient[];
 };
 
+export type ExpenseCategory =
+  | 'MATERIALS'
+  | 'LOGISTICS'
+  | 'PAYROLL_PICKERS'
+  | 'HANDLING_PPR'
+  | 'CONTRACT_WORK'
+  | 'RENT'
+  | 'UTILITIES'
+  | 'TAXES'
+  | 'SOFTWARE'
+  | 'EQUIPMENT'
+  | 'MARKETING'
+  | 'OTHER';
+
+export type ExpenseEntry = {
+  id: string;
+  category: ExpenseCategory;
+  source:
+    | 'MANUAL'
+    | 'MATERIAL_PURCHASE'
+    | 'AUTO_MATERIAL_CONSUMPTION'
+    | 'MATERIAL_WRITE_OFF'
+    | 'LOGISTICS';
+  status: 'ACTIVE' | 'CANCELLED';
+  expenseDate: string;
+  amountRub: number;
+  description: string;
+  quantity: number | null;
+  unit: string | null;
+  unitPriceRub: number | null;
+  workerName: string | null;
+  sourceKey: string | null;
+  comment: string | null;
+  client: { id: string; code: string; name: string } | null;
+  request: { id: string; number: number; title: string } | null;
+  material: { id: string; code: string; name: string; unit: string } | null;
+  createdBy: { id: string; name: string; email: string } | null;
+  cancelledBy: { id: string; name: string; email: string } | null;
+  cancelledAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ExpenseMaterial = {
+  id: string;
+  code: string;
+  name: string;
+  unit: string;
+  stockQuantity: number;
+  averageUnitCostRub: number;
+  stockValueRub: number;
+  minStockQuantity: number;
+  isLowStock: boolean;
+  isActive: boolean;
+  comment: string | null;
+  rulesCount: number;
+  movementsCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ExpenseMaterialMovement = {
+  id: string;
+  type: 'INITIAL' | 'PURCHASE' | 'CONSUMPTION' | 'ADJUSTMENT' | 'WRITE_OFF';
+  quantity: number;
+  unitCostRub: number | null;
+  comment: string | null;
+  client: { id: string; code: string; name: string } | null;
+  request: { id: string; number: number; title: string } | null;
+  createdBy: { id: string; name: string; email: string } | null;
+  createdAt: string;
+};
+
+export type ClientExpenseMaterialRules = {
+  client: { id: string; code: string; name: string };
+  materials: Array<{
+    material: ExpenseMaterial;
+    isEnabled: boolean;
+    quantityPerShippedUnit: number;
+    chargeSeparately: boolean;
+    billingUnitPriceRub: number | null;
+    comment: string | null;
+    updatedAt: string | null;
+  }>;
+};
+
+export type ExpensePayrollReport = {
+  period: { dateFrom: string; dateTo: string; from: string; to: string };
+  defaultRateRub: number;
+  summary: { users: number; activeWorkers: number; orders: number; units: number; productiveDurationSeconds: number; payrollRub: number };
+  workers: Array<{
+    userId: string; userName: string; email: string; status: string; deviceCodes: string[];
+    orders: number; units: number; measuredOrders: number; workStartedAt: string | null; workEndedAt: string | null;
+    workSpanSeconds: number | null; productiveDurationSeconds: number; averageDurationSecondsPerOrder: number | null;
+    averageDurationSecondsPerUnit: number | null; rateRub: number; rateIsDefault: boolean; rateUpdatedAt: string | null;
+    resetAt: string | null; payrollRub: number;
+  }>;
+  generatedAt: string;
+};
+
+export type ExpenseReport = {
+  periodFrom: string;
+  periodTo: string;
+  generatedAt: string;
+  totals: {
+    totalRub: number;
+    entriesCount: number;
+    linkedToClientsRub: number;
+    overheadRub: number;
+    materialsRub: number;
+    logisticsRub: number;
+    payrollPickersRub: number;
+    handlingPprRub: number;
+    contractWorkRub: number;
+  };
+  byCategory: Array<{
+    category: ExpenseCategory;
+    amountRub: number;
+    entriesCount: number;
+  }>;
+  byClient: Array<{
+    client: { id: string; code: string; name: string } | null;
+    amountRub: number;
+    entriesCount: number;
+  }>;
+  byWorker: Array<{
+    workerName: string;
+    totalRub: number;
+    payrollPickersRub: number;
+    handlingPprRub: number;
+    contractWorkRub: number;
+    entriesCount: number;
+  }>;
+  daily: Array<{ date: string; amountRub: number }>;
+  entries: ExpenseEntry[];
+};
+
+export type ExpenseDebtReport = Omit<BillingReconciliation, 'clients'> & {
+  clients: Array<
+    Omit<BillingReconciliationClient, 'invoices'> & {
+      invoices: Array<
+        BillingReconciliationInvoice & {
+          comment: string | null;
+          items: Array<{
+            id: string;
+            description: string;
+            unit: BillingUnit;
+            quantity: number;
+            unitPriceRub: number;
+            totalRub: number;
+            serviceDate: string;
+          }>;
+        }
+      >;
+    }
+  >;
+};
+
 export type BillingInvoiceItemSummary = {
   id: string;
   invoiceId: string;
@@ -604,6 +856,13 @@ export type BillingInvoiceSummary = {
   issuedAt: string | null;
   paidAt: string | null;
   comment: string | null;
+  paymentBankAccountId: string | null;
+  paymentBankName: string | null;
+  paymentBankBik: string | null;
+  paymentBankInn: string | null;
+  paymentBankKpp: string | null;
+  paymentBankAccount: string | null;
+  paymentCorrespondentAccount: string | null;
   createdAt: string;
   updatedAt: string;
   client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
@@ -614,6 +873,95 @@ export type BillingInvoiceSummary = {
     email: string;
     name: string;
   } | null;
+};
+
+export type BillingInvoiceRecheckResult = {
+  invoiceId: string;
+  number: string;
+  checkedAt: string;
+  status: 'OK' | 'WARNING' | 'ERROR';
+  kind: 'FBS' | 'STANDARD';
+  summary: {
+    invoiceItems: number;
+    serviceRows: number;
+    zeroCostRows: number;
+    invoiceTotalRub: number;
+    calculatedTotalRub: number;
+    unbilledCharges: number;
+    fbsOrders: number;
+    fbsItems: number;
+    fbsPrimaryRows: number;
+    fbsPrimaryQuantity: number;
+    fbsLogisticsRows: number;
+  };
+  checks: Array<{
+    code: string;
+    label: string;
+    status: 'OK' | 'WARNING' | 'ERROR';
+    message: string;
+  }>;
+  actions: {
+    addPrimaryProcessing: {
+      available: boolean;
+      reason: string | null;
+    };
+  };
+  unbilledServices: Array<{
+    chargeId: string;
+    serviceCode: string | null;
+    name: string;
+    description: string;
+    quantity: number;
+    unitPriceRub: number;
+    totalRub: number;
+  }>;
+};
+
+export type FbsInvoiceMergePreview = {
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  draftInvoices: number;
+  sourceInvoiceNumbers: string[];
+  existingMergedInvoiceId: string | null;
+  processingTotalRub: number;
+  primaryProcessing: {
+    available: boolean;
+    included: boolean;
+    invoices: number;
+    shipments: number;
+    itemCount: number;
+    totalRub: number;
+  };
+  orders: Array<{
+    orderId: string;
+    itemCount: number;
+    date: string;
+  }>;
+  logisticsDays: Array<{
+    date: string;
+    shipments: number;
+    orders: number;
+    itemCount: number;
+    currentAmountRub: number | null;
+    suggestedAmountRub: number;
+  }>;
+};
+
+export type MergeFbsInvoicesPayload = {
+  clientId: string;
+  invoiceIds?: string[];
+  includePrimaryProcessing?: boolean;
+  aggregateSameItems?: boolean;
+  excludeZeroTotalItems?: boolean;
+  logisticsDays: Array<{
+    date: string;
+    amountRub: number;
+  }>;
+};
+
+export type MergeBillingInvoicesPayload = {
+  invoiceIds: string[];
+  aggregateSameItems?: boolean;
+  excludeZeroTotalItems?: boolean;
 };
 
 export type BillingAdvanceEntry = BillingPaymentSummary & {
@@ -790,6 +1138,7 @@ export type CreateBillingInvoicePayload = {
   dueDate?: string;
   chargeIds?: string[];
   comment?: string;
+  paymentBankAccountId?: string;
 };
 
 export type UpsertClientBillingServicePayload = {
@@ -801,6 +1150,7 @@ export type UpsertClientBillingServicePayload = {
 };
 
 export type UpsertOwnCompanyPayload = {
+  warehouseId?: string | null;
   shortName: string;
   fullName: string;
   inn: string;
@@ -817,8 +1167,11 @@ export type UpsertOwnCompanyPayload = {
   isActive?: boolean;
   comment?: string;
   bankAccounts?: Array<{
+    id?: string;
     bankName: string;
     bankBik: string;
+    bankInn?: string;
+    bankKpp?: string;
     bankAccount: string;
     correspondentAccount?: string;
     isDefault?: boolean;
@@ -846,6 +1199,7 @@ export type CreateManualBillingInvoicePayload = {
   dueDate?: string;
   rows: CreateManualBillingInvoiceLinePayload[];
   comment?: string;
+  paymentBankAccountId?: string;
 };
 
 export type GenerateStorageChargePayload = {
@@ -895,6 +1249,23 @@ export type CreateBillingAdvancePayload = {
   comment?: string;
 };
 
+export type CreateIncomingPaymentPayload = {
+  clientId: string;
+  totalRub: number;
+  allocations: Array<{ invoiceId: string; amountRub: number }>;
+  paidAt?: string;
+  method?: string;
+  reference?: string;
+  comment?: string;
+};
+
+export type IncomingPaymentResult = {
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  totalRub: number;
+  paidAt: string;
+  invoices: BillingInvoiceSummary[];
+};
+
 export type OwnCompanySellerSnapshot = {
   shortName: string;
   fullName: string;
@@ -907,6 +1278,8 @@ export type OwnCompanySellerSnapshot = {
   correspondentAccount: string;
   paymentCode: string;
   paymentPurposeCode: string;
+  stampDataUrl: string | null;
+  signatureDataUrl: string | null;
 };
 
 export type OwnCompanyBankAccountSummary = {
@@ -914,6 +1287,8 @@ export type OwnCompanyBankAccountSummary = {
   companyId: string;
   bankName: string;
   bankBik: string;
+  bankInn: string | null;
+  bankKpp: string | null;
   bankAccount: string;
   correspondentAccount: string | null;
   isDefault: boolean;
@@ -924,6 +1299,7 @@ export type OwnCompanyBankAccountSummary = {
 
 export type OwnCompanySummary = {
   id: string;
+  warehouseId: string | null;
   shortName: string;
   fullName: string;
   inn: string;
@@ -939,6 +1315,12 @@ export type OwnCompanySummary = {
   isDefault: boolean;
   isActive: boolean;
   comment: string | null;
+  stampFileName: string | null;
+  stampMimeType: string | null;
+  signatureFileName: string | null;
+  signatureMimeType: string | null;
+  hasStamp: boolean;
+  hasSignature: boolean;
   bankAccounts: OwnCompanyBankAccountSummary[];
   createdAt: string;
   updatedAt: string;
@@ -1059,7 +1441,9 @@ export type ClientRequestSummary = {
   managerComment: string | null;
   createdAt: string;
   updatedAt: string;
-  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'> & {
+    storesWithoutBoxes?: boolean;
+  };
   createdBy: {
     id: string;
     email: string;
@@ -1073,6 +1457,15 @@ export type ClientRequestSummary = {
   items: ClientRequestItem[];
   files: ClientRequestFileSummary[];
   packages: ClientRequestPackage[];
+  _count?: {
+    fbsOrderLinks: number;
+  };
+  fbsCompletion?: {
+    totalOrders: number;
+    completedOrders: number;
+    percent: number;
+    completed: boolean;
+  };
 };
 
 export type ClientRequestManualBoxSelection = {
@@ -1102,6 +1495,16 @@ export type ClientRequestManualBoxSelection = {
     } | null;
     requestedBarcode: string | null;
     requestedName: string | null;
+    itemComment: string | null;
+    fbsOrders: Array<{
+      orderId: string;
+      assemblyStatus: string;
+      sourceBoxPending: boolean;
+      boxCode: string | null;
+      barcode: string | null;
+      stickerPartB: string | null;
+      wbStatus: string | null;
+    }>;
     boxes: Array<{
       boxId: string;
       boxCode: string;
@@ -1113,7 +1516,37 @@ export type ClientRequestManualBoxSelection = {
   }>;
 };
 
+export type RequisitesDocumentFields = {
+  clientKind: ClientKind;
+  shortName: string;
+  fullName: string;
+  name: string;
+  legalName: string;
+  inn: string;
+  kpp: string;
+  ogrn: string;
+  legalAddress: string;
+  actualAddress: string;
+  phone: string;
+  email: string;
+  bankName: string;
+  bankBik: string;
+  bankInn: string | null;
+  bankKpp: string | null;
+  bankAccount: string;
+  correspondentAccount: string;
+};
+
+export type RequisitesDocumentResult = {
+  fileName: string;
+  sourceType: 'PDF' | 'EXCEL';
+  fields: RequisitesDocumentFields;
+  recognizedFields: string[];
+  warnings: string[];
+};
+
 export type ClientRequestFbsBoxSearch = {
+  stockMode: 'BOXES' | 'WITHOUT_BOXES';
   request: {
     id: string;
     number: number;
@@ -1127,6 +1560,19 @@ export type ClientRequestFbsBoxSearch = {
     confirmedOrders: number;
     unmatchedOrders: number;
   };
+  warehouseStock: Array<{
+    requestItemId: string;
+    skuId: string;
+    productName: string;
+    article: string | null;
+    barcodes: string[];
+    requestedQuantity: number;
+    availableQuantity: number;
+    reservedQuantity: number;
+    freeQuantity: number;
+    orderIds: string[];
+    reservedOrderIds: string[];
+  }>;
   boxes: Array<{
     boxId: string;
     boxCode: string;
@@ -1164,6 +1610,7 @@ export type ClientRequestBoxOverlapStatistics = {
     client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
     requests: Array<{
       id: string;
+      number: number;
       title: string;
       status: ClientRequestStatus;
       destinationCity: string | null;
@@ -1421,6 +1868,34 @@ export type PickWaveBalanceReviewAllocation = {
   needsRelabel: boolean;
   targetBarcode: string | null;
   comment: string | null;
+};
+
+export type ClientFbsTurnkeyPricing = {
+  clientId: string;
+  enabled: boolean;
+  unitPriceRub: number;
+  fixedPlusLogisticsEnabled: boolean;
+  fixedPlusLogisticsUnitPriceRub: number;
+  fixedPlusLogisticsDestination: string;
+  tieredLogisticsEnabled: boolean;
+  logisticsFreeItemsLimit: number;
+  logisticsCubicMeterLiters: number;
+  logisticsCubicMeterPriceRub: number;
+  logisticsPalletPriceRub: number;
+  primaryProcessingEnabled: boolean;
+  primaryWhiteUnitPriceRub: number;
+  primaryGrayUnitPriceRub: number;
+  primaryReturnUnitPriceRub: number;
+  primaryServices: Array<{
+    serviceId: string;
+    quantityMultiplier: number;
+    matchKeywords: string;
+  }>;
+  recalculation?: {
+    recalculatedCharges: number;
+    recalculatedInvoices: number;
+  };
+  updatedByUserId?: string;
 };
 
 export type PickWaveBalanceReview = {
@@ -1686,6 +2161,13 @@ export type TsdAssemblyPlan = {
     isFound?: boolean;
     servesMultipleCities?: boolean;
     multiCityLabel?: string;
+    storageLocation?: {
+      palletId: string;
+      palletCode: string;
+      zoneId: string | null;
+      zoneCode: string | null;
+      zoneName: string | null;
+    } | null;
   }>;
   shipmentBoxes?: Array<{ boxCode?: string; code?: string; found?: boolean; isFound?: boolean }>;
   outgoingBoxes?: Array<{
@@ -1701,7 +2183,19 @@ export type TsdAssemblyPlan = {
   }>;
   shipmentBoxCodes?: string[];
   outgoingBoxCodes?: string[];
-  boxesToSearch?: Array<{ boxCode?: string; code?: string; found?: boolean; isFound?: boolean }>;
+  boxesToSearch?: Array<{
+    boxCode?: string;
+    code?: string;
+    found?: boolean;
+    isFound?: boolean;
+    storageLocation?: {
+      palletId: string;
+      palletCode: string;
+      zoneId: string | null;
+      zoneCode: string | null;
+      zoneName: string | null;
+    } | null;
+  }>;
   foundBoxes?: Array<{ boxCode?: string; code?: string; found?: boolean; isFound?: boolean }>;
   foundBoxCodes?: string[];
   foundBoxesCodes?: string[];
@@ -1789,6 +2283,46 @@ export type TsdAssemblyPlan = {
     totalOrders: number;
     startedOrders: number;
     completedOrders: number;
+    duplicateKizScans: Array<{
+      id: string;
+      eventKey: string;
+      kiz: string;
+      detectedAt: string;
+      attempt: {
+        requestId: string;
+        requestNumber: number | null;
+        requestTitle: string | null;
+        assemblyId: string;
+        orderId: string;
+        boxCode: string;
+        deviceCode: string | null;
+        workerName: string | null;
+        status: string | null;
+        scannedAt: string;
+      };
+      existing: {
+        requestId: string;
+        requestNumber: number | null;
+        requestTitle: string | null;
+        assemblyId: string;
+        orderId: string;
+        boxCode: string;
+        deviceCode: string | null;
+        workerName: string | null;
+        status: string | null;
+        scannedAt: string;
+      };
+    }>;
+    kizConflicts: Array<{
+      id: string;
+      orderId: string;
+      productName: string;
+      article: string | null;
+      sourceBoxCode: string | null;
+      kiz: string;
+      message: string;
+      updatedAt: string;
+    }>;
     returnRequired: {
       orders: number;
       units: number;
@@ -1811,6 +2345,46 @@ export type TsdAssemblyPlan = {
         updatedAt: string;
       }>;
     };
+    wmsBoxes: {
+      totalBoxes: number;
+      closedBoxes: number;
+      packedUnits: number;
+      remainingUnits: number;
+      boxes: Array<{
+        id: string;
+        code: string;
+        status: string;
+        deviceCode: string | null;
+        openedByName: string | null;
+        openedAt: string;
+        closedByName: string | null;
+        closedAt: string | null;
+        items: Array<{
+          id: string;
+          orderId: string;
+          productName: string;
+          article: string | null;
+          productBarcode: string | null;
+          size: string | null;
+          kiz: string | null;
+          wbStickerPartB: string | null;
+          packedByName: string | null;
+          packedAt: string | null;
+          quantity: number;
+        }>;
+      }>;
+      notPacked: Array<{
+        orderId: string;
+        productName: string;
+        article: string | null;
+        productBarcode: string | null;
+        size: string | null;
+        wbStickerPartB: string | null;
+        assemblyStatus: string;
+        assemblyStatusLabel: string;
+        readyForPacking: boolean;
+      }>;
+    };
     notCollected: {
       remainingOrders: number;
       remainingPositions: number;
@@ -1828,8 +2402,26 @@ export type TsdAssemblyPlan = {
         collectedQuantity: number;
         remainingQuantity: number;
         orderIds: string[];
-        orders: Array<{ id: string; connectionId: string }>;
-        availableBoxes: Array<{ boxCode: string; quantity: number }>;
+        orders: Array<{
+          id: string;
+          connectionId: string;
+          assemblyId: string | null;
+          requiresKiz: boolean;
+          kizAccepted: boolean;
+        }>;
+        availableBoxes: Array<{
+          boxCode: string;
+          quantity: number;
+          palletId?: string | null;
+          palletCode?: string | null;
+          storageLocation?: {
+            palletId: string;
+            palletCode: string;
+            zoneId: string | null;
+            zoneCode: string | null;
+            zoneName: string | null;
+          } | null;
+        }>;
       }>;
     };
     rows: Array<{
@@ -1845,8 +2437,10 @@ export type TsdAssemblyPlan = {
       wbStickerBarcode: string | null;
       status: string;
       statusLabel: string;
+      sourceBoxPending: boolean;
       syncIssue: string | null;
       workerName: string | null;
+      completionSource: 'SOS_WB' | 'STANDARD';
       completedAt: string | null;
       updatedAt: string;
     }>;
@@ -1855,6 +2449,7 @@ export type TsdAssemblyPlan = {
 
 export type CreateClientRequestPayload = {
   clientId: string;
+  warehouseId?: string;
   type: ClientRequestType;
   priority?: ClientRequestPriority;
   title: string;
@@ -1875,7 +2470,7 @@ export type CreateClientRequestPayload = {
 
 export type UpdateClientRequestPayload = Partial<Omit<CreateClientRequestPayload, 'clientId'>>;
 
-export type PreviewClientRequestAvailabilityPayload = Pick<CreateClientRequestPayload, 'clientId' | 'type' | 'items'> & {
+export type PreviewClientRequestAvailabilityPayload = Pick<CreateClientRequestPayload, 'clientId' | 'warehouseId' | 'type' | 'items'> & {
   excludeRequestId?: string;
 };
 
@@ -1912,9 +2507,15 @@ export type CreateClientPayload = {
   logisticsInvoiceMode?: ClientLogisticsInvoiceMode;
   storageBillingMode?: ClientStorageBillingMode;
   storesWithoutBoxes?: boolean;
+  stockBalanceMode?: ClientStockBalanceMode;
   onlineReceiptVisibleToClient?: boolean;
   fbsCalculatorEnabled?: boolean;
+  relabelingEnabled?: boolean;
+  factoryEnabled?: boolean;
+  factoryName?: string;
+  factoryCode?: string;
   fulfillmentManagerUserId?: string;
+  ownCompanyId?: string;
 };
 
 export type ClientTelegramSettings = {
@@ -1924,6 +2525,14 @@ export type ClientTelegramSettings = {
 };
 
 export type UpdateClientPayload = Partial<CreateClientPayload>;
+
+export type FactoryShipment = {
+  id: string; number: number; clientId: string; title: string; factoryName: string;
+  status: 'DRAFT' | 'PICKING' | 'SHIPPED' | 'RECEIVING' | 'RECONCILED' | 'CANCELLED';
+  comment?: string | null; receiptRequestId?: string | null; createdAt: string; shippedAt?: string | null;
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'> & { factoryName?: string | null; factoryCode?: string | null };
+  items: Array<{ id: string; skuId: string; barcode?: string | null; name: string; article?: string | null; size?: string | null; plannedQty: number; scannedQty: number; receivedQty: number }>;
+};
 
 export type ClientImportIssue = {
   row: number;
@@ -2035,6 +2644,262 @@ export type ArticleMappingImportResult = {
   items: ArticleMappingSummary[];
 };
 
+export type FbsRelabelReconciliationSku = {
+  id: string;
+  internalSku: string;
+  clientSku: string | null;
+  article: string | null;
+  name: string;
+  color: string | null;
+  size: string | null;
+  barcodes: string[];
+  primaryBarcode: string | null;
+};
+
+export type FbsRelabelReconciliationIssue = {
+  id: string;
+  kind:
+    | 'MISSING_RELABEL'
+    | 'RELABEL_NOT_RECORDED'
+    | 'WB_SHIPPED_WMS_OPEN'
+    | 'WMS_DONE_WB_ACTIVE';
+  severity: 'CRITICAL' | 'WARNING';
+  title: string;
+  explanation: string;
+  correctable: boolean;
+  assemblyId?: string;
+  request: {
+    id: string;
+    number: number;
+    title: string;
+    status: ClientRequestStatus;
+  } | null;
+  order: {
+    id: string;
+    supplierStatus: string | null;
+    wbStatus: string | null;
+  };
+  supplyId: string | null;
+  quantity: number;
+  boxCode: string | null;
+  sourceSku: FbsRelabelReconciliationSku | null;
+  targetSku: FbsRelabelReconciliationSku | null;
+  correction: {
+    mode: 'APPLY_RELABEL' | 'MANUAL_REVIEW' | 'CLOSE_REQUEST_REVIEW' | 'WB_REVIEW';
+    sourceDelta: number;
+    targetDelta: number;
+    availableSourceQuantity?: number;
+  };
+};
+
+export type FbsRelabelReconciliationReport = {
+  generatedAt: string;
+  period: { from: string; to: string };
+  filter: { barcode: string | null };
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  wb: {
+    checked: boolean;
+    fetchedAt: string;
+    ordersChecked: number;
+    suppliesChecked: number;
+    supplies: Array<{
+      connectionId: string;
+      accountName: string | null;
+      supplyId: string;
+      checked: boolean;
+      done: boolean | null;
+      closedAt: string | null;
+      error: string | null;
+    }>;
+  };
+  totals: {
+    mappings: number;
+    sentRequests: number;
+    stockUnits: number;
+    reservedUnits: number;
+    freeUnits: number;
+    pendingReservedUnits: number;
+    assembledReservedUnits: number;
+    issues: number;
+    criticalIssues: number;
+    correctableIssues: number;
+  };
+  stockRows: Array<{
+    mappingId: string;
+    sourceArticle: string;
+    targetArticle: string;
+    sourceSku: FbsRelabelReconciliationSku;
+    targetSku: FbsRelabelReconciliationSku | null;
+    stock: {
+      available: number;
+      reserved: number;
+      free: number;
+      targetAvailable: number;
+      boxes: Array<{ code: string; quantity: number }>;
+    };
+    reservations: {
+      pending: number;
+      assembled: number;
+      returnRequired: number;
+      requestNumbers: number[];
+      orderIds: string[];
+    };
+  }>;
+  requests: Array<{
+    id: string;
+    number: number;
+    title: string;
+    status: ClientRequestStatus;
+    shippedAt: string;
+    supplies: string[];
+    orders: number;
+    wbShippedOrders: number;
+    relabelExpected: number;
+    relabelConfirmed: number;
+    issues: number;
+  }>;
+  issues: FbsRelabelReconciliationIssue[];
+};
+
+export type KizIssue = {
+  issueKey: string;
+  kind:
+    | 'WB_REJECTED'
+    | 'WB_SYNC_STUCK'
+    | 'COMPLETED_WITHOUT_ACCEPTED_KIZ'
+    | 'MARK_MISSING'
+    | 'MARK_WRONG_CLIENT'
+    | 'MARK_WRONG_SKU'
+    | 'MARK_WRONG_BOX'
+    | 'MARK_WRONG_STATUS'
+    | 'LOCAL_STATUS_CONFLICT'
+    | 'DUPLICATE_SCAN'
+    | 'BOX_KIZ_EXHAUSTED';
+  status: 'OPEN' | 'RESOLVED';
+  severity: 'CRITICAL' | 'WARNING';
+  title: string;
+  explanation: string;
+  detectedAt: string;
+  isUnread: boolean;
+  readAt: string | null;
+  resolvedAt: string | null;
+  resolution: {
+    action: string;
+    comment: string | null;
+    userName: string | null;
+  } | null;
+  client: { id: string; code: string; name: string } | null;
+  branch: { id: string; code: string; city: string; name: string } | null;
+  request: {
+    id: string;
+    number: number;
+    title: string;
+    status: string;
+  } | null;
+  orderId: string | null;
+  assemblyId: string | null;
+  sku: {
+    id: string;
+    internalSku: string;
+    article: string | null;
+    name: string;
+    color: string | null;
+    size: string | null;
+  } | null;
+  boxCode: string | null;
+  kiz: string | null;
+  wbMetaStatus: string | null;
+  workerName: string | null;
+  errorMessage: string | null;
+  duplicate: {
+    existingRequestNumber: number | null;
+    existingOrderId: string | null;
+    existingBoxCode: string | null;
+    existingWorkerName: string | null;
+    existingProduct: {
+      internalSku: string | null;
+      article: string | null;
+      name: string | null;
+      color: string | null;
+      size: string | null;
+    } | null;
+  } | null;
+  stockConflict: {
+    availableQuantity: number;
+    registeredKizCount: number;
+    usedKizCount: number;
+    usedAssignments: Array<{
+      requestNumber: number | null;
+      orderId: string | null;
+      boxCode: string | null;
+      status: string | null;
+    }>;
+  } | null;
+  canReplace: boolean;
+  allowedActions: Array<
+    | 'REPLACE_KIZ'
+    | 'REGISTER_EXTRA_UNIT'
+    | 'PREPARE_EXTRA_UNIT'
+    | 'RELEASE_BOX'
+    | 'MARK_RESOLVED'
+  >;
+};
+
+export type KizIssuesReport = {
+  generatedAt: string;
+  activeWarehouseId: string | null;
+  status: 'open' | 'resolved' | 'all';
+  summary: {
+    all: number;
+    open: number;
+    critical: number;
+    warning: number;
+    unread: number;
+    resolved: number;
+  };
+  issues: KizIssue[];
+};
+
+export type BoxKizDiscrepancy = {
+  boxId: string;
+  boxCode: string;
+  boxStatus: string;
+  clientId: string;
+  clientCode: string;
+  clientName: string;
+  warehouseId: string | null;
+  warehouseCode: string | null;
+  warehouseCity: string | null;
+  warehouseName: string | null;
+  skuId: string;
+  internalSku: string;
+  article: string | null;
+  productName: string;
+  color: string | null;
+  size: string | null;
+  boxQuantity: number;
+  registeredKizCount: number;
+  excessKizCount: number;
+  protectedKizCount: number;
+  removableKizCount: number;
+  canWriteOff: boolean;
+  totalRows: number;
+  totalExcessKiz: number;
+  totalBlockedRows: number;
+};
+
+export type BoxKizDiscrepancyReport = {
+  generatedAt: string;
+  activeWarehouseId: string | null;
+  summary: {
+    rows: number;
+    boxes: number;
+    excessKiz: number;
+    blockedRows: number;
+  };
+  discrepancies: BoxKizDiscrepancy[];
+};
+
 export type DeleteClientResult = {
   id: string;
   code: string;
@@ -2052,6 +2917,11 @@ export type MarketplaceConnectionSummary = {
   hasApiKey: boolean;
   isActive: boolean;
   comment: string | null;
+  fbsExecutionWarehouseId: string | null;
+  fbsWarehouseId: string | null;
+  fbsWarehouseName: string | null;
+  fbsDropoffWarehouseId: string | null;
+  fbsAutoRouteNewWarehouses: boolean;
   createdAt: string;
   updatedAt: string;
   client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
@@ -2063,6 +2933,7 @@ export type MarketplaceProductSyncResult = {
   productsReceived: number;
   created: number;
   updated: number;
+  mergedDrafts: number;
   barcodesTouched: number;
   skipped: number;
   errors: Array<{
@@ -2071,7 +2942,89 @@ export type MarketplaceProductSyncResult = {
   }>;
 };
 
+export type DbsIntegrationSummary = {
+  id: string;
+  clientId: string;
+  marketplace: 'WILDBERRIES' | 'OZON' | 'YANDEX_MARKET';
+  senderName: string;
+  contactName: string | null;
+  phone: string;
+  email: string | null;
+  city: string;
+  address: string;
+  postalCode: string | null;
+  deliveryProvider: string;
+  deliveryServiceName: string | null;
+  deliveryApiUrl: string | null;
+  deliveryAccountId: string | null;
+  deliveryApiKeyMask: string;
+  hasDeliveryApiKey: boolean;
+  hasDeliveryApiSecret: boolean;
+  hasMarketplaceApi: boolean;
+  isActive: boolean;
+  ready: boolean;
+  lastCheckedAt: string | null;
+  lastCheckOk: boolean | null;
+  lastCheckMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+};
+
+export type UpsertDbsIntegrationPayload = {
+  clientId: string;
+  marketplace: 'WILDBERRIES' | 'OZON' | 'YANDEX_MARKET';
+  senderName: string;
+  contactName?: string;
+  phone: string;
+  email?: string;
+  city: string;
+  address: string;
+  postalCode?: string;
+  deliveryProvider: string;
+  deliveryServiceName?: string;
+  deliveryApiUrl?: string;
+  deliveryAccountId?: string;
+  deliveryApiKey: string;
+  deliveryApiSecret?: string;
+  isActive?: boolean;
+};
+
 export type FbsOrderCategory = 'active' | 'shipped' | 'cancelled' | 'archive';
+
+export type FbsProductShipmentReportRow = {
+  skuId: string | null;
+  internalSku: string;
+  clientSku: string;
+  article: string;
+  productName: string;
+  color: string;
+  size: string;
+  barcode: string;
+  quantity: number;
+  orders: number;
+  wbOrderNumbers: string;
+  wbSupplyNumbers: string;
+  wmsRequestNumbers: string;
+  firstShippedAt: string;
+  lastShippedAt: string;
+};
+
+export type FbsProductShipmentReport = {
+  client: { id: string; code: string; name: string };
+  warehouse: { id: string; code: string; name: string; city: string };
+  period: { dateFrom: string; dateTo: string };
+  search: string;
+  summary: {
+    products: number;
+    quantity: number;
+    orders: number;
+    requests: number;
+  };
+  rows: FbsProductShipmentReportRow[];
+  generatedAt: string;
+};
+
 export type FbsDeliveryDestination = 'PICKUP_POINT' | 'VNUKOVO_SORTING_CENTER';
 
 export type FbsOrderSummary = {
@@ -2079,7 +3032,7 @@ export type FbsOrderSummary = {
   orderUid: string | null;
   connectionId: string;
   accountName: string | null;
-  marketplace: 'WILDBERRIES' | 'OZON';
+  marketplace: 'WILDBERRIES' | 'OZON' | 'YANDEX_MARKET';
   category: FbsOrderCategory;
   supplierStatus: string;
   wbStatus: string;
@@ -2095,17 +3048,26 @@ export type FbsOrderSummary = {
     internalSku: string;
     clientSku: string | null;
     article: string | null;
+    size: string | null;
   } | null;
   storageBoxes: Array<{
     code: string;
     quantity: number;
     status: string;
   }>;
+  relabeling: {
+    required: true;
+    sourceSkuId: string | null;
+    sourceProductName: string | null;
+    sourceArticle: string;
+    sourceBarcodes: string[];
+  } | null;
   createdAt: string | null;
   sellerDate: string | null;
   deliveryDate: string | null;
   supplyId: string | null;
   warehouseId: string | null;
+  warehouseName: string | null;
   officeId: string | null;
   cargoType: string | null;
   crossBorderType: string | null;
@@ -2117,6 +3079,11 @@ export type FbsOrderSummary = {
     requiresCargoPlaces: boolean;
     cargoPlaceCount: number;
     cargoPlaceIds: string[];
+    sentToWbAt: string | null;
+    sentToWbBy: {
+      id: string | null;
+      name: string;
+    } | null;
   } | null;
   requiredMeta: string[];
   optionalMeta: string[];
@@ -2126,6 +3093,18 @@ export type FbsOrderSummary = {
     number: number;
     title: string;
     status: ClientRequestStatus;
+    fbsEmergencyAssemblyAt: string | null;
+    fbsEmergencyAssemblyByUserId: string | null;
+    fbsEmergencyAssemblyByName: string | null;
+  } | null;
+  reservation?: {
+    status: string;
+    withoutBox: boolean;
+    boxCode: string | null;
+    palletCode: string | null;
+    warehouseId: string | null;
+    reservedAt: string | null;
+    problem: string | null;
   } | null;
   billing: {
     chargeId: string;
@@ -2155,7 +3134,7 @@ export type ClientFbsOrders = {
   connected: boolean;
   connections: Array<{
     id: string;
-    marketplace: 'WILDBERRIES' | 'OZON';
+    marketplace: 'WILDBERRIES' | 'OZON' | 'YANDEX_MARKET';
     accountName: string | null;
   }>;
   fetchedAt: string;
@@ -2198,6 +3177,8 @@ export type FbsCargoPackingOrder = {
 
 export type FbsCargoPackingPlace = {
   id: string | null;
+  supplyId?: string;
+  requestNumbers?: number[];
   cargoPlaceId: string;
   cargoPlaceBarcode: string | null;
   capacityItems: number;
@@ -2216,6 +3197,14 @@ export type FbsCargoPackingSupply = {
   client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
   connectionId: string;
   supplyId: string;
+  requestNumbers: number[];
+  hasActiveRequest: boolean;
+  ignored: boolean;
+  ignoredAt: string | null;
+  ignoredByName: string | null;
+  ignoreReason: string | null;
+  deliveryDestination: FbsDeliveryDestination;
+  packingMode: 'WB_CARGO_PLACE' | 'SORTING_CENTER_BOX';
   itemsPerCargoPlace: number;
   cargoPlaceCount: number;
   totalPlannedItems: number;
@@ -2230,10 +3219,117 @@ export type FbsCargoPackingSupply = {
   updatedAt: string;
 };
 
+export type ClientPaymentAccounts = {
+  company: {
+    id: string;
+    shortName: string;
+    fullName: string;
+    inn: string;
+  } | null;
+  bankAccounts: OwnCompanyBankAccountSummary[];
+};
+
 export type FbsCargoPackingsResponse = {
   clientId: string;
   fetchedAt: string;
   supplies: FbsCargoPackingSupply[];
+};
+
+export type FbsPackedItem = {
+  id: string;
+  marketplace: 'WILDBERRIES' | 'OZON' | 'YANDEX_MARKET';
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'> | null;
+  request: {
+    id: string;
+    number: number;
+    title: string;
+    status: ClientRequestStatus;
+  } | null;
+  orderId: string;
+  supplyId: string | null;
+  accountName: string | null;
+  marketplaceWarehouse: { id: string | null; name: string | null };
+  executionWarehouse: { id: string; code: string; name: string; city: string } | null;
+  product: {
+    skuId: string;
+    internalSku: string | null;
+    clientSku: string | null;
+    name: string | null;
+    article: string | null;
+    color: string | null;
+    size: string | null;
+    barcode: string | null;
+    quantity: number;
+    requiresKiz: boolean;
+    kiz: string | null;
+  };
+  relabeling: {
+    sourceSkuId: string | null;
+    sourceInternalSku: string | null;
+    sourceProductName: string | null;
+    sourceArticle: string | null;
+    sourceBarcode: string | null;
+  } | null;
+  source: {
+    boxId: string | null;
+    boxCode: string | null;
+    boxStatus: string | null;
+    zone: { id: string; code: string; name: string } | null;
+    palletSort: { id: string; code: string; status: string } | null;
+    placementScannedAt: string | null;
+  };
+  sticker: {
+    partA: string | null;
+    partB: string | null;
+    barcode: string | null;
+    labelSaved: boolean;
+  };
+  cargoPlace: {
+    id: string;
+    barcode: string | null;
+    status: string;
+    closedAt: string | null;
+  } | null;
+  assembly: {
+    status: string;
+    wbMetaStatus: string;
+    deviceCode: string;
+    workerUserId: string | null;
+    workerName: string | null;
+    completedAt: string | null;
+    cargoPackedAt: string | null;
+    cargoPackedByName: string | null;
+    marketplaceSubmittedAt: string | null;
+    marketplaceSubmitError: string | null;
+    errorMessage: string | null;
+  };
+  comparison?: FbsPackedItemComparison | null;
+};
+
+export type FbsPackedItemComparison = {
+  status: 'MATCHED' | 'STICKER_MISMATCH' | 'ORDER_CANCELLED' | 'ORDER_NOT_FOUND' | 'ISSUES' | 'CHECK_ERROR' | 'NOT_AVAILABLE';
+  issues: string[];
+  actualSticker: { partA: string | null; partB: string | null; barcode: string | null } | null;
+  expectedSticker: { partA: string | null; partB: string | null; barcode: string | null } | null;
+  order: {
+    category: 'active' | 'shipped' | 'cancelled' | 'archive';
+    supplierStatus: string;
+    wbStatus: string;
+    statusLabel: string;
+    supplyId: string | null;
+    productName: string | null;
+    article: string | null;
+    barcode: string | null;
+  } | null;
+};
+
+export type FbsPackedItemsReport = {
+  generatedAt: string;
+  page: number;
+  pageSize: number;
+  total: number;
+  pages: number;
+  items: FbsPackedItem[];
 };
 
 export type FbsStockItem = {
@@ -2253,7 +3349,31 @@ export type FbsStockItem = {
   reserved: number;
   sellable: number;
   wbAmount: number;
+  /**
+   * Manually configured cap for the quantity published to WB. `null` means
+   * that the whole available WMS balance is used.
+   */
+  saleLimit: number | null;
+  /** Manual WB quantity for a SKU assembled from relabeled source stock. */
+  relabelManualAmount: number | null;
+  relabeling: {
+    isSource: boolean;
+    isTarget: boolean;
+    sources: Array<{ skuId: string; label: string; sellable: number; allocated: number }>;
+    allocatedFromSources: number;
+    allocatedToTargets: number;
+    capacity: number;
+  };
+  /** Quantity requested by the current publication setting. */
+  requestedAmount: number | null;
+  /** Quantity that the WMS plans to publish after all limits are applied. */
   targetAmount: number | null;
+  /** Quantity currently confirmed by Wildberries (kept alongside wbAmount for compatibility). */
+  publishedAmount: number | null;
+  /** Whether the requested limit is currently higher than the free WMS balance. */
+  shortage: boolean;
+  /** Number of units missing to cover the requested limit. */
+  shortageAmount: number;
   difference: number | null;
   lastSyncedAmount: number | null;
   lastSyncedAt: string | null;
@@ -2267,6 +3387,9 @@ export type FbsStocksResponse = {
     id: string;
     marketplace: 'WILDBERRIES';
     accountName: string | null;
+    fbsExecutionWarehouseId: string | null;
+    fbsDropoffWarehouseId: string | null;
+    fbsAutoRouteNewWarehouses: boolean;
   }>;
   selectedConnectionId: string | null;
   warehouses: Array<{
@@ -2277,6 +3400,9 @@ export type FbsStocksResponse = {
     deliveryType: number | null;
   }>;
   selectedWarehouseId: string | null;
+  connectedWarehouseId: string | null;
+  connectedWarehouseName: string | null;
+  warehouseConnectedAt: string | null;
   fetchedAt: string;
   summary: {
     products: number;
@@ -2286,20 +3412,99 @@ export type FbsStocksResponse = {
     wmsAvailable: number;
     sellable: number;
     wbAmount: number;
+    requestedAmount: number;
+    targetAmount: number;
     differences: number;
+    excessProducts: number;
+    excessUnits: number;
+    shortages: number;
   };
   items: FbsStockItem[];
+};
+
+export type FbsWarehouseRouteMode =
+  | 'DEFAULT'
+  | 'CENTRAL'
+  | 'BRANCH'
+  | 'EXCLUDED';
+
+export type FbsWarehouseRoutesResponse = {
+  connection: {
+    id: string;
+    clientId: string;
+    accountName: string | null;
+    isActive: boolean;
+    fbsExecutionWarehouseId: string | null;
+    fbsDropoffWarehouseId: string | null;
+    fbsAutoRouteNewWarehouses: boolean;
+  };
+  branches: Array<{
+    id: string;
+    code: string;
+    name: string;
+    city: string;
+    isActive: boolean;
+    sortOrder: number;
+  }>;
+  warehouses: Array<{
+    marketplaceWarehouseId: string;
+    marketplaceWarehouseName: string;
+    existsInMarketplace: boolean;
+    officeId: string | null;
+    officeName: string | null;
+    officeCity: string | null;
+    mode: FbsWarehouseRouteMode;
+    executionWarehouseId: string | null;
+    dropoffWarehouseId: string | null;
+    effectiveExecutionWarehouseId: string | null;
+    effectiveDropoffWarehouseId: string | null;
+    updatedAt: string | null;
+  }>;
+  fetchedAt: string;
+};
+
+export type UpdateFbsWarehouseRoutesPayload = {
+  items: Array<{
+    marketplaceWarehouseId: string;
+    marketplaceWarehouseName?: string;
+    officeId?: string;
+    officeName?: string;
+    officeCity?: string;
+    mode: FbsWarehouseRouteMode;
+    executionWarehouseId?: string;
+    dropoffWarehouseId?: string;
+  }>;
 };
 
 export type FbsOrderSelectionPayload = {
   clientId: string;
   orders: Array<{ connectionId: string; id: string }>;
   deliveryDestination?: FbsDeliveryDestination;
+  marketplaceWarehouseKey?: string;
 };
+
+function sanitizeFbsOrderSelectionPayload(
+  payload: FbsOrderSelectionPayload,
+): FbsOrderSelectionPayload {
+  return {
+    clientId: payload.clientId,
+    orders: payload.orders.map(({ connectionId, id }) => ({ connectionId, id })),
+    ...(payload.deliveryDestination === undefined
+      ? {}
+      : { deliveryDestination: payload.deliveryDestination }),
+    ...(payload.marketplaceWarehouseKey === undefined
+      ? {}
+      : { marketplaceWarehouseKey: payload.marketplaceWarehouseKey }),
+  };
+}
 
 export type AssembleFbsOrdersResult = {
   assembled: number;
   reshipped: number;
+  submitted?: number;
+  marketplace?: MarketplaceType;
+  message?: string;
+  orderIds?: string[];
   deliveryPlan: ClientFbsOrders['deliveryPlan'];
   supplies: Array<{
     id: string;
@@ -2314,13 +3519,17 @@ export type AssembleFbsOrdersResult = {
 
 export type MoveFbsOrdersToNewSupplyResult = {
   moved: number;
+  skipped: number;
+  skippedOrders: Array<{ id: string; reason: string }>;
   sourceSupplyId: string;
+  sourceSupplyIds: string[];
   targetSupply: {
     id: string;
     cargoPlaceCount: number;
     cargoPlaceIds: string[];
   };
   sourceRequest: { id: string; number: number };
+  sourceRequests: Array<{ id: string; number: number }>;
   targetRequest: {
     id: string;
     number: number;
@@ -2330,11 +3539,61 @@ export type MoveFbsOrdersToNewSupplyResult = {
   orders: ClientFbsOrders;
 };
 
+export type MergeFbsRequestTailsResult =
+  MoveFbsOrdersToNewSupplyResult & {
+    selectedRequestCount: number;
+  };
+
+export type MergeFbsRequestTailsPreview = {
+  clientId: string;
+  sourceRequests: Array<{ id: string; number: number }>;
+  orderCount: number;
+  itemCount: number;
+  skuCount: number;
+  orders: Array<{
+    connectionId: string;
+    id: string;
+    sourceRequest: { id: string; number: number } | null;
+    sourceSupplyId: string;
+    itemCount: number;
+    article: string | null;
+    barcodes: string[];
+    product: {
+      id: string;
+      name: string;
+      internalSku: string;
+      clientSku: string | null;
+      article: string | null;
+      size: string | null;
+    };
+    storageBoxes: Array<{ code: string; quantity: number }>;
+  }>;
+  skippedOrders: Array<{ id: string; reason: string }>;
+};
+
 export type FbsOrderActionResult = {
   cancelled?: number;
   delivered?: number;
   failed: Array<{ id?: string; supplyId?: string; message: string }>;
+  recovery?: {
+    rescanOrders: FbsDeliveryRecoveryItem[];
+    cancelledOrders: FbsDeliveryRecoveryItem[];
+  };
   orders: ClientFbsOrders;
+};
+
+export type FbsDeliveryRecoveryItem = {
+  orderId: string;
+  requestId: string | null;
+  requestNumber: number | null;
+  productName: string;
+  article: string | null;
+  size: string | null;
+  barcode: string | null;
+  kiz: string | null;
+  boxCode: string | null;
+  cargoPlaceCode: string | null;
+  reason: string;
 };
 
 export type ChangeFbsSupplyDestinationResult = {
@@ -2402,12 +3661,18 @@ export type FbsBillingSettings = {
   client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
   settings: {
     id: string;
+    primaryProcessingEnabled: boolean;
     defaultDeliveryDestination: FbsDeliveryDestination;
     pickupPointBasePriceRub: number;
     vnukovoBasePriceRub: number;
     baseIncludedItems: number;
     extraBlockItems: number;
     extraBlockPriceRub: number;
+    tieredLogisticsEnabled: boolean;
+    logisticsFreeItemsLimit: number;
+    logisticsCubicMeterLiters: number;
+    logisticsCubicMeterPriceRub: number;
+    logisticsPalletPriceRub: number;
     boxCapacityItems: number;
     palletsEnabled: boolean;
     boxesPerPallet: number;
@@ -2418,6 +3683,7 @@ export type FbsBillingSettings = {
     additionalServices: Array<{
       serviceId: string;
       quantityMultiplier: number;
+      matchKeywords: string;
     }>;
   };
   serviceOptions: Array<{
@@ -2449,6 +3715,9 @@ export type UpsertMarketplaceConnectionPayload = {
   apiKey: string;
   isActive?: boolean;
   comment?: string;
+  fbsExecutionWarehouseId?: string;
+  fbsDropoffWarehouseId?: string;
+  fbsAutoRouteNewWarehouses?: boolean;
 };
 
 export type StockBalance = {
@@ -2476,12 +3745,137 @@ export type StockBalance = {
     id: string;
     code: string;
     status: string;
+    warehouse?: {
+      id: string;
+      code: string;
+      name: string;
+      city: string;
+    } | null;
   } | null;
   pallet: {
     id: string;
     code: string;
     status: string;
   } | null;
+};
+
+export type BranchSummary = {
+  id: string;
+  code: string;
+  name: string;
+  city: string;
+  address: string | null;
+  ownCompanyId: string | null;
+  isActive: boolean;
+  sortOrder: number;
+  ownCompany?: {
+    id: string;
+    shortName: string;
+    fullName: string;
+    inn: string;
+    isActive: boolean;
+  } | null;
+  userScopes?: Array<{
+    canRead: boolean;
+    canWrite: boolean;
+    isResponsible: boolean;
+    user: { id: string; name: string; email: string; status: string };
+  }>;
+  _count?: { clients: number; boxes: number; requests: number };
+  _stock?: {
+    totalQuantity: number;
+    availableQuantity: number;
+    skuCount: number;
+    balanceRows: number;
+  };
+};
+
+export type ClientBranchAccessResponse = {
+  client: {
+    id: string;
+    code: string;
+    name: string;
+  };
+  branches: Array<
+    Pick<BranchSummary, 'id' | 'code' | 'name' | 'city' | 'address' | 'isActive' | 'sortOrder'> & {
+      enabled: boolean;
+      status: string | null;
+      source: string | null;
+      activatedAt: string | null;
+    }
+  >;
+};
+
+export type BranchStockSummary = {
+  warehouse: Pick<BranchSummary, 'id' | 'code' | 'name' | 'city' | 'address'>;
+  totalQuantity: number;
+  availableQuantity: number;
+  skuCount: number;
+  balanceRows: number;
+  outgoingInTransitQuantity: number;
+  incomingInTransitQuantity: number;
+};
+
+export type InterBranchTransfer = {
+  id: string;
+  number: number;
+  status: string;
+  totalQuantity: number;
+  items: Array<{ skuId: string; quantity: number; internalSku: string; name: string }>;
+  manifest: {
+    boxes: Array<{
+      boxId: string;
+      code: string;
+      generated: boolean;
+      quantity: number;
+    }>;
+  } | null;
+  sourceBoxCodes: string[] | null;
+  receivedBoxCodes: string[] | null;
+  destinationBoxCode: string | null;
+  receivedQuantity: number;
+  comment: string | null;
+  createdByName: string;
+  receivedByName: string | null;
+  dispatchedAt: string | null;
+  receivedAt: string | null;
+  createdAt: string;
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  fromWarehouse: Pick<BranchSummary, 'id' | 'code' | 'name' | 'city'>;
+  toWarehouse: Pick<BranchSummary, 'id' | 'code' | 'name' | 'city'>;
+  issues?: Array<{
+    id: string;
+    boxCode: string | null;
+    type: string;
+    status: string;
+    message: string;
+    createdAt: string;
+  }>;
+  alreadyReceived?: boolean;
+};
+
+export type BranchTransferBoxesFilePreview = {
+  fileName: string;
+  sheetName: string;
+  warehouse: Pick<BranchSummary, 'id' | 'code' | 'name' | 'city'>;
+  validCodes: string[];
+  duplicateCodes: string[];
+  rows: Array<{
+    row: number;
+    code: string;
+    status: 'READY' | 'ERROR';
+    quantity: number;
+    skuCount: number;
+    reason: string | null;
+  }>;
+  summary: {
+    sourceRows: number;
+    uniqueCodes: number;
+    readyBoxes: number;
+    errorBoxes: number;
+    duplicateBoxes: number;
+    totalQuantity: number;
+  };
 };
 
 export type ServiceClientStockSummary = {
@@ -2553,14 +3947,29 @@ export type ServiceMaintenanceMode = {
 };
 
 export type ServiceSessionSummary = {
+  id: string;
   userId: string | null;
   name: string;
   email: string;
   client: string;
   ip: string;
   userAgent: string;
+  appName: string;
+  browserName: string;
   openedAt: string;
+  lastSeenAt: string;
+  expiresAt: string | null;
+  isActive: boolean;
   minutesAgo: number;
+};
+
+export type TelegramNotificationSection = 'REQUESTS' | 'FBS' | 'WAREHOUSE' | 'LOGISTICS' | 'BILLING' | 'KIZ' | 'SYSTEM';
+
+export type ServiceTelegramGroup = {
+  id: string;
+  title: string;
+  type: 'group' | 'supergroup' | 'channel';
+  username: string | null;
 };
 
 export type ServiceTelegramSettings = {
@@ -2568,11 +3977,13 @@ export type ServiceTelegramSettings = {
     enabled: boolean;
     botToken: string;
     fulfillmentChatIds: string[];
+    sections: TelegramNotificationSection[];
   };
   client: {
     clientId: string;
     enabled: boolean;
     chatId: string;
+    sections: TelegramNotificationSection[];
   } | null;
 };
 
@@ -2596,6 +4007,8 @@ export type TurnoverSkuReport = {
   clientSku: string | null;
   article: string | null;
   name: string;
+  color: string | null;
+  size: string | null;
   primaryBarcode: string | null;
   barcodes: string[];
   volumeLiters: number | null;
@@ -2619,6 +4032,9 @@ export type TurnoverSkuReport = {
     boxId: string | null;
     boxCode: string;
     palletCode: string | null;
+    palletSortCode: string | null;
+    storageZone: { id: string; code: string; name: string } | null;
+    placementSource: string | null;
     status: string;
     quantity: number;
   }>;
@@ -2768,6 +4184,20 @@ export type TurnoverSuggestions = {
   }>;
 };
 
+export type MarketplaceConnectionCheckResult = {
+  connectionId: string;
+  clientId: string;
+  marketplace: MarketplaceType;
+  checkedAt: string;
+  ok: boolean;
+  checks: Array<{
+    key: 'products' | 'fbsOrders' | 'warehouses';
+    label: string;
+    ok: boolean;
+    message: string;
+  }>;
+};
+
 export type TurnoverBoxDetails = {
   generatedAt: string;
   box: {
@@ -2775,6 +4205,15 @@ export type TurnoverBoxDetails = {
     code: string;
     status: string;
     client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+    storagePlacement: {
+      source: string;
+      scannedAt: string;
+      pallet: {
+        id: string;
+        code: string;
+        zone: { id: string; code: string; name: string } | null;
+      };
+    } | null;
   };
   totals: {
     rows: number;
@@ -3115,10 +4554,109 @@ export type WarehouseBoxSummary = {
     code: string;
     status: string;
   } | null;
+  storagePlacement: {
+    id: string;
+    source: string;
+    scannedAt: string;
+    pallet: {
+      id: string;
+      code: string;
+      zone: {
+        id: string;
+        code: string;
+        name: string;
+      } | null;
+    };
+  } | null;
   _count: {
     balances: number;
     movements: number;
   };
+};
+
+export type WarehouseBoxCheckDecision =
+  | 'PENDING'
+  | 'WRITE_OFF'
+  | 'KEEP_AS_IS'
+  | 'SET_QUANTITY';
+
+export type WarehouseBoxCheckRow = {
+  id: string;
+  checkId: string;
+  boxId: string | null;
+  boxCode: string;
+  clientId: string;
+  clientName: string;
+  skuId: string | null;
+  internalSku: string;
+  skuName: string;
+  barcode: string | null;
+  currentQuantity: number;
+  suspectQuantity: number;
+  relabelQuantity: number;
+  fbsPickedQuantity: number;
+  restoredQuantity: number;
+  markCount: number;
+  excessMarkCount: number;
+  severity: 'HIGH' | 'MEDIUM' | 'LOW';
+  reasonCode: string;
+  reasonLabel: string;
+  evidence: {
+    relabelOrders?: string[];
+    restoredDocuments?: string[];
+    periodFrom?: string;
+    periodTo?: string;
+  } | null;
+  decision: WarehouseBoxCheckDecision;
+  decidedQuantity: number | null;
+  beforeQuantity: number | null;
+  afterQuantity: number | null;
+  decisionComment: string | null;
+  decidedByUserId: string | null;
+  decidedByName: string | null;
+  decidedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type WarehouseBoxCheck = {
+  id: string;
+  periodFrom: string;
+  periodTo: string;
+  clientId: string | null;
+  boxesChecked: number;
+  findingsCount: number;
+  probableUnits: number;
+  highConfidenceRows: number;
+  createdByUserId: string;
+  createdByName: string;
+  rows: WarehouseBoxCheckRow[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ShippedKizHistoryRow = {
+  id: string;
+  assemblyId: string;
+  clientId: string;
+  clientName: string;
+  requestId: string;
+  requestNumber: number;
+  requestTitle: string;
+  orderId: string | null;
+  supplyId: string | null;
+  skuId: string;
+  internalSku: string;
+  barcode: string | null;
+  article: string | null;
+  productName: string;
+  color: string | null;
+  size: string | null;
+  kiz: string;
+  sourceBoxCode: string | null;
+  arrivalAt: string | null;
+  shippedAt: string;
+  createdAt: string;
 };
 
 export type WarehousePalletSummary = {
@@ -3140,6 +4678,82 @@ export type WarehousePalletSummary = {
   }>;
   _count: {
     balances: number;
+  };
+};
+
+export type StorageLayout = {
+  warehouse: {
+    id: string;
+    code: string;
+    name: string;
+  };
+  codePrefixes: {
+    pallet: string;
+    storageCell: string;
+    rackSlot: string;
+    rack: string;
+    storageBox: string;
+  };
+  zones: Array<{
+    id: string;
+    warehouseId: string;
+    code: string;
+    name: string;
+    palletCount: number;
+    boxCount: number;
+  }>;
+  pallets: Array<{
+    id: string;
+    warehouseId: string;
+    clientId: string;
+    zoneId: string | null;
+    code: string;
+    status: string;
+    source: string;
+    client: {
+      id: string;
+      code: string;
+      name: string;
+    };
+    deviceCode: string | null;
+    workerName: string | null;
+    lastSyncedAt: string | null;
+    closedAt: string | null;
+    updatedAt: string;
+    zone: {
+      id: string;
+      code: string;
+      name: string;
+    } | null;
+    boxes: Array<{
+      id: string;
+      boxId: string | null;
+      boxCode: string;
+      source: string;
+      scannedAt: string;
+      box: {
+        id: string;
+        status: string;
+        client: {
+          id: string;
+          code: string;
+          name: string;
+        };
+      } | null;
+    }>;
+  }>;
+  summary: {
+    zones: number;
+    pallets: number;
+    boxes: number;
+    unassignedPallets: number;
+    boxesMissingInWms: number;
+  };
+  googleSync: {
+    sourceUrl: string;
+    lastSyncedAt: string | null;
+    lastAttemptAt: string | null;
+    error: string | null;
   };
 };
 
@@ -3424,6 +5038,7 @@ export type UserSummary = {
   name: string;
   status: string;
   analyticsEnabled: boolean;
+  activeWarehouseId?: string | null;
   createdAt?: string;
   hasTsdActivationCode?: boolean;
   roles: Array<{
@@ -3434,6 +5049,11 @@ export type UserSummary = {
   }>;
   clientScopes: UserClientScope[];
   printerScopes: UserPrinterScope[];
+  warehouseScopes?: Array<{
+    canRead: boolean;
+    canWrite: boolean;
+    warehouse: Pick<BranchSummary, 'id' | 'code' | 'name' | 'city'>;
+  }>;
 };
 
 export type UserReferralClientSummary = {
@@ -3460,9 +5080,11 @@ export type CreateUserPayload = {
   roleCodes?: string[];
   clientIds?: string[];
   writableClientIds?: string[];
+  warehouseId?: string;
 };
 
 export type UpdateUserClientScopesPayload = {
+  allClients?: boolean;
   scopes: Array<{
     clientId: string;
     canRead?: boolean;
@@ -3524,6 +5146,7 @@ export type UpdateUserProfilePayload = {
   password?: string;
   status?: string;
   analyticsEnabled?: boolean;
+  warehouseId?: string | null;
 };
 
 export type UpdateUserPrinterScopesPayload = {
@@ -4183,6 +5806,502 @@ type BootstrapPayload = LoginPayload & {
   bootstrapSecret: string;
 };
 
+export type AdministrationOverview = {
+  owner: { id: string; name: string; email: string };
+  metrics: Record<string, number>;
+  system: {
+    apiUptimeSeconds: number;
+    memoryMb: number;
+    nodeVersion: string;
+    environment: string;
+  };
+  boxCodePolicy: BoxCodePolicy;
+  ai: {
+    settings: Record<string, unknown>;
+    apiKeyConfigured: boolean;
+    liveProviderAvailable: boolean;
+    mode: string;
+  };
+  safeguards: Record<string, boolean>;
+};
+
+export type AdministrationTechnicalWorkCategory =
+  | 'REQUESTS'
+  | 'PALLET_SORTS'
+  | 'BOXES'
+  | 'MARKETPLACE_STATUS';
+
+export type AdministrationTechnicalWorkOverview = {
+  checkedAt: string;
+  activeRequests: number;
+  statusProblems: number;
+};
+
+export type AdministrationTechnicalWorkIssue = {
+  id: string;
+  category: AdministrationTechnicalWorkCategory;
+  severity: 'WARNING' | 'CRITICAL';
+  title: string;
+  explanation: string;
+  recommendation: string;
+  request: {
+    id: string;
+    number: number;
+    title: string;
+    status: string;
+    client: { id: string; code: string; name: string };
+  } | null;
+  orderId: string | null;
+  objectCode: string | null;
+  state: string;
+  evidence: string[];
+  actions: Array<{
+    id: 'REPAIR_REQUEST_ROUTE' | 'RETURN_TO_STOCK' | 'MANAGER_CONFIRMED';
+    label: string;
+    tone: 'PRIMARY' | 'DANGER';
+    confirmation: string;
+    requiresComment: boolean;
+  }>;
+};
+
+export type AdministrationTechnicalWorkDiagnosis = {
+  category: AdministrationTechnicalWorkCategory;
+  checkedAt: string;
+  summary: { issues: number; critical: number; actionable: number };
+  issues: AdministrationTechnicalWorkIssue[];
+};
+
+export type AdministrationTechnicalWorkBulkResult = {
+  category: AdministrationTechnicalWorkCategory;
+  action: AdministrationTechnicalWorkIssue['actions'][number]['id'];
+  requestedIssues: number;
+  operations: number;
+  applied: number;
+  failed: number;
+  verified: number;
+  verificationWarning: string | null;
+  results: Array<{
+    issueIds: string[];
+    applied: boolean;
+    verified: boolean;
+    message: string;
+  }>;
+  diagnosis: AdministrationTechnicalWorkDiagnosis | null;
+};
+
+export type AdministrationTsdWorkloads = {
+  checkedAt: string;
+  summary: {
+    registeredDevices: number;
+    onlineDevices: number;
+    busyDevices: number;
+    tasks: number;
+    protectedTasks: number;
+  };
+  devices: Array<{
+    deviceCode: string;
+    deviceId: string | null;
+    deviceName: string | null;
+    status: string | null;
+    user: { id: string; name: string; email: string } | null;
+    lastSeenAt: string | null;
+    online: boolean;
+    workloads: Array<{
+      id: string;
+      kind: 'FBS_ORDER' | 'REQUEST_SESSION';
+      request: {
+        id: string;
+        number: number;
+        title: string;
+        status: string;
+        client: { id: string; code: string; name: string };
+      };
+      orderId: string | null;
+      stage: string;
+      stageLabel: string;
+      productName: string | null;
+      article: string | null;
+      sourceBoxCode: string | null;
+      workerName: string | null;
+      updatedAt: string;
+      hasScans: boolean;
+      protected: boolean;
+      protectedReason: string | null;
+    }>;
+  }>;
+};
+
+export type TsdMonitoring = Omit<AdministrationTsdWorkloads, 'summary' | 'devices'> & {
+  summary: AdministrationTsdWorkloads['summary'] & { errors24h: number };
+  pickerStatistics: {
+    period: { from: string; to: string; label: string };
+    summary: { workers: number; orders: number; units: number };
+    workers: Array<{
+      workerId: string | null;
+      workerName: string;
+      deviceCodes: string[];
+      orders: number;
+      units: number;
+      measuredOrders: number;
+      totalDurationSeconds: number;
+      averageDurationSeconds: number | null;
+      orderDetails: Array<{
+        taskId: string;
+        orderId: string;
+        requestId: string;
+        requestNumber: number;
+        clientName: string;
+        productName: string;
+        article: string | null;
+        units: number;
+        deviceCode: string;
+        startedAt: string | null;
+        completedAt: string;
+        durationSeconds: number | null;
+      }>;
+    }>;
+  };
+  devices: Array<AdministrationTsdWorkloads['devices'][number] & {
+    liveState: {
+      screen?: string | null;
+      screenLabel?: string | null;
+      stage?: string | null;
+      state?: string | null;
+      requestId?: string | null;
+      requestNumber?: number | null;
+      clientName?: string | null;
+      orderId?: string | null;
+      productName?: string | null;
+      boxCode?: string | null;
+      total?: number | null;
+      completed?: number | null;
+      remaining?: number | null;
+      accepted?: number | null;
+      lastAction?: string | null;
+      appVersion?: string | null;
+      reportedAt?: string | null;
+      inventorySessionId?: string | null;
+      inventoryType?: string | null;
+      inventoryMandatory?: boolean | null;
+      inventoryBoxId?: string | null;
+      inventoryBoxCode?: string | null;
+    } | null;
+    progress: { total: number; completed: number; remaining: number } | null;
+    errors: Array<{
+      id: string;
+      message: string;
+      screen: string | null;
+      requestId: string | null;
+      requestNumber: number | null;
+      orderId: string | null;
+      workerName: string | null;
+      clientName: string | null;
+      createdAt: string;
+      status: string;
+    }>;
+    activity: Array<{
+      id: string;
+      type: string;
+      status: string;
+      message: string | null;
+      stage: string | null;
+      screen: string | null;
+      requestId: string | null;
+      requestNumber: number | null;
+      orderId: string | null;
+      workerName: string | null;
+      clientName: string | null;
+      boxCode: string | null;
+      barcode: string | null;
+      createdAt: string;
+    }>;
+  }>;
+};
+
+export type AdministrationFbsErrorRequest = {
+  id: string;
+  number: number;
+  title: string;
+  status: string;
+  updatedAt: string;
+  client: { id: string; code: string; name: string };
+  orders: number;
+  tasks: { total: number; completed: number; outstanding: number };
+};
+
+export type AdministrationFbsBoxAuditState =
+  | 'OK'
+  | 'NO_REMAINING_DEMAND'
+  | 'BLOCKED_BY_RESERVATIONS'
+  | 'SKU_OR_QUANTITY_MISMATCH'
+  | 'NOT_ON_PALLET_SORT'
+  | 'EMPTY'
+  | 'ARCHIVED'
+  | 'MISSING';
+
+export type AdministrationFbsBoxAudit = {
+  checkedAt: string;
+  request: {
+    id: string;
+    number: number;
+    title: string;
+    status: string;
+    client: { id: string; code: string; name: string };
+  };
+  taskSummary: { total: number; completed: number; outstanding: number; inProgress: number };
+  summary: {
+    planBoxes: number;
+    healthy: number;
+    issues: number;
+    noRemainingDemand: number;
+    blockedByReservations: number;
+    skuOrQuantityMismatch: number;
+    notOnPalletSort: number;
+    empty: number;
+    archived: number;
+    missing: number;
+  };
+  rows: Array<{
+    code: string;
+    state: AdministrationFbsBoxAuditState;
+    stateLabel: string;
+    palletCode: string | null;
+    availableUnits: number;
+    reservedUnits: number;
+    freeUnits: number;
+    requiredUnits: number;
+    externalOrders: string[];
+    externalOrdersCount: number;
+    products: Array<{
+      skuId: string;
+      name: string;
+      available: number;
+      reserved: number;
+      free: number;
+      required: number;
+    }>;
+    recommendation: string;
+  }>;
+};
+
+export type AdministrationFbsErrorRepair = {
+  repairedAt: string;
+  selection: {
+    repairedTasks: number;
+    reservedTasks: number;
+    waitingStockTasks: number;
+    preservedStartedTasks: number;
+    message: string;
+  };
+  before: AdministrationFbsBoxAudit;
+  after: AdministrationFbsBoxAudit;
+  message: string;
+};
+
+export type AdministrationPerformanceOptimization = {
+  status: 'COMPLETED';
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  cleanup: {
+    expiredMobileCommands: number;
+    expiredMobileSessions: number;
+  };
+  runtime: {
+    expiredCacheEntries: number;
+    retainedCacheEntries: number;
+    memoryBeforeMb: number;
+    memoryAfterMb: number;
+  };
+  files: {
+    roots: string[];
+    scanned: number;
+    deleted: number;
+    freedBytes: number;
+    freedMb: number;
+  };
+  database: {
+    statisticsUpdated: boolean;
+    before: { sizeMb: number; liveRows: number; deadRows: number };
+    after: { sizeMb: number; liveRows: number; deadRows: number };
+  };
+};
+
+export type BoxCodePolicy = {
+  primaryPrefix: string;
+  allowedPrefixes: string[];
+  receiptPrefix: string;
+  balancePrefix: string;
+  whiteReceiptPrefixes: string[];
+  grayReceiptPrefixes: string[];
+  palletPrefix: string;
+  storageCellPrefix: string;
+  rackSlotPrefix: string;
+  rackPrefix: string;
+  storageBoxPrefix: string;
+  autoCorrections: Record<string, string>;
+};
+
+export type AdministrationSetting = {
+  key: string;
+  group: string;
+  title: string;
+  description: string;
+  risk: 'LOW' | 'MEDIUM' | 'HIGH';
+  defaultValue: unknown;
+  editable: boolean;
+  secret?: boolean;
+  value: unknown;
+  updatedAt: string | null;
+  updatedByUserId: string | null;
+};
+
+export type AdministrationWorkspaceVisibility = {
+  workspaces: string[];
+  users: Array<{
+    id: string;
+    email: string;
+    name: string;
+    status: string;
+    roleCodes: string[];
+    overrides: Record<string, boolean>;
+  }>;
+  note: string;
+};
+
+export type MarketplaceDiagnostics = {
+  checkedAt: string;
+  summary: { checked: number; healthy: number; failed: number };
+  results: Array<Record<string, unknown> & {
+    connectionId: string;
+    marketplace: string;
+    accountName: string;
+    healthy: boolean;
+    client: { id: string; code: string; name: string };
+  }>;
+};
+
+export type AdministrationAuditEntry = {
+  id: string;
+  action: string;
+  entity: string;
+  entityId: string | null;
+  payload: unknown;
+  createdAt: string;
+  user: { id: string; name: string; email: string } | null;
+};
+
+export type AdministrationAssistantPreview = {
+  previewId: string;
+  prompt: string;
+  provider: string;
+  liveModelConfigured: boolean;
+  title: string;
+  summary: string;
+  risk: 'LOW' | 'MEDIUM' | 'HIGH';
+  recommendations: string[];
+  rollback: string;
+  actions: Array<{ type: string; executable: boolean; [key: string]: unknown }>;
+};
+
+export type AdministrationDocumentation = {
+  generatedAt: string;
+  sections: Array<{ id: string; title: string; summary: string }>;
+  references: Array<{ title: string; path: string }>;
+};
+
+export type AdministrationStockComparison = {
+  checkedAt: string;
+  source: 'FILE' | 'API';
+  file: { name: string; sheetName: string; sourceRows: number; duplicateRows: number };
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  warehouse: Pick<BranchSummary, 'id' | 'code' | 'name' | 'city'>;
+  fixContext: {
+    connectionId: string | null;
+    warehouseId: string | null;
+    warehouseName: string | null;
+    accountName: string | null;
+  };
+  wildberriesWarehouses?: Array<{
+    connectionId: string;
+    warehouseId: string | null;
+    warehouseName: string | null;
+    accountName: string | null;
+  }>;
+  health: 'OK' | 'DANGER';
+  summary: {
+    products: number;
+    matched: number;
+    exact: number;
+    differences: number;
+    excessProducts: number;
+    excessUnits: number;
+    wmsGreaterProducts: number;
+    notFound: number;
+  };
+  rows: Array<{
+    barcode: string;
+    quantity: number;
+    product: string | null;
+    brand: string | null;
+    name: string | null;
+    size: string | null;
+    sellerArticle: string | null;
+    sourceRows: number[];
+    sku: { id: string; internalSku: string; article: string | null; name: string; size: string | null } | null;
+    wmsAvailable: number;
+    wmsReserved: number;
+    wmsQuantity: number;
+    difference: number;
+    status: 'MATCH' | 'WB_EXCESS' | 'WMS_GREATER' | 'NOT_FOUND';
+  }>;
+};
+
+export type AdministrationPhantomStock = {
+  checkedAt: string;
+  health: 'OK' | 'DANGER';
+  summary: {
+    balancesChecked: number;
+    findings: number;
+    suspectUnits: number;
+    boxes: number;
+    clients: number;
+  };
+  rows: Array<{
+    balanceId: string;
+    balanceUpdatedAt: string;
+    clientId: string;
+    clientCode: string;
+    clientName: string;
+    boxId: string;
+    boxCode: string;
+    skuId: string;
+    internalSku: string;
+    skuName: string;
+    barcode: string | null;
+    status: 'PACKING' | 'SHIPPING';
+    currentQuantity: number;
+    suspectQuantity: number;
+    reasonCode: 'SHIPPED_KIZ_IN_BALANCE' | 'CLOSED_REQUEST_RESERVE';
+    reason: string;
+    shippedMarks: Array<{
+      markId: string;
+      maskedKiz: string;
+      requestId: string;
+      requestNumber: number;
+      orderId: string | null;
+      shippedAt: string;
+    }>;
+    closedRequests: Array<{
+      requestId: string;
+      requestNumber: number;
+      movementId: string;
+      quantity: number;
+      createdAt: string;
+    }>;
+  }>;
+};
+
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? '/api/v1';
 
 export async function login(payload: LoginPayload) {
@@ -4205,6 +6324,254 @@ export async function fetchMe(accessToken: string) {
   });
 }
 
+export async function fetchAdministrationOverview(accessToken: string) {
+  return request<AdministrationOverview>('/administration/overview', { accessToken });
+}
+
+// ADDED: Technical-work diagnostics expose only server-whitelisted repairs.
+export async function fetchAdministrationTechnicalWork(accessToken: string) {
+  return request<AdministrationTechnicalWorkOverview>('/administration/technical-work', { accessToken });
+}
+
+export async function diagnoseAdministrationTechnicalWork(
+  accessToken: string,
+  category: AdministrationTechnicalWorkCategory,
+) {
+  return request<AdministrationTechnicalWorkDiagnosis>('/administration/technical-work/diagnose', {
+    method: 'POST',
+    body: { category },
+    accessToken,
+  });
+}
+
+export async function applyAdministrationTechnicalWork(
+  accessToken: string,
+  payload: {
+    issueId: string;
+    category: AdministrationTechnicalWorkCategory;
+    action: AdministrationTechnicalWorkIssue['actions'][number]['id'];
+    confirmation: string;
+    comment?: string;
+  },
+) {
+  return request<{ applied: boolean; verified: boolean; message: string }>(
+    '/administration/technical-work/apply',
+    { method: 'POST', body: payload, accessToken },
+  );
+}
+
+// ADDED: One bulk run is constrained to one category and one server-whitelisted action.
+export async function applyAdministrationTechnicalWorkBulk(
+  accessToken: string,
+  payload: {
+    category: AdministrationTechnicalWorkCategory;
+    issueIds: string[];
+    action: AdministrationTechnicalWorkIssue['actions'][number]['id'];
+    confirmation: string;
+    comment?: string;
+  },
+) {
+  return request<AdministrationTechnicalWorkBulkResult>('/administration/technical-work/apply-bulk', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function fetchAdministrationTsdWorkloads(accessToken: string) {
+  return request<AdministrationTsdWorkloads>('/administration/tsd-workloads', { accessToken });
+}
+
+export async function fetchTsdMonitoring(accessToken: string) {
+  return request<TsdMonitoring>('/administration/tsd-monitor', { accessToken });
+}
+
+export async function sendTsdMonitorAction(
+  accessToken: string,
+  deviceCode: string,
+  action: 'RELOAD_REQUEST' | 'UPDATE_APP' | 'UNLOCK_INVENTORY' | 'LOGOUT',
+) {
+  return request<{ accepted: boolean; message: string }>(
+    `/administration/tsd-monitor/devices/${encodeURIComponent(deviceCode)}/action`,
+    { method: 'POST', body: { action }, accessToken },
+  );
+}
+
+export async function fetchAdministrationFbsErrorRequests(accessToken: string) {
+  return request<AdministrationFbsErrorRequest[]>('/administration/fbs-request-errors/requests', { accessToken });
+}
+
+export async function checkAdministrationFbsRequestErrors(accessToken: string, requestId: string) {
+  return request<AdministrationFbsBoxAudit>('/administration/fbs-request-errors/check', {
+    method: 'POST',
+    body: { requestId },
+    accessToken,
+  });
+}
+
+export async function repairAdministrationFbsRequestErrors(accessToken: string, requestId: string) {
+  return request<AdministrationFbsErrorRepair>('/administration/fbs-request-errors/repair', {
+    method: 'POST',
+    body: { requestId, confirmation: 'ИСПРАВИТЬ' },
+    accessToken,
+  });
+}
+
+export async function releaseAdministrationTsdWorkload(
+  accessToken: string,
+  payload: { kind: 'FBS_ORDER' | 'REQUEST_SESSION'; workloadId: string; requestId: string; deviceCode: string },
+) {
+  return request<{ released: number; message: string }>('/administration/tsd-workloads/release', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function disconnectAdministrationTsdRequest(
+  accessToken: string,
+  payload: { requestId: string; deviceCode: string },
+) {
+  return request<{ released: number; releasedOrders: number; message: string }>(
+    '/administration/tsd-workloads/disconnect-request',
+    { method: 'POST', body: payload, accessToken },
+  );
+}
+
+export async function fetchAdministrationSettings(accessToken: string) {
+  return request<AdministrationSetting[]>('/administration/settings', { accessToken });
+}
+
+export async function updateAdministrationSetting(
+  accessToken: string,
+  key: string,
+  value: unknown,
+  reason: string,
+) {
+  return request<{ key: string; value: unknown; updatedAt: string }>(
+    `/administration/settings/${encodeURIComponent(key)}`,
+    { method: 'PATCH', body: { value, reason }, accessToken },
+  );
+}
+
+export async function fetchAdministrationWorkspaceVisibility(accessToken: string) {
+  return request<AdministrationWorkspaceVisibility>('/administration/users/workspaces', {
+    accessToken,
+  });
+}
+
+export async function updateAdministrationWorkspaceVisibility(
+  accessToken: string,
+  userId: string,
+  overrides: Record<string, boolean>,
+  reason: string,
+) {
+  return request<{ user: { id: string; name: string; email: string }; overrides: Record<string, boolean> }>(
+    `/administration/users/${encodeURIComponent(userId)}/workspaces`,
+    { method: 'PUT', body: { overrides, reason }, accessToken },
+  );
+}
+
+export async function runAdministrationMarketplaceDiagnostics(
+  accessToken: string,
+  filter: { clientId?: string; connectionId?: string } = {},
+) {
+  return request<MarketplaceDiagnostics>('/administration/marketplaces/diagnostics', {
+    method: 'POST',
+    body: filter,
+    accessToken,
+  });
+}
+
+export async function optimizeAdministrationPerformance(accessToken: string) {
+  return request<AdministrationPerformanceOptimization>('/administration/performance/optimize', {
+    method: 'POST',
+    accessToken,
+  });
+}
+
+export async function fetchAdministrationPhantomStocks(accessToken: string) {
+  return request<AdministrationPhantomStock>('/administration/phantom-stocks', { accessToken });
+}
+
+export async function fixAdministrationPhantomStock(accessToken: string, balanceId: string) {
+  return request<{ overview: AdministrationPhantomStock }>(
+    `/administration/phantom-stocks/${encodeURIComponent(balanceId)}/fix`,
+    { method: 'POST', accessToken },
+  );
+}
+
+export async function fixAllAdministrationPhantomStocks(accessToken: string) {
+  return request<{
+    fixed: number;
+    removedUnits: number;
+    overview: AdministrationPhantomStock;
+  }>('/administration/phantom-stocks/fix-all', { method: 'POST', accessToken });
+}
+
+export async function fetchAdministrationAudit(
+  accessToken: string,
+  search = '',
+  take = 80,
+) {
+  return request<AdministrationAuditEntry[]>(
+    withQuery('/administration/audit', { search, take }),
+    { accessToken },
+  );
+}
+
+export async function previewAdministrationAssistant(accessToken: string, prompt: string) {
+  return request<AdministrationAssistantPreview>('/administration/assistant/preview', {
+    method: 'POST',
+    body: { prompt },
+    accessToken,
+  });
+}
+
+export async function applyAdministrationAssistant(
+  accessToken: string,
+  previewId: string,
+  confirmation: string,
+) {
+  return request<{ previewId: string; applied: boolean; results: unknown[] }>(
+    '/administration/assistant/apply',
+    { method: 'POST', body: { previewId, confirmation }, accessToken },
+  );
+}
+
+export async function fetchAdministrationDocumentation(accessToken: string) {
+  return request<AdministrationDocumentation>('/administration/documentation', { accessToken });
+}
+
+export async function compareAdministrationWbStockFile(
+  accessToken: string,
+  payload: { clientId: string; warehouseId: string; connectionId: string; marketplaceWarehouseId?: string; file: File },
+) {
+  const form = new FormData();
+  form.append('file', payload.file);
+  return requestMultipart<AdministrationStockComparison>(
+    withQuery('/administration/stocks/compare-file', {
+      clientId: payload.clientId,
+      warehouseId: payload.warehouseId,
+      connectionId: payload.connectionId,
+      marketplaceWarehouseId: payload.marketplaceWarehouseId,
+    }),
+    form,
+    accessToken,
+  );
+}
+
+export async function compareAdministrationWbStockApi(
+  accessToken: string,
+  payload: { clientId: string; warehouseId: string; connectionId: string; marketplaceWarehouseId?: string },
+) {
+  return request<AdministrationStockComparison>('/administration/stocks/compare-wb', {
+    method: 'POST',
+    accessToken,
+    body: payload,
+  });
+}
+
 export async function fetchClients(accessToken: string, options: { includeArchived?: boolean } = {}) {
   return request<ClientSummary[]>(
     withQuery('/clients', {
@@ -4223,6 +6590,108 @@ export async function fetchClientRequests(
   return request<ClientRequestSummary[]>(withQuery('/client-requests', filter), {
     accessToken,
   });
+}
+
+export async function mergeFbsRequestTails(
+  accessToken: string,
+  requestIds: string[],
+  confirmedOrders?: Array<{ connectionId: string; id: string }>,
+) {
+  return request<MergeFbsRequestTailsResult>(
+    '/client-requests/fbs/merge-tails',
+    {
+      method: 'POST',
+      body: { requestIds, confirmedOrders },
+      accessToken,
+    },
+  );
+}
+
+export async function previewFbsRequestTails(
+  accessToken: string,
+  requestIds: string[],
+) {
+  return request<MergeFbsRequestTailsPreview>(
+    '/client-requests/fbs/merge-tails/preview',
+    {
+      method: 'POST',
+      body: { requestIds },
+      accessToken,
+    },
+  );
+}
+
+export async function fetchContracts(accessToken: string) {
+  return request<ClientContractSummary[]>('/contracts', { accessToken });
+}
+
+export async function setClientContractArchived(accessToken: string, contractId: string, archived: boolean) {
+  return request<ClientContractSummary>(`/contracts/${contractId}/archive`, {
+    method: 'PATCH',
+    body: { archived },
+    accessToken,
+  });
+}
+
+export async function deleteClientContract(accessToken: string, contractId: string) {
+  return request<{ id: string; deleted: true }>(`/contracts/${contractId}`, {
+    method: 'DELETE',
+    accessToken,
+  });
+}
+
+export async function fetchContractClients(accessToken: string) {
+  return request<ContractClientOption[]>('/contracts/clients', { accessToken });
+}
+
+export async function createClientContract(accessToken: string, payload: CreateClientContractPayload) {
+  return request<ClientContractSummary>('/contracts', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function checkClientContractRequisites(accessToken: string, contractId: string) {
+  return request<ClientContractRequisitesCheck>(`/contracts/${contractId}/requisites-check`, {
+    accessToken,
+  });
+}
+
+export async function refreshClientContractRequisites(
+  accessToken: string,
+  contractId: string,
+  payload: { expectedFingerprint: string; wmsPassword: string },
+) {
+  return request<RefreshClientContractRequisitesResult>(`/contracts/${contractId}/requisites-refresh`, {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function downloadClientContract(accessToken: string, contractId: string, signed = false) {
+  return requestBlob(`/contracts/${contractId}/${signed ? 'signed-pdf' : 'pdf'}`, accessToken);
+}
+
+export async function uploadSignedClientContract(accessToken: string, contractId: string, file: File) {
+  const form = new FormData();
+  form.append('file', file);
+  return requestMultipart<ClientContractSummary>(`/contracts/${contractId}/signed-pdf`, form, accessToken);
+}
+
+export async function uploadContractAdditionalAgreement(accessToken: string, contractId: string, file: File) {
+  const form = new FormData();
+  form.append('file', file);
+  return requestMultipart<ClientContractSummary>(`/contracts/${contractId}/additional-agreements`, form, accessToken);
+}
+
+export async function downloadContractAdditionalAgreement(
+  accessToken: string,
+  contractId: string,
+  attachmentId: string,
+) {
+  return requestBlob(`/contracts/${contractId}/additional-agreements/${attachmentId}/pdf`, accessToken);
 }
 
 export async function fetchClientRequestManualBoxSelection(accessToken: string, requestId: string) {
@@ -4374,6 +6843,44 @@ export async function fetchClientBillingServices(accessToken: string, clientId: 
   });
 }
 
+export async function fetchClientFbsTurnkeyPricing(accessToken: string, clientId: string) {
+  return request<ClientFbsTurnkeyPricing>(`/billing/clients/${clientId}/fbs-turnkey`, {
+    accessToken,
+  });
+}
+
+export async function updateClientFbsTurnkeyPricing(
+  accessToken: string,
+  clientId: string,
+  payload: {
+    enabled: boolean;
+    unitPriceRub: number;
+    fixedPlusLogisticsEnabled: boolean;
+    fixedPlusLogisticsUnitPriceRub: number;
+    fixedPlusLogisticsDestination: string;
+    tieredLogisticsEnabled?: boolean;
+    logisticsFreeItemsLimit?: number;
+    logisticsCubicMeterLiters?: number;
+    logisticsCubicMeterPriceRub?: number;
+    logisticsPalletPriceRub?: number;
+    primaryProcessingEnabled?: boolean;
+    primaryWhiteUnitPriceRub?: number;
+    primaryGrayUnitPriceRub?: number;
+    primaryReturnUnitPriceRub?: number;
+    primaryServices?: Array<{
+      serviceId: string;
+      quantityMultiplier: number;
+      matchKeywords?: string;
+    }>;
+  },
+) {
+  return request<ClientFbsTurnkeyPricing>(`/billing/clients/${clientId}/fbs-turnkey`, {
+    method: 'PUT',
+    body: payload,
+    accessToken,
+  });
+}
+
 export async function createBillingService(accessToken: string, payload: CreateBillingServicePayload) {
   return request<BillingServiceSummary>('/billing/services', {
     method: 'POST',
@@ -4400,6 +6907,17 @@ export async function fetchOwnCompanies(accessToken: string) {
   });
 }
 
+export async function parseRequisitesDocument(
+  accessToken: string,
+  target: 'own-company' | 'client',
+  file: File,
+) {
+  const form = new FormData();
+  form.append('file', file);
+  const path = target === 'own-company' ? '/own-companies/parse-requisites' : '/clients/parse-requisites';
+  return requestMultipart<RequisitesDocumentResult>(path, form, accessToken);
+}
+
 export async function createOwnCompany(accessToken: string, payload: UpsertOwnCompanyPayload) {
   return request<OwnCompanySummary>('/own-companies', {
     method: 'POST',
@@ -4412,6 +6930,32 @@ export async function updateOwnCompany(accessToken: string, companyId: string, p
   return request<OwnCompanySummary>(`/own-companies/${companyId}`, {
     method: 'PUT',
     body: payload,
+    accessToken,
+  });
+}
+
+export async function uploadOwnCompanyAsset(
+  accessToken: string,
+  companyId: string,
+  kind: 'stamp' | 'signature',
+  file: File,
+) {
+  const form = new FormData();
+  form.append('file', file);
+  return requestMultipart<OwnCompanySummary>(
+    `/own-companies/${companyId}/assets/${kind}`,
+    form,
+    accessToken,
+  );
+}
+
+export async function deleteOwnCompanyAsset(
+  accessToken: string,
+  companyId: string,
+  kind: 'stamp' | 'signature',
+) {
+  return request<OwnCompanySummary>(`/own-companies/${companyId}/assets/${kind}`, {
+    method: 'DELETE',
     accessToken,
   });
 }
@@ -4443,6 +6987,211 @@ export async function fetchBillingReconciliation(
   });
 }
 
+export async function fetchExpenseEntries(
+  accessToken: string,
+  filter: {
+    clientId?: string;
+    category?: ExpenseCategory;
+    dateFrom?: string;
+    dateTo?: string;
+    limit?: number;
+  } = {},
+) {
+  return request<ExpenseEntry[]>(withQuery('/expenses/entries', filter), {
+    accessToken,
+  });
+}
+
+export async function createExpenseEntry(
+  accessToken: string,
+  payload: {
+    category: ExpenseCategory;
+    expenseDate: string;
+    description: string;
+    amountRub: number;
+    clientId?: string;
+    requestId?: string;
+    quantity?: number;
+    unit?: string;
+    unitPriceRub?: number;
+    workerName?: string;
+    comment?: string;
+  },
+) {
+  return request<ExpenseEntry>('/expenses/entries', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function cancelExpenseEntry(accessToken: string, entryId: string) {
+  return request<ExpenseEntry>(`/expenses/entries/${entryId}/cancel`, {
+    method: 'PATCH',
+    accessToken,
+  });
+}
+
+export async function fetchExpenseMaterials(accessToken: string) {
+  return request<ExpenseMaterial[]>('/expenses/materials', { accessToken });
+}
+
+export async function createExpenseMaterial(
+  accessToken: string,
+  payload: {
+    code: string;
+    name: string;
+    unit?: string;
+    initialQuantity?: number;
+    averageUnitCostRub?: number;
+    minStockQuantity?: number;
+    comment?: string;
+  },
+) {
+  return request<ExpenseMaterial>('/expenses/materials', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function updateExpenseMaterial(
+  accessToken: string,
+  materialId: string,
+  payload: {
+    code?: string;
+    name?: string;
+    unit?: string;
+    minStockQuantity?: number;
+    isActive?: boolean;
+    comment?: string;
+  },
+) {
+  return request<ExpenseMaterial>(`/expenses/materials/${materialId}`, {
+    method: 'PATCH',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function addExpenseMaterialStock(
+  accessToken: string,
+  materialId: string,
+  payload: {
+    type: 'PURCHASE' | 'ADJUSTMENT' | 'WRITE_OFF';
+    quantity: number;
+    unitCostRub?: number;
+    expenseDate?: string;
+    comment?: string;
+  },
+) {
+  return request<{
+    material: ExpenseMaterial;
+    movement: ExpenseMaterialMovement;
+    expenseEntryId: string | null;
+  }>(`/expenses/materials/${materialId}/stock`, {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function fetchExpenseMaterialMovements(
+  accessToken: string,
+  materialId: string,
+) {
+  return request<ExpenseMaterialMovement[]>(
+    `/expenses/materials/${materialId}/movements`,
+    { accessToken },
+  );
+}
+
+export async function fetchClientExpenseMaterialRules(
+  accessToken: string,
+  clientId: string,
+) {
+  return request<ClientExpenseMaterialRules>(
+    `/expenses/clients/${clientId}/material-rules`,
+    { accessToken },
+  );
+}
+
+export async function updateClientExpenseMaterialRule(
+  accessToken: string,
+  clientId: string,
+  materialId: string,
+  payload: {
+    isEnabled: boolean;
+    quantityPerShippedUnit: number;
+    chargeSeparately: boolean;
+    billingUnitPriceRub?: number;
+    comment?: string;
+  },
+) {
+  return request<ClientExpenseMaterialRules>(
+    `/expenses/clients/${clientId}/material-rules/${materialId}`,
+    {
+      method: 'PUT',
+      body: payload,
+      accessToken,
+    },
+  );
+}
+
+export async function fetchExpensePayroll(accessToken: string, filter: { dateFrom?: string; dateTo?: string } = {}) {
+  return request<ExpensePayrollReport>(withQuery('/expenses/payroll', filter), { accessToken });
+}
+
+export async function updateExpensePayrollRate(accessToken: string, userId: string, rateRub: number) {
+  return request<{ userId: string; userName: string; email: string; rateRub: number; rateIsDefault: boolean }>(
+    `/expenses/payroll/users/${encodeURIComponent(userId)}/rate`,
+    { method: 'PUT', body: { rateRub }, accessToken },
+  );
+}
+
+export async function resetExpensePayrollCounter(accessToken: string, userId: string) {
+  return request<{ userId: string; userName: string; email: string; resetAt: string; message: string }>(
+    `/expenses/payroll/users/${encodeURIComponent(userId)}/reset`,
+    { method: 'POST', accessToken },
+  );
+}
+
+export async function fetchExpenseReport(
+  accessToken: string,
+  filter: {
+    clientId?: string;
+    category?: ExpenseCategory;
+    dateFrom?: string;
+    dateTo?: string;
+  } = {},
+) {
+  return request<ExpenseReport>(withQuery('/expenses/report', filter), {
+    accessToken,
+  });
+}
+
+export async function fetchExpenseDebts(
+  accessToken: string,
+  clientId?: string,
+) {
+  return request<ExpenseDebtReport>(
+    withQuery('/expenses/debts', { clientId }),
+    { accessToken },
+  );
+}
+
+export async function downloadExpenseReportXlsx(
+  accessToken: string,
+  filter: {
+    clientId?: string;
+    category?: ExpenseCategory;
+    dateFrom?: string;
+    dateTo?: string;
+  } = {},
+) {
+  return requestBlob(withQuery('/expenses/report.xlsx', filter), accessToken);
+}
+
 export async function createBillingCharge(accessToken: string, payload: CreateBillingChargePayload) {
   return request<BillingChargeSummary>('/billing/charges', {
     method: 'POST',
@@ -4457,6 +7206,18 @@ export async function updateBillingChargeStatus(
   payload: { status: BillingChargeStatus },
 ) {
   return request<BillingChargeSummary>(`/billing/charges/${chargeId}/status`, {
+    method: 'PATCH',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function updateFbsBillingLogisticsTrip(
+  accessToken: string,
+  chargeId: string,
+  payload: { extraTrip: boolean },
+) {
+  return request<BillingChargeSummary>(`/billing/charges/${chargeId}/fbs-logistics-trip`, {
     method: 'PATCH',
     body: payload,
     accessToken,
@@ -4480,6 +7241,25 @@ export async function fetchBillingInvoices(
   });
 }
 
+export async function recheckBillingInvoice(accessToken: string, invoiceId: string) {
+  return request<BillingInvoiceRecheckResult>(`/billing/invoices/${invoiceId}/recheck`, {
+    accessToken,
+  });
+}
+
+export async function addBillingInvoicePrimaryProcessing(
+  accessToken: string,
+  invoiceId: string,
+) {
+  return request<BillingInvoiceSummary>(
+    `/billing/invoices/${invoiceId}/primary-processing`,
+    {
+      method: 'POST',
+      accessToken,
+    },
+  );
+}
+
 export async function fetchBillingInvoiceDocument(accessToken: string, invoiceId: string) {
   return request<BillingInvoiceDocument>(`/billing/invoices/${invoiceId}/document`, {
     accessToken,
@@ -4488,6 +7268,13 @@ export async function fetchBillingInvoiceDocument(accessToken: string, invoiceId
 
 export async function downloadBillingInvoicePdf(accessToken: string, invoiceId: string) {
   return requestBlob(`/billing/invoices/${invoiceId}/document.pdf`, accessToken);
+}
+
+export async function downloadCombinedBillingInvoicesPdf(
+  accessToken: string,
+  filter: { clientId?: string; status?: BillingInvoiceStatus; periodFrom?: string; periodTo?: string; unpaidOnly?: boolean } = {},
+) {
+  return requestBlob(withQuery('/billing/invoices/combined.pdf', filter), accessToken);
 }
 
 export async function fetchBillingInvoiceActDocument(accessToken: string, invoiceId: string) {
@@ -4516,6 +7303,60 @@ export async function createManualBillingInvoice(accessToken: string, payload: C
   });
 }
 
+export async function fetchClientPaymentAccounts(accessToken: string, clientId: string) {
+  return request<ClientPaymentAccounts>(`/billing/clients/${clientId}/payment-accounts`, {
+    accessToken,
+  });
+}
+
+export async function updateBillingInvoicePaymentAccount(
+  accessToken: string,
+  invoiceId: string,
+  paymentBankAccountId: string,
+) {
+  return request<BillingInvoiceSummary>(`/billing/invoices/${invoiceId}/payment-account`, {
+    method: 'PATCH',
+    body: { paymentBankAccountId },
+    accessToken,
+  });
+}
+
+export async function fetchFbsInvoiceMergePreview(
+  accessToken: string,
+  clientId: string,
+  invoiceIds?: string[],
+) {
+  return request<FbsInvoiceMergePreview>(
+    withQuery('/billing/invoices/fbs-merge-preview', {
+      clientId,
+      invoiceIds: invoiceIds?.length ? invoiceIds.join(',') : undefined,
+    }),
+    { accessToken },
+  );
+}
+
+export async function mergeFbsInvoices(
+  accessToken: string,
+  payload: MergeFbsInvoicesPayload,
+) {
+  return request<BillingInvoiceSummary>('/billing/invoices/fbs-merge', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function mergeBillingInvoices(
+  accessToken: string,
+  payload: MergeBillingInvoicesPayload,
+) {
+  return request<BillingInvoiceSummary>('/billing/invoices/merge', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
 export async function fetchBillingAdvances(accessToken: string, clientId?: string) {
   return request<BillingAdvancesOverview>(withQuery('/billing/advances', { clientId }), {
     accessToken,
@@ -4533,6 +7374,20 @@ export async function createBillingAdvance(accessToken: string, payload: CreateB
 export async function cancelBillingAdvance(accessToken: string, advanceId: string) {
   return request<BillingAdvanceEntry>(`/billing/advances/${advanceId}/cancel`, {
     method: 'PATCH',
+    accessToken,
+  });
+}
+
+export async function applyBillingAdvance(accessToken: string, advanceId: string) {
+  return request<{ advance: BillingAdvanceEntry; invoicesTouched: false }>(`/billing/advances/${advanceId}/apply`, {
+    method: 'POST',
+    accessToken,
+  });
+}
+
+export async function restoreBillingAdvance(accessToken: string, advanceId: string) {
+  return request<{ advance: BillingAdvanceEntry; invoicesTouched: false }>(`/billing/advances/${advanceId}/restore`, {
+    method: 'POST',
     accessToken,
   });
 }
@@ -4677,6 +7532,14 @@ export async function createClientRequest(accessToken: string, payload: CreateCl
   });
 }
 
+export async function createIncomingPayment(accessToken: string, payload: CreateIncomingPaymentPayload) {
+  return request<IncomingPaymentResult>('/billing/payments/incoming', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
 export async function updateClientRequest(
   accessToken: string,
   requestId: string,
@@ -4725,7 +7588,14 @@ export async function updateClientRequestStatus(
     boxes?: number;
     pallets?: number;
     packedUnits?: number;
+    allowOverweightPackages?: boolean;
     packages?: unknown[];
+    stockSources?: Array<{
+      requestItemId: string;
+      boxCode?: string;
+      noBox?: boolean;
+      quantity: number;
+    }>;
   },
 ) {
   return request<ClientRequestSummary>(`/client-requests/${requestId}/status`, {
@@ -4738,6 +7608,24 @@ export async function updateClientRequestStatus(
 export async function cancelClientRequest(accessToken: string, requestId: string) {
   return request<ClientRequestSummary>(`/client-requests/${requestId}/cancel`, {
     method: 'POST',
+    accessToken,
+  });
+}
+
+export async function resolveFbsSynchronization(
+  accessToken: string,
+  requestId: string,
+  action: 'RETURN_TO_WORK' | 'CONFIRM_DELIVERED',
+  requestNumber: number,
+) {
+  return request<{
+    request: ClientRequestSummary;
+    action: 'RETURN_TO_WORK' | 'CONFIRM_DELIVERED';
+    stockChanged: boolean;
+    message: string;
+  }>(`/client-requests/${requestId}/fbs-synchronization/resolve`, {
+    method: 'POST',
+    body: { action, requestNumber },
     accessToken,
   });
 }
@@ -4798,6 +7686,23 @@ export async function fetchSkus(accessToken: string, filter: { clientId?: string
   return request<SkuSummary[]>(withQuery('/skus', filter), {
     accessToken,
   });
+}
+
+export async function fetchFactoryShipments(accessToken: string, clientId?: string) {
+  const query = clientId ? `?clientId=${encodeURIComponent(clientId)}` : '';
+  return request<FactoryShipment[]>(`/factory-shipments${query}`, { accessToken });
+}
+
+export async function createFactoryShipment(accessToken: string, payload: { clientId: string; title: string; comment?: string; items: Array<{ skuId: string; plannedQty: number }> }) {
+  return request<FactoryShipment>('/factory-shipments', { method: 'POST', body: payload, accessToken });
+}
+
+export async function shipFactoryShipment(accessToken: string, id: string) {
+  return request<FactoryShipment>(`/factory-shipments/${id}/ship`, { method: 'POST', accessToken });
+}
+
+export async function reconcileFactoryShipment(accessToken: string, id: string, requestId: string) {
+  return request<FactoryShipment>(`/factory-shipments/${id}/reconcile`, { method: 'POST', body: { requestId }, accessToken });
 }
 
 export async function fetchBulkSkuVolume(
@@ -4914,6 +7819,105 @@ export async function fetchStockBalances(accessToken: string, filter: { clientId
   });
 }
 
+export async function fetchBranches(accessToken: string) {
+  return request<BranchSummary[]>('/branches', { accessToken });
+}
+
+export async function fetchClientBranches(accessToken: string, clientId: string) {
+  return request<ClientBranchAccessResponse>(`/clients/${clientId}/branches`, { accessToken });
+}
+
+export async function updateClientBranches(accessToken: string, clientId: string, warehouseIds: string[]) {
+  return request<ClientBranchAccessResponse>(`/clients/${clientId}/branches`, {
+    method: 'PATCH',
+    body: { warehouseIds },
+    accessToken,
+  });
+}
+
+export async function activateBranch(accessToken: string, branchId: string) {
+  return request<BranchSummary>(`/branches/${branchId}/activate`, {
+    method: 'POST',
+    accessToken,
+  });
+}
+
+export async function createBranch(
+  accessToken: string,
+  payload: { code: string; name: string; city: string; address?: string; ownCompanyId?: string },
+) {
+  return request<BranchSummary>('/branches', { method: 'POST', body: payload, accessToken });
+}
+
+export async function updateBranch(
+  accessToken: string,
+  branchId: string,
+  payload: Partial<{ name: string; city: string; address: string; ownCompanyId: string | null; isActive: boolean; sortOrder: number }>,
+) {
+  return request<BranchSummary>(`/branches/${branchId}`, { method: 'PATCH', body: payload, accessToken });
+}
+
+export async function assignBranchManager(accessToken: string, branchId: string, userId: string | null) {
+  return request<{ warehouse: BranchSummary; manager: { id: string; name: string; email: string } | null }>(
+    `/branches/${branchId}/manager`,
+    { method: 'PUT', body: { userId }, accessToken },
+  );
+}
+
+export async function fetchBranchStockSummary(accessToken: string, clientId?: string) {
+  return request<BranchStockSummary[]>(withQuery('/branches/stock-summary', { clientId }), { accessToken });
+}
+
+export async function fetchInterBranchTransfers(accessToken: string, clientId?: string) {
+  return request<InterBranchTransfer[]>(withQuery('/branches/transfers', { clientId }), { accessToken });
+}
+
+export async function previewInterBranchTransferBoxesFile(
+  accessToken: string,
+  payload: { clientId: string; fromWarehouseId: string; file: File },
+) {
+  const form = new FormData();
+  form.append('file', payload.file);
+  return requestMultipart<BranchTransferBoxesFilePreview>(
+    withQuery('/branches/transfers/boxes-xlsx/preview', {
+      clientId: payload.clientId,
+      fromWarehouseId: payload.fromWarehouseId,
+    }),
+    form,
+    accessToken,
+  );
+}
+
+export async function createInterBranchTransfer(
+  accessToken: string,
+  payload: {
+    clientId: string;
+    fromWarehouseId: string;
+    toWarehouseId: string;
+    items?: Array<{ skuId: string; quantity: number }>;
+    sourceBoxCodes?: string[];
+    comment?: string;
+  },
+) {
+  return request<InterBranchTransfer>('/branches/transfers', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function receiveInterBranchTransferBox(
+  accessToken: string,
+  transferId: string,
+  boxCode: string,
+) {
+  return request<InterBranchTransfer>(`/branches/transfers/${transferId}/receive-box`, {
+    method: 'POST',
+    body: { boxCode },
+    accessToken,
+  });
+}
+
 export async function fetchTurnoverReport(
   accessToken: string,
   filter: { clientId?: string; skuId?: string; barcode?: string; kiz?: string; search?: string; dateFrom?: string; dateTo?: string; limit?: number } = {},
@@ -4932,6 +7936,180 @@ export async function fetchTurnoverSuggestions(
     search: filter.search,
     scope: filter.scope,
   }), {
+    accessToken,
+  });
+}
+
+export async function fetchFbsRelabelReconciliation(
+  accessToken: string,
+  filter: {
+    clientId: string;
+    dateFrom: string;
+    dateTo: string;
+    barcode?: string;
+    refreshWb?: boolean;
+  },
+) {
+  return request<FbsRelabelReconciliationReport>(
+    withQuery('/marketplace-connections/fbs/relabel-reconciliation', {
+      clientId: filter.clientId,
+      dateFrom: filter.dateFrom,
+      dateTo: filter.dateTo,
+      barcode: filter.barcode,
+      refreshWb: filter.refreshWb === false ? 'false' : 'true',
+    }),
+    { accessToken },
+  );
+}
+
+export async function applyFbsRelabelReconciliation(
+  accessToken: string,
+  payload: {
+    clientId: string;
+    issueId: string;
+    dateFrom: string;
+    dateTo: string;
+    barcode?: string;
+  },
+) {
+  return request<{
+    applied: boolean;
+    message: string;
+    report: FbsRelabelReconciliationReport;
+  }>('/marketplace-connections/fbs/relabel-reconciliation/apply', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function fetchKizIssues(
+  accessToken: string,
+  filter: {
+    status?: 'open' | 'resolved' | 'all';
+    search?: string;
+    clientId?: string;
+    limit?: number;
+  } = {},
+) {
+  return request<KizIssuesReport>(
+    withQuery('/kiz/issues', {
+      status: filter.status,
+      search: filter.search,
+      clientId: filter.clientId,
+      limit: filter.limit,
+    }),
+    { accessToken },
+  );
+}
+
+export async function resolveKizIssue(
+  accessToken: string,
+  issueKey: string,
+  payload: {
+    action:
+      | 'REPLACE_KIZ'
+      | 'REGISTER_EXTRA_UNIT'
+      | 'PREPARE_EXTRA_UNIT'
+      | 'RELEASE_BOX'
+      | 'MARK_RESOLVED';
+    kiz?: string;
+    confirmBoxMove?: boolean;
+    comment?: string;
+  },
+) {
+  return request<{
+    issueKey: string;
+    resolved: boolean;
+    action:
+      | 'REPLACE_KIZ'
+      | 'REGISTER_EXTRA_UNIT'
+      | 'PREPARE_EXTRA_UNIT'
+      | 'RELEASE_BOX'
+      | 'MARK_RESOLVED';
+    message: string;
+  }>(`/kiz/issues/${encodeURIComponent(issueKey)}/resolve`, {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function markKizIssueRead(
+  accessToken: string,
+  issueKey: string,
+) {
+  return request<{ issueKey: string; read: boolean }>(
+    `/kiz/issues/${encodeURIComponent(issueKey)}/read`,
+    {
+      method: 'POST',
+      accessToken,
+    },
+  );
+}
+
+export async function fetchBoxKizDiscrepancies(
+  accessToken: string,
+  filter: { search?: string; clientId?: string; limit?: number } = {},
+) {
+  return request<BoxKizDiscrepancyReport>(
+    withQuery('/kiz/discrepancies', filter),
+    { accessToken },
+  );
+}
+
+export async function writeOffBoxKizDiscrepancy(
+  accessToken: string,
+  boxId: string,
+  skuId: string,
+  payload: { confirm: true; comment?: string },
+) {
+  return request<{
+    boxId: string;
+    boxCode: string;
+    skuId: string;
+    internalSku: string;
+    boxQuantity: number;
+    registeredKizBefore: number;
+    writtenOffKiz: number;
+    registeredKizAfter: number;
+    message: string;
+  }>(
+    `/kiz/discrepancies/${encodeURIComponent(boxId)}/${encodeURIComponent(skuId)}/write-off`,
+    { method: 'POST', body: payload, accessToken },
+  );
+}
+
+export async function writeOffAllBoxKizDiscrepancies(
+  accessToken: string,
+  filter: { search?: string; clientId?: string },
+  payload: { confirm: true; comment?: string },
+) {
+  return request<{
+    bulkWriteOffId: string;
+    processedRows: number;
+    writtenOffKiz: number;
+    failedRows: number;
+    failures: Array<{
+      boxId: string;
+      boxCode: string;
+      skuId: string;
+      internalSku: string;
+      message: string;
+    }>;
+    remainingRows: number;
+    remainingExcessKiz: number;
+    message: string;
+  }>(withQuery('/kiz/discrepancies/write-off-all', filter), {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function deleteArticleMapping(accessToken: string, id: string) {
+  return request<{ id: string; deleted: boolean }>(`/skus/article-mappings/${id}`, {
+    method: 'DELETE',
     accessToken,
   });
 }
@@ -5076,9 +8254,15 @@ export async function fetchServiceTelegramSettings(accessToken: string, clientId
   });
 }
 
+export async function fetchServiceTelegramGroups(accessToken: string) {
+  return request<{ groups: ServiceTelegramGroup[]; warning?: string }>('/service/telegram/groups', {
+    accessToken,
+  });
+}
+
 export async function updateServiceTelegramGlobal(
   accessToken: string,
-  payload: { enabled: boolean; botToken: string; fulfillmentChatIds: string[] },
+  payload: { enabled: boolean; botToken: string; fulfillmentChatIds: string[]; sections: TelegramNotificationSection[] },
 ) {
   return request<ServiceTelegramSettings['global']>('/service/telegram/global', {
     method: 'PATCH',
@@ -5090,7 +8274,7 @@ export async function updateServiceTelegramGlobal(
 export async function updateServiceTelegramClient(
   accessToken: string,
   clientId: string,
-  payload: { enabled: boolean; chatId: string },
+  payload: { enabled: boolean; chatId: string; sections: TelegramNotificationSection[] },
 ) {
   return request<NonNullable<ServiceTelegramSettings['client']>>(`/service/telegram/clients/${clientId}`, {
     method: 'PATCH',
@@ -5172,6 +8356,20 @@ export async function fetchMarketplaceConnections(accessToken: string, filter: {
   });
 }
 
+export async function closeServiceSession(accessToken: string, sessionId: string) {
+  return request<{ id: string; closed: boolean; closedAt: string }>(`/service/sessions/${sessionId}/close`, {
+    method: 'POST',
+    accessToken,
+  });
+}
+
+export async function logout(accessToken: string) {
+  return request<{ closed: boolean }>('/auth/logout', {
+    method: 'POST',
+    accessToken,
+  });
+}
+
 export async function fetchAnalyticsClients(accessToken: string) {
   return request<AnalyticsClientSummary[]>('/analytics/clients', { accessToken });
 }
@@ -5212,10 +8410,77 @@ export async function fetchFbsOrders(accessToken: string, clientId: string, refr
   );
 }
 
-export async function fetchFbsActiveClients(accessToken: string) {
-  return request<FbsActiveClientSummary[]>('/marketplace-connections/fbs/active-clients', {
+export async function fetchFbsPackedItems(
+  accessToken: string,
+  filter: {
+    clientId?: string;
+    marketplace?: 'ALL' | 'WILDBERRIES' | 'OZON' | 'YANDEX_MARKET';
+    dateFrom?: string;
+    dateTo?: string;
+    search?: string;
+    requiresKiz?: boolean;
+    page?: number;
+    pageSize?: number;
+  },
+) {
+  return request<FbsPackedItemsReport>(
+    withQuery('/marketplace-connections/fbs/packed-items', filter),
+    { accessToken },
+  );
+}
+
+export async function reconcileFbsPackedItems(
+  accessToken: string,
+  payload: { clientId: string; assemblyIds: string[] },
+) {
+  return request<{
+    checkedAt: string;
+    items: Array<{ id: string; comparison: FbsPackedItemComparison }>;
+  }>('/marketplace-connections/fbs/packed-items/reconcile', {
+    method: 'POST',
     accessToken,
+    body: payload,
   });
+}
+
+export async function fetchFbsProductShipmentReport(
+  accessToken: string,
+  filter: {
+    clientId: string;
+    dateFrom: string;
+    dateTo: string;
+    search?: string;
+  },
+) {
+  return request<FbsProductShipmentReport>(
+    withQuery('/marketplace-connections/fbs/product-shipments-report', filter),
+    { accessToken },
+  );
+}
+
+export async function downloadFbsProductShipmentReport(
+  accessToken: string,
+  filter: {
+    clientId: string;
+    dateFrom: string;
+    dateTo: string;
+    search?: string;
+  },
+) {
+  return requestBlob(
+    withQuery('/marketplace-connections/fbs/product-shipments-report.xlsx', filter),
+    accessToken,
+  );
+}
+
+export async function fetchFbsActiveClients(
+  accessToken: string,
+  marketplace?: 'WILDBERRIES' | 'OZON' | 'YANDEX_MARKET',
+) {
+  return request<FbsActiveClientSummary[]>(
+    withQuery('/marketplace-connections/fbs/active-clients', { marketplace }),
+    { accessToken },
+  );
 }
 
 export async function fetchFbsCargoPackings(accessToken: string, clientId: string) {
@@ -5225,14 +8490,41 @@ export async function fetchFbsCargoPackings(accessToken: string, clientId: strin
   );
 }
 
+export async function updateFbsCargoPackingIgnore(
+  accessToken: string,
+  planId: string,
+  ignored: boolean,
+  reason?: string,
+) {
+  return request<{
+    id: string;
+    supplyId: string;
+    ignored: boolean;
+    ignoredAt: string | null;
+    ignoredByName: string | null;
+    ignoreReason: string | null;
+    message: string;
+  }>(`/marketplace-connections/fbs/cargo-packings/${encodeURIComponent(planId)}/ignore`, {
+    method: 'PATCH',
+    accessToken,
+    body: JSON.stringify({ ignored, reason }),
+  });
+}
+
 export async function fetchFbsStocks(
   accessToken: string,
   clientId: string,
   connectionId?: string,
   warehouseId?: string,
+  refreshReserves = false,
 ) {
   return request<FbsStocksResponse>(
-    withQuery('/marketplace-connections/fbs/stocks', { clientId, connectionId, warehouseId }),
+    withQuery('/marketplace-connections/fbs/stocks', {
+      clientId,
+      connectionId,
+      warehouseId,
+      refresh: refreshReserves || undefined,
+    }),
     { accessToken },
   );
 }
@@ -5245,12 +8537,58 @@ export async function updateFbsStockPublication(
     warehouseId: string;
     skuId: string;
     enabled: boolean;
+    saleLimit?: number | null;
+    relabelManualAmount?: number | null;
   },
 ) {
   return request<{ updated: boolean; skuId: string; enabled: boolean; amount: number; syncedAt: string }>(
     '/marketplace-connections/fbs/stocks/publication',
     { method: 'PUT', accessToken, body: payload },
   );
+}
+
+export async function reconcileFbsStockItem(
+  accessToken: string,
+  payload: { clientId: string; connectionId: string; warehouseId: string; skuId: string },
+) {
+  return request<{
+    corrected: boolean;
+    skuId: string;
+    previousAmount: number;
+    amount: number;
+    targetAmount: number;
+    checkedAt: string;
+  }>('/marketplace-connections/fbs/stocks/reconcile-item', {
+    method: 'POST',
+    accessToken,
+    body: payload,
+  });
+}
+
+export async function updateFbsStockPublicationBulk(
+  accessToken: string,
+  payload: {
+    clientId: string;
+    connectionId: string;
+    warehouseId: string;
+    skuIds: string[];
+    enabled: boolean;
+    saleLimit?: number | null;
+  },
+) {
+  return request<{
+    updated: boolean;
+    enabled: boolean;
+    requested: number;
+    updatedProducts: number;
+    synced: number;
+    amount: number;
+    syncedAt: string;
+  }>('/marketplace-connections/fbs/stocks/publication/bulk', {
+    method: 'PUT',
+    accessToken,
+    body: payload,
+  });
 }
 
 export async function syncFbsStocks(
@@ -5263,11 +8601,49 @@ export async function syncFbsStocks(
   );
 }
 
+export async function connectFbsStockWarehouse(
+  accessToken: string,
+  payload: { clientId: string; connectionId: string; warehouseId: string },
+) {
+  return request<{
+    connected: boolean;
+    connectionId: string;
+    warehouseId: string;
+    warehouseName: string;
+    connectedAt: string;
+  }>('/marketplace-connections/fbs/stocks/warehouse', {
+    method: 'PUT',
+    accessToken,
+    body: payload,
+  });
+}
+
+export async function fetchFbsWarehouseRoutes(
+  accessToken: string,
+  connectionId: string,
+) {
+  return request<FbsWarehouseRoutesResponse>(
+    `/marketplace-connections/${encodeURIComponent(connectionId)}/fbs-warehouse-routes`,
+    { accessToken },
+  );
+}
+
+export async function updateFbsWarehouseRoutes(
+  accessToken: string,
+  connectionId: string,
+  payload: UpdateFbsWarehouseRoutesPayload,
+) {
+  return request<FbsWarehouseRoutesResponse>(
+    `/marketplace-connections/${encodeURIComponent(connectionId)}/fbs-warehouse-routes`,
+    { method: 'PUT', accessToken, body: payload },
+  );
+}
+
 export async function assembleFbsOrders(accessToken: string, payload: FbsOrderSelectionPayload) {
   return request<AssembleFbsOrdersResult>('/marketplace-connections/fbs/orders/assemble', {
     method: 'POST',
     accessToken,
-    body: payload,
+    body: sanitizeFbsOrderSelectionPayload(payload),
   });
 }
 
@@ -5275,7 +8651,7 @@ export async function reshipFbsOrders(accessToken: string, payload: FbsOrderSele
   return request<AssembleFbsOrdersResult>('/marketplace-connections/fbs/orders/reship', {
     method: 'POST',
     accessToken,
-    body: payload,
+    body: sanitizeFbsOrderSelectionPayload(payload),
   });
 }
 
@@ -5288,7 +8664,7 @@ export async function moveFbsOrdersToNewSupply(
     {
       method: 'POST',
       accessToken,
-      body: payload,
+      body: sanitizeFbsOrderSelectionPayload(payload),
     },
   );
 }
@@ -5297,7 +8673,20 @@ export async function cancelFbsOrders(accessToken: string, payload: FbsOrderSele
   return request<FbsOrderActionResult>('/marketplace-connections/fbs/orders/cancel', {
     method: 'POST',
     accessToken,
-    body: payload,
+    body: sanitizeFbsOrderSelectionPayload(payload),
+  });
+}
+
+export async function removeCancelledFbsOrder(accessToken: string, payload: FbsOrderSelectionPayload) {
+  return request<{
+    removed: boolean;
+    requestNumber?: number;
+    message: string;
+    orders: ClientFbsOrders;
+  }>('/marketplace-connections/fbs/orders/remove-cancelled', {
+    method: 'POST',
+    accessToken,
+    body: sanitizeFbsOrderSelectionPayload(payload),
   });
 }
 
@@ -5305,7 +8694,7 @@ export async function deliverFbsSupplies(accessToken: string, payload: FbsOrderS
   return request<FbsOrderActionResult>('/marketplace-connections/fbs/supplies/deliver', {
     method: 'POST',
     accessToken,
-    body: payload,
+    body: sanitizeFbsOrderSelectionPayload(payload),
   });
 }
 
@@ -5316,7 +8705,26 @@ export async function changeFbsSuppliesDestination(
   return request<ChangeFbsSupplyDestinationResult>('/marketplace-connections/fbs/supplies/change-destination', {
     method: 'POST',
     accessToken,
-    body: payload,
+    body: sanitizeFbsOrderSelectionPayload(payload),
+  });
+}
+
+export async function fetchFbsMoveTargets(accessToken: string, payload: FbsOrderSelectionPayload) {
+  return request<{
+    sourceCity: string;
+    candidates: Array<{
+      supplyId: string;
+      city: string;
+      warehouseId: string | null;
+      requestId: string;
+      requestNumber: number;
+      orderCount: number;
+      itemCount: number;
+    }>;
+  }>('/marketplace-connections/fbs/orders/move-targets', {
+    method: 'POST',
+    accessToken,
+    body: sanitizeFbsOrderSelectionPayload(payload),
   });
 }
 
@@ -5324,16 +8732,68 @@ export async function createFbsRequest(accessToken: string, payload: FbsOrderSel
   return request<CreateFbsRequestResult>('/marketplace-connections/fbs/orders/request', {
     method: 'POST',
     accessToken,
-    body: payload,
+    body: sanitizeFbsOrderSelectionPayload(payload),
   });
+}
+
+export type FbsEmergencyAssemblyResult = {
+  status: 'APPLIED' | 'ALREADY_APPLIED';
+  request: {
+    id: string;
+    number: number;
+    status: ClientRequestStatus;
+    fbsEmergencyAssemblyAt: string;
+    fbsEmergencyAssemblyByUserId: string | null;
+    fbsEmergencyAssemblyByName: string | null;
+  };
+  orders: number;
+  shippedOrders: number;
+};
+
+export async function enableFbsEmergencyAssembly(accessToken: string, requestId: string) {
+  return request<FbsEmergencyAssemblyResult>(
+    `/marketplace-connections/fbs/requests/${requestId}/emergency-assembly`,
+    {
+      method: 'POST',
+      accessToken,
+    },
+  );
 }
 
 export async function downloadFbsOrderStickersPdf(accessToken: string, payload: FbsOrderSelectionPayload) {
   return requestBlob('/marketplace-connections/fbs/orders/stickers.pdf', accessToken, {
     method: 'POST',
-    body: payload,
+    body: sanitizeFbsOrderSelectionPayload(payload),
   });
 }
+
+export function resolveInventoryBox(
+  accessToken: string,
+  auditBoxId: string,
+  action: 'APPLY_ACTUAL' | 'ACCEPT_AS_IS',
+  comment?: string,
+) {
+  return request<InventoryAuditBox>(`/inventory/boxes/${auditBoxId}/resolve`, {
+    method: 'POST',
+    body: { action, comment },
+    accessToken,
+  });
+}
+
+export type WebOrderAssemblyResult = {
+  orderId: string; requestId: string; requestNumber:number|null; productName: string; article: string | null;
+  boxCode: string | null; stickerBarcode: string; warehouseName:string; contentType: string; imageBase64: string;
+};
+export type WebOrderAssemblyHistoryItem = { id:string;kiz:string;orderId:string;assemblyId:string;clientId:string;requestId:string;supplyId:string|null;requestNumber:number|null;stickerCode:string|null;printedBy:string;printedAt:string;productName:string|null;article:string|null;size:string|null;color:string|null };
+
+export async function scanWebOrderAssembly(accessToken: string, code: string) {
+  return request<WebOrderAssemblyResult>('/marketplace-connections/fbs/web-order-assembly/scan', {
+    method: 'POST', accessToken, body: { code },
+  });
+}
+export async function fetchWebOrderAssemblyHistory(accessToken:string){return request<WebOrderAssemblyHistoryItem[]>('/marketplace-connections/fbs/web-order-assembly/history',{accessToken});}
+export async function reprintWebOrderAssemblyHistory(accessToken:string,id:string){return request<WebOrderAssemblyResult>(`/marketplace-connections/fbs/web-order-assembly/history/${id}/reprint`,{method:'POST',accessToken});}
+export async function deleteWebOrderAssemblyHistory(accessToken:string,id:string){return request<{deleted:boolean;orderId:string}>(`/marketplace-connections/fbs/web-order-assembly/history/${id}`,{method:'DELETE',accessToken});}
 
 export async function downloadFbsCargoPlaceStickersPdf(
   accessToken: string,
@@ -5341,7 +8801,7 @@ export async function downloadFbsCargoPlaceStickersPdf(
 ) {
   return requestBlob('/marketplace-connections/fbs/orders/cargo-place-stickers.pdf', accessToken, {
     method: 'POST',
-    body: payload,
+    body: sanitizeFbsOrderSelectionPayload(payload),
   });
 }
 
@@ -5351,7 +8811,7 @@ export async function downloadFbsSupplyStickersPdf(
 ) {
   return requestBlob('/marketplace-connections/fbs/orders/supply-stickers.pdf', accessToken, {
     method: 'POST',
-    body: payload,
+    body: sanitizeFbsOrderSelectionPayload(payload),
   });
 }
 
@@ -5361,7 +8821,7 @@ export async function downloadFbsRequestPickListPdf(accessToken: string, request
 
 export async function createFbsMarketplaceConnection(
   accessToken: string,
-  payload: UpsertMarketplaceConnectionPayload & { marketplace: 'WILDBERRIES' | 'OZON' },
+  payload: UpsertMarketplaceConnectionPayload & { marketplace: 'WILDBERRIES' | 'OZON' | 'YANDEX_MARKET' },
 ) {
   return request<MarketplaceConnectionSummary>('/marketplace-connections/fbs/connections', {
     method: 'POST',
@@ -5477,10 +8937,212 @@ export async function syncMarketplaceProducts(accessToken: string, connectionId:
   });
 }
 
-export async function fetchBoxes(accessToken: string, filter: { clientId?: string; code?: string } = {}) {
+export async function fetchDbsIntegrations(
+  accessToken: string,
+  filter: { clientId?: string; marketplace?: 'WILDBERRIES' | 'OZON' | 'YANDEX_MARKET' } = {},
+) {
+  return request<DbsIntegrationSummary[]>(withQuery('/marketplace-connections/dbs/integrations', filter), {
+    accessToken,
+  });
+}
+
+export async function createDbsIntegration(accessToken: string, payload: UpsertDbsIntegrationPayload) {
+  return request<DbsIntegrationSummary>('/marketplace-connections/dbs/integrations', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function updateDbsIntegration(
+  accessToken: string,
+  integrationId: string,
+  payload: Partial<UpsertDbsIntegrationPayload>,
+) {
+  return request<DbsIntegrationSummary>(
+    `/marketplace-connections/dbs/integrations/${encodeURIComponent(integrationId)}`,
+    { method: 'PATCH', body: payload, accessToken },
+  );
+}
+
+export async function checkDbsIntegration(accessToken: string, integrationId: string) {
+  return request<DbsIntegrationSummary & { check: { ok: boolean; message: string } }>(
+    `/marketplace-connections/dbs/integrations/${encodeURIComponent(integrationId)}/check`,
+    { method: 'POST', accessToken },
+  );
+}
+
+export async function checkMarketplaceConnection(accessToken: string, connectionId: string) {
+  return request<MarketplaceConnectionCheckResult>(`/marketplace-connections/${connectionId}/check`, {
+    method: 'POST',
+    accessToken,
+  });
+}
+
+export async function fetchBoxes(
+  accessToken: string,
+  filter: { clientId?: string; code?: string; archive?: boolean } = {},
+) {
   return request<WarehouseBoxSummary[]>(withQuery('/warehouse/boxes', filter), {
     accessToken,
   });
+}
+
+export async function fetchWarehouseBoxChecks(accessToken: string, clientId?: string) {
+  return request<WarehouseBoxCheck[]>(
+    withQuery('/warehouse/box-checks', { clientId }),
+    { accessToken },
+  );
+}
+
+export async function runWarehouseBoxCheck(
+  accessToken: string,
+  payload: { periodFrom: string; periodTo: string; clientId?: string },
+) {
+  return request<WarehouseBoxCheck>('/warehouse/box-checks', {
+    method: 'POST',
+    accessToken,
+    body: payload,
+  });
+}
+
+export async function decideWarehouseBoxCheckRow(
+  accessToken: string,
+  rowId: string,
+  payload: {
+    action: 'WRITE_OFF' | 'KEEP_AS_IS' | 'SET_QUANTITY';
+    quantity?: number;
+    comment?: string;
+  },
+) {
+  return request<WarehouseBoxCheck>(`/warehouse/box-check-rows/${rowId}/decision`, {
+    method: 'POST',
+    accessToken,
+    body: payload,
+  });
+}
+
+export async function fetchShippedKizHistory(
+  accessToken: string,
+  filter: {
+    clientId?: string;
+    periodFrom?: string;
+    periodTo?: string;
+    search?: string;
+  } = {},
+) {
+  return request<ShippedKizHistoryRow[]>(
+    withQuery('/warehouse/shipment-history', filter),
+    { accessToken },
+  );
+}
+
+export async function syncShippedKizHistory(accessToken: string, clientId?: string) {
+  return request<{ checkedRequests: number; added: number }>(
+    '/warehouse/shipment-history/sync',
+    {
+      method: 'POST',
+      accessToken,
+      body: { clientId },
+    },
+  );
+}
+
+export async function fetchStorageLayout(
+  accessToken: string,
+  filter: { warehouseId?: string; query?: string; sync?: boolean } = {},
+) {
+  return request<StorageLayout>(
+    withQuery('/warehouse/storage-locations', {
+      warehouseId: filter.warehouseId,
+      query: filter.query,
+      sync: filter.sync === undefined ? undefined : String(filter.sync),
+    }),
+    { accessToken },
+  );
+}
+
+export async function syncStorageLayout(accessToken: string, warehouseId?: string, clientId?: string) {
+  return request<StorageLayout>('/warehouse/storage-locations/sync-google', {
+    method: 'POST',
+    accessToken,
+    body: { warehouseId, clientId },
+  });
+}
+
+export async function createStorageZone(
+  accessToken: string,
+  payload: { warehouseId: string; name: string; code?: string },
+) {
+  return request<StorageLayout['zones'][number]>('/warehouse/storage-locations/zones', {
+    method: 'POST',
+    accessToken,
+    body: payload,
+  });
+}
+
+export async function createStoragePallet(
+  accessToken: string,
+  payload: { warehouseId: string; clientId: string; code: string; zoneId?: string },
+) {
+  return request<StorageLayout['pallets'][number]>('/warehouse/storage-locations/pallets', {
+    method: 'POST',
+    accessToken,
+    body: payload,
+  });
+}
+
+export async function updateStoragePallet(
+  accessToken: string,
+  id: string,
+  payload: { zoneId?: string | null; status?: string },
+) {
+  return request<StorageLayout['pallets'][number]>(`/warehouse/storage-locations/pallets/${id}`, {
+    method: 'PATCH',
+    accessToken,
+    body: payload,
+  });
+}
+
+export async function deleteStoragePallet(accessToken: string, id: string) {
+  return request<{ id: string; code: string; deleted: true }>(
+    `/warehouse/storage-locations/pallets/${id}`,
+    { method: 'DELETE', accessToken },
+  );
+}
+
+export async function addStoragePalletBox(accessToken: string, palletId: string, boxCode: string) {
+  return request<{ warning?: string | null }>(`/warehouse/storage-locations/pallets/${palletId}/boxes`, {
+    method: 'POST',
+    accessToken,
+    body: { boxCode },
+  });
+}
+
+export async function relocateStoragePalletBox(
+  accessToken: string,
+  payload: { boxCode: string; targetPalletId: string; swapBoxCode?: string },
+) {
+  return request<{
+    mode: 'MOVED' | 'SWAPPED';
+    boxCode: string;
+    fromPallet: { id: string; code: string };
+    toPallet: { id: string; code: string };
+    swappedBoxCode: string | null;
+    changedAt: string;
+    message: string;
+  }>('/warehouse/storage-locations/pallets/boxes/relocate', {
+    method: 'POST',
+    accessToken,
+    body: payload,
+  });
+}
+
+export async function removeStoragePalletBox(accessToken: string, palletId: string, boxCode: string) {
+  return request<{ removed: true; boxCode: string; palletCode: string }>(
+    `/warehouse/storage-locations/pallets/${palletId}/boxes/${encodeURIComponent(boxCode)}`,
+    { method: 'DELETE', accessToken },
+  );
 }
 
 export async function fetchOnlineReceipts(accessToken: string, filter: { clientId?: string } = {}) {
@@ -5731,6 +9393,116 @@ export async function fetchTsdDevices(accessToken: string) {
 
 export async function fetchTsdAssemblyPlan(accessToken: string, requestId: string) {
   return request<TsdAssemblyPlan>(`/tsd/requests/${requestId}`, {
+    accessToken,
+  });
+}
+
+export async function resolveTsdFbsKizConflict(
+  accessToken: string,
+  requestId: string,
+  assemblyId: string,
+) {
+  return request<{
+    resolved: boolean;
+    assemblyId: string;
+    orderId: string;
+    requestId: string;
+    conflictingOrderId?: string | null;
+    conflictingRequestNumber?: number | null;
+    message: string;
+  }>(`/tsd/requests/${requestId}/fbs-kiz-conflicts/${assemblyId}/resolve`, {
+    method: 'POST',
+    accessToken,
+  });
+}
+
+export async function restoreTsdFbsRescanFromWildberries(
+  accessToken: string,
+  requestId: string,
+  assemblyId: string,
+) {
+  return request<{
+    resolved: boolean;
+    assemblyId: string;
+    orderId: string;
+    requestId: string;
+    message: string;
+  }>(`/tsd/requests/${requestId}/fbs-rescan/${assemblyId}/restore-from-wb`, {
+    method: 'POST',
+    accessToken,
+  });
+}
+
+export type FbsSyncConflictResolutionAction =
+  | 'RETURN_TO_STOCK'
+  | 'MANAGER_CONFIRMED';
+
+export async function resolveTsdFbsSyncConflict(
+  accessToken: string,
+  requestId: string,
+  assemblyId: string,
+  payload: {
+    action: FbsSyncConflictResolutionAction;
+    comment?: string;
+  },
+) {
+  return request<{
+    resolved: boolean;
+    assemblyId: string;
+    orderId: string;
+    requestId: string;
+    action: FbsSyncConflictResolutionAction;
+    message: string;
+  }>(`/tsd/requests/${requestId}/fbs-sync-conflicts/${assemblyId}/resolve`, {
+    method: 'POST',
+    accessToken,
+    body: payload,
+  });
+}
+
+export async function resetTsdFbsAssemblyOrder(
+  accessToken: string,
+  requestId: string,
+  assemblyId: string,
+) {
+  return request<{
+    reset: boolean;
+    assemblyId: string;
+    orderId: string;
+    requestId: string;
+    message: string;
+  }>(`/tsd/requests/${requestId}/fbs-assembly/${assemblyId}/reset`, {
+    method: 'POST',
+    accessToken,
+  });
+}
+
+export async function markTsdFbsAssemblyPackedWithoutSource(
+  accessToken: string,
+  requestId: string,
+  assemblyId: string,
+) {
+  return request<{
+    completed: boolean;
+    assemblyId: string;
+    orderId: string;
+    requestId: string;
+    sourceBoxPending: boolean;
+    message: string;
+  }>(`/tsd/requests/${requestId}/fbs-assembly/${assemblyId}/packed-without-source`, {
+    method: 'POST',
+    accessToken,
+  });
+}
+
+/**
+ * Publishes the current request composition to the handheld queue.  The TSD
+ * receives the refreshed plan on its next queue request; repeating this call
+ * is safe and is used when a newly-created request has not appeared yet.
+ */
+export async function syncClientRequestToTsd(accessToken: string, requestId: string) {
+  return request<{ message?: string; mode?: 'FBS' | string; requiresEmergencyAssembly?: boolean; totalOrders?: number; activeOrders?: number }>(`/client-requests/${requestId}/sync-tsd`, {
+    method: 'POST',
     accessToken,
   });
 }
@@ -6286,6 +10058,63 @@ export async function refreshPickInstruction(accessToken: string, requestId: str
   });
 }
 
+export async function repairFbsRequestSelection(accessToken: string, requestId: string) {
+  return request<{
+    requestId: string;
+    requestNumber: number;
+    repairedTasks: number;
+    reservedTasks: number;
+    waitingStockTasks: number;
+    preservedStartedTasks: number;
+    message: string;
+  }>(`/marketplace-connections/fbs/requests/${requestId}/repair-selection`, {
+    method: 'POST',
+    accessToken,
+  });
+}
+
+export type FbsRequestSupplyConsistency = {
+  requestId: string;
+  requestNumber: number;
+  requestTitle: string;
+  requestStatus: ClientRequestStatus;
+  checkedAt: string;
+  consistent: boolean;
+  wbOrders: number;
+  wmsOrders: number;
+  missingInWms: number;
+  extraInWms: number;
+  repairedOrders?: number;
+  message: string;
+  supplies: Array<{
+    connectionId: string;
+    accountName: string;
+    supplyId: string;
+    warehouseName: string | null;
+    wbOrders: number;
+    wmsOrders: number;
+    missingInWms: number;
+    extraInWms: number;
+    missingOrderIds: string[];
+    extraOrderIds: string[];
+  }>;
+  unassignedWmsOrderIds: string[];
+};
+
+export async function checkFbsRequestSupplyConsistency(accessToken: string, requestId: string) {
+  return request<FbsRequestSupplyConsistency>(
+    `/marketplace-connections/fbs/requests/${requestId}/supply-consistency`,
+    { accessToken },
+  );
+}
+
+export async function repairFbsRequestSupplyConsistency(accessToken: string, requestId: string) {
+  return request<FbsRequestSupplyConsistency>(
+    `/marketplace-connections/fbs/requests/${requestId}/supply-consistency/repair`,
+    { method: 'POST', accessToken },
+  );
+}
+
 export async function uploadManualPickInstruction(accessToken: string, requestId: string, file: File) {
   const form = new FormData();
   form.append('file', file);
@@ -6349,6 +10178,257 @@ function appendOptional(form: FormData, key: string, value?: string) {
   if (value?.trim()) {
     form.append(key, value.trim());
   }
+}
+
+export type OzonFboConnection = {
+  id: string;
+  accountName: string | null;
+  sellerId: string | null;
+  isActive: boolean;
+  configured: boolean;
+};
+
+export type OzonFboPlanSummary = {
+  id: string;
+  title: string;
+  status: string;
+  sourceFileName: string;
+  draftId: string | null;
+  ozonOrderId: string | null;
+  ozonOrderNumber: string | null;
+  slotFrom: string | null;
+  slotTo: string | null;
+  dropOffWarehouseName: string | null;
+  createdAt: string;
+  updatedAt: string;
+  totalUnits: number;
+  assembledUnits: number;
+  clusters: number;
+  boxes: number;
+  closedBoxes: number;
+  errors: number;
+};
+
+export type OzonFboPlan = Omit<OzonFboPlanSummary, 'clusters' | 'boxes' | 'closedBoxes' | 'errors' | 'totalUnits' | 'assembledUnits'> & {
+  clientId: string;
+  connectionId: string;
+  deliveryType: string;
+  dropOffWarehouseId: string | null;
+  dropOffWarehouseType: string | null;
+  availableTimeslots: unknown;
+  lastError: string | null;
+  importSummary: Record<string, unknown> | null;
+  creationSummary?: {
+    supplyMode: 'ONE' | 'BY_CITY';
+    requested: number;
+    created: number;
+    failed: Array<{ planId: string; message: string }>;
+    processing?: boolean;
+  };
+  bookingSummary?: {
+    requested: number;
+    started?: number;
+    created?: number;
+    failed?: Array<{ planId: string; message: string }>;
+    processing: boolean;
+  };
+  client: { id: string; code: string; name: string };
+  connection: Omit<OzonFboConnection, 'configured'>;
+  clusters: Array<{
+    id: string;
+    sourceName: string;
+    clusterId: string | null;
+    macrolocalClusterId: string | null;
+    clusterName: string | null;
+    storageWarehouseId: string | null;
+    storageWarehouseName: string | null;
+    supplyId: string | null;
+    status: string;
+    validationMessage: string | null;
+    items: Array<{
+      id: string;
+      offerId: string;
+      ozonSku: string | null;
+      productName: string | null;
+      quantity: number;
+      assembledQuantity: number;
+      isValid: boolean;
+      validationMessage: string | null;
+    }>;
+  }>;
+  boxes: Array<{
+    id: string;
+    boxCode: string;
+    ozonCargoId: string | null;
+    ozonBarcode: string | null;
+    status: string;
+    clusterId: string;
+    cluster: { clusterName: string | null; sourceName: string };
+    items: Array<{
+      id: string;
+      quantity: number;
+      assembledQuantity: number;
+      planItem: { offerId: string; productName: string | null; ozonSku: string | null };
+    }>;
+  }>;
+  events: Array<{ id: string; type: string; message: string; payload: Record<string, unknown> | null; userName: string | null; createdAt: string }>;
+};
+
+export type OzonFboClusterOption = {
+  id: string;
+  name: string;
+  macrolocalClusterId: string;
+  warehouses: Array<{ id: string; name: string; type: string }>;
+};
+
+export async function fetchOzonFboOverview(accessToken: string, clientId: string) {
+  return request<{ connections: OzonFboConnection[]; plans: OzonFboPlanSummary[] }>(
+    withQuery('/ozon-fbo/overview', { clientId }), { accessToken },
+  );
+}
+
+export async function fetchOzonFboPlan(accessToken: string, planId: string) {
+  return request<OzonFboPlan>(`/ozon-fbo/plans/${planId}`, { accessToken });
+}
+
+export async function syncOzonFboSkus(accessToken: string, connectionId: string) {
+  return request<MarketplaceProductSyncResult & { plansRefreshed: number; planItemsRecognized: number }>(
+    '/ozon-fbo/skus/sync',
+    { method: 'POST', accessToken, body: { connectionId } },
+  );
+}
+
+export async function deleteOzonFboPlan(accessToken: string, planId: string) {
+  return request<{ id: string; title: string; sourceFileName: string; deleted: true }>(
+    `/ozon-fbo/plans/${planId}`,
+    { method: 'DELETE', accessToken },
+  );
+}
+
+export async function fetchOzonFboClusters(accessToken: string, connectionId: string) {
+  return request<OzonFboClusterOption[]>(withQuery('/ozon-fbo/clusters', { connectionId }), { accessToken });
+}
+
+export async function fetchOzonFboDropoffs(accessToken: string, connectionId: string, search: string) {
+  return request<Array<{ warehouse_id: string | number; name: string; warehouse_type: string; address?: string }>>(
+    withQuery('/ozon-fbo/dropoff-warehouses', { connectionId, search, supplyType: 'CROSSDOCK' }), { accessToken },
+  );
+}
+
+export async function importOzonFboPlan(
+  accessToken: string,
+  payload: { clientId: string; connectionId: string; title: string; file: File },
+) {
+  const form = new FormData();
+  form.append('clientId', payload.clientId);
+  form.append('connectionId', payload.connectionId);
+  form.append('title', payload.title);
+  form.append('file', payload.file);
+  return requestMultipart<OzonFboPlan>('/ozon-fbo/plans/import', form, accessToken);
+}
+
+export async function mapOzonFboCluster(
+  accessToken: string,
+  planId: string,
+  rowId: string,
+  cluster: OzonFboClusterOption,
+) {
+  return request<OzonFboPlan>(`/ozon-fbo/plans/${planId}/clusters/${rowId}`, {
+    method: 'PATCH', accessToken,
+    body: { clusterId: cluster.id, macrolocalClusterId: cluster.macrolocalClusterId, clusterName: cluster.name },
+  });
+}
+
+export async function setOzonFboDropoff(
+  accessToken: string,
+  planId: string,
+  warehouse: { warehouse_id: string | number; name: string; warehouse_type: string },
+) {
+  return request<OzonFboPlan>(`/ozon-fbo/plans/${planId}/dropoff`, {
+    method: 'PATCH', accessToken,
+    body: { warehouseId: String(warehouse.warehouse_id), name: warehouse.name, type: warehouse.warehouse_type, deliveryType: 'DROPOFF' },
+  });
+}
+
+export async function createOzonFboDraft(
+  accessToken: string,
+  planId: string,
+  preferences: { supplyMode: 'ONE' | 'BY_CITY'; packingMode: 'MONO' | 'MONO_WITH_SMALL_MIXED'; mixedThreshold: number },
+) {
+  return request<OzonFboPlan>(`/ozon-fbo/plans/${planId}/draft`, { method: 'POST', accessToken, body: preferences });
+}
+
+export async function refreshOzonFboDraft(accessToken: string, planId: string) {
+  return request<OzonFboPlan>(`/ozon-fbo/plans/${planId}/draft/refresh`, { method: 'POST', accessToken });
+}
+
+export async function fetchOzonFboTimeslots(accessToken: string, planId: string, dateFrom: string, dateTo: string) {
+  return request<unknown>(`/ozon-fbo/plans/${planId}/timeslots`, { method: 'POST', accessToken, body: { dateFrom, dateTo } });
+}
+
+export async function bookOzonFboSlot(accessToken: string, planId: string, from: string, to: string) {
+  return request<OzonFboPlan>(`/ozon-fbo/plans/${planId}/book-slot`, {
+    method: 'POST', accessToken, body: { from, to, confirm: true },
+  });
+}
+
+export async function refreshOzonFboSupply(accessToken: string, planId: string) {
+  return request<OzonFboPlan>(`/ozon-fbo/plans/${planId}/supply/refresh`, { method: 'POST', accessToken });
+}
+
+export async function generateOzonFboBoxes(
+  accessToken: string,
+  planId: string,
+  maxUnitsPerBox: number,
+  packingMode: 'MONO' | 'MONO_WITH_SMALL_MIXED',
+  mixedThreshold = 20,
+) {
+  return request<OzonFboPlan>(`/ozon-fbo/plans/${planId}/boxes/generate`, {
+    method: 'POST', accessToken, body: { maxUnitsPerBox, packingMode, mixedThreshold },
+  });
+}
+
+export async function scanOzonFboBox(accessToken: string, boxId: string, code: string) {
+  return request<unknown>(`/ozon-fbo/boxes/${boxId}/scan`, { method: 'POST', accessToken, body: { code } });
+}
+
+export async function closeOzonFboBox(accessToken: string, boxId: string) {
+  return request<OzonFboPlan>(`/ozon-fbo/boxes/${boxId}/close`, { method: 'POST', accessToken });
+}
+
+export async function reportOzonFboBoxShortage(accessToken: string, boxId: string, reason: string) {
+  return request<OzonFboPlan>(`/ozon-fbo/boxes/${boxId}/shortage`, {
+    method: 'POST', accessToken, body: { reason },
+  });
+}
+
+export async function resolveOzonFboBoxShortage(
+  accessToken: string,
+  boxId: string,
+  decision: 'APPROVE' | 'CORRECT',
+  comment = '',
+) {
+  return request<OzonFboPlan>(`/ozon-fbo/boxes/${boxId}/shortage/resolve`, {
+    method: 'POST', accessToken, body: { decision, comment },
+  });
+}
+
+export async function uploadOzonFboCargoes(accessToken: string, planId: string) {
+  return request<OzonFboPlan>(`/ozon-fbo/plans/${planId}/cargoes/upload`, {
+    method: 'POST', accessToken, body: { confirm: true },
+  });
+}
+
+export async function refreshOzonFboCargoes(accessToken: string, planId: string) {
+  return request<OzonFboPlan>(`/ozon-fbo/plans/${planId}/cargoes/refresh`, { method: 'POST', accessToken });
+}
+
+export async function downloadOzonFboAssembly(accessToken: string, planId: string) {
+  return requestBlob(`/ozon-fbo/plans/${planId}/assembly.xlsx`, accessToken);
+}
+
+export async function downloadOzonFboBoxLabels(accessToken: string, planId: string) {
+  return requestBlob(`/ozon-fbo/plans/${planId}/box-labels.pdf`, accessToken);
 }
 
 async function request<T>(

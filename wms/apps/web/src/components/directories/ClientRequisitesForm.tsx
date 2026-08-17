@@ -10,6 +10,7 @@ import {
   type ClientKind,
   type ClientLogisticsInvoiceMode,
   type ClientStatus,
+  type ClientStockBalanceMode,
   type ClientSummary,
   type ClientStorageBillingMode,
   type UpdateClientPayload,
@@ -17,6 +18,7 @@ import {
 } from '../../lib/api';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import { DirectoryResultCard } from './DirectoryResultCard';
+import { useRememberedClientId } from '../../lib/rememberedClient';
 
 type ClientRequisitesFormProps = {
   session: AuthSession;
@@ -39,8 +41,10 @@ type ClientRequisitesFormState = {
   correspondentAccount: string;
   storageAccountingEnabled: boolean;
   storesWithoutBoxes: boolean;
+  stockBalanceMode: ClientStockBalanceMode;
   onlineReceiptVisibleToClient: boolean;
   fbsCalculatorEnabled: boolean;
+  relabelingEnabled: boolean;
   logisticsInvoiceMode: ClientLogisticsInvoiceMode;
   storageBillingMode: ClientStorageBillingMode;
   fulfillmentManagerUserId: string;
@@ -63,8 +67,10 @@ const emptyForm: ClientRequisitesFormState = {
   correspondentAccount: '',
   storageAccountingEnabled: false,
   storesWithoutBoxes: false,
+  stockBalanceMode: 'PALLET_SORT',
   onlineReceiptVisibleToClient: false,
   fbsCalculatorEnabled: false,
+  relabelingEnabled: false,
   logisticsInvoiceMode: 'SEPARATE',
   storageBillingMode: 'MONTHLY',
   fulfillmentManagerUserId: '',
@@ -91,7 +97,7 @@ const storageBillingModeOptions: Array<{ value: ClientStorageBillingMode; label:
 export function ClientRequisitesForm({ session }: ClientRequisitesFormProps) {
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [users, setUsers] = useState<UserSummary[]>([]);
-  const [clientId, setClientId] = useState('');
+  const [clientId, setClientId] = useRememberedClientId(session.user.id);
   const [form, setForm] = useState<ClientRequisitesFormState>(emptyForm);
   const [savedClient, setSavedClient] = useState<ClientSummary | null>(null);
   const [error, setError] = useState('');
@@ -105,7 +111,7 @@ export function ClientRequisitesForm({ session }: ClientRequisitesFormProps) {
 
   useEffect(() => {
     void loadClients();
-  }, []);
+  }, [session.accessToken, session.user.activeWarehouseId]);
 
   useEffect(() => {
     void loadUsers();
@@ -221,7 +227,7 @@ export function ClientRequisitesForm({ session }: ClientRequisitesFormProps) {
   }
 
   return (
-    <form className="directory-form" onSubmit={submit}>
+    <form className="directory-form client-requisites-form" onSubmit={submit}>
       <div className="directory-subheading">
         <div>
           <h3>Реквизиты клиента</h3>
@@ -330,7 +336,14 @@ export function ClientRequisitesForm({ session }: ClientRequisitesFormProps) {
         </div>
       ) : null}
 
-      <div className="directory-fields directory-fields--client">
+      <section className="client-requisites-card">
+        <div className="client-requisites-card__heading">
+          <div>
+            <h4>Параметры и реквизиты</h4>
+            <span>Настройки работы, юридические, контактные и банковские данные клиента</span>
+          </div>
+        </div>
+        <div className="directory-fields directory-fields--client">
         <label className="directory-checkbox">
           <input
             checked={form.onlineReceiptVisibleToClient}
@@ -347,6 +360,14 @@ export function ClientRequisitesForm({ session }: ClientRequisitesFormProps) {
           />
           <span>Показывать калькулятор стоимости в FBS</span>
         </label>
+        <label className="directory-checkbox">
+          <input
+            checked={form.relabelingEnabled}
+            type="checkbox"
+            onChange={(event) => setForm({ ...form, relabelingEnabled: event.target.checked })}
+          />
+          <span>Возможна переклейка товаров</span>
+        </label>
         <label>
           <span>Вид приемки</span>
           <select
@@ -357,6 +378,29 @@ export function ClientRequisitesForm({ session }: ClientRequisitesFormProps) {
             <option value="WITHOUT_BOXES">Без коробов, поштучно</option>
           </select>
         </label>
+        {!form.storesWithoutBoxes ? (
+          <fieldset className="client-stock-mode">
+            <legend>Какие остатки учитывать</legend>
+            <label>
+              <input
+                checked={form.stockBalanceMode === 'PALLET_SORT'}
+                name="stockBalanceMode"
+                type="radio"
+                onChange={() => setForm({ ...form, stockBalanceMode: 'PALLET_SORT' })}
+              />
+              <span><strong>На паллетсортах</strong><small>Показывать и передавать в WB только короба, размещённые на паллетсортах.</small></span>
+            </label>
+            <label>
+              <input
+                checked={form.stockBalanceMode === 'BOXES'}
+                name="stockBalanceMode"
+                type="radio"
+                onChange={() => setForm({ ...form, stockBalanceMode: 'BOXES' })}
+              />
+              <span><strong>По всем коробам</strong><small>Учитывать все активные короба, даже если они ещё не размещены на паллетсортах.</small></span>
+            </label>
+          </fieldset>
+        ) : null}
         <label>
           <span>Тип клиента</span>
           <select value={form.clientKind} onChange={(event) => setForm({ ...form, clientKind: event.target.value as ClientKind })}>
@@ -475,7 +519,8 @@ export function ClientRequisitesForm({ session }: ClientRequisitesFormProps) {
             onChange={(event) => setForm({ ...form, correspondentAccount: event.target.value })}
           />
         </label>
-      </div>
+        </div>
+      </section>
 
       {error ? <p className="form-error">{error}</p> : null}
       {actionMessage ? <p className="form-success">{actionMessage}</p> : null}
@@ -531,8 +576,10 @@ function formFromClient(client: ClientSummary): ClientRequisitesFormState {
     correspondentAccount: client.correspondentAccount ?? '',
     storageAccountingEnabled: client.storageAccountingEnabled,
     storesWithoutBoxes: Boolean(client.storesWithoutBoxes),
+    stockBalanceMode: client.stockBalanceMode ?? 'PALLET_SORT',
     onlineReceiptVisibleToClient: Boolean(client.onlineReceiptVisibleToClient),
     fbsCalculatorEnabled: Boolean(client.fbsCalculatorEnabled),
+    relabelingEnabled: Boolean(client.relabelingEnabled),
     logisticsInvoiceMode: client.logisticsInvoiceMode,
     storageBillingMode: client.storageBillingMode,
     fulfillmentManagerUserId: client.fulfillmentManagerUserId ?? '',
@@ -557,8 +604,10 @@ function compactPayload(form: ClientRequisitesFormState): UpdateClientPayload {
     correspondentAccount: form.correspondentAccount,
     storageAccountingEnabled: form.storageAccountingEnabled,
     storesWithoutBoxes: form.storesWithoutBoxes,
+    stockBalanceMode: form.stockBalanceMode,
     onlineReceiptVisibleToClient: form.onlineReceiptVisibleToClient,
     fbsCalculatorEnabled: form.fbsCalculatorEnabled,
+    relabelingEnabled: form.relabelingEnabled,
     logisticsInvoiceMode: form.logisticsInvoiceMode,
     storageBillingMode: form.storageBillingMode,
     fulfillmentManagerUserId: form.fulfillmentManagerUserId,

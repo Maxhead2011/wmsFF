@@ -1,25 +1,36 @@
-import { Plus, ReceiptText, Save, Trash2 } from 'lucide-react';
+import { Eye, EyeOff, ListChecks, Plus, ReceiptText, Save, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
+  addBillingInvoicePrimaryProcessing,
   createBillingInvoice,
   createManualBillingInvoice,
   fetchClientBillingServices,
+  fetchClientPaymentAccounts,
   generateStorageCharge,
+  recheckBillingInvoice,
+  updateBillingInvoicePaymentAccount,
   updateManualBillingInvoice,
   upsertClientBillingService,
   type AuthSession,
+  type BillingInvoiceRecheckResult,
   type BillingInvoiceSummary,
   type BillingPriceTaxMode,
   type BillingUnit,
   type ClientBillingServiceSummary,
   type ClientSummary,
+  type OwnCompanyBankAccountSummary,
 } from '../../lib/api';
+import { useRememberedClientId } from '../../lib/rememberedClient';
 
 type BillingInvoiceFormProps = {
   clients: ClientSummary[];
   session: AuthSession;
   onCreated: (invoice: BillingInvoiceSummary) => void;
+  onMutated?: (invoice: BillingInvoiceSummary) => void;
   invoice?: BillingInvoiceSummary;
+  initialClientId?: string;
+  initialPeriodFrom?: string;
+  initialPeriodTo?: string;
 };
 
 type InvoiceRow = {
@@ -39,23 +50,56 @@ type InvoiceRow = {
 
 const standardServiceCodes = ['BOX_60_40_40', 'BOX_ASSEMBLY', 'PALLET', 'PALLET_ASSEMBLY'];
 
-export function BillingInvoiceForm({ clients, session, onCreated, invoice }: BillingInvoiceFormProps) {
-  const [clientId, setClientId] = useState(invoice?.clientId ?? clients[0]?.id ?? '');
-  const [periodFrom, setPeriodFrom] = useState(invoice ? dateInput(invoice.periodFrom) : monthStart());
-  const [periodTo, setPeriodTo] = useState(invoice ? dateInput(invoice.periodTo) : today());
+export function BillingInvoiceForm({
+  clients,
+  session,
+  onCreated,
+  onMutated,
+  invoice,
+  initialClientId,
+  initialPeriodFrom,
+  initialPeriodTo,
+}: BillingInvoiceFormProps) {
+  const [clientId, setClientId] = useRememberedClientId(session.user.id, {
+    initialClientId: invoice?.clientId ?? initialClientId ?? clients[0]?.id ?? '',
+    preferInitialClientId: Boolean(invoice || initialClientId),
+  });
+  const [periodFrom, setPeriodFrom] = useState(invoice ? dateInput(invoice.periodFrom) : initialPeriodFrom ?? monthStart());
+  const [periodTo, setPeriodTo] = useState(invoice ? dateInput(invoice.periodTo) : initialPeriodTo ?? today());
   const [dueDate, setDueDate] = useState(invoice?.dueDate ? dateInput(invoice.dueDate) : '');
   const [comment, setComment] = useState(invoice?.comment ?? '');
   const [isStorageInvoice, setIsStorageInvoice] = useState(false);
   const [isApprovedChargesInvoice, setIsApprovedChargesInvoice] = useState(false);
   const [services, setServices] = useState<ClientBillingServiceSummary[]>([]);
+  const [paymentAccounts, setPaymentAccounts] = useState<OwnCompanyBankAccountSummary[]>([]);
+  const [paymentBankAccountId, setPaymentBankAccountId] = useState(invoice?.paymentBankAccountId ?? '');
   const [rows, setRows] = useState<InvoiceRow[]>([]);
   const [isLoadingServices, setIsLoadingServices] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSavingPaymentAccount, setIsSavingPaymentAccount] = useState(false);
   const [isSavingPrices, setIsSavingPrices] = useState(false);
+  const [isRechecking, setIsRechecking] = useState(false);
+  const [isAddingPrimaryProcessing, setIsAddingPrimaryProcessing] = useState(false);
+  const [hideZeroCostRows, setHideZeroCostRows] = useState(false);
+  const [recheckResult, setRecheckResult] = useState<BillingInvoiceRecheckResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const serviceOptions = useMemo(() => services.filter((item) => item.isActive), [services]);
   const invoiceTotal = useMemo(() => rows.reduce((sum, row) => sum + rowTotal(row), 0), [rows]);
+  const zeroCostRowsCount = useMemo(() => rows.filter((row) => rowTotal(row) === 0).length, [rows]);
+  const visibleRows = useMemo(
+    () => (invoice && hideZeroCostRows ? rows.filter((row) => rowTotal(row) !== 0) : rows),
+    [hideZeroCostRows, invoice, rows],
+  );
+  const canChangeInvoiceClient =
+    !invoice ||
+    (invoice.source === 'MANUAL' &&
+      !invoice.sourceKey &&
+      !invoice.requestId &&
+      invoice.payments.length === 0 &&
+      numberFromInput(invoice.paidRub) === 0);
+  const clientChanged = Boolean(invoice && invoice.clientId !== clientId);
+  const selectedClient = clients.find((client) => client.id === clientId) ?? null;
 
   useEffect(() => {
     if (!clientId) {
@@ -65,7 +109,13 @@ export function BillingInvoiceForm({ clients, session, onCreated, invoice }: Bil
     }
 
     void loadClientServices(clientId);
+    void loadPaymentAccounts(clientId);
   }, [clientId, invoice?.id]);
+
+  useEffect(() => {
+    setRecheckResult(null);
+    setHideZeroCostRows(false);
+  }, [invoice?.id]);
 
   async function loadClientServices(nextClientId: string) {
     setIsLoadingServices(true);
@@ -104,11 +154,89 @@ export function BillingInvoiceForm({ clients, session, onCreated, invoice }: Bil
           }),
         ),
       );
-      await loadClientServices(clientId);
+      const nextServices = await fetchClientBillingServices(session.accessToken, clientId);
+      setServices(nextServices);
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
       setIsSavingPrices(false);
+    }
+  }
+
+  async function loadPaymentAccounts(nextClientId: string) {
+    try {
+      const result = await fetchClientPaymentAccounts(session.accessToken, nextClientId);
+      setPaymentAccounts(result.bankAccounts);
+      const invoiceAccountId = invoice?.paymentBankAccountId ?? '';
+      const selected =
+        result.bankAccounts.find((account) => account.id === invoiceAccountId) ??
+        result.bankAccounts.find((account) => account.isDefault) ??
+        result.bankAccounts[0];
+      setPaymentBankAccountId(selected?.id ?? invoiceAccountId);
+    } catch (caught) {
+      setPaymentAccounts([]);
+      setPaymentBankAccountId(invoice?.paymentBankAccountId ?? '');
+      setError(errorMessage(caught));
+    }
+  }
+
+  async function savePaymentAccount() {
+    if (!invoice || !paymentAccounts.some((account) => account.id === paymentBankAccountId)) {
+      return;
+    }
+    setIsSavingPaymentAccount(true);
+    setError(null);
+    try {
+      const updated = await updateBillingInvoicePaymentAccount(
+        session.accessToken,
+        invoice.id,
+        paymentBankAccountId,
+      );
+      onMutated?.(updated);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setIsSavingPaymentAccount(false);
+    }
+  }
+
+  async function recheckSavedInvoice() {
+    if (!invoice) {
+      return;
+    }
+    setIsRechecking(true);
+    setError(null);
+    try {
+      setRecheckResult(
+        await recheckBillingInvoice(session.accessToken, invoice.id),
+      );
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setIsRechecking(false);
+    }
+  }
+
+  async function addPrimaryProcessing() {
+    if (!invoice) {
+      return;
+    }
+    setIsAddingPrimaryProcessing(true);
+    setError(null);
+    try {
+      const updatedInvoice = await addBillingInvoicePrimaryProcessing(
+        session.accessToken,
+        invoice.id,
+      );
+      setRows(buildInvoiceRows(updatedInvoice, services));
+      setRecheckResult(
+        await recheckBillingInvoice(session.accessToken, updatedInvoice.id),
+      );
+      onMutated?.(updatedInvoice);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setIsAddingPrimaryProcessing(false);
     }
   }
 
@@ -118,6 +246,11 @@ export function BillingInvoiceForm({ clients, session, onCreated, invoice }: Bil
       setError('Выберите клиента.');
       return;
     }
+    const selectedPaymentAccountId = paymentAccounts.some(
+      (account) => account.id === paymentBankAccountId,
+    )
+      ? paymentBankAccountId
+      : undefined;
 
     if (isApprovedChargesInvoice) {
       setIsSubmitting(true);
@@ -130,6 +263,7 @@ export function BillingInvoiceForm({ clients, session, onCreated, invoice }: Bil
           periodTo,
           dueDate: dueDate || undefined,
           comment: comment || undefined,
+          paymentBankAccountId: selectedPaymentAccountId,
         });
         onCreated(invoice);
         setComment('');
@@ -160,6 +294,7 @@ export function BillingInvoiceForm({ clients, session, onCreated, invoice }: Bil
           dueDate: dueDate || undefined,
           chargeIds: [charge.id],
           comment: comment || undefined,
+          paymentBankAccountId: selectedPaymentAccountId,
         });
         onCreated(invoice);
         setComment('');
@@ -202,6 +337,7 @@ export function BillingInvoiceForm({ clients, session, onCreated, invoice }: Bil
             dueDate: dueDate || undefined,
             rows: invoiceRows,
             comment: comment || undefined,
+            paymentBankAccountId: selectedPaymentAccountId,
           })
         : createManualBillingInvoice(session.accessToken, {
             clientId,
@@ -210,6 +346,7 @@ export function BillingInvoiceForm({ clients, session, onCreated, invoice }: Bil
             dueDate: dueDate || undefined,
             rows: invoiceRows,
             comment: comment || undefined,
+            paymentBankAccountId: selectedPaymentAccountId,
           }));
       onCreated(savedInvoice);
       if (!invoice) {
@@ -294,13 +431,20 @@ export function BillingInvoiceForm({ clients, session, onCreated, invoice }: Bil
       <div className="billing-fields billing-fields--invoice">
         <label>
           <span>Клиент</span>
-          <select disabled={Boolean(invoice)} value={clientId} onChange={(event) => setClientId(event.target.value)}>
+          <select
+            disabled={!canChangeInvoiceClient}
+            value={clientId}
+            onChange={(event) => setClientId(event.target.value)}
+          >
             {clients.map((client) => (
               <option key={client.id} value={client.id}>
                 {client.code} - {client.name}
               </option>
             ))}
           </select>
+          {invoice && canChangeInvoiceClient ? (
+            <small>Ошибочно выбранного клиента можно заменить до регистрации оплаты.</small>
+          ) : null}
         </label>
 
         <label>
@@ -319,10 +463,52 @@ export function BillingInvoiceForm({ clients, session, onCreated, invoice }: Bil
         </label>
 
         <label className="billing-fields__wide">
+          <span>Расчётный счёт для оплаты</span>
+          <select
+            disabled={paymentAccounts.length === 0}
+            value={paymentBankAccountId}
+            onChange={(event) => setPaymentBankAccountId(event.target.value)}
+          >
+            {invoice?.paymentBankAccountId &&
+            !paymentAccounts.some((account) => account.id === invoice.paymentBankAccountId) ? (
+              <option value={invoice.paymentBankAccountId}>
+                Сохранённый в счёте: {invoice.paymentBankName || 'банк'} · {maskAccount(invoice.paymentBankAccount)}
+              </option>
+            ) : null}
+            {paymentAccounts.length === 0 ? <option value="">Расчётные счета не настроены</option> : null}
+            {paymentAccounts.map((account) => (
+              <option key={account.id} value={account.id}>
+                {account.isDefault ? 'Основной · ' : ''}{account.bankName} · {maskAccount(account.bankAccount)}
+              </option>
+            ))}
+          </select>
+          {paymentAccounts.length > 0 ? (
+            <small>Этот счёт будет указан в PDF и сохранится в документе.</small>
+          ) : null}
+          {invoice ? (
+            <button
+              className="secondary-button billing-payment-account-save"
+              disabled={isSavingPaymentAccount || !paymentAccounts.some((account) => account.id === paymentBankAccountId)}
+              type="button"
+              onClick={() => void savePaymentAccount()}
+            >
+              {isSavingPaymentAccount ? 'Сохраняю…' : 'Сохранить РС в этом счёте'}
+            </button>
+          ) : null}
+        </label>
+
+        <label className="billing-fields__wide">
           <span>Комментарий</span>
           <input value={comment} onChange={(event) => setComment(event.target.value)} placeholder="для счета" />
         </label>
       </div>
+
+      {clientChanged ? (
+        <div className="billing-client-change-warning" role="status">
+          После сохранения счёт №{invoice?.number} и его начисления будут перенесены клиенту{' '}
+          <strong>{selectedClient?.name ?? 'из списка'}</strong>. Расчётный счёт для оплаты будет взят из настроек нового клиента.
+        </div>
+      ) : null}
 
       {!invoice ? <label className="billing-checkbox">
         <input
@@ -363,8 +549,119 @@ export function BillingInvoiceForm({ clients, session, onCreated, invoice }: Bil
               <Save size={16} aria-hidden="true" />
               <span>{isSavingPrices ? 'Сохраняю' : 'Сохранить цены клиента'}</span>
             </button>
+            {invoice ? (
+              <button
+                className="secondary-button"
+                disabled={isRechecking}
+                type="button"
+                onClick={() => void recheckSavedInvoice()}
+              >
+                <ListChecks size={16} aria-hidden="true" />
+                <span>{isRechecking ? 'Проверяю счёт…' : 'Перепроверить счёт'}</span>
+              </button>
+            ) : null}
+            {invoice ? (
+              <button
+                aria-pressed={hideZeroCostRows}
+                className="secondary-button"
+                disabled={zeroCostRowsCount === 0}
+                type="button"
+                onClick={() => setHideZeroCostRows((current) => !current)}
+              >
+                {hideZeroCostRows ? <Eye size={16} aria-hidden="true" /> : <EyeOff size={16} aria-hidden="true" />}
+                <span>{hideZeroCostRows ? `Показать нулевые (${zeroCostRowsCount})` : `Скрыть с нулевой стоимостью (${zeroCostRowsCount})`}</span>
+              </button>
+            ) : null}
             <strong>Итого: {formatMoney(invoiceTotal)} ₽</strong>
           </div>
+
+          {recheckResult ? (
+            <section
+              className={`billing-invoice-recheck billing-invoice-recheck--${recheckResult.status.toLowerCase()}`}
+              aria-label="Результат перепроверки счета"
+            >
+              <header>
+                <span>
+                  <strong>
+                    {recheckResult.status === 'OK'
+                      ? 'Счёт проверен'
+                      : recheckResult.status === 'WARNING'
+                        ? 'Нужно обратить внимание'
+                        : 'Найдены ошибки'}
+                  </strong>
+                  <small>
+                    {recheckResult.kind === 'FBS' ? 'FBS-счёт' : 'Обычный счёт'} · сохранённая версия
+                  </small>
+                </span>
+                <b>{recheckResult.checks.filter((check) => check.status !== 'OK').length} замеч.</b>
+              </header>
+              <div className="billing-invoice-recheck__metrics">
+                <span><b>{recheckResult.summary.serviceRows}</b><small>услуг</small></span>
+                <span><b>{recheckResult.summary.zeroCostRows}</b><small>нулевых</small></span>
+                <span><b>{recheckResult.summary.unbilledCharges}</b><small>вне счетов</small></span>
+                {recheckResult.kind === 'FBS' ? (
+                  <>
+                    <span><b>{recheckResult.summary.fbsOrders}</b><small>заказов FBS</small></span>
+                    <span><b>{formatQuantity(recheckResult.summary.fbsItems)}</b><small>товаров FBS</small></span>
+                  </>
+                ) : null}
+              </div>
+              <div className="billing-invoice-recheck__checks">
+                {recheckResult.checks.map((check) => (
+                  <article className={`is-${check.status.toLowerCase()}`} key={check.code}>
+                    <span aria-hidden="true">
+                      {check.status === 'OK' ? '✓' : check.status === 'WARNING' ? '!' : '×'}
+                    </span>
+                    <div>
+                      <strong>{check.label}</strong>
+                      <small>{check.message}</small>
+                      {check.code === 'FBS_PRIMARY_PROCESSING' && check.status === 'ERROR' ? (
+                        <>
+                          <button
+                            className="secondary-button billing-invoice-recheck__action"
+                            disabled={
+                              isAddingPrimaryProcessing ||
+                              !recheckResult.actions.addPrimaryProcessing.available
+                            }
+                            type="button"
+                            onClick={() => void addPrimaryProcessing()}
+                          >
+                            <Plus size={15} aria-hidden="true" />
+                            <span>
+                              {isAddingPrimaryProcessing
+                                ? 'Добавляю первичную обработку…'
+                                : 'Добавить первичную обработку'}
+                            </span>
+                          </button>
+                          {!recheckResult.actions.addPrimaryProcessing.available &&
+                          recheckResult.actions.addPrimaryProcessing.reason ? (
+                            <small className="billing-invoice-recheck__action-reason">
+                              {recheckResult.actions.addPrimaryProcessing.reason}
+                            </small>
+                          ) : null}
+                        </>
+                      ) : null}
+                    </div>
+                  </article>
+                ))}
+              </div>
+              {recheckResult.unbilledServices.length > 0 ? (
+                <details>
+                  <summary>Показать услуги вне счетов ({recheckResult.unbilledServices.length})</summary>
+                  <div className="billing-invoice-recheck__unbilled">
+                    {recheckResult.unbilledServices.map((service) => (
+                      <span key={service.chargeId}>
+                        <strong>{service.name}</strong>
+                        <small>
+                          {formatQuantity(service.quantity)} × {formatMoney(service.unitPriceRub)} ₽ = {formatMoney(service.totalRub)} ₽
+                        </small>
+                      </span>
+                    ))}
+                  </div>
+                </details>
+              ) : null}
+            </section>
+          ) : null}
 
           <div className="billing-table-wrap">
             <table className="data-table billing-table billing-table--invoice-form">
@@ -381,7 +678,7 @@ export function BillingInvoiceForm({ clients, session, onCreated, invoice }: Bil
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
+                {visibleRows.map((row) => (
                   <tr key={row.key}>
                     <td>
                       <div className="billing-service-combobox">
@@ -431,6 +728,11 @@ export function BillingInvoiceForm({ clients, session, onCreated, invoice }: Bil
                     </td>
                   </tr>
                 ))}
+                {hideZeroCostRows && visibleRows.length === 0 && !isLoadingServices ? (
+                  <tr>
+                    <td colSpan={8}>Все строки с нулевой стоимостью скрыты.</td>
+                  </tr>
+                ) : null}
                 {isLoadingServices ? (
                   <tr>
                     <td colSpan={8}>Загружаю услуги клиента.</td>
@@ -472,6 +774,7 @@ function buildInitialRows(services: ClientBillingServiceSummary[], serviceDate: 
 function buildInvoiceRows(invoice: BillingInvoiceSummary, services: ClientBillingServiceSummary[]): InvoiceRow[] {
   return invoice.items.map((item) => {
     const service = services.find((candidate) => candidate.service.id === item.charge?.serviceId);
+    const pricing = invoiceItemPricing(item);
     return {
       key: item.id,
       invoiceItemId: item.id,
@@ -480,13 +783,52 @@ function buildInvoiceRows(invoice: BillingInvoiceSummary, services: ClientBillin
       description: item.description,
       unit: item.unit,
       quantity: String(item.quantity),
-      unitPriceRub: String(item.unitPriceRub),
-      taxMode: 'INCLUDED',
+      unitPriceRub: String(pricing.priceBeforeTaxRub),
+      taxMode: pricing.taxMode,
       serviceDate: dateInput(item.serviceDate),
       comment: '',
       isStandard: Boolean(service && standardServiceCodes.includes(service.service.code)),
     };
   });
+}
+
+function invoiceItemPricing(item: BillingInvoiceSummary['items'][number]): {
+  priceBeforeTaxRub: number;
+  taxMode: BillingPriceTaxMode;
+} {
+  const finalPriceRub = numberFromInput(item.unitPriceRub);
+  const metadata = isRecord(item.charge?.metadata) ? item.charge.metadata : null;
+  const taxMode = isBillingPriceTaxMode(metadata?.taxMode) ? metadata.taxMode : 'INCLUDED';
+  const storedPriceBeforeTaxRub = numberFromUnknown(metadata?.priceBeforeTaxRub);
+
+  if (storedPriceBeforeTaxRub !== null) {
+    return { priceBeforeTaxRub: storedPriceBeforeTaxRub, taxMode };
+  }
+
+  // Older invoice rows may have the tax mode but no original price saved.
+  // Recover the editable base price so saving the draft cannot add the tax twice.
+  return {
+    priceBeforeTaxRub:
+      taxMode === 'ADD_6_PERCENT' ? roundMoney(finalPriceRub * 0.94) : finalPriceRub,
+    taxMode,
+  };
+}
+
+function isBillingPriceTaxMode(value: unknown): value is BillingPriceTaxMode {
+  return value === 'INCLUDED' || value === 'ADD_6_PERCENT';
+}
+
+function numberFromUnknown(value: unknown) {
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    return null;
+  }
+
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function rowFromService(item: ClientBillingServiceSummary, serviceDate: string, isStandard: boolean): InvoiceRow {
@@ -522,8 +864,8 @@ function emptyRow(serviceDate: string): InvoiceRow {
 }
 
 function rowTotal(row: InvoiceRow) {
-  const unitPrice = applyTaxMode(numberFromInput(row.unitPriceRub), row.taxMode);
-  return roundMoney(numberFromInput(row.quantity) * unitPrice);
+  const baseTotal = numberFromInput(row.quantity) * numberFromInput(row.unitPriceRub);
+  return applyTaxMode(baseTotal, row.taxMode);
 }
 
 function applyTaxMode(value: number, taxMode: BillingPriceTaxMode) {
@@ -586,6 +928,10 @@ function formatMoney(value: number) {
   return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2, minimumFractionDigits: 2 }).format(value);
 }
 
+function formatQuantity(value: number) {
+  return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 3 }).format(value);
+}
+
 function unitLabel(unit: BillingUnit) {
   const labels: Record<BillingUnit, string> = {
     SERVICE: 'услуга',
@@ -599,6 +945,11 @@ function unitLabel(unit: BillingUnit) {
   };
 
   return labels[unit];
+}
+
+function maskAccount(value: string | null | undefined) {
+  const normalized = value?.replace(/\s+/g, '') ?? '';
+  return normalized ? `•••• ${normalized.slice(-4)}` : 'счёт не указан';
 }
 
 function errorMessage(caught: unknown) {

@@ -15,11 +15,13 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
+  closeServiceSession,
   fetchClients,
   fetchServiceClientRequestsCleanupPreview,
   fetchServiceClientStockCleanupPreview,
   fetchServiceMaintenance,
   fetchServiceSessions,
+  fetchServiceTelegramGroups,
   fetchServiceTelegramSettings,
   purgeServiceClientRequests,
   purgeServiceClientStock,
@@ -38,9 +40,12 @@ import {
   type ServiceKizSearchRow,
   type ServiceMaintenanceMode,
   type ServiceSessionSummary,
+  type ServiceTelegramGroup,
   type ServiceTelegramSettings,
+  type TelegramNotificationSection,
 } from '../../lib/api';
 import './service-center.css';
+import { useRememberedClientId } from '../../lib/rememberedClient';
 
 type LoadState<T> = {
   status: 'idle' | 'loading' | 'ready' | 'error';
@@ -62,6 +67,16 @@ const emptySummary: ServiceClientStockSummary = {
   productMarks: 0,
 };
 
+const telegramSectionOptions: Array<{ id: TelegramNotificationSection; label: string }> = [
+  { id: 'REQUESTS', label: 'Заявки' },
+  { id: 'FBS', label: 'FBS и сборка' },
+  { id: 'WAREHOUSE', label: 'Склад и приёмка' },
+  { id: 'LOGISTICS', label: 'Логистика' },
+  { id: 'BILLING', label: 'Биллинг' },
+  { id: 'KIZ', label: 'КИЗ' },
+  { id: 'SYSTEM', label: 'Системные' },
+];
+
 const tabs = [
   { id: 'mode', label: 'Режим', icon: Lock },
   { id: 'sessions', label: 'Сессии', icon: Users },
@@ -76,7 +91,7 @@ type TabId = (typeof tabs)[number]['id'];
 export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
   const [activeTab, setActiveTab] = useState<TabId>('mode');
   const [clients, setClients] = useState<LoadState<ClientSummary[]>>({ status: 'idle', data: [] });
-  const [selectedClientId, setSelectedClientId] = useState('');
+  const [selectedClientId, setSelectedClientId] = useRememberedClientId(session.user.id);
   const [stockPreview, setStockPreview] = useState<LoadState<ServiceClientStockCleanupPreview | null>>({
     status: 'idle',
     data: null,
@@ -87,7 +102,9 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
   });
   const [maintenance, setMaintenance] = useState<LoadState<ServiceMaintenanceMode | null>>({ status: 'idle', data: null });
   const [sessions, setSessions] = useState<LoadState<ServiceSessionSummary[]>>({ status: 'idle', data: [] });
+  const [closingSessionId, setClosingSessionId] = useState('');
   const [telegram, setTelegram] = useState<LoadState<ServiceTelegramSettings | null>>({ status: 'idle', data: null });
+  const [telegramGroups, setTelegramGroups] = useState<LoadState<ServiceTelegramGroup[]>>({ status: 'idle', data: [] });
   const [kizRows, setKizRows] = useState<LoadState<ServiceKizSearchRow[]>>({ status: 'idle', data: [] });
   const [stockConfirmation, setStockConfirmation] = useState('');
   const [requestsConfirmation, setRequestsConfirmation] = useState('');
@@ -113,7 +130,7 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
   }, [selectedClientId]);
 
   async function loadBase() {
-    await Promise.all([loadClients(), loadMaintenance(), loadSessions()]);
+    await Promise.all([loadClients(), loadMaintenance(), loadSessions(), loadTelegramGroups()]);
   }
 
   async function loadClients() {
@@ -182,12 +199,39 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
     }
   }
 
+  async function closeSession(item: ServiceSessionSummary) {
+    if (!window.confirm(`Закрыть сессию пользователя ${item.name}? Пользователю потребуется войти повторно.`)) {
+      return;
+    }
+    setClosingSessionId(item.id);
+    setMessage(null);
+    try {
+      await closeServiceSession(session.accessToken, item.id);
+      await loadSessions();
+      setMessage(`Сессия пользователя ${item.name} закрыта.`);
+    } catch (caught) {
+      setMessage(errorMessage(caught));
+    } finally {
+      setClosingSessionId('');
+    }
+  }
+
   async function loadTelegram(clientId = selectedClientId) {
     setTelegram((current) => ({ ...current, status: 'loading', error: undefined }));
     try {
       setTelegram({ status: 'ready', data: await fetchServiceTelegramSettings(session.accessToken, clientId || undefined) });
     } catch (caught) {
       setTelegram({ status: 'error', data: null, error: errorMessage(caught) });
+    }
+  }
+
+  async function loadTelegramGroups() {
+    setTelegramGroups((current) => ({ ...current, status: 'loading', error: undefined }));
+    try {
+      const result = await fetchServiceTelegramGroups(session.accessToken);
+      setTelegramGroups({ status: 'ready', data: result.groups, error: result.warning });
+    } catch (caught) {
+      setTelegramGroups({ status: 'error', data: [], error: errorMessage(caught) });
     }
   }
 
@@ -217,6 +261,7 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
     try {
       const updated = await updateServiceTelegramGlobal(session.accessToken, telegram.data.global);
       setTelegram((current) => (current.data ? { status: 'ready', data: { ...current.data, global: updated } } : current));
+      await loadTelegramGroups();
       setMessage('Настройки Telegram сохранены.');
     } catch (caught) {
       setMessage(errorMessage(caught));
@@ -388,19 +433,43 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
                   <th>IP</th>
                   <th>Браузер / приложение</th>
                   <th>Открыта</th>
+                  <th>Активность</th>
+                  <th>Статус</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
                 {sessions.data.map((item) => (
-                  <tr key={`${item.userId}-${item.openedAt}`}>
+                  <tr key={item.id}>
                     <td>
                       <strong>{item.name}</strong>
                       <span>{item.email}</span>
                     </td>
                     <td>{item.client}</td>
                     <td>{item.ip || '-'}</td>
-                    <td className="service-muted-cell">{item.userAgent || '-'}</td>
+                    <td className="service-muted-cell">
+                      <strong>{item.browserName || item.appName}</strong>
+                      <span>{item.userAgent || '-'}</span>
+                    </td>
                     <td>{formatDateTime(item.openedAt)}</td>
+                    <td>{formatDateTime(item.lastSeenAt)}</td>
+                    <td>
+                      <span className={`service-session-status ${item.isActive ? 'is-active' : 'is-closed'}`}>
+                        {item.isActive ? 'Активна' : 'Закрыта'}
+                      </span>
+                    </td>
+                    <td>
+                      {item.isActive ? (
+                        <button
+                          className="danger-button service-session-close"
+                          type="button"
+                          disabled={Boolean(closingSessionId)}
+                          onClick={() => void closeSession(item)}
+                        >
+                          {closingSessionId === item.id ? 'Закрываю…' : 'Закрыть'}
+                        </button>
+                      ) : null}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -450,6 +519,15 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
                     }
                   />
                 </label>
+                <TelegramSectionPicker
+                  value={telegram.data.global.sections}
+                  onChange={(sections) =>
+                    setTelegram({
+                      status: 'ready',
+                      data: { ...telegram.data!, global: { ...telegram.data!.global, sections } },
+                    })
+                  }
+                />
                 <div className="service-actions">
                   <button className="primary-button" type="button" onClick={() => void saveTelegramGlobal()} disabled={isBusy}>
                     Сохранить
@@ -483,6 +561,7 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
                             clientId: selectedClientId,
                             chatId: telegram.data!.client?.chatId ?? '',
                             enabled: event.target.checked,
+                            sections: telegram.data!.client?.sections ?? telegramSectionOptions.map((item) => item.id),
                           },
                         },
                       })
@@ -493,6 +572,7 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
                 <label>
                   <span>Chat ID клиента</span>
                   <input
+                    list="telegram-client-groups"
                     value={telegram.data.client?.chatId ?? ''}
                     onChange={(event) =>
                       setTelegram({
@@ -503,13 +583,78 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
                             clientId: selectedClientId,
                             enabled: telegram.data!.client?.enabled ?? false,
                             chatId: event.target.value,
+                            sections: telegram.data!.client?.sections ?? telegramSectionOptions.map((item) => item.id),
                           },
                         },
                       })
                     }
-                    placeholder="123456789"
+                    placeholder="Группа: -1001234567890"
                   />
                 </label>
+                <datalist id="telegram-client-groups">
+                  {telegramGroups.data.map((group) => (
+                    <option key={group.id} value={group.id}>{group.title}</option>
+                  ))}
+                </datalist>
+                <div className="service-telegram-groups">
+                  <div>
+                    <strong>Группы, которые видит бот</strong>
+                    <small>Выберите группу кнопкой — её ID автоматически попадёт в поле клиента.</small>
+                  </div>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => void loadTelegramGroups()}
+                    disabled={telegramGroups.status === 'loading'}
+                  >
+                    <RefreshCw size={15} aria-hidden="true" />
+                    {telegramGroups.status === 'loading' ? 'Ищу группы…' : 'Обновить группы'}
+                  </button>
+                  <div className="service-telegram-group-list">
+                    {telegramGroups.data.map((group) => (
+                      <button
+                        className={telegram.data?.client?.chatId === group.id ? 'is-active' : ''}
+                        type="button"
+                        key={group.id}
+                        onClick={() =>
+                          setTelegram({
+                            status: 'ready',
+                            data: {
+                              ...telegram.data!,
+                              client: {
+                                clientId: selectedClientId,
+                                enabled: telegram.data!.client?.enabled ?? true,
+                                chatId: group.id,
+                                sections: telegram.data!.client?.sections ?? telegramSectionOptions.map((item) => item.id),
+                              },
+                            },
+                          })
+                        }
+                      >
+                        <span>{group.title}</span>
+                        <small>{group.id}</small>
+                      </button>
+                    ))}
+                  </div>
+                  {telegramGroups.error ? <p className="service-help">{telegramGroups.error}</p> : null}
+                </div>
+                <TelegramSectionPicker
+                  value={telegram.data.client?.sections ?? telegramSectionOptions.map((item) => item.id)}
+                  onChange={(sections) =>
+                    setTelegram({
+                      status: 'ready',
+                      data: {
+                        ...telegram.data!,
+                        client: {
+                          clientId: selectedClientId,
+                          enabled: telegram.data!.client?.enabled ?? false,
+                          chatId: telegram.data!.client?.chatId ?? '',
+                          sections,
+                        },
+                      },
+                    })
+                  }
+                />
                 <div className="service-actions">
                   <button className="primary-button" type="button" onClick={() => void saveTelegramClient()} disabled={isBusy || !selectedClientId}>
                     Сохранить
@@ -617,6 +762,38 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
         </Section>
       ) : null}
     </section>
+  );
+}
+
+function TelegramSectionPicker({
+  value,
+  onChange,
+}: {
+  value: TelegramNotificationSection[];
+  onChange: (sections: TelegramNotificationSection[]) => void;
+}) {
+  return (
+    <fieldset className="service-telegram-sections">
+      <legend>Из каких разделов присылать уведомления</legend>
+      <div className="service-telegram-sections__grid">
+        {telegramSectionOptions.map((item) => (
+          <label className="service-check" key={item.id}>
+            <input
+              type="checkbox"
+              checked={value.includes(item.id)}
+              onChange={(event) =>
+                onChange(
+                  event.target.checked
+                    ? [...value, item.id]
+                    : value.filter((section) => section !== item.id),
+                )
+              }
+            />
+            <span>{item.label}</span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
   );
 }
 

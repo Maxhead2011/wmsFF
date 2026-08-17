@@ -79,6 +79,9 @@ describe('StockOperationsService', () => {
         findFirst: vi.fn().mockResolvedValue(null),
         create: vi.fn().mockResolvedValue(undefined),
       },
+      fbsTsdAssembly: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       clientRequest: {
         findUnique: vi.fn().mockResolvedValue({
           id: 'request-1',
@@ -231,6 +234,9 @@ describe('StockOperationsService', () => {
       stockMovement: {
         findFirst: vi.fn().mockResolvedValue(null),
         create: vi.fn().mockResolvedValue(undefined),
+      },
+      fbsTsdAssembly: {
+        findMany: vi.fn().mockResolvedValue([]),
       },
       clientRequest: {
         findUnique: vi.fn().mockResolvedValue({
@@ -477,6 +483,9 @@ describe('StockOperationsService', () => {
         findFirst: vi.fn().mockResolvedValue(null),
         create: vi.fn().mockResolvedValue(undefined),
       },
+      fbsTsdAssembly: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       clientRequest: {
         findUnique: vi.fn().mockResolvedValue({
           id: 'request-1',
@@ -566,6 +575,9 @@ describe('StockOperationsService', () => {
       stockMovement: {
         findFirst: vi.fn().mockResolvedValue(null),
         create: vi.fn().mockResolvedValue(undefined),
+      },
+      fbsTsdAssembly: {
+        findMany: vi.fn().mockResolvedValue([]),
       },
       clientRequest: {
         findUnique: vi.fn().mockResolvedValue({
@@ -807,6 +819,678 @@ describe('StockOperationsService', () => {
         }),
       }),
     );
+  });
+
+  it('не считает переклейку пересчётом и списывает собранный товар из AVAILABLE', async () => {
+    const availableBalance = {
+      id: 'available-balance',
+      balanceKey: 'client-1:sku-1:box-1:no-pallet:AVAILABLE',
+      clientId: 'client-1',
+      skuId: 'sku-1',
+      boxId: 'box-1',
+      palletId: null,
+      status: 'AVAILABLE',
+      quantity: 9,
+      updatedAt: new Date('2026-07-24T19:00:00.000Z'),
+    };
+    const tx = {
+      fbsTsdAssembly: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            requestItemId: 'item-1',
+            skuId: 'sku-1',
+            boxId: 'box-1',
+            itemCount: 1,
+            completedAt: new Date('2026-07-24T20:00:00.000Z'),
+          },
+        ]),
+      },
+      stockBalance: {
+        findMany: vi.fn().mockResolvedValue([availableBalance]),
+        update: vi.fn().mockResolvedValue({ ...availableBalance, quantity: 8 }),
+        delete: vi.fn(),
+        upsert: vi.fn().mockResolvedValue({ id: 'shipping-balance' }),
+      },
+      box: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'box-1',
+            code: 'FFL_LKB1107_245',
+            palletId: null,
+          },
+        ]),
+      },
+      stockMovement: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            skuId: 'sku-1',
+            boxId: 'box-1',
+            createdAt: new Date('2026-07-24T20:01:00.000Z'),
+            idempotencyKey: 'fbs-relabel:assembly-1:source',
+            sourceDocument: 'FBS TSD, заказ 5355467854',
+          },
+        ]),
+        create: vi.fn().mockResolvedValue({ id: 'movement-1' }),
+      },
+    };
+    const recoveryService = new StockOperationsService(
+      {} as never,
+      {} as never,
+      {
+        balanceKey: vi.fn().mockReturnValue('client-1:sku-1:box-1:no-pallet:SHIPPING'),
+      } as never,
+    );
+
+    await (recoveryService as unknown as {
+      restoreCompletedFbsSelectionShortages: (
+        tx: typeof tx,
+        request: {
+          id: string;
+          clientId: string;
+          items: Array<{ id: string; skuId: string; barcode: null; quantity: number }>;
+        },
+        selections: Array<{
+          id: string;
+          requestItemId: string;
+          skuId: string;
+          boxId: string;
+          quantity: number;
+          box: { code: string };
+        }>,
+        baseKey: string,
+      ) => Promise<void>;
+    }).restoreCompletedFbsSelectionShortages(
+      tx,
+      {
+        id: 'request-35',
+        clientId: 'client-1',
+        items: [{ id: 'item-1', skuId: 'sku-1', barcode: null, quantity: 1 }],
+      },
+      [
+        {
+          id: 'selection-1',
+          requestItemId: 'item-1',
+          skuId: 'sku-1',
+          boxId: 'box-1',
+          quantity: 1,
+          box: { code: 'FFL_LKB1107_245' },
+        },
+      ],
+      'manual-status-done:request-35',
+    );
+
+    expect(tx.stockBalance.update).toHaveBeenCalledWith({
+      where: { id: 'available-balance' },
+      data: { quantity: { decrement: 1 } },
+    });
+    expect(tx.stockBalance.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: { quantity: { increment: 1 } },
+        create: expect.objectContaining({
+          status: 'SHIPPING',
+          quantity: 1,
+        }),
+      }),
+    );
+    expect(tx.stockMovement.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: 'PICK',
+          status: 'AVAILABLE',
+          quantity: -1,
+          idempotencyKey:
+            'manual-status-done:request-35:fbs-reserved:selection-1:available-balance:out',
+        }),
+      }),
+    );
+    expect(tx.stockMovement.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: 'PACK',
+          status: 'SHIPPING',
+          quantity: 1,
+          idempotencyKey: 'manual-status-done:request-35:fbs-reserved:selection-1:in',
+        }),
+      }),
+    );
+  });
+
+  it('закрывает проблемную позицию по подтверждённому физическому коробу и восстанавливает только недостающую часть', async () => {
+    const existingBalance = {
+      id: 'balance-1',
+      balanceKey: 'client-1:sku-1:box-1:no-pallet:AVAILABLE',
+      clientId: 'client-1',
+      skuId: 'sku-1',
+      boxId: 'box-1',
+      palletId: null,
+      status: 'AVAILABLE',
+      quantity: 1,
+      updatedAt: new Date('2026-07-25T00:00:00.000Z'),
+      box: { code: 'FFL_LKB1107_245' },
+    };
+    const reconciledBalance = {
+      id: 'shipping-1',
+      balanceKey: 'client-1:sku-1:box-1:no-pallet:SHIPPING',
+      clientId: 'client-1',
+      skuId: 'sku-1',
+      boxId: 'box-1',
+      palletId: null,
+      status: 'SHIPPING',
+      quantity: 1,
+      updatedAt: new Date('2026-07-25T01:00:00.000Z'),
+    };
+    const tx = {
+      sku: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'sku-1',
+          internalSku: 'Костюм-вейв-44',
+          weightGrams: 500,
+        }),
+      },
+      box: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'box-1',
+            code: 'FFL_LKB1107_245',
+            palletId: null,
+          },
+        ]),
+      },
+      stockBalance: {
+        findMany: vi.fn().mockResolvedValue([existingBalance]),
+        upsert: vi.fn().mockResolvedValue(reconciledBalance),
+      },
+      stockMovement: {
+        create: vi.fn().mockResolvedValue({ id: 'adjustment-1' }),
+      },
+      fbsOrderRequestLink: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      fbsTsdAssembly: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+    };
+    const physicalService = new StockOperationsService(
+      {} as never,
+      {} as never,
+      {
+        balanceKey: vi.fn().mockReturnValue(reconciledBalance.balanceKey),
+      } as never,
+    );
+
+    const plan = await (physicalService as unknown as {
+      planRequestAllocationsWithPhysicalSources: (
+        tx: typeof tx,
+        request: {
+          id: string;
+          clientId: string;
+          items: Array<{ id: string; skuId: string; barcode: null; quantity: number }>;
+        },
+        selections: never[],
+        sources: Array<{ requestItemId: string; boxCode: string; quantity: number }>,
+        baseKey: string,
+      ) => Promise<{
+        lines: Array<{ allocations: Array<{ quantity: number }> }>;
+      }>;
+    }).planRequestAllocationsWithPhysicalSources(
+      tx,
+      {
+        id: 'request-35',
+        clientId: 'client-1',
+        items: [{ id: 'item-1', skuId: 'sku-1', barcode: null, quantity: 2 }],
+      },
+      [],
+      [
+        {
+          requestItemId: 'item-1',
+          boxCode: 'ffl_lkb1107_245',
+          quantity: 2,
+        },
+      ],
+      'manual-status-done:request-35',
+    );
+
+    expect(plan.lines[0]?.allocations.map((allocation) => allocation.quantity)).toEqual([1, 1]);
+    expect(tx.stockBalance.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          boxId: 'box-1',
+          status: 'SHIPPING',
+          quantity: 1,
+        }),
+      }),
+    );
+    expect(tx.stockMovement.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          boxId: 'box-1',
+          type: 'INVENTORY_ADJUSTMENT',
+          status: 'SHIPPING',
+          quantity: 1,
+          idempotencyKey:
+            'manual-status-done:request-35:physical-source:item-1:box-1:0',
+        }),
+      }),
+    );
+  });
+
+  it('требует фактический источник для каждого FBS-заказа, который не завершён на ТСД', async () => {
+    const tx = {
+      sku: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValueOnce({
+            id: 'sku-incomplete',
+            internalSku: 'новый_корея_2черный-XL / 48',
+            weightGrams: 500,
+          })
+          .mockResolvedValueOnce({
+            id: 'sku-confirmed',
+            internalSku: 'SKU-CONFIRMED',
+            weightGrams: 500,
+          }),
+      },
+      box: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      stockBalance: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'balance-incomplete',
+            balanceKey: 'client-1:sku-incomplete:no-box:no-pallet:AVAILABLE',
+            clientId: 'client-1',
+            skuId: 'sku-incomplete',
+            boxId: null,
+            palletId: null,
+            status: 'AVAILABLE',
+            quantity: 1,
+            updatedAt: new Date('2026-07-25T00:00:00.000Z'),
+            box: null,
+          },
+        ]),
+      },
+      stockMovement: {
+        create: vi.fn(),
+      },
+      fbsOrderRequestLink: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            connectionId: 'connection-1',
+            orderId: '5371905207',
+            lastSkuId: 'sku-incomplete',
+          },
+        ]),
+      },
+      fbsTsdAssembly: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+    };
+    const physicalService = new StockOperationsService(
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      (physicalService as any).planRequestAllocationsWithPhysicalSources(
+        tx,
+        {
+          id: 'request-37',
+          clientId: 'client-1',
+          items: [
+            { id: 'item-incomplete', skuId: 'sku-incomplete', barcode: null, quantity: 1 },
+            { id: 'item-confirmed', skuId: 'sku-confirmed', barcode: null, quantity: 1 },
+          ],
+        },
+        [],
+        [{ requestItemId: 'item-confirmed', noBox: true, quantity: 1 }],
+        'manual-status-done:request-37',
+      ),
+    ).rejects.toThrow(
+      /не завершены FBS-заказы №5371905207.*Подтвердите фактический короб/,
+    );
+    expect(tx.stockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('позволяет подтвердить физический товар без короба', async () => {
+    const reconciledBalance = {
+      id: 'shipping-no-box',
+      balanceKey: 'client-1:sku-1:no-box:no-pallet:SHIPPING',
+      clientId: 'client-1',
+      skuId: 'sku-1',
+      boxId: null,
+      palletId: null,
+      status: 'SHIPPING',
+      quantity: 1,
+      updatedAt: new Date('2026-07-25T01:00:00.000Z'),
+    };
+    const tx = {
+      sku: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'sku-1',
+          internalSku: 'SKU-1',
+          weightGrams: 300,
+        }),
+      },
+      box: {
+        findMany: vi.fn(),
+      },
+      stockBalance: {
+        findMany: vi.fn().mockResolvedValue([]),
+        upsert: vi.fn().mockResolvedValue(reconciledBalance),
+      },
+      stockMovement: {
+        create: vi.fn().mockResolvedValue({ id: 'adjustment-no-box' }),
+      },
+      fbsOrderRequestLink: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      fbsTsdAssembly: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+    };
+    const physicalService = new StockOperationsService(
+      {} as never,
+      {} as never,
+      {
+        balanceKey: vi.fn().mockReturnValue(reconciledBalance.balanceKey),
+      } as never,
+    );
+
+    const plan = await (physicalService as unknown as {
+      planRequestAllocationsWithPhysicalSources: (
+        tx: typeof tx,
+        request: {
+          id: string;
+          clientId: string;
+          items: Array<{ id: string; skuId: string; barcode: null; quantity: number }>;
+        },
+        selections: never[],
+        sources: Array<{ requestItemId: string; noBox: true; quantity: number }>,
+        baseKey: string,
+      ) => Promise<{
+        lines: Array<{
+          allocations: Array<{ balance: { boxId: string | null }; quantity: number }>;
+        }>;
+      }>;
+    }).planRequestAllocationsWithPhysicalSources(
+      tx,
+      {
+        id: 'request-35',
+        clientId: 'client-1',
+        items: [{ id: 'item-1', skuId: 'sku-1', barcode: null, quantity: 1 }],
+      },
+      [],
+      [{ requestItemId: 'item-1', noBox: true, quantity: 1 }],
+      'manual-status-done:request-35',
+    );
+
+    expect(plan.lines[0]?.allocations[0]).toMatchObject({
+      balance: { boxId: null },
+      quantity: 1,
+    });
+    expect(tx.box.findMany).not.toHaveBeenCalled();
+    expect(tx.stockMovement.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          boxId: null,
+          type: 'INVENTORY_ADJUSTMENT',
+          status: 'SHIPPING',
+          quantity: 1,
+          idempotencyKey:
+            'manual-status-done:request-35:physical-source:item-1:no-box:0',
+        }),
+      }),
+    );
+  });
+
+  it('атомарно перемещает отсканированную единицу на ТСД и архивирует пустой исходный короб', async () => {
+    const sku = {
+      id: 'sku-1',
+      clientId: 'client-1',
+      internalSku: 'SKU-1',
+      clientSku: null,
+      article: 'ART-1',
+      name: 'Тестовый товар',
+      color: 'чёрный',
+      size: 'M',
+      needsChestnyZnak: false,
+      isUnmarked: false,
+      barcodes: [{ value: '2040000000001', isPrimary: true }],
+    };
+    const sourceBox = {
+      id: 'box-source',
+      clientId: 'client-1',
+      code: 'FFL_SOURCE_001',
+      status: 'active',
+      palletId: null,
+      client: { id: 'client-1', code: 'CLIENT', name: 'Клиент' },
+      balances: [{
+        id: 'balance-source',
+        balanceKey: 'source-key',
+        clientId: 'client-1',
+        skuId: 'sku-1',
+        boxId: 'box-source',
+        palletId: null,
+        status: 'AVAILABLE',
+        quantity: 1,
+        sku,
+      }],
+    };
+    const targetBox = {
+      id: 'box-target',
+      clientId: 'client-1',
+      code: 'FFL_TARGET_001',
+      status: 'active',
+      palletId: null,
+    };
+    const stockMovementFindUnique = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'movement-in' });
+    const tx = {
+      box: {
+        findUnique: vi.fn(async (args: any) => {
+          if (args.where?.code === 'FFL_SOURCE_001') return sourceBox;
+          if (args.where?.code === 'FFL_TARGET_001') return targetBox;
+          if (args.where?.clientId_code?.code === 'FFL_SOURCE_001') return sourceBox;
+          if (args.where?.clientId_code?.code === 'FFL_TARGET_001') return null;
+          return null;
+        }),
+        create: vi.fn().mockResolvedValue(targetBox),
+        update: vi.fn().mockResolvedValue({ ...sourceBox, status: 'archived' }),
+      },
+      sku: {
+        findFirst: vi.fn().mockResolvedValue(sku),
+      },
+      productMark: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        count: vi.fn().mockResolvedValue(0),
+        update: vi.fn(),
+      },
+      stockBalance: {
+        findFirst: vi.fn().mockResolvedValue(sourceBox.balances[0]),
+        update: vi.fn().mockResolvedValue({ ...sourceBox.balances[0], quantity: 0 }),
+        delete: vi.fn().mockResolvedValue(undefined),
+        upsert: vi.fn().mockResolvedValue({
+          id: 'balance-target',
+          boxId: targetBox.id,
+          quantity: 1,
+        }),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { quantity: null } }),
+      },
+      stockMovement: {
+        findUnique: stockMovementFindUnique,
+        create: vi.fn().mockResolvedValue({ id: 'movement' }),
+      },
+    };
+    const clientScopes = { requireClientAccess: vi.fn() };
+    const transferService = new StockOperationsService(
+      {
+        $transaction: (callback: (value: typeof tx) => unknown) => callback(tx),
+      } as never,
+      clientScopes as never,
+      {
+        balanceKey: vi.fn().mockReturnValue('target-key'),
+      } as never,
+    );
+
+    await expect(
+      transferService.executeTsdTransfer(
+        {
+          fromBoxCode: 'FFL_SOURCE_001',
+          toBoxCode: 'FFL_TARGET_001',
+          scanCode: '2040000000001',
+          idempotencyKey: 'tsd-transfer:test-1',
+        },
+        user(),
+      ),
+    ).resolves.toMatchObject({
+      status: 'APPLIED',
+      sourceBoxCode: 'FFL_SOURCE_001',
+      targetBoxCode: 'FFL_TARGET_001',
+      sourceBoxArchived: true,
+      sourceRemaining: 0,
+      item: {
+        skuId: 'sku-1',
+        scanType: 'BARCODE',
+      },
+    });
+    expect(tx.stockMovement.create).toHaveBeenCalledTimes(2);
+    expect(tx.box.update).toHaveBeenCalledWith({
+      where: { id: 'box-source' },
+      data: { status: 'archived' },
+    });
+    expect(clientScopes.requireClientAccess).toHaveBeenCalledWith(
+      user(),
+      'client-1',
+      'write',
+    );
+  });
+
+  it('атомарно перемещает несколько отсканированных единиц в один целевой короб', async () => {
+    let remaining = 2;
+    const sku = {
+      id: 'sku-1',
+      clientId: 'client-1',
+      internalSku: 'SKU-1',
+      clientSku: null,
+      article: 'ARTICLE-1',
+      name: 'Костюм',
+      color: 'чёрный',
+      size: '48',
+      needsChestnyZnak: false,
+      isUnmarked: true,
+      barcodes: [{ value: '2040000000001', isPrimary: true }],
+    };
+    const sourceBoxBase = {
+      id: 'box-source',
+      clientId: 'client-1',
+      code: 'FFL_SOURCE_001',
+      status: 'active',
+      palletId: null,
+      client: { id: 'client-1', code: 'CLIENT', name: 'Клиент' },
+    };
+    const targetBox = {
+      id: 'box-target',
+      clientId: 'client-1',
+      code: 'FFL_TARGET_001',
+      status: 'active',
+      palletId: null,
+    };
+    const sourceBalance = () => ({
+      id: 'balance-source',
+      balanceKey: 'source-key',
+      clientId: 'client-1',
+      skuId: 'sku-1',
+      boxId: 'box-source',
+      palletId: null,
+      status: 'AVAILABLE',
+      quantity: remaining,
+      sku,
+    });
+    const sourceBox = () => ({
+      ...sourceBoxBase,
+      balances: remaining > 0 ? [sourceBalance()] : [],
+    });
+    const tx = {
+      box: {
+        findUnique: vi.fn(async (args: any) => {
+          if (args.where?.code === 'FFL_SOURCE_001') return sourceBox();
+          if (args.where?.code === 'FFL_TARGET_001') return targetBox;
+          if (args.where?.clientId_code?.code === 'FFL_SOURCE_001') return sourceBoxBase;
+          if (args.where?.clientId_code?.code === 'FFL_TARGET_001') return targetBox;
+          return null;
+        }),
+        create: vi.fn().mockResolvedValue(targetBox),
+        update: vi.fn().mockResolvedValue({ ...sourceBoxBase, status: 'archived' }),
+      },
+      sku: {
+        findFirst: vi.fn().mockResolvedValue(sku),
+      },
+      productMark: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        count: vi.fn().mockResolvedValue(0),
+        update: vi.fn(),
+      },
+      stockBalance: {
+        findFirst: vi.fn(async () => sourceBalance()),
+        update: vi.fn(async (args: any) => {
+          remaining -= Number(args.data?.quantity?.decrement ?? 0);
+          return { ...sourceBalance(), quantity: remaining };
+        }),
+        delete: vi.fn().mockResolvedValue(undefined),
+        upsert: vi.fn().mockResolvedValue({
+          id: 'balance-target',
+          boxId: targetBox.id,
+          quantity: 2,
+        }),
+        aggregate: vi.fn(async () => ({ _sum: { quantity: remaining || null } })),
+      },
+      stockMovement: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        findUnique: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ id: 'movement' }),
+      },
+    };
+    const batchService = new StockOperationsService(
+      {
+        $transaction: (callback: (value: typeof tx) => unknown) => callback(tx),
+      } as never,
+      { requireClientAccess: vi.fn() } as never,
+      {
+        balanceKey: vi.fn().mockReturnValue('target-key'),
+      } as never,
+    );
+
+    await expect(
+      batchService.executeTsdTransferBatch(
+        {
+          fromBoxCode: 'FFL_SOURCE_001',
+          toBoxCode: 'FFL_TARGET_001',
+          scanCodes: ['2040000000001', '2040000000001'],
+          idempotencyKey: 'tsd-transfer-batch:test-1',
+        },
+        user(),
+      ),
+    ).resolves.toMatchObject({
+      status: 'APPLIED',
+      sourceBoxCode: 'FFL_SOURCE_001',
+      targetBoxCode: 'FFL_TARGET_001',
+      sourceBoxArchived: true,
+      sourceRemaining: 0,
+      movedQuantity: 2,
+      items: [
+        { skuId: 'sku-1', scanType: 'BARCODE' },
+        { skuId: 'sku-1', scanType: 'BARCODE' },
+      ],
+    });
+    expect(tx.stockMovement.create).toHaveBeenCalledTimes(4);
+    expect(tx.box.update).toHaveBeenCalledWith({
+      where: { id: 'box-source' },
+      data: { status: 'archived' },
+    });
   });
 });
 

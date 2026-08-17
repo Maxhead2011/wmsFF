@@ -1,5 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import type { AuthUser } from '../auth/auth.types';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { CreateUserDto } from './dto/create-user.dto';
 import { SetTsdActivationCodeDto } from './dto/set-tsd-activation-code.dto';
@@ -17,38 +19,38 @@ export class UsersController {
 
   @Get()
   @RequirePermissions('users:read')
-  list() {
-    return this.users.list();
+  list(@CurrentUser() user: AuthUser) {
+    return this.users.list(user);
   }
 
   @Post()
   @RequirePermissions('users:write')
-  create(@Body() dto: CreateUserDto) {
-    return this.users.create(dto);
+  create(@Body() dto: CreateUserDto, @CurrentUser() user: AuthUser) {
+    return this.users.create(dto, user);
   }
 
   @Patch(':id/client-scopes')
   @RequirePermissions('users:write')
-  updateClientScopes(@Param('id') id: string, @Body() dto: UpdateUserClientScopesDto) {
-    return this.users.updateClientScopes(id, dto);
+  updateClientScopes(@Param('id') id: string, @Body() dto: UpdateUserClientScopesDto, @CurrentUser() user: AuthUser) {
+    return this.users.updateClientScopes(id, dto, user);
   }
 
   @Patch(':id/printer-scopes')
   @RequirePermissions('users:write')
-  updatePrinterScopes(@Param('id') id: string, @Body() dto: UpdateUserPrinterScopesDto) {
-    return this.users.updatePrinterScopes(id, dto);
+  updatePrinterScopes(@Param('id') id: string, @Body() dto: UpdateUserPrinterScopesDto, @CurrentUser() user: AuthUser) {
+    return this.users.updatePrinterScopes(id, dto, user);
   }
 
   @Patch(':id/profile')
   @RequirePermissions('users:write')
-  updateProfile(@Param('id') id: string, @Body() dto: UpdateUserProfileDto) {
-    return this.users.updateProfile(id, dto);
+  updateProfile(@Param('id') id: string, @Body() dto: UpdateUserProfileDto, @CurrentUser() user: AuthUser) {
+    return this.users.updateProfile(id, dto, user);
   }
 
   @Patch(':id/roles')
   @RequirePermissions('users:write')
-  updateRoles(@Param('id') id: string, @Body() dto: UpdateUserRolesDto) {
-    return this.users.updateRoles(id, dto);
+  updateRoles(@Param('id') id: string, @Body() dto: UpdateUserRolesDto, @CurrentUser() user: AuthUser) {
+    return this.users.updateRoles(id, dto, user);
   }
 
   @Patch(':id/tsd-activation-code')
@@ -65,7 +67,7 @@ export class UsersController {
 
   @Get('roles')
   @RequirePermissions('users:read')
-  listRoles() {
-    return this.users.listRoles();
+  listRoles(@CurrentUser() user: AuthUser) {
+    return this.users.listRoles(user);
   }
 }

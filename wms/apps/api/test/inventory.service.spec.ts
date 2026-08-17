@@ -20,7 +20,68 @@ const manager: AuthUser = {
   writableClientIds: ['client-1'],
 };
 
+const administrator: AuthUser = {
+  ...manager,
+  id: 'admin-1',
+  email: 'admin@example.test',
+  name: 'Администратор',
+  roleCodes: ['ADMIN'],
+  permissionCodes: ['stock:read', 'stock:write', 'system:admin'],
+  clientScopeMode: 'ALL',
+};
+
 describe('InventoryService box checks', () => {
+  it('opens a box when the scanner omitted separators from its code', async () => {
+    const storedBox = {
+      id: 'box-1',
+      clientId: 'client-1',
+      code: 'FFL_LKNOV1607_004',
+      status: 'active',
+      client: { id: 'client-1', name: 'Клиент' },
+    };
+    const createdAuditBox = {
+      id: 'audit-box-1',
+      boxCode: storedBox.code,
+      status: InventoryBoxStatus.COUNTING,
+      lines: [],
+    };
+    const prisma = {
+      inventorySession: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'session-1',
+          title: 'Проверка коробов',
+          clientId: 'client-1',
+          status: InventorySessionStatus.ACTIVE,
+        }),
+      },
+      box: {
+        findUnique: vi.fn()
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce(storedBox),
+      },
+      $queryRaw: vi.fn().mockResolvedValue([{ id: storedBox.id }]),
+      inventoryAuditBox: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue(createdAuditBox),
+      },
+      inventoryBoxRescanRequest: {
+        findFirst: vi.fn().mockResolvedValue(null),
+      },
+      stockBalance: { findMany: vi.fn().mockResolvedValue([]) },
+      $transaction: vi.fn(async (action: (tx: unknown) => unknown) => action(prisma)),
+    };
+    const scopes = { requireClientAccess: vi.fn() };
+    const service = new InventoryService(prisma as never, scopes as never, {} as never);
+
+    await expect(service.openBox('session-1', 'FFLLKNOV1607004', manager))
+      .resolves.toEqual(createdAuditBox);
+
+    expect(prisma.box.findUnique).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      where: { id: storedBox.id },
+    }));
+  });
+
   it('sends a box check with mismatches to reconciliation instead of completing it', async () => {
     const update = vi.fn().mockResolvedValue({ id: 'session-1', status: InventorySessionStatus.REVIEW });
     const prisma = {
@@ -159,6 +220,89 @@ describe('InventoryService box checks', () => {
         requestedByUserId: manager.id,
       }),
     }));
+  });
+
+  it('automatically reopens a completed box when an administrator checks it again', async () => {
+    const createRescanRequest = vi.fn();
+    const reopened = {
+      id: 'audit-box-1',
+      status: InventoryBoxStatus.COUNTING,
+      lines: [],
+    };
+    const prisma = {
+      inventorySession: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'session-1',
+          title: 'Проверка коробов',
+          clientId: 'client-1',
+          status: InventorySessionStatus.ACTIVE,
+        }),
+      },
+      box: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'box-1',
+          clientId: 'client-1',
+          code: 'FFL_BOX_1',
+          status: 'active',
+          client: { id: 'client-1', name: 'Клиент' },
+        }),
+      },
+      stockBalance: { findMany: vi.fn().mockResolvedValue([]) },
+      inventoryAuditLine: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      inventoryAuditBox: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'audit-box-1',
+          status: InventoryBoxStatus.MATCHED,
+          lines: [],
+        }),
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'audit-box-1',
+          status: InventoryBoxStatus.MATCHED,
+        }),
+        update: vi.fn().mockResolvedValue(reopened),
+      },
+      inventoryBoxRescanRequest: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: createRescanRequest,
+      },
+      $transaction: vi.fn(async (action: (tx: unknown) => unknown) => action(prisma)),
+    };
+    const scopes = { requireClientAccess: vi.fn() };
+    const service = new InventoryService(prisma as never, scopes as never, {} as never);
+
+    await expect(service.openBox('session-1', 'FFL_BOX_1', administrator)).resolves.toEqual(reopened);
+
+    expect(createRescanRequest).not.toHaveBeenCalled();
+    expect(prisma.inventoryAuditBox.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: InventoryBoxStatus.COUNTING,
+        countedByUserId: administrator.id,
+      }),
+    }));
+  });
+
+  it('hides already actualized boxes from the TSD work list', () => {
+    const service = new InventoryService({} as never, {} as never, {} as never);
+    const session = {
+      id: 'session-1',
+      boxes: [
+        {
+          id: 'resolved-box',
+          status: InventoryBoxStatus.RESOLVED,
+          lines: [],
+        },
+        {
+          id: 'mismatch-box',
+          status: InventoryBoxStatus.MISMATCH,
+          lines: [],
+        },
+      ],
+    };
+
+    const result = (service as any).decorateSession(session, undefined, true);
+
+    expect(result.boxes.map((box: { id: string }) => box.id)).toEqual(['mismatch-box']);
+    expect(result.progress.checkedBoxes).toBe(2);
   });
 
   it('resolves inventory items only by a registered product barcode', async () => {

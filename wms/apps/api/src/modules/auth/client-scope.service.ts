@@ -1,7 +1,7 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import type { AuthUser } from './auth.types';
 
-type ClientFilter = string | { in: string[] } | undefined;
+export type ClientFilter = string | { in: string[] } | { notIn: string[] } | undefined;
 
 @Injectable()
 export class ClientScopeService {
@@ -12,7 +12,7 @@ export class ClientScopeService {
     }
 
     if (this.hasGlobalClientAccess(user)) {
-      return undefined;
+      return user.hiddenClientIds?.length ? { notIn: user.hiddenClientIds } : undefined;
     }
 
     return { in: user.clientIds };
@@ -20,6 +20,13 @@ export class ClientScopeService {
 
   requireClientAccess(user: AuthUser, clientId: string, mode: 'read' | 'write') {
     if (this.hasGlobalClientAccess(user)) {
+      if (user.hiddenClientIds?.includes(clientId)) {
+        throw new ForbiddenException({
+          message: 'Демонстрационные данные доступны только в демо-режиме.',
+          clientId,
+          mode,
+        });
+      }
       return;
     }
 

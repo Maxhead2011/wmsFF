@@ -1,5 +1,5 @@
 import { InventoryLineDecision, InventorySessionType } from '@prisma/client';
-import { IsEnum, IsInt, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
+import { IsBoolean, IsEnum, IsIn, IsInt, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
 
 export enum InventoryResolutionAction {
   APPLY_ACTUAL = 'APPLY_ACTUAL',
@@ -35,13 +35,22 @@ export class OpenInventoryBoxDto {
 
 export class CountInventoryItemDto {
   @IsString()
-  @MaxLength(13, { message: 'В поле ШК товара отсканирован КИЗ. При инвентаризации сканируйте только ШК товара.' })
+  @MaxLength(14, { message: 'В поле ШК товара отсканирован КИЗ. При инвентаризации сканируйте только ШК товара.' })
   barcode!: string;
 
   @IsOptional()
   @IsInt()
   @Min(1)
   quantity?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(512)
+  kiz?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  requireKiz?: boolean;
 }
 
 export class SetInventoryCountDto {
@@ -61,6 +70,16 @@ export class InventoryDecisionDto {
   @IsOptional()
   @IsEnum(InventoryResolutionAction)
   action?: InventoryResolutionAction;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  comment?: string;
+}
+
+export class ResolveInventoryBoxDto {
+  @IsIn([InventoryResolutionAction.APPLY_ACTUAL, InventoryResolutionAction.ACCEPT_AS_IS])
+  action!: InventoryResolutionAction.APPLY_ACTUAL | InventoryResolutionAction.ACCEPT_AS_IS;
 
   @IsOptional()
   @IsString()

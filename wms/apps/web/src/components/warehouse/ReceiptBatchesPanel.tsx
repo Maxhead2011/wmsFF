@@ -8,10 +8,11 @@ import {
   type ClientSummary,
   type ReceiptBatchSummary,
 } from '../../lib/api';
+import { useRememberedClientId, validRememberedClientId } from '../../lib/rememberedClient';
 
 export function ReceiptBatchesPanel({ fixedClientId, session }: { fixedClientId?: string; session: AuthSession }) {
   const [clients, setClients] = useState<ClientSummary[]>([]);
-  const [clientId, setClientId] = useState(fixedClientId ?? '');
+  const [clientId, setClientId] = useRememberedClientId(session.user.id, { fixedClientId });
   const [batches, setBatches] = useState<ReceiptBatchSummary[]>([]);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
@@ -20,7 +21,7 @@ export function ReceiptBatchesPanel({ fixedClientId, session }: { fixedClientId?
     if (fixedClientId) return;
     void fetchClients(session.accessToken).then((rows) => {
       setClients(rows);
-      setClientId((current) => current || rows[0]?.id || '');
+      setClientId((current) => validRememberedClientId(current, rows));
     }).catch((error: unknown) => setMessage(error instanceof Error ? error.message : 'Не удалось загрузить клиентов.'));
   }, [fixedClientId, session.accessToken]);
 

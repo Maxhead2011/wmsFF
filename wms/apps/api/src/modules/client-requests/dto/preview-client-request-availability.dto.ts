@@ -28,6 +28,10 @@ export class PreviewClientRequestAvailabilityDto {
   @IsString()
   clientId!: string;
 
+  @IsOptional()
+  @IsString()
+  warehouseId?: string;
+
   @IsEnum(ClientRequestType)
   type!: ClientRequestType;
 

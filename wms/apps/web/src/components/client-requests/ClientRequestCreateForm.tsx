@@ -1,9 +1,11 @@
 import { Send } from 'lucide-react';
-import { useCallback, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
   createClientRequest,
+  fetchBranches,
   previewClientRequestAvailability,
   type AuthSession,
+  type BranchSummary,
   type ClientRequestAvailabilityPreview,
   type ClientRequestPriority,
   type ClientRequestSummary,
@@ -13,6 +15,7 @@ import {
 import { ClientRequestItemsEditor } from './ClientRequestItemsEditor';
 import { emptyClientRequestItem, normalizeClientRequestItems, type ClientRequestDraftItem } from './clientRequestItems';
 import { requestPriorityOptions, requestTypeOptions } from './clientRequestMeta';
+import { useRememberedClientId } from '../../lib/rememberedClient';
 
 type ClientRequestCreateFormProps = {
   clients: ClientSummary[];
@@ -29,7 +32,11 @@ export function ClientRequestCreateForm({ clients, session, onCreated }: ClientR
     return new Set(session.user.writableClientIds);
   }, [clients, session.user]);
   const writableClients = clients.filter((client) => writableClientIds.has(client.id));
-  const [clientId, setClientId] = useState(writableClients[0]?.id ?? '');
+  const [clientId, setClientId] = useRememberedClientId(session.user.id, {
+    initialClientId: writableClients[0]?.id ?? '',
+  });
+  const [branches, setBranches] = useState<BranchSummary[]>([]);
+  const [warehouseId, setWarehouseId] = useState(session.user.activeWarehouseId ?? '');
   const [type, setType] = useState<ClientRequestType>('OUTBOUND');
   const [priority, setPriority] = useState<ClientRequestPriority>('NORMAL');
   const [title, setTitle] = useState('');
@@ -44,7 +51,27 @@ export function ClientRequestCreateForm({ clients, session, onCreated }: ClientR
   const [isSubmitting, setSubmitting] = useState(false);
   const [isCheckingAvailability, setCheckingAvailability] = useState(false);
 
+  useEffect(() => {
+    void fetchBranches(session.accessToken)
+      .then((rows) => {
+        setBranches(rows);
+        setWarehouseId((current) =>
+          rows.some((branch) => branch.id === current)
+            ? current
+            : rows[0]?.id ?? '',
+        );
+      })
+      .catch((caught) => {
+        setError(caught instanceof Error ? caught.message : 'Не удалось загрузить филиалы.');
+      });
+  }, [session.accessToken]);
+
   const checkAvailability = useCallback(async (nextItems = items) => {
+    if (!clientId || !warehouseId) {
+      setAvailability(null);
+      return null;
+    }
+
     const requestItems = normalizeClientRequestItems(nextItems);
     if (requestItems.length === 0) {
       setAvailability(null);
@@ -55,6 +82,7 @@ export function ClientRequestCreateForm({ clients, session, onCreated }: ClientR
     try {
       const nextAvailability = await previewClientRequestAvailability(session.accessToken, {
         clientId,
+        warehouseId,
         type,
         items: requestItems,
       });
@@ -63,7 +91,7 @@ export function ClientRequestCreateForm({ clients, session, onCreated }: ClientR
     } finally {
       setCheckingAvailability(false);
     }
-  }, [clientId, items, session.accessToken, type]);
+  }, [clientId, items, session.accessToken, type, warehouseId]);
 
   if (writableClients.length === 0) {
     return null;
@@ -85,6 +113,7 @@ export function ClientRequestCreateForm({ clients, session, onCreated }: ClientR
 
       const request = await createClientRequest(session.accessToken, {
         clientId,
+        warehouseId,
         type,
         priority,
         title,
@@ -115,6 +144,24 @@ export function ClientRequestCreateForm({ clients, session, onCreated }: ClientR
   return (
     <form className="client-request-form" onSubmit={(event) => void submit(event)}>
       <div className="client-request-fields">
+        <label>
+          <span>Филиал исполнения</span>
+          <select
+            value={warehouseId}
+            onChange={(event) => {
+              setWarehouseId(event.target.value);
+              setAvailability(null);
+            }}
+            required
+          >
+            <option value="">Выберите филиал</option>
+            {branches.map((branch) => (
+              <option key={branch.id} value={branch.id}>
+                {branch.city} · {branch.name}
+              </option>
+            ))}
+          </select>
+        </label>
         <label>
           <span>Клиент</span>
           <select
@@ -206,7 +253,7 @@ export function ClientRequestCreateForm({ clients, session, onCreated }: ClientR
 
       {error ? <p className="form-error">{error}</p> : null}
 
-      <button className="primary-button client-request-submit" disabled={isSubmitting} type="submit">
+      <button className="primary-button client-request-submit" disabled={isSubmitting || !warehouseId} type="submit">
         <Send size={16} aria-hidden="true" />
         <span>{isSubmitting ? 'Создаю' : 'Создать заявку'}</span>
       </button>

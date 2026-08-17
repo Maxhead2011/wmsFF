@@ -4,6 +4,7 @@ import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { ServiceCenterService } from './service-center.service';
+import type { TelegramNotificationSection } from '../client-notifications/telegram-notification.service';
 
 @ApiTags('service')
 @RequirePermissions('system:admin')
@@ -57,14 +58,24 @@ export class ServiceCenterController {
     return this.serviceCenter.listRecentSessions();
   }
 
+  @Post('sessions/:sessionId/close')
+  closeSession(@Param('sessionId') sessionId: string, @CurrentUser() user: AuthUser) {
+    return this.serviceCenter.closeSession(sessionId, user);
+  }
+
   @Get('telegram')
   getTelegramSettings(@Query('clientId') clientId?: string) {
     return this.serviceCenter.getTelegramSettings(clientId);
   }
 
+  @Get('telegram/groups')
+  listTelegramGroups() {
+    return this.serviceCenter.listTelegramGroups();
+  }
+
   @Patch('telegram/global')
   updateTelegramGlobalSettings(
-    @Body() payload: { enabled?: boolean; botToken?: string; fulfillmentChatIds?: string[] },
+    @Body() payload: { enabled?: boolean; botToken?: string; fulfillmentChatIds?: string[]; sections?: TelegramNotificationSection[] },
     @CurrentUser() user: AuthUser,
   ) {
     return this.serviceCenter.updateTelegramGlobalSettings(payload, user);
@@ -73,7 +84,7 @@ export class ServiceCenterController {
   @Patch('telegram/clients/:clientId')
   updateTelegramClientSettings(
     @Param('clientId') clientId: string,
-    @Body() payload: { enabled?: boolean; chatId?: string },
+    @Body() payload: { enabled?: boolean; chatId?: string; sections?: TelegramNotificationSection[] },
     @CurrentUser() user: AuthUser,
   ) {
     return this.serviceCenter.updateTelegramClientSettings(clientId, payload, user);

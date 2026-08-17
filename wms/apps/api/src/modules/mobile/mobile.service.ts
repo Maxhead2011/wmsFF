@@ -61,9 +61,14 @@ export class MobileService {
       return emptyDashboard();
     }
 
-    const requestWhere: Prisma.ClientRequestWhereInput = { clientId: { in: clientIds } };
+    const warehouseId = resolveScopedMobileWarehouseId(user);
+    const requestWhere: Prisma.ClientRequestWhereInput = {
+      clientId: { in: clientIds },
+      ...(warehouseId ? { warehouseId } : {}),
+    };
     const invoiceWhere: Prisma.BillingInvoiceWhereInput = {
       clientId: { in: clientIds },
+      ...(warehouseId ? { warehouseId } : {}),
       status: isClientOnly(user)
         ? { in: [BillingInvoiceStatus.ISSUED, BillingInvoiceStatus.PAID] }
         : undefined,
@@ -79,6 +84,7 @@ export class MobileService {
       this.prisma.stockBalance.findMany({
         where: {
           clientId: { in: clientIds },
+          ...(warehouseId ? { warehouseId } : {}),
           status: { in: [StockStatus.AVAILABLE, StockStatus.PACKING, StockStatus.SHIPPING] },
           quantity: { gt: 0 },
         },
@@ -95,7 +101,13 @@ export class MobileService {
         _sum: { totalRub: true, paidRub: true },
       }),
       this.prisma.clientNotification.count({ where: { clientId: { in: clientIds }, isRead: false } }),
-      this.prisma.box.count({ where: { clientId: { in: clientIds }, status: 'receiving' } }),
+      this.prisma.box.count({
+        where: {
+          clientId: { in: clientIds },
+          ...(warehouseId ? { warehouseId } : {}),
+          status: 'receiving',
+        },
+      }),
       estimateClientId
         ? this.prisma.client.findUnique({
             where: { id: estimateClientId },
@@ -109,6 +121,9 @@ export class MobileService {
               entityId: estimateClientId,
               action: 'warehouse.goods-arrival',
               createdAt: { gte: monthStart },
+              ...(warehouseId
+                ? { payload: { path: ['warehouseId'], equals: warehouseId } }
+                : {}),
             },
             select: { payload: true },
             orderBy: { createdAt: 'desc' },
@@ -198,16 +213,18 @@ export class MobileService {
         periodFrom: monthStart.toISOString(),
         periodTo: new Date().toISOString(),
       },
-      adminQueue: isClientOnly(user) ? null : await this.adminQueue(user, clientIds),
+      adminQueue: isClientOnly(user) ? null : await this.adminQueue(user, clientIds, warehouseId),
       updatedAt: new Date(),
     };
   }
 
   async listRequests(user: AuthUser, query: MobileListDto) {
     const clientIds = await this.resolveClientIds(user, query.clientId);
+    const warehouseId = resolveScopedMobileWarehouseId(user);
     const status = validRequestStatus(query.status);
     const where: Prisma.ClientRequestWhereInput = {
       clientId: { in: clientIds },
+      ...(warehouseId ? { warehouseId } : {}),
       status,
       OR: query.search
         ? [
@@ -244,8 +261,10 @@ export class MobileService {
 
   async listInvoices(user: AuthUser, query: MobileListDto) {
     const clientIds = await this.resolveClientIds(user, query.clientId);
+    const warehouseId = resolveScopedMobileWarehouseId(user);
     const where: Prisma.BillingInvoiceWhereInput = {
       clientId: { in: clientIds },
+      ...(warehouseId ? { warehouseId } : {}),
       status: query.status && Object.values(BillingInvoiceStatus).includes(query.status as BillingInvoiceStatus)
         ? (query.status as BillingInvoiceStatus)
         : isClientOnly(user)
@@ -285,8 +304,13 @@ export class MobileService {
 
   async listNotifications(user: AuthUser, query: MobileListDto) {
     const clientIds = await this.resolveClientIds(user, query.clientId);
+    const warehouseId = resolveScopedMobileWarehouseId(user);
     const rows = await this.prisma.clientNotification.findMany({
-      where: { clientId: { in: clientIds }, isRead: query.unreadOnly ? false : undefined },
+      where: {
+        clientId: { in: clientIds },
+        ...(warehouseId ? { request: { warehouseId } } : {}),
+        isRead: query.unreadOnly ? false : undefined,
+      },
       cursor: query.cursor ? { id: query.cursor } : undefined,
       skip: query.cursor ? 1 : 0,
       take: query.limit + 1,
@@ -299,17 +323,29 @@ export class MobileService {
   }
 
   async markNotificationRead(user: AuthUser, id: string) {
-    const notification = await this.prisma.clientNotification.findUnique({ where: { id }, select: { id: true, clientId: true } });
+    const notification = await this.prisma.clientNotification.findUnique({
+      where: { id },
+      select: { id: true, clientId: true, request: { select: { warehouseId: true } } },
+    });
     if (!notification) throw new NotFoundException('Уведомление не найдено.');
     this.clientScopes.requireClientAccess(user, notification.clientId, 'read');
+    const warehouseId = resolveScopedMobileWarehouseId(user);
+    if (warehouseId && notification.request?.warehouseId !== warehouseId) {
+      throw new NotFoundException('Уведомление не найдено в активном филиале.');
+    }
     return this.prisma.clientNotification.update({ where: { id }, data: { isRead: true, readAt: new Date() } });
   }
 
   async markAllNotificationsRead(user: AuthUser, clientId?: string) {
     const clientIds = await this.resolveClientIds(user, clientId);
+    const warehouseId = resolveScopedMobileWarehouseId(user);
     const readAt = new Date();
     const result = await this.prisma.clientNotification.updateMany({
-      where: { clientId: { in: clientIds }, isRead: false },
+      where: {
+        clientId: { in: clientIds },
+        ...(warehouseId ? { request: { warehouseId } } : {}),
+        isRead: false,
+      },
       data: { isRead: true, readAt },
     });
     return { updated: result.count, readAt };
@@ -326,8 +362,13 @@ export class MobileService {
       });
       return { data: data.map((item) => ({ ...item, category: notificationCategory(item.title) })), nextCursor: cursorFrom(data) };
     }
+    const warehouseId = resolveScopedMobileWarehouseId(user);
     const data = await this.prisma.auditLog.findMany({
-      where: { createdAt: since ? { gt: since } : undefined, action: categoryActionFilter(query.category) },
+      where: {
+        createdAt: since ? { gt: since } : undefined,
+        action: categoryActionFilter(query.category),
+        ...(warehouseId ? { payload: { path: ['warehouseId'], equals: warehouseId } } : {}),
+      },
       include: { user: { select: { id: true, name: true } } },
       orderBy: { createdAt: 'asc' },
       take: query.limit,
@@ -354,11 +395,30 @@ export class MobileService {
       'print',
       'service',
       'own-companies',
+      'branches',
+      'contracts',
+      'billing',
+      'kiz',
+      'relabeling',
+      'administration',
       'profile',
     ]);
     if (!supported.has(module)) throw new NotFoundException('Раздел мобильного приложения не найден.');
 
-    const adminOnly = new Set(['clients', 'access', 'imports', 'print', 'service', 'own-companies']);
+    const adminOnly = new Set([
+      'clients',
+      'access',
+      'imports',
+      'print',
+      'service',
+      'own-companies',
+      'branches',
+      'contracts',
+      'billing',
+      'kiz',
+      'relabeling',
+      'administration',
+    ]);
     if (adminOnly.has(module) && isClientOnly(user)) {
       throw new ForbiddenException('Раздел доступен только сотрудникам WMS.');
     }
@@ -375,7 +435,13 @@ export class MobileService {
       imports: ['imports:write'],
       print: ['print:write'],
       service: ['system:admin'],
-      'own-companies': ['billing:read'],
+      'own-companies': ['own-companies:read'],
+      branches: ['warehouse:read'],
+      contracts: ['billing:read', 'billing:write'],
+      billing: ['billing:read'],
+      kiz: ['system:admin'],
+      relabeling: ['skus:read'],
+      administration: ['system:admin', 'administration:demo'],
       profile: ['clients:read'],
     };
     if (!hasAnyPermission(user, requiredPermissions[module])) {
@@ -383,6 +449,7 @@ export class MobileService {
     }
 
     const clientIds = await this.resolveClientIds(user, query.clientId);
+    const warehouseId = resolveScopedMobileWarehouseId(user);
     const search = clean(query.search);
     const contains = search ? { contains: search, mode: Prisma.QueryMode.insensitive } : undefined;
     const take = query.limit;
@@ -424,6 +491,7 @@ export class MobileService {
       const rows = await this.prisma.stockBalance.findMany({
         where: {
           clientId: { in: clientIds },
+          ...(warehouseId ? { warehouseId } : {}),
           quantity: { gt: 0 },
           OR: contains
             ? [
@@ -480,7 +548,10 @@ export class MobileService {
           client: { select: { name: true } },
           barcodes: { select: { value: true, isPrimary: true } },
           balances: {
-            where: { quantity: { gt: 0 } },
+            where: {
+              quantity: { gt: 0 },
+              ...(warehouseId ? { warehouseId } : {}),
+            },
             select: {
               quantity: true,
               status: true,
@@ -516,7 +587,13 @@ export class MobileService {
       const rows = await this.prisma.box.findMany({
         where: {
           clientId: { in: clientIds },
-          balances: { some: { quantity: { gt: 0 } } },
+          ...(warehouseId ? { warehouseId } : {}),
+          balances: {
+            some: {
+              quantity: { gt: 0 },
+              ...(warehouseId ? { warehouseId } : {}),
+            },
+          },
           OR: contains ? [{ code: contains }, { client: { name: contains } }] : undefined,
         },
         include: {
@@ -524,7 +601,10 @@ export class MobileService {
           zone: { select: { code: true, name: true } },
           pallet: { select: { code: true } },
           balances: {
-            where: { quantity: { gt: 0 } },
+            where: {
+              quantity: { gt: 0 },
+              ...(warehouseId ? { warehouseId } : {}),
+            },
             select: {
               id: true,
               quantity: true,
@@ -586,6 +666,7 @@ export class MobileService {
       const rows = await this.prisma.inventorySession.findMany({
         where: {
           clientId: { in: clientIds },
+          ...(warehouseId ? { warehouseId } : {}),
           OR: contains ? [{ title: contains }, { comment: contains }, { boxes: { some: { boxCode: contains } } }] : undefined,
         },
         include: {
@@ -619,6 +700,7 @@ export class MobileService {
       const rows = await this.prisma.stockMovement.findMany({
         where: {
           clientId: { in: clientIds },
+          ...(warehouseId ? { warehouseId } : {}),
           OR: contains
             ? [
                 { sourceDocument: contains },
@@ -667,7 +749,22 @@ export class MobileService {
           OR: contains ? [{ name: contains }, { code: contains }, { legalName: contains }, { inn: contains }] : undefined,
         },
         include: {
-          _count: { select: { skus: true, boxes: true, requests: true, billingInvoices: true, userScopes: true } },
+          _count: {
+            select: warehouseId
+              ? {
+                  skus: { where: { balances: { some: { warehouseId, quantity: { gt: 0 } } } } },
+                  boxes: { where: { warehouseId } },
+                  requests: { where: { warehouseId } },
+                  billingInvoices: { where: { warehouseId } },
+                  userScopes: {
+                    where: {
+                      canRead: true,
+                      user: { warehouseScopes: { some: { warehouseId, canRead: true } } },
+                    },
+                  },
+                }
+              : { skus: true, boxes: true, requests: true, billingInvoices: true, userScopes: true },
+          },
         },
         orderBy: { name: 'asc' },
         take,
@@ -728,6 +825,7 @@ export class MobileService {
       const rows = await this.prisma.logisticsDeliveryRequest.findMany({
         where: {
           clientId: { in: clientIds },
+          ...(warehouseId ? { warehouseId } : {}),
           OR: contains
             ? [
                 { origin: contains },
@@ -794,6 +892,9 @@ export class MobileService {
     }
 
     if (module === 'imports') {
+      // Import batch rows do not yet carry a durable warehouse dimension. Never
+      // expose another branch's history through a client-only approximation.
+      if (warehouseId) return mobilePage(module, []);
       const rows = await this.prisma.stockTransferBatch.findMany({
         where: {
           clientId: { in: clientIds },
@@ -817,6 +918,8 @@ export class MobileService {
     }
 
     if (module === 'print') {
+      // PrintJob has no warehouse relation, so scoped users must fail closed.
+      if (warehouseId) return mobilePage(module, []);
       const rows = await this.prisma.printJob.findMany({
         where: {
           OR: contains ? [{ printerCode: contains }, { labelType: contains }, { status: contains }] : undefined,
@@ -876,9 +979,187 @@ export class MobileService {
       );
     }
 
+    if (module === 'branches') {
+      const warehouseScope = user.permissionCodes.includes('system:admin')
+        ? {}
+        : { id: { in: user.warehouseIds ?? [] } };
+      const rows = await this.prisma.warehouse.findMany({
+        where: {
+          ...warehouseScope,
+          OR: contains ? [{ code: contains }, { name: contains }, { city: contains }, { address: contains }] : undefined,
+        },
+        include: {
+          ownCompany: { select: { shortName: true } },
+          _count: { select: { boxes: true, clients: true, userScopes: true } },
+        },
+        orderBy: [{ isActive: 'desc' }, { sortOrder: 'asc' }, { city: 'asc' }],
+        take,
+      });
+      return mobilePage(
+        module,
+        rows.map((row) =>
+          mobileRow(
+            row.id,
+            `${row.city} · ${row.name}`,
+            [row.code, row.address, row.ownCompany?.shortName, `${row._count.boxes} коробов`, `${row._count.clients} клиентов`]
+              .filter(Boolean)
+              .join(' · '),
+            row.isActive ? 'Активен' : 'Отключён',
+            row,
+          ),
+        ),
+      );
+    }
+
+    if (module === 'contracts') {
+      const rows = await this.prisma.clientContract.findMany({
+        where: {
+          clientId: { in: clientIds },
+          ...(warehouseId ? { warehouseId } : {}),
+          OR: contains
+            ? [{ number: contains }, { fileName: contains }, { client: { name: contains } }, { warehouse: { name: contains } }]
+            : undefined,
+        },
+        include: {
+          client: { select: { name: true, code: true } },
+          warehouse: { select: { name: true, city: true } },
+          _count: { select: { attachments: true } },
+        },
+        orderBy: { contractDate: 'desc' },
+        take,
+      });
+      return mobilePage(
+        module,
+        rows.map((row) =>
+          mobileRow(
+            row.id,
+            `Договор ${row.number}`,
+            [row.client.name, row.warehouse?.city, row.fileName, `${row._count.attachments} приложений`]
+              .filter(Boolean)
+              .join(' · '),
+            row.signedUploadedAt ? 'Подписан' : 'Ожидает подписи',
+            { ...row, pdfData: undefined, signedPdfData: undefined },
+          ),
+        ),
+      );
+    }
+
+    if (module === 'billing') {
+      const rows = await this.prisma.billingInvoice.findMany({
+        where: {
+          clientId: { in: clientIds },
+          ...(warehouseId ? { warehouseId } : {}),
+          OR: contains ? [{ number: contains }, { comment: contains }, { client: { name: contains } }] : undefined,
+        },
+        include: { client: { select: { name: true, code: true } }, _count: { select: { items: true } } },
+        orderBy: { createdAt: 'desc' },
+        take,
+      });
+      return mobilePage(
+        module,
+        rows.map((row) =>
+          mobileRow(
+            row.id,
+            `Счёт ${row.number}`,
+            [row.client.name, `${row._count.items} строк`, `${row.totalRub.toString()} ₽`].join(' · '),
+            row.status,
+            row,
+          ),
+        ),
+      );
+    }
+
+    if (module === 'kiz') {
+      const rows = await this.prisma.fbsTsdAssembly.findMany({
+        where: {
+          clientId: { in: clientIds },
+          AND: [
+            { OR: [{ errorMessage: { not: null } }, { status: { in: ['FAILED', 'CONFLICT', 'REVIEW_REQUIRED'] } }] },
+            ...(contains
+              ? [{ OR: [{ productName: contains }, { article: contains }, { boxCode: contains }, { kiz: contains }, { errorMessage: contains }] }]
+              : []),
+          ],
+        },
+        orderBy: { updatedAt: 'desc' },
+        take,
+      });
+      return mobilePage(
+        module,
+        rows.map((row) =>
+          mobileRow(
+            row.id,
+            row.productName,
+            [row.article, row.boxCode, row.kiz, row.errorMessage].filter(Boolean).join(' · '),
+            row.status,
+            row,
+          ),
+        ),
+      );
+    }
+
+    if (module === 'relabeling') {
+      const rows = await this.prisma.clientArticleMapping.findMany({
+        where: {
+          clientId: { in: clientIds },
+          OR: contains
+            ? [{ sourceArticle: contains }, { targetArticle: contains }, { comment: contains }, { client: { name: contains } }]
+            : undefined,
+        },
+        include: { client: { select: { name: true, code: true } } },
+        orderBy: { updatedAt: 'desc' },
+        take,
+      });
+      return mobilePage(
+        module,
+        rows.map((row) =>
+          mobileRow(
+            row.id,
+            `${row.sourceArticle} → ${row.targetArticle}`,
+            [row.client.name, row.comment].filter(Boolean).join(' · '),
+            'Активна',
+            row,
+          ),
+        ),
+      );
+    }
+
+    if (module === 'administration') {
+      const rows = await this.prisma.auditLog.findMany({
+        where: contains ? { OR: [{ action: contains }, { entity: contains }, { entityId: contains }, { user: { name: contains } }] } : undefined,
+        include: { user: { select: { name: true, email: true } } },
+        orderBy: { createdAt: 'desc' },
+        take,
+      });
+      return mobilePage(
+        module,
+        rows.map((row) =>
+          mobileRow(
+            row.id,
+            row.action,
+            [row.entity, row.entityId, row.user?.name].filter(Boolean).join(' · '),
+            'Журнал',
+            row,
+          ),
+        ),
+      );
+    }
+
+    const ownCompanyScope = user.permissionCodes.includes('system:admin')
+      ? {}
+      : warehouseId
+        ? {
+            OR: [
+              { warehouseId },
+              { warehouses: { some: { id: warehouseId } } },
+            ],
+          }
+        : { id: '__no_access__' };
     const rows = await this.prisma.ownCompany.findMany({
       where: {
-        OR: contains ? [{ shortName: contains }, { fullName: contains }, { inn: contains }] : undefined,
+        AND: [
+          ownCompanyScope,
+          contains ? { OR: [{ shortName: contains }, { fullName: contains }, { inn: contains }] } : {},
+        ],
       },
       include: { bankAccounts: true },
       orderBy: [{ isDefault: 'desc' }, { shortName: 'asc' }],
@@ -924,36 +1205,86 @@ export class MobileService {
     const setting = await this.prisma.systemSetting.findUnique({ where: { key: 'mobile.android.version' } });
     const value = asRecord(setting?.value);
     return {
-      currentVersion: stringValue(value.currentVersion, '0.3.10'),
+      currentVersion: stringValue(value.currentVersion, '0.4.0'),
       minimumVersion: stringValue(value.minimumVersion, '0.1.0'),
       mandatory: value.mandatory === true,
       apkUrl: stringValue(value.apkUrl, '/downloads/logoff-wms-mobile.apk'),
       releaseNotes: stringValue(
         value.releaseNotes,
-        'В FBS добавлен отдельный раздел «Отменённые заказы». Отмены продавца, покупателя и перевозчика больше не смешиваются с завершёнными заказами в архиве.',
+        'Полная WMS со всеми разделами, функциями и темами внутри Android-приложения.',
       ),
       updatedAt: setting?.updatedAt ?? null,
     };
   }
 
-  private async adminQueue(user: AuthUser, clientIds?: string[]) {
+  private async adminQueue(user: AuthUser, clientIds?: string[], warehouseId?: string | null) {
     if (isClientOnly(user)) throw new ForbiddenException('Административная очередь недоступна.');
     const filter = clientIds?.length ? { in: clientIds } : undefined;
     const [newRequests, receivingBoxes, tsdReview, skuDrafts, invoiceDrafts, logisticsReview] = await Promise.all([
-      this.prisma.clientRequest.count({ where: { clientId: filter, status: { in: [ClientRequestStatus.SUBMITTED, ClientRequestStatus.IN_REVIEW] } } }),
-      this.prisma.box.count({ where: { clientId: filter, status: 'receiving' } }),
-      this.prisma.tsdOperation.count({ where: { status: TsdOperationStatus.NEEDS_REVIEW } }),
+      this.prisma.clientRequest.count({
+        where: {
+          clientId: filter,
+          ...(warehouseId ? { warehouseId } : {}),
+          status: { in: [ClientRequestStatus.SUBMITTED, ClientRequestStatus.IN_REVIEW] },
+        },
+      }),
+      this.prisma.box.count({
+        where: { clientId: filter, ...(warehouseId ? { warehouseId } : {}), status: 'receiving' },
+      }),
+      this.prisma.tsdOperation.count({
+        where: {
+          status: TsdOperationStatus.NEEDS_REVIEW,
+          ...(warehouseId ? { payload: { path: ['warehouseId'], equals: warehouseId } } : {}),
+        },
+      }),
       this.prisma.sku.count({ where: { clientId: filter, isDraft: true } }),
-      this.prisma.billingInvoice.count({ where: { clientId: filter, status: BillingInvoiceStatus.DRAFT } }),
-      this.prisma.logisticsDeliveryRequest.count({ where: { clientId: filter, requiresManualReview: true } }),
+      this.prisma.billingInvoice.count({
+        where: { clientId: filter, ...(warehouseId ? { warehouseId } : {}), status: BillingInvoiceStatus.DRAFT },
+      }),
+      this.prisma.logisticsDeliveryRequest.count({
+        where: {
+          clientId: filter,
+          ...(warehouseId ? { warehouseId } : {}),
+          requiresManualReview: true,
+        },
+      }),
     ]);
     return { newRequests, receivingBoxes, tsdReview, skuDrafts, invoiceDrafts, logisticsReview, total: newRequests + receivingBoxes + tsdReview + skuDrafts + invoiceDrafts + logisticsReview };
   }
 
   private async resolveClientIds(user: AuthUser, clientId?: string) {
+    const warehouseId = resolveScopedMobileWarehouseId(user);
     if (clientId) {
       this.clientScopes.requireClientAccess(user, clientId, 'read');
+      if (warehouseId) {
+        const link = await this.prisma.warehouseClient.findFirst({
+          where: {
+            warehouseId,
+            clientId,
+            status: 'ACTIVE',
+            warehouse: { isActive: true },
+          },
+          select: { clientId: true },
+        });
+        if (!link) {
+          throw new ForbiddenException('Клиент не доступен в активном филиале.');
+        }
+      }
       return [clientId];
+    }
+    if (warehouseId) {
+      const links = await this.prisma.warehouseClient.findMany({
+        where: {
+          warehouseId,
+          status: 'ACTIVE',
+          warehouse: { isActive: true },
+          client: { status: { not: 'ARCHIVED' }, isDemo: false },
+          ...(user.clientScopeMode === 'LIMITED' ? { clientId: { in: user.clientIds } } : {}),
+        },
+        select: { clientId: true },
+        orderBy: { client: { name: 'asc' } },
+      });
+      return links.map((link) => link.clientId);
     }
     if (user.clientScopeMode === 'LIMITED') return user.clientIds;
     const clients = await this.prisma.client.findMany({ where: { status: { not: 'ARCHIVED' }, isDemo: false }, select: { id: true } });
@@ -963,6 +1294,22 @@ export class MobileService {
 
 function isClientOnly(user: AuthUser) {
   return user.roleCodes.includes('CLIENT') && !user.roleCodes.some((role) => ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR'].includes(role));
+}
+
+function resolveScopedMobileWarehouseId(user: AuthUser) {
+  if (
+    user.permissionCodes.includes('system:admin') ||
+    user.roleCodes.includes('CLIENT') ||
+    (!user.roleCodes.includes('BRANCH_MANAGER') && (user.warehouseIds?.length ?? 0) === 0)
+  ) {
+    return null;
+  }
+
+  const warehouseId = user.activeWarehouseId?.trim() || null;
+  if (!warehouseId || !(user.warehouseIds ?? []).includes(warehouseId)) {
+    throw new ForbiddenException('Выберите доступный активный филиал.');
+  }
+  return warehouseId;
 }
 
 function validRequestStatus(value?: string) {

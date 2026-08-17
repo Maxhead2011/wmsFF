@@ -14,6 +14,7 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   clearUserTsdActivationCode,
+  fetchBranches,
   fetchClients,
   fetchRoles,
   fetchUsers,
@@ -23,7 +24,9 @@ import {
   updateStorageTariff,
   updateUserProfile,
   updateUserRoles,
+  updateUserClientScopes,
   type AuthSession,
+  type BranchSummary,
   type ClientKind,
   type ClientStatus,
   type ClientSummary,
@@ -33,6 +36,7 @@ import {
 import type { WorkspaceId } from '../../lib/workspaces';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import './debug.css';
+import { useRememberedClientId } from '../../lib/rememberedClient';
 
 type DebugPanelProps = {
   session: AuthSession;
@@ -70,6 +74,7 @@ type UserDraft = {
   password: string;
   status: string;
   analyticsEnabled: boolean;
+  warehouseId: string;
 };
 
 const tabs: Array<{ id: DebugTab; label: string; icon: typeof Building2 }> = [
@@ -158,6 +163,7 @@ const emptyUserDraft: UserDraft = {
   password: '',
   status: 'ACTIVE',
   analyticsEnabled: false,
+  warehouseId: '',
 };
 
 export function DebugPanel({ session, onOpenWorkspace }: DebugPanelProps) {
@@ -165,7 +171,8 @@ export function DebugPanel({ session, onOpenWorkspace }: DebugPanelProps) {
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [users, setUsers] = useState<UserSummary[]>([]);
   const [roles, setRoles] = useState<RoleSummary[]>([]);
-  const [selectedClientId, setSelectedClientId] = useState('');
+  const [branches, setBranches] = useState<BranchSummary[]>([]);
+  const [selectedClientId, setSelectedClientId] = useRememberedClientId(session.user.id);
   const [selectedUserId, setSelectedUserId] = useState('');
   const [clientSearch, setClientSearch] = useState('');
   const [archiveSearch, setArchiveSearch] = useState('');
@@ -173,6 +180,8 @@ export function DebugPanel({ session, onOpenWorkspace }: DebugPanelProps) {
   const [clientDraft, setClientDraft] = useState<ClientDraft>(emptyClientDraft);
   const [userDraft, setUserDraft] = useState<UserDraft>(emptyUserDraft);
   const [roleCodes, setRoleCodes] = useState<string[]>([]);
+  const [userClientMode, setUserClientMode] = useState<'all' | 'limited'>('all');
+  const [userClientIds, setUserClientIds] = useState<string[]>([]);
   const [tsdCode, setTsdCode] = useState('');
   const [pendingUserOverrideReasons, setPendingUserOverrideReasons] = useState<string[] | null>(null);
   const [pendingArchiveClient, setPendingArchiveClient] = useState<ClientSummary | null>(null);
@@ -231,6 +240,8 @@ export function DebugPanel({ session, onOpenWorkspace }: DebugPanelProps) {
   useEffect(() => {
     setUserDraft(selectedUser ? userToDraft(selectedUser) : emptyUserDraft);
     setRoleCodes(selectedUser?.roles.map((item) => item.role.code) ?? []);
+    setUserClientMode(selectedUser && selectedUser.clientScopes.length > 0 ? 'limited' : 'all');
+    setUserClientIds(selectedUser?.clientScopes.map((scope) => scope.client.id) ?? []);
     setTsdCode('');
   }, [selectedUser]);
 
@@ -239,14 +250,16 @@ export function DebugPanel({ session, onOpenWorkspace }: DebugPanelProps) {
     setError('');
     setMessage('');
     try {
-      const [nextClients, nextUsers, nextRoles] = await Promise.all([
+      const [nextClients, nextUsers, nextRoles, nextBranches] = await Promise.all([
         fetchClients(session.accessToken, { includeArchived: true }),
         fetchUsers(session.accessToken),
         fetchRoles(session.accessToken),
+        fetchBranches(session.accessToken),
       ]);
       setClients(nextClients);
       setUsers(nextUsers);
       setRoles(nextRoles);
+      setBranches(nextBranches);
       setSelectedClientId((current) => current || nextClients.find((client) => client.status !== 'ARCHIVED')?.id || nextClients[0]?.id || '');
       setSelectedUserId((current) => current || nextUsers[0]?.id || '');
     } catch (caught) {
@@ -398,6 +411,7 @@ export function DebugPanel({ session, onOpenWorkspace }: DebugPanelProps) {
         name: userDraft.name,
         status: userDraft.status,
         analyticsEnabled: userDraft.analyticsEnabled,
+        warehouseId: userDraft.warehouseId || null,
         ...(userDraft.password.trim() ? { password: userDraft.password.trim() } : {}),
       });
       const currentRoleCodes = selectedUser.roles.map((item) => item.role.code).sort().join('|');
@@ -405,6 +419,11 @@ export function DebugPanel({ session, onOpenWorkspace }: DebugPanelProps) {
       if (currentRoleCodes !== nextRoleCodes) {
         saved = await updateUserRoles(session.accessToken, selectedUser.id, { roleCodes });
       }
+      const savedScopes = await updateUserClientScopes(session.accessToken, selectedUser.id, {
+        allClients: userClientMode === 'all',
+        scopes: userClientMode === 'all' ? [] : userClientIds.map((clientId) => ({ clientId, canRead: true, canWrite: true })),
+      });
+      saved = { ...saved, clientScopes: savedScopes.clientScopes };
       setUsers((current) => current.map((user) => (user.id === saved.id ? saved : user)));
       setUserDraft(userToDraft(saved));
       setMessage('Данные пользователя сохранены.');
@@ -778,6 +797,17 @@ export function DebugPanel({ session, onOpenWorkspace }: DebugPanelProps) {
                   <strong>{userDraft.analyticsEnabled ? 'Плитка видна' : 'Плитка скрыта'}</strong>
                 </span>
               </label>
+              <label>
+                <span>Закреплённый филиал</span>
+                <select value={userDraft.warehouseId} onChange={(event) => setUserField('warehouseId', event.target.value)}>
+                  <option value="">Все филиалы (только администратор/владелец)</option>
+                  {branches.filter((branch) => branch.isActive).map((branch) => (
+                    <option key={branch.id} value={branch.id}>
+                      {branch.city} · {branch.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
 
             <div className="debug-role-grid">
@@ -793,6 +823,24 @@ export function DebugPanel({ session, onOpenWorkspace }: DebugPanelProps) {
                   </label>
                 );
               })}
+            </div>
+
+            <div className="debug-code-box">
+              <div>
+                <ShieldCheck size={18} aria-hidden="true" />
+                <strong>Доступные клиенты</strong>
+                <span>Выберите всех клиентов филиала или только конкретных.</span>
+              </div>
+              <div className="debug-access-toggle__control">
+                <label><input type="radio" checked={userClientMode === 'all'} onChange={() => setUserClientMode('all')} /> Все клиенты филиала</label>
+                <label><input type="radio" checked={userClientMode === 'limited'} onChange={() => setUserClientMode('limited')} /> Выбранные</label>
+              </div>
+              {userClientMode === 'limited' ? <div className="debug-role-grid">
+                {clients.filter((client) => client.status === 'ACTIVE').map((client) => <label className={userClientIds.includes(client.id) ? 'debug-role active' : 'debug-role'} key={client.id}>
+                  <input type="checkbox" checked={userClientIds.includes(client.id)} onChange={() => setUserClientIds((current) => current.includes(client.id) ? current.filter((id) => id !== client.id) : [...current, client.id])} />
+                  <span><strong>{client.code}</strong>{client.name}</span>
+                </label>)}
+              </div> : null}
             </div>
 
             <div className="debug-actions">
@@ -951,6 +999,7 @@ function userToDraft(user: UserSummary): UserDraft {
     password: '',
     status: user.status,
     analyticsEnabled: user.analyticsEnabled,
+    warehouseId: user.activeWarehouseId ?? user.warehouseScopes?.find((scope) => scope.canRead)?.warehouse.id ?? '',
   };
 }
 

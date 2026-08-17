@@ -7,6 +7,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -63,6 +64,10 @@ export class CreateManualBillingInvoiceDto {
   @IsOptional()
   @IsDateString()
   dueDate?: string;
+
+  @IsOptional()
+  @IsUUID('4')
+  paymentBankAccountId?: string;
 
   @IsArray()
   @ValidateNested({ each: true })

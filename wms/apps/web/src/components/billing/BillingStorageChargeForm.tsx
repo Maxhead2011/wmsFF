@@ -1,6 +1,7 @@
 import { Warehouse } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { generateStorageCharge, type AuthSession, type BillingChargeSummary, type ClientSummary } from '../../lib/api';
+import { useRememberedClientId } from '../../lib/rememberedClient';
 
 type BillingStorageChargeFormProps = {
   clients: ClientSummary[];
@@ -9,7 +10,9 @@ type BillingStorageChargeFormProps = {
 };
 
 export function BillingStorageChargeForm({ clients, session, onCreated }: BillingStorageChargeFormProps) {
-  const [clientId, setClientId] = useState(clients[0]?.id ?? '');
+  const [clientId, setClientId] = useRememberedClientId(session.user.id, {
+    initialClientId: clients[0]?.id ?? '',
+  });
   const [periodFrom, setPeriodFrom] = useState(monthStart());
   const [periodTo, setPeriodTo] = useState(today());
   const [unitPriceRub, setUnitPriceRub] = useState('');

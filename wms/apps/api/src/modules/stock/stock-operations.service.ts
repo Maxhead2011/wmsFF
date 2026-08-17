@@ -17,9 +17,12 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
+import { captureShippedKizHistory } from '../../common/shipment-history/shipped-kiz-history';
+import { BoxCodePolicyService } from '../../common/boxes/box-code-policy.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { RequestBillingAutomationService } from '../billing/request-billing-automation.service';
+import { ExpenseAutomationService } from '../expenses/expense-automation.service';
 import { clientRequestPackageInclude } from '../client-requests/client-request-packages.include';
 import { LogisticsService } from '../logistics/logistics.service';
 import { FulfillClientRequestDto } from './dto/fulfill-client-request.dto';
@@ -28,12 +31,21 @@ import { TransferBetweenBoxesDto } from './dto/transfer-between-boxes.dto';
 import { TransferWholeBoxDto } from './dto/transfer-whole-box.dto';
 import { StockBalancesService } from './stock-balances.service';
 
+const allocationBoxSelect = {
+  code: true,
+  warehouseId: true,
+  zoneId: true,
+  palletId: true,
+  zone: { select: { warehouseId: true } },
+  pallet: { select: { zone: { select: { warehouseId: true } } } },
+} as const;
+
 type StockBalanceForAllocation = Prisma.StockBalanceGetPayload<{
-  include: { box: { select: { code: true } } };
+  include: { box: { select: typeof allocationBoxSelect } };
 }>;
 
 type RequestBoxSelectionForAllocation = Prisma.ClientRequestBoxSelectionGetPayload<{
-  include: { box: { select: { code: true } } };
+  include: { box: { select: { code: true; warehouseId: true } } };
 }>;
 
 type TransferExecutionInput = TransferBetweenBoxesDto & {
@@ -41,9 +53,37 @@ type TransferExecutionInput = TransferBetweenBoxesDto & {
 };
 
 type StockTransferValidationDb = Pick<Prisma.TransactionClient, 'barcode' | 'box' | 'stockBalance'>;
+type TsdTransferDb = Pick<
+  Prisma.TransactionClient,
+  'barcode' | 'box' | 'productMark' | 'stockBalance'
+>;
+type TsdTransferSourceBox = Prisma.BoxGetPayload<{
+  include: {
+    client: { select: { id: true; code: true; name: true } };
+    zone: { select: { warehouseId: true } };
+    pallet: { select: { zone: { select: { warehouseId: true } } } };
+    balances: {
+      include: {
+        sku: {
+          include: {
+            barcodes: { select: { value: true; isPrimary: true } };
+          };
+        };
+      };
+    };
+  };
+}>;
+type TsdTransferScannedItem = {
+  sku: TsdTransferSourceBox['balances'][number]['sku'];
+  scanCode: string;
+  scanType: 'BARCODE' | 'KIZ';
+  productMarkId: string | null;
+  availableQuantity: number;
+};
 
 export type ReceiveIntoBoxInput = {
   clientId: string;
+  warehouseId?: string;
   skuId?: string;
   barcode?: string;
   kiz?: string;
@@ -71,6 +111,13 @@ type RequestItemForAllocation = {
   id: string;
   skuId: string | null;
   barcode: string | null;
+  quantity: number;
+};
+
+export type PhysicalStockSourceInput = {
+  requestItemId: string;
+  boxCode?: string;
+  noBox?: boolean;
   quantity: number;
 };
 
@@ -111,29 +158,398 @@ export class StockOperationsService {
     private readonly billingAutomation?: RequestBillingAutomationService,
     private readonly logistics?: LogisticsService,
     private readonly inventoryLock?: InventoryLockService,
+    private readonly boxCodes?: BoxCodePolicyService,
+    private readonly expenseAutomation?: ExpenseAutomationService,
   ) {}
+
+  private resolveWritableWarehouseId(user: AuthUser) {
+    if (user.permissionCodes.includes('system:admin') || user.roleCodes.includes('CLIENT')) {
+      return undefined;
+    }
+    const warehouseId = user.activeWarehouseId;
+    if (!warehouseId) {
+      throw new BadRequestException('Выберите активный филиал.');
+    }
+    if (!user.writableWarehouseIds?.includes(warehouseId)) {
+      throw new ForbiddenException('Филиал не назначен сотруднику для складских операций.');
+    }
+    return warehouseId;
+  }
+
+  private assertRequestWarehouse(
+    request: { warehouseId?: string | null },
+    warehouseId: string | undefined,
+  ) {
+    if (warehouseId && request.warehouseId !== warehouseId) {
+      throw new ForbiddenException('Заявка относится к другому филиалу. Переключите город работы.');
+    }
+  }
+
+  private assertBoxWarehouse(
+    warehouseId: string | undefined,
+    box: {
+      warehouseId?: string | null;
+      zoneId?: string | null;
+      palletId?: string | null;
+      zone?: { warehouseId: string } | null;
+      pallet?: { zone: { warehouseId: string } | null } | null;
+    },
+  ) {
+    if (!warehouseId) return;
+    if (
+      box.warehouseId !== warehouseId ||
+      (box.zoneId !== null && box.zoneId !== undefined && box.zone?.warehouseId !== warehouseId) ||
+      (box.palletId !== null && box.palletId !== undefined && box.pallet?.zone?.warehouseId !== warehouseId)
+    ) {
+      throw new ForbiddenException(
+        'Короб, его зона или паллета относятся к другому филиалу. Переключите город работы.',
+      );
+    }
+  }
+
+  private warehouseScopedBoxWhere(warehouseId: string | undefined): Prisma.BoxWhereInput | undefined {
+    if (!warehouseId) return undefined;
+    return {
+      warehouseId,
+      AND: [
+        { OR: [{ zoneId: null }, { zone: { warehouseId } }] },
+        { OR: [{ palletId: null }, { pallet: { zone: { warehouseId } } }] },
+      ],
+    };
+  }
+
+  private requireBalanceWarehouseId(warehouseId: string | null | undefined) {
+    if (!warehouseId) {
+      throw new BadRequestException('Невозможно определить филиал остатка. Привяжите короб или заявку к складу.');
+    }
+    return warehouseId;
+  }
 
   async transferBetweenBoxes(dto: TransferBetweenBoxesDto, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
     await this.inventoryLock?.assertStockMovementsAllowed();
+    const warehouseId = this.resolveWritableWarehouseId(user);
+    if (warehouseId) {
+      const boxes = await this.prisma.box.findMany({
+        where: { clientId: dto.clientId, code: { in: [dto.fromBoxCode.trim(), dto.toBoxCode.trim()] } },
+        select: {
+          code: true,
+          warehouseId: true,
+          zoneId: true,
+          palletId: true,
+          zone: { select: { warehouseId: true } },
+          pallet: { select: { zone: { select: { warehouseId: true } } } },
+        },
+      });
+      for (const foreignBox of boxes) {
+        this.assertBoxWarehouse(warehouseId, foreignBox);
+      }
+    }
+    if (this.boxCodes) {
+      dto.toBoxCode = await this.boxCodes.requireAllowed(dto.toBoxCode);
+    }
 
-    return this.prisma.$transaction((tx) => this.applyTransferBetweenBoxes(tx, dto));
+    return this.prisma.$transaction((tx) => this.applyTransferBetweenBoxes(tx, dto, warehouseId));
+  }
+
+  async inspectTsdTransferSource(boxCodeValue: unknown, user: AuthUser) {
+    const sourceBox = await this.loadTsdTransferSourceBox(
+      this.prisma,
+      requiredTsdTransferText(boxCodeValue, 'Отсканируйте исходный короб.'),
+      user,
+    );
+    return this.formatTsdTransferSource(sourceBox);
+  }
+
+  async inspectTsdTransferItem(payload: Record<string, unknown>, user: AuthUser) {
+    const sourceBox = await this.loadTsdTransferSourceBox(
+      this.prisma,
+      requiredTsdTransferText(payload.fromBoxCode, 'Сначала отсканируйте исходный короб.'),
+      user,
+    );
+    const item = await this.resolveTsdTransferScannedItem(
+      this.prisma,
+      sourceBox,
+      requiredTsdTransferText(payload.scanCode, 'Отсканируйте ШК товара или КИЗ.'),
+    );
+    return {
+      sourceBox: this.formatTsdTransferSource(sourceBox).sourceBox,
+      item: formatTsdTransferItem(item),
+      message:
+        item.scanType === 'KIZ'
+          ? `КИЗ принят. Будет перемещена 1 единица товара «${item.sku.name}».`
+          : `Товар принят. Будет перемещена 1 единица «${item.sku.name}».`,
+    };
+  }
+
+  async executeTsdTransfer(payload: Record<string, unknown>, user: AuthUser) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
+    const warehouseId = this.resolveWritableWarehouseId(user);
+    const fromBoxCode = this.boxCodes
+      ? await this.boxCodes.normalize(
+          requiredTsdTransferText(payload.fromBoxCode, 'Сначала отсканируйте исходный короб.'),
+        )
+      : requiredTsdTransferText(payload.fromBoxCode, 'Сначала отсканируйте исходный короб.');
+    const toBoxCode = this.boxCodes
+      ? await this.boxCodes.requireAllowed(
+          requiredTsdTransferText(payload.toBoxCode, 'Отсканируйте короб назначения.'),
+        )
+      : requiredTsdTransferText(payload.toBoxCode, 'Отсканируйте короб назначения.');
+    const scanCode = requiredTsdTransferText(payload.scanCode, 'Отсканируйте ШК товара или КИЗ.');
+    const idempotencyKey = requiredTsdTransferText(
+      payload.idempotencyKey,
+      'Не удалось создать номер операции. Повторите перемещение.',
+    ).slice(0, 220);
+    if (fromBoxCode.toLocaleUpperCase('ru-RU') === toBoxCode.toLocaleUpperCase('ru-RU')) {
+      throw new BadRequestException('Исходный короб и короб назначения совпадают.');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.stockMovement.findUnique({
+        where: { idempotencyKey: `${idempotencyKey}:out` },
+        include: { sku: true },
+      });
+      if (existing) {
+        this.clientScopes.requireClientAccess(user, existing.clientId, 'write');
+        const inbound = await tx.stockMovement.findUnique({
+          where: { idempotencyKey: `${idempotencyKey}:in` },
+          include: { box: { select: { code: true } } },
+        });
+        return {
+          status: 'ALREADY_APPLIED' as const,
+          message: 'Это перемещение уже было выполнено. Повтор не добавлен.',
+          sourceBoxCode: fromBoxCode,
+          targetBoxCode: inbound?.box?.code ?? toBoxCode,
+          sourceBoxArchived: false,
+          item: {
+            skuId: existing.skuId,
+            name: existing.sku.name,
+            article: existing.sku.article ?? existing.sku.clientSku ?? existing.sku.internalSku,
+            color: existing.sku.color,
+            size: existing.sku.size,
+            scanCode,
+            scanType: 'BARCODE',
+            availableQuantity: 0,
+          },
+        };
+      }
+
+      const sourceBox = await this.loadTsdTransferSourceBox(tx, fromBoxCode, user);
+      const operationWarehouseId =
+        warehouseId ??
+        this.requireBalanceWarehouseId(sourceBox.warehouseId ?? user.activeWarehouseId);
+      const item = await this.resolveTsdTransferScannedItem(tx, sourceBox, scanCode);
+      await this.applyTransferBetweenBoxes(tx, {
+        clientId: sourceBox.clientId,
+        skuId: item.sku.id,
+        fromBoxCode: sourceBox.code,
+        toBoxCode,
+        quantity: 1,
+        status: StockStatus.AVAILABLE,
+        idempotencyKey,
+        sourceDocument: `TSD ${user.deviceCode ?? user.id}`,
+        comment: `Перемещение на ТСД: ${sourceBox.code} → ${toBoxCode}`,
+      }, operationWarehouseId);
+
+      const targetBox = await tx.box.findUnique({ where: { code: toBoxCode } });
+      if (!targetBox || targetBox.clientId !== sourceBox.clientId) {
+        throw new BadRequestException(`Короб назначения ${toBoxCode} не удалось открыть.`);
+      }
+      if (item.productMarkId) {
+        const inbound = await tx.stockMovement.findUnique({
+          where: { idempotencyKey: `${idempotencyKey}:in` },
+          select: { id: true },
+        });
+        await tx.productMark.update({
+          where: { id: item.productMarkId },
+          data: {
+            boxId: targetBox.id,
+            stockMovementId: inbound?.id,
+          },
+        });
+      }
+
+      const [remainingBalance, remainingMarks] = await Promise.all([
+        tx.stockBalance.aggregate({
+          where: { boxId: sourceBox.id, quantity: { gt: 0 } },
+          _sum: { quantity: true },
+        }),
+        tx.productMark.count({ where: { boxId: sourceBox.id } }),
+      ]);
+      const sourceRemaining = remainingBalance._sum.quantity ?? 0;
+      const sourceBoxArchived = sourceRemaining === 0 && remainingMarks === 0;
+      if (sourceBoxArchived) {
+        await tx.box.update({
+          where: { id: sourceBox.id },
+          data: { status: 'archived' },
+        });
+      }
+
+      return {
+        status: 'APPLIED' as const,
+        message: `Перемещена 1 единица «${item.sku.name}»: ${sourceBox.code} → ${targetBox.code}.`,
+        sourceBoxCode: sourceBox.code,
+        targetBoxCode: targetBox.code,
+        sourceBoxArchived,
+        sourceRemaining,
+        item: formatTsdTransferItem(item),
+      };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+
+  async executeTsdTransferBatch(payload: Record<string, unknown>, user: AuthUser) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
+    const warehouseId = this.resolveWritableWarehouseId(user);
+    const fromBoxCode = this.boxCodes
+      ? await this.boxCodes.normalize(
+          requiredTsdTransferText(payload.fromBoxCode, 'Сначала отсканируйте исходный короб.'),
+        )
+      : requiredTsdTransferText(payload.fromBoxCode, 'Сначала отсканируйте исходный короб.');
+    const toBoxCode = this.boxCodes
+      ? await this.boxCodes.requireAllowed(
+          requiredTsdTransferText(payload.toBoxCode, 'Отсканируйте короб назначения.'),
+        )
+      : requiredTsdTransferText(payload.toBoxCode, 'Отсканируйте короб назначения.');
+    const scanCodes = tsdTransferScanCodes(payload.scanCodes);
+    const idempotencyKey = requiredTsdTransferText(
+      payload.idempotencyKey,
+      'Не удалось создать номер пакетного перемещения. Повторите операцию.',
+    ).slice(0, 180);
+    if (fromBoxCode.toLocaleUpperCase('ru-RU') === toBoxCode.toLocaleUpperCase('ru-RU')) {
+      throw new BadRequestException('Исходный короб и короб назначения совпадают.');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.stockMovement.findFirst({
+        where: { idempotencyKey: { startsWith: `${idempotencyKey}:1:` } },
+        include: { sku: true },
+      });
+      if (existing) {
+        this.clientScopes.requireClientAccess(user, existing.clientId, 'write');
+        const source = await tx.box.findUnique({
+          where: { code: fromBoxCode },
+          select: { id: true, status: true },
+        });
+        const sourceRemaining = source
+          ? (
+              await tx.stockBalance.aggregate({
+                where: { boxId: source.id, quantity: { gt: 0 } },
+                _sum: { quantity: true },
+              })
+            )._sum.quantity ?? 0
+          : 0;
+        return {
+          status: 'ALREADY_APPLIED' as const,
+          message: `Пакетное перемещение ${scanCodes.length} ед. уже выполнено. Повтор не добавлен.`,
+          sourceBoxCode: fromBoxCode,
+          targetBoxCode: toBoxCode,
+          sourceBoxArchived: source?.status === 'archived',
+          sourceRemaining,
+          movedQuantity: scanCodes.length,
+          items: [],
+        };
+      }
+
+      const initialSourceBox = await this.loadTsdTransferSourceBox(tx, fromBoxCode, user);
+      const operationWarehouseId =
+        warehouseId ??
+        this.requireBalanceWarehouseId(initialSourceBox.warehouseId ?? user.activeWarehouseId);
+      const normalizedKizScans = new Set<string>();
+      const movedItems: ReturnType<typeof formatTsdTransferItem>[] = [];
+      const targetBox = await this.ensureTargetBox(
+        tx,
+        initialSourceBox.clientId,
+        toBoxCode,
+        operationWarehouseId,
+      );
+
+      for (const [index, scanCode] of scanCodes.entries()) {
+        const sourceBox =
+          index === 0
+            ? initialSourceBox
+            : await this.loadTsdTransferSourceBox(tx, fromBoxCode, user);
+        const item = await this.resolveTsdTransferScannedItem(tx, sourceBox, scanCode);
+        if (item.scanType === 'KIZ') {
+          const normalizedKiz = item.scanCode.toLocaleLowerCase('ru-RU');
+          if (normalizedKizScans.has(normalizedKiz)) {
+            throw new BadRequestException(
+              `КИЗ ${printableTransferScan(item.scanCode)} отсканирован в этом перемещении повторно.`,
+            );
+          }
+          normalizedKizScans.add(normalizedKiz);
+        }
+        const lineKey = `${idempotencyKey}:${index + 1}`;
+        await this.applyTransferBetweenBoxes(tx, {
+          clientId: sourceBox.clientId,
+          skuId: item.sku.id,
+          fromBoxCode: sourceBox.code,
+          toBoxCode: targetBox.code,
+          quantity: 1,
+          status: StockStatus.AVAILABLE,
+          idempotencyKey: lineKey,
+          sourceDocument: `TSD ${user.deviceCode ?? user.id}`,
+          comment: `Пакетное перемещение на ТСД: ${sourceBox.code} → ${targetBox.code}`,
+        }, operationWarehouseId);
+
+        if (item.productMarkId) {
+          const inbound = await tx.stockMovement.findUnique({
+            where: { idempotencyKey: `${lineKey}:in` },
+            select: { id: true },
+          });
+          await tx.productMark.update({
+            where: { id: item.productMarkId },
+            data: {
+              boxId: targetBox.id,
+              stockMovementId: inbound?.id,
+            },
+          });
+        }
+        movedItems.push(formatTsdTransferItem(item));
+      }
+
+      const [remainingBalance, remainingMarks] = await Promise.all([
+        tx.stockBalance.aggregate({
+          where: { boxId: initialSourceBox.id, quantity: { gt: 0 } },
+          _sum: { quantity: true },
+        }),
+        tx.productMark.count({ where: { boxId: initialSourceBox.id } }),
+      ]);
+      const sourceRemaining = remainingBalance._sum.quantity ?? 0;
+      const sourceBoxArchived = sourceRemaining === 0 && remainingMarks === 0;
+      if (sourceBoxArchived) {
+        await tx.box.update({
+          where: { id: initialSourceBox.id },
+          data: { status: 'archived' },
+        });
+      }
+
+      return {
+        status: 'APPLIED' as const,
+        message: `Перемещено ${movedItems.length} ед.: ${initialSourceBox.code} → ${targetBox.code}.`,
+        sourceBoxCode: initialSourceBox.code,
+        targetBoxCode: targetBox.code,
+        sourceBoxArchived,
+        sourceRemaining,
+        movedQuantity: movedItems.length,
+        items: movedItems,
+      };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
   async transferWholeBox(dto: TransferWholeBoxDto, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
     await this.inventoryLock?.assertStockMovementsAllowed();
+    const warehouseId = this.resolveWritableWarehouseId(user);
 
     const fromBoxCode = dto.fromBoxCode.trim();
-    const toBoxCode = dto.toBoxCode.trim();
+    const toBoxCode = this.boxCodes
+      ? await this.boxCodes.requireAllowed(dto.toBoxCode)
+      : dto.toBoxCode.trim();
     if (!fromBoxCode || !toBoxCode) {
       throw new BadRequestException('Укажите исходный и целевой короба.');
     }
     if (fromBoxCode.toLocaleUpperCase('ru-RU') === toBoxCode.toLocaleUpperCase('ru-RU')) {
       throw new BadRequestException('Исходный и целевой короба совпадают.');
-    }
-    if (!toBoxCode.toLocaleUpperCase('ru-RU').startsWith('FFL')) {
-      throw new BadRequestException('Номер целевого короба должен начинаться с FFL.');
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -151,8 +567,10 @@ export class StockOperationsService {
       const sourceBox = await tx.box.findUnique({
         where: { clientId_code: { clientId: dto.clientId, code: fromBoxCode } },
         include: {
+          zone: { select: { warehouseId: true } },
+          pallet: { select: { zone: { select: { warehouseId: true } } } },
           balances: {
-            where: { quantity: { gt: 0 } },
+            where: { quantity: { gt: 0 }, warehouseId },
             orderBy: [{ skuId: 'asc' }, { status: 'asc' }],
           },
           productMarks: {
@@ -163,25 +581,39 @@ export class StockOperationsService {
       if (!sourceBox || sourceBox.status !== 'active') {
         throw new NotFoundException(`Исходный короб ${fromBoxCode} не найден в активных остатках.`);
       }
+      this.assertBoxWarehouse(warehouseId, sourceBox);
       if (sourceBox.balances.length === 0) {
         throw new BadRequestException(`В коробе ${sourceBox.code} нет остатка для перемещения.`);
       }
 
       const existingTarget = await tx.box.findUnique({
         where: { clientId_code: { clientId: dto.clientId, code: toBoxCode } },
+        include: {
+          zone: { select: { warehouseId: true } },
+          pallet: { select: { zone: { select: { warehouseId: true } } } },
+        },
       });
+      if (existingTarget) this.assertBoxWarehouse(warehouseId, existingTarget);
       if (existingTarget && existingTarget.status !== 'active') {
         throw new BadRequestException(`Короб ${toBoxCode} не является активным и не может принять остаток.`);
       }
       const targetBox =
         existingTarget ??
         (await tx.box.create({
-          data: { clientId: dto.clientId, code: toBoxCode, status: 'active' },
+          data: {
+            warehouseId: this.requireBalanceWarehouseId(
+              warehouseId ?? sourceBox.warehouseId ?? user.activeWarehouseId,
+            ),
+            clientId: dto.clientId,
+            code: toBoxCode,
+            status: 'active',
+          },
         }));
 
       const balanceKeys = new Set(sourceBox.balances.map((balance) => `${balance.skuId}:${balance.status}`));
-      const orphanMark = sourceBox.productMarks.find((mark) => !balanceKeys.has(`${mark.skuId}:${mark.status}`));
-      if (orphanMark) {
+      const orphanMarks = sourceBox.productMarks.filter((mark) => !balanceKeys.has(`${mark.skuId}:${mark.status}`));
+      const autoApproveChecks = canAutoApproveStockChecks(user);
+      if (orphanMarks.length > 0 && !autoApproveChecks) {
         throw new BadRequestException(
           `Короб ${sourceBox.code} содержит КИЗ без соответствующего остатка. Перемещение остановлено для проверки.`,
         );
@@ -194,6 +626,7 @@ export class StockOperationsService {
         const lineKey = `${dto.idempotencyKey}:${index + 1}:${balance.id}`;
         await this.decrementSourceBalance(tx, balance, quantity);
         await this.incrementTargetBalance(tx, {
+          warehouseId: this.requireBalanceWarehouseId(targetBox.warehouseId),
           clientId: dto.clientId,
           skuId: balance.skuId,
           boxId: targetBox.id,
@@ -204,6 +637,7 @@ export class StockOperationsService {
 
         await tx.stockMovement.create({
           data: {
+            warehouseId: this.requireBalanceWarehouseId(targetBox.warehouseId),
             clientId: dto.clientId,
             skuId: balance.skuId,
             boxId: sourceBox.id,
@@ -218,6 +652,7 @@ export class StockOperationsService {
         });
         const inboundMovement = await tx.stockMovement.create({
           data: {
+            warehouseId: this.requireBalanceWarehouseId(targetBox.warehouseId),
             clientId: dto.clientId,
             skuId: balance.skuId,
             boxId: targetBox.id,
@@ -245,6 +680,29 @@ export class StockOperationsService {
         totalQuantity += quantity;
       }
 
+      if (orphanMarks.length > 0) {
+        const movedOrphanMarks = await tx.productMark.updateMany({
+          where: { id: { in: orphanMarks.map((mark) => mark.id) }, boxId: sourceBox.id },
+          data: { boxId: targetBox.id, stockMovementId: null },
+        });
+        movedMarks += movedOrphanMarks.count;
+        await tx.auditLog.create({
+          data: {
+            userId: user.id,
+            action: 'ADMIN_AUTO_APPROVE_BOX_TRANSFER_CHECK',
+            entity: 'Box',
+            entityId: sourceBox.id,
+            payload: {
+              fromBox: sourceBox.code,
+              toBox: targetBox.code,
+              orphanMarkIds: orphanMarks.map((mark) => mark.id),
+              orphanMarks: orphanMarks.length,
+              reason: 'КИЗ без соответствующего остатка автоматически пропущены администратором при перемещении короба',
+            },
+          },
+        });
+      }
+
       const [remainingBalances, remainingMarks] = await Promise.all([
         tx.stockBalance.count({ where: { boxId: sourceBox.id, quantity: { gt: 0 } } }),
         tx.productMark.count({ where: { boxId: sourceBox.id } }),
@@ -266,6 +724,7 @@ export class StockOperationsService {
         lines: sourceBox.balances.length,
         quantity: totalQuantity,
         movedMarks,
+        autoApprovedChecks: orphanMarks.length,
         sourceArchived,
       };
     });
@@ -273,20 +732,22 @@ export class StockOperationsService {
 
   async previewBoxTransfersXlsx(clientId: string, file: Express.Multer.File | undefined, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const warehouseId = this.resolveWritableWarehouseId(user);
     const rows = parseBoxTransferImportRows(file);
-    return this.validateBoxTransferRows(clientId, fileName(file), rows, this.prisma);
+    return this.validateBoxTransferRows(clientId, fileName(file), rows, this.prisma, warehouseId);
   }
 
   async commitBoxTransfersXlsx(clientId: string, file: Express.Multer.File | undefined, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, clientId, 'write');
     await this.inventoryLock?.assertStockMovementsAllowed();
+    const warehouseId = this.resolveWritableWarehouseId(user);
     const parsedRows = parseBoxTransferImportRows(file);
     const batchId = randomUUID();
     const sourceFileName = fileName(file);
 
     return this.prisma.$transaction(
       async (tx) => {
-        const preview = await this.validateBoxTransferRows(clientId, sourceFileName, parsedRows, tx);
+        const preview = await this.validateBoxTransferRows(clientId, sourceFileName, parsedRows, tx, warehouseId);
         const readyRows = preview.rows.filter((row) => row.status === 'READY' && row.skuId);
         if (readyRows.length === 0) {
           throw new BadRequestException({
@@ -407,6 +868,7 @@ export class StockOperationsService {
     }
     this.clientScopes.requireClientAccess(user, existing.clientId, 'write');
     await this.inventoryLock?.assertStockMovementsAllowed();
+    const warehouseId = this.resolveWritableWarehouseId(user);
 
     return this.prisma.$transaction(
       async (tx) => {
@@ -432,7 +894,7 @@ export class StockOperationsService {
               idempotencyKey: `reverse-box-transfer-batch:${batch.id}:${row.rowNumber}`,
               sourceDocument: sourceFileName,
               comment: `Отмена файла ${sourceFileName}, строка ${row.rowNumber}`,
-            });
+            }, warehouseId);
           } catch (caught) {
             throw new BadRequestException(
               `Файл нельзя удалить: строка ${row.rowNumber}. ${exceptionMessage(caught)}`,
@@ -461,7 +923,11 @@ export class StockOperationsService {
     );
   }
 
-  private async applyTransferBetweenBoxes(tx: Prisma.TransactionClient, dto: TransferExecutionInput) {
+  private async applyTransferBetweenBoxes(
+    tx: Prisma.TransactionClient,
+    dto: TransferExecutionInput,
+    warehouseId?: string,
+  ) {
     const existingMovement = await tx.stockMovement.findUnique({
       where: { idempotencyKey: `${dto.idempotencyKey}:out` },
     });
@@ -474,8 +940,15 @@ export class StockOperationsService {
     }
 
     const sku = await this.resolveSku(tx, dto);
-    const fromBox = await this.resolveBox(tx, dto.clientId, dto.fromBoxCode);
-    const toBox = await this.ensureTargetBox(tx, dto.clientId, dto.toBoxCode);
+    const fromBox = await this.resolveBox(tx, dto.clientId, dto.fromBoxCode, warehouseId);
+    const operationWarehouseId =
+      warehouseId ?? this.requireBalanceWarehouseId(fromBox.warehouseId);
+    const toBox = await this.ensureTargetBox(
+      tx,
+      dto.clientId,
+      dto.toBoxCode,
+      operationWarehouseId,
+    );
     const status = dto.status ?? StockStatus.AVAILABLE;
 
     const sourceBalance = await tx.stockBalance.findFirst({
@@ -483,6 +956,7 @@ export class StockOperationsService {
         clientId: dto.clientId,
         skuId: sku.id,
         boxId: fromBox.id,
+        warehouseId: operationWarehouseId,
         status,
       },
     });
@@ -493,6 +967,7 @@ export class StockOperationsService {
 
     await this.decrementSourceBalance(tx, sourceBalance, dto.quantity);
     const targetBalance = await this.incrementTargetBalance(tx, {
+      warehouseId: this.requireBalanceWarehouseId(toBox.warehouseId),
       clientId: dto.clientId,
       skuId: sku.id,
       boxId: toBox.id,
@@ -503,6 +978,7 @@ export class StockOperationsService {
 
     await tx.stockMovement.create({
       data: {
+        warehouseId: this.requireBalanceWarehouseId(fromBox.warehouseId),
         clientId: dto.clientId,
         skuId: sku.id,
         boxId: fromBox.id,
@@ -518,6 +994,7 @@ export class StockOperationsService {
 
     await tx.stockMovement.create({
       data: {
+        warehouseId: this.requireBalanceWarehouseId(toBox.warehouseId),
         clientId: dto.clientId,
         skuId: sku.id,
         boxId: toBox.id,
@@ -547,10 +1024,11 @@ export class StockOperationsService {
     sourceFileName: string,
     rows: BoxTransferImportRow[],
     db: StockTransferValidationDb,
+    warehouseId?: string,
   ) {
     const barcodeValues = [...new Set(rows.map((row) => row.barcode).filter(Boolean))];
     const [boxes, barcodeRecords, balances] = await Promise.all([
-      db.box.findMany({ where: { clientId }, select: { code: true } }),
+      db.box.findMany({ where: { clientId, warehouseId }, select: { code: true } }),
       barcodeValues.length
         ? db.barcode.findMany({
             where: { value: { in: barcodeValues }, sku: { clientId } },
@@ -558,7 +1036,13 @@ export class StockOperationsService {
           })
         : Promise.resolve([]),
       db.stockBalance.findMany({
-        where: { clientId, status: StockStatus.AVAILABLE, boxId: { not: null } },
+        where: {
+          clientId,
+          status: StockStatus.AVAILABLE,
+          warehouseId,
+          boxId: { not: null },
+          box: this.warehouseScopedBoxWhere(warehouseId),
+        },
         include: { box: { select: { code: true } } },
       }),
     ]);
@@ -650,6 +1134,7 @@ export class StockOperationsService {
 
   async pickClientRequest(dto: PickClientRequestDto, user: AuthUser) {
     await this.inventoryLock?.assertStockMovementsAllowed();
+    const warehouseId = this.resolveWritableWarehouseId(user);
     const baseKey = dto.idempotencyKey ?? `pick-request:${dto.requestId}`;
 
     return this.prisma.$transaction(async (tx) => {
@@ -679,6 +1164,8 @@ export class StockOperationsService {
       }
 
       this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+      this.assertRequestWarehouse(request, warehouseId);
+      const operationWarehouseId = request.warehouseId ?? warehouseId;
 
       if (request.type !== ClientRequestType.OUTBOUND) {
         throw new BadRequestException('Сборка доступна только для заявок на отгрузку.');
@@ -700,7 +1187,7 @@ export class StockOperationsService {
         throw new BadRequestException('В заявке нет товарных позиций для сборки.');
       }
 
-      const savedSelections = await this.loadRequestBoxSelections(tx, request.id);
+      const savedSelections = await this.loadRequestBoxSelections(tx, request.id, operationWarehouseId);
       const plan = savedSelections.length
         ? await this.planRequestAllocationsFromSelections(
             tx,
@@ -708,8 +1195,9 @@ export class StockOperationsService {
             request.items,
             savedSelections,
             [StockStatus.AVAILABLE],
+            operationWarehouseId,
           )
-        : await this.planRequestPick(tx, request.clientId, request.items);
+        : await this.planRequestPick(tx, request.clientId, request.items, operationWarehouseId);
 
       // Русский комментарий: сначала строим полный план по всем строкам, и только потом меняем остатки,
       // чтобы нехватка по одной позиции не оставила заявку частично собранной.
@@ -717,9 +1205,10 @@ export class StockOperationsService {
         for (const allocation of line.allocations) {
           await this.decrementSourceBalance(tx, allocation.balance, allocation.quantity);
           await this.incrementTargetBalance(tx, {
+            warehouseId: this.requireBalanceWarehouseId(allocation.balance.warehouseId),
             clientId: request.clientId,
             skuId: line.skuId,
-            boxId: allocation.balance.boxId!,
+            boxId: allocation.balance.boxId,
             palletId: allocation.balance.palletId,
             status: StockStatus.PACKING,
             quantity: allocation.quantity,
@@ -727,6 +1216,7 @@ export class StockOperationsService {
 
           await tx.stockMovement.create({
             data: {
+              warehouseId: this.requireBalanceWarehouseId(allocation.balance.warehouseId),
               clientId: request.clientId,
               skuId: line.skuId,
               boxId: allocation.balance.boxId,
@@ -742,6 +1232,7 @@ export class StockOperationsService {
 
           await tx.stockMovement.create({
             data: {
+              warehouseId: this.requireBalanceWarehouseId(allocation.balance.warehouseId),
               clientId: request.clientId,
               skuId: line.skuId,
               boxId: allocation.balance.boxId,
@@ -778,6 +1269,7 @@ export class StockOperationsService {
 
   async packageClientRequest(dto: FulfillClientRequestDto, user: AuthUser) {
     await this.inventoryLock?.assertStockMovementsAllowed();
+    const warehouseId = this.resolveWritableWarehouseId(user);
     const baseKey = dto.idempotencyKey ?? `pack-request:${dto.requestId}`;
 
     return this.prisma.$transaction(async (tx) => {
@@ -797,13 +1289,20 @@ export class StockOperationsService {
       const request = await this.loadOutboundRequest(tx, dto.requestId, user, 'Упаковка');
       this.ensureRequestCanMove(request, 'упаковывать');
 
+      this.assertRequestWarehouse(request, warehouseId);
+      const operationWarehouseId = request.warehouseId ?? warehouseId;
       if (request.status !== ClientRequestStatus.IN_WORK) {
         throw new BadRequestException('Упаковка доступна только после сборки заявки.');
       }
 
-      await this.ensureAvailableStockIsInPacking(tx, request, `complete-pick-before-pack:${request.id}:${baseKey}`);
+      await this.ensureAvailableStockIsInPacking(
+        tx,
+        request,
+        `complete-pick-before-pack:${request.id}:${baseKey}`,
+        operationWarehouseId,
+      );
 
-      const savedSelections = await this.loadRequestBoxSelections(tx, request.id);
+      const savedSelections = await this.loadRequestBoxSelections(tx, request.id, operationWarehouseId);
       const plan = savedSelections.length
         ? await this.planRequestAllocationsFromSelections(
             tx,
@@ -811,8 +1310,15 @@ export class StockOperationsService {
             request.items,
             savedSelections,
             [StockStatus.PACKING],
+            operationWarehouseId,
           )
-        : await this.planRequestAllocations(tx, request.clientId, request.items, StockStatus.PACKING);
+        : await this.planRequestAllocations(
+            tx,
+            request.clientId,
+            request.items,
+            StockStatus.PACKING,
+            operationWarehouseId,
+          );
 
       // Русский комментарий: упаковка переводит уже собранный товар из PACKING в SHIPPING,
       // чтобы отгрузка работала только с упакованным остатком.
@@ -870,6 +1376,7 @@ export class StockOperationsService {
 
   async shipClientRequest(dto: FulfillClientRequestDto, user: AuthUser) {
     await this.inventoryLock?.assertStockMovementsAllowed();
+    const warehouseId = this.resolveWritableWarehouseId(user);
     const baseKey = dto.idempotencyKey ?? `ship-request:${dto.requestId}`;
 
     const result = await this.prisma.$transaction(async (tx) => {
@@ -878,6 +1385,8 @@ export class StockOperationsService {
 
       // Упаковка через ТСД или аварийный workflow могла завершиться без начислений.
       // Перед закрытием восстанавливаем их по фактическим упаковочным местам.
+      this.assertRequestWarehouse(request, warehouseId);
+      const operationWarehouseId = request.warehouseId ?? warehouseId;
       await this.ensureRequestFulfillmentBillingCharges(tx, request, user, doneAt);
 
       if (request.status === ClientRequestStatus.DONE) {
@@ -905,6 +1414,7 @@ export class StockOperationsService {
       });
 
       if (existingMovement) {
+        await captureShippedKizHistory(tx, request.id, doneAt);
         await tx.clientRequest.update({
           where: { id: request.id },
           data: {
@@ -933,9 +1443,14 @@ export class StockOperationsService {
         throw new BadRequestException('Отгрузка доступна только после упаковки заявки.');
       }
 
-      await this.ensurePackedStockIsInShipping(tx, request, `complete-pack-before-ship:${request.id}:${baseKey}`);
+      await this.ensurePackedStockIsInShipping(
+        tx,
+        request,
+        `complete-pack-before-ship:${request.id}:${baseKey}`,
+        operationWarehouseId,
+      );
 
-      const savedSelections = await this.loadRequestBoxSelections(tx, request.id);
+      const savedSelections = await this.loadRequestBoxSelections(tx, request.id, operationWarehouseId);
       const plan = savedSelections.length
         ? await this.planRequestAllocationsFromSelections(
             tx,
@@ -943,8 +1458,15 @@ export class StockOperationsService {
             request.items,
             savedSelections,
             [StockStatus.SHIPPING],
+            operationWarehouseId,
           )
-        : await this.planRequestAllocations(tx, request.clientId, request.items, StockStatus.SHIPPING);
+        : await this.planRequestAllocations(
+            tx,
+            request.clientId,
+            request.items,
+            StockStatus.SHIPPING,
+            operationWarehouseId,
+          );
 
       for (const line of plan.lines) {
         for (const allocation of line.allocations) {
@@ -952,6 +1474,7 @@ export class StockOperationsService {
 
           await tx.stockMovement.create({
             data: {
+              warehouseId: this.requireBalanceWarehouseId(allocation.balance.warehouseId),
               clientId: request.clientId,
               skuId: line.skuId,
               boxId: allocation.balance.boxId,
@@ -967,6 +1490,7 @@ export class StockOperationsService {
         }
       }
 
+      await captureShippedKizHistory(tx, request.id, doneAt);
       await tx.clientRequest.update({
         where: { id: request.id },
         data: {
@@ -997,16 +1521,25 @@ export class StockOperationsService {
       result.status === 'APPLIED' || result.status === 'ALREADY_APPLIED'
         ? await this.ensureRequestLogisticsBilling(result.requestId, user)
         : undefined;
+    const expenses =
+      result.status === 'APPLIED' || result.status === 'ALREADY_APPLIED'
+        ? await this.ensureRequestExpenseConsumption(result.requestId, user)
+        : undefined;
     const billing =
       result.status === 'APPLIED' || result.status === 'ALREADY_APPLIED'
         ? await this.billingAutomation?.generateForDoneRequest(result.requestId, user)
         : undefined;
 
-    return { ...result, logistics, billing };
+    return { ...result, logistics, expenses, billing };
   }
 
-  async shipClientRequestFromCurrentStock(dto: FulfillClientRequestDto, user: AuthUser) {
+  async shipClientRequestFromCurrentStock(
+    dto: FulfillClientRequestDto,
+    user: AuthUser,
+    physicalSources: PhysicalStockSourceInput[] = [],
+  ) {
     await this.inventoryLock?.assertStockMovementsAllowed();
+    const warehouseId = this.resolveWritableWarehouseId(user);
     const baseKey = dto.idempotencyKey ?? `manual-ship-request:${dto.requestId}`;
 
     const result = await this.prisma.$transaction(async (tx) => {
@@ -1026,6 +1559,8 @@ export class StockOperationsService {
 
       const request = await this.loadOutboundRequest(tx, dto.requestId, user, 'Отгрузка', true);
 
+      this.assertRequestWarehouse(request, warehouseId);
+      const operationWarehouseId = request.warehouseId ?? warehouseId;
       if (request.status === ClientRequestStatus.DONE) {
         await this.ensureRequestFulfillmentBillingCharges(tx, request, user, doneAt);
         return {
@@ -1040,6 +1575,7 @@ export class StockOperationsService {
 
       if (existingMovement) {
         await this.ensureRequestFulfillmentBillingCharges(tx, request, user, doneAt);
+        await captureShippedKizHistory(tx, request.id, doneAt);
         await tx.clientRequest.update({
           where: { id: request.id },
           data: {
@@ -1061,24 +1597,43 @@ export class StockOperationsService {
         dto,
         request.items.reduce((total, item) => total + item.quantity, 0),
       );
-      const savedSelections = await this.loadRequestBoxSelections(tx, request.id);
-      if (savedSelections.length) {
+      const savedSelections = await this.loadRequestBoxSelections(tx, request.id, operationWarehouseId);
+      // An explicitly confirmed physical source replaces the saved box selection.
+      // Restoring old FBS selections as well would leave phantom PACKING/SHIPPING
+      // balances in those boxes after the confirmed source has been shipped.
+      if (savedSelections.length && physicalSources.length === 0) {
         await this.restoreCompletedFbsSelectionShortages(
           tx,
           request,
           savedSelections,
           baseKey,
+          operationWarehouseId,
         );
       }
-      const plan = savedSelections.length
-        ? await this.planRequestAllocationsFromSelections(
+      const plan = physicalSources.length
+        ? await this.planRequestAllocationsWithPhysicalSources(
+            tx,
+            request,
+            savedSelections,
+            physicalSources,
+            baseKey,
+            operationWarehouseId,
+          )
+        : savedSelections.length
+          ? await this.planRequestAllocationsFromSelections(
             tx,
             request.clientId,
             request.items,
             savedSelections,
             [StockStatus.SHIPPING, StockStatus.PACKING, StockStatus.AVAILABLE],
+            operationWarehouseId,
           )
-        : await this.planRequestShipment(tx, request.clientId, request.items);
+          : await this.planRequestShipment(
+              tx,
+              request.clientId,
+              request.items,
+              operationWarehouseId,
+            );
       await tx.clientRequestPackage.deleteMany({ where: { requestId: request.id } });
       const packages = await this.createRequestPackages(tx, {
         request,
@@ -1100,6 +1655,7 @@ export class StockOperationsService {
 
           await tx.stockMovement.create({
             data: {
+              warehouseId: this.requireBalanceWarehouseId(allocation.balance.warehouseId),
               clientId: request.clientId,
               skuId: line.skuId,
               boxId: allocation.balance.boxId,
@@ -1115,6 +1671,7 @@ export class StockOperationsService {
         }
       }
 
+      await captureShippedKizHistory(tx, request.id, doneAt);
       await tx.clientRequest.update({
         where: { id: request.id },
         data: {
@@ -1145,12 +1702,16 @@ export class StockOperationsService {
       result.status === 'APPLIED' || result.status === 'ALREADY_APPLIED'
         ? await this.ensureRequestLogisticsBilling(result.requestId, user)
         : undefined;
+    const expenses =
+      result.status === 'APPLIED' || result.status === 'ALREADY_APPLIED'
+        ? await this.ensureRequestExpenseConsumption(result.requestId, user)
+        : undefined;
     const billing =
       result.status === 'APPLIED' || result.status === 'ALREADY_APPLIED'
         ? await this.billingAutomation?.generateForDoneRequest(result.requestId, user)
         : undefined;
 
-    return { ...result, logistics, billing };
+    return { ...result, logistics, expenses, billing };
   }
 
   private async ensureRequestLogisticsBilling(requestId: string, user: AuthUser) {
@@ -1171,6 +1732,14 @@ export class StockOperationsService {
   async receiveIntoBox(dto: ReceiveIntoBoxInput, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
     await this.inventoryLock?.assertStockMovementsAllowed();
+    const scopedWarehouseId = this.resolveWritableWarehouseId(user);
+    if (scopedWarehouseId && dto.warehouseId && dto.warehouseId !== scopedWarehouseId) {
+      throw new ForbiddenException(
+        'Приёмка относится к другому филиалу. Переключите город работы.',
+      );
+    }
+    const operationWarehouseId =
+      scopedWarehouseId ?? dto.warehouseId ?? user.activeWarehouseId ?? undefined;
 
     return this.prisma.$transaction(async (tx) => {
       const existingMovement = await tx.stockMovement.findUnique({
@@ -1186,7 +1755,9 @@ export class StockOperationsService {
       }
 
       const { createdDraft, sku } = await this.resolveOrCreateSkuForReceipt(tx, dto);
-      const box = dto.boxCode ? await this.ensureTargetBox(tx, dto.clientId, dto.boxCode) : null;
+      const box = dto.boxCode
+        ? await this.ensureTargetBox(tx, dto.clientId, dto.boxCode, operationWarehouseId)
+        : null;
       const status = dto.status ?? StockStatus.RECEIVING;
       const kiz = dto.kiz?.trim();
 
@@ -1200,14 +1771,26 @@ export class StockOperationsService {
             clientId: dto.clientId,
             value: { equals: kiz, mode: Prisma.QueryMode.insensitive },
           },
-          select: { box: { select: { code: true } } },
+          select: {
+            box: { select: { code: true, warehouseId: true } },
+            stockMovement: { select: { warehouseId: true } },
+          },
         });
         if (existingKiz) {
-          throw new BadRequestException(duplicateKizMessage(existingKiz.box?.code));
+          const duplicateWarehouseId =
+            existingKiz.box?.warehouseId ?? existingKiz.stockMovement?.warehouseId ?? null;
+          throw new BadRequestException(
+            duplicateKizMessage(
+              !operationWarehouseId || duplicateWarehouseId === operationWarehouseId
+                ? existingKiz.box?.code
+                : undefined,
+            ),
+          );
         }
       }
 
       const targetBalance = await this.incrementTargetBalance(tx, {
+        warehouseId: this.requireBalanceWarehouseId(box?.warehouseId ?? operationWarehouseId),
         clientId: dto.clientId,
         skuId: sku.id,
         boxId: box?.id ?? null,
@@ -1218,6 +1801,7 @@ export class StockOperationsService {
 
       const movement = await tx.stockMovement.create({
         data: {
+          warehouseId: this.requireBalanceWarehouseId(box?.warehouseId ?? operationWarehouseId),
           clientId: dto.clientId,
           skuId: sku.id,
           boxId: box?.id ?? null,
@@ -1271,6 +1855,7 @@ export class StockOperationsService {
   async adjustInventoryToCounted(dto: AdjustInventoryInput, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
     await this.inventoryLock?.assertStockMovementsAllowed();
+    const warehouseId = this.resolveWritableWarehouseId(user);
 
     return this.prisma.$transaction(async (tx) => {
       const existingMovement = await tx.stockMovement.findUnique({
@@ -1286,13 +1871,14 @@ export class StockOperationsService {
       }
 
       const sku = await this.resolveSku(tx, dto);
-      const box = await this.resolveBox(tx, dto.clientId, dto.boxCode);
+      const box = await this.resolveBox(tx, dto.clientId, dto.boxCode, warehouseId);
       const status = dto.status ?? StockStatus.AVAILABLE;
       const balance = await tx.stockBalance.findFirst({
         where: {
           clientId: dto.clientId,
           skuId: sku.id,
           boxId: box.id,
+          warehouseId,
           status,
         },
       });
@@ -1301,6 +1887,7 @@ export class StockOperationsService {
 
       if (delta > 0) {
         await this.incrementTargetBalance(tx, {
+          warehouseId: this.requireBalanceWarehouseId(box.warehouseId),
           clientId: dto.clientId,
           skuId: sku.id,
           boxId: box.id,
@@ -1317,6 +1904,7 @@ export class StockOperationsService {
       if (delta !== 0) {
         await tx.stockMovement.create({
           data: {
+            warehouseId: this.requireBalanceWarehouseId(box.warehouseId),
             clientId: dto.clientId,
             skuId: sku.id,
             boxId: box.id,
@@ -1361,15 +1949,23 @@ export class StockOperationsService {
     tx: Prisma.TransactionClient,
     clientId: string,
     items: RequestItemForAllocation[],
+    warehouseId?: string,
   ) {
-    return this.planRequestAllocations(tx, clientId, items, StockStatus.AVAILABLE);
+    return this.planRequestAllocations(tx, clientId, items, StockStatus.AVAILABLE, warehouseId);
   }
 
   private async planRequestShipment(
     tx: Prisma.TransactionClient,
     clientId: string,
     items: RequestItemForAllocation[],
+    warehouseId?: string,
   ): Promise<RequestAllocationPlan> {
+    const client = 'client' in tx
+      ? await tx.client.findUnique({
+          where: { id: clientId },
+          select: { storesWithoutBoxes: true },
+        })
+      : null;
     const lines = [];
     const balanceRemaining = new Map<string, number>();
     const sourceStatuses: StockStatus[] = [StockStatus.SHIPPING, StockStatus.PACKING, StockStatus.AVAILABLE];
@@ -1385,10 +1981,16 @@ export class StockOperationsService {
           clientId,
           skuId: sku.id,
           status: { in: sourceStatuses },
+          warehouseId,
           quantity: { gt: 0 },
+          ...(client?.storesWithoutBoxes
+            ? {}
+            : warehouseId
+              ? { box: this.warehouseScopedBoxWhere(warehouseId) }
+              : { boxId: { not: null } }),
         },
         include: {
-          box: { select: { code: true } },
+          box: { select: allocationBoxSelect },
         },
         orderBy: [{ updatedAt: 'asc' }],
       });
@@ -1436,14 +2038,21 @@ export class StockOperationsService {
     return { lines };
   }
 
-  private loadRequestBoxSelections(tx: Prisma.TransactionClient, requestId: string) {
+  private loadRequestBoxSelections(
+    tx: Prisma.TransactionClient,
+    requestId: string,
+    warehouseId?: string,
+  ) {
     // Некоторые старые импорты и тестовые адаптеры могут не иметь новой таблицы до синхронизации схемы.
     if (!('clientRequestBoxSelection' in tx)) {
       return Promise.resolve([] as RequestBoxSelectionForAllocation[]);
     }
     return tx.clientRequestBoxSelection.findMany({
-      where: { requestItem: { requestId } },
-      include: { box: { select: { code: true } } },
+      where: {
+        requestItem: { requestId },
+        box: this.warehouseScopedBoxWhere(warehouseId),
+      },
+      include: { box: { select: allocationBoxSelect } },
       orderBy: [{ createdAt: 'asc' }],
     });
   }
@@ -1457,6 +2066,7 @@ export class StockOperationsService {
     },
     selections: RequestBoxSelectionForAllocation[],
     baseKey: string,
+    warehouseId?: string,
   ) {
     // Старые/тестовые Prisma-адаптеры могут не содержать FBS-таблицу.
     if (!('fbsTsdAssembly' in tx) || selections.length === 0) return;
@@ -1500,23 +2110,20 @@ export class StockOperationsService {
           boxId: { in: selectedBoxIds },
           status: { in: [StockStatus.SHIPPING, StockStatus.PACKING, StockStatus.AVAILABLE] },
           quantity: { gt: 0 },
-        },
-        select: {
-          skuId: true,
-          boxId: true,
-          status: true,
-          quantity: true,
+          warehouseId,
+          box: this.warehouseScopedBoxWhere(warehouseId),
         },
       }),
       tx.box.findMany({
-        where: { id: { in: selectedBoxIds } },
-        select: { id: true, code: true, palletId: true },
+        where: { id: { in: selectedBoxIds }, ...(this.warehouseScopedBoxWhere(warehouseId) ?? {}) },
+        select: { id: true, ...allocationBoxSelect },
       }),
       tx.stockMovement.findMany({
         where: {
           clientId: request.clientId,
           skuId: { in: selectedSkuIds },
           boxId: { in: selectedBoxIds },
+          warehouseId,
           type: MovementType.INVENTORY_ADJUSTMENT,
           quantity: { lt: 0 },
         },
@@ -1524,23 +2131,31 @@ export class StockOperationsService {
           skuId: true,
           boxId: true,
           createdAt: true,
+          idempotencyKey: true,
+          sourceDocument: true,
         },
       }),
     ]);
     const boxById = new Map(boxes.map((box) => [box.id, box]));
-    const balanceBySelection = new Map<string, number>();
     const inProcessBalanceBySelection = new Map<string, number>();
+    const availableBalancesBySelection = new Map<string, StockBalance[]>();
     for (const balance of balances) {
       if (!balance.boxId) continue;
       const key = `${balance.skuId}:${balance.boxId}`;
-      balanceBySelection.set(key, (balanceBySelection.get(key) ?? 0) + balance.quantity);
-      if (balance.status !== StockStatus.AVAILABLE) {
+      if (balance.status === StockStatus.AVAILABLE) {
+        const available = availableBalancesBySelection.get(key) ?? [];
+        available.push(balance);
+        availableBalancesBySelection.set(key, available);
+      } else {
         inProcessBalanceBySelection.set(
           key,
           (inProcessBalanceBySelection.get(key) ?? 0) + balance.quantity,
         );
       }
     }
+    // Остаток PACKING/SHIPPING общий для короба. По мере обхода назначаем его
+    // конкретным строкам заявки, чтобы две позиции не использовали один резерв повторно.
+    const unassignedInProcessBySelection = new Map(inProcessBalanceBySelection);
 
     for (const selection of selections) {
       const completedQuantity =
@@ -1548,6 +2163,9 @@ export class StockOperationsService {
       if (completedQuantity < selection.quantity) continue;
 
       const balanceKey = `${selection.skuId}:${selection.boxId}`;
+      const inProcessPool = unassignedInProcessBySelection.get(balanceKey) ?? 0;
+      const alreadyReserved = Math.min(selection.quantity, inProcessPool);
+      unassignedInProcessBySelection.set(balanceKey, inProcessPool - alreadyReserved);
       const completedAt = completedAtBySelection.get(
         `${selection.requestItemId}:${selection.skuId}:${selection.boxId}`,
       );
@@ -1557,15 +2175,11 @@ export class StockOperationsService {
             (movement) =>
               movement.skuId === selection.skuId &&
               movement.boxId === selection.boxId &&
-              movement.createdAt >= completedAt,
+              movement.createdAt >= completedAt &&
+              !isFbsRelabelInventoryAdjustment(movement),
           ),
       );
-      // После физической сборки инвентаризация считает только то, что осталось в исходном коробе.
-      // Такой AVAILABLE-остаток нельзя повторно относить к уже собранной заявке.
-      const reservedQuantity = recountedAfterCollection
-        ? inProcessBalanceBySelection.get(balanceKey) ?? 0
-        : balanceBySelection.get(balanceKey) ?? 0;
-      const shortage = Math.max(0, selection.quantity - reservedQuantity);
+      const shortage = Math.max(0, selection.quantity - alreadyReserved);
       if (shortage === 0) continue;
 
       const box = boxById.get(selection.boxId);
@@ -1575,7 +2189,40 @@ export class StockOperationsService {
         );
       }
 
+      // Сканирование ТСД — физический факт отбора. До закрытия заявки переносим
+      // эту единицу из AVAILABLE в SHIPPING, а не проверяем её повторно как
+      // свободный товар. Если после сборки короб уже пересчитали, AVAILABLE
+      // содержит только фактический остаток коробки и уменьшать его нельзя.
+      let shiftedFromAvailable = 0;
+      if (!recountedAfterCollection) {
+        for (const balance of availableBalancesBySelection.get(balanceKey) ?? []) {
+          if (shiftedFromAvailable >= shortage || balance.quantity <= 0) continue;
+          const quantity = Math.min(balance.quantity, shortage - shiftedFromAvailable);
+          await this.decrementSourceBalance(tx, balance, quantity);
+          balance.quantity -= quantity;
+          shiftedFromAvailable += quantity;
+          await tx.stockMovement.create({
+            data: {
+              warehouseId: this.requireBalanceWarehouseId(balance.warehouseId),
+              clientId: request.clientId,
+              skuId: selection.skuId,
+              boxId: selection.boxId,
+              palletId: balance.palletId,
+              type: MovementType.PICK,
+              status: StockStatus.AVAILABLE,
+              quantity: -quantity,
+              sourceDocument: request.id,
+              idempotencyKey: `${baseKey}:fbs-reserved:${selection.id}:${balance.id}:out`,
+              comment:
+                `Зарезервировано ${quantity} шт. уже собранного товара FBS из короба ${box.code} ` +
+                'перед закрытием заявки.',
+            },
+          });
+        }
+      }
+
       await this.incrementTargetBalance(tx, {
+        warehouseId: this.requireBalanceWarehouseId(box.warehouseId),
         clientId: request.clientId,
         skuId: selection.skuId,
         boxId: selection.boxId,
@@ -1583,24 +2230,66 @@ export class StockOperationsService {
         status: StockStatus.SHIPPING,
         quantity: shortage,
       });
-      await tx.stockMovement.create({
-        data: {
-          clientId: request.clientId,
-          skuId: selection.skuId,
-          boxId: selection.boxId,
-          palletId: box.palletId,
-          type: MovementType.INVENTORY_ADJUSTMENT,
-          status: StockStatus.SHIPPING,
-          quantity: shortage,
-          sourceDocument: request.id,
-          idempotencyKey: `${baseKey}:fbs-reconciled:${selection.id}`,
-          comment:
-            `Восстановлен резерв ${shortage} шт. уже собранного товара FBS после пересчёта ` +
-            `короба ${box.code}; резерв будет списан при закрытии заявки.`,
-        },
-      });
-      balanceBySelection.set(balanceKey, (balanceBySelection.get(balanceKey) ?? 0) + shortage);
-      inProcessBalanceBySelection.set(balanceKey, reservedQuantity + shortage);
+      if (shiftedFromAvailable > 0) {
+        await tx.stockMovement.create({
+          data: {
+            warehouseId: this.requireBalanceWarehouseId(box.warehouseId),
+            clientId: request.clientId,
+            skuId: selection.skuId,
+            boxId: selection.boxId,
+            palletId: box.palletId,
+            type: MovementType.PACK,
+            status: StockStatus.SHIPPING,
+            quantity: shiftedFromAvailable,
+            sourceDocument: request.id,
+            idempotencyKey: `${baseKey}:fbs-reserved:${selection.id}:in`,
+            comment:
+              `Уже собранный товар FBS из короба ${box.code} подготовлен к списанию ` +
+              'при закрытии заявки.',
+          },
+        });
+      }
+      const reconciledQuantity = shortage - shiftedFromAvailable;
+      if (reconciledQuantity > 0) {
+        await tx.stockMovement.create({
+          data: {
+            warehouseId: this.requireBalanceWarehouseId(box.warehouseId),
+            clientId: request.clientId,
+            skuId: selection.skuId,
+            boxId: selection.boxId,
+            palletId: box.palletId,
+            type: MovementType.INVENTORY_ADJUSTMENT,
+            status: StockStatus.SHIPPING,
+            quantity: reconciledQuantity,
+            sourceDocument: request.id,
+            idempotencyKey: `${baseKey}:fbs-reconciled:${selection.id}`,
+            comment:
+              `Восстановлен резерв ${reconciledQuantity} шт. уже собранного товара FBS после пересчёта ` +
+              `короба ${box.code}; резерв будет списан при закрытии заявки.`,
+          },
+        });
+      }
+    }
+  }
+
+  private async ensureRequestExpenseConsumption(
+    requestId: string,
+    user: AuthUser,
+  ) {
+    if (!this.expenseAutomation) {
+      return undefined;
+    }
+
+    try {
+      return await this.expenseAutomation.consumeForDoneRequest(requestId, user);
+    } catch (caught) {
+      return {
+        status: 'FAILED' as const,
+        message:
+          caught instanceof Error
+            ? caught.message
+            : 'Не удалось списать расходные материалы по заявке.',
+      };
     }
   }
 
@@ -1610,6 +2299,7 @@ export class StockOperationsService {
     items: RequestItemForAllocation[],
     selections: RequestBoxSelectionForAllocation[],
     sourceStatuses: StockStatus[],
+    warehouseId?: string,
   ): Promise<RequestAllocationPlan> {
     const resolvedItems: Array<{
       item: RequestItemForAllocation;
@@ -1643,11 +2333,15 @@ export class StockOperationsService {
         clientId,
         skuId: { in: skuIds },
         boxId: { in: boxIds },
+        warehouseId,
         status: { in: sourceStatuses },
         quantity: { gt: 0 },
-        box: { status: { notIn: ['deleted', 'archived'] } },
+        box: {
+          status: { notIn: ['deleted', 'archived'] },
+          ...(this.warehouseScopedBoxWhere(warehouseId) ?? {}),
+        },
       },
-      include: { box: { select: { code: true } } },
+      include: { box: { select: allocationBoxSelect } },
       orderBy: [{ updatedAt: 'asc' }],
     });
     balances.sort((left, right) => {
@@ -1696,12 +2390,318 @@ export class StockOperationsService {
     return { lines };
   }
 
+  /**
+   * Закрытие по физическому факту используется только после ошибки штатного
+   * списания. Для отмеченных строк менеджер подтверждает конкретный короб или
+   * отсутствие короба. Имеющийся остаток списывается как обычно, а недостающая
+   * в WMS часть сначала восстанавливается в SHIPPING отдельной корректировкой,
+   * чтобы факт не создавал отрицательные остатки.
+   */
+  private async planRequestAllocationsWithPhysicalSources(
+    tx: Prisma.TransactionClient,
+    request: {
+      id: string;
+      clientId: string;
+      items: RequestItemForAllocation[];
+    },
+    savedSelections: RequestBoxSelectionForAllocation[],
+    physicalSources: PhysicalStockSourceInput[],
+    baseKey: string,
+    warehouseId?: string,
+  ): Promise<RequestAllocationPlan> {
+    const itemById = new Map(request.items.map((item) => [item.id, item]));
+    const sourcesByItem = new Map<string, PhysicalStockSourceInput[]>();
+    const duplicateSources = new Set<string>();
+    const normalizedSources = physicalSources.map((source) => {
+      const boxCode = source.boxCode?.trim() || undefined;
+      const noBox = source.noBox === true;
+      if (!itemById.has(source.requestItemId)) {
+        throw new BadRequestException('В фактических источниках указан товар, которого нет в заявке.');
+      }
+      if (Boolean(boxCode) === noBox) {
+        throw new BadRequestException('Для фактического источника выберите короб либо вариант «Без короба».');
+      }
+      const key = `${source.requestItemId}:${noBox ? 'NO_BOX' : boxCode!.toLocaleUpperCase('ru-RU')}`;
+      if (duplicateSources.has(key)) {
+        throw new BadRequestException('Один фактический источник нельзя указывать для позиции дважды.');
+      }
+      duplicateSources.add(key);
+      return {
+        requestItemId: source.requestItemId,
+        boxCode,
+        noBox,
+        quantity: source.quantity,
+      };
+    });
+    for (const source of normalizedSources) {
+      const itemSources = sourcesByItem.get(source.requestItemId) ?? [];
+      itemSources.push(source);
+      sourcesByItem.set(source.requestItemId, itemSources);
+    }
+    for (const [requestItemId, sources] of sourcesByItem) {
+      const requested = itemById.get(requestItemId)!.quantity;
+      const confirmed = sources.reduce((sum, source) => sum + source.quantity, 0);
+      if (confirmed !== requested) {
+        throw new BadRequestException(
+          `Для подтверждённой позиции нужно указать источник всех ${requested} шт., сейчас указано ${confirmed} шт.`,
+        );
+      }
+    }
+
+    const resolvedItems = await Promise.all(
+      request.items.map(async (item) => ({
+        item,
+        sku: await this.resolveSku(tx, {
+          clientId: request.clientId,
+          skuId: item.skuId ?? undefined,
+          barcode: item.barcode ?? undefined,
+        }),
+      })),
+    );
+    const [fbsLinks, fbsTasks] = await Promise.all([
+      tx.fbsOrderRequestLink.findMany({
+        where: {
+          requestId: request.id,
+          syncStatus: { not: 'REMOVED' },
+        },
+        select: {
+          connectionId: true,
+          orderId: true,
+          lastSkuId: true,
+        },
+      }),
+      tx.fbsTsdAssembly.findMany({
+        where: { requestId: request.id },
+        select: {
+          connectionId: true,
+          orderId: true,
+          status: true,
+        },
+      }),
+    ]);
+    const completedFbsOrders = new Set(
+      fbsTasks
+        .filter((task) => task.status === 'COMPLETED')
+        .map((task) => `${task.connectionId}:${task.orderId}`),
+    );
+    const incompleteFbsOrdersBySku = new Map<string, string[]>();
+    for (const link of fbsLinks) {
+      if (
+        !link.lastSkuId ||
+        completedFbsOrders.has(`${link.connectionId}:${link.orderId}`)
+      ) {
+        continue;
+      }
+      const orderIds = incompleteFbsOrdersBySku.get(link.lastSkuId) ?? [];
+      orderIds.push(link.orderId);
+      incompleteFbsOrdersBySku.set(link.lastSkuId, orderIds);
+    }
+    const requestedBoxCodes = [
+      ...new Set(
+        normalizedSources
+          .map((source) => source.boxCode)
+          .filter((value): value is string => Boolean(value)),
+      ),
+    ];
+    const boxes = requestedBoxCodes.length
+      ? await tx.box.findMany({
+          where: {
+            clientId: request.clientId,
+            code: { in: requestedBoxCodes, mode: 'insensitive' },
+            status: { notIn: ['deleted', 'archived'] },
+            ...(this.warehouseScopedBoxWhere(warehouseId) ?? {}),
+          },
+          select: { id: true, ...allocationBoxSelect },
+        })
+      : [];
+    const boxByCode = new Map(
+      boxes.map((box) => [box.code.toLocaleUpperCase('ru-RU'), box]),
+    );
+    for (const boxCode of requestedBoxCodes) {
+      if (!boxByCode.has(boxCode.toLocaleUpperCase('ru-RU'))) {
+        throw new BadRequestException(`Короб ${boxCode} не найден в активных коробах клиента.`);
+      }
+    }
+
+    const sourceStatuses: StockStatus[] = [
+      StockStatus.SHIPPING,
+      StockStatus.PACKING,
+      StockStatus.AVAILABLE,
+    ];
+    const balances = await tx.stockBalance.findMany({
+      where: {
+        clientId: request.clientId,
+        skuId: { in: [...new Set(resolvedItems.map(({ sku }) => sku.id))] },
+        status: { in: sourceStatuses },
+        warehouseId,
+        quantity: { gt: 0 },
+        OR: [
+          ...((!warehouseId || normalizedSources.some((source) => source.noBox))
+            ? [{ boxId: null }]
+            : []),
+          {
+            box: {
+              status: { notIn: ['deleted', 'archived'] },
+              ...(this.warehouseScopedBoxWhere(warehouseId) ?? {}),
+            },
+          },
+        ],
+      },
+      include: { box: { select: allocationBoxSelect } },
+      orderBy: [{ updatedAt: 'asc' }],
+    });
+    balances.sort((left, right) => {
+      const statusPriority =
+        sourceStatuses.indexOf(left.status) - sourceStatuses.indexOf(right.status);
+      if (statusPriority !== 0) return statusPriority;
+      return left.updatedAt.getTime() - right.updatedAt.getTime();
+    });
+
+    const remainingByBalance = new Map<string, number>();
+    const lines: RequestAllocationPlan['lines'] = [];
+    const allocateExisting = (
+      skuId: string,
+      quantity: number,
+      matches: (balance: StockBalanceForAllocation) => boolean,
+      allocations: Array<{ balance: StockBalanceForAllocation; quantity: number }>,
+    ) => {
+      let remaining = quantity;
+      for (const balance of balances) {
+        if (remaining <= 0) break;
+        if (balance.skuId !== skuId || !matches(balance)) continue;
+        const available = remainingByBalance.has(balance.id)
+          ? remainingByBalance.get(balance.id)!
+          : balance.quantity;
+        if (available <= 0) continue;
+        const allocated = Math.min(available, remaining);
+        allocations.push({ balance, quantity: allocated });
+        remainingByBalance.set(balance.id, available - allocated);
+        remaining -= allocated;
+      }
+      return remaining;
+    };
+
+    for (const { item, sku } of resolvedItems) {
+      const allocations: Array<{ balance: StockBalanceForAllocation; quantity: number }> = [];
+      const confirmedSources = sourcesByItem.get(item.id);
+      const incompleteFbsOrderIds = incompleteFbsOrdersBySku.get(sku.id) ?? [];
+      if (incompleteFbsOrderIds.length > 0 && !confirmedSources) {
+        throw new BadRequestException(
+          `По позиции ${sku.internalSku} не завершены FBS-заказы №${incompleteFbsOrderIds.join(', №')}. ` +
+            'Подтвердите фактический короб или выберите «Без короба» для этой позиции.',
+        );
+      }
+      if (confirmedSources) {
+        for (const [sourceIndex, source] of confirmedSources.entries()) {
+          const box = source.noBox
+            ? null
+            : boxByCode.get(source.boxCode!.toLocaleUpperCase('ru-RU'))!;
+          const missing = allocateExisting(
+            sku.id,
+            source.quantity,
+            (balance) => (source.noBox ? balance.boxId === null : balance.boxId === box?.id),
+            allocations,
+          );
+          if (missing <= 0) continue;
+
+          const targetBalance = await this.incrementTargetBalance(tx, {
+            warehouseId: this.requireBalanceWarehouseId(box?.warehouseId ?? warehouseId),
+            clientId: request.clientId,
+            skuId: sku.id,
+            boxId: box?.id ?? null,
+            palletId: box?.palletId ?? null,
+            status: StockStatus.SHIPPING,
+            quantity: missing,
+          });
+          const reconciledBalance: StockBalanceForAllocation = {
+            ...targetBalance,
+            box: box ? { ...box } : null,
+          };
+          if (!balances.some((balance) => balance.id === reconciledBalance.id)) {
+            balances.push(reconciledBalance);
+          }
+          allocations.push({ balance: reconciledBalance, quantity: missing });
+          remainingByBalance.set(reconciledBalance.id, 0);
+          await tx.stockMovement.create({
+            data: {
+              warehouseId: this.requireBalanceWarehouseId(targetBalance.warehouseId),
+              clientId: request.clientId,
+              skuId: sku.id,
+              boxId: box?.id ?? null,
+              palletId: box?.palletId ?? null,
+              type: MovementType.INVENTORY_ADJUSTMENT,
+              status: StockStatus.SHIPPING,
+              quantity: missing,
+              sourceDocument: request.id,
+              idempotencyKey:
+                `${baseKey}:physical-source:${item.id}:${source.noBox ? 'no-box' : box!.id}:${sourceIndex}`,
+              comment: source.noBox
+                ? `Менеджер подтвердил ${missing} шт. товара без короба для закрытия заявки.`
+                : `Менеджер подтвердил ${missing} шт. товара из физического короба ${box!.code} для закрытия заявки.`,
+            },
+          });
+        }
+      } else {
+        const itemSelections = savedSelections.filter(
+          (selection) => selection.requestItemId === item.id,
+        );
+        if (itemSelections.length > 0) {
+          for (const selection of itemSelections) {
+            const missing = allocateExisting(
+              sku.id,
+              selection.quantity,
+              (balance) => balance.boxId === selection.boxId,
+              allocations,
+            );
+            if (missing > 0) {
+              throw new BadRequestException(
+                `В коробе ${selection.box.code} уже недостаточно товара ${sku.internalSku}. ` +
+                  'Укажите фактический короб или выберите «Без короба».',
+              );
+            }
+          }
+        } else {
+          const missing = allocateExisting(
+            sku.id,
+            item.quantity,
+            () => true,
+            allocations,
+          );
+          if (missing > 0) {
+            throw new BadRequestException(
+              `Недостаточно остатка для списания позиции ${sku.internalSku}. ` +
+                'Укажите фактический короб или выберите «Без короба».',
+            );
+          }
+        }
+      }
+
+      lines.push({
+        itemId: item.id,
+        skuId: sku.id,
+        skuWeightGrams: sku.weightGrams,
+        barcode: item.barcode,
+        requestedQuantity: item.quantity,
+        allocations,
+      });
+    }
+
+    return { lines };
+  }
+
   private async ensurePackedStockIsInShipping(
     tx: Prisma.TransactionClient,
     request: { id: string; clientId: string; title?: string | null; items: RequestItemForAllocation[] },
     baseKey: string,
+    warehouseId?: string,
   ) {
-    const missingItems = await this.findItemsMissingInStatus(tx, request.clientId, request.items, StockStatus.SHIPPING);
+    const missingItems = await this.findItemsMissingInStatus(
+      tx,
+      request.clientId,
+      request.items,
+      StockStatus.SHIPPING,
+      warehouseId,
+    );
 
     if (missingItems.length === 0) {
       return;
@@ -1711,9 +2711,16 @@ export class StockOperationsService {
       tx,
       { ...request, items: missingItems },
       `complete-pick-before-ship:${request.id}:${baseKey}`,
+      warehouseId,
     );
 
-    const plan = await this.planRequestAllocations(tx, request.clientId, missingItems, StockStatus.PACKING);
+    const plan = await this.planRequestAllocations(
+      tx,
+      request.clientId,
+      missingItems,
+      StockStatus.PACKING,
+      warehouseId,
+    );
 
     await this.applyStatusMove(tx, {
       request,
@@ -1731,14 +2738,27 @@ export class StockOperationsService {
     tx: Prisma.TransactionClient,
     request: { id: string; clientId: string; title?: string | null; items: RequestItemForAllocation[] },
     baseKey: string,
+    warehouseId?: string,
   ) {
-    const missingItems = await this.findItemsMissingInStatus(tx, request.clientId, request.items, StockStatus.PACKING);
+    const missingItems = await this.findItemsMissingInStatus(
+      tx,
+      request.clientId,
+      request.items,
+      StockStatus.PACKING,
+      warehouseId,
+    );
 
     if (missingItems.length === 0) {
       return;
     }
 
-    const plan = await this.planRequestAllocations(tx, request.clientId, missingItems, StockStatus.AVAILABLE);
+    const plan = await this.planRequestAllocations(
+      tx,
+      request.clientId,
+      missingItems,
+      StockStatus.AVAILABLE,
+      warehouseId,
+    );
 
     await this.applyStatusMove(tx, {
       request,
@@ -1757,7 +2777,14 @@ export class StockOperationsService {
     clientId: string,
     items: RequestItemForAllocation[],
     status: StockStatus,
+    warehouseId?: string,
   ): Promise<RequestItemForAllocation[]> {
+    const client = 'client' in tx
+      ? await tx.client.findUnique({
+          where: { id: clientId },
+          select: { storesWithoutBoxes: true },
+        })
+      : null;
     const remainingBySku = new Map<string, number>();
     const missingItems: RequestItemForAllocation[] = [];
 
@@ -1775,8 +2802,13 @@ export class StockOperationsService {
             clientId,
             skuId: sku.id,
             status,
+            warehouseId,
             quantity: { gt: 0 },
-            boxId: { not: null },
+            ...(client?.storesWithoutBoxes
+              ? {}
+              : warehouseId
+                ? { box: this.warehouseScopedBoxWhere(warehouseId) }
+                : { boxId: { not: null } }),
           },
         });
         available = balances.reduce((sum, balance) => sum + balance.quantity, 0);
@@ -1797,7 +2829,14 @@ export class StockOperationsService {
     clientId: string,
     items: RequestItemForAllocation[],
     sourceStatus: StockStatus,
+    warehouseId?: string,
   ): Promise<RequestAllocationPlan> {
+    const client = 'client' in tx
+      ? await tx.client.findUnique({
+          where: { id: clientId },
+          select: { storesWithoutBoxes: true },
+        })
+      : null;
     const lines = [];
     const balanceRemaining = new Map<string, number>();
 
@@ -1812,11 +2851,16 @@ export class StockOperationsService {
           clientId,
           skuId: sku.id,
           status: sourceStatus,
+          warehouseId,
           quantity: { gt: 0 },
-          boxId: { not: null },
+          ...(client?.storesWithoutBoxes
+            ? {}
+            : warehouseId
+              ? { box: this.warehouseScopedBoxWhere(warehouseId) }
+              : { boxId: { not: null } }),
         },
         include: {
-          box: { select: { code: true } },
+          box: { select: allocationBoxSelect },
         },
         orderBy: [{ updatedAt: 'asc' }],
       });
@@ -2158,6 +3202,15 @@ export class StockOperationsService {
     },
   ) {
     if (!('billingService' in tx) || !('clientBillingService' in tx) || !('billingCharge' in tx)) {
+      return;
+    }
+    if (
+      'fbsOrderRequestLink' in tx &&
+      typeof tx.fbsOrderRequestLink.count === 'function' &&
+      (await tx.fbsOrderRequestLink.count({ where: { requestId: input.request.id } })) > 0
+    ) {
+      // FBS формирует собственный счёт и, при включённой настройке клиента,
+      // отдельный счёт первичной обработки. Общие начисления заявки здесь не дублируем.
       return;
     }
 
@@ -2550,9 +3603,10 @@ export class StockOperationsService {
       for (const allocation of line.allocations) {
         await this.decrementSourceBalance(tx, allocation.balance, allocation.quantity);
         await this.incrementTargetBalance(tx, {
+          warehouseId: this.requireBalanceWarehouseId(allocation.balance.warehouseId),
           clientId: input.request.clientId,
           skuId: line.skuId,
-          boxId: allocation.balance.boxId!,
+          boxId: allocation.balance.boxId,
           palletId: allocation.balance.palletId,
           status: input.targetStatus,
           quantity: allocation.quantity,
@@ -2560,6 +3614,7 @@ export class StockOperationsService {
 
         await tx.stockMovement.create({
           data: {
+            warehouseId: this.requireBalanceWarehouseId(allocation.balance.warehouseId),
             clientId: input.request.clientId,
             skuId: line.skuId,
             boxId: allocation.balance.boxId,
@@ -2575,6 +3630,7 @@ export class StockOperationsService {
 
         await tx.stockMovement.create({
           data: {
+            warehouseId: this.requireBalanceWarehouseId(allocation.balance.warehouseId),
             clientId: input.request.clientId,
             skuId: line.skuId,
             boxId: allocation.balance.boxId,
@@ -2712,26 +3768,205 @@ export class StockOperationsService {
     return candidate;
   }
 
-  private async resolveBox(tx: Prisma.TransactionClient, clientId: string, code: string) {
+  private async loadTsdTransferSourceBox(
+    db: TsdTransferDb,
+    boxCodeValue: string,
+    user: AuthUser,
+  ): Promise<TsdTransferSourceBox> {
+    const warehouseId = this.resolveWritableWarehouseId(user);
+    const boxCode = this.boxCodes
+      ? await this.boxCodes.normalize(boxCodeValue)
+      : boxCodeValue.trim();
+    const box = await db.box.findUnique({
+      where: { code: boxCode },
+      include: {
+        client: { select: { id: true, code: true, name: true } },
+        zone: { select: { warehouseId: true } },
+        pallet: { select: { zone: { select: { warehouseId: true } } } },
+        balances: {
+          where: {
+            status: StockStatus.AVAILABLE,
+            warehouseId,
+            quantity: { gt: 0 },
+          },
+          include: {
+            sku: {
+              include: {
+                barcodes: {
+                  select: { value: true, isPrimary: true },
+                  orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }],
+                },
+              },
+            },
+          },
+          orderBy: [{ sku: { name: 'asc' } }],
+        },
+      },
+    });
+    if (!box || ['deleted', 'archived'].includes(box.status)) {
+      throw new NotFoundException(`Короб ${boxCode} не найден в активных остатках.`);
+    }
+    this.clientScopes.requireClientAccess(user, box.clientId, 'write');
+    this.assertBoxWarehouse(warehouseId, box);
+    if (box.balances.length === 0) {
+      throw new BadRequestException(`В коробе ${box.code} нет доступного товара для перемещения.`);
+    }
+    return box;
+  }
+
+  private formatTsdTransferSource(sourceBox: TsdTransferSourceBox) {
+    return {
+      state: 'SCAN_ITEM',
+      message: `Короб ${sourceBox.code} открыт. Отсканируйте ШК товара или КИЗ.`,
+      sourceBox: {
+        id: sourceBox.id,
+        code: sourceBox.code,
+        client: sourceBox.client,
+        totalQuantity: sourceBox.balances.reduce(
+          (sum, balance) => sum + balance.quantity,
+          0,
+        ),
+        products: sourceBox.balances.map((balance) => ({
+          skuId: balance.skuId,
+          name: balance.sku.name,
+          article:
+            balance.sku.article ??
+            balance.sku.clientSku ??
+            balance.sku.internalSku,
+          color: balance.sku.color,
+          size: balance.sku.size,
+          quantity: balance.quantity,
+          requiresKiz:
+            balance.sku.needsChestnyZnak && !balance.sku.isUnmarked,
+          barcodes: balance.sku.barcodes.map((barcode) => barcode.value),
+        })),
+      },
+    };
+  }
+
+  private async resolveTsdTransferScannedItem(
+    db: TsdTransferDb,
+    sourceBox: TsdTransferSourceBox,
+    scanCodeValue: string,
+  ): Promise<TsdTransferScannedItem> {
+    const scanCode = requiredTsdTransferText(
+      scanCodeValue,
+      'Отсканируйте ШК товара или КИЗ.',
+    );
+    const productMark = await db.productMark.findFirst({
+      where: {
+        clientId: sourceBox.clientId,
+        boxId: sourceBox.id,
+        status: StockStatus.AVAILABLE,
+        value: { equals: scanCode, mode: Prisma.QueryMode.insensitive },
+      },
+      select: { id: true, skuId: true },
+    });
+    if (productMark) {
+      const balance = sourceBox.balances.find(
+        (row) => row.skuId === productMark.skuId,
+      );
+      if (!balance || balance.quantity < 1) {
+        throw new BadRequestException(
+          `КИЗ числится в коробе ${sourceBox.code}, но доступного остатка товара нет. Передайте короб менеджеру.`,
+        );
+      }
+      return {
+        sku: balance.sku,
+        scanCode,
+        scanType: 'KIZ',
+        productMarkId: productMark.id,
+        availableQuantity: balance.quantity,
+      };
+    }
+
+    const normalizedScan = scanCode.toLocaleLowerCase('ru-RU');
+    const balance = sourceBox.balances.find((row) =>
+      row.sku.barcodes.some(
+        (barcode) =>
+          barcode.value.toLocaleLowerCase('ru-RU') === normalizedScan,
+      ),
+    );
+    if (!balance) {
+      throw new NotFoundException(
+        `В коробе ${sourceBox.code} нет товара с кодом ${printableTransferScan(scanCode)}.`,
+      );
+    }
+    const registeredMarks = await db.productMark.count({
+      where: {
+        clientId: sourceBox.clientId,
+        skuId: balance.skuId,
+        boxId: sourceBox.id,
+        status: StockStatus.AVAILABLE,
+      },
+    });
+    if (registeredMarks >= balance.quantity) {
+      throw new BadRequestException(
+        `Для товара «${balance.sku.name}» в коробе зарегистрированы КИЗы. Отсканируйте КИЗ конкретной единицы.`,
+      );
+    }
+    return {
+      sku: balance.sku,
+      scanCode,
+      scanType: 'BARCODE',
+      productMarkId: null,
+      availableQuantity: balance.quantity - registeredMarks,
+    };
+  }
+
+  private async resolveBox(
+    tx: Prisma.TransactionClient,
+    clientId: string,
+    code: string,
+    warehouseId?: string,
+  ) {
     const box = await tx.box.findUnique({
       where: { clientId_code: { clientId, code } },
+      include: {
+        zone: { select: { warehouseId: true } },
+        pallet: { select: { zone: { select: { warehouseId: true } } } },
+      },
     });
 
     if (!box || ['deleted', 'archived'].includes(box.status)) {
       throw new NotFoundException(`Короб ${code} не найден.`);
     }
 
+    this.assertBoxWarehouse(warehouseId, box);
+
     return box;
   }
 
-  private async ensureTargetBox(tx: Prisma.TransactionClient, clientId: string, code: string) {
+  private async ensureTargetBox(
+    tx: Prisma.TransactionClient,
+    clientId: string,
+    code: string,
+    warehouseId?: string,
+  ) {
     const existing = await tx.box.findUnique({
-      where: { clientId_code: { clientId, code } },
+      where: { code },
+      include: {
+        zone: { select: { warehouseId: true } },
+        pallet: { select: { zone: { select: { warehouseId: true } } } },
+      },
     });
+    if (existing && existing.clientId !== clientId) {
+      throw new BadRequestException(
+        `Короб ${code} принадлежит другому клиенту. Перемещение остановлено.`,
+      );
+    }
     if (existing && ['deleted', 'archived'].includes(existing.status)) {
       throw new BadRequestException(`Короб ${code} находится в архиве и не может быть переиспользован.`);
     }
-    return existing ?? tx.box.create({ data: { clientId, code } });
+    if (existing) this.assertBoxWarehouse(warehouseId, existing);
+    if (existing) return existing;
+    return tx.box.create({
+      data: {
+        clientId,
+        code,
+        warehouseId: this.requireBalanceWarehouseId(warehouseId),
+      },
+    });
   }
 
   private async decrementSourceBalance(tx: Prisma.TransactionClient, balance: StockBalance, quantity: number) {
@@ -2752,6 +3987,7 @@ export class StockOperationsService {
   private incrementTargetBalance(
     tx: Prisma.TransactionClient,
     input: {
+      warehouseId: string;
       clientId: string;
       skuId: string;
       boxId?: string | null;
@@ -2765,10 +4001,12 @@ export class StockOperationsService {
     return tx.stockBalance.upsert({
       where: { balanceKey },
       update: {
+        warehouseId: input.warehouseId,
         quantity: { increment: input.quantity },
       },
       create: {
         balanceKey,
+        warehouseId: input.warehouseId,
         clientId: input.clientId,
         skuId: input.skuId,
         boxId: input.boxId,
@@ -2784,8 +4022,61 @@ function cleanBarcode(value?: string) {
   return value?.trim() || '';
 }
 
+function requiredTsdTransferText(value: unknown, message: string) {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  if (!normalized) {
+    throw new BadRequestException(message);
+  }
+  return normalized;
+}
+
+function tsdTransferScanCodes(value: unknown) {
+  if (!Array.isArray(value)) {
+    throw new BadRequestException('Отсканируйте хотя бы один товар для перемещения.');
+  }
+  const scanCodes = value
+    .map((item) => (typeof item === 'string' ? item.trim() : ''))
+    .filter(Boolean);
+  if (scanCodes.length === 0) {
+    throw new BadRequestException('Отсканируйте хотя бы один товар для перемещения.');
+  }
+  if (scanCodes.length > 500) {
+    throw new BadRequestException('За одно перемещение можно выбрать не более 500 единиц.');
+  }
+  return scanCodes;
+}
+
+function printableTransferScan(value: string) {
+  return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, '').slice(0, 80);
+}
+
+function formatTsdTransferItem(item: TsdTransferScannedItem) {
+  return {
+    skuId: item.sku.id,
+    name: item.sku.name,
+    article: item.sku.article ?? item.sku.clientSku ?? item.sku.internalSku,
+    color: item.sku.color,
+    size: item.sku.size,
+    scanCode: printableTransferScan(item.scanCode),
+    scanType: item.scanType,
+    availableQuantity: item.availableQuantity,
+  };
+}
+
 function isUniqueConstraintError(caught: unknown) {
   return caught instanceof Prisma.PrismaClientKnownRequestError && caught.code === 'P2002';
+}
+
+function isFbsRelabelInventoryAdjustment(movement: {
+  idempotencyKey: string | null;
+  sourceDocument: string | null;
+}) {
+  const key = movement.idempotencyKey ?? '';
+  return (
+    key.startsWith('fbs-relabel:') ||
+    key.startsWith('relabel-reconcile:') ||
+    movement.sourceDocument?.startsWith('FBS TSD,') === true
+  );
 }
 
 function duplicateKizMessage(boxCode?: string | null) {
@@ -3133,10 +4424,6 @@ function parseBoxTransferImportRows(file: Express.Multer.File | undefined): BoxT
       errors.push('Не указано количество.');
     }
 
-    if (toBoxCode && !toBoxCode.toUpperCase().startsWith('FFL_')) {
-      errors.push('Целевой короб должен начинаться с FFL_.');
-    }
-
     const quantity = Number(quantityText.replace(',', '.'));
     if (!Number.isInteger(quantity) || quantity <= 0) {
       errors.push('Количество должно быть целым числом больше 0.');
@@ -3209,6 +4496,10 @@ function transferBatchSummary(batch: StockTransferBatchSummaryRecord) {
 }
 
 function canDeleteTransferBatches(user: AuthUser) {
+  return user.permissionCodes.includes('system:admin') || user.roleCodes.some((role) => role === 'ADMIN' || role === 'OWNER');
+}
+
+function canAutoApproveStockChecks(user: AuthUser) {
   return user.permissionCodes.includes('system:admin') || user.roleCodes.some((role) => role === 'ADMIN' || role === 'OWNER');
 }
 

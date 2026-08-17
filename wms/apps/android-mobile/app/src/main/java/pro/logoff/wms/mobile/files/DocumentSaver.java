@@ -25,15 +25,38 @@ public final class DocumentSaver {
     private DocumentSaver() {}
 
     public static void save(Context context, String fileName, ResponseBody body, Callback callback) {
+        save(context, fileName, "application/pdf", body, callback);
+    }
+
+    public static void save(
+            Context context,
+            String fileName,
+            String mimeType,
+            ResponseBody body,
+            Callback callback
+    ) {
         IO.execute(() -> {
-            try { callback.saved(write(context, safe(fileName), body.bytes())); }
+            try { callback.saved(write(context, safe(fileName), mimeType, body.bytes())); }
             catch (Exception error) { callback.failed(error.getMessage() == null ? "Не удалось сохранить файл" : error.getMessage()); }
         });
     }
 
-    private static Uri write(Context context, String name, byte[] bytes) throws IOException {
+    public static void saveBytes(
+            Context context,
+            String fileName,
+            String mimeType,
+            byte[] bytes,
+            Callback callback
+    ) {
+        IO.execute(() -> {
+            try { callback.saved(write(context, safe(fileName), mimeType, bytes)); }
+            catch (Exception error) { callback.failed(error.getMessage() == null ? "Не удалось сохранить файл" : error.getMessage()); }
+        });
+    }
+
+    private static Uri write(Context context, String name, String mimeType, byte[] bytes) throws IOException {
         if (Build.VERSION.SDK_INT >= 29) {
-            ContentValues values = new ContentValues(); values.put(MediaStore.Downloads.DISPLAY_NAME, name); values.put(MediaStore.Downloads.MIME_TYPE, "application/pdf"); values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/LOGOff WMS");
+            ContentValues values = new ContentValues(); values.put(MediaStore.Downloads.DISPLAY_NAME, name); values.put(MediaStore.Downloads.MIME_TYPE, mimeType); values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/LOGOff WMS");
             Uri uri = context.getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values); if (uri == null) throw new IOException("Хранилище недоступно");
             try (OutputStream output = context.getContentResolver().openOutputStream(uri)) { if (output == null) throw new IOException("Файл не открыт"); output.write(bytes); }
             return uri;

@@ -30,6 +30,7 @@ import pro.logoff.wms.mobile.network.DataCallback;
 import pro.logoff.wms.mobile.push.NotificationCenter;
 import pro.logoff.wms.mobile.push.NotificationWorker;
 import pro.logoff.wms.mobile.ui.DashboardFragment;
+import pro.logoff.wms.mobile.ui.ExpensesFragment;
 import pro.logoff.wms.mobile.ui.FbsFragment;
 import pro.logoff.wms.mobile.ui.ListFragment;
 import pro.logoff.wms.mobile.ui.MoreFragment;
@@ -144,6 +145,8 @@ public class MainActivity extends AppCompatActivity {
                     ((pro.logoff.wms.mobile.ui.NativeModuleFragment) current).refresh();
                 } else if (current instanceof FbsFragment) {
                     ((FbsFragment) current).refresh();
+                } else if (current instanceof ExpensesFragment) {
+                    ((ExpensesFragment) current).refresh();
                 }
             }
             @Override public void onNothingSelected(android.widget.AdapterView<?> parent) {}
@@ -172,6 +175,8 @@ public class MainActivity extends AppCompatActivity {
             ((pro.logoff.wms.mobile.ui.NativeModuleFragment) current).refresh();
         } else if (current instanceof FbsFragment) {
             ((FbsFragment) current).refresh();
+        } else if (current instanceof ExpensesFragment) {
+            ((ExpensesFragment) current).refresh();
         }
     }
 

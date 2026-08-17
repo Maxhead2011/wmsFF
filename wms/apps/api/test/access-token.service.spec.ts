@@ -29,4 +29,12 @@ describe('AccessTokenService', () => {
 
     expect(() => service.verify(tampered)).toThrow(UnauthorizedException);
   });
+
+  it('создаёт стабильный идентификатор конкретного токена', () => {
+    const token = service.sign('user-1');
+
+    expect(service.fingerprint(token)).toHaveLength(64);
+    expect(service.fingerprint(token)).toBe(service.fingerprint(token));
+    expect(service.fingerprint(`${token}x`)).not.toBe(service.fingerprint(token));
+  });
 });

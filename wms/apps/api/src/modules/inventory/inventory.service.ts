@@ -15,6 +15,7 @@ import {
   CountInventoryItemDto,
   InventoryDecisionDto,
   InventoryResolutionAction,
+  ResolveInventoryBoxDto,
   SetInventoryCountDto,
   StartInventoryDto,
 } from './dto/inventory.dto';
@@ -34,19 +35,22 @@ export class InventoryService {
     private readonly balances: StockBalancesService,
   ) {}
 
-  async dashboard(user: AuthUser) {
+  async dashboard(user: AuthUser, hideResolvedBoxes = false) {
     const globalAccess = hasGlobalInventoryAccess(user);
+    const warehouseId = this.resolveScopedWarehouseId(user, 'read');
+    const warehouseWhere = warehouseId ? { warehouseId } : {};
     const [activeFull, activeSessions, reviewSessions, historySessions, pendingRescanRequests] = await Promise.all([
       this.prisma.inventorySession.findFirst({
         where: {
           type: InventorySessionType.FULL,
           status: { in: [InventorySessionStatus.ACTIVE, InventorySessionStatus.REVIEW] },
+          ...warehouseWhere,
         },
         include: sessionInclude,
         orderBy: { startedAt: 'desc' },
       }),
       this.prisma.inventorySession.findMany({
-        where: { status: InventorySessionStatus.ACTIVE },
+        where: { status: InventorySessionStatus.ACTIVE, ...warehouseWhere },
         include: sessionInclude,
         orderBy: { startedAt: 'desc' },
         take: 30,
@@ -55,20 +59,21 @@ export class InventoryService {
         where: {
           type: { in: [InventorySessionType.FULL, InventorySessionType.PARTIAL, InventorySessionType.BOX_CHECK] },
           status: InventorySessionStatus.REVIEW,
+          ...warehouseWhere,
         },
         include: sessionInclude,
         orderBy: { updatedAt: 'desc' },
         take: 30,
       }),
       this.prisma.inventorySession.findMany({
-        where: { boxes: { some: {} } },
+        where: { boxes: { some: {} }, ...warehouseWhere },
         include: sessionInclude,
         orderBy: { updatedAt: 'desc' },
         take: 100,
       }),
       canApproveInventoryRescan(user)
         ? this.prisma.inventoryBoxRescanRequest.findMany({
-            where: { status: 'PENDING' },
+            where: { status: 'PENDING', ...warehouseWhere },
             orderBy: { createdAt: 'asc' },
             take: 100,
           })
@@ -88,16 +93,16 @@ export class InventoryService {
             createdByName: activeFull.createdByName,
           }
         : { active: false },
-      activeFull: activeFull && globalAccess ? this.decorateSession(activeFull, totalBoxes) : null,
+      activeFull: activeFull && globalAccess ? this.decorateSession(activeFull, totalBoxes, hideResolvedBoxes) : null,
       activeSessions: activeSessions
         .filter((session) => canSeeInventorySession(user, session.clientId))
-        .map((session) => this.decorateSession(session)),
+        .map((session) => this.decorateSession(session, undefined, hideResolvedBoxes)),
       reviewSessions: reviewSessions
         .filter((session) => canSeeInventorySession(user, session.clientId))
-        .map((session) => this.decorateSession(session)),
+        .map((session) => this.decorateSession(session, undefined, hideResolvedBoxes)),
       historySessions: historySessions
         .filter((session) => canSeeInventorySession(user, session.clientId))
-        .map((session) => this.decorateSession(session)),
+        .map((session) => this.decorateSession(session, undefined, hideResolvedBoxes)),
       pendingRescanRequests: pendingRescanRequests.filter((request) =>
         canSeeInventorySession(user, request.clientId),
       ),
@@ -111,10 +116,12 @@ export class InventoryService {
       ? (type as InventorySessionType)
       : undefined;
     const clientFilter = this.clientScopes.resolveClientFilter(user);
+    const warehouseId = this.resolveScopedWarehouseId(user, 'read');
     return this.prisma.inventorySession.findMany({
       where: {
         type: parsedType,
         ...(clientFilter ? { clientId: clientFilter } : {}),
+        ...(warehouseId ? { warehouseId } : {}),
       },
       include: sessionInclude,
       orderBy: { createdAt: 'desc' },
@@ -122,11 +129,12 @@ export class InventoryService {
     });
   }
 
-  async getSession(id: string, user: AuthUser) {
+  async getSession(id: string, user: AuthUser, hideResolvedBoxes = false) {
     const session = await this.prisma.inventorySession.findUnique({ where: { id }, include: sessionInclude });
     if (!session) {
       throw new NotFoundException('Инвентаризация не найдена.');
     }
+    this.requireSessionWarehouse(user, session.warehouseId, 'read');
     if (session.clientId) {
       this.clientScopes.requireClientAccess(user, session.clientId, 'read');
     } else {
@@ -136,10 +144,12 @@ export class InventoryService {
       session.type === InventorySessionType.FULL
         ? await this.prisma.box.count({ where: { status: { notIn: ['deleted', 'archived'] } } })
         : undefined;
-    return this.decorateSession(session, totalBoxes);
+    return this.decorateSession(session, totalBoxes, hideResolvedBoxes);
   }
 
   async startSession(dto: StartInventoryDto, user: AuthUser) {
+    const warehouseId =
+      dto.type === InventorySessionType.FULL ? null : this.resolveScopedWarehouseId(user, 'write');
     if (dto.type === InventorySessionType.FULL) {
       this.requireManager(user);
       this.clientScopes.requireGlobalClientAccess(user);
@@ -165,12 +175,35 @@ export class InventoryService {
         : dto.type === InventorySessionType.PARTIAL
           ? `Частичная инвентаризация ${new Date().toLocaleDateString('ru-RU')}`
           : `Проверка коробов ${new Date().toLocaleDateString('ru-RU')}`;
+    const requestedTitle = dto.title?.trim() || defaultTitle;
+    const requestedComment = dto.comment?.trim() || null;
+    if (
+      dto.type === InventorySessionType.BOX_CHECK &&
+      requestedComment?.includes('[FBS_MANDATORY_BOX_CHECK]')
+    ) {
+      const existingMandatoryCheck = await this.prisma.inventorySession.findFirst({
+        where: {
+          type: InventorySessionType.BOX_CHECK,
+          status: InventorySessionStatus.ACTIVE,
+          clientId: dto.clientId,
+          title: requestedTitle,
+          comment: { contains: '[FBS_MANDATORY_BOX_CHECK]' },
+          ...(warehouseId ? { warehouseId } : {}),
+        },
+        include: sessionInclude,
+        orderBy: { createdAt: 'desc' },
+      });
+      if (existingMandatoryCheck) {
+        return existingMandatoryCheck;
+      }
+    }
     return this.prisma.inventorySession.create({
       data: {
         type: dto.type,
         clientId: dto.type === InventorySessionType.FULL ? null : dto.clientId,
-        title: dto.title?.trim() || defaultTitle,
-        comment: dto.comment?.trim() || null,
+        warehouseId,
+        title: requestedTitle,
+        comment: requestedComment,
         createdByUserId: user.id,
         createdByName: user.name,
       },
@@ -183,13 +216,43 @@ export class InventoryService {
     if (!boxCode) {
       throw new BadRequestException('Укажите номер короба.');
     }
-    const session = await this.requireActiveSession(sessionId);
-    const box = await this.prisma.box.findUnique({
+    const session = await this.requireActiveSession(sessionId, user, 'write');
+    const warehouseId = this.resolveScopedWarehouseId(user, 'write');
+    let box = await this.prisma.box.findUnique({
       where: { code: boxCode },
       include: { client: { select: { id: true, name: true } } },
     });
+    if (!box) {
+      const normalizedBoxCode = normalizeInventoryBoxCode(boxCode);
+      const matchingBoxes = normalizedBoxCode
+        ? await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+            SELECT "id"
+            FROM "Box"
+            WHERE regexp_replace(upper("code"), '[^A-ZА-ЯЁ0-9]', '', 'g') = ${normalizedBoxCode}
+              AND "status" NOT IN ('deleted', 'archived')
+              ${session.clientId ? Prisma.sql`AND "clientId" = ${session.clientId}` : Prisma.empty}
+              ${warehouseId ? Prisma.sql`AND "warehouseId" = ${warehouseId}` : Prisma.empty}
+            LIMIT 2
+          `)
+        : [];
+      if (matchingBoxes.length > 1) {
+        throw new BadRequestException(
+          `Найдено несколько коробов с номером ${boxCode}. Отсканируйте полный ШК с разделителями.`,
+        );
+      }
+      if (matchingBoxes.length === 1) {
+        box = await this.prisma.box.findUnique({
+          where: { id: matchingBoxes[0].id },
+          include: { client: { select: { id: true, name: true } } },
+        });
+      }
+    }
     if (!box || ['deleted', 'archived'].includes(box.status)) {
       throw new NotFoundException(`Короб ${boxCode} не найден.`);
+    }
+    this.requirePhysicalBoxWarehouse(user, box.warehouseId, 'write');
+    if (session.warehouseId && session.warehouseId !== box.warehouseId) {
+      throw new ForbiddenException('Короб относится к другому филиалу инвентаризации.');
     }
     if (session.clientId && session.clientId !== box.clientId) {
       throw new BadRequestException(`Короб ${boxCode} относится к другому клиенту.`);
@@ -200,20 +263,26 @@ export class InventoryService {
       where: { sessionId_boxId: { sessionId, boxId: box.id } },
       include: { lines: { orderBy: [{ skuName: 'asc' }, { internalSku: 'asc' }] } },
     });
-    const approvedRescan = await this.prisma.inventoryBoxRescanRequest.findFirst({
+    const forcedFbsBoxCheck =
+      Boolean(user.deviceCode) &&
+      (session.comment?.includes('[FBS_MANDATORY_BOX_CHECK]') ?? false);
+    const autoApproveRescan = canApproveInventoryRescan(user) || forcedFbsBoxCheck;
+    const rescanRequest = await this.prisma.inventoryBoxRescanRequest.findFirst({
       where: {
         boxId: box.id,
         sessionId,
-        status: 'APPROVED',
+        status: autoApproveRescan ? { in: ['PENDING', 'APPROVED'] } : 'APPROVED',
         consumedAt: null,
+        ...(session.warehouseId ? { warehouseId: session.warehouseId } : {}),
       },
-      orderBy: { approvedAt: 'asc' },
+      orderBy: { createdAt: 'asc' },
     });
+    const rescanAllowed = autoApproveRescan || rescanRequest?.status === 'APPROVED';
     if (existing) {
       if (existing.status === InventoryBoxStatus.COUNTING) {
         return existing;
       }
-      if (!approvedRescan) {
+      if (!rescanAllowed) {
         await this.ensureRescanRequest(session, box, user);
         throw new ConflictException(
           `Короб ${boxCode} уже проверен. Запрос на повторную проверку отправлен администратору.`,
@@ -225,7 +294,7 @@ export class InventoryService {
       select: { id: true, status: true },
       orderBy: { createdAt: 'desc' },
     });
-    if (previousCheck && !approvedRescan) {
+    if (previousCheck && !rescanAllowed) {
       await this.ensureRescanRequest(session, box, user);
       throw new ConflictException(
         previousCheck.status === InventoryBoxStatus.COUNTING
@@ -235,7 +304,12 @@ export class InventoryService {
     }
 
     const stock = await this.prisma.stockBalance.findMany({
-      where: { boxId: box.id, status: StockStatus.AVAILABLE, quantity: { gt: 0 } },
+      where: {
+        boxId: box.id,
+        status: StockStatus.AVAILABLE,
+        quantity: { gt: 0 },
+        ...(box.warehouseId ? { warehouseId: box.warehouseId } : {}),
+      },
       include: { sku: { include: { barcodes: true } } },
     });
     const expected = new Map<string, (typeof stock)[number] & { total: number }>();
@@ -256,7 +330,7 @@ export class InventoryService {
       difference: -item.total,
     }));
 
-    if (existing && approvedRescan) {
+    if (existing && rescanAllowed) {
       return this.prisma.$transaction(async (tx) => {
         await tx.inventoryAuditLine.deleteMany({ where: { auditBoxId: existing.id } });
         const reopened = await tx.inventoryAuditBox.update({
@@ -269,15 +343,27 @@ export class InventoryService {
             completedAt: null,
             resolvedAt: null,
             resolvedByName: null,
-            comment: `Повторная проверка разрешена администратором ${approvedRescan.approvedByName ?? ''}`.trim(),
+            comment: autoApproveRescan
+              ? forcedFbsBoxCheck
+                ? `Обязательная повторная проверка после FBS автоматически открыта для ${user.name}`
+                : `Повторная проверка автоматически разрешена администратору ${user.name}`
+              : `Повторная проверка разрешена администратором ${rescanRequest?.approvedByName ?? ''}`.trim(),
             lines: { create: lineData },
           },
           include: { lines: { orderBy: [{ skuName: 'asc' }, { internalSku: 'asc' }] } },
         });
-        await tx.inventoryBoxRescanRequest.update({
-          where: { id: approvedRescan.id },
-          data: { status: 'CONSUMED', consumedAt: new Date() },
-        });
+        if (rescanRequest) {
+          await tx.inventoryBoxRescanRequest.update({
+            where: { id: rescanRequest.id },
+            data: {
+              status: 'CONSUMED',
+              approvedByUserId: rescanRequest.approvedByUserId ?? user.id,
+              approvedByName: rescanRequest.approvedByName ?? user.name,
+              approvedAt: rescanRequest.approvedAt ?? new Date(),
+              consumedAt: new Date(),
+            },
+          });
+        }
         return reopened;
       });
     }
@@ -296,10 +382,16 @@ export class InventoryService {
         },
         include: { lines: { orderBy: [{ skuName: 'asc' }, { internalSku: 'asc' }] } },
       });
-      if (approvedRescan) {
+      if (rescanRequest) {
         await tx.inventoryBoxRescanRequest.update({
-          where: { id: approvedRescan.id },
-          data: { status: 'CONSUMED', consumedAt: new Date() },
+          where: { id: rescanRequest.id },
+          data: {
+            status: 'CONSUMED',
+            approvedByUserId: rescanRequest.approvedByUserId ?? user.id,
+            approvedByName: rescanRequest.approvedByName ?? user.name,
+            approvedAt: rescanRequest.approvedAt ?? new Date(),
+            consumedAt: new Date(),
+          },
         });
       }
       return created;
@@ -314,6 +406,7 @@ export class InventoryService {
     if (!request) {
       throw new NotFoundException('Запрос на повторную проверку не найден.');
     }
+    this.requireSessionWarehouse(user, request.warehouseId, 'write');
     this.clientScopes.requireClientAccess(user, request.clientId, 'write');
     if (request.status !== 'PENDING') {
       throw new BadRequestException('Этот запрос уже обработан.');
@@ -330,7 +423,7 @@ export class InventoryService {
   }
 
   async scanItem(auditBoxId: string, dto: CountInventoryItemDto, user: AuthUser) {
-    const auditBox = await this.requireCountingBox(auditBoxId);
+    const auditBox = await this.requireCountingBox(auditBoxId, user);
     this.clientScopes.requireClientAccess(user, auditBox.clientId, 'write');
     const value = dto.barcode.trim();
     const sku = await this.prisma.sku.findFirst({
@@ -344,6 +437,29 @@ export class InventoryService {
       throw new NotFoundException(
         `ШК товара ${value} не найден у клиента ${auditBox.clientName}. При инвентаризации сканируйте только ШК товара, не КИЗ и не внутренний SKU.`,
       );
+    }
+    if (dto.requireKiz && sku.needsChestnyZnak && !sku.isUnmarked) {
+      const kiz = dto.kiz?.trim();
+      if (!kiz) {
+        throw new ConflictException(
+          'Для этого маркированного товара обязательно отсканируйте КИЗ после ШК.',
+        );
+      }
+      const mark = await this.prisma.productMark.findFirst({
+        where: {
+          clientId: auditBox.clientId,
+          skuId: sku.id,
+          boxId: auditBox.boxId,
+          value: kiz,
+          status: StockStatus.AVAILABLE,
+        },
+        select: { id: true },
+      });
+      if (!mark) {
+        throw new BadRequestException(
+          `КИЗ не зарегистрирован за товаром ${sku.internalSku} в коробе ${auditBox.boxCode}. Проверьте физический товар и повторите сканирование.`,
+        );
+      }
     }
     const quantity = dto.quantity ?? 1;
     const existing = await this.prisma.inventoryAuditLine.findUnique({
@@ -373,7 +489,7 @@ export class InventoryService {
   }
 
   async setCount(auditBoxId: string, dto: SetInventoryCountDto, user: AuthUser) {
-    const auditBox = await this.requireCountingBox(auditBoxId);
+    const auditBox = await this.requireCountingBox(auditBoxId, user);
     this.clientScopes.requireClientAccess(user, auditBox.clientId, 'write');
     const line = await this.prisma.inventoryAuditLine.findFirst({ where: { id: dto.lineId, auditBoxId } });
     if (!line) {
@@ -389,7 +505,7 @@ export class InventoryService {
   }
 
   async finishBox(auditBoxId: string, user: AuthUser) {
-    const auditBox = await this.requireCountingBox(auditBoxId);
+    const auditBox = await this.requireCountingBox(auditBoxId, user);
     this.clientScopes.requireClientAccess(user, auditBox.clientId, 'write');
     const lines = await this.prisma.inventoryAuditLine.findMany({ where: { auditBoxId } });
     const mismatch = lines.some((line) => line.countedQuantity !== line.expectedQuantity);
@@ -414,6 +530,9 @@ export class InventoryService {
         },
       }),
     ]);
+    if (!mismatch) {
+      await this.completeMandatoryFbsSessionIfReady(auditBox.sessionId, user);
+    }
     return this.prisma.inventoryAuditBox.findUnique({
       where: { id: auditBoxId },
       include: { lines: { orderBy: [{ skuName: 'asc' }, { internalSku: 'asc' }] } },
@@ -421,7 +540,20 @@ export class InventoryService {
   }
 
   async sendToReview(id: string, user: AuthUser) {
-    const session = await this.requireActiveSession(id);
+    const session = await this.prisma.inventorySession.findUnique({ where: { id } });
+    if (!session) {
+      throw new NotFoundException('Инвентаризация не найдена.');
+    }
+    this.requireSessionWarehouse(user, session.warehouseId, 'write');
+    if (isMandatoryFbsBoxCheck(session)) {
+      const completed = await this.completeMandatoryFbsSessionIfReady(id, user);
+      if (completed) {
+        return this.prisma.inventorySession.findUnique({ where: { id }, include: sessionInclude });
+      }
+    }
+    if (session.status !== InventorySessionStatus.ACTIVE) {
+      throw new BadRequestException('Добавлять подсчёты можно только в активную инвентаризацию.');
+    }
     const [counting, auditedBoxes] = await Promise.all([
       this.prisma.inventoryAuditBox.count({ where: { sessionId: id, status: InventoryBoxStatus.COUNTING } }),
       this.prisma.inventoryAuditBox.count({ where: { sessionId: id } }),
@@ -489,6 +621,7 @@ export class InventoryService {
     if (!line) {
       throw new NotFoundException('Позиция инвентаризации не найдена.');
     }
+    this.requireSessionWarehouse(user, line.auditBox.session.warehouseId, 'write');
     const canResolveCompletedBoxCheck =
       line.auditBox.session.type === InventorySessionType.BOX_CHECK &&
       line.auditBox.session.status === InventorySessionStatus.COMPLETED;
@@ -529,6 +662,10 @@ export class InventoryService {
       if (!box) {
         throw new NotFoundException('Исходный короб не найден.');
       }
+      this.requirePhysicalBoxWarehouse(user, box.warehouseId, 'write');
+      if (line.auditBox.session.warehouseId && line.auditBox.session.warehouseId !== box.warehouseId) {
+        throw new ForbiddenException('Короб относится к другому филиалу инвентаризации.');
+      }
       await this.prisma.$transaction(async (tx) => {
         const balance = await tx.stockBalance.findFirst({
           where: {
@@ -536,6 +673,7 @@ export class InventoryService {
             skuId: line.skuId,
             boxId: box.id,
             status: StockStatus.AVAILABLE,
+            ...(box.warehouseId ? { warehouseId: box.warehouseId } : {}),
           },
         });
         const current = balance?.quantity ?? 0;
@@ -548,6 +686,7 @@ export class InventoryService {
           await tx.stockBalance.create({
             data: {
               balanceKey: this.balances.balanceKey({
+                warehouseId: box.warehouseId,
                 clientId: line.auditBox.clientId,
                 skuId: line.skuId,
                 boxId: box.id,
@@ -555,6 +694,7 @@ export class InventoryService {
                 status: StockStatus.AVAILABLE,
               }),
               clientId: line.auditBox.clientId,
+              warehouseId: box.warehouseId,
               skuId: line.skuId,
               boxId: box.id,
               palletId: box.palletId,
@@ -567,6 +707,7 @@ export class InventoryService {
           await tx.stockMovement.create({
             data: {
               clientId: line.auditBox.clientId,
+              warehouseId: box.warehouseId,
               skuId: line.skuId,
               boxId: box.id,
               palletId: box.palletId,
@@ -599,9 +740,49 @@ export class InventoryService {
         decidedAt: new Date(),
       },
     });
-    await this.refreshBoxResolution(line.auditBoxId, user.name);
+    await this.refreshBoxResolution(line.auditBoxId, user);
     return this.prisma.inventoryAuditBox.findUnique({
       where: { id: line.auditBoxId },
+      include: { lines: { orderBy: [{ skuName: 'asc' }, { internalSku: 'asc' }] } },
+    });
+  }
+
+  async resolveBox(auditBoxId: string, dto: ResolveInventoryBoxDto, user: AuthUser) {
+    this.requireManager(user);
+    const auditBox = await this.prisma.inventoryAuditBox.findUnique({
+      where: { id: auditBoxId },
+      include: { session: true, lines: true },
+    });
+    if (!auditBox) {
+      throw new NotFoundException('Проверка короба не найдена.');
+    }
+    this.requireSessionWarehouse(user, auditBox.session.warehouseId, 'write');
+    this.clientScopes.requireClientAccess(user, auditBox.clientId, 'write');
+    if (auditBox.status === InventoryBoxStatus.COUNTING) {
+      throw new BadRequestException('Сначала завершите подсчёт короба.');
+    }
+
+    const pendingLines = auditBox.lines.filter(
+      (line) => line.difference !== 0 && line.decision === InventoryLineDecision.PENDING,
+    );
+    for (const line of pendingLines) {
+      await this.decideLine(
+        line.id,
+        { action: dto.action, comment: dto.comment },
+        user,
+      );
+    }
+
+    if (pendingLines.length === 0 && auditBox.status === InventoryBoxStatus.MATCHED) {
+      await this.prisma.inventoryAuditBox.update({
+        where: { id: auditBox.id },
+        data: { status: InventoryBoxStatus.RESOLVED, resolvedAt: new Date(), resolvedByName: user.name },
+      });
+    }
+    await this.completeMandatoryFbsSessionIfReady(auditBox.sessionId, user);
+
+    return this.prisma.inventoryAuditBox.findUnique({
+      where: { id: auditBox.id },
       include: { lines: { orderBy: [{ skuName: 'asc' }, { internalSku: 'asc' }] } },
     });
   }
@@ -612,6 +793,7 @@ export class InventoryService {
     if (!session) {
       throw new NotFoundException('Инвентаризация не найдена.');
     }
+    this.requireSessionWarehouse(user, session.warehouseId, 'write');
     const unresolved = await this.prisma.inventoryAuditLine.count({
       where: {
         auditBox: { sessionId: id, status: InventoryBoxStatus.MISMATCH },
@@ -640,6 +822,7 @@ export class InventoryService {
     if (!session) {
       throw new NotFoundException('Инвентаризация не найдена.');
     }
+    this.requireSessionWarehouse(user, session.warehouseId, 'write');
     if (
       session.status === InventorySessionStatus.COMPLETED ||
       session.status === InventorySessionStatus.CANCELLED
@@ -660,8 +843,8 @@ export class InventoryService {
   }
 
   private async ensureRescanRequest(
-    session: { id: string; title: string },
-    box: { id: string; code: string; clientId: string; client: { name: string } },
+    session: { id: string; title: string; warehouseId: string | null },
+    box: { id: string; code: string; clientId: string; warehouseId: string | null; client: { name: string } },
     user: AuthUser,
   ) {
     const pending = await this.prisma.inventoryBoxRescanRequest.findFirst({
@@ -679,6 +862,7 @@ export class InventoryService {
         boxId: box.id,
         boxCode: box.code,
         clientId: box.clientId,
+        warehouseId: session.warehouseId ?? box.warehouseId,
         clientName: box.client.name,
         sessionId: session.id,
         sessionTitle: session.title,
@@ -688,7 +872,7 @@ export class InventoryService {
     });
   }
 
-  private async requireActiveSession(id: string) {
+  private async requireActiveSession(id: string, user: AuthUser, access: 'read' | 'write') {
     const session = await this.prisma.inventorySession.findUnique({ where: { id } });
     if (!session) {
       throw new NotFoundException('Инвентаризация не найдена.');
@@ -696,10 +880,11 @@ export class InventoryService {
     if (session.status !== InventorySessionStatus.ACTIVE) {
       throw new BadRequestException('Добавлять подсчёты можно только в активную инвентаризацию.');
     }
+    this.requireSessionWarehouse(user, session.warehouseId, access);
     return session;
   }
 
-  private async requireCountingBox(id: string) {
+  private async requireCountingBox(id: string, user: AuthUser) {
     const auditBox = await this.prisma.inventoryAuditBox.findUnique({
       where: { id },
       include: { session: true },
@@ -707,22 +892,112 @@ export class InventoryService {
     if (!auditBox) {
       throw new NotFoundException('Проверка короба не найдена.');
     }
+    this.requireSessionWarehouse(user, auditBox.session.warehouseId, 'write');
     if (auditBox.session.status !== InventorySessionStatus.ACTIVE || auditBox.status !== InventoryBoxStatus.COUNTING) {
       throw new BadRequestException('Подсчёт этого короба уже завершён.');
     }
     return auditBox;
   }
 
-  private async refreshBoxResolution(auditBoxId: string, resolvedByName: string) {
+  private requireSessionWarehouse(
+    user: AuthUser,
+    warehouseId: string | null,
+    access: 'read' | 'write',
+  ) {
+    const scopedWarehouseId = this.resolveScopedWarehouseId(user, access);
+    if (scopedWarehouseId && warehouseId !== scopedWarehouseId) {
+      throw new ForbiddenException('Инвентаризация относится к другому филиалу.');
+    }
+  }
+
+  private requirePhysicalBoxWarehouse(
+    user: AuthUser,
+    warehouseId: string | null,
+    access: 'read' | 'write',
+  ) {
+    const scopedWarehouseId = this.resolveScopedWarehouseId(user, access);
+    if (scopedWarehouseId && warehouseId !== scopedWarehouseId) {
+      throw new NotFoundException('Короб не найден в активном филиале.');
+    }
+  }
+
+  private resolveScopedWarehouseId(user: AuthUser, access: 'read' | 'write') {
+    if (!isWarehouseScopedInventoryUser(user)) {
+      return null;
+    }
+    const warehouseId = user.activeWarehouseId?.trim() || null;
+    const allowedWarehouseIds = access === 'write' ? user.writableWarehouseIds : user.warehouseIds;
+    if (!warehouseId || !(allowedWarehouseIds ?? []).includes(warehouseId)) {
+      throw new ForbiddenException(
+        access === 'write'
+          ? 'Выберите доступный для изменения активный филиал.'
+          : 'Выберите доступный активный филиал.',
+      );
+    }
+    return warehouseId;
+  }
+
+  private async refreshBoxResolution(auditBoxId: string, user: AuthUser) {
     const pending = await this.prisma.inventoryAuditLine.count({
       where: { auditBoxId, difference: { not: 0 }, decision: InventoryLineDecision.PENDING },
     });
     if (pending === 0) {
-      await this.prisma.inventoryAuditBox.update({
+      const resolved = await this.prisma.inventoryAuditBox.update({
         where: { id: auditBoxId },
-        data: { status: InventoryBoxStatus.RESOLVED, resolvedAt: new Date(), resolvedByName },
+        data: { status: InventoryBoxStatus.RESOLVED, resolvedAt: new Date(), resolvedByName: user.name },
       });
+      await this.completeMandatoryFbsSessionIfReady(resolved.sessionId, user);
     }
+  }
+
+  private async completeMandatoryFbsSessionIfReady(sessionId: string, user: AuthUser) {
+    const session = await this.prisma.inventorySession.findUnique({
+      where: { id: sessionId },
+      select: { id: true, type: true, status: true, comment: true },
+    });
+    if (!session || !isMandatoryFbsBoxCheck(session)) return false;
+    if (session.status === InventorySessionStatus.COMPLETED) return true;
+    if (
+      session.status !== InventorySessionStatus.ACTIVE &&
+      session.status !== InventorySessionStatus.REVIEW
+    ) {
+      return false;
+    }
+    const [unresolvedBoxes, auditedBoxes, pendingDifferences] = await Promise.all([
+      this.prisma.inventoryAuditBox.count({
+        where: {
+          sessionId,
+          status: { notIn: [InventoryBoxStatus.MATCHED, InventoryBoxStatus.RESOLVED] },
+        },
+      }),
+      this.prisma.inventoryAuditBox.count({ where: { sessionId } }),
+      this.prisma.inventoryAuditLine.count({
+        where: {
+          auditBox: { sessionId },
+          difference: { not: 0 },
+          decision: InventoryLineDecision.PENDING,
+        },
+      }),
+    ]);
+    if (unresolvedBoxes > 0 || auditedBoxes === 0 || pendingDifferences > 0) return false;
+    const completed = await this.prisma.inventorySession.updateMany({
+      where: {
+        id: sessionId,
+        status: { in: [InventorySessionStatus.ACTIVE, InventorySessionStatus.REVIEW] },
+      },
+      data: {
+        status: InventorySessionStatus.COMPLETED,
+        completedAt: new Date(),
+        completedByUserId: user.id,
+        completedByName: user.name,
+      },
+    });
+    if (completed.count === 1) return true;
+    const current = await this.prisma.inventorySession.findUnique({
+      where: { id: sessionId },
+      select: { status: true },
+    });
+    return current?.status === InventorySessionStatus.COMPLETED;
   }
 
   private requireManager(user: AuthUser) {
@@ -734,6 +1009,7 @@ export class InventoryService {
   private decorateSession<T extends { boxes: Array<{ status: InventoryBoxStatus; lines: Array<{ difference: number; decision: InventoryLineDecision; decisionComment?: string | null }> }> }>(
     session: T,
     totalBoxes?: number,
+    hideResolvedBoxes = false,
   ) {
     const mismatchBoxes = session.boxes.filter((box) => box.status === InventoryBoxStatus.MISMATCH).length;
     const unresolvedLines = session.boxes.reduce(
@@ -742,13 +1018,15 @@ export class InventoryService {
     );
     return {
       ...session,
-      boxes: session.boxes.map((box) => ({
+      boxes: session.boxes
+        .filter((box) => !hideResolvedBoxes || box.status !== InventoryBoxStatus.RESOLVED)
+        .map((box) => ({
         ...box,
         lines: box.lines.map((line) => ({
           ...line,
           resolutionAction: resolutionActionFromComment(line.decisionComment, line.decision),
         })),
-      })),
+        })),
       progress: {
         totalBoxes: totalBoxes ?? null,
         checkedBoxes: session.boxes.filter((box) => box.status !== InventoryBoxStatus.COUNTING).length,
@@ -757,6 +1035,23 @@ export class InventoryService {
       },
     };
   }
+}
+
+function normalizeInventoryBoxCode(value: string) {
+  return value
+    .trim()
+    .toLocaleUpperCase('ru-RU')
+    .replace(/[^A-ZА-ЯЁ0-9]/g, '');
+}
+
+function isMandatoryFbsBoxCheck(session: {
+  type: InventorySessionType;
+  comment?: string | null;
+}) {
+  return (
+    session.type === InventorySessionType.BOX_CHECK &&
+    (session.comment?.includes('[FBS_MANDATORY_BOX_CHECK]') ?? false)
+  );
 }
 
 function resolutionComment(action: InventoryResolutionAction, comment?: string) {
@@ -781,19 +1076,29 @@ function resolutionActionFromComment(comment: string | null | undefined, decisio
 function canManageInventory(user: AuthUser) {
   return (
     user.permissionCodes.includes('system:admin') ||
-    user.roleCodes.some((role) => ['ADMIN', 'OWNER', 'MANAGER'].includes(role))
+    user.roleCodes.some((role) =>
+      ['ADMIN', 'OWNER', 'MANAGER', 'BRANCH_MANAGER', 'WAREHOUSE_KEEPER'].includes(role),
+    )
   );
 }
 
 function canApproveInventoryRescan(user: AuthUser) {
   return (
     user.permissionCodes.includes('system:admin') ||
-    user.roleCodes.some((role) => ['ADMIN', 'OWNER'].includes(role))
+    user.roleCodes.some((role) => ['ADMIN', 'OWNER', 'WAREHOUSE_KEEPER'].includes(role))
   );
 }
 
 function hasGlobalInventoryAccess(user: AuthUser) {
   return user.permissionCodes.includes('system:admin') || user.clientScopeMode === 'ALL';
+}
+
+function isWarehouseScopedInventoryUser(user: AuthUser) {
+  return (
+    !user.permissionCodes.includes('system:admin') &&
+    !user.roleCodes.includes('CLIENT') &&
+    (user.roleCodes.includes('BRANCH_MANAGER') || (user.warehouseIds?.length ?? 0) > 0)
+  );
 }
 
 function canSeeInventorySession(user: AuthUser, clientId: string | null) {

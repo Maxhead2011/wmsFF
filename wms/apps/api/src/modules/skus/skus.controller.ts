@@ -34,14 +34,18 @@ export class SkusController {
 
   @Post('nomenclature')
   @RequirePermissions('skus:write')
-  createNomenclature(@Body() dto: CreateNomenclatureItemDto) {
-    return this.skus.createNomenclature(dto);
+  createNomenclature(@Body() dto: CreateNomenclatureItemDto, @CurrentUser() user: AuthUser) {
+    return this.skus.createNomenclature(dto, user);
   }
 
   @Patch('nomenclature/:id')
   @RequirePermissions('skus:write')
-  updateNomenclature(@Param('id') id: string, @Body() dto: CreateNomenclatureItemDto) {
-    return this.skus.updateNomenclature(id, dto);
+  updateNomenclature(
+    @Param('id') id: string,
+    @Body() dto: CreateNomenclatureItemDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.skus.updateNomenclature(id, dto, user);
   }
 
   @Post('nomenclature/import-xlsx')
@@ -49,8 +53,11 @@ export class SkusController {
   @ApiConsumes('multipart/form-data')
   @ApiBody({ description: 'Excel-файл общей номенклатуры' })
   @UseInterceptors(FileInterceptor('file'))
-  importNomenclatureXlsx(@UploadedFile() file: Express.Multer.File) {
-    return this.skus.importNomenclatureWorkbook(file);
+  importNomenclatureXlsx(
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.skus.importNomenclatureWorkbook(file, user);
   }
 
   @Get('article-mappings')
@@ -59,13 +66,11 @@ export class SkusController {
   }
 
   @Post('article-mappings')
-  @RequirePermissions('skus:write')
   createArticleMapping(@Body() dto: CreateArticleMappingDto, @CurrentUser() user: AuthUser) {
     return this.skus.createArticleMapping(dto, user);
   }
 
   @Post('article-mappings/import-xlsx')
-  @RequirePermissions('skus:write')
   @ApiConsumes('multipart/form-data')
   @ApiBody({ description: 'Excel-файл соответствий артикула на складе и артикула продавца' })
   @UseInterceptors(FileInterceptor('file'))
@@ -75,6 +80,11 @@ export class SkusController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.skus.importArticleMappingsWorkbook(clientId, file, user);
+  }
+
+  @Delete('article-mappings/:id')
+  deleteArticleMapping(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.skus.deleteArticleMapping(id, user);
   }
 
   @Get('bulk-volume')
@@ -121,7 +131,7 @@ export class SkusController {
   @ApiConsumes('multipart/form-data')
   @ApiBody({ description: 'Excel-файл общей номенклатуры' })
   @UseInterceptors(FileInterceptor('file'))
-  importXlsx(@UploadedFile() file: Express.Multer.File) {
-    return this.skus.importNomenclatureWorkbook(file);
+  importXlsx(@UploadedFile() file: Express.Multer.File, @CurrentUser() user: AuthUser) {
+    return this.skus.importNomenclatureWorkbook(file, user);
   }
 }

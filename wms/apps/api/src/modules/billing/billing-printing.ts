@@ -6,13 +6,18 @@ export const BILLING_SELLER = {
   fullName: 'Индивидуальный предприниматель Говорова Екатерина Ивановна',
   inn: '616602423102',
   kpp: '',
+  ogrn: '324619600095788',
   address: '',
   bankName: 'АО «ТБанк»',
   bankBik: '044525974',
+  bankInn: '',
+  bankKpp: '',
   bankAccount: '40802810600008484063',
   correspondentAccount: '30101810145250000974',
   paymentCode: '0002820008',
   paymentPurposeCode: 'НК26060000',
+  stampDataUrl: null as string | null,
+  signatureDataUrl: null as string | null,
 };
 
 const SIGNATURE_PATH = join(process.cwd(), 'assets', 'billing', 'govorova-signature.png');
@@ -74,6 +79,7 @@ export function unitLabel(unit: string) {
     LITER_DAY: 'л-дн',
     DAY: 'дн',
     HOUR: 'ч',
+    ORDER: 'зак.',
   };
   return labels[unit] ?? 'шт';
 }

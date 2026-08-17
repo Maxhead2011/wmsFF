@@ -10,6 +10,7 @@ import {
   type WarehouseBoxSummary,
 } from '../../lib/api';
 import { TsplPreviewCard } from './TsplPreviewCard';
+import { useRememberedClientId } from '../../lib/rememberedClient';
 
 type BoxLabelFormProps = {
   session: AuthSession;
@@ -18,7 +19,7 @@ type BoxLabelFormProps = {
 export function BoxLabelForm({ session }: BoxLabelFormProps) {
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [boxes, setBoxes] = useState<WarehouseBoxSummary[]>([]);
-  const [clientId, setClientId] = useState('');
+  const [clientId, setClientId] = useRememberedClientId(session.user.id);
   const [boxCode, setBoxCode] = useState('');
   const [quantity, setQuantity] = useState('0');
   const [preview, setPreview] = useState<BoxLabelPreview | null>(null);

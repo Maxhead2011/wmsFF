@@ -1,8 +1,8 @@
 {
-  "versionCode": 15,
-  "versionName": "0.3.10",
+  "versionCode": 22,
+  "versionName": "0.5.3",
   "minimumVersion": "0.1.0",
   "mandatory": false,
   "apkUrl": "/downloads/logoff-wms-mobile.apk",
-  "releaseNotes": "В FBS добавлен отдельный раздел «Отменённые заказы». Отмены продавца, покупателя и перевозчика больше не смешиваются с завершёнными заказами в архиве."
+  "releaseNotes": "Последняя основная сборка LOGOff WMS для WMSFF2207: актуальные разделы, темы, FBS и операционные инструменты."
 }

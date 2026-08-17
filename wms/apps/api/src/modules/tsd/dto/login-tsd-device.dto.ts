@@ -14,6 +14,11 @@ export class LoginTsdDeviceDto {
   @IsOptional()
   @IsString()
   @Length(1, 200)
+  installationCode?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 200)
   code?: string;
 
   @IsOptional()

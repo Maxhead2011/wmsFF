@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
 import { Prisma, StockStatus } from '@prisma/client';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -110,6 +110,7 @@ export class ImportsService {
   async commitStockWorkbook(buffer: Buffer, options: CommitStockOptions) {
     await this.inventoryLock?.assertStockMovementsAllowed();
     this.clientScopes.requireClientAccess(options.user, options.clientId, 'write');
+    const warehouseId = await this.resolveImportWarehouseId(options.user, options.clientId);
 
     const parsed = await this.parseStockWorkbookWithCatalog(buffer, options.clientId);
     const errors = parsed.issues.filter((issue) => issue.severity === 'error');
@@ -132,12 +133,19 @@ export class ImportsService {
         };
 
         for (const item of parsed.items) {
-          const box = await this.ensureBox(tx, item);
+          const box = await this.ensureBox(tx, item, warehouseId);
           const sku = await this.ensureSku(tx, item);
 
           await this.ensureBarcode(tx, sku.id, item.barcode);
-          const movementCreated = await this.createInitialMovement(tx, item, sku.id, box.id, options.sourceDocument);
-          await this.addToBalance(tx, item, sku.id, box.id, 'AVAILABLE');
+          const movementCreated = await this.createInitialMovement(
+            tx,
+            item,
+            sku.id,
+            box.id,
+            warehouseId,
+            options.sourceDocument,
+          );
+          await this.addToBalance(tx, item, sku.id, box.id, warehouseId, 'AVAILABLE');
 
           counters.boxesTouched += 1;
           counters.skusTouched += 1;
@@ -176,6 +184,7 @@ export class ImportsService {
   async commitReceiptWorkbook(buffer: Buffer, options: CommitStockOptions) {
     await this.inventoryLock?.assertStockMovementsAllowed();
     this.clientScopes.requireClientAccess(options.user, options.clientId, 'write');
+    const warehouseId = await this.resolveImportWarehouseId(options.user, options.clientId);
 
     const rows = this.readReceiptSheet(buffer);
     const parsed = parseReceiptSheet(rows, { clientId: options.clientId });
@@ -201,12 +210,19 @@ export class ImportsService {
         };
 
         for (const item of parsed.items) {
-          const box = await this.ensureBox(tx, item);
+          const box = await this.ensureBox(tx, item, warehouseId);
           const sku = await this.ensureSku(tx, item);
 
           await this.ensureBarcode(tx, sku.id, item.barcode);
-          const movement = await this.createReceiptMovement(tx, item, sku.id, box.id, options.sourceDocument);
-          await this.addToBalance(tx, item, sku.id, box.id, 'AVAILABLE');
+          const movement = await this.createReceiptMovement(
+            tx,
+            item,
+            sku.id,
+            box.id,
+            warehouseId,
+            options.sourceDocument,
+          );
+          await this.addToBalance(tx, item, sku.id, box.id, warehouseId, 'AVAILABLE');
           await tx.productMark.create({
             data: {
               clientId: item.clientId,
@@ -276,8 +292,12 @@ export class ImportsService {
     });
   }
 
-  private ensureBox(tx: Prisma.TransactionClient, item: StockImportItem) {
-    return tx.box.upsert({
+  private async ensureBox(
+    tx: Prisma.TransactionClient,
+    item: StockImportItem,
+    warehouseId: string,
+  ) {
+    const box = await tx.box.upsert({
       where: {
         clientId_code: {
           clientId: item.clientId,
@@ -287,9 +307,16 @@ export class ImportsService {
       update: {},
       create: {
         clientId: item.clientId,
+        warehouseId,
         code: item.boxCode,
       },
     });
+    if (box.warehouseId !== warehouseId) {
+      throw new ForbiddenException(
+        `Короб ${item.boxCode} относится к другому филиалу или не имеет безопасной привязки. Импорт остановлен.`,
+      );
+    }
+    return box;
   }
 
   private async ensureSku(tx: Prisma.TransactionClient, item: StockImportItem) {
@@ -339,17 +366,25 @@ export class ImportsService {
     item: StockImportItem,
     skuId: string,
     boxId: string,
+    warehouseId: string,
     sourceDocument: string,
   ) {
     const idempotencyKey = ['stock-import', sourceDocument, item.sourceRow, item.boxCode, item.barcode].join(':');
     const exists = await tx.stockMovement.findUnique({ where: { idempotencyKey } });
 
     if (exists) {
+      if (exists.warehouseId && exists.warehouseId !== warehouseId) {
+        throw new ForbiddenException('Строка импорта уже относится к другому филиалу.');
+      }
+      if (!exists.warehouseId) {
+        await tx.stockMovement.update({ where: { id: exists.id }, data: { warehouseId } });
+      }
       return false;
     }
 
     await tx.stockMovement.create({
       data: {
+        warehouseId,
         clientId: item.clientId,
         skuId,
         boxId,
@@ -370,10 +405,12 @@ export class ImportsService {
     item: ReceiptImportItem,
     skuId: string,
     boxId: string,
+    warehouseId: string,
     sourceDocument: string,
   ) {
     return tx.stockMovement.create({
       data: {
+        warehouseId,
         clientId: item.clientId,
         skuId,
         boxId,
@@ -392,9 +429,11 @@ export class ImportsService {
     item: StockImportItem,
     skuId: string,
     boxId: string,
+    warehouseId: string,
     status: StockStatus,
   ) {
     const balanceKey = this.balances.balanceKey({
+      warehouseId,
       clientId: item.clientId,
       skuId,
       boxId,
@@ -404,10 +443,12 @@ export class ImportsService {
     await tx.stockBalance.upsert({
       where: { balanceKey },
       update: {
+        warehouseId,
         quantity: { increment: item.quantity },
       },
       create: {
         balanceKey,
+        warehouseId,
         clientId: item.clientId,
         skuId,
         boxId,
@@ -415,6 +456,52 @@ export class ImportsService {
         quantity: item.quantity,
       },
     });
+  }
+
+  private async resolveImportWarehouseId(user: AuthUser, clientId: string) {
+    const activeWarehouseId = user.activeWarehouseId?.trim() || null;
+    const isSystemAdmin = user.permissionCodes.includes('system:admin');
+    const isClient = user.roleCodes.includes('CLIENT');
+
+    if (
+      activeWarehouseId &&
+      !isSystemAdmin &&
+      !isClient &&
+      !(user.writableWarehouseIds ?? []).includes(activeWarehouseId)
+    ) {
+      throw new ForbiddenException('Активный филиал недоступен сотруднику для импорта остатков.');
+    }
+    if (!activeWarehouseId && !isSystemAdmin && !isClient) {
+      throw new BadRequestException('Перед импортом выберите активный филиал.');
+    }
+
+    const links = await this.prisma.warehouseClient.findMany({
+      where: {
+        clientId,
+        status: 'ACTIVE',
+        warehouse: { isActive: true },
+        ...(activeWarehouseId ? { warehouseId: activeWarehouseId } : {}),
+      },
+      select: { warehouseId: true },
+      orderBy: { createdAt: 'asc' },
+      take: activeWarehouseId ? 1 : 2,
+    });
+
+    if (activeWarehouseId) {
+      if (links.length !== 1) {
+        throw new ForbiddenException('Клиент не подключен к активному филиалу. Импорт остановлен.');
+      }
+      return activeWarehouseId;
+    }
+    if (links.length === 1) {
+      return links[0].warehouseId;
+    }
+    if (links.length === 0) {
+      throw new BadRequestException('Клиент не подключен ни к одному активному филиалу.');
+    }
+    throw new BadRequestException(
+      'Клиент работает в нескольких филиалах. Перед импортом выберите филиал явно.',
+    );
   }
 
   private async duplicateKizIssues(items: ReceiptImportItem[]) {

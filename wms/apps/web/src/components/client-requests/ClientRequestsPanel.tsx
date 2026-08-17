@@ -1,7 +1,8 @@
-import { AlertTriangle, Archive, ArrowLeft, ArrowRightLeft, Boxes, ClipboardList, FileDown, FileUp, RefreshCw, Search, ShieldAlert, Truck, X } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { AlertTriangle, Archive, ArrowLeft, ArrowRightLeft, Boxes, CheckCircle2, ClipboardList, FileDown, FileUp, RefreshCw, RotateCcw, Search, ShieldAlert, Truck, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   cancelClientRequest,
+  checkFbsRequestSupplyConsistency,
   downloadClientRequestFile,
   downloadClientRequestItemsXlsx,
   downloadClientRequestFbsBoxSearchXlsx,
@@ -19,16 +20,28 @@ import {
   fetchClientRequestBoxOverlaps,
   fetchClientRequests,
   fetchClients,
+  fetchFbsOrders,
   fetchPickInstruction,
   fetchPendingPickWaveBalanceReviews,
   fetchTsdAssemblyPlan,
+  mergeFbsRequestTails,
+  markTsdFbsAssemblyPackedWithoutSource,
   moveFbsOrdersToNewSupply,
+  previewFbsRequestTails,
   packageClientRequest,
   pickClientRequest,
   refreshPickInstruction as refreshPickInstructionDocument,
+  repairFbsRequestSelection as repairFbsRequestSelectionRequest,
+  repairFbsRequestSupplyConsistency,
+  resolveTsdFbsKizConflict,
+  resolveTsdFbsSyncConflict,
+  resetTsdFbsAssemblyOrder,
+  resolveFbsSynchronization,
+  restoreTsdFbsRescanFromWildberries,
   rollbackEmergencyCloseClientRequest,
   saveClientRequestManualBoxSelection,
   shipClientRequest,
+  syncClientRequestToTsd,
   updateClientRequestStatus,
   uploadManualPickInstruction,
   type AuthSession,
@@ -40,8 +53,12 @@ import {
   type ClientRequestFileSummary,
   type ClientRequestStatus,
   type ClientRequestSummary,
+  type ClientFbsOrders,
   type ClientSummary,
   type EmergencyPackedXlsxResult,
+  type FbsSyncConflictResolutionAction,
+  type FbsRequestSupplyConsistency,
+  type MergeFbsRequestTailsPreview,
   type PickInstructionDocument,
   type PickWaveBalanceReview,
   type TsdAssemblyPlan,
@@ -56,6 +73,7 @@ import { HtmlDocumentPreview } from '../documents/HtmlDocumentPreview';
 import { requestStatusLabel } from './clientRequestMeta';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import { PickWaveBalanceReviewPanel } from './PickWaveBalanceReviewPanel';
+import { useRememberedClientId } from '../../lib/rememberedClient';
 
 type LoadState<T> = {
   status: 'idle' | 'loading' | 'ready' | 'error';
@@ -65,7 +83,11 @@ type LoadState<T> = {
 
 type ClientRequestsPanelProps = {
   session: AuthSession;
+  onOpenFbsOrders?: (request: ClientRequestSummary) => void;
 };
+
+type RequestSortField = 'number' | 'createdAt' | 'quantity';
+type RequestSortDirection = 'asc' | 'desc';
 
 type ManualCloseState = {
   request: ClientRequestSummary;
@@ -85,6 +107,23 @@ type ManualBoxSelectionState = {
   error?: string;
 };
 
+type CloseStockSourceValue = {
+  boxQuantities: Record<string, string>;
+  noBoxQuantity: string;
+  manualBoxCode: string;
+  manualBoxQuantity: string;
+};
+
+type CloseStockRecoveryState = {
+  close: ManualCloseState;
+  status: 'loading' | 'ready' | 'submitting';
+  data: ClientRequestManualBoxSelection | null;
+  values: Record<string, CloseStockSourceValue>;
+  touchedItemIds: string[];
+  originalError: string;
+  error?: string;
+};
+
 type FbsBoxSearchState = {
   request: ClientRequestSummary;
   status: 'loading' | 'ready';
@@ -92,7 +131,42 @@ type FbsBoxSearchState = {
   error?: string;
 };
 
-export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
+type FbsTailMergePreviewState = {
+  requestIds: string[];
+  data: MergeFbsRequestTailsPreview;
+  error?: string;
+};
+
+type FbsSupplyConsistencyState = {
+  request: ClientRequestSummary;
+  status: 'loading' | 'ready' | 'repairing';
+  data: FbsRequestSupplyConsistency | null;
+  error?: string;
+};
+
+type FbsSynchronizationAuditIssue = {
+  requestId: string;
+  requestNumber: number;
+  requestTitle: string;
+  clientName: string;
+  marketplaceNames: string[];
+  wmsStatus: ClientRequestStatus;
+  activeOrders: number;
+  shippedOrders: number;
+  deliveredOrders: number;
+  cancelledOrders: number;
+  kind: 'WMS_OPEN_MARKETPLACE_FINISHED' | 'WMS_CLOSED_MARKETPLACE_ACTIVE';
+};
+
+type FbsSynchronizationAudit = {
+  checkedAt: string;
+  clients: number;
+  orders: number;
+  issues: FbsSynchronizationAuditIssue[];
+  failures: string[];
+};
+
+export function ClientRequestsPanel({ session, onOpenFbsOrders }: ClientRequestsPanelProps) {
   const canRead = canUse(session.user, 'client-requests:read');
   const canWrite = canUse(session.user, 'client-requests:write');
   const canChangeStatus = canUse(session.user, 'client-requests:status');
@@ -114,6 +188,9 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
   const [documentPreview, setDocumentPreview] = useState<ClientRequestDocument | null>(null);
   const [pickInstructionPreview, setPickInstructionPreview] = useState<PickInstructionDocument | null>(null);
   const [refreshingInstructionId, setRefreshingInstructionId] = useState<string | null>(null);
+  const [syncingTsdRequestId, setSyncingTsdRequestId] = useState<string | null>(null);
+  const [checkingSupplyRequestId, setCheckingSupplyRequestId] = useState<string | null>(null);
+  const [fbsSupplyConsistency, setFbsSupplyConsistency] = useState<FbsSupplyConsistencyState | null>(null);
   const [editingRequest, setEditingRequest] = useState<ClientRequestSummary | null>(null);
   const [onlinePreview, setOnlinePreview] = useState<{ request: ClientRequestSummary; plan: TsdAssemblyPlan | null; status: 'loading' | 'ready' | 'error'; error?: string } | null>(null);
   const [onlineFbsMove, setOnlineFbsMove] = useState<{
@@ -121,6 +198,16 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     message?: string;
     error?: string;
   }>({ orderId: null });
+  const [onlineKizResolution, setOnlineKizResolution] = useState<{
+    assemblyId: string | null;
+    message?: string;
+    error?: string;
+  }>({ assemblyId: null });
+  const [onlineFbsSyncResolution, setOnlineFbsSyncResolution] = useState<{
+    assemblyId: string | null;
+    message?: string;
+    error?: string;
+  }>({ assemblyId: null });
   const [emergencyUpload, setEmergencyUpload] = useState<{
     request: ClientRequestSummary;
     file: File | null;
@@ -139,19 +226,119 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
   } | null>(null);
   const [manualClose, setManualClose] = useState<ManualCloseState | null>(null);
   const [manualBoxSelection, setManualBoxSelection] = useState<ManualBoxSelectionState | null>(null);
+  const [closeStockRecovery, setCloseStockRecovery] = useState<CloseStockRecoveryState | null>(null);
   const [fbsBoxSearch, setFbsBoxSearch] = useState<FbsBoxSearchState | null>(null);
   const [showArchive, setShowArchive] = useState(false);
+  const [requestSortField, setRequestSortField] = useState<RequestSortField>(() =>
+    (window.localStorage.getItem(`wms-request-sort-field:${session.user.id}`) as RequestSortField | null) ?? 'number',
+  );
+  const [requestSortDirection, setRequestSortDirection] = useState<RequestSortDirection>(() =>
+    (window.localStorage.getItem(`wms-request-sort-direction:${session.user.id}`) as RequestSortDirection | null) ?? 'desc',
+  );
   const [archiveBoxSearch, setArchiveBoxSearch] = useState('');
   const [appliedArchiveBoxSearch, setAppliedArchiveBoxSearch] = useState('');
+  const [fbsTailClientId, setFbsTailClientId] = useRememberedClientId(session.user.id);
+  const [selectedFbsTailRequestIds, setSelectedFbsTailRequestIds] = useState<
+    Set<string>
+  >(() => new Set());
+  const [isPreviewingFbsTails, setPreviewingFbsTails] = useState(false);
+  const [fbsTailMergePreview, setFbsTailMergePreview] =
+    useState<FbsTailMergePreviewState | null>(null);
+  const [isMergingFbsTails, setMergingFbsTails] = useState(false);
+  const [fbsSynchronizationAudit, setFbsSynchronizationAudit] =
+    useState<FbsSynchronizationAudit | null>(null);
+  const [isRunningFbsSynchronizationAudit, setRunningFbsSynchronizationAudit] = useState(false);
+  const [resolvingFbsSynchronizationRequestId, setResolvingFbsSynchronizationRequestId] = useState<string | null>(null);
 
   const visibleClients = useMemo(() => clients.data, [clients.data]);
   const displayedRequests = useMemo(
     () => ({
       ...requests,
-      data: requests.data.filter((request) => (showArchive ? request.status === 'DONE' : request.status !== 'DONE')),
+      data: requests.data
+        .filter((request) => {
+          const isArchived = request.status === 'DONE' || request.status === 'CANCELLED';
+          return showArchive ? isArchived : !isArchived;
+        })
+        .sort((left, right) => {
+          const leftValue = requestSortField === 'number'
+            ? left.number
+            : requestSortField === 'createdAt'
+              ? new Date(left.createdAt).getTime()
+              : left.items.reduce((sum, item) => sum + item.quantity, 0);
+          const rightValue = requestSortField === 'number'
+            ? right.number
+            : requestSortField === 'createdAt'
+              ? new Date(right.createdAt).getTime()
+              : right.items.reduce((sum, item) => sum + item.quantity, 0);
+          const difference = leftValue - rightValue;
+          return requestSortDirection === 'asc' ? difference : -difference;
+        }),
     }),
-    [requests, showArchive],
+    [requests, requestSortDirection, requestSortField, showArchive],
   );
+  const fbsTailEligibleRequests = useMemo(
+    () =>
+      displayedRequests.data.filter((request) =>
+        canMergeFbsRequestTail(request),
+      ),
+    [displayedRequests.data],
+  );
+  const fbsTailClients = useMemo(
+    () => [
+      ...new Map(
+        fbsTailEligibleRequests.map((request) => [
+          request.clientId,
+          request.client,
+        ]),
+      ).values(),
+    ],
+    [fbsTailEligibleRequests],
+  );
+  const selectableFbsTailRequestIds = useMemo(
+    () =>
+      new Set(
+        fbsTailEligibleRequests
+          .filter((request) => request.clientId === fbsTailClientId)
+          .map((request) => request.id),
+      ),
+    [fbsTailClientId, fbsTailEligibleRequests],
+  );
+  const selectedFbsTailRequests = useMemo(
+    () =>
+      fbsTailEligibleRequests.filter((request) =>
+        selectedFbsTailRequestIds.has(request.id),
+      ),
+    [fbsTailEligibleRequests, selectedFbsTailRequestIds],
+  );
+  const fbsAuditClientIds = useMemo(
+    () =>
+      [...new Set(
+        requests.data
+          .filter((request) => (request._count?.fbsOrderLinks ?? 0) > 0)
+          .map((request) => request.clientId),
+      )],
+    [requests.data],
+  );
+
+  useEffect(() => {
+    setFbsTailClientId((current) => {
+      if (fbsTailClients.some((client) => client.id === current)) {
+        return current;
+      }
+      return fbsTailClients.length === 1 ? fbsTailClients[0]!.id : '';
+    });
+  }, [fbsTailClients]);
+
+  useEffect(() => {
+    setSelectedFbsTailRequestIds((current) => {
+      const next = new Set(
+        [...current].filter((requestId) =>
+          selectableFbsTailRequestIds.has(requestId),
+        ),
+      );
+      return next.size === current.size ? current : next;
+    });
+  }, [selectableFbsTailRequestIds]);
 
   useEffect(() => {
     if (canRead) {
@@ -166,7 +353,16 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     }
 
     let cancelled = false;
+    let refreshInProgress = false;
     const refresh = async () => {
+      if (
+        cancelled ||
+        refreshInProgress ||
+        document.visibilityState !== 'visible'
+      ) {
+        return;
+      }
+      refreshInProgress = true;
       try {
         const plan = await fetchTsdAssemblyPlan(session.accessToken, requestId);
         if (!cancelled) {
@@ -180,12 +376,14 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
             current?.request.id === requestId ? { ...current, status: 'error', error: errorMessage(caught) } : current,
           );
         }
+      } finally {
+        refreshInProgress = false;
       }
     };
 
     const timer = window.setInterval(() => {
       void refresh();
-    }, 1500);
+    }, 5000);
 
     return () => {
       cancelled = true;
@@ -232,6 +430,69 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
       setRequests((current) => ({ ...current, status: 'error', error: message }));
       setClients((current) => ({ ...current, status: 'error', error: message }));
       setBalanceReviews((current) => ({ ...current, status: 'error', error: message }));
+    }
+  }
+
+  async function runFbsSynchronizationAudit() {
+    if (isRunningFbsSynchronizationAudit) return;
+    setRunningFbsSynchronizationAudit(true);
+    setError(null);
+    setActionMessage(null);
+    try {
+      const results = await Promise.allSettled(
+        fbsAuditClientIds.map((clientId) => fetchFbsOrders(session.accessToken, clientId, true)),
+      );
+      const responses: ClientFbsOrders[] = [];
+      const failures: string[] = [];
+      results.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+          responses.push(result.value);
+        } else {
+          const client = visibleClients.find((item) => item.id === fbsAuditClientIds[index]);
+          failures.push(`${client?.name ?? 'Клиент'}: ${errorMessage(result.reason)}`);
+        }
+      });
+      setFbsSynchronizationAudit(buildFbsSynchronizationAudit(responses, failures));
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setRunningFbsSynchronizationAudit(false);
+    }
+  }
+
+  async function resolveFbsSynchronizationIssue(
+    issue: FbsSynchronizationAuditIssue,
+    action: 'RETURN_TO_WORK' | 'CONFIRM_DELIVERED',
+  ) {
+    if (resolvingFbsSynchronizationRequestId) return;
+    const actionLabel = action === 'CONFIRM_DELIVERED' ? 'подтвердить сдачу' : 'вернуть в работу';
+    const confirmation = window.prompt(
+      `Для действия «${actionLabel}» введите номер заявки ${issue.requestNumber}. Остатки повторно не изменятся.`,
+      '',
+    );
+    if (confirmation?.trim() !== String(issue.requestNumber)) {
+      setActionMessage('Действие отменено: номер заявки не подтверждён.');
+      return;
+    }
+    setResolvingFbsSynchronizationRequestId(issue.requestId);
+    setError(null);
+    try {
+      const result = await resolveFbsSynchronization(
+        session.accessToken,
+        issue.requestId,
+        action,
+        issue.requestNumber,
+      );
+      setRequests((current) => ({
+        ...current,
+        data: current.data.map((request) => request.id === result.request.id ? result.request : request),
+      }));
+      setActionMessage(result.message);
+      await runFbsSynchronizationAudit();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setResolvingFbsSynchronizationRequestId(null);
     }
   }
 
@@ -476,28 +737,262 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     setError(null);
 
     try {
-      if (manualClose.usesRecordedPackages) {
-        await shipClientRequest(session.accessToken, {
-          requestId: manualClose.request.id,
-          idempotencyKey: `web-ship:${manualClose.request.id}`,
-          comment: manualClose.comment.trim(),
-        });
-      } else {
-        await updateClientRequestStatus(session.accessToken, manualClose.request.id, {
-          status: 'DONE',
-          managerComment: manualClose.comment.trim(),
-          boxes: boxes!,
-          pallets: pallets!,
-          packedUnits: packedUnits!,
-        });
-      }
+      await updateClientRequestStatus(session.accessToken, manualClose.request.id, {
+        status: 'DONE',
+        managerComment: manualClose.comment.trim(),
+        boxes: boxes!,
+        pallets: pallets!,
+        packedUnits: packedUnits!,
+      });
 
       setManualClose(null);
       setActionMessage('Отгрузка закрыта. Остатки списаны, начисления за обработку и черновик счета сформированы.');
       await loadData();
     } catch (caught) {
-      setManualClose((current) =>
-        current ? { ...current, status: 'idle', error: errorMessage(caught) } : current,
+      const message = errorMessage(caught);
+      const failedClose: ManualCloseState = {
+        ...manualClose,
+        status: 'idle',
+        error: message,
+      };
+      setManualClose(failedClose);
+      if (isStockSourceResolutionError(message)) {
+        await openCloseStockRecovery(failedClose, message);
+      }
+    }
+  }
+
+  async function openCloseStockRecovery(
+    closeOverride?: ManualCloseState,
+    errorOverride?: string,
+  ) {
+    const close = closeOverride ?? manualClose;
+    if (!close) return;
+    const originalError =
+      errorOverride ??
+      close.error ??
+      'Штатное закрытие заявки не выполнено.';
+    setCloseStockRecovery({
+      close,
+      status: 'loading',
+      data: null,
+      values: {},
+      touchedItemIds: [],
+      originalError,
+    });
+
+    try {
+      const data = await fetchClientRequestManualBoxSelection(
+        session.accessToken,
+        close.request.id,
+      );
+      const values = Object.fromEntries(
+        data.items.map((item) => [
+          item.requestItemId,
+          {
+            boxQuantities: Object.fromEntries(
+              item.boxes.map((box) => [
+                box.boxCode,
+                box.selectedQuantity > 0 ? String(box.selectedQuantity) : '',
+              ]),
+            ),
+            noBoxQuantity: '',
+            manualBoxCode: '',
+            manualBoxQuantity: '',
+          } satisfies CloseStockSourceValue,
+        ]),
+      );
+      setCloseStockRecovery({
+        close,
+        status: 'ready',
+        data,
+        values,
+        touchedItemIds: [],
+        originalError,
+      });
+    } catch (caught) {
+      setCloseStockRecovery((current) =>
+        current
+          ? { ...current, status: 'ready', error: errorMessage(caught) }
+          : current,
+      );
+    }
+  }
+
+  function changeCloseStockSource(
+    requestItemId: string,
+    patch: (value: CloseStockSourceValue) => CloseStockSourceValue,
+  ) {
+    setCloseStockRecovery((current) => {
+      if (!current || current.status !== 'ready') return current;
+      const value = current.values[requestItemId];
+      if (!value) return current;
+      return {
+        ...current,
+        error: undefined,
+        touchedItemIds: current.touchedItemIds.includes(requestItemId)
+          ? current.touchedItemIds
+          : [...current.touchedItemIds, requestItemId],
+        values: {
+          ...current.values,
+          [requestItemId]: patch(value),
+        },
+      };
+    });
+  }
+
+  function chooseCloseStockWithoutBox(requestItemId: string, requestedQuantity: number) {
+    changeCloseStockSource(requestItemId, (value) => ({
+      ...value,
+      boxQuantities: Object.fromEntries(
+        Object.keys(value.boxQuantities).map((boxCode) => [boxCode, '']),
+      ),
+      manualBoxCode: '',
+      manualBoxQuantity: '',
+      noBoxQuantity: String(requestedQuantity),
+    }));
+  }
+
+  async function submitCloseStockRecovery() {
+    if (!closeStockRecovery?.data || closeStockRecovery.status !== 'ready') return;
+    if (closeStockRecovery.touchedItemIds.length === 0) {
+      setCloseStockRecovery((current) =>
+        current
+          ? { ...current, error: 'Выберите проблемный товар и укажите его фактический источник.' }
+          : current,
+      );
+      return;
+    }
+    const unresolvedFbsItems = closeStockRecovery.data.items.filter(
+      (item) =>
+        item.fbsOrders.some(
+          (order) => order.assemblyStatus !== 'COMPLETED' || order.sourceBoxPending,
+        ) &&
+        !closeStockRecovery.touchedItemIds.includes(item.requestItemId),
+    );
+    if (unresolvedFbsItems.length > 0) {
+      const orderIds = unresolvedFbsItems.flatMap((item) =>
+        item.fbsOrders
+          .filter(
+            (order) => order.assemblyStatus !== 'COMPLETED' || order.sourceBoxPending,
+          )
+          .map((order) => order.orderId),
+      );
+      setCloseStockRecovery((current) =>
+        current
+          ? {
+              ...current,
+              error:
+                `Подтвердите фактический источник для незавершённых FBS-заказов: ` +
+                `№${orderIds.join(', №')}.`,
+            }
+          : current,
+      );
+      return;
+    }
+
+    const stockSources: Array<{
+      requestItemId: string;
+      boxCode?: string;
+      noBox?: boolean;
+      quantity: number;
+    }> = [];
+    for (const requestItemId of closeStockRecovery.touchedItemIds) {
+      const item = closeStockRecovery.data.items.find(
+        (candidate) => candidate.requestItemId === requestItemId,
+      );
+      const value = closeStockRecovery.values[requestItemId];
+      if (!item || !value) continue;
+
+      const sources = new Map<string, { boxCode?: string; noBox?: boolean; quantity: number }>();
+      for (const [boxCode, rawQuantity] of Object.entries(value.boxQuantities)) {
+        const quantity = parseNonNegativeInteger(rawQuantity || '0') ?? 0;
+        if (quantity <= 0) continue;
+        sources.set(`BOX:${boxCode.toLocaleUpperCase('ru-RU')}`, { boxCode, quantity });
+      }
+      const manualBoxCode = value.manualBoxCode.trim();
+      const manualQuantity = parseNonNegativeInteger(value.manualBoxQuantity || '0') ?? 0;
+      if (manualQuantity > 0) {
+        if (!manualBoxCode) {
+          setCloseStockRecovery((current) =>
+            current ? { ...current, error: 'Введите номер фактического короба.' } : current,
+          );
+          return;
+        }
+        const key = `BOX:${manualBoxCode.toLocaleUpperCase('ru-RU')}`;
+        const existing = sources.get(key);
+        sources.set(key, {
+          boxCode: existing?.boxCode ?? manualBoxCode,
+          quantity: (existing?.quantity ?? 0) + manualQuantity,
+        });
+      }
+      const noBoxQuantity = parseNonNegativeInteger(value.noBoxQuantity || '0') ?? 0;
+      if (noBoxQuantity > 0) {
+        sources.set('NO_BOX', { noBox: true, quantity: noBoxQuantity });
+      }
+      const confirmedQuantity = [...sources.values()].reduce(
+        (sum, source) => sum + source.quantity,
+        0,
+      );
+      if (confirmedQuantity !== item.requestedQuantity) {
+        const label =
+          item.sku?.name ??
+          item.sku?.internalSku ??
+          item.requestedName ??
+          item.requestedBarcode ??
+          'товара';
+        setCloseStockRecovery((current) =>
+          current
+            ? {
+                ...current,
+                error:
+                  `Для «${label}» укажите источник всех ${item.requestedQuantity} шт. ` +
+                  `Сейчас указано ${confirmedQuantity} шт.`,
+              }
+            : current,
+        );
+        return;
+      }
+      for (const source of sources.values()) {
+        stockSources.push({ requestItemId, ...source });
+      }
+    }
+
+    const close = closeStockRecovery.close;
+    const boxes = parseNonNegativeInteger(close.boxes);
+    const pallets = parseNonNegativeInteger(close.pallets);
+    const packedUnits = parseNonNegativeInteger(close.packedUnits);
+    if (boxes == null || pallets == null || packedUnits == null) {
+      setCloseStockRecovery((current) =>
+        current ? { ...current, error: 'Параметры закрытия заявки изменились. Откройте закрытие повторно.' } : current,
+      );
+      return;
+    }
+
+    setCloseStockRecovery((current) =>
+      current ? { ...current, status: 'submitting', error: undefined } : current,
+    );
+    try {
+      await updateClientRequestStatus(session.accessToken, close.request.id, {
+        status: 'DONE',
+        managerComment:
+          `${close.comment.trim()} Фактический источник проблемного товара подтверждён менеджером.`,
+        boxes,
+        pallets,
+        packedUnits,
+        stockSources,
+      });
+      setCloseStockRecovery(null);
+      setManualClose(null);
+      setActionMessage(
+        'Заявка закрыта по подтверждённому факту. Источник товара и корректировка остатков записаны в движениях.',
+      );
+      await loadData();
+    } catch (caught) {
+      setCloseStockRecovery((current) =>
+        current
+          ? { ...current, status: 'ready', error: errorMessage(caught) }
+          : current,
       );
     }
   }
@@ -505,6 +1000,8 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
   async function openOnlineExecution(request: ClientRequestSummary) {
     setOnlinePreview({ request, plan: null, status: 'loading' });
     setOnlineFbsMove({ orderId: null });
+    setOnlineKizResolution({ assemblyId: null });
+    setOnlineFbsSyncResolution({ assemblyId: null });
     setError(null);
 
     try {
@@ -512,6 +1009,178 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
       setOnlinePreview({ request, plan, status: 'ready' });
     } catch (caught) {
       setOnlinePreview({ request, plan: null, status: 'error', error: errorMessage(caught) });
+    }
+  }
+
+  async function resolveOnlineFbsKiz(
+    request: ClientRequestSummary,
+    assemblyId: string,
+  ) {
+    setOnlineKizResolution({ assemblyId });
+    try {
+      const result = await resolveTsdFbsKizConflict(
+        session.accessToken,
+        request.id,
+        assemblyId,
+      );
+      const plan = await fetchTsdAssemblyPlan(session.accessToken, request.id);
+      setOnlinePreview((current) =>
+        current?.request.id === request.id
+          ? { ...current, plan, status: 'ready', error: undefined }
+          : current,
+      );
+      setOnlineKizResolution({
+        assemblyId: null,
+        ...(result.resolved
+          ? { message: result.message }
+          : { error: result.message }),
+      });
+    } catch (caught) {
+      setOnlineKizResolution({
+        assemblyId: null,
+        error: errorMessage(caught),
+      });
+    }
+  }
+
+  async function restoreOnlineFbsRescanFromWb(
+    request: ClientRequestSummary,
+    assemblyId: string,
+  ) {
+    setOnlineKizResolution({ assemblyId });
+    try {
+      const result = await restoreTsdFbsRescanFromWildberries(
+        session.accessToken,
+        request.id,
+        assemblyId,
+      );
+      const plan = await fetchTsdAssemblyPlan(session.accessToken, request.id);
+      setOnlinePreview((current) =>
+        current?.request.id === request.id
+          ? { ...current, plan, status: 'ready', error: undefined }
+          : current,
+      );
+      setOnlineKizResolution({ assemblyId: null, message: result.message });
+      await loadData();
+    } catch (caught) {
+      setOnlineKizResolution({ assemblyId: null, error: errorMessage(caught) });
+    }
+  }
+
+  async function resolveOnlineFbsSyncConflict(
+    request: ClientRequestSummary,
+    assemblyId: string,
+    action: FbsSyncConflictResolutionAction,
+  ) {
+    let comment: string | undefined;
+    if (action === 'RETURN_TO_STOCK') {
+      const confirmed = window.confirm(
+        'Подтвердите, что товар физически возвращён в указанный короб или в хранение без коробов. Резерв FBS и отсканированные данные будут сняты.',
+      );
+      if (!confirmed) return;
+    } else {
+      const managerComment = window.prompt(
+        'Опишите решение менеджера. После подтверждения конфликт будет закрыт, а прежний резерв FBS снят:',
+        '',
+      );
+      if (managerComment === null) return;
+      comment = managerComment.trim();
+      if (!comment) {
+        setOnlineFbsSyncResolution({
+          assemblyId: null,
+          error: 'Для подтверждения решения менеджера нужен комментарий.',
+        });
+        return;
+      }
+    }
+
+    setOnlineFbsSyncResolution({ assemblyId });
+    try {
+      const result = await resolveTsdFbsSyncConflict(
+        session.accessToken,
+        request.id,
+        assemblyId,
+        { action, comment },
+      );
+      const plan = await fetchTsdAssemblyPlan(session.accessToken, request.id);
+      setOnlinePreview((current) =>
+        current?.request.id === request.id
+          ? { ...current, plan, status: 'ready', error: undefined }
+          : current,
+      );
+      setOnlineFbsSyncResolution({ assemblyId: null, message: result.message });
+      await loadData();
+    } catch (caught) {
+      setOnlineFbsSyncResolution({
+        assemblyId: null,
+        error: errorMessage(caught),
+      });
+    }
+  }
+
+  async function resetOnlineFbsAssemblyOrder(
+    request: ClientRequestSummary,
+    assemblyId: string,
+    orderId: string,
+  ) {
+    const confirmed = window.confirm(
+      `Сбросить сборку заказа №${orderId}?\n\nWMS снимет резерв и очистит только ШК товара, КИЗ, короб и наклейку этого заказа. Сам заказ на Wildberries не отменяется. Перед сбросом верните товар в исходный короб.`,
+    );
+    if (!confirmed) return;
+
+    setOnlineFbsSyncResolution({ assemblyId });
+    try {
+      const result = await resetTsdFbsAssemblyOrder(
+        session.accessToken,
+        request.id,
+        assemblyId,
+      );
+      const plan = await fetchTsdAssemblyPlan(session.accessToken, request.id);
+      setOnlinePreview((current) =>
+        current?.request.id === request.id
+          ? { ...current, plan, status: 'ready', error: undefined }
+          : current,
+      );
+      setOnlineFbsSyncResolution({ assemblyId: null, message: result.message });
+      await loadData();
+    } catch (caught) {
+      setOnlineFbsSyncResolution({
+        assemblyId: null,
+        error: errorMessage(caught),
+      });
+    }
+  }
+
+  async function markOnlineFbsOrderPackedWithoutSource(
+    request: ClientRequestSummary,
+    assemblyId: string,
+    orderId: string,
+  ) {
+    const confirmed = window.confirm(
+      `Отметить заказ №${orderId} как «Вложен без короба»?\n\nЗаказ будет засчитан в сборке. При закрытии заявки WMS обязательно попросит указать фактический короб, откуда был взят товар. Для маркируемого товара КИЗ должен быть уже подтверждён Wildberries.`,
+    );
+    if (!confirmed) return;
+
+    setOnlineFbsSyncResolution({ assemblyId });
+    try {
+      const result = await markTsdFbsAssemblyPackedWithoutSource(
+        session.accessToken,
+        request.id,
+        assemblyId,
+      );
+      const plan = await fetchTsdAssemblyPlan(session.accessToken, request.id);
+      setOnlinePreview((current) =>
+        current?.request.id === request.id
+          ? { ...current, plan, status: 'ready', error: undefined }
+          : current,
+      );
+      setOnlineFbsSyncResolution({ assemblyId: null, message: result.message });
+      await loadData();
+    } catch (caught) {
+      setOnlineFbsSyncResolution({
+        assemblyId: null,
+        error: errorMessage(caught),
+      });
     }
   }
 
@@ -555,14 +1224,10 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
       selectedOrders.map((order) => [`${order.connectionId}:${order.id}`, order]),
     ).values()];
     if (orders.length === 0) return;
-    const orderDescription = orders.length === 1
-      ? `несобранный заказ №${orders[0]!.id}`
-      : `${orders.length} выбранных несобранных заказов`;
-    if (!window.confirm(
-      `Перенести ${orderDescription} в новую поставку WB?\n\n` +
-      'Для них будет создана отдельная заявка WMS, а текущая заявка пересчитается автоматически.',
-    )) return;
-
+    // The action button itself is the explicit confirmation.  Native browser
+    // dialogs are easily dismissed on a TSD/touch screen and, in that case,
+    // the request never reaches the API at all.  The server still performs
+    // the final live WB/status/physical-assembly validation before moving.
     setOnlineFbsMove({ orderId: orders.length === 1 ? orders[0]!.id : '__bulk__' });
     try {
       const result = await moveFbsOrdersToNewSupply(session.accessToken, {
@@ -600,6 +1265,73 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     return moveOnlineFbsOrders(request, [order]);
   }
 
+  async function openFbsRequestTailsPreview() {
+    if (
+      selectedFbsTailRequests.length === 0 ||
+      isPreviewingFbsTails ||
+      isMergingFbsTails
+    ) {
+      return;
+    }
+
+    const requestIds = selectedFbsTailRequests.map((request) => request.id);
+    setPreviewingFbsTails(true);
+    setError(null);
+    setActionMessage(null);
+    try {
+      const data = await previewFbsRequestTails(
+        session.accessToken,
+        requestIds,
+      );
+      setFbsTailMergePreview({ requestIds, data });
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setPreviewingFbsTails(false);
+    }
+  }
+
+  async function confirmFbsRequestTailsMerge() {
+    if (!fbsTailMergePreview || isMergingFbsTails) {
+      return;
+    }
+    setMergingFbsTails(true);
+    setError(null);
+    setActionMessage(null);
+    setFbsTailMergePreview((current) =>
+      current ? { ...current, error: undefined } : current,
+    );
+    try {
+      const result = await mergeFbsRequestTails(
+        session.accessToken,
+        fbsTailMergePreview.requestIds,
+        fbsTailMergePreview.data.orders.map((order) => ({
+          connectionId: order.connectionId,
+          id: order.id,
+        })),
+      );
+      setFbsTailMergePreview(null);
+      setSelectedFbsTailRequestIds(new Set());
+      setActionMessage(
+        `Создана заявка №${String(result.targetRequest.number).padStart(6, '0')}: ` +
+          `${result.moved} необработанных заказов из ${result.selectedRequestCount} заявок. ` +
+          `Новая поставка WB: ${result.targetSupply.id}.` +
+          (result.skipped > 0
+            ? ` Пропущено заказов: ${result.skipped} (${result.skippedOrders
+                .map((order) => `№${order.id}`)
+                .join(', ')}).`
+            : ''),
+      );
+      await loadData();
+    } catch (caught) {
+      setFbsTailMergePreview((current) =>
+        current ? { ...current, error: errorMessage(caught) } : current,
+      );
+    } finally {
+      setMergingFbsTails(false);
+    }
+  }
+
   async function downloadRequestItems(request: ClientRequestSummary) {
     setError(null);
 
@@ -633,11 +1365,19 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
 
   async function refreshPickInstruction(request: ClientRequestSummary) {
     setError(null);
+    setActionMessage(null);
     setRefreshingInstructionId(request.id);
 
     try {
+      const repair = isFbsRequest(request)
+        ? await repairFbsRequestSelectionRequest(session.accessToken, request.id)
+        : null;
       const document = await refreshPickInstructionDocument(session.accessToken, request.id);
       setPickInstructionPreview(document);
+      setActionMessage(
+        repair?.message
+          ?? `Заявка №${String(request.number).padStart(6, '0')} принудительно пересчитана по текущим остаткам. Архивные короба исключены, история сборки сохранена.`,
+      );
 
       if (onlinePreview?.request.id === request.id) {
         const plan = await fetchTsdAssemblyPlan(session.accessToken, request.id);
@@ -647,6 +1387,71 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
       setError(errorMessage(caught));
     } finally {
       setRefreshingInstructionId((current) => (current === request.id ? null : current));
+    }
+  }
+
+  async function openFbsSupplyConsistency(request: ClientRequestSummary) {
+    setError(null);
+    setCheckingSupplyRequestId(request.id);
+    setFbsSupplyConsistency({ request, status: 'loading', data: null });
+    try {
+      const data = await checkFbsRequestSupplyConsistency(session.accessToken, request.id);
+      setFbsSupplyConsistency((current) =>
+        current?.request.id === request.id
+          ? { request, status: 'ready', data }
+          : current,
+      );
+    } catch (caught) {
+      setFbsSupplyConsistency((current) =>
+        current?.request.id === request.id
+          ? { request, status: 'ready', data: null, error: errorMessage(caught) }
+          : current,
+      );
+    } finally {
+      setCheckingSupplyRequestId((current) => (current === request.id ? null : current));
+    }
+  }
+
+  async function repairFbsSupplyConsistency() {
+    const current = fbsSupplyConsistency;
+    if (!current || current.status === 'repairing') return;
+    setFbsSupplyConsistency({ ...current, status: 'repairing', error: undefined });
+    try {
+      const data = await repairFbsRequestSupplyConsistency(
+        session.accessToken,
+        current.request.id,
+      );
+      setFbsSupplyConsistency({
+        request: current.request,
+        status: 'ready',
+        data,
+      });
+      setActionMessage(data.message);
+      await loadData();
+    } catch (caught) {
+      setFbsSupplyConsistency({
+        ...current,
+        status: 'ready',
+        error: errorMessage(caught),
+      });
+    }
+  }
+
+  async function syncRequestToTsd(request: ClientRequestSummary) {
+    setError(null);
+    setActionMessage(null);
+    setSyncingTsdRequestId(request.id);
+
+    try {
+      const result = await syncClientRequestToTsd(session.accessToken, request.id);
+      setActionMessage(
+        result.message
+          ?? `Заявка №${String(request.number).padStart(6, '0')} синхронизирована с ТСД. Обновите очередь на устройстве.`,
+      );
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setSyncingTsdRequestId((current) => (current === request.id ? null : current));
     }
   }
 
@@ -814,6 +1619,29 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           <h2>{showArchive ? 'Архив заявок' : 'Клиентские заявки'}</h2>
         </div>
         <div className="client-requests-panel__heading-actions">
+          {onOpenFbsOrders ? (
+            <button
+              className="client-request-open-fbs-orders"
+              type="button"
+              onClick={() => onOpenFbsOrders(requests.data.find(isFbsRequest) ?? ({} as ClientRequestSummary))}
+              title="Перейти к заказам FBS"
+            >
+              <ArrowRightLeft size={17} aria-hidden="true" />
+              <span>К заказам FBS</span>
+            </button>
+          ) : null}
+          {!showArchive ? (
+            <button
+              className="client-request-fbs-audit-trigger"
+              type="button"
+              onClick={() => void runFbsSynchronizationAudit()}
+              disabled={isRunningFbsSynchronizationAudit || fbsAuditClientIds.length === 0}
+              title="Обновляет статусы FBS из маркетплейсов и показывает расхождения с заявками WMS"
+            >
+              <ShieldAlert className={isRunningFbsSynchronizationAudit ? 'is-spinning' : undefined} size={17} aria-hidden="true" />
+              <span>{isRunningFbsSynchronizationAudit ? 'Проверяю…' : 'Проверить рассинхронизацию FBS'}</span>
+            </button>
+          ) : null}
           <button
             className={`client-request-archive-toggle ${showArchive ? 'is-active' : ''}`}
             type="button"
@@ -833,6 +1661,16 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           </button>
         </div>
       </div>
+
+      {!showArchive && fbsSynchronizationAudit ? (
+        <FbsSynchronizationAuditPanel
+          audit={fbsSynchronizationAudit}
+          canResolve={canChangeStatus}
+          resolvingRequestId={resolvingFbsSynchronizationRequestId}
+          onResolve={resolveFbsSynchronizationIssue}
+          onClose={() => setFbsSynchronizationAudit(null)}
+        />
+      ) : null}
 
       {!showArchive && canViewBoxOverlaps ? <BoxOverlapStatistics state={boxOverlaps} /> : null}
 
@@ -903,9 +1741,105 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
         </form>
       ) : null}
 
+      {!showArchive && canWrite && fbsTailEligibleRequests.length > 0 ? (
+        <section
+          className="client-request-fbs-tails"
+          aria-label="Объединение необработанных FBS-заказов"
+        >
+          <div className="client-request-fbs-tails__copy">
+            <ArrowRightLeft size={20} aria-hidden="true" />
+            <div>
+              <strong>Новая заявка из хвостов FBS</strong>
+              <span>
+                Выберите клиента, отметьте незавершённые заявки в таблице и
+                перенесите их необработанные заказы в одну новую заявку.
+              </span>
+            </div>
+          </div>
+          <div className="client-request-fbs-tails__actions">
+            <label>
+              <span>Клиент</span>
+              <select
+                value={fbsTailClientId}
+                onChange={(event) => {
+                  setFbsTailClientId(event.target.value);
+                  setSelectedFbsTailRequestIds(new Set());
+                  setFbsTailMergePreview(null);
+                }}
+                disabled={isPreviewingFbsTails || isMergingFbsTails}
+              >
+                <option value="">Выберите клиента</option>
+                {fbsTailClients.map((client) => (
+                  <option value={client.id} key={client.id}>
+                    {client.code} · {client.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span className="client-request-fbs-tails__selected">
+              Выбрано заявок: <strong>{selectedFbsTailRequests.length}</strong>
+            </span>
+            <button
+              className="primary-button"
+              type="button"
+              onClick={() => void openFbsRequestTailsPreview()}
+              disabled={
+                selectedFbsTailRequests.length === 0 ||
+                isPreviewingFbsTails ||
+                isMergingFbsTails
+              }
+            >
+              <ClipboardList size={16} aria-hidden="true" />
+              <span>
+                {isPreviewingFbsTails
+                  ? 'Проверяю состав…'
+                  : 'Показать, что будет перенесено'}
+              </span>
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      <div className="client-request-sortbar" aria-label="Сортировка заявок">
+        <span>Сортировка</span>
+        <label>
+          <span className="sr-only">Поле сортировки</span>
+          <select
+            value={requestSortField}
+            onChange={(event) => {
+              const value = event.target.value as RequestSortField;
+              setRequestSortField(value);
+              window.localStorage.setItem(`wms-request-sort-field:${session.user.id}`, value);
+            }}
+          >
+            <option value="number">По номеру</option>
+            <option value="createdAt">По дате создания</option>
+            <option value="quantity">По количеству товаров</option>
+          </select>
+        </label>
+        <label>
+          <span className="sr-only">Направление сортировки</span>
+          <select
+            value={requestSortDirection}
+            onChange={(event) => {
+              const value = event.target.value as RequestSortDirection;
+              setRequestSortDirection(value);
+              window.localStorage.setItem(`wms-request-sort-direction:${session.user.id}`, value);
+            }}
+          >
+            <option value="desc">Сначала большие / новые</option>
+            <option value="asc">Сначала маленькие / старые</option>
+          </select>
+        </label>
+        <strong>{displayedRequests.data.length} заявок</strong>
+      </div>
+
       <div className="client-requests-panel__list">
         {renderRequests(
           displayedRequests,
+          selectableFbsTailRequestIds,
+          selectedFbsTailRequestIds,
+          setSelectedFbsTailRequestIds,
           canChangeStatus,
           canPickOutbound,
           canWrite,
@@ -913,6 +1847,8 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           canPickOutbound && canEditAnyRequest,
           canUploadManualInstruction,
           refreshingInstructionId,
+          syncingTsdRequestId,
+          checkingSupplyRequestId,
           (requestId, status) => void changeStatus(requestId, status),
           (request) => void cancelRequest(request),
           (request) => setEditingRequest(request),
@@ -921,11 +1857,14 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           canDownloadOriginalRequest
             ? (request, file) => void downloadOriginalRequestFile(request, file)
             : undefined,
+          onOpenFbsOrders,
           canPickOutbound ? (request) => void openOnlineExecution(request) : undefined,
           canPickOutbound ? (request) => void openManualBoxSelection(request) : undefined,
           canPickOutbound ? (request) => void openFbsBoxSearch(request) : undefined,
           (request) => void openPickInstruction(request),
           (request) => void refreshPickInstruction(request),
+          canPickOutbound ? (request) => void syncRequestToTsd(request) : undefined,
+          canPickOutbound ? (request) => void openFbsSupplyConsistency(request) : undefined,
           (request) => void downloadPickInstruction(request),
           canPickOutbound ? (request) => void downloadWbProductsTemplate(request) : undefined,
           canPickOutbound ? (request) => void downloadWbPackagesTemplate(request) : undefined,
@@ -939,6 +1878,31 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           (request) => void shipOutboundRequest(request),
         )}
       </div>
+
+      {fbsTailMergePreview ? (
+        <FbsTailMergePreviewModal
+          state={fbsTailMergePreview}
+          isSubmitting={isMergingFbsTails}
+          onConfirm={() => void confirmFbsRequestTailsMerge()}
+          onClose={() => {
+            if (!isMergingFbsTails) {
+              setFbsTailMergePreview(null);
+            }
+          }}
+        />
+      ) : null}
+
+      {fbsSupplyConsistency ? (
+        <FbsSupplyConsistencyModal
+          state={fbsSupplyConsistency}
+          onRepair={() => void repairFbsSupplyConsistency()}
+          onClose={() => {
+            if (fbsSupplyConsistency.status !== 'repairing') {
+              setFbsSupplyConsistency(null);
+            }
+          }}
+        />
+      ) : null}
 
       {documentPreview ? (
         <ClientRequestDocumentPreview document={documentPreview} onClose={() => setDocumentPreview(null)} />
@@ -972,6 +1936,54 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           movingOrderId={onlineFbsMove.orderId}
           moveMessage={onlineFbsMove.message}
           moveError={onlineFbsMove.error}
+          resolvingKizId={onlineKizResolution.assemblyId}
+          kizResolutionMessage={onlineKizResolution.message}
+          kizResolutionError={onlineKizResolution.error}
+          resolvingSyncConflictId={onlineFbsSyncResolution.assemblyId}
+          syncConflictResolutionMessage={onlineFbsSyncResolution.message}
+          syncConflictResolutionError={onlineFbsSyncResolution.error}
+          onResolveKiz={
+            canWrite
+              ? (assemblyId) =>
+                  void resolveOnlineFbsKiz(onlinePreview.request, assemblyId)
+              : undefined
+          }
+          onRestoreRescanKiz={
+            canWrite
+              ? (assemblyId) =>
+                  void restoreOnlineFbsRescanFromWb(onlinePreview.request, assemblyId)
+              : undefined
+          }
+          onResolveSyncConflict={
+            canWrite
+              ? (assemblyId, action) =>
+                  void resolveOnlineFbsSyncConflict(
+                    onlinePreview.request,
+                    assemblyId,
+                    action,
+                  )
+              : undefined
+          }
+          onResetFbsAssembly={
+            canWrite
+              ? (assemblyId, orderId) =>
+                  void resetOnlineFbsAssemblyOrder(
+                    onlinePreview.request,
+                    assemblyId,
+                    orderId,
+                  )
+              : undefined
+          }
+          onMarkPackedWithoutSource={
+            canWrite
+              ? (assemblyId, orderId) =>
+                  void markOnlineFbsOrderPackedWithoutSource(
+                    onlinePreview.request,
+                    assemblyId,
+                    orderId,
+                  )
+              : undefined
+          }
           onMoveOrder={
             canWrite
               ? (order) => void moveOnlineFbsOrder(onlinePreview.request, order)
@@ -985,6 +1997,8 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           onClose={() => {
             setOnlinePreview(null);
             setOnlineFbsMove({ orderId: null });
+            setOnlineKizResolution({ assemblyId: null });
+            setOnlineFbsSyncResolution({ assemblyId: null });
           }}
           onRefresh={() => void refreshOnlineExecution()}
           onDownloadBoxes={() => void downloadOnlineOutgoingBoxes(onlinePreview.request)}
@@ -1034,7 +2048,51 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           state={manualClose}
           onChange={(patch) => setManualClose((current) => (current ? { ...current, ...patch, error: undefined } : current))}
           onSubmit={() => void submitManualClose()}
+          onResolveStock={() => void openCloseStockRecovery()}
           onClose={() => setManualClose(null)}
+        />
+      ) : null}
+
+      {closeStockRecovery ? (
+        <CloseStockRecoveryModal
+          state={closeStockRecovery}
+          onBoxQuantityChange={(requestItemId, boxCode, quantity) =>
+            changeCloseStockSource(requestItemId, (value) => ({
+              ...value,
+              boxQuantities: { ...value.boxQuantities, [boxCode]: quantity },
+              noBoxQuantity: '',
+            }))
+          }
+          onUseSuggestedBox={(requestItemId, boxCode, quantity) =>
+            changeCloseStockSource(requestItemId, (value) => ({
+              ...value,
+              boxQuantities: {
+                ...Object.fromEntries(
+                  Object.keys(value.boxQuantities).map((knownBoxCode) => [knownBoxCode, '']),
+                ),
+                [boxCode]: String(quantity),
+              },
+              noBoxQuantity: '',
+              manualBoxCode: '',
+              manualBoxQuantity: '',
+            }))
+          }
+          onManualBoxChange={(requestItemId, patch) =>
+            changeCloseStockSource(requestItemId, (value) => ({
+              ...value,
+              ...patch,
+              noBoxQuantity: '',
+            }))
+          }
+          onNoBoxQuantityChange={(requestItemId, quantity) =>
+            changeCloseStockSource(requestItemId, (value) => ({
+              ...value,
+              noBoxQuantity: quantity,
+            }))
+          }
+          onChooseNoBox={chooseCloseStockWithoutBox}
+          onSubmit={() => void submitCloseStockRecovery()}
+          onClose={() => setCloseStockRecovery(null)}
         />
       ) : null}
 
@@ -1053,7 +2111,10 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           state={fbsBoxSearch}
           onDownload={async () => {
             const blob = await downloadClientRequestFbsBoxSearchXlsx(session.accessToken, fbsBoxSearch.request.id);
-            downloadBlob(blob, `Совпадающие_короба_FBS_${String(fbsBoxSearch.request.number).padStart(6, '0')}.xlsx`);
+            downloadBlob(
+              blob,
+              `${fbsBoxSearch.data?.stockMode === 'WITHOUT_BOXES' ? 'Остатки_склада_FBS' : 'Совпадающие_короба_FBS'}_${String(fbsBoxSearch.request.number).padStart(6, '0')}.xlsx`,
+            );
           }}
           onClose={() => setFbsBoxSearch(null)}
         />
@@ -1063,8 +2124,191 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
 }
 
 function isFbsRequest(request: ClientRequestSummary) {
-  return request.title.trim().toLocaleUpperCase('ru-RU').startsWith('FBS')
-    || request.comment?.toLocaleLowerCase('ru-RU').includes('создано из fbs-заказов:') === true;
+  return (
+    (request._count?.fbsOrderLinks ?? 0) > 0 ||
+    request.title.trim().toLocaleUpperCase('ru-RU').startsWith('FBS') ||
+    request.comment
+      ?.toLocaleLowerCase('ru-RU')
+      .includes('создано из fbs-заказов:') === true
+  );
+}
+
+function canMergeFbsRequestTail(request: ClientRequestSummary) {
+  return (
+    request.type === 'OUTBOUND' &&
+    isFbsRequest(request) &&
+    ['SUBMITTED', 'IN_REVIEW', 'APPROVED', 'IN_WORK'].includes(request.status)
+  );
+}
+
+function FbsTailMergePreviewModal({
+  state,
+  isSubmitting,
+  onConfirm,
+  onClose,
+}: {
+  state: FbsTailMergePreviewState;
+  isSubmitting: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const sourceRequestNumbers = state.data.sourceRequests
+    .map((request) => `№${String(request.number).padStart(6, '0')}`)
+    .join(', ');
+
+  return (
+    <div
+      className="online-execution-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Подтверждение переноса хвостов FBS"
+    >
+      <section className="online-execution-modal__panel fbs-tail-preview-modal">
+        <header className="online-execution-modal__header">
+          <div>
+            <span>Предварительный состав новой заявки</span>
+            <h3>Хвосты из заявок {sourceRequestNumbers}</h3>
+            <small>
+              До нажатия кнопки подтверждения заказы никуда не переносятся
+            </small>
+          </div>
+          <button
+            className="icon-button"
+            type="button"
+            onClick={onClose}
+            disabled={isSubmitting}
+            title="Закрыть"
+            aria-label="Закрыть"
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="online-execution-modal__body fbs-tail-preview-modal__body">
+          <div className="fbs-tail-preview-modal__summary">
+            <span>
+              <small>Заказов</small>
+              <strong>{state.data.orderCount}</strong>
+            </span>
+            <span>
+              <small>Единиц товара</small>
+              <strong>{state.data.itemCount}</strong>
+            </span>
+            <span>
+              <small>Разных SKU</small>
+              <strong>{state.data.skuCount}</strong>
+            </span>
+            <span>
+              <small>Исходных заявок</small>
+              <strong>{state.data.sourceRequests.length}</strong>
+            </span>
+          </div>
+
+          <div className="fbs-tail-preview-modal__notice">
+            <ClipboardList size={18} aria-hidden="true" />
+            <span>
+              Ниже показан точный состав, который будет отправлен в новую
+              поставку WB и записан в новую заявку WMS.
+            </span>
+          </div>
+
+          <div className="fbs-tail-preview-modal__table-wrap">
+            <table className="fbs-tail-preview-modal__table">
+              <thead>
+                <tr>
+                  <th>Из заявки</th>
+                  <th>Заказ WB</th>
+                  <th>Товар</th>
+                  <th>Размер</th>
+                  <th>Количество</th>
+                  <th>Где лежит</th>
+                </tr>
+              </thead>
+              <tbody>
+                {state.data.orders.map((order) => (
+                  <tr key={`${order.connectionId}-${order.id}`}>
+                    <td>
+                      {order.sourceRequest
+                        ? `№${String(order.sourceRequest.number).padStart(6, '0')}`
+                        : '—'}
+                    </td>
+                    <td>
+                      <strong>№{order.id}</strong>
+                      <small>Поставка {order.sourceSupplyId}</small>
+                    </td>
+                    <td>
+                      <strong>{order.product.name}</strong>
+                      <small>
+                        Арт. {order.product.article || order.article || '—'} ·
+                        SKU {order.product.clientSku || order.product.internalSku}
+                      </small>
+                      <small>ШК {order.barcodes.join(', ') || '—'}</small>
+                    </td>
+                    <td>{order.product.size || '—'}</td>
+                    <td>
+                      <strong>{order.itemCount} шт.</strong>
+                    </td>
+                    <td>
+                      {order.storageBoxes.length > 0
+                        ? order.storageBoxes
+                            .map((box) => `${box.code} (${box.quantity})`)
+                            .join(', ')
+                        : 'Короб не найден'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {state.data.skippedOrders.length > 0 ? (
+            <details className="fbs-tail-preview-modal__skipped">
+              <summary>
+                Не будут перенесены: {state.data.skippedOrders.length}
+              </summary>
+              <ul>
+                {state.data.skippedOrders.map((order, index) => (
+                  <li key={`${order.id}-${index}`}>
+                    <strong>№{order.id}</strong> — {order.reason}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
+
+          {state.error ? (
+            <p className="form-error fbs-tail-preview-modal__error">
+              {state.error}
+            </p>
+          ) : null}
+
+          <div className="fbs-tail-preview-modal__actions">
+            <button
+              className="client-request-action-button"
+              type="button"
+              onClick={onClose}
+              disabled={isSubmitting}
+            >
+              Отмена
+            </button>
+            <button
+              className="primary-button"
+              type="button"
+              onClick={onConfirm}
+              disabled={isSubmitting || state.data.orders.length === 0}
+            >
+              <ArrowRightLeft size={16} aria-hidden="true" />
+              <span>
+                {isSubmitting
+                  ? 'Создаю новую заявку…'
+                  : `Подтвердить перенос ${state.data.orderCount} заказов`}
+              </span>
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
 }
 
 function FbsBoxSearchModal({
@@ -1080,6 +2324,7 @@ function FbsBoxSearchModal({
   const [downloadStatus, setDownloadStatus] = useState<'idle' | 'downloading'>('idle');
   const [downloadError, setDownloadError] = useState('');
   const normalizedSearch = search.trim().toLocaleLowerCase('ru-RU');
+  const withoutBoxes = state.data?.stockMode === 'WITHOUT_BOXES';
   const boxes = (state.data?.boxes ?? []).filter((box) => {
     if (!normalizedSearch) return true;
     return [
@@ -1088,15 +2333,28 @@ function FbsBoxSearchModal({
       ...box.items.flatMap((item) => [item.productName, item.article ?? '', ...item.barcodes]),
     ].some((value) => value.toLocaleLowerCase('ru-RU').includes(normalizedSearch));
   });
+  const warehouseStock = (state.data?.warehouseStock ?? []).filter((item) => {
+    if (!normalizedSearch) return true;
+    return [
+      ...item.orderIds,
+      item.productName,
+      item.article ?? '',
+      ...item.barcodes,
+    ].some((value) => value.toLocaleLowerCase('ru-RU').includes(normalizedSearch));
+  });
 
   return (
-    <div className="online-execution-modal" role="dialog" aria-modal="true" aria-label="Поиск коробов для FBS-заявки">
+    <div className="online-execution-modal" role="dialog" aria-modal="true" aria-label="Остатки для FBS-заявки">
       <section className="online-execution-modal__panel fbs-box-search-modal">
         <header className="online-execution-modal__header">
           <div>
-            <span>Совпадающие короба FBS</span>
+            <span>{withoutBoxes ? 'Остатки склада FBS' : 'Совпадающие короба FBS'}</span>
             <h3>№{String(state.request.number).padStart(6, '0')} · {state.request.title}</h3>
-            <small>{state.request.client.name} · показаны только короба, общие для нескольких заказов</small>
+            <small>
+              {state.request.client.name} · {withoutBoxes
+                ? 'поштучный учет без привязки к коробам и палет-сортам'
+                : 'показаны только короба, общие для нескольких заказов'}
+            </small>
           </div>
           <button className="icon-button" type="button" onClick={onClose} title="Закрыть" aria-label="Закрыть">
             <X size={18} aria-hidden="true" />
@@ -1105,13 +2363,18 @@ function FbsBoxSearchModal({
 
         <div className="online-execution-modal__body fbs-box-search-modal__body">
           {state.status === 'loading' ? (
-            <p className="panel-message"><RefreshCw size={18} aria-hidden="true" /> Ищу остатки по коробам.</p>
+            <p className="panel-message">
+              <RefreshCw size={18} aria-hidden="true" /> Проверяю остатки на складе.
+            </p>
           ) : state.data ? (
             <>
               <div className="fbs-box-search-modal__summary">
                 <span><small>Заказов в заявке</small><strong>{state.data.summary.orders}</strong></span>
-                <span><small>Совпадающих коробов</small><strong>{state.data.summary.boxes}</strong></span>
-                <span><small>Подтверждено ТСД</small><strong>{state.data.summary.confirmedOrders}</strong></span>
+                <span>
+                  <small>{withoutBoxes ? 'Позиций на складе' : 'Совпадающих коробов'}</small>
+                  <strong>{withoutBoxes ? state.data.warehouseStock.length : state.data.summary.boxes}</strong>
+                </span>
+                <span><small>Зарезервировано заказов</small><strong>{state.data.summary.confirmedOrders}</strong></span>
               </div>
 
               <label className="fbs-box-search-modal__search">
@@ -1119,7 +2382,7 @@ function FbsBoxSearchModal({
                 <input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Номер короба, заказа, ШК или товар"
+                  placeholder={withoutBoxes ? 'Номер заказа, ШК, артикул или товар' : 'Номер короба, заказа, ШК или товар'}
                   autoFocus
                 />
                 {search ? (
@@ -1129,7 +2392,41 @@ function FbsBoxSearchModal({
                 ) : null}
               </label>
 
-              {boxes.length ? (
+              {withoutBoxes && warehouseStock.length ? (
+                <div className="fbs-box-search-results">
+                  {warehouseStock.map((item) => (
+                    <article className="fbs-box-search-card" key={item.requestItemId}>
+                      <header>
+                        <div>
+                          <Boxes size={19} aria-hidden="true" />
+                          <strong>{item.productName}</strong>
+                        </div>
+                        <span>{item.availableQuantity} шт. на складе</span>
+                      </header>
+                      <div className="fbs-box-search-card__orders">
+                        <strong>
+                          {item.orderIds.length
+                            ? `Заказы №${item.orderIds.join(', №')}`
+                            : 'Заказы по позиции не определены'}
+                        </strong>
+                        <span>Без коробов и палет-сортов</span>
+                      </div>
+                      <div className="fbs-box-search-card__items">
+                        <div>
+                          <span>
+                            <strong>Арт. {item.article || '—'}</strong>
+                            <small>ШК {item.barcodes.join(', ') || '—'} · нужно {item.requestedQuantity} шт.</small>
+                          </span>
+                          <span>
+                            <strong>{item.freeQuantity} шт. свободно</strong>
+                            <small>зарезервировано {item.reservedQuantity} шт.</small>
+                          </span>
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : !withoutBoxes && boxes.length ? (
                 <div className="fbs-box-search-results">
                   {boxes.map((box) => (
                     <article className={`fbs-box-search-card ${box.confirmedOrderIds.length ? 'is-confirmed' : ''}`} key={box.boxId}>
@@ -1167,13 +2464,21 @@ function FbsBoxSearchModal({
                 </div>
               ) : (
                 <p className="panel-message">
-                  {state.data.boxes.length ? 'По этому запросу короб не найден.' : 'Общих коробов для нескольких заказов этой заявки нет.'}
+                  {withoutBoxes
+                    ? state.data.warehouseStock.length
+                      ? 'По этому запросу товар не найден.'
+                      : 'Поштучного остатка по товарам этой заявки на складе нет.'
+                    : state.data.boxes.length
+                      ? 'По этому запросу короб не найден.'
+                      : 'Общих коробов для нескольких заказов этой заявки нет.'}
                 </p>
               )}
 
               {state.data.unmatchedOrderIds.length ? (
                 <p className="form-error fbs-box-search-modal__unmatched">
-                  Не найдены в активных коробах заказы №{state.data.unmatchedOrderIds.join(', №')}.
+                  {withoutBoxes
+                    ? `Нет доступного складского остатка для заказов №${state.data.unmatchedOrderIds.join(', №')}.`
+                    : `Не найдены в активных коробах заказы №${state.data.unmatchedOrderIds.join(', №')}.`}
                 </p>
               ) : null}
             </>
@@ -1185,7 +2490,7 @@ function FbsBoxSearchModal({
             <button className="client-request-action-button client-request-action-button--instruction" type="button" onClick={onClose}>
               Закрыть
             </button>
-            {state.data?.boxes.length ? (
+            {state.data && (state.data.boxes.length > 0 || state.data.warehouseStock.length > 0) ? (
               <button
                 className="client-request-action-button client-request-action-button--xlsx"
                 type="button"
@@ -1373,11 +2678,13 @@ function ManualCloseModal({
   state,
   onChange,
   onSubmit,
+  onResolveStock,
   onClose,
 }: {
   state: ManualCloseState;
   onChange: (patch: Partial<Pick<ManualCloseState, 'boxes' | 'pallets' | 'packedUnits' | 'comment'>>) => void;
   onSubmit: () => void;
+  onResolveStock: () => void;
   onClose: () => void;
 }) {
   const isSubmitting = state.status === 'submitting';
@@ -1469,9 +2776,307 @@ function ManualCloseModal({
             <button className="client-request-action-button client-request-action-button--instruction" type="button" onClick={onClose} disabled={isSubmitting}>
               Отмена
             </button>
+            {state.error ? (
+              <button
+                className="client-request-action-button client-request-action-button--box-selection"
+                type="button"
+                onClick={onResolveStock}
+                disabled={isSubmitting}
+              >
+                <ShieldAlert size={16} aria-hidden="true" />
+                Указать фактический короб / без короба
+              </button>
+            ) : null}
             <button className="client-request-action-button client-request-action-button--ship" type="button" onClick={onSubmit} disabled={isSubmitting}>
               <Truck size={16} aria-hidden="true" />
               {isSubmitting ? 'Закрываю отгрузку' : 'Подтвердить и сдать'}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function CloseStockRecoveryModal({
+  state,
+  onBoxQuantityChange,
+  onUseSuggestedBox,
+  onManualBoxChange,
+  onNoBoxQuantityChange,
+  onChooseNoBox,
+  onSubmit,
+  onClose,
+}: {
+  state: CloseStockRecoveryState;
+  onBoxQuantityChange: (requestItemId: string, boxCode: string, quantity: string) => void;
+  onUseSuggestedBox: (
+    requestItemId: string,
+    boxCode: string,
+    quantity: number,
+  ) => void;
+  onManualBoxChange: (
+    requestItemId: string,
+    patch: Partial<Pick<CloseStockSourceValue, 'manualBoxCode' | 'manualBoxQuantity'>>,
+  ) => void;
+  onNoBoxQuantityChange: (requestItemId: string, quantity: string) => void;
+  onChooseNoBox: (requestItemId: string, requestedQuantity: number) => void;
+  onSubmit: () => void;
+  onClose: () => void;
+}) {
+  const isBusy = state.status === 'loading' || state.status === 'submitting';
+  const normalizedError = state.originalError.toLocaleLowerCase('ru-RU');
+
+  return (
+    <div className="online-execution-modal" role="dialog" aria-modal="true" aria-label="Фактический источник товара">
+      <section className="online-execution-modal__panel manual-box-selection-modal close-stock-recovery-modal">
+        <header className="online-execution-modal__header">
+          <div>
+            <span>Закрытие по физическому факту</span>
+            <h3>№{String(state.close.request.number).padStart(6, '0')} · {state.close.request.title}</h3>
+            <small>Укажите источник только для позиции, из-за которой заявка не закрывается</small>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose} title="Закрыть" aria-label="Закрыть" disabled={isBusy}>
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="online-execution-modal__body manual-box-selection-modal__body">
+          <div className="close-stock-recovery-modal__warning">
+            <ShieldAlert size={22} aria-hidden="true" />
+            <div>
+              <strong>Штатное закрытие остановлено</strong>
+              <span>{state.originalError}</span>
+            </div>
+          </div>
+
+          {state.status === 'loading' ? (
+            <p className="panel-message"><RefreshCw size={18} aria-hidden="true" /> Загружаю товары и короба заявки.</p>
+          ) : state.data ? (
+            <div className="close-stock-recovery-items">
+              {state.data.items.map((item) => {
+                const value = state.values[item.requestItemId];
+                if (!value) return null;
+                const itemLabel = item.sku?.name ?? item.requestedName ?? 'Товар не сопоставлен';
+                const itemCode = item.sku?.article ?? item.sku?.internalSku ?? item.requestedBarcode ?? 'без артикула';
+                const touched = state.touchedItemIds.includes(item.requestItemId);
+                const matchesError = [
+                  item.sku?.internalSku,
+                  item.sku?.article,
+                  item.sku?.name,
+                  item.requestedBarcode,
+                  item.requestedName,
+                ].some((candidate) =>
+                  candidate
+                    ? normalizedError.includes(candidate.toLocaleLowerCase('ru-RU'))
+                    : false,
+                );
+                const confirmedQuantity =
+                  Object.values(value.boxQuantities).reduce(
+                    (sum, quantity) => sum + (parseNonNegativeInteger(quantity || '0') ?? 0),
+                    0,
+                  ) +
+                  (parseNonNegativeInteger(value.manualBoxQuantity || '0') ?? 0) +
+                  (parseNonNegativeInteger(value.noBoxQuantity || '0') ?? 0);
+                const availableBoxes = item.boxes.filter((box) => box.availableQuantity > 0);
+                const unavailableSelectedBoxes = item.boxes.filter(
+                  (box) => box.availableQuantity === 0 && box.selectedQuantity > 0,
+                );
+                const incompleteFbsOrders = item.fbsOrders.filter(
+                  (order) => order.assemblyStatus !== 'COMPLETED' || order.sourceBoxPending,
+                );
+                const isProblem = matchesError || incompleteFbsOrders.length > 0;
+                return (
+                  <details
+                    className={`close-stock-recovery-item ${touched ? 'is-touched' : ''} ${isProblem ? 'is-problem' : ''}`}
+                    key={item.requestItemId}
+                    open={touched || isProblem}
+                  >
+                    <summary>
+                      <div>
+                        <strong>{itemLabel}</strong>
+                        <span>Артикул: {itemCode} · ШК: {item.sku?.barcodes.join(', ') || item.requestedBarcode || 'не указан'}</span>
+                        {item.itemComment ? <span>{item.itemComment}</span> : null}
+                      </div>
+                      <b>{confirmedQuantity} / {item.requestedQuantity} шт.</b>
+                    </summary>
+
+                    <div className="close-stock-recovery-item__body">
+                      {incompleteFbsOrders.length > 0 ? (
+                        <div className="close-stock-recovery-fbs-warning">
+                          <ShieldAlert size={18} aria-hidden="true" />
+                          <div>
+                            <strong>Нужно подтвердить источник товара FBS</strong>
+                            <span>
+                              {incompleteFbsOrders.map((order) => (
+                                `№${order.orderId} — ${order.sourceBoxPending ? 'исходный короб не указан' : fbsAssemblyStatusLabel(order.assemblyStatus)}`
+                              )).join('; ')}.
+                              Подтвердите, откуда фактически взят товар.
+                            </span>
+                          </div>
+                        </div>
+                      ) : null}
+                      <p>
+                        Укажите, где физически находились все {item.requestedQuantity} шт. этой позиции.
+                        Данные WMS рядом приведены только для сверки и не ограничивают подтверждение менеджера.
+                      </p>
+
+                      <div className="close-stock-recovery-available-heading">
+                        <div>
+                          <strong>Где товар есть в наличии</strong>
+                          <span>
+                            WMS нашла коробов: {availableBoxes.length}. Сначала показаны короба с наибольшим остатком.
+                          </span>
+                        </div>
+                        <b>{availableBoxes.reduce((sum, box) => sum + box.availableQuantity, 0)} шт. всего</b>
+                      </div>
+
+                      {availableBoxes.length > 0 ? (
+                        <div className="close-stock-recovery-boxes">
+                          {availableBoxes.map((box) => (
+                            <label key={box.boxId}>
+                              <span>
+                                <strong>{box.boxCode}</strong>
+                                <small>
+                                  Сейчас в WMS: {box.availableQuantity} шт. ·{' '}
+                                  {box.statuses.map((row) => `${stockStatusLabel(row.status)} ${row.quantity}`).join(', ') || 'остаток не найден'}
+                                </small>
+                              </span>
+                              <input
+                                type="number"
+                                min="0"
+                                step="1"
+                                inputMode="numeric"
+                                value={value.boxQuantities[box.boxCode] ?? ''}
+                                placeholder="0"
+                                disabled={isBusy}
+                                aria-label={`Фактически взято из короба ${box.boxCode}`}
+                                onChange={(event) =>
+                                  onBoxQuantityChange(item.requestItemId, box.boxCode, event.target.value)
+                                }
+                              />
+                              <button
+                                type="button"
+                                disabled={isBusy}
+                                onClick={() =>
+                                  onUseSuggestedBox(
+                                    item.requestItemId,
+                                    box.boxCode,
+                                    Math.min(item.requestedQuantity, box.availableQuantity),
+                                  )
+                                }
+                              >
+                                {box.availableQuantity >= item.requestedQuantity
+                                  ? 'Взять всё отсюда'
+                                  : `Начать с ${box.availableQuantity} шт.`}
+                              </button>
+                            </label>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="manual-box-selection-item__empty">WMS не нашла активных коробов с этим товаром.</p>
+                      )}
+
+                      {unavailableSelectedBoxes.length > 0 ? (
+                        <div className="close-stock-recovery-stale-boxes">
+                          <strong>Ранее выбранные короба, где сейчас нет остатка</strong>
+                          {unavailableSelectedBoxes.map((box) => (
+                            <label key={box.boxId}>
+                              <span>{box.boxCode}</span>
+                              <input
+                                type="number"
+                                min="0"
+                                step="1"
+                                inputMode="numeric"
+                                value={value.boxQuantities[box.boxCode] ?? ''}
+                                placeholder="0"
+                                disabled={isBusy}
+                                onChange={(event) =>
+                                  onBoxQuantityChange(item.requestItemId, box.boxCode, event.target.value)
+                                }
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      ) : null}
+
+                      <div className="close-stock-recovery-manual-box">
+                        <label className="form-field">
+                          <span>Другой фактический короб</span>
+                          <input
+                            type="text"
+                            value={value.manualBoxCode}
+                            placeholder="Отсканируйте или введите номер короба"
+                            disabled={isBusy}
+                            onChange={(event) =>
+                              onManualBoxChange(item.requestItemId, { manualBoxCode: event.target.value })
+                            }
+                          />
+                        </label>
+                        <label className="form-field close-stock-recovery-manual-box__quantity">
+                          <span>Взято, шт.</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            inputMode="numeric"
+                            value={value.manualBoxQuantity}
+                            placeholder="0"
+                            disabled={isBusy}
+                            onChange={(event) =>
+                              onManualBoxChange(item.requestItemId, { manualBoxQuantity: event.target.value })
+                            }
+                          />
+                        </label>
+                      </div>
+
+                      <div className={`close-stock-recovery-no-box ${value.noBoxQuantity ? 'is-selected' : ''}`}>
+                        <div>
+                          <strong>Товар физически был без короба</strong>
+                          <span>Выберите этот вариант, если номера короба действительно нет.</span>
+                        </div>
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          inputMode="numeric"
+                          value={value.noBoxQuantity}
+                          placeholder="0"
+                          disabled={isBusy}
+                          aria-label="Количество товара без короба"
+                          onChange={(event) =>
+                            onNoBoxQuantityChange(item.requestItemId, event.target.value)
+                          }
+                        />
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => onChooseNoBox(item.requestItemId, item.requestedQuantity)}
+                        >
+                          Весь товар без короба
+                        </button>
+                      </div>
+                    </div>
+                  </details>
+                );
+              })}
+            </div>
+          ) : null}
+
+          {state.error ? <p className="form-error manual-box-selection-modal__error">{state.error}</p> : null}
+
+          <div className="emergency-xlsx-modal__actions">
+            <button className="client-request-action-button client-request-action-button--instruction" type="button" onClick={onClose} disabled={isBusy}>
+              Назад
+            </button>
+            <button
+              className="client-request-action-button client-request-action-button--ship"
+              type="button"
+              onClick={onSubmit}
+              disabled={isBusy || !state.data}
+            >
+              <Truck size={16} aria-hidden="true" />
+              {state.status === 'submitting' ? 'Закрываю заявку' : 'Подтвердить источник и сдать'}
             </button>
           </div>
         </div>
@@ -1501,7 +3106,7 @@ function BoxOverlapStatistics({
   const hasOverlaps = statistics.overlappingBoxesCount > 0;
 
   return (
-    <details className={`box-overlap-panel ${hasOverlaps ? 'has-conflicts' : 'is-clear'}`} open={hasOverlaps}>
+    <details className={`box-overlap-panel ${hasOverlaps ? 'has-conflicts' : 'is-clear'}`}>
       <summary>
         <span className="box-overlap-panel__icon">
           {hasOverlaps ? <ShieldAlert size={20} aria-hidden="true" /> : <Boxes size={20} aria-hidden="true" />}
@@ -1536,9 +3141,11 @@ function BoxOverlapStatistics({
                 <div className="box-overlap-card__requests">
                   {overlap.requests.map((request) => (
                     <div key={request.id}>
-                      <strong>{request.title}</strong>
+                      <strong>
+                        №{String(request.number).padStart(6, '0')} · {request.title}
+                      </strong>
                       <span>{requestStatusLabel(request.status)}</span>
-                      <small>{request.destinationCity || 'Город не указан'} · {request.id.slice(0, 8)}</small>
+                      <small>{request.destinationCity || 'Город не указан'}</small>
                     </div>
                   ))}
                 </div>
@@ -1751,6 +3358,20 @@ type OnlineExecutionModalProps = {
   movingOrderId: string | null;
   moveMessage?: string;
   moveError?: string;
+  resolvingKizId: string | null;
+  kizResolutionMessage?: string;
+  kizResolutionError?: string;
+  resolvingSyncConflictId: string | null;
+  syncConflictResolutionMessage?: string;
+  syncConflictResolutionError?: string;
+  onResolveKiz?: (assemblyId: string) => void;
+  onRestoreRescanKiz?: (assemblyId: string) => void;
+  onResolveSyncConflict?: (
+    assemblyId: string,
+    action: FbsSyncConflictResolutionAction,
+  ) => void;
+  onResetFbsAssembly?: (assemblyId: string, orderId: string) => void;
+  onMarkPackedWithoutSource?: (assemblyId: string, orderId: string) => void;
   onMoveOrder?: (order: { id: string; connectionId: string }) => void;
   onMoveOrders?: (orders: Array<{ id: string; connectionId: string }>) => void;
   onClose: () => void;
@@ -1768,6 +3389,17 @@ function OnlineExecutionModal({
   movingOrderId,
   moveMessage,
   moveError,
+  resolvingKizId,
+  kizResolutionMessage,
+  kizResolutionError,
+  resolvingSyncConflictId,
+  syncConflictResolutionMessage,
+  syncConflictResolutionError,
+  onResolveKiz,
+  onRestoreRescanKiz,
+  onResolveSyncConflict,
+  onResetFbsAssembly,
+  onMarkPackedWithoutSource,
   onMoveOrder,
   onMoveOrders,
   onClose,
@@ -1781,7 +3413,17 @@ function OnlineExecutionModal({
   const [fbsAssemblySearch, setFbsAssemblySearch] = useState('');
   const [notCollectedSearch, setNotCollectedSearch] = useState('');
   const [selectedNotCollectedOrders, setSelectedNotCollectedOrders] = useState<string[]>([]);
+  const [wmsBoxesOpen, setWmsBoxesOpen] = useState(false);
+  const wmsBoxesRef = useRef<HTMLDetailsElement>(null);
   const searchBoxes = normalizeOnlineBoxes(plan?.searchBoxes ?? plan?.boxesToSearch ?? []);
+  const palletSortByBoxCode = new Map(
+    searchBoxes
+      .filter((box) => box.storageLocation?.palletCode)
+      .map((box) => [
+        normalizeCode(box.boxCode),
+        box.storageLocation!.palletCode,
+      ]),
+  );
   const foundCodes = new Set(
     [...(plan?.boxSearchProgress?.foundBoxCodes ?? []), ...(plan?.foundBoxCodes ?? []), ...(plan?.foundBoxesCodes ?? [])].map(normalizeCode),
   );
@@ -1806,8 +3448,12 @@ function OnlineExecutionModal({
   const movementSourceBoxes = plan?.movementProgress?.sourceBoxes ?? [];
   const actualMovements = plan?.movementProgress?.actualRows ?? [];
   const fbsAssembly = plan?.fbsAssembly ?? null;
+  const wmsBoxes = fbsAssembly?.wmsBoxes ?? null;
   const notCollected = fbsAssembly?.notCollected ?? null;
   const returnRequired = fbsAssembly?.returnRequired ?? null;
+  const rescanRequiredRows = (fbsAssembly?.rows ?? []).filter(
+    (row) => row.status === 'RESCAN_REQUIRED',
+  );
   const normalizedFbsAssemblySearch = fbsAssemblySearch.trim().toLocaleLowerCase('ru-RU');
   const filteredFbsAssemblyRows = (fbsAssembly?.rows ?? []).filter((row) =>
     !normalizedFbsAssemblySearch ||
@@ -1815,6 +3461,7 @@ function OnlineExecutionModal({
       row.sourceBoxCode,
       row.orderId,
       row.productBarcode,
+      row.kiz,
       row.size,
       row.wbStickerPartB,
       row.wbStickerBarcode,
@@ -1869,6 +3516,22 @@ function OnlineExecutionModal({
           </div>
           <div className="online-execution-modal__actions">
             <button
+              className="client-request-action-button client-request-action-button--wms-boxes"
+              type="button"
+              onClick={() => {
+                setWmsBoxesOpen(true);
+                requestAnimationFrame(() => {
+                  wmsBoxesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                });
+              }}
+              disabled={status === 'loading' || !fbsAssembly}
+              title="Посмотреть фактически пропиканное содержимое коробов WMS"
+            >
+              <Boxes size={16} aria-hidden="true" />
+              Короба WMS
+              {wmsBoxes ? <strong>{wmsBoxes.packedUnits}</strong> : null}
+            </button>
+            <button
               className="client-request-action-button client-request-action-button--xlsx"
               type="button"
               onClick={onDownloadBoxes}
@@ -1899,6 +3562,10 @@ function OnlineExecutionModal({
         {status === 'error' ? <p className="form-error">{error ?? 'Не удалось получить онлайн-выполнение.'}</p> : null}
         {moveMessage ? <p className="online-execution-action-message">{moveMessage}</p> : null}
         {moveError ? <p className="form-error online-execution-action-error">{moveError}</p> : null}
+        {kizResolutionMessage ? <p className="online-execution-action-message">{kizResolutionMessage}</p> : null}
+        {kizResolutionError ? <p className="form-error online-execution-action-error">{kizResolutionError}</p> : null}
+        {syncConflictResolutionMessage ? <p className="online-execution-action-message">{syncConflictResolutionMessage}</p> : null}
+        {syncConflictResolutionError ? <p className="form-error online-execution-action-error">{syncConflictResolutionError}</p> : null}
 
         {plan ? (
           <div className="online-execution-modal__body">
@@ -1953,6 +3620,281 @@ function OnlineExecutionModal({
 
             {fbsAssembly ? (
               <>
+                <details
+                  className="online-execution-section online-execution-section--wms-boxes"
+                  open={wmsBoxesOpen}
+                  onToggle={(event) => setWmsBoxesOpen(event.currentTarget.open)}
+                  ref={wmsBoxesRef}
+                >
+                  <summary>
+                    <span>
+                      <Boxes size={18} aria-hidden="true" />
+                      <strong>Короба WMS</strong>
+                      <small>нажмите, чтобы посмотреть фактическую упаковку</small>
+                    </span>
+                    <b>
+                      {wmsBoxes?.packedUnits ?? 0} пропикано · {wmsBoxes?.remainingUnits ?? fbsAssembly.totalOrders} ещё нет
+                    </b>
+                  </summary>
+                  <div className="online-execution-wms-boxes">
+                    {wmsBoxes && wmsBoxes.boxes.length > 0 ? (
+                      <div className="online-execution-wms-box-list">
+                        {wmsBoxes.boxes.map((box) => (
+                          <details className="online-execution-wms-box" key={box.id}>
+                            <summary>
+                              <span>
+                                <strong>{box.code}</strong>
+                                <small>
+                                  {box.status === 'CLOSED' ? 'закрыт' : 'открыт'} · {box.items.reduce((sum, item) => sum + item.quantity, 0)} ед.
+                                </small>
+                              </span>
+                              <span>
+                                {box.closedByName || box.openedByName || box.deviceCode || 'ТСД'}
+                              </span>
+                            </summary>
+                            <div className="online-execution-table-wrap online-execution-table-wrap--wms-box">
+                              <table className="online-execution-table online-execution-table--wms-box">
+                                <thead>
+                                  <tr>
+                                    <th>Заказ WB</th>
+                                    <th>Фактически пропикан товар</th>
+                                    <th>ШК товара</th>
+                                    <th>Размер</th>
+                                    <th>КИЗ</th>
+                                    <th>Наклейка WB</th>
+                                    <th>Когда</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {box.items.map((item) => (
+                                    <tr key={item.id}>
+                                      <td><strong>№{item.orderId}</strong></td>
+                                      <td>
+                                        <strong>{item.productName}</strong>
+                                        <span>{item.article ? `арт. ${item.article}` : 'артикул не указан'}</span>
+                                      </td>
+                                      <td>{item.productBarcode ?? '—'}</td>
+                                      <td><strong>{item.size ?? '—'}</strong></td>
+                                      <td>{item.kiz ?? 'без КИЗ'}</td>
+                                      <td><strong className="online-execution-wb-digits">{item.wbStickerPartB ?? '—'}</strong></td>
+                                      <td>
+                                        <strong>{item.packedByName ?? box.closedByName ?? box.openedByName ?? 'ТСД'}</strong>
+                                        <span>{formatOnlineDateTime(item.packedAt ?? box.openedAt)}</span>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </details>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="online-execution-empty">В этой заявке пока не пропикан ни один короб WMS.</p>
+                    )}
+
+                    <section className="online-execution-wms-boxes__remaining">
+                      <div className="online-execution-section__heading">
+                        <h4>Что ещё не пропикано в короба WMS</h4>
+                        <span>{wmsBoxes?.notPacked.length ?? fbsAssembly.totalOrders} заказов</span>
+                      </div>
+                      {wmsBoxes && wmsBoxes.notPacked.length > 0 ? (
+                        <div className="online-execution-table-wrap online-execution-table-wrap--wms-remaining">
+                          <table className="online-execution-table online-execution-table--wms-remaining">
+                            <thead>
+                              <tr>
+                                <th>Заказ WB</th>
+                                <th>Товар</th>
+                                <th>ШК товара</th>
+                                <th>Размер</th>
+                                <th>ШК WB</th>
+                                <th>Почему ещё не в коробе</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {wmsBoxes.notPacked.map((item) => (
+                                <tr key={item.orderId}>
+                                  <td><strong>№{item.orderId}</strong></td>
+                                  <td>
+                                    <strong>{item.productName}</strong>
+                                    <span>{item.article ? `арт. ${item.article}` : 'артикул не указан'}</span>
+                                  </td>
+                                  <td>{item.productBarcode ?? '—'}</td>
+                                  <td><strong>{item.size ?? '—'}</strong></td>
+                                  <td><strong>{item.wbStickerPartB ?? '—'}</strong></td>
+                                  <td>
+                                    <span className={`online-execution-pill ${item.readyForPacking ? 'is-open' : 'is-danger'}`}>
+                                      {item.readyForPacking ? 'Собран — нужно упаковать' : item.assemblyStatusLabel}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <p className="online-execution-empty online-execution-empty--done">
+                          Все заказы этой заявки пропиканы в короба WMS.
+                        </p>
+                      )}
+                    </section>
+                  </div>
+                </details>
+
+                {fbsAssembly.kizConflicts?.length ? (
+                  <section className="online-execution-section online-execution-section--kiz-conflict">
+                    <div className="online-execution-section__heading">
+                      <div>
+                        <h4>
+                          <ShieldAlert size={18} aria-hidden="true" />
+                          КИЗ требует проверки
+                        </h4>
+                        <span>
+                          WMS сохранила неудачный скан. Кнопка сверит маркировку с заказами WB,
+                          снимет только устаревшую локальную блокировку и восстановит текущую привязку.
+                        </span>
+                      </div>
+                      <strong>{fbsAssembly.kizConflicts.length}</strong>
+                    </div>
+                    <div className="online-execution-kiz-conflict-list">
+                      {fbsAssembly.kizConflicts.map((conflict) => (
+                        <article key={conflict.id}>
+                          <div>
+                            <strong>Заказ WB №{conflict.orderId}</strong>
+                            <span>
+                              {conflict.productName}
+                              {conflict.article ? ` · арт. ${conflict.article}` : ''}
+                              {conflict.sourceBoxCode ? ` · короб ${conflict.sourceBoxCode}` : ''}
+                            </span>
+                            <code>{conflict.kiz}</code>
+                            <small>{conflict.message}</small>
+                          </div>
+                          {onResolveKiz ? (
+                            <button
+                              className="client-request-action-button client-request-action-button--kiz-fix"
+                              type="button"
+                              disabled={Boolean(resolvingKizId)}
+                              onClick={() => onResolveKiz(conflict.id)}
+                            >
+                              <RefreshCw
+                                size={16}
+                                aria-hidden="true"
+                                className={resolvingKizId === conflict.id ? 'is-spinning' : undefined}
+                              />
+                              {resolvingKizId === conflict.id
+                                ? 'Проверяю в WB…'
+                                : 'Проверить и исправить КИЗ'}
+                            </button>
+                          ) : null}
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
+                {rescanRequiredRows.length > 0 ? (
+                  <section className="online-execution-section online-execution-section--sync-conflict">
+                    <div className="online-execution-section__heading">
+                      <div>
+                        <h4>
+                          <ShieldAlert size={18} aria-hidden="true" />
+                          КИЗ введён вручную в Wildberries
+                        </h4>
+                        <span>
+                          Если КИЗ уже пропикан в кабинете WB, нажмите кнопку: WMS получит его из Wildberries и вернёт заказ в собранные без повторного списания товара.
+                        </span>
+                      </div>
+                      <strong>{rescanRequiredRows.length}</strong>
+                    </div>
+                    <div className="online-execution-table-wrap online-execution-table-wrap--sync-conflict">
+                      <table className="online-execution-table online-execution-table--sync-conflict">
+                        <thead>
+                          <tr>
+                            <th>Заказ WB</th>
+                            <th>Товар</th>
+                            <th>Короб</th>
+                            <th>Состояние</th>
+                            <th>Действие</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rescanRequiredRows.map((row) => (
+                            <tr key={row.id}>
+                              <td><strong>№{row.orderId}</strong></td>
+                              <td>
+                                <strong>{row.productName}</strong>
+                                <span>{[row.article, row.size].filter(Boolean).join(' · ')}</span>
+                              </td>
+                              <td><strong>{row.sourceBoxCode ?? 'без короба'}</strong></td>
+                              <td>{row.statusLabel}</td>
+                              <td>
+                                {onRestoreRescanKiz ? (
+                                  <button
+                                    type="button"
+                                    className="online-execution-sync-conflict-button is-manager"
+                                    onClick={() => onRestoreRescanKiz(row.id)}
+                                    disabled={resolvingKizId !== null}
+                                  >
+                                    <CheckCircle2 size={14} aria-hidden="true" />
+                                    {resolvingKizId === row.id
+                                      ? 'Проверяю WB…'
+                                      : 'КИЗ уже введён в WB'}
+                                  </button>
+                                ) : (
+                                  <span>Нужны права на изменение заявок</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                ) : null}
+
+                {fbsAssembly.duplicateKizScans?.length ? (
+                  <details className="online-execution-section online-execution-section--duplicate-kiz" open>
+                    <summary>
+                      <span>
+                        <AlertTriangle size={18} aria-hidden="true" />
+                        <strong>Повторно просканированные КИЗ</strong>
+                      </span>
+                      <b>{fbsAssembly.duplicateKizScans.length}</b>
+                    </summary>
+                    <div className="online-execution-duplicate-kiz-list">
+                      {fbsAssembly.duplicateKizScans.map((event) => (
+                        <article key={event.eventKey || event.id}>
+                          <code>{event.kiz}</code>
+                          <div className="online-execution-duplicate-kiz-occurrences">
+                            <div className="is-attempt">
+                              <span>Повторный скан</span>
+                              <strong>{formatOnlineDateTime(event.attempt.scannedAt)}</strong>
+                              <small>
+                                {onlineRequestNumber(event.attempt.requestNumber)} · заказ №{event.attempt.orderId}
+                              </small>
+                              <small>
+                                короб {event.attempt.boxCode} · {event.attempt.workerName || event.attempt.deviceCode || 'сотрудник не указан'}
+                              </small>
+                              {event.attempt.deviceCode ? <small>ТСД: {event.attempt.deviceCode}</small> : null}
+                            </div>
+                            <div className="is-existing">
+                              <span>Где КИЗ уже был принят</span>
+                              <strong>{formatOnlineDateTime(event.existing.scannedAt)}</strong>
+                              <small>
+                                {onlineRequestNumber(event.existing.requestNumber)} · заказ №{event.existing.orderId}
+                              </small>
+                              <small>
+                                короб {event.existing.boxCode} · {event.existing.workerName || event.existing.deviceCode || 'сотрудник не указан'}
+                              </small>
+                              {event.existing.deviceCode ? <small>ТСД: {event.existing.deviceCode}</small> : null}
+                            </div>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </details>
+                ) : null}
+
                 {returnRequired && returnRequired.rows.length > 0 ? (
                   <section className="online-execution-section online-execution-section--sync-conflict">
                     <div className="online-execution-section__heading">
@@ -1967,6 +3909,16 @@ function OnlineExecutionModal({
                       </div>
                       <strong>{returnRequired.units} шт.</strong>
                     </div>
+                    {syncConflictResolutionMessage ? (
+                      <p className="online-execution-action-message is-success">
+                        {syncConflictResolutionMessage}
+                      </p>
+                    ) : null}
+                    {syncConflictResolutionError ? (
+                      <p className="online-execution-action-message is-error">
+                        {syncConflictResolutionError}
+                      </p>
+                    ) : null}
                     <div className="online-execution-table-wrap online-execution-table-wrap--sync-conflict">
                       <table className="online-execution-table online-execution-table--sync-conflict">
                         <thead>
@@ -1976,6 +3928,7 @@ function OnlineExecutionModal({
                             <th>Короб</th>
                             <th>КИЗ</th>
                             <th>Что изменилось</th>
+                            <th>Действия</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1993,6 +3946,36 @@ function OnlineExecutionModal({
                               <td><strong>{row.sourceBoxCode ?? 'не выбран'}</strong></td>
                               <td>{row.kiz ?? 'не пропикан'}</td>
                               <td><strong>{row.syncIssue ?? 'Требуется решение менеджера.'}</strong></td>
+                              <td>
+                                {onResolveSyncConflict ? (
+                                  <div className="online-execution-sync-conflict-actions">
+                                    <button
+                                      type="button"
+                                      className="online-execution-sync-conflict-button is-return"
+                                      onClick={() => onResolveSyncConflict(row.id, 'RETURN_TO_STOCK')}
+                                      disabled={resolvingSyncConflictId !== null}
+                                    >
+                                      <RotateCcw size={14} aria-hidden="true" />
+                                      {resolvingSyncConflictId === row.id
+                                        ? 'Возвращаю…'
+                                        : 'Вернуть на склад'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="online-execution-sync-conflict-button is-manager"
+                                      onClick={() => onResolveSyncConflict(row.id, 'MANAGER_CONFIRMED')}
+                                      disabled={resolvingSyncConflictId !== null}
+                                    >
+                                      <CheckCircle2 size={14} aria-hidden="true" />
+                                      {resolvingSyncConflictId === row.id
+                                        ? 'Подтверждаю…'
+                                        : 'Решение менеджера'}
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <span>Нужны права на изменение заявок</span>
+                                )}
+                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -2041,6 +4024,18 @@ function OnlineExecutionModal({
                               ? 'Переношу заказы…'
                               : `Перенести выбранные в новую поставку (${selectedNotCollectedOrderRows.length})`}
                           </button>
+                          {moveError ? (
+                            <div className="online-execution-bulk-move__result is-error" role="alert">
+                              <strong>Перенос не выполнен</strong>
+                              <span>{moveError}</span>
+                            </div>
+                          ) : null}
+                          {moveMessage ? (
+                            <div className="online-execution-bulk-move__result is-success" role="status">
+                              <strong>Готово</strong>
+                              <span>{moveMessage}</span>
+                            </div>
+                          ) : null}
                         </div>
                       ) : null}
                       {filteredNotCollectedRows.length > 0 ? (
@@ -2102,6 +4097,28 @@ function OnlineExecutionModal({
                                                   : 'В новую поставку'}
                                               </button>
                                             ) : null}
+                                            {onMarkPackedWithoutSource ? (
+                                              <button
+                                                type="button"
+                                                className="online-execution-pack-without-source"
+                                                onClick={() => {
+                                                  if (order.assemblyId) {
+                                                    onMarkPackedWithoutSource(order.assemblyId, order.id);
+                                                  }
+                                                }}
+                                                disabled={!order.assemblyId || resolvingSyncConflictId !== null}
+                                                title={
+                                                  order.requiresKiz && !order.kizAccepted
+                                                    ? 'Сначала КИЗ должен быть подтверждён Wildberries'
+                                                    : 'Засчитать заказ сейчас, а исходный короб указать при закрытии заявки'
+                                                }
+                                              >
+                                                <CheckCircle2 size={14} aria-hidden="true" />
+                                                {resolvingSyncConflictId === order.assemblyId
+                                                  ? 'Засчитываю…'
+                                                  : 'Вложен без короба'}
+                                              </button>
+                                            ) : null}
                                           </div>
                                         ))}
                                       </div>
@@ -2113,7 +4130,26 @@ function OnlineExecutionModal({
                                   </td>
                                   <td>
                                     {row.availableBoxes.length > 0
-                                      ? row.availableBoxes.map((box) => `${box.boxCode} — ${box.quantity} шт.`).join(', ')
+                                      ? (
+                                          <div className="online-execution-storage-list">
+                                            {row.availableBoxes.map((box) => {
+                                              const storageLocation = box.storageLocation ?? null;
+                                              const palletCode =
+                                                storageLocation?.palletCode ??
+                                                box.palletCode ??
+                                                palletSortByBoxCode.get(normalizeCode(box.boxCode));
+                                              return (
+                                                <span key={normalizeCode(box.boxCode)}>
+                                                  <strong>{box.boxCode} — {box.quantity} шт.</strong>
+                                                  <small>
+                                                    Паллет-сорт: {palletCode ?? 'не назначен'}
+                                                    {storageLocation?.zoneName ? ` · зона: ${storageLocation.zoneName}` : ''}
+                                                  </small>
+                                                </span>
+                                              );
+                                            })}
+                                          </div>
+                                        )
                                       : 'доступный короб не найден'}
                                   </td>
                                   <td>{row.requiredQuantity}</td>
@@ -2156,17 +4192,29 @@ function OnlineExecutionModal({
                             <th>Размер</th>
                             <th>ШК WB — большие 4 цифры</th>
                             <th>Статус</th>
+                            <th>Действие</th>
                           </tr>
                         </thead>
                         <tbody>
                           {filteredFbsAssemblyRows.map((row) => (
                             <tr key={row.id}>
-                              <td><strong>{row.sourceBoxCode ?? 'ещё не выбран'}</strong></td>
+                              <td>
+                                <strong>
+                                  {row.sourceBoxPending
+                                    ? 'Указать при закрытии'
+                                    : row.sourceBoxCode ?? 'ещё не выбран'}
+                                </strong>
+                              </td>
                               <td>
                                 <strong>№{row.orderId}</strong>
                                 <span>{row.productName}{row.article ? ` · арт. ${row.article}` : ''}</span>
                               </td>
-                              <td>{row.productBarcode ?? 'ещё не пропикан'}</td>
+                              <td>
+                                <strong>{row.productBarcode ?? 'ещё не пропикан'}</strong>
+                                <span className="online-execution-kiz">
+                                  КИЗ: {row.kiz ?? 'не записан'}
+                                </span>
+                              </td>
                               <td><strong>{row.size ?? 'не указан'}</strong></td>
                               <td>
                                 <strong className="online-execution-wb-digits">{row.wbStickerPartB ?? '—'}</strong>
@@ -2175,6 +4223,9 @@ function OnlineExecutionModal({
                               <td>
                                 <span
                                   className={`online-execution-pill ${
+                                    row.completionSource === 'SOS_WB'
+                                      ? 'is-sos'
+                                      :
                                     row.status === 'COMPLETED'
                                       ? 'is-done'
                                       : row.status === 'RETURN_REQUIRED'
@@ -2182,8 +4233,35 @@ function OnlineExecutionModal({
                                         : 'is-open'
                                   }`}
                                 >
-                                  {row.statusLabel}
+                                  {row.completionSource === 'SOS_WB'
+                                    ? row.sourceBoxPending
+                                      ? 'Сделано SOS · короб ожидается'
+                                      : 'Сделано SOS'
+                                    : row.sourceBoxPending
+                                      ? 'Вложен без короба'
+                                      : row.statusLabel}
                                 </span>
+                                {row.completionSource === 'SOS_WB' ? (
+                                  <span>{row.workerName ? `${row.workerName} · ` : ''}{row.completedAt ? formatOnlineDateTime(row.completedAt) : ''}</span>
+                                ) : null}
+                              </td>
+                              <td>
+                                {onResetFbsAssembly && ['IN_PROGRESS', 'RESCAN_REQUIRED'].includes(row.status) ? (
+                                  <button
+                                    type="button"
+                                    className="online-execution-sync-conflict-button is-reset"
+                                    disabled={resolvingSyncConflictId !== null}
+                                    onClick={() => onResetFbsAssembly(row.id, row.orderId)}
+                                    title="Очистить сканы и вернуть только этот заказ в очередь ТСД"
+                                  >
+                                    <RotateCcw size={14} aria-hidden="true" />
+                                    {resolvingSyncConflictId === row.id
+                                      ? 'Сбрасываю…'
+                                      : 'Сбросить сборку'}
+                                  </button>
+                                ) : (
+                                  <span>—</span>
+                                )}
                               </td>
                             </tr>
                           ))}
@@ -2397,8 +4475,217 @@ function OnlineSectionSearch({ value, onChange, placeholder }: { value: string; 
   );
 }
 
+function FbsSynchronizationAuditPanel({
+  audit,
+  canResolve,
+  resolvingRequestId,
+  onResolve,
+  onClose,
+}: {
+  audit: FbsSynchronizationAudit;
+  canResolve: boolean;
+  resolvingRequestId: string | null;
+  onResolve: (
+    issue: FbsSynchronizationAuditIssue,
+    action: 'RETURN_TO_WORK' | 'CONFIRM_DELIVERED',
+  ) => Promise<void>;
+  onClose: () => void;
+}) {
+  return (
+    <section
+      className={`client-request-fbs-audit${audit.issues.length ? ' is-warning' : ' is-ok'}`}
+      aria-live="polite"
+    >
+      <header className="client-request-fbs-audit__header">
+        <div>
+          <div className="client-request-fbs-audit__title">
+            {audit.issues.length ? <AlertTriangle size={19} aria-hidden="true" /> : <CheckCircle2 size={19} aria-hidden="true" />}
+            <strong>{audit.issues.length ? `Найдено расхождений: ${audit.issues.length}` : 'Рассинхронизаций не найдено'}</strong>
+          </div>
+          <span>
+            Проверено клиентов: {audit.clients} · заказов: {audit.orders}
+          </span>
+        </div>
+        <button className="icon-button" type="button" onClick={onClose} title="Скрыть результат" aria-label="Скрыть результат проверки">
+          <X size={17} aria-hidden="true" />
+        </button>
+      </header>
+
+      {audit.issues.length ? (
+        <div className="client-request-fbs-audit__issues">
+          {audit.issues.map((issue) => {
+            const isResolving = resolvingRequestId === issue.requestId;
+            const canConfirmDelivery = issue.kind === 'WMS_OPEN_MARKETPLACE_FINISHED';
+            return (
+              <article className="client-request-fbs-audit__issue" key={issue.requestId}>
+                <div className="client-request-fbs-audit__issue-copy">
+                  <strong>Заявка №{String(issue.requestNumber).padStart(6, '0')} · {issue.requestTitle}</strong>
+                  <span>{issue.clientName} · {issue.marketplaceNames.join(', ')}</span>
+                  <p>
+                    В WMS: <b>{fbsSynchronizationStatusLabel(issue.wmsStatus)}</b> · на сдаче/в доставке: {issue.shippedOrders} · доставлено: {issue.deliveredOrders} · отменено: {issue.cancelledOrders}.
+                  </p>
+                  <small>
+                    {issue.kind === 'WMS_OPEN_MARKETPLACE_FINISHED'
+                      ? 'Все заказы маркетплейса доставлены либо отменены. Выберите, оставить заявку в работе или подтвердить её сдачу без повторного списания остатков.'
+                      : 'В WMS заявка закрыта, но в маркетплейсе ещё есть активные заказы. Верните её в работу для проверки.'}
+                  </small>
+                </div>
+                {canResolve ? (
+                  <div className="client-request-fbs-audit__actions">
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      disabled={isResolving}
+                      onClick={() => void onResolve(issue, 'RETURN_TO_WORK')}
+                    >
+                      Вернуть в работу
+                    </button>
+                    {canConfirmDelivery ? (
+                      <button
+                        className="primary-button"
+                        type="button"
+                        disabled={isResolving}
+                        onClick={() => void onResolve(issue, 'CONFIRM_DELIVERED')}
+                      >
+                        {isResolving ? 'Сохраняю…' : 'Подтвердить сдачу'}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </article>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {audit.failures.length ? (
+        <p className="client-request-fbs-audit__failures">
+          Не удалось обновить: {audit.failures.join(' · ')}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+function FbsSupplyConsistencyModal({
+  state,
+  onRepair,
+  onClose,
+}: {
+  state: FbsSupplyConsistencyState;
+  onRepair: () => void;
+  onClose: () => void;
+}) {
+  const { data } = state;
+  const isBusy = state.status === 'loading' || state.status === 'repairing';
+  return (
+    <div
+      className="online-execution-modal fbs-supply-consistency-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Проверка состава FBS-заявки с Wildberries"
+    >
+      <section className="online-execution-modal__panel fbs-supply-consistency-modal__panel">
+        <header className="online-execution-modal__header">
+          <div>
+            <span>Контроль состава WB</span>
+            <h3>Заявка №{String(state.request.number).padStart(6, '0')}</h3>
+            <small>{state.request.client.name}</small>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose} disabled={isBusy} title="Закрыть">
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="fbs-supply-consistency-modal__body">
+          {state.status === 'loading' ? (
+            <p className="inline-status">Запрашиваю фактический состав поставки у Wildberries…</p>
+          ) : null}
+          {state.status === 'repairing' ? (
+            <p className="inline-status">Добавляю недостающие заказы и пересчитываю состав заявки…</p>
+          ) : null}
+          {state.error ? <p className="form-error">{state.error}</p> : null}
+
+          {data ? (
+            <>
+              <div className={`fbs-supply-consistency-summary ${data.consistent ? 'is-ok' : 'is-error'}`}>
+                {data.consistent ? <CheckCircle2 size={22} aria-hidden="true" /> : <AlertTriangle size={22} aria-hidden="true" />}
+                <div>
+                  <strong>{data.consistent ? 'Состав совпадает' : 'Есть расхождение состава'}</strong>
+                  <span>{data.message}</span>
+                </div>
+              </div>
+              <div className="fbs-supply-consistency-metrics">
+                <article><span>В поставке WB</span><strong>{data.wbOrders}</strong></article>
+                <article><span>В заявке WMS</span><strong>{data.wmsOrders}</strong></article>
+                <article className={data.missingInWms > 0 ? 'is-error' : ''}><span>Не хватает в WMS</span><strong>{data.missingInWms}</strong></article>
+                <article className={data.extraInWms > 0 ? 'is-error' : ''}><span>Лишних в WMS</span><strong>{data.extraInWms}</strong></article>
+              </div>
+              <div className="fbs-supply-consistency-table-wrap">
+                <table className="data-table fbs-supply-consistency-table">
+                  <thead>
+                    <tr>
+                      <th>Поставка WB</th>
+                      <th>Склад</th>
+                      <th>WB</th>
+                      <th>WMS</th>
+                      <th>Не хватает</th>
+                      <th>Лишние</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.supplies.map((supply) => (
+                      <tr key={`${supply.connectionId}:${supply.supplyId}`}>
+                        <td><strong>{supply.supplyId}</strong><small>{supply.accountName}</small></td>
+                        <td>{supply.warehouseName ?? 'Не указан'}</td>
+                        <td>{supply.wbOrders}</td>
+                        <td>{supply.wmsOrders}</td>
+                        <td className={supply.missingInWms > 0 ? 'is-error' : ''}>{supply.missingInWms}</td>
+                        <td className={supply.extraInWms > 0 ? 'is-error' : ''}>{supply.extraInWms}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {data.supplies.some((supply) => supply.missingOrderIds.length || supply.extraOrderIds.length) ? (
+                <details className="fbs-supply-consistency-details">
+                  <summary>Показать номера заказов с расхождениями</summary>
+                  {data.supplies.map((supply) => (
+                    supply.missingOrderIds.length || supply.extraOrderIds.length ? (
+                      <div key={supply.supplyId}>
+                        <strong>{supply.supplyId}</strong>
+                        {supply.missingOrderIds.length ? <p>Нет в WMS: {supply.missingOrderIds.join(', ')}</p> : null}
+                        {supply.extraOrderIds.length ? <p>Лишние в WMS: {supply.extraOrderIds.join(', ')}</p> : null}
+                      </div>
+                    ) : null
+                  ))}
+                </details>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+
+        <footer className="fbs-supply-consistency-modal__footer">
+          <button className="client-request-action-button client-request-action-button--instruction" type="button" onClick={onClose} disabled={isBusy}>
+            Закрыть
+          </button>
+          {data && !data.consistent ? (
+            <button className="primary-button" type="button" onClick={onRepair} disabled={isBusy}>
+              <RefreshCw className={state.status === 'repairing' ? 'is-spinning' : undefined} size={16} aria-hidden="true" />
+              <span>{state.status === 'repairing' ? 'Исправляю…' : 'Исправить состав заявки'}</span>
+            </button>
+          ) : null}
+        </footer>
+      </section>
+    </div>
+  );
+}
+
 function renderRequests(
   state: LoadState<ClientRequestSummary>,
+  selectableRequestIds: Set<string>,
+  selectedRequestIds: Set<string>,
+  onRequestSelectionChange: (requestIds: Set<string>) => void,
   canChangeStatus: boolean,
   canPickOutbound: boolean,
   canCancelRequests: boolean,
@@ -2406,17 +4693,22 @@ function renderRequests(
   canRefreshPickInstruction: boolean,
   canUploadManualInstruction: boolean,
   refreshingInstructionId: string | null,
+  syncingTsdRequestId: string | null,
+  checkingSupplyRequestId: string | null,
   onStatusChange: (requestId: string, status: ClientRequestStatus) => void,
   onCancelRequest: (request: ClientRequestSummary) => void,
   onEditRequest: (request: ClientRequestSummary) => void,
   onOpenDocument: (request: ClientRequestSummary) => void,
   onDownloadRequestItems: (request: ClientRequestSummary) => void,
   onDownloadOriginalFile: ((request: ClientRequestSummary, file: ClientRequestFileSummary) => void) | undefined,
+  onOpenFbsOrders: ((request: ClientRequestSummary) => void) | undefined,
   onOpenOnlineExecution: ((request: ClientRequestSummary) => void) | undefined,
   onSelectManualBoxes: ((request: ClientRequestSummary) => void) | undefined,
   onOpenFbsBoxSearch: ((request: ClientRequestSummary) => void) | undefined,
   onOpenPickInstruction: (request: ClientRequestSummary) => void,
   onRefreshPickInstruction: (request: ClientRequestSummary) => void,
+  onSyncTsd: ((request: ClientRequestSummary) => void) | undefined,
+  onCheckSupplyConsistency: ((request: ClientRequestSummary) => void) | undefined,
   onDownloadPickInstruction: (request: ClientRequestSummary) => void,
   onDownloadWbProducts: ((request: ClientRequestSummary) => void) | undefined,
   onDownloadWbPackages: ((request: ClientRequestSummary) => void) | undefined,
@@ -2449,23 +4741,31 @@ function renderRequests(
       {state.status === 'loading' ? <p className="inline-status">Обновляю заявки.</p> : null}
       <ClientRequestsTable
         items={state.data}
+        selectableRequestIds={selectableRequestIds}
+        selectedRequestIds={selectedRequestIds}
+        onRequestSelectionChange={onRequestSelectionChange}
         canChangeStatus={canChangeStatus}
         canPickOutbound={canPickOutbound}
         canCancelRequests={canCancelRequests}
         canEditAnyRequest={canEditAnyRequest}
         canRefreshPickInstruction={canRefreshPickInstruction}
         refreshingInstructionId={refreshingInstructionId}
+        syncingTsdRequestId={syncingTsdRequestId}
+        checkingSupplyRequestId={checkingSupplyRequestId}
         onStatusChange={onStatusChange}
         onCancelRequest={onCancelRequest}
         onEditRequest={onEditRequest}
         onOpenDocument={onOpenDocument}
         onDownloadRequestItems={onDownloadRequestItems}
         onDownloadOriginalFile={onDownloadOriginalFile}
+        onOpenFbsOrders={onOpenFbsOrders}
         onOpenOnlineExecution={onOpenOnlineExecution}
         onSelectManualBoxes={onSelectManualBoxes}
         onOpenFbsBoxSearch={onOpenFbsBoxSearch}
         onOpenPickInstruction={onOpenPickInstruction}
         onRefreshPickInstruction={onRefreshPickInstruction}
+        onSyncTsd={onSyncTsd}
+        onCheckSupplyConsistency={onCheckSupplyConsistency}
         onDownloadPickInstruction={onDownloadPickInstruction}
         onDownloadWbProducts={onDownloadWbProducts}
         onDownloadWbPackages={onDownloadWbPackages}
@@ -2496,6 +4796,13 @@ function normalizeOnlineBoxes(
     isFound?: boolean;
     servesMultipleCities?: boolean;
     multiCityLabel?: string;
+    storageLocation?: {
+      palletId: string;
+      palletCode: string;
+      zoneId: string | null;
+      zoneCode: string | null;
+      zoneName: string | null;
+    } | null;
   }>,
 ) {
   return values
@@ -2505,6 +4812,7 @@ function normalizeOnlineBoxes(
       isFound: Boolean(box.isFound),
       servesMultipleCities: Boolean(box.servesMultipleCities),
       multiCityLabel: box.multiCityLabel?.trim() ?? '',
+      storageLocation: box.storageLocation ?? null,
     }))
     .filter((box) => box.boxCode);
 }
@@ -2589,6 +4897,23 @@ function onlineFbsOrderKey(order: { id: string; connectionId: string }) {
   return `${order.connectionId}:${order.id}`;
 }
 
+function onlineRequestNumber(value: number | null) {
+  return value == null ? 'заявка без номера' : `заявка №${String(value).padStart(6, '0')}`;
+}
+
+function formatOnlineDateTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value || 'время не записано';
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).format(date);
+}
+
 function movementRowMatchesSearch(
   row: { sourceBox?: string; targetBox?: string; actualTargetBoxes?: string[]; barcode?: string; name?: string | null },
   query: string,
@@ -2639,6 +4964,107 @@ function parseNonNegativeInteger(value: string) {
 
 function isPalletPackage(packageType?: string | null) {
   return ['PALLET', 'PALLETTE', 'ПАЛЛЕТ', 'ПАЛЛЕТА'].includes((packageType ?? '').trim().toUpperCase());
+}
+
+function isStockSourceResolutionError(message: string) {
+  const normalized = message.toLocaleLowerCase('ru-RU');
+  return (
+    normalized.includes('остат') ||
+    normalized.includes('списан') ||
+    normalized.includes('фактическ') ||
+    normalized.includes('короб')
+  );
+}
+
+function buildFbsSynchronizationAudit(
+  responses: ClientFbsOrders[],
+  failures: string[],
+): FbsSynchronizationAudit {
+  const byRequest = new Map<
+    string,
+    Omit<FbsSynchronizationAuditIssue, 'kind'>
+  >();
+  let orders = 0;
+
+  for (const response of responses) {
+    for (const order of response.orders) {
+      if (!order.request) continue;
+      orders += 1;
+      const current = byRequest.get(order.request.id) ?? {
+        requestId: order.request.id,
+        requestNumber: order.request.number,
+        requestTitle: order.request.title,
+        clientName: response.client.name,
+        marketplaceNames: [],
+        wmsStatus: order.request.status,
+        activeOrders: 0,
+        shippedOrders: 0,
+        deliveredOrders: 0,
+        cancelledOrders: 0,
+      };
+      const marketplaceName = order.marketplace === 'WILDBERRIES'
+        ? 'WB'
+        : order.marketplace === 'OZON'
+          ? 'Ozon'
+          : 'Яндекс Маркет';
+      if (!current.marketplaceNames.includes(marketplaceName)) {
+        current.marketplaceNames.push(marketplaceName);
+      }
+      if (order.category === 'active') current.activeOrders += 1;
+      else if (order.category === 'cancelled') current.cancelledOrders += 1;
+      else if (order.category === 'shipped') current.shippedOrders += 1;
+      else if (order.category === 'archive') current.deliveredOrders += 1;
+      byRequest.set(order.request.id, current);
+    }
+  }
+
+  const closed = new Set<ClientRequestStatus>(['DONE', 'CANCELLED', 'REJECTED']);
+  const issues: FbsSynchronizationAuditIssue[] = [];
+  byRequest.forEach((request) => {
+    // `shipped` in WB means handover to delivery, not delivery to the buyer.
+    // Such a request must remain in work; #161 is exactly this case.
+    if (
+      !closed.has(request.wmsStatus) &&
+      request.activeOrders === 0 &&
+      request.shippedOrders === 0 &&
+      (request.deliveredOrders > 0 || request.cancelledOrders > 0)
+    ) {
+      issues.push({ ...request, kind: 'WMS_OPEN_MARKETPLACE_FINISHED' });
+    }
+    if (closed.has(request.wmsStatus) && request.activeOrders > 0) {
+      issues.push({ ...request, kind: 'WMS_CLOSED_MARKETPLACE_ACTIVE' });
+    }
+  });
+
+  return {
+    checkedAt: new Date().toISOString(),
+    clients: responses.length,
+    orders,
+    failures,
+    issues: issues.sort((left, right) => left.requestNumber - right.requestNumber),
+  };
+}
+
+function fbsSynchronizationStatusLabel(status: ClientRequestStatus) {
+  const labels: Record<ClientRequestStatus, string> = {
+    SUBMITTED: 'Новая',
+    IN_REVIEW: 'На проверке',
+    APPROVED: 'Подтверждена',
+    IN_WORK: 'В работе',
+    PACKED: 'Упакована',
+    DONE: 'Сдана',
+    CANCELLED: 'Отменена',
+    REJECTED: 'Отклонена',
+  };
+  return labels[status] ?? status;
+}
+
+function fbsAssemblyStatusLabel(status: string) {
+  if (status === 'COMPLETED') return 'собран';
+  if (status === 'IN_PROGRESS') return 'сборка не завершена';
+  if (status === 'RELEASED') return 'отложен на ТСД';
+  if (status === 'CANCELLED') return 'сборка отменена';
+  return 'не начинался на ТСД';
 }
 
 function errorMessage(caught: unknown) {

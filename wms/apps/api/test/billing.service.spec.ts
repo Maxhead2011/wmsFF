@@ -535,6 +535,83 @@ describe('BillingService', () => {
     );
   });
 
+  it('явно добавляет второй выезд FBS только в черновом начислении', async () => {
+    const charge = {
+      id: 'charge-fbs-2',
+      clientId: 'client-1',
+      status: BillingChargeStatus.DRAFT,
+      quantity: 2,
+      metadata: {
+        kind: 'FBS',
+        logisticsTrip: {
+          billingDay: '2026-07-20',
+          groupKey: 'client-1:2026-07-20',
+          automaticPrimary: false,
+          extraTripOverride: false,
+          charged: false,
+          totalWithoutLogisticsRub: 300,
+          totalWithLogisticsRub: 1800,
+        },
+      },
+      invoiceItems: [],
+    };
+    const tx = {
+      billingCharge: {
+        update: vi.fn().mockResolvedValue({}),
+        findUniqueOrThrow: vi.fn().mockResolvedValue({
+          ...billingCharge({ id: charge.id, totalRub: '1800' }),
+          metadata: charge.metadata,
+        }),
+      },
+      billingInvoiceItem: {
+        updateMany: vi.fn(),
+        findMany: vi.fn(),
+      },
+      billingInvoice: {
+        update: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue({}),
+      },
+    };
+    const prisma = {
+      billingCharge: {
+        findUnique: vi.fn().mockResolvedValue(charge),
+      },
+      $transaction: vi.fn(
+        async (callback: (client: typeof tx) => Promise<unknown>) => callback(tx),
+      ),
+    };
+    const service = new BillingService(prisma as never, clientScopes());
+
+    await service.updateFbsLogisticsTrip(
+      charge.id,
+      { extraTrip: true },
+      user({ clientIds: ['client-1'], writableClientIds: ['client-1'] }),
+    );
+
+    expect(tx.billingCharge.update).toHaveBeenCalledWith({
+      where: { id: charge.id },
+      data: expect.objectContaining({
+        unitPriceRub: 900,
+        totalRub: 1800,
+        metadata: expect.objectContaining({
+          logisticsTrip: expect.objectContaining({
+            extraTripOverride: true,
+            charged: true,
+          }),
+        }),
+      }),
+    });
+    expect(tx.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'FBS_LOGISTICS_EXTRA_TRIP_ENABLED',
+        }),
+      }),
+    );
+  });
+
   it('СЃРѕР·РґР°РµС‚ СЃС‡РµС‚ РёР· СѓС‚РІРµСЂР¶РґРµРЅРЅС‹С… РЅР°С‡РёСЃР»РµРЅРёР№ РїРµСЂРёРѕРґР°', async () => {
     const prisma = {
       billingCharge: {
@@ -1047,6 +1124,93 @@ describe('BillingService', () => {
     );
     },
   );
+
+  it('stores a canonical WMS city for fixed FBS processing plus logistics', async () => {
+    const prisma = {
+      client: { count: vi.fn().mockResolvedValue(1) },
+      clientFbsBillingSettings: {
+        upsert: vi.fn().mockImplementation(async ({ create }) => ({
+          ...create,
+        })),
+      },
+    };
+    const logistics = {
+      listFbsCalculatorDestinations: vi.fn().mockResolvedValue({
+        destinations: ['Внуково', 'Казань', 'Санкт-Петербург'],
+      }),
+    };
+    const marketplaceConnections = {
+      recalculateFbsDraftBilling: vi.fn().mockResolvedValue({
+        recalculatedCharges: 2,
+        recalculatedInvoices: 1,
+      }),
+    };
+    const service = new BillingService(
+      prisma as never,
+      clientScopes(),
+      undefined,
+      logistics as never,
+      marketplaceConnections as never,
+    );
+
+    const result = await service.updateClientFbsTurnkey(
+      'client-1',
+      {
+        enabled: false,
+        unitPriceRub: 0,
+        fixedPlusLogisticsEnabled: true,
+        fixedPlusLogisticsUnitPriceRub: 50,
+        fixedPlusLogisticsDestination: '  казань ',
+        primaryProcessingEnabled: false,
+      },
+      user({ clientIds: ['client-1'], writableClientIds: ['client-1'] }),
+    );
+
+    expect(prisma.clientFbsBillingSettings.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({
+          fixedPlusLogisticsEnabled: true,
+          fixedPlusLogisticsUnitPriceRub: 50,
+          fixedPlusLogisticsDestination: 'Казань',
+        }),
+      }),
+    );
+    expect(result).toMatchObject({
+      fixedPlusLogisticsEnabled: true,
+      fixedPlusLogisticsUnitPriceRub: 50,
+      fixedPlusLogisticsDestination: 'Казань',
+      recalculation: {
+        recalculatedCharges: 2,
+        recalculatedInvoices: 1,
+      },
+    });
+    expect(marketplaceConnections.recalculateFbsDraftBilling)
+      .toHaveBeenCalledWith('client-1');
+  });
+
+  it('rejects simultaneous FBS turnkey and fixed plus logistics modes', async () => {
+    const prisma = {
+      client: { count: vi.fn().mockResolvedValue(1) },
+      clientFbsBillingSettings: { upsert: vi.fn() },
+    };
+    const service = new BillingService(prisma as never, clientScopes());
+
+    await expect(
+      service.updateClientFbsTurnkey(
+        'client-1',
+        {
+          enabled: true,
+          unitPriceRub: 50,
+          fixedPlusLogisticsEnabled: true,
+          fixedPlusLogisticsUnitPriceRub: 40,
+          fixedPlusLogisticsDestination: 'Казань',
+          primaryProcessingEnabled: false,
+        },
+        user({ clientIds: ['client-1'], writableClientIds: ['client-1'] }),
+      ),
+    ).rejects.toThrow(BadRequestException);
+    expect(prisma.clientFbsBillingSettings.upsert).not.toHaveBeenCalled();
+  });
 });
 
 function clientScopes() {

@@ -33,6 +33,17 @@ export class ClientsService {
     const clientFilter = this.clientScopes.resolveClientFilter(user);
     const where: Prisma.ClientWhereInput = {
       ...(clientFilter === undefined ? {} : { id: clientFilter }),
+      isDemo: Boolean(user.isDemo),
+      ...(user.activeWarehouseId && !user.roleCodes.includes('CLIENT')
+        ? {
+            warehouseLinks: {
+              some: {
+                warehouseId: user.activeWarehouseId,
+                status: 'ACTIVE',
+              },
+            },
+          }
+        : {}),
       ...(includeArchived ? {} : { status: { not: ClientStatus.ARCHIVED } }),
     };
 
@@ -71,18 +82,49 @@ export class ClientsService {
       throw new NotFoundException('Клиент не найден.');
     }
 
+    const warehouseId = user.activeWarehouseId?.trim() || null;
+    if (warehouseId && !this.hasGlobalClientManagement(user) && !user.roleCodes.includes('CLIENT')) {
+      const [boxes, pallets, movements] = await Promise.all([
+        this.prisma.box.count({ where: { clientId: id, warehouseId } }),
+        this.prisma.pallet.count({
+          where: { clientId: id, zone: { warehouseId } },
+        }),
+        this.prisma.stockMovement.count({
+          where: {
+            clientId: id,
+            OR: [
+              { warehouseId },
+              { warehouseId: null, box: { warehouseId } },
+            ],
+          },
+        }),
+      ]);
+
+      return {
+        ...client,
+        _count: {
+          ...client._count,
+          boxes,
+          pallets,
+          movements,
+        },
+      };
+    }
+
     return client;
   }
 
   async create(dto: CreateClientDto, user: AuthUser) {
-    this.clientScopes.requireGlobalClientAccess(user);
+    const warehouseId = this.resolveManagementWarehouse(user);
     await this.ensureFulfillmentManagerExists(dto.fulfillmentManagerUserId);
+    const ownCompanyId = await this.resolveOwnCompanyId(dto.ownCompanyId, user, warehouseId);
 
-    return this.createWithGeneratedCode(dto);
+    return this.createWithGeneratedCode(dto, ownCompanyId, warehouseId);
   }
 
   async importWorkbook(file: Express.Multer.File | undefined, user: AuthUser) {
-    this.clientScopes.requireGlobalClientAccess(user);
+    const warehouseId = this.resolveManagementWarehouse(user);
+    const ownCompanyId = await this.resolveOwnCompanyId(undefined, user, warehouseId);
     if (!file?.buffer?.length) {
       throw new BadRequestException('Выберите XLSX-файл с клиентами.');
     }
@@ -118,8 +160,8 @@ export class ClientsService {
               code: row.code,
               name: row.name,
               registrationDate: row.registrationDate,
-            })
-          : await this.createImportedClientWithGeneratedCode(row);
+            }, warehouseId, ownCompanyId)
+          : await this.createImportedClientWithGeneratedCode(row, warehouseId, ownCompanyId);
         created.push(client);
         if (row.code) {
           existingByCode.set(row.code, row.name);
@@ -156,8 +198,12 @@ export class ClientsService {
   }
 
   async update(id: string, dto: UpdateClientDto, user: AuthUser) {
-    this.clientScopes.requireGlobalClientAccess(user);
+    const warehouseId = await this.requireClientManagementAccess(id, user);
     await this.ensureFulfillmentManagerExists(dto.fulfillmentManagerUserId);
+    const ownCompanyId =
+      dto.ownCompanyId === undefined
+        ? undefined
+        : await this.resolveOwnCompanyId(dto.ownCompanyId, user, warehouseId);
 
     try {
       return await this.prisma.client.update({
@@ -168,16 +214,21 @@ export class ClientsService {
           ...(dto.fulfillmentManagerUserId === undefined
             ? {}
             : { fulfillmentManagerUserId: normalizeNullableString(dto.fulfillmentManagerUserId) }),
+          ...(ownCompanyId === undefined ? {} : { ownCompanyId }),
           ...(dto.storageAccountingEnabled === undefined ? {} : { storageAccountingEnabled: dto.storageAccountingEnabled }),
           ...(dto.logisticsInvoiceMode === undefined ? {} : { logisticsInvoiceMode: dto.logisticsInvoiceMode }),
           ...(dto.storageBillingMode === undefined ? {} : { storageBillingMode: dto.storageBillingMode }),
           ...(dto.storesWithoutBoxes === undefined ? {} : { storesWithoutBoxes: dto.storesWithoutBoxes }),
+          ...(dto.stockBalanceMode === undefined ? {} : { stockBalanceMode: dto.stockBalanceMode }),
           ...(dto.onlineReceiptVisibleToClient === undefined
             ? {}
             : { onlineReceiptVisibleToClient: dto.onlineReceiptVisibleToClient }),
           ...(dto.fbsCalculatorEnabled === undefined
             ? {}
             : { fbsCalculatorEnabled: dto.fbsCalculatorEnabled }),
+          ...(dto.relabelingEnabled === undefined
+            ? {}
+            : { relabelingEnabled: dto.relabelingEnabled }),
           ...nullableUpdateClientData(dto),
         },
         select: this.clientSummarySelect(),
@@ -191,7 +242,17 @@ export class ClientsService {
   }
 
   async updateStatus(id: string, status: string, user: AuthUser) {
-    this.clientScopes.requireGlobalClientAccess(user);
+    const warehouseId = await this.requireClientManagementAccess(id, user);
+    if (!this.hasGlobalClientManagement(user) && warehouseId) {
+      const activeBranches = await this.prisma.warehouseClient.count({
+        where: { clientId: id, status: 'ACTIVE' },
+      });
+      if (activeBranches > 1) {
+        throw new BadRequestException(
+          'Клиент работает в нескольких филиалах. Общий статус может изменить только администратор сети.',
+        );
+      }
+    }
     const normalizedStatus = normalizeClientStatus(status);
 
     try {
@@ -273,7 +334,11 @@ export class ClientsService {
     };
   }
 
-  private async createWithGeneratedCode(dto: CreateClientDto) {
+  private async createWithGeneratedCode(
+    dto: CreateClientDto,
+    ownCompanyId: string | null,
+    warehouseId?: string | null,
+  ) {
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const code = await this.nextClientCode();
       try {
@@ -289,9 +354,22 @@ export class ClientsService {
             logisticsInvoiceMode: dto.logisticsInvoiceMode ?? ClientLogisticsInvoiceMode.SEPARATE,
             storageBillingMode: dto.storageBillingMode ?? ClientStorageBillingMode.MONTHLY,
             storesWithoutBoxes: dto.storesWithoutBoxes ?? false,
+            stockBalanceMode: dto.stockBalanceMode ?? 'PALLET_SORT',
             onlineReceiptVisibleToClient: dto.onlineReceiptVisibleToClient ?? false,
             fbsCalculatorEnabled: dto.fbsCalculatorEnabled ?? false,
+            relabelingEnabled: dto.relabelingEnabled ?? false,
             fulfillmentManagerUserId: normalizeNullableString(dto.fulfillmentManagerUserId),
+            ownCompanyId,
+            warehouseLinks: warehouseId
+              ? {
+                  create: {
+                    warehouseId,
+                    status: 'ACTIVE',
+                    source: 'LOCAL',
+                    activatedAt: new Date(),
+                  },
+                }
+              : undefined,
           },
           select: this.clientSummarySelect(),
         });
@@ -305,7 +383,11 @@ export class ClientsService {
     throw new BadRequestException('Не удалось сгенерировать уникальный код клиента.');
   }
 
-  private async createImportedClientWithGeneratedCode(row: ParsedClientImportRow) {
+  private async createImportedClientWithGeneratedCode(
+    row: ParsedClientImportRow,
+    warehouseId: string | null,
+    ownCompanyId: string | null,
+  ) {
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const code = await this.nextClientCode();
       try {
@@ -313,7 +395,7 @@ export class ClientsService {
           code,
           name: row.name,
           registrationDate: row.registrationDate,
-        });
+        }, warehouseId, ownCompanyId);
       } catch (caught) {
         if (!isUniqueClientCodeError(caught)) {
           throw caught;
@@ -324,7 +406,11 @@ export class ClientsService {
     throw new BadRequestException('Не удалось сгенерировать уникальный код клиента.');
   }
 
-  private createWithCode(row: { code: string; name: string; registrationDate: Date | null }) {
+  private createWithCode(
+    row: { code: string; name: string; registrationDate: Date | null },
+    warehouseId: string | null = null,
+    ownCompanyId: string | null = null,
+  ) {
     return this.prisma.client.create({
       data: {
         code: row.code,
@@ -334,6 +420,17 @@ export class ClientsService {
         storageAccountingEnabled: false,
         logisticsInvoiceMode: ClientLogisticsInvoiceMode.SEPARATE,
         storageBillingMode: ClientStorageBillingMode.MONTHLY,
+        ownCompanyId,
+        warehouseLinks: warehouseId
+          ? {
+              create: {
+                warehouseId,
+                status: 'ACTIVE',
+                source: 'LOCAL',
+                activatedAt: new Date(),
+              },
+            }
+          : undefined,
         ...(row.registrationDate ? { createdAt: row.registrationDate } : {}),
       },
       select: this.clientSummarySelect(),
@@ -374,6 +471,103 @@ export class ClientsService {
     }
   }
 
+  private async resolveOwnCompanyId(
+    requestedId: string | undefined,
+    user: AuthUser,
+    warehouseId: string | null,
+  ) {
+    if (!this.prisma.ownCompany) return null;
+    const normalized = normalizeNullableString(requestedId);
+    const scopedToWarehouse = !this.hasGlobalClientManagement(user) && Boolean(warehouseId);
+    if (normalized) {
+      const company = await (this.prisma as any).ownCompany.findFirst({
+        where: {
+          id: normalized,
+          isActive: true,
+          ...(scopedToWarehouse
+            ? {
+                OR: [
+                  { warehouseId },
+                  { warehouses: { some: { id: warehouseId } } },
+                ],
+              }
+            : {}),
+        },
+        select: { id: true },
+      });
+      if (!company) {
+        throw new BadRequestException(
+          scopedToWarehouse
+            ? 'Собственная компания не относится к выбранному филиалу.'
+            : 'Выбранная собственная компания не найдена или отключена.',
+        );
+      }
+      return company.id;
+    }
+    if (warehouseId) {
+      const warehouse = await this.prisma.warehouse.findUnique({
+        where: { id: warehouseId },
+        select: { ownCompanyId: true },
+      });
+      if (warehouse?.ownCompanyId) return warehouse.ownCompanyId;
+    }
+
+    const active = await (this.prisma as any).ownCompany.findMany({
+      where: {
+        isActive: true,
+        ...(scopedToWarehouse ? { warehouseId } : {}),
+      },
+      select: { id: true },
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+      take: 2,
+    });
+    return active.length === 1 ? active[0].id : active[0]?.id ?? null;
+  }
+
+  private hasGlobalClientManagement(user: AuthUser) {
+    return user.permissionCodes.includes('system:admin') || user.clientScopeMode === 'ALL';
+  }
+
+  private resolveManagementWarehouse(user: AuthUser) {
+    if (this.hasGlobalClientManagement(user)) {
+      return user.activeWarehouseId ?? null;
+    }
+    const warehouseId = user.activeWarehouseId?.trim() || '';
+    if (!warehouseId || !(user.writableWarehouseIds ?? []).includes(warehouseId)) {
+      throw new BadRequestException(
+        'Для создания клиента нужен активный филиал, доступный менеджеру для записи.',
+      );
+    }
+    return warehouseId;
+  }
+
+  private async requireClientManagementAccess(id: string, user: AuthUser) {
+    if (this.hasGlobalClientManagement(user)) {
+      return user.activeWarehouseId ?? null;
+    }
+    const warehouseId = this.resolveManagementWarehouse(user);
+    if (!warehouseId) {
+      throw new BadRequestException('Для управления клиентом выберите филиал.');
+    }
+    this.clientScopes.requireClientAccess(user, id, 'write');
+    const activeWarehouseCount = await this.prisma.warehouseClient.count({
+      where: { clientId: id, status: 'ACTIVE' },
+    });
+    if (activeWarehouseCount > 1) {
+      throw new BadRequestException(
+        'Клиент работает в нескольких филиалах. Общие реквизиты и настройки может изменить только администратор сети.',
+      );
+    }
+    const link = await this.prisma.warehouseClient.findFirst({
+      where: { warehouseId, clientId: id, status: 'ACTIVE' },
+      select: { clientId: true },
+    });
+    if (!link) {
+      throw new NotFoundException('Клиент не найден в активном филиале.');
+    }
+    return warehouseId;
+  }
+
   private clientSummarySelect() {
     return {
       id: true,
@@ -398,9 +592,25 @@ export class ClientsService {
       logisticsInvoiceMode: true,
       storageBillingMode: true,
       storesWithoutBoxes: true,
+      stockBalanceMode: true,
       onlineReceiptVisibleToClient: true,
       fbsCalculatorEnabled: true,
+        relabelingEnabled: true,
+        factoryEnabled: true,
+        factoryName: true,
+        factoryCode: true,
       fulfillmentManagerUserId: true,
+      ownCompanyId: true,
+      ownCompany: {
+        select: {
+          id: true,
+          shortName: true,
+          fullName: true,
+          inn: true,
+          isDefault: true,
+          isActive: true,
+        },
+      },
       fulfillmentManager: {
         select: {
           id: true,

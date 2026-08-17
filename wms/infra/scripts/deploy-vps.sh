@@ -11,6 +11,7 @@ HOST_NGINX_AVAILABLE="/etc/nginx/sites-available/wms.logoff.pro"
 HOST_NGINX_ENABLED="/etc/nginx/sites-enabled/wms.logoff.pro"
 DOCKER_CLEANUP_AFTER_DEPLOY="${DOCKER_CLEANUP_AFTER_DEPLOY:-1}"
 DOCKER_PRUNE_UNTIL="${DOCKER_PRUNE_UNTIL:-}"
+PRISMA_SCHEMA_MODE="${PRISMA_SCHEMA_MODE:-migrate}"
 
 cleanup_docker_after_deploy() {
   if [ "$DOCKER_CLEANUP_AFTER_DEPLOY" != "1" ]; then
@@ -98,13 +99,29 @@ fi
 cd "$COMPOSE_DIR"
 docker compose --env-file ../.env build
 docker compose --env-file ../.env up -d postgres analytics-postgres redis
-docker compose --env-file ../.env up -d api web
-docker compose --env-file ../.env --profile compose-nginx rm -sf nginx >/dev/null 2>&1 || true
+
+# Apply the database schema before a new API container can accept traffic.
+# Production migrations preserve backfills, triggers and data checks that
+# `prisma db push` cannot execute. `push` is an explicit bootstrap escape hatch.
+case "$PRISMA_SCHEMA_MODE" in
+  migrate)
+    docker compose --env-file ../.env run --rm api pnpm --filter @logoff/wms-api prisma:migrate:deploy
+    ;;
+  push)
+    docker compose --env-file ../.env run --rm api pnpm --filter @logoff/wms-api prisma:push
+    ;;
+  *)
+    echo "Unsupported PRISMA_SCHEMA_MODE=$PRISMA_SCHEMA_MODE (expected migrate or push)" >&2
+    exit 1
+    ;;
+esac
 
 # Русский комментарий: для первого bootstrap используем db push; после появления миграций заменим на migrate deploy.
-docker compose --env-file ../.env exec -T api pnpm --filter @logoff/wms-api prisma:push
-docker compose --env-file ../.env exec -T api pnpm --filter @logoff/wms-api prisma:analytics:push
+docker compose --env-file ../.env run --rm api pnpm --filter @logoff/wms-api prisma:analytics:push
+docker compose --env-file ../.env up -d api web
+docker compose --env-file ../.env --profile compose-nginx rm -sf nginx >/dev/null 2>&1 || true
 docker compose --env-file ../.env exec -T api pnpm --filter @logoff/wms-api ensure:admin
+docker compose --env-file ../.env exec -T api pnpm --filter @logoff/wms-api ensure:demo
 
 if [ -f "$HOST_NGINX_AVAILABLE" ]; then
   cp "$HOST_NGINX_AVAILABLE" "$HOST_NGINX_AVAILABLE.bak.$(date +%Y%m%d-%H%M%S)"

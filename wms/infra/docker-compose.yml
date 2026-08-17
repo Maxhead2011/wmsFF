@@ -36,6 +36,12 @@ services:
     volumes:
       - ./data/redis:/data
 
+  ollama:
+    image: ollama/ollama:0.11.4
+    restart: unless-stopped
+    volumes:
+      - ./data/ollama:/root/.ollama
+
   api:
     build:
       context: ..
@@ -51,6 +57,8 @@ services:
       analytics-postgres:
         condition: service_healthy
       redis:
+        condition: service_started
+      ollama:
         condition: service_started
 
   web:

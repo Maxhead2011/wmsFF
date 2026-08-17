@@ -8,6 +8,8 @@ import { PrinterScopeService } from './printer-scope.service';
 import { AuthGuard } from './guards/auth.guard';
 import { PermissionsGuard } from './guards/permissions.guard';
 import { PasswordService } from './password.service';
+import { UserSessionService } from './user-session.service';
+import { WarehouseAuthScopeService } from './warehouse-auth-scope.service';
 
 @Module({
   controllers: [AuthController],
@@ -20,6 +22,8 @@ import { PasswordService } from './password.service';
     PrinterScopeService,
     PasswordService,
     PermissionsGuard,
+    UserSessionService,
+    WarehouseAuthScopeService,
   ],
   exports: [
     AccessModelService,
@@ -30,6 +34,8 @@ import { PasswordService } from './password.service';
     PrinterScopeService,
     PasswordService,
     PermissionsGuard,
+    UserSessionService,
+    WarehouseAuthScopeService,
   ],
 })
 export class AuthModule {}

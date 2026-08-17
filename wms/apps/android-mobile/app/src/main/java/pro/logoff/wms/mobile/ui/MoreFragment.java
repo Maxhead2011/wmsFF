@@ -6,6 +6,7 @@ import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ArrayAdapter;
 import android.widget.LinearLayout;
 import android.widget.Toast;
 
@@ -21,6 +22,7 @@ import java.util.Map;
 
 import pro.logoff.wms.mobile.AppState;
 import pro.logoff.wms.mobile.BuildConfig;
+import pro.logoff.wms.mobile.FullWmsActivity;
 import pro.logoff.wms.mobile.LogoffApplication;
 import pro.logoff.wms.mobile.MainActivity;
 import pro.logoff.wms.mobile.R;
@@ -38,6 +40,7 @@ public class MoreFragment extends Fragment {
         binding.account.setText(AppState.string(app.state().user().get("name")));
         binding.roles.setText("Роли: " + AppState.string(app.state().user().get("roleCodes")));
         configureTheme();
+        configureWebTheme();
         addModules();
         binding.checkUpdate.setOnClickListener(view -> checkUpdate());
         binding.logout.setOnClickListener(view -> logout());
@@ -54,9 +57,37 @@ public class MoreFragment extends Fragment {
         });
     }
 
+    private void configureWebTheme() {
+        String userId = AppState.string(app.state().user().get("id"));
+        boolean includeWingX = ThemeStore.canUseWingX(userId);
+        String[] values = ThemeStore.webThemeValues(includeWingX);
+        String[] labels = ThemeStore.webThemeLabels(includeWingX);
+        String current = ThemeStore.webTheme(requireContext());
+        if (ThemeStore.WING_X.equals(current) && !includeWingX) {
+            current = ThemeStore.CLASSIC;
+            ThemeStore.setWebTheme(requireContext(), current);
+        }
+        binding.webTheme.setAdapter(new ArrayAdapter<>(
+                requireContext(),
+                android.R.layout.simple_dropdown_item_1line,
+                labels
+        ));
+        binding.webTheme.setText(ThemeStore.webThemeLabel(current), false);
+        binding.webTheme.setOnItemClickListener((parent, view, position, id) -> {
+            if (position >= 0 && position < values.length) {
+                ThemeStore.setWebTheme(requireContext(), values[position]);
+            }
+        });
+        binding.webTheme.setOnClickListener(view -> binding.webTheme.showDropDown());
+    }
+
     private void addModules() {
+        addFullWmsButton();
         if (app.state().isAdmin()) {
             addButton("FBS", () -> ((MainActivity) requireActivity()).showNative(FbsFragment.newInstance(), "FBS"));
+            if (app.state().can("expenses:read")) {
+                addButton("Расходы", () -> ((MainActivity) requireActivity()).showNative(ExpensesFragment.newInstance(), "Расходы"));
+            }
             addModuleIfAllowed("Склад и короба", "warehouse", "warehouse:read");
             addModuleIfAllowed("Инвентаризация", "inventory", "stock:read");
             addModuleIfAllowed("Товарооборот", "turnover", "stock:read");
@@ -81,6 +112,23 @@ public class MoreFragment extends Fragment {
             addModule("Услуги и тарифы", "services");
             addModule("Профиль компании", "profile");
         }
+    }
+
+    private void addFullWmsButton() {
+        MaterialButton button = new MaterialButton(requireContext());
+        button.setText("Полная WMS · все функции и темы   ›");
+        button.setAllCaps(false);
+        button.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICAL);
+        button.setTextColor(ContextCompat.getColor(requireContext(), R.color.logoff_white));
+        button.setBackgroundColor(ContextCompat.getColor(requireContext(), R.color.logoff_red));
+        button.setCornerRadius(dp(18));
+        button.setInsetTop(0);
+        button.setInsetBottom(0);
+        button.setPadding(dp(18), 0, dp(18), 0);
+        button.setOnClickListener(view -> startActivity(new Intent(requireContext(), FullWmsActivity.class)));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(62));
+        params.bottomMargin = dp(12);
+        binding.moduleButtons.addView(button, params);
     }
 
     private void addModule(String title, String module) {

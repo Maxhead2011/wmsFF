@@ -10,6 +10,7 @@ import {
   IsOptional,
   IsString,
   Max,
+  MaxLength,
   Min,
   ValidateIf,
   ValidateNested,
@@ -23,9 +24,18 @@ class FbsAdditionalServiceDto {
   @Min(0.001)
   @Max(1000)
   quantityMultiplier!: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  matchKeywords?: string;
 }
 
 export class UpdateFbsBillingSettingsDto {
+  @IsOptional()
+  @IsBoolean()
+  primaryProcessingEnabled?: boolean;
+
   @IsEnum(FbsDeliveryDestination)
   defaultDeliveryDestination!: FbsDeliveryDestination;
 
@@ -50,6 +60,32 @@ export class UpdateFbsBillingSettingsDto {
   @IsNumber()
   @Min(0)
   extraBlockPriceRub!: number;
+
+  @IsOptional()
+  @IsBoolean()
+  tieredLogisticsEnabled?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(100000)
+  logisticsFreeItemsLimit?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(1000000)
+  logisticsCubicMeterLiters?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  logisticsCubicMeterPriceRub?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  logisticsPalletPriceRub?: number;
 
   @IsInt()
   @Min(1)

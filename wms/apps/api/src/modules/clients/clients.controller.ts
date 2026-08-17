@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
+import { parseRequisitesDocument } from '../../common/documents/requisites-document-parser';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
@@ -28,6 +29,15 @@ export class ClientsController {
   @RequirePermissions('clients:write')
   create(@Body() dto: CreateClientDto, @CurrentUser() user: AuthUser) {
     return this.clients.create(dto, user);
+  }
+
+  @Post('parse-requisites')
+  @RequirePermissions('clients:write')
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ description: 'PDF, XLS или XLSX с реквизитами нового клиента' })
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
+  parseRequisites(@UploadedFile() file: Express.Multer.File) {
+    return parseRequisitesDocument(file);
   }
 
   @Post('import-xlsx')

@@ -10,6 +10,7 @@ import {
   type SkuSummary,
 } from '../../lib/api';
 import { TsplPreviewCard } from './TsplPreviewCard';
+import { useRememberedClientId } from '../../lib/rememberedClient';
 
 type SkuLabelFormProps = {
   session: AuthSession;
@@ -18,7 +19,7 @@ type SkuLabelFormProps = {
 export function SkuLabelForm({ session }: SkuLabelFormProps) {
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [skus, setSkus] = useState<SkuSummary[]>([]);
-  const [clientId, setClientId] = useState('');
+  const [clientId, setClientId] = useRememberedClientId(session.user.id);
   const [skuCode, setSkuCode] = useState('');
   const [name, setName] = useState('');
   const [preview, setPreview] = useState<LabelPreview | null>(null);

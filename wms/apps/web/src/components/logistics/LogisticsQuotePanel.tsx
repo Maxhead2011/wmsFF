@@ -28,6 +28,7 @@ import {
   type FinalizeLogisticsDeliveryQuotePayload,
 } from '../../lib/api';
 import './logistics.css';
+import { WorkspaceTileGate } from '../common/WorkspaceTileGate';
 import { LogisticsDeliveryForm } from './LogisticsDeliveryForm';
 import { LogisticsDeliveryRequestsTable } from './LogisticsDeliveryRequestsTable';
 import { LogisticsOperationsSummary } from './LogisticsOperationsSummary';
@@ -223,6 +224,16 @@ export function LogisticsQuotePanel({ session }: LogisticsQuotePanelProps) {
   }
 
   return (
+    <WorkspaceTileGate
+      eyebrow="Логистика"
+      title="Доставка и рейсы"
+      description="Рассчитайте маршрут, оформите заявку на доставку или управляйте рейсами и их оплатой."
+      tiles={[
+        { title: 'Рассчитать доставку', description: 'Стоимость по направлению, тарифу, коробам или паллетам.', icon: Calculator, tone: 'blue' },
+        { title: 'Заявки на доставку', description: 'Создать и обработать доставку клиента.', icon: RefreshCw, tone: 'orange' },
+        { title: 'Рейсы и контроль', description: 'Назначить рейс, сменить статус и передать стоимость в биллинг.', icon: Calculator, tone: 'green' },
+      ]}
+    >
     <section className="logistics-panel" aria-label="Расчет логистики">
       <div className="section-heading logistics-panel__heading">
         <div>
@@ -370,6 +381,7 @@ export function LogisticsQuotePanel({ session }: LogisticsQuotePanelProps) {
         ) : null}
       </div>
     </section>
+    </WorkspaceTileGate>
   );
 }
 

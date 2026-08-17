@@ -21,6 +21,7 @@ export const pickWaveInclude = {
         select: {
           id: true,
           clientId: true,
+          warehouseId: true,
           title: true,
           type: true,
           status: true,

@@ -5,6 +5,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { ClientRequestsService, type ClientRequestAvailabilityConflict } from './client-requests.service';
+import { effectiveWarehouseId } from './client-request-warehouse-scope';
 import { ImportOutboundRequestXlsxDto } from './dto/import-outbound-request-xlsx.dto';
 import {
   parseOutboundRequestXlsxRows,
@@ -148,6 +149,7 @@ export class ClientRequestXlsxService {
     const clientId = normalizeRequiredText(dto.clientId, 'Клиент обязателен.');
     normalizeRequiredText(dto.destinationCity, 'Город поставки обязателен.');
     this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const warehouseId = effectiveWarehouseId(user, 'write') ?? user.activeWarehouseId ?? undefined;
 
     const parsed = parseOutboundRequestXlsxRows(this.readFirstSheet(buffer));
     const barcodes = parsed.lines.map((line) => line.barcode).filter((barcode): barcode is string => Boolean(barcode));
@@ -221,8 +223,14 @@ export class ClientRequestXlsxService {
     }
     const skuMatches = buildSkuMatchesByProductName(skuRows);
     const resolvedLines = parsed.lines.map((line) => this.resolveParsedLine(line, barcodeMatches, skuMatches));
-    const actionSuggestionsByLine = await this.buildCatalogActionSuggestions(clientId, parsed.lines, resolvedLines, skuMatches);
-    const relabelSourceOptions = await this.buildRelabelSourceOptions(clientId);
+    const actionSuggestionsByLine = await this.buildCatalogActionSuggestions(
+      clientId,
+      parsed.lines,
+      resolvedLines,
+      skuMatches,
+      warehouseId,
+    );
+    const relabelSourceOptions = await this.buildRelabelSourceOptions(clientId, warehouseId);
 
     const availability = await this.clientRequests.previewAvailability(
       {
@@ -454,6 +462,7 @@ export class ClientRequestXlsxService {
     lines: OutboundRequestXlsxLine[],
     resolvedLines: ResolvedParsedLine[],
     skuMatches: Map<string, ResolvedSku[]>,
+    warehouseId?: string,
   ) {
     const candidateSkuIds = new Set<string>();
     const lineCandidates = new Map<number, ResolvedSku[]>();
@@ -476,7 +485,7 @@ export class ClientRequestXlsxService {
       relabelCandidates.forEach((sku) => candidateSkuIds.add(sku.id));
     });
 
-    const stockBySkuId = await this.stockQuantityBySkuId(clientId, [...candidateSkuIds]);
+    const stockBySkuId = await this.stockQuantityBySkuId(clientId, [...candidateSkuIds], warehouseId);
     const nomenclatureByBarcode = await this.nomenclatureByBarcode(lines.map((line) => line.barcode).filter((barcode): barcode is string => Boolean(barcode)));
     const result = new Map<number, OutboundRequestActionSuggestion[]>();
 
@@ -523,7 +532,7 @@ export class ClientRequestXlsxService {
     return result;
   }
 
-  private async stockQuantityBySkuId(clientId: string, skuIds: string[]) {
+  private async stockQuantityBySkuId(clientId: string, skuIds: string[], warehouseId?: string) {
     const stockBalance = this.prisma.stockBalance;
     if (skuIds.length === 0 || !stockBalance?.groupBy) {
       return new Map<string, number>();
@@ -533,6 +542,7 @@ export class ClientRequestXlsxService {
       by: ['skuId'],
       where: {
         clientId,
+        warehouseId,
         skuId: { in: skuIds },
         status: StockStatus.AVAILABLE,
       },
@@ -556,7 +566,10 @@ export class ClientRequestXlsxService {
     return new Map(rows.filter((row) => row.barcode).map((row) => [row.barcode!, { barcode: row.barcode!, name: row.name }]));
   }
 
-  private async buildRelabelSourceOptions(clientId: string): Promise<OutboundRequestRelabelSourceOption[]> {
+  private async buildRelabelSourceOptions(
+    clientId: string,
+    warehouseId?: string,
+  ): Promise<OutboundRequestRelabelSourceOption[]> {
     const stockBalance = this.prisma.stockBalance;
     if (!stockBalance?.findMany) {
       return [];
@@ -565,6 +578,7 @@ export class ClientRequestXlsxService {
     const rows = await stockBalance.findMany({
       where: {
         clientId,
+        warehouseId,
         status: StockStatus.AVAILABLE,
         quantity: { gt: 0 },
       },

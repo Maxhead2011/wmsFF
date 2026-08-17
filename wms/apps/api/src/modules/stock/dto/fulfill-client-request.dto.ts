@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsArray, IsInt, IsNumber, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
+import { IsArray, IsBoolean, IsInt, IsNumber, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
 
 export class PackageClientRequestItemDto {
   @IsString()
@@ -89,4 +89,8 @@ export class FulfillClientRequestDto {
   @ValidateNested({ each: true })
   @Type(() => PackageClientRequestPlaceDto)
   packages?: PackageClientRequestPlaceDto[];
+
+  @IsOptional()
+  @IsBoolean()
+  allowOverweightPackages?: boolean;
 }

@@ -226,12 +226,14 @@ public class ListFragment extends Fragment {
         String status = string(request.get("status"));
         boolean editable = app.state().isAdmin() || Arrays.asList("SUBMITTED", "IN_REVIEW", "APPROVED").contains(status);
         boolean canChangeStatus = app.state().can("client-requests:status");
-        if (!editable && !canChangeStatus) {
+        boolean canViewOnline = app.state().can("stock:read") || app.state().can("stock:write");
+        if (!editable && !canChangeStatus && !canViewOnline) {
             new com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext()).setTitle(row.title()).setMessage(row.subtitle() + "\n\nСтатус: " + StatusLabels.label(status)).setPositiveButton("Закрыть", null).show();
             return;
         }
 
         List<String> actions = new ArrayList<>();
+        if (canViewOnline) actions.add("Онлайн-сборка и исправления");
         if (editable) actions.add("Редактировать");
         if (canChangeStatus) actions.add("Изменить статус");
         if (Arrays.asList("SUBMITTED", "IN_REVIEW", "APPROVED").contains(status)) actions.add("Отменить заявку");
@@ -239,7 +241,20 @@ public class ListFragment extends Fragment {
 
         new com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext()).setTitle(row.title()).setItems(actions.toArray(new String[0]), (dialog, which) -> {
             String action = actions.get(which);
-            if ("Редактировать".equals(action)) {
+            if ("Онлайн-сборка и исправления".equals(action)) {
+                Map<String, Object> client = map(request.get("client"));
+                String requestClientId = fallback(request.get("clientId"), fallback(client.get("id"), app.state().selectedClientId()));
+                String number = string(request.get("number"));
+                ((pro.logoff.wms.mobile.MainActivity) requireActivity()).showNative(
+                        OnlineAssemblyFragment.newInstance(
+                                row.id(),
+                                fallback(request.get("title"), row.title()),
+                                requestClientId,
+                                number
+                        ),
+                        "Онлайн-сборка"
+                );
+            } else if ("Редактировать".equals(action)) {
                 Intent intent = new Intent(requireContext(), RequestFormActivity.class); intent.putExtra("requestId", row.id()); intent.putExtra("title", string(request.get("title"))); intent.putExtra("city", string(request.get("destinationCity"))); intent.putExtra("comment", string(request.get("comment"))); startActivity(intent);
             } else if ("Изменить статус".equals(action)) {
                 showRequestStatusPicker(row, status);

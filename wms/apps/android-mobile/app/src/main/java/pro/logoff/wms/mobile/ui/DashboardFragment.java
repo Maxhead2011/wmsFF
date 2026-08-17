@@ -85,6 +85,9 @@ public class DashboardFragment extends Fragment {
         addMetric("ПРР предварительно", money(estimates.get("pprRub")), R.color.logoff_red, () -> openList(ListFragment.RECEIPTS));
         addMetric("FBS", "Заказы и обработка", R.color.logoff_blue, this::openFbs);
         if (app.state().isAdmin()) {
+            if (app.state().can("expenses:read")) {
+                addMetric("Расходы", "Затраты и долги", R.color.logoff_warning, this::openExpenses);
+            }
             Map<String, Object> queue = map(data.get("adminQueue"));
             addMetric("Очередь задач", number(queue.get("total")), R.color.logoff_red, () -> openModule(app.state().can("system:admin") ? "service" : "inventory", "Очередь задач"));
             addMetric("Приемка: открыто", number(data.get("receivingBoxes")), R.color.logoff_black, () -> openList(ListFragment.RECEIPTS));
@@ -163,6 +166,10 @@ public class DashboardFragment extends Fragment {
 
     private void openFbs() {
         ((MainActivity) requireActivity()).showNative(FbsFragment.newInstance(), "FBS");
+    }
+
+    private void openExpenses() {
+        ((MainActivity) requireActivity()).showNative(ExpensesFragment.newInstance(), "Расходы");
     }
 
     private String listTitle(String kind) {

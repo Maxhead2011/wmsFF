@@ -1,7 +1,17 @@
-const RECEIPT_BOX_PREFIX = 'FFL_LKB';
+const DEFAULT_RECEIPT_BOX_PREFIX = 'FFL_LKB';
 
-export function receiptDateFromBoxCode(boxCode: string, fallback: Date) {
-  const match = boxCode.toLocaleUpperCase('ru-RU').match(/^FFL_LKB(\d{2})(\d{2})(\d{2})?(?:_|$)/);
+export function receiptDateFromBoxCode(
+  boxCode: string,
+  fallback: Date,
+  receiptPrefix = DEFAULT_RECEIPT_BOX_PREFIX,
+) {
+  const escapedPrefix = receiptPrefix
+    .trim()
+    .toLocaleUpperCase('ru-RU')
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = boxCode
+    .toLocaleUpperCase('ru-RU')
+    .match(new RegExp(`^${escapedPrefix}(\\d{2})(\\d{2})(\\d{2})?(?:_|$)`));
   if (!match) return moscowDateKey(fallback);
 
   const fallbackYear = Number(moscowDateKey(fallback).slice(0, 4));
@@ -15,7 +25,10 @@ export function receiptDateFromBoxCode(boxCode: string, fallback: Date) {
     : moscowDateKey(fallback);
 }
 
-export function receiptBoxCodePrefixForDate(value: string) {
+export function receiptBoxCodePrefixForDate(
+  value: string,
+  receiptPrefix = DEFAULT_RECEIPT_BOX_PREFIX,
+) {
   const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) return null;
 
@@ -31,7 +44,7 @@ export function receiptBoxCodePrefixForDate(value: string) {
     return null;
   }
 
-  return `${RECEIPT_BOX_PREFIX}${match[3]}${match[2]}`;
+  return `${receiptPrefix.trim().toLocaleUpperCase('ru-RU')}${match[3]}${match[2]}`;
 }
 
 function moscowDateKey(value: Date) {

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, Res, StreamableFile } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, Res, StreamableFile } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import type { AuthUser } from '../auth/auth.types';
@@ -6,6 +6,9 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { MarketplaceConnectionsService } from '../marketplace-connections/marketplace-connections.service';
+import { ResolveFbsSyncConflictDto } from '../marketplace-connections/dto/resolve-fbs-sync-conflict.dto';
+import { StockOperationsService } from '../stock/stock-operations.service';
+import { StorageLocationsService } from '../warehouse/storage-locations.service';
 import { CreateTsdDeviceDto } from './dto/create-tsd-device.dto';
 import { LoginTsdDeviceDto } from './dto/login-tsd-device.dto';
 import { TsdAssemblyService } from './tsd-assembly.service';
@@ -20,7 +23,62 @@ export class TsdDeviceController {
     private readonly assembly: TsdAssemblyService,
     private readonly receipts: TsdReceiptService,
     private readonly marketplace: MarketplaceConnectionsService,
+    private readonly storageLocations: StorageLocationsService,
+    private readonly stockOperations: StockOperationsService,
   ) {}
+
+  @Get('storage-pallet/current')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  currentStoragePallet(
+    @Query('deviceCode') deviceCode: string | undefined,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.storageLocations.getCurrentTsdPallet(deviceCode || user.deviceCode, user);
+  }
+
+  @Post('storage-pallet/open')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  openStoragePallet(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {
+    return this.storageLocations.openTsdPallet(body, user);
+  }
+
+  @Post('storage-pallet/:id/scan-box')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  scanStoragePalletBox(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.storageLocations.scanTsdPalletBox(id, body, user);
+  }
+
+  @Post('storage-pallet/:id/restore-box')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  restoreStoragePalletBox(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.storageLocations.restoreTsdPalletBox(id, body, user);
+  }
+
+  @Post('storage-pallet/:id/close')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  closeStoragePallet(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.storageLocations.closeTsdPallet(id, user);
+  }
+
+  @Delete('storage-pallet/:id')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  deleteStoragePallet(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.storageLocations.deleteTsdPallet(id, user);
+  }
 
   @Get('clients')
   @ApiBearerAuth()
@@ -29,14 +87,66 @@ export class TsdDeviceController {
     return this.devices.listClientsForDevice(user);
   }
 
+  @Get('transfers/source')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  inspectTransferSource(
+    @Query('boxCode') boxCode: string | undefined,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.stockOperations.inspectTsdTransferSource(boxCode, user);
+  }
+
+  @Post('transfers/item')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  inspectTransferItem(
+    @Body() body: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.stockOperations.inspectTsdTransferItem(body, user);
+  }
+
+  @Post('transfers/execute')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  executeTransfer(
+    @Body() body: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.stockOperations.executeTsdTransfer(body, user);
+  }
+
+  @Post('transfers/execute-batch')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  executeTransferBatch(
+    @Body() body: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.stockOperations.executeTsdTransferBatch(body, user);
+  }
+
   @Get('fbs/next')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
   getNextFbsAssembly(
     @Query('deviceCode') deviceCode: string | undefined,
+    @Query('requestId') requestId: string | undefined,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.marketplace.getNextFbsTsdAssembly(deviceCode, user);
+    return this.marketplace.getNextFbsTsdAssembly(deviceCode, user, requestId);
+  }
+
+  @Get('fbs/requests')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  listFbsAssemblyRequests(
+    @Query('deviceCode') deviceCode: string | undefined,
+    @Query('archive') archive: string | undefined,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.marketplace.listFbsTsdRequests(deviceCode, user, archive);
   }
 
   @Get('fbs/cargo')
@@ -74,6 +184,13 @@ export class TsdDeviceController {
     return this.marketplace.undoLastFbsCargoOrder(id, user);
   }
 
+  @Post('fbs/cargo/:id/cancel')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  cancelFbsCargoPacking(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.marketplace.cancelFbsCargoPacking(id, user);
+  }
+
   @Post('fbs/cargo/:id/close')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
@@ -90,6 +207,17 @@ export class TsdDeviceController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.marketplace.scanFbsTsdBox(id, body, user);
+  }
+
+  @Post('fbs/tasks/:id/scan')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  scanFbsCode(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.marketplace.scanFbsTsdCode(id, body, user);
   }
 
   @Post('fbs/tasks/:id/scan-barcode')
@@ -112,6 +240,13 @@ export class TsdDeviceController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.marketplace.scanFbsTsdKiz(id, body, user);
+  }
+
+  @Post('fbs/tasks/:id/undo-kiz')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  undoFbsKiz(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.marketplace.undoFbsTsdKiz(id, user);
   }
 
   @Post('fbs/tasks/:id/complete')
@@ -144,14 +279,70 @@ export class TsdDeviceController {
 
   @Get('requests/:id')
   @ApiBearerAuth()
-  @RequirePermissions('stock:write')
+  @RequirePermissions('stock:read')
   getAssemblyRequest(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.assembly.getRequestPlan(id, user);
   }
 
-  @Get('requests/:id/outgoing-boxes.xlsx')
+  @Post('requests/:id/fbs-kiz-conflicts/:taskId/resolve')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
+  resolveFbsKizConflict(
+    @Param('id') id: string,
+    @Param('taskId') taskId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.marketplace.resolveFbsKizConflict(id, taskId, user);
+  }
+
+  @Post('requests/:id/fbs-sync-conflicts/:taskId/resolve')
+  @ApiBearerAuth()
+  @RequirePermissions('client-requests:write')
+  resolveFbsSyncConflict(
+    @Param('id') id: string,
+    @Param('taskId') taskId: string,
+    @Body() body: ResolveFbsSyncConflictDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.marketplace.resolveFbsSyncConflict(id, taskId, body, user);
+  }
+
+  @Post('requests/:id/fbs-assembly/:taskId/reset')
+  @ApiBearerAuth()
+  @RequirePermissions('client-requests:write')
+  resetFbsAssemblyOrder(
+    @Param('id') id: string,
+    @Param('taskId') taskId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.marketplace.resetFbsAssemblyOrder(id, taskId, user);
+  }
+
+  @Post('requests/:id/fbs-assembly/:taskId/packed-without-source')
+  @ApiBearerAuth()
+  @RequirePermissions('client-requests:write')
+  markFbsAssemblyPackedWithoutSource(
+    @Param('id') id: string,
+    @Param('taskId') taskId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.marketplace.markFbsAssemblyPackedWithoutSource(id, taskId, user);
+  }
+
+  @Post('requests/:id/fbs-rescan/:taskId/restore-from-wb')
+  @ApiBearerAuth()
+  @RequirePermissions('client-requests:write')
+  restoreFbsRescanFromWildberries(
+    @Param('id') id: string,
+    @Param('taskId') taskId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.marketplace.restoreFbsRescanFromWildberries(id, taskId, user);
+  }
+
+  @Get('requests/:id/outgoing-boxes.xlsx')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:read')
   async downloadOutgoingBoxes(
     @Param('id') id: string,
     @CurrentUser() user: AuthUser,
@@ -167,7 +358,7 @@ export class TsdDeviceController {
 
   @Get('requests/:id/outgoing-contents.xlsx')
   @ApiBearerAuth()
-  @RequirePermissions('stock:write')
+  @RequirePermissions('stock:read')
   async downloadOutgoingContents(
     @Param('id') id: string,
     @CurrentUser() user: AuthUser,
@@ -183,7 +374,7 @@ export class TsdDeviceController {
 
   @Get('requests/:id/movements.xlsx')
   @ApiBearerAuth()
-  @RequirePermissions('stock:write')
+  @RequirePermissions('stock:read')
   async downloadMovements(
     @Param('id') id: string,
     @CurrentUser() user: AuthUser,
@@ -439,6 +630,20 @@ export class TsdDeviceController {
   @RequirePermissions('users:read')
   listDevices() {
     return this.devices.listDevices();
+  }
+
+  @Post('monitor/heartbeat')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  monitorHeartbeat(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {
+    return this.devices.recordMonitorHeartbeat(body, user);
+  }
+
+  @Post('monitor/error')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  monitorError(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {
+    return this.devices.recordMonitorError(body, user);
   }
 
   @Post('devices')

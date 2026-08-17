@@ -18,6 +18,7 @@ import { ClientScopeService } from '../auth/client-scope.service';
 import { RequestBillingAutomationService } from '../billing/request-billing-automation.service';
 import { LogisticsService } from '../logistics/logistics.service';
 import { clientRequestPackageInclude } from './client-request-packages.include';
+import { assertWarehouseAccess } from './client-request-warehouse-scope';
 
 const xlsxMimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const maxFileSizeBytes = 10 * 1024 * 1024;
@@ -154,12 +155,13 @@ export class ClientRequestEmergencyService {
 
     const requestAccess = await this.prisma.clientRequest.findUnique({
       where: { id: requestId },
-      select: { id: true, clientId: true },
+      select: { id: true, clientId: true, warehouseId: true },
     });
     if (!requestAccess) {
       throw new NotFoundException('Клиентская заявка не найдена.');
     }
     this.clientScopes.requireClientAccess(user, requestAccess.clientId, 'write');
+    assertWarehouseAccess(user, requestAccess, 'write', 'Заявка не найдена в выбранном филиале.');
 
     const result = await this.prisma.$transaction(async (tx) => {
       const request = await tx.clientRequest.findUnique({
@@ -205,7 +207,7 @@ export class ClientRequestEmergencyService {
         };
       }
 
-      const boxes = await loadBoxes(tx, request.clientId, boxCodes);
+      const boxes = await loadBoxes(tx, request.clientId, request.warehouseId, boxCodes);
       const [previousPackages, previousMarkStatuses, previousInvoiceIds, previousChargeIds, previousDeliveryIds] =
         await Promise.all([
           tx.clientRequestPackage.findMany({
@@ -402,18 +404,20 @@ export class ClientRequestEmergencyService {
     requireEmergencyAccess(user);
     const requestAccess = await this.prisma.clientRequest.findUnique({
       where: { id: requestId },
-      select: { id: true, clientId: true },
+      select: { id: true, clientId: true, warehouseId: true },
     });
     if (!requestAccess) {
       throw new NotFoundException('Клиентская заявка не найдена.');
     }
     this.clientScopes.requireClientAccess(user, requestAccess.clientId, 'write');
+    assertWarehouseAccess(user, requestAccess, 'write', 'Заявка не найдена в выбранном филиале.');
 
     return this.prisma.$transaction(async (tx) => {
       const request = await tx.clientRequest.findUnique({
         where: { id: requestId },
         select: {
           id: true,
+          warehouseId: true,
           clientId: true,
           title: true,
           type: true,
@@ -466,6 +470,7 @@ export class ClientRequestEmergencyService {
         where: movementWhere,
         select: {
           id: true,
+          warehouseId: true,
           clientId: true,
           skuId: true,
           boxId: true,
@@ -483,13 +488,26 @@ export class ClientRequestEmergencyService {
       let restoredUnits = 0;
       for (const movement of movements) {
         const quantity = Math.abs(movement.quantity);
+        const warehouseId =
+          movement.warehouseId ??
+          request.warehouseId ??
+          null;
+        if (!warehouseId) {
+          throw new BadRequestException(
+            'Не удалось определить филиал возвращаемого остатка. Откат остановлен без изменений.',
+          );
+        }
         restoredUnits += quantity;
-        const balanceKey = stockBalanceKey(movement);
+        const balanceKey = stockBalanceKey({ ...movement, warehouseId });
         await tx.stockBalance.upsert({
           where: { balanceKey },
-          update: { quantity: { increment: quantity } },
+          update: {
+            quantity: { increment: quantity },
+            warehouseId,
+          },
           create: {
             balanceKey,
+            warehouseId,
             clientId: movement.clientId,
             skuId: movement.skuId,
             boxId: movement.boxId,
@@ -500,6 +518,7 @@ export class ClientRequestEmergencyService {
         });
         await tx.stockMovement.create({
           data: {
+            warehouseId,
             clientId: movement.clientId,
             skuId: movement.skuId,
             boxId: movement.boxId,
@@ -819,13 +838,24 @@ function readClosureSnapshot(packages: Array<{ metadata: Prisma.JsonValue | null
 }
 
 function stockBalanceKey(input: {
+  warehouseId: string;
   clientId: string;
   skuId: string;
   boxId: string | null;
   palletId: string | null;
   status: StockStatus;
 }) {
-  return [input.clientId, input.skuId, input.boxId ?? 'no-box', input.palletId ?? 'no-pallet', input.status].join(':');
+  const parts = [
+    input.clientId,
+    input.skuId,
+    input.boxId ?? 'no-box',
+    input.palletId ?? 'no-pallet',
+    input.status,
+  ];
+  if (!input.boxId && !input.palletId) {
+    parts.push('warehouse', input.warehouseId);
+  }
+  return parts.join(':');
 }
 
 function uniqueStrings(values: Array<string | null | undefined>) {
@@ -836,10 +866,16 @@ function isJsonObject(value: Prisma.JsonValue | null | undefined): value is Pris
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
-async function loadBoxes(tx: Prisma.TransactionClient, clientId: string, boxCodes: string[]) {
+async function loadBoxes(
+  tx: Prisma.TransactionClient,
+  clientId: string,
+  warehouseId: string | null,
+  boxCodes: string[],
+) {
   const boxes = await tx.box.findMany({
     where: {
       clientId,
+      warehouseId: warehouseId ?? undefined,
       OR: boxCodes.map((code) => ({ code: { equals: code, mode: Prisma.QueryMode.insensitive } })),
     },
     include: emergencyBoxInclude,

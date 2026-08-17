@@ -72,6 +72,67 @@ describe('TsdSyncService', () => {
     );
   });
 
+  it('принимает товар по боксам даже для клиента с поштучным хранением', async () => {
+    const receiveIntoBox = vi.fn().mockResolvedValue({ status: 'APPLIED' });
+    const service = createService({
+      receiveIntoBox,
+      prisma: { client: { findUnique: vi.fn().mockResolvedValue({ storesWithoutBoxes: true }) } },
+    });
+
+    const result = await service.acceptOperation(
+      {
+        deviceId: 'tsd-1',
+        operationKey: 'receipt-box-mode-1',
+        operationType: 'receipt_scan',
+        payload: {
+          clientId: 'client-1',
+          barcode: '4600004',
+          boxCode: 'FFL_RCV_BOX_1',
+          receiptMode: 'BOXES',
+          quantity: 1,
+        },
+      },
+      user,
+    );
+
+    expect(result.status).toBe('APPLIED');
+    expect(receiveIntoBox).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientId: 'client-1',
+        barcode: '4600004',
+        boxCode: 'FFL_RCV_BOX_1',
+        quantity: 1,
+      }),
+      user,
+    );
+  });
+
+  it('не разрешает режим приемки по боксам без номера бокса', async () => {
+    const receiveIntoBox = vi.fn();
+    const service = createService({
+      receiveIntoBox,
+      prisma: { client: { findUnique: vi.fn().mockResolvedValue({ storesWithoutBoxes: true }) } },
+    });
+
+    const result = await service.acceptOperation(
+      {
+        deviceId: 'tsd-1',
+        operationKey: 'receipt-box-mode-without-box',
+        operationType: 'receipt_scan',
+        payload: {
+          clientId: 'client-1',
+          barcode: '4600004',
+          receiptMode: 'BOXES',
+          quantity: 1,
+        },
+      },
+      user,
+    );
+
+    expect(result.status).toBe('NEEDS_REVIEW');
+    expect(receiveIntoBox).not.toHaveBeenCalled();
+  });
+
   it('применяет move_scan через stock transfer', async () => {
     const transferBetweenBoxes = vi.fn().mockResolvedValue({ status: 'APPLIED' });
     const service = createService({ transferBetweenBoxes });

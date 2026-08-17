@@ -1,14 +1,15 @@
-import { Download, Eye, KeyRound, LogIn, ScanBarcode, ShieldPlus, Smartphone } from 'lucide-react';
+import { Crown, Download, Eye, KeyRound, LogIn, ScanBarcode, ShieldPlus, Smartphone } from 'lucide-react';
 import { FormEvent, useState } from 'react';
 import { bootstrapAdmin, login, type AuthSession } from '../lib/api';
 
 type AuthPanelProps = {
   onSession: (session: AuthSession) => void;
+  onBack?: () => void;
 };
 
 type Mode = 'login' | 'bootstrap';
 
-export function AuthPanel({ onSession }: AuthPanelProps) {
+export function AuthPanel({ onSession, onBack }: AuthPanelProps) {
   const [mode, setMode] = useState<Mode>('login');
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
@@ -41,14 +42,18 @@ export function AuthPanel({ onSession }: AuthPanelProps) {
     }
   }
 
-  async function enterDemo() {
+  async function enterDemo(kind: 'standard' | 'plus') {
     setError('');
     setSubmitting(true);
 
     try {
-      onSession(await login({ email: 'demo', password: 'demo' }));
+      const credentials =
+        kind === 'plus'
+          ? { email: 'demo-plus', password: 'demo-plus' }
+          : { email: 'demo', password: 'demo' };
+      onSession(await login(credentials));
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Не удалось открыть демо-кабинет.');
+      setError(caught instanceof Error ? caught.message : 'Не удалось открыть демонстрационный режим.');
     } finally {
       setSubmitting(false);
     }
@@ -60,6 +65,7 @@ export function AuthPanel({ onSession }: AuthPanelProps) {
         <div className="auth-panel__brand">
           <p className="eyebrow">LOGOff WMS</p>
           <h1>Фулфилмент LOGOff</h1>
+          {onBack ? <button className="auth-panel__back" type="button" onClick={onBack}>← На главную</button> : null}
         </div>
 
         <div className="segmented-control" role="tablist" aria-label="Режим входа">
@@ -128,13 +134,27 @@ export function AuthPanel({ onSession }: AuthPanelProps) {
         </form>
 
         {mode === 'login' ? (
-          <button className="demo-login-button" type="button" disabled={isSubmitting} onClick={() => void enterDemo()}>
-            <Eye size={18} aria-hidden="true" />
-            <span>
-              <strong>Открыть демо-кабинет</strong>
-              <small>Один клиент · демонстрационные данные изолированы от рабочих</small>
-            </span>
-          </button>
+          <div className="demo-login-actions">
+            <button className="demo-login-button" type="button" disabled={isSubmitting} onClick={() => void enterDemo('standard')}>
+              <Eye size={18} aria-hidden="true" />
+              <span>
+                <strong>Открыть демо-кабинет</strong>
+                <small>Клиентский режим · демонстрационные данные изолированы от рабочих</small>
+              </span>
+            </button>
+            <button
+              className="demo-login-button demo-login-button--plus"
+              type="button"
+              disabled={isSubmitting}
+              onClick={() => void enterDemo('plus')}
+            >
+              <Crown size={18} aria-hidden="true" />
+              <span>
+                <strong>Демо плюс</strong>
+                <small>Расширенное управление · все виды и статусы заказов</small>
+              </span>
+            </button>
+          </div>
         ) : null}
 
         <div className="auth-downloads">

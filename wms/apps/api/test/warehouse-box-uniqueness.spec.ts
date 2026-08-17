@@ -14,7 +14,19 @@ describe('WarehouseService: уникальность номера короба',
       $transaction: vi.fn(async (callback: (transaction: typeof tx) => unknown) => callback(tx)),
     };
     const clientScopes = { requireClientAccess: vi.fn() };
-    const service = new WarehouseService(prisma as never, clientScopes as never, {} as never, {} as never, {} as never, {} as never);
+    const boxCodes = {
+      requireAllowed: vi.fn(async (value: string) => value),
+      getPolicy: vi.fn(async () => ({ allowedPrefixes: ['FFL_'] })),
+    };
+    const service = new WarehouseService(
+      prisma as never,
+      clientScopes as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      boxCodes as never,
+    );
 
     await expect(
       service.openOnlineReceiptBox(
@@ -48,6 +60,9 @@ describe('WarehouseService: уникальность номера короба',
       {} as never,
       {} as never,
       {} as never,
+      {
+        getPolicy: vi.fn().mockResolvedValue({ receiptPrefix: 'FFL_LKB' }),
+      } as never,
     );
 
     await service.listOnlineReceipts(

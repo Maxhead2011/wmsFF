@@ -60,8 +60,67 @@ public interface MobileApi {
     @PATCH("client-requests/{id}") Call<Map<String, Object>> updateRequest(@Path("id") String id, @Body Map<String, Object> body);
     @PATCH("client-requests/{id}/status") Call<Map<String, Object>> updateRequestStatus(@Path("id") String id, @Body Map<String, Object> body);
     @POST("client-requests/{id}/cancel") Call<Map<String, Object>> cancelRequest(@Path("id") String id, @Body Map<String, Object> body);
+    @POST("client-requests/{id}/sync-tsd") Call<Map<String, Object>> syncRequestToTsd(@Path("id") String id);
+    @GET("tsd/requests/{id}") Call<Map<String, Object>> requestOnlineAssembly(@Path("id") String id);
+    @POST("tsd/requests/{id}/fbs-kiz-conflicts/{conflictId}/resolve")
+    Call<Map<String, Object>> resolveFbsKizConflict(
+            @Path("id") String id,
+            @Path("conflictId") String conflictId
+    );
+    @POST("marketplace-connections/fbs/orders/move-to-new-supply")
+    Call<Map<String, Object>> moveFbsOrdersToNewSupply(@Body Map<String, Object> body);
+    @Streaming @GET("tsd/requests/{id}/outgoing-boxes.xlsx")
+    Call<ResponseBody> requestOutgoingBoxes(@Path("id") String id);
+    @Streaming @GET("tsd/requests/{id}/outgoing-contents.xlsx")
+    Call<ResponseBody> requestOutgoingContents(@Path("id") String id);
+    @Streaming @GET("tsd/requests/{id}/movements.xlsx")
+    Call<ResponseBody> requestMovements(@Path("id") String id);
     @Multipart @POST("client-requests/outbound-xlsx/commit")
     Call<Map<String, Object>> uploadRequest(@Part MultipartBody.Part file, @Part("clientId") RequestBody clientId, @Part("title") RequestBody title, @Part("destinationCity") RequestBody city, @Part("comment") RequestBody comment);
     @Streaming @GET("billing/invoices/{id}/document.pdf") Call<ResponseBody> invoicePdf(@Path("id") String id);
     @Streaming @GET("billing/invoices/{id}/act.pdf") Call<ResponseBody> actPdf(@Path("id") String id);
+    @GET("expenses/report") Call<Map<String, Object>> expenseReport(
+            @Query("clientId") String clientId,
+            @Query("dateFrom") String dateFrom,
+            @Query("dateTo") String dateTo,
+            @Query("category") String category
+    );
+    @Streaming @GET("expenses/report.xlsx") Call<ResponseBody> expenseReportXlsx(
+            @Query("clientId") String clientId,
+            @Query("dateFrom") String dateFrom,
+            @Query("dateTo") String dateTo,
+            @Query("category") String category
+    );
+    @GET("expenses/debts") Call<Map<String, Object>> expenseDebts(@Query("clientId") String clientId);
+    @GET("expenses/entries") Call<List<Map<String, Object>>> expenseEntries(
+            @Query("clientId") String clientId,
+            @Query("dateFrom") String dateFrom,
+            @Query("dateTo") String dateTo,
+            @Query("category") String category,
+            @Query("limit") int limit
+    );
+    @POST("expenses/entries") Call<Map<String, Object>> createExpense(@Body Map<String, Object> body);
+    @PATCH("expenses/entries/{id}/cancel") Call<Map<String, Object>> cancelExpense(@Path("id") String id);
+    @GET("expenses/materials") Call<List<Map<String, Object>>> expenseMaterials();
+    @POST("expenses/materials") Call<Map<String, Object>> createExpenseMaterial(@Body Map<String, Object> body);
+    @PATCH("expenses/materials/{id}") Call<Map<String, Object>> updateExpenseMaterial(
+            @Path("id") String id,
+            @Body Map<String, Object> body
+    );
+    @POST("expenses/materials/{id}/stock") Call<Map<String, Object>> updateExpenseMaterialStock(
+            @Path("id") String id,
+            @Body Map<String, Object> body
+    );
+    @GET("expenses/materials/{id}/movements") Call<List<Map<String, Object>>> expenseMaterialMovements(
+            @Path("id") String id
+    );
+    @GET("expenses/clients/{clientId}/material-rules") Call<Map<String, Object>> expenseMaterialRules(
+            @Path("clientId") String clientId
+    );
+    @PUT("expenses/clients/{clientId}/material-rules/{materialId}")
+    Call<Map<String, Object>> updateExpenseMaterialRule(
+            @Path("clientId") String clientId,
+            @Path("materialId") String materialId,
+            @Body Map<String, Object> body
+    );
 }

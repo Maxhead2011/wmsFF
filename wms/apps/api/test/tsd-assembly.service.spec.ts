@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { ClientRequestStatus } from '@prisma/client';
 import { TsdAssemblyService, boxSearchInstruction, validateStageAction } from '../src/modules/tsd/tsd-assembly.service';
 
 describe('boxSearchInstruction', () => {
@@ -23,6 +24,36 @@ describe('validateStageAction: уникальность скана короба'
     expect(
       validateStageAction({ searchBoxes: [{ boxCode: 'FFL_BOX_1', found: true }] }, 'box-search', 'scan', 'FFL_BOX_1'),
     ).toMatchObject({ status: 'DUPLICATE', accepted: false, message: expect.stringContaining('уже был пропикан') });
+  });
+});
+
+describe('TsdAssemblyService: активная очередь', () => {
+  it('не возвращает упакованные и завершённые заявки в рабочий список ТСД', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const prisma = {
+      clientRequest: { findMany },
+    };
+    const clientScopes = {
+      resolveClientFilter: vi.fn().mockReturnValue({ in: ['client-1'] }),
+    };
+    const service = new TsdAssemblyService(
+      prisma as never,
+      clientScopes as never,
+      {} as never,
+      {} as never,
+    );
+
+    await service.listActiveRequests({ id: 'worker-1' } as never);
+
+    const statuses = findMany.mock.calls[0][0].where.status.in;
+    expect(statuses).toEqual([
+      ClientRequestStatus.SUBMITTED,
+      ClientRequestStatus.IN_REVIEW,
+      ClientRequestStatus.APPROVED,
+      ClientRequestStatus.IN_WORK,
+    ]);
+    expect(statuses).not.toContain(ClientRequestStatus.PACKED);
+    expect(statuses).not.toContain(ClientRequestStatus.DONE);
   });
 });
 
@@ -65,6 +96,9 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
           color: 'Чёрный',
           size: '52',
         }]),
+      },
+      auditLog: {
+        findMany: vi.fn().mockResolvedValue([]),
       },
     };
     const service = new TsdAssemblyService(prisma as never, {} as never, {} as never, {} as never);
@@ -159,6 +193,9 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
           color: 'Чёрный',
           size: '52',
         }]),
+      },
+      auditLog: {
+        findMany: vi.fn().mockResolvedValue([]),
       },
     };
     const service = new TsdAssemblyService(prisma as never, {} as never, {} as never, {} as never);

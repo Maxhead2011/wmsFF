@@ -1,11 +1,14 @@
 package pro.logoff.wms.tsd.sync;
 
 import java.io.IOException;
-import java.time.Instant;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.TimeZone;
 
 import pro.logoff.wms.tsd.data.OperationOutbox;
 import pro.logoff.wms.tsd.data.PendingOperation;
@@ -39,7 +42,7 @@ public class TsdSyncRunner {
             }
 
             Response<List<TsdOperationResponse>> response = api
-                .syncOperations(authorization, new TsdSyncRequest(requests, Instant.now().toString()))
+                .syncOperations(authorization, new TsdSyncRequest(requests, utcNow()))
                 .execute();
             if (!response.isSuccessful()) {
                 throw new IOException("HTTP " + response.code());
@@ -102,6 +105,12 @@ public class TsdSyncRunner {
                 error.getMessage() == null ? "Ошибка синхронизации" : error.getMessage()
             );
         }
+    }
+
+    private static String utcNow() {
+        SimpleDateFormat formatter = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US);
+        formatter.setTimeZone(TimeZone.getTimeZone("UTC"));
+        return formatter.format(new Date());
     }
 
     private TsdOperationRequest toRequest(PendingOperation operation) {

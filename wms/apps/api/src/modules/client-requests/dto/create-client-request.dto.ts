@@ -38,6 +38,10 @@ export class CreateClientRequestDto {
   @IsString()
   clientId!: string;
 
+  @IsOptional()
+  @IsString()
+  warehouseId?: string;
+
   @IsEnum(ClientRequestType)
   type!: ClientRequestType;
 
