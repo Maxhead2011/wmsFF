@@ -17,10 +17,13 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  applyAdministrationPalletSortScan,
   applyAdministrationTechnicalWork,
   applyAdministrationTechnicalWorkBulk,
   diagnoseAdministrationTechnicalWork,
   fetchAdministrationTechnicalWork,
+  previewAdministrationPalletSortScan,
+  type AdministrationPalletSortScanPreview,
   type AdministrationTechnicalWorkCategory,
   type AdministrationTechnicalWorkBulkResult,
   type AdministrationTechnicalWorkDiagnosis,
@@ -192,6 +195,14 @@ export function AdministrationTechnicalWork({ session }: Props) {
         {selected === 'KIZ' ? <KizIssuesPanel session={session} embedded /> : null}
         {selected === 'TSD' ? <AdministrationTsdWorkloadsPanel session={session} /> : null}
         {selected === 'PHANTOM_STOCK' ? <AdministrationPhantomStockPanel session={session} /> : null}
+        {selected === 'PALLET_SORTS' ? (
+          <PalletSortScanRecovery
+            session={session}
+            onApplied={async () => {
+              await diagnose('PALLET_SORTS');
+            }}
+          />
+        ) : null}
         {isDiagnosticSection(selected) ? (
           <DiagnosisPanel
             diagnosis={diagnoses[selected] ?? null}
@@ -250,6 +261,118 @@ export function AdministrationTechnicalWork({ session }: Props) {
       <footer className="admin-tech-footnote">
         <Wrench size={16} /> Активных FBS-заявок для проверки: {overview?.activeRequests ?? '—'}. Анализ коробов и паллет-сортов запускается только по нажатию, чтобы не нагружать сборку.
       </footer>
+    </section>
+  );
+}
+
+function PalletSortScanRecovery({ session, onApplied }: { session: AuthSession; onApplied: () => Promise<void> }) {
+  const [palletCode, setPalletCode] = useState('');
+  const [boxText, setBoxText] = useState('');
+  const [preview, setPreview] = useState<AdministrationPalletSortScanPreview | null>(null);
+  const [confirmation, setConfirmation] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const boxCodes = useMemo(() => uniqueScannedCodes(boxText), [boxText]);
+
+  function changePallet(value: string) {
+    setPalletCode(value);
+    setPreview(null);
+    setConfirmation('');
+  }
+
+  function changeBoxes(value: string) {
+    setBoxText(value);
+    setPreview(null);
+    setConfirmation('');
+  }
+
+  async function runPreview() {
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      setPreview(await previewAdministrationPalletSortScan(session.accessToken, { palletCode, boxCodes }));
+    } catch (caught) {
+      setError(errorText(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function applyScan() {
+    if (!preview) return;
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      const result = await applyAdministrationPalletSortScan(session.accessToken, {
+        palletCode: preview.pallet.code,
+        boxCodes: preview.boxes.map((box) => box.code),
+        confirmation,
+      });
+      setMessage(result.message);
+      setPreview(null);
+      setConfirmation('');
+      setBoxText('');
+      await onApplied();
+    } catch (caught) {
+      setError(errorText(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="admin-tech-bulk" aria-label="Восстановление палет-сорта фактическим сканированием">
+      <div className="admin-tech-bulk__head">
+        <Container size={20} />
+        <div>
+          <strong>Восстановить по фактическому размещению</strong>
+          <span>Сначала отсканируйте палет-сорт, затем все короба, которые сейчас физически находятся на нём.</span>
+        </div>
+      </div>
+      {message ? <div className="admin-message admin-message--ok"><CheckCircle2 size={18} />{message}</div> : null}
+      {error ? <div className="admin-message admin-message--error"><AlertTriangle size={18} />{error}</div> : null}
+      <div className="admin-tech-bulk__controls">
+        <label>Палет-сорт
+          <input value={palletCode} onChange={(event) => changePallet(event.target.value)} placeholder="Отсканируйте палет-сорт" />
+        </label>
+        <label>Короба, по одному в строке
+          <textarea value={boxText} onChange={(event) => changeBoxes(event.target.value)} rows={6} placeholder="Отсканируйте короб и нажмите Enter" />
+        </label>
+        <div className="admin-tech-bulk__selection">
+          <strong>Уникальных коробов: {boxCodes.length}</strong>
+          <span>Старая история размещений не применяется автоматически.</span>
+        </div>
+        <button type="button" className="admin-button admin-button--primary" disabled={busy || !palletCode.trim() || boxCodes.length === 0} onClick={() => void runPreview()}>
+          {busy ? <><LoaderCircle size={16} className="admin-spin" /> Проверяем…</> : 'Проверить перед размещением'}
+        </button>
+      </div>
+      {preview ? (
+        <div className="admin-tech-bulk__confirm">
+          <strong>{preview.pallet.code}: коробов {preview.summary.requested}</strong>
+          <p>
+            Новых привязок: {preview.summary.place}; переносов с другой палеты: {preview.summary.move};
+            уже на месте: {preview.summary.unchanged}; связанных заявок: {preview.summary.affectedRequests}.
+          </p>
+          {preview.pallet.willCreate ? <p>Карточка палет-сорта будет создана для склада {preview.pallet.warehouse?.name}.</p> : null}
+          {preview.boxes.some((box) => box.action === 'MOVE') ? (
+            <ul>{preview.boxes.filter((box) => box.action === 'MOVE').map((box) => <li key={box.code}>{box.code}: перенос с {box.currentPalletCode}</li>)}</ul>
+          ) : null}
+          {preview.errors.length > 0 ? <ul>{preview.errors.map((row) => <li key={`${row.code}:${row.message}`}>{row.code}: {row.message}</li>)}</ul> : null}
+          {preview.affectedRequests.length > 0 ? <p>Будут пересчитаны заявки: {preview.affectedRequests.map((request) => request.number).join(', ')}.</p> : null}
+          <label>Подтверждение
+            <input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={preview.confirmation} />
+          </label>
+          <div>
+            <button type="button" className="admin-button admin-button--ghost" onClick={() => setPreview(null)}>Отмена</button>
+            <button type="button" className="admin-button admin-button--primary" disabled={busy || !preview.canApply || confirmation.trim().toLocaleUpperCase('ru-RU') !== preview.confirmation} onClick={() => void applyScan()}>
+              {busy ? 'Сохраняю…' : 'Разместить и пересчитать заявки'}
+            </button>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -366,6 +489,7 @@ function DiagnosisPanel({
     <div className="admin-tech-results">
       <div className="admin-tech-summary">
         <strong>Найдено: {diagnosis.summary.issues}</strong>
+        {diagnosis.category === 'PALLET_SORTS' ? <span>Уникальных коробов: {diagnosis.summary.uniqueObjects}</span> : null}
         <span>Критичных: {diagnosis.summary.critical}</span>
         <span>Можно исправить из раздела: {diagnosis.summary.actionable}</span>
         <small>Проверено {formatCheckedAt(diagnosis.checkedAt)}</small>
@@ -462,4 +586,8 @@ function formatCheckedAt(value: string) {
 
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : 'Не удалось выполнить техническую проверку.';
+}
+
+function uniqueScannedCodes(value: string) {
+  return [...new Set(value.split(/[\r\n,;]+/).map((code) => code.trim().toLocaleUpperCase('ru-RU')).filter(Boolean))];
 }

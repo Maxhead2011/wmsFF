@@ -5867,8 +5867,43 @@ export type AdministrationTechnicalWorkIssue = {
 export type AdministrationTechnicalWorkDiagnosis = {
   category: AdministrationTechnicalWorkCategory;
   checkedAt: string;
-  summary: { issues: number; critical: number; actionable: number };
+  summary: { issues: number; uniqueObjects: number; critical: number; actionable: number };
   issues: AdministrationTechnicalWorkIssue[];
+};
+
+export type AdministrationPalletSortScanPreview = {
+  checkedAt: string;
+  pallet: {
+    id: string | null;
+    code: string;
+    exists: boolean;
+    willCreate: boolean;
+    client: { id: string; code: string; name: string } | null;
+    warehouse: { id: string; code: string; name: string } | null;
+  };
+  boxes: Array<{
+    code: string;
+    boxId: string | null;
+    currentPalletCode: string | null;
+    action: 'PLACE' | 'MOVE' | 'UNCHANGED' | 'ERROR';
+  }>;
+  affectedRequests: Array<{ id: string; number: number }>;
+  errors: Array<{ code: string; message: string }>;
+  summary: { requested: number; place: number; move: number; unchanged: number; affectedRequests: number };
+  canApply: boolean;
+  confirmation: 'РАЗМЕСТИТЬ';
+};
+
+export type AdministrationPalletSortScanResult = {
+  applied: boolean;
+  pallet: { id: string; code: string };
+  placed: number;
+  moved: number;
+  unchanged: number;
+  affectedRequests: number;
+  repairedRequests: number;
+  failedRoutes: Array<{ requestId: string; number: number; repaired: false; message: string }>;
+  message: string;
 };
 
 export type AdministrationTechnicalWorkBulkResult = {
@@ -6372,6 +6407,29 @@ export async function applyAdministrationTechnicalWorkBulk(
   },
 ) {
   return request<AdministrationTechnicalWorkBulkResult>('/administration/technical-work/apply-bulk', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+// ADDED: The preview is read-only and shows every move before confirmation.
+export async function previewAdministrationPalletSortScan(
+  accessToken: string,
+  payload: { palletCode: string; boxCodes: string[] },
+) {
+  return request<AdministrationPalletSortScanPreview>('/administration/technical-work/pallet-sorts/scan-preview', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function applyAdministrationPalletSortScan(
+  accessToken: string,
+  payload: { palletCode: string; boxCodes: string[]; confirmation: string },
+) {
+  return request<AdministrationPalletSortScanResult>('/administration/technical-work/pallet-sorts/scan-apply', {
     method: 'POST',
     body: payload,
     accessToken,

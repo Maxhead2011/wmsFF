@@ -66,6 +66,24 @@ export class AdministrationController {
     return this.technicalWork.applyBulk(body, user);
   }
 
+  // ADDED: Physical scan preview never changes placement.
+  @Post('technical-work/pallet-sorts/scan-preview')
+  previewPalletSortScan(
+    @Body() body: { palletCode?: string; boxCodes?: unknown },
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.technicalWork.previewPalletSortScan(body, user);
+  }
+
+  // ADDED: Apply revalidates the exact pallet and boxes scanned by the operator.
+  @Post('technical-work/pallet-sorts/scan-apply')
+  applyPalletSortScan(
+    @Body() body: { palletCode?: string; boxCodes?: unknown; confirmation?: string },
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.technicalWork.applyPalletSortScan(body, user);
+  }
+
   @Get('settings')
   settings(@CurrentUser() user: AuthUser) {
     return this.administration.listSettings(user);

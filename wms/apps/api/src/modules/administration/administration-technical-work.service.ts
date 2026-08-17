@@ -137,10 +137,248 @@ export class AdministrationTechnicalWorkService {
       checkedAt: new Date().toISOString(),
       summary: {
         issues: issues.length,
+        // FIX: One physical box can occur in several requests; expose the real object count.
+        uniqueObjects: new Set(issues.map((issue) => issue.objectCode).filter(Boolean)).size,
         critical: issues.filter((issue) => issue.severity === 'CRITICAL').length,
         actionable: issues.filter((issue) => issue.actions.length > 0).length,
       },
       issues,
+    };
+  }
+
+  // ADDED: Preview uses only the codes physically scanned now; historical pallet data is never applied.
+  async previewPalletSortScan(
+    body: { palletCode?: string; boxCodes?: unknown },
+    user: AuthUser,
+  ) {
+    this.assertOwner(user);
+    const palletCode = normalizeWarehouseCode(body.palletCode);
+    const boxCodes = normalizeWarehouseCodes(body.boxCodes);
+    if (!palletCode) throw new BadRequestException('Отсканируйте палет-сорт.');
+    if (boxCodes.length === 0) throw new BadRequestException('Отсканируйте хотя бы один короб.');
+    if (boxCodes.length > 200) throw new BadRequestException('За один запуск можно разместить не более 200 коробов.');
+
+    const boxes = await this.prisma.box.findMany({
+      where: {
+        OR: boxCodes.map((code) => ({ code: { equals: code, mode: 'insensitive' as const } })),
+      },
+      select: {
+        id: true,
+        code: true,
+        status: true,
+        clientId: true,
+        warehouseId: true,
+        client: { select: { id: true, code: true, name: true } },
+        warehouse: { select: { id: true, code: true, name: true } },
+        storagePlacement: {
+          select: { palletId: true, pallet: { select: { code: true } } },
+        },
+      },
+    });
+    const boxByCode = new Map(boxes.map((box) => [normalizeWarehouseCode(box.code), box]));
+    const errors: Array<{ code: string; message: string }> = [];
+    for (const code of boxCodes) {
+      const box = boxByCode.get(code);
+      if (!box) errors.push({ code, message: 'Короб не найден в WMS.' });
+      else if (['deleted', 'archived'].includes(box.status.toLocaleLowerCase('ru-RU'))) {
+        errors.push({ code: box.code, message: 'Короб удалён или находится в архиве.' });
+      } else if (!box.warehouseId || !box.warehouse) {
+        errors.push({ code: box.code, message: 'У короба не указан склад.' });
+      }
+    }
+    const validBoxes = boxes.filter((box) =>
+      !['deleted', 'archived'].includes(box.status.toLocaleLowerCase('ru-RU')) &&
+      Boolean(box.warehouseId && box.warehouse),
+    );
+    const scopes = new Set(validBoxes.map((box) => `${box.clientId}:${box.warehouseId}`));
+    if (scopes.size > 1) {
+      errors.push({ code: palletCode, message: 'В одном запуске нельзя смешивать короба разных клиентов или складов.' });
+    }
+    const scope = scopes.size === 1 ? validBoxes[0] : null;
+    if (scope) {
+      const writableClients = user.clientScopeMode === 'ALL' || user.writableClientIds.includes(scope.clientId);
+      const writableWarehouses = !user.writableWarehouseIds?.length || user.writableWarehouseIds.includes(scope.warehouseId!);
+      if (!writableClients || !writableWarehouses) {
+        errors.push({ code: palletCode, message: 'Нет прав на изменение этого клиента или склада.' });
+      }
+    }
+
+    const target = scope
+      ? await this.prisma.storagePallet.findUnique({
+          where: { warehouseId_code: { warehouseId: scope.warehouseId!, code: palletCode } },
+          select: { id: true, code: true, clientId: true, warehouseId: true },
+        })
+      : null;
+    if (target && scope && target.clientId !== scope.clientId) {
+      errors.push({ code: palletCode, message: 'Этот палет-сорт принадлежит другому клиенту.' });
+    }
+
+    const affectedRequests = scope
+      ? await this.requestsAffectedByBoxes(scope.clientId, validBoxes.map((box) => box.code))
+      : [];
+    const rows = boxCodes.map((code) => {
+      const box = boxByCode.get(code);
+      const currentPalletCode = box?.storagePlacement?.pallet.code ?? null;
+      return {
+        code: box?.code ?? code,
+        boxId: box?.id ?? null,
+        currentPalletCode,
+        action: !box
+          ? 'ERROR' as const
+          : currentPalletCode === palletCode
+            ? 'UNCHANGED' as const
+            : currentPalletCode
+              ? 'MOVE' as const
+              : 'PLACE' as const,
+      };
+    });
+    return {
+      checkedAt: new Date().toISOString(),
+      pallet: {
+        id: target?.id ?? null,
+        code: palletCode,
+        exists: Boolean(target),
+        willCreate: Boolean(scope && !target),
+        client: scope?.client ?? null,
+        warehouse: scope?.warehouse ?? null,
+      },
+      boxes: rows,
+      affectedRequests,
+      errors,
+      summary: {
+        requested: boxCodes.length,
+        place: rows.filter((row) => row.action === 'PLACE').length,
+        move: rows.filter((row) => row.action === 'MOVE').length,
+        unchanged: rows.filter((row) => row.action === 'UNCHANGED').length,
+        affectedRequests: affectedRequests.length,
+      },
+      canApply: errors.length === 0 && validBoxes.length > 0,
+      confirmation: 'РАЗМЕСТИТЬ',
+    };
+  }
+
+  // ADDED: The current physical scan is revalidated and written atomically without touching stock or marks.
+  async applyPalletSortScan(
+    body: { palletCode?: string; boxCodes?: unknown; confirmation?: string },
+    user: AuthUser,
+  ) {
+    this.assertOwner(user);
+    if (user.isDemo) throw new ForbiddenException('Технические исправления недоступны в демо-режиме.');
+    if (String(body.confirmation ?? '').trim().toLocaleUpperCase('ru-RU') !== 'РАЗМЕСТИТЬ') {
+      throw new BadRequestException('Подтвердите действие словом «РАЗМЕСТИТЬ».');
+    }
+    const preview = await this.previewPalletSortScan(body, user);
+    if (!preview.canApply || !preview.pallet.client || !preview.pallet.warehouse) {
+      throw new BadRequestException(preview.errors[0]?.message ?? 'Набор коробов нельзя безопасно разместить.');
+    }
+    const changedAt = new Date();
+    const canonicalBoxes = preview.boxes.filter((box): box is typeof box & { boxId: string } => Boolean(box.boxId));
+    const pallet = await this.prisma.$transaction(async (tx) => {
+      const currentBoxes = await tx.box.findMany({
+        where: { id: { in: canonicalBoxes.map((box) => box.boxId) } },
+        select: { id: true, status: true, clientId: true, warehouseId: true },
+      });
+      const stillValid = currentBoxes.length === canonicalBoxes.length && currentBoxes.every((box) =>
+        !['deleted', 'archived'].includes(box.status.toLocaleLowerCase('ru-RU')) &&
+        box.clientId === preview.pallet.client!.id &&
+        box.warehouseId === preview.pallet.warehouse!.id,
+      );
+      if (!stillValid) {
+        throw new BadRequestException('Один из коробов изменился после проверки. Выполните предварительную проверку ещё раз.');
+      }
+      // FIX: Recreate only the pallet code scanned now, never a pallet from stale history.
+      const target = await tx.storagePallet.upsert({
+        where: {
+          warehouseId_code: {
+            warehouseId: preview.pallet.warehouse!.id,
+            code: preview.pallet.code,
+          },
+        },
+        create: {
+          warehouseId: preview.pallet.warehouse!.id,
+          clientId: preview.pallet.client!.id,
+          code: preview.pallet.code,
+          status: 'CLOSED',
+          source: 'TECHNICAL_SCAN',
+          workerUserId: user.id,
+          workerName: user.name,
+          lastSyncedAt: changedAt,
+          closedAt: changedAt,
+        },
+        update: {
+          source: 'TECHNICAL_SCAN',
+          workerUserId: user.id,
+          workerName: user.name,
+          lastSyncedAt: changedAt,
+        },
+        select: { id: true, code: true, clientId: true, warehouseId: true },
+      });
+      if (target.clientId !== preview.pallet.client!.id) {
+        throw new BadRequestException('Этот палет-сорт принадлежит другому клиенту.');
+      }
+      for (const box of canonicalBoxes) {
+        await tx.storagePalletBox.upsert({
+          where: { boxCode: box.code },
+          create: {
+            palletId: target.id,
+            boxId: box.boxId,
+            boxCode: box.code,
+            source: 'TECHNICAL_SCAN',
+            scannedAt: changedAt,
+          },
+          update: {
+            palletId: target.id,
+            boxId: box.boxId,
+            source: 'TECHNICAL_SCAN',
+            scannedAt: changedAt,
+          },
+        });
+      }
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'administration.technical-work.pallet-sort-scan',
+          entity: 'StoragePallet',
+          entityId: target.id,
+          payload: {
+            palletCode: target.code,
+            boxCodes: canonicalBoxes.map((box) => box.code),
+            placed: preview.summary.place,
+            moved: preview.summary.move,
+            unchanged: preview.summary.unchanged,
+            requestIds: preview.affectedRequests.map((request) => request.id),
+            changedAt: changedAt.toISOString(),
+          },
+        },
+      });
+      return target;
+    });
+
+    const routeResults: Array<{ requestId: string; number: number; repaired: boolean; message: string }> = [];
+    for (const request of preview.affectedRequests) {
+      try {
+        await this.marketplaceConnections.repairFbsRequestSelection(request.id, user);
+        await this.pickInstructions.refreshRequestInstruction(request.id, user);
+        routeResults.push({ requestId: request.id, number: request.number, repaired: true, message: 'Маршрут пересчитан.' });
+      } catch (caught) {
+        routeResults.push({ requestId: request.id, number: request.number, repaired: false, message: errorMessage(caught) });
+      } finally {
+        this.pickInstructions.invalidateRequestInstruction(request.id);
+      }
+    }
+    const failedRoutes = routeResults.filter((result) => !result.repaired);
+    return {
+      applied: true,
+      pallet: { id: pallet.id, code: pallet.code },
+      placed: preview.summary.place,
+      moved: preview.summary.move,
+      unchanged: preview.summary.unchanged,
+      affectedRequests: preview.affectedRequests.length,
+      repairedRequests: routeResults.length - failedRoutes.length,
+      failedRoutes,
+      message: failedRoutes.length
+        ? `Размещение сохранено. Не удалось пересчитать заявок: ${failedRoutes.length}; повторное сканирование коробов не требуется.`
+        : `Палет-сорт ${pallet.code} сохранён, связанные заявки пересчитаны.`,
     };
   }
 
@@ -498,6 +736,39 @@ export class AdministrationTechnicalWorkService {
     });
   }
 
+  private async requestsAffectedByBoxes(clientId: string, boxCodes: string[]) {
+    const normalized = new Set(boxCodes.map(normalizeWarehouseCode));
+    const requests = await this.prisma.clientRequest.findMany({
+      where: {
+        clientId,
+        type: ClientRequestType.OUTBOUND,
+        status: { in: OPEN_REQUEST_STATUSES },
+        fbsOrderLinks: { some: {} },
+      },
+      select: { id: true, number: true },
+    });
+    if (requests.length === 0) return [];
+    const tasks = await this.prisma.fbsTsdAssembly.findMany({
+      where: { requestId: { in: requests.map((request) => request.id) } },
+      select: {
+        requestId: true,
+        boxCode: true,
+        reservedBoxCode: true,
+        storageBoxes: true,
+      },
+    });
+    const affectedIds = new Set<string>();
+    for (const task of tasks) {
+      const taskCodes = [
+        task.boxCode,
+        task.reservedBoxCode,
+        ...jsonStorageBoxCodes(task.storageBoxes),
+      ].map(normalizeWarehouseCode);
+      if (taskCodes.some((code) => normalized.has(code))) affectedIds.add(task.requestId);
+    }
+    return requests.filter((request) => affectedIds.has(request.id)).sort((left, right) => left.number - right.number);
+  }
+
   private async visibleOpenRequestIds(user: AuthUser) {
     const requests = await this.prisma.clientRequest.findMany({
       where: {
@@ -642,6 +913,24 @@ function deduplicateIssues(rows: TechnicalWorkIssue[]) {
 
 function errorMessage(value: unknown) {
   return value instanceof Error ? value.message : 'неизвестная ошибка';
+}
+
+function normalizeWarehouseCode(value: unknown) {
+  return String(value ?? '').trim().toLocaleUpperCase('ru-RU');
+}
+
+function normalizeWarehouseCodes(value: unknown) {
+  const source = Array.isArray(value) ? value : String(value ?? '').split(/[\r\n,;]+/);
+  return [...new Set(source.map(normalizeWarehouseCode).filter(Boolean))];
+}
+
+function jsonStorageBoxCodes(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((row) => {
+    if (!row || typeof row !== 'object' || !('code' in row)) return [];
+    const code = normalizeWarehouseCode((row as { code?: unknown }).code);
+    return code ? [code] : [];
+  });
 }
 
 function confirmationForAction(action: TechnicalWorkActionId) {
