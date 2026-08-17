@@ -964,6 +964,33 @@ export class TsdAssemblyService {
         })
       : [];
     const skuById = new Map(skus.map((sku) => [sku.id, sku]));
+    // FIX: allocations in a saved instruction may not contain the pallet-sort that
+    // was assigned later. The online request must show the current physical place.
+    const allocationBoxCodes = uniqueSorted(
+      requestRows.flatMap((row) => row.allocations.map((allocation) => allocation.boxCode)),
+    );
+    const allocationPlacements = allocationBoxCodes.length > 0
+      ? await this.prisma.storagePalletBox.findMany({
+          where: {
+            OR: allocationBoxCodes.map((boxCode) => ({
+              boxCode: { equals: boxCode, mode: 'insensitive' as const },
+            })),
+          },
+          include: { pallet: { include: { zone: true } } },
+        })
+      : [];
+    const allocationLocationByBox = new Map(
+      allocationPlacements.map((placement) => [
+        normalizeBoxCode(placement.boxCode),
+        {
+          palletId: placement.palletId,
+          palletCode: placement.pallet.code,
+          zoneId: placement.pallet.zoneId,
+          zoneCode: placement.pallet.zone?.code ?? null,
+          zoneName: placement.pallet.zone?.name ?? null,
+        },
+      ]),
+    );
     const facts = rows.map((row) => ({
       id: row.id,
       orderId: row.orderId,
@@ -1066,12 +1093,17 @@ export class TsdAssemblyService {
               } =>
                 Boolean(order),
             ),
-          availableBoxes: row.allocations.map((allocation) => ({
-            boxCode: allocation.boxCode,
-            quantity: allocation.quantity,
-            palletId: allocation.palletId,
-            palletCode: allocation.palletCode,
-          })),
+          availableBoxes: row.allocations.map((allocation) => {
+            const storageLocation = allocationLocationByBox.get(normalizeBoxCode(allocation.boxCode)) ?? null;
+            return {
+              boxCode: allocation.boxCode,
+              quantity: allocation.quantity,
+              // FIX: prefer the current placement over the stale instruction snapshot.
+              palletId: storageLocation?.palletId ?? allocation.palletId,
+              palletCode: storageLocation?.palletCode ?? allocation.palletCode,
+              storageLocation,
+            };
+          }),
         };
       })
       .filter((row) => row.remainingQuantity > 0);

@@ -3998,7 +3998,7 @@ export type TurnoverMovementType =
   | 'RETURN'
   | 'INVENTORY_ADJUSTMENT';
 
-export type TurnoverActionKind = 'ADD' | 'WRITE_OFF' | 'TRANSFER' | 'UTILIZE' | 'HOLD';
+export type TurnoverActionKind = 'ADD' | 'WRITE_OFF' | 'TRANSFER' | 'UTILIZE' | 'HOLD' | 'REPLACE_BARCODE';
 
 export type TurnoverSkuReport = {
   skuId: string;
@@ -4120,6 +4120,8 @@ export type TurnoverActionPayload = {
   action: TurnoverActionKind;
   quantity: number;
   sourceBoxCode?: string;
+  sourceBalanceId?: string; // ADDED: exact stock row being corrected.
+  targetBarcode?: string; // ADDED: barcode of the correct SKU.
   targetBoxCode?: string;
   reason?: string;
   kiz?: string;

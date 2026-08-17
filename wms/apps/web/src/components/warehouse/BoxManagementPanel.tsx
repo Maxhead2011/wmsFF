@@ -6,6 +6,7 @@ import {
   CirclePlus,
   PackageOpen,
   RefreshCw,
+  ScanBarcode,
   Search,
   Trash2,
   X,
@@ -32,6 +33,7 @@ type BoxActionState = {
   action: TurnoverActionKind;
   quantity: string;
   targetBoxCode: string;
+  targetBarcode: string;
   reason: string;
   kiz: string;
   comment: string;
@@ -52,6 +54,7 @@ const actionLabels: Record<TurnoverActionKind, string> = {
   TRANSFER: 'Перенести',
   UTILIZE: 'Утилизировать',
   HOLD: 'Отложить',
+  REPLACE_BARCODE: 'Исправить ШК', // ADDED
 };
 
 export function BoxManagementPanel({ session }: { session: AuthSession }) {
@@ -181,6 +184,7 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
       action,
       quantity: '1',
       targetBoxCode: action === 'ADD' || action === 'HOLD' ? currentBox : '',
+      targetBarcode: '',
       reason: '',
       kiz: '',
       comment: '',
@@ -215,7 +219,7 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
 
     const quantity = Number(actionState.quantity);
     const needsTarget = ['ADD', 'TRANSFER', 'HOLD'].includes(actionState.action);
-    const needsReason = ['WRITE_OFF', 'HOLD'].includes(actionState.action);
+    const needsReason = ['WRITE_OFF', 'HOLD', 'REPLACE_BARCODE'].includes(actionState.action);
     const targetBoxCode = actionState.targetBoxCode.trim();
 
     if (!Number.isInteger(quantity) || quantity <= 0) {
@@ -228,6 +232,10 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
     }
     if (needsTarget && !targetBoxCode) {
       setActionError('Укажите короб назначения.');
+      return;
+    }
+    if (actionState.action === 'REPLACE_BARCODE' && !actionState.targetBarcode.trim()) {
+      setActionError('Отсканируйте или введите правильный ШК товара.');
       return;
     }
     if (needsReason && !actionState.reason.trim()) {
@@ -245,6 +253,8 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
         action: actionState.action,
         quantity,
         sourceBoxCode: actionState.action === 'ADD' ? undefined : box.code,
+        sourceBalanceId: actionState.action === 'REPLACE_BARCODE' ? actionState.item.balanceId : undefined,
+        targetBarcode: actionState.action === 'REPLACE_BARCODE' ? actionState.targetBarcode.trim() : undefined,
         targetBoxCode: needsTarget ? targetBoxCode : undefined,
         reason: actionState.reason.trim() || undefined,
         kiz: actionState.kiz.trim() || undefined,
@@ -462,6 +472,15 @@ function BoxCard({
                       <CirclePlus size={14} aria-hidden="true" />
                       <span>Добавить</span>
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => onAction(item, 'REPLACE_BARCODE')}
+                      disabled={item.kizCount > 0 || !['AVAILABLE', 'RECEIVING', 'UNMARKED', 'NEEDS_LABEL', 'NEEDS_RELABEL'].includes(item.status)}
+                      title={item.kizCount > 0 ? 'Для товара с КИЗом автоматическая замена ШК запрещена' : 'Исправить ошибочно принятый ШК'}
+                    >
+                      <ScanBarcode size={14} aria-hidden="true" />
+                      <span>Исправить ШК</span>
+                    </button>
                   </div>
                 </td> : null}
               </tr>
@@ -530,7 +549,7 @@ function BoxActionDialog({
   onSubmit: () => void;
 }) {
   const needsTarget = ['ADD', 'TRANSFER', 'HOLD'].includes(state.action);
-  const needsReason = ['WRITE_OFF', 'HOLD'].includes(state.action);
+  const needsReason = ['WRITE_OFF', 'HOLD', 'REPLACE_BARCODE'].includes(state.action);
 
   return (
     <div className="warehouse-box-dialog-backdrop" role="presentation">
@@ -555,6 +574,19 @@ function BoxActionDialog({
             <input min="1" type="number" value={state.quantity} onChange={(event) => onChange('quantity', event.target.value)} />
           </label>
 
+          {state.action === 'REPLACE_BARCODE' ? (
+            <label>
+              <span>Новый правильный ШК</span>
+              <input
+                value={state.targetBarcode}
+                onChange={(event) => onChange('targetBarcode', event.target.value)}
+                placeholder="Отсканируйте или введите ШК"
+                autoComplete="off"
+                autoFocus
+              />
+            </label>
+          ) : null}
+
           {needsTarget ? (
             <label>
               <span>Короб назначения</span>
@@ -578,10 +610,12 @@ function BoxActionDialog({
             </label>
           ) : null}
 
-          <label className="warehouse-box-dialog__wide">
-            <span>КИЗ</span>
-            <textarea value={state.kiz} onChange={(event) => onChange('kiz', event.target.value)} placeholder="При необходимости: через запятую или с новой строки" />
-          </label>
+          {state.action !== 'REPLACE_BARCODE' ? (
+            <label className="warehouse-box-dialog__wide">
+              <span>КИЗ</span>
+              <textarea value={state.kiz} onChange={(event) => onChange('kiz', event.target.value)} placeholder="При необходимости: через запятую или с новой строки" />
+            </label>
+          ) : null}
 
           <label className="warehouse-box-dialog__wide">
             <span>Комментарий</span>

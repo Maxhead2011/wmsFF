@@ -60,6 +60,9 @@ describe('TsdAssemblyService: активная очередь', () => {
 describe('TsdAssemblyService: факт сборки FBS', () => {
   it('возвращает короб, заказ, ШК товара, размер и четыре цифры наклейки WB', async () => {
     const prisma = {
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
       fbsOrderRequestLink: {
         findMany: vi.fn().mockResolvedValue([
           { orderId: '5355303495', connectionId: 'connection-1', lastSkuId: 'sku-1' },
@@ -80,6 +83,7 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
             stickerPartB: '9753',
             stickerBarcode: 'WB-FULL-BARCODE',
             status: 'COMPLETED',
+            deviceCode: 'TSD-1',
             itemCount: 1,
             workerName: 'Сборщик',
             completedAt: new Date('2026-07-23T08:00:00.000Z'),
@@ -99,6 +103,18 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
       },
       auditLog: {
         findMany: vi.fn().mockResolvedValue([]),
+      },
+      storagePalletBox: {
+        // ADDED: the saved allocation has no pallet, while the box is physically placed.
+        findMany: vi.fn().mockResolvedValue([{
+          boxCode: 'FFL_LKB0106_039',
+          palletId: 'pallet-1',
+          pallet: {
+            code: 'PALET_SORT_041',
+            zoneId: 'zone-1',
+            zone: { code: 'ZONE-002', name: '2 помещение' },
+          },
+        }]),
       },
     };
     const service = new TsdAssemblyService(prisma as never, {} as never, {} as never, {} as never);
@@ -146,8 +162,20 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
             collectedQuantity: 1,
             remainingQuantity: 1,
             orderIds: ['5355303496'],
-            orders: [{ id: '5355303496', connectionId: 'connection-1' }],
-            availableBoxes: [{ boxCode: 'FFL_LKB0106_039', quantity: 2 }],
+            orders: [expect.objectContaining({ id: '5355303496', connectionId: 'connection-1' })],
+            availableBoxes: [{
+              boxCode: 'FFL_LKB0106_039',
+              quantity: 2,
+              palletId: 'pallet-1',
+              palletCode: 'PALET_SORT_041',
+              storageLocation: {
+                palletId: 'pallet-1',
+                palletCode: 'PALET_SORT_041',
+                zoneId: 'zone-1',
+                zoneCode: 'ZONE-002',
+                zoneName: '2 помещение',
+              },
+            }],
           }),
         ],
       },
@@ -156,6 +184,9 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
 
   it('показывает изменённый после сборки заказ как требующий решения и не считает его несобранным', async () => {
     const prisma = {
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
       fbsOrderRequestLink: {
         findMany: vi.fn().mockResolvedValue([
           { orderId: '5355303495', connectionId: 'connection-1', lastSkuId: 'sku-1' },
@@ -176,6 +207,7 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
             stickerPartB: '9753',
             stickerBarcode: 'WB-FULL-BARCODE',
             status: 'RETURN_REQUIRED',
+            deviceCode: 'TSD-1',
             errorMessage: 'Заказ отменён после начала сборки.',
             itemCount: 1,
             workerName: 'Сборщик',
@@ -195,6 +227,9 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
         }]),
       },
       auditLog: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      storagePalletBox: {
         findMany: vi.fn().mockResolvedValue([]),
       },
     };

@@ -887,6 +887,136 @@ export class TurnoverService {
       const kizValues = parseKizValues(dto.kiz);
       await this.assertKizValuesInWarehouse(tx, dto.clientId, kizValues, warehouseScope);
 
+      if (dto.action === TurnoverActionKind.REPLACE_BARCODE) {
+        const sourceBalanceId = dto.sourceBalanceId?.trim();
+        const sourceBoxCode = dto.sourceBoxCode?.trim();
+        const targetBarcode = dto.targetBarcode?.trim();
+        if (!sourceBalanceId || !sourceBoxCode || !targetBarcode) {
+          throw new BadRequestException('Укажите строку остатка, исходный короб и новый ШК.');
+        }
+        if (!dto.reason?.trim()) {
+          throw new BadRequestException('Укажите причину замены ШК.');
+        }
+        if (kizValues.length > 0) {
+          throw new BadRequestException('При замене ШК КИЗы передавать нельзя.');
+        }
+
+        const balanceScopeWhere = this.balanceWarehouseWhere(warehouseScope);
+        const sourceBalance = await tx.stockBalance.findFirst({
+          where: {
+            AND: [
+              {
+                id: sourceBalanceId,
+                clientId: dto.clientId,
+                skuId: sku.id,
+                quantity: { gt: 0 },
+                boxId: { not: null },
+                status: {
+                  in: [
+                    StockStatus.AVAILABLE,
+                    StockStatus.RECEIVING,
+                    StockStatus.UNMARKED,
+                    StockStatus.NEEDS_LABEL,
+                    StockStatus.NEEDS_RELABEL,
+                  ],
+                },
+              },
+              ...(balanceScopeWhere ? [balanceScopeWhere] : []),
+            ],
+          },
+          include: { box: true },
+        });
+        if (
+          !sourceBalance?.box ||
+          sourceBalance.box.code.localeCompare(sourceBoxCode, 'ru-RU', { sensitivity: 'accent' }) !== 0
+        ) {
+          throw new NotFoundException('Строка товара не найдена в указанном коробе. Обновите карточку короба.');
+        }
+        if (sourceBalance.quantity < dto.quantity) {
+          throw new BadRequestException(`В выбранной строке доступно только ${sourceBalance.quantity} шт.`);
+        }
+
+        const marksCount = await tx.productMark.count({
+          where: {
+            clientId: dto.clientId,
+            skuId: sku.id,
+            boxId: sourceBalance.boxId,
+            status: sourceBalance.status,
+          },
+        });
+        if (marksCount > 0) {
+          throw new BadRequestException(
+            'У этой позиции есть КИЗы. Сначала исправьте привязку КИЗов отдельной операцией; автоматическая замена ШК запрещена.',
+          );
+        }
+
+        const targetSku = await this.resolveSku(tx, dto.clientId, undefined, targetBarcode);
+        if (targetSku.id === sku.id) {
+          throw new BadRequestException('Новый ШК относится к тому же товару. Остаток менять не нужно.');
+        }
+
+        const targetWarehouseId =
+          sourceBalance.warehouseId ?? sourceBalance.box.warehouseId ?? warehouseScope?.warehouseId ?? user.activeWarehouseId ?? null;
+        if (!targetWarehouseId) {
+          throw new BadRequestException('Не удалось определить филиал исправляемого остатка.');
+        }
+
+        // FIX: change the SKU in-place as one transaction; total box quantity is preserved.
+        const reduced = await tx.stockBalance.updateMany({
+          where: { id: sourceBalance.id, quantity: { gte: dto.quantity } },
+          data: { quantity: { decrement: dto.quantity } },
+        });
+        if (reduced.count !== 1) {
+          throw new BadRequestException('Остаток уже изменился. Обновите карточку короба и повторите операцию.');
+        }
+        await tx.stockBalance.deleteMany({ where: { id: sourceBalance.id, quantity: 0 } });
+        await this.incrementBalance(tx, {
+          warehouseId: targetWarehouseId,
+          clientId: dto.clientId,
+          skuId: targetSku.id,
+          boxId: sourceBalance.boxId,
+          palletId: sourceBalance.palletId,
+          status: sourceBalance.status,
+          quantity: dto.quantity,
+        });
+
+        const sourceBarcode =
+          sku.barcodes.find((barcode) => barcode.isPrimary)?.value ?? sku.barcodes[0]?.value ?? 'не указан';
+        const correctionComment = `${comment}. Исправление ШК: ${sourceBarcode} → ${targetBarcode}`;
+        await tx.stockMovement.createMany({
+          data: [
+            {
+              warehouseId: targetWarehouseId,
+              clientId: dto.clientId,
+              skuId: sku.id,
+              boxId: sourceBalance.boxId,
+              palletId: sourceBalance.palletId,
+              type: MovementType.INVENTORY_ADJUSTMENT,
+              status: sourceBalance.status,
+              quantity: -dto.quantity,
+              sourceDocument: 'barcode-correction',
+              idempotencyKey: `${idempotencyKey}:barcode-correction:out`,
+              comment: correctionComment,
+            },
+            {
+              warehouseId: targetWarehouseId,
+              clientId: dto.clientId,
+              skuId: targetSku.id,
+              boxId: sourceBalance.boxId,
+              palletId: sourceBalance.palletId,
+              type: MovementType.INVENTORY_ADJUSTMENT,
+              status: sourceBalance.status,
+              quantity: dto.quantity,
+              sourceDocument: 'barcode-correction',
+              idempotencyKey: `${idempotencyKey}:barcode-correction:in`,
+              comment: correctionComment,
+            },
+          ],
+        });
+
+        return this.actionResult('APPLIED', idempotencyKey, targetSku, dto.quantity, sourceBalance.box.code);
+      }
+
       if (dto.action === TurnoverActionKind.ADD) {
         const targetBox = dto.targetBoxCode
           ? await this.ensureBox(tx, dto.clientId, dto.targetBoxCode, warehouseScope)
@@ -2168,6 +2298,7 @@ function actionLabel(action: TurnoverActionKind) {
     TRANSFER: 'Перенос товара',
     UTILIZE: 'Утилизация товара',
     HOLD: 'Отложено на отдельное хранение',
+    REPLACE_BARCODE: 'Исправление ошибочного ШК', // ADDED
   };
 
   return labels[action];
