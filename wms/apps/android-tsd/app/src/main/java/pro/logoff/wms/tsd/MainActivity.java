@@ -3802,7 +3802,13 @@ public class MainActivity extends Activity {
         }
 
         if ("SCAN_BOX".equals(state) || "PALLET_BOXES".equals(state)) {
-            if ("PALLET_BOXES".equals(state) && fbsAssembly.palletScan != null) {
+            // FIX: A request route starts from the pallet-sort physically scanned by the worker.
+            // Do not send the worker to one preselected pallet before that scan.
+            boolean palletRouteOpen = FbsPalletRouteUi.isPalletRouteOpen(
+                state,
+                fbsAssembly.palletScan != null
+            );
+            if (palletRouteOpen) {
                 TsdFbsAssemblyResponse.PalletScan pallet = fbsAssembly.palletScan;
                 String zone = pallet.zone == null
                     ? tr("не назначена", "belgilanmagan")
@@ -3842,94 +3848,17 @@ public class MainActivity extends Activity {
                     }
                     root.addView(feedbackView(nearby.toString(), Color.rgb(220, 252, 231)));
                 }
-            }
-            String boxCode = nonEmpty(task.recommendedBoxCode, "-");
-            String locationHint = "";
-            if (task.recommendedLocation != null) {
-                String zone = nonEmpty(
-                    task.recommendedLocation.zoneName,
-                    tr("зона не назначена", "zona belgilanmagan")
-                );
-                locationHint = "\n" +
-                    tr("ЗОНА: ", "ZONA: ") + zone + "\n" +
-                    tr("ПАЛЛЕТА: ", "PALLET: ") + nonEmpty(task.recommendedLocation.palletCode, "-");
-            }
-            root.addView(feedbackView(
-                tr("1. НАЙДИТЕ И ОТСКАНИРУЙТЕ КОРОБ\nМожно сначала пикнуть QR паллетсорта.\n",
-                    "1. QUTINI TOPING VA SKANERLANG\nAvval palletsort QR kodini skanerlash mumkin.\n") +
-                    boxCode + locationHint,
-                BOX_MOVEMENT_BLUE
-            ));
-            if (task.storageBoxes != null && !task.storageBoxes.isEmpty()) {
-                StringBuilder options = new StringBuilder(tr(
-                    "НЕСКОЛЬКО ВАРИАНТОВ, ГДЕ ВЗЯТЬ ТОВАР",
-                    "MAHSULOTNI OLISH UCHUN BIR NECHTA JOY"
-                ));
-                String previousPallet = null;
-                // FIX: Show every available box and pallet-sort returned by WMS.
-                for (TsdFbsAssemblyResponse.StorageBox storageBox : task.storageBoxes) {
-                    TsdFbsAssemblyResponse.StorageLocation location = storageBox.location;
-                    String pallet = location == null
-                        ? tr("БЕЗ ПАЛЛЕТСОРТА", "PALLETSORTSIZ")
-                        : nonEmpty(location.palletCode, tr("БЕЗ ПАЛЛЕТСОРТА", "PALLETSORTSIZ"));
-                    if (!pallet.equals(previousPallet)) {
-                        String zone = location == null
-                            ? tr("зона не указана", "zona ko‘rsatilmagan")
-                            : nonEmpty(location.zoneName, nonEmpty(location.zoneCode, tr("зона не указана", "zona ko‘rsatilmagan")));
-                        options.append("\n\n")
-                            .append(tr("ПАЛЛЕТСОРТ: ", "PALLETSORT: "))
-                            .append(pallet)
-                            .append(" · ")
-                            .append(tr("ЗОНА: ", "ZONA: "))
-                            .append(zone);
-                        previousPallet = pallet;
-                    }
-                    options.append("\n• ")
-                        .append(nonEmpty(storageBox.code, "-"))
-                        .append(" — ")
-                        .append(storageBox.quantity)
-                        .append(tr(" шт.", " dona"));
-                }
-                root.addView(feedbackView(options.toString(), Color.rgb(224, 242, 254)));
-            }
-            if (task.samePalletRemainingBoxes > 0) {
-                String nextBoxes = task.samePalletBoxCodes == null || task.samePalletBoxCodes.isEmpty()
-                    ? ""
-                    : "\n" + String.join(", ", task.samePalletBoxCodes);
+            } else {
+                // ADDED: Explain the physical route before showing any individual box target.
                 root.addView(feedbackView(
-                    tr("НЕ УХОДИТЕ ОТ ЭТОЙ ПАЛЛЕТЫ\nЗдесь ещё нужных коробов: ",
-                        "BU PALLETDAN KETMANG\nBu yerda yana kerakli qutilar: ") +
-                        task.samePalletRemainingBoxes + nextBoxes,
-                    Color.rgb(254, 240, 138)
+                    tr(
+                        "1. ОТСКАНИРУЙТЕ ПАЛЛЕТ-СОРТ В ТЕКУЩЕМ ПОМЕЩЕНИИ\n" +
+                            "После скана ТСД покажет все нужные короба на нём и остальные нужные паллет-сорты в этой зоне.",
+                        "1. JORIY XONADAGI PALLETSORTNI SKANERLANG\n" +
+                            "Skanerdan keyin TSD undagi barcha kerakli qutilarni va shu zonadagi boshqa kerakli palletsortlarni ko‘rsatadi."
+                    ),
+                    BOX_MOVEMENT_BLUE
                 ));
-            }
-            if (task.nextRequestSources != null && !task.nextRequestSources.isEmpty()) {
-                StringBuilder next = new StringBuilder(tr(
-                    "ДАЛЬШЕ ПО ЭТОЙ ЗАЯВКЕ",
-                    "SHU ARIZA BO‘YICHA KEYINGILAR"
-                ));
-                // FIX: Show every remaining request route instead of the first eight.
-                for (TsdFbsAssemblyResponse.NextRequestSource source : task.nextRequestSources) {
-                    String zone = nonEmpty(source.zoneName, nonEmpty(source.zoneCode, "-"));
-                    next.append("\n\n")
-                        .append(tr("Заказ ", "Buyurtma "))
-                        .append(nonEmpty(source.orderId, "-"))
-                        .append(" · ")
-                        .append(nonEmpty(source.productName, "-"))
-                        .append("\n")
-                        .append(tr("ПАЛЛЕТ-СОРТ: ", "PALLETSORT: "))
-                        .append(nonEmpty(source.palletCode, "-"))
-                        .append(" · ")
-                        .append(tr("ЗОНА: ", "ZONA: "))
-                        .append(zone)
-                        .append("\n")
-                        .append(tr("КОРОБ: ", "QUTI: "))
-                        .append(nonEmpty(source.boxCode, "-"))
-                        .append(" · ")
-                        .append(source.quantity)
-                        .append(tr(" шт.", " dona"));
-                }
-                root.addView(feedbackView(next.toString(), Color.rgb(240, 249, 255)));
             }
             root.addView(messageView(
                 tr("В коробе есть нужный товар: ", "Qutida kerakli mahsulot bor: ") +
