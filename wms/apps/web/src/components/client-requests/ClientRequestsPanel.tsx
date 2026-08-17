@@ -448,7 +448,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     });
   }
 
-  async function submitManualClose() {
+  async function submitManualClose(allowOverweightPackages = false) {
     if (!manualClose) return;
 
     const boxes = parseNonNegativeInteger(manualClose.boxes);
@@ -489,6 +489,8 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           boxes: boxes!,
           pallets: pallets!,
           packedUnits: packedUnits!,
+          // FIX: флаг отправляется только по отдельной кнопке подтверждения перевеса.
+          allowOverweightPackages,
         });
       }
 
@@ -1033,7 +1035,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
         <ManualCloseModal
           state={manualClose}
           onChange={(patch) => setManualClose((current) => (current ? { ...current, ...patch, error: undefined } : current))}
-          onSubmit={() => void submitManualClose()}
+          onSubmit={(allowOverweightPackages) => void submitManualClose(allowOverweightPackages)}
           onClose={() => setManualClose(null)}
         />
       ) : null}
@@ -1377,7 +1379,7 @@ function ManualCloseModal({
 }: {
   state: ManualCloseState;
   onChange: (patch: Partial<Pick<ManualCloseState, 'boxes' | 'pallets' | 'packedUnits' | 'comment'>>) => void;
-  onSubmit: () => void;
+  onSubmit: (allowOverweightPackages?: boolean) => void;
   onClose: () => void;
 }) {
   const isSubmitting = state.status === 'submitting';
@@ -1465,11 +1467,32 @@ function ManualCloseModal({
 
           {state.error ? <p className="form-error manual-close-modal__error">{state.error}</p> : null}
 
+          {state.error && isOverweightPackageError(state.error) ? (
+            <div className="manual-close-modal__overweight-action">
+              <div>
+                <strong>Вес подтвержден фактически?</strong>
+                <span>
+                  Если товар уже упакован и короб действительно нужно сдать целиком, подтвердите закрытие с перевесом.
+                  Остатки и количество товара повторно увеличены не будут.
+                </span>
+              </div>
+              <button
+                className="client-request-action-button client-request-action-button--ship"
+                type="button"
+                onClick={() => onSubmit(true)}
+                disabled={isSubmitting}
+              >
+                <AlertTriangle size={16} aria-hidden="true" />
+                Закрыть, несмотря на вес
+              </button>
+            </div>
+          ) : null}
+
           <div className="emergency-xlsx-modal__actions">
             <button className="client-request-action-button client-request-action-button--instruction" type="button" onClick={onClose} disabled={isSubmitting}>
               Отмена
             </button>
-            <button className="client-request-action-button client-request-action-button--ship" type="button" onClick={onSubmit} disabled={isSubmitting}>
+            <button className="client-request-action-button client-request-action-button--ship" type="button" onClick={() => onSubmit()} disabled={isSubmitting || Boolean(state.error && isOverweightPackageError(state.error))}>
               <Truck size={16} aria-hidden="true" />
               {isSubmitting ? 'Закрываю отгрузку' : 'Подтвердить и сдать'}
             </button>
@@ -2639,6 +2662,12 @@ function parseNonNegativeInteger(value: string) {
 
 function isPalletPackage(packageType?: string | null) {
   return ['PALLET', 'PALLETTE', 'ПАЛЛЕТ', 'ПАЛЛЕТА'].includes((packageType ?? '').trim().toUpperCase());
+}
+
+// FIX: распознаём только точную весовую блокировку, не остальные ошибки короба.
+function isOverweightPackageError(message: string) {
+  const normalized = message.toLocaleLowerCase('ru-RU');
+  return normalized.includes('вес короба') && normalized.includes('превышает 25 кг');
 }
 
 function errorMessage(caught: unknown) {

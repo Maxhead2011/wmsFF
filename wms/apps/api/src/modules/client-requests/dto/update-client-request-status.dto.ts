@@ -1,6 +1,6 @@
 import { ClientRequestStatus } from '@prisma/client';
 import { Type } from 'class-transformer';
-import { IsArray, IsEnum, IsInt, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
+import { IsArray, IsBoolean, IsEnum, IsInt, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
 import { PackageClientRequestPlaceDto } from '../../stock/dto/fulfill-client-request.dto';
 
 export class UpdateClientRequestStatusDto {
@@ -28,6 +28,11 @@ export class UpdateClientRequestStatusDto {
   @IsInt()
   @Min(0)
   packedUnits?: number;
+
+  // FIX: перевес можно подтвердить только явным повторным действием менеджера.
+  @IsOptional()
+  @IsBoolean()
+  allowOverweightPackages?: boolean;
 
   @IsOptional()
   @IsArray()

@@ -4725,6 +4725,7 @@ export async function updateClientRequestStatus(
     boxes?: number;
     pallets?: number;
     packedUnits?: number;
+    allowOverweightPackages?: boolean;
     packages?: unknown[];
   },
 ) {

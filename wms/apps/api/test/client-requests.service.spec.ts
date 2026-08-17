@@ -194,6 +194,8 @@ describe('ClientRequestsService', () => {
         boxes: 2,
         pallets: 1,
         packedUnits: 30,
+        // TEST: явное подтверждение должно дойти до складской операции закрытия.
+        allowOverweightPackages: true,
       },
       user({
         clientIds: ['client-1'],
@@ -210,6 +212,7 @@ describe('ClientRequestsService', () => {
         boxes: 2,
         pallets: 1,
         packedUnits: 30,
+        allowOverweightPackages: true,
       }),
       expect.any(Object),
     );

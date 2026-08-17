@@ -1495,6 +1495,37 @@
   white-space: pre-line;
 }
 
+.manual-close-modal__overweight-action {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 2px solid #ef4444;
+  border-radius: 14px;
+  background: #fff1f2;
+  color: #991b1b;
+}
+
+.manual-close-modal__overweight-action > div {
+  display: grid;
+  gap: 4px;
+}
+
+.manual-close-modal__overweight-action strong {
+  font-size: 17px;
+}
+
+.manual-close-modal__overweight-action span {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.manual-close-modal__overweight-action button {
+  width: 100%;
+  min-height: 48px;
+  justify-content: center;
+  font-size: 15px;
+}
+
 .manual-box-selection-modal {
   width: min(980px, 100%);
 }

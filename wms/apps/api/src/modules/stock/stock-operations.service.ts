@@ -1996,7 +1996,7 @@ export class StockOperationsService {
           packageType,
           comment: dto.comment?.trim() || undefined,
           metadata: isPrimaryPackage
-            ? validateBoxWeight(packageCode, { packageType }, items)
+            ? validateBoxWeight(packageCode, { packageType }, items, dto.allowOverweightPackages)
             : { generatedFromPackageCount: true },
           items: isPrimaryPackage ? items.map(({ skuWeightGrams: _skuWeightGrams, ...item }) => item) : [],
         });
@@ -2034,7 +2034,7 @@ export class StockOperationsService {
           quantity: item.quantity,
         };
       });
-      const metadata = validateBoxWeight(packageCode, packageDto, items);
+      const metadata = validateBoxWeight(packageCode, packageDto, items, dto.allowOverweightPackages);
 
       return {
         packageCode,
@@ -2985,7 +2985,12 @@ function buildAllocationPackages(
     .sort(([left], [right]) => left.localeCompare(right, 'ru', { numeric: true }))
     .map(([packageCode, rows]) => {
       const items = [...rows.values()];
-      const metadata = validateBoxWeight(packageCode, { packageType: 'BOX' }, items);
+      const metadata = validateBoxWeight(
+        packageCode,
+        { packageType: 'BOX' },
+        items,
+        dto.allowOverweightPackages,
+      );
 
       return {
         packageCode,
@@ -3234,10 +3239,11 @@ function looksLikeBoxTransferHeader(...values: string[]) {
   );
 }
 
-function validateBoxWeight(
+export function validateBoxWeight(
   packageCode: string,
   packageDto: { packageType?: string; weightGrams?: number },
   items: Array<{ quantity: number; skuWeightGrams: number | null }>,
+  allowOverweightPackages = false,
 ): Prisma.InputJsonValue | undefined {
   if (isPalletPackage(packageDto.packageType)) {
     return undefined;
@@ -3245,7 +3251,20 @@ function validateBoxWeight(
 
   if (packageDto.weightGrams != null) {
     if (packageDto.weightGrams > MAX_BOX_WEIGHT_GRAMS) {
-      throw new BadRequestException(`Вес короба ${packageCode} превышает 25 кг.`);
+      if (!allowOverweightPackages) {
+        throw new BadRequestException(`Вес короба ${packageCode} превышает 25 кг.`);
+      }
+      // FIX: подтвержденный перевес не теряется — сохраняем его как предупреждение упаковки.
+      return {
+        measuredWeightGrams: packageDto.weightGrams,
+        warnings: [
+          {
+            code: 'BOX_WEIGHT_OVER_LIMIT_CONFIRMED',
+            message: `Вес короба ${packageCode} превышает 25 кг; перевес подтвержден менеджером.`,
+            limitGrams: MAX_BOX_WEIGHT_GRAMS,
+          },
+        ],
+      };
     }
     return undefined;
   }
@@ -3265,7 +3284,20 @@ function validateBoxWeight(
 
   const calculatedWeightGrams = items.reduce((sum, item) => sum + (item.skuWeightGrams ?? 0) * item.quantity, 0);
   if (calculatedWeightGrams > MAX_BOX_WEIGHT_GRAMS) {
-    throw new BadRequestException(`Расчетный вес короба ${packageCode} превышает 25 кг.`);
+    if (!allowOverweightPackages) {
+      throw new BadRequestException(`Расчетный вес короба ${packageCode} превышает 25 кг.`);
+    }
+    // FIX: разрешаем только повторное закрытие с явным подтверждением из web.
+    return {
+      calculatedWeightGrams,
+      warnings: [
+        {
+          code: 'BOX_WEIGHT_OVER_LIMIT_CONFIRMED',
+          message: `Расчетный вес короба ${packageCode} превышает 25 кг; перевес подтвержден менеджером.`,
+          limitGrams: MAX_BOX_WEIGHT_GRAMS,
+        },
+      ],
+    };
   }
 
   return {

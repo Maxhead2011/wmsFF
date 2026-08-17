@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsArray, IsInt, IsNumber, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
+import { IsArray, IsBoolean, IsInt, IsNumber, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
 
 export class PackageClientRequestItemDto {
   @IsString()
@@ -83,6 +83,11 @@ export class FulfillClientRequestDto {
   @IsOptional()
   @IsString()
   comment?: string;
+
+  // FIX: внутренний складской метод получает подтверждение перевеса явно.
+  @IsOptional()
+  @IsBoolean()
+  allowOverweightPackages?: boolean;
 
   @IsOptional()
   @IsArray()

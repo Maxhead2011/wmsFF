@@ -986,6 +986,8 @@ export class ClientRequestsService {
       pallets: dto.pallets,
       packedUnits: dto.packedUnits,
       packages: dto.packages,
+      // FIX: по умолчанию ограничение 25 кг остается обязательным.
+      allowOverweightPackages: dto.allowOverweightPackages,
     };
     if (usesRecordedPackages) {
       // Аварийное закрытие уже зафиксировало фактические короба, их состав и складские движения.
