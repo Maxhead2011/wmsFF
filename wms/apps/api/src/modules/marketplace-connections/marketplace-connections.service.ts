@@ -4157,6 +4157,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
     if (current) {
       this.clientScopes.requireClientAccess(user, current.clientId, 'write');
+      // FIX: A forced route repair can preserve an old empty assignment while WB
+      // temporarily returns the order to `new`. Do not let that saved assignment
+      // bypass the normal `confirm` filter used for fresh TSD queue candidates.
+      if (await this.releaseUntouchedFbsTsdAssignmentAwaitingWbConfirmation(current, user)) {
+        current = null;
+      }
+    }
+    if (current) {
       const canReleaseEmptyAssignment =
         Boolean(selectedRequestId) &&
         selectedRequestId !== current.requestId &&
@@ -4600,6 +4608,69 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             ? `По FBS-заявке №${String(selectedRequest.number).padStart(6, '0')} пока нет готовых к сборке заказов. Проверьте статус заказа на маркетплейсе и доступные остатки.`
             : 'Готовых заказов нет. Заказы появятся после создания заявки и перевода поставки в статус «На сборке».',
     );
+  }
+
+  // ADDED: Release only untouched WB assignments. Once a physical scan exists,
+  // the task and its worker remain unchanged for an explicit warehouse decision.
+  private async releaseUntouchedFbsTsdAssignmentAwaitingWbConfirmation(
+    task: FbsTsdAssemblyRecord,
+    user: AuthUser,
+  ) {
+    if (
+      task.marketplace !== MarketplaceType.WILDBERRIES ||
+      task.boxId ||
+      task.sourceBarcode ||
+      task.barcode ||
+      task.kiz ||
+      !this.prisma.fbsOrderRequestLink?.findUnique
+    ) {
+      return false;
+    }
+    const link = await this.prisma.fbsOrderRequestLink.findUnique({
+      where: {
+        marketplace_connectionId_orderId: {
+          marketplace: task.marketplace,
+          connectionId: task.connectionId,
+          orderId: task.orderId,
+        },
+      },
+      select: {
+        syncStatus: true,
+        lastCategory: true,
+        lastSupplierStatus: true,
+        request: { select: { fbsEmergencyAssemblyAt: true } },
+      },
+    });
+    const awaitingWbConfirmation =
+      link?.syncStatus === FBS_REQUEST_LINK_ACTIVE &&
+      link.lastCategory === 'active' &&
+      link.lastSupplierStatus?.trim().toLowerCase() === 'new' &&
+      !link.request.fbsEmergencyAssemblyAt;
+    if (!awaitingWbConfirmation) return false;
+
+    const released = await this.prisma.fbsTsdAssembly.updateMany({
+      where: {
+        id: task.id,
+        status: 'IN_PROGRESS',
+        deviceCode: task.deviceCode,
+        workerUserId: user.id,
+        updatedAt: task.updatedAt,
+        boxId: null,
+        sourceBarcode: null,
+        barcode: null,
+        kiz: null,
+      },
+      data: {
+        status: task.reservedBoxId ? FBS_TSD_RESERVED_STATUS : 'RELEASED',
+        deviceCode: task.reservedBoxId
+          ? FBS_TSD_AUTO_RESERVATION_DEVICE
+          : task.deviceCode,
+        workerUserId: null,
+        workerName: null,
+        errorMessage: 'Задание временно скрыто до подтверждения заказа в поставке Wildberries.',
+      },
+    });
+    return released.count === 1;
   }
 
   async getFbsCargoPackingQueue(deviceCodeValue: unknown, user: AuthUser) {

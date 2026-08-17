@@ -2305,6 +2305,132 @@ describe('MarketplaceConnectionsService', () => {
     });
   });
 
+  // ADDED: A saved empty assignment cannot bypass the WB `confirm` queue filter.
+  it('releases an untouched WB task while the order is temporarily new', async () => {
+    const updatedAt = new Date('2026-08-16T11:53:22.000Z');
+    const prisma = {
+      fbsOrderRequestLink: {
+        findUnique: vi.fn().mockResolvedValue({
+          syncStatus: 'ACTIVE',
+          lastCategory: 'active',
+          lastSupplierStatus: 'new',
+          request: { fbsEmergencyAssemblyAt: null },
+        }),
+      },
+      fbsTsdAssembly: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    const task = {
+      id: 'task-new',
+      marketplace: MarketplaceType.WILDBERRIES,
+      connectionId: 'connection-1',
+      orderId: '5491216813',
+      status: 'IN_PROGRESS',
+      deviceCode: 'TSD-1',
+      workerUserId: 'worker-1',
+      workerName: 'Сборщик',
+      updatedAt,
+      reservedBoxId: null,
+      boxId: null,
+      sourceBarcode: null,
+      barcode: null,
+      kiz: null,
+    };
+
+    await expect(
+      (service as any).releaseUntouchedFbsTsdAssignmentAwaitingWbConfirmation(
+        task,
+        { id: 'worker-1', name: 'Сборщик' },
+      ),
+    ).resolves.toBe(true);
+    expect(prisma.fbsTsdAssembly.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        id: 'task-new',
+        status: 'IN_PROGRESS',
+        workerUserId: 'worker-1',
+        updatedAt,
+        boxId: null,
+        barcode: null,
+        kiz: null,
+      }),
+      data: expect.objectContaining({
+        status: 'RELEASED',
+        workerUserId: null,
+        workerName: null,
+      }),
+    });
+  });
+
+  // ADDED: Confirmed orders continue through the existing assignment path.
+  it('keeps an untouched WB task when the order is confirm', async () => {
+    const prisma = {
+      fbsOrderRequestLink: {
+        findUnique: vi.fn().mockResolvedValue({
+          syncStatus: 'ACTIVE',
+          lastCategory: 'active',
+          lastSupplierStatus: 'confirm',
+          request: { fbsEmergencyAssemblyAt: null },
+        }),
+      },
+      fbsTsdAssembly: { updateMany: vi.fn() },
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+
+    await expect(
+      (service as any).releaseUntouchedFbsTsdAssignmentAwaitingWbConfirmation(
+        {
+          id: 'task-confirm',
+          marketplace: MarketplaceType.WILDBERRIES,
+          connectionId: 'connection-1',
+          orderId: 'order-confirm',
+          status: 'IN_PROGRESS',
+          deviceCode: 'TSD-1',
+          workerUserId: 'worker-1',
+          updatedAt: new Date(),
+          reservedBoxId: null,
+          boxId: null,
+          sourceBarcode: null,
+          barcode: null,
+          kiz: null,
+        },
+        { id: 'worker-1', name: 'Сборщик' },
+      ),
+    ).resolves.toBe(false);
+    expect(prisma.fbsTsdAssembly.updateMany).not.toHaveBeenCalled();
+  });
+
+  // ADDED: Physical work is never discarded when WB changes status mid-task.
+  it('keeps a physically started WB task even when the order becomes new', async () => {
+    const prisma = {
+      fbsOrderRequestLink: { findUnique: vi.fn() },
+      fbsTsdAssembly: { updateMany: vi.fn() },
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+
+    await expect(
+      (service as any).releaseUntouchedFbsTsdAssignmentAwaitingWbConfirmation(
+        {
+          id: 'task-scanned',
+          marketplace: MarketplaceType.WILDBERRIES,
+          connectionId: 'connection-1',
+          orderId: 'order-scanned',
+          status: 'IN_PROGRESS',
+          deviceCode: 'TSD-1',
+          workerUserId: 'worker-1',
+          updatedAt: new Date(),
+          reservedBoxId: null,
+          boxId: 'box-1',
+          sourceBarcode: null,
+          barcode: '2049190574845',
+          kiz: null,
+        },
+        { id: 'worker-1', name: 'Сборщик' },
+      ),
+    ).resolves.toBe(false);
+    expect(prisma.fbsOrderRequestLink.findUnique).not.toHaveBeenCalled();
+    expect(prisma.fbsTsdAssembly.updateMany).not.toHaveBeenCalled();
+  });
+
   it('allows a client to connect their own WB API without granting client editing rights', async () => {
     const created = {
       id: 'connection-1',
