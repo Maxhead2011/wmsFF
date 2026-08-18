@@ -3964,6 +3964,9 @@ describe('MarketplaceConnectionsService', () => {
       requiresCargoPlaces: false,
     });
     vi.spyOn(service as any, 'resolveFbsRequestWarehouseId').mockResolvedValue(null);
+    const syncRequests = vi
+      .spyOn(service as any, 'syncFbsRequestsFromMarketplace')
+      .mockResolvedValue(undefined);
     vi.spyOn(service as any, 'refreshFbsOrdersCache').mockResolvedValue({
       orders: [order],
     });
@@ -4032,6 +4035,17 @@ describe('MarketplaceConnectionsService', () => {
       }),
     });
     expect(prisma.fbsSupplyPlan.findUnique).not.toHaveBeenCalled();
+    expect(syncRequests).toHaveBeenCalledWith(
+      'client-1',
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: order.id,
+          supplierStatus: 'confirm',
+          supplyId: 'WB-GI-NEW',
+        }),
+      ]),
+      ['request-old', 'request-new'],
+    );
   });
 
   it('merges unstarted FBS orders from multiple WMS requests and WB supplies', async () => {

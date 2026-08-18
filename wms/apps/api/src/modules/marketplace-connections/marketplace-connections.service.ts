@@ -15876,6 +15876,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           ? {
               ...order,
               supplyId: targetSupplyId,
+              // FIX: WB changes a new order to confirm when it accepts the
+              // PATCH. Preserve that verified transition while its history
+              // endpoint is still eventually consistent.
+              ...(movesUnassignedNewOrders
+                ? {
+                    supplierStatus: 'confirm',
+                    category: 'active' as const,
+                    statusLabel: fbsStatusLabel('confirm', order.wbStatus),
+                  }
+                : {}),
               shipmentPlan: targetShipmentPlan,
               request: targetRequestSummary,
             }
@@ -15922,6 +15932,20 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         fetchedAt: new Date().toISOString(),
         orders: patchedOrders,
       };
+      if (movesUnassignedNewOrders) {
+        // ADDED: unlike a transfer between two existing supplies, this path
+        // has no stale source supply that can overwrite the target. Persist
+        // the synthetic confirmed assignment immediately so TSD tasks receive
+        // the real supply id and the MOVING marker is cleared.
+        await this.syncFbsRequestsFromMarketplace(
+          clientId,
+          patchedResponse.orders,
+          uniqueStrings([
+            ...sourceRequests.map((request) => request.id),
+            targetRequest.id,
+          ]),
+        );
+      }
       this.fbsOrdersCache.set(clientId, {
         expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
         value: patchedResponse,
