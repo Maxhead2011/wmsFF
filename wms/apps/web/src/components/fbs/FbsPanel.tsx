@@ -3746,9 +3746,8 @@ function FbsOrdersView({
   onRunSynchronizationAudit: () => Promise<void>;
   onCloseSynchronizationAudit: () => void;
 }) {
+  // FIX: список заказов изначально свёрнут и меняется только по нажатию пользователя.
   const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<string>>(() => new Set());
-  // ADDED: ручное сворачивание важнее автораскрытия при фоновых обновлениях списка.
-  const manuallyCollapsedGroupKeys = useRef<Set<string>>(new Set());
   const [ordersLayout, setOrdersLayout] = useState<'all' | 'warehouses'>('all');
   const [selectedWarehouseKey, setSelectedWarehouseKey] = useState('all');
   const [hiddenWaitingStockKeys, setHiddenWaitingStockKeys] = useState<Set<string>>(() => new Set());
@@ -3823,16 +3822,6 @@ function FbsOrdersView({
   );
   const readOnlyView = view === 'archive' || view === 'cancelled';
   const orderGroups = groupFbsOrdersBySupply(visibleOrders, view, orderSort);
-  const orderGroupKeys = orderGroups.map((group) => group.key).join('|');
-  useEffect(() => {
-    if (!normalizedSearch) return;
-    // FIX: не раскрываем повторно группы, которые пользователь уже свернул сам.
-    setExpandedGroupKeys(new Set(
-      orderGroups
-        .map((group) => group.key)
-        .filter((groupKey) => !manuallyCollapsedGroupKeys.current.has(groupKey)),
-    ));
-  }, [normalizedSearch, orderGroupKeys]);
   const tableColumnCount = 6 + (!readOnlyView ? 1 : 0) + (view === 'active' ? 1 : 0) + (view === 'cancelled' ? 1 : 0);
   const itemsCount = visibleOrders.reduce((sum, order) => sum + Math.max(1, order.itemCount), 0);
   const hasWildberriesOrders = visibleOrders.some((order) => order.marketplace === 'WILDBERRIES');
@@ -3971,15 +3960,9 @@ function FbsOrdersView({
   function toggleGroup(groupKey: string) {
     setExpandedGroupKeys((current) => {
       const next = new Set(current);
-      if (next.has(groupKey)) {
-        // ADDED: запоминаем ручное сворачивание между обновлениями данных.
-        next.delete(groupKey);
-        manuallyCollapsedGroupKeys.current.add(groupKey);
-      } else {
-        // FIX: только явное нажатие пользователя снова разрешает раскрыть группу.
-        next.add(groupKey);
-        manuallyCollapsedGroupKeys.current.delete(groupKey);
-      }
+      // ADDED: только эта кнопка раскрывает или сворачивает список.
+      if (next.has(groupKey)) next.delete(groupKey);
+      else next.add(groupKey);
       return next;
     });
   }
