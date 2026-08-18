@@ -71,7 +71,7 @@ public class FbsTaskSafetyTest {
     @Test
     public void acceptedBarcodeNeverStartsInventoryAfterTaskSwitch() {
         TsdFbsAssemblyResponse updated = new TsdFbsAssemblyResponse();
-        updated.state = "SCAN_KIZ";
+        updated.state = "SCAN_BOX";
         updated.task = task("switched-order");
         updated.task.scannedBarcode = "2042311801127";
 

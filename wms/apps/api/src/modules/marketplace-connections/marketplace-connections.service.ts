@@ -7789,17 +7789,27 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       if (freshTarget.id === freshCurrent.id) {
         return tx.fbsTsdAssembly.update({ where: { id: freshTarget.id }, data: scanData });
       }
+      const keepsScannedPhysicalBox = Boolean(freshCurrent.boxId && freshCurrent.boxCode);
       await tx.fbsTsdAssembly.update({
         where: { id: freshCurrent.id },
         data: {
-          status: freshCurrent.reservedBoxId ? FBS_TSD_RESERVED_STATUS : 'RELEASED',
-          deviceCode: freshCurrent.reservedBoxId
+          // FIX: the physical box follows the accepted product, not the order that
+          // happened to be shown before the worker scanned the barcode.
+          status: keepsScannedPhysicalBox
+            ? 'RELEASED'
+            : freshCurrent.reservedBoxId
+              ? FBS_TSD_RESERVED_STATUS
+              : 'RELEASED',
+          deviceCode: !keepsScannedPhysicalBox && freshCurrent.reservedBoxId
             ? FBS_TSD_AUTO_RESERVATION_DEVICE
             : freshCurrent.deviceCode,
           workerUserId: null,
           workerName: null,
           boxId: null,
           boxCode: null,
+          ...(keepsScannedPhysicalBox
+            ? { reservedBoxId: null, reservedBoxCode: null, reservedAt: null }
+            : {}),
           errorMessage: `Сотрудник выбрал товар по ШК ${barcode}; задание возвращено в очередь.`,
         },
       });
@@ -7811,14 +7821,31 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           workerUserId: user.id,
           workerName: user.name,
           startedAt: new Date(),
+          ...(keepsScannedPhysicalBox
+            ? {
+                reservedBoxId: freshCurrent.boxId,
+                reservedBoxCode: freshCurrent.boxCode,
+                reservedAt: new Date(),
+                boxId: freshCurrent.boxId,
+                boxCode: freshCurrent.boxCode,
+                sourceBoxPending: false,
+              }
+            : {}),
           ...scanData,
         },
       });
     });
     if (!switched) return null;
 
+    const keptScannedPhysicalBox = Boolean(
+      currentTask.boxId && switched.boxId === currentTask.boxId,
+    );
     const noBox = fbsTsdUsesNoBox(switched);
-    const action = noBox
+    const action = keptScannedPhysicalBox
+      ? switched.requiresKiz
+        ? `Товар принят из короба ${switched.boxCode}. Теперь отсканируйте КИЗ.`
+        : `Товар принят из короба ${switched.boxCode}. Переходите к наклейке.`
+      : noBox
       ? matched.field === 'sourceBarcode'
         ? 'Исходный товар принят. Выполните переклейку и отсканируйте новый ШК.'
         : 'Товар принят. Переходите к следующему шагу.'

@@ -3412,6 +3412,62 @@ describe('MarketplaceConnectionsService', () => {
     });
   });
 
+  it('keeps the scanned physical box when barcode switches the FBS order', async () => {
+    const currentTask = {
+      id: 'task-current', clientId: 'client-1', marketplace: MarketplaceType.WILDBERRIES,
+      connectionId: 'connection-1', orderId: 'order-current', requestId: 'request-259',
+      status: 'IN_PROGRESS', deviceCode: 'TSD-INSTALL-01', workerUserId: 'worker-1',
+      reservedBoxId: 'box-166', reservedBoxCode: 'FFL_LKB1007_166',
+      boxId: 'box-166', boxCode: 'FFL_LKB1007_166', sourceBarcode: null,
+      barcode: null, kiz: null, relabelConfirmedAt: null, relabelRequired: false,
+      barcodes: ['2042311801110'],
+    };
+    const targetTask = {
+      ...currentTask, id: 'task-target', orderId: '5486686716', status: 'RESERVED',
+      reservedBoxId: 'box-033', reservedBoxCode: 'FFL_LKB1107_033',
+      boxId: null, boxCode: null, requiresKiz: true, barcodes: ['2042311801127'],
+    };
+    const updatedTarget = {
+      ...targetTask, status: 'IN_PROGRESS', reservedBoxId: 'box-166',
+      reservedBoxCode: 'FFL_LKB1007_166', boxId: 'box-166',
+      boxCode: 'FFL_LKB1007_166', barcode: '2042311801127',
+    };
+    const tx = {
+      fbsTsdAssembly: {
+        findUnique: vi.fn().mockResolvedValueOnce(currentTask).mockResolvedValueOnce(targetTask),
+        update: vi.fn().mockResolvedValueOnce({ ...currentTask, status: 'RELEASED' }).mockResolvedValueOnce(updatedTarget),
+      },
+    };
+    const prisma = {
+      fbsTsdAssembly: { findMany: vi.fn().mockResolvedValue([currentTask, targetTask]) },
+      $transaction: vi.fn(async (callback: (client: typeof tx) => Promise<unknown>) => callback(tx)),
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    vi.spyOn(service as any, 'formatFbsTsdAssembly').mockImplementation(
+      async (task: unknown, _user: unknown, message: string) => ({ task, message }),
+    );
+
+    const result = await (service as any).switchFbsTsdAssemblyToBarcode(
+      currentTask, '2042311801127',
+      { id: 'worker-1', name: 'Администратор', deviceCode: 'TSD-INSTALL-01' },
+    );
+
+    // TEST: request 259 keeps the box already scanned by the worker and proceeds to KIZ.
+    expect(tx.fbsTsdAssembly.update).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      data: expect.objectContaining({ status: 'RELEASED', reservedBoxId: null, boxId: null }),
+    }));
+    expect(tx.fbsTsdAssembly.update).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      data: expect.objectContaining({
+        boxId: 'box-166', boxCode: 'FFL_LKB1007_166',
+        reservedBoxId: 'box-166', barcode: '2042311801127',
+      }),
+    }));
+    expect(result).toMatchObject({
+      task: { orderId: '5486686716', boxCode: 'FFL_LKB1007_166' },
+      message: expect.stringContaining('Теперь отсканируйте КИЗ'),
+    });
+  });
+
   it('considers shipped WB orders when switching boxes for an emergency request', async () => {
     const service = new MarketplaceConnectionsService({} as never, {} as never);
     const product = {

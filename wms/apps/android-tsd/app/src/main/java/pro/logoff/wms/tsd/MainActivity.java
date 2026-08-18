@@ -266,6 +266,7 @@ public class MainActivity extends Activity {
     private AlertDialog activeErrorDialog;
     private AlertDialog fbsGuidedScanDialog;
     private String fbsGuidedScanDialogKey = "";
+    private Runnable fbsGuidedAutoSubmitTask;
     private String lastDialogError = "";
     private long lastDialogErrorAt = 0L;
     private final Runnable monitorHeartbeatTask = new Runnable() {
@@ -3831,9 +3832,7 @@ public class MainActivity extends Activity {
 
                 // FIX: полный маршрут остаётся доступным, но его можно свернуть,
                 // чтобы он не занимал весь экран во время фактического сканирования.
-                LinearLayout routeDetails = new LinearLayout(this);
-                routeDetails.setOrientation(LinearLayout.VERTICAL);
-                routeDetails.addView(feedbackView(
+                root.addView(feedbackView(
                     tr("НУЖНЫЕ КОРОБА НА ЭТОМ ПАЛЛЕТСОРТЕ\n", "BU PALLETSORTDAGI KERAKLI QUTILAR\n") +
                         neededCodes,
                     Color.rgb(254, 240, 138)
@@ -3859,21 +3858,8 @@ public class MainActivity extends Activity {
                                 .append(String.join(", ", nextPallet.neededBoxCodes));
                         }
                     }
-                    routeDetails.addView(feedbackView(nearby.toString(), Color.rgb(220, 252, 231)));
+                    root.addView(feedbackView(nearby.toString(), Color.rgb(220, 252, 231)));
                 }
-                Button routeToggle = secondaryButton(
-                    tr("Свернуть весь маршрут", "Yo‘nalishni yig‘ish"),
-                    view -> { }
-                );
-                routeToggle.setOnClickListener(view -> {
-                    boolean collapse = routeDetails.getVisibility() == View.VISIBLE;
-                    routeDetails.setVisibility(collapse ? View.GONE : View.VISIBLE);
-                    routeToggle.setText(collapse
-                        ? tr("Показать весь маршрут", "Yo‘nalishni ko‘rsatish")
-                        : tr("Свернуть весь маршрут", "Yo‘nalishni yig‘ish"));
-                });
-                root.addView(routeToggle);
-                root.addView(routeDetails);
             } else {
                 // ADDED: Explain the physical route before showing any individual box target.
                 root.addView(feedbackView(
@@ -4414,8 +4400,6 @@ public class MainActivity extends Activity {
             fbsGuidedScanDialog.isShowing() &&
             dialogKey.equals(fbsGuidedScanDialogKey)
         ) {
-            Button confirm = fbsGuidedScanDialog.getButton(AlertDialog.BUTTON_POSITIVE);
-            if (confirm != null) confirm.setEnabled(!fbsBusy);
             return;
         }
 
@@ -4439,6 +4423,14 @@ public class MainActivity extends Activity {
         EditText dialogInput = input(scanKiz
             ? tr("Сканируйте КИЗ Data Matrix", "Data Matrix KIZni skanerlang")
             : tr("Сканируйте ШК товара", "Mahsulot SHKini skanerlang"));
+        dialogInput.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence value, int start, int count, int after) { }
+            @Override public void onTextChanged(CharSequence value, int start, int before, int count) { }
+            @Override public void afterTextChanged(Editable value) {
+                // FIX: no separate confirmation is required after a hardware scan.
+                scheduleFbsGuidedAutoSubmit(dialogInput, value == null ? "" : value.toString());
+            }
+        });
         content.addView(dialogInput);
         fbsScanInput = dialogInput;
 
@@ -4448,21 +4440,11 @@ public class MainActivity extends Activity {
                 : tr("Товар из короба ", "Qutidagi mahsulot ") + nonEmpty(task.scannedBoxCode, "-"))
             .setView(content)
             .setNegativeButton(tr("Свернуть", "Yig‘ish"), null)
-            .setPositiveButton(scanKiz
-                ? tr("Подтвердить КИЗ", "KIZni tasdiqlash")
-                : tr("Подтвердить ШК", "SHKni tasdiqlash"), null)
             .create();
         fbsGuidedScanDialog = dialog;
         fbsGuidedScanDialogKey = dialogKey;
         dialog.setCanceledOnTouchOutside(false);
-        dialog.setOnShowListener(ignored -> {
-            Button confirm = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
-            confirm.setEnabled(!fbsBusy);
-            confirm.setOnClickListener(view -> {
-                if (!fbsBusy) submitFbsScan();
-            });
-            dialogInput.requestFocus();
-        });
+        dialog.setOnShowListener(ignored -> dialogInput.requestFocus());
         dialog.setOnDismissListener(ignored -> {
             if (fbsGuidedScanDialog == dialog) {
                 fbsGuidedScanDialog = null;
@@ -4473,7 +4455,22 @@ public class MainActivity extends Activity {
         dialog.show();
     }
 
+    private void scheduleFbsGuidedAutoSubmit(EditText input, String value) {
+        if (fbsGuidedAutoSubmitTask != null) mainHandler.removeCallbacks(fbsGuidedAutoSubmitTask);
+        fbsGuidedAutoSubmitTask = null;
+        if (nonEmpty(value, "").isEmpty()) return;
+        fbsGuidedAutoSubmitTask = () -> {
+            fbsGuidedAutoSubmitTask = null;
+            if (fbsScanInput == input && !fbsBusy && !textValue(input).isEmpty()) submitFbsScan();
+        };
+        mainHandler.postDelayed(fbsGuidedAutoSubmitTask, 350L);
+    }
+
     private void dismissFbsGuidedScanDialog() {
+        if (fbsGuidedAutoSubmitTask != null) {
+            mainHandler.removeCallbacks(fbsGuidedAutoSubmitTask);
+            fbsGuidedAutoSubmitTask = null;
+        }
         AlertDialog dialog = fbsGuidedScanDialog;
         fbsGuidedScanDialog = null;
         fbsGuidedScanDialogKey = "";

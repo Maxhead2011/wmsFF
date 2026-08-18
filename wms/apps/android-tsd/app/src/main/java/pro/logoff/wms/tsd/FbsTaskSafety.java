@@ -74,8 +74,9 @@ final class FbsTaskSafety {
         if (updated == null || updated.task == null) return false;
         if (!"scan-any".equals(action) && !"scan-barcode".equals(action)) return false;
         if (nonEmpty(scannedValue).isEmpty() || nonEmpty(updated.task.scannedBarcode).isEmpty()) return false;
-        String state = nonEmpty(updated.state).toUpperCase(Locale.ROOT);
-        return "SCAN_KIZ".equals(state) || "READY_TO_COMPLETE".equals(state);
+        // FIX: SCAN_BOX can be returned by an older API during task switching;
+        // exact scannedBarcode equality still proves successful product acceptance.
+        return nonEmpty(scannedValue).equalsIgnoreCase(nonEmpty(updated.task.scannedBarcode));
     }
 
     private static boolean taskCanUseBox(
