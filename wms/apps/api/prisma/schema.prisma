@@ -633,6 +633,10 @@ model Client {
   dbsIntegrations              ClientDbsIntegration[]
   fbsSupplyPlans               FbsSupplyPlan[]
   fbsStockPublications         FbsStockPublication[]
+  // ADDED: Per-cabinet WB stock distribution without mixing physical client balances.
+  fbsStockAllocationPolicies   FbsStockAllocationPolicy[]
+  fbsStockIntegrationApiKeys   FbsStockIntegrationApiKey[]
+  fbsStockAllocationChanges    FbsStockAllocationChange[]
   ozonFboPlans                 OzonFboPlan[]
   articleMappings              ClientArticleMapping[]
   allowedIps                   ClientAllowedIp[]
@@ -723,6 +727,7 @@ model ClientMarketplaceConnection {
   fbsExecutionWarehouse     Warehouse?                @relation("FbsExecutionWarehouse", fields: [fbsExecutionWarehouseId], references: [id], onDelete: SetNull)
   fbsDropoffWarehouse       Warehouse?                @relation("FbsDropoffWarehouse", fields: [fbsDropoffWarehouseId], references: [id], onDelete: SetNull)
   fbsStockPublications      FbsStockPublication[]
+  fbsStockAllocationPolicy  FbsStockAllocationPolicy?
   fbsWarehouseRoutes        FbsWarehouseRoutingRule[]
   ozonFboPlans              OzonFboPlan[]
   createdAt                 DateTime                  @default(now())
@@ -964,7 +969,8 @@ model Sku {
   requestBoxSelections ClientRequestBoxSelection[]
   packageItems         ClientRequestPackageItem[]
   productMarks         ProductMark[]
-  fbsStockPublications FbsStockPublication[]
+  fbsStockPublications        FbsStockPublication[]
+  fbsStockAllocationOverrides FbsStockAllocationOverride[]
   ozonFboPlanItems     OzonFboPlanItem[]
   factoryShipmentItems FactoryShipmentItem[]
   createdAt            DateTime                    @default(now())
@@ -2013,6 +2019,104 @@ model FbsStockPublication {
   @@unique([connectionId, warehouseId, skuId])
   @@index([clientId, warehouseId, enabled])
   @@index([skuId])
+}
+
+model FbsStockAllocationPolicy {
+  id                 String                       @id @default(uuid())
+  clientId           String
+  connectionId       String                       @unique
+  enabled            Boolean                      @default(false)
+  primaryWarehouseId String?
+  lowStockThreshold  Int                          @default(10)
+  recommendationDays Int                          @default(30)
+  updatedSource      String                       @default("WMS")
+  changedByClientAt  DateTime?
+  lastSyncedAt       DateTime?
+  lastError          String?
+  client             Client                       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  connection         ClientMarketplaceConnection  @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  shares             FbsStockAllocationShare[]
+  overrides          FbsStockAllocationOverride[]
+  changes            FbsStockAllocationChange[]
+  createdAt          DateTime                     @default(now())
+  updatedAt          DateTime                     @updatedAt
+
+  @@index([clientId, enabled])
+}
+
+model FbsStockAllocationShare {
+  id            String                   @id @default(uuid())
+  policyId      String
+  warehouseId   String
+  warehouseName String?
+  percent       Int
+  isPrimary     Boolean                  @default(false)
+  policy        FbsStockAllocationPolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+
+  @@unique([policyId, warehouseId])
+  @@index([policyId, isPrimary])
+}
+
+model FbsStockAllocationOverride {
+  id                String                     @id @default(uuid())
+  clientId          String
+  policyId          String
+  skuId             String
+  requestedAmount   Int
+  updatedSource     String                     @default("WMS")
+  changedByClientAt DateTime?
+  updatedByApiKeyId String?
+  policy            FbsStockAllocationPolicy   @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  sku               Sku                        @relation(fields: [skuId], references: [id], onDelete: Cascade)
+  updatedByApiKey   FbsStockIntegrationApiKey? @relation(fields: [updatedByApiKeyId], references: [id], onDelete: SetNull)
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
+
+  @@unique([policyId, skuId])
+  @@index([clientId, updatedSource, updatedAt])
+  @@index([updatedByApiKeyId])
+}
+
+model FbsStockIntegrationApiKey {
+  id              String                       @id @default(uuid())
+  clientId        String
+  name            String
+  keyHash         String                       @unique
+  keyPrefix       String
+  isActive        Boolean                      @default(true)
+  createdByUserId String?
+  lastUsedAt      DateTime?
+  revokedAt       DateTime?
+  client          Client                       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  overrides       FbsStockAllocationOverride[]
+  changes         FbsStockAllocationChange[]
+  createdAt       DateTime                     @default(now())
+  updatedAt       DateTime                     @updatedAt
+
+  @@index([clientId, isActive])
+}
+
+model FbsStockAllocationChange {
+  id                   String                     @id @default(uuid())
+  clientId             String
+  policyId             String
+  apiKeyId             String?
+  source               String                     @default("EXTERNAL_CLIENT")
+  changeType           String
+  externalReference    String?
+  payload              Json
+  acknowledgedAt       DateTime?
+  acknowledgedByUserId String?
+  client               Client                     @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  policy               FbsStockAllocationPolicy   @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  apiKey               FbsStockIntegrationApiKey? @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+  createdAt            DateTime                   @default(now())
+
+  @@unique([apiKeyId, externalReference])
+  @@index([clientId, acknowledgedAt, createdAt])
+  @@index([policyId, createdAt])
 }
 
 model FbsCargoPlacePacking {

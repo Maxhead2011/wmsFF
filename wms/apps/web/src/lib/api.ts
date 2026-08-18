@@ -3422,6 +3422,52 @@ export type FbsStocksResponse = {
   items: FbsStockItem[];
 };
 
+export type FbsStockAllocationResponse = {
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  connection: { id: string; accountName: string | null; primaryWarehouseId: string | null };
+  policy: {
+    id: string | null;
+    enabled: boolean;
+    lowStockThreshold: number;
+    recommendationDays: number;
+    updatedSource: 'WMS' | 'CLIENT_PORTAL' | 'EXTERNAL_CLIENT' | string;
+    changedByClientAt: string | null;
+    lastSyncedAt: string | null;
+    lastError: string | null;
+    overrideCount: number;
+  };
+  shares: Array<{
+    warehouseId: string;
+    warehouseName: string;
+    routeMode: FbsWarehouseRouteMode;
+    percent: number;
+    isPrimary: boolean;
+    recommendedPercent: number;
+  }>;
+  recommendation: { periodDays: number; basedOnOrders: number };
+  integrationKeys: Array<{
+    id: string;
+    name: string;
+    keyPrefix: string;
+    isActive: boolean;
+    lastUsedAt: string | null;
+    revokedAt: string | null;
+    createdAt: string;
+  }>;
+  changes: Array<{
+    id: string;
+    source: string;
+    changeType: string;
+    externalReference: string | null;
+    payload: unknown;
+    acknowledged: boolean;
+    acknowledgedAt: string | null;
+    createdAt: string;
+    integration: { id: string; name: string; keyPrefix: string } | null;
+  }>;
+  unacknowledgedChanges: number;
+};
+
 export type FbsWarehouseRouteMode =
   | 'DEFAULT'
   | 'CENTRAL'
@@ -8759,6 +8805,77 @@ export async function connectFbsStockWarehouse(
     accessToken,
     body: payload,
   });
+}
+
+// ADDED: Multi-warehouse stock allocation remains separate from the legacy per-item publication API.
+export async function fetchFbsStockAllocation(
+  accessToken: string,
+  clientId: string,
+  connectionId: string,
+) {
+  return request<FbsStockAllocationResponse>(
+    withQuery('/marketplace-connections/fbs/stocks/allocation', { clientId, connectionId }),
+    { accessToken },
+  );
+}
+
+export async function updateFbsStockAllocation(
+  accessToken: string,
+  payload: {
+    clientId: string;
+    connectionId: string;
+    enabled: boolean;
+    lowStockThreshold: number;
+    recommendationDays: number;
+    shares: Array<{ warehouseId: string; warehouseName?: string; percent: number; isPrimary: boolean }>;
+  },
+) {
+  return request<{ updated: boolean; duplicate: boolean; policyId?: string }>(
+    '/marketplace-connections/fbs/stocks/allocation',
+    { method: 'PUT', accessToken, body: payload },
+  );
+}
+
+export async function syncFbsStockAllocation(
+  accessToken: string,
+  payload: { clientId: string; connectionId: string },
+) {
+  return request<{ synced: number; products: number; warehouses: number; publishedAmount: number; syncedAt: string }>(
+    '/marketplace-connections/fbs/stocks/allocation/sync',
+    { method: 'POST', accessToken, body: payload },
+  );
+}
+
+export async function createFbsStockIntegrationKey(
+  accessToken: string,
+  payload: { clientId: string; name: string },
+) {
+  return request<{ id: string; name: string; keyPrefix: string; createdAt: string; apiKey: string }>(
+    '/marketplace-connections/fbs/stocks/allocation/api-keys',
+    { method: 'POST', accessToken, body: payload },
+  );
+}
+
+export async function revokeFbsStockIntegrationKey(
+  accessToken: string,
+  clientId: string,
+  keyId: string,
+) {
+  return request<{ revoked: boolean; keyId: string }>(
+    withQuery(`/marketplace-connections/fbs/stocks/allocation/api-keys/${encodeURIComponent(keyId)}`, { clientId }),
+    { method: 'DELETE', accessToken },
+  );
+}
+
+export async function acknowledgeFbsStockAllocationChange(
+  accessToken: string,
+  clientId: string,
+  changeId: string,
+) {
+  return request<{ acknowledged: boolean; changeId: string; acknowledgedAt: string }>(
+    `/marketplace-connections/fbs/stocks/allocation/changes/${encodeURIComponent(changeId)}/acknowledge`,
+    { method: 'POST', accessToken, body: { clientId } },
+  );
 }
 
 export async function fetchFbsWarehouseRoutes(
