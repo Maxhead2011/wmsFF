@@ -14842,17 +14842,38 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     });
     const { response, orders: selectedOrders } =
       await this.resolveSelectedFbsOrders(clientId, dto.orders, freshResponse);
-    const unavailable = selectedOrders.filter(
+    // FIX: an order already linked to a WMS request can legitimately return to
+    // WB as new/waiting without a supply. Moving it must create the first WB
+    // supply and the new WMS request in one operation; no stock is released.
+    const movesConfirmedOrders = selectedOrders.every(
       (order) =>
-        order.marketplace !== MarketplaceType.WILDBERRIES ||
-        order.category !== 'active' ||
-        order.supplierStatus !== 'confirm' ||
-        !order.supplyId ||
-        !order.product,
+        order.marketplace === MarketplaceType.WILDBERRIES &&
+        order.category === 'active' &&
+        order.supplierStatus === 'confirm' &&
+        Boolean(order.supplyId) &&
+        Boolean(order.product),
     );
-    if (unavailable.length > 0) {
+    const movesUnassignedNewOrders = selectedOrders.every(
+      (order) =>
+        order.marketplace === MarketplaceType.WILDBERRIES &&
+        order.category === 'active' &&
+        order.supplierStatus === 'new' &&
+        !order.supplyId &&
+        Boolean(order.product),
+    );
+    if (!movesConfirmedOrders && !movesUnassignedNewOrders) {
+      const unavailable = selectedOrders.filter(
+        (order) =>
+          order.marketplace !== MarketplaceType.WILDBERRIES ||
+          order.category !== 'active' ||
+          !order.product ||
+          !(
+            (order.supplierStatus === 'confirm' && Boolean(order.supplyId)) ||
+            (order.supplierStatus === 'new' && !order.supplyId)
+          ),
+      );
       throw new BadRequestException(
-        `Перенести можно только активные заказы WB со статусом «На сборке» и найденным товаром WMS. Проверьте: ${unavailable
+        `Перенести можно только активные заказы WB с найденным товаром WMS: новые без поставки или со статусом «На сборке». Проверьте: ${(unavailable.length > 0 ? unavailable : selectedOrders)
           .map((order) => order.id)
           .join(', ')}.`,
       );
@@ -14905,7 +14926,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     }
     const sourceSupplyIds = uniqueStrings(
-      orders.map((order) => order.supplyId!),
+      // FIX: new/waiting orders intentionally have no source supply yet.
+      orders.map((order) => order.supplyId ?? ''),
     );
     const warehouseKeys = uniqueStrings(
       orders.map((order) => order.warehouseId || order.officeId || 'unknown'),
@@ -14932,7 +14954,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           .join('; ')}.`,
       );
     }
-    const sourceSupplyId = sourceSupplyIds[0]!;
+    const sourceSupplyId = sourceSupplyIds[0] ?? null;
     const selectedKeys = new Set(
       orders.map((order) => selectionKey(order.connectionId, order.id)),
     );
@@ -15056,12 +15078,19 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const deliveryDestinations = new Set(
       resolvedSourcePlans.map((plan) => plan.deliveryDestination),
     );
-    if (deliveryDestinations.size !== 1) {
+    if (resolvedSourcePlans.length > 0 && deliveryDestinations.size !== 1) {
       throw new BadRequestException(
         'Объединить можно только поставки с одним направлением сдачи: либо все ПВЗ, либо все СЦ.',
       );
     }
-    const sourcePlan = resolvedSourcePlans[0]!;
+    // ADDED: new/waiting orders have no source supply plan yet. Use the
+    // client's existing delivery settings only for creating their first plan.
+    const sourcePlan = resolvedSourcePlans[0] ?? {
+      marketplaceWarehouseId: orders[0]?.warehouseId ?? null,
+      marketplaceWarehouseName: orders[0]?.warehouseName ?? null,
+      deliveryDestination: fallbackDeliveryPlan.destination,
+      itemsPerCargoPlace: fallbackDeliveryPlan.itemsPerCargoPlace,
+    };
     const itemsPerCargoPlace = Math.max(1, sourcePlan.itemsPerCargoPlace);
     const incompatibleCargoCapacity = resolvedSourcePlans.some(
       (plan) => Math.max(1, plan.itemsPerCargoPlace) !== itemsPerCargoPlace,

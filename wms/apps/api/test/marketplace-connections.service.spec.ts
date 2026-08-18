@@ -3866,16 +3866,18 @@ describe('MarketplaceConnectionsService', () => {
     expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith('/trbx'))).toBe(false);
   });
 
-  it('moves unstarted FBS orders to a new WB supply and creates a separate WMS request', async () => {
+  it('moves a linked new/waiting WB order without a supply to a new supply and WMS request', async () => {
     const order = {
       id: '5355000001',
       connectionId: 'connection-1',
       marketplace: MarketplaceType.WILDBERRIES,
       category: 'active',
-      supplierStatus: 'confirm',
+      supplierStatus: 'new',
       wbStatus: 'waiting',
-      statusLabel: 'На сборке',
-      supplyId: 'WB-GI-OLD',
+      statusLabel: 'Новый',
+      supplyId: null,
+      warehouseId: '1935323',
+      warehouseName: 'СЦ Белая дача',
       itemCount: 1,
       barcodes: ['460000000001'],
       product: {
@@ -3956,6 +3958,12 @@ describe('MarketplaceConnectionsService', () => {
       prisma as never,
       { requireClientAccess: vi.fn() } as never,
     );
+    vi.spyOn(service as any, 'loadFbsDeliveryPlan').mockResolvedValue({
+      destination: FbsDeliveryDestination.VNUKOVO_SORTING_CENTER,
+      itemsPerCargoPlace: 14,
+      requiresCargoPlaces: false,
+    });
+    vi.spyOn(service as any, 'resolveFbsRequestWarehouseId').mockResolvedValue(null);
     vi.spyOn(service as any, 'refreshFbsOrdersCache').mockResolvedValue({
       orders: [order],
     });
@@ -3975,9 +3983,6 @@ describe('MarketplaceConnectionsService', () => {
       },
       orders: [order],
     });
-    const syncRequests = vi
-      .spyOn(service as any, 'syncFbsRequestsFromMarketplace')
-      .mockResolvedValue(undefined);
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => ({
@@ -3998,7 +4003,8 @@ describe('MarketplaceConnectionsService', () => {
 
     expect(result).toMatchObject({
       moved: 1,
-      sourceSupplyId: 'WB-GI-OLD',
+      sourceSupplyId: null,
+      sourceSupplyIds: [],
       targetSupply: { id: 'WB-GI-NEW', cargoPlaceCount: 0 },
       sourceRequest: { id: 'request-old', number: 31 },
       targetRequest: { id: 'request-new', number: 32 },
@@ -4021,19 +4027,11 @@ describe('MarketplaceConnectionsService', () => {
     expect(tx.fbsSupplyPlan.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         supplyId: 'WB-GI-NEW',
+        marketplaceWarehouseId: '1935323',
         orderIds: [order.id],
       }),
     });
-    expect(syncRequests).toHaveBeenCalledWith(
-      'client-1',
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: order.id,
-          supplyId: 'WB-GI-NEW',
-        }),
-      ]),
-      ['request-old', 'request-new'],
-    );
+    expect(prisma.fbsSupplyPlan.findUnique).not.toHaveBeenCalled();
   });
 
   it('merges unstarted FBS orders from multiple WMS requests and WB supplies', async () => {
