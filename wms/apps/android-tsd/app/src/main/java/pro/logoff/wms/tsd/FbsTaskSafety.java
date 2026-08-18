@@ -45,12 +45,17 @@ final class FbsTaskSafety {
         boolean previousBoxWasLocallyConfirmed,
         boolean previousBoxWasNotPicked,
         boolean releaseAction,
+        boolean updatedTaskAcceptedBarcode,
         String previousTaskId,
         String previousBoxCode,
         TsdFbsAssemblyResponse.Task updatedTask
     ) {
         if (!previousBoxWasLocallyConfirmed) return false;
         if (releaseAction) return !normalizeBox(previousBoxCode).isEmpty();
+
+        // FIX: успешный ШК уже доказывает, что сотрудник взял нужный товар из
+        // открытого короба. Переключение размера/заказа не является недостачей.
+        if (updatedTaskAcceptedBarcode) return false;
 
         boolean switchedToAnotherTask = updatedTask == null
             || !nonEmpty(previousTaskId).equals(nonEmpty(updatedTask.id));
@@ -59,6 +64,18 @@ final class FbsTaskSafety {
         // FIX: скан другого нужного размера может законно переключить FBS-заказ,
         // но физический короб остаётся тем же. В этом случае инвентаризация не нужна.
         return !taskCanUseBox(updatedTask, previousBoxCode);
+    }
+
+    static boolean taskAcceptedScannedBarcode(
+        String action,
+        String scannedValue,
+        TsdFbsAssemblyResponse updated
+    ) {
+        if (updated == null || updated.task == null) return false;
+        if (!"scan-any".equals(action) && !"scan-barcode".equals(action)) return false;
+        if (nonEmpty(scannedValue).isEmpty() || nonEmpty(updated.task.scannedBarcode).isEmpty()) return false;
+        String state = nonEmpty(updated.state).toUpperCase(Locale.ROOT);
+        return "SCAN_KIZ".equals(state) || "READY_TO_COMPLETE".equals(state);
     }
 
     private static boolean taskCanUseBox(

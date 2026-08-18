@@ -23,6 +23,7 @@ public class FbsTaskSafetyTest {
             true,
             true,
             false,
+            false,
             "order-size-xl",
             "FFL_LKB1007_166",
             updatedTask
@@ -40,6 +41,7 @@ public class FbsTaskSafetyTest {
         assertTrue(FbsTaskSafety.shouldQueueMandatoryAuditAfterTaskSwitch(
             true,
             true,
+            false,
             false,
             "original-order",
             "FFL_LKB1007_166",
@@ -59,9 +61,36 @@ public class FbsTaskSafetyTest {
             true,
             true,
             true,
+            false,
             "same-order",
             "FFL_LKB1007_166",
             updatedTask
+        ));
+    }
+
+    @Test
+    public void acceptedBarcodeNeverStartsInventoryAfterTaskSwitch() {
+        TsdFbsAssemblyResponse updated = new TsdFbsAssemblyResponse();
+        updated.state = "SCAN_KIZ";
+        updated.task = task("switched-order");
+        updated.task.scannedBarcode = "2042311801127";
+
+        // TEST: точное воспроизведение заявки №259 — новый заказ уже принял ШК,
+        // поэтому отсутствие маршрута в ответе не должно запускать инвентаризацию.
+        boolean acceptedBarcode = FbsTaskSafety.taskAcceptedScannedBarcode(
+            "scan-any",
+            "2042311801127",
+            updated
+        );
+        assertTrue(acceptedBarcode);
+        assertFalse(FbsTaskSafety.shouldQueueMandatoryAuditAfterTaskSwitch(
+            true,
+            true,
+            false,
+            acceptedBarcode,
+            "original-order",
+            "FFL_LKB1007_166",
+            updated.task
         ));
     }
 
