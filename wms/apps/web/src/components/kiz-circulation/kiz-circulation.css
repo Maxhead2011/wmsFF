@@ -14,6 +14,8 @@
 .kizc-client-select select { width: 100%; min-width: 0; max-width: 100%; min-height: 42px; overflow: hidden; border: 1px solid #475569; border-radius: 10px; background: #0f172a; color: #fff; padding: 0 11px; text-overflow: ellipsis; }
 .kizc-primary, .kizc-secondary, .kizc-danger { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; border: 0; border-radius: 9px; padding: 0 14px; font-size: 12px; font-weight: 900; white-space: nowrap; }
 .kizc-primary { background: #d71920; color: #fff; box-shadow: 0 9px 22px rgba(215,25,32,.2); }
+/* FIX: align the sales action with the client select, not with its label. */
+.kizc-header > .kizc-primary { align-self: end; min-height: 42px; }
 .kizc-secondary { border: 1px solid #cfd7e3; background: #fff; color: #27364d; }
 .kizc-danger { background: #b42318; color: #fff; }
 
