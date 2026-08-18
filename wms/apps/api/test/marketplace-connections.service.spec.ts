@@ -7415,8 +7415,7 @@ describe('MarketplaceConnectionsService', () => {
         findUnique: vi.fn().mockResolvedValue({ storesWithoutBoxes: true }),
       },
       stockBalance: {
-        findMany: vi.fn(),
-        aggregate: vi.fn().mockResolvedValue({ _sum: { quantity: 5 } }),
+        findMany: vi.fn().mockResolvedValue([{ skuId: 'sku-1', quantity: 5 }]),
       },
       fbsTsdAssembly,
       storagePalletBox: {
@@ -7441,10 +7440,11 @@ describe('MarketplaceConnectionsService', () => {
       ],
     );
 
-    expect(prisma.stockBalance.aggregate).toHaveBeenCalledWith({
+    // FIX: Piece balances are loaded once for the whole order batch.
+    expect(prisma.stockBalance.findMany).toHaveBeenCalledWith({
       where: {
         clientId: 'client-1',
-        skuId: 'sku-1',
+        skuId: { in: ['sku-1'] },
         status: StockStatus.AVAILABLE,
         OR: [
           { boxId: null },
@@ -7454,9 +7454,8 @@ describe('MarketplaceConnectionsService', () => {
           },
         ],
       },
-      _sum: { quantity: true },
+      select: { skuId: true, quantity: true },
     });
-    expect(prisma.stockBalance.findMany).not.toHaveBeenCalled();
     expect(fbsTsdAssembly.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         status: 'RESERVED',
@@ -7471,6 +7470,103 @@ describe('MarketplaceConnectionsService', () => {
       withoutBox: true,
       boxCode: 'БЕЗ КОРОБА',
       palletCode: null,
+    });
+  });
+
+  it('loads pallet-sort sources in one batch and does not reserve one unit twice', async () => {
+    const tasks: Array<Record<string, any>> = [];
+    const fbsTsdAssembly = {
+      findMany: vi.fn(async ({ select }: { select?: { skuId?: boolean; status?: boolean } }) => {
+        if (!select) return [];
+        return tasks;
+      }),
+      create: vi.fn(async ({ data }: { data: Record<string, any> }) => {
+        const task = { id: `task-${data.orderId}`, ...data };
+        tasks.push(task);
+        return task;
+      }),
+      update: vi.fn(),
+    };
+    const prisma = {
+      client: {
+        findUnique: vi.fn().mockResolvedValue({ storesWithoutBoxes: false }),
+      },
+      clientRequestItem: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: 'item-1', requestId: 'request-1', skuId: 'sku-1' },
+        ]),
+      },
+      stockBalance: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            skuId: 'sku-1',
+            boxId: 'box-1',
+            quantity: 1,
+            box: {
+              id: 'box-1',
+              code: 'FFL_BOX_001',
+              warehouseId: 'warehouse-1',
+              storagePlacement: {
+                pallet: {
+                  id: 'pallet-1',
+                  code: 'PS-001',
+                  warehouseId: 'warehouse-1',
+                  status: 'active',
+                },
+              },
+            },
+          },
+        ]),
+      },
+      fbsTsdAssembly,
+      storagePalletBox: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            boxId: 'box-1',
+            pallet: { code: 'PS-001', warehouseId: 'warehouse-1' },
+          },
+        ]),
+      },
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    const routeLookup = vi
+      .spyOn(service as any, 'resolveFbsWarehouseFromWildberries')
+      .mockResolvedValue('warehouse-1');
+    const request = { id: 'request-1', warehouseId: null };
+
+    const result = await (service as any).syncFbsPalletSortReservations(
+      'client-1',
+      [
+        fbsOrder({
+          id: '5355000001',
+          request,
+          warehouseId: 'wb-warehouse-1',
+          officeId: 'wb-office-1',
+        }),
+        fbsOrder({
+          id: '5355000002',
+          request,
+          warehouseId: 'wb-warehouse-1',
+          officeId: 'wb-office-1',
+        }),
+      ],
+    );
+
+    // ADDED: one request-item query and one stock query serve the entire batch.
+    expect(prisma.clientRequestItem.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.stockBalance.findMany).toHaveBeenCalledTimes(1);
+    expect(routeLookup).toHaveBeenCalledTimes(1);
+    expect(fbsTsdAssembly.create).toHaveBeenCalledTimes(2);
+    expect(tasks.map((task) => task.status)).toEqual(['RESERVED', 'WAITING_STOCK']);
+    expect(tasks.map((task) => task.reservedBoxId)).toEqual(['box-1', null]);
+    expect(result.get('connection-1:5355000001')).toMatchObject({
+      status: 'RESERVED',
+      boxCode: 'FFL_BOX_001',
+      palletCode: 'PS-001',
+    });
+    expect(result.get('connection-1:5355000002')).toMatchObject({
+      status: 'WAITING_STOCK',
+      boxCode: null,
     });
   });
 

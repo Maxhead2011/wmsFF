@@ -13398,6 +13398,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     clientId: string;
     skuIds: string[];
     excludeTaskId: string | null;
+    withoutBox?: boolean;
   }) {
     const result = new Map<
       string,
@@ -13430,13 +13431,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               },
             ],
           },
-          {
-            OR: [
-              { boxId: { not: null } },
-              { reservedBoxId: { not: null } },
-            ],
-          },
+          input.withoutBox
+            ? { boxId: null, reservedBoxId: null }
+            : {
+                OR: [
+                  { boxId: { not: null } },
+                  { reservedBoxId: { not: null } },
+                ],
+              },
         ],
+        // ADDED: Piece-storage reservations use the same bulk query while
+        // retaining the exact filter of fbsTsdReservationRows().
+        ...(input.withoutBox ? { boxCode: FBS_TSD_NO_BOX_CODE } : {}),
         status: {
           in: [
             FBS_TSD_RESERVED_STATUS,
@@ -19548,6 +19554,148 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     }
 
+    const reservableOrders = relevantOrders.filter((order) => {
+      if (
+        order.category !== 'active' ||
+        !order.product ||
+        order.supplierStatus !== 'confirm'
+      ) {
+        return false;
+      }
+      const existing = taskByKey.get(selectionKey(order.connectionId, order.id));
+      return (
+        !existing ||
+        [FBS_TSD_RESERVED_STATUS, FBS_TSD_WAITING_STOCK_STATUS].includes(
+          existing.status,
+        )
+      );
+    });
+    const stockSkuIds = uniqueStrings(
+      reservableOrders.map(
+        (order) => order.relabeling?.sourceSkuId ?? order.product!.id,
+      ),
+    );
+    const requestIds = uniqueStrings(
+      reservableOrders.map((order) => order.request?.id ?? ''),
+    );
+    const requestSkuIds = uniqueStrings(
+      reservableOrders.map((order) => order.product!.id),
+    );
+    // FIX: The old refresh executed these reads once for every WB order. Load
+    // request rows and reservations once, then keep the reservation snapshot
+    // current in memory after every successful task write.
+    const [requestItems, reservationRowsBySku] = await Promise.all([
+      requestIds.length > 0 && this.prisma.clientRequestItem?.findMany
+        ? this.prisma.clientRequestItem.findMany({
+            where: {
+              requestId: { in: requestIds },
+              skuId: { in: requestSkuIds },
+            },
+            select: { id: true, requestId: true, skuId: true },
+          })
+        : [],
+      this.fbsTsdReservationRowsBySku({
+        clientId,
+        skuIds: stockSkuIds,
+        excludeTaskId: null,
+        withoutBox: storesWithoutBoxes,
+      }),
+    ]);
+    const requestItemByKey = new Map<string, { id: string }>();
+    requestItems.forEach((item) => {
+      const key = `${item.requestId}:${item.skuId}`;
+      if (!requestItemByKey.has(key)) requestItemByKey.set(key, item);
+    });
+    const availableWithoutBoxBySku = new Map<string, number>();
+    const boxedBalancesBySku = new Map<
+      string,
+      Array<{
+        boxId: string | null;
+        quantity: number;
+        box: {
+          id: string;
+          code: string;
+          warehouseId: string | null;
+          storagePlacement: {
+            pallet: {
+              id: string;
+              code: string;
+              warehouseId: string;
+              status: string;
+            } | null;
+          } | null;
+        } | null;
+      }>
+    >();
+    if (stockSkuIds.length > 0 && storesWithoutBoxes) {
+      const balances = await this.prisma.stockBalance.findMany({
+        where: {
+          clientId,
+          skuId: { in: stockSkuIds },
+          status: StockStatus.AVAILABLE,
+          OR: [
+            { boxId: null },
+            {
+              boxId: { not: null },
+              box: { status: { notIn: ['deleted', 'archived'] } },
+            },
+          ],
+        },
+        select: { skuId: true, quantity: true },
+      });
+      balances.forEach((balance) => {
+        availableWithoutBoxBySku.set(
+          balance.skuId,
+          (availableWithoutBoxBySku.get(balance.skuId) ?? 0) + balance.quantity,
+        );
+      });
+    } else if (stockSkuIds.length > 0) {
+      const balances = await this.prisma.stockBalance.findMany({
+        where: {
+          clientId,
+          skuId: { in: stockSkuIds },
+          status: StockStatus.AVAILABLE,
+          quantity: { gt: 0 },
+          boxId: { not: null },
+          box: {
+            status: { notIn: ['deleted', 'archived'] },
+            warehouseId: { not: null },
+            storagePlacement: { pallet: { clientId } },
+          },
+        },
+        select: {
+          skuId: true,
+          boxId: true,
+          quantity: true,
+          box: {
+            select: {
+              id: true,
+              code: true,
+              warehouseId: true,
+              storagePlacement: {
+                select: {
+                  pallet: {
+                    select: {
+                      id: true,
+                      code: true,
+                      warehouseId: true,
+                      status: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+      balances.forEach((balance) => {
+        const rows = boxedBalancesBySku.get(balance.skuId) ?? [];
+        rows.push(balance);
+        boxedBalancesBySku.set(balance.skuId, rows);
+      });
+    }
+    const routeResolutionByKey = new Map<string, Promise<string | null>>();
+
     for (const order of relevantOrders) {
       if (
         order.category !== 'active' ||
@@ -19583,13 +19731,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const sourceSkuId = order.relabeling?.sourceSkuId ?? null;
       const stockSkuId = sourceSkuId || order.product.id;
       const requestItem = order.request
-        ? await this.prisma.clientRequestItem.findFirst({
-            where: {
-              requestId: order.request.id,
-              skuId: order.product.id,
-            },
-            select: { id: true },
-          })
+        ? requestItemByKey.get(`${order.request.id}:${order.product.id}`) ?? null
         : null;
       let routedWarehouseId = order.request?.warehouseId ?? null;
       const keepExistingReservation =
@@ -19597,10 +19739,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         Boolean(existing.reservedAt);
       if (!routedWarehouseId && !keepExistingReservation) {
         try {
-          routedWarehouseId = await this.resolveFbsWarehouseFromWildberries(
-            clientId,
-            [order],
-          );
+          const routeKey = `${order.connectionId}:${order.warehouseId ?? ''}:${order.officeId ?? ''}`;
+          let routeResolution = routeResolutionByKey.get(routeKey);
+          if (!routeResolution) {
+            // ADDED: Orders from the same WB source share one route lookup.
+            routeResolution = this.resolveFbsWarehouseFromWildberries(clientId, [order]);
+            routeResolutionByKey.set(routeKey, routeResolution);
+          }
+          routedWarehouseId = await routeResolution;
         } catch (caught) {
           if (caught instanceof FbsWarehouseExcludedError) {
             continue;
@@ -19614,30 +19760,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
 
       if (storesWithoutBoxes) {
-        const available = await this.prisma.stockBalance.aggregate({
-          where: {
-            clientId,
-            skuId: stockSkuId,
-            status: StockStatus.AVAILABLE,
-            OR: [
-              { boxId: null },
-              {
-                boxId: { not: null },
-                box: { status: { notIn: ['deleted', 'archived'] } },
-              },
-            ],
-          },
-          _sum: { quantity: true },
-        });
-        const reservations = await this.fbsTsdReservationRows({
-          clientId,
-          skuId: stockSkuId,
-          withoutBox: true,
-          excludeTaskId: existing?.id ?? null,
-        });
+        const reservations = (reservationRowsBySku.get(stockSkuId) ?? []).filter(
+          (reservation) => reservation.taskId !== existing?.id,
+        );
         const availableQuantity = Math.max(
           0,
-          (available._sum.quantity ?? 0) -
+          (availableWithoutBoxBySku.get(stockSkuId) ?? 0) -
             reservations.reduce(
               (sum, reservation) => sum + reservation.itemCount,
               0,
@@ -19716,12 +19844,35 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               },
               data: taskData,
             });
-            const saved = await this.prisma.fbsTsdAssembly.findUnique({ where: { id: existing.id } });
-            if (saved) taskByKey.set(key, saved);
             if (changed.count !== 1) continue;
+            reservationRowsBySku.set(
+              stockSkuId,
+              [
+                ...(reservationRowsBySku.get(stockSkuId) ?? []).filter(
+                  (reservation) => reservation.taskId !== existing.id,
+                ),
+                ...(hasStock
+                  ? [{
+                      taskId: existing.id,
+                      boxId: null,
+                      itemCount,
+                      releasableBackground: false,
+                    }]
+                  : []),
+              ],
+            );
           } else {
             const saved = await this.prisma.fbsTsdAssembly.create({ data: taskData });
-            taskByKey.set(key, saved);
+            if (hasStock) {
+              const rows = reservationRowsBySku.get(stockSkuId) ?? [];
+              rows.push({
+                taskId: saved.id,
+                boxId: null,
+                itemCount,
+                releasableBackground: false,
+              });
+              reservationRowsBySku.set(stockSkuId, rows);
+            }
           }
         } catch (caught) {
           if (
@@ -19738,51 +19889,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       let warehouseId = routedWarehouseId;
 
       const balances = sourceSkuId || !order.relabeling
-        ? await this.prisma.stockBalance.findMany({
-            where: {
-              clientId,
-              skuId: stockSkuId,
-              status: StockStatus.AVAILABLE,
-              quantity: { gt: 0 },
-              boxId: { not: null },
-              box: {
-                status: { notIn: ['deleted', 'archived'] },
-                warehouseId: { not: null },
-                storagePlacement: {
-                  pallet: { clientId },
-                },
-              },
-            },
-            select: {
-              boxId: true,
-              quantity: true,
-              box: {
-                select: {
-                  id: true,
-                  code: true,
-                  warehouseId: true,
-                  storagePlacement: {
-                    select: {
-                      pallet: {
-                        select: {
-                          id: true,
-                          code: true,
-                          warehouseId: true,
-                          status: true,
-                        },
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          })
+        ? boxedBalancesBySku.get(stockSkuId) ?? []
         : [];
-      const reservations = await this.fbsTsdReservationRows({
-        clientId,
-        skuId: stockSkuId,
-        excludeTaskId: existing?.id ?? null,
-      });
+      const reservations = (reservationRowsBySku.get(stockSkuId) ?? []).filter(
+        (reservation) => reservation.taskId !== existing?.id,
+      );
       const reservedByBox = new Map<string, number>();
       for (const reservation of reservations) {
         if (!reservation.boxId) continue;
@@ -19944,12 +20055,35 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             },
             data: taskData,
           });
-          const saved = await this.prisma.fbsTsdAssembly.findUnique({ where: { id: existing.id } });
-          if (saved) taskByKey.set(key, saved);
           if (changed.count !== 1) continue;
+          reservationRowsBySku.set(
+            stockSkuId,
+            [
+              ...(reservationRowsBySku.get(stockSkuId) ?? []).filter(
+                (reservation) => reservation.taskId !== existing.id,
+              ),
+              ...(selectedBox
+                ? [{
+                    taskId: existing.id,
+                    boxId: selectedBox.id,
+                    itemCount,
+                    releasableBackground: false,
+                  }]
+                : []),
+            ],
+          );
         } else {
           const saved = await this.prisma.fbsTsdAssembly.create({ data: taskData });
-          taskByKey.set(key, saved);
+          if (selectedBox) {
+            const rows = reservationRowsBySku.get(stockSkuId) ?? [];
+            rows.push({
+              taskId: saved.id,
+              boxId: selectedBox.id,
+              itemCount,
+              releasableBackground: true,
+            });
+            reservationRowsBySku.set(stockSkuId, rows);
+          }
         }
       } catch (caught) {
         if (
