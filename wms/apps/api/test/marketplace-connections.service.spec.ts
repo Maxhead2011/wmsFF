@@ -1685,7 +1685,7 @@ describe('MarketplaceConnectionsService', () => {
     expect(prisma.client.findUnique).not.toHaveBeenCalled();
   });
 
-  it('restores active WMS request orders omitted from the WB response in the FBS list', async () => {
+  it('refreshes a cached FBS list incrementally and restores request orders omitted by WB', async () => {
     const clientScopes = { requireClientAccess: vi.fn() };
     const service = new MarketplaceConnectionsService({} as never, clientScopes as never);
     const liveResponse = {
@@ -1699,23 +1699,49 @@ describe('MarketplaceConnectionsService', () => {
         requiresCargoPlaces: false,
       },
       counts: { active: 2, shipped: 0, cancelled: 0, archive: 0, all: 2 },
-      orders: [{ id: 'order-1' }, { id: 'order-2' }],
+      orders: [fbsOrder({ id: 'order-1' }), fbsOrder({ id: 'order-2' })],
     };
     const restoredResponse = {
       ...liveResponse,
       counts: { active: 68, shipped: 0, cancelled: 0, archive: 0, all: 68 },
       orders: Array.from({ length: 68 }, (_, index) => ({ id: `order-${index + 1}` })),
     };
-    vi.spyOn(service as any, 'loadFbsOrders').mockResolvedValue(liveResponse);
+    (service as any).fbsOrdersCache.set('client-1', {
+      expiresAt: Date.now() + 60_000,
+      value: {
+        ...liveResponse,
+        fetchedAt: '2026-08-08T15:00:00.000Z',
+        counts: { active: 1, shipped: 0, cancelled: 0, archive: 0, all: 1 },
+        orders: [fbsOrder({ id: 'order-cached' })],
+      },
+    });
+    const loadOrders = vi
+      .spyOn(service as any, 'loadFbsOrders')
+      .mockResolvedValue(liveResponse);
+    const syncRequests = vi
+      .spyOn(service as any, 'syncFbsRequestsFromMarketplace')
+      .mockResolvedValue(undefined);
     const merge = vi
       .spyOn(service as any, 'mergeSyncedFbsTsdRequestOrders')
       .mockResolvedValue(restoredResponse);
+    vi.spyOn(service as any, 'scopeFbsOrdersForUser').mockResolvedValue(restoredResponse);
 
     const result = await service.listFbsOrders('client-1', { id: 'admin-1' } as never, true);
 
     expect(result.counts.active).toBe(68);
     expect(result.orders).toHaveLength(68);
-    expect(merge).toHaveBeenCalledWith('client-1', liveResponse);
+    expect(loadOrders).toHaveBeenCalledWith('client-1', expect.any(Map));
+    expect(syncRequests).toHaveBeenCalledTimes(1);
+    expect(merge).toHaveBeenCalledWith(
+      'client-1',
+      expect.objectContaining({
+        orders: expect.arrayContaining([
+          expect.objectContaining({ id: 'order-cached' }),
+          expect.objectContaining({ id: 'order-1' }),
+          expect.objectContaining({ id: 'order-2' }),
+        ]),
+      }),
+    );
   });
 
   it('forces a fresh FBS order load when reserves are refreshed', async () => {

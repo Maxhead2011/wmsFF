@@ -1298,7 +1298,32 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
     }
 
-    const liveValue = await this.loadFbsOrders(normalizedClientId);
+    let liveValue: FbsOrdersResponse;
+    if (cached) {
+      // FIX: Manual refresh used to start a full 17k-order rebuild alongside
+      // the background incremental refresh. Reuse the same incremental load
+      // key so concurrent web/background requests share one promise and only
+      // changed orders are recalculated.
+      const previousOrderStates = new Map(
+        cached.value.orders.map((order) => [
+          selectionKey(order.connectionId, order.id),
+          fbsOrderRefreshFingerprint(order),
+        ]),
+      );
+      const refreshed = await this.loadFbsOrders(
+        normalizedClientId,
+        previousOrderStates,
+      );
+      liveValue = this.mergeIncrementalFbsOrders(cached.value, refreshed);
+      if (refreshed.orders.length > 0) {
+        await this.syncFbsRequestsFromMarketplace(
+          normalizedClientId,
+          liveValue.orders,
+        );
+      }
+    } else {
+      liveValue = await this.loadFbsOrders(normalizedClientId);
+    }
     const value = await this.mergeSyncedFbsTsdRequestOrders(normalizedClientId, liveValue);
     this.fbsOrdersCache.set(normalizedClientId, {
       expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
