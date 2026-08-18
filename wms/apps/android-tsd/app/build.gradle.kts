@@ -15,8 +15,8 @@ android {
         applicationId = "pro.logoff.wms.tsd"
         minSdk = 24
         targetSdk = 35
-        versionCode = 138 // FIX: Publish the pallet-sort-first FBS route screen.
-        versionName = "0.1.139"
+        versionCode = 143 // FIX: Keep the remaining-orders list collapsed until the worker opens it.
+        versionName = "0.1.144"
     }
 
     flavorDimensions += "brand"

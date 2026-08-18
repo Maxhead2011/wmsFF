@@ -247,6 +247,9 @@ public class MainActivity extends Activity {
     private boolean fbsRequestsBusy;
     private boolean fbsRequestsArchiveMode;
     private boolean fbsCargoBusy;
+    // ADDED: ручное состояние длинного списка остальных заказов.
+    private boolean fbsRemainingOrdersOpen;
+    private String fbsRemainingOrdersTaskId = "";
     private boolean ozonFboBusy;
     private boolean transferBusy;
     private boolean transferTargetMode;
@@ -264,6 +267,9 @@ public class MainActivity extends Activity {
     private int receiptFeedbackColor = 0;
     private Screen screen = Screen.MAIN;
     private AlertDialog activeErrorDialog;
+    private AlertDialog fbsGuidedScanDialog;
+    private String fbsGuidedScanDialogKey = "";
+    private Runnable fbsGuidedAutoSubmitTask;
     private String lastDialogError = "";
     private long lastDialogErrorAt = 0L;
     private final Runnable monitorHeartbeatTask = new Runnable() {
@@ -359,6 +365,7 @@ public class MainActivity extends Activity {
         monitorExecutor.shutdownNow();
         executor.shutdownNow();
         if (activeErrorDialog != null) activeErrorDialog.dismiss();
+        dismissFbsGuidedScanDialog();
         super.onDestroy();
     }
 
@@ -3679,7 +3686,9 @@ public class MainActivity extends Activity {
             return;
         }
         screen = Screen.FBS_ASSEMBLY;
-        fbsScanInput = null;
+        if (fbsGuidedScanDialog == null || !fbsGuidedScanDialog.isShowing()) {
+            fbsScanInput = null;
+        }
         LinearLayout root = baseRoot();
         root.addView(header());
         root.addView(title(tr("Сборка FBS", "FBS buyurtmasini yig‘ish")));
@@ -3705,6 +3714,10 @@ public class MainActivity extends Activity {
 
         TsdFbsAssemblyResponse.Task task = fbsAssembly == null ? null : fbsAssembly.task;
         if (task == null) {
+            dismissFbsGuidedScanDialog();
+            // FIX: без активного заказа список всегда начинается свёрнутым.
+            fbsRemainingOrdersOpen = false;
+            fbsRemainingOrdersTaskId = "";
             if (!fbsBusy) {
                 root.addView(feedbackView(
                     nonEmpty(statusMessage, tr("Готовых заказов пока нет.", "Hozircha tayyor buyurtmalar yo‘q.")),
@@ -3725,6 +3738,14 @@ public class MainActivity extends Activity {
             return;
         }
 
+        String remainingOrdersTaskId = nonEmpty(task.id, nonEmpty(task.orderId, "-"));
+        fbsRemainingOrdersOpen = FbsAssemblyUi.keepRemainingOrdersOpen(
+            fbsRemainingOrdersTaskId,
+            remainingOrdersTaskId,
+            fbsRemainingOrdersOpen
+        );
+        fbsRemainingOrdersTaskId = remainingOrdersTaskId;
+
         String clientName = task.client == null ? "-" : nonEmpty(task.client.name, task.client.code);
         String productName = task.product == null ? "-" : nonEmpty(task.product.name, "-");
         String article = task.product == null ? "-" : nonEmpty(task.product.article, "-");
@@ -3739,6 +3760,8 @@ public class MainActivity extends Activity {
         String sourceSize = sourceProduct == null ? size : nonEmpty(sourceProduct.size, tr("не указан", "ko‘rsatilmagan"));
         boolean relabelRequired = task.relabeling != null && task.relabeling.required;
         String state = nonEmpty(fbsAssembly.state, "SCAN_BOX");
+        boolean guidedScanDialog = FbsAssemblyUi.shouldUseGuidedScanDialog(state);
+        if (!guidedScanDialog) dismissFbsGuidedScanDialog();
         if (!"WAIT_MARKETPLACE_LABEL".equals(state)) {
             cancelOzonLabelAutoRefresh();
         }
@@ -3760,23 +3783,19 @@ public class MainActivity extends Activity {
         boolean orderStickerReady = false;
         Button stickerAppliedButton = null;
         if ("READY_TO_COMPLETE".equals(state)) {
-            String taskMarketplace = nonEmpty(task.marketplace, "WILDBERRIES");
-            boolean hasRenderableSticker = !"WILDBERRIES".equalsIgnoreCase(taskMarketplace)
-                && !"OZON".equalsIgnoreCase(taskMarketplace)
-                || task.orderSticker != null
-                    && !nonEmpty(task.orderSticker.imageBase64, "").isEmpty();
-            if (hasRenderableSticker) {
+            // FIX: сначала показываем этикетку, затем подтверждение наклейки.
+            orderStickerReady = "WILDBERRIES".equalsIgnoreCase(nonEmpty(task.marketplace, "WILDBERRIES"))
+                ? renderFbsOrderSticker(root, task)
+                : "OZON".equalsIgnoreCase(nonEmpty(task.marketplace, ""))
+                    ? renderOzonOrderSticker(root, task)
+                    : renderNonWbOrderStickerInstruction(root, task);
+            if (orderStickerReady) {
                 stickerAppliedButton = primaryMenuButton(
                     tr("НАКЛЕЙКА НАКЛЕЕНА", "STIKER YOPISHTIRILDI"),
                     view -> completeFbsAssembly()
                 );
                 root.addView(stickerAppliedButton);
             }
-            orderStickerReady = "WILDBERRIES".equalsIgnoreCase(nonEmpty(task.marketplace, "WILDBERRIES"))
-                ? renderFbsOrderSticker(root, task)
-                : "OZON".equalsIgnoreCase(nonEmpty(task.marketplace, ""))
-                    ? renderOzonOrderSticker(root, task)
-                    : renderNonWbOrderStickerInstruction(root, task);
         }
         if (fbsAssembly.progress != null && fbsAssembly.progress.requestTotalItems > 0) {
             String requestNumber = fbsAssembly.progress.requestNumber > 0
@@ -3802,13 +3821,9 @@ public class MainActivity extends Activity {
         }
 
         if ("SCAN_BOX".equals(state) || "PALLET_BOXES".equals(state)) {
-            // FIX: A request route starts from the pallet-sort physically scanned by the worker.
-            // Do not send the worker to one preselected pallet before that scan.
-            boolean palletRouteOpen = FbsPalletRouteUi.isPalletRouteOpen(
-                state,
-                fbsAssembly.palletScan != null
-            );
-            if (palletRouteOpen) {
+            LinearLayout routeDetails = new LinearLayout(this);
+            routeDetails.setOrientation(LinearLayout.VERTICAL);
+            if ("PALLET_BOXES".equals(state) && fbsAssembly.palletScan != null) {
                 TsdFbsAssemblyResponse.PalletScan pallet = fbsAssembly.palletScan;
                 String zone = pallet.zone == null
                     ? tr("не назначена", "belgilanmagan")
@@ -3848,17 +3863,115 @@ public class MainActivity extends Activity {
                     }
                     root.addView(feedbackView(nearby.toString(), Color.rgb(220, 252, 231)));
                 }
-            } else {
-                // ADDED: Explain the physical route before showing any individual box target.
-                root.addView(feedbackView(
-                    tr(
-                        "1. ОТСКАНИРУЙТЕ ПАЛЛЕТ-СОРТ В ТЕКУЩЕМ ПОМЕЩЕНИИ\n" +
-                            "После скана ТСД покажет все нужные короба на нём и остальные нужные паллет-сорты в этой зоне.",
-                        "1. JORIY XONADAGI PALLETSORTNI SKANERLANG\n" +
-                            "Skanerdan keyin TSD undagi barcha kerakli qutilarni va shu zonadagi boshqa kerakli palletsortlarni ko‘rsatadi."
-                    ),
-                    BOX_MOVEMENT_BLUE
+            }
+            String boxCode = nonEmpty(task.recommendedBoxCode, "-");
+            String locationHint = "";
+            if (task.recommendedLocation != null) {
+                String zone = nonEmpty(
+                    task.recommendedLocation.zoneName,
+                    tr("зона не назначена", "zona belgilanmagan")
+                );
+                locationHint = "\n" +
+                    tr("ЗОНА: ", "ZONA: ") + zone + "\n" +
+                    tr("ПАЛЛЕТА: ", "PALLET: ") + nonEmpty(task.recommendedLocation.palletCode, "-");
+            }
+            root.addView(feedbackView(
+                tr("1. НАЙДИТЕ И ОТСКАНИРУЙТЕ КОРОБ\nМожно сначала пикнуть QR паллетсорта.\n",
+                    "1. QUTINI TOPING VA SKANERLANG\nAvval palletsort QR kodini skanerlash mumkin.\n") +
+                    boxCode + locationHint,
+                BOX_MOVEMENT_BLUE
+            ));
+            if (task.storageBoxes != null && !task.storageBoxes.isEmpty()) {
+                StringBuilder options = new StringBuilder(tr(
+                    "НЕСКОЛЬКО ВАРИАНТОВ, ГДЕ ВЗЯТЬ ТОВАР",
+                    "MAHSULOTNI OLISH UCHUN BIR NECHTA JOY"
                 ));
+                String previousPallet = null;
+                // FIX: Show every available box and pallet-sort returned by WMS.
+                for (TsdFbsAssemblyResponse.StorageBox storageBox : task.storageBoxes) {
+                    TsdFbsAssemblyResponse.StorageLocation location = storageBox.location;
+                    String pallet = location == null
+                        ? tr("БЕЗ ПАЛЛЕТСОРТА", "PALLETSORTSIZ")
+                        : nonEmpty(location.palletCode, tr("БЕЗ ПАЛЛЕТСОРТА", "PALLETSORTSIZ"));
+                    if (!pallet.equals(previousPallet)) {
+                        String zone = location == null
+                            ? tr("зона не указана", "zona ko‘rsatilmagan")
+                            : nonEmpty(location.zoneName, nonEmpty(location.zoneCode, tr("зона не указана", "zona ko‘rsatilmagan")));
+                        options.append("\n\n")
+                            .append(tr("ПАЛЛЕТСОРТ: ", "PALLETSORT: "))
+                            .append(pallet)
+                            .append(" · ")
+                            .append(tr("ЗОНА: ", "ZONA: "))
+                            .append(zone);
+                        previousPallet = pallet;
+                    }
+                    options.append("\n• ")
+                        .append(nonEmpty(storageBox.code, "-"))
+                        .append(" — ")
+                        .append(storageBox.quantity)
+                        .append(tr(" шт.", " dona"));
+                }
+                root.addView(feedbackView(options.toString(), Color.rgb(224, 242, 254)));
+            }
+            if (task.samePalletRemainingBoxes > 0) {
+                String nextBoxes = task.samePalletBoxCodes == null || task.samePalletBoxCodes.isEmpty()
+                    ? ""
+                    : "\n" + String.join(", ", task.samePalletBoxCodes);
+                root.addView(feedbackView(
+                    tr("НЕ УХОДИТЕ ОТ ЭТОЙ ПАЛЛЕТЫ\nЗдесь ещё нужных коробов: ",
+                        "BU PALLETDAN KETMANG\nBu yerda yana kerakli qutilar: ") +
+                        task.samePalletRemainingBoxes + nextBoxes,
+                    Color.rgb(254, 240, 138)
+                ));
+            }
+            if (task.nextRequestSources != null && !task.nextRequestSources.isEmpty()) {
+                StringBuilder next = new StringBuilder(tr(
+                    "ДАЛЬШЕ ПО ЭТОЙ ЗАЯВКЕ",
+                    "SHU ARIZA BO‘YICHA KEYINGILAR"
+                ));
+                // FIX: Show every remaining request route instead of the first eight.
+                for (TsdFbsAssemblyResponse.NextRequestSource source : task.nextRequestSources) {
+                    String zone = nonEmpty(source.zoneName, nonEmpty(source.zoneCode, "-"));
+                    next.append("\n\n")
+                        .append(tr("Заказ ", "Buyurtma "))
+                        .append(nonEmpty(source.orderId, "-"))
+                        .append(" · ")
+                        .append(nonEmpty(source.productName, "-"))
+                        .append("\n")
+                        .append(tr("ПАЛЛЕТ-СОРТ: ", "PALLETSORT: "))
+                        .append(nonEmpty(source.palletCode, "-"))
+                        .append(" · ")
+                        .append(tr("ЗОНА: ", "ZONA: "))
+                        .append(zone)
+                        .append("\n")
+                        .append(tr("КОРОБ: ", "QUTI: "))
+                        .append(nonEmpty(source.boxCode, "-"))
+                        .append(" · ")
+                        .append(source.quantity)
+                        .append(tr(" шт.", " dona"));
+                }
+                routeDetails.addView(feedbackView(next.toString(), Color.rgb(240, 249, 255)));
+            }
+            if (routeDetails.getChildCount() > 0) {
+                // FIX: сворачивается только длинный список остальных заказов;
+                // текущие жёлтые, зелёные и синие рабочие блоки остаются видимыми.
+                routeDetails.setVisibility(fbsRemainingOrdersOpen ? View.VISIBLE : View.GONE);
+                Button routeToggle = secondaryButton(
+                    fbsRemainingOrdersOpen
+                        ? tr("Свернуть список остальных заказов", "Qolgan buyurtmalarni yig‘ish")
+                        : tr("Показать остальные заказы", "Qolgan buyurtmalarni ko‘rsatish"),
+                    view -> { }
+                );
+                routeToggle.setOnClickListener(view -> {
+                    // FIX: только эта кнопка может изменить раскрытие списка.
+                    fbsRemainingOrdersOpen = !fbsRemainingOrdersOpen;
+                    routeDetails.setVisibility(fbsRemainingOrdersOpen ? View.VISIBLE : View.GONE);
+                    routeToggle.setText(fbsRemainingOrdersOpen
+                        ? tr("Свернуть список остальных заказов", "Qolgan buyurtmalarni yig‘ish")
+                        : tr("Показать остальные заказы", "Qolgan buyurtmalarni ko‘rsatish"));
+                });
+                root.addView(routeToggle);
+                root.addView(routeDetails);
             }
             root.addView(messageView(
                 tr("В коробе есть нужный товар: ", "Qutida kerakli mahsulot bor: ") +
@@ -3935,11 +4048,9 @@ public class MainActivity extends Activity {
                     tr("РАЗМЕР: ", "O‘LCHAM: ") + size,
                 BOX_MOVEMENT_BLUE
             ));
-            fbsScanInput = input(tr("Сканируйте ШК товара", "Mahsulot SHK sini skanerlang"));
-            root.addView(fbsScanInput);
             root.addView(primaryMenuButton(
-                tr("Подтвердить товар", "Mahsulotni tasdiqlash"),
-                view -> submitFbsScan()
+                tr("Открыть окно сканирования ШК", "SHK skanerlash oynasini ochish"),
+                view -> showFbsGuidedScanDialog(state, task, productName, article, color, size, marketplaceName)
             ));
         } else if ("SCAN_KIZ".equals(state)) {
             root.addView(feedbackView(
@@ -3951,11 +4062,9 @@ public class MainActivity extends Activity {
                     "3. ENDI DATA MATRIX KIZNI SKANERLANG\nOddiy SHKni qayta skanerlamang."),
                 Color.rgb(254, 240, 138)
             ));
-            fbsScanInput = input(tr("Сканируйте КИЗ", "KIZni skanerlang"));
-            root.addView(fbsScanInput);
             root.addView(primaryMenuButton(
-                tr("Подтвердить КИЗ для ", "KIZni tasdiqlash: ") + marketplaceName,
-                view -> submitFbsScan()
+                tr("Открыть окно сканирования КИЗ", "KIZ skanerlash oynasini ochish"),
+                view -> showFbsGuidedScanDialog(state, task, productName, article, color, size, marketplaceName)
             ));
         } else if ("CONFIRM_KIZ_MOVE".equals(state)) {
             TsdFbsAssemblyResponse.KizMoveProposal proposal = fbsAssembly.kizMoveProposal;
@@ -4039,7 +4148,10 @@ public class MainActivity extends Activity {
         ));
         root.addView(secondaryButton(tr("В главное меню", "Bosh menyuga"), view -> renderMainScreen()));
         setScrollableContent(root);
-        if (stickerAppliedButton != null && orderStickerReady) {
+        if (guidedScanDialog) {
+            // FIX: после короба окно ШК открывается сразу и само переключается на КИЗ.
+            showFbsGuidedScanDialog(state, task, productName, article, color, size, marketplaceName);
+        } else if (stickerAppliedButton != null && orderStickerReady) {
             stickerAppliedButton.setFocusableInTouchMode(true);
             stickerAppliedButton.requestFocus();
         } else if (fbsScanInput != null) {
@@ -4372,6 +4484,112 @@ public class MainActivity extends Activity {
             .show();
     }
 
+    private void showFbsGuidedScanDialog(
+        String state,
+        TsdFbsAssemblyResponse.Task task,
+        String productName,
+        String article,
+        String color,
+        String size,
+        String marketplaceName
+    ) {
+        if (!FbsAssemblyUi.shouldUseGuidedScanDialog(state) || task == null) return;
+        String dialogKey = nonEmpty(task.id, "-") + "|" + state;
+        if (
+            fbsGuidedScanDialog != null &&
+            fbsGuidedScanDialog.isShowing() &&
+            dialogKey.equals(fbsGuidedScanDialogKey)
+        ) {
+            return;
+        }
+
+        dismissFbsGuidedScanDialog();
+        boolean scanKiz = "SCAN_KIZ".equals(state);
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(18), dp(8), dp(18), 0);
+        content.addView(feedbackView(
+            (scanKiz
+                ? tr("ШАГ 2 ИЗ 2 · ОТСКАНИРУЙТЕ КИЗ", "2-QADAM · KIZNI SKANERLANG")
+                : tr("ШАГ 1 ИЗ 2 · ОТСКАНИРУЙТЕ ШК", "1-QADAM · SHKNI SKANERLANG")) + "\n\n" +
+                productName + "\n" +
+                tr("Артикул: ", "Artikul: ") + article + "\n" +
+                tr("Цвет: ", "Rang: ") + color + " · " + tr("Размер: ", "O‘lcham: ") + size + "\n" +
+                (scanKiz
+                    ? tr("После приёма КИЗ откроется наклейка ", "KIZ qabul qilingach stiker ochiladi: ") + marketplaceName
+                    : tr("После ШК это окно переключится на КИЗ.", "SHKdan keyin oyna KIZga o‘tadi.")),
+            scanKiz ? Color.rgb(254, 240, 138) : BOX_MOVEMENT_BLUE
+        ));
+        EditText dialogInput = input(scanKiz
+            ? tr("Сканируйте КИЗ Data Matrix", "Data Matrix KIZni skanerlang")
+            : tr("Сканируйте ШК товара", "Mahsulot SHKini skanerlang"));
+        dialogInput.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence value, int start, int count, int after) { }
+
+            @Override
+            public void onTextChanged(CharSequence value, int start, int before, int count) { }
+
+            @Override
+            public void afterTextChanged(Editable value) {
+                // FIX: аппаратный ТСД отправляет скан автоматически; отдельное
+                // подтверждение ШК или КИЗ сотрудником не требуется.
+                scheduleFbsGuidedAutoSubmit(dialogInput, value == null ? "" : value.toString());
+            }
+        });
+        content.addView(dialogInput);
+        fbsScanInput = dialogInput;
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+            .setTitle(scanKiz
+                ? tr("КИЗ товара", "Mahsulot KIZi")
+                : tr("Товар из короба ", "Qutidagi mahsulot ") + nonEmpty(task.scannedBoxCode, "-"))
+            .setView(content)
+            .setNegativeButton(tr("Свернуть", "Yig‘ish"), null)
+            .create();
+        fbsGuidedScanDialog = dialog;
+        fbsGuidedScanDialogKey = dialogKey;
+        dialog.setCanceledOnTouchOutside(false);
+        dialog.setOnShowListener(ignored -> {
+            dialogInput.requestFocus();
+        });
+        dialog.setOnDismissListener(ignored -> {
+            if (fbsGuidedScanDialog == dialog) {
+                fbsGuidedScanDialog = null;
+                fbsGuidedScanDialogKey = "";
+                if (fbsScanInput == dialogInput) fbsScanInput = null;
+            }
+        });
+        dialog.show();
+    }
+
+    private void scheduleFbsGuidedAutoSubmit(EditText input, String value) {
+        if (fbsGuidedAutoSubmitTask != null) {
+            mainHandler.removeCallbacks(fbsGuidedAutoSubmitTask);
+        }
+        fbsGuidedAutoSubmitTask = null;
+        if (nonEmpty(value, "").isEmpty()) return;
+        fbsGuidedAutoSubmitTask = () -> {
+            fbsGuidedAutoSubmitTask = null;
+            if (fbsScanInput == input && !fbsBusy && !textValue(input).isEmpty()) {
+                submitFbsScan();
+            }
+        };
+        mainHandler.postDelayed(fbsGuidedAutoSubmitTask, 350L);
+    }
+
+    private void dismissFbsGuidedScanDialog() {
+        if (fbsGuidedAutoSubmitTask != null) {
+            mainHandler.removeCallbacks(fbsGuidedAutoSubmitTask);
+            fbsGuidedAutoSubmitTask = null;
+        }
+        AlertDialog dialog = fbsGuidedScanDialog;
+        fbsGuidedScanDialog = null;
+        fbsGuidedScanDialogKey = "";
+        fbsScanInput = null;
+        if (dialog != null && dialog.isShowing()) dialog.dismiss();
+    }
+
     private void submitFbsScan() {
         if (fbsBusy || fbsAssembly == null || fbsAssembly.task == null) return;
         String value = textValue(fbsScanInput);
@@ -4653,10 +4871,22 @@ public class MainActivity extends Activity {
                     !previousBoxCode.isEmpty() && "release".equals(action);
                 boolean switchedToAnotherTask =
                     updated.task == null || !taskId.equals(nonEmpty(updated.task.id, ""));
-                if (
-                    previousBoxWasLocallyConfirmed &&
-                    (problemWasReportedAfterBoxScan || (previousBoxWasNotPicked && switchedToAnotherTask))
-                ) {
+                boolean updatedTaskAcceptedBarcode = FbsTaskSafety.taskAcceptedScannedBarcode(
+                    action,
+                    value,
+                    updated
+                );
+                // FIX: не отправляем сотрудника в обязательную инвентаризацию,
+                // если сервер уже принял ШК и переключил заказ на нужный размер.
+                if (FbsTaskSafety.shouldQueueMandatoryAuditAfterTaskSwitch(
+                    previousBoxWasLocallyConfirmed,
+                    previousBoxWasNotPicked,
+                    problemWasReportedAfterBoxScan,
+                    updatedTaskAcceptedBarcode,
+                    taskId,
+                    previousBoxCode,
+                    updated.task
+                )) {
                     queueMandatoryFbsAudit(
                         currentTask.client == null ? "" : currentTask.client.id,
                         previousBoxCode
