@@ -3221,6 +3221,37 @@ describe('MarketplaceConnectionsService', () => {
     });
   });
 
+  it('scopes saved TSD orders by request without filtering marketplace cabinets', async () => {
+    const prisma = {
+      client: {
+        findUnique: vi.fn().mockResolvedValue({ id: 'client-1', code: 'CL-1', name: 'Клиент' }),
+      },
+      clientMarketplaceConnection: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      fbsOrderRequestLink: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    vi.spyOn(service as any, 'loadFbsDeliveryPlan').mockResolvedValue({
+      destination: FbsDeliveryDestination.PICKUP_POINT,
+      itemsPerCargoPlace: 2000,
+      requiresCargoPlaces: true,
+    });
+
+    await (service as any).loadFbsTsdRequestOrders('client-1', 'request-32');
+
+    expect(prisma.clientMarketplaceConnection.findMany).toHaveBeenCalledWith({
+      where: expect.not.objectContaining({ requestId: expect.anything() }),
+      select: expect.any(Object),
+      orderBy: expect.any(Array),
+    });
+    expect(prisma.fbsOrderRequestLink.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ requestId: 'request-32' }),
+    }));
+  });
+
   it('switches an untouched TSD task using a saved request order omitted from the live WB feed', async () => {
     const currentTask = {
       id: 'task-current',
@@ -3229,7 +3260,8 @@ describe('MarketplaceConnectionsService', () => {
       connectionId: 'connection-1',
       orderId: 'order-current',
       requestId: 'request-32',
-      deviceCode: 'USER:worker',
+      deviceCode: 'USER:worker-1',
+      workerUserId: 'worker-1',
       status: 'IN_PROGRESS',
       boxId: null,
       barcode: null,
@@ -3259,7 +3291,10 @@ describe('MarketplaceConnectionsService', () => {
         findMany: vi.fn().mockResolvedValue([]),
         aggregate: vi.fn().mockResolvedValue({ _sum: { itemCount: 0 } }),
       },
-      stockBalance: { aggregate: vi.fn().mockResolvedValue({ _sum: { quantity: 30 } }) },
+      stockBalance: {
+        findMany: vi.fn().mockResolvedValue([]),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { quantity: 30 } }),
+      },
       $transaction: vi.fn(async (callback: (client: typeof tx) => Promise<unknown>) => callback(tx)),
     };
     const service = new MarketplaceConnectionsService(prisma as never, {} as never);
@@ -3287,11 +3322,11 @@ describe('MarketplaceConnectionsService', () => {
         supplyId: 'WB-GI-32',
         createdAt: '2026-07-22T10:00:00Z',
       };
-    vi.spyOn(service as any, 'loadFbsOrders').mockResolvedValue({
+    const loadLiveOrders = vi.spyOn(service as any, 'loadFbsOrders').mockResolvedValue({
       orders: [],
       counts: { active: 0, shipped: 0, cancelled: 0, archive: 0, all: 0 },
     });
-    vi.spyOn(service as any, 'loadFbsTsdRequestOrders').mockResolvedValue({
+    const loadSavedOrders = vi.spyOn(service as any, 'loadFbsTsdRequestOrders').mockResolvedValue({
       orders: [savedOrder],
       counts: { active: 1, shipped: 0, cancelled: 0, archive: 0, all: 1 },
     });
@@ -3322,6 +3357,10 @@ describe('MarketplaceConnectionsService', () => {
       task: { orderId: '5355467854', boxCode: 'FFL_LKB1705_101' },
       message: expect.stringContaining('Короб FFL_LKB1705_101 нужен заявке'),
     });
+    // ADDED: regression — a direct box scan must stay inside the selected local
+    // request and must not wait for a Wildberries network refresh.
+    expect(loadSavedOrders).toHaveBeenCalledWith('client-1', 'request-32');
+    expect(loadLiveOrders).not.toHaveBeenCalled();
   });
 
   it('переключается на любой нужный товар по ШК, даже если он не следующий по маршруту', async () => {

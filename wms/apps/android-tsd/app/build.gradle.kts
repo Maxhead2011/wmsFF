@@ -15,8 +15,8 @@ android {
         applicationId = "pro.logoff.wms.tsd"
         minSdk = 24
         targetSdk = 35
-        versionCode = 143 // FIX: Keep the remaining-orders list collapsed until the worker opens it.
-        versionName = "0.1.144"
+        versionCode = 144 // FIX: Fast direct box scan, rejected-SHK clearing and missing-box signal.
+        versionName = "0.1.145"
     }
 
     flavorDimensions += "brand"

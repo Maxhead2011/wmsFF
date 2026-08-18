@@ -31,6 +31,38 @@ const administrator: AuthUser = {
 };
 
 describe('InventoryService box checks', () => {
+  it('deduplicates a missing-pallet-box signal until manager review is resolved', async () => {
+    const existing = {
+      id: 'missing-box-check-1',
+      type: InventorySessionType.BOX_CHECK,
+      status: InventorySessionStatus.REVIEW,
+      title: 'СИГНАЛ ТСД: на паллете нет короба FFL_LKB1508_02',
+    };
+    const create = vi.fn();
+    const findFirst = vi.fn().mockResolvedValue(existing);
+    const prisma = { inventorySession: { findFirst, create } };
+    const scopes = { requireClientAccess: vi.fn() };
+    const service = new InventoryService(prisma as never, scopes as never, {} as never);
+
+    await expect(service.startSession({
+      type: InventorySessionType.BOX_CHECK,
+      clientId: 'client-1',
+      title: existing.title,
+      comment: '[FBS_MISSING_PALLET_BOX] Короб: FFL_LKB1508_02; паллетсорт: PS-1',
+    }, manager)).resolves.toBe(existing);
+
+    expect(findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        type: InventorySessionType.BOX_CHECK,
+        status: { in: [InventorySessionStatus.ACTIVE, InventorySessionStatus.REVIEW] },
+        clientId: 'client-1',
+        title: existing.title,
+        comment: { contains: '[FBS_MISSING_PALLET_BOX]' },
+      }),
+    }));
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('opens a box when the scanner omitted separators from its code', async () => {
     const storedBox = {
       id: 'box-1',

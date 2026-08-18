@@ -7448,20 +7448,31 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
     }
 
-    const cached = this.fbsOrdersCache.get(currentTask.clientId);
-    const liveResponse = cached && cached.expiresAt > Date.now()
-      ? cached.value
-      : await this.loadFbsOrders(currentTask.clientId);
-    if (!cached || cached.expiresAt <= Date.now()) {
-      this.fbsOrdersCache.set(currentTask.clientId, {
-        expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
-        value: liveResponse,
-      });
-    }
-    const response = await this.mergeSyncedFbsTsdRequestOrders(
+    // FIX: the selected WMS request is the authoritative and fast source for a
+    // direct box scan. Do not make the worker wait for every WB cabinet when
+    // the request already has synchronized local orders. The old live fallback
+    // remains only for legacy requests that have no saved order links at all.
+    const syncedResponse = await this.loadFbsTsdRequestOrders(
       currentTask.clientId,
-      liveResponse,
+      currentTask.requestId,
     );
+    let response = syncedResponse;
+    if (syncedResponse.orders.length === 0) {
+      const cached = this.fbsOrdersCache.get(currentTask.clientId);
+      const liveResponse = cached && cached.expiresAt > Date.now()
+        ? cached.value
+        : await this.loadFbsOrders(currentTask.clientId);
+      if (!cached || cached.expiresAt <= Date.now()) {
+        this.fbsOrdersCache.set(currentTask.clientId, {
+          expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
+          value: liveResponse,
+        });
+      }
+      response = await this.mergeSyncedFbsTsdRequestOrders(
+        currentTask.clientId,
+        liveResponse,
+      );
+    }
 
     const candidates = response.orders
       .filter(
@@ -7789,17 +7800,26 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       if (freshTarget.id === freshCurrent.id) {
         return tx.fbsTsdAssembly.update({ where: { id: freshTarget.id }, data: scanData });
       }
+      const keepsScannedPhysicalBox = Boolean(freshCurrent.boxId && freshCurrent.boxCode);
       await tx.fbsTsdAssembly.update({
         where: { id: freshCurrent.id },
         data: {
-          status: freshCurrent.reservedBoxId ? FBS_TSD_RESERVED_STATUS : 'RELEASED',
-          deviceCode: freshCurrent.reservedBoxId
+          // FIX: the physical box follows the product accepted by barcode.
+          status: keepsScannedPhysicalBox
+            ? 'RELEASED'
+            : freshCurrent.reservedBoxId
+              ? FBS_TSD_RESERVED_STATUS
+              : 'RELEASED',
+          deviceCode: !keepsScannedPhysicalBox && freshCurrent.reservedBoxId
             ? FBS_TSD_AUTO_RESERVATION_DEVICE
             : freshCurrent.deviceCode,
           workerUserId: null,
           workerName: null,
           boxId: null,
           boxCode: null,
+          ...(keepsScannedPhysicalBox
+            ? { reservedBoxId: null, reservedBoxCode: null, reservedAt: null }
+            : {}),
           errorMessage: `Сотрудник выбрал товар по ШК ${barcode}; задание возвращено в очередь.`,
         },
       });
@@ -7811,14 +7831,31 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           workerUserId: user.id,
           workerName: user.name,
           startedAt: new Date(),
+          ...(keepsScannedPhysicalBox
+            ? {
+                reservedBoxId: freshCurrent.boxId,
+                reservedBoxCode: freshCurrent.boxCode,
+                reservedAt: new Date(),
+                boxId: freshCurrent.boxId,
+                boxCode: freshCurrent.boxCode,
+                sourceBoxPending: false,
+              }
+            : {}),
           ...scanData,
         },
       });
     });
     if (!switched) return null;
 
+    const keptScannedPhysicalBox = Boolean(
+      currentTask.boxId && switched.boxId === currentTask.boxId,
+    );
     const noBox = fbsTsdUsesNoBox(switched);
-    const action = noBox
+    const action = keptScannedPhysicalBox
+      ? switched.requiresKiz
+        ? `Товар принят из короба ${switched.boxCode}. Теперь отсканируйте КИЗ.`
+        : `Товар принят из короба ${switched.boxCode}. Переходите к наклейке.`
+      : noBox
       ? matched.field === 'sourceBarcode'
         ? 'Исходный товар принят. Выполните переклейку и отсканируйте новый ШК.'
         : 'Товар принят. Переходите к следующему шагу.'
@@ -19210,7 +19247,33 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             !liveOrder.product ||
             !requestItemId ||
             task.status === FBS_TSD_RETURN_REQUIRED ||
+            // FIX: Once /fbs/next has leased a task to a picker, background
+            // metadata refreshes must not change its optimistic-lock version.
+            // Marketplace status/conflict handling above remains authoritative.
+            task.status === 'IN_PROGRESS' ||
             fbsTsdTaskWasPhysicallyHandled(task)
+          ) {
+            continue;
+          }
+          const article =
+            liveOrder.product.article ??
+            liveOrder.product.clientSku ??
+            liveOrder.product.internalSku;
+          const storageBoxes = task.reservedBoxId || task.boxId
+            ? task.storageBoxes
+            : liveOrder.storageBoxes;
+          // FIX: Do not rewrite hundreds of untouched TSD tasks on every
+          // background refresh. These no-op updates held the large request
+          // transaction long enough for interactive scanner calls to time out.
+          if (
+            task.requestItemId === requestItemId &&
+            task.skuId === liveOrder.product.id &&
+            task.productName === liveOrder.product.name &&
+            task.article === article &&
+            jsonStringArraysEqual(task.barcodes, liveOrder.barcodes) &&
+            jsonValuesEqual(task.storageBoxes, storageBoxes) &&
+            task.itemCount === Math.max(1, liveOrder.itemCount) &&
+            task.supplyId === liveOrder.supplyId
           ) {
             continue;
           }
@@ -19220,18 +19283,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               requestItemId,
               skuId: liveOrder.product.id,
               productName: liveOrder.product.name,
-              article:
-                liveOrder.product.article ??
-                liveOrder.product.clientSku ??
-                liveOrder.product.internalSku,
+              article,
               barcodes: liveOrder.barcodes as Prisma.InputJsonValue,
               // FIX: Marketplace metadata has no local pallet-sort route. Keep
               // the route selected by repair/reservation until it is released.
-              storageBoxes: (
-                task.reservedBoxId || task.boxId
-                  ? task.storageBoxes
-                  : liveOrder.storageBoxes
-              ) as Prisma.InputJsonValue,
+              storageBoxes: storageBoxes as Prisma.InputJsonValue,
               itemCount: Math.max(1, liveOrder.itemCount),
               supplyId: liveOrder.supplyId,
             },
@@ -19926,7 +19982,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
-  private async loadFbsTsdRequestOrders(clientId: string): Promise<FbsOrdersResponse> {
+  private async loadFbsTsdRequestOrders(
+    clientId: string,
+    requestId?: string,
+  ): Promise<FbsOrdersResponse> {
     const [client, connections, deliveryPlan, links] = await Promise.all([
       Promise.resolve().then(() => this.prisma.client.findUnique({
         where: { id: clientId },
@@ -19946,6 +20005,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       Promise.resolve().then(() => this.prisma.fbsOrderRequestLink.findMany({
         where: {
           clientId,
+          // FIX: scope the saved order links, never the marketplace cabinet.
+          // This keeps the direct TSD box check local to the selected request.
+          ...(requestId ? { requestId } : {}),
           // FIX: Restore Ozon orders from the selected WMS request as well.
           marketplace: { in: [MarketplaceType.WILDBERRIES, MarketplaceType.OZON] },
           syncStatus: FBS_REQUEST_LINK_ACTIVE,
@@ -23418,6 +23480,24 @@ function fbsStoragePalletCodeAlias(value: string) {
 
 function jsonStringArray(value: Prisma.JsonValue | null | undefined): string[] {
   return Array.isArray(value) ? uniqueStrings(value.map(textValue)) : [];
+}
+
+// ADDED: Exact comparisons let the background synchronizer distinguish a real
+// task metadata change from the same marketplace snapshot arriving again.
+function jsonStringArraysEqual(
+  left: Prisma.JsonValue | null | undefined,
+  right: Prisma.JsonValue | null | undefined,
+) {
+  const leftValues = jsonStringArray(left);
+  const rightValues = jsonStringArray(right);
+  return (
+    leftValues.length === rightValues.length &&
+    leftValues.every((value, index) => value === rightValues[index])
+  );
+}
+
+function jsonValuesEqual(left: unknown, right: unknown) {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
 }
 
 function fbsTsdStage(task: FbsTsdAssemblyRecord) {

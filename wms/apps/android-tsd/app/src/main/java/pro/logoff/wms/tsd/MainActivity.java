@@ -3863,6 +3863,14 @@ public class MainActivity extends Activity {
                     }
                     root.addView(feedbackView(nearby.toString(), Color.rgb(220, 252, 231)));
                 }
+                if (pallet.neededBoxCodes != null && !pallet.neededBoxCodes.isEmpty()) {
+                    // ADDED: create a real web verification task without changing
+                    // stock, box placement or the current FBS assembly state.
+                    root.addView(dangerSecondaryButton(
+                        tr("На паллете отсутствует короб", "Palletda quti yo‘q"),
+                        view -> chooseMissingFbsPalletBox(pallet)
+                    ));
+                }
             }
             String boxCode = nonEmpty(task.recommendedBoxCode, "-");
             String locationHint = "";
@@ -4808,10 +4816,105 @@ public class MainActivity extends Activity {
             .show();
     }
 
+    // ADDED: when several boxes are expected on the pallet-sort, the worker
+    // names the exact missing physical box before the signal is sent.
+    private void chooseMissingFbsPalletBox(TsdFbsAssemblyResponse.PalletScan pallet) {
+        if (
+            pallet == null ||
+            pallet.neededBoxCodes == null ||
+            pallet.neededBoxCodes.isEmpty() ||
+            fbsBusy
+        ) return;
+        if (pallet.neededBoxCodes.size() == 1) {
+            confirmMissingFbsPalletBox(pallet.neededBoxCodes.get(0), pallet.code);
+            return;
+        }
+        String[] boxCodes = pallet.neededBoxCodes.toArray(new String[0]);
+        new AlertDialog.Builder(this)
+            .setTitle(tr("Какого короба нет на паллете?", "Palletda qaysi quti yo‘q?"))
+            .setItems(boxCodes, (dialog, which) -> {
+                if (which >= 0 && which < boxCodes.length) {
+                    confirmMissingFbsPalletBox(boxCodes[which], pallet.code);
+                }
+            })
+            .setNegativeButton(tr("Отмена", "Bekor qilish"), null)
+            .show();
+    }
+
+    private void confirmMissingFbsPalletBox(String boxCode, String palletCode) {
+        String normalizedBoxCode = nonEmpty(boxCode, "");
+        if (normalizedBoxCode.isEmpty() || fbsBusy) return;
+        new AlertDialog.Builder(this)
+            .setTitle(tr("Сообщить об отсутствующем коробе?", "Yo‘q quti haqida xabar berilsinmi?"))
+            .setMessage(
+                tr("Короб: ", "Quti: ") + normalizedBoxCode + "\n" +
+                    tr("Паллетсорт: ", "Palletsort: ") + nonEmpty(palletCode, "-") + "\n\n" +
+                    tr(
+                        "Менеджер увидит задачу проверки в вебе. Остатки и заявка автоматически не изменятся.",
+                        "Menejer vebda tekshiruv vazifasini ko‘radi. Qoldiq va ariza avtomatik o‘zgarmaydi."
+                    )
+            )
+            .setNegativeButton(tr("Отмена", "Bekor qilish"), null)
+            .setPositiveButton(tr("Отправить сигнал", "Xabar yuborish"), (dialog, which) ->
+                reportMissingFbsPalletBox(normalizedBoxCode, palletCode)
+            )
+            .show();
+    }
+
+    private void reportMissingFbsPalletBox(String boxCode, String palletCode) {
+        TsdSession session = safeSession();
+        TsdFbsAssemblyResponse current = fbsAssembly;
+        TsdFbsAssemblyResponse.Task task = current == null ? null : current.task;
+        String clientId = task == null || task.client == null ? "" : nonEmpty(task.client.id, "");
+        if (session == null || task == null || clientId.isEmpty() || fbsBusy) return;
+
+        int requestNumber = current.progress == null ? 0 : current.progress.requestNumber;
+        String requestLabel = requestNumber > 0
+            ? String.format(Locale.US, "%06d", requestNumber)
+            : nonEmpty(task.requestId, "-");
+        String normalizedPalletCode = nonEmpty(palletCode, "-");
+        String title = "СИГНАЛ ТСД: на паллете нет короба " + boxCode;
+        String comment = "[FBS_MISSING_PALLET_BOX] Короб: " + boxCode +
+            "; паллетсорт: " + normalizedPalletCode +
+            "; заявка: " + requestLabel +
+            "; заказ: " + nonEmpty(task.orderId, "-");
+
+        fbsBusy = true;
+        fbsFeedbackColor = Color.rgb(254, 240, 138);
+        statusMessage = tr("Отправляю сигнал менеджеру…", "Menejerga xabar yuborilmoqda…");
+        renderFbsAssemblyScreen();
+        runBackground(() -> {
+            Map<String, Object> request = new LinkedHashMap<>();
+            request.put("type", "BOX_CHECK");
+            request.put("clientId", clientId);
+            request.put("title", title);
+            request.put("comment", comment);
+            Response<TsdInventorySession> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                .startInventory(session.authorizationHeader(), request)
+                .execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException(inventoryHttpError(response));
+            }
+            mainHandler.post(() -> {
+                // FIX: the picker stays on the same FBS pallet and continues work.
+                online = true;
+                fbsBusy = false;
+                fbsFeedbackColor = Color.rgb(254, 240, 138);
+                statusMessage = tr(
+                    "Сигнал отправлен. Менеджер проверит короб " + boxCode + " в вебе.",
+                    "Xabar yuborildi. Menejer " + boxCode + " qutisini vebda tekshiradi."
+                );
+                playFbsSuccess();
+                renderFbsAssemblyScreen();
+            });
+        });
+    }
+
     private void executeFbsAction(String action, String field, String value) {
         TsdSession session = safeSession();
         TsdFbsAssemblyResponse.Task currentTask = fbsAssembly == null ? null : fbsAssembly.task;
         if (session == null || currentTask == null || fbsBusy) return;
+        String submittedState = fbsAssembly == null ? "" : nonEmpty(fbsAssembly.state, "");
         String actionOwnerKey = fbsSessionOwnerKey(session);
         String previousBoxCode = nonEmpty(currentTask.scannedBoxCode, "");
         boolean previousBoxWasNotPicked =
@@ -4859,7 +4962,20 @@ public class MainActivity extends Activity {
                     mainHandler.post(() -> reloadFbsAfterStaleTask(errorDetails.message));
                     return;
                 }
-                mainHandler.post(() -> showFbsError(errorDetails.message, response.code() < 500));
+                boolean clearRejectedBarcode = FbsTaskSafety.shouldClearRejectedBarcode(
+                    action,
+                    submittedState,
+                    response.code()
+                );
+                mainHandler.post(() -> {
+                    if (clearRejectedBarcode && fbsScanInput != null) {
+                        // FIX: a rejected product barcode must never remain in the
+                        // scanner field and be submitted again by the operator.
+                        fbsScanInput.setText("");
+                        fbsScanInput.requestFocus();
+                    }
+                    showFbsError(errorDetails.message, response.code() < 500);
+                });
                 return;
             }
             TsdFbsAssemblyResponse updated = response.body();

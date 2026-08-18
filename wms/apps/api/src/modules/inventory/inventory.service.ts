@@ -177,24 +177,34 @@ export class InventoryService {
           : `Проверка коробов ${new Date().toLocaleDateString('ru-RU')}`;
     const requestedTitle = dto.title?.trim() || defaultTitle;
     const requestedComment = dto.comment?.trim() || null;
+    // ADDED: both FBS-generated checks are real inventory tasks. Keep the
+    // mandatory flow's old ACTIVE-only behavior, while a missing-pallet-box
+    // signal stays deduplicated until its manager review is resolved.
+    const fbsCheckMarker = requestedComment?.includes('[FBS_MANDATORY_BOX_CHECK]')
+      ? '[FBS_MANDATORY_BOX_CHECK]'
+      : requestedComment?.includes('[FBS_MISSING_PALLET_BOX]')
+        ? '[FBS_MISSING_PALLET_BOX]'
+        : null;
     if (
       dto.type === InventorySessionType.BOX_CHECK &&
-      requestedComment?.includes('[FBS_MANDATORY_BOX_CHECK]')
+      fbsCheckMarker
     ) {
-      const existingMandatoryCheck = await this.prisma.inventorySession.findFirst({
+      const existingFbsCheck = await this.prisma.inventorySession.findFirst({
         where: {
           type: InventorySessionType.BOX_CHECK,
-          status: InventorySessionStatus.ACTIVE,
+          status: fbsCheckMarker === '[FBS_MISSING_PALLET_BOX]'
+            ? { in: [InventorySessionStatus.ACTIVE, InventorySessionStatus.REVIEW] }
+            : InventorySessionStatus.ACTIVE,
           clientId: dto.clientId,
           title: requestedTitle,
-          comment: { contains: '[FBS_MANDATORY_BOX_CHECK]' },
+          comment: { contains: fbsCheckMarker },
           ...(warehouseId ? { warehouseId } : {}),
         },
         include: sessionInclude,
         orderBy: { createdAt: 'desc' },
       });
-      if (existingMandatoryCheck) {
-        return existingMandatoryCheck;
+      if (existingFbsCheck) {
+        return existingFbsCheck;
       }
     }
     return this.prisma.inventorySession.create({
