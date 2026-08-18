@@ -55,6 +55,11 @@ import { clearStoredSession, loadStoredSession, storeSession } from './lib/sessi
 import { canOpenWorkspace, workspaceNav, type WorkspaceId, type WorkspaceNavItem } from './lib/workspaces';
 
 const AnalyticsPanel = lazy(() => import('./components/analytics/AnalyticsPanel').then((module) => ({ default: module.AnalyticsPanel })));
+const KizCirculationPanel = lazy(() =>
+  import('./components/kiz-circulation/KizCirculationPanel').then((module) => ({
+    default: module.KizCirculationPanel,
+  })),
+);
 const AdministrationPanel = lazy(() =>
   import('./components/administration/AdministrationPanel').then((module) => ({
     default: module.AdministrationPanel,
@@ -883,6 +888,8 @@ function renderWorkspace(
       return <InventoryPanel session={session} />;
     case 'kiz':
       return <KizIssuesPanel session={session} />;
+    case 'kiz-circulation':
+      return <Suspense fallback={<div className="workspace-loading">Загружаю погашение КИЗ…</div>}><KizCirculationPanel session={session} /></Suspense>;
     case 'turnover':
       return <TurnoverPanel session={session} />;
     case 'requests':
@@ -1184,7 +1191,7 @@ function sectionForWorkspace(id: WorkspaceId): WorkspaceSection {
     return 'client';
   }
 
-  if (id === 'warehouse' || id === 'storage-zones' || id === 'inventory' || id === 'kiz' || id === 'turnover' || id === 'fbs-packed' || id === 'logistics' || id === 'print') {
+  if (id === 'warehouse' || id === 'storage-zones' || id === 'inventory' || id === 'kiz' || id === 'kiz-circulation' || id === 'turnover' || id === 'fbs-packed' || id === 'logistics' || id === 'print') {
     return 'operations';
   }
 

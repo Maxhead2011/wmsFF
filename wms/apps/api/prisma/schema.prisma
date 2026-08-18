@@ -49,6 +49,31 @@ enum MarketplaceType {
   OTHER
 }
 
+// ADDED: отдельный жизненный цикл юридически значимых операций в ГИС МТ.
+enum KizCirculationOperation {
+  RETIRE
+  RETURN
+}
+
+enum KizCirculationItemStatus {
+  NEEDS_REVIEW
+  READY
+  ALREADY_APPLIED
+  IN_BATCH
+  SUBMITTED
+  APPLIED
+  ERROR
+  EXCLUDED
+}
+
+enum KizCirculationBatchStatus {
+  DRAFT
+  SIGNED
+  SUBMITTED
+  APPLIED
+  REJECTED
+}
+
 enum ClientRequestType {
   INBOUND
   OUTBOUND
@@ -622,6 +647,9 @@ model Client {
   expenseMaterialRules         ClientExpenseMaterialRule[]
   expenseMaterialMovements     ExpenseMaterialMovement[]
   factoryShipments             FactoryShipment[]
+  kizTrueApiConnection         KizTrueApiConnection?
+  kizCirculationItems          KizCirculationItem[]
+  kizCirculationBatches        KizCirculationBatch[]
   createdAt                    DateTime                       @default(now())
   updatedAt                    DateTime                       @updatedAt
 
@@ -1316,6 +1344,88 @@ model ShippedKizHistory {
   @@index([requestId])
   @@index([orderId])
   @@index([kiz])
+}
+
+// ADDED: токен True API хранится только в зашифрованном виде; закрытый ключ УКЭП здесь не хранится.
+model KizTrueApiConnection {
+  id                    String    @id @default(uuid())
+  clientId              String    @unique
+  inn                   String
+  kpp                   String?
+  fiasId                String?
+  productGroup          String
+  apiBaseUrl            String
+  apiTokenEncrypted     String    @db.Text
+  tokenExpiresAt        DateTime?
+  certificateSubject    String?
+  certificateThumbprint String?
+  isActive              Boolean   @default(true)
+  lastCheckedAt         DateTime?
+  lastCheckOk           Boolean?
+  lastCheckMessage      String?
+  client                Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([isActive])
+}
+
+model KizCirculationBatch {
+  id                 String                    @id @default(uuid())
+  clientId           String
+  operation          KizCirculationOperation
+  productGroup       String
+  documentType       String
+  status             KizCirculationBatchStatus @default(DRAFT)
+  payload            Json
+  payloadJson        String                    @db.Text
+  payloadHash        String
+  signatureEncrypted String?                   @db.Text
+  crptDocumentId     String?                   @unique
+  crptStatus         String?
+  crptError          String?
+  submittedAt        DateTime?
+  processedAt        DateTime?
+  createdByUserId    String
+  createdByName      String
+  client             Client                    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  items              KizCirculationItem[]
+  createdAt          DateTime                  @default(now())
+  updatedAt          DateTime                  @updatedAt
+
+  @@index([clientId, status, createdAt])
+}
+
+model KizCirculationItem {
+  id                      String                   @id @default(uuid())
+  clientId                String
+  marketplace             MarketplaceType
+  marketplaceConnectionId String?
+  operation               KizCirculationOperation
+  sourceEventKey          String                   @unique
+  orderId                 String?
+  requestId               String?
+  assemblyId              String?
+  skuId                   String?
+  kizRaw                  String                   @db.Text
+  cis                     String
+  productGroup            String
+  productCostKopecks      Int?
+  eventAt                 DateTime
+  status                  KizCirculationItemStatus @default(NEEDS_REVIEW)
+  remoteStatus            String?
+  remoteMessage           String?
+  metadata                Json?
+  batchId                 String?
+  client                  Client                   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  batch                   KizCirculationBatch?     @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+
+  @@index([clientId, operation, status, eventAt])
+  @@index([clientId, cis])
+  @@index([batchId])
+  @@index([orderId])
 }
 
 model InventorySession {

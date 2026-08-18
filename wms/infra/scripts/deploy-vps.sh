@@ -73,6 +73,7 @@ ANALYTICS_POSTGRES_USER=logoff_analytics
 ANALYTICS_POSTGRES_PASSWORD=$ANALYTICS_DB_PASSWORD
 ANALYTICS_DATABASE_URL=postgresql://logoff_analytics:$ANALYTICS_DB_PASSWORD@analytics-postgres:5432/logoff_analytics?schema=public
 ANALYTICS_CREDENTIALS_SECRET=$(openssl rand -hex 32)
+KIZ_CREDENTIALS_SECRET=$(openssl rand -hex 32)
 
 REDIS_URL=redis://redis:6379
 JWT_ACCESS_SECRET=$JWT_ACCESS
@@ -94,6 +95,11 @@ if ! grep -q '^ANALYTICS_DATABASE_URL=' "$ENV_FILE"; then
   printf 'ANALYTICS_POSTGRES_PASSWORD=%s\n' "$ANALYTICS_DB_PASSWORD" >> "$ENV_FILE"
   printf 'ANALYTICS_DATABASE_URL=postgresql://logoff_analytics:%s@analytics-postgres:5432/logoff_analytics?schema=public\n' "$ANALYTICS_DB_PASSWORD" >> "$ENV_FILE"
   printf 'ANALYTICS_CREDENTIALS_SECRET=%s\n' "$(openssl rand -hex 32)" >> "$ENV_FILE"
+fi
+
+# ADDED: отдельный случайный ключ шифрования токенов True API; в Git он не хранится.
+if ! grep -q '^KIZ_CREDENTIALS_SECRET=' "$ENV_FILE"; then
+  printf '\nKIZ_CREDENTIALS_SECRET=%s\n' "$(openssl rand -hex 32)" >> "$ENV_FILE"
 fi
 
 cd "$COMPOSE_DIR"

@@ -19,6 +19,7 @@ import { ClientsModule } from './modules/clients/clients.module';
 import { ImportsModule } from './modules/imports/imports.module';
 import { InventoryModule } from './modules/inventory/inventory.module';
 import { KizIssuesModule } from './modules/kiz-issues/kiz-issues.module';
+import { KizCirculationModule } from './modules/kiz-circulation/kiz-circulation.module';
 import { LogisticsModule } from './modules/logistics/logistics.module';
 import { MarketplaceConnectionsModule } from './modules/marketplace-connections/marketplace-connections.module';
 import { MobileModule } from './modules/mobile/mobile.module';
@@ -62,6 +63,7 @@ import { WmsAiModule } from './modules/wms-ai/wms-ai.module';
     OzonFboModule,
     ImportsModule,
     InventoryModule,
+    KizCirculationModule,
     KizIssuesModule,
     PrintModule,
     ServiceCenterModule,

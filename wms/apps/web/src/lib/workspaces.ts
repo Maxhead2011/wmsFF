@@ -1,6 +1,7 @@
 import {
   BriefcaseBusiness,
   BarChart3,
+  BadgeCheck,
   Building2,
   Boxes,
   Bug,
@@ -46,6 +47,7 @@ export type WorkspaceId =
   | 'storage-zones'
   | 'inventory'
   | 'kiz'
+  | 'kiz-circulation'
   | 'turnover'
   | 'requests'
   | 'contracts'
@@ -188,6 +190,16 @@ export const workspaceNav: WorkspaceNavItem[] = [
       'Очередь проблемных КИЗ после FBS-отбора, исправление данных WMS и повторная синхронизация с Wildberries.',
     permissions: ['system:admin'],
     icon: ScanLine,
+    status: 'ready',
+    audience: 'internal',
+  },
+  {
+    id: 'kiz-circulation',
+    title: 'Погашение КИЗ',
+    eyebrow: 'Честный знак и маркетплейсы',
+    description: 'Продажи WB, Ozon и Яндекс Маркета, сверка статусов ГИС МТ, погашение и возврат в оборот.',
+    permissions: ['system:admin'],
+    icon: BadgeCheck,
     status: 'ready',
     audience: 'internal',
   },

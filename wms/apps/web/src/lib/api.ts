@@ -3806,6 +3806,89 @@ export type ClientBranchAccessResponse = {
   >;
 };
 
+// ADDED: отдельные типы контура True API, не смешанные с исправлением складских КИЗ.
+export type KizCirculationOperation = 'RETIRE' | 'RETURN';
+export type KizCirculationItemStatus =
+  | 'NEEDS_REVIEW'
+  | 'READY'
+  | 'ALREADY_APPLIED'
+  | 'IN_BATCH'
+  | 'SUBMITTED'
+  | 'APPLIED'
+  | 'ERROR'
+  | 'EXCLUDED';
+export type KizCirculationBatchStatus = 'DRAFT' | 'SIGNED' | 'SUBMITTED' | 'APPLIED' | 'REJECTED';
+
+export type KizCirculationItem = {
+  id: string;
+  clientId: string;
+  marketplace: MarketplaceType;
+  operation: KizCirculationOperation;
+  orderId: string | null;
+  requestId: string | null;
+  assemblyId: string | null;
+  skuId: string | null;
+  kizRaw: string;
+  cis: string;
+  productGroup: string;
+  productCostKopecks: number | null;
+  eventAt: string;
+  status: KizCirculationItemStatus;
+  remoteStatus: string | null;
+  remoteMessage: string | null;
+  metadata: Record<string, unknown> | null;
+  batchId: string | null;
+  batch: { id: string; status: KizCirculationBatchStatus; crptDocumentId: string | null } | null;
+};
+
+export type KizCirculationBatch = {
+  id: string;
+  clientId: string;
+  operation: KizCirculationOperation;
+  productGroup: string;
+  documentType: 'LK_RECEIPT' | 'LP_RETURN';
+  status: KizCirculationBatchStatus;
+  payload: Record<string, unknown>;
+  payloadJson: string;
+  payloadHash: string;
+  crptDocumentId: string | null;
+  crptStatus: string | null;
+  crptError: string | null;
+  submittedAt: string | null;
+  processedAt: string | null;
+  createdAt: string;
+  itemCount: number;
+};
+
+export type KizCirculationOverview = {
+  client: Pick<ClientSummary, 'id' | 'code' | 'name' | 'inn' | 'kpp' | 'clientKind'>;
+  connection: {
+    id: string;
+    inn: string;
+    kpp: string | null;
+    fiasId: string | null;
+    productGroup: string;
+    apiBaseUrl: string;
+    tokenConfigured: boolean;
+    tokenExpiresAt: string | null;
+    certificateSubject: string | null;
+    certificateThumbprint: string | null;
+    isActive: boolean;
+    lastCheckedAt: string | null;
+    lastCheckOk: boolean | null;
+    lastCheckMessage: string | null;
+  } | null;
+  marketplaceConnections: Array<{
+    id: string;
+    marketplace: MarketplaceType;
+    accountName: string | null;
+    isActive: boolean;
+  }>;
+  counts: Partial<Record<KizCirculationItemStatus, number>>;
+  items: KizCirculationItem[];
+  batches: KizCirculationBatch[];
+};
+
 export type BranchStockSummary = {
   warehouse: Pick<BranchSummary, 'id' | 'code' | 'name' | 'city' | 'address'>;
   totalQuantity: number;
@@ -8825,6 +8908,125 @@ export async function downloadFbsOrderStickersPdf(accessToken: string, payload: 
     method: 'POST',
     body: sanitizeFbsOrderSelectionPayload(payload),
   });
+}
+
+export async function fetchKizCirculationOverview(accessToken: string, clientId: string) {
+  return request<KizCirculationOverview>(
+    withQuery('/kiz-circulation/overview', { clientId }),
+    { accessToken },
+  );
+}
+
+export async function saveKizTrueApiConnection(
+  accessToken: string,
+  clientId: string,
+  payload: {
+    inn: string;
+    kpp?: string;
+    fiasId?: string;
+    productGroup: string;
+    apiBaseUrl: string;
+    apiToken?: string;
+    tokenExpiresAt?: string;
+    certificateSubject?: string;
+    certificateThumbprint?: string;
+    isActive?: boolean;
+  },
+) {
+  return request<{ id: string; configured: boolean }>(
+    `/kiz-circulation/connections/${encodeURIComponent(clientId)}`,
+    { method: 'PUT', body: payload, accessToken },
+  );
+}
+
+export async function syncKizCirculation(accessToken: string, clientId: string) {
+  return request<{
+    scannedShipments: number;
+    retireCreated: number;
+    returnCreated: number;
+    invalidCodes: number;
+  }>(`/kiz-circulation/sync/${encodeURIComponent(clientId)}`, {
+    method: 'POST',
+    accessToken,
+  });
+}
+
+export async function importKizCirculationItems(
+  accessToken: string,
+  payload: {
+    clientId: string;
+    operation: KizCirculationOperation;
+    marketplace?: MarketplaceType;
+    codes: string[];
+  },
+) {
+  return request<{ imported: number }>('/kiz-circulation/items/import', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function updateKizCirculationItem(
+  accessToken: string,
+  itemId: string,
+  payload: { productCostKopecks?: number; productGroup?: string; excluded?: boolean },
+) {
+  return request<KizCirculationItem>(`/kiz-circulation/items/${encodeURIComponent(itemId)}`, {
+    method: 'PATCH',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function checkKizCirculationItems(accessToken: string, clientId: string, itemIds: string[]) {
+  return request<{ checked: number }>('/kiz-circulation/items/check', {
+    method: 'POST',
+    body: { clientId, itemIds },
+    accessToken,
+  });
+}
+
+export async function createKizCirculationBatch(
+  accessToken: string,
+  payload: {
+    clientId: string;
+    operation: KizCirculationOperation;
+    itemIds: string[];
+    actionDate: string;
+    documentType: string;
+    documentNumber: string;
+    documentDate: string;
+    primaryDocumentCustomName?: string;
+    paid?: boolean;
+  },
+) {
+  return request<KizCirculationBatch>('/kiz-circulation/batches', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+export async function signKizCirculationBatch(accessToken: string, batchId: string, signature: string) {
+  return request<{ signed: boolean; payloadHash: string }>(
+    `/kiz-circulation/batches/${encodeURIComponent(batchId)}/signature`,
+    { method: 'POST', body: { signature }, accessToken },
+  );
+}
+
+export async function submitKizCirculationBatch(accessToken: string, batchId: string, confirmation: string) {
+  return request<{ submitted: boolean; crptDocumentId: string }>(
+    `/kiz-circulation/batches/${encodeURIComponent(batchId)}/submit`,
+    { method: 'POST', body: { confirmation }, accessToken },
+  );
+}
+
+export async function refreshKizCirculationBatch(accessToken: string, batchId: string) {
+  return request<{ status: string; error: string | null; applied: boolean; rejected: boolean }>(
+    `/kiz-circulation/batches/${encodeURIComponent(batchId)}/refresh`,
+    { method: 'POST', accessToken },
+  );
 }
 
 export function resolveInventoryBox(
