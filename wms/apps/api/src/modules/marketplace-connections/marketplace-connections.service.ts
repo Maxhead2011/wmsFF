@@ -7452,10 +7452,20 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     // direct box scan. Do not make the worker wait for every WB cabinet when
     // the request already has synchronized local orders. The old live fallback
     // remains only for legacy requests that have no saved order links at all.
-    const syncedResponse = await this.loadFbsTsdRequestOrders(
+    const scannedBoxSkuIds = [...availableBySku.keys()];
+    let syncedResponse = await this.loadFbsTsdRequestOrders(
       currentTask.clientId,
       currentTask.requestId,
+      scannedBoxSkuIds,
     );
+    if (syncedResponse.orders.length === 0 && scannedBoxSkuIds.length > 0) {
+      // FIX: retain the old full-request path only for uncommon relabeling,
+      // where the SKU inside the box differs from the marketplace target SKU.
+      syncedResponse = await this.loadFbsTsdRequestOrders(
+        currentTask.clientId,
+        currentTask.requestId,
+      );
+    }
     let response = syncedResponse;
     if (syncedResponse.orders.length === 0) {
       const cached = this.fbsOrdersCache.get(currentTask.clientId);
@@ -19985,7 +19995,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   private async loadFbsTsdRequestOrders(
     clientId: string,
     requestId?: string,
+    filterSkuIds?: string[],
   ): Promise<FbsOrdersResponse> {
+    const requestedSkuIds = uniqueStrings(filterSkuIds ?? []);
     const [client, connections, deliveryPlan, links] = await Promise.all([
       Promise.resolve().then(() => this.prisma.client.findUnique({
         where: { id: clientId },
@@ -20011,7 +20023,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           // FIX: Restore Ozon orders from the selected WMS request as well.
           marketplace: { in: [MarketplaceType.WILDBERRIES, MarketplaceType.OZON] },
           syncStatus: FBS_REQUEST_LINK_ACTIVE,
-          lastSkuId: { not: null },
+          // FIX: a direct box scan needs only orders for SKUs physically found
+          // in that box, not every item in a 500+ unit request.
+          lastSkuId: requestedSkuIds.length > 0
+            ? { in: requestedSkuIds }
+            : { not: null },
           lastCategory: { not: 'cancelled' },
           request: {
             status: {

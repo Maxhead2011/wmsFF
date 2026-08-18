@@ -4609,11 +4609,23 @@ public class MainActivity extends Activity {
         if ("SCAN_KIZ".equals(state)) {
             String kizError = fbsKizScanError(value);
             if (!kizError.isEmpty()) {
+                // FIX: a locally rejected KIZ must not remain in the scanner
+                // field and be submitted again by the hardware scanner.
+                if (fbsScanInput != null) {
+                    fbsScanInput.setText("");
+                    fbsScanInput.requestFocus();
+                }
                 showFbsError(kizError, true);
                 return;
             }
         }
-        executeFbsAction("scan-any", "code", value);
+        // FIX: the screen already knows whether it expects a box or KIZ. Skip
+        // the universal classifier and its duplicate database reads.
+        executeFbsAction(
+            FbsTaskSafety.scanActionForState(state),
+            FbsTaskSafety.scanFieldForState(state),
+            value
+        );
     }
 
     private void completeFbsAssembly() {
@@ -4962,14 +4974,14 @@ public class MainActivity extends Activity {
                     mainHandler.post(() -> reloadFbsAfterStaleTask(errorDetails.message));
                     return;
                 }
-                boolean clearRejectedBarcode = FbsTaskSafety.shouldClearRejectedBarcode(
+                boolean clearRejectedScan = FbsTaskSafety.shouldClearRejectedScan(
                     action,
                     submittedState,
                     response.code()
                 );
                 mainHandler.post(() -> {
-                    if (clearRejectedBarcode && fbsScanInput != null) {
-                        // FIX: a rejected product barcode must never remain in the
+                    if (clearRejectedScan && fbsScanInput != null) {
+                        // FIX: a rejected product barcode or KIZ must never remain in the
                         // scanner field and be submitted again by the operator.
                         fbsScanInput.setText("");
                         fbsScanInput.requestFocus();

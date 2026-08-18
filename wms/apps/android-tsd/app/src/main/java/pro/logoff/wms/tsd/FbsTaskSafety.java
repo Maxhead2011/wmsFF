@@ -12,18 +12,38 @@ final class FbsTaskSafety {
         return httpStatus == 409 && "FBS_TASK_STALE".equals(errorCode);
     }
 
-    // ADDED: Clear only a rejected product barcode. KIZ, authorization,
-    // throttling, server and stale-task errors must preserve their input.
-    static boolean shouldClearRejectedBarcode(
+    // FIX: clear only values which the server has actually rejected as scan
+    // data. Authorization, throttling, server and stale-task errors retain it.
+    static boolean shouldClearRejectedScan(
         String action,
         String state,
         int httpStatus
     ) {
-        if (httpStatus != 400 && httpStatus != 422) return false;
-        if (!"scan-any".equals(action) && !"scan-barcode".equals(action)) return false;
-        return "SCAN_BARCODE".equals(state)
+        boolean rejectedBarcode =
+            (httpStatus == 400 || httpStatus == 422) &&
+            ("scan-any".equals(action) || "scan-barcode".equals(action)) &&
+            ("SCAN_BARCODE".equals(state)
             || "SCAN_SOURCE_BARCODE".equals(state)
-            || "SCAN_RELABEL_BARCODE".equals(state);
+            || "SCAN_RELABEL_BARCODE".equals(state));
+        boolean rejectedKiz =
+            (httpStatus == 400 || httpStatus == 409 || httpStatus == 422) &&
+            ("scan-any".equals(action) || "scan-kiz".equals(action)) &&
+            "SCAN_KIZ".equals(state);
+        return rejectedBarcode || rejectedKiz;
+    }
+
+    // ADDED: keep state-aware scanner routing testable. Box and KIZ screens
+    // must not fall back to the slower universal classifier.
+    static String scanActionForState(String state) {
+        if ("SCAN_BOX".equals(state) || "PALLET_BOXES".equals(state)) return "scan-box";
+        if ("SCAN_KIZ".equals(state)) return "scan-kiz";
+        return "scan-any";
+    }
+
+    static String scanFieldForState(String state) {
+        if ("SCAN_BOX".equals(state) || "PALLET_BOXES".equals(state)) return "boxCode";
+        if ("SCAN_KIZ".equals(state)) return "kiz";
+        return "code";
     }
 
     static boolean matchesConfirmedBox(

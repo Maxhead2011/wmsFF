@@ -3240,7 +3240,11 @@ describe('MarketplaceConnectionsService', () => {
       requiresCargoPlaces: true,
     });
 
-    await (service as any).loadFbsTsdRequestOrders('client-1', 'request-32');
+    await (service as any).loadFbsTsdRequestOrders(
+      'client-1',
+      'request-32',
+      ['sku-in-scanned-box'],
+    );
 
     expect(prisma.clientMarketplaceConnection.findMany).toHaveBeenCalledWith({
       where: expect.not.objectContaining({ requestId: expect.anything() }),
@@ -3248,7 +3252,10 @@ describe('MarketplaceConnectionsService', () => {
       orderBy: expect.any(Array),
     });
     expect(prisma.fbsOrderRequestLink.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ requestId: 'request-32' }),
+      where: expect.objectContaining({
+        requestId: 'request-32',
+        lastSkuId: { in: ['sku-in-scanned-box'] },
+      }),
     }));
   });
 
@@ -3292,7 +3299,7 @@ describe('MarketplaceConnectionsService', () => {
         aggregate: vi.fn().mockResolvedValue({ _sum: { itemCount: 0 } }),
       },
       stockBalance: {
-        findMany: vi.fn().mockResolvedValue([]),
+        findMany: vi.fn().mockResolvedValue([{ skuId: 'sku-black', quantity: 30 }]),
         aggregate: vi.fn().mockResolvedValue({ _sum: { quantity: 30 } }),
       },
       $transaction: vi.fn(async (callback: (client: typeof tx) => Promise<unknown>) => callback(tx)),
@@ -3359,7 +3366,7 @@ describe('MarketplaceConnectionsService', () => {
     });
     // ADDED: regression — a direct box scan must stay inside the selected local
     // request and must not wait for a Wildberries network refresh.
-    expect(loadSavedOrders).toHaveBeenCalledWith('client-1', 'request-32');
+    expect(loadSavedOrders).toHaveBeenCalledWith('client-1', 'request-32', ['sku-black']);
     expect(loadLiveOrders).not.toHaveBeenCalled();
   });
 

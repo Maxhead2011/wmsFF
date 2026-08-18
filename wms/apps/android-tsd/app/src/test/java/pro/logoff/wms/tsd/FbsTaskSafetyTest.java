@@ -1,5 +1,6 @@
 package pro.logoff.wms.tsd;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -11,25 +12,40 @@ import pro.logoff.wms.tsd.network.TsdFbsAssemblyResponse;
 
 public class FbsTaskSafetyTest {
     @Test
-    public void clearsOnlyRejectedProductBarcodes() {
+    public void routesBoxAndKizDirectlyWithoutUniversalClassification() {
+        // TEST: direct box scanning must stay on the fast specialized endpoint.
+        assertEquals("scan-box", FbsTaskSafety.scanActionForState("SCAN_BOX"));
+        assertEquals("boxCode", FbsTaskSafety.scanFieldForState("SCAN_BOX"));
+        assertEquals("scan-box", FbsTaskSafety.scanActionForState("PALLET_BOXES"));
+        assertEquals("scan-kiz", FbsTaskSafety.scanActionForState("SCAN_KIZ"));
+        assertEquals("kiz", FbsTaskSafety.scanFieldForState("SCAN_KIZ"));
+        assertEquals("scan-any", FbsTaskSafety.scanActionForState("SCAN_BARCODE"));
+    }
+
+    @Test
+    public void clearsRejectedBarcodesAndKizButKeepsSystemFailures() {
         // TEST: a wrong product barcode is immediately ready for the next scan.
-        assertTrue(FbsTaskSafety.shouldClearRejectedBarcode(
+        assertTrue(FbsTaskSafety.shouldClearRejectedScan(
             "scan-any",
             "SCAN_BARCODE",
             400
         ));
-        assertTrue(FbsTaskSafety.shouldClearRejectedBarcode(
+        assertTrue(FbsTaskSafety.shouldClearRejectedScan(
             "scan-any",
             "SCAN_RELABEL_BARCODE",
             422
         ));
 
-        // TEST: KIZ and retryable/system failures retain the scanned value.
-        assertFalse(FbsTaskSafety.shouldClearRejectedBarcode("scan-any", "SCAN_KIZ", 400));
-        assertFalse(FbsTaskSafety.shouldClearRejectedBarcode("scan-any", "SCAN_BARCODE", 401));
-        assertFalse(FbsTaskSafety.shouldClearRejectedBarcode("scan-any", "SCAN_BARCODE", 409));
-        assertFalse(FbsTaskSafety.shouldClearRejectedBarcode("scan-any", "SCAN_BARCODE", 429));
-        assertFalse(FbsTaskSafety.shouldClearRejectedBarcode("scan-any", "SCAN_BARCODE", 500));
+        // TEST: an invalid or conflicting KIZ is cleared as requested.
+        assertTrue(FbsTaskSafety.shouldClearRejectedScan("scan-kiz", "SCAN_KIZ", 400));
+        assertTrue(FbsTaskSafety.shouldClearRejectedScan("scan-kiz", "SCAN_KIZ", 409));
+        assertTrue(FbsTaskSafety.shouldClearRejectedScan("scan-kiz", "SCAN_KIZ", 422));
+
+        // TEST: authorization, throttling and server failures retain the scan.
+        assertFalse(FbsTaskSafety.shouldClearRejectedScan("scan-kiz", "SCAN_KIZ", 401));
+        assertFalse(FbsTaskSafety.shouldClearRejectedScan("scan-kiz", "SCAN_KIZ", 429));
+        assertFalse(FbsTaskSafety.shouldClearRejectedScan("scan-kiz", "SCAN_KIZ", 500));
+        assertFalse(FbsTaskSafety.shouldClearRejectedScan("scan-any", "SCAN_BARCODE", 409));
     }
 
     @Test
