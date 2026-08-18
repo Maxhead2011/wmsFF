@@ -3559,8 +3559,8 @@ function FbsCargoPackingView({
         <details
           className={`fbs-cargo-supply${supply.readyToDeliver ? ' is-ready' : ''}${supply.ignored ? ' is-ignored' : ''}`}
           key={supply.id}
-          open={!supply.readyToDeliver && !supply.ignored}
         >
+          {/* FIX: состояние раскрытия принадлежит пользователю и не сбрасывается кнопкой «Обновить». */}
           <summary>
             <span>
               <strong>Поставка {supply.supplyId}</strong>
