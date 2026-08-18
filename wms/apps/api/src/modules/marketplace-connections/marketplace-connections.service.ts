@@ -44,6 +44,11 @@ import type { ApplyFbsRelabelReconciliationDto } from './dto/apply-fbs-relabel-r
 import type { FbsPassDto } from './dto/fbs-pass.dto';
 import type { FbsStockPublicationBulkDto } from './dto/fbs-stock-publication-bulk.dto';
 import type { FbsStockPublicationDto } from './dto/fbs-stock-publication.dto';
+import type {
+  CreateFbsStockIntegrationKeyDto,
+  SyncFbsStockAllocationDto,
+  UpdateFbsStockAllocationDto,
+} from './dto/fbs-stock-allocation.dto';
 import type { ReconcileFbsStockItemDto } from './dto/reconcile-fbs-stock-item.dto';
 import {
   FbsSyncConflictResolutionAction,
@@ -63,6 +68,8 @@ import {
   FBS_UNLIMITED_CARGO_PLACE_CAPACITY,
 } from './fbs.constants';
 import { buildFbsPrimaryProcessingBreakdown } from './fbs-primary-processing';
+import { allocateFbsStock } from './fbs-stock-allocation';
+import { FbsStockAllocationService } from './fbs-stock-allocation.service';
 import {
   buildFbsCargoPlaceStickersPdf,
   buildFbsPickListPdf,
@@ -484,6 +491,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     private readonly inventoryLock?: InventoryLockService,
     private readonly logistics?: LogisticsService,
     private readonly boxCodes?: BoxCodePolicyService,
+    private readonly stockAllocation?: FbsStockAllocationService,
   ) {}
 
   pruneExpiredRuntimeCaches(now = Date.now()) {
@@ -719,6 +727,21 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     });
 
     for (const connection of connections) {
+      // ADDED: Only explicitly enabled policies enter the multi-warehouse path.
+      // Every existing cabinet continues through the unchanged legacy block below.
+      const allocationPolicy = this.stockAllocation
+        ? await this.stockAllocation.activePolicy(connection.id)
+        : null;
+      if (allocationPolicy) {
+        try {
+          await this.syncAllocatedFbsStocksForConnection(connection.clientId, connection.id);
+        } catch (caught) {
+          this.logger.warn(
+            `Automatic allocated FBS stock sync failed for connection ${connection.id}: ${marketplaceErrorText(caught)}`,
+          );
+        }
+        continue;
+      }
       const wbWarehouseId = connection.fbsWarehouseId;
       if (!wbWarehouseId) continue;
       const publications = connection.fbsStockPublications.filter(
@@ -815,6 +838,180 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         );
       }
     }
+  }
+
+  private async syncAllocatedFbsStocksForConnection(clientId: string, connectionId: string) {
+    const allocation = this.requireFbsStockAllocationService();
+    const [connection, policy] = await Promise.all([
+      this.prisma.clientMarketplaceConnection.findFirst({
+        where: {
+          id: connectionId,
+          clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          isActive: true,
+        },
+      }),
+      allocation.activePolicy(connectionId),
+    ]);
+    if (!connection) throw new NotFoundException('Подключение Wildberries не найдено.');
+    if (!policy) throw new BadRequestException('Распределение остатков не включено.');
+    const shares = policy.shares.map((share) => ({
+      warehouseId: share.warehouseId,
+      percent: share.percent,
+      isPrimary: share.isPrimary,
+    }));
+    if (shares.length === 0 || shares.reduce((sum, share) => sum + share.percent, 0) !== 100) {
+      throw new BadRequestException('Сумма долей рабочих складов должна быть 100%.');
+    }
+    const primaryWarehouseId =
+      policy.primaryWarehouseId ||
+      shares.find((share) => share.isPrimary)?.warehouseId ||
+      connection.fbsWarehouseId;
+    if (!primaryWarehouseId) throw new BadRequestException('Выберите основной склад WB.');
+
+    const publications = await this.prisma.fbsStockPublication.findMany({
+      where: { clientId, connectionId },
+      include: { sku: { select: { id: true, marketplaceProductId: true } } },
+      orderBy: { createdAt: 'asc' },
+    });
+    const sourceBySku = new Map<string, typeof publications[number]>();
+    publications.forEach((publication) => {
+      const current = sourceBySku.get(publication.skuId);
+      if (
+        !current ||
+        publication.warehouseId === primaryWarehouseId ||
+        (!current.enabled && publication.enabled)
+      ) {
+        sourceBySku.set(publication.skuId, publication);
+      }
+    });
+    const sourcePublications = [...sourceBySku.values()].filter((publication) => publication.enabled);
+    if (sourcePublications.length === 0) {
+      await allocation.markSync(policy.id, null);
+      return { synced: 0, products: 0, warehouses: shares.length, publishedAmount: 0 };
+    }
+
+    const executionWarehouseId = await this.resolveFbsExecutionWarehouseId(
+      clientId,
+      connection.fbsExecutionWarehouseId,
+    );
+    const stockPlan = await this.calculateFbsRelabelStockPlan(
+      clientId,
+      executionWarehouseId,
+      connection.id,
+      primaryWarehouseId,
+    );
+    const overrideBySku = new Map(policy.overrides.map((row) => [row.skuId, row.requestedAmount]));
+    const preparedByWarehouse = new Map<
+      string,
+      Array<{
+        publicationId: string;
+        skuId: string;
+        chrtId: number;
+        amount: number;
+        wmsAmount: number;
+        needsSync: boolean;
+      }>
+    >();
+
+    for (const source of sourcePublications) {
+      const ids = wildberriesStockIds(source.sku.marketplaceProductId);
+      if (!ids) continue;
+      const quantity = stockPlan.quantities.get(source.skuId);
+      const relabeling = stockPlan.meta.get(source.skuId);
+      const configuredLimit = overrideBySku.has(source.skuId)
+        ? overrideBySku.get(source.skuId)!
+        : relabeling?.isTarget && source.relabelManualAmount != null
+          ? source.relabelManualAmount
+          : source.saleLimit;
+      const totalAmount = fbsPublicationAmounts(
+        true,
+        configuredLimit,
+        quantity?.sellable ?? 0,
+      ).targetAmount;
+      const split = allocateFbsStock(totalAmount, policy.lowStockThreshold, shares);
+      for (const target of split) {
+        const publication = await this.prisma.fbsStockPublication.upsert({
+          where: {
+            connectionId_warehouseId_skuId: {
+              connectionId,
+              warehouseId: target.warehouseId,
+              skuId: source.skuId,
+            },
+          },
+          create: {
+            clientId,
+            connectionId,
+            warehouseId: target.warehouseId,
+            skuId: source.skuId,
+            enabled: true,
+            lastWmsAmount: quantity?.sellable ?? 0,
+          },
+          update: {
+            enabled: true,
+            lastWmsAmount: quantity?.sellable ?? 0,
+          },
+        });
+        const needsSync =
+          publication.lastSyncedAmount !== target.amount ||
+          Boolean(publication.lastError) ||
+          !publication.lastSyncedAt ||
+          Date.now() - publication.lastSyncedAt.getTime() >= FBS_AUTO_RECONCILE_INTERVAL_MS;
+        const list = preparedByWarehouse.get(target.warehouseId) ?? [];
+        list.push({
+          publicationId: publication.id,
+          skuId: source.skuId,
+          chrtId: ids.chrtId,
+          amount: target.amount,
+          wmsAmount: quantity?.sellable ?? 0,
+          needsSync,
+        });
+        preparedByWarehouse.set(target.warehouseId, list);
+      }
+    }
+
+    let synced = 0;
+    try {
+      for (const [warehouseId, rows] of preparedByWarehouse) {
+        const changed = rows.filter((row) => row.needsSync);
+        for (const batch of chunks(changed, 1000)) {
+          await this.putWildberriesStocks(
+            connection.apiKey,
+            warehouseId,
+            batch.map((row) => ({ chrtId: row.chrtId, amount: row.amount })),
+          );
+          const syncedAt = new Date();
+          await this.prisma.$transaction(
+            batch.map((row) =>
+              this.prisma.fbsStockPublication.update({
+                where: { id: row.publicationId },
+                data: {
+                  lastWmsAmount: row.wmsAmount,
+                  lastWbAmount: row.amount,
+                  lastSyncedAmount: row.amount,
+                  lastSyncedAt: syncedAt,
+                  lastError: null,
+                },
+              }),
+            ),
+          );
+          synced += batch.length;
+        }
+      }
+      await allocation.markSync(policy.id, null);
+    } catch (caught) {
+      const message = marketplaceErrorText(caught);
+      await allocation.markSync(policy.id, message);
+      throw caught;
+    }
+    const rows = [...preparedByWarehouse.values()].flat();
+    return {
+      synced,
+      products: sourcePublications.length,
+      warehouses: preparedByWarehouse.size,
+      publishedAmount: rows.reduce((sum, row) => sum + row.amount, 0),
+      syncedAt: new Date().toISOString(),
+    };
   }
 
   private async resolveFbsExecutionWarehouseId(
@@ -4905,6 +5102,118 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       context.connectedWarehouseName,
       scopedExecutionWarehouseId,
     );
+  }
+
+  // ADDED: Configuration and external integration share one calculation path.
+  async listFbsStockAllocation(clientIdValue: string, connectionIdValue: string, user: AuthUser) {
+    const clientId = requiredFbsTsdText(clientIdValue, 'Выберите клиента.');
+    const connectionId = requiredFbsTsdText(connectionIdValue, 'Выберите кабинет Wildberries.');
+    this.clientScopes.requireClientAccess(user, clientId, 'read');
+    return this.listExternalFbsStockAllocation(clientId, connectionId);
+  }
+
+  async listExternalFbsStockAllocation(clientId: string, connectionId: string) {
+    const allocation = this.requireFbsStockAllocationService();
+    const demand = await this.fbsStockAllocationDemand(clientId, connectionId, 30);
+    return allocation.list(clientId, connectionId, demand);
+  }
+
+  async updateFbsStockAllocation(dto: UpdateFbsStockAllocationDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    this.clientScopes.requireClientAccess(
+      user,
+      clientId,
+      user.roleCodes.includes('CLIENT') ? 'read' : 'write',
+    );
+    const source = user.roleCodes.includes('CLIENT') ? 'CLIENT_PORTAL' : 'WMS';
+    const saved = await this.requireFbsStockAllocationService().saveInternal(dto, {
+      source,
+      userId: user.id,
+    });
+    if (dto.enabled && !saved.duplicate) {
+      await this.syncAllocatedFbsStocksForConnection(clientId, dto.connectionId);
+    }
+    return saved;
+  }
+
+  async syncFbsStockAllocation(dto: SyncFbsStockAllocationDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    this.clientScopes.requireClientAccess(
+      user,
+      clientId,
+      user.roleCodes.includes('CLIENT') ? 'read' : 'write',
+    );
+    return this.syncAllocatedFbsStocksForConnection(clientId, dto.connectionId.trim());
+  }
+
+  async syncExternalFbsStockAllocation(clientId: string, connectionId: string) {
+    return this.syncAllocatedFbsStocksForConnection(clientId, connectionId);
+  }
+
+  async createFbsStockIntegrationKey(dto: CreateFbsStockIntegrationKeyDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    this.clientScopes.requireClientAccess(
+      user,
+      clientId,
+      user.roleCodes.includes('CLIENT') ? 'read' : 'write',
+    );
+    return this.requireFbsStockAllocationService().createApiKey(clientId, dto.name, user.id);
+  }
+
+  async revokeFbsStockIntegrationKey(clientIdValue: string, keyId: string, user: AuthUser) {
+    const clientId = requiredFbsTsdText(clientIdValue, 'Выберите клиента.');
+    this.clientScopes.requireClientAccess(
+      user,
+      clientId,
+      user.roleCodes.includes('CLIENT') ? 'read' : 'write',
+    );
+    return this.requireFbsStockAllocationService().revokeApiKey(clientId, keyId, user.id);
+  }
+
+  async acknowledgeFbsStockAllocationChange(
+    clientIdValue: string,
+    changeId: string,
+    user: AuthUser,
+  ) {
+    const clientId = requiredFbsTsdText(clientIdValue, 'Выберите клиента.');
+    this.clientScopes.requireClientAccess(user, clientId, 'write');
+    return this.requireFbsStockAllocationService().acknowledgeChange(clientId, changeId, user.id);
+  }
+
+  private requireFbsStockAllocationService() {
+    if (!this.stockAllocation) {
+      throw new Error('FbsStockAllocationService is not configured.');
+    }
+    return this.stockAllocation;
+  }
+
+  private async fbsStockAllocationDemand(clientId: string, connectionId: string, periodDays: number) {
+    const cached = this.fbsOrdersCache.get(clientId);
+    const orders = cached?.value ?? (await this.loadFbsOrders(clientId));
+    if (!cached) {
+      this.fbsOrdersCache.set(clientId, {
+        expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
+        value: orders,
+      });
+    }
+    const cutoff = Date.now() - Math.max(7, Math.min(90, periodDays)) * 24 * 60 * 60 * 1000;
+    const result = new Map<string, number>();
+    orders.orders.forEach((order) => {
+      if (
+        order.connectionId !== connectionId ||
+        order.marketplace !== MarketplaceType.WILDBERRIES ||
+        order.category === 'cancelled' ||
+        !order.warehouseId ||
+        (order.createdAt && Date.parse(order.createdAt) < cutoff)
+      ) {
+        return;
+      }
+      result.set(
+        order.warehouseId,
+        (result.get(order.warehouseId) ?? 0) + Math.max(1, order.itemCount),
+      );
+    });
+    return result;
   }
 
   async connectFbsStockWarehouse(dto: FbsStockSyncDto, user: AuthUser) {

@@ -9,6 +9,7 @@ import {
   Calculator,
   CarFront,
   CalendarDays,
+  ChartPie,
   ChevronDown,
   ChevronRight,
   CircleCheckBig,
@@ -94,6 +95,7 @@ import {
   type UpdateFbsBillingSettingsPayload,
 } from '../../lib/api';
 import { FbsCostCalculator } from './FbsCostCalculator';
+import { FbsStockAllocationView } from './FbsStockAllocationView';
 import './fbs.css';
 import { useRememberedClientId, validRememberedClientId } from '../../lib/rememberedClient';
 
@@ -136,6 +138,7 @@ const FBS_HISTORY_STATE_KEY = '__wmsFbsMarketplace';
 type FbsView =
   | 'active'
   | 'stocks'
+  | 'allocation'
   | 'cargo'
   | 'shipped'
   | 'cancelled'
@@ -183,6 +186,13 @@ const fbsViews = [
     description: 'Отдельное управление публикацией товаров: «Продавать» или «Не продавать» в Wildberries.',
     icon: PackageCheck,
     accent: 'green',
+  },
+  {
+    id: 'allocation' as const,
+    title: 'Распределение остатков',
+    description: 'Проценты по рабочим складам WB, рекомендация по продажам и API внешней системы учёта.',
+    icon: ChartPie,
+    accent: 'blue',
   },
   {
     id: 'cargo' as const,
@@ -249,7 +259,7 @@ const fbsViews = [
   },
 ];
 
-const ozonHiddenViews = new Set<FbsView>(['stocks', 'cargo', 'report', 'passes']);
+const ozonHiddenViews = new Set<FbsView>(['stocks', 'allocation', 'cargo', 'report', 'passes']);
 
 export function FbsPanel({ session }: FbsPanelProps) {
   const [marketplace, setMarketplace] = useState<FbsMarketplace | null>(null);
@@ -600,6 +610,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
   const tileCounts: Record<FbsView, number | string> = {
     active: activeOrdersTotal,
     stocks: 'WMS → WB',
+    allocation: '100%',
     cargo: cargoState.data?.supplies.filter((supply) => !supply.readyToDeliver && !supply.ignored).length ?? 0,
     shipped: data?.counts.shipped ?? 0,
     cancelled: data?.counts.cancelled ?? 0,
@@ -1435,6 +1446,12 @@ export function FbsPanel({ session }: FbsPanelProps) {
           <FbsPassesView clientId={selectedClientId} session={session} />
         ) : activeView === 'stocks' ? (
           <FbsStocksView clientId={selectedClientId} session={session} search={search} />
+        ) : activeView === 'allocation' ? (
+          <FbsStockAllocationView
+            clientId={selectedClientId}
+            connectionId={data?.connections.find((connection) => connection.marketplace === 'WILDBERRIES')?.id ?? ''}
+            session={session}
+          />
         ) : activeView === 'cargo' ? (
           <FbsCargoPackingView
             state={cargoState}
@@ -3716,7 +3733,8 @@ function FbsOrdersView({
 }: {
   data: ClientFbsOrders | null;
   search: string;
-  view: Exclude<FbsView, 'stocks' | 'cargo' | 'cost' | 'calculator' | 'pricing' | 'passes' | 'report'>;
+  // FIX: the allocation tile is not an orders-table view.
+  view: Exclude<FbsView, 'stocks' | 'cargo' | 'cost' | 'calculator' | 'pricing' | 'passes' | 'report' | 'allocation'>;
   selectedOrderKeys: Set<string>;
   onSelectionChange: (keys: Set<string>) => void;
   orderAction: 'assemble' | 'reship' | 'move' | 'deliver' | 'change-destination' | 'cancel' | 'remove-cancelled' | 'stickers' | 'cargo' | 'supply' | 'request' | 'recover-missing-requests' | 'pick-list' | 'emergency-assembly' | null;

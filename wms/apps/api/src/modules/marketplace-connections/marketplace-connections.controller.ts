@@ -10,6 +10,11 @@ import { FbsOrderSelectionDto } from './dto/fbs-order-selection.dto';
 import { FbsPassDto } from './dto/fbs-pass.dto';
 import { FbsStockPublicationBulkDto } from './dto/fbs-stock-publication-bulk.dto';
 import { FbsStockPublicationDto } from './dto/fbs-stock-publication.dto';
+import {
+  CreateFbsStockIntegrationKeyDto,
+  SyncFbsStockAllocationDto,
+  UpdateFbsStockAllocationDto,
+} from './dto/fbs-stock-allocation.dto';
 import { ReconcileFbsStockItemDto } from './dto/reconcile-fbs-stock-item.dto';
 import { FbsStockSyncDto } from './dto/fbs-stock-sync.dto';
 import { QuoteFbsCalculatorDto } from './dto/quote-fbs-calculator.dto';
@@ -251,6 +256,64 @@ export class MarketplaceConnectionsController {
   @RequirePermissions()
   connectFbsStockWarehouse(@Body() dto: FbsStockSyncDto, @CurrentUser() user: AuthUser) {
     return this.connections.connectFbsStockWarehouse(dto, user);
+  }
+
+  // ADDED: Optional multi-warehouse allocation; disabled policies do not affect legacy stock sync.
+  @Get('fbs/stocks/allocation')
+  @RequirePermissions()
+  listFbsStockAllocation(
+    @CurrentUser() user: AuthUser,
+    @Query('clientId') clientId: string,
+    @Query('connectionId') connectionId: string,
+  ) {
+    return this.connections.listFbsStockAllocation(clientId, connectionId, user);
+  }
+
+  @Put('fbs/stocks/allocation')
+  @RequirePermissions()
+  updateFbsStockAllocation(
+    @Body() dto: UpdateFbsStockAllocationDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.connections.updateFbsStockAllocation(dto, user);
+  }
+
+  @Post('fbs/stocks/allocation/sync')
+  @RequirePermissions()
+  syncFbsStockAllocation(
+    @Body() dto: SyncFbsStockAllocationDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.connections.syncFbsStockAllocation(dto, user);
+  }
+
+  @Post('fbs/stocks/allocation/api-keys')
+  @RequirePermissions()
+  createFbsStockIntegrationKey(
+    @Body() dto: CreateFbsStockIntegrationKeyDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.connections.createFbsStockIntegrationKey(dto, user);
+  }
+
+  @Delete('fbs/stocks/allocation/api-keys/:keyId')
+  @RequirePermissions()
+  revokeFbsStockIntegrationKey(
+    @Param('keyId') keyId: string,
+    @Query('clientId') clientId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.connections.revokeFbsStockIntegrationKey(clientId, keyId, user);
+  }
+
+  @Post('fbs/stocks/allocation/changes/:changeId/acknowledge')
+  @RequirePermissions()
+  acknowledgeFbsStockAllocationChange(
+    @Param('changeId') changeId: string,
+    @Body() dto: { clientId: string },
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.connections.acknowledgeFbsStockAllocationChange(dto.clientId, changeId, user);
   }
 
   @Get(':id/fbs-warehouse-routes')
