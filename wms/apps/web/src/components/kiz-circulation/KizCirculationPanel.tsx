@@ -273,6 +273,8 @@ export function KizCirculationPanel({ session }: Props) {
     return <div className="kizc-loading"><RefreshCw className="spin" /> Загружаю контур погашения КИЗ…</div>;
   }
 
+  // FIX: keep the primary action before the client selector so the selector
+  // remains the last flexible column and cannot be pushed outside the header.
   return (
     <section className="kizc-panel" aria-label="Погашение КИЗ">
       <header className="kizc-header">
@@ -281,16 +283,16 @@ export function KizCirculationPanel({ session }: Props) {
           <h2>Погашение КИЗ</h2>
           <p>Сверка продаж маркетплейсов с ГИС МТ, погашение и контролируемый возврат в оборот.</p>
         </div>
+        <button className="kizc-primary" type="button" disabled={!clientId || Boolean(busy)} onClick={() => void sync()}>
+          <CloudDownload className={busy === 'sync' ? 'spin' : ''} size={18} />
+          {busy === 'sync' ? 'Сверяю статусы' : 'Получить продажи'}
+        </button>
         <label className="kizc-client-select">
           <span>Клиент</span>
           <select value={clientId} onChange={(event) => { setClientId(event.target.value); setSelectedIds([]); }}>
             {clients.map((client) => <option key={client.id} value={client.id}>{client.code} · {client.name}</option>)}
           </select>
         </label>
-        <button className="kizc-primary" type="button" disabled={!clientId || Boolean(busy)} onClick={() => void sync()}>
-          <CloudDownload className={busy === 'sync' ? 'spin' : ''} size={18} />
-          {busy === 'sync' ? 'Сверяю статусы' : 'Получить продажи'}
-        </button>
       </header>
 
       {error ? <div className="kizc-alert kizc-alert--error"><TriangleAlert size={18} /> <span>{error}</span></div> : null}

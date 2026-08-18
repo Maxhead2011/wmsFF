@@ -4,13 +4,14 @@
 .kizc-panel button:disabled { cursor: not-allowed; opacity: .58; }
 .kizc-panel button:focus-visible, .kizc-panel input:focus-visible, .kizc-panel select:focus-visible, .kizc-panel textarea:focus-visible { outline: 3px solid rgba(37,99,235,.24); outline-offset: 2px; }
 
-.kizc-header { display: grid; grid-template-columns: auto minmax(260px,1fr) minmax(240px,340px) auto; align-items: center; gap: 14px; padding: 20px; border-radius: 16px; background: #172033; color: #fff; box-shadow: 0 18px 46px rgba(15,23,42,.18); }
+.kizc-header { display: grid; grid-template-columns: auto minmax(260px,1fr) auto minmax(220px,340px); align-items: center; gap: 14px; padding: 20px; border-radius: 16px; background: #172033; color: #fff; box-shadow: 0 18px 46px rgba(15,23,42,.18); }
 .kizc-header__mark { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 14px; background: #d71920; color: #fff; }
 .kizc-header h2, .kizc-header p, .kizc-queue h3, .kizc-compose h3, .kizc-settings h3, .kizc-batches h3 { margin: 0; }
 .kizc-header h2 { font-size: 25px; letter-spacing: -.025em; }
 .kizc-header p { max-width: 68ch; margin-top: 5px; color: #cbd5e1; font-size: 12px; line-height: 1.45; }
-.kizc-client-select { display: grid; gap: 6px; color: #cbd5e1; font-size: 11px; font-weight: 800; }
-.kizc-client-select select { min-height: 42px; border: 1px solid #475569; border-radius: 10px; background: #0f172a; color: #fff; padding: 0 11px; }
+.kizc-client-select { display: grid; min-width: 0; gap: 6px; color: #cbd5e1; font-size: 11px; font-weight: 800; }
+/* FIX: long client names stay inside the header instead of widening the grid. */
+.kizc-client-select select { width: 100%; min-width: 0; max-width: 100%; min-height: 42px; overflow: hidden; border: 1px solid #475569; border-radius: 10px; background: #0f172a; color: #fff; padding: 0 11px; text-overflow: ellipsis; }
 .kizc-primary, .kizc-secondary, .kizc-danger { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; border: 0; border-radius: 9px; padding: 0 14px; font-size: 12px; font-weight: 900; white-space: nowrap; }
 .kizc-primary { background: #d71920; color: #fff; box-shadow: 0 9px 22px rgba(215,25,32,.2); }
 .kizc-secondary { border: 1px solid #cfd7e3; background: #fff; color: #27364d; }
