@@ -7668,7 +7668,7 @@ describe('MarketplaceConnectionsService', () => {
     ).rejects.toMatchObject({ name: 'FbsWarehouseExcludedError' });
   });
 
-  it('batches large pallet-sort reservation lookups below the PostgreSQL bind-variable limit', async () => {
+  it('loads large pallet-sort reservation sets with IN batches instead of composite OR branches', async () => {
     const findMany = vi.fn().mockResolvedValue([]);
     const prisma = {
       client: {
@@ -7693,10 +7693,13 @@ describe('MarketplaceConnectionsService', () => {
       (service as any).syncFbsPalletSortReservations('client-1', orders),
     ).resolves.toBeInstanceOf(Map);
 
-    // ADDED: three batches for the initial lookup and three for the final snapshot.
-    expect(findMany).toHaveBeenCalledTimes(6);
+    // FIX: one initial and one final query; no 4,000-branch SQL expression.
+    expect(findMany).toHaveBeenCalledTimes(2);
     for (const [query] of findMany.mock.calls) {
-      expect(query.where.OR.length).toBeLessThanOrEqual(4_000);
+      expect(query.where.OR).toBeUndefined();
+      expect(query.where.connectionId).toEqual({ in: ['connection-1'] });
+      expect(query.where.orderId.in).toHaveLength(8_001);
+      expect(query.where.orderId.in.length).toBeLessThanOrEqual(20_000);
     }
   });
 

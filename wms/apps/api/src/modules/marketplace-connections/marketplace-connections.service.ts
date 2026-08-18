@@ -19501,22 +19501,31 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         order,
       ]),
     );
+    const relevantConnectionIds = uniqueStrings(
+      relevantOrders.map((order) => order.connectionId),
+    );
+    const relevantOrderIds = uniqueStrings(
+      relevantOrders.map((order) => order.id),
+    );
     const existingTaskBatches = [];
-    // FIX: each composite OR branch adds two bind variables. Large WB cabinets
-    // can exceed PostgreSQL's 32767-variable limit unless the lookup is batched.
-    for (const orderBatch of chunks(relevantOrders, 4_000)) {
+    // FIX: Thousands of composite OR branches made PostgreSQL spend tens of
+    // seconds planning each lookup. Two IN lists are fast; exact connection +
+    // order pairs are retained by the in-memory key filter below.
+    for (const orderIdBatch of chunks(relevantOrderIds, 20_000)) {
       existingTaskBatches.push(await this.prisma.fbsTsdAssembly.findMany({
         where: {
           clientId,
           marketplace: MarketplaceType.WILDBERRIES,
-          OR: orderBatch.map((order) => ({
-            connectionId: order.connectionId,
-            orderId: order.id,
-          })),
+          connectionId: { in: relevantConnectionIds },
+          orderId: { in: orderIdBatch },
         },
       }));
     }
-    const existingTasks = existingTaskBatches.flat();
+    const existingTasks = existingTaskBatches
+      .flat()
+      .filter((task) =>
+        orderByKey.has(selectionKey(task.connectionId, task.orderId)),
+      );
     const taskByKey = new Map(
       existingTasks.map((task) => [
         selectionKey(task.connectionId, task.orderId),
@@ -20108,15 +20117,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
 
     const taskBatches = [];
-    for (const orderBatch of chunks(relevantOrders, 4_000)) {
+    for (const orderIdBatch of chunks(relevantOrderIds, 20_000)) {
       taskBatches.push(await this.prisma.fbsTsdAssembly.findMany({
         where: {
           clientId,
           marketplace: MarketplaceType.WILDBERRIES,
-          OR: orderBatch.map((order) => ({
-            connectionId: order.connectionId,
-            orderId: order.id,
-          })),
+          connectionId: { in: relevantConnectionIds },
+          orderId: { in: orderIdBatch },
         },
         select: {
           connectionId: true,
@@ -20131,7 +20138,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         },
       }));
     }
-    const tasks = taskBatches.flat();
+    const tasks = taskBatches
+      .flat()
+      .filter((task) =>
+        orderByKey.has(selectionKey(task.connectionId, task.orderId)),
+      );
     const locationBoxIds = uniqueStrings(
       tasks.map((task) => task.reservedBoxId ?? task.boxId ?? ''),
     );
