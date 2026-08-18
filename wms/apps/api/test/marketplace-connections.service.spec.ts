@@ -7477,7 +7477,6 @@ describe('MarketplaceConnectionsService', () => {
     const tasks: Array<Record<string, any>> = [];
     const fbsTsdAssembly = {
       findMany: vi.fn(async ({ select }: { select?: { skuId?: boolean; status?: boolean } }) => {
-        if (!select) return [];
         return tasks;
       }),
       create: vi.fn(async ({ data }: { data: Record<string, any> }) => {
@@ -7486,6 +7485,7 @@ describe('MarketplaceConnectionsService', () => {
         return task;
       }),
       update: vi.fn(),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     };
     const prisma = {
       client: {
@@ -7568,6 +7568,27 @@ describe('MarketplaceConnectionsService', () => {
       status: 'WAITING_STOCK',
       boxCode: null,
     });
+
+    await (service as any).syncFbsPalletSortReservations(
+      'client-1',
+      [
+        fbsOrder({
+          id: '5355000001',
+          request,
+          warehouseId: 'wb-warehouse-1',
+          officeId: 'wb-office-1',
+        }),
+        fbsOrder({
+          id: '5355000002',
+          request,
+          warehouseId: 'wb-warehouse-1',
+          officeId: 'wb-office-1',
+        }),
+      ],
+    );
+
+    // ADDED: An unchanged second refresh performs no per-order UPDATE.
+    expect(fbsTsdAssembly.updateMany).not.toHaveBeenCalled();
   });
 
   it('routes one WB seller warehouse to its own branch instead of the central branch', async () => {

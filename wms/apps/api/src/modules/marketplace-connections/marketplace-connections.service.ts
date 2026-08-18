@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import {
   BadRequestException,
   ConflictException,
@@ -19830,6 +19831,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           completedAt: null,
         };
         try {
+          // FIX: A refresh used to rewrite every unchanged waiting/reserved
+          // task one by one. The bulk snapshot already contains this task, so
+          // an identical row needs no database round-trip.
+          if (existing && fbsReservationTaskDataUnchanged(existing, taskData)) {
+            continue;
+          }
           if (existing) {
             const changed = await this.prisma.fbsTsdAssembly.updateMany({
               where: {
@@ -20041,6 +20048,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       };
 
       try {
+        // FIX: Keep stable pallet-sort reservations read-only during refresh.
+        if (existing && fbsReservationTaskDataUnchanged(existing, taskData)) {
+          continue;
+        }
         if (existing) {
           const changed = await this.prisma.fbsTsdAssembly.updateMany({
             where: {
@@ -23731,6 +23742,17 @@ function fbsAutomaticReservationId(
   >,
 ) {
   return `AUTO:${order.marketplace}:${order.connectionId}:${order.id}`;
+}
+
+function fbsReservationTaskDataUnchanged(
+  existing: FbsTsdAssemblyRecord,
+  data: Record<string, unknown>,
+) {
+  const row = existing as unknown as Record<string, unknown>;
+  const current = Object.fromEntries(
+    Object.keys(data).map((key) => [key, row[key]]),
+  );
+  return isDeepStrictEqual(current, data);
 }
 
 function fbsTsdStockSourceHasAvailableStock(
