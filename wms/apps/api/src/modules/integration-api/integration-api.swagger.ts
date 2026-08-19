@@ -135,7 +135,8 @@ export const integrationAdjustmentSchema: SchemaObject = {
         idempotencyKey: { type: 'string' },
         status: { type: 'string', enum: ['APPLIED', 'ALREADY_APPLIED', 'NO_CHANGE'] },
         skuId: { type: 'string', format: 'uuid' },
-        box: { type: 'string' },
+        // FIX: для бескоробного остатка API возвращает null.
+        box: { type: 'string', nullable: true },
         previousQuantity: { type: 'integer' },
         countedQuantity: { type: 'integer' },
         delta: { type: 'integer' },

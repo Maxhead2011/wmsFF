@@ -100,7 +100,8 @@ export type AdjustInventoryInput = {
   clientId: string;
   skuId?: string;
   barcode?: string;
-  boxCode: string;
+  // FIX: отсутствие boxCode допустимо только для клиента storesWithoutBoxes.
+  boxCode?: string;
   countedQuantity: number;
   status?: StockStatus;
   idempotencyKey: string;
@@ -1871,13 +1872,33 @@ export class StockOperationsService {
       }
 
       const sku = await this.resolveSku(tx, dto);
-      const box = await this.resolveBox(tx, dto.clientId, dto.boxCode, warehouseId);
+      const boxCode = dto.boxCode?.trim() || undefined;
+      const client = !boxCode
+        ? await tx.client.findUnique({
+            where: { id: dto.clientId },
+            select: { storesWithoutBoxes: true },
+          })
+        : null;
+      if (!boxCode && !client?.storesWithoutBoxes) {
+        throw new BadRequestException(
+          'Для этого клиента обязателен boxCode. Корректировка без короба разрешена только при бескоробном учете.',
+        );
+      }
+      // ADDED: бескоробный остаток остается в том же складе API-ключа с boxId/palletId = null.
+      const box = boxCode
+        ? await this.resolveBox(tx, dto.clientId, boxCode, warehouseId)
+        : null;
+      const balanceWarehouseId = box
+        ? this.requireBalanceWarehouseId(box.warehouseId)
+        : this.requireBalanceWarehouseId(warehouseId);
       const status = dto.status ?? StockStatus.AVAILABLE;
       const balance = await tx.stockBalance.findFirst({
         where: {
           clientId: dto.clientId,
           skuId: sku.id,
-          boxId: box.id,
+          ...(box
+            ? { boxId: box.id }
+            : { boxId: null, palletId: null }),
           warehouseId,
           status,
         },
@@ -1887,11 +1908,11 @@ export class StockOperationsService {
 
       if (delta > 0) {
         await this.incrementTargetBalance(tx, {
-          warehouseId: this.requireBalanceWarehouseId(box.warehouseId),
+          warehouseId: balanceWarehouseId,
           clientId: dto.clientId,
           skuId: sku.id,
-          boxId: box.id,
-          palletId: box.palletId,
+          boxId: box?.id ?? null,
+          palletId: box?.palletId ?? null,
           status,
           quantity: delta,
         });
@@ -1904,16 +1925,20 @@ export class StockOperationsService {
       if (delta !== 0) {
         await tx.stockMovement.create({
           data: {
-            warehouseId: this.requireBalanceWarehouseId(box.warehouseId),
+            warehouseId: balanceWarehouseId,
             clientId: dto.clientId,
             skuId: sku.id,
-            boxId: box.id,
-            palletId: box.palletId,
+            boxId: box?.id ?? null,
+            palletId: box?.palletId ?? null,
             type: 'INVENTORY_ADJUSTMENT',
             status,
             quantity: delta,
             idempotencyKey: dto.idempotencyKey,
-            comment: dto.comment ?? `Корректировка инвентаризации ТСД в коробе ${box.code}`,
+            comment:
+              dto.comment ??
+              (box
+                ? `Корректировка инвентаризации ТСД в коробе ${box.code}`
+                : 'Корректировка инвентаризации без короба'),
           },
         });
       }
@@ -1922,7 +1947,7 @@ export class StockOperationsService {
         idempotencyKey: dto.idempotencyKey,
         status: delta === 0 ? 'NO_CHANGE' : 'APPLIED',
         skuId: sku.id,
-        box: box.code,
+        box: box?.code ?? null,
         previousQuantity: currentQuantity,
         countedQuantity: dto.countedQuantity,
         delta,

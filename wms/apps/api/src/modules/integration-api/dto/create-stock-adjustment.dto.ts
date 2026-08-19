@@ -14,10 +14,14 @@ export class CreateIntegrationStockAdjustmentDto {
   @MaxLength(200)
   barcode?: string;
 
-  @ApiProperty({ description: 'Фактический короб WMS.' })
+  // FIX: для клиента с бескоробным учетом код короба не передается.
+  @ApiPropertyOptional({
+    description: 'Фактический короб WMS. Не передавайте для клиента с бескоробным учетом.',
+  })
+  @IsOptional()
   @IsString()
   @MaxLength(120)
-  boxCode!: string;
+  boxCode?: string;
 
   @ApiProperty({ minimum: 0, maximum: 1_000_000 })
   @IsInt()

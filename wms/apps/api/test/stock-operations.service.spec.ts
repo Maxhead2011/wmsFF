@@ -27,7 +27,12 @@ describe('StockOperationsService', () => {
         findFirst: vi.fn().mockResolvedValue({ id: 'sku-1' }),
       },
       box: {
-        findUnique: vi.fn().mockResolvedValue({ id: 'box-1', code: 'BOX-1', palletId: null }),
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'box-1',
+          code: 'BOX-1',
+          warehouseId: 'warehouse-1',
+          palletId: null,
+        }),
       },
       stockBalance: {
         findFirst: vi.fn().mockResolvedValue({ id: 'balance-1', quantity: 5 }),
@@ -50,7 +55,7 @@ describe('StockOperationsService', () => {
           countedQuantity: 2,
           idempotencyKey: 'inventory-1',
         },
-        user(),
+        warehouseUser(),
       ),
     ).resolves.toMatchObject({
       status: 'APPLIED',
@@ -71,6 +76,119 @@ describe('StockOperationsService', () => {
         }),
       }),
     );
+  });
+
+  it('корректирует бескоробный остаток без boxCode через ledger', async () => {
+    // ADDED: внешний API может менять число для клиента storesWithoutBoxes без фиктивного короба.
+    const tx = {
+      stockMovement: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ id: 'movement-no-box' }),
+      },
+      client: {
+        findUnique: vi.fn().mockResolvedValue({ storesWithoutBoxes: true }),
+      },
+      sku: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'sku-1' }),
+      },
+      stockBalance: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'balance-1', quantity: 1 }),
+        upsert: vi.fn().mockResolvedValue({ id: 'balance-1', quantity: 4 }),
+      },
+    };
+    const adjustmentService = new StockOperationsService(
+      { $transaction: (callback: (tx: typeof tx) => unknown) => callback(tx) } as never,
+      { requireClientAccess: vi.fn() } as never,
+      { balanceKey: vi.fn().mockReturnValue('warehouse-1:client-1:sku-1:no-box:AVAILABLE') } as never,
+    );
+
+    await expect(
+      adjustmentService.adjustInventoryToCounted(
+        {
+          clientId: 'client-1',
+          skuId: 'sku-1',
+          countedQuantity: 4,
+          idempotencyKey: 'inventory-no-box-1',
+        },
+        warehouseUser(),
+      ),
+    ).resolves.toMatchObject({
+      status: 'APPLIED',
+      box: null,
+      previousQuantity: 1,
+      countedQuantity: 4,
+      delta: 3,
+    });
+    expect(tx.stockBalance.findFirst).toHaveBeenCalledWith({
+      where: {
+        clientId: 'client-1',
+        skuId: 'sku-1',
+        boxId: null,
+        palletId: null,
+        warehouseId: 'warehouse-1',
+        status: 'AVAILABLE',
+      },
+    });
+    expect(tx.stockBalance.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          warehouseId: 'warehouse-1',
+          boxId: null,
+          palletId: null,
+          quantity: 3,
+        }),
+      }),
+    );
+    expect(tx.stockMovement.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        warehouseId: 'warehouse-1',
+        boxId: null,
+        palletId: null,
+        type: 'INVENTORY_ADJUSTMENT',
+        quantity: 3,
+        idempotencyKey: 'inventory-no-box-1',
+      }),
+    });
+  });
+
+  it('не разрешает корректировку без boxCode коробочному клиенту', async () => {
+    // ADDED: отсутствие boxCode не должно обходить обычную коробочную модель хранения.
+    const tx = {
+      stockMovement: {
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
+      client: {
+        findUnique: vi.fn().mockResolvedValue({ storesWithoutBoxes: false }),
+      },
+      sku: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'sku-1' }),
+      },
+      stockBalance: {
+        findFirst: vi.fn(),
+      },
+      box: {
+        findUnique: vi.fn(),
+      },
+    };
+    const adjustmentService = new StockOperationsService(
+      { $transaction: (callback: (tx: typeof tx) => unknown) => callback(tx) } as never,
+      { requireClientAccess: vi.fn() } as never,
+      { balanceKey: vi.fn() } as never,
+    );
+
+    await expect(
+      adjustmentService.adjustInventoryToCounted(
+        {
+          clientId: 'client-1',
+          skuId: 'sku-1',
+          countedQuantity: 4,
+          idempotencyKey: 'inventory-box-required-1',
+        },
+        warehouseUser(),
+      ),
+    ).rejects.toThrow(/обязателен boxCode/);
+    expect(tx.stockBalance.findFirst).not.toHaveBeenCalled();
+    expect(tx.box.findUnique).not.toHaveBeenCalled();
   });
 
   it('собирает outbound-заявку в PACKING через PICK-движения', async () => {
@@ -1504,5 +1622,15 @@ function user(): AuthUser {
     clientScopeMode: 'ALL',
     clientIds: [],
     writableClientIds: [],
+  };
+}
+
+// ADDED: складской пользователь с явным writable-филиалом для inventory adjustment.
+function warehouseUser(): AuthUser {
+  return {
+    ...user(),
+    activeWarehouseId: 'warehouse-1',
+    warehouseIds: ['warehouse-1'],
+    writableWarehouseIds: ['warehouse-1'],
   };
 }

@@ -52,7 +52,7 @@ export class IntegrationApiController {
   }
 
   @Post('stock-adjustments')
-  @ApiOperation({ summary: 'Установить фактический AVAILABLE-остаток в коробе через ledger WMS' })
+  @ApiOperation({ summary: 'Установить фактический AVAILABLE-остаток через ledger WMS, с коробом или без него' })
   @ApiOkResponse({ schema: integrationAdjustmentSchema })
   adjustStock(
     @IntegrationContext() context: WmsIntegrationContext,

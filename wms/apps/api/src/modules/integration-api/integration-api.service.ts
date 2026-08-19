@@ -158,7 +158,8 @@ export class IntegrationApiService {
         clientId: context.credential.clientId,
         skuId: dto.skuId,
         barcode: dto.barcode?.trim(),
-        boxCode: dto.boxCode.trim(),
+        // FIX: бескоробный клиент меняет остаток без вымышленного boxCode.
+        boxCode: dto.boxCode?.trim() || undefined,
         countedQuantity: dto.countedQuantity,
         status: StockStatus.AVAILABLE,
         idempotencyKey,
@@ -187,7 +188,7 @@ export class IntegrationApiService {
           data: {
             clientId: context.credential.clientId,
             title: 'Остаток изменён клиентом через API',
-            body: `${context.credential.name}: короб ${result.box}, количество ${result.previousQuantity} → ${result.countedQuantity}.`,
+            body: `${context.credential.name}: ${result.box ? `короб ${result.box}` : 'без короба'}, количество ${result.previousQuantity} → ${result.countedQuantity}.`,
             severity: ClientNotificationSeverity.WARNING,
           },
         }),
