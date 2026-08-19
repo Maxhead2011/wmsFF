@@ -2397,6 +2397,64 @@ describe('MarketplaceConnectionsService', () => {
     expect((service as any).loadFbsOrders).toHaveBeenCalledTimes(2);
   });
 
+  // TEST: Global access must not bypass the warehouse-level "do not process"
+  // rule, otherwise an administrator can still select excluded WB orders.
+  it('hides orders from excluded WB warehouses even for administrators', async () => {
+    const excludedOrder = fbsOrder({
+      id: '5355000001',
+      warehouseId: 'wb-warehouse-excluded',
+      warehouseName: 'Не обслуживаем',
+    });
+    const allowedOrder = fbsOrder({
+      id: '5355000002',
+      warehouseId: 'wb-warehouse-allowed',
+      warehouseName: 'Обслуживаем',
+    });
+    const prisma = {
+      fbsWarehouseRoutingRule: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            connectionId: 'connection-1',
+            marketplaceWarehouseId: 'wb-warehouse-excluded',
+          },
+        ]),
+      },
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    const response = {
+      connected: true,
+      connections: [{ id: 'connection-1' }],
+      counts: { active: 2, shipped: 0, cancelled: 0, archive: 0, all: 2 },
+      orders: [excludedOrder, allowedOrder],
+    };
+
+    const result = await (service as any).scopeFbsOrdersForUser(response, {
+      id: 'admin-1',
+      roleCodes: ['ADMIN'],
+      permissionCodes: ['system:admin'],
+    });
+
+    expect(result.orders.map((order: { id: string }) => order.id)).toEqual(['5355000002']);
+    expect(result.counts).toEqual({
+      active: 1,
+      shipped: 0,
+      cancelled: 0,
+      archive: 0,
+      all: 1,
+    });
+    expect(prisma.fbsWarehouseRoutingRule.findMany).toHaveBeenCalledWith({
+      where: {
+        connectionId: { in: ['connection-1'] },
+        marketplaceWarehouseId: { in: ['wb-warehouse-excluded', 'wb-warehouse-allowed'] },
+        mode: 'EXCLUDED',
+      },
+      select: {
+        connectionId: true,
+        marketplaceWarehouseId: true,
+      },
+    });
+  });
+
   it('hides completed TSD orders and requests without remaining FBS work', async () => {
     const request54 = {
       id: 'request-54',

@@ -1324,7 +1324,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     response: FbsOrdersResponse,
     user: AuthUser,
   ): Promise<FbsOrdersResponse> {
-    if (this.hasGlobalFbsBranchAccess(user)) return response;
+    // FIX: EXCLUDED is a warehouse processing rule, not a branch-visibility
+    // rule. Global roles need the same exclusion that branch users already
+    // receive below, otherwise admins can still select these WB orders.
+    if (this.hasGlobalFbsBranchAccess(user)) {
+      return this.hideExcludedFbsWarehouseOrders(response);
+    }
 
     const activeWarehouseId = this.activeFbsBranchId(user);
     if (!activeWarehouseId) {
@@ -1422,6 +1427,64 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         active: orders.filter((order) => order.category === 'active').length,
         shipped: orders.filter((order) => order.category === 'shipped').length,
         cancelled: orders.filter((order) => order.category === 'cancelled').length,
+        archive: orders.filter((order) => order.category === 'archive').length,
+        all: orders.length,
+      },
+      orders,
+    };
+  }
+
+  private async hideExcludedFbsWarehouseOrders(
+    response: FbsOrdersResponse,
+  ): Promise<FbsOrdersResponse> {
+    const wildberriesOrders = response.orders.filter(
+      (order) =>
+        order.marketplace === MarketplaceType.WILDBERRIES &&
+        Boolean(order.warehouseId),
+    );
+    const connectionIds = uniqueStrings(
+      wildberriesOrders.map((order) => order.connectionId),
+    );
+    const marketplaceWarehouseIds = uniqueStrings(
+      wildberriesOrders.map((order) => order.warehouseId ?? ''),
+    );
+    if (connectionIds.length === 0 || marketplaceWarehouseIds.length === 0) {
+      return response;
+    }
+
+    const rules = await this.prisma.fbsWarehouseRoutingRule.findMany({
+      where: {
+        connectionId: { in: connectionIds },
+        marketplaceWarehouseId: { in: marketplaceWarehouseIds },
+        mode: 'EXCLUDED',
+      },
+      select: {
+        connectionId: true,
+        marketplaceWarehouseId: true,
+      },
+    });
+    if (rules.length === 0) return response;
+
+    const excludedKeys = new Set(
+      rules.map(
+        (rule) => `${rule.connectionId}:${rule.marketplaceWarehouseId}`,
+      ),
+    );
+    const orders = response.orders.filter(
+      (order) =>
+        order.marketplace !== MarketplaceType.WILDBERRIES ||
+        !order.warehouseId ||
+        !excludedKeys.has(`${order.connectionId}:${order.warehouseId}`),
+    );
+    if (orders.length === response.orders.length) return response;
+
+    return {
+      ...response,
+      counts: {
+        active: orders.filter((order) => order.category === 'active').length,
+        shipped: orders.filter((order) => order.category === 'shipped').length,
+        cancelled: orders.filter((order) => order.category === 'cancelled')
+          .length,
         archive: orders.filter((order) => order.category === 'archive').length,
         all: orders.length,
       },
