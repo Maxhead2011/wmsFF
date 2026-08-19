@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRightLeft, ChevronRight, ClipboardCheck, History, PackageCheck, PackagePlus, PackageSearch, RefreshCw, Truck, Warehouse } from 'lucide-react';
+import { ArrowLeft, ArrowRightLeft, ChevronRight, ClipboardCheck, History, PackageCheck, PackagePlus, PackageSearch, RefreshCw, Truck } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { deleteSku, fetchClients, fetchSkus, type AuthSession, type AuthUser, type ClientSummary, type SkuSummary } from '../../lib/api';
 import { BoxTransferForm } from './BoxTransferForm';
@@ -7,7 +7,6 @@ import { OnlineReceiptPanel } from './OnlineReceiptPanel';
 import { GoodsArrivalPanel } from './GoodsArrivalPanel';
 import { ReceiptBatchesPanel } from './ReceiptBatchesPanel';
 import { PickWavePanel } from './PickWavePanel';
-import { StoragePanel } from './StoragePanel';
 import { BoxIntegrityPanel } from './BoxIntegrityPanel';
 import { ShipmentHistoryPanel } from './ShipmentHistoryPanel';
 import './warehouse.css';
@@ -26,8 +25,7 @@ type WarehouseTopic =
   | 'integrity'
   | 'shipment-history'
   | 'operations'
-  | 'drafts'
-  | 'storage';
+  | 'drafts';
 
 export function WarehouseOpsPanel({ onOpenCatalog, session }: WarehouseOpsPanelProps) {
   const [activeTopic, setActiveTopic] = useState<WarehouseTopic | null>(null);
@@ -134,17 +132,6 @@ export function WarehouseOpsPanel({ onOpenCatalog, session }: WarehouseOpsPanelP
         <NewProductsPanel session={session} onOpenCatalog={onOpenCatalog} />
       </section> : null}
 
-      {activeTopic === 'storage' ? <section className="warehouse-panel warehouse-panel--storage" aria-label="Хранение">
-        <div className="section-heading warehouse-panel__heading">
-          <div>
-            <p className="eyebrow">Хранение</p>
-            <h2>Литраж, тарифы и начисления</h2>
-          </div>
-          <Warehouse size={20} aria-hidden="true" />
-        </div>
-
-        <StoragePanel session={session} />
-      </section> : null}
     </div>
   );
 }
@@ -159,7 +146,6 @@ function WarehouseTopicPicker({ onOpen }: { onOpen: (topic: WarehouseTopic) => v
     { id: 'shipment-history', eyebrow: 'История', title: 'Отгруженные КИЗ', description: 'Проверка отгруженных товаров, коробов и кодов маркировки.', icon: <History size={23} /> },
     { id: 'operations', eyebrow: 'Операции склада', title: 'Перемещения и сборка', description: 'Перемещайте короба и формируйте задания на сборку.', icon: <ArrowRightLeft size={23} /> },
     { id: 'drafts', eyebrow: 'Новый товар', title: 'Черновики приёмки', description: 'Заполните карточки новых товаров после приёмки.', icon: <PackagePlus size={23} /> },
-    { id: 'storage', eyebrow: 'Тарифы', title: 'Хранение', description: 'Литраж, тарифы и начисления за хранение.', icon: <Warehouse size={23} /> },
   ];
 
   return (

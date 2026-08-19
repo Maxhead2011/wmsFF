@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Search,
   Trash2,
+  Warehouse,
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
@@ -35,6 +36,7 @@ import {
   type TurnoverSuggestions,
 } from '../../lib/api';
 import { KnownValueInput, type KnownValueOption } from '../common/KnownValueInput';
+import { StoragePanel } from '../warehouse/StoragePanel';
 import './turnover.css';
 import { useRememberedClientId, validRememberedClientId } from '../../lib/rememberedClient';
 
@@ -44,7 +46,7 @@ type LoadState<T> = {
   error?: string;
 };
 
-type ActiveTile = 'home' | 'lookup' | 'movement' | 'receipts' | 'stockExport' | 'actions' | 'stats';
+type ActiveTile = 'home' | 'lookup' | 'movement' | 'receipts' | 'stockExport' | 'storage' | 'actions' | 'stats';
 
 type ActionForm = {
   action: TurnoverActionKind;
@@ -158,7 +160,7 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
 
   useEffect(() => {
     if (
-      (activeTile === 'actions' && !canUseActions) ||
+      ((activeTile === 'actions' || activeTile === 'storage') && !canUseActions) ||
       ((activeTile === 'stats' || activeTile === 'stockExport') && !canSeeStatistics)
     ) {
       setActiveTile('movement');
@@ -481,7 +483,7 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
         </button>
       )}
 
-      {activeTile !== 'home' ? <>
+      {activeTile !== 'home' && activeTile !== 'storage' ? <>
       <section className="turnover-panel turnover-panel--filters" aria-label="Фильтр товарооборота">
         <div className="turnover-filter-grid">
           <label>
@@ -708,6 +710,18 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
           <TurnoverTile
             active={false}
             index={5}
+            icon={<Warehouse size={22} aria-hidden="true" />}
+            title="Хранение"
+            text="Литраж, тарифы и начисления за хранение."
+            value="Учёт хранения"
+            tone="receipt"
+            onClick={() => setActiveTile('storage')}
+          />
+        ) : null}
+        {canUseActions ? (
+          <TurnoverTile
+            active={false}
+            index={6}
             icon={<ArrowRightLeft size={22} aria-hidden="true" />}
             title="Действия с товарами"
             text="Добавить, списать, перенести, утилизировать или отложить."
@@ -719,7 +733,7 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
         {canSeeStatistics ? (
           <TurnoverTile
             active={false}
-            index={6}
+            index={7}
             icon={<BarChart3 size={22} aria-hidden="true" />}
             title="Статистика"
             text="Приход, отгрузка и тенденции по дням, месяцам, кварталам."
@@ -730,7 +744,10 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
         ) : null}
       </section> : null}
 
-      {report.status === 'loading' ? <p className="inline-status">Загружаю товарооборот.</p> : null}
+      {/* FIX: Storage accounting now belongs to the Turnover workspace. */}
+      {activeTile === 'storage' && canUseActions ? <StoragePanel session={session} /> : null}
+
+      {activeTile !== 'storage' && report.status === 'loading' ? <p className="inline-status">Загружаю товарооборот.</p> : null}
       {boxDetails.status !== 'idle' ? (
         <div
           className="turnover-box-dialog"
