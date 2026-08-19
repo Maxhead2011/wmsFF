@@ -30,7 +30,7 @@ export function StoragePanel({ session }: StoragePanelProps) {
   const [isLoading, setLoading] = useState(false);
   const [isSavingTariff, setSavingTariff] = useState(false);
   const [isCharging, setCharging] = useState(false);
-  const [areControlsOpen, setControlsOpen] = useState(false);
+  const [areControlsOpen, setControlsOpen] = useState(true); // FIX: show client selection and storage operations immediately.
   const selectedClient = useMemo(() => clients.find((client) => client.id === clientId) ?? null, [clientId, clients]);
   const storageEnabled = selectedClient?.storageAccountingEnabled === true;
 
