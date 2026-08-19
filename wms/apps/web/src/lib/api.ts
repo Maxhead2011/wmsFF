@@ -10431,6 +10431,84 @@ export async function downloadOzonFboBoxLabels(accessToken: string, planId: stri
   return requestBlob(`/ozon-fbo/plans/${planId}/box-labels.pdf`, accessToken);
 }
 
+// ADDED: management types never contain the stored hash or a recoverable secret.
+export type WmsApiScope = {
+  code: 'catalog:read' | 'stock:read' | 'stock:write' | 'requests:read' | 'movements:read';
+  name: string;
+};
+
+export type WmsApiCredentialSummary = {
+  id: string;
+  name: string;
+  clientId: string;
+  warehouseId: string;
+  keyPrefix: string;
+  scopes: string[];
+  allowedIps: string[];
+  expiresAt: string | null;
+  revokedAt: string | null;
+  lastUsedAt: string | null;
+  lastUsedIp: string | null;
+  createdAt: string;
+  client: { code: string; name: string };
+  warehouse: { code: string; name: string; city: string };
+  createdBy: { id: string; name: string; email: string } | null;
+};
+
+export type WmsApiAccessOptions = {
+  clients: Array<{ id: string; code: string; name: string }>;
+  warehouses: Array<{ clientId: string; id: string; code: string; name: string; city: string }>;
+};
+
+export type CreateWmsApiCredentialInput = {
+  name: string;
+  clientId: string;
+  warehouseId: string;
+  scopes: string[];
+  allowedIps?: string[];
+  expiresAt?: string;
+};
+
+export type IssuedWmsApiKey = {
+  credential: { id: string; name: string; clientId: string; warehouseId: string; keyPrefix: string };
+  apiKey: string;
+  shownOnce: true;
+};
+
+export function fetchWmsApiScopes(accessToken: string) {
+  return request<WmsApiScope[]>('/integration-access/scopes', { accessToken });
+}
+
+export function fetchWmsApiAccessOptions(accessToken: string) {
+  return request<WmsApiAccessOptions>('/integration-access/options', { accessToken });
+}
+
+export function fetchWmsApiCredentials(accessToken: string) {
+  return request<WmsApiCredentialSummary[]>('/integration-access/credentials', { accessToken });
+}
+
+export function createWmsApiCredential(accessToken: string, input: CreateWmsApiCredentialInput) {
+  return request<IssuedWmsApiKey>('/integration-access/credentials', {
+    method: 'POST',
+    accessToken,
+    body: input,
+  });
+}
+
+export function rotateWmsApiCredential(accessToken: string, id: string) {
+  return request<IssuedWmsApiKey>(`/integration-access/credentials/${id}/rotate`, {
+    method: 'POST',
+    accessToken,
+  });
+}
+
+export function revokeWmsApiCredential(accessToken: string, id: string) {
+  return request<{ id: string; name: string; keyPrefix: string; revokedAt: string }>(
+    `/integration-access/credentials/${id}/revoke`,
+    { method: 'POST', accessToken },
+  );
+}
+
 async function request<T>(
   path: string,
   options: { method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: unknown; accessToken?: string } = {},

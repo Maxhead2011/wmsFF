@@ -383,6 +383,7 @@ model User {
   updatedReferralClients         UserReferralClient[]           @relation("UserReferralUpdatedBy")
   systemSettings                 SystemSetting[]
   auditLogs                      AuditLog[]
+  createdWmsApiCredentials       WmsApiCredential[]             @relation("WmsApiCredentialCreatedBy")
   createdExpenseEntries          ExpenseEntry[]                 @relation("ExpenseEntryCreatedBy")
   cancelledExpenseEntries        ExpenseEntry[]                 @relation("ExpenseEntryCancelledBy")
   updatedExpenseMaterialRules    ClientExpenseMaterialRule[]    @relation("ClientExpenseMaterialRuleUpdatedBy")
@@ -622,6 +623,7 @@ model Client {
   expenseMaterialRules         ClientExpenseMaterialRule[]
   expenseMaterialMovements     ExpenseMaterialMovement[]
   factoryShipments             FactoryShipment[]
+  wmsApiCredentials            WmsApiCredential[]
   createdAt                    DateTime                       @default(now())
   updatedAt                    DateTime                       @updatedAt
 
@@ -769,6 +771,7 @@ model Warehouse {
   fbsDropoffConnections   ClientMarketplaceConnection[] @relation("FbsDropoffWarehouse")
   fbsRouteExecutions      FbsWarehouseRoutingRule[]     @relation("FbsRouteExecutionWarehouse")
   fbsRouteDropoffs        FbsWarehouseRoutingRule[]     @relation("FbsRouteDropoffWarehouse")
+  wmsApiCredentials       WmsApiCredential[]
   createdAt               DateTime                      @default(now())
   updatedAt               DateTime                      @default(now()) @updatedAt
 
@@ -1622,7 +1625,6 @@ model ClientRequestPackage {
   @@index([clientId, createdAt])
   @@index([createdByUserId])
 }
-
 model ClientRequestPackageItem {
   id            String               @id @default(uuid())
   packageId     String
@@ -2775,4 +2777,30 @@ model AuditLog {
   payload   Json?
   user      User?    @relation(fields: [userId], references: [id])
   createdAt DateTime @default(now())
+}
+
+// ADDED: credentials for isolated external WMS integrations. Only a SHA-256 hash is stored.
+model WmsApiCredential {
+  id              String    @id @default(uuid())
+  name            String
+  clientId        String
+  warehouseId     String
+  keyPrefix       String    @unique
+  keyHash         String    @unique
+  scopes          Json
+  allowedIps      Json?
+  expiresAt       DateTime?
+  revokedAt       DateTime?
+  createdByUserId String?
+  lastUsedAt      DateTime?
+  lastUsedIp      String?
+  client          Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  warehouse       Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  createdBy       User?     @relation("WmsApiCredentialCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([clientId, warehouseId, revokedAt])
+  @@index([expiresAt])
+  @@index([createdByUserId])
 }

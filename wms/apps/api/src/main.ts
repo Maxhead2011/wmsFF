@@ -33,13 +33,22 @@ async function bootstrap() {
 
   const swaggerConfig = new DocumentBuilder()
     .setTitle('LOGOFF WMS API')
-    .setDescription('API складской системы LOGOFF: WMS как главный источник остатков.')
-    .setVersion('0.1.0')
+    .setDescription(
+      'Документация внутреннего API и изолированного Integration API v1. ' +
+        'Для внешних систем используйте X-WMS-API-Key; пользовательский Bearer-токен во внешнюю систему не передаётся.',
+    )
+    .setVersion('1.0.0')
     .addBearerAuth()
+    // ADDED: Swagger can authorize external integrations without exposing a WMS user session.
+    .addApiKey({ type: 'apiKey', in: 'header', name: 'X-WMS-API-Key' }, 'WmsApiKey')
+    .addServer('https://wms.logoff.pro', 'Production')
     .build();
 
   const document = SwaggerModule.createDocument(app, swaggerConfig);
-  SwaggerModule.setup('api/docs', app, document);
+  SwaggerModule.setup('api/docs', app, document, {
+    customSiteTitle: 'LOGOFF WMS API',
+    jsonDocumentUrl: 'api/docs/openapi.json',
+  });
 
   const port = Number(process.env.API_PORT ?? 3000);
   await app.listen(port, '0.0.0.0');
