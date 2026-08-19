@@ -19141,24 +19141,39 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           ) {
             continue;
           }
+          const article =
+            liveOrder.product.article ??
+            liveOrder.product.clientSku ??
+            liveOrder.product.internalSku;
+          // FIX: storageBoxes is the WMS pallet-sort route calculated just
+          // before this metadata sync. WB has no authoritative local route,
+          // including for WAITING_STOCK tasks without a selected box.
+          const storageBoxes = task.storageBoxes;
+          // FIX: Do not rewrite thousands of unchanged untouched TSD tasks on
+          // every WB refresh. Those no-op updates kept the background
+          // transaction open long enough for interactive box scans to time out.
+          if (
+            task.requestItemId === requestItemId &&
+            task.skuId === liveOrder.product.id &&
+            task.productName === liveOrder.product.name &&
+            task.article === article &&
+            jsonStringArraysEqual(task.barcodes, liveOrder.barcodes) &&
+            task.itemCount === Math.max(1, liveOrder.itemCount) &&
+            task.supplyId === liveOrder.supplyId
+          ) {
+            continue;
+          }
           await tx.fbsTsdAssembly.update({
             where: { id: task.id },
             data: {
               requestItemId,
               skuId: liveOrder.product.id,
               productName: liveOrder.product.name,
-              article:
-                liveOrder.product.article ??
-                liveOrder.product.clientSku ??
-                liveOrder.product.internalSku,
+              article,
               barcodes: liveOrder.barcodes as Prisma.InputJsonValue,
               // FIX: Marketplace metadata has no local pallet-sort route. Keep
               // the route selected by repair/reservation until it is released.
-              storageBoxes: (
-                task.reservedBoxId || task.boxId
-                  ? task.storageBoxes
-                  : liveOrder.storageBoxes
-              ) as Prisma.InputJsonValue,
+              storageBoxes: storageBoxes as Prisma.InputJsonValue,
               itemCount: Math.max(1, liveOrder.itemCount),
               supplyId: liveOrder.supplyId,
             },
@@ -23335,6 +23350,20 @@ function fbsStoragePalletCodeAlias(value: string) {
 
 function jsonStringArray(value: Prisma.JsonValue | null | undefined): string[] {
   return Array.isArray(value) ? uniqueStrings(value.map(textValue)) : [];
+}
+
+// ADDED: Exact comparisons separate a real marketplace metadata change from
+// an identical snapshot received by the background synchronizer.
+function jsonStringArraysEqual(
+  left: Prisma.JsonValue | null | undefined,
+  right: Prisma.JsonValue | null | undefined,
+) {
+  const leftValues = jsonStringArray(left);
+  const rightValues = jsonStringArray(right);
+  return (
+    leftValues.length === rightValues.length &&
+    leftValues.every((value, index) => value === rightValues[index])
+  );
 }
 
 function fbsTsdStage(task: FbsTsdAssemblyRecord) {

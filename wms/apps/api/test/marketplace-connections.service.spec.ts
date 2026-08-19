@@ -5790,6 +5790,96 @@ describe('MarketplaceConnectionsService', () => {
     expect(tx.clientNotification.create).not.toHaveBeenCalled();
   });
 
+  // TEST: An unchanged marketplace snapshot must not rewrite every untouched
+  // TSD task in a large FBS request and block interactive box scans.
+  it('does not update unchanged untouched TSD tasks during FBS request sync', async () => {
+    const order = fbsOrder({ id: '5355000001' });
+    const link = fbsRequestLink({
+      orderId: order.id,
+      lastCategory: 'active',
+      lastSupplierStatus: 'confirm',
+    });
+    const item = {
+      id: 'item-1',
+      skuId: 'sku-1',
+      barcode: '460000000001',
+      name: 'Костюм',
+      quantity: 1,
+      comment: 'FBS-заказы: 5355000001',
+      packageItems: [],
+      boxSelections: [],
+    };
+    const task = {
+      id: 'task-1',
+      clientId: 'client-1',
+      requestId: 'request-1',
+      requestItemId: item.id,
+      marketplace: MarketplaceType.WILDBERRIES,
+      connectionId: 'connection-1',
+      orderId: order.id,
+      skuId: 'sku-1',
+      productName: 'Костюм',
+      article: 'ART-1',
+      barcodes: ['460000000001'],
+      // TEST: this WMS-only route must not be replaced by order.storageBoxes.
+      storageBoxes: [
+        {
+          code: 'FFL_TEST_001',
+          quantity: 1,
+          status: StockStatus.AVAILABLE,
+          palletCode: 'PALET_SORT_001',
+        },
+      ],
+      itemCount: 1,
+      supplyId: 'WB-GI-1',
+      status: 'WAITING_STOCK',
+      reservedBoxId: null,
+      boxId: null,
+      barcode: null,
+      kiz: null,
+      stickerPartA: null,
+      stickerPartB: null,
+      stickerBarcode: null,
+      cargoPackingId: null,
+      completedAt: null,
+    };
+    const request = fbsLinkedRequest({ links: [link], items: [item] });
+    const tx: any = {
+      clientRequest: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValueOnce({ id: 'request-1', status: ClientRequestStatus.SUBMITTED })
+          .mockResolvedValueOnce(request),
+        update: vi.fn(),
+      },
+      fbsOrderRequestLink: {
+        findUnique: vi.fn(),
+        update: vi.fn(),
+        create: vi.fn(),
+      },
+      fbsTsdAssembly: {
+        findMany: vi.fn().mockResolvedValue([task]),
+        update: vi.fn(),
+      },
+      clientRequestItem: {
+        update: vi.fn(),
+        create: vi.fn(),
+        delete: vi.fn(),
+      },
+      clientRequestEvent: { create: vi.fn() },
+      clientNotification: { create: vi.fn() },
+    };
+    const prisma: any = {
+      fbsOrderRequestLink: { findMany: vi.fn().mockResolvedValue([link]) },
+      $transaction: vi.fn(async (callback: (value: typeof tx) => Promise<unknown>) => callback(tx)),
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+
+    await (service as any).syncFbsRequestsFromMarketplace('client-1', [order]);
+
+    expect(tx.fbsTsdAssembly.update).not.toHaveBeenCalled();
+  });
+
   it('keeps a physically collected cancelled FBS order and marks it for a manager decision', async () => {
     const link = fbsRequestLink({
       orderId: '5355000001',
