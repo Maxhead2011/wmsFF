@@ -46,7 +46,9 @@ export class WarehouseAuthScopeService {
 
     const isSystemAdmin = input.permissionCodes.includes('system:admin');
     const isClient = input.roleCodes.includes('CLIENT');
-    if (isClient && input.roleCodes.some((code) => code !== 'CLIENT')) {
+    // FIX: WMS_API_MANAGER is a narrow client capability, not an internal warehouse role.
+    const clientCompatibleRoles = new Set(['CLIENT', 'WMS_API_MANAGER']);
+    if (isClient && input.roleCodes.some((code) => !clientCompatibleRoles.has(code))) {
       throw new ForbiddenException(
         'Роль клиента нельзя совмещать с внутренними ролями сотрудников.',
       );

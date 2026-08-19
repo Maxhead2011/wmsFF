@@ -7,6 +7,8 @@ const permissions = [
   ['users:write', 'Создание и изменение пользователей'],
   ['clients:read', 'Просмотр клиентов'],
   ['clients:write', 'Создание и изменение клиентов'],
+  // ADDED: issuing external WMS keys is isolated from system administration.
+  ['integration-api:manage', 'Управление внешними API-доступами WMS'],
   ['skus:read', 'Просмотр SKU'],
   ['skus:write', 'Создание и изменение SKU'],
   ['warehouse:read', 'Просмотр складской структуры'],
@@ -149,6 +151,10 @@ const rolePermissions: Record<string, { name: string; permissions: string[] }> =
       'logistics:request',
       'billing:read',
     ],
+  },
+  WMS_API_MANAGER: {
+    name: 'Управление внешним API WMS',
+    permissions: ['integration-api:manage'],
   },
 };
 

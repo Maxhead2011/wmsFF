@@ -1,0 +1,126 @@
+.integration-api {
+  display: grid;
+  gap: 18px;
+  color: #142019;
+}
+
+.integration-api__hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  border-radius: 18px;
+  background: #153326;
+  padding: 24px;
+  color: #f6fff9;
+  box-shadow: 0 18px 45px rgba(18, 57, 39, .2);
+}
+
+.integration-api h2,
+.integration-api h3,
+.integration-api h4,
+.integration-api p { margin: 0; }
+
+.integration-api__hero h2 { font-size: clamp(24px, 3vw, 34px); letter-spacing: -.03em; }
+.integration-api__hero p { max-width: 680px; margin-top: 7px; color: #cce3d5; }
+
+.integration-api__docs,
+.integration-api__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.integration-api button,
+.integration-api__docs a {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid #cfddd5;
+  border-radius: 10px;
+  background: #fff;
+  padding: 9px 13px;
+  color: #234535;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.integration-api__docs a { border-color: rgba(216, 255, 231, .26); background: rgba(255,255,255,.08); color: #f4fff7; }
+.integration-api button:hover:not(:disabled), .integration-api__docs a:hover { filter: brightness(.97); }
+.integration-api button:focus-visible, .integration-api a:focus-visible, .integration-api input:focus-visible, .integration-api select:focus-visible { outline: 3px solid rgba(29, 128, 78, .28); outline-offset: 2px; }
+.integration-api button:disabled { cursor: not-allowed; opacity: .55; }
+
+.integration-api__feedback { border-radius: 12px; padding: 12px 15px; font-weight: 750; }
+.integration-api__feedback.is-error { background: #fff1f2; color: #9f1239; }
+.integration-api__feedback.is-success { background: #ecfdf3; color: #126237; }
+
+.integration-api__secret {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 16px;
+  border: 1px solid #9fd5b5;
+  border-radius: 14px;
+  background: #effbf3;
+  padding: 18px;
+  color: #174d30;
+}
+.integration-api__secret p { margin-top: 4px; color: #436b54; font-size: 13px; }
+.integration-api__secret code { display: block; overflow-x: auto; margin-top: 12px; border-radius: 8px; background: #10291d; padding: 11px 13px; color: #dfffea; font-size: 13px; }
+.integration-api__secret button.is-quiet { background: transparent; }
+
+.integration-api__layout { display: grid; grid-template-columns: minmax(330px, .8fr) minmax(520px, 1.2fr); gap: 18px; align-items: start; }
+.integration-api__form,
+.integration-api__registry { display: grid; gap: 18px; border: 1px solid #dae5de; border-radius: 16px; background: #fff; padding: 22px; box-shadow: 0 12px 34px rgba(28, 54, 39, .06); }
+
+.integration-api__form > header,
+.integration-api__registry > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.integration-api__form > header { justify-content: flex-start; }
+.integration-api__form header p,
+.integration-api__registry header p { margin-top: 4px; color: #607369; font-size: 13px; line-height: 1.45; }
+
+.integration-api label { display: grid; gap: 7px; color: #40594c; font-size: 13px; font-weight: 800; }
+.integration-api input,
+.integration-api select { width: 100%; min-height: 43px; border: 1px solid #cbdad1; border-radius: 9px; background: #fff; padding: 9px 11px; color: #152a1f; font: inherit; }
+.integration-api small, .integration-api .is-optional { color: #75867d; font-size: 11px; font-weight: 600; }
+.integration-api__fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.integration-api fieldset { margin: 0; border: 0; padding: 0; }
+.integration-api legend { margin-bottom: 8px; color: #40594c; font-size: 13px; font-weight: 800; }
+.integration-api__scopes { display: grid; gap: 7px; }
+.integration-api__scopes label { display: grid; grid-template-columns: auto 1fr; align-items: center; border: 1px solid #dce6e0; border-radius: 10px; padding: 10px; cursor: pointer; }
+.integration-api__scopes label.is-selected { border-color: #66a680; background: #f1faf4; }
+.integration-api__scopes input { width: 17px; min-height: 17px; }
+.integration-api__scopes strong, .integration-api__scopes code { display: block; }
+.integration-api__scopes code { margin-top: 2px; color: #607369; font-size: 11px; }
+.integration-api .integration-api__primary { border-color: #153326; background: #153326; color: #fff; }
+
+.integration-api__list { display: grid; gap: 12px; }
+.integration-api__list article { display: grid; gap: 13px; border-bottom: 1px solid #dce6e0; padding: 2px 0 16px; }
+.integration-api__list article:last-child { border-bottom: 0; padding-bottom: 0; }
+.integration-api__list article.is-inactive { opacity: .68; }
+.integration-api__credential-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.integration-api__credential-title p { margin-top: 4px; color: #607369; font-size: 13px; }
+.integration-api__credential-title > span { border-radius: 999px; padding: 5px 9px; font-size: 11px; font-weight: 900; }
+.integration-api__credential-title .is-on { background: #dcfce7; color: #126237; }
+.integration-api__credential-title .is-off { background: #f1f3f2; color: #67756d; }
+.integration-api dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0; }
+.integration-api dl div { min-width: 0; }
+.integration-api dt { color: #718078; font-size: 11px; font-weight: 800; }
+.integration-api dd { overflow-wrap: anywhere; margin: 3px 0 0; color: #253b30; font-size: 13px; }
+.integration-api__scope-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.integration-api__scope-tags code { border-radius: 6px; background: #edf3ef; padding: 5px 7px; color: #385746; font-size: 11px; }
+.integration-api button.is-danger { border-color: #fecdd3; color: #a31238; }
+.integration-api__empty { border-radius: 12px; background: #f5f8f6; padding: 24px; color: #607369; text-align: center; }
+
+@media (max-width: 1050px) {
+  .integration-api__layout { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 680px) {
+  .integration-api__hero, .integration-api__registry > header { align-items: stretch; flex-direction: column; }
+  .integration-api__docs a { flex: 1; }
+  .integration-api__secret { grid-template-columns: 1fr; }
+  .integration-api__fields, .integration-api dl { grid-template-columns: 1fr; }
+  .integration-api__form, .integration-api__registry { padding: 16px; }
+}

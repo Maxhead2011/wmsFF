@@ -14,6 +14,7 @@ import {
   FileSignature,
   HandCoins,
   LayoutDashboard,
+  KeyRound,
   MapPinned,
   MessageSquareMore,
   MonitorUp,
@@ -39,6 +40,7 @@ export type WorkspaceId =
   | 'analytics'
   | 'branches'
   | 'access'
+  | 'integration-api'
   | 'directories'
   | 'imports'
   | 'logistics'
@@ -115,6 +117,16 @@ export const workspaceNav: WorkspaceNavItem[] = [
     icon: ShieldCheck,
     status: 'ready',
     audience: 'internal',
+  },
+  {
+    id: 'integration-api',
+    title: 'API WMS',
+    eyebrow: 'Внешние системы',
+    description: 'Документация, выпуск, замена и отзыв изолированных API-ключей клиента.',
+    permissions: ['integration-api:manage'],
+    icon: KeyRound,
+    status: 'ready',
+    audience: 'all',
   },
   {
     id: 'directories',

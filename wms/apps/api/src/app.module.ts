@@ -18,6 +18,7 @@ import { HealthController } from './modules/health/health.controller';
 import { ClientsModule } from './modules/clients/clients.module';
 import { ImportsModule } from './modules/imports/imports.module';
 import { InventoryModule } from './modules/inventory/inventory.module';
+import { IntegrationApiModule } from './modules/integration-api/integration-api.module';
 import { KizIssuesModule } from './modules/kiz-issues/kiz-issues.module';
 import { LogisticsModule } from './modules/logistics/logistics.module';
 import { MarketplaceConnectionsModule } from './modules/marketplace-connections/marketplace-connections.module';
@@ -62,6 +63,8 @@ import { WmsAiModule } from './modules/wms-ai/wms-ai.module';
     OzonFboModule,
     ImportsModule,
     InventoryModule,
+    // ADDED: isolated external API; it does not change existing user or TSD routes.
+    IntegrationApiModule,
     KizIssuesModule,
     PrintModule,
     ServiceCenterModule,

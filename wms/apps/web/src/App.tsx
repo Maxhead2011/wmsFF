@@ -60,6 +60,11 @@ const AdministrationPanel = lazy(() =>
     default: module.AdministrationPanel,
   })),
 );
+const IntegrationApiPanel = lazy(() =>
+  import('./components/integration-api/IntegrationApiPanel').then((module) => ({
+    default: module.IntegrationApiPanel,
+  })),
+);
 const BillingPanel = lazy(() =>
   import('./components/billing/BillingPanel').then((module) => ({ default: module.BillingPanel })),
 );
@@ -867,6 +872,12 @@ function renderWorkspace(
           <AdministrationPanel session={session} onOpenWorkspace={setActiveWorkspaceId} />
         </Suspense>
       );
+    case 'integration-api':
+      return (
+        <Suspense fallback={<div className="workspace-loading">Загружаю API WMS…</div>}>
+          <IntegrationApiPanel session={session} />
+        </Suspense>
+      );
     case 'directories':
       return <Suspense fallback={<div className="workspace-loading">Загружаю справочники…</div>}><DirectoryPanel session={session} /></Suspense>;
     case 'imports':
@@ -1188,7 +1199,7 @@ function sectionForWorkspace(id: WorkspaceId): WorkspaceSection {
     return 'operations';
   }
 
-  if (id === 'access' || id === 'branches' || id === 'directories' || id === 'imports' || id === 'services' || id === 'billing' || id === 'expenses' || id === 'own-companies') {
+  if (id === 'access' || id === 'integration-api' || id === 'branches' || id === 'directories' || id === 'imports' || id === 'services' || id === 'billing' || id === 'expenses' || id === 'own-companies') {
     return 'management';
   }
 
