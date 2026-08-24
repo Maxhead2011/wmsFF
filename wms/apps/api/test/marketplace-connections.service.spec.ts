@@ -9196,6 +9196,8 @@ describe('MarketplaceConnectionsService', () => {
     expect(result.palletScan).not.toHaveProperty('nearbyPallets');
     expect(result.task).not.toHaveProperty('storageBoxes');
     expect(result.task).not.toHaveProperty('nextRequestSources');
+    // TEST: legacy TSD clients receive the aggregate without route details.
+    expect(result.message).toContain('В этом помещении осталось паллет: 1.');
   });
 
   // TEST: archived/deleted pallet-sorts are filtered in SQL while normal CLOSED storage pallets remain eligible.

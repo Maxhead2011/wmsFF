@@ -14075,10 +14075,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         .filter((route) => route.palletId !== pallet.id && route.boxCodes.length > 0)
         .map((route) => route.palletId),
     ).size;
+    // FIX: Old installed TSD versions also receive the safe aggregate in the message.
+    const remainingPalletMessage = additionalPalletCount > 0
+      ? `В этом помещении осталось паллет: ${additionalPalletCount}.`
+      : 'В этом помещении больше нет паллет для этой заявки.';
     const message =
       neededBoxCodes.length > 0
-        ? `Паллетсорт ${pallet.code}: для заявки нужен ${neededBoxCodes.length} короб(а/ов). Берите короба из показанного списка.`
-        : `На паллетсорте ${pallet.code} больше нет коробов, нужных этой заявке. Отсканируйте другой паллетсорт.`;
+        ? `Паллетсорт ${pallet.code}: для заявки нужен ${neededBoxCodes.length} короб(а/ов). Берите короба из показанного списка. ${remainingPalletMessage}`
+        : `На паллетсорте ${pallet.code} больше нет коробов, нужных этой заявке. ${remainingPalletMessage}`;
     const employeeTask = base.task
       ? { ...base.task } as Record<string, unknown>
       : base.task;
