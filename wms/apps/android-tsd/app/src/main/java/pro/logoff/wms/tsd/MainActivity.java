@@ -4,21 +4,32 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.Dialog;
+import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
+import android.content.pm.PackageInstaller;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Typeface;
 import android.media.AudioManager;
 import android.media.ToneGenerator;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.ParcelFileDescriptor;
+import android.graphics.pdf.PdfRenderer;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
+import android.provider.Settings;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
@@ -39,6 +50,14 @@ import android.widget.TextView;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.security.MessageDigest;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -48,6 +67,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -68,10 +88,13 @@ import pro.logoff.wms.tsd.network.TsdAssemblyRequestSummary;
 import pro.logoff.wms.tsd.network.TsdBoxlessPackingResponse;
 import pro.logoff.wms.tsd.network.TsdFbsAssemblyResponse;
 import pro.logoff.wms.tsd.network.TsdFbsCargoPackingResponse;
+import pro.logoff.wms.tsd.network.TsdFbsRequestsResponse;
 import pro.logoff.wms.tsd.network.TsdMovementTask;
 import pro.logoff.wms.tsd.network.TsdOperationRequest;
 import pro.logoff.wms.tsd.network.TsdRelabelTask;
 import pro.logoff.wms.tsd.network.TsdSearchBoxTask;
+import pro.logoff.wms.tsd.network.TsdStoragePalletResponse;
+import pro.logoff.wms.tsd.network.TsdTransferResponse;
 import pro.logoff.wms.tsd.network.TsdLoginRequest;
 import pro.logoff.wms.tsd.network.TsdLoginResponse;
 import pro.logoff.wms.tsd.network.TsdKizCheckResponse;
@@ -79,18 +102,22 @@ import pro.logoff.wms.tsd.network.TsdInventoryBox;
 import pro.logoff.wms.tsd.network.TsdInventoryDashboard;
 import pro.logoff.wms.tsd.network.TsdInventoryLine;
 import pro.logoff.wms.tsd.network.TsdInventorySession;
+import pro.logoff.wms.tsd.network.TsdOzonFboOverview;
+import pro.logoff.wms.tsd.network.TsdOzonFboPlan;
 import pro.logoff.wms.tsd.network.TsdSkuInfo;
 import pro.logoff.wms.tsd.network.WmsApi;
 import pro.logoff.wms.tsd.network.WmsApiFactory;
+import pro.logoff.wms.tsd.printing.NiimbotB1Printer;
 import pro.logoff.wms.tsd.sync.TsdSyncRunner;
 import pro.logoff.wms.tsd.sync.TsdSyncSummary;
 import retrofit2.Response;
 
 public class MainActivity extends Activity {
     private static final int CAMERA_PERMISSION_REQUEST = 4201;
-    private static final String DEFAULT_BASE_URL = "https://wms.logoff.pro/";
-    private static final String APK_URL = "https://wms.logoff.pro/downloads/logoff-tsd.apk?v=0.1.74";
-    private static final String APP_VERSION = "0.1.74";
+    private static final int BLUETOOTH_PRINTER_PERMISSION_REQUEST = 4202;
+    private static final String UPDATE_INSTALL_ACTION = BuildConfig.APPLICATION_ID + ".UPDATE_INSTALL_STATUS";
+    private static final String DEFAULT_BASE_URL = BuildConfig.API_BASE_URL;
+    private static final String APK_URL = BuildConfig.APK_URL;
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int BOX_FOUND_GREEN = Color.rgb(187, 247, 208);
     private static final int BOX_DUPLICATE_BLUE = Color.rgb(191, 219, 254);
@@ -100,8 +127,11 @@ public class MainActivity extends Activity {
     private static final int BOX_RELABEL_MOVEMENT_CYAN = Color.rgb(165, 243, 252);
     private static final int LIGHT_GRAY = Color.rgb(226, 232, 240);
     private static final int TEXT = Color.rgb(30, 41, 59);
+    private static final String RECEIPT_MODE_STANDARD = "STANDARD";
+    private static final String RECEIPT_MODE_BOXES = "BOXES";
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final ExecutorService monitorExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final List<TsdClientSummary> clients = new ArrayList<>();
     private final List<TsdAssemblyRequestSummary> assemblyRequests = new ArrayList<>();
@@ -133,6 +163,9 @@ public class MainActivity extends Activity {
     private EditText inventoryTransferTargetInput;
     private EditText fbsScanInput;
     private EditText fbsCargoScanInput;
+    private EditText ozonFboScanInput;
+    private EditText storagePalletScanInput;
+    private EditText transferScanInput;
     private TsdAssemblyPlan assemblyPlan;
     private TsdBoxlessPackingResponse boxlessPacking;
     private TsdRelabelTask activeRelabelTask;
@@ -140,12 +173,36 @@ public class MainActivity extends Activity {
     private TsdInventoryBox activeInventoryBox;
     private TsdInventoryDashboard inventoryDashboard;
     private TsdFbsAssemblyResponse fbsAssembly;
+    private TsdFbsRequestsResponse fbsRequests;
     private TsdFbsCargoPackingResponse fbsCargoPacking;
+    private TsdOzonFboOverview ozonFboOverview;
+    private TsdOzonFboPlan ozonFboPlan;
+    private TsdOzonFboPlan.Box ozonFboBox;
+    private TsdStoragePalletResponse storagePalletAssembly;
+    private final Map<String, StoragePalletRecoveryItem> storagePalletRecoveryItems = new LinkedHashMap<>();
+    private String storagePalletRecoveryOperationId = "";
+    private String storagePalletRecoveryBoxCode = "";
+    private TsdTransferResponse transferWorkflow;
+    private String storagePalletClientId = "";
     private String selectedFbsCargoPlanId = "";
+    private String selectedFbsRequestId = "";
     private String inventoryType = "";
     private String inventoryClientId = "";
     private String transferredInventoryBoxId = "";
     private boolean inventoryTransferMode;
+    private boolean inventoryArchiveMode;
+    private boolean inventoryRequestBusy;
+    private boolean mandatoryFbsAuditActive;
+    private String mandatoryFbsAuditBoxCode = "";
+    private String mandatoryFbsAuditClientId = "";
+    private String mandatoryFbsAuditSessionId = "";
+    private String mandatoryFbsAuditPendingBarcode = "";
+    private String mandatoryFbsAuditOwnerKey = "";
+    private String confirmedFbsBoxTaskId = "";
+    private String confirmedFbsBoxCode = "";
+    private String confirmedFbsBoxOwnerKey = "";
+    private final Set<String> pendingFbsAuditBoxes = new LinkedHashSet<>();
+    private final Set<String> mandatoryFbsAuditKizValues = new LinkedHashSet<>();
     private String uiLanguage = "ru";
     private boolean phoneMode;
     private EditText phoneCameraTarget;
@@ -155,6 +212,7 @@ public class MainActivity extends Activity {
     private final Set<String> receiptSessionBoxes = new LinkedHashSet<>();
     private final Set<String> receiptKizValues = new LinkedHashSet<>();
     private final Map<String, String> receiptKizBoxes = new LinkedHashMap<>();
+    private String receiptMode = "";
     private String receiptClientId = "";
     private String receiptSourceDocument = "";
     private String receiptBoxCode = "";
@@ -162,6 +220,16 @@ public class MainActivity extends Activity {
     private TsdSkuInfo pendingReceiptSku;
     private boolean pendingReceiptRequiresKiz;
     private boolean receiptCheckingKiz;
+    private boolean niimbotPrintBusy;
+    private boolean appUpdateBusy;
+    private boolean niimbotForceSelection;
+    private String pendingNiimbotLabelBase64 = "";
+    private String pendingNiimbotLabelContentType = "";
+    private String pendingNiimbotOrderId = "";
+    private String pendingNiimbotMarketplace = "";
+    private String pendingNiimbotRequestNumber = "";
+    private String pendingNiimbotWarehouse = "";
+    private boolean receiptKizAuditMode;
     private int receiptClosedBoxes;
     private int receiptAcceptedItems;
     private String selectedRelabelBox = "";
@@ -172,21 +240,78 @@ public class MainActivity extends Activity {
     private boolean online;
     private String statusMessage = "";
     private Runnable receiptBoxAutoOpenTask;
+    private Runnable fbsOzonLabelRefreshTask;
     private boolean receiptOpeningBox;
+    private boolean receiptClosingBox;
     private boolean fbsBusy;
+    private boolean fbsRequestsBusy;
+    private boolean fbsRequestsArchiveMode;
     private boolean fbsCargoBusy;
+    private boolean ozonFboBusy;
+    private boolean transferBusy;
+    private boolean transferTargetMode;
+    private String transferOperationKey = "";
+    private final List<String> transferSelectedScanCodes = new ArrayList<>();
+    private final List<TsdTransferResponse.Item> transferSelectedItems = new ArrayList<>();
     private int fbsFeedbackColor;
     private int fbsCargoFeedbackColor;
+    private int ozonFboFeedbackColor;
+    private int transferFeedbackColor;
     private String lastAssemblyTouchKey = "";
     private long lastAssemblyTouchAt = 0L;
     private int boxSearchFeedbackColor = 0;
     private int movementFeedbackColor = 0;
     private int receiptFeedbackColor = 0;
     private Screen screen = Screen.MAIN;
+    private AlertDialog activeErrorDialog;
+    private String lastDialogError = "";
+    private long lastDialogErrorAt = 0L;
+    private final Runnable monitorHeartbeatTask = new Runnable() {
+        @Override
+        public void run() {
+            sendMonitorHeartbeat();
+            mainHandler.postDelayed(this, 5_000L);
+        }
+    };
+    private final BroadcastReceiver updateInstallReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            int status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE);
+            if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
+                Intent confirmation;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    confirmation = intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent.class);
+                } else {
+                    @SuppressWarnings("deprecation")
+                    Intent legacyConfirmation = intent.getParcelableExtra(Intent.EXTRA_INTENT);
+                    confirmation = legacyConfirmation;
+                }
+                if (confirmation != null) {
+                    confirmation.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(confirmation);
+                    showUpdateStatus("Android просит подтвердить установку. Нажмите «Обновить» один раз.", false);
+                    return;
+                }
+            }
+            appUpdateBusy = false;
+            if (status == PackageInstaller.STATUS_SUCCESS) {
+                showUpdateStatus("Обновление установлено.", false);
+                return;
+            }
+            String detail = nonEmpty(intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE), "неизвестная ошибка установки");
+            showUpdateStatus("Не удалось установить обновление: " + detail + ".", true);
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        IntentFilter updateFilter = new IntentFilter(UPDATE_INSTALL_ACTION);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(updateInstallReceiver, updateFilter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(updateInstallReceiver, updateFilter);
+        }
         getWindow().setStatusBarColor(RED);
         try {
             outbox = new OperationOutbox(TsdDatabase.get(this).operationDao());
@@ -195,15 +320,29 @@ public class MainActivity extends Activity {
             uiStore = getSharedPreferences("tsd_ui_preferences", MODE_PRIVATE);
             uiLanguage = uiStore.getString("language", "ru");
             phoneMode = uiStore.getBoolean("phone_mode", false);
-            if (sessionStore.load() == null) {
+            TsdSession startupSession = sessionStore.load();
+            if (startupSession != null && nonEmpty(startupSession.deviceCode, "")
+                .toUpperCase(Locale.ROOT).startsWith("USER:")) {
+                clearMandatoryFbsAuditState();
+                sessionStore.clear();
+                statusMessage = "Обновите приложение ТСД и войдите заново: старая общая сессия отключена.";
                 renderSettingsScreen();
             } else {
+                restoreMandatoryFbsAuditState();
+            }
+            if (startupSession == null) {
+                renderSettingsScreen();
+            } else if (!nonEmpty(startupSession.deviceCode, "").toUpperCase(Locale.ROOT).startsWith("USER:")
+                && (mandatoryFbsAuditActive || !pendingFbsAuditBoxes.isEmpty())) {
+                resumeMandatoryFbsAudit();
+            } else if (!nonEmpty(startupSession.deviceCode, "").toUpperCase(Locale.ROOT).startsWith("USER:")) {
                 renderMainScreen();
             }
             refreshQueue(null);
             if (sessionStore.load() != null) {
                 loadClients(false);
             }
+            mainHandler.post(monitorHeartbeatTask);
         } catch (Throwable error) {
             renderFatalScreen(error);
         }
@@ -211,7 +350,15 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        mainHandler.removeCallbacks(monitorHeartbeatTask);
+        cancelOzonLabelAutoRefresh();
+        try {
+            unregisterReceiver(updateInstallReceiver);
+        } catch (Throwable ignored) {
+        }
+        monitorExecutor.shutdownNow();
         executor.shutdownNow();
+        if (activeErrorDialog != null) activeErrorDialog.dismiss();
         super.onDestroy();
     }
 
@@ -246,6 +393,19 @@ public class MainActivity extends Activity {
                 submitFbsCargoScan();
                 return true;
             }
+            if ((screen == Screen.OZON_FBO_BOXES || screen == Screen.OZON_FBO_ASSEMBLY) && ozonFboScanInput != null) {
+                if (screen == Screen.OZON_FBO_BOXES) openOzonFboBoxByCode();
+                else submitOzonFboProductScan();
+                return true;
+            }
+            if (screen == Screen.STORAGE_PALLET && storagePalletScanInput != null) {
+                submitStoragePalletScan();
+                return true;
+            }
+            if (screen == Screen.STOCK_TRANSFER && transferScanInput != null) {
+                submitStockTransferScan();
+                return true;
+            }
             if (screen == Screen.INVENTORY_COUNT) {
                 if (activeInventoryBox == null && inventoryBoxInput != null) {
                     openInventoryBox();
@@ -261,6 +421,26 @@ public class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == BLUETOOTH_PRINTER_PERMISSION_REQUEST) {
+            boolean granted = grantResults.length > 0;
+            for (int result : grantResults) {
+                if (result != PackageManager.PERMISSION_GRANTED) {
+                    granted = false;
+                    break;
+                }
+            }
+            if (granted) {
+                continueQuietNiimbotPrint();
+            } else {
+                niimbotPrintBusy = false;
+                statusMessage = tr(
+                    "Доступ к Bluetooth запрещён. Разрешите поиск устройств поблизости в настройках приложения.",
+                    "Bluetooth ruxsati berilmadi. Ilova sozlamalarida yaqin qurilmalarni qidirishga ruxsat bering."
+                );
+                refreshCurrentScreen();
+            }
+            return;
+        }
         if (requestCode != CAMERA_PERMISSION_REQUEST) {
             return;
         }
@@ -296,31 +476,69 @@ public class MainActivity extends Activity {
         }
     }
 
+    @Override
+    public void onBackPressed() {
+        if (mandatoryFbsAuditActive) {
+            statusMessage = tr(
+                "Обязательную проверку нельзя закрыть. Сначала полностью пропикайте и актуализируйте короб.",
+                "Majburiy tekshiruvni yopib bo‘lmaydi. Avval qutini to‘liq skanerlang va yangilang."
+            );
+            renderInventoryCountScreen();
+            return;
+        }
+        super.onBackPressed();
+    }
+
     private void renderMainScreen() {
-        if (safeSession() == null) {
+        TsdSession session = safeSession();
+        if (session == null) {
             renderSettingsScreen();
+            return;
+        }
+        if (mandatoryFbsAuditActive || !pendingFbsAuditBoxes.isEmpty()) {
+            resumeMandatoryFbsAudit();
             return;
         }
         screen = Screen.MAIN;
         LinearLayout root = baseRoot();
         root.addView(header());
         root.addView(mainStatusLine());
-        root.addView(primaryMenuButton(tr("Приемка товара", "Tovarni qabul qilish"), view -> openReceipt()));
-        root.addView(primaryMenuButton(tr("Сборка заявки", "Buyurtmani yig‘ish"), view -> openAssemblyRequests()));
-        root.addView(primaryMenuButton(tr("Сборка FBS", "FBS buyurtmasini yig‘ish"), view -> openFbsAssembly()));
-        root.addView(primaryMenuButton(
-            tr("Упаковка FBS", "FBS qadoqlash"),
-            view -> openFbsCargoPacking()
-        ));
-        root.addView(primaryMenuButton(tr("Инвентаризация", "Inventarizatsiya"), view -> renderInventoryMenu()));
-        root.addView(primaryMenuButton(
-            phoneMode
-                ? tr("Телефон: камера включена", "Telefon: kamera yoqilgan")
-                : tr("Телефон", "Telefon"),
-            view -> togglePhoneMode()
-        ));
+        if (isWarehouseKeeperOnly(session)) {
+            root.addView(primaryMenuButton(tr("Перемещения", "Ko‘chirish"), view -> openStockTransfer()));
+            root.addView(primaryMenuButton(
+                tr("Сборка паллетов", "Palletlarni yig‘ish"),
+                view -> openStoragePalletAssembly()
+            ));
+            root.addView(primaryMenuButton(
+                tr("Инвентаризация", "Inventarizatsiya"),
+                view -> renderInventoryMenu()
+            ));
+        } else {
+            root.addView(primaryMenuButton(tr("Приемка товара", "Tovarni qabul qilish"), view -> openReceipt()));
+            root.addView(primaryMenuButton(tr("Перемещения", "Ko‘chirish"), view -> openStockTransfer()));
+            root.addView(primaryMenuButton(tr("Сборка заявки", "Buyurtmani yig‘ish"), view -> openAssemblyRequests()));
+            root.addView(primaryMenuButton(tr("Сборка FBS", "FBS buyurtmasini yig‘ish"), view -> openFbsAssembly()));
+            root.addView(primaryMenuButton(tr("Сборка FBO Ozon", "Ozon FBO yig‘ish"), view -> openOzonFboAssembly()));
+            root.addView(primaryMenuButton(
+                tr("Упаковка FBS", "FBS qadoqlash"),
+                view -> openFbsCargoPacking()
+            ));
+            root.addView(primaryMenuButton(
+                tr("Сборка паллетов", "Palletlarni yig‘ish"),
+                view -> openStoragePalletAssembly()
+            ));
+            root.addView(primaryMenuButton(tr("Инвентаризация", "Inventarizatsiya"), view -> renderInventoryMenu()));
+            root.addView(primaryMenuButton(
+                phoneMode
+                    ? tr("Телефон: камера включена", "Telefon: kamera yoqilgan")
+                    : tr("Телефон", "Telefon"),
+                view -> togglePhoneMode()
+            ));
+        }
         root.addView(secondaryButton(tr("Синхронизировать очередь", "Navbatni sinxronlash") + " (" + pendingCount + ")", view -> syncPending()));
-        root.addView(secondaryButton(tr("Обновить клиентов", "Mijozlarni yangilash"), view -> loadClients(true)));
+        if (!isWarehouseKeeperOnly(session)) {
+            root.addView(secondaryButton(tr("Обновить клиентов", "Mijozlarni yangilash"), view -> loadClients(true)));
+        }
         root.addView(secondaryButton(tr("Настройки / вход", "Sozlamalar / kirish"), view -> renderSettingsScreen()));
         root.addView(secondaryButton(tr("Проверить обновление", "Yangilanishni tekshirish"), view -> openApkDownload()));
         root.addView(secondaryButton(tr("Сбросить вход", "Kirishni bekor qilish"), view -> clearSession()));
@@ -330,6 +548,444 @@ public class MainActivity extends Activity {
         root.addView(versionView());
         setScrollableContent(root);
         refreshHeaderText();
+    }
+
+    private boolean isWarehouseKeeperOnly(TsdSession session) {
+        if (session == null || !session.hasRole("WAREHOUSE_KEEPER")) return false;
+        String[] elevatedRoles = {
+            "ADMIN", "OWNER", "MANAGER", "OPERATOR", "BRANCH_MANAGER", "SUPER_ADMIN"
+        };
+        for (String role : elevatedRoles) {
+            if (session.hasRole(role)) return false;
+        }
+        return true;
+    }
+
+    private void openStockTransfer() {
+        transferWorkflow = null;
+        transferOperationKey = "";
+        transferSelectedScanCodes.clear();
+        transferSelectedItems.clear();
+        transferTargetMode = false;
+        transferBusy = false;
+        transferFeedbackColor = 0;
+        statusMessage = tr(
+            "Отсканируйте короб, из которого берёте товар.",
+            "Tovar olinadigan qutini skanerlang."
+        );
+        renderStockTransferScreen();
+    }
+
+    private void renderStockTransferScreen() {
+        screen = Screen.STOCK_TRANSFER;
+        transferScanInput = null;
+        LinearLayout root = baseRoot();
+        applyScreenFeedback(root, transferFeedbackColor);
+        root.addView(header());
+        root.addView(title(tr("Перемещения", "Ko‘chirish")));
+        if (!statusMessage.isEmpty()) {
+            root.addView(transferFeedbackColor == 0
+                ? messageView(statusMessage)
+                : feedbackView(statusMessage, transferFeedbackColor));
+        }
+
+        TsdTransferResponse.SourceBox source =
+            transferWorkflow == null ? null : transferWorkflow.sourceBox;
+        if (source == null) {
+            root.addView(messageView(tr(
+                "Шаг 1 из 3. Отсканируйте исходный короб.",
+                "1/3-qadam. Manba qutini skanerlang."
+            )));
+            transferScanInput = input(tr("Исходный короб", "Manba quti"));
+            root.addView(transferScanInput);
+            root.addView(primaryMenuButton(
+                tr("Открыть короб", "Qutini ochish"),
+                view -> submitStockTransferScan()
+            ));
+        } else {
+            String clientName = source.client == null ? "—" : safeText(source.client.name);
+            root.addView(feedbackView(
+                tr("ИЗ КОРОБА: ", "MANBA QUTI: ") + safeText(source.code) +
+                    "\n" + tr("Клиент: ", "Mijoz: ") + clientName +
+                    "\n" + tr("Доступно: ", "Mavjud: ") + source.totalQuantity + tr(" ед.", " dona"),
+                BOX_MOVEMENT_BLUE
+            ));
+
+            if (!transferTargetMode) {
+                root.addView(messageView(tr(
+                    "Шаг 2 из 3. Сканируйте подряд все вещи для перемещения. Если у единицы есть КИЗ, сканируйте именно КИЗ.",
+                    "2/3-qadam. Ko‘chiriladigan barcha narsalarni ketma-ket skanerlang. Agar KIZ bo‘lsa, aynan KIZni skanerlang."
+                )));
+                transferScanInput = input(tr("ШК товара или КИЗ", "Tovar SHK yoki KIZ"));
+                root.addView(transferScanInput);
+                root.addView(primaryMenuButton(
+                    tr("Добавить товар", "Tovarni qo‘shish"),
+                    view -> submitStockTransferScan()
+                ));
+                if (!transferSelectedItems.isEmpty()) {
+                    root.addView(primaryMenuButton(
+                        tr("Закончить выбор — ", "Tanlashni tugatish — ") +
+                            transferSelectedItems.size() + tr(" ед.", " dona"),
+                        view -> {
+                            transferTargetMode = true;
+                            transferFeedbackColor = 0;
+                            statusMessage = tr(
+                                "Шаг 3 из 3. Отсканируйте короб назначения для всей выбранной партии.",
+                                "3/3-qadam. Belgilangan qutini skanerlang."
+                            );
+                            renderStockTransferScreen();
+                        }
+                    ));
+                }
+                addTransferSelectedItems(root);
+                addTransferSourceProducts(root, source);
+            } else {
+                root.addView(messageView(tr(
+                    "Шаг 3 из 3. Отсканируйте короб, куда положили все выбранные вещи.",
+                    "3/3-qadam. Barcha tanlangan narsalar joylangan qutini skanerlang."
+                )));
+                root.addView(feedbackView(
+                    tr("К ПЕРЕМЕЩЕНИЮ: ", "KO‘CHIRISH UCHUN: ") +
+                        transferSelectedItems.size() + tr(" ед.", " dona"),
+                    BOX_FOUND_GREEN
+                ));
+                addTransferSelectedItems(root);
+                transferScanInput = input(tr("Короб назначения", "Belgilangan quti"));
+                root.addView(transferScanInput);
+                root.addView(primaryMenuButton(
+                    tr("Переместить всю партию", "Barcha partiyani ko‘chirish"),
+                    view -> submitStockTransferScan()
+                ));
+                root.addView(secondaryButton(
+                    tr("Добавить ещё товары", "Yana tovar qo‘shish"),
+                    view -> {
+                        transferTargetMode = false;
+                        transferFeedbackColor = 0;
+                        statusMessage = tr(
+                            "Продолжайте сканировать товары.",
+                            "Tovarlarni skanerlashni davom eting."
+                        );
+                        renderStockTransferScreen();
+                    }
+                ));
+            }
+
+            if (!transferSelectedItems.isEmpty()) {
+                root.addView(secondaryButton(
+                    tr("Отменить последний товар", "Oxirgi tovarni bekor qilish"),
+                    view -> removeLastTransferItem()
+                ));
+            }
+
+            root.addView(secondaryButton(
+                tr("Сменить исходный короб", "Manba qutini almashtirish"),
+                view -> openStockTransfer()
+            ));
+        }
+        if (transferBusy) {
+            root.addView(messageView(tr("Проверяю…", "Tekshirilmoqda…")));
+        }
+        root.addView(secondaryButton(tr("В главное меню", "Bosh menyuga"), view -> renderMainScreen()));
+        root.addView(versionView());
+        setScrollableContent(root);
+        refreshHeaderText();
+        if (transferScanInput != null && !transferBusy) {
+            transferScanInput.requestFocus();
+        }
+    }
+
+    private void addTransferSourceProducts(LinearLayout root, TsdTransferResponse.SourceBox source) {
+        if (source.products == null || source.products.isEmpty()) {
+            return;
+        }
+        root.addView(label(tr("Содержимое исходного короба", "Manba quti tarkibi")));
+        int shown = 0;
+        for (TsdTransferResponse.Product product : source.products) {
+            if (shown++ >= 12) {
+                root.addView(messageView(tr(
+                    "Остальные позиции скрыты. Сканирование продолжает работать.",
+                    "Qolgan pozitsiyalar yashirilgan. Skanerlash ishlashda davom etadi."
+                )));
+                break;
+            }
+            String details =
+                tr("Артикул: ", "Artikul: ") + safeText(product.article) +
+                (safeText(product.color).equals("—") ? "" :
+                    " · " + tr("цвет: ", "rang: ") + safeText(product.color)) +
+                (safeText(product.size).equals("—") ? "" :
+                    " · " + tr("размер: ", "o‘lcham: ") + safeText(product.size)) +
+                "\n" + tr("Доступно: ", "Mavjud: ") + product.quantity +
+                (product.requiresKiz ? tr(" · нужен КИЗ", " · KIZ kerak") : "");
+            root.addView(taskRow(safeText(product.name), details, Color.WHITE));
+        }
+    }
+
+    private void addTransferSelectedItems(LinearLayout root) {
+        if (transferSelectedItems.isEmpty()) {
+            return;
+        }
+        root.addView(label(
+            tr("Выбрано для перемещения", "Ko‘chirish uchun tanlangan") +
+                ": " + transferSelectedItems.size()
+        ));
+        int start = Math.max(0, transferSelectedItems.size() - 12);
+        for (int index = transferSelectedItems.size() - 1; index >= start; index--) {
+            TsdTransferResponse.Item item = transferSelectedItems.get(index);
+            String details =
+                tr("Артикул: ", "Artikul: ") + safeText(item.article) +
+                (safeText(item.color).equals("—") ? "" :
+                    " · " + tr("цвет: ", "rang: ") + safeText(item.color)) +
+                (safeText(item.size).equals("—") ? "" :
+                    " · " + tr("размер: ", "o‘lcham: ") + safeText(item.size)) +
+                "\n" + ("KIZ".equals(item.scanType)
+                    ? tr("КИЗ", "KIZ")
+                    : tr("ШК", "SHK")) +
+                " · " + tr("единица №", "birlik №") + (index + 1);
+            root.addView(taskRow(safeText(item.name), details, BOX_FOUND_GREEN));
+        }
+        if (start > 0) {
+            root.addView(messageView(
+                tr("Ранее выбрано ещё: ", "Oldin tanlangan yana: ") + start
+            ));
+        }
+    }
+
+    private void removeLastTransferItem() {
+        if (transferSelectedItems.isEmpty()) {
+            return;
+        }
+        int last = transferSelectedItems.size() - 1;
+        TsdTransferResponse.Item removed = transferSelectedItems.remove(last);
+        transferSelectedScanCodes.remove(last);
+        transferTargetMode = false;
+        transferFeedbackColor = 0;
+        statusMessage = tr("Убран последний товар: ", "Oxirgi tovar olib tashlandi: ") +
+            safeText(removed.name) + ". " +
+            tr("Можно продолжать сканирование.", "Skanerlashni davom ettirishingiz mumkin.");
+        renderStockTransferScreen();
+    }
+
+    private void submitStockTransferScan() {
+        if (transferBusy) {
+            return;
+        }
+        TsdSession session = safeSession();
+        if (session == null) {
+            renderSettingsScreen();
+            return;
+        }
+        String scanned = textValue(transferScanInput);
+        if (scanned.isEmpty()) {
+            showStockTransferError(tr("Сначала отсканируйте код.", "Avval kodni skanerlang."));
+            return;
+        }
+        TsdTransferResponse.SourceBox source =
+            transferWorkflow == null ? null : transferWorkflow.sourceBox;
+        if (source == null) {
+            inspectStockTransferSource(scanned);
+        } else if (transferTargetMode) {
+            executeStockTransferBatch(source.code, scanned);
+        } else {
+            inspectStockTransferItem(source.code, scanned);
+        }
+    }
+
+    private void inspectStockTransferSource(String boxCode) {
+        TsdSession session = safeSession();
+        if (session == null) return;
+        transferBusy = true;
+        transferFeedbackColor = BOX_DUPLICATE_BLUE;
+        statusMessage = tr("Открываю исходный короб…", "Manba quti ochilmoqda…");
+        renderStockTransferScreen();
+        runBackground(() -> {
+            Response<TsdTransferResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                .inspectTransferSource(session.authorizationHeader(), boxCode)
+                .execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                String message = responseErrorMessage(
+                    response,
+                    tr("Не удалось открыть исходный короб.", "Manba qutini ochib bo‘lmadi.")
+                );
+                mainHandler.post(() -> showStockTransferError(message));
+                return;
+            }
+            TsdTransferResponse loaded = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                transferBusy = false;
+                transferWorkflow = loaded;
+                transferFeedbackColor = BOX_FOUND_GREEN;
+                statusMessage = nonEmpty(loaded.message, tr("Короб открыт.", "Quti ochildi."));
+                playFbsSuccess();
+                renderStockTransferScreen();
+            });
+        });
+    }
+
+    private void inspectStockTransferItem(String sourceBoxCode, String scanCode) {
+        TsdSession session = safeSession();
+        if (session == null) return;
+        transferBusy = true;
+        transferFeedbackColor = BOX_DUPLICATE_BLUE;
+        statusMessage = tr("Проверяю товар…", "Tovar tekshirilmoqda…");
+        renderStockTransferScreen();
+        runBackground(() -> {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("fromBoxCode", sourceBoxCode);
+            payload.put("scanCode", scanCode);
+            Response<TsdTransferResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                .inspectTransferItem(session.authorizationHeader(), payload)
+                .execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                String message = responseErrorMessage(
+                    response,
+                    tr("Товар не найден в исходном коробе.", "Tovar manba qutida topilmadi.")
+                );
+                mainHandler.post(() -> showStockTransferError(message));
+                return;
+            }
+            TsdTransferResponse loaded = response.body();
+            mainHandler.post(() -> {
+                TsdTransferResponse.Item item = loaded.item;
+                if (item == null) {
+                    showStockTransferError(tr(
+                        "Сервер не вернул данные отсканированного товара.",
+                        "Server skanerlangan tovar ma’lumotlarini qaytarmadi."
+                    ));
+                    return;
+                }
+                if ("KIZ".equals(item.scanType)) {
+                    for (String selectedCode : transferSelectedScanCodes) {
+                        if (selectedCode.equalsIgnoreCase(scanCode)) {
+                            showStockTransferError(tr(
+                                "Этот КИЗ уже выбран. Повтор не добавлен.",
+                                "Bu KIZ allaqachon tanlangan. Takror qo‘shilmadi."
+                            ));
+                            return;
+                        }
+                    }
+                }
+                int selectedBarcodeQuantity = 0;
+                if ("BARCODE".equals(item.scanType)) {
+                    for (TsdTransferResponse.Item selected : transferSelectedItems) {
+                        if (
+                            "BARCODE".equals(selected.scanType) &&
+                            safeText(selected.skuId).equals(safeText(item.skuId))
+                        ) {
+                            selectedBarcodeQuantity += 1;
+                        }
+                    }
+                }
+                if ("BARCODE".equals(item.scanType) && selectedBarcodeQuantity >= item.availableQuantity) {
+                    showStockTransferError(
+                        tr("В исходном коробе больше нет свободных единиц товара «",
+                            "Manba qutida boshqa bo‘sh birlik qolmadi: «") +
+                            safeText(item.name) + "»."
+                    );
+                    return;
+                }
+                online = true;
+                transferBusy = false;
+                transferWorkflow = loaded;
+                transferWorkflow.item = null;
+                transferSelectedScanCodes.add(scanCode);
+                transferSelectedItems.add(item);
+                if (transferOperationKey.isEmpty()) {
+                    transferOperationKey =
+                        "tsd-transfer-batch:" + session.deviceCode + ":" + System.currentTimeMillis();
+                }
+                transferTargetMode = false;
+                transferFeedbackColor = BOX_FOUND_GREEN;
+                statusMessage =
+                    tr("Товар добавлен. Всего выбрано: ", "Tovar qo‘shildi. Jami tanlandi: ") +
+                        transferSelectedItems.size() + tr(" ед.", " dona");
+                playFbsSuccess();
+                renderStockTransferScreen();
+            });
+        });
+    }
+
+    private void executeStockTransferBatch(String sourceBoxCode, String targetBoxCode) {
+        TsdSession session = safeSession();
+        if (session == null) return;
+        if (transferSelectedScanCodes.isEmpty()) {
+            showStockTransferError(tr(
+                "Сначала отсканируйте хотя бы один товар.",
+                "Avval kamida bitta tovarni skanerlang."
+            ));
+            return;
+        }
+        if (transferOperationKey.isEmpty()) {
+            transferOperationKey =
+                "tsd-transfer-batch:" + session.deviceCode + ":" + System.currentTimeMillis();
+        }
+        final String operationKey = transferOperationKey;
+        final List<String> scanCodes = new ArrayList<>(transferSelectedScanCodes);
+        transferBusy = true;
+        transferFeedbackColor = BOX_DUPLICATE_BLUE;
+        statusMessage =
+            tr("Перемещаю выбранную партию: ", "Tanlangan partiya ko‘chirilmoqda: ") +
+                scanCodes.size() + tr(" ед.…", " dona…");
+        renderStockTransferScreen();
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("fromBoxCode", sourceBoxCode);
+            payload.put("toBoxCode", targetBoxCode);
+            payload.put("scanCodes", scanCodes);
+            payload.put("idempotencyKey", operationKey);
+            Response<TsdTransferResponse> response = api
+                .executeTransferBatch(session.authorizationHeader(), payload)
+                .execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                String message = responseErrorMessage(
+                    response,
+                    tr("Перемещение не выполнено.", "Ko‘chirish bajarilmadi.")
+                );
+                mainHandler.post(() -> showStockTransferError(message));
+                return;
+            }
+            TsdTransferResponse result = response.body();
+            TsdTransferResponse refreshed = null;
+            if (!result.sourceBoxArchived) {
+                Response<TsdTransferResponse> sourceResponse = api
+                    .inspectTransferSource(session.authorizationHeader(), sourceBoxCode)
+                    .execute();
+                if (sourceResponse.isSuccessful()) {
+                    refreshed = sourceResponse.body();
+                }
+            }
+            TsdTransferResponse finalRefreshed = refreshed;
+            mainHandler.post(() -> {
+                online = true;
+                transferBusy = false;
+                transferWorkflow = result.sourceBoxArchived ? null : finalRefreshed;
+                transferOperationKey = "";
+                transferSelectedScanCodes.clear();
+                transferSelectedItems.clear();
+                transferTargetMode = false;
+                transferFeedbackColor = BOX_FOUND_GREEN;
+                statusMessage = nonEmpty(
+                    result.message,
+                    tr("Пакетное перемещение выполнено.", "Paketli ko‘chirish bajarildi.")
+                ) +
+                    (result.sourceBoxArchived
+                        ? tr(" Исходный короб опустел и перенесён в архив.", " Manba quti bo‘shadi va arxivga o‘tkazildi.")
+                        : "");
+                playFbsSuccess();
+                renderStockTransferScreen();
+            });
+        });
+    }
+
+    private void showStockTransferError(String message) {
+        online = true;
+        transferBusy = false;
+        transferFeedbackColor = BOX_NOT_NEEDED_RED;
+        statusMessage = message;
+        playFbsError();
+        renderStockTransferScreen();
+        showScanningErrorDialog(message);
     }
 
     private void renderSettingsScreen() {
@@ -389,7 +1045,452 @@ public class MainActivity extends Activity {
         return "uz".equals(uiLanguage) ? uzbek : russian;
     }
 
+    private void openStoragePalletAssembly() {
+        storagePalletAssembly = null;
+        clearStoragePalletRecovery();
+        storagePalletClientId = "";
+        statusMessage = tr("Проверяю открытую паллету…", "Ochiq pallet tekshirilmoqda…");
+        screen = Screen.STORAGE_PALLET;
+        renderStoragePalletAssemblyScreen();
+        TsdSession session = safeSession();
+        if (session == null) {
+            return;
+        }
+        runBackground(() -> {
+            Response<TsdStoragePalletResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                .currentStoragePallet(session.authorizationHeader(), session.deviceCode)
+                .execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException(inventoryHttpError(response));
+            }
+            TsdStoragePalletResponse loaded = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                storagePalletAssembly = loaded;
+                prepareStoragePalletRecovery(loaded);
+                if (loaded.pallet != null && loaded.pallet.client != null) {
+                    storagePalletClientId = safeText(loaded.pallet.client.id);
+                }
+                statusMessage = safeText(loaded.message);
+                renderStoragePalletAssemblyScreen();
+            });
+        });
+    }
+
+    private void renderStoragePalletAssemblyScreen() {
+        screen = Screen.STORAGE_PALLET;
+        storagePalletScanInput = null;
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title(tr("Сборка паллетов", "Palletlarni yig‘ish")));
+
+        TsdStoragePalletResponse.Pallet pallet =
+            storagePalletAssembly == null ? null : storagePalletAssembly.pallet;
+        if (!statusMessage.isEmpty()) {
+            root.addView(messageView(statusMessage));
+        }
+
+        if (pallet == null) {
+            root.addView(messageView(tr(
+                "Сначала выберите клиента, затем отсканируйте ШК пустой или уже существующей паллеты.",
+                "Avval mijozni tanlang, keyin bo‘sh yoki mavjud pallet shtrix-kodini skanerlang."
+            )));
+            root.addView(label(tr("Клиент паллет-сорта", "Pallet-sort mijozi")));
+            clientAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new ArrayList<String>());
+            clientAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+            clientSpinner = new Spinner(this);
+            clientSpinner.setAdapter(clientAdapter);
+            clientAdapter.add(tr("Выберите клиента", "Mijozni tanlang"));
+            int selected = 0;
+            for (TsdClientSummary client : clients) {
+                clientAdapter.add(client.name + " · " + client.code);
+                if (client.id.equals(storagePalletClientId)) {
+                    selected = clientAdapter.getCount() - 1;
+                }
+            }
+            clientAdapter.notifyDataSetChanged();
+            clientSpinner.setSelection(selected);
+            root.addView(clientSpinner);
+
+            storagePalletScanInput = input(tr("Сканируйте ШК паллеты", "Pallet shtrix-kodini skanerlang"));
+            storagePalletScanInput.setOnEditorActionListener((view, actionId, event) -> {
+                submitStoragePalletScan();
+                return true;
+            });
+            root.addView(storagePalletScanInput);
+            root.addView(primaryMenuButton(tr("Открыть паллету", "Palletni ochish"), view -> submitStoragePalletScan()));
+            root.addView(secondaryButton(tr("Обновить клиентов", "Mijozlarni yangilash"), view -> loadClients(true)));
+        } else {
+            String clientName = pallet.client == null ? "-" : safeText(pallet.client.name);
+            String zoneName = pallet.zone == null
+                ? tr("без зоны", "zonasiz")
+                : safeText(pallet.zone.name);
+            root.addView(feedbackView(
+                pallet.code + "\n" +
+                    tr("Клиент", "Mijoz") + ": " + clientName + "\n" +
+                    tr("Зона", "Zona") + ": " + zoneName + "\n" +
+                    tr("Коробов на паллете", "Palletdagi qutilar") + ": " + pallet.boxCount,
+                Color.rgb(220, 252, 231)
+            ));
+            if (storagePalletAssembly.recovery != null) {
+                renderStoragePalletRecovery(root);
+            } else {
+                storagePalletScanInput = input(tr("Сканируйте номер короба", "Quti raqamini skanerlang"));
+                storagePalletScanInput.setOnEditorActionListener((view, actionId, event) -> {
+                    submitStoragePalletScan();
+                    return true;
+                });
+                root.addView(storagePalletScanInput);
+                root.addView(primaryMenuButton(tr("Добавить короб", "Qutini qo‘shish"), view -> submitStoragePalletScan()));
+                root.addView(secondaryButton(
+                    tr("Следующая паллета", "Keyingi pallet"),
+                    view -> finishStoragePallet()
+                ));
+                Button deletePalletButton = secondaryButton(
+                    tr("Удалить паллет", "Palletni o‘chirish"),
+                    view -> confirmDeleteStoragePallet()
+                );
+                deletePalletButton.setBackgroundColor(BOX_NOT_NEEDED_RED);
+                deletePalletButton.setTextColor(TEXT);
+                root.addView(deletePalletButton);
+                if (pallet.boxes != null && !pallet.boxes.isEmpty()) {
+                    root.addView(label(tr("Последние добавленные короба", "Oxirgi qo‘shilgan qutilar")));
+                    int limit = Math.min(pallet.boxes.size(), 12);
+                    for (int index = 0; index < limit; index += 1) {
+                        TsdStoragePalletResponse.Box box = pallet.boxes.get(index);
+                        String detail = box.existsInWms
+                            ? nonEmpty(box.clientName, clientName)
+                            : tr("пока не найден в WMS", "WMSda hozircha topilmadi");
+                        root.addView(taskRow(box.boxCode, detail, Color.WHITE));
+                    }
+                }
+            }
+        }
+        root.addView(secondaryButton(tr("Назад", "Orqaga"), view -> renderMainScreen()));
+        root.addView(versionView());
+        setScrollableContent(root);
+        refreshHeaderText();
+        if (storagePalletScanInput != null) {
+            storagePalletScanInput.requestFocus();
+        }
+    }
+
+    private void submitStoragePalletScan() {
+        if (storagePalletAssembly != null && storagePalletAssembly.recovery != null) {
+            scanStoragePalletRecoveryItem();
+            return;
+        }
+        TsdSession session = safeSession();
+        if (session == null) {
+            renderSettingsScreen();
+            return;
+        }
+        String code = textValue(storagePalletScanInput);
+        if (code.isEmpty()) {
+            statusMessage = tr("Отсканируйте код.", "Kodni skanerlang.");
+            renderStoragePalletAssemblyScreen();
+            return;
+        }
+        TsdStoragePalletResponse.Pallet pallet =
+            storagePalletAssembly == null ? null : storagePalletAssembly.pallet;
+        if (pallet == null && isLikelyBoxCode(code)) {
+            statusMessage = tr(
+                "ОТСКАНИРОВАН НОМЕР КОРОБА " + code + ".\nСейчас нужен QR или ШК паллетсорта. Короба сканируются после открытия паллетсорта.",
+                "QUTI RAQAMI SKANERLANDI " + code + ".\nHozir pallet-sort QR yoki shtrix-kodi kerak. Qutilar pallet-sort ochilgandan keyin skanerlanadi."
+            );
+            renderStoragePalletAssemblyScreen();
+            return;
+        }
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("deviceCode", session.deviceCode);
+        if (pallet == null) {
+            int selected = clientSpinner == null ? 0 : clientSpinner.getSelectedItemPosition();
+            if (selected <= 0 || selected > clients.size()) {
+                statusMessage = tr("Выберите клиента паллет-сорта.", "Pallet-sort mijozini tanlang.");
+                renderStoragePalletAssemblyScreen();
+                return;
+            }
+            storagePalletClientId = clients.get(selected - 1).id;
+            request.put("clientId", storagePalletClientId);
+            request.put("palletCode", code);
+        } else {
+            request.put("boxCode", code);
+        }
+        statusMessage = tr("Сохраняю…", "Saqlanmoqda…");
+        renderStoragePalletAssemblyScreen();
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<TsdStoragePalletResponse> response = pallet == null
+                ? api.openStoragePallet(session.authorizationHeader(), request).execute()
+                : api.scanStoragePalletBox(session.authorizationHeader(), pallet.id, request).execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException(inventoryHttpError(response));
+            }
+            TsdStoragePalletResponse loaded = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                storagePalletAssembly = loaded;
+                prepareStoragePalletRecovery(loaded);
+                statusMessage = safeText(loaded.message);
+                renderStoragePalletAssemblyScreen();
+            });
+        });
+    }
+
+    private void renderStoragePalletRecovery(LinearLayout root) {
+        TsdStoragePalletResponse.Recovery recovery = storagePalletAssembly.recovery;
+        int total = 0;
+        for (StoragePalletRecoveryItem item : storagePalletRecoveryItems.values()) {
+            total += item.quantity;
+        }
+        root.addView(feedbackView(
+            tr(
+                "ТРЕБУЕТСЯ ВОССТАНОВЛЕНИЕ КОРОБА\n",
+                "QUTINI TIKLASH KERAK\n"
+            ) +
+                safeText(recovery.boxCode) + "\n" +
+                safeText(recovery.reasonLabel) + "\n" +
+                tr(
+                    "Пропикайте каждый товар обычным ШК. КИЗ и номера коробов не принимаются.",
+                    "Har bir mahsulotni oddiy shtrix-kod bilan skanerlang. KIZ va quti raqamlari qabul qilinmaydi."
+                ),
+            BOX_NOT_NEEDED_RED
+        ));
+        root.addView(messageView(
+            tr("Отсканировано единиц", "Skanerlangan birliklar") + ": " + total +
+                " · " + tr("позиций", "pozitsiyalar") + ": " + storagePalletRecoveryItems.size()
+        ));
+        for (StoragePalletRecoveryItem item : storagePalletRecoveryItems.values()) {
+            root.addView(taskRow(
+                item.name,
+                tr("ШК", "ShK") + ": " + item.barcode + " · " +
+                    tr("Количество", "Miqdor") + ": " + item.quantity,
+                Color.WHITE
+            ));
+        }
+        storagePalletScanInput = input(tr("ШК товара", "Tovar shtrix-kodi"));
+        storagePalletScanInput.setOnEditorActionListener((view, actionId, event) -> {
+            scanStoragePalletRecoveryItem();
+            return true;
+        });
+        root.addView(storagePalletScanInput);
+        root.addView(primaryMenuButton(
+            tr("Учесть товар", "Tovarni hisobga olish"),
+            view -> scanStoragePalletRecoveryItem()
+        ));
+        root.addView(secondaryButton(
+            tr("Завершить и восстановить короб", "Yakunlash va qutini tiklash"),
+            view -> completeStoragePalletRecovery()
+        ));
+        root.addView(secondaryButton(
+            tr("Отменить пересчёт", "Qayta sanashni bekor qilish"),
+            view -> cancelStoragePalletRecovery()
+        ));
+    }
+
+    private void scanStoragePalletRecoveryItem() {
+        TsdSession session = safeSession();
+        if (session == null || storagePalletAssembly == null || storagePalletAssembly.recovery == null) return;
+        String barcode = textValue(storagePalletScanInput);
+        if (barcode.isEmpty()) {
+            statusMessage = tr("Пропикайте ШК товара.", "Tovar shtrix-kodini skanerlang.");
+            renderStoragePalletAssemblyScreen();
+            return;
+        }
+        String barcodeError = receiptBarcodeError(barcode);
+        if (!barcodeError.isEmpty()) {
+            statusMessage = tr(
+                "Можно сканировать только ШК товара. " + barcodeError,
+                "Faqat tovar shtrix-kodini skanerlash mumkin."
+            );
+            renderStoragePalletAssemblyScreen();
+            return;
+        }
+        TsdStoragePalletResponse.Pallet pallet = storagePalletAssembly.pallet;
+        if (pallet == null || pallet.client == null) return;
+        statusMessage = tr("Проверяю товар…", "Tovar tekshirilmoqda…");
+        renderStoragePalletAssemblyScreen();
+        runBackground(() -> {
+            Response<TsdSkuInfo> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                .findSkuByBarcode(session.authorizationHeader(), pallet.client.id, barcode)
+                .execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException(inventoryHttpError(response));
+            }
+            TsdSkuInfo sku = response.body();
+            mainHandler.post(() -> {
+                StoragePalletRecoveryItem current = storagePalletRecoveryItems.get(sku.id);
+                if (current == null) {
+                    storagePalletRecoveryItems.put(
+                        sku.id,
+                        new StoragePalletRecoveryItem(
+                            sku.id,
+                            barcode,
+                            sku.displayName(barcode),
+                            1
+                        )
+                    );
+                } else {
+                    current.quantity += 1;
+                }
+                online = true;
+                statusMessage = tr("Товар учтён.", "Tovar hisobga olindi.");
+                renderStoragePalletAssemblyScreen();
+            });
+        });
+    }
+
+    private void completeStoragePalletRecovery() {
+        TsdSession session = safeSession();
+        if (
+            session == null ||
+            storagePalletAssembly == null ||
+            storagePalletAssembly.pallet == null ||
+            storagePalletAssembly.recovery == null
+        ) return;
+        if (storagePalletRecoveryItems.isEmpty()) {
+            statusMessage = tr(
+                "Сначала пропикайте содержимое короба.",
+                "Avval quti tarkibini skanerlang."
+            );
+            renderStoragePalletAssemblyScreen();
+            return;
+        }
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("boxCode", storagePalletAssembly.recovery.boxCode);
+        request.put("idempotencyKey", storagePalletRecoveryOperationId);
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (StoragePalletRecoveryItem item : storagePalletRecoveryItems.values()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("skuId", item.skuId);
+            row.put("barcode", item.barcode);
+            row.put("quantity", item.quantity);
+            items.add(row);
+        }
+        request.put("items", items);
+        String palletId = storagePalletAssembly.pallet.id;
+        statusMessage = tr("Восстанавливаю короб и остатки…", "Quti va qoldiqlar tiklanmoqda…");
+        renderStoragePalletAssemblyScreen();
+        runBackground(() -> {
+            Response<TsdStoragePalletResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                .restoreStoragePalletBox(session.authorizationHeader(), palletId, request)
+                .execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException(inventoryHttpError(response));
+            }
+            TsdStoragePalletResponse loaded = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                clearStoragePalletRecovery();
+                storagePalletAssembly = loaded;
+                statusMessage = safeText(loaded.message);
+                renderStoragePalletAssemblyScreen();
+            });
+        });
+    }
+
+    private void prepareStoragePalletRecovery(TsdStoragePalletResponse response) {
+        if (response == null || response.recovery == null) {
+            clearStoragePalletRecovery();
+            return;
+        }
+        String boxCode = safeText(response.recovery.boxCode);
+        if (storagePalletRecoveryOperationId.isEmpty()
+            || !sameBox(storagePalletRecoveryBoxCode, boxCode)) {
+            storagePalletRecoveryItems.clear();
+            storagePalletRecoveryOperationId = "tsd-pallet-restore:" + UUID.randomUUID();
+            storagePalletRecoveryBoxCode = boxCode;
+        }
+    }
+
+    private void cancelStoragePalletRecovery() {
+        if (storagePalletAssembly != null) {
+            storagePalletAssembly.recovery = null;
+            storagePalletAssembly.state = "SCAN_BOX";
+        }
+        clearStoragePalletRecovery();
+        statusMessage = tr("Пересчёт отменён. Сканируйте следующий короб.", "Qayta sanash bekor qilindi. Keyingi qutini skanerlang.");
+        renderStoragePalletAssemblyScreen();
+    }
+
+    private void clearStoragePalletRecovery() {
+        storagePalletRecoveryItems.clear();
+        storagePalletRecoveryOperationId = "";
+        storagePalletRecoveryBoxCode = "";
+    }
+
+    private void finishStoragePallet() {
+        TsdSession session = safeSession();
+        TsdStoragePalletResponse.Pallet pallet =
+            storagePalletAssembly == null ? null : storagePalletAssembly.pallet;
+        if (session == null || pallet == null) {
+            return;
+        }
+        statusMessage = tr("Завершаю паллету…", "Pallet yakunlanmoqda…");
+        renderStoragePalletAssemblyScreen();
+        runBackground(() -> {
+            Response<TsdStoragePalletResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                .closeStoragePallet(session.authorizationHeader(), pallet.id)
+                .execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException(inventoryHttpError(response));
+            }
+            TsdStoragePalletResponse loaded = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                storagePalletAssembly = loaded;
+                statusMessage = safeText(loaded.message);
+                renderStoragePalletAssemblyScreen();
+            });
+        });
+    }
+
+    private void confirmDeleteStoragePallet() {
+        TsdStoragePalletResponse.Pallet pallet =
+            storagePalletAssembly == null ? null : storagePalletAssembly.pallet;
+        if (pallet == null) return;
+        new AlertDialog.Builder(this)
+            .setTitle(tr("Удалить паллет?", "Pallet o‘chirilsinmi?"))
+            .setMessage(
+                tr(
+                    "Паллета " + pallet.code + " и её ошибочная привязка коробов будут удалены. После этого паллету можно открыть и пропикать заново.",
+                    pallet.code + " pallet va qutilarning noto‘g‘ri bog‘lanishi o‘chiriladi. Keyin palletni qayta ochib skanerlash mumkin."
+                )
+            )
+            .setNegativeButton(tr("Нет", "Yo‘q"), null)
+            .setPositiveButton(tr("Удалить", "O‘chirish"), (dialog, which) -> deleteStoragePallet())
+            .show();
+    }
+
+    private void deleteStoragePallet() {
+        TsdSession session = safeSession();
+        TsdStoragePalletResponse.Pallet pallet =
+            storagePalletAssembly == null ? null : storagePalletAssembly.pallet;
+        if (session == null || pallet == null) return;
+        statusMessage = tr("Удаляю паллету…", "Pallet o‘chirilmoqda…");
+        renderStoragePalletAssemblyScreen();
+        runBackground(() -> {
+            Response<TsdStoragePalletResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                .deleteStoragePallet(session.authorizationHeader(), pallet.id)
+                .execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException(inventoryHttpError(response));
+            }
+            TsdStoragePalletResponse loaded = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                storagePalletAssembly = loaded;
+                statusMessage = safeText(loaded.message);
+                renderStoragePalletAssemblyScreen();
+            });
+        });
+    }
+
     private void renderInventoryMenu() {
+        if (mandatoryFbsAuditActive || !pendingFbsAuditBoxes.isEmpty()) {
+            resumeMandatoryFbsAudit();
+            return;
+        }
         screen = Screen.INVENTORY_MENU;
         activeInventory = null;
         activeInventoryBox = null;
@@ -398,6 +1499,7 @@ public class MainActivity extends Activity {
         inventoryClientId = "";
         transferredInventoryBoxId = "";
         inventoryTransferMode = false;
+        inventoryArchiveMode = false;
         LinearLayout root = baseRoot();
         root.addView(header());
         root.addView(title(tr("Инвентаризация", "Inventarizatsiya")));
@@ -417,6 +1519,10 @@ public class MainActivity extends Activity {
             tr("3. Проверка содержимого короба", "3. Quti tarkibini tekshirish"),
             view -> openInventoryMode("BOX_CHECK")
         ));
+        root.addView(secondaryButton(
+            tr("Архив проверок коробок", "Qutilar tekshiruvi arxivi"),
+            view -> openInventoryBoxCheckArchive()
+        ));
         root.addView(secondaryButton(tr("Назад", "Orqaga"), view -> renderMainScreen()));
         if (!statusMessage.isEmpty()) {
             root.addView(messageView(statusMessage));
@@ -426,8 +1532,284 @@ public class MainActivity extends Activity {
         refreshHeaderText();
     }
 
+    private void restoreMandatoryFbsAuditState() {
+        if (progressStore == null) return;
+        TsdSession session = safeSession();
+        String storedOwnerKey = progressStore.getString("mandatory_fbs_audit_owner", "");
+        String currentOwnerKey = fbsSessionOwnerKey(session);
+        if (session == null || storedOwnerKey.isEmpty() || !storedOwnerKey.equals(currentOwnerKey)) {
+            clearMandatoryFbsAuditState();
+            return;
+        }
+        mandatoryFbsAuditOwnerKey = storedOwnerKey;
+        pendingFbsAuditBoxes.clear();
+        Set<String> saved = progressStore.getStringSet("mandatory_fbs_audit_boxes", null);
+        if (saved != null) pendingFbsAuditBoxes.addAll(saved);
+        mandatoryFbsAuditBoxCode = progressStore.getString("mandatory_fbs_audit_box", "");
+        mandatoryFbsAuditClientId = progressStore.getString("mandatory_fbs_audit_client", "");
+        mandatoryFbsAuditSessionId = progressStore.getString("mandatory_fbs_audit_session", "");
+        // Mandatory FBS box audits count physical units by the product barcode only.
+        // Discard the obsolete KIZ step persisted by versions newer than 0.1.23.
+        mandatoryFbsAuditPendingBarcode = "";
+        mandatoryFbsAuditKizValues.clear();
+        confirmedFbsBoxTaskId = progressStore.getString("confirmed_fbs_box_task", "");
+        confirmedFbsBoxCode = progressStore.getString("confirmed_fbs_box_code", "");
+        confirmedFbsBoxOwnerKey = progressStore.getString("confirmed_fbs_box_owner", "");
+        mandatoryFbsAuditActive = !mandatoryFbsAuditBoxCode.isEmpty();
+    }
+
+    private void persistMandatoryFbsAuditState() {
+        if (progressStore == null) return;
+        progressStore.edit()
+            .putStringSet("mandatory_fbs_audit_boxes", new LinkedHashSet<>(pendingFbsAuditBoxes))
+            .putString("mandatory_fbs_audit_box", mandatoryFbsAuditBoxCode)
+            .putString("mandatory_fbs_audit_client", mandatoryFbsAuditClientId)
+            .putString("mandatory_fbs_audit_session", mandatoryFbsAuditSessionId)
+            .putString("mandatory_fbs_audit_owner", mandatoryFbsAuditOwnerKey)
+            .putString("mandatory_fbs_audit_barcode", mandatoryFbsAuditPendingBarcode)
+            .putStringSet("mandatory_fbs_audit_kiz", new LinkedHashSet<>(mandatoryFbsAuditKizValues))
+            .putString("confirmed_fbs_box_task", confirmedFbsBoxTaskId)
+            .putString("confirmed_fbs_box_code", confirmedFbsBoxCode)
+            .putString("confirmed_fbs_box_owner", confirmedFbsBoxOwnerKey)
+            .apply();
+    }
+
+    private String fbsSessionOwnerKey(TsdSession session) {
+        if (session == null) return "";
+        return nonEmpty(session.userId, "") + "\u001f" + nonEmpty(session.deviceCode, "");
+    }
+
+    private void clearConfirmedFbsBoxScan() {
+        confirmedFbsBoxTaskId = "";
+        confirmedFbsBoxCode = "";
+        confirmedFbsBoxOwnerKey = "";
+    }
+
+    private void clearMandatoryFbsAuditState() {
+        pendingFbsAuditBoxes.clear();
+        inventoryRequestBusy = false;
+        mandatoryFbsAuditActive = false;
+        mandatoryFbsAuditBoxCode = "";
+        mandatoryFbsAuditClientId = "";
+        mandatoryFbsAuditSessionId = "";
+        mandatoryFbsAuditPendingBarcode = "";
+        mandatoryFbsAuditOwnerKey = "";
+        mandatoryFbsAuditKizValues.clear();
+        clearConfirmedFbsBoxScan();
+        if (progressStore != null) {
+            progressStore.edit()
+                .remove("mandatory_fbs_audit_boxes")
+                .remove("mandatory_fbs_audit_box")
+                .remove("mandatory_fbs_audit_client")
+                .remove("mandatory_fbs_audit_session")
+                .remove("mandatory_fbs_audit_owner")
+                .remove("mandatory_fbs_audit_barcode")
+                .remove("mandatory_fbs_audit_kiz")
+                .remove("confirmed_fbs_box_task")
+                .remove("confirmed_fbs_box_code")
+                .remove("confirmed_fbs_box_owner")
+                .apply();
+        }
+    }
+
+    private String mandatoryFbsAuditKey(String clientId, String boxCode) {
+        return nonEmpty(clientId, "").trim() + "\u001f" + nonEmpty(boxCode, "").trim();
+    }
+
+    private void removeEquivalentMandatoryFbsAudit(String clientId, String boxCode) {
+        String expectedClientId = nonEmpty(clientId, "").trim();
+        pendingFbsAuditBoxes.removeIf(entry -> {
+            int divider = entry.indexOf('\u001f');
+            if (divider <= 0 || divider >= entry.length() - 1) return false;
+            String queuedClientId = entry.substring(0, divider).trim();
+            String queuedBoxCode = entry.substring(divider + 1).trim();
+            return expectedClientId.equals(queuedClientId) && sameBox(queuedBoxCode, boxCode);
+        });
+    }
+
+    private void queueMandatoryFbsAudit(String clientId, String boxCode) {
+        if (nonEmpty(clientId, "").isEmpty() || nonEmpty(boxCode, "").isEmpty()) return;
+        TsdSession session = safeSession();
+        String ownerKey = fbsSessionOwnerKey(session);
+        if (ownerKey.isEmpty()) return;
+        if (!mandatoryFbsAuditOwnerKey.isEmpty() && !mandatoryFbsAuditOwnerKey.equals(ownerKey)) {
+            clearMandatoryFbsAuditState();
+        }
+        mandatoryFbsAuditOwnerKey = ownerKey;
+        removeEquivalentMandatoryFbsAudit(clientId, boxCode);
+        pendingFbsAuditBoxes.add(mandatoryFbsAuditKey(clientId, boxCode));
+        persistMandatoryFbsAuditState();
+    }
+
+    private void resumeMandatoryFbsAudit() {
+        if (!mandatoryFbsAuditActive) {
+            if (pendingFbsAuditBoxes.isEmpty()) {
+                openFbsAssembly();
+                return;
+            }
+            String next = pendingFbsAuditBoxes.iterator().next();
+            int divider = next.indexOf('\u001f');
+            if (divider <= 0 || divider >= next.length() - 1) {
+                pendingFbsAuditBoxes.remove(next);
+                persistMandatoryFbsAuditState();
+                resumeMandatoryFbsAudit();
+                return;
+            }
+            mandatoryFbsAuditClientId = next.substring(0, divider);
+            mandatoryFbsAuditBoxCode = next.substring(divider + 1);
+            mandatoryFbsAuditSessionId = "";
+            mandatoryFbsAuditPendingBarcode = "";
+            mandatoryFbsAuditKizValues.clear();
+            mandatoryFbsAuditActive = true;
+            persistMandatoryFbsAuditState();
+        }
+        inventoryType = "BOX_CHECK";
+        inventoryClientId = mandatoryFbsAuditClientId;
+        inventoryArchiveMode = false;
+        transferredInventoryBoxId = "";
+        inventoryTransferMode = false;
+        statusMessage = tr(
+            "Обязательная проверка короба " + mandatoryFbsAuditBoxCode + ". Сборка FBS продолжится только после сверки и актуализации.",
+            mandatoryFbsAuditBoxCode + " qutisini majburiy tekshirish. FBS faqat tekshiruv va yangilashdan keyin davom etadi."
+        );
+        if (!mandatoryFbsAuditSessionId.isEmpty()) {
+            loadMandatoryFbsAuditSession();
+        } else {
+            startMandatoryFbsAuditSession();
+        }
+    }
+
+    private void startMandatoryFbsAuditSession() {
+        TsdSession session = safeSession();
+        if (session == null) return;
+        activeInventory = null;
+        activeInventoryBox = null;
+        screen = Screen.INVENTORY_COUNT;
+        renderInventoryCountScreen();
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Map<String, Object> request = new LinkedHashMap<>();
+            request.put("type", "BOX_CHECK");
+            request.put("clientId", mandatoryFbsAuditClientId);
+            request.put("title", "Обязательная проверка после сборки FBS · " + mandatoryFbsAuditBoxCode);
+            request.put("comment", "[FBS_MANDATORY_BOX_CHECK] Короб выбран в FBS, но нужный товар не был подтверждён.");
+            Response<TsdInventoryDashboard> dashboardResponse = api.inventoryDashboard(
+                session.authorizationHeader(),
+                true
+            ).execute();
+            Response<TsdInventorySession> createdResponse = api.startInventory(
+                session.authorizationHeader(),
+                request
+            ).execute();
+            if (!createdResponse.isSuccessful() || createdResponse.body() == null) {
+                throw new IOException(inventoryHttpError(createdResponse));
+            }
+            TsdInventorySession created = createdResponse.body();
+            TsdInventoryBox box = null;
+            if (created.boxes != null) {
+                for (TsdInventoryBox existingBox : created.boxes) {
+                    if (existingBox != null && sameBox(existingBox.boxCode, mandatoryFbsAuditBoxCode)) {
+                        box = existingBox;
+                        break;
+                    }
+                }
+            }
+            if (box == null) {
+                Map<String, Object> openRequest = new LinkedHashMap<>();
+                openRequest.put("boxCode", mandatoryFbsAuditBoxCode);
+                Response<TsdInventoryBox> boxResponse = api.openInventoryBox(
+                    session.authorizationHeader(),
+                    created.id,
+                    openRequest
+                ).execute();
+                if (!boxResponse.isSuccessful() || boxResponse.body() == null) {
+                    throw new IOException(inventoryHttpError(boxResponse));
+                }
+                box = boxResponse.body();
+            }
+            TsdInventoryBox openedBox = box;
+            TsdInventoryDashboard dashboard = dashboardResponse.isSuccessful()
+                ? dashboardResponse.body()
+                : null;
+            mainHandler.post(() -> {
+                online = true;
+                inventoryDashboard = dashboard;
+                activeInventory = created;
+                activeInventoryBox = openedBox;
+                mandatoryFbsAuditBoxCode = nonEmpty(openedBox.boxCode, mandatoryFbsAuditBoxCode);
+                mandatoryFbsAuditSessionId = created.id;
+                persistMandatoryFbsAuditState();
+                statusMessage = tr(
+                    "Отсканируйте каждую единицу только по ШК товара. КИЗ в этой проверке не требуется.",
+                    "Har bir birlikni faqat mahsulot SHKsi bilan skanerlang. Bu tekshiruvda KIZ kerak emas."
+                );
+                if (continueAfterMandatoryFbsAuditIfReady()) {
+                    return;
+                }
+                renderInventoryCountScreen();
+                new AlertDialog.Builder(this)
+                    .setTitle(tr("Обязательная проверка короба", "Qutini majburiy tekshirish"))
+                    .setMessage(tr(
+                        "Сборка FBS приостановлена. Полностью пропикайте короб " + mandatoryFbsAuditBoxCode + " только по ШК товара. После сверки подтвердите актуализацию.",
+                        "FBS yig‘ish to‘xtatildi. " + mandatoryFbsAuditBoxCode + " qutisini faqat mahsulot SHKsi bilan to‘liq tekshiring."
+                    ))
+                    .setPositiveButton(tr("Понятно", "Tushunarli"), null)
+                    .show();
+            });
+        });
+    }
+
+    private void loadMandatoryFbsAuditSession() {
+        TsdSession session = safeSession();
+        if (session == null) return;
+        screen = Screen.INVENTORY_COUNT;
+        renderInventoryCountScreen();
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<TsdInventoryDashboard> dashboardResponse = api.inventoryDashboard(
+                session.authorizationHeader(),
+                true
+            ).execute();
+            Response<TsdInventorySession> response = api.getInventory(
+                session.authorizationHeader(),
+                mandatoryFbsAuditSessionId,
+                false
+            ).execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                mandatoryFbsAuditSessionId = "";
+                persistMandatoryFbsAuditState();
+                mainHandler.post(this::startMandatoryFbsAuditSession);
+                return;
+            }
+            TsdInventorySession loaded = response.body();
+            TsdInventoryBox target = null;
+            if (loaded.boxes != null) {
+                for (TsdInventoryBox box : loaded.boxes) {
+                    if (box != null && sameBox(box.boxCode, mandatoryFbsAuditBoxCode)) {
+                        target = box;
+                        break;
+                    }
+                }
+            }
+            TsdInventoryBox loadedBox = target;
+            TsdInventoryDashboard dashboard = dashboardResponse.isSuccessful()
+                ? dashboardResponse.body()
+                : null;
+            mainHandler.post(() -> {
+                online = true;
+                inventoryDashboard = dashboard;
+                activeInventory = loaded;
+                activeInventoryBox = loadedBox;
+                if (!continueAfterMandatoryFbsAuditIfReady()) {
+                    renderInventoryCountScreen();
+                }
+            });
+        });
+    }
+
     private void openInventoryMode(String type) {
         inventoryType = type;
+        inventoryArchiveMode = false;
         activeInventory = null;
         activeInventoryBox = null;
         transferredInventoryBoxId = "";
@@ -441,7 +1823,37 @@ public class MainActivity extends Activity {
         }
         runBackground(() -> {
             WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
-            Response<TsdInventoryDashboard> response = api.inventoryDashboard(session.authorizationHeader()).execute();
+            Response<TsdInventoryDashboard> response = api.inventoryDashboard(session.authorizationHeader(), true).execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException("HTTP " + response.code());
+            }
+            TsdInventoryDashboard loaded = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                inventoryDashboard = loaded;
+                statusMessage = "";
+                renderInventoryStartScreen();
+            });
+        });
+    }
+
+    private void openInventoryBoxCheckArchive() {
+        inventoryType = "BOX_CHECK";
+        inventoryArchiveMode = true;
+        activeInventory = null;
+        activeInventoryBox = null;
+        transferredInventoryBoxId = "";
+        inventoryTransferMode = false;
+        statusMessage = tr("Загружаю архив проверок коробок…", "Qutilar tekshiruvi arxivi yuklanmoqda…");
+        screen = Screen.INVENTORY_START;
+        renderInventoryStartScreen();
+        TsdSession session = safeSession();
+        if (session == null) {
+            return;
+        }
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<TsdInventoryDashboard> response = api.inventoryDashboard(session.authorizationHeader(), true).execute();
             if (!response.isSuccessful() || response.body() == null) {
                 throw new IOException("HTTP " + response.code());
             }
@@ -459,26 +1871,53 @@ public class MainActivity extends Activity {
         screen = Screen.INVENTORY_START;
         LinearLayout root = baseRoot();
         root.addView(header());
-        root.addView(title(inventoryTypeTitle()));
+        root.addView(title(inventoryArchiveMode
+            ? tr("Архив проверок коробок", "Qutilar tekshiruvi arxivi")
+            : inventoryTypeTitle()));
 
         if (!statusMessage.isEmpty()) {
             root.addView(messageView(statusMessage));
         }
 
-        List<TsdInventorySession> active = activeInventorySessions();
-        if (!active.isEmpty()) {
-            root.addView(label(tr("Продолжить активную проверку", "Faol tekshiruvni davom ettirish")));
-            for (TsdInventorySession item : active) {
-                String progress = item.progress == null
-                    ? ""
-                    : "\n" + tr("Проверено коробов", "Tekshirilgan qutilar") + ": " + item.progress.checkedBoxes;
-                root.addView(multilineSecondaryButton(
-                    safeText(item.title) + progress,
-                    view -> loadInventorySession(item.id)
+        if (inventoryArchiveMode) {
+            List<TsdInventorySession> archive = completedBoxCheckSessions();
+            if (archive.isEmpty()) {
+                root.addView(feedbackView(
+                    tr("Завершённых проверок коробов пока нет.", "Tugallangan quti tekshiruvlari hozircha yo‘q."),
+                    LIGHT_GRAY
                 ));
+            } else {
+                root.addView(label(tr("Завершённые проверки", "Tugallangan tekshiruvlar")));
+                for (TsdInventorySession item : archive) {
+                    String progress = item.progress == null
+                        ? ""
+                        : "\n" + tr("Проверено коробов", "Tekshirilgan qutilar") + ": " + item.progress.checkedBoxes;
+                    String completed = safeText(item.completedAt);
+                    if (!completed.isEmpty()) {
+                        progress += "\n" + tr("Завершено: ", "Yakunlangan: ") + completed;
+                    }
+                    if (item.completedByName != null && !item.completedByName.trim().isEmpty()) {
+                        progress += "\n" + tr("Сотрудник: ", "Xodim: ") + item.completedByName;
+                    }
+                    root.addView(taskRow(safeText(item.title), progress, BOX_FOUND_GREEN));
+                }
             }
+            root.addView(secondaryButton(
+                tr("Обновить архив", "Arxivni yangilash"),
+                view -> openInventoryBoxCheckArchive()
+            ));
+            root.addView(secondaryButton(
+                tr("К очереди проверки коробок", "Qutilar tekshiruvi navbatiga"),
+                view -> openInventoryMode("BOX_CHECK")
+            ));
+            root.addView(secondaryButton(tr("Назад", "Orqaga"), view -> renderInventoryMenu()));
+            root.addView(versionView());
+            setScrollableContent(root);
+            refreshHeaderText();
+            return;
         }
 
+        List<TsdInventorySession> active = activeInventorySessions();
         if ("FULL".equals(inventoryType)) {
             if (active.isEmpty()) {
                 root.addView(messageView(tr(
@@ -504,6 +1943,21 @@ public class MainActivity extends Activity {
                     : tr("Начать проверку коробов", "Qutilarni tekshirishni boshlash"),
                 view -> startInventory()
             ));
+        }
+        // Previous/unfinished checks are reference information. Keep the
+        // primary action (start a new box check) at the top and render the
+        // previous checks below all current-work controls.
+        if (!active.isEmpty()) {
+            root.addView(label(tr("Предыдущие проверки", "Oldingi tekshiruvlar")));
+            for (TsdInventorySession item : active) {
+                String progress = item.progress == null
+                    ? ""
+                    : "\n" + tr("Проверено коробов", "Tekshirilgan qutilar") + ": " + item.progress.checkedBoxes;
+                root.addView(multilineSecondaryButton(
+                    safeText(item.title) + progress,
+                    view -> loadInventorySession(item.id)
+                ));
+            }
         }
         root.addView(secondaryButton(tr("Назад", "Orqaga"), view -> renderInventoryMenu()));
         root.addView(versionView());
@@ -531,6 +1985,19 @@ public class MainActivity extends Activity {
         Set<String> ids = new LinkedHashSet<>();
         for (TsdInventorySession item : inventoryDashboard.activeSessions) {
             if (item != null && inventoryType.equals(item.type) && ids.add(item.id)) {
+                result.add(item);
+            }
+        }
+        return result;
+    }
+
+    private List<TsdInventorySession> completedBoxCheckSessions() {
+        List<TsdInventorySession> result = new ArrayList<>();
+        if (inventoryDashboard == null || inventoryDashboard.historySessions == null) {
+            return result;
+        }
+        for (TsdInventorySession item : inventoryDashboard.historySessions) {
+            if (item != null && "BOX_CHECK".equals(item.type) && "COMPLETED".equals(item.status)) {
                 result.add(item);
             }
         }
@@ -586,7 +2053,7 @@ public class MainActivity extends Activity {
         renderInventoryStartScreen();
         runBackground(() -> {
             WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
-            Response<TsdInventorySession> response = api.getInventory(session.authorizationHeader(), id).execute();
+            Response<TsdInventorySession> response = api.getInventory(session.authorizationHeader(), id, true).execute();
             if (!response.isSuccessful() || response.body() == null) {
                 throw new IOException(inventoryHttpError(response));
             }
@@ -609,9 +2076,20 @@ public class MainActivity extends Activity {
         LinearLayout root = baseRoot();
         root.addView(header());
         root.addView(title(inventoryTypeTitle()));
+        if (mandatoryFbsAuditActive) {
+            root.addView(feedbackView(
+                tr(
+                    "FBS ПРИОСТАНОВЛЕН · обязательная проверка " + mandatoryFbsAuditBoxCode,
+                    "FBS TO‘XTATILDI · " + mandatoryFbsAuditBoxCode + " majburiy tekshiruv"
+                ),
+                Color.rgb(254, 215, 170)
+            ));
+        }
         if (activeInventory == null) {
             root.addView(messageView(tr("Инвентаризация не открыта.", "Inventarizatsiya ochilmagan.")));
-            root.addView(secondaryButton(tr("Назад", "Orqaga"), view -> openInventoryMode(inventoryType)));
+            if (!mandatoryFbsAuditActive) {
+                root.addView(secondaryButton(tr("Назад", "Orqaga"), view -> openInventoryMode(inventoryType)));
+            }
             setScrollableContent(root);
             return;
         }
@@ -627,6 +2105,16 @@ public class MainActivity extends Activity {
         }
         if (!statusMessage.isEmpty()) {
             root.addView(messageView(statusMessage));
+        }
+        if (inventoryRequestBusy) {
+            root.addView(feedbackView(
+                tr("Дождитесь ответа WMS. Повторное сканирование временно заблокировано.", "WMS javobini kuting. Takroriy skan vaqtincha bloklangan."),
+                LIGHT_GRAY
+            ));
+            root.addView(versionView());
+            setScrollableContent(root);
+            refreshHeaderText();
+            return;
         }
 
         if (activeInventoryBox == null) {
@@ -649,7 +2137,7 @@ public class MainActivity extends Activity {
                 inventoryQuantityInput.setInputType(InputType.TYPE_CLASS_NUMBER);
                 inventoryQuantityInput.setText("1");
                 root.addView(inventoryItemInput);
-                root.addView(inventoryQuantityInput);
+                if (!mandatoryFbsAuditActive) root.addView(inventoryQuantityInput);
                 root.addView(primaryMenuButton(
                     tr("Учесть товар", "Tovarni hisobga olish"),
                     view -> scanInventoryItem()
@@ -661,27 +2149,51 @@ public class MainActivity extends Activity {
                 inventoryItemInput.requestFocus();
             } else {
                 addInventoryResult(root, activeInventoryBox);
+                addInventoryAdminActions(root, activeInventoryBox);
                 addInventoryTransferAction(root, activeInventoryBox);
-                root.addView(primaryMenuButton(
-                    tr("Проверить следующий короб", "Keyingi qutini tekshirish"),
-                    view -> {
-                        activeInventoryBox = null;
-                        transferredInventoryBoxId = "";
-                        inventoryTransferMode = false;
-                        statusMessage = "";
-                        reloadInventorySession(false);
+                if (mandatoryFbsAuditActive) {
+                    if ("MATCHED".equals(activeInventoryBox.status) || "RESOLVED".equals(activeInventoryBox.status)) {
+                        root.addView(primaryMenuButton(
+                            tr("Проверка завершена — продолжить FBS", "Tekshiruv tugadi — FBSni davom ettirish"),
+                            view -> finishMandatoryFbsAudit()
+                        ));
+                    } else {
+                        root.addView(feedbackView(
+                            tr(
+                                "Есть расхождения. Сборка останется заблокированной до актуализации короба администратором.",
+                                "Tafovut bor. Administrator qutini yangilamaguncha FBS bloklangan."
+                            ),
+                            BOX_NOT_NEEDED_RED
+                        ));
+                        root.addView(secondaryButton(
+                            tr("Проверить статус актуализации", "Yangilash holatini tekshirish"),
+                            view -> reloadInventorySession(true)
+                        ));
                     }
-                ));
+                } else {
+                    root.addView(primaryMenuButton(
+                        tr("Проверить следующий короб", "Keyingi qutini tekshirish"),
+                        view -> {
+                            activeInventoryBox = null;
+                            transferredInventoryBoxId = "";
+                            inventoryTransferMode = false;
+                            statusMessage = "";
+                            reloadInventorySession(false);
+                        }
+                    ));
+                }
             }
         }
 
-        root.addView(secondaryButton(
-            "BOX_CHECK".equals(inventoryType)
-                ? tr("Завершить проверку", "Tekshiruvni yakunlash")
-                : tr("Передать на актуализацию", "Tuzatish uchun yuborish"),
-            view -> finishInventorySession()
-        ));
-        root.addView(secondaryButton(tr("Назад к режимам", "Rejimlarga qaytish"), view -> renderInventoryMenu()));
+        if (!mandatoryFbsAuditActive) {
+            root.addView(secondaryButton(
+                "BOX_CHECK".equals(inventoryType)
+                    ? tr("Завершить проверку", "Tekshiruvni yakunlash")
+                    : tr("Передать на актуализацию", "Tuzatish uchun yuborish"),
+                view -> finishInventorySession()
+            ));
+            root.addView(secondaryButton(tr("Назад к режимам", "Rejimlarga qaytish"), view -> renderInventoryMenu()));
+        }
         root.addView(versionView());
         setScrollableContent(root);
         refreshHeaderText();
@@ -732,6 +2244,126 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void addInventoryAdminActions(LinearLayout root, TsdInventoryBox box) {
+        if (inventoryDashboard == null || !inventoryDashboard.canManage) {
+            return;
+        }
+        if ("RESOLVED".equals(box.status)) {
+            root.addView(feedbackView(
+                tr("Проверка подтверждена администратором.", "Tekshiruv administrator tomonidan tasdiqlandi."),
+                BOX_FOUND_GREEN
+            ));
+            return;
+        }
+        boolean mismatch = false;
+        if (box.lines != null) {
+            for (TsdInventoryLine line : box.lines) {
+                if (line.countedQuantity != line.expectedQuantity && "PENDING".equals(line.decision)) {
+                    mismatch = true;
+                    break;
+                }
+            }
+        }
+        if (!mismatch) {
+            root.addView(primaryMenuButton(
+                tr("Подтвердить проверку короба", "Quti tekshiruvini tasdiqlash"),
+                view -> confirmResolveInventoryBox("ACCEPT_AS_IS")
+            ));
+            return;
+        }
+        root.addView(primaryMenuButton(
+            tr("Актуализировать и переместить в другой короб", "Yangilash va boshqa qutiga ko‘chirish"),
+            view -> confirmResolveInventoryBox("APPLY_ACTUAL", true)
+        ));
+        root.addView(secondaryButton(
+            tr("Только актуализировать товары по факту", "Faqat tovarlarni amaldagi miqdor bo‘yicha yangilash"),
+            view -> confirmResolveInventoryBox("APPLY_ACTUAL", false)
+        ));
+        root.addView(secondaryButton(
+            tr("Подтвердить без изменения WMS", "WMSni o‘zgartirmasdan tasdiqlash"),
+            view -> confirmResolveInventoryBox("ACCEPT_AS_IS")
+        ));
+    }
+
+    private void confirmResolveInventoryBox(String action) {
+        confirmResolveInventoryBox(action, false);
+    }
+
+    private void confirmResolveInventoryBox(String action, boolean moveAfterResolve) {
+        if (activeInventoryBox == null) {
+            return;
+        }
+        boolean applyActual = "APPLY_ACTUAL".equals(action);
+        String titleText = applyActual
+            ? tr("Актуализировать остатки?", "Qoldiqlarni yangilaysizmi?")
+            : tr("Подтвердить без изменений?", "O‘zgarishsiz tasdiqlaysizmi?");
+        String messageText = applyActual
+            ? tr(
+                "Остатки в WMS будут заменены фактически подсчитанными значениями. Действие запишется в журнал.",
+                "WMS qoldiqlari amalda sanalgan qiymatlar bilan almashtiriladi. Harakat jurnalga yoziladi."
+            )
+            : tr(
+                "Фактические расхождения останутся, а значения WMS не изменятся. Действие запишется в журнал.",
+                "Amaldagi tafovutlar qoladi, WMS qiymatlari o‘zgarmaydi. Harakat jurnalga yoziladi."
+            );
+        if (moveAfterResolve) {
+            messageText += tr(
+                " После актуализации здесь же откроется сканирование целевого короба.",
+                " Yangilangandan so‘ng shu ekranda maqsad qutini skanerlash ochiladi."
+            );
+        }
+        new AlertDialog.Builder(this)
+            .setTitle(titleText)
+            .setMessage(messageText)
+            .setNegativeButton(tr("Отмена", "Bekor qilish"), null)
+            .setPositiveButton(
+                tr("Подтвердить", "Tasdiqlash"),
+                (dialog, which) -> resolveInventoryBox(action, moveAfterResolve)
+            )
+            .show();
+    }
+
+    private void resolveInventoryBox(String action, boolean moveAfterResolve) {
+        TsdSession session = safeSession();
+        if (session == null || activeInventoryBox == null) {
+            return;
+        }
+        String boxId = activeInventoryBox.id;
+        statusMessage = "APPLY_ACTUAL".equals(action)
+            ? tr("Актуализирую остатки…", "Qoldiqlar yangilanmoqda…")
+            : tr("Подтверждаю проверку…", "Tekshiruv tasdiqlanmoqda…");
+        renderInventoryCountScreen();
+        runBackground(() -> {
+            Map<String, Object> request = new LinkedHashMap<>();
+            request.put("action", action);
+            request.put("comment", "Решение принято администратором на ТСД");
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<TsdInventoryBox> response = api.resolveInventoryBox(
+                session.authorizationHeader(),
+                boxId,
+                request
+            ).execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException(inventoryHttpError(response));
+            }
+            TsdInventoryBox resolved = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                activeInventoryBox = resolved;
+                inventoryTransferMode = moveAfterResolve;
+                statusMessage = "APPLY_ACTUAL".equals(action)
+                    ? moveAfterResolve
+                        ? tr(
+                            "Остатки актуализированы. Пропикайте короб, куда переместить товар.",
+                            "Qoldiqlar yangilandi. Tovar ko‘chiriladigan qutini skanerlang."
+                        )
+                        : tr("Остатки актуализированы.", "Qoldiqlar yangilandi.")
+                    : tr("Проверка подтверждена.", "Tekshiruv tasdiqlandi.");
+                reloadInventorySession(true);
+            });
+        });
+    }
+
     private void openInventoryBox() {
         TsdSession session = safeSession();
         if (session == null || activeInventory == null) {
@@ -777,15 +2409,16 @@ public class MainActivity extends Activity {
 
     private void scanInventoryItem() {
         TsdSession session = safeSession();
-        if (session == null || activeInventoryBox == null) {
+        if (session == null || activeInventoryBox == null || inventoryRequestBusy) {
             return;
         }
-        String barcode = textValue(inventoryItemInput);
-        if (barcode.isEmpty()) {
+        String scannedValue = textValue(inventoryItemInput);
+        if (scannedValue.isEmpty()) {
             statusMessage = tr("Пропикайте штрихкод товара.", "Tovar shtrix-kodini skanerlang.");
             renderInventoryCountScreen();
             return;
         }
+        String barcode = scannedValue;
         String barcodeError = receiptBarcodeError(barcode);
         if (!barcodeError.isEmpty()) {
             statusMessage = tr(
@@ -802,12 +2435,16 @@ public class MainActivity extends Activity {
         } catch (NumberFormatException ignored) {
         }
         int finalQuantity = quantity;
+        inventoryRequestBusy = true;
         statusMessage = tr("Учитываю товар…", "Tovar hisobga olinmoqda…");
         renderInventoryCountScreen();
         runBackground(() -> {
             Map<String, Object> request = new LinkedHashMap<>();
             request.put("barcode", barcode);
-            request.put("quantity", finalQuantity);
+            request.put("quantity", mandatoryFbsAuditActive ? 1 : finalQuantity);
+            if (mandatoryFbsAuditActive) {
+                request.put("requireKiz", false);
+            }
             WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
             Response<TsdInventoryLine> response = api.scanInventoryItem(
                 session.authorizationHeader(),
@@ -815,22 +2452,108 @@ public class MainActivity extends Activity {
                 request
             ).execute();
             if (!response.isSuccessful()) {
-                throw new IOException(inventoryHttpError(response));
+                String message = inventoryHttpError(response);
+                throw new IOException(message);
             }
             mainHandler.post(() -> {
                 online = true;
+                inventoryRequestBusy = false;
+                mandatoryFbsAuditPendingBarcode = "";
+                persistMandatoryFbsAuditState();
                 statusMessage = tr("Товар учтён: ", "Tovar hisobga olindi: ") + barcode;
                 reloadInventorySession(true);
             });
         });
     }
 
+    private void finishMandatoryFbsAudit() {
+        TsdSession session = safeSession();
+        if (session == null || activeInventory == null || activeInventoryBox == null || inventoryRequestBusy) return;
+        if (!"MATCHED".equals(activeInventoryBox.status) && !"RESOLVED".equals(activeInventoryBox.status)) {
+            statusMessage = tr(
+                "Сначала завершите подсчёт и актуализируйте расхождения.",
+                "Avval sanashni tugating va tafovutlarni yangilang."
+            );
+            renderInventoryCountScreen();
+            return;
+        }
+        String completedClientId = mandatoryFbsAuditClientId;
+        String completedBoxCode = mandatoryFbsAuditBoxCode;
+        inventoryRequestBusy = true;
+        statusMessage = tr("Закрываю проверку и возвращаюсь в FBS…", "Tekshiruv yopilmoqda va FBSga qaytilmoqda…");
+        renderInventoryCountScreen();
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<TsdInventorySession> response = api.finishInventory(
+                session.authorizationHeader(),
+                activeInventory.id
+            ).execute();
+            if (!response.isSuccessful()) throw new IOException(inventoryHttpError(response));
+            mainHandler.post(() -> completeMandatoryFbsAuditLocally(completedClientId, completedBoxCode));
+        });
+    }
+
+    private boolean continueAfterMandatoryFbsAuditIfReady() {
+        if (!mandatoryFbsAuditActive || activeInventory == null || activeInventoryBox == null) {
+            return false;
+        }
+        int pendingDifferences = 0;
+        if (activeInventoryBox.lines != null) {
+            for (TsdInventoryLine line : activeInventoryBox.lines) {
+                if (
+                    line != null &&
+                    line.countedQuantity != line.expectedQuantity &&
+                    "PENDING".equals(safeText(line.decision))
+                ) {
+                    pendingDifferences += 1;
+                }
+            }
+        }
+        if (!FbsTaskSafety.mandatoryAuditCanResume(
+            activeInventory.status,
+            activeInventoryBox.status,
+            pendingDifferences
+        )) {
+            return false;
+        }
+        if (FbsTaskSafety.mandatoryAuditAlreadyCompleted(activeInventory.status)) {
+            completeMandatoryFbsAuditLocally(mandatoryFbsAuditClientId, mandatoryFbsAuditBoxCode);
+        } else {
+            finishMandatoryFbsAudit();
+        }
+        return true;
+    }
+
+    private void completeMandatoryFbsAuditLocally(String completedClientId, String completedBoxCode) {
+        inventoryRequestBusy = false;
+        removeEquivalentMandatoryFbsAudit(completedClientId, completedBoxCode);
+        mandatoryFbsAuditActive = false;
+        mandatoryFbsAuditBoxCode = "";
+        mandatoryFbsAuditClientId = "";
+        mandatoryFbsAuditSessionId = "";
+        mandatoryFbsAuditPendingBarcode = "";
+        mandatoryFbsAuditKizValues.clear();
+        if (pendingFbsAuditBoxes.isEmpty()) {
+            mandatoryFbsAuditOwnerKey = "";
+        }
+        activeInventory = null;
+        activeInventoryBox = null;
+        persistMandatoryFbsAuditState();
+        statusMessage = tr(
+            "Короб проверен и актуализирован. Сборка FBS разблокирована.",
+            "Quti tekshirildi va yangilandi. FBS blokdan chiqarildi."
+        );
+        if (!pendingFbsAuditBoxes.isEmpty()) resumeMandatoryFbsAudit();
+        else openFbsAssembly();
+    }
+
     private void finishInventoryBox() {
         TsdSession session = safeSession();
-        if (session == null || activeInventoryBox == null) {
+        if (session == null || activeInventoryBox == null || inventoryRequestBusy) {
             return;
         }
         String boxId = activeInventoryBox.id;
+        inventoryRequestBusy = true;
         statusMessage = tr("Сверяю короб…", "Quti solishtirilmoqda…");
         renderInventoryCountScreen();
         runBackground(() -> {
@@ -845,10 +2568,13 @@ public class MainActivity extends Activity {
             TsdInventoryBox finished = response.body();
             mainHandler.post(() -> {
                 online = true;
+                inventoryRequestBusy = false;
                 activeInventoryBox = finished;
                 inventoryTransferMode = false;
                 statusMessage = "";
-                renderInventoryCountScreen();
+                if (!continueAfterMandatoryFbsAuditIfReady()) {
+                    renderInventoryCountScreen();
+                }
             });
         });
     }
@@ -954,12 +2680,22 @@ public class MainActivity extends Activity {
                 transferredInventoryBoxId = auditBoxId;
                 Object quantityValue = result.get("quantity");
                 int quantity = quantityValue instanceof Number ? ((Number) quantityValue).intValue() : 0;
+                Object autoApprovedValue = result.get("autoApprovedChecks");
+                int autoApprovedChecks = autoApprovedValue instanceof Number
+                    ? ((Number) autoApprovedValue).intValue()
+                    : 0;
                 boolean archived = Boolean.TRUE.equals(result.get("sourceArchived"));
                 statusMessage = tr(
                     "Перемещено " + quantity + " шт. в короб " + targetBoxCode +
-                        (archived ? ". Исходный короб отправлен в архив." : "."),
+                        (archived ? ". Исходный короб отправлен в архив." : ".") +
+                        (autoApprovedChecks > 0
+                            ? " Администратором автоматически подтверждено проверок: " + autoApprovedChecks + "."
+                            : ""),
                     quantity + " dona " + targetBoxCode + " qutiga ko‘chirildi" +
-                        (archived ? ". Manba quti arxivga yuborildi." : ".")
+                        (archived ? ". Manba quti arxivga yuborildi." : ".") +
+                        (autoApprovedChecks > 0
+                            ? " Administrator avtomatik tasdiqlagan tekshiruvlar: " + autoApprovedChecks + "."
+                            : "")
                 );
                 renderInventoryCountScreen();
             });
@@ -975,7 +2711,11 @@ public class MainActivity extends Activity {
         String boxId = keepBox && activeInventoryBox != null ? activeInventoryBox.id : "";
         runBackground(() -> {
             WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
-            Response<TsdInventorySession> response = api.getInventory(session.authorizationHeader(), sessionId).execute();
+            Response<TsdInventorySession> response = api.getInventory(
+                session.authorizationHeader(),
+                sessionId,
+                !keepBox
+            ).execute();
             if (!response.isSuccessful() || response.body() == null) {
                 throw new IOException(inventoryHttpError(response));
             }
@@ -984,7 +2724,9 @@ public class MainActivity extends Activity {
                 online = true;
                 activeInventory = loaded;
                 activeInventoryBox = boxId.isEmpty() ? null : findInventoryBox(loaded, boxId);
-                renderInventoryCountScreen();
+                if (!continueAfterMandatoryFbsAuditIfReady()) {
+                    renderInventoryCountScreen();
+                }
             });
         });
     }
@@ -1086,7 +2828,29 @@ public class MainActivity extends Activity {
             root.addView(receiptFeedbackColor == 0 ? messageView(statusMessage) : feedbackView(statusMessage, receiptFeedbackColor));
         }
 
+        if (receiptMode.isEmpty()) {
+            root.addView(messageView(
+                "Выберите способ приемки. В обоих режимах один КИЗ можно принять только один раз."
+            ));
+            root.addView(primaryMenuButton(
+                "Обычная приемка",
+                view -> selectReceiptMode(RECEIPT_MODE_STANDARD)
+            ));
+            root.addView(primaryMenuButton(
+                "Приемка по боксам",
+                view -> selectReceiptMode(RECEIPT_MODE_BOXES)
+            ));
+            root.addView(messageView(
+                "Приемка по боксам: сканируйте бокс/короб, добавляйте товары, закройте его и переходите к следующему."
+            ));
+            root.addView(secondaryButton("Назад", view -> renderMainScreen()));
+            setScrollableContent(root);
+            refreshHeaderText();
+            return;
+        }
+
         if (receiptClientId.isEmpty()) {
+            root.addView(messageView("Режим: " + receiptModeLabel()));
             root.addView(label("Клиент приемки"));
             clientAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new ArrayList<String>());
             clientAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
@@ -1096,6 +2860,7 @@ public class MainActivity extends Activity {
             root.addView(clientSpinner);
             root.addView(primaryMenuButton("Выбрать клиента", view -> startReceiptForSelectedClient()));
             root.addView(secondaryButton("Обновить клиентов", view -> loadClients(true)));
+            root.addView(secondaryButton("Изменить режим", view -> resetReceiptStateAndRender()));
             root.addView(secondaryButton("Назад", view -> renderMainScreen()));
             setScrollableContent(root);
             refreshHeaderText();
@@ -1103,11 +2868,31 @@ public class MainActivity extends Activity {
         }
 
         root.addView(messageView("Клиент: " + receiptClientName()));
-        root.addView(messageView(receiptWithoutBoxes()
+        root.addView(messageView(!receiptUsesBoxes()
             ? "Режим: без коробов · принято товаров: " + receiptAcceptedItems
-            : "Принято коробов: " + receiptClosedBoxes + " · товаров: " + receiptAcceptedItems));
+            : "Режим: по боксам · закрыто боксов: " + receiptClosedBoxes + " · товаров: " + receiptAcceptedItems));
 
-        if (receiptWithoutBoxes()) {
+        if (receiptKizAuditMode) {
+            root.addView(feedbackView(
+                "ПРОВЕРКА ПРИНЯТЫХ КИЗ\nСканирование здесь ничего повторно не принимает и не меняет остатки.",
+                BOX_DUPLICATE_BLUE
+            ));
+            scanInput = input("Сканируйте КИЗ для проверки");
+            scanInput.setOnEditorActionListener((view, actionId, event) -> {
+                handleReceiptKizAuditScan();
+                return true;
+            });
+            root.addView(scanInput);
+            root.addView(primaryMenuButton("Проверить КИЗ", view -> handleReceiptKizAuditScan()));
+            root.addView(secondaryButton("Вернуться к приемке", view -> stopReceiptKizAudit()));
+            root.addView(secondaryButton("Назад", view -> renderMainScreen()));
+            setScrollableContent(root);
+            scanInput.requestFocus();
+            refreshHeaderText();
+            return;
+        }
+
+        if (!receiptUsesBoxes()) {
             if (!pendingReceiptBarcode.isEmpty() && pendingReceiptRequiresKiz) {
                 root.addView(messageView("Товар: " + receiptSkuDisplay(pendingReceiptSku, pendingReceiptBarcode)));
                 scanInput = input("Сканируйте КИЗ");
@@ -1126,6 +2911,7 @@ public class MainActivity extends Activity {
                 });
                 root.addView(scanInput);
                 root.addView(primaryMenuButton("Принять товар", view -> handleReceiptBarcodeScan()));
+                root.addView(secondaryButton("Проверить принятые КИЗы", view -> startReceiptKizAudit()));
             }
             if (receiptAcceptedItems > 0 || pendingCount > 0) {
                 root.addView(primaryMenuButton("Закрыть приемку", view -> finishReceipt()));
@@ -1180,6 +2966,7 @@ public class MainActivity extends Activity {
             scanInput = boxCodeInput;
             root.addView(boxCodeInput);
             root.addView(primaryMenuButton("Открыть короб", view -> openReceiptBoxFromInput()));
+            root.addView(secondaryButton("Проверить принятые КИЗы", view -> startReceiptKizAudit()));
             if (receiptClosedBoxes > 0) {
                 root.addView(primaryMenuButton("Закрыть приемку", view -> finishReceipt()));
             }
@@ -1211,6 +2998,7 @@ public class MainActivity extends Activity {
             });
             root.addView(scanInput);
             root.addView(primaryMenuButton("Принять товар", view -> handleReceiptBarcodeScan()));
+            root.addView(secondaryButton("Проверить принятые КИЗы", view -> startReceiptKizAudit()));
         }
 
         root.addView(secondaryButton("Закрыть короб", view -> closeReceiptBox()));
@@ -1236,7 +3024,7 @@ public class MainActivity extends Activity {
 
     private void renderFatalScreen(Throwable error) {
         LinearLayout root = baseRoot();
-        root.addView(title("LOGOff ТСД"));
+        root.addView(title(BuildConfig.BRAND_NAME));
         root.addView(messageView("Приложение не смогло открыть локальную базу. Переустановите приложение или очистите данные ТСД."));
         root.addView(messageView(error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage()));
         root.addView(secondaryButton("Скачать приложение заново", view -> openApkDownload()));
@@ -1244,19 +3032,583 @@ public class MainActivity extends Activity {
         setScrollableContent(root);
     }
 
+    private void openOzonFboAssembly() {
+        if (safeSession() == null) {
+            statusMessage = tr("Сначала выполните вход в настройках.", "Avval sozlamalarda tizimga kiring.");
+            renderSettingsScreen();
+            return;
+        }
+        ozonFboOverview = null;
+        ozonFboPlan = null;
+        ozonFboBox = null;
+        ozonFboBusy = false;
+        ozonFboFeedbackColor = 0;
+        statusMessage = tr("Выберите клиента FBO Ozon.", "Ozon FBO mijozini tanlang.");
+        renderOzonFboClientScreen();
+    }
+
+    private void renderOzonFboClientScreen() {
+        screen = Screen.OZON_FBO_CLIENT;
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title(tr("Сборка FBO Ozon", "Ozon FBO yig‘ish")));
+        if (!statusMessage.isEmpty()) root.addView(messageView(statusMessage));
+        if (clients.isEmpty()) {
+            root.addView(feedbackView(
+                tr("Список клиентов ещё не загружен. Нажмите «Обновить клиентов».", "Mijozlar ro‘yxati yuklanmagan."),
+                LIGHT_GRAY
+            ));
+        } else {
+            clientAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new ArrayList<>());
+            clientAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+            clientSpinner = new Spinner(this);
+            clientSpinner.setAdapter(clientAdapter);
+            root.addView(label(tr("Клиент", "Mijoz")));
+            root.addView(clientSpinner);
+            refreshClientOptions();
+            root.addView(primaryMenuButton(
+                tr("Показать поставки FBO Ozon", "Ozon FBO yetkazib berishlarini ko‘rsatish"),
+                view -> loadOzonFboPlans()
+            ));
+        }
+        root.addView(secondaryButton(tr("Обновить клиентов", "Mijozlarni yangilash"), view -> loadClients(true)));
+        root.addView(secondaryButton(tr("В главное меню", "Bosh menyuga"), view -> renderMainScreen()));
+        setScrollableContent(root);
+        refreshHeaderText();
+    }
+
+    private String selectedOzonFboClientId() {
+        if (clientSpinner == null) return null;
+        int index = clientSpinner.getSelectedItemPosition() - 1;
+        if (index < 0 || index >= clients.size()) return null;
+        return clients.get(index).id;
+    }
+
+    private void loadOzonFboPlans() {
+        TsdSession session = safeSession();
+        String clientId = selectedOzonFboClientId();
+        if (session == null) {
+            renderSettingsScreen();
+            return;
+        }
+        if (clientId == null || clientId.trim().isEmpty()) {
+            statusMessage = tr("Выберите клиента.", "Mijozni tanlang.");
+            renderOzonFboClientScreen();
+            return;
+        }
+        screen = Screen.OZON_FBO_PLANS;
+        ozonFboBusy = true;
+        statusMessage = tr("Загружаю поставки FBO Ozon...", "Ozon FBO yetkazib berishlari yuklanmoqda...");
+        renderOzonFboPlansScreen();
+        runBackground(() -> {
+            Response<TsdOzonFboOverview> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                .listOzonFboPlans(session.authorizationHeader(), clientId)
+                .execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                String message = responseErrorMessage(response, tr("Не удалось загрузить поставки FBO Ozon.", "Ozon FBO ro‘yxatini yuklab bo‘lmadi."));
+                mainHandler.post(() -> showOzonFboError(message));
+                return;
+            }
+            TsdOzonFboOverview loaded = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                ozonFboBusy = false;
+                ozonFboFeedbackColor = 0;
+                ozonFboOverview = loaded;
+                statusMessage = tr("Выберите поставку для сборки.", "Yig‘ish uchun yetkazib berishni tanlang.");
+                renderOzonFboPlansScreen();
+            });
+        });
+    }
+
+    private void renderOzonFboPlansScreen() {
+        screen = Screen.OZON_FBO_PLANS;
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title(tr("FBO Ozon — поставки", "Ozon FBO — yetkazib berishlar")));
+        if (!statusMessage.isEmpty()) root.addView(feedbackView(
+            statusMessage,
+            ozonFboFeedbackColor == 0 ? Color.rgb(219, 234, 254) : ozonFboFeedbackColor
+        ));
+        if (ozonFboBusy) {
+            root.addView(messageView(tr("Подождите, идёт загрузка...", "Kutib turing, yuklanmoqda...")));
+        }
+        int visible = 0;
+        if (ozonFboOverview != null && ozonFboOverview.plans != null) {
+            for (TsdOzonFboOverview.Plan plan : ozonFboOverview.plans) {
+                if (plan == null || plan.boxes <= 0) continue;
+                visible += 1;
+                int remaining = Math.max(0, plan.totalUnits - plan.assembledUnits);
+                root.addView(taskRow(
+                    nonEmpty(plan.title, "FBO Ozon"),
+                    tr("Товары: ", "Tovarlar: ") + plan.assembledUnits + " / " + plan.totalUnits +
+                        "\n" + tr("Короба: ", "Qutilar: ") + plan.closedBoxes + " / " + plan.boxes +
+                        " · " + tr("осталось единиц: ", "qoldi: ") + remaining,
+                    plan.closedBoxes == plan.boxes ? BOX_FOUND_GREEN : Color.rgb(219, 234, 254)
+                ));
+                root.addView(multilineSecondaryButton(
+                    plan.closedBoxes == plan.boxes
+                        ? tr("Посмотреть закрытые короба", "Yopilgan qutilarni ko‘rish")
+                        : tr("Открыть сборку", "Yig‘ishni ochish"),
+                    view -> loadOzonFboPlan(plan.id)
+                ));
+            }
+        }
+        if (!ozonFboBusy && visible == 0) {
+            root.addView(feedbackView(
+                tr("Поставок с созданными коробами пока нет. Сначала создайте короба на этапе 3 в WMS.", "Yaratilgan qutilari bor yetkazib berishlar yo‘q."),
+                LIGHT_GRAY
+            ));
+        }
+        root.addView(secondaryButton(tr("Обновить список", "Ro‘yxatni yangilash"), view -> loadOzonFboPlans()));
+        root.addView(secondaryButton(tr("Сменить клиента", "Mijozni almashtirish"), view -> renderOzonFboClientScreen()));
+        root.addView(secondaryButton(tr("В главное меню", "Bosh menyuga"), view -> renderMainScreen()));
+        setScrollableContent(root);
+        refreshHeaderText();
+    }
+
+    private void loadOzonFboPlan(String planId) {
+        TsdSession session = safeSession();
+        if (session == null || planId == null || planId.trim().isEmpty()) return;
+        screen = Screen.OZON_FBO_BOXES;
+        ozonFboBusy = true;
+        statusMessage = tr("Загружаю короба...", "Qutilar yuklanmoqda...");
+        renderOzonFboBoxesScreen();
+        runBackground(() -> {
+            Response<TsdOzonFboPlan> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                .getOzonFboPlan(session.authorizationHeader(), planId)
+                .execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                String message = responseErrorMessage(response, tr("Не удалось загрузить короба FBO Ozon.", "Ozon FBO qutilarini yuklab bo‘lmadi."));
+                mainHandler.post(() -> showOzonFboError(message));
+                return;
+            }
+            TsdOzonFboPlan loaded = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                ozonFboBusy = false;
+                ozonFboFeedbackColor = 0;
+                ozonFboPlan = loaded;
+                ozonFboBox = null;
+                statusMessage = tr("Отсканируйте номер короба WMS или выберите его из списка.", "WMS quti raqamini skanerlang yoki ro‘yxatdan tanlang.");
+                renderOzonFboBoxesScreen();
+            });
+        });
+    }
+
+    private void renderOzonFboBoxesScreen() {
+        screen = Screen.OZON_FBO_BOXES;
+        ozonFboScanInput = null;
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title(tr("FBO Ozon — короба WMS", "Ozon FBO — WMS qutilari")));
+        if (ozonFboPlan != null) root.addView(messageView(nonEmpty(ozonFboPlan.title, "FBO Ozon")));
+        if (!statusMessage.isEmpty()) root.addView(feedbackView(
+            statusMessage,
+            ozonFboFeedbackColor == 0 ? Color.rgb(219, 234, 254) : ozonFboFeedbackColor
+        ));
+        if (ozonFboBusy) root.addView(messageView(tr("Подождите...", "Kutib turing...")));
+        if (ozonFboPlan != null && ozonFboPlan.boxes != null) {
+            ozonFboScanInput = input(tr("Сканируйте короб WMS", "WMS qutini skanerlang"));
+            root.addView(ozonFboScanInput);
+            root.addView(primaryMenuButton(tr("Открыть короб", "Qutini ochish"), view -> openOzonFboBoxByCode()));
+            for (TsdOzonFboPlan.Box box : ozonFboPlan.boxes) {
+                if (box == null) continue;
+                int planned = box.plannedQuantity();
+                int assembled = box.assembledQuantity();
+                String city = box.cluster == null
+                    ? "—"
+                    : nonEmpty(box.cluster.clusterName, nonEmpty(box.cluster.sourceName, "—"));
+                root.addView(taskRow(
+                    nonEmpty(box.boxCode, "Короб WMS"),
+                    city + " · " + assembled + " / " + planned + tr(" шт.", " dona"),
+                    box.isClosed() ? BOX_FOUND_GREEN : assembled > 0 ? Color.rgb(254, 240, 138) : LIGHT_GRAY
+                ));
+                if (!box.isClosed()) {
+                    root.addView(multilineSecondaryButton(
+                        assembled > 0 ? tr("Продолжить короб", "Qutini davom ettirish") : tr("Начать короб", "Qutini boshlash"),
+                        view -> selectOzonFboBox(box)
+                    ));
+                }
+            }
+        }
+        root.addView(secondaryButton(tr("Обновить короба", "Qutilarni yangilash"), view -> {
+            if (ozonFboPlan != null) loadOzonFboPlan(ozonFboPlan.id);
+        }));
+        root.addView(secondaryButton(tr("К списку поставок", "Yetkazib berishlar ro‘yxatiga"), view -> renderOzonFboPlansScreen()));
+        root.addView(secondaryButton(tr("В главное меню", "Bosh menyuga"), view -> renderMainScreen()));
+        setScrollableContent(root);
+        if (ozonFboScanInput != null) ozonFboScanInput.requestFocus();
+        refreshHeaderText();
+    }
+
+    private void openOzonFboBoxByCode() {
+        if (ozonFboPlan == null || ozonFboPlan.boxes == null) return;
+        String code = textValue(ozonFboScanInput).toUpperCase(Locale.ROOT);
+        if (code.isEmpty()) {
+            showOzonFboError(tr("Отсканируйте номер короба WMS.", "WMS quti raqamini skanerlang."));
+            return;
+        }
+        for (TsdOzonFboPlan.Box box : ozonFboPlan.boxes) {
+            if (box != null && code.equals(nonEmpty(box.boxCode, "").toUpperCase(Locale.ROOT))) {
+                if (box.isClosed()) {
+                    showOzonFboError(tr("Этот короб уже закрыт.", "Bu quti allaqachon yopilgan."));
+                    return;
+                }
+                selectOzonFboBox(box);
+                return;
+            }
+        }
+        showOzonFboError(tr("Короб не относится к выбранной поставке FBO Ozon.", "Quti tanlangan Ozon FBO yetkazib berishiga tegishli emas."));
+    }
+
+    private void selectOzonFboBox(TsdOzonFboPlan.Box box) {
+        ozonFboBox = box;
+        ozonFboFeedbackColor = 0;
+        statusMessage = tr("Сканируйте ШК каждой единицы, которую кладёте в короб.", "Qutiga qo‘yilgan har bir mahsulot SHKini skanerlang.");
+        renderOzonFboAssemblyScreen();
+    }
+
+    private void renderOzonFboAssemblyScreen() {
+        screen = Screen.OZON_FBO_ASSEMBLY;
+        ozonFboScanInput = null;
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title(tr("Сборка FBO Ozon", "Ozon FBO yig‘ish")));
+        if (ozonFboBox == null) {
+            root.addView(feedbackView(tr("Короб не выбран.", "Quti tanlanmagan."), LIGHT_GRAY));
+            root.addView(secondaryButton(tr("К коробам", "Qutilarga"), view -> renderOzonFboBoxesScreen()));
+            setScrollableContent(root);
+            return;
+        }
+        int planned = ozonFboBox.plannedQuantity();
+        int assembled = ozonFboBox.assembledQuantity();
+        root.addView(feedbackView(
+            nonEmpty(ozonFboBox.boxCode, "Короб WMS") + "\n" +
+                tr("Собрано: ", "Yig‘ildi: ") + assembled + " / " + planned,
+            assembled == planned ? BOX_FOUND_GREEN : Color.rgb(219, 234, 254)
+        ));
+        if (!statusMessage.isEmpty()) root.addView(feedbackView(
+            statusMessage,
+            ozonFboFeedbackColor == 0 ? LIGHT_GRAY : ozonFboFeedbackColor
+        ));
+        if (ozonFboBox.items != null) {
+            for (TsdOzonFboPlan.Item item : ozonFboBox.items) {
+                if (item == null) continue;
+                TsdOzonFboPlan.PlanItem product = item.planItem;
+                String offerId = product == null ? "—" : nonEmpty(product.offerId, nonEmpty(product.ozonSku, "—"));
+                String name = product == null ? "—" : nonEmpty(product.productName, offerId);
+                root.addView(taskRow(
+                    name,
+                    tr("Артикул: ", "Artikul: ") + offerId + " · " + item.assembledQuantity + " / " + item.quantity,
+                    item.assembledQuantity >= item.quantity ? BOX_FOUND_GREEN : LIGHT_GRAY
+                ));
+            }
+        }
+        if (!ozonFboBox.isClosed() && assembled < planned && !"SHORTAGE_PENDING".equals(ozonFboBox.status)) {
+            ozonFboScanInput = input(tr("Сканируйте ШК товара", "Mahsulot SHKini skanerlang"));
+            root.addView(ozonFboScanInput);
+            root.addView(primaryMenuButton(tr("Добавить товар", "Tovar qo‘shish"), view -> submitOzonFboProductScan()));
+        } else if ("SHORTAGE_PENDING".equals(ozonFboBox.status)) {
+            root.addView(feedbackView(
+                tr("По коробу заявлено недовложение. Ожидается решение менеджера в WMS.", "Quti bo‘yicha kamlik bildirildi. Menejer qarori kutilmoqda."),
+                Color.rgb(254, 240, 138)
+            ));
+        }
+        if (!ozonFboBox.isClosed() && planned > 0 && assembled == planned) {
+            root.addView(primaryMenuButton(tr("Закрыть короб", "Qutini yopish"), view -> closeOzonFboBox()));
+        }
+        root.addView(secondaryButton(tr("Обновить короб", "Qutini yangilash"), view -> {
+            if (ozonFboPlan != null) loadOzonFboPlan(ozonFboPlan.id);
+        }));
+        root.addView(secondaryButton(tr("К списку коробов", "Qutilar ro‘yxatiga"), view -> renderOzonFboBoxesScreen()));
+        root.addView(secondaryButton(tr("В главное меню", "Bosh menyuga"), view -> renderMainScreen()));
+        setScrollableContent(root);
+        if (ozonFboScanInput != null) ozonFboScanInput.requestFocus();
+        refreshHeaderText();
+    }
+
+    private void submitOzonFboProductScan() {
+        TsdSession session = safeSession();
+        if (session == null || ozonFboBox == null || ozonFboBusy) return;
+        String code = textValue(ozonFboScanInput);
+        if (code.isEmpty()) {
+            showOzonFboError(tr("Отсканируйте ШК товара.", "Mahsulot SHKini skanerlang."));
+            return;
+        }
+        if (isCurrentOzonFboBoxCode(code)) {
+            showOzonFboError(tr("Сейчас нужен ШК товара, а не номер короба WMS.", "Hozir mahsulot SHKi kerak, WMS quti raqami emas."));
+            return;
+        }
+        ozonFboBusy = true;
+        Map<String, String> body = new LinkedHashMap<>();
+        body.put("code", code);
+        runBackground(() -> {
+            Response<TsdOzonFboPlan.Box> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                .scanOzonFboBox(session.authorizationHeader(), ozonFboBox.id, body)
+                .execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                String message = responseErrorMessage(response, tr("Товар не принят в короб FBO Ozon.", "Tovar Ozon FBO qutisiga qabul qilinmadi."));
+                mainHandler.post(() -> showOzonFboError(message));
+                return;
+            }
+            TsdOzonFboPlan.Box updated = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                ozonFboBusy = false;
+                ozonFboFeedbackColor = BOX_FOUND_GREEN;
+                ozonFboBox = updated;
+                replaceOzonFboBox(updated);
+                statusMessage = tr("Товар принят. Сканируйте следующую единицу.", "Tovar qabul qilindi. Keyingi birlikni skanerlang.");
+                playFbsSuccess();
+                renderOzonFboAssemblyScreen();
+            });
+        });
+    }
+
+    private void closeOzonFboBox() {
+        TsdSession session = safeSession();
+        if (session == null || ozonFboBox == null || ozonFboBusy) return;
+        String closedCode = nonEmpty(ozonFboBox.boxCode, "Короб WMS");
+        ozonFboBusy = true;
+        runBackground(() -> {
+            Response<TsdOzonFboPlan> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                .closeOzonFboBox(session.authorizationHeader(), ozonFboBox.id)
+                .execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                String message = responseErrorMessage(response, tr("Не удалось закрыть короб.", "Qutini yopib bo‘lmadi."));
+                mainHandler.post(() -> showOzonFboError(message));
+                return;
+            }
+            TsdOzonFboPlan updated = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                ozonFboBusy = false;
+                ozonFboPlan = updated;
+                ozonFboBox = null;
+                ozonFboFeedbackColor = BOX_FOUND_GREEN;
+                statusMessage = tr("Короб закрыт: ", "Quti yopildi: ") + closedCode;
+                playFbsSuccess();
+                renderOzonFboBoxesScreen();
+            });
+        });
+    }
+
+    private void replaceOzonFboBox(TsdOzonFboPlan.Box updated) {
+        if (updated == null || ozonFboPlan == null || ozonFboPlan.boxes == null) return;
+        for (int index = 0; index < ozonFboPlan.boxes.size(); index += 1) {
+            TsdOzonFboPlan.Box current = ozonFboPlan.boxes.get(index);
+            if (current != null && nonEmpty(current.id, "").equals(nonEmpty(updated.id, ""))) {
+                ozonFboPlan.boxes.set(index, updated);
+                return;
+            }
+        }
+    }
+
+    private boolean isCurrentOzonFboBoxCode(String value) {
+        String normalized = nonEmpty(value, "").trim();
+        if (normalized.isEmpty() || ozonFboPlan == null || ozonFboPlan.boxes == null) return false;
+        for (TsdOzonFboPlan.Box box : ozonFboPlan.boxes) {
+            if (box != null && normalized.equalsIgnoreCase(nonEmpty(box.boxCode, "").trim())) return true;
+        }
+        return false;
+    }
+
+    private void showOzonFboError(String message) {
+        ozonFboBusy = false;
+        ozonFboFeedbackColor = BOX_NOT_NEEDED_RED;
+        statusMessage = nonEmpty(message, tr("Ошибка FBO Ozon.", "Ozon FBO xatosi."));
+        playFbsError();
+        refreshCurrentScreen();
+        showScanningErrorDialog(statusMessage);
+    }
+
     private void openFbsAssembly() {
+        if (mandatoryFbsAuditActive || !pendingFbsAuditBoxes.isEmpty()) {
+            resumeMandatoryFbsAudit();
+            return;
+        }
         if (safeSession() == null) {
             statusMessage = tr("Сначала выполните вход в настройках.", "Avval sozlamalarda tizimga kiring.");
             renderSettingsScreen();
             return;
         }
         fbsAssembly = null;
+        fbsRequests = null;
+        selectedFbsRequestId = "";
+        fbsRequestsArchiveMode = false;
         fbsFeedbackColor = 0;
-        statusMessage = tr("Получаю следующий заказ...", "Keyingi buyurtma olinmoqda...");
+        statusMessage = tr("Загружаю FBS-заявки...", "FBS arizalari yuklanmoqda...");
+        loadFbsRequestChoices();
+    }
+
+    private void loadFbsRequestChoices() {
+        if (mandatoryFbsAuditActive || !pendingFbsAuditBoxes.isEmpty()) {
+            resumeMandatoryFbsAudit();
+            return;
+        }
+        TsdSession session = safeSession();
+        if (session == null) {
+            renderSettingsScreen();
+            return;
+        }
+        screen = Screen.FBS_REQUESTS;
+        fbsRequestsBusy = true;
+        renderFbsRequestSelectionScreen();
+        runBackground(() -> {
+            Response<TsdFbsRequestsResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                .listFbsAssemblyRequests(
+                    session.authorizationHeader(),
+                    session.deviceCode,
+                    fbsRequestsArchiveMode ? "true" : null
+                )
+                .execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                String message = responseErrorMessage(response, tr(
+                    "Не удалось загрузить FBS-заявки. Повторите через минуту.",
+                    "FBS arizalarini yuklab bo‘lmadi. Bir daqiqadan so‘ng takrorlang."
+                ));
+                mainHandler.post(() -> showFbsRequestsError(message, response.code() < 500));
+                return;
+            }
+            TsdFbsRequestsResponse loaded = response.body();
+            mainHandler.post(() -> {
+                online = true;
+                fbsRequestsBusy = false;
+                fbsFeedbackColor = 0;
+                fbsRequests = loaded;
+                statusMessage = nonEmpty(loaded.message, tr("Выберите FBS-заявку.", "FBS arizasini tanlang."));
+                renderFbsRequestSelectionScreen();
+            });
+        });
+    }
+
+    private void renderFbsRequestSelectionScreen() {
+        screen = Screen.FBS_REQUESTS;
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title(tr("Сборка FBS — заявки", "FBS yig‘ish — arizalar")));
+
+        if (fbsRequestsArchiveMode) {
+            root.addView(feedbackView(
+                tr("Архив собранных FBS-заявок", "Yig‘ilgan FBS arizalari arxivi"),
+                BOX_FOUND_GREEN
+            ));
+        }
+
+        if (fbsRequestsBusy) {
+            root.addView(feedbackView(
+                tr("Подождите, загружаю список заявок...", "Kutib turing, arizalar ro‘yxati yuklanmoqda..."),
+                BOX_DUPLICATE_BLUE
+            ));
+        } else if (!statusMessage.isEmpty()) {
+            root.addView(feedbackView(
+                statusMessage,
+                fbsFeedbackColor == 0 ? Color.rgb(219, 234, 254) : fbsFeedbackColor
+            ));
+        }
+
+        List<TsdFbsRequestsResponse.Request> requests = fbsRequests == null ? null : fbsRequests.requests;
+        if (!fbsRequestsBusy && (requests == null || requests.isEmpty())) {
+            root.addView(feedbackView(
+                fbsRequestsArchiveMode
+                    ? tr("Собранных FBS-заявок пока нет.", "Yig‘ilgan FBS arizalari hozircha yo‘q.")
+                    : tr("Открытых FBS-заявок пока нет.", "Hozircha ochiq FBS arizalari yo‘q."),
+                LIGHT_GRAY
+            ));
+        } else if (requests != null) {
+            String lockedRequestId = fbsRequests.currentRequestId == null ? "" : fbsRequests.currentRequestId;
+            for (TsdFbsRequestsResponse.Request request : requests) {
+                boolean isCurrent = !lockedRequestId.isEmpty() && lockedRequestId.equals(request.requestId);
+                boolean isLocked = !lockedRequestId.isEmpty() && !isCurrent;
+                String requestNumber = request.requestNumber > 0
+                    ? String.format(Locale.US, "%06d", request.requestNumber)
+                    : "-";
+                String clientName = request.client == null
+                    ? "-"
+                    : nonEmpty(request.client.name, request.client.code);
+                String marketplaceName = fbsMarketplaceNames(request.marketplaces);
+                root.addView(fbsMarketplaceWarehouseBanner(marketplaceName, request.warehouseNames));
+                if (fbsRequestsArchiveMode) {
+                    String archiveDetails = tr("Клиент: ", "Mijoz: ") + clientName + "\n" +
+                        tr("Собрано заказов: ", "Yig‘ilgan buyurtmalar: ") + request.completedOrders +
+                        tr(" из ", " / ") + request.totalOrders;
+                    if (request.completedAt != null && !request.completedAt.trim().isEmpty()) {
+                        archiveDetails += "\n" + tr("Завершено: ", "Yakunlangan: ") + request.completedAt;
+                    }
+                    root.addView(taskRow(
+                        tr("Заявка №", "Ariza №") + requestNumber + " · " + nonEmpty(request.title, "FBS"),
+                        archiveDetails,
+                        BOX_FOUND_GREEN
+                    ));
+                    continue;
+                }
+
+                String details = tr("Клиент: ", "Mijoz: ") + clientName + "\n" +
+                    tr("Готово к сборке: ", "Yig‘ishga tayyor: ") + request.readyOrders +
+                    tr(" из ", " / ") + request.totalOrders + "\n" +
+                    tr("Осталось заказов: ", "Qolgan buyurtmalar: ") + request.totalOrders +
+                    tr(" · В работе: ", " · Jarayonda: ") + request.inProgressOrders;
+                if (request.awaitingWbConfirmation > 0) {
+                    details += "\n" + tr("Ждут готовности маркетплейса: ", "Marketplace tayyorligini kutmoqda: ") + request.awaitingWbConfirmation;
+                }
+                if (request.noAvailableStock > 0) {
+                    details += "\n" + tr("Нет доступного остатка: ", "Erkin qoldiq yo‘q: ") + request.noAvailableStock;
+                }
+                if (isCurrent) {
+                    details += "\n" + tr("Открыт незавершённый заказ — продолжите его.", "Tugallanmagan buyurtma ochiq — uni davom ettiring.");
+                }
+                root.addView(taskRow(
+                    tr("Заявка №", "Ariza №") + requestNumber + " · " + nonEmpty(request.title, "FBS"),
+                    details,
+                    isCurrent ? Color.rgb(254, 240, 138) : request.readyOrders > 0 ? Color.rgb(219, 234, 254) : LIGHT_GRAY
+                ));
+                if (isLocked) {
+                    continue;
+                }
+                root.addView(multilineSecondaryButton(
+                    isCurrent
+                        ? tr("Продолжить эту заявку", "Shu arizani davom ettirish")
+                        : tr("Выбрать эту заявку", "Shu arizani tanlash"),
+                    view -> selectFbsRequest(request)
+                ));
+            }
+        }
+
+        root.addView(secondaryButton(
+            fbsRequestsArchiveMode
+                ? tr("К рабочим FBS-заявкам", "Faol FBS arizalariga")
+                : tr("Архив собранных заявок", "Yig‘ilgan arizalar arxivi"),
+            view -> {
+                fbsRequestsArchiveMode = !fbsRequestsArchiveMode;
+                loadFbsRequestChoices();
+            }
+        ));
+        root.addView(secondaryButton(
+            fbsRequestsArchiveMode ? tr("Обновить архив", "Arxivni yangilash") : tr("Обновить список", "Ro‘yxatni yangilash"),
+            view -> loadFbsRequestChoices()
+        ));
+        root.addView(secondaryButton(tr("В главное меню", "Bosh menyuga"), view -> renderMainScreen()));
+        setScrollableContent(root);
+        refreshHeaderText();
+    }
+
+    private void selectFbsRequest(TsdFbsRequestsResponse.Request request) {
+        if (request == null || request.requestId == null || request.requestId.trim().isEmpty()) {
+            return;
+        }
+        selectedFbsRequestId = request.requestId;
+        fbsAssembly = null;
+        fbsFeedbackColor = 0;
+        statusMessage = tr("Открываю выбранную FBS-заявку...", "Tanlangan FBS arizasi ochilmoqda...");
         loadNextFbsAssembly();
     }
 
     private void loadNextFbsAssembly() {
+        if (mandatoryFbsAuditActive || !pendingFbsAuditBoxes.isEmpty()) {
+            resumeMandatoryFbsAudit();
+            return;
+        }
         TsdSession session = safeSession();
         if (session == null) {
             renderSettingsScreen();
@@ -1267,7 +3619,7 @@ public class MainActivity extends Activity {
         renderFbsAssemblyScreen();
         runBackground(() -> {
             Response<TsdFbsAssemblyResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
-                .nextFbsAssembly(session.authorizationHeader(), session.deviceCode)
+                .nextFbsAssembly(session.authorizationHeader(), session.deviceCode, selectedFbsRequestId)
                 .execute();
             if (!response.isSuccessful() || response.body() == null) {
                 String message = responseErrorMessage(response, tr(
@@ -1289,7 +3641,43 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void scheduleOzonLabelAutoRefresh(TsdFbsAssemblyResponse.Task task) {
+        cancelOzonLabelAutoRefresh();
+        if (task == null || task.id == null || task.id.trim().isEmpty()) return;
+        String taskId = task.id;
+        fbsOzonLabelRefreshTask = () -> {
+            fbsOzonLabelRefreshTask = null;
+            if (
+                screen != Screen.FBS_ASSEMBLY ||
+                fbsBusy ||
+                fbsAssembly == null ||
+                fbsAssembly.task == null ||
+                !taskId.equals(fbsAssembly.task.id) ||
+                !"WAIT_MARKETPLACE_LABEL".equals(fbsAssembly.state)
+            ) {
+                return;
+            }
+            fbsFeedbackColor = BOX_DUPLICATE_BLUE;
+            statusMessage = tr(
+                "Проверяю готовность этикетки Ozon автоматически...",
+                "Ozon stikeri tayyorligini avtomatik tekshiryapman..."
+            );
+            loadNextFbsAssembly();
+        };
+        mainHandler.postDelayed(fbsOzonLabelRefreshTask, 5_000L);
+    }
+
+    private void cancelOzonLabelAutoRefresh() {
+        if (fbsOzonLabelRefreshTask == null) return;
+        mainHandler.removeCallbacks(fbsOzonLabelRefreshTask);
+        fbsOzonLabelRefreshTask = null;
+    }
+
     private void renderFbsAssemblyScreen() {
+        if (mandatoryFbsAuditActive || !pendingFbsAuditBoxes.isEmpty()) {
+            resumeMandatoryFbsAudit();
+            return;
+        }
         screen = Screen.FBS_ASSEMBLY;
         fbsScanInput = null;
         LinearLayout root = baseRoot();
@@ -1327,7 +3715,11 @@ public class MainActivity extends Activity {
                     view -> loadNextFbsAssembly()
                 ));
             }
-            root.addView(secondaryButton(tr("Назад", "Orqaga"), view -> renderMainScreen()));
+            root.addView(secondaryButton(
+                tr("К списку FBS-заявок", "FBS arizalari ro‘yxatiga"),
+                view -> loadFbsRequestChoices()
+            ));
+            root.addView(secondaryButton(tr("В главное меню", "Bosh menyuga"), view -> renderMainScreen()));
             setScrollableContent(root);
             refreshHeaderText();
             return;
@@ -1338,16 +3730,53 @@ public class MainActivity extends Activity {
         String article = task.product == null ? "-" : nonEmpty(task.product.article, "-");
         String color = task.product == null ? "-" : nonEmpty(task.product.color, tr("не указан", "ko‘rsatilmagan"));
         String size = task.product == null ? "-" : nonEmpty(task.product.size, tr("не указан", "ko‘rsatilmagan"));
+        String marketplaceName = fbsMarketplaceName(task.marketplace);
+        TsdFbsAssemblyResponse.Product sourceProduct =
+            task.relabeling == null ? null : task.relabeling.sourceProduct;
+        String sourceProductName = sourceProduct == null ? productName : nonEmpty(sourceProduct.name, "-");
+        String sourceArticle = sourceProduct == null ? article : nonEmpty(sourceProduct.article, "-");
+        String sourceColor = sourceProduct == null ? color : nonEmpty(sourceProduct.color, tr("не указан", "ko‘rsatilmagan"));
+        String sourceSize = sourceProduct == null ? size : nonEmpty(sourceProduct.size, tr("не указан", "ko‘rsatilmagan"));
+        boolean relabelRequired = task.relabeling != null && task.relabeling.required;
         String state = nonEmpty(fbsAssembly.state, "SCAN_BOX");
+        if (!"WAIT_MARKETPLACE_LABEL".equals(state)) {
+            cancelOzonLabelAutoRefresh();
+        }
+        root.addView(feedbackView(
+            tr("\u0427\u0422\u041e \u0417\u0410\u0411\u0420\u0410\u0422\u042c", "NIMA OLISH KERAK") + "\n" +
+                productName + "\n" +
+                tr("\u0410\u0420\u0422\u0418\u041a\u0423\u041b: ", "ARTIKUL: ") + article + "\n" +
+                tr("\u0426\u0412\u0415\u0422: ", "RANG: ") + color + "  \u00b7  " +
+                tr("\u0420\u0410\u0417\u041c\u0415\u0420: ", "O'LCHAM: ") + size,
+            Color.rgb(254, 240, 138)
+        ));
         root.addView(taskRow(
-            tr("Заказ WB №", "WB buyurtmasi №") + nonEmpty(task.orderId, "-"),
+            tr("Заказ ", "Buyurtma ") + marketplaceName + " №" + nonEmpty(task.orderId, "-"),
             tr("Клиент: ", "Mijoz: ") + clientName + "\n" +
-                productName + " · " + tr("арт. ", "art. ") + article,
+                productName + " · " + tr("арт. ", "art. ") + article + "\n" +
+                tr("Цвет: ", "Rang: ") + color + " · " + tr("РАЗМЕР: ", "O‘LCHAM: ") + size,
             LIGHT_GRAY
         ));
         boolean orderStickerReady = false;
+        Button stickerAppliedButton = null;
         if ("READY_TO_COMPLETE".equals(state)) {
-            orderStickerReady = renderFbsOrderSticker(root, task);
+            String taskMarketplace = nonEmpty(task.marketplace, "WILDBERRIES");
+            boolean hasRenderableSticker = !"WILDBERRIES".equalsIgnoreCase(taskMarketplace)
+                && !"OZON".equalsIgnoreCase(taskMarketplace)
+                || task.orderSticker != null
+                    && !nonEmpty(task.orderSticker.imageBase64, "").isEmpty();
+            if (hasRenderableSticker) {
+                stickerAppliedButton = primaryMenuButton(
+                    tr("НАКЛЕЙКА НАКЛЕЕНА", "STIKER YOPISHTIRILDI"),
+                    view -> completeFbsAssembly()
+                );
+                root.addView(stickerAppliedButton);
+            }
+            orderStickerReady = "WILDBERRIES".equalsIgnoreCase(nonEmpty(task.marketplace, "WILDBERRIES"))
+                ? renderFbsOrderSticker(root, task)
+                : "OZON".equalsIgnoreCase(nonEmpty(task.marketplace, ""))
+                    ? renderOzonOrderSticker(root, task)
+                    : renderNonWbOrderStickerInstruction(root, task);
         }
         if (fbsAssembly.progress != null && fbsAssembly.progress.requestTotalItems > 0) {
             String requestNumber = fbsAssembly.progress.requestNumber > 0
@@ -1372,33 +3801,155 @@ public class MainActivity extends Activity {
             root.addView(messageView(statusMessage));
         }
 
-        if ("SCAN_BOX".equals(state)) {
+        if ("SCAN_BOX".equals(state) || "PALLET_BOXES".equals(state)) {
+            if ("PALLET_BOXES".equals(state) && fbsAssembly.palletScan != null) {
+                TsdFbsAssemblyResponse.PalletScan pallet = fbsAssembly.palletScan;
+                String zone = pallet.zone == null
+                    ? tr("не назначена", "belgilanmagan")
+                    : nonEmpty(pallet.zone.name, pallet.zone.code);
+                String neededCodes =
+                    pallet.neededBoxCodes == null || pallet.neededBoxCodes.isEmpty()
+                        ? tr("нужных коробов нет", "kerakli qutilar yo‘q")
+                        : String.join("\n", pallet.neededBoxCodes);
+                root.addView(feedbackView(
+                    tr("ПАЛЛЕТСОРТ: ", "PALLETSORT: ") + nonEmpty(pallet.code, "-") + "\n" +
+                        tr("Зона: ", "Zona: ") + zone + "\n" +
+                        tr("Нужно коробов для заявки: ", "Ariza uchun kerakli qutilar: ") +
+                        pallet.neededBoxes + tr(" из ", " / ") + pallet.totalBoxes + "\n\n" +
+                        neededCodes,
+                    pallet.neededBoxes > 0 ? Color.rgb(254, 240, 138) : Color.rgb(254, 226, 226)
+                ));
+                // FIX: Show only the aggregate for remaining pallet-sorts in this room.
+                root.addView(feedbackView(
+                    FbsPalletHintFormatter.format(
+                        pallet.additionalPalletCount,
+                        "uz".equals(uiLanguage)
+                    ),
+                    Color.rgb(220, 252, 231)
+                ));
+            }
             String boxCode = nonEmpty(task.recommendedBoxCode, "-");
+            String locationHint = "";
+            if (task.recommendedLocation != null) {
+                String zone = nonEmpty(
+                    task.recommendedLocation.zoneName,
+                    tr("зона не назначена", "zona belgilanmagan")
+                );
+                locationHint = "\n" +
+                    tr("ЗОНА: ", "ZONA: ") + zone + "\n" +
+                    tr("ПАЛЛЕТА: ", "PALLET: ") + nonEmpty(task.recommendedLocation.palletCode, "-");
+            }
             root.addView(feedbackView(
-                tr("1. НАЙДИТЕ И ОТСКАНИРУЙТЕ КОРОБ\n", "1. QUTINI TOPING VA SKANERLANG\n") + boxCode,
+                tr("1. НАЙДИТЕ И ОТСКАНИРУЙТЕ КОРОБ\nМожно сначала пикнуть QR паллетсорта.\n",
+                    "1. QUTINI TOPING VA SKANERLANG\nAvval palletsort QR kodini skanerlash mumkin.\n") +
+                    boxCode + locationHint,
                 BOX_MOVEMENT_BLUE
             ));
+            // FIX: Employee view intentionally hides alternative pallets, boxes and routes.
+            if (task.samePalletRemainingBoxes > 0) {
+                String nextBoxes = task.samePalletBoxCodes == null || task.samePalletBoxCodes.isEmpty()
+                    ? ""
+                    : "\n" + String.join(", ", task.samePalletBoxCodes);
+                root.addView(feedbackView(
+                    tr("НЕ УХОДИТЕ ОТ ЭТОЙ ПАЛЛЕТЫ\nЗдесь ещё нужных коробов: ",
+                        "BU PALLETDAN KETMANG\nBu yerda yana kerakli qutilar: ") +
+                        task.samePalletRemainingBoxes + nextBoxes,
+                    Color.rgb(254, 240, 138)
+                ));
+            }
+            // FIX: Following orders stay hidden; the employee sees only the aggregate room hint above.
             root.addView(messageView(
-                tr("В коробе есть нужный товар: ", "Qutida kerakli mahsulot bor: ") + productName
+                tr("В коробе есть нужный товар: ", "Qutida kerakli mahsulot bor: ") +
+                    (relabelRequired ? sourceProductName : productName) + "\n" +
+                    tr("РАЗМЕР: ", "O‘LCHAM: ") + (relabelRequired ? sourceSize : size)
             ));
-            fbsScanInput = input(tr("Сканируйте номер короба", "Quti raqamini skanerlang"));
+            fbsScanInput = input(tr(
+                "Номер короба или QR паллетсорта",
+                "Quti raqami yoki palletsort QR"
+            ));
             root.addView(fbsScanInput);
             root.addView(primaryMenuButton(
-                tr("Подтвердить короб", "Qutini tasdiqlash"),
+                tr("Проверить скан", "Skanni tekshirish"),
                 view -> submitFbsScan()
             ));
-        } else if ("SCAN_BARCODE".equals(state)) {
+        } else if ("SCAN_SOURCE_BARCODE".equals(state)) {
             root.addView(feedbackView(
                 tr("Короб подтверждён: ", "Quti tasdiqlandi: ") + nonEmpty(task.scannedBoxCode, "-"),
                 BOX_FOUND_GREEN
             ));
+            root.addView(feedbackView(
+                tr("2. ВОЗЬМИТЕ ИСХОДНЫЙ ТОВАР ДЛЯ ПЕРЕКЛЕЙКИ\n", "2. QAYTA YORLIQLASH UCHUN MANBA MAHSULOTNI OLING\n") +
+                    tr("Название: ", "Nomi: ") + sourceProductName + "\n" +
+                    tr("Артикул: ", "Artikul: ") + sourceArticle + "\n" +
+                    tr("Цвет: ", "Rang: ") + sourceColor + "\n" +
+                    tr("РАЗМЕР: ", "O‘LCHAM: ") + sourceSize,
+                BOX_MOVEMENT_BLUE
+            ));
+            fbsScanInput = input(tr("Сканируйте исходный ШК", "Manba SHKni skanerlang"));
+            root.addView(fbsScanInput);
+            root.addView(primaryMenuButton(
+                tr("Подтвердить исходный товар", "Manba mahsulotni tasdiqlash"),
+                view -> submitFbsScan()
+            ));
+        } else if ("SCAN_RELABEL_BARCODE".equals(state)) {
+            root.addView(feedbackView(
+                tr("ИСХОДНЫЙ ТОВАР ВЕРНЫЙ", "MANBA MAHSULOT TO‘G‘RI"),
+                BOX_FOUND_GREEN
+            ));
+            root.addView(feedbackView(
+                tr("3. ПЕРЕКЛЕЙТЕ ТОВАР И ОТСКАНИРУЙТЕ НОВЫЙ ШК\n", "3. YORLIQNI ALMASHTIRING VA YANGI SHKNI SKANERLANG\n") +
+                    sourceArticle + "  →  " + article + "\n" +
+                    tr("Должно уехать: ", "Jo‘natilishi kerak: ") + productName + "\n" +
+                    tr("Цвет: ", "Rang: ") + color + "\n" +
+                    tr("РАЗМЕР: ", "O‘LCHAM: ") + size,
+                Color.rgb(254, 240, 138)
+            ));
+            fbsScanInput = input(tr("Сканируйте новый ШК после переклейки", "Yangi SHKni skanerlang"));
+            root.addView(fbsScanInput);
+            root.addView(primaryMenuButton(
+                tr("Подтвердить переклейку", "Qayta yorliqlashni tasdiqlash"),
+                view -> submitFbsScan()
+            ));
+        } else if ("SCAN_BARCODE".equals(state)) {
+            root.addView(feedbackView(
+                task.sourceWithoutBox
+                    ? tr("ИСТОЧНИК: ХРАНЕНИЕ БЕЗ КОРОБОВ", "MANBA: QUTISIZ SAQLASH")
+                    : tr("Короб подтверждён: ", "Quti tasdiqlandi: ") + nonEmpty(task.scannedBoxCode, "-"),
+                BOX_FOUND_GREEN
+            ));
             if (task.sourceBoxUsage != null) {
-                root.addView(feedbackView(
-                    tr("ИЗ ЭТОГО КОРОБА БУДЕТ ВЗЯТО\n", "BU QUTIDAN OLINADI\n") +
-                        task.sourceBoxUsage.units + tr(" ЕДИНИЦ ТОВАРА · ", " DONA · ") +
-                        task.sourceBoxUsage.positions + tr(" ПОЗИЦИЙ", " TA POZITSIYA"),
-                    Color.rgb(219, 234, 254)
-                ));
+                StringBuilder boxPickList = new StringBuilder(
+                    tr("ЗАБРАТЬ ИЗ ЭТОГО КОРОБА", "BU QUTIDAN OLING")
+                );
+                boxPickList.append("\n")
+                    .append(task.sourceBoxUsage.units)
+                    .append(tr(" ЕДИНИЦ ТОВАРА · ", " DONA · "))
+                    .append(task.sourceBoxUsage.positions)
+                    .append(tr(" ПОЗИЦИЙ", " TA POZITSIYA"));
+                if (task.sourceBoxUsage.items != null && !task.sourceBoxUsage.items.isEmpty()) {
+                    int itemNumber = 1;
+                    for (TsdFbsAssemblyResponse.SourceBoxItem boxItem : task.sourceBoxUsage.items) {
+                        boxPickList.append("\n\n")
+                            .append(itemNumber)
+                            .append(". ")
+                            .append(nonEmpty(boxItem.productName, "-"))
+                            .append("\n")
+                            .append(tr("Артикул: ", "Artikul: "))
+                            .append(nonEmpty(boxItem.article, "-"))
+                            .append(" · ")
+                            .append(tr("Цвет: ", "Rang: "))
+                            .append(nonEmpty(boxItem.color, "-"))
+                            .append(" · ")
+                            .append(tr("РАЗМЕР: ", "O'LCHAM: "))
+                            .append(nonEmpty(boxItem.size, "-"))
+                            .append("\n")
+                            .append(tr("Взять: ", "Olish: "))
+                            .append(boxItem.quantity)
+                            .append(tr(" шт.", " dona"));
+                        itemNumber += 1;
+                    }
+                }
+                root.addView(feedbackView(boxPickList.toString(), Color.rgb(254, 240, 138)));
             }
             root.addView(feedbackView(
                 tr("2. ВОЗЬМИТЕ ТОВАР И ОТСКАНИРУЙТЕ ЕГО ШК\n", "2. MAHSULOTNI OLING VA SHKNI SKANERLANG\n") +
@@ -1427,7 +3978,7 @@ public class MainActivity extends Activity {
             fbsScanInput = input(tr("Сканируйте КИЗ", "KIZni skanerlang"));
             root.addView(fbsScanInput);
             root.addView(primaryMenuButton(
-                tr("Передать КИЗ в WB", "KIZni WBga yuborish"),
+                tr("Подтвердить КИЗ для ", "KIZni tasdiqlash: ") + marketplaceName,
                 view -> submitFbsScan()
             ));
         } else if ("CONFIRM_KIZ_MOVE".equals(state)) {
@@ -1442,7 +3993,8 @@ public class MainActivity extends Activity {
                 tr("Сейчас числится: ", "Hozirgi quti: ") + fromBox + "\n" +
                     tr("Переместить в открытый короб: ", "Ochiq qutiga ko‘chirish: ") + toBox + "\n" +
                     tr("Товар: ", "Mahsulot: ") + productName + "\n" +
-                    tr("Артикул: ", "Artikul: ") + article,
+                    tr("Артикул: ", "Artikul: ") + article + "\n" +
+                    tr("Цвет: ", "Rang: ") + color + " · " + tr("РАЗМЕР: ", "O‘LCHAM: ") + size,
                 BOX_MOVEMENT_BLUE
             ));
             root.addView(primaryMenuButton(
@@ -1453,18 +4005,38 @@ public class MainActivity extends Activity {
                 tr("Нет — отсканировать другой КИЗ", "Yo‘q — boshqa KIZni skanerlash"),
                 view -> cancelFbsKizMove()
             ));
+        } else if ("READY_TO_SUBMIT".equals(state)) {
+            root.addView(feedbackView(
+                tr("ТОВАР ОТПИКАН\nТеперь WMS передаст состав заказа и КИЗ в Ozon.",
+                    "MAHSULOT SKANERLANDI\nEndi WMS buyurtma va KIZni Ozonga yuboradi."),
+                BOX_FOUND_GREEN
+            ));
+            root.addView(primaryMenuButton(
+                tr("Передать заказ в Ozon", "Buyurtmani Ozonga yuborish"),
+                view -> completeFbsAssembly()
+            ));
+        } else if ("WAIT_MARKETPLACE_LABEL".equals(state)) {
+            root.addView(feedbackView(
+                tr("OZON ПРИНЯЛ СБОРКУ\nЭтикетка формируется. WMS проверяет её автоматически каждые 5 секунд — ждать на этом экране можно без нажатий.",
+                    "OZON YIG‘IMNI QABUL QILDI\nStiker tayyorlanmoqda. WMS uni har 5 soniyada avtomatik tekshiradi."),
+                Color.rgb(254, 240, 138)
+            ));
+            if (task.marketplaceSubmitError != null && !task.marketplaceSubmitError.trim().isEmpty()) {
+                root.addView(messageView(task.marketplaceSubmitError));
+            }
+            scheduleOzonLabelAutoRefresh(task);
         } else if ("READY_TO_COMPLETE".equals(state)) {
             String readyText = task.requiresKiz
-                ? tr("ШК и КИЗ подтверждены Wildberries.", "SHK va KIZ Wildberries tomonidan tasdiqlandi.")
+                ? tr("ШК и КИЗ подтверждены для ", "SHK va KIZ tasdiqlandi: ") + marketplaceName + "."
                 : tr("Товар подтверждён. КИЗ не требуется.", "Mahsulot tasdiqlandi. KIZ talab qilinmaydi.");
             root.addView(feedbackView(
                 tr("ВСЁ ВЕРНО\n", "HAMMASI TO‘G‘RI\n") + readyText,
                 BOX_FOUND_GREEN
             ));
-            if (orderStickerReady) {
-                root.addView(primaryMenuButton(
-                    tr("Готово — наклейка нанесена", "Tayyor — stiker yopishtirildi"),
-                    view -> completeFbsAssembly()
+            if (task.kizAccepted) {
+                root.addView(dangerSecondaryButton(
+                    tr("Отменить принятый КИЗ", "Qabul qilingan KIZni bekor qilish"),
+                    view -> confirmUndoFbsKiz()
                 ));
             }
         } else if ("COMPLETED".equals(state)) {
@@ -1485,9 +4057,18 @@ public class MainActivity extends Activity {
             ));
         }
         root.addView(secondaryButton(tr("Обновить", "Yangilash"), view -> loadNextFbsAssembly()));
+        root.addView(secondaryButton(
+            tr("К списку FBS-заявок", "FBS arizalari ro‘yxatiga"),
+            view -> loadFbsRequestChoices()
+        ));
         root.addView(secondaryButton(tr("В главное меню", "Bosh menyuga"), view -> renderMainScreen()));
         setScrollableContent(root);
-        if (fbsScanInput != null) fbsScanInput.requestFocus();
+        if (stickerAppliedButton != null && orderStickerReady) {
+            stickerAppliedButton.setFocusableInTouchMode(true);
+            stickerAppliedButton.requestFocus();
+        } else if (fbsScanInput != null) {
+            fbsScanInput.requestFocus();
+        }
         refreshHeaderText();
     }
 
@@ -1506,14 +4087,272 @@ public class MainActivity extends Activity {
                 "WB BUYURTMA SHK STIKERINI YOPISHTIRING\nKATTA RAQAMLI STIKERNI TOPING: ") + largeDigits,
             Color.rgb(254, 240, 138)
         ));
+        root.addView(fbsOrderStickerWarehouseBanner(task));
         ImageView stickerView = fbsOrderStickerView(task.orderSticker.imageBase64);
         if (stickerView != null) root.addView(stickerView);
+        if (stickerView != null) addQuietNiimbotPrintActions(root, task);
         root.addView(messageView(
             tr("Наклейка для заказа №", "Buyurtma stikeri №") + nonEmpty(task.orderId, "-") +
                 " · " + tr("часть A: ", "A qismi: ") + nonEmpty(task.orderSticker.partA, "-") +
                 " · " + tr("часть B: ", "B qismi: ") + largeDigits
         ));
         return stickerView != null;
+    }
+
+    private boolean renderNonWbOrderStickerInstruction(
+        LinearLayout root,
+        TsdFbsAssemblyResponse.Task task
+    ) {
+        String marketplaceName = fbsMarketplaceName(task.marketplace);
+        root.addView(feedbackView(
+            tr("ЭТО ЗАКАЗ ", "BU BUYURTMA ") + marketplaceName + "\n" +
+                tr("Наклейка WB для него не требуется. Наклейте правильную этикетку ",
+                    "WB stikeri talab qilinmaydi. To‘g‘ri stikerini yopishtiring: ") +
+                marketplaceName + tr(" для заказа №", " buyurtma №") + nonEmpty(task.orderId, "-"),
+            Color.rgb(254, 240, 138)
+        ));
+        return true;
+    }
+
+    private boolean renderOzonOrderSticker(
+        LinearLayout root,
+        TsdFbsAssemblyResponse.Task task
+    ) {
+        if (task.orderSticker == null || nonEmpty(task.orderSticker.imageBase64, "").isEmpty()) {
+            root.addView(feedbackView(
+                tr("Этикетка Ozon ещё не загрузилась. Нажмите «Обновить» и не завершайте заказ без этикетки.",
+                    "Ozon stikeri hali yuklanmadi. «Yangilash»ni bosing."),
+                Color.rgb(254, 226, 226)
+            ));
+            return false;
+        }
+        root.addView(feedbackView(
+            tr("НАКЛЕЙТЕ ЭТИКЕТКУ OZON\nЗаказ №", "OZON STIKERINI YOPISHTIRING\nBuyurtma №") +
+                nonEmpty(task.orderId, "-"),
+            Color.rgb(254, 240, 138)
+        ));
+        root.addView(fbsOrderStickerWarehouseBanner(task));
+        ImageView stickerView = fbsOrderStickerView(
+            task.orderSticker.imageBase64,
+            nonEmpty(task.orderSticker.contentType, "application/pdf")
+        );
+        if (stickerView != null) {
+            root.addView(stickerView);
+            addQuietNiimbotPrintActions(root, task);
+        } else {
+            root.addView(feedbackView(
+                tr(
+                    "Этикетка Ozon получена, но ТСД не смог безопасно открыть PDF. Нажмите «Обновить» — приложение больше не закроется.",
+                    "Ozon stikeri olindi, ammo TSD PDF faylini xavfsiz ocha olmadi. «Yangilash»ni bosing."
+                ),
+                BOX_NOT_NEEDED_RED
+            ));
+        }
+        return stickerView != null;
+    }
+
+    private void addQuietNiimbotPrintActions(
+        LinearLayout root,
+        TsdFbsAssemblyResponse.Task task
+    ) {
+        if (task.orderSticker == null || nonEmpty(task.orderSticker.imageBase64, "").isEmpty()) return;
+        String savedPrinter = uiStore == null
+            ? ""
+            : nonEmpty(uiStore.getString("niimbot_b1_name", ""), "");
+        String buttonText = savedPrinter.isEmpty()
+            ? tr(
+                "Тихая печать 50×30 · подключить NIIMBOT B1",
+                "Jim chop etish 50×30 · NIIMBOT B1 ni ulash"
+            )
+            : tr("Тихая печать 50×30 · ", "Jim chop etish 50×30 · ") + savedPrinter;
+        buttonText = savedPrinter.isEmpty()
+            ? tr(
+                "Печать 2 стикеров 50×30 · подключить NIIMBOT B1",
+                "2 ta 50×30 stiker · NIIMBOT B1 ni ulash"
+            )
+            : tr("Печать 2 стикеров 50×30 · ", "2 ta 50×30 stiker · ") + savedPrinter;
+        Button printButton = primaryMenuButton(buttonText, view -> requestQuietNiimbotPrint(task, false));
+        printButton.setEnabled(!niimbotPrintBusy);
+        root.addView(printButton);
+        if (!savedPrinter.isEmpty()) {
+            Button changeButton = secondaryButton(
+                tr("Сменить принтер NIIMBOT", "NIIMBOT printerni almashtirish"),
+                view -> requestQuietNiimbotPrint(task, true)
+            );
+            changeButton.setEnabled(!niimbotPrintBusy);
+            root.addView(changeButton);
+        }
+    }
+
+    private void requestQuietNiimbotPrint(
+        TsdFbsAssemblyResponse.Task task,
+        boolean forceSelection
+    ) {
+        if (niimbotPrintBusy || task == null || task.orderSticker == null) return;
+        pendingNiimbotLabelBase64 = nonEmpty(task.orderSticker.imageBase64, "");
+        pendingNiimbotLabelContentType = nonEmpty(task.orderSticker.contentType, "image/png");
+        pendingNiimbotOrderId = nonEmpty(task.orderId, "-");
+        pendingNiimbotMarketplace = fbsMarketplaceName(task.marketplace);
+        int requestNumber = fbsAssembly != null && fbsAssembly.progress != null
+            ? fbsAssembly.progress.requestNumber
+            : 0;
+        pendingNiimbotRequestNumber = requestNumber > 0
+            ? String.format(Locale.US, "%06d", requestNumber)
+            : "-";
+        pendingNiimbotWarehouse = nonEmpty(
+            task.warehouseName,
+            nonEmpty(task.warehouseId, "СКЛАД НЕ УКАЗАН")
+        );
+        niimbotForceSelection = forceSelection;
+        if (!ensureNiimbotPermissions()) return;
+        continueQuietNiimbotPrint();
+    }
+
+    private boolean ensureNiimbotPermissions() {
+        List<String> missing = new ArrayList<>();
+        if (Build.VERSION.SDK_INT >= 31) {
+            if (checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
+                missing.add(Manifest.permission.BLUETOOTH_SCAN);
+            }
+            if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                missing.add(Manifest.permission.BLUETOOTH_CONNECT);
+            }
+        } else if (
+            checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
+        ) {
+            missing.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        }
+        if (missing.isEmpty()) return true;
+        requestPermissions(
+            missing.toArray(new String[0]),
+            BLUETOOTH_PRINTER_PERMISSION_REQUEST
+        );
+        return false;
+    }
+
+    private void continueQuietNiimbotPrint() {
+        if (pendingNiimbotLabelBase64.isEmpty()) return;
+        String address = uiStore == null
+            ? ""
+            : nonEmpty(uiStore.getString("niimbot_b1_address", ""), "");
+        if (niimbotForceSelection || address.isEmpty()) {
+            discoverNiimbotPrinter();
+        } else {
+            startQuietNiimbotPrint(address);
+        }
+    }
+
+    private void discoverNiimbotPrinter() {
+        niimbotPrintBusy = true;
+        fbsFeedbackColor = BOX_DUPLICATE_BLUE;
+        statusMessage = tr(
+            "Ищу NIIMBOT B1 рядом… Не выключайте принтер.",
+            "Yaqindagi NIIMBOT B1 qidirilmoqda… Printerni o‘chirmang."
+        );
+        refreshCurrentScreen();
+        NiimbotB1Printer.discover(this, new NiimbotB1Printer.DiscoveryCallback() {
+            @Override
+            public void onFound(List<NiimbotB1Printer.DeviceInfo> devices) {
+                niimbotPrintBusy = false;
+                if (devices.size() == 1) {
+                    selectNiimbotPrinter(devices.get(0));
+                    return;
+                }
+                String[] labels = new String[devices.size()];
+                for (int index = 0; index < devices.size(); index++) {
+                    labels[index] = devices.get(index).displayName();
+                }
+                new AlertDialog.Builder(MainActivity.this)
+                    .setTitle(tr("Выберите NIIMBOT B1", "NIIMBOT B1 ni tanlang"))
+                    .setItems(labels, (dialog, which) -> selectNiimbotPrinter(devices.get(which)))
+                    .setNegativeButton(tr("Отмена", "Bekor qilish"), null)
+                    .show();
+            }
+
+            @Override
+            public void onError(String message) {
+                niimbotPrintBusy = false;
+                fbsFeedbackColor = BOX_NOT_NEEDED_RED;
+                statusMessage = message;
+                refreshCurrentScreen();
+            }
+        });
+    }
+
+    private void selectNiimbotPrinter(NiimbotB1Printer.DeviceInfo device) {
+        if (uiStore != null) {
+            uiStore.edit()
+                .putString("niimbot_b1_address", device.address)
+                .putString("niimbot_b1_name", device.name)
+                .apply();
+        }
+        niimbotForceSelection = false;
+        startQuietNiimbotPrint(device.address);
+    }
+
+    private void startQuietNiimbotPrint(String address) {
+        Bitmap marketplaceBitmap = fbsOrderStickerBitmap(
+            pendingNiimbotLabelBase64,
+            pendingNiimbotLabelContentType
+        );
+        if (marketplaceBitmap == null) {
+            niimbotPrintBusy = false;
+            fbsFeedbackColor = BOX_NOT_NEEDED_RED;
+            statusMessage = tr(
+                "Не удалось подготовить изображение этикетки для печати.",
+                "Chop etish uchun stiker tasvirini tayyorlab bo‘lmadi."
+            );
+            refreshCurrentScreen();
+            return;
+        }
+        List<Bitmap> labels = new ArrayList<>();
+        labels.add(marketplaceBitmap);
+        labels.add(fbsSortingStickerBitmap(
+            pendingNiimbotRequestNumber,
+            pendingNiimbotOrderId,
+            pendingNiimbotWarehouse
+        ));
+        niimbotPrintBusy = true;
+        NiimbotB1Printer.print(this, address, labels, new NiimbotB1Printer.PrintCallback() {
+            @Override
+            public void onProgress(String message) {
+                fbsFeedbackColor = BOX_DUPLICATE_BLUE;
+                statusMessage = message;
+                refreshCurrentScreen();
+            }
+
+            @Override
+            public void onSuccess(String printerName) {
+                niimbotPrintBusy = false;
+                fbsFeedbackColor = BOX_FOUND_GREEN;
+                statusMessage = tr("НАПЕЧАТАНО · ", "CHOP ETILDI · ") +
+                    pendingNiimbotMarketplace + tr(" · заказ №", " · buyurtma №") +
+                    pendingNiimbotOrderId + " · " + printerName + " · 50×30 мм";
+                statusMessage = tr(
+                    "НАПЕЧАТАНО 2 ЭТИКЕТКИ · ",
+                    "2 TA STIKER CHOP ETILDI · "
+                ) + pendingNiimbotMarketplace + " · заказ №" + pendingNiimbotOrderId +
+                    " · " + printerName + " · 50×30 мм";
+                pendingNiimbotLabelBase64 = "";
+                pendingNiimbotLabelContentType = "";
+                pendingNiimbotOrderId = "";
+                pendingNiimbotMarketplace = "";
+                pendingNiimbotRequestNumber = "";
+                pendingNiimbotWarehouse = "";
+                refreshCurrentScreen();
+            }
+
+            @Override
+            public void onError(String message) {
+                niimbotPrintBusy = false;
+                fbsFeedbackColor = BOX_NOT_NEEDED_RED;
+                statusMessage = message + tr(
+                    " Если NIIMBOT открыт на другом телефоне — закройте там приложение и повторите.",
+                    " Agar NIIMBOT boshqa telefonda ochiq bo‘lsa, u yerdagi ilovani yoping va takrorlang."
+                );
+                refreshCurrentScreen();
+            }
+        });
     }
 
     private void showFbsStickerHistory() {
@@ -1540,6 +4379,8 @@ public class MainActivity extends Activity {
                     tr("Заказ WB №", "WB buyurtmasi №") + nonEmpty(item.orderId, "-") +
                         " · " + tr("заявка №", "ariza №") + requestNumber + "\n" +
                         nonEmpty(item.productName, "-") + " · " + tr("арт. ", "art. ") + nonEmpty(item.article, "-") + "\n" +
+                        tr("Цвет: ", "Rang: ") + nonEmpty(item.color, "—") + " · " +
+                        tr("РАЗМЕР: ", "O‘LCHAM: ") + nonEmpty(item.size, "—") + "\n" +
                         tr("Короб: ", "Quti: ") + nonEmpty(item.boxCode, "-") + "\n" +
                         tr("ШК наклейки: ", "Stiker SHK: ") + nonEmpty(item.barcode, "-"),
                     BOX_FOUND_GREEN
@@ -1563,17 +4404,33 @@ public class MainActivity extends Activity {
             return;
         }
         String state = nonEmpty(fbsAssembly.state, "");
-        if ("SCAN_BOX".equals(state)) {
-            executeFbsAction("scan-box", "boxCode", value);
-        } else if ("SCAN_BARCODE".equals(state)) {
-            executeFbsAction("scan-barcode", "barcode", value);
-        } else if ("SCAN_KIZ".equals(state)) {
-            executeFbsAction("scan-kiz", "kiz", value);
+        if ("SCAN_KIZ".equals(state)) {
+            String kizError = fbsKizScanError(value);
+            if (!kizError.isEmpty()) {
+                showFbsError(kizError, true);
+                return;
+            }
         }
+        executeFbsAction("scan-any", "code", value);
     }
 
     private void completeFbsAssembly() {
         executeFbsAction("complete", null, null);
+    }
+
+    private void confirmUndoFbsKiz() {
+        if (fbsAssembly == null || fbsAssembly.task == null || fbsBusy) return;
+        new AlertDialog.Builder(this)
+            .setTitle(tr("Отменить принятый КИЗ?", "Qabul qilingan KIZ bekor qilinsinmi?"))
+            .setMessage(tr(
+                "КИЗ будет удалён из заказа Wildberries и освобождён в WMS. После этого отсканируйте правильный КИЗ.",
+                "KIZ Wildberries buyurtmasidan o‘chiriladi va WMSda bo‘shatiladi. Keyin to‘g‘ri KIZni skanerlang."
+            ))
+            .setNegativeButton(tr("Нет", "Yo‘q"), null)
+            .setPositiveButton(tr("Да, отменить", "Ha, bekor qilish"), (dialog, which) ->
+                executeFbsAction("undo-kiz", null, null)
+            )
+            .show();
     }
 
     private void confirmFbsKizMove() {
@@ -1591,25 +4448,154 @@ public class MainActivity extends Activity {
     }
 
     private ImageView fbsOrderStickerView(String encodedImage) {
+        return fbsOrderStickerView(encodedImage, "image/png");
+    }
+
+    private ImageView fbsOrderStickerView(String encodedImage, String contentType) {
+        Bitmap bitmap = fbsOrderStickerBitmap(encodedImage, contentType);
+        if (bitmap == null) return null;
+        ImageView image = new ImageView(this);
+        image.setImageBitmap(bitmap);
+        image.setAdjustViewBounds(true);
+        image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        image.setBackgroundColor(Color.WHITE);
+        image.setPadding(dp(12), dp(12), dp(12), dp(12));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        params.setMargins(dp(16), dp(6), dp(16), dp(10));
+        image.setLayoutParams(params);
+        return image;
+    }
+
+    private Bitmap fbsOrderStickerBitmap(String encodedImage, String contentType) {
         try {
             byte[] bytes = Base64.decode(encodedImage, Base64.DEFAULT);
-            Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
-            if (bitmap == null) return null;
-            ImageView image = new ImageView(this);
-            image.setImageBitmap(bitmap);
-            image.setAdjustViewBounds(true);
-            image.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            image.setBackgroundColor(Color.WHITE);
-            image.setPadding(dp(12), dp(12), dp(12), dp(12));
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            );
-            params.setMargins(dp(16), dp(6), dp(16), dp(10));
-            image.setLayoutParams(params);
-            return image;
-        } catch (IllegalArgumentException ignored) {
+            return contentType.toLowerCase(Locale.ROOT).contains("pdf")
+                ? firstPdfPage(bytes)
+                : BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+        } catch (IllegalArgumentException | OutOfMemoryError ignored) {
             return null;
+        }
+    }
+
+    private Bitmap fbsSortingStickerBitmap(
+        String requestNumber,
+        String orderId,
+        String warehouseName
+    ) {
+        int width = 768;
+        int height = 480;
+        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+        canvas.drawColor(Color.WHITE);
+
+        Paint border = new Paint(Paint.ANTI_ALIAS_FLAG);
+        border.setColor(Color.BLACK);
+        border.setStyle(Paint.Style.STROKE);
+        border.setStrokeWidth(7f);
+        canvas.drawRect(10f, 10f, width - 10f, height - 10f, border);
+        border.setStrokeWidth(3f);
+        canvas.drawLine(28f, 154f, width - 28f, 154f, border);
+        canvas.drawLine(28f, 294f, width - 28f, 294f, border);
+
+        Paint text = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
+        text.setColor(Color.BLACK);
+        text.setTextAlign(Paint.Align.CENTER);
+        text.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+        drawFittedSortingLine(
+            canvas,
+            text,
+            "ЗАЯВКА №" + nonEmpty(requestNumber, "-"),
+            width / 2f,
+            112f,
+            width - 64f,
+            72f,
+            34f
+        );
+        drawFittedSortingLine(
+            canvas,
+            text,
+            "ЗАКАЗ №" + nonEmpty(orderId, "-"),
+            width / 2f,
+            252f,
+            width - 64f,
+            66f,
+            30f
+        );
+        drawFittedSortingLine(
+            canvas,
+            text,
+            "СКЛАД: " + nonEmpty(warehouseName, "НЕ УКАЗАН").toUpperCase(Locale.ROOT),
+            width / 2f,
+            407f,
+            width - 64f,
+            76f,
+            28f
+        );
+        return bitmap;
+    }
+
+    private void drawFittedSortingLine(
+        Canvas canvas,
+        Paint paint,
+        String value,
+        float centerX,
+        float baselineY,
+        float maxWidth,
+        float maxTextSize,
+        float minTextSize
+    ) {
+        float size = maxTextSize;
+        paint.setTextSize(size);
+        while (size > minTextSize && paint.measureText(value) > maxWidth) {
+            size -= 2f;
+            paint.setTextSize(size);
+        }
+        canvas.drawText(value, centerX, baselineY, paint);
+    }
+
+    private Bitmap firstPdfPage(byte[] bytes) {
+        File file = null;
+        try {
+            file = File.createTempFile("ozon-label-", ".pdf", getCacheDir());
+            try (FileOutputStream output = new FileOutputStream(file)) {
+                output.write(bytes);
+            }
+            try (
+                ParcelFileDescriptor descriptor = ParcelFileDescriptor.open(
+                    file,
+                    ParcelFileDescriptor.MODE_READ_ONLY
+                );
+                PdfRenderer renderer = new PdfRenderer(descriptor)
+            ) {
+                if (renderer.getPageCount() < 1) return null;
+                try (PdfRenderer.Page page = renderer.openPage(0)) {
+                    int sourceWidth = Math.max(1, page.getWidth());
+                    int sourceHeight = Math.max(1, page.getHeight());
+                    float scale = Math.min(
+                        2f,
+                        Math.min(1600f / sourceWidth, 1600f / sourceHeight)
+                    );
+                    int width = Math.max(1, Math.round(sourceWidth * scale));
+                    int height = Math.max(1, Math.round(sourceHeight * scale));
+                    long pixels = (long) width * height;
+                    if (pixels > 2_000_000L) {
+                        float safeScale = (float) Math.sqrt(2_000_000d / pixels);
+                        width = Math.max(1, Math.round(width * safeScale));
+                        height = Math.max(1, Math.round(height * safeScale));
+                    }
+                    Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+                    bitmap.eraseColor(Color.WHITE);
+                    page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                    return bitmap;
+                }
+            }
+        } catch (IOException | RuntimeException | OutOfMemoryError ignored) {
+            return null;
+        } finally {
+            if (file != null) file.delete();
         }
     }
 
@@ -1632,6 +4618,18 @@ public class MainActivity extends Activity {
         TsdSession session = safeSession();
         TsdFbsAssemblyResponse.Task currentTask = fbsAssembly == null ? null : fbsAssembly.task;
         if (session == null || currentTask == null || fbsBusy) return;
+        String actionOwnerKey = fbsSessionOwnerKey(session);
+        String previousBoxCode = nonEmpty(currentTask.scannedBoxCode, "");
+        boolean previousBoxWasNotPicked =
+            !previousBoxCode.isEmpty() && nonEmpty(currentTask.scannedBarcode, "").isEmpty();
+        boolean previousBoxWasLocallyConfirmed = FbsTaskSafety.matchesConfirmedBox(
+            currentTask.id,
+            previousBoxCode,
+            actionOwnerKey,
+            confirmedFbsBoxTaskId,
+            confirmedFbsBoxCode,
+            confirmedFbsBoxOwnerKey
+        );
         fbsBusy = true;
         fbsFeedbackColor = BOX_DUPLICATE_BLUE;
         statusMessage = tr("Проверяю...", "Tekshirilmoqda...");
@@ -1643,23 +4641,31 @@ public class MainActivity extends Activity {
             if (field != null) payload.put(field, value);
             if ("scan-kiz-move".equals(action)) payload.put("confirmBoxMove", true);
             Response<TsdFbsAssemblyResponse> response;
-            if ("scan-box".equals(action)) {
+            if ("scan-any".equals(action)) {
+                response = api.scanFbsCode(session.authorizationHeader(), taskId, payload).execute();
+            } else if ("scan-box".equals(action)) {
                 response = api.scanFbsBox(session.authorizationHeader(), taskId, payload).execute();
             } else if ("scan-barcode".equals(action)) {
                 response = api.scanFbsBarcode(session.authorizationHeader(), taskId, payload).execute();
             } else if ("scan-kiz".equals(action) || "scan-kiz-move".equals(action)) {
                 response = api.scanFbsKiz(session.authorizationHeader(), taskId, payload).execute();
+            } else if ("undo-kiz".equals(action)) {
+                response = api.undoFbsKiz(session.authorizationHeader(), taskId).execute();
             } else if ("release".equals(action)) {
                 response = api.releaseFbsAssembly(session.authorizationHeader(), taskId).execute();
             } else {
                 response = api.completeFbsAssembly(session.authorizationHeader(), taskId).execute();
             }
             if (!response.isSuccessful() || response.body() == null) {
-                String message = responseErrorMessage(response, tr(
+                ApiErrorDetails errorDetails = responseErrorDetails(response, tr(
                     "Операция не выполнена. Повторите сканирование.",
                     "Amal bajarilmadi. Qayta skanerlang."
                 ));
-                mainHandler.post(() -> showFbsError(message, response.code() < 500));
+                if (FbsTaskSafety.isStaleTaskConflict(response.code(), errorDetails.code)) {
+                    mainHandler.post(() -> reloadFbsAfterStaleTask(errorDetails.message));
+                    return;
+                }
+                mainHandler.post(() -> showFbsError(errorDetails.message, response.code() < 500));
                 return;
             }
             TsdFbsAssemblyResponse updated = response.body();
@@ -1667,10 +4673,47 @@ public class MainActivity extends Activity {
                 online = true;
                 fbsBusy = false;
                 fbsAssembly = updated;
+                boolean problemWasReportedAfterBoxScan =
+                    !previousBoxCode.isEmpty() && "release".equals(action);
+                boolean switchedToAnotherTask =
+                    updated.task == null || !taskId.equals(nonEmpty(updated.task.id, ""));
+                if (
+                    previousBoxWasLocallyConfirmed &&
+                    (problemWasReportedAfterBoxScan || (previousBoxWasNotPicked && switchedToAnotherTask))
+                ) {
+                    queueMandatoryFbsAudit(
+                        currentTask.client == null ? "" : currentTask.client.id,
+                        previousBoxCode
+                    );
+                }
+                if ("release".equals(action) || switchedToAnotherTask) {
+                    clearConfirmedFbsBoxScan();
+                }
+                if (
+                    updated.task != null &&
+                    FbsTaskSafety.isConfirmedBoxScan(
+                        action,
+                        value,
+                        updated.task.id,
+                        updated.task.scannedBoxCode
+                    )
+                ) {
+                    confirmedFbsBoxTaskId = updated.task.id;
+                    confirmedFbsBoxCode = updated.task.scannedBoxCode;
+                    confirmedFbsBoxOwnerKey = actionOwnerKey;
+                }
+                persistMandatoryFbsAuditState();
                 statusMessage = nonEmpty(updated.message, tr("Принято.", "Qabul qilindi."));
                 boolean needsMoveConfirmation = "CONFIRM_KIZ_MOVE".equals(updated.state);
-                fbsFeedbackColor = needsMoveConfirmation ? Color.rgb(254, 240, 138) : BOX_FOUND_GREEN;
+                boolean kizWasUndone = "undo-kiz".equals(action);
+                fbsFeedbackColor = needsMoveConfirmation || kizWasUndone
+                    ? Color.rgb(254, 240, 138)
+                    : BOX_FOUND_GREEN;
                 if (!needsMoveConfirmation) playFbsSuccess();
+                if (!pendingFbsAuditBoxes.isEmpty()) {
+                    resumeMandatoryFbsAudit();
+                    return;
+                }
                 renderFbsAssemblyScreen();
                 if ("COMPLETED".equals(updated.state)) {
                     String completedTaskId = taskId;
@@ -1692,6 +4735,24 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void reloadFbsAfterStaleTask(String message) {
+        online = true;
+        fbsBusy = false;
+        fbsAssembly = null;
+        clearConfirmedFbsBoxScan();
+        persistMandatoryFbsAuditState();
+        fbsFeedbackColor = Color.rgb(254, 240, 138);
+        statusMessage = nonEmpty(
+            message,
+            tr(
+                "Задание уже изменилось. Обновляю очередь…",
+                "Vazifa allaqachon o‘zgargan. Navbat yangilanmoqda…"
+            )
+        );
+        renderFbsAssemblyScreen();
+        mainHandler.postDelayed(this::loadNextFbsAssembly, 150L);
+    }
+
     private void showFbsError(String message, boolean keepOnline) {
         online = keepOnline;
         fbsBusy = false;
@@ -1699,6 +4760,17 @@ public class MainActivity extends Activity {
         statusMessage = message;
         playFbsError();
         renderFbsAssemblyScreen();
+        showScanningErrorDialog(message);
+    }
+
+    private void showFbsRequestsError(String message, boolean keepOnline) {
+        online = keepOnline;
+        fbsRequestsBusy = false;
+        fbsFeedbackColor = BOX_NOT_NEEDED_RED;
+        statusMessage = message;
+        playFbsError();
+        renderFbsRequestSelectionScreen();
+        showScanningErrorDialog(message);
     }
 
     private void playFbsSuccess() {
@@ -1719,7 +4791,13 @@ public class MainActivity extends Activity {
         try {
             Vibrator vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
             if (vibrator != null && vibrator.hasVibrator()) {
-                vibrator.vibrate(VibrationEffect.createOneShot(vibrationMs, VibrationEffect.DEFAULT_AMPLITUDE));
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    vibrator.vibrate(
+                        VibrationEffect.createOneShot(vibrationMs, VibrationEffect.DEFAULT_AMPLITUDE)
+                    );
+                } else {
+                    vibrator.vibrate(vibrationMs);
+                }
             }
         } catch (Throwable ignored) {
         }
@@ -1787,12 +4865,22 @@ public class MainActivity extends Activity {
         TsdFbsCargoPackingResponse.Packing current = fbsCargoPacking == null ? null : fbsCargoPacking.packing;
         if (current != null) {
             boolean sortingCenterBox = isSortingCenterPacking(current);
+            root.addView(fbsWarehouseBanner(current.warehouseName, current.warehouseId));
             root.addView(feedbackView(
                 (sortingCenterBox
                     ? tr("ОТКРЫТ КОРОБ\n", "QUTI OCHILDI\n")
                     : tr("ОТКРЫТО ГРУЗОМЕСТО\n", "YUK JOYI OCHILDI\n")) + safeText(current.cargoPlaceId) +
-                    "\n" + tr("Заполнено: ", "To‘ldirildi: ") + current.packedItems + " / " + current.capacityItems,
+                    "\n" + tr("Заполнено: ", "To‘ldirildi: ") + current.packedItems +
+                    tr(" · без ограничения", " · cheklovsiz") +
+                    "\n" + tr("Поставка WB: ", "WB yetkazib berish: ") + safeText(current.supplyId) +
+                    fbsRequestNumbersLabel(current.requestNumbers),
                 BOX_MOVEMENT_BLUE
+            ));
+            root.addView(primaryMenuButton(
+                sortingCenterBox
+                    ? tr("Закрыть короб", "Qutini yopish")
+                    : tr("Закрыть грузоместо", "Yuk joyini yopish"),
+                view -> confirmCloseFbsCargoPacking()
             ));
             root.addView(messageView(sortingCenterBox
                 ? tr(
@@ -1821,6 +4909,9 @@ public class MainActivity extends Activity {
                 for (TsdFbsCargoPackingResponse.Order order : current.orders) {
                     if (shown++ >= 8) break;
                     String details = tr("Товар: ", "Mahsulot: ") + safeText(order.productName) +
+                        (order.requestNumber > 0
+                            ? "\n" + tr("Заявка WMS №", "WMS ariza №") + String.format(Locale.ROOT, "%06d", order.requestNumber)
+                            : "") +
                         "\n" + tr("Артикул: ", "Artikul: ") + safeText(order.article) +
                         (safeText(order.color).equals("—") ? "" : " · " + tr("цвет: ", "rang: ") + safeText(order.color)) +
                         (safeText(order.size).equals("—") ? "" : " · " + tr("размер: ", "o‘lcham: ") + safeText(order.size)) +
@@ -1832,18 +4923,21 @@ public class MainActivity extends Activity {
                     view -> undoLastFbsCargoOrder()
                 ));
             }
-            root.addView(primaryMenuButton(
-                sortingCenterBox
-                    ? tr("Закрыть короб", "Qutini yopish")
-                    : tr("Закрыть грузоместо", "Yuk joyini yopish"),
-                view -> confirmCloseFbsCargoPacking()
-            ));
+            Button cancelPackingButton = secondaryButton(
+                tr("Отменить упаковку полностью", "Qadoqlashni to‘liq bekor qilish"),
+                view -> confirmCancelFbsCargoPacking()
+            );
+            cancelPackingButton.setBackgroundColor(BOX_NOT_NEEDED_RED);
+            cancelPackingButton.setTextColor(TEXT);
+            root.addView(cancelPackingButton);
         } else {
             TsdFbsCargoPackingResponse.Supply selected = selectedFbsCargoSupply();
             if (selected != null) {
                 boolean sortingCenterBox = isSortingCenterSupply(selected);
+                root.addView(fbsWarehouseBanner(selected.warehouseName, selected.warehouseId));
                 root.addView(feedbackView(
                     tr("ПОСТАВКА ", "YETKAZIB BERISH ") + safeText(selected.supplyId) +
+                        fbsRequestNumbersLabel(selected.requestNumbers) +
                         "\n" + safeText(selected.client == null ? null : selected.client.name) +
                         "\n" + fbsDeliveryDestinationLabel(selected.deliveryDestination) +
                         "\n" + tr("Упаковано: ", "Qadoqlandi: ") + selected.packedItems + " / " + selected.totalPlannedItems +
@@ -1893,22 +4987,17 @@ public class MainActivity extends Activity {
                 } else {
                     root.addView(label(tr("Выберите поставку", "Yetkazib berishni tanlang")));
                     for (TsdFbsCargoPackingResponse.Supply supply : supplies) {
+                        if (supply.readyToDeliver || supply.ignored) continue;
                         String clientName = supply.client == null ? "" : safeText(supply.client.name);
-                        String stateText = supply.readyToDeliver
-                            ? tr("ГОТОВА К ПЕРЕДАЧЕ", "TOPSHIRISHGA TAYYOR")
-                            : tr("уложить: ", "joylash: ") + supply.remainingToPack +
+                        String stateText = tr("уложить: ", "joylash: ") + supply.remainingToPack +
                                 " · " + tr("ещё собирается: ", "hali yig‘ilmoqda: ") + supply.waitingAssembly;
                         Button supplyButton = multilineSecondaryButton(
-                            safeText(supply.supplyId) + "\n" + clientName + " · " +
+                            fbsWarehouseLabel(supply.warehouseName, supply.warehouseId) +
+                                "\n" + safeText(supply.supplyId) + fbsRequestNumbersLabel(supply.requestNumbers) +
+                                "\n" + clientName + " · " +
                                 fbsDeliveryDestinationLabel(supply.deliveryDestination) + "\n" +
                                 supply.packedItems + " / " + supply.totalPlannedItems + " · " + stateText,
                             view -> {
-                                if (supply.readyToDeliver) {
-                                    statusMessage = tr("Эта поставка уже полностью упакована.", "Bu yetkazib berish to‘liq qadoqlangan.");
-                                    fbsCargoFeedbackColor = BOX_FOUND_GREEN;
-                                    renderFbsCargoPackingScreen();
-                                    return;
-                                }
                                 selectedFbsCargoPlanId = supply.id;
                                 fbsCargoFeedbackColor = 0;
                                 statusMessage = isSortingCenterSupply(supply)
@@ -1917,10 +5006,6 @@ public class MainActivity extends Activity {
                                 renderFbsCargoPackingScreen();
                             }
                         );
-                        if (supply.readyToDeliver) {
-                            supplyButton.setBackgroundColor(BOX_FOUND_GREEN);
-                            supplyButton.setTextColor(TEXT);
-                        }
                         root.addView(supplyButton);
                     }
                 }
@@ -1966,6 +5051,26 @@ public class MainActivity extends Activity {
         executeFbsCargoAction("undo", null);
     }
 
+    private void confirmCancelFbsCargoPacking() {
+        TsdFbsCargoPackingResponse.Packing current =
+            fbsCargoPacking == null ? null : fbsCargoPacking.packing;
+        if (current == null || fbsCargoBusy) return;
+        new AlertDialog.Builder(this)
+            .setTitle(tr("Отменить всю упаковку?", "Butun qadoqlash bekor qilinsinmi?"))
+            .setMessage(
+                tr(
+                    "Все уже добавленные товары будут удалены из этого упаковочного места и вернутся в очередь. Сами заказы и их сборка не отменятся.",
+                    "Qo‘shilgan barcha tovarlar bu joydan chiqarilib, navbatga qaytariladi. Buyurtmalar va ularning yig‘ilishi bekor qilinmaydi."
+                )
+            )
+            .setNegativeButton(tr("Нет", "Yo‘q"), null)
+            .setPositiveButton(
+                tr("Сбросить упаковку", "Qadoqlashni tiklash"),
+                (dialog, which) -> executeFbsCargoAction("cancel", null)
+            )
+            .show();
+    }
+
     private void confirmCloseFbsCargoPacking() {
         TsdFbsCargoPackingResponse.Packing current = fbsCargoPacking == null ? null : fbsCargoPacking.packing;
         if (current == null || fbsCargoBusy) return;
@@ -1975,7 +5080,7 @@ public class MainActivity extends Activity {
                 ? tr("Закрыть короб?", "Qutini yopasizmi?")
                 : tr("Закрыть грузоместо?", "Yuk joyini yopasizmi?"))
             .setMessage(tr("Внутри зафиксировано: ", "Ichida qayd etilgan: ") + current.packedItems +
-                " / " + current.capacityItems + tr(" единиц. После закрытия повторное сканирование запрещено.",
+                tr(" единиц. После закрытия повторное сканирование запрещено.",
                     " dona. Yopilgandan keyin qayta skanerlash taqiqlanadi."))
             .setNegativeButton(tr("Нет", "Yo‘q"), null)
             .setPositiveButton(tr("Закрыть", "Yopish"), (dialog, which) -> executeFbsCargoAction("close", null))
@@ -2002,6 +5107,19 @@ public class MainActivity extends Activity {
             : tr("ПВЗ", "PVZ");
     }
 
+    private String fbsRequestNumbersLabel(List<Integer> requestNumbers) {
+        if (requestNumbers == null || requestNumbers.isEmpty()) return "";
+        StringBuilder result = new StringBuilder("\n");
+        result.append(tr("Заявка WMS: ", "WMS ariza: "));
+        for (int index = 0; index < requestNumbers.size(); index += 1) {
+            Integer number = requestNumbers.get(index);
+            if (number == null || number <= 0) continue;
+            if (result.charAt(result.length() - 1) != ' ') result.append(", ");
+            result.append("№").append(String.format(Locale.ROOT, "%06d", number));
+        }
+        return result.toString().endsWith(": ") ? "" : result.toString();
+    }
+
     private void executeFbsCargoAction(String action, String value) {
         TsdSession session = safeSession();
         if (session == null || fbsCargoBusy) return;
@@ -2026,6 +5144,8 @@ public class MainActivity extends Activity {
                 response = api.scanFbsCargoOrder(session.authorizationHeader(), current.id, payload).execute();
             } else if ("undo".equals(action)) {
                 response = api.undoLastFbsCargoOrder(session.authorizationHeader(), current.id).execute();
+            } else if ("cancel".equals(action)) {
+                response = api.cancelFbsCargoPacking(session.authorizationHeader(), current.id).execute();
             } else {
                 response = api.closeFbsCargoPacking(session.authorizationHeader(), current.id).execute();
             }
@@ -2039,7 +5159,7 @@ public class MainActivity extends Activity {
             }
             TsdFbsCargoPackingResponse updated = response.body();
             mainHandler.post(() -> {
-                boolean closed = "close".equals(action);
+                boolean closed = "close".equals(action) || "cancel".equals(action);
                 if (closed) selectedFbsCargoPlanId = "";
                 applyFbsCargoResponse(updated, true);
             });
@@ -2063,6 +5183,7 @@ public class MainActivity extends Activity {
         statusMessage = message;
         playFbsError();
         renderFbsCargoPackingScreen();
+        showScanningErrorDialog(message);
     }
 
     private void openReceipt() {
@@ -2596,9 +5717,37 @@ public class MainActivity extends Activity {
         List<TsdSearchBoxTask> boxes = safeSearchBoxes();
         Set<String> found = foundBoxes();
         syncFoundBoxesToServer(boxes, found);
-        String lastFoundBox = lastFoundBoxCode();
         root.addView(messageView("Найдено: " + foundSearchBoxesCount(boxes, found) + " / " + boxes.size()));
         addFeedbackMessage(root, boxSearchFeedbackColor);
+        TsdSearchBoxTask nextBox = null;
+        for (TsdSearchBoxTask box : boxes) {
+            if (!found.contains(normalizeBoxCode(box.boxCode))) {
+                nextBox = box;
+                break;
+            }
+        }
+        if (nextBox != null) {
+            int samePalletRemaining = 0;
+            if (nextBox.storageLocation != null) {
+                for (TsdSearchBoxTask box : boxes) {
+                    if (
+                        !found.contains(normalizeBoxCode(box.boxCode)) &&
+                        box.storageLocation != null &&
+                        safeText(nextBox.storageLocation.palletId).equals(safeText(box.storageLocation.palletId))
+                    ) {
+                        samePalletRemaining += 1;
+                    }
+                }
+            }
+            String samePalletHint = samePalletRemaining > 1
+                ? "\nНа этой паллете нужно найти коробов: " + samePalletRemaining
+                : "";
+            root.addView(feedbackView(
+                "СЛЕДУЮЩИЙ КОРОБ: " + nextBox.boxCode + "\n" +
+                    boxStorageLocationLabel(nextBox) + samePalletHint,
+                BOX_MOVEMENT_BLUE
+            ));
+        }
         assemblyScanInput = input("Сканируйте короб");
         assemblyScanInput.setOnEditorActionListener((view, actionId, event) -> {
             submitBoxSearchScan();
@@ -2606,23 +5755,9 @@ public class MainActivity extends Activity {
         });
         root.addView(assemblyScanInput);
 
-        if (!lastFoundBox.isEmpty() && found.contains(lastFoundBox)) {
-            for (TsdSearchBoxTask box : boxes) {
-                if (lastFoundBox.equals(normalizeBoxCode(box.boxCode))) {
-                    root.addView(taskRow(box.boxCode, "Найден · " + boxInstructionLabel(box), BOX_FOUND_GREEN));
-                    break;
-                }
-            }
-        }
-        for (TsdSearchBoxTask box : boxes) {
-            String normalizedBox = normalizeBoxCode(box.boxCode);
-            if (found.contains(normalizedBox) && !normalizedBox.equals(lastFoundBox)) {
-                root.addView(taskRow(box.boxCode, "Найден · " + boxInstructionLabel(box), BOX_FOUND_GREEN));
-            }
-        }
         for (TsdSearchBoxTask box : boxes) {
             if (!found.contains(normalizeBoxCode(box.boxCode))) {
-                root.addView(taskRow(box.boxCode, "Нужно найти · " + boxInstructionLabel(box), Color.rgb(241, 245, 249)));
+                root.addView(taskRow(box.boxCode, "Нужно найти · " + boxInstructionLabel(box) + "\n" + boxStorageLocationLabel(box), Color.rgb(241, 245, 249)));
             }
         }
 
@@ -2739,7 +5874,11 @@ public class MainActivity extends Activity {
         root.addView(header());
         root.addView(title("Перемаркировка"));
         root.addView(messageView("Короб: " + selectedRelabelBox));
-        root.addView(messageView(activeRelabelTask == null ? "Сканируйте старый ШК товара" : "Сканируйте новый ШК: " + activeRelabelTask.newBarcode));
+        root.addView(messageView(activeRelabelTask == null
+            ? "Сканируйте старый ШК товара"
+            : "Товар: " + emptyAsDash(activeRelabelTask.name) +
+                "\nРазмер: " + emptyAsDash(activeRelabelTask.size) +
+                "\nСканируйте новый ШК: " + activeRelabelTask.newBarcode));
         assemblyScanInput = input(activeRelabelTask == null ? "Старый ШК" : "Новый ШК");
         assemblyScanInput.setOnEditorActionListener((view, actionId, event) -> {
             submitRelabelScan();
@@ -2753,7 +5892,11 @@ public class MainActivity extends Activity {
             }
             int remaining = remainingRelabel(task);
             if (remaining > 0) {
-                root.addView(taskRow(task.oldBarcode + " -> " + task.newBarcode, "Осталось: " + remaining, Color.rgb(241, 245, 249)));
+                root.addView(taskRow(
+                    task.oldBarcode + " -> " + task.newBarcode,
+                    emptyAsDash(task.name) + " · размер: " + emptyAsDash(task.size) + "\nОсталось: " + remaining,
+                    Color.rgb(241, 245, 249)
+                ));
             }
         }
 
@@ -2861,9 +6004,8 @@ public class MainActivity extends Activity {
         if (selectedMoveSourceBox.isEmpty()) {
             root.addView(messageView("Короба, из которых нужно переместить товар:"));
             for (String sourceBox : movementSourceBoxes()) {
-                boolean done = isMovementSourceDone(sourceBox);
                 String purpose = isShipmentMovementSource(sourceBox) ? "в новый короб поставки" : "остаток на баланс";
-                root.addView(taskRow(sourceBox, done ? "Обработан" : purpose + " · осталось: " + remainingMovementForSource(sourceBox), done ? BOX_FOUND_GREEN : Color.rgb(241, 245, 249)));
+                root.addView(taskRow(sourceBox, purpose + " · осталось: " + remainingMovementForSource(sourceBox), Color.rgb(241, 245, 249)));
             }
         } else {
             root.addView(messageView("Что нужно переложить из этого короба:"));
@@ -2964,7 +6106,9 @@ public class MainActivity extends Activity {
 
         for (String boxCode : displayBoxes) {
             boolean confirmed = confirmedBoxes.contains(normalizeBoxCode(boxCode));
-            root.addView(taskRow(boxCode, confirmed ? "Подтвержден, уезжает" : "Нужно отпикать перед упаковкой", confirmed ? BOX_FOUND_GREEN : BOX_NOT_NEEDED_RED));
+            if (!confirmed) {
+                root.addView(taskRow(boxCode, "Нужно отпикать перед упаковкой", BOX_NOT_NEEDED_RED));
+            }
         }
         if (areOutgoingBoxesConfirmed()) {
             root.addView(primaryMenuButton("Заявка упакована", view -> completeAssemblyIfReady()));
@@ -3229,19 +6373,41 @@ public class MainActivity extends Activity {
     }
 
     private void submitReceiptInput() {
-        if (receiptClientId.isEmpty()) {
-            startReceiptForSelectedClient();
+        if (receiptKizAuditMode) {
+            handleReceiptKizAuditScan();
             return;
         }
-        if (receiptBoxCode.isEmpty()) {
-            openReceiptBoxFromInput();
+        if (receiptMode.isEmpty()) {
+            statusMessage = "Выберите режим приемки.";
+            renderReceiptScreen();
+            return;
+        }
+        if (receiptClientId.isEmpty()) {
+            startReceiptForSelectedClient();
             return;
         }
         if (!pendingReceiptBarcode.isEmpty() && pendingReceiptRequiresKiz) {
             handleReceiptKizScan();
             return;
         }
+        if (!receiptUsesBoxes()) {
+            handleReceiptBarcodeScan();
+            return;
+        }
+        if (receiptBoxCode.isEmpty()) {
+            openReceiptBoxFromInput();
+            return;
+        }
         handleReceiptBarcodeScan();
+    }
+
+    private void selectReceiptMode(String mode) {
+        receiptMode = RECEIPT_MODE_BOXES.equals(mode) ? RECEIPT_MODE_BOXES : RECEIPT_MODE_STANDARD;
+        receiptFeedbackColor = 0;
+        statusMessage = RECEIPT_MODE_BOXES.equals(receiptMode)
+            ? "Выбрана приемка по боксам. Теперь выберите клиента."
+            : "Выбрана обычная приемка. Теперь выберите клиента.";
+        renderReceiptScreen();
     }
 
     private void startReceiptForSelectedClient() {
@@ -3257,10 +6423,108 @@ public class MainActivity extends Activity {
         receiptKizValues.clear();
         receiptKizBoxes.clear();
         receiptFeedbackColor = 0;
-        statusMessage = receiptWithoutBoxes()
+        statusMessage = !receiptUsesBoxes()
             ? "Клиент выбран. Сканируйте ШК товара."
-            : "Клиент выбран. Сканируйте новый короб.";
+            : "Клиент выбран. Сканируйте новый бокс/короб.";
         renderReceiptScreen();
+    }
+
+    private void startReceiptKizAudit() {
+        if (!pendingReceiptBarcode.isEmpty()) {
+            statusMessage = "Сначала завершите или отмените текущий товар.";
+            renderReceiptScreen();
+            return;
+        }
+        receiptKizAuditMode = true;
+        receiptFeedbackColor = BOX_DUPLICATE_BLUE;
+        statusMessage = "Проверка КИЗ включена. Сканируйте уже уложенные КИЗы — повторного прихода не будет.";
+        renderReceiptScreen();
+    }
+
+    private void stopReceiptKizAudit() {
+        receiptKizAuditMode = false;
+        receiptFeedbackColor = 0;
+        statusMessage = receiptUsesBoxes() && receiptBoxCode.isEmpty()
+            ? "Проверка завершена. Сканируйте следующий бокс/короб."
+            : "Проверка завершена. Продолжайте приемку.";
+        renderReceiptScreen();
+    }
+
+    private void handleReceiptKizAuditScan() {
+        if (receiptCheckingKiz) {
+            return;
+        }
+        String kiz = textValue(scanInput);
+        if (kiz.isEmpty()) {
+            statusMessage = "Сканируйте КИЗ для проверки.";
+            renderReceiptScreen();
+            return;
+        }
+        String kizError = receiptKizError(kiz);
+        if (!kizError.isEmpty()) {
+            statusMessage = kizError;
+            receiptFeedbackColor = BOX_NOT_NEEDED_RED;
+            scanInput.setText("");
+            renderReceiptScreen();
+            return;
+        }
+
+        String normalizedKiz = kiz.trim().toUpperCase(Locale.ROOT);
+        if (receiptKizValues.contains(normalizedKiz)) {
+            String duplicateBox = receiptKizBoxes.get(normalizedKiz);
+            statusMessage = "КИЗ уже принят в текущей приемке"
+                + (duplicateBox == null || duplicateBox.trim().isEmpty() ? "." : " в " + duplicateBox + ".")
+                + "\nПовторно ничего не записано.";
+            receiptFeedbackColor = BOX_FOUND_GREEN;
+            scanInput.setText("");
+            renderReceiptScreen();
+            return;
+        }
+
+        TsdSession session = safeSession();
+        if (session == null) {
+            statusMessage = "Сначала войдите на ТСД.";
+            renderSettingsScreen();
+            return;
+        }
+
+        receiptCheckingKiz = true;
+        scanInput.setEnabled(false);
+        executor.execute(() -> {
+            try {
+                Response<TsdKizCheckResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                    .checkReceiptKiz(session.authorizationHeader(), receiptClientId, kiz)
+                    .execute();
+                if (!response.isSuccessful() || response.body() == null) {
+                    throw new IOException("HTTP " + response.code());
+                }
+                TsdKizCheckResponse result = response.body();
+                mainHandler.post(() -> {
+                    receiptCheckingKiz = false;
+                    online = true;
+                    if (result.duplicate) {
+                        statusMessage = "КИЗ уже принят в WMS"
+                            + (result.boxCode == null || result.boxCode.trim().isEmpty()
+                                ? "."
+                                : " в короб " + result.boxCode + ".")
+                            + "\nПовторно ничего не записано.";
+                        receiptFeedbackColor = BOX_FOUND_GREEN;
+                    } else {
+                        statusMessage = "Этот КИЗ еще не принят в WMS.\nПроверьте, не пропущен ли товар при приемке.";
+                        receiptFeedbackColor = BOX_NOT_NEEDED_RED;
+                    }
+                    renderReceiptScreen();
+                });
+            } catch (Throwable error) {
+                mainHandler.post(() -> {
+                    receiptCheckingKiz = false;
+                    online = false;
+                    receiptFeedbackColor = BOX_NOT_NEEDED_RED;
+                    statusMessage = "Не удалось проверить КИЗ: нет связи с WMS. Данные не изменены.";
+                    renderReceiptScreen();
+                });
+            }
+        });
     }
 
     private void openReceiptBoxFromInput() {
@@ -3320,10 +6584,16 @@ public class MainActivity extends Activity {
                 payload.put("sourceDocument", receiptSourceDocument);
                 Response<Map<String, Object>> response = api.openReceiptBox(session.authorizationHeader(), payload).execute();
                 if (!response.isSuccessful()) {
+                    // FIX: show the actionable WMS reason instead of hiding it
+                    // behind a generic HTTP 400 message.
+                    String receiptError = responseErrorMessage(
+                        response,
+                        "Короб не открыт в WMS: HTTP " + response.code()
+                    );
                     mainHandler.post(() -> {
                         online = false;
                         receiptOpeningBox = false;
-                        statusMessage = "Короб не открыт в WMS: HTTP " + response.code();
+                        statusMessage = receiptError;
                         if (sameBox(receiptBoxCode, boxCode) && receiptCurrentItems.isEmpty()) {
                             receiptBoxCode = "";
                             clearPendingReceiptProductFields();
@@ -3474,12 +6744,10 @@ public class MainActivity extends Activity {
                 mainHandler.post(() -> {
                     receiptCheckingKiz = false;
                     online = false;
-                    addReceiptItem(
-                        barcode,
-                        kiz,
-                        sku,
-                        "Товар принят офлайн. КИЗ будет повторно проверен при синхронизации с WMS."
-                    );
+                    receiptFeedbackColor = BOX_NOT_NEEDED_RED;
+                    statusMessage = "КИЗ не принят: не удалось проверить уникальность в WMS.\n"
+                        + "Восстановите связь и отсканируйте этот КИЗ еще раз.";
+                    renderReceiptScreen();
                 });
             }
         });
@@ -3490,7 +6758,7 @@ public class MainActivity extends Activity {
     }
 
     private void addReceiptItem(String barcode, String kiz, TsdSkuInfo sku, String message) {
-        if (receiptWithoutBoxes()) {
+        if (!receiptUsesBoxes()) {
             enqueueUnboxedReceiptItem(barcode, kiz, sku, message);
             return;
         }
@@ -3521,20 +6789,25 @@ public class MainActivity extends Activity {
             receiptKizBoxes.put(normalizedKiz, "Без короба");
         }
         clearPendingReceiptProductFields();
-        outbox.enqueueReceipt(
-            receiptClientId,
-            barcode,
-            kiz,
-            null,
-            1,
-            "AVAILABLE",
-            receiptSourceDocument,
-            "Поштучная приемка ТСД без коробов"
-        );
-        statusMessage = message == null ? "Товар добавлен: " + barcode : message;
+        String clientId = receiptClientId;
+        String sourceDocument = receiptSourceDocument;
+        statusMessage = message == null
+            ? "Сохраняю товар в WMS: " + barcode
+            : message + "\nСохраняю товар в WMS.";
         renderReceiptScreen();
 
         runBackground(() -> {
+            outbox.enqueueReceipt(
+                clientId,
+                barcode,
+                kiz,
+                null,
+                1,
+                "AVAILABLE",
+                sourceDocument,
+                RECEIPT_MODE_STANDARD,
+                "Поштучная приемка ТСД без коробов"
+            );
             WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
             TsdSyncSummary summary = new TsdSyncRunner(outbox, api, session.deviceCode)
                 .syncPending(session.authorizationHeader());
@@ -3570,6 +6843,9 @@ public class MainActivity extends Activity {
     }
 
     private void closeReceiptBox() {
+        if (receiptClosingBox) {
+            return;
+        }
         if (outbox == null) {
             statusMessage = "Локальная очередь недоступна.";
             refreshCurrentScreen();
@@ -3599,41 +6875,51 @@ public class MainActivity extends Activity {
 
         String closedBoxCode = receiptBoxCode;
         List<ReceiptItem> itemsToSend = new ArrayList<>(receiptCurrentItems);
+        receiptClosingBox = true;
+        statusMessage = "Сохраняю короб " + closedBoxCode + " в WMS. Не нажимайте кнопку повторно.";
+        renderReceiptScreen();
         runBackground(() -> {
-            for (ReceiptItem item : itemsToSend) {
-                outbox.enqueueReceipt(
-                    receiptClientId,
-                    item.barcode,
-                    item.kiz,
-                    closedBoxCode,
-                    1,
-                    "AVAILABLE",
-                    receiptSourceDocument,
-                    "Приемка ТСД: короб " + closedBoxCode
-                );
-            }
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
-            TsdSyncSummary summary = new TsdSyncRunner(outbox, api, session.deviceCode)
-                .syncPending(session.authorizationHeader());
-            mainHandler.post(() -> {
-                online = summary.retried == 0;
-                receiptClosedBoxes += summary.rejected == 0 ? 1 : 0;
-                receiptAcceptedItems += summary.applied;
-                receiptSessionBoxes.add(normalizeBoxCode(closedBoxCode));
-                receiptBoxCode = "";
-                receiptCurrentItems.clear();
-                clearPendingReceiptProductFields();
-                receiptFeedbackColor = summary.rejected > 0 ? BOX_NOT_NEEDED_RED : 0;
-                if (summary.rejected > 0) {
-                    statusMessage = "ДУБЛЬ КИЗ / ОШИБКА ПРИЕМКИ\n" + summary.message + "\nКороб: " + closedBoxCode;
-                } else if (summary.retried > 0) {
-                    statusMessage = "Короб сохранен в очереди: " + closedBoxCode + ". КИЗ будут проверены при синхронизации.";
-                } else {
-                    statusMessage = "Короб закрыт и записан в WMS: " + closedBoxCode;
+            try {
+                for (ReceiptItem item : itemsToSend) {
+                    outbox.enqueueReceipt(
+                        receiptClientId,
+                        item.barcode,
+                        item.kiz,
+                        closedBoxCode,
+                        1,
+                        "AVAILABLE",
+                        receiptSourceDocument,
+                        RECEIPT_MODE_BOXES,
+                        "Приемка ТСД: короб " + closedBoxCode
+                    );
                 }
-                renderReceiptScreen();
-                refreshQueue(null);
-            });
+                WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+                TsdSyncSummary summary = new TsdSyncRunner(outbox, api, session.deviceCode)
+                    .syncPending(session.authorizationHeader());
+                mainHandler.post(() -> {
+                    receiptClosingBox = false;
+                    online = summary.retried == 0;
+                    receiptClosedBoxes += summary.rejected == 0 ? 1 : 0;
+                    receiptAcceptedItems += summary.applied;
+                    receiptSessionBoxes.add(normalizeBoxCode(closedBoxCode));
+                    receiptBoxCode = "";
+                    receiptCurrentItems.clear();
+                    clearPendingReceiptProductFields();
+                    receiptFeedbackColor = summary.rejected > 0 ? BOX_NOT_NEEDED_RED : 0;
+                    if (summary.rejected > 0) {
+                        statusMessage = "ДУБЛЬ КИЗ / ОШИБКА ПРИЕМКИ\n" + summary.message + "\nКороб: " + closedBoxCode;
+                    } else if (summary.retried > 0) {
+                        statusMessage = "Короб сохранен в очереди: " + closedBoxCode + ". КИЗ будут проверены при синхронизации.";
+                    } else {
+                        statusMessage = "Короб закрыт и записан в WMS: " + closedBoxCode;
+                    }
+                    renderReceiptScreen();
+                    refreshQueue(null);
+                });
+            } catch (Throwable error) {
+                mainHandler.post(() -> receiptClosingBox = false);
+                throw error;
+            }
         });
     }
 
@@ -3643,9 +6929,9 @@ public class MainActivity extends Activity {
             renderReceiptScreen();
             return;
         }
-        String summary = receiptWithoutBoxes()
+        String summary = !receiptUsesBoxes()
             ? "Приемка закрыта. Товаров: " + receiptAcceptedItems + "."
-            : "Приемка закрыта. Коробов: " + receiptClosedBoxes + ", товаров: " + receiptAcceptedItems + ".";
+            : "Приемка по боксам закрыта. Боксов: " + receiptClosedBoxes + ", товаров: " + receiptAcceptedItems + ".";
         resetReceiptState();
         statusMessage = summary;
         renderMainScreen();
@@ -3653,11 +6939,18 @@ public class MainActivity extends Activity {
 
     private void resetReceiptSession() {
         resetReceiptState();
-        statusMessage = "Выберите клиента приемки.";
+        statusMessage = "Выберите режим приемки.";
+        renderReceiptScreen();
+    }
+
+    private void resetReceiptStateAndRender() {
+        resetReceiptState();
+        statusMessage = "Выберите режим приемки.";
         renderReceiptScreen();
     }
 
     private void resetReceiptState() {
+        receiptMode = "";
         receiptClientId = "";
         receiptSourceDocument = "";
         receiptBoxCode = "";
@@ -3668,6 +6961,8 @@ public class MainActivity extends Activity {
         receiptKizValues.clear();
         receiptKizBoxes.clear();
         receiptCheckingKiz = false;
+        receiptClosingBox = false;
+        receiptKizAuditMode = false;
         receiptFeedbackColor = 0;
         clearPendingReceiptProductFields();
     }
@@ -3684,9 +6979,11 @@ public class MainActivity extends Activity {
         String baseUrl = textValue(baseUrlInput);
         runBackground(() -> {
             WmsApi api = WmsApiFactory.create(baseUrl);
-            Response<TsdLoginResponse> response = api.login(new TsdLoginRequest(login, password)).execute();
+            Response<TsdLoginResponse> response = api.login(
+                new TsdLoginRequest(login, password, physicalInstallationCode())
+            ).execute();
             if (!response.isSuccessful()) {
-                throw new IOException("HTTP " + response.code());
+                throw new IOException(inventoryHttpError(response));
             }
             TsdLoginResponse body = response.body();
             if (body == null || body.device == null) {
@@ -3694,6 +6991,7 @@ public class MainActivity extends Activity {
             }
             sessionStore.save(body);
             mainHandler.post(() -> {
+                restoreMandatoryFbsAuditState();
                 online = true;
                 statusMessage = "ТСД вошел: " + body.device.name;
                 loadClients(false);
@@ -3757,7 +7055,28 @@ public class MainActivity extends Activity {
         });
     }
 
+    private String physicalInstallationCode() {
+        String saved = uiStore == null
+            ? ""
+            : nonEmpty(uiStore.getString("tsd_installation_code", ""), "");
+        if (!saved.isEmpty()) return saved;
+        String androidId = Settings.Secure.getString(
+            getContentResolver(),
+            Settings.Secure.ANDROID_ID
+        );
+        String stablePart = nonEmpty(androidId, "").replaceAll("[^A-Za-z0-9]", "");
+        if (stablePart.isEmpty()) {
+            stablePart = UUID.randomUUID().toString().replace("-", "");
+        }
+        String generated = "TSD-INSTALL-" + stablePart.toUpperCase(Locale.ROOT);
+        if (uiStore != null) {
+            uiStore.edit().putString("tsd_installation_code", generated).commit();
+        }
+        return generated;
+    }
+
     private void clearSession() {
+        clearMandatoryFbsAuditState();
         sessionStore.clear();
         clients.clear();
         online = false;
@@ -3789,32 +7108,252 @@ public class MainActivity extends Activity {
                 task.run();
             } catch (Throwable error) {
                 mainHandler.post(() -> {
-                    if (screen == Screen.FBS_ASSEMBLY) {
-                        showFbsError(
-                            tr(
-                                "Нет связи с WMS. Проверьте интернет и повторите.",
-                                "WMS bilan aloqa yo‘q. Internetni tekshirib, qayta urinib ko‘ring."
-                            ),
-                            false
+                    if (screen == Screen.INVENTORY_COUNT) {
+                        inventoryRequestBusy = false;
+                    }
+                    boolean networkFailure = isNetworkFailure(error);
+                    String failureMessage = networkFailure
+                        ? tr(
+                            "Нет связи с WMS. Проверьте интернет и повторите.",
+                            "WMS bilan aloqa yo‘q. Internetni tekshirib, qayta urinib ko‘ring."
+                        )
+                        : nonEmpty(
+                            error.getMessage(),
+                            tr("Ошибка приложения.", "Ilova xatosi.")
                         );
+                    if (screen == Screen.FBS_ASSEMBLY) {
+                        showFbsError(failureMessage, !networkFailure);
+                        return;
+                    }
+                    if (screen == Screen.FBS_REQUESTS) {
+                        showFbsRequestsError(failureMessage, !networkFailure);
                         return;
                     }
                     if (screen == Screen.FBS_CARGO) {
-                        showFbsCargoError(
-                            tr(
-                                "Нет связи с WMS. Проверьте интернет и повторите.",
-                                "WMS bilan aloqa yo‘q. Internetni tekshirib, qayta urinib ko‘ring."
-                            ),
-                            false
-                        );
+                        showFbsCargoError(failureMessage, !networkFailure);
                         return;
                     }
-                    online = false;
-                    statusMessage = error.getMessage() == null ? "Ошибка приложения" : error.getMessage();
+                    online = !networkFailure;
+                    statusMessage = failureMessage;
                     refreshCurrentScreen();
+                    showScanningErrorDialog(statusMessage);
                 });
             }
         });
+    }
+
+    private boolean isNetworkFailure(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (
+                current instanceof java.net.SocketTimeoutException ||
+                current instanceof java.net.ConnectException ||
+                current instanceof java.net.UnknownHostException ||
+                current instanceof java.net.SocketException ||
+                current instanceof javax.net.ssl.SSLException
+            ) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private void sendMonitorHeartbeat() {
+        TsdSession session = safeSession();
+        if (session == null || monitorExecutor.isShutdown()) return;
+        Map<String, Object> payload = buildMonitorPayload();
+        monitorExecutor.execute(() -> {
+            try {
+                Response<Map<String, Object>> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                    .sendMonitorHeartbeat(session.authorizationHeader(), payload)
+                    .execute();
+                Map<String, Object> body = response.body();
+                if (response.isSuccessful() && body != null && body.get("command") instanceof Map) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> command = (Map<String, Object>) body.get("command");
+                    String action = String.valueOf(command.get("action"));
+                    mainHandler.post(() -> {
+                        if (!session.hasSameAccessToken(safeSession())) return;
+                        handleMonitorCommand(action);
+                    });
+                }
+            } catch (Throwable ignored) {
+            }
+        });
+    }
+
+    private void handleMonitorCommand(String actionValue) {
+        String action = nonEmpty(actionValue, "").trim().toUpperCase(Locale.ROOT);
+        if ("LOGOUT".equals(action)) {
+            clearSession();
+            return;
+        }
+        if ("UPDATE_APP".equals(action)) {
+            openApkDownload();
+            return;
+        }
+        if ("UNLOCK_INVENTORY".equals(action)) {
+            unlockInventoryFromMonitor();
+            return;
+        }
+        if (!"RELOAD_REQUEST".equals(action)) return;
+        statusMessage = tr("Диспетчер перезагрузил текущую заявку.", "Dispetcher joriy arizani qayta yukladi.");
+        if (screen == Screen.FBS_ASSEMBLY) {
+            fbsAssembly = null;
+            loadNextFbsAssembly();
+        } else if (screen == Screen.FBS_REQUESTS) {
+            loadFbsRequestChoices();
+        } else if (screen == Screen.FBS_CARGO) {
+            loadFbsCargoPacking();
+        } else if (screen == Screen.ASSEMBLY_DETAIL && assemblyPlan != null) {
+            loadAssemblyPlan(assemblyPlan.id);
+        } else {
+            refreshCurrentScreen();
+        }
+    }
+
+    private void unlockInventoryFromMonitor() {
+        if (activeErrorDialog != null && activeErrorDialog.isShowing()) {
+            activeErrorDialog.dismiss();
+        }
+        if (mandatoryFbsAuditActive || !pendingFbsAuditBoxes.isEmpty()) {
+            clearMandatoryFbsAuditState();
+        }
+        activeInventory = null;
+        activeInventoryBox = null;
+        inventoryDashboard = null;
+        inventoryType = "";
+        inventoryClientId = "";
+        transferredInventoryBoxId = "";
+        inventoryTransferMode = false;
+        inventoryArchiveMode = false;
+        inventoryBoxInput = null;
+        inventoryItemInput = null;
+        inventoryQuantityInput = null;
+        inventoryTransferTargetInput = null;
+        statusMessage = tr(
+            "Администратор разблокировал инвентаризацию. Можно продолжать работу.",
+            "Administrator inventarizatsiyani blokdan chiqardi. Ishni davom ettirish mumkin."
+        );
+        renderMainScreen();
+    }
+
+    private void reportMonitorError(String message) {
+        TsdSession session = safeSession();
+        if (session == null || monitorExecutor.isShutdown()) return;
+        Map<String, Object> payload = buildMonitorPayload();
+        payload.put("message", nonEmpty(message, "Ошибка сканирования"));
+        monitorExecutor.execute(() -> {
+            try {
+                WmsApiFactory.create(DEFAULT_BASE_URL)
+                    .sendMonitorError(session.authorizationHeader(), payload)
+                    .execute();
+            } catch (Throwable ignored) {
+            }
+        });
+    }
+
+    private Map<String, Object> buildMonitorPayload() {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        TsdSession session = safeSession();
+        if (session != null) {
+            payload.put("deviceCode", session.deviceCode);
+            payload.put("workerName", nonEmpty(session.deviceName, session.deviceCode));
+        }
+        payload.put("screen", screen.name());
+        payload.put("screenLabel", monitorScreenLabel(screen));
+        payload.put("state", online ? "ONLINE" : "OFFLINE");
+        payload.put("stage", monitorScreenLabel(screen));
+        payload.put("lastAction", nonEmpty(statusMessage, monitorScreenLabel(screen)));
+        payload.put("appVersion", BuildConfig.VERSION_NAME);
+        payload.put("reportedAt", System.currentTimeMillis());
+
+        if (activeInventory != null) {
+            payload.put("inventorySessionId", activeInventory.id);
+            payload.put("inventoryType", nonEmpty(activeInventory.type, inventoryType));
+            payload.put("inventoryMandatory", mandatoryFbsAuditActive);
+        }
+        if (activeInventoryBox != null) {
+            payload.put("inventoryBoxId", activeInventoryBox.id);
+            payload.put("inventoryBoxCode", activeInventoryBox.boxCode);
+        }
+
+        if (fbsAssembly != null) {
+            if (fbsAssembly.task != null) {
+                TsdFbsAssemblyResponse.Task task = fbsAssembly.task;
+                payload.put("requestId", task.requestId);
+                payload.put("orderId", task.orderId);
+                payload.put("productName", task.product == null ? "" : task.product.name);
+                payload.put("clientName", task.client == null ? "" : task.client.name);
+                payload.put("boxCode", nonEmpty(task.scannedBoxCode, task.recommendedBoxCode));
+            }
+            if (fbsAssembly.progress != null) {
+                payload.put("requestNumber", String.valueOf(fbsAssembly.progress.requestNumber));
+                payload.put("total", fbsAssembly.progress.requestTotalItems);
+                payload.put("completed", fbsAssembly.progress.requestCompletedItems);
+                payload.put("remaining", fbsAssembly.progress.requestRemainingItems);
+            }
+        } else if (assemblyPlan != null) {
+            payload.put("requestId", assemblyPlan.id);
+            payload.put("requestNumber", nonEmpty(assemblyPlan.title, assemblyPlan.id));
+            payload.put("total", assemblyPlan.totalRequested);
+            payload.put("completed", assemblyPlan.foundCount);
+            payload.put("remaining", assemblyPlan.remainingCount);
+        } else if (screen == Screen.RECEIPT) {
+            payload.put("accepted", receiptAcceptedItems);
+            payload.put("completed", receiptAcceptedItems);
+            payload.put("boxCode", receiptBoxCode);
+        }
+        return payload;
+    }
+
+    private String monitorScreenLabel(Screen value) {
+        switch (value) {
+            case RECEIPT: return "Приёмка";
+            case ASSEMBLY_LIST:
+            case ASSEMBLY_DETAIL: return "Сборка заявки";
+            case BOX_SEARCH: return "Поиск коробов";
+            case RELABEL_LIST:
+            case RELABEL_BOX: return "Переклейка";
+            case MOVEMENTS: return "Перемещения";
+            case OUTGOING_CONTROL: return "Контроль отгрузки";
+            case BOXLESS_PACKING: return "Упаковка без коробов";
+            case FBS_REQUESTS: return "Список FBS-заявок";
+            case FBS_ASSEMBLY: return "Сборка FBS";
+            case FBS_CARGO: return "Упаковка FBS";
+            case OZON_FBO_CLIENT:
+            case OZON_FBO_PLANS:
+            case OZON_FBO_BOXES:
+            case OZON_FBO_ASSEMBLY: return "FBO Ozon";
+            case STORAGE_PALLET: return "Паллетное хранение";
+            case STOCK_TRANSFER: return "Перемещение товара";
+            case INVENTORY_MENU:
+            case INVENTORY_START:
+            case INVENTORY_COUNT: return "Инвентаризация";
+            case SETTINGS: return "Настройки";
+            case INFO: return "Информация";
+            case MAIN:
+            default: return "Главное меню";
+        }
+    }
+
+    private void showScanningErrorDialog(String message) {
+        String text = nonEmpty(message, "Ошибка сканирования").trim();
+        long now = System.currentTimeMillis();
+        if (text.equals(lastDialogError) && now - lastDialogErrorAt < 1_500L) return;
+        lastDialogError = text;
+        lastDialogErrorAt = now;
+        reportMonitorError(text);
+        if (activeErrorDialog != null && activeErrorDialog.isShowing()) activeErrorDialog.dismiss();
+        activeErrorDialog = new AlertDialog.Builder(this)
+            .setTitle(tr("Ошибка сканирования", "Skanerlash xatosi"))
+            .setMessage(text)
+            .setCancelable(false)
+            .setPositiveButton(tr("Понятно", "Tushunarli"), (dialog, which) -> dialog.dismiss())
+            .create();
+        activeErrorDialog.setOnDismissListener(dialog -> activeErrorDialog = null);
+        activeErrorDialog.show();
     }
 
     private void runSilentBackground(ThrowingRunnable task) {
@@ -3921,6 +7460,15 @@ public class MainActivity extends Activity {
         }
         if (screen == Screen.FBS_CARGO) {
             return fbsCargoScanInput;
+        }
+        if (screen == Screen.OZON_FBO_BOXES || screen == Screen.OZON_FBO_ASSEMBLY) {
+            return ozonFboScanInput;
+        }
+        if (screen == Screen.STORAGE_PALLET) {
+            return storagePalletScanInput;
+        }
+        if (screen == Screen.STOCK_TRANSFER) {
+            return transferScanInput;
         }
         if (
             screen == Screen.BOX_SEARCH ||
@@ -4054,6 +7602,14 @@ public class MainActivity extends Activity {
             submitFbsScan();
         } else if (screen == Screen.FBS_CARGO) {
             submitFbsCargoScan();
+        } else if (screen == Screen.OZON_FBO_BOXES) {
+            openOzonFboBoxByCode();
+        } else if (screen == Screen.OZON_FBO_ASSEMBLY) {
+            submitOzonFboProductScan();
+        } else if (screen == Screen.STORAGE_PALLET) {
+            submitStoragePalletScan();
+        } else if (screen == Screen.STOCK_TRANSFER) {
+            submitStockTransferScan();
         } else if (screen == Screen.INVENTORY_COUNT) {
             if (inventoryTransferMode) {
                 transferInventoryBox();
@@ -4096,6 +7652,13 @@ public class MainActivity extends Activity {
         );
         params.setMargins(0, 0, 0, dp(10));
         button.setLayoutParams(params);
+        return button;
+    }
+
+    private Button dangerSecondaryButton(String text, View.OnClickListener listener) {
+        Button button = secondaryButton(text, listener);
+        button.setTextColor(Color.rgb(153, 27, 27));
+        button.setBackgroundColor(Color.rgb(254, 226, 226));
         return button;
     }
 
@@ -4145,7 +7708,7 @@ public class MainActivity extends Activity {
 
     private TextView versionView() {
         TextView view = new TextView(this);
-        view.setText("Версия " + APP_VERSION);
+        view.setText("Версия " + installedVersionName());
         view.setTextColor(Color.rgb(100, 116, 139));
         view.setTextSize(13f);
         view.setGravity(Gravity.CENTER);
@@ -4224,6 +7787,73 @@ public class MainActivity extends Activity {
         return view;
     }
 
+    private String fbsWarehouseLabel(String warehouseName, String warehouseId) {
+        String value = warehouseName == null ? "" : warehouseName.trim();
+        if (value.isEmpty()) value = warehouseId == null ? "" : warehouseId.trim();
+        if (value.isEmpty()) value = tr("НЕ ОПРЕДЕЛЁН", "ANIQLANMAGAN");
+        return tr("СКЛАД WB: ", "WB OMBORI: ") + value.toUpperCase(Locale.ROOT);
+    }
+
+    private String fbsMarketplaceNames(List<String> marketplaces) {
+        if (marketplaces == null || marketplaces.isEmpty()) return "FBS";
+        List<String> names = new ArrayList<>();
+        for (String marketplace : marketplaces) {
+            String name = fbsMarketplaceName(marketplace);
+            if (!names.contains(name)) names.add(name);
+        }
+        return String.join(" / ", names);
+    }
+
+    private String fbsMarketplaceName(String marketplace) {
+        if ("OZON".equalsIgnoreCase(marketplace)) return "OZON";
+        if ("YANDEX_MARKET".equalsIgnoreCase(marketplace)) return "ЯНДЕКС";
+        if ("WILDBERRIES".equalsIgnoreCase(marketplace)) return "WB";
+        return "FBS";
+    }
+
+    private TextView fbsWarehouseBanner(String warehouseName, String warehouseId) {
+        TextView view = feedbackView(
+            fbsWarehouseLabel(warehouseName, warehouseId),
+            Color.rgb(254, 240, 138)
+        );
+        view.setTextColor(Color.rgb(15, 23, 42));
+        view.setTextSize(23f);
+        view.setGravity(Gravity.CENTER);
+        view.setPadding(dp(14), dp(16), dp(14), dp(16));
+        return view;
+    }
+
+    private TextView fbsOrderStickerWarehouseBanner(TsdFbsAssemblyResponse.Task task) {
+        String warehouseName = task == null ? "" : nonEmpty(task.warehouseName, task.warehouseId);
+        if (warehouseName.isEmpty()) warehouseName = tr("НЕ УКАЗАН", "ANIQLANMAGAN");
+        TextView view = feedbackView(
+            tr("СКЛАД ЗАКАЗА\n", "BUYURTMA OMBORI\n") + warehouseName.toUpperCase(Locale.ROOT),
+            Color.rgb(15, 23, 42)
+        );
+        view.setTextColor(Color.WHITE);
+        view.setTextSize(27f);
+        view.setTypeface(null, Typeface.BOLD);
+        view.setGravity(Gravity.CENTER);
+        view.setLetterSpacing(0.045f);
+        view.setPadding(dp(14), dp(18), dp(14), dp(18));
+        return view;
+    }
+
+    private TextView fbsMarketplaceWarehouseBanner(String marketplaceName, List<String> warehouseNames) {
+        String warehouses = warehouseNames == null || warehouseNames.isEmpty()
+            ? tr("НЕ ОПРЕДЕЛЁН", "ANIQLANMAGAN")
+            : String.join(" / ", warehouseNames).toUpperCase(Locale.ROOT);
+        TextView view = feedbackView(
+            tr("СКЛАД ", "OMBOR ") + marketplaceName + ": " + warehouses,
+            Color.rgb(254, 240, 138)
+        );
+        view.setTextColor(Color.rgb(15, 23, 42));
+        view.setTextSize(23f);
+        view.setGravity(Gravity.CENTER);
+        view.setPadding(dp(14), dp(16), dp(14), dp(16));
+        return view;
+    }
+
     private void applyScreenFeedback(LinearLayout root, int backgroundColor) {
         if (backgroundColor != 0) {
             root.setBackgroundColor(backgroundColor);
@@ -4246,6 +7876,16 @@ public class MainActivity extends Activity {
             return "ПЕРЕМЕЩЕНИЕ";
         }
         return "ЦЕЛИКОМ";
+    }
+
+    private String boxStorageLocationLabel(TsdSearchBoxTask box) {
+        if (box == null || box.storageLocation == null) {
+            return tr("Место хранения не задано", "Saqlash joyi belgilanmagan");
+        }
+        return tr("Зона: ", "Zona: ") +
+            nonEmpty(box.storageLocation.zoneName, tr("не назначена", "belgilanmagan")) +
+            tr(" · Паллета: ", " · Pallet: ") +
+            nonEmpty(box.storageLocation.palletCode, "-");
     }
 
     private int boxInstructionColor(TsdSearchBoxTask box) {
@@ -4328,7 +7968,12 @@ public class MainActivity extends Activity {
         Set<String> boxes = new LinkedHashSet<>();
         if (assemblyPlan != null && assemblyPlan.movementProgress != null && assemblyPlan.movementProgress.sourceBoxes != null) {
             for (TsdAssemblyPlan.TsdMovementSourceBox box : assemblyPlan.movementProgress.sourceBoxes) {
-                if (box.sourceBox != null && !box.sourceBox.trim().isEmpty()) {
+                if (
+                    box.sourceBox != null &&
+                    !box.sourceBox.trim().isEmpty() &&
+                    !box.done &&
+                    box.remainingQuantity > 0
+                ) {
                     boxes.add(box.sourceBox);
                 }
             }
@@ -4788,6 +8433,14 @@ public class MainActivity extends Activity {
         return false;
     }
 
+    private boolean receiptUsesBoxes() {
+        return RECEIPT_MODE_BOXES.equals(receiptMode) || !receiptWithoutBoxes();
+    }
+
+    private String receiptModeLabel() {
+        return RECEIPT_MODE_BOXES.equals(receiptMode) ? "приемка по боксам" : "обычная приемка";
+    }
+
     private String receiptSkuDisplay(TsdSkuInfo sku, String barcode) {
         if (sku == null) {
             return "Новый товар без карточки\nШК " + barcode;
@@ -4830,10 +8483,24 @@ public class MainActivity extends Activity {
             renderOutgoingControlScreen();
         } else if (screen == Screen.BOXLESS_PACKING) {
             renderBoxlessPackingScreen();
+        } else if (screen == Screen.FBS_REQUESTS) {
+            renderFbsRequestSelectionScreen();
         } else if (screen == Screen.FBS_ASSEMBLY) {
             renderFbsAssemblyScreen();
         } else if (screen == Screen.FBS_CARGO) {
             renderFbsCargoPackingScreen();
+        } else if (screen == Screen.OZON_FBO_CLIENT) {
+            renderOzonFboClientScreen();
+        } else if (screen == Screen.OZON_FBO_PLANS) {
+            renderOzonFboPlansScreen();
+        } else if (screen == Screen.OZON_FBO_BOXES) {
+            renderOzonFboBoxesScreen();
+        } else if (screen == Screen.OZON_FBO_ASSEMBLY) {
+            renderOzonFboAssemblyScreen();
+        } else if (screen == Screen.STORAGE_PALLET) {
+            renderStoragePalletAssemblyScreen();
+        } else if (screen == Screen.STOCK_TRANSFER) {
+            renderStockTransferScreen();
         } else if (screen == Screen.INVENTORY_MENU) {
             renderInventoryMenu();
         } else if (screen == Screen.INVENTORY_START) {
@@ -4856,23 +8523,41 @@ public class MainActivity extends Activity {
     }
 
     private String responseErrorMessage(Response<?> response, String fallback) {
+        return responseErrorDetails(response, fallback).message;
+    }
+
+    private ApiErrorDetails responseErrorDetails(Response<?> response, String fallback) {
+        String code = "";
+        String messageText = fallback;
         try {
-            if (response.errorBody() == null) return fallback;
+            if (response.errorBody() == null) return new ApiErrorDetails(code, messageText);
             String body = response.errorBody().string();
-            if (body == null || body.trim().isEmpty()) return fallback;
+            if (body == null || body.trim().isEmpty()) return new ApiErrorDetails(code, messageText);
             JSONObject payload = new JSONObject(body);
+            code = nonEmpty(payload.optString("code", ""), "");
             Object message = payload.opt("message");
             if (message != null && !JSONObject.NULL.equals(message)) {
                 String text = String.valueOf(message).trim();
-                if (!text.isEmpty()) return text;
+                if (!text.isEmpty()) messageText = text;
             }
         } catch (Throwable ignored) {
         }
-        return fallback;
+        return new ApiErrorDetails(code, messageText);
+    }
+
+    private static final class ApiErrorDetails {
+        final String code;
+        final String message;
+
+        ApiErrorDetails(String code, String message) {
+            this.code = code == null ? "" : code;
+            this.message = message == null ? "" : message;
+        }
     }
 
     private boolean isFflBoxCode(String value) {
-        return normalizeBoxCode(value).startsWith("FFL");
+        String normalized = normalizeBoxCode(value);
+        return normalized.startsWith("FFU") || normalized.startsWith("FFL");
     }
 
     private String receiptBarcodeError(String value) {
@@ -4903,6 +8588,54 @@ public class MainActivity extends Activity {
         return "";
     }
 
+    private String fbsKizScanError(String value) {
+        String trimmed = value == null ? "" : value.trim();
+        if (trimmed.isEmpty()) {
+            return "";
+        }
+        String compact = trimmed
+            .toUpperCase(Locale.ROOT)
+            .replaceAll("[^A-ZА-ЯЁ0-9]", "");
+        if (compact.startsWith("FFL")) {
+            return tr(
+                "Отсканирован номер короба. Сейчас нужен КИЗ Data Matrix товара.",
+                "Quti raqami skanerlandi. Hozir mahsulotning Data Matrix KIZ kodi kerak."
+            );
+        }
+        if (
+            compact.startsWith("PALETSORT") ||
+            compact.startsWith("PALLETSORT") ||
+            compact.startsWith("ПАЛЛЕТСОРТ")
+        ) {
+            return tr(
+                "Отсканирован код паллетсорта. Сейчас нужен КИЗ Data Matrix товара.",
+                "Palletsort kodi skanerlandi. Hozir mahsulotning Data Matrix KIZ kodi kerak."
+            );
+        }
+        if (trimmed.matches("^\\d{8,14}$")) {
+            return tr(
+                "Отсканирован обычный ШК товара. Сейчас нужен КИЗ Data Matrix.",
+                "Oddiy mahsulot SHK skanerlandi. Hozir Data Matrix KIZ kerak."
+            );
+        }
+        if (trimmed.length() < 21 || trimmed.length() > 135) {
+            return tr(
+                "Отсканирован не КИЗ. Нужен Data Matrix длиной от 21 до 135 символов.",
+                "KIZ skanerlanmadi. 21 dan 135 belgigacha Data Matrix kerak."
+            );
+        }
+        boolean hasGs1KizStructure =
+            trimmed.matches("(?i)^(?:\\]d2)?01\\d{14}(?:\\x1d)?21[\\s\\S]+$") ||
+            trimmed.matches("(?i)^\\(01\\)\\d{14}\\(21\\)[\\s\\S]+$");
+        if (!hasGs1KizStructure) {
+            return tr(
+                "Код неверного типа. КИЗ должен содержать группы 01 (GTIN) и 21 (серийный номер).",
+                "Kod turi noto‘g‘ri. KIZ 01 (GTIN) va 21 (seriya raqami) guruhlarini o‘z ichiga olishi kerak."
+            );
+        }
+        return "";
+    }
+
     private String duplicateKizMessage(String kiz, String boxCode, boolean currentReceipt) {
         String location;
         if (boxCode != null && !boxCode.trim().isEmpty()) {
@@ -4929,6 +8662,11 @@ public class MainActivity extends Activity {
         return builder.toString();
     }
 
+    private boolean isLikelyBoxCode(String value) {
+        String normalized = value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
+        return normalized.startsWith("FFL_") || normalized.startsWith("FL_");
+    }
+
     private String optionalValue(EditText input) {
         String value = textValue(input);
         return value.isEmpty() ? null : value;
@@ -4950,22 +8688,30 @@ public class MainActivity extends Activity {
     }
 
     private void openApkDownload() {
+        if (appUpdateBusy) {
+            showUpdateStatus("Обновление уже загружается.", false);
+            return;
+        }
         TsdSession session = safeSession();
         if (session == null) {
             statusMessage = "Перед обновлением войдите на ТСД и синхронизируйте операции.";
             refreshCurrentScreen();
             return;
         }
-        OperationOutboxCounts beforeSync = outbox.counts();
-        if (beforeSync.pending == 0) {
-            statusMessage = "Очередь синхронизирована. Открываю обновление " + APP_VERSION + ".";
-            refreshCurrentScreen();
-            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(APK_URL)));
-            return;
-        }
         statusMessage = "Проверяю очередь и синхронизирую данные перед обновлением...";
         refreshCurrentScreen();
         runBackground(() -> {
+            OperationOutboxCounts beforeSync = outbox.counts();
+            if (beforeSync.pending == 0) {
+                mainHandler.post(() -> {
+                    pendingCount = beforeSync.pending;
+                    rejectedCount = beforeSync.rejected;
+                    statusMessage = "Очередь синхронизирована. Загружаю обновление...";
+                    refreshCurrentScreen();
+                    startManagedApkUpdate();
+                });
+                return;
+            }
             WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
             TsdSyncSummary summary = new TsdSyncRunner(outbox, api, session.deviceCode)
                 .syncPending(session.authorizationHeader());
@@ -4980,11 +8726,143 @@ public class MainActivity extends Activity {
                 }
                 statusMessage = counts.rejected > 0
                     ? "Очередь отправлена. Отклоненные операции сохранены на ТСД и в разборе WMS."
-                    : "Все данные синхронизированы. Открываю обновление.";
+                    : "Все данные синхронизированы. Загружаю обновление...";
                 refreshCurrentScreen();
-                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(APK_URL)));
+                startManagedApkUpdate();
             });
         });
+    }
+
+    private void startManagedApkUpdate() {
+        if (appUpdateBusy) return;
+        appUpdateBusy = true;
+        showUpdateStatus("Скачиваю и проверяю обновление ТСД...", false);
+        executor.execute(() -> {
+            try {
+                File apk = downloadAndVerifyUpdateApk();
+                if (apk == null) {
+                    appUpdateBusy = false;
+                    showUpdateStatus("На ТСД уже установлена актуальная версия.", false);
+                    return;
+                }
+                installUpdateApk(apk);
+            } catch (Throwable error) {
+                appUpdateBusy = false;
+                showUpdateStatus(
+                    "Не удалось обновить ТСД: " + nonEmpty(error.getMessage(), "ошибка загрузки") + ".",
+                    true
+                );
+            }
+        });
+    }
+
+    private File downloadAndVerifyUpdateApk() throws Exception {
+        String metadataUrl = APK_URL.endsWith(".apk")
+            ? APK_URL.substring(0, APK_URL.length() - 4) + ".json"
+            : APK_URL + ".json";
+        JSONObject metadata = new JSONObject(new String(downloadBytes(metadataUrl), java.nio.charset.StandardCharsets.UTF_8));
+        int remoteVersion = metadata.optInt("versionCode", 0);
+        int installedVersion = installedVersionCode();
+        if (remoteVersion <= installedVersion) {
+            return null;
+        }
+        byte[] apkBytes = downloadBytes(metadata.optString("apkUrl", APK_URL) + "?v=" + remoteVersion);
+        String expectedSha = metadata.optString("sha256", "").trim().toLowerCase(Locale.ROOT);
+        String actualSha = sha256(apkBytes);
+        if (expectedSha.isEmpty() || !expectedSha.equals(actualSha)) {
+            throw new SecurityException("контрольная сумма APK не совпала");
+        }
+        File apk = new File(getCacheDir(), "logoff-tsd-update-" + remoteVersion + ".apk");
+        try (FileOutputStream output = new FileOutputStream(apk, false)) {
+            output.write(apkBytes);
+            output.flush();
+        }
+        return apk;
+    }
+
+    private byte[] downloadBytes(String urlValue) throws Exception {
+        HttpURLConnection connection = (HttpURLConnection) new URL(urlValue).openConnection();
+        connection.setConnectTimeout(20_000);
+        connection.setReadTimeout(60_000);
+        connection.setUseCaches(false);
+        connection.setRequestProperty("Accept", "application/json, application/vnd.android.package-archive, */*");
+        int status = connection.getResponseCode();
+        if (status < 200 || status >= 300) {
+            connection.disconnect();
+            throw new IOException("сервер обновлений ответил HTTP " + status);
+        }
+        try (InputStream input = connection.getInputStream(); java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream()) {
+            byte[] buffer = new byte[32 * 1024];
+            int read;
+            while ((read = input.read(buffer)) >= 0) {
+                if (read > 0) output.write(buffer, 0, read);
+            }
+            return output.toByteArray();
+        } finally {
+            connection.disconnect();
+        }
+    }
+
+    private String sha256(byte[] value) throws Exception {
+        byte[] digest = MessageDigest.getInstance("SHA-256").digest(value);
+        StringBuilder result = new StringBuilder(digest.length * 2);
+        for (byte item : digest) result.append(String.format(Locale.ROOT, "%02x", item & 0xff));
+        return result.toString();
+    }
+
+    private void installUpdateApk(File apk) throws Exception {
+        PackageInstaller installer = getPackageManager().getPackageInstaller();
+        PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+        params.setAppPackageName(getPackageName());
+        int sessionId = installer.createSession(params);
+        try (PackageInstaller.Session installSession = installer.openSession(sessionId)) {
+            try (InputStream input = new FileInputStream(apk);
+                 OutputStream output = installSession.openWrite("logoff-tsd.apk", 0, apk.length())) {
+                byte[] buffer = new byte[32 * 1024];
+                int read;
+                while ((read = input.read(buffer)) >= 0) {
+                    if (read > 0) output.write(buffer, 0, read);
+                }
+                installSession.fsync(output);
+            }
+            Intent resultIntent = new Intent(UPDATE_INSTALL_ACTION).setPackage(getPackageName());
+            PendingIntent callback = PendingIntent.getBroadcast(
+                this,
+                sessionId,
+                resultIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE
+            );
+            installSession.commit(callback.getIntentSender());
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private int installedVersionCode() throws PackageManager.NameNotFoundException {
+        android.content.pm.PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            long value = info.getLongVersionCode();
+            return value > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) value;
+        }
+        return info.versionCode;
+    }
+
+    private void showUpdateStatus(String message, boolean error) {
+        mainHandler.post(() -> {
+            statusMessage = message;
+            refreshCurrentScreen();
+            if (error) showScanningErrorDialog(message);
+        });
+    }
+
+    private String installedVersionName() {
+        try {
+            String versionName = getPackageManager()
+                .getPackageInfo(getPackageName(), 0)
+                .versionName;
+            return versionName == null || versionName.isBlank() ? "—" : versionName;
+        } catch (PackageManager.NameNotFoundException error) {
+            return "—";
+        }
     }
 
     private int dp(int value) {
@@ -5003,8 +8881,15 @@ public class MainActivity extends Activity {
         MOVEMENTS,
         OUTGOING_CONTROL,
         BOXLESS_PACKING,
+        FBS_REQUESTS,
         FBS_ASSEMBLY,
         FBS_CARGO,
+        OZON_FBO_CLIENT,
+        OZON_FBO_PLANS,
+        OZON_FBO_BOXES,
+        OZON_FBO_ASSEMBLY,
+        STORAGE_PALLET,
+        STOCK_TRANSFER,
         INVENTORY_MENU,
         INVENTORY_START,
         INVENTORY_COUNT,
@@ -5024,6 +8909,20 @@ public class MainActivity extends Activity {
             this.barcode = barcode;
             this.kiz = kiz;
             this.name = name;
+        }
+    }
+
+    private static class StoragePalletRecoveryItem {
+        final String skuId;
+        final String barcode;
+        final String name;
+        int quantity;
+
+        StoragePalletRecoveryItem(String skuId, String barcode, String name, int quantity) {
+            this.skuId = skuId;
+            this.barcode = barcode;
+            this.name = name;
+            this.quantity = quantity;
         }
     }
 }

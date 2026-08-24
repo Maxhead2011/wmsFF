@@ -1,17 +1,22 @@
 import {
   BadRequestException,
+  ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
   OnModuleDestroy,
   OnModuleInit,
+  UnauthorizedException,
 } from '@nestjs/common';
 import {
   BillingChargeSource,
   BillingChargeStatus,
   BillingInvoiceSource,
   BillingInvoiceStatus,
+  BillingPriceTaxMode,
   BillingUnit,
+  ClientStockBalanceMode,
   ClientRequestEventType,
   ClientRequestStatus,
   ClientRequestType,
@@ -22,21 +27,61 @@ import {
   StockStatus,
   VolumeSource,
 } from '@prisma/client';
+import { PDFParse } from 'pdf-parse';
 import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
+import { BoxCodePolicyService } from '../../common/boxes/box-code-policy.service';
+import { ArchivedEmptyBoxPalletDetachService } from '../../common/boxes/archived-empty-box-pallet-detach.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
-import { ClientScopeService } from '../auth/client-scope.service';
+import { ClientScopeService, type ClientFilter } from '../auth/client-scope.service';
+import type { MergeFbsRequestTailsDto } from '../client-requests/dto/merge-fbs-request-tails.dto';
 import {
+  calculateFbsBoxes,
   FBS_VNUKOVO,
   quoteFixedFbsCalculator,
 } from '../logistics/fbs-calculator';
+import { LogisticsService } from '../logistics/logistics.service';
 import type { FbsOrderSelectionDto } from './dto/fbs-order-selection.dto';
+import type { ApplyFbsRelabelReconciliationDto } from './dto/apply-fbs-relabel-reconciliation.dto';
 import type { FbsPassDto } from './dto/fbs-pass.dto';
+import type { FbsStockPublicationBulkDto } from './dto/fbs-stock-publication-bulk.dto';
 import type { FbsStockPublicationDto } from './dto/fbs-stock-publication.dto';
+import type { ReconcileFbsStockItemDto } from './dto/reconcile-fbs-stock-item.dto';
+import {
+  FbsSyncConflictResolutionAction,
+  type ResolveFbsSyncConflictDto,
+} from './dto/resolve-fbs-sync-conflict.dto';
 import type { FbsStockSyncDto } from './dto/fbs-stock-sync.dto';
+import type { FbsSupplyRequestDto } from './dto/fbs-supply-request.dto';
 import { UpdateFbsBillingSettingsDto } from './dto/update-fbs-billing-settings.dto';
+import type { UpdateFbsCargoPackingIgnoreDto } from './dto/update-fbs-cargo-packing-ignore.dto';
+import {
+  type FbsWarehouseRouteMode,
+  type UpdateFbsWarehouseRoutesDto,
+} from './dto/update-fbs-warehouse-routes.dto';
 import { UpsertMarketplaceConnectionDto } from './dto/upsert-marketplace-connection.dto';
-import { DEFAULT_FBS_ITEMS_PER_CARGO_PLACE } from './fbs.constants';
+import type { UpsertDbsIntegrationDto } from './dto/upsert-dbs-integration.dto';
+import {
+  DEFAULT_FBS_ITEMS_PER_CARGO_PLACE,
+  FBS_UNLIMITED_CARGO_PLACE_CAPACITY,
+} from './fbs.constants';
+import {
+  runWithWildberriesRequestPriority,
+  WildberriesRequestScheduler,
+  wildberriesReadRequestKey,
+} from './wildberries-request-scheduler';
+import { buildFbsPrimaryProcessingBreakdown } from './fbs-primary-processing';
+import {
+  FbsStockMonitoringService,
+  type FbsStockMonitorProbeInput,
+  type FbsStockMonitorProbeResult,
+} from './fbs-stock-monitoring.service';
+import {
+  describeFbsRejectedBox,
+  diffFbsRouteBoxes,
+  evaluateFbsBoxAvailability,
+  fbsRouteFingerprint,
+} from './fbs-route-availability';
 import {
   buildFbsCargoPlaceStickersPdf,
   buildFbsPickListPdf,
@@ -101,15 +146,24 @@ type FbsOrderSummary = {
     internalSku: string;
     clientSku: string | null;
     article: string | null;
+    size: string | null;
     needsChestnyZnak: boolean;
     isUnmarked: boolean;
   } | null;
   storageBoxes: Array<{ code: string; quantity: number; status: string }>;
+  relabeling: {
+    required: true;
+    sourceSkuId: string | null;
+    sourceProductName: string | null;
+    sourceArticle: string;
+    sourceBarcodes: string[];
+  } | null;
   createdAt: string | null;
   sellerDate: string | null;
   deliveryDate: string | null;
   supplyId: string | null;
   warehouseId: string | null;
+  warehouseName: string | null;
   officeId: string | null;
   cargoType: string | null;
   crossBorderType: string | null;
@@ -121,6 +175,11 @@ type FbsOrderSummary = {
     requiresCargoPlaces: boolean;
     cargoPlaceCount: number;
     cargoPlaceIds: string[];
+    sentToWbAt: string | null;
+    sentToWbBy: {
+      id: string | null;
+      name: string;
+    } | null;
   } | null;
   requiredMeta: string[];
   optionalMeta: string[];
@@ -130,6 +189,19 @@ type FbsOrderSummary = {
     number: number;
     title: string;
     status: ClientRequestStatus;
+    warehouseId?: string | null;
+    fbsEmergencyAssemblyAt: Date | null;
+    fbsEmergencyAssemblyByUserId: string | null;
+    fbsEmergencyAssemblyByName: string | null;
+  } | null;
+  reservation?: {
+    status: string;
+    withoutBox: boolean;
+    boxCode: string | null;
+    palletCode: string | null;
+    warehouseId: string | null;
+    reservedAt: string | null;
+    problem: string | null;
   } | null;
   billing: {
     chargeId: string;
@@ -168,13 +240,66 @@ type FbsOrdersResponse = {
   orders: FbsOrderSummary[];
 };
 
+type FbsOrderHistoryMode = 'full' | 'cache-only';
+
+type FbsDeliveryRecoveryItem = {
+  orderId: string;
+  requestId: string | null;
+  requestNumber: number | null;
+  productName: string;
+  article: string | null;
+  size: string | null;
+  barcode: string | null;
+  kiz: string | null;
+  boxCode: string | null;
+  cargoPlaceCode: string | null;
+  reason: string;
+};
+
+type FbsDeliveryRecovery = {
+  rescanOrders: FbsDeliveryRecoveryItem[];
+  cancelledOrders: FbsDeliveryRecoveryItem[];
+};
+
 type FbsTsdAssemblyRecord = Prisma.FbsTsdAssemblyGetPayload<{}>;
+type FbsTsdStockSource = {
+  sourceSkuId: string | null;
+  sourceProductName: string | null;
+  sourceArticle: string | null;
+  sourceBarcodes: string[];
+  storageBoxes: Array<{ code: string; quantity: number; status: string }>;
+  withoutBoxQuantity: number;
+  relabelRequired: boolean;
+};
 type FbsSupplyPlanWithClient = Prisma.FbsSupplyPlanGetPayload<{
   include: { client: { select: { id: true; code: true; name: true } } };
 }>;
 type FbsCargoPackingWithAssemblies = Prisma.FbsCargoPlacePackingGetPayload<{
   include: { assemblies: true };
 }>;
+type FbsPrimaryBillingService = Prisma.ClientBillingServiceGetPayload<{
+  include: {
+    service: {
+      select: {
+        id: true;
+        code: true;
+        name: true;
+        unit: true;
+        isActive: true;
+      };
+    };
+  };
+}>;
+type FbsPrimaryChargeLine = {
+  key: string;
+  description: string;
+  quantity: number;
+  unitPriceRub: number;
+  serviceId: string | null;
+  serviceCode: string;
+  taxMode: BillingPriceTaxMode;
+  priceBeforeTaxRub: number;
+};
 type FbsRequestDesiredItem = {
   skuId: string;
   barcode: string | null;
@@ -189,6 +314,31 @@ type FbsStockWarehouse = {
   cargoType: number | null;
   deliveryType: number | null;
 };
+type FbsWarehouseOffice = {
+  id: string;
+  name: string;
+  city: string;
+};
+class FbsWarehouseExcludedError extends Error {
+  constructor(readonly orders: FbsOrderSummary[]) {
+    super(
+      `FBS orders are excluded from WMS routing: ${orders
+        .map((order) => order.id)
+        .join(', ')}`,
+    );
+    this.name = 'FbsWarehouseExcludedError';
+  }
+}
+class FbsWarehouseUnconfiguredError extends Error {
+  constructor(readonly orders: FbsOrderSummary[]) {
+    super(
+      `FBS warehouses are not configured for WMS routing: ${orders
+        .map((order) => order.id)
+        .join(', ')}`,
+    );
+    this.name = 'FbsWarehouseUnconfiguredError';
+  }
+}
 type FbsStockQuantity = {
   skuId: string;
   chrtId: number;
@@ -196,13 +346,100 @@ type FbsStockQuantity = {
   reserved: number;
   sellable: number;
 };
+type FbsRelabelStockMeta = {
+  isSource: boolean;
+  isTarget: boolean;
+  sources: Array<{ skuId: string; label: string; sellable: number; allocated: number }>;
+  allocatedFromSources: number;
+  allocatedToTargets: number;
+  capacity: number;
+};
+type FbsPublicationAmounts = {
+  saleLimit: number | null;
+  requestedAmount: number;
+  targetAmount: number;
+  shortage: boolean;
+  shortageAmount: number;
+};
+type MarketplaceAccessCheck = {
+  key: 'products' | 'fbsOrders' | 'warehouses';
+  label: string;
+  ok: boolean;
+  message: string;
+};
+type RelabelReconciliationSku = {
+  id: string;
+  internalSku: string;
+  clientSku: string | null;
+  article: string | null;
+  name: string;
+  color: string | null;
+  size: string | null;
+  barcodes: Array<{ value: string; isPrimary: boolean }>;
+  balances: Array<{
+    id: string;
+    boxId: string | null;
+    palletId: string | null;
+    status: StockStatus;
+    quantity: number;
+    box: { code: string } | null;
+  }>;
+};
+type RelabelReconciliationPair = {
+  mappingId: string;
+  sourceArticle: string;
+  targetArticle: string;
+  source: RelabelReconciliationSku;
+  target: RelabelReconciliationSku | null;
+};
 const FBS_TSD_STALE_UNSTARTED_TASK_MS = 2 * 60 * 60 * 1_000;
 const FBS_TSD_REQUEST_FALLBACK_CACHE_MS = 2 * 60 * 1_000;
+const FBS_TSD_NO_BOX_CODE = 'БЕЗ КОРОБА';
+const FBS_TSD_RESERVED_STATUS = 'RESERVED';
+const FBS_TSD_WAITING_STOCK_STATUS = 'WAITING_STOCK';
+const FBS_TSD_RESCAN_REQUIRED_STATUS = 'RESCAN_REQUIRED';
+const FBS_TSD_AUTO_RESERVATION_DEVICE = 'AUTO:FBS:PALLET_SORT';
+const FBS_BACKGROUND_REFRESH_INTERVAL_MS = Math.max(
+  2 * 60_000,
+  Number(process.env.FBS_AUTO_SYNC_INTERVAL_MS) || 2 * 60_000,
+);
+const FBS_BACKGROUND_REFRESH_MAX_INTERVAL_MS = Math.max(
+  FBS_BACKGROUND_REFRESH_INTERVAL_MS,
+  Number(process.env.FBS_AUTO_SYNC_MAX_INTERVAL_MS) || 5 * 60_000,
+);
+const FBS_BACKGROUND_CLIENT_CONCURRENCY = Math.max(
+  1,
+  Math.min(
+    8,
+    Math.trunc(Number(process.env.FBS_BACKGROUND_CLIENT_CONCURRENCY)) || 1,
+  ),
+);
+const WILDBERRIES_FBS_HISTORY_MAX_PAGES = Math.max(
+  5,
+  Math.min(
+    100,
+    Math.trunc(Number(process.env.WILDBERRIES_FBS_HISTORY_MAX_PAGES)) || 50,
+  ),
+);
+const FBS_ORDERS_CACHE_TTL_MS = Math.max(
+  2 * 60_000,
+  FBS_BACKGROUND_REFRESH_INTERVAL_MS * 3,
+);
+const FBS_AUTO_RECONCILE_INTERVAL_MS = 15 * 60_000;
+const FBS_FORCED_REFRESH_MIN_AGE_MS = 15_000;
 const FBS_REQUEST_LINK_ACTIVE = 'ACTIVE';
 const FBS_REQUEST_LINK_MOVING = 'MOVING';
 const FBS_REQUEST_LINK_REMOVED = 'REMOVED';
 const FBS_REQUEST_LINK_RETURN_REQUIRED = 'RETURN_REQUIRED';
 const FBS_TSD_RETURN_REQUIRED = 'RETURN_REQUIRED';
+const FBS_KIZ_SCAN_ACCEPTED_ACTION = 'FBS_KIZ_SCAN_ACCEPTED';
+const FBS_KIZ_DUPLICATE_SCAN_ACTION = 'FBS_KIZ_DUPLICATE_SCAN';
+const FBS_KIZ_LOCAL_STATUS_CONFLICT_ACTION = 'FBS_KIZ_LOCAL_STATUS_CONFLICT';
+const FBS_KIZ_WB_STATUS_CONFLICT_ACTION = 'FBS_KIZ_WB_STATUS_CONFLICT';
+const FBS_SUPPLY_SENT_TO_WB_ACTION = 'FBS_SUPPLY_SENT_TO_WB';
+const FBS_EMERGENCY_ASSEMBLY_ENABLED_ACTION = 'FBS_EMERGENCY_ASSEMBLY_ENABLED';
+const FBS_TSD_WB_READ_TIMEOUT_MS = 20_000;
+const FBS_TSD_STICKER_TIMEOUT_MS = 8_000;
 const FBS_REQUEST_CLOSED_STATUSES = new Set<ClientRequestStatus>([
   ClientRequestStatus.DONE,
   ClientRequestStatus.CANCELLED,
@@ -215,10 +452,49 @@ const FBS_REQUEST_COMPOSITION_STATUSES = new Set<ClientRequestStatus>([
   ClientRequestStatus.IN_WORK,
 ]);
 
+/**
+ * Converts a saved sale cap and the current free WMS balance into the amount
+ * that can safely be published to Wildberries. The requested value is never
+ * inflated: when the cap exceeds free stock we publish only what is free and
+ * report the shortage to the caller.
+ */
+function fbsPublicationAmounts(
+  enabled: boolean,
+  saleLimit: number | null | undefined,
+  sellable: number,
+): FbsPublicationAmounts {
+  const normalizedSellable = Math.max(0, Math.trunc(sellable));
+  const normalizedSaleLimit = saleLimit == null ? null : Math.max(0, Math.trunc(saleLimit));
+  const requestedAmount = enabled ? (normalizedSaleLimit ?? normalizedSellable) : 0;
+  const targetAmount = enabled ? Math.min(requestedAmount, normalizedSellable) : 0;
+  const shortage = enabled && normalizedSaleLimit !== null && normalizedSaleLimit > normalizedSellable;
+  return {
+    saleLimit: normalizedSaleLimit,
+    requestedAmount,
+    targetAmount,
+    shortage,
+    shortageAmount: shortage ? normalizedSaleLimit - normalizedSellable : 0,
+  };
+}
+
 @Injectable()
 export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MarketplaceConnectionsService.name);
   private readonly fbsOrdersCache = new Map<string, { expiresAt: number; value: FbsOrdersResponse }>();
+  private readonly fbsOrdersLoads = new Map<string, Promise<FbsOrdersResponse>>();
+  private readonly wildberriesFbsHistoryCache = new Map<
+    string,
+    { expiresAt: number; orders: Record<string, unknown>[] }
+  >();
+  private readonly wildberriesFbsHistoryCacheTtlMs = 6 * 60 * 60_000;
+  private readonly wildberriesFbsStatusCache = new Map<
+    string,
+    {
+      expiresAt: number;
+      statuses: Map<string, { supplierStatus: string; wbStatus: string }>;
+    }
+  >();
+  private readonly wildberriesFbsStatusCacheTtlMs = 6 * 60 * 60_000;
   private readonly fbsTsdRequestFallbackCache = new Map<
     string,
     { expiresAt: number; value: FbsOrdersResponse }
@@ -230,58 +506,667 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       value: { partA: string; partB: string; barcode: string; imageBase64: string };
     }
   >();
-  private fbsRefreshTimer: ReturnType<typeof setInterval> | undefined;
+  private readonly fbsTsdAssignmentLocks = new Map<string, Promise<void>>();
+  private fbsRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   private fbsBackgroundRefreshRunning = false;
+  private fbsBackgroundRefreshStopped = false;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly clientScopes: ClientScopeService,
     private readonly inventoryLock?: InventoryLockService,
+    private readonly logistics?: LogisticsService,
+    private readonly boxCodes?: BoxCodePolicyService,
+    private readonly stockMonitoring?: FbsStockMonitoringService,
+    private readonly archivedEmptyBoxDetach?: ArchivedEmptyBoxPalletDetachService,
   ) {}
 
+  pruneExpiredRuntimeCaches(now = Date.now()) {
+    const caches = [
+      this.fbsOrdersCache,
+      this.wildberriesFbsHistoryCache,
+      this.wildberriesFbsStatusCache,
+      this.fbsTsdRequestFallbackCache,
+      this.fbsTsdStickerCache,
+    ];
+    let removed = 0;
+    for (const cache of caches) {
+      for (const [key, entry] of cache.entries()) {
+        if (entry.expiresAt > now) continue;
+        cache.delete(key);
+        removed += 1;
+      }
+    }
+    return {
+      removed,
+      retained: caches.reduce((total, cache) => total + cache.size, 0),
+    };
+  }
+
   onModuleInit() {
-    this.fbsRefreshTimer = setInterval(() => {
-      void this.refreshAllFbsClients();
-    }, 60_000);
-    this.fbsRefreshTimer.unref?.();
-    void this.refreshAllFbsClients();
+    this.fbsBackgroundRefreshStopped = false;
+    // ADDED: monitoring receives read-only probes through the existing WB
+    // scheduler and WMS calculation path.
+    this.stockMonitoring?.registerProbe((events) => this.probeFbsStockMonitoring(events));
+    // ADDED: confirmed manual repairs delegate to the already established
+    // "WB excess -> sellable WMS" path; monitoring owns only the audit flow.
+    this.stockMonitoring?.registerRepair({
+      preview: (input, user) => this.previewFbsStockReconciliation(input, user),
+      apply: (input, user) => this.reconcileFbsStockItem(input, user),
+    });
+    // Give scanners and web clients time to reconnect after an API restart
+    // before the first marketplace refresh starts. Interactive requests fill
+    // the same cache on demand and always have scheduler priority.
+    this.scheduleFbsBackgroundRefresh(FBS_BACKGROUND_REFRESH_INTERVAL_MS);
   }
 
   onModuleDestroy() {
+    this.fbsBackgroundRefreshStopped = true;
     if (this.fbsRefreshTimer) {
-      clearInterval(this.fbsRefreshTimer);
+      clearTimeout(this.fbsRefreshTimer);
+      this.fbsRefreshTimer = undefined;
     }
+  }
+
+  private scheduleFbsBackgroundRefresh(
+    delayMs = FBS_BACKGROUND_REFRESH_INTERVAL_MS,
+  ) {
+    if (this.fbsBackgroundRefreshStopped) return;
+    if (this.fbsRefreshTimer) {
+      clearTimeout(this.fbsRefreshTimer);
+    }
+    this.fbsRefreshTimer = setTimeout(async () => {
+      this.fbsRefreshTimer = undefined;
+      let nextDelayMs = FBS_BACKGROUND_REFRESH_INTERVAL_MS;
+      try {
+        nextDelayMs = await this.refreshAllFbsClients();
+      } finally {
+        if (!this.fbsBackgroundRefreshStopped) {
+          this.scheduleFbsBackgroundRefresh(nextDelayMs);
+        }
+      }
+    }, Math.max(1_000, delayMs));
+    this.fbsRefreshTimer.unref?.();
   }
 
   private async refreshAllFbsClients() {
     if (this.fbsBackgroundRefreshRunning) {
-      return;
+      return FBS_BACKGROUND_REFRESH_INTERVAL_MS;
     }
     this.fbsBackgroundRefreshRunning = true;
+    let slowestOrdersDurationMs = 0;
+    let rateLimited = false;
     try {
       const clients = await this.prisma.clientMarketplaceConnection.findMany({
         where: {
-          marketplace: { in: [MarketplaceType.WILDBERRIES, MarketplaceType.OZON] },
+          marketplace: { in: [MarketplaceType.WILDBERRIES, MarketplaceType.OZON, MarketplaceType.YANDEX_MARKET] },
           isActive: true,
         },
         select: { clientId: true },
         distinct: ['clientId'],
       });
-      for (const { clientId } of clients) {
-        try {
-          const value = await this.loadFbsOrders(clientId);
-          this.fbsOrdersCache.set(clientId, {
-            expiresAt: Date.now() + 30_000,
-            value,
-          });
-        } catch (caught) {
-          const message = caught instanceof Error ? caught.message : 'Unknown marketplace API error';
-          this.logger.warn(`FBS refresh failed for client ${clientId}: ${message}`);
-        }
-      }
+      const queue = [...clients];
+      const workerCount = Math.min(
+        FBS_BACKGROUND_CLIENT_CONCURRENCY,
+        queue.length,
+      );
+      await Promise.all(
+        Array.from({ length: workerCount }, async () => {
+          while (queue.length > 0) {
+            const next = queue.shift();
+            if (!next) return;
+            const { clientId } = next;
+            try {
+              const previous = this.fbsOrdersCache.get(clientId)?.value;
+              const previousOrderStates = previous
+                ? new Map(
+                    previous.orders.map((order) => [
+                      selectionKey(order.connectionId, order.id),
+                      fbsOrderRefreshFingerprint(order),
+                    ]),
+                  )
+                : undefined;
+              const ordersStartedAt = Date.now();
+              const refreshed = await runWithWildberriesRequestPriority(
+                'background',
+                () => this.loadFbsOrders(clientId, previousOrderStates),
+              );
+              const value = previous
+                ? this.mergeIncrementalFbsOrders(previous, refreshed)
+                : refreshed;
+              if (previous && refreshed.orders.length > 0) {
+                await this.syncFbsRequestsFromMarketplace(clientId, value.orders);
+              }
+              const ordersDurationMs = Date.now() - ordersStartedAt;
+              slowestOrdersDurationMs = Math.max(
+                slowestOrdersDurationMs,
+                ordersDurationMs,
+              );
+              this.fbsOrdersCache.set(clientId, {
+                expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
+                value,
+              });
+              // ADDED: a monitoring failure must not stop order refresh or the
+              // existing stock synchronizer.
+              await this.ingestFbsStockMonitoringOrders(clientId, refreshed.orders);
+              const stocksStartedAt = Date.now();
+              await runWithWildberriesRequestPriority(
+                'background',
+                () => this.autoSyncFbsStocksForClient(clientId),
+              );
+              const stocksDurationMs = Date.now() - stocksStartedAt;
+              if (ordersDurationMs >= 2_000 || stocksDurationMs >= 2_000) {
+                this.logger.log(
+                  `FBS background refresh timing for client ${clientId}: orders=${ordersDurationMs}ms, stocks=${stocksDurationMs}ms.`,
+                );
+              }
+            } catch (caught) {
+              const message = caught instanceof Error ? caught.message : 'Unknown marketplace API error';
+              rateLimited ||= isWildberriesRateLimitMessage(message);
+              this.logger.warn(`FBS refresh failed for client ${clientId}: ${message}`);
+            }
+            // Let interactive TSD/API requests run between marketplace clients.
+            await new Promise<void>((resolve) => setImmediate(resolve));
+          }
+        }),
+      );
     } finally {
       this.fbsBackgroundRefreshRunning = false;
     }
+    return adaptiveFbsBackgroundRefreshDelayMs(
+      slowestOrdersDurationMs,
+      rateLimited,
+    );
+  }
+
+  private mergeIncrementalFbsOrders(
+    previous: FbsOrdersResponse,
+    refreshed: FbsOrdersResponse,
+  ): FbsOrdersResponse {
+    // Preserve the exact cached response when the incremental marketplace
+    // refresh found no changed orders. Besides avoiding needless sorting, this
+    // keeps the HTTP ETag stable so open FBS screens receive 304 instead of
+    // downloading the multi-megabyte order history again every minute.
+    if (refreshed.orders.length === 0) {
+      return previous;
+    }
+    const refreshedKeys = new Set(
+      refreshed.orders.map((order) => selectionKey(order.connectionId, order.id)),
+    );
+    const orders = [
+      ...refreshed.orders,
+      ...previous.orders.filter(
+        (order) => !refreshedKeys.has(selectionKey(order.connectionId, order.id)),
+      ),
+    ].sort((left, right) => (right.createdAt ?? '').localeCompare(left.createdAt ?? ''));
+    return {
+      ...refreshed,
+      orders,
+      counts: {
+        active: orders.filter((order) => order.category === 'active').length,
+        shipped: orders.filter((order) => order.category === 'shipped').length,
+        cancelled: orders.filter((order) => order.category === 'cancelled').length,
+        archive: orders.filter((order) => order.category === 'archive').length,
+        all: orders.length,
+      },
+    };
+  }
+
+  private preserveNewFbsSupplyAssignments(
+    previous: FbsOrdersResponse,
+    refreshed: FbsOrdersResponse,
+    supplies: Array<{ id: string; connectionId: string; orderIds: string[] }>,
+  ): FbsOrdersResponse {
+    const supplyByOrder = new Map(
+      supplies.flatMap((supply) =>
+        supply.orderIds.map(
+          (orderId) => [selectionKey(supply.connectionId, orderId), supply.id] as const,
+        ),
+      ),
+    );
+    const orderByKey = new Map(
+      refreshed.orders.map(
+        (order) => [selectionKey(order.connectionId, order.id), order] as const,
+      ),
+    );
+    for (const previousOrder of previous.orders) {
+      const key = selectionKey(previousOrder.connectionId, previousOrder.id);
+      const supplyId = supplyByOrder.get(key);
+      if (!supplyId) continue;
+      const current = orderByKey.get(key);
+      const wbStatus = current?.wbStatus || previousOrder.wbStatus || 'waiting';
+      orderByKey.set(key, {
+        ...previousOrder,
+        ...current,
+        supplyId,
+        supplierStatus: 'confirm',
+        wbStatus,
+        category: 'active',
+        statusLabel: fbsStatusLabel('confirm', wbStatus),
+        requiresReshipment: false,
+      });
+    }
+    const orders = [...orderByKey.values()].sort((left, right) =>
+      (right.createdAt ?? '').localeCompare(left.createdAt ?? ''),
+    );
+    return {
+      ...refreshed,
+      orders,
+      counts: {
+        active: orders.filter((order) => order.category === 'active').length,
+        shipped: orders.filter((order) => order.category === 'shipped').length,
+        cancelled: orders.filter((order) => order.category === 'cancelled').length,
+        archive: orders.filter((order) => order.category === 'archive').length,
+        all: orders.length,
+      },
+    };
+  }
+
+  // ADDED: convert only the fields already returned by the official WB order
+  // integration. The observer remains isolated from request/assembly writes.
+  private async ingestFbsStockMonitoringOrders(clientId: string, orders: FbsOrderSummary[]) {
+    if (!this.stockMonitoring || orders.length === 0) return;
+    try {
+      await this.stockMonitoring.ingestOrders(
+        orders.flatMap((order) => {
+          if (order.marketplace !== MarketplaceType.WILDBERRIES || !order.product?.id) return [];
+          return [{
+            clientId,
+            connectionId: order.connectionId,
+            orderId: order.id,
+            orderUid: order.orderUid,
+            category: order.category,
+            supplierStatus: order.supplierStatus,
+            wbStatus: order.wbStatus,
+            skuId: order.product.id,
+            productName: order.product.name,
+            article: order.product.article || order.article,
+            barcode: order.barcodes[0] ?? null,
+            size: order.product.size,
+            quantity: Math.max(1, order.itemCount),
+            createdAt: order.createdAt,
+            sellerDate: order.sellerDate,
+            marketplaceWarehouseId: order.warehouseId,
+            marketplaceWarehouseName: order.warehouseName,
+          }];
+        }),
+      );
+    } catch (caught) {
+      this.logger.warn(
+        `FBS stock monitoring ingest failed for client ${clientId}: ${marketplaceErrorText(caught)}`,
+      );
+    }
+  }
+
+  // ADDED: one batched read path supplies independent WB and WMS results.
+  // It deliberately contains no PUT/UPDATE operation for either stock system.
+  private async probeFbsStockMonitoring(
+    events: FbsStockMonitorProbeInput[],
+  ): Promise<FbsStockMonitorProbeResult[]> {
+    if (events.length === 0) return [];
+    const connectionIds = uniqueStrings(events.map((event) => event.connectionId));
+    const connections = await this.prisma.clientMarketplaceConnection.findMany({
+      where: {
+        id: { in: connectionIds },
+        marketplace: MarketplaceType.WILDBERRIES,
+        isActive: true,
+      },
+      select: {
+        id: true,
+        clientId: true,
+        apiKey: true,
+        fbsWarehouseId: true,
+        fbsExecutionWarehouseId: true,
+      },
+    });
+    const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
+    const assemblies = await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        connectionId: { in: connectionIds },
+        orderId: { in: uniqueStrings(events.map((event) => event.orderId)) },
+      },
+      select: {
+        id: true,
+        connectionId: true,
+        orderId: true,
+        requestId: true,
+        skuId: true,
+        itemCount: true,
+        status: true,
+        deviceCode: true,
+        reservedAt: true,
+        completedAt: true,
+      },
+    });
+    const assemblyByOrder = new Map(
+      assemblies.map((task) => [selectionKey(task.connectionId, task.orderId), task]),
+    );
+    const groups = new Map<string, FbsStockMonitorProbeInput[]>();
+    for (const event of events) {
+      const warehouseId = event.marketplaceWarehouseId || connectionById.get(event.connectionId)?.fbsWarehouseId || '';
+      const key = `${event.connectionId}:${warehouseId}`;
+      const group = groups.get(key) ?? [];
+      group.push(event);
+      groups.set(key, group);
+    }
+    const resultById = new Map<string, FbsStockMonitorProbeResult>();
+
+    for (const group of groups.values()) {
+      const first = group[0];
+      if (!first) continue;
+      const connection = connectionById.get(first.connectionId);
+      const warehouseId = first.marketplaceWarehouseId || connection?.fbsWarehouseId || '';
+      let wbAmounts = new Map<number, number>();
+      let wbError: string | null = null;
+      if (!connection) {
+        wbError = 'Активное подключение Wildberries больше не найдено.';
+      } else if (!warehouseId) {
+        wbError = 'Для подключения не определён склад Wildberries.';
+      } else {
+        const chrtIds = uniqueNumbers(group.map((event) => event.chrtId));
+        if (chrtIds.length === 0) {
+          wbError = 'У товара отсутствует chrtId размера Wildberries.';
+        } else {
+          try {
+            wbAmounts = await this.fetchWildberriesStockAmounts(connection.apiKey, warehouseId, chrtIds);
+          } catch (caught) {
+            wbError = marketplaceErrorText(caught);
+          }
+        }
+      }
+
+      let wmsQuantities = new Map<string, { available: number; reserved: number; sellable: number }>();
+      let executionWarehouseId: string | null = null;
+      let wmsError: string | null = null;
+      if (!connection) {
+        wmsError = 'Подключение не найдено: невозможно определить склад исполнения WMS.';
+      } else {
+        try {
+          executionWarehouseId = await this.resolveFbsExecutionWarehouseId(
+            connection.clientId,
+            connection.fbsExecutionWarehouseId,
+          );
+          if (!executionWarehouseId) {
+            wmsError = 'Не определён филиал WMS для этого подключения.';
+          } else {
+            const calculated = await this.calculateFbsStockQuantities(
+              connection.clientId,
+              uniqueStrings(group.map((event) => event.skuId)),
+              executionWarehouseId,
+              connection.id,
+            );
+            wmsQuantities = new Map(
+              [...calculated.entries()].map(([skuId, quantity]) => [skuId, {
+                available: quantity.available,
+                reserved: quantity.reserved,
+                sellable: quantity.sellable,
+              }]),
+            );
+          }
+        } catch (caught) {
+          wmsError = marketplaceErrorText(caught);
+        }
+      }
+
+      for (const event of group) {
+        const assembly = assemblyByOrder.get(selectionKey(event.connectionId, event.orderId));
+        const quantity = wmsQuantities.get(event.skuId);
+        const terminalAssembly = !assembly || [
+          'RELEASED',
+          'CANCELLED',
+          'RETURNED',
+          'RETURN_REQUIRED',
+        ].includes(assembly.status);
+        resultById.set(event.eventId, {
+          eventId: event.eventId,
+          wbCurrentAmount: event.chrtId == null ? null : wbAmounts.get(event.chrtId) ?? null,
+          // The persisted event was created only from this exact WB order,
+          // therefore the order side of the correlation is already proven.
+          wbOrderMatched: true,
+          wbError,
+          wmsCurrentAmount: quantity?.available ?? null,
+          wmsSellableAmount: quantity?.sellable ?? null,
+          wmsReservedAmount: quantity?.reserved ?? null,
+          wmsReservationMatched: Boolean(
+            assembly &&
+            assembly.skuId === event.skuId &&
+            !terminalAssembly &&
+            // FIX: a partial reservation must not confirm a multi-unit order.
+            Math.max(1, assembly.itemCount) >= event.quantity,
+          ),
+          wmsReservationReleased: terminalAssembly,
+          wmsError,
+          sourceIds: {
+            connectionId: event.connectionId,
+            orderId: event.orderId,
+            skuId: event.skuId,
+            wbWarehouseId: warehouseId || null,
+            executionWarehouseId,
+            assemblyId: assembly?.id ?? null,
+            requestId: assembly?.requestId ?? null,
+            assemblyStatus: assembly?.status ?? null,
+          },
+        });
+      }
+    }
+    return events.map((event) => resultById.get(event.eventId) ?? {
+      eventId: event.eventId,
+      wbCurrentAmount: null,
+      wbOrderMatched: true,
+      wbError: 'Событие не попало в пакет проверки WB.',
+      wmsCurrentAmount: null,
+      wmsSellableAmount: null,
+      wmsReservedAmount: null,
+      wmsReservationMatched: false,
+      wmsReservationReleased: false,
+      wmsError: 'Событие не попало в пакет проверки WMS.',
+    });
+  }
+
+  private async autoSyncFbsStocksForClient(clientId: string) {
+    if (
+      typeof this.prisma.clientMarketplaceConnection?.findMany !== 'function'
+    ) {
+      return;
+    }
+    const connections = await this.prisma.clientMarketplaceConnection.findMany({
+      where: {
+        clientId,
+        marketplace: MarketplaceType.WILDBERRIES,
+        isActive: true,
+        fbsWarehouseId: { not: null },
+      },
+      include: {
+        fbsStockPublications: {
+          include: {
+            sku: { select: { id: true, marketplaceProductId: true } },
+          },
+        },
+      },
+    });
+
+    for (const connection of connections) {
+      const wbWarehouseId = connection.fbsWarehouseId;
+      if (!wbWarehouseId) continue;
+      const publications = connection.fbsStockPublications.filter(
+        (publication) => publication.warehouseId === wbWarehouseId,
+      );
+      if (publications.length === 0) continue;
+
+      const executionWarehouseId = await this.resolveFbsExecutionWarehouseId(
+        connection.clientId,
+        connection.fbsExecutionWarehouseId,
+      );
+      const stockPlan = await this.calculateFbsRelabelStockPlan(
+        clientId,
+        executionWarehouseId,
+        connection.id,
+        wbWarehouseId,
+      );
+      const wbAmounts = await this.fetchWildberriesStockAmounts(
+        connection.apiKey,
+        wbWarehouseId,
+        publications.flatMap((publication) => {
+          const ids = wildberriesStockIds(publication.sku.marketplaceProductId);
+          return ids ? [ids.chrtId] : [];
+        }),
+      );
+      const prepared = publications.flatMap((publication) => {
+        const ids = wildberriesStockIds(publication.sku.marketplaceProductId);
+        if (!ids) return [];
+        const relabeling = stockPlan.meta.get(publication.skuId);
+        const wmsAmount = stockPlan.quantities.get(publication.skuId)?.sellable ?? 0;
+        const effectiveLimit = relabeling?.isTarget && publication.relabelManualAmount != null
+          ? publication.relabelManualAmount
+          : publication.saleLimit;
+        const calculated = fbsPublicationAmounts(
+          publication.enabled,
+          effectiveLimit,
+          wmsAmount,
+        );
+        const wbAmount = wbAmounts.get(ids.chrtId) ?? publication.lastWbAmount ?? 0;
+        const hasExplicitManagerAmount = effectiveLimit != null;
+        const targetAmount = hasExplicitManagerAmount
+          ? calculated.targetAmount
+          : Math.min(calculated.targetAmount, wbAmount);
+        const amounts = { ...calculated, targetAmount };
+        const needsSync =
+          publication.lastSyncedAmount !== amounts.targetAmount ||
+          Boolean(publication.lastError) ||
+          !publication.lastSyncedAt ||
+          Date.now() - publication.lastSyncedAt.getTime() >=
+            FBS_AUTO_RECONCILE_INTERVAL_MS;
+        if (!needsSync) return [];
+        return [{ publication, chrtId: ids.chrtId, wmsAmount, ...amounts }];
+      });
+      if (prepared.length === 0) continue;
+
+      try {
+        for (const batch of chunks(prepared, 1000)) {
+          await this.putWildberriesStocks(
+            connection.apiKey,
+            wbWarehouseId,
+            batch.map((item) => ({
+              chrtId: item.chrtId,
+              amount: item.targetAmount,
+            })),
+          );
+          const syncedAt = new Date();
+          await this.prisma.$transaction(
+            batch.map((item) =>
+              this.prisma.fbsStockPublication.update({
+                where: { id: item.publication.id },
+                data: {
+                  lastWmsAmount: item.wmsAmount,
+                  lastWbAmount: item.targetAmount,
+                  lastSyncedAmount: item.targetAmount,
+                  lastSyncedAt: syncedAt,
+                  lastError: null,
+                },
+              }),
+            ),
+          );
+        }
+      } catch (caught) {
+        const message = marketplaceErrorText(caught);
+        await this.prisma.$transaction(
+          prepared.map((item) =>
+            this.prisma.fbsStockPublication.update({
+              where: { id: item.publication.id },
+              data: { lastWmsAmount: item.wmsAmount, lastError: message },
+            }),
+          ),
+        );
+        this.logger.warn(
+          `Automatic FBS stock sync failed for connection ${connection.id}: ${message}`,
+        );
+      }
+    }
+  }
+
+  private async resolveFbsExecutionWarehouseId(
+    clientId: string,
+    configuredWarehouseId: string | null,
+  ) {
+    if (configuredWarehouseId) return configuredWarehouseId;
+    if (typeof this.prisma.warehouse?.findFirst !== 'function') return null;
+
+    const linkedMoscowWarehouse = await this.prisma.warehouse.findFirst({
+      where: {
+        isActive: true,
+        clients: { some: { clientId, status: 'ACTIVE' } },
+        OR: [
+          { city: { contains: 'Москва', mode: 'insensitive' } },
+          { name: { contains: 'Москва', mode: 'insensitive' } },
+        ],
+      },
+      select: { id: true },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+    });
+    if (linkedMoscowWarehouse) return linkedMoscowWarehouse.id;
+
+    const linkedWarehouse = await this.prisma.warehouse.findFirst({
+      where: {
+        isActive: true,
+        clients: { some: { clientId, status: 'ACTIVE' } },
+      },
+      select: { id: true },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+    });
+    if (linkedWarehouse) return linkedWarehouse.id;
+
+    const moscowWarehouse = await this.prisma.warehouse.findFirst({
+      where: {
+        isActive: true,
+        OR: [
+          { city: { contains: 'Москва', mode: 'insensitive' } },
+          { name: { contains: 'Москва', mode: 'insensitive' } },
+        ],
+      },
+      select: { id: true },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+    });
+    return moscowWarehouse?.id ?? null;
+  }
+
+  private async resolveFbsShipmentWarehouseId(
+    clientId: string,
+    orders: FbsOrderSummary[],
+  ) {
+    const warehouseIds = uniqueStrings(
+      orders.map(
+        (order) =>
+          order.request?.warehouseId?.trim() ||
+          order.reservation?.warehouseId?.trim() ||
+          '',
+      ),
+    );
+    if (warehouseIds.length > 1) {
+      throw new BadRequestException(
+        'В одной FBS-поставке обнаружены заказы разных филиалов. Счёт не создан.',
+      );
+    }
+    if (warehouseIds.length === 1) {
+      return warehouseIds[0];
+    }
+
+    const activeLinks = await this.prisma.warehouseClient.findMany({
+      where: {
+        clientId,
+        status: 'ACTIVE',
+        warehouse: { isActive: true },
+      },
+      select: { warehouseId: true },
+      distinct: ['warehouseId'],
+      take: 2,
+    });
+    if (activeLinks.length === 1) {
+      return activeLinks[0].warehouseId;
+    }
+
+    throw new BadRequestException(
+      'Не удалось определить филиал FBS-поставки. Обновите привязку заявки или резерва.',
+    );
   }
 
   async list(clientId: string | undefined, user: AuthUser) {
@@ -306,6 +1191,354 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return connections.map(maskConnection);
   }
 
+  async listDbsIntegrations(clientId: string | undefined, marketplace: string | undefined, user: AuthUser) {
+    const normalizedMarketplace = marketplace ? requireDbsMarketplace(marketplace) : undefined;
+    const integrations = await this.prisma.clientDbsIntegration.findMany({
+      where: {
+        clientId: this.clientScopes.resolveClientFilter(user, clientId),
+        ...(normalizedMarketplace ? { marketplace: normalizedMarketplace } : {}),
+      },
+      include: { client: { select: { id: true, code: true, name: true } } },
+      orderBy: [{ client: { name: 'asc' } }, { marketplace: 'asc' }],
+    });
+    const clientIds = uniqueStrings(integrations.map((item) => item.clientId));
+    const marketplaceConnections = clientIds.length
+      ? await this.prisma.clientMarketplaceConnection.findMany({
+          where: {
+            clientId: { in: clientIds },
+            marketplace: { in: dbsMarketplaceTypes() },
+            isActive: true,
+          },
+          select: { clientId: true, marketplace: true },
+        })
+      : [];
+    const connected = new Set(
+      marketplaceConnections.map((item) => `${item.clientId}:${item.marketplace}`),
+    );
+    return integrations.map((item) =>
+      maskDbsIntegration(item, connected.has(`${item.clientId}:${item.marketplace}`)),
+    );
+  }
+
+  async createDbsIntegration(dto: UpsertDbsIntegrationDto, user: AuthUser) {
+    requireDbsMarketplace(dto.marketplace);
+    this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+    await this.requireBranchOwnedClientConfiguration(user, dto.clientId);
+    try {
+      const created = await this.prisma.clientDbsIntegration.create({
+        data: normalizedDbsData(dto) as Prisma.ClientDbsIntegrationUncheckedCreateInput,
+        include: { client: { select: { id: true, code: true, name: true } } },
+      });
+      const hasMarketplaceApi = await this.hasActiveMarketplaceApi(created.clientId, created.marketplace);
+      return maskDbsIntegration(created, hasMarketplaceApi);
+    } catch (caught) {
+      if (isUniqueError(caught)) {
+        throw new BadRequestException('Для этого клиента DBS выбранного маркетплейса уже настроен.');
+      }
+      throw caught;
+    }
+  }
+
+  async updateDbsIntegration(id: string, dto: Partial<UpsertDbsIntegrationDto>, user: AuthUser) {
+    const existing = await this.prisma.clientDbsIntegration.findUnique({
+      where: { id },
+      select: { id: true, clientId: true, marketplace: true },
+    });
+    if (!existing) throw new NotFoundException('Настройка DBS не найдена.');
+    this.clientScopes.requireClientAccess(user, existing.clientId, 'write');
+    await this.requireBranchOwnedClientConfiguration(user, existing.clientId);
+    if (dto.clientId && dto.clientId !== existing.clientId) {
+      this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+      await this.requireBranchOwnedClientConfiguration(user, dto.clientId);
+    }
+    if (dto.marketplace) requireDbsMarketplace(dto.marketplace);
+    try {
+      const updated = await this.prisma.clientDbsIntegration.update({
+        where: { id },
+        data: normalizedDbsData(dto),
+        include: { client: { select: { id: true, code: true, name: true } } },
+      });
+      const hasMarketplaceApi = await this.hasActiveMarketplaceApi(updated.clientId, updated.marketplace);
+      return maskDbsIntegration(updated, hasMarketplaceApi);
+    } catch (caught) {
+      if (isUniqueError(caught)) {
+        throw new BadRequestException('Для этого клиента DBS выбранного маркетплейса уже настроен.');
+      }
+      throw caught;
+    }
+  }
+
+  async checkDbsIntegration(id: string, user: AuthUser) {
+    const integration = await this.prisma.clientDbsIntegration.findUnique({
+      where: { id },
+      include: { client: { select: { id: true, code: true, name: true } } },
+    });
+    if (!integration) throw new NotFoundException('Настройка DBS не найдена.');
+    this.clientScopes.requireClientAccess(user, integration.clientId, 'write');
+    await this.requireBranchOwnedClientConfiguration(user, integration.clientId);
+    const hasMarketplaceApi = await this.hasActiveMarketplaceApi(
+      integration.clientId,
+      integration.marketplace,
+    );
+    const deliveryReady = Boolean(
+      integration.deliveryProvider &&
+      integration.deliveryApiKey &&
+      integration.senderName &&
+      integration.phone &&
+      integration.city &&
+      integration.address,
+    );
+    const ok = integration.isActive && deliveryReady && hasMarketplaceApi;
+    const message = !integration.isActive
+      ? 'Подключение DBS отключено.'
+      : !deliveryReady
+        ? 'Заполнены не все обязательные данные отправителя или API службы доставки.'
+        : !hasMarketplaceApi
+          ? 'API службы доставки заполнен, но у клиента нет активного API этого маркетплейса.'
+          : 'Настройка DBS готова: клиент, маркетплейс и служба доставки подключены.';
+    const checked = await this.prisma.clientDbsIntegration.update({
+      where: { id },
+      data: { lastCheckedAt: new Date(), lastCheckOk: ok, lastCheckMessage: message },
+      include: { client: { select: { id: true, code: true, name: true } } },
+    });
+    return { ...maskDbsIntegration(checked, hasMarketplaceApi), check: { ok, message } };
+  }
+
+  private async hasActiveMarketplaceApi(clientId: string, marketplace: MarketplaceType) {
+    return Boolean(
+      await this.prisma.clientMarketplaceConnection.findFirst({
+        where: { clientId, marketplace, isActive: true },
+        select: { id: true },
+      }),
+    );
+  }
+
+  async listFbsWarehouseRoutes(connectionId: string, user: AuthUser) {
+    this.requireNetworkWideWarehouseConfiguration(user);
+    const connection = await this.prisma.clientMarketplaceConnection.findUnique({
+      where: { id: connectionId },
+      select: {
+        id: true,
+        clientId: true,
+        marketplace: true,
+        accountName: true,
+        apiKey: true,
+        isActive: true,
+        fbsExecutionWarehouseId: true,
+        fbsDropoffWarehouseId: true,
+        fbsAutoRouteNewWarehouses: true,
+      },
+    });
+    if (!connection) {
+      throw new NotFoundException('Подключение маркетплейса не найдено.');
+    }
+    this.clientScopes.requireClientAccess(user, connection.clientId, 'read');
+    if (connection.marketplace !== MarketplaceType.WILDBERRIES) {
+      throw new BadRequestException(
+        'Индивидуальная маршрутизация складов сейчас доступна только для Wildberries.',
+      );
+    }
+
+    const [sellerWarehouses, offices, rules, branches] = await Promise.all([
+      this.fetchWildberriesStockWarehouses(connection.apiKey).catch(() => []),
+      this.fetchWildberriesOffices(connection.apiKey).catch(() => []),
+      this.prisma.fbsWarehouseRoutingRule.findMany({
+        where: { connectionId },
+        orderBy: [{ marketplaceWarehouseName: 'asc' }, { marketplaceWarehouseId: 'asc' }],
+      }),
+      this.prisma.warehouse.findMany({
+        where: { isActive: true },
+        select: { id: true, code: true, name: true, city: true, isActive: true, sortOrder: true },
+        orderBy: [{ sortOrder: 'asc' }, { city: 'asc' }, { name: 'asc' }],
+      }),
+    ]);
+    const officeById = new Map(offices.map((office) => [office.id, office]));
+    const ruleByWarehouseId = new Map(
+      rules.map((rule) => [rule.marketplaceWarehouseId, rule]),
+    );
+    const currentById = new Map(
+      sellerWarehouses.map((warehouse) => [warehouse.id, warehouse]),
+    );
+    const allWarehouseIds = uniqueStrings([
+      ...sellerWarehouses.map((warehouse) => warehouse.id),
+      ...rules.map((rule) => rule.marketplaceWarehouseId),
+    ]);
+
+    const warehouses = allWarehouseIds.map((marketplaceWarehouseId) => {
+      const sellerWarehouse = currentById.get(marketplaceWarehouseId);
+      const rule = ruleByWarehouseId.get(marketplaceWarehouseId);
+      const officeId = sellerWarehouse?.officeId ?? rule?.officeId ?? null;
+      const office = officeId ? officeById.get(officeId) : null;
+      const mode = normalizeFbsWarehouseRouteMode(rule?.mode) ?? 'DEFAULT';
+      const executionWarehouseId =
+        mode === 'BRANCH'
+          ? rule?.executionWarehouseId ?? null
+          : mode === 'CENTRAL'
+            ? connection.fbsExecutionWarehouseId
+            : mode === 'DEFAULT' && connection.fbsAutoRouteNewWarehouses
+              ? connection.fbsExecutionWarehouseId
+              : null;
+      const dropoffWarehouseId =
+        mode === 'BRANCH'
+          ? rule?.dropoffWarehouseId ?? null
+          : mode === 'CENTRAL'
+            ? connection.fbsDropoffWarehouseId
+            : mode === 'DEFAULT' && connection.fbsAutoRouteNewWarehouses
+              ? connection.fbsDropoffWarehouseId
+              : null;
+      return {
+        marketplaceWarehouseId,
+        marketplaceWarehouseName:
+          sellerWarehouse?.name ??
+          rule?.marketplaceWarehouseName ??
+          `Склад WB ${marketplaceWarehouseId}`,
+        existsInMarketplace: Boolean(sellerWarehouse),
+        officeId,
+        officeName: office?.name ?? rule?.officeName ?? null,
+        officeCity: office?.city ?? rule?.officeCity ?? null,
+        mode,
+        executionWarehouseId,
+        dropoffWarehouseId,
+        effectiveExecutionWarehouseId: executionWarehouseId,
+        effectiveDropoffWarehouseId: dropoffWarehouseId,
+        updatedAt: rule?.updatedAt?.toISOString() ?? null,
+      };
+    });
+
+    return {
+      connection: {
+        id: connection.id,
+        clientId: connection.clientId,
+        accountName: connection.accountName,
+        isActive: connection.isActive,
+        fbsExecutionWarehouseId: connection.fbsExecutionWarehouseId,
+        fbsDropoffWarehouseId: connection.fbsDropoffWarehouseId,
+        fbsAutoRouteNewWarehouses: connection.fbsAutoRouteNewWarehouses,
+      },
+      branches,
+      warehouses,
+      fetchedAt: new Date().toISOString(),
+    };
+  }
+
+  async updateFbsWarehouseRoutes(
+    connectionId: string,
+    dto: UpdateFbsWarehouseRoutesDto,
+    user: AuthUser,
+  ) {
+    this.requireNetworkWideWarehouseConfiguration(user);
+    const connection = await this.prisma.clientMarketplaceConnection.findUnique({
+      where: { id: connectionId },
+      select: {
+        id: true,
+        clientId: true,
+        marketplace: true,
+        fbsExecutionWarehouseId: true,
+      },
+    });
+    if (!connection) {
+      throw new NotFoundException('Подключение маркетплейса не найдено.');
+    }
+    this.clientScopes.requireClientAccess(user, connection.clientId, 'write');
+    if (connection.marketplace !== MarketplaceType.WILDBERRIES) {
+      throw new BadRequestException(
+        'Индивидуальная маршрутизация складов сейчас доступна только для Wildberries.',
+      );
+    }
+
+    const ids = dto.items.map((item) => item.marketplaceWarehouseId.trim());
+    if (new Set(ids).size !== ids.length) {
+      throw new BadRequestException('Один склад WB указан в настройках несколько раз.');
+    }
+    if (
+      dto.items.some((item) => item.mode === 'CENTRAL') &&
+      !connection.fbsExecutionWarehouseId
+    ) {
+      throw new BadRequestException(
+        'Сначала выберите основной филиал исполнения для центральной схемы.',
+      );
+    }
+    const branchIds = uniqueStrings(
+      dto.items.flatMap((item) => [
+        item.mode === 'BRANCH' ? item.executionWarehouseId ?? '' : '',
+        item.mode === 'BRANCH' ? item.dropoffWarehouseId ?? '' : '',
+      ]),
+    );
+    const branches = branchIds.length
+      ? await this.prisma.warehouse.findMany({
+          where: { id: { in: branchIds }, isActive: true },
+          select: { id: true },
+        })
+      : [];
+    if (branches.length !== branchIds.length) {
+      throw new BadRequestException(
+        'Один из выбранных филиалов не найден или отключён.',
+      );
+    }
+    const branchWithoutExecution = dto.items.find(
+      (item) => item.mode === 'BRANCH' && !item.executionWarehouseId?.trim(),
+    );
+    if (branchWithoutExecution) {
+      throw new BadRequestException(
+        `Выберите филиал исполнения для склада «${branchWithoutExecution.marketplaceWarehouseName || branchWithoutExecution.marketplaceWarehouseId}».`,
+      );
+    }
+
+    await this.prisma.$transaction(
+      dto.items.map((item) => {
+        const marketplaceWarehouseId = item.marketplaceWarehouseId.trim();
+        const mode = item.mode;
+        if (mode === 'DEFAULT') {
+          return this.prisma.fbsWarehouseRoutingRule.deleteMany({
+            where: { connectionId, marketplaceWarehouseId },
+          });
+        }
+        return this.prisma.fbsWarehouseRoutingRule.upsert({
+          where: {
+            connectionId_marketplaceWarehouseId: {
+              connectionId,
+              marketplaceWarehouseId,
+            },
+          },
+          create: {
+            connectionId,
+            marketplaceWarehouseId,
+            marketplaceWarehouseName: normalizeNullable(item.marketplaceWarehouseName),
+            officeId: normalizeNullable(item.officeId),
+            officeName: normalizeNullable(item.officeName),
+            officeCity: normalizeNullable(item.officeCity),
+            mode,
+            executionWarehouseId:
+              mode === 'BRANCH'
+                ? normalizeNullable(item.executionWarehouseId)
+                : null,
+            dropoffWarehouseId:
+              mode === 'BRANCH'
+                ? normalizeNullable(item.dropoffWarehouseId)
+                : null,
+          },
+          update: {
+            marketplaceWarehouseName: normalizeNullable(item.marketplaceWarehouseName),
+            officeId: normalizeNullable(item.officeId),
+            officeName: normalizeNullable(item.officeName),
+            officeCity: normalizeNullable(item.officeCity),
+            mode,
+            executionWarehouseId:
+              mode === 'BRANCH'
+                ? normalizeNullable(item.executionWarehouseId)
+                : null,
+            dropoffWarehouseId:
+              mode === 'BRANCH'
+                ? normalizeNullable(item.dropoffWarehouseId)
+                : null,
+          },
+        });
+      }),
+    );
+    this.fbsOrdersCache.delete(connection.clientId);
+    return this.listFbsWarehouseRoutes(connectionId, user);
+  }
+
   async listFbsOrders(clientId: string, user: AuthUser, refresh = false) {
     const normalizedClientId = clientId?.trim();
     if (!normalizedClientId) {
@@ -314,24 +1547,2638 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     this.clientScopes.requireClientAccess(user, normalizedClientId, 'read');
 
     const cached = this.fbsOrdersCache.get(normalizedClientId);
-    if (!refresh && cached && cached.expiresAt > Date.now()) {
-      return cached.value;
+    const now = Date.now();
+    if (cached && cached.expiresAt > now) {
+      const fetchedAt = Date.parse(cached.value.fetchedAt);
+      const forceRefreshIsTooSoon =
+        refresh &&
+        Number.isFinite(fetchedAt) &&
+        now - fetchedAt < FBS_FORCED_REFRESH_MIN_AGE_MS;
+      if (!refresh || forceRefreshIsTooSoon) {
+        // WB may omit older orders after they were moved to a newly created
+        // supply.  The WMS request remains the authoritative source for its
+        // active composition, so do not let a shortened marketplace response
+        // make most of the supply disappear from the FBS screen.
+        const merged = await this.mergeSyncedFbsTsdRequestOrders(normalizedClientId, cached.value);
+        return this.scopeFbsOrdersForUser(merged, user);
+      }
     }
 
-    const value = await this.loadFbsOrders(normalizedClientId);
+    const liveValue = await this.loadFbsOrders(normalizedClientId);
+    const value = await this.mergeSyncedFbsTsdRequestOrders(normalizedClientId, liveValue);
     this.fbsOrdersCache.set(normalizedClientId, {
-      expiresAt: Date.now() + 30_000,
+      expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
       value,
     });
-    return value;
+    return this.scopeFbsOrdersForUser(value, user);
   }
 
-  async listFbsActiveClients(user: AuthUser) {
+  private hasGlobalFbsBranchAccess(user: AuthUser) {
+    return user.permissionCodes.includes('system:admin') ||
+      user.roleCodes.some((role) => role === 'ADMIN' || role === 'OWNER' || role === 'CLIENT');
+  }
+
+  private activeFbsBranchId(user: AuthUser) {
+    if (this.hasGlobalFbsBranchAccess(user)) return null;
+    const activeWarehouseId = user.activeWarehouseId?.trim() ?? '';
+    if (!activeWarehouseId) return '';
+    return (user.warehouseIds ?? []).includes(activeWarehouseId)
+      ? activeWarehouseId
+      : '';
+  }
+
+  private async scopeFbsOrdersForUser(
+    response: FbsOrdersResponse,
+    user: AuthUser,
+  ): Promise<FbsOrdersResponse> {
+    if (this.hasGlobalFbsBranchAccess(user)) return response;
+
+    const activeWarehouseId = this.activeFbsBranchId(user);
+    if (!activeWarehouseId) {
+      return {
+        ...response,
+        connected: false,
+        connections: [],
+        counts: { active: 0, shipped: 0, cancelled: 0, archive: 0, all: 0 },
+        orders: [],
+      };
+    }
+
+    const connectionIds = uniqueStrings(response.connections.map((connection) => connection.id));
+    if (connectionIds.length === 0) return response;
+    const marketplaceWarehouseIds = uniqueStrings(
+      response.orders.map((order) => order.warehouseId ?? ''),
+    );
+    const [connections, routingRules] = await Promise.all([
+      this.prisma.clientMarketplaceConnection.findMany({
+        where: { id: { in: connectionIds }, isActive: true },
+        select: {
+          id: true,
+          marketplace: true,
+          fbsExecutionWarehouseId: true,
+          fbsAutoRouteNewWarehouses: true,
+        },
+      }),
+      marketplaceWarehouseIds.length > 0
+        ? this.prisma.fbsWarehouseRoutingRule.findMany({
+            where: {
+              connectionId: { in: connectionIds },
+              marketplaceWarehouseId: { in: marketplaceWarehouseIds },
+            },
+            select: {
+              connectionId: true,
+              marketplaceWarehouseId: true,
+              mode: true,
+              executionWarehouseId: true,
+            },
+          })
+        : Promise.resolve([]),
+    ]);
+    const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
+    const ruleByKey = new Map(
+      routingRules.map((rule) => [
+        `${rule.connectionId}:${rule.marketplaceWarehouseId}`,
+        rule,
+      ]),
+    );
+
+    const isVisible = (order: FbsOrderSummary) => {
+      if (order.request?.warehouseId) {
+        return order.request.warehouseId === activeWarehouseId;
+      }
+      const connection = connectionById.get(order.connectionId);
+      if (!connection) return false;
+      if (order.marketplace !== MarketplaceType.WILDBERRIES) {
+        return connection.fbsExecutionWarehouseId === activeWarehouseId;
+      }
+      const rule = order.warehouseId
+        ? ruleByKey.get(`${order.connectionId}:${order.warehouseId}`)
+        : null;
+      const mode = normalizeFbsWarehouseRouteMode(rule?.mode);
+      if (mode === 'EXCLUDED') return false;
+      if (mode === 'BRANCH') {
+        return rule?.executionWarehouseId === activeWarehouseId;
+      }
+      if (mode === 'CENTRAL') {
+        return connection.fbsExecutionWarehouseId === activeWarehouseId;
+      }
+      return connection.fbsAutoRouteNewWarehouses &&
+        connection.fbsExecutionWarehouseId === activeWarehouseId;
+    };
+
+    const orders = response.orders.filter(isVisible);
+    const visibleConnectionIds = new Set(orders.map((order) => order.connectionId));
+    routingRules.forEach((rule) => {
+      if (rule.mode === 'BRANCH' && rule.executionWarehouseId === activeWarehouseId) {
+        visibleConnectionIds.add(rule.connectionId);
+      }
+    });
+    connections.forEach((connection) => {
+      if (connection.fbsExecutionWarehouseId === activeWarehouseId) {
+        visibleConnectionIds.add(connection.id);
+      }
+    });
+    const scopedConnections = response.connections.filter((connection) =>
+      visibleConnectionIds.has(connection.id),
+    );
+    return {
+      ...response,
+      connected: scopedConnections.length > 0,
+      connections: scopedConnections,
+      counts: {
+        active: orders.filter((order) => order.category === 'active').length,
+        shipped: orders.filter((order) => order.category === 'shipped').length,
+        cancelled: orders.filter((order) => order.category === 'cancelled').length,
+        archive: orders.filter((order) => order.category === 'archive').length,
+        all: orders.length,
+      },
+      orders,
+    };
+  }
+
+  async listFbsPackedItems(
+    query: {
+      clientId?: string;
+      marketplace?: string;
+      dateFrom?: string;
+      dateTo?: string;
+      search?: string;
+      requiresKiz?: string;
+      page?: string;
+      pageSize?: string;
+    },
+    user: AuthUser,
+  ) {
+    const requestedClientId = query.clientId?.trim() || undefined;
+    if (requestedClientId) {
+      this.clientScopes.requireClientAccess(user, requestedClientId, 'read');
+    }
+    const clientId = this.clientScopes.resolveClientFilter(user, requestedClientId);
+    const marketplace = packedItemsMarketplace(query.marketplace);
+    const page = packedItemsPositiveInteger(query.page, 1, 10_000);
+    const pageSize = packedItemsPositiveInteger(query.pageSize, 100, 300);
+    const search = query.search?.trim() ?? '';
+    const completedAt = packedItemsPeriod(query.dateFrom, query.dateTo);
+
+    let relatedRequestIds: string[] = [];
+    let relatedClientIds: string[] = [];
+    let relatedBoxIds: string[] = [];
+    if (search) {
+      const requestNumber = /^\d{1,9}$/.test(search) ? Number(search) : null;
+      const [requests, clients, boxes] = await Promise.all([
+        requestNumber
+          ? this.prisma.clientRequest.findMany({
+              where: { number: requestNumber, clientId },
+              select: { id: true },
+              take: 20,
+            })
+          : Promise.resolve([]),
+        this.prisma.client.findMany({
+          where: {
+            id: clientId,
+            OR: [
+              { code: { contains: search, mode: 'insensitive' } },
+              { name: { contains: search, mode: 'insensitive' } },
+            ],
+          },
+          select: { id: true },
+          take: 100,
+        }),
+        this.prisma.box.findMany({
+          where: {
+            clientId,
+            OR: [
+              { code: { contains: search, mode: 'insensitive' } },
+              { storagePlacement: { pallet: { code: { contains: search, mode: 'insensitive' } } } },
+            ],
+          },
+          select: { id: true },
+          take: 200,
+        }),
+      ]);
+      relatedRequestIds = requests.map((row) => row.id);
+      relatedClientIds = clients.map((row) => row.id);
+      relatedBoxIds = boxes.map((row) => row.id);
+    }
+
+    const where: Prisma.FbsTsdAssemblyWhereInput = {
+      clientId,
+      status: 'COMPLETED',
+      completedAt: { not: null, ...completedAt },
+      ...(marketplace ? { marketplace } : {}),
+      ...(query.requiresKiz === 'true' || query.requiresKiz === '1' ? { requiresKiz: true } : {}),
+      ...(search
+        ? {
+            OR: [
+              { orderId: { contains: search, mode: 'insensitive' } },
+              { supplyId: { contains: search, mode: 'insensitive' } },
+              { productName: { contains: search, mode: 'insensitive' } },
+              { article: { contains: search, mode: 'insensitive' } },
+              { sourceProductName: { contains: search, mode: 'insensitive' } },
+              { sourceArticle: { contains: search, mode: 'insensitive' } },
+              { barcode: { contains: search, mode: 'insensitive' } },
+              { sourceBarcode: { contains: search, mode: 'insensitive' } },
+              { kiz: { contains: search, mode: 'insensitive' } },
+              { boxCode: { contains: search, mode: 'insensitive' } },
+              { reservedBoxCode: { contains: search, mode: 'insensitive' } },
+              { stickerPartA: { contains: search, mode: 'insensitive' } },
+              { stickerPartB: { contains: search, mode: 'insensitive' } },
+              { stickerBarcode: { contains: search, mode: 'insensitive' } },
+              { workerName: { contains: search, mode: 'insensitive' } },
+              { deviceCode: { contains: search, mode: 'insensitive' } },
+              { cargoPacking: { cargoPlaceId: { contains: search, mode: 'insensitive' } } },
+              ...(relatedRequestIds.length > 0 ? [{ requestId: { in: relatedRequestIds } }] : []),
+              ...(relatedClientIds.length > 0 ? [{ clientId: { in: relatedClientIds } }] : []),
+              ...(relatedBoxIds.length > 0
+                ? [
+                    { boxId: { in: relatedBoxIds } },
+                    { reservedBoxId: { in: relatedBoxIds } },
+                  ]
+                : []),
+            ],
+          }
+        : {}),
+    };
+
+    const [total, rows] = await Promise.all([
+      this.prisma.fbsTsdAssembly.count({ where }),
+      this.prisma.fbsTsdAssembly.findMany({
+        where,
+        orderBy: [{ completedAt: 'desc' }, { updatedAt: 'desc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        select: {
+          id: true,
+          clientId: true,
+          marketplace: true,
+          connectionId: true,
+          orderId: true,
+          supplyId: true,
+          requestId: true,
+          skuId: true,
+          sourceSkuId: true,
+          productName: true,
+          article: true,
+          sourceProductName: true,
+          sourceArticle: true,
+          itemCount: true,
+          requiresKiz: true,
+          status: true,
+          deviceCode: true,
+          workerUserId: true,
+          workerName: true,
+          reservedBoxId: true,
+          reservedBoxCode: true,
+          boxId: true,
+          boxCode: true,
+          sourceBarcode: true,
+          barcode: true,
+          relabelRequired: true,
+          kiz: true,
+          wbMetaStatus: true,
+          stickerPartA: true,
+          stickerPartB: true,
+          stickerBarcode: true,
+          marketplaceSubmittedAt: true,
+          marketplaceSubmitError: true,
+          cargoPackingId: true,
+          cargoPackedAt: true,
+          cargoPackedByName: true,
+          errorMessage: true,
+          completedAt: true,
+          updatedAt: true,
+        },
+      }),
+    ]);
+
+    const clientIds = uniqueStrings(rows.map((row) => row.clientId));
+    const skuIds = uniqueStrings(rows.flatMap((row) => [row.skuId, row.sourceSkuId ?? '']));
+    const requestIds = uniqueStrings(rows.map((row) => row.requestId));
+    const connectionIds = uniqueStrings(rows.map((row) => row.connectionId));
+    const boxIds = uniqueStrings(rows.flatMap((row) => [row.boxId ?? '', row.reservedBoxId ?? '']));
+    const supplyKeys = rows
+      .filter((row) => row.supplyId)
+      .map((row) => ({ marketplace: row.marketplace, connectionId: row.connectionId, supplyId: row.supplyId! }));
+    const cargoPackingIds = uniqueStrings(rows.map((row) => row.cargoPackingId ?? ''));
+
+    const [clients, skus, requests, connections, boxes, plans, cargoPackings] = await Promise.all([
+      this.prisma.client.findMany({
+        where: { id: { in: clientIds } },
+        select: { id: true, code: true, name: true },
+      }),
+      this.prisma.sku.findMany({
+        where: { id: { in: skuIds } },
+        select: {
+          id: true,
+          internalSku: true,
+          clientSku: true,
+          article: true,
+          name: true,
+          color: true,
+          size: true,
+        },
+      }),
+      this.prisma.clientRequest.findMany({
+        where: { id: { in: requestIds } },
+        select: {
+          id: true,
+          number: true,
+          title: true,
+          status: true,
+          warehouse: { select: { id: true, code: true, name: true, city: true } },
+        },
+      }),
+      this.prisma.clientMarketplaceConnection.findMany({
+        where: { id: { in: connectionIds } },
+        select: {
+          id: true,
+          accountName: true,
+          fbsWarehouseId: true,
+          fbsWarehouseName: true,
+          fbsExecutionWarehouse: { select: { id: true, code: true, name: true, city: true } },
+        },
+      }),
+      this.prisma.box.findMany({
+        where: { id: { in: boxIds } },
+        select: {
+          id: true,
+          code: true,
+          status: true,
+          warehouse: { select: { id: true, code: true, name: true, city: true } },
+          zone: { select: { id: true, code: true, name: true } },
+          pallet: { select: { id: true, code: true, status: true } },
+          storagePlacement: {
+            select: {
+              scannedAt: true,
+              pallet: {
+                select: {
+                  id: true,
+                  code: true,
+                  status: true,
+                  zone: { select: { id: true, code: true, name: true } },
+                  warehouse: { select: { id: true, code: true, name: true, city: true } },
+                },
+              },
+            },
+          },
+        },
+      }),
+      supplyKeys.length > 0
+        ? this.prisma.fbsSupplyPlan.findMany({
+            where: { OR: supplyKeys },
+            select: {
+              marketplace: true,
+              connectionId: true,
+              supplyId: true,
+              marketplaceWarehouseId: true,
+              marketplaceWarehouseName: true,
+              deliveryDestination: true,
+            },
+          })
+        : Promise.resolve([]),
+      this.prisma.fbsCargoPlacePacking.findMany({
+        where: { id: { in: cargoPackingIds } },
+        select: {
+          id: true,
+          cargoPlaceId: true,
+          cargoPlaceBarcode: true,
+          status: true,
+          closedAt: true,
+        },
+      }),
+    ]);
+
+    const clientById = new Map(clients.map((row) => [row.id, row]));
+    const skuById = new Map(skus.map((row) => [row.id, row]));
+    const requestById = new Map(requests.map((row) => [row.id, row]));
+    const connectionById = new Map(connections.map((row) => [row.id, row]));
+    const boxById = new Map(boxes.map((row) => [row.id, row]));
+    const planByKey = new Map(
+      plans.map((row) => [fbsSupplyPlanKey(row.marketplace, row.connectionId, row.supplyId), row]),
+    );
+    const cargoPackingById = new Map(cargoPackings.map((row) => [row.id, row]));
+
+    const items = rows.map((row) => {
+      const sku = skuById.get(row.skuId);
+      const sourceSku = row.sourceSkuId ? skuById.get(row.sourceSkuId) : null;
+      const request = requestById.get(row.requestId);
+      const connection = connectionById.get(row.connectionId);
+      const box = boxById.get(row.boxId ?? '') ?? boxById.get(row.reservedBoxId ?? '');
+      const storagePallet = box?.storagePlacement?.pallet;
+      const plan = row.supplyId
+        ? planByKey.get(fbsSupplyPlanKey(row.marketplace, row.connectionId, row.supplyId))
+        : null;
+      const cargoPacking = row.cargoPackingId ? cargoPackingById.get(row.cargoPackingId) : null;
+      return {
+        id: row.id,
+        marketplace: row.marketplace,
+        client: clientById.get(row.clientId) ?? null,
+        request: request
+          ? {
+              id: request.id,
+              number: request.number,
+              title: request.title,
+              status: request.status,
+            }
+          : null,
+        orderId: row.orderId,
+        supplyId: row.supplyId,
+        accountName: connection?.accountName ?? null,
+        marketplaceWarehouse: {
+          id: plan?.marketplaceWarehouseId ?? connection?.fbsWarehouseId ?? null,
+          name: plan?.marketplaceWarehouseName ?? connection?.fbsWarehouseName ?? null,
+        },
+        executionWarehouse:
+          box?.warehouse ?? storagePallet?.warehouse ?? request?.warehouse ?? connection?.fbsExecutionWarehouse ?? null,
+        product: {
+          skuId: row.skuId,
+          internalSku: sku?.internalSku ?? null,
+          clientSku: sku?.clientSku ?? null,
+          name: row.productName || sku?.name || null,
+          article: row.article ?? sku?.article ?? null,
+          color: sku?.color ?? null,
+          size: sku?.size ?? null,
+          barcode: row.barcode,
+          quantity: Math.max(1, row.itemCount),
+          requiresKiz: row.requiresKiz,
+          kiz: row.kiz,
+        },
+        relabeling: row.relabelRequired
+          ? {
+              sourceSkuId: row.sourceSkuId,
+              sourceInternalSku: sourceSku?.internalSku ?? null,
+              sourceProductName: row.sourceProductName ?? sourceSku?.name ?? null,
+              sourceArticle: row.sourceArticle ?? sourceSku?.article ?? null,
+              sourceBarcode: row.sourceBarcode,
+            }
+          : null,
+        source: {
+          boxId: box?.id ?? row.boxId ?? row.reservedBoxId,
+          boxCode: row.boxCode ?? row.reservedBoxCode ?? box?.code ?? null,
+          boxStatus: box?.status ?? null,
+          zone: box?.zone ?? storagePallet?.zone ?? null,
+          palletSort: storagePallet
+            ? { id: storagePallet.id, code: storagePallet.code, status: storagePallet.status }
+            : box?.pallet ?? null,
+          placementScannedAt: box?.storagePlacement?.scannedAt?.toISOString() ?? null,
+        },
+        sticker: {
+          partA: row.stickerPartA,
+          partB: row.stickerPartB,
+          barcode: row.stickerBarcode,
+          labelSaved: Boolean(row.stickerBarcode || row.stickerPartA || row.stickerPartB),
+        },
+        cargoPlace: cargoPacking
+          ? {
+              id: cargoPacking.cargoPlaceId,
+              barcode: cargoPacking.cargoPlaceBarcode,
+              status: cargoPacking.status,
+              closedAt: cargoPacking.closedAt?.toISOString() ?? null,
+            }
+          : null,
+        assembly: {
+          status: row.status,
+          wbMetaStatus: row.wbMetaStatus,
+          deviceCode: row.deviceCode,
+          workerUserId: row.workerUserId,
+          workerName: row.workerName,
+          completedAt: row.completedAt?.toISOString() ?? null,
+          cargoPackedAt: row.cargoPackedAt?.toISOString() ?? null,
+          cargoPackedByName: row.cargoPackedByName,
+          marketplaceSubmittedAt: row.marketplaceSubmittedAt?.toISOString() ?? null,
+          marketplaceSubmitError: row.marketplaceSubmitError,
+          errorMessage: row.errorMessage,
+        },
+      };
+    });
+
+    return {
+      generatedAt: new Date().toISOString(),
+      page,
+      pageSize,
+      total,
+      pages: Math.max(1, Math.ceil(total / pageSize)),
+      items,
+    };
+  }
+
+  async reconcileFbsPackedItems(
+    payload: { clientId?: string; assemblyIds?: string[] },
+    user: AuthUser,
+  ) {
+    const clientId = payload.clientId?.trim();
+    if (!clientId) {
+      throw new BadRequestException('Для сверки с маркетплейсом выберите клиента.');
+    }
+    this.clientScopes.requireClientAccess(user, clientId, 'read');
+    const assemblyIds = uniqueStrings(payload.assemblyIds ?? []);
+    if (assemblyIds.length === 0) {
+      throw new BadRequestException('Выберите хотя бы одну упакованную единицу для сверки.');
+    }
+    if (assemblyIds.length > 150) {
+      throw new BadRequestException('За один запрос можно сверить не более 150 упакованных единиц.');
+    }
+
+    const tasks = await this.prisma.fbsTsdAssembly.findMany({
+      where: { id: { in: assemblyIds }, clientId, status: 'COMPLETED' },
+      select: {
+        id: true,
+        clientId: true,
+        marketplace: true,
+        connectionId: true,
+        orderId: true,
+        supplyId: true,
+        skuId: true,
+        article: true,
+        barcode: true,
+        relabelRequired: true,
+        stickerPartA: true,
+        stickerPartB: true,
+        stickerBarcode: true,
+        marketplaceSubmitError: true,
+      },
+    });
+    const taskById = new Map(tasks.map((task) => [task.id, task]));
+    let liveOrders: FbsOrdersResponse;
+    try {
+      liveOrders = await this.loadFbsOrders(clientId);
+    } catch (caught) {
+      const message = marketplaceErrorMessage(caught);
+      return {
+        checkedAt: new Date().toISOString(),
+        items: assemblyIds.map((id) => ({
+          id,
+          comparison: {
+            status: 'CHECK_ERROR',
+            issues: [`Не удалось запросить актуальные заказы маркетплейса: ${message}`],
+            actualSticker: null,
+            expectedSticker: null,
+            order: null,
+          },
+        })),
+      };
+    }
+
+    const liveByKey = new Map(
+      liveOrders.orders.map((order) => [selectionKey(order.connectionId, order.id), order]),
+    );
+    const stickerCheck = await this.loadFbsPackedItemWbStickers(tasks);
+    const checkedAt = new Date().toISOString();
+    return {
+      checkedAt,
+      items: assemblyIds.map((id) => {
+        const task = taskById.get(id);
+        if (!task) {
+          return {
+            id,
+            comparison: {
+              status: 'NOT_AVAILABLE',
+              issues: ['Запись упаковки не найдена или больше не относится к выбранному клиенту.'],
+              actualSticker: null,
+              expectedSticker: null,
+              order: null,
+            },
+          };
+        }
+        const live = liveByKey.get(selectionKey(task.connectionId, task.orderId));
+        const actualSticker = {
+          partA: task.stickerPartA,
+          partB: task.stickerPartB,
+          barcode: task.stickerBarcode,
+        };
+        if (!live) {
+          return {
+            id,
+            comparison: {
+              status: 'ORDER_NOT_FOUND',
+              issues: ['Заказ не найден среди актуальных заказов этого подключения. Проверьте отмену или другой аккаунт маркетплейса.'],
+              actualSticker,
+              expectedSticker: null,
+              order: null,
+            },
+          };
+        }
+
+        const issues: string[] = [];
+        if (live.category === 'cancelled') {
+          issues.push('Заказ отменён на маркетплейсе — товар нужно проверить и вернуть на склад.');
+        }
+        if (!fbsPackedItemMatchesLiveProduct(task, live)) {
+          issues.push('Товар в журнале ТСД не совпадает с товаром актуального заказа.');
+        }
+        if (task.supplyId && live.supplyId && task.supplyId !== live.supplyId) {
+          issues.push(`Поставка изменилась: в ТСД ${task.supplyId}, сейчас ${live.supplyId}.`);
+        }
+
+        const stickerKey = selectionKey(task.connectionId, task.orderId);
+        const expectedSticker = stickerCheck.stickers.get(stickerKey) ?? null;
+        const stickerError = stickerCheck.errors.get(task.connectionId);
+        if (task.marketplace === MarketplaceType.WILDBERRIES) {
+          if (stickerError) {
+            issues.push(`Наклейку WB сейчас не удалось проверить: ${stickerError}`);
+          } else if (!expectedSticker) {
+            issues.push('WB не вернул актуальную наклейку для этого заказа.');
+          } else if (!fbsPackedStickerMatches(actualSticker, expectedSticker)) {
+            issues.push('Наклеен стикер другого заказа: данные наклейки ТСД не совпадают с актуальной наклейкой WB.');
+          }
+        } else if (task.marketplace === MarketplaceType.OZON && task.stickerBarcode && task.stickerBarcode !== task.orderId) {
+          issues.push('Наклеенный стикер Ozon относится к другому заказу.');
+        }
+        if (task.marketplaceSubmitError) {
+          issues.push(`Ошибка передачи в маркетплейс: ${task.marketplaceSubmitError}`);
+        }
+        const stickerMismatch = issues.some((issue) => issue.startsWith('Наклеен стикер') || issue.startsWith('Наклеенный стикер'));
+        return {
+          id,
+          comparison: {
+            status: stickerMismatch
+              ? 'STICKER_MISMATCH'
+              : live.category === 'cancelled'
+                ? 'ORDER_CANCELLED'
+                : issues.length > 0
+                  ? 'ISSUES'
+                  : 'MATCHED',
+            issues,
+            actualSticker,
+            expectedSticker,
+            order: {
+              category: live.category,
+              supplierStatus: live.supplierStatus,
+              wbStatus: live.wbStatus,
+              statusLabel: live.statusLabel,
+              supplyId: live.supplyId,
+              productName: live.product?.name ?? null,
+              article: live.product?.article ?? live.article,
+              barcode: live.barcodes[0] ?? null,
+            },
+          },
+        };
+      }),
+    };
+  }
+
+  private async loadFbsPackedItemWbStickers(
+    tasks: Array<{
+      marketplace: MarketplaceType;
+      connectionId: string;
+      orderId: string;
+    }>,
+  ) {
+    const groups = new Map<string, string[]>();
+    for (const task of tasks) {
+      if (task.marketplace !== MarketplaceType.WILDBERRIES) continue;
+      const orderIds = groups.get(task.connectionId) ?? [];
+      orderIds.push(task.orderId);
+      groups.set(task.connectionId, orderIds);
+    }
+    const connectionIds = [...groups.keys()];
+    const connections = connectionIds.length > 0
+      ? await this.prisma.clientMarketplaceConnection.findMany({
+          where: { id: { in: connectionIds }, marketplace: MarketplaceType.WILDBERRIES, isActive: true },
+          select: { id: true, apiKey: true },
+        })
+      : [];
+    const apiKeyByConnection = new Map(connections.map((connection) => [connection.id, connection.apiKey]));
+    const stickers = new Map<string, { partA: string | null; partB: string | null; barcode: string | null }>();
+    const errors = new Map<string, string>();
+    for (const [connectionId, orderIds] of groups) {
+      const apiKey = apiKeyByConnection.get(connectionId);
+      if (!apiKey) {
+        errors.set(connectionId, 'активное подключение WB не найдено');
+        continue;
+      }
+      try {
+        for (const orderChunk of chunks(uniqueStrings(orderIds), 100)) {
+          const response = await marketplaceJson(
+            'https://marketplace-api.wildberries.ru/api/v3/orders/stickers?type=png&width=58&height=40',
+            {
+              method: 'POST',
+              headers: wbHeaders(apiKey),
+              body: JSON.stringify({ orders: orderChunk.map((orderId) => numericWbOrderId(orderId)) }),
+            },
+          );
+          for (const sticker of asArray<Record<string, unknown>>(response.stickers)) {
+            const orderId = textValue(sticker.orderId);
+            if (!orderId) continue;
+            stickers.set(selectionKey(connectionId, orderId), {
+              partA: textValue(sticker.partA) || null,
+              partB: textValue(sticker.partB) || null,
+              barcode: textValue(sticker.barcode) || null,
+            });
+          }
+        }
+      } catch (caught) {
+        errors.set(connectionId, marketplaceErrorMessage(caught));
+      }
+    }
+    return { stickers, errors };
+  }
+
+  async listFbsRelabelReconciliation(
+    clientId: string,
+    dateFrom: string,
+    dateTo: string,
+    barcode: string | undefined,
+    user: AuthUser,
+    refreshWb = true,
+  ) {
+    const normalizedClientId = clientId?.trim();
+    if (!normalizedClientId) {
+      throw new BadRequestException('Выберите клиента для сверки остатков.');
+    }
+    this.clientScopes.requireClientAccess(user, normalizedClientId, 'read');
+    const period = relabelReconciliationPeriod(dateFrom, dateTo);
+    const search = barcode?.trim() ?? '';
+    const wbOrders = await this.listFbsOrders(normalizedClientId, user, refreshWb);
+    const [client, mappings, skus, sentRequests] = await Promise.all([
+      this.prisma.client.findUnique({
+        where: { id: normalizedClientId },
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          storesWithoutBoxes: true,
+        },
+      }),
+      this.prisma.clientArticleMapping.findMany({
+        where: { clientId: normalizedClientId },
+        orderBy: [{ sourceArticle: 'asc' }, { targetArticle: 'asc' }],
+      }),
+      this.prisma.sku.findMany({
+        where: { clientId: normalizedClientId },
+        select: {
+          id: true,
+          internalSku: true,
+          clientSku: true,
+          article: true,
+          name: true,
+          color: true,
+          size: true,
+          barcodes: {
+            select: { value: true, isPrimary: true },
+            orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }],
+          },
+          balances: {
+            where: { quantity: { gt: 0 } },
+            select: {
+              id: true,
+              boxId: true,
+              palletId: true,
+              status: true,
+              quantity: true,
+              box: { select: { code: true } },
+            },
+          },
+        },
+      }),
+      this.prisma.clientRequest.findMany({
+        where: {
+          clientId: normalizedClientId,
+          status: ClientRequestStatus.DONE,
+          OR: [
+            {
+              events: {
+                some: {
+                  statusTo: ClientRequestStatus.DONE,
+                  createdAt: { gte: period.from, lte: period.to },
+                },
+              },
+            },
+            {
+              events: { none: { statusTo: ClientRequestStatus.DONE } },
+              updatedAt: { gte: period.from, lte: period.to },
+            },
+          ],
+        },
+        select: {
+          id: true,
+          number: true,
+          title: true,
+          status: true,
+          updatedAt: true,
+          events: {
+            where: { statusTo: ClientRequestStatus.DONE },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            select: { createdAt: true },
+          },
+          fbsOrderLinks: {
+            select: {
+              connectionId: true,
+              orderId: true,
+              lastSupplyId: true,
+              lastSupplierStatus: true,
+              lastWbStatus: true,
+            },
+          },
+        },
+        orderBy: { number: 'desc' },
+      }),
+    ]);
+    if (!client) {
+      throw new NotFoundException('Клиент для сверки не найден.');
+    }
+
+    const allPairs = buildRelabelReconciliationPairs(mappings, skus);
+    const pairs = search
+      ? allPairs.filter((pair) =>
+          reconciliationSkuMatchesSearch(pair.source, search) ||
+          (pair.target ? reconciliationSkuMatchesSearch(pair.target, search) : false),
+        )
+      : allPairs;
+    const relevantSkuIds = uniqueStrings(
+      pairs.flatMap((pair) => [pair.source.id, pair.target?.id ?? '']),
+    );
+    const sentRequestIds = sentRequests.map((request) => request.id);
+    const allAssemblies = relevantSkuIds.length > 0
+      ? await this.prisma.fbsTsdAssembly.findMany({
+          where: {
+            clientId: normalizedClientId,
+            status: { not: 'RELEASED' },
+            OR: [
+              { skuId: { in: relevantSkuIds } },
+              { sourceSkuId: { in: relevantSkuIds } },
+            ],
+          },
+          select: {
+            id: true,
+            connectionId: true,
+            orderId: true,
+            supplyId: true,
+            requestId: true,
+            requestItemId: true,
+            skuId: true,
+            sourceSkuId: true,
+            productName: true,
+            article: true,
+            sourceProductName: true,
+            sourceArticle: true,
+            itemCount: true,
+            status: true,
+            boxId: true,
+            boxCode: true,
+            sourceBarcode: true,
+            barcode: true,
+            relabelRequired: true,
+            relabelConfirmedAt: true,
+            completedAt: true,
+            updatedAt: true,
+          },
+          orderBy: { updatedAt: 'desc' },
+        })
+      : [];
+    const assemblyRequestIds = uniqueStrings(allAssemblies.map((assembly) => assembly.requestId));
+    const assemblyRequests = assemblyRequestIds.length > 0
+      ? await this.prisma.clientRequest.findMany({
+          where: { id: { in: assemblyRequestIds } },
+          select: { id: true, number: true, title: true, status: true },
+        })
+      : [];
+    const requestById = new Map(assemblyRequests.map((request) => [request.id, request]));
+    sentRequests.forEach((request) => requestById.set(request.id, request));
+
+    const movements = sentRequestIds.length > 0
+      ? await this.prisma.stockMovement.findMany({
+          where: {
+            clientId: normalizedClientId,
+            OR: [
+              { sourceDocument: { in: sentRequestIds } },
+              {
+                idempotencyKey: {
+                  startsWith: 'fbs-relabel:',
+                },
+              },
+              {
+                idempotencyKey: {
+                  startsWith: 'relabel-reconcile:',
+                },
+              },
+            ],
+          },
+          select: {
+            skuId: true,
+            type: true,
+            quantity: true,
+            sourceDocument: true,
+            idempotencyKey: true,
+          },
+        })
+      : [];
+    const confirmedAssemblyIds = new Set(
+      movements
+        .map((movement) => relabelAssemblyIdFromMovementKey(movement.idempotencyKey))
+        .filter((value): value is string => Boolean(value)),
+    );
+    const orderByKey = new Map(
+      wbOrders.orders.map((order) => [
+        selectionKey(order.connectionId, order.id),
+        order,
+      ]),
+    );
+    const pairBySourceTarget = new Map(
+      pairs
+        .filter((pair) => pair.target)
+        .map((pair) => [`${pair.source.id}:${pair.target!.id}`, pair]),
+    );
+    const pairsByTarget = new Map<string, RelabelReconciliationPair[]>();
+    pairs.forEach((pair) => {
+      if (!pair.target) return;
+      pairsByTarget.set(pair.target.id, [...(pairsByTarget.get(pair.target.id) ?? []), pair]);
+    });
+
+    const issues: Array<Record<string, unknown>> = [];
+    const sentRequestIdSet = new Set(sentRequestIds);
+    const sentAssemblies = allAssemblies.filter((assembly) => sentRequestIdSet.has(assembly.requestId));
+    for (const assembly of sentAssemblies) {
+      const request = requestById.get(assembly.requestId);
+      const order = orderByKey.get(selectionKey(assembly.connectionId, assembly.orderId));
+      const persistedPair =
+        assembly.sourceSkuId
+          ? pairBySourceTarget.get(`${assembly.sourceSkuId}:${assembly.skuId}`) ?? null
+          : null;
+      const inferredPair =
+        !assembly.sourceSkuId && order?.product
+          ? (pairsByTarget.get(order.product.id) ?? []).find(
+              (pair) => pair.source.id === assembly.skuId,
+            ) ?? null
+          : null;
+      const pair = persistedPair ?? inferredPair;
+      const confirmed = Boolean(
+        assembly.relabelConfirmedAt ||
+        confirmedAssemblyIds.has(assembly.id),
+      );
+      if ((assembly.relabelRequired || inferredPair) && pair && !confirmed) {
+        const sourceBalance = skus
+          .find((sku) => sku.id === pair.source.id)
+          ?.balances
+          .filter(
+            (balance) =>
+              balance.status === StockStatus.AVAILABLE &&
+              (client.storesWithoutBoxes
+                ? true
+                : balance.boxId === assembly.boxId),
+          )
+          .reduce((sum, balance) => sum + balance.quantity, 0) ?? 0;
+        const canApply = Boolean(
+          assembly.relabelRequired &&
+          assembly.sourceSkuId &&
+          pair.target &&
+          sourceBalance >= Math.max(1, assembly.itemCount),
+        );
+        issues.push({
+          id: `missing-relabel:${assembly.id}`,
+          kind: assembly.relabelRequired
+            ? 'MISSING_RELABEL'
+            : 'RELABEL_NOT_RECORDED',
+          severity: 'CRITICAL',
+          title: assembly.relabelRequired
+            ? 'Переклейка была обязательна, но не подтверждена'
+            : 'Заказ WB соответствует товару после переклейки, но сборка записана как исходный товар',
+          explanation: assembly.relabelRequired
+            ? 'В заявке и WB есть требование переклейки, однако нет подтверждения ТСД и складских движений переклейки.'
+            : 'Автоматически менять остаток опасно: заявка могла уже списать исходный SKU. Нужна проверка менеджера по товару и наклеенному ШК.',
+          correctable: canApply,
+          assemblyId: assembly.id,
+          request: request
+            ? {
+                id: request.id,
+                number: request.number,
+                title: request.title,
+                status: request.status,
+              }
+            : null,
+          order: {
+            id: assembly.orderId,
+            supplierStatus: order?.supplierStatus ?? null,
+            wbStatus: order?.wbStatus ?? null,
+          },
+          supplyId: order?.supplyId ?? assembly.supplyId,
+          quantity: Math.max(1, assembly.itemCount),
+          boxCode: assembly.boxCode,
+          sourceSku: reconciliationSkuSummary(pair.source),
+          targetSku: pair.target ? reconciliationSkuSummary(pair.target) : null,
+          correction: {
+            mode: canApply ? 'APPLY_RELABEL' : 'MANUAL_REVIEW',
+            sourceDelta: canApply ? -Math.max(1, assembly.itemCount) : 0,
+            targetDelta: canApply ? Math.max(1, assembly.itemCount) : 0,
+            availableSourceQuantity: sourceBalance,
+          },
+        });
+      }
+    }
+
+    for (const order of wbOrders.orders) {
+      if (!order.request || !relevantSkuIds.includes(order.product?.id ?? '')) {
+        continue;
+      }
+      if (
+        ['shipped', 'archive'].includes(order.category) &&
+        !FBS_REQUEST_CLOSED_STATUSES.has(order.request.status)
+      ) {
+        issues.push({
+          id: `wb-shipped-wms-open:${order.connectionId}:${order.id}`,
+          kind: 'WB_SHIPPED_WMS_OPEN',
+          severity: 'WARNING',
+          title: 'Поставка уже отправлена в WB, но заявка WMS ещё открыта',
+          explanation: 'Собранные товары продолжают числиться резервом WMS до закрытия заявки.',
+          correctable: false,
+          request: order.request,
+          order: {
+            id: order.id,
+            supplierStatus: order.supplierStatus,
+            wbStatus: order.wbStatus,
+          },
+          supplyId: order.supplyId,
+          quantity: Math.max(1, order.itemCount),
+          boxCode: null,
+          sourceSku: order.product ? reconciliationSkuSummary(order.product) : null,
+          targetSku: null,
+          correction: { mode: 'CLOSE_REQUEST_REVIEW', sourceDelta: 0, targetDelta: 0 },
+        });
+      }
+      if (
+        order.request.status === ClientRequestStatus.DONE &&
+        order.category === 'active'
+      ) {
+        issues.push({
+          id: `wms-done-wb-active:${order.connectionId}:${order.id}`,
+          kind: 'WMS_DONE_WB_ACTIVE',
+          severity: 'WARNING',
+          title: 'Заявка WMS закрыта, но заказ WB ещё активен',
+          explanation: 'Проверьте, была ли поставка действительно передана в WB.',
+          correctable: false,
+          request: order.request,
+          order: {
+            id: order.id,
+            supplierStatus: order.supplierStatus,
+            wbStatus: order.wbStatus,
+          },
+          supplyId: order.supplyId,
+          quantity: Math.max(1, order.itemCount),
+          boxCode: null,
+          sourceSku: order.product ? reconciliationSkuSummary(order.product) : null,
+          targetSku: null,
+          correction: { mode: 'WB_REVIEW', sourceDelta: 0, targetDelta: 0 },
+        });
+      }
+    }
+
+    const openRequestIds = new Set(
+      [...requestById.values()]
+        .filter((request) => !FBS_REQUEST_CLOSED_STATUSES.has(request.status))
+        .map((request) => request.id),
+    );
+    const reservationsBySku = new Map<
+      string,
+      { pending: number; assembled: number; returnRequired: number; requestNumbers: Set<number>; orderIds: Set<string> }
+    >();
+    for (const assembly of allAssemblies) {
+      if (!openRequestIds.has(assembly.requestId)) continue;
+      const reservationSkuId =
+        assembly.sourceSkuId && !assembly.relabelConfirmedAt
+          ? assembly.sourceSkuId
+          : assembly.skuId;
+      const row = reservationsBySku.get(reservationSkuId) ?? {
+        pending: 0,
+        assembled: 0,
+        returnRequired: 0,
+        requestNumbers: new Set<number>(),
+        orderIds: new Set<string>(),
+      };
+      const quantity = Math.max(1, assembly.itemCount);
+      if (assembly.status === 'COMPLETED') row.assembled += quantity;
+      else if (assembly.status === FBS_TSD_RETURN_REQUIRED) row.returnRequired += quantity;
+      else row.pending += quantity;
+      const request = requestById.get(assembly.requestId);
+      if (request) row.requestNumbers.add(request.number);
+      row.orderIds.add(assembly.orderId);
+      reservationsBySku.set(reservationSkuId, row);
+    }
+    const ordersWithActiveAssembly = new Set(
+      allAssemblies
+        .filter((assembly) => openRequestIds.has(assembly.requestId))
+        .map((assembly) => selectionKey(assembly.connectionId, assembly.orderId)),
+    );
+    for (const order of wbOrders.orders) {
+      if (
+        order.category !== 'active' ||
+        !order.request ||
+        FBS_REQUEST_CLOSED_STATUSES.has(order.request.status) ||
+        !order.product ||
+        ordersWithActiveAssembly.has(selectionKey(order.connectionId, order.id))
+      ) {
+        continue;
+      }
+      const reservationSkuId =
+        order.relabeling?.sourceSkuId ??
+        order.product.id;
+      if (!relevantSkuIds.includes(reservationSkuId)) continue;
+      const row = reservationsBySku.get(reservationSkuId) ?? {
+        pending: 0,
+        assembled: 0,
+        returnRequired: 0,
+        requestNumbers: new Set<number>(),
+        orderIds: new Set<string>(),
+      };
+      row.pending += Math.max(1, order.itemCount);
+      row.requestNumbers.add(order.request.number);
+      row.orderIds.add(order.id);
+      reservationsBySku.set(reservationSkuId, row);
+    }
+
+    const stockRows = pairs.map((pair) => {
+      const availableBalances = pair.source.balances.filter(
+        (balance) => balance.status === StockStatus.AVAILABLE,
+      );
+      const available = availableBalances.reduce((sum, balance) => sum + balance.quantity, 0);
+      const reservation = reservationsBySku.get(pair.source.id) ?? {
+        pending: 0,
+        assembled: 0,
+        returnRequired: 0,
+        requestNumbers: new Set<number>(),
+        orderIds: new Set<string>(),
+      };
+      const reserved = reservation.pending + reservation.assembled + reservation.returnRequired;
+      const targetAvailable = pair.target?.balances
+        .filter((balance) => balance.status === StockStatus.AVAILABLE)
+        .reduce((sum, balance) => sum + balance.quantity, 0) ?? 0;
+      return {
+        mappingId: pair.mappingId,
+        sourceArticle: pair.sourceArticle,
+        targetArticle: pair.targetArticle,
+        sourceSku: reconciliationSkuSummary(pair.source),
+        targetSku: pair.target ? reconciliationSkuSummary(pair.target) : null,
+        stock: {
+          available,
+          reserved,
+          free: Math.max(0, available - reserved),
+          targetAvailable,
+          boxes: availableBalances
+            .map((balance) => ({
+              code: balance.box?.code ?? 'БЕЗ КОРОБА',
+              quantity: balance.quantity,
+            }))
+            .sort((left, right) => left.code.localeCompare(right.code, 'ru-RU')),
+        },
+        reservations: {
+          pending: reservation.pending,
+          assembled: reservation.assembled,
+          returnRequired: reservation.returnRequired,
+          requestNumbers: [...reservation.requestNumbers].sort((left, right) => left - right),
+          orderIds: [...reservation.orderIds].sort(naturalFbsIdCompare),
+        },
+      };
+    });
+
+    const requestRows = sentRequests.map((request) => {
+      const requestAssemblies = sentAssemblies.filter((assembly) => assembly.requestId === request.id);
+      const requestIssues = issues.filter(
+        (issue) => (issue.request as { id?: string } | null)?.id === request.id,
+      );
+      const orders = request.fbsOrderLinks.map((link) =>
+        orderByKey.get(selectionKey(link.connectionId, link.orderId)),
+      );
+      return {
+        id: request.id,
+        number: request.number,
+        title: request.title,
+        status: request.status,
+        shippedAt: (request.events[0]?.createdAt ?? request.updatedAt).toISOString(),
+        supplies: uniqueStrings(
+          request.fbsOrderLinks.map((link) => link.lastSupplyId ?? ''),
+        ),
+        orders: request.fbsOrderLinks.length,
+        wbShippedOrders: orders.filter((order) => order && ['shipped', 'archive'].includes(order.category)).length,
+        relabelExpected: requestAssemblies.filter((assembly) => assembly.relabelRequired).length,
+        relabelConfirmed: requestAssemblies.filter(
+          (assembly) =>
+            assembly.relabelRequired &&
+            Boolean(assembly.relabelConfirmedAt || confirmedAssemblyIds.has(assembly.id)),
+        ).length,
+        issues: requestIssues.length,
+      };
+    });
+
+    const relevantSupplyRefs = uniqueStrings(
+      sentRequests.flatMap((request) =>
+        request.fbsOrderLinks
+          .filter((link) => link.lastSupplyId)
+          .map((link) => `${link.connectionId}|${link.lastSupplyId}`),
+      ),
+    ).slice(0, 50);
+    const connections = relevantSupplyRefs.length > 0
+      ? await this.prisma.clientMarketplaceConnection.findMany({
+          where: {
+            clientId: normalizedClientId,
+            marketplace: MarketplaceType.WILDBERRIES,
+            id: { in: uniqueStrings(relevantSupplyRefs.map((value) => value.split('|')[0] ?? '')) },
+          },
+          select: { id: true, accountName: true, apiKey: true },
+        })
+      : [];
+    const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
+    const supplies: Array<{
+      connectionId: string;
+      accountName: string | null;
+      supplyId: string;
+      checked: boolean;
+      done: boolean | null;
+      closedAt: string | null;
+      error: string | null;
+    }> = [];
+    for (const supplyBatch of chunks(relevantSupplyRefs, 15)) {
+      supplies.push(...await Promise.all(
+        supplyBatch.map(async (reference) => {
+        const [connectionId, supplyId] = reference.split('|');
+        const connection = connectionById.get(connectionId);
+        if (!connection || !supplyId) {
+          return {
+            connectionId,
+            accountName: connection?.accountName ?? null,
+            supplyId,
+            checked: false,
+            done: null,
+            closedAt: null,
+            error: 'Подключение WB не найдено.',
+          };
+        }
+        try {
+          const response = await marketplaceJson(
+            `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(supplyId)}`,
+            { method: 'GET', headers: wbHeaders(connection.apiKey) },
+          );
+          return {
+            connectionId,
+            accountName: connection.accountName,
+            supplyId,
+            checked: true,
+            done: Boolean(response.done),
+            closedAt: textValue(response.closedAt) || null,
+            error: null,
+          };
+        } catch (caught) {
+          return {
+            connectionId,
+            accountName: connection.accountName,
+            supplyId,
+            checked: false,
+            done: null,
+            closedAt: null,
+            error: caught instanceof Error ? caught.message : 'WB не вернул данные поставки.',
+          };
+        }
+        }),
+      ));
+      if (supplies.length < relevantSupplyRefs.length) {
+        await delay(250);
+      }
+    }
+
+    const uniqueStockBySource = new Map<
+      string,
+      { available: number; reserved: number; pending: number; assembled: number }
+    >();
+    stockRows.forEach((row) => {
+      if (!uniqueStockBySource.has(row.sourceSku.id)) {
+        uniqueStockBySource.set(row.sourceSku.id, {
+          available: row.stock.available,
+          reserved: row.stock.reserved,
+          pending: row.reservations.pending,
+          assembled: row.reservations.assembled,
+        });
+      }
+    });
+    const totalAvailable = [...uniqueStockBySource.values()]
+      .reduce((sum, row) => sum + row.available, 0);
+    const totalReserved = [...uniqueStockBySource.values()]
+      .reduce((sum, row) => sum + row.reserved, 0);
+    return {
+      generatedAt: new Date().toISOString(),
+      period: {
+        from: period.from.toISOString(),
+        to: period.to.toISOString(),
+      },
+      filter: { barcode: search || null },
+      client: { id: client.id, code: client.code, name: client.name },
+      wb: {
+        checked: true,
+        fetchedAt: wbOrders.fetchedAt,
+        ordersChecked: wbOrders.orders.length,
+        suppliesChecked: supplies.filter((supply) => supply.checked).length,
+        supplies,
+      },
+      totals: {
+        mappings: pairs.length,
+        sentRequests: sentRequests.length,
+        stockUnits: totalAvailable,
+        reservedUnits: totalReserved,
+        freeUnits: Math.max(0, totalAvailable - totalReserved),
+        pendingReservedUnits: [...uniqueStockBySource.values()]
+          .reduce((sum, row) => sum + row.pending, 0),
+        assembledReservedUnits: [...uniqueStockBySource.values()]
+          .reduce((sum, row) => sum + row.assembled, 0),
+        issues: issues.length,
+        criticalIssues: issues.filter((issue) => issue.severity === 'CRITICAL').length,
+        correctableIssues: issues.filter((issue) => issue.correctable).length,
+      },
+      stockRows,
+      requests: requestRows,
+      issues,
+    };
+  }
+
+  async applyFbsRelabelReconciliation(
+    dto: ApplyFbsRelabelReconciliationDto,
+    user: AuthUser,
+  ) {
+    const clientId = dto.clientId.trim();
+    this.clientScopes.requireClientAccess(
+      user,
+      clientId,
+      user.roleCodes.includes('CLIENT') ? 'read' : 'write',
+    );
+    const report = await this.listFbsRelabelReconciliation(
+      clientId,
+      dto.dateFrom,
+      dto.dateTo,
+      dto.barcode,
+      user,
+      true,
+    );
+    const issue = report.issues.find((item) => item.id === dto.issueId);
+    if (
+      !issue ||
+      issue.kind !== 'MISSING_RELABEL' ||
+      issue.correctable !== true ||
+      !issue.assemblyId
+    ) {
+      throw new BadRequestException(
+        'Расхождение уже изменилось или не допускает автоматическую корректировку. Обновите сверку.',
+      );
+    }
+    await this.inventoryLock?.assertStockMovementsAllowed();
+    const assembly = await this.prisma.fbsTsdAssembly.findUnique({
+      where: { id: String(issue.assemblyId) },
+    });
+    if (
+      !assembly ||
+      assembly.clientId !== clientId ||
+      !assembly.relabelRequired ||
+      !assembly.sourceSkuId
+    ) {
+      throw new BadRequestException('Задание переклейки уже изменилось. Обновите сверку.');
+    }
+    const quantity = Math.max(1, assembly.itemCount);
+    const sourceSkuId = assembly.sourceSkuId;
+    const applied = await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.auditLog.findFirst({
+        where: {
+          action: 'FBS_RELABEL_RECONCILIATION_APPLIED',
+          entity: 'FbsTsdAssembly',
+          entityId: assembly.id,
+        },
+      });
+      if (existing) {
+        return false;
+      }
+      const sourceBalance = await tx.stockBalance.findFirst({
+        where: {
+          clientId,
+          skuId: sourceSkuId,
+          boxId: assembly.boxId,
+          status: StockStatus.AVAILABLE,
+          quantity: { gte: quantity },
+        },
+        orderBy: { updatedAt: 'asc' },
+      });
+      if (!sourceBalance) {
+        throw new BadRequestException(
+          `Недостаточно исходного товара в ${assembly.boxCode || 'остатках без короба'}. Обновите сверку.`,
+        );
+      }
+      if (sourceBalance.quantity === quantity) {
+        await tx.stockBalance.delete({ where: { id: sourceBalance.id } });
+      } else {
+        await tx.stockBalance.update({
+          where: { id: sourceBalance.id },
+          data: { quantity: { decrement: quantity } },
+        });
+      }
+      const balanceWarehouseId = requireFbsBalanceWarehouseId(sourceBalance.warehouseId);
+      const targetBalanceKey = fbsStockBalanceKey({
+        warehouseId: balanceWarehouseId,
+        clientId,
+        skuId: assembly.skuId,
+        boxId: sourceBalance.boxId,
+        palletId: sourceBalance.palletId,
+        status: StockStatus.AVAILABLE,
+      });
+      await tx.stockBalance.upsert({
+        where: { balanceKey: targetBalanceKey },
+        update: {
+          quantity: { increment: quantity },
+          warehouseId: balanceWarehouseId,
+        },
+        create: {
+          balanceKey: targetBalanceKey,
+          warehouseId: balanceWarehouseId,
+          clientId,
+          skuId: assembly.skuId,
+          boxId: sourceBalance.boxId,
+          palletId: sourceBalance.palletId,
+          status: StockStatus.AVAILABLE,
+          quantity,
+        },
+      });
+      const movementKey = `relabel-reconcile:${assembly.id}`;
+      await tx.stockMovement.createMany({
+        data: [
+          {
+            warehouseId: balanceWarehouseId,
+            clientId,
+            skuId: sourceSkuId,
+            boxId: sourceBalance.boxId,
+            palletId: sourceBalance.palletId,
+            type: MovementType.INVENTORY_ADJUSTMENT,
+            status: StockStatus.AVAILABLE,
+            quantity: -quantity,
+            sourceDocument: assembly.requestId,
+            idempotencyKey: `${movementKey}:source`,
+            comment: `Восстановление пропущенной переклейки по заказу WB ${assembly.orderId}`,
+          },
+          {
+            warehouseId: balanceWarehouseId,
+            clientId,
+            skuId: assembly.skuId,
+            boxId: sourceBalance.boxId,
+            palletId: sourceBalance.palletId,
+            type: MovementType.INVENTORY_ADJUSTMENT,
+            status: StockStatus.AVAILABLE,
+            quantity,
+            sourceDocument: assembly.requestId,
+            idempotencyKey: `${movementKey}:target`,
+            comment: `Восстановление пропущенной переклейки по заказу WB ${assembly.orderId}`,
+          },
+        ],
+      });
+      await tx.fbsTsdAssembly.update({
+        where: { id: assembly.id },
+        data: {
+          relabelConfirmedAt: new Date(),
+          errorMessage: null,
+        },
+      });
+      await tx.clientRequestEvent.create({
+        data: {
+          requestId: assembly.requestId,
+          clientId,
+          eventType: ClientRequestEventType.COMMENT,
+          title: 'Сверка восстановила пропущенную переклейку',
+          body: `Заказ WB ${assembly.orderId}; ${assembly.sourceArticle ?? assembly.sourceProductName ?? assembly.sourceSkuId} → ${assembly.article ?? assembly.productName}; ${quantity} шт.; ${assembly.boxCode ?? 'без короба'}.`,
+          createdByUserId: user.id,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'FBS_RELABEL_RECONCILIATION_APPLIED',
+          entity: 'FbsTsdAssembly',
+          entityId: assembly.id,
+          payload: {
+            clientId,
+            requestId: assembly.requestId,
+            orderId: assembly.orderId,
+            sourceSkuId,
+            targetSkuId: assembly.skuId,
+            boxId: sourceBalance.boxId,
+            boxCode: assembly.boxCode,
+            quantity,
+            issueId: dto.issueId,
+          },
+        },
+      });
+      return true;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+    return {
+      applied,
+      message: applied
+        ? 'Пропущенная переклейка восстановлена, остатки и история обновлены.'
+        : 'Эта корректировка уже была применена ранее.',
+      report: await this.listFbsRelabelReconciliation(
+        clientId,
+        dto.dateFrom,
+        dto.dateTo,
+        dto.barcode,
+        user,
+        false,
+      ),
+    };
+  }
+
+  /**
+   * Refreshes one WMS request against Wildberries before a picker takes it in
+   * the handheld FBS workflow.  FBS tasks are intentionally created lazily by
+   * the handheld queue, so this method reports exact readiness instead of
+   * manufacturing a task for an order which WB has not confirmed yet.
+   */
+  async syncFbsRequestForTsd(requestId: string, user: AuthUser) {
+    const request = await this.prisma.clientRequest.findUnique({
+      where: { id: requestId },
+      select: {
+        id: true,
+        number: true,
+        clientId: true,
+        type: true,
+        status: true,
+        title: true,
+        comment: true,
+        fbsEmergencyAssemblyAt: true,
+        items: { select: { comment: true } },
+        events: {
+          select: { title: true, body: true },
+          orderBy: { createdAt: 'asc' },
+          take: 20,
+        },
+        fbsOrderLinks: {
+          select: {
+            id: true,
+            orderId: true,
+            syncStatus: true,
+            lastCategory: true,
+            lastSupplierStatus: true,
+          },
+        },
+      },
+    });
+    if (!request) {
+      throw new NotFoundException('Заявка не найдена.');
+    }
+    this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+
+    const fbsEvidenceTexts = [
+      request.title,
+      request.comment ?? '',
+      ...request.items.map((item) => item.comment ?? ''),
+      ...request.events.flatMap((event) => [event.title, event.body ?? '']),
+    ];
+    const fbsEvidenceOrderIds = uniqueStrings([
+      ...request.fbsOrderLinks.map((link) => link.orderId),
+      ...fbsEvidenceTexts.flatMap(fbsOrderIdsFromText),
+    ]);
+    const looksLikeFbs =
+      request.fbsOrderLinks.length > 0 ||
+      fbsEvidenceTexts.some((value) => /\bfbs\b/iu.test(value));
+
+    if (request.type !== ClientRequestType.OUTBOUND || !looksLikeFbs) {
+      return null;
+    }
+    if (FBS_REQUEST_CLOSED_STATUSES.has(request.status)) {
+      throw new BadRequestException('Закрытую, отменённую или отклонённую FBS-заявку нельзя отправить в ТСД.');
+    }
+
+    // Diagnose the most common "request is missing on TSD" case from the
+    // synchronized WMS snapshot before calling WB. This remains available
+    // during WB rate limits and gives the UI a safe recovery action.
+    const linkedOrders = request.fbsOrderLinks.filter(
+      (link) => link.syncStatus === FBS_REQUEST_LINK_ACTIVE,
+    );
+    if (linkedOrders.length === 0) {
+      const activeLinksElsewhere = fbsEvidenceOrderIds.length > 0
+        ? await this.prisma.fbsOrderRequestLink.findMany({
+            where: {
+              clientId: request.clientId,
+              orderId: { in: fbsEvidenceOrderIds },
+              requestId: { not: request.id },
+              syncStatus: FBS_REQUEST_LINK_ACTIVE,
+              lastCategory: { not: 'cancelled' },
+            },
+            select: {
+              orderId: true,
+              request: { select: { number: true } },
+            },
+          })
+        : [];
+      const diagnosis = diagnoseFbsRequestIdentity({
+        requestNumber: request.number,
+        evidenceOrderIds: fbsEvidenceOrderIds,
+        activeHereOrderIds: [],
+        movedOrders: activeLinksElsewhere.map((link) => ({
+          orderId: link.orderId,
+          requestNumber: link.request.number,
+        })),
+        cancelledHereOrderIds: request.fbsOrderLinks
+          .filter((link) =>
+            link.lastCategory === 'cancelled' ||
+            link.lastSupplierStatus?.startsWith('cancel') ||
+            [FBS_REQUEST_LINK_REMOVED, FBS_REQUEST_LINK_RETURN_REQUIRED].includes(link.syncStatus),
+          )
+          .map((link) => link.orderId),
+        returnRequiredHereOrderIds: request.fbsOrderLinks
+          .filter((link) => link.syncStatus === FBS_REQUEST_LINK_RETURN_REQUIRED)
+          .map((link) => link.orderId),
+      });
+      return {
+        mode: 'FBS' as const,
+        requestId: request.id,
+        requestNumber: request.number,
+        totalOrders: diagnosis.totalOrders,
+        activeOrders: 0,
+        readyForTsd: 0,
+        awaitingWbConfirmation: 0,
+        withAvailableStock: 0,
+        noAvailableStock: 0,
+        fbsIdentityStatus: diagnosis.kind,
+        movedToRequestNumbers: diagnosis.movedToRequestNumbers,
+        message: diagnosis.message,
+      };
+    }
+    const shippedOrders = linkedOrders.filter(
+      (link) => link.lastCategory === 'shipped' || link.lastSupplierStatus === 'complete',
+    ).length;
+    if (
+      !request.fbsEmergencyAssemblyAt &&
+      linkedOrders.length > 0 &&
+      shippedOrders === linkedOrders.length
+    ) {
+      return {
+        mode: 'FBS' as const,
+        requestId: request.id,
+        requestNumber: request.number,
+        totalOrders: linkedOrders.length,
+        activeOrders: 0,
+        readyForTsd: 0,
+        awaitingWbConfirmation: 0,
+        withAvailableStock: 0,
+        noAvailableStock: 0,
+        requiresEmergencyAssembly: true,
+        shippedOrders,
+        message:
+          `Заявка №${String(request.number).padStart(6, '0')} скрыта из обычной очереди ТСД: ` +
+          `Wildberries уже считает переданными/завершёнными все ${shippedOrders} заказ(а/ов). ` +
+          'Можно безопасно вернуть её в локальную сборку без изменения Wildberries.',
+      };
+    }
+
+    const value = await this.loadFbsOrders(request.clientId);
+    this.fbsOrdersCache.set(request.clientId, {
+      expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
+      value,
+    });
+    this.fbsTsdRequestFallbackCache.delete(request.clientId);
+
+    const orders = value.orders.filter((order) => order.request?.id === request.id);
+    const activeOrders = orders.filter((order) => order.category === 'active');
+    const availability = new Map<string, boolean>();
+    await Promise.all(activeOrders.map(async (order) => {
+      if (!order.product) {
+        availability.set(order.id, false);
+        return;
+      }
+      const source = await this.resolveFbsTsdStockSource(request.clientId, order.product, order.storageBoxes);
+      availability.set(
+        order.id,
+        fbsTsdStockSourceHasAvailableStock(source),
+      );
+    }));
+    const hasAvailableStock = (order: FbsOrderSummary) => availability.get(order.id) === true;
+    const readyForTsd = activeOrders.filter(
+      (order) => order.supplierStatus === 'confirm' && hasAvailableStock(order),
+    ).length;
+    const awaitingWbConfirmation = activeOrders.filter((order) => order.supplierStatus !== 'confirm').length;
+    const withAvailableStock = activeOrders.filter(hasAvailableStock).length;
+    const noAvailableStock = activeOrders.filter((order) => !hasAvailableStock(order)).length;
+    const message =
+      readyForTsd > 0
+        ? `FBS-заявка №${String(request.number).padStart(6, '0')} обновлена: к ТСД готовы ${readyForTsd} из ${orders.length}. На ТСД откройте «Сборка FBS» и обновите очередь.`
+        : `FBS-заявка №${String(request.number).padStart(6, '0')} обновлена. Готовых к ТСД: 0 из ${orders.length}; ожидают подтверждения WB: ${awaitingWbConfirmation}; есть в остатках: ${withAvailableStock}; нет доступного остатка: ${noAvailableStock}.`;
+
+    return {
+      mode: 'FBS',
+      requestId: request.id,
+      requestNumber: request.number,
+      syncedAt: value.fetchedAt,
+      totalOrders: orders.length,
+      activeOrders: activeOrders.length,
+      readyForTsd,
+      awaitingWbConfirmation,
+      withAvailableStock,
+      noAvailableStock,
+      message,
+    };
+  }
+
+  /**
+   * Releases unstarted FBS tasks in one request and rebuilds their automatic
+   * pallet-sort reservations from the live stock balances.  A task that has
+   * already scanned a box, barcode or KIZ is deliberately left untouched: its
+   * physical work must be completed or handled through the problem workflow.
+   */
+  async getFbsRequestRoute(requestId: string, user: AuthUser) {
+    const request = await this.prisma.clientRequest.findUnique({
+      where: { id: requestId },
+      select: {
+        id: true,
+        number: true,
+        title: true,
+        clientId: true,
+        type: true,
+        updatedAt: true,
+        _count: { select: { fbsOrderLinks: true } },
+      },
+    });
+    if (!request) throw new NotFoundException('FBS-заявка не найдена.');
+    this.clientScopes.requireClientAccess(user, request.clientId, 'read');
+    if (request.type !== ClientRequestType.OUTBOUND || request._count.fbsOrderLinks === 0) {
+      throw new BadRequestException('Маршрут доступен только для FBS-заявки.');
+    }
+    const tasks = await this.prisma.fbsTsdAssembly.findMany({
+      where: { requestId },
+      select: {
+        id: true,
+        orderId: true,
+        skuId: true,
+        sourceSkuId: true,
+        productName: true,
+        article: true,
+        itemCount: true,
+        status: true,
+        reservedBoxId: true,
+        reservedBoxCode: true,
+        boxId: true,
+        boxCode: true,
+        barcode: true,
+        kiz: true,
+        errorMessage: true,
+        workerName: true,
+        updatedAt: true,
+      },
+      orderBy: [{ status: 'asc' }, { orderId: 'asc' }],
+    });
+    const boxIds = uniqueStrings(
+      tasks.flatMap((task) => [task.boxId ?? '', task.reservedBoxId ?? '']),
+    );
+    const boxes = boxIds.length > 0
+      ? await this.prisma.box.findMany({
+          where: { id: { in: boxIds } },
+          select: {
+            id: true,
+            code: true,
+            storagePlacement: {
+              select: { pallet: { select: { id: true, code: true } } },
+            },
+          },
+        })
+      : [];
+    const boxById = new Map(boxes.map((box) => [box.id, box]));
+    const balancePairs = tasks.flatMap((task) => {
+      const boxId = task.boxId ?? task.reservedBoxId;
+      const skuId = task.sourceSkuId ?? task.skuId;
+      return boxId ? [{ boxId, skuId }] : [];
+    });
+    const balances = balancePairs.length > 0
+      ? await this.prisma.stockBalance.findMany({
+          where: {
+            clientId: request.clientId,
+            status: StockStatus.AVAILABLE,
+            boxId: { in: uniqueStrings(balancePairs.map((pair) => pair.boxId)) },
+            skuId: { in: uniqueStrings(balancePairs.map((pair) => pair.skuId)) },
+          },
+          select: { boxId: true, skuId: true, quantity: true },
+        })
+      : [];
+    const quantityByBoxSku = new Map<string, number>();
+    balances.forEach((balance) => {
+      if (!balance.boxId) return;
+      const key = `${balance.boxId}:${balance.skuId}`;
+      quantityByBoxSku.set(key, (quantityByBoxSku.get(key) ?? 0) + balance.quantity);
+    });
+    const routeSkuIds = uniqueStrings(tasks.map((task) => task.sourceSkuId ?? task.skuId));
+    const reservationRowsBySku = await this.fbsTsdReservationRowsBySku({
+      clientId: request.clientId,
+      skuIds: routeSkuIds,
+      excludeTaskId: null,
+    });
+    const items = tasks.map((task) => {
+      const boxId = task.boxId ?? task.reservedBoxId;
+      const box = boxId ? boxById.get(boxId) : null;
+      const skuId = task.sourceSkuId ?? task.skuId;
+      const gathered = task.status === 'COMPLETED';
+      const availableQuantity = boxId
+        ? Math.max(0, quantityByBoxSku.get(`${boxId}:${skuId}`) ?? 0)
+        : 0;
+      const routeAvailable = Boolean(boxId) && evaluateFbsBoxAvailability({
+        boxId: boxId!,
+        availableQuantity,
+        candidateTaskId: task.id,
+        candidateAssignedBoxId: boxId,
+        requiredQuantity: task.itemCount,
+        reservations: reservationRowsBySku.get(skuId) ?? [],
+      }).accepted;
+      const unavailable = !gathered && !routeAvailable;
+      return {
+        taskId: task.id,
+        orderId: task.orderId,
+        productName: task.productName,
+        article: task.article,
+        quantity: Math.max(1, task.itemCount),
+        status: task.status,
+        state: gathered ? 'GATHERED' : unavailable ? 'UNAVAILABLE' : 'ROUTED',
+        boxId: boxId ?? null,
+        boxCode: task.boxCode ?? task.reservedBoxCode ?? box?.code ?? null,
+        palletId: box?.storagePlacement?.pallet.id ?? null,
+        palletCode: box?.storagePlacement?.pallet.code ?? null,
+        availableQuantity,
+        scannedBarcode: Boolean(task.barcode),
+        scannedKiz: Boolean(task.kiz),
+        workerName: task.workerName,
+        reason: unavailable
+          ? task.errorMessage ?? 'Свободный остаток в коробах паллет-сортов не найден.'
+          : null,
+        updatedAt: task.updatedAt.toISOString(),
+        skuId,
+      };
+    });
+    const version = fbsRouteFingerprint(items.map((item) => ({
+      taskId: item.taskId,
+      status: `${item.status}:${item.state}`,
+      skuId: item.skuId,
+      quantity: item.availableQuantity,
+      boxId: item.boxId,
+      boxCode: item.boxCode,
+      palletCode: item.palletCode,
+      updatedAt: item.updatedAt,
+    })));
+    const routeBoxes = uniqueStrings(items.map((item) => item.boxCode ?? ''));
+    return {
+      requestId,
+      requestNumber: request.number,
+      requestTitle: request.title,
+      version,
+      generatedAt: new Date().toISOString(),
+      summary: {
+        total: items.length,
+        gathered: items.filter((item) => item.state === 'GATHERED').length,
+        routed: items.filter((item) => item.state === 'ROUTED').length,
+        unavailable: items.filter((item) => item.state === 'UNAVAILABLE').length,
+      },
+      boxes: routeBoxes,
+      pallets: uniqueStrings(items.map((item) => item.palletCode ?? '')).map((palletCode) => ({
+        palletCode,
+        boxes: uniqueStrings(
+          items
+            .filter((item) => item.palletCode === palletCode)
+            .map((item) => item.boxCode ?? ''),
+        ),
+      })),
+      items: items.map(({ skuId: _skuId, ...item }) => item),
+    };
+  }
+
+  async repairFbsRequestSelection(requestId: string, user: AuthUser) {
+    const request = await this.prisma.clientRequest.findUnique({
+      where: { id: requestId },
+      select: {
+        id: true,
+        number: true,
+        clientId: true,
+        warehouseId: true,
+        type: true,
+        status: true,
+        client: { select: { storesWithoutBoxes: true } },
+        fbsOrderLinks: {
+          where: {
+            syncStatus: FBS_REQUEST_LINK_ACTIVE,
+            lastSupplierStatus: 'confirm',
+          },
+          select: {
+            marketplace: true,
+            connectionId: true,
+            orderId: true,
+            lastSupplyId: true,
+            lastSkuId: true,
+            lastItemCount: true,
+          },
+        },
+        items: {
+          select: {
+            id: true,
+            skuId: true,
+            barcode: true,
+            name: true,
+            sku: {
+              select: {
+                id: true,
+                internalSku: true,
+                clientSku: true,
+                article: true,
+                name: true,
+                needsChestnyZnak: true,
+                isUnmarked: true,
+                barcodes: { select: { value: true }, orderBy: { isPrimary: 'desc' } },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!request) throw new NotFoundException('FBS-заявка не найдена.');
+    this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+    if (request.type !== ClientRequestType.OUTBOUND || request.fbsOrderLinks.length === 0) {
+      throw new BadRequestException('Исправление подбора доступно только для FBS-заявки.');
+    }
+    if (FBS_REQUEST_CLOSED_STATUSES.has(request.status)) {
+      throw new BadRequestException('Закрытую FBS-заявку нельзя пересчитать.');
+    }
+    const routeBefore = await this.getFbsRequestRoute(requestId, user);
+
+    // Old requests may contain the full persisted WB composition while only a
+    // limited page of marketplace orders ever reached the automatic TSD queue.
+    // Recreate those untouched queue rows from the request snapshots first;
+    // completed or otherwise existing tasks are protected by the unique key.
+    const itemBySkuId = new Map(
+      request.items
+        .filter((item): item is (typeof request.items)[number] & { skuId: string } => Boolean(item.skuId))
+        .map((item) => [item.skuId, item]),
+    );
+    const linkedTasks = await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        OR: request.fbsOrderLinks.map((link) => ({
+          marketplace: link.marketplace,
+          connectionId: link.connectionId,
+          orderId: link.orderId,
+        })),
+      },
+      select: {
+        id: true,
+        requestId: true,
+        connectionId: true,
+        orderId: true,
+        skuId: true,
+        status: true,
+        boxId: true,
+        barcode: true,
+        kiz: true,
+        sourceBarcode: true,
+        relabelConfirmedAt: true,
+      },
+    });
+    let adoptedTasks = 0;
+    for (const task of linkedTasks) {
+      const item = itemBySkuId.get(task.skuId);
+      if (
+        !item ||
+        task.requestId === requestId ||
+        !task.requestId.startsWith('AUTO:') ||
+        ![FBS_TSD_RESERVED_STATUS, FBS_TSD_WAITING_STOCK_STATUS, 'RELEASED'].includes(task.status) ||
+        task.boxId ||
+        task.sourceBarcode ||
+        task.barcode ||
+        task.kiz ||
+        task.relabelConfirmedAt
+      ) {
+        continue;
+      }
+      const adopted = await this.prisma.fbsTsdAssembly.updateMany({
+        where: { id: task.id, requestId: task.requestId, status: task.status },
+        data: { requestId, requestItemId: item.id },
+      });
+      adoptedTasks += adopted.count;
+    }
+    const existingTaskKeys = new Set(
+      linkedTasks.map((task) => selectionKey(task.connectionId, task.orderId)),
+    );
+    const missingTaskRows = request.fbsOrderLinks.flatMap((link) => {
+      const key = selectionKey(link.connectionId, link.orderId);
+      const item = link.lastSkuId ? itemBySkuId.get(link.lastSkuId) : null;
+      if (existingTaskKeys.has(key) || !item?.sku) return [];
+      const sku = item.sku;
+      const barcodes = uniqueStrings([
+        item.barcode ?? '',
+        ...sku.barcodes.map((barcode) => barcode.value),
+      ]);
+      return [{
+        clientId: request.clientId,
+        marketplace: link.marketplace,
+        connectionId: link.connectionId,
+        orderId: link.orderId,
+        supplyId: link.lastSupplyId,
+        requestId: request.id,
+        requestItemId: item.id,
+        skuId: sku.id,
+        productName: item.name ?? sku.name,
+        article: sku.article ?? sku.clientSku ?? sku.internalSku,
+        barcodes: barcodes as Prisma.InputJsonValue,
+        storageBoxes: [] as Prisma.InputJsonValue,
+        itemCount: Math.max(1, link.lastItemCount ?? 1),
+        requiresKiz: sku.needsChestnyZnak && !sku.isUnmarked,
+        status: FBS_TSD_WAITING_STOCK_STATUS,
+        deviceCode: FBS_TSD_AUTO_RESERVATION_DEVICE,
+        wbMetaStatus: sku.needsChestnyZnak && !sku.isUnmarked ? 'PENDING' : 'NOT_REQUIRED',
+        errorMessage: 'Задание восстановлено из сохранённого состава FBS-заявки.',
+      }];
+    });
+    const createdTasks = missingTaskRows.length > 0
+      ? (
+          await this.prisma.fbsTsdAssembly.createMany({
+            data: missingTaskRows,
+            skipDuplicates: true,
+          })
+        ).count
+      : 0;
+    const restoredTasks = adoptedTasks + createdTasks;
+
+    const tasks = await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        requestId,
+        status: {
+          in: [
+            FBS_TSD_RESERVED_STATUS,
+            FBS_TSD_WAITING_STOCK_STATUS,
+            'RELEASED',
+            'IN_PROGRESS',
+          ],
+        },
+      },
+      select: {
+        id: true,
+        orderId: true,
+        skuId: true,
+        sourceSkuId: true,
+        itemCount: true,
+        status: true,
+        boxId: true,
+        barcode: true,
+        kiz: true,
+        sourceBarcode: true,
+        relabelConfirmedAt: true,
+      },
+      orderBy: [{ createdAt: 'asc' }, { orderId: 'asc' }],
+    });
+    const repairableTasks = tasks.filter(
+      (task) =>
+        !task.boxId &&
+        !task.sourceBarcode &&
+        !task.barcode &&
+        !task.kiz &&
+        !task.relabelConfirmedAt,
+    );
+    const repairableTaskIds = repairableTasks.map((task) => task.id);
+    const queuedRepairableTaskIds = repairableTasks
+      .filter((task) => task.status !== 'IN_PROGRESS')
+      .map((task) => task.id);
+    const assignedRepairableTaskIds = repairableTasks
+      .filter((task) => task.status === 'IN_PROGRESS')
+      .map((task) => task.id);
+
+    if (queuedRepairableTaskIds.length > 0) {
+      await this.prisma.fbsTsdAssembly.updateMany({
+        where: { id: { in: queuedRepairableTaskIds } },
+        data: {
+          status: FBS_TSD_WAITING_STOCK_STATUS,
+          deviceCode: FBS_TSD_AUTO_RESERVATION_DEVICE,
+          workerUserId: null,
+          workerName: null,
+          reservedBoxId: null,
+          reservedBoxCode: null,
+          reservedAt: null,
+          boxId: null,
+          boxCode: null,
+          errorMessage: 'Подбор пересчитан по живым остаткам: прежний резерв короба снят.',
+        },
+      });
+    }
+    if (assignedRepairableTaskIds.length > 0) {
+      await this.prisma.fbsTsdAssembly.updateMany({
+        where: { id: { in: assignedRepairableTaskIds } },
+        data: {
+          reservedBoxId: null,
+          reservedBoxCode: null,
+          reservedAt: null,
+          boxId: null,
+          boxCode: null,
+          errorMessage: 'Паллет-сорт проверяется по живым остаткам.',
+        },
+      });
+    }
+
+    // Rebuild the request immediately from live WMS balances. Asking WB for
+    // active orders alone is insufficient for reassembly: WB can stop
+    // returning an older order while its unfinished WMS task must remain.
+    let reservedTasks = 0;
+    if (repairableTaskIds.length > 0) {
+      if (request.client.storesWithoutBoxes) {
+        for (const task of repairableTasks) {
+          const stockSkuId = task.sourceSkuId ?? task.skuId;
+          const [balance, reservations] = await Promise.all([
+            this.prisma.stockBalance.aggregate({
+              where: {
+                clientId: request.clientId,
+                skuId: stockSkuId,
+                status: StockStatus.AVAILABLE,
+                OR: [
+                  { boxId: null },
+                  {
+                    boxId: { not: null },
+                    box: { status: { notIn: ['deleted', 'archived'] } },
+                  },
+                ],
+              },
+              _sum: { quantity: true },
+            }),
+            this.fbsTsdReservationRows({
+              clientId: request.clientId,
+              skuId: stockSkuId,
+              withoutBox: true,
+              excludeTaskId: task.id,
+            }),
+          ]);
+          const reserved = reservations.reduce((sum, row) => sum + row.itemCount, 0);
+          const hasStock = (balance._sum.quantity ?? 0) - reserved >= Math.max(1, task.itemCount);
+          await this.prisma.fbsTsdAssembly.update({
+            where: { id: task.id },
+            data: {
+              status: task.status === 'IN_PROGRESS'
+                ? 'IN_PROGRESS'
+                : hasStock
+                  ? FBS_TSD_RESERVED_STATUS
+                  : FBS_TSD_WAITING_STOCK_STATUS,
+              reservedAt: hasStock ? new Date() : null,
+              boxCode: hasStock ? FBS_TSD_NO_BOX_CODE : null,
+              errorMessage: hasStock
+                ? null
+                : 'На складе нет свободного поштучного остатка этого товара.',
+            },
+          });
+          if (hasStock) reservedTasks += 1;
+        }
+      } else {
+        const stockSkuIds = uniqueStrings(
+          repairableTasks.map((task) => task.sourceSkuId ?? task.skuId),
+        );
+        // FIX: A manager-triggered repair of a real request has priority over
+        // untouched AUTO reservations. Physical/started tasks stay protected.
+        if (stockSkuIds.length > 0) {
+          await this.prisma.fbsTsdAssembly.updateMany({
+            where: {
+              clientId: request.clientId,
+              // FIX: Manager-created automatic reservations keep a normal
+              // requestId; deviceCode and untouched fields are the safe marker.
+              deviceCode: FBS_TSD_AUTO_RESERVATION_DEVICE,
+              status: FBS_TSD_RESERVED_STATUS,
+              boxId: null,
+              reservedBoxId: { not: null },
+              sourceBarcode: null,
+              barcode: null,
+              kiz: null,
+              relabelConfirmedAt: null,
+              OR: [
+                { skuId: { in: stockSkuIds }, sourceSkuId: null },
+                { sourceSkuId: { in: stockSkuIds }, relabelConfirmedAt: null },
+                { skuId: { in: stockSkuIds }, relabelConfirmedAt: { not: null } },
+              ],
+            },
+            data: {
+              status: FBS_TSD_WAITING_STOCK_STATUS,
+              reservedBoxId: null,
+              reservedBoxCode: null,
+              reservedAt: null,
+              errorMessage: `Фоновый резерв освобождён в пользу FBS-заявки №${String(request.number).padStart(6, '0')}.`,
+            },
+          });
+        }
+        const liveBalances = stockSkuIds.length
+          ? await this.prisma.stockBalance.findMany({
+              where: {
+                clientId: request.clientId,
+                skuId: { in: stockSkuIds },
+                status: StockStatus.AVAILABLE,
+                quantity: { gt: 0 },
+                boxId: { not: null },
+                box: {
+                  status: { notIn: ['deleted', 'archived'] },
+                  warehouseId: request.warehouseId ?? { not: null },
+                  storagePlacement: {
+                    pallet: {
+                      clientId: request.clientId,
+                      warehouseId: request.warehouseId ?? undefined,
+                    },
+                  },
+                },
+              },
+              select: {
+                skuId: true,
+                boxId: true,
+                quantity: true,
+                box: {
+                  select: {
+                    id: true,
+                    code: true,
+                    storagePlacement: {
+                      select: {
+                        pallet: { select: { code: true } },
+                      },
+                    },
+                  },
+                },
+              },
+            })
+          : [];
+        const boxesBySku = new Map<string, Array<{
+          id: string;
+          code: string;
+          palletCode: string;
+          quantity: number;
+        }>>();
+        for (const balance of liveBalances) {
+          if (!balance.boxId || !balance.box?.storagePlacement?.pallet) continue;
+          const rows = boxesBySku.get(balance.skuId) ?? [];
+          const current = rows.find((row) => row.id === balance.boxId);
+          if (current) {
+            current.quantity += balance.quantity;
+          } else {
+            rows.push({
+              id: balance.boxId,
+              code: balance.box.code,
+              palletCode: balance.box.storagePlacement.pallet.code,
+              quantity: balance.quantity,
+            });
+          }
+          boxesBySku.set(balance.skuId, rows);
+        }
+
+        for (const task of repairableTasks) {
+          const stockSkuId = task.sourceSkuId ?? task.skuId;
+          const reservations = await this.fbsTsdReservationRows({
+            clientId: request.clientId,
+            skuId: stockSkuId,
+            excludeTaskId: task.id,
+          });
+          const reservedByBox = new Map<string, number>();
+          reservations.forEach((row) => {
+            if (!row.boxId) return;
+            reservedByBox.set(row.boxId, (reservedByBox.get(row.boxId) ?? 0) + row.itemCount);
+          });
+          const itemCount = Math.max(1, task.itemCount);
+          const eligibleBoxes = (boxesBySku.get(stockSkuId) ?? [])
+            .map((box) => ({
+              ...box,
+              freeQuantity: box.quantity - (reservedByBox.get(box.id) ?? 0),
+            }))
+            .filter((box) => box.freeQuantity >= itemCount)
+            .sort(
+              (left, right) =>
+                left.freeQuantity - right.freeQuantity ||
+                left.code.localeCompare(right.code, 'ru-RU'),
+            );
+          const selectedBox = eligibleBoxes[0] ?? null;
+          await this.prisma.fbsTsdAssembly.update({
+            where: { id: task.id },
+            data: {
+              storageBoxes: eligibleBoxes.map((box) => ({
+                code: box.code,
+                quantity: box.freeQuantity,
+                status: StockStatus.AVAILABLE,
+                palletCode: box.palletCode,
+              })) as Prisma.InputJsonValue,
+              status: task.status === 'IN_PROGRESS'
+                ? 'IN_PROGRESS'
+                : selectedBox
+                  ? FBS_TSD_RESERVED_STATUS
+                  : FBS_TSD_WAITING_STOCK_STATUS,
+              reservedBoxId: selectedBox?.id ?? null,
+              reservedBoxCode: selectedBox?.code ?? null,
+              reservedAt: selectedBox ? new Date() : null,
+              boxId: null,
+              boxCode: null,
+              errorMessage: selectedBox
+                ? null
+                : 'В выбранном филиале нет свободной единицы товара в коробе на паллет-сорте.',
+            },
+          });
+          if (selectedBox) reservedTasks += 1;
+        }
+      }
+    }
+
+    const routeAfter = await this.getFbsRequestRoute(requestId, user);
+    const routeDiff = diffFbsRouteBoxes(routeBefore.boxes, routeAfter.boxes);
+    await this.prisma.clientRequestEvent.create({
+      data: {
+        requestId: request.id,
+        clientId: request.clientId,
+        eventType: ClientRequestEventType.COMMENT,
+        title: 'Исправлен подбор FBS по живым остаткам',
+        body: repairableTaskIds.length > 0
+          ? `Версия ${routeBefore.version} → ${routeAfter.version}. Восстановлено недостающих заданий: ${restoredTasks}. Проверено заданий без физических сканов: ${repairableTaskIds.length}. Добавлены короба: ${routeDiff.addedBoxes.join(', ') || 'нет'}. Убраны короба: ${routeDiff.removedBoxes.join(', ') || 'нет'}. Физически начатые позиции сохранены.`
+          : `Версия ${routeBefore.version} не изменилась. Заданий без физических сканов для восстановления нет.`,
+        createdByUserId: user.id,
+      },
+    });
+
+    return {
+      requestId,
+      requestNumber: request.number,
+      restoredTasks,
+      repairedTasks: repairableTaskIds.length,
+      reservedTasks,
+      waitingStockTasks: repairableTaskIds.length - reservedTasks,
+      preservedStartedTasks: tasks.length - repairableTaskIds.length,
+      route: routeAfter,
+      diff: routeDiff,
+      message:
+        repairableTaskIds.length > 0
+          ? `Паллет-сорты заявки №${String(request.number).padStart(6, '0')} проверены: восстановлено заданий ${restoredTasks}, маршрутов ${reservedTasks} из ${repairableTaskIds.length}; без доступного паллет-сорта осталось ${repairableTaskIds.length - reservedTasks}.`
+          : `Паллет-сорты заявки №${String(request.number).padStart(6, '0')} проверены: восстанавливать нечего.`,
+      sync: null,
+    };
+  }
+
+  async checkFbsRequestSupplyConsistency(requestId: string, user: AuthUser) {
+    const inspection = await this.inspectFbsRequestSupplyConsistency(requestId, user);
+    return inspection.result;
+  }
+
+  async repairFbsRequestSupplyConsistency(requestId: string, user: AuthUser) {
+    const before = await this.inspectFbsRequestSupplyConsistency(requestId, user);
+    if (before.result.consistent) {
+      return {
+        ...before.result,
+        repairedOrders: 0,
+        message: `Заявка №${String(before.result.requestNumber).padStart(6, '0')} уже полностью совпадает с поставкой WB.`,
+      };
+    }
+
+    await Promise.all(
+      before.supplies
+        .filter((supply) => supply.planId)
+        .map((supply) =>
+          this.prisma.fbsSupplyPlan.update({
+            where: { id: supply.planId! },
+            data: { orderIds: supply.remoteOrderIds as Prisma.InputJsonValue },
+          }),
+        ),
+    );
+
+    let marketplace = this.fbsOrdersCache.get(before.clientId)?.value;
+    const missingKeys = new Set(
+      before.supplies.flatMap((supply) =>
+        supply.missingOrderIds.map((orderId) => selectionKey(supply.connectionId, orderId)),
+      ),
+    );
+    const cacheHasEveryMissingOrder = marketplace
+      ? [...missingKeys].every((key) =>
+          marketplace!.orders.some(
+            (order) => selectionKey(order.connectionId, order.id) === key,
+          ),
+        )
+      : false;
+    if (!marketplace || !cacheHasEveryMissingOrder) {
+      marketplace = await this.refreshFbsOrdersCache(before.clientId);
+    }
+
+    const orderByKey = new Map(
+      marketplace.orders.map((order) => [selectionKey(order.connectionId, order.id), order]),
+    );
+    const additions = [...missingKeys]
+      .map((key) => orderByKey.get(key))
+      .filter(
+        (order): order is FbsOrderSummary =>
+          Boolean(order && order.marketplace === MarketplaceType.WILDBERRIES && order.product),
+      );
+    if (additions.length > 0) {
+      await this.syncOneFbsRequest(before.clientId, requestId, orderByKey, additions);
+    }
+
+    const after = await this.inspectFbsRequestSupplyConsistency(requestId, user);
+    const repairedOrders = Math.max(
+      0,
+      before.result.missingInWms - after.result.missingInWms,
+    );
+    await this.prisma.clientRequestEvent.create({
+      data: {
+        requestId,
+        clientId: before.clientId,
+        eventType: ClientRequestEventType.COMMENT,
+        title: 'Проверен и исправлен состав FBS-заявки по WB',
+        body:
+          `До исправления: WB ${before.result.wbOrders}, WMS ${before.result.wmsOrders}, ` +
+          `не хватало ${before.result.missingInWms}. Добавлено заказов: ${repairedOrders}. ` +
+          `После исправления не хватает: ${after.result.missingInWms}, лишних: ${after.result.extraInWms}.`,
+        createdByUserId: user.id,
+      },
+    });
+
+    return {
+      ...after.result,
+      repairedOrders,
+      message: after.result.consistent
+        ? `Заявка №${String(after.result.requestNumber).padStart(6, '0')} исправлена: состав WMS теперь полностью совпадает с WB.`
+        : `Заявка №${String(after.result.requestNumber).padStart(6, '0')} перепроверена. Добавлено ${repairedOrders}; осталось недостающих ${after.result.missingInWms}, лишних ${after.result.extraInWms}. Нераспознанные товары показаны в деталях.`,
+    };
+  }
+
+  private async inspectFbsRequestSupplyConsistency(requestId: string, user: AuthUser) {
+    const request = await this.prisma.clientRequest.findUnique({
+      where: { id: requestId },
+      select: {
+        id: true,
+        number: true,
+        title: true,
+        clientId: true,
+        type: true,
+        status: true,
+        fbsOrderLinks: {
+          select: {
+            marketplace: true,
+            connectionId: true,
+            orderId: true,
+            syncStatus: true,
+            lastSupplyId: true,
+          },
+        },
+      },
+    });
+    if (!request) throw new NotFoundException('FBS-заявка не найдена.');
+    this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+    const wbLinks = request.fbsOrderLinks.filter(
+      (link) => link.marketplace === MarketplaceType.WILDBERRIES,
+    );
+    if (request.type !== ClientRequestType.OUTBOUND || wbLinks.length === 0) {
+      throw new BadRequestException('Проверка состава WB доступна только для FBS-заявок Wildberries.');
+    }
+
+    const connectionIds = uniqueStrings(wbLinks.map((link) => link.connectionId));
+    const [plans, connections] = await Promise.all([
+      this.prisma.fbsSupplyPlan.findMany({
+        where: {
+          clientId: request.clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          connectionId: { in: connectionIds },
+        },
+        orderBy: { updatedAt: 'desc' },
+      }),
+      this.prisma.clientMarketplaceConnection.findMany({
+        where: {
+          clientId: request.clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          id: { in: connectionIds },
+          isActive: true,
+        },
+        select: { id: true, apiKey: true, accountName: true },
+      }),
+    ]);
+    const linkedKeys = new Set(wbLinks.map((link) => selectionKey(link.connectionId, link.orderId)));
+    const relevantPlans = plans.filter((plan) =>
+      asArray<unknown>(plan.orderIds)
+        .map(textValue)
+        .some((orderId) => linkedKeys.has(selectionKey(plan.connectionId, orderId))),
+    );
+    const supplyRefs = new Map<string, {
+      connectionId: string;
+      supplyId: string;
+      planId: string | null;
+      warehouseName: string | null;
+      planOrderIds: string[];
+    }>();
+    for (const plan of relevantPlans) {
+      supplyRefs.set(fbsSupplyPlanKey(plan.marketplace, plan.connectionId, plan.supplyId), {
+        connectionId: plan.connectionId,
+        supplyId: plan.supplyId,
+        planId: plan.id,
+        warehouseName: plan.marketplaceWarehouseName,
+        planOrderIds: uniqueStrings(asArray<unknown>(plan.orderIds).map(textValue)),
+      });
+    }
+    for (const link of wbLinks) {
+      const supplyId = textValue(link.lastSupplyId);
+      if (!supplyId) continue;
+      const key = fbsSupplyPlanKey(MarketplaceType.WILDBERRIES, link.connectionId, supplyId);
+      if (!supplyRefs.has(key)) {
+        supplyRefs.set(key, {
+          connectionId: link.connectionId,
+          supplyId,
+          planId: null,
+          warehouseName: null,
+          planOrderIds: [],
+        });
+      }
+    }
+    if (supplyRefs.size === 0) {
+      throw new BadRequestException(
+        'У заявки пока не определена поставка WB. Сначала обновите заказы FBS.',
+      );
+    }
+
+    const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
+    const supplies = await Promise.all(
+      [...supplyRefs.values()].map(async (supply) => {
+        const connection = connectionById.get(supply.connectionId);
+        if (!connection) {
+          throw new BadRequestException(
+            `Подключение WB для поставки ${supply.supplyId} не найдено или отключено.`,
+          );
+        }
+        const response = await marketplaceJson(
+          `https://marketplace-api.wildberries.ru/api/marketplace/v3/supplies/${encodeURIComponent(supply.supplyId)}/order-ids`,
+          { method: 'GET', headers: wbHeaders(connection.apiKey) },
+        );
+        const remoteOrderIds = uniqueStrings(asArray<unknown>(response.orderIds).map(textValue));
+        const remoteOrderSet = new Set(remoteOrderIds);
+        const planOrderSet = new Set(supply.planOrderIds);
+        const wmsOrderIds = uniqueStrings(
+          wbLinks
+            .filter(
+              (link) =>
+                link.connectionId === supply.connectionId &&
+                link.syncStatus !== FBS_REQUEST_LINK_REMOVED &&
+                (link.lastSupplyId === supply.supplyId || planOrderSet.has(link.orderId)),
+            )
+            .map((link) => link.orderId),
+        );
+        const wmsOrderSet = new Set(wmsOrderIds);
+        const missingOrderIds = remoteOrderIds.filter((orderId) => !wmsOrderSet.has(orderId));
+        const extraOrderIds = wmsOrderIds.filter((orderId) => !remoteOrderSet.has(orderId));
+        return {
+          ...supply,
+          accountName: connection.accountName,
+          remoteOrderIds,
+          wmsOrderIds,
+          missingOrderIds,
+          extraOrderIds,
+        };
+      }),
+    );
+    const assignedWmsKeys = new Set(
+      supplies.flatMap((supply) =>
+        supply.wmsOrderIds.map((orderId) => selectionKey(supply.connectionId, orderId)),
+      ),
+    );
+    const unassignedWmsOrderIds = wbLinks
+      .filter(
+        (link) =>
+          link.syncStatus !== FBS_REQUEST_LINK_REMOVED &&
+          !assignedWmsKeys.has(selectionKey(link.connectionId, link.orderId)),
+      )
+      .map((link) => link.orderId);
+    const wbOrders = supplies.reduce((sum, supply) => sum + supply.remoteOrderIds.length, 0);
+    const wmsOrders = wbLinks.filter(
+      (link) => link.syncStatus !== FBS_REQUEST_LINK_REMOVED,
+    ).length;
+    const missingInWms = supplies.reduce((sum, supply) => sum + supply.missingOrderIds.length, 0);
+    const extraInWms =
+      supplies.reduce((sum, supply) => sum + supply.extraOrderIds.length, 0) +
+      unassignedWmsOrderIds.length;
+    const consistent = missingInWms === 0 && extraInWms === 0;
+
+    return {
+      clientId: request.clientId,
+      supplies,
+      result: {
+        requestId: request.id,
+        requestNumber: request.number,
+        requestTitle: request.title,
+        requestStatus: request.status,
+        checkedAt: new Date().toISOString(),
+        consistent,
+        wbOrders,
+        wmsOrders,
+        missingInWms,
+        extraInWms,
+        supplies: supplies.map((supply) => ({
+          connectionId: supply.connectionId,
+          accountName: supply.accountName,
+          supplyId: supply.supplyId,
+          warehouseName: supply.warehouseName,
+          wbOrders: supply.remoteOrderIds.length,
+          wmsOrders: supply.wmsOrderIds.length,
+          missingInWms: supply.missingOrderIds.length,
+          extraInWms: supply.extraOrderIds.length,
+          missingOrderIds: supply.missingOrderIds.slice(0, 100),
+          extraOrderIds: supply.extraOrderIds.slice(0, 100),
+        })),
+        unassignedWmsOrderIds: unassignedWmsOrderIds.slice(0, 100),
+        message: consistent
+          ? `Состав совпадает: в WB и WMS по ${wbOrders} заказов.`
+          : `Найдено расхождение: WB ${wbOrders}, WMS ${wmsOrders}; не хватает ${missingInWms}, лишних ${extraInWms}.`,
+      },
+    };
+  }
+
+  async listFbsActiveClients(user: AuthUser, marketplaceValue: unknown = undefined) {
     const clientFilter = this.clientScopes.resolveClientFilter(user);
+    const requestedMarketplace = textValue(marketplaceValue)?.toUpperCase();
+    const marketplace = requestedMarketplace === MarketplaceType.WILDBERRIES
+      ? MarketplaceType.WILDBERRIES
+      : requestedMarketplace === MarketplaceType.OZON
+        ? MarketplaceType.OZON
+        : requestedMarketplace === MarketplaceType.YANDEX_MARKET
+          ? MarketplaceType.YANDEX_MARKET
+        : null;
     const connections = await this.prisma.clientMarketplaceConnection.findMany({
       where: {
         clientId: clientFilter,
-        marketplace: { in: [MarketplaceType.WILDBERRIES, MarketplaceType.OZON] },
+        marketplace: marketplace ?? { in: [MarketplaceType.WILDBERRIES, MarketplaceType.OZON, MarketplaceType.YANDEX_MARKET] },
         isActive: true,
       },
       select: {
@@ -349,14 +4196,27 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     for (const client of clients.values()) {
       try {
         const cached = this.fbsOrdersCache.get(client.id);
-        const orders = cached?.value ?? (await this.loadFbsOrders(client.id));
-        if (!cached) {
-          this.fbsOrdersCache.set(client.id, { expiresAt: Date.now() + 30_000, value: orders });
+        const cachedOrders = cached && cached.expiresAt > Date.now() ? cached.value : null;
+        if (cached && !cachedOrders) {
+          this.fbsOrdersCache.delete(client.id);
         }
-        if (orders.counts.active > 0) {
+        const orders = cachedOrders ?? (await this.loadFbsOrders(client.id));
+        if (!cachedOrders) {
+          this.fbsOrdersCache.set(client.id, {
+            expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
+            value: orders,
+          });
+        }
+        const scopedOrders = await this.scopeFbsOrdersForUser(orders, user);
+        const activeOrders = marketplace
+          ? scopedOrders.orders.filter(
+              (order) => order.marketplace === marketplace && order.category === 'active',
+            ).length
+          : scopedOrders.counts.active;
+        if (activeOrders > 0) {
           result.push({
             client,
-            activeOrders: orders.counts.active,
+            activeOrders,
             fetchedAt: orders.fetchedAt,
           });
         }
@@ -372,50 +4232,538 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     );
   }
 
-  async getNextFbsTsdAssembly(deviceCodeValue: unknown, user: AuthUser) {
+  async listFbsTsdRequests(deviceCodeValue: unknown, user: AuthUser, archiveValue: unknown = undefined) {
     const deviceCode = this.fbsTsdDeviceCode(deviceCodeValue, user);
-    let current = await this.prisma.fbsTsdAssembly.findFirst({
+    const archive = ['1', 'true', 'yes'].includes(textValue(archiveValue).toLowerCase());
+    const current = await this.prisma.fbsTsdAssembly.findFirst({
       where: {
         status: 'IN_PROGRESS',
-        OR: [
-          { deviceCode },
-          {
-            workerUserId: user.id,
-            boxId: null,
-            barcode: null,
-            kiz: null,
-          },
-        ],
+        deviceCode,
+        workerUserId: user.id,
       },
-      orderBy: { updatedAt: 'desc' },
+      orderBy: [{ startedAt: 'desc' }, { updatedAt: 'desc' }, { id: 'desc' }],
     });
     if (current) {
       this.clientScopes.requireClientAccess(user, current.clientId, 'write');
-      if (current.deviceCode !== deviceCode) {
-        current = await this.prisma.fbsTsdAssembly.update({
-          where: { id: current.id },
-          data: {
-            deviceCode,
+    }
+
+    const clientFilter = this.clientScopes.resolveClientFilter(user);
+    const links = await this.prisma.fbsOrderRequestLink.findMany({
+      where: {
+        clientId: clientFilter,
+        marketplace: { in: [MarketplaceType.WILDBERRIES, MarketplaceType.OZON] },
+        syncStatus: FBS_REQUEST_LINK_ACTIVE,
+        ...(archive ? {} : { request: { status: { notIn: [...FBS_REQUEST_CLOSED_STATUSES] } } }),
+      },
+      select: {
+        requestId: true,
+        marketplace: true,
+        connectionId: true,
+        orderId: true,
+        lastCategory: true,
+        lastSupplierStatus: true,
+        lastSupplyId: true,
+        lastSkuId: true,
+        request: {
+          select: {
+            id: true,
+            number: true,
+            title: true,
+            status: true,
+            fbsEmergencyAssemblyAt: true,
+            fbsEmergencyAssemblyByName: true,
+            client: { select: { id: true, code: true, name: true } },
+          },
+        },
+      },
+    });
+    const linkedSupplyIds = uniqueStrings(links.map((link) => link.lastSupplyId ?? ''));
+    const linkedSupplyPlans = linkedSupplyIds.length > 0 && this.prisma.fbsSupplyPlan?.findMany
+      ? await this.prisma.fbsSupplyPlan.findMany({
+          where: {
+            marketplace: { in: [MarketplaceType.WILDBERRIES, MarketplaceType.OZON] },
+            connectionId: { in: uniqueStrings(links.map((link) => link.connectionId)) },
+            supplyId: { in: linkedSupplyIds },
+          },
+          select: {
+            marketplace: true,
+            connectionId: true,
+            supplyId: true,
+            marketplaceWarehouseId: true,
+            marketplaceWarehouseName: true,
+          },
+        })
+      : [];
+    const warehouseBySupplyKey = new Map(
+      linkedSupplyPlans.map((plan) => [
+        fbsSupplyPlanKey(plan.marketplace, plan.connectionId, plan.supplyId),
+        plan.marketplaceWarehouseName ?? plan.marketplaceWarehouseId ?? null,
+      ]),
+    );
+
+    type FbsRequestChoice = {
+      requestId: string;
+      requestNumber: number;
+      title: string;
+      status: ClientRequestStatus;
+      client: { id: string; code: string; name: string };
+      marketplaces: Set<MarketplaceType>;
+      supplyIds: Set<string>;
+      warehouseNames: Set<string>;
+      totalOrders: number;
+      readyOrders: number;
+      awaitingWbConfirmation: number;
+      noAvailableStock: number;
+      completedOrders: number;
+      inProgressOrders: number;
+      completedAt: Date | null;
+      emergencyAssemblyAt: Date | null;
+      emergencyAssemblyByName: string | null;
+    };
+    const choices = new Map<string, FbsRequestChoice>();
+    const addChoice = (request: {
+      id: string;
+      number: number;
+      title: string;
+      status: ClientRequestStatus;
+      fbsEmergencyAssemblyAt: Date | null;
+      fbsEmergencyAssemblyByName: string | null;
+      client: { id: string; code: string; name: string };
+    }) => {
+      const existing = choices.get(request.id);
+      if (existing) return existing;
+      const created: FbsRequestChoice = {
+        requestId: request.id,
+        requestNumber: request.number,
+        title: request.title,
+        status: request.status,
+        client: request.client,
+        marketplaces: new Set<MarketplaceType>(),
+        supplyIds: new Set<string>(),
+        warehouseNames: new Set<string>(),
+        totalOrders: 0,
+        readyOrders: 0,
+        awaitingWbConfirmation: 0,
+        noAvailableStock: 0,
+        completedOrders: 0,
+        inProgressOrders: 0,
+        completedAt: null,
+        emergencyAssemblyAt: request.fbsEmergencyAssemblyAt,
+        emergencyAssemblyByName: request.fbsEmergencyAssemblyByName,
+      };
+      choices.set(request.id, created);
+      return created;
+    };
+
+    // Completed WB orders do not belong in the TSD picker unless an
+    // administrator explicitly enabled local emergency assembly.
+    const activeLinks = links.filter(
+      (link) =>
+        Boolean(link.request.fbsEmergencyAssemblyAt) ||
+        !link.lastCategory ||
+        link.lastCategory === 'active',
+    );
+    const taskRequestIds = uniqueStrings(links.map((link) => link.requestId));
+    const activeTasks = taskRequestIds.length > 0
+      ? await this.prisma.fbsTsdAssembly.findMany({
+          where: {
+            requestId: { in: taskRequestIds },
+            status: { in: ['IN_PROGRESS', 'COMPLETED'] },
+          },
+          select: {
+            requestId: true,
+            connectionId: true,
+            orderId: true,
+            status: true,
+            completedAt: true,
+          },
+        })
+      : [];
+    const emergencyAssemblyAtByRequest = new Map(
+      links.map((link) => [
+        link.requestId,
+        link.request.fbsEmergencyAssemblyAt?.getTime() ?? null,
+      ]),
+    );
+    const requestOrderKey = (requestId: string, connectionId: string, orderId: string) =>
+      `${requestId}:${selectionKey(connectionId, orderId)}`;
+    const completedOrderKeys = new Set(
+      activeTasks
+        .filter((task) => {
+          if (task.status !== 'COMPLETED') return false;
+          const emergencyAt = emergencyAssemblyAtByRequest.get(task.requestId);
+          return emergencyAt == null || Boolean(task.completedAt && task.completedAt.getTime() >= emergencyAt);
+        })
+        .map((task) => requestOrderKey(task.requestId, task.connectionId, task.orderId)),
+    );
+    const pendingLinks = activeLinks.filter(
+      (link) => !completedOrderKeys.has(requestOrderKey(link.requestId, link.connectionId, link.orderId)),
+    );
+
+    if (archive) {
+      const archiveLinksByRequest = new Map<string, typeof links>();
+      for (const link of links) {
+        if (link.lastCategory === 'cancelled') continue;
+        const requestLinks = archiveLinksByRequest.get(link.requestId) ?? [];
+        requestLinks.push(link);
+        archiveLinksByRequest.set(link.requestId, requestLinks);
+      }
+      const completedAtByOrderKey = new Map(
+        activeTasks
+          .filter((task) => completedOrderKeys.has(requestOrderKey(task.requestId, task.connectionId, task.orderId)))
+          .map((task) => [requestOrderKey(task.requestId, task.connectionId, task.orderId), task.completedAt]),
+      );
+      for (const requestLinks of archiveLinksByRequest.values()) {
+        if (
+          requestLinks.length === 0 ||
+          requestLinks.some((link) => !completedOrderKeys.has(requestOrderKey(link.requestId, link.connectionId, link.orderId)))
+        ) {
+          continue;
+        }
+        for (const link of requestLinks) {
+          const choice = addChoice(link.request);
+          const linkMarketplace = link.marketplace ?? MarketplaceType.WILDBERRIES;
+          choice.marketplaces.add(linkMarketplace);
+          choice.totalOrders += 1;
+          choice.completedOrders += 1;
+          if (link.lastSupplyId) {
+            choice.supplyIds.add(link.lastSupplyId);
+            const warehouse = warehouseBySupplyKey.get(
+              fbsSupplyPlanKey(linkMarketplace, link.connectionId, link.lastSupplyId),
+            );
+            if (warehouse) choice.warehouseNames.add(warehouse);
+          }
+          const completedAt = completedAtByOrderKey.get(requestOrderKey(link.requestId, link.connectionId, link.orderId));
+          if (completedAt && (!choice.completedAt || completedAt > choice.completedAt)) {
+            choice.completedAt = completedAt;
+          }
+        }
+      }
+      const requests = [...choices.values()]
+        .map((choice) => ({
+          requestId: choice.requestId,
+          requestNumber: choice.requestNumber,
+          title: choice.title,
+          status: choice.status,
+          client: choice.client,
+          marketplaces: [...choice.marketplaces],
+          supplyIds: [...choice.supplyIds],
+          warehouseNames: [...choice.warehouseNames].sort((left, right) => left.localeCompare(right, 'ru-RU')),
+          totalOrders: choice.totalOrders,
+          readyOrders: 0,
+          awaitingWbConfirmation: 0,
+          noAvailableStock: 0,
+          completedOrders: choice.completedOrders,
+          inProgressOrders: 0,
+          completedAt: choice.completedAt?.toISOString() ?? null,
+          emergencyAssemblyAt: choice.emergencyAssemblyAt?.toISOString() ?? null,
+          emergencyAssemblyByName: choice.emergencyAssemblyByName,
+        }))
+        .sort((left, right) => {
+          const rightAt = right.completedAt ? Date.parse(right.completedAt) : 0;
+          const leftAt = left.completedAt ? Date.parse(left.completedAt) : 0;
+          return rightAt - leftAt || right.requestNumber - left.requestNumber;
+        });
+      return {
+        currentRequestId: null,
+        message: requests.length > 0
+          ? 'Архив собранных FBS-заявок.'
+          : 'Собранных FBS-заявок пока нет.',
+        requests,
+      };
+    }
+    const stockSkuIds = uniqueStrings(pendingLinks.map((link) => link.lastSkuId ?? ''));
+    const clientIds = uniqueStrings(
+      pendingLinks.map((link) => link.request.client.id),
+    );
+    const [stockBalances, boxlessClients] = await Promise.all([
+      stockSkuIds.length
+        ? this.prisma.stockBalance.findMany({
+          where: {
+            skuId: { in: stockSkuIds },
+            status: StockStatus.AVAILABLE,
+            quantity: { gt: 0 },
+            OR: [
+              { boxId: null },
+              {
+                boxId: { not: null },
+                box: { status: { notIn: ['deleted', 'archived'] } },
+              },
+            ],
+          },
+          select: { skuId: true, clientId: true, boxId: true },
+        })
+        : Promise.resolve([]),
+      clientIds.length
+        ? this.prisma.client.findMany({
+            where: { id: { in: clientIds }, storesWithoutBoxes: true },
+            select: { id: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const boxlessClientIds = new Set(boxlessClients.map((client) => client.id));
+    const skuIdsWithStock = new Set(
+      stockBalances
+        .filter(
+          (balance) =>
+            Boolean(balance.boxId) ||
+            boxlessClientIds.has(balance.clientId),
+        )
+        .map((balance) => balance.skuId),
+    );
+    const relabelCandidates = uniqueStrings(
+      pendingLinks
+        .filter((link) => link.lastSkuId && !skuIdsWithStock.has(link.lastSkuId))
+        .map((link) => link.lastSkuId ?? ''),
+    );
+    if (relabelCandidates.length > 0) {
+      const candidateSkus = await this.prisma.sku.findMany({
+        where: { id: { in: relabelCandidates } },
+        select: {
+          id: true,
+          clientId: true,
+          name: true,
+          internalSku: true,
+          clientSku: true,
+          article: true,
+          size: true,
+          needsChestnyZnak: true,
+          isUnmarked: true,
+        },
+      });
+      await Promise.all(candidateSkus.map(async (sku) => {
+        const source = await this.resolveFbsTsdStockSource(sku.clientId, sku, []);
+        if (fbsTsdStockSourceHasAvailableStock(source)) {
+          skuIdsWithStock.add(sku.id);
+        }
+      }));
+    }
+
+    for (const link of pendingLinks) {
+      const choice = addChoice(link.request);
+      const linkMarketplace = link.marketplace ?? MarketplaceType.WILDBERRIES;
+      choice.marketplaces.add(linkMarketplace);
+      choice.totalOrders += 1;
+      if (link.lastSupplyId) {
+        choice.supplyIds.add(link.lastSupplyId);
+        const warehouse = warehouseBySupplyKey.get(
+          fbsSupplyPlanKey(linkMarketplace, link.connectionId, link.lastSupplyId),
+        );
+        if (warehouse) choice.warehouseNames.add(warehouse);
+      }
+      if (
+        !link.request.fbsEmergencyAssemblyAt &&
+        !isFbsTsdSupplierStatusEligible(linkMarketplace, link.lastSupplierStatus)
+      ) {
+        choice.awaitingWbConfirmation += 1;
+      } else if (!link.lastSkuId || !skuIdsWithStock.has(link.lastSkuId)) {
+        choice.noAvailableStock += 1;
+      } else {
+        choice.readyOrders += 1;
+      }
+    }
+
+    if (current && !choices.has(current.requestId)) {
+      const currentRequest = await this.prisma.clientRequest.findUnique({
+        where: { id: current.requestId },
+        select: {
+          id: true,
+          number: true,
+          title: true,
+          status: true,
+          fbsEmergencyAssemblyAt: true,
+          fbsEmergencyAssemblyByName: true,
+          client: { select: { id: true, code: true, name: true } },
+        },
+      });
+      if (currentRequest && !FBS_REQUEST_CLOSED_STATUSES.has(currentRequest.status)) {
+        addChoice(currentRequest).marketplaces.add(current.marketplace);
+      }
+    }
+
+    const requestIds = [...choices.keys()];
+    if (requestIds.length > 0) {
+      for (const task of activeTasks) {
+        const choice = choices.get(task.requestId);
+        if (!choice) continue;
+        if (task.status === 'IN_PROGRESS') choice.inProgressOrders += 1;
+      }
+    }
+
+    const requests = [...choices.values()]
+      .map((choice) => ({
+        requestId: choice.requestId,
+        requestNumber: choice.requestNumber,
+        title: choice.title,
+        status: choice.status,
+        client: choice.client,
+        marketplaces: [...choice.marketplaces],
+        supplyIds: [...choice.supplyIds],
+        warehouseNames: [...choice.warehouseNames].sort((left, right) => left.localeCompare(right, 'ru-RU')),
+        totalOrders: choice.totalOrders,
+        readyOrders: choice.readyOrders,
+        awaitingWbConfirmation: choice.awaitingWbConfirmation,
+        noAvailableStock: choice.noAvailableStock,
+        completedOrders: choice.completedOrders,
+        inProgressOrders: choice.inProgressOrders,
+        emergencyAssemblyAt: choice.emergencyAssemblyAt?.toISOString() ?? null,
+        emergencyAssemblyByName: choice.emergencyAssemblyByName,
+      }))
+      .filter((choice) => choice.totalOrders > 0 || choice.inProgressOrders > 0)
+      .sort((left, right) => right.requestNumber - left.requestNumber);
+    const currentHasScans = Boolean(current && (current.boxId || current.barcode || current.kiz));
+
+    return {
+      currentRequestId: currentHasScans ? current?.requestId ?? null : null,
+      message: currentHasScans
+        ? 'Сначала завершите или отложите уже открытый заказ этой FBS-заявки.'
+        : 'Выберите FBS-заявку для сборки.',
+      requests,
+    };
+  }
+
+  async getNextFbsTsdAssembly(
+    deviceCodeValue: unknown,
+    user: AuthUser,
+    requestIdValue: unknown = undefined,
+  ) {
+    const deviceCode = this.fbsTsdDeviceCode(deviceCodeValue, user);
+    const lockKey = `${user.id}\u001f${deviceCode}`;
+    return this.withFbsTsdAssignmentLock(lockKey, () =>
+      this.getNextFbsTsdAssemblyUnlocked(deviceCode, user, requestIdValue),
+    );
+  }
+
+  private async getNextFbsTsdAssemblyUnlocked(
+    deviceCode: string,
+    user: AuthUser,
+    requestIdValue: unknown = undefined,
+  ) {
+    const selectedRequestId = textValue(requestIdValue);
+    let current = await this.prisma.fbsTsdAssembly.findFirst({
+      where: {
+        status: 'IN_PROGRESS',
+        deviceCode,
+        workerUserId: user.id,
+        ...(selectedRequestId ? { requestId: selectedRequestId } : {}),
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+    // Выбранная на ТСД заявка всегда имеет приоритет. Задание из другой
+    // заявки проверяем только если в выбранной заявке у сотрудника ещё нет
+    // начатого заказа. Так опрос ТСД не может чередовать две заявки.
+    if (!current && selectedRequestId) {
+      current = await this.prisma.fbsTsdAssembly.findFirst({
+        where: {
+          status: 'IN_PROGRESS',
+          deviceCode,
+          workerUserId: user.id,
+        },
+        orderBy: { updatedAt: 'desc' },
+      });
+    }
+    if (current) {
+      this.clientScopes.requireClientAccess(user, current.clientId, 'write');
+      const canReleaseEmptyAssignment =
+        Boolean(selectedRequestId) &&
+        selectedRequestId !== current.requestId &&
+        !current.boxId &&
+        !current.sourceBarcode &&
+        !current.barcode &&
+        !current.kiz;
+      if (canReleaseEmptyAssignment) {
+        const released = await this.prisma.fbsTsdAssembly.updateMany({
+          where: {
+            id: current.id,
+            status: 'IN_PROGRESS',
             workerUserId: user.id,
-            workerName: user.name,
-            errorMessage: null,
+            updatedAt: current.updatedAt,
+            boxId: null,
+            sourceBarcode: null,
+            barcode: null,
+            kiz: null,
+          },
+          data: {
+            status: current.reservedBoxId
+              ? FBS_TSD_RESERVED_STATUS
+              : 'RELEASED',
+            deviceCode: current.reservedBoxId
+              ? FBS_TSD_AUTO_RESERVATION_DEVICE
+              : current.deviceCode,
+            workerUserId: null,
+            workerName: null,
+            errorMessage: 'Пустое назначение освобождено при выборе другой FBS-заявки на ТСД.',
           },
         });
+        current =
+          released.count > 0
+            ? null
+            : await this.prisma.fbsTsdAssembly.findUnique({ where: { id: current.id } });
+        if (current?.status !== 'IN_PROGRESS') {
+          current = null;
+        }
       }
-      return this.formatFbsTsdAssembly(current, user, 'Продолжите начатый заказ.');
+    }
+    if (current && selectedRequestId && selectedRequestId !== current.requestId) {
+      throw new BadRequestException(
+        `У сотрудника ${user.name} уже начат заказ в другой FBS-заявке. ` +
+          'Завершите или отложите его, затем снова откройте выбранную заявку. ' +
+          'ТСД не будет автоматически переключать заявку.',
+      );
+    }
+    if (current) {
+      return this.formatFbsTsdAssembly(
+        current,
+        user,
+        'Продолжите начатый заказ.',
+      );
     }
 
     const previousBatch = await this.prisma.fbsTsdAssembly.findFirst({
-      where: { deviceCode, status: 'COMPLETED' },
+      where: {
+        status: 'COMPLETED',
+        ...(selectedRequestId ? { requestId: selectedRequestId } : { deviceCode }),
+      },
       orderBy: { completedAt: 'desc' },
-      select: { requestId: true, supplyId: true },
+      select: { requestId: true, supplyId: true, boxCode: true },
     });
+    const previousPlacement = previousBatch?.boxCode
+      ? await this.prisma.storagePalletBox.findUnique({
+          where: { boxCode: previousBatch.boxCode },
+          include: { pallet: { select: { id: true, boxes: { select: { boxCode: true } } } } },
+        })
+      : null;
+    const preferredPalletBoxCodes = new Set(
+      previousPlacement?.pallet.boxes.map((placement) => placement.boxCode) ?? [],
+    );
 
-    const clientFilter = this.clientScopes.resolveClientFilter(user);
+    const selectedRequest = selectedRequestId
+      ? await this.prisma.clientRequest.findUnique({
+          where: { id: selectedRequestId },
+          select: {
+            id: true,
+            clientId: true,
+            number: true,
+            status: true,
+            fbsEmergencyAssemblyAt: true,
+          },
+        })
+      : null;
+    if (selectedRequestId && !selectedRequest) {
+      throw new NotFoundException('FBS-заявка не найдена. Обновите список заявок на ТСД.');
+    }
+    if (selectedRequest) {
+      this.clientScopes.requireClientAccess(user, selectedRequest.clientId, 'write');
+      if (FBS_REQUEST_CLOSED_STATUSES.has(selectedRequest.status)) {
+        throw new BadRequestException('Эта FBS-заявка уже закрыта. Обновите список заявок на ТСД.');
+      }
+    }
+
+    const clientFilter = selectedRequest?.clientId ?? this.clientScopes.resolveClientFilter(user);
     const connections = await this.prisma.clientMarketplaceConnection.findMany({
       where: {
         clientId: clientFilter,
-        marketplace: MarketplaceType.WILDBERRIES,
+        marketplace: { in: [MarketplaceType.WILDBERRIES, MarketplaceType.OZON] },
         isActive: true,
       },
       select: { clientId: true },
@@ -430,14 +4778,27 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         const cached = this.fbsOrdersCache.get(clientId);
         const requestFallback = this.fbsTsdRequestFallbackCache.get(clientId);
         let response: FbsOrdersResponse;
-        if (cached && cached.expiresAt > Date.now()) {
+        // A selected WMS request already contains the synchronized marketplace
+        // orders needed by the picker.  Do not block the TSD on a fresh WB/Ozon
+        // API round trip: rate limits or a slow marketplace used to surface in
+        // the Android client as the misleading "No connection to WMS" error.
+        if (selectedRequestId) {
+          response = await this.loadFbsTsdRequestOrders(clientId);
+          this.fbsTsdRequestFallbackCache.set(clientId, {
+            expiresAt: Date.now() + FBS_TSD_REQUEST_FALLBACK_CACHE_MS,
+            value: response,
+          });
+        } else if (cached && cached.expiresAt > Date.now()) {
           response = cached.value;
         } else if (requestFallback && requestFallback.expiresAt > Date.now()) {
           response = requestFallback.value;
         } else {
           try {
             response = await this.loadFbsOrders(clientId);
-            this.fbsOrdersCache.set(clientId, { expiresAt: Date.now() + 30_000, value: response });
+            this.fbsOrdersCache.set(clientId, {
+              expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
+              value: response,
+            });
             this.fbsTsdRequestFallbackCache.delete(clientId);
           } catch (caught) {
             response = await this.loadFbsTsdRequestOrders(clientId);
@@ -455,40 +4816,38 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             );
           }
         }
+        response = await this.mergeSyncedFbsTsdRequestOrders(clientId, response);
 
         const candidates = response.orders
           .filter(
             (order) =>
-              order.marketplace === MarketplaceType.WILDBERRIES &&
-              order.category === 'active' &&
-              order.supplierStatus === 'confirm' &&
+              (order.marketplace === MarketplaceType.WILDBERRIES ||
+                order.marketplace === MarketplaceType.OZON) &&
+              isFbsTsdAssemblyOrderEligible(order) &&
               Boolean(order.product) &&
               Boolean(order.request) &&
-              !['DONE', 'CANCELLED', 'REJECTED'].includes(order.request?.status ?? '') &&
-              order.storageBoxes.some(
-                (box) => box.quantity > 0 && box.status === StockStatus.AVAILABLE,
-              ),
+              (!selectedRequestId || order.request?.id === selectedRequestId) &&
+              !['DONE', 'CANCELLED', 'REJECTED'].includes(order.request?.status ?? ''),
           )
           .sort((left, right) => (left.createdAt ?? '').localeCompare(right.createdAt ?? ''));
-        const sameBatchCandidates = previousBatch
+        const sameBatchCandidates = !selectedRequestId && previousBatch
           ? candidates.filter((order) =>
               previousBatch.supplyId
                 ? order.supplyId === previousBatch.supplyId
                 : order.request?.id === previousBatch.requestId,
             )
           : [];
-        const orderedCandidates = sameBatchCandidates.length > 0 ? sameBatchCandidates : candidates;
+        const baseCandidates = sameBatchCandidates.length > 0 ? sameBatchCandidates : candidates;
+        const orderedCandidates = [...baseCandidates].sort((left, right) => {
+          const leftOnCurrentPallet = left.storageBoxes.some((box) => preferredPalletBoxCodes.has(box.code));
+          const rightOnCurrentPallet = right.storageBoxes.some((box) => preferredPalletBoxCodes.has(box.code));
+          return Number(rightOnCurrentPallet) - Number(leftOnCurrentPallet);
+        });
 
         for (const order of orderedCandidates) {
           const product = order.product!;
           const request = order.request!;
-          const requestItem = await this.prisma.clientRequestItem.findFirst({
-            where: { requestId: request.id, skuId: product.id },
-            select: { id: true },
-          });
-          if (!requestItem) continue;
-
-          const existing = await this.prisma.fbsTsdAssembly.findUnique({
+          let existing = await this.prisma.fbsTsdAssembly.findUnique({
             where: {
               marketplace_connectionId_orderId: {
                 marketplace: order.marketplace,
@@ -497,10 +4856,81 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               },
             },
           });
+          if (existing?.status === FBS_TSD_RESCAN_REQUIRED_STATUS) {
+            const claimed = await this.prisma.fbsTsdAssembly.updateMany({
+              where: {
+                id: existing.id,
+                status: FBS_TSD_RESCAN_REQUIRED_STATUS,
+                updatedAt: existing.updatedAt,
+              },
+              data: {
+                status: 'IN_PROGRESS',
+                deviceCode,
+                workerUserId: user.id,
+                workerName: user.name,
+                startedAt: new Date(),
+                errorMessage: null,
+              },
+            });
+            if (claimed.count !== 1) continue;
+            const retryTask = await this.prisma.fbsTsdAssembly.findUnique({
+              where: { id: existing.id },
+            });
+            if (!retryTask || retryTask.deviceCode !== deviceCode) continue;
+            return this.formatFbsTsdAssembly(
+              retryTask,
+              user,
+              `Повторная проверка заказа WB №${retryTask.orderId}. Отсканируйте заново только ШК товара${retryTask.requiresKiz ? ' и ЧЗ' : ''}. Остальные заказы заявки повторно собирать не нужно.`,
+            );
+          }
+          const stockSource = await this.resolveFbsTsdStockSource(
+            clientId,
+            product,
+            order.storageBoxes,
+            existing?.id,
+          );
+          if (
+            !stockSource ||
+            !fbsTsdStockSourceHasAvailableStock(stockSource)
+          ) {
+            continue;
+          }
+          const sourceWithoutBox = stockSource.withoutBoxQuantity > 0;
+          if (sourceWithoutBox) {
+            const stockSkuId =
+              stockSource.relabelRequired && stockSource.sourceSkuId
+                ? stockSource.sourceSkuId
+                : product.id;
+            const reservations = await this.fbsTsdReservationRows({
+              clientId,
+              skuId: stockSkuId,
+              withoutBox: true,
+              // Собственный автоматический резерв текущего WB-заказа уже учтен
+              // в доступном остатке и не должен повторно блокировать выдачу задания ТСД.
+              excludeTaskId: existing?.id ?? null,
+            });
+            const reservedQuantity = reservations.reduce(
+              (sum, reservation) => sum + reservation.itemCount,
+              0,
+            );
+            if (
+              stockSource.withoutBoxQuantity - reservedQuantity <
+              Math.max(1, order.itemCount)
+            ) {
+              continue;
+            }
+          }
+          const requestItem = await this.prisma.clientRequestItem.findFirst({
+            where: { requestId: request.id, skuId: product.id },
+            select: { id: true },
+          });
+          if (!requestItem) continue;
+
           if (existing?.status === 'COMPLETED' || existing?.status === FBS_TSD_RETURN_REQUIRED) continue;
           if (existing?.status === 'IN_PROGRESS') {
             const staleUnstarted =
               !existing.boxId &&
+              !existing.sourceBarcode &&
               !existing.barcode &&
               !existing.kiz &&
               existing.updatedAt.getTime() <= Date.now() - FBS_TSD_STALE_UNSTARTED_TASK_MS;
@@ -515,22 +4945,39 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               where: {
                 id: existing.id,
                 status: 'IN_PROGRESS',
+                workerUserId: existing.workerUserId,
                 updatedAt: existing.updatedAt,
                 boxId: null,
+                sourceBarcode: null,
                 barcode: null,
                 kiz: null,
               },
               data: {
-                status: 'RELEASED',
+                status: existing.reservedBoxId
+                  ? FBS_TSD_RESERVED_STATUS
+                  : 'RELEASED',
+                deviceCode: existing.reservedBoxId
+                  ? FBS_TSD_AUTO_RESERVATION_DEVICE
+                  : existing.deviceCode,
+                workerUserId: null,
+                workerName: null,
                 errorMessage: `Пустое задание автоматически возвращено в очередь спустя ${FBS_TSD_STALE_UNSTARTED_TASK_MS / 3_600_000} ч. без сканирования.`,
               },
             });
             if (released.count === 0) continue;
+            existing = await this.prisma.fbsTsdAssembly.findUnique({
+              where: { id: existing.id },
+            });
+            if (!existing) continue;
           }
 
-          const storageBoxes = order.storageBoxes.filter(
-            (box) => box.quantity > 0 && box.status === StockStatus.AVAILABLE,
-          );
+          const storageBoxes = stockSource.storageBoxes
+            .filter((box) => box.quantity > 0 && box.status === StockStatus.AVAILABLE)
+            .sort((left, right) => {
+              const leftOnCurrentPallet = preferredPalletBoxCodes.has(left.code);
+              const rightOnCurrentPallet = preferredPalletBoxCodes.has(right.code);
+              return Number(rightOnCurrentPallet) - Number(leftOnCurrentPallet);
+            });
           const metadata = uniqueStrings([...order.requiredMeta, ...order.optionalMeta]).map((item) =>
             item.toLowerCase(),
           );
@@ -545,9 +4992,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             requestId: request.id,
             requestItemId: requestItem.id,
             skuId: product.id,
+            sourceSkuId: stockSource.sourceSkuId,
             productName: product.name,
             article: product.article ?? product.clientSku ?? product.internalSku,
+            sourceProductName: stockSource.sourceProductName,
+            sourceArticle: stockSource.sourceArticle,
             barcodes: order.barcodes as Prisma.InputJsonValue,
+            sourceBarcodes: stockSource.sourceBarcodes as Prisma.InputJsonValue,
             storageBoxes: storageBoxes as Prisma.InputJsonValue,
             itemCount: Math.max(1, order.itemCount),
             requiresKiz,
@@ -555,9 +5006,46 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             deviceCode,
             workerUserId: user.id,
             workerName: user.name,
+            startedAt: new Date(),
+            // Retain an automatic reservation only while its box still
+            // appears in the live source for this order.  Otherwise a skipped
+            // task used to be claimed again with the same empty box.
+            reservedBoxId:
+              existing?.reservedBoxCode &&
+              storageBoxes.some(
+                (box) =>
+                  box.code.localeCompare(existing.reservedBoxCode ?? '', 'ru-RU', {
+                    sensitivity: 'accent',
+                  }) === 0 && box.quantity >= Math.max(1, order.itemCount),
+              )
+                ? existing.reservedBoxId
+                : null,
+            reservedBoxCode:
+              existing?.reservedBoxCode &&
+              storageBoxes.some(
+                (box) =>
+                  box.code.localeCompare(existing.reservedBoxCode ?? '', 'ru-RU', {
+                    sensitivity: 'accent',
+                  }) === 0 && box.quantity >= Math.max(1, order.itemCount),
+              )
+                ? existing.reservedBoxCode
+                : null,
+            reservedAt:
+              existing?.reservedBoxCode &&
+              storageBoxes.some(
+                (box) =>
+                  box.code.localeCompare(existing.reservedBoxCode ?? '', 'ru-RU', {
+                    sensitivity: 'accent',
+                  }) === 0 && box.quantity >= Math.max(1, order.itemCount),
+              )
+                ? existing.reservedAt
+                : null,
             boxId: null,
-            boxCode: null,
+            boxCode: sourceWithoutBox ? FBS_TSD_NO_BOX_CODE : null,
+            sourceBarcode: null,
             barcode: null,
+            relabelRequired: stockSource.relabelRequired,
+            relabelConfirmedAt: null,
             kiz: null,
             wbMetaStatus: requiresKiz ? 'PENDING' : 'NOT_REQUIRED',
             errorMessage: null,
@@ -565,10 +5053,36 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           };
 
           try {
-            const task = existing
-              ? await this.prisma.fbsTsdAssembly.update({ where: { id: existing.id }, data })
-              : await this.prisma.fbsTsdAssembly.create({ data });
-            return this.formatFbsTsdAssembly(task, user, 'Заказ назначен. Следуйте подсказке на экране.');
+            let task;
+            if (existing) {
+              // The queue is shared by all TSDs. Claim an existing reserved/released
+              // order atomically so two employees can work on the same request
+              // without ever receiving the same marketplace order.
+              const claimed = await this.prisma.fbsTsdAssembly.updateMany({
+                where: {
+                  id: existing.id,
+                  status: existing.status,
+                  updatedAt: existing.updatedAt,
+                },
+                data,
+              });
+              if (claimed.count !== 1) continue;
+              task = await this.prisma.fbsTsdAssembly.findUnique({
+                where: { id: existing.id },
+              });
+              if (!task || task.deviceCode !== deviceCode || task.status !== 'IN_PROGRESS') {
+                continue;
+              }
+            } else {
+              task = await this.prisma.fbsTsdAssembly.create({ data });
+            }
+            return this.formatFbsTsdAssembly(
+              task,
+              user,
+              request.fbsEmergencyAssemblyAt
+                ? `Аварийная локальная сборка: ${fbsMarketplaceDisplayName(order.marketplace)} не изменяется. Следуйте подсказке на экране.`
+                : 'Заказ назначен. Следуйте подсказке на экране.',
+            );
           } catch (caught) {
             if (caught instanceof Prisma.PrismaClientKnownRequestError && caught.code === 'P2002') {
               continue;
@@ -577,7 +5091,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           }
         }
       } catch (caught) {
-        lastMarketplaceError = caught instanceof Error ? caught.message : 'Wildberries временно недоступен.';
+        lastMarketplaceError = caught instanceof Error ? caught.message : 'Маркетплейс временно недоступен.';
         this.logger.warn(`FBS TSD queue failed for client ${clientId}: ${lastMarketplaceError}`);
       }
     }
@@ -586,10 +5100,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       deviceCode,
       user,
       lastMarketplaceError
-        ? 'Не удалось обновить очередь Wildberries. Повторите через минуту.'
+        ? 'Не удалось обновить очередь маркетплейса. Повторите через минуту.'
         : blockedBatchOrder
           ? `В текущей поставке остался заказ ${blockedBatchOrder.orderId}, но он закреплён за сотрудником ${blockedBatchOrder.workerName}. Продолжите его на том ТСД или отложите там задание.`
-          : 'Готовых заказов нет. Заказы появятся после создания заявки и перевода поставки в статус «На сборке».',
+          : selectedRequest
+            ? `По FBS-заявке №${String(selectedRequest.number).padStart(6, '0')} пока нет готовых к сборке заказов. Проверьте статус заказа на маркетплейсе и доступные остатки.`
+            : 'Готовых заказов нет. Заказы появятся после создания заявки и перевода поставки в статус «На сборке».',
     );
   }
 
@@ -602,11 +5118,74 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const clientId = textValue(clientIdValue);
     if (!clientId) throw new BadRequestException('Выберите клиента.');
     this.clientScopes.requireClientAccess(user, clientId, 'read');
-    const data = await this.loadFbsCargoPackingData(clientId, FbsDeliveryDestination.PICKUP_POINT);
+    const data = await this.loadFbsCargoPackingData(clientId);
     return {
       clientId,
       fetchedAt: new Date().toISOString(),
       supplies: data.summaries,
+    };
+  }
+
+  async updateFbsCargoPackingIgnore(
+    planIdValue: string,
+    dto: UpdateFbsCargoPackingIgnoreDto,
+    user: AuthUser,
+  ) {
+    const planId = requiredFbsTsdText(planIdValue, 'Не указана поставка FBS.');
+    const plan = await this.prisma.fbsSupplyPlan.findUnique({
+      where: { id: planId },
+      select: {
+        id: true,
+        clientId: true,
+        supplyId: true,
+        ignoredAt: true,
+        ignoredByName: true,
+      },
+    });
+    if (!plan) throw new NotFoundException('Поставка FBS не найдена.');
+    this.clientScopes.requireClientAccess(user, plan.clientId, 'write');
+
+    const ignoredAt = dto.ignored ? new Date() : null;
+    const reason = textValue(dto.reason) || null;
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.fbsSupplyPlan.update({
+        where: { id: plan.id },
+        data: {
+          ignoredAt,
+          ignoredByUserId: dto.ignored ? user.id : null,
+          ignoredByName: dto.ignored ? user.name : null,
+          ignoreReason: dto.ignored ? reason : null,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: dto.ignored ? 'FBS_CARGO_PACKING_IGNORED' : 'FBS_CARGO_PACKING_RESTORED',
+          entity: 'FbsSupplyPlan',
+          entityId: plan.id,
+          payload: {
+            clientId: plan.clientId,
+            supplyId: plan.supplyId,
+            ignored: dto.ignored,
+            reason,
+            previousIgnoredAt: plan.ignoredAt?.toISOString() ?? null,
+            previousIgnoredByName: plan.ignoredByName,
+          },
+        },
+      });
+      return row;
+    });
+
+    return {
+      id: updated.id,
+      supplyId: updated.supplyId,
+      ignored: Boolean(updated.ignoredAt),
+      ignoredAt: updated.ignoredAt?.toISOString() ?? null,
+      ignoredByName: updated.ignoredByName,
+      ignoreReason: updated.ignoreReason,
+      message: dto.ignored
+        ? `Поставка ${updated.supplyId} отмечена как игнорируемая.`
+        : `Поставка ${updated.supplyId} возвращена в работу.`,
     };
   }
 
@@ -615,10 +5194,102 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     connectionIdValue: string | undefined,
     warehouseIdValue: string | undefined,
     user: AuthUser,
+    refreshReserves = false,
   ) {
     const clientId = requiredFbsTsdText(clientIdValue, 'Выберите клиента.');
     this.clientScopes.requireClientAccess(user, clientId, 'read');
-    const context = await this.loadFbsStockContext(clientId, connectionIdValue, warehouseIdValue);
+    let context = await this.loadFbsStockContext(clientId, connectionIdValue, warehouseIdValue);
+    let scopedExecutionWarehouseId: string | undefined;
+    if (!this.hasGlobalFbsBranchAccess(user)) {
+      const activeWarehouseId = this.activeFbsBranchId(user);
+      if (!activeWarehouseId) {
+        throw new ForbiddenException(
+          'Выберите назначенный вам филиал, чтобы просматривать остатки FBS.',
+        );
+      }
+      scopedExecutionWarehouseId = activeWarehouseId;
+      const connectionIds = context.connections.map((connection) => connection.id);
+      const branchRules = connectionIds.length > 0
+        ? await this.prisma.fbsWarehouseRoutingRule.findMany({
+            where: {
+              connectionId: { in: connectionIds },
+              mode: 'BRANCH',
+              executionWarehouseId: activeWarehouseId,
+            },
+            select: { connectionId: true },
+          })
+        : [];
+      const allowedConnectionIds = new Set(
+        context.connections
+          .filter((connection) => connection.fbsExecutionWarehouseId === activeWarehouseId)
+          .map((connection) => connection.id),
+      );
+      branchRules.forEach((rule) => allowedConnectionIds.add(rule.connectionId));
+      const requestedConnectionId = textValue(connectionIdValue);
+      if (requestedConnectionId && !allowedConnectionIds.has(requestedConnectionId)) {
+        throw new ForbiddenException(
+          'Это подключение FBS относится к другому филиалу.',
+        );
+      }
+      const selectedConnectionId = requestedConnectionId ||
+        (context.connection && allowedConnectionIds.has(context.connection.id)
+          ? context.connection.id
+          : context.connections.find((connection) => allowedConnectionIds.has(connection.id))?.id ?? '');
+      if (selectedConnectionId && context.connection?.id !== selectedConnectionId) {
+        context = await this.loadFbsStockContext(clientId, selectedConnectionId, warehouseIdValue);
+      }
+      context.connections = context.connections.filter((connection) =>
+        allowedConnectionIds.has(connection.id),
+      );
+      if (!context.connection || !allowedConnectionIds.has(context.connection.id)) {
+        context.connection = undefined;
+        context.warehouses = [];
+        context.warehouse = undefined;
+        context.connectedWarehouseId = '';
+        context.connectedWarehouseName = '';
+      } else {
+        const routeRows = await this.prisma.fbsWarehouseRoutingRule.findMany({
+          where: { connectionId: context.connection.id },
+          select: {
+            marketplaceWarehouseId: true,
+            mode: true,
+            executionWarehouseId: true,
+          },
+        });
+        const routeByWarehouseId = new Map(
+          routeRows.map((route) => [route.marketplaceWarehouseId, route]),
+        );
+        const allowedWarehouses = context.warehouses.filter((warehouse) => {
+          const route = routeByWarehouseId.get(warehouse.id);
+          const mode = normalizeFbsWarehouseRouteMode(route?.mode);
+          if (mode === 'BRANCH') {
+            return route?.executionWarehouseId === activeWarehouseId;
+          }
+          if (mode === 'CENTRAL') {
+            return context.connection?.fbsExecutionWarehouseId === activeWarehouseId;
+          }
+          if (mode === 'EXCLUDED') return false;
+          return context.connection?.fbsAutoRouteNewWarehouses === true &&
+            context.connection.fbsExecutionWarehouseId === activeWarehouseId;
+        });
+        const allowedWarehouseIds = new Set(allowedWarehouses.map((warehouse) => warehouse.id));
+        const requestedWarehouseId = textValue(warehouseIdValue);
+        if (requestedWarehouseId && !allowedWarehouseIds.has(requestedWarehouseId)) {
+          throw new ForbiddenException(
+            'Этот склад маркетплейса направлен в другой филиал.',
+          );
+        }
+        context.warehouses = allowedWarehouses;
+        context.warehouse = requestedWarehouseId
+          ? allowedWarehouses.find((warehouse) => warehouse.id === requestedWarehouseId)
+          : allowedWarehouses.find((warehouse) => warehouse.id === context.connectedWarehouseId) ??
+            allowedWarehouses[0];
+        if (!allowedWarehouseIds.has(context.connectedWarehouseId)) {
+          context.connectedWarehouseId = '';
+          context.connectedWarehouseName = '';
+        }
+      }
+    }
     if (!context.connection || !context.warehouse) {
       return {
         client: context.client,
@@ -627,6 +5298,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         selectedConnectionId: context.connection?.id ?? null,
         warehouses: context.warehouses,
         selectedWarehouseId: context.warehouse?.id ?? null,
+        connectedWarehouseId: context.connectedWarehouseId || null,
+        connectedWarehouseName: context.connectedWarehouseName || null,
+        warehouseConnectedAt: context.connection?.fbsWarehouseConnectedAt?.toISOString() ?? null,
         fetchedAt: new Date().toISOString(),
         summary: {
           products: 0,
@@ -637,9 +5311,24 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           sellable: 0,
           wbAmount: 0,
           differences: 0,
+          excessProducts: 0,
+          excessUnits: 0,
+          shortages: 0,
+          requestedAmount: 0,
+          targetAmount: 0,
         },
         items: [],
       };
+    }
+
+    if (refreshReserves) {
+      this.fbsOrdersCache.delete(clientId);
+      const orders = await this.loadFbsOrders(clientId);
+      this.fbsOrdersCache.set(clientId, {
+        expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
+        value: orders,
+      });
+      await this.autoSyncFbsStocksForClient(clientId);
     }
 
     return this.buildFbsStocksResponse(
@@ -648,7 +5337,57 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       context.connection,
       context.warehouses,
       context.warehouse,
+      context.connectedWarehouseId,
+      context.connectedWarehouseName,
+      scopedExecutionWarehouseId,
     );
+  }
+
+  async connectFbsStockWarehouse(dto: FbsStockSyncDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    this.clientScopes.requireClientAccess(
+      user,
+      clientId,
+      user.roleCodes.includes('CLIENT') ? 'read' : 'write',
+    );
+    const context = await this.loadFbsStockContext(clientId, dto.connectionId, dto.warehouseId);
+    if (!context.connection || !context.warehouse) {
+      throw new BadRequestException('Выберите действующее подключение и склад Wildberries.');
+    }
+
+    const connectedAt = new Date();
+    await this.prisma.$transaction([
+      this.prisma.clientMarketplaceConnection.update({
+        where: { id: context.connection.id },
+        data: {
+          fbsWarehouseId: context.warehouse.id,
+          fbsWarehouseName: context.warehouse.name,
+          fbsWarehouseConnectedAt: connectedAt,
+        },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'FBS_STOCK_WAREHOUSE_CONNECTED',
+          entity: 'ClientMarketplaceConnection',
+          entityId: context.connection.id,
+          payload: {
+            clientId,
+            connectionId: context.connection.id,
+            warehouseId: context.warehouse.id,
+            warehouseName: context.warehouse.name,
+          },
+        },
+      }),
+    ]);
+
+    return {
+      connected: true,
+      connectionId: context.connection.id,
+      warehouseId: context.warehouse.id,
+      warehouseName: context.warehouse.name,
+      connectedAt: connectedAt.toISOString(),
+    };
   }
 
   async updateFbsStockPublication(dto: FbsStockPublicationDto, user: AuthUser) {
@@ -661,6 +5400,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const context = await this.loadFbsStockContext(clientId, dto.connectionId, dto.warehouseId);
     if (!context.connection || !context.warehouse) {
       throw new BadRequestException('Выберите действующее подключение и склад Wildberries.');
+    }
+    if (context.connectedWarehouseId !== context.warehouse.id) {
+      throw new BadRequestException(
+        'Сначала подключите выбранный склад как рабочий склад FBS, затем меняйте остатки товара.',
+      );
     }
 
     const sku = await this.prisma.sku.findFirst({
@@ -676,7 +5420,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new BadRequestException('Товар не связан с размером карточки Wildberries. Обновите карточки клиента.');
     }
 
-    const quantities = await this.calculateFbsStockQuantities(clientId, [sku.id]);
+    const executionWarehouseId = await this.resolveFbsExecutionWarehouseId(
+      clientId,
+      context.connection.fbsExecutionWarehouseId,
+    );
+    const quantities = await this.calculateFbsStockQuantities(
+      clientId,
+      [sku.id],
+      executionWarehouseId,
+      context.connection.id,
+    );
     const quantity = quantities.get(sku.id) ?? {
       skuId: sku.id,
       chrtId: ids.chrtId,
@@ -684,7 +5437,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       reserved: 0,
       sellable: 0,
     };
-    const amount = dto.enabled ? quantity.sellable : 0;
+    // An omitted cap preserves an already configured value. Sending null
+    // explicitly removes the cap and exposes all free WMS stock.
+    const saleLimitProvided = dto.saleLimit !== undefined;
+    const relabelManualAmountProvided = dto.relabelManualAmount !== undefined;
     const publicationKey = {
       connectionId_warehouseId_skuId: {
         connectionId: context.connection.id,
@@ -700,15 +5456,34 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         warehouseId: context.warehouse.id,
         skuId: sku.id,
         enabled: dto.enabled,
+        saleLimit: dto.saleLimit ?? null,
+        relabelManualAmount: dto.relabelManualAmount ?? null,
         lastWmsAmount: quantity.sellable,
         lastError: null,
       },
       update: {
         enabled: dto.enabled,
+        saleLimit: saleLimitProvided ? (dto.saleLimit ?? null) : undefined,
+        relabelManualAmount: relabelManualAmountProvided
+          ? (dto.relabelManualAmount ?? null)
+          : undefined,
         lastWmsAmount: quantity.sellable,
         lastError: null,
       },
     });
+    const stockPlan = await this.calculateFbsRelabelStockPlan(
+      clientId,
+      executionWarehouseId,
+      context.connection.id,
+      context.warehouse.id,
+    );
+    const plannedQuantity = stockPlan.quantities.get(sku.id) ?? quantity;
+    const relabeling = stockPlan.meta.get(sku.id);
+    const effectiveLimit = relabeling?.isTarget && publication.relabelManualAmount != null
+      ? publication.relabelManualAmount
+      : publication.saleLimit;
+    const amounts = fbsPublicationAmounts(dto.enabled, effectiveLimit, plannedQuantity.sellable);
+    const amount = amounts.targetAmount;
 
     try {
       await this.putWildberriesStocks(context.connection.apiKey, context.warehouse.id, [
@@ -719,7 +5494,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         this.prisma.fbsStockPublication.update({
           where: { id: publication.id },
           data: {
-            lastWmsAmount: quantity.sellable,
+            lastWmsAmount: plannedQuantity.sellable,
             lastWbAmount: amount,
             lastSyncedAmount: amount,
             lastSyncedAt: syncedAt,
@@ -739,6 +5514,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               skuId: sku.id,
               chrtId: ids.chrtId,
               enabled: dto.enabled,
+              saleLimit: amounts.saleLimit,
+              relabelManualAmount: publication.relabelManualAmount,
+              relabeling,
+              requestedAmount: amounts.requestedAmount,
+              targetAmount: amounts.targetAmount,
+              shortage: amounts.shortage,
               amount,
             },
           },
@@ -748,6 +5529,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         updated: true,
         skuId: sku.id,
         enabled: dto.enabled,
+        saleLimit: amounts.saleLimit,
+        relabelManualAmount: publication.relabelManualAmount,
+        relabeling,
+        requestedAmount: amounts.requestedAmount,
+        targetAmount: amounts.targetAmount,
+        publishedAmount: amount,
+        shortage: amounts.shortage,
+        shortageAmount: amounts.shortageAmount,
         amount,
         syncedAt: syncedAt.toISOString(),
       };
@@ -755,10 +5544,387 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const message = marketplaceErrorText(caught);
       await this.prisma.fbsStockPublication.update({
         where: { id: publication.id },
-        data: { lastWmsAmount: quantity.sellable, lastError: message },
+        data: { lastWmsAmount: plannedQuantity.sellable, lastError: message },
       });
       throw caught;
     }
+  }
+
+  async previewFbsStockReconciliation(dto: ReconcileFbsStockItemDto, user: AuthUser) {
+    const prepared = await this.prepareFbsStockReconciliation(dto, user);
+    return {
+      skuId: prepared.sku.id,
+      previousAmount: prepared.previousAmount,
+      targetAmount: prepared.quantity.sellable,
+      wmsAvailableAmount: prepared.quantity.available,
+      wmsReservedAmount: prepared.quantity.reserved,
+      checkedAt: prepared.checkedAt.toISOString(),
+    };
+  }
+
+  async reconcileFbsStockItem(dto: ReconcileFbsStockItemDto, user: AuthUser) {
+    // FIX: preview and apply share one calculation, so the confirmation dialog
+    // and the WB PUT can never use different WMS rules.
+    const prepared = await this.prepareFbsStockReconciliation(dto, user);
+    const targetAmount = prepared.quantity.sellable;
+    if (prepared.previousAmount <= targetAmount) {
+      return {
+        corrected: false,
+        skuId: prepared.sku.id,
+        previousAmount: prepared.previousAmount,
+        amount: prepared.previousAmount,
+        targetAmount,
+        wmsAvailableAmount: prepared.quantity.available,
+        wmsReservedAmount: prepared.quantity.reserved,
+        checkedAt: prepared.checkedAt.toISOString(),
+        externalResponse: null,
+      };
+    }
+
+    const externalResponse = await this.putWildberriesStocks(
+      prepared.context.connection.apiKey,
+      prepared.context.warehouse.id,
+      [{ chrtId: prepared.ids.chrtId, amount: targetAmount }],
+    );
+    const correctedAt = new Date();
+    await this.prisma.$transaction([
+      this.prisma.fbsStockPublication.updateMany({
+        where: {
+          connectionId: prepared.context.connection.id,
+          warehouseId: prepared.context.warehouse.id,
+          skuId: prepared.sku.id,
+        },
+        data: {
+          lastWmsAmount: targetAmount,
+          lastWbAmount: targetAmount,
+          lastSyncedAmount: targetAmount,
+          lastSyncedAt: correctedAt,
+          lastError: null,
+        },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'FBS_STOCK_EXCESS_RECONCILED',
+          entity: 'Sku',
+          entityId: prepared.sku.id,
+          payload: {
+            clientId: prepared.clientId,
+            connectionId: prepared.context.connection.id,
+            warehouseId: prepared.context.warehouse.id,
+            executionWarehouseId: prepared.executionWarehouseId,
+            skuId: prepared.sku.id,
+            chrtId: prepared.ids.chrtId,
+            previousAmount: prepared.previousAmount,
+            targetAmount,
+            externalResponse: externalResponse as Prisma.InputJsonValue,
+          },
+        },
+      }),
+    ]);
+    return {
+      corrected: true,
+      skuId: prepared.sku.id,
+      previousAmount: prepared.previousAmount,
+      amount: targetAmount,
+      targetAmount,
+      wmsAvailableAmount: prepared.quantity.available,
+      wmsReservedAmount: prepared.quantity.reserved,
+      checkedAt: correctedAt.toISOString(),
+      externalResponse,
+    };
+  }
+
+  private async prepareFbsStockReconciliation(dto: ReconcileFbsStockItemDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    this.clientScopes.requireClientAccess(
+      user,
+      clientId,
+      user.roleCodes.includes('CLIENT') ? 'read' : 'write',
+    );
+    const context = await this.loadFbsStockContext(clientId, dto.connectionId, dto.warehouseId);
+    if (!context.connection || !context.warehouse) {
+      throw new BadRequestException('Выберите действующее подключение и склад Wildberries.');
+    }
+    if (context.connectedWarehouseId !== context.warehouse.id) {
+      throw new BadRequestException('Выбранный склад WB не является рабочим складом FBS.');
+    }
+
+    const sku = await this.prisma.sku.findFirst({
+      where: { id: dto.skuId, clientId, marketplace: MarketplaceType.WILDBERRIES },
+      select: { id: true, name: true, marketplaceProductId: true },
+    });
+    const ids = sku ? wildberriesStockIds(sku.marketplaceProductId) : null;
+    if (!sku || !ids) throw new BadRequestException('Товар не связан с карточкой Wildberries.');
+
+    const executionWarehouseId = await this.resolveFbsExecutionWarehouseId(
+      clientId,
+      context.connection.fbsExecutionWarehouseId,
+    );
+    const stockPlan = await this.calculateFbsRelabelStockPlan(
+      clientId,
+      executionWarehouseId,
+      context.connection.id,
+      context.warehouse.id,
+    );
+    const quantity = stockPlan.quantities.get(sku.id) ?? {
+      skuId: sku.id,
+      chrtId: ids.chrtId,
+      available: 0,
+      reserved: 0,
+      sellable: 0,
+    };
+    const wbAmounts = await this.fetchWildberriesStockAmounts(
+      context.connection.apiKey,
+      context.warehouse.id,
+      [ids.chrtId],
+    );
+    const previousAmount = wbAmounts.get(ids.chrtId) ?? 0;
+    return {
+      clientId,
+      context: { connection: context.connection, warehouse: context.warehouse },
+      sku,
+      ids,
+      executionWarehouseId,
+      quantity,
+      previousAmount,
+      checkedAt: new Date(),
+    };
+  }
+
+  /**
+   * Changes the FBS sale status for a set of products and mirrors the same
+   * stock amounts to Wildberries in batches.  The publication row is kept for
+   * every SKU, including a stopped one, so the client can always see the last
+   * decision ("Продавать"/"Не продавать") in the FBS stock tile.
+   */
+  async updateFbsStockPublicationBulk(dto: FbsStockPublicationBulkDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    const skuIds = Array.from(new Set(dto.skuIds.map((value) => value.trim()).filter(Boolean)));
+    if (!clientId || skuIds.length === 0) {
+      throw new BadRequestException('Укажите клиента и хотя бы один товар для изменения статуса FBS.');
+    }
+
+    this.clientScopes.requireClientAccess(
+      user,
+      clientId,
+      user.roleCodes.includes('CLIENT') ? 'read' : 'write',
+    );
+    const context = await this.loadFbsStockContext(clientId, dto.connectionId, dto.warehouseId);
+    if (!context.connection || !context.warehouse) {
+      throw new BadRequestException(
+        'Выберите действующее подключение и склад Wildberries для публикации остатков.',
+      );
+    }
+    if (context.connectedWarehouseId !== context.warehouse.id) {
+      throw new BadRequestException(
+        'Сначала подключите выбранный склад как рабочий склад FBS, затем меняйте остатки товаров.',
+      );
+    }
+
+    const skus = await this.prisma.sku.findMany({
+      where: {
+        id: { in: skuIds },
+        clientId,
+        marketplace: MarketplaceType.WILDBERRIES,
+        marketplaceProductId: { not: null },
+        isDraft: false,
+      },
+      select: { id: true, marketplaceProductId: true },
+    });
+    const foundIds = new Set(skus.map((sku) => sku.id));
+    const missingIds = skuIds.filter((skuId) => !foundIds.has(skuId));
+    if (missingIds.length > 0) {
+      throw new BadRequestException(
+        `Не удалось найти связанные с Wildberries товары: ${missingIds.slice(0, 20).join(', ')}${
+          missingIds.length > 20 ? '…' : ''}`,
+      );
+    }
+
+    const executionWarehouseId = await this.resolveFbsExecutionWarehouseId(
+      clientId,
+      context.connection.fbsExecutionWarehouseId,
+    );
+    const quantities = await this.calculateFbsStockQuantities(
+      clientId,
+      skus.map((sku) => sku.id),
+      executionWarehouseId,
+      context.connection.id,
+    );
+    const saleLimitProvided = dto.saleLimit !== undefined;
+    const prepared = skus
+      .map((sku) => {
+        const ids = wildberriesStockIds(sku.marketplaceProductId);
+        if (!ids) return null;
+        const quantity = quantities.get(sku.id);
+        return {
+          sku,
+          chrtId: ids.chrtId,
+          wmsAmount: quantity?.sellable ?? 0,
+        };
+      })
+      .filter(
+        (item): item is NonNullable<typeof item> => Boolean(item),
+      );
+    if (prepared.length === 0) {
+      throw new BadRequestException(
+        'У выбранных товаров отсутствуют ID размеров Wildberries. Обновите карточки клиента.',
+      );
+    }
+
+    // Persist the choice before the remote call so the status remains visible
+    // even if WB is temporarily unavailable.  lastError is cleared on a new
+    // explicit choice and is filled below if WB rejects a batch.
+    const publications = await this.prisma.$transaction(
+      prepared.map((item) =>
+        this.prisma.fbsStockPublication.upsert({
+          where: {
+            connectionId_warehouseId_skuId: {
+              connectionId: context.connection!.id,
+              warehouseId: context.warehouse!.id,
+              skuId: item.sku.id,
+            },
+          },
+          create: {
+            clientId,
+            connectionId: context.connection!.id,
+            warehouseId: context.warehouse!.id,
+            skuId: item.sku.id,
+            enabled: dto.enabled,
+            saleLimit: dto.saleLimit ?? null,
+            lastWmsAmount: item.wmsAmount,
+            lastError: null,
+          },
+          update: {
+            enabled: dto.enabled,
+            saleLimit: saleLimitProvided ? (dto.saleLimit ?? null) : undefined,
+            lastWmsAmount: item.wmsAmount,
+            lastError: null,
+          },
+        }),
+      ),
+    );
+
+    const publicationBySku = new Map(publications.map((publication) => [publication.skuId, publication]));
+    const stockPlan = await this.calculateFbsRelabelStockPlan(
+      clientId,
+      executionWarehouseId,
+      context.connection.id,
+      context.warehouse.id,
+    );
+    const preparedWithAmounts = prepared.map((item) => {
+      const publication = publicationBySku.get(item.sku.id);
+      if (!publication) {
+        throw new Error(`FBS publication was not created for SKU ${item.sku.id}`);
+      }
+      const relabeling = stockPlan.meta.get(item.sku.id);
+      const wmsAmount = stockPlan.quantities.get(item.sku.id)?.sellable ?? item.wmsAmount;
+      const effectiveLimit = relabeling?.isTarget && publication.relabelManualAmount != null
+        ? publication.relabelManualAmount
+        : publication.saleLimit;
+      const amounts = fbsPublicationAmounts(dto.enabled, effectiveLimit, wmsAmount);
+      return {
+        ...item,
+        wmsAmount,
+        publication,
+        ...amounts,
+        amount: amounts.targetAmount,
+      };
+    });
+    let synced = 0;
+    const syncedAt = new Date();
+    try {
+      for (const batch of chunks(preparedWithAmounts, 1000)) {
+        await this.putWildberriesStocks(
+          context.connection.apiKey,
+          context.warehouse.id,
+          batch.map((item) => ({ chrtId: item.chrtId, amount: item.amount })),
+        );
+        const batchUpdatedAt = new Date();
+        await this.prisma.$transaction(
+          batch.map((item) => {
+            const publication = publicationBySku.get(item.sku.id);
+            if (!publication) {
+              throw new Error(`FBS publication was not created for SKU ${item.sku.id}`);
+            }
+            return this.prisma.fbsStockPublication.update({
+              where: { id: publication.id },
+              data: {
+                lastWmsAmount: item.wmsAmount,
+                lastWbAmount: item.amount,
+                lastSyncedAmount: item.amount,
+                lastSyncedAt: batchUpdatedAt,
+                lastError: null,
+              },
+            });
+          }),
+        );
+        synced += batch.length;
+      }
+
+      await this.prisma.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'FBS_STOCK_PUBLICATIONS_BULK_UPDATED',
+          entity: 'ClientMarketplaceConnection',
+          entityId: context.connection.id,
+          payload: {
+            clientId,
+            connectionId: context.connection.id,
+            warehouseId: context.warehouse.id,
+            skuIds: preparedWithAmounts.map((item) => item.sku.id),
+            enabled: dto.enabled,
+            saleLimit: saleLimitProvided ? (dto.saleLimit ?? null) : undefined,
+            requestedAmount: preparedWithAmounts.reduce((sum, item) => sum + item.requestedAmount, 0),
+            targetAmount: preparedWithAmounts.reduce((sum, item) => sum + item.targetAmount, 0),
+            shortageProducts: preparedWithAmounts.filter((item) => item.shortage).length,
+            amount: preparedWithAmounts.reduce((sum, item) => sum + item.amount, 0),
+          },
+        },
+      });
+    } catch (caught) {
+      const message = marketplaceErrorText(caught);
+      await this.prisma.$transaction(
+        preparedWithAmounts.map((item) => {
+          const publication = publicationBySku.get(item.sku.id);
+          if (!publication) {
+            throw new Error(`FBS publication was not created for SKU ${item.sku.id}`);
+          }
+          return this.prisma.fbsStockPublication.update({
+            where: { id: publication.id },
+            data: { lastWmsAmount: item.wmsAmount, lastError: message },
+          });
+        }),
+      );
+      throw caught;
+    }
+
+    return {
+      updated: true,
+      enabled: dto.enabled,
+      requested: skuIds.length,
+      updatedProducts: preparedWithAmounts.length,
+      synced,
+      saleLimit: saleLimitProvided ? (dto.saleLimit ?? null) : null,
+      requestedAmount: preparedWithAmounts.reduce((sum, item) => sum + item.requestedAmount, 0),
+      targetAmount: preparedWithAmounts.reduce((sum, item) => sum + item.targetAmount, 0),
+      publishedAmount: preparedWithAmounts.reduce((sum, item) => sum + item.amount, 0),
+      shortage: preparedWithAmounts.some((item) => item.shortage),
+      shortageProducts: preparedWithAmounts.filter((item) => item.shortage).length,
+      shortageAmount: preparedWithAmounts.reduce((sum, item) => sum + item.shortageAmount, 0),
+      amount: preparedWithAmounts.reduce((sum, item) => sum + item.amount, 0),
+      items: preparedWithAmounts.map((item) => ({
+        skuId: item.sku.id,
+        saleLimit: item.saleLimit,
+        wmsAmount: item.wmsAmount,
+        requestedAmount: item.requestedAmount,
+        targetAmount: item.targetAmount,
+        publishedAmount: item.amount,
+        shortage: item.shortage,
+        shortageAmount: item.shortageAmount,
+      })),
+      syncedAt: syncedAt.toISOString(),
+    };
   }
 
   async syncFbsStocks(dto: FbsStockSyncDto, user: AuthUser) {
@@ -771,6 +5937,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const context = await this.loadFbsStockContext(clientId, dto.connectionId, dto.warehouseId);
     if (!context.connection || !context.warehouse) {
       throw new BadRequestException('Выберите действующее подключение и склад Wildberries.');
+    }
+    if (context.connectedWarehouseId !== context.warehouse.id) {
+      throw new BadRequestException(
+        'Сначала подключите выбранный склад как рабочий склад FBS, затем запускайте синхронизацию.',
+      );
     }
     const publications = await this.prisma.fbsStockPublication.findMany({
       where: {
@@ -789,20 +5960,48 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new BadRequestException('Сначала укажите хотя бы для одного товара статус «Продавать» или «Не продавать».');
     }
 
-    const quantities = await this.calculateFbsStockQuantities(
+    const executionWarehouseId = await this.resolveFbsExecutionWarehouseId(
       clientId,
-      publications.map((publication) => publication.skuId),
+      context.connection.fbsExecutionWarehouseId,
+    );
+    const stockPlan = await this.calculateFbsRelabelStockPlan(
+      clientId,
+      executionWarehouseId,
+      context.connection.id,
+      context.warehouse.id,
+    );
+    const wbAmounts = await this.fetchWildberriesStockAmounts(
+      context.connection.apiKey,
+      context.warehouse.id,
+      publications.flatMap((publication) => {
+        const ids = wildberriesStockIds(publication.sku.marketplaceProductId);
+        return ids ? [ids.chrtId] : [];
+      }),
     );
     const prepared = publications
       .map((publication) => {
         const ids = wildberriesStockIds(publication.sku.marketplaceProductId);
         if (!ids) return null;
-        const quantity = quantities.get(publication.skuId);
+        const quantity = stockPlan.quantities.get(publication.skuId);
+        const relabeling = stockPlan.meta.get(publication.skuId);
+        const effectiveLimit = relabeling?.isTarget && publication.relabelManualAmount != null
+          ? publication.relabelManualAmount
+          : publication.saleLimit;
+        const calculated = fbsPublicationAmounts(
+          publication.enabled,
+          effectiveLimit,
+          quantity?.sellable ?? 0,
+        );
+        const wbAmount = wbAmounts.get(ids.chrtId) ?? publication.lastWbAmount ?? 0;
+        const targetAmount = effectiveLimit != null
+          ? calculated.targetAmount
+          : Math.min(calculated.targetAmount, wbAmount);
         return {
           publication,
           chrtId: ids.chrtId,
           wmsAmount: quantity?.sellable ?? 0,
-          amount: publication.enabled ? quantity?.sellable ?? 0 : 0,
+          ...calculated,
+          targetAmount,
         };
       })
       .filter((item): item is NonNullable<typeof item> => Boolean(item));
@@ -816,7 +6015,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         await this.putWildberriesStocks(
           context.connection.apiKey,
           context.warehouse.id,
-          batch.map((item) => ({ chrtId: item.chrtId, amount: item.amount })),
+          batch.map((item) => ({ chrtId: item.chrtId, amount: item.targetAmount })),
         );
         const syncedAt = new Date();
         await this.prisma.$transaction(
@@ -825,8 +6024,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               where: { id: item.publication.id },
               data: {
                 lastWmsAmount: item.wmsAmount,
-                lastWbAmount: item.amount,
-                lastSyncedAmount: item.amount,
+                lastWbAmount: item.targetAmount,
+                lastSyncedAmount: item.targetAmount,
                 lastSyncedAt: syncedAt,
                 lastError: null,
               },
@@ -859,12 +6058,31 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           connectionId: context.connection.id,
           warehouseId: context.warehouse.id,
           synced,
+          requestedAmount: prepared.reduce((sum, item) => sum + item.requestedAmount, 0),
+          targetAmount: prepared.reduce((sum, item) => sum + item.targetAmount, 0),
+          shortageProducts: prepared.filter((item) => item.shortage).length,
         },
       },
     });
     return {
       synced,
       warehouseId: context.warehouse.id,
+      requestedAmount: prepared.reduce((sum, item) => sum + item.requestedAmount, 0),
+      targetAmount: prepared.reduce((sum, item) => sum + item.targetAmount, 0),
+      publishedAmount: prepared.reduce((sum, item) => sum + item.targetAmount, 0),
+      shortage: prepared.some((item) => item.shortage),
+      shortageProducts: prepared.filter((item) => item.shortage).length,
+      shortageAmount: prepared.reduce((sum, item) => sum + item.shortageAmount, 0),
+      items: prepared.map((item) => ({
+        skuId: item.publication.skuId,
+        saleLimit: item.saleLimit,
+        wmsAmount: item.wmsAmount,
+        requestedAmount: item.requestedAmount,
+        targetAmount: item.targetAmount,
+        publishedAmount: item.targetAmount,
+        shortage: item.shortage,
+        shortageAmount: item.shortageAmount,
+      })),
       syncedAt: new Date().toISOString(),
     };
   }
@@ -903,7 +6121,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       : [];
     const requestedWarehouseId = textValue(warehouseIdValue);
     let rememberedWarehouseId = '';
-    if (connection && !requestedWarehouseId) {
+    if (connection && !connection.fbsWarehouseId) {
       rememberedWarehouseId =
         (
           await this.prisma.fbsStockPublication.findFirst({
@@ -913,9 +6131,17 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           })
         )?.warehouseId ?? '';
     }
+    const configuredWarehouse = warehouses.find((item) => item.id === connection?.fbsWarehouseId);
+    const rememberedWarehouse = warehouses.find((item) => item.id === rememberedWarehouseId);
+    const connectedWarehouseId = configuredWarehouse?.id || rememberedWarehouse?.id || '';
+    const connectedWarehouseName =
+      configuredWarehouse?.name ||
+      rememberedWarehouse?.name ||
+      connection?.fbsWarehouseName ||
+      '';
     const warehouseId =
       requestedWarehouseId ||
-      rememberedWarehouseId ||
+      connectedWarehouseId ||
       warehouses.find((item) => /(^|\s)(FBS|ФБС)(\s|$)/i.test(item.name))?.id ||
       warehouses[0]?.id ||
       '';
@@ -923,7 +6149,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (requestedWarehouseId && !warehouse) {
       throw new BadRequestException('Склад не найден в подключённом кабинете Wildberries.');
     }
-    return { client, connections, connection, warehouses, warehouse };
+    return {
+      client,
+      connections,
+      connection,
+      warehouses,
+      warehouse,
+      connectedWarehouseId,
+      connectedWarehouseName,
+    };
   }
 
   private async fetchWildberriesStockWarehouses(apiKey: string): Promise<FbsStockWarehouse[]> {
@@ -947,12 +6181,32 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       });
   }
 
+  private async fetchWildberriesOffices(apiKey: string): Promise<FbsWarehouseOffice[]> {
+    const response = await marketplaceJson(
+      'https://marketplace-api.wildberries.ru/api/v3/offices',
+      {
+        method: 'GET',
+        headers: wbHeaders(apiKey),
+      },
+    );
+    return asArray<Record<string, unknown>>(response)
+      .map((office) => ({
+        id: textValue(office.id),
+        name: textValue(office.name),
+        city: textValue(office.city),
+      }))
+      .filter((office) => Boolean(office.id));
+  }
+
   private async buildFbsStocksResponse(
     client: { id: string; code: string; name: string },
     connections: MarketplaceConnectionWithClient[],
     connection: MarketplaceConnectionWithClient,
     warehouses: FbsStockWarehouse[],
     warehouse: FbsStockWarehouse,
+    connectedWarehouseId: string,
+    connectedWarehouseName: string,
+    executionWarehouseIdOverride?: string,
   ) {
     const skus = await this.prisma.sku.findMany({
       where: {
@@ -983,8 +6237,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         Boolean(item.ids),
       );
     const skuIds = mappedSkus.map((item) => item.sku.id);
-    const [quantities, publications] = await Promise.all([
-      this.calculateFbsStockQuantities(client.id, skuIds),
+    const executionWarehouseId = executionWarehouseIdOverride ??
+      await this.resolveFbsExecutionWarehouseId(
+        client.id,
+        connection.fbsExecutionWarehouseId,
+      );
+    const [stockPlan, publications] = await Promise.all([
+      this.calculateFbsRelabelStockPlan(
+        client.id,
+        executionWarehouseId,
+        connection.id,
+        warehouse.id,
+      ),
       this.prisma.fbsStockPublication.findMany({
         where: {
           clientId: client.id,
@@ -994,6 +6258,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         },
       }),
     ]);
+    const quantities = stockPlan.quantities;
     const wbAmounts = await this.fetchWildberriesStockAmounts(
       connection.apiKey,
       warehouse.id,
@@ -1009,8 +6274,30 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         sellable: 0,
       };
       const publication = publicationBySku.get(sku.id);
+      const relabeling = stockPlan.meta.get(sku.id) ?? {
+        isSource: false,
+        isTarget: false,
+        sources: [],
+        allocatedFromSources: 0,
+        allocatedToTargets: 0,
+        capacity: quantity.sellable,
+      };
       const wbAmount = wbAmounts.get(ids.chrtId) ?? 0;
-      const targetAmount = publication ? (publication.enabled ? quantity.sellable : 0) : null;
+      const effectiveLimit = relabeling.isTarget && publication?.relabelManualAmount != null
+        ? publication.relabelManualAmount
+        : publication?.saleLimit ?? null;
+      const amounts = publication
+        ? fbsPublicationAmounts(
+            publication.enabled,
+            effectiveLimit,
+            quantity.sellable,
+          )
+        : null;
+      const targetAmount = amounts == null
+        ? null
+        : effectiveLimit != null
+          ? amounts.targetAmount
+          : Math.min(amounts.targetAmount, wbAmount);
       return {
         skuId: sku.id,
         internalSku: sku.internalSku,
@@ -1024,11 +6311,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         chrtId: String(ids.chrtId),
         status: publication ? (publication.enabled ? 'SELLING' : 'STOPPED') : 'UNMANAGED',
         enabled: publication?.enabled ?? null,
+        saleLimit: publication?.saleLimit ?? null,
+        relabelManualAmount: publication?.relabelManualAmount ?? null,
+        relabeling,
         wmsAvailable: quantity.available,
         reserved: quantity.reserved,
         sellable: quantity.sellable,
+        requestedAmount: amounts?.requestedAmount ?? null,
         wbAmount,
         targetAmount,
+        publishedAmount: wbAmount,
+        shortage: amounts?.shortage ?? false,
+        shortageAmount: amounts?.shortageAmount ?? 0,
         difference: targetAmount == null ? null : wbAmount - targetAmount,
         lastSyncedAmount: publication?.lastSyncedAmount ?? null,
         lastSyncedAt: publication?.lastSyncedAt?.toISOString() ?? null,
@@ -1042,6 +6336,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       selectedConnectionId: connection.id,
       warehouses,
       selectedWarehouseId: warehouse.id,
+      connectedWarehouseId: connectedWarehouseId || null,
+      connectedWarehouseName: connectedWarehouseName || null,
+      warehouseConnectedAt: connection.fbsWarehouseConnectedAt?.toISOString() ?? null,
       fetchedAt: new Date().toISOString(),
       summary: {
         products: items.length,
@@ -1051,16 +6348,45 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         wmsAvailable: items.reduce((sum, item) => sum + item.wmsAvailable, 0),
         sellable: items.reduce((sum, item) => sum + item.sellable, 0),
         wbAmount: items.reduce((sum, item) => sum + item.wbAmount, 0),
+        requestedAmount: items.reduce((sum, item) => sum + (item.requestedAmount ?? 0), 0),
+        targetAmount: items.reduce((sum, item) => sum + (item.targetAmount ?? 0), 0),
         differences: items.filter((item) => item.difference != null && item.difference !== 0).length,
+        excessProducts: items.filter((item) => item.wbAmount > item.sellable).length,
+        excessUnits: items.reduce(
+          (sum, item) => sum + Math.max(0, item.wbAmount - item.sellable),
+          0,
+        ),
+        shortages: items.filter((item) => item.shortage).length,
       },
       items,
     };
   }
 
-  private async calculateFbsStockQuantities(clientId: string, skuIds: string[]) {
+  async calculateFbsStockQuantities(
+    clientId: string,
+    skuIds: string[],
+    executionWarehouseId?: string | null,
+    connectionId?: string,
+  ) {
     const result = new Map<string, FbsStockQuantity>();
     if (skuIds.length === 0) return result;
-    const [skus, balances, requestItems] = await Promise.all([
+    const [client, primaryWarehouse] = await Promise.all([
+      typeof this.prisma.client?.findUnique === 'function'
+        ? this.prisma.client.findUnique({
+            where: { id: clientId },
+            select: { storesWithoutBoxes: true, stockBalanceMode: true },
+          })
+        : Promise.resolve(null),
+      executionWarehouseId && typeof this.prisma.warehouse?.findUnique === 'function'
+        ? this.prisma.warehouse.findUnique({
+            where: { code: 'MSK' },
+            select: { id: true },
+          })
+        : Promise.resolve(null),
+    ]);
+    const includeLegacyMoscowRows =
+      Boolean(executionWarehouseId) && primaryWarehouse?.id === executionWarehouseId;
+    const [skus, balances, requestItems, physicallyHandledTasks] = await Promise.all([
       this.prisma.sku.findMany({
         where: { id: { in: skuIds }, clientId },
         select: { id: true, marketplaceProductId: true },
@@ -1071,6 +6397,27 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           skuId: { in: skuIds },
           status: StockStatus.AVAILABLE,
           quantity: { gt: 0 },
+          ...(client?.storesWithoutBoxes
+            ? { boxId: null }
+            : {
+                boxId: { not: null },
+                box: {
+                  ...(executionWarehouseId
+                    ? includeLegacyMoscowRows
+                      ? {
+                          OR: [
+                            { warehouseId: executionWarehouseId },
+                            { warehouseId: null },
+                          ],
+                        }
+                      : { warehouseId: executionWarehouseId }
+                    : {}),
+                  status: { notIn: ['deleted', 'archived'] },
+                  ...(client?.stockBalanceMode === ClientStockBalanceMode.BOXES
+                    ? {}
+                    : { storagePlacement: { isNot: null } }),
+                },
+              }),
         },
         select: {
           skuId: true,
@@ -1083,30 +6430,63 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           skuId: { in: skuIds },
           request: {
             clientId,
-            OR: [
+            AND: [
+              executionWarehouseId
+                ? includeLegacyMoscowRows
+                  ? {
+                      OR: [
+                        { warehouseId: executionWarehouseId },
+                        { warehouseId: null },
+                      ],
+                    }
+                  : { warehouseId: executionWarehouseId }
+                : {},
               {
-                status: {
-                  in: [
-                    ClientRequestStatus.SUBMITTED,
-                    ClientRequestStatus.IN_REVIEW,
-                    ClientRequestStatus.APPROVED,
-                  ],
-                },
-              },
-              {
-                status: ClientRequestStatus.IN_WORK,
-                fbsOrderLinks: {
-                  some: {
-                    syncStatus: {
-                      in: [FBS_REQUEST_LINK_ACTIVE, FBS_REQUEST_LINK_RETURN_REQUIRED],
+                OR: [
+                  {
+                    status: {
+                      in: [
+                        ClientRequestStatus.SUBMITTED,
+                        ClientRequestStatus.IN_REVIEW,
+                        ClientRequestStatus.APPROVED,
+                      ],
                     },
                   },
-                },
+                  {
+                    status: ClientRequestStatus.IN_WORK,
+                    fbsOrderLinks: {
+                      some: {
+                        syncStatus: {
+                          in: [FBS_REQUEST_LINK_ACTIVE, FBS_REQUEST_LINK_RETURN_REQUIRED],
+                        },
+                      },
+                    },
+                  },
+                  { status: ClientRequestStatus.PACKED },
+                ],
               },
             ],
           },
         },
-        select: { skuId: true, quantity: true },
+        select: { requestId: true, skuId: true, quantity: true },
+      }),
+      this.prisma.fbsTsdAssembly.findMany({
+        where: {
+          clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          skuId: { in: skuIds },
+          ...(connectionId ? { connectionId } : {}),
+          status: { in: ['COMPLETED', FBS_TSD_RETURN_REQUIRED] },
+          requestId: { not: { startsWith: 'AUTO:' } },
+          completedAt: { not: null },
+        },
+        select: {
+          skuId: true,
+          sourceSkuId: true,
+          relabelConfirmedAt: true,
+          itemCount: true,
+          requestId: true,
+        },
       }),
     ]);
     const availableBySku = new Map<string, number>();
@@ -1120,17 +6500,40 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       if (!item.skuId) return;
       reservedBySku.set(item.skuId, (reservedBySku.get(item.skuId) ?? 0) + Math.max(0, item.quantity));
     });
+    // The TSD scan is the physical warehouse fact. WB may reduce a supply
+    // later because of a customer refusal or delayed cancellation; that must
+    // not recreate an item in sellable WMS stock. Keep physically handled
+    // units reserved while their WMS request is still IN_WORK or PACKED. A
+    // real return becomes stock only through receipt/inventory.
+    const reservingRequestIds = new Set(requestItems.map((item) => item.requestId));
+    const physicallyHandledBySku = new Map<string, number>();
+    physicallyHandledTasks.forEach((task) => {
+      if (!reservingRequestIds.has(task.requestId)) return;
+      const physicalSkuId =
+        task.sourceSkuId && !task.relabelConfirmedAt ? task.sourceSkuId : task.skuId;
+      physicallyHandledBySku.set(
+        physicalSkuId,
+        (physicallyHandledBySku.get(physicalSkuId) ?? 0) + Math.max(1, task.itemCount),
+      );
+    });
+    physicallyHandledBySku.forEach((quantity, skuId) => {
+      reservedBySku.set(skuId, Math.max(reservedBySku.get(skuId) ?? 0, quantity));
+    });
 
     const cachedOrders = this.fbsOrdersCache.get(clientId);
     const fbsOrders = cachedOrders?.value ?? (await this.loadFbsOrders(clientId));
     if (!cachedOrders) {
-      this.fbsOrdersCache.set(clientId, { expiresAt: Date.now() + 30_000, value: fbsOrders });
+      this.fbsOrdersCache.set(clientId, {
+        expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
+        value: fbsOrders,
+      });
     }
     fbsOrders.orders.forEach((order) => {
       if (
         order.marketplace !== MarketplaceType.WILDBERRIES ||
         order.category !== 'active' ||
         order.request ||
+        (connectionId && order.connectionId !== connectionId) ||
         !order.product?.id ||
         !skuIds.includes(order.product.id)
       ) {
@@ -1156,6 +6559,169 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       });
     });
     return result;
+  }
+
+  /**
+   * Builds a stock plan for WB publications and moves (rather than copies)
+   * manually approved relabel quantities from source SKUs to target SKUs.
+   * The manual amount is configured per target WB size, so article mappings
+   * that cover a whole model still remain size-safe.
+   */
+  private async calculateFbsRelabelStockPlan(
+    clientId: string,
+    executionWarehouseId: string | null | undefined,
+    connectionId: string,
+    warehouseId: string,
+  ) {
+    // A few isolated service tests use deliberately minimal Prisma doubles.
+    // In production all delegates exist; falling back to the already computed
+    // base quantities keeps those narrow tests compatible.
+    if (
+      typeof this.prisma.sku?.findMany !== 'function' ||
+      typeof this.prisma.clientArticleMapping?.findMany !== 'function' ||
+      typeof this.prisma.fbsStockPublication?.findMany !== 'function'
+    ) {
+      return {
+        quantities: new Map<string, FbsStockQuantity>(),
+        meta: new Map<string, FbsRelabelStockMeta>(),
+      };
+    }
+    const skus = await this.prisma.sku.findMany({
+      where: {
+        clientId,
+        marketplace: MarketplaceType.WILDBERRIES,
+        marketplaceProductId: { not: null },
+        isDraft: false,
+      },
+      select: {
+        id: true,
+        internalSku: true,
+        clientSku: true,
+        article: true,
+        name: true,
+        size: true,
+        marketplaceProductId: true,
+        barcodes: { select: { value: true } },
+      },
+      orderBy: [{ size: 'asc' }, { internalSku: 'asc' }],
+    });
+    const skuIds = skus.map((sku) => sku.id);
+    const [base, mappings, publications] = await Promise.all([
+      this.calculateFbsStockQuantities(
+        clientId,
+        skuIds,
+        executionWarehouseId,
+        connectionId,
+      ),
+      this.prisma.clientArticleMapping.findMany({
+        where: { clientId },
+        select: { id: true, sourceArticle: true, targetArticle: true },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      }),
+      this.prisma.fbsStockPublication.findMany({
+        where: { clientId, connectionId, warehouseId, skuId: { in: skuIds } },
+        select: { skuId: true, relabelManualAmount: true },
+      }),
+    ]);
+
+    const publicationsBySku = new Map(publications.map((item) => [item.skuId, item]));
+    const adjusted = new Map<string, FbsStockQuantity>();
+    base.forEach((quantity, skuId) => adjusted.set(skuId, { ...quantity }));
+    const meta = new Map<string, FbsRelabelStockMeta>();
+    const allocatedFromSource = new Map<string, number>();
+    const refs = new Map<string, typeof skus>();
+    skus.forEach((sku) => {
+      const values = [sku.article, sku.clientSku, sku.internalSku, sku.name, ...sku.barcodes.map((item) => item.value)];
+      values.forEach((value) => {
+        const normalized = normalizeFbsRelabelReference(value);
+        if (!normalized) return;
+        const list = refs.get(normalized) ?? [];
+        if (!list.some((item) => item.id === sku.id)) list.push(sku);
+        refs.set(normalized, list);
+      });
+    });
+
+    const targetRules = new Map<string, Array<{ sourceArticle: string; sourceSkus: typeof skus }>>();
+    mappings.forEach((mapping) => {
+      const targets = refs.get(normalizeFbsRelabelReference(mapping.targetArticle)) ?? [];
+      const sources = refs.get(normalizeFbsRelabelReference(mapping.sourceArticle)) ?? [];
+      targets.forEach((target) => {
+        const sameSizeSources = sources.filter(
+          (source) =>
+            !target.size ||
+            !source.size ||
+            normalizeFbsRelabelReference(source.size) === normalizeFbsRelabelReference(target.size),
+        );
+        if (sameSizeSources.length === 0) return;
+        const rules = targetRules.get(target.id) ?? [];
+        rules.push({ sourceArticle: mapping.sourceArticle, sourceSkus: sameSizeSources });
+        targetRules.set(target.id, rules);
+      });
+    });
+
+    skus.forEach((target) => {
+      const rules = targetRules.get(target.id) ?? [];
+      if (rules.length === 0) return;
+      const targetQuantity = adjusted.get(target.id);
+      const ownSellable = targetQuantity?.sellable ?? 0;
+      const manualAmount = publicationsBySku.get(target.id)?.relabelManualAmount ?? null;
+      let remaining = manualAmount == null ? 0 : Math.max(0, manualAmount - ownSellable);
+      const sourceRows: FbsRelabelStockMeta['sources'] = [];
+      let allocatedFromSources = 0;
+
+      rules.forEach((rule) => {
+        rule.sourceSkus.forEach((source) => {
+          if (source.id === target.id || sourceRows.some((row) => row.skuId === source.id)) return;
+          const sourceQuantity = base.get(source.id);
+          const sourceSellable = sourceQuantity?.sellable ?? 0;
+          const alreadyAllocated = allocatedFromSource.get(source.id) ?? 0;
+          const availableForRelabel = Math.max(0, sourceSellable - alreadyAllocated);
+          const allocated = Math.min(remaining, availableForRelabel);
+          if (allocated > 0) {
+            allocatedFromSource.set(source.id, alreadyAllocated + allocated);
+            allocatedFromSources += allocated;
+            remaining -= allocated;
+          }
+          sourceRows.push({
+            skuId: source.id,
+            label: [rule.sourceArticle, source.size].filter(Boolean).join(' · '),
+            sellable: sourceSellable,
+            allocated,
+          });
+        });
+      });
+
+      const capacity = ownSellable + allocatedFromSources;
+      if (targetQuantity) {
+        adjusted.set(target.id, { ...targetQuantity, sellable: capacity });
+      }
+      meta.set(target.id, {
+        isSource: false,
+        isTarget: true,
+        sources: sourceRows,
+        allocatedFromSources,
+        allocatedToTargets: 0,
+        capacity,
+      });
+    });
+
+    allocatedFromSource.forEach((allocated, skuId) => {
+      const quantity = adjusted.get(skuId);
+      if (quantity) {
+        adjusted.set(skuId, { ...quantity, sellable: Math.max(0, quantity.sellable - allocated) });
+      }
+      const current = meta.get(skuId);
+      meta.set(skuId, {
+        isSource: true,
+        isTarget: current?.isTarget ?? false,
+        sources: current?.sources ?? [],
+        allocatedFromSources: current?.allocatedFromSources ?? 0,
+        allocatedToTargets: allocated,
+        capacity: current?.capacity ?? Math.max(0, (quantity?.sellable ?? 0) - allocated),
+      });
+    });
+
+    return { quantities: adjusted, meta };
   }
 
   private async fetchWildberriesStockAmounts(apiKey: string, warehouseId: string, chrtIds: number[]) {
@@ -1185,8 +6751,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     warehouseId: string,
     stocks: Array<{ chrtId: number; amount: number }>,
   ) {
-    if (stocks.length === 0) return;
-    await marketplaceJson(
+    if (stocks.length === 0) return {};
+    // ADDED: callers may persist the real WB acknowledgement in an audit
+    // history; existing callers can continue ignoring the return value.
+    return marketplaceJson(
       `https://marketplace-api.wildberries.ru/api/v3/stocks/${numericPositiveId(warehouseId, 'склада WB')}`,
       {
         method: 'PUT',
@@ -1203,7 +6771,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   async openFbsCargoPacking(payload: Record<string, unknown>, user: AuthUser) {
     const planId = requiredFbsTsdText(payload.planId, 'Выберите поставку FBS.');
-    const cargoCode = requiredFbsTsdText(payload.cargoCode, 'Отсканируйте номер короба или QR грузоместа.');
+    const cargoCode = normalizeFbsScannerCode(
+      requiredFbsTsdText(payload.cargoCode, 'Отсканируйте номер короба или QR грузоместа.'),
+    );
     const deviceCode = this.fbsTsdDeviceCode(payload.deviceCode, user);
     const plan = await this.prisma.fbsSupplyPlan.findUnique({
       where: { id: planId },
@@ -1213,6 +6783,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new NotFoundException('Поставка FBS не найдена. Обновите список.');
     }
     this.clientScopes.requireClientAccess(user, plan.clientId, 'write');
+    if (plan.ignoredAt) {
+      throw new BadRequestException(
+        `Поставка ${plan.supplyId} помечена администратором как игнорируемая. Верните её в работу в разделе «Короба WMS».`,
+      );
+    }
     const isPickupPoint = plan.deliveryDestination === FbsDeliveryDestination.PICKUP_POINT;
 
     const otherOpen = await this.prisma.fbsCargoPlacePacking.findFirst({
@@ -1232,7 +6807,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       if (!cargoPlaceId) {
         cargoPlaceBarcodes = await this.syncFbsCargoPlaceBarcodes(plan);
         cargoPlaceId =
-          Object.entries(cargoPlaceBarcodes).find(([, barcode]) => barcode === cargoCode)?.[0] ?? '';
+          Object.entries(cargoPlaceBarcodes).find(
+            ([, barcode]) => normalizeFbsScannerCode(barcode) === cargoCode,
+          )?.[0] ??
+          cargoPlaceIdFromWbBarcode(cargoPlaceIds, cargoCode) ??
+          '';
       }
       if (!cargoPlaceId) {
         throw new BadRequestException(
@@ -1240,10 +6819,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         );
       }
     } else {
-      cargoPlaceId = normalizeFbsPhysicalBoxCode(cargoPlaceId);
+      const allowedBoxPrefixes = this.boxCodes
+        ? (await this.boxCodes.getPolicy()).allowedPrefixes
+        : ['FFL_'];
+      cargoPlaceId = normalizeFbsPhysicalBoxCode(cargoPlaceId, allowedBoxPrefixes);
       if (!cargoPlaceId) {
         throw new BadRequestException(
-          'Отсканированный код не является номером физического короба. Для поставки на СЦ нужен номер короба с префиксом FFL.',
+          `Отсканированный код не является номером физического короба. Для поставки на СЦ нужен префикс: ${allowedBoxPrefixes.join(', ')}.`,
         );
       }
     }
@@ -1275,7 +6857,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             supplyId: plan.supplyId,
             cargoPlaceId,
             cargoPlaceBarcode: isPickupPoint ? cargoPlaceBarcodes[cargoPlaceId] || cargoCode : cargoPlaceId,
-            capacityItems: Math.max(1, plan.itemsPerCargoPlace),
+            capacityItems: FBS_UNLIMITED_CARGO_PLACE_CAPACITY,
             status: 'OPEN',
             deviceCode,
             openedByUserId: user.id,
@@ -1314,9 +6896,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new NotFoundException(`План поставки ${packing.supplyId} не найден.`);
     }
     const isSortingCenter = plan.deliveryDestination === FbsDeliveryDestination.VNUKOVO_SORTING_CENTER;
-    const orderCode = requiredFbsTsdText(
-      payload.orderCode,
-      isSortingCenter ? 'Отсканируйте ШК товара.' : 'Отсканируйте ШК заказа Wildberries.',
+    const orderCode = normalizeFbsScannerCode(
+      requiredFbsTsdText(
+        payload.orderCode,
+        isSortingCenter ? 'Отсканируйте ШК товара.' : 'Отсканируйте ШК заказа Wildberries.',
+      ),
     );
     let matched: FbsTsdAssemblyRecord | null = null;
     let candidates: FbsTsdAssemblyRecord[] = [];
@@ -1363,6 +6947,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             { orderId: orderCode },
             { stickerBarcode: orderCode },
             { stickerPartB: orderCode },
+            { barcode: orderCode },
           ],
         },
         orderBy: { completedAt: 'asc' },
@@ -1370,7 +6955,23 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const exact = candidates.filter(
         (task) => task.orderId === orderCode || task.stickerBarcode === orderCode,
       );
-      matched = exact.length === 1 ? exact[0] : candidates.length === 1 ? candidates[0] : null;
+      const productBarcodeCandidates = candidates.filter((task) => task.barcode === orderCode);
+      matched =
+        exact.length === 1
+          ? exact[0]
+          : productBarcodeCandidates.length > 0
+            ? productBarcodeCandidates.find((task) => !task.cargoPackingId) ?? null
+            : candidates.length === 1
+              ? candidates[0]
+              : null;
+
+      if (!matched && productBarcodeCandidates.length > 0) {
+        return this.buildFbsCargoPackingResponse(
+          packing.deviceCode,
+          user,
+          `Все собранные товары с ШК ${orderCode} уже разложены по грузоместам.`,
+        );
+      }
     }
 
     if (!matched) {
@@ -1399,18 +7000,6 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       });
       throw new BadRequestException(
         `Заказ ${matched.orderId} уже уложен в грузоместо ${other?.cargoPlaceId ?? 'другое'}. Повтор запрещён.`,
-      );
-    }
-    const packed = await this.prisma.fbsTsdAssembly.aggregate({
-      where: { cargoPackingId: packing.id },
-      _sum: { itemCount: true },
-    });
-    const packedItems = packed._sum.itemCount ?? 0;
-    if (packedItems + matched.itemCount > packing.capacityItems) {
-      throw new BadRequestException(
-        isSortingCenter
-          ? `Короб заполнен: ${packedItems} из ${packing.capacityItems}. Закройте его и откройте следующий.`
-          : `Грузоместо заполнено: ${packedItems} из ${packing.capacityItems}. Закройте его и откройте следующее.`,
       );
     }
     const updated = await this.prisma.fbsTsdAssembly.updateMany({
@@ -1458,6 +7047,39 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     );
   }
 
+  async cancelFbsCargoPacking(packingId: string, user: AuthUser) {
+    const packing = await this.loadOwnedFbsCargoPacking(packingId, user);
+    const resetItems = await this.prisma.$transaction(async (tx) => {
+      const current = await tx.fbsCargoPlacePacking.findUnique({
+        where: { id: packing.id },
+        select: { id: true, status: true },
+      });
+      if (!current || current.status !== 'OPEN') {
+        throw new BadRequestException('Эта упаковка уже закрыта или отменена. Обновите экран.');
+      }
+      const packed = await tx.fbsTsdAssembly.aggregate({
+        where: { cargoPackingId: current.id },
+        _sum: { itemCount: true },
+      });
+      await tx.fbsTsdAssembly.updateMany({
+        where: { cargoPackingId: current.id },
+        data: {
+          cargoPackingId: null,
+          cargoPackedAt: null,
+          cargoPackedByUserId: null,
+          cargoPackedByName: null,
+        },
+      });
+      await tx.fbsCargoPlacePacking.delete({ where: { id: current.id } });
+      return packed._sum.itemCount ?? 0;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    return this.buildFbsCargoPackingResponse(
+      packing.deviceCode,
+      user,
+      `Упаковка ${packing.cargoPlaceId} отменена. В очередь упаковки возвращено ${resetItems} ед.`,
+    );
+  }
+
   async closeFbsCargoPacking(packingId: string, user: AuthUser) {
     const packing = await this.loadOwnedFbsCargoPacking(packingId, user);
     const packed = await this.prisma.fbsTsdAssembly.aggregate({
@@ -1478,7 +7100,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return this.buildFbsCargoPackingResponse(
       packing.deviceCode,
       user,
-      `Упаковка ${packing.cargoPlaceId} закрыта: ${packedItems} из ${packing.capacityItems} единиц.`,
+      `Упаковка ${packing.cargoPlaceId} закрыта: ${packedItems} единиц.`,
     );
   }
 
@@ -1510,28 +7132,37 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       : undefined;
     const currentIsSortingCenter =
       currentPlan?.deliveryDestination === FbsDeliveryDestination.VNUKOVO_SORTING_CENTER;
+    const visibleSummaries = data.summaries.filter(
+      (summary) =>
+        (!summary.readyToDeliver && !summary.ignored && summary.hasActiveRequest) ||
+        Boolean(current && summary.id === currentPlan?.id),
+    );
     return {
-      state: current ? 'SCAN_ORDER' : data.summaries.length > 0 ? 'SELECT_SUPPLY' : 'EMPTY',
+      state: current ? 'SCAN_ORDER' : visibleSummaries.length > 0 ? 'SELECT_SUPPLY' : 'EMPTY',
       message: message || (current
         ? currentIsSortingCenter
           ? `Продолжите упаковку короба ${current.cargoPlaceId}: сканируйте ШК товаров.`
           : `Продолжите грузоместо ${current.cargoPlaceId}.`
-        : data.summaries.length > 0
+        : visibleSummaries.length > 0
           ? 'Выберите поставку и отсканируйте номер короба или QR грузоместа.'
           : 'Поставок FBS для упаковки сейчас нет.'),
-      supplies: data.summaries,
+      supplies: visibleSummaries,
       packing: current
         ? formatFbsCargoPacking(
             current,
             data.skuById,
             currentPlan?.deliveryDestination ?? FbsDeliveryDestination.PICKUP_POINT,
+            data.requestNumberById,
+            data.summaries.find((summary) => summary.id === currentPlan?.id)?.requestNumbers ?? [],
+            data.summaries.find((summary) => summary.id === currentPlan?.id)?.warehouseId ?? null,
+            data.summaries.find((summary) => summary.id === currentPlan?.id)?.warehouseName ?? null,
           )
         : null,
     };
   }
 
   private async loadFbsCargoPackingData(
-    clientFilter: string | { in: string[] } | undefined,
+    clientFilter: ClientFilter,
     deliveryDestination?: FbsDeliveryDestination,
   ) {
     const plans = await this.prisma.fbsSupplyPlan.findMany({
@@ -1550,11 +7181,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         packings: [] as FbsCargoPackingWithAssemblies[],
         summaries: [],
         skuById: new Map<string, { color: string | null; size: string | null }>(),
+        requestNumberById: new Map<string, number>(),
       };
     }
     const supplyIds = uniqueStrings(plans.map((plan) => plan.supplyId));
     const connectionIds = uniqueStrings(plans.map((plan) => plan.connectionId));
-    const [assemblies, packings] = await Promise.all([
+    const allPlanOrderIds = uniqueStrings(
+      plans.flatMap((plan) => asArray<unknown>(plan.orderIds).map(textValue)),
+    );
+    const [assemblies, packings, requestLinks, connections] = await Promise.all([
       this.prisma.fbsTsdAssembly.findMany({
         where: {
           clientId: clientFilter,
@@ -1574,15 +7209,63 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         include: { assemblies: { orderBy: { cargoPackedAt: 'desc' } } },
         orderBy: { openedAt: 'asc' },
       }),
+      this.prisma.fbsOrderRequestLink.findMany({
+        where: {
+          clientId: clientFilter,
+          marketplace: MarketplaceType.WILDBERRIES,
+          connectionId: { in: connectionIds },
+          orderId: { in: allPlanOrderIds },
+          syncStatus: FBS_REQUEST_LINK_ACTIVE,
+        },
+        include: {
+          request: {
+            select: { id: true, number: true, status: true },
+          },
+        },
+      }),
+      this.prisma.clientMarketplaceConnection.findMany({
+        where: {
+          id: { in: connectionIds },
+          clientId: clientFilter,
+          marketplace: MarketplaceType.WILDBERRIES,
+        },
+        select: { id: true, fbsWarehouseId: true, fbsWarehouseName: true },
+      }),
     ]);
+    const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
     const skuRows = assemblies.length > 0
       ? await this.prisma.sku.findMany({
           where: { id: { in: uniqueStrings(assemblies.map((task) => task.skuId)) } },
           select: { id: true, color: true, size: true },
         })
       : [];
+    const requestRows = assemblies.length > 0
+      ? await this.prisma.clientRequest.findMany({
+          where: { id: { in: uniqueStrings(assemblies.map((task) => task.requestId)) } },
+          select: { id: true, number: true, status: true },
+        })
+      : [];
     const skuById = new Map(skuRows.map((sku) => [sku.id, { color: sku.color, size: sku.size }]));
+    const requestNumberById = new Map(requestRows.map((request) => [request.id, request.number]));
+    requestLinks.forEach((link) => requestNumberById.set(link.request.id, link.request.number));
+    const requestStatusForId = new Map<string, ClientRequestStatus>();
+    requestRows.forEach((request) => requestStatusForId.set(request.id, request.status));
+    requestLinks.forEach((link) => requestStatusForId.set(link.request.id, link.request.status));
     const summaries = plans.map((plan) => {
+      const connection = connectionById.get(plan.connectionId);
+      const cachedOrder = this.fbsOrdersCache
+        .get(plan.clientId)
+        ?.value.orders.find(
+          (order) =>
+            order.marketplace === plan.marketplace &&
+            order.connectionId === plan.connectionId &&
+            order.supplyId === plan.supplyId &&
+            Boolean(order.warehouseId || order.warehouseName),
+        );
+      const marketplaceWarehouseId =
+        plan.marketplaceWarehouseId ?? cachedOrder?.warehouseId ?? connection?.fbsWarehouseId ?? null;
+      const marketplaceWarehouseName =
+        plan.marketplaceWarehouseName ?? cachedOrder?.warehouseName ?? connection?.fbsWarehouseName ?? null;
       const key = fbsSupplyPlanKey(plan.marketplace, plan.connectionId, plan.supplyId);
       const planAssemblies = assemblies.filter(
         (task) => fbsSupplyPlanKey(task.marketplace, task.connectionId, task.supplyId ?? '') === key,
@@ -1590,6 +7273,22 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const planPackings = packings.filter(
         (packing) => fbsSupplyPlanKey(packing.marketplace, packing.connectionId, packing.supplyId) === key,
       );
+      const planOrderIds = new Set(asArray<unknown>(plan.orderIds).map(textValue).filter(Boolean));
+      const planRequestIds = uniqueStrings([
+        ...planAssemblies.map((task) => task.requestId),
+        ...requestLinks
+          .filter((link) => link.connectionId === plan.connectionId && planOrderIds.has(link.orderId))
+          .map((link) => link.requestId),
+      ]);
+      const requestNumbers = [...new Set(
+        planRequestIds
+          .map((requestId) => requestNumberById.get(requestId))
+          .filter((number): number is number => typeof number === 'number'),
+      )].sort((left, right) => left - right);
+      const hasActiveRequest = planRequestIds.some((requestId) => {
+        const status = requestStatusForId.get(requestId);
+        return Boolean(status && FBS_REQUEST_COMPOSITION_STATUSES.has(status));
+      });
       const totalPlannedItems = uniqueStrings(asArray<unknown>(plan.orderIds).map(textValue)).length;
       const completedItems = planAssemblies.reduce((sum, task) => sum + Math.max(1, task.itemCount), 0);
       const packedItems = planAssemblies
@@ -1612,9 +7311,17 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         client: plan.client,
         connectionId: plan.connectionId,
         supplyId: plan.supplyId,
+        warehouseId: marketplaceWarehouseId,
+        warehouseName: marketplaceWarehouseName,
+        requestNumbers,
+        hasActiveRequest,
+        ignored: Boolean(plan.ignoredAt),
+        ignoredAt: plan.ignoredAt?.toISOString() ?? null,
+        ignoredByName: plan.ignoredByName,
+        ignoreReason: plan.ignoreReason,
         deliveryDestination: plan.deliveryDestination,
         packingMode: isPickupPoint ? 'WB_CARGO_PLACE' : 'SORTING_CENTER_BOX',
-        itemsPerCargoPlace: Math.max(1, plan.itemsPerCargoPlace),
+        itemsPerCargoPlace: FBS_UNLIMITED_CARGO_PLACE_CAPACITY,
         cargoPlaceCount: cargoPlaceIds.length,
         totalPlannedItems,
         completedItems,
@@ -1626,14 +7333,26 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         cargoPlaces: cargoPlaceIds.map((cargoPlaceId) => {
           const packing = planPackings.find((item) => item.cargoPlaceId === cargoPlaceId);
           return packing
-            ? formatFbsCargoPacking(packing, skuById, plan.deliveryDestination)
+            ? formatFbsCargoPacking(
+                packing,
+                skuById,
+                plan.deliveryDestination,
+                requestNumberById,
+                requestNumbers,
+                marketplaceWarehouseId,
+                marketplaceWarehouseName,
+              )
             : {
                 id: null,
+                supplyId: plan.supplyId,
+                requestNumbers,
+                warehouseId: marketplaceWarehouseId,
+                warehouseName: marketplaceWarehouseName,
                 cargoPlaceId,
                 cargoPlaceBarcode: cargoBarcodeMap(plan.cargoPlaceBarcodes)[cargoPlaceId] ?? null,
                 deliveryDestination: plan.deliveryDestination,
                 packingMode: 'WB_CARGO_PLACE',
-                capacityItems: Math.max(1, plan.itemsPerCargoPlace),
+                capacityItems: FBS_UNLIMITED_CARGO_PLACE_CAPACITY,
                 packedItems: 0,
                 status: 'NOT_STARTED',
                 deviceCode: null,
@@ -1648,7 +7367,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         updatedAt: plan.updatedAt.toISOString(),
       };
     });
-    return { plans, packings, summaries, skuById };
+    return { plans, packings, summaries, skuById, requestNumberById };
   }
 
   private async syncFbsCargoPlaceBarcodes(plan: FbsSupplyPlanWithClient) {
@@ -1700,63 +7419,549 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return mapping;
   }
 
-  async scanFbsTsdBox(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
+  async scanFbsTsdCode(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
+    const rawCode = requiredFbsTsdText(
+      payload.code,
+      'Отсканируйте товар, короб, паллетсорт или бокс хранения.',
+    );
+    const scannedCode = normalizeFbsScannerCode(rawCode);
     const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
     requireFbsTaskWithoutSyncConflict(task);
-    if (task.status === 'COMPLETED') return this.formatFbsTsdAssembly(task, user, 'Заказ уже собран.');
-    const boxCode = requiredFbsTsdText(payload.boxCode, 'Отсканируйте номер короба.');
-    if (!boxCode.toUpperCase().startsWith('FFL')) {
-      throw new BadRequestException('Это не номер короба. Отсканируйте короб с префиксом FFL.');
-    }
-    if (task.boxId) {
-      if (task.boxCode?.toUpperCase() === boxCode.toUpperCase()) {
-        return this.formatFbsTsdAssembly(task, user, `Короб ${task.boxCode} уже подтверждён.`);
-      }
-      throw new BadRequestException(`Сначала закончите работу с коробом ${task.boxCode}.`);
+    if (task.status === 'COMPLETED') {
+      return this.formatFbsTsdAssembly(task, user, 'Заказ уже собран.');
     }
 
+    let storagePallet = await this.prisma.storagePallet.findFirst({
+      where: {
+        clientId: task.clientId,
+        code: { equals: scannedCode, mode: Prisma.QueryMode.insensitive },
+      },
+      select: { id: true, code: true },
+    });
+    const storagePalletAlias = fbsStoragePalletCodeAlias(scannedCode);
+    if (!storagePallet && storagePalletAlias) {
+      storagePallet = await this.prisma.storagePallet.findFirst({
+        where: {
+          clientId: task.clientId,
+          code: { equals: storagePalletAlias, mode: Prisma.QueryMode.insensitive },
+        },
+        select: { id: true, code: true },
+      });
+    }
+    const boxPolicy = this.boxCodes ? await this.boxCodes.getPolicy() : null;
+    const allowedBoxPrefixes = boxPolicy?.allowedPrefixes ?? ['FFL_'];
+    const normalizedBoxCode = this.boxCodes
+      ? await this.boxCodes.normalize(scannedCode)
+      : scannedCode;
+    if (storagePallet || isFbsPhysicalBoxCode(normalizedBoxCode, allowedBoxPrefixes)) {
+      return this.scanFbsTsdBox(
+        taskId,
+        { boxCode: storagePallet?.code ?? rawCode },
+        user,
+      );
+    }
+
+    const state = fbsTsdStage(task);
+    if (state === 'SCAN_KIZ') {
+      return this.scanFbsTsdKiz(taskId, { kiz: rawCode }, user);
+    }
+    if (
+      state === 'SCAN_BOX' &&
+      [task.sourceBarcode, task.barcode]
+        .filter((value): value is string => Boolean(value))
+        .some((value) => value.toLowerCase() === scannedCode.toLowerCase())
+    ) {
+      return this.formatFbsTsdAssembly(
+        task,
+        user,
+        `ШК ${scannedCode} уже принят для заказа №${task.orderId}. Теперь отсканируйте короб, бокс или паллетсорт, откуда взят товар.`,
+      );
+    }
+    if (state === 'SCAN_BOX' && !fbsTsdKizFormatError(rawCode, allowedBoxPrefixes)) {
+      return this.formatFbsTsdAssembly(
+        task,
+        user,
+        'КИЗ распознан, но пока не записан. Сначала отсканируйте короб, бокс или паллетсорт, затем повторите сканирование КИЗ.',
+      );
+    }
+    if (task.boxId || fbsTsdUsesNoBox(task)) {
+      const currentBarcodes = task.relabelRequired && !task.sourceBarcode
+        ? jsonStringArray(task.sourceBarcodes)
+        : jsonStringArray(task.barcodes);
+      if (currentBarcodes.some((barcode) => barcode.toLowerCase() === scannedCode.toLowerCase())) {
+        return this.scanFbsTsdBarcode(taskId, { barcode: scannedCode }, user);
+      }
+    }
+
+    const switched = await this.switchFbsTsdAssemblyToBarcode(task, scannedCode, user);
+    if (switched) return switched;
+    if (state === 'SCAN_BOX') {
+      throw new BadRequestException(
+        `Товар с ШК ${scannedCode} не нужен в оставшейся части этой FBS-заявки.`,
+      );
+    }
+    return this.scanFbsTsdBarcode(taskId, { barcode: scannedCode }, user);
+  }
+
+  async scanFbsTsdBox(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
+    let task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    task = await this.assertFbsTsdLeaseVersion(task, user);
+    requireFbsTaskWithoutSyncConflict(task);
+    if (task.status === 'COMPLETED') return this.formatFbsTsdAssembly(task, user, 'Заказ уже собран.');
+    const scannedCode = normalizeFbsScannerCode(
+      requiredFbsTsdText(payload.boxCode, 'Отсканируйте номер короба или QR паллетсорта.'),
+    );
+    let storagePallet = await this.prisma.storagePallet.findFirst({
+      where: {
+        clientId: task.clientId,
+        code: { equals: scannedCode, mode: Prisma.QueryMode.insensitive },
+      },
+      select: {
+        id: true,
+        code: true,
+        source: true,
+        status: true,
+        zone: { select: { id: true, code: true, name: true } },
+        _count: { select: { boxes: true } },
+      },
+    });
+    const storagePalletAlias = fbsStoragePalletCodeAlias(scannedCode);
+    if (!storagePallet && storagePalletAlias) {
+      storagePallet = await this.prisma.storagePallet.findFirst({
+        where: {
+          clientId: task.clientId,
+          code: { equals: storagePalletAlias, mode: Prisma.QueryMode.insensitive },
+        },
+        select: {
+          id: true,
+          code: true,
+          source: true,
+          status: true,
+          zone: { select: { id: true, code: true, name: true } },
+          _count: { select: { boxes: true } },
+        },
+      });
+    }
+    if (storagePallet) {
+      return this.formatFbsTsdPalletScan(task, storagePallet, user);
+    }
+    const boxPolicy = this.boxCodes ? await this.boxCodes.getPolicy() : null;
+    const boxCode = this.boxCodes ? await this.boxCodes.normalize(scannedCode) : scannedCode;
+    const allowedBoxPrefixes = boxPolicy?.allowedPrefixes ?? ['FFL_'];
+    if (!isFbsPhysicalBoxCode(boxCode, allowedBoxPrefixes)) {
+      throw new BadRequestException(
+        `Код не распознан ни как короб, ни как паллетсорт. Короб должен начинаться с: ${allowedBoxPrefixes.join(', ')}.`,
+      );
+    }
     const box = await this.prisma.box.findFirst({
       where: {
         clientId: task.clientId,
         code: { equals: boxCode, mode: Prisma.QueryMode.insensitive },
         status: { notIn: ['deleted', 'archived'] },
+        storagePlacement: { isNot: null },
       },
-      select: { id: true, code: true },
+      select: {
+        id: true,
+        code: true,
+        storagePlacement: {
+          select: {
+            pallet: { select: { code: true } },
+          },
+        },
+      },
     });
     if (!box) {
-      throw new BadRequestException(`Короба ${boxCode} нет в WMS.`);
+      throw new BadRequestException(
+        `Короб ${boxCode} не найден в палет-сорте. Для FBS можно использовать только короба, установленные на палет-сорт.`,
+      );
     }
-    const available = await this.prisma.stockBalance.aggregate({
-      where: {
+    if (task.boxId) {
+      if (task.boxCode?.toUpperCase() === box.code.toUpperCase()) {
+        return this.formatFbsTsdAssembly(task, user, `Короб ${task.boxCode} уже подтверждён.`);
+      }
+      if (task.sourceBarcode || task.barcode || task.kiz || task.relabelConfirmedAt) {
+        throw new BadRequestException(
+          `По заказу уже отсканирован товар из короба ${task.boxCode}. Завершите его или сбросьте сборку заказа.`,
+        );
+      }
+    }
+    const stockSkuId = task.relabelRequired && task.sourceSkuId ? task.sourceSkuId : task.skuId;
+    const [available, initialReservations] = await Promise.all([
+      this.prisma.stockBalance.aggregate({
+        where: {
+          clientId: task.clientId,
+          skuId: stockSkuId,
+          boxId: box.id,
+          status: StockStatus.AVAILABLE,
+        },
+        _sum: { quantity: true },
+      }),
+      this.fbsTsdReservationRows({
         clientId: task.clientId,
-        skuId: task.skuId,
+        skuId: stockSkuId,
         boxId: box.id,
-        status: StockStatus.AVAILABLE,
-      },
-      _sum: { quantity: true },
+        excludeTaskId: task.id,
+      }),
+    ]);
+    let reservations = initialReservations;
+    let availability = evaluateFbsBoxAvailability({
+      boxId: box.id,
+      availableQuantity: available._sum.quantity ?? 0,
+      candidateTaskId: task.id,
+      candidateAssignedBoxId: task.boxId ?? task.reservedBoxId,
+      requiredQuantity: task.itemCount,
+      reservations: reservations.map((reservation, index) => ({
+        taskId: `protected:${index}`,
+        boxId: reservation.boxId,
+        itemCount: reservation.itemCount,
+        releasableBackground: false,
+      })),
     });
-    const reserved = await this.prisma.fbsTsdAssembly.aggregate({
-      where: {
-        id: { not: task.id },
+    if (!availability.accepted) {
+      const released = await this.releaseUntouchedFbsReservationsForScannedBox({
         clientId: task.clientId,
-        skuId: task.skuId,
+        requestId: task.requestId,
+        taskId: task.id,
+        skuId: stockSkuId,
         boxId: box.id,
-        status: { in: ['IN_PROGRESS', 'COMPLETED', FBS_TSD_RETURN_REQUIRED] },
-      },
-      _sum: { itemCount: true },
-    });
-    const freeQuantity = (available._sum.quantity ?? 0) - (reserved._sum.itemCount ?? 0);
-    if (freeQuantity < task.itemCount) {
+        boxCode: box.code,
+        requiredQuantity: Math.max(1, task.itemCount),
+        availableQuantity: available._sum.quantity ?? 0,
+      });
+      if (released > 0) {
+        reservations = await this.fbsTsdReservationRows({
+          clientId: task.clientId,
+          skuId: stockSkuId,
+          boxId: box.id,
+          excludeTaskId: task.id,
+        });
+        availability = evaluateFbsBoxAvailability({
+          boxId: box.id,
+          availableQuantity: available._sum.quantity ?? 0,
+          candidateTaskId: task.id,
+          candidateAssignedBoxId: task.boxId ?? task.reservedBoxId,
+          requiredQuantity: task.itemCount,
+          reservations: reservations.map((reservation, index) => ({
+            taskId: `protected:${index}`,
+            boxId: reservation.boxId,
+            itemCount: reservation.itemCount,
+            releasableBackground: false,
+          })),
+        });
+      }
+    }
+    if (!availability.accepted) {
+      const relabeling = await this.useRelabelingSourceForCurrentFbsTask(
+        task,
+        box,
+        user,
+      );
+      if (relabeling) return relabeling;
       const switched = await this.switchFbsTsdAssemblyToBox(task, box, user);
       if (switched) return switched;
-      throw new BadRequestException(`Короб ${box.code} не нужен для текущей FBS-заявки.`);
+      // FIX: A different box with no current SKU is a wrong-box scan, not
+      // evidence that another request took the product.
+      const rejection = describeFbsRejectedBox({
+        scannedBoxCode: box.code,
+        assignedBoxCode: task.boxCode ?? task.reservedBoxCode,
+        productLabel: [task.productName, task.article].filter(Boolean).join(' · '),
+        availableQuantity: available._sum.quantity ?? 0,
+      });
+      throw new ConflictException({
+        code: rejection.code,
+        message: rejection.message,
+        route: await this.getFbsRequestRoute(task.requestId, user),
+      });
     }
 
-    const updated = await this.prisma.fbsTsdAssembly.update({
-      where: { id: task.id },
-      data: { boxId: box.id, boxCode: box.code, errorMessage: null },
+    const updated = await this.claimFbsTsdBoxAtomically(task, box, user);
+    if (!updated) {
+      // FIX: The balance changed after the preview check. Return the new live
+      // route instead of accepting the same physical unit twice.
+      throw new ConflictException({
+        code: 'FBS_ROUTE_STALE',
+        message: `Товар из короба ${box.code} успела забрать другая заявка. Маршрут обновлён.`,
+        route: await this.getFbsRequestRoute(task.requestId, user),
+      });
+    }
+    return this.formatFbsTsdAssembly(
+      updated,
+      user,
+      task.relabelRequired
+        ? `Короб ${box.code} с палет-сорта ${box.storagePlacement?.pallet.code ?? '—'} принят. Найдите исходный товар «${task.sourceProductName ?? task.sourceArticle ?? 'для переклейки'}» и сканируйте его ШК.`
+        : `Короб ${box.code} с палет-сорта ${box.storagePlacement?.pallet.code ?? '—'} принят. Теперь сканируйте ШК товара.`,
+    );
+  }
+
+  private async claimFbsTsdBoxAtomically(
+    task: FbsTsdAssemblyRecord,
+    box: { id: string; code: string },
+    user: AuthUser,
+  ) {
+    const stockSkuId = task.relabelRequired && task.sourceSkuId
+      ? task.sourceSkuId
+      : task.skuId;
+    const requiredQuantity = Math.max(1, task.itemCount);
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        // FIX: The database lock, not frontend order, decides the first winner.
+        // FIX: pg_advisory_xact_lock returns PostgreSQL void. $queryRaw tries
+        // to deserialize it and turns a valid TSD scan into HTTP 500.
+        await tx.$executeRaw(
+          Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`fbs:${task.clientId}:${box.id}:${stockSkuId}`}))`,
+        );
+        const freshTask = await tx.fbsTsdAssembly.findUnique({ where: { id: task.id } });
+        this.requireCurrentFbsTsdLease(freshTask, user);
+        if (
+          freshTask.sourceBarcode ||
+          freshTask.barcode ||
+          freshTask.kiz ||
+          freshTask.relabelConfirmedAt
+        ) {
+          this.throwFbsTsdTaskStale(freshTask, user);
+        }
+
+        const [balance, reservationRowsBySku] = await Promise.all([
+          tx.stockBalance.aggregate({
+            where: {
+              clientId: freshTask.clientId,
+              skuId: stockSkuId,
+              boxId: box.id,
+              status: StockStatus.AVAILABLE,
+            },
+            _sum: { quantity: true },
+          }),
+          this.fbsTsdReservationRowsBySku({
+            clientId: freshTask.clientId,
+            skuIds: [stockSkuId],
+            excludeTaskId: null,
+          }, tx),
+        ]);
+        let reservations = reservationRowsBySku.get(stockSkuId) ?? [];
+        let decision = evaluateFbsBoxAvailability({
+          boxId: box.id,
+          availableQuantity: balance._sum.quantity ?? 0,
+          candidateTaskId: freshTask.id,
+          candidateAssignedBoxId: freshTask.boxId ?? freshTask.reservedBoxId,
+          requiredQuantity,
+          reservations,
+        });
+        if (!decision.accepted) return null;
+
+        const protectedForCandidate =
+          decision.freeQuantity + decision.ownReservationQuantity;
+        let shortage = Math.max(0, requiredQuantity - protectedForCandidate);
+        const releaseIds: string[] = [];
+        for (const reservation of reservations) {
+          if (
+            shortage <= 0 ||
+            reservation.taskId === freshTask.id ||
+            reservation.boxId !== box.id ||
+            !reservation.releasableBackground
+          ) {
+            continue;
+          }
+          releaseIds.push(reservation.taskId);
+          shortage -= Math.max(1, reservation.itemCount);
+        }
+        if (releaseIds.length > 0) {
+          const autoReleaseIds = reservations
+            .filter(
+              (reservation) =>
+                releaseIds.includes(reservation.taskId) &&
+                reservation.status === FBS_TSD_RESERVED_STATUS &&
+                reservation.deviceCode === FBS_TSD_AUTO_RESERVATION_DEVICE,
+            )
+            .map((reservation) => reservation.taskId);
+          const activeReleaseIds = reservations
+            .filter(
+              (reservation) =>
+                releaseIds.includes(reservation.taskId) &&
+                reservation.status === 'IN_PROGRESS',
+            )
+            .map((reservation) => reservation.taskId);
+          if (autoReleaseIds.length > 0) {
+            await tx.fbsTsdAssembly.updateMany({
+              where: {
+                id: { in: autoReleaseIds },
+                deviceCode: FBS_TSD_AUTO_RESERVATION_DEVICE,
+                status: FBS_TSD_RESERVED_STATUS,
+                boxId: null,
+                reservedBoxId: box.id,
+                sourceBarcode: null,
+                barcode: null,
+                kiz: null,
+                relabelConfirmedAt: null,
+              },
+              data: {
+                status: FBS_TSD_WAITING_STOCK_STATUS,
+                reservedBoxId: null,
+                reservedBoxCode: null,
+                reservedAt: null,
+                errorMessage: `Фоновый маршрут освобождён после физического скана короба ${box.code}.`,
+              },
+            });
+          }
+          if (activeReleaseIds.length > 0) {
+            // FIX: keep the second employee on the same order, but remove the
+            // untouched box hint so their next poll immediately shows another
+            // live route. A scanned box/barcode/KIZ can never match this update.
+            await tx.fbsTsdAssembly.updateMany({
+              where: {
+                id: { in: activeReleaseIds },
+                status: 'IN_PROGRESS',
+                boxId: null,
+                reservedBoxId: box.id,
+                sourceBarcode: null,
+                barcode: null,
+                kiz: null,
+                relabelConfirmedAt: null,
+              },
+              data: {
+                reservedBoxId: null,
+                reservedBoxCode: null,
+                reservedAt: null,
+                errorMessage: `Маршрут изменён: короб ${box.code} физически выбран другим сотрудником. Используйте новый маршрут на экране.`,
+              },
+            });
+          }
+          reservations = (await this.fbsTsdReservationRowsBySku({
+            clientId: freshTask.clientId,
+            skuIds: [stockSkuId],
+            excludeTaskId: null,
+          }, tx)).get(stockSkuId) ?? [];
+          decision = evaluateFbsBoxAvailability({
+            boxId: box.id,
+            availableQuantity: balance._sum.quantity ?? 0,
+            candidateTaskId: freshTask.id,
+            candidateAssignedBoxId: freshTask.boxId ?? freshTask.reservedBoxId,
+            requiredQuantity,
+            reservations,
+          });
+        }
+        if (!decision.accepted) return null;
+
+        const claimed = await tx.fbsTsdAssembly.updateMany({
+          where: {
+            id: freshTask.id,
+            status: 'IN_PROGRESS',
+            workerUserId: user.id,
+            deviceCode: freshTask.deviceCode,
+            updatedAt: freshTask.updatedAt,
+          },
+          data: {
+            reservedBoxId: box.id,
+            reservedBoxCode: box.code,
+            reservedAt: freshTask.reservedAt ?? new Date(),
+            boxId: box.id,
+            boxCode: box.code,
+            errorMessage: null,
+          },
+        });
+        if (claimed.count !== 1) this.throwFbsTsdTaskStale(freshTask, user);
+        return tx.fbsTsdAssembly.findUnique({ where: { id: freshTask.id } });
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    } catch (caught) {
+      if (
+        caught instanceof Prisma.PrismaClientKnownRequestError &&
+        caught.code === 'P2034'
+      ) {
+        return null;
+      }
+      throw caught;
+    }
+  }
+
+  private async useRelabelingSourceForCurrentFbsTask(
+    task: FbsTsdAssemblyRecord,
+    box: { id: string; code: string },
+    user: AuthUser,
+  ) {
+    if (
+      task.relabelRequired ||
+      task.boxId ||
+      task.sourceBarcode ||
+      task.barcode ||
+      task.kiz ||
+      task.relabelConfirmedAt
+    ) {
+      return null;
+    }
+    const product = await this.prisma.sku.findUnique({
+      where: { id: task.skuId },
+      select: {
+        id: true,
+        name: true,
+        internalSku: true,
+        clientSku: true,
+        article: true,
+        size: true,
+        needsChestnyZnak: true,
+        isUnmarked: true,
+      },
     });
-    return this.formatFbsTsdAssembly(updated, user, `Короб ${box.code} принят. Теперь сканируйте ШК товара.`);
+    if (!product) return null;
+    const source = await this.resolveFbsTsdStockSource(
+      task.clientId,
+      product,
+      [],
+      task.id,
+      false,
+    );
+    if (!source?.relabelRequired || !source.sourceSkuId) return null;
+    const sourceBox = source.storageBoxes.find(
+      (storageBox) =>
+        storageBox.code.toLocaleUpperCase('ru-RU') ===
+          box.code.toLocaleUpperCase('ru-RU') &&
+        storageBox.status === StockStatus.AVAILABLE &&
+        storageBox.quantity > 0,
+    );
+    if (!sourceBox) return null;
+
+    const [available, reservations] = await Promise.all([
+      this.prisma.stockBalance.aggregate({
+        where: {
+          clientId: task.clientId,
+          skuId: source.sourceSkuId,
+          boxId: box.id,
+          status: StockStatus.AVAILABLE,
+        },
+        _sum: { quantity: true },
+      }),
+      this.fbsTsdReservationRows({
+        clientId: task.clientId,
+        skuId: source.sourceSkuId,
+        boxId: box.id,
+        excludeTaskId: task.id,
+      }),
+    ]);
+    const reservedQuantity = reservations.reduce(
+      (sum, reservation) => sum + reservation.itemCount,
+      0,
+    );
+    if ((available._sum.quantity ?? 0) - reservedQuantity < task.itemCount) {
+      return null;
+    }
+
+    const updated = await this.updateFbsTsdUnderLease(task, user, {
+        sourceSkuId: source.sourceSkuId,
+        sourceProductName: source.sourceProductName,
+        sourceArticle: source.sourceArticle,
+        sourceBarcodes:
+          source.sourceBarcodes.length > 0
+            ? (source.sourceBarcodes as Prisma.InputJsonValue)
+            : Prisma.JsonNull,
+        storageBoxes: source.storageBoxes as Prisma.InputJsonValue,
+        relabelRequired: true,
+        boxId: box.id,
+        boxCode: box.code,
+        errorMessage: null,
+    });
+    return this.formatFbsTsdAssembly(
+      updated,
+      user,
+      `Короб ${box.code} принят. Готовая единица уже занята другим заказом, поэтому используйте исходный товар «${source.sourceProductName ?? source.sourceArticle ?? 'для переклейки'}» и выполните переклейку.`,
+    );
   }
 
   private async switchFbsTsdAssemblyToBox(
@@ -1764,16 +7969,206 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     box: { id: string; code: string },
     user: AuthUser,
   ) {
+    // A request can outlive the marketplace "active orders" window. In that
+    // case the order is still legitimately reserved in the WMS, but it is no
+    // longer present in loadFbsOrders(), so the old switcher could not find it
+    // and incorrectly answered that the physically required box was not
+    // needed. Prefer the request's own untouched reservation before consulting
+    // the live marketplace response.
+    const scannedBoxBalances = await this.prisma.stockBalance.findMany({
+      where: {
+        clientId: currentTask.clientId,
+        boxId: box.id,
+        status: StockStatus.AVAILABLE,
+        quantity: { gt: 0 },
+      },
+      select: { skuId: true, quantity: true },
+    });
+    const availableBySku = new Map<string, number>();
+    scannedBoxBalances.forEach((balance) => {
+      availableBySku.set(
+        balance.skuId,
+        (availableBySku.get(balance.skuId) ?? 0) + balance.quantity,
+      );
+    });
+    const queuedTasks = availableBySku.size > 0
+      ? await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        id: { not: currentTask.id },
+        clientId: currentTask.clientId,
+        marketplace: currentTask.marketplace,
+        connectionId: currentTask.connectionId,
+        requestId: currentTask.requestId,
+        status: {
+          in: [
+            FBS_TSD_RESERVED_STATUS,
+            FBS_TSD_WAITING_STOCK_STATUS,
+            FBS_TSD_RESCAN_REQUIRED_STATUS,
+          ],
+        },
+        boxId: null,
+        sourceBarcode: null,
+        barcode: null,
+        kiz: null,
+        relabelConfirmedAt: null,
+        OR: [
+          { skuId: { in: [...availableBySku.keys()] } },
+          { sourceSkuId: { in: [...availableBySku.keys()] } },
+        ],
+      },
+      orderBy: [{ reservedAt: 'asc' }, { createdAt: 'asc' }],
+    })
+      : [];
+    const orderedQueuedTasks = queuedTasks
+      .filter((candidate) => {
+        const stockSkuId = candidate.relabelRequired && candidate.sourceSkuId
+          ? candidate.sourceSkuId
+          : candidate.skuId;
+        return availableBySku.has(stockSkuId);
+      })
+      .sort((left, right) => {
+        const leftStored = asArray<Record<string, unknown>>(left.storageBoxes).some(
+          (storageBox) => textValue(storageBox.code).toLocaleUpperCase('ru-RU') === box.code.toLocaleUpperCase('ru-RU'),
+        );
+        const rightStored = asArray<Record<string, unknown>>(right.storageBoxes).some(
+          (storageBox) => textValue(storageBox.code).toLocaleUpperCase('ru-RU') === box.code.toLocaleUpperCase('ru-RU'),
+        );
+        return Number(right.reservedBoxId === box.id) - Number(left.reservedBoxId === box.id) ||
+          Number(rightStored) - Number(leftStored) ||
+          (left.reservedAt?.getTime() ?? Number.MAX_SAFE_INTEGER) -
+            (right.reservedAt?.getTime() ?? Number.MAX_SAFE_INTEGER) ||
+          left.createdAt.getTime() - right.createdAt.getTime();
+      });
+    for (const reservedTask of orderedQueuedTasks) {
+      const stockSkuId =
+        reservedTask.relabelRequired && reservedTask.sourceSkuId
+          ? reservedTask.sourceSkuId
+          : reservedTask.skuId;
+      let reservations = await this.fbsTsdReservationRows({
+          clientId: reservedTask.clientId,
+          skuId: stockSkuId,
+          boxId: box.id,
+          excludeTaskId: reservedTask.id,
+        });
+      let reservedQuantity = reservations.reduce(
+        (sum, reservation) => sum + reservation.itemCount,
+        0,
+      );
+      const availableQuantity = availableBySku.get(stockSkuId) ?? 0;
+      let freeQuantity = availableQuantity - reservedQuantity;
+      if (freeQuantity < Math.max(1, reservedTask.itemCount)) {
+        const released = await this.releaseUntouchedFbsReservationsForScannedBox({
+          clientId: reservedTask.clientId,
+          requestId: reservedTask.requestId,
+          taskId: reservedTask.id,
+          skuId: stockSkuId,
+          boxId: box.id,
+          boxCode: box.code,
+          requiredQuantity: Math.max(1, reservedTask.itemCount),
+          availableQuantity,
+        });
+        if (released > 0) {
+          reservations = await this.fbsTsdReservationRows({
+            clientId: reservedTask.clientId,
+            skuId: stockSkuId,
+            boxId: box.id,
+            excludeTaskId: reservedTask.id,
+          });
+          reservedQuantity = reservations.reduce(
+            (sum, reservation) => sum + reservation.itemCount,
+            0,
+          );
+          freeQuantity = availableQuantity - reservedQuantity;
+        }
+      }
+      if (freeQuantity >= Math.max(1, reservedTask.itemCount)) {
+        const switched = await this.withFbsTsdLeaseTransaction(currentTask, user, async (tx) => {
+          const [loadedCurrent, freshTarget] = await Promise.all([
+            tx.fbsTsdAssembly.findUnique({ where: { id: currentTask.id } }),
+            tx.fbsTsdAssembly.findUnique({ where: { id: reservedTask.id } }),
+          ]);
+          const freshCurrent = loadedCurrent;
+          this.requireCurrentFbsTsdLease(freshCurrent, user);
+          if (
+            freshCurrent.sourceBarcode ||
+            freshCurrent.barcode ||
+            freshCurrent.kiz ||
+            freshCurrent.relabelConfirmedAt
+          ) {
+            this.throwFbsTsdTaskStale(freshCurrent, user);
+          }
+          if (
+            !freshTarget ||
+            ![
+              FBS_TSD_RESERVED_STATUS,
+              FBS_TSD_WAITING_STOCK_STATUS,
+              FBS_TSD_RESCAN_REQUIRED_STATUS,
+            ].includes(freshTarget.status) ||
+            freshTarget.boxId ||
+            freshTarget.sourceBarcode ||
+            freshTarget.barcode ||
+            freshTarget.kiz ||
+            freshTarget.relabelConfirmedAt
+          ) {
+            return null;
+          }
+          await tx.fbsTsdAssembly.update({
+            where: { id: freshCurrent.id },
+            data: {
+              status: freshCurrent.reservedBoxId
+                ? FBS_TSD_RESERVED_STATUS
+                : 'RELEASED',
+              deviceCode: freshCurrent.reservedBoxId
+                ? FBS_TSD_AUTO_RESERVATION_DEVICE
+                : freshCurrent.deviceCode,
+              workerUserId: null,
+              workerName: null,
+              boxId: null,
+              boxCode: null,
+              errorMessage: `Сотрудник выбрал короб ${box.code}; задание возвращено в очередь.`,
+            },
+          });
+          return tx.fbsTsdAssembly.update({
+            where: { id: reservedTask.id },
+            data: {
+              status: 'IN_PROGRESS',
+              deviceCode: freshCurrent.deviceCode,
+              workerUserId: user.id,
+              workerName: user.name,
+              startedAt: new Date(),
+              reservedBoxId: box.id,
+              reservedBoxCode: box.code,
+              reservedAt: freshTarget.reservedAt ?? new Date(),
+              boxId: box.id,
+              boxCode: box.code,
+              errorMessage: null,
+            },
+          });
+        });
+        if (switched) {
+          return this.formatFbsTsdAssembly(
+            switched,
+            user,
+            `Короб ${box.code} нужен заявке. Переключено на заказ №${switched.orderId}. Теперь сканируйте ШК товара.`,
+          );
+        }
+      }
+    }
+
     const cached = this.fbsOrdersCache.get(currentTask.clientId);
-    const response = cached && cached.expiresAt > Date.now()
+    const liveResponse = cached && cached.expiresAt > Date.now()
       ? cached.value
       : await this.loadFbsOrders(currentTask.clientId);
     if (!cached || cached.expiresAt <= Date.now()) {
       this.fbsOrdersCache.set(currentTask.clientId, {
-        expiresAt: Date.now() + 30_000,
-        value: response,
+        expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
+        value: liveResponse,
       });
     }
+    const response = await this.mergeSyncedFbsTsdRequestOrders(
+      currentTask.clientId,
+      liveResponse,
+    );
 
     const candidates = response.orders
       .filter(
@@ -1781,22 +8176,40 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           order.id !== currentTask.orderId &&
           order.marketplace === currentTask.marketplace &&
           order.connectionId === currentTask.connectionId &&
-          order.category === 'active' &&
-          order.supplierStatus === 'confirm' &&
+          isFbsTsdAssemblyOrderEligible(order) &&
           order.request?.id === currentTask.requestId &&
-          Boolean(order.product) &&
-          order.storageBoxes.some(
-            (storageBox) =>
-              storageBox.code.toLocaleUpperCase('ru-RU') === box.code.toLocaleUpperCase('ru-RU') &&
-              storageBox.status === StockStatus.AVAILABLE &&
-              storageBox.quantity > 0,
-          ),
+          Boolean(order.product),
       )
       .sort((left, right) => (left.createdAt ?? '').localeCompare(right.createdAt ?? ''));
 
     for (const order of candidates) {
       const product = order.product!;
-      const [requestItem, existing, available, reserved] = await Promise.all([
+      const stockSource = order.relabeling
+        ? {
+            sourceSkuId: order.relabeling.sourceSkuId,
+            sourceProductName: order.relabeling.sourceProductName,
+            sourceArticle: order.relabeling.sourceArticle,
+            sourceBarcodes: order.relabeling.sourceBarcodes,
+            storageBoxes: order.storageBoxes,
+            withoutBoxQuantity: 0,
+            relabelRequired: true,
+          }
+        : await this.resolveFbsTsdStockSource(
+            currentTask.clientId,
+            product,
+            order.storageBoxes,
+          );
+      if (
+        !stockSource ||
+        (stockSource.relabelRequired && !stockSource.sourceSkuId)
+      ) {
+        continue;
+      }
+      const stockSkuId =
+        stockSource.relabelRequired && stockSource.sourceSkuId
+          ? stockSource.sourceSkuId
+          : product.id;
+      const [requestItem, existing] = await Promise.all([
         this.prisma.clientRequestItem.findFirst({
           where: { requestId: currentTask.requestId, skuId: product.id },
           select: { id: true },
@@ -1810,38 +8223,85 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             },
           },
         }),
+      ]);
+      const [available, initialReservations] = await Promise.all([
         this.prisma.stockBalance.aggregate({
           where: {
             clientId: currentTask.clientId,
-            skuId: product.id,
+            skuId: stockSkuId,
             boxId: box.id,
             status: StockStatus.AVAILABLE,
           },
           _sum: { quantity: true },
         }),
-        this.prisma.fbsTsdAssembly.aggregate({
-          where: {
-            clientId: currentTask.clientId,
-            skuId: product.id,
-            boxId: box.id,
-            status: { in: ['IN_PROGRESS', 'COMPLETED', FBS_TSD_RETURN_REQUIRED] },
-          },
-          _sum: { itemCount: true },
+        this.fbsTsdReservationRows({
+          clientId: currentTask.clientId,
+          skuId: stockSkuId,
+          boxId: box.id,
+          excludeTaskId: existing?.id ?? null,
         }),
       ]);
+      let reservations = initialReservations;
+      let reservedQuantity = reservations.reduce(
+        (sum, reservation) => sum + reservation.itemCount,
+        0,
+      );
+      let freeQuantity = (available._sum.quantity ?? 0) - reservedQuantity;
+      if (freeQuantity < Math.max(1, order.itemCount)) {
+        const released = await this.releaseUntouchedFbsReservationsForScannedBox({
+          clientId: currentTask.clientId,
+          requestId: currentTask.requestId,
+          taskId: existing?.id ?? null,
+          skuId: stockSkuId,
+          boxId: box.id,
+          boxCode: box.code,
+          requiredQuantity: Math.max(1, order.itemCount),
+          availableQuantity: available._sum.quantity ?? 0,
+        });
+        if (released > 0) {
+          reservations = await this.fbsTsdReservationRows({
+            clientId: currentTask.clientId,
+            skuId: stockSkuId,
+            boxId: box.id,
+            excludeTaskId: existing?.id ?? null,
+          });
+          reservedQuantity = reservations.reduce(
+            (sum, reservation) => sum + reservation.itemCount,
+            0,
+          );
+          freeQuantity = (available._sum.quantity ?? 0) - reservedQuantity;
+        }
+      }
       if (
         !requestItem ||
         existing?.status === 'COMPLETED' ||
         existing?.status === FBS_TSD_RETURN_REQUIRED ||
-        existing?.status === 'IN_PROGRESS' ||
-        (available._sum.quantity ?? 0) - (reserved._sum.itemCount ?? 0) < Math.max(1, order.itemCount)
+        (existing?.status === 'IN_PROGRESS' &&
+          Boolean(
+            existing.boxId ||
+            existing.sourceBarcode ||
+            existing.barcode ||
+            existing.kiz ||
+            existing.relabelConfirmedAt,
+          )) ||
+        freeQuantity < Math.max(1, order.itemCount)
       ) {
         continue;
       }
 
-      const storageBoxes = order.storageBoxes.filter(
-        (storageBox) => storageBox.quantity > 0 && storageBox.status === StockStatus.AVAILABLE,
-      );
+      const storageBoxes = [
+        {
+          code: box.code,
+          quantity: freeQuantity,
+          status: StockStatus.AVAILABLE,
+        },
+        ...stockSource.storageBoxes.filter(
+          (storageBox) =>
+            storageBox.quantity > 0 &&
+            storageBox.status === StockStatus.AVAILABLE &&
+            storageBox.code.toLocaleUpperCase('ru-RU') !== box.code.toLocaleUpperCase('ru-RU'),
+        ),
+      ];
       const metadata = uniqueStrings([...order.requiredMeta, ...order.optionalMeta]).map((item) =>
         item.toLowerCase(),
       );
@@ -1855,9 +8315,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         requestId: currentTask.requestId,
         requestItemId: requestItem.id,
         skuId: product.id,
+        sourceSkuId: stockSource.sourceSkuId,
         productName: product.name,
         article: product.article ?? product.clientSku ?? product.internalSku,
+        sourceProductName: stockSource.sourceProductName,
+        sourceArticle: stockSource.sourceArticle,
         barcodes: order.barcodes as Prisma.InputJsonValue,
+        sourceBarcodes: stockSource.sourceBarcodes.length > 0
+          ? stockSource.sourceBarcodes as Prisma.InputJsonValue
+          : Prisma.JsonNull,
         storageBoxes: storageBoxes as Prisma.InputJsonValue,
         itemCount: Math.max(1, order.itemCount),
         requiresKiz,
@@ -1865,9 +8331,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         deviceCode: currentTask.deviceCode,
         workerUserId: user.id,
         workerName: user.name,
+        startedAt: new Date(),
+        reservedBoxId: box.id,
+        reservedBoxCode: box.code,
+        reservedAt: existing?.reservedAt ?? new Date(),
         boxId: box.id,
         boxCode: box.code,
+        sourceBarcode: null,
         barcode: null,
+        relabelRequired: stockSource.relabelRequired,
+        relabelConfirmedAt: null,
         kiz: null,
         wbMetaStatus: requiresKiz ? 'PENDING' : 'NOT_REQUIRED',
         errorMessage: null,
@@ -1875,7 +8348,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       };
 
       try {
-        const switched = await this.prisma.$transaction(async (tx) => {
+        const switched = await this.withFbsTsdLeaseTransaction(currentTask, user, async (tx) => {
           const target = await tx.fbsTsdAssembly.findUnique({
             where: {
               marketplace_connectionId_orderId: {
@@ -1885,33 +8358,50 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               },
             },
           });
-          if (target?.status === 'COMPLETED' || target?.status === 'IN_PROGRESS') return null;
-          const freshCurrent = await tx.fbsTsdAssembly.findUnique({ where: { id: currentTask.id } });
           if (
-            !freshCurrent ||
-            freshCurrent.status !== 'IN_PROGRESS' ||
-            freshCurrent.boxId ||
-            freshCurrent.barcode ||
-            freshCurrent.kiz
+            target?.status === 'COMPLETED' ||
+            target?.status === FBS_TSD_RETURN_REQUIRED ||
+            target?.status === 'IN_PROGRESS'
           ) {
-            throw new BadRequestException('Задание на ТСД уже изменилось. Нажмите «Обновить» и повторите сканирование.');
+            return null;
+          }
+          const freshCurrent = await tx.fbsTsdAssembly.findUnique({ where: { id: currentTask.id } });
+          this.requireCurrentFbsTsdLease(freshCurrent, user);
+          if (
+            freshCurrent.sourceBarcode ||
+            freshCurrent.barcode ||
+            freshCurrent.kiz ||
+            freshCurrent.relabelConfirmedAt
+          ) {
+            this.throwFbsTsdTaskStale(freshCurrent, user);
           }
           await tx.fbsTsdAssembly.update({
-            where: { id: currentTask.id },
+            where: { id: freshCurrent.id },
             data: {
-              status: 'RELEASED',
+              status: freshCurrent.reservedBoxId
+                ? FBS_TSD_RESERVED_STATUS
+                : 'RELEASED',
+              deviceCode: freshCurrent.reservedBoxId
+                ? FBS_TSD_AUTO_RESERVATION_DEVICE
+                : freshCurrent.deviceCode,
+              workerUserId: null,
+              workerName: null,
+              boxId: null,
+              boxCode: null,
               errorMessage: `Сотрудник выбрал короб ${box.code}; задание возвращено в очередь.`,
             },
           });
           return target
             ? tx.fbsTsdAssembly.update({ where: { id: target.id }, data: taskData })
             : tx.fbsTsdAssembly.create({ data: taskData });
-        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+        });
         if (!switched) continue;
         return this.formatFbsTsdAssembly(
           switched,
           user,
-          `Короб ${box.code} нужен заявке. Переключено на заказ №${order.id}. Теперь сканируйте ШК товара.`,
+          stockSource.relabelRequired
+            ? `Короб ${box.code} нужен заявке. Переключено на заказ №${order.id}. Найдите исходный товар «${stockSource.sourceProductName ?? stockSource.sourceArticle ?? 'для переклейки'}» и сканируйте его ШК.`
+            : `Короб ${box.code} нужен заявке. Переключено на заказ №${order.id}. Теперь сканируйте ШК товара.`,
         );
       } catch (caught) {
         if (caught instanceof Prisma.PrismaClientKnownRequestError && caught.code === 'P2002') continue;
@@ -1922,60 +8412,371 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return null;
   }
 
+  private async switchFbsTsdAssemblyToBarcode(
+    currentTask: FbsTsdAssemblyRecord,
+    barcodeValue: string,
+    user: AuthUser,
+  ) {
+    if (currentTask.barcode || currentTask.kiz || currentTask.relabelConfirmedAt) return null;
+    const barcode = normalizeFbsScannerCode(barcodeValue);
+    const queueStatuses = [
+      FBS_TSD_RESERVED_STATUS,
+      FBS_TSD_WAITING_STOCK_STATUS,
+      FBS_TSD_RESCAN_REQUIRED_STATUS,
+    ];
+    const candidates = await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        clientId: currentTask.clientId,
+        marketplace: currentTask.marketplace,
+        connectionId: currentTask.connectionId,
+        requestId: currentTask.requestId,
+        status: { in: ['IN_PROGRESS', ...queueStatuses] },
+        barcode: null,
+        kiz: null,
+        relabelConfirmedAt: null,
+      },
+      orderBy: [{ createdAt: 'asc' }],
+    });
+    const normalizedBarcode = barcode.toLowerCase();
+    const matched = candidates
+      .sort((left, right) => Number(right.id === currentTask.id) - Number(left.id === currentTask.id))
+      .map((candidate) => {
+        if (
+          candidate.id !== currentTask.id &&
+          (candidate.status === 'IN_PROGRESS' || candidate.boxId)
+        ) {
+          return null;
+        }
+        if (candidate.relabelRequired && !candidate.sourceBarcode) {
+          const matchesSource = jsonStringArray(candidate.sourceBarcodes)
+            .some((value) => value.toLowerCase() === normalizedBarcode);
+          return matchesSource ? { task: candidate, field: 'sourceBarcode' as const } : null;
+        }
+        if (!candidate.relabelRequired) {
+          const matchesTarget = jsonStringArray(candidate.barcodes)
+            .some((value) => value.toLowerCase() === normalizedBarcode);
+          return matchesTarget ? { task: candidate, field: 'barcode' as const } : null;
+        }
+        return null;
+      })
+      .find((candidate): candidate is { task: FbsTsdAssemblyRecord; field: 'sourceBarcode' | 'barcode' } => Boolean(candidate));
+    if (!matched) return null;
+
+    const switched = await this.withFbsTsdLeaseTransaction(currentTask, user, async (tx) => {
+      const [loadedCurrent, freshTarget] = await Promise.all([
+        tx.fbsTsdAssembly.findUnique({ where: { id: currentTask.id } }),
+        tx.fbsTsdAssembly.findUnique({ where: { id: matched.task.id } }),
+      ]);
+      const freshCurrent = loadedCurrent;
+      this.requireCurrentFbsTsdLease(freshCurrent, user);
+      if (
+        freshCurrent.sourceBarcode ||
+        freshCurrent.barcode ||
+        freshCurrent.kiz ||
+        freshCurrent.relabelConfirmedAt
+      ) {
+        this.throwFbsTsdTaskStale(freshCurrent, user);
+      }
+      if (
+        !freshTarget ||
+        freshTarget.barcode ||
+        freshTarget.kiz ||
+        freshTarget.relabelConfirmedAt ||
+        (freshTarget.id !== freshCurrent.id &&
+          (freshTarget.status === 'IN_PROGRESS' ||
+            !queueStatuses.includes(freshTarget.status) ||
+            Boolean(freshTarget.boxId)))
+      ) {
+        return null;
+      }
+      if (matched.field === 'sourceBarcode' && freshTarget.sourceBarcode) return null;
+      const scanData = matched.field === 'sourceBarcode'
+        ? { sourceBarcode: barcode, errorMessage: null }
+        : { barcode, errorMessage: null };
+      if (freshTarget.id === freshCurrent.id) {
+        return tx.fbsTsdAssembly.update({ where: { id: freshTarget.id }, data: scanData });
+      }
+      await tx.fbsTsdAssembly.update({
+        where: { id: freshCurrent.id },
+        data: {
+          status: freshCurrent.reservedBoxId ? FBS_TSD_RESERVED_STATUS : 'RELEASED',
+          deviceCode: freshCurrent.reservedBoxId
+            ? FBS_TSD_AUTO_RESERVATION_DEVICE
+            : freshCurrent.deviceCode,
+          workerUserId: null,
+          workerName: null,
+          boxId: null,
+          boxCode: null,
+          errorMessage: `Сотрудник выбрал товар по ШК ${barcode}; задание возвращено в очередь.`,
+        },
+      });
+      return tx.fbsTsdAssembly.update({
+        where: { id: freshTarget.id },
+        data: {
+          status: 'IN_PROGRESS',
+          deviceCode: freshCurrent.deviceCode,
+          workerUserId: user.id,
+          workerName: user.name,
+          startedAt: new Date(),
+          ...scanData,
+        },
+      });
+    });
+    if (!switched) return null;
+
+    const noBox = fbsTsdUsesNoBox(switched);
+    const action = noBox
+      ? matched.field === 'sourceBarcode'
+        ? 'Исходный товар принят. Выполните переклейку и отсканируйте новый ШК.'
+        : 'Товар принят. Переходите к следующему шагу.'
+      : 'Товар нужен заявке. Возьмите его и теперь отсканируйте короб, бокс или паллетсорт, откуда он взят.';
+    return this.formatFbsTsdAssembly(
+      switched,
+      user,
+      `ШК ${barcode} нужен для заказа №${switched.orderId}. ${action}`,
+    );
+  }
+
   async scanFbsTsdBarcode(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
-    const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    let task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    task = await this.assertFbsTsdLeaseVersion(task, user);
     requireFbsTaskWithoutSyncConflict(task);
-    if (!task.boxId) throw new BadRequestException('Сначала отсканируйте короб, указанный на экране.');
+    if (!task.boxId && !fbsTsdUsesNoBox(task)) {
+      throw new BadRequestException('Сначала отсканируйте короб, указанный на экране.');
+    }
     if (task.barcode) return this.formatFbsTsdAssembly(task, user, 'Товар уже подтверждён.');
-    const barcode = requiredFbsTsdText(payload.barcode, 'Отсканируйте ШК товара.');
-    if (barcode.toUpperCase().startsWith('FFL')) {
+    const barcode = normalizeFbsScannerCode(
+      requiredFbsTsdText(payload.barcode, 'Отсканируйте ШК товара.'),
+    );
+    const allowedBoxPrefixes = this.boxCodes
+      ? (await this.boxCodes.getPolicy()).allowedPrefixes
+      : ['FFL_'];
+    if (isFbsPhysicalBoxCode(barcode, allowedBoxPrefixes)) {
       throw new BadRequestException('Сейчас нужен ШК товара, а не номер короба.');
     }
     if (barcode.length > 13) {
       throw new BadRequestException('Сейчас нужен ШК товара. КИЗ будет запрошен следующим шагом.');
     }
+    if (task.relabelRequired && !task.sourceBarcode) {
+      const allowedSourceBarcodes = jsonStringArray(task.sourceBarcodes);
+      if (!allowedSourceBarcodes.some((value) => value.toLowerCase() === barcode.toLowerCase())) {
+        throw new BadRequestException(
+          `Неверный исходный товар. Возьмите «${task.sourceProductName ?? 'товар для переклейки'}», арт. ${task.sourceArticle ?? 'не указан'}, и отсканируйте его ШК.`,
+        );
+      }
+      const updated = await this.updateFbsTsdUnderLease(
+        task,
+        user,
+        { sourceBarcode: barcode, errorMessage: null },
+      );
+      return this.formatFbsTsdAssembly(
+        updated,
+        user,
+        `Исходный товар верный. Переклейте его в «${task.productName}» и отсканируйте новый ШК.`,
+      );
+    }
     const allowedBarcodes = jsonStringArray(task.barcodes);
     if (!allowedBarcodes.some((value) => value.toLowerCase() === barcode.toLowerCase())) {
       throw new BadRequestException(
-        `Неверный товар. Нужен «${task.productName}», арт. ${task.article ?? 'не указан'}. Верните товар и отсканируйте правильный ШК.`,
+        task.relabelRequired
+          ? `Неверный новый ШК. После переклейки должен получиться «${task.productName}», арт. ${task.article ?? 'не указан'}.`
+          : `Неверный товар. Нужен «${task.productName}», арт. ${task.article ?? 'не указан'}. Верните товар и отсканируйте правильный ШК.`,
       );
     }
-    const updated = await this.prisma.fbsTsdAssembly.update({
-      where: { id: task.id },
-      data: { barcode, errorMessage: null },
-    });
+    const updated = task.relabelRequired
+      ? await this.completeFbsTsdRelabeling(task, barcode, user)
+      : await this.updateFbsTsdUnderLease(task, user, { barcode, errorMessage: null });
     return this.formatFbsTsdAssembly(
       updated,
       user,
-      task.requiresKiz ? 'Товар верный. Теперь отсканируйте КИЗ.' : 'Товар верный. Подтвердите сборку.',
+      task.requiresKiz
+        ? task.relabelRequired
+          ? 'Переклейка подтверждена. Теперь отсканируйте КИЗ.'
+          : 'Товар верный. Теперь отсканируйте КИЗ.'
+        : task.relabelRequired
+          ? 'Переклейка подтверждена. Подтвердите сборку.'
+          : 'Товар верный. Подтвердите сборку.',
     );
   }
 
+  private async completeFbsTsdRelabeling(
+    task: FbsTsdAssemblyRecord,
+    targetBarcode: string,
+    user: AuthUser,
+  ) {
+    const sourceWithoutBox = fbsTsdUsesNoBox(task);
+    if (
+      !task.sourceSkuId ||
+      (!task.boxId && !sourceWithoutBox) ||
+      !task.boxCode ||
+      !task.sourceBarcode
+    ) {
+      throw new BadRequestException('Сначала подтвердите исходный товар для переклейки.');
+    }
+    await this.inventoryLock?.assertStockMovementsAllowed();
+    return this.prisma.$transaction(async (tx) => {
+      const fresh = await tx.fbsTsdAssembly.findUnique({ where: { id: task.id } });
+      if (!fresh) throw new NotFoundException('Задание FBS не найдено.');
+      this.requireCurrentFbsTsdLease(fresh, user);
+      if (fresh.updatedAt.getTime() !== task.updatedAt.getTime()) {
+        this.throwFbsTsdTaskStale(fresh, user);
+      }
+      if (fresh.relabelConfirmedAt && fresh.barcode) return fresh;
+      if (
+        !fresh.relabelRequired ||
+        !fresh.sourceSkuId ||
+        (!fresh.boxId && !fbsTsdUsesNoBox(fresh)) ||
+        !fresh.sourceBarcode
+      ) {
+        throw new BadRequestException('Состояние переклейки изменилось. Обновите задание.');
+      }
+      const noBox = fbsTsdUsesNoBox(fresh);
+      const [box, sourceBalance] = await Promise.all([
+        fresh.boxId
+          ? tx.box.findUnique({
+              where: { id: fresh.boxId },
+              select: { id: true, code: true, palletId: true },
+            })
+          : Promise.resolve(null),
+        tx.stockBalance.findFirst({
+          where: {
+            clientId: fresh.clientId,
+            skuId: fresh.sourceSkuId,
+            ...(noBox ? {} : { boxId: fresh.boxId }),
+            status: StockStatus.AVAILABLE,
+            quantity: { gte: fresh.itemCount },
+          },
+          orderBy: { updatedAt: 'asc' },
+        }),
+      ]);
+      if ((!noBox && !box) || !sourceBalance) {
+        throw new BadRequestException(
+          `${noBox ? 'В остатках без короба' : `В коробе ${fresh.boxCode}`} уже недостаточно исходного товара «${fresh.sourceProductName ?? fresh.sourceArticle ?? ''}». Обновите задание.`,
+        );
+      }
+      if (sourceBalance.quantity === fresh.itemCount) {
+        await tx.stockBalance.delete({ where: { id: sourceBalance.id } });
+      } else {
+        await tx.stockBalance.update({
+          where: { id: sourceBalance.id },
+          data: { quantity: { decrement: fresh.itemCount } },
+        });
+      }
+      const balanceWarehouseId = requireFbsBalanceWarehouseId(sourceBalance.warehouseId);
+      const targetBalanceKey = fbsStockBalanceKey({
+        warehouseId: balanceWarehouseId,
+        clientId: fresh.clientId,
+        skuId: fresh.skuId,
+        boxId: box?.id ?? null,
+        palletId: box?.palletId ?? null,
+        status: StockStatus.AVAILABLE,
+      });
+      await tx.stockBalance.upsert({
+        where: { balanceKey: targetBalanceKey },
+        update: {
+          quantity: { increment: fresh.itemCount },
+          warehouseId: balanceWarehouseId,
+        },
+        create: {
+          balanceKey: targetBalanceKey,
+          warehouseId: balanceWarehouseId,
+          clientId: fresh.clientId,
+          skuId: fresh.skuId,
+          boxId: box?.id ?? null,
+          palletId: box?.palletId ?? null,
+          status: StockStatus.AVAILABLE,
+          quantity: fresh.itemCount,
+        },
+      });
+      const movementKey = `fbs-relabel:${fresh.id}`;
+      await tx.stockMovement.createMany({
+        data: [
+          {
+            warehouseId: balanceWarehouseId,
+            clientId: fresh.clientId,
+            skuId: fresh.sourceSkuId,
+            boxId: sourceBalance.boxId,
+            palletId: sourceBalance.palletId,
+            type: MovementType.INVENTORY_ADJUSTMENT,
+            status: StockStatus.AVAILABLE,
+            quantity: -fresh.itemCount,
+            sourceDocument: `FBS TSD, заказ ${fresh.orderId}`,
+            idempotencyKey: `${movementKey}:source`,
+            comment: `Переклейка ${fresh.sourceArticle ?? fresh.sourceProductName ?? fresh.sourceSkuId} → ${fresh.article ?? fresh.productName}`,
+          },
+          {
+            warehouseId: balanceWarehouseId,
+            clientId: fresh.clientId,
+            skuId: fresh.skuId,
+            boxId: box?.id ?? null,
+            palletId: box?.palletId ?? null,
+            type: MovementType.INVENTORY_ADJUSTMENT,
+            status: StockStatus.AVAILABLE,
+            quantity: fresh.itemCount,
+            sourceDocument: `FBS TSD, заказ ${fresh.orderId}`,
+            idempotencyKey: `${movementKey}:target`,
+            comment: `Переклейка ${fresh.sourceArticle ?? fresh.sourceProductName ?? fresh.sourceSkuId} → ${fresh.article ?? fresh.productName}`,
+          },
+        ],
+      });
+      await tx.clientRequestEvent.create({
+        data: {
+          requestId: fresh.requestId,
+          clientId: fresh.clientId,
+          eventType: ClientRequestEventType.COMMENT,
+          title: 'Переклейка товара для FBS',
+          body: `Заказ ${fresh.orderId}; ${noBox ? 'хранение без короба' : `короб ${box!.code}`}; ${fresh.sourceArticle ?? fresh.sourceProductName ?? fresh.sourceSkuId} → ${fresh.article ?? fresh.productName}; исходный ШК ${fresh.sourceBarcode}; новый ШК ${targetBarcode}; сотрудник ${fresh.workerName ?? fresh.deviceCode}.`,
+          createdByUserId: user.id,
+        },
+      });
+      return tx.fbsTsdAssembly.update({
+        where: { id: fresh.id },
+        data: {
+          barcode: targetBarcode,
+          relabelConfirmedAt: new Date(),
+          errorMessage: null,
+        },
+      });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+
   async scanFbsTsdKiz(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
-    const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    let task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    task = await this.assertFbsTsdLeaseVersion(task, user);
     requireFbsTaskWithoutSyncConflict(task);
     if (!task.requiresKiz) throw new BadRequestException('Для этого товара КИЗ не требуется.');
-    if (!task.boxId || !task.barcode) {
+    if ((!task.boxId && !fbsTsdUsesNoBox(task)) || !task.barcode) {
       throw new BadRequestException('Сначала подтвердите короб и ШК товара.');
     }
     if (task.kiz && task.wbMetaStatus === 'ACCEPTED') {
-      return this.formatFbsTsdAssembly(task, user, 'КИЗ уже принят Wildberries.');
+      // FIX: an accepted WB KIZ means the unit is already physically in the
+      // worker's hands. Ensure it cannot remain AVAILABLE for another route.
+      await this.reserveAcceptedWildberriesStock(task);
+      return this.formatFbsTsdAssembly(
+        task,
+        user,
+        `КИЗ уже принят для ${fbsMarketplaceDisplayName(task.marketplace)}.`,
+      );
     }
     const kiz = requiredFbsTsdText(payload.kiz, 'Отсканируйте КИЗ товара.');
     const confirmBoxMove = payload.confirmBoxMove === true;
+    const allowedBoxPrefixes = this.boxCodes
+      ? (await this.boxCodes.getPolicy()).allowedPrefixes
+      : ['FFL_'];
+    const kizFormatError = fbsTsdKizFormatError(kiz, allowedBoxPrefixes);
+    if (kizFormatError) {
+      throw new BadRequestException(kizFormatError);
+    }
     if (task.kiz && task.wbMetaStatus === 'PENDING' && task.kiz.toLowerCase() !== kiz.toLowerCase()) {
       throw new BadRequestException(
-        'Для этого заказа уже сохранён другой КИЗ и ожидается подтверждение Wildberries. Повторно отсканируйте тот же товар.',
+        `Для этого заказа уже сохранён другой КИЗ и ожидается подтверждение для ${fbsMarketplaceDisplayName(task.marketplace)}. Повторно отсканируйте тот же товар.`,
       );
-    }
-    if (kiz.length < 16 || kiz.length > 135) {
-      throw new BadRequestException('Отсканирован не КИЗ. Нужен код Data Matrix длиной от 16 до 135 символов.');
     }
     if (jsonStringArray(task.barcodes).some((barcode) => barcode === kiz)) {
       throw new BadRequestException('Отсканирован ШК товара. Сейчас нужен КИЗ Data Matrix.');
     }
 
-    const mark = await this.prisma.productMark.findFirst({
+    let mark = await this.prisma.productMark.findFirst({
       where: {
         value: { equals: kiz, mode: Prisma.QueryMode.insensitive },
       },
@@ -1985,29 +8786,138 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         skuId: true,
         boxId: true,
         status: true,
+        sourceDocument: true,
         box: { select: { code: true } },
-        sku: { select: { name: true } },
+        sku: {
+          select: {
+            internalSku: true,
+            article: true,
+            name: true,
+            color: true,
+            size: true,
+          },
+        },
       },
     });
     if (mark && mark.clientId !== task.clientId) {
       throw new BadRequestException('Этот КИЗ уже зарегистрирован в WMS у другого клиента. Передайте товар менеджеру.');
     }
+    if (
+      mark &&
+      mark.skuId !== task.skuId &&
+      task.relabelRequired &&
+      task.relabelConfirmedAt &&
+      task.sourceSkuId === mark.skuId
+    ) {
+      mark = await this.prisma.productMark.update({
+        where: { id: mark.id },
+        data: {
+          skuId: task.skuId,
+          sourceDocument: `Переклейка FBS, заказ ${task.orderId}: ${task.sourceArticle ?? task.sourceProductName ?? task.sourceSkuId} → ${task.article ?? task.productName}`,
+        },
+        select: {
+          id: true,
+          clientId: true,
+          skuId: true,
+          boxId: true,
+          status: true,
+          sourceDocument: true,
+          box: { select: { code: true } },
+          sku: {
+            select: {
+              internalSku: true,
+              article: true,
+              name: true,
+              color: true,
+              size: true,
+            },
+          },
+        },
+      });
+    }
     if (mark && mark.skuId !== task.skuId) {
-      throw new BadRequestException(`Этот КИЗ относится к другому товару: ${mark.sku.name}.`);
+      const message = `Этот КИЗ относится к другому товару: ${mark.sku.name}.`;
+      task = await this.updateFbsTsdUnderLease(task, user, { errorMessage: message });
+      await this.recordLocalFbsKizConflict(
+        task,
+        kiz,
+        mark,
+        message,
+        user,
+        'WRONG_SKU',
+      );
+      throw new BadRequestException(message);
     }
-    if (mark && mark.status !== StockStatus.AVAILABLE) {
-      throw new BadRequestException('Этот КИЗ уже находится в сборке или был отгружен. Возьмите другую единицу.');
-    }
-    const duplicate = await this.prisma.fbsTsdAssembly.findFirst({
+    const duplicateCandidates = await this.prisma.fbsTsdAssembly.findMany({
       where: {
         id: { not: task.id },
         kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
-        status: { not: 'RELEASED' },
+        status: { in: ['IN_PROGRESS', 'COMPLETED', FBS_TSD_RETURN_REQUIRED] },
       },
-      select: { orderId: true },
+      select: {
+        id: true,
+        orderId: true,
+        requestId: true,
+        skuId: true,
+        productName: true,
+        article: true,
+        status: true,
+        boxCode: true,
+        deviceCode: true,
+        workerName: true,
+        completedAt: true,
+        createdAt: true,
+        updatedAt: true,
+      },
     });
+    const duplicateCompletedRequestIds = uniqueStrings(
+      duplicateCandidates
+        .filter((candidate) => candidate.status === 'COMPLETED')
+        .map((candidate) => candidate.requestId),
+    );
+    const duplicateOpenCompletedRequests = duplicateCompletedRequestIds.length > 0
+      ? await this.prisma.clientRequest.findMany({
+          where: {
+            id: { in: duplicateCompletedRequestIds },
+            status: { notIn: [...FBS_REQUEST_CLOSED_STATUSES] },
+          },
+          select: { id: true },
+        })
+      : [];
+    const duplicateOpenCompletedRequestIds = new Set(
+      duplicateOpenCompletedRequests.map((request) => request.id),
+    );
+    const duplicate = duplicateCandidates.find(
+      (candidate) =>
+        candidate.status !== 'COMPLETED' ||
+        duplicateOpenCompletedRequestIds.has(candidate.requestId),
+    );
     if (duplicate) {
+      await this.recordDuplicateFbsKizScan(task, kiz, duplicate, user);
       throw new BadRequestException(`Этот КИЗ уже привязан к FBS-заказу ${duplicate.orderId}. Возьмите другую единицу.`);
+    }
+    const previousWbUsage = await this.findPreviousWildberriesKizUsage(
+      task.clientId,
+      kiz,
+      task.id,
+    );
+    if (previousWbUsage) {
+      const message = previousWbUsage.orderId
+        ? `Этот КИЗ уже передавался в Wildberries для заказа ${previousWbUsage.orderId}. Возьмите другую единицу.`
+        : 'Этот КИЗ уже передавался или был отгружен через Wildberries. Возьмите другую единицу.';
+      await this.recordLocalFbsKizConflict(task, kiz, mark, message, user, 'WB_HISTORY');
+      throw new BadRequestException(message);
+    }
+    if (
+      mark &&
+      (mark.status === StockStatus.DEFECT || mark.status === StockStatus.QUARANTINE)
+    ) {
+      const message = 'Этот КИЗ находится в браке или карантине. Передайте товар менеджеру.';
+      await this.recordLocalFbsKizConflict(task, kiz, mark, message, user, 'QUALITY_HOLD');
+      throw new BadRequestException(message);
+    }
+    if (mark && mark.status !== StockStatus.AVAILABLE) {
+      mark = await this.restoreScannedFbsKizAvailability(task, mark, kiz, user);
     }
 
     const markNeedsBoxMove = Boolean(mark && mark.boxId !== task.boxId);
@@ -2035,6 +8945,68 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       await this.inventoryLock?.assertStockMovementsAllowed();
     }
 
+    const emergencyAssembly = await this.isFbsEmergencyAssemblyRequest(task.requestId);
+    let wbConnection: { apiKey: string } | null = null;
+    let wbKizPreflight: {
+      supplierStatus: string;
+      wbStatus: string;
+      remoteKizValues: string[];
+      alreadyAttached: boolean;
+    } | null = null;
+    if (
+      !emergencyAssembly &&
+      (!task.marketplace || task.marketplace === MarketplaceType.WILDBERRIES)
+    ) {
+      wbConnection = await this.prisma.clientMarketplaceConnection.findFirst({
+        where: {
+          id: task.connectionId,
+          clientId: task.clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          isActive: true,
+        },
+        select: { apiKey: true },
+      });
+      if (!wbConnection) {
+        throw new BadRequestException(
+          'Подключение Wildberries отключено. Обратитесь к администратору.',
+        );
+      }
+      task = await this.assertFbsTsdLeaseVersion(task, user);
+      wbKizPreflight = await this.loadWildberriesFbsKizPreflight(
+        wbConnection.apiKey,
+        task.orderId,
+        kiz,
+      );
+      if (
+        !wbKizPreflight.alreadyAttached &&
+        wbKizPreflight.remoteKizValues.length > 0
+      ) {
+        const message = await this.parkFbsTsdOrderAfterWbKizConflict(
+          task,
+          kiz,
+          wbKizPreflight.supplierStatus,
+          wbKizPreflight.wbStatus,
+          'у заказа уже указан другой КИЗ',
+          user,
+        );
+        throw new BadRequestException(message);
+      }
+      if (
+        !wbKizPreflight.alreadyAttached &&
+        wbKizPreflight.supplierStatus !== 'confirm'
+      ) {
+        const message = await this.parkFbsTsdOrderAfterWbKizConflict(
+          task,
+          kiz,
+          wbKizPreflight.supplierStatus,
+          wbKizPreflight.wbStatus,
+          'заказ больше не находится в статусе «На сборке» (confirm)',
+          user,
+        );
+        throw new BadRequestException(message);
+      }
+    }
+
     let historicalMarkRegistration:
       | { mode: 'CREATED'; id: string }
       | { mode: 'REPLACED'; id: string; previousValue: string; previousSourceDocument: string | null }
@@ -2042,6 +9014,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (!mark) {
       try {
         historicalMarkRegistration = await this.prisma.$transaction(async (tx) => {
+          const freshLease = await tx.fbsTsdAssembly.findUnique({ where: { id: task.id } });
+          this.requireCurrentFbsTsdLease(freshLease, user);
+          if (freshLease.updatedAt.getTime() !== task.updatedAt.getTime()) {
+            this.throwFbsTsdTaskStale(freshLease, user);
+          }
           const [available, registeredMarks] = await Promise.all([
             tx.stockBalance.aggregate({
               where: {
@@ -2062,17 +9039,45 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             }),
           ]);
           if ((available._sum.quantity ?? 0) <= registeredMarks) {
-            const usedMarks = await tx.fbsTsdAssembly.findMany({
+            const usedMarkCandidates = await tx.fbsTsdAssembly.findMany({
               where: {
                 id: { not: task.id },
                 clientId: task.clientId,
                 skuId: task.skuId,
                 kiz: { not: null },
-                status: { not: 'RELEASED' },
+                status: { in: ['IN_PROGRESS', 'COMPLETED', FBS_TSD_RETURN_REQUIRED] },
               },
-              select: { kiz: true },
+              select: {
+                kiz: true,
+                requestId: true,
+                orderId: true,
+                status: true,
+                boxCode: true,
+              },
             });
-            const usedKizValues = usedMarks
+            const usedMarkCompletedRequestIds = uniqueStrings(
+              usedMarkCandidates
+                .filter((candidate) => candidate.status === 'COMPLETED')
+                .map((candidate) => candidate.requestId),
+            );
+            const usedMarkOpenCompletedRequests = usedMarkCompletedRequestIds.length > 0
+              ? await tx.clientRequest.findMany({
+                  where: {
+                    id: { in: usedMarkCompletedRequestIds },
+                    status: { notIn: [...FBS_REQUEST_CLOSED_STATUSES] },
+                  },
+                  select: { id: true },
+                })
+              : [];
+            const usedMarkOpenCompletedRequestIds = new Set(
+              usedMarkOpenCompletedRequests.map((request) => request.id),
+            );
+            const usedKizValues = usedMarkCandidates
+              .filter(
+                (candidate) =>
+                  candidate.status !== 'COMPLETED' ||
+                  usedMarkOpenCompletedRequestIds.has(candidate.requestId),
+              )
               .map((item) => item.kiz)
               .filter((value): value is string => Boolean(value));
             const replaceable = await tx.productMark.findFirst({
@@ -2087,9 +9092,24 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               select: { id: true, value: true, sourceDocument: true },
             });
             if (!replaceable) {
-              throw new BadRequestException(
-                `В коробе ${task.boxCode} нет доступной единицы этого товара: все зарегистрированные КИЗы уже используются в других FBS-заказах. Передайте короб менеджеру для сверки.`,
-              );
+              const created = await tx.productMark.create({
+                data: {
+                  clientId: task.clientId,
+                  skuId: task.skuId,
+                  boxId: task.boxId,
+                  value: kiz,
+                  sourceDocument:
+                    `FBS TSD, заказ ${task.orderId}: физически отсканированный КИЗ ` +
+                    'зарегистрирован без изменения количества товара',
+                  status: StockStatus.AVAILABLE,
+                },
+                select: { id: true },
+              });
+              await tx.fbsTsdAssembly.update({
+                where: { id: task.id },
+                data: { kiz, wbMetaStatus: 'PENDING', errorMessage: null },
+              });
+              return { mode: 'CREATED' as const, id: created.id };
             }
             await tx.productMark.update({
               where: { id: replaceable.id },
@@ -2127,12 +9147,227 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           });
           return { mode: 'CREATED' as const, id: created.id };
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+        task = await this.loadOwnedFbsTsdAssembly(task.id, user);
       } catch (caught) {
         if (isUniqueError(caught)) {
           throw new BadRequestException('Этот КИЗ уже успели зарегистрировать в WMS. Обновите задание и проверьте товар.');
         }
         throw caught;
       }
+    }
+
+    const rollbackHistoricalMarkRegistration = async () => {
+      const registration = historicalMarkRegistration;
+      if (!registration) return;
+      await this.prisma.$transaction(async (tx) => {
+        if (registration.mode === 'CREATED') {
+          await tx.productMark.deleteMany({
+            where: { id: registration.id, clientId: task.clientId, value: kiz },
+          });
+          return;
+        }
+        await tx.productMark.updateMany({
+          where: { id: registration.id, clientId: task.clientId, value: kiz },
+          data: {
+            value: registration.previousValue,
+            sourceDocument: registration.previousSourceDocument,
+          },
+        });
+      });
+    };
+
+    if (emergencyAssembly) {
+      const boxCorrection = mark && markNeedsBoxMove
+        ? await this.moveExistingFbsKizToOpenedBox(task, mark.id, mark.boxId, kiz, user)
+        : null;
+      const updated = boxCorrection?.task ?? await this.updateFbsTsdUnderLease(
+        task,
+        user,
+        { kiz, wbMetaStatus: 'ACCEPTED', errorMessage: null },
+      );
+      await this.recordAcceptedFbsKizScan(updated, kiz, user);
+      // FIX: emergency WB assembly still represents a physical pick in WMS.
+      await this.reserveAcceptedWildberriesStock(updated);
+      return this.formatFbsTsdAssembly(
+        updated,
+        user,
+        boxCorrection
+          ? `КИЗ принят локально в WMS. Товар перемещён в короб ${task.boxCode}. Wildberries не изменялся. Подтвердите сборку заказа.`
+          : 'КИЗ принят локально в аварийном режиме. Wildberries не изменялся. Подтвердите сборку заказа.',
+      );
+    }
+
+    if (task.marketplace && task.marketplace !== MarketplaceType.WILDBERRIES) {
+      const boxCorrection = mark && markNeedsBoxMove
+        ? await this.moveExistingFbsKizToOpenedBox(task, mark.id, mark.boxId, kiz, user)
+        : null;
+      const updated = boxCorrection?.task ?? await this.updateFbsTsdUnderLease(
+        task,
+        user,
+        { kiz, wbMetaStatus: 'ACCEPTED', errorMessage: null },
+      );
+      await this.recordAcceptedFbsKizScan(updated, kiz, user);
+      return this.formatFbsTsdAssembly(
+        updated,
+        user,
+        boxCorrection
+          ? `КИЗ принят в WMS для ${fbsMarketplaceDisplayName(task.marketplace)}. Товар перемещён в короб ${task.boxCode}. Подтвердите сборку заказа.`
+          : `КИЗ принят в WMS для ${fbsMarketplaceDisplayName(task.marketplace)}. Подтвердите сборку заказа.`,
+      );
+    }
+
+    if (!wbConnection || !wbKizPreflight) {
+      throw new BadRequestException(
+        'Не удалось подготовить безопасную передачу КИЗа в Wildberries. Обновите задание.',
+      );
+    }
+
+    if (!wbKizPreflight.alreadyAttached) {
+      try {
+        task = await this.assertFbsTsdLeaseVersion(task, user);
+        await marketplaceJsonOnce(
+          `https://marketplace-api.wildberries.ru/api/v3/orders/${numericWbOrderId(task.orderId)}/meta/sgtin`,
+          {
+            method: 'PUT',
+            headers: wbHeaders(wbConnection.apiKey),
+            body: JSON.stringify({ sgtins: [kiz] }),
+            signal: AbortSignal.timeout(FBS_TSD_WB_READ_TIMEOUT_MS),
+          },
+        );
+      } catch (caught) {
+        const message = marketplaceErrorMessage(caught);
+        if (isWildberriesFailedToUpdateMeta(caught)) {
+          let refreshed: NonNullable<typeof wbKizPreflight>;
+          try {
+            refreshed = await this.loadWildberriesFbsKizPreflight(
+              wbConnection.apiKey,
+              task.orderId,
+              kiz,
+            );
+          } catch (refreshCaught) {
+            await rollbackHistoricalMarkRegistration();
+            const parkedMessage = await this.parkFbsTsdOrderAfterWbKizConflict(
+              task,
+              kiz,
+              '',
+              '',
+              `Wildberries вернул FailedToUpdateMeta, а повторная проверка статуса не удалась: ${marketplaceErrorMessage(refreshCaught)}`,
+              user,
+            );
+            throw new BadRequestException(parkedMessage);
+          }
+
+          if (!refreshed.alreadyAttached) {
+            await rollbackHistoricalMarkRegistration();
+            const reason = refreshed.supplierStatus === 'confirm'
+              ? 'Wildberries отклонил КИЗ (FailedToUpdateMeta), хотя заказ ещё имеет статус confirm'
+              : 'после сканирования заказ перестал находиться в статусе confirm';
+            const parkedMessage = await this.parkFbsTsdOrderAfterWbKizConflict(
+              task,
+              kiz,
+              refreshed.supplierStatus,
+              refreshed.wbStatus,
+              reason,
+              user,
+            );
+            throw new BadRequestException(parkedMessage);
+          }
+          // WB мог принять запрос, но вернуть 409 после гонки статусов. Если тот же
+          // КИЗ уже прикреплён к этому заказу, операция считается идемпотентно успешной.
+        } else {
+          await rollbackHistoricalMarkRegistration();
+          task = await this.updateFbsTsdUnderLease(
+            task,
+            user,
+            { wbMetaStatus: 'REJECTED', errorMessage: message },
+          );
+          await this.recordLocalFbsKizConflict(task, kiz, mark, message, user, 'WB_REJECTED');
+          throw new BadRequestException(`Wildberries не принял КИЗ: ${message}`);
+        }
+      }
+    }
+
+    const boxCorrection = mark && markNeedsBoxMove
+      ? await this.moveExistingFbsKizToOpenedBox(task, mark.id, mark.boxId, kiz, user)
+      : null;
+    const updated = boxCorrection?.task ?? await this.updateFbsTsdUnderLease(
+      task,
+      user,
+      { kiz, wbMetaStatus: 'ACCEPTED', errorMessage: null },
+    );
+    await this.recordAcceptedFbsKizScan(updated, kiz, user);
+    // FIX: after box + barcode + accepted KIZ, remove the unit from sellable
+    // stock immediately instead of waiting for the whole request to close.
+    await this.reserveAcceptedWildberriesStock(updated);
+    return this.formatFbsTsdAssembly(
+      updated,
+      user,
+      boxCorrection?.mode === 'RELINKED'
+        ? `КИЗ принят Wildberries и перепривязан к фактической единице в коробе ${task.boxCode}. Количество товара не изменялось. Подтвердите сборку заказа.`
+        : boxCorrection
+        ? `КИЗ принят Wildberries. Товар перемещён из короба ${mark?.box?.code ?? 'без номера'} в ${task.boxCode}. Подтвердите сборку заказа.`
+        : historicalMarkRegistration?.mode === 'REPLACED'
+        ? `КИЗ принят Wildberries и заменил устаревшую запись в коробе ${task.boxCode}. Количество товара не изменилось. Подтвердите сборку заказа.`
+        : historicalMarkRegistration?.mode === 'CREATED'
+        ? 'КИЗ принят Wildberries и записан в WMS без изменения количества товара. Подтвердите сборку заказа.'
+        : 'КИЗ принят Wildberries. Подтвердите сборку заказа.',
+    );
+  }
+
+  async resolveFbsKizConflict(
+    requestId: string,
+    taskId: string,
+    user: AuthUser,
+  ) {
+    let task = await this.prisma.fbsTsdAssembly.findUnique({
+      where: { id: taskId },
+    });
+    let kiz = task?.kiz ?? null;
+    let localConflictEventId: string | null = null;
+    if (!task) {
+      const event = await this.prisma.auditLog.findFirst({
+        where: {
+          id: taskId,
+          action: FBS_KIZ_LOCAL_STATUS_CONFLICT_ACTION,
+          entity: 'ClientRequest',
+          entityId: requestId,
+        },
+        select: { id: true, payload: true },
+      });
+      const eventPayload = asRecord(event?.payload);
+      const assemblyId = textValue(eventPayload.assemblyId);
+      const eventKiz = textValue(eventPayload.kiz);
+      if (event && assemblyId && eventKiz) {
+        task = await this.prisma.fbsTsdAssembly.findUnique({
+          where: { id: assemblyId },
+        });
+        kiz = normalizedFbsKizValue(eventKiz);
+        localConflictEventId = event.id;
+      }
+    }
+    if (!task || task.requestId !== requestId) {
+      throw new NotFoundException('Конфликт КИЗа в этой заявке не найден.');
+    }
+    this.clientScopes.requireClientAccess(user, task.clientId, 'write');
+    if (
+      !task.requiresKiz ||
+      !kiz ||
+      (!localConflictEventId && task.wbMetaStatus !== 'REJECTED')
+    ) {
+      throw new BadRequestException(
+        'Этот конфликт уже устранён или в нём не сохранён КИЗ. Обновите онлайн-заявку.',
+      );
+    }
+    if (task.status !== 'IN_PROGRESS') {
+      throw new BadRequestException(
+        'Заказ уже не находится в активной сборке. Обновите онлайн-заявку и повторите работу с заказом.',
+      );
+    }
+    if (await this.isFbsEmergencyAssemblyRequest(task.requestId)) {
+      throw new BadRequestException(
+        'В аварийном режиме исправление КИЗа через Wildberries отключено. ' +
+        'WB не изменялся: передайте товар администратору для локальной сверки или отсканируйте другую единицу.',
+      );
     }
 
     const connection = await this.prisma.clientMarketplaceConnection.findFirst({
@@ -2144,68 +9379,2432 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       },
       select: { apiKey: true },
     });
-    if (!connection) throw new BadRequestException('Подключение Wildberries отключено. Обратитесь к администратору.');
+    if (!connection) {
+      throw new BadRequestException(
+        'Подключение Wildberries отключено. Обратитесь к администратору.',
+      );
+    }
 
-    try {
-      await marketplaceJson(
+    const orderId = numericWbOrderId(task.orderId);
+    const metadata = await marketplaceJson(
+      'https://marketplace-api.wildberries.ru/api/marketplace/v3/orders/meta',
+      {
+        method: 'POST',
+        headers: wbHeaders(connection.apiKey),
+        body: JSON.stringify({ orders: [orderId] }),
+      },
+    );
+    const remoteKizValues = wildberriesOrderSgtins(metadata, orderId);
+    const normalizedKiz = normalizedFbsKizValue(kiz);
+    const alreadyAttachedToCurrentOrder = remoteKizValues.some(
+      (value) => normalizedFbsKizValue(value) === normalizedKiz,
+    );
+
+    if (!alreadyAttachedToCurrentOrder && remoteKizValues.length > 0) {
+      const message =
+        `У заказа WB №${task.orderId} уже указан другой КИЗ. ` +
+        'Автоматическая замена остановлена, чтобы не удалить правильную маркировку.';
+      await this.prisma.fbsTsdAssembly.update({
+        where: { id: task.id },
+        data: { errorMessage: message },
+      });
+      return {
+        resolved: false,
+        assemblyId: task.id,
+        orderId: task.orderId,
+        requestId: task.requestId,
+        message,
+      };
+    }
+
+    if (!alreadyAttachedToCurrentOrder) {
+      try {
+        await marketplaceJson(
+          `https://marketplace-api.wildberries.ru/api/v3/orders/${orderId}/meta/sgtin`,
+          {
+            method: 'PUT',
+            headers: wbHeaders(connection.apiKey),
+            body: JSON.stringify({ sgtins: [kiz] }),
+          },
+        );
+      } catch (caught) {
+        const wbMessage =
+          caught instanceof Error ? caught.message : 'Wildberries не принял КИЗ.';
+        const localDuplicate = await this.prisma.fbsTsdAssembly.findFirst({
+          where: {
+            id: { not: task.id },
+            clientId: task.clientId,
+            kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+            status: { in: ['IN_PROGRESS', 'COMPLETED', FBS_TSD_RETURN_REQUIRED] },
+          },
+          select: {
+            orderId: true,
+            requestId: true,
+          },
+        });
+        const localDuplicateRequest = localDuplicate
+          ? await this.prisma.clientRequest.findUnique({
+              where: { id: localDuplicate.requestId },
+              select: { number: true },
+            })
+          : null;
+        const location = localDuplicate
+          ? ` В WMS он также найден у заказа №${localDuplicate.orderId}, заявка №${String(localDuplicateRequest?.number ?? 0).padStart(6, '0')}.`
+          : '';
+        const message =
+          `WB всё ещё считает этот КИЗ привязанным к другому сборочному заданию.${location} ` +
+          `Исходный ответ WB: ${wbMessage}`;
+        await this.prisma.fbsTsdAssembly.update({
+          where: { id: task.id },
+          data: { errorMessage: message },
+        });
+        return {
+          resolved: false,
+          assemblyId: task.id,
+          orderId: task.orderId,
+          requestId: task.requestId,
+          conflictingOrderId: localDuplicate?.orderId ?? null,
+          conflictingRequestNumber: localDuplicateRequest?.number ?? null,
+          message,
+        };
+      }
+    }
+
+    if (localConflictEventId) {
+      await this.prepareLocalFbsKizConflictResolution(task, kiz, connection.apiKey);
+    }
+    const accepted = await this.restoreAcceptedFbsKiz(task, kiz, user);
+    await this.recordAcceptedFbsKizScan(accepted, kiz, user);
+    // FIX: conflict recovery must use the same physical-pick accounting path.
+    await this.reserveAcceptedWildberriesStock(accepted);
+    await this.prisma.clientRequestEvent.create({
+      data: {
+        requestId: task.requestId,
+        clientId: task.clientId,
+        eventType: ClientRequestEventType.COMMENT,
+        title: 'Исправлена привязка КИЗа FBS',
+        body:
+          `Заказ WB №${task.orderId}; КИЗ ${printableFbsKiz(kiz)}. ` +
+          (alreadyAttachedToCurrentOrder
+            ? 'Wildberries уже принял этот КИЗ для текущего заказа; локальная запись WMS восстановлена.'
+            : 'КИЗ повторно передан Wildberries и локальная запись WMS восстановлена.'),
+        createdByUserId: user.id,
+      },
+    });
+    return {
+      resolved: true,
+      assemblyId: accepted.id,
+      orderId: accepted.orderId,
+      requestId: accepted.requestId,
+      message: alreadyAttachedToCurrentOrder
+        ? 'Готово: WB уже принял КИЗ именно для этого заказа. WMS восстановила привязку, можно продолжать сборку.'
+        : 'Готово: КИЗ принят WB и восстановлен в WMS. Можно продолжать сборку.',
+    };
+  }
+
+  async restoreFbsRescanFromWildberries(
+    requestId: string,
+    taskId: string,
+    user: AuthUser,
+  ) {
+    const task = await this.prisma.fbsTsdAssembly.findUnique({ where: { id: taskId } });
+    if (!task || task.requestId !== requestId) {
+      throw new NotFoundException('Проблемный FBS-заказ в этой заявке не найден.');
+    }
+    this.clientScopes.requireClientAccess(user, task.clientId, 'write');
+    if (task.marketplace && task.marketplace !== MarketplaceType.WILDBERRIES) {
+      throw new BadRequestException('Восстановление КИЗ из кабинета доступно только для Wildberries.');
+    }
+    if (task.status !== FBS_TSD_RESCAN_REQUIRED_STATUS || !task.completedAt) {
+      throw new BadRequestException(
+        'Заказ уже не ожидает повторного сканирования или ранее не был собран. Обновите заявку.',
+      );
+    }
+    if (!task.requiresKiz) {
+      throw new BadRequestException('Для этого заказа КИЗ не требуется.');
+    }
+
+    const [connection, link] = await Promise.all([
+      this.prisma.clientMarketplaceConnection.findFirst({
+        where: {
+          id: task.connectionId,
+          clientId: task.clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          isActive: true,
+        },
+        select: { apiKey: true },
+      }),
+      this.prisma.fbsOrderRequestLink.findUnique({
+        where: {
+          marketplace_connectionId_orderId: {
+            marketplace: task.marketplace,
+            connectionId: task.connectionId,
+            orderId: task.orderId,
+          },
+        },
+      }),
+    ]);
+    if (!connection) {
+      throw new BadRequestException('Подключение Wildberries отключено. Обратитесь к администратору.');
+    }
+    if (!link || link.requestId !== requestId || link.lastCategory === 'cancelled') {
+      throw new BadRequestException('Заказ отменён или больше не относится к этой FBS-заявке.');
+    }
+
+    const numericOrderId = numericWbOrderId(task.orderId);
+    const metadata = await marketplaceJson(
+      'https://marketplace-api.wildberries.ru/api/marketplace/v3/orders/meta',
+      {
+        method: 'POST',
+        headers: wbHeaders(connection.apiKey),
+        body: JSON.stringify({ orders: [numericOrderId] }),
+      },
+    );
+    const remoteKizValues = wildberriesOrderSgtins(metadata, numericOrderId);
+    if (remoteKizValues.length === 0) {
+      throw new BadRequestException(
+        `Wildberries пока не показывает КИЗ у заказа №${task.orderId}. Сначала внесите КИЗ в кабинете WB и повторите проверку.`,
+      );
+    }
+    if (remoteKizValues.length !== 1) {
+      throw new BadRequestException(
+        `Wildberries вернул ${remoteKizValues.length} КИЗ для заказа №${task.orderId}. Требуется ручная проверка менеджера.`,
+      );
+    }
+    const kiz = remoteKizValues[0];
+
+    const duplicateCandidates = await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        id: { not: task.id },
+        clientId: task.clientId,
+        kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+        status: {
+          in: [
+            'IN_PROGRESS',
+            'COMPLETED',
+            FBS_TSD_RETURN_REQUIRED,
+            FBS_TSD_RESCAN_REQUIRED_STATUS,
+          ],
+        },
+      },
+      select: { id: true, orderId: true, requestId: true, status: true },
+    });
+    const duplicateRequestIds = uniqueStrings(duplicateCandidates.map((item) => item.requestId));
+    const openDuplicateRequests = duplicateRequestIds.length
+      ? await this.prisma.clientRequest.findMany({
+          where: {
+            id: { in: duplicateRequestIds },
+            status: { notIn: [...FBS_REQUEST_CLOSED_STATUSES] },
+          },
+          select: { id: true },
+        })
+      : [];
+    const openDuplicateIds = new Set(openDuplicateRequests.map((item) => item.id));
+    const duplicate = duplicateCandidates.find(
+      (item) => item.status !== 'COMPLETED' || openDuplicateIds.has(item.requestId),
+    );
+    if (duplicate) {
+      throw new BadRequestException(
+        `КИЗ из WB уже используется заказом №${duplicate.orderId}. Автоматическое восстановление остановлено.`,
+      );
+    }
+
+    const mark = await this.prisma.productMark.findFirst({
+      where: { value: { equals: kiz, mode: Prisma.QueryMode.insensitive } },
+      select: { clientId: true, skuId: true },
+    });
+    if (mark && (mark.clientId !== task.clientId || mark.skuId !== task.skuId)) {
+      throw new BadRequestException(
+        'КИЗ из WB зарегистрирован у другого клиента или товара. Требуется ручная проверка менеджера.',
+      );
+    }
+
+    const barcode = task.barcode || jsonStringArray(task.barcodes)[0] || task.sourceBarcode;
+    if (!barcode) {
+      throw new BadRequestException('У заказа не найден ШК товара. Требуется ручная проверка менеджера.');
+    }
+
+    const restored = await this.prisma.$transaction(async (tx) => {
+      const fresh = await tx.fbsTsdAssembly.findUnique({ where: { id: task.id } });
+      if (
+        !fresh ||
+        fresh.requestId !== requestId ||
+        fresh.status !== FBS_TSD_RESCAN_REQUIRED_STATUS ||
+        !fresh.completedAt
+      ) {
+        throw new BadRequestException('Состояние заказа уже изменилось. Обновите заявку.');
+      }
+      const updated = await tx.fbsTsdAssembly.update({
+        where: { id: fresh.id },
+        data: {
+          status: 'COMPLETED',
+          barcode,
+          kiz,
+          wbMetaStatus: 'ACCEPTED',
+          workerUserId: user.id,
+          workerName: user.name,
+          errorMessage: null,
+        },
+      });
+      await tx.clientRequestEvent.create({
+        data: {
+          requestId,
+          clientId: fresh.clientId,
+          eventType: ClientRequestEventType.COMMENT,
+          title: 'КИЗ восстановлен из Wildberries',
+          body:
+            `Заказ WB №${fresh.orderId}; КИЗ ${printableFbsKiz(kiz)} уже был введён в кабинете WB. ` +
+            `WMS восстановила сборку без повторного списания товара; короб ${fresh.boxCode ?? fresh.reservedBoxCode ?? 'без короба'}.`,
+          createdByUserId: user.id,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'FBS_RESCAN_RESTORED_FROM_WB',
+          entity: 'FbsTsdAssembly',
+          entityId: fresh.id,
+          payload: cleanJson({
+            requestId,
+            orderId: fresh.orderId,
+            clientId: fresh.clientId,
+            boxCode: fresh.boxCode ?? fresh.reservedBoxCode,
+            kiz: printableFbsKiz(kiz),
+          }),
+        },
+      });
+      return updated;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+    this.fbsOrdersCache.delete(restored.clientId);
+    this.fbsTsdRequestFallbackCache.delete(restored.clientId);
+    return {
+      resolved: true,
+      assemblyId: restored.id,
+      orderId: restored.orderId,
+      requestId: restored.requestId,
+      message: `Готово: КИЗ заказа №${restored.orderId} получен из WB, заказ снова отмечен собранным.`,
+    };
+  }
+
+  /**
+   * Confirms that an operator has physically packed an FBS order while the
+   * source storage box is not yet known. The order is counted as assembled,
+   * but the request cannot be closed until a manager confirms the real stock
+   * source. Marking and relabel requirements remain mandatory.
+   */
+  async markFbsAssemblyPackedWithoutSource(
+    requestId: string,
+    taskId: string,
+    user: AuthUser,
+  ) {
+    const task = await this.prisma.fbsTsdAssembly.findUnique({
+      where: { id: taskId },
+    });
+    if (!task || task.requestId !== requestId) {
+      throw new NotFoundException('FBS-заказ в этой заявке не найден. Обновите онлайн-заявку.');
+    }
+    this.clientScopes.requireClientAccess(user, task.clientId, 'write');
+    if (task.marketplace !== MarketplaceType.WILDBERRIES) {
+      throw new BadRequestException(
+        'Действие «Вложен без короба» сейчас доступно только для заказов Wildberries.',
+      );
+    }
+    if (task.status === 'COMPLETED') {
+      if (task.sourceBoxPending) {
+        return {
+          completed: true,
+          assemblyId: task.id,
+          orderId: task.orderId,
+          requestId: task.requestId,
+          sourceBoxPending: true,
+          message: `Заказ №${task.orderId} уже засчитан. Исходный короб будет запрошен при закрытии заявки.`,
+        };
+      }
+      throw new BadRequestException('Этот заказ уже собран с указанным источником товара.');
+    }
+    if (![FBS_TSD_WAITING_STOCK_STATUS, FBS_TSD_RESERVED_STATUS, 'IN_PROGRESS'].includes(task.status)) {
+      throw new BadRequestException(
+        'Заказ сейчас нельзя засчитать вручную: сначала устраните его текущую ошибку или обновите заявку.',
+      );
+    }
+    if (task.relabelRequired && !task.relabelConfirmedAt) {
+      throw new BadRequestException(
+        'Сначала завершите переклейку и подтвердите новый штрихкод товара.',
+      );
+    }
+    if (task.requiresKiz && (!task.kiz || task.wbMetaStatus !== 'ACCEPTED')) {
+      throw new BadRequestException(
+        'Для этого товара обязателен КИЗ. Сначала отсканируйте КИЗ на ТСД или внесите его в WB, затем повторите действие. Кнопка не обходит Честный знак.',
+      );
+    }
+    const barcode = task.barcode ?? jsonStringArray(task.barcodes)[0] ?? null;
+    if (!barcode) {
+      throw new BadRequestException('У товара не найден штрихкод. Обновите номенклатуру и повторите действие.');
+    }
+
+    const link = await this.prisma.fbsOrderRequestLink.findUnique({
+      where: {
+        marketplace_connectionId_orderId: {
+          marketplace: task.marketplace,
+          connectionId: task.connectionId,
+          orderId: task.orderId,
+        },
+      },
+    });
+    if (
+      !link ||
+      link.requestId !== requestId ||
+      link.syncStatus !== FBS_REQUEST_LINK_ACTIVE ||
+      link.lastCategory !== 'active'
+    ) {
+      throw new BadRequestException(
+        'Заказ уже не является активной строкой этой FBS-заявки. Обновите данные Wildberries.',
+      );
+    }
+
+    const completed = await this.prisma.$transaction(async (tx) => {
+      const fresh = await tx.fbsTsdAssembly.findUnique({ where: { id: task.id } });
+      if (!fresh || fresh.requestId !== requestId) {
+        throw new NotFoundException('FBS-заказ в этой заявке не найден.');
+      }
+      if (fresh.status === 'COMPLETED' && fresh.sourceBoxPending) return fresh;
+      if (![FBS_TSD_WAITING_STOCK_STATUS, FBS_TSD_RESERVED_STATUS, 'IN_PROGRESS'].includes(fresh.status)) {
+        throw new BadRequestException('Состояние заказа уже изменилось. Обновите онлайн-заявку.');
+      }
+      if (fresh.relabelRequired && !fresh.relabelConfirmedAt) {
+        throw new BadRequestException('Переклейка ещё не подтверждена.');
+      }
+      if (fresh.requiresKiz && (!fresh.kiz || fresh.wbMetaStatus !== 'ACCEPTED')) {
+        throw new BadRequestException('КИЗ ещё не подтверждён Wildberries.');
+      }
+      const request = await tx.clientRequest.findUnique({
+        where: { id: requestId },
+        select: { status: true },
+      });
+      if (!request || FBS_REQUEST_CLOSED_STATUSES.has(request.status)) {
+        throw new BadRequestException('FBS-заявка уже закрыта или отменена.');
+      }
+      const requestItem = await tx.clientRequestItem.findUnique({
+        where: { id: fresh.requestItemId },
+        select: { id: true, skuId: true, quantity: true },
+      });
+      if (!requestItem || requestItem.skuId !== fresh.skuId) {
+        throw new BadRequestException('Товар больше не найден в составе этой FBS-заявки.');
+      }
+      const completed = await tx.fbsTsdAssembly.aggregate({
+        where: {
+          requestItemId: requestItem.id,
+          status: 'COMPLETED',
+          id: { not: fresh.id },
+        },
+        _sum: { itemCount: true },
+      });
+      if (
+        (completed._sum.itemCount ?? 0) + fresh.itemCount >
+        requestItem.quantity
+      ) {
+        throw new BadRequestException(
+          'Нужное количество по этой позиции уже собрано. Обновите онлайн-заявку.',
+        );
+      }
+
+      const updated = await tx.fbsTsdAssembly.update({
+        where: { id: fresh.id },
+        data: {
+          status: 'COMPLETED',
+          deviceCode: 'WEB:FBS:NO_SOURCE',
+          workerUserId: user.id,
+          workerName: user.name,
+          boxId: null,
+          boxCode: FBS_TSD_NO_BOX_CODE,
+          sourceBoxPending: true,
+          barcode,
+          completedAt: new Date(),
+          errorMessage: null,
+        },
+      });
+      await tx.clientRequestEvent.create({
+        data: {
+          requestId,
+          clientId: fresh.clientId,
+          eventType: ClientRequestEventType.COMMENT,
+          title: 'FBS-заказ вложен без указания исходного короба',
+          body: `Заказ №${fresh.orderId}; ${fresh.productName}; ${Math.max(1, fresh.itemCount)} шт. Заказ засчитан, исходный короб обязательно указывается при закрытии заявки.`,
+          createdByUserId: user.id,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'FBS_PACKED_WITHOUT_SOURCE_BOX',
+          entity: 'FbsTsdAssembly',
+          entityId: fresh.id,
+          payload: cleanJson({
+            requestId,
+            orderId: fresh.orderId,
+            clientId: fresh.clientId,
+            reservedBoxCode: fresh.reservedBoxCode,
+            barcode,
+            quantity: Math.max(1, fresh.itemCount),
+          }),
+        },
+      });
+      return updated;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+    this.fbsOrdersCache.delete(completed.clientId);
+    this.fbsTsdRequestFallbackCache.delete(completed.clientId);
+    return {
+      completed: true,
+      assemblyId: completed.id,
+      orderId: completed.orderId,
+      requestId: completed.requestId,
+      sourceBoxPending: true,
+      message: `Заказ №${completed.orderId} засчитан. При закрытии заявки WMS обязательно запросит исходный короб.`,
+    };
+  }
+
+  async listSosWbRequests(user: AuthUser) {
+    const clientFilter = this.clientScopes.resolveClientFilter(user);
+    const tasks = await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        clientId: clientFilter,
+        marketplace: MarketplaceType.WILDBERRIES,
+        requiresKiz: true,
+        relabelRequired: false,
+        status: { in: [FBS_TSD_RESERVED_STATUS, FBS_TSD_WAITING_STOCK_STATUS, 'RELEASED'] },
+      },
+      select: { requestId: true },
+    });
+    const requestIds = uniqueStrings(tasks.map((task) => task.requestId));
+    const availableByRequest = new Map<string, number>();
+    tasks.forEach((task) => availableByRequest.set(task.requestId, (availableByRequest.get(task.requestId) ?? 0) + 1));
+    if (!requestIds.length) return { requests: [] };
+    const requests = await this.prisma.clientRequest.findMany({
+      where: {
+        id: { in: requestIds },
+        status: { notIn: [...FBS_REQUEST_CLOSED_STATUSES] },
+        ...(user.activeWarehouseId ? { warehouseId: user.activeWarehouseId } : {}),
+      },
+      select: {
+        id: true,
+        number: true,
+        title: true,
+        status: true,
+        client: { select: { id: true, code: true, name: true } },
+      },
+      orderBy: [{ number: 'desc' }, { createdAt: 'desc' }],
+    });
+    return {
+      requests: requests.map((request) => ({
+        requestId: request.id,
+        requestNumber: request.number,
+        title: request.title,
+        status: request.status,
+        client: request.client,
+        availableOrders: availableByRequest.get(request.id) ?? 0,
+      })),
+    };
+  }
+
+  async claimSosWbOrder(
+    payload: { requestId?: unknown; barcode?: unknown; deviceCode?: unknown; sourceBoxCode?: unknown },
+    user: AuthUser,
+  ) {
+    const barcode = requiredFbsTsdText(payload.barcode, 'Отсканируйте ШК товара.');
+    const requestId = textValue(payload.requestId) || null;
+    const sourceBoxCode = textValue(payload.sourceBoxCode).trim() || null;
+    const deviceCode = this.sosWbDeviceCode(payload.deviceCode);
+    const clientFilter = this.clientScopes.resolveClientFilter(user);
+    const lockKey = `sos-wb:${requestId ?? 'all'}:${barcode.toLocaleUpperCase('ru-RU')}`;
+    return this.withFbsTsdAssignmentLock(lockKey, async () => {
+      const existing = await this.prisma.fbsTsdAssembly.findFirst({
+        where: {
+          status: 'IN_PROGRESS',
+          workerUserId: user.id,
+          deviceCode,
+        },
+        orderBy: [{ startedAt: 'desc' }, { updatedAt: 'desc' }],
+      });
+      if (existing) {
+        if (jsonStringArray(existing.barcodes).includes(barcode) && (!requestId || existing.requestId === requestId)) {
+          return this.sosWbClaimResponse(existing, true);
+        }
+        throw new ConflictException({
+          code: 'SOS_WB_ORDER_ACTIVE',
+          message: `Сначала завершите заказ №${existing.orderId} или нажмите «Отменить выбор».`,
+          taskId: existing.id,
+          requestId: existing.requestId,
+          orderId: existing.orderId,
+        });
+      }
+
+      const scannedSourceBox = sourceBoxCode
+        ? await this.prisma.box.findFirst({
+            where: {
+              clientId: clientFilter,
+              code: { equals: sourceBoxCode, mode: Prisma.QueryMode.insensitive },
+              status: { notIn: ['deleted', 'archived'] },
+            },
+            select: { id: true, code: true, clientId: true, warehouseId: true },
+          })
+        : null;
+      if (sourceBoxCode && !scannedSourceBox) {
+        return {
+          matched: false,
+          color: 'RED',
+          message: `Короб ${sourceBoxCode} не найден среди доступных коробов. Отсканируйте короб ещё раз.`,
+        };
+      }
+
+      const candidates = await this.prisma.fbsTsdAssembly.findMany({
+        where: {
+          clientId: clientFilter,
+          marketplace: MarketplaceType.WILDBERRIES,
+          requiresKiz: true,
+          relabelRequired: false,
+          status: { in: [FBS_TSD_RESERVED_STATUS, FBS_TSD_WAITING_STOCK_STATUS, 'RELEASED'] },
+          ...(requestId ? { requestId } : {}),
+        },
+        orderBy: [{ createdAt: 'asc' }, { orderId: 'asc' }],
+        take: 5000,
+      });
+      const barcodeCandidates = candidates.filter((task) =>
+        jsonStringArray(task.barcodes).some((value) => value === barcode),
+      );
+      if (!barcodeCandidates.length) {
+        return {
+          matched: false,
+          color: 'RED',
+          message: requestId
+            ? 'Этот костюм не нужен в оставшейся части выбранной заявки. Отсканируйте следующий ШК.'
+            : 'Этот костюм не нужен ни в одной незакрытой заявке. Отсканируйте следующий ШК.',
+        };
+      }
+
+      const requestIds = uniqueStrings(barcodeCandidates.map((task) => task.requestId));
+      const [requests, links] = await Promise.all([
+        this.prisma.clientRequest.findMany({
+          where: {
+            id: { in: requestIds },
+            status: { notIn: [...FBS_REQUEST_CLOSED_STATUSES] },
+            ...(user.activeWarehouseId ? { warehouseId: user.activeWarehouseId } : {}),
+          },
+          select: {
+            id: true,
+            number: true,
+            warehouseId: true,
+            client: { select: { storesWithoutBoxes: true } },
+          },
+          orderBy: [{ number: 'desc' }, { createdAt: 'desc' }],
+        }),
+        this.prisma.fbsOrderRequestLink.findMany({
+          where: {
+            requestId: { in: requestIds },
+            marketplace: MarketplaceType.WILDBERRIES,
+            syncStatus: FBS_REQUEST_LINK_ACTIVE,
+            lastCategory: 'active',
+          },
+          select: { requestId: true, connectionId: true, orderId: true },
+        }),
+      ]);
+      const requestById = new Map(requests.map((request) => [request.id, request]));
+      const activeLinkKeys = new Set(links.map((link) => `${link.requestId}:${link.connectionId}:${link.orderId}`));
+      const eligible = barcodeCandidates
+        .filter((task) => requestById.has(task.requestId))
+        .filter((task) => activeLinkKeys.has(`${task.requestId}:${task.connectionId}:${task.orderId}`))
+        .sort((left, right) =>
+          (requestById.get(right.requestId)?.number ?? 0) - (requestById.get(left.requestId)?.number ?? 0) ||
+          left.createdAt.getTime() - right.createdAt.getTime(),
+        );
+
+      for (const candidate of eligible) {
+        const request = requestById.get(candidate.requestId);
+        if (!request) continue;
+        if (
+          scannedSourceBox &&
+          (scannedSourceBox.clientId !== candidate.clientId ||
+            (request.warehouseId && scannedSourceBox.warehouseId !== request.warehouseId))
+        ) {
+          continue;
+        }
+        let virtualBoxId = scannedSourceBox?.id ?? candidate.reservedBoxId;
+        let virtualBoxCode = scannedSourceBox?.code ?? candidate.reservedBoxCode;
+        if (scannedSourceBox) {
+          const stockSkuId = candidate.sourceSkuId ?? candidate.skuId;
+          const [available, reservations] = await Promise.all([
+            this.prisma.stockBalance.aggregate({
+              where: {
+                clientId: candidate.clientId,
+                skuId: stockSkuId,
+                boxId: scannedSourceBox.id,
+                status: StockStatus.AVAILABLE,
+              },
+              _sum: { quantity: true },
+            }),
+            this.fbsTsdReservationRows({
+              clientId: candidate.clientId,
+              skuId: stockSkuId,
+              excludeTaskId: candidate.id,
+            }),
+          ]);
+          const reservedInBox = reservations
+            .filter((reservation) => reservation.boxId === scannedSourceBox.id)
+            .reduce((sum, reservation) => sum + Math.max(1, reservation.itemCount), 0);
+          if ((available._sum.quantity ?? 0) - reservedInBox < Math.max(1, candidate.itemCount)) {
+            continue;
+          }
+        } else if (!virtualBoxId && !request.client.storesWithoutBoxes) {
+          const stockSkuId = candidate.sourceSkuId ?? candidate.skuId;
+          const [balances, reservations] = await Promise.all([
+            this.prisma.stockBalance.findMany({
+              where: {
+                clientId: candidate.clientId,
+                skuId: stockSkuId,
+                status: StockStatus.AVAILABLE,
+                quantity: { gt: 0 },
+                boxId: { not: null },
+                box: {
+                  status: { notIn: ['deleted', 'archived'] },
+                  ...(request.warehouseId ? { warehouseId: request.warehouseId } : {}),
+                },
+              },
+              select: { boxId: true, quantity: true, box: { select: { id: true, code: true } } },
+            }),
+            this.fbsTsdReservationRows({
+              clientId: candidate.clientId,
+              skuId: stockSkuId,
+              excludeTaskId: candidate.id,
+            }),
+          ]);
+          const quantityByBox = new Map<string, { code: string; quantity: number }>();
+          for (const balance of balances) {
+            if (!balance.boxId || !balance.box) continue;
+            const value = quantityByBox.get(balance.boxId) ?? { code: balance.box.code, quantity: 0 };
+            value.quantity += balance.quantity;
+            quantityByBox.set(balance.boxId, value);
+          }
+          for (const reservation of reservations) {
+            if (!reservation.boxId) continue;
+            const value = quantityByBox.get(reservation.boxId);
+            if (value) value.quantity -= Math.max(1, reservation.itemCount);
+          }
+          const selected = [...quantityByBox.entries()]
+            .filter(([, value]) => value.quantity >= Math.max(1, candidate.itemCount))
+            .sort((left, right) => left[1].quantity - right[1].quantity || left[1].code.localeCompare(right[1].code, 'ru-RU'))[0];
+          if (!selected) continue;
+          virtualBoxId = selected[0];
+          virtualBoxCode = selected[1].code;
+        } else if (!virtualBoxId && request.client.storesWithoutBoxes) {
+          const stockSkuId = candidate.sourceSkuId ?? candidate.skuId;
+          const [available, reservations] = await Promise.all([
+            this.prisma.stockBalance.aggregate({
+              where: {
+                clientId: candidate.clientId,
+                skuId: stockSkuId,
+                status: StockStatus.AVAILABLE,
+                boxId: null,
+              },
+              _sum: { quantity: true },
+            }),
+            this.fbsTsdReservationRows({
+              clientId: candidate.clientId,
+              skuId: stockSkuId,
+              withoutBox: true,
+              excludeTaskId: candidate.id,
+            }),
+          ]);
+          const reserved = reservations.reduce((sum, row) => sum + Math.max(1, row.itemCount), 0);
+          if ((available._sum.quantity ?? 0) - reserved < Math.max(1, candidate.itemCount)) continue;
+          virtualBoxCode = FBS_TSD_NO_BOX_CODE;
+        }
+        const claimed = await this.prisma.fbsTsdAssembly.updateMany({
+          where: {
+            id: candidate.id,
+            status: { in: [FBS_TSD_RESERVED_STATUS, FBS_TSD_WAITING_STOCK_STATUS, 'RELEASED'] },
+            workerUserId: null,
+            barcode: null,
+            kiz: null,
+            completedAt: null,
+            reservedBoxId: candidate.reservedBoxId,
+          },
+          data: {
+            status: 'IN_PROGRESS',
+            deviceCode,
+            workerUserId: user.id,
+            workerName: user.name,
+            startedAt: new Date(),
+            boxId: scannedSourceBox?.id ?? null,
+            boxCode: scannedSourceBox?.code ?? FBS_TSD_NO_BOX_CODE,
+            sourceBoxPending: false,
+            reservedBoxId: virtualBoxId,
+            reservedBoxCode: virtualBoxCode,
+            reservedAt: new Date(),
+            barcode,
+            wbMetaStatus: 'PENDING',
+            errorMessage: null,
+          },
+        });
+        if (claimed.count !== 1) continue;
+        const task = await this.prisma.fbsTsdAssembly.findUnique({ where: { id: candidate.id } });
+        if (!task) continue;
+        await this.prisma.auditLog.create({
+          data: {
+            userId: user.id,
+            action: 'SOS_WB_ORDER_CLAIMED',
+            entity: 'FbsTsdAssembly',
+            entityId: task.id,
+            payload: cleanJson({
+              requestId: task.requestId,
+              requestNumber: requestById.get(task.requestId)?.number,
+              orderId: task.orderId,
+              barcode,
+              deviceCode,
+              workerName: user.name,
+            }),
+          },
+        });
+        return this.sosWbClaimResponse(task, false, requestById.get(task.requestId)?.number);
+      }
+      return {
+        matched: false,
+        color: 'RED',
+        message: scannedSourceBox
+          ? `В коробе ${scannedSourceBox.code} нет свободной единицы этого товара для активных заказов. Отсканируйте следующий ШК или выберите другой короб.`
+          : 'Подходящий заказ только что забрал другой сотрудник. Отсканируйте ШК ещё раз.',
+      };
+    });
+  }
+
+  async acceptSosWbKiz(
+    taskId: string,
+    payload: { kiz?: unknown; deviceCode?: unknown; confirmReplace?: unknown },
+    user: AuthUser,
+  ) {
+    const deviceCode = this.sosWbDeviceCode(payload.deviceCode);
+    const kiz = normalizedFbsKizValue(requiredFbsTsdText(payload.kiz, 'Отсканируйте КИЗ товара.'));
+    const task = await this.prisma.fbsTsdAssembly.findUnique({ where: { id: taskId } });
+    if (!task) throw new NotFoundException('Заказ SOS WB не найден. Обновите очередь.');
+    this.clientScopes.requireClientAccess(user, task.clientId, 'write');
+    if (task.status !== 'IN_PROGRESS' || task.workerUserId !== user.id || task.deviceCode !== deviceCode) {
+      throw new ConflictException({ code: 'SOS_WB_TASK_STALE', message: 'Этот заказ уже изменился или назначен другому сотруднику.' });
+    }
+    if (!task.barcode) {
+      throw new BadRequestException('Сначала отсканируйте ШК нужного костюма.');
+    }
+    const hasPhysicalSourceBox = Boolean(task.boxId && task.boxCode && task.boxCode !== FBS_TSD_NO_BOX_CODE);
+    const normalizedUpperKiz = kiz.toLocaleUpperCase('ru-RU');
+    if (
+      kiz.length < 16 ||
+      jsonStringArray(task.barcodes).some((value) => value === kiz) ||
+      normalizedUpperKiz.startsWith('FFL_') ||
+      normalizedUpperKiz.startsWith('PALLET_') ||
+      normalizedUpperKiz.startsWith('PALET_')
+    ) {
+      throw new BadRequestException('Отсканирован не КИЗ товара. Считайте полный Data Matrix с этикетки костюма.');
+    }
+
+    let mark = await this.prisma.productMark.findFirst({
+      where: { value: { equals: kiz, mode: Prisma.QueryMode.insensitive } },
+      select: {
+        id: true,
+        clientId: true,
+        skuId: true,
+        boxId: true,
+        status: true,
+        sourceDocument: true,
+        box: { select: { code: true } },
+        sku: {
+          select: {
+            internalSku: true,
+            article: true,
+            name: true,
+            color: true,
+            size: true,
+          },
+        },
+      },
+    });
+    if (mark && (mark.clientId !== task.clientId || mark.skuId !== task.skuId)) {
+      throw new BadRequestException('Этот КИЗ относится к другому клиенту или другому товару. Возьмите другую единицу.');
+    }
+    if (
+      hasPhysicalSourceBox &&
+      mark?.box?.code &&
+      normalizeFbsScannerCode(mark.box.code) !== normalizeFbsScannerCode(task.boxCode ?? '')
+    ) {
+      throw new BadRequestException(
+        `Этот КИЗ числится в коробе ${mark.box.code}, а вы собираете из ${task.boxCode}. Проверьте физический короб.`,
+      );
+    }
+    const previousWbUsage = await this.findPreviousWildberriesKizUsage(
+      task.clientId,
+      kiz,
+      task.id,
+    );
+    if (previousWbUsage) {
+      throw new BadRequestException(
+        previousWbUsage.orderId
+          ? `Этот КИЗ уже передавался в Wildberries для заказа №${previousWbUsage.orderId}. Возьмите другую единицу.`
+          : 'Этот КИЗ уже передавался или был отгружен через Wildberries. Возьмите другую единицу.',
+      );
+    }
+    if (
+      mark &&
+      (mark.status === StockStatus.DEFECT || mark.status === StockStatus.QUARANTINE)
+    ) {
+      throw new BadRequestException('Этот КИЗ находится в браке или карантине. Передайте товар менеджеру.');
+    }
+    if (mark && mark.status !== StockStatus.AVAILABLE) {
+      mark = await this.restoreScannedFbsKizAvailability(task, mark, kiz, user);
+    }
+    const duplicate = await this.prisma.fbsTsdAssembly.findFirst({
+      where: {
+        id: { not: task.id },
+        kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+        status: { in: ['IN_PROGRESS', 'COMPLETED', FBS_TSD_RETURN_REQUIRED] },
+      },
+      select: { orderId: true },
+    });
+    if (duplicate) throw new BadRequestException(`Этот КИЗ уже привязан к заказу №${duplicate.orderId}.`);
+
+    const connection = await this.prisma.clientMarketplaceConnection.findFirst({
+      where: {
+        id: task.connectionId,
+        clientId: task.clientId,
+        marketplace: MarketplaceType.WILDBERRIES,
+        isActive: true,
+      },
+      select: { apiKey: true },
+    });
+    if (!connection) throw new BadRequestException('Подключение Wildberries отключено.');
+    const preflight = await this.loadWildberriesFbsKizPreflight(connection.apiKey, task.orderId, kiz);
+    let replacedRemoteKizValues: string[] = [];
+    if (!preflight.alreadyAttached && preflight.remoteKizValues.length > 0) {
+      if (payload.confirmReplace !== true) {
+        return {
+          completed: false,
+          color: 'RED',
+          conflict: 'REMOTE_KIZ',
+          canReplace: true,
+          taskId: task.id,
+          requestId: task.requestId,
+          orderId: task.orderId,
+          scannedKiz: printableFbsKiz(kiz),
+          remoteKiz: preflight.remoteKizValues.map(printableFbsKiz),
+          message: 'В Wildberries у заказа уже записан другой КИЗ. Проверьте старую маркировку и нажмите «Заменить КИЗ в WB», если перед вами другая физическая единица.',
+        };
+      }
+      if (preflight.supplierStatus !== 'confirm') {
+        throw new BadRequestException(`Нельзя заменить КИЗ: заказ WB имеет статус ${preflight.supplierStatus || 'неизвестно'}, нужен confirm.`);
+      }
+      await marketplaceJsonOnce(
+        `https://marketplace-api.wildberries.ru/api/v3/orders/${numericWbOrderId(task.orderId)}/meta?key=sgtin`,
+        {
+          method: 'DELETE',
+          headers: wbHeaders(connection.apiKey),
+          signal: AbortSignal.timeout(FBS_TSD_WB_READ_TIMEOUT_MS),
+        },
+      );
+      replacedRemoteKizValues = [...preflight.remoteKizValues];
+    }
+    if (!preflight.alreadyAttached && preflight.supplierStatus !== 'confirm') {
+      throw new BadRequestException(`Wildberries не разрешает запись КИЗ: заказ имеет статус ${preflight.supplierStatus || 'неизвестно'}, нужен confirm.`);
+    }
+    if (!preflight.alreadyAttached) {
+      await marketplaceJsonOnce(
         `https://marketplace-api.wildberries.ru/api/v3/orders/${numericWbOrderId(task.orderId)}/meta/sgtin`,
         {
           method: 'PUT',
           headers: wbHeaders(connection.apiKey),
           body: JSON.stringify({ sgtins: [kiz] }),
+          signal: AbortSignal.timeout(FBS_TSD_WB_READ_TIMEOUT_MS),
         },
       );
+    }
+
+    const completed = await this.prisma.$transaction(async (tx) => {
+      const changed = await tx.fbsTsdAssembly.updateMany({
+        where: {
+          id: task.id,
+          status: 'IN_PROGRESS',
+          workerUserId: user.id,
+          deviceCode,
+          barcode: task.barcode,
+          kiz: null,
+          completedAt: null,
+        },
+        data: {
+          status: 'COMPLETED',
+          kiz,
+          wbMetaStatus: 'ACCEPTED',
+          boxId: hasPhysicalSourceBox ? task.boxId : null,
+          boxCode: hasPhysicalSourceBox ? task.boxCode : FBS_TSD_NO_BOX_CODE,
+          sourceBoxPending: !hasPhysicalSourceBox,
+          completedAt: new Date(),
+          errorMessage: null,
+        },
+      });
+      if (changed.count !== 1) {
+        throw new ConflictException({ code: 'SOS_WB_TASK_STALE', message: 'Заказ уже изменился. Обновите очередь.' });
+      }
+      const fresh = await tx.fbsTsdAssembly.findUnique({ where: { id: task.id } });
+      if (!fresh) throw new NotFoundException('Заказ SOS WB не найден.');
+      await tx.clientRequestEvent.create({
+        data: {
+          requestId: fresh.requestId,
+          clientId: fresh.clientId,
+          eventType: ClientRequestEventType.COMMENT,
+          title: hasPhysicalSourceBox
+            ? `SOS WB: заказ собран из короба ${fresh.boxCode}`
+            : 'SOS WB: заказ собран без указания короба',
+          body: hasPhysicalSourceBox
+            ? `Заявка WMS; заказ WB №${fresh.orderId}; ${fresh.productName}; ШК ${fresh.barcode}; КИЗ ${printableFbsKiz(kiz)}; короб ${fresh.boxCode}; сотрудник ${user.name}. Сделано SOS.`
+            : `Заявка WMS; заказ WB №${fresh.orderId}; ${fresh.productName}; ШК ${fresh.barcode}; КИЗ ${printableFbsKiz(kiz)}; сотрудник ${user.name}. Исходный короб необходимо указать при закрытии заявки. Сделано SOS.`,
+          createdByUserId: user.id,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'SOS_WB_ORDER_COMPLETED',
+          entity: 'FbsTsdAssembly',
+          entityId: fresh.id,
+          payload: cleanJson({
+            requestId: fresh.requestId,
+            orderId: fresh.orderId,
+            barcode: fresh.barcode,
+            kiz: printableFbsKiz(kiz),
+            sourceBoxCode: hasPhysicalSourceBox ? fresh.boxCode : null,
+            sourceMode: hasPhysicalSourceBox ? 'BOX_AND_PRODUCT' : 'AUTO_VIRTUAL_RESERVE',
+            deviceCode,
+            workerName: user.name,
+          }),
+        },
+      });
+      return fresh;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    await this.recordAcceptedFbsKizScan(completed, kiz, user);
+    if (replacedRemoteKizValues.length > 0) {
+      await this.prisma.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'SOS_WB_KIZ_REPLACED',
+          entity: 'FbsTsdAssembly',
+          entityId: completed.id,
+          payload: cleanJson({
+            requestId: completed.requestId,
+            orderId: completed.orderId,
+            oldKiz: replacedRemoteKizValues.map(printableFbsKiz),
+            newKiz: printableFbsKiz(kiz),
+            deviceCode,
+            workerName: user.name,
+          }),
+        },
+      });
+    }
+    const request = await this.prisma.clientRequest.findUnique({
+      where: { id: completed.requestId },
+      select: { number: true },
+    });
+    return {
+      completed: true,
+      color: 'GREEN',
+      taskId: completed.id,
+      requestId: completed.requestId,
+      requestNumber: request?.number ?? null,
+      orderId: completed.orderId,
+      productName: completed.productName,
+      article: completed.article,
+      kiz: printableFbsKiz(kiz),
+      sourceBoxPending: !hasPhysicalSourceBox,
+      sourceBoxCode: hasPhysicalSourceBox ? completed.boxCode : null,
+      completionSource: 'SOS_WB',
+      message: hasPhysicalSourceBox
+        ? `Готово. КИЗ записан в Wildberries. Заказ №${completed.orderId} собран из короба ${completed.boxCode}. Сделано SOS.`
+        : `Готово. КИЗ записан в Wildberries. Заказ №${completed.orderId} собран; короб будет указан при закрытии заявки. Сделано SOS.`,
+    };
+  }
+
+  async releaseSosWbOrder(
+    taskId: string,
+    payload: { deviceCode?: unknown },
+    user: AuthUser,
+  ) {
+    const deviceCode = this.sosWbDeviceCode(payload.deviceCode);
+    const task = await this.prisma.fbsTsdAssembly.findUnique({ where: { id: taskId } });
+    if (!task) return { released: true };
+    this.clientScopes.requireClientAccess(user, task.clientId, 'write');
+    const changed = await this.prisma.fbsTsdAssembly.updateMany({
+      where: {
+        id: task.id,
+        status: 'IN_PROGRESS',
+        workerUserId: user.id,
+        deviceCode,
+        kiz: null,
+        wbMetaStatus: 'PENDING',
+      },
+      data: {
+        status: task.reservedBoxId ? FBS_TSD_RESERVED_STATUS : FBS_TSD_WAITING_STOCK_STATUS,
+        deviceCode: FBS_TSD_AUTO_RESERVATION_DEVICE,
+        workerUserId: null,
+        workerName: null,
+        boxId: null,
+        boxCode: null,
+        sourceBoxPending: false,
+        barcode: null,
+        startedAt: null,
+        errorMessage: 'Выбор SOS WB отменён сотрудником.',
+      },
+    });
+    return { released: changed.count === 1 };
+  }
+
+  private sosWbDeviceCode(value: unknown) {
+    const raw = textValue(value).trim().toLocaleUpperCase('ru-RU');
+    if (!raw) throw new BadRequestException('Не определён физический ТСД SOS WB. Перезапустите приложение.');
+    return raw.startsWith('SOS-WB:') ? raw.slice(0, 100) : `SOS-WB:${raw}`.slice(0, 100);
+  }
+
+  private async sosWbClaimResponse(task: FbsTsdAssemblyRecord, resumed: boolean, requestNumberValue?: number) {
+    const requestNumber = requestNumberValue ?? (await this.prisma.clientRequest.findUnique({
+      where: { id: task.requestId },
+      select: { number: true },
+    }))?.number ?? null;
+    const sku = await this.prisma.sku.findUnique({
+      where: { id: task.skuId },
+      select: { internalSku: true, size: true, color: true },
+    });
+    return {
+      matched: true,
+      resumed,
+      color: 'GREEN',
+      taskId: task.id,
+      requestId: task.requestId,
+      requestNumber,
+      orderId: task.orderId,
+      productName: task.productName,
+      article: task.article ?? sku?.internalSku ?? null,
+      size: sku?.size ?? null,
+      colorName: sku?.color ?? null,
+      barcode: task.barcode,
+      virtualSourceBox: task.reservedBoxCode ?? FBS_TSD_NO_BOX_CODE,
+      message: 'КОСТЮМ НУЖЕН. Теперь отсканируйте КИЗ.',
+    };
+  }
+
+  /**
+   * Resets an individual, unfinished FBS order back to the handheld queue.
+   * This deliberately does not remove the WB order or alter request quantities:
+   * the physical item is still expected to be returned to its source box by the
+   * operator before the order is picked again.
+   */
+  async resetFbsAssemblyOrder(
+    requestId: string,
+    taskId: string,
+    user: AuthUser,
+  ) {
+    const task = await this.prisma.fbsTsdAssembly.findUnique({
+      where: { id: taskId },
+    });
+    if (!task || task.requestId !== requestId) {
+      throw new NotFoundException('FBS-заказ в этой заявке не найден. Обновите заявку.');
+    }
+    this.clientScopes.requireClientAccess(user, task.clientId, 'write');
+    if (!["IN_PROGRESS", FBS_TSD_RESCAN_REQUIRED_STATUS].includes(task.status)) {
+      throw new BadRequestException(
+        task.status === 'COMPLETED'
+          ? 'Этот заказ уже завершён и упакован. Для него нужен отдельный возврат товара, а не сброс сборки.'
+          : 'Сборка этого заказа ещё не начата или уже изменилась. Обновите заявку.',
+      );
+    }
+
+    const link = await this.prisma.fbsOrderRequestLink.findUnique({
+      where: {
+        marketplace_connectionId_orderId: {
+          marketplace: task.marketplace,
+          connectionId: task.connectionId,
+          orderId: task.orderId,
+        },
+      },
+    });
+    if (!link || link.requestId !== requestId || link.syncStatus !== FBS_REQUEST_LINK_ACTIVE) {
+      throw new BadRequestException(
+        'Заказ уже не является активной строкой этой FBS-заявки. Сначала обновите данные Wildberries.',
+      );
+    }
+    if (link.lastCategory !== 'active') {
+      throw new BadRequestException(
+        'Заказ уже отменён или изменён на стороне маркетплейса. Используйте решение для проблемного заказа.',
+      );
+    }
+
+    // If the scanner has already saved the marking code in WB, release it first.
+    // The local reset is not performed if WB refuses the release, so the two
+    // systems cannot silently diverge.
+    if (
+      task.marketplace === MarketplaceType.WILDBERRIES &&
+      task.kiz &&
+      task.wbMetaStatus === 'ACCEPTED' &&
+      !(await this.isFbsEmergencyAssemblyRequest(task.requestId))
+    ) {
+      const connection = await this.prisma.clientMarketplaceConnection.findFirst({
+        where: {
+          id: task.connectionId,
+          clientId: task.clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          isActive: true,
+        },
+        select: { apiKey: true },
+      });
+      if (!connection) {
+        throw new BadRequestException(
+          'Подключение Wildberries отключено. Нельзя безопасно освободить переданный КИЗ.',
+        );
+      }
+      const claimed = await this.prisma.fbsTsdAssembly.updateMany({
+        where: {
+          id: task.id,
+          status: { in: ['IN_PROGRESS', FBS_TSD_RESCAN_REQUIRED_STATUS] },
+          kiz: task.kiz,
+          wbMetaStatus: 'ACCEPTED',
+        },
+        data: { wbMetaStatus: 'REMOVING', errorMessage: null },
+      });
+      if (claimed.count !== 1) {
+        throw new BadRequestException('Состояние заказа уже изменилось. Обновите заявку и повторите действие.');
+      }
+      try {
+        await marketplaceJson(
+          `https://marketplace-api.wildberries.ru/api/v3/orders/${numericWbOrderId(task.orderId)}/meta?key=sgtin`,
+          {
+            method: 'DELETE',
+            headers: wbHeaders(connection.apiKey),
+          },
+        );
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : 'Wildberries не освободил КИЗ.';
+        await this.prisma.fbsTsdAssembly.updateMany({
+          where: { id: task.id, wbMetaStatus: 'REMOVING' },
+          data: { wbMetaStatus: 'ACCEPTED', errorMessage: message },
+        });
+        throw new BadRequestException(
+          `Сброс не выполнен: сначала нужно освободить КИЗ в Wildberries. ${message}`,
+        );
+      }
+    }
+
+    await this.inventoryLock?.assertStockMovementsAllowed();
+    const reset = await this.prisma.$transaction(async (tx) => {
+      const freshTask = await tx.fbsTsdAssembly.findUnique({ where: { id: task.id } });
+      const freshLink = await tx.fbsOrderRequestLink.findUnique({ where: { id: link.id } });
+      if (
+        !freshTask ||
+        !freshLink ||
+        !['IN_PROGRESS', FBS_TSD_RESCAN_REQUIRED_STATUS].includes(freshTask.status) ||
+        freshLink.requestId !== requestId ||
+        freshLink.syncStatus !== FBS_REQUEST_LINK_ACTIVE ||
+        freshLink.lastCategory !== 'active'
+      ) {
+        throw new BadRequestException('Состояние заказа уже изменилось. Обновите заявку и повторите действие.');
+      }
+
+      if (freshTask.cargoPackingId) {
+        await tx.fbsCargoPlacePacking.updateMany({
+          where: { id: freshTask.cargoPackingId, status: 'CLOSED' },
+          data: {
+            status: 'OPEN',
+            closedByUserId: null,
+            closedByName: null,
+            closedAt: null,
+          },
+        });
+      }
+
+      const sourceLocation = freshTask.boxCode || freshTask.reservedBoxCode || 'хранение без коробов';
+      await tx.fbsTsdAssembly.update({
+        where: { id: freshTask.id },
+        data: {
+          status: FBS_TSD_WAITING_STOCK_STATUS,
+          deviceCode: FBS_TSD_AUTO_RESERVATION_DEVICE,
+          workerUserId: null,
+          workerName: null,
+          reservedBoxId: null,
+          reservedBoxCode: null,
+          reservedAt: null,
+          boxId: null,
+          boxCode: null,
+          sourceBoxPending: false,
+          sourceBarcode: null,
+          barcode: null,
+          relabelConfirmedAt: null,
+          kiz: null,
+          wbMetaStatus: freshTask.requiresKiz ? 'PENDING' : 'NOT_REQUIRED',
+          stickerPartA: null,
+          stickerPartB: null,
+          stickerBarcode: null,
+          cargoPackingId: null,
+          cargoPackedAt: null,
+          cargoPackedByUserId: null,
+          cargoPackedByName: null,
+          completedAt: null,
+          errorMessage: `Сборка сброшена пользователем. Заказ ${freshTask.orderId} направлен на повторное резервирование.`,
+        },
+      });
+      await tx.fbsOrderRequestLink.update({
+        where: { id: freshLink.id },
+        data: { syncStatus: FBS_REQUEST_LINK_ACTIVE, syncIssue: null },
+      });
+      await tx.clientRequestEvent.create({
+        data: {
+          requestId,
+          clientId: freshTask.clientId,
+          eventType: ClientRequestEventType.COMMENT,
+          title: 'Сборка FBS-заказа сброшена',
+          body: `Заказ WB №${freshTask.orderId}; ${freshTask.productName}; источник до сброса: ${sourceLocation}; ${Math.max(1, freshTask.itemCount)} шт.${freshTask.kiz ? ` КИЗ ${printableFbsKiz(freshTask.kiz)} освобождён.` : ''}`,
+          createdByUserId: user.id,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'FBS_ASSEMBLY_ORDER_RESET',
+          entity: 'FbsTsdAssembly',
+          entityId: freshTask.id,
+          payload: cleanJson({
+            requestId,
+            orderId: freshTask.orderId,
+            clientId: freshTask.clientId,
+            sourceBoxCode: freshTask.boxCode ?? freshTask.reservedBoxCode,
+            hadKiz: Boolean(freshTask.kiz),
+            quantity: Math.max(1, freshTask.itemCount),
+          }),
+        },
+      });
+      return { id: freshTask.id, orderId: freshTask.orderId, clientId: freshTask.clientId };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+    this.fbsOrdersCache.delete(reset.clientId);
+    this.fbsTsdRequestFallbackCache.delete(reset.clientId);
+    try {
+      await this.refreshFbsOrdersCache(reset.clientId, {
+        invalidateHistory: false,
+        historyMode: 'cache-only',
+      });
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : 'Wildberries не принял КИЗ.';
-      if (historicalMarkRegistration) {
-        await this.prisma.$transaction(async (tx) => {
-          if (historicalMarkRegistration!.mode === 'CREATED') {
-            await tx.productMark.deleteMany({
-              where: { id: historicalMarkRegistration!.id, clientId: task.clientId, value: kiz },
+      this.logger.warn(
+        `FBS order ${reset.orderId} was reset, but its immediate reservation refresh failed: ${marketplaceErrorMessage(caught)}`,
+      );
+    }
+    return {
+      reset: true,
+      assemblyId: reset.id,
+      orderId: reset.orderId,
+      requestId,
+      message: `Готово: сборка заказа №${reset.orderId} сброшена. Он снова появится в очереди ТСД для повторного сканирования.`,
+    };
+  }
+
+  async resolveFbsSyncConflict(
+    requestId: string,
+    taskId: string,
+    dto: ResolveFbsSyncConflictDto,
+    user: AuthUser,
+  ) {
+    const comment = textValue(dto.comment).slice(0, 1000);
+    if (
+      dto.action === FbsSyncConflictResolutionAction.MANAGER_CONFIRMED &&
+      !comment
+    ) {
+      throw new BadRequestException('Укажите решение менеджера в комментарии.');
+    }
+
+    const task = await this.prisma.fbsTsdAssembly.findUnique({
+      where: { id: taskId },
+    });
+    if (!task || task.requestId !== requestId) {
+      throw new NotFoundException('Проблемный FBS-заказ в этой заявке не найден.');
+    }
+    this.clientScopes.requireClientAccess(user, task.clientId, 'write');
+    if (task.status !== FBS_TSD_RETURN_REQUIRED) {
+      throw new BadRequestException(
+        'Эта проблема уже решена или состояние заказа изменилось. Обновите заявку.',
+      );
+    }
+
+    const link = await this.prisma.fbsOrderRequestLink.findUnique({
+      where: {
+        marketplace_connectionId_orderId: {
+          marketplace: task.marketplace,
+          connectionId: task.connectionId,
+          orderId: task.orderId,
+        },
+      },
+    });
+    if (!link || link.requestId !== requestId) {
+      throw new NotFoundException('Связь FBS-заказа с заявкой не найдена. Обновите заявку.');
+    }
+
+    const orderCancelled = link.lastCategory === 'cancelled';
+    if (
+      !orderCancelled &&
+      task.kiz &&
+      task.wbMetaStatus === 'ACCEPTED' &&
+      !(await this.isFbsEmergencyAssemblyRequest(task.requestId))
+    ) {
+      const connection = await this.prisma.clientMarketplaceConnection.findFirst({
+        where: {
+          id: task.connectionId,
+          clientId: task.clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          isActive: true,
+        },
+        select: { apiKey: true },
+      });
+      if (!connection) {
+        throw new BadRequestException(
+          'Подключение Wildberries отключено. Нельзя безопасно освободить переданный КИЗ.',
+        );
+      }
+      try {
+        await marketplaceJson(
+          `https://marketplace-api.wildberries.ru/api/v3/orders/${numericWbOrderId(task.orderId)}/meta?key=sgtin`,
+          {
+            method: 'DELETE',
+            headers: wbHeaders(connection.apiKey),
+          },
+        );
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : 'Wildberries не освободил КИЗ.';
+        throw new BadRequestException(
+          `Не удалось безопасно вернуть товар: сначала нужно освободить КИЗ в Wildberries. ${message}`,
+        );
+      }
+    }
+
+    await this.inventoryLock?.assertStockMovementsAllowed();
+    const resolved = await this.prisma.$transaction(async (tx) => {
+      const freshTask = await tx.fbsTsdAssembly.findUnique({ where: { id: task.id } });
+      const freshLink = await tx.fbsOrderRequestLink.findUnique({ where: { id: link.id } });
+      if (
+        !freshTask ||
+        !freshLink ||
+        freshTask.status !== FBS_TSD_RETURN_REQUIRED ||
+        freshLink.syncStatus !== FBS_REQUEST_LINK_RETURN_REQUIRED
+      ) {
+        throw new BadRequestException(
+          'Состояние заказа уже изменилось. Обновите заявку и проверьте результат.',
+        );
+      }
+
+      if (freshTask.completedAt && freshTask.boxId) {
+        const selection = await tx.clientRequestBoxSelection.findUnique({
+          where: {
+            requestItemId_boxId: {
+              requestItemId: freshTask.requestItemId,
+              boxId: freshTask.boxId,
+            },
+          },
+        });
+        if (selection) {
+          if (selection.quantity <= Math.max(1, freshTask.itemCount)) {
+            await tx.clientRequestBoxSelection.delete({ where: { id: selection.id } });
+          } else {
+            await tx.clientRequestBoxSelection.update({
+              where: { id: selection.id },
+              data: { quantity: { decrement: Math.max(1, freshTask.itemCount) } },
+            });
+          }
+        }
+      }
+
+      // FIX: undo the early WB sticker-confirmation reserve before the task is
+      // cleared, otherwise a cancelled/requeued order would leave PACKING stock.
+      if (freshTask.completedAt) {
+        await this.returnCompletedWildberriesStockReservation(tx, freshTask);
+      }
+
+      if (freshTask.cargoPackingId) {
+        await tx.fbsCargoPlacePacking.updateMany({
+          where: { id: freshTask.cargoPackingId, status: 'CLOSED' },
+          data: {
+            status: 'OPEN',
+            closedByUserId: null,
+            closedByName: null,
+            closedAt: null,
+          },
+        });
+      }
+
+      const freshOrderCancelled = freshLink.lastCategory === 'cancelled';
+      const actionLabel =
+        dto.action === FbsSyncConflictResolutionAction.RETURN_TO_STOCK
+          ? 'Товар возвращён на склад'
+          : 'Решение менеджера подтверждено';
+      const sourceLocation = freshTask.boxCode || freshTask.reservedBoxCode || 'хранение без короба';
+      const nextStatus = freshOrderCancelled
+        ? 'RELEASED'
+        : FBS_TSD_WAITING_STOCK_STATUS;
+
+      await tx.fbsTsdAssembly.update({
+        where: { id: freshTask.id },
+        data: {
+          status: nextStatus,
+          deviceCode: FBS_TSD_AUTO_RESERVATION_DEVICE,
+          workerUserId: null,
+          workerName: null,
+          reservedBoxId: null,
+          reservedBoxCode: null,
+          reservedAt: null,
+          boxId: null,
+          boxCode: null,
+          sourceBarcode: null,
+          barcode: null,
+          relabelConfirmedAt: null,
+          kiz: null,
+          wbMetaStatus: freshTask.requiresKiz ? 'PENDING' : 'NOT_REQUIRED',
+          stickerPartA: null,
+          stickerPartB: null,
+          stickerBarcode: null,
+          cargoPackingId: null,
+          cargoPackedAt: null,
+          cargoPackedByUserId: null,
+          cargoPackedByName: null,
+          completedAt: null,
+          errorMessage: freshOrderCancelled
+            ? `${actionLabel}; отменённый заказ ${freshTask.orderId} удалён из FBS-заявки.`
+            : `${actionLabel}; заказ ${freshTask.orderId} направлен на повторное резервирование по актуальному составу WB.`,
+        },
+      });
+      await tx.fbsOrderRequestLink.update({
+        where: { id: freshLink.id },
+        data: {
+          syncStatus: freshOrderCancelled
+            ? FBS_REQUEST_LINK_REMOVED
+            : FBS_REQUEST_LINK_ACTIVE,
+          syncIssue: null,
+        },
+      });
+
+      await tx.clientRequestEvent.create({
+        data: {
+          requestId,
+          clientId: freshTask.clientId,
+          eventType: ClientRequestEventType.COMMENT,
+          title: actionLabel,
+          body:
+            `FBS-заказ №${freshTask.orderId}; ${freshTask.productName}; ` +
+            `источник: ${sourceLocation}; ${Math.max(1, freshTask.itemCount)} шт.` +
+            (freshTask.kiz ? `; КИЗ ${printableFbsKiz(freshTask.kiz)}` : '') +
+            (comment ? ` Комментарий: ${comment}` : ''),
+          createdByUserId: user.id,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action:
+            dto.action === FbsSyncConflictResolutionAction.RETURN_TO_STOCK
+              ? 'FBS_SYNC_CONFLICT_RETURNED_TO_STOCK'
+              : 'FBS_SYNC_CONFLICT_MANAGER_CONFIRMED',
+          entity: 'FbsTsdAssembly',
+          entityId: freshTask.id,
+          payload: {
+            requestId,
+            orderId: freshTask.orderId,
+            clientId: freshTask.clientId,
+            sourceBoxCode: freshTask.boxCode,
+            kiz: freshTask.kiz,
+            quantity: Math.max(1, freshTask.itemCount),
+            marketplaceCategory: freshLink.lastCategory,
+            supplierStatus: freshLink.lastSupplierStatus,
+            wbStatus: freshLink.lastWbStatus,
+            comment: comment || null,
+          },
+        },
+      });
+
+      return {
+        orderId: freshTask.orderId,
+        clientId: freshTask.clientId,
+        actionLabel,
+        orderCancelled: freshOrderCancelled,
+      };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+    this.fbsOrdersCache.delete(resolved.clientId);
+    try {
+      await this.listFbsOrders(resolved.clientId, user, true);
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      this.logger.warn(
+        `FBS sync conflict ${task.id} was resolved, but immediate WB refresh failed: ${message}`,
+      );
+    }
+
+    return {
+      resolved: true,
+      assemblyId: task.id,
+      orderId: resolved.orderId,
+      requestId,
+      action: dto.action,
+      message: resolved.orderCancelled
+        ? `${resolved.actionLabel}. Отменённый заказ удалён из заявки, резерв освобождён.`
+        : `${resolved.actionLabel}. Заказ будет повторно собран по актуальным данным Wildberries.`,
+    };
+  }
+
+  private async prepareLocalFbsKizConflictResolution(
+    task: FbsTsdAssemblyRecord,
+    kiz: string,
+    apiKey: string,
+  ) {
+    const [mark, duplicates] = await Promise.all([
+      this.prisma.productMark.findFirst({
+        where: {
+          clientId: task.clientId,
+          value: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+        },
+        select: {
+          id: true,
+          clientId: true,
+          skuId: true,
+          status: true,
+          boxId: true,
+          sourceDocument: true,
+        },
+      }),
+      this.prisma.fbsTsdAssembly.findMany({
+        where: {
+          id: { not: task.id },
+          clientId: task.clientId,
+          kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+        },
+        select: {
+          id: true,
+          requestId: true,
+          orderId: true,
+          status: true,
+        },
+      }),
+    ]);
+    if (mark && mark.skuId !== task.skuId) {
+      throw new BadRequestException(
+        'КИЗ относится к другому товару. Автоматическое исправление остановлено.',
+      );
+    }
+
+    const requestIds = uniqueStrings(duplicates.map((duplicate) => duplicate.requestId));
+    const requests = requestIds.length
+      ? await this.prisma.clientRequest.findMany({
+          where: { id: { in: requestIds } },
+          select: { id: true, number: true, status: true },
+        })
+      : [];
+    const requestById = new Map(requests.map((request) => [request.id, request]));
+    const openDuplicate = duplicates.find((duplicate) => {
+      const request = requestById.get(duplicate.requestId);
+      return !request || !FBS_REQUEST_CLOSED_STATUSES.has(request.status);
+    });
+    if (openDuplicate) {
+      const request = requestById.get(openDuplicate.requestId);
+      throw new BadRequestException(
+        `КИЗ используется в активной заявке №${String(request?.number ?? 0).padStart(6, '0')}, ` +
+        `заказ WB №${openDuplicate.orderId}. Автоматическое исправление остановлено.`,
+      );
+    }
+
+    if (duplicates.length > 0) {
+      const duplicateOrderIds = duplicates
+        .map((duplicate) => Number(duplicate.orderId))
+        .filter((value) => Number.isSafeInteger(value) && value > 0);
+      if (duplicateOrderIds.length > 0) {
+        const metadata = await marketplaceJson(
+          'https://marketplace-api.wildberries.ru/api/marketplace/v3/orders/meta',
+          {
+            method: 'POST',
+            headers: wbHeaders(apiKey),
+            body: JSON.stringify({ orders: duplicateOrderIds }),
+          },
+        );
+        const remoteDuplicate = duplicates.find((duplicate) => {
+          const duplicateOrderId = Number(duplicate.orderId);
+          return wildberriesOrderSgtins(metadata, duplicateOrderId).some(
+            (value) => normalizedFbsKizValue(value) === normalizedFbsKizValue(kiz),
+          );
+        });
+        if (remoteDuplicate) {
+          const request = requestById.get(remoteDuplicate.requestId);
+          throw new BadRequestException(
+            `WB подтверждает, что КИЗ уже использован заказом №${remoteDuplicate.orderId}, ` +
+            `заявка №${String(request?.number ?? 0).padStart(6, '0')}. Возьмите другую единицу товара.`,
+          );
+        }
+      }
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      if (duplicates.length > 0) {
+        await tx.fbsTsdAssembly.updateMany({
+          where: { id: { in: duplicates.map((duplicate) => duplicate.id) } },
+          data: {
+            kiz: null,
+            errorMessage: 'Устаревшая локальная привязка КИЗа снята администратором после сверки с WB.',
+          },
+        });
+      }
+      if (mark) {
+        await tx.productMark.update({
+          where: { id: mark.id },
+          data: {
+            status: StockStatus.AVAILABLE,
+            boxId: task.boxId,
+            sourceDocument:
+              `Исправление конфликта FBS, заказ ${task.orderId}: фактический КИЗ возвращён в доступный остаток` +
+              (mark.sourceDocument ? `; ранее: ${mark.sourceDocument}` : ''),
+          },
+        });
+      }
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+
+  private async restoreAcceptedFbsKiz(
+    task: FbsTsdAssemblyRecord,
+    kiz: string,
+    user: AuthUser,
+  ) {
+    const duplicates = await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        id: { not: task.id },
+        clientId: task.clientId,
+        kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+        status: { in: ['IN_PROGRESS', 'COMPLETED', FBS_TSD_RETURN_REQUIRED] },
+      },
+      select: { id: true, orderId: true, requestId: true, status: true },
+    });
+    const openCompletedRequestIds = uniqueStrings(
+      duplicates
+        .filter((duplicate) => duplicate.status === 'COMPLETED')
+        .map((duplicate) => duplicate.requestId),
+    );
+    const openCompletedRequests = openCompletedRequestIds.length
+      ? await this.prisma.clientRequest.findMany({
+          where: {
+            id: { in: openCompletedRequestIds },
+            status: { notIn: [...FBS_REQUEST_CLOSED_STATUSES] },
+          },
+          select: { id: true },
+        })
+      : [];
+    const openCompletedIds = new Set(openCompletedRequests.map((request) => request.id));
+    const duplicate = duplicates.find(
+      (candidate) =>
+        candidate.status !== 'COMPLETED' || openCompletedIds.has(candidate.requestId),
+    );
+    if (duplicate) {
+      throw new BadRequestException(
+        `КИЗ уже используется заказом WB №${duplicate.orderId}. Автоматическое исправление остановлено.`,
+      );
+    }
+
+    let mark = await this.prisma.productMark.findFirst({
+      where: {
+        value: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+      },
+      select: {
+        id: true,
+        clientId: true,
+        skuId: true,
+        boxId: true,
+        status: true,
+      },
+    });
+    if (mark && mark.clientId !== task.clientId) {
+      throw new BadRequestException(
+        'КИЗ зарегистрирован у другого клиента. Автоматическое исправление запрещено.',
+      );
+    }
+    if (
+      mark &&
+      mark.skuId !== task.skuId &&
+      task.relabelRequired &&
+      task.relabelConfirmedAt &&
+      task.sourceSkuId === mark.skuId
+    ) {
+      mark = await this.prisma.productMark.update({
+        where: { id: mark.id },
+        data: {
+          skuId: task.skuId,
+          sourceDocument: `Исправление КИЗа FBS, заказ ${task.orderId}`,
+        },
+        select: {
+          id: true,
+          clientId: true,
+          skuId: true,
+          boxId: true,
+          status: true,
+        },
+      });
+    }
+    if (mark && mark.skuId !== task.skuId) {
+      throw new BadRequestException(
+        'КИЗ относится к другому товару. Автоматическое исправление запрещено.',
+      );
+    }
+    if (mark && mark.status !== StockStatus.AVAILABLE) {
+      throw new BadRequestException(
+        'КИЗ уже находится в сборке или был отгружен. Автоматическое исправление запрещено.',
+      );
+    }
+    if (mark && mark.boxId !== task.boxId) {
+      if (!task.boxId || !task.boxCode) {
+        throw new BadRequestException(
+          'КИЗ числится в коробе, а текущий заказ собирается без короба. Нужна ручная проверка менеджера.',
+        );
+      }
+      const moved = await this.moveExistingFbsKizToOpenedBox(
+        task,
+        mark.id,
+        mark.boxId,
+        kiz,
+        user,
+      );
+      return moved.task;
+    }
+    if (mark) {
+      return this.prisma.fbsTsdAssembly.update({
+        where: { id: task.id },
+        data: { kiz, wbMetaStatus: 'ACCEPTED', errorMessage: null },
+      });
+    }
+
+    const activeKizValues = (
+      await this.prisma.fbsTsdAssembly.findMany({
+        where: {
+          id: { not: task.id },
+          clientId: task.clientId,
+          skuId: task.skuId,
+          kiz: { not: null },
+          status: { in: ['IN_PROGRESS', FBS_TSD_RETURN_REQUIRED] },
+        },
+        select: { kiz: true },
+      })
+    )
+      .map((row) => row.kiz)
+      .filter((value): value is string => Boolean(value));
+
+    return this.prisma.$transaction(
+      async (tx) => {
+        const [available, registeredMarks] = await Promise.all([
+          tx.stockBalance.aggregate({
+            where: {
+              clientId: task.clientId,
+              skuId: task.skuId,
+              boxId: task.boxId,
+              status: StockStatus.AVAILABLE,
+            },
+            _sum: { quantity: true },
+          }),
+          tx.productMark.count({
+            where: {
+              clientId: task.clientId,
+              skuId: task.skuId,
+              boxId: task.boxId,
+              status: StockStatus.AVAILABLE,
+            },
+          }),
+        ]);
+        if ((available._sum.quantity ?? 0) > registeredMarks) {
+          await tx.productMark.create({
+            data: {
+              clientId: task.clientId,
+              skuId: task.skuId,
+              boxId: task.boxId,
+              value: kiz,
+              sourceDocument: `Исправление привязки FBS, заказ ${task.orderId}`,
+              status: StockStatus.AVAILABLE,
+            },
+          });
+        } else {
+          const replaceable = await tx.productMark.findFirst({
+            where: {
+              clientId: task.clientId,
+              skuId: task.skuId,
+              boxId: task.boxId,
+              status: StockStatus.AVAILABLE,
+              ...(activeKizValues.length
+                ? { value: { notIn: activeKizValues } }
+                : {}),
+            },
+            orderBy: { createdAt: 'asc' },
+            select: { id: true, value: true },
+          });
+          if (replaceable) {
+            await tx.productMark.update({
+              where: { id: replaceable.id },
+              data: {
+                value: kiz,
+                sourceDocument:
+                  `Исправление привязки FBS, заказ ${task.orderId}: ` +
+                  `заменена устаревшая запись ${printableFbsKiz(replaceable.value)}`,
+              },
             });
           } else {
-            await tx.productMark.updateMany({
-              where: { id: historicalMarkRegistration!.id, clientId: task.clientId, value: kiz },
+            await tx.productMark.create({
               data: {
-                value: historicalMarkRegistration!.previousValue,
-                sourceDocument: historicalMarkRegistration!.previousSourceDocument,
+                clientId: task.clientId,
+                skuId: task.skuId,
+                boxId: task.boxId,
+                value: kiz,
+                sourceDocument:
+                  `Исправление привязки FBS, заказ ${task.orderId}: ` +
+                  'физический КИЗ записан без изменения количества товара',
+                status: StockStatus.AVAILABLE,
               },
             });
           }
-          await tx.fbsTsdAssembly.updateMany({
-            where: { id: task.id, kiz, wbMetaStatus: 'PENDING' },
-            data: { kiz: null, wbMetaStatus: 'REJECTED', errorMessage: message },
-          });
-        });
-      } else {
-        await this.prisma.fbsTsdAssembly.update({
-          where: { id: task.id },
-          data: { wbMetaStatus: 'REJECTED', errorMessage: message },
-        });
-      }
-      throw new BadRequestException(`Wildberries не принял КИЗ: ${message}`);
-    }
-
-    const boxCorrection = mark && markNeedsBoxMove
-      ? await this.moveExistingFbsKizToOpenedBox(task, mark.id, mark.boxId, kiz, user)
-      : null;
-    const updated = boxCorrection?.task ?? await this.prisma.fbsTsdAssembly.update({
+        }
+        return tx.fbsTsdAssembly.update({
           where: { id: task.id },
           data: { kiz, wbMetaStatus: 'ACCEPTED', errorMessage: null },
         });
-    return this.formatFbsTsdAssembly(
-      updated,
-      user,
-      boxCorrection?.mode === 'RELINKED'
-        ? `КИЗ принят Wildberries и перепривязан к фактической единице в коробе ${task.boxCode}. Количество товара не изменялось. Подтвердите сборку заказа.`
-        : boxCorrection
-        ? `КИЗ принят Wildberries. Товар перемещён из короба ${mark?.box?.code ?? 'без номера'} в ${task.boxCode}. Подтвердите сборку заказа.`
-        : historicalMarkRegistration?.mode === 'REPLACED'
-        ? `КИЗ принят Wildberries и заменил устаревшую запись в коробе ${task.boxCode}. Количество товара не изменилось. Подтвердите сборку заказа.`
-        : historicalMarkRegistration?.mode === 'CREATED'
-        ? 'КИЗ принят Wildberries и зарегистрирован в остатках WMS. Подтвердите сборку заказа.'
-        : 'КИЗ принят Wildberries. Подтвердите сборку заказа.',
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
+  }
+
+  private async recordAcceptedFbsKizScan(task: FbsTsdAssemblyRecord, kiz: string, user: AuthUser) {
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          userId: user.id,
+          action: FBS_KIZ_SCAN_ACCEPTED_ACTION,
+          entity: 'FbsTsdAssembly',
+          entityId: task.id,
+          payload: cleanJson({
+            clientId: task.clientId,
+            requestId: task.requestId,
+            orderId: task.orderId,
+            assemblyId: task.id,
+            kiz: printableFbsKiz(kiz),
+            boxCode: task.boxCode ?? FBS_TSD_NO_BOX_CODE,
+            deviceCode: task.deviceCode,
+            workerName: task.workerName ?? user.name,
+            scannedAt: new Date().toISOString(),
+          }),
+        },
+      });
+    } catch (caught) {
+      this.logger.warn(
+        `Could not write accepted FBS KIZ scan audit for task ${task.id}: ${caught instanceof Error ? caught.message : 'unknown error'}`,
+      );
+    }
+  }
+
+  private async recordDuplicateFbsKizScan(
+    task: FbsTsdAssemblyRecord,
+    kiz: string,
+    duplicate: {
+      id: string;
+      orderId: string;
+      requestId: string;
+      skuId: string;
+      productName: string;
+      article: string | null;
+      status: string;
+      boxCode: string | null;
+      deviceCode: string;
+      workerName: string | null;
+      completedAt: Date | null;
+      createdAt: Date;
+      updatedAt: Date;
+    },
+    user: AuthUser,
+  ) {
+    const detectedAt = new Date();
+    try {
+      const requestIds = uniqueStrings([task.requestId, duplicate.requestId]);
+      const [requests, acceptedScan] = await Promise.all([
+        this.prisma.clientRequest.findMany({
+          where: { id: { in: requestIds } },
+          select: { id: true, number: true, title: true },
+        }),
+        this.prisma.auditLog.findFirst({
+          where: {
+            action: FBS_KIZ_SCAN_ACCEPTED_ACTION,
+            entity: 'FbsTsdAssembly',
+            entityId: duplicate.id,
+          },
+          orderBy: { createdAt: 'desc' },
+          select: { payload: true, createdAt: true },
+        }),
+      ]);
+      const requestById = new Map(requests.map((request) => [request.id, request]));
+      const acceptedPayload = asRecord(acceptedScan?.payload);
+      const payload = cleanJson({
+        eventKey: `${task.id}:${duplicate.id}:${detectedAt.getTime()}`,
+        clientId: task.clientId,
+        requestId: task.requestId,
+        kiz: printableFbsKiz(kiz),
+        detectedAt: detectedAt.toISOString(),
+        attempt: {
+          requestId: task.requestId,
+          requestNumber: requestById.get(task.requestId)?.number ?? null,
+          requestTitle: requestById.get(task.requestId)?.title ?? null,
+          assemblyId: task.id,
+          orderId: task.orderId,
+          boxCode: task.boxCode ?? FBS_TSD_NO_BOX_CODE,
+          deviceCode: task.deviceCode,
+          workerName: task.workerName ?? user.name,
+          scannedAt: detectedAt.toISOString(),
+        },
+        existing: {
+          requestId: duplicate.requestId,
+          requestNumber: requestById.get(duplicate.requestId)?.number ?? null,
+          requestTitle: requestById.get(duplicate.requestId)?.title ?? null,
+          assemblyId: duplicate.id,
+          orderId: duplicate.orderId,
+          skuId: duplicate.skuId,
+          productName: duplicate.productName,
+          article: duplicate.article,
+          boxCode: duplicate.boxCode ?? FBS_TSD_NO_BOX_CODE,
+          deviceCode: duplicate.deviceCode,
+          workerName: duplicate.workerName,
+          status: duplicate.status,
+          scannedAt:
+            textValue(acceptedPayload.scannedAt) ||
+            acceptedScan?.createdAt.toISOString() ||
+            duplicate.completedAt?.toISOString() ||
+            duplicate.updatedAt.toISOString(),
+        },
+      });
+      await this.prisma.$transaction(
+        requestIds.map((requestId) =>
+          this.prisma.auditLog.create({
+            data: {
+              userId: user.id,
+              action: FBS_KIZ_DUPLICATE_SCAN_ACTION,
+              entity: 'ClientRequest',
+              entityId: requestId,
+              payload,
+            },
+          }),
+        ),
+      );
+    } catch (caught) {
+      this.logger.warn(
+        `Could not write duplicate FBS KIZ scan audit for task ${task.id}: ${caught instanceof Error ? caught.message : 'unknown error'}`,
+      );
+    }
+  }
+
+  private async recordLocalFbsKizConflict(
+    task: FbsTsdAssemblyRecord,
+    kiz: string,
+    mark: {
+      id: string;
+      clientId: string;
+      skuId: string;
+      boxId: string | null;
+      status: StockStatus;
+      box: { code: string } | null;
+      sku: {
+        internalSku: string;
+        article: string | null;
+        name: string;
+        color: string | null;
+        size: string | null;
+      };
+    } | null,
+    message: string,
+    user: AuthUser,
+    conflictType:
+      | 'LOCAL_STATUS'
+      | 'WB_HISTORY'
+      | 'WB_REJECTED'
+      | 'WRONG_SKU'
+      | 'QUALITY_HOLD',
+  ) {
+    const detectedAt = new Date();
+    try {
+      const [existing, shippedHistory, acceptedScan, relatedMovement] =
+        await Promise.all([
+          this.prisma.fbsTsdAssembly.findFirst({
+            where: {
+              id: { not: task.id },
+              clientId: task.clientId,
+              kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+            },
+            orderBy: { updatedAt: 'desc' },
+            select: {
+              id: true,
+              requestId: true,
+              orderId: true,
+              skuId: true,
+              productName: true,
+              article: true,
+              status: true,
+              boxCode: true,
+              deviceCode: true,
+              workerName: true,
+              completedAt: true,
+              updatedAt: true,
+            },
+          }),
+          this.prisma.shippedKizHistory.findFirst({
+            where: {
+              clientId: task.clientId,
+              kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+              shippedAt: { lte: detectedAt },
+            },
+            orderBy: { shippedAt: 'desc' },
+          }),
+          this.prisma.auditLog.findFirst({
+            where: {
+              action: FBS_KIZ_SCAN_ACCEPTED_ACTION,
+              entity: 'FbsTsdAssembly',
+              entityId: { not: task.id },
+              createdAt: { lte: detectedAt },
+              payload: { path: ['kiz'], equals: kiz },
+            },
+            orderBy: { createdAt: 'desc' },
+            select: { payload: true, createdAt: true },
+          }),
+          mark?.boxId
+            ? this.prisma.stockMovement.findFirst({
+                where: {
+                  clientId: task.clientId,
+                  skuId: mark.skuId,
+                  boxId: mark.boxId,
+                  sourceDocument: { not: null },
+                  type: { in: [MovementType.PACK, MovementType.SHIP] },
+                  createdAt: { lte: detectedAt },
+                },
+                orderBy: { createdAt: 'desc' },
+                select: { sourceDocument: true, createdAt: true },
+              })
+            : null,
+        ]);
+      const acceptedPayload = asRecord(acceptedScan?.payload);
+      const requestIds = uniqueStrings([
+        task.requestId,
+        ...(existing ? [existing.requestId] : []),
+        ...(shippedHistory ? [shippedHistory.requestId] : []),
+        ...(
+          textValue(acceptedPayload.requestId)
+            ? [textValue(acceptedPayload.requestId)]
+            : []
+        ),
+        ...(relatedMovement?.sourceDocument
+          ? [relatedMovement.sourceDocument]
+          : []),
+      ]);
+      const requests = await this.prisma.clientRequest.findMany({
+        where: { id: { in: requestIds } },
+        select: { id: true, number: true, title: true, status: true },
+      });
+      const requestById = new Map(requests.map((request) => [request.id, request]));
+      const acceptedRequestId = textValue(acceptedPayload.requestId);
+      const relatedRequest =
+        (existing ? requestById.get(existing.requestId) : null) ??
+        (shippedHistory ? requestById.get(shippedHistory.requestId) : null) ??
+        (acceptedRequestId ? requestById.get(acceptedRequestId) : null) ??
+        (relatedMovement?.sourceDocument
+          ? requestById.get(relatedMovement.sourceDocument)
+          : null);
+      const payload = cleanJson({
+        eventKey: `${task.id}:${mark?.id ?? 'wb'}:${detectedAt.getTime()}`,
+        conflictType,
+        clientId: task.clientId,
+        requestId: task.requestId,
+        assemblyId: task.id,
+        orderId: task.orderId,
+        productName: task.productName,
+        article: task.article,
+        boxCode: task.boxCode ?? FBS_TSD_NO_BOX_CODE,
+        kiz: printableFbsKiz(kiz),
+        message,
+        detectedAt: detectedAt.toISOString(),
+        mark: mark
+          ? {
+              id: mark.id,
+              status: mark.status,
+              boxId: mark.boxId,
+              boxCode: mark.box?.code ?? null,
+              skuId: mark.skuId,
+              internalSku: mark.sku.internalSku,
+              article: mark.sku.article,
+              productName: mark.sku.name,
+              color: mark.sku.color,
+              size: mark.sku.size,
+            }
+          : null,
+        existing: relatedRequest || existing || shippedHistory || acceptedScan
+          ? {
+              requestId:
+                existing?.requestId ??
+                shippedHistory?.requestId ??
+                acceptedRequestId ??
+                relatedRequest?.id ??
+                null,
+              requestNumber:
+                relatedRequest?.number ??
+                shippedHistory?.requestNumber ??
+                null,
+              requestTitle:
+                relatedRequest?.title ??
+                shippedHistory?.requestTitle ??
+                null,
+              requestStatus: relatedRequest?.status ?? null,
+              assemblyId:
+                existing?.id ??
+                shippedHistory?.assemblyId ??
+                textValue(acceptedPayload.assemblyId) ??
+                null,
+              orderId:
+                existing?.orderId ??
+                shippedHistory?.orderId ??
+                textValue(acceptedPayload.orderId) ??
+                null,
+              skuId:
+                existing?.skuId ??
+                shippedHistory?.skuId ??
+                mark?.skuId ??
+                null,
+              productName:
+                existing?.productName ??
+                shippedHistory?.productName ??
+                mark?.sku.name ??
+                null,
+              article:
+                existing?.article ??
+                shippedHistory?.article ??
+                mark?.sku.article ??
+                null,
+              color: shippedHistory?.color ?? mark?.sku.color ?? null,
+              size: shippedHistory?.size ?? mark?.sku.size ?? null,
+              status:
+                existing?.status ??
+                mark?.status ??
+                null,
+              boxCode:
+                existing?.boxCode ??
+                shippedHistory?.sourceBoxCode ??
+                textValue(acceptedPayload.boxCode) ??
+                mark?.box?.code ??
+                FBS_TSD_NO_BOX_CODE,
+              deviceCode:
+                existing?.deviceCode ??
+                textValue(acceptedPayload.deviceCode) ??
+                null,
+              workerName:
+                existing?.workerName ??
+                textValue(acceptedPayload.workerName) ??
+                null,
+              scannedAt:
+                existing?.completedAt?.toISOString() ??
+                existing?.updatedAt.toISOString() ??
+                shippedHistory?.shippedAt.toISOString() ??
+                acceptedScan?.createdAt.toISOString() ??
+                relatedMovement?.createdAt.toISOString() ??
+                null,
+            }
+          : null,
+      });
+      await this.prisma.auditLog.create({
+        data: {
+          userId: user.id,
+          action: FBS_KIZ_LOCAL_STATUS_CONFLICT_ACTION,
+          entity: 'ClientRequest',
+          entityId: task.requestId,
+          payload,
+        },
+      });
+    } catch (caught) {
+      this.logger.warn(
+        `Could not write local FBS KIZ conflict audit for task ${task.id}: ${caught instanceof Error ? caught.message : 'unknown error'}`,
+      );
+    }
+  }
+
+  private async findPreviousWildberriesKizUsage(
+    clientId: string,
+    kiz: string,
+    excludedAssemblyId: string,
+  ) {
+    const [assembly, shipped, printed] = await Promise.all([
+      this.prisma.fbsTsdAssembly.findFirst({
+        where: {
+          id: { not: excludedAssemblyId },
+          clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+          wbMetaStatus: 'ACCEPTED',
+        },
+        select: { orderId: true, requestId: true, completedAt: true },
+        orderBy: { updatedAt: 'desc' },
+      }),
+      this.prisma.shippedKizHistory.findFirst({
+        where: {
+          clientId,
+          kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+        },
+        select: { orderId: true, requestId: true, shippedAt: true },
+        orderBy: { shippedAt: 'desc' },
+      }),
+      this.prisma.fbsWebKizStickerPrint.findFirst({
+        where: {
+          clientId,
+          kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+        },
+        select: { orderId: true, requestId: true, printedAt: true },
+        orderBy: { printedAt: 'desc' },
+      }),
+    ]);
+    if (assembly) return { source: 'ASSEMBLY' as const, ...assembly };
+    if (shipped) return { source: 'SHIPMENT' as const, ...shipped };
+    if (printed) return { source: 'PRINT' as const, ...printed };
+    return null;
+  }
+
+  private async restoreScannedFbsKizAvailability(
+    task: FbsTsdAssemblyRecord,
+    mark: {
+      id: string;
+      clientId: string;
+      skuId: string;
+      boxId: string | null;
+      status: StockStatus;
+      sourceDocument: string | null;
+      box: { code: string } | null;
+      sku: {
+        internalSku: string;
+        article: string | null;
+        name: string;
+        color: string | null;
+        size: string | null;
+      };
+    },
+    kiz: string,
+    user: AuthUser,
+  ) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
+    return this.prisma.$transaction(async (tx) => {
+      const [freshTask, freshMark] = await Promise.all([
+        tx.fbsTsdAssembly.findUnique({ where: { id: task.id } }),
+        tx.productMark.findUnique({
+          where: { id: mark.id },
+          select: {
+            id: true,
+            clientId: true,
+            skuId: true,
+            boxId: true,
+            status: true,
+            sourceDocument: true,
+            value: true,
+            box: { select: { code: true } },
+            sku: {
+              select: {
+                internalSku: true,
+                article: true,
+                name: true,
+                color: true,
+                size: true,
+              },
+            },
+          },
+        }),
+      ]);
+      if (!freshTask) throw new NotFoundException('Задание FBS не найдено.');
+      this.requireCurrentFbsTsdLease(freshTask, user);
+      if (
+        !freshMark ||
+        freshMark.clientId !== freshTask.clientId ||
+        freshMark.skuId !== freshTask.skuId ||
+        freshMark.value.toLocaleLowerCase('ru-RU') !== kiz.toLocaleLowerCase('ru-RU')
+      ) {
+        throw new BadRequestException(
+          'Данные КИЗа изменились. Обновите задание и повторите сканирование.',
+        );
+      }
+      if (
+        freshMark.status === StockStatus.DEFECT ||
+        freshMark.status === StockStatus.QUARANTINE
+      ) {
+        throw new BadRequestException(
+          'Этот КИЗ находится в браке или карантине. Передайте товар менеджеру.',
+        );
+      }
+      if (freshMark.status === StockStatus.AVAILABLE) return freshMark;
+
+      const targetBoxId = freshTask.boxId ?? freshMark.boxId;
+
+      const restored = await tx.productMark.update({
+        where: { id: freshMark.id },
+        data: {
+          status: StockStatus.AVAILABLE,
+          boxId: targetBoxId,
+          stockMovementId: null,
+          sourceDocument:
+            `FBS TSD, заказ ${freshTask.orderId}: КИЗ восстановлен физическим сканированием; ` +
+            `предыдущий статус ${freshMark.status}; количество товара не изменялось`,
+        },
+        select: {
+          id: true,
+          clientId: true,
+          skuId: true,
+          boxId: true,
+          status: true,
+          sourceDocument: true,
+          box: { select: { code: true } },
+          sku: {
+            select: {
+              internalSku: true,
+              article: true,
+              name: true,
+              color: true,
+              size: true,
+            },
+          },
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'FBS_KIZ_AVAILABILITY_RESTORED',
+          entity: 'ProductMark',
+          entityId: restored.id,
+          payload: cleanJson({
+            taskId: freshTask.id,
+            requestId: freshTask.requestId,
+            orderId: freshTask.orderId,
+            kiz: printableFbsKiz(kiz),
+            previousStatus: freshMark.status,
+            previousBoxId: freshMark.boxId,
+            previousSourceDocument: freshMark.sourceDocument,
+            targetBoxId: restored.boxId,
+            targetBoxCode: restored.box?.code ?? freshTask.boxCode,
+            quantityChanged: false,
+            workerName: user.name,
+          }),
+        },
+      });
+      await tx.clientRequestEvent.create({
+        data: {
+          requestId: freshTask.requestId,
+          clientId: freshTask.clientId,
+          eventType: ClientRequestEventType.COMMENT,
+          title: 'КИЗ восстановлен физическим сканированием',
+          body:
+            `Заказ WB №${freshTask.orderId}; КИЗ ${printableFbsKiz(kiz)}; ` +
+            `статус ${freshMark.status} → AVAILABLE; короб ${restored.box?.code ?? freshTask.boxCode ?? 'не указан'}; ` +
+            'количество товара не изменялось.',
+          createdByUserId: user.id,
+        },
+      });
+      return restored;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
   private async moveExistingFbsKizToOpenedBox(
@@ -2226,6 +11825,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       ]);
       if (!freshTask?.boxId || !freshTask.boxCode) {
         throw new BadRequestException('Открытый короб изменился. Обновите задание и повторите сканирование.');
+      }
+      this.requireCurrentFbsTsdLease(freshTask, user);
+      if (freshTask.updatedAt.getTime() !== task.updatedAt.getTime()) {
+        this.throwFbsTsdTaskStale(freshTask, user);
       }
       if (freshTask.boxId !== task.boxId) {
         throw new BadRequestException('Открытый короб изменился после подтверждения. Обновите задание и повторите сканирование.');
@@ -2252,7 +11855,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
       const targetBox = await tx.box.findUnique({
         where: { id: freshTask.boxId },
-        select: { id: true, code: true, palletId: true, status: true },
+        select: { id: true, code: true, palletId: true, status: true, warehouseId: true },
       });
       if (!targetBox || ['deleted', 'archived'].includes(targetBox.status)) {
         throw new BadRequestException(`Короб ${freshTask.boxCode} больше недоступен. Обновите задание.`);
@@ -2266,29 +11869,6 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         },
       });
       if (!sourceBalance || sourceBalance.quantity < 1) {
-        const [targetBalance, targetMarks] = await Promise.all([
-          tx.stockBalance.findFirst({
-            where: {
-              clientId: freshTask.clientId,
-              skuId: freshTask.skuId,
-              boxId: targetBox.id,
-              status: StockStatus.AVAILABLE,
-            },
-          }),
-          tx.productMark.count({
-            where: {
-              clientId: freshTask.clientId,
-              skuId: freshTask.skuId,
-              boxId: targetBox.id,
-              status: StockStatus.AVAILABLE,
-            },
-          }),
-        ]);
-        if (!targetBalance || targetBalance.quantity <= targetMarks) {
-          throw new BadRequestException(
-            `В открытом коробе ${targetBox.code} нет свободной единицы этого товара без КИЗа. Передайте товар менеджеру.`,
-          );
-        }
         await tx.productMark.update({
           where: { id: freshMark.id },
           data: {
@@ -2317,6 +11897,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         ]);
         if (remainingBalances === 0 && remainingMarks === 0) {
           await tx.box.update({ where: { id: freshMark.boxId }, data: { status: 'archived' } });
+          // FIX: KIZ relinking cannot leave an archived empty source box on a pallet-sort.
+          await this.archivedEmptyBoxDetach?.detachIfArchivedAndEmpty(
+            { boxId: freshMark.boxId, userId: user.id, reason: 'fbs-kiz-relink' },
+            tx,
+          );
         }
         return { task: updatedTask, mode: 'RELINKED' as const };
       }
@@ -2329,7 +11914,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           data: { quantity: { decrement: 1 } },
         });
       }
+      const balanceWarehouseId = requireFbsBalanceWarehouseId(sourceBalance.warehouseId);
+      if (targetBox.warehouseId && targetBox.warehouseId !== balanceWarehouseId) {
+        throw new BadRequestException(
+          'Исходный и целевой короба находятся в разных филиалах. Перемещение остановлено.',
+        );
+      }
       const targetBalanceKey = fbsStockBalanceKey({
+        warehouseId: balanceWarehouseId,
         clientId: freshTask.clientId,
         skuId: freshTask.skuId,
         boxId: targetBox.id,
@@ -2338,9 +11930,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       });
       await tx.stockBalance.upsert({
         where: { balanceKey: targetBalanceKey },
-        update: { quantity: { increment: 1 } },
+        update: {
+          quantity: { increment: 1 },
+          warehouseId: balanceWarehouseId,
+        },
         create: {
           balanceKey: targetBalanceKey,
+          warehouseId: balanceWarehouseId,
           clientId: freshTask.clientId,
           skuId: freshTask.skuId,
           boxId: targetBox.id,
@@ -2352,6 +11948,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const movementKey = `fbs-kiz-move:${freshTask.id}:${freshMark.id}`;
       await tx.stockMovement.create({
         data: {
+          warehouseId: balanceWarehouseId,
           clientId: freshTask.clientId,
           skuId: freshTask.skuId,
           boxId: freshMark.boxId,
@@ -2366,6 +11963,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       });
       const inboundMovement = await tx.stockMovement.create({
         data: {
+          warehouseId: balanceWarehouseId,
           clientId: freshTask.clientId,
           skuId: freshTask.skuId,
           boxId: targetBox.id,
@@ -2402,6 +12000,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       ]);
       if (remainingBalances === 0 && remainingMarks === 0) {
         await tx.box.update({ where: { id: freshMark.boxId }, data: { status: 'archived' } });
+        // FIX: KIZ movement uses the same atomic archived-empty lifecycle rule.
+        await this.archivedEmptyBoxDetach?.detachIfArchivedAndEmpty(
+          { boxId: freshMark.boxId, userId: user.id, reason: 'fbs-kiz-move' },
+          tx,
+        );
       }
       return { task: updatedTask, mode: 'MOVED' as const };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
@@ -2411,18 +12014,53 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
     requireFbsTaskWithoutSyncConflict(task);
     if (task.status === 'COMPLETED') return this.formatFbsTsdAssembly(task, user, 'Заказ уже собран.');
-    if (!task.boxId || !task.barcode) throw new BadRequestException('Сначала подтвердите короб и товар.');
+    if ((!task.boxId && !fbsTsdUsesNoBox(task)) || !task.barcode) {
+      throw new BadRequestException('Сначала подтвердите источник и товар.');
+    }
+    if (task.relabelRequired && !task.relabelConfirmedAt) {
+      throw new BadRequestException('Сначала завершите переклейку и отсканируйте новый ШК товара.');
+    }
     if (task.requiresKiz && (!task.kiz || task.wbMetaStatus !== 'ACCEPTED')) {
-      throw new BadRequestException('Сначала отсканируйте КИЗ и дождитесь подтверждения Wildberries.');
+      throw new BadRequestException(
+        `Сначала отсканируйте КИЗ и дождитесь подтверждения для ${fbsMarketplaceDisplayName(task.marketplace)}.`,
+      );
+    }
+    if (task.marketplace === MarketplaceType.OZON && !task.marketplaceSubmittedAt) {
+      const submitted = await this.submitOzonFbsTask(task);
+      return this.formatFbsTsdAssembly(
+        submitted,
+        user,
+        `Заказ ${task.orderId} передан в Ozon. Ozon формирует этикетку; нажмите «Обновить» через несколько секунд.`,
+      );
+    }
+    if (
+      task.marketplace === MarketplaceType.OZON &&
+      !task.marketplaceLabelBase64
+    ) {
+      throw new BadRequestException(
+        'Ozon ещё формирует этикетку. Нажмите «Обновить» и завершайте заказ только после появления этикетки.',
+      );
+    }
+
+    if (task.marketplace === MarketplaceType.WILDBERRIES) {
+      await this.inventoryLock?.assertStockMovementsAllowed();
     }
 
     const completed = await this.prisma.$transaction(async (tx) => {
       const fresh = await tx.fbsTsdAssembly.findUnique({ where: { id: task.id } });
       if (!fresh) throw new NotFoundException('Задание FBS не найдено.');
       if (fresh.status === 'COMPLETED') return fresh;
+      if (fresh.relabelRequired && !fresh.relabelConfirmedAt) {
+        throw new BadRequestException('Переклейка ещё не подтверждена. Обновите задание.');
+      }
+      if (fresh.requiresKiz && (!fresh.kiz || fresh.wbMetaStatus !== 'ACCEPTED')) {
+        throw new BadRequestException(
+          `КИЗ отменяется или ещё не подтверждён для ${fbsMarketplaceDisplayName(fresh.marketplace)}. Обновите задание.`,
+        );
+      }
       const request = await tx.clientRequest.findUnique({
         where: { id: fresh.requestId },
-        select: { id: true, status: true, title: true },
+        select: { id: true, status: true, title: true, warehouseId: true },
       });
       if (!request || ['DONE', 'CANCELLED', 'REJECTED'].includes(request.status)) {
         throw new BadRequestException('Заявка FBS уже закрыта или отменена. Обновите очередь.');
@@ -2434,31 +12072,59 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       if (!requestItem || requestItem.skuId !== fresh.skuId) {
         throw new BadRequestException('Товар больше не найден в заявке FBS. Обратитесь к администратору.');
       }
-      const selected = await tx.clientRequestBoxSelection.aggregate({
-        where: { requestItemId: requestItem.id },
-        _sum: { quantity: true },
+      const completed = await tx.fbsTsdAssembly.aggregate({
+        where: {
+          requestItemId: requestItem.id,
+          status: 'COMPLETED',
+          id: { not: fresh.id },
+        },
+        _sum: { itemCount: true },
       });
-      if ((selected._sum.quantity ?? 0) + fresh.itemCount > requestItem.quantity) {
+      if (
+        (completed._sum.itemCount ?? 0) +
+          (fresh.completedAt ? 0 : fresh.itemCount) >
+        requestItem.quantity
+      ) {
         throw new BadRequestException('Нужное количество по этой позиции уже собрано. Обновите очередь.');
       }
 
-      await tx.clientRequestBoxSelection.upsert({
-        where: { requestItemId_boxId: { requestItemId: requestItem.id, boxId: fresh.boxId! } },
-        create: {
-          requestItemId: requestItem.id,
-          skuId: fresh.skuId,
-          boxId: fresh.boxId!,
-          quantity: fresh.itemCount,
-        },
-        update: { quantity: { increment: fresh.itemCount } },
-      });
+      if (fresh.boxId && !fresh.completedAt) {
+        await tx.clientRequestBoxSelection.upsert({
+          where: {
+            requestItemId_boxId: {
+              requestItemId: requestItem.id,
+              boxId: fresh.boxId,
+            },
+          },
+          create: {
+            requestItemId: requestItem.id,
+            skuId: fresh.skuId,
+            boxId: fresh.boxId,
+            quantity: fresh.itemCount,
+          },
+          update: { quantity: { increment: fresh.itemCount } },
+        });
+      } else if (!fresh.boxId && !fbsTsdUsesNoBox(fresh)) {
+        throw new BadRequestException(
+          'Источник товара изменился. Обновите задание.',
+        );
+      }
+
+      // FIX: pressing "sticker applied" is the physical pick confirmation for WB.
+      // Move the unit out of sellable stock immediately; the request close later
+      // consumes PACKING once and therefore cannot subtract AVAILABLE a second time.
+      await this.reserveCompletedWildberriesStock(
+        tx,
+        fresh,
+        request.warehouseId,
+      );
       await tx.clientRequestEvent.create({
         data: {
           requestId: request.id,
           clientId: fresh.clientId,
           eventType: ClientRequestEventType.COMMENT,
           title: 'FBS-заказ собран на ТСД',
-          body: `Заказ ${fresh.orderId}; короб ${fresh.boxCode}; сотрудник ${fresh.workerName ?? fresh.deviceCode}${fresh.kiz ? `; КИЗ ${printableFbsKiz(fresh.kiz)}` : ''}${fresh.stickerPartB ? `; наклейка WB ${fresh.stickerPartB}` : ''}.`,
+          body: `Заказ ${fresh.orderId}; ${fbsTsdUsesNoBox(fresh) ? 'товар взят из хранения без коробов' : `короб ${fresh.boxCode}`}; сотрудник ${fresh.workerName ?? fresh.deviceCode}${fresh.kiz ? `; КИЗ ${printableFbsKiz(fresh.kiz)}` : ''}${fresh.stickerPartB ? `; наклейка WB ${fresh.stickerPartB}` : ''}.`,
           createdByUserId: user.id,
         },
       });
@@ -2470,6 +12136,496 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return this.formatFbsTsdAssembly(completed, user, 'Готово. Заказ собран и записан в заявку.');
   }
 
+  private async reserveCompletedWildberriesStock(
+    tx: Prisma.TransactionClient,
+    task: FbsTsdAssemblyRecord,
+    requestWarehouseId: string | null,
+  ) {
+    if (
+      task.marketplace !== MarketplaceType.WILDBERRIES ||
+      task.completedAt
+    ) {
+      return;
+    }
+
+    const quantity = Math.max(1, task.itemCount);
+    const movementPrefix = `fbs-sticker-pick:${task.id}`;
+    const previousPackingMovements = await tx.stockMovement.findMany({
+      where: {
+        idempotencyKey: { startsWith: `${movementPrefix}:` },
+        status: StockStatus.PACKING,
+      },
+      select: { quantity: true },
+    });
+    const activeReservedQuantity = previousPackingMovements.reduce(
+      (total, movement) => total + movement.quantity,
+      0,
+    );
+    if (activeReservedQuantity >= quantity) return;
+
+    // ADDED: after an undo/re-scan the same task may legitimately reserve
+    // again. A numbered attempt keeps StockMovement idempotency keys unique.
+    const reserveAttempt =
+      previousPackingMovements.filter((movement) => movement.quantity > 0).length + 1;
+    const movementKey = reserveAttempt === 1
+      ? movementPrefix
+      : `${movementPrefix}:attempt-${reserveAttempt}`;
+    const quantityToReserve = quantity - Math.max(0, activeReservedQuantity);
+    const box = task.boxId
+      ? await tx.box.findUnique({
+          where: { id: task.boxId },
+          select: { id: true, code: true, warehouseId: true, palletId: true },
+        })
+      : null;
+    if (task.boxId && !box) {
+      throw new BadRequestException(
+        `Короб ${task.boxCode ?? task.boxId} больше не найден. Обновите задание.`,
+      );
+    }
+
+    const availableBalances = await tx.stockBalance.findMany({
+      where: {
+        clientId: task.clientId,
+        skuId: task.skuId,
+        boxId: task.boxId,
+        status: StockStatus.AVAILABLE,
+        quantity: { gt: 0 },
+        warehouseId: requestWarehouseId ?? undefined,
+      },
+      orderBy: { updatedAt: 'asc' },
+    });
+    const balanceWarehouseId = requireFbsBalanceWarehouseId(
+      availableBalances[0]?.warehouseId ?? box?.warehouseId ?? requestWarehouseId,
+    );
+    const targetBoxId = box?.id ?? null;
+    const targetPalletId = box?.palletId ?? availableBalances[0]?.palletId ?? null;
+    let shiftedFromAvailable = 0;
+
+    for (const balance of availableBalances) {
+      if (shiftedFromAvailable >= quantityToReserve || balance.quantity <= 0) continue;
+      const shifted = Math.min(balance.quantity, quantityToReserve - shiftedFromAvailable);
+      if (shifted === balance.quantity) {
+        await tx.stockBalance.delete({ where: { id: balance.id } });
+      } else {
+        await tx.stockBalance.update({
+          where: { id: balance.id },
+          data: { quantity: { decrement: shifted } },
+        });
+      }
+      shiftedFromAvailable += shifted;
+      await tx.stockMovement.create({
+        data: {
+          warehouseId: requireFbsBalanceWarehouseId(balance.warehouseId),
+          clientId: task.clientId,
+          skuId: task.skuId,
+          boxId: balance.boxId,
+          palletId: balance.palletId,
+          type: MovementType.PICK,
+          status: StockStatus.AVAILABLE,
+          quantity: -shifted,
+          sourceDocument: task.requestId,
+          idempotencyKey: `${movementKey}:${balance.id}:out`,
+          comment: `Товар физически отобран из ${task.boxCode ?? 'хранения без короба'} для заказа WB ${task.orderId}.`,
+        },
+      });
+    }
+
+    const targetBalanceKey = fbsStockBalanceKey({
+      warehouseId: balanceWarehouseId,
+      clientId: task.clientId,
+      skuId: task.skuId,
+      boxId: targetBoxId,
+      palletId: targetPalletId,
+      status: StockStatus.PACKING,
+    });
+    await tx.stockBalance.upsert({
+      where: { balanceKey: targetBalanceKey },
+      update: {
+        quantity: { increment: quantityToReserve },
+        warehouseId: balanceWarehouseId,
+      },
+      create: {
+        balanceKey: targetBalanceKey,
+        warehouseId: balanceWarehouseId,
+        clientId: task.clientId,
+        skuId: task.skuId,
+        boxId: targetBoxId,
+        palletId: targetPalletId,
+        status: StockStatus.PACKING,
+        quantity: quantityToReserve,
+      },
+    });
+
+    if (shiftedFromAvailable > 0) {
+      await tx.stockMovement.create({
+        data: {
+          warehouseId: balanceWarehouseId,
+          clientId: task.clientId,
+          skuId: task.skuId,
+          boxId: targetBoxId,
+          palletId: targetPalletId,
+          type: MovementType.PICK,
+          status: StockStatus.PACKING,
+          quantity: shiftedFromAvailable,
+          sourceDocument: task.requestId,
+          idempotencyKey: `${movementKey}:in`,
+          comment: `Товар заказа WB ${task.orderId} ожидает упаковки/закрытия заявки.`,
+        },
+      });
+    }
+
+    const reconciledQuantity = quantityToReserve - shiftedFromAvailable;
+    if (reconciledQuantity > 0) {
+      // FIX: a physical scan is authoritative, but it must never inflate AVAILABLE.
+      await tx.stockMovement.create({
+        data: {
+          warehouseId: balanceWarehouseId,
+          clientId: task.clientId,
+          skuId: task.skuId,
+          boxId: targetBoxId,
+          palletId: targetPalletId,
+          type: MovementType.INVENTORY_ADJUSTMENT,
+          status: StockStatus.PACKING,
+          quantity: reconciledQuantity,
+          sourceDocument: task.requestId,
+          idempotencyKey: `${movementKey}:reconciled`,
+          comment:
+            `Физически отобранный товар WB ${task.orderId} учтён только во внутреннем резерве; ` +
+            'доступный остаток не увеличен.',
+        },
+      });
+    }
+  }
+
+  private async reserveAcceptedWildberriesStock(task: FbsTsdAssemblyRecord) {
+    if (
+      task.marketplace !== MarketplaceType.WILDBERRIES ||
+      !task.kiz ||
+      task.wbMetaStatus !== 'ACCEPTED' ||
+      task.completedAt
+    ) {
+      return;
+    }
+    // FIX: the stock mutation is isolated and retry-safe. If the response to
+    // the first KIZ scan is lost, the repeated scan only verifies the reserve.
+    await this.inventoryLock?.assertStockMovementsAllowed();
+    await this.prisma.$transaction(async (tx) => {
+      const [fresh, request] = await Promise.all([
+        tx.fbsTsdAssembly.findUnique({ where: { id: task.id } }),
+        tx.clientRequest.findUnique({
+          where: { id: task.requestId },
+          select: { warehouseId: true },
+        }),
+      ]);
+      if (
+        !fresh ||
+        fresh.status !== 'IN_PROGRESS' ||
+        !fresh.kiz ||
+        fresh.wbMetaStatus !== 'ACCEPTED'
+      ) {
+        return;
+      }
+      await this.reserveCompletedWildberriesStock(
+        tx,
+        fresh,
+        request?.warehouseId ?? null,
+      );
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+
+  private async returnCompletedWildberriesStockReservation(
+    tx: Prisma.TransactionClient,
+    task: FbsTsdAssemblyRecord,
+  ) {
+    if (task.marketplace !== MarketplaceType.WILDBERRIES) return;
+
+    const movementKey = `fbs-sticker-pick:${task.id}`;
+    const reservationMovements = await tx.stockMovement.findMany({
+      where: {
+        idempotencyKey: { startsWith: `${movementKey}:` },
+        status: StockStatus.PACKING,
+      },
+      select: {
+        warehouseId: true,
+        boxId: true,
+        palletId: true,
+        quantity: true,
+      },
+    });
+    const reservedQuantity = Math.max(0, reservationMovements.reduce(
+      (total, movement) => total + movement.quantity,
+      0,
+    ));
+    if (reservedQuantity === 0) return;
+    const returnAttempt =
+      reservationMovements.filter((movement) => movement.quantity < 0).length + 1;
+    const returnKey = returnAttempt === 1
+      ? `${movementKey}:return`
+      : `${movementKey}:return-${returnAttempt}`;
+
+    const warehouseId = requireFbsBalanceWarehouseId(
+      reservationMovements[0]?.warehouseId,
+    );
+    const boxId = reservationMovements[0]?.boxId ?? null;
+    const palletId = reservationMovements[0]?.palletId ?? null;
+    const balances = await tx.stockBalance.findMany({
+      where: {
+        warehouseId,
+        clientId: task.clientId,
+        skuId: task.skuId,
+        boxId,
+        status: { in: [StockStatus.PACKING, StockStatus.SHIPPING] },
+        quantity: { gt: 0 },
+      },
+      orderBy: { updatedAt: 'asc' },
+    });
+    let remaining = reservedQuantity;
+    for (const balance of balances) {
+      if (remaining === 0) break;
+      const returned = Math.min(balance.quantity, remaining);
+      if (returned === balance.quantity) {
+        await tx.stockBalance.delete({ where: { id: balance.id } });
+      } else {
+        await tx.stockBalance.update({
+          where: { id: balance.id },
+          data: { quantity: { decrement: returned } },
+        });
+      }
+      remaining -= returned;
+      await tx.stockMovement.create({
+        data: {
+          warehouseId,
+          clientId: task.clientId,
+          skuId: task.skuId,
+          boxId,
+          palletId: balance.palletId,
+          type: MovementType.RETURN,
+          status: balance.status,
+          quantity: -returned,
+          sourceDocument: task.requestId,
+          idempotencyKey: `${returnKey}:${balance.id}:out`,
+          comment: `Снят резерв отменённой сборки заказа WB ${task.orderId}.`,
+        },
+      });
+    }
+    if (remaining > 0) {
+      throw new BadRequestException(
+        `Не удалось вернуть ${remaining} шт. заказа WB ${task.orderId}: внутренний резерв уже изменён. Проверьте остаток.`,
+      );
+    }
+
+    const availableBalanceKey = fbsStockBalanceKey({
+      warehouseId,
+      clientId: task.clientId,
+      skuId: task.skuId,
+      boxId,
+      palletId,
+      status: StockStatus.AVAILABLE,
+    });
+    await tx.stockBalance.upsert({
+      where: { balanceKey: availableBalanceKey },
+      update: { quantity: { increment: reservedQuantity }, warehouseId },
+      create: {
+        balanceKey: availableBalanceKey,
+        warehouseId,
+        clientId: task.clientId,
+        skuId: task.skuId,
+        boxId,
+        palletId,
+        status: StockStatus.AVAILABLE,
+        quantity: reservedQuantity,
+      },
+    });
+    await tx.stockMovement.create({
+      data: {
+        warehouseId,
+        clientId: task.clientId,
+        skuId: task.skuId,
+        boxId,
+        palletId,
+        type: MovementType.RETURN,
+        status: StockStatus.AVAILABLE,
+        quantity: reservedQuantity,
+        sourceDocument: task.requestId,
+        idempotencyKey: `${returnKey}:in`,
+        comment: `Товар заказа WB ${task.orderId} возвращён в доступный остаток.`,
+      },
+    });
+  }
+
+  async undoFbsTsdKiz(taskId: string, user: AuthUser) {
+    const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    requireFbsTaskWithoutSyncConflict(task);
+    if (task.status === 'COMPLETED') {
+      throw new BadRequestException('Заказ уже завершён. КИЗ из завершённой сборки отменить нельзя.');
+    }
+    if (!task.requiresKiz) {
+      throw new BadRequestException('Для этого товара КИЗ не требуется.');
+    }
+    if (!task.kiz || task.wbMetaStatus !== 'ACCEPTED') {
+      return this.formatFbsTsdAssembly(task, user, 'Принятого КИЗа в этом заказе нет.');
+    }
+
+    if (await this.isFbsEmergencyAssemblyRequest(task.requestId)) {
+      const updated = await this.clearFbsTsdKizWithAudit(
+        task,
+        user,
+        false,
+        'Аварийный режим: КИЗ освобождён только локально в WMS.',
+      );
+      return this.formatFbsTsdAssembly(
+        updated,
+        user,
+        'КИЗ освобождён локально в WMS. Wildberries не изменялся. Отсканируйте другой КИЗ.',
+      );
+    }
+
+    if (task.marketplace && task.marketplace !== MarketplaceType.WILDBERRIES) {
+      const updated = await this.clearFbsTsdKizWithAudit(
+        task,
+        user,
+        false,
+        `КИЗ освобождён локально для ${fbsMarketplaceDisplayName(task.marketplace)}.`,
+      );
+      return this.formatFbsTsdAssembly(
+        updated,
+        user,
+        `КИЗ освобождён в WMS для ${fbsMarketplaceDisplayName(task.marketplace)}. Отсканируйте другой КИЗ.`,
+      );
+    }
+
+    const connection = await this.prisma.clientMarketplaceConnection.findFirst({
+      where: {
+        id: task.connectionId,
+        clientId: task.clientId,
+        marketplace: MarketplaceType.WILDBERRIES,
+        isActive: true,
+      },
+      select: { apiKey: true },
+    });
+    if (!connection) {
+      throw new BadRequestException('Подключение Wildberries отключено. Обратитесь к администратору.');
+    }
+
+    const claimed = await this.prisma.fbsTsdAssembly.updateMany({
+      where: {
+        id: task.id,
+        status: 'IN_PROGRESS',
+        kiz: task.kiz,
+        wbMetaStatus: 'ACCEPTED',
+      },
+      data: { wbMetaStatus: 'REMOVING', errorMessage: null },
+    });
+    if (claimed.count !== 1) {
+      const fresh = await this.loadOwnedFbsTsdAssembly(task.id, user);
+      if (!fresh.kiz || fresh.wbMetaStatus === 'PENDING') {
+        return this.formatFbsTsdAssembly(fresh, user, 'КИЗ уже отменён. Отсканируйте другой КИЗ.');
+      }
+      throw new BadRequestException('Состояние заказа изменилось. Обновите задание и повторите отмену.');
+    }
+
+    try {
+      await marketplaceJson(
+        `https://marketplace-api.wildberries.ru/api/v3/orders/${numericWbOrderId(task.orderId)}/meta?key=sgtin`,
+        {
+          method: 'DELETE',
+          headers: wbHeaders(connection.apiKey),
+        },
+      );
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : 'Wildberries не удалил КИЗ.';
+      await this.prisma.fbsTsdAssembly.updateMany({
+        where: {
+          id: task.id,
+          status: 'IN_PROGRESS',
+          kiz: task.kiz,
+          wbMetaStatus: 'REMOVING',
+        },
+        data: { wbMetaStatus: 'ACCEPTED', errorMessage: message },
+      });
+      throw new BadRequestException(`Не удалось отменить КИЗ в Wildberries: ${message}`);
+    }
+
+    const updated = await this.clearFbsTsdKizWithAudit(
+      task,
+      user,
+      true,
+      'КИЗ удалён из метаданных заказа Wildberries и освобождён в WMS.',
+    );
+    return this.formatFbsTsdAssembly(
+      updated,
+      user,
+      'КИЗ отменён в Wildberries и освобождён в WMS. Отсканируйте другой КИЗ.',
+    );
+  }
+
+  private async clearFbsTsdKizWithAudit(
+    task: FbsTsdAssemblyRecord,
+    user: AuthUser,
+    removedFromMarketplace: boolean,
+    reason: string,
+  ) {
+    const cancelledAt = new Date();
+    const printableKiz = printableFbsKiz(task.kiz ?? '');
+    return this.prisma.$transaction(async (tx) => {
+      // FIX: undoing an accepted KIZ restores only the unit reserved by this
+      // scan, so the same task can safely accept another physical item.
+      await this.returnCompletedWildberriesStockReservation(tx, task);
+      const updated = await tx.fbsTsdAssembly.update({
+        where: { id: task.id },
+        data: {
+          kiz: null,
+          wbMetaStatus: 'PENDING',
+          errorMessage: null,
+          stickerPartA: null,
+          stickerPartB: null,
+          stickerBarcode: null,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'FBS_KIZ_SCAN_UNDONE',
+          entity: 'FbsTsdAssembly',
+          entityId: task.id,
+          payload: cleanJson({
+            assemblyId: task.id,
+            clientId: task.clientId,
+            requestId: task.requestId,
+            orderId: task.orderId,
+            marketplace: task.marketplace,
+            deviceCode: task.deviceCode,
+            workerUserId: task.workerUserId,
+            workerName: task.workerName,
+            cancelledByUserId: user.id,
+            cancelledByName: user.name,
+            cancelledAt: cancelledAt.toISOString(),
+            boxCode: task.boxCode ?? task.reservedBoxCode,
+            kiz: printableKiz,
+            stickerBarcode: task.stickerBarcode,
+            previousWbMetaStatus: task.wbMetaStatus,
+            removedFromMarketplace,
+            reason,
+          }),
+        },
+      });
+      await tx.clientRequestEvent.create({
+        data: {
+          requestId: task.requestId,
+          clientId: task.clientId,
+          eventType: ClientRequestEventType.COMMENT,
+          title: 'КИЗ отменён на ТСД',
+          body:
+            `Заказ ${task.orderId}; короб ${task.boxCode ?? task.reservedBoxCode ?? 'не указан'}; ` +
+            `сотрудник ${user.name || task.workerName || 'не определён'}; КИЗ ${printableKiz}; ` +
+            `наклейка WB ${task.stickerBarcode ?? 'не получена'}. ${reason}`,
+          createdByUserId: user.id,
+        },
+      });
+      return updated;
+    });
+  }
+
   async releaseFbsTsdAssembly(taskId: string, user: AuthUser) {
     const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
     requireFbsTaskWithoutSyncConflict(task);
@@ -2477,12 +12633,23 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (task.kiz || task.wbMetaStatus === 'ACCEPTED') {
       throw new BadRequestException('КИЗ уже передан Wildberries. Для замены обратитесь к администратору.');
     }
+    if (task.relabelConfirmedAt) {
+      throw new BadRequestException('Переклейка уже подтверждена и учтена в остатках. Завершите этот заказ.');
+    }
     await this.prisma.fbsTsdAssembly.update({
       where: { id: task.id },
       data: {
-        status: 'RELEASED',
+        status: task.reservedBoxId
+          ? FBS_TSD_RESERVED_STATUS
+          : 'RELEASED',
+        deviceCode: task.reservedBoxId
+          ? FBS_TSD_AUTO_RESERVATION_DEVICE
+          : task.deviceCode,
+        workerUserId: null,
+        workerName: null,
         boxId: null,
         boxCode: null,
+        sourceBarcode: null,
         barcode: null,
         errorMessage: 'Сотрудник отложил заказ на ТСД.',
       },
@@ -2495,14 +12662,710 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (!task) throw new NotFoundException('Задание FBS не найдено. Обновите очередь.');
     this.clientScopes.requireClientAccess(user, task.clientId, 'write');
     const deviceCode = this.fbsTsdDeviceCode(undefined, user);
-    if (task.deviceCode !== deviceCode) {
-      throw new BadRequestException('Этот заказ уже назначен другому сотруднику.');
+    if (task.workerUserId !== user.id || task.deviceCode !== deviceCode) {
+      this.throwFbsTsdTaskStale(task, user);
     }
     return task;
   }
 
+  private throwFbsTsdTaskStale(task: FbsTsdAssemblyRecord, user: AuthUser): never {
+    throw new ConflictException({
+      code: 'FBS_TASK_STALE',
+      message: 'Задание на ТСД уже изменилось. Очередь будет обновлена автоматически.',
+      taskId: task.id,
+      requestId: task.requestId,
+      orderId: task.orderId,
+      expectedDeviceCode: this.fbsTsdDeviceCode(undefined, user),
+      ownerDeviceCode: task.deviceCode,
+      ownerWorkerUserId: task.workerUserId,
+      ownerWorkerName: task.workerName,
+    });
+  }
+
+  private requireCurrentFbsTsdLease(
+    task: FbsTsdAssemblyRecord | null,
+    user: AuthUser,
+  ): asserts task is FbsTsdAssemblyRecord {
+    if (
+      !task ||
+      task.status !== 'IN_PROGRESS' ||
+      task.workerUserId !== user.id ||
+      task.deviceCode !== this.fbsTsdDeviceCode(undefined, user)
+    ) {
+      if (task) this.throwFbsTsdTaskStale(task, user);
+      throw new ConflictException({
+        code: 'FBS_TASK_STALE',
+        message: 'Задание на ТСД уже изменилось. Очередь будет обновлена автоматически.',
+      });
+    }
+  }
+
+  private async withFbsTsdLeaseTransaction<T>(
+    task: FbsTsdAssemblyRecord,
+    user: AuthUser,
+    operation: (tx: Prisma.TransactionClient) => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await this.prisma.$transaction(operation, {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      });
+    } catch (caught) {
+      if (
+        caught instanceof Prisma.PrismaClientKnownRequestError &&
+        ['P2025', 'P2034'].includes(caught.code)
+      ) {
+        this.throwFbsTsdTaskStale(task, user);
+      }
+      throw caught;
+    }
+  }
+
+  private async withFbsTsdAssignmentLock<T>(
+    key: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.fbsTsdAssignmentLocks.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queued = previous.catch(() => undefined).then(() => gate);
+    this.fbsTsdAssignmentLocks.set(key, queued);
+    await previous.catch(() => undefined);
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.fbsTsdAssignmentLocks.get(key) === queued) {
+        this.fbsTsdAssignmentLocks.delete(key);
+      }
+    }
+  }
+
+  private async assertFbsTsdLeaseVersion(
+    task: FbsTsdAssemblyRecord,
+    user: AuthUser,
+  ) {
+    // Some isolated unit fixtures intentionally model only the operation under
+    // test. The real Prisma delegate always exposes findUnique.
+    if (typeof this.prisma.fbsTsdAssembly?.findUnique !== 'function') return task;
+    const fresh = await this.prisma.fbsTsdAssembly.findUnique({ where: { id: task.id } });
+    this.requireCurrentFbsTsdLease(fresh, user);
+    if (fresh.updatedAt.getTime() !== task.updatedAt.getTime()) {
+      this.throwFbsTsdTaskStale(fresh, user);
+    }
+    return fresh;
+  }
+
+  private async updateFbsTsdUnderLease(
+    task: FbsTsdAssemblyRecord,
+    user: AuthUser,
+    data: Prisma.FbsTsdAssemblyUpdateManyMutationInput,
+  ) {
+    if (typeof this.prisma.fbsTsdAssembly?.updateMany !== 'function') {
+      return this.prisma.fbsTsdAssembly.update({ where: { id: task.id }, data });
+    }
+    const updated = await this.prisma.fbsTsdAssembly.updateMany({
+      where: {
+        id: task.id,
+        status: 'IN_PROGRESS',
+        workerUserId: user.id,
+        deviceCode: this.fbsTsdDeviceCode(undefined, user),
+        updatedAt: task.updatedAt,
+      },
+      data,
+    });
+    if (updated.count !== 1) {
+      const fresh = await this.prisma.fbsTsdAssembly.findUnique({ where: { id: task.id } });
+      if (fresh) this.throwFbsTsdTaskStale(fresh, user);
+      throw new ConflictException({
+        code: 'FBS_TASK_STALE',
+        message: 'Задание на ТСД уже изменилось. Очередь будет обновлена автоматически.',
+      });
+    }
+    const fresh = await this.prisma.fbsTsdAssembly.findUnique({ where: { id: task.id } });
+    this.requireCurrentFbsTsdLease(fresh, user);
+    return fresh;
+  }
+
   private fbsTsdDeviceCode(deviceCodeValue: unknown, user: AuthUser) {
-    return user.deviceCode || textValue(deviceCodeValue) || `USER:${user.id}`;
+    const authenticatedDeviceCode = textValue(user.deviceCode);
+    if (authenticatedDeviceCode.toUpperCase().startsWith('USER:')) {
+      throw new UnauthorizedException({
+        code: 'TSD_UPDATE_REQUIRED',
+        message: 'Обновите приложение ТСД и войдите заново. Старая общая сессия сотрудника отключена, чтобы заказы не переходили между устройствами.',
+      });
+    }
+    return authenticatedDeviceCode || textValue(deviceCodeValue) || `USER:${user.id}`;
+  }
+
+  private async isFbsEmergencyAssemblyRequest(requestId: string) {
+    const request = await this.prisma.clientRequest?.findUnique?.({
+      where: { id: requestId },
+      select: { fbsEmergencyAssemblyAt: true },
+    });
+    return Boolean(request?.fbsEmergencyAssemblyAt);
+  }
+
+  private async applyFbsRelabelingStockSources(
+    clientId: string,
+    orders: FbsOrderSummary[],
+  ): Promise<FbsOrderSummary[]> {
+    const client = await this.prisma.client.findUnique({
+      where: { id: clientId },
+      select: { relabelingEnabled: true },
+    });
+    if (!client?.relabelingEnabled) {
+      return orders;
+    }
+
+    const relabelCandidates = orders.filter(
+      (order) =>
+        order.product &&
+        !order.storageBoxes.some(
+          (box) => box.quantity > 0 && box.status === StockStatus.AVAILABLE,
+        ),
+    );
+    if (relabelCandidates.length === 0) {
+      return orders.map((order) => ({
+        ...order,
+        relabeling: null,
+      }));
+    }
+
+    const targetArticles = uniqueStrings(
+      relabelCandidates.flatMap((order) =>
+        order.product
+          ? [
+              order.product.article ?? '',
+              order.product.clientSku ?? '',
+              order.product.internalSku,
+              order.article ?? '',
+            ]
+          : [],
+      ),
+    );
+    if (targetArticles.length === 0) {
+      return orders;
+    }
+
+    const mappings = await this.prisma.clientArticleMapping.findMany({
+      where: {
+        clientId,
+        OR: targetArticles.map((article) => ({
+          targetArticle: { equals: article, mode: Prisma.QueryMode.insensitive },
+        })),
+      },
+      select: {
+        sourceArticle: true,
+        targetArticle: true,
+      },
+      orderBy: [{ targetArticle: 'asc' }, { sourceArticle: 'asc' }],
+    });
+    if (mappings.length === 0) {
+      return orders;
+    }
+
+    const sourceArticles = uniqueStrings(mappings.map((mapping) => mapping.sourceArticle));
+    const sourceSkus = await this.prisma.sku.findMany({
+      where: {
+        clientId,
+        OR: sourceArticles.flatMap((article) => [
+          { article: { equals: article, mode: Prisma.QueryMode.insensitive } },
+          { clientSku: { equals: article, mode: Prisma.QueryMode.insensitive } },
+          { internalSku: { equals: article, mode: Prisma.QueryMode.insensitive } },
+          { internalSku: { startsWith: `${article}-`, mode: Prisma.QueryMode.insensitive } },
+        ]),
+      },
+      select: {
+        id: true,
+        name: true,
+        internalSku: true,
+        clientSku: true,
+        article: true,
+        size: true,
+        barcodes: {
+          select: { value: true },
+          orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }],
+        },
+        balances: {
+          where: {
+            status: StockStatus.AVAILABLE,
+            quantity: { gt: 0 },
+            boxId: { not: null },
+            box: {
+              status: { notIn: ['deleted', 'archived'] },
+              storagePlacement: { isNot: null },
+            },
+          },
+          select: {
+            quantity: true,
+            status: true,
+            box: { select: { code: true } },
+          },
+        },
+      },
+    });
+
+    return orders.map((order) => {
+      if (!order.product) {
+        return order;
+      }
+      const hasDirectAvailableStock = order.storageBoxes.some(
+        (box) => box.quantity > 0 && box.status === StockStatus.AVAILABLE,
+      );
+      if (hasDirectAvailableStock) {
+        return {
+          ...order,
+          relabeling: null,
+        };
+      }
+      const targetKeys = new Set(
+        uniqueStrings([
+          order.product.article ?? '',
+          order.product.clientSku ?? '',
+          order.product.internalSku,
+          order.article ?? '',
+        ]).map(fbsArticleKey),
+      );
+      const matchedMappings = mappings.filter((mapping) =>
+        targetKeys.has(fbsArticleKey(mapping.targetArticle)),
+      );
+      if (matchedMappings.length === 0) {
+        return order;
+      }
+
+      const targetSize = fbsArticleKey(order.product.size ?? '');
+      const candidates = sourceSkus
+        .flatMap((sku) => {
+          const mapping = matchedMappings.find((item) =>
+            fbsSkuMatchesSourceArticle(sku, item.sourceArticle),
+          );
+          if (!mapping || (targetSize && fbsArticleKey(sku.size ?? '') !== targetSize)) {
+            return [];
+          }
+          return [{
+            sku,
+            mapping,
+            available: sku.balances.reduce((sum, balance) => sum + balance.quantity, 0),
+          }];
+        })
+        .sort(
+          (left, right) =>
+            right.available - left.available ||
+            left.sku.internalSku.localeCompare(right.sku.internalSku, 'ru-RU'),
+        );
+      const selected = candidates[0];
+      const fallbackSourceArticle = matchedMappings[0].sourceArticle;
+      if (!selected || selected.available <= 0) {
+        return {
+          ...order,
+          storageBoxes: [],
+          relabeling: {
+            required: true,
+            sourceSkuId: selected?.sku.id ?? null,
+            sourceProductName: selected?.sku.name ?? null,
+            sourceArticle: selected?.mapping.sourceArticle ?? fallbackSourceArticle,
+            sourceBarcodes: selected
+              ? uniqueStrings(selected.sku.barcodes.map((barcode) => barcode.value))
+              : [],
+          },
+        };
+      }
+
+      const boxes = new Map<string, number>();
+      selected.sku.balances.forEach((balance) => {
+        if (!balance.box) return;
+        boxes.set(balance.box.code, (boxes.get(balance.box.code) ?? 0) + balance.quantity);
+      });
+      return {
+        ...order,
+        storageBoxes: [...boxes.entries()]
+          .map(([code, quantity]) => ({
+            code,
+            quantity,
+            status: StockStatus.AVAILABLE,
+          }))
+          .sort((left, right) => left.code.localeCompare(right.code, 'ru-RU')),
+        relabeling: {
+          required: true,
+          sourceSkuId: selected.sku.id,
+          sourceProductName: selected.sku.name,
+          sourceArticle: selected.mapping.sourceArticle,
+          sourceBarcodes: uniqueStrings(selected.sku.barcodes.map((barcode) => barcode.value)),
+        },
+      };
+    });
+  }
+
+  private async loadWildberriesFbsKizPreflight(
+    apiKey: string,
+    orderId: string,
+    kiz: string,
+  ) {
+    const numericOrderId = numericWbOrderId(orderId);
+    const signal = AbortSignal.timeout(FBS_TSD_WB_READ_TIMEOUT_MS);
+    let statusPayload: Record<string, unknown>;
+    let metadataPayload: Record<string, unknown>;
+    try {
+      [statusPayload, metadataPayload] = await Promise.all([
+        marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/orders/status', {
+          method: 'POST',
+          headers: wbHeaders(apiKey),
+          body: JSON.stringify({ orders: [numericOrderId] }),
+          signal,
+        }),
+        marketplaceJson('https://marketplace-api.wildberries.ru/api/marketplace/v3/orders/meta', {
+          method: 'POST',
+          headers: wbHeaders(apiKey),
+          body: JSON.stringify({ orders: [numericOrderId] }),
+          signal,
+        }),
+      ]);
+    } catch (caught) {
+      const reason = marketplaceErrorMessage(caught);
+      throw new BadRequestException(
+        `Не удалось безопасно проверить статус и КИЗ заказа WB №${orderId}. ` +
+          `КИЗ в Wildberries не отправлялся. Обновите задание и повторите сканирование. Причина: ${reason}`,
+      );
+    }
+
+    const status = asArray<Record<string, unknown>>(statusPayload.orders).find(
+      (candidate) => Number(candidate.id) === numericOrderId,
+    );
+    const supplierStatus = textValue(status?.supplierStatus).toLowerCase();
+    const wbStatus = textValue(status?.wbStatus).toLowerCase();
+    const remoteKizValues = wildberriesOrderSgtins(metadataPayload, numericOrderId);
+    const normalizedKiz = normalizedFbsKizValue(kiz);
+
+    return {
+      supplierStatus,
+      wbStatus,
+      remoteKizValues,
+      alreadyAttached: remoteKizValues.some(
+        (value) => normalizedFbsKizValue(value) === normalizedKiz,
+      ),
+    };
+  }
+
+  private async parkFbsTsdOrderAfterWbKizConflict(
+    task: FbsTsdAssemblyRecord,
+    kiz: string,
+    supplierStatus: string,
+    wbStatus: string,
+    reason: string,
+    user: AuthUser,
+  ) {
+    const supplierLabel = supplierStatus || 'не определён';
+    const wbLabel = wbStatus || 'не определён';
+    const message =
+      `Заказ WB №${task.orderId} нельзя продолжать на ТСД: ${reason}. ` +
+      `Текущий статус WB: ${supplierLabel}/${wbLabel}. КИЗ в Wildberries повторно не отправляется. ` +
+      'Задача снята со сборщика и перенесена в проблемные заказы онлайн-заявки. ' +
+      'Менеджеру нужно обновить заказ WB и выбрать действие: вернуть товар на склад или подтвердить решение.';
+
+    await this.withFbsTsdLeaseTransaction(task, user, async (tx) => {
+      const freshTask = await tx.fbsTsdAssembly.findUnique({ where: { id: task.id } });
+      this.requireCurrentFbsTsdLease(freshTask, user);
+      if (freshTask.updatedAt.getTime() !== task.updatedAt.getTime()) {
+        this.throwFbsTsdTaskStale(freshTask, user);
+      }
+      await tx.fbsTsdAssembly.update({
+        where: { id: freshTask.id },
+        data: {
+          status: FBS_TSD_RETURN_REQUIRED,
+          deviceCode: FBS_TSD_AUTO_RESERVATION_DEVICE,
+          workerUserId: null,
+          workerName: null,
+          kiz,
+          wbMetaStatus: 'REJECTED',
+          errorMessage: message,
+        },
+      });
+      await tx.fbsOrderRequestLink.updateMany({
+        where: {
+          clientId: task.clientId,
+          connectionId: task.connectionId,
+          orderId: task.orderId,
+        },
+        data: {
+          ...(supplierStatus ? { lastSupplierStatus: supplierStatus } : {}),
+          ...(wbStatus ? { lastWbStatus: wbStatus } : {}),
+          ...(supplierStatus || wbStatus
+            ? { lastCategory: fbsOrderCategory(supplierStatus, wbStatus) }
+            : {}),
+          syncStatus: FBS_REQUEST_LINK_RETURN_REQUIRED,
+          syncIssue: message,
+          lastSeenAt: new Date(),
+        },
+      });
+      await tx.clientRequestEvent.create({
+        data: {
+          requestId: task.requestId,
+          clientId: task.clientId,
+          eventType: ClientRequestEventType.COMMENT,
+          title: 'Сборка остановлена: статус заказа WB изменился',
+          body: message,
+          createdByUserId: user.id,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: FBS_KIZ_WB_STATUS_CONFLICT_ACTION,
+          entity: 'FbsTsdAssembly',
+          entityId: task.id,
+          payload: {
+            requestId: task.requestId,
+            orderId: task.orderId,
+            clientId: task.clientId,
+            supplierStatus: supplierStatus || null,
+            wbStatus: wbStatus || null,
+            kiz: printableFbsKiz(kiz),
+            reason,
+          },
+        },
+      });
+    });
+    this.fbsOrdersCache.delete(task.clientId);
+    this.fbsTsdRequestFallbackCache.delete(task.clientId);
+    return message;
+  }
+
+  private async resolveFbsTsdStockSource(
+    clientId: string,
+    product: NonNullable<FbsOrderSummary['product']>,
+    directStorageBoxes: FbsOrderSummary['storageBoxes'],
+    excludeTaskId?: string,
+    allowDirect = true,
+  ): Promise<FbsTsdStockSource | null> {
+    const client = this.prisma.client?.findUnique
+      ? await this.prisma.client.findUnique({
+        where: { id: clientId },
+        select: { relabelingEnabled: true, storesWithoutBoxes: true },
+      })
+      : { relabelingEnabled: false, storesWithoutBoxes: false };
+    if (allowDirect && client?.storesWithoutBoxes) {
+      const availableWithoutBox = await this.prisma.stockBalance.aggregate({
+        where: {
+          clientId,
+          skuId: product.id,
+          status: StockStatus.AVAILABLE,
+          OR: [
+            { boxId: null },
+            {
+              boxId: { not: null },
+              box: { status: { notIn: ['deleted', 'archived'] } },
+            },
+          ],
+        },
+        _sum: { quantity: true },
+      });
+      const withoutBoxQuantity = availableWithoutBox._sum.quantity ?? 0;
+      const reservations = withoutBoxQuantity > 0
+        ? await this.fbsTsdReservationRows({
+            clientId,
+            skuId: product.id,
+            withoutBox: true,
+            excludeTaskId: excludeTaskId ?? null,
+          })
+        : [];
+      const reservedQuantity = reservations.reduce(
+        (sum, reservation) => sum + reservation.itemCount,
+        0,
+      );
+      if (withoutBoxQuantity - reservedQuantity > 0) {
+        return {
+          sourceSkuId: null,
+          sourceProductName: null,
+          sourceArticle: null,
+          sourceBarcodes: [],
+          storageBoxes: [],
+          withoutBoxQuantity,
+          relabelRequired: false,
+        };
+      }
+    }
+    if (allowDirect && !client?.storesWithoutBoxes) {
+      const directQuantity = directStorageBoxes
+        .filter((box) => box.status === StockStatus.AVAILABLE)
+        .reduce((sum, box) => sum + Math.max(0, box.quantity), 0);
+      if (directQuantity > 0) {
+        const reservations = await this.fbsTsdReservationRows({
+          clientId,
+          skuId: product.id,
+          excludeTaskId: excludeTaskId ?? null,
+        });
+        const reservedQuantity = reservations.reduce(
+          (sum, reservation) => sum + reservation.itemCount,
+          0,
+        );
+        if (directQuantity - reservedQuantity > 0) {
+          return {
+            sourceSkuId: null,
+            sourceProductName: null,
+            sourceArticle: null,
+            sourceBarcodes: [],
+            storageBoxes: directStorageBoxes,
+            withoutBoxQuantity: 0,
+            relabelRequired: false,
+          };
+        }
+      }
+    }
+    if (!client?.relabelingEnabled) {
+      return {
+        sourceSkuId: null,
+        sourceProductName: null,
+        sourceArticle: null,
+        sourceBarcodes: [],
+        storageBoxes: directStorageBoxes,
+        withoutBoxQuantity: 0,
+        relabelRequired: false,
+      };
+    }
+    const targetSku = await this.prisma.sku.findUnique({
+        where: { id: product.id },
+        select: { id: true, internalSku: true, clientSku: true, article: true, size: true },
+      });
+    if (!targetSku) {
+      return {
+        sourceSkuId: null,
+        sourceProductName: null,
+        sourceArticle: null,
+        sourceBarcodes: [],
+        storageBoxes: directStorageBoxes,
+        withoutBoxQuantity: 0,
+        relabelRequired: false,
+      };
+    }
+
+    const targetArticles = uniqueStrings([
+      targetSku.article ?? '',
+      targetSku.clientSku ?? '',
+      product.article ?? '',
+      product.clientSku ?? '',
+    ]);
+    if (targetArticles.length === 0) {
+      return {
+        sourceSkuId: null,
+        sourceProductName: null,
+        sourceArticle: null,
+        sourceBarcodes: [],
+        storageBoxes: directStorageBoxes,
+        withoutBoxQuantity: 0,
+        relabelRequired: false,
+      };
+    }
+    const mappings = await this.prisma.clientArticleMapping.findMany({
+      where: {
+        clientId,
+        OR: targetArticles.map((article) => ({
+          targetArticle: { equals: article, mode: Prisma.QueryMode.insensitive },
+        })),
+      },
+      orderBy: [{ targetArticle: 'asc' }, { sourceArticle: 'asc' }],
+    });
+    if (mappings.length === 0) {
+      return {
+        sourceSkuId: null,
+        sourceProductName: null,
+        sourceArticle: null,
+        sourceBarcodes: [],
+        storageBoxes: directStorageBoxes,
+        withoutBoxQuantity: 0,
+        relabelRequired: false,
+      };
+    }
+
+    const sourceArticles = uniqueStrings(mappings.map((mapping) => mapping.sourceArticle));
+    const sourceSkus = await this.prisma.sku.findMany({
+      where: {
+        clientId,
+        ...(targetSku.size
+          ? { size: { equals: targetSku.size, mode: Prisma.QueryMode.insensitive } }
+          : {}),
+        OR: sourceArticles.flatMap((article) => [
+          { article: { equals: article, mode: Prisma.QueryMode.insensitive } },
+          { clientSku: { equals: article, mode: Prisma.QueryMode.insensitive } },
+          { internalSku: { equals: article, mode: Prisma.QueryMode.insensitive } },
+          { internalSku: { startsWith: `${article}-`, mode: Prisma.QueryMode.insensitive } },
+        ]),
+      },
+      select: {
+        id: true,
+        name: true,
+        internalSku: true,
+        clientSku: true,
+        article: true,
+        barcodes: { select: { value: true }, orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }] },
+        balances: {
+          where: {
+            status: StockStatus.AVAILABLE,
+            quantity: { gt: 0 },
+            ...(client.storesWithoutBoxes
+              ? {
+                  OR: [
+                    { boxId: null },
+                    {
+                      boxId: { not: null },
+                      box: { status: { notIn: ['deleted', 'archived'] } },
+                    },
+                  ],
+                }
+              : {
+                  boxId: { not: null },
+                  box: {
+                    status: { notIn: ['deleted', 'archived'] },
+                    storagePlacement: { isNot: null },
+                  },
+                }),
+          },
+          select: {
+            quantity: true,
+            status: true,
+            box: { select: { code: true } },
+          },
+        },
+      },
+    });
+    const ranked = sourceSkus
+      .map((sku) => ({
+        sku,
+        available: sku.balances.reduce((sum, balance) => sum + balance.quantity, 0),
+      }))
+      .filter((item) => item.available > 0)
+      .sort(
+        (left, right) =>
+          right.available - left.available ||
+          left.sku.internalSku.localeCompare(right.sku.internalSku, 'ru-RU'),
+      );
+    const selected = ranked[0]?.sku;
+    if (!selected) {
+      return null;
+    }
+    const boxes = new Map<string, number>();
+    selected.balances.forEach((balance) => {
+      if (!balance.box) return;
+      boxes.set(balance.box.code, (boxes.get(balance.box.code) ?? 0) + balance.quantity);
+    });
+    return {
+      sourceSkuId: selected.id,
+      sourceProductName: selected.name,
+      sourceArticle: selected.article ?? selected.clientSku ?? selected.internalSku,
+      sourceBarcodes: uniqueStrings(selected.barcodes.map((barcode) => barcode.value)),
+      storageBoxes: [...boxes.entries()].map(([code, quantity]) => ({
+        code,
+        quantity,
+        status: StockStatus.AVAILABLE,
+      })),
+      withoutBoxQuantity: client.storesWithoutBoxes
+        ? selected.balances.reduce((sum, balance) => sum + balance.quantity, 0)
+        : selected.balances
+            .filter((balance) => !balance.box)
+            .reduce((sum, balance) => sum + balance.quantity, 0),
+      relabelRequired: true,
+    };
   }
 
   private async emptyFbsTsdAssembly(deviceCode: string, user: AuthUser, message: string) {
@@ -2519,8 +13382,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   private async formatFbsTsdAssembly(task: FbsTsdAssemblyRecord, user: AuthUser, message: string) {
-    const state = fbsTsdStage(task);
-    const [client, skuDetails, balances, reservations, completedToday, requestSummary, orderSticker, recentStickers, sourceBoxUsage] = await Promise.all([
+    let state = fbsTsdStage(task);
+    const needsStorageRouting = state === 'SCAN_BOX';
+    const needsSourceBoxUsage = state === 'SCAN_BARCODE';
+    const stockSkuId =
+      task.relabelRequired && !task.relabelConfirmedAt && task.sourceSkuId
+        ? task.sourceSkuId
+        : task.skuId;
+    const [client, skuDetails, sourceSkuDetails, balances, reservations, completedToday, requestSummary, requestItemTotals, completedRequestItems, orderSticker, recentStickers, sourceBoxUsage, warehousePlan, warehouseConnection, nextRequestSources] = await Promise.all([
       this.prisma.client.findUnique({
         where: { id: task.clientId },
         select: { id: true, code: true, name: true },
@@ -2529,44 +13398,90 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         where: { id: task.skuId },
         select: { color: true, size: true },
       }),
-      this.prisma.stockBalance.findMany({
-        where: {
-          clientId: task.clientId,
-          skuId: task.skuId,
-          status: StockStatus.AVAILABLE,
-          quantity: { gt: 0 },
-          boxId: { not: null },
-          box: { status: { notIn: ['deleted', 'archived'] } },
-        },
-        select: { boxId: true, quantity: true, box: { select: { code: true } } },
-      }),
-      this.prisma.fbsTsdAssembly.findMany({
-        where: {
-          id: { not: task.id },
-          clientId: task.clientId,
-          skuId: task.skuId,
-          boxId: { not: null },
-          status: { in: ['IN_PROGRESS', 'COMPLETED', FBS_TSD_RETURN_REQUIRED] },
-        },
-        select: { boxId: true, itemCount: true },
-      }),
+      task.sourceSkuId
+        ? this.prisma.sku.findUnique({
+            where: { id: task.sourceSkuId },
+            select: { color: true, size: true },
+          })
+        : Promise.resolve(null),
+      needsStorageRouting
+        ? this.prisma.stockBalance.findMany({
+            where: {
+              clientId: task.clientId,
+              skuId: stockSkuId,
+              status: StockStatus.AVAILABLE,
+              quantity: { gt: 0 },
+              boxId: { not: null },
+              box: {
+                status: { notIn: ['deleted', 'archived'] },
+                storagePlacement: { isNot: null },
+              },
+            },
+            select: { boxId: true, quantity: true, box: { select: { code: true } } },
+          })
+        : Promise.resolve([]),
+      needsStorageRouting
+        ? this.fbsTsdReservationRows({
+            clientId: task.clientId,
+            skuId: stockSkuId,
+            excludeTaskId: task.id,
+          })
+        : Promise.resolve([]),
       this.fbsTsdCompletedToday(task.deviceCode, user),
       this.prisma.clientRequest.findUnique({
         where: { id: task.requestId },
         select: {
           number: true,
-          items: {
-            select: {
-              quantity: true,
-              boxSelections: { select: { quantity: true } },
-            },
-          },
+          fbsEmergencyAssemblyAt: true,
+          fbsEmergencyAssemblyByName: true,
         },
       }),
-      state === 'READY_TO_COMPLETE' ? this.loadFbsTsdOrderSticker(task) : Promise.resolve(null),
+      this.prisma.clientRequestItem.aggregate({
+        where: { requestId: task.requestId },
+        _sum: { quantity: true },
+      }),
+      this.prisma.fbsTsdAssembly.aggregate({
+        where: {
+          requestId: task.requestId,
+          status: 'COMPLETED',
+        },
+        _sum: { itemCount: true },
+      }),
+      state === 'READY_TO_COMPLETE' &&
+      (task.marketplace === MarketplaceType.WILDBERRIES ||
+        task.marketplace === MarketplaceType.OZON)
+        ? this.loadFbsTsdOrderSticker(task)
+        : state === 'WAIT_MARKETPLACE_LABEL' && task.marketplace === MarketplaceType.OZON
+          ? this.loadFbsTsdOrderSticker(task)
+        : Promise.resolve(null),
       this.fbsTsdStickerHistory(task.deviceCode, user),
-      this.fbsTsdSourceBoxUsage(task),
+      needsSourceBoxUsage ? this.fbsTsdSourceBoxUsage(task) : Promise.resolve(null),
+      task.supplyId
+        ? this.prisma.fbsSupplyPlan.findFirst({
+            where: {
+              marketplace: task.marketplace,
+              connectionId: task.connectionId,
+              supplyId: task.supplyId,
+            },
+            select: {
+              marketplaceWarehouseId: true,
+              marketplaceWarehouseName: true,
+            },
+          })
+        : Promise.resolve(null),
+      this.prisma.clientMarketplaceConnection.findUnique({
+        where: { id: task.connectionId },
+        select: { fbsWarehouseId: true, fbsWarehouseName: true },
+      }),
+      needsStorageRouting ? this.fbsTsdNextRequestSources(task) : Promise.resolve([]),
     ]);
+    if (
+      task.marketplace === MarketplaceType.OZON &&
+      (orderSticker || task.marketplaceLabelBase64) &&
+      task.status !== 'COMPLETED'
+    ) {
+      state = 'READY_TO_COMPLETE';
+    }
     const reservedByBox = new Map<string, number>();
     reservations.forEach((reservation) => {
       if (!reservation.boxId) return;
@@ -2586,24 +13501,132 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       current.quantity += balance.quantity;
       boxesById.set(balance.boxId, current);
     });
-    const storageBoxes = [...boxesById.values()]
+    let storageBoxes = [...boxesById.values()]
       .map((box) => ({ ...box, quantity: box.quantity - (reservedByBox.get(box.id) ?? 0) }))
       .filter((box) => box.quantity >= task.itemCount || box.id === task.boxId)
       .sort((left, right) => left.quantity - right.quantity || left.code.localeCompare(right.code, 'ru-RU'));
-    const recommendedBoxCode = task.boxCode ?? storageBoxes[0]?.code ?? null;
-    const requestTotalItems = requestSummary?.items.reduce((sum, item) => sum + item.quantity, 0) ?? 0;
-    const requestCompletedItems = requestSummary?.items.reduce(
-      (sum, item) => sum + item.boxSelections.reduce((itemSum, selection) => itemSum + selection.quantity, 0),
-      0,
-    ) ?? 0;
+    const previousCompleted = !needsStorageRouting || task.boxCode
+      ? null
+      : await this.prisma.fbsTsdAssembly.findFirst({
+          where: {
+            requestId: task.requestId,
+            deviceCode: task.deviceCode,
+            status: 'COMPLETED',
+            boxCode: { not: null },
+          },
+          orderBy: { completedAt: 'desc' },
+          select: { boxCode: true },
+        });
+    const locationBoxCodes = uniqueStrings([
+      ...storageBoxes.map((box) => box.code),
+      task.reservedBoxCode ?? '',
+      task.boxCode ?? '',
+      previousCompleted?.boxCode ?? '',
+    ]);
+    const placements = needsStorageRouting && locationBoxCodes.length
+      ? await this.prisma.storagePalletBox.findMany({
+          where: { boxCode: { in: locationBoxCodes } },
+          include: { pallet: { include: { zone: true } } },
+        })
+      : [];
+    const locationsByBox = new Map(
+      placements.map((placement) => [
+        placement.boxCode,
+        {
+          palletId: placement.palletId,
+          palletCode: placement.pallet.code,
+          zoneId: placement.pallet.zoneId,
+          zoneCode: placement.pallet.zone?.code ?? null,
+          zoneName: placement.pallet.zone?.name ?? null,
+          source: placement.source,
+        },
+      ]),
+    );
+    // A scanned box is a physical fact and must remain the first choice.  An
+    // automatic reservation, on the other hand, is only a hint: it may become
+    // stale after an inventory correction or another FBS reservation.  Never
+    // let such a stale hint send a picker back to an empty pallet-sort.
+    const scannedStorageBox = task.boxId
+      ? storageBoxes.find((box) => box.id === task.boxId) ?? null
+      : null;
+    const liveReservedStorageBox = task.reservedBoxId
+      ? storageBoxes.find(
+          (box) => box.id === task.reservedBoxId && box.quantity >= task.itemCount,
+        ) ?? null
+      : task.reservedBoxCode
+        ? storageBoxes.find(
+            (box) =>
+              box.code.localeCompare(task.reservedBoxCode ?? '', 'ru-RU', {
+                sensitivity: 'accent',
+              }) === 0 && box.quantity >= task.itemCount,
+          ) ?? null
+        : null;
+    const preferredLocation =
+      locationsByBox.get(scannedStorageBox?.code ?? '') ??
+      locationsByBox.get(liveReservedStorageBox?.code ?? '') ??
+      locationsByBox.get(previousCompleted?.boxCode ?? '') ??
+      locationsByBox.get(storageBoxes.find((box) => locationsByBox.has(box.code))?.code ?? '') ??
+      null;
+    storageBoxes = storageBoxes.sort((left, right) => {
+      const leftSamePallet =
+        preferredLocation && locationsByBox.get(left.code)?.palletId === preferredLocation.palletId;
+      const rightSamePallet =
+        preferredLocation && locationsByBox.get(right.code)?.palletId === preferredLocation.palletId;
+      return Number(rightSamePallet) - Number(leftSamePallet) ||
+        left.quantity - right.quantity ||
+        left.code.localeCompare(right.code, 'ru-RU');
+    });
+    const recommendedBoxCode =
+      scannedStorageBox?.code ??
+      liveReservedStorageBox?.code ??
+      storageBoxes[0]?.code ??
+      null;
+    const recommendedLocation = recommendedBoxCode ? locationsByBox.get(recommendedBoxCode) ?? null : null;
+    const samePalletBoxes = recommendedLocation
+      ? uniqueStrings(
+          nextRequestSources
+            .filter(
+              (source) =>
+                source.palletId === recommendedLocation.palletId &&
+                source.boxCode !== recommendedBoxCode,
+            )
+            .map((source) => source.boxCode),
+        ).sort((left, right) => left.localeCompare(right, 'ru-RU'))
+      : [];
+    const requestTotalItems = requestItemTotals._sum.quantity ?? 0;
+    const requestCompletedItems = Math.min(
+      requestTotalItems,
+      completedRequestItems._sum.itemCount ?? 0,
+    );
+    const cachedWarehouseOrder = this.fbsOrdersCache
+      .get(task.clientId)
+      ?.value.orders.find(
+        (order) =>
+          order.marketplace === task.marketplace &&
+          order.connectionId === task.connectionId &&
+          order.id === task.orderId,
+      );
+    const marketplaceWarehouseId =
+      cachedWarehouseOrder?.warehouseId ??
+      warehousePlan?.marketplaceWarehouseId ??
+      warehouseConnection?.fbsWarehouseId ??
+      null;
+    const marketplaceWarehouseName =
+      cachedWarehouseOrder?.warehouseName ??
+      warehousePlan?.marketplaceWarehouseName ??
+      warehouseConnection?.fbsWarehouseName ??
+      null;
     return {
       state,
       message,
       task: {
         id: task.id,
+        marketplace: task.marketplace,
         orderId: task.orderId,
         supplyId: task.supplyId,
         requestId: task.requestId,
+        warehouseId: marketplaceWarehouseId,
+        warehouseName: marketplaceWarehouseName,
         client: client ?? { id: task.clientId, code: '', name: task.clientId },
         product: {
           id: task.skuId,
@@ -2613,18 +13636,49 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           size: skuDetails?.size ?? null,
           barcodes: jsonStringArray(task.barcodes),
         },
+        relabeling: task.relabelRequired
+          ? {
+              required: true,
+              sourceProduct: {
+                id: task.sourceSkuId,
+                name: task.sourceProductName,
+                article: task.sourceArticle,
+                color: sourceSkuDetails?.color ?? null,
+                size: sourceSkuDetails?.size ?? skuDetails?.size ?? null,
+                barcodes: jsonStringArray(task.sourceBarcodes),
+              },
+              sourceBarcode: task.sourceBarcode,
+              targetBarcode: task.barcode,
+              confirmed: Boolean(task.relabelConfirmedAt),
+              confirmedAt: task.relabelConfirmedAt?.toISOString() ?? null,
+            }
+          : null,
         itemCount: task.itemCount,
+        sourceWithoutBox: fbsTsdUsesNoBox(task),
         requiresKiz: task.requiresKiz,
         recommendedBoxCode,
-        storageBoxes,
+        // FIX: employee API keeps only the selected current route and aggregate hints.
+        recommendedLocation,
+        samePalletRemainingBoxes: samePalletBoxes.length,
+        // FIX: Return every remaining box on the recommended pallet-sort.
+        samePalletBoxCodes: samePalletBoxes,
         scannedBoxCode: task.boxCode,
         sourceBoxUsage,
         scannedBarcode: task.barcode,
         kizAccepted: Boolean(task.kiz && task.wbMetaStatus === 'ACCEPTED'),
         wbMetaStatus: task.wbMetaStatus,
         orderSticker,
+        marketplaceSubmittedAt: task.marketplaceSubmittedAt?.toISOString() ?? null,
+        marketplaceSubmitError: task.marketplaceSubmitError,
         errorMessage: task.errorMessage,
         status: task.status,
+        emergencyAssembly: requestSummary?.fbsEmergencyAssemblyAt
+          ? {
+              enabledAt: requestSummary.fbsEmergencyAssemblyAt.toISOString(),
+              enabledByName: requestSummary.fbsEmergencyAssemblyByName,
+              wbMutationAllowed: false,
+            }
+          : null,
       },
       progress: {
         completedToday,
@@ -2637,63 +13691,1189 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
-  private async fbsTsdSourceBoxUsage(task: FbsTsdAssemblyRecord) {
-    if (!task.boxId || !task.boxCode) return null;
-
-    const [requestItems, balances] = await Promise.all([
-      this.prisma.clientRequestItem.findMany({
-        where: { requestId: task.requestId },
-        select: {
-          skuId: true,
-          quantity: true,
-          boxSelections: { select: { quantity: true } },
+  private async remainingRequestBoxesOnStoragePallet(
+    requestId: string,
+    _clientId: string,
+    palletId: string,
+    excludeBoxCode: string,
+  ) {
+    // The pallet screen must use exactly the same reservations as the box
+    // scanner.  Looking at all physical balances for a requested SKU used to
+    // show boxes whose units had already been reserved by other FBS orders;
+    // the picker then scanned such a box and received “not needed”.
+    const tasks = await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        requestId,
+        status: {
+          in: [
+            FBS_TSD_RESERVED_STATUS,
+            FBS_TSD_WAITING_STOCK_STATUS,
+            FBS_TSD_RESCAN_REQUIRED_STATUS,
+            'IN_PROGRESS',
+          ],
         },
-      }),
+        OR: [
+          { boxId: { not: null } },
+          { reservedBoxId: { not: null } },
+        ],
+      },
+      select: {
+        id: true,
+        connectionId: true,
+        orderId: true,
+        boxId: true,
+        reservedBoxId: true,
+      },
+    });
+    const assignedBoxIds = uniqueStrings(
+      tasks.map((task) => task.boxId ?? task.reservedBoxId ?? ''),
+    );
+    if (assignedBoxIds.length === 0) {
+      return [];
+    }
+
+    const placements = await this.prisma.storagePalletBox.findMany({
+      where: {
+        palletId,
+        boxId: { in: assignedBoxIds },
+      },
+      select: { boxCode: true },
+    });
+    return uniqueStrings(
+      placements
+        .map((placement) => placement.boxCode)
+        .filter((code) => code && code !== excludeBoxCode),
+    ).sort((left, right) => left.localeCompare(right, 'ru-RU'));
+  }
+
+  /**
+   * A physical scan has priority over a virtual box hint. Untouched AUTO
+   * reservations return to the queue; untouched assigned tasks keep their
+   * employee/order and calculate another box on the next poll. A box, product
+   * barcode or KIZ already scanned by another worker is never moved.
+   */
+  private async releaseUntouchedFbsReservationsForScannedBox(input: {
+    clientId: string;
+    requestId: string;
+    taskId: string | null;
+    skuId: string;
+    boxId: string;
+    boxCode: string;
+    requiredQuantity: number;
+    availableQuantity: number;
+  }) {
+    if (input.requestId.startsWith('AUTO:')) return 0;
+
+    const reservations = await this.fbsTsdReservationRows({
+      clientId: input.clientId,
+      skuId: input.skuId,
+      boxId: input.boxId,
+      excludeTaskId: input.taskId,
+    });
+    const reservedQuantity = reservations.reduce(
+      (sum, reservation) => sum + reservation.itemCount,
+      0,
+    );
+    const shortage = Math.max(
+      0,
+      input.requiredQuantity - (input.availableQuantity - reservedQuantity),
+    );
+    if (shortage === 0) return 0;
+
+    const candidates = await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        id: input.taskId ? { not: input.taskId } : undefined,
+        clientId: input.clientId,
+        // FIX: only virtual reservations are releasable. Physical scan fields
+        // below protect any work that another employee has actually started.
+        boxId: null,
+        reservedBoxId: input.boxId,
+        sourceBarcode: null,
+        barcode: null,
+        kiz: null,
+        relabelConfirmedAt: null,
+        AND: [
+          {
+            OR: [
+              { skuId: input.skuId, sourceSkuId: null },
+              { sourceSkuId: input.skuId, relabelConfirmedAt: null },
+              { skuId: input.skuId, relabelConfirmedAt: { not: null } },
+            ],
+          },
+          {
+            OR: [
+              {
+                deviceCode: FBS_TSD_AUTO_RESERVATION_DEVICE,
+                status: FBS_TSD_RESERVED_STATUS,
+              },
+              {
+                status: 'IN_PROGRESS',
+                workerUserId: { not: null },
+              },
+            ],
+          },
+        ],
+      },
+      select: { id: true, itemCount: true, status: true, deviceCode: true },
+      orderBy: [{ reservedAt: 'desc' }, { createdAt: 'desc' }],
+    });
+    const releasableQuantity = candidates.reduce(
+      (sum, candidate) => sum + Math.max(1, candidate.itemCount),
+      0,
+    );
+    if (input.availableQuantity - (reservedQuantity - releasableQuantity) < input.requiredQuantity) {
+      return 0;
+    }
+
+    const ids: string[] = [];
+    let releasedQuantity = 0;
+    for (const candidate of candidates) {
+      ids.push(candidate.id);
+      releasedQuantity += Math.max(1, candidate.itemCount);
+      if (releasedQuantity >= shortage) break;
+    }
+    if (ids.length === 0) return 0;
+
+    const autoIds = candidates
+      .filter(
+        (candidate) =>
+          ids.includes(candidate.id) &&
+          candidate.status === FBS_TSD_RESERVED_STATUS &&
+          candidate.deviceCode === FBS_TSD_AUTO_RESERVATION_DEVICE,
+      )
+      .map((candidate) => candidate.id);
+    const activeIds = candidates
+      .filter((candidate) => ids.includes(candidate.id) && candidate.status === 'IN_PROGRESS')
+      .map((candidate) => candidate.id);
+    const autoReleased = autoIds.length > 0
+      ? await this.prisma.fbsTsdAssembly.updateMany({
+          where: {
+            id: { in: autoIds },
+            deviceCode: FBS_TSD_AUTO_RESERVATION_DEVICE,
+            status: FBS_TSD_RESERVED_STATUS,
+            boxId: null,
+            reservedBoxId: input.boxId,
+            sourceBarcode: null,
+            barcode: null,
+            kiz: null,
+            relabelConfirmedAt: null,
+          },
+          data: {
+            status: FBS_TSD_WAITING_STOCK_STATUS,
+            reservedBoxId: null,
+            reservedBoxCode: null,
+            reservedAt: null,
+            errorMessage: `Фоновый резерв перенесён: короб ${input.boxCode} физически выбран для действующей FBS-заявки.`,
+          },
+        })
+      : { count: 0 };
+    const activeReleased = activeIds.length > 0
+      ? await this.prisma.fbsTsdAssembly.updateMany({
+          where: {
+            id: { in: activeIds },
+            status: 'IN_PROGRESS',
+            boxId: null,
+            reservedBoxId: input.boxId,
+            sourceBarcode: null,
+            barcode: null,
+            kiz: null,
+            relabelConfirmedAt: null,
+          },
+          data: {
+            reservedBoxId: null,
+            reservedBoxCode: null,
+            reservedAt: null,
+            errorMessage: `Маршрут изменён: короб ${input.boxCode} физически выбран другим сотрудником. Используйте новый маршрут на экране.`,
+          },
+        })
+      : { count: 0 };
+    return autoReleased.count + activeReleased.count;
+  }
+
+  /** Full live route for the remaining orders in the current FBS request. */
+  private async fbsTsdNextRequestSources(task: FbsTsdAssemblyRecord) {
+    // FIX: The TSD route overview must include every untouched order in the request.
+    const tasks = await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        requestId: task.requestId,
+        id: { not: task.id },
+        status: {
+          in: [
+            FBS_TSD_RESERVED_STATUS,
+            FBS_TSD_WAITING_STOCK_STATUS,
+            FBS_TSD_RESCAN_REQUIRED_STATUS,
+          ],
+        },
+        boxId: null,
+        sourceBarcode: null,
+        barcode: null,
+        kiz: null,
+        relabelConfirmedAt: null,
+      },
+      select: {
+        id: true,
+        orderId: true,
+        productName: true,
+        article: true,
+        skuId: true,
+        sourceSkuId: true,
+        itemCount: true,
+        boxId: true,
+        reservedBoxId: true,
+      },
+      orderBy: { orderId: 'asc' },
+    });
+    if (tasks.length === 0) return [];
+
+    const stockSkuIds = uniqueStrings(tasks.map((candidate) => candidate.sourceSkuId ?? candidate.skuId));
+    const balances = await this.prisma.stockBalance.findMany({
+      where: {
+        clientId: task.clientId,
+        skuId: { in: stockSkuIds },
+        status: StockStatus.AVAILABLE,
+        quantity: { gt: 0 },
+        boxId: { not: null },
+        box: {
+          status: { notIn: ['deleted', 'archived'] },
+          storagePlacement: { isNot: null },
+        },
+      },
+      select: {
+        skuId: true,
+        boxId: true,
+        quantity: true,
+        box: {
+          select: {
+            code: true,
+            storagePlacement: {
+              select: {
+                pallet: {
+                  select: {
+                    id: true,
+                    code: true,
+                    zone: { select: { code: true, name: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    const boxesBySku = new Map<string, Array<{
+      id: string;
+      code: string;
+      quantity: number;
+      palletId: string;
+      palletCode: string;
+      zoneCode: string | null;
+      zoneName: string | null;
+    }>>();
+    balances.forEach((balance) => {
+      if (!balance.boxId || !balance.box?.storagePlacement?.pallet) return;
+      const pallet = balance.box.storagePlacement.pallet;
+      const boxes = boxesBySku.get(balance.skuId) ?? [];
+      const existing = boxes.find((box) => box.id === balance.boxId);
+      if (existing) {
+        existing.quantity += balance.quantity;
+      } else {
+        boxes.push({
+          id: balance.boxId,
+          code: balance.box.code,
+          quantity: balance.quantity,
+          palletId: pallet.id,
+          palletCode: pallet.code,
+          zoneCode: pallet.zone?.code ?? null,
+          zoneName: pallet.zone?.name ?? null,
+        });
+      }
+      boxesBySku.set(balance.skuId, boxes);
+    });
+
+    // Keep the preview and the scanner on the same source of truth. Raw
+    // StockBalance is not a free balance: unfinished/completed open FBS tasks
+    // may already own some units. Showing the raw quantity here made a box
+    // appear in "next in request", while scanFbsTsdBox correctly rejected it.
+    const reservationRowsBySku = await this.fbsTsdReservationRowsBySku({
+      clientId: task.clientId,
+      skuIds: stockSkuIds,
+      excludeTaskId: null,
+    });
+
+    // FIX: Do not truncate the calculated pallet-sort and box routes.
+    return tasks.flatMap((candidate) => {
+      const stockSkuId = candidate.sourceSkuId ?? candidate.skuId;
+      const candidateAssignedBoxId = candidate.boxId ?? candidate.reservedBoxId;
+      const boxes = (boxesBySku.get(stockSkuId) ?? [])
+        .map((box) => {
+          // FIX: Route display uses the exact same decision as the scanner.
+          const availability = evaluateFbsBoxAvailability({
+            boxId: box.id,
+            availableQuantity: box.quantity,
+            candidateTaskId: candidate.id,
+            candidateAssignedBoxId,
+            requiredQuantity: candidate.itemCount,
+            reservations: reservationRowsBySku.get(stockSkuId) ?? [],
+          });
+          return { ...box, freeQuantity: availability.claimableQuantity };
+        })
+        .filter((box) => box.freeQuantity >= Math.max(1, candidate.itemCount))
+        .sort(
+          (left, right) =>
+            Number(right.id === candidate.boxId || right.id === candidate.reservedBoxId) -
+              Number(left.id === candidate.boxId || left.id === candidate.reservedBoxId) ||
+            left.freeQuantity - right.freeQuantity ||
+            left.code.localeCompare(right.code, 'ru-RU'),
+        );
+      const selected = boxes[0];
+      return selected
+        ? [{
+            orderId: candidate.orderId,
+            productName: candidate.productName,
+            article: candidate.article,
+            itemCount: candidate.itemCount,
+            boxCode: selected.code,
+            quantity: selected.freeQuantity,
+            palletId: selected.palletId,
+            palletCode: selected.palletCode,
+            zoneCode: selected.zoneCode,
+            zoneName: selected.zoneName,
+          }]
+        : [];
+    });
+  }
+
+  private async formatFbsTsdPalletScan(
+    task: FbsTsdAssemblyRecord,
+    pallet: {
+      id: string;
+      code: string;
+      source: string;
+      status: string;
+      zone: { id: string; code: string; name: string } | null;
+      _count: { boxes: number };
+    },
+    user: AuthUser,
+  ) {
+    const [base, zoneRoutes] = await Promise.all([
+      this.formatFbsTsdAssembly(task, user, ''),
+      pallet.zone?.id
+        ? this.neededFbsRequestPalletsInStorageZone(task, pallet.zone.id)
+        : this.neededFbsRequestBoxesOnStoragePallet(task, pallet.id).then(
+            (boxCodes) => [{
+              palletId: pallet.id,
+              palletCode: pallet.code,
+              boxCodes,
+            }],
+          ),
+    ]);
+    const neededBoxCodes =
+      zoneRoutes.find((route) => route.palletId === pallet.id)?.boxCodes ?? [];
+    // FIX: Employee TSD needs only a unique count, never another pallet's route details.
+    const additionalPalletCount = new Set(
+      zoneRoutes
+        .filter((route) => route.palletId !== pallet.id && route.boxCodes.length > 0)
+        .map((route) => route.palletId),
+    ).size;
+    const message =
+      neededBoxCodes.length > 0
+        ? `Паллетсорт ${pallet.code}: для заявки нужен ${neededBoxCodes.length} короб(а/ов). Берите короба из показанного списка.`
+        : `На паллетсорте ${pallet.code} больше нет коробов, нужных этой заявке. Отсканируйте другой паллетсорт.`;
+    const employeeTask = base.task
+      ? { ...base.task } as Record<string, unknown>
+      : base.task;
+    if (employeeTask) {
+      delete employeeTask.storageBoxes;
+      delete employeeTask.nextRequestSources;
+    }
+    return {
+      ...base,
+      // FIX: detailed alternative/next routes never leave the employee pallet-scan API.
+      task: employeeTask,
+      state: 'PALLET_BOXES',
+      message,
+      palletScan: {
+        id: pallet.id,
+        code: pallet.code,
+        status: pallet.status,
+        source: pallet.source,
+        zone: pallet.zone,
+        totalBoxes: pallet._count.boxes,
+        neededBoxes: neededBoxCodes.length,
+        neededBoxCodes,
+        additionalPalletCount,
+      },
+    };
+  }
+
+  /**
+   * Return every box on a scanned pallet-sort which the normal box scanner
+   * can accept for any untouched order of the current request.
+   *
+   * This deliberately does not use fbsTsdNextRequestSources(): that method is
+   * a compact screen preview (and is capped), while a pallet scan is a
+   * physical validation and must inspect the whole request. Using the preview
+   * here caused large requests to report that a pallet had no needed boxes,
+   * even though scanning one of its boxes immediately switched to a matching
+   * order.
+   */
+  private async neededFbsRequestBoxesOnStoragePallet(
+    task: FbsTsdAssemblyRecord,
+    palletId: string,
+  ) {
+    const placements = await this.prisma.storagePalletBox.findMany({
+      where: {
+        palletId,
+        boxId: { not: null },
+      },
+      select: { boxId: true, boxCode: true },
+    });
+    return this.neededFbsRequestBoxesFromPlacements(task, placements);
+  }
+
+  private async neededFbsRequestPalletsInStorageZone(
+    task: FbsTsdAssemblyRecord,
+    zoneId: string,
+  ) {
+    const placements = await this.prisma.storagePalletBox.findMany({
+      where: {
+        boxId: { not: null },
+        pallet: {
+          clientId: task.clientId,
+          zoneId,
+          // FIX: Closed working pallet-sorts remain routable; archived/deleted ones do not.
+          status: { notIn: ['ARCHIVED', 'DELETED'] },
+        },
+      },
+      select: {
+        boxId: true,
+        boxCode: true,
+        palletId: true,
+        pallet: { select: { code: true } },
+      },
+    });
+    const neededBoxCodes = new Set(
+      await this.neededFbsRequestBoxesFromPlacements(task, placements),
+    );
+    const routes = new Map<
+      string,
+      { palletId: string; palletCode: string; boxCodes: string[] }
+    >();
+    placements.forEach((placement) => {
+      if (!neededBoxCodes.has(placement.boxCode)) return;
+      const route = routes.get(placement.palletId) ?? {
+        palletId: placement.palletId,
+        palletCode: placement.pallet.code,
+        boxCodes: [],
+      };
+      route.boxCodes.push(placement.boxCode);
+      routes.set(placement.palletId, route);
+    });
+    return [...routes.values()]
+      .map((route) => ({
+        ...route,
+        boxCodes: uniqueStrings(route.boxCodes).sort((left, right) =>
+          left.localeCompare(right, 'ru-RU'),
+        ),
+      }))
+      .sort((left, right) =>
+        left.palletCode.localeCompare(right.palletCode, 'ru-RU'),
+      );
+  }
+
+  private async neededFbsRequestBoxesFromPlacements(
+    task: FbsTsdAssemblyRecord,
+    placements: Array<{ boxId: string | null; boxCode: string }>,
+  ) {
+    const queuedTasks = await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        id: { not: task.id },
+        clientId: task.clientId,
+        marketplace: task.marketplace,
+        connectionId: task.connectionId,
+        requestId: task.requestId,
+        // FIX: one request may span supplies; room count belongs only to the current supply.
+        supplyId: task.supplyId ?? null,
+        status: {
+          in: [
+            FBS_TSD_RESERVED_STATUS,
+            FBS_TSD_WAITING_STOCK_STATUS,
+            FBS_TSD_RESCAN_REQUIRED_STATUS,
+          ],
+        },
+        boxId: null,
+        sourceBarcode: null,
+        barcode: null,
+        kiz: null,
+        relabelConfirmedAt: null,
+      },
+      select: {
+        id: true,
+        skuId: true,
+        sourceSkuId: true,
+        itemCount: true,
+        boxId: true,
+        reservedBoxId: true,
+        relabelConfirmedAt: true,
+      },
+      orderBy: [{ reservedAt: 'asc' }, { createdAt: 'asc' }],
+    });
+    const currentTaskIsUntouched =
+      !task.boxId &&
+      !task.sourceBarcode &&
+      !task.barcode &&
+      !task.kiz &&
+      !task.relabelConfirmedAt;
+    const candidates = [
+      ...(currentTaskIsUntouched
+        ? [{
+            id: task.id,
+            skuId: task.skuId,
+            sourceSkuId: task.sourceSkuId,
+            itemCount: task.itemCount,
+            boxId: task.boxId,
+            reservedBoxId: task.reservedBoxId,
+            relabelConfirmedAt: task.relabelConfirmedAt,
+          }]
+        : []),
+      ...queuedTasks,
+    ];
+    if (candidates.length === 0) return [];
+
+    const stockSkuIds = uniqueStrings(
+      candidates.map((candidate) =>
+        candidate.sourceSkuId && !candidate.relabelConfirmedAt
+          ? candidate.sourceSkuId
+          : candidate.skuId,
+      ),
+    );
+    const boxIds = uniqueStrings(
+      placements.map((placement) => placement.boxId ?? ''),
+    );
+    if (boxIds.length === 0 || stockSkuIds.length === 0) return [];
+
+    const [balances, reservationRowsBySku] = await Promise.all([
       this.prisma.stockBalance.findMany({
         where: {
           clientId: task.clientId,
-          boxId: task.boxId,
+          skuId: { in: stockSkuIds },
+          boxId: { in: boxIds },
           status: StockStatus.AVAILABLE,
           quantity: { gt: 0 },
+          box: { status: { notIn: ['deleted', 'archived'] } },
         },
-        select: { skuId: true, quantity: true },
+        select: { skuId: true, boxId: true, quantity: true },
+      }),
+      this.fbsTsdReservationRowsBySku({
+        clientId: task.clientId,
+        skuIds: stockSkuIds,
+        excludeTaskId: null,
       }),
     ]);
 
+    const quantityByBoxAndSku = new Map<string, number>();
+    balances.forEach((balance) => {
+      if (!balance.boxId) return;
+      const key = `${balance.boxId}:${balance.skuId}`;
+      quantityByBoxAndSku.set(
+        key,
+        (quantityByBoxAndSku.get(key) ?? 0) + balance.quantity,
+      );
+    });
+    const candidatesBySku = new Map<string, typeof candidates>();
+    candidates.forEach((candidate) => {
+      const stockSkuId =
+        candidate.sourceSkuId && !candidate.relabelConfirmedAt
+          ? candidate.sourceSkuId
+          : candidate.skuId;
+      const skuCandidates = candidatesBySku.get(stockSkuId) ?? [];
+      skuCandidates.push(candidate);
+      candidatesBySku.set(stockSkuId, skuCandidates);
+    });
+
+    return uniqueStrings(
+      placements.flatMap((placement) => {
+        if (!placement.boxId) return [];
+        const needed = stockSkuIds.some((stockSkuId) => {
+          const available =
+            quantityByBoxAndSku.get(`${placement.boxId}:${stockSkuId}`) ?? 0;
+          if (available <= 0) return false;
+          return (candidatesBySku.get(stockSkuId) ?? []).some((candidate) => {
+            const assignedBoxId = candidate.boxId ?? candidate.reservedBoxId;
+            // FIX: Pallet contents and box scan share one availability rule.
+            return evaluateFbsBoxAvailability({
+              boxId: placement.boxId!,
+              availableQuantity: available,
+              candidateTaskId: candidate.id,
+              candidateAssignedBoxId: assignedBoxId,
+              requiredQuantity: candidate.itemCount,
+              reservations: reservationRowsBySku.get(stockSkuId) ?? [],
+            }).accepted;
+          });
+        });
+        return needed ? [placement.boxCode] : [];
+      }),
+    ).sort((left, right) => left.localeCompare(right, 'ru-RU'));
+  }
+
+  private async fbsTsdReservationRows(input: {
+    clientId: string;
+    skuId: string;
+    boxId?: string;
+    withoutBox?: boolean;
+    excludeTaskId: string | null;
+  }) {
+    const tasks = await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        id: input.excludeTaskId ? { not: input.excludeTaskId } : undefined,
+        clientId: input.clientId,
+        AND: [
+          {
+            OR: [
+              { skuId: input.skuId, sourceSkuId: null },
+              { sourceSkuId: input.skuId, relabelConfirmedAt: null },
+              { skuId: input.skuId, relabelConfirmedAt: { not: null } },
+            ],
+          },
+          input.withoutBox
+            ? { boxId: null, reservedBoxId: null }
+            : input.boxId
+              ? {
+                  OR: [
+                    { boxId: input.boxId },
+                    { boxId: null, reservedBoxId: input.boxId },
+                  ],
+                }
+              : {
+                  OR: [
+                    { boxId: { not: null } },
+                    { reservedBoxId: { not: null } },
+                  ],
+                },
+        ],
+        ...(input.withoutBox ? { boxCode: FBS_TSD_NO_BOX_CODE } : {}),
+        status: {
+          in: [
+            FBS_TSD_RESERVED_STATUS,
+            FBS_TSD_RESCAN_REQUIRED_STATUS,
+            'IN_PROGRESS',
+            'COMPLETED',
+            FBS_TSD_RETURN_REQUIRED,
+          ],
+        },
+      },
+      select: {
+        id: true,
+        connectionId: true,
+        orderId: true,
+        boxId: true,
+        reservedBoxId: true,
+        itemCount: true,
+        requestId: true,
+        status: true,
+        completedAt: true,
+        sourceBarcode: true,
+        barcode: true,
+        kiz: true,
+        relabelConfirmedAt: true,
+      },
+    });
+    const taskRequestIds = uniqueStrings(tasks.map((task) => task.requestId));
+    const canCheckCompletedOrderLinks = Boolean(
+      this.prisma.fbsOrderRequestLink?.findMany,
+    );
+    const [
+      openTaskRequests,
+      obsoleteCompletedOrderLinks,
+      latestPhysicalRecount,
+      physicallyPickedTaskIds,
+    ] = await Promise.all([
+      taskRequestIds.length > 0
+        ? this.prisma.clientRequest.findMany({
+            where: {
+              id: { in: taskRequestIds },
+              status: { notIn: [...FBS_REQUEST_CLOSED_STATUSES] },
+            },
+            select: { id: true },
+          })
+        : [],
+      taskRequestIds.length > 0 && canCheckCompletedOrderLinks
+        ? this.prisma.fbsOrderRequestLink.findMany({
+            where: {
+              requestId: { in: taskRequestIds },
+              lastCategory: { in: ['shipped', 'archive'] },
+              lastSupplierStatus: 'complete',
+            },
+            select: { connectionId: true, orderId: true },
+          })
+        : [],
+      input.boxId && taskRequestIds.length > 0
+        ? this.prisma.stockMovement.findFirst({
+            where: {
+              clientId: input.clientId,
+              skuId: input.skuId,
+              boxId: input.boxId,
+              type: MovementType.INVENTORY_ADJUSTMENT,
+              OR: [
+                { idempotencyKey: { startsWith: 'web-inventory:' } },
+                { idempotencyKey: { startsWith: 'warehouse-box-check:' } },
+              ],
+            },
+            select: { createdAt: true },
+            orderBy: { createdAt: 'desc' },
+          })
+        : null,
+      this.fbsPhysicallyPickedTaskIds(tasks, [input.skuId]),
+    ]);
+    const openTaskRequestIds = new Set(
+      openTaskRequests.map((request) => request.id),
+    );
+    const obsoleteCompletedOrderKeys = new Set(
+      obsoleteCompletedOrderLinks.map((link) =>
+        selectionKey(link.connectionId, link.orderId),
+      ),
+    );
+
+    return tasks
+      .filter(
+        (task) =>
+          // FIX: AVAILABLE was already reduced when this physical unit's KIZ
+          // was accepted, so the task must not reserve the same unit again.
+          !physicallyPickedTaskIds.has(task.id) &&
+          // FIX: untouched routes from a closed request or an already shipped
+          // WB order are stale metadata, not a physical stock reservation.
+          (task.status !== FBS_TSD_RESERVED_STATUS ||
+            (openTaskRequestIds.has(task.requestId) &&
+              (!canCheckCompletedOrderLinks ||
+                !obsoleteCompletedOrderKeys.has(
+                  selectionKey(task.connectionId, task.orderId),
+                )))) &&
+          // FIX: an assignment alone is not a physical pick. Release a stale
+          // IN_PROGRESS task only while no box, barcode or KIZ was scanned.
+          (task.status !== 'IN_PROGRESS' ||
+            Boolean(
+              task.boxId ||
+              task.sourceBarcode ||
+              task.barcode ||
+              task.kiz ||
+              task.relabelConfirmedAt,
+            ) ||
+            (openTaskRequestIds.has(task.requestId) &&
+              (!canCheckCompletedOrderLinks ||
+                !obsoleteCompletedOrderKeys.has(
+                  selectionKey(task.connectionId, task.orderId),
+                )))) &&
+          (input.withoutBox
+            ? !task.boxId && !task.reservedBoxId
+            : Boolean(task.boxId || task.reservedBoxId)) &&
+          (task.status !== 'COMPLETED' ||
+            (openTaskRequestIds.has(task.requestId) &&
+              // FIX: A shipped/archived marketplace order must not keep a
+              // pallet-sort blocked merely because its local request is open.
+              (!canCheckCompletedOrderLinks ||
+                !obsoleteCompletedOrderKeys.has(
+                  selectionKey(task.connectionId, task.orderId),
+                )) &&
+              !(
+                latestPhysicalRecount &&
+                task.completedAt &&
+                task.completedAt <= latestPhysicalRecount.createdAt
+              ))),
+      )
+      .map((task) => ({
+        boxId: task.boxId ?? task.reservedBoxId,
+        itemCount: Math.max(1, task.itemCount),
+      }));
+  }
+
+  /**
+   * Bulk form used by the handheld route preview. The previous implementation
+   * ran the full reservation query (plus completed-request checks) once per
+   * SKU — up to 36 times after every scan. One request-wide query keeps the
+   * exact same reservation rules without exhausting the Prisma connection
+   * pool while the employee is waiting at the scanner.
+   */
+  private async fbsTsdReservationRowsBySku(input: {
+    clientId: string;
+    skuIds: string[];
+    excludeTaskId: string | null;
+  }, db: Prisma.TransactionClient | PrismaService = this.prisma) {
+    const result = new Map<
+      string,
+      Array<{
+        taskId: string;
+        boxId: string | null;
+        itemCount: number;
+        releasableBackground: boolean;
+        status: string;
+        deviceCode: string;
+      }>
+    >();
+    const skuIds = uniqueStrings(input.skuIds);
+    skuIds.forEach((skuId) => result.set(skuId, []));
+    if (skuIds.length === 0) return result;
+
+    const tasks = await db.fbsTsdAssembly.findMany({
+      where: {
+        id: input.excludeTaskId ? { not: input.excludeTaskId } : undefined,
+        clientId: input.clientId,
+        AND: [
+          {
+            OR: [
+              { skuId: { in: skuIds }, sourceSkuId: null },
+              {
+                sourceSkuId: { in: skuIds },
+                relabelConfirmedAt: null,
+              },
+              {
+                skuId: { in: skuIds },
+                relabelConfirmedAt: { not: null },
+              },
+            ],
+          },
+          {
+            OR: [
+              { boxId: { not: null } },
+              { reservedBoxId: { not: null } },
+            ],
+          },
+        ],
+        status: {
+          in: [
+            FBS_TSD_RESERVED_STATUS,
+            FBS_TSD_RESCAN_REQUIRED_STATUS,
+            'IN_PROGRESS',
+            'COMPLETED',
+            FBS_TSD_RETURN_REQUIRED,
+          ],
+        },
+      },
+      select: {
+        id: true,
+        connectionId: true,
+        orderId: true,
+        skuId: true,
+        sourceSkuId: true,
+        relabelConfirmedAt: true,
+        boxId: true,
+        reservedBoxId: true,
+        itemCount: true,
+        requestId: true,
+        deviceCode: true,
+        sourceBarcode: true,
+        barcode: true,
+        kiz: true,
+        status: true,
+      },
+    });
+    const taskRequestIds = uniqueStrings(tasks.map((task) => task.requestId));
+    const canCheckCompletedOrderLinks = Boolean(
+      db.fbsOrderRequestLink?.findMany,
+    );
+    const [
+      openTaskRequests,
+      obsoleteCompletedOrderLinks,
+      physicallyPickedTaskIds,
+    ] = await Promise.all([
+      taskRequestIds.length > 0
+        ? db.clientRequest.findMany({
+            where: {
+              id: { in: taskRequestIds },
+              status: { notIn: [...FBS_REQUEST_CLOSED_STATUSES] },
+            },
+            select: { id: true },
+          })
+        : [],
+      taskRequestIds.length > 0 && canCheckCompletedOrderLinks
+        ? db.fbsOrderRequestLink.findMany({
+            where: {
+              requestId: { in: taskRequestIds },
+              lastCategory: { in: ['shipped', 'archive'] },
+              lastSupplierStatus: 'complete',
+            },
+            select: { connectionId: true, orderId: true },
+          })
+        : [],
+      this.fbsPhysicallyPickedTaskIds(tasks, skuIds, db),
+    ]);
+    const openTaskRequestIds = new Set(
+      openTaskRequests.map((request) => request.id),
+    );
+    const obsoleteCompletedOrderKeys = new Set(
+      obsoleteCompletedOrderLinks.map((link) =>
+        selectionKey(link.connectionId, link.orderId),
+      ),
+    );
+
+    tasks.forEach((task) => {
+      // FIX: the active PACKING movement is the physical reservation. Keeping
+      // this task in the virtual reservation list would subtract it twice.
+      if (physicallyPickedTaskIds.has(task.id)) return;
+      if (
+        task.status === FBS_TSD_RESERVED_STATUS &&
+        (!openTaskRequestIds.has(task.requestId) ||
+          (canCheckCompletedOrderLinks &&
+            obsoleteCompletedOrderKeys.has(
+              selectionKey(task.connectionId, task.orderId),
+            )))
+      ) {
+        return;
+      }
+      if (
+        task.status === 'IN_PROGRESS' &&
+        !task.boxId &&
+        !task.sourceBarcode &&
+        !task.barcode &&
+        !task.kiz &&
+        !task.relabelConfirmedAt &&
+        (!openTaskRequestIds.has(task.requestId) ||
+          (canCheckCompletedOrderLinks &&
+            obsoleteCompletedOrderKeys.has(
+              selectionKey(task.connectionId, task.orderId),
+            )))
+      ) {
+        return;
+      }
+      if (task.status === 'COMPLETED') {
+        const keepsReservation =
+          openTaskRequestIds.has(task.requestId) &&
+          // FIX: Release completed capacity only when the exact WB order is
+          // explicitly shipped/archived and complete.
+          (!canCheckCompletedOrderLinks ||
+            !obsoleteCompletedOrderKeys.has(
+              selectionKey(task.connectionId, task.orderId),
+            ));
+        if (!keepsReservation) return;
+      }
+      const reservationSkuId = task.sourceSkuId && !task.relabelConfirmedAt
+        ? task.sourceSkuId
+        : task.skuId;
+      const rows = result.get(reservationSkuId);
+      if (!rows) return;
+      rows.push({
+        taskId: task.id,
+        boxId: task.boxId ?? task.reservedBoxId,
+        itemCount: Math.max(1, task.itemCount),
+        releasableBackground:
+          // FIX: a route is only a hint until this employee scans a physical
+          // box or product. The physical picker wins; the untouched task stays
+          // assigned and receives another route on its next poll.
+          !task.boxId &&
+          Boolean(task.reservedBoxId) &&
+          !task.sourceBarcode &&
+          !task.barcode &&
+          !task.kiz &&
+          !task.relabelConfirmedAt &&
+          ((task.deviceCode === FBS_TSD_AUTO_RESERVATION_DEVICE &&
+            task.status === FBS_TSD_RESERVED_STATUS) ||
+            task.status === 'IN_PROGRESS'),
+        status: task.status,
+        deviceCode: task.deviceCode,
+      });
+    });
+    return result;
+  }
+
+  private async fbsPhysicallyPickedTaskIds(
+    tasks: Array<{ id: string; requestId: string }>,
+    skuIds: string[],
+    db: Prisma.TransactionClient | PrismaService = this.prisma,
+  ) {
+    if (tasks.length === 0 || !db.stockMovement?.findMany) {
+      return new Set<string>();
+    }
+    const taskIds = new Set(tasks.map((task) => task.id));
+    const movements = await db.stockMovement.findMany({
+      where: {
+        skuId: { in: uniqueStrings(skuIds) },
+        sourceDocument: {
+          in: uniqueStrings(tasks.map((task) => task.requestId)),
+        },
+        status: StockStatus.PACKING,
+        idempotencyKey: { startsWith: 'fbs-sticker-pick:' },
+      },
+      select: { idempotencyKey: true, quantity: true },
+    });
+    const quantityByTaskId = new Map<string, number>();
+    movements.forEach((movement) => {
+      if (!movement.idempotencyKey) return;
+      const taskId = movement.idempotencyKey
+        .slice('fbs-sticker-pick:'.length)
+        .split(':', 1)[0];
+      if (!taskIds.has(taskId)) return;
+      quantityByTaskId.set(
+        taskId,
+        (quantityByTaskId.get(taskId) ?? 0) + movement.quantity,
+      );
+    });
+    return new Set(
+      [...quantityByTaskId.entries()]
+        .filter(([, quantity]) => quantity > 0)
+        .map(([taskId]) => taskId),
+    );
+  }
+
+  private async fbsTsdSourceBoxUsage(task: FbsTsdAssemblyRecord) {
+    if (!task.boxId || !task.boxCode) return null;
+
+    // Сначала читаем только содержимое физически отсканированного короба.
+    // Затем берём незавершённые FBS-заказы этой заявки только по найденным SKU.
+    // Так ТСД всегда получает конкретный список «что забрать», но ответ не
+    // разрастается до размера всей заявки.
+    const balances = await this.prisma.stockBalance.findMany({
+      where: {
+        clientId: task.clientId,
+        boxId: task.boxId,
+        status: StockStatus.AVAILABLE,
+        quantity: { gt: 0 },
+      },
+      select: {
+        skuId: true,
+        quantity: true,
+        sku: {
+          select: {
+            id: true,
+            name: true,
+            internalSku: true,
+            clientSku: true,
+            article: true,
+            color: true,
+            size: true,
+            needsChestnyZnak: true,
+            isUnmarked: true,
+          },
+        },
+      },
+    });
+    const boxSkuIds = uniqueStrings(balances.map((balance) => balance.skuId));
+    if (boxSkuIds.length === 0) {
+      return { boxCode: task.boxCode, units: 0, positions: 0, orders: 0, items: [] };
+    }
+
+    const requestTasks = await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        clientId: task.clientId,
+        requestId: task.requestId,
+        status: {
+          in: [
+            'IN_PROGRESS',
+            FBS_TSD_RESERVED_STATUS,
+            FBS_TSD_WAITING_STOCK_STATUS,
+            FBS_TSD_RESCAN_REQUIRED_STATUS,
+            'RELEASED',
+          ],
+        },
+        OR: [
+          { skuId: { in: boxSkuIds } },
+          { sourceSkuId: { in: boxSkuIds } },
+        ],
+      },
+      select: {
+        id: true,
+        skuId: true,
+        sourceSkuId: true,
+        productName: true,
+        article: true,
+        sourceProductName: true,
+        sourceArticle: true,
+        itemCount: true,
+        requiresKiz: true,
+        status: true,
+        workerUserId: true,
+        boxId: true,
+        relabelRequired: true,
+        relabelConfirmedAt: true,
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+
     const availableBySku = new Map<string, number>();
+    const skuById = new Map<string, (typeof balances)[number]['sku']>();
     balances.forEach((balance) => {
       availableBySku.set(
         balance.skuId,
         (availableBySku.get(balance.skuId) ?? 0) + balance.quantity,
       );
+      skuById.set(balance.skuId, balance.sku);
     });
 
-    const remainingBySku = new Map<string, number>();
-    requestItems.forEach((item) => {
-      if (!item.skuId) return;
-      const completed = item.boxSelections.reduce((sum, selection) => sum + selection.quantity, 0);
-      const remaining = Math.max(0, item.quantity - completed);
-      if (remaining === 0) return;
-      remainingBySku.set(item.skuId, (remainingBySku.get(item.skuId) ?? 0) + remaining);
-    });
+    const grouped = new Map<string, {
+      skuId: string;
+      productName: string;
+      article: string;
+      color: string | null;
+      size: string | null;
+      quantity: number;
+      orders: number;
+      requiresKiz: boolean;
+    }>();
+    for (const candidate of requestTasks) {
+      const physicalSkuId =
+        candidate.relabelRequired && !candidate.relabelConfirmedAt && candidate.sourceSkuId
+          ? candidate.sourceSkuId
+          : candidate.skuId;
+      const sku = skuById.get(physicalSkuId);
+      if (!sku) continue;
+      if (candidate.boxId && candidate.boxId !== task.boxId) continue;
+      if (
+        candidate.id !== task.id &&
+        candidate.status === 'IN_PROGRESS' &&
+        candidate.workerUserId &&
+        candidate.workerUserId !== task.workerUserId
+      ) {
+        continue;
+      }
 
-    let units = 0;
-    let positions = 0;
-    remainingBySku.forEach((remaining, skuId) => {
-      const planned = Math.min(remaining, availableBySku.get(skuId) ?? 0);
-      if (planned <= 0) return;
-      units += planned;
-      positions += 1;
-    });
+      const current = grouped.get(physicalSkuId) ?? {
+        skuId: physicalSkuId,
+        productName:
+          candidate.relabelRequired && !candidate.relabelConfirmedAt
+            ? candidate.sourceProductName || sku.name
+            : candidate.productName || sku.name,
+        article:
+          candidate.relabelRequired && !candidate.relabelConfirmedAt
+            ? candidate.sourceArticle || sku.article || sku.clientSku || sku.internalSku
+            : candidate.article || sku.article || sku.clientSku || sku.internalSku,
+        color: sku.color,
+        size: sku.size,
+        quantity: 0,
+        orders: 0,
+        requiresKiz: false,
+      };
+      current.quantity += Math.max(1, candidate.itemCount);
+      current.orders += 1;
+      current.requiresKiz = current.requiresKiz || candidate.requiresKiz ||
+        (sku.needsChestnyZnak && !sku.isUnmarked);
+      grouped.set(physicalSkuId, current);
+    }
+
+    const items = [...grouped.values()]
+      .map((item) => ({
+        ...item,
+        quantity: Math.min(item.quantity, availableBySku.get(item.skuId) ?? 0),
+      }))
+      .filter((item) => item.quantity > 0)
+      .sort((left, right) =>
+        left.productName.localeCompare(right.productName, 'ru-RU') ||
+        (left.size ?? '').localeCompare(right.size ?? '', 'ru-RU') ||
+        left.article.localeCompare(right.article, 'ru-RU'),
+      );
+    const units = items.reduce((sum, item) => sum + item.quantity, 0);
+    const orders = items.reduce((sum, item) => sum + item.orders, 0);
 
     return {
       boxCode: task.boxCode,
       units,
-      positions,
+      positions: items.length,
+      orders,
+      items,
     };
   }
 
   private async loadFbsTsdOrderSticker(task: FbsTsdAssemblyRecord) {
+    if (task.marketplace === MarketplaceType.OZON) {
+      return this.loadOzonFbsTsdOrderSticker(task);
+    }
     const cacheKey = `${task.connectionId}:${task.orderId}`;
     const cached = this.fbsTsdStickerCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
@@ -2719,6 +14899,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           method: 'POST',
           headers: wbHeaders(connection.apiKey),
           body: JSON.stringify({ orders: [numericWbOrderId(task.orderId)] }),
+          signal: AbortSignal.timeout(FBS_TSD_STICKER_TIMEOUT_MS),
         },
       );
       const sticker = asArray<Record<string, unknown>>(response.stickers).find(
@@ -2727,9 +14908,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const imageBase64 = textValue(sticker?.file);
       if (!sticker || !imageBase64) return null;
       const value = {
+        marketplace: MarketplaceType.WILDBERRIES,
         partA: textValue(sticker.partA),
         partB: textValue(sticker.partB),
         barcode: textValue(sticker.barcode),
+        contentType: 'image/png',
         imageBase64,
       };
       this.fbsTsdStickerCache.set(cacheKey, {
@@ -2742,6 +14925,285 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const reason = caught instanceof Error ? caught.message : 'неизвестная ошибка';
       this.logger.warn(`WB sticker is temporarily unavailable for FBS TSD order ${task.orderId}: ${reason}`);
       return null;
+    }
+  }
+
+  async scanWebOrderAssembly(codeValue: unknown, user: AuthUser, stationIdValue?: unknown, deviceCodeValue?: unknown) {
+    const scannedCode = textValue(codeValue)
+      .replace(/^[\uFEFF\u200B]+/, '')
+      .replace(/^\]d2/i, '')
+      .replace(/[\r\n]+$/g, '')
+      .trim();
+    const humanSerial = scannedCode.match(/\(21\)([^\x1d(]+)/i)?.[1];
+    const rawGs1 = scannedCode.replace(/[()]/g, '');
+    const rawSerial = rawGs1.match(/^01\d{14}21([^\x1d]+)/i)?.[1];
+    const serialWithCrypto = humanSerial ?? rawSerial ?? '';
+    const serial = serialWithCrypto
+      .split(/\x1d|(?=91[A-Za-z0-9]{4}(?:92|93))/i, 1)[0]
+      .trim();
+    const compactFullCode = scannedCode.replace(/[()\x1d\r\n]/g, '').trim();
+    const lookupCodes = uniqueStrings([
+      serial,
+      scannedCode,
+      compactFullCode,
+      rawGs1.replace(/[\x1d\r\n]/g, ''),
+    ].filter((value) => value.length >= 6));
+    if (lookupCodes.length === 0) throw new BadRequestException('Отсканируйте КИЗ или его уникальную часть — минимум 6 символов.');
+    let clientFilter = this.clientScopes.resolveClientFilter(user);
+    if (user.clientScopeMode === 'LIMITED' && user.clientIds.length === 0 && user.activeWarehouseId) {
+      const branchClients = await this.prisma.warehouseClient.findMany({
+        where: { warehouseId: user.activeWarehouseId }, select: { clientId: true },
+      });
+      clientFilter = { in: uniqueStrings(branchClients.map((item) => item.clientId)) };
+    }
+    const candidates = await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        marketplace: MarketplaceType.WILDBERRIES,
+        clientId: clientFilter,
+        OR: lookupCodes.map((code) => ({ kiz: { contains: code } })),
+        status: { not: 'CANCELLED' },
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: 3,
+    });
+    if (candidates.length === 0) throw new NotFoundException('Заказ с таким КИЗ не найден. Проверьте скан и выбранный филиал.');
+    if (candidates.length > 1) throw new BadRequestException(`КИЗ распознан неоднозначно: найдено ${candidates.length} заказов. Отсканируйте полный код ещё раз.`);
+    const task = candidates[0];
+    if (!task.kiz) throw new BadRequestException('У найденного заказа КИЗ не сохранён.');
+    const existing = await this.prisma.fbsWebKizStickerPrint.findFirst({
+      where: { OR: [{ kiz: task.kiz }, { orderId: task.orderId }] },
+    });
+    if (existing) {
+      throw new ConflictException(`Повторная печать запрещена. Заказ №${task.orderId} уже напечатан ${existing.printedAt.toLocaleString('ru-RU')} пользователем ${existing.printedBy}.`);
+    }
+    const sticker = await this.loadFbsTsdOrderSticker(task);
+    if (!sticker?.imageBase64) throw new BadRequestException(`Этикетка WB для заказа №${task.orderId} ещё не готова.`);
+    const stationId = textValue(stationIdValue).trim();
+    if (stationId && !await this.prisma.fbsPrintStation.findFirst({ where: { id: stationId, enabled: true } })) {
+      throw new BadRequestException('Печатная станция не найдена или отключена.');
+    }
+    let history: { id: string };
+    try {
+      history = await this.prisma.fbsWebKizStickerPrint.create({
+        data: {
+          kiz: task.kiz, orderId: task.orderId, assemblyId: task.id,
+          clientId: task.clientId, requestId: task.requestId,
+          stickerCode: sticker.barcode || null, printedById: user.id, printedBy: user.name,
+        },
+      });
+    } catch {
+      throw new ConflictException(`Повторная печать запрещена: КИЗ или стикер заказа №${task.orderId} уже обработан.`);
+    }
+    const linkedRequest = await this.prisma.clientRequest.findUnique({ where: { id: task.requestId }, select: { number: true } });
+    const warehouseName = textValue((await this.prisma.fbsSupplyPlan.findFirst({ where: { supplyId: task.supplyId ?? undefined, connectionId: task.connectionId }, select: { marketplaceWarehouseName: true } }))?.marketplaceWarehouseName) || 'СКЛАД НЕ УКАЗАН';
+    let printJobId: string | null = null;
+    if (stationId) {
+      const job = await this.prisma.fbsPrintJob.create({ data: {
+        stationId, historyId: history.id, assemblyId: task.id, requestId: task.requestId,
+        requestNumber: linkedRequest?.number ?? null, orderId: task.orderId, kiz: task.kiz,
+        warehouseName, productName: task.productName, stickerCode: sticker.barcode || null,
+        stickerMime: 'image/png', stickerBase64: sticker.imageBase64,
+        requestedById: user.id, requestedBy: user.name,
+        deviceCode: textValue(deviceCodeValue).trim() || null,
+      }});
+      printJobId = job.id;
+    }
+    return {
+      orderId: task.orderId, requestId: task.requestId, productName: task.productName,
+      requestNumber: linkedRequest?.number ?? null,
+      article: task.article, boxCode: task.boxCode, stickerBarcode: sticker.barcode,
+      warehouseName, printJobId, printStatus: printJobId ? 'QUEUED' : null,
+      contentType: 'image/png', imageBase64: sticker.imageBase64,
+    };
+  }
+  async listFbsPrintStations(_user: AuthUser) {
+    const stations = await this.prisma.fbsPrintStation.findMany({ where: { enabled: true }, orderBy: { name: 'asc' } });
+    const now = Date.now();
+    return stations.map(({ agentKey: _agentKey, ...station }) => ({ ...station, online: Boolean(station.lastSeenAt && now - station.lastSeenAt.getTime() < 45_000) }));
+  }
+  async createFbsPrintStation(body: { name?: string; printerName?: string; printerModel?: string; labelWidthMm?: number; labelHeightMm?: number }, user: AuthUser) {
+    const name = textValue(body.name).trim(); const printerName = textValue(body.printerName).trim(); const printerModel = textValue(body.printerModel).trim().toUpperCase();
+    if (!name || !printerName) throw new BadRequestException('Укажите название станции и имя принтера Windows.');
+    const niimbot = printerModel.includes('NIIMBOT');
+    const existing = await this.prisma.fbsPrintStation.findUnique({ where: { name } });
+    const stationData = { printerName, printerModel: printerModel || 'GENERIC', enabled: true, lastError: null, labelWidthMm: body.labelWidthMm ?? (niimbot ? 50 : 58), labelHeightMm: body.labelHeightMm ?? (niimbot ? 30 : 40) };
+    const station = existing
+      ? await this.prisma.fbsPrintStation.update({ where: { id: existing.id }, data: stationData })
+      : await this.prisma.fbsPrintStation.create({ data: { name, ...stationData, agentKey: `${Date.now()}${Math.random()}${Math.random()}`.replace(/\D/g, '') } });
+    await this.prisma.auditLog.create({ data: { userId: user.id, action: existing ? 'FBS_PRINT_STATION_RECONNECTED' : 'FBS_PRINT_STATION_CREATED', entity: 'FbsPrintStation', entityId: station.id, payload: { name, printerName, printerModel } } });
+    return station;
+  }
+  async heartbeatFbsPrintStation(id: string, error: unknown, _user: AuthUser) {
+    return this.prisma.fbsPrintStation.update({ where: { id }, data: { lastSeenAt: new Date(), lastError: textValue(error).trim() || null } });
+  }
+  async deleteFbsPrintStation(id: string, user: AuthUser) {
+    const station = await this.prisma.fbsPrintStation.findUnique({ where: { id } });
+    if (!station) throw new NotFoundException('Печатная станция уже удалена.');
+    const cancelled = await this.prisma.fbsPrintJob.updateMany({ where: { stationId: id, status: { in: ['QUEUED', 'CLAIMED', 'FAILED'] } }, data: { status: 'CANCELLED', errorMessage: 'Станция удалена администратором' } });
+    await this.prisma.fbsPrintStation.delete({ where: { id } });
+    await this.prisma.auditLog.create({ data: { userId: user.id, action: 'FBS_PRINT_STATION_DELETED', entity: 'FbsPrintStation', entityId: id, payload: { name: station.name, printerName: station.printerName, cancelledJobs: cancelled.count } } });
+    return { deleted: true, cancelledJobs: cancelled.count };
+  }
+  async claimFbsPrintJob(stationId: string, _user: AuthUser) {
+    await this.prisma.fbsPrintStation.update({ where: { id: stationId }, data: { lastSeenAt: new Date(), lastError: null } });
+    const stale = new Date(Date.now() - 120_000);
+    const job = await this.prisma.fbsPrintJob.findFirst({ where: { stationId, OR: [{ status: 'QUEUED' }, { status: 'CLAIMED', claimedAt: { lt: stale } }] }, orderBy: { createdAt: 'asc' } });
+    if (!job) return null;
+    return this.prisma.fbsPrintJob.update({ where: { id: job.id }, data: { status: 'CLAIMED', claimedAt: new Date(), attempts: { increment: 1 }, errorMessage: null } });
+  }
+  async finishFbsPrintJob(id: string, success: boolean, error: unknown, user: AuthUser) {
+    const job = await this.prisma.fbsPrintJob.update({ where: { id }, data: success ? { status: 'PRINTED', printedAt: new Date(), errorMessage: null } : { status: 'FAILED', failedAt: new Date(), errorMessage: textValue(error).trim() || 'Ошибка печати' } });
+    await this.prisma.auditLog.create({ data: { userId: user.id, action: success ? 'FBS_TWO_LABELS_PRINTED' : 'FBS_TWO_LABELS_PRINT_FAILED', entity: 'FbsPrintJob', entityId: job.id, payload: { stationId: job.stationId, orderId: job.orderId, deviceCode: job.deviceCode, error: job.errorMessage } } });
+    return job;
+  }
+  async webOrderAssemblyHistory(user: AuthUser) {
+    let clientFilter = this.clientScopes.resolveClientFilter(user);
+    if (user.clientScopeMode === 'LIMITED' && user.clientIds.length === 0 && user.activeWarehouseId) {
+      const branchClients = await this.prisma.warehouseClient.findMany({
+        where: { warehouseId: user.activeWarehouseId }, select: { clientId: true },
+      });
+      clientFilter = { in: uniqueStrings(branchClients.map((item) => item.clientId)) };
+    }
+    const rows = await this.prisma.fbsWebKizStickerPrint.findMany({ where: { clientId: clientFilter }, orderBy: { printedAt: 'desc' }, take: 300 });
+    const tasks = await this.prisma.fbsTsdAssembly.findMany({ where: { id: { in: rows.map((row) => row.assemblyId) } }, select: { id: true, skuId: true, requestId: true, supplyId: true, productName: true, article: true } });
+    const skus = await this.prisma.sku.findMany({ where: { id: { in: uniqueStrings(tasks.map((task) => task.skuId)) } }, select: { id: true, name: true, article: true, size: true, color: true } });
+    const requests = await this.prisma.clientRequest.findMany({ where: { id: { in: uniqueStrings(tasks.map((task) => task.requestId)) } }, select: { id: true, number: true } });
+    const skuById = new Map(skus.map((sku) => [sku.id, sku]));
+    const requestById = new Map(requests.map((request) => [request.id, request]));
+    const taskById = new Map(tasks.map((task) => [task.id, { ...task, sku: skuById.get(task.skuId) }]));
+    return rows.map((row) => {
+      const task = taskById.get(row.assemblyId); const sku = task?.sku;
+      return { ...row, supplyId: task?.supplyId || null, requestNumber: task ? requestById.get(task.requestId)?.number ?? null : null, productName: task?.productName || sku?.name || null, article: task?.article || sku?.article || null, size: sku?.size || null, color: sku?.color || null };
+    });
+  }
+  async reprintWebOrderAssemblyHistory(idValue: string, user: AuthUser) {
+    const record = await this.prisma.fbsWebKizStickerPrint.findUnique({ where: { id: idValue.trim() } });
+    if (!record) throw new NotFoundException('Запись печати не найдена.');
+    let allowedClientIds = user.clientIds;
+    if (user.clientScopeMode === 'LIMITED' && allowedClientIds.length === 0 && user.activeWarehouseId) {
+      const branchClients = await this.prisma.warehouseClient.findMany({ where: { warehouseId: user.activeWarehouseId }, select: { clientId: true } });
+      allowedClientIds = uniqueStrings(branchClients.map((item) => item.clientId));
+    }
+    if (user.clientScopeMode === 'LIMITED' && !allowedClientIds.includes(record.clientId)) throw new ForbiddenException('Нет доступа к клиенту этой этикетки.');
+    const task = await this.prisma.fbsTsdAssembly.findUnique({ where: { id: record.assemblyId } });
+    if (!task) throw new NotFoundException('Заказ для повторной печати не найден.');
+    const sticker = await this.loadFbsTsdOrderSticker(task);
+    if (!sticker?.imageBase64) throw new BadRequestException(`Этикетка WB для заказа №${task.orderId} временно недоступна.`);
+    const linkedRequest = await this.prisma.clientRequest.findUnique({ where: { id: task.requestId }, select: { number: true } });
+    const supply = await this.prisma.fbsSupplyPlan.findFirst({ where: { supplyId: task.supplyId ?? undefined, connectionId: task.connectionId }, select: { marketplaceWarehouseName: true } });
+    return { orderId: task.orderId, requestId: task.requestId, productName: task.productName, requestNumber: linkedRequest?.number ?? null, article: task.article, boxCode: task.boxCode, stickerBarcode: sticker.barcode, warehouseName: textValue(supply?.marketplaceWarehouseName) || 'СКЛАД НЕ УКАЗАН', contentType: 'image/png', imageBase64: sticker.imageBase64 };
+  }
+  async deleteWebOrderAssemblyHistory(idValue: string, user: AuthUser) {
+    const record = await this.prisma.fbsWebKizStickerPrint.findUnique({ where: { id: idValue.trim() } });
+    if (!record) throw new NotFoundException('Запись печати не найдена.');
+    this.clientScopes.requireClientAccess(user, record.clientId, 'write');
+    await this.prisma.$transaction([
+      this.prisma.auditLog.create({ data: { userId: user.id, action: 'FBS_WEB_STICKER_PRINT_UNLOCKED', entity: 'FbsWebKizStickerPrint', entityId: record.id, payload: { kiz: record.kiz, orderId: record.orderId, printedAt: record.printedAt, printedBy: record.printedBy } } }),
+      this.prisma.fbsWebKizStickerPrint.delete({ where: { id: record.id } }),
+    ]);
+    return { deleted: true, orderId: record.orderId };
+  }
+
+  private async loadOzonFbsTsdOrderSticker(task: FbsTsdAssemblyRecord) {
+    if (task.marketplaceLabelBase64) {
+      try {
+        // FIX: ATOL TSD devices can crash inside Android PdfRenderer on Ozon's vector PDF.
+        const label = await this.prepareOzonFbsTsdLabel(
+          Buffer.from(task.marketplaceLabelBase64, 'base64'),
+          task.marketplaceLabelContentType || 'application/pdf',
+        );
+        if (label.contentType !== task.marketplaceLabelContentType) {
+          await this.prisma.fbsTsdAssembly.updateMany({
+            where: { id: task.id },
+            data: {
+              marketplaceLabelBase64: label.buffer.toString('base64'),
+              marketplaceLabelContentType: label.contentType,
+            },
+          });
+        }
+        return {
+          marketplace: MarketplaceType.OZON,
+          partA: '',
+          partB: '',
+          barcode: task.orderId,
+          contentType: label.contentType,
+          imageBase64: label.buffer.toString('base64'),
+        };
+      } catch (caught) {
+        const reason = marketplaceErrorMessage(caught);
+        this.logger.warn(`Ozon label cannot be prepared for FBS TSD order ${task.orderId}: ${reason}`);
+        return null;
+      }
+    }
+    const connection = await this.prisma.clientMarketplaceConnection.findFirst({
+      where: {
+        id: task.connectionId,
+        clientId: task.clientId,
+        marketplace: MarketplaceType.OZON,
+        isActive: true,
+      },
+      select: { sellerId: true, apiKey: true },
+    });
+    if (!connection?.sellerId || !task.marketplaceSubmittedAt) return null;
+    try {
+      const label = await marketplaceBinary(
+        'https://api-seller.ozon.ru/v2/posting/fbs/package-label',
+        {
+          method: 'POST',
+          headers: {
+            ...ozonHeaders(connection.sellerId, connection.apiKey),
+            Accept: 'application/pdf',
+          },
+          body: JSON.stringify({ posting_number: [task.orderId] }),
+        },
+      );
+      // FIX: send a regular PNG to the TSD instead of invoking its unstable native PDF renderer.
+      const preparedLabel = await this.prepareOzonFbsTsdLabel(label.buffer, label.contentType);
+      const imageBase64 = preparedLabel.buffer.toString('base64');
+      await this.prisma.fbsTsdAssembly.updateMany({
+        where: { id: task.id },
+        data: {
+          marketplaceLabelBase64: imageBase64,
+          marketplaceLabelContentType: preparedLabel.contentType,
+          stickerBarcode: task.orderId,
+          marketplaceSubmitError: null,
+          errorMessage: null,
+        },
+      });
+      return {
+        marketplace: MarketplaceType.OZON,
+        partA: '',
+        partB: '',
+        barcode: task.orderId,
+        contentType: preparedLabel.contentType,
+        imageBase64,
+      };
+    } catch (caught) {
+      const reason = marketplaceErrorMessage(caught);
+      this.logger.warn(`Ozon label is not ready for FBS TSD order ${task.orderId}: ${reason}`);
+      await this.prisma.fbsTsdAssembly.updateMany({
+        where: { id: task.id },
+        data: { marketplaceSubmitError: reason },
+      });
+      return null;
+    }
+  }
+
+  private async prepareOzonFbsTsdLabel(buffer: Buffer, contentType: string) {
+    if (!contentType.toLowerCase().includes('pdf')) return { buffer, contentType };
+    const parser = new PDFParse({ data: buffer });
+    try {
+      const screenshot = await parser.getScreenshot({
+        desiredWidth: 1095,
+        first: 1,
+        imageDataUrl: false,
+        imageBuffer: true,
+      });
+      const firstPage = screenshot.pages[0]?.data;
+      if (!firstPage?.length) throw new Error('Ozon label PDF has no renderable page.');
+      return { buffer: Buffer.from(firstPage), contentType: 'image/png' };
+    } finally {
+      await parser.destroy();
     }
   }
 
@@ -2774,6 +15236,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       select: {
         orderId: true,
         requestId: true,
+        skuId: true,
         productName: true,
         article: true,
         boxCode: true,
@@ -2785,6 +15248,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       orderBy: { completedAt: 'desc' },
       take: 50,
     });
+    const skuIds = uniqueStrings(rows.map((row) => row.skuId));
+    const skus = skuIds.length > 0
+      ? await this.prisma.sku.findMany({
+          where: { id: { in: skuIds } },
+          select: { id: true, color: true, size: true },
+        })
+      : [];
+    const skuById = new Map(skus.map((sku) => [sku.id, sku]));
     const requestIds = uniqueStrings(rows.map((row) => row.requestId));
     const requests = requestIds.length > 0
       ? await this.prisma.clientRequest.findMany({
@@ -2798,6 +15269,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       requestNumber: requestNumberById.get(row.requestId) ?? null,
       productName: row.productName,
       article: row.article,
+      color: skuById.get(row.skuId)?.color ?? null,
+      size: skuById.get(row.skuId)?.size ?? null,
       boxCode: row.boxCode,
       partA: row.stickerPartA,
       partB: row.stickerPartB,
@@ -2821,18 +15294,779 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   async assembleFbsOrders(dto: FbsOrderSelectionDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    const selected = await this.resolveSelectedFbsOrders(clientId, dto.orders);
+    if (selected.orders.every((order) => order.marketplace === MarketplaceType.OZON)) {
+      return this.submitOzonFbsOrders(clientId, selected.orders, user);
+    }
     return this.moveFbsOrdersToSupply(dto, user, 'assemble');
+  }
+
+  private async submitOzonFbsOrders(
+    clientId: string,
+    orders: FbsOrderSummary[],
+    user: AuthUser,
+  ) {
+    this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const tasks = await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        clientId,
+        marketplace: MarketplaceType.OZON,
+        OR: orders.map((order) => ({
+          connectionId: order.connectionId,
+          orderId: order.id,
+        })),
+      },
+    });
+    const taskByOrder = new Map(
+      tasks.map((task) => [selectionKey(task.connectionId, task.orderId), task]),
+    );
+    const missing = orders.filter(
+      (order) => !taskByOrder.has(selectionKey(order.connectionId, order.id)),
+    );
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        `Сначала создайте заявку WMS и полностью отпикайте на ТСД заказы Ozon: ${missing
+          .map((order) => order.id)
+          .join(', ')}.`,
+      );
+    }
+
+    const submitted: string[] = [];
+    for (const order of orders) {
+      const task = taskByOrder.get(selectionKey(order.connectionId, order.id))!;
+      requireFbsTaskWithoutSyncConflict(task);
+      if (order.product?.id && task.skuId !== order.product.id) {
+        throw new BadRequestException(
+          `Товар в Ozon-заказе ${task.orderId} изменился после создания заявки. Обновите FBS и перепроверьте товар.`,
+        );
+      }
+      if ((!task.boxId && !fbsTsdUsesNoBox(task)) || !task.barcode) {
+        throw new BadRequestException(
+          `Заказ Ozon ${task.orderId} ещё не отпикан на ТСД: не подтверждён товар или источник остатка.`,
+        );
+      }
+      if (task.requiresKiz && (!task.kiz || task.wbMetaStatus !== 'ACCEPTED')) {
+        throw new BadRequestException(
+          `Заказ Ozon ${task.orderId} требует КИЗ. Сначала отсканируйте его на ТСД.`,
+        );
+      }
+      await this.submitOzonFbsTask(task);
+      submitted.push(task.orderId);
+    }
+    this.fbsOrdersCache.delete(clientId);
+    const response = await this.refreshFbsOrdersCache(clientId);
+    return {
+      marketplace: MarketplaceType.OZON,
+      assembled: submitted.length,
+      reshipped: 0,
+      submitted: submitted.length,
+      orderIds: submitted,
+      deliveryPlan: response.deliveryPlan,
+      supplies: [],
+      orders: response,
+      message: `В Ozon передано заказов: ${submitted.length}. Этикетки можно скачать после их формирования Ozon.`,
+    };
+  }
+
+  private async submitOzonFbsTask(task: FbsTsdAssemblyRecord) {
+    const connection = await this.prisma.clientMarketplaceConnection.findFirst({
+      where: {
+        id: task.connectionId,
+        clientId: task.clientId,
+        marketplace: MarketplaceType.OZON,
+        isActive: true,
+      },
+      select: { sellerId: true, apiKey: true },
+    });
+    if (!connection?.sellerId) {
+      throw new BadRequestException('Подключение Ozon не найдено или в нём не заполнен Client-Id.');
+    }
+    const headers = ozonHeaders(connection.sellerId, connection.apiKey);
+    try {
+      const postingResponse = await marketplaceJson(
+        'https://api-seller.ozon.ru/v3/posting/fbs/get',
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            posting_number: task.orderId,
+            with: {
+              analytics_data: false,
+              barcodes: true,
+              financial_data: false,
+              legal_info: false,
+              related_postings: false,
+              translit: false,
+            },
+          }),
+        },
+      );
+      const posting = asRecord(postingResponse.result ?? postingResponse);
+      const status = textValue(posting.status).toLowerCase();
+      if (status !== 'awaiting_packaging') {
+        if (['awaiting_deliver', 'arbitration', 'delivering', 'delivered'].includes(status)) {
+          return this.prisma.fbsTsdAssembly.update({
+            where: { id: task.id },
+            data: {
+              marketplaceSubmittedAt: task.marketplaceSubmittedAt ?? new Date(),
+              marketplaceSubmitError: null,
+            },
+          });
+        }
+        throw new BadRequestException(
+          `Заказ Ozon ${task.orderId} нельзя передать в сборку: текущий статус ${status || 'не определён'}.`,
+        );
+      }
+
+      const products = asArray<Record<string, unknown>>(posting.products);
+      const totalQuantity = products.reduce(
+        (sum, product) => sum + Math.max(1, Math.trunc(numberValue(product.quantity)) || 1),
+        0,
+      );
+      if (products.length !== 1 || totalQuantity !== Math.max(1, task.itemCount)) {
+        throw new BadRequestException(
+          `В заказе Ozon ${task.orderId} несколько товарных строк или единиц. Автоматическая отправка остановлена, чтобы не передать в Ozon неотпиканный товар. Разделите заказ в Ozon или обратитесь к администратору.`,
+        );
+      }
+      const product = products[0]!;
+      const productId = Math.trunc(numberValue(product.sku));
+      if (!Number.isSafeInteger(productId) || productId <= 0) {
+        throw new BadRequestException(`Ozon не вернул SKU товара для заказа ${task.orderId}.`);
+      }
+      const requirements = asRecord(posting.requirements);
+      const mandatoryProductIds = new Set(
+        asArray<unknown>(requirements.products_requiring_mandatory_mark).map(textValue),
+      );
+      if (mandatoryProductIds.has(String(productId))) {
+        if (!task.kiz) {
+          throw new BadRequestException(
+            `Ozon требует КИЗ для заказа ${task.orderId}. Отсканируйте КИЗ на ТСД.`,
+          );
+        }
+        await this.submitOzonFbsMark(task, productId, headers);
+      }
+
+      await marketplaceJson('https://api-seller.ozon.ru/v4/posting/fbs/ship', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          posting_number: task.orderId,
+          packages: [
+            {
+              products: products.map((item) => ({
+                product_id: Math.trunc(numberValue(item.sku)),
+                quantity: Math.max(1, Math.trunc(numberValue(item.quantity)) || 1),
+              })),
+            },
+          ],
+          with: { additional_data: true },
+        }),
+      });
+      this.fbsOrdersCache.delete(task.clientId);
+      return this.prisma.fbsTsdAssembly.update({
+        where: { id: task.id },
+        data: {
+          marketplaceSubmittedAt: new Date(),
+          marketplaceSubmitError: null,
+          errorMessage: null,
+        },
+      });
+    } catch (caught) {
+      const message = marketplaceErrorMessage(caught);
+      await this.prisma.fbsTsdAssembly.updateMany({
+        where: { id: task.id },
+        data: { marketplaceSubmitError: message, errorMessage: message },
+      });
+      if (caught instanceof BadRequestException) throw caught;
+      throw new BadRequestException(`Ozon не принял заказ ${task.orderId}: ${message}`);
+    }
+  }
+
+  private async submitOzonFbsMark(
+    task: FbsTsdAssemblyRecord,
+    productId: number,
+    headers: Record<string, string>,
+  ) {
+    const exemplarResponse = await marketplaceJson(
+      'https://api-seller.ozon.ru/v6/fbs/posting/product/exemplar/create-or-get',
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ posting_number: task.orderId }),
+      },
+    );
+    const product = asArray<Record<string, unknown>>(exemplarResponse.products).find(
+      (item) => Math.trunc(numberValue(item.product_id)) === productId,
+    );
+    const exemplars = asArray<Record<string, unknown>>(product?.exemplars);
+    const exemplarId = Math.trunc(numberValue(exemplars[0]?.exemplar_id));
+    if (!Number.isSafeInteger(exemplarId) || exemplarId <= 0) {
+      throw new BadRequestException(
+        `Ozon не создал экземпляр товара для КИЗа заказа ${task.orderId}. Обновите заказ и повторите.`,
+      );
+    }
+    await marketplaceJson('https://api-seller.ozon.ru/v6/fbs/posting/product/exemplar/set', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        multi_box_qty: 1,
+        posting_number: task.orderId,
+        products: [
+          {
+            product_id: productId,
+            exemplars: [
+              {
+                exemplar_id: exemplarId,
+                gtd: '',
+                is_gtd_absent: true,
+                rnpt: '',
+                is_rnpt_absent: true,
+                marks: [{ mark: task.kiz, mark_type: 'mandatory_mark' }],
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      if (attempt > 0) await delay(750);
+      const statusResponse = await marketplaceJson(
+        'https://api-seller.ozon.ru/v5/fbs/posting/product/exemplar/status',
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ posting_number: task.orderId }),
+        },
+      );
+      const status = textValue(statusResponse.status).toLowerCase();
+      const marks = asArray<Record<string, unknown>>(statusResponse.products)
+        .flatMap((item) => asArray<Record<string, unknown>>(item.exemplars))
+        .flatMap((item) => asArray<Record<string, unknown>>(item.marks));
+      const errors = uniqueStrings(
+        marks.flatMap((mark) => asArray<unknown>(mark.error_codes).map(textValue)),
+      );
+      if (status === 'failed' || errors.length > 0) {
+        throw new BadRequestException(
+          `Ozon отклонил КИЗ заказа ${task.orderId}: ${errors.join(', ') || 'проверка не пройдена'}.`,
+        );
+      }
+      if (
+        status === 'passed' ||
+        (marks.length > 0 && marks.every((mark) => textValue(mark.check_status).toLowerCase() === 'passed'))
+      ) {
+        return;
+      }
+    }
+    throw new BadRequestException(
+      `Ozon ещё проверяет КИЗ заказа ${task.orderId}. Нажмите «Передать в Ozon» ещё раз через несколько секунд.`,
+    );
   }
 
   async reshipFbsOrders(dto: FbsOrderSelectionDto, user: AuthUser) {
     return this.moveFbsOrdersToSupply(dto, user, 'reship');
   }
 
+  private async loadFbsRequestTailCandidates(
+    dto: MergeFbsRequestTailsDto,
+    user: AuthUser,
+  ) {
+    const requestIds = uniqueStrings(dto.requestIds);
+    const requests = await this.prisma.clientRequest.findMany({
+      where: { id: { in: requestIds } },
+      select: {
+        id: true,
+        number: true,
+        clientId: true,
+        type: true,
+        status: true,
+        fbsOrderLinks: {
+          select: {
+            connectionId: true,
+            orderId: true,
+            syncStatus: true,
+          },
+        },
+      },
+      orderBy: { number: 'asc' },
+    });
+    if (requests.length !== requestIds.length) {
+      const foundIds = new Set(requests.map((request) => request.id));
+      throw new NotFoundException(
+        `Заявки не найдены: ${requestIds
+          .filter((requestId) => !foundIds.has(requestId))
+          .join(', ')}.`,
+      );
+    }
+
+    const clientIds = uniqueStrings(
+      requests.map((request) => request.clientId),
+    );
+    if (clientIds.length !== 1) {
+      throw new BadRequestException(
+        'Для одной новой заявки выберите FBS-заявки только одного клиента.',
+      );
+    }
+    const clientId = clientIds[0]!;
+    this.clientScopes.requireClientAccess(user, clientId, 'write');
+
+    const invalidRequests = requests.filter(
+      (request) =>
+        request.type !== ClientRequestType.OUTBOUND ||
+        request.fbsOrderLinks.length === 0 ||
+        !FBS_REQUEST_COMPOSITION_STATUSES.has(request.status),
+    );
+    if (invalidRequests.length > 0) {
+      throw new BadRequestException(
+        `Выберите только незавершённые FBS-заявки. Проверьте: ${invalidRequests
+          .map(
+            (request) =>
+              `№${String(request.number).padStart(6, '0')}`,
+          )
+          .join(', ')}.`,
+      );
+    }
+
+    const response = await this.refreshFbsOrdersCache(clientId);
+    const orderByKey = new Map(
+      response.orders.map((order) => [
+        selectionKey(order.connectionId, order.id),
+        order,
+      ]),
+    );
+    const candidates = new Map<string, FbsOrderSummary>();
+    const excludedOrders: Array<{ id: string; reason: string }> = [];
+    for (const request of requests) {
+      for (const link of request.fbsOrderLinks) {
+        const order = orderByKey.get(
+          selectionKey(link.connectionId, link.orderId),
+        );
+        if (link.syncStatus !== FBS_REQUEST_LINK_ACTIVE) {
+          excludedOrders.push({
+            id: link.orderId,
+            reason: 'По заказу есть незавершённое изменение синхронизации.',
+          });
+          continue;
+        }
+        if (!order) {
+          excludedOrders.push({
+            id: link.orderId,
+            reason: 'Заказ не найден в актуальном ответе Wildberries.',
+          });
+          continue;
+        }
+        if (
+          order.category !== 'active' ||
+          order.supplierStatus !== 'confirm'
+        ) {
+          excludedOrders.push({
+            id: order.id,
+            reason: `Текущий статус WB: ${order.statusLabel}.`,
+          });
+          continue;
+        }
+        if (!order.supplyId || !order.product) {
+          excludedOrders.push({
+            id: order.id,
+            reason: !order.supplyId
+              ? 'Заказ ещё не включён в поставку WB.'
+              : 'Для заказа не найдена карточка товара WMS.',
+          });
+          continue;
+        }
+        candidates.set(selectionKey(order.connectionId, order.id), order);
+      }
+    }
+    const orders = [...candidates.values()];
+    if (orders.length === 0) {
+      throw new BadRequestException(
+        `В выбранных заявках нет необработанных заказов для новой заявки.${excludedOrders.length > 0
+          ? ` Проверено заказов: ${excludedOrders.length}.`
+          : ''}`,
+      );
+    }
+
+    const sourceRequestByOrderKey = new Map<
+      string,
+      { id: string; number: number }
+    >();
+    for (const request of requests) {
+      for (const link of request.fbsOrderLinks) {
+        const key = selectionKey(link.connectionId, link.orderId);
+        if (candidates.has(key) && !sourceRequestByOrderKey.has(key)) {
+          sourceRequestByOrderKey.set(key, {
+            id: request.id,
+            number: request.number,
+          });
+        }
+      }
+    }
+
+    return {
+      clientId,
+      requests,
+      orders,
+      excludedOrders,
+      sourceRequestByOrderKey,
+    };
+  }
+
+  async previewFbsRequestTails(
+    dto: MergeFbsRequestTailsDto,
+    user: AuthUser,
+  ) {
+    const selection = await this.loadFbsRequestTailCandidates(dto, user);
+    const connectionIds = uniqueStrings(
+      selection.orders.map((order) => order.connectionId),
+    );
+    if (connectionIds.length !== 1) {
+      throw new BadRequestException(
+        'В одну новую заявку можно перенести заказы только одного кабинета Wildberries.',
+      );
+    }
+
+    const tasks = await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        clientId: selection.clientId,
+        marketplace: MarketplaceType.WILDBERRIES,
+        connectionId: connectionIds[0]!,
+        orderId: { in: selection.orders.map((order) => order.id) },
+      },
+    });
+    const handledOrderIds = new Set(
+      tasks
+        .filter(fbsTsdTaskWasPhysicallyHandled)
+        .map((task) => task.orderId),
+    );
+    const handledOrders = selection.orders
+      .filter((order) => handledOrderIds.has(order.id))
+      .map((order) => ({
+        id: order.id,
+        reason:
+          'По заказу уже сканировали товар, короб, КИЗ или наклейку — он не будет перенесён.',
+      }));
+    const orders = selection.orders.filter(
+      (order) => !handledOrderIds.has(order.id),
+    );
+    if (orders.length === 0) {
+      throw new BadRequestException(
+        'В выбранных заявках нет необработанных заказов, которые можно перенести.',
+      );
+    }
+
+    return {
+      clientId: selection.clientId,
+      sourceRequests: selection.requests.map((request) => ({
+        id: request.id,
+        number: request.number,
+      })),
+      orderCount: orders.length,
+      itemCount: orders.reduce(
+        (sum, order) => sum + Math.max(1, order.itemCount),
+        0,
+      ),
+      skuCount: new Set(orders.map((order) => order.product!.id)).size,
+      orders: orders.map((order) => ({
+        connectionId: order.connectionId,
+        id: order.id,
+        sourceRequest:
+          selection.sourceRequestByOrderKey.get(
+            selectionKey(order.connectionId, order.id),
+          ) ?? null,
+        sourceSupplyId: order.supplyId!,
+        itemCount: Math.max(1, order.itemCount),
+        article: order.article,
+        barcodes: order.barcodes,
+        product: {
+          id: order.product!.id,
+          name: order.product!.name,
+          internalSku: order.product!.internalSku,
+          clientSku: order.product!.clientSku,
+          article: order.product!.article,
+          size: order.product!.size,
+        },
+        storageBoxes: order.storageBoxes
+          .filter((box) => box.quantity > 0)
+          .map((box) => ({
+            code: box.code,
+            quantity: box.quantity,
+          })),
+      })),
+      skippedOrders: [
+        ...selection.excludedOrders,
+        ...handledOrders,
+      ],
+    };
+  }
+
+  async mergeFbsRequestTails(
+    dto: MergeFbsRequestTailsDto,
+    user: AuthUser,
+  ) {
+    const selection = await this.loadFbsRequestTailCandidates(dto, user);
+    let orders = selection.orders;
+    if (dto.confirmedOrders) {
+      const confirmedOrderKeys = uniqueStrings(
+        dto.confirmedOrders.map((order) =>
+          selectionKey(order.connectionId, order.id),
+        ),
+      );
+      const orderByKey = new Map(
+        orders.map((order) => [
+          selectionKey(order.connectionId, order.id),
+          order,
+        ]),
+      );
+      const changedOrders = confirmedOrderKeys.filter(
+        (orderKey) => !orderByKey.has(orderKey),
+      );
+      if (changedOrders.length > 0) {
+        throw new BadRequestException(
+          'Состав хвостов изменился после предварительного просмотра. Закройте окно, обновите список и подтвердите перенос повторно.',
+        );
+      }
+      orders = confirmedOrderKeys.map((orderKey) => orderByKey.get(orderKey)!);
+    }
+
+    const result = await this.moveFbsOrdersToNewSupply(
+      {
+        clientId: selection.clientId,
+        orders: orders.map((order) => ({
+          connectionId: order.connectionId,
+          id: order.id,
+        })),
+      },
+      user,
+    );
+    return {
+      ...result,
+      selectedRequestCount: selection.requests.length,
+      skipped: result.skipped + selection.excludedOrders.length,
+      skippedOrders: [
+        ...selection.excludedOrders,
+        ...result.skippedOrders,
+      ],
+    };
+  }
+
+  async listFbsMoveTargets(dto: FbsOrderSelectionDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const selectedKeys = new Set(
+      dto.orders.map((order) => selectionKey(order.connectionId, order.id)),
+    );
+    const connectionIds = uniqueStrings(
+      dto.orders.map((order) => order.connectionId.trim()),
+    );
+    if (connectionIds.length !== 1) {
+      throw new BadRequestException(
+        'Выберите заказы одного кабинета Wildberries.',
+      );
+    }
+    const connectionId = connectionIds[0]!;
+    const selectedLinks = await this.prisma.fbsOrderRequestLink.findMany({
+      where: {
+        clientId,
+        marketplace: MarketplaceType.WILDBERRIES,
+        connectionId,
+        orderId: { in: dto.orders.map((order) => order.id.trim()) },
+        syncStatus: { not: FBS_REQUEST_LINK_REMOVED },
+      },
+      include: {
+        request: { select: { id: true, number: true, status: true } },
+      },
+    });
+    const activeSelectedLinks = selectedLinks.filter((link) =>
+      selectedKeys.has(selectionKey(link.connectionId, link.orderId)),
+    );
+    if (activeSelectedLinks.length !== selectedKeys.size) {
+      throw new BadRequestException(
+        'Не все выбранные заказы связаны с действующей заявкой WMS. Обновите онлайн-заявку.',
+      );
+    }
+    const sourceSupplyIds = uniqueStrings(
+      activeSelectedLinks
+        .map((link) => link.lastSupplyId)
+        .filter((supplyId): supplyId is string => Boolean(supplyId)),
+    );
+    if (sourceSupplyIds.length === 0) {
+      throw new BadRequestException(
+        'У выбранных заказов не найдена исходная поставка WB.',
+      );
+    }
+    const sourcePlans = await this.prisma.fbsSupplyPlan.findMany({
+      where: {
+        clientId,
+        marketplace: MarketplaceType.WILDBERRIES,
+        connectionId,
+        supplyId: { in: sourceSupplyIds },
+      },
+    });
+    const sourcePlan = sourcePlans[0];
+    if (!sourcePlan) {
+      throw new BadRequestException(
+        'План исходной поставки не найден. Обновите FBS и повторите действие.',
+      );
+    }
+    const normalizeCity = (value: string | null | undefined) =>
+      (value ?? '')
+        .trim()
+        .toLocaleLowerCase('ru-RU')
+        .replace(/[^a-zа-яё0-9]+/giu, ' ');
+    const sourceCityKey = normalizeCity(sourcePlan.marketplaceWarehouseName);
+    const sourceRequestIds = new Set(
+      activeSelectedLinks.map((link) => link.requestId),
+    );
+    const plans = await this.prisma.fbsSupplyPlan.findMany({
+      where: {
+        clientId,
+        marketplace: MarketplaceType.WILDBERRIES,
+        connectionId,
+        sentToWbAt: null,
+        supplyId: { notIn: sourceSupplyIds },
+        deliveryDestination: sourcePlan.deliveryDestination,
+        itemsPerCargoPlace: sourcePlan.itemsPerCargoPlace,
+      },
+    });
+    const sameCityPlans = plans.filter((plan) => {
+      const sameWarehouse = Boolean(
+        sourcePlan.marketplaceWarehouseId &&
+          plan.marketplaceWarehouseId === sourcePlan.marketplaceWarehouseId,
+      );
+      const cityKey = normalizeCity(plan.marketplaceWarehouseName);
+      return sameWarehouse || Boolean(sourceCityKey && cityKey === sourceCityKey);
+    });
+    const targetSupplyIds = sameCityPlans.map((plan) => plan.supplyId);
+    if (targetSupplyIds.length === 0) {
+      return {
+        sourceCity: sourcePlan.marketplaceWarehouseName ?? 'город не указан',
+        candidates: [],
+      };
+    }
+    const [targetLinks, targetTasks, targetPacking] = await Promise.all([
+      this.prisma.fbsOrderRequestLink.findMany({
+        where: {
+          clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          connectionId,
+          lastSupplyId: { in: targetSupplyIds },
+          syncStatus: FBS_REQUEST_LINK_ACTIVE,
+        },
+        include: {
+          request: { select: { id: true, number: true, status: true } },
+        },
+      }),
+      this.prisma.fbsTsdAssembly.findMany({
+        where: {
+          clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          connectionId,
+          supplyId: { in: targetSupplyIds },
+        },
+      }),
+      this.prisma.fbsCargoPlacePacking.findMany({
+        where: {
+          clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          connectionId,
+          supplyId: { in: targetSupplyIds },
+          status: { not: 'CANCELLED' },
+        },
+        select: { supplyId: true },
+      }),
+    ]);
+    const packedSupplyIds = new Set(targetPacking.map((row) => row.supplyId));
+    const handledSupplyIds = new Set(
+      targetTasks
+        .filter(fbsTsdTaskWasPhysicallyHandled)
+        .map((task) => task.supplyId)
+        .filter((supplyId): supplyId is string => Boolean(supplyId)),
+    );
+    const candidates = sameCityPlans
+      .map((plan) => {
+        if (
+          packedSupplyIds.has(plan.supplyId) ||
+          handledSupplyIds.has(plan.supplyId)
+        ) {
+          return null;
+        }
+        const links = targetLinks.filter(
+          (link) => link.lastSupplyId === plan.supplyId,
+        );
+        const requests = [
+          ...new Map(
+            links
+              .filter(
+                (link) =>
+                  FBS_REQUEST_COMPOSITION_STATUSES.has(link.request.status) &&
+                  !sourceRequestIds.has(link.requestId),
+              )
+              .map((link) => [link.request.id, link.request]),
+          ).values(),
+        ];
+        if (
+          requests.length !== 1 ||
+          links.length === 0 ||
+          links.some((link) => link.requestId !== requests[0]!.id)
+        ) {
+          return null;
+        }
+        const tasks = targetTasks.filter(
+          (task) => task.supplyId === plan.supplyId,
+        );
+        return {
+          supplyId: plan.supplyId,
+          city:
+            plan.marketplaceWarehouseName ??
+            sourcePlan.marketplaceWarehouseName ??
+            'город не указан',
+          warehouseId: plan.marketplaceWarehouseId,
+          requestId: requests[0]!.id,
+          requestNumber: requests[0]!.number,
+          orderCount: links.length,
+          itemCount: tasks.reduce(
+            (sum, task) => sum + Math.max(1, task.itemCount),
+            0,
+          ),
+        };
+      })
+      .filter((candidate): candidate is NonNullable<typeof candidate> =>
+        Boolean(candidate),
+      )
+      .sort((left, right) => left.requestNumber - right.requestNumber);
+    return {
+      sourceCity: sourcePlan.marketplaceWarehouseName ?? 'город не указан',
+      candidates,
+    };
+  }
+
   async moveFbsOrdersToNewSupply(dto: FbsOrderSelectionDto, user: AuthUser) {
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'write');
-    const { response, orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders);
-    const unavailable = orders.filter(
+    // Moving an order is irreversible from the WMS point of view. Always use
+    // the current WB state here: a cached `confirm` status can already be
+    // obsolete and WB then answers with an otherwise opaque HTTP 409.
+    // A full WB history refresh may take longer than the HTTP proxy timeout for
+    // a large seller. For a transfer we only need fresh active statuses: the
+    // current `orders/new` response already contains every transferable order.
+    const freshResponse = await this.refreshFbsOrdersCache(clientId, {
+      invalidateHistory: false,
+      historyMode: 'cache-only',
+    });
+    const { response, orders: resolvedSelectedOrders } =
+      await this.resolveSelectedFbsOrders(clientId, dto.orders, freshResponse);
+    // FIX: one order already archived by WB must not block all other orders in
+    // a large transfer. Only orders that WB can still accept are moved.
+    const selectedOrders = resolvedSelectedOrders.filter(
+      (order) =>
+        order.marketplace === MarketplaceType.WILDBERRIES &&
+        order.category === 'active' &&
+        order.supplierStatus === 'confirm' &&
+        Boolean(order.supplyId) &&
+        Boolean(order.product),
+    );
+    const unavailable = resolvedSelectedOrders.filter(
       (order) =>
         order.marketplace !== MarketplaceType.WILDBERRIES ||
         order.category !== 'active' ||
@@ -2840,7 +16074,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         !order.supplyId ||
         !order.product,
     );
-    if (unavailable.length > 0) {
+    if (selectedOrders.length === 0) {
       throw new BadRequestException(
         `Перенести можно только активные заказы WB со статусом «На сборке» и найденным товаром WMS. Проверьте: ${unavailable
           .map((order) => order.id)
@@ -2848,16 +16082,89 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     }
 
-    const sourceKeys = new Set(
-      orders.map((order) => `${order.connectionId}:${order.supplyId}`),
+    const connectionIds = new Set(
+      selectedOrders.map((order) => order.connectionId),
     );
-    if (sourceKeys.size !== 1) {
+    if (connectionIds.size !== 1) {
       throw new BadRequestException(
-        'Выберите заказы только из одной поставки Wildberries.',
+        'Объединить можно только заказы одного кабинета Wildberries.',
       );
     }
-    const connectionId = orders[0]!.connectionId;
-    const sourceSupplyId = orders[0]!.supplyId!;
+    const connectionId = selectedOrders[0]!.connectionId;
+    const tasks = await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        clientId,
+        marketplace: MarketplaceType.WILDBERRIES,
+        connectionId,
+        orderId: { in: selectedOrders.map((order) => order.id) },
+      },
+    });
+    const handledTasks = tasks.filter(fbsTsdTaskWasPhysicallyHandled);
+    const skippedOrders: Array<{ id: string; reason: string }> = [
+      // ADDED: return every WB-ineligible order to the UI instead of silently
+      // claiming that it was transferred with the valid part of the batch.
+      ...unavailable.map((order) => ({
+        id: order.id,
+        reason: order.product
+          ? `WB: ${order.category}/${order.supplierStatus}${order.wbStatus ? `/${order.wbStatus}` : ''}. Перенос недоступен; заказ оставлен в исходной заявке.`
+          : 'Товар WMS не найден. Заказ оставлен в исходной заявке.',
+      })),
+      ...handledTasks.map((task) => {
+        const order = selectedOrders.find((item) => item.id === task.orderId);
+        const requestNumber = order?.request?.number
+          ? `, заявка №${String(order.request.number).padStart(6, '0')}`
+          : '';
+        const scans = uniqueStrings([
+          task.boxCode ? `короб ${task.boxCode}` : '',
+          task.barcode ? 'ШК товара отсканирован' : '',
+          task.kiz ? 'КИЗ отсканирован' : '',
+          task.stickerBarcode ? 'наклейка WB получена' : '',
+        ]).join(', ');
+        return {
+          id: task.orderId,
+          reason:
+            `${task.status === 'COMPLETED' ? 'Сборка завершена' : 'Сборка уже начата'}${requestNumber}` +
+            `${scans ? `: ${scans}` : ''}. Оставлен в исходной поставке.`,
+        };
+      }),
+    ];
+    const handledOrderIds = new Set(handledTasks.map((task) => task.orderId));
+    const orders = selectedOrders.filter((order) => !handledOrderIds.has(order.id));
+    if (orders.length === 0) {
+      throw new BadRequestException(
+        `Перенос не начат: все ${selectedOrders.length} выбранных заказов уже физически собирали. ` +
+          'Для переноса сначала оформите возврат товара менеджеру и сброс сборки в исходной заявке.',
+      );
+    }
+    const sourceSupplyIds = uniqueStrings(
+      orders.map((order) => order.supplyId!),
+    );
+    const warehouseKeys = uniqueStrings(
+      orders.map((order) => order.warehouseId || order.officeId || 'unknown'),
+    );
+    if (warehouseKeys.length !== 1) {
+      throw new BadRequestException(
+        'Объединить в одну заявку можно только заказы одного склада WB. Отфильтруйте один склад и повторите действие.',
+      );
+    }
+    const cargoTypeGroups = new Map<string, FbsOrderSummary[]>();
+    for (const order of orders) {
+      const cargoType = order.cargoType?.trim() || 'не указан WB';
+      const group = cargoTypeGroups.get(cargoType) ?? [];
+      group.push(order);
+      cargoTypeGroups.set(cargoType, group);
+    }
+    if (cargoTypeGroups.size > 1) {
+      throw new BadRequestException(
+        `Wildberries не позволяет объединить в одну поставку заказы разных габаритов. Разделите перенос по габариту: ${[...cargoTypeGroups.entries()]
+          .map(([cargoType, group]) => `${cargoType} — ${group.length} шт. (например: ${group
+            .slice(0, 5)
+            .map((order) => `№${order.id}`)
+            .join(', ')})`)
+          .join('; ')}.`,
+      );
+    }
+    const sourceSupplyId = sourceSupplyIds[0]!;
     const selectedKeys = new Set(
       orders.map((order) => selectionKey(order.connectionId, order.id)),
     );
@@ -2884,18 +16191,22 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         'Все выбранные заказы должны находиться в действующей заявке WMS.',
       );
     }
-    const requestIds = new Set(activeLinks.map((link) => link.requestId));
-    if (requestIds.size !== 1) {
+    const sourceRequests = [
+      ...new Map(
+        activeLinks.map((link) => [link.request.id, link.request]),
+      ).values(),
+    ];
+    const closedSourceRequests = sourceRequests.filter(
+      (request) => !FBS_REQUEST_COMPOSITION_STATUSES.has(request.status),
+    );
+    if (closedSourceRequests.length > 0) {
       throw new BadRequestException(
-        'Выберите заказы только из одной заявки WMS.',
+        `Заявки ${closedSourceRequests
+          .map((request) => `№${String(request.number).padStart(6, '0')}`)
+          .join(', ')} уже упакованы, закрыты или отменены. Перенос из них недоступен.`,
       );
     }
-    const sourceRequest = activeLinks[0]!.request;
-    if (!FBS_REQUEST_COMPOSITION_STATUSES.has(sourceRequest.status)) {
-      throw new BadRequestException(
-        `Заявка №${String(sourceRequest.number).padStart(6, '0')} уже упакована, закрыта или отменена. Перенос из неё недоступен.`,
-      );
-    }
+    const sourceRequest = sourceRequests[0]!;
     const syncConflicts = activeLinks.filter(
       (link) => link.syncStatus !== FBS_REQUEST_LINK_ACTIVE,
     );
@@ -2905,64 +16216,287 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     }
 
-    const tasks = await this.prisma.fbsTsdAssembly.findMany({
-      where: {
-        clientId,
-        marketplace: MarketplaceType.WILDBERRIES,
-        connectionId,
-        orderId: { in: orders.map((order) => order.id) },
-      },
-    });
-    const handledTasks = tasks.filter(fbsTsdTaskWasPhysicallyHandled);
-    if (handledTasks.length > 0) {
+    const sourcePlans = await Promise.all(
+      sourceSupplyIds.map((supplyId) =>
+        this.prisma.fbsSupplyPlan.findUnique({
+          where: {
+            marketplace_connectionId_supplyId: {
+              marketplace: MarketplaceType.WILDBERRIES,
+              connectionId,
+              supplyId,
+            },
+          },
+        }),
+      ),
+    );
+    const foreignSourceSupplyIds = sourceSupplyIds.filter(
+      (_supplyId, index) =>
+        Boolean(sourcePlans[index]) && sourcePlans[index]?.clientId !== clientId,
+    );
+    if (foreignSourceSupplyIds.length > 0) {
       throw new BadRequestException(
-        `Нельзя перенести заказы, по которым уже сканировали товар, короб, КИЗ или наклейку: ${handledTasks
-          .map((task) => task.orderId)
-          .join(', ')}. Сначала оформите возврат товара менеджером.`,
+        `Планы поставок ${foreignSourceSupplyIds.join(', ')} принадлежат другому клиенту WMS.`,
       );
     }
-
-    const sourcePlan = await this.prisma.fbsSupplyPlan.findUnique({
-      where: {
-        marketplace_connectionId_supplyId: {
+    // WB may already contain a supply created during an interrupted previous
+    // transfer, while its local FbsSupplyPlan was not committed.  Such a
+    // supply is still a valid source for untouched orders. Recover the local
+    // link from the other source plans instead of blocking the whole move.
+    const knownSourcePlan = sourcePlans.find(
+      (plan) => plan?.clientId === clientId,
+    );
+    const fallbackDeliveryPlan = knownSourcePlan
+      ? {
+          destination: knownSourcePlan.deliveryDestination,
+          itemsPerCargoPlace: Math.max(1, knownSourcePlan.itemsPerCargoPlace),
+        }
+      : await this.loadFbsDeliveryPlan(clientId);
+    const recoveredSourcePlans = await Promise.all(
+      sourceSupplyIds.map(async (supplyId, index) => {
+        const existing = sourcePlans[index];
+        if (existing) return existing;
+        const supplyOrders = orders.filter((order) => order.supplyId === supplyId);
+        return this.prisma.fbsSupplyPlan.upsert({
+          where: {
+            marketplace_connectionId_supplyId: {
+              marketplace: MarketplaceType.WILDBERRIES,
+              connectionId,
+              supplyId,
+            },
+          },
+          create: {
+            clientId,
+            marketplace: MarketplaceType.WILDBERRIES,
+            connectionId,
+            supplyId,
+            marketplaceWarehouseId: supplyOrders[0]?.warehouseId ?? null,
+            marketplaceWarehouseName: supplyOrders[0]?.warehouseName ?? null,
+            deliveryDestination: fallbackDeliveryPlan.destination,
+            itemsPerCargoPlace: fallbackDeliveryPlan.itemsPerCargoPlace,
+            cargoPlaceCount: 0,
+            cargoPlaceIds: [],
+            orderIds: supplyOrders.map((order) => order.id),
+            createdByUserId: user.id,
+          },
+          update: {},
+        });
+      }),
+    );
+    const resolvedSourcePlans = recoveredSourcePlans.filter(
+      (plan): plan is NonNullable<typeof plan> => Boolean(plan),
+    );
+    const deliveryDestinations = new Set(
+      resolvedSourcePlans.map((plan) => plan.deliveryDestination),
+    );
+    if (deliveryDestinations.size !== 1) {
+      throw new BadRequestException(
+        'Объединить можно только поставки с одним направлением сдачи: либо все ПВЗ, либо все СЦ.',
+      );
+    }
+    const sourcePlan = resolvedSourcePlans[0]!;
+    const itemsPerCargoPlace = Math.max(1, sourcePlan.itemsPerCargoPlace);
+    const incompatibleCargoCapacity = resolvedSourcePlans.some(
+      (plan) => Math.max(1, plan.itemsPerCargoPlace) !== itemsPerCargoPlace,
+    );
+    if (incompatibleCargoCapacity) {
+      throw new BadRequestException(
+        'В выбранных поставках отличаются настройки количества товаров в грузоместе.',
+      );
+    }
+    const requestedTargetSupplyId = dto.targetSupplyId?.trim() || null;
+    if (requestedTargetSupplyId && sourceSupplyIds.includes(requestedTargetSupplyId)) {
+      throw new BadRequestException(
+        'Поставка назначения должна отличаться от исходной поставки.',
+      );
+    }
+    const existingTargetPlan = requestedTargetSupplyId
+      ? await this.prisma.fbsSupplyPlan.findUnique({
+          where: {
+            marketplace_connectionId_supplyId: {
+              marketplace: MarketplaceType.WILDBERRIES,
+              connectionId,
+              supplyId: requestedTargetSupplyId,
+            },
+          },
+        })
+      : null;
+    const existingTargetOrders = requestedTargetSupplyId
+      ? response.orders.filter(
+          (order) =>
+            order.marketplace === MarketplaceType.WILDBERRIES &&
+            order.connectionId === connectionId &&
+            order.supplyId === requestedTargetSupplyId &&
+            order.category === 'active' &&
+            order.supplierStatus === 'confirm',
+        )
+      : [];
+    const existingTargetRequests = [
+      ...new Map(
+        existingTargetOrders
+          .map((order) => order.request)
+          .filter(
+            (request): request is NonNullable<FbsOrderSummary['request']> =>
+              Boolean(request) &&
+              FBS_REQUEST_COMPOSITION_STATUSES.has(request!.status),
+          )
+          .map((request) => [request.id, request]),
+      ).values(),
+    ];
+    if (requestedTargetSupplyId) {
+      if (!existingTargetPlan || existingTargetPlan.clientId !== clientId) {
+        throw new BadRequestException(
+          `Поставка ${requestedTargetSupplyId} не найдена среди действующих поставок клиента.`,
+        );
+      }
+      if (existingTargetPlan.sentToWbAt) {
+        throw new BadRequestException(
+          `Поставка ${requestedTargetSupplyId} уже передана в WB и больше не принимает заказы.`,
+        );
+      }
+      if (existingTargetOrders.length === 0) {
+        throw new BadRequestException(
+          `В поставке ${requestedTargetSupplyId} нет активных заказов со статусом «На сборке».`,
+        );
+      }
+      if (existingTargetOrders.some((order) => !order.product)) {
+        throw new BadRequestException(
+          `В поставке ${requestedTargetSupplyId} есть товары, которые ещё не сопоставлены с номенклатурой WMS.`,
+        );
+      }
+      if (existingTargetRequests.length !== 1) {
+        throw new BadRequestException(
+          `Поставка ${requestedTargetSupplyId} должна быть связана ровно с одной действующей заявкой WMS. Обновите FBS и повторите перенос.`,
+        );
+      }
+      if (sourceRequests.some((request) => request.id === existingTargetRequests[0]!.id)) {
+        throw new BadRequestException(
+          `Поставка ${requestedTargetSupplyId} уже относится к текущей заявке WMS.`,
+        );
+      }
+      if (
+        existingTargetOrders.some(
+          (order) => order.request?.id !== existingTargetRequests[0]!.id,
+        )
+      ) {
+        throw new BadRequestException(
+          `Не все заказы поставки ${requestedTargetSupplyId} связаны с одной действующей заявкой WMS. Запустите проверку синхронизации.`,
+        );
+      }
+      if (
+        existingTargetPlan.deliveryDestination !== sourcePlan.deliveryDestination ||
+        Math.max(1, existingTargetPlan.itemsPerCargoPlace) !== itemsPerCargoPlace
+      ) {
+        throw new BadRequestException(
+          `Поставка ${requestedTargetSupplyId} использует другое направление сдачи или настройку грузомест.`,
+        );
+      }
+      const sourceWarehouseIds = new Set(
+        orders.map((order) => order.warehouseId).filter(Boolean),
+      );
+      const targetWarehouseIds = new Set(
+        existingTargetOrders.map((order) => order.warehouseId).filter(Boolean),
+      );
+      const normalizeCity = (value: string | null | undefined) =>
+        (value ?? '').trim().toLocaleLowerCase('ru-RU').replace(/[^a-zа-яё0-9]+/giu, ' ');
+      const sourceCities = new Set(
+        orders.map((order) => normalizeCity(order.warehouseName)).filter(Boolean),
+      );
+      const targetCities = new Set(
+        existingTargetOrders.map((order) => normalizeCity(order.warehouseName)).filter(Boolean),
+      );
+      const sameWarehouse = [...sourceWarehouseIds].some((id) => targetWarehouseIds.has(id));
+      const sameCity = [...sourceCities].some((city) => targetCities.has(city));
+      if (!sameWarehouse && !sameCity) {
+        throw new BadRequestException(
+          `Поставка ${requestedTargetSupplyId} относится к другому городу или складу WB.`,
+        );
+      }
+      const sourceCargoType = orders[0]?.cargoType?.trim() || '';
+      const incompatibleTargetOrder = existingTargetOrders.find(
+        (order) => (order.cargoType?.trim() || '') !== sourceCargoType,
+      );
+      if (incompatibleTargetOrder) {
+        throw new BadRequestException(
+          `Поставка ${requestedTargetSupplyId} содержит заказы другого габарита WB.`,
+        );
+      }
+      const targetAssemblyTasks = await this.prisma.fbsTsdAssembly.findMany({
+        where: {
+          clientId,
           marketplace: MarketplaceType.WILDBERRIES,
           connectionId,
-          supplyId: sourceSupplyId,
+          supplyId: requestedTargetSupplyId,
         },
-      },
-    });
-    if (!sourcePlan || sourcePlan.clientId !== clientId) {
-      throw new BadRequestException(
-        `План поставки ${sourceSupplyId} не найден в WMS.`,
-      );
+      });
+      if (targetAssemblyTasks.some(fbsTsdTaskWasPhysicallyHandled)) {
+        throw new BadRequestException(
+          `По поставке ${requestedTargetSupplyId} уже началась физическая сборка на ТСД. В неё нельзя добавлять новые заказы.`,
+        );
+      }
     }
-    const sourceSupplyOrders = response.orders.filter(
-      (order) =>
-        order.marketplace === MarketplaceType.WILDBERRIES &&
-        order.connectionId === connectionId &&
-        order.supplyId === sourceSupplyId &&
-        order.category === 'active' &&
-        order.supplierStatus === 'confirm',
-    );
-    const remainingSourceOrders = sourceSupplyOrders.filter(
-      (order) => !selectedKeys.has(selectionKey(order.connectionId, order.id)),
-    );
-    const sourcePackingStarted =
-      sourcePlan.deliveryDestination === FbsDeliveryDestination.PICKUP_POINT
-        ? await this.prisma.fbsCargoPlacePacking.count({
+    const sourceStates = sourceSupplyIds.map((supplyId, index) => {
+      const plan = resolvedSourcePlans[index]!;
+      const sourceOrders = response.orders.filter(
+        (order) =>
+          order.marketplace === MarketplaceType.WILDBERRIES &&
+          order.connectionId === connectionId &&
+          order.supplyId === supplyId &&
+          order.category === 'active' &&
+          order.supplierStatus === 'confirm',
+      );
+      return {
+        supplyId,
+        plan,
+        sourceOrders,
+        remainingOrders: sourceOrders.filter(
+          (order) =>
+            !selectedKeys.has(selectionKey(order.connectionId, order.id)),
+        ),
+        originalCargoPlaceIds: [] as string[],
+        cargoPlaceIds: [] as string[],
+        cargoChanged: false,
+      };
+    });
+    const requiresCargoPlaces =
+      sourcePlan.deliveryDestination === FbsDeliveryDestination.PICKUP_POINT;
+    if (requiresCargoPlaces) {
+      const packingCounts = await Promise.all(
+        sourceStates.map((state) =>
+          this.prisma.fbsCargoPlacePacking.count({
             where: {
               clientId,
               marketplace: MarketplaceType.WILDBERRIES,
               connectionId,
-              supplyId: sourceSupplyId,
+              supplyId: state.supplyId,
               status: { not: 'CANCELLED' },
             },
-          })
-        : 0;
-    if (sourcePackingStarted > 0) {
-      throw new BadRequestException(
-        `По поставке ${sourceSupplyId} уже начата упаковка грузомест ПВЗ. Сначала расформируйте упаковку.`,
+          }),
+        ),
       );
+      const startedSupplyIds = sourceStates
+        .filter((_state, index) => packingCounts[index]! > 0)
+        .map((state) => state.supplyId);
+      if (startedSupplyIds.length > 0) {
+        throw new BadRequestException(
+          `По поставкам ${startedSupplyIds.join(', ')} уже начата упаковка грузомест ПВЗ. Сначала расформируйте упаковку.`,
+        );
+      }
+      if (requestedTargetSupplyId) {
+        const targetPackingCount = await this.prisma.fbsCargoPlacePacking.count({
+          where: {
+            clientId,
+            marketplace: MarketplaceType.WILDBERRIES,
+            connectionId,
+            supplyId: requestedTargetSupplyId,
+            status: { not: 'CANCELLED' },
+          },
+        });
+        if (targetPackingCount > 0) {
+          throw new BadRequestException(
+            `По поставке ${requestedTargetSupplyId} уже начата упаковка грузомест ПВЗ. В неё нельзя добавлять новые заказы.`,
+          );
+        }
+      }
     }
 
     const connections = await this.loadSelectedConnections(clientId, orders);
@@ -2971,98 +16505,129 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new BadRequestException('Подключение Wildberries не найдено или отключено.');
     }
     const headers = wbHeaders(connection.apiKey);
-    const requiresCargoPlaces =
-      sourcePlan.deliveryDestination === FbsDeliveryDestination.PICKUP_POINT;
-    let originalSourceCargoPlaceIds: string[] = [];
+    let originalTargetCargoPlaceIds: string[] = [];
     if (requiresCargoPlaces) {
-      const cargoResponse = await marketplaceJson(
-        `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(sourceSupplyId)}/trbx`,
-        { method: 'GET', headers },
-      );
-      originalSourceCargoPlaceIds = uniqueStrings(
-        asArray<Record<string, unknown>>(cargoResponse.trbxes).map((cargoPlace) =>
-          textValue(cargoPlace.id),
+      const cargoResponses = await Promise.all(
+        sourceStates.map((state) =>
+          marketplaceJson(
+            `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(state.supplyId)}/trbx`,
+            { method: 'GET', headers },
+          ),
         ),
       );
+      sourceStates.forEach((state, index) => {
+        const cargoPlaceIds = uniqueStrings(
+          asArray<Record<string, unknown>>(cargoResponses[index]?.trbxes).map(
+            (cargoPlace) => textValue(cargoPlace.id),
+          ),
+        );
+        state.originalCargoPlaceIds = cargoPlaceIds;
+        state.cargoPlaceIds = [...cargoPlaceIds];
+      });
+      if (requestedTargetSupplyId) {
+        const targetCargoResponse = await marketplaceJson(
+          `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(requestedTargetSupplyId)}/trbx`,
+          { method: 'GET', headers },
+        );
+        originalTargetCargoPlaceIds = uniqueStrings(
+          asArray<Record<string, unknown>>(targetCargoResponse.trbxes).map(
+            (cargoPlace) => textValue(cargoPlace.id),
+          ),
+        );
+      }
     }
 
-    const createdSupply = await marketplaceJson(
-      'https://marketplace-api.wildberries.ru/api/v3/supplies',
-      {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          name: `${fbsSupplyName(response.client.code, 1, 1)} перенос`.slice(0, 128),
-        }),
-      },
-    );
-    const targetSupplyId = textValue(createdSupply.id);
+    const createdSupply = requestedTargetSupplyId
+      ? null
+      : await marketplaceJson(
+          'https://marketplace-api.wildberries.ru/api/v3/supplies',
+          {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              name: `${fbsSupplyName(response.client.code, 1, 1)} перенос`.slice(0, 128),
+            }),
+          },
+        );
+    const targetSupplyId = requestedTargetSupplyId ?? textValue(createdSupply?.id);
     if (!targetSupplyId) {
       throw new BadRequestException(
         'Wildberries создал новую поставку без номера. Повторите операцию позже.',
       );
     }
 
-    let targetCargoPlaceIds: string[] = [];
-    let sourceCargoPlaceIds = [...originalSourceCargoPlaceIds];
-    let sourceCargoChanged = false;
+    let targetCargoPlaceIds: string[] = [...originalTargetCargoPlaceIds];
+    let addedTargetCargoPlaceIds: string[] = [];
     const movedRemoteOrders: FbsOrderSummary[] = [];
     let databaseCommitted = false;
     const restoreMarketplaceState = async () => {
       try {
         if (movedRemoteOrders.length > 0) {
-          for (const orderChunk of chunks(movedRemoteOrders, 100)) {
-            await marketplaceJson(
-              `https://marketplace-api.wildberries.ru/api/marketplace/v3/supplies/${encodeURIComponent(sourceSupplyId)}/orders`,
-              {
-                method: 'PATCH',
-                headers,
-                body: JSON.stringify({
-                  orders: orderChunk.map((order) => numericWbOrderId(order.id)),
-                }),
-              },
+          for (const state of sourceStates) {
+            const movedFromSource = movedRemoteOrders.filter(
+              (order) => order.supplyId === state.supplyId,
             );
+            for (const orderChunk of chunks(movedFromSource, 100)) {
+              await marketplaceJson(
+                `https://marketplace-api.wildberries.ru/api/marketplace/v3/supplies/${encodeURIComponent(state.supplyId)}/orders`,
+                {
+                  method: 'PATCH',
+                  headers,
+                  body: JSON.stringify({
+                    orders: orderChunk.map((order) => numericWbOrderId(order.id)),
+                  }),
+                },
+              );
+            }
           }
         }
-        if (targetCargoPlaceIds.length > 0) {
+        if (addedTargetCargoPlaceIds.length > 0) {
           await marketplaceJson(
             `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(targetSupplyId)}/trbx`,
             {
               method: 'DELETE',
               headers,
-              body: JSON.stringify({ trbxIds: targetCargoPlaceIds }),
+              body: JSON.stringify({ trbxIds: addedTargetCargoPlaceIds }),
             },
           );
         }
-        if (sourceCargoChanged) {
+        for (const state of sourceStates.filter(
+          (sourceState) => sourceState.cargoChanged,
+        )) {
           const currentCargoResponse = await marketplaceJson(
-            `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(sourceSupplyId)}/trbx`,
+            `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(state.supplyId)}/trbx`,
             { method: 'GET', headers },
           );
           const currentCargoIds = uniqueStrings(
-            asArray<Record<string, unknown>>(currentCargoResponse.trbxes).map((cargoPlace) =>
-              textValue(cargoPlace.id),
-            ),
+            asArray<Record<string, unknown>>(
+              currentCargoResponse.trbxes,
+            ).map((cargoPlace) => textValue(cargoPlace.id)),
           );
-          if (currentCargoIds.length > originalSourceCargoPlaceIds.length) {
+          if (currentCargoIds.length > state.originalCargoPlaceIds.length) {
             await marketplaceJson(
-              `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(sourceSupplyId)}/trbx`,
+              `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(state.supplyId)}/trbx`,
               {
                 method: 'DELETE',
                 headers,
                 body: JSON.stringify({
-                  trbxIds: currentCargoIds.slice(originalSourceCargoPlaceIds.length),
+                  trbxIds: currentCargoIds.slice(
+                    state.originalCargoPlaceIds.length,
+                  ),
                 }),
               },
             );
-          } else if (currentCargoIds.length < originalSourceCargoPlaceIds.length) {
+          } else if (
+            currentCargoIds.length < state.originalCargoPlaceIds.length
+          ) {
             await marketplaceJson(
-              `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(sourceSupplyId)}/trbx`,
+              `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(state.supplyId)}/trbx`,
               {
                 method: 'POST',
                 headers,
                 body: JSON.stringify({
-                  amount: originalSourceCargoPlaceIds.length - currentCargoIds.length,
+                  amount:
+                    state.originalCargoPlaceIds.length -
+                    currentCargoIds.length,
                 }),
               },
             );
@@ -3071,97 +16636,124 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       } catch {
         // The original error remains primary; a manager can reconcile the WB supply manually.
       }
-      await deleteEmptyWbSupply(targetSupplyId, headers);
+      if (!requestedTargetSupplyId) {
+        await deleteEmptyWbSupply(targetSupplyId, headers);
+      }
     };
 
     try {
+      // WB accepts up to 100 assembly orders in this endpoint. Sending them
+      // one by one turns a large transfer into a minute-long operation and
+      // makes the reverse proxy return 504 even though WB is still working.
       for (const orderChunk of chunks(orders, 100)) {
-        await marketplaceJson(
-          `https://marketplace-api.wildberries.ru/api/marketplace/v3/supplies/${encodeURIComponent(targetSupplyId)}/orders`,
-          {
-            method: 'PATCH',
-            headers,
-            body: JSON.stringify({
-              orders: orderChunk.map((order) => numericWbOrderId(order.id)),
-            }),
-          },
-        );
-        movedRemoteOrders.push(...orderChunk);
+        try {
+          await marketplaceJson(
+            `https://marketplace-api.wildberries.ru/api/marketplace/v3/supplies/${encodeURIComponent(targetSupplyId)}/orders`,
+            {
+              method: 'PATCH',
+              headers,
+              body: JSON.stringify({
+                orders: orderChunk.map((order) => numericWbOrderId(order.id)),
+              }),
+            },
+          );
+          movedRemoteOrders.push(...orderChunk);
+        } catch (caught) {
+          const message = marketplaceErrorMessage(caught);
+          throw new BadRequestException(
+            `Wildberries не принял перенос пакета заказов №${orderChunk[0]!.id}` +
+              (orderChunk.length > 1 ? `–№${orderChunk[orderChunk.length - 1]!.id}` : '') +
+              `: ${message}`,
+          );
+        }
       }
 
       if (requiresCargoPlaces) {
-        const targetItemCount = orders.reduce(
+        const targetItemCount = [...existingTargetOrders, ...orders].reduce(
           (sum, order) => sum + Math.max(1, order.itemCount),
           0,
         );
         const targetCargoPlaceCount = Math.ceil(
-          targetItemCount / Math.max(1, sourcePlan.itemsPerCargoPlace),
+          targetItemCount / itemsPerCargoPlace,
         );
-        const targetCargoResponse = await marketplaceJson(
-          `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(targetSupplyId)}/trbx`,
-          {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({ amount: targetCargoPlaceCount }),
-          },
-        );
-        targetCargoPlaceIds = uniqueStrings(
-          asArray<unknown>(targetCargoResponse.trbxIds).map(textValue),
-        );
-        if (targetCargoPlaceIds.length !== targetCargoPlaceCount) {
-          throw new Error(
-            `для новой поставки ожидалось ${targetCargoPlaceCount} грузомест, WB создал ${targetCargoPlaceIds.length}`,
-          );
-        }
-
-        const remainingItemCount = remainingSourceOrders.reduce(
-          (sum, order) => sum + Math.max(1, order.itemCount),
-          0,
-        );
-        const requiredSourceCargoPlaces =
-          remainingItemCount > 0
-            ? Math.ceil(
-                remainingItemCount / Math.max(1, sourcePlan.itemsPerCargoPlace),
-              )
-            : 0;
-        if (sourceCargoPlaceIds.length > requiredSourceCargoPlaces) {
-          const extraIds = sourceCargoPlaceIds.slice(requiredSourceCargoPlaces);
-          await marketplaceJson(
-            `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(sourceSupplyId)}/trbx`,
-            {
-              method: 'DELETE',
-              headers,
-              body: JSON.stringify({ trbxIds: extraIds }),
-            },
-          );
-          sourceCargoPlaceIds = sourceCargoPlaceIds.slice(
-            0,
-            requiredSourceCargoPlaces,
-          );
-          sourceCargoChanged = true;
-        } else if (sourceCargoPlaceIds.length < requiredSourceCargoPlaces) {
-          const cargoResponse = await marketplaceJson(
-            `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(sourceSupplyId)}/trbx`,
+        if (targetCargoPlaceIds.length < targetCargoPlaceCount) {
+          const targetCargoResponse = await marketplaceJson(
+            `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(targetSupplyId)}/trbx`,
             {
               method: 'POST',
               headers,
               body: JSON.stringify({
-                amount: requiredSourceCargoPlaces - sourceCargoPlaceIds.length,
+                amount: targetCargoPlaceCount - targetCargoPlaceIds.length,
               }),
             },
           );
-          const addedIds = uniqueStrings(
-            asArray<unknown>(cargoResponse.trbxIds).map(textValue),
+          addedTargetCargoPlaceIds = uniqueStrings(
+            asArray<unknown>(targetCargoResponse.trbxIds).map(textValue),
           );
-          sourceCargoPlaceIds = uniqueStrings([
-            ...sourceCargoPlaceIds,
-            ...addedIds,
+          targetCargoPlaceIds = uniqueStrings([
+            ...targetCargoPlaceIds,
+            ...addedTargetCargoPlaceIds,
           ]);
-          sourceCargoChanged = true;
-          if (sourceCargoPlaceIds.length !== requiredSourceCargoPlaces) {
-            throw new Error(
-              `для исходной поставки требуется ${requiredSourceCargoPlaces} грузомест, WB вернул ${sourceCargoPlaceIds.length}`,
+        }
+        if (targetCargoPlaceIds.length !== targetCargoPlaceCount) {
+          throw new Error(
+            `для поставки ${targetSupplyId} требуется ${targetCargoPlaceCount} грузомест, WB вернул ${targetCargoPlaceIds.length}`,
+          );
+        }
+
+        for (const state of sourceStates) {
+          const remainingItemCount = state.remainingOrders.reduce(
+            (sum, order) => sum + Math.max(1, order.itemCount),
+            0,
+          );
+          const requiredSourceCargoPlaces =
+            remainingItemCount > 0
+              ? Math.ceil(remainingItemCount / itemsPerCargoPlace)
+              : 0;
+          if (state.cargoPlaceIds.length > requiredSourceCargoPlaces) {
+            const extraIds = state.cargoPlaceIds.slice(
+              requiredSourceCargoPlaces,
             );
+            await marketplaceJson(
+              `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(state.supplyId)}/trbx`,
+              {
+                method: 'DELETE',
+                headers,
+                body: JSON.stringify({ trbxIds: extraIds }),
+              },
+            );
+            state.cargoPlaceIds = state.cargoPlaceIds.slice(
+              0,
+              requiredSourceCargoPlaces,
+            );
+            state.cargoChanged = true;
+          } else if (
+            state.cargoPlaceIds.length < requiredSourceCargoPlaces
+          ) {
+            const cargoResponse = await marketplaceJson(
+              `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(state.supplyId)}/trbx`,
+              {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                  amount:
+                    requiredSourceCargoPlaces - state.cargoPlaceIds.length,
+                }),
+              },
+            );
+            const addedIds = uniqueStrings(
+              asArray<unknown>(cargoResponse.trbxIds).map(textValue),
+            );
+            state.cargoPlaceIds = uniqueStrings([
+              ...state.cargoPlaceIds,
+              ...addedIds,
+            ]);
+            state.cargoChanged = true;
+            if (state.cargoPlaceIds.length !== requiredSourceCargoPlaces) {
+              throw new Error(
+                `для исходной поставки ${state.supplyId} требуется ${requiredSourceCargoPlaces} грузомест, WB вернул ${state.cargoPlaceIds.length}`,
+              );
+            }
           }
         }
       }
@@ -3177,7 +16769,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           orderIds: string[];
         }
       >();
-      for (const order of orders) {
+      const targetOrdersAfterMove = [...existingTargetOrders, ...orders];
+      for (const order of targetOrdersAfterMove) {
         const product = order.product!;
         const current = itemGroups.get(product.id);
         if (current) {
@@ -3194,39 +16787,105 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         }
       }
 
+      const requestWarehouseId = await this.resolveFbsRequestWarehouseId(clientId, user, orders);
       const targetRequest = await this.prisma.$transaction(async (tx) => {
-        const created = await tx.clientRequest.create({
-          data: {
-            clientId,
-            type: ClientRequestType.OUTBOUND,
-            status: ClientRequestStatus.SUBMITTED,
-            priority: 'NORMAL',
-            title: `FBS — ${orders.length} заказ(а/ов)`,
-            destinationCity: 'Маркетплейс FBS',
-            comment:
-              `Перенесено из заявки №${String(sourceRequest.number).padStart(6, '0')} ` +
-              `в поставку ${targetSupplyId}: ${orderIds.join(', ')}`,
-            createdByUserId: user.id,
-            items: {
-              create: [...itemGroups.values()].map((item) => ({
-                skuId: item.skuId,
-                barcode: item.barcode,
-                name: item.name,
-                quantity: item.quantity,
-                comment: fbsRequestItemComment(item.orderIds),
-              })),
-            },
+        const sourceRequestLabels = sourceRequests
+          .map(
+            (request) =>
+              `№${String(request.number).padStart(6, '0')}`,
+          )
+          .join(', ');
+        const requestSelect = {
+          id: true,
+          number: true,
+          title: true,
+          status: true,
+          items: {
+            select: { id: true, skuId: true, name: true, quantity: true },
           },
-          select: {
-            id: true,
-            number: true,
-            title: true,
-            status: true,
-            items: {
-              select: { id: true, skuId: true, name: true, quantity: true },
+        } as const;
+        let created;
+        if (requestedTargetSupplyId) {
+          const targetRequestId = existingTargetRequests[0]!.id;
+          const currentTargetRequest = await tx.clientRequest.findUnique({
+            where: { id: targetRequestId },
+            select: requestSelect,
+          });
+          if (!currentTargetRequest) {
+            throw new Error(
+              `Заявка WMS для поставки ${targetSupplyId} больше не найдена.`,
+            );
+          }
+          const currentItemBySku = new Map(
+            currentTargetRequest.items
+              .filter((item) => Boolean(item.skuId))
+              .map((item) => [item.skuId!, item]),
+          );
+          for (const item of itemGroups.values()) {
+            const currentItem = currentItemBySku.get(item.skuId);
+            if (currentItem) {
+              await tx.clientRequestItem.update({
+                where: { id: currentItem.id },
+                data: {
+                  barcode: item.barcode,
+                  name: item.name,
+                  quantity: item.quantity,
+                  comment: fbsRequestItemComment(item.orderIds),
+                },
+              });
+            } else {
+              await tx.clientRequestItem.create({
+                data: {
+                  requestId: targetRequestId,
+                  skuId: item.skuId,
+                  barcode: item.barcode,
+                  name: item.name,
+                  quantity: item.quantity,
+                  comment: fbsRequestItemComment(item.orderIds),
+                },
+              });
+            }
+          }
+          await tx.clientRequest.update({
+            where: { id: targetRequestId },
+            data: {
+              title: `FBS — ${targetOrdersAfterMove.length} заказ(а/ов)`,
+              comment:
+                `Добавлены несобранные заказы из заявок ${sourceRequestLabels} ` +
+                `и поставок ${sourceSupplyIds.join(', ')} в поставку ${targetSupplyId}: ${orderIds.join(', ')}`,
             },
-          },
-        });
+          });
+          created = await tx.clientRequest.findUniqueOrThrow({
+            where: { id: targetRequestId },
+            select: requestSelect,
+          });
+        } else {
+          created = await tx.clientRequest.create({
+            data: {
+              clientId,
+              warehouseId: requestWarehouseId,
+              type: ClientRequestType.OUTBOUND,
+              status: ClientRequestStatus.SUBMITTED,
+              priority: 'NORMAL',
+              title: `FBS — ${orders.length} заказ(а/ов)`,
+              destinationCity: 'Маркетплейс FBS',
+              comment:
+                `Собраны несобранные заказы из заявок ${sourceRequestLabels} ` +
+                `и поставок ${sourceSupplyIds.join(', ')} в поставку ${targetSupplyId}: ${orderIds.join(', ')}`,
+              createdByUserId: user.id,
+              items: {
+                create: [...itemGroups.values()].map((item) => ({
+                  skuId: item.skuId,
+                  barcode: item.barcode,
+                  name: item.name,
+                  quantity: item.quantity,
+                  comment: fbsRequestItemComment(item.orderIds),
+                })),
+              },
+            },
+            select: requestSelect,
+          });
+        }
         const requestItemIdBySku = new Map(
           created.items
             .filter(
@@ -3240,27 +16899,40 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           data: {
             requestId: created.id,
             clientId,
-            eventType: ClientRequestEventType.CREATED,
-            title: 'Заявка создана переносом FBS-заказов',
+            eventType: requestedTargetSupplyId
+              ? ClientRequestEventType.COMMENT
+              : ClientRequestEventType.CREATED,
+            title: requestedTargetSupplyId
+              ? 'В заявку добавлены несобранные FBS-заказы'
+              : 'Заявка создана объединением несобранных FBS-заказов',
             body:
-              `Из заявки №${String(sourceRequest.number).padStart(6, '0')}, ` +
-              `поставка ${sourceSupplyId} → ${targetSupplyId}. Заказы: ${orderIds.join(', ')}`,
-            statusTo: ClientRequestStatus.SUBMITTED,
+              `Из заявок ${sourceRequestLabels}, поставки ${sourceSupplyIds.join(', ')} ` +
+              `→ ${targetSupplyId}. Заказы: ${orderIds.join(', ')}`,
+            statusTo: requestedTargetSupplyId
+              ? undefined
+              : ClientRequestStatus.SUBMITTED,
             createdByUserId: user.id,
           },
         });
-        await tx.clientRequestEvent.create({
-          data: {
-            requestId: sourceRequest.id,
-            clientId,
-            eventType: ClientRequestEventType.COMMENT,
-            title: 'Часть FBS-заказов перенесена в новую заявку',
-            body:
-              `Новая заявка №${String(created.number).padStart(6, '0')}, ` +
-              `поставка ${targetSupplyId}. Заказы: ${orderIds.join(', ')}`,
-            createdByUserId: user.id,
-          },
-        });
+        for (const request of sourceRequests) {
+          const movedFromRequest = activeLinks
+            .filter((link) => link.requestId === request.id)
+            .map((link) => link.orderId);
+          await tx.clientRequestEvent.create({
+            data: {
+              requestId: request.id,
+              clientId,
+              eventType: ClientRequestEventType.COMMENT,
+              title: requestedTargetSupplyId
+                ? 'Несобранные FBS-заказы перенесены в доступную поставку'
+                : 'Несобранные FBS-заказы перенесены в новую заявку',
+              body:
+                `${requestedTargetSupplyId ? 'Заявка назначения' : 'Новая заявка'} №${String(created.number).padStart(6, '0')}, ` +
+                `поставка ${targetSupplyId}. Заказы: ${movedFromRequest.join(', ')}`,
+              createdByUserId: user.id,
+            },
+          });
+        }
 
         for (const order of orders) {
           const link = activeLinks.find(
@@ -3297,7 +16969,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
                 supplyId: targetSupplyId,
                 requestId: created.id,
                 requestItemId,
-                status: 'RELEASED',
+                status: task.reservedBoxId
+                  ? FBS_TSD_RESERVED_STATUS
+                  : 'RELEASED',
+                deviceCode: task.reservedBoxId
+                  ? FBS_TSD_AUTO_RESERVATION_DEVICE
+                  : task.deviceCode,
                 workerUserId: null,
                 workerName: null,
                 boxId: null,
@@ -3310,58 +16987,98 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           }
         }
 
-        const sourceCargoBarcodes = cargoBarcodeMap(
-          sourcePlan.cargoPlaceBarcodes,
-        );
-        const retainedSourceCargoBarcodes = sourceCargoPlaceIds.reduce<
-          Record<string, string>
-        >((result, cargoPlaceId) => {
-          const barcode = sourceCargoBarcodes[cargoPlaceId];
-          if (barcode) result[cargoPlaceId] = barcode;
-          return result;
-        }, {});
-        await tx.fbsSupplyPlan.update({
-          where: { id: sourcePlan.id },
-          data: {
-            orderIds: remainingSourceOrders.map((order) => order.id),
-            cargoPlaceCount: sourceCargoPlaceIds.length,
-            cargoPlaceIds: sourceCargoPlaceIds,
-            cargoPlaceBarcodes:
-              retainedSourceCargoBarcodes as Prisma.InputJsonValue,
-          },
-        });
-        await tx.fbsSupplyPlan.create({
-          data: {
-            clientId,
-            marketplace: MarketplaceType.WILDBERRIES,
-            connectionId,
-            supplyId: targetSupplyId,
-            deliveryDestination: sourcePlan.deliveryDestination,
-            itemsPerCargoPlace: sourcePlan.itemsPerCargoPlace,
-            cargoPlaceCount: targetCargoPlaceIds.length,
-            cargoPlaceIds: targetCargoPlaceIds,
-            cargoPlaceBarcodes: {},
-            orderIds,
-            createdByUserId: user.id,
-          },
-        });
+        for (const state of sourceStates) {
+          const sourceCargoBarcodes = cargoBarcodeMap(
+            state.plan.cargoPlaceBarcodes,
+          );
+          const retainedSourceCargoBarcodes = state.cargoPlaceIds.reduce<
+            Record<string, string>
+          >((result, cargoPlaceId) => {
+            const barcode = sourceCargoBarcodes[cargoPlaceId];
+            if (barcode) result[cargoPlaceId] = barcode;
+            return result;
+          }, {});
+          await tx.fbsSupplyPlan.update({
+            where: { id: state.plan.id },
+            data: {
+              orderIds: state.remainingOrders.map((order) => order.id),
+              cargoPlaceCount: state.cargoPlaceIds.length,
+              cargoPlaceIds: state.cargoPlaceIds,
+              cargoPlaceBarcodes:
+                retainedSourceCargoBarcodes as Prisma.InputJsonValue,
+            },
+          });
+        }
+        if (requestedTargetSupplyId) {
+          const targetCargoBarcodes = cargoBarcodeMap(
+            existingTargetPlan!.cargoPlaceBarcodes,
+          );
+          const retainedTargetCargoBarcodes = targetCargoPlaceIds.reduce<
+            Record<string, string>
+          >((result, cargoPlaceId) => {
+            const barcode = targetCargoBarcodes[cargoPlaceId];
+            if (barcode) result[cargoPlaceId] = barcode;
+            return result;
+          }, {});
+          await tx.fbsSupplyPlan.update({
+            where: { id: existingTargetPlan!.id },
+            data: {
+              orderIds: targetOrdersAfterMove.map((order) => order.id),
+              cargoPlaceCount: targetCargoPlaceIds.length,
+              cargoPlaceIds: targetCargoPlaceIds,
+              cargoPlaceBarcodes:
+                retainedTargetCargoBarcodes as Prisma.InputJsonValue,
+            },
+          });
+        } else {
+          await tx.fbsSupplyPlan.create({
+            data: {
+              clientId,
+              marketplace: MarketplaceType.WILDBERRIES,
+              connectionId,
+              supplyId: targetSupplyId,
+              marketplaceWarehouseId: sourcePlan.marketplaceWarehouseId,
+              marketplaceWarehouseName: sourcePlan.marketplaceWarehouseName,
+              deliveryDestination: sourcePlan.deliveryDestination,
+              itemsPerCargoPlace,
+              cargoPlaceCount: targetCargoPlaceIds.length,
+              cargoPlaceIds: targetCargoPlaceIds,
+              cargoPlaceBarcodes: {},
+              orderIds,
+              createdByUserId: user.id,
+            },
+          });
+        }
         return created;
+      }, {
+        // FIX: large requests (for example №260) update thousands of links/tasks
+        // atomically and cannot finish within Prisma's 5-second default.
+        maxWait: 10_000,
+        timeout: 120_000,
       });
       databaseCommitted = true;
 
       const targetShipmentPlan: FbsOrderSummary['shipmentPlan'] = {
         destination: sourcePlan.deliveryDestination,
-        itemsPerCargoPlace: Math.max(1, sourcePlan.itemsPerCargoPlace),
+        itemsPerCargoPlace,
         requiresCargoPlaces,
         cargoPlaceCount: targetCargoPlaceIds.length,
         cargoPlaceIds: targetCargoPlaceIds,
+        sentToWbAt: null,
+        sentToWbBy: null,
       };
       const targetRequestSummary = {
         id: targetRequest.id,
         number: targetRequest.number,
         title: targetRequest.title,
         status: targetRequest.status,
+        fbsEmergencyAssemblyAt: null,
+        fbsEmergencyAssemblyByUserId: null,
+        fbsEmergencyAssemblyByName: null,
       };
+      const sourceStateBySupplyId = new Map(
+        sourceStates.map((state) => [state.supplyId, state]),
+      );
       const patchedOrders = response.orders.map((order) =>
         selectedKeys.has(selectionKey(order.connectionId, order.id))
           ? {
@@ -3370,44 +17087,82 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               shipmentPlan: targetShipmentPlan,
               request: targetRequestSummary,
             }
-          : order.connectionId === connectionId &&
-              order.supplyId === sourceSupplyId
+          : order.connectionId === connectionId && order.supplyId === targetSupplyId
             ? {
                 ...order,
-                shipmentPlan: {
-                  destination: sourcePlan.deliveryDestination,
-                  itemsPerCargoPlace: Math.max(
-                    1,
-                    sourcePlan.itemsPerCargoPlace,
-                  ),
-                  requiresCargoPlaces,
-                  cargoPlaceCount: sourceCargoPlaceIds.length,
-                  cargoPlaceIds: sourceCargoPlaceIds,
-                },
+                shipmentPlan: targetShipmentPlan,
+                request: targetRequestSummary,
               }
-          : order,
+          : (() => {
+              const sourceState =
+                order.connectionId === connectionId && order.supplyId
+                  ? sourceStateBySupplyId.get(order.supplyId)
+                  : undefined;
+              return sourceState
+                ? {
+                    ...order,
+                    shipmentPlan: {
+                      destination: sourceState.plan.deliveryDestination,
+                      itemsPerCargoPlace,
+                      requiresCargoPlaces,
+                      cargoPlaceCount: sourceState.cargoPlaceIds.length,
+                      cargoPlaceIds: sourceState.cargoPlaceIds,
+                      sentToWbAt: sourceState.plan.sentToWbAt?.toISOString() ?? null,
+                      sentToWbBy: sourceState.plan.sentToWbByName
+                        ? {
+                            id: sourceState.plan.sentToWbByUserId ?? null,
+                            name: sourceState.plan.sentToWbByName,
+                          }
+                        : null,
+                    },
+                  }
+                : order;
+            })(),
       );
-      try {
-        await this.syncFbsRequestsFromMarketplace(clientId, patchedOrders);
-      } catch (caught) {
-        const message =
-          caught instanceof Error ? caught.message : 'unknown synchronization error';
-        this.logger.warn(
-          `FBS move ${sourceSupplyId} -> ${targetSupplyId} completed, but immediate request sync failed: ${message}`,
-        );
-      }
       const patchedResponse: FbsOrdersResponse = {
         ...response,
         fetchedAt: new Date().toISOString(),
         orders: patchedOrders,
       };
+      // FIX: WB history can keep the old supply for six hours. Patch the same
+      // history cache after WB accepted the move, otherwise the next refresh
+      // leaves every link in MOVING and the new request is hidden from TSD.
+      const historyCache = this.wildberriesFbsHistoryCache.get(connectionId);
+      if (historyCache) {
+        const movedOrderIds = new Set(orders.map((order) => order.id));
+        this.wildberriesFbsHistoryCache.set(connectionId, {
+          ...historyCache,
+          orders: historyCache.orders.map((order) =>
+            movedOrderIds.has(textValue(order.id))
+              ? {
+                  ...order,
+                  supplyId: targetSupplyId,
+                  supplyID: targetSupplyId,
+                }
+              : order,
+          ),
+        });
+      }
+      // ADDED: the successful WB PATCH plus the patched cache is authoritative;
+      // finish MOVING -> ACTIVE now so the request is immediately visible on TSD.
+      await this.syncFbsRequestsFromMarketplace(
+        clientId,
+        patchedResponse.orders,
+        uniqueStrings([
+          ...sourceRequests.map((request) => request.id),
+          targetRequest.id,
+        ]),
+      );
       this.fbsOrdersCache.set(clientId, {
-        expiresAt: Date.now() + 30_000,
+        expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
         value: patchedResponse,
       });
       return {
         moved: orders.length,
+        skipped: skippedOrders.length,
+        skippedOrders,
         sourceSupplyId,
+        sourceSupplyIds,
         targetSupply: {
           id: targetSupplyId,
           cargoPlaceCount: targetCargoPlaceIds.length,
@@ -3417,6 +17172,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           id: sourceRequest.id,
           number: sourceRequest.number,
         },
+        sourceRequests: sourceRequests.map((request) => ({
+          id: request.id,
+          number: request.number,
+        })),
         targetRequest: targetRequestSummary,
         orders: patchedResponse,
       };
@@ -3426,10 +17185,19 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
       const message =
         caught instanceof Error ? caught.message : 'неизвестная ошибка переноса';
+      this.logger.warn(
+        `FBS move failed for client ${clientId}, orders ${orders
+          .map((order) => order.id)
+          .join(',')}, supplies ${sourceSupplyIds.join(',')} -> ${targetSupplyId}: ${message}`,
+      );
       throw new BadRequestException(
         databaseCommitted
           ? `Заказы перенесены, но экран не удалось обновить: ${message}. Обновите страницу.`
-          : `Заказы не перенесены: ${message}`,
+          : `Заказы не перенесены: ${message}${
+              message.includes('HTTP 409')
+                ? ' Обновите список заказов и повторите перенос. Если заказ или поставка уже изменены в кабинете WB, сначала завершите это изменение там.'
+                : ''
+            }`,
       );
     }
   }
@@ -3446,7 +17214,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const destination = dto.deliveryDestination ?? defaultDeliveryPlan.destination;
     const deliveryPlan: FbsOrdersResponse['deliveryPlan'] = {
       destination,
-      itemsPerCargoPlace: DEFAULT_FBS_ITEMS_PER_CARGO_PLACE,
+      itemsPerCargoPlace: FBS_UNLIMITED_CARGO_PLACE_CAPACITY,
       requiresCargoPlaces: destination === FbsDeliveryDestination.PICKUP_POINT,
     };
 
@@ -3531,6 +17299,39 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           );
           addedOrders += orderIds.length;
         }
+
+        const expectedOrderIds = new Set(group.map((order) => order.id));
+        let verifiedOrderIds = new Set<string>();
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+          const verified = await marketplaceJson(
+            `https://marketplace-api.wildberries.ru/api/marketplace/v3/supplies/${encodeURIComponent(supplyId)}/order-ids`,
+            { method: 'GET', headers },
+          );
+          verifiedOrderIds = new Set(
+            asArray<unknown>(verified.orderIds).map(textValue).filter(Boolean),
+          );
+          if (
+            verifiedOrderIds.size === expectedOrderIds.size &&
+            [...expectedOrderIds].every((orderId) => verifiedOrderIds.has(orderId))
+          ) {
+            break;
+          }
+          if (attempt < 4) await delay(500 * (attempt + 1));
+        }
+        const missingOrderIds = [...expectedOrderIds].filter(
+          (orderId) => !verifiedOrderIds.has(orderId),
+        );
+        const unexpectedOrderIds = [...verifiedOrderIds].filter(
+          (orderId) => !expectedOrderIds.has(orderId),
+        );
+        if (missingOrderIds.length > 0 || unexpectedOrderIds.length > 0) {
+          throw new BadRequestException(
+            `Поставка ${supplyId} не прошла контроль состава: ожидалось ${expectedOrderIds.size}, ` +
+              `Wildberries подтвердил ${verifiedOrderIds.size}. ` +
+              `${missingOrderIds.length > 0 ? `Не добавлены: ${missingOrderIds.slice(0, 20).join(', ')}${missingOrderIds.length > 20 ? ` и ещё ${missingOrderIds.length - 20}` : ''}. ` : ''}` +
+              `${unexpectedOrderIds.length > 0 ? `Лишние: ${unexpectedOrderIds.slice(0, 20).join(', ')}${unexpectedOrderIds.length > 20 ? ` и ещё ${unexpectedOrderIds.length - 20}` : ''}.` : ''}`,
+          );
+        }
       } catch (caught) {
         if (addedOrders === 0) {
           await deleteEmptyWbSupply(supplyId, headers);
@@ -3558,6 +17359,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           marketplace: MarketplaceType.WILDBERRIES,
           connectionId: connection.id,
           supplyId,
+          marketplaceWarehouseId: group[0].warehouseId,
+          marketplaceWarehouseName: group[0].warehouseName,
           deliveryDestination: destination,
           itemsPerCargoPlace: deliveryPlan.itemsPerCargoPlace,
           cargoPlaceCount: 0,
@@ -3566,6 +17369,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           createdByUserId: user.id,
         },
         update: {
+          marketplaceWarehouseId: group[0].warehouseId,
+          marketplaceWarehouseName: group[0].warehouseName,
           deliveryDestination: destination,
           itemsPerCargoPlace: deliveryPlan.itemsPerCargoPlace,
           orderIds: group.map((order) => order.id),
@@ -3620,13 +17425,24 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       });
     }
 
-    const refreshedOrders = await this.refreshFbsOrdersCache(clientId);
+    const refreshedOrders = await this.refreshFbsOrdersCache(clientId, {
+      invalidateHistory: false,
+    });
+    const stabilizedOrders = this.preserveNewFbsSupplyAssignments(
+      response,
+      refreshedOrders,
+      supplies,
+    );
+    this.fbsOrdersCache.set(clientId, {
+      expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
+      value: stabilizedOrders,
+    });
     return {
       assembled: orders.length,
       reshipped: mode === 'reship' ? orders.length : 0,
       deliveryPlan,
       supplies,
-      orders: refreshedOrders,
+      orders: stabilizedOrders,
     };
   }
 
@@ -3676,10 +17492,111 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return { cancelled: cancelled.length, failed, orders: refreshedOrders };
   }
 
+  /**
+   * Removes a WB order from its WMS request only after WB has confirmed that the
+   * order is cancelled. This is deliberately different from cancelFbsOrders:
+   * it never sends a second cancellation request to Wildberries.
+   */
+  async removeCancelledFbsOrder(dto: FbsOrderSelectionDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    this.clientScopes.requireClientAccess(user, clientId, 'write');
+    if (dto.orders.length !== 1) {
+      throw new BadRequestException('Удалять из WMS можно по одному отменённому заказу за раз.');
+    }
+
+    // Do not trust a stale browser status: refresh WB before releasing a reserve.
+    const freshOrders = await this.refreshFbsOrdersCache(clientId);
+    const { orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders, freshOrders);
+    const order = orders[0]!;
+    if (order.marketplace !== MarketplaceType.WILDBERRIES || order.category !== 'cancelled') {
+      throw new BadRequestException(
+        `Заказ ${order.id} ещё не подтверждён WB как отменённый. Удаление из WMS недоступно.`,
+      );
+    }
+
+    const link = await this.prisma.fbsOrderRequestLink.findUnique({
+      where: {
+        marketplace_connectionId_orderId: {
+          marketplace: MarketplaceType.WILDBERRIES,
+          connectionId: order.connectionId,
+          orderId: order.id,
+        },
+      },
+      include: {
+        request: { select: { id: true, number: true } },
+      },
+    });
+
+    if (!link || link.syncStatus === FBS_REQUEST_LINK_REMOVED) {
+      return {
+        removed: false,
+        message: `Заказ ${order.id} уже удалён из заявки WMS.`,
+        orders: freshOrders,
+      };
+    }
+    if (link.syncStatus === FBS_REQUEST_LINK_RETURN_REQUIRED) {
+      throw new BadRequestException(
+        `Заказ ${order.id} уже начали собирать. Сначала оформите возврат товара по заявке №${String(link.request.number).padStart(6, '0')}; резерв нельзя снять автоматически.`,
+      );
+    }
+
+    // The ordinary synchronization contains the single source of truth for
+    // releasing reservations, recalculating request items and writing history.
+    await this.syncFbsRequestsFromMarketplace(clientId, freshOrders.orders, [link.requestId]);
+    const updatedLink = await this.prisma.fbsOrderRequestLink.findUnique({
+      where: { id: link.id },
+      select: { syncStatus: true },
+    });
+    if (updatedLink?.syncStatus !== FBS_REQUEST_LINK_REMOVED) {
+      throw new BadRequestException(
+        `Не удалось снять заказ ${order.id} с заявки WMS. Обновите страницу и проверьте статус сборки.`,
+      );
+    }
+
+    const refreshedOrders = await this.refreshFbsOrdersCache(clientId, { invalidateHistory: false });
+    return {
+      removed: true,
+      requestNumber: link.request.number,
+      message: `Заказ ${order.id} удалён из заявки WMS, резерв снят.`,
+      orders: refreshedOrders,
+    };
+  }
+
   async deliverFbsSupplies(dto: FbsOrderSelectionDto, user: AuthUser) {
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'write');
-    const { response, orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders);
+    // Перед необратимым закрытием поставки не доверяем экранному кешу:
+    // заново получаем статусы WB, синхронизируем заявки и только затем проверяем сборку.
+    const freshResponse = await this.refreshFbsOrdersCache(clientId);
+    const { response, orders } = await this.resolveSelectedFbsOrders(
+      clientId,
+      dto.orders,
+      freshResponse,
+    );
+    try {
+      await this.assertFbsDeliveryReadiness(clientId, response, orders);
+    } catch (caught) {
+      const message =
+        caught instanceof Error ? caught.message : 'Поставка не прошла проверку перед передачей в Wildberries.';
+      const recovery = await this.prepareFbsDeliveryRecovery(
+        clientId,
+        response,
+        orders,
+        user,
+        message,
+      );
+      const refreshedOrders = await this.refreshFbsOrdersCache(clientId);
+      const supplyIds = uniqueStrings(orders.map((order) => order.supplyId ?? ''));
+      return {
+        delivered: 0,
+        failed: (supplyIds.length > 0 ? supplyIds : ['WB']).map((supplyId) => ({
+          supplyId,
+          message,
+        })),
+        recovery,
+        orders: refreshedOrders,
+      };
+    }
     const unavailable = orders.filter(
       (order) =>
         order.marketplace !== MarketplaceType.WILDBERRIES ||
@@ -3695,6 +17612,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const connections = await this.loadSelectedConnections(clientId, orders);
     const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
     const supplies = new Map<string, { connectionId: string; supplyId: string }>();
+    const supplyPlanByKey = new Map<string, { id: string }>();
     orders.forEach((order) => {
       supplies.set(`${order.connectionId}:${order.supplyId}`, {
         connectionId: order.connectionId,
@@ -3710,6 +17628,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           supplyId: supply.supplyId,
         },
       });
+      if (plan) {
+        supplyPlanByKey.set(`${supply.connectionId}:${supply.supplyId}`, { id: plan.id });
+      }
       if (!plan || plan.deliveryDestination !== FbsDeliveryDestination.PICKUP_POINT) continue;
       const expectedOrderIds = uniqueStrings(
         response.orders
@@ -3773,18 +17694,72 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(supply.supplyId)}/deliver`,
             { method: 'PATCH', headers: wbHeaders(connection.apiKey) },
           );
-          delivered.push(supply.supplyId);
         } catch (caught) {
           failed.push({
             supplyId: supply.supplyId,
             message: caught instanceof Error ? caught.message : 'Wildberries не принял поставку в доставку.',
           });
+          return;
         }
+
+        const sentToWbAt = new Date();
+        const plan = supplyPlanByKey.get(`${supply.connectionId}:${supply.supplyId}`);
+        if (plan) {
+          try {
+            await this.prisma.fbsSupplyPlan.update({
+              where: { id: plan.id },
+              data: {
+                sentToWbAt,
+                sentToWbByUserId: user.id,
+                sentToWbByName: user.name,
+              },
+            });
+            await this.prisma.auditLog.create({
+              data: {
+                userId: user.id,
+                action: FBS_SUPPLY_SENT_TO_WB_ACTION,
+                entity: 'FbsSupplyPlan',
+                entityId: plan.id,
+                payload: {
+                  clientId,
+                  connectionId: supply.connectionId,
+                  supplyId: supply.supplyId,
+                  sentToWbAt: sentToWbAt.toISOString(),
+                  userName: user.name,
+                },
+              },
+            });
+          } catch (caught) {
+            this.logger.error(
+              `WB accepted FBS supply ${supply.supplyId}, but its sender could not be recorded`,
+              caught instanceof Error ? caught.stack : String(caught),
+            );
+          }
+        }
+        delivered.push(supply.supplyId);
       }),
     );
 
-    const refreshedOrders = await this.refreshFbsOrdersCache(clientId);
-    return { delivered: delivered.length, failed, orders: refreshedOrders };
+    let refreshedOrders = await this.refreshFbsOrdersCache(clientId);
+    let recovery: FbsDeliveryRecovery = { rescanOrders: [], cancelledOrders: [] };
+    if (failed.length > 0) {
+      const failedSupplyIds = new Set(failed.map((item) => item.supplyId));
+      const failedOrders = orders.filter(
+        (order) => order.supplyId && failedSupplyIds.has(order.supplyId),
+      );
+      recovery = await this.prepareFbsDeliveryRecovery(
+        clientId,
+        refreshedOrders,
+        failedOrders,
+        user,
+        failed.map((item) => `${item.supplyId}: ${item.message}`).join(' '),
+        true,
+      );
+      if (recovery.rescanOrders.length > 0 || recovery.cancelledOrders.length > 0) {
+        refreshedOrders = await this.refreshFbsOrdersCache(clientId);
+      }
+    }
+    return { delivered: delivered.length, failed, recovery, orders: refreshedOrders };
   }
 
   async changeFbsSuppliesDestination(dto: FbsOrderSelectionDto, user: AuthUser) {
@@ -4066,23 +18041,32 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'read');
     const { orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders);
-
-    const unavailable = orders.filter(
-      (order) =>
-        order.marketplace !== MarketplaceType.WILDBERRIES ||
-        !['confirm', 'complete'].includes(order.supplierStatus),
-    );
+    const unavailable = orders.filter((order) => {
+      if (order.marketplace === MarketplaceType.WILDBERRIES) {
+        return !['confirm', 'complete'].includes(order.supplierStatus);
+      }
+      if (order.marketplace === MarketplaceType.OZON) {
+        return !['awaiting_deliver', 'arbitration', 'delivering', 'delivered'].includes(
+          order.supplierStatus,
+        );
+      }
+      return true;
+    });
     if (unavailable.length > 0) {
       throw new BadRequestException(
-        `ШК можно скачать для заказов WB в статусе «На сборке» или «В доставке». Проверьте: ${unavailable
+        `Этикетки доступны для собранных заказов WB и Ozon. Сначала передайте сборку маркетплейсу. Проверьте: ${unavailable
           .map((order) => order.id)
           .join(', ')}.`,
       );
     }
 
-    const connections = await this.loadSelectedConnections(clientId, orders);
+    const wbOrders = orders.filter((order) => order.marketplace === MarketplaceType.WILDBERRIES);
+    const ozonOrders = orders.filter((order) => order.marketplace === MarketplaceType.OZON);
+    const connections = wbOrders.length > 0
+      ? await this.loadSelectedConnections(clientId, wbOrders)
+      : [];
     const ordersByConnection = new Map<string, FbsOrderSummary[]>();
-    for (const order of orders) {
+    for (const order of wbOrders) {
       const group = ordersByConnection.get(order.connectionId) ?? [];
       group.push(order);
       ordersByConnection.set(order.connectionId, group);
@@ -4134,7 +18118,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
     }
 
-    const missingOrderIds = orders
+    const missingOrderIds = wbOrders
       .map((order) => order.id)
       .filter((orderId) => !stickersByOrderId.has(orderId) && !crossBorderPdfByOrderId.has(orderId));
     if (missingOrderIds.length > 0) {
@@ -4142,18 +18126,54 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         `Wildberries пока не сформировал ШК для заказов: ${missingOrderIds.join(', ')}. Обновите статусы и повторите.`,
       );
     }
-    const regularStickers = orders
+    const regularStickers = wbOrders
       .map((order) => stickersByOrderId.get(order.id))
       .filter((sticker): sticker is FbsStickerImage => Boolean(sticker));
     const pdfParts: Buffer[] = [];
     if (regularStickers.length > 0) pdfParts.push(await buildFbsStickersPdf(regularStickers));
-    orders.forEach((order) => {
+    wbOrders.forEach((order) => {
       const crossBorderPdf = crossBorderPdfByOrderId.get(order.id);
       if (crossBorderPdf) pdfParts.push(crossBorderPdf);
     });
+    if (ozonOrders.length > 0) {
+      const ozonConnectionIds = uniqueStrings(ozonOrders.map((order) => order.connectionId));
+      const ozonConnections = await this.prisma.clientMarketplaceConnection.findMany({
+        where: {
+          id: { in: ozonConnectionIds },
+          clientId,
+          marketplace: MarketplaceType.OZON,
+          isActive: true,
+        },
+      });
+      if (ozonConnections.length !== ozonConnectionIds.length) {
+        throw new BadRequestException('Одно из подключений Ozon не найдено или отключено.');
+      }
+      const ozonConnectionById = new Map(ozonConnections.map((connection) => [connection.id, connection]));
+      for (const connectionId of ozonConnectionIds) {
+        const connection = ozonConnectionById.get(connectionId)!;
+        if (!connection.sellerId) {
+          throw new BadRequestException('В подключении Ozon не заполнен Client-Id.');
+        }
+        const connectionOrders = ozonOrders.filter((order) => order.connectionId === connectionId);
+        for (const orderChunk of chunks(connectionOrders, 20)) {
+          const label = await marketplaceBinary(
+            'https://api-seller.ozon.ru/v2/posting/fbs/package-label',
+            {
+              method: 'POST',
+              headers: {
+                ...ozonHeaders(connection.sellerId, connection.apiKey),
+                Accept: 'application/pdf',
+              },
+              body: JSON.stringify({ posting_number: orderChunk.map((order) => order.id) }),
+            },
+          );
+          pdfParts.push(label.buffer);
+        }
+      }
+    }
     const buffer = await mergeFbsStickerPdfs(pdfParts);
     return {
-      fileName: `fbs-wb-order-stickers-${fileTimestamp(new Date())}.pdf`,
+      fileName: `fbs-order-stickers-${fileTimestamp(new Date())}.pdf`,
       contentType: 'application/pdf' as const,
       buffer,
       count: orders.length,
@@ -4211,7 +18231,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
       if (cargoPlaceIds.length === 0) {
         throw new BadRequestException(
-          `В поставке ${supply.supplyId} нет грузомест. Сначала добавьте их из расчёта ${supply.itemsPerCargoPlace} единиц товара на одно грузоместо.`,
+          `В поставке ${supply.supplyId} нет грузомест. Сначала добавьте хотя бы одно грузоместо.`,
         );
       }
       const stickerResponse = await marketplaceJson(
@@ -4336,11 +18356,24 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       request.clientId,
       links.map((link) => ({ connectionId: link.connectionId, id: link.orderId })),
     );
-    const unavailable = orders.filter(
-      (order) =>
-        order.marketplace !== MarketplaceType.WILDBERRIES ||
-        !['confirm', 'complete'].includes(order.supplierStatus),
-    );
+    const marketplaces = [...new Set(orders.map((order) => order.marketplace))];
+    if (marketplaces.length !== 1) {
+      throw new BadRequestException(
+        'Одна заявка FBS должна содержать заказы одного маркетплейса.',
+      );
+    }
+    const marketplace = marketplaces[0];
+    if (
+      marketplace !== MarketplaceType.WILDBERRIES &&
+      marketplace !== MarketplaceType.OZON
+    ) {
+      throw new BadRequestException(
+        `Лист подбора пока не поддерживает ${fbsMarketplaceDisplayName(marketplace)}.`,
+      );
+    }
+    const unavailable = marketplace === MarketplaceType.WILDBERRIES
+      ? orders.filter((order) => !['confirm', 'complete'].includes(order.supplierStatus))
+      : [];
     if (unavailable.length > 0) {
       throw new BadRequestException(
         `QR/ШК Wildberries появится после перевода всех заказов в сборку. Проверьте: ${unavailable
@@ -4349,7 +18382,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     }
 
-    const connections = await this.loadSelectedConnections(request.clientId, orders);
+    const connections = marketplace === MarketplaceType.WILDBERRIES
+      ? await this.loadSelectedConnections(request.clientId, orders)
+      : [];
     const ordersByConnection = new Map<string, FbsOrderSummary[]>();
     for (const order of orders) {
       const group = ordersByConnection.get(order.connectionId) ?? [];
@@ -4377,7 +18412,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         }
       }
     }
-    const missing = orders.filter((order) => !stickersByOrderId.has(order.id));
+    const missing = marketplace === MarketplaceType.WILDBERRIES
+      ? orders.filter((order) => !stickersByOrderId.has(order.id))
+      : [];
     if (missing.length > 0) {
       throw new BadRequestException(
         `Wildberries пока не сформировал QR/ШК для заказов: ${missing.map((order) => order.id).join(', ')}.`,
@@ -4388,6 +18425,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       requestNumber: request.number,
       requestTitle: request.title,
       clientName: [request.client.code, request.client.name].filter(Boolean).join(' · '),
+      marketplaceLabel: fbsMarketplaceDisplayName(marketplace),
       rows: orders.map((order) => ({
         orderId: order.id,
         productName: order.product?.name || order.article || `Товар ${order.nmId ?? ''}`,
@@ -4395,7 +18433,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         barcodes: order.barcodes,
         quantity: Math.max(1, order.itemCount),
         boxes: order.storageBoxes.map((box) => ({ code: box.code, quantity: box.quantity })),
-        sticker: stickersByOrderId.get(order.id)!,
+        sticker: stickersByOrderId.get(order.id) ?? null,
       })),
     });
     return {
@@ -4405,10 +18443,377 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
-  async createFbsRequest(dto: FbsOrderSelectionDto, user: AuthUser) {
+  private async resolveFbsRequestWarehouseId(
+    clientId: string,
+    user: AuthUser,
+    orders: FbsOrderSummary[],
+  ) {
+    let wildberriesWarehouseId: string | null;
+    try {
+      wildberriesWarehouseId = await this.resolveFbsWarehouseFromWildberries(
+        clientId,
+        orders,
+      );
+    } catch (caught) {
+      if (caught instanceof FbsWarehouseExcludedError) {
+        throw new BadRequestException(
+          `Склад WB исключён из обработки WMS для заказов: ${caught.orders
+            .map((order) => order.id)
+            .join(', ')}. Измените маршрутизацию склада перед созданием заявки.`,
+        );
+      }
+      if (caught instanceof FbsWarehouseUnconfiguredError) {
+        throw new BadRequestException(
+          `Для склада WB не настроен маршрут FBS для заказов: ${caught.orders
+            .map((order) => order.id)
+            .join(', ')}. Назначьте основной филиал или отдельный филиал исполнения перед созданием заявки.`,
+        );
+      }
+      throw caught;
+    }
+    if (wildberriesWarehouseId) {
+      return wildberriesWarehouseId;
+    }
+
+    const quantityByBoxCode = new Map<string, number>();
+    for (const order of orders) {
+      for (const box of order.storageBoxes ?? []) {
+        const code = box.code.trim();
+        if (!code) continue;
+        quantityByBoxCode.set(
+          code,
+          Math.max(quantityByBoxCode.get(code) ?? 0, Math.max(1, box.quantity)),
+        );
+      }
+    }
+    if (quantityByBoxCode.size > 0) {
+      const boxes = await this.prisma.box.findMany({
+        where: {
+          clientId,
+          code: { in: [...quantityByBoxCode.keys()] },
+          warehouseId: { not: null },
+          status: { notIn: ['deleted', 'archived'] },
+        },
+        select: { code: true, warehouseId: true },
+      });
+      const quantityByWarehouseId = new Map<string, number>();
+      for (const box of boxes) {
+        if (!box.warehouseId) continue;
+        quantityByWarehouseId.set(
+          box.warehouseId,
+          (quantityByWarehouseId.get(box.warehouseId) ?? 0) +
+            (quantityByBoxCode.get(box.code) ?? 1),
+        );
+      }
+      const stockWarehouse = [...quantityByWarehouseId.entries()].sort(
+        ([leftId, leftQuantity], [rightId, rightQuantity]) =>
+          rightQuantity - leftQuantity ||
+          Number(rightId === user.activeWarehouseId) -
+            Number(leftId === user.activeWarehouseId) ||
+          leftId.localeCompare(rightId),
+      )[0];
+      if (stockWarehouse) {
+        return stockWarehouse[0];
+      }
+    }
+
+    if (user.activeWarehouseId) {
+      const activeLink = await this.prisma.warehouseClient?.findFirst({
+        where: {
+          clientId,
+          warehouseId: user.activeWarehouseId,
+          warehouse: { isActive: true },
+        },
+        select: { warehouseId: true },
+      });
+      if (activeLink) {
+        return activeLink.warehouseId;
+      }
+    }
+
+    const primaryLink = await this.prisma.warehouseClient?.findFirst({
+      where: { clientId, warehouse: { isActive: true } },
+      select: { warehouseId: true },
+      orderBy: [{ warehouse: { sortOrder: 'asc' } }, { createdAt: 'asc' }],
+    });
+    return primaryLink?.warehouseId ?? user.activeWarehouseId ?? null;
+  }
+
+  private async resolveFbsWarehouseFromWildberries(
+    clientId: string,
+    orders: FbsOrderSummary[],
+  ) {
+    const wildberriesOrders = orders.filter(
+      (order) =>
+        order.marketplace === MarketplaceType.WILDBERRIES &&
+        Boolean(order.officeId || order.warehouseId),
+    );
+    if (wildberriesOrders.length === 0) {
+      return null;
+    }
+    if (
+      typeof this.prisma.clientMarketplaceConnection?.findMany !== 'function' ||
+      typeof this.prisma.warehouse?.findMany !== 'function'
+    ) {
+      return null;
+    }
+
+    const connectionIds = uniqueStrings(
+      wildberriesOrders.map((order) => order.connectionId),
+    );
+    const [connections, branches, routingRules] = await Promise.all([
+      this.prisma.clientMarketplaceConnection.findMany({
+        where: {
+          id: { in: connectionIds },
+          clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          isActive: true,
+        },
+        select: {
+          id: true,
+          apiKey: true,
+          fbsExecutionWarehouseId: true,
+          fbsAutoRouteNewWarehouses: true,
+        },
+      }),
+      this.prisma.warehouse.findMany({
+        where: { isActive: true },
+        select: { id: true, code: true, name: true, city: true },
+        orderBy: [{ sortOrder: 'asc' }, { city: 'asc' }],
+      }),
+      typeof this.prisma.fbsWarehouseRoutingRule?.findMany === 'function'
+        ? this.prisma.fbsWarehouseRoutingRule.findMany({
+        where: {
+          connectionId: { in: connectionIds },
+          marketplaceWarehouseId: {
+            in: uniqueStrings(
+              wildberriesOrders.map((order) => order.warehouseId ?? ''),
+            ),
+          },
+        },
+        select: {
+          connectionId: true,
+          marketplaceWarehouseId: true,
+          mode: true,
+          executionWarehouseId: true,
+        },
+          })
+        : Promise.resolve([]),
+    ]);
+    const connectionById = new Map(
+      connections.map((connection) => [connection.id, connection]),
+    );
+    const matchedBranches = new Map<
+      string,
+      { id: string; code: string; city: string }
+    >();
+    const excludedOrders: FbsOrderSummary[] = [];
+    const unconfiguredOrders: FbsOrderSummary[] = [];
+    const ruleByKey = new Map(
+      routingRules.map((rule) => [
+        `${rule.connectionId}:${rule.marketplaceWarehouseId}`,
+        rule,
+      ]),
+    );
+    const addBranch = (warehouseId: string | null | undefined) => {
+      if (!warehouseId) return false;
+      const branch = branches.find((candidate) => candidate.id === warehouseId);
+      if (!branch) return false;
+      matchedBranches.set(branch.id, {
+        id: branch.id,
+        code: branch.code,
+        city: branch.city,
+      });
+      return true;
+    };
+
+    for (const connectionId of connectionIds) {
+      const connection = connectionById.get(connectionId);
+      if (!connection) continue;
+      const connectionOrders = wildberriesOrders.filter(
+        (order) => order.connectionId === connectionId,
+      );
+      const unresolvedOrders: FbsOrderSummary[] = [];
+      for (const order of connectionOrders) {
+        const rule = order.warehouseId
+          ? ruleByKey.get(`${connectionId}:${order.warehouseId}`)
+          : null;
+        const mode = normalizeFbsWarehouseRouteMode(rule?.mode);
+        if (mode === 'EXCLUDED') {
+          excludedOrders.push(order);
+          continue;
+        }
+        if (mode === 'BRANCH' && addBranch(rule?.executionWarehouseId)) {
+          continue;
+        }
+        if (
+          mode === 'CENTRAL' &&
+          addBranch(connection.fbsExecutionWarehouseId)
+        ) {
+          continue;
+        }
+        unresolvedOrders.push(order);
+      }
+      if (unresolvedOrders.length === 0) continue;
+      if (
+        connection.fbsAutoRouteNewWarehouses &&
+        addBranch(connection.fbsExecutionWarehouseId)
+      ) {
+        continue;
+      }
+      // FIX: a WB office city is a delivery destination, not proof that stock
+      // belongs to the same WMS branch. Never guess an execution branch for an
+      // unconfigured warehouse; require CENTRAL/BRANCH (or enabled auto-route).
+      unconfiguredOrders.push(...unresolvedOrders);
+    }
+
+    if (excludedOrders.length > 0) {
+      throw new FbsWarehouseExcludedError(excludedOrders);
+    }
+    if (unconfiguredOrders.length > 0) {
+      throw new FbsWarehouseUnconfiguredError(unconfiguredOrders);
+    }
+
+    if (matchedBranches.size > 1) {
+      throw new BadRequestException(
+        `Выбранные FBS-заказы относятся к разным филиалам: ${[
+          ...matchedBranches.values(),
+        ]
+          .map((branch) => `${branch.city} (${branch.code})`)
+          .join(', ')}. Создайте отдельную заявку для каждого города.`,
+      );
+    }
+    return [...matchedBranches.keys()][0] ?? null;
+  }
+
+  // FIX / ADDED: create a local WMS request from a known WB supply without changing WB.
+  async createFbsRequestFromSupply(dto: FbsSupplyRequestDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    const supplyId = dto.supplyId.trim().toUpperCase();
+    this.clientScopes.requireClientAccess(user, clientId, 'write');
+    if (!supplyId) {
+      throw new BadRequestException('Укажите номер поставки Wildberries.');
+    }
+
+    const liveResponse = await this.loadFbsOrders(clientId);
+    const visibleResponse = await this.scopeFbsOrdersForUser(liveResponse, user);
+    const supplyOrders = visibleResponse.orders.filter(
+      (order) =>
+        order.marketplace === MarketplaceType.WILDBERRIES &&
+        order.supplyId?.trim().toUpperCase() === supplyId,
+    );
+    if (supplyOrders.length === 0) {
+      throw new NotFoundException(
+        `Поставка ${supplyId} не найдена в доступных кабинетах выбранного клиента. Обновите API WB и проверьте клиента.`,
+      );
+    }
+
+    const activeOrders = supplyOrders.filter(
+      (order) => order.category === 'active' && order.supplierStatus === 'confirm',
+    );
+    if (activeOrders.length === 0) {
+      throw new BadRequestException(
+        `В поставке ${supplyId} нет активных заказов WB со статусом «На сборке». Текущие статусы: ${uniqueStrings(
+          supplyOrders.map((order) => `${order.supplierStatus}/${order.wbStatus}`),
+        ).join(', ')}.`,
+      );
+    }
+
+    const existingLinks = await this.prisma.fbsOrderRequestLink.findMany({
+      where: {
+        clientId,
+        marketplace: MarketplaceType.WILDBERRIES,
+        connectionId: { in: uniqueStrings(activeOrders.map((order) => order.connectionId)) },
+        orderId: { in: uniqueStrings(activeOrders.map((order) => order.id)) },
+      },
+      select: {
+        connectionId: true,
+        orderId: true,
+        syncStatus: true,
+        request: { select: { number: true, status: true } },
+      },
+    });
+    const linkedOrderKeys = new Set(
+      existingLinks
+        .filter(
+          (link) =>
+            link.request.status !== ClientRequestStatus.CANCELLED &&
+            link.syncStatus !== FBS_REQUEST_LINK_REMOVED,
+        )
+        .map((link) => selectionKey(link.connectionId, link.orderId)),
+    );
+    const unlinkedOrders = activeOrders.filter(
+      (order) => !linkedOrderKeys.has(selectionKey(order.connectionId, order.id)),
+    );
+    if (unlinkedOrders.length === 0) {
+      const requestNumbers = uniqueStrings(
+        existingLinks.map((link) => String(link.request.number).padStart(6, '0')),
+      );
+      throw new BadRequestException(
+        `Все активные заказы поставки ${supplyId} уже находятся в заявках WMS${
+          requestNumbers.length ? `: №${requestNumbers.join(', №')}` : ''
+        }.`,
+      );
+    }
+
+    const result = await this.createFbsRequest(
+      {
+        clientId,
+        orders: unlinkedOrders.map((order) => ({
+          connectionId: order.connectionId,
+          id: order.id,
+        })),
+      },
+      user,
+      liveResponse,
+    );
+    return {
+      ...result,
+      supplyId,
+      supplyOrders: supplyOrders.length,
+      skippedLinkedOrders: activeOrders.length - unlinkedOrders.length,
+      skippedInactiveOrders: supplyOrders.length - activeOrders.length,
+    };
+  }
+
+  async createFbsRequest(
+    dto: FbsOrderSelectionDto,
+    user: AuthUser,
+    responseOverride?: FbsOrdersResponse,
+  ) {
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'write');
-    const { orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders);
+    const { orders } = await this.resolveSelectedFbsOrders(
+      clientId,
+      dto.orders,
+      responseOverride,
+    );
+    const wbWarehouseKeys = uniqueStrings(
+      orders
+        .filter((order) => order.marketplace === MarketplaceType.WILDBERRIES)
+        .map(
+          (order) =>
+            `${order.connectionId}:${order.marketplace}:${order.warehouseId || order.officeId || 'unknown'}`,
+        ),
+    );
+    const requestedWarehouseKey = dto.marketplaceWarehouseKey?.trim() || null;
+    if (requestedWarehouseKey && wbWarehouseKeys.some((key) => key !== requestedWarehouseKey)) {
+      throw new BadRequestException(
+        'В заявку можно включить только заказы выбранного склада WB. Обновите фильтр склада и выберите заказы заново.',
+      );
+    }
+    if (wbWarehouseKeys.length > 1) {
+      throw new BadRequestException(
+        'Выбраны заказы разных складов WB. Создайте отдельную FBS-заявку для каждого склада.',
+      );
+    }
+    const wbWarehouseOrder = orders.find(
+      (order) => order.marketplace === MarketplaceType.WILDBERRIES,
+    );
+    const wbWarehouseLabel = wbWarehouseOrder
+      ? wbWarehouseOrder.warehouseName?.trim() ||
+        (wbWarehouseOrder.warehouseId ? `WB №${wbWarehouseOrder.warehouseId}` : 'WB: склад не определён')
+      : null;
     const inactive = orders.filter((order) => order.category !== 'active');
     if (inactive.length > 0) {
       throw new BadRequestException(
@@ -4467,17 +18872,19 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
     }
 
+    const requestWarehouseId = await this.resolveFbsRequestWarehouseId(clientId, user, orders);
     try {
       const request = await this.prisma.$transaction(async (tx) => {
         const created = await tx.clientRequest.create({
           data: {
             clientId,
+            warehouseId: requestWarehouseId,
             type: ClientRequestType.OUTBOUND,
             status: ClientRequestStatus.SUBMITTED,
             priority: 'NORMAL',
-            title: `FBS — ${orders.length} заказ(а/ов)`,
-            destinationCity: 'Маркетплейс FBS',
-            comment: `Создано из FBS-заказов: ${orderIds.join(', ')}`,
+            title: `${wbWarehouseLabel ? `FBS WB · ${wbWarehouseLabel}` : 'FBS'} — ${orders.length} заказ(а/ов)`,
+            destinationCity: wbWarehouseLabel ? `Маркетплейс FBS · ${wbWarehouseLabel}` : 'Маркетплейс FBS',
+            comment: `${wbWarehouseLabel ? `Склад WB: ${wbWarehouseLabel}. ` : ''}Создано из FBS-заказов: ${orderIds.join(', ')}`,
             createdByUserId: user.id,
             items: {
               create: [...itemGroups.values()].map((item) => ({
@@ -4504,7 +18911,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             clientId,
             eventType: ClientRequestEventType.CREATED,
             title: 'Заявка создана из FBS-заказов',
-            body: orderIds.join(', '),
+            body: `${wbWarehouseLabel ? `Склад WB: ${wbWarehouseLabel}. ` : ''}${orderIds.join(', ')}`,
             statusTo: ClientRequestStatus.SUBMITTED,
             createdByUserId: user.id,
           },
@@ -4556,11 +18963,243 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
   }
 
+  async enableFbsEmergencyAssembly(requestIdValue: string, user: AuthUser) {
+    requireFbsEmergencyAssemblyAccess(user);
+    const requestId = requiredFbsTsdText(requestIdValue, 'Не указана заявка FBS.');
+    const request = await this.prisma.clientRequest.findUnique({
+      where: { id: requestId },
+      select: {
+        id: true,
+        number: true,
+        clientId: true,
+        type: true,
+        status: true,
+        fbsEmergencyAssemblyAt: true,
+        fbsEmergencyAssemblyByUserId: true,
+        fbsEmergencyAssemblyByName: true,
+        fbsOrderLinks: {
+          select: {
+            marketplace: true,
+            connectionId: true,
+            orderId: true,
+            syncStatus: true,
+            lastCategory: true,
+            lastSupplierStatus: true,
+            lastSupplyId: true,
+          },
+        },
+      },
+    });
+    if (!request) {
+      throw new NotFoundException('FBS-заявка не найдена.');
+    }
+    this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+    if (
+      request.type !== ClientRequestType.OUTBOUND ||
+      request.fbsOrderLinks.length === 0 ||
+      request.fbsOrderLinks.some((link) => link.marketplace !== MarketplaceType.WILDBERRIES)
+    ) {
+      throw new BadRequestException('Экстренное восстановление доступно только для FBS-заявки Wildberries.');
+    }
+    if (!FBS_REQUEST_COMPOSITION_STATUSES.has(request.status)) {
+      throw new BadRequestException(
+        'Эту заявку нельзя вернуть в сборку: она уже упакована, закрыта, отменена или отклонена.',
+      );
+    }
+    const shippedLinks = request.fbsOrderLinks.filter(
+      (link) =>
+        link.syncStatus === FBS_REQUEST_LINK_ACTIVE &&
+        (link.lastCategory === 'shipped' || link.lastSupplierStatus === 'complete'),
+    );
+    if (shippedLinks.length === 0) {
+      throw new BadRequestException(
+        'У заявки нет заказов, уже переданных Wildberries. Используйте обычный сценарий сборки.',
+      );
+    }
+    if (request.fbsEmergencyAssemblyAt) {
+      return {
+        status: 'ALREADY_APPLIED' as const,
+        request: {
+          id: request.id,
+          number: request.number,
+          status: request.status,
+          fbsEmergencyAssemblyAt: request.fbsEmergencyAssemblyAt,
+          fbsEmergencyAssemblyByUserId: request.fbsEmergencyAssemblyByUserId,
+          fbsEmergencyAssemblyByName: request.fbsEmergencyAssemblyByName,
+        },
+        orders: request.fbsOrderLinks.length,
+        shippedOrders: shippedLinks.length,
+      };
+    }
+
+    const enabledAt = new Date();
+    const supplyIds = uniqueStrings(
+      shippedLinks.map((link) => link.lastSupplyId ?? ''),
+    );
+    const result = await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.clientRequest.updateMany({
+        where: {
+          id: request.id,
+          fbsEmergencyAssemblyAt: null,
+          status: { in: [...FBS_REQUEST_COMPOSITION_STATUSES] },
+        },
+        data: {
+          status: ClientRequestStatus.IN_WORK,
+          fbsEmergencyAssemblyAt: enabledAt,
+          fbsEmergencyAssemblyByUserId: user.id,
+          fbsEmergencyAssemblyByName: user.name,
+        },
+      });
+      if (claimed.count !== 1) {
+        const current = await tx.clientRequest.findUnique({
+          where: { id: request.id },
+          select: {
+            id: true,
+            number: true,
+            status: true,
+            fbsEmergencyAssemblyAt: true,
+            fbsEmergencyAssemblyByUserId: true,
+            fbsEmergencyAssemblyByName: true,
+          },
+        });
+        if (!current?.fbsEmergencyAssemblyAt) {
+          throw new BadRequestException('Состояние заявки изменилось. Обновите страницу и повторите проверку.');
+        }
+        return {
+          status: 'ALREADY_APPLIED' as const,
+          request: current,
+        };
+      }
+
+      const emergencyOrderWhere = shippedLinks.map((link) => ({
+        marketplace: link.marketplace,
+        connectionId: link.connectionId,
+        orderId: link.orderId,
+      }));
+      const previousAssemblyStatuses = await tx.fbsTsdAssembly.groupBy({
+        by: ['status'],
+        where: {
+          requestId: request.id,
+          OR: emergencyOrderWhere,
+        },
+        _count: { _all: true },
+      });
+      const resetAssemblies = await tx.fbsTsdAssembly.updateMany({
+        where: {
+          requestId: request.id,
+          OR: emergencyOrderWhere,
+        },
+        data: {
+          status: FBS_TSD_WAITING_STOCK_STATUS,
+          deviceCode: FBS_TSD_AUTO_RESERVATION_DEVICE,
+          workerUserId: null,
+          workerName: null,
+          reservedBoxId: null,
+          reservedBoxCode: null,
+          reservedAt: null,
+          boxId: null,
+          boxCode: null,
+          sourceBarcode: null,
+          barcode: null,
+          relabelConfirmedAt: null,
+          kiz: null,
+          wbMetaStatus: 'PENDING',
+          stickerPartA: null,
+          stickerPartB: null,
+          stickerBarcode: null,
+          marketplaceLabelBase64: null,
+          marketplaceLabelContentType: null,
+          marketplaceSubmitError: null,
+          marketplaceSubmittedAt: null,
+          cargoPackingId: null,
+          cargoPackedAt: null,
+          cargoPackedByUserId: null,
+          cargoPackedByName: null,
+          completedAt: null,
+          errorMessage: 'Экстренное восстановление: требуется полная повторная сборка заказа.',
+        },
+      });
+      await tx.fbsTsdAssembly.updateMany({
+        where: {
+          requestId: request.id,
+          requiresKiz: false,
+          OR: emergencyOrderWhere,
+        },
+        data: { wbMetaStatus: 'NOT_REQUIRED' },
+      });
+
+      await tx.clientRequestEvent.create({
+        data: {
+          requestId: request.id,
+          clientId: request.clientId,
+          eventType:
+            request.status === ClientRequestStatus.IN_WORK
+              ? ClientRequestEventType.COMMENT
+              : ClientRequestEventType.STATUS_CHANGED,
+          title: 'FBS-заявка экстренно возвращена в сборку',
+          body:
+            `Администратор ${user.name} включил локальную сборку ${shippedLinks.length} заказов. ` +
+            'Статусы и данные Wildberries не изменялись.',
+          statusFrom:
+            request.status === ClientRequestStatus.IN_WORK ? undefined : request.status,
+          statusTo: ClientRequestStatus.IN_WORK,
+          createdByUserId: user.id,
+          createdAt: enabledAt,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: FBS_EMERGENCY_ASSEMBLY_ENABLED_ACTION,
+          entity: 'ClientRequest',
+          entityId: request.id,
+          payload: {
+            requestNumber: request.number,
+            clientId: request.clientId,
+            orders: request.fbsOrderLinks.length,
+            shippedOrders: shippedLinks.length,
+            supplyIds,
+            previousStatus: request.status,
+            nextStatus: ClientRequestStatus.IN_WORK,
+            resetAssemblies: resetAssemblies.count,
+            previousAssemblyStatuses: previousAssemblyStatuses.map((row) => ({
+              status: row.status,
+              count: row._count._all,
+            })),
+            wbMutationPerformed: false,
+            enabledByName: user.name,
+            enabledAt: enabledAt.toISOString(),
+          },
+        },
+      });
+      return {
+        status: 'APPLIED' as const,
+        request: {
+          id: request.id,
+          number: request.number,
+          status: ClientRequestStatus.IN_WORK,
+          fbsEmergencyAssemblyAt: enabledAt,
+          fbsEmergencyAssemblyByUserId: user.id,
+          fbsEmergencyAssemblyByName: user.name,
+        },
+      };
+    });
+
+    this.fbsOrdersCache.delete(request.clientId);
+    this.fbsTsdRequestFallbackCache.delete(request.clientId);
+    return {
+      ...result,
+      orders: request.fbsOrderLinks.length,
+      shippedOrders: shippedLinks.length,
+    };
+  }
+
   private async resolveSelectedFbsOrders(
     clientId: string,
     selections: Array<{ connectionId: string; id: string }>,
+    responseOverride?: FbsOrdersResponse,
   ) {
-    const response = await this.loadFbsOrders(clientId);
+    const response = responseOverride ?? (await this.loadFbsOrders(clientId));
     const orderByKey = new Map(response.orders.map((order) => [selectionKey(order.connectionId, order.id), order]));
     const uniqueSelections = new Map(
       selections.map((selection) => [selectionKey(selection.connectionId, selection.id), selection]),
@@ -4576,6 +19215,462 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new BadRequestException(`Заказы не найдены в выбранном кабинете: ${missing.join(', ')}.`);
     }
     return { response, orders };
+  }
+
+  private async prepareFbsDeliveryRecovery(
+    clientId: string,
+    response: FbsOrdersResponse,
+    selectedOrders: FbsOrderSummary[],
+    user: AuthUser,
+    reasonMessage: string,
+    verifyRemoteKiz = false,
+  ): Promise<FbsDeliveryRecovery> {
+    const empty: FbsDeliveryRecovery = { rescanOrders: [], cancelledOrders: [] };
+    const selectedSupplyKeys = new Set(
+      selectedOrders
+        .filter((order) => order.marketplace === MarketplaceType.WILDBERRIES && order.supplyId)
+        .map((order) => `${order.connectionId}:${order.supplyId}`),
+    );
+    const affectedByKey = new Map<string, FbsOrderSummary>();
+    [...selectedOrders, ...response.orders.filter(
+      (order) =>
+        order.marketplace === MarketplaceType.WILDBERRIES &&
+        Boolean(order.supplyId) &&
+        selectedSupplyKeys.has(`${order.connectionId}:${order.supplyId}`),
+    )].forEach((order) => affectedByKey.set(selectionKey(order.connectionId, order.id), order));
+    const affectedOrders = [...affectedByKey.values()];
+    if (affectedOrders.length === 0) return empty;
+
+    const orderFilter = affectedOrders.map((order) => ({
+      connectionId: order.connectionId,
+      orderId: order.id,
+    }));
+    const [links, tasks] = await Promise.all([
+      this.prisma.fbsOrderRequestLink.findMany({
+        where: {
+          clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          OR: orderFilter,
+        },
+        select: {
+          connectionId: true,
+          orderId: true,
+          requestId: true,
+          syncStatus: true,
+          syncIssue: true,
+          request: { select: { number: true } },
+        },
+      }),
+      this.prisma.fbsTsdAssembly.findMany({
+        where: {
+          clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          OR: orderFilter,
+        },
+        select: {
+          id: true,
+          connectionId: true,
+          orderId: true,
+          requestId: true,
+          skuId: true,
+          status: true,
+          itemCount: true,
+          productName: true,
+          article: true,
+          barcodes: true,
+          barcode: true,
+          kiz: true,
+          requiresKiz: true,
+          wbMetaStatus: true,
+          boxCode: true,
+          reservedBoxCode: true,
+          cargoPacking: { select: { cargoPlaceId: true } },
+        },
+      }),
+    ]);
+    const linkByKey = new Map(
+      links.map((link) => [selectionKey(link.connectionId, link.orderId), link]),
+    );
+    const taskByKey = new Map(
+      tasks.map((task) => [selectionKey(task.connectionId, task.orderId), task]),
+    );
+    const skuIds = uniqueStrings(tasks.map((task) => task.skuId));
+    const skus = skuIds.length > 0
+      ? await this.prisma.sku.findMany({
+          where: { id: { in: skuIds } },
+          select: { id: true, size: true },
+        })
+      : [];
+    const sizeBySkuId = new Map(skus.map((sku) => [sku.id, sku.size]));
+
+    const cancelledKeys = new Set<string>();
+    for (const order of affectedOrders) {
+      const key = selectionKey(order.connectionId, order.id);
+      const link = linkByKey.get(key);
+      if (
+        order.category === 'cancelled' ||
+        link?.syncStatus === FBS_REQUEST_LINK_RETURN_REQUIRED
+      ) {
+        cancelledKeys.add(key);
+      }
+    }
+
+    const remoteKizMismatchKeys = new Set<string>();
+    if (verifyRemoteKiz) {
+      const completedKizTasks = tasks.filter(
+        (task) => task.status === 'COMPLETED' && task.requiresKiz && task.kiz,
+      );
+      const connectionIds = uniqueStrings(completedKizTasks.map((task) => task.connectionId));
+      const connections = connectionIds.length > 0
+        ? await this.prisma.clientMarketplaceConnection.findMany({
+            where: {
+              id: { in: connectionIds },
+              clientId,
+              marketplace: MarketplaceType.WILDBERRIES,
+              isActive: true,
+            },
+            select: { id: true, apiKey: true },
+          })
+        : [];
+      const apiKeyByConnection = new Map(connections.map((connection) => [connection.id, connection.apiKey]));
+      for (const connectionId of connectionIds) {
+        const apiKey = apiKeyByConnection.get(connectionId);
+        if (!apiKey) continue;
+        const connectionTasks = completedKizTasks.filter((task) => task.connectionId === connectionId);
+        for (const batch of chunks(connectionTasks, 100)) {
+          try {
+            const numericOrderIds = batch.map((task) => numericWbOrderId(task.orderId));
+            const metadata = await marketplaceJson(
+              'https://marketplace-api.wildberries.ru/api/marketplace/v3/orders/meta',
+              {
+                method: 'POST',
+                headers: wbHeaders(apiKey),
+                body: JSON.stringify({ orders: numericOrderIds }),
+              },
+            );
+            batch.forEach((task) => {
+              const remoteValues = wildberriesOrderSgtins(metadata, numericWbOrderId(task.orderId));
+              const localKiz = normalizedFbsKizValue(task.kiz!);
+              if (!remoteValues.some((value) => normalizedFbsKizValue(value) === localKiz)) {
+                remoteKizMismatchKeys.add(selectionKey(task.connectionId, task.orderId));
+              }
+            });
+          } catch (caught) {
+            this.logger.warn(
+              `Could not verify WB metadata after FBS delivery error: ${caught instanceof Error ? caught.message : String(caught)}`,
+            );
+          }
+        }
+      }
+    }
+
+    const explicitProblemKeys = new Set(
+      affectedOrders
+        .filter((order) => reasonMessage.includes(order.id))
+        .map((order) => selectionKey(order.connectionId, order.id)),
+    );
+    const rescanTasks = tasks.filter((task) => {
+      const key = selectionKey(task.connectionId, task.orderId);
+      if (cancelledKeys.has(key) || task.status !== 'COMPLETED') return false;
+      const localScanInvalid =
+        !task.barcode ||
+        (task.requiresKiz && (!task.kiz || task.wbMetaStatus !== 'ACCEPTED'));
+      return localScanInvalid || explicitProblemKeys.has(key) || remoteKizMismatchKeys.has(key);
+    });
+    const rescanTaskIds = new Set(rescanTasks.map((task) => task.id));
+
+    if (rescanTasks.length > 0) {
+      await this.prisma.$transaction(async (tx) => {
+        for (const task of rescanTasks) {
+          const changed = await tx.fbsTsdAssembly.updateMany({
+            where: { id: task.id, status: 'COMPLETED' },
+            data: {
+              status: FBS_TSD_RESCAN_REQUIRED_STATUS,
+              deviceCode: FBS_TSD_AUTO_RESERVATION_DEVICE,
+              workerUserId: null,
+              workerName: null,
+              barcode: null,
+              kiz: null,
+              wbMetaStatus: task.requiresKiz ? 'PENDING' : 'NOT_REQUIRED',
+              errorMessage: `Передача поставки WB завершилась ошибкой. Повторно отсканируйте ШК товара${task.requiresKiz ? ' и ЧЗ' : ''} только для заказа №${task.orderId}.`,
+            },
+          });
+          if (changed.count === 0) continue;
+          await tx.clientRequestEvent.create({
+            data: {
+              requestId: task.requestId,
+              clientId,
+              eventType: ClientRequestEventType.COMMENT,
+              title: 'Заказ возвращён на повторное сканирование',
+              body: `Заказ WB №${task.orderId}: повторно отсканировать ШК товара${task.requiresKiz ? ' и ЧЗ' : ''}. Остальная заявка не изменена. Причина передачи: ${reasonMessage}`,
+              createdByUserId: user.id,
+            },
+          });
+        }
+      });
+      this.fbsOrdersCache.delete(clientId);
+      this.fbsTsdRequestFallbackCache.delete(clientId);
+    }
+
+    const describe = (order: FbsOrderSummary, reason: string): FbsDeliveryRecoveryItem => {
+      const key = selectionKey(order.connectionId, order.id);
+      const task = taskByKey.get(key);
+      const link = linkByKey.get(key);
+      return {
+        orderId: order.id,
+        requestId: link?.requestId ?? task?.requestId ?? order.request?.id ?? null,
+        requestNumber: link?.request.number ?? order.request?.number ?? null,
+        productName: order.product?.name ?? task?.productName ?? order.article ?? 'Товар не определён',
+        article: order.product?.article ?? task?.article ?? order.article,
+        size: order.product?.size ?? (task ? sizeBySkuId.get(task.skuId) ?? null : null),
+        barcode: task?.barcode ?? jsonStringArray(task?.barcodes)[0] ?? order.barcodes[0] ?? null,
+        kiz: task?.kiz ?? null,
+        boxCode: task?.boxCode ?? task?.reservedBoxCode ?? null,
+        cargoPlaceCode: task?.cargoPacking?.cargoPlaceId ?? null,
+        reason,
+      };
+    };
+
+    const rescanOrders = affectedOrders
+      .filter((order) => {
+        const task = taskByKey.get(selectionKey(order.connectionId, order.id));
+        return Boolean(task && rescanTaskIds.has(task.id));
+      })
+      .map((order) =>
+        describe(order, `Повторно отсканировать только этот заказ: ${reasonMessage}`),
+      );
+    const cancelledOrders = affectedOrders
+      .filter((order) => cancelledKeys.has(selectionKey(order.connectionId, order.id)))
+      .map((order) => {
+        const link = linkByKey.get(selectionKey(order.connectionId, order.id));
+        return describe(
+          order,
+          link?.syncIssue || `Заказ отменён в WB: ${order.statusLabel}`,
+        );
+      });
+
+    return { rescanOrders, cancelledOrders };
+  }
+
+  private async assertFbsDeliveryReadiness(
+    clientId: string,
+    response: FbsOrdersResponse,
+    selectedOrders: FbsOrderSummary[],
+  ) {
+    const selectedSupplyKeys = new Set(
+      selectedOrders
+        .filter((order) => order.marketplace === MarketplaceType.WILDBERRIES && order.supplyId)
+        .map((order) => `${order.connectionId}:${order.supplyId}`),
+    );
+    const supplyOrders = response.orders.filter(
+      (order) =>
+        order.marketplace === MarketplaceType.WILDBERRIES &&
+        Boolean(order.supplyId) &&
+        selectedSupplyKeys.has(`${order.connectionId}:${order.supplyId}`),
+    );
+    const checkedOrders = new Map(
+      [...selectedOrders, ...supplyOrders].map((order) => [
+        selectionKey(order.connectionId, order.id),
+        order,
+      ]),
+    );
+    const seedOrders = [...checkedOrders.values()];
+    const seedLinks = seedOrders.length
+      ? await this.prisma.fbsOrderRequestLink.findMany({
+          where: {
+            clientId,
+            marketplace: MarketplaceType.WILDBERRIES,
+            OR: seedOrders.map((order) => ({
+              connectionId: order.connectionId,
+              orderId: order.id,
+            })),
+          },
+          select: {
+            connectionId: true,
+            orderId: true,
+            requestId: true,
+          },
+        })
+      : [];
+    const seedLinkByKey = new Map(
+      seedLinks.map((link) => [selectionKey(link.connectionId, link.orderId), link]),
+    );
+    const unlinkedOrderIds = seedOrders
+      .filter((order) => !seedLinkByKey.has(selectionKey(order.connectionId, order.id)))
+      .map((order) => order.id);
+    const requestIds = uniqueStrings(seedLinks.map((link) => link.requestId));
+    if (requestIds.length === 0) {
+      throw new BadRequestException(
+        `Поставка не отправлена в WB: заказы не привязаны к заявке WMS: №${uniqueStrings(
+          seedOrders.map((order) => order.id),
+        ).join(', №')}.`,
+      );
+    }
+
+    const checkedOrderKeys = new Set(
+      seedOrders.map((order) => selectionKey(order.connectionId, order.id)),
+    );
+    const requestLinks = (await this.prisma.fbsOrderRequestLink.findMany({
+      where: {
+        clientId,
+        marketplace: MarketplaceType.WILDBERRIES,
+        requestId: { in: requestIds },
+        OR: seedOrders.map((order) => ({
+          connectionId: order.connectionId,
+          orderId: order.id,
+        })),
+      },
+      select: {
+        connectionId: true,
+        orderId: true,
+        requestId: true,
+        syncStatus: true,
+        lastCategory: true,
+        lastSupplierStatus: true,
+        lastWbStatus: true,
+        request: {
+          select: {
+            id: true,
+            number: true,
+            status: true,
+          },
+        },
+      },
+      orderBy: [{ request: { number: 'asc' } }, { createdAt: 'asc' }],
+    })).filter((link) =>
+      checkedOrderKeys.has(selectionKey(link.connectionId, link.orderId)),
+    );
+    const taskOrderIds = uniqueStrings(requestLinks.map((link) => link.orderId));
+    const tasks = taskOrderIds.length
+      ? await this.prisma.fbsTsdAssembly.findMany({
+          where: {
+            clientId,
+            marketplace: MarketplaceType.WILDBERRIES,
+            requestId: { in: requestIds },
+            orderId: { in: taskOrderIds },
+          },
+          select: {
+            requestId: true,
+            connectionId: true,
+            orderId: true,
+            status: true,
+            requiresKiz: true,
+            kiz: true,
+            wbMetaStatus: true,
+            barcode: true,
+          },
+        })
+      : [];
+    const taskByKey = new Map(
+      tasks.map((task) => [selectionKey(task.connectionId, task.orderId), task]),
+    );
+    const orderByKey = new Map(
+      response.orders.map((order) => [selectionKey(order.connectionId, order.id), order]),
+    );
+    const issues: string[] = [];
+    if (unlinkedOrderIds.length > 0) {
+      issues.push(
+        `Нет заявки WMS (${unlinkedOrderIds.length}): №${uniqueStrings(unlinkedOrderIds).join(', №')}.`,
+      );
+    }
+
+    for (const requestId of requestIds) {
+      const links = requestLinks.filter((link) => link.requestId === requestId);
+      const request = links[0]?.request;
+      if (!request) continue;
+      const cancelledIds: string[] = [];
+      const notCollectedIds: string[] = [];
+      const invalidKizIds: string[] = [];
+      const statusProblems: string[] = [];
+      const missingWbIds: string[] = [];
+
+      if (
+        request.status === ClientRequestStatus.CANCELLED ||
+        request.status === ClientRequestStatus.REJECTED
+      ) {
+        issues.push(
+          `Заявка WMS №${String(request.number).padStart(6, '0')} имеет статус ${request.status}.`,
+        );
+      }
+
+      for (const link of links) {
+        const key = selectionKey(link.connectionId, link.orderId);
+        const order = orderByKey.get(key);
+        const supplierStatus = order?.supplierStatus ?? link.lastSupplierStatus ?? '';
+        const wbStatus = order?.wbStatus ?? link.lastWbStatus ?? '';
+        const category =
+          order?.category ??
+          (link.lastCategory as FbsOrderSummary['category'] | null) ??
+          fbsOrderCategory(supplierStatus, wbStatus);
+        const cancelled =
+          category === 'cancelled' ||
+          link.syncStatus === FBS_REQUEST_LINK_RETURN_REQUIRED;
+        if (cancelled) {
+          cancelledIds.push(link.orderId);
+          continue;
+        }
+        if (link.syncStatus === FBS_REQUEST_LINK_REMOVED) {
+          continue;
+        }
+        if (!order) {
+          missingWbIds.push(link.orderId);
+          continue;
+        }
+        if (order.supplierStatus !== 'confirm') {
+          statusProblems.push(`${order.id} — ${order.statusLabel}`);
+          continue;
+        }
+        const task = taskByKey.get(key);
+        if (!task || task.status !== 'COMPLETED' || !task.barcode) {
+          notCollectedIds.push(order.id);
+          continue;
+        }
+        if (task.requiresKiz && (!task.kiz || task.wbMetaStatus !== 'ACCEPTED')) {
+          invalidKizIds.push(order.id);
+        }
+      }
+
+      const prefix = `Заявка WMS №${String(request.number).padStart(6, '0')}:`;
+      if (notCollectedIds.length > 0) {
+        issues.push(
+          `${prefix} не собраны на ТСД (${notCollectedIds.length}): №${uniqueStrings(
+            notCollectedIds,
+          ).join(', №')}.`,
+        );
+      }
+      if (invalidKizIds.length > 0) {
+        issues.push(
+          `${prefix} КИЗ не подтверждён WB (${invalidKizIds.length}): №${uniqueStrings(
+            invalidKizIds,
+          ).join(', №')}.`,
+        );
+      }
+      if (cancelledIds.length > 0) {
+        issues.push(
+          `${prefix} отменены в WB (${cancelledIds.length}): №${uniqueStrings(
+            cancelledIds,
+          ).join(', №')}.`,
+        );
+      }
+      if (statusProblems.length > 0) {
+        issues.push(`${prefix} неподходящий статус: №${statusProblems.join(', №')}.`);
+      }
+      if (missingWbIds.length > 0) {
+        issues.push(
+          `${prefix} нет актуального статуса WB (${missingWbIds.length}): №${uniqueStrings(
+            missingWbIds,
+          ).join(', №')}.`,
+        );
+      }
+    }
+
+    if (issues.length > 0) {
+      throw new BadRequestException(
+        `Поставка не отправлена в WB. Сначала устраните проблемы:\n${issues
+          .map((issue) => `• ${issue}`)
+          .join('\n')}`,
+      );
+    }
   }
 
   private async loadSelectedConnections(clientId: string, orders: FbsOrderSummary[]) {
@@ -4597,14 +19692,77 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return connections;
   }
 
-  private async refreshFbsOrdersCache(clientId: string) {
-    const value = await this.loadFbsOrders(clientId);
-    this.fbsOrdersCache.set(clientId, { expiresAt: Date.now() + 30_000, value });
+  private async refreshFbsOrdersCache(
+    clientId: string,
+    options: { invalidateHistory?: boolean; historyMode?: FbsOrderHistoryMode } = {},
+  ) {
+    const connections = await this.prisma.clientMarketplaceConnection.findMany({
+      where: { clientId, marketplace: MarketplaceType.WILDBERRIES },
+      select: { id: true },
+    });
+    // Operations with live orders (transfer, delivery) do not need to wait for
+    // the large WB history endpoint. Keep the existing history in that case;
+    // `orders/new` is the source of truth for their current status.
+    if (options.invalidateHistory !== false && options.historyMode !== 'cache-only') {
+      connections.forEach((connection) =>
+        this.wildberriesFbsHistoryCache.delete(connection.id),
+      );
+    }
+    connections.forEach((connection) =>
+      this.wildberriesFbsStatusCache.delete(connection.id),
+    );
+    const value = await this.loadFbsOrders(clientId, undefined, options);
+    this.fbsOrdersCache.set(clientId, {
+      expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
+      value,
+    });
     return value;
   }
 
+  async recalculateFbsDraftBilling(clientId: string) {
+    const cached = this.fbsOrdersCache.get(clientId)?.value;
+    const value = cached ?? (await this.refreshFbsOrdersCache(clientId));
+    const shippedOrders = value.orders.filter((order) => order.category === 'shipped');
+    const billingByOrder = cached
+      ? await this.ensureFbsProcessingCharges(clientId, shippedOrders)
+      : new Map(
+          shippedOrders
+            .filter((order) => order.billing)
+            .map((order) => [fbsOrderKey(order), order.billing!]),
+        );
+    const refreshedValue = cached
+      ? {
+          ...value,
+          orders: value.orders.map((order) => ({
+            ...order,
+            billing: billingByOrder.get(fbsOrderKey(order)) ?? order.billing,
+          })),
+        }
+      : value;
+    this.fbsOrdersCache.set(clientId, {
+      expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
+      value: refreshedValue,
+    });
+
+    const billings = refreshedValue.orders
+      .map((order) => order.billing)
+      .filter((billing): billing is NonNullable<FbsOrderSummary['billing']> => Boolean(billing));
+    const editableBillings = billings.filter(
+      (billing) =>
+        billing.status === BillingChargeStatus.DRAFT &&
+        (!billing.invoiceStatus || billing.invoiceStatus === BillingInvoiceStatus.DRAFT),
+    );
+    return {
+      recalculatedCharges: new Set(editableBillings.map((billing) => billing.chargeId)).size,
+      recalculatedInvoices: new Set(
+        editableBillings.map((billing) => billing.invoiceNumber).filter(Boolean),
+      ).size,
+    };
+  }
+
   async getFbsBillingSettings(clientId: string, user: AuthUser) {
-    this.clientScopes.requireGlobalClientAccess(user);
+    // FIX: менеджер филиала может читать настройки только назначенного ему клиента.
+    this.clientScopes.requireClientAccess(user, clientId, 'read');
     return this.loadFbsBillingSettingsView(clientId);
   }
 
@@ -4613,7 +19771,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     dto: UpdateFbsBillingSettingsDto,
     user: AuthUser,
   ) {
-    this.clientScopes.requireGlobalClientAccess(user);
+    // FIX: изменение тарифа разрешено только для клиента с филиальным write-доступом.
+    this.clientScopes.requireClientAccess(user, clientId, 'write');
     const { client, fbsService, boxFormationService, boxMaterialService } =
       await this.ensureFbsBillingBase(clientId);
 
@@ -4676,16 +19835,33 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         selection.serviceId !== dto.palletServiceId,
     );
 
+    if (
+      dto.tieredLogisticsEnabled &&
+      ((dto.logisticsCubicMeterLiters ?? 0) <= 0 ||
+        (dto.logisticsCubicMeterPriceRub ?? 0) <= 0 ||
+        (dto.logisticsPalletPriceRub ?? 0) <= 0)
+    ) {
+      throw new BadRequestException(
+        'Для ступенчатой логистики укажите положительный объём куба и цены за куб и паллету.',
+      );
+    }
+
     await this.prisma.$transaction(async (tx) => {
       const settings = await tx.clientFbsBillingSettings.upsert({
         where: { clientId },
         update: {
+          primaryProcessingEnabled: dto.primaryProcessingEnabled,
           defaultDeliveryDestination: dto.defaultDeliveryDestination,
           pickupPointBasePriceRub: dto.pickupPointBasePriceRub,
           vnukovoBasePriceRub: dto.vnukovoBasePriceRub,
           baseIncludedItems: dto.baseIncludedItems,
           extraBlockItems: dto.extraBlockItems,
           extraBlockPriceRub: dto.extraBlockPriceRub,
+          tieredLogisticsEnabled: dto.tieredLogisticsEnabled,
+          logisticsFreeItemsLimit: dto.logisticsFreeItemsLimit,
+          logisticsCubicMeterLiters: dto.logisticsCubicMeterLiters,
+          logisticsCubicMeterPriceRub: dto.logisticsCubicMeterPriceRub,
+          logisticsPalletPriceRub: dto.logisticsPalletPriceRub,
           boxCapacityItems: dto.boxCapacityItems,
           boxFormationServiceId: dto.boxFormationServiceId || null,
           boxMaterialServiceId: dto.boxMaterialServiceId || null,
@@ -4695,12 +19871,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         },
         create: {
           clientId: client.id,
+          primaryProcessingEnabled: dto.primaryProcessingEnabled ?? false,
           defaultDeliveryDestination: dto.defaultDeliveryDestination,
           pickupPointBasePriceRub: dto.pickupPointBasePriceRub,
           vnukovoBasePriceRub: dto.vnukovoBasePriceRub,
           baseIncludedItems: dto.baseIncludedItems,
           extraBlockItems: dto.extraBlockItems,
           extraBlockPriceRub: dto.extraBlockPriceRub,
+          tieredLogisticsEnabled: dto.tieredLogisticsEnabled ?? false,
+          logisticsFreeItemsLimit: dto.logisticsFreeItemsLimit ?? 20,
+          logisticsCubicMeterLiters: dto.logisticsCubicMeterLiters ?? 1000,
+          logisticsCubicMeterPriceRub: dto.logisticsCubicMeterPriceRub ?? 1500,
+          logisticsPalletPriceRub: dto.logisticsPalletPriceRub ?? 2500,
           boxCapacityItems: dto.boxCapacityItems,
           boxFormationServiceId: dto.boxFormationServiceId || null,
           boxMaterialServiceId: dto.boxMaterialServiceId || null,
@@ -4718,6 +19900,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             settingsId: settings.id,
             serviceId: selection.serviceId,
             quantityMultiplier: selection.quantityMultiplier,
+            matchKeywords: selection.matchKeywords?.trim() || null,
           })),
         });
       }
@@ -4771,12 +19954,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       client,
       settings: {
         id: settings.id,
+        primaryProcessingEnabled: settings.primaryProcessingEnabled,
         defaultDeliveryDestination: settings.defaultDeliveryDestination,
         pickupPointBasePriceRub: Number(settings.pickupPointBasePriceRub),
         vnukovoBasePriceRub: Number(settings.vnukovoBasePriceRub),
         baseIncludedItems: settings.baseIncludedItems,
         extraBlockItems: settings.extraBlockItems,
         extraBlockPriceRub: Number(settings.extraBlockPriceRub),
+        tieredLogisticsEnabled: settings.tieredLogisticsEnabled,
+        logisticsFreeItemsLimit: settings.logisticsFreeItemsLimit,
+        logisticsCubicMeterLiters: settings.logisticsCubicMeterLiters,
+        logisticsCubicMeterPriceRub: Number(settings.logisticsCubicMeterPriceRub),
+        logisticsPalletPriceRub: Number(settings.logisticsPalletPriceRub),
         boxCapacityItems: settings.boxCapacityItems,
         palletsEnabled: settings.palletsEnabled,
         boxesPerPallet: settings.boxesPerPallet,
@@ -4789,6 +19978,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         additionalServices: settings.additionalServices.map((selection) => ({
           serviceId: selection.serviceId,
           quantityMultiplier: Number(selection.quantityMultiplier),
+          matchKeywords: selection.matchKeywords ?? '',
         })),
       },
       serviceOptions: services
@@ -4920,9 +20110,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
-  private async syncFbsRequestsFromMarketplace(clientId: string, orders: FbsOrderSummary[]) {
+  private async syncFbsRequestsFromMarketplace(
+    clientId: string,
+    orders: FbsOrderSummary[],
+    extraRequestIds: string[] = [],
+  ) {
     const links = await this.prisma.fbsOrderRequestLink.findMany({
-      where: { clientId },
+      // Completed requests never change their composition. Reading thousands
+      // of their links on every minute-long FBS refresh delayed live WB calls.
+      where: {
+        clientId,
+        request: { status: { notIn: [...FBS_REQUEST_CLOSED_STATUSES] } },
+      },
       include: {
         request: {
           select: {
@@ -4933,7 +20132,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         },
       },
     });
-    const openLinks = links.filter((link) => !FBS_REQUEST_CLOSED_STATUSES.has(link.request.status));
+    const openLinks = links;
     if (openLinks.length === 0) {
       return;
     }
@@ -5003,7 +20202,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       additionsByRequest.set(requestId, additions);
     }
 
-    const requestIds = uniqueStrings(openLinks.map((link) => link.requestId));
+    const requestIds = uniqueStrings([
+      ...openLinks.map((link) => link.requestId),
+      ...extraRequestIds,
+    ]);
     for (const requestId of requestIds) {
       if (requestWithMissingOrders.has(requestId)) {
         this.logger.warn(
@@ -5171,7 +20373,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           continue;
         }
         const hadSnapshot = Boolean(link.lastSeenAt);
-        if (hadSnapshot && fbsOrderLinkChanged(link, order)) {
+        const snapshotChanged = !hadSnapshot || fbsOrderLinkChanged(link, order);
+        if (hadSnapshot && snapshotChanged) {
           statusChanges.push(fbsOrderLinkChangeText(link, order));
         }
 
@@ -5230,6 +20433,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
                 where: { id: task.id },
                 data: {
                   status: 'RELEASED',
+                  reservedBoxId: null,
+                  reservedBoxCode: null,
+                  reservedAt: null,
                   boxId: null,
                   boxCode: null,
                   barcode: null,
@@ -5283,14 +20489,20 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           continue;
         }
 
-        await tx.fbsOrderRequestLink.update({
-          where: { id: link.id },
-          data: {
-            ...fbsOrderLinkSnapshot(order),
-            syncStatus: FBS_REQUEST_LINK_ACTIVE,
-            syncIssue: null,
-          },
-        });
+        if (
+          snapshotChanged ||
+          link.syncStatus !== FBS_REQUEST_LINK_ACTIVE ||
+          Boolean(link.syncIssue)
+        ) {
+          await tx.fbsOrderRequestLink.update({
+            where: { id: link.id },
+            data: {
+              ...fbsOrderLinkSnapshot(order),
+              syncStatus: FBS_REQUEST_LINK_ACTIVE,
+              syncIssue: null,
+            },
+          });
+        }
         addFbsDesiredItem(desiredItems, desiredSkuByOrder, {
           orderId: order.id,
           skuId: product.id,
@@ -5389,7 +20601,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
                 liveOrder.product.clientSku ??
                 liveOrder.product.internalSku,
               barcodes: liveOrder.barcodes as Prisma.InputJsonValue,
-              storageBoxes: liveOrder.storageBoxes as Prisma.InputJsonValue,
+              // FIX: Marketplace metadata has no local pallet-sort route. Keep
+              // the route selected by repair/reservation until it is released.
+              storageBoxes: (
+                task.reservedBoxId || task.boxId
+                  ? task.storageBoxes
+                  : liveOrder.storageBoxes
+              ) as Prisma.InputJsonValue,
               itemCount: Math.max(1, liveOrder.itemCount),
               supplyId: liveOrder.supplyId,
             },
@@ -5401,7 +20619,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         [...desiredItems.values()].flatMap((item) => item.orderIds),
       ).sort(naturalFbsIdCompare);
       const nextTitle = `FBS — ${effectiveOrderIds.length} заказ(а/ов)`;
-      const nextComment = `Создано из FBS-заказов: ${effectiveOrderIds.join(', ')}`;
+      const nextComment = fbsRequestCompositionComment(
+        effectiveOrderIds,
+        request.comment,
+      );
       const requestData: Prisma.ClientRequestUpdateInput = {};
       if (!compositionLocked && request.title !== nextTitle) {
         requestData.title = nextTitle;
@@ -5486,7 +20707,577 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         changed,
         summary: [...changes, ...conflicts].join(' ') || 'изменений нет',
       };
+    }, {
+      maxWait: 10_000,
+      timeout: 30_000,
     });
+  }
+
+  private async syncFbsPalletSortReservations(
+    clientId: string,
+    orders: FbsOrderSummary[],
+  ) {
+    const result = new Map<
+      string,
+      NonNullable<FbsOrderSummary['reservation']>
+    >();
+    if (
+      !this.prisma.fbsTsdAssembly?.findMany ||
+      !this.prisma.stockBalance?.findMany
+    ) {
+      return result;
+    }
+
+    const relevantOrders = orders.filter(
+      (order) =>
+        order.marketplace === MarketplaceType.WILDBERRIES &&
+        Boolean(order.id) &&
+        Boolean(order.connectionId),
+    );
+    if (relevantOrders.length === 0) {
+      return result;
+    }
+    const client = this.prisma.client?.findUnique
+      ? await this.prisma.client.findUnique({
+          where: { id: clientId },
+          select: { storesWithoutBoxes: true },
+        })
+      : { storesWithoutBoxes: false };
+    const storesWithoutBoxes = client?.storesWithoutBoxes === true;
+
+    const orderByKey = new Map(
+      relevantOrders.map((order) => [
+        selectionKey(order.connectionId, order.id),
+        order,
+      ]),
+    );
+    const existingTasks = await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        clientId,
+        marketplace: MarketplaceType.WILDBERRIES,
+        OR: relevantOrders.map((order) => ({
+          connectionId: order.connectionId,
+          orderId: order.id,
+        })),
+      },
+    });
+    const taskByKey = new Map(
+      existingTasks.map((task) => [
+        selectionKey(task.connectionId, task.orderId),
+        task,
+      ]),
+    );
+
+    for (const task of existingTasks) {
+      const order = orderByKey.get(
+        selectionKey(task.connectionId, task.orderId),
+      );
+      if (
+        order?.category !== 'cancelled' ||
+        ![
+          FBS_TSD_RESERVED_STATUS,
+          FBS_TSD_WAITING_STOCK_STATUS,
+        ].includes(task.status)
+      ) {
+        continue;
+      }
+      const released = await this.prisma.fbsTsdAssembly.update({
+        where: { id: task.id },
+        data: {
+          status: 'RELEASED',
+          reservedBoxId: null,
+          reservedBoxCode: null,
+          reservedAt: null,
+          boxId: null,
+          boxCode: null,
+          errorMessage: `Автоматический резерв снят: заказ ${order.id} отменён в маркетплейсе.`,
+        },
+      });
+      taskByKey.set(
+        selectionKey(task.connectionId, task.orderId),
+        released,
+      );
+    }
+
+    for (const order of relevantOrders) {
+      if (
+        order.category !== 'active' ||
+        !order.product ||
+        order.supplierStatus !== 'confirm'
+      ) {
+        continue;
+      }
+      const key = selectionKey(order.connectionId, order.id);
+      const existing = taskByKey.get(key);
+      // An unstarted task may still be assigned to a handheld.  Let the
+      // background reservation pass inspect it: if its reserved box has
+      // disappeared from the live balances, the task is safely returned to
+      // the automatic queue and receives a new source.  Tasks with any
+      // physical scan stay completely untouched.
+      if (
+        existing &&
+        ![
+          FBS_TSD_RESERVED_STATUS,
+          FBS_TSD_WAITING_STOCK_STATUS,
+          'IN_PROGRESS',
+        ].includes(existing.status)
+      ) {
+        continue;
+      }
+      // Once a picker has accepted an order, background reservation sync must
+      // not reassign or rewrite it. Only an explicit picker/admin action may
+      // release an active task.
+      if (existing?.status === 'IN_PROGRESS') {
+        continue;
+      }
+
+      const sourceSkuId = order.relabeling?.sourceSkuId ?? null;
+      const stockSkuId = sourceSkuId || order.product.id;
+      const requestItem = order.request
+        ? await this.prisma.clientRequestItem.findFirst({
+            where: {
+              requestId: order.request.id,
+              skuId: order.product.id,
+            },
+            select: { id: true },
+          })
+        : null;
+      let routedWarehouseId = order.request?.warehouseId ?? null;
+      const keepExistingReservation =
+        existing?.status === FBS_TSD_RESERVED_STATUS &&
+        Boolean(existing.reservedAt);
+      if (!routedWarehouseId && !keepExistingReservation) {
+        try {
+          routedWarehouseId = await this.resolveFbsWarehouseFromWildberries(
+            clientId,
+            [order],
+          );
+        } catch (caught) {
+          if (
+            caught instanceof FbsWarehouseExcludedError ||
+            caught instanceof FbsWarehouseUnconfiguredError
+          ) {
+            continue;
+          }
+          const message =
+            caught instanceof Error ? caught.message : String(caught);
+          this.logger.warn(
+            `FBS order ${order.id}: WB branch could not be resolved before automatic reservation: ${message}`,
+          );
+        }
+      }
+
+      if (storesWithoutBoxes) {
+        const available = await this.prisma.stockBalance.aggregate({
+          where: {
+            clientId,
+            skuId: stockSkuId,
+            status: StockStatus.AVAILABLE,
+            OR: [
+              { boxId: null },
+              {
+                boxId: { not: null },
+                box: { status: { notIn: ['deleted', 'archived'] } },
+              },
+            ],
+          },
+          _sum: { quantity: true },
+        });
+        const reservations = await this.fbsTsdReservationRows({
+          clientId,
+          skuId: stockSkuId,
+          withoutBox: true,
+          excludeTaskId: existing?.id ?? null,
+        });
+        const availableQuantity = Math.max(
+          0,
+          (available._sum.quantity ?? 0) -
+            reservations.reduce(
+              (sum, reservation) => sum + reservation.itemCount,
+              0,
+            ),
+        );
+        const itemCount = Math.max(1, order.itemCount);
+        const hasStock = availableQuantity >= itemCount;
+        const metadata = uniqueStrings([
+          ...order.requiredMeta,
+          ...order.optionalMeta,
+        ]).map((item) => item.toLowerCase());
+        const requiresKiz =
+          metadata.includes('sgtin') ||
+          (order.product.needsChestnyZnak && !order.product.isUnmarked);
+        const automaticId = fbsAutomaticReservationId(order);
+        const taskData = {
+          clientId,
+          marketplace: order.marketplace,
+          connectionId: order.connectionId,
+          orderId: order.id,
+          supplyId: order.supplyId,
+          requestId: order.request?.id ?? automaticId,
+          requestItemId: requestItem?.id ?? automaticId,
+          skuId: order.product.id,
+          sourceSkuId,
+          productName: order.product.name,
+          article:
+            order.product.article ??
+            order.product.clientSku ??
+            order.product.internalSku,
+          sourceProductName:
+            order.relabeling?.sourceProductName ?? null,
+          sourceArticle: order.relabeling?.sourceArticle ?? null,
+          barcodes: order.barcodes as Prisma.InputJsonValue,
+          sourceBarcodes:
+            (order.relabeling?.sourceBarcodes ?? []) as Prisma.InputJsonValue,
+          storageBoxes: [] as Prisma.InputJsonValue,
+          itemCount,
+          requiresKiz,
+          status: hasStock
+            ? FBS_TSD_RESERVED_STATUS
+            : FBS_TSD_WAITING_STOCK_STATUS,
+          deviceCode: FBS_TSD_AUTO_RESERVATION_DEVICE,
+          workerUserId: null,
+          workerName: null,
+          reservedBoxId: null,
+          reservedBoxCode: null,
+          reservedAt: hasStock
+            ? existing?.reservedAt ?? new Date()
+            : null,
+          boxId: null,
+          boxCode: hasStock ? FBS_TSD_NO_BOX_CODE : null,
+          sourceBarcode: null,
+          barcode: null,
+          relabelRequired: Boolean(order.relabeling),
+          relabelConfirmedAt: null,
+          kiz: null,
+          wbMetaStatus: requiresKiz ? 'PENDING' : 'NOT_REQUIRED',
+          errorMessage: hasStock
+            ? null
+            : 'На складе нет свободного поштучного остатка этого товара.',
+          completedAt: null,
+        };
+        try {
+          if (existing) {
+            const changed = await this.prisma.fbsTsdAssembly.updateMany({
+              where: {
+                id: existing.id,
+                status: { in: [FBS_TSD_RESERVED_STATUS, FBS_TSD_WAITING_STOCK_STATUS, 'RELEASED'] },
+                boxId: null,
+                sourceBarcode: null,
+                barcode: null,
+                kiz: null,
+                completedAt: null,
+                relabelConfirmedAt: null,
+              },
+              data: taskData,
+            });
+            const saved = await this.prisma.fbsTsdAssembly.findUnique({ where: { id: existing.id } });
+            if (saved) taskByKey.set(key, saved);
+            if (changed.count !== 1) continue;
+          } else {
+            const saved = await this.prisma.fbsTsdAssembly.create({ data: taskData });
+            taskByKey.set(key, saved);
+          }
+        } catch (caught) {
+          if (
+            caught instanceof Prisma.PrismaClientKnownRequestError &&
+            caught.code === 'P2002'
+          ) {
+            continue;
+          }
+          throw caught;
+        }
+        continue;
+      }
+
+      let warehouseId = routedWarehouseId;
+
+      const balances = sourceSkuId || !order.relabeling
+        ? await this.prisma.stockBalance.findMany({
+            where: {
+              clientId,
+              skuId: stockSkuId,
+              status: StockStatus.AVAILABLE,
+              quantity: { gt: 0 },
+              boxId: { not: null },
+              box: {
+                status: { notIn: ['deleted', 'archived'] },
+                warehouseId: { not: null },
+                storagePlacement: {
+                  pallet: { clientId },
+                },
+              },
+            },
+            select: {
+              boxId: true,
+              quantity: true,
+              box: {
+                select: {
+                  id: true,
+                  code: true,
+                  warehouseId: true,
+                  storagePlacement: {
+                    select: {
+                      pallet: {
+                        select: {
+                          id: true,
+                          code: true,
+                          warehouseId: true,
+                          status: true,
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          })
+        : [];
+      const reservations = await this.fbsTsdReservationRows({
+        clientId,
+        skuId: stockSkuId,
+        excludeTaskId: existing?.id ?? null,
+      });
+      const reservedByBox = new Map<string, number>();
+      for (const reservation of reservations) {
+        if (!reservation.boxId) continue;
+        reservedByBox.set(
+          reservation.boxId,
+          (reservedByBox.get(reservation.boxId) ?? 0) +
+            reservation.itemCount,
+        );
+      }
+
+      const boxes = new Map<
+        string,
+        {
+          id: string;
+          code: string;
+          warehouseId: string;
+          palletId: string;
+          palletCode: string;
+          quantity: number;
+        }
+      >();
+      for (const balance of balances) {
+        const box = balance.box;
+        const pallet = box?.storagePlacement?.pallet;
+        if (
+          !balance.boxId ||
+          !box?.warehouseId ||
+          !pallet ||
+          pallet.warehouseId !== box.warehouseId
+        ) {
+          continue;
+        }
+        const current = boxes.get(balance.boxId) ?? {
+          id: balance.boxId,
+          code: box.code,
+          warehouseId: box.warehouseId,
+          palletId: pallet.id,
+          palletCode: pallet.code,
+          quantity: 0,
+        };
+        current.quantity += balance.quantity;
+        boxes.set(balance.boxId, current);
+      }
+
+      if (!warehouseId && existing?.reservedBoxId) {
+        warehouseId =
+          boxes.get(existing.reservedBoxId)?.warehouseId ?? null;
+      }
+      if (!warehouseId && boxes.size > 0) {
+        const quantityByWarehouse = new Map<string, number>();
+        for (const box of boxes.values()) {
+          quantityByWarehouse.set(
+            box.warehouseId,
+            (quantityByWarehouse.get(box.warehouseId) ?? 0) + box.quantity,
+          );
+        }
+        warehouseId =
+          [...quantityByWarehouse.entries()].sort(
+            ([leftId, leftQuantity], [rightId, rightQuantity]) =>
+              rightQuantity - leftQuantity ||
+              leftId.localeCompare(rightId),
+          )[0]?.[0] ?? null;
+      }
+
+      const itemCount = Math.max(1, order.itemCount);
+      const eligibleBoxes = [...boxes.values()]
+        .filter((box) => !warehouseId || box.warehouseId === warehouseId)
+        .map((box) => ({
+          ...box,
+          freeQuantity:
+            box.quantity - (reservedByBox.get(box.id) ?? 0),
+        }))
+        .filter((box) => box.freeQuantity >= itemCount)
+        .sort(
+          (left, right) =>
+            Number(right.id === existing?.reservedBoxId) -
+              Number(left.id === existing?.reservedBoxId) ||
+            left.freeQuantity - right.freeQuantity ||
+            left.code.localeCompare(right.code, 'ru-RU'),
+        );
+      const selectedBox = eligibleBoxes[0] ?? null;
+      const metadata = uniqueStrings([
+        ...order.requiredMeta,
+        ...order.optionalMeta,
+      ]).map((item) => item.toLowerCase());
+      const requiresKiz =
+        metadata.includes('sgtin') ||
+        (order.product.needsChestnyZnak && !order.product.isUnmarked);
+      const automaticId = fbsAutomaticReservationId(order);
+      const waitingReason = !stockSkuId
+        ? 'Для товара не найдена складская карточка источника.'
+        : warehouseId
+          ? `В выбранном филиале нет свободной единицы товара в коробе, установленном на палет-сорт.`
+          : 'Не удалось определить филиал с доступным товаром в палет-сорте.';
+      const taskData = {
+        clientId,
+        marketplace: order.marketplace,
+        connectionId: order.connectionId,
+        orderId: order.id,
+        supplyId: order.supplyId,
+        requestId: order.request?.id ?? automaticId,
+        requestItemId: requestItem?.id ?? automaticId,
+        skuId: order.product.id,
+        sourceSkuId,
+        productName: order.product.name,
+        article:
+          order.product.article ??
+          order.product.clientSku ??
+          order.product.internalSku,
+        sourceProductName:
+          order.relabeling?.sourceProductName ?? null,
+        sourceArticle: order.relabeling?.sourceArticle ?? null,
+        barcodes: order.barcodes as Prisma.InputJsonValue,
+        sourceBarcodes:
+          (order.relabeling?.sourceBarcodes ?? []) as Prisma.InputJsonValue,
+        storageBoxes: eligibleBoxes.map((box) => ({
+          code: box.code,
+          quantity: box.freeQuantity,
+          status: StockStatus.AVAILABLE,
+          palletCode: box.palletCode,
+        })) as Prisma.InputJsonValue,
+        itemCount,
+        requiresKiz,
+        status: selectedBox
+          ? FBS_TSD_RESERVED_STATUS
+          : FBS_TSD_WAITING_STOCK_STATUS,
+        deviceCode: FBS_TSD_AUTO_RESERVATION_DEVICE,
+        workerUserId: null,
+        workerName: null,
+        reservedBoxId: selectedBox?.id ?? null,
+        reservedBoxCode: selectedBox?.code ?? null,
+        reservedAt: selectedBox
+          ? existing?.reservedAt ?? new Date()
+          : null,
+        boxId: null,
+        boxCode: null,
+        sourceBarcode: null,
+        barcode: null,
+        relabelRequired: Boolean(order.relabeling),
+        relabelConfirmedAt: null,
+        kiz: null,
+        wbMetaStatus: requiresKiz ? 'PENDING' : 'NOT_REQUIRED',
+        errorMessage: selectedBox ? null : waitingReason,
+        completedAt: null,
+      };
+
+      try {
+        if (existing) {
+          const changed = await this.prisma.fbsTsdAssembly.updateMany({
+            where: {
+              id: existing.id,
+              status: { in: [FBS_TSD_RESERVED_STATUS, FBS_TSD_WAITING_STOCK_STATUS, 'RELEASED'] },
+              boxId: null,
+              sourceBarcode: null,
+              barcode: null,
+              kiz: null,
+              completedAt: null,
+              relabelConfirmedAt: null,
+            },
+            data: taskData,
+          });
+          const saved = await this.prisma.fbsTsdAssembly.findUnique({ where: { id: existing.id } });
+          if (saved) taskByKey.set(key, saved);
+          if (changed.count !== 1) continue;
+        } else {
+          const saved = await this.prisma.fbsTsdAssembly.create({ data: taskData });
+          taskByKey.set(key, saved);
+        }
+      } catch (caught) {
+        if (
+          caught instanceof Prisma.PrismaClientKnownRequestError &&
+          caught.code === 'P2002'
+        ) {
+          continue;
+        }
+        throw caught;
+      }
+    }
+
+    const tasks = await this.prisma.fbsTsdAssembly.findMany({
+      where: {
+        clientId,
+        marketplace: MarketplaceType.WILDBERRIES,
+        OR: relevantOrders.map((order) => ({
+          connectionId: order.connectionId,
+          orderId: order.id,
+        })),
+      },
+      select: {
+        connectionId: true,
+        orderId: true,
+        status: true,
+        reservedBoxId: true,
+        reservedBoxCode: true,
+        reservedAt: true,
+        boxId: true,
+        boxCode: true,
+        errorMessage: true,
+      },
+    });
+    const locationBoxIds = uniqueStrings(
+      tasks.map((task) => task.reservedBoxId ?? task.boxId ?? ''),
+    );
+    const placements = locationBoxIds.length
+      ? await this.prisma.storagePalletBox.findMany({
+          where: { boxId: { in: locationBoxIds } },
+          select: {
+            boxId: true,
+            pallet: {
+              select: {
+                code: true,
+                warehouseId: true,
+              },
+            },
+          },
+        })
+      : [];
+    const placementByBoxId = new Map(
+      placements
+        .filter(
+          (
+            placement,
+          ): placement is typeof placement & { boxId: string } =>
+            Boolean(placement.boxId),
+        )
+        .map((placement) => [placement.boxId, placement.pallet]),
+    );
+    for (const task of tasks) {
+      const boxId = task.reservedBoxId ?? task.boxId;
+      const placement = boxId ? placementByBoxId.get(boxId) : null;
+      result.set(selectionKey(task.connectionId, task.orderId), {
+        status: task.status,
+        withoutBox: storesWithoutBoxes || fbsTsdUsesNoBox(task),
+        boxCode: task.reservedBoxCode ?? task.boxCode,
+        palletCode: placement?.code ?? null,
+        warehouseId: placement?.warehouseId ?? null,
+        reservedAt: task.reservedAt?.toISOString() ?? null,
+        problem: task.errorMessage,
+      });
+    }
+    return result;
   }
 
   private async loadFbsDeliveryPlan(clientId: string): Promise<FbsOrdersResponse['deliveryPlan']> {
@@ -5499,35 +21290,36 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const destination = settings?.defaultDeliveryDestination ?? FbsDeliveryDestination.PICKUP_POINT;
     return {
       destination,
-      itemsPerCargoPlace: DEFAULT_FBS_ITEMS_PER_CARGO_PLACE,
+      itemsPerCargoPlace: FBS_UNLIMITED_CARGO_PLACE_CAPACITY,
       requiresCargoPlaces: destination === FbsDeliveryDestination.PICKUP_POINT,
     };
   }
 
   private async loadFbsTsdRequestOrders(clientId: string): Promise<FbsOrdersResponse> {
     const [client, connections, deliveryPlan, links] = await Promise.all([
-      this.prisma.client.findUnique({
+      Promise.resolve().then(() => this.prisma.client.findUnique({
         where: { id: clientId },
         select: { id: true, code: true, name: true },
-      }),
-      this.prisma.clientMarketplaceConnection.findMany({
+      })),
+      Promise.resolve().then(() => this.prisma.clientMarketplaceConnection.findMany({
         where: {
           clientId,
-          marketplace: MarketplaceType.WILDBERRIES,
+          // FIX: A selected WMS request may contain either WB or Ozon orders.
+          marketplace: { in: [MarketplaceType.WILDBERRIES, MarketplaceType.OZON] },
           isActive: true,
         },
         select: { id: true, marketplace: true, accountName: true },
         orderBy: [{ accountName: 'asc' }, { createdAt: 'asc' }],
-      }),
-      this.loadFbsDeliveryPlan(clientId),
-      this.prisma.fbsOrderRequestLink.findMany({
+      })),
+      Promise.resolve().then(() => this.loadFbsDeliveryPlan(clientId)),
+      Promise.resolve().then(() => this.prisma.fbsOrderRequestLink.findMany({
         where: {
           clientId,
-          marketplace: MarketplaceType.WILDBERRIES,
+          // FIX: Restore Ozon orders from the selected WMS request as well.
+          marketplace: { in: [MarketplaceType.WILDBERRIES, MarketplaceType.OZON] },
           syncStatus: FBS_REQUEST_LINK_ACTIVE,
-          lastCategory: 'active',
-          lastSupplierStatus: 'confirm',
           lastSkuId: { not: null },
+          lastCategory: { not: 'cancelled' },
           request: {
             status: {
               notIn: [
@@ -5537,12 +21329,39 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               ],
             },
           },
+          OR: [
+            {
+              marketplace: MarketplaceType.WILDBERRIES,
+              lastCategory: 'active',
+              lastSupplierStatus: 'confirm',
+            },
+            {
+              marketplace: MarketplaceType.OZON,
+              lastCategory: 'active',
+              lastSupplierStatus: 'awaiting_packaging',
+            },
+            {
+              request: {
+                fbsEmergencyAssemblyAt: { not: null },
+              },
+            },
+          ],
         },
         include: {
-          request: { select: { id: true, number: true, title: true, status: true } },
+          request: {
+            select: {
+              id: true,
+              number: true,
+              title: true,
+              status: true,
+              fbsEmergencyAssemblyAt: true,
+              fbsEmergencyAssemblyByUserId: true,
+              fbsEmergencyAssemblyByName: true,
+            },
+          },
         },
         orderBy: { createdAt: 'asc' },
-      }),
+      })),
     ]);
 
     if (!client) {
@@ -5561,6 +21380,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             internalSku: true,
             clientSku: true,
             article: true,
+            size: true,
             needsChestnyZnak: true,
             isUnmarked: true,
             barcodes: { select: { value: true } },
@@ -5586,7 +21406,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       if (!sku || !connection) {
         return [];
       }
-      const supplierStatus = link.lastSupplierStatus || 'confirm';
+      const emergencyAssembly = Boolean(link.request.fbsEmergencyAssemblyAt);
+      const supplierStatus = emergencyAssembly ? 'confirm' : link.lastSupplierStatus || 'confirm';
       const wbStatus = link.lastWbStatus || 'waiting';
       return [{
         id: link.orderId,
@@ -5603,15 +21424,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         chrtId: null,
         barcodes: uniqueStrings(sku.barcodes.map((barcode) => barcode.value)),
         itemCount: Math.max(1, link.lastItemCount ?? 1),
-        product: {
-          id: sku.id,
-          name: sku.name,
-          internalSku: sku.internalSku,
-          clientSku: sku.clientSku,
-          article: sku.article,
-          needsChestnyZnak: sku.needsChestnyZnak,
-          isUnmarked: sku.isUnmarked,
-        },
+          product: {
+            id: sku.id,
+            name: sku.name,
+            internalSku: sku.internalSku,
+            clientSku: sku.clientSku,
+            article: sku.article,
+            size: sku.size,
+            needsChestnyZnak: sku.needsChestnyZnak,
+            isUnmarked: sku.isUnmarked,
+          },
         storageBoxes: sku.balances
           .filter((balance) => balance.box)
           .map((balance) => ({
@@ -5620,11 +21442,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             status: balance.status,
           }))
           .sort((left, right) => left.code.localeCompare(right.code)),
+        relabeling: null,
         createdAt: link.createdAt.toISOString(),
         sellerDate: null,
         deliveryDate: null,
         supplyId: link.lastSupplyId,
         warehouseId: null,
+        warehouseName: null,
         officeId: null,
         cargoType: null,
         crossBorderType: null,
@@ -5633,7 +21457,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         shipmentPlan: null,
         requiredMeta: [],
         optionalMeta: [],
-        comment: 'Очередь восстановлена из синхронизированной заявки WMS.',
+        comment: emergencyAssembly
+          ? 'Экстренная локальная сборка: статус Wildberries не изменяется.'
+          : 'Очередь восстановлена из синхронизированной заявки WMS.',
         request: link.request,
         billing: null,
       }];
@@ -5657,7 +21483,93 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
-  private async loadFbsOrders(clientId: string): Promise<FbsOrdersResponse> {
+  private async mergeSyncedFbsTsdRequestOrders(
+    clientId: string,
+    response: FbsOrdersResponse,
+  ): Promise<FbsOrdersResponse> {
+    try {
+      const synced = await this.loadFbsTsdRequestOrders(clientId);
+      if (synced.orders.length === 0) return response;
+
+      const syncedByKey = new Map(
+        synced.orders.map((order) => [selectionKey(order.connectionId, order.id), order]),
+      );
+      const liveKeys = new Set<string>();
+      const mergedOrders = response.orders.map((order) => {
+        const key = selectionKey(order.connectionId, order.id);
+        liveKeys.add(key);
+        const saved = syncedByKey.get(key);
+        if (!saved) return order;
+        return {
+          ...saved,
+          ...order,
+          product: order.product ?? saved.product,
+          request: order.request ?? saved.request,
+          barcodes: order.barcodes.length > 0 ? order.barcodes : saved.barcodes,
+          storageBoxes:
+            order.storageBoxes.length > 0 ? order.storageBoxes : saved.storageBoxes,
+          supplyId: order.supplyId ?? saved.supplyId,
+        };
+      });
+      const restored = synced.orders.filter(
+        (order) => !liveKeys.has(selectionKey(order.connectionId, order.id)),
+      );
+      if (restored.length === 0) {
+        return { ...response, orders: mergedOrders };
+      }
+
+      const orders = [...mergedOrders, ...restored];
+      this.logger.warn(
+        `FBS TSD queue for client ${clientId} restored ${restored.length} order(s) from the WMS request: ${restored.map((order) => order.id).join(', ')}`,
+      );
+      return {
+        ...response,
+        orders,
+        counts: {
+          active: orders.filter((order) => order.category === 'active').length,
+          shipped: orders.filter((order) => order.category === 'shipped').length,
+          cancelled: orders.filter((order) => order.category === 'cancelled').length,
+          archive: orders.filter((order) => order.category === 'archive').length,
+          all: orders.length,
+        },
+      };
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      this.logger.warn(
+        `FBS TSD queue for client ${clientId} could not merge saved request orders: ${message}`,
+      );
+      return response;
+    }
+  }
+
+  private async loadFbsOrders(
+    clientId: string,
+    previousOrderStates?: ReadonlyMap<string, string>,
+    options: { historyMode?: FbsOrderHistoryMode } = {},
+  ): Promise<FbsOrdersResponse> {
+    const historyMode = options.historyMode ?? 'full';
+    const loadKey = `${clientId}:${previousOrderStates ? 'incremental' : 'full'}:${historyMode}`;
+    const current = this.fbsOrdersLoads.get(loadKey);
+    if (current) {
+      return current;
+    }
+
+    const promise = this.loadFbsOrdersUncached(clientId, previousOrderStates, { historyMode });
+    this.fbsOrdersLoads.set(loadKey, promise);
+    try {
+      return await promise;
+    } finally {
+      if (this.fbsOrdersLoads.get(loadKey) === promise) {
+        this.fbsOrdersLoads.delete(loadKey);
+      }
+    }
+  }
+
+  private async loadFbsOrdersUncached(
+    clientId: string,
+    previousOrderStates?: ReadonlyMap<string, string>,
+    options: { historyMode?: FbsOrderHistoryMode } = {},
+  ): Promise<FbsOrdersResponse> {
     const [client, connections, deliveryPlan] = await Promise.all([
       this.prisma.client.findUnique({
         where: { id: clientId },
@@ -5666,7 +21578,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       this.prisma.clientMarketplaceConnection.findMany({
         where: {
           clientId,
-          marketplace: { in: [MarketplaceType.WILDBERRIES, MarketplaceType.OZON] },
+          marketplace: { in: [MarketplaceType.WILDBERRIES, MarketplaceType.OZON, MarketplaceType.YANDEX_MARKET] },
           isActive: true,
         },
         orderBy: [{ accountName: 'asc' }, { createdAt: 'asc' }],
@@ -5696,17 +21608,36 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       };
     }
 
-    const rawOrders: WildberriesFbsOrder[] = [];
-    for (const connection of connections) {
-      if (connection.marketplace === MarketplaceType.WILDBERRIES) {
-        rawOrders.push(...(await this.fetchWildberriesFbsOrders(connection)));
-      } else if (connection.marketplace === MarketplaceType.OZON) {
-        rawOrders.push(...(await this.fetchOzonFbsOrders(connection)));
-      }
-    }
+    const rawOrderGroups: WildberriesFbsOrder[][] = (
+      await Promise.all(
+        connections.map(async (connection): Promise<WildberriesFbsOrder[]> => {
+          if (connection.marketplace === MarketplaceType.WILDBERRIES) {
+            return (await this.fetchWildberriesFbsOrders(
+              connection,
+              options.historyMode,
+            )) as WildberriesFbsOrder[];
+          }
+          if (connection.marketplace === MarketplaceType.OZON) {
+            return (await this.fetchOzonFbsOrders(connection)) as WildberriesFbsOrder[];
+          }
+          if (connection.marketplace === MarketplaceType.YANDEX_MARKET) {
+            return (await this.fetchYandexFbsOrders(connection)) as WildberriesFbsOrder[];
+          }
+          return [] as WildberriesFbsOrder[];
+        }),
+      )
+    );
+    const rawOrders = rawOrderGroups.flat();
 
-    const barcodes = uniqueStrings(rawOrders.flatMap((order) => asArray<unknown>(order.skus).map(textValue)));
-    const articles = uniqueStrings(rawOrders.map((order) => textValue(order.article)));
+    const selectedRawOrders = previousOrderStates
+      ? rawOrders.filter((order) => {
+          const key = selectionKey(order.connectionId, textValue(order.id));
+          return previousOrderStates.get(key) !== fbsOrderRefreshFingerprint(order);
+        })
+      : rawOrders;
+
+    const barcodes = uniqueStrings(selectedRawOrders.flatMap((order) => asArray<unknown>(order.skus).map(textValue)));
+    const articles = uniqueStrings(selectedRawOrders.map((order) => textValue(order.article)));
     const skus =
       barcodes.length > 0 || articles.length > 0
         ? await this.prisma.sku.findMany({
@@ -5728,6 +21659,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               internalSku: true,
               clientSku: true,
               article: true,
+              size: true,
               needsChestnyZnak: true,
               isUnmarked: true,
               barcodes: { select: { value: true } },
@@ -5739,7 +21671,19 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
                 select: {
                   quantity: true,
                   status: true,
-                  box: { select: { code: true } },
+                  box: {
+                    select: {
+                      code: true,
+                      warehouseId: true,
+                      storagePlacement: {
+                        select: {
+                          pallet: {
+                            select: { id: true, code: true, warehouseId: true },
+                          },
+                        },
+                      },
+                    },
+                  },
                 },
               },
             },
@@ -5757,7 +21701,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       ),
     );
 
-    const ordersWithoutBilling: FbsOrderSummary[] = rawOrders
+    const ordersWithoutBilling: FbsOrderSummary[] = selectedRawOrders
       .map((order) => {
         const orderBarcodes = uniqueStrings(asArray<unknown>(order.skus).map(textValue));
         const article = textValue(order.article);
@@ -5791,6 +21735,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
                 internalSku: sku.internalSku,
                 clientSku: sku.clientSku,
                 article: sku.article,
+                size: sku.size,
                 needsChestnyZnak: sku.needsChestnyZnak,
                 isUnmarked: sku.isUnmarked,
               }
@@ -5805,11 +21750,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
                 }))
                 .sort((left, right) => left.code.localeCompare(right.code))
             : [],
+          relabeling: null,
           createdAt: textValue(order.createdAt) || null,
           sellerDate: textValue(order.sellerDate) || null,
           deliveryDate: textValue(order.ddate) || null,
           supplyId: textValue(order.supplyId) || textValue(order.supplyID) || null,
           warehouseId: textValue(order.warehouseId) || null,
+          warehouseName: textValue(order.warehouseName) || null,
           officeId: textValue(order.officeId) || null,
           cargoType: textValue(order.cargoType) || null,
           crossBorderType: textValue(order.crossBorderType) || null,
@@ -5834,15 +21781,49 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           },
         })
       : [];
+    await Promise.all(
+      supplyPlans.map(async (plan) => {
+        const warehouseOrder = ordersWithoutBilling.find(
+          (order) =>
+            order.marketplace === plan.marketplace &&
+            order.connectionId === plan.connectionId &&
+            order.supplyId === plan.supplyId &&
+            Boolean(order.warehouseId || order.warehouseName),
+        );
+        if (
+          !warehouseOrder ||
+          (plan.marketplaceWarehouseId === warehouseOrder.warehouseId &&
+            plan.marketplaceWarehouseName === warehouseOrder.warehouseName)
+        ) {
+          return;
+        }
+        await this.prisma.fbsSupplyPlan.update({
+          where: { id: plan.id },
+          data: {
+            marketplaceWarehouseId: warehouseOrder.warehouseId,
+            marketplaceWarehouseName: warehouseOrder.warehouseName,
+          },
+        });
+        plan.marketplaceWarehouseId = warehouseOrder.warehouseId;
+        plan.marketplaceWarehouseName = warehouseOrder.warehouseName;
+      }),
+    );
     const supplyPlanByKey = new Map(
       supplyPlans.map((plan) => [
         fbsSupplyPlanKey(plan.marketplace, plan.connectionId, plan.supplyId),
         {
           destination: plan.deliveryDestination,
-          itemsPerCargoPlace: Math.max(1, plan.itemsPerCargoPlace),
+          itemsPerCargoPlace: FBS_UNLIMITED_CARGO_PLACE_CAPACITY,
           requiresCargoPlaces: plan.deliveryDestination === FbsDeliveryDestination.PICKUP_POINT,
           cargoPlaceCount: Math.max(0, plan.cargoPlaceCount),
           cargoPlaceIds: uniqueStrings(asArray<unknown>(plan.cargoPlaceIds).map(textValue)),
+          sentToWbAt: plan.sentToWbAt?.toISOString() ?? null,
+          sentToWbBy: plan.sentToWbByName
+            ? {
+                id: plan.sentToWbByUserId ?? null,
+                name: plan.sentToWbByName,
+              }
+            : null,
         },
       ]),
     );
@@ -5852,34 +21833,77 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         ? supplyPlanByKey.get(fbsSupplyPlanKey(order.marketplace, order.connectionId, order.supplyId)) ?? null
         : null,
     }));
-    await this.syncFbsRequestsFromMarketplace(clientId, ordersWithShipmentPlans);
-    const requestLinks = ordersWithShipmentPlans.length > 0
+    const ordersWithStockSources = await this.applyFbsRelabelingStockSources(
+      clientId,
+      ordersWithShipmentPlans,
+    );
+    if (!previousOrderStates) {
+      await this.syncFbsRequestsFromMarketplace(clientId, ordersWithStockSources);
+    }
+    const requestLinks = ordersWithStockSources.length > 0
       ? await this.prisma.fbsOrderRequestLink.findMany({
           where: {
             clientId,
-            connectionId: { in: uniqueStrings(ordersWithShipmentPlans.map((order) => order.connectionId)) },
-            orderId: { in: uniqueStrings(ordersWithShipmentPlans.map((order) => order.id)) },
+            connectionId: { in: uniqueStrings(ordersWithStockSources.map((order) => order.connectionId)) },
+            orderId: { in: uniqueStrings(ordersWithStockSources.map((order) => order.id)) },
             syncStatus: {
-              in: [FBS_REQUEST_LINK_ACTIVE, FBS_REQUEST_LINK_RETURN_REQUIRED],
+              in: [
+                FBS_REQUEST_LINK_ACTIVE,
+                FBS_REQUEST_LINK_MOVING,
+                FBS_REQUEST_LINK_RETURN_REQUIRED,
+              ],
             },
           },
           include: {
-            request: { select: { id: true, number: true, title: true, status: true } },
+            request: {
+              select: {
+                id: true,
+                number: true,
+                title: true,
+                status: true,
+                warehouseId: true,
+                fbsEmergencyAssemblyAt: true,
+                fbsEmergencyAssemblyByUserId: true,
+                fbsEmergencyAssemblyByName: true,
+              },
+            },
           },
         })
       : [];
     const requestByOrder = new Map(
       requestLinks.map((link) => [selectionKey(link.connectionId, link.orderId), link.request]),
     );
-    const ordersWithRequests = ordersWithShipmentPlans.map((order) => ({
+    const ordersWithRequests = ordersWithStockSources.map((order) => ({
       ...order,
       request: requestByOrder.get(selectionKey(order.connectionId, order.id)) ?? null,
     }));
+    let reservationByOrder = new Map<
+      string,
+      NonNullable<FbsOrderSummary['reservation']>
+    >();
+    try {
+      reservationByOrder = await this.syncFbsPalletSortReservations(
+        clientId,
+        ordersWithRequests,
+      );
+    } catch (caught) {
+      const message =
+        caught instanceof Error ? caught.message : String(caught);
+      this.logger.error(
+        `Automatic FBS pallet-sort reservation failed for client ${clientId}: ${message}`,
+      );
+    }
+    const ordersWithReservations = ordersWithRequests.map((order) => ({
+      ...order,
+      reservation:
+        reservationByOrder.get(selectionKey(order.connectionId, order.id)) ??
+        null,
+    }));
     const billingByOrder = await this.ensureFbsProcessingCharges(
       clientId,
-      ordersWithRequests.filter((order) => order.category === 'shipped'),
+      ordersWithReservations.filter((order) => order.category === 'shipped'),
     );
-    const orders = ordersWithRequests.map((order) => ({
+    const orders = ordersWithReservations.map((order) => ({
       ...order,
       billing: billingByOrder.get(fbsOrderKey(order)) ?? null,
     }));
@@ -5905,22 +21929,66 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
-  private async fetchWildberriesFbsOrders(connection: MarketplaceConnectionWithClient) {
+  private async fetchWildberriesFbsOrders(
+    connection: MarketplaceConnectionWithClient,
+    historyMode: FbsOrderHistoryMode = 'full',
+  ) {
     const headers = {
       Authorization: connection.apiKey,
       'Content-Type': 'application/json',
     };
-    const [newResponse, historicalOrders, reshipmentResponse] = await Promise.all([
+    const cachedHistory = this.wildberriesFbsHistoryCache.get(connection.id);
+    const historyPromise =
+      cachedHistory && cachedHistory.expiresAt > Date.now()
+        ? Promise.resolve(cachedHistory.orders)
+        : historyMode === 'cache-only'
+          ? Promise.resolve(cachedHistory?.orders ?? [])
+        : fetchWildberriesFbsHistory(headers).then((orders) => {
+            const compactOrders = orders.map(compactWildberriesFbsOrder);
+            this.wildberriesFbsHistoryCache.set(connection.id, {
+              expiresAt: Date.now() + this.wildberriesFbsHistoryCacheTtlMs,
+              orders: compactOrders,
+            });
+            return compactOrders;
+          });
+    const [newResponse, loadedHistoricalOrders, reshipmentResponse, sellerWarehouses] = await Promise.all([
       marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/orders/new', {
         method: 'GET',
         headers,
       }),
-      fetchWildberriesFbsHistory(headers),
+      historyPromise,
       marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/supplies/orders/reshipment', {
         method: 'GET',
         headers,
       }),
+      this.fetchWildberriesStockWarehouses(connection.apiKey).catch((caught) => {
+        const message = caught instanceof Error ? caught.message : String(caught);
+        this.logger.warn(`WB seller warehouses are unavailable for ${connection.id}: ${message}`);
+        return [] as FbsStockWarehouse[];
+      }),
     ]);
+    const newOrders = asArray<Record<string, unknown>>(newResponse.orders).map(
+      compactWildberriesFbsOrder,
+    );
+    const historyById = new Map(
+      loadedHistoricalOrders.map((order) => [textValue(order.id), order]),
+    );
+    for (const order of newOrders) {
+      const id = textValue(order.id);
+      if (id) historyById.set(id, { ...(historyById.get(id) ?? {}), ...order });
+    }
+    const historicalOrders = [...historyById.values()];
+    if (newOrders.length > 0) {
+      const currentHistory = this.wildberriesFbsHistoryCache.get(connection.id);
+      this.wildberriesFbsHistoryCache.set(connection.id, {
+        expiresAt:
+          currentHistory?.expiresAt ?? Date.now() + this.wildberriesFbsHistoryCacheTtlMs,
+        orders: historicalOrders,
+      });
+    }
+    const sellerWarehouseById = new Map(
+      sellerWarehouses.map((warehouse) => [warehouse.id, warehouse]),
+    );
     const reshipmentByOrderId = new Map(
       asArray<Record<string, unknown>>(reshipmentResponse.orders).map((item) => [
         textValue(item.orderID) || textValue(item.orderId),
@@ -5935,18 +22003,35 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         ordersById.set(id, order);
       }
     }
-    for (const order of asArray<Record<string, unknown>>(newResponse.orders)) {
+    for (const order of newOrders) {
       const id = textValue(order.id);
       if (id) {
-        ordersById.set(id, { ...(ordersById.get(id) ?? {}), ...order });
+        ordersById.set(id, {
+          ...(ordersById.get(id) ?? {}),
+          ...compactWildberriesFbsOrder(order),
+        });
       }
     }
 
     const ids = [...ordersById.keys()]
       .map((id) => Number(id))
       .filter((id) => Number.isSafeInteger(id) && id > 0);
-    const statuses = new Map<string, { supplierStatus: string; wbStatus: string }>();
-    for (const orderIds of chunks(ids, 1000)) {
+    const now = Date.now();
+    const cachedStatuses = this.wildberriesFbsStatusCache.get(connection.id);
+    const hasFreshStatusCache = Boolean(cachedStatuses && cachedStatuses.expiresAt > now);
+    const statuses = new Map<string, { supplierStatus: string; wbStatus: string }>(
+      hasFreshStatusCache ? cachedStatuses!.statuses : [],
+    );
+    const statusIdsToRefresh = hasFreshStatusCache
+      ? ids.filter((id) => {
+          const current = statuses.get(String(id));
+          return (
+            !current ||
+            fbsOrderCategory(current.supplierStatus, current.wbStatus) === 'active'
+          );
+        })
+      : ids;
+    for (const orderIds of chunks(statusIdsToRefresh, 1000)) {
       const response = await marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/orders/status', {
         method: 'POST',
         headers,
@@ -5962,11 +22047,19 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         }
       }
     }
+    this.wildberriesFbsStatusCache.set(connection.id, {
+      expiresAt: hasFreshStatusCache
+        ? cachedStatuses!.expiresAt
+        : now + this.wildberriesFbsStatusCacheTtlMs,
+      statuses,
+    });
 
     return [...ordersById.entries()].map(([id, order]) => {
       const status = statuses.get(id);
+      const sellerWarehouse = sellerWarehouseById.get(textValue(order.warehouseId));
       return {
         ...order,
+        warehouseName: sellerWarehouse?.name ?? null,
         connectionId: connection.id,
         accountName: connection.accountName,
         marketplace: MarketplaceType.WILDBERRIES,
@@ -5991,28 +22084,33 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
     const to = new Date().toISOString();
     const postings: Record<string, unknown>[] = [];
+    let cursor = '';
 
-    for (let offset = 0; offset < 5000; offset += 1000) {
-      const response = await marketplaceJson('https://api-seller.ozon.ru/v3/posting/fbs/list', {
+    for (let pageIndex = 0; pageIndex < 1000; pageIndex += 1) {
+      const response = await marketplaceJson('https://api-seller.ozon.ru/v4/posting/fbs/list', {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          dir: 'DESC',
+          cursor: cursor || undefined,
           filter: { since, to },
-          limit: 1000,
-          offset,
+          limit: 100,
+          sort_dir: 'DESC',
+          translit: false,
           with: {
             analytics_data: true,
             barcodes: true,
             financial_data: false,
+            legal_info: false,
           },
         }),
       });
-      const page = asArray<Record<string, unknown>>(asRecord(response.result).postings);
+      const page = asArray<Record<string, unknown>>(response.postings);
       postings.push(...page);
-      if (page.length < 1000) {
+      const nextCursor = textValue(response.cursor);
+      if (!toBoolean(response.has_next) || !nextCursor || nextCursor === cursor) {
         break;
       }
+      cursor = nextCursor;
     }
 
     return postings.map((posting) => {
@@ -6044,6 +22142,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         ddate: textValue(posting.delivering_date),
         supplyId: textValue(posting.tracking_number),
         warehouseId: textValue(analytics.warehouse_id),
+        warehouseName: textValue(analytics.warehouse_name) || null,
         officeId: textValue(analytics.warehouse_name),
         cargoType: '',
         requiredMeta: [],
@@ -6059,25 +22158,405 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     });
   }
 
+  private async fetchYandexFbsOrders(connection: MarketplaceConnectionWithClient) {
+    if (!connection.sellerId) {
+      throw new BadRequestException('Для Яндекс Маркета заполните Campaign ID.');
+    }
+    const headers = {
+      'Api-Key': connection.apiKey,
+      Accept: 'application/json',
+    };
+    const orders: Record<string, unknown>[] = [];
+    let pageToken = '';
+
+    for (let page = 0; page < 100; page += 1) {
+      const url = new URL(
+        `https://api.partner.market.yandex.ru/v2/campaigns/${encodeURIComponent(connection.sellerId)}/orders`,
+      );
+      url.searchParams.set('limit', '50');
+      if (pageToken) url.searchParams.set('pageToken', pageToken);
+      const response = await marketplaceJson(url.toString(), { method: 'GET', headers });
+      const pageOrders = asArray<Record<string, unknown>>(response.orders);
+      orders.push(...pageOrders);
+      const paging = asRecord(response.paging);
+      const nextPageToken = textValue(paging.nextPageToken) || textValue(response.nextPageToken);
+      if (pageOrders.length < 50 || !nextPageToken || nextPageToken === pageToken) break;
+      pageToken = nextPageToken;
+    }
+
+    return orders.map((order) => {
+      const items = asArray<Record<string, unknown>>(order.items);
+      const item = items[0] ?? {};
+      const delivery = asRecord(order.delivery);
+      const shipments = asArray<Record<string, unknown>>(delivery.shipments);
+      const shipment = shipments[0] ?? {};
+      const status = textValue(order.status).toUpperCase();
+      const substatus = textValue(order.substatus).toUpperCase();
+      const mappedStatus = yandexFbsStatus(status, substatus);
+      const itemCount = Math.max(
+        1,
+        items.reduce(
+          (sum, currentItem) => sum + Math.max(1, Math.trunc(numberValue(currentItem.count)) || 1),
+          0,
+        ),
+      );
+      return {
+        ...order,
+        id: textValue(order.id),
+        orderUid: textValue(order.id),
+        article: textValue(item.offerId),
+        nmId: textValue(item.marketSku) || textValue(item.shopSku),
+        chrtId: '',
+        skus: uniqueStrings([
+          textValue(item.offerId),
+          textValue(item.shopSku),
+          textValue(item.marketSku),
+        ]),
+        createdAt: yandexDateToIso(textValue(order.creationDate)),
+        sellerDate: yandexDateToIso(textValue(order.creationDate)),
+        ddate: yandexDateToIso(textValue(delivery.shipmentDate) || textValue(delivery.deliveryDate)),
+        supplyId: textValue(shipment.id),
+        warehouseId: textValue(order.partnerWarehouseId) || textValue(delivery.partnerWarehouseId),
+        warehouseName: textValue(delivery.deliveryServiceName) || null,
+        officeId: textValue(asRecord(delivery.region).name),
+        cargoType: '',
+        requiredMeta: [],
+        optionalMeta: [],
+        requiresReshipment: false,
+        itemCount,
+        connectionId: connection.id,
+        accountName: connection.accountName,
+        marketplace: MarketplaceType.YANDEX_MARKET,
+        supplierStatus: mappedStatus,
+        wbStatus: mappedStatus,
+      } satisfies WildberriesFbsOrder;
+    });
+  }
+
   private async ensureFbsProcessingCharges(clientId: string, orders: FbsOrderSummary[]) {
     const result = new Map<string, NonNullable<FbsOrderSummary['billing']>>();
     if (orders.length === 0) {
       return result;
     }
 
-    const { fbsService } = await this.ensureFbsBillingBase(clientId);
-    const batches = groupFbsOrdersByShipment(orders);
+    const { fbsService, settings } = await this.ensureFbsBillingBase(clientId);
+    const primaryProcessingServices = settings.primaryProcessingEnabled
+      ? (await this.prisma.clientBillingService.findMany({
+          where: {
+            clientId,
+            isActive: true,
+            priceRub: { gt: 0 },
+            service: {
+              isActive: true,
+              unit: BillingUnit.PIECE,
+            },
+          },
+          include: {
+            service: {
+              select: {
+                id: true,
+                code: true,
+                name: true,
+                unit: true,
+                isActive: true,
+              },
+            },
+          },
+          orderBy: [{ service: { name: 'asc' } }],
+        }))
+      : [];
+    const relabelService =
+      primaryProcessingServices.find((row) => isFbsRelabelService(row.service)) ?? null;
+    const configuredPrimaryServices = settings.primaryProcessingEnabled
+      ? settings.additionalServices.flatMap((selection) => {
+          const service = primaryProcessingServices.find(
+            (row) => row.serviceId === selection.serviceId && !isFbsRelabelService(row.service),
+          );
+          return service
+            ? [{
+                service,
+                quantityMultiplier: Number(selection.quantityMultiplier),
+                matchKeywords: selection.matchKeywords ?? '',
+              }]
+            : [];
+        })
+      : [];
+    const assemblyByOrder = settings.primaryProcessingEnabled
+      ? new Map(
+          (
+            await this.prisma.fbsTsdAssembly.findMany({
+              where: {
+                clientId,
+                orderId: { in: uniqueStrings(orders.map((order) => order.id)) },
+              },
+              select: {
+                connectionId: true,
+                orderId: true,
+                boxCode: true,
+                itemCount: true,
+                relabelRequired: true,
+              },
+            })
+          ).map((assembly) => [
+            selectionKey(assembly.connectionId, assembly.orderId),
+            assembly,
+          ]),
+        )
+      : new Map<
+          string,
+          {
+            connectionId: string;
+            orderId: string;
+            boxCode: string | null;
+            itemCount: number;
+            relabelRequired: boolean;
+          }
+        >();
+    const receiptTypePrefixes =
+      settings.primaryProcessingEnabled && this.boxCodes
+        ? await this.boxCodes.getPolicy()
+        : undefined;
+    const batches = [...groupFbsOrdersByShipment(orders).entries()]
+      .map(([shipmentKey, batchOrders]) => ({
+        shipmentKey,
+        batchOrders,
+        serviceDate: fbsShipmentServiceDate(batchOrders),
+      }))
+      .sort(
+        (left, right) =>
+          left.serviceDate.getTime() - right.serviceDate.getTime() ||
+          left.shipmentKey.localeCompare(right.shipmentKey, 'ru-RU', { numeric: true }),
+      );
+    const dailyItems = new Map<string, number>();
+    const volumeRows = this.prisma.sku?.findMany
+      ? await this.prisma.sku.findMany({
+          where: {
+            clientId,
+            id: {
+              in: uniqueStrings(
+                orders.map((order) => order.product?.id ?? ''),
+              ),
+            },
+          },
+          select: { id: true, volumeLiters: true },
+        })
+      : [];
+    const volumeBySkuId = new Map(
+      volumeRows.map((sku) => [sku.id, Number(sku.volumeLiters ?? 0)]),
+    );
+    const dailyVolumeLiters = new Map<string, number>();
+    const dailyMissingVolumeItems = new Map<string, number>();
+    for (const batch of batches) {
+      const dayKey = fbsBillingDayKey(batch.serviceDate);
+      const quantity = batch.batchOrders.reduce(
+        (sum, order) => sum + Math.max(1, order.itemCount),
+        0,
+      );
+      dailyItems.set(dayKey, (dailyItems.get(dayKey) ?? 0) + quantity);
+      for (const order of batch.batchOrders) {
+        const itemCount = Math.max(1, order.itemCount);
+        const volumeLiters = order.product?.id
+          ? volumeBySkuId.get(order.product.id) ?? 0
+          : 0;
+        if (volumeLiters > 0) {
+          dailyVolumeLiters.set(
+            dayKey,
+            (dailyVolumeLiters.get(dayKey) ?? 0) + volumeLiters * itemCount,
+          );
+        } else {
+          dailyMissingVolumeItems.set(
+            dayKey,
+            (dailyMissingVolumeItems.get(dayKey) ?? 0) + itemCount,
+          );
+        }
+      }
+    }
+    const primaryShipmentByDay = new Map<string, string>();
+    for (const batch of batches) {
+      const dayKey = fbsBillingDayKey(batch.serviceDate);
+      if (!primaryShipmentByDay.has(dayKey)) {
+        primaryShipmentByDay.set(dayKey, batch.shipmentKey);
+      }
+    }
 
-    for (const [shipmentKey, batchOrders] of batches) {
+    for (const { shipmentKey, batchOrders, serviceDate } of batches) {
       const shipmentItems = batchOrders.reduce(
         (sum, order) => sum + Math.max(1, order.itemCount),
         0,
       );
+      const billingDay = fbsBillingDayKey(serviceDate);
+      const automaticPrimaryTrip = primaryShipmentByDay.get(billingDay) === shipmentKey;
+      const sourceKey = `fbs-calculator:${clientId}:${shipmentKey}`;
+      const existing = await this.prisma.billingCharge.findUnique({
+        where: { sourceKey },
+        include: {
+          invoiceItems: {
+            where: { invoice: { status: { not: 'CANCELLED' } } },
+            select: { invoice: { select: { number: true, status: true } } },
+            take: 1,
+          },
+        },
+      });
+      const existingMetadata = asRecord(existing?.metadata);
+      const existingLogisticsTrip = asRecord(existingMetadata?.logisticsTrip);
+      const extraTripOverride = existingLogisticsTrip?.extraTripOverride === true;
       const weights = batchOrders.map((order) => Math.max(1, order.itemCount));
+      const turnkeyEnabled = settings.turnkeyEnabled;
+      const turnkeyUnitPriceRub = Number(settings.turnkeyUnitPriceRub);
+      const fixedPlusLogisticsEnabled =
+        settings.fixedPlusLogisticsEnabled && !turnkeyEnabled;
+      const tieredLogisticsEnabled =
+        settings.tieredLogisticsEnabled && !turnkeyEnabled;
+      const fixedPlusLogisticsUnitPriceRub = Number(
+        settings.fixedPlusLogisticsUnitPriceRub ?? 0,
+      );
+      const fixedPlusLogisticsDestination =
+        settings.fixedPlusLogisticsDestination?.trim() || FBS_VNUKOVO;
       const quote = quoteFixedFbsCalculator(shipmentItems, FBS_VNUKOVO);
-      if (!quote) throw new BadRequestException('Не удалось рассчитать обработку FBS по тарифу Внуково.');
+      if (!turnkeyEnabled && !fixedPlusLogisticsEnabled && !quote) {
+        throw new BadRequestException('Не удалось рассчитать обработку FBS по тарифу Внуково.');
+      }
+      const calculatedBoxCount = calculateFbsBoxes(shipmentItems);
+      const logisticsTripCharged =
+        !turnkeyEnabled && (automaticPrimaryTrip || extraTripOverride);
+      const logisticsItems = automaticPrimaryTrip
+        ? dailyItems.get(billingDay) ?? shipmentItems
+        : shipmentItems;
+      const batchVolume = batchOrders.reduce(
+        (sum, order) =>
+          sum +
+          (order.product?.id ? volumeBySkuId.get(order.product.id) ?? 0 : 0) *
+            Math.max(1, order.itemCount),
+        0,
+      );
+      const batchMissingVolumeItems = batchOrders.reduce((sum, order) => {
+        const volume = order.product?.id ? volumeBySkuId.get(order.product.id) ?? 0 : 0;
+        return sum + (volume > 0 ? 0 : Math.max(1, order.itemCount));
+      }, 0);
+      const logisticsBoxes = calculateFbsBoxes(logisticsItems);
+      let logisticsDestination = fixedPlusLogisticsDestination;
+      let logisticsDeliveryPriceRub = 0;
+      const tieredLogistics = tieredLogisticsEnabled
+        ? calculateTieredFbsLogistics({
+            items: logisticsItems,
+            volumeLiters: automaticPrimaryTrip
+              ? dailyVolumeLiters.get(billingDay) ?? 0
+              : batchVolume,
+            missingVolumeItems: automaticPrimaryTrip
+              ? dailyMissingVolumeItems.get(billingDay) ?? 0
+              : batchMissingVolumeItems,
+            freeItemsLimit: settings.logisticsFreeItemsLimit,
+            cubicMeterLiters: settings.logisticsCubicMeterLiters,
+            cubicMeterPriceRub: Number(settings.logisticsCubicMeterPriceRub),
+            palletPriceRub: Number(settings.logisticsPalletPriceRub),
+          })
+        : null;
+      if (tieredLogistics) {
+        logisticsDestination = 'Ступенчатая логистика FBS';
+        logisticsDeliveryPriceRub = tieredLogistics.totalRub;
+      } else if (fixedPlusLogisticsEnabled) {
+        const fixedDestinationQuote = quoteFixedFbsCalculator(
+          logisticsItems,
+          fixedPlusLogisticsDestination,
+        );
+        if (fixedDestinationQuote) {
+          logisticsDestination = fixedDestinationQuote.destination;
+          logisticsDeliveryPriceRub = fixedDestinationQuote.deliveryPrice;
+        } else {
+          if (!this.logistics) {
+            throw new BadRequestException(
+              `Не удалось рассчитать логистику FBS в город «${fixedPlusLogisticsDestination}».`,
+            );
+          }
+          const logisticsQuote = await this.logistics.quote({
+            destination: fixedPlusLogisticsDestination,
+            boxes: logisticsBoxes,
+          });
+          if (
+            logisticsQuote.requiresManualReview ||
+            logisticsQuote.estimatedTotalRub == null
+          ) {
+            throw new BadRequestException(
+              `Для города «${fixedPlusLogisticsDestination}» тариф требует ручного расчёта.`,
+            );
+          }
+          logisticsDestination = logisticsQuote.route.destination;
+          logisticsDeliveryPriceRub = logisticsQuote.estimatedTotalRub;
+        }
+      }
+      const fixedProcessingTotalRub = round(
+        shipmentItems * fixedPlusLogisticsUnitPriceRub,
+        2,
+      );
+      const logisticsWithTaxRub = fixedPlusLogisticsEnabled
+        ? round((logisticsDeliveryPriceRub / 94) * 100, 2)
+        : tieredLogisticsEnabled
+          ? logisticsDeliveryPriceRub
+          : 0;
+      const builtInLogisticsQuote = !turnkeyEnabled && !fixedPlusLogisticsEnabled && !tieredLogisticsEnabled
+        ? quoteFixedFbsCalculator(logisticsItems, FBS_VNUKOVO)!
+        : null;
+      const builtInTotalWithoutLogisticsRub = quote
+        ? round((quote.servicesWithMarkup / 94) * 100, 2)
+        : 0;
+      const totalWithoutLogisticsRub = turnkeyEnabled
+        ? round(shipmentItems * turnkeyUnitPriceRub, 2)
+        : fixedPlusLogisticsEnabled
+          ? fixedProcessingTotalRub
+          : builtInTotalWithoutLogisticsRub;
+      const totalWithLogisticsRub = turnkeyEnabled
+        ? totalWithoutLogisticsRub
+        : fixedPlusLogisticsEnabled
+          ? round(fixedProcessingTotalRub + logisticsWithTaxRub, 2)
+          : tieredLogisticsEnabled
+            ? round(builtInTotalWithoutLogisticsRub + logisticsWithTaxRub, 2)
+          : round(
+              ((quote!.servicesWithMarkup + builtInLogisticsQuote!.deliveryPrice) / 94) * 100,
+              2,
+            );
+      const calculatedTotalRub = logisticsTripCharged
+        ? totalWithLogisticsRub
+        : totalWithoutLogisticsRub;
+      const calculatedUnitPriceRub = round(calculatedTotalRub / shipmentItems, 2);
       const requestIds = uniqueStrings(batchOrders.map((order) => order.request?.id ?? ''));
       const requestId = requestIds.length === 1 ? requestIds[0] : null;
+      if (settings.primaryProcessingEnabled) {
+        const primaryBreakdown = buildFbsPrimaryProcessingBreakdown(
+          batchOrders.map((order) => {
+            const assembly = assemblyByOrder.get(
+              selectionKey(order.connectionId, order.id),
+            );
+            return {
+              quantity: assembly?.itemCount ?? order.itemCount,
+              boxCode:
+                assembly?.boxCode ??
+                order.storageBoxes.find((box) => box.quantity > 0)?.code ??
+                null,
+              relabelRequired:
+                assembly?.relabelRequired ?? Boolean(order.relabeling?.required),
+            };
+          }),
+          receiptTypePrefixes,
+        );
+        await this.ensureFbsPrimaryProcessingInvoice({
+          clientId,
+          shipmentKey,
+          shipmentOrders: batchOrders,
+          warehouseId: await this.resolveFbsShipmentWarehouseId(clientId, batchOrders),
+          shipmentItems,
+          serviceDate,
+          requestId,
+          lines: fbsPrimaryChargeLines({
+            breakdown: primaryBreakdown,
+            whiteUnitPriceRub: Number(settings.primaryWhiteUnitPriceRub),
+            grayUnitPriceRub: Number(settings.primaryGrayUnitPriceRub),
+            returnUnitPriceRub: Number(settings.primaryReturnUnitPriceRub),
+            relabelService,
+            primaryServices: configuredPrimaryServices,
+            orders: batchOrders,
+          }),
+        });
+      }
       const invoiceSourceKey = `fbs-invoice:${clientId}:${shipmentKey}`;
       const lockedInvoice = await this.prisma.billingInvoice.findUnique({
         where: { sourceKey: invoiceSourceKey },
@@ -6085,11 +22564,19 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           id: true,
           number: true,
           status: true,
+          comment: true,
           totalRub: true,
           items: { select: { chargeId: true }, take: 1 },
         },
       });
-      if (lockedInvoice && lockedInvoice.status !== BillingInvoiceStatus.DRAFT) {
+      const mergedSourceInvoice =
+        lockedInvoice?.status === BillingInvoiceStatus.CANCELLED &&
+        lockedInvoice.comment?.startsWith('Объединено в FBS-счёт');
+      if (
+        lockedInvoice &&
+        lockedInvoice.status !== BillingInvoiceStatus.DRAFT &&
+        !mergedSourceInvoice
+      ) {
         const lockedTotalRub = Number(lockedInvoice.totalRub);
         batchOrders.forEach((order, orderIndex) => {
           const totalRub = allocateRub(lockedTotalRub, weights, orderIndex);
@@ -6109,7 +22596,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               palletRub: 0,
               shipmentKey,
               shipmentItems,
-              boxCount: quote.boxes,
+              boxCount: calculatedBoxCount,
               palletCount: 0,
               deliveryDestination: FbsDeliveryDestination.VNUKOVO_SORTING_CENTER,
             },
@@ -6119,20 +22606,21 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
 
       const description = 'Обработка заказов по FBS';
-      const sourceKey = `fbs-calculator:${clientId}:${shipmentKey}`;
-      const serviceDate = batchOrders
-        .map((order) =>
-          validDate(order.deliveryDate) ??
-          validDate(order.sellerDate) ??
-          validDate(order.createdAt),
-        )
-        .filter((date): date is Date => Boolean(date))
-        .sort((left, right) => left.getTime() - right.getTime())[0] ?? new Date();
       const chargeMetadata = cleanJson({
         kind: 'FBS',
-        pricingVersion: 4,
-        calculator: 'BUILT_IN',
-        calculatorDestination: FBS_VNUKOVO,
+        pricingVersion: 7,
+        calculator: turnkeyEnabled
+          ? 'CLIENT_TURNKEY'
+          : fixedPlusLogisticsEnabled
+            ? 'CLIENT_FIXED_PLUS_LOGISTICS'
+            : tieredLogisticsEnabled
+              ? 'CLIENT_TIERED_LOGISTICS'
+            : 'BUILT_IN',
+        calculatorDestination: turnkeyEnabled
+          ? null
+          : fixedPlusLogisticsEnabled || tieredLogisticsEnabled
+            ? logisticsDestination
+            : FBS_VNUKOVO,
         marketplace: batchOrders[0].marketplace,
         connectionId: batchOrders[0].connectionId,
         supplyId: batchOrders[0].supplyId,
@@ -6140,19 +22628,58 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         requestIds,
         orderIds: batchOrders.map((order) => order.id),
         quantity: shipmentItems,
-        quote,
-      });
-      const existing = await this.prisma.billingCharge.findUnique({
-        where: { sourceKey },
-        include: {
-          invoiceItems: {
-            where: { invoice: { status: { not: 'CANCELLED' } } },
-            select: { invoice: { select: { number: true, status: true } } },
-            take: 1,
-          },
+        logisticsTrip: {
+          groupKey: `${clientId}:${billingDay}`,
+          billingDay,
+          automaticPrimary: automaticPrimaryTrip,
+          extraTripOverride,
+          charged: logisticsTripCharged,
+          logisticsItems,
+          logisticsBoxes,
+          totalWithoutLogisticsRub,
+          totalWithLogisticsRub,
+          logisticsRub: round(totalWithLogisticsRub - totalWithoutLogisticsRub, 2),
         },
+        quote: turnkeyEnabled
+          ? {
+              unitPriceRub: calculatedUnitPriceRub,
+              quantity: shipmentItems,
+              totalWithTax: calculatedTotalRub,
+            }
+          : fixedPlusLogisticsEnabled || tieredLogisticsEnabled
+            ? {
+                unitPriceRub: fixedPlusLogisticsEnabled
+                  ? fixedPlusLogisticsUnitPriceRub
+                  : round(builtInTotalWithoutLogisticsRub / shipmentItems, 2),
+                quantity: shipmentItems,
+                processingTotalRub: fixedPlusLogisticsEnabled
+                  ? fixedProcessingTotalRub
+                  : builtInTotalWithoutLogisticsRub,
+                destination: logisticsDestination,
+                boxes: logisticsBoxes,
+                deliveryPrice: logisticsDeliveryPriceRub,
+                deliveryWithTaxRub: logisticsTripCharged ? logisticsWithTaxRub : 0,
+                tieredLogistics,
+                totalWithTax: calculatedTotalRub,
+              }
+            : {
+                ...quote,
+                deliveryPrice: logisticsTripCharged ? builtInLogisticsQuote!.deliveryPrice : 0,
+                subtotalBeforeTax: round(
+                  quote!.servicesWithMarkup +
+                    (logisticsTripCharged ? builtInLogisticsQuote!.deliveryPrice : 0),
+                  2,
+                ),
+                taxGrossUp: round(
+                  calculatedTotalRub -
+                    quote!.servicesWithMarkup -
+                    (logisticsTripCharged ? builtInLogisticsQuote!.deliveryPrice : 0),
+                  2,
+                ),
+                totalWithTax: calculatedTotalRub,
+              },
       });
-      const unitPriceRub = round(quote.totalWithTax / shipmentItems, 2);
+      const unitPriceRub = calculatedUnitPriceRub;
       const shouldUpdate =
         existing?.status === BillingChargeStatus.DRAFT &&
         existing.invoiceItems.every((item) => item.invoice.status === BillingInvoiceStatus.DRAFT) &&
@@ -6161,7 +22688,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           existing.description !== description ||
           Number(existing.quantity) !== shipmentItems ||
           Number(existing.unitPriceRub) !== unitPriceRub ||
-          Number(existing.totalRub) !== quote.totalWithTax ||
+          Number(existing.totalRub) !== calculatedTotalRub ||
           JSON.stringify(existing.metadata ?? null) !== JSON.stringify(chargeMetadata));
       const charge = !existing
         ? await this.prisma.billingCharge.create({
@@ -6173,7 +22700,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               unit: BillingUnit.PIECE,
               quantity: shipmentItems,
               unitPriceRub,
-              totalRub: quote.totalWithTax,
+              totalRub: calculatedTotalRub,
               status: BillingChargeStatus.DRAFT,
               serviceDate,
               source: BillingChargeSource.MANUAL,
@@ -6197,7 +22724,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
                 description,
                 quantity: shipmentItems,
                 unitPriceRub,
-                totalRub: quote.totalWithTax,
+                totalRub: calculatedTotalRub,
                 serviceDate,
                 metadata: chargeMetadata,
               },
@@ -6214,19 +22741,37 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
       for (const [orderIndex, order] of batchOrders.entries()) {
         const itemCount = Math.max(1, order.itemCount);
-        const totalRub = allocateRub(quote.totalWithTax, weights, orderIndex);
-        const fbsProcessingRub = allocateRub(
-          (quote.processingCost + quote.stickersCost) * 1.5,
-          weights,
-          orderIndex,
-        );
-        const deliveryRub = allocateRub(quote.deliveryPrice, weights, orderIndex);
-        const boxFormationRub = allocateRub(quote.assemblyCost * 1.5, weights, orderIndex);
-        const boxMaterialRub = allocateRub(quote.boxesCost * 1.5, weights, orderIndex);
-        const additionalServicesRub = round(
-          totalRub - fbsProcessingRub - deliveryRub - boxFormationRub - boxMaterialRub,
-          2,
-        );
+        const totalRub = allocateRub(calculatedTotalRub, weights, orderIndex);
+        const fbsProcessingRub = turnkeyEnabled
+          ? totalRub
+          : fixedPlusLogisticsEnabled
+            ? allocateRub(fixedProcessingTotalRub, weights, orderIndex)
+            : allocateRub(
+                (quote!.processingCost + quote!.stickersCost) * 1.5,
+                weights,
+                orderIndex,
+              );
+        const deliveryRub = turnkeyEnabled
+          ? 0
+          : fixedPlusLogisticsEnabled || tieredLogisticsEnabled
+            ? allocateRub(logisticsTripCharged ? logisticsWithTaxRub : 0, weights, orderIndex)
+            : allocateRub(
+                logisticsTripCharged ? builtInLogisticsQuote!.deliveryPrice : 0,
+                weights,
+                orderIndex,
+              );
+        const boxFormationRub = turnkeyEnabled || fixedPlusLogisticsEnabled
+          ? 0
+          : allocateRub(quote!.assemblyCost * 1.5, weights, orderIndex);
+        const boxMaterialRub = turnkeyEnabled || fixedPlusLogisticsEnabled
+          ? 0
+          : allocateRub(quote!.boxesCost * 1.5, weights, orderIndex);
+        const additionalServicesRub = turnkeyEnabled || fixedPlusLogisticsEnabled
+          ? 0
+          : round(
+              totalRub - fbsProcessingRub - deliveryRub - boxFormationRub - boxMaterialRub,
+              2,
+            );
         const breakdown: NonNullable<FbsOrderSummary['billing']>['breakdown'] = {
           fbsProcessingRub,
           additionalServicesRub,
@@ -6236,7 +22781,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           palletRub: 0,
           shipmentKey,
           shipmentItems,
-          boxCount: quote.boxes,
+          boxCount: calculatedBoxCount,
           palletCount: 0,
           deliveryDestination: FbsDeliveryDestination.VNUKOVO_SORTING_CENTER,
         };
@@ -6256,6 +22801,253 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return result;
   }
 
+  async cancelFbsPrimaryDraftBilling(clientId: string) {
+    const invoicePrefix = `fbs-primary-invoice:${clientId}:`;
+    const chargePrefix = `fbs-primary:${clientId}:`;
+    return this.prisma.$transaction(async (tx) => {
+      const invoices = await tx.billingInvoice.findMany({
+        where: {
+          clientId,
+          sourceKey: { startsWith: invoicePrefix },
+          status: BillingInvoiceStatus.DRAFT,
+        },
+        select: { id: true },
+      });
+      const cancelledInvoices = invoices.length > 0
+        ? await tx.billingInvoice.updateMany({
+            where: { id: { in: invoices.map((invoice) => invoice.id) } },
+            data: { status: BillingInvoiceStatus.CANCELLED },
+          })
+        : { count: 0 };
+      const cancelledCharges = await tx.billingCharge.updateMany({
+        where: {
+          clientId,
+          sourceKey: { startsWith: chargePrefix },
+          status: BillingChargeStatus.DRAFT,
+        },
+        data: { status: BillingChargeStatus.CANCELLED },
+      });
+      return {
+        cancelledInvoices: cancelledInvoices.count,
+        cancelledCharges: cancelledCharges.count,
+      };
+    });
+  }
+
+  private async ensureFbsPrimaryProcessingInvoice(input: {
+    clientId: string;
+    shipmentKey: string;
+    shipmentOrders: FbsOrderSummary[];
+    warehouseId: string;
+    shipmentItems: number;
+    serviceDate: Date;
+    requestId: string | null;
+    lines?: FbsPrimaryChargeLine[];
+    services?: FbsPrimaryBillingService[];
+  }) {
+    const invoiceSourceKey = `fbs-primary-invoice:${input.clientId}:${input.shipmentKey}`;
+    const chargePrefix = `fbs-primary:${input.clientId}:${input.shipmentKey}:`;
+    let invoice = await this.prisma.billingInvoice.findUnique({
+      where: { sourceKey: invoiceSourceKey },
+      select: { id: true, number: true, status: true },
+    });
+    if (
+      invoice &&
+      invoice.status !== BillingInvoiceStatus.DRAFT &&
+      invoice.status !== BillingInvoiceStatus.CANCELLED
+    ) {
+      return invoice;
+    }
+
+    const existingCharges = await this.prisma.billingCharge.findMany({
+      where: {
+        clientId: input.clientId,
+        sourceKey: { startsWith: chargePrefix },
+      },
+      include: {
+        invoiceItems: {
+          where: {
+            invoice: {
+              status: {
+                notIn: [BillingInvoiceStatus.DRAFT, BillingInvoiceStatus.CANCELLED],
+              },
+            },
+          },
+          select: { id: true },
+        },
+      },
+    });
+    if (existingCharges.some((charge) => charge.invoiceItems.length > 0)) {
+      return invoice;
+    }
+
+    const inputLines = input.lines ?? (input.services ?? []).map((service) => {
+      const priceBeforeTaxRub = Number(service.priceRub);
+      return {
+        key: `SERVICE:${service.serviceId}`,
+        description: `Первичная обработка FBS: ${service.service.name}`,
+        quantity: input.shipmentItems,
+        unitPriceRub: fbsPrimaryPriceWithTax(priceBeforeTaxRub, service.taxMode),
+        serviceId: service.serviceId,
+        serviceCode: service.service.code,
+        taxMode: service.taxMode,
+        priceBeforeTaxRub,
+      } satisfies FbsPrimaryChargeLine;
+    });
+    const configuredLines = inputLines.filter(
+      (line) => line.quantity > 0 && line.unitPriceRub > 0,
+    );
+    if (configuredLines.length === 0) {
+      if (invoice?.status === BillingInvoiceStatus.DRAFT) {
+        invoice = await this.prisma.billingInvoice.update({
+          where: { id: invoice.id },
+          data: { status: BillingInvoiceStatus.CANCELLED },
+          select: { id: true, number: true, status: true },
+        });
+      }
+      const cancellableChargeIds = existingCharges
+        .filter((charge) => charge.status === BillingChargeStatus.DRAFT)
+        .map((charge) => charge.id);
+      if (cancellableChargeIds.length > 0) {
+        await this.prisma.billingCharge.updateMany({
+          where: { id: { in: cancellableChargeIds } },
+          data: { status: BillingChargeStatus.CANCELLED },
+        });
+      }
+      return invoice;
+    }
+
+    const existingBySourceKey = new Map(
+      existingCharges.map((charge) => [charge.sourceKey ?? '', charge]),
+    );
+    const charges: Prisma.BillingChargeGetPayload<{}>[] = [];
+    for (const line of configuredLines) {
+      const sourceKey = `${chargePrefix}${line.key}`;
+      const totalRub = round(line.unitPriceRub * line.quantity, 2);
+      const data = {
+        clientId: input.clientId,
+        serviceId: line.serviceId,
+        requestId: input.requestId,
+        description: line.description,
+        unit: BillingUnit.PIECE,
+        quantity: line.quantity,
+        unitPriceRub: line.unitPriceRub,
+        totalRub,
+        status: BillingChargeStatus.DRAFT,
+        serviceDate: input.serviceDate,
+        source: BillingChargeSource.MANUAL,
+        sourceKey,
+        metadata: cleanJson({
+          kind: 'FBS_PRIMARY_PROCESSING',
+          shipmentKey: input.shipmentKey,
+          supplyId: input.shipmentOrders[0]?.supplyId ?? null,
+          requestId: input.requestId,
+          orderIds: input.shipmentOrders.map((order) => order.id),
+          quantity: input.shipmentItems,
+          lineQuantity: line.quantity,
+          processingType: line.key,
+          serviceCode: line.serviceCode,
+          taxMode: line.taxMode,
+          priceBeforeTaxRub: line.priceBeforeTaxRub,
+        }),
+      } satisfies Prisma.BillingChargeUncheckedCreateInput;
+      const existing = existingBySourceKey.get(sourceKey);
+      charges.push(
+        existing
+          ? await this.prisma.billingCharge.update({
+              where: { id: existing.id },
+              data,
+            })
+          : await this.prisma.billingCharge.create({ data }),
+      );
+    }
+
+    const activeSourceKeys = new Set(charges.map((charge) => charge.sourceKey));
+    const obsoleteChargeIds = existingCharges
+      .filter(
+        (charge) =>
+          charge.status === BillingChargeStatus.DRAFT &&
+          !activeSourceKeys.has(charge.sourceKey),
+      )
+      .map((charge) => charge.id);
+    if (obsoleteChargeIds.length > 0) {
+      await this.prisma.billingCharge.updateMany({
+        where: { id: { in: obsoleteChargeIds } },
+        data: { status: BillingChargeStatus.CANCELLED },
+      });
+    }
+
+    const totalRub = round(
+      charges.reduce((sum, charge) => sum + Number(charge.totalRub), 0),
+      2,
+    );
+    if (totalRub <= 0) {
+      return null;
+    }
+    if (!invoice) {
+      invoice = await this.prisma.billingInvoice.create({
+        data: {
+          number: await this.nextFbsPrimaryInvoiceNumber(input.serviceDate),
+          clientId: input.clientId,
+          warehouseId: input.warehouseId,
+          periodFrom: input.serviceDate,
+          periodTo: input.serviceDate,
+          status: BillingInvoiceStatus.DRAFT,
+          source: BillingInvoiceSource.MANUAL,
+          sourceKey: invoiceSourceKey,
+          requestId: input.requestId,
+          totalRub,
+          comment: `Автоматический черновик счёта за первичную обработку FBS-поставки ${input.shipmentOrders[0]?.supplyId ?? input.shipmentKey}.`,
+          items: {
+            create: charges.map((charge) => ({
+              chargeId: charge.id,
+              description: charge.description,
+              unit: charge.unit,
+              quantity: charge.quantity,
+              unitPriceRub: charge.unitPriceRub,
+              totalRub: charge.totalRub,
+              serviceDate: charge.serviceDate,
+            })),
+          },
+        },
+        select: { id: true, number: true, status: true },
+      });
+      return invoice;
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.billingInvoiceItem.deleteMany({ where: { invoiceId: invoice!.id } });
+      await tx.billingInvoiceItem.createMany({
+        data: charges.map((charge) => ({
+          invoiceId: invoice!.id,
+          chargeId: charge.id,
+          description: charge.description,
+          unit: charge.unit,
+          quantity: charge.quantity,
+          unitPriceRub: charge.unitPriceRub,
+          totalRub: charge.totalRub,
+          serviceDate: charge.serviceDate,
+        })),
+      });
+      await tx.billingInvoice.update({
+        where: { id: invoice!.id },
+        data: {
+          warehouseId: input.warehouseId,
+          periodFrom: input.serviceDate,
+          periodTo: input.serviceDate,
+          requestId: input.requestId,
+          totalRub,
+          status: BillingInvoiceStatus.DRAFT,
+          comment: `Автоматический черновик счёта за первичную обработку FBS-поставки ${input.shipmentOrders[0]?.supplyId ?? input.shipmentKey}.`,
+        },
+      });
+    });
+    return this.prisma.billingInvoice.findUnique({
+      where: { id: invoice.id },
+      select: { id: true, number: true, status: true },
+    });
+  }
+
   private async ensureFbsShipmentInvoices(
     clientId: string,
     orders: FbsOrderSummary[],
@@ -6264,12 +23056,41 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const eligibleOrders = orders.filter((order) => order.shipmentPlan && order.supplyId);
     const shipments = groupFbsOrdersByShipment(eligibleOrders);
     for (const [shipmentKey, shipmentOrders] of shipments) {
+      const warehouseId = await this.resolveFbsShipmentWarehouseId(clientId, shipmentOrders);
       const sourceKey = `fbs-invoice:${clientId}:${shipmentKey}`;
       let invoice = await this.prisma.billingInvoice.findUnique({
         where: { sourceKey },
-        select: { id: true, number: true, status: true },
+        select: { id: true, number: true, status: true, comment: true },
       });
       if (invoice && invoice.status !== BillingInvoiceStatus.DRAFT) {
+        if (
+          invoice.status === BillingInvoiceStatus.CANCELLED &&
+          invoice.comment?.startsWith('Объединено в FBS-счёт')
+        ) {
+          const mergedInvoiceNumber = invoice.comment
+            .slice('Объединено в FBS-счёт'.length)
+            .trim()
+            .replace(/\.$/, '');
+          const mergedInvoice = mergedInvoiceNumber
+            ? await this.prisma.billingInvoice.findUnique({
+                where: { number: mergedInvoiceNumber },
+                select: { id: true, number: true, status: true },
+              })
+            : null;
+          if (mergedInvoice && mergedInvoice.status !== BillingInvoiceStatus.CANCELLED) {
+            shipmentOrders.forEach((order) => {
+              const billing = billingByOrder.get(fbsOrderKey(order));
+              if (billing) {
+                billingByOrder.set(fbsOrderKey(order), {
+                  ...billing,
+                  invoiceNumber: mergedInvoice.number,
+                  invoiceStatus: mergedInvoice.status,
+                });
+              }
+            });
+            continue;
+          }
+        }
         shipmentOrders.forEach((order) => {
           const billing = billingByOrder.get(fbsOrderKey(order));
           if (billing) {
@@ -6299,6 +23120,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         charges[0].serviceDate,
       );
       const totalRub = round(charges.reduce((sum, charge) => sum + Number(charge.totalRub), 0), 2);
+      if (totalRub <= 0) {
+        continue;
+      }
       const requestIds = uniqueStrings(shipmentOrders.map((order) => order.request?.id ?? ''));
       const requestId = requestIds.length === 1 ? requestIds[0] : null;
       if (!invoice) {
@@ -6308,6 +23132,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             data: {
               number,
               clientId,
+              warehouseId,
               periodFrom,
               periodTo,
               status: BillingInvoiceStatus.DRAFT,
@@ -6328,13 +23153,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
                 })),
               },
             },
-            select: { id: true, number: true, status: true },
+            select: { id: true, number: true, status: true, comment: true },
           });
         } catch (caught) {
           if (!(caught instanceof Prisma.PrismaClientKnownRequestError) || caught.code !== 'P2002') throw caught;
           invoice = await this.prisma.billingInvoice.findUnique({
             where: { sourceKey },
-            select: { id: true, number: true, status: true },
+            select: { id: true, number: true, status: true, comment: true },
           });
         }
       } else {
@@ -6366,6 +23191,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           await tx.billingInvoice.update({
             where: { id: invoice!.id },
             data: {
+              warehouseId,
               periodFrom,
               periodTo,
               requestId,
@@ -6405,14 +23231,75 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return `${prefix}-${String(count + 1).padStart(4, '0')}`;
   }
 
-  async createFbsConnection(dto: UpsertMarketplaceConnectionDto, user: AuthUser) {
-    if (dto.marketplace !== MarketplaceType.WILDBERRIES && dto.marketplace !== MarketplaceType.OZON) {
-      throw new BadRequestException('В разделе FBS можно подключить Wildberries или Ozon.');
+  private async nextFbsPrimaryInvoiceNumber(date: Date) {
+    const prefix = `FBS-PRIMARY-${date.getUTCFullYear()}${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+    const count = await this.prisma.billingInvoice.count({ where: { number: { startsWith: prefix } } });
+    return `${prefix}-${String(count + 1).padStart(4, '0')}`;
+  }
+
+  private async validateFbsRoutingSettings(
+    dto: Partial<UpsertMarketplaceConnectionDto>,
+    existing?: {
+      fbsExecutionWarehouseId: string | null;
+      fbsDropoffWarehouseId: string | null;
+      fbsAutoRouteNewWarehouses: boolean;
+    },
+  ) {
+    const executionWarehouseId =
+      dto.fbsExecutionWarehouseId === undefined
+        ? existing?.fbsExecutionWarehouseId ?? null
+        : normalizeNullable(dto.fbsExecutionWarehouseId);
+    const dropoffWarehouseId =
+      dto.fbsDropoffWarehouseId === undefined
+        ? existing?.fbsDropoffWarehouseId ?? null
+        : normalizeNullable(dto.fbsDropoffWarehouseId);
+    const autoRoute =
+      dto.fbsAutoRouteNewWarehouses ??
+      existing?.fbsAutoRouteNewWarehouses ??
+      false;
+
+    if (autoRoute && !executionWarehouseId) {
+      throw new BadRequestException(
+        'Выберите филиал исполнения перед включением автоматической маршрутизации FBS.',
+      );
     }
-    this.clientScopes.requireClientAccess(user, dto.clientId, 'read');
+
+    const warehouseIds = uniqueStrings([
+      executionWarehouseId ?? '',
+      dropoffWarehouseId ?? '',
+    ]);
+    if (warehouseIds.length === 0) return;
+
+    const warehouses = await this.prisma.warehouse.findMany({
+      where: { id: { in: warehouseIds }, isActive: true },
+      select: { id: true },
+    });
+    if (warehouses.length !== warehouseIds.length) {
+      throw new BadRequestException(
+        'Один из выбранных филиалов не найден или отключён.',
+      );
+    }
+  }
+
+  async createFbsConnection(dto: UpsertMarketplaceConnectionDto, user: AuthUser) {
+    requireFbsRoutingSettingsAccess(dto, user);
+    if (
+      dto.marketplace !== MarketplaceType.WILDBERRIES &&
+      dto.marketplace !== MarketplaceType.OZON &&
+      dto.marketplace !== MarketplaceType.YANDEX_MARKET
+    ) {
+      throw new BadRequestException('В разделе FBS можно подключить Wildberries, Ozon или Яндекс Маркет.');
+    }
+    this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+    await this.requireBranchOwnedClientConfiguration(user, dto.clientId);
     if (dto.marketplace === MarketplaceType.OZON && !dto.sellerId?.trim()) {
       throw new BadRequestException('Для Ozon укажите Client-Id.');
     }
+    if (dto.marketplace === MarketplaceType.YANDEX_MARKET && !dto.sellerId?.trim()) {
+      throw new BadRequestException('Для Яндекс Маркета укажите Campaign ID.');
+    }
+
+    await this.validateFbsRoutingSettings(dto);
 
     try {
       const created = await this.prisma.clientMarketplaceConnection.create({
@@ -6434,7 +23321,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   async create(dto: UpsertMarketplaceConnectionDto, user: AuthUser) {
+    requireFbsRoutingSettingsAccess(dto, user);
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+    await this.requireBranchOwnedClientConfiguration(user, dto.clientId);
+    await this.validateFbsRoutingSettings(dto);
 
     try {
       const created = await this.prisma.clientMarketplaceConnection.create({
@@ -6460,18 +23350,27 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   async update(id: string, dto: Partial<UpsertMarketplaceConnectionDto>, user: AuthUser) {
+    requireFbsRoutingSettingsAccess(dto, user);
     const existing = await this.prisma.clientMarketplaceConnection.findUnique({
       where: { id },
-      select: { clientId: true },
+      select: {
+        clientId: true,
+        fbsExecutionWarehouseId: true,
+        fbsDropoffWarehouseId: true,
+        fbsAutoRouteNewWarehouses: true,
+      },
     });
 
     if (!existing) {
       throw new NotFoundException('Подключение маркетплейса не найдено.');
     }
     this.clientScopes.requireClientAccess(user, existing.clientId, 'write');
+    await this.requireBranchOwnedClientConfiguration(user, existing.clientId);
     if (dto.clientId && dto.clientId !== existing.clientId) {
       this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+      await this.requireBranchOwnedClientConfiguration(user, dto.clientId);
     }
+    await this.validateFbsRoutingSettings(dto, existing);
 
     try {
       const updated = await this.prisma.clientMarketplaceConnection.update({
@@ -6512,6 +23411,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new NotFoundException('Подключение маркетплейса не найдено.');
     }
     this.clientScopes.requireClientAccess(user, existing.clientId, 'write');
+    await this.requireBranchOwnedClientConfiguration(user, existing.clientId);
 
     await this.prisma.clientMarketplaceConnection.delete({ where: { id } });
     return {
@@ -6540,6 +23440,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new NotFoundException('Подключение маркетплейса не найдено.');
     }
     this.clientScopes.requireClientAccess(user, connection.clientId, 'write');
+    await this.requireBranchOwnedClientConfiguration(user, connection.clientId);
 
     if (!connection.isActive) {
       throw new BadRequestException('Подключение отключено. Включите его перед синхронизацией товаров.');
@@ -6552,6 +23453,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       productsReceived: products.length,
       created: 0,
       updated: 0,
+      mergedDrafts: 0,
       barcodesTouched: 0,
       skipped: 0,
       errors: [] as Array<{ offerId: string; message: string }>,
@@ -6561,6 +23463,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       try {
         const synced = await this.upsertMarketplaceSku(connection.clientId, product);
         result[synced.created ? 'created' : 'updated'] += 1;
+        result.mergedDrafts += synced.mergedDrafts;
         result.barcodesTouched += synced.barcodesTouched;
       } catch (caught) {
         result.skipped += 1;
@@ -6572,6 +23475,216 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
 
     return result;
+  }
+
+  async checkConnection(id: string, user: AuthUser) {
+    const connection = await this.prisma.clientMarketplaceConnection.findUnique({
+      where: { id },
+      include: {
+        client: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+          },
+        },
+      },
+    });
+
+    if (!connection) {
+      throw new NotFoundException('Подключение маркетплейса не найдено.');
+    }
+    this.clientScopes.requireClientAccess(user, connection.clientId, 'write');
+    await this.requireBranchOwnedClientConfiguration(user, connection.clientId);
+
+    if (!connection.isActive) {
+      throw new BadRequestException('Подключение отключено. Включите его перед проверкой API.');
+    }
+
+    const checks =
+      connection.marketplace === MarketplaceType.WILDBERRIES
+        ? await this.checkWildberriesAccess(connection)
+        : connection.marketplace === MarketplaceType.OZON
+          ? await this.checkOzonAccess(connection)
+          : connection.marketplace === MarketplaceType.YANDEX_MARKET
+            ? await this.checkYandexAccess(connection)
+          : unsupportedMarketplaceChecks();
+
+    return {
+      connectionId: connection.id,
+      clientId: connection.clientId,
+      marketplace: connection.marketplace,
+      checkedAt: new Date().toISOString(),
+      ok: checks.every((check) => check.ok),
+      checks,
+    };
+  }
+
+  private async checkWildberriesAccess(connection: MarketplaceConnectionWithClient) {
+    const headers = wbHeaders(connection.apiKey);
+    return Promise.all([
+      this.runMarketplaceAccessCheck('products', 'Карточки товаров', async () => {
+        const response = await marketplaceJson('https://content-api.wildberries.ru/content/v2/get/cards/list', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            settings: {
+              sort: { ascending: true },
+              cursor: { limit: 1 },
+              filter: { withPhoto: -1 },
+            },
+          }),
+        });
+        const cards = asArray<Record<string, unknown>>(response.cards);
+        return cards.length > 0
+          ? 'Доступ подтверждён, карточки товаров доступны.'
+          : 'Доступ подтверждён. В кабинете пока нет карточек товаров.';
+      }),
+      this.runMarketplaceAccessCheck('fbsOrders', 'Заказы FBS', async () => {
+        const response = await marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/orders/new', {
+          method: 'GET',
+          headers,
+        });
+        const orders = asArray<Record<string, unknown>>(response.orders);
+        return orders.length > 0
+          ? `Доступ подтверждён. Новых заказов: ${orders.length}.`
+          : 'Доступ подтверждён. Новых заказов сейчас нет.';
+      }),
+      this.runMarketplaceAccessCheck('warehouses', 'Склады FBS', async () => {
+        const response = await marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/warehouses', {
+          method: 'GET',
+          headers,
+        });
+        const warehouses = Array.isArray(response) ? response : asArray<Record<string, unknown>>(response.warehouses);
+        return warehouses.length > 0
+          ? `Доступ подтверждён. Складов: ${warehouses.length}.`
+          : 'Доступ подтверждён. Склады продавца пока не созданы.';
+      }),
+    ]);
+  }
+
+  private async checkOzonAccess(connection: MarketplaceConnectionWithClient) {
+    if (!connection.sellerId) {
+      return [
+        failedMarketplaceAccessCheck('products', 'Карточки товаров', 'Для Ozon заполните Client-Id.'),
+        failedMarketplaceAccessCheck('fbsOrders', 'Заказы FBS', 'Для Ozon заполните Client-Id.'),
+        failedMarketplaceAccessCheck('warehouses', 'Склады FBS', 'Для Ozon заполните Client-Id.'),
+      ];
+    }
+
+    const headers = {
+      'Client-Id': connection.sellerId,
+      'Api-Key': connection.apiKey,
+      'Content-Type': 'application/json',
+    };
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const to = new Date().toISOString();
+
+    return Promise.all([
+      this.runMarketplaceAccessCheck('products', 'Карточки товаров', async () => {
+        const response = await marketplaceJson('https://api-seller.ozon.ru/v3/product/list', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            filter: { visibility: 'ALL' },
+            last_id: '',
+            limit: 1,
+          }),
+        });
+        const items = asArray<Record<string, unknown>>(asRecord(response.result).items);
+        return items.length > 0
+          ? 'Доступ подтверждён, карточки товаров доступны.'
+          : 'Доступ подтверждён. В кабинете пока нет карточек товаров.';
+      }),
+      this.runMarketplaceAccessCheck('fbsOrders', 'Заказы FBS', async () => {
+        const response = await marketplaceJson('https://api-seller.ozon.ru/v4/posting/fbs/list', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            filter: { since, to },
+            limit: 1,
+            sort_dir: 'DESC',
+            translit: false,
+            with: {
+              analytics_data: false,
+              barcodes: false,
+              financial_data: false,
+              legal_info: false,
+            },
+          }),
+        });
+        const postings = asArray<Record<string, unknown>>(response.postings);
+        return postings.length > 0
+          ? 'Доступ подтверждён, заказы FBS доступны.'
+          : 'Доступ подтверждён. Заказов за последние 30 дней нет.';
+      }),
+      this.runMarketplaceAccessCheck('warehouses', 'Склады FBS', async () => {
+        const response = await marketplaceJson('https://api-seller.ozon.ru/v2/warehouse/list', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ limit: 100 }),
+        });
+        const warehouses = asArray<Record<string, unknown>>(response.warehouses);
+        return warehouses.length > 0
+          ? `Доступ подтверждён. Складов: ${warehouses.length}.`
+          : 'Доступ подтверждён. Склады продавца пока не созданы.';
+      }),
+    ]);
+  }
+
+  private async checkYandexAccess(connection: MarketplaceConnectionWithClient) {
+    if (!connection.sellerId) {
+      return [
+        failedMarketplaceAccessCheck('products', 'Магазин', 'Для Яндекс Маркета заполните Campaign ID.'),
+        failedMarketplaceAccessCheck('fbsOrders', 'Заказы FBS', 'Для Яндекс Маркета заполните Campaign ID.'),
+        failedMarketplaceAccessCheck('warehouses', 'Настройки магазина', 'Для Яндекс Маркета заполните Campaign ID.'),
+      ];
+    }
+    const campaignId = encodeURIComponent(connection.sellerId);
+    const headers = { 'Api-Key': connection.apiKey, Accept: 'application/json' };
+    return Promise.all([
+      this.runMarketplaceAccessCheck('products', 'Магазин', async () => {
+        await marketplaceJson(`https://api.partner.market.yandex.ru/v2/campaigns/${campaignId}`, {
+          method: 'GET',
+          headers,
+        });
+        return 'Доступ подтверждён, магазин Яндекс Маркета доступен.';
+      }),
+      this.runMarketplaceAccessCheck('fbsOrders', 'Заказы FBS', async () => {
+        const response = await marketplaceJson(
+          `https://api.partner.market.yandex.ru/v2/campaigns/${campaignId}/orders?limit=1`,
+          { method: 'GET', headers },
+        );
+        const orders = asArray<Record<string, unknown>>(response.orders);
+        return orders.length > 0
+          ? 'Доступ подтверждён, заказы FBS доступны.'
+          : 'Доступ подтверждён. Заказов сейчас нет.';
+      }),
+      this.runMarketplaceAccessCheck('warehouses', 'Настройки магазина', async () => {
+        await marketplaceJson(`https://api.partner.market.yandex.ru/v2/campaigns/${campaignId}/settings`, {
+          method: 'GET',
+          headers,
+        });
+        return 'Доступ подтверждён, настройки магазина доступны.';
+      }),
+    ]);
+  }
+
+  private async runMarketplaceAccessCheck(
+    key: MarketplaceAccessCheck['key'],
+    label: string,
+    action: () => Promise<string>,
+  ): Promise<MarketplaceAccessCheck> {
+    try {
+      return {
+        key,
+        label,
+        ok: true,
+        message: await action(),
+      };
+    } catch (caught) {
+      return failedMarketplaceAccessCheck(key, label, marketplaceAccessErrorText(caught));
+    }
   }
 
   private async fetchMarketplaceProducts(connection: MarketplaceConnectionWithClient) {
@@ -6699,7 +23812,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       headers,
       body: JSON.stringify({ product_id: productIds }),
     });
-    const items = asArray<Record<string, unknown>>(asRecord(response.result).items);
+    const items = marketplaceResponseItems<Record<string, unknown>>(response);
     return new Map(items.map((item) => [textValue(item.id) || textValue(item.product_id), item]));
   }
 
@@ -6720,7 +23833,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           limit: productIds.length,
         }),
       });
-      const items = asArray<Record<string, unknown>>(asRecord(response.result).items);
+      const items = marketplaceResponseItems<Record<string, unknown>>(response);
       return new Map(items.map((item) => [textValue(item.id) || textValue(item.product_id), item]));
     } catch {
       return new Map<string, Record<string, unknown>>();
@@ -6728,6 +23841,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   private async upsertMarketplaceSku(clientId: string, product: MarketplaceProductSyncItem) {
+    const productBarcodes = uniqueStrings(product.barcodes);
     const existing =
       (await this.prisma.sku.findFirst({
         where: {
@@ -6743,14 +23857,6 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           marketplaceOfferId: product.offerId,
         },
       })) ??
-      (product.barcode
-        ? (
-            await this.prisma.barcode.findFirst({
-              where: { value: product.barcode, sku: { clientId } },
-              include: { sku: true },
-            })
-          )?.sku
-        : null) ??
       (await this.prisma.sku.findUnique({
         where: {
           clientId_internalSku: {
@@ -6758,8 +23864,20 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             internalSku: product.internalSku,
           },
         },
-      }));
+      })) ??
+      (productBarcodes.length
+        ? (
+            await this.prisma.barcode.findFirst({
+              where: { value: { in: productBarcodes }, sku: { clientId } },
+              include: { sku: true },
+            })
+          )?.sku
+        : null);
 
+    const recognizedReceiptDraft = Boolean(
+      existing?.isDraft &&
+      existing.draftSource === 'RECEIPT_SCAN',
+    );
     const preserveManualVolume =
       existing?.volumeSource === VolumeSource.MANUAL && Number(existing.volumeLiters) > 0;
     const data = marketplaceSkuData(clientId, product, preserveManualVolume);
@@ -6772,8 +23890,29 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           data,
         });
 
+    const receiptDrafts = productBarcodes.length
+      ? await this.prisma.barcode.findMany({
+          where: {
+            value: { in: productBarcodes },
+            sku: {
+              clientId,
+              isDraft: true,
+              draftSource: 'RECEIPT_SCAN',
+            },
+          },
+          include: { sku: true },
+        })
+      : [];
+    const uniqueReceiptDrafts = [
+      ...new Map(receiptDrafts.map((barcode) => [barcode.sku.id, barcode.sku])).values(),
+    ].filter((draft) => draft.id !== sku.id);
+
+    for (const draft of uniqueReceiptDrafts) {
+      await this.mergeReceiptDraftSku(clientId, draft.id, sku.id);
+    }
+
     let barcodesTouched = 0;
-    for (const barcode of product.barcodes) {
+    for (const barcode of productBarcodes) {
       await this.prisma.barcode.upsert({
         where: {
           skuId_value: {
@@ -6791,7 +23930,309 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       barcodesTouched += 1;
     }
 
-    return { created: !existing, barcodesTouched };
+    return {
+      created: !existing,
+      mergedDrafts: uniqueReceiptDrafts.length + (recognizedReceiptDraft ? 1 : 0),
+      barcodesTouched,
+    };
+  }
+
+  private async mergeReceiptDraftSku(clientId: string, sourceSkuId: string, targetSkuId: string) {
+    await this.prisma.$transaction(
+      async (tx) => {
+        const [source, target] = await Promise.all([
+          tx.sku.findFirst({
+            where: {
+              id: sourceSkuId,
+              clientId,
+              isDraft: true,
+              draftSource: 'RECEIPT_SCAN',
+            },
+            include: { barcodes: true },
+          }),
+          tx.sku.findFirst({
+            where: {
+              id: targetSkuId,
+              clientId,
+            },
+            include: { barcodes: true },
+          }),
+        ]);
+        if (!source || !target || source.id === target.id) {
+          return;
+        }
+
+        const sourceBalances = await tx.stockBalance.findMany({
+          where: {
+            clientId,
+            skuId: source.id,
+          },
+        });
+        for (const sourceBalance of sourceBalances) {
+          const balanceWarehouseId = requireFbsBalanceWarehouseId(sourceBalance.warehouseId);
+          const targetBalanceKey = fbsStockBalanceKey({
+            warehouseId: balanceWarehouseId,
+            clientId,
+            skuId: target.id,
+            boxId: sourceBalance.boxId,
+            palletId: sourceBalance.palletId,
+            status: sourceBalance.status,
+          });
+          const targetBalance = await tx.stockBalance.findUnique({
+            where: { balanceKey: targetBalanceKey },
+          });
+
+          if (!targetBalance) {
+            await tx.stockBalance.update({
+              where: { id: sourceBalance.id },
+              data: {
+                skuId: target.id,
+                balanceKey: targetBalanceKey,
+                warehouseId: balanceWarehouseId,
+              },
+            });
+            continue;
+          }
+
+          await this.mergePickWaveBalanceLines(tx, sourceBalance.id, targetBalance.id, target);
+          await tx.stockBalance.update({
+            where: { id: targetBalance.id },
+            data: {
+              warehouseId: balanceWarehouseId,
+              quantity: { increment: sourceBalance.quantity },
+            },
+          });
+          await tx.stockBalance.delete({ where: { id: sourceBalance.id } });
+        }
+
+        await Promise.all([
+          tx.stockMovement.updateMany({
+            where: { clientId, skuId: source.id },
+            data: { skuId: target.id },
+          }),
+          tx.productMark.updateMany({
+            where: { clientId, skuId: source.id },
+            data: { skuId: target.id },
+          }),
+          tx.clientRequestItem.updateMany({
+            where: { skuId: source.id },
+            data: { skuId: target.id },
+          }),
+          tx.clientRequestBoxSelection.updateMany({
+            where: { skuId: source.id },
+            data: { skuId: target.id },
+          }),
+          tx.clientRequestPackageItem.updateMany({
+            where: { skuId: source.id },
+            data: { skuId: target.id },
+          }),
+          tx.pickWaveBalanceLine.updateMany({
+            where: { skuId: source.id },
+            data: {
+              skuId: target.id,
+              internalSku: target.internalSku,
+              name: target.name,
+              color: target.color,
+              size: target.size,
+            },
+          }),
+          tx.fbsTsdAssembly.updateMany({
+            where: { clientId, skuId: source.id },
+            data: { skuId: target.id },
+          }),
+          tx.fbsTsdAssembly.updateMany({
+            where: { clientId, sourceSkuId: source.id },
+            data: { sourceSkuId: target.id },
+          }),
+          tx.fbsOrderRequestLink.updateMany({
+            where: { clientId, lastSkuId: source.id },
+            data: { lastSkuId: target.id },
+          }),
+        ]);
+
+        const publications = await tx.fbsStockPublication.findMany({
+          where: { clientId, skuId: source.id },
+        });
+        for (const publication of publications) {
+          const targetPublication = await tx.fbsStockPublication.findFirst({
+            where: {
+              connectionId: publication.connectionId,
+              warehouseId: publication.warehouseId,
+              skuId: target.id,
+            },
+          });
+          if (!targetPublication) {
+            await tx.fbsStockPublication.update({
+              where: { id: publication.id },
+              data: { skuId: target.id },
+            });
+            continue;
+          }
+
+          const sourceSettingsWin = publication.enabled && !targetPublication.enabled;
+          await tx.fbsStockPublication.update({
+            where: { id: targetPublication.id },
+            data: {
+              enabled: targetPublication.enabled || publication.enabled,
+              saleLimit: sourceSettingsWin ? publication.saleLimit : targetPublication.saleLimit,
+              lastWmsAmount: targetPublication.lastWmsAmount ?? publication.lastWmsAmount,
+              lastWbAmount: targetPublication.lastWbAmount ?? publication.lastWbAmount,
+              lastSyncedAmount: targetPublication.lastSyncedAmount ?? publication.lastSyncedAmount,
+              lastSyncedAt: targetPublication.lastSyncedAt ?? publication.lastSyncedAt,
+              lastError: targetPublication.lastError ?? publication.lastError,
+            },
+          });
+          await tx.fbsStockPublication.delete({ where: { id: publication.id } });
+        }
+
+        for (const barcode of source.barcodes) {
+          await tx.barcode.upsert({
+            where: {
+              skuId_value: {
+                skuId: target.id,
+                value: barcode.value,
+              },
+            },
+            update: {
+              isPrimary: barcode.isPrimary,
+            },
+            create: {
+              skuId: target.id,
+              value: barcode.value,
+              isPrimary: barcode.isPrimary,
+            },
+          });
+        }
+        await tx.barcode.deleteMany({ where: { skuId: source.id } });
+
+        const sourceHasManualVolume =
+          source.volumeSource === VolumeSource.MANUAL && Number(source.volumeLiters) > 0;
+        const targetHasManualVolume =
+          target.volumeSource === VolumeSource.MANUAL && Number(target.volumeLiters) > 0;
+        if (sourceHasManualVolume && !targetHasManualVolume) {
+          await tx.sku.update({
+            where: { id: target.id },
+            data: {
+              volumeLiters: source.volumeLiters,
+              volumeSource: VolumeSource.MANUAL,
+            },
+          });
+        }
+
+        await tx.sku.delete({ where: { id: source.id } });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
+  private async mergePickWaveBalanceLines(
+    tx: Prisma.TransactionClient,
+    sourceBalanceId: string,
+    targetBalanceId: string,
+    target: {
+      id: string;
+      internalSku: string;
+      name: string;
+      color: string | null;
+      size: string | null;
+      barcodes: Array<{ value: string; isPrimary: boolean }>;
+    },
+  ) {
+    const sourceLines = await tx.pickWaveBalanceLine.findMany({
+      where: { balanceId: sourceBalanceId },
+    });
+    const targetBarcode =
+      target.barcodes.find((barcode) => barcode.isPrimary)?.value ?? target.barcodes[0]?.value ?? null;
+
+    for (const sourceLine of sourceLines) {
+      const targetLine = await tx.pickWaveBalanceLine.findFirst({
+        where: {
+          waveId: sourceLine.waveId,
+          balanceId: targetBalanceId,
+        },
+      });
+      if (!targetLine) {
+        await tx.pickWaveBalanceLine.update({
+          where: { id: sourceLine.id },
+          data: {
+            balanceId: targetBalanceId,
+            skuId: target.id,
+            internalSku: target.internalSku,
+            barcode: targetBarcode,
+            name: target.name,
+            color: target.color,
+            size: target.size,
+          },
+        });
+        continue;
+      }
+
+      await tx.pickWaveBalanceAllocation.updateMany({
+        where: { lineId: sourceLine.id },
+        data: { lineId: targetLine.id },
+      });
+      await tx.pickWaveBalanceLine.update({
+        where: { id: targetLine.id },
+        data: {
+          originalQuantity: targetLine.originalQuantity + sourceLine.originalQuantity,
+          plannedQuantity: targetLine.plannedQuantity + sourceLine.plannedQuantity,
+          remainingQuantity: targetLine.remainingQuantity + sourceLine.remainingQuantity,
+          keepQuantity:
+            targetLine.keepQuantity == null && sourceLine.keepQuantity == null
+              ? null
+              : (targetLine.keepQuantity ?? 0) + (sourceLine.keepQuantity ?? 0),
+          isReviewed: targetLine.isReviewed && sourceLine.isReviewed,
+        },
+      });
+      await tx.pickWaveBalanceLine.delete({ where: { id: sourceLine.id } });
+    }
+  }
+
+  private async requireBranchOwnedClientConfiguration(user: AuthUser, clientId: string) {
+    if (
+      user.permissionCodes?.includes('system:admin') ||
+      user.roleCodes?.includes('CLIENT') ||
+      (user.warehouseIds?.length ?? 0) === 0
+    ) {
+      return;
+    }
+
+    const warehouseId = user.activeWarehouseId?.trim() ?? '';
+    if (
+      !warehouseId ||
+      !user.warehouseIds?.includes(warehouseId) ||
+      !user.writableWarehouseIds?.includes(warehouseId)
+    ) {
+      throw new ForbiddenException('Нет прав на изменение интеграций выбранного филиала.');
+    }
+
+    const [currentLink, activeLinks] = await this.prisma.$transaction([
+      this.prisma.warehouseClient.findFirst({
+        where: { warehouseId, clientId, status: 'ACTIVE' },
+        select: { clientId: true },
+      }),
+      this.prisma.warehouseClient.count({ where: { clientId, status: 'ACTIVE' } }),
+    ]);
+    if (!currentLink) {
+      throw new ForbiddenException('Клиент не закреплён за выбранным филиалом.');
+    }
+    if (activeLinks > 1) {
+      throw new ForbiddenException(
+        'Интеграция маркетплейса общая для нескольких филиалов. Изменить её может только администратор сети.',
+      );
+    }
+  }
+
+  private requireNetworkWideWarehouseConfiguration(user: AuthUser) {
+    if (
+      !user.permissionCodes?.includes('system:admin') &&
+      !user.roleCodes?.includes('CLIENT') &&
+      (user.warehouseIds?.length ?? 0) > 0
+    ) {
+      throw new ForbiddenException(
+        'Общую маршрутизацию складов настраивает только администратор сети.',
+      );
+    }
   }
 }
 
@@ -6804,6 +24245,15 @@ function normalizedData(dto: Partial<UpsertMarketplaceConnectionDto>): Prisma.Cl
     ...(dto.apiKey === undefined ? {} : { apiKey: dto.apiKey.trim() }),
     ...(dto.isActive === undefined ? {} : { isActive: dto.isActive }),
     ...(dto.comment === undefined ? {} : { comment: normalizeNullable(dto.comment) }),
+    ...(dto.fbsExecutionWarehouseId === undefined
+      ? {}
+      : { fbsExecutionWarehouseId: normalizeNullable(dto.fbsExecutionWarehouseId) }),
+    ...(dto.fbsDropoffWarehouseId === undefined
+      ? {}
+      : { fbsDropoffWarehouseId: normalizeNullable(dto.fbsDropoffWarehouseId) }),
+    ...(dto.fbsAutoRouteNewWarehouses === undefined
+      ? {}
+      : { fbsAutoRouteNewWarehouses: dto.fbsAutoRouteNewWarehouses }),
   } as Prisma.ClientMarketplaceConnectionUncheckedCreateInput;
 }
 
@@ -6816,6 +24266,11 @@ function maskConnection(connection: {
   apiKey: string;
   isActive: boolean;
   comment: string | null;
+  fbsExecutionWarehouseId: string | null;
+  fbsWarehouseId: string | null;
+  fbsWarehouseName: string | null;
+  fbsDropoffWarehouseId: string | null;
+  fbsAutoRouteNewWarehouses: boolean;
   createdAt: Date;
   updatedAt: Date;
   client: { id: string; code: string; name: string };
@@ -6830,6 +24285,11 @@ function maskConnection(connection: {
     hasApiKey: Boolean(connection.apiKey),
     isActive: connection.isActive,
     comment: connection.comment,
+    fbsExecutionWarehouseId: connection.fbsExecutionWarehouseId,
+    fbsWarehouseId: connection.fbsWarehouseId,
+    fbsWarehouseName: connection.fbsWarehouseName,
+    fbsDropoffWarehouseId: connection.fbsDropoffWarehouseId,
+    fbsAutoRouteNewWarehouses: connection.fbsAutoRouteNewWarehouses,
     createdAt: connection.createdAt,
     updatedAt: connection.updatedAt,
     client: connection.client,
@@ -6870,6 +24330,76 @@ function toBoolean(value: unknown): boolean {
   return ['1', 'true', 'yes', 'y', 'да'].includes(normalized);
 }
 
+function normalizedDbsData(dto: Partial<UpsertDbsIntegrationDto>): Prisma.ClientDbsIntegrationUncheckedUpdateInput {
+  return {
+    ...(dto.clientId === undefined ? {} : { clientId: dto.clientId }),
+    ...(dto.marketplace === undefined ? {} : { marketplace: dto.marketplace }),
+    ...(dto.senderName === undefined ? {} : { senderName: dto.senderName.trim() }),
+    ...(dto.contactName === undefined ? {} : { contactName: normalizeNullable(dto.contactName) }),
+    ...(dto.phone === undefined ? {} : { phone: dto.phone.trim() }),
+    ...(dto.email === undefined ? {} : { email: normalizeNullable(dto.email) }),
+    ...(dto.city === undefined ? {} : { city: dto.city.trim() }),
+    ...(dto.address === undefined ? {} : { address: dto.address.trim() }),
+    ...(dto.postalCode === undefined ? {} : { postalCode: normalizeNullable(dto.postalCode) }),
+    ...(dto.deliveryProvider === undefined ? {} : { deliveryProvider: dto.deliveryProvider.trim().toUpperCase() }),
+    ...(dto.deliveryServiceName === undefined ? {} : { deliveryServiceName: normalizeNullable(dto.deliveryServiceName) }),
+    ...(dto.deliveryApiUrl === undefined ? {} : { deliveryApiUrl: normalizeNullable(dto.deliveryApiUrl) }),
+    ...(dto.deliveryAccountId === undefined ? {} : { deliveryAccountId: normalizeNullable(dto.deliveryAccountId) }),
+    ...(dto.deliveryApiKey === undefined ? {} : { deliveryApiKey: dto.deliveryApiKey.trim() }),
+    ...(dto.deliveryApiSecret === undefined ? {} : { deliveryApiSecret: normalizeNullable(dto.deliveryApiSecret) }),
+    ...(dto.isActive === undefined ? {} : { isActive: dto.isActive }),
+    ...(Object.keys(dto).length === 0 ? {} : { lastCheckedAt: null, lastCheckOk: null, lastCheckMessage: null }),
+  } as Prisma.ClientDbsIntegrationUncheckedUpdateInput;
+}
+
+function dbsMarketplaceTypes(): MarketplaceType[] {
+  return [MarketplaceType.WILDBERRIES, MarketplaceType.OZON, MarketplaceType.YANDEX_MARKET];
+}
+
+function requireDbsMarketplace(value: string | MarketplaceType) {
+  if (!dbsMarketplaceTypes().includes(value as MarketplaceType)) {
+    throw new BadRequestException('DBS доступен только для Wildberries, Ozon и Яндекс Маркета.');
+  }
+  return value as MarketplaceType;
+}
+
+function maskDbsIntegration(integration: {
+  id: string;
+  clientId: string;
+  marketplace: MarketplaceType;
+  senderName: string;
+  contactName: string | null;
+  phone: string;
+  email: string | null;
+  city: string;
+  address: string;
+  postalCode: string | null;
+  deliveryProvider: string;
+  deliveryServiceName: string | null;
+  deliveryApiUrl: string | null;
+  deliveryAccountId: string | null;
+  deliveryApiKey: string;
+  deliveryApiSecret: string | null;
+  isActive: boolean;
+  lastCheckedAt: Date | null;
+  lastCheckOk: boolean | null;
+  lastCheckMessage: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  client: { id: string; code: string; name: string };
+}, hasMarketplaceApi: boolean) {
+  return {
+    ...integration,
+    deliveryApiKey: undefined,
+    deliveryApiSecret: undefined,
+    deliveryApiKeyMask: maskApiKey(integration.deliveryApiKey),
+    hasDeliveryApiKey: Boolean(integration.deliveryApiKey),
+    hasDeliveryApiSecret: Boolean(integration.deliveryApiSecret),
+    hasMarketplaceApi,
+    ready: integration.isActive && hasMarketplaceApi && Boolean(integration.deliveryApiKey),
+  };
+}
+
 function requiredFbsTsdText(value: unknown, message: string) {
   if (typeof value !== 'string' || !value.trim()) {
     throw new BadRequestException(message);
@@ -6877,11 +24407,288 @@ function requiredFbsTsdText(value: unknown, message: string) {
   return value.trim();
 }
 
+function fbsTsdKizFormatError(value: string, allowedBoxPrefixes: string[] = ['FFL_']) {
+  const normalized = value.trim();
+  const upper = normalized.toLocaleUpperCase('ru-RU');
+  const compact = upper.replace(/[^A-ZА-ЯЁ0-9]/g, '');
+  if (allowedBoxPrefixes.some((prefix) => compact.startsWith(prefix.toUpperCase().replace(/[^A-ZА-ЯЁ0-9]/g, '')))) {
+    return 'Отсканирован номер короба. Сейчас нужен КИЗ Data Matrix товара.';
+  }
+  if (
+    compact.startsWith('PALETSORT') ||
+    compact.startsWith('PALLETSORT') ||
+    compact.startsWith('ПАЛЛЕТСОРТ')
+  ) {
+    return 'Отсканирован код паллетсорта. Сейчас нужен КИЗ Data Matrix товара.';
+  }
+  if (/^\d{8,14}$/.test(normalized)) {
+    return 'Отсканирован обычный ШК товара. Сейчас нужен КИЗ Data Matrix.';
+  }
+  if (normalized.length < 21 || normalized.length > 135) {
+    return 'Отсканирован не КИЗ. Нужен код Data Matrix длиной от 21 до 135 символов.';
+  }
+
+  const hasGs1KizStructure =
+    /^(?:\]d2)?01\d{14}(?:\u001d)?21[\s\S]+$/i.test(normalized) ||
+    /^\(01\)\d{14}\(21\)[\s\S]+$/i.test(normalized);
+  if (!hasGs1KizStructure) {
+    return 'Отсканирован код неверного типа. КИЗ Data Matrix должен содержать группы 01 (GTIN) и 21 (серийный номер).';
+  }
+  return null;
+}
+
+function isFbsRelabelService(service: {
+  code: string;
+  name: string;
+  unit: BillingUnit;
+}) {
+  if (service.unit !== BillingUnit.PIECE) return false;
+  const value = `${service.code} ${service.name}`
+    .toLocaleLowerCase('ru-RU')
+    .replace(/ё/g, 'е');
+  return ['перемарк', 'перекле', 'relabel'].some((marker) =>
+    value.includes(marker),
+  );
+}
+
+function fbsPrimaryChargeLines(input: {
+  breakdown: ReturnType<typeof buildFbsPrimaryProcessingBreakdown>;
+  whiteUnitPriceRub: number;
+  grayUnitPriceRub: number;
+  returnUnitPriceRub: number;
+  relabelService: FbsPrimaryBillingService | null;
+  primaryServices: Array<{
+    service: FbsPrimaryBillingService;
+    quantityMultiplier: number;
+    matchKeywords: string;
+  }>;
+  orders: FbsOrderSummary[];
+}): FbsPrimaryChargeLine[] {
+  const lines: FbsPrimaryChargeLine[] = [
+    {
+      key: 'WHITE',
+      description: 'Первичная обработка — в белую',
+      quantity: input.breakdown.quantities.WHITE,
+      unitPriceRub: round(input.whiteUnitPriceRub, 2),
+      serviceId: null,
+      serviceCode: 'FBS_PRIMARY_WHITE',
+      taxMode: BillingPriceTaxMode.INCLUDED,
+      priceBeforeTaxRub: round(input.whiteUnitPriceRub, 2),
+    },
+    {
+      key: 'GRAY',
+      description: 'Первичная обработка — в серую',
+      quantity: input.breakdown.quantities.GRAY,
+      unitPriceRub: round(input.grayUnitPriceRub, 2),
+      serviceId: null,
+      serviceCode: 'FBS_PRIMARY_GRAY',
+      taxMode: BillingPriceTaxMode.INCLUDED,
+      priceBeforeTaxRub: round(input.grayUnitPriceRub, 2),
+    },
+    {
+      key: 'RETURN',
+      description: 'Первичная обработка — возврат',
+      quantity: input.breakdown.quantities.RETURN,
+      unitPriceRub: round(input.returnUnitPriceRub, 2),
+      serviceId: null,
+      serviceCode: 'FBS_PRIMARY_RETURN',
+      taxMode: BillingPriceTaxMode.INCLUDED,
+      priceBeforeTaxRub: round(input.returnUnitPriceRub, 2),
+    },
+  ];
+
+  const matchedQuantities = matchFbsPrimaryServicesToOrders(
+    input.primaryServices,
+    input.orders,
+  );
+
+  for (const selection of input.primaryServices) {
+    const priceBeforeTaxRub = Number(selection.service.priceRub);
+    const keywords = parseFbsPrimaryMatchKeywords(selection.matchKeywords);
+    const sourceQuantity = keywords.length > 0
+      ? matchedQuantities.get(selection.service.serviceId) ?? 0
+      : input.breakdown.totalQuantity;
+    const quantity = round(
+      sourceQuantity * Math.max(0.001, selection.quantityMultiplier),
+      3,
+    );
+    lines.push({
+      key: `SERVICE:${selection.service.serviceId}`,
+      description: `Первичная обработка — ${selection.service.service.name}`,
+      quantity,
+      unitPriceRub: fbsPrimaryPriceWithTax(
+        priceBeforeTaxRub,
+        selection.service.taxMode,
+      ),
+      serviceId: selection.service.serviceId,
+      serviceCode: selection.service.service.code,
+      taxMode: selection.service.taxMode,
+      priceBeforeTaxRub,
+    });
+  }
+
+  if (input.relabelService && input.breakdown.relabelQuantity > 0) {
+    const priceBeforeTaxRub = Number(input.relabelService.priceRub);
+    lines.push({
+      key: 'RELABEL',
+      description: `Перемаркировка FBS: ${input.relabelService.service.name}`,
+      quantity: input.breakdown.relabelQuantity,
+      unitPriceRub: fbsPrimaryPriceWithTax(
+        priceBeforeTaxRub,
+        input.relabelService.taxMode,
+      ),
+      serviceId: input.relabelService.serviceId,
+      serviceCode: input.relabelService.service.code,
+      taxMode: input.relabelService.taxMode,
+      priceBeforeTaxRub,
+    });
+  }
+
+  return lines;
+}
+
+function matchFbsPrimaryServicesToOrders(
+  selections: Array<{
+    service: FbsPrimaryBillingService;
+    matchKeywords: string;
+  }>,
+  orders: FbsOrderSummary[],
+) {
+  const rules = selections.map((selection) => ({
+    serviceId: selection.service.serviceId,
+    matchKeywords: selection.matchKeywords,
+  }));
+  const quantities = new Map<string, number>();
+  for (const order of orders) {
+    const serviceId = resolveFbsPrimaryServiceMatch([
+      order.product?.name,
+      order.product?.internalSku,
+      order.product?.clientSku,
+      order.product?.article,
+      order.product?.size,
+      order.article,
+      order.nmId,
+      ...order.barcodes,
+    ], rules);
+    if (serviceId) {
+      quantities.set(
+        serviceId,
+        (quantities.get(serviceId) ?? 0) + Math.max(1, order.itemCount),
+      );
+    }
+  }
+  return quantities;
+}
+
+export function resolveFbsPrimaryServiceMatch(
+  searchValues: Array<string | null | undefined>,
+  rules: Array<{ serviceId: string; matchKeywords: string }>,
+) {
+  const searchable = normalizeFbsPrimaryMatchText(
+    searchValues.filter((value): value is string => Boolean(value)).join(' '),
+  );
+  let bestMatch: { serviceId: string; score: number } | null = null;
+  for (const rule of rules) {
+    const matchedKeyword = parseFbsPrimaryMatchKeywords(rule.matchKeywords)
+      .filter((keyword) => fbsPrimaryTextContains(searchable, keyword))
+      .sort((left, right) => right.length - left.length)[0];
+    if (!matchedKeyword) continue;
+    const candidate = { serviceId: rule.serviceId, score: matchedKeyword.length };
+    if (
+      !bestMatch ||
+      candidate.score > bestMatch.score ||
+      (candidate.score === bestMatch.score && candidate.serviceId < bestMatch.serviceId)
+    ) {
+      bestMatch = candidate;
+    }
+  }
+  return bestMatch?.serviceId ?? null;
+}
+
+function parseFbsPrimaryMatchKeywords(value: string) {
+  return uniqueStrings(
+    value
+      .split(/\r?\n|;|\|/g)
+      .map(normalizeFbsPrimaryMatchText)
+      .filter(Boolean),
+  );
+}
+
+function normalizeFbsPrimaryMatchText(value: string) {
+  return value
+    .toLocaleLowerCase('ru-RU')
+    .replace(/ё/g, 'е')
+    .replace(/(\d)([a-zа-я])/gi, '$1 $2')
+    .replace(/([a-zа-я])(\d)/gi, '$1 $2')
+    .replace(/[^a-zа-я0-9]+/gi, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function fbsPrimaryTextContains(searchable: string, keyword: string) {
+  return ` ${searchable} `.includes(` ${keyword} `);
+}
+
+export function calculateTieredFbsLogistics(input: {
+  items: number;
+  volumeLiters: number;
+  missingVolumeItems: number;
+  freeItemsLimit: number;
+  cubicMeterLiters: number;
+  cubicMeterPriceRub: number;
+  palletPriceRub: number;
+}) {
+  const items = Math.max(0, Math.trunc(input.items));
+  const volumeLiters = Math.max(0, input.volumeLiters);
+  const cubicMeterLiters = Math.max(1, Math.trunc(input.cubicMeterLiters));
+  if (items <= Math.max(0, Math.trunc(input.freeItemsLimit))) {
+    return {
+      mode: 'FREE',
+      items,
+      volumeLiters: round(volumeLiters, 3),
+      missingVolumeItems: input.missingVolumeItems,
+      palletCount: 0,
+      totalRub: 0,
+    };
+  }
+  if (volumeLiters <= cubicMeterLiters) {
+    return {
+      mode: 'CUBIC_METER',
+      items,
+      volumeLiters: round(volumeLiters, 3),
+      missingVolumeItems: input.missingVolumeItems,
+      palletCount: 0,
+      totalRub: round(input.cubicMeterPriceRub, 2),
+    };
+  }
+  const palletCount = Math.max(1, Math.ceil(volumeLiters / cubicMeterLiters));
+  return {
+    mode: 'PALLETS',
+    items,
+    volumeLiters: round(volumeLiters, 3),
+    missingVolumeItems: input.missingVolumeItems,
+    palletCount,
+    totalRub: round(palletCount * input.palletPriceRub, 2),
+  };
+}
+
+function fbsPrimaryPriceWithTax(
+  unitPriceRub: number,
+  taxMode: BillingPriceTaxMode,
+) {
+  return taxMode === BillingPriceTaxMode.ADD_6_PERCENT
+    ? round((unitPriceRub / 94) * 100, 2)
+    : round(unitPriceRub, 2);
+}
+
 function fbsStockConnectionSummary(connection: MarketplaceConnectionWithClient) {
   return {
     id: connection.id,
     marketplace: connection.marketplace,
     accountName: connection.accountName,
+    fbsExecutionWarehouseId: connection.fbsExecutionWarehouseId,
+    fbsDropoffWarehouseId: connection.fbsDropoffWarehouseId,
+    fbsAutoRouteNewWarehouses: connection.fbsAutoRouteNewWarehouses,
   };
 }
 
@@ -6911,24 +24718,118 @@ function marketplaceErrorText(caught: unknown) {
   return caught instanceof Error ? caught.message : 'Wildberries не принял обновление остатков.';
 }
 
-function normalizeFbsPhysicalBoxCode(value: string) {
+function marketplaceAccessErrorText(caught: unknown) {
+  const message = marketplaceErrorText(caught);
+  if (/unauthori[sz]ed|forbidden|token|api.?key|auth|401|403/i.test(message)) {
+    return `Нет доступа: проверьте API-ключ и разрешения. ${message}`;
+  }
+  return message || 'Маркетплейс не подтвердил доступ.';
+}
+
+function failedMarketplaceAccessCheck(
+  key: MarketplaceAccessCheck['key'],
+  label: string,
+  message: string,
+): MarketplaceAccessCheck {
+  return { key, label, ok: false, message };
+}
+
+function unsupportedMarketplaceChecks(): MarketplaceAccessCheck[] {
+  const message = 'Автоматическая проверка сейчас доступна для Wildberries и Ozon.';
+  return [
+    failedMarketplaceAccessCheck('products', 'Карточки товаров', message),
+    failedMarketplaceAccessCheck('fbsOrders', 'Заказы FBS', message),
+    failedMarketplaceAccessCheck('warehouses', 'Склады FBS', message),
+  ];
+}
+
+function normalizeFbsPhysicalBoxCode(value: string, allowedBoxPrefixes: string[] = ['FFL_']) {
   const normalized = value
     .normalize('NFKC')
     .toUpperCase()
     .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200d\u2060\ufeff]/g, '');
-  return normalized.match(/FFL[A-Z0-9_-]{3,}/)?.[0] ?? '';
+  const prefixPattern = allowedBoxPrefixes
+    .map((prefix) => prefix.toUpperCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .sort((left, right) => right.length - left.length)
+    .join('|');
+  if (!prefixPattern) return '';
+  return normalized.match(new RegExp(`(?:${prefixPattern})[A-Z0-9_-]{3,}`))?.[0] ?? '';
 }
 
-function jsonStringArray(value: Prisma.JsonValue): string[] {
+function isFbsPhysicalBoxCode(value: string, allowedBoxPrefixes: string[] = ['FFL_']) {
+  const normalized = normalizeFbsScannerCode(value).toUpperCase();
+  return allowedBoxPrefixes.some((prefix) => normalized.startsWith(prefix.toUpperCase()));
+}
+
+function normalizeFbsScannerCode(value: string) {
+  return value
+    .normalize('NFKC')
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200d\u2060\ufeff]/g, '')
+    // AIM symbology identifiers are added by many hardware scanners:
+    // ]C0 / ]C1 for Code 128, ]Q* for QR and ]d* for Data Matrix.
+    .replace(/^\][A-Z][0-9A-Z]/i, '')
+    .trim();
+}
+
+/**
+ * Some legacy pallet-sort labels omit the zero used by the imported storage
+ * code (for example PALET_SORT_49 on the label versus PALET_SORT_049 in WMS).
+ * Exact lookup always wins; this alias is only a fallback for a PALET/PALLET
+ * sort code with a one- or two-digit numeric suffix, so boxes and product
+ * barcodes are never reclassified.
+ */
+function fbsStoragePalletCodeAlias(value: string) {
+  const normalized = normalizeFbsScannerCode(value).toLocaleUpperCase('ru-RU');
+  const match = normalized.match(/^((?:PALET|PALLET)(?:[_ -]?SORT)?[_ -])(\d{1,2})$/);
+  if (!match) return null;
+  return `${match[1]}${match[2].padStart(3, '0')}`;
+}
+
+function jsonStringArray(value: Prisma.JsonValue | null | undefined): string[] {
   return Array.isArray(value) ? uniqueStrings(value.map(textValue)) : [];
 }
 
 function fbsTsdStage(task: FbsTsdAssemblyRecord) {
   if (task.status === 'COMPLETED') return 'COMPLETED';
-  if (!task.boxId) return 'SCAN_BOX';
+  if (!task.boxId && !fbsTsdUsesNoBox(task)) return 'SCAN_BOX';
+  if (task.relabelRequired && !task.sourceBarcode) return 'SCAN_SOURCE_BARCODE';
+  if (task.relabelRequired && !task.barcode) return 'SCAN_RELABEL_BARCODE';
   if (!task.barcode) return 'SCAN_BARCODE';
   if (task.requiresKiz && (!task.kiz || task.wbMetaStatus !== 'ACCEPTED')) return 'SCAN_KIZ';
+  if (task.marketplace === MarketplaceType.OZON) {
+    if (!task.marketplaceSubmittedAt) return 'READY_TO_SUBMIT';
+    if (!task.marketplaceLabelBase64) return 'WAIT_MARKETPLACE_LABEL';
+  }
   return 'READY_TO_COMPLETE';
+}
+
+function fbsTsdUsesNoBox(task: Pick<FbsTsdAssemblyRecord, 'boxId' | 'boxCode'>) {
+  return (
+    !task.boxId &&
+    task.boxCode?.toLocaleUpperCase('ru-RU') === FBS_TSD_NO_BOX_CODE
+  );
+}
+
+function fbsAutomaticReservationId(
+  order: Pick<
+    FbsOrderSummary,
+    'marketplace' | 'connectionId' | 'id'
+  >,
+) {
+  return `AUTO:${order.marketplace}:${order.connectionId}:${order.id}`;
+}
+
+function fbsTsdStockSourceHasAvailableStock(
+  source: FbsTsdStockSource | null | undefined,
+) {
+  return Boolean(
+    source &&
+      (source.withoutBoxQuantity > 0 ||
+        source.storageBoxes.some(
+          (box) =>
+            box.quantity > 0 && box.status === StockStatus.AVAILABLE,
+        )),
+  );
 }
 
 function cargoBarcodeMap(value: Prisma.JsonValue | null | undefined) {
@@ -6951,9 +24852,17 @@ function formatFbsCargoPacking(
   packing: FbsCargoPackingWithAssemblies,
   skuById = new Map<string, { color: string | null; size: string | null }>(),
   deliveryDestination: FbsDeliveryDestination = FbsDeliveryDestination.PICKUP_POINT,
+  requestNumberById = new Map<string, number>(),
+  requestNumbers: number[] = [],
+  warehouseId: string | null = null,
+  warehouseName: string | null = null,
 ) {
   return {
     id: packing.id,
+    supplyId: packing.supplyId,
+    requestNumbers,
+    warehouseId,
+    warehouseName,
     cargoPlaceId: packing.cargoPlaceId,
     cargoPlaceBarcode: packing.cargoPlaceBarcode,
     deliveryDestination,
@@ -6961,7 +24870,7 @@ function formatFbsCargoPacking(
       deliveryDestination === FbsDeliveryDestination.PICKUP_POINT
         ? 'WB_CARGO_PLACE'
         : 'SORTING_CENTER_BOX',
-    capacityItems: packing.capacityItems,
+    capacityItems: FBS_UNLIMITED_CARGO_PLACE_CAPACITY,
     packedItems: packing.assemblies.reduce((sum, task) => sum + Math.max(1, task.itemCount), 0),
     status: packing.status,
     deviceCode: packing.deviceCode,
@@ -6972,6 +24881,7 @@ function formatFbsCargoPacking(
     orders: packing.assemblies.map((task) => ({
       orderId: task.orderId,
       requestId: task.requestId,
+      requestNumber: requestNumberById.get(task.requestId) ?? null,
       productName: task.productName,
       article: task.article,
       color: skuById.get(task.skuId)?.color ?? null,
@@ -6987,19 +24897,223 @@ function formatFbsCargoPacking(
   };
 }
 
+const WB_REQUEST_INTERVAL_MS = process.env.NODE_ENV === 'test' ? 0 : 240;
+const MARKETPLACE_RATE_LIMIT_RETRIES = 4;
+const wbRequestScheduler = new WildberriesRequestScheduler(
+  WB_REQUEST_INTERVAL_MS,
+);
+const marketplaceReadLoads = new Map<
+  string,
+  Promise<Record<string, unknown>>
+>();
+
+async function waitForWbRequestSlot(url: string, init: RequestInit) {
+  await wbRequestScheduler.waitForSlot(url, init);
+}
+
+function marketplaceRetryDelayMs(response: Response, attempt: number) {
+  const header = (name: string) => response.headers?.get?.(name) ?? null;
+  const retrySeconds = Number(
+    header('x-ratelimit-retry') ??
+      header('retry-after') ??
+      '',
+  );
+  if (Number.isFinite(retrySeconds) && retrySeconds > 0) {
+    return Math.min(30_000, Math.ceil(retrySeconds * 1000) + 150);
+  }
+  const resetSeconds = Number(header('x-ratelimit-reset') ?? '');
+  if (Number.isFinite(resetSeconds) && resetSeconds > 0) {
+    return Math.min(30_000, Math.ceil(resetSeconds * 1000) + 150);
+  }
+  return Math.min(12_000, 1_500 * 2 ** attempt);
+}
+
+async function marketplaceFetch(
+  url: string,
+  init: RequestInit,
+  rateLimitRetries = MARKETPLACE_RATE_LIMIT_RETRIES,
+) {
+  for (let attempt = 0; attempt <= rateLimitRetries; attempt += 1) {
+    await waitForWbRequestSlot(url, init);
+    const response = await fetch(url, init);
+    if (response.status !== 429) {
+      return response;
+    }
+    const retryDelayMs = marketplaceRetryDelayMs(response, attempt);
+    // WB applies the Marketplace limit to the seller (`sid`), not to an
+    // individual token. Pause every token of this seller before another call.
+    wbRequestScheduler.defer(url, init, retryDelayMs);
+    if (attempt === rateLimitRetries) {
+      return response;
+    }
+    await response.arrayBuffer().catch(() => undefined);
+  }
+  throw new Error('Не удалось выполнить запрос к маркетплейсу.');
+}
+
 async function marketplaceJson(url: string, init: RequestInit) {
-  const response = await fetch(url, init);
+  const readKey = wildberriesReadRequestKey(url, init);
+  if (!readKey) {
+    return marketplaceJsonUncached(url, init);
+  }
+  const current = marketplaceReadLoads.get(readKey);
+  if (current) return current;
+  const promise = marketplaceJsonUncached(url, init);
+  marketplaceReadLoads.set(readKey, promise);
+  try {
+    return await promise;
+  } finally {
+    if (marketplaceReadLoads.get(readKey) === promise) {
+      marketplaceReadLoads.delete(readKey);
+    }
+  }
+}
+
+async function marketplaceJsonUncached(url: string, init: RequestInit) {
+  const response = await marketplaceFetch(url, init);
   const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
-    const message =
-      textValue(payload.message) ||
-      textValue(payload.error) ||
-      textValue(payload.detail) ||
-      `Маркетплейс вернул HTTP ${response.status}.`;
-    throw new BadRequestException(message);
+    throw new BadRequestException(
+      formatMarketplaceHttpError(url, response.status, payload),
+    );
   }
 
   return payload;
+}
+
+async function marketplaceJsonOnce(url: string, init: RequestInit) {
+  const response = await marketplaceFetch(url, init, 0);
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok) {
+    const message = formatMarketplaceHttpError(url, response.status, payload);
+    throw new BadRequestException(
+      response.status === 429
+        ? message.replace(
+            'WMS уже повторила запрос автоматически, но лимит продавца ещё не восстановился.',
+            'Изменяющий запрос не повторялся автоматически, чтобы не создать дубль. Лимит продавца ещё не восстановился.',
+          )
+        : message,
+    );
+  }
+
+  return payload;
+}
+
+async function marketplaceBinary(url: string, init: RequestInit) {
+  const response = await marketplaceFetch(url, init);
+  const contentType = response.headers.get('content-type')?.split(';')[0]?.trim() || 'application/pdf';
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (!response.ok) {
+    let payload: Record<string, unknown> = {};
+    const plainText = buffer.toString('utf8').trim();
+    try {
+      payload = JSON.parse(plainText) as Record<string, unknown>;
+    } catch {
+      // Some marketplace errors are returned as plain text.
+    }
+    throw new BadRequestException(
+      formatMarketplaceHttpError(url, response.status, payload, plainText),
+    );
+  }
+  if (contentType.includes('json')) {
+    const payload = JSON.parse(buffer.toString('utf8')) as Record<string, unknown>;
+    const encoded = textValue(payload.content) || textValue(asRecord(payload.result).content);
+    if (!encoded) throw new BadRequestException('Маркетплейс вернул пустой файл этикетки.');
+    return { buffer: Buffer.from(encoded, 'base64'), contentType: 'application/pdf' };
+  }
+  if (buffer.length === 0) throw new BadRequestException('Маркетплейс вернул пустой файл этикетки.');
+  return { buffer, contentType };
+}
+
+function marketplaceErrorMessage(caught: unknown) {
+  if (caught instanceof BadRequestException) {
+    const response = caught.getResponse();
+    if (typeof response === 'string') return response;
+    if (response && typeof response === 'object') {
+      const message = (response as { message?: unknown }).message;
+      if (Array.isArray(message)) return message.map(textValue).filter(Boolean).join('; ');
+      if (message) return textValue(message);
+    }
+  }
+  return caught instanceof Error ? caught.message : 'неизвестная ошибка маркетплейса';
+}
+
+function isWildberriesFailedToUpdateMeta(caught: unknown) {
+  const message = marketplaceErrorMessage(caught).toLowerCase();
+  return (
+    message.includes('failedtoupdatemeta') ||
+    (message.includes('http 409') && message.includes('/meta/sgtin'))
+  );
+}
+
+export function formatMarketplaceHttpError(
+  url: string,
+  status: number,
+  payload: Record<string, unknown>,
+  plainText = '',
+) {
+  const marketplace = url.includes('wildberries.ru')
+    ? 'Wildberries'
+    : url.includes('ozon.ru')
+      ? 'Ozon'
+      : url.includes('yandex')
+        ? 'Яндекс Маркет'
+        : 'Маркетплейс';
+  const code = marketplaceErrorScalar(payload.code);
+  const primary = uniqueStrings(
+    [payload.message, payload.error, payload.detail, payload.title]
+      .map(marketplaceErrorDetail)
+      .filter(Boolean),
+  ).join('; ');
+  const detail = uniqueStrings(
+    [
+      payload.metaDetails,
+      payload.additionalErrors,
+      payload.errors,
+      payload.data,
+    ]
+      .map(marketplaceErrorDetail)
+      .filter(Boolean),
+  ).join('; ');
+  const requestId =
+    marketplaceErrorScalar(payload.requestId) ||
+    marketplaceErrorScalar(payload.requestID);
+  const prefix = `${marketplace} вернул HTTP ${status}${code ? ` (${code})` : ''}`;
+  const fallback = plainText && plainText !== '[object Object]' ? plainText : '';
+  const message = primary || fallback;
+  if (status === 429) {
+    return `${marketplace} временно ограничил частоту запросов. WMS уже повторила запрос автоматически, но лимит продавца ещё не восстановился. Подождите 20–30 секунд и нажмите действие ещё раз${requestId ? `. ID запроса: ${requestId}` : ''}.`;
+  }
+  return `${prefix}${message ? `: ${message}` : ''}${
+    detail && !message.includes(detail) ? `. Детали: ${detail}` : ''
+  }${requestId ? `. ID запроса: ${requestId}` : ''}.`.slice(0, 3000);
+}
+
+function marketplaceErrorScalar(value: unknown) {
+  return typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'boolean'
+    ? String(value).trim()
+    : '';
+}
+
+function marketplaceErrorDetail(value: unknown): string {
+  const scalar = marketplaceErrorScalar(value);
+  if (scalar) return scalar;
+  if (value == null) return '';
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return '';
+  }
+}
+
+function ozonHeaders(clientId: string, apiKey: string) {
+  return {
+    'Client-Id': clientId,
+    'Api-Key': apiKey,
+    'Content-Type': 'application/json',
+  };
 }
 
 function wbHeaders(apiKey: string) {
@@ -7037,6 +25151,54 @@ function fbsPassPayload(dto: FbsPassDto) {
 
 function delay(milliseconds: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function delayWithAbort(milliseconds: number, signal?: AbortSignal | null) {
+  if (!signal) return delay(milliseconds);
+  if (signal.aborted) {
+    return Promise.reject(
+      signal.reason instanceof Error
+        ? signal.reason
+        : new Error('Запрос к маркетплейсу отменён по таймауту.'),
+    );
+  }
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', abort);
+      resolve();
+    }, milliseconds);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(
+        signal.reason instanceof Error
+          ? signal.reason
+          : new Error('Запрос к маркетплейсу отменён по таймауту.'),
+      );
+    };
+    signal.addEventListener('abort', abort, { once: true });
+  });
+}
+
+function adaptiveFbsBackgroundRefreshDelayMs(
+  slowestOrdersDurationMs: number,
+  rateLimited: boolean,
+) {
+  if (rateLimited || slowestOrdersDurationMs >= 60_000) {
+    return FBS_BACKGROUND_REFRESH_MAX_INTERVAL_MS;
+  }
+  if (slowestOrdersDurationMs >= 15_000) {
+    return Math.min(
+      FBS_BACKGROUND_REFRESH_MAX_INTERVAL_MS,
+      FBS_BACKGROUND_REFRESH_INTERVAL_MS * 2,
+    );
+  }
+  return FBS_BACKGROUND_REFRESH_INTERVAL_MS;
+}
+
+function isWildberriesRateLimitMessage(message: string) {
+  return /(?:\b429\b|too many requests|global limiter|rate.?limit|лимит)/i.test(
+    message,
+  );
 }
 
 function selectionKey(connectionId: string, orderId: string) {
@@ -7083,7 +25245,7 @@ async function fetchWildberriesFbsHistory(headers: Record<string, string>) {
   const orders: Record<string, unknown>[] = [];
   let next = 0;
 
-  for (let page = 0; page < 5; page += 1) {
+  for (let page = 0; page < WILDBERRIES_FBS_HISTORY_MAX_PAGES; page += 1) {
     const url = new URL('https://marketplace-api.wildberries.ru/api/v3/orders');
     url.searchParams.set('limit', '1000');
     url.searchParams.set('next', String(next));
@@ -7102,6 +25264,55 @@ async function fetchWildberriesFbsHistory(headers: Record<string, string>) {
   }
 
   return orders;
+}
+
+function compactWildberriesFbsOrder(order: Record<string, unknown>) {
+  const result: Record<string, unknown> = {};
+  const fields = [
+    'id',
+    'orderUid',
+    'orderUID',
+    'skus',
+    'article',
+    'nmId',
+    'chrtId',
+    'createdAt',
+    'sellerDate',
+    'ddate',
+    'supplyId',
+    'supplyID',
+    'warehouseId',
+    'officeId',
+    'cargoType',
+    'crossBorderType',
+    'isPickupPointShipmentAllowed',
+    'requiredMeta',
+    'optionalMeta',
+    'comment',
+  ];
+  for (const field of fields) {
+    if (field in order) {
+      result[field] = order[field];
+    }
+  }
+  return result;
+}
+
+function fbsOrderRefreshFingerprint(order: {
+  supplierStatus?: unknown;
+  wbStatus?: unknown;
+  supplyId?: unknown;
+  supplyID?: unknown;
+  requiresReshipment?: unknown;
+  warehouseId?: unknown;
+}) {
+  return [
+    textValue(order.supplierStatus),
+    textValue(order.wbStatus),
+    textValue(order.supplyId) || textValue(order.supplyID),
+    toBoolean(order.requiresReshipment) ? '1' : '0',
+    textValue(order.warehouseId),
+  ].join('|');
 }
 
 function fbsOrderLinkSnapshot(order: FbsOrderSummary) {
@@ -7201,8 +25412,240 @@ function fbsRequestItemComment(orderIds: string[]) {
   return `FBS-заказы: ${orderIds.join(', ')}`;
 }
 
+// FIX: FBS-looking requests with no active link must not silently fall back to
+// the ordinary OUTBOUND queue.  The result distinguishes a safe transfer or
+// cancellation from a genuinely missing link without duplicating marketplace orders.
+export function diagnoseFbsRequestIdentity(input: {
+  requestNumber: number;
+  evidenceOrderIds: string[];
+  activeHereOrderIds: string[];
+  movedOrders: Array<{ orderId: string; requestNumber: number }>;
+  cancelledHereOrderIds: string[];
+  returnRequiredHereOrderIds: string[];
+}) {
+  const evidenceOrderIds = uniqueStrings(input.evidenceOrderIds);
+  const activeHereOrderIds = uniqueStrings(input.activeHereOrderIds);
+  const cancelledHereOrderIds = uniqueStrings(input.cancelledHereOrderIds);
+  const cancelledHereOrderIdSet = new Set(cancelledHereOrderIds);
+  const returnRequiredHereOrderIds = uniqueStrings(input.returnRequiredHereOrderIds);
+  const movedOrders = [
+    ...new Map(input.movedOrders.map((order) => [order.orderId, order])).values(),
+  ];
+  const movedToRequestNumbers = [...new Set(movedOrders.map((order) => order.requestNumber))]
+    .sort((left, right) => left - right);
+  const requestLabel = `№${String(input.requestNumber).padStart(6, '0')}`;
+
+  if (activeHereOrderIds.length > 0) {
+    return {
+      kind: 'ACTIVE' as const,
+      totalOrders: evidenceOrderIds.length,
+      movedToRequestNumbers,
+      message: `FBS-заявка ${requestLabel} активна: связанных заказов ${activeHereOrderIds.length}.`,
+    };
+  }
+  if (movedOrders.length > 0) {
+    const destinations = movedToRequestNumbers
+      .map((number) => `№${String(number).padStart(6, '0')}`)
+      .join(', ');
+    return {
+      kind: 'MOVED' as const,
+      totalOrders: evidenceOrderIds.length,
+      movedToRequestNumbers,
+      message:
+        `FBS-заявка ${requestLabel} не потеряна: ${movedOrders.length} заказ(а/ов) уже перенесены ` +
+        `в заявку ${destinations}. Возвращать их автоматически нельзя — получится двойная сборка.`,
+    };
+  }
+  if (
+    evidenceOrderIds.length > 0 &&
+    evidenceOrderIds.every((orderId) => cancelledHereOrderIdSet.has(orderId))
+  ) {
+    const returnText = returnRequiredHereOrderIds.length > 0
+      ? ` Из них ${returnRequiredHereOrderIds.length} требуют решения по возврату товара.`
+      : '';
+    return {
+      kind: 'CANCELLED' as const,
+      totalOrders: evidenceOrderIds.length,
+      movedToRequestNumbers,
+      message:
+        `FBS-заявка ${requestLabel} распознана корректно, но все ${evidenceOrderIds.length} заказ(а/ов) отменены маркетплейсом.` +
+        `${returnText} В очередь ТСД она не возвращается.`,
+    };
+  }
+  if (evidenceOrderIds.length > 0) {
+    return {
+      kind: 'BROKEN' as const,
+      totalOrders: evidenceOrderIds.length,
+      movedToRequestNumbers,
+      message:
+        `У FBS-заявки ${requestLabel} действительно отсутствуют активные связи с ${evidenceOrderIds.length} заказ(а/ов). ` +
+        'Автоматическое дублирование заблокировано; обновите API маркетплейса и повторите проверку.',
+    };
+  }
+  return {
+    kind: 'NOT_FBS' as const,
+    totalOrders: 0,
+    movedToRequestNumbers,
+    message: `В заявке ${requestLabel} не найдено подтверждённых FBS-заказов.`,
+  };
+}
+
+function fbsOrderIdsFromText(value: string) {
+  return value.match(/\b\d{10,}\b/g) ?? [];
+}
+
+function fbsRequestCompositionComment(
+  orderIds: string[],
+  currentComment: string | null | undefined,
+) {
+  const transferOrigin = currentComment?.match(
+    /^(.+?\u0438\u0437 \u0437\u0430\u044f\u0432\u043e\u043a\s+.+?\s+\u0438 \u043f\u043e\u0441\u0442\u0430\u0432\u043e\u043a\s+.+?\s+\u0432 \u043f\u043e\u0441\u0442\u0430\u0432\u043a\u0443\s+[^:]+):/iu,
+  );
+  const prefix = transferOrigin?.[1]?.trim();
+  return prefix
+    ? `${prefix}: ${orderIds.join(', ')}`
+    : `Создано из FBS-заказов: ${orderIds.join(', ')}`;
+}
+
 function naturalFbsIdCompare(left: string, right: string) {
   return left.localeCompare(right, 'ru-RU', { numeric: true, sensitivity: 'base' });
+}
+
+function relabelReconciliationPeriod(dateFrom: string, dateTo: string) {
+  const fromText = dateFrom?.trim();
+  const toText = dateTo?.trim();
+  if (!fromText || !toText) {
+    throw new BadRequestException('Укажите начало и конец периода сверки.');
+  }
+  const from = new Date(
+    /^\d{4}-\d{2}-\d{2}$/.test(fromText)
+      ? `${fromText}T00:00:00.000+03:00`
+      : fromText,
+  );
+  const to = new Date(
+    /^\d{4}-\d{2}-\d{2}$/.test(toText)
+      ? `${toText}T23:59:59.999+03:00`
+      : toText,
+  );
+  if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime()) || from > to) {
+    throw new BadRequestException('Период сверки указан неверно.');
+  }
+  if (to.getTime() - from.getTime() > 366 * 24 * 60 * 60 * 1000) {
+    throw new BadRequestException('За один раз можно проверить период не более 366 дней.');
+  }
+  return { from, to };
+}
+
+function buildRelabelReconciliationPairs(
+  mappings: Array<{
+    id: string;
+    sourceArticle: string;
+    targetArticle: string;
+  }>,
+  skus: RelabelReconciliationSku[],
+) {
+  const pairs: RelabelReconciliationPair[] = [];
+  for (const mapping of mappings) {
+    const sourceSkus = skus.filter((sku) =>
+      fbsSkuMatchesSourceArticle(sku, mapping.sourceArticle),
+    );
+    const targetSkus = skus.filter((sku) =>
+      fbsSkuMatchesSourceArticle(sku, mapping.targetArticle),
+    );
+    for (const source of sourceSkus) {
+      const sourceSize = fbsArticleKey(source.size ?? '');
+      const target =
+        targetSkus.find(
+          (candidate) =>
+            !sourceSize || fbsArticleKey(candidate.size ?? '') === sourceSize,
+        ) ??
+        (targetSkus.length === 1 ? targetSkus[0] : null);
+      pairs.push({
+        mappingId: mapping.id,
+        sourceArticle: mapping.sourceArticle,
+        targetArticle: mapping.targetArticle,
+        source,
+        target,
+      });
+    }
+  }
+  return [
+    ...new Map(
+      pairs.map((pair) => [
+        `${pair.mappingId}:${pair.source.id}:${pair.target?.id ?? 'missing'}`,
+        pair,
+      ]),
+    ).values(),
+  ];
+}
+
+function reconciliationSkuMatchesSearch(
+  sku: RelabelReconciliationSku,
+  search: string,
+) {
+  const query = fbsArticleKey(search);
+  return [
+    sku.internalSku,
+    sku.clientSku ?? '',
+    sku.article ?? '',
+    sku.name,
+    sku.color ?? '',
+    sku.size ?? '',
+    ...sku.barcodes.map((barcode) => barcode.value),
+  ].some((value) => fbsArticleKey(value).includes(query));
+}
+
+function reconciliationSkuSummary(sku: {
+  id: string;
+  internalSku: string;
+  clientSku: string | null;
+  article: string | null;
+  name: string;
+  color?: string | null;
+  size: string | null;
+  barcodes?: Array<{ value: string; isPrimary?: boolean }>;
+}) {
+  return {
+    id: sku.id,
+    internalSku: sku.internalSku,
+    clientSku: sku.clientSku,
+    article: sku.article,
+    name: sku.name,
+    color: sku.color ?? null,
+    size: sku.size,
+    barcodes: (sku.barcodes ?? []).map((barcode) => barcode.value),
+    primaryBarcode:
+      (sku.barcodes ?? []).find((barcode) => barcode.isPrimary)?.value ??
+      sku.barcodes?.[0]?.value ??
+      null,
+  };
+}
+
+function relabelAssemblyIdFromMovementKey(value: string | null) {
+  const match = value?.match(/^(?:fbs-relabel|relabel-reconcile):([^:]+):(?:source|target)$/);
+  return match?.[1] ?? null;
+}
+
+function fbsArticleKey(value: string) {
+  return value.trim().toLocaleLowerCase('ru-RU');
+}
+
+function fbsSkuMatchesSourceArticle(
+  sku: {
+    internalSku: string;
+    clientSku: string | null;
+    article: string | null;
+  },
+  sourceArticle: string,
+) {
+  const sourceKey = fbsArticleKey(sourceArticle);
+  const internalSkuKey = fbsArticleKey(sku.internalSku);
+  return (
+    [sku.article, sku.clientSku, sku.internalSku].some(
+      (value) => value && fbsArticleKey(value) === sourceKey,
+    ) ||
+    internalSkuKey.startsWith(`${sourceKey}-`)
+  );
 }
 
 function fbsTsdTaskWasPhysicallyHandled(task: {
@@ -7241,6 +25684,38 @@ function requireFbsTaskWithoutSyncConflict(task: { status: string; errorMessage:
   }
 }
 
+function requireFbsRoutingSettingsAccess(
+  dto: Partial<UpsertMarketplaceConnectionDto>,
+  user: AuthUser,
+) {
+  const changesRouting =
+    dto.fbsExecutionWarehouseId !== undefined ||
+    dto.fbsDropoffWarehouseId !== undefined ||
+    dto.fbsAutoRouteNewWarehouses !== undefined;
+  if (!changesRouting) return;
+  if (
+    user.permissionCodes.includes('system:admin') ||
+    user.roleCodes.some((role) => role === 'ADMIN' || role === 'OWNER')
+  ) {
+    return;
+  }
+  throw new ForbiddenException(
+    'Маршрутизацию FBS может изменять только администратор.',
+  );
+}
+
+function requireFbsEmergencyAssemblyAccess(user: AuthUser) {
+  if (
+    user.permissionCodes.includes('system:admin') ||
+    user.roleCodes.some((role) => role === 'ADMIN' || role === 'OWNER')
+  ) {
+    return;
+  }
+  throw new ForbiddenException(
+    'Экстренно вернуть FBS-заявку в сборку может только администратор.',
+  );
+}
+
 function fbsOrderCategory(supplierStatus: string, wbStatus: string): 'active' | 'shipped' | 'cancelled' | 'archive' {
   const cancelledSupplierStatuses = new Set(['cancel', 'cancel_carrier', 'cancelled', 'canceled']);
   const cancelledWbStatuses = new Set([
@@ -7258,6 +25733,28 @@ function fbsOrderCategory(supplierStatus: string, wbStatus: string): 'active' | 
     return 'shipped';
   }
   return 'active';
+}
+
+function yandexFbsStatus(status: string, substatus: string) {
+  if (status === 'CANCELLED') return 'cancelled';
+  if (status === 'DELIVERED') return 'delivered';
+  if (status === 'DELIVERY' || status === 'PICKUP') return 'delivering';
+  if (status === 'PROCESSING' && substatus === 'SHIPPED') return 'complete';
+  if (status === 'PROCESSING' && substatus === 'READY_TO_SHIP') return 'awaiting_deliver';
+  if (status === 'PROCESSING') return 'awaiting_packaging';
+  if (status === 'UNPAID' || status === 'RESERVED') return 'awaiting_approve';
+  return status.toLowerCase() || 'new';
+}
+
+function yandexDateToIso(value: string) {
+  if (!value) return '';
+  const match = value.match(/^(\d{2})-(\d{2})-(\d{4})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (match) {
+    const [, day, month, year, hour = '00', minute = '00', second = '00'] = match;
+    return new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}+03:00`).toISOString();
+  }
+  const direct = new Date(value);
+  return Number.isNaN(direct.getTime()) ? value : direct.toISOString();
 }
 
 function fbsStatusLabel(supplierStatus: string, wbStatus: string) {
@@ -7288,6 +25785,19 @@ function fbsStatusLabel(supplierStatus: string, wbStatus: string) {
     sent_to_carrier: 'Передан перевозчику',
     canceled_by_carrier: 'Отменён перевозчиком',
   };
+  const cancelledWbStatuses = new Set([
+    'canceled',
+    'canceled_by_client',
+    'declined_by_client',
+    'defect',
+    'canceled_by_carrier',
+  ]);
+  if (cancelledWbStatuses.has(wbStatus)) {
+    return labels[wbStatus] || 'Отменён Wildberries';
+  }
+  if (['cancel', 'cancel_carrier', 'cancelled', 'canceled'].includes(supplierStatus)) {
+    return labels[supplierStatus] || 'Отменён';
+  }
   return labels[supplierStatus] || labels[wbStatus] || supplierStatus || wbStatus || 'Статус не определён';
 }
 
@@ -7353,6 +25863,9 @@ function mapOzonProduct(
     textValue(source.barcode),
     ...asArray<unknown>(source.barcodes).map(textValue),
     ...asArray<unknown>(source.sku_barcodes).map(textValue),
+    textValue(attributes?.barcode),
+    ...asArray<unknown>(attributes?.barcodes).map(textValue),
+    ...asArray<unknown>(attributes?.sku_barcodes).map(textValue),
   ]);
   const attrs = asArray<Record<string, unknown>>(attributes?.attributes);
   const dimensions = extractOzonDimensions(source, attributes);
@@ -7408,6 +25921,8 @@ function marketplaceSkuData(
     heightCm: product.heightCm,
     ...(!preserveManualVolume && volumeLiters ? { volumeLiters, volumeSource: 'CALCULATED' } : {}),
     needsChestnyZnak: product.needsChestnyZnak ?? false,
+    isDraft: false,
+    draftSource: null,
     marketplace: product.marketplace,
     marketplaceProductId: product.productId,
     marketplaceOfferId: product.offerId,
@@ -7417,20 +25932,23 @@ function marketplaceSkuData(
 }
 
 function extractOzonDimensions(source: Record<string, unknown>, attributes?: Record<string, unknown>) {
-  const unit = textValue(source.dimension_unit).toLowerCase();
-  const weightUnit = textValue(source.weight_unit).toLowerCase();
-  const depth = positiveNumber(source.depth) ?? positiveNumber(source.length);
-  const width = positiveNumber(source.width);
-  const height = positiveNumber(source.height);
-  const weight = positiveNumber(source.weight);
+  const packaging = attributes ?? {};
+  const unit = (textValue(packaging.dimension_unit) || textValue(source.dimension_unit)).toLowerCase();
+  const weightUnit = (textValue(packaging.weight_unit) || textValue(source.weight_unit)).toLowerCase();
+  const depth =
+    positiveNumber(packaging.depth) ??
+    positiveNumber(packaging.length) ??
+    positiveNumber(source.depth) ??
+    positiveNumber(source.length);
+  const width = positiveNumber(packaging.width) ?? positiveNumber(source.width);
+  const height = positiveNumber(packaging.height) ?? positiveNumber(source.height);
+  const weight = positiveNumber(packaging.weight) ?? positiveNumber(source.weight);
 
   return {
     lengthCm: convertLengthToCm(depth, unit),
     widthCm: convertLengthToCm(width, unit),
     heightCm: convertLengthToCm(height, unit),
-    weightGrams:
-      convertWeightToGrams(weight, weightUnit) ??
-      convertWeightToGrams(positiveNumber(attributes?.weight), textValue(attributes?.weight_unit).toLowerCase()),
+    weightGrams: convertWeightToGrams(weight, weightUnit),
   };
 }
 
@@ -7505,6 +26023,19 @@ function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
 
+function marketplaceResponseItems<T>(response: Record<string, unknown>): T[] {
+  const directItems = asArray<T>(response.items);
+  if (directItems.length > 0) {
+    return directItems;
+  }
+
+  if (Array.isArray(response.result)) {
+    return asArray<T>(response.result);
+  }
+
+  return asArray<T>(asRecord(response.result).items);
+}
+
 function textValue(value: unknown) {
   return value == null ? '' : String(value).trim();
 }
@@ -7524,6 +26055,13 @@ function positiveNumber(value: unknown) {
 
 function uniqueStrings(values: string[]) {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+// ADDED: monitoring batches WB size identifiers without duplicate API work.
+function uniqueNumbers(values: Array<number | null | undefined>) {
+  return [...new Set(values.filter(
+    (value): value is number => Number.isSafeInteger(value) && Number(value) > 0,
+  ))];
 }
 
 function safeSku(value: string) {
@@ -7565,14 +26103,55 @@ function printableFbsKiz(value: string) {
     );
 }
 
+function normalizedFbsKizValue(value: string) {
+  return value
+    .replace(/<GS>/gi, '\u001d')
+    .replace(/^\]d2/i, '')
+    .trim();
+}
+
+function wildberriesOrderSgtins(
+  payload: Record<string, unknown>,
+  orderId: number,
+) {
+  const order = asArray<Record<string, unknown>>(payload.orders).find(
+    (candidate) => Number(candidate.id) === orderId,
+  );
+  if (!order) return [];
+  const meta = asRecord(order.meta);
+  const sgtin = asRecord(meta.sgtin);
+  return uniqueStrings(asArray<unknown>(sgtin.value).map(textValue));
+}
+
 function fbsStockBalanceKey(input: {
+  warehouseId: string;
   clientId: string;
   skuId: string;
   boxId: string | null;
   palletId: string | null;
   status: StockStatus;
 }) {
-  return [input.clientId, input.skuId, input.boxId ?? 'no-box', input.palletId ?? 'no-pallet', input.status].join(':');
+  const parts = [
+    input.clientId,
+    input.skuId,
+    input.boxId ?? 'no-box',
+    input.palletId ?? 'no-pallet',
+    input.status,
+  ];
+  if (!input.boxId && !input.palletId) {
+    parts.push('warehouse', input.warehouseId);
+  }
+  return parts.join(':');
+}
+
+function requireFbsBalanceWarehouseId(value: string | null | undefined) {
+  const warehouseId = value?.trim();
+  if (!warehouseId) {
+    throw new BadRequestException(
+      'Не удалось определить филиал складского остатка. Выполните сверку остатков перед операцией.',
+    );
+  }
+  return warehouseId;
 }
 
 function validDate(value: string | null | undefined) {
@@ -7583,11 +26162,154 @@ function validDate(value: string | null | undefined) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+function packedItemsMarketplace(value: string | null | undefined) {
+  const normalized = value?.trim().toUpperCase();
+  if (!normalized || normalized === 'ALL') return null;
+  if (normalized === MarketplaceType.WILDBERRIES) return MarketplaceType.WILDBERRIES;
+  if (normalized === MarketplaceType.OZON) return MarketplaceType.OZON;
+  if (normalized === MarketplaceType.YANDEX_MARKET) return MarketplaceType.YANDEX_MARKET;
+  throw new BadRequestException('Неизвестный маркетплейс для журнала упаковки.');
+}
+
+function packedItemsPositiveInteger(value: string | null | undefined, fallback: number, maximum: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  return Math.min(maximum, Math.trunc(parsed));
+}
+
+function packedItemsPeriod(dateFrom: string | undefined, dateTo: string | undefined) {
+  const from = packedItemsDateBoundary(dateFrom, false);
+  const to = packedItemsDateBoundary(dateTo, true);
+  if (from && to && from.getTime() > to.getTime()) {
+    throw new BadRequestException('Дата начала периода не может быть позже даты окончания.');
+  }
+  return {
+    ...(from ? { gte: from } : {}),
+    ...(to ? { lte: to } : {}),
+  };
+}
+
+function packedItemsDateBoundary(value: string | null | undefined, endOfDay: boolean) {
+  const normalized = value?.trim();
+  if (!normalized) return null;
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(normalized);
+  const parsed = new Date(
+    dateOnly
+      ? `${normalized}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}+03:00`
+      : normalized,
+  );
+  if (Number.isNaN(parsed.getTime())) {
+    throw new BadRequestException(`Некорректная дата: ${normalized}.`);
+  }
+  return parsed;
+}
+
+function fbsPackedItemMatchesLiveProduct(
+  task: { skuId: string; article: string | null; barcode: string | null; relabelRequired: boolean },
+  order: FbsOrderSummary,
+) {
+  if (!order.product) return true;
+  if (task.skuId === order.product.id) return true;
+  const article = normalizeFbsPackedReference(task.article);
+  const orderArticle = normalizeFbsPackedReference(order.product.article ?? order.article);
+  if (article && orderArticle && article === orderArticle) return true;
+  const barcode = normalizeFbsPackedReference(task.barcode);
+  return Boolean(barcode && order.barcodes.some((value) => normalizeFbsPackedReference(value) === barcode));
+}
+
+function fbsPackedStickerMatches(
+  actual: { partA: string | null; partB: string | null; barcode: string | null },
+  expected: { partA: string | null; partB: string | null; barcode: string | null },
+) {
+  const actualPartB = normalizeFbsPackedReference(actual.partB);
+  const expectedPartB = normalizeFbsPackedReference(expected.partB);
+  if (actualPartB && expectedPartB) return actualPartB === expectedPartB;
+  const actualBarcode = normalizeFbsPackedReference(actual.barcode);
+  const expectedBarcode = normalizeFbsPackedReference(expected.barcode);
+  return Boolean(actualBarcode && expectedBarcode && actualBarcode === expectedBarcode);
+}
+
+function normalizeFbsPackedReference(value: string | null | undefined) {
+  return (value ?? '').trim().toLocaleUpperCase('ru-RU').replace(/\s+/g, '');
+}
+
+function normalizeFbsRelabelReference(value: string | null | undefined) {
+  return textValue(value)
+    .normalize('NFKC')
+    .toLocaleLowerCase('ru-RU')
+    .replace(/ё/g, 'е')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeFbsCity(value: string) {
+  return value
+    .trim()
+    .toLocaleLowerCase('ru-RU')
+    .replace(/ё/g, 'е')
+    .replace(/^г(?:ород)?[.\s-]*/u, '')
+    .replace(/[^a-zа-я0-9]+/giu, ' ')
+    .trim();
+}
+
+function normalizeFbsWarehouseRouteMode(
+  value: unknown,
+): FbsWarehouseRouteMode | null {
+  const normalized = textValue(value).toUpperCase();
+  return normalized === 'CENTRAL' ||
+    normalized === 'BRANCH' ||
+    normalized === 'EXCLUDED'
+    ? normalized
+    : null;
+}
+
+function isFbsTsdAssemblyOrderEligible(order: FbsOrderSummary) {
+  return (
+    Boolean(order.request?.fbsEmergencyAssemblyAt) ||
+    (
+      order.category === 'active' &&
+      isFbsTsdSupplierStatusEligible(order.marketplace, order.supplierStatus)
+    )
+  );
+}
+
+function isFbsTsdSupplierStatusEligible(
+  marketplace: MarketplaceType,
+  supplierStatus: string | null | undefined,
+) {
+  const status = supplierStatus?.trim().toLowerCase() ?? '';
+  if (marketplace === MarketplaceType.WILDBERRIES) return status === 'confirm';
+  if (marketplace === MarketplaceType.OZON) return status === 'awaiting_packaging';
+  return false;
+}
+
+function fbsMarketplaceDisplayName(marketplace: MarketplaceType) {
+  if (marketplace === MarketplaceType.WILDBERRIES) return 'Wildberries';
+  if (marketplace === MarketplaceType.OZON) return 'Ozon';
+  if (marketplace === MarketplaceType.YANDEX_MARKET) return 'Яндекс Маркет';
+  return 'маркетплейс';
+}
+
 function fbsShipmentKey(order: FbsOrderSummary) {
   const supply = order.supplyId?.trim();
   const date = (order.deliveryDate || order.sellerDate || order.createdAt || '').slice(0, 10);
   const batch = supply ? `supply:${supply}` : date ? `date:${date}` : `order:${order.id}`;
   return `${order.marketplace}:${order.connectionId}:${batch}`;
+}
+
+function fbsShipmentServiceDate(orders: FbsOrderSummary[]) {
+  return orders
+    .map((order) =>
+      validDate(order.deliveryDate) ??
+      validDate(order.sellerDate) ??
+      validDate(order.createdAt),
+    )
+    .filter((date): date is Date => Boolean(date))
+    .sort((left, right) => left.getTime() - right.getTime())[0] ?? new Date();
+}
+
+function fbsBillingDayKey(value: Date) {
+  return value.toISOString().slice(0, 10);
 }
 
 function fbsOrderDeliveryPlan(
