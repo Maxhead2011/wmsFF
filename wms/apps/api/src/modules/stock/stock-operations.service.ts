@@ -3913,7 +3913,9 @@ export class StockOperationsService {
         status: StockStatus.AVAILABLE,
       },
     });
-    if (registeredMarks >= balance.quantity) {
+    const requiresKizRegistration =
+      balance.sku.needsChestnyZnak && !balance.sku.isUnmarked;
+    if (!requiresKizRegistration && registeredMarks >= balance.quantity) {
       throw new BadRequestException(
         `Для товара «${balance.sku.name}» в коробе зарегистрированы КИЗы. Отсканируйте КИЗ конкретной единицы.`,
       );
@@ -3923,9 +3925,10 @@ export class StockOperationsService {
       scanCode,
       scanType: 'BARCODE',
       productMarkId: null,
-      availableQuantity: balance.quantity - registeredMarks,
-      requiresKizRegistration:
-        balance.sku.needsChestnyZnak && !balance.sku.isUnmarked,
+      availableQuantity: requiresKizRegistration
+        ? balance.quantity
+        : balance.quantity - registeredMarks,
+      requiresKizRegistration,
     };
   }
 
@@ -3985,13 +3988,60 @@ export class StockOperationsService {
         status: StockStatus.AVAILABLE,
       },
     });
-    if (registeredMarks >= balance.quantity) {
-      throw new BadRequestException(
-        `В коробе ${sourceBox.code} нет свободной единицы «${balance.sku.name}» без КИЗ.`,
-      );
-    }
-
     try {
+      if (registeredMarks >= balance.quantity) {
+        // FIX: Количество не увеличиваем: физический КИЗ заменяет одну старую неиспользуемую привязку.
+        const protectedKizValues = (
+          await db.fbsTsdAssembly.findMany({
+            where: {
+              clientId: sourceBox.clientId,
+              skuId,
+              kiz: { not: null },
+              status: { in: ['IN_PROGRESS', 'COMPLETED', 'RETURN_REQUIRED'] },
+            },
+            select: { kiz: true },
+          })
+        )
+          .map((row) => row.kiz)
+          .filter((value): value is string => Boolean(value));
+        const replaceable = await db.productMark.findFirst({
+          where: {
+            clientId: sourceBox.clientId,
+            skuId,
+            boxId: sourceBox.id,
+            status: StockStatus.AVAILABLE,
+            ...(protectedKizValues.length > 0
+              ? { value: { notIn: protectedKizValues } }
+              : {}),
+          },
+          orderBy: [{ updatedAt: 'asc' }, { createdAt: 'asc' }],
+          select: { id: true, value: true, sourceDocument: true },
+        });
+        if (!replaceable) {
+          throw new BadRequestException(
+            `В коробе ${sourceBox.code} нет старой привязки КИЗ, которую можно безопасно заменить.`,
+          );
+        }
+        const replaced = await db.productMark.update({
+          where: { id: replaceable.id },
+          data: {
+            value: kiz,
+            sourceDocument:
+              `${sourceDocument}: физический КИЗ заменил старую привязку ` +
+              `ref ${hashText(replaceable.value)} без изменения количества`,
+          },
+          select: { id: true },
+        });
+        return {
+          sku: balance.sku,
+          scanCode: kiz,
+          scanType: 'KIZ',
+          productMarkId: replaced.id,
+          availableQuantity: balance.quantity,
+          requiresKizRegistration: false,
+        };
+      }
+
       const created = await db.productMark.create({
         data: {
           clientId: sourceBox.clientId,
