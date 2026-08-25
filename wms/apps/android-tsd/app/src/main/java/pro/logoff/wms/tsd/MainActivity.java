@@ -253,6 +253,8 @@ public class MainActivity extends Activity {
     private String transferOperationKey = "";
     private final List<String> transferSelectedScanCodes = new ArrayList<>();
     private final List<TsdTransferResponse.Item> transferSelectedItems = new ArrayList<>();
+    // FIX: ШК маркированной единицы храним до сканирования её КИЗ.
+    private TsdTransferResponse.Item transferPendingKizItem;
     private int fbsFeedbackColor;
     private int fbsCargoFeedbackColor;
     private int ozonFboFeedbackColor;
@@ -566,6 +568,7 @@ public class MainActivity extends Activity {
         transferOperationKey = "";
         transferSelectedScanCodes.clear();
         transferSelectedItems.clear();
+        transferPendingKizItem = null;
         transferTargetMode = false;
         transferBusy = false;
         transferFeedbackColor = 0;
@@ -612,17 +615,28 @@ public class MainActivity extends Activity {
             ));
 
             if (!transferTargetMode) {
-                root.addView(messageView(tr(
-                    "Шаг 2 из 3. Сканируйте подряд все вещи для перемещения. Если у единицы есть КИЗ, сканируйте именно КИЗ.",
-                    "2/3-qadam. Ko‘chiriladigan barcha narsalarni ketma-ket skanerlang. Agar KIZ bo‘lsa, aynan KIZni skanerlang."
-                )));
-                transferScanInput = input(tr("ШК товара или КИЗ", "Tovar SHK yoki KIZ"));
+                boolean awaitingKiz = transferPendingKizItem != null;
+                root.addView(messageView(awaitingKiz
+                    ? tr(
+                        "ШК принят: " + safeText(transferPendingKizItem.name) + ". Теперь отсканируйте КИЗ этой единицы.",
+                        "SHK qabul qilindi: " + safeText(transferPendingKizItem.name) + ". Endi shu birlikning KIZini skanerlang."
+                    )
+                    : tr(
+                        "Шаг 2 из 3. Сначала сканируйте ШК товара. Для маркированного товара ТСД сразу попросит КИЗ.",
+                        "2/3-qadam. Avval tovar SHKini skanerlang. Belgilangan tovar uchun TSD darhol KIZni so‘raydi."
+                    )
+                ));
+                transferScanInput = input(awaitingKiz
+                    ? tr("КИЗ товара", "Tovar KIZi")
+                    : tr("ШК товара или привязанный КИЗ", "Tovar SHKi yoki biriktirilgan KIZ"));
                 root.addView(transferScanInput);
                 root.addView(primaryMenuButton(
-                    tr("Добавить товар", "Tovarni qo‘shish"),
+                    awaitingKiz
+                        ? tr("Привязать КИЗ", "KIZni biriktirish")
+                        : tr("Добавить товар", "Tovarni qo‘shish"),
                     view -> submitStockTransferScan()
                 ));
-                if (!transferSelectedItems.isEmpty()) {
+                if (!transferSelectedItems.isEmpty() && !awaitingKiz) {
                     root.addView(primaryMenuButton(
                         tr("Закончить выбор — ", "Tanlashni tugatish — ") +
                             transferSelectedItems.size() + tr(" ед.", " dona"),
@@ -632,6 +646,20 @@ public class MainActivity extends Activity {
                             statusMessage = tr(
                                 "Шаг 3 из 3. Отсканируйте короб назначения для всей выбранной партии.",
                                 "3/3-qadam. Belgilangan qutini skanerlang."
+                            );
+                            renderStockTransferScreen();
+                        }
+                    ));
+                }
+                if (awaitingKiz) {
+                    root.addView(secondaryButton(
+                        tr("Отменить выбор ШК", "SHK tanlovini bekor qilish"),
+                        view -> {
+                            transferPendingKizItem = null;
+                            transferFeedbackColor = 0;
+                            statusMessage = tr(
+                                "ШК отменён. Сканируйте товар заново.",
+                                "SHK bekor qilindi. Tovarni qayta skanerlang."
                             );
                             renderStockTransferScreen();
                         }
@@ -825,14 +853,22 @@ public class MainActivity extends Activity {
     private void inspectStockTransferItem(String sourceBoxCode, String scanCode) {
         TsdSession session = safeSession();
         if (session == null) return;
+        final TsdTransferResponse.Item pendingKizItem = transferPendingKizItem;
         transferBusy = true;
         transferFeedbackColor = BOX_DUPLICATE_BLUE;
-        statusMessage = tr("Проверяю товар…", "Tovar tekshirilmoqda…");
+        statusMessage = pendingKizItem == null
+            ? tr("Проверяю товар…", "Tovar tekshirilmoqda…")
+            : tr("Проверяю и привязываю КИЗ…", "KIZ tekshirilmoqda va biriktirilmoqda…");
         renderStockTransferScreen();
         runBackground(() -> {
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("fromBoxCode", sourceBoxCode);
             payload.put("scanCode", scanCode);
+            if (pendingKizItem != null) {
+                // FIX: Сервер привязывает новый КИЗ именно к SKU ранее отсканированного товара.
+                payload.put("skuId", pendingKizItem.skuId);
+                payload.put("bindMissingKiz", true);
+            }
             Response<TsdTransferResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
                 .inspectTransferItem(session.authorizationHeader(), payload)
                 .execute();
@@ -852,6 +888,24 @@ public class MainActivity extends Activity {
                         "Сервер не вернул данные отсканированного товара.",
                         "Server skanerlangan tovar ma’lumotlarini qaytarmadi."
                     ));
+                    return;
+                }
+                if ("SCAN_KIZ".equals(loaded.state)) {
+                    online = true;
+                    transferBusy = false;
+                    transferWorkflow = loaded;
+                    transferWorkflow.item = null;
+                    transferPendingKizItem = item;
+                    transferFeedbackColor = BOX_DUPLICATE_BLUE;
+                    statusMessage = nonEmpty(
+                        loaded.message,
+                        tr(
+                            "ШК принят. Теперь отсканируйте КИЗ этой единицы.",
+                            "SHK qabul qilindi. Endi shu birlikning KIZini skanerlang."
+                        )
+                    );
+                    playFbsSuccess();
+                    renderStockTransferScreen();
                     return;
                 }
                 if ("KIZ".equals(item.scanType)) {
@@ -888,6 +942,7 @@ public class MainActivity extends Activity {
                 transferBusy = false;
                 transferWorkflow = loaded;
                 transferWorkflow.item = null;
+                transferPendingKizItem = null;
                 transferSelectedScanCodes.add(scanCode);
                 transferSelectedItems.add(item);
                 if (transferOperationKey.isEmpty()) {
@@ -963,6 +1018,7 @@ public class MainActivity extends Activity {
                 transferOperationKey = "";
                 transferSelectedScanCodes.clear();
                 transferSelectedItems.clear();
+                transferPendingKizItem = null;
                 transferTargetMode = false;
                 transferFeedbackColor = BOX_FOUND_GREEN;
                 statusMessage = nonEmpty(

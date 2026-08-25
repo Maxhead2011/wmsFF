@@ -80,6 +80,7 @@ type TsdTransferScannedItem = {
   scanType: 'BARCODE' | 'KIZ';
   productMarkId: string | null;
   availableQuantity: number;
+  requiresKizRegistration: boolean;
 };
 
 export type ReceiveIntoBoxInput = {
@@ -264,21 +265,44 @@ export class StockOperationsService {
   }
 
   async inspectTsdTransferItem(payload: Record<string, unknown>, user: AuthUser) {
-    const sourceBox = await this.loadTsdTransferSourceBox(
-      this.prisma,
-      requiredTsdTransferText(payload.fromBoxCode, 'Сначала отсканируйте исходный короб.'),
-      user,
+    const fromBoxCode = requiredTsdTransferText(
+      payload.fromBoxCode,
+      'Сначала отсканируйте исходный короб.',
     );
-    const item = await this.resolveTsdTransferScannedItem(
-      this.prisma,
-      sourceBox,
-      requiredTsdTransferText(payload.scanCode, 'Отсканируйте ШК товара или КИЗ.'),
+    const scanCode = requiredTsdTransferText(
+      payload.scanCode,
+      'Отсканируйте ШК товара или КИЗ.',
     );
+
+    // FIX: КИЗ, которого ещё нет в WMS, привязываем только после явно отсканированного ШК.
+    const inspected = payload.bindMissingKiz === true
+      ? await this.prisma.$transaction(async (tx) => {
+          await this.inventoryLock?.assertStockMovementsAllowed();
+          const sourceBox = await this.loadTsdTransferSourceBox(tx, fromBoxCode, user);
+          const item = await this.bindMissingTsdTransferKiz(
+            tx,
+            sourceBox,
+            requiredTsdTransferText(payload.skuId, 'Повторно отсканируйте ШК товара.'),
+            scanCode,
+            `TSD ${user.deviceCode ?? user.id}`,
+          );
+          return { sourceBox, item };
+        }, STOCK_TRANSFER_TRANSACTION_OPTIONS)
+      : await (async () => {
+          const sourceBox = await this.loadTsdTransferSourceBox(this.prisma, fromBoxCode, user);
+          const item = await this.resolveTsdTransferScannedItem(this.prisma, sourceBox, scanCode);
+          return { sourceBox, item };
+        })();
+
+    const { sourceBox, item } = inspected;
     return {
+      state: item.requiresKizRegistration ? 'SCAN_KIZ' : 'SCAN_ITEM',
       sourceBox: this.formatTsdTransferSource(sourceBox).sourceBox,
       item: formatTsdTransferItem(item),
       message:
-        item.scanType === 'KIZ'
+        item.requiresKizRegistration
+          ? `ШК товара «${item.sku.name}» принят. Теперь отсканируйте КИЗ этой единицы.`
+          : item.scanType === 'KIZ'
           ? `КИЗ принят. Будет перемещена 1 единица товара «${item.sku.name}».`
           : `Товар принят. Будет перемещена 1 единица «${item.sku.name}».`,
     };
@@ -3865,6 +3889,7 @@ export class StockOperationsService {
         scanType: 'KIZ',
         productMarkId: productMark.id,
         availableQuantity: balance.quantity,
+        requiresKizRegistration: false,
       };
     }
 
@@ -3899,7 +3924,99 @@ export class StockOperationsService {
       scanType: 'BARCODE',
       productMarkId: null,
       availableQuantity: balance.quantity - registeredMarks,
+      requiresKizRegistration:
+        balance.sku.needsChestnyZnak && !balance.sku.isUnmarked,
     };
+  }
+
+  private async bindMissingTsdTransferKiz(
+    db: Prisma.TransactionClient,
+    sourceBox: TsdTransferSourceBox,
+    skuId: string,
+    kizValue: string,
+    sourceDocument: string,
+  ): Promise<TsdTransferScannedItem> {
+    const kiz = requiredTsdTransferText(kizValue, 'Отсканируйте КИЗ товара.');
+    if (kiz.length <= 20) {
+      throw new BadRequestException('После ШК товара нужно отсканировать его КИЗ.');
+    }
+    const balance = sourceBox.balances.find((row) => row.skuId === skuId);
+    if (!balance || balance.quantity < 1) {
+      throw new BadRequestException(
+        `В коробе ${sourceBox.code} больше нет доступной единицы выбранного товара.`,
+      );
+    }
+    if (!balance.sku.needsChestnyZnak || balance.sku.isUnmarked) {
+      throw new BadRequestException('Для этого товара КИЗ не требуется. Повторно отсканируйте ШК.');
+    }
+
+    const existing = await db.productMark.findFirst({
+      where: {
+        clientId: sourceBox.clientId,
+        value: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+      },
+      select: { id: true, skuId: true, boxId: true, status: true },
+    });
+    if (existing) {
+      if (
+        existing.skuId === skuId &&
+        existing.boxId === sourceBox.id &&
+        existing.status === StockStatus.AVAILABLE
+      ) {
+        return {
+          sku: balance.sku,
+          scanCode: kiz,
+          scanType: 'KIZ',
+          productMarkId: existing.id,
+          availableQuantity: balance.quantity,
+          requiresKizRegistration: false,
+        };
+      }
+      throw new BadRequestException(
+        'Этот КИЗ уже привязан к другому товару или коробу. Перемещение остановлено.',
+      );
+    }
+
+    const registeredMarks = await db.productMark.count({
+      where: {
+        clientId: sourceBox.clientId,
+        skuId,
+        boxId: sourceBox.id,
+        status: StockStatus.AVAILABLE,
+      },
+    });
+    if (registeredMarks >= balance.quantity) {
+      throw new BadRequestException(
+        `В коробе ${sourceBox.code} нет свободной единицы «${balance.sku.name}» без КИЗ.`,
+      );
+    }
+
+    try {
+      const created = await db.productMark.create({
+        data: {
+          clientId: sourceBox.clientId,
+          skuId,
+          boxId: sourceBox.id,
+          value: kiz,
+          sourceDocument,
+          status: StockStatus.AVAILABLE,
+        },
+        select: { id: true },
+      });
+      return {
+        sku: balance.sku,
+        scanCode: kiz,
+        scanType: 'KIZ',
+        productMarkId: created.id,
+        availableQuantity: balance.quantity,
+        requiresKizRegistration: false,
+      };
+    } catch (caught) {
+      if (isUniqueConstraintError(caught)) {
+        throw new BadRequestException('Этот КИЗ уже есть в WMS. Повторная привязка запрещена.');
+      }
+      throw caught;
+    }
   }
 
   private async resolveBox(
