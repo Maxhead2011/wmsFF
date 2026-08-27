@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -p tsconfig.json && vite build",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "echo \"web smoke tests will be added with Playwright\""
+    "test": "vitest run"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
@@ -24,6 +24,7 @@
   "devDependencies": {
     "@types/qrcode": "1.5.5",
     "@types/react": "^18.3.17",
-    "@types/react-dom": "^18.3.5"
+    "@types/react-dom": "^18.3.5",
+    "vitest": "^2.1.8"
   }
 }
