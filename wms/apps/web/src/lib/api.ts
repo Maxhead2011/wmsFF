@@ -3027,6 +3027,62 @@ export type FbsProductShipmentReport = {
   generatedAt: string;
 };
 
+export type FbsPenaltyReportRow = {
+  id: string;
+  connectionId: string;
+  accountName: string;
+  reportDate: string;
+  reason: string;
+  penalty: number;
+  currency: string;
+  orderId: string;
+  orderUid: string;
+  cargoPlaceId: string;
+  vendorCode: string;
+  productName: string;
+  size: string;
+  barcode: string;
+  nmId: string;
+  officeName: string;
+  deliveryMethod: string;
+  reportId: string;
+  rrdId: string;
+};
+
+export type FbsPenaltiesReport = {
+  client: { id: string; code: string; name: string };
+  period: { dateFrom: string; dateTo: string };
+  selectedConnectionId: string | null;
+  search: string;
+  summary: {
+    penalties: number;
+    chargedPenalty: number;
+    reversedPenalty: number;
+    netPenalty: number;
+    orders: number;
+    reasons: number;
+    accounts: number;
+    currency: string;
+  };
+  reasons: Array<{
+    reason: string;
+    penalties: number;
+    chargedPenalty: number;
+    reversedPenalty: number;
+    netPenalty: number;
+  }>;
+  rows: FbsPenaltyReportRow[];
+  sources: Array<{
+    connectionId: string;
+    accountName: string;
+    status: 'READY' | 'ERROR';
+    rows: number;
+    error: string | null;
+  }>;
+  truncated: boolean;
+  generatedAt: string;
+};
+
 export type FbsDeliveryDestination = 'PICKUP_POINT' | 'VNUKOVO_SORTING_CENTER';
 
 export type FbsOrderSummary = {
@@ -9252,6 +9308,39 @@ export async function downloadFbsProductShipmentReport(
 ) {
   return requestBlob(
     withQuery('/marketplace-connections/fbs/product-shipments-report.xlsx', filter),
+    accessToken,
+  );
+}
+
+export async function fetchFbsPenaltiesReport(
+  accessToken: string,
+  filter: {
+    clientId: string;
+    connectionId?: string;
+    dateFrom: string;
+    dateTo: string;
+    search?: string;
+  },
+) {
+  // ADDED: the browser never receives the WB token; WMS performs the finance request.
+  return request<FbsPenaltiesReport>(
+    withQuery('/marketplace-connections/fbs/penalties-report', filter),
+    { accessToken },
+  );
+}
+
+export async function downloadFbsPenaltiesReport(
+  accessToken: string,
+  filter: {
+    clientId: string;
+    connectionId?: string;
+    dateFrom: string;
+    dateTo: string;
+    search?: string;
+  },
+) {
+  return requestBlob(
+    withQuery('/marketplace-connections/fbs/penalties-report.xlsx', filter),
     accessToken,
   );
 }
