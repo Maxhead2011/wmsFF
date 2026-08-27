@@ -179,24 +179,34 @@ export class InventoryService {
           : `Проверка коробов ${new Date().toLocaleDateString('ru-RU')}`;
     const requestedTitle = dto.title?.trim() || defaultTitle;
     const requestedComment = dto.comment?.trim() || null;
+    // ADDED: both FBS-generated checks are real inventory tasks. Keep the
+    // mandatory flow's old ACTIVE-only behavior, while a missing-pallet-box
+    // signal stays deduplicated until its manager review is resolved.
+    const fbsCheckMarker = requestedComment?.includes('[FBS_MANDATORY_BOX_CHECK]')
+      ? '[FBS_MANDATORY_BOX_CHECK]'
+      : requestedComment?.includes('[FBS_MISSING_PALLET_BOX]')
+        ? '[FBS_MISSING_PALLET_BOX]'
+        : null;
     if (
       dto.type === InventorySessionType.BOX_CHECK &&
-      requestedComment?.includes('[FBS_MANDATORY_BOX_CHECK]')
+      fbsCheckMarker
     ) {
-      const existingMandatoryCheck = await this.prisma.inventorySession.findFirst({
+      const existingFbsCheck = await this.prisma.inventorySession.findFirst({
         where: {
           type: InventorySessionType.BOX_CHECK,
-          status: InventorySessionStatus.ACTIVE,
+          status: fbsCheckMarker === '[FBS_MISSING_PALLET_BOX]'
+            ? { in: [InventorySessionStatus.ACTIVE, InventorySessionStatus.REVIEW] }
+            : InventorySessionStatus.ACTIVE,
           clientId: dto.clientId,
           title: requestedTitle,
-          comment: { contains: '[FBS_MANDATORY_BOX_CHECK]' },
+          comment: { contains: fbsCheckMarker },
           ...(warehouseId ? { warehouseId } : {}),
         },
         include: sessionInclude,
         orderBy: { createdAt: 'desc' },
       });
-      if (existingMandatoryCheck) {
-        return existingMandatoryCheck;
+      if (existingFbsCheck) {
+        return existingFbsCheck;
       }
     }
     return this.prisma.inventorySession.create({
@@ -283,6 +293,16 @@ export class InventoryService {
     if (existing) {
       if (existing.status === InventoryBoxStatus.COUNTING) {
         return existing;
+      }
+      // FIX: never delete decisions that already produced inventory movements.
+      // A fresh session preserves the old web-inventory audit and idempotency keys.
+      const hasAppliedDecisions = existing.lines.some(
+        (line) => line.decision !== InventoryLineDecision.PENDING || line.decidedAt != null,
+      );
+      if (hasAppliedDecisions) {
+        throw new ConflictException(
+          `Короб ${boxCode} уже содержит применённые решения этой проверки. Для повторной проверки создайте новую сессию инвентаризации.`,
+        );
       }
       if (!rescanAllowed) {
         await this.ensureRescanRequest(session, box, user);
@@ -531,6 +551,33 @@ export class InventoryService {
           countedByName: user.name,
         },
       }),
+      ...(!mismatch
+        ? [
+            // FIX: keep MATCHED and receiving -> active atomic, while isolating
+            // the physical stock by client and, when present, warehouse.
+            this.prisma.box.updateMany({
+              where: {
+                id: auditBox.boxId,
+                clientId: auditBox.clientId,
+                status: 'receiving',
+                ...(auditBox.session.warehouseId
+                  ? { warehouseId: auditBox.session.warehouseId }
+                  : {}),
+                balances: {
+                  some: {
+                    clientId: auditBox.clientId,
+                    status: StockStatus.AVAILABLE,
+                    quantity: { gt: 0 },
+                    ...(auditBox.session.warehouseId
+                      ? { warehouseId: auditBox.session.warehouseId }
+                      : {}),
+                  },
+                },
+              },
+              data: { status: 'active' },
+            }),
+          ]
+        : []),
     ]);
     if (!mismatch) {
       await this.completeMandatoryFbsSessionIfReady(auditBox.sessionId, user);
@@ -636,16 +683,46 @@ export class InventoryService {
     }
     this.clientScopes.requireClientAccess(user, line.auditBox.clientId, 'write');
 
+    // FIX: an applied decision is immutable. An exact retry is a read-only
+    // idempotent response; changing APPLY/DELETE/ACCEPT (including to LEAVE)
+    // would break movement audit and allow a later rescan to erase history.
+    if (isFinalInventoryDecision(line)) {
+      const appliedAction = resolutionActionFromComment(line.decisionComment, line.decision);
+      if (appliedAction === action) {
+        // FIX: the final decision may have committed before the follow-up
+        // RESOLVED/activation transaction failed. Retry that safe phase only.
+        await this.refreshBoxResolution(line.auditBoxId, user);
+        return this.prisma.inventoryAuditBox.findUnique({
+          where: { id: line.auditBoxId },
+          include: { lines: { orderBy: [{ skuName: 'asc' }, { internalSku: 'asc' }] } },
+        });
+      }
+      throw new ConflictException(
+        `Решение по позиции уже применено (${appliedAction}). Изменить его на ${action} нельзя.`,
+      );
+    }
+
     if (action === InventoryResolutionAction.LEAVE_FOR_LATER) {
-      await this.prisma.inventoryAuditLine.update({
-        where: { id: line.id },
-        data: {
-          decision: InventoryLineDecision.PENDING,
-          decisionComment: resolutionComment(action, dto.comment),
-          decidedByUserId: null,
-          decidedByName: null,
-          decidedAt: null,
-        },
+      // FIX: LEAVE participates in the same pending-row write race as final
+      // actions, so a concurrent final action cannot be cleared afterwards.
+      await this.runSerializableInventoryDecision(async (tx) => {
+        const pending = await tx.inventoryAuditLine.updateMany({
+          where: {
+            id: line.id,
+            decision: InventoryLineDecision.PENDING,
+            decidedAt: null,
+          },
+          data: {
+            decision: InventoryLineDecision.PENDING,
+            decisionComment: resolutionComment(action, dto.comment),
+            decidedByUserId: null,
+            decidedByName: null,
+            decidedAt: null,
+          },
+        });
+        if (pending.count !== 1) {
+          throw concurrentInventoryDecisionConflict();
+        }
       });
       return this.prisma.inventoryAuditBox.findUnique({
         where: { id: line.auditBoxId },
@@ -658,24 +735,78 @@ export class InventoryService {
       action === InventoryResolutionAction.DELETE_FROM_BOX;
     const targetQuantity =
       action === InventoryResolutionAction.DELETE_FROM_BOX ? 0 : line.countedQuantity;
+    const decisionData = {
+      decision:
+        action === InventoryResolutionAction.ACCEPT_AS_IS
+          ? InventoryLineDecision.KEEP_SYSTEM
+          : InventoryLineDecision.APPLY_ACTUAL,
+      decisionComment: resolutionComment(action, dto.comment),
+      decidedByUserId: user.id,
+      decidedByName: user.name,
+      decidedAt: new Date(),
+    };
 
     if (shouldAdjustStock) {
       const box = await this.prisma.box.findUnique({ where: { id: line.auditBox.boxId } });
       if (!box) {
         throw new NotFoundException('Исходный короб не найден.');
       }
+      // FIX: an old inventory line must not restore stock in a box that was
+      // archived or deleted after counting (for example, after a transfer).
+      if (box.status === 'archived' || box.status === 'deleted') {
+        throw new ConflictException(
+          `Короб ${line.auditBox.boxCode} уже архивирован или удалён. Остаток не изменён. Создайте новую проверку актуального короба.`,
+        );
+      }
       this.requirePhysicalBoxWarehouse(user, box.warehouseId, 'write');
       if (line.auditBox.session.warehouseId && line.auditBox.session.warehouseId !== box.warehouseId) {
         throw new ForbiddenException('Короб относится к другому филиалу инвентаризации.');
       }
-      await this.prisma.$transaction(async (tx) => {
+      const claimed = await this.runSerializableInventoryDecision(async (tx) => {
+        // FIX: claim the still-pending line before any balance mutation. A
+        // later error rolls this claim and every stock write back together.
+        const decisionClaimed = await this.claimFinalInventoryDecision(
+          tx,
+          line.id,
+          action,
+          decisionData,
+        );
+        if (!decisionClaimed) {
+          return false;
+        }
+        // FIX: close the transfer race by checking the physical box again
+        // inside the same serializable transaction as balance and decision.
+        const freshBox = await tx.box.findUnique({
+          where: { id: box.id },
+          select: { id: true, clientId: true, warehouseId: true, palletId: true, status: true },
+        });
+        if (!freshBox) {
+          throw new NotFoundException('Исходный короб не найден.');
+        }
+        if (freshBox.status === 'archived' || freshBox.status === 'deleted') {
+          throw new ConflictException(
+            `Короб ${line.auditBox.boxCode} уже архивирован или удалён. Остаток не изменён. Создайте новую проверку актуального короба.`,
+          );
+        }
+        if (freshBox.clientId !== line.auditBox.clientId) {
+          throw new ConflictException(
+            `Короб ${line.auditBox.boxCode} относится к другому клиенту. Остаток не изменён.`,
+          );
+        }
+        this.requirePhysicalBoxWarehouse(user, freshBox.warehouseId, 'write');
+        if (
+          line.auditBox.session.warehouseId &&
+          line.auditBox.session.warehouseId !== freshBox.warehouseId
+        ) {
+          throw new ForbiddenException('Короб относится к другому филиалу инвентаризации.');
+        }
         const balance = await tx.stockBalance.findFirst({
           where: {
             clientId: line.auditBox.clientId,
             skuId: line.skuId,
-            boxId: box.id,
+            boxId: freshBox.id,
             status: StockStatus.AVAILABLE,
-            ...(box.warehouseId ? { warehouseId: box.warehouseId } : {}),
+            ...(freshBox.warehouseId ? { warehouseId: freshBox.warehouseId } : {}),
           },
         });
         const current = balance?.quantity ?? 0;
@@ -688,18 +819,18 @@ export class InventoryService {
           await tx.stockBalance.create({
             data: {
               balanceKey: this.balances.balanceKey({
-                warehouseId: box.warehouseId,
+                warehouseId: freshBox.warehouseId,
                 clientId: line.auditBox.clientId,
                 skuId: line.skuId,
-                boxId: box.id,
-                palletId: box.palletId,
+                boxId: freshBox.id,
+                palletId: freshBox.palletId,
                 status: StockStatus.AVAILABLE,
               }),
               clientId: line.auditBox.clientId,
-              warehouseId: box.warehouseId,
+              warehouseId: freshBox.warehouseId,
               skuId: line.skuId,
-              boxId: box.id,
-              palletId: box.palletId,
+              boxId: freshBox.id,
+              palletId: freshBox.palletId,
               status: StockStatus.AVAILABLE,
               quantity: targetQuantity,
             },
@@ -709,10 +840,10 @@ export class InventoryService {
           await tx.stockMovement.create({
             data: {
               clientId: line.auditBox.clientId,
-              warehouseId: box.warehouseId,
+              warehouseId: freshBox.warehouseId,
               skuId: line.skuId,
-              boxId: box.id,
-              palletId: box.palletId,
+              boxId: freshBox.id,
+              palletId: freshBox.palletId,
               type: 'INVENTORY_ADJUSTMENT',
               status: StockStatus.AVAILABLE,
               quantity: delta,
@@ -726,32 +857,97 @@ export class InventoryService {
             },
           });
         }
-        // FIX: covers the "archived first, quantity became zero later" sequence.
+        // FIX: inventory may be the operation that makes an already archived box empty.
         await this.archivedEmptyBoxDetach?.detachIfArchivedAndEmpty(
-          { boxId: box.id, userId: user.id, reason: 'inventory-adjustment' },
+          { boxId: freshBox.id, userId: user.id, reason: 'inventory-stock-adjustment' },
           tx,
         );
-      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+        return true;
+      });
+      if (!claimed) {
+        // FIX: a concurrent same-action winner may still need the idempotent
+        // audit resolution and receiving-box activation phase.
+        await this.refreshBoxResolution(line.auditBoxId, user);
+        return this.prisma.inventoryAuditBox.findUnique({
+          where: { id: line.auditBoxId },
+          include: { lines: { orderBy: [{ skuName: 'asc' }, { internalSku: 'asc' }] } },
+        });
+      }
+    } else {
+      const claimed = await this.runSerializableInventoryDecision((tx) =>
+        this.claimFinalInventoryDecision(tx, line.id, action, decisionData),
+      );
+      if (!claimed) {
+        // FIX: ACCEPT retries recover a previously failed resolution phase
+        // without changing the already final decision.
+        await this.refreshBoxResolution(line.auditBoxId, user);
+        return this.prisma.inventoryAuditBox.findUnique({
+          where: { id: line.auditBoxId },
+          include: { lines: { orderBy: [{ skuName: 'asc' }, { internalSku: 'asc' }] } },
+        });
+      }
     }
-
-    await this.prisma.inventoryAuditLine.update({
-      where: { id: line.id },
-      data: {
-        decision:
-          action === InventoryResolutionAction.ACCEPT_AS_IS
-            ? InventoryLineDecision.KEEP_SYSTEM
-            : InventoryLineDecision.APPLY_ACTUAL,
-        decisionComment: resolutionComment(action, dto.comment),
-        decidedByUserId: user.id,
-        decidedByName: user.name,
-        decidedAt: new Date(),
-      },
-    });
     await this.refreshBoxResolution(line.auditBoxId, user);
     return this.prisma.inventoryAuditBox.findUnique({
       where: { id: line.auditBoxId },
       include: { lines: { orderBy: [{ skuName: 'asc' }, { internalSku: 'asc' }] } },
     });
+  }
+
+  // ADDED: compare-and-set makes final decisions immutable under concurrent
+  // manager actions while preserving idempotent retries of the same action.
+  private async claimFinalInventoryDecision(
+    tx: Prisma.TransactionClient,
+    lineId: string,
+    action: InventoryResolutionAction,
+    decisionData: {
+      decision: InventoryLineDecision;
+      decisionComment: string;
+      decidedByUserId: string;
+      decidedByName: string;
+      decidedAt: Date;
+    },
+  ) {
+    const claimed = await tx.inventoryAuditLine.updateMany({
+      where: {
+        id: lineId,
+        decision: InventoryLineDecision.PENDING,
+        decidedAt: null,
+      },
+      data: decisionData,
+    });
+    if (claimed.count === 1) {
+      return true;
+    }
+    const current = await tx.inventoryAuditLine.findUnique({
+      where: { id: lineId },
+      select: { decision: true, decisionComment: true, decidedAt: true },
+    });
+    if (
+      current &&
+      isFinalInventoryDecision(current) &&
+      resolutionActionFromComment(current.decisionComment, current.decision) === action
+    ) {
+      return false;
+    }
+    throw concurrentInventoryDecisionConflict();
+  }
+
+  // ADDED: PostgreSQL serializable write collisions are safe business
+  // conflicts, not opaque HTTP 500 responses.
+  private async runSerializableInventoryDecision<T>(
+    operation: (tx: Prisma.TransactionClient) => Promise<T>,
+  ) {
+    try {
+      return await this.prisma.$transaction(operation, {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      });
+    } catch (error) {
+      if (isPrismaSerializableConflict(error)) {
+        throw concurrentInventoryDecisionConflict();
+      }
+      throw error;
+    }
   }
 
   async resolveBox(auditBoxId: string, dto: ResolveInventoryBoxDto, user: AuthUser) {
@@ -780,13 +976,11 @@ export class InventoryService {
       );
     }
 
-    if (pendingLines.length === 0 && auditBox.status === InventoryBoxStatus.MATCHED) {
-      await this.prisma.inventoryAuditBox.update({
-        where: { id: auditBox.id },
-        data: { status: InventoryBoxStatus.RESOLVED, resolvedAt: new Date(), resolvedByName: user.name },
-      });
+    if (pendingLines.length === 0) {
+      // FIX: MATCHED and repeated resolution use the same atomic boundary as
+      // line-by-line actualization.
+      await this.resolveAuditBoxAndReactivateIfReady(auditBox.id, user);
     }
-    await this.completeMandatoryFbsSessionIfReady(auditBox.sessionId, user);
 
     return this.prisma.inventoryAuditBox.findUnique({
       where: { id: auditBox.id },
@@ -945,16 +1139,88 @@ export class InventoryService {
   }
 
   private async refreshBoxResolution(auditBoxId: string, user: AuthUser) {
-    const pending = await this.prisma.inventoryAuditLine.count({
-      where: { auditBoxId, difference: { not: 0 }, decision: InventoryLineDecision.PENDING },
-    });
-    if (pending === 0) {
-      const resolved = await this.prisma.inventoryAuditBox.update({
+    await this.resolveAuditBoxAndReactivateIfReady(auditBoxId, user);
+  }
+
+  // ADDED: resolving the audit and making its usable receiving box active are
+  // one serializable operation; a failed activation rolls the RESOLVED write back.
+  private async resolveAuditBoxAndReactivateIfReady(auditBoxId: string, user: AuthUser) {
+    const resolved = await this.prisma.$transaction(async (tx) => {
+      const auditBox = await tx.inventoryAuditBox.findUnique({
         where: { id: auditBoxId },
-        data: { status: InventoryBoxStatus.RESOLVED, resolvedAt: new Date(), resolvedByName: user.name },
+        select: {
+          id: true,
+          boxId: true,
+          clientId: true,
+          sessionId: true,
+          status: true,
+          session: { select: { warehouseId: true } },
+        },
       });
+      if (!auditBox) {
+        throw new NotFoundException('Проверка короба не найдена.');
+      }
+      const pending = await tx.inventoryAuditLine.count({
+        where: { auditBoxId, difference: { not: 0 }, decision: InventoryLineDecision.PENDING },
+      });
+      if (pending > 0) {
+        return null;
+      }
+      const current =
+        auditBox.status === InventoryBoxStatus.RESOLVED
+          ? auditBox
+          : await tx.inventoryAuditBox.update({
+              where: { id: auditBoxId },
+              data: {
+                status: InventoryBoxStatus.RESOLVED,
+                resolvedAt: new Date(),
+                resolvedByName: user.name,
+              },
+              select: {
+                id: true,
+                boxId: true,
+                clientId: true,
+                sessionId: true,
+                status: true,
+                session: { select: { warehouseId: true } },
+              },
+            });
+      await this.reactivateReceivingBoxIfUsable(tx, {
+        boxId: current.boxId,
+        clientId: current.clientId,
+        warehouseId: current.session.warehouseId,
+      });
+      return current;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    if (resolved) {
       await this.completeMandatoryFbsSessionIfReady(resolved.sessionId, user);
     }
+    return resolved;
+  }
+
+  // ADDED: one scoped rule prevents another client or branch balance from
+  // activating this inventory box.
+  private async reactivateReceivingBoxIfUsable(
+    db: Pick<Prisma.TransactionClient, 'box'>,
+    scope: { boxId: string; clientId: string; warehouseId: string | null },
+  ) {
+    await db.box.updateMany({
+      where: {
+        id: scope.boxId,
+        clientId: scope.clientId,
+        ...(scope.warehouseId ? { warehouseId: scope.warehouseId } : {}),
+        status: 'receiving',
+        balances: {
+          some: {
+            clientId: scope.clientId,
+            ...(scope.warehouseId ? { warehouseId: scope.warehouseId } : {}),
+            status: StockStatus.AVAILABLE,
+            quantity: { gt: 0 },
+          },
+        },
+      },
+      data: { status: 'active' },
+    });
   }
 
   private async completeMandatoryFbsSessionIfReady(sessionId: string, user: AuthUser) {
@@ -1078,6 +1344,25 @@ function resolutionActionFromComment(comment: string | null | undefined, decisio
     return InventoryResolutionAction.ACCEPT_AS_IS;
   }
   return InventoryResolutionAction.LEAVE_FOR_LATER;
+}
+
+// ADDED: decidedAt is included because legacy/concurrent rows may have reached
+// a final state before their enum value was persisted.
+function isFinalInventoryDecision(line: {
+  decision: InventoryLineDecision;
+  decidedAt?: Date | null;
+}) {
+  return line.decision !== InventoryLineDecision.PENDING || line.decidedAt != null;
+}
+
+function isPrismaSerializableConflict(error: unknown) {
+  return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'P2034');
+}
+
+function concurrentInventoryDecisionConflict() {
+  return new ConflictException(
+    'Решение по позиции было изменено параллельно: обновите данные и повторите действие.',
+  );
 }
 
 function canManageInventory(user: AuthUser) {

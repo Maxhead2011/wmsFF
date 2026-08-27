@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { BillingUnit, MovementType, Prisma, StockStatus, TsdOperationStatus, TsdReviewReason } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
+import { BoxCodePolicyService } from '../../common/boxes/box-code-policy.service';
 import { receiptDateFromBoxCode } from '../../common/receipt-batches';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
@@ -23,17 +24,86 @@ export class WarehouseService {
     private readonly stockOperations: StockOperationsService,
     private readonly telegram: TelegramNotificationService,
     private readonly billing: BillingService,
+    private readonly boxCodes: BoxCodePolicyService,
     private readonly inventoryLock?: InventoryLockService,
   ) {}
 
-  listWarehouses() {
+  private resolveWriteWarehouseId(user: AuthUser, requestedWarehouseId?: string) {
+    if (user.roleCodes.includes('CLIENT')) {
+      return undefined;
+    }
+    if (user.permissionCodes.includes('system:admin')) {
+      const warehouseId = requestedWarehouseId || user.activeWarehouseId;
+      if (!warehouseId) {
+        throw new BadRequestException('Выберите активный филиал.');
+      }
+      return warehouseId;
+    }
+    return this.resolveWarehouseScope(user, requestedWarehouseId, true);
+  }
+
+  private resolveReadWarehouseId(user: AuthUser) {
+    if (user.roleCodes.includes('CLIENT')) return undefined;
+    return this.resolveWarehouseScope(user, undefined, false);
+  }
+
+  private assertBoxWarehouse(
+    warehouseId: string | undefined,
+    box: {
+      warehouseId?: string | null;
+      zoneId?: string | null;
+      palletId?: string | null;
+      zone?: { warehouseId: string } | null;
+      pallet?: { zone: { warehouseId: string } | null } | null;
+    },
+  ) {
+    if (
+      warehouseId &&
+      (box.warehouseId !== warehouseId ||
+        (box.zoneId !== null && box.zoneId !== undefined && box.zone?.warehouseId !== warehouseId) ||
+        (box.palletId !== null && box.palletId !== undefined && box.pallet?.zone?.warehouseId !== warehouseId))
+    ) {
+      throw new ForbiddenException(
+        'Короб, его зона или паллета относятся к другому филиалу. Переключите город работы.',
+      );
+    }
+  }
+
+  private warehouseScopedBoxWhere(warehouseId: string | undefined): Prisma.BoxWhereInput | undefined {
+    if (!warehouseId) return undefined;
+    return {
+      warehouseId,
+      AND: [
+        { OR: [{ zoneId: null }, { zone: { warehouseId } }] },
+        { OR: [{ palletId: null }, { pallet: { zone: { warehouseId } } }] },
+      ],
+    };
+  }
+
+  listWarehouses(user?: AuthUser) {
     return this.prisma.warehouse.findMany({
+      where:
+        user && !user.permissionCodes.includes('system:admin')
+          ? user.roleCodes.includes('CLIENT')
+            ? {
+                clients: {
+                  some: {
+                    clientId: { in: user.clientIds },
+                    status: 'ACTIVE',
+                  },
+                },
+              }
+            : { id: { in: user.warehouseIds ?? [] } }
+          : undefined,
       include: { zones: true },
-      orderBy: { code: 'asc' },
+      orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }],
     });
   }
 
-  createWarehouse(dto: CreateWarehouseDto) {
+  createWarehouse(dto: CreateWarehouseDto, user: AuthUser) {
+    if (!user.permissionCodes?.includes('system:admin')) {
+      throw new ForbiddenException('Создавать филиалы может только администратор сети.');
+    }
     return this.prisma.warehouse.create({
       data: {
         code: dto.code.trim(),
@@ -42,30 +112,41 @@ export class WarehouseService {
     });
   }
 
-  listZones(warehouseId?: string) {
+  listZones(user: AuthUser, warehouseId?: string) {
+    const resolvedWarehouseId = this.resolveWarehouseScope(user, warehouseId, false);
     return this.prisma.zone.findMany({
-      where: { warehouseId },
+      where: { warehouseId: resolvedWarehouseId },
       include: { warehouse: true },
       orderBy: [{ warehouseId: 'asc' }, { code: 'asc' }],
     });
   }
 
-  createZone(dto: CreateZoneDto) {
+  createZone(dto: CreateZoneDto, user: AuthUser) {
+    const warehouseId = this.resolveWarehouseScope(user, dto.warehouseId, true);
+    if (!warehouseId) {
+      throw new BadRequestException('Выберите активный филиал.');
+    }
     // Русский комментарий: зоны нужны уже в MVP, стеллажи оставляем как следующий уровень адресации.
     return this.prisma.zone.create({
       data: {
-        warehouseId: dto.warehouseId,
+        warehouseId,
         code: dto.code.trim(),
         name: dto.name.trim(),
       },
     });
   }
 
-  listBoxes(filter: { clientId?: string; code?: string }, user: AuthUser) {
+  listBoxes(filter: { clientId?: string; code?: string; archive?: boolean }, user: AuthUser) {
     const where: Prisma.BoxWhereInput = {
       clientId: this.clientScopes.resolveClientFilter(user, filter.clientId),
+      warehouseId:
+        user.activeWarehouseId && !user.roleCodes.includes('CLIENT')
+          ? user.activeWarehouseId
+          : undefined,
       code: filter.code ? { contains: filter.code, mode: 'insensitive' } : undefined,
-      status: { notIn: ['deleted', 'archived'] },
+      status: filter.archive
+        ? { in: ['deleted', 'archived'] }
+        : { notIn: ['deleted', 'archived'] },
     };
 
     return this.prisma.box.findMany({
@@ -74,6 +155,13 @@ export class WarehouseService {
         client: true,
         zone: true,
         pallet: true,
+        storagePlacement: {
+          include: {
+            pallet: {
+              include: { zone: true },
+            },
+          },
+        },
         _count: { select: { balances: true, movements: true } },
       },
       orderBy: { code: 'asc' },
@@ -84,6 +172,8 @@ export class WarehouseService {
   async listOnlineReceipts(filter: { clientId?: string }, user: AuthUser) {
     const clientId = stringField(filter.clientId, 'clientId');
     this.clientScopes.requireClientAccess(user, clientId, 'read');
+    const warehouseId = this.resolveReadWarehouseId(user);
+    const receiptPrefix = (await this.boxCodes.getPolicy()).receiptPrefix;
 
     const client = await this.prisma.client.findUnique({
       where: { id: clientId },
@@ -106,7 +196,12 @@ export class WarehouseService {
             { operationType: 'receipt_open_box' },
             { operationType: 'receipt_box_status' },
           ],
-          payload: { path: ['clientId'], equals: clientId },
+          AND: [
+            { payload: { path: ['clientId'], equals: clientId } },
+            ...(warehouseId
+              ? [{ payload: { path: ['warehouseId'], equals: warehouseId } }]
+              : []),
+          ],
         },
         // Fetch newest rows first so the operation cap cannot hide the current receipt batch.
         orderBy: { createdAt: 'desc' },
@@ -121,7 +216,11 @@ export class WarehouseService {
       ...new Set(operations.map((operation) => normalizeBoxCode(stringFromPayload(operation.payload, 'boxCode'))).filter(Boolean)),
     ];
     const receivingBoxes = await this.prisma.box.findMany({
-      where: { clientId, status: 'receiving' },
+      where: {
+        clientId,
+        status: 'receiving',
+        ...(this.warehouseScopedBoxWhere(warehouseId) ?? {}),
+      },
       select: { code: true },
       orderBy: { code: 'asc' },
       take: 500,
@@ -130,6 +229,7 @@ export class WarehouseService {
 
     const movementWhere: Prisma.StockMovementWhereInput = {
       clientId,
+      warehouseId,
       type: MovementType.RECEIPT,
       OR: [
         sourceDocuments.length ? { sourceDocument: { in: sourceDocuments } } : undefined,
@@ -174,7 +274,11 @@ export class WarehouseService {
     ];
     const boxes = boxCodes.length
       ? await this.prisma.box.findMany({
-          where: { clientId, code: { in: boxCodes } },
+          where: {
+            clientId,
+            code: { in: boxCodes },
+            ...(this.warehouseScopedBoxWhere(warehouseId) ?? {}),
+          },
           include: {
             balances: {
               include: {
@@ -200,6 +304,9 @@ export class WarehouseService {
           },
         })
       : [];
+    const boxByCode = new Map(
+      boxes.map((box) => [normalizeBoxCode(box.code), box]),
+    );
 
     const actors = await this.resolveTsdActors(operations.map((operation) => operation.deviceId));
     const operationActors = new Map(
@@ -207,6 +314,7 @@ export class WarehouseService {
     );
 
     const boxMap = new Map<string, OnlineReceiptBoxBuilder>();
+    const sourceDocumentByBoxCode = new Map<string, string>();
     const ensureBox = (boxCode: string, sourceDocument?: string | null) => {
       const safeBoxCode = normalizeBoxCode(boxCode);
       const safeSourceDocument = text(sourceDocument);
@@ -216,7 +324,7 @@ export class WarehouseService {
         attachSourceDocument(existing, safeSourceDocument);
         return existing;
       }
-      const box = boxes.find((item) => item.code === safeBoxCode) ?? null;
+      const box = boxByCode.get(safeBoxCode) ?? null;
       const created: OnlineReceiptBoxBuilder = {
         key,
         boxId: box?.id ?? null,
@@ -247,6 +355,9 @@ export class WarehouseService {
         return;
       }
       const sourceDocument = text(payload.sourceDocument);
+      if (sourceDocument && !sourceDocumentByBoxCode.has(normalizeBoxCode(boxCode))) {
+        sourceDocumentByBoxCode.set(normalizeBoxCode(boxCode), sourceDocument);
+      }
       const box = ensureBox(boxCode, sourceDocument);
       const actor = operationActors.get(operation.id) ?? actorFallback(operation.deviceId);
       box.firstSeenAt = minIso(box.firstSeenAt, operation.createdAt);
@@ -352,14 +463,21 @@ export class WarehouseService {
       });
     });
 
+    const movementSourceDocumentByBoxId = new Map<string, string>();
+    movements.forEach((movement) => {
+      if (
+        movement.boxId &&
+        movement.sourceDocument &&
+        !movementSourceDocumentByBoxId.has(movement.boxId)
+      ) {
+        movementSourceDocumentByBoxId.set(movement.boxId, movement.sourceDocument);
+      }
+    });
     boxes.forEach((box) => {
       const sourceDocument =
-        sourceDocuments.find((document) =>
-          operations.some((operation) => {
-            const payload = recordFromJson(operation.payload);
-            return text(payload.sourceDocument) === document && normalizeBoxCode(text(payload.boxCode)) === box.code;
-          }),
-        ) ?? movements.find((movement) => movement.boxId === box.id)?.sourceDocument ?? '';
+        sourceDocumentByBoxCode.get(normalizeBoxCode(box.code)) ??
+        movementSourceDocumentByBoxId.get(box.id) ??
+        '';
       const onlineBox = ensureBox(box.code, sourceDocument);
       onlineBox.boxId = box.id;
       onlineBox.status = box.status;
@@ -394,15 +512,18 @@ export class WarehouseService {
         kizCount: box.kizValues.length || box.items.filter((item) => Boolean(item.kiz)).length,
         items: box.items.sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
       }));
+    const todayMoscow = moscowDateKey(new Date());
     const receiptBoxes = allBoxes
       .filter((box) => !['deleted', 'archived'].includes(box.status))
-      .sort(compareOnlineReceiptBoxes);
+      .sort((left, right) =>
+        compareOnlineReceiptBoxes(left, right, todayMoscow),
+      );
     const currentBatchDate = receiptBoxes[0]
-      ? receiptDateFromBoxCode(receiptBoxes[0].boxCode, onlineReceiptActivityDate(receiptBoxes[0]))
+      ? receiptDateFromBoxCode(receiptBoxes[0].boxCode, onlineReceiptActivityDate(receiptBoxes[0]), receiptPrefix)
       : null;
     const resultBoxes = currentBatchDate
       ? receiptBoxes.filter(
-          (box) => receiptDateFromBoxCode(box.boxCode, onlineReceiptActivityDate(box)) === currentBatchDate,
+          (box) => receiptDateFromBoxCode(box.boxCode, onlineReceiptActivityDate(box), receiptPrefix) === currentBatchDate,
         )
       : [];
     const activeBoxCodes = new Set(resultBoxes.map((box) => box.boxCode));
@@ -437,12 +558,15 @@ export class WarehouseService {
   async listReceiptBatches(filter: { clientId?: string }, user: AuthUser) {
     const clientId = stringField(filter.clientId, 'clientId');
     this.clientScopes.requireClientAccess(user, clientId, 'read');
+    const warehouseId = this.resolveReadWarehouseId(user);
+    const receiptPrefix = (await this.boxCodes.getPolicy()).receiptPrefix;
     const movements = await this.prisma.stockMovement.findMany({
       where: {
         clientId,
+        warehouseId,
         type: MovementType.RECEIPT,
         quantity: { gt: 0 },
-        box: { code: { startsWith: 'FFL_LKB', mode: Prisma.QueryMode.insensitive } },
+        box: { code: { startsWith: receiptPrefix, mode: Prisma.QueryMode.insensitive } },
       },
       select: {
         quantity: true,
@@ -455,7 +579,7 @@ export class WarehouseService {
     });
     const groups = new Map<string, { date: string; boxCodes: Set<string>; quantity: number; kizCount: number }>();
     for (const movement of movements) {
-      const date = receiptDateFromBoxCode(movement.box?.code ?? '', movement.createdAt);
+      const date = receiptDateFromBoxCode(movement.box?.code ?? '', movement.createdAt, receiptPrefix);
       const group = groups.get(date) ?? { date, boxCodes: new Set<string>(), quantity: 0, kizCount: 0 };
       if (movement.box?.code) group.boxCodes.add(movement.box.code);
       group.quantity += movement.quantity;
@@ -478,8 +602,16 @@ export class WarehouseService {
   async listGoodsArrivals(filter: { clientId?: string; periodFrom?: string; periodTo?: string }, user: AuthUser) {
     const clientId = stringField(filter.clientId, 'clientId');
     this.clientScopes.requireClientAccess(user, clientId, 'read');
+    const warehouseId = this.resolveReadWarehouseId(user);
     const rows = await this.prisma.auditLog.findMany({
-      where: { entity: 'goods-arrival', entityId: clientId, action: 'warehouse.goods-arrival' },
+      where: {
+        entity: 'goods-arrival',
+        entityId: clientId,
+        action: 'warehouse.goods-arrival',
+        ...(warehouseId
+          ? { payload: { path: ['warehouseId'], equals: warehouseId } }
+          : {}),
+      },
       orderBy: { createdAt: 'desc' },
       take: 5000,
     });
@@ -493,6 +625,7 @@ export class WarehouseService {
   async createGoodsArrival(dto: Record<string, unknown>, user: AuthUser) {
     const clientId = stringField(dto.clientId, 'clientId');
     this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const warehouseId = this.resolveWriteWarehouseId(user, optionalString(dto.warehouseId));
     const arrivalDate = isoDateField(dto.arrivalDate, 'arrivalDate');
     const bagCount = nonNegativeInteger(dto.bagCount, 'bagCount');
     const boxCount = nonNegativeInteger(dto.boxCount, 'boxCount');
@@ -507,6 +640,7 @@ export class WarehouseService {
         entityId: clientId,
         payload: {
           clientId,
+          warehouseId,
           arrivalDate,
           bagCount,
           boxCount,
@@ -524,6 +658,10 @@ export class WarehouseService {
     if (!existing || existing.entity !== 'goods-arrival') throw new NotFoundException('Приход товара не найден.');
     const row = goodsArrivalFromAudit(existing);
     this.clientScopes.requireClientAccess(user, row.clientId, 'write');
+    const warehouseId = this.resolveWriteWarehouseId(user);
+    if (warehouseId && row.warehouseId !== warehouseId) {
+      throw new ForbiddenException('Приход товара относится к другому филиалу или не имеет безопасной привязки.');
+    }
     if (row.billingInvoiceId) throw new BadRequestException('Приход уже включен в счет. Сначала отмените счет или исправьте его в биллинге.');
     const updated = await this.prisma.auditLog.update({
       where: { id },
@@ -626,9 +764,10 @@ export class WarehouseService {
   async openOnlineReceiptBox(dto: Record<string, unknown>, user: AuthUser) {
     await this.inventoryLock?.assertStockMovementsAllowed();
     const clientId = stringField(dto.clientId, 'clientId');
-    const boxCode = requireFflBoxCode(stringField(dto.boxCode, 'boxCode'));
+    const boxCode = await this.boxCodes.requireAllowed(stringField(dto.boxCode, 'boxCode'));
     const sourceDocument = optionalString(dto.sourceDocument) || `WEB-RECEIPT-${dateStamp()}-${boxCode}`;
     this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const warehouseId = this.resolveWriteWarehouseId(user, optionalString(dto.warehouseId));
 
     let box: { id: string; code: string; status: string };
     try {
@@ -646,7 +785,9 @@ export class WarehouseService {
           );
         }
 
-        return tx.box.create({ data: { clientId, code: boxCode, status: 'receiving' } });
+        return tx.box.create({
+          data: { clientId, warehouseId: warehouseId ?? user.activeWarehouseId, code: boxCode, status: 'receiving' },
+        });
       });
     } catch (caught) {
       if (isPrismaUniqueConflict(caught)) {
@@ -656,6 +797,7 @@ export class WarehouseService {
     }
     await this.recordReceiptAdminOperation('receipt_open_box', user, {
       clientId,
+      warehouseId,
       boxCode,
       sourceDocument,
       status: 'receiving',
@@ -674,15 +816,17 @@ export class WarehouseService {
     await this.inventoryLock?.assertStockMovementsAllowed();
     const clientId = stringField(dto.clientId, 'clientId');
     this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const warehouseId = this.resolveWriteWarehouseId(user, optionalString(dto.warehouseId));
 
     const requestedBatchDate = optionalString(dto.batchDate);
+    const receiptPrefix = (await this.boxCodes.getPolicy()).receiptPrefix;
     const candidateBoxes = await this.prisma.box.findMany({
-      where: { clientId, status: 'receiving' },
+      where: { clientId, status: 'receiving', ...(this.warehouseScopedBoxWhere(warehouseId) ?? {}) },
       select: { id: true, code: true },
       orderBy: { code: 'asc' },
     });
     const boxes = requestedBatchDate
-      ? candidateBoxes.filter((box) => receiptDateFromBoxCode(box.code, new Date()) === requestedBatchDate)
+      ? candidateBoxes.filter((box) => receiptDateFromBoxCode(box.code, new Date(), receiptPrefix) === requestedBatchDate)
       : candidateBoxes;
     if (boxes.length === 0) {
       return { closed: 0, boxes: [] };
@@ -701,6 +845,7 @@ export class WarehouseService {
           user,
           {
             clientId,
+            warehouseId,
             boxCode: box.code,
             status: 'active',
             comment,
@@ -717,6 +862,7 @@ export class WarehouseService {
     await this.inventoryLock?.assertStockMovementsAllowed();
     const clientId = stringField(dto.clientId, 'clientId');
     this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const warehouseId = this.resolveWriteWarehouseId(user, optionalString(dto.warehouseId));
 
     const client = await this.prisma.client.findUnique({
       where: { id: clientId },
@@ -728,9 +874,11 @@ export class WarehouseService {
 
     const todayStart = moscowDayStartUtc(new Date());
     const requestedBatchDate = optionalString(dto.batchDate);
+    const receiptPrefix = (await this.boxCodes.getPolicy()).receiptPrefix;
     const candidateBoxes = await this.prisma.box.findMany({
       where: {
         clientId,
+        ...(this.warehouseScopedBoxWhere(warehouseId) ?? {}),
         status: { notIn: ['deleted', 'archived'] },
         OR: [
           { status: 'receiving' },
@@ -749,7 +897,7 @@ export class WarehouseService {
       orderBy: { code: 'asc' },
     });
     const boxes = requestedBatchDate
-      ? candidateBoxes.filter((box) => receiptDateFromBoxCode(box.code, new Date()) === requestedBatchDate)
+      ? candidateBoxes.filter((box) => receiptDateFromBoxCode(box.code, new Date(), receiptPrefix) === requestedBatchDate)
       : candidateBoxes;
     if (boxes.length === 0) {
       throw new BadRequestException('Нет открытых или сегодняшних коробов приемки для завершения.');
@@ -827,6 +975,7 @@ export class WarehouseService {
           user,
           {
             clientId,
+            warehouseId,
             boxCode: box.code,
             status: 'active',
             comment,
@@ -840,6 +989,7 @@ export class WarehouseService {
         user,
         {
           clientId,
+          warehouseId,
           status: 'finished',
           boxes: boxes.length,
           closedBoxes: closedBoxes.length,
@@ -887,13 +1037,16 @@ export class WarehouseService {
   async deleteOnlineReceiptBox(dto: Record<string, unknown>, user: AuthUser) {
     await this.inventoryLock?.assertStockMovementsAllowed();
     const clientId = stringField(dto.clientId, 'clientId');
-    const boxCode = requireFflBoxCode(stringField(dto.boxCode, 'boxCode'));
+    const boxCode = await this.boxCodes.requireAllowed(stringField(dto.boxCode, 'boxCode'));
     this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const warehouseId = this.resolveWriteWarehouseId(user, optionalString(dto.warehouseId));
 
     await this.prisma.$transaction(async (tx) => {
       const box = await tx.box.findUnique({
         where: { clientId_code: { clientId, code: boxCode } },
         include: {
+          zone: { select: { warehouseId: true } },
+          pallet: { select: { zone: { select: { warehouseId: true } } } },
           balances: {
             include: {
               sku: {
@@ -912,6 +1065,7 @@ export class WarehouseService {
         throw new NotFoundException(`Короб ${boxCode} не найден.`);
       }
 
+      this.assertBoxWarehouse(warehouseId, box);
       const snapshotItems = snapshotItemsFromBox(box);
 
       await removeOnlineReceiptBoxData(tx, box.id);
@@ -920,6 +1074,7 @@ export class WarehouseService {
         user,
         {
           clientId,
+          warehouseId,
           boxCode,
           sourceDocument: optionalString(dto.sourceDocument),
           status: 'deleted',
@@ -937,13 +1092,25 @@ export class WarehouseService {
   async restoreOnlineReceiptBox(dto: Record<string, unknown>, user: AuthUser) {
     await this.inventoryLock?.assertStockMovementsAllowed();
     const clientId = stringField(dto.clientId, 'clientId');
-    const boxCode = requireFflBoxCode(stringField(dto.boxCode, 'boxCode'));
+    const boxCode = await this.boxCodes.requireAllowed(stringField(dto.boxCode, 'boxCode'));
     this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const warehouseId = this.resolveWriteWarehouseId(user, optionalString(dto.warehouseId));
 
     const existingBox = await this.prisma.box.findUnique({
       where: { clientId_code: { clientId, code: boxCode } },
-      select: { id: true, status: true },
+      select: {
+        id: true,
+        status: true,
+        warehouseId: true,
+        zoneId: true,
+        palletId: true,
+        zone: { select: { warehouseId: true } },
+        pallet: { select: { zone: { select: { warehouseId: true } } } },
+      },
     });
+    if (existingBox) {
+      this.assertBoxWarehouse(warehouseId, existingBox);
+    }
     if (existingBox && existingBox.status !== 'deleted') {
       throw new BadRequestException(`Короб ${boxCode} уже есть в активных остатках.`);
     }
@@ -954,6 +1121,9 @@ export class WarehouseService {
     }
 
     const payload = recordFromJson(deletedOperation.payload);
+    if (warehouseId && optionalString(payload.warehouseId) !== warehouseId) {
+      throw new ForbiddenException('Удаленный короб относится к другому филиалу или не имеет безопасной привязки.');
+    }
     const sourceDocument = optionalString(payload.sourceDocument) || `RESTORE-RECEIPT-${dateStamp()}-${boxCode}`;
     const snapshotItems = snapshotItemsFromPayload(payload);
     const restoreItems = snapshotItems.length
@@ -972,6 +1142,7 @@ export class WarehouseService {
       await this.stockOperations.receiveIntoBox(
         {
           clientId,
+          warehouseId,
           boxCode,
           barcode: item.barcode,
           skuId: item.skuId,
@@ -989,6 +1160,7 @@ export class WarehouseService {
     await this.setOnlineReceiptBoxStatus(
       {
         clientId,
+        warehouseId,
         boxCode,
         sourceDocument,
         comment: `Короб ${boxCode} восстановлен из онлайн-приемки.`,
@@ -1003,25 +1175,47 @@ export class WarehouseService {
   async addOnlineReceiptItem(dto: Record<string, unknown>, user: AuthUser) {
     await this.inventoryLock?.assertStockMovementsAllowed();
     const clientId = stringField(dto.clientId, 'clientId');
-    const boxCode = requireFflBoxCode(stringField(dto.boxCode, 'boxCode'));
+    const boxCode = await this.boxCodes.requireAllowed(stringField(dto.boxCode, 'boxCode'));
     const barcode = optionalString(dto.barcode);
     const skuId = optionalString(dto.skuId);
     const quantity = positiveInteger(dto.quantity ?? 1, 'quantity');
     const kiz = optionalString(dto.kiz);
     const sourceDocument = optionalString(dto.sourceDocument) || `WEB-RECEIPT-${dateStamp()}-${boxCode}`;
-    validateReceiptProductBarcode(barcode);
-    validateReceiptKiz(kiz);
+    const boxPolicy = await this.boxCodes.getPolicy();
+    validateReceiptProductBarcode(barcode, boxPolicy.allowedPrefixes);
+    validateReceiptKiz(kiz, boxPolicy.allowedPrefixes);
     this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const warehouseId = this.resolveWriteWarehouseId(user, optionalString(dto.warehouseId));
 
-    await this.prisma.box.upsert({
+    const existingBox = await this.prisma.box.findUnique({
       where: { clientId_code: { clientId, code: boxCode } },
-      update: { status: 'receiving' },
-      create: { clientId, code: boxCode, status: 'receiving' },
+      select: {
+        id: true,
+        warehouseId: true,
+        zoneId: true,
+        palletId: true,
+        zone: { select: { warehouseId: true } },
+        pallet: { select: { zone: { select: { warehouseId: true } } } },
+      },
     });
+    if (existingBox) {
+      this.assertBoxWarehouse(warehouseId, existingBox);
+      await this.prisma.box.update({ where: { id: existingBox.id }, data: { status: 'receiving' } });
+    } else {
+      await this.prisma.box.create({
+        data: {
+          clientId,
+          warehouseId: warehouseId ?? user.activeWarehouseId,
+          code: boxCode,
+          status: 'receiving',
+        },
+      });
+    }
 
     const result = await this.stockOperations.receiveIntoBox(
       {
         clientId,
+        warehouseId,
         boxCode,
         barcode,
         skuId,
@@ -1037,6 +1231,7 @@ export class WarehouseService {
 
     await this.recordReceiptAdminOperation('receipt_scan', user, {
       clientId,
+      warehouseId,
       boxCode,
       barcode,
       skuId,
@@ -1054,21 +1249,33 @@ export class WarehouseService {
     await this.inventoryLock?.assertStockMovementsAllowed();
     const quantity = dto.quantity === undefined ? undefined : positiveInteger(dto.quantity, 'quantity');
     const kiz = dto.kiz === undefined ? undefined : optionalString(dto.kiz) ?? '';
-    validateReceiptKiz(kiz || undefined);
+    const boxPolicy = await this.boxCodes.getPolicy();
+    validateReceiptKiz(kiz || undefined, boxPolicy.allowedPrefixes);
+    const warehouseId = this.resolveWriteWarehouseId(user, optionalString(dto.warehouseId));
 
     return this.prisma.$transaction(async (tx) => {
       const movement = await tx.stockMovement.findUnique({
         where: { id },
-        include: { box: true, productMarks: true },
+        include: {
+          box: {
+            include: {
+              zone: { select: { warehouseId: true } },
+              pallet: { select: { zone: { select: { warehouseId: true } } } },
+            },
+          },
+          productMarks: true,
+        },
       });
       if (!movement || movement.type !== MovementType.RECEIPT || !movement.boxId || !movement.box) {
         throw new NotFoundException('Строка приемки не найдена.');
       }
       this.clientScopes.requireClientAccess(user, movement.clientId, 'write');
+      this.assertBoxWarehouse(warehouseId, movement.box);
 
       if (quantity !== undefined && quantity !== movement.quantity) {
         await this.adjustBalanceQuantity(tx, {
           clientId: movement.clientId,
+          warehouseId: warehouseId ?? movement.box.warehouseId,
           skuId: movement.skuId,
           boxId: movement.boxId,
           palletId: movement.palletId,
@@ -1104,6 +1311,7 @@ export class WarehouseService {
         user,
         {
           clientId: movement.clientId,
+          warehouseId,
           boxCode: movement.box.code,
           quantity: quantity ?? movement.quantity,
           kiz,
@@ -1118,20 +1326,56 @@ export class WarehouseService {
     });
   }
 
+  private resolveWarehouseScope(
+    user: AuthUser,
+    requestedWarehouseId: string | undefined,
+    write: boolean,
+  ) {
+    if (user.roleCodes.includes('CLIENT')) {
+      if (!requestedWarehouseId) return undefined;
+      return requestedWarehouseId;
+    }
+    const warehouseId = user.activeWarehouseId || requestedWarehouseId;
+    if (!warehouseId) {
+      throw new BadRequestException('Выберите активный филиал.');
+    }
+    if (requestedWarehouseId && requestedWarehouseId !== warehouseId) {
+      throw new ForbiddenException('Данные другого филиала недоступны.');
+    }
+    if (
+      !user.permissionCodes.includes('system:admin') &&
+      !(write ? user.writableWarehouseIds : user.warehouseIds)?.includes(warehouseId)
+    ) {
+      throw new ForbiddenException('Филиал не назначен сотруднику.');
+    }
+    return warehouseId;
+  }
+
   async deleteOnlineReceiptItem(id: string, dto: Record<string, unknown>, user: AuthUser) {
     await this.inventoryLock?.assertStockMovementsAllowed();
+    const warehouseId = this.resolveWriteWarehouseId(user, optionalString(dto.warehouseId));
     return this.prisma.$transaction(async (tx) => {
       const movement = await tx.stockMovement.findUnique({
         where: { id },
-        include: { box: true, productMarks: true },
+        include: {
+          box: {
+            include: {
+              zone: { select: { warehouseId: true } },
+              pallet: { select: { zone: { select: { warehouseId: true } } } },
+            },
+          },
+          productMarks: true,
+        },
       });
       if (!movement || movement.type !== MovementType.RECEIPT || !movement.boxId || !movement.box) {
         throw new NotFoundException('Строка приемки не найдена.');
       }
       this.clientScopes.requireClientAccess(user, movement.clientId, 'write');
+      this.assertBoxWarehouse(warehouseId, movement.box);
 
       await this.adjustBalanceQuantity(tx, {
         clientId: movement.clientId,
+        warehouseId: warehouseId ?? movement.box.warehouseId,
         skuId: movement.skuId,
         boxId: movement.boxId,
         palletId: movement.palletId,
@@ -1146,6 +1390,7 @@ export class WarehouseService {
         user,
         {
           clientId: movement.clientId,
+          warehouseId,
           boxCode: movement.box.code,
           quantity: -movement.quantity,
           sourceDocument: movement.sourceDocument,
@@ -1161,16 +1406,32 @@ export class WarehouseService {
 
   private async setOnlineReceiptBoxStatus(dto: Record<string, unknown>, user: AuthUser, status: string) {
     const clientId = stringField(dto.clientId, 'clientId');
-    const boxCode = requireFflBoxCode(stringField(dto.boxCode, 'boxCode'));
+    const boxCode = await this.boxCodes.requireAllowed(stringField(dto.boxCode, 'boxCode'));
     this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const warehouseId = this.resolveWriteWarehouseId(user, optionalString(dto.warehouseId));
 
-    const box = await this.prisma.box.upsert({
+    const existingBox = await this.prisma.box.findUnique({
       where: { clientId_code: { clientId, code: boxCode } },
-      update: { status },
-      create: { clientId, code: boxCode, status },
+      select: {
+        id: true,
+        warehouseId: true,
+        zoneId: true,
+        palletId: true,
+        zone: { select: { warehouseId: true } },
+        pallet: { select: { zone: { select: { warehouseId: true } } } },
+      },
     });
+    if (existingBox) {
+      this.assertBoxWarehouse(warehouseId, existingBox);
+    }
+    const box = existingBox
+      ? await this.prisma.box.update({ where: { id: existingBox.id }, data: { status } })
+      : await this.prisma.box.create({
+          data: { clientId, code: boxCode, status, warehouseId: warehouseId ?? user.activeWarehouseId },
+        });
     await this.recordReceiptAdminOperation('receipt_box_status', user, {
       clientId,
+      warehouseId,
       boxCode,
       sourceDocument: optionalString(dto.sourceDocument),
       status,
@@ -1184,6 +1445,7 @@ export class WarehouseService {
     tx: Prisma.TransactionClient,
     input: {
       clientId: string;
+      warehouseId?: string | null;
       skuId: string;
       boxId: string;
       palletId?: string | null;
@@ -1198,6 +1460,7 @@ export class WarehouseService {
     const balance = await tx.stockBalance.findFirst({
       where: {
         clientId: input.clientId,
+        warehouseId: input.warehouseId,
         skuId: input.skuId,
         boxId: input.boxId,
         status: input.status,
@@ -1213,6 +1476,7 @@ export class WarehouseService {
         data: {
           balanceKey: this.balances.balanceKey(input),
           clientId: input.clientId,
+          warehouseId: input.warehouseId,
           skuId: input.skuId,
           boxId: input.boxId,
           palletId: input.palletId,
@@ -1324,7 +1588,7 @@ export class WarehouseService {
         deviceId,
         operationKey: `${operationType}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
         operationType,
-        payload: compactJson(payload),
+        payload: compactJson({ ...payload, warehouseId: payload.warehouseId ?? user.activeWarehouseId }),
         status: 'ACCEPTED',
         serverMessage: optionalString(payload.comment) || 'Операция онлайн-приемки WMS.',
       },
@@ -1380,8 +1644,44 @@ export class WarehouseService {
     return actors;
   }
 
-  upsertBox(dto: UpsertBoxDto, user: AuthUser) {
+  async upsertBox(dto: UpsertBoxDto, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+    const warehouseId = this.resolveWriteWarehouseId(user);
+    const existing = await this.prisma.box.findUnique({
+      where: { clientId_code: { clientId: dto.clientId, code: dto.code.trim() } },
+      select: {
+        id: true,
+        warehouseId: true,
+        zoneId: true,
+        palletId: true,
+        zone: { select: { warehouseId: true } },
+        pallet: { select: { zone: { select: { warehouseId: true } } } },
+      },
+    });
+    if (existing) {
+      this.assertBoxWarehouse(warehouseId, existing);
+    }
+    const zone = dto.zoneId
+      ? await this.prisma.zone.findUnique({ where: { id: dto.zoneId }, select: { id: true, warehouseId: true } })
+      : null;
+    if (dto.zoneId && (!zone || (warehouseId && zone.warehouseId !== warehouseId))) {
+      throw new ForbiddenException('Зона хранения относится к другому филиалу.');
+    }
+    const pallet = dto.palletId
+      ? await this.prisma.pallet.findUnique({
+          where: { id: dto.palletId },
+          select: { id: true, clientId: true, zoneId: true, zone: { select: { warehouseId: true } } },
+        })
+      : null;
+    if (
+      dto.palletId &&
+      (!pallet || pallet.clientId !== dto.clientId || (warehouseId && pallet.zone?.warehouseId !== warehouseId))
+    ) {
+      throw new ForbiddenException('Паллета относится к другому филиалу или клиенту.');
+    }
+    if (dto.zoneId && pallet?.zoneId && pallet.zoneId !== dto.zoneId) {
+      throw new BadRequestException('Паллета находится в другой зоне хранения.');
+    }
 
     return this.prisma.box.upsert({
       where: {
@@ -1391,11 +1691,13 @@ export class WarehouseService {
         },
       },
       update: {
+        warehouseId: warehouseId ?? user.activeWarehouseId,
         zoneId: dto.zoneId,
         palletId: dto.palletId,
       },
       create: {
         clientId: dto.clientId,
+        warehouseId: warehouseId ?? user.activeWarehouseId,
         code: dto.code.trim(),
         zoneId: dto.zoneId,
         palletId: dto.palletId,
@@ -1409,7 +1711,13 @@ export class WarehouseService {
 
   listPallets(clientId: string | undefined, user: AuthUser) {
     return this.prisma.pallet.findMany({
-      where: { clientId: this.clientScopes.resolveClientFilter(user, clientId) },
+      where: {
+        clientId: this.clientScopes.resolveClientFilter(user, clientId),
+        zone:
+          user.activeWarehouseId && !user.roleCodes.includes('CLIENT')
+            ? { warehouseId: user.activeWarehouseId }
+            : undefined,
+      },
       include: {
         client: true,
         zone: true,
@@ -1421,8 +1729,22 @@ export class WarehouseService {
     });
   }
 
-  upsertPallet(dto: UpsertPalletDto, user: AuthUser) {
+  async upsertPallet(dto: UpsertPalletDto, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+    const warehouseId = this.resolveWriteWarehouseId(user);
+    const existing = await this.prisma.pallet.findUnique({
+      where: { clientId_code: { clientId: dto.clientId, code: dto.code.trim() } },
+      select: { id: true, zone: { select: { warehouseId: true } } },
+    });
+    if (warehouseId && existing && existing.zone?.warehouseId !== warehouseId) {
+      throw new ForbiddenException('Паллета относится к другому филиалу.');
+    }
+    const zone = dto.zoneId
+      ? await this.prisma.zone.findUnique({ where: { id: dto.zoneId }, select: { id: true, warehouseId: true } })
+      : null;
+    if (warehouseId && (!zone || zone.warehouseId !== warehouseId)) {
+      throw new ForbiddenException('Для паллеты выберите зону активного филиала.');
+    }
 
     return this.prisma.pallet.upsert({
       where: {
@@ -1698,6 +2020,7 @@ function goodsArrivalFromAudit(row: { id: string; payload: Prisma.JsonValue | nu
   return {
     id: row.id,
     clientId: text(payload.clientId),
+    warehouseId: text(payload.warehouseId) || null,
     arrivalDate: text(payload.arrivalDate),
     bagCount: Number(payload.bagCount) || 0,
     boxCount: Number(payload.boxCount) || 0,
@@ -1740,19 +2063,11 @@ function isPrismaUniqueConflict(value: unknown) {
   return Boolean(value && typeof value === 'object' && 'code' in value && value.code === 'P2002');
 }
 
-function requireFflBoxCode(value: string) {
-  const boxCode = normalizeBoxCode(value);
-  if (!isFflBoxCode(boxCode)) {
-    throw new BadRequestException('Номер короба должен начинаться с FFL. Отсканируйте корректный ШК короба.');
-  }
-  return boxCode;
-}
-
-function validateReceiptProductBarcode(value: string | undefined) {
+function validateReceiptProductBarcode(value: string | undefined, allowedPrefixes: string[]) {
   if (!value) {
     return;
   }
-  if (isFflBoxCode(value)) {
+  if (isConfiguredBoxCode(value, allowedPrefixes)) {
     throw new BadRequestException('В поле ШК товара отсканирован номер короба. Отсканируйте ШК товара.');
   }
   if (value.length > 13) {
@@ -1760,11 +2075,11 @@ function validateReceiptProductBarcode(value: string | undefined) {
   }
 }
 
-function validateReceiptKiz(value: string | undefined) {
+function validateReceiptKiz(value: string | undefined, allowedPrefixes: string[]) {
   if (!value) {
     return;
   }
-  if (isFflBoxCode(value)) {
+  if (isConfiguredBoxCode(value, allowedPrefixes)) {
     throw new BadRequestException('В поле КИЗ отсканирован номер короба. Отсканируйте КИЗ товара.');
   }
   if (value.length <= 20) {
@@ -1774,6 +2089,11 @@ function validateReceiptKiz(value: string | undefined) {
 
 function isFflBoxCode(value: string) {
   return value.trim().toLocaleUpperCase('ru-RU').startsWith('FFL');
+}
+
+function isConfiguredBoxCode(value: string, allowedPrefixes: string[]) {
+  const normalized = normalizeBoxCode(value);
+  return allowedPrefixes.some((prefix) => normalized.startsWith(prefix));
 }
 
 function primaryBarcode(sku: { barcodes: Array<{ value: string; isPrimary: boolean }> }) {
@@ -1817,13 +2137,15 @@ function isVerificationError(
   return Boolean(value);
 }
 
+const moscowDateFormatter = new Intl.DateTimeFormat('en-CA', {
+  day: '2-digit',
+  month: '2-digit',
+  timeZone: 'Europe/Moscow',
+  year: 'numeric',
+});
+
 function moscowDayStartUtc(value: Date) {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    day: '2-digit',
-    month: '2-digit',
-    timeZone: 'Europe/Moscow',
-    year: 'numeric',
-  }).formatToParts(value);
+  const parts = moscowDateFormatter.formatToParts(value);
   const byType = new Map(parts.map((part) => [part.type, part.value]));
   const year = Number(byType.get('year'));
   const month = Number(byType.get('month'));
@@ -1834,10 +2156,10 @@ function moscowDayStartUtc(value: Date) {
 function compareOnlineReceiptBoxes(
   left: { firstSeenAt: string | null; lastSeenAt: string | null; openedAt: string | null; closedAt: string | null; boxCode: string },
   right: { firstSeenAt: string | null; lastSeenAt: string | null; openedAt: string | null; closedAt: string | null; boxCode: string },
+  today: string,
 ) {
   const leftDate = onlineReceiptActivityDate(left);
   const rightDate = onlineReceiptActivityDate(right);
-  const today = moscowDateKey(new Date());
   const leftToday = moscowDateKey(leftDate) === today ? 1 : 0;
   const rightToday = moscowDateKey(rightDate) === today ? 1 : 0;
   if (leftToday !== rightToday) {
@@ -1865,12 +2187,7 @@ function dateFromIso(value: string | null | undefined) {
 }
 
 function moscowDateKey(value: Date) {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    day: '2-digit',
-    month: '2-digit',
-    timeZone: 'Europe/Moscow',
-    year: 'numeric',
-  }).formatToParts(value);
+  const parts = moscowDateFormatter.formatToParts(value);
   const byType = new Map(parts.map((part) => [part.type, part.value]));
   return `${byType.get('year') ?? ''}-${byType.get('month') ?? ''}-${byType.get('day') ?? ''}`;
 }

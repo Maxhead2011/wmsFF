@@ -598,13 +598,9 @@ export class WarehouseBoxIntegrityService {
             where: { id: box.id },
             data: { status: 'archived', palletId: null, zoneId: null },
           });
-          // FIX: the shared rule validates canonical stock before removing only the active placement.
+          // FIX: the canonical rule performs the guarded, audited detach.
           await this.archivedEmptyBoxDetach?.detachIfArchivedAndEmpty(
-            {
-              boxId: box.id,
-              userId: user.id,
-              reason: 'warehouse-box-integrity-write-off',
-            },
+            { boxId: box.id, userId: user.id, reason: 'warehouse-box-integrity' },
             tx,
           );
         }

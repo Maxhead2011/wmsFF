@@ -4,6 +4,7 @@ import * as XLSX from 'xlsx';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
+import { assertWarehouseAccess } from './client-request-warehouse-scope';
 
 const xlsxMimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const marketplaceReadyStatuses = new Set<ClientRequestStatus>([
@@ -90,6 +91,7 @@ export class ClientRequestMarketplaceFilesService {
       throw new NotFoundException('Клиентская заявка не найдена.');
     }
     this.clientScopes.requireClientAccess(user, request.clientId, 'read');
+    assertWarehouseAccess(user, request, 'read', 'Заявка не найдена в выбранном филиале.');
     if (request.type !== ClientRequestType.OUTBOUND) {
       throw new BadRequestException('Файлы WB доступны только для заявок на отгрузку.');
     }

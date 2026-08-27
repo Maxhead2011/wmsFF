@@ -6,6 +6,7 @@ import { ClientScopeService } from '../auth/client-scope.service';
 import { isClientNotificationEnabled } from '../client-notifications/client-notification-preferences';
 import { TelegramNotificationService } from '../client-notifications/telegram-notification.service';
 import { manualPickInstructionPlanFilePrefix } from '../stock/manual-pick-instruction';
+import { assertWarehouseAccess } from './client-request-warehouse-scope';
 
 const maxFileSizeBytes = 10 * 1024 * 1024;
 
@@ -20,6 +21,7 @@ export class ClientRequestFilesService {
   async listForRequest(requestId: string, user: AuthUser) {
     const request = await this.getRequestForAccess(requestId);
     this.clientScopes.requireClientAccess(user, request.clientId, 'read');
+    assertWarehouseAccess(user, request, 'read', 'Заявка не найдена в выбранном филиале.');
 
     const files = await this.prisma.clientRequestFile.findMany({
       where: { requestId, NOT: { fileName: { startsWith: manualPickInstructionPlanFilePrefix } } },
@@ -40,6 +42,7 @@ export class ClientRequestFilesService {
 
     const request = await this.getRequestForAccess(requestId);
     this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+    assertWarehouseAccess(user, request, 'write', 'Заявка не найдена в выбранном филиале.');
     const notifyClient = await isClientNotificationEnabled(this.prisma, request.clientId, ClientNotificationEvent.REQUEST_FILE_UPLOADED);
 
     // Русский комментарий: файл хранится рядом с заявкой, чтобы клиент видел вложения без внешнего файлового сервиса.
@@ -95,6 +98,9 @@ export class ClientRequestFilesService {
   }
 
   async getFileContent(requestId: string, fileId: string, user: AuthUser) {
+    const request = await this.getRequestForAccess(requestId);
+    this.clientScopes.requireClientAccess(user, request.clientId, 'read');
+    assertWarehouseAccess(user, request, 'read', 'Заявка не найдена в выбранном филиале.');
     const file = await this.prisma.clientRequestFile.findFirst({
       where: { id: fileId, requestId },
       select: {
@@ -111,14 +117,13 @@ export class ClientRequestFilesService {
       throw new NotFoundException('Файл заявки не найден.');
     }
 
-    this.clientScopes.requireClientAccess(user, file.clientId, 'read');
     return { ...file, fileName: normalizeFileName(file.fileName) };
   }
 
   private async getRequestForAccess(requestId: string) {
     const request = await this.prisma.clientRequest.findUnique({
       where: { id: requestId },
-      select: { id: true, clientId: true, title: true },
+      select: { id: true, clientId: true, warehouseId: true, title: true },
     });
 
     if (!request) {

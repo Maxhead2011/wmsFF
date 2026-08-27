@@ -8,6 +8,7 @@ import {
   CountInventoryItemDto,
   InventoryDecisionDto,
   OpenInventoryBoxDto,
+  ResolveInventoryBoxDto,
   SetInventoryCountDto,
   StartInventoryDto,
 } from './dto/inventory.dto';
@@ -20,8 +21,8 @@ export class InventoryController {
   constructor(private readonly inventory: InventoryService) {}
 
   @Get('dashboard')
-  dashboard(@CurrentUser() user: AuthUser) {
-    return this.inventory.dashboard(user);
+  dashboard(@Query('workOnly') workOnly: string | undefined, @CurrentUser() user: AuthUser) {
+    return this.inventory.dashboard(user, workOnly === 'true');
   }
 
   @Get('sessions')
@@ -30,8 +31,12 @@ export class InventoryController {
   }
 
   @Get('sessions/:id')
-  get(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.inventory.getSession(id, user);
+  get(
+    @Param('id') id: string,
+    @Query('workOnly') workOnly: string | undefined,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.inventory.getSession(id, user, workOnly === 'true');
   }
 
   @Post('sessions')
@@ -80,6 +85,12 @@ export class InventoryController {
   @RequirePermissions('stock:write')
   decide(@Param('id') id: string, @Body() dto: InventoryDecisionDto, @CurrentUser() user: AuthUser) {
     return this.inventory.decideLine(id, dto, user);
+  }
+
+  @Post('boxes/:id/resolve')
+  @RequirePermissions('stock:write')
+  resolveBox(@Param('id') id: string, @Body() dto: ResolveInventoryBoxDto, @CurrentUser() user: AuthUser) {
+    return this.inventory.resolveBox(id, dto, user);
   }
 
   @Post('sessions/:id/complete')

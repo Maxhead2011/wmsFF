@@ -84,14 +84,13 @@ export class FulfillClientRequestDto {
   @IsString()
   comment?: string;
 
-  // FIX: внутренний складской метод получает подтверждение перевеса явно.
-  @IsOptional()
-  @IsBoolean()
-  allowOverweightPackages?: boolean;
-
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => PackageClientRequestPlaceDto)
   packages?: PackageClientRequestPlaceDto[];
+
+  @IsOptional()
+  @IsBoolean()
+  allowOverweightPackages?: boolean;
 }

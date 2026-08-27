@@ -1,4 +1,4 @@
-import { GitCompareArrows, PackagePlus, UserPlus } from 'lucide-react';
+import { ArrowLeft, ChevronRight, GitCompareArrows, PackagePlus, UserPlus } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { AuthSession, AuthUser } from '../../lib/api';
 import { ArticleMappingPanel } from './ArticleMappingPanel';
@@ -23,19 +23,12 @@ const directoryTabs = [
 type DirectoryTab = (typeof directoryTabs)[number]['id'];
 
 export function DirectoryPanel({ session }: DirectoryPanelProps) {
-  const [activeTab, setActiveTab] = useState<DirectoryTab>('clients');
+  const [activeTab, setActiveTab] = useState<DirectoryTab | null>(null);
   const [skuReloadKey, setSkuReloadKey] = useState(0);
   const availableTabs = useMemo(
     () => directoryTabs.filter((tab) => canUse(session.user, tab.permission)),
     [session.user],
   );
-  const activeTabMeta = availableTabs.find((tab) => tab.id === activeTab);
-
-  useEffect(() => {
-    if (availableTabs.length > 0 && !activeTabMeta) {
-      setActiveTab(availableTabs[0].id);
-    }
-  }, [activeTabMeta, availableTabs]);
 
   if (availableTabs.length === 0) {
     return null;
@@ -50,21 +43,27 @@ export function DirectoryPanel({ session }: DirectoryPanelProps) {
         </div>
       </div>
 
-      <div className="directory-tabs" role="tablist" aria-label="Тип справочника">
+      {!activeTab ? <div className="directory-topic-grid" aria-label="Темы справочников">
         {availableTabs.map((tab) => (
           <button
-            aria-selected={activeTab === tab.id}
-            className={activeTab === tab.id ? 'active' : ''}
+            className={`directory-topic-tile directory-topic-tile--${tab.id}`}
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            role="tab"
             type="button"
           >
-            <tab.icon size={16} aria-hidden="true" />
-            <span>{tab.label}</span>
+            <span className="directory-topic-tile__icon"><tab.icon size={22} aria-hidden="true" /></span>
+            <span className="directory-topic-tile__content"><small>Справочник</small><strong>{tab.label}</strong><span>{directoryTopicDescription(tab.id)}</span></span>
+            <ChevronRight size={22} aria-hidden="true" />
           </button>
         ))}
-      </div>
+      </div> : null}
+
+      {activeTab ? <div className="directory-tabs" role="tablist" aria-label="Тип справочника">
+        <button className="directory-tabs__back" type="button" onClick={() => setActiveTab(null)}><ArrowLeft size={16} /><span>Разделы</span></button>
+        {availableTabs.map((tab) => (
+          <button aria-selected={activeTab === tab.id} className={activeTab === tab.id ? 'active' : ''} key={tab.id} onClick={() => setActiveTab(tab.id)} role="tab" type="button"><tab.icon size={16} aria-hidden="true" /><span>{tab.label}</span></button>
+        ))}
+      </div> : null}
 
       {activeTab === 'clients' ? (
         <div className="directory-stack">
@@ -83,6 +82,12 @@ export function DirectoryPanel({ session }: DirectoryPanelProps) {
       {activeTab === 'article-mappings' ? <ArticleMappingPanel session={session} /> : null}
     </section>
   );
+}
+
+function directoryTopicDescription(tab: DirectoryTab) {
+  if (tab === 'clients') return 'Карточки клиентов, реквизиты и загрузка данных из файлов.';
+  if (tab === 'skus') return 'Товары, штрихкоды, размеры, карточки и импорт номенклатуры.';
+  return 'Связи старых и новых артикулов для корректной переклейки и остатков.';
 }
 
 function canUse(user: AuthUser, permission: string) {

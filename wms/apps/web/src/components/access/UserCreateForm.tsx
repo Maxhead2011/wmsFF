@@ -2,9 +2,11 @@ import { Save } from 'lucide-react';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   createUser,
+  fetchBranches,
   fetchClients,
   fetchRoles,
   type AuthSession,
+  type BranchSummary,
   type ClientSummary,
   type RoleSummary,
   type UserSummary,
@@ -26,8 +28,10 @@ const emptyUserForm = {
 export function UserCreateForm({ session }: UserCreateFormProps) {
   const [roles, setRoles] = useState<RoleSummary[]>([]);
   const [clients, setClients] = useState<ClientSummary[]>([]);
+  const [branches, setBranches] = useState<BranchSummary[]>([]);
   const [form, setForm] = useState(emptyUserForm);
   const [roleCodes, setRoleCodes] = useState<string[]>(['OPERATOR']);
+  const [warehouseId, setWarehouseId] = useState(session.user.activeWarehouseId ?? '');
   const [scopeMode, setScopeMode] = useState<'all' | 'limited'>('all');
   const [scopeMap, setScopeMap] = useState<ScopeMap>({});
   const [createdUser, setCreatedUser] = useState<UserSummary | null>(null);
@@ -41,6 +45,9 @@ export function UserCreateForm({ session }: UserCreateFormProps) {
     [roleCodes, roles],
   );
   const clientRoleSelected = roleCodes.includes('CLIENT');
+  const employeeNeedsBranch = !roleCodes.some((code) =>
+    ['ADMIN', 'OWNER', 'CLIENT'].includes(code),
+  );
 
   useEffect(() => {
     let isActive = true;
@@ -50,9 +57,10 @@ export function UserCreateForm({ session }: UserCreateFormProps) {
       setError('');
 
       try {
-        const [nextRoles, nextClients] = await Promise.all([
+        const [nextRoles, nextClients, nextBranches] = await Promise.all([
           fetchRoles(session.accessToken),
           fetchClients(session.accessToken),
+          fetchBranches(session.accessToken),
         ]);
         if (!isActive) {
           return;
@@ -60,6 +68,12 @@ export function UserCreateForm({ session }: UserCreateFormProps) {
 
         setRoles(nextRoles);
         setClients(nextClients);
+        setBranches(nextBranches);
+        setWarehouseId((current) =>
+          nextBranches.some((branch) => branch.id === current)
+            ? current
+            : nextBranches[0]?.id ?? '',
+        );
         if (!nextRoles.some((role) => role.code === 'OPERATOR')) {
           setRoleCodes(nextRoles[0] ? [nextRoles[0].code] : []);
         }
@@ -92,8 +106,9 @@ export function UserCreateForm({ session }: UserCreateFormProps) {
       if (current.includes(code)) {
         return current.filter((item) => item !== code);
       }
-
-      return [...current, code];
+      return code === 'CLIENT'
+        ? ['CLIENT']
+        : [...current.filter((item) => item !== 'CLIENT'), code];
     });
   }
 
@@ -122,6 +137,7 @@ export function UserCreateForm({ session }: UserCreateFormProps) {
         roleCodes: roleCodes.length ? roleCodes : undefined,
         clientIds: scopes?.clientIds.length ? scopes.clientIds : undefined,
         writableClientIds: scopes?.writableClientIds.length ? scopes.writableClientIds : undefined,
+        warehouseId: employeeNeedsBranch ? warehouseId : undefined,
       });
       setCreatedUser(created);
       setForm(emptyUserForm);
@@ -159,6 +175,23 @@ export function UserCreateForm({ session }: UserCreateFormProps) {
             required
           />
         </label>
+        {employeeNeedsBranch ? (
+          <label>
+            <span>Филиал сотрудника</span>
+            <select
+              value={warehouseId}
+              onChange={(event) => setWarehouseId(event.target.value)}
+              required
+            >
+              <option value="">Выберите филиал</option>
+              {branches.map((branch) => (
+                <option key={branch.id} value={branch.id}>
+                  {branch.city} · {branch.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
       </div>
 
       <div className="role-choice-grid" aria-label="Роли пользователя">
@@ -191,7 +224,16 @@ export function UserCreateForm({ session }: UserCreateFormProps) {
 
       {error ? <p className="form-error">{error}</p> : null}
 
-      <button className="primary-button access-submit" type="submit" disabled={isSubmitting || isLoading || roleCodes.length === 0}>
+      <button
+        className="primary-button access-submit"
+        type="submit"
+        disabled={
+          isSubmitting ||
+          isLoading ||
+          roleCodes.length === 0 ||
+          (employeeNeedsBranch && !warehouseId)
+        }
+      >
         <Save size={16} aria-hidden="true" />
         <span>{isSubmitting ? 'Сохранение' : 'Создать пользователя'}</span>
       </button>

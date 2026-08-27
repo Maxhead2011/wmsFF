@@ -19,10 +19,12 @@ import type {
   TsdReceiptReviewItem,
   TsdReceiptReviewResult,
 } from '../../lib/api';
+import { useRememberedClientId, validRememberedClientId } from '../../lib/rememberedClient';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import './tsd-receipt-review.css';
 
 type TsdReceiptReviewPanelProps = {
+  userId: string;
   dashboard: TsdReceiptReviewDashboard | null;
   error?: string;
   isLoading: boolean;
@@ -42,6 +44,7 @@ const dateTimeFormatter = new Intl.DateTimeFormat('ru-RU', {
 });
 
 export function TsdReceiptReviewPanel({
+  userId,
   dashboard,
   error,
   isLoading,
@@ -50,7 +53,7 @@ export function TsdReceiptReviewPanel({
   onRefresh,
 }: TsdReceiptReviewPanelProps) {
   const [query, setQuery] = useState('');
-  const [clientId, setClientId] = useState('');
+  const [clientId, setClientId] = useRememberedClientId(userId);
   const [filter, setFilter] = useState<ReviewFilter>('ALL');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
@@ -66,6 +69,12 @@ export function TsdReceiptReviewPanel({
     dashboard?.items.forEach((item) => map.set(item.client.id, item.client));
     return [...map.values()].sort((left, right) => left.name.localeCompare(right.name, 'ru'));
   }, [dashboard]);
+
+  useEffect(() => {
+    if (!clients.length) return;
+    const nextClientId = validRememberedClientId(clientId, clients);
+    if (nextClientId !== clientId) setClientId(nextClientId);
+  }, [clientId, clients, setClientId]);
 
   const boxIssuesByKey = useMemo(() => {
     const map = new Map<string, TsdReceiptReviewItem[]>();

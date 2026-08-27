@@ -21,6 +21,7 @@ import {
   type SkuSummary,
 } from '../../lib/api';
 import { ConfirmDialog } from '../common/ConfirmDialog';
+import { useRememberedClientId, validRememberedClientId } from '../../lib/rememberedClient';
 
 type OnlineReceiptPanelProps = {
   session: AuthSession;
@@ -39,7 +40,7 @@ type PendingConfirm = {
 
 export function OnlineReceiptPanel({ fixedClientId, readOnly = false, session }: OnlineReceiptPanelProps) {
   const [clients, setClients] = useState<ClientSummary[]>([]);
-  const [clientId, setClientId] = useState(fixedClientId ?? '');
+  const [clientId, setClientId] = useRememberedClientId(session.user.id, { fixedClientId });
   const [overview, setOverview] = useState<OnlineReceiptOverview | null>(null);
   const [selectedBoxKey, setSelectedBoxKey] = useState('');
   const [message, setMessage] = useState('');
@@ -72,7 +73,7 @@ export function OnlineReceiptPanel({ fixedClientId, readOnly = false, session }:
           return;
         }
         setClients(items);
-        setClientId((current) => current || items[0]?.id || '');
+        setClientId((current) => validRememberedClientId(current, items));
       })
       .catch((caught: unknown) => {
         if (active) {

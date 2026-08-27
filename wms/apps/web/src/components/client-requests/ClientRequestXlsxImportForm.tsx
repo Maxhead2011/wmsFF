@@ -14,6 +14,7 @@ import {
   type OutboundRequestXlsxPreview,
 } from '../../lib/api';
 import { requestPriorityOptions } from './clientRequestMeta';
+import { useRememberedClientId } from '../../lib/rememberedClient';
 
 type ClientRequestXlsxImportFormProps = {
   clients: ClientSummary[];
@@ -30,7 +31,9 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
     return new Set(session.user.writableClientIds);
   }, [clients, session.user]);
   const writableClients = clients.filter((client) => writableClientIds.has(client.id));
-  const [clientId, setClientId] = useState(writableClients[0]?.id ?? '');
+  const [clientId, setClientId] = useRememberedClientId(session.user.id, {
+    initialClientId: writableClients[0]?.id ?? '',
+  });
   const [title, setTitle] = useState('');
   const [priority, setPriority] = useState<ClientRequestPriority>('NORMAL');
   const [desiredDate, setDesiredDate] = useState('');

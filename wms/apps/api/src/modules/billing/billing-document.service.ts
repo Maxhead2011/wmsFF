@@ -25,16 +25,24 @@ export class BillingDocumentService {
     }
 
     this.clientScopes.requireClientAccess(user, invoice.clientId, 'read');
+    const invoiceWarehouseId = invoice.warehouseId ?? invoice.request?.warehouseId ?? null;
+    if (
+      user.activeWarehouseId &&
+      !user.roleCodes.includes('CLIENT') &&
+      !user.permissionCodes.includes('system:admin') &&
+      invoiceWarehouseId !== user.activeWarehouseId
+    ) {
+      throw new NotFoundException('Счёт биллинга не найден в активном филиале.');
+    }
+    if (
+      invoice.status === BillingInvoiceStatus.DRAFT &&
+      user.roleCodes.includes('CLIENT') &&
+      !user.permissionCodes.includes('system:admin')
+    ) {
+      throw new NotFoundException('Счет биллинга не найден.');
+    }
 
-    const rows = invoice.items.map((item, index) => ({
-      position: index + 1,
-      description: item.description,
-      unit: item.unit,
-      quantity: Number(item.quantity),
-      unitPriceRub: Number(item.unitPriceRub),
-      totalRub: Number(item.totalRub),
-      serviceDate: item.serviceDate.toISOString(),
-    }));
+    const rows = await this.buildPrintableRows(invoice);
     const payments = invoice.payments
       .filter((payment) => payment.status === BillingPaymentStatus.RECORDED)
       .map((payment) => ({
@@ -48,7 +56,11 @@ export class BillingDocumentService {
     const totalRub = Number(invoice.totalRub);
     const paidRub = Number(invoice.paidRub);
     const remainingRub = roundMoney(totalRub - paidRub);
-    const seller = await this.findSeller();
+    const seller = await this.findSeller(
+      invoice.clientId,
+      invoice,
+      invoiceWarehouseId ?? user.activeWarehouseId,
+    );
     const payload: InvoiceDocumentPayload = {
       invoiceId: invoice.id,
       number: invoice.number,
@@ -126,8 +138,157 @@ export class BillingDocumentService {
     };
   }
 
-  private async findSeller() {
-    return this.ownCompanies ? this.ownCompanies.findDefaultSeller() : BILLING_SELLER;
+  private async findSeller(
+    clientId: string,
+    invoice?: Prisma.BillingInvoiceGetPayload<{ include: typeof invoiceDocumentInclude }>,
+    warehouseId?: string | null,
+  ) {
+    const defaultSeller = this.ownCompanies
+      ? await this.ownCompanies.findSellerForClient(clientId, undefined, warehouseId)
+      : BILLING_SELLER;
+    if (!invoice?.paymentBankAccountId) {
+      return defaultSeller;
+    }
+    return {
+      ...defaultSeller,
+      bankName: invoice.paymentBankName ?? defaultSeller.bankName,
+      bankBik: invoice.paymentBankBik ?? defaultSeller.bankBik,
+      bankInn: invoice.paymentBankInn ?? defaultSeller.bankInn,
+      bankKpp: invoice.paymentBankKpp ?? defaultSeller.bankKpp,
+      bankAccount: invoice.paymentBankAccount ?? defaultSeller.bankAccount,
+      correspondentAccount:
+        invoice.paymentCorrespondentAccount ?? defaultSeller.correspondentAccount,
+    };
+  }
+
+  private async buildPrintableRows(
+    invoice: Prisma.BillingInvoiceGetPayload<{ include: typeof invoiceDocumentInclude }>,
+  ): Promise<InvoiceDocumentPayload['rows']> {
+    const normalizeMergedRows = isMergedInvoiceSourceKey(invoice.sourceKey);
+    const basicRows = invoice.items.map((item) => ({
+      description: item.description,
+      unit: item.unit as string,
+      quantity: Number(item.quantity),
+      unitPriceRub: Number(item.unitPriceRub),
+      totalRub: Number(item.totalRub),
+      serviceDate: item.serviceDate.toISOString(),
+    }));
+    const orderQuantities = new Map<string, number>();
+    for (const item of invoice.items) {
+      const orderId = fbsOrderIdFromDescription(item.description);
+      if (orderId) {
+        orderQuantities.set(orderId, Math.max(1, Number(item.quantity) || 1));
+      }
+    }
+    const fbsItems = invoice.items.filter(
+      (item) => asDocumentRecord(item.charge?.metadata).kind === 'FBS',
+    );
+    const orderIds = [
+      ...new Set(
+        fbsItems.flatMap((item) =>
+          documentStringArray(asDocumentRecord(item.charge?.metadata).orderIds),
+        ),
+      ),
+    ];
+    if (fbsItems.length === 0 || orderIds.length === 0) {
+      return finalizePrintableRows(basicRows, normalizeMergedRows);
+    }
+
+    const links = await this.prisma.fbsOrderRequestLink.findMany({
+      where: { clientId: invoice.clientId, orderId: { in: orderIds } },
+      select: {
+        orderId: true,
+        requestId: true,
+        request: { select: { id: true, number: true } },
+      },
+    });
+    const requestByOrder = new Map(
+      links.map((link) => [
+        link.orderId,
+        { id: link.requestId, number: link.request.number },
+      ]),
+    );
+    const groups = new Map<
+      string,
+      {
+        requestNumber: number | null;
+        orderIds: Set<string>;
+        totalCents: number;
+        serviceDate: string;
+      }
+    >();
+    const processedChargeIds = new Set<string>();
+
+    for (const item of fbsItems) {
+      if (item.chargeId && processedChargeIds.has(item.chargeId)) {
+        continue;
+      }
+      if (item.chargeId) {
+        processedChargeIds.add(item.chargeId);
+      }
+      const itemOrderIds = documentStringArray(
+        asDocumentRecord(item.charge?.metadata).orderIds,
+      );
+      if (itemOrderIds.length === 0) {
+        continue;
+      }
+      const allocations = allocateFbsAmountByRequest(
+        Math.round(Number(item.totalRub) * 100),
+        itemOrderIds,
+        orderQuantities,
+        requestByOrder,
+      );
+      for (const allocation of allocations) {
+        const current = groups.get(allocation.key) ?? {
+          requestNumber: allocation.requestNumber,
+          orderIds: new Set<string>(),
+          totalCents: 0,
+          serviceDate: item.serviceDate.toISOString(),
+        };
+        allocation.orderIds.forEach((orderId) => current.orderIds.add(orderId));
+        current.totalCents += allocation.cents;
+        if (item.serviceDate.toISOString() < current.serviceDate) {
+          current.serviceDate = item.serviceDate.toISOString();
+        }
+        groups.set(allocation.key, current);
+      }
+    }
+
+    const nonFbsRows = invoice.items
+      .filter(
+        (item) =>
+          asDocumentRecord(item.charge?.metadata).kind !== 'FBS' &&
+          !fbsOrderIdFromDescription(item.description),
+      )
+      .map((item) => ({
+        description: item.description,
+        unit: item.unit as string,
+        quantity: Number(item.quantity),
+        unitPriceRub: Number(item.unitPriceRub),
+        totalRub: Number(item.totalRub),
+        serviceDate: item.serviceDate.toISOString(),
+      }));
+    const requestRows = [...groups.values()].map((group) => {
+      const sortedOrderIds = [...group.orderIds].sort((left, right) =>
+        left.localeCompare(right, 'ru-RU', { numeric: true }),
+      );
+      const quantity = Math.max(1, sortedOrderIds.length);
+      const totalRub = group.totalCents / 100;
+      const requestLabel =
+        group.requestNumber === null
+          ? 'FBS без заявки'
+          : `Заявка №${group.requestNumber}`;
+      return {
+        description: `${requestLabel} (заказы: ${sortedOrderIds.map((orderId) => `№${orderId}`).join(', ')})`,
+        unit: 'ORDER',
+        quantity,
+        unitPriceRub: roundMoney(totalRub / quantity),
+        totalRub,
+        serviceDate: group.serviceDate,
+      };
+    });
+
+    return finalizePrintableRows([...requestRows, ...nonFbsRows], normalizeMergedRows);
   }
 }
 
@@ -224,10 +385,21 @@ const invoiceDocumentInclude = {
     },
   },
   items: {
+    include: {
+      charge: {
+        select: {
+          id: true,
+          metadata: true,
+        },
+      },
+    },
     orderBy: [{ serviceDate: 'asc' }, { id: 'asc' }],
   },
   payments: {
     orderBy: [{ paidAt: 'desc' }, { createdAt: 'desc' }],
+  },
+  request: {
+    select: { warehouseId: true },
   },
 } satisfies Prisma.BillingInvoiceInclude;
 
@@ -473,6 +645,140 @@ function formatNumber(value: number) {
 
 function roundMoney(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function positionPrintableRows(
+  rows: Array<Omit<InvoiceDocumentPayload['rows'][number], 'position'>>,
+) {
+  return rows
+    .sort(
+      (left, right) =>
+        left.serviceDate.localeCompare(right.serviceDate) ||
+        left.description.localeCompare(right.description, 'ru-RU', { numeric: true }),
+    )
+    .map((row, index) => ({ ...row, position: index + 1 }));
+}
+
+function finalizePrintableRows(
+  rows: Array<Omit<InvoiceDocumentPayload['rows'][number], 'position'>>,
+  normalizeMergedRows: boolean,
+) {
+  if (!normalizeMergedRows) {
+    return positionPrintableRows(rows);
+  }
+
+  const grouped = new Map<
+    string,
+    Omit<InvoiceDocumentPayload['rows'][number], 'position'>
+  >();
+  for (const row of rows) {
+    const totalRub = roundMoney(row.totalRub);
+    if (totalRub === 0) {
+      continue;
+    }
+    const description = row.description.trim().replace(/\s+/g, ' ');
+    const unitPriceRub = roundMoney(row.unitPriceRub);
+    const key = [
+      description.toLocaleLowerCase('ru-RU'),
+      row.unit,
+      unitPriceRub.toFixed(2),
+    ].join('|');
+    const existing = grouped.get(key);
+    if (!existing) {
+      grouped.set(key, {
+        ...row,
+        description,
+        quantity: roundQuantity(row.quantity),
+        unitPriceRub,
+        totalRub,
+      });
+      continue;
+    }
+    existing.quantity = roundQuantity(existing.quantity + row.quantity);
+    existing.totalRub = roundMoney(existing.totalRub + totalRub);
+    if (row.serviceDate < existing.serviceDate) {
+      existing.serviceDate = row.serviceDate;
+    }
+  }
+
+  return positionPrintableRows([...grouped.values()]);
+}
+
+function isMergedInvoiceSourceKey(sourceKey: string | null) {
+  return sourceKey?.startsWith('invoice-merged:') === true || sourceKey?.startsWith('fbs-merged:') === true;
+}
+
+function roundQuantity(value: number) {
+  return Math.round((value + Number.EPSILON) * 1000) / 1000;
+}
+
+function fbsOrderIdFromDescription(description: string) {
+  const match = description.trim().match(/^FBS-заказ №(.+)$/u);
+  return match?.[1]?.trim() || null;
+}
+
+function allocateFbsAmountByRequest(
+  totalCents: number,
+  orderIds: string[],
+  orderQuantities: Map<string, number>,
+  requestByOrder: Map<string, { id: string; number: number }>,
+) {
+  const grouped = new Map<
+    string,
+    {
+      key: string;
+      requestNumber: number | null;
+      orderIds: string[];
+      weight: number;
+    }
+  >();
+  for (const orderId of [...new Set(orderIds)]) {
+    const request = requestByOrder.get(orderId);
+    const key = request ? `request:${request.id}` : 'request:unlinked';
+    const current = grouped.get(key) ?? {
+      key,
+      requestNumber: request?.number ?? null,
+      orderIds: [],
+      weight: 0,
+    };
+    current.orderIds.push(orderId);
+    current.weight += Math.max(1, orderQuantities.get(orderId) ?? 1);
+    grouped.set(key, current);
+  }
+  const rows = [...grouped.values()];
+  const totalWeight = rows.reduce((sum, row) => sum + row.weight, 0) || rows.length;
+  const shares = rows.map((row) => {
+    const exact = (totalCents * row.weight) / totalWeight;
+    const cents = Math.floor(exact);
+    return { ...row, cents, remainder: exact - cents };
+  });
+  let undistributed = totalCents - shares.reduce((sum, row) => sum + row.cents, 0);
+  for (const row of [...shares].sort((left, right) => right.remainder - left.remainder)) {
+    if (undistributed <= 0) break;
+    row.cents += 1;
+    undistributed -= 1;
+  }
+  return shares;
+}
+
+function asDocumentRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function documentStringArray(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return [
+    ...new Set(
+      value
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ];
 }
 
 function canForceAct(user: AuthUser) {

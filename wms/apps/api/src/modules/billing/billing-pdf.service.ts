@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import pdfMake = require('pdfmake');
 import type { Content, TableCell, TDocumentDefinitions } from 'pdfmake/interfaces';
+import { PDFDocument } from 'pdf-lib';
 import { configurePdfMake } from '../../common/pdf/pdfmake';
 import type { AuthUser } from '../auth/auth.types';
 import { BillingDocumentService, BillingPrintableDocument } from './billing-document.service';
@@ -39,6 +40,24 @@ export class BillingPdfService {
     return this.renderPdf(document, 'act');
   }
 
+  async getCombinedInvoicesPdf(invoiceIds: string[], clientCode: string, user: AuthUser): Promise<BillingPdfFile> {
+    const mergedDocument = await PDFDocument.create();
+
+    for (const invoiceId of invoiceIds) {
+      const invoice = await this.getInvoicePdf(invoiceId, user);
+      const sourceDocument = await PDFDocument.load(invoice.buffer);
+      const sourcePages = await mergedDocument.copyPages(sourceDocument, sourceDocument.getPageIndices());
+      sourcePages.forEach((page) => mergedDocument.addPage(page));
+    }
+
+    const date = new Date().toISOString().slice(0, 10);
+    return {
+      fileName: `Счета_${safePdfFileName(clientCode)}_${date}.pdf`,
+      contentType: 'application/pdf',
+      buffer: Buffer.from(await mergedDocument.save()),
+    };
+  }
+
   private async renderPdf(document: BillingPrintableDocument, kind: 'invoice' | 'act'): Promise<BillingPdfFile> {
     const pdfDocument = pdfMake.createPdf(kind === 'act' ? actDefinition(document) : invoiceDefinition(document));
     const buffer = await pdfDocument.getBuffer();
@@ -49,6 +68,10 @@ export class BillingPdfService {
       buffer,
     };
   }
+}
+
+function safePdfFileName(value: string) {
+  return value.trim().replace(/[^a-zA-Z0-9а-яА-ЯёЁ._-]+/g, '_') || 'клиент';
 }
 
 function invoiceDefinition(document: BillingPrintableDocument): TDocumentDefinitions {
@@ -71,7 +94,7 @@ function invoiceDefinition(document: BillingPrintableDocument): TDocumentDefinit
     invoiceTotals(document),
     totalInWords(document, 'Всего наименований'),
     horizontalLine([0, 14, 0, 16]),
-    invoiceSignaturesBlock(),
+    invoiceSignaturesBlock(document),
   ]);
 }
 
@@ -98,7 +121,7 @@ function actDefinition(document: BillingPrintableDocument): TDocumentDefinitions
       margin: [0, 14, 0, 8],
     },
     horizontalLine([0, 0, 0, 22]),
-    actSignaturesBlock(),
+    actSignaturesBlock(document),
   ]);
 }
 
@@ -308,56 +331,56 @@ function totalInWords(document: BillingPrintableDocument, prefix: string): Conte
   };
 }
 
-function invoiceSignaturesBlock(): Content {
+function invoiceSignaturesBlock(document: BillingPrintableDocument): Content {
   return {
     stack: [
-      signatureRow('Генеральный\nдиректор', true),
-      signatureRow('Бухгалтер', false),
-      signatureRow('Менеджер', false),
+      signatureRow('Генеральный\nдиректор', true, document),
+      signatureRow('Бухгалтер', false, document),
+      signatureRow('Менеджер', false, document),
     ],
   };
 }
 
-function actSignaturesBlock(): Content {
+function actSignaturesBlock(document: BillingPrintableDocument): Content {
   return {
     columns: [
-      signatureColumn('Исполнитель', true),
-      signatureColumn('Заказчик', false),
+      signatureColumn('Исполнитель', true, document),
+      signatureColumn('Заказчик', false, document),
     ],
     columnGap: 36,
   };
 }
 
-function signatureRow(title: string, withAssets: boolean): Content {
+function signatureRow(title: string, withAssets: boolean, document: BillingPrintableDocument): Content {
   return {
     columns: [
       { text: title, bold: true, width: 72, margin: [0, 7, 0, 0] },
-      signatureLineStack(withAssets, 156),
+      signatureLineStack(withAssets, 156, document),
       { text: '', width: 26 },
-      signatureLineStack(false, 204),
+      signatureLineStack(false, 204, document),
     ],
     margin: [0, 0, 0, 15],
   };
 }
 
-function signatureColumn(title: string, withAssets: boolean): Content {
+function signatureColumn(title: string, withAssets: boolean, document: BillingPrintableDocument): Content {
   return {
     stack: [
-      withAssets ? assetsStampStack() : { text: '', margin: [0, 70, 0, 0] },
+      withAssets ? assetsStampStack(document) : { text: '', margin: [0, 70, 0, 0] },
       {
         columns: [
           { text: title, bold: true, width: 82, margin: [0, 4, 0, 0] },
-          signatureLineStack(false, 132),
+          signatureLineStack(false, 132, document),
         ],
       },
     ],
   };
 }
 
-function signatureLineStack(withAssets: boolean, width: number): Content {
+function signatureLineStack(withAssets: boolean, width: number, document: BillingPrintableDocument): Content {
   return {
     stack: [
-      withAssets ? assetsSmallStack() : { text: '', margin: [0, 34, 0, 0] },
+      withAssets ? assetsSmallStack(document) : { text: '', margin: [0, 34, 0, 0] },
       { canvas: [{ type: 'line', x1: 0, y1: 0, x2: width, y2: 0, lineWidth: 0.6 }] },
       { text: 'подпись', style: 'signatureCaption' },
     ],
@@ -365,9 +388,9 @@ function signatureLineStack(withAssets: boolean, width: number): Content {
   } as unknown as Content;
 }
 
-function assetsSmallStack(): Content {
-  const signature = billingAssetDataUrl('signature');
-  const stamp = billingAssetDataUrl('stamp');
+function assetsSmallStack(document: BillingPrintableDocument): Content {
+  const signature = sellerAsset(document, 'signature');
+  const stamp = sellerAsset(document, 'stamp');
   const stack: Content[] = [];
   if (stamp) {
     stack.push({ image: stamp, width: 70, opacity: 0.78, margin: [18, -8, 0, -58] });
@@ -378,9 +401,9 @@ function assetsSmallStack(): Content {
   return stack.length ? { stack } : { text: '', margin: [0, 34, 0, 0] };
 }
 
-function assetsStampStack(): Content {
-  const signature = billingAssetDataUrl('signature');
-  const stamp = billingAssetDataUrl('stamp');
+function assetsStampStack(document: BillingPrintableDocument): Content {
+  const signature = sellerAsset(document, 'signature');
+  const stamp = sellerAsset(document, 'stamp');
   const stack: Content[] = [];
   if (stamp) {
     stack.push({ image: stamp, width: 112, opacity: 0.82, margin: [90, -6, 0, -92] });
@@ -389,6 +412,16 @@ function assetsStampStack(): Content {
     stack.push({ image: signature, width: 124, opacity: 0.9, margin: [76, 6, 0, -4] });
   }
   return stack.length ? { stack, margin: [0, 0, 0, 0] } : { text: '', margin: [0, 70, 0, 0] };
+}
+
+function sellerAsset(document: BillingPrintableDocument, kind: 'signature' | 'stamp') {
+  const seller = document.seller ?? BILLING_SELLER;
+  const selected =
+    kind === 'signature'
+      ? seller.signatureDataUrl
+      : seller.stampDataUrl;
+  if (selected) return selected;
+  return seller.inn === BILLING_SELLER.inn ? billingAssetDataUrl(kind) : null;
 }
 
 function requisitesLine(label: string, value: string): Content {

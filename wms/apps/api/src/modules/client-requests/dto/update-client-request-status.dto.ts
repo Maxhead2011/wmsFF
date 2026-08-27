@@ -1,7 +1,35 @@
 import { ClientRequestStatus } from '@prisma/client';
 import { Type } from 'class-transformer';
-import { IsArray, IsBoolean, IsEnum, IsInt, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
+import {
+  ArrayMaxSize,
+  IsArray,
+  IsBoolean,
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  Min,
+  ValidateNested,
+} from 'class-validator';
 import { PackageClientRequestPlaceDto } from '../../stock/dto/fulfill-client-request.dto';
+
+export class ClientRequestPhysicalStockSourceDto {
+  @IsString()
+  requestItemId!: string;
+
+  @IsOptional()
+  @IsString()
+  boxCode?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  noBox?: boolean;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  quantity!: number;
+}
 
 export class UpdateClientRequestStatusDto {
   @IsEnum(ClientRequestStatus)
@@ -29,14 +57,26 @@ export class UpdateClientRequestStatusDto {
   @Min(0)
   packedUnits?: number;
 
-  // FIX: перевес можно подтвердить только явным повторным действием менеджера.
-  @IsOptional()
-  @IsBoolean()
-  allowOverweightPackages?: boolean;
-
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => PackageClientRequestPlaceDto)
   packages?: PackageClientRequestPlaceDto[];
+
+  /** Явное решение менеджера пропустить ограничение веса упаковочного места. */
+  @IsOptional()
+  @IsBoolean()
+  allowOverweightPackages?: boolean;
+
+  /**
+   * Фактические источники указываются менеджером только после неудачного
+   * штатного закрытия. Можно подтвердить физический короб либо отсутствие
+   * короба; складская операция зафиксирует расхождение отдельным движением.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(5000)
+  @ValidateNested({ each: true })
+  @Type(() => ClientRequestPhysicalStockSourceDto)
+  stockSources?: ClientRequestPhysicalStockSourceDto[];
 }

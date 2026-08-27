@@ -3,7 +3,11 @@ import { ClientRequestStatus, Prisma } from '@prisma/client';
 import { AuditLogService } from '../../common/audit/audit-log.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
-import { TelegramNotificationService } from '../client-notifications/telegram-notification.service';
+import {
+  TelegramNotificationService,
+  telegramNotificationSections,
+  type TelegramNotificationSection,
+} from '../client-notifications/telegram-notification.service';
 
 const CLEANUP_CONFIRMATION = 'ОЧИСТИТЬ';
 const REQUEST_DELETE_CONFIRMATION = 'УДАЛИТЬ ЗАЯВКИ';
@@ -200,8 +204,7 @@ export class ServiceCenterService {
   }
 
   async listRecentSessions() {
-    const events = await this.prisma.auditLog.findMany({
-      where: { action: 'auth.login', entity: 'user' },
+    const sessions = await this.prisma.userSession.findMany({
       include: {
         user: {
           select: {
@@ -216,32 +219,61 @@ export class ServiceCenterService {
           },
         },
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { lastSeenAt: 'desc' },
       take: 80,
     });
 
-    const latestByUser = new Map<string, (typeof events)[number]>();
-    events.forEach((event) => {
-      if (event.userId && !latestByUser.has(event.userId)) {
-        latestByUser.set(event.userId, event);
-      }
-    });
-
-    return [...latestByUser.values()].map((event) => {
-      const payload = asRecord(event.payload);
+    const now = Date.now();
+    return sessions.map((session) => {
       return {
-        userId: event.userId,
-        name: event.user?.name ?? 'Пользователь удален',
-        email: event.user?.email ?? '',
-        client: event.user?.clientScopes.length
-          ? event.user.clientScopes.map((scope) => `${scope.client.code} ${scope.client.name}`).join(', ')
+        id: session.id,
+        userId: session.userId,
+        name: session.user?.name ?? 'Пользователь удален',
+        email: session.user?.email ?? '',
+        client: session.user?.clientScopes.length
+          ? session.user.clientScopes.map((scope) => `${scope.client.code} ${scope.client.name}`).join(', ')
           : 'Все клиенты или не задан',
-        ip: typeof payload?.ip === 'string' ? payload.ip : '',
-        userAgent: typeof payload?.userAgent === 'string' ? payload.userAgent : '',
-        openedAt: event.createdAt,
-        minutesAgo: Math.max(0, Math.round((Date.now() - event.createdAt.getTime()) / 60_000)),
+        ip: session.ipAddress ?? '',
+        userAgent: session.userAgent ?? '',
+        appName: session.appName,
+        browserName: session.browserName,
+        openedAt: session.startedAt,
+        lastSeenAt: session.lastSeenAt,
+        expiresAt: session.expiresAt,
+        isActive: !session.expiresAt || session.expiresAt.getTime() > now,
+        minutesAgo: Math.max(0, Math.round((now - session.lastSeenAt.getTime()) / 60_000)),
       };
     });
+  }
+
+  async closeSession(sessionId: string, user: AuthUser) {
+    const session = await this.prisma.userSession.findUnique({
+      where: { id: sessionId },
+      include: { user: { select: { id: true, name: true, email: true } } },
+    });
+    if (!session) {
+      throw new NotFoundException('Сессия не найдена.');
+    }
+
+    const closedAt = new Date();
+    const updated = await this.prisma.userSession.update({
+      where: { id: sessionId },
+      data: { expiresAt: closedAt, lastSeenAt: closedAt },
+    });
+    await this.auditLog.write({
+      userId: user.id,
+      action: 'service.session.close',
+      entity: 'user-session',
+      entityId: sessionId,
+      payload: {
+        sessionUserId: session.userId,
+        sessionUserName: session.user.name,
+        sessionUserEmail: session.user.email,
+        closedAt: closedAt.toISOString(),
+      },
+    });
+
+    return { id: updated.id, closed: true, closedAt };
   }
 
   async getTelegramSettings(clientId?: string) {
@@ -253,12 +285,16 @@ export class ServiceCenterService {
     return { global, client };
   }
 
-  updateTelegramGlobalSettings(payload: { enabled?: boolean; botToken?: string; fulfillmentChatIds?: string[] }, user: AuthUser) {
+  updateTelegramGlobalSettings(
+    payload: { enabled?: boolean; botToken?: string; fulfillmentChatIds?: string[]; sections?: TelegramNotificationSection[] },
+    user: AuthUser,
+  ) {
     return this.telegram.updateGlobalSettings(
       {
         enabled: payload.enabled === true,
         botToken: payload.botToken ?? '',
         fulfillmentChatIds: payload.fulfillmentChatIds ?? [],
+        sections: payload.sections ?? [...telegramNotificationSections],
       },
       user,
     );
@@ -266,7 +302,7 @@ export class ServiceCenterService {
 
   async updateTelegramClientSettings(
     clientId: string,
-    payload: { enabled?: boolean; chatId?: string },
+    payload: { enabled?: boolean; chatId?: string; sections?: TelegramNotificationSection[] },
     user: AuthUser,
   ) {
     await this.findClient(clientId);
@@ -275,6 +311,7 @@ export class ServiceCenterService {
       {
         enabled: payload.enabled === true,
         chatId: payload.chatId ?? '',
+        sections: payload.sections ?? [...telegramNotificationSections],
       },
       user,
     );
@@ -282,6 +319,10 @@ export class ServiceCenterService {
 
   testTelegramFulfillment() {
     return this.telegram.sendTestToFulfillment();
+  }
+
+  listTelegramGroups() {
+    return this.telegram.listAvailableGroups();
   }
 
   async testTelegramClient(clientId: string) {

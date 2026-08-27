@@ -21,6 +21,8 @@ import {
 } from '../../lib/api';
 import { BulkVolumeEditor } from './BulkVolumeEditor';
 import './catalog.css';
+import { WorkspaceTileGate } from '../common/WorkspaceTileGate';
+import { useRememberedClientId, validRememberedClientId } from '../../lib/rememberedClient';
 
 type CatalogPanelProps = {
   session: AuthSession;
@@ -92,7 +94,7 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
   const canWrite = canUse(session.user, 'skus:write');
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [clientState, setClientState] = useState<LoadState>('idle');
-  const [selectedClientId, setSelectedClientId] = useState('');
+  const [selectedClientId, setSelectedClientId] = useRememberedClientId(session.user.id);
   const [search, setSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
   const [skus, setSkus] = useState<SkuSummary[]>([]);
@@ -129,6 +131,7 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
           return;
         }
         setClients(list);
+        setSelectedClientId((current) => validRememberedClientId(current, list));
         setManualForm((current) => ({
           ...current,
           clientId: current.clientId || selectedClientId || list[0]?.id || '',
@@ -217,7 +220,7 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
     try {
       const result = await syncMarketplaceProducts(session.accessToken, connectionId);
       setMessage(
-        `Товары синхронизированы. Получено: ${result.productsReceived}. Создано: ${result.created}. Обновлено: ${result.updated}.`,
+        `Товары синхронизированы. Получено: ${result.productsReceived}. Создано: ${result.created}. Обновлено: ${result.updated}. Объединено товаров без карточки: ${result.mergedDrafts}.`,
       );
       setReloadKey((current) => current + 1);
     } catch (caught) {
@@ -297,6 +300,16 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
   }
 
   return (
+    <WorkspaceTileGate
+      eyebrow="Номенклатура"
+      title="Каталог товаров"
+      description="Найдите товар, создайте новую карточку или синхронизируйте каталог выбранного клиента с маркетплейсом."
+      tiles={[
+        { title: 'Поиск и карточки', description: 'Быстрый поиск по названию, SKU, артикулу или штрихкоду.', icon: Search, tone: 'blue' },
+        { title: 'Новый товар', description: 'Создать SKU вручную со всеми размерами и признаками.', icon: PlusCircle, tone: 'green' },
+        { title: 'Синхронизация', description: 'Загрузить карточки из подключённого маркетплейса.', icon: RefreshCw, tone: 'violet' },
+      ]}
+    >
     <section className="catalog-panel" aria-label="Каталог товаров">
       <div className="section-heading catalog-panel__heading">
         <div>
@@ -402,7 +415,11 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
                   <span>Клиент</span>
                   <select
                     value={manualForm.clientId}
-                    onChange={(event) => setManualForm({ ...manualForm, clientId: event.target.value })}
+                    onChange={(event) => {
+                      const clientId = event.target.value;
+                      setManualForm({ ...manualForm, clientId });
+                      setSelectedClientId(clientId);
+                    }}
                     required
                   >
                     <option value="">Выберите клиента</option>
@@ -506,6 +523,7 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
         />
       ) : null}
     </section>
+    </WorkspaceTileGate>
   );
 }
 

@@ -7,6 +7,15 @@
   align-items: center;
 }
 
+.own-companies-panel__scope-note {
+  background: color-mix(in srgb, var(--surface, #fff) 92%, #dbeafe);
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  color: #1e3a8a;
+  margin: 0;
+  padding: 10px 12px;
+}
+
 .own-companies-default {
   align-items: center;
   border: 1px solid #d7dde5;
@@ -57,11 +66,86 @@
   grid-column: span 2;
 }
 
+.own-company-form__asset small {
+  color: #64748b;
+  font-size: 12px;
+}
+
 .own-company-form input {
   border: 1px solid #cbd5e1;
   border-radius: 6px;
   min-height: 36px;
   padding: 7px 9px;
+}
+
+.own-company-bank-accounts {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d7dde5;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface, #fff) 94%, #e2e8f0);
+}
+
+.own-company-bank-accounts__heading,
+.own-company-bank-account > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.own-company-bank-accounts__heading > div {
+  display: grid;
+  gap: 3px;
+}
+
+.own-company-bank-accounts__heading small,
+.own-company-bank-accounts__empty {
+  margin: 0;
+  color: #64748b;
+}
+
+.own-company-bank-account {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: var(--surface, #fff);
+}
+
+.own-company-bank-account__default {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+}
+
+.own-company-bank-account__default input {
+  min-height: auto;
+}
+
+.own-company-bank-account__grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.own-company-bank-account__grid label {
+  display: grid;
+  gap: 6px;
+}
+
+.own-company-bank-account__grid span {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.own-company-bank-account__comment {
+  grid-column: span 2;
 }
 
 .own-company-form__checks,
@@ -118,6 +202,64 @@
   display: block;
 }
 
+.own-company-assets {
+  min-width: 210px;
+}
+
+.own-company-assets .link-button {
+  margin: 4px 8px 0 0;
+  padding: 0;
+  border: 0;
+  color: #b91c1c;
+  background: transparent;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.own-company-clients {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #d7dde5;
+  border-radius: 8px;
+}
+
+.own-company-clients > div:first-child {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.own-company-clients p {
+  margin: 3px 0 0;
+  color: #64748b;
+}
+
+.own-company-clients__list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.own-company-clients__list label {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 9px;
+  border-radius: 7px;
+  background: #f8fafc;
+}
+
+.own-company-clients__list label > span,
+.own-company-clients__list label small {
+  display: block;
+}
+
+.own-company-clients__list label small {
+  color: #64748b;
+}
+
 .own-companies-table td > small {
   color: #64748b;
   margin-top: 3px;
@@ -125,6 +267,14 @@
 
 @media (max-width: 980px) {
   .own-company-form__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .own-company-clients__list {
+    grid-template-columns: 1fr;
+  }
+
+  .own-company-bank-account__grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -139,6 +289,23 @@
   }
 
   .own-company-form__wide {
+    grid-column: auto;
+  }
+
+  .own-company-clients__list label {
+    grid-template-columns: 1fr;
+  }
+
+  .own-company-bank-accounts__heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .own-company-bank-account__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .own-company-bank-account__comment {
     grid-column: auto;
   }
 }

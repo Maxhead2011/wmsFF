@@ -1,6 +1,7 @@
 import { Truck, Upload } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { AuthSession, AuthUser } from '../../lib/api';
+import { WorkspaceTileGate } from '../common/WorkspaceTileGate';
 import { LogisticsImportForm } from './LogisticsImportForm';
 import { StockImportForm } from './StockImportForm';
 
@@ -34,6 +35,12 @@ export function ImportPanel({ session }: ImportPanelProps) {
   }
 
   return (
+    <WorkspaceTileGate
+      eyebrow="Управление данными"
+      title="Импорт"
+      description="Выберите, какие данные загрузить. Формат и проверка файла откроются только после выбора операции."
+      tiles={availableTabs.map((tab) => ({ title: tab.label, description: tab.id === 'stock' ? 'Загрузка остатков из XLSX с проверкой строк.' : 'Загрузка и обновление тарифов доставки.', icon: tab.icon, tone: tab.id === 'stock' ? 'green' : 'orange' }))}
+    >
     <section className="import-panel" aria-label="Импорт XLSX">
       <div className="section-heading import-panel__heading">
         <div>
@@ -61,6 +68,7 @@ export function ImportPanel({ session }: ImportPanelProps) {
       {activeTab === 'stock' ? <StockImportForm session={session} /> : null}
       {activeTab === 'logistics' ? <LogisticsImportForm session={session} /> : null}
     </section>
+    </WorkspaceTileGate>
   );
 }
 

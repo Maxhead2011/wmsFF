@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { ClientRequestEventType, ClientRequestPriority, ClientRequestStatus, ClientRequestType } from '@prisma/client';
+import { ClientRequestEventType, ClientRequestPriority, ClientRequestStatus, ClientRequestType, MarketplaceType } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import type { AuthUser } from '../src/modules/auth/auth.types';
 import { ClientScopeService } from '../src/modules/auth/client-scope.service';
@@ -20,13 +20,15 @@ describe('ClientRequestsService', () => {
       expect.objectContaining({
         where: expect.objectContaining({
           clientId: { in: ['client-1', 'client-2'] },
-          status: { not: ClientRequestStatus.DONE },
+          status: {
+            notIn: [ClientRequestStatus.DONE, ClientRequestStatus.CANCELLED],
+          },
         }),
       }),
     );
   });
 
-  it('показывает в архиве только сданные заявки', async () => {
+  it('показывает в архиве сданные и отменённые заявки', async () => {
     const prisma = {
       clientRequest: {
         findMany: vi.fn().mockResolvedValue([]),
@@ -40,7 +42,205 @@ describe('ClientRequestsService', () => {
       expect.objectContaining({
         where: expect.objectContaining({
           clientId: { in: ['client-1'] },
-          status: ClientRequestStatus.DONE,
+          status: {
+            in: [ClientRequestStatus.DONE, ClientRequestStatus.CANCELLED],
+          },
+        }),
+      }),
+    );
+  });
+
+  // ADDED: сохраняем номера поставок WB для новых и старых архивных FBS-заявок.
+  it('возвращает уникальные отсортированные номера поставок WB для архивной FBS-заявки', async () => {
+    const prisma = {
+      clientRequest: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'request-done',
+            status: ClientRequestStatus.DONE,
+            _count: { fbsOrderLinks: 5 },
+          },
+        ]),
+      },
+      fbsOrderRequestLink: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            requestId: 'request-done',
+            clientId: 'client-1',
+            orderId: 'order-current',
+            connectionId: 'connection-1',
+            marketplace: MarketplaceType.WILDBERRIES,
+            lastSupplyId: 'WB-GI-300',
+          },
+          {
+            requestId: 'request-done',
+            clientId: 'client-1',
+            orderId: 'order-legacy-a',
+            connectionId: 'connection-1',
+            marketplace: MarketplaceType.WILDBERRIES,
+            lastSupplyId: null,
+          },
+          {
+            requestId: 'request-done',
+            clientId: 'client-1',
+            orderId: 'order-legacy-b',
+            connectionId: 'connection-1',
+            marketplace: MarketplaceType.WILDBERRIES,
+            lastSupplyId: null,
+          },
+          {
+            requestId: 'request-done',
+            clientId: 'client-1',
+            orderId: 'order-duplicate',
+            connectionId: 'connection-1',
+            marketplace: MarketplaceType.WILDBERRIES,
+            lastSupplyId: 'WB-GI-300',
+          },
+          {
+            requestId: 'request-done',
+            clientId: 'client-1',
+            orderId: 'order-ozon',
+            connectionId: 'connection-ozon',
+            marketplace: MarketplaceType.OZON,
+            lastSupplyId: 'OZON-SUPPLY-1',
+          },
+        ]),
+      },
+      fbsTsdAssembly: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      fbsSupplyPlan: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            clientId: 'client-1',
+            connectionId: 'connection-1',
+            marketplace: MarketplaceType.WILDBERRIES,
+            supplyId: 'WB-GI-200',
+            orderIds: ['order-legacy-a', 'order-duplicate'],
+          },
+          {
+            clientId: 'client-1',
+            connectionId: 'connection-1',
+            marketplace: MarketplaceType.WILDBERRIES,
+            supplyId: 'WB-GI-100',
+            orderIds: JSON.stringify(['order-legacy-b']),
+          },
+          {
+            clientId: 'client-1',
+            connectionId: 'connection-1',
+            marketplace: MarketplaceType.WILDBERRIES,
+            supplyId: 'WB-GI-ignored',
+            orderIds: { invalid: true },
+          },
+        ]),
+      },
+    };
+    const service = new ClientRequestsService(prisma as never, new ClientScopeService(), stockOperations() as never);
+
+    const result = await service.list({ archive: true }, user({ clientIds: ['client-1'] }));
+
+    expect(result[0]).toMatchObject({
+      wbSupplyIds: ['WB-GI-100', 'WB-GI-200', 'WB-GI-300'],
+    });
+    expect(prisma.fbsSupplyPlan.findMany).toHaveBeenCalledWith({
+      where: {
+        OR: [
+          {
+            clientId: 'client-1',
+            connectionId: 'connection-1',
+            marketplace: MarketplaceType.WILDBERRIES,
+          },
+        ],
+      },
+      select: {
+        clientId: true,
+        connectionId: true,
+        marketplace: true,
+        supplyId: true,
+        orderIds: true,
+      },
+    });
+  });
+
+  // ADDED: активные заявки не должны запускать архивный поиск поставок WB.
+  it('не ищет номер поставки WB для активной FBS-заявки', async () => {
+    const prisma = {
+      clientRequest: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'request-active',
+            status: ClientRequestStatus.IN_WORK,
+            _count: { fbsOrderLinks: 1 },
+          },
+        ]),
+      },
+      fbsOrderRequestLink: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            requestId: 'request-active',
+            clientId: 'client-1',
+            orderId: 'order-active',
+            connectionId: 'connection-1',
+            marketplace: MarketplaceType.WILDBERRIES,
+            lastSupplyId: null,
+          },
+        ]),
+      },
+      fbsTsdAssembly: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      fbsSupplyPlan: {
+        findMany: vi.fn(),
+      },
+    };
+    const service = new ClientRequestsService(prisma as never, new ClientScopeService(), stockOperations() as never);
+
+    const result = await service.list({}, user({ clientIds: ['client-1'] }));
+
+    expect(prisma.fbsSupplyPlan.findMany).not.toHaveBeenCalled();
+    expect(result[0]).not.toHaveProperty('wbSupplyIds');
+  });
+
+  it('показывает 100% только когда собраны все активные FBS-заказы заявки', async () => {
+    const prisma = {
+      clientRequest: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'request-1',
+            _count: { fbsOrderLinks: 3 },
+          },
+        ]),
+      },
+      fbsOrderRequestLink: {
+        findMany: vi.fn().mockResolvedValue([
+          { requestId: 'request-1', orderId: 'order-1' },
+          { requestId: 'request-1', orderId: 'order-2' },
+        ]),
+      },
+      fbsTsdAssembly: {
+        findMany: vi.fn().mockResolvedValue([
+          { requestId: 'request-1', orderId: 'order-1', status: 'COMPLETED' },
+          { requestId: 'request-1', orderId: 'order-2', status: 'COMPLETED' },
+          { requestId: 'request-1', orderId: 'removed-order', status: 'COMPLETED' },
+        ]),
+      },
+    };
+    const service = new ClientRequestsService(prisma as never, new ClientScopeService(), stockOperations() as never);
+
+    const result = await service.list({}, user({ clientIds: ['client-1'] }));
+
+    expect(result[0]).toMatchObject({
+      fbsCompletion: {
+        totalOrders: 2,
+        completedOrders: 2,
+        percent: 100,
+        completed: true,
+      },
+    });
+    expect(prisma.fbsOrderRequestLink.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          syncStatus: { notIn: ['REMOVED', 'MOVING'] },
         }),
       }),
     );
@@ -194,8 +394,6 @@ describe('ClientRequestsService', () => {
         boxes: 2,
         pallets: 1,
         packedUnits: 30,
-        // TEST: явное подтверждение должно дойти до складской операции закрытия.
-        allowOverweightPackages: true,
       },
       user({
         clientIds: ['client-1'],
@@ -212,7 +410,6 @@ describe('ClientRequestsService', () => {
         boxes: 2,
         pallets: 1,
         packedUnits: 30,
-        allowOverweightPackages: true,
       }),
       expect.any(Object),
     );
@@ -270,6 +467,94 @@ describe('ClientRequestsService', () => {
     expect(stock.shipClientRequestFromCurrentStock).not.toHaveBeenCalled();
   });
 
+  it('разрешает закрыть заявку без сохраненного выбора по подтвержденному физическому источнику', async () => {
+    const stock = {
+      shipClientRequestFromCurrentStock: vi.fn().mockResolvedValue({
+        status: 'APPLIED',
+        requestId: 'request-1',
+      }),
+    };
+    const tx = {
+      clientRequest: {
+        update: vi.fn().mockResolvedValue({
+          id: 'request-1',
+          clientId: 'client-1',
+          type: ClientRequestType.OUTBOUND,
+          status: ClientRequestStatus.DONE,
+          title: 'FBS — 1 заказ',
+          items: [],
+          files: [],
+          packages: [],
+          client: { id: 'client-1', code: 'CL-1', name: 'Клиент' },
+        }),
+      },
+      clientRequestEvent: {
+        create: vi.fn().mockResolvedValue({ id: 'event-1' }),
+      },
+      clientNotificationPreference: {
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
+      clientNotification: {
+        create: vi.fn(),
+      },
+    };
+    const prisma = {
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'request-1',
+          clientId: 'client-1',
+          type: ClientRequestType.OUTBOUND,
+          status: ClientRequestStatus.PACKED,
+          title: 'FBS — 1 заказ',
+          comment: 'Создано из FBS-заказов: 1001',
+          packages: [],
+        }),
+      },
+      clientRequestBoxSelection: {
+        count: vi.fn().mockResolvedValue(0),
+      },
+      $transaction: vi.fn((callback) => callback(tx)),
+    };
+    const service = new ClientRequestsService(
+      prisma as never,
+      new ClientScopeService(),
+      stock as never,
+    );
+    const stockSources = [
+      {
+        requestItemId: 'item-1',
+        noBox: true,
+        quantity: 1,
+      },
+    ];
+
+    await service.updateStatus(
+      'request-1',
+      {
+        status: ClientRequestStatus.DONE,
+        managerComment: 'Физически без короба',
+        boxes: 1,
+        pallets: 0,
+        packedUnits: 1,
+        stockSources,
+      },
+      user({
+        clientIds: ['client-1'],
+        writableClientIds: ['client-1'],
+        permissionCodes: ['client-requests:read', 'client-requests:write', 'client-requests:status'],
+      }),
+    );
+
+    expect(stock.shipClientRequestFromCurrentStock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: 'request-1',
+        idempotencyKey: 'manual-status-done:request-1',
+      }),
+      expect.any(Object),
+      stockSources,
+    );
+  });
+
   it('предлагает остатки по коробам для ручной товарной DELIVERY-заявки', async () => {
     const prisma = {
       clientRequest: {
@@ -310,6 +595,8 @@ describe('ClientRequestsService', () => {
         ]),
       },
       clientRequestBoxSelection: { findMany: vi.fn().mockResolvedValue([]) },
+      fbsOrderRequestLink: { findMany: vi.fn().mockResolvedValue([]) },
+      fbsTsdAssembly: { findMany: vi.fn().mockResolvedValue([]) },
     };
     const service = new ClientRequestsService(prisma as never, new ClientScopeService(), stockOperations() as never);
 
@@ -322,6 +609,7 @@ describe('ClientRequestsService', () => {
     expect(selection.items[0].boxes).toEqual([
       expect.objectContaining({ boxCode: 'FFL_LKB1807_114', availableQuantity: 3 }),
     ]);
+    expect(selection.items[0].fbsOrders).toEqual([]);
   });
 
   it('закрывает товарную DELIVERY-заявку через выбранные короба', async () => {

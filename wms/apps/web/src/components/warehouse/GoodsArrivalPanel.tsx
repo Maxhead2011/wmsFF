@@ -12,10 +12,11 @@ import {
   type GoodsArrivalEstimate,
   type GoodsArrivalSummary,
 } from '../../lib/api';
+import { useRememberedClientId, validRememberedClientId } from '../../lib/rememberedClient';
 
 export function GoodsArrivalPanel({ session }: { session: AuthSession }) {
   const [clients, setClients] = useState<ClientSummary[]>([]);
-  const [clientId, setClientId] = useState('');
+  const [clientId, setClientId] = useRememberedClientId(session.user.id);
   const [arrivalDate, setArrivalDate] = useState(today());
   const [bagCount, setBagCount] = useState('0');
   const [boxCount, setBoxCount] = useState('0');
@@ -30,7 +31,7 @@ export function GoodsArrivalPanel({ session }: { session: AuthSession }) {
   useEffect(() => {
     void fetchClients(session.accessToken).then((items) => {
       setClients(items);
-      setClientId((current) => current || items[0]?.id || '');
+      setClientId((current) => validRememberedClientId(current, items));
     }).catch((error: unknown) => setMessage(error instanceof Error ? error.message : 'Не удалось загрузить клиентов.'));
   }, [session.accessToken]);
 

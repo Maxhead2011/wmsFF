@@ -1,9 +1,7 @@
 import { BadgeRussianRuble, Boxes, ClipboardList, HandCoins, PackageCheck, ReceiptText } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type {
-  BillingChargeSummary,
   BillingInvoiceSummary,
-  BillingReconciliation,
   ClientRequestSummary,
   StockBalance,
 } from '../../lib/api';
@@ -15,8 +13,6 @@ type ClientCabinetMetricsProps = {
   stock: StockBalance[];
   requests: ClientRequestSummary[];
   invoices: BillingInvoiceSummary[];
-  charges: BillingChargeSummary[];
-  reconciliation: BillingReconciliation | null;
   advanceRub: number;
   onNavigate: (target: ClientCabinetMetricTarget) => void;
   onOpenAdvance: () => void;
@@ -28,8 +24,6 @@ export function ClientCabinetMetrics({
   stock,
   requests,
   invoices,
-  charges,
-  reconciliation,
   advanceRub,
   onNavigate,
   onOpenAdvance,
@@ -37,20 +31,16 @@ export function ClientCabinetMetrics({
   const uniqueSkuCount = new Set(stock.map((balance) => balance.skuId)).size;
   const totalQuantity = stock.reduce((sum, balance) => sum + Number(balance.quantity), 0);
   const activeRequests = requests.filter((request) => !closedRequestStatuses.includes(request.status)).length;
-  const invoiceGrossDebtRub =
-    reconciliation?.totals.grossDebtRub ??
-    invoices
-      .filter((invoice) => invoice.status !== 'CANCELLED')
-      .reduce((sum, invoice) => sum + Math.max(0, Number(invoice.totalRub) - Number(invoice.paidRub)), 0);
-  const debtRub = Math.max(0, invoiceGrossDebtRub + unbilledApprovedChargesRub(charges, invoices) - advanceRub);
+  // «К оплате» — это долг только по уже выставленным счетам.
+  // Черновики и ещё не выставленные начисления не являются задолженностью клиента.
+  const invoiceGrossDebtRub = invoices
+    .filter((invoice) => invoice.status === 'ISSUED')
+    .reduce((sum, invoice) => sum + Math.max(0, Number(invoice.totalRub) - Number(invoice.paidRub)), 0);
+  const debtRub = Math.max(0, invoiceGrossDebtRub - advanceRub);
   const fbsInvoicesRub = invoices
     .filter((invoice) => invoice.status === 'ISSUED' || invoice.status === 'PAID')
     .reduce(
-      (sum, invoice) =>
-        sum +
-        invoice.items
-          .filter((item) => item.charge?.sourceKey?.startsWith('fbs:'))
-          .reduce((invoiceSum, item) => invoiceSum + Number(item.totalRub), 0),
+      (sum, invoice) => sum + fbsInvoiceItemsRub(invoice),
       0,
     );
 
@@ -91,16 +81,30 @@ export function ClientCabinetMetrics({
   );
 }
 
-function unbilledApprovedChargesRub(charges: BillingChargeSummary[], invoices: BillingInvoiceSummary[]) {
-  const invoicedChargeIds = new Set(
-    invoices
-      .filter((invoice) => invoice.status !== 'CANCELLED')
-      .flatMap((invoice) => invoice.items.map((item) => item.chargeId).filter((chargeId): chargeId is string => Boolean(chargeId))),
-  );
+function fbsInvoiceItemsRub(invoice: BillingInvoiceSummary) {
+  const hasFbsMarker =
+    isFbsSourceKey(invoice.sourceKey) ||
+    invoice.items.some((item) => isFbsSourceKey(item.charge?.sourceKey) || /\bFBS\b/i.test(item.description));
 
-  return charges
-    .filter((charge) => charge.status === 'APPROVED' && !invoicedChargeIds.has(charge.id))
-    .reduce((sum, charge) => sum + Number(charge.totalRub), 0);
+  if (!hasFbsMarker) {
+    return 0;
+  }
+
+  return invoice.items
+    .filter((item) => {
+      if (isFbsSourceKey(item.charge?.sourceKey) || /\bFBS\b/i.test(item.description)) {
+        return true;
+      }
+
+      // В объединённых FBS-счетах строки первичной обработки и перемаркировки
+      // могут не иметь chargeId, но относятся к тем же FBS-заказам.
+      return /^(Первичная обработка|Перемаркировка)/i.test(item.description.trim());
+    })
+    .reduce((sum, item) => sum + Number(item.totalRub), 0);
+}
+
+function isFbsSourceKey(sourceKey: string | null | undefined) {
+  return Boolean(sourceKey && (/^fbs[-:]/i.test(sourceKey) || /^fbs$/i.test(sourceKey)));
 }
 
 function MetricTile({

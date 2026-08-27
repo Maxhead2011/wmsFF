@@ -33,4 +33,18 @@ export class UpsertMarketplaceConnectionDto {
   @IsString()
   @Length(1, 500)
   comment?: string;
+
+  @IsOptional()
+  @ValidateIf((_object, value) => value !== '')
+  @IsString()
+  fbsExecutionWarehouseId?: string;
+
+  @IsOptional()
+  @ValidateIf((_object, value) => value !== '')
+  @IsString()
+  fbsDropoffWarehouseId?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  fbsAutoRouteNewWarehouses?: boolean;
 }

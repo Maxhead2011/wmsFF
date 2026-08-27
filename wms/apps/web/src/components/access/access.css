@@ -10,6 +10,8 @@
   align-items: center;
   margin-bottom: 14px;
 }
+.access-topic-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
+.access-topic-tile { --access-tone:#246fdf; display:grid; grid-template-columns:auto minmax(0,1fr) auto; min-height:160px; align-items:center; gap:15px; overflow:hidden; border:1px solid color-mix(in srgb,var(--access-tone) 28%,var(--line)); border-radius:20px; background:radial-gradient(circle at 96% 6%,color-mix(in srgb,var(--access-tone) 16%,transparent),transparent 35%),color-mix(in srgb,var(--surface) 97%,#dbeafe); color:var(--ink); padding:20px; text-align:left; transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease; }.access-topic-tile:hover,.access-topic-tile:focus-visible { border-color:color-mix(in srgb,var(--access-tone) 66%,var(--line)); box-shadow:0 16px 34px color-mix(in srgb,var(--access-tone) 17%,transparent); outline:0; transform:translateY(-3px); }.access-topic-tile__icon { display:grid; width:56px; height:56px; place-items:center; border-radius:18px; background:var(--access-tone); color:#fff; }.access-topic-tile__content { display:grid; min-width:0; gap:6px; }.access-topic-tile__content small { color:var(--access-tone); font-size:10px; font-weight:900; letter-spacing:.07em; text-transform:uppercase; }.access-topic-tile__content strong { font-size:clamp(19px,1.7vw,26px); letter-spacing:-.035em; line-height:1.06; }.access-topic-tile__content>span { color:var(--muted); font-size:12px; line-height:1.4; }.access-topic-tile>svg { color:var(--access-tone); }.access-topic-tile--roles { --access-tone:#9b4fcc; background:radial-gradient(circle at 96% 6%,color-mix(in srgb,#9b4fcc 16%,transparent),transparent 35%),color-mix(in srgb,var(--surface) 97%,#f3e8ff); }.access-topic-tile--scopes { --access-tone:#14804a; background:radial-gradient(circle at 96% 6%,color-mix(in srgb,#14804a 16%,transparent),transparent 35%),color-mix(in srgb,var(--surface) 97%,#dcfce7); }.access-topic-tile--tsd { --access-tone:#0e7490; background:radial-gradient(circle at 96% 6%,color-mix(in srgb,#0e7490 16%,transparent),transparent 35%),color-mix(in srgb,var(--surface) 97%,#cffafe); }.access-topic-tile--printers { --access-tone:#b87b0d; background:radial-gradient(circle at 96% 6%,color-mix(in srgb,#b87b0d 16%,transparent),transparent 35%),color-mix(in srgb,var(--surface) 97%,#fef3c7); }
 
 .access-tabs,
 .access-segments {
@@ -51,6 +53,8 @@
   color: var(--red-dark);
   box-shadow: 0 1px 2px rgb(15 23 42 / 0.12);
 }
+.access-tabs__back { display:inline-flex; align-items:center; gap:5px; }
+@media (max-width:900px) { .access-topic-grid { grid-template-columns:1fr; } }
 
 .access-form {
   display: grid;

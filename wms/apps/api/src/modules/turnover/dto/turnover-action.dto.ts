@@ -7,6 +7,7 @@ export enum TurnoverActionKind {
   TRANSFER = 'TRANSFER',
   UTILIZE = 'UTILIZE',
   HOLD = 'HOLD',
+  REPLACE_BARCODE = 'REPLACE_BARCODE', // ADDED: correct a wrongly received SKU inside one box.
 }
 
 export class TurnoverActionDto {
@@ -32,6 +33,14 @@ export class TurnoverActionDto {
   @IsOptional()
   @IsString()
   sourceBoxCode?: string;
+
+  @IsOptional()
+  @IsString()
+  sourceBalanceId?: string;
+
+  @IsOptional()
+  @IsString()
+  targetBarcode?: string;
 
   @IsOptional()
   @IsString()

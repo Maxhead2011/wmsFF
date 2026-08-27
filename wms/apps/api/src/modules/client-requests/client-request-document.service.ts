@@ -5,6 +5,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { clientRequestPackageInclude } from './client-request-packages.include';
+import { assertWarehouseAccess } from './client-request-warehouse-scope';
 
 @Injectable()
 export class ClientRequestDocumentService {
@@ -24,6 +25,7 @@ export class ClientRequestDocumentService {
     }
 
     this.clientScopes.requireClientAccess(user, request.clientId, 'read');
+    assertWarehouseAccess(user, request, 'read', 'Заявка не найдена в выбранном филиале.');
 
     const rows = request.items.map((item, index) => ({
       position: index + 1,

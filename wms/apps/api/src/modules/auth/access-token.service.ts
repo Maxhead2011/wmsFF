@@ -1,6 +1,6 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHmac, timingSafeEqual } from 'crypto';
+import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import type { TokenPayload } from './auth.types';
 
 const TOKEN_TTL_SECONDS = 60 * 60 * 8;
@@ -47,6 +47,10 @@ export class AccessTokenService {
     }
 
     return payload;
+  }
+
+  fingerprint(token: string) {
+    return createHash('sha256').update(token).digest('hex');
   }
 
   private signParts(header: string, body: string) {

@@ -67,7 +67,7 @@ export function BillingPaymentForm({ invoices, session, onPaid }: BillingPayment
   }
 
   return (
-    <form className="billing-form" onSubmit={(event) => void submit(event)}>
+    <form className="billing-form billing-form--payment" onSubmit={(event) => void submit(event)}>
       <div className="billing-fields billing-fields--payment">
         <label>
           <span>Счет</span>

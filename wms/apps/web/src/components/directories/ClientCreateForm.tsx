@@ -9,10 +9,12 @@ import {
   type AuthSession,
   type ClientKind,
   type ClientSummary,
+  type ClientStockBalanceMode,
   type CreateClientPayload,
   type UserSummary,
 } from '../../lib/api';
 import { DirectoryResultCard } from './DirectoryResultCard';
+import { RequisitesDocumentImport } from '../requisites/RequisitesDocumentImport';
 
 type ClientCreateFormProps = {
   session: AuthSession;
@@ -42,8 +44,10 @@ const emptyClientForm = {
   correspondentAccount: '',
   storageAccountingEnabled: false,
   storesWithoutBoxes: false,
+  stockBalanceMode: 'PALLET_SORT' as ClientStockBalanceMode,
   onlineReceiptVisibleToClient: false,
   fbsCalculatorEnabled: false,
+  relabelingEnabled: false,
   fulfillmentManagerUserId: '',
 };
 
@@ -216,6 +220,32 @@ export function ClientCreateForm({ session }: ClientCreateFormProps) {
           </div>
         </div>
 
+        <RequisitesDocumentImport
+          accessToken={session.accessToken}
+          target="client"
+          disabled={isSubmitting}
+          onImported={(fields) => {
+            setForm((current) => ({
+              ...current,
+              clientKind: fields.clientKind,
+              name: fields.name || fields.shortName || current.name,
+              legalName: fields.legalName || fields.fullName || current.legalName,
+              inn: fields.inn || current.inn,
+              kpp: fields.kpp || current.kpp,
+              ogrn: fields.ogrn || current.ogrn,
+              legalAddress: fields.legalAddress || current.legalAddress,
+              actualAddress: fields.actualAddress || current.actualAddress,
+              phone: fields.phone || current.phone,
+              email: fields.email || current.email,
+              bankName: fields.bankName || current.bankName,
+              bankBik: fields.bankBik || current.bankBik,
+              bankAccount: fields.bankAccount || current.bankAccount,
+              correspondentAccount: fields.correspondentAccount || current.correspondentAccount,
+            }));
+            setError('');
+          }}
+        />
+
         <div className="directory-fields directory-fields--client">
           <label>
             <span>Тип клиента</span>
@@ -280,6 +310,14 @@ export function ClientCreateForm({ session }: ClientCreateFormProps) {
             />
             <span>Показывать калькулятор стоимости в FBS</span>
           </label>
+          <label className="directory-checkbox">
+            <input
+              checked={form.relabelingEnabled}
+              type="checkbox"
+              onChange={(event) => setForm({ ...form, relabelingEnabled: event.target.checked })}
+            />
+            <span>Возможна переклейка товаров</span>
+          </label>
           <label>
             <span>Вид приемки</span>
             <select
@@ -290,6 +328,29 @@ export function ClientCreateForm({ session }: ClientCreateFormProps) {
               <option value="WITHOUT_BOXES">Без коробов, поштучно</option>
             </select>
           </label>
+          {!form.storesWithoutBoxes ? (
+            <fieldset className="client-stock-mode">
+              <legend>Какие остатки учитывать</legend>
+              <label>
+                <input
+                  checked={form.stockBalanceMode === 'PALLET_SORT'}
+                  name="stockBalanceMode"
+                  type="radio"
+                  onChange={() => setForm({ ...form, stockBalanceMode: 'PALLET_SORT' })}
+                />
+                <span><strong>На паллетсортах</strong><small>Только размещённые короба — в интерфейсе и при обмене с WB.</small></span>
+              </label>
+              <label>
+                <input
+                  checked={form.stockBalanceMode === 'BOXES'}
+                  name="stockBalanceMode"
+                  type="radio"
+                  onChange={() => setForm({ ...form, stockBalanceMode: 'BOXES' })}
+                />
+                <span><strong>По всем коробам</strong><small>Все активные короба, даже без паллетсорта.</small></span>
+              </label>
+            </fieldset>
+          ) : null}
           <label>
             <span>Менеджер фулфилмента</span>
             <select
@@ -508,8 +569,10 @@ function compactPayload(form: typeof emptyClientForm): CreateClientPayload {
     ...optionalString('correspondentAccount', form.correspondentAccount),
     storageAccountingEnabled: form.storageAccountingEnabled,
     storesWithoutBoxes: form.storesWithoutBoxes,
+    stockBalanceMode: form.stockBalanceMode,
     onlineReceiptVisibleToClient: form.onlineReceiptVisibleToClient,
     fbsCalculatorEnabled: form.fbsCalculatorEnabled,
+    relabelingEnabled: form.relabelingEnabled,
     ...optionalString('fulfillmentManagerUserId', form.fulfillmentManagerUserId),
   };
 }

@@ -1,4 +1,4 @@
-import { Activity, AlertTriangle, Boxes, CheckCircle2, ClipboardList, Edit3, FileDown, FileSpreadsheet, FileText, FileUp, PackageCheck, RefreshCw, Search, Send, Truck, Undo2, XCircle } from 'lucide-react';
+import { Activity, AlertTriangle, Boxes, CheckCircle2, ClipboardList, Edit3, FileDown, FileSpreadsheet, FileText, FileUp, MapPinned, PackageCheck, RefreshCw, Search, Send, ShieldCheck, Truck, Undo2, XCircle } from 'lucide-react';
 import {
   type ClientRequestFileSummary,
   type ClientRequestStatus,
@@ -14,12 +14,18 @@ import {
 
 type ClientRequestsTableProps = {
   items: ClientRequestSummary[];
+  selectableRequestIds?: Set<string>;
+  selectedRequestIds?: Set<string>;
+  onRequestSelectionChange?: (requestIds: Set<string>) => void;
   canChangeStatus: boolean;
   canPickOutbound: boolean;
   canCancelRequests: boolean;
   canEditAnyRequest: boolean;
   canRefreshPickInstruction: boolean;
   refreshingInstructionId?: string | null;
+  syncingTsdRequestId?: string | null;
+  checkingSupplyRequestId?: string | null;
+  routeLoadingRequestId?: string | null;
   onStatusChange: (requestId: string, status: ClientRequestStatus) => void;
   onCancelRequest: (request: ClientRequestSummary) => void;
   onEditRequest: (request: ClientRequestSummary) => void;
@@ -27,10 +33,14 @@ type ClientRequestsTableProps = {
   onDownloadRequestItems?: (request: ClientRequestSummary) => void;
   onDownloadOriginalFile?: (request: ClientRequestSummary, file: ClientRequestFileSummary) => void;
   onOpenOnlineExecution?: (request: ClientRequestSummary) => void;
+  onOpenFbsOrders?: (request: ClientRequestSummary) => void;
+  onOpenFbsRoute?: (request: ClientRequestSummary) => void;
   onSelectManualBoxes?: (request: ClientRequestSummary) => void;
   onOpenFbsBoxSearch?: (request: ClientRequestSummary) => void;
   onOpenPickInstruction?: (request: ClientRequestSummary) => void;
   onRefreshPickInstruction?: (request: ClientRequestSummary) => void;
+  onSyncTsd?: (request: ClientRequestSummary) => void;
+  onCheckSupplyConsistency?: (request: ClientRequestSummary) => void;
   onDownloadPickInstruction?: (request: ClientRequestSummary) => void;
   onDownloadWbProducts?: (request: ClientRequestSummary) => void;
   onDownloadWbPackages?: (request: ClientRequestSummary) => void;
@@ -48,14 +58,28 @@ const dateFormatter = new Intl.DateTimeFormat('ru-RU', {
   year: 'numeric',
 });
 
+const createdAtFormatter = new Intl.DateTimeFormat('ru-RU', {
+  day: '2-digit',
+  month: '2-digit',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
 export function ClientRequestsTable({
   items,
+  selectableRequestIds = new Set<string>(),
+  selectedRequestIds = new Set<string>(),
+  onRequestSelectionChange,
   canChangeStatus,
   canPickOutbound,
   canCancelRequests,
   canEditAnyRequest,
   canRefreshPickInstruction,
   refreshingInstructionId,
+  syncingTsdRequestId,
+  checkingSupplyRequestId,
+  routeLoadingRequestId,
   onStatusChange,
   onCancelRequest,
   onEditRequest,
@@ -63,10 +87,14 @@ export function ClientRequestsTable({
   onDownloadRequestItems,
   onDownloadOriginalFile,
   onOpenOnlineExecution,
+  onOpenFbsOrders,
+  onOpenFbsRoute,
   onSelectManualBoxes,
   onOpenFbsBoxSearch,
   onOpenPickInstruction,
   onRefreshPickInstruction,
+  onSyncTsd,
+  onCheckSupplyConsistency,
   onDownloadPickInstruction,
   onDownloadWbProducts,
   onDownloadWbPackages,
@@ -77,11 +105,50 @@ export function ClientRequestsTable({
   onPackageOutbound,
   onShipOutbound,
 }: ClientRequestsTableProps) {
+  const selectableItems = items.filter((request) =>
+    selectableRequestIds.has(request.id),
+  );
+  const showRequestSelection =
+    Boolean(onRequestSelectionChange) && selectableItems.length > 0;
+  const allSelectableSelected =
+    selectableItems.length > 0 &&
+    selectableItems.every((request) => selectedRequestIds.has(request.id));
+  function toggleAllSelectable() {
+    if (!onRequestSelectionChange) return;
+    const next = new Set(selectedRequestIds);
+    if (allSelectableSelected) {
+      selectableItems.forEach((request) => next.delete(request.id));
+    } else {
+      selectableItems.forEach((request) => next.add(request.id));
+    }
+    onRequestSelectionChange(next);
+  }
+
+  function toggleRequest(requestId: string) {
+    if (!onRequestSelectionChange || !selectableRequestIds.has(requestId)) {
+      return;
+    }
+    const next = new Set(selectedRequestIds);
+    if (next.has(requestId)) next.delete(requestId);
+    else next.add(requestId);
+    onRequestSelectionChange(next);
+  }
+
   return (
     <div className="client-request-table-wrap">
       <table className="data-table client-request-table">
         <thead>
           <tr>
+            {showRequestSelection ? (
+              <th className="client-request-table__select-heading">
+                <input
+                  type="checkbox"
+                  checked={allSelectableSelected}
+                  onChange={toggleAllSelectable}
+                  aria-label="Выбрать все незавершённые FBS-заявки"
+                />
+              </th>
+            ) : null}
             <th className="client-request-table__request-heading">Заявка</th>
             <th className="client-request-table__client-heading">Клиент</th>
             <th className="client-request-table__composition-heading">Состав</th>
@@ -96,14 +163,51 @@ export function ClientRequestsTable({
           {items.map((request) => {
             const originalFile = findOriginalRequestFile(request);
             const emergencyClosed = isEmergencyClosedRequest(request);
+            const formattedRequestNumber = formatRequestNumber(request.number);
+            const requestNumberPrefix = formattedRequestNumber.slice(0, -3);
+            const requestNumberAccent = formattedRequestNumber.slice(-3);
+            const transferOrigin = parseFbsTransferOrigin(request.comment);
 
             return (
             <tr
-              className={`client-request-row client-request-row--${requestStatusTone(request.status)}`}
               key={request.id}
+              className={`client-request-row client-request-row--${requestStatusTone(request.status)}`}
             >
+              {showRequestSelection ? (
+                <td
+                  className="client-request-table__select-cell"
+                  data-label="В хвосты"
+                >
+                  {selectableRequestIds.has(request.id) ? (
+                    <input
+                      type="checkbox"
+                      checked={selectedRequestIds.has(request.id)}
+                      onChange={() => toggleRequest(request.id)}
+                      aria-label={`Выбрать FBS-заявку №${formatRequestNumber(request.number)}`}
+                    />
+                  ) : null}
+                </td>
+              ) : null}
               <td className="client-request-table__request-cell" data-label="Заявка">
-                <span className="client-request-number">№{formatRequestNumber(request.number)}</span>
+                <span className="client-request-number" aria-label={`Заявка №${formattedRequestNumber}`}>
+                  <span className="client-request-number__prefix">№{requestNumberPrefix}</span>
+                  <strong className="client-request-number__accent">{requestNumberAccent}</strong>
+                </span>
+                {/* ADDED: shipped and archived requests share this table, so the WB supply stays visible. */}
+                {request.status === 'DONE' && request.wbSupplyIds?.length ? (
+                  <span className="client-request-wb-supplies">
+                    <span>{request.wbSupplyIds.length === 1 ? 'Поставка WB' : 'Поставки WB'}</span>
+                    {request.wbSupplyIds.map((supplyId) => (
+                      <strong key={supplyId}>{supplyId}</strong>
+                    ))}
+                  </span>
+                ) : null}
+                {transferOrigin ? (
+                  <span className="client-request-transfer-origin" title={request.comment ?? undefined}>
+                    <strong>Из заявок: {transferOrigin.sourceRequests}</strong>
+                    <span>Из поставок: {transferOrigin.sourceSupplies}</span>
+                  </span>
+                ) : null}
                 {onOpenDocument ? (
                   <button
                     className="client-request-title client-request-title--button"
@@ -120,8 +224,37 @@ export function ClientRequestsTable({
                 <span className="client-request-list-meta">
                   {requestTypeLabel(request.type)} · {requestPriorityLabel(request.priority)}
                 </span>
-                <span className="client-request-list-meta">Город: {request.destinationCity ?? '-'}</span>
-                {request.comment ? (
+                <span className="client-request-city">
+                  <span>Склад</span>
+                  <strong>{request.destinationCity ?? '-'}</strong>
+                </span>
+                <span className="client-request-list-meta">
+                  Создана: {createdAtFormatter.format(new Date(request.createdAt))}
+                </span>
+                {onOpenFbsOrders && isFbsRequest(request) ? (
+                  <button
+                    className="client-request-row-fbs-link"
+                    type="button"
+                    onClick={() => onOpenFbsOrders(request)}
+                    title="Открыть FBS-заказы этой заявки"
+                  >
+                    <Activity size={15} aria-hidden="true" />
+                    <span>К заказам FBS</span>
+                  </button>
+                ) : null}
+                {onOpenFbsRoute && isFbsRequest(request) ? (
+                  <button
+                    className="client-request-row-fbs-link client-request-row-fbs-link--route"
+                    type="button"
+                    onClick={() => onOpenFbsRoute(request)}
+                    disabled={routeLoadingRequestId === request.id}
+                    title="Показать живой маршрут: паллетсорты, короба и недоступные позиции"
+                  >
+                    <MapPinned size={15} aria-hidden="true" />
+                    <span>{routeLoadingRequestId === request.id ? 'Открываю маршрут' : 'Маршрут'}</span>
+                  </button>
+                ) : null}
+                {request.comment && !transferOrigin ? (
                   <span className="client-request-list-comment" title={request.comment}>{request.comment}</span>
                 ) : null}
               </td>
@@ -131,6 +264,17 @@ export function ClientRequestsTable({
               </td>
               <td className="client-request-table__composition-cell" data-label="Состав">
                 <span className="client-request-items-count">{itemsCountSummary(request)}</span>
+                {request.fbsCompletion ? (
+                  <span
+                    className={`client-request-fbs-completion ${
+                      request.fbsCompletion.completed ? 'client-request-fbs-completion--done' : ''
+                    }`}
+                  >
+                    {request.fbsCompletion.completed
+                      ? `Выполнено 100% · ${request.fbsCompletion.completedOrders} из ${request.fbsCompletion.totalOrders} заказов`
+                      : `FBS собрано ${request.fbsCompletion.completedOrders} из ${request.fbsCompletion.totalOrders} · ${request.fbsCompletion.percent}%`}
+                  </span>
+                ) : null}
                 <span className="client-request-items-preview">{itemsSummary(request)}</span>
                 {request.packages.length ? (
                   <span className="request-package-summary">{packagesSummary(request)}</span>
@@ -200,10 +344,22 @@ export function ClientRequestsTable({
                            className="client-request-action-button client-request-action-button--fbs-box-search"
                            type="button"
                            onClick={() => onOpenFbsBoxSearch(request)}
-                           title="Показать короба и номера FBS-заказов, товар которых в них хранится"
+                           title="Показать складские остатки по товарам FBS-заявки"
                          >
                            <Search size={15} aria-hidden="true" />
-                           <span>Найти короба FBS</span>
+                           <span>Остатки FBS</span>
+                         </button>
+                       ) : null}
+                       {onCheckSupplyConsistency && isFbsRequest(request) ? (
+                         <button
+                           className="client-request-action-button client-request-action-button--supply-check"
+                           type="button"
+                           onClick={() => onCheckSupplyConsistency(request)}
+                           disabled={checkingSupplyRequestId === request.id}
+                           title="Сравнить состав этой заявки с фактическим составом поставки Wildberries"
+                         >
+                           <ShieldCheck size={15} aria-hidden="true" />
+                           <span>{checkingSupplyRequestId === request.id ? 'Проверяю WB' : 'Проверить с WB'}</span>
                          </button>
                        ) : null}
                        {onSelectManualBoxes && canSelectManualBoxes(request) ? (
@@ -228,16 +384,36 @@ export function ClientRequestsTable({
                           <span>Инструкция</span>
                         </button>
                       ) : null}
-                      {onRefreshPickInstruction && canRefreshPickInstruction && request.type === 'OUTBOUND' ? (
+                      {onSyncTsd && canSyncTsdRequest(request) ? (
+                        <button
+                          className="client-request-action-button client-request-action-button--sync-tsd"
+                          type="button"
+                          onClick={() => onSyncTsd(request)}
+                          disabled={syncingTsdRequestId === request.id}
+                          title="Обновить заявку в очереди ТСД"
+                        >
+                          <RefreshCw size={15} aria-hidden="true" />
+                          <span>{syncingTsdRequestId === request.id ? 'Синхронизирую' : 'В ТСД'}</span>
+                        </button>
+                      ) : null}
+                      {onRefreshPickInstruction && canRefreshPickInstruction && canSyncTsdRequest(request) ? (
                         <button
                           className="client-request-action-button client-request-action-button--refresh-instruction"
                           type="button"
                           onClick={() => onRefreshPickInstruction(request)}
                           disabled={refreshingInstructionId === request.id}
-                          title="Обновить складскую инструкцию"
+                          title={isFbsRequest(request)
+                            ? 'Проверить состав заявки, восстановить недостающие задания и маршруты до паллет-сортов'
+                            : 'Принудительно пересчитать оставшиеся товары и короба по текущим остаткам'}
                         >
                           <RefreshCw size={15} aria-hidden="true" />
-                          <span>{refreshingInstructionId === request.id ? 'Обновляю' : 'Обновить инструкцию'}</span>
+                          <span>{refreshingInstructionId === request.id
+                            ? isFbsRequest(request)
+                              ? 'Проверяю паллет-сорты'
+                              : 'Пересчитываю заявку'
+                            : isFbsRequest(request)
+                              ? 'Проверить паллет-сорты'
+                              : 'Пересчитать заявку'}</span>
                         </button>
                       ) : null}
                       {onDownloadPickInstruction && request.type === 'OUTBOUND' ? (
@@ -246,7 +422,7 @@ export function ClientRequestsTable({
                           type="button"
                           onClick={() => onDownloadPickInstruction(request)}
                           title={isFbsRequest(request)
-                            ? 'Скачать лист подбора с QR/ШК, полученными из Wildberries'
+                            ? 'Скачать лист подбора FBS для маркетплейса заявки'
                             : 'Скачать Excel-инструкцию сборки'}
                         >
                           <FileDown size={15} aria-hidden="true" />
@@ -424,13 +600,22 @@ function canShowWarehouseActions(request: ClientRequestSummary) {
   return request.type === 'OUTBOUND' || canSelectManualBoxes(request) || canRunFulfillment(request);
 }
 
+function canSyncTsdRequest(request: ClientRequestSummary) {
+  return request.type === 'OUTBOUND' && !['DONE', 'CANCELLED', 'REJECTED'].includes(request.status);
+}
+
 function canCancelRequest(request: ClientRequestSummary) {
   return request.type === 'OUTBOUND' && ['SUBMITTED', 'IN_REVIEW', 'APPROVED'].includes(request.status);
 }
 
 function isFbsRequest(request: ClientRequestSummary) {
-  return request.title.trim().toLocaleUpperCase('ru-RU').startsWith('FBS')
-    || request.comment?.toLocaleLowerCase('ru-RU').includes('создано из fbs-заказов:') === true;
+  return (
+    (request._count?.fbsOrderLinks ?? 0) > 0 ||
+    request.title.trim().toLocaleUpperCase('ru-RU').startsWith('FBS') ||
+    request.comment
+      ?.toLocaleLowerCase('ru-RU')
+      .includes('создано из fbs-заказов:') === true
+  );
 }
 
 function canSelectManualBoxes(request: ClientRequestSummary) {
@@ -438,12 +623,27 @@ function canSelectManualBoxes(request: ClientRequestSummary) {
     (request.type === 'OUTBOUND' || request.type === 'DELIVERY') &&
     request.items.length > 0 &&
     ['SUBMITTED', 'IN_REVIEW', 'APPROVED', 'IN_WORK'].includes(request.status) &&
+    !request.client.storesWithoutBoxes &&
     !request.comment?.toLocaleLowerCase('ru-RU').includes('создано из excel:')
   );
 }
 
 function formatRequestNumber(value: number) {
   return String(value).padStart(6, '0');
+}
+
+function parseFbsTransferOrigin(comment: string | null | undefined) {
+  if (!comment) return null;
+
+  const match = comment.match(
+    /\u0438\u0437 \u0437\u0430\u044f\u0432\u043e\u043a\s+(.+?)\s+\u0438 \u043f\u043e\u0441\u0442\u0430\u0432\u043e\u043a\s+(.+?)\s+\u0432 \u043f\u043e\u0441\u0442\u0430\u0432\u043a\u0443\s+([^\s:]+)/iu,
+  );
+  if (!match) return null;
+
+  return {
+    sourceRequests: match[1]!.trim(),
+    sourceSupplies: match[2]!.trim(),
+  };
 }
 
 function canDownloadMarketplaceTemplates(request: ClientRequestSummary) {

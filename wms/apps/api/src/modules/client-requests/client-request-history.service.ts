@@ -6,6 +6,7 @@ import { ClientScopeService } from '../auth/client-scope.service';
 import { isClientNotificationEnabled } from '../client-notifications/client-notification-preferences';
 import { TelegramNotificationService } from '../client-notifications/telegram-notification.service';
 import { CreateClientRequestCommentDto } from './dto/create-client-request-comment.dto';
+import { assertWarehouseAccess } from './client-request-warehouse-scope';
 
 @Injectable()
 export class ClientRequestHistoryService {
@@ -18,6 +19,7 @@ export class ClientRequestHistoryService {
   async getTimeline(requestId: string, user: AuthUser) {
     const request = await this.getRequestForAccess(requestId);
     this.clientScopes.requireClientAccess(user, request.clientId, 'read');
+    assertWarehouseAccess(user, request, 'read', 'Заявка не найдена в выбранном филиале.');
     const includeInternal = canSeeInternalComments(user);
 
     const [comments, events] = await Promise.all([
@@ -46,6 +48,7 @@ export class ClientRequestHistoryService {
   async addComment(requestId: string, dto: CreateClientRequestCommentDto, user: AuthUser) {
     const request = await this.getRequestForAccess(requestId);
     this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+    assertWarehouseAccess(user, request, 'write', 'Заявка не найдена в выбранном филиале.');
 
     const isInternal = dto.isInternal === true;
     if (isInternal && !canSeeInternalComments(user)) {
@@ -119,6 +122,7 @@ export class ClientRequestHistoryService {
         id: true,
         number: true,
         clientId: true,
+        warehouseId: true,
         title: true,
         type: true,
         status: true,

@@ -1,10 +1,15 @@
 import {
+  Archive,
   ArrowRightLeft,
   Box,
+  Boxes,
+  ChevronLeft,
+  ChevronRight,
   CirclePause,
   CirclePlus,
   PackageOpen,
   RefreshCw,
+  ScanBarcode,
   Search,
   Trash2,
   X,
@@ -12,13 +17,18 @@ import {
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
   fetchBoxes,
+  fetchClients,
+  fetchFbsBoxStockReport,
   fetchTurnoverBoxDetails,
   runTurnoverAction,
   type AuthSession,
+  type ClientSummary,
+  type FbsBoxStockReport,
   type TurnoverActionKind,
   type TurnoverBoxDetails,
   type WarehouseBoxSummary,
 } from '../../lib/api';
+import { useRememberedClientId, validRememberedClientId } from '../../lib/rememberedClient';
 
 type DetailsState = {
   status: 'idle' | 'loading' | 'ready' | 'error';
@@ -31,9 +41,20 @@ type BoxActionState = {
   action: TurnoverActionKind;
   quantity: string;
   targetBoxCode: string;
+  targetBarcode: string;
   reason: string;
   kiz: string;
   comment: string;
+};
+
+type BoxSelection = Pick<WarehouseBoxSummary, 'clientId' | 'code'>;
+type WithoutPalletItem = FbsBoxStockReport['withoutPallet']['items'][number];
+
+export type WithoutPalletBoxGroup = Pick<
+  WithoutPalletItem,
+  'boxCode' | 'warehouse' | 'location' | 'status' | 'boxTotal'
+> & {
+  contents: WithoutPalletItem[];
 };
 
 const numberFormatter = new Intl.NumberFormat('ru-RU');
@@ -51,23 +72,105 @@ const actionLabels: Record<TurnoverActionKind, string> = {
   TRANSFER: 'Перенести',
   UTILIZE: 'Утилизировать',
   HOLD: 'Отложить',
+  REPLACE_BARCODE: 'Исправить ШК', // ADDED
 };
 
 export function BoxManagementPanel({ session }: { session: AuthSession }) {
+  const [showArchive, setShowArchive] = useState(false);
+  // ADDED: the third view is read from the existing stock report and never mutates placement.
+  const [showWithoutPallet, setShowWithoutPallet] = useState(false);
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState<WarehouseBoxSummary[]>([]);
   const [isSearching, setSearching] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [searchError, setSearchError] = useState('');
-  const [selectedBox, setSelectedBox] = useState<WarehouseBoxSummary | null>(null);
+  const [selectedBox, setSelectedBox] = useState<BoxSelection | null>(null);
   const [details, setDetails] = useState<DetailsState>({ status: 'idle', data: null });
   const [actionState, setActionState] = useState<BoxActionState | null>(null);
   const [actionError, setActionError] = useState('');
   const [actionMessage, setActionMessage] = useState('');
   const [isSubmitting, setSubmitting] = useState(false);
   const [targetSuggestions, setTargetSuggestions] = useState<WarehouseBoxSummary[]>([]);
+  const [clients, setClients] = useState<ClientSummary[]>([]);
+  const [selectedClientId, setSelectedClientId] = useRememberedClientId(session.user.id);
+  const [withoutPalletReport, setWithoutPalletReport] = useState<FbsBoxStockReport | null>(null);
+  const [withoutPalletPage, setWithoutPalletPage] = useState(1);
+  const [withoutPalletRefresh, setWithoutPalletRefresh] = useState(0);
+  const [isLoadingClients, setLoadingClients] = useState(false);
+  const [isLoadingWithoutPallet, setLoadingWithoutPallet] = useState(false);
+  const [withoutPalletError, setWithoutPalletError] = useState('');
 
   const visibleSuggestions = useMemo(() => suggestions.slice(0, 14), [suggestions]);
+
+  useEffect(() => {
+    if (!showWithoutPallet) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    setLoadingClients(true);
+    setWithoutPalletError('');
+    fetchClients(session.accessToken)
+      .then((items) => {
+        if (!cancelled) {
+          setClients(items);
+          setSelectedClientId((current) => validRememberedClientId(current, items));
+        }
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) {
+          setClients([]);
+          setWithoutPalletError(errorMessage(caught));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingClients(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session.accessToken, setSelectedClientId, showWithoutPallet]);
+
+  useEffect(() => {
+    if (!showWithoutPallet || !selectedClientId || !clients.some((client) => client.id === selectedClientId)) {
+      setWithoutPalletReport(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    setLoadingWithoutPallet(true);
+    setWithoutPalletError('');
+    fetchFbsBoxStockReport(session.accessToken, {
+      clientId: selectedClientId,
+      page: withoutPalletPage,
+      pageSize: 100,
+      palletPage: 1,
+      palletPageSize: 10,
+    })
+      .then((report) => {
+        if (!cancelled) {
+          setWithoutPalletReport(report);
+        }
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) {
+          setWithoutPalletReport(null);
+          setWithoutPalletError(errorMessage(caught));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingWithoutPallet(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [clients, session.accessToken, selectedClientId, showWithoutPallet, withoutPalletPage, withoutPalletRefresh]);
 
   useEffect(() => {
     const cleanQuery = query.trim();
@@ -81,7 +184,7 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
     const timer = window.setTimeout(() => {
       setSearching(true);
       setSearchError('');
-      fetchBoxes(session.accessToken, { code: cleanQuery })
+      fetchBoxes(session.accessToken, { code: cleanQuery, archive: showArchive })
         .then((boxes) => {
           if (!cancelled) {
             setSuggestions(boxes);
@@ -104,7 +207,7 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [query, session.accessToken, showSuggestions]);
+  }, [query, session.accessToken, showArchive, showSuggestions]);
 
   useEffect(() => {
     const cleanCode = actionState?.targetBoxCode.trim() ?? '';
@@ -135,7 +238,7 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
     };
   }, [actionState?.targetBoxCode, details.data?.box.client.id, session.accessToken]);
 
-  async function loadBox(box: WarehouseBoxSummary) {
+  async function loadBox(box: BoxSelection) {
     setSelectedBox(box);
     setQuery(box.code);
     setShowSuggestions(false);
@@ -179,12 +282,42 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
       action,
       quantity: '1',
       targetBoxCode: action === 'ADD' || action === 'HOLD' ? currentBox : '',
+      targetBarcode: '',
       reason: '',
       kiz: '',
       comment: '',
     });
     setActionError('');
     setActionMessage('');
+  }
+
+  function switchArchive(nextArchive: boolean) {
+    setShowArchive(nextArchive);
+    setShowWithoutPallet(false);
+    setQuery('');
+    setSuggestions([]);
+    setShowSuggestions(false);
+    setSearchError('');
+    setSelectedBox(null);
+    setDetails({ status: 'idle', data: null });
+    setActionState(null);
+    setActionError('');
+    setActionMessage('');
+  }
+
+  function switchWithoutPallet() {
+    setShowArchive(false);
+    setShowWithoutPallet(true);
+    setQuery('');
+    setSuggestions([]);
+    setShowSuggestions(false);
+    setSearchError('');
+    setSelectedBox(null);
+    setDetails({ status: 'idle', data: null });
+    setActionState(null);
+    setActionError('');
+    setActionMessage('');
+    setWithoutPalletPage(1);
   }
 
   function updateAction<K extends keyof Omit<BoxActionState, 'item'>>(key: K, value: BoxActionState[K]) {
@@ -200,7 +333,7 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
 
     const quantity = Number(actionState.quantity);
     const needsTarget = ['ADD', 'TRANSFER', 'HOLD'].includes(actionState.action);
-    const needsReason = ['WRITE_OFF', 'HOLD'].includes(actionState.action);
+    const needsReason = ['WRITE_OFF', 'HOLD', 'REPLACE_BARCODE'].includes(actionState.action);
     const targetBoxCode = actionState.targetBoxCode.trim();
 
     if (!Number.isInteger(quantity) || quantity <= 0) {
@@ -215,8 +348,8 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
       setActionError('Укажите короб назначения.');
       return;
     }
-    if (needsTarget && !targetBoxCode.toLocaleUpperCase('ru-RU').startsWith('FFL_')) {
-      setActionError('Номер короба назначения должен начинаться с FFL_.');
+    if (actionState.action === 'REPLACE_BARCODE' && !actionState.targetBarcode.trim()) {
+      setActionError('Отсканируйте или введите правильный ШК товара.');
       return;
     }
     if (needsReason && !actionState.reason.trim()) {
@@ -234,6 +367,8 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
         action: actionState.action,
         quantity,
         sourceBoxCode: actionState.action === 'ADD' ? undefined : box.code,
+        sourceBalanceId: actionState.action === 'REPLACE_BARCODE' ? actionState.item.balanceId : undefined,
+        targetBarcode: actionState.action === 'REPLACE_BARCODE' ? actionState.targetBarcode.trim() : undefined,
         targetBoxCode: needsTarget ? targetBoxCode : undefined,
         reason: actionState.reason.trim() || undefined,
         kiz: actionState.kiz.trim() || undefined,
@@ -252,7 +387,40 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
 
   return (
     <div className="warehouse-box-manager">
-      <form className="warehouse-box-search" onSubmit={submitSearch}>
+      <div className="warehouse-box-view-toggle" role="group" aria-label="Режим просмотра коробов">
+        <button
+          className={!showArchive && !showWithoutPallet ? 'is-active' : ''}
+          type="button"
+          onClick={() => switchArchive(false)}
+        >
+          <Box size={16} aria-hidden="true" />
+          Короба на складе
+        </button>
+        <button
+          className={showArchive ? 'is-active' : ''}
+          type="button"
+          onClick={() => switchArchive(true)}
+        >
+          <Archive size={16} aria-hidden="true" />
+          Архив коробов
+        </button>
+        <button
+          className={showWithoutPallet ? 'is-active' : ''}
+          type="button"
+          onClick={switchWithoutPallet}
+        >
+          <Boxes size={16} aria-hidden="true" />
+          Без паллет-сорта
+        </button>
+      </div>
+      <p className="warehouse-box-view-note">
+        {showWithoutPallet
+          ? 'Все короба с фактическим товаром, для которых сейчас не указан паллет-сорт.'
+          : showArchive
+            ? 'Найдите удалённый или архивный короб по номеру и откройте сохранённую историю его движений.'
+            : 'Поиск действующих коробов, просмотр содержимого и складские операции.'}
+      </p>
+      {!showWithoutPallet ? <form className="warehouse-box-search" onSubmit={submitSearch}>
         <label className="warehouse-box-search__field">
           <span>Номер короба</span>
           <div className="warehouse-box-search__input">
@@ -265,7 +433,7 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
                 setSearchError('');
               }}
               onFocus={() => setShowSuggestions(Boolean(query.trim()))}
-              placeholder="Начните вводить FFL_..."
+              placeholder={showArchive ? 'Номер короба из архива' : 'Начните вводить номер короба…'}
               autoComplete="off"
             />
             {isSearching ? <RefreshCw className="is-spinning" size={16} aria-hidden="true" /> : null}
@@ -278,7 +446,12 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
                   <Box size={17} aria-hidden="true" />
                   <span>
                     <strong>{box.code}</strong>
-                    <small>{box.client.name} · {boxStatusLabel(box.status)}</small>
+                    <small>
+                      {box.client.name} · {boxStatusLabel(box.status)}
+                      {box.storagePlacement
+                        ? ` · ${box.storagePlacement.pallet.zone?.name ?? 'Без зоны'} / ${box.storagePlacement.pallet.code}`
+                        : ' · место не задано'}
+                    </small>
                   </span>
                   <em>{box._count.balances} поз.</em>
                 </button>
@@ -297,9 +470,27 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
             <span>Обновить</span>
           </button>
         ) : null}
-      </form>
+      </form> : (
+        <WithoutPalletBoxes
+          clients={clients}
+          clientId={selectedClientId}
+          report={withoutPalletReport}
+          page={withoutPalletPage}
+          isLoading={isLoadingClients || isLoadingWithoutPallet}
+          error={withoutPalletError}
+          onClientChange={(clientId) => {
+            setSelectedClientId(clientId);
+            setWithoutPalletPage(1);
+            setSelectedBox(null);
+            setDetails({ status: 'idle', data: null });
+          }}
+          onRefresh={() => setWithoutPalletRefresh((current) => current + 1)}
+          onPage={setWithoutPalletPage}
+          onOpenBox={(boxCode) => void loadBox({ clientId: selectedClientId, code: boxCode })}
+        />
+      )}
 
-      {searchError ? <p className="form-error">{searchError}</p> : null}
+      {!showWithoutPallet && searchError ? <p className="form-error">{searchError}</p> : null}
       {actionMessage ? <p className="form-success">{actionMessage}</p> : null}
       {details.status === 'loading' ? <p className="warehouse-inline">Загружаю короб.</p> : null}
       {details.error ? <p className="form-error">{details.error}</p> : null}
@@ -307,6 +498,7 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
       {details.data ? (
         <BoxCard
           details={details.data}
+          readOnly={showArchive}
           onAction={startAction}
           onClose={() => {
             setSelectedBox(null);
@@ -316,7 +508,7 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
         />
       ) : null}
 
-      {actionState && details.data ? (
+      {!showArchive && actionState && details.data ? (
         <BoxActionDialog
           state={actionState}
           box={details.data.box.code}
@@ -332,12 +524,143 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
   );
 }
 
+// ADDED: one visible group per physical box; every content line remains available.
+export function groupWithoutPalletItems(items: WithoutPalletItem[]): WithoutPalletBoxGroup[] {
+  const groups = new Map<string, WithoutPalletBoxGroup>();
+  for (const item of items) {
+    const current = groups.get(item.boxCode);
+    if (current) {
+      current.contents.push(item);
+      continue;
+    }
+    groups.set(item.boxCode, {
+      boxCode: item.boxCode,
+      warehouse: item.warehouse,
+      location: item.location,
+      status: item.status,
+      boxTotal: item.boxTotal,
+      contents: [item],
+    });
+  }
+  return [...groups.values()];
+}
+
+function WithoutPalletBoxes({
+  clients,
+  clientId,
+  report,
+  page,
+  isLoading,
+  error,
+  onClientChange,
+  onRefresh,
+  onPage,
+  onOpenBox,
+}: {
+  clients: ClientSummary[];
+  clientId: string;
+  report: FbsBoxStockReport | null;
+  page: number;
+  isLoading: boolean;
+  error: string;
+  onClientChange: (clientId: string) => void;
+  onRefresh: () => void;
+  onPage: (page: number) => void;
+  onOpenBox: (boxCode: string) => void;
+}) {
+  const groups = groupWithoutPalletItems(report?.withoutPallet.items ?? []);
+  const pages = report?.withoutPallet.pagination.pages ?? 1;
+
+  return (
+    <section className="warehouse-unpalleted" aria-label="Короба без паллет-сорта">
+      <div className="warehouse-unpalleted__toolbar">
+        <label>
+          <span>Клиент</span>
+          <select value={clientId} onChange={(event) => onClientChange(event.target.value)} disabled={isLoading && clients.length === 0}>
+            <option value="">Выберите клиента</option>
+            {clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}
+          </select>
+        </label>
+        <button className="secondary-button" type="button" onClick={onRefresh} disabled={!clientId || isLoading}>
+          <RefreshCw className={isLoading ? 'is-spinning' : ''} size={16} aria-hidden="true" />
+          <span>{isLoading ? 'Проверяю' : 'Обновить список'}</span>
+        </button>
+      </div>
+
+      {error ? <p className="form-error">{error}</p> : null}
+      {report ? (
+        <div className="warehouse-unpalleted__summary" aria-live="polite">
+          <span><strong>{formatNumber(report.withoutPallet.summary.boxes)}</strong> коробов без паллет-сорта</span>
+          <span><strong>{formatNumber(report.withoutPallet.summary.units)}</strong> единиц товара</span>
+          <span><strong>{formatNumber(report.withoutPallet.summary.rows)}</strong> товарных позиций</span>
+        </div>
+      ) : null}
+
+      <div className="warehouse-box-table-wrap warehouse-unpalleted__table-wrap">
+        <table className="warehouse-box-table warehouse-unpalleted__table">
+          <thead>
+            <tr>
+              <th>Короб</th>
+              <th>Склад / место</th>
+              <th>Содержимое</th>
+              <th>ШК</th>
+              <th>Статус короба</th>
+              <th>Кол-во</th>
+              <th>Всего в коробе</th>
+            </tr>
+          </thead>
+          <tbody>
+            {!isLoading && clientId && groups.length === 0 && !error ? (
+              <tr><td colSpan={7}>Коробов с товаром без паллет-сорта не найдено.</td></tr>
+            ) : null}
+            {isLoading && !report ? <tr><td colSpan={7}>Проверяю размещение коробов…</td></tr> : null}
+            {!clientId && !isLoading ? <tr><td colSpan={7}>Выберите клиента, чтобы увидеть короба.</td></tr> : null}
+            {groups.map((group) => group.contents.map((item, index) => (
+              <tr key={`${group.boxCode}:${item.barcode || item.article}:${index}`}>
+                {index === 0 ? (
+                  <td rowSpan={group.contents.length}>
+                    <button className="warehouse-unpalleted__box-link" type="button" onClick={() => onOpenBox(group.boxCode)}>
+                      {group.boxCode}
+                    </button>
+                  </td>
+                ) : null}
+                {index === 0 ? <td rowSpan={group.contents.length}><strong>{group.warehouse}</strong><span>{group.location}</span></td> : null}
+                <td><strong>{item.article || 'Артикул не указан'}</strong></td>
+                <td>{item.barcode || '—'}</td>
+                {index === 0 ? <td rowSpan={group.contents.length}>{boxStatusLabel(group.status)}</td> : null}
+                <td><strong>{formatNumber(item.quantity)}</strong></td>
+                {index === 0 ? <td rowSpan={group.contents.length}><strong>{formatNumber(group.boxTotal)}</strong></td> : null}
+              </tr>
+            )))}
+          </tbody>
+        </table>
+      </div>
+
+      {report && pages > 1 ? (
+        <nav className="warehouse-unpalleted__pager" aria-label="Страницы коробов без паллет-сорта">
+          <button className="secondary-button" type="button" disabled={isLoading || page <= 1} onClick={() => onPage(page - 1)}>
+            <ChevronLeft size={16} aria-hidden="true" />
+            <span>Назад</span>
+          </button>
+          <span>Страница {page} из {pages}</span>
+          <button className="secondary-button" type="button" disabled={isLoading || page >= pages} onClick={() => onPage(page + 1)}>
+            <span>Дальше</span>
+            <ChevronRight size={16} aria-hidden="true" />
+          </button>
+        </nav>
+      ) : null}
+    </section>
+  );
+}
+
 function BoxCard({
   details,
+  readOnly,
   onAction,
   onClose,
 }: {
   details: TurnoverBoxDetails;
+  readOnly: boolean;
   onAction: (item: TurnoverBoxDetails['contents'][number], action: TurnoverActionKind) => void;
   onClose: () => void;
 }) {
@@ -348,6 +671,11 @@ function BoxCard({
           <span>{details.box.client.name}</span>
           <h3>{details.box.code}</h3>
           <small>{boxStatusLabel(details.box.status)}</small>
+          <small>
+            {details.box.storagePlacement
+              ? `Место: ${details.box.storagePlacement.pallet.zone?.name ?? 'без зоны'} / ${details.box.storagePlacement.pallet.code}`
+              : 'Место хранения не задано'}
+          </small>
         </div>
         <button className="icon-button" type="button" onClick={onClose} title="Закрыть карточку" aria-label="Закрыть карточку короба">
           <X size={18} aria-hidden="true" />
@@ -371,13 +699,13 @@ function BoxCard({
               <th>Статус</th>
               <th>Кол-во</th>
               <th>КИЗ</th>
-              <th>Изменить</th>
+              {!readOnly ? <th>Изменить</th> : null}
             </tr>
           </thead>
           <tbody>
             {details.contents.length === 0 ? (
               <tr>
-                <td colSpan={7}>В коробе нет текущего остатка.</td>
+                <td colSpan={readOnly ? 6 : 7}>В коробе нет текущего остатка.</td>
               </tr>
             ) : null}
             {details.contents.map((item) => (
@@ -397,7 +725,7 @@ function BoxCard({
                     </span>
                   ) : '-'}
                 </td>
-                <td>
+                {!readOnly ? <td>
                   <div className="warehouse-box-row-actions">
                     <button type="button" onClick={() => onAction(item, 'TRANSFER')} title="Перенести товар">
                       <ArrowRightLeft size={14} aria-hidden="true" />
@@ -415,15 +743,24 @@ function BoxCard({
                       <CirclePlus size={14} aria-hidden="true" />
                       <span>Добавить</span>
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => onAction(item, 'REPLACE_BARCODE')}
+                      disabled={item.kizCount > 0 || !['AVAILABLE', 'RECEIVING', 'UNMARKED', 'NEEDS_LABEL', 'NEEDS_RELABEL'].includes(item.status)}
+                      title={item.kizCount > 0 ? 'Для товара с КИЗом автоматическая замена ШК запрещена' : 'Исправить ошибочно принятый ШК'}
+                    >
+                      <ScanBarcode size={14} aria-hidden="true" />
+                      <span>Исправить ШК</span>
+                    </button>
                   </div>
-                </td>
+                </td> : null}
               </tr>
             ))}
           </tbody>
         </table>
       </div>
 
-      <details className="warehouse-box-history">
+      <details className="warehouse-box-history" open={readOnly ? true : undefined}>
         <summary>История движений <span>{details.movements.length}</span></summary>
         <div className="warehouse-box-table-wrap">
           <table className="warehouse-box-table warehouse-box-table--history">
@@ -483,7 +820,7 @@ function BoxActionDialog({
   onSubmit: () => void;
 }) {
   const needsTarget = ['ADD', 'TRANSFER', 'HOLD'].includes(state.action);
-  const needsReason = ['WRITE_OFF', 'HOLD'].includes(state.action);
+  const needsReason = ['WRITE_OFF', 'HOLD', 'REPLACE_BARCODE'].includes(state.action);
 
   return (
     <div className="warehouse-box-dialog-backdrop" role="presentation">
@@ -508,13 +845,26 @@ function BoxActionDialog({
             <input min="1" type="number" value={state.quantity} onChange={(event) => onChange('quantity', event.target.value)} />
           </label>
 
+          {state.action === 'REPLACE_BARCODE' ? (
+            <label>
+              <span>Новый правильный ШК</span>
+              <input
+                value={state.targetBarcode}
+                onChange={(event) => onChange('targetBarcode', event.target.value)}
+                placeholder="Отсканируйте или введите ШК"
+                autoComplete="off"
+                autoFocus
+              />
+            </label>
+          ) : null}
+
           {needsTarget ? (
             <label>
               <span>Короб назначения</span>
               <input
                 value={state.targetBoxCode}
                 onChange={(event) => onChange('targetBoxCode', event.target.value)}
-                placeholder="FFL_..."
+                placeholder="Номер короба назначения"
                 list="warehouse-box-target-suggestions"
                 autoComplete="off"
               />
@@ -531,10 +881,12 @@ function BoxActionDialog({
             </label>
           ) : null}
 
-          <label className="warehouse-box-dialog__wide">
-            <span>КИЗ</span>
-            <textarea value={state.kiz} onChange={(event) => onChange('kiz', event.target.value)} placeholder="При необходимости: через запятую или с новой строки" />
-          </label>
+          {state.action !== 'REPLACE_BARCODE' ? (
+            <label className="warehouse-box-dialog__wide">
+              <span>КИЗ</span>
+              <textarea value={state.kiz} onChange={(event) => onChange('kiz', event.target.value)} placeholder="При необходимости: через запятую или с новой строки" />
+            </label>
+          ) : null}
 
           <label className="warehouse-box-dialog__wide">
             <span>Комментарий</span>
@@ -580,6 +932,7 @@ function boxStatusLabel(status: string) {
     packed: 'Упакован',
     shipped: 'Отгружен',
     deleted: 'Удален',
+    archived: 'В архиве',
   };
   return labels[status.toLocaleLowerCase('ru-RU')] ?? status;
 }

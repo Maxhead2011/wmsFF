@@ -105,6 +105,7 @@
 
 .service-client-selector select,
 .service-form-card input,
+.service-form-card select,
 .service-form-card textarea,
 .service-danger-zone input,
 .service-search-row input {
@@ -173,6 +174,93 @@
 
 .service-form-card {
   gap: 12px;
+}
+
+.service-telegram-sections {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 11px;
+}
+
+.service-telegram-sections legend {
+  padding: 0 5px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.service-telegram-sections__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.service-telegram-sections__grid .service-check {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface, #fff);
+  padding: 7px 9px;
+}
+
+.service-telegram-groups {
+  display: grid;
+  gap: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 11px;
+}
+
+.service-telegram-groups > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.service-telegram-groups > .secondary-button {
+  width: fit-content;
+}
+
+.service-telegram-group-list {
+  display: grid;
+  gap: 7px;
+}
+
+.service-telegram-group-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface, #fff);
+  color: var(--ink);
+  padding: 8px 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.service-telegram-group-list button:hover,
+.service-telegram-group-list button.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface, #fff));
+}
+
+.service-telegram-group-list button.is-active {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.service-telegram-group-list button span {
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.service-telegram-group-list button small {
+  white-space: nowrap;
 }
 
 .service-check {
@@ -314,6 +402,29 @@
   font-size: 12px;
 }
 
+.service-session-status {
+  width: max-content;
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-weight: 800;
+}
+
+.service-session-status.is-active {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.service-session-status.is-closed {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.service-session-close {
+  min-height: 34px;
+  padding: 6px 11px;
+  white-space: nowrap;
+}
+
 @media (max-width: 920px) {
   .service-two-columns,
   .service-client-selector,
@@ -336,5 +447,15 @@
 
   .service-tabs {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .service-telegram-sections__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .service-telegram-group-list button {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
   }
 }

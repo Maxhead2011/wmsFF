@@ -246,6 +246,7 @@ export function DashboardDataPanel({ session }: DashboardDataPanelProps) {
       return (
         <>
           <TsdReceiptReviewPanel
+            userId={session.user.id}
             dashboard={tsdReceiptReview.data}
             error={tsdReceiptReview.error}
             isLoading={tsdReceiptReview.status === 'idle' || tsdReceiptReview.status === 'loading'}

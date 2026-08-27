@@ -15,6 +15,10 @@ export class UserClientScopeDto {
 }
 
 export class UpdateUserClientScopesDto {
+  @IsOptional()
+  @IsBoolean()
+  allClients?: boolean;
+
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => UserClientScopeDto)

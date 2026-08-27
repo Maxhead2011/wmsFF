@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, VolumeSource } from '@prisma/client';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -25,6 +25,7 @@ export class SkusService {
   ) {}
 
   async list(filter: { clientId?: string; search?: string; draftsOnly?: boolean }, user: AuthUser) {
+    const warehouseId = this.scopedWarehouseId(user);
     const where: Prisma.SkuWhereInput = {
       clientId: this.clientScopes.resolveClientFilter(user, filter.clientId),
       isDraft: filter.draftsOnly ? true : undefined,
@@ -43,7 +44,12 @@ export class SkusService {
       include: {
         client: { select: { id: true, code: true, name: true } },
         barcodes: true,
-        _count: { select: { balances: true, movements: true } },
+        _count: {
+          select: {
+            balances: warehouseId ? { where: { warehouseId } } : true,
+            movements: warehouseId ? { where: { warehouseId } } : true,
+          },
+        },
       },
       take: 100,
     });
@@ -52,6 +58,7 @@ export class SkusService {
   }
 
   async get(id: string, user: AuthUser) {
+    const warehouseId = this.scopedWarehouseId(user);
     const sku = await this.prisma.sku.findFirst({
       where: {
         id,
@@ -61,12 +68,34 @@ export class SkusService {
         client: { select: { id: true, code: true, name: true } },
         barcodes: true,
         balances: {
+          where: warehouseId ? { warehouseId } : undefined,
           include: {
             box: { select: { id: true, code: true, status: true } },
             pallet: { select: { id: true, code: true, status: true } },
           },
         },
-        _count: { select: { balances: true, movements: true, clientRequestItems: true, packageItems: true, productMarks: true } },
+        _count: {
+          select: {
+            balances: warehouseId ? { where: { warehouseId } } : true,
+            movements: warehouseId ? { where: { warehouseId } } : true,
+            clientRequestItems: warehouseId
+              ? { where: { request: { warehouseId } } }
+              : true,
+            packageItems: warehouseId
+              ? { where: { package: { request: { warehouseId } } } }
+              : true,
+            productMarks: warehouseId
+              ? {
+                  where: {
+                    OR: [
+                      { box: { warehouseId } },
+                      { stockMovement: { warehouseId } },
+                    ],
+                  },
+                }
+              : true,
+          },
+        },
       },
     });
 
@@ -150,6 +179,7 @@ export class SkusService {
 
   async updateBulkVolume(dto: BulkUpdateSkuVolumeDto, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+    await this.requireBranchCatalogWrite(user, dto.clientId);
     const skuIds = [...new Set(dto.skuIds)];
     if (skuIds.length !== dto.skuIds.length) {
       throw new BadRequestException('В списке товаров есть повторяющиеся позиции.');
@@ -196,6 +226,7 @@ export class SkusService {
 
   async create(dto: CreateSkuDto, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+    await this.requireBranchCatalogWrite(user, dto.clientId);
     const volume = this.tryCalculateVolume(dto);
 
     // Русский комментарий: карточка SKU и основной штрихкод создаются одной транзакцией, чтобы не ловить "висячие" barcode.
@@ -253,6 +284,7 @@ export class SkusService {
   }
 
   async update(id: string, dto: UpdateSkuDto, user: AuthUser) {
+    const warehouseId = this.scopedWarehouseId(user);
     const existing = await this.prisma.sku.findFirst({
       where: {
         id,
@@ -266,6 +298,7 @@ export class SkusService {
     }
 
     this.clientScopes.requireClientAccess(user, existing.clientId, 'write');
+    await this.requireBranchCatalogWrite(user, existing.clientId);
     if (dto.clientId && dto.clientId !== existing.clientId) {
       throw new BadRequestException('Нельзя перенести SKU к другому клиенту через редактирование карточки.');
     }
@@ -305,12 +338,34 @@ export class SkusService {
           include: {
             barcodes: true,
             balances: {
+              where: warehouseId ? { warehouseId } : undefined,
               include: {
                 box: { select: { id: true, code: true, status: true } },
                 pallet: { select: { id: true, code: true, status: true } },
               },
             },
-            _count: { select: { balances: true, movements: true, clientRequestItems: true, packageItems: true, productMarks: true } },
+            _count: {
+              select: {
+                balances: warehouseId ? { where: { warehouseId } } : true,
+                movements: warehouseId ? { where: { warehouseId } } : true,
+                clientRequestItems: warehouseId
+                  ? { where: { request: { warehouseId } } }
+                  : true,
+                packageItems: warehouseId
+                  ? { where: { package: { request: { warehouseId } } } }
+                  : true,
+                productMarks: warehouseId
+                  ? {
+                      where: {
+                        OR: [
+                          { box: { warehouseId } },
+                          { stockMovement: { warehouseId } },
+                        ],
+                      },
+                    }
+                  : true,
+              },
+            },
           },
         });
 
@@ -353,6 +408,7 @@ export class SkusService {
     }
 
     this.clientScopes.requireClientAccess(user, existing.clientId, 'write');
+    await this.requireBranchCatalogWrite(user, existing.clientId);
 
     const linkedRecords =
       existing._count.balances +
@@ -394,7 +450,8 @@ export class SkusService {
     });
   }
 
-  async createNomenclature(dto: CreateNomenclatureItemDto) {
+  async createNomenclature(dto: CreateNomenclatureItemDto, user: AuthUser) {
+    this.requireGlobalCatalogWrite(user);
     const internalSku = this.buildNomenclatureInternalSku(dto);
 
     try {
@@ -421,7 +478,8 @@ export class SkusService {
     }
   }
 
-  async updateNomenclature(id: string, dto: CreateNomenclatureItemDto) {
+  async updateNomenclature(id: string, dto: CreateNomenclatureItemDto, user: AuthUser) {
+    this.requireGlobalCatalogWrite(user);
     const existing = await this.prisma.nomenclatureItem.findUnique({ where: { id } });
     if (!existing) {
       throw new NotFoundException('Номенклатура не найдена.');
@@ -467,23 +525,34 @@ export class SkusService {
 
   async createArticleMapping(dto: CreateArticleMappingDto, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+    await this.requireBranchCatalogWrite(user, dto.clientId);
+    const sourceArticle = dto.sourceArticle.trim();
+    const targetArticle = dto.targetArticle.trim();
+    if (normalizeArticleMappingValue(sourceArticle) === normalizeArticleMappingValue(targetArticle)) {
+      throw new BadRequestException(
+        'Исходный товар и товар после переклейки должны отличаться.',
+      );
+    }
 
     try {
-      return await this.prisma.clientArticleMapping.upsert({
+      const existing = await this.prisma.clientArticleMapping.findFirst({
         where: {
-          clientId_sourceArticle_targetArticle: {
-            clientId: dto.clientId,
-            sourceArticle: dto.sourceArticle.trim(),
-            targetArticle: dto.targetArticle.trim(),
-          },
-        },
-        create: {
           clientId: dto.clientId,
-          sourceArticle: dto.sourceArticle.trim(),
-          targetArticle: dto.targetArticle.trim(),
-          comment: cleanOptional(dto.comment),
+          sourceArticle: { equals: sourceArticle, mode: 'insensitive' },
+          targetArticle: { equals: targetArticle, mode: 'insensitive' },
         },
-        update: {
+      });
+      if (existing) {
+        return await this.prisma.clientArticleMapping.update({
+          where: { id: existing.id },
+          data: { comment: cleanOptional(dto.comment) },
+        });
+      }
+      return await this.prisma.clientArticleMapping.create({
+        data: {
+          clientId: dto.clientId,
+          sourceArticle,
+          targetArticle,
           comment: cleanOptional(dto.comment),
         },
       });
@@ -496,13 +565,28 @@ export class SkusService {
     }
   }
 
+  async deleteArticleMapping(id: string, user: AuthUser) {
+    const mapping = await this.prisma.clientArticleMapping.findUnique({
+      where: { id },
+      select: { id: true, clientId: true },
+    });
+    if (!mapping) {
+      throw new NotFoundException('Соответствие переклейки не найдено.');
+    }
+    this.clientScopes.requireClientAccess(user, mapping.clientId, 'write');
+    await this.requireBranchCatalogWrite(user, mapping.clientId);
+    await this.prisma.clientArticleMapping.delete({ where: { id } });
+    return { id, deleted: true };
+  }
+
   async importArticleMappingsWorkbook(clientId: string, file: Express.Multer.File, user: AuthUser) {
     if (!clientId) {
       throw new BadRequestException('Не выбран клиент для импорта соответствий.');
     }
 
     this.clientScopes.requireClientAccess(user, clientId, 'write');
-    const rows = this.readFirstSheet(file.buffer);
+    await this.requireBranchCatalogWrite(user, clientId);
+    const rows = this.readSheet(file.buffer, ['Соответствие', 'Соответствия']);
     const parsed = parseArticleMappingSheet(rows);
 
     if (parsed.items.length === 0) {
@@ -575,7 +659,8 @@ export class SkusService {
     };
   }
 
-  async importNomenclatureWorkbook(file: Express.Multer.File) {
+  async importNomenclatureWorkbook(file: Express.Multer.File, user: AuthUser) {
+    this.requireGlobalCatalogWrite(user);
     const rows = this.readFirstSheet(file.buffer);
     const parsed = parseNomenclatureSheet(rows);
     const errors = parsed.issues.filter((issue) => issue.severity === 'error');
@@ -670,14 +755,71 @@ export class SkusService {
   }
 
   private readFirstSheet(buffer: Buffer): SheetMatrix {
+    return this.readSheet(buffer);
+  }
+
+  private readSheet(buffer: Buffer, preferredSheetNames: string[] = []): SheetMatrix {
     const workbook = XLSX.read(buffer, { type: 'buffer' });
-    const firstSheet = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[firstSheet];
+    const preferred = new Set(preferredSheetNames.map((name) => normalizeImportHeader(name)));
+    const sheetName =
+      workbook.SheetNames.find((name) => preferred.has(normalizeImportHeader(name))) ??
+      workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
     return XLSX.utils.sheet_to_json<SheetMatrix[number]>(worksheet, {
       header: 1,
       raw: false,
       blankrows: false,
     });
+  }
+
+  private scopedWarehouseId(user: AuthUser) {
+    if (
+      user.permissionCodes?.includes('system:admin') ||
+      user.roleCodes?.includes('CLIENT') ||
+      (user.warehouseIds?.length ?? 0) === 0
+    ) {
+      return null;
+    }
+
+    const warehouseId = user.activeWarehouseId?.trim() ?? '';
+    if (!warehouseId || !user.warehouseIds?.includes(warehouseId)) {
+      throw new ForbiddenException('Для работы с номенклатурой выберите доступный филиал.');
+    }
+    return warehouseId;
+  }
+
+  private async requireBranchCatalogWrite(user: AuthUser, clientId: string) {
+    const warehouseId = this.scopedWarehouseId(user);
+    if (!warehouseId) return;
+    if (!user.writableWarehouseIds?.includes(warehouseId)) {
+      throw new ForbiddenException('Нет прав на изменение данных в выбранном филиале.');
+    }
+
+    const [currentLink, activeLinks] = await this.prisma.$transaction([
+      this.prisma.warehouseClient.findFirst({
+        where: { warehouseId, clientId, status: 'ACTIVE' },
+        select: { clientId: true },
+      }),
+      this.prisma.warehouseClient.count({
+        where: { clientId, status: 'ACTIVE' },
+      }),
+    ]);
+    if (!currentLink) {
+      throw new ForbiddenException('Клиент не закреплён за выбранным филиалом.');
+    }
+    if (activeLinks > 1) {
+      throw new ForbiddenException(
+        'Карточка товара общая для нескольких филиалов. Изменить её может только администратор сети.',
+      );
+    }
+  }
+
+  private requireGlobalCatalogWrite(user: AuthUser) {
+    if (this.scopedWarehouseId(user)) {
+      throw new ForbiddenException(
+        'Общий справочник номенклатуры изменяет только администратор сети.',
+      );
+    }
   }
 
   private buildSkuUpdateData(
@@ -995,7 +1137,22 @@ function parseArticleMappingSheet(rows: SheetMatrix) {
       return;
     }
 
-    const dedupeKey = `${sourceArticle}|${targetArticle}`;
+    if (
+      normalizeArticleMappingValue(sourceArticle) ===
+      normalizeArticleMappingValue(targetArticle)
+    ) {
+      issues.push({
+        row: sourceRow,
+        message: 'Исходный товар и товар после переклейки должны отличаться.',
+        severity: 'error',
+      });
+      return;
+    }
+
+    const dedupeKey = [
+      normalizeArticleMappingValue(sourceArticle),
+      normalizeArticleMappingValue(targetArticle),
+    ].join('|');
     if (seenKeys.has(dedupeKey)) {
       issues.push({
         row: sourceRow,
@@ -1027,15 +1184,15 @@ function parseArticleMappingSheet(rows: SheetMatrix) {
 function detectArticleMappingColumns(rows: SheetMatrix) {
   for (const row of rows) {
     const normalized = row.map((cell) => normalizeImportHeader(cleanImportText(cell)));
-    if (!normalized.some((cell) => cell.includes('артикул') || cell.includes('article'))) {
+    if (!normalized.some(isArticleMappingHeaderCell)) {
       continue;
     }
 
     return {
       sourceArticle:
-        findImportColumn(normalized, ['артикул на складе', 'склад', 'исходный', 'старый', 'спортивный', 'source']) ?? 0,
+        findImportColumn(normalized, ['где лежит', 'артикул на складе', 'склад', 'исходный', 'старый', 'source']) ?? 0,
       targetArticle:
-        findImportColumn(normalized, ['артикул продавца', 'продавца', 'базовый', 'новый', 'target']) ?? 1,
+        findImportColumn(normalized, ['должно уехать', 'артикул продавца', 'продавца', 'целевой', 'новый', 'target']) ?? 1,
       comment: findImportColumn(normalized, ['комментарий', 'примечание', 'comment']) ?? 2,
     };
   }
@@ -1049,7 +1206,16 @@ function detectArticleMappingColumns(rows: SheetMatrix) {
 
 function looksLikeArticleMappingHeader(row: SheetMatrix[number]) {
   const normalized = row.map((cell) => normalizeImportHeader(cleanImportText(cell)));
-  return normalized.some((cell) => cell.includes('артикул') || cell.includes('article'));
+  return normalized.some(isArticleMappingHeaderCell);
+}
+
+function isArticleMappingHeaderCell(cell: string) {
+  return (
+    cell.includes('артикул') ||
+    cell.includes('article') ||
+    cell.includes('должно уехать') ||
+    cell.includes('где лежит')
+  );
 }
 
 function findImportColumn(cells: string[], needles: string[]) {
@@ -1067,6 +1233,15 @@ function cleanImportText(value: SheetMatrix[number][number]) {
 
 function normalizeImportHeader(value: string) {
   return value.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function normalizeArticleMappingValue(value: string) {
+  return value
+    .normalize('NFKC')
+    .toLocaleLowerCase('ru-RU')
+    .replace(/ё/g, 'е')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function isUniqueConstraintError(error: unknown) {

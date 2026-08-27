@@ -14,6 +14,7 @@ import {
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
+import { assertWarehouseAccess, warehouseScopeWhere } from '../client-requests/client-request-warehouse-scope';
 import { TelegramNotificationService } from '../client-notifications/telegram-notification.service';
 import { CreatePickWaveDto } from './dto/create-pick-wave.dto';
 import { ListPickWavesDto } from './dto/list-pick-waves.dto';
@@ -37,6 +38,7 @@ const balanceReviewInclude = {
         select: {
           id: true,
           clientId: true,
+          warehouseId: true,
           title: true,
           status: true,
           destinationCity: true,
@@ -72,6 +74,7 @@ export class FulfillmentWaveService {
     return this.prisma.pickWave.findMany({
       where: {
         status: query.status,
+        ...warehouseScopeWhere(user),
         requests: {
           some: {
             request: {
@@ -116,8 +119,15 @@ export class FulfillmentWaveService {
       throw new BadRequestException('В одной волне могут находиться только заявки одного клиента.');
     }
 
+    const warehouseIds = new Set(requests.map((request) => request.warehouseId));
+    if (warehouseIds.size !== 1 || !requests[0].warehouseId) {
+      throw new BadRequestException('Все заявки волны должны относиться к одному выбранному филиалу.');
+    }
+    const warehouseId = requests[0].warehouseId;
+
     for (const request of requests) {
       this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+      assertWarehouseAccess(user, request, 'write', 'Заявка волны не найдена в выбранном филиале.');
       if (request.type !== ClientRequestType.OUTBOUND) {
         throw new BadRequestException('В волну сборки можно добавлять только outbound-заявки.');
       }
@@ -137,6 +147,7 @@ export class FulfillmentWaveService {
       const created = await tx.pickWave.create({
         data: {
           waveNumber,
+          warehouseId,
           status: needsBalanceReview ? PickWaveStatus.BALANCE_REVIEW : PickWaveStatus.FROZEN,
           comment: dto.comment?.trim() || undefined,
           plan: this.toJson(draft.plan),
@@ -225,6 +236,7 @@ export class FulfillmentWaveService {
         balanceReviewStatus: {
           in: [PickWaveBalanceReviewStatus.PENDING, PickWaveBalanceReviewStatus.SUBMITTED],
         },
+        ...warehouseScopeWhere(user),
         requests: {
           some: {
             request: { clientId: this.clientScopes.resolveClientFilter(user) },
@@ -240,13 +252,13 @@ export class FulfillmentWaveService {
 
   async getBalanceReview(waveId: string, user: AuthUser) {
     const wave = await this.loadBalanceReview(waveId);
-    this.requireWaveClientAccess(wave, user, 'read');
+    this.requireWaveAccess(wave, user, 'read');
     return this.toBalanceReviewResponse(wave);
   }
 
   async saveBalanceReview(waveId: string, dto: UpdatePickWaveBalanceReviewDto, user: AuthUser) {
     const wave = await this.loadBalanceReview(waveId);
-    this.requireWaveClientAccess(wave, user, 'write');
+    this.requireWaveAccess(wave, user, 'write');
     if (
       wave.status !== PickWaveStatus.BALANCE_REVIEW ||
       wave.balanceReviewStatus !== PickWaveBalanceReviewStatus.PENDING
@@ -314,7 +326,7 @@ export class FulfillmentWaveService {
 
   async submitBalanceReview(waveId: string, user: AuthUser) {
     let wave = await this.loadBalanceReview(waveId);
-    this.requireWaveClientAccess(wave, user, 'write');
+    this.requireWaveAccess(wave, user, 'write');
     if (wave.balanceReviewStatus === PickWaveBalanceReviewStatus.APPROVED) {
       return this.toBalanceReviewResponse(wave);
     }
@@ -441,7 +453,7 @@ export class FulfillmentWaveService {
     if (!wave) {
       throw new NotFoundException('Волна сборки не найдена.');
     }
-    this.requireWaveClientAccess(wave, user, 'write');
+    this.requireWaveAccess(wave, user, 'write');
     if (wave.status === PickWaveStatus.CANCELLED) {
       throw new BadRequestException('Отмененную волну сборки нельзя запускать.');
     }
@@ -538,7 +550,7 @@ export class FulfillmentWaveService {
     if (!wave) {
       throw new NotFoundException('Волна сборки не найдена.');
     }
-    this.requireWaveClientAccess(wave, user, 'write');
+    this.requireWaveAccess(wave, user, 'write');
 
     if (wave.status === PickWaveStatus.CANCELLED) {
       return wave;
@@ -673,8 +685,11 @@ export class FulfillmentWaveService {
     return wave;
   }
 
-  private requireWaveClientAccess(
-    wave: { requests: Array<{ request: { clientId: string } }> },
+  private requireWaveAccess(
+    wave: {
+      warehouseId: string | null;
+      requests: Array<{ request: { clientId: string; warehouseId: string | null } }>;
+    },
     user: AuthUser,
     mode: 'read' | 'write',
   ) {
@@ -683,6 +698,13 @@ export class FulfillmentWaveService {
       throw new BadRequestException('В волне обнаружены заявки разных клиентов.');
     }
     this.clientScopes.requireClientAccess(user, clientIds[0], mode);
+    assertWarehouseAccess(user, wave, mode, 'Волна не найдена в выбранном филиале.');
+    if (
+      !wave.warehouseId ||
+      wave.requests.some((link) => link.request.warehouseId !== wave.warehouseId)
+    ) {
+      throw new BadRequestException('Волна содержит заявки разных филиалов или не привязана к филиалу.');
+    }
   }
 
   private validateCompleteBalanceReview(wave: BalanceReviewWave) {

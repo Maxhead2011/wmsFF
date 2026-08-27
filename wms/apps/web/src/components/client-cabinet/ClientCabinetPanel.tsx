@@ -11,12 +11,14 @@ import {
   downloadClientRequestFile,
   fetchClientNotifications,
   fetchClientNotificationPreferences,
+  fetchClientFbsTurnkeyPricing,
   fetchClientRequestDocument,
   fetchClientRequests,
   fetchClientRequestTimeline,
   fetchClients,
   fetchStockBalances,
   updateClient,
+  updateClientFbsTurnkeyPricing,
   updateClientStatus,
   markClientNotificationRead,
   updateClientNotificationPreference,
@@ -39,8 +41,10 @@ import {
   type ClientRequestSummary,
   type ClientRequestTimeline,
   type ClientKind,
+  type ClientFbsTurnkeyPricing,
   type ClientSummary,
   type ClientStatus,
+  type ClientStockBalanceMode,
   type StockBalance,
   type UpdateClientPayload,
 } from '../../lib/api';
@@ -48,15 +52,18 @@ import { BillingInvoiceDocumentPreview } from '../billing/BillingInvoiceDocument
 import { ClientRequestDocumentPreview } from '../client-requests/ClientRequestDocumentPreview';
 import { OnlineReceiptPanel } from '../warehouse/OnlineReceiptPanel';
 import './client-cabinet.css';
+import { useRememberedClientId } from '../../lib/rememberedClient';
 import { ClientCabinetExports } from './ClientCabinetExports';
 import { ClientCabinetMetrics, type ClientCabinetMetricTarget } from './ClientCabinetMetrics';
 import { ClientCabinetAdvanceWidget } from './ClientCabinetAdvanceWidget';
 import { ClientCabinetStorageWidget } from './ClientCabinetStorageWidget';
 import { ClientCabinetPprWidget } from './ClientCabinetPprWidget';
+import { ClientFbsDeliveryGauge } from './ClientFbsDeliveryGauge';
 import { ReceiptBatchesPanel } from '../warehouse/ReceiptBatchesPanel';
 import { ClientCabinetTables } from './ClientCabinetTables';
 import type { BrowserNotificationPermission } from './ClientCabinetNotifications';
 import { ClientMarketplaceConnections } from './ClientMarketplaceConnections';
+import { canManageClientMarketplaceApi } from './clientMarketplaceAccess';
 import { ClientCabinetFilterPresets } from './ClientCabinetFilterPresets';
 import {
   ClientCabinetFilters,
@@ -65,6 +72,7 @@ import {
 } from './ClientCabinetFilters';
 import { clientStatusLabel, formatCabinetMoney, formatCabinetNumber } from './clientCabinetFormat';
 import { ClientRequestTimelineModal } from './ClientRequestTimelineModal';
+import { ClientBranchStockTiles } from './ClientBranchStockTiles';
 
 type CabinetData = {
   clients: ClientSummary[];
@@ -115,8 +123,11 @@ type ClientManagementForm = {
   correspondentAccount: string;
   storageAccountingEnabled: boolean;
   storesWithoutBoxes: boolean;
+  stockBalanceMode: ClientStockBalanceMode;
   onlineReceiptVisibleToClient: boolean;
   fbsCalculatorEnabled: boolean;
+  primaryProcessingEnabled: boolean;
+  relabelingEnabled: boolean;
 };
 
 const clientKindOptions: Array<{ value: ClientKind; label: string }> = [
@@ -149,7 +160,7 @@ const emptyData: CabinetData = {
 
 export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
   const [state, setState] = useState<CabinetState>({ status: 'idle', data: emptyData });
-  const [selectedClientId, setSelectedClientId] = useState('');
+  const [selectedClientId, setSelectedClientId] = useRememberedClientId(session.user.id);
   const [documentPreview, setDocumentPreview] = useState<BillingInvoiceDocument | null>(null);
   const [requestDocumentPreview, setRequestDocumentPreview] = useState<ClientRequestDocument | null>(null);
   const [requestTimeline, setRequestTimeline] = useState<ClientRequestTimeline | null>(null);
@@ -160,9 +171,11 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
   const [activeSection, setActiveSection] = useState<ClientCabinetMetricTarget>('skus');
   const [editingClientId, setEditingClientId] = useState('');
   const [managementForm, setManagementForm] = useState<ClientManagementForm | null>(null);
+  const [managementFbsPricing, setManagementFbsPricing] = useState<ClientFbsTurnkeyPricing | null>(null);
   const [managementMessage, setManagementMessage] = useState('');
   const [managementError, setManagementError] = useState('');
   const [isManagingClient, setManagingClient] = useState(false);
+  const managementPricingRequestId = useRef(0);
   const [browserNotificationPermission, setBrowserNotificationPermission] = useState<BrowserNotificationPermission>(
     browserNotificationPermissionState(),
   );
@@ -226,7 +239,11 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
       clientRequests.filter((request) => requestMatchesFilters(request, filters)),
       (request) => request.createdAt,
     );
-    const clientInvoices = state.data.invoices.filter((invoice) => !clientId || invoice.clientId === clientId);
+    const clientInvoices = state.data.invoices
+      .filter((invoice) => !clientId || invoice.clientId === clientId)
+      // Кабинет администратора должен показывать ту же финансовую картину,
+      // которую видит клиент: без черновиков и отменённых счетов.
+      .filter((invoice) => invoice.status === 'ISSUED' || invoice.status === 'PAID');
     const invoices = sortByDate(
       clientInvoices.filter((invoice) => invoiceMatchesFilters(invoice, filters)),
       (invoice) => invoice.createdAt,
@@ -496,24 +513,50 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
     setActiveSection(target);
     setEditingClientId('');
     setManagementForm(null);
+    setManagementFbsPricing(null);
     setManagementError('');
     setManagementMessage('');
     scrollToCabinetWorkspace();
   }
 
   function startClientEdit(client: ClientSummary) {
+    const pricingRequestId = managementPricingRequestId.current + 1;
+    managementPricingRequestId.current = pricingRequestId;
     setEditingClientId(client.id);
     setManagementForm(formFromClient(client));
+    setManagementFbsPricing(null);
     setManagementError('');
     setManagementMessage('');
+    void fetchClientFbsTurnkeyPricing(session.accessToken, client.id)
+      .then((pricing) => {
+        if (managementPricingRequestId.current !== pricingRequestId) {
+          return;
+        }
+        setManagementFbsPricing(pricing);
+        setManagementForm((current) =>
+          current ? { ...current, primaryProcessingEnabled: pricing.primaryProcessingEnabled } : current,
+        );
+      })
+      .catch((caught) => {
+        if (managementPricingRequestId.current !== pricingRequestId) {
+          return;
+        }
+        setManagementError(
+          caught instanceof Error
+            ? caught.message
+            : 'Не удалось загрузить настройку первичной обработки.',
+        );
+      });
     window.setTimeout(() => {
       document.getElementById('client-cabinet-client-editor')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 60);
   }
 
   function cancelClientEdit() {
+    managementPricingRequestId.current += 1;
     setEditingClientId('');
     setManagementForm(null);
+    setManagementFbsPricing(null);
     setManagementError('');
   }
 
@@ -521,15 +564,30 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
     if (!view.client || !managementForm) {
       return;
     }
+    if (!managementFbsPricing) {
+      setManagementError('Настройки биллинга еще загружаются. Повторите сохранение.');
+      return;
+    }
 
     setManagingClient(true);
     setManagementError('');
     setManagementMessage('');
     try {
-      const updated = await updateClient(session.accessToken, view.client.id, compactClientPayload(managementForm));
+      const [updated] = await Promise.all([
+        updateClient(session.accessToken, view.client.id, compactClientPayload(managementForm)),
+        updateClientFbsTurnkeyPricing(session.accessToken, view.client.id, {
+          enabled: managementFbsPricing.enabled,
+          unitPriceRub: managementFbsPricing.unitPriceRub,
+          fixedPlusLogisticsEnabled: managementFbsPricing.fixedPlusLogisticsEnabled,
+          fixedPlusLogisticsUnitPriceRub: managementFbsPricing.fixedPlusLogisticsUnitPriceRub,
+          fixedPlusLogisticsDestination: managementFbsPricing.fixedPlusLogisticsDestination,
+          primaryProcessingEnabled: managementForm.primaryProcessingEnabled,
+        }),
+      ]);
       replaceClient(updated);
       setEditingClientId('');
       setManagementForm(null);
+      setManagementFbsPricing(null);
       setManagementMessage('Клиент сохранен.');
     } catch (caught) {
       setManagementError(caught instanceof Error ? caught.message : 'Не удалось сохранить клиента.');
@@ -610,6 +668,7 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
 
   const showClientOverview = isInternalUser(session.user) && state.data.clients.length > 1;
   const canManageClients = canUse(session.user, 'clients:write');
+  const canManageMarketplaceApi = canManageClientMarketplaceApi(session.user);
   const canManageAdvances = canUse(session.user, 'billing:write');
 
   return (
@@ -661,10 +720,16 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
 
           {session.user.isDemo ? (
             <div className="client-cabinet-demo-banner" role="status">
-              <strong>Демо-режим</strong>
-              <span>Вы видите кабинет одного демонстрационного клиента. Эти данные изолированы от рабочего контура.</span>
+              <strong>{session.user.roleCodes.includes('DEMO_PLUS') ? 'Демо плюс' : 'Демо-режим'}</strong>
+              <span>
+                {session.user.roleCodes.includes('DEMO_PLUS')
+                  ? 'Расширенное административное управление и все виды заказов на изолированных демонстрационных данных.'
+                  : 'Вы видите кабинет одного демонстрационного клиента. Эти данные изолированы от рабочего контура.'}
+              </span>
             </div>
           ) : null}
+
+          <ClientBranchStockTiles accessToken={session.accessToken} clientId={view.client.id} />
 
           {showClientOverview ? (
             <ClientCabinetClientTable
@@ -738,23 +803,27 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
           {canManageClients && editingClientId === view.client.id && managementForm ? (
             <ClientCabinetClientEditor
               form={managementForm}
-              isSubmitting={isManagingClient}
+              isSubmitting={isManagingClient || !managementFbsPricing}
               onCancel={cancelClientEdit}
               onChange={(patch) => setManagementForm((current) => (current ? { ...current, ...patch } : current))}
               onSave={() => void saveClientEdit()}
             />
           ) : null}
-          {canManageClients ? <ClientMarketplaceConnections accessToken={session.accessToken} client={view.client} /> : null}
+          {canManageMarketplaceApi ? (
+            <ClientMarketplaceConnections accessToken={session.accessToken} client={view.client} />
+          ) : null}
 
           <ClientCabinetMetrics
             stock={view.stock}
             requests={view.requests}
             invoices={view.invoices}
-            charges={view.charges}
-            reconciliation={view.reconciliation}
             advanceRub={Number(view.advance?.balanceRub ?? 0)}
             onNavigate={navigateToSection}
             onOpenAdvance={scrollToAdvance}
+          />
+          <ClientFbsDeliveryGauge
+            accessToken={session.accessToken}
+            clientId={view.client.id}
           />
           <ClientCabinetAdvanceWidget
             accessToken={session.accessToken}
@@ -1116,6 +1185,25 @@ function ClientCabinetClientEditor({
           />
           <span>Показывать калькулятор стоимости в FBS</span>
         </label>
+        <label
+          className="client-cabinet-editor-checkbox"
+          title="Автоматически начислять поштучные услуги первичной обработки для товаров, отправленных по FBS"
+        >
+          <input
+            checked={form.primaryProcessingEnabled}
+            type="checkbox"
+            onChange={(event) => onChange({ primaryProcessingEnabled: event.target.checked })}
+          />
+          <span>Биллинг: первичная обработка FBS</span>
+        </label>
+        <label className="client-cabinet-editor-checkbox">
+          <input
+            checked={form.relabelingEnabled}
+            type="checkbox"
+            onChange={(event) => onChange({ relabelingEnabled: event.target.checked })}
+          />
+          <span>Возможна переклейка товаров</span>
+        </label>
         <label>
           <span>Вид приемки</span>
           <select
@@ -1126,6 +1214,18 @@ function ClientCabinetClientEditor({
             <option value="WITHOUT_BOXES">Без коробов, поштучно</option>
           </select>
         </label>
+        {!form.storesWithoutBoxes ? (
+          <label>
+            <span>Расчёт остатков</span>
+            <select
+              value={form.stockBalanceMode}
+              onChange={(event) => onChange({ stockBalanceMode: event.target.value as ClientStockBalanceMode })}
+            >
+              <option value="PALLET_SORT">Только короба на паллетсортах</option>
+              <option value="BOXES">Все активные короба</option>
+            </select>
+          </label>
+        ) : null}
       </div>
       <div className="client-cabinet-client-editor__actions">
         <button className="primary-button" disabled={isSubmitting || !form.name.trim()} onClick={onSave} type="button">
@@ -1142,12 +1242,13 @@ function ClientCabinetClientEditor({
 
 function buildClientSummary(client: ClientSummary, data: CabinetData): ClientCabinetClientSummary {
   const stock = data.stock.filter((balance) => balance.clientId === client.id);
-  const invoices = data.invoices.filter((invoice) => invoice.clientId === client.id && invoice.status !== 'CANCELLED');
-  const charges = data.charges.filter((charge) => charge.clientId === client.id);
+  const invoices = data.invoices.filter(
+    (invoice) => invoice.clientId === client.id && (invoice.status === 'ISSUED' || invoice.status === 'PAID'),
+  );
   const advanceRub = Number(data.advances.clients.find((item) => item.client.id === client.id)?.balanceRub ?? 0);
-  const grossDebtRub =
-    invoices.reduce((sum, invoice) => sum + Math.max(0, Number(invoice.totalRub) - Number(invoice.paidRub)), 0) +
-    unbilledApprovedChargesRub(charges, invoices);
+  const grossDebtRub = invoices
+    .filter((invoice) => invoice.status === 'ISSUED')
+    .reduce((sum, invoice) => sum + Math.max(0, Number(invoice.totalRub) - Number(invoice.paidRub)), 0);
 
   return {
     client,
@@ -1159,18 +1260,6 @@ function buildClientSummary(client: ClientSummary, data: CabinetData): ClientCab
     advanceRub,
     debtRub: Math.max(0, grossDebtRub - advanceRub),
   };
-}
-
-function unbilledApprovedChargesRub(charges: BillingChargeSummary[], invoices: BillingInvoiceSummary[]) {
-  const invoicedChargeIds = new Set(
-    invoices.flatMap((invoice) =>
-      invoice.items.map((item) => item.chargeId).filter((chargeId): chargeId is string => Boolean(chargeId)),
-    ),
-  );
-
-  return charges
-    .filter((charge) => charge.status === 'APPROVED' && !invoicedChargeIds.has(charge.id))
-    .reduce((sum, charge) => sum + Number(charge.totalRub), 0);
 }
 
 function formFromClient(client: ClientSummary): ClientManagementForm {
@@ -1191,8 +1280,11 @@ function formFromClient(client: ClientSummary): ClientManagementForm {
     correspondentAccount: client.correspondentAccount ?? '',
     storageAccountingEnabled: client.storageAccountingEnabled,
     storesWithoutBoxes: Boolean(client.storesWithoutBoxes),
+    stockBalanceMode: client.stockBalanceMode ?? 'PALLET_SORT',
     onlineReceiptVisibleToClient: Boolean(client.onlineReceiptVisibleToClient),
     fbsCalculatorEnabled: Boolean(client.fbsCalculatorEnabled),
+    primaryProcessingEnabled: false,
+    relabelingEnabled: Boolean(client.relabelingEnabled),
   };
 }
 
@@ -1214,8 +1306,10 @@ function compactClientPayload(form: ClientManagementForm): UpdateClientPayload {
     correspondentAccount: form.correspondentAccount.trim(),
     storageAccountingEnabled: form.storageAccountingEnabled,
     storesWithoutBoxes: form.storesWithoutBoxes,
+    stockBalanceMode: form.stockBalanceMode,
     onlineReceiptVisibleToClient: form.onlineReceiptVisibleToClient,
     fbsCalculatorEnabled: form.fbsCalculatorEnabled,
+    relabelingEnabled: form.relabelingEnabled,
   };
 }
 
@@ -1363,7 +1457,16 @@ function filterReconciliation(
 
   const clients = report.clients
     .filter((item) => !clientId || item.client.id === clientId)
-    .map((item) => rebuildReconciliationClient(item, item.invoices.filter((invoice) => periodMatchesRange(invoice.periodFrom, invoice.periodTo, filters))))
+    .map((item) =>
+      rebuildReconciliationClient(
+        item,
+        item.invoices.filter(
+          (invoice) =>
+            (invoice.status === 'ISSUED' || invoice.status === 'PAID') &&
+            periodMatchesRange(invoice.periodFrom, invoice.periodTo, filters),
+        ),
+      ),
+    )
     .filter((item) => item.invoicesCount > 0 || item.advanceRub > 0);
 
   return {

@@ -366,6 +366,58 @@ describe('PickInstructionService', () => {
 
     await expect(service.getRequestInstruction('request-1', user({ clientIds: ['client-1'] }))).rejects.toThrow(BadRequestException);
   });
+
+  it('принудительно пересчитывает активную заявку и исключает архивные короба', async () => {
+    const request = requestFixture({ status: ClientRequestStatus.IN_WORK });
+    const balance = balanceFixture({
+      id: 'balance-current',
+      boxId: 'box-current',
+      boxCode: 'FFL_CURRENT_001',
+      quantity: 4,
+    });
+    const eventCreate = vi.fn().mockResolvedValue({ id: 'event-refresh' });
+    const stockBalanceFindMany = vi.fn().mockResolvedValue([balance]);
+    const prisma = {
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue(request),
+        findMany: vi.fn().mockResolvedValue([request]),
+      },
+      clientRequestEvent: {
+        create: eventCreate,
+      },
+      barcode: { findMany: vi.fn().mockResolvedValue([]) },
+      clientArticleMapping: { findMany: vi.fn().mockResolvedValue([]) },
+      sku: { findMany: vi.fn().mockResolvedValue([]) },
+      stockBalance: {
+        findMany: stockBalanceFindMany,
+        groupBy: vi.fn().mockResolvedValue([{ boxId: balance.boxId, _sum: { quantity: balance.quantity } }]),
+      },
+      box: { findMany: vi.fn().mockResolvedValue([]) },
+    };
+    const service = new PickInstructionService(prisma as never, new ClientScopeService());
+
+    const document = await service.refreshRequestInstruction(
+      request.id,
+      user({ clientIds: ['client-1'], writableClientIds: ['client-1'] }),
+    );
+
+    expect(eventCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        requestId: request.id,
+        title: 'Принудительный пересчёт заявки по текущим остаткам',
+      }),
+    });
+    expect(stockBalanceFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          box: { status: { notIn: ['deleted', 'archived'] } },
+        }),
+      }),
+    );
+    expect(document.boxes).toEqual([
+      expect.objectContaining({ boxCode: 'FFL_CURRENT_001', allocatedQuantity: 4 }),
+    ]);
+  });
 });
 
 function requestFixture(

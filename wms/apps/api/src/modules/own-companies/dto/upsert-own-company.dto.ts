@@ -1,12 +1,24 @@
 import { Type } from 'class-transformer';
-import { IsArray, IsBoolean, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { IsArray, IsBoolean, IsOptional, IsString, IsUUID, ValidateNested } from 'class-validator';
 
 export class UpsertOwnCompanyBankAccountDto {
+  @IsOptional()
+  @IsUUID('4')
+  id?: string;
+
   @IsString()
   bankName!: string;
 
   @IsString()
   bankBik!: string;
+
+  @IsOptional()
+  @IsString()
+  bankInn?: string;
+
+  @IsOptional()
+  @IsString()
+  bankKpp?: string;
 
   @IsString()
   bankAccount!: string;
@@ -25,6 +37,10 @@ export class UpsertOwnCompanyBankAccountDto {
 }
 
 export class UpsertOwnCompanyDto {
+  @IsOptional()
+  @IsUUID('4')
+  warehouseId?: string | null;
+
   @IsString()
   shortName!: string;
 

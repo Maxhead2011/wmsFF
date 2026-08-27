@@ -1,4 +1,5 @@
 import { BillingInvoiceStatus } from '@prisma/client';
+import { PDFDocument } from 'pdf-lib';
 import { describe, expect, it, vi } from 'vitest';
 import type { AuthUser } from '../src/modules/auth/auth.types';
 import type { BillingPrintableDocument } from '../src/modules/billing/billing-document.service';
@@ -39,6 +40,30 @@ describe('BillingPdfService', () => {
     expect(documents.getInvoiceActDocument).toHaveBeenCalledWith('invoice-1', expect.any(Object));
     expect(file.fileName).toBe('ACT-202606-0001.pdf');
     expect(file.buffer.subarray(0, 4).toString()).toBe('%PDF');
+  });
+
+  it('объединяет счета одного клиента в один многостраничный PDF', async () => {
+    const documents = {
+      getInvoiceDocument: vi.fn().mockImplementation((invoiceId: string) =>
+        Promise.resolve({
+          ...printableDocument(),
+          invoiceId,
+          number: invoiceId === 'invoice-1' ? 'INV-202606-0001' : 'INV-202607-0002',
+          fileName: invoiceId === 'invoice-1' ? 'INV-202606-0001.html' : 'INV-202607-0002.html',
+        }),
+      ),
+      getInvoiceActDocument: vi.fn(),
+    };
+    const service = new BillingPdfService(documents as never);
+
+    const file = await service.getCombinedInvoicesPdf(['invoice-1', 'invoice-2'], 'CLIENT', user());
+    const merged = await PDFDocument.load(file.buffer);
+
+    expect(documents.getInvoiceDocument).toHaveBeenCalledTimes(2);
+    expect(file.fileName).toMatch(/^Счета_CLIENT_\d{4}-\d{2}-\d{2}\.pdf$/);
+    expect(file.contentType).toBe('application/pdf');
+    expect(file.buffer.subarray(0, 4).toString()).toBe('%PDF');
+    expect(merged.getPageCount()).toBeGreaterThanOrEqual(2);
   });
 });
 

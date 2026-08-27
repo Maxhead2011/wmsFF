@@ -7,6 +7,10 @@ const permissions = [
   ['users:write', 'Создание и изменение пользователей'],
   ['clients:read', 'Просмотр клиентов'],
   ['clients:write', 'Создание и изменение клиентов'],
+  // ADDED: issuing external WMS keys is isolated from system administration.
+  ['integration-api:manage', 'Управление внешними API-доступами WMS'],
+  // FIX: отдельное право не открывает клиенту редактирование реквизитов и чужих кабинетов.
+  ['marketplace-api:write', 'Управление API маркетплейсов закреплённых клиентов'],
   ['skus:read', 'Просмотр SKU'],
   ['skus:write', 'Создание и изменение SKU'],
   ['warehouse:read', 'Просмотр складской структуры'],
@@ -24,7 +28,17 @@ const permissions = [
   ['logistics:write', 'Загрузка и изменение тарифов логистики'],
   ['billing:read', 'Просмотр услуг и начислений биллинга'],
   ['billing:write', 'Создание услуг и начислений биллинга'],
+  ['expenses:read', 'Просмотр расходов, материалов и задолженности клиентов'],
+  ['expenses:write', 'Управление расходами, материалами и правилами списания'],
   ['print:write', 'Печать этикеток'],
+  ['factory-shipments:read', 'Просмотр отправок с фабрики'],
+  ['factory-shipments:write', 'Управление отправками с фабрики'],
+  ['factory-shipments:scan', 'Сканирование товаров на фабрике'],
+  // ADDED: отдельные права позволяют открыть клиенту КИЗ без system:admin.
+  ['kiz-circulation:read', 'Просмотр погашения КИЗ'],
+  ['kiz-circulation:write', 'Управление погашением КИЗ'],
+  ['own-companies:read', 'Просмотр собственных компаний'],
+  ['own-companies:write', 'Создание и изменение собственных компаний'],
 ] as const;
 
 const rolePermissions: Record<string, { name: string; permissions: string[] }> = {
@@ -59,7 +73,35 @@ const rolePermissions: Record<string, { name: string; permissions: string[] }> =
       'logistics:write',
       'billing:read',
       'billing:write',
+      'expenses:read',
+      'expenses:write',
       'print:write',
+      'own-companies:read',
+      'own-companies:write',
+    ],
+  },
+  BRANCH_MANAGER: {
+    name: 'Менеджер филиала',
+    permissions: [
+      'clients:read',
+      'clients:write',
+      'skus:read',
+      'skus:write',
+      'warehouse:read',
+      'warehouse:write',
+      'stock:read',
+      'stock:write',
+      'client-requests:read',
+      'client-requests:write',
+      'client-requests:status',
+      'client-notifications:read',
+      'client-notifications:write',
+      'imports:write',
+      'logistics:read',
+      'logistics:request',
+      'print:write',
+      'own-companies:read',
+      'own-companies:write',
     ],
   },
   OPERATOR: {
@@ -81,6 +123,26 @@ const rolePermissions: Record<string, { name: string; permissions: string[] }> =
       'print:write',
     ],
   },
+  WAREHOUSE_KEEPER: {
+    name: 'Кладовщик',
+    permissions: [
+      'clients:read',
+      'skus:read',
+      'warehouse:read',
+      'warehouse:write',
+      'stock:read',
+      'stock:write',
+    ],
+  },
+  FACTORY_OPERATOR: {
+    name: 'Сотрудник фабрики',
+    permissions: [
+      'clients:read',
+      'skus:read',
+      'factory-shipments:read',
+      'factory-shipments:scan',
+    ],
+  },
   CLIENT: {
     name: 'Клиент',
     permissions: [
@@ -93,7 +155,20 @@ const rolePermissions: Record<string, { name: string; permissions: string[] }> =
       'logistics:read',
       'logistics:request',
       'billing:read',
+      // ADDED: клиент управляет только данными закреплённого за ним клиента.
+      'factory-shipments:read',
+      'factory-shipments:write',
+      'kiz-circulation:read',
+      'kiz-circulation:write',
     ],
+  },
+  CLIENT_API_MANAGER: {
+    name: 'Управление API клиента',
+    permissions: ['marketplace-api:write'],
+  },
+  WMS_API_MANAGER: {
+    name: 'Управление внешним API WMS',
+    permissions: ['integration-api:manage'],
   },
 };
 

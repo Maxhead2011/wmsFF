@@ -87,6 +87,7 @@ export function UserScopeEditor({ session }: UserScopeEditorProps) {
 
     try {
       const saved = await updateUserClientScopes(session.accessToken, selectedUser.id, {
+        allClients: scopeMode === 'all',
         scopes: scopeMode === 'all' ? [] : scopeMapToPayload(scopeMap),
       });
       setSavedUser({

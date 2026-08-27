@@ -1,0 +1,340 @@
+.fbs-stock-reports {
+  display: grid;
+  min-width: 0;
+  width: 100%;
+  gap: 18px;
+}
+
+.fbs-stock-reports__toolbar,
+.fbs-stock-reports__section {
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.fbs-stock-reports__toolbar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(210px, 1fr)) minmax(230px, auto);
+  align-items: end;
+  gap: 12px;
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.fbs-stock-reports__toolbar > *,
+.fbs-stock-reports__section > header > * {
+  min-width: 0;
+}
+
+.fbs-stock-reports__toolbar label,
+.fbs-stock-reports__period label {
+  display: grid;
+  gap: 6px;
+}
+
+.fbs-stock-reports__toolbar label > span,
+.fbs-stock-reports__period label > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.fbs-stock-reports__toolbar select,
+.fbs-stock-reports__period input {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfdff;
+  color: var(--ink);
+  padding: 0 11px;
+}
+
+.fbs-stock-reports__updated {
+  display: grid;
+  min-height: 40px;
+  justify-items: end;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.fbs-stock-reports__updated > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  text-align: right;
+}
+
+.fbs-stock-reports__section {
+  display: grid;
+  gap: 16px;
+  border-radius: 12px;
+  padding: 18px;
+}
+
+.fbs-stock-reports__section .secondary-button,
+.fbs-stock-reports__section .primary-button,
+.fbs-stock-reports__updated .secondary-button {
+  min-height: 44px;
+}
+
+.fbs-stock-reports__section > header,
+.fbs-stock-reports__subheading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.fbs-stock-reports__section h3,
+.fbs-stock-reports__section h4,
+.fbs-stock-reports__section p {
+  margin: 0;
+}
+
+.fbs-stock-reports__section h3 {
+  font-size: 21px;
+  letter-spacing: -.025em;
+}
+
+.fbs-stock-reports__section header p {
+  max-width: 72ch;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.fbs-stock-reports__facts,
+.fbs-stock-reports__quick-periods {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fbs-stock-reports__facts span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 7px;
+  background: #f1f5f9;
+  color: #334155;
+  padding: 7px 9px;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.fbs-stock-reports__period {
+  display: grid;
+  grid-template-columns: minmax(170px, 240px) minmax(170px, 240px) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.fbs-stock-reports__quick-periods .secondary-button,
+.fbs-stock-reports__pager .secondary-button {
+  min-height: 44px;
+  padding-inline: 12px;
+}
+
+.fbs-stock-reports__quick-periods button:hover,
+.fbs-stock-reports__quick-periods button:focus-visible,
+.fbs-stock-reports__pager button:hover:not(:disabled),
+.fbs-stock-reports__pager button:focus-visible:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: 0;
+}
+
+.fbs-stock-reports__metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  border-block: 1px solid var(--line);
+}
+
+.fbs-stock-reports__metrics--four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.fbs-stock-reports__metric {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-right: 1px solid var(--line);
+}
+
+.fbs-stock-reports__metric:last-child { border-right: 0; }
+
+.fbs-stock-reports__metric span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.fbs-stock-reports__metric strong {
+  flex: 0 0 auto;
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.03em;
+}
+
+.fbs-stock-reports .turnover-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.fbs-stock-reports__daily {
+  display: flex;
+  overflow-x: auto;
+  gap: 7px;
+  padding-bottom: 2px;
+}
+
+.fbs-stock-reports__daily > div {
+  display: grid;
+  min-width: 150px;
+  gap: 3px;
+  border-bottom: 2px solid #93c5fd;
+  background: #eff6ff;
+  padding: 8px 10px;
+}
+
+.fbs-stock-reports__daily strong {
+  color: #1e3a5f;
+  font-size: 12px;
+}
+
+.fbs-stock-reports__daily span,
+.fbs-stock-reports__daily p {
+  color: #475569;
+  font-size: 11px;
+}
+
+.fbs-stock-reports__table tbody tr {
+  cursor: default;
+}
+
+.fbs-stock-reports__table--boxes {
+  min-width: 1040px;
+}
+
+.fbs-stock-reports__box-block {
+  display: grid;
+  gap: 11px;
+  padding-top: 4px;
+}
+
+.fbs-stock-reports__box-block + .fbs-stock-reports__box-block {
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+
+.fbs-stock-reports__subheading {
+  align-items: center;
+}
+
+.fbs-stock-reports__subheading > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fbs-stock-reports__subheading h4 {
+  font-size: 16px;
+}
+
+.fbs-stock-reports__subheading > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.fbs-stock-reports__pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.fbs-stock-reports__pager span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.fbs-stock-reports__pager button:disabled {
+  cursor: not-allowed;
+  opacity: .48;
+}
+
+.fbs-stock-reports .is-spinning {
+  animation: fbs-stock-reports-spin 900ms linear infinite;
+}
+
+@keyframes fbs-stock-reports-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fbs-stock-reports .is-spinning { animation: none; }
+}
+
+@media (max-width: 900px) {
+  .fbs-stock-reports__toolbar,
+  .fbs-stock-reports__metrics--four {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .fbs-stock-reports__updated {
+    grid-column: 1 / -1;
+    justify-items: start;
+  }
+
+  .fbs-stock-reports__updated > div { text-align: left; }
+
+  .fbs-stock-reports__metrics--four .fbs-stock-reports__metric:nth-child(2n) { border-right: 0; }
+}
+
+@media (max-width: 650px) {
+  .fbs-stock-reports__toolbar,
+  .fbs-stock-reports__period {
+    grid-template-columns: 1fr;
+  }
+
+  .fbs-stock-reports__metrics,
+  .fbs-stock-reports__metrics--four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  .fbs-stock-reports__section > header,
+  .fbs-stock-reports__subheading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .fbs-stock-reports__section > header button { width: 100%; }
+  .fbs-stock-reports__pager { justify-content: space-between; }
+
+  .fbs-stock-reports__section { padding: 14px; }
+
+  .fbs-stock-reports__metric {
+    align-items: flex-start;
+    flex-direction: column;
+    border-right: 1px solid var(--line);
+  }
+
+  .fbs-stock-reports__metric:nth-child(2n) { border-right: 0; }
+
+  .fbs-stock-reports__quick-periods .secondary-button { flex: 1 1 calc(50% - 8px); }
+}
+

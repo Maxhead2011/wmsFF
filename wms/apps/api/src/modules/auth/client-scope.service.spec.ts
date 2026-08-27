@@ -35,4 +35,20 @@ describe('ClientScopeService demo isolation', () => {
     expect(() => service.requireClientAccess(demoUser(), 'demo-client', 'read')).not.toThrow();
     expect(() => service.requireClientAccess(demoUser(), 'demo-client', 'write')).not.toThrow();
   });
+
+  it('excludes demo clients from a live global session', () => {
+    const liveAdmin = demoUser({
+      id: 'admin',
+      email: 'admin',
+      name: 'Admin',
+      isDemo: false,
+      clientIds: [],
+      writableClientIds: [],
+      hiddenClientIds: ['demo-client'],
+    });
+
+    expect(service.resolveClientFilter(liveAdmin)).toEqual({ notIn: ['demo-client'] });
+    expect(() => service.requireClientAccess(liveAdmin, 'real-client', 'read')).not.toThrow();
+    expect(() => service.requireClientAccess(liveAdmin, 'demo-client', 'read')).toThrow(ForbiddenException);
+  });
 });

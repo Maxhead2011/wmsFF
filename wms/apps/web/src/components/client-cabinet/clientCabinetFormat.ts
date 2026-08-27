@@ -42,6 +42,7 @@ export function formatCabinetNumber(value: number) {
 
 const stockStatusLabels: Record<string, string> = {
   AVAILABLE: 'Доступно',
+  IN_TRANSIT: 'В пути между филиалами',
   RESERVED: 'Зарезервировано',
   RECEIVING: 'Приемка',
   PACKING: 'Сборка',

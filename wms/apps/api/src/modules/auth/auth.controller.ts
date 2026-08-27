@@ -28,9 +28,20 @@ export class AuthController {
     });
   }
 
+  @Post('logout')
+  @ApiBearerAuth()
+  logout(@Req() request: Request) {
+    return this.auth.logout(this.extractBearerToken(request.headers.authorization));
+  }
+
   @Get('me')
   @ApiBearerAuth()
   me(@CurrentUser() user: AuthUser) {
     return user;
+  }
+
+  private extractBearerToken(authorization?: string) {
+    const [scheme, token] = authorization?.split(' ') ?? [];
+    return scheme === 'Bearer' && token ? token : '';
   }
 }

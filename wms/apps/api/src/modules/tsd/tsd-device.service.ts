@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
-import { ClientStatus, TsdDeviceStatus, UserStatus } from '@prisma/client';
-import { randomBytes } from 'crypto';
+import { ClientStatus, Prisma, TsdDeviceStatus, TsdOperationStatus, UserStatus } from '@prisma/client';
+import { randomBytes, randomUUID } from 'crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AccessTokenService } from '../auth/access-token.service';
 import type { AuthUser } from '../auth/auth.types';
@@ -8,6 +8,10 @@ import { ClientScopeService } from '../auth/client-scope.service';
 import { PasswordService } from '../auth/password.service';
 import { CreateTsdDeviceDto } from './dto/create-tsd-device.dto';
 import { LoginTsdDeviceDto } from './dto/login-tsd-device.dto';
+
+const FBS_TSD_RESERVED_STATUS = 'RESERVED';
+const FBS_TSD_AUTO_RESERVATION_DEVICE = 'AUTO:FBS:PALLET_SORT';
+const TSD_PHYSICAL_INSTALLATION_PREFIX = 'TSD-INSTALL-';
 
 @Injectable()
 export class TsdDeviceService {
@@ -39,6 +43,85 @@ export class TsdDeviceService {
         },
       },
     });
+  }
+
+  async recordMonitorHeartbeat(body: Record<string, unknown>, user: AuthUser) {
+    const reportedDeviceCode = monitorText(body.deviceCode) || user.deviceCode;
+    const deviceCode = this.monitorDeviceCode(
+      monitorText(body.installationCode),
+      reportedDeviceCode,
+      user.id,
+    );
+    if (!deviceCode) {
+      throw new BadRequestException('Не удалось определить код ТСД для мониторинга.');
+    }
+    await this.touchActiveDevice(user.deviceId);
+    const payload = monitorPayload(body, deviceCode, user.name, user.id);
+    await this.prisma.tsdOperation.upsert({
+      where: { operationKey: `monitor-heartbeat:${deviceCode}` },
+      update: {
+        payload: payload as Prisma.InputJsonValue,
+        status: TsdOperationStatus.ACCEPTED,
+        serverMessage: monitorText(body.lastAction) || null,
+      },
+      create: {
+        deviceId: deviceCode,
+        operationKey: `monitor-heartbeat:${deviceCode}`,
+        operationType: 'monitor_heartbeat',
+        payload: payload as Prisma.InputJsonValue,
+        status: TsdOperationStatus.ACCEPTED,
+        serverMessage: monitorText(body.lastAction) || null,
+      },
+    });
+      const command = await this.prisma.tsdOperation.findFirst({
+        where: {
+          deviceId: deviceCode,
+          operationType: 'monitor_command',
+          status: TsdOperationStatus.NEEDS_REVIEW,
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+    if (command) {
+      await this.prisma.tsdOperation.update({
+        where: { id: command.id },
+        data: { status: TsdOperationStatus.ACCEPTED, serverMessage: 'Команда доставлена на ТСД.' },
+      });
+    }
+    return {
+      accepted: true,
+      serverTime: new Date().toISOString(),
+      command: command
+        ? {
+            id: command.id,
+            action: monitorText(administrationPayloadValue(command.payload, 'action')),
+          }
+        : null,
+    };
+  }
+
+  async recordMonitorError(body: Record<string, unknown>, user: AuthUser) {
+    const reportedDeviceCode = monitorText(body.deviceCode) || user.deviceCode;
+    const deviceCode = this.monitorDeviceCode(
+      monitorText(body.installationCode),
+      reportedDeviceCode,
+      user.id,
+    );
+    const message = monitorText(body.message);
+    if (!deviceCode || !message) {
+      throw new BadRequestException('Для журнала ошибки нужны код ТСД и текст ошибки.');
+    }
+    await this.touchActiveDevice(user.deviceId);
+    await this.prisma.tsdOperation.create({
+      data: {
+        deviceId: deviceCode,
+        operationKey: `monitor-error:${deviceCode}:${Date.now()}:${randomUUID()}`,
+        operationType: 'monitor_error',
+        payload: monitorPayload(body, deviceCode, user.name, user.id) as Prisma.InputJsonValue,
+        status: TsdOperationStatus.REJECTED,
+        serverMessage: message,
+      },
+    });
+    return { accepted: true, serverTime: new Date().toISOString() };
   }
 
   async createDevice(dto: CreateTsdDeviceDto) {
@@ -163,40 +246,78 @@ export class TsdDeviceService {
         user.roles.flatMap((item) => item.role.permissions.map((permission) => permission.permission.code)),
       ),
     ];
+    const roleCodes = [...new Set(user.roles.map((item) => item.role.code))];
     if (!permissionCodes.includes('stock:write') && !permissionCodes.includes('system:admin')) {
       throw new UnauthorizedException('У пользователя ТСД нет права stock:write.');
     }
 
-    const device = await this.prisma.tsdDevice.findFirst({
-      where: { userId: user.id, status: TsdDeviceStatus.ACTIVE },
-      orderBy: { createdAt: 'asc' },
-      select: { id: true, code: true, name: true },
+    const installationCode = dto.installationCode?.trim();
+    if (!installationCode) {
+      throw new UnauthorizedException({
+        code: 'TSD_UPDATE_REQUIRED',
+        message: 'Обновите приложение ТСД и войдите заново: старая версия не передаёт код физического устройства.',
+      });
+    }
+    const deviceCode = this.normalizeCode(installationCode);
+    let device = await this.prisma.tsdDevice.findUnique({
+      where: { code: deviceCode },
+      select: { id: true, code: true, name: true, userId: true, status: true },
     });
-
-    if (device) {
+    if (!device) {
+      try {
+        device = await this.prisma.tsdDevice.create({
+          data: {
+            code: deviceCode,
+            name: `${user.name} · ${deviceCode.slice(-8)}`,
+            userId: user.id,
+            secretHash: await this.passwords.hash(randomBytes(32).toString('hex')),
+            lastLoginAt: new Date(),
+            lastSeenAt: new Date(),
+          },
+          select: { id: true, code: true, name: true, userId: true, status: true },
+        });
+      } catch (caught) {
+        if (!(caught instanceof Prisma.PrismaClientKnownRequestError) || caught.code !== 'P2002') {
+          throw caught;
+        }
+        device = await this.prisma.tsdDevice.findUnique({
+          where: { code: deviceCode },
+          select: { id: true, code: true, name: true, userId: true, status: true },
+        });
+      }
+    }
+    if (!device) {
+      throw new UnauthorizedException('Не удалось зарегистрировать физический ТСД. Повторите вход.');
+    }
+    if (device.status !== TsdDeviceStatus.ACTIVE) {
+      throw new UnauthorizedException('Этот физический ТСД заблокирован администратором.');
+    }
+    if (device.userId !== user.id) {
+      device = await this.rebindSharedInstallation(device, user);
+    } else {
       await this.prisma.tsdDevice.update({
         where: { id: device.id },
         data: { lastLoginAt: new Date(), lastSeenAt: new Date() },
       });
     }
-
-    const deviceCode = device?.code ?? this.loginDeviceCode(user.email);
+    await this.releaseUntouchedLegacyFbsLeases(user.id, user.name, deviceCode);
 
     return {
       accessToken: this.tokens.sign(user.id, {
-        ...(device ? { deviceId: device.id } : {}),
+        deviceId: device.id,
         deviceCode,
       }),
       tokenType: 'Bearer',
       device: {
-        id: device?.id ?? user.id,
+        id: device.id,
         code: deviceCode,
-        name: device?.name ?? user.name,
+        name: device.name,
       },
       user: {
         id: user.id,
         email: user.email,
         name: user.name,
+        roleCodes,
         permissionCodes,
       },
     };
@@ -247,6 +368,7 @@ export class TsdDeviceService {
         device.user.roles.flatMap((item) => item.role.permissions.map((permission) => permission.permission.code)),
       ),
     ];
+    const roleCodes = [...new Set(device.user.roles.map((item) => item.role.code))];
     if (!permissionCodes.includes('stock:write') && !permissionCodes.includes('system:admin')) {
       throw new UnauthorizedException('У пользователя ТСД нет права stock:write.');
     }
@@ -271,6 +393,7 @@ export class TsdDeviceService {
         id: device.user.id,
         email: device.user.email,
         name: device.user.name,
+        roleCodes,
         permissionCodes,
       },
     };
@@ -300,6 +423,160 @@ export class TsdDeviceService {
     return randomBytes(24).toString('base64url');
   }
 
+  /**
+   * Credential login identifies the employee while installationCode identifies
+   * the physical handheld. Shared handhelds can move between employees, but the
+   * device row (and monitor card) stays stable. The current on-device FBS task
+   * moves in the same serializable transaction, so the old token loses its
+   * lease immediately and cannot write after the new employee signs in.
+   * Device-secret login deliberately remains pinned to its configured user.
+   */
+  private async rebindSharedInstallation(
+    device: { id: string; code: string; name: string; userId: string; status: TsdDeviceStatus },
+    user: { id: string; name: string },
+  ) {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const current = await tx.tsdDevice.findUnique({
+          where: { id: device.id },
+          select: { id: true, code: true, name: true, userId: true, status: true },
+        });
+        if (!current || current.status !== TsdDeviceStatus.ACTIVE) {
+          throw new UnauthorizedException('Этот физический ТСД заблокирован или удалён.');
+        }
+        if (current.userId !== user.id) {
+          const rebound = await tx.tsdDevice.updateMany({
+            where: { id: current.id, userId: current.userId, status: TsdDeviceStatus.ACTIVE },
+            data: { userId: user.id, lastLoginAt: new Date(), lastSeenAt: new Date() },
+          });
+          if (rebound.count !== 1) {
+            throw new UnauthorizedException('Сотрудник на этом ТСД уже изменился. Повторите вход.');
+          }
+          const movedTasks = await tx.fbsTsdAssembly.updateMany({
+            where: {
+              deviceCode: current.code,
+              workerUserId: current.userId,
+              status: 'IN_PROGRESS',
+            },
+            data: {
+              workerUserId: user.id,
+              workerName: user.name,
+              errorMessage: null,
+            },
+          });
+          await tx.auditLog.create({
+            data: {
+              userId: user.id,
+              action: 'TSD_SHARED_INSTALLATION_REBOUND',
+              entity: 'TsdDevice',
+              entityId: current.id,
+              payload: {
+                deviceCode: current.code,
+                previousUserId: current.userId,
+                nextUserId: user.id,
+                movedFbsTasks: movedTasks.count,
+              },
+            },
+          });
+        } else {
+          await tx.tsdDevice.update({
+            where: { id: current.id },
+            data: { lastLoginAt: new Date(), lastSeenAt: new Date() },
+          });
+        }
+        const reboundDevice = await tx.tsdDevice.findUnique({
+          where: { id: current.id },
+          select: { id: true, code: true, name: true, userId: true, status: true },
+        });
+        if (!reboundDevice || reboundDevice.userId !== user.id) {
+          throw new UnauthorizedException('Не удалось перепривязать общий ТСД. Повторите вход.');
+        }
+        return reboundDevice;
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    } catch (caught) {
+      if (caught instanceof UnauthorizedException) throw caught;
+      if (caught instanceof Prisma.PrismaClientKnownRequestError && caught.code === 'P2034') {
+        throw new UnauthorizedException('Сотрудник на этом ТСД уже изменился. Повторите вход.');
+      }
+      throw caught;
+    }
+  }
+
+  /**
+   * Versions before physical installation identity assigned FBS tasks to
+   * shared codes such as USER:<login> or TSD-01. Once the same employee has
+   * successfully logged in with TSD-INSTALL-*, return only completely
+   * untouched legacy leases to the automatic reservation queue. Reserved box
+   * fields are intentionally not changed. Any physical/WB/label/finalization
+   * marker makes the row ineligible and leaves it for explicit review.
+   */
+  private async releaseUntouchedLegacyFbsLeases(
+    userId: string,
+    userName: string,
+    physicalDeviceCode: string,
+  ) {
+    if (!physicalDeviceCode.startsWith(TSD_PHYSICAL_INSTALLATION_PREFIX)) {
+      return 0;
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const released = await tx.fbsTsdAssembly.updateMany({
+        where: {
+          status: 'IN_PROGRESS',
+          workerUserId: userId,
+          deviceCode: {
+            not: { startsWith: TSD_PHYSICAL_INSTALLATION_PREFIX },
+          },
+          boxId: null,
+          boxCode: null,
+          sourceBarcode: null,
+          barcode: null,
+          kiz: null,
+          relabelConfirmedAt: null,
+          wbMetaStatus: { in: ['PENDING', 'NOT_REQUIRED'] },
+          marketplaceSubmittedAt: null,
+          marketplaceLabelBase64: null,
+          marketplaceLabelContentType: null,
+          marketplaceSubmitError: null,
+          stickerPartA: null,
+          stickerPartB: null,
+          stickerBarcode: null,
+          sourceBoxPending: false,
+          cargoPackingId: null,
+          cargoPackedAt: null,
+          cargoPackedByUserId: null,
+          cargoPackedByName: null,
+          completedAt: null,
+        },
+        data: {
+          status: FBS_TSD_RESERVED_STATUS,
+          deviceCode: FBS_TSD_AUTO_RESERVATION_DEVICE,
+          workerUserId: null,
+          workerName: null,
+          startedAt: null,
+          errorMessage:
+            `Нетронутое задание старой сессии ${userName} возвращено в автоматический резерв после входа с ${physicalDeviceCode}.`,
+        },
+      });
+      if (released.count > 0) {
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: 'TSD_LEGACY_FBS_LEASES_RELEASED',
+            entity: 'User',
+            entityId: userId,
+            payload: {
+              physicalDeviceCode,
+              releasedTasks: released.count,
+              predicateVersion: 1,
+              preservedReservation: true,
+            },
+          },
+        });
+      }
+      return released.count;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+
   private normalizeCode(code: string) {
     return code.trim().toUpperCase();
   }
@@ -311,4 +588,55 @@ export class TsdDeviceService {
   private loginDeviceCode(login: string) {
     return `USER:${login.trim().toLowerCase()}`;
   }
+
+  private monitorDeviceCode(installationCode: string, reportedDeviceCode: string | undefined, userId: string) {
+    const installation = installationCode.trim();
+    if (installation) return this.normalizeCode(installation);
+
+    const reported = (reportedDeviceCode ?? '').trim();
+    if (!reported) return '';
+    if (/^FFU-TSD-/i.test(reported)) return this.normalizeCode(reported);
+
+    return `${this.normalizeCode(reported)}@${userId.slice(0, 8).toUpperCase()}`;
+  }
+}
+
+function monitorPayload(body: Record<string, unknown>, deviceCode: string, workerName: string, workerUserId: string) {
+  return {
+    deviceCode,
+    workerName,
+    workerUserId,
+    screen: monitorText(body.screen),
+    screenLabel: monitorText(body.screenLabel),
+    stage: monitorText(body.stage),
+    state: monitorText(body.state),
+    requestId: monitorText(body.requestId),
+    requestNumber: monitorNumber(body.requestNumber),
+    clientName: monitorText(body.clientName),
+    orderId: monitorText(body.orderId),
+    productName: monitorText(body.productName),
+    boxCode: monitorText(body.boxCode),
+    total: monitorNumber(body.total),
+    completed: monitorNumber(body.completed),
+    remaining: monitorNumber(body.remaining),
+    accepted: monitorNumber(body.accepted),
+    lastAction: monitorText(body.lastAction),
+    message: monitorText(body.message),
+    appVersion: monitorText(body.appVersion),
+    reportedAt: new Date().toISOString(),
+  };
+}
+
+function monitorText(value: unknown) {
+  return typeof value === 'string' ? value.trim().slice(0, 2000) : '';
+}
+
+function monitorNumber(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : null;
+}
+
+function administrationPayloadValue(payload: Prisma.JsonValue, key: string) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+  return (payload as Prisma.JsonObject)[key];
 }

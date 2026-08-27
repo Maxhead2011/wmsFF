@@ -1,22 +1,33 @@
 import {
   BriefcaseBusiness,
   BarChart3,
+  BadgeCheck,
   Building2,
   Boxes,
   Bug,
   Calculator,
+  CircleDollarSign,
   ClipboardCheck,
   ClipboardList,
+  Crown,
   Database,
   FolderCog,
+  FileSignature,
   HandCoins,
   LayoutDashboard,
+  KeyRound,
+  MapPinned,
+  MessageSquareMore,
+  MonitorUp,
+  PackageCheck,
   PackageSearch,
   Printer,
   RefreshCw,
+  ScanLine,
   ShieldCheck,
   ShoppingBasket,
   Settings2,
+  Tags,
   Truck,
   Upload,
 } from 'lucide-react';
@@ -25,25 +36,41 @@ import type { AuthUser } from './api';
 
 export type WorkspaceId =
   | 'overview'
+  | 'ai'
   | 'cabinet'
   | 'analytics'
+  | 'branches'
   | 'access'
+  | 'integration-api'
   | 'directories'
   | 'imports'
   | 'logistics'
   | 'warehouse'
+  | 'storage-zones'
   | 'inventory'
+  | 'kiz'
+  | 'kiz-circulation'
   | 'turnover'
   | 'requests'
+  | 'contracts'
   | 'fbs'
+  | 'factory'
+  | 'fbs-packed'
+  | 'order-assembly'
+  | 'monitoring'
+  | 'dbs'
+  | 'fbo-ozon'
+  | 'relabeling'
   | 'catalog'
   | 'billing'
+  | 'expenses'
   | 'services'
   | 'own-companies'
   | 'print'
   | 'service'
   | 'debug'
-  | 'data';
+  | 'data'
+  | 'administration';
 
 export type WorkspaceNavItem = {
   id: WorkspaceId;
@@ -56,6 +83,8 @@ export type WorkspaceNavItem = {
   status: 'ready' | 'in-progress' | 'planned';
   audience?: 'all' | 'internal' | 'client';
   requiresAnalyticsAccess?: boolean;
+  requiresRelabelingAccess?: boolean;
+  requiresAdministrationAccess?: boolean;
 };
 
 export const workspaceNav: WorkspaceNavItem[] = [
@@ -86,9 +115,20 @@ export const workspaceNav: WorkspaceNavItem[] = [
     eyebrow: 'Администрирование',
     description: 'Пользователи, роли, клиентские scope и ТСД-устройства.',
     permissions: ['users:read', 'users:write'],
+    permissionMode: 'all',
     icon: ShieldCheck,
     status: 'ready',
     audience: 'internal',
+  },
+  {
+    id: 'integration-api',
+    title: 'API WMS',
+    eyebrow: 'Внешние системы',
+    description: 'Документация, выпуск, замена и отзыв изолированных API-ключей клиента.',
+    permissions: ['integration-api:manage'],
+    icon: KeyRound,
+    status: 'ready',
+    audience: 'all',
   },
   {
     id: 'directories',
@@ -111,6 +151,39 @@ export const workspaceNav: WorkspaceNavItem[] = [
     audience: 'internal',
   },
   {
+    id: 'ai',
+    title: 'ИИ',
+    eyebrow: 'Локальный WMS-ассистент',
+    description: 'Чат для анализа проблем WMS, поиска аномалий, Excel-выгрузок и накопления подтверждённых решений.',
+    permissions: ['warehouse:read', 'stock:read'],
+    permissionMode: 'all',
+    icon: MessageSquareMore,
+    status: 'ready',
+    audience: 'internal',
+  },
+  {
+    id: 'branches',
+    title: 'Филиалы',
+    eyebrow: 'Города и подразделения',
+    description: 'Отдельные ФФ, их ИП, менеджеры, остатки и межгородские перемещения клиентов.',
+    permissions: ['warehouse:read', 'stock:read'],
+    permissionMode: 'all',
+    icon: MapPinned,
+    status: 'ready',
+    audience: 'internal',
+  },
+  {
+    id: 'storage-zones',
+    title: 'Зоны хранения',
+    eyebrow: 'Адресное размещение',
+    description: 'Зоны, паллет-сорт и фактическое размещение коробов на складе.',
+    permissions: ['warehouse:read', 'warehouse:write'],
+    permissionMode: 'all',
+    icon: MapPinned,
+    status: 'ready',
+    audience: 'internal',
+  },
+  {
     id: 'inventory',
     title: 'Инвентаризация',
     eyebrow: 'Складской контроль',
@@ -120,6 +193,28 @@ export const workspaceNav: WorkspaceNavItem[] = [
     icon: ClipboardCheck,
     status: 'ready',
     audience: 'internal',
+  },
+  {
+    id: 'kiz',
+    title: 'КИЗ',
+    eyebrow: 'Контроль маркировки',
+    description:
+      'Очередь проблемных КИЗ после FBS-отбора, исправление данных WMS и повторная синхронизация с Wildberries.',
+    permissions: ['system:admin'],
+    icon: ScanLine,
+    status: 'ready',
+    audience: 'internal',
+  },
+  {
+    id: 'kiz-circulation',
+    title: 'Погашение КИЗ',
+    eyebrow: 'Честный знак и маркетплейсы',
+    description: 'Продажи WB, Ozon и Яндекс Маркета, сверка статусов ГИС МТ, погашение и возврат в оборот.',
+    // FIX: отдельное read-право открывает погашение клиенту без system:admin.
+    permissions: ['kiz-circulation:read'],
+    icon: BadgeCheck,
+    status: 'ready',
+    audience: 'all',
   },
   {
     id: 'turnover',
@@ -142,6 +237,16 @@ export const workspaceNav: WorkspaceNavItem[] = [
     audience: 'all',
   },
   {
+    id: 'contracts',
+    title: 'Договоры',
+    eyebrow: 'Клиентский контур',
+    description: 'Создание, хранение и скачивание договоров, подписанных экземпляров и дополнительных соглашений.',
+    permissions: [],
+    icon: FileSignature,
+    status: 'ready',
+    audience: 'all',
+  },
+  {
     id: 'fbs',
     title: 'FBS',
     eyebrow: 'Клиентский контур',
@@ -150,6 +255,79 @@ export const workspaceNav: WorkspaceNavItem[] = [
     icon: ShoppingBasket,
     status: 'in-progress',
     audience: 'client',
+  },
+  {
+    id: 'factory',
+    title: 'Фабрика',
+    eyebrow: 'Товар в пути',
+    description: 'Предварительные отправки с производства и сверка с фактической приёмкой.',
+    permissions: ['factory-shipments:read', 'factory-shipments:write'],
+    icon: Truck,
+    status: 'ready',
+    audience: 'all',
+  },
+  {
+    id: 'order-assembly',
+    title: 'Сборка заказов',
+    eyebrow: 'WB · потоковая печать',
+    description: 'Сканирование КИЗ, поиск заказа и печать уникального WB-стикера.',
+    permissions: ['stock:write'],
+    icon: ScanLine,
+    status: 'ready',
+    audience: 'internal',
+  },
+  {
+    id: 'fbs-packed',
+    title: 'Упаковка FBS',
+    eyebrow: 'Контроль ТСД',
+    description: 'Журнал всех товаров, собранных на ТСД: заказ, заявка, КИЗ, короб, палетсорт, стикер и сотрудник.',
+    permissions: ['stock:read'],
+    icon: PackageCheck,
+    status: 'ready',
+    audience: 'internal',
+  },
+  {
+    id: 'monitoring',
+    title: 'Мониторинг',
+    eyebrow: 'Остатки WB · WMS',
+    description: 'Контроль обработки заказов и изменения остатков WB и WMS. Внутренним ролям также доступна диспетчерская ТСД.',
+    // FIX: клиент видит монитор только в рамках собственных clientIds;
+    // внутренний экран ТСД дополнительно закрыт в MonitoringPanel.
+    permissions: ['clients:read'],
+    icon: MonitorUp,
+    status: 'ready',
+    audience: 'all',
+  },
+  {
+    id: 'dbs',
+    title: 'DBS',
+    eyebrow: 'Доставка силами продавца',
+    description: 'Заказы DBS Wildberries, Ozon и Яндекс Маркета в отдельных рабочих контурах.',
+    permissions: [],
+    icon: Truck,
+    status: 'in-progress',
+    audience: 'client',
+  },
+  {
+    id: 'fbo-ozon',
+    title: 'FBO Ozon',
+    eyebrow: 'Поставки на склады Ozon',
+    description: 'Импорт распределения из Excel, слоты, короба WMS, сборка и передача поставки в Ozon.',
+    permissions: [],
+    icon: Boxes,
+    status: 'ready',
+    audience: 'client',
+  },
+  {
+    id: 'relabeling',
+    title: 'Переклейка',
+    eyebrow: 'Клиентский контур',
+    description: 'Таблица соответствий исходного товара и товара, который должен уехать после переклейки.',
+    permissions: ['skus:read'],
+    icon: Tags,
+    status: 'ready',
+    audience: 'all',
+    requiresRelabelingAccess: true,
   },
   {
     id: 'analytics',
@@ -213,11 +391,21 @@ export const workspaceNav: WorkspaceNavItem[] = [
     audience: 'all',
   },
   {
+    id: 'expenses',
+    title: 'Расходы',
+    eyebrow: 'Управленческий учёт',
+    description: 'Расходные материалы, логистика, ФОТ, ПРР, отдельные работы, отчёты и задолженность клиентов.',
+    permissions: ['expenses:read'],
+    icon: CircleDollarSign,
+    status: 'ready',
+    audience: 'internal',
+  },
+  {
     id: 'own-companies',
     title: 'Собственные компании',
     eyebrow: 'Реквизиты',
     description: 'Юрлица, расчетные счета и реквизиты для счетов и актов.',
-    permissions: ['billing:write'],
+    permissions: ['own-companies:read'],
     icon: Building2,
     status: 'ready',
     audience: 'internal',
@@ -231,6 +419,17 @@ export const workspaceNav: WorkspaceNavItem[] = [
     icon: Printer,
     status: 'ready',
     audience: 'internal',
+  },
+  {
+    id: 'administration',
+    title: 'Администрирование',
+    eyebrow: 'Режим владельца',
+    description: 'Единый центр системных настроек, префиксов, API, интерфейса, ИИ, алгоритмов и аудита.',
+    permissions: ['system:admin'],
+    icon: Crown,
+    status: 'ready',
+    audience: 'internal',
+    requiresAdministrationAccess: true,
   },
   {
     id: 'service',
@@ -265,7 +464,16 @@ export const workspaceNav: WorkspaceNavItem[] = [
 ];
 
 export function canOpenWorkspace(user: AuthUser, item: WorkspaceNavItem) {
+  if (user.workspaceVisibility?.[item.id] === false) {
+    return false;
+  }
+  if (item.requiresAdministrationAccess && !user.administrationEnabled) {
+    return false;
+  }
   if (item.requiresAnalyticsAccess && !user.analyticsEnabled) {
+    return false;
+  }
+  if (item.requiresRelabelingAccess && !user.relabelingEnabled) {
     return false;
   }
 

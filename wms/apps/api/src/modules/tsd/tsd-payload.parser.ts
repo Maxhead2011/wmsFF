@@ -46,6 +46,7 @@ export class TsdPayloadParser {
       skuId,
       kiz,
       boxCode,
+      receiptMode: this.optionalReceiptMode(payload.receiptMode),
       quantity,
       status: this.optionalStockStatus(payload.status),
       sourceDocument: this.optionalStringValue(payload.sourceDocument),
@@ -143,6 +144,19 @@ export class TsdPayloadParser {
     }
 
     return value as StockStatus;
+  }
+
+  private optionalReceiptMode(value: unknown): ReceiptScanPayload['receiptMode'] {
+    if (value == null || value === '') {
+      return undefined;
+    }
+
+    const normalized = typeof value === 'string' ? value.trim().toUpperCase() : '';
+    if (normalized !== 'STANDARD' && normalized !== 'BOXES') {
+      throw new BadRequestException('Некорректный режим приемки ТСД.');
+    }
+
+    return normalized;
   }
 
   private numberValue(value: unknown, field: string) {

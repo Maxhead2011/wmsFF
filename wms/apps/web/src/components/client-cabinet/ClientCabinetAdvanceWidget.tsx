@@ -1,8 +1,10 @@
-import { Ban, HandCoins, Landmark, PlusCircle } from 'lucide-react';
+﻿import { Ban, CheckCircle2, HandCoins, Landmark, PlusCircle } from 'lucide-react';
 import { useMemo, useState, type FormEvent } from 'react';
 import {
+  applyBillingAdvance,
   cancelBillingAdvance,
   createBillingAdvance,
+  type BillingAdvanceEntry,
   type BillingAdvancesOverview,
   type ClientSummary,
 } from '../../lib/api';
@@ -34,6 +36,13 @@ function emptyForm(): AdvanceForm {
   };
 }
 
+function advanceStatusLabel(entry: BillingAdvanceEntry) {
+  if (entry.status === 'RECORDED') {
+    return 'Зачислен';
+  }
+  return entry.comment?.includes('[ADVANCE_APPLIED]') ? 'Погашен' : 'Отменён';
+}
+
 export function ClientCabinetAdvanceWidget({
   accessToken,
   client,
@@ -44,6 +53,7 @@ export function ClientCabinetAdvanceWidget({
   const [form, setForm] = useState<AdvanceForm>(emptyForm);
   const [isSubmitting, setSubmitting] = useState(false);
   const [cancellingId, setCancellingId] = useState('');
+  const [applyingId, setApplyingId] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const summary = overview.clients.find((item) => item.client.id === client.id);
@@ -98,15 +108,30 @@ export function ClientCabinetAdvanceWidget({
     }
   }
 
+  async function applyAdvance(id: string) {
+    setApplyingId(id);
+    setMessage('');
+    setError('');
+    try {
+      const result = await applyBillingAdvance(accessToken, id);
+      setMessage(result.invoicesTouched ? 'Аванс погашен.' : 'Аванс отмечен как погашенный. Счета не изменялись.');
+      await onChanged();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Не удалось погасить аванс.');
+    } finally {
+      setApplyingId('');
+    }
+  }
+
   return (
     <section className="client-advance-widget" id="client-cabinet-advance" aria-label="Авансирование клиента">
       <header className="client-advance-widget__heading">
         <div>
           <span><HandCoins size={20} aria-hidden="true" /></span>
           <div>
-            <p className="eyebrow">Финансы клиента</p>
-            <h3>Авансирование</h3>
-            <small>Поступления без счёта уменьшают общий долг клиента.</small>
+            <p className="eyebrow">{decodeText('Финансы клиента')}</p>
+            <h3>{decodeText('Авансирование')}</h3>
+            <small>{decodeText('Поступления без счёта уменьшают общий долг клиента.')}</small>
           </div>
         </div>
         <div className="client-advance-widget__balance">
@@ -192,18 +217,29 @@ export function ClientCabinetAdvanceWidget({
                 </div>
                 <div>
                   <span className={`status status--${entry.status === 'RECORDED' ? 'done' : 'cancelled'}`}>
-                    {entry.status === 'RECORDED' ? 'Зачислен' : 'Отменён'}
+                    {advanceStatusLabel(entry)}
                   </span>
                   {canManage && entry.status === 'RECORDED' ? (
-                    <button
-                      className="icon-text-button client-advance-cancel"
-                      type="button"
-                      disabled={cancellingId === entry.id}
-                      onClick={() => void cancelAdvance(entry.id)}
-                    >
-                      <Ban size={14} aria-hidden="true" />
-                      {cancellingId === entry.id ? 'Отменяю' : 'Отменить запись'}
-                    </button>
+                    <div className="client-advance-history__actions">
+                      <button
+                        className="icon-text-button client-advance-apply"
+                        type="button"
+                        disabled={applyingId === entry.id}
+                        onClick={() => void applyAdvance(entry.id)}
+                      >
+                        <CheckCircle2 size={14} aria-hidden="true" />
+                        {applyingId === entry.id ? 'Погашаю' : 'Погасить аванс'}
+                      </button>
+                      <button
+                        className="icon-text-button client-advance-cancel"
+                        type="button"
+                        disabled={cancellingId === entry.id || applyingId === entry.id}
+                        onClick={() => void cancelAdvance(entry.id)}
+                      >
+                        <Ban size={14} aria-hidden="true" />
+                        {cancellingId === entry.id ? 'Отменяю' : 'Отменить запись'}
+                      </button>
+                    </div>
                   ) : null}
                 </div>
               </article>
@@ -214,3 +250,8 @@ export function ClientCabinetAdvanceWidget({
     </section>
   );
 }
+
+function decodeText(value: string) {
+  return value;
+}
+

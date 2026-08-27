@@ -30,4 +30,9 @@ export class CreateUserDto {
   @ArrayNotEmpty()
   @IsString({ each: true })
   writableClientIds?: string[];
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 100)
+  warehouseId?: string;
 }

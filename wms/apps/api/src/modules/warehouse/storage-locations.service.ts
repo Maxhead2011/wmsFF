@@ -10,6 +10,8 @@ const GOOGLE_SHEET_CSV_URL =
   'https://docs.google.com/spreadsheets/d/103bMP_DBQmB7if17WEfi9DQMvIcAsxgV24gTSXnDKcw/export?format=csv&gid=0';
 const GOOGLE_SYNC_TTL_MS = 5 * 60 * 1000;
 const GOOGLE_LAYOUT_WAREHOUSE_CODE = process.env.STORAGE_LAYOUT_GOOGLE_WAREHOUSE_CODE || 'MSK';
+const DELETED_STORAGE_PALLET_STATUS = 'deleted';
+const MAX_BULK_DELETE_PALLETS = 500;
 
 type ParsedPallet = {
   code: string;
@@ -37,19 +39,16 @@ export class StorageLocationsService {
   ) {
     const scopedWarehouseId = this.requireWarehouseScope(user, warehouseId, 'read');
     const warehouse = await this.resolveWarehouse(scopedWarehouseId);
-    if (
-      sync &&
-      warehouse.code === GOOGLE_LAYOUT_WAREHOUSE_CODE &&
-      Date.now() - this.lastSyncAttemptAt > GOOGLE_SYNC_TTL_MS
-    ) {
-      await this.syncGoogleSheet(warehouse.id, false, undefined, user).catch(() => undefined);
-    }
+    // FIX: Google was a one-time migration source. Reading the layout must never
+    // recreate pallets or placements that warehouse staff deleted afterwards.
+    void sync;
 
     const normalizedQuery = String(query ?? '').trim();
     const codePolicy = await this.boxCodes.getPolicy();
     const pallets = await this.prisma.storagePallet.findMany({
       where: {
         warehouseId: warehouse.id,
+        status: { not: DELETED_STORAGE_PALLET_STATUS },
         ...this.clientWhere(user, 'read'),
         ...(normalizedQuery
           ? {
@@ -197,13 +196,8 @@ export class StorageLocationsService {
       throw new NotFoundException('Паллета не найдена.');
     }
     this.requirePalletAccess(user, pallet, 'write');
-    if (pallet.boxes.length > 0) {
-      throw new BadRequestException(
-        `На паллете ${pallet.code} находится ${pallet.boxes.length} коробов. Сначала перенесите их на другую паллету или уберите из палет-сорта.`,
-      );
-    }
-
-    await this.prisma.$transaction(async (tx) => {
+    const detachedBoxCount = await this.prisma.$transaction(async (tx) => {
+      const detached = await tx.storagePalletBox.deleteMany({ where: { palletId: pallet.id } });
       await tx.auditLog.create({
         data: {
           userId: user.id,
@@ -217,17 +211,167 @@ export class StorageLocationsService {
             zoneId: pallet.zoneId,
             source: pallet.source,
             status: pallet.status,
+            detachedBoxCount: detached.count,
+            boxCodes: pallet.boxes.map((box) => box.boxCode),
+            deletionMode: pallet.source === 'GOOGLE_SHEETS' ? 'HIDDEN_FROM_SYNC' : 'HARD_DELETE',
           },
         },
       });
-      await tx.storagePallet.delete({ where: { id: pallet.id } });
-    });
+      if (pallet.source === 'GOOGLE_SHEETS') {
+        await tx.storagePallet.update({
+          where: { id: pallet.id },
+          data: {
+            status: DELETED_STORAGE_PALLET_STATUS,
+            zoneId: null,
+            deviceCode: null,
+            workerUserId: null,
+            workerName: null,
+          },
+        });
+      } else {
+        await tx.storagePallet.delete({ where: { id: pallet.id } });
+      }
+      return detached.count;
+    }, { isolationLevel: 'Serializable' });
 
     return {
       id: pallet.id,
       code: pallet.code,
       deleted: true as const,
+      detachedBoxCount,
     };
+  }
+
+  async clearPallet(id: string, user: AuthUser) {
+    const pallet = await this.prisma.storagePallet.findUnique({
+      where: { id },
+      include: { boxes: { select: { boxCode: true } } },
+    });
+    if (!pallet || pallet.status === DELETED_STORAGE_PALLET_STATUS) {
+      throw new NotFoundException('Паллета не найдена.');
+    }
+    this.requirePalletAccess(user, pallet, 'write');
+
+    const clearedCount = await this.prisma.$transaction(async (tx) => {
+      const cleared = await tx.storagePalletBox.deleteMany({ where: { palletId: pallet.id } });
+      await tx.storagePallet.update({
+        where: { id: pallet.id },
+        data: { source: 'MANUAL' },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'STORAGE_PALLET_CLEARED',
+          entity: 'StoragePallet',
+          entityId: pallet.id,
+          payload: {
+            palletCode: pallet.code,
+            clientId: pallet.clientId,
+            warehouseId: pallet.warehouseId,
+            zoneId: pallet.zoneId,
+            source: pallet.source,
+            clearedCount: cleared.count,
+            boxCodes: pallet.boxes.map((box) => box.boxCode),
+          },
+        },
+      });
+      return cleared.count;
+    }, { isolationLevel: 'Serializable' });
+
+    return { id: pallet.id, code: pallet.code, cleared: true as const, clearedCount };
+  }
+
+  async deletePallets(body: Record<string, unknown>, user: AuthUser) {
+    const ids = [...new Set(
+      (Array.isArray(body.ids) ? body.ids : [])
+        .map((value) => (typeof value === 'string' ? value.trim() : ''))
+        .filter(Boolean),
+    )];
+    if (!ids.length) {
+      throw new BadRequestException('Выберите хотя бы одну паллету для удаления.');
+    }
+    if (ids.length > MAX_BULK_DELETE_PALLETS) {
+      throw new BadRequestException(`За один раз можно удалить не более ${MAX_BULK_DELETE_PALLETS} паллет.`);
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const found = await tx.storagePallet.findMany({
+        where: { id: { in: ids } },
+        include: { boxes: { select: { boxCode: true } } },
+      });
+      if (found.length !== ids.length) {
+        throw new NotFoundException(
+          'Одна или несколько выбранных паллет больше не существуют. Обновите список и повторите удаление.',
+        );
+      }
+
+      const byId = new Map(found.map((pallet) => [pallet.id, pallet]));
+      const pallets = ids.map((id) => byId.get(id)!);
+      for (const pallet of pallets) {
+        this.requirePalletAccess(user, pallet, 'write');
+      }
+      const googleIds = pallets
+        .filter((pallet) => pallet.source === 'GOOGLE_SHEETS')
+        .map((pallet) => pallet.id);
+      const hardDeleteIds = pallets
+        .filter((pallet) => pallet.source !== 'GOOGLE_SHEETS')
+        .map((pallet) => pallet.id);
+
+      const detached = await tx.storagePalletBox.deleteMany({
+        where: { palletId: { in: ids } },
+      });
+
+      await tx.auditLog.createMany({
+        data: pallets.map((pallet) => ({
+          userId: user.id,
+          action: 'STORAGE_PALLET_DELETED',
+          entity: 'StoragePallet',
+          entityId: pallet.id,
+          payload: {
+            palletCode: pallet.code,
+            clientId: pallet.clientId,
+            warehouseId: pallet.warehouseId,
+            zoneId: pallet.zoneId,
+            source: pallet.source,
+            status: pallet.status,
+            detachedBoxCount: pallet.boxes.length,
+            boxCodes: pallet.boxes.map((box) => box.boxCode),
+            mode: 'BULK',
+            deletionMode: pallet.source === 'GOOGLE_SHEETS' ? 'HIDDEN_FROM_SYNC' : 'HARD_DELETE',
+          },
+        })),
+      });
+
+      if (googleIds.length) {
+        const hidden = await tx.storagePallet.updateMany({
+          where: { id: { in: googleIds } },
+          data: {
+            status: DELETED_STORAGE_PALLET_STATUS,
+            zoneId: null,
+            deviceCode: null,
+            workerUserId: null,
+            workerName: null,
+          },
+        });
+        if (hidden.count !== googleIds.length) {
+          throw new BadRequestException('Состав выбранных паллет изменился. Ничего не удалено; обновите список.');
+        }
+      }
+      if (hardDeleteIds.length) {
+        const deleted = await tx.storagePallet.deleteMany({
+          where: { id: { in: hardDeleteIds } },
+        });
+        if (deleted.count !== hardDeleteIds.length) {
+          throw new BadRequestException('Состав выбранных паллет изменился. Ничего не удалено; обновите список.');
+        }
+      }
+
+      return {
+        deleted: pallets.map((pallet) => ({ id: pallet.id, code: pallet.code })),
+        deletedCount: pallets.length,
+        detachedBoxCount: detached.count,
+      };
+    }, { isolationLevel: 'Serializable' });
   }
 
   async addBox(palletId: string, body: Record<string, unknown>, user: AuthUser) {
@@ -372,34 +516,17 @@ export class StorageLocationsService {
     requestedClientId: string | undefined,
     user: AuthUser,
   ) {
-    const scopedWarehouseId = this.requireWarehouseScope(user, warehouseId, 'write');
-    const warehouse = await this.resolveWarehouse(scopedWarehouseId);
-    if (warehouse.code !== GOOGLE_LAYOUT_WAREHOUSE_CODE) {
-      throw new BadRequestException(
-        `Google-палет-сорт привязан к складу ${GOOGLE_LAYOUT_WAREHOUSE_CODE}. Для склада ${warehouse.code} используйте ТСД или ручное размещение.`,
-      );
-    }
-    const clientId = await this.resolveClientId(requestedClientId, true, user, 'write');
-    if (!force && Date.now() - this.lastSyncAttemptAt <= GOOGLE_SYNC_TTL_MS) {
-      return this.listLayout(warehouse.id, undefined, false, user);
-    }
-    if (this.syncPromise) {
-      await this.syncPromise;
-      return this.listLayout(warehouse.id, undefined, false, user);
-    }
+    // FIX: retain the permission check without resolving/creating a warehouse;
+    // a disabled integration endpoint must be completely read/write-free.
+    this.requireWarehouseScope(user, warehouseId, 'write');
+    void force;
+    void requestedClientId;
 
-    this.lastSyncAttemptAt = Date.now();
-    this.syncPromise = this.performGoogleSync(warehouse.id, clientId);
-    try {
-      await this.syncPromise;
-      this.lastSyncError = null;
-    } catch (error) {
-      this.lastSyncError = error instanceof Error ? error.message : 'Не удалось синхронизировать Google-таблицу.';
-      throw new BadRequestException(this.lastSyncError);
-    } finally {
-      this.syncPromise = null;
-    }
-    return this.listLayout(warehouse.id, undefined, false, user);
+    // FIX: keep the legacy endpoint safe for old clients, but stop before any
+    // external request or Prisma mutation. Current placement is managed in WMS.
+    throw new BadRequestException(
+      'Синхронизация с Google отключена: перенос был одноразовой миграцией. Используйте ТСД или ручное размещение в WMS.',
+    );
   }
 
   async getCurrentTsdPallet(deviceCode: string | undefined, user: AuthUser) {
@@ -855,7 +982,7 @@ export class StorageLocationsService {
       });
       // FIX: a physical TSD/manual actualization owns the pallet contents from this point on.
       // Google may keep the pallet row visible, but must never restore boxes removed by workers.
-      if (pallet.source !== 'GOOGLE_SHEETS') {
+      if (pallet.source !== 'GOOGLE_SHEETS' || pallet.status === DELETED_STORAGE_PALLET_STATUS) {
         continue;
       }
       const writableBoxes = entry.boxes.filter((boxCode) => !protectedBoxes.has(boxCode));

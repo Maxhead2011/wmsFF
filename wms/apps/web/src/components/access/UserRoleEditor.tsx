@@ -76,8 +76,9 @@ export function UserRoleEditor({ session }: UserRoleEditorProps) {
       if (current.includes(code)) {
         return current.filter((item) => item !== code);
       }
-
-      return [...current, code];
+      return code === 'CLIENT'
+        ? ['CLIENT']
+        : [...current.filter((item) => item !== 'CLIENT'), code];
     });
   }
 

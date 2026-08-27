@@ -18,8 +18,8 @@ import {
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
 import { captureShippedKizHistory } from '../../common/shipment-history/shipped-kiz-history';
-import { ArchivedEmptyBoxPalletDetachService } from '../../common/boxes/archived-empty-box-pallet-detach.service';
 import { BoxCodePolicyService } from '../../common/boxes/box-code-policy.service';
+import { ArchivedEmptyBoxPalletDetachService } from '../../common/boxes/archived-empty-box-pallet-detach.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { RequestBillingAutomationService } from '../billing/request-billing-automation.service';
@@ -80,6 +80,7 @@ type TsdTransferScannedItem = {
   scanType: 'BARCODE' | 'KIZ';
   productMarkId: string | null;
   availableQuantity: number;
+  requiresKizRegistration: boolean;
 };
 
 export type ReceiveIntoBoxInput = {
@@ -101,7 +102,8 @@ export type AdjustInventoryInput = {
   clientId: string;
   skuId?: string;
   barcode?: string;
-  boxCode: string;
+  // FIX: отсутствие boxCode допустимо только для клиента storesWithoutBoxes.
+  boxCode?: string;
   countedQuantity: number;
   status?: StockStatus;
   idempotencyKey: string;
@@ -264,21 +266,44 @@ export class StockOperationsService {
   }
 
   async inspectTsdTransferItem(payload: Record<string, unknown>, user: AuthUser) {
-    const sourceBox = await this.loadTsdTransferSourceBox(
-      this.prisma,
-      requiredTsdTransferText(payload.fromBoxCode, 'Сначала отсканируйте исходный короб.'),
-      user,
+    const fromBoxCode = requiredTsdTransferText(
+      payload.fromBoxCode,
+      'Сначала отсканируйте исходный короб.',
     );
-    const item = await this.resolveTsdTransferScannedItem(
-      this.prisma,
-      sourceBox,
-      requiredTsdTransferText(payload.scanCode, 'Отсканируйте ШК товара или КИЗ.'),
+    const scanCode = requiredTsdTransferText(
+      payload.scanCode,
+      'Отсканируйте ШК товара или КИЗ.',
     );
+
+    // FIX: КИЗ, которого ещё нет в WMS, привязываем только после явно отсканированного ШК.
+    const inspected = payload.bindMissingKiz === true
+      ? await this.prisma.$transaction(async (tx) => {
+          await this.inventoryLock?.assertStockMovementsAllowed();
+          const sourceBox = await this.loadTsdTransferSourceBox(tx, fromBoxCode, user);
+          const item = await this.bindMissingTsdTransferKiz(
+            tx,
+            sourceBox,
+            requiredTsdTransferText(payload.skuId, 'Повторно отсканируйте ШК товара.'),
+            scanCode,
+            `TSD ${user.deviceCode ?? user.id}`,
+          );
+          return { sourceBox, item };
+        }, STOCK_TRANSFER_TRANSACTION_OPTIONS)
+      : await (async () => {
+          const sourceBox = await this.loadTsdTransferSourceBox(this.prisma, fromBoxCode, user);
+          const item = await this.resolveTsdTransferScannedItem(this.prisma, sourceBox, scanCode);
+          return { sourceBox, item };
+        })();
+
+    const { sourceBox, item } = inspected;
     return {
+      state: item.requiresKizRegistration ? 'SCAN_KIZ' : 'SCAN_ITEM',
       sourceBox: this.formatTsdTransferSource(sourceBox).sourceBox,
       item: formatTsdTransferItem(item),
       message:
-        item.scanType === 'KIZ'
+        item.requiresKizRegistration
+          ? `ШК товара «${item.sku.name}» принят. Теперь отсканируйте КИЗ этой единицы.`
+          : item.scanType === 'KIZ'
           ? `КИЗ принят. Будет перемещена 1 единица товара «${item.sku.name}».`
           : `Товар принят. Будет перемещена 1 единица «${item.sku.name}».`,
     };
@@ -376,7 +401,14 @@ export class StockOperationsService {
           where: { boxId: sourceBox.id, quantity: { gt: 0 } },
           _sum: { quantity: true },
         }),
-        tx.productMark.count({ where: { boxId: sourceBox.id } }),
+        // FIX: исторический SHIPPING КИЗ не является активным содержимым короба
+        // и не должен мешать архивированию после полного перемещения остатка.
+        tx.productMark.count({
+          where: {
+            boxId: sourceBox.id,
+            status: { not: StockStatus.SHIPPING },
+          },
+        }),
       ]);
       const sourceRemaining = remainingBalance._sum.quantity ?? 0;
       const sourceBoxArchived = sourceRemaining === 0 && remainingMarks === 0;
@@ -385,9 +417,9 @@ export class StockOperationsService {
           where: { id: sourceBox.id },
           data: { status: 'archived' },
         });
-        // FIX: archive and pallet-sort detachment stay in this stock transaction.
+        // FIX: archive and pallet detach must commit atomically.
         await this.archivedEmptyBoxDetach?.detachIfArchivedAndEmpty(
-          { boxId: sourceBox.id, userId: user.id, reason: 'tsd-box-transfer' },
+          { boxId: sourceBox.id, userId: user.id, reason: 'tsd-single-transfer' },
           tx,
         );
       }
@@ -519,7 +551,14 @@ export class StockOperationsService {
           where: { boxId: initialSourceBox.id, quantity: { gt: 0 } },
           _sum: { quantity: true },
         }),
-        tx.productMark.count({ where: { boxId: initialSourceBox.id } }),
+        // FIX: исторический SHIPPING КИЗ не является активным содержимым короба
+        // и не должен мешать архивированию после полного пакетного перемещения.
+        tx.productMark.count({
+          where: {
+            boxId: initialSourceBox.id,
+            status: { not: StockStatus.SHIPPING },
+          },
+        }),
       ]);
       const sourceRemaining = remainingBalance._sum.quantity ?? 0;
       const sourceBoxArchived = sourceRemaining === 0 && remainingMarks === 0;
@@ -528,9 +567,9 @@ export class StockOperationsService {
           where: { id: initialSourceBox.id },
           data: { status: 'archived' },
         });
-        // FIX: batch moves use the same archived-empty rule as single moves.
+        // FIX: archive and pallet detach must commit atomically.
         await this.archivedEmptyBoxDetach?.detachIfArchivedAndEmpty(
-          { boxId: initialSourceBox.id, userId: user.id, reason: 'tsd-box-transfer-batch' },
+          { boxId: initialSourceBox.id, userId: user.id, reason: 'tsd-batch-transfer' },
           tx,
         );
       }
@@ -725,7 +764,7 @@ export class StockOperationsService {
           where: { id: sourceBox.id },
           data: { status: 'archived' },
         });
-        // FIX: whole-box consolidation cannot leave an archived empty box on a pallet-sort.
+        // FIX: a whole-box move cannot leave its archived source on a pallet-sort.
         await this.archivedEmptyBoxDetach?.detachIfArchivedAndEmpty(
           { boxId: sourceBox.id, userId: user.id, reason: 'whole-box-transfer' },
           tx,
@@ -1561,6 +1600,19 @@ export class StockOperationsService {
 
     const result = await this.prisma.$transaction(async (tx) => {
       const doneAt = new Date();
+      const existingMovement = await tx.stockMovement.findFirst({
+        where: {
+          OR: [
+            { idempotencyKey: { startsWith: `${baseKey}:` } },
+            {
+              sourceDocument: dto.requestId,
+              type: MovementType.SHIP,
+              quantity: { lt: 0 },
+            },
+          ],
+        },
+      });
+
       const request = await this.loadOutboundRequest(tx, dto.requestId, user, 'Отгрузка', true);
 
       this.assertRequestWarehouse(request, warehouseId);
@@ -1577,10 +1629,26 @@ export class StockOperationsService {
 
       this.ensureRequestCanMove(request, 'отгружать');
 
-      // FIX: an old SHIP movement is not proof that the current open request
-      // has no residual PACKING/SHIPPING stock. A committed retry is already
-      // handled by the DONE status above; an open request must drain its live
-      // balances instead of silently marking them as shipped.
+      if (existingMovement) {
+        await this.ensureRequestFulfillmentBillingCharges(tx, request, user, doneAt);
+        await captureShippedKizHistory(tx, request.id, doneAt);
+        await tx.clientRequest.update({
+          where: { id: request.id },
+          data: {
+            status: ClientRequestStatus.DONE,
+            assignedToUserId: user.id,
+            managerComment: dto.comment ?? 'Заявка сдана; списание ранее уже было выполнено.',
+          },
+        });
+
+        return {
+          idempotencyKey: baseKey,
+          status: 'ALREADY_APPLIED',
+          requestId: request.id,
+          clientId: request.clientId,
+        };
+      }
+
       this.ensureManualDonePackageInput(
         dto,
         request.items.reduce((total, item) => total + item.quantity, 0),
@@ -1859,13 +1927,33 @@ export class StockOperationsService {
       }
 
       const sku = await this.resolveSku(tx, dto);
-      const box = await this.resolveBox(tx, dto.clientId, dto.boxCode, warehouseId);
+      const boxCode = dto.boxCode?.trim() || undefined;
+      const client = !boxCode
+        ? await tx.client.findUnique({
+            where: { id: dto.clientId },
+            select: { storesWithoutBoxes: true },
+          })
+        : null;
+      if (!boxCode && !client?.storesWithoutBoxes) {
+        throw new BadRequestException(
+          'Для этого клиента обязателен boxCode. Корректировка без короба разрешена только при бескоробном учете.',
+        );
+      }
+      // ADDED: бескоробный остаток остается в том же складе API-ключа с boxId/palletId = null.
+      const box = boxCode
+        ? await this.resolveBox(tx, dto.clientId, boxCode, warehouseId)
+        : null;
+      const balanceWarehouseId = box
+        ? this.requireBalanceWarehouseId(box.warehouseId)
+        : this.requireBalanceWarehouseId(warehouseId);
       const status = dto.status ?? StockStatus.AVAILABLE;
       const balance = await tx.stockBalance.findFirst({
         where: {
           clientId: dto.clientId,
           skuId: sku.id,
-          boxId: box.id,
+          ...(box
+            ? { boxId: box.id }
+            : { boxId: null, palletId: null }),
           warehouseId,
           status,
         },
@@ -1875,11 +1963,11 @@ export class StockOperationsService {
 
       if (delta > 0) {
         await this.incrementTargetBalance(tx, {
-          warehouseId: this.requireBalanceWarehouseId(box.warehouseId),
+          warehouseId: balanceWarehouseId,
           clientId: dto.clientId,
           skuId: sku.id,
-          boxId: box.id,
-          palletId: box.palletId,
+          boxId: box?.id ?? null,
+          palletId: box?.palletId ?? null,
           status,
           quantity: delta,
         });
@@ -1892,16 +1980,20 @@ export class StockOperationsService {
       if (delta !== 0) {
         await tx.stockMovement.create({
           data: {
-            warehouseId: this.requireBalanceWarehouseId(box.warehouseId),
+            warehouseId: balanceWarehouseId,
             clientId: dto.clientId,
             skuId: sku.id,
-            boxId: box.id,
-            palletId: box.palletId,
+            boxId: box?.id ?? null,
+            palletId: box?.palletId ?? null,
             type: 'INVENTORY_ADJUSTMENT',
             status,
             quantity: delta,
             idempotencyKey: dto.idempotencyKey,
-            comment: dto.comment ?? `Корректировка инвентаризации ТСД в коробе ${box.code}`,
+            comment:
+              dto.comment ??
+              (box
+                ? `Корректировка инвентаризации ТСД в коробе ${box.code}`
+                : 'Корректировка инвентаризации без короба'),
           },
         });
       }
@@ -1910,7 +2002,7 @@ export class StockOperationsService {
         idempotencyKey: dto.idempotencyKey,
         status: delta === 0 ? 'NO_CHANGE' : 'APPLIED',
         skuId: sku.id,
-        box: box.code,
+        box: box?.code ?? null,
         previousQuantity: currentQuantity,
         countedQuantity: dto.countedQuantity,
         delta,
@@ -3865,6 +3957,7 @@ export class StockOperationsService {
         scanType: 'KIZ',
         productMarkId: productMark.id,
         availableQuantity: balance.quantity,
+        requiresKizRegistration: false,
       };
     }
 
@@ -3888,7 +3981,9 @@ export class StockOperationsService {
         status: StockStatus.AVAILABLE,
       },
     });
-    if (registeredMarks >= balance.quantity) {
+    const requiresKizRegistration =
+      balance.sku.needsChestnyZnak && !balance.sku.isUnmarked;
+    if (!requiresKizRegistration && registeredMarks >= balance.quantity) {
       throw new BadRequestException(
         `Для товара «${balance.sku.name}» в коробе зарегистрированы КИЗы. Отсканируйте КИЗ конкретной единицы.`,
       );
@@ -3898,8 +3993,148 @@ export class StockOperationsService {
       scanCode,
       scanType: 'BARCODE',
       productMarkId: null,
-      availableQuantity: balance.quantity - registeredMarks,
+      availableQuantity: requiresKizRegistration
+        ? balance.quantity
+        : balance.quantity - registeredMarks,
+      requiresKizRegistration,
     };
+  }
+
+  private async bindMissingTsdTransferKiz(
+    db: Prisma.TransactionClient,
+    sourceBox: TsdTransferSourceBox,
+    skuId: string,
+    kizValue: string,
+    sourceDocument: string,
+  ): Promise<TsdTransferScannedItem> {
+    const kiz = requiredTsdTransferText(kizValue, 'Отсканируйте КИЗ товара.');
+    if (kiz.length <= 20) {
+      throw new BadRequestException('После ШК товара нужно отсканировать его КИЗ.');
+    }
+    const balance = sourceBox.balances.find((row) => row.skuId === skuId);
+    if (!balance || balance.quantity < 1) {
+      throw new BadRequestException(
+        `В коробе ${sourceBox.code} больше нет доступной единицы выбранного товара.`,
+      );
+    }
+    if (!balance.sku.needsChestnyZnak || balance.sku.isUnmarked) {
+      throw new BadRequestException('Для этого товара КИЗ не требуется. Повторно отсканируйте ШК.');
+    }
+
+    const existing = await db.productMark.findFirst({
+      where: {
+        clientId: sourceBox.clientId,
+        value: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+      },
+      select: { id: true, skuId: true, boxId: true, status: true },
+    });
+    if (existing) {
+      if (
+        existing.skuId === skuId &&
+        existing.boxId === sourceBox.id &&
+        existing.status === StockStatus.AVAILABLE
+      ) {
+        return {
+          sku: balance.sku,
+          scanCode: kiz,
+          scanType: 'KIZ',
+          productMarkId: existing.id,
+          availableQuantity: balance.quantity,
+          requiresKizRegistration: false,
+        };
+      }
+      throw new BadRequestException(
+        'Этот КИЗ уже привязан к другому товару или коробу. Перемещение остановлено.',
+      );
+    }
+
+    const registeredMarks = await db.productMark.count({
+      where: {
+        clientId: sourceBox.clientId,
+        skuId,
+        boxId: sourceBox.id,
+        status: StockStatus.AVAILABLE,
+      },
+    });
+    try {
+      if (registeredMarks >= balance.quantity) {
+        // FIX: Количество не увеличиваем: физический КИЗ заменяет одну старую неиспользуемую привязку.
+        const protectedKizValues = (
+          await db.fbsTsdAssembly.findMany({
+            where: {
+              clientId: sourceBox.clientId,
+              skuId,
+              kiz: { not: null },
+              status: { in: ['IN_PROGRESS', 'COMPLETED', 'RETURN_REQUIRED'] },
+            },
+            select: { kiz: true },
+          })
+        )
+          .map((row) => row.kiz)
+          .filter((value): value is string => Boolean(value));
+        const replaceable = await db.productMark.findFirst({
+          where: {
+            clientId: sourceBox.clientId,
+            skuId,
+            boxId: sourceBox.id,
+            status: StockStatus.AVAILABLE,
+            ...(protectedKizValues.length > 0
+              ? { value: { notIn: protectedKizValues } }
+              : {}),
+          },
+          orderBy: [{ updatedAt: 'asc' }, { createdAt: 'asc' }],
+          select: { id: true, value: true, sourceDocument: true },
+        });
+        if (!replaceable) {
+          throw new BadRequestException(
+            `В коробе ${sourceBox.code} нет старой привязки КИЗ, которую можно безопасно заменить.`,
+          );
+        }
+        const replaced = await db.productMark.update({
+          where: { id: replaceable.id },
+          data: {
+            value: kiz,
+            sourceDocument:
+              `${sourceDocument}: физический КИЗ заменил старую привязку ` +
+              `ref ${hashText(replaceable.value)} без изменения количества`,
+          },
+          select: { id: true },
+        });
+        return {
+          sku: balance.sku,
+          scanCode: kiz,
+          scanType: 'KIZ',
+          productMarkId: replaced.id,
+          availableQuantity: balance.quantity,
+          requiresKizRegistration: false,
+        };
+      }
+
+      const created = await db.productMark.create({
+        data: {
+          clientId: sourceBox.clientId,
+          skuId,
+          boxId: sourceBox.id,
+          value: kiz,
+          sourceDocument,
+          status: StockStatus.AVAILABLE,
+        },
+        select: { id: true },
+      });
+      return {
+        sku: balance.sku,
+        scanCode: kiz,
+        scanType: 'KIZ',
+        productMarkId: created.id,
+        availableQuantity: balance.quantity,
+        requiresKizRegistration: false,
+      };
+    } catch (caught) {
+      if (isUniqueConstraintError(caught)) {
+        throw new BadRequestException('Этот КИЗ уже есть в WMS. Повторная привязка запрещена.');
+      }
+      throw caught;
+    }
   }
 
   private async resolveBox(

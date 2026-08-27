@@ -1,4 +1,4 @@
-import { KeyRound, Printer, ShieldCheck, Smartphone, UserPlus } from 'lucide-react';
+import { ArrowLeft, ChevronRight, KeyRound, Printer, ShieldCheck, Smartphone, UserPlus } from 'lucide-react';
 import { useState } from 'react';
 import type { AuthSession, AuthUser } from '../../lib/api';
 import './access.css';
@@ -14,8 +14,16 @@ type AccessAdminPanelProps = {
 
 type AccessTab = 'create' | 'roles' | 'scopes' | 'printers' | 'tsd';
 
+const accessTopics = [
+  { id: 'create', label: 'Создать сотрудника', text: 'Новый пользователь, роль и стартовые доступы.', icon: UserPlus },
+  { id: 'roles', label: 'Роли', text: 'Настройте наборы прав для должностей.', icon: KeyRound },
+  { id: 'scopes', label: 'Доступы', text: 'Ограничьте клиентов, филиалы и разделы для сотрудника.', icon: ShieldCheck },
+  { id: 'tsd', label: 'ТСД', text: 'Устройства, сотрудники и работа мобильного приложения.', icon: Smartphone },
+  { id: 'printers', label: 'Принтеры', text: 'Кому доступна печать и на какие устройства.', icon: Printer },
+] as const;
+
 export function AccessAdminPanel({ session }: AccessAdminPanelProps) {
-  const [activeTab, setActiveTab] = useState<AccessTab>('create');
+  const [activeTab, setActiveTab] = useState<AccessTab | null>(null);
 
   if (!canUse(session.user, 'users:write')) {
     return null;
@@ -30,7 +38,12 @@ export function AccessAdminPanel({ session }: AccessAdminPanelProps) {
         </div>
       </div>
 
-      <div className="access-tabs" role="tablist" aria-label="Раздел доступа">
+      {!activeTab ? <div className="access-topic-grid" aria-label="Темы доступа">
+        {accessTopics.map((topic) => <button className={`access-topic-tile access-topic-tile--${topic.id}`} key={topic.id} type="button" onClick={() => setActiveTab(topic.id)}><span className="access-topic-tile__icon"><topic.icon size={22} /></span><span className="access-topic-tile__content"><small>Доступы</small><strong>{topic.label}</strong><span>{topic.text}</span></span><ChevronRight size={22} /></button>)}
+      </div> : null}
+
+      {activeTab ? <div className="access-tabs" role="tablist" aria-label="Раздел доступа">
+        <button className="access-tabs__back" type="button" onClick={() => setActiveTab(null)}><ArrowLeft size={16} /><span>Разделы</span></button>
         <button
           aria-selected={activeTab === 'create'}
           className={activeTab === 'create' ? 'active' : ''}
@@ -81,7 +94,7 @@ export function AccessAdminPanel({ session }: AccessAdminPanelProps) {
           <Printer size={16} aria-hidden="true" />
           <span>Принтеры</span>
         </button>
-      </div>
+      </div> : null}
 
       {activeTab === 'create' ? <UserCreateForm session={session} /> : null}
       {activeTab === 'roles' ? <UserRoleEditor session={session} /> : null}

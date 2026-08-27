@@ -13,16 +13,23 @@ import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { PickInstructionService } from '../stock/pick-instruction.service';
 import type { PickInstructionDocument } from '../stock/pick-instruction.types';
+import { FbsRequestBoxAuditService } from '../stock/fbs-request-box-audit.service';
 import { StockOperationsService } from '../stock/stock-operations.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import {
+  assertWarehouseAccess,
+  effectiveWarehouseId,
+  warehouseScopeWhere,
+} from '../client-requests/client-request-warehouse-scope';
 
 const activeAssemblyStatuses = [
   ClientRequestStatus.SUBMITTED,
   ClientRequestStatus.IN_REVIEW,
   ClientRequestStatus.APPROVED,
   ClientRequestStatus.IN_WORK,
-  ClientRequestStatus.PACKED,
 ];
+const FBS_KIZ_DUPLICATE_SCAN_ACTION = 'FBS_KIZ_DUPLICATE_SCAN';
+const FBS_KIZ_LOCAL_STATUS_CONFLICT_ACTION = 'FBS_KIZ_LOCAL_STATUS_CONFLICT';
 
 type TsdRequestStage = 'box-search' | 'relabel' | 'moves' | 'boxless-packing';
 
@@ -53,13 +60,17 @@ type TsdMovementPlanTask = {
 @Injectable()
 export class TsdAssemblyService {
   private readonly instructionCache = new Map<string, { expiresAt: number; promise: Promise<PickInstructionDocument & { html?: string }> }>();
-  private readonly instructionCacheTtlMs = 1000;
+  // The web preview used to request the same expensive instruction every
+  // 1.5 seconds. A short shared cache protects StockMovement aggregation from
+  // duplicate browser tabs while all mutating TSD actions still invalidate it.
+  private readonly instructionCacheTtlMs = 5000;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly clientScopes: ClientScopeService,
     private readonly pickInstructions: PickInstructionService,
     private readonly stockOperations: StockOperationsService,
+    private readonly fbsRequestBoxAudits: FbsRequestBoxAuditService,
   ) {}
 
   async listActiveRequests(user: AuthUser) {
@@ -67,6 +78,7 @@ export class TsdAssemblyService {
     const requests = await this.prisma.clientRequest.findMany({
       where: {
         clientId: clientFilter,
+        ...warehouseScopeWhere(user),
         type: ClientRequestType.OUTBOUND,
         status: { in: activeAssemblyStatuses },
       },
@@ -136,6 +148,7 @@ export class TsdAssemblyService {
       select: {
         id: true,
         clientId: true,
+        warehouseId: true,
         client: { select: { storesWithoutBoxes: true } },
         pickWaveRequests: {
           where: { wave: { status: PickWaveStatus.BALANCE_REVIEW } },
@@ -149,6 +162,7 @@ export class TsdAssemblyService {
     }
 
     this.clientScopes.requireClientAccess(user, exists.clientId, 'read');
+    assertWarehouseAccess(user, exists, 'read', 'Заявка для ТСД не найдена в выбранном филиале.');
     const pendingWave = exists.pickWaveRequests[0]?.wave;
     if (
       pendingWave &&
@@ -169,18 +183,16 @@ export class TsdAssemblyService {
   }
 
   async assertRelabelProgressAvailable(requestId: string, payload: Record<string, unknown>, user: AuthUser) {
-    const plan = await this.getRequestPlan(requestId, user);
-    const key = relabelPayloadProgressKey(payload);
-    const task = (plan.relabelTasks ?? []).find((item: Record<string, unknown>) => relabelTaskProgressKey(item) === key);
-    if (!task) {
-      throw new BadRequestException('Задание на перемаркировку не найдено или уже изменилось. Обновите заявку на ТСД.');
-    }
-    if (Number(task.remainingQuantity ?? task.quantity ?? 0) <= 0) {
-      throw new BadRequestException('Эта перемаркировка уже выполнена другим сборщиком. Обновите заявку на ТСД.');
-    }
+    await this.requireRequestAccess(requestId, user, 'write');
+    // В этой инсталляции одна и та же физическая позиция может повторно
+    // проходить переклейку. Не блокируем сканирование по рассчитанному
+    // остатку очереди: фактический ШК/КИЗ и итог заявки проверяются дальше.
+    await this.getRequestPlan(requestId, user);
+    void payload;
   }
 
   async assertMovementProgressAvailable(requestId: string, payload: Record<string, unknown>, user: AuthUser) {
+    await this.requireRequestAccess(requestId, user, 'write');
     const plan = await this.getRequestPlan(requestId, user);
     const sourceBox = normalizeBoxCode(textValue(payload, 'fromBoxCode'));
     const barcode = normalizeScanCode(textValue(payload, 'barcode'));
@@ -198,6 +210,7 @@ export class TsdAssemblyService {
   }
 
   async assertOutgoingBoxAvailable(requestId: string, payload: Record<string, unknown>, user: AuthUser) {
+    await this.requireRequestAccess(requestId, user, 'write');
     const plan = await this.getRequestPlan(requestId, user);
     const boxCode = normalizeBoxCode(textValue(payload, 'boxCode'));
     if (!(plan.outgoingBoxCodes ?? []).some((value: string) => normalizeBoxCode(value) === boxCode)) {
@@ -334,13 +347,14 @@ export class TsdAssemblyService {
   private async loadInstructionWithAccess(requestId: string, user: AuthUser) {
     const exists = await this.prisma.clientRequest.findUnique({
       where: { id: requestId },
-      select: { id: true, clientId: true },
+      select: { id: true, clientId: true, warehouseId: true },
     });
     if (!exists) {
       throw new NotFoundException('Заявка для ТСД не найдена.');
     }
 
     this.clientScopes.requireClientAccess(user, exists.clientId, 'read');
+    assertWarehouseAccess(user, exists, 'read', 'Заявка для ТСД не найдена в выбранном филиале.');
     return this.getCachedInstruction(requestId, user);
   }
 
@@ -392,6 +406,7 @@ export class TsdAssemblyService {
     body: Record<string, unknown> | string | undefined,
     user: AuthUser,
   ) {
+    await this.requireRequestAccess(requestId, user, 'write');
     const plan = await this.getRequestPlan(requestId, user);
     const scannedCode =
       stage === 'boxless-packing' && action === 'scan-item' && isRecord(body)
@@ -475,6 +490,7 @@ export class TsdAssemblyService {
     }
 
     this.clientScopes.requireClientAccess(user, clientId, 'read');
+    const warehouseId = effectiveWarehouseId(user, 'read');
 
     const matches = await this.prisma.barcode.findMany({
       where: {
@@ -486,7 +502,10 @@ export class TsdAssemblyService {
           include: {
             barcodes: true,
             balances: {
-              where: { quantity: { gt: 0 } },
+              where: {
+                quantity: { gt: 0 },
+                warehouseId: warehouseId ?? undefined,
+              },
               select: { quantity: true, status: true },
             },
             client: { select: { id: true, code: true, name: true } },
@@ -543,6 +562,23 @@ export class TsdAssemblyService {
     };
   }
 
+  private async requireRequestAccess(
+    requestId: string,
+    user: AuthUser,
+    mode: 'read' | 'write',
+  ) {
+    const request = await this.prisma.clientRequest.findUnique({
+      where: { id: requestId },
+      select: { id: true, clientId: true, warehouseId: true },
+    });
+    if (!request) {
+      throw new NotFoundException('Заявка для ТСД не найдена.');
+    }
+    this.clientScopes.requireClientAccess(user, request.clientId, mode);
+    assertWarehouseAccess(user, request, mode, 'Заявка для ТСД не найдена в выбранном филиале.');
+    return request;
+  }
+
   private async toTsdPlan(document: PickInstructionDocument & { html?: string }) {
     const rawSearchBoxCodes = uniqueSorted([
       ...document.warehouseRows.map((row) => row.sourceBox),
@@ -559,6 +595,17 @@ export class TsdAssemblyService {
       this.loadActiveTsdProcesses([document.requestId]),
       this.loadFbsAssemblyFacts(document.requestId, document.rows),
     ]);
+    const fbsBoxAudit = fbsAssembly
+      ? await this.fbsRequestBoxAudits.auditDocument(document)
+      : null;
+    if (fbsBoxAudit) {
+      const liveBoxCodes = new Set(
+        fbsBoxAudit.rows
+          .filter((row) => row.state === 'OK')
+          .map((row) => normalizeBoxCode(row.code)),
+      );
+      searchBoxes = searchBoxes.filter((box) => liveBoxCodes.has(normalizeBoxCode(box.boxCode)));
+    }
     const activeTsdProcesses = activeProcessesByRequest.get(document.requestId) ?? [];
     let activeTsdProcess = activeTsdProcesses[0] ?? null;
     const foundSearchBoxCodes = await this.loadFoundBoxSearchCodes(
@@ -632,6 +679,53 @@ export class TsdAssemblyService {
         multiCityLabel: servesMultipleCities ? 'ТОВАР УЕЗЖАЕТ В НЕСКОЛЬКО ГОРОДОВ' : '',
       };
     });
+    const storagePlacementCodes = uniqueSorted(
+      searchBoxes
+        .map((box) => safeDecode(box.boxCode).trim())
+        .filter(Boolean),
+    );
+    const storagePlacements = storagePlacementCodes.length
+      ? await this.prisma.storagePalletBox.findMany({
+          where: {
+            OR: storagePlacementCodes.map((boxCode) => ({
+              boxCode: { equals: boxCode, mode: 'insensitive' as const },
+            })),
+          },
+          include: { pallet: { include: { zone: true } } },
+        })
+      : [];
+    const storageLocationByBox = new Map(
+      storagePlacements.map((placement) => [
+        normalizeBoxCode(placement.boxCode),
+        {
+          palletId: placement.palletId,
+          palletCode: placement.pallet.code,
+          zoneId: placement.pallet.zoneId,
+          zoneCode: placement.pallet.zone?.code ?? null,
+          zoneName: placement.pallet.zone?.name ?? null,
+        },
+      ]),
+    );
+    const currentPalletId =
+      searchBoxes
+        .filter((box) => box.found || box.isFound)
+        .map((box) => storageLocationByBox.get(normalizeBoxCode(box.boxCode))?.palletId)
+        .find(Boolean) ?? null;
+    searchBoxes = searchBoxes
+      .map((box) => ({
+        ...box,
+        storageLocation: storageLocationByBox.get(normalizeBoxCode(box.boxCode)) ?? null,
+      }))
+      .sort((left, right) => {
+        const leftCurrent = currentPalletId && left.storageLocation?.palletId === currentPalletId;
+        const rightCurrent = currentPalletId && right.storageLocation?.palletId === currentPalletId;
+        return Number(rightCurrent) - Number(leftCurrent) ||
+          (left.storageLocation?.palletCode ?? '\uffff').localeCompare(
+            right.storageLocation?.palletCode ?? '\uffff',
+            'ru-RU',
+          ) ||
+          left.boxCode.localeCompare(right.boxCode, 'ru-RU');
+      });
     const movementProgress = await this.loadMovementProgress(document, allMovementTasks);
     const completedMoveSourceBoxes = new Set(
       movementProgress.sourceBoxes.filter((box) => box.done).map((box) => normalizeBoxCode(box.sourceBox)),
@@ -755,15 +849,26 @@ export class TsdAssemblyService {
       movementBoxes: groupTasksByBox(movementTasks),
       movementProgress,
       fbsAssembly,
+      fbsBoxAudit: fbsBoxAudit
+        ? {
+            checkedAt: fbsBoxAudit.checkedAt,
+            summary: fbsBoxAudit.summary,
+          }
+        : null,
     };
   }
 
   private async loadFbsAssemblyFacts(requestId: string, requestRows: PickInstructionDocument['rows']) {
-    const [links, rows] = await Promise.all([
+    const [request, links, assemblyRows, duplicateKizEvents, localKizConflictEvents] = await Promise.all([
+      this.prisma.clientRequest.findUnique({
+        where: { id: requestId },
+        select: { fbsEmergencyAssemblyAt: true },
+      }),
       this.prisma.fbsOrderRequestLink.findMany({
         where: {
           requestId,
           syncStatus: { in: ['ACTIVE', 'RETURN_REQUIRED'] },
+          lastCategory: { not: 'cancelled' },
         },
         select: { orderId: true, connectionId: true, lastSkuId: true },
         orderBy: { createdAt: 'asc' },
@@ -780,21 +885,67 @@ export class TsdAssemblyService {
           boxCode: true,
           barcode: true,
           kiz: true,
+          wbMetaStatus: true,
           stickerPartB: true,
           stickerBarcode: true,
           status: true,
           errorMessage: true,
           itemCount: true,
+          requiresKiz: true,
+          sourceBoxPending: true,
           workerName: true,
+          deviceCode: true,
           completedAt: true,
           updatedAt: true,
+          cargoPackingId: true,
+          cargoPackedAt: true,
+          cargoPackedByName: true,
+          cargoPacking: {
+            select: {
+              id: true,
+              cargoPlaceId: true,
+              status: true,
+              deviceCode: true,
+              openedByName: true,
+              openedAt: true,
+              closedByName: true,
+              closedAt: true,
+            },
+          },
         },
         orderBy: [{ completedAt: 'desc' }, { updatedAt: 'desc' }],
+      }),
+      this.prisma.auditLog.findMany({
+        where: {
+          action: FBS_KIZ_DUPLICATE_SCAN_ACTION,
+          entity: 'ClientRequest',
+          entityId: requestId,
+        },
+        select: { id: true, payload: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+      }),
+      this.prisma.auditLog.findMany({
+        where: {
+          action: FBS_KIZ_LOCAL_STATUS_CONFLICT_ACTION,
+          entity: 'ClientRequest',
+          entityId: requestId,
+        },
+        select: { id: true, payload: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
       }),
     ]);
     if (links.length === 0) {
       return null;
     }
+    const emergencyAssemblyAt = request?.fbsEmergencyAssemblyAt?.getTime() ?? null;
+    const rows = assemblyRows.filter(
+      (row) =>
+        row.status !== 'COMPLETED' ||
+        emergencyAssemblyAt === null ||
+        Boolean(row.completedAt && row.completedAt.getTime() >= emergencyAssemblyAt),
+    );
     const skuIds = uniqueSorted([
       ...rows.map((row) => row.skuId),
       ...requestRows.map((row) => row.skuId).filter((value): value is string => Boolean(value)),
@@ -813,6 +964,33 @@ export class TsdAssemblyService {
         })
       : [];
     const skuById = new Map(skus.map((sku) => [sku.id, sku]));
+    // FIX: allocations in a saved instruction may not contain the pallet-sort that
+    // was assigned later. The online request must show the current physical place.
+    const allocationBoxCodes = uniqueSorted(
+      requestRows.flatMap((row) => row.allocations.map((allocation) => allocation.boxCode)),
+    );
+    const allocationPlacements = allocationBoxCodes.length > 0
+      ? await this.prisma.storagePalletBox.findMany({
+          where: {
+            OR: allocationBoxCodes.map((boxCode) => ({
+              boxCode: { equals: boxCode, mode: 'insensitive' as const },
+            })),
+          },
+          include: { pallet: { include: { zone: true } } },
+        })
+      : [];
+    const allocationLocationByBox = new Map(
+      allocationPlacements.map((placement) => [
+        normalizeBoxCode(placement.boxCode),
+        {
+          palletId: placement.palletId,
+          palletCode: placement.pallet.code,
+          zoneId: placement.pallet.zoneId,
+          zoneCode: placement.pallet.zone?.code ?? null,
+          zoneName: placement.pallet.zone?.name ?? null,
+        },
+      ]),
+    );
     const facts = rows.map((row) => ({
       id: row.id,
       orderId: row.orderId,
@@ -821,15 +999,22 @@ export class TsdAssemblyService {
       article: row.article,
       productBarcode: row.barcode,
       kiz: row.kiz,
+      wbMetaStatus: row.wbMetaStatus,
       size: skuById.get(row.skuId)?.size ?? null,
       wbStickerPartB: row.stickerPartB,
       wbStickerBarcode: row.stickerBarcode,
       status: row.status,
       statusLabel: fbsAssemblyStatusLabel(row.status),
+      sourceBoxPending: row.sourceBoxPending,
       syncIssue: row.errorMessage,
       workerName: row.workerName,
+      completionSource: row.deviceCode.startsWith('SOS-WB:') ? 'SOS_WB' : 'STANDARD',
       completedAt: row.completedAt?.toISOString() ?? null,
       updatedAt: row.updatedAt.toISOString(),
+      cargoPackingId: row.cargoPackingId,
+      cargoPackedAt: row.cargoPackedAt?.toISOString() ?? null,
+      cargoPackedByName: row.cargoPackedByName,
+      wmsBoxCode: row.cargoPacking?.cargoPlaceId ?? null,
     }));
     const completedRows = rows.filter((row) => row.status === 'COMPLETED');
     const returnRequiredRows = rows.filter((row) => row.status === 'RETURN_REQUIRED');
@@ -839,6 +1024,7 @@ export class TsdAssemblyService {
     const linkByOrderId = new Map(
       links.map((link) => [link.orderId, link]),
     );
+    const rowByOrderId = new Map(rows.map((row) => [row.orderId, row]));
     const pendingOrderIds = links
       .map((link) => link.orderId)
       .filter((orderId) => !handledOrderIds.has(orderId));
@@ -884,33 +1070,202 @@ export class TsdAssemblyService {
           orders: orderIds
             .map((orderId) => {
               const link = linkByOrderId.get(orderId);
+              const task = rowByOrderId.get(orderId);
               return link
-                ? { id: orderId, connectionId: link.connectionId }
+                ? {
+                    id: orderId,
+                    connectionId: link.connectionId,
+                    assemblyId: task?.id ?? null,
+                    requiresKiz: task?.requiresKiz ?? false,
+                    kizAccepted: Boolean(task?.kiz && task.wbMetaStatus === 'ACCEPTED'),
+                  }
                 : null;
             })
             .filter(
               (
                 order,
-              ): order is { id: string; connectionId: string } =>
+              ): order is {
+                id: string;
+                connectionId: string;
+                assemblyId: string | null;
+                requiresKiz: boolean;
+                kizAccepted: boolean;
+              } =>
                 Boolean(order),
             ),
-          availableBoxes: row.allocations.map((allocation) => ({
-            boxCode: allocation.boxCode,
-            quantity: allocation.quantity,
-          })),
+          availableBoxes: row.allocations.map((allocation) => {
+            const storageLocation = allocationLocationByBox.get(normalizeBoxCode(allocation.boxCode)) ?? null;
+            return {
+              boxCode: allocation.boxCode,
+              quantity: allocation.quantity,
+              // FIX: prefer the current placement over the stale instruction snapshot.
+              palletId: storageLocation?.palletId ?? allocation.palletId,
+              palletCode: storageLocation?.palletCode ?? allocation.palletCode,
+              storageLocation,
+            };
+          }),
         };
       })
       .filter((row) => row.remainingQuantity > 0);
+    const requestRowBySkuId = new Map(
+      requestRows
+        .filter((row): row is typeof row & { skuId: string } => Boolean(row.skuId))
+        .map((row) => [row.skuId, row]),
+    );
+    const wmsPackingRows = rows.filter(
+      (row) => row.status === 'COMPLETED' && Boolean(row.cargoPackingId && row.cargoPacking),
+    );
+    const wmsBoxMap = new Map<
+      string,
+      {
+        id: string;
+        code: string;
+        status: string;
+        deviceCode: string | null;
+        openedByName: string | null;
+        openedAt: string;
+        closedByName: string | null;
+        closedAt: string | null;
+        items: Array<{
+          id: string;
+          orderId: string;
+          productName: string;
+          article: string | null;
+          productBarcode: string | null;
+          size: string | null;
+          kiz: string | null;
+          wbStickerPartB: string | null;
+          packedByName: string | null;
+          packedAt: string | null;
+          quantity: number;
+        }>;
+      }
+    >();
+    wmsPackingRows.forEach((row) => {
+      const packing = row.cargoPacking!;
+      const current = wmsBoxMap.get(packing.id) ?? {
+        id: packing.id,
+        code: packing.cargoPlaceId,
+        status: packing.status,
+        deviceCode: packing.deviceCode,
+        openedByName: packing.openedByName,
+        openedAt: packing.openedAt.toISOString(),
+        closedByName: packing.closedByName,
+        closedAt: packing.closedAt?.toISOString() ?? null,
+        items: [],
+      };
+      current.items.push({
+        id: row.id,
+        orderId: row.orderId,
+        productName: row.productName,
+        article: row.article,
+        productBarcode: row.barcode,
+        size: skuById.get(row.skuId)?.size ?? null,
+        kiz: row.kiz,
+        wbStickerPartB: row.stickerPartB,
+        packedByName: row.cargoPackedByName,
+        packedAt: row.cargoPackedAt?.toISOString() ?? null,
+        quantity: Math.max(1, row.itemCount),
+      });
+      wmsBoxMap.set(packing.id, current);
+    });
+    const notPackedRows = links
+      .map((link) => {
+        const task = rowByOrderId.get(link.orderId);
+        if (task?.cargoPackingId) return null;
+        const requestRow = link.lastSkuId ? requestRowBySkuId.get(link.lastSkuId) : null;
+        const sku = link.lastSkuId ? skuById.get(link.lastSkuId) : null;
+        return {
+          orderId: link.orderId,
+          productName: task?.productName ?? requestRow?.name ?? 'Товар не определён',
+          article:
+            task?.article ??
+            sku?.article ??
+            sku?.clientSku ??
+            sku?.internalSku ??
+            requestRow?.internalSku ??
+            null,
+          productBarcode: task?.barcode ?? requestRow?.barcode ?? null,
+          size: task ? skuById.get(task.skuId)?.size ?? null : sku?.size ?? null,
+          wbStickerPartB: task?.stickerPartB ?? null,
+          assemblyStatus: task?.status ?? 'NOT_STARTED',
+          assemblyStatusLabel: task ? fbsAssemblyStatusLabel(task.status) : 'Ещё не собрано',
+          readyForPacking: task?.status === 'COMPLETED',
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => Boolean(row));
+    const factById = new Map(facts.map((row) => [row.id, row]));
+    const seenLocalKizConflicts = new Set<string>();
+    const localKizConflicts = localKizConflictEvents
+      .map((event) => localFbsKizConflictFromAudit(event))
+      .filter((event): event is NonNullable<typeof event> => Boolean(event))
+      .filter((event) => {
+        const row = factById.get(event.assemblyId);
+        if (
+          !row ||
+          row.status !== 'IN_PROGRESS' ||
+          (row.wbMetaStatus === 'ACCEPTED' && Boolean(row.kiz))
+        ) {
+          return false;
+        }
+        const key = `${event.assemblyId}:${event.kiz}`;
+        if (seenLocalKizConflicts.has(key)) return false;
+        seenLocalKizConflicts.add(key);
+        return true;
+      })
+      .map((event) => ({
+        id: event.id,
+        orderId: event.orderId,
+        productName: event.productName,
+        article: event.article,
+        sourceBoxCode: event.sourceBoxCode,
+        kiz: event.kiz,
+        message: event.message,
+        updatedAt: event.updatedAt,
+      }));
     return {
       totalOrders: links.length,
-      startedOrders: facts.length,
+      startedOrders: facts.filter(
+        (row) => !['WAITING_STOCK', 'RELEASED'].includes(row.status),
+      ).length,
       completedOrders: facts.filter((row) => row.status === 'COMPLETED').length,
+      duplicateKizScans: duplicateKizEvents
+        .map((event) => duplicateFbsKizScanFromAudit(event))
+        .filter((event): event is NonNullable<typeof event> => Boolean(event)),
+      kizConflicts: [
+        ...facts
+          .filter(
+            (row) =>
+              row.wbMetaStatus === 'REJECTED' &&
+              Boolean(row.kiz) &&
+              Boolean(row.syncIssue),
+          )
+          .map((row) => ({
+            id: row.id,
+            orderId: row.orderId,
+            productName: row.productName,
+            article: row.article,
+            sourceBoxCode: row.sourceBoxCode,
+            kiz: row.kiz!,
+            message: row.syncIssue!,
+            updatedAt: row.updatedAt,
+          })),
+        ...localKizConflicts,
+      ],
       returnRequired: {
         orders: returnRequiredRows.length,
         units: returnRequiredRows.reduce((sum, row) => sum + Math.max(1, row.itemCount), 0),
         rows: facts.filter((row) => row.status === 'RETURN_REQUIRED'),
       },
       rows: facts,
+      wmsBoxes: {
+        totalBoxes: wmsBoxMap.size,
+        closedBoxes: [...wmsBoxMap.values()].filter((box) => box.status === 'CLOSED').length,
+        packedUnits: wmsPackingRows.reduce((sum, row) => sum + Math.max(1, row.itemCount), 0),
+        remainingUnits: notPackedRows.length,
+        boxes: [...wmsBoxMap.values()],
+        notPacked: notPackedRows,
+      },
       notCollected: {
         remainingOrders: pendingOrderIds.length,
         remainingPositions: notCollectedRows.length,
@@ -1200,7 +1555,7 @@ export class TsdAssemblyService {
     const operations = await this.prisma.tsdOperation.findMany({
       where: {
         status: TsdOperationStatus.ACCEPTED,
-        operationType: { in: ['assembly_stage', 'box_search_scan', 'move_scan'] },
+        operationType: { in: ['assembly_stage', 'box_search_scan', 'move_scan', 'administration_release'] },
         createdAt: { gte: since },
       },
       orderBy: { createdAt: 'desc' },
@@ -1252,6 +1607,7 @@ export class TsdAssemblyService {
 
     const result = new Map<string, TsdProcessSummary[]>();
     for (const operation of latestByWorker.values()) {
+      if (operation.operationType === 'administration_release') continue;
       const payload = operationPayload(operation.payload);
       const requestId = operationRequestId(operation, payload);
       if (!requestId) continue;
@@ -1607,6 +1963,76 @@ function boxSearchOperationPrefix(requestId: string) {
 
 function operationPayload(payload: Prisma.JsonValue): Record<string, unknown> {
   return payload && typeof payload === 'object' && !Array.isArray(payload) ? (payload as Record<string, unknown>) : {};
+}
+
+function duplicateFbsKizScanFromAudit(event: { id: string; payload: Prisma.JsonValue | null; createdAt: Date }) {
+  const payload = operationPayload(event.payload ?? {});
+  const attempt = isRecord(payload.attempt) ? payload.attempt : {};
+  const existing = isRecord(payload.existing) ? payload.existing : {};
+  const kiz = textValue(payload, 'kiz');
+  const attemptOrderId = textValue(attempt, 'orderId');
+  const existingOrderId = textValue(existing, 'orderId');
+  if (!kiz || !attemptOrderId || !existingOrderId) {
+    return null;
+  }
+
+  return {
+    id: event.id,
+    eventKey: textValue(payload, 'eventKey') ?? event.id,
+    kiz,
+    detectedAt: textValue(payload, 'detectedAt') ?? event.createdAt.toISOString(),
+    attempt: duplicateFbsKizOccurrence(attempt, event.createdAt),
+    existing: duplicateFbsKizOccurrence(existing, event.createdAt),
+  };
+}
+
+function localFbsKizConflictFromAudit(event: {
+  id: string;
+  payload: Prisma.JsonValue | null;
+  createdAt: Date;
+}) {
+  const payload = operationPayload(event.payload ?? {});
+  const assemblyId = textValue(payload, 'assemblyId');
+  const orderId = textValue(payload, 'orderId');
+  const kiz = textValue(payload, 'kiz');
+  if (!assemblyId || !orderId || !kiz) return null;
+  return {
+    id: event.id,
+    assemblyId,
+    orderId,
+    productName: textValue(payload, 'productName') ?? 'Товар не определён',
+    article: textValue(payload, 'article') ?? null,
+    sourceBoxCode: textValue(payload, 'boxCode') ?? null,
+    kiz,
+    message:
+      textValue(payload, 'message') ??
+      'КИЗ требует сверки с данными WMS и Wildberries.',
+    updatedAt:
+      textValue(payload, 'detectedAt') ??
+      event.createdAt.toISOString(),
+  };
+}
+
+function duplicateFbsKizOccurrence(value: Record<string, unknown>, fallbackDate: Date) {
+  const requestNumberValue = value.requestNumber;
+  const requestNumber =
+    typeof requestNumberValue === 'number' && Number.isSafeInteger(requestNumberValue)
+      ? requestNumberValue
+      : typeof requestNumberValue === 'string' && /^\d+$/.test(requestNumberValue)
+        ? Number(requestNumberValue)
+        : null;
+  return {
+    requestId: textValue(value, 'requestId') ?? '',
+    requestNumber,
+    requestTitle: textValue(value, 'requestTitle') ?? null,
+    assemblyId: textValue(value, 'assemblyId') ?? '',
+    orderId: textValue(value, 'orderId') ?? '',
+    boxCode: textValue(value, 'boxCode') ?? 'БЕЗ КОРОБА',
+    deviceCode: textValue(value, 'deviceCode') ?? null,
+    workerName: textValue(value, 'workerName') ?? null,
+    status: textValue(value, 'status') ?? null,
+    scannedAt: textValue(value, 'scannedAt') ?? fallbackDate.toISOString(),
+  };
 }
 
 function operationRequestId(operation: { operationKey: string; operationType: string }, payload: Record<string, unknown>) {

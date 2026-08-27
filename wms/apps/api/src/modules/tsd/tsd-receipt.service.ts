@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { ClientStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
@@ -7,6 +7,8 @@ import { TsdDeviceService } from './tsd-device.service';
 
 @Injectable()
 export class TsdReceiptService {
+  private readonly logger = new Logger(TsdReceiptService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly clientScopes: ClientScopeService,
@@ -19,6 +21,7 @@ export class TsdReceiptService {
     const clientId = stringValue(clientIdValue, 'clientId');
     const kiz = stringValue(kizValue, 'kiz');
     this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const warehouseId = this.resolveWritableWarehouseId(user);
 
     const duplicate = await this.prisma.productMark.findFirst({
       where: {
@@ -27,18 +30,25 @@ export class TsdReceiptService {
       },
       select: {
         value: true,
-        box: { select: { code: true } },
+        box: { select: { code: true, warehouseId: true } },
+        stockMovement: { select: { warehouseId: true } },
         sku: { select: { name: true } },
       },
     });
-    const boxCode = duplicate?.box?.code ?? null;
+    const duplicateWarehouseId = duplicate?.box?.warehouseId ?? duplicate?.stockMovement?.warehouseId ?? null;
+    const canRevealDuplicate = !warehouseId || duplicateWarehouseId === warehouseId;
+    const boxCode = canRevealDuplicate ? duplicate?.box?.code ?? null : null;
 
     return {
       duplicate: Boolean(duplicate),
       kiz,
       boxCode,
-      skuName: duplicate?.sku.name ?? null,
-      message: duplicate ? duplicateKizMessage(boxCode) : 'КИЗ свободен.',
+      skuName: canRevealDuplicate ? duplicate?.sku.name ?? null : null,
+      message: duplicate
+        ? canRevealDuplicate
+          ? duplicateKizMessage(boxCode)
+          : 'КИЗ уже зарегистрирован в другом филиале. Передайте товар менеджеру.'
+        : 'КИЗ свободен.',
     };
   }
 
@@ -49,6 +59,10 @@ export class TsdReceiptService {
     const boxCode = requireFflBoxCode(stringValue(payload.boxCode, 'boxCode'));
     const sourceDocument = optionalStringValue(payload.sourceDocument);
     this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const warehouseId = this.resolveWritableWarehouseId(user, optionalStringValue(payload.warehouseId));
+    if (!warehouseId) {
+      throw new BadRequestException('Выберите филиал для приемки на ТСД.');
+    }
 
     const client = await this.prisma.client.findFirst({
       where: { id: clientId, status: { not: ClientStatus.ARCHIVED } },
@@ -59,22 +73,65 @@ export class TsdReceiptService {
     }
 
     const existingBox = await this.prisma.box.findUnique({
-      where: { clientId_code: { clientId, code: boxCode } },
-      select: { id: true, code: true, status: true },
+      where: { code: boxCode },
+      select: {
+        id: true,
+        clientId: true,
+        warehouseId: true,
+        zoneId: true,
+        palletId: true,
+        code: true,
+        status: true,
+        balances: { where: { quantity: { gt: 0 } }, select: { quantity: true }, take: 1 },
+        storagePlacement: { select: { id: true } },
+      },
     });
+    if (existingBox && existingBox.clientId !== clientId) {
+      throw new BadRequestException(`Короб ${boxCode} относится к другому клиенту.`);
+    }
+    if (existingBox && existingBox.warehouseId !== warehouseId) {
+      throw new ForbiddenException(
+        `Короб ${boxCode} относится к другому филиалу или не имеет безопасной привязки.`,
+      );
+    }
+    const reopenReceivingBox = existingBox?.status === 'receiving';
+    const reuseEmptyBox = Boolean(
+      existingBox &&
+        existingBox.status !== 'receiving' &&
+        existingBox.status !== 'deleted' &&
+        existingBox.balances.length === 0 &&
+        !existingBox.palletId &&
+        !existingBox.storagePlacement,
+    );
     if (existingBox?.status === 'deleted') {
       await this.prisma.$transaction((tx) => removeDeletedReceiptBoxData(tx, existingBox.id));
-    } else if (existingBox) {
+    } else if (existingBox && !reopenReceivingBox && !reuseEmptyBox) {
+      this.logger.warn(
+        `Receipt box rejected: box=${boxCode}, status=${existingBox.status}, ` +
+          `hasStock=${existingBox.balances.length > 0}, placed=${Boolean(
+            existingBox.palletId || existingBox.storagePlacement,
+          )}, clientId=${clientId}, warehouseId=${warehouseId}`,
+      );
       throw new BadRequestException(`Короб ${boxCode} уже есть в WMS. Для новой приемки нужен новый ШК короба.`);
     }
 
-    await this.prisma.box.create({
-      data: {
-        clientId,
-        code: boxCode,
-        status: 'receiving',
-      },
-    });
+    // FIX: an existing physical box may be reused for receipt only when WMS
+    // confirms that it has no stock and is not placed on a pallet.
+    if (reuseEmptyBox && existingBox) {
+      await this.prisma.box.update({
+        where: { id: existingBox.id },
+        data: { status: 'receiving', zoneId: null },
+      });
+    } else if (!reopenReceivingBox) {
+      await this.prisma.box.create({
+        data: {
+          clientId,
+          warehouseId,
+          code: boxCode,
+          status: 'receiving',
+        },
+      });
+    }
 
     await this.prisma.tsdOperation.create({
       data: {
@@ -83,9 +140,12 @@ export class TsdReceiptService {
         operationType: 'receipt_open_box',
         payload: compactJson({
           clientId,
+          warehouseId,
           boxCode,
           sourceDocument,
           status: 'receiving',
+          reopened: reopenReceivingBox || reuseEmptyBox,
+          reusedEmpty: reuseEmptyBox,
         }),
         status: 'ACCEPTED',
         serverMessage: `РљРѕСЂРѕР± ${boxCode} РѕС‚РєСЂС‹С‚ РґР»СЏ РїСЂРёРµРјРєРё.`,
@@ -96,8 +156,28 @@ export class TsdReceiptService {
       client,
       boxCode,
       canOpen: true,
-      message: `Короб ${boxCode} открыт для приемки.`,
+      reopened: reopenReceivingBox || reuseEmptyBox,
+      message: reopenReceivingBox || reuseEmptyBox
+        ? `Короб ${boxCode} повторно открыт. Продолжайте приемку.`
+        : `Короб ${boxCode} открыт для приемки.`,
     };
+  }
+
+  private resolveWritableWarehouseId(user: AuthUser, requestedWarehouseId?: string) {
+    const activeWarehouseId = optionalStringValue(user.activeWarehouseId);
+    if (user.roleCodes.includes('CLIENT')) {
+      return requestedWarehouseId || activeWarehouseId;
+    }
+    if (user.permissionCodes.includes('system:admin')) {
+      return requestedWarehouseId || activeWarehouseId;
+    }
+    if (!activeWarehouseId || !user.writableWarehouseIds?.includes(activeWarehouseId)) {
+      throw new ForbiddenException('Выберите доступный для изменения филиал.');
+    }
+    if (requestedWarehouseId && requestedWarehouseId !== activeWarehouseId) {
+      throw new ForbiddenException('Приемка относится к другому филиалу. Переключите город работы.');
+    }
+    return activeWarehouseId;
   }
 }
 

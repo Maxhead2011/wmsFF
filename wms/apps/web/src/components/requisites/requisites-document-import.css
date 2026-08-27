@@ -1,0 +1,124 @@
+.requisites-import {
+  align-items: center;
+  background: linear-gradient(135deg, #f8fafc 0%, #fff 70%);
+  border: 1px dashed #94a3b8;
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 13px 14px;
+}
+
+.requisites-import--success {
+  background: #f0fdf4;
+  border-color: #86efac;
+}
+
+.requisites-import--error {
+  background: #fff7ed;
+  border-color: #fdba74;
+}
+
+.requisites-import__icon {
+  align-items: center;
+  background: #e2e8f0;
+  border-radius: 8px;
+  color: #334155;
+  display: flex;
+  height: 42px;
+  justify-content: center;
+  width: 42px;
+}
+
+.requisites-import__body {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.requisites-import__body > strong {
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.requisites-import__body > span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.requisites-import__result,
+.requisites-import__error {
+  align-items: center;
+  display: flex;
+  font-size: 12px;
+  gap: 6px;
+  margin: 4px 0 0;
+}
+
+.requisites-import__result {
+  color: #15803d;
+}
+
+.requisites-import__error {
+  color: #c2410c;
+}
+
+.requisites-import__warning {
+  color: #9a3412;
+  font-size: 11px;
+  margin: 1px 0 0;
+}
+
+.requisites-import__button {
+  align-items: center;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  color: #0f172a;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 700;
+  gap: 7px;
+  min-height: 36px;
+  padding: 7px 12px;
+  white-space: nowrap;
+}
+
+.requisites-import__button:hover {
+  border-color: #ef1b23;
+  color: #c5141b;
+}
+
+.requisites-import__button[aria-disabled='true'] {
+  cursor: wait;
+  opacity: 0.65;
+  pointer-events: none;
+}
+
+.requisites-import__input {
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  position: absolute;
+  width: 1px;
+}
+
+.requisites-import__spinner {
+  animation: requisites-import-spin 0.8s linear infinite;
+}
+
+@keyframes requisites-import-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 720px) {
+  .requisites-import {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .requisites-import__button {
+    grid-column: 1 / -1;
+    justify-content: center;
+  }
+}

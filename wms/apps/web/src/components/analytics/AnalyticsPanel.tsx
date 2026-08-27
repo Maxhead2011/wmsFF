@@ -30,6 +30,7 @@ import {
   type AuthSession,
 } from '../../lib/api';
 import './analytics.css';
+import { useRememberedClientId } from '../../lib/rememberedClient';
 
 type AnalyticsPanelProps = { session: AuthSession };
 type LoadStatus = 'idle' | 'loading' | 'ready' | 'error';
@@ -52,7 +53,7 @@ const availabilityOptions = [
 
 export function AnalyticsPanel({ session }: AnalyticsPanelProps) {
   const [clients, setClients] = useState<AnalyticsClientSummary[]>([]);
-  const [selectedClientId, setSelectedClientId] = useState('');
+  const [selectedClientId, setSelectedClientId] = useRememberedClientId(session.user.id);
   const [dashboard, setDashboard] = useState<AnalyticsDashboard | null>(null);
   const [status, setStatus] = useState<LoadStatus>('idle');
   const [error, setError] = useState('');

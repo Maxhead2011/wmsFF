@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { Truck } from 'lucide-react';
+import { useRememberedClientId } from '../../lib/rememberedClient';
 import {
   createLogisticsDeliveryRequest,
   fetchLogisticsTariffSet,
@@ -24,7 +25,9 @@ type QuantityMode = 'boxes' | 'pallets';
 const DEFAULT_LOGISTICS_ORIGIN = 'Москва';
 
 export function LogisticsDeliveryForm({ clients, requests, tariffs, session, onCreated }: LogisticsDeliveryFormProps) {
-  const [clientId, setClientId] = useState(clients[0]?.id ?? '');
+  const [clientId, setClientId] = useRememberedClientId(session.user.id, {
+    initialClientId: clients[0]?.id ?? '',
+  });
   const [requestId, setRequestId] = useState('');
   const [tariffSetId, setTariffSetId] = useState(tariffs[0]?.id ?? '');
   const [tariffDetail, setTariffDetail] = useState<LogisticsTariffSetDetail | null>(null);

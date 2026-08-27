@@ -35,6 +35,7 @@ export class RequestBillingAutomationService {
       select: {
         id: true,
         clientId: true,
+        warehouseId: true,
         title: true,
         updatedAt: true,
         client: {
@@ -131,7 +132,7 @@ export class RequestBillingAutomationService {
   }
 
   private async createDraftInvoice(input: {
-    request: { id: string; clientId: string; title: string; updatedAt: Date };
+    request: { id: string; clientId: string; warehouseId: string | null; title: string; updatedAt: Date };
     charges: ApprovedCharge[];
     prefix: 'USL' | 'LOG';
     source: BillingInvoiceSource;
@@ -153,12 +154,16 @@ export class RequestBillingAutomationService {
     const periodFrom = minDate(input.charges.map((charge) => charge.serviceDate)) ?? input.request.updatedAt;
     const periodTo = maxDate(input.charges.map((charge) => charge.serviceDate)) ?? input.request.updatedAt;
     const totalRub = roundMoney(input.charges.reduce((sum, charge) => sum + decimalToNumber(charge.totalRub), 0));
+    if (totalRub <= 0) {
+      return null;
+    }
     const number = await this.nextInvoiceNumber(input.prefix, periodTo);
 
     return this.prisma.billingInvoice.create({
       data: {
         number,
         clientId: input.request.clientId,
+        warehouseId: input.request.warehouseId,
         requestId: input.request.id,
         periodFrom,
         periodTo,

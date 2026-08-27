@@ -1,8 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, StockStatus, type PickWaveStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
+import { assertWarehouseAccess } from '../client-requests/client-request-warehouse-scope';
 import type { PickWaveDocumentPayload, PickWaveDocumentRow, WaveAllocation } from './pick-wave-document.types';
 import { buildPickWaveWorkbook, pickWaveXlsxMimeType } from './pick-wave-document-xlsx';
 
@@ -33,6 +34,13 @@ export class PickWaveDocumentService {
     }
 
     wave.requests.forEach((link) => this.clientScopes.requireClientAccess(user, link.request.clientId, 'read'));
+    assertWarehouseAccess(user, wave, 'read', 'Волна не найдена в выбранном филиале.');
+    if (
+      !wave.warehouseId ||
+      wave.requests.some((link) => link.request.warehouseId !== wave.warehouseId)
+    ) {
+      throw new BadRequestException('Волна содержит заявки разных филиалов или не привязана к филиалу.');
+    }
 
     const rows = wave.requests.flatMap((link) =>
       link.request.items.map((item) => ({
@@ -50,6 +58,7 @@ export class PickWaveDocumentService {
           skuId: item.skuId,
           quantity: item.quantity,
         })),
+      wave.warehouseId,
     );
     const actualBoxCodes = await this.loadActualLocationCodes([...pickedLinesByItemId.values()]);
 
@@ -178,6 +187,7 @@ export class PickWaveDocumentService {
 
   private async buildPlannedAllocations(
     lines: Array<{ itemId: string; clientId: string; skuId: string | null; quantity: number }>,
+    warehouseId: string,
   ) {
     const result = new Map<string, WaveAllocation[]>();
     const skuIds = [...new Set(lines.map((line) => line.skuId).filter((skuId): skuId is string => Boolean(skuId)))];
@@ -187,6 +197,7 @@ export class PickWaveDocumentService {
 
     const balances = await this.prisma.stockBalance.findMany({
       where: {
+        warehouseId,
         skuId: { in: skuIds },
         status: StockStatus.AVAILABLE,
         quantity: { gt: 0 },
@@ -351,6 +362,7 @@ const pickWaveDocumentInclude = {
         select: {
           id: true,
           clientId: true,
+          warehouseId: true,
           title: true,
           status: true,
           client: {

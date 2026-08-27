@@ -1,5 +1,5 @@
 import { UserStatus } from '@prisma/client';
-import { IsBoolean, IsEnum, IsOptional, IsString, Length, ValidateIf } from 'class-validator';
+import { IsBoolean, IsEnum, IsOptional, IsString, IsUUID, Length, ValidateIf } from 'class-validator';
 
 export class UpdateUserProfileDto {
   @IsOptional()
@@ -27,4 +27,8 @@ export class UpdateUserProfileDto {
   @IsOptional()
   @IsBoolean()
   analyticsEnabled?: boolean;
+
+  @IsOptional()
+  @IsUUID()
+  warehouseId?: string | null;
 }

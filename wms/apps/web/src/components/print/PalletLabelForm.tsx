@@ -10,6 +10,7 @@ import {
   type WarehousePalletSummary,
 } from '../../lib/api';
 import { TsplPreviewCard } from './TsplPreviewCard';
+import { useRememberedClientId } from '../../lib/rememberedClient';
 
 type PalletLabelFormProps = {
   session: AuthSession;
@@ -18,7 +19,7 @@ type PalletLabelFormProps = {
 export function PalletLabelForm({ session }: PalletLabelFormProps) {
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [pallets, setPallets] = useState<WarehousePalletSummary[]>([]);
-  const [clientId, setClientId] = useState('');
+  const [clientId, setClientId] = useRememberedClientId(session.user.id);
   const [palletCode, setPalletCode] = useState('');
   const [boxesCount, setBoxesCount] = useState('0');
   const [preview, setPreview] = useState<LabelPreview | null>(null);
