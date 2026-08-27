@@ -33,22 +33,18 @@ export function useRememberedClientId(
     if (fixedClientId || typeof window === 'undefined') return undefined;
 
     const handleChange = (event: Event) => {
-      const detail = (event as CustomEvent<{ storageKey: string; clientId: string }>).detail;
-      if (detail?.storageKey === storageKey && detail.clientId) {
-        setClientIdState(detail.clientId);
-      }
-    };
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === storageKey && event.newValue) {
-        setClientIdState(event.newValue);
+      const nextClientId = rememberedClientIdFromSameTabEvent(event, storageKey);
+      if (nextClientId) {
+        setClientIdState(nextClientId);
       }
     };
 
+    // FIX: do not consume the browser `storage` event. Two WMS tabs can have
+    // different branch-scoped client lists and otherwise keep forcing their
+    // fallback client into each other, remounting the cabinet in a tight loop.
     window.addEventListener(CHANGE_EVENT, handleChange);
-    window.addEventListener('storage', handleStorage);
     return () => {
       window.removeEventListener(CHANGE_EVENT, handleChange);
-      window.removeEventListener('storage', handleStorage);
     };
   }, [fixedClientId, storageKey]);
 
@@ -76,6 +72,14 @@ export function validRememberedClientId(
   return clients.some((client) => client.id === currentClientId)
     ? currentClientId
     : fallbackClientId || clients[0]?.id || '';
+}
+
+export function rememberedClientIdFromSameTabEvent(event: Event, storageKey: string) {
+  // FIX: only the explicit same-tab event may update mounted client selectors.
+  // Native cross-tab StorageEvent objects intentionally have no `detail`.
+  const detail = (event as CustomEvent<{ storageKey?: string; clientId?: string }>).detail;
+  if (event.type !== CHANGE_EVENT || detail?.storageKey !== storageKey) return '';
+  return detail.clientId?.trim() ?? '';
 }
 
 function readRememberedClientId(storageKey: string) {
