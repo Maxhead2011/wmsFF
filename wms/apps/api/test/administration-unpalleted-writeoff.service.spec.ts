@@ -6,6 +6,7 @@ import { AdministrationController } from '../src/modules/administration/administ
 import {
   ADMIN_UNPALLETED_WRITEOFF_SOURCE,
   AdministrationUnpalletedWriteoffService,
+  UNPALLETED_BLOCKER_RECHECK_CONFIRMATION,
   UNPALLETED_WRITEOFF_CONFIRMATION,
   UNPALLETED_WRITEOFF_TARGET_CLIENT_ID,
 } from '../src/modules/administration/administration-unpalleted-writeoff.service';
@@ -65,12 +66,18 @@ function box(id: string, code: string, balances: ReturnType<typeof balance>[]) {
 
 // TEST: the preview is read-only and treats a code-only pallet link case-insensitively.
 describe('AdministrationUnpalletedWriteoffService', () => {
-  // TEST: both HTTP endpoints require system:admin before the service is reached.
-  it('защищает preview и apply декоратором system:admin', () => {
+  // TEST: all three HTTP endpoints require system:admin before the service is reached.
+  it('защищает preview, recheck и apply декоратором system:admin', () => {
     expect(
       Reflect.getMetadata(
         REQUIRED_PERMISSIONS_KEY,
         AdministrationController.prototype.previewUnpalletedBoxWriteoff,
+      ),
+    ).toEqual(['system:admin']);
+    expect(
+      Reflect.getMetadata(
+        REQUIRED_PERMISSIONS_KEY,
+        AdministrationController.prototype.recheckUnpalletedBoxBlockers,
       ),
     ).toEqual(['system:admin']);
     expect(
@@ -204,8 +211,9 @@ describe('AdministrationUnpalletedWriteoffService', () => {
     expect(prisma.stockBalance.delete).not.toHaveBeenCalled();
   });
 
-  // TEST: повреждённые связи клиента, КИЗы, активные волны и незакрытые проверки блокируют списание.
-  it('блокирует чужие остатки, несовпавшие КИЗы, активные волны и проверки коробов', async () => {
+  // TEST: a KIZ count mismatch is visible but is not a blocker for the explicitly approved
+  // cleanup; foreign data, active waves and pending checks remain hard blockers.
+  it('показывает расхождение КИЗ как предупреждение и группирует реальные блокировки', async () => {
     const foreign = box('box-foreign', 'FFL_FOREIGN', [
       {
         ...balance('bal-foreign', 'box-foreign', StockStatus.AVAILABLE, 1),
@@ -253,10 +261,82 @@ describe('AdministrationUnpalletedWriteoffService', () => {
     const result = await service.preview(admin as never);
 
     expect(result.rows.find((row) => row.boxId === 'box-foreign')?.blockers).toContain('FOREIGN_CLIENT_DATA');
-    expect(result.rows.find((row) => row.boxId === 'box-kiz')?.blockers).toContain('KIZ_COUNT_MISMATCH');
+    expect(result.rows.find((row) => row.boxId === 'box-kiz')).toMatchObject({
+      safe: true,
+      blockers: [],
+      warnings: ['KIZ_COUNT_MISMATCH'],
+    });
     expect(result.rows.find((row) => row.boxId === 'box-wave')?.blockers).toContain('ACTIVE_PICK_WAVE');
     expect(result.rows.find((row) => row.boxId === 'box-check')?.blockers).toContain('PENDING_BOX_CHECK');
-    expect(result.summary.safe).toBe(0);
+    expect(result.summary).toMatchObject({ safe: 1, blocked: 3, warnings: 1 });
+    expect(result.blockerSummary).toEqual([
+      { blocker: 'ACTIVE_PICK_WAVE', boxes: 1, units: 2 },
+      { blocker: 'FOREIGN_CLIENT_DATA', boxes: 1, units: 1 },
+      { blocker: 'PENDING_BOX_CHECK', boxes: 1, units: 2 },
+    ]);
+    expect(result.warningSummary).toEqual([
+      { warning: 'KIZ_COUNT_MISMATCH', boxes: 1, units: 1 },
+    ]);
+  });
+
+  // TEST: recheck must reuse authoritative WB synchronization and only ask InventoryService
+  // to finish already resolved sessions; the administration service does not rewrite their rows.
+  it('массово перепроверяет WB и завершённые инвентаризации штатными сервисами', async () => {
+    const candidate = box('box-kiz', 'FFL_KIZ', [balance('bal-kiz', 'box-kiz')]);
+    const prisma = {
+      client: { findUnique: vi.fn().mockResolvedValue(targetClient) },
+      box: { findMany: vi.fn().mockResolvedValue([candidate]) },
+      storagePalletBox: { findMany: vi.fn().mockResolvedValue([]) },
+      clientRequestBoxSelection: { findMany: vi.fn().mockResolvedValue([]) },
+      fbsTsdAssembly: { findMany: vi.fn().mockResolvedValue([]) },
+      inventoryAuditBox: { findMany: vi.fn().mockResolvedValue([]) },
+      productMark: { findMany: vi.fn().mockResolvedValue([]) },
+      pickWaveBalanceLine: { findMany: vi.fn().mockResolvedValue([]) },
+      warehouseBoxCheckRow: { findMany: vi.fn().mockResolvedValue([]) },
+      auditLog: { create: vi.fn().mockResolvedValue({ id: 'audit-recheck' }) },
+    };
+    const marketplaceConnections = {
+      listFbsOrders: vi.fn().mockResolvedValue({ orders: [] }),
+    };
+    const inventory = {
+      completeResolvedSessionsForBoxes: vi.fn().mockResolvedValue({
+        checked: 2,
+        completed: 1,
+        sessionIds: ['inventory-1'],
+      }),
+    };
+    const service = new AdministrationUnpalletedWriteoffService(
+      prisma as never,
+      { assertStockMovementsAllowed: vi.fn() } as never,
+      marketplaceConnections as never,
+      inventory as never,
+    );
+
+    const result = await service.recheck(
+      { confirmation: UNPALLETED_BLOCKER_RECHECK_CONFIRMATION },
+      admin as never,
+    );
+
+    expect(marketplaceConnections.listFbsOrders).toHaveBeenCalledWith(
+      UNPALLETED_WRITEOFF_TARGET_CLIENT_ID,
+      admin,
+      true,
+    );
+    expect(inventory.completeResolvedSessionsForBoxes).toHaveBeenCalledWith(
+      ['box-kiz'],
+      admin,
+    );
+    expect(result).toMatchObject({
+      fbs: { refreshed: true, error: null },
+      inventory: { checked: 2, completed: 1, sessionIds: ['inventory-1'] },
+      preview: { summary: { candidates: 1 } },
+    });
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: admin.id,
+        action: 'administration.unpalleted-box.blockers_rechecked',
+      }),
+    });
   });
 
   // TEST: controller guards are not the only protection; the service also rejects a client user.
@@ -394,6 +474,55 @@ describe('AdministrationUnpalletedWriteoffService', () => {
       }),
     });
     expect(result).toMatchObject({ archived: 1, skipped: 0, unitsWrittenOff: 2 });
+  });
+
+  // TEST: a mismatched AVAILABLE count is cleaned up, while the query explicitly excludes
+  // historical SHIPPING marks and the audit records that the warning existed.
+  it('списывает короб с расхождением КИЗ, не изменяя SHIPPING', async () => {
+    const sourceBalance = balance('bal-kiz-mismatch', 'box-kiz-mismatch', StockStatus.AVAILABLE, 3);
+    sourceBalance.sku.needsChestnyZnak = true;
+    const sourceBox = box('box-kiz-mismatch', 'FFL_KIZ_MISMATCH', [sourceBalance]);
+    const tx = safeApplyTx(sourceBox);
+    tx.productMark.findMany.mockResolvedValue([
+      {
+        boxId: sourceBox.id,
+        clientId: UNPALLETED_WRITEOFF_TARGET_CLIENT_ID,
+        skuId: sourceBalance.skuId,
+        status: StockStatus.AVAILABLE,
+        sku: { clientId: UNPALLETED_WRITEOFF_TARGET_CLIENT_ID },
+      },
+      {
+        boxId: sourceBox.id,
+        clientId: UNPALLETED_WRITEOFF_TARGET_CLIENT_ID,
+        skuId: sourceBalance.skuId,
+        status: StockStatus.SHIPPING,
+        sku: { clientId: UNPALLETED_WRITEOFF_TARGET_CLIENT_ID },
+      },
+    ]);
+    tx.productMark.updateMany.mockResolvedValue({ count: 1 });
+    const prisma = {
+      client: { findUnique: vi.fn().mockResolvedValue(targetClient) },
+      $transaction: vi.fn(async (callback: (db: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new AdministrationUnpalletedWriteoffService(
+      prisma as never,
+      { assertStockMovementsAllowed: vi.fn().mockResolvedValue(undefined) } as never,
+    );
+
+    const result = await service.apply(
+      { boxIds: [sourceBox.id], confirmation: UNPALLETED_WRITEOFF_CONFIRMATION },
+      admin as never,
+    );
+
+    expect(result.results[0]).toMatchObject({ outcome: 'ARCHIVED', unitsWrittenOff: 3, marksBlocked: 1 });
+    expect(tx.productMark.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ status: StockStatus.AVAILABLE }),
+    }));
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        payload: expect.objectContaining({ kizCountMismatch: true }),
+      }),
+    });
   });
 
   // TEST: the destructive endpoint is bounded and requires an exact confirmation phrase.

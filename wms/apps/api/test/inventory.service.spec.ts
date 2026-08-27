@@ -566,4 +566,75 @@ describe('InventoryService box checks', () => {
       },
     }));
   });
+
+  // TEST: mass maintenance may finish only sessions whose every box is already
+  // MATCHED/RESOLVED and whose mismatch decisions are all resolved.
+  it('завершает только фактически законченную инвентаризацию выбранных коробов', async () => {
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'session-ready' }]),
+      inventorySession: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'session-ready',
+          status: InventorySessionStatus.REVIEW,
+        }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      inventoryAuditBox: {
+        count: vi.fn()
+          .mockResolvedValueOnce(2)
+          .mockResolvedValueOnce(0),
+      },
+      inventoryAuditLine: { count: vi.fn().mockResolvedValue(0) },
+    };
+    const prisma = {
+      inventorySession: {
+        findMany: vi.fn().mockResolvedValue([{ id: 'session-ready' }]),
+      },
+      $transaction: vi.fn(async (callback: (db: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new InventoryService(prisma as never, {} as never, {} as never);
+
+    const result = await service.completeResolvedSessionsForBoxes(['box-1', 'box-2'], administrator);
+
+    expect(result).toEqual({ checked: 1, completed: 1, sessionIds: ['session-ready'] });
+    expect(tx.inventoryAuditBox.count).toHaveBeenNthCalledWith(2, {
+      where: {
+        sessionId: 'session-ready',
+        status: { notIn: [InventoryBoxStatus.MATCHED, InventoryBoxStatus.RESOLVED] },
+      },
+    });
+    expect(tx.inventorySession.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        id: 'session-ready',
+        status: { in: [InventorySessionStatus.ACTIVE, InventorySessionStatus.REVIEW] },
+      },
+    }));
+  });
+
+  // TEST: a COUNTING/MISMATCH box keeps the session open even when the session is old.
+  it('не завершает инвентаризацию с незавершённым коробом', async () => {
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'session-live' }]),
+      inventorySession: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'session-live', status: InventorySessionStatus.ACTIVE }),
+        updateMany: vi.fn(),
+      },
+      inventoryAuditBox: {
+        count: vi.fn()
+          .mockResolvedValueOnce(3)
+          .mockResolvedValueOnce(1),
+      },
+      inventoryAuditLine: { count: vi.fn().mockResolvedValue(0) },
+    };
+    const prisma = {
+      inventorySession: { findMany: vi.fn().mockResolvedValue([{ id: 'session-live' }]) },
+      $transaction: vi.fn(async (callback: (db: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new InventoryService(prisma as never, {} as never, {} as never);
+
+    const result = await service.completeResolvedSessionsForBoxes(['box-live'], administrator);
+
+    expect(result).toEqual({ checked: 1, completed: 0, sessionIds: [] });
+    expect(tx.inventorySession.updateMany).not.toHaveBeenCalled();
+  });
 });
