@@ -2,6 +2,11 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 import { ClientNotificationSeverity, Prisma, StockStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
+import {
+  excludeAdminUnpalletedWriteoffMovement,
+  targetClientPlacedBalanceVisibility,
+  UNPALLETED_WRITEOFF_TARGET_CLIENT_ID,
+} from '../administration/administration-unpalleted-writeoff.service';
 import { StockOperationsService } from '../stock/stock-operations.service';
 import { CreateIntegrationStockAdjustmentDto } from './dto/create-stock-adjustment.dto';
 import {
@@ -56,6 +61,10 @@ export class IntegrationApiService {
       where: {
         clientId: context.credential.clientId,
         warehouseId: context.credential.warehouseId,
+        // FIX: this exact client's API stock is authoritative only for boxes placed on pallet-sorts.
+        ...(context.credential.clientId === UNPALLETED_WRITEOFF_TARGET_CLIENT_ID
+          ? { AND: [targetClientPlacedBalanceVisibility()] }
+          : {}),
         ...(query.status ? { status: query.status } : {}),
         ...(query.updatedSince ? { updatedAt: { gt: new Date(query.updatedSince) } } : {}),
         ...(query.barcode ? { sku: { barcodes: { some: { value: query.barcode } } } } : {}),
@@ -122,6 +131,8 @@ export class IntegrationApiService {
       where: {
         clientId: context.credential.clientId,
         warehouseId: context.credential.warehouseId,
+        // FIX: the client API does not expose the internal administrator-only cleanup action.
+        ...excludeAdminUnpalletedWriteoffMovement(),
         ...(query.updatedSince ? { createdAt: { gt: new Date(query.updatedSince) } } : {}),
       },
       select: {

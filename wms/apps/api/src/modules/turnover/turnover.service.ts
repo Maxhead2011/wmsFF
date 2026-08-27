@@ -7,6 +7,11 @@ import { BoxCodePolicyService } from '../../common/boxes/box-code-policy.service
 import { receiptBoxCodePrefixForDate, receiptDateFromBoxCode } from '../../common/receipt-batches';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService, type ClientFilter } from '../auth/client-scope.service';
+import {
+  excludeAdminUnpalletedWriteoffMovement,
+  targetClientPlacedBalanceVisibility,
+  UNPALLETED_WRITEOFF_TARGET_CLIENT_ID,
+} from '../administration/administration-unpalleted-writeoff.service';
 import { ListTurnoverDto, TurnoverBoxDetailsDto, TurnoverStatisticsDto, TurnoverStockExportDto, TurnoverSuggestionsDto } from './dto/list-turnover.dto';
 import { TurnoverKizReportDto } from './dto/turnover-kiz-report.dto';
 import { TurnoverActionDto, TurnoverActionKind } from './dto/turnover-action.dto';
@@ -327,8 +332,11 @@ export class TurnoverService {
     const kiz = query.kiz?.trim();
     const warehouseScope = await this.resolveWarehouseScope(user, clientFilter);
     const movementScopeWhere = this.movementWarehouseWhere(warehouseScope);
+    const movementVisibilityWhere = this.movementVisibilityWhere(user);
     const balanceScopeWhere = this.balanceWarehouseWhere(warehouseScope);
+    const balanceVisibilityWhere = this.balanceVisibilityWhere(user);
     const markScopeWhere = this.markWarehouseWhere(warehouseScope);
+    const markVisibilityWhere = this.markVisibilityWhere(user);
 
     const skus = await this.prisma.sku.findMany({
       where: {
@@ -340,6 +348,7 @@ export class TurnoverService {
                   AND: [
                     { createdAt: movementDateRange },
                     ...(movementScopeWhere ? [movementScopeWhere] : []),
+                    ...(movementVisibilityWhere ? [movementVisibilityWhere] : []),
                   ],
                 },
               },
@@ -350,7 +359,16 @@ export class TurnoverService {
         client: { select: { id: true, code: true, name: true } },
         barcodes: { orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }] },
         balances: {
-          ...(balanceScopeWhere ? { where: balanceScopeWhere } : {}),
+          ...(balanceScopeWhere || balanceVisibilityWhere
+            ? {
+                where: {
+                  AND: [
+                    ...(balanceScopeWhere ? [balanceScopeWhere] : []),
+                    ...(balanceVisibilityWhere ? [balanceVisibilityWhere] : []),
+                  ],
+                },
+              }
+            : {}),
           include: {
             box: {
               select: {
@@ -384,12 +402,13 @@ export class TurnoverService {
           orderBy: [{ updatedAt: 'desc' }],
         },
         productMarks: {
-          ...(kiz || markScopeWhere
+          ...(kiz || markScopeWhere || markVisibilityWhere
             ? {
                 where: {
                   AND: [
                     ...(kiz ? [{ value: { contains: kiz, mode: Prisma.QueryMode.insensitive } }] : []),
                     ...(markScopeWhere ? [markScopeWhere] : []),
+                    ...(markVisibilityWhere ? [markVisibilityWhere] : []),
                   ],
                 },
               }
@@ -399,12 +418,13 @@ export class TurnoverService {
           take: 30,
         },
         movements: {
-          ...(movementDateRange || movementScopeWhere
+          ...(movementDateRange || movementScopeWhere || movementVisibilityWhere
             ? {
                 where: {
                   AND: [
                     ...(movementDateRange ? [{ createdAt: movementDateRange }] : []),
                     ...(movementScopeWhere ? [movementScopeWhere] : []),
+                    ...(movementVisibilityWhere ? [movementVisibilityWhere] : []),
                   ],
                 },
               }
@@ -590,8 +610,11 @@ export class TurnoverService {
     const searchText = search ? { contains: search, mode: Prisma.QueryMode.insensitive } : undefined;
     const warehouseScope = await this.resolveWarehouseScope(user, clientFilter);
     const balanceScopeWhere = this.balanceWarehouseWhere(warehouseScope);
+    const balanceVisibilityWhere = this.balanceVisibilityWhere(user);
     const markScopeWhere = this.markWarehouseWhere(warehouseScope);
+    const markVisibilityWhere = this.markVisibilityWhere(user);
     const boxScopeWhere = this.boxWarehouseWhere(warehouseScope);
+    const boxVisibilityWhere = this.boxVisibilityWhere(user);
 
     const [skus, barcodeRows, marks, boxes] = await Promise.all([
       this.prisma.sku.findMany({
@@ -621,7 +644,16 @@ export class TurnoverService {
           size: true,
           barcodes: { select: { value: true, isPrimary: true }, orderBy: [{ isPrimary: 'desc' }, { value: 'asc' }], take: 5 },
           balances: {
-            ...(balanceScopeWhere ? { where: balanceScopeWhere } : {}),
+            ...(balanceScopeWhere || balanceVisibilityWhere
+              ? {
+                  where: {
+                    AND: [
+                      ...(balanceScopeWhere ? [balanceScopeWhere] : []),
+                      ...(balanceVisibilityWhere ? [balanceVisibilityWhere] : []),
+                    ],
+                  },
+                }
+              : {}),
             select: {
               quantity: true,
               status: true,
@@ -662,7 +694,14 @@ export class TurnoverService {
         where: {
           clientId: clientFilter,
           ...(search ? { value: searchText } : {}),
-          ...(markScopeWhere ? { AND: [markScopeWhere] } : {}),
+          ...(markScopeWhere || markVisibilityWhere
+            ? {
+                AND: [
+                  ...(markScopeWhere ? [markScopeWhere] : []),
+                  ...(markVisibilityWhere ? [markVisibilityWhere] : []),
+                ],
+              }
+            : {}),
         },
         select: {
           id: true,
@@ -678,7 +717,14 @@ export class TurnoverService {
         where: {
           clientId: clientFilter,
           ...(search ? { code: searchText } : {}),
-          ...(boxScopeWhere ?? {}),
+          ...(boxScopeWhere || boxVisibilityWhere
+            ? {
+                AND: [
+                  ...(boxScopeWhere ? [boxScopeWhere] : []),
+                  ...(boxVisibilityWhere ? [boxVisibilityWhere] : []),
+                ],
+              }
+            : {}),
         },
         select: { id: true, code: true, status: true },
         orderBy: { code: 'asc' },
@@ -775,6 +821,7 @@ export class TurnoverService {
         clientId: clientFilter,
         code: { equals: cleanCode, mode: Prisma.QueryMode.insensitive },
         ...(this.boxWarehouseWhere(warehouseScope) ?? {}),
+        ...(this.boxVisibilityWhere(user) ?? {}),
       },
       select: {
         id: true,
@@ -835,6 +882,7 @@ export class TurnoverService {
         where: {
           clientId: box.client.id,
           boxId: box.id,
+          ...(this.movementVisibilityWhere(user) ?? {}),
         },
         include: {
           sku: {
@@ -1205,11 +1253,17 @@ export class TurnoverService {
     const clientFilter = this.clientScopes.resolveClientFilter(user);
     const warehouseScope = await this.resolveWarehouseScope(user, clientFilter);
     const movementScopeWhere = this.movementWarehouseWhere(warehouseScope);
+    const movementVisibilityWhere = this.movementVisibilityWhere(user);
     const seed = await this.prisma.stockMovement.findFirst({
       where: {
         id: movementId,
         clientId: clientFilter,
-        ...(movementScopeWhere ? { AND: [movementScopeWhere] } : {}),
+        ...((movementScopeWhere || movementVisibilityWhere)
+          ? { AND: [
+              ...(movementScopeWhere ? [movementScopeWhere] : []),
+              ...(movementVisibilityWhere ? [movementVisibilityWhere] : []),
+            ] }
+          : {}),
       },
       include: receiptDocumentInclude,
     });
@@ -1234,6 +1288,7 @@ export class TurnoverService {
         AND: [
           documentWhere,
           ...(movementScopeWhere ? [movementScopeWhere] : []),
+          ...(movementVisibilityWhere ? [movementVisibilityWhere] : []),
         ],
       },
       include: receiptDocumentInclude,
@@ -1970,6 +2025,52 @@ export class TurnoverService {
           : []),
       ],
     };
+  }
+
+  private movementVisibilityWhere(user: AuthUser): Prisma.StockMovementWhereInput | undefined {
+    // FIX: clients do not see the administrator-only cleanup action.
+    return user.roleCodes.includes('CLIENT') && !user.permissionCodes.includes('system:admin')
+      ? excludeAdminUnpalletedWriteoffMovement()
+      : undefined;
+  }
+
+  private balanceVisibilityWhere(user: AuthUser): Prisma.StockBalanceWhereInput | undefined {
+    return this.isExternalClient(user) ? targetClientPlacedBalanceVisibility() : undefined;
+  }
+
+  private markVisibilityWhere(user: AuthUser): Prisma.ProductMarkWhereInput | undefined {
+    if (!this.isExternalClient(user)) return undefined;
+    return {
+      OR: [
+        { clientId: { not: UNPALLETED_WRITEOFF_TARGET_CLIENT_ID } },
+        {
+          clientId: UNPALLETED_WRITEOFF_TARGET_CLIENT_ID,
+          boxId: { not: null },
+          box: {
+            status: { notIn: ['deleted', 'archived'] },
+            storagePlacement: { isNot: null },
+          },
+        },
+      ],
+    };
+  }
+
+  private boxVisibilityWhere(user: AuthUser): Prisma.BoxWhereInput | undefined {
+    if (!this.isExternalClient(user)) return undefined;
+    return {
+      OR: [
+        { clientId: { not: UNPALLETED_WRITEOFF_TARGET_CLIENT_ID } },
+        {
+          clientId: UNPALLETED_WRITEOFF_TARGET_CLIENT_ID,
+          status: { notIn: ['deleted', 'archived'] },
+          storagePlacement: { isNot: null },
+        },
+      ],
+    };
+  }
+
+  private isExternalClient(user: AuthUser) {
+    return user.roleCodes.includes('CLIENT') && !user.permissionCodes.includes('system:admin');
   }
 
   private markWarehouseWhere(

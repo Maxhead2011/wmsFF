@@ -4,6 +4,89 @@ import { StorageLocationsService } from '../src/modules/warehouse/storage-locati
 describe('StorageLocationsService', () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  // TEST: ordinary MANUAL/TSD placement takes the shared Box lock before writing the pallet-sort link.
+  it('блокирует активный короб до размещения на паллет-сорте', async () => {
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{
+        id: 'box-active',
+        status: 'active',
+        clientId: 'client-1',
+        warehouseId: 'warehouse-1',
+      }]),
+      storagePalletBox: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        upsert: vi.fn().mockResolvedValue({
+          id: 'placement-1',
+          boxId: 'box-active',
+          boxCode: 'FFL_ACTIVE_001',
+          palletId: 'pallet-1',
+          box: { id: 'box-active', status: 'active' },
+          pallet: { id: 'pallet-1' },
+        }),
+      },
+      storagePallet: { update: vi.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (db: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new StorageLocationsService(prisma as never, boxCodePolicy() as never, balances() as never);
+
+    await (service as any).placeBox(
+      { id: 'pallet-1', code: 'PALLET-1', clientId: 'client-1', warehouseId: 'warehouse-1' },
+      'FFL_ACTIVE_001',
+      'MANUAL',
+      { id: 'admin-1', name: 'Администратор', permissionCodes: ['system:admin'] },
+    );
+
+    expect(tx.$queryRaw).toHaveBeenCalledOnce();
+    expect(tx.storagePalletBox.upsert).toHaveBeenCalledOnce();
+    expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.storagePalletBox.upsert.mock.invocationCallOrder[0],
+    );
+  });
+
+  // TEST: архивный короб после административного списания нельзя вернуть на паллет-сорт обычным сканом.
+  it('не размещает архивный короб на паллет-сорте', async () => {
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([
+        {
+          id: 'box-archived',
+          status: 'archived',
+          clientId: 'client-1',
+          warehouseId: 'warehouse-1',
+        },
+      ]),
+      storagePalletBox: { findUnique: vi.fn(), upsert: vi.fn() },
+      storagePallet: { update: vi.fn() },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (db: typeof tx) => unknown) => callback(tx)),
+      storagePalletBox: { findUnique: vi.fn(), upsert: vi.fn() },
+      box: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'box-archived',
+          status: 'archived',
+          clientId: 'client-1',
+          warehouseId: 'warehouse-1',
+        }),
+      },
+      storagePallet: { update: vi.fn() },
+    };
+    const service = new StorageLocationsService(prisma as never, boxCodePolicy() as never, balances() as never);
+
+    await expect(
+      (service as any).placeBox(
+        { id: 'pallet-1', code: 'PALLET-1', clientId: 'client-1', warehouseId: 'warehouse-1' },
+        'FFL_ARCHIVED_001',
+        'TSD',
+        { id: 'admin-1', name: 'Администратор', permissionCodes: ['system:admin'] },
+      ),
+    ).rejects.toThrow('архив');
+
+    expect(tx.storagePalletBox.upsert).not.toHaveBeenCalled();
+    expect(tx.storagePallet.update).not.toHaveBeenCalled();
+  });
+
   it('rejects a box code when the TSD expects a pallet-sort code', async () => {
     const prisma = {
       box: {

@@ -6229,6 +6229,55 @@ export type AdministrationPalletSortScanResult = {
   message: string;
 };
 
+export type AdministrationUnpalletedWriteoffBlocker =
+  | 'NON_AVAILABLE_BALANCE'
+  | 'ACTIVE_CLIENT_REQUEST'
+  | 'ACTIVE_FBS_ASSEMBLY'
+  | 'OPEN_INVENTORY'
+  | 'FOREIGN_CLIENT_DATA'
+  | 'KIZ_COUNT_MISMATCH'
+  | 'ACTIVE_PICK_WAVE'
+  | 'PENDING_BOX_CHECK';
+
+export type AdministrationUnpalletedWriteoffPreview = {
+  checkedAt: string;
+  client: { id: string; code: string; name: string; stockBalanceMode: 'PALLET_SORT' };
+  summary: {
+    scanned: number;
+    candidates: number;
+    safe: number;
+    blocked: number;
+    units: number;
+    safeUnits: number;
+  };
+  rows: Array<{
+    boxId: string;
+    boxCode: string;
+    warehouseId: string | null;
+    quantity: number;
+    statuses: string[];
+    safe: boolean;
+    blockers: AdministrationUnpalletedWriteoffBlocker[];
+  }>;
+};
+
+export type AdministrationUnpalletedWriteoffResult = {
+  processed: number;
+  archived: number;
+  skipped: number;
+  failed: number;
+  unitsWrittenOff: number;
+  results: Array<{
+    boxId: string;
+    boxCode: string | null;
+    outcome: 'ARCHIVED' | 'SKIPPED' | 'ERROR';
+    reason: string | null;
+    unitsWrittenOff: number;
+    marksBlocked: number;
+    movementIds: string[];
+  }>;
+};
+
 export type AdministrationTechnicalWorkBulkResult = {
   category: AdministrationTechnicalWorkCategory;
   action: AdministrationTechnicalWorkIssue['actions'][number]['id'];
@@ -6899,6 +6948,26 @@ export async function applyAdministrationPalletSortScan(
   payload: { palletCode: string; boxCodes: string[]; confirmation: string },
 ) {
   return request<AdministrationPalletSortScanResult>('/administration/technical-work/pallet-sorts/scan-apply', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+// FIX: preview is the only way the admin UI obtains eligible box ids; it never mutates stock.
+export async function previewAdministrationUnpalletedWriteoff(accessToken: string) {
+  return request<AdministrationUnpalletedWriteoffPreview>('/administration/technical-work/unpalleted-boxes/preview', {
+    method: 'POST',
+    accessToken,
+  });
+}
+
+// FIX: the server revalidates every id; the browser is limited to the same 25-box batch.
+export async function applyAdministrationUnpalletedWriteoff(
+  accessToken: string,
+  payload: { boxIds: string[]; confirmation: string },
+) {
+  return request<AdministrationUnpalletedWriteoffResult>('/administration/technical-work/unpalleted-boxes/apply', {
     method: 'POST',
     body: payload,
     accessToken,

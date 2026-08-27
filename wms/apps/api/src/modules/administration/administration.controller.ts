@@ -8,6 +8,7 @@ import { AdministrationService } from './administration.service';
 import { PhantomStockService } from './phantom-stock.service';
 import { AdministrationTechnicalWorkService } from './administration-technical-work.service';
 import { AdministrationInternalApiService } from './administration-internal-api.service';
+import { AdministrationUnpalletedWriteoffService } from './administration-unpalleted-writeoff.service';
 
 @ApiTags('administration')
 @ApiBearerAuth()
@@ -19,6 +20,7 @@ export class AdministrationController {
     private readonly technicalWork: AdministrationTechnicalWorkService,
     private readonly phantomStock: PhantomStockService,
     private readonly internalApi: AdministrationInternalApiService,
+    private readonly unpalletedWriteoff: AdministrationUnpalletedWriteoffService,
   ) {}
 
   @Get('overview')
@@ -100,6 +102,23 @@ export class AdministrationController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.technicalWork.applyPalletSortScan(body, user);
+  }
+
+  // FIX: only a real system administrator can inspect the destructive cleanup queue.
+  @RequirePermissions('system:admin')
+  @Post('technical-work/unpalleted-boxes/preview')
+  previewUnpalletedBoxWriteoff(@CurrentUser() user: AuthUser) {
+    return this.unpalletedWriteoff.preview(user);
+  }
+
+  // FIX: the service repeats authorization and revalidates every selected box transactionally.
+  @RequirePermissions('system:admin')
+  @Post('technical-work/unpalleted-boxes/apply')
+  applyUnpalletedBoxWriteoff(
+    @Body() body: { boxIds?: unknown; confirmation?: string },
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.unpalletedWriteoff.apply(body, user);
   }
 
   @Get('settings')
