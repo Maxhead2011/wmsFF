@@ -104,6 +104,17 @@ import {
 } from '../../lib/api';
 import { FbsCostCalculator } from './FbsCostCalculator';
 import { FbsStockAllocationView } from './FbsStockAllocationView';
+import {
+  FBS_AUTO_CANCEL_HOURS,
+  fbsActiveOrderAgeTone,
+  fbsDeadlineCreatedAt,
+  fbsDeadlineSnapshot,
+  fbsDeadlineStockSnapshot,
+  filterFbsDeadlineOrders,
+  type FbsDeadlineStockFilter,
+  type FbsDeadlineTone,
+  type FbsDeadlineToneFilter,
+} from './fbsOrderDeadlineReport';
 import './fbs.css';
 import { useRememberedClientId, validRememberedClientId } from '../../lib/rememberedClient';
 
@@ -145,6 +156,7 @@ const FBS_HISTORY_STATE_KEY = '__wmsFbsMarketplace';
 
 type FbsView =
   | 'active'
+  | 'deadlines'
   | 'stocks'
   | 'allocation'
   | 'cargo'
@@ -187,6 +199,14 @@ const fbsViews = [
     title: 'Активные заказы по FBS',
     description: 'Новые заказы, сборка, упаковка и готовность к передаче.',
     icon: ShoppingBasket,
+    accent: 'red',
+  },
+  {
+    // ADDED: read-only control surface for orders approaching WB auto-cancellation.
+    id: 'deadlines' as const,
+    title: 'Контроль автоотмены',
+    description: 'Красные, жёлтые и зелёные заказы: остаток до 240 часов, заявка, направление и поставка WB.',
+    icon: Clock3,
     accent: 'red',
   },
   {
@@ -275,7 +295,8 @@ const fbsViews = [
   },
 ];
 
-const ozonHiddenViews = new Set<FbsView>(['stocks', 'allocation', 'cargo', 'report', 'passes', 'penalties']);
+// FIX: both WB-only reports stay hidden for Ozon and Yandex after merging their tiles.
+const ozonHiddenViews = new Set<FbsView>(['deadlines', 'stocks', 'allocation', 'cargo', 'report', 'passes', 'penalties']);
 
 export function FbsPanel({ session }: FbsPanelProps) {
   const [marketplace, setMarketplace] = useState<FbsMarketplace | null>(null);
@@ -767,8 +788,13 @@ export function FbsPanel({ session }: FbsPanelProps) {
     }
   }
   const activeOrdersTotal = activeClients.reduce((sum, item) => sum + item.activeOrders, 0);
+  const criticalOrdersTotal = (data?.orders ?? []).filter((order) => {
+    if (order.category !== 'active' || order.marketplace !== 'WILDBERRIES') return false;
+    return fbsDeadlineSnapshot(order, Date.now())?.tone === 'critical';
+  }).length;
   const tileCounts: Record<FbsView, number | string> = {
     active: activeOrdersTotal,
+    deadlines: criticalOrdersTotal,
     stocks: 'WMS → WB',
     allocation: '100%',
     cargo: cargoState.data?.supplies.filter((supply) => !supply.readyToDeliver && !supply.ignored).length ?? 0,
@@ -1561,7 +1587,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
                   </small>
                 ) : null}
               </form>
-            ) : activeView !== 'cost' && activeView !== 'pricing' && activeView !== 'passes' && activeView !== 'report' && activeView !== 'penalties' ? (
+            ) : activeView !== 'cost' && activeView !== 'pricing' && activeView !== 'passes' && activeView !== 'report' && activeView !== 'deadlines' && activeView !== 'penalties' ? (
               <label className="fbs-workspace__search">
                 <span>Поиск</span>
                 <span>
@@ -1781,6 +1807,8 @@ export function FbsPanel({ session }: FbsPanelProps) {
             title="Получаю заказы"
             text={`Проверяем подключённые кабинеты ${marketplaceLabel(marketplace)}.`}
           />
+        ) : activeView === 'deadlines' ? (
+          <FbsAutoCancelReportView data={data} />
         ) : activeView === 'cost' ? (
           <FbsCostView data={data} />
         ) : activeView === 'active' || activeView === 'shipped' || activeView === 'cancelled' || activeView === 'archive' ? (
@@ -1856,6 +1884,238 @@ export function FbsPanel({ session }: FbsPanelProps) {
       ) : null}
     </section>
   );
+}
+
+function FbsAutoCancelReportView({ data }: { data: ClientFbsOrders | null }) {
+  // ADDED: the report is read-only and derives rows from the same scoped order snapshot as FBS.
+  const [toneFilter, setToneFilter] = useState<FbsDeadlineToneFilter>('critical');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [orderNumber, setOrderNumber] = useState('');
+  const [requestNumber, setRequestNumber] = useState('');
+  const [supplyId, setSupplyId] = useState('');
+  const [stockFilter, setStockFilter] = useState<FbsDeadlineStockFilter>('all');
+  const [clockNow, setClockNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setClockNow(Date.now()), 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    setToneFilter('critical');
+    setDateFrom('');
+    setDateTo('');
+    setOrderNumber('');
+    setRequestNumber('');
+    setSupplyId('');
+    setStockFilter('all');
+  }, [data?.client.id]);
+
+  const commonFilters = {
+    dateFrom,
+    dateTo,
+    orderNumber,
+    requestNumber,
+    supplyId,
+    stock: stockFilter,
+  };
+  const rowsWithoutTone = useMemo(
+    () => filterFbsDeadlineOrders(data?.orders ?? [], { ...commonFilters, tone: 'all' }, clockNow),
+    [clockNow, data?.orders, dateFrom, dateTo, orderNumber, requestNumber, stockFilter, supplyId],
+  );
+  const rows = useMemo(
+    () => filterFbsDeadlineOrders(data?.orders ?? [], { ...commonFilters, tone: toneFilter }, clockNow),
+    [clockNow, data?.orders, dateFrom, dateTo, orderNumber, requestNumber, stockFilter, supplyId, toneFilter],
+  );
+  const zoneCounts = rowsWithoutTone.reduce<Record<FbsDeadlineTone, number>>(
+    (counts, order) => {
+      const snapshot = fbsDeadlineSnapshot(order, clockNow);
+      if (snapshot) counts[snapshot.tone] += 1;
+      return counts;
+    },
+    { normal: 0, warning: 0, critical: 0 },
+  );
+  const invalidPeriod = Boolean(dateFrom && dateTo && dateFrom > dateTo);
+
+  function clearFilters() {
+    setToneFilter('critical');
+    setDateFrom('');
+    setDateTo('');
+    setOrderNumber('');
+    setRequestNumber('');
+    setSupplyId('');
+    setStockFilter('all');
+  }
+
+  return (
+    <section className="fbs-deadline-report" aria-label="Контроль автоотмены заказов FBS">
+      <header className="fbs-deadline-report__hero">
+        <div>
+          <p className="eyebrow">Wildberries · контроль срока</p>
+          <h4>До автоотмены заказа — {FBS_AUTO_CANCEL_HOURS} часов</h4>
+          <p>
+            Отчёт использует полный список активных заказов выбранного клиента и текущего филиала.
+            Самые срочные заказы идут первыми.
+          </p>
+        </div>
+        <div className="fbs-deadline-report__total">
+          <small>Найдено</small>
+          <strong>{rows.length.toLocaleString('ru-RU')}</strong>
+          <span>заказов</span>
+        </div>
+      </header>
+
+      <div className="fbs-deadline-report__zones" role="group" aria-label="Фильтр по цветовой зоне">
+        <button type="button" className={toneFilter === 'all' ? 'is-active' : ''} onClick={() => setToneFilter('all')}>
+          Все · {rowsWithoutTone.length}
+        </button>
+        <button type="button" className={`is-red${toneFilter === 'critical' ? ' is-active' : ''}`} onClick={() => setToneFilter('critical')}>
+          Красные · {zoneCounts.critical}
+        </button>
+        <button type="button" className={`is-yellow${toneFilter === 'warning' ? ' is-active' : ''}`} onClick={() => setToneFilter('warning')}>
+          Жёлтые · {zoneCounts.warning}
+        </button>
+        <button type="button" className={`is-green${toneFilter === 'normal' ? ' is-active' : ''}`} onClick={() => setToneFilter('normal')}>
+          Зелёные · {zoneCounts.normal}
+        </button>
+      </div>
+
+      <div className="fbs-deadline-report__filters">
+        <label>
+          <span>Заказы с даты</span>
+          <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+        </label>
+        <label>
+          <span>по дату</span>
+          <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+        </label>
+        <label>
+          <span>Номер заказа WB</span>
+          <input value={orderNumber} onChange={(event) => setOrderNumber(event.target.value)} placeholder="Например, 5508811674" />
+        </label>
+        <label>
+          <span>Номер заявки WMS</span>
+          <input value={requestNumber} onChange={(event) => setRequestNumber(event.target.value)} placeholder="Например, 250" />
+        </label>
+        <label>
+          <span>Номер поставки WB</span>
+          <input value={supplyId} onChange={(event) => setSupplyId(event.target.value.toUpperCase())} placeholder="WB-GI-…" />
+        </label>
+        <label>
+          <span>Наличие товара в WMS</span>
+          <select value={stockFilter} onChange={(event) => setStockFilter(event.target.value as FbsDeadlineStockFilter)}>
+            <option value="all">Любое наличие</option>
+            <option value="available">Есть на складе</option>
+            <option value="missing">Нет на складе</option>
+          </select>
+        </label>
+        <button type="button" className="button button-secondary" onClick={clearFilters}>
+          <RotateCcw size={16} aria-hidden="true" />
+          Сбросить
+        </button>
+      </div>
+
+      {invalidPeriod ? (
+        <p className="fbs-deadline-report__error">Дата начала периода не может быть позже даты окончания.</p>
+      ) : null}
+
+      <div className="fbs-table-wrap fbs-deadline-report__table">
+        <table className="fbs-table">
+          <thead>
+            <tr>
+              <th>Критичность</th>
+              <th>Заказ WB</th>
+              <th>Создан</th>
+              <th>До автоотмены</th>
+              <th>Заявка WMS</th>
+              <th>Наличие WMS</th>
+              <th>Направление</th>
+              <th>Поставка WB</th>
+            </tr>
+          </thead>
+          <tbody>
+            {!invalidPeriod && rows.length > 0 ? rows.map((order) => {
+              const snapshot = fbsDeadlineSnapshot(order, clockNow);
+              const stock = fbsDeadlineStockSnapshot(order);
+              const tone = snapshot?.tone ?? 'normal';
+              return (
+                <tr key={`${order.connectionId}:${order.id}`} className={`fbs-deadline-report__row is-${tone}`}>
+                  <td><FbsDeadlineToneBadge tone={tone} /></td>
+                  <td>
+                    <strong>№ {order.id}</strong>
+                    {order.orderUid && order.orderUid !== order.id ? <small>{order.orderUid}</small> : null}
+                  </td>
+                  <td>
+                    <strong>{formatDateTime(snapshot ? new Date(snapshot.createdAt).toISOString() : null)}</strong>
+                    <small>{snapshot ? `Прошло ${formatDeadlineDuration(snapshot.ageMilliseconds)}` : 'Дата заказа не получена'}</small>
+                  </td>
+                  <td>
+                    <strong className={snapshot?.overdue ? 'is-overdue' : undefined}>
+                      {snapshot ? formatDeadlineRemaining(snapshot.remainingMilliseconds) : 'Не рассчитано'}
+                    </strong>
+                    <small>Лимит {FBS_AUTO_CANCEL_HOURS} ч</small>
+                  </td>
+                  <td>
+                    <strong>{order.request ? `№${String(order.request.number).padStart(6, '0')}` : 'Без заявки'}</strong>
+                    <small>{order.request?.title ?? 'Заказ ещё не привязан к заявке WMS'}</small>
+                  </td>
+                  <td>
+                    <span className={`fbs-deadline-report__stock is-${stock.available ? 'available' : 'missing'}`}>
+                      {stock.available ? 'Есть на складе' : 'Нет на складе'}
+                    </span>
+                    {stock.available && stock.quantity > 0 ? (
+                      <small>{stock.quantity.toLocaleString('ru-RU')} шт. · {stock.boxes.map((box) => box.code).join(', ')}</small>
+                    ) : order.reservation?.status === 'RESERVED' ? (
+                      <small>Товар уже зарезервирован для заказа</small>
+                    ) : (
+                      <small>{order.reservation?.problem || 'Свободный товар в коробах не найден'}</small>
+                    )}
+                  </td>
+                  <td>
+                    <strong>{fbsShipmentDestinationLabel(order, data?.deliveryPlan.requiresCargoPlaces === true)}</strong>
+                    <small>{order.warehouseName || (order.warehouseId ? `Склад WB ${order.warehouseId}` : 'Склад WB не указан')}</small>
+                  </td>
+                  <td><strong className="fbs-mono">{order.supplyId || 'Без поставки'}</strong></td>
+                </tr>
+              );
+            }) : (
+              <tr>
+                <td colSpan={8} className="fbs-deadline-report__empty">
+                  {invalidPeriod ? 'Исправьте выбранный период.' : 'Заказов по выбранным фильтрам нет.'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function FbsDeadlineToneBadge({ tone }: { tone: FbsDeadlineTone }) {
+  const labels: Record<FbsDeadlineTone, string> = {
+    normal: 'Зелёный',
+    warning: 'Жёлтый',
+    critical: 'Красный',
+  };
+  return <span className={`fbs-deadline-report__tone is-${tone}`}>{labels[tone]}</span>;
+}
+
+function formatDeadlineRemaining(milliseconds: number) {
+  if (milliseconds > 0) return `Осталось ${formatDeadlineDuration(milliseconds)}`;
+  if (milliseconds === 0) return 'Срок истёк';
+  return `Просрочен на ${formatDeadlineDuration(Math.abs(milliseconds))}`;
+}
+
+function formatDeadlineDuration(milliseconds: number) {
+  const totalMinutes = Math.max(0, Math.ceil(milliseconds / 60_000));
+  const days = Math.floor(totalMinutes / (24 * 60));
+  const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+  const minutes = totalMinutes % 60;
+  if (days > 0) return `${days} д ${hours} ч`;
+  if (hours > 0) return `${hours} ч ${minutes} мин`;
+  return `${minutes} мин`;
 }
 
 function FbsProductShipmentsReportView({
@@ -4335,7 +4595,7 @@ function FbsOrdersView({
   data: ClientFbsOrders | null;
   search: string;
   // FIX: the allocation tile is not an orders-table view.
-  view: Exclude<FbsView, 'stocks' | 'cargo' | 'cost' | 'calculator' | 'pricing' | 'passes' | 'report' | 'allocation' | 'penalties'>;
+  view: Exclude<FbsView, 'deadlines' | 'stocks' | 'cargo' | 'cost' | 'calculator' | 'pricing' | 'passes' | 'report' | 'allocation' | 'penalties'>;
   selectedOrderKeys: Set<string>;
   onSelectionChange: (keys: Set<string>) => void;
   orderAction: 'assemble' | 'reship' | 'move' | 'deliver' | 'change-destination' | 'cancel' | 'remove-cancelled' | 'stickers' | 'cargo' | 'supply' | 'request' | 'recover-missing-requests' | 'pick-list' | 'emergency-assembly' | null;
@@ -6687,7 +6947,8 @@ function compareOptionalFbsText(
 }
 
 function fbsOrderCreatedAt(order: FbsOrderSummary) {
-  return validTimestamp(order.createdAt) ?? validTimestamp(order.sellerDate);
+  // FIX: list badges and the deadline report use the same WB order timestamp fallback.
+  return fbsDeadlineCreatedAt(order);
 }
 
 function fbsOrderDeliveryFinishedAt(order: FbsOrderSummary) {
@@ -6727,10 +6988,8 @@ function fbsOrderAgeTone(
   category: FbsOrderSummary['category'],
 ) {
   if (category !== 'active') return 'finished';
-  const hours = milliseconds / (60 * 60 * 1000);
-  if (hours >= 19) return 'critical';
-  if (hours >= 12) return 'warning';
-  return 'normal';
+  // FIX: the active list and deadline report share exactly the same colour boundaries.
+  return fbsActiveOrderAgeTone(milliseconds);
 }
 
 function groupFbsOrdersBySupply(

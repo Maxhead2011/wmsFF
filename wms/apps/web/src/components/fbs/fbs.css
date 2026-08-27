@@ -4775,6 +4775,171 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* ADDED: isolated presentation for the read-only FBS auto-cancel report. */
+.fbs-deadline-report {
+  display: grid;
+  gap: 16px;
+}
+
+.fbs-deadline-report__hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 20px;
+  border: 1px solid #fecaca;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #fff7f7, #fff);
+}
+
+.fbs-deadline-report__hero h4,
+.fbs-deadline-report__hero p {
+  margin: 0;
+}
+
+.fbs-deadline-report__hero h4 {
+  margin: 4px 0 6px;
+  font-size: 20px;
+}
+
+.fbs-deadline-report__hero p:last-child {
+  color: #64748b;
+}
+
+.fbs-deadline-report__total {
+  display: grid;
+  min-width: 116px;
+  justify-items: center;
+  padding: 12px 18px;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgb(153 27 27 / 10%);
+}
+
+.fbs-deadline-report__total strong {
+  color: #b91c1c;
+  font-size: 28px;
+}
+
+.fbs-deadline-report__total small,
+.fbs-deadline-report__total span {
+  color: #64748b;
+}
+
+.fbs-deadline-report__zones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fbs-deadline-report__zones button {
+  padding: 9px 13px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  color: #334155;
+  background: #fff;
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.fbs-deadline-report__zones button.is-red { border-color: #fca5a5; color: #b91c1c; background: #fff1f2; }
+.fbs-deadline-report__zones button.is-yellow { border-color: #facc15; color: #854d0e; background: #fefce8; }
+.fbs-deadline-report__zones button.is-green { border-color: #86efac; color: #166534; background: #f0fdf4; }
+.fbs-deadline-report__zones button.is-active { outline: 3px solid rgb(59 130 246 / 20%); box-shadow: inset 0 0 0 1px currentColor; }
+
+.fbs-deadline-report__filters {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(150px, 1fr)) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.fbs-deadline-report__filters label {
+  display: grid;
+  gap: 6px;
+}
+
+.fbs-deadline-report__filters label > span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.fbs-deadline-report__filters input,
+.fbs-deadline-report__filters select {
+  min-width: 0;
+  width: 100%;
+}
+
+.fbs-deadline-report__filters button {
+  white-space: nowrap;
+}
+
+.fbs-deadline-report__table {
+  max-height: 640px;
+}
+
+.fbs-deadline-report__table td {
+  vertical-align: top;
+}
+
+.fbs-deadline-report__table td strong,
+.fbs-deadline-report__table td small {
+  display: block;
+}
+
+.fbs-deadline-report__table td small {
+  margin-top: 3px;
+  color: #64748b;
+}
+
+.fbs-deadline-report__row.is-critical { background: #fff7f7; }
+.fbs-deadline-report__row.is-warning { background: #fffdf2; }
+.fbs-deadline-report__row.is-normal { background: #f7fff9; }
+
+.fbs-deadline-report__tone {
+  display: inline-flex;
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.fbs-deadline-report__tone.is-critical { color: #991b1b; background: #fee2e2; }
+.fbs-deadline-report__tone.is-warning { color: #854d0e; background: #fef3c7; }
+.fbs-deadline-report__tone.is-normal { color: #166534; background: #dcfce7; }
+.fbs-deadline-report__stock { display: inline-flex; padding: 5px 9px; border-radius: 999px; font-size: 12px; font-weight: 800; }
+.fbs-deadline-report__stock.is-available { color: #166534; background: #dcfce7; }
+.fbs-deadline-report__stock.is-missing { color: #991b1b; background: #fee2e2; }
+.fbs-deadline-report__table .is-overdue { color: #b91c1c; }
+
+.fbs-deadline-report__error {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  color: #b91c1c;
+  background: #fef2f2;
+  font-weight: 750;
+}
+
+.fbs-deadline-report__empty {
+  padding: 28px !important;
+  color: #64748b;
+  text-align: center !important;
+}
+
+@media (max-width: 1180px) {
+  .fbs-deadline-report__filters { grid-template-columns: repeat(3, minmax(150px, 1fr)); }
+}
+
+@media (max-width: 720px) {
+  .fbs-deadline-report__hero { align-items: stretch; flex-direction: column; }
+  .fbs-deadline-report__filters { grid-template-columns: 1fr; }
+  .fbs-deadline-report__filters button { width: 100%; justify-content: center; }
+}
+
 /* ADDED: Isolated styles for the optional FBS stock allocation tile. */
 .fbs-allocation { display: grid; gap: 18px; }
 .fbs-allocation__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding: 22px; border: 1px solid #dbe5f0; border-radius: 20px; background: linear-gradient(135deg, #f8fbff, #eef6ff); }
