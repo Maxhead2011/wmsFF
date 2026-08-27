@@ -6235,9 +6235,10 @@ export type AdministrationUnpalletedWriteoffBlocker =
   | 'ACTIVE_FBS_ASSEMBLY'
   | 'OPEN_INVENTORY'
   | 'FOREIGN_CLIENT_DATA'
-  | 'KIZ_COUNT_MISMATCH'
   | 'ACTIVE_PICK_WAVE'
   | 'PENDING_BOX_CHECK';
+
+export type AdministrationUnpalletedWriteoffWarning = 'KIZ_COUNT_MISMATCH';
 
 export type AdministrationUnpalletedWriteoffPreview = {
   checkedAt: string;
@@ -6249,7 +6250,18 @@ export type AdministrationUnpalletedWriteoffPreview = {
     blocked: number;
     units: number;
     safeUnits: number;
+    warnings: number;
   };
+  blockerSummary: Array<{
+    blocker: AdministrationUnpalletedWriteoffBlocker;
+    boxes: number;
+    units: number;
+  }>;
+  warningSummary: Array<{
+    warning: AdministrationUnpalletedWriteoffWarning;
+    boxes: number;
+    units: number;
+  }>;
   rows: Array<{
     boxId: string;
     boxCode: string;
@@ -6258,7 +6270,14 @@ export type AdministrationUnpalletedWriteoffPreview = {
     statuses: string[];
     safe: boolean;
     blockers: AdministrationUnpalletedWriteoffBlocker[];
+    warnings: AdministrationUnpalletedWriteoffWarning[];
   }>;
+};
+
+export type AdministrationUnpalletedBlockerRecheckResult = {
+  fbs: { refreshed: boolean; error: string | null };
+  inventory: { checked: number; completed: number; sessionIds: string[] };
+  preview: AdministrationUnpalletedWriteoffPreview;
 };
 
 export type AdministrationUnpalletedWriteoffResult = {
@@ -6958,6 +6977,15 @@ export async function applyAdministrationPalletSortScan(
 export async function previewAdministrationUnpalletedWriteoff(accessToken: string) {
   return request<AdministrationUnpalletedWriteoffPreview>('/administration/technical-work/unpalleted-boxes/preview', {
     method: 'POST',
+    accessToken,
+  });
+}
+
+// FIX: this endpoint reuses WB synchronization and closes only fully resolved inventory sessions.
+export async function recheckAdministrationUnpalletedBlockers(accessToken: string) {
+  return request<AdministrationUnpalletedBlockerRecheckResult>('/administration/technical-work/unpalleted-boxes/recheck', {
+    method: 'POST',
+    body: { confirmation: 'ПЕРЕПРОВЕРИТЬ БЛОКИРОВКИ' },
     accessToken,
   });
 }

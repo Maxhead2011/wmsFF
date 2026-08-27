@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import {
   ClientRequestStatus,
   ClientStockBalanceMode,
@@ -12,9 +12,12 @@ import {
 import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
+import { InventoryService } from '../inventory/inventory.service';
+import { MarketplaceConnectionsService } from '../marketplace-connections/marketplace-connections.service';
 
 export const UNPALLETED_WRITEOFF_TARGET_CLIENT_ID = 'c76b78f9-1b83-4e9b-bee3-bc28336ee1c9';
 export const UNPALLETED_WRITEOFF_CONFIRMATION = 'СПИСАТЬ И АРХИВИРОВАТЬ';
+export const UNPALLETED_BLOCKER_RECHECK_CONFIRMATION = 'ПЕРЕПРОВЕРИТЬ БЛОКИРОВКИ';
 export const ADMIN_UNPALLETED_WRITEOFF_SOURCE = 'admin-unpalleted-writeoff';
 
 // FIX: nullable legacy movements stay visible; only this internal administrative source is hidden.
@@ -67,10 +70,11 @@ export type UnpalletedWriteoffBlocker =
   | 'ACTIVE_FBS_ASSEMBLY'
   | 'OPEN_INVENTORY'
   | 'FOREIGN_CLIENT_DATA'
-  | 'KIZ_COUNT_MISMATCH'
   | 'ACTIVE_PICK_WAVE'
   | 'PENDING_BOX_CHECK'
   | 'FULL_INVENTORY_LOCK';
+
+export type UnpalletedWriteoffWarning = 'KIZ_COUNT_MISMATCH';
 
 type PreviewBalance = {
   id: string;
@@ -123,6 +127,8 @@ export class AdministrationUnpalletedWriteoffService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly inventoryLock: InventoryLockService,
+    @Optional() private readonly marketplaceConnections?: MarketplaceConnectionsService,
+    @Optional() private readonly inventory?: InventoryService,
   ) {}
 
   async preview(user: AuthUser) {
@@ -301,6 +307,7 @@ export class AdministrationUnpalletedWriteoffService {
     const rows = candidates
       .map((box) => {
         const blockers: UnpalletedWriteoffBlocker[] = [];
+        const warnings: UnpalletedWriteoffWarning[] = [];
         if (box.balances.some((balance) => balance.status !== StockStatus.AVAILABLE)) {
           blockers.push('NON_AVAILABLE_BALANCE');
         }
@@ -317,7 +324,10 @@ export class AdministrationUnpalletedWriteoffService {
         ) {
           blockers.push('FOREIGN_CLIENT_DATA');
         }
-        if (hasKizCountMismatch(box.balances, boxMarks)) blockers.push('KIZ_COUNT_MISMATCH');
+        // FIX: the dedicated admin cleanup writes off every AVAILABLE balance and blocks only
+        // AVAILABLE marks. A count mismatch is visible for audit, but historical SHIPPING marks
+        // are not a reason to preserve a phantom unpalleted balance forever.
+        if (hasKizCountMismatch(box.balances, boxMarks)) warnings.push('KIZ_COUNT_MISMATCH');
         if (pickWaveBoxIds.has(box.id) || pickWaveBoxCodes.has(normalizeCode(box.code))) {
           blockers.push('ACTIVE_PICK_WAVE');
         }
@@ -332,6 +342,7 @@ export class AdministrationUnpalletedWriteoffService {
           statuses: unique(box.balances.map((balance) => balance.status)),
           safe: blockers.length === 0,
           blockers,
+          warnings,
         };
       })
       .sort(
@@ -339,6 +350,8 @@ export class AdministrationUnpalletedWriteoffService {
           Number(left.safe) - Number(right.safe) || left.boxCode.localeCompare(right.boxCode, 'ru-RU'),
       );
 
+    const blockerSummary = summarizeReasons(rows, 'blockers', 'blocker');
+    const warningSummary = summarizeReasons(rows, 'warnings', 'warning');
     return {
       checkedAt: new Date().toISOString(),
       client,
@@ -349,8 +362,69 @@ export class AdministrationUnpalletedWriteoffService {
         blocked: rows.filter((row) => !row.safe).length,
         units: rows.reduce((sum, row) => sum + row.quantity, 0),
         safeUnits: rows.filter((row) => row.safe).reduce((sum, row) => sum + row.quantity, 0),
+        warnings: rows.filter((row) => row.warnings.length > 0).length,
       },
+      blockerSummary,
+      warningSummary,
       rows,
+    };
+  }
+
+  async recheck(body: { confirmation?: string }, user: AuthUser) {
+    // FIX: this route may synchronize marketplace state and complete already-finished inventory
+    // sessions, so it repeats authorization and requires an explicit server-side phrase.
+    this.assertSystemAdmin(user);
+    if (body.confirmation !== UNPALLETED_BLOCKER_RECHECK_CONFIRMATION) {
+      throw new BadRequestException(
+        `Введите точное подтверждение: ${UNPALLETED_BLOCKER_RECHECK_CONFIRMATION}`,
+      );
+    }
+    await this.requireTargetClient();
+    if (!this.marketplaceConnections || !this.inventory) {
+      throw new BadRequestException('Сервисы перепроверки временно недоступны.');
+    }
+
+    const before = await this.preview(user);
+    const boxIds = before.rows.map((row) => row.boxId);
+    let fbsError: string | null = null;
+    try {
+      // FIX: reuse the existing WB refresh/synchronization path; do not infer order states locally.
+      await this.marketplaceConnections.listFbsOrders(
+        UNPALLETED_WRITEOFF_TARGET_CLIENT_ID,
+        user,
+        true,
+      );
+    } catch (caught) {
+      fbsError = publicRecheckError(caught);
+    }
+
+    // FIX: InventoryService owns the strict MATCHED/RESOLVED completion invariant.
+    const inventory = await this.inventory.completeResolvedSessionsForBoxes(boxIds, user);
+    const preview = await this.preview(user);
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'administration.unpalleted-box.blockers_rechecked',
+          entity: 'Client',
+          entityId: UNPALLETED_WRITEOFF_TARGET_CLIENT_ID,
+          payload: {
+            candidatesBefore: before.summary.candidates,
+            blockedBefore: before.summary.blocked,
+            blockedAfter: preview.summary.blocked,
+            fbsRefreshed: fbsError === null,
+            fbsError,
+            inventory,
+          },
+        },
+      });
+    } catch (caught) {
+      this.logger.error(`Unable to audit unpalleted blocker recheck: ${failureErrorCode(caught)}`);
+    }
+    return {
+      fbs: { refreshed: fbsError === null, error: fbsError },
+      inventory,
+      preview,
     };
   }
 
@@ -536,9 +610,7 @@ export class AdministrationUnpalletedWriteoffService {
     if (hasForeignClientData(box, marks as PreviewMark[])) {
       return skipped(box.id, box.code, 'FOREIGN_CLIENT_DATA');
     }
-    if (hasKizCountMismatch(box.balances, marks as PreviewMark[])) {
-      return skipped(box.id, box.code, 'KIZ_COUNT_MISMATCH');
-    }
+    const kizCountMismatch = hasKizCountMismatch(box.balances, marks as PreviewMark[]);
     if (pickWaveLine) return skipped(box.id, box.code, 'ACTIVE_PICK_WAVE');
     if (pendingCheck) return skipped(box.id, box.code, 'PENDING_BOX_CHECK');
 
@@ -597,6 +669,7 @@ export class AdministrationUnpalletedWriteoffService {
           boxCode: box.code,
           unitsWrittenOff,
           marksBlocked,
+          kizCountMismatch,
           movementIds,
         },
       },
@@ -675,10 +748,36 @@ export class AdministrationUnpalletedWriteoffService {
     return {
       checkedAt: new Date().toISOString(),
       client,
-      summary: { scanned: 0, candidates: 0, safe: 0, blocked: 0, units: 0, safeUnits: 0 },
+      summary: { scanned: 0, candidates: 0, safe: 0, blocked: 0, units: 0, safeUnits: 0, warnings: 0 },
+      blockerSummary: [],
+      warningSummary: [],
       rows: [],
     };
   }
+}
+
+function summarizeReasons<
+  TRow extends { quantity: number; blockers: UnpalletedWriteoffBlocker[]; warnings: UnpalletedWriteoffWarning[] },
+  TList extends 'blockers' | 'warnings',
+  TName extends 'blocker' | 'warning',
+>(rows: TRow[], listName: TList, valueName: TName) {
+  const totals = new Map<string, { boxes: number; units: number }>();
+  for (const row of rows) {
+    for (const reason of row[listName]) {
+      const current = totals.get(reason) ?? { boxes: 0, units: 0 };
+      current.boxes += 1;
+      current.units += row.quantity;
+      totals.set(reason, current);
+    }
+  }
+  return [...totals.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([reason, totalsForReason]) => ({ [valueName]: reason, ...totalsForReason }));
+}
+
+function publicRecheckError(caught: unknown) {
+  if (caught instanceof Error && caught.message.trim()) return caught.message.trim().slice(0, 500);
+  return 'WB не подтвердил обновление заказов.';
 }
 
 function parseBoxIds(value: unknown) {

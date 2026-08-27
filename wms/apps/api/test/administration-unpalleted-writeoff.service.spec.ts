@@ -644,8 +644,9 @@ describe('AdministrationUnpalletedWriteoffService', () => {
     expect(tx.auditLog.create).not.toHaveBeenCalled();
   });
 
-  // TEST: повторная проверка внутри транзакции не позволяет списать повреждённый учёт КИЗов.
-  it('не меняет остаток, если число КИЗов перестало совпадать перед применением', async () => {
+  // TEST: the locked recheck records a late KIZ mismatch but still performs the explicitly
+  // approved cleanup; updateMany remains scoped to AVAILABLE marks.
+  it('фиксирует позднее расхождение КИЗ и списывает только AVAILABLE', async () => {
     const sourceBalance = balance('bal-kiz-race', 'box-kiz-race', StockStatus.AVAILABLE, 1);
     sourceBalance.sku.needsChestnyZnak = true;
     const sourceBox = box('box-kiz-race', 'FFL_KIZ_RACE', [sourceBalance]);
@@ -653,7 +654,7 @@ describe('AdministrationUnpalletedWriteoffService', () => {
       $executeRaw: vi.fn().mockResolvedValue(0),
       $queryRaw: vi.fn().mockResolvedValue([{ id: sourceBox.id }]),
       inventorySession: { findFirst: vi.fn().mockResolvedValue(null) },
-      box: { findFirst: vi.fn().mockResolvedValue(sourceBox), update: vi.fn() },
+      box: { findFirst: vi.fn().mockResolvedValue(sourceBox), update: vi.fn().mockResolvedValue({}) },
       storagePalletBox: { findFirst: vi.fn().mockResolvedValue(null) },
       clientRequestBoxSelection: { findFirst: vi.fn().mockResolvedValue(null) },
       fbsTsdAssembly: { findFirst: vi.fn().mockResolvedValue(null) },
@@ -663,13 +664,13 @@ describe('AdministrationUnpalletedWriteoffService', () => {
           { boxId: sourceBox.id, clientId: UNPALLETED_WRITEOFF_TARGET_CLIENT_ID, skuId: sourceBalance.skuId, status: StockStatus.AVAILABLE, sku: { clientId: UNPALLETED_WRITEOFF_TARGET_CLIENT_ID } },
           { boxId: sourceBox.id, clientId: UNPALLETED_WRITEOFF_TARGET_CLIENT_ID, skuId: sourceBalance.skuId, status: StockStatus.AVAILABLE, sku: { clientId: UNPALLETED_WRITEOFF_TARGET_CLIENT_ID } },
         ]),
-        updateMany: vi.fn(),
+        updateMany: vi.fn().mockResolvedValue({ count: 2 }),
       },
       pickWaveBalanceLine: { findFirst: vi.fn().mockResolvedValue(null) },
       warehouseBoxCheckRow: { findFirst: vi.fn().mockResolvedValue(null) },
-      stockMovement: { create: vi.fn() },
-      stockBalance: { delete: vi.fn() },
-      auditLog: { create: vi.fn() },
+      stockMovement: { create: vi.fn().mockResolvedValue({ id: 'movement-kiz-race' }) },
+      stockBalance: { delete: vi.fn().mockResolvedValue({}) },
+      auditLog: { create: vi.fn().mockResolvedValue({ id: 'audit-kiz-race' }) },
     };
     const prisma = {
       client: { findUnique: vi.fn().mockResolvedValue(targetClient) },
@@ -685,11 +686,13 @@ describe('AdministrationUnpalletedWriteoffService', () => {
       admin as never,
     );
 
-    expect(result.results[0]).toMatchObject({ outcome: 'SKIPPED', reason: 'KIZ_COUNT_MISMATCH' });
-    expect(tx.stockMovement.create).not.toHaveBeenCalled();
-    expect(tx.productMark.updateMany).not.toHaveBeenCalled();
-    expect(tx.stockBalance.delete).not.toHaveBeenCalled();
-    expect(tx.box.update).not.toHaveBeenCalled();
+    expect(result.results[0]).toMatchObject({ outcome: 'ARCHIVED', reason: null, marksBlocked: 2 });
+    expect(tx.productMark.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ status: StockStatus.AVAILABLE }),
+    }));
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ payload: expect.objectContaining({ kizCountMismatch: true }) }),
+    });
   });
 
   // TEST: an archived/already processed box makes retries idempotent.
