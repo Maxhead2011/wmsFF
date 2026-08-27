@@ -3,6 +3,7 @@ import type { AuthSession } from '../../lib/api';
 import { visibleTechnicalWorkSections } from './AdministrationTechnicalWork';
 import {
   canUseUnpalletedWriteoff,
+  unpalletedRecheckMessage,
   UNPALLETED_WRITEOFF_BATCH_SIZE,
 } from './AdministrationUnpalletedWriteoff';
 
@@ -50,5 +51,21 @@ describe('ADMIN-only unpalleted write-off access', () => {
   // TEST: the operator can submit the full server-approved batch in one run.
   it('отправляет до 25 коробов за одну партию', () => {
     expect(UNPALLETED_WRITEOFF_BATCH_SIZE).toBe(25);
+  });
+
+  // TEST: an external WB error remains visible together with successful inventory cleanup.
+  it('не маскирует частичный результат массовой перепроверки', () => {
+    expect(unpalletedRecheckMessage({
+      fbs: { refreshed: false, error: 'WB API timeout' },
+      inventory: { checked: 7, completed: 3, sessionIds: ['1', '2', '3'] },
+      preview: {
+        checkedAt: '2026-08-27T12:00:00.000Z',
+        client: { id: 'client-1', code: 'LUKIN', name: 'ИП Лукин', stockBalanceMode: 'PALLET_SORT' },
+        summary: { scanned: 10, candidates: 8, safe: 2, blocked: 6, units: 20, safeUnits: 4, warnings: 1 },
+        blockerSummary: [],
+        warningSummary: [],
+        rows: [],
+      },
+    })).toContain('WB не обновлён: WB API timeout');
   });
 });

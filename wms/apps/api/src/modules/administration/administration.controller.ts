@@ -111,6 +111,16 @@ export class AdministrationController {
     return this.unpalletedWriteoff.preview(user);
   }
 
+  // FIX: this endpoint invokes only the existing WB sync and strictly completed inventories.
+  @RequirePermissions('system:admin')
+  @Post('technical-work/unpalleted-boxes/recheck')
+  recheckUnpalletedBoxBlockers(
+    @Body() body: { confirmation?: string },
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.unpalletedWriteoff.recheck(body, user);
+  }
+
   // FIX: the service repeats authorization and revalidates every selected box transactionally.
   @RequirePermissions('system:admin')
   @Post('technical-work/unpalleted-boxes/apply')

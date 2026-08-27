@@ -3,8 +3,11 @@ import { useState } from 'react';
 import {
   applyAdministrationUnpalletedWriteoff,
   previewAdministrationUnpalletedWriteoff,
+  recheckAdministrationUnpalletedBlockers,
+  type AdministrationUnpalletedBlockerRecheckResult,
   type AdministrationUnpalletedWriteoffBlocker,
   type AdministrationUnpalletedWriteoffPreview,
+  type AdministrationUnpalletedWriteoffWarning,
   type AuthSession,
 } from '../../lib/api';
 
@@ -18,9 +21,12 @@ const blockerLabels: Record<AdministrationUnpalletedWriteoffBlocker, string> = {
   ACTIVE_FBS_ASSEMBLY: 'короб зарезервирован активной сборкой FBS',
   OPEN_INVENTORY: 'короб участвует в открытой инвентаризации',
   FOREIGN_CLIENT_DATA: 'обнаружены связи с остатками или КИЗами другого клиента',
-  KIZ_COUNT_MISMATCH: 'число доступных КИЗов не совпадает с остатком маркируемого товара',
   ACTIVE_PICK_WAVE: 'остаток используется незавершённой волной сборки',
   PENDING_BOX_CHECK: 'по коробу не принято решение в проверке целостности',
+};
+
+const warningLabels: Record<AdministrationUnpalletedWriteoffWarning, string> = {
+  KIZ_COUNT_MISMATCH: 'число доступных КИЗов не совпадает с остатком; SHIPPING не изменится',
 };
 
 export function AdministrationUnpalletedWriteoff({ session }: { session: AuthSession }) {
@@ -38,6 +44,7 @@ export function AdministrationUnpalletedWriteoff({ session }: { session: AuthSes
     .slice(0, UNPALLETED_WRITEOFF_BATCH_SIZE)
     .map((row) => row.boxId) ?? [];
   const blockedRows = preview?.rows.filter((row) => !row.safe) ?? [];
+  const warningRows = preview?.rows.filter((row) => row.warnings.length > 0) ?? [];
 
   async function runPreview(keepMessage = false) {
     setBusy(true);
@@ -82,6 +89,23 @@ export function AdministrationUnpalletedWriteoff({ session }: { session: AuthSes
     }
   }
 
+  async function recheckBlockers() {
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      const result = await recheckAdministrationUnpalletedBlockers(session.accessToken);
+      setPreview(result.preview);
+      const resultText = unpalletedRecheckMessage(result);
+      if (result.fbs.error) setError(resultText);
+      else setMessage(resultText);
+    } catch (caught) {
+      setError(errorText(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <section className="admin-tech-bulk" aria-label="Списание коробов без паллет-сорта">
       <div className="admin-tech-bulk__head">
@@ -106,6 +130,9 @@ export function AdministrationUnpalletedWriteoff({ session }: { session: AuthSes
         <button type="button" className="admin-button admin-button--ghost" disabled={busy} onClick={() => void runPreview()}>
           {busy ? <><LoaderCircle size={16} className="admin-spin" /> Проверяем…</> : <><RefreshCw size={16} /> Проанализировать</>}
         </button>
+        <button type="button" className="admin-button admin-button--primary" disabled={busy} onClick={() => void recheckBlockers()}>
+          {busy ? <><LoaderCircle size={16} className="admin-spin" /> Перепроверяем…</> : <><RefreshCw size={16} /> Перепроверить и снять устаревшие блокировки</>}
+        </button>
       </div>
 
       {preview ? (
@@ -114,6 +141,7 @@ export function AdministrationUnpalletedWriteoff({ session }: { session: AuthSes
             <strong>Без паллет-сорта: {preview.summary.candidates}</strong>
             <span>Можно списать: {preview.summary.safe} коробов / {preview.summary.safeUnits} ед.</span>
             <span>Заблокировано: {preview.summary.blocked}</span>
+            <span>С предупреждением по КИЗам: {preview.summary.warnings}</span>
             <small>Проверено: {new Date(preview.checkedAt).toLocaleString('ru-RU')}</small>
           </div>
 
@@ -121,9 +149,32 @@ export function AdministrationUnpalletedWriteoff({ session }: { session: AuthSes
             <details className="admin-tech-issue admin-tech-issue--critical">
               <summary>Почему заблокированы {blockedRows.length} коробов</summary>
               <ul>
-                {blockedRows.map((row) => (
-                  <li key={row.boxId}>
-                    <strong>{row.boxCode}</strong> — {row.quantity} ед.: {row.blockers.map((item) => blockerLabels[item]).join('; ')}
+                {preview.blockerSummary.map((item) => (
+                  <li key={item.blocker}>
+                    <strong>{blockerLabels[item.blocker]}</strong> — {item.boxes} коробов / {item.units} ед.
+                  </li>
+                ))}
+              </ul>
+              <details>
+                <summary>Показать конкретные короба</summary>
+                <ul>
+                  {blockedRows.map((row) => (
+                    <li key={row.boxId}>
+                      <strong>{row.boxCode}</strong> — {row.quantity} ед.: {row.blockers.map((item) => blockerLabels[item]).join('; ')}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            </details>
+          ) : null}
+
+          {warningRows.length > 0 ? (
+            <details className="admin-tech-issue">
+              <summary>Предупреждения по КИЗам: {warningRows.length} коробов</summary>
+              <ul>
+                {preview.warningSummary.map((item) => (
+                  <li key={item.warning}>
+                    <strong>{warningLabels[item.warning]}</strong> — {item.boxes} коробов / {item.units} ед.
                   </li>
                 ))}
               </ul>
@@ -172,6 +223,16 @@ export function canUseUnpalletedWriteoff(session: AuthSession) {
     session.user.roleCodes.includes('ADMIN') &&
     session.user.permissionCodes.includes('system:admin')
   );
+}
+
+// TEST: partial success is not hidden when WB refresh fails after inventory cleanup.
+export function unpalletedRecheckMessage(result: AdministrationUnpalletedBlockerRecheckResult) {
+  const inventoryText =
+    `Инвентаризации: проверено ${result.inventory.checked}, завершено ${result.inventory.completed}. `;
+  const queueText = `После перепроверки заблокировано коробов: ${result.preview.summary.blocked}.`;
+  return result.fbs.error
+    ? `${inventoryText}WB не обновлён: ${result.fbs.error}. ${queueText}`
+    : `${inventoryText}Статусы WB обновлены. ${queueText}`;
 }
 
 function errorText(error: unknown) {
