@@ -16,7 +16,8 @@ const CONFIRMATION = 'СПИСАТЬ И АРХИВИРОВАТЬ';
 export const UNPALLETED_WRITEOFF_BATCH_SIZE = 25;
 
 const blockerLabels: Record<AdministrationUnpalletedWriteoffBlocker, string> = {
-  NON_AVAILABLE_BALANCE: 'есть остаток не в статусе AVAILABLE',
+  // FIX: orphan PACKING is supported; shipment history and unknown statuses stay protected.
+  NON_AVAILABLE_BALANCE: 'есть остаток в защищённом статусе (например SHIPPING)',
   ACTIVE_CLIENT_REQUEST: 'короб участвует в незавершённой заявке',
   ACTIVE_FBS_ASSEMBLY: 'короб зарезервирован активной сборкой FBS',
   OPEN_INVENTORY: 'короб участвует в открытой инвентаризации',

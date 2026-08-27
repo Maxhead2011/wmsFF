@@ -88,7 +88,7 @@ describe('AdministrationUnpalletedWriteoffService', () => {
     ).toEqual(['system:admin']);
   });
 
-  it('показывает только реально непривязанные короба и разделяет безопасные и заблокированные', async () => {
+  it('показывает только реально непривязанные короба и разрешает осиротевший PACKING', async () => {
     const safeBox = box('box-safe', 'FFL_LKB_SAFE', [balance('bal-safe', 'box-safe')]);
     const placedByCode = box('box-placed', 'FFL_LKB_PLACED', [balance('bal-placed', 'box-placed')]);
     const packingBox = box('box-packing', 'FFL_LKB_PACKING', [
@@ -170,18 +170,19 @@ describe('AdministrationUnpalletedWriteoffService', () => {
         }),
       }),
     );
-    expect(result.summary).toMatchObject({ candidates: 5, safe: 1, blocked: 4, units: 9 });
+    expect(result.summary).toMatchObject({ candidates: 5, safe: 2, blocked: 3, units: 9 });
     expect(result.rows.map((row) => row.boxId)).toEqual([
       'box-assembly',
       'box-inventory',
-      'box-packing',
       'box-request',
+      'box-packing',
       'box-safe',
     ]);
     expect(result.rows.find((row) => row.boxId === 'box-safe')).toMatchObject({ safe: true });
-    expect(result.rows.find((row) => row.boxId === 'box-packing')?.blockers).toContain(
-      'NON_AVAILABLE_BALANCE',
-    );
+    expect(result.rows.find((row) => row.boxId === 'box-packing')).toMatchObject({
+      safe: true,
+      blockers: [],
+    });
     expect(result.rows.find((row) => row.boxId === 'box-request')?.blockers).toContain(
       'ACTIVE_CLIENT_REQUEST',
     );
@@ -204,6 +205,17 @@ describe('AdministrationUnpalletedWriteoffService', () => {
       expect.objectContaining({
         where: expect.objectContaining({
           wave: { status: { notIn: ['DONE', 'CANCELLED'] } },
+        }),
+      }),
+    );
+    // TEST: a resolved box must not inherit a lock from another unfinished box in the same session.
+    expect(prisma.inventoryAuditBox.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: [
+            { status: { notIn: ['MATCHED', 'RESOLVED'] } },
+            { lines: { some: { difference: { not: 0 }, decision: 'PENDING' } } },
+          ],
         }),
       }),
     );
@@ -474,6 +486,40 @@ describe('AdministrationUnpalletedWriteoffService', () => {
       }),
     });
     expect(result).toMatchObject({ archived: 1, skipped: 0, unitsWrittenOff: 2 });
+  });
+
+  // TEST: orphan PACKING is a real stored balance but no longer has an owning process;
+  // the same auditable cleanup must remove it without converting it back to sellable AVAILABLE.
+  it('списывает осиротевший PACKING в его исходном статусе', async () => {
+    const sourceBalance = balance('bal-packing-safe', 'box-packing-safe', StockStatus.PACKING, 2);
+    const sourceBox = box('box-packing-safe', 'FFL_LKB_PACKING_SAFE', [sourceBalance]);
+    const tx = safeApplyTx(sourceBox);
+    const prisma = {
+      client: { findUnique: vi.fn().mockResolvedValue(targetClient) },
+      $transaction: vi.fn(async (callback: (db: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new AdministrationUnpalletedWriteoffService(
+      prisma as never,
+      { assertStockMovementsAllowed: vi.fn().mockResolvedValue(undefined) } as never,
+    );
+
+    const result = await service.apply(
+      { boxIds: [sourceBox.id], confirmation: UNPALLETED_WRITEOFF_CONFIRMATION },
+      admin as never,
+    );
+
+    expect(result.results[0]).toMatchObject({ outcome: 'ARCHIVED', unitsWrittenOff: 2 });
+    expect(tx.stockMovement.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        status: StockStatus.PACKING,
+        quantity: -2,
+        sourceDocument: ADMIN_UNPALLETED_WRITEOFF_SOURCE,
+      }),
+    });
+    expect(tx.productMark.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({ status: StockStatus.PACKING }),
+      data: expect.objectContaining({ status: StockStatus.BLOCKED, boxId: null }),
+    });
   });
 
   // TEST: a mismatched AVAILABLE count is cleaned up, while the query explicitly excludes
@@ -752,7 +798,7 @@ describe('AdministrationUnpalletedWriteoffService', () => {
       balance(`bal-${blocker}`, `box-${blocker}`),
     ]);
     const tx = safeApplyTx(sourceBox);
-    if (blocker === 'non-available') sourceBox.balances[0].status = StockStatus.PACKING;
+    if (blocker === 'non-available') sourceBox.balances[0].status = StockStatus.SHIPPING;
     if (blocker === 'request') tx.clientRequestBoxSelection.findFirst.mockResolvedValue({ id: 'selection-1' });
     if (blocker === 'assembly') {
       tx.fbsTsdAssembly.findFirst.mockResolvedValue({

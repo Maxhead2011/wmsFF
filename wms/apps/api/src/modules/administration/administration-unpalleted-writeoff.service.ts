@@ -2,6 +2,8 @@ import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundEx
 import {
   ClientRequestStatus,
   ClientStockBalanceMode,
+  InventoryBoxStatus,
+  InventoryLineDecision,
   InventorySessionStatus,
   MovementType,
   PickWaveStatus,
@@ -63,6 +65,12 @@ const TERMINAL_PICK_WAVE_STATUSES = [
   PickWaveStatus.DONE,
   PickWaveStatus.CANCELLED,
 ] as const;
+// FIX: orphan PACKING is not sellable stock and can be written off atomically by
+// this ADMIN-only flow. SHIPPING remains protected as shipment history.
+const WRITEOFF_BALANCE_STATUSES = new Set<StockStatus>([
+  StockStatus.AVAILABLE,
+  StockStatus.PACKING,
+]);
 
 export type UnpalletedWriteoffBlocker =
   | 'NON_AVAILABLE_BALANCE'
@@ -230,6 +238,18 @@ export class AdministrationUnpalletedWriteoffService {
         where: {
           boxId: { in: boxIds },
           session: { status: { in: [...OPEN_INVENTORY_STATUSES] } },
+          // FIX: another unfinished box must not keep this already resolved box locked.
+          OR: [
+            { status: { notIn: [InventoryBoxStatus.MATCHED, InventoryBoxStatus.RESOLVED] } },
+            {
+              lines: {
+                some: {
+                  difference: { not: 0 },
+                  decision: InventoryLineDecision.PENDING,
+                },
+              },
+            },
+          ],
         },
         select: { boxId: true, sessionId: true },
       }),
@@ -308,7 +328,7 @@ export class AdministrationUnpalletedWriteoffService {
       .map((box) => {
         const blockers: UnpalletedWriteoffBlocker[] = [];
         const warnings: UnpalletedWriteoffWarning[] = [];
-        if (box.balances.some((balance) => balance.status !== StockStatus.AVAILABLE)) {
+        if (box.balances.some((balance) => !WRITEOFF_BALANCE_STATUSES.has(balance.status))) {
           blockers.push('NON_AVAILABLE_BALANCE');
         }
         if (requestBoxIds.has(box.id)) blockers.push('ACTIVE_CLIENT_REQUEST');
@@ -324,9 +344,8 @@ export class AdministrationUnpalletedWriteoffService {
         ) {
           blockers.push('FOREIGN_CLIENT_DATA');
         }
-        // FIX: the dedicated admin cleanup writes off every AVAILABLE balance and blocks only
-        // AVAILABLE marks. A count mismatch is visible for audit, but historical SHIPPING marks
-        // are not a reason to preserve a phantom unpalleted balance forever.
+        // FIX: the dedicated admin cleanup writes off AVAILABLE and orphan PACKING balances.
+        // A count mismatch is visible for audit, but historical SHIPPING marks are preserved.
         if (hasKizCountMismatch(box.balances, boxMarks)) warnings.push('KIZ_COUNT_MISMATCH');
         if (pickWaveBoxIds.has(box.id) || pickWaveBoxCodes.has(normalizeCode(box.code))) {
           blockers.push('ACTIVE_PICK_WAVE');
@@ -538,7 +557,7 @@ export class AdministrationUnpalletedWriteoffService {
       select: { id: true },
     });
     if (placement) return skipped(box.id, box.code, 'PALLET_PLACEMENT_FOUND');
-    if (box.balances.some((balance) => balance.status !== StockStatus.AVAILABLE)) {
+    if (box.balances.some((balance) => !WRITEOFF_BALANCE_STATUSES.has(balance.status))) {
       return skipped(box.id, box.code, 'NON_AVAILABLE_BALANCE');
     }
 
@@ -566,6 +585,18 @@ export class AdministrationUnpalletedWriteoffService {
         where: {
           boxId: box.id,
           session: { status: { in: [...OPEN_INVENTORY_STATUSES] } },
+          // FIX: only an unresolved state of this exact box blocks the cleanup.
+          OR: [
+            { status: { notIn: [InventoryBoxStatus.MATCHED, InventoryBoxStatus.RESOLVED] } },
+            {
+              lines: {
+                some: {
+                  difference: { not: 0 },
+                  decision: InventoryLineDecision.PENDING,
+                },
+              },
+            },
+          ],
         },
         select: { id: true },
       }),
@@ -626,7 +657,7 @@ export class AdministrationUnpalletedWriteoffService {
           boxId: box.id,
           palletId: balance.palletId,
           type: MovementType.INVENTORY_ADJUSTMENT,
-          status: StockStatus.AVAILABLE,
+          status: balance.status,
           quantity: -balance.quantity,
           sourceDocument: ADMIN_UNPALLETED_WRITEOFF_SOURCE,
           idempotencyKey: `${ADMIN_UNPALLETED_WRITEOFF_SOURCE}:${box.id}:${balance.id}`,
@@ -638,7 +669,7 @@ export class AdministrationUnpalletedWriteoffService {
           clientId: UNPALLETED_WRITEOFF_TARGET_CLIENT_ID,
           boxId: box.id,
           skuId: balance.skuId,
-          status: StockStatus.AVAILABLE,
+          status: balance.status,
         },
         data: {
           status: StockStatus.BLOCKED,
@@ -869,7 +900,7 @@ function hasKizCountMismatch(balances: PreviewBalance[], marks: PreviewMark[]) {
   for (const mark of marks) {
     if (
       mark.clientId !== UNPALLETED_WRITEOFF_TARGET_CLIENT_ID ||
-      mark.status !== StockStatus.AVAILABLE
+      !WRITEOFF_BALANCE_STATUSES.has(mark.status)
     ) continue;
     actualBySku.set(mark.skuId, (actualBySku.get(mark.skuId) ?? 0) + 1);
   }
