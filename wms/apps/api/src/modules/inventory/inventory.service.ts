@@ -1017,6 +1017,75 @@ export class InventoryService {
     });
   }
 
+  // FIX: administrative mass maintenance can complete only sessions whose every box is already
+  // MATCHED/RESOLVED. The session row lock prevents a concurrent rescan from being closed midway.
+  async completeResolvedSessionsForBoxes(boxIds: string[], user: AuthUser) {
+    this.requireManager(user);
+    const uniqueBoxIds = [...new Set(boxIds.map((boxId) => boxId.trim()).filter(Boolean))];
+    if (uniqueBoxIds.length === 0) return { checked: 0, completed: 0, sessionIds: [] as string[] };
+    const sessions = await this.prisma.inventorySession.findMany({
+      where: {
+        status: { in: [InventorySessionStatus.ACTIVE, InventorySessionStatus.REVIEW] },
+        boxes: { some: { boxId: { in: uniqueBoxIds } } },
+      },
+      select: { id: true },
+      orderBy: { updatedAt: 'asc' },
+      take: 500,
+    });
+    const completedIds: string[] = [];
+    for (const candidate of sessions) {
+      const completed = await this.prisma.$transaction(async (tx) => {
+        await tx.$queryRaw<Array<{ id: string }>>(
+          Prisma.sql`SELECT "id" FROM "InventorySession" WHERE "id" = ${candidate.id} FOR UPDATE`,
+        );
+        const session = await tx.inventorySession.findFirst({
+          where: {
+            id: candidate.id,
+            status: { in: [InventorySessionStatus.ACTIVE, InventorySessionStatus.REVIEW] },
+          },
+          select: { id: true, status: true },
+        });
+        if (!session) return false;
+        const [auditedBoxes, unfinishedBoxes, pendingDifferences] = await Promise.all([
+          tx.inventoryAuditBox.count({ where: { sessionId: candidate.id } }),
+          tx.inventoryAuditBox.count({
+            where: {
+              sessionId: candidate.id,
+              status: { notIn: [InventoryBoxStatus.MATCHED, InventoryBoxStatus.RESOLVED] },
+            },
+          }),
+          tx.inventoryAuditLine.count({
+            where: {
+              auditBox: { sessionId: candidate.id },
+              difference: { not: 0 },
+              decision: InventoryLineDecision.PENDING,
+            },
+          }),
+        ]);
+        if (auditedBoxes === 0 || unfinishedBoxes > 0 || pendingDifferences > 0) return false;
+        const updated = await tx.inventorySession.updateMany({
+          where: {
+            id: candidate.id,
+            status: { in: [InventorySessionStatus.ACTIVE, InventorySessionStatus.REVIEW] },
+          },
+          data: {
+            status: InventorySessionStatus.COMPLETED,
+            completedAt: new Date(),
+            completedByUserId: user.id,
+            completedByName: user.name,
+          },
+        });
+        return updated.count === 1;
+      }, {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        maxWait: 10_000,
+        timeout: 10_000,
+      });
+      if (completed) completedIds.push(candidate.id);
+    }
+    return { checked: sessions.length, completed: completedIds.length, sessionIds: completedIds };
+  }
+
   async cancelSession(id: string, comment: string | undefined, user: AuthUser) {
     this.requireManager(user);
     const session = await this.prisma.inventorySession.findUnique({ where: { id } });

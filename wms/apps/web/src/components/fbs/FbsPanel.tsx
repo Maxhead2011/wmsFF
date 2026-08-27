@@ -51,6 +51,7 @@ import {
   deleteFbsPass,
   deliverFbsSupplies,
   downloadFbsCargoPlaceStickersPdf,
+  downloadFbsPenaltiesReport,
   downloadFbsProductShipmentReport,
   downloadFbsOrderStickersPdf,
   downloadFbsRequestPickListPdf,
@@ -61,6 +62,7 @@ import {
   fetchFbsActiveClients,
   fetchFbsCargoPackings,
   fetchFbsOrders,
+  fetchFbsPenaltiesReport,
   fetchFbsProductShipmentReport,
   fetchFbsPasses,
   fetchFbsStocks,
@@ -87,6 +89,8 @@ import {
   type FbsDeliveryDestination,
   type FbsDeliveryRecoveryItem,
   type FbsOrderSummary,
+  type FbsPenaltiesReport,
+  type FbsPenaltyReportRow,
   type FbsPass,
   type FbsPassPayload,
   type FbsPassesResponse,
@@ -163,7 +167,8 @@ type FbsView =
   | 'calculator'
   | 'archive'
   | 'passes'
-  | 'pricing';
+  | 'pricing'
+  | 'penalties';
 type OrdersState =
   | { status: 'idle'; data: null; error: '' }
   | { status: 'loading'; data: ClientFbsOrders | null; error: '' }
@@ -281,9 +286,17 @@ const fbsViews = [
     icon: Settings2,
     accent: 'violet',
   },
+  {
+    id: 'penalties' as const,
+    title: 'Штрафы по FBS',
+    description: 'Финансовые штрафы Wildberries по FBS: причины, детализация и Excel.',
+    icon: AlertTriangle,
+    accent: 'red',
+  },
 ];
 
-const ozonHiddenViews = new Set<FbsView>(['deadlines', 'stocks', 'allocation', 'cargo', 'report', 'passes']);
+// FIX: both WB-only reports stay hidden for Ozon and Yandex after merging their tiles.
+const ozonHiddenViews = new Set<FbsView>(['deadlines', 'stocks', 'allocation', 'cargo', 'report', 'passes', 'penalties']);
 
 export function FbsPanel({ session }: FbsPanelProps) {
   const [marketplace, setMarketplace] = useState<FbsMarketplace | null>(null);
@@ -793,6 +806,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
     archive: data?.counts.archive ?? 0,
     passes: '48 ч',
     pricing: 'тарифы',
+    penalties: '₽',
   };
 
   async function assembleSelectedOrders(orders: FbsOrderSummary[]) {
@@ -1573,7 +1587,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
                   </small>
                 ) : null}
               </form>
-            ) : activeView !== 'cost' && activeView !== 'pricing' && activeView !== 'passes' && activeView !== 'report' && activeView !== 'deadlines' ? (
+            ) : activeView !== 'cost' && activeView !== 'pricing' && activeView !== 'passes' && activeView !== 'report' && activeView !== 'deadlines' && activeView !== 'penalties' ? (
               <label className="fbs-workspace__search">
                 <span>Поиск</span>
                 <span>
@@ -1586,7 +1600,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
                 </span>
               </label>
             ) : null}
-            {activeView !== 'pricing' && activeView !== 'passes' && activeView !== 'stocks' && activeView !== 'report' ? (
+            {activeView !== 'pricing' && activeView !== 'passes' && activeView !== 'stocks' && activeView !== 'report' && activeView !== 'penalties' ? (
               <button
                 className="fbs-refresh-button"
                 type="button"
@@ -1761,6 +1775,14 @@ export function FbsPanel({ session }: FbsPanelProps) {
             clientId={selectedClientId}
             session={session}
           />
+        ) : activeView === 'penalties' ? (
+          <FbsPenaltiesReportView
+            clientId={selectedClientId}
+            connections={(data?.connections ?? [])
+              .filter((connection) => connection.marketplace === 'WILDBERRIES')
+              .map((connection) => ({ id: connection.id, accountName: connection.accountName }))}
+            session={session}
+          />
         ) : ordersState.status === 'error' ? (
           <FbsNotice icon={AlertTriangle} title="Не удалось получить заказы" text={ordersState.error} tone="error" />
         ) : data && !data.connected ? (
@@ -1828,7 +1850,8 @@ export function FbsPanel({ session }: FbsPanelProps) {
         activeView !== 'calculator' &&
         activeView !== 'passes' &&
         activeView !== 'stocks' &&
-        activeView !== 'report' ? (
+        activeView !== 'report' &&
+        activeView !== 'penalties' ? (
           <div className="fbs-source-line">
             <span>
               <Link2 size={14} aria-hidden="true" />
@@ -2412,6 +2435,314 @@ function fbsProductReportSummary(rows: FbsProductShipmentReportRow[]) {
 
 function normalizeFbsReportSearch(value: string) {
   return value.toLocaleLowerCase('ru-RU').replace(/ё/g, 'е').trim();
+}
+
+function FbsPenaltiesReportView({
+  clientId,
+  connections,
+  session,
+}: {
+  clientId: string;
+  connections: Array<{ id: string; accountName: string | null }>;
+  session: AuthSession;
+}) {
+  const initialPeriod = useMemo(() => fbsReportInitialPeriod(), []);
+  const [dateFrom, setDateFrom] = useState(initialPeriod.dateFrom);
+  const [dateTo, setDateTo] = useState(initialPeriod.dateTo);
+  const [connectionId, setConnectionId] = useState('');
+  const [keyword, setKeyword] = useState('');
+  const [report, setReport] = useState<FbsPenaltiesReport | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState('');
+  const reportLoadSequence = useRef(0);
+
+  const loadReport = useCallback(async () => {
+    if (!clientId) return;
+    const sequence = ++reportLoadSequence.current;
+    setLoading(true);
+    setError('');
+    try {
+      const nextReport = await fetchFbsPenaltiesReport(session.accessToken, {
+        clientId,
+        connectionId: connectionId || undefined,
+        dateFrom,
+        dateTo,
+        search: keyword.trim() || undefined,
+      });
+      if (reportLoadSequence.current === sequence) setReport(nextReport);
+    } catch (caught) {
+      if (reportLoadSequence.current === sequence) {
+        setReport(null);
+        setError(
+          caught instanceof Error
+            ? caught.message
+            : 'Не удалось получить штрафы Wildberries.',
+        );
+      }
+    } finally {
+      if (reportLoadSequence.current === sequence) setLoading(false);
+    }
+  }, [clientId, connectionId, dateFrom, dateTo, keyword, session.accessToken]);
+
+  useEffect(() => {
+    // FIX: ignore a late response from the previously selected client or filter request.
+    const sequence = ++reportLoadSequence.current;
+    setConnectionId('');
+    setKeyword('');
+    setReport(null);
+    if (!clientId) {
+      setLoading(false);
+      setError('Выберите клиента для формирования отчёта.');
+      return undefined;
+    }
+    setLoading(true);
+    setError('');
+    void fetchFbsPenaltiesReport(session.accessToken, {
+      clientId,
+      dateFrom: initialPeriod.dateFrom,
+      dateTo: initialPeriod.dateTo,
+    })
+      .then((nextReport) => {
+        if (reportLoadSequence.current === sequence) setReport(nextReport);
+      })
+      .catch((caught) => {
+        if (reportLoadSequence.current === sequence) {
+          setError(caught instanceof Error ? caught.message : 'Не удалось получить штрафы Wildberries.');
+        }
+      })
+      .finally(() => {
+        if (reportLoadSequence.current === sequence) setLoading(false);
+      });
+    return () => {
+      if (reportLoadSequence.current === sequence) reportLoadSequence.current += 1;
+    };
+  }, [clientId, initialPeriod.dateFrom, initialPeriod.dateTo, session.accessToken]);
+
+  async function download() {
+    if (!report) return;
+    setDownloading(true);
+    setError('');
+    try {
+      const blob = await downloadFbsPenaltiesReport(session.accessToken, {
+        clientId,
+        connectionId: connectionId || undefined,
+        dateFrom,
+        dateTo,
+        search: keyword.trim() || undefined,
+      });
+      downloadFbsBlob(blob, `FBS_штрафы_${dateFrom}_${dateTo}.xlsx`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Не удалось скачать отчёт Excel.');
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void loadReport();
+  }
+
+  return (
+    // ADDED: the 13th tile is intentionally self-contained and does not reload FBS orders.
+    <div className="fbs-product-report fbs-penalties-report">
+      <form className="fbs-product-report__period fbs-penalties-report__filters" onSubmit={submit}>
+        <label>
+          <span>Период с</span>
+          <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+        </label>
+        <label>
+          <span>по</span>
+          <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+        </label>
+        <label>
+          <span>Кабинет WB</span>
+          <select value={connectionId} onChange={(event) => setConnectionId(event.target.value)}>
+            <option value="">Все кабинеты</option>
+            {connections.map((connection) => (
+              <option key={connection.id} value={connection.id}>
+                {connection.accountName || 'Кабинет Wildberries'}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="fbs-penalties-report__search">
+          <span>Поиск</span>
+          <input
+            value={keyword}
+            onChange={(event) => setKeyword(event.target.value)}
+            placeholder="Причина, товар, заказ или ШК"
+          />
+        </label>
+        <button className="button button-primary" type="submit" disabled={loading}>
+          {loading ? <RefreshCw className="is-spinning" size={17} /> : <BarChart3 size={17} />}
+          Сформировать
+        </button>
+        <button
+          className="button button-secondary"
+          type="button"
+          disabled={!report || downloading}
+          onClick={() => void download()}
+        >
+          {downloading ? <RefreshCw className="is-spinning" size={17} /> : <Download size={17} />}
+          Скачать Excel
+        </button>
+      </form>
+
+      {error ? <p className="fbs-product-report__error">{error}</p> : null}
+      {report?.truncated ? (
+        <p className="fbs-penalties-report__warning">
+          WB вернул максимальные 100 000 строк. Уменьшите период, чтобы не пропустить штрафы.
+        </p>
+      ) : null}
+      {report?.sources.some((source) => source.status === 'ERROR') ? (
+        <div className="fbs-penalties-report__sources">
+          {report.sources
+            .filter((source) => source.status === 'ERROR')
+            .map((source) => (
+              <p key={source.connectionId}>
+                <strong>{source.accountName}:</strong> {source.error}
+              </p>
+            ))}
+        </div>
+      ) : null}
+
+      {report ? (
+        <>
+          <div className="fbs-product-report__summary fbs-penalties-report__summary">
+            <span>
+              <small>Начислено</small>
+              <strong>{formatFbsPenaltyMoney(report.summary.chargedPenalty, report.summary.currency)}</strong>
+            </span>
+            <span>
+              <small>Возвращено</small>
+              <strong>{formatFbsPenaltyMoney(report.summary.reversedPenalty, report.summary.currency)}</strong>
+            </span>
+            <span className={report.summary.netPenalty > 0 ? 'is-danger' : 'is-success'}>
+              <small>Итого штрафов</small>
+              <strong>{formatFbsPenaltyMoney(report.summary.netPenalty, report.summary.currency)}</strong>
+            </span>
+            <span>
+              <small>Строк / заказов</small>
+              <strong>{report.summary.penalties.toLocaleString('ru-RU')} / {report.summary.orders.toLocaleString('ru-RU')}</strong>
+            </span>
+          </div>
+
+          <section className="fbs-product-report__window">
+            <header>
+              <div>
+                <p className="eyebrow">Сводка</p>
+                <h4>Штрафы по причинам</h4>
+                <p>Начисления и корректировки из финансовой детализации Wildberries.</p>
+              </div>
+            </header>
+            <FbsPenaltyReasonsTable report={report} />
+          </section>
+
+          <section className="fbs-product-report__window">
+            <header>
+              <div>
+                <p className="eyebrow">Детализация</p>
+                <h4>Все штрафы FBS за период</h4>
+                <p>В таблицу не попадают FBO/FBW и строки с нулевым штрафом.</p>
+              </div>
+            </header>
+            <FbsPenaltyRowsTable rows={report.rows} currency={report.summary.currency} />
+          </section>
+        </>
+      ) : loading ? (
+        <FbsNotice
+          icon={RefreshCw}
+          title="Получаю финансовый отчёт WB"
+          text="Wildberries разрешает один запрос на кабинет в минуту. Повторное открытие использует сохранённый снимок."
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function FbsPenaltyReasonsTable({ report }: { report: FbsPenaltiesReport }) {
+  if (report.reasons.length === 0) {
+    return <div className="fbs-product-report__empty">За выбранный период штрафов FBS не найдено.</div>;
+  }
+  return (
+    <div className="fbs-table-wrap fbs-product-report__table">
+      <table className="fbs-table">
+        <thead>
+          <tr><th>Причина</th><th>Строк</th><th>Начислено</th><th>Возвращено</th><th>Итого</th></tr>
+        </thead>
+        <tbody>
+          {report.reasons.map((row) => (
+            <tr key={row.reason}>
+              <td><strong>{row.reason}</strong></td>
+              <td>{row.penalties.toLocaleString('ru-RU')}</td>
+              <td>{formatFbsPenaltyMoney(row.chargedPenalty, report.summary.currency)}</td>
+              <td>{formatFbsPenaltyMoney(row.reversedPenalty, report.summary.currency)}</td>
+              <td className={row.netPenalty > 0 ? 'fbs-penalties-report__amount' : undefined}>
+                <strong>{formatFbsPenaltyMoney(row.netPenalty, report.summary.currency)}</strong>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function FbsPenaltyRowsTable({ rows, currency }: { rows: FbsPenaltyReportRow[]; currency: string }) {
+  if (rows.length === 0) {
+    return <div className="fbs-product-report__empty">За выбранный период штрафов FBS не найдено.</div>;
+  }
+  return (
+    <div className="fbs-table-wrap fbs-product-report__table fbs-penalties-report__table">
+      <table className="fbs-table">
+        <thead>
+          <tr>
+            <th>Дата</th><th>Кабинет</th><th>Причина</th><th>Сумма</th><th>Товар</th>
+            <th>Заказ WB</th><th>Грузоместо</th><th>Склад WB</th><th>Отчёт</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.id}>
+              <td>{row.reportDate ? formatFbsPenaltyDate(row.reportDate) : '—'}</td>
+              <td>{row.accountName}</td>
+              <td><strong>{row.reason}</strong><small>{row.deliveryMethod}</small></td>
+              <td className={row.penalty > 0 ? 'fbs-penalties-report__amount' : 'fbs-penalties-report__refund'}>
+                <strong>{formatFbsPenaltyMoney(row.penalty, row.currency || currency)}</strong>
+              </td>
+              <td>
+                <strong>{row.productName || row.vendorCode || '—'}</strong>
+                <small>{[row.vendorCode, row.size, row.barcode].filter(Boolean).join(' · ')}</small>
+              </td>
+              <td className="fbs-product-report__numbers">{row.orderId || '—'}</td>
+              <td className="fbs-product-report__numbers">{row.cargoPlaceId || '—'}</td>
+              <td>{row.officeName || '—'}</td>
+              <td>{row.reportId || '—'}<small>{row.rrdId || ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function formatFbsPenaltyMoney(value: number, currency: string) {
+  try {
+    return new Intl.NumberFormat('ru-RU', {
+      style: 'currency',
+      currency: currency || 'RUB',
+      maximumFractionDigits: 2,
+    }).format(value);
+  } catch {
+    return `${value.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ${currency || 'RUB'}`;
+  }
+}
+
+function formatFbsPenaltyDate(value: string) {
+  const [year, month, day] = value.slice(0, 10).split('-');
+  return year && month && day ? `${day}.${month}.${year}` : value;
 }
 
 function fbsReportInitialPeriod() {
@@ -4264,7 +4595,7 @@ function FbsOrdersView({
   data: ClientFbsOrders | null;
   search: string;
   // FIX: the allocation tile is not an orders-table view.
-  view: Exclude<FbsView, 'deadlines' | 'stocks' | 'cargo' | 'cost' | 'calculator' | 'pricing' | 'passes' | 'report' | 'allocation'>;
+  view: Exclude<FbsView, 'deadlines' | 'stocks' | 'cargo' | 'cost' | 'calculator' | 'pricing' | 'passes' | 'report' | 'allocation' | 'penalties'>;
   selectedOrderKeys: Set<string>;
   onSelectionChange: (keys: Set<string>) => void;
   orderAction: 'assemble' | 'reship' | 'move' | 'deliver' | 'change-destination' | 'cancel' | 'remove-cancelled' | 'stickers' | 'cargo' | 'supply' | 'request' | 'recover-missing-requests' | 'pick-list' | 'emergency-assembly' | null;

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { LogisticsModule } from '../logistics/logistics.module';
 import { WmsStockAvailabilityService } from '../stock/wms-stock-availability.service';
+import { FbsPenaltiesReportService } from './fbs-penalties-report.service';
 import { FbsProductShipmentsReportService } from './fbs-product-shipments-report.service';
 import { FbsStockAllocationExternalController } from './fbs-stock-allocation-external.controller';
 import { FbsStockAllocationService } from './fbs-stock-allocation.service';
@@ -14,6 +15,8 @@ import { MarketplaceConnectionsService } from './marketplace-connections.service
   controllers: [MarketplaceConnectionsController, FbsStockAllocationExternalController],
   providers: [
     MarketplaceConnectionsService,
+    // ADDED: isolated read-only WB Finance integration for FBS penalties.
+    FbsPenaltiesReportService,
     FbsProductShipmentsReportService,
     FbsStockAllocationService,
     FbsStockMonitoringService,

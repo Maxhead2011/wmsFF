@@ -3027,6 +3027,62 @@ export type FbsProductShipmentReport = {
   generatedAt: string;
 };
 
+export type FbsPenaltyReportRow = {
+  id: string;
+  connectionId: string;
+  accountName: string;
+  reportDate: string;
+  reason: string;
+  penalty: number;
+  currency: string;
+  orderId: string;
+  orderUid: string;
+  cargoPlaceId: string;
+  vendorCode: string;
+  productName: string;
+  size: string;
+  barcode: string;
+  nmId: string;
+  officeName: string;
+  deliveryMethod: string;
+  reportId: string;
+  rrdId: string;
+};
+
+export type FbsPenaltiesReport = {
+  client: { id: string; code: string; name: string };
+  period: { dateFrom: string; dateTo: string };
+  selectedConnectionId: string | null;
+  search: string;
+  summary: {
+    penalties: number;
+    chargedPenalty: number;
+    reversedPenalty: number;
+    netPenalty: number;
+    orders: number;
+    reasons: number;
+    accounts: number;
+    currency: string;
+  };
+  reasons: Array<{
+    reason: string;
+    penalties: number;
+    chargedPenalty: number;
+    reversedPenalty: number;
+    netPenalty: number;
+  }>;
+  rows: FbsPenaltyReportRow[];
+  sources: Array<{
+    connectionId: string;
+    accountName: string;
+    status: 'READY' | 'ERROR';
+    rows: number;
+    error: string | null;
+  }>;
+  truncated: boolean;
+  generatedAt: string;
+};
+
 export type FbsDeliveryDestination = 'PICKUP_POINT' | 'VNUKOVO_SORTING_CENTER';
 
 export type FbsOrderSummary = {
@@ -6229,6 +6285,74 @@ export type AdministrationPalletSortScanResult = {
   message: string;
 };
 
+export type AdministrationUnpalletedWriteoffBlocker =
+  | 'NON_AVAILABLE_BALANCE'
+  | 'ACTIVE_CLIENT_REQUEST'
+  | 'ACTIVE_FBS_ASSEMBLY'
+  | 'OPEN_INVENTORY'
+  | 'FOREIGN_CLIENT_DATA'
+  | 'ACTIVE_PICK_WAVE'
+  | 'PENDING_BOX_CHECK';
+
+export type AdministrationUnpalletedWriteoffWarning = 'KIZ_COUNT_MISMATCH';
+
+export type AdministrationUnpalletedWriteoffPreview = {
+  checkedAt: string;
+  client: { id: string; code: string; name: string; stockBalanceMode: 'PALLET_SORT' };
+  summary: {
+    scanned: number;
+    candidates: number;
+    safe: number;
+    blocked: number;
+    units: number;
+    safeUnits: number;
+    warnings: number;
+  };
+  blockerSummary: Array<{
+    blocker: AdministrationUnpalletedWriteoffBlocker;
+    boxes: number;
+    units: number;
+  }>;
+  warningSummary: Array<{
+    warning: AdministrationUnpalletedWriteoffWarning;
+    boxes: number;
+    units: number;
+  }>;
+  rows: Array<{
+    boxId: string;
+    boxCode: string;
+    warehouseId: string | null;
+    quantity: number;
+    statuses: string[];
+    safe: boolean;
+    blockers: AdministrationUnpalletedWriteoffBlocker[];
+    warnings: AdministrationUnpalletedWriteoffWarning[];
+  }>;
+};
+
+export type AdministrationUnpalletedBlockerRecheckResult = {
+  fbs: { refreshed: boolean; error: string | null };
+  inventory: { checked: number; completed: number; sessionIds: string[] };
+  preview: AdministrationUnpalletedWriteoffPreview;
+};
+
+export type AdministrationUnpalletedWriteoffResult = {
+  processed: number;
+  archived: number;
+  skipped: number;
+  failed: number;
+  unitsWrittenOff: number;
+  results: Array<{
+    boxId: string;
+    boxCode: string | null;
+    outcome: 'ARCHIVED' | 'SKIPPED' | 'ERROR';
+    reason: string | null;
+    unitsWrittenOff: number;
+    marksBlocked: number;
+    movementIds: string[];
+  }>;
+};
+
 export type AdministrationTechnicalWorkBulkResult = {
   category: AdministrationTechnicalWorkCategory;
   action: AdministrationTechnicalWorkIssue['actions'][number]['id'];
@@ -6899,6 +7023,35 @@ export async function applyAdministrationPalletSortScan(
   payload: { palletCode: string; boxCodes: string[]; confirmation: string },
 ) {
   return request<AdministrationPalletSortScanResult>('/administration/technical-work/pallet-sorts/scan-apply', {
+    method: 'POST',
+    body: payload,
+    accessToken,
+  });
+}
+
+// FIX: preview is the only way the admin UI obtains eligible box ids; it never mutates stock.
+export async function previewAdministrationUnpalletedWriteoff(accessToken: string) {
+  return request<AdministrationUnpalletedWriteoffPreview>('/administration/technical-work/unpalleted-boxes/preview', {
+    method: 'POST',
+    accessToken,
+  });
+}
+
+// FIX: this endpoint reuses WB synchronization and closes only fully resolved inventory sessions.
+export async function recheckAdministrationUnpalletedBlockers(accessToken: string) {
+  return request<AdministrationUnpalletedBlockerRecheckResult>('/administration/technical-work/unpalleted-boxes/recheck', {
+    method: 'POST',
+    body: { confirmation: 'ПЕРЕПРОВЕРИТЬ БЛОКИРОВКИ' },
+    accessToken,
+  });
+}
+
+// FIX: the server revalidates every id; the browser is limited to the same 25-box batch.
+export async function applyAdministrationUnpalletedWriteoff(
+  accessToken: string,
+  payload: { boxIds: string[]; confirmation: string },
+) {
+  return request<AdministrationUnpalletedWriteoffResult>('/administration/technical-work/unpalleted-boxes/apply', {
     method: 'POST',
     body: payload,
     accessToken,
@@ -9155,6 +9308,39 @@ export async function downloadFbsProductShipmentReport(
 ) {
   return requestBlob(
     withQuery('/marketplace-connections/fbs/product-shipments-report.xlsx', filter),
+    accessToken,
+  );
+}
+
+export async function fetchFbsPenaltiesReport(
+  accessToken: string,
+  filter: {
+    clientId: string;
+    connectionId?: string;
+    dateFrom: string;
+    dateTo: string;
+    search?: string;
+  },
+) {
+  // ADDED: the browser never receives the WB token; WMS performs the finance request.
+  return request<FbsPenaltiesReport>(
+    withQuery('/marketplace-connections/fbs/penalties-report', filter),
+    { accessToken },
+  );
+}
+
+export async function downloadFbsPenaltiesReport(
+  accessToken: string,
+  filter: {
+    clientId: string;
+    connectionId?: string;
+    dateFrom: string;
+    dateTo: string;
+    search?: string;
+  },
+) {
+  return requestBlob(
+    withQuery('/marketplace-connections/fbs/penalties-report.xlsx', filter),
     accessToken,
   );
 }

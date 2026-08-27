@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { MovementType, StockStatus } from '@prisma/client';
+import { MovementType, Prisma, StockStatus } from '@prisma/client';
 import type { AuthUser } from '../auth/auth.types';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { BoxCodePolicyService } from '../../common/boxes/box-code-policy.service';
@@ -1088,49 +1088,66 @@ export class StorageLocationsService {
     user: AuthUser,
   ) {
     this.requirePalletAccess(user, pallet, 'write');
-    const existingPlacement = await this.prisma.storagePalletBox.findUnique({
-      where: { boxCode },
-      include: { pallet: true },
+    return this.prisma.$transaction(async (tx) => {
+      // FIX: the cleanup service locks the same Box row before archiving it.
+      const lockedBoxes = await tx.$queryRaw<Array<{
+        id: string;
+        status: string;
+        clientId: string;
+        warehouseId: string | null;
+      }>>(
+        Prisma.sql`SELECT "id", "status", "clientId", "warehouseId" FROM "Box" WHERE "code" = ${boxCode} FOR UPDATE`,
+      );
+      const box = lockedBoxes[0] ?? null;
+      if (box?.status !== undefined && box.status !== 'active') {
+        throw new BadRequestException(
+          `Короб ${boxCode} находится в архиве или неактивен. Сначала восстановите его через актуализацию.`,
+        );
+      }
+      const existingPlacement = await tx.storagePalletBox.findUnique({
+        where: { boxCode },
+        include: { pallet: true },
+      });
+      if (existingPlacement && existingPlacement.palletId !== pallet.id) {
+        this.requirePalletAccess(user, existingPlacement.pallet, 'write');
+      }
+      if (box && box.clientId !== pallet.clientId) {
+        throw new BadRequestException(`Короб ${boxCode} относится к другому клиенту.`);
+      }
+      this.assertBoxWarehouse(box, pallet.warehouseId, boxCode);
+      const placement = await tx.storagePalletBox.upsert({
+        where: { boxCode },
+        create: {
+          palletId: pallet.id,
+          boxId: box?.id,
+          boxCode,
+          source,
+        },
+        update: {
+          palletId: pallet.id,
+          boxId: box?.id,
+          source,
+          scannedAt: new Date(),
+        },
+        include: { box: { select: { id: true, status: true } }, pallet: true },
+      });
+      await tx.storagePallet.update({
+        where: { id: pallet.id },
+        data: {
+          source,
+          workerUserId: user.id,
+          workerName: user.name,
+        },
+      });
+      return {
+        ...placement,
+        warning: box ? null : `Короб ${boxCode} сохранён в размещении, но пока не найден в WMS.`,
+      };
+    }, {
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      maxWait: 10_000,
+      timeout: 10_000,
     });
-    if (existingPlacement && existingPlacement.palletId !== pallet.id) {
-      this.requirePalletAccess(user, existingPlacement.pallet, 'write');
-    }
-    const box = await this.prisma.box.findUnique({
-      where: { code: boxCode },
-      select: { id: true, status: true, clientId: true, warehouseId: true },
-    });
-    if (box && box.clientId !== pallet.clientId) {
-      throw new BadRequestException(`Короб ${boxCode} относится к другому клиенту.`);
-    }
-    this.assertBoxWarehouse(box, pallet.warehouseId, boxCode);
-    const placement = await this.prisma.storagePalletBox.upsert({
-      where: { boxCode },
-      create: {
-        palletId: pallet.id,
-        boxId: box?.id,
-        boxCode,
-        source,
-      },
-      update: {
-        palletId: pallet.id,
-        boxId: box?.id,
-        source,
-        scannedAt: new Date(),
-      },
-      include: { box: { select: { id: true, status: true } }, pallet: true },
-    });
-    await this.prisma.storagePallet.update({
-      where: { id: pallet.id },
-      data: {
-        source,
-        workerUserId: user.id,
-        workerName: user.name,
-      },
-    });
-    return {
-      ...placement,
-      warning: box ? null : `Короб ${boxCode} сохранён в размещении, но пока не найден в WMS.`,
-    };
   }
 
   private async tsdPalletResponse(

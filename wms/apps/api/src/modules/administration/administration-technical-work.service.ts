@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { ClientRequestStatus, ClientRequestType } from '@prisma/client';
+import { ClientRequestStatus, ClientRequestType, Prisma } from '@prisma/client';
 import { AuditLogService } from '../../common/audit/audit-log.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
@@ -274,6 +274,13 @@ export class AdministrationTechnicalWorkService {
     const changedAt = new Date();
     const canonicalBoxes = preview.boxes.filter((box): box is typeof box & { boxId: string } => Boolean(box.boxId));
     const pallet = await this.prisma.$transaction(async (tx) => {
+      // FIX: serialize technical placement with administrative box retirement.
+      const boxIds = canonicalBoxes.map((box) => box.boxId).sort();
+      if (boxIds.length > 0) {
+        await tx.$queryRaw(
+          Prisma.sql`SELECT "id" FROM "Box" WHERE "id" IN (${Prisma.join(boxIds)}) ORDER BY "id" FOR UPDATE`,
+        );
+      }
       const currentBoxes = await tx.box.findMany({
         where: { id: { in: canonicalBoxes.map((box) => box.boxId) } },
         select: { id: true, status: true, clientId: true, warehouseId: true },

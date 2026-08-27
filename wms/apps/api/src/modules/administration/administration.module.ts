@@ -6,15 +6,19 @@ import { StockModule } from '../stock/stock.module';
 import { PhantomStockService } from './phantom-stock.service';
 import { AdministrationTechnicalWorkService } from './administration-technical-work.service';
 import { AdministrationInternalApiService } from './administration-internal-api.service';
+import { AdministrationUnpalletedWriteoffService } from './administration-unpalleted-writeoff.service';
+import { InventoryModule } from '../inventory/inventory.module';
 
 @Module({
-  imports: [MarketplaceConnectionsModule, StockModule],
+  imports: [MarketplaceConnectionsModule, StockModule, InventoryModule],
   controllers: [AdministrationController],
   // ADDED: Internal API diagnostics are isolated from existing technical-work repair logic.
   providers: [
     AdministrationService,
     AdministrationTechnicalWorkService,
     AdministrationInternalApiService,
+    // FIX: destructive unpalleted-box cleanup is isolated from existing repair flows.
+    AdministrationUnpalletedWriteoffService,
     PhantomStockService,
   ],
   exports: [AdministrationService],

@@ -4550,6 +4550,7 @@
 }
 
 .fbs-product-report__period input,
+.fbs-product-report__period select,
 .fbs-product-report__keyword input {
   border: 1px solid #cbd5e1;
   border-radius: 9px;
@@ -4560,6 +4561,7 @@
 }
 
 .fbs-product-report__period input:focus,
+.fbs-product-report__period select:focus,
 .fbs-product-report__keyword input:focus {
   border-color: #7c3aed;
   box-shadow: 0 0 0 3px rgb(124 58 237 / 0.12);
@@ -4694,6 +4696,65 @@
   padding: 10px 12px;
 }
 
+/* ADDED: visual isolation for the 13th FBS penalties tile. */
+.fbs-penalties-report__filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(145px, 0.7fr)) minmax(210px, 1fr) minmax(240px, 1.4fr) auto auto;
+}
+
+.fbs-penalties-report__filters input,
+.fbs-penalties-report__filters select {
+  width: 100%;
+  min-height: 40px;
+}
+
+.fbs-penalties-report__summary > span.is-danger {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.fbs-penalties-report__summary > span.is-success {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.fbs-penalties-report__warning,
+.fbs-penalties-report__sources {
+  margin: 0;
+  border: 1px solid #fed7aa;
+  border-radius: 10px;
+  background: #fff7ed;
+  color: #9a3412;
+  padding: 10px 12px;
+}
+
+.fbs-penalties-report__sources {
+  display: grid;
+  gap: 5px;
+}
+
+.fbs-penalties-report__sources p {
+  margin: 0;
+}
+
+.fbs-penalties-report__amount {
+  color: #b91c1c;
+}
+
+.fbs-penalties-report__refund {
+  color: #15803d;
+}
+
+.fbs-penalties-report__table {
+  max-height: 620px;
+}
+
+.fbs-penalties-report__table table {
+  min-width: 1280px;
+}
+
 @media (max-width: 720px) {
   .fbs-product-report__window > header {
     align-items: stretch;
@@ -4708,6 +4769,10 @@
   .fbs-product-report__period button {
     width: 100%;
     justify-content: center;
+  }
+
+  .fbs-penalties-report__filters {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -8,5 +8,7 @@ import { InventoryService } from './inventory.service';
   imports: [AuthModule, StockModule],
   controllers: [InventoryController],
   providers: [InventoryService],
+  // FIX: administration reuses the inventory-owned resolved-session invariant.
+  exports: [InventoryService],
 })
 export class InventoryModule {}
