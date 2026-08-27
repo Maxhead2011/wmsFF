@@ -3,6 +3,11 @@ import { BillingInvoiceStatus, ClientRequestStatus, Prisma, StockStatus, TsdOper
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
+import {
+  excludeAdminUnpalletedWriteoffMovement,
+  targetClientPlacedBalanceVisibility,
+  UNPALLETED_WRITEOFF_TARGET_CLIENT_ID,
+} from '../administration/administration-unpalleted-writeoff.service';
 import { WarehouseService } from '../warehouse/warehouse.service';
 import { MobileDeviceDto } from './dto/mobile-device.dto';
 import { MobileEventListDto, MobileListDto } from './dto/mobile-list.dto';
@@ -85,6 +90,7 @@ export class MobileService {
         where: {
           clientId: { in: clientIds },
           ...(warehouseId ? { warehouseId } : {}),
+          ...clientVisibleStockWhere(user, clientIds),
           status: { in: [StockStatus.AVAILABLE, StockStatus.PACKING, StockStatus.SHIPPING] },
           quantity: { gt: 0 },
         },
@@ -492,6 +498,7 @@ export class MobileService {
         where: {
           clientId: { in: clientIds },
           ...(warehouseId ? { warehouseId } : {}),
+          ...clientVisibleStockWhere(user, clientIds),
           quantity: { gt: 0 },
           OR: contains
             ? [
@@ -551,6 +558,7 @@ export class MobileService {
             where: {
               quantity: { gt: 0 },
               ...(warehouseId ? { warehouseId } : {}),
+              ...clientVisibleStockWhere(user, clientIds),
             },
             select: {
               quantity: true,
@@ -584,6 +592,11 @@ export class MobileService {
     }
 
     if (module === 'warehouse') {
+      const visibleBoxWhere = clientVisibleBoxWhere(user, clientIds);
+      const boxAndWhere: Prisma.BoxWhereInput[] = [
+        ...(visibleBoxWhere ? [visibleBoxWhere] : []),
+        ...(contains ? [{ OR: [{ code: contains }, { client: { name: contains } }] }] : []),
+      ];
       const rows = await this.prisma.box.findMany({
         where: {
           clientId: { in: clientIds },
@@ -594,7 +607,7 @@ export class MobileService {
               ...(warehouseId ? { warehouseId } : {}),
             },
           },
-          OR: contains ? [{ code: contains }, { client: { name: contains } }] : undefined,
+          AND: boxAndWhere.length ? boxAndWhere : undefined,
         },
         include: {
           client: { select: { name: true } },
@@ -701,6 +714,10 @@ export class MobileService {
         where: {
           clientId: { in: clientIds },
           ...(warehouseId ? { warehouseId } : {}),
+          // FIX: clients never see the internal cleanup ledger; staff retain full diagnostics.
+          ...(isExternalClient(user)
+            ? { AND: [excludeAdminUnpalletedWriteoffMovement()] }
+            : {}),
           OR: contains
             ? [
                 { sourceDocument: contains },
@@ -1294,6 +1311,35 @@ export class MobileService {
 
 function isClientOnly(user: AuthUser) {
   return user.roleCodes.includes('CLIENT') && !user.roleCodes.some((role) => ['ADMIN', 'OWNER', 'MANAGER', 'OPERATOR'].includes(role));
+}
+
+function isExternalClient(user: AuthUser) {
+  return user.roleCodes.includes('CLIENT') && !user.permissionCodes.includes('system:admin');
+}
+
+function clientVisibleStockWhere(
+  user: AuthUser,
+  clientIds: string[],
+): Prisma.StockBalanceWhereInput {
+  if (!isExternalClient(user) || !clientIds.includes(UNPALLETED_WRITEOFF_TARGET_CLIENT_ID)) return {};
+  return { AND: [targetClientPlacedBalanceVisibility()] };
+}
+
+function clientVisibleBoxWhere(
+  user: AuthUser,
+  clientIds: string[],
+): Prisma.BoxWhereInput | undefined {
+  if (!isExternalClient(user) || !clientIds.includes(UNPALLETED_WRITEOFF_TARGET_CLIENT_ID)) return undefined;
+  return {
+    OR: [
+      { clientId: { not: UNPALLETED_WRITEOFF_TARGET_CLIENT_ID } },
+      {
+        clientId: UNPALLETED_WRITEOFF_TARGET_CLIENT_ID,
+        status: { notIn: ['deleted', 'archived'] },
+        storagePlacement: { isNot: null },
+      },
+    ],
+  };
 }
 
 function resolveScopedMobileWarehouseId(user: AuthUser) {

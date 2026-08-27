@@ -8,7 +8,7 @@ import {
   StockStatus,
   VolumeSource,
 } from '@prisma/client';
-import { ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FBS_UNLIMITED_CARGO_PLACE_CAPACITY } from '../src/modules/marketplace-connections/fbs.constants';
 import {
@@ -7345,6 +7345,12 @@ describe('MarketplaceConnectionsService', () => {
       _count: { boxes: 12 },
     };
     const prisma = {
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue({
+          clientId: 'client-1',
+          warehouseId: 'warehouse-1',
+        }),
+      },
       storagePallet: {
         findFirst: vi.fn().mockResolvedValue(pallet),
       },
@@ -7390,11 +7396,419 @@ describe('MarketplaceConnectionsService', () => {
     expect(prisma.storagePallet.findFirst).toHaveBeenCalledWith({
       where: {
         clientId: 'client-1',
+        warehouseId: 'warehouse-1',
         code: { equals: 'PALETSORT 101', mode: Prisma.QueryMode.insensitive },
       },
       select: expect.any(Object),
     });
     expect(formatPallet).toHaveBeenCalledWith(task, pallet, expect.any(Object));
+  });
+
+  // ADDED: Regression for a physical box whose pallet-sort placement is being rebuilt.
+  // TEST: a background refresh cannot recreate a reservation after the box was archived/unplaced.
+  it('does not reserve an archived box from a stale background snapshot', async () => {
+    const operation = vi.fn();
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'box-archived' }]),
+      box: { findFirst: vi.fn().mockResolvedValue(null) },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (db: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+
+    await expect(
+      (service as any).withActivePalletSortBoxLock(
+        {
+          boxId: 'box-archived',
+          clientId: 'client-1',
+          skuId: 'sku-1',
+          requiredQuantity: 1,
+          warehouseId: 'warehouse-1',
+          excludeTaskId: null,
+        },
+        operation,
+      ),
+    ).resolves.toBeNull();
+
+    expect(tx.$queryRaw).toHaveBeenCalledOnce();
+    expect(tx.box.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'box-archived',
+        clientId: 'client-1',
+        warehouseId: 'warehouse-1',
+        status: 'active',
+        storagePlacement: {
+          is: { pallet: { clientId: 'client-1', warehouseId: 'warehouse-1' } },
+        },
+      },
+      select: { id: true },
+    });
+    expect(operation).not.toHaveBeenCalled();
+  });
+
+  // TEST: both background allocation and manager route repair recheck live stock under the shared Box lock.
+  it('rechecks active placement and quantity before persisting an FBS reservation', async () => {
+    const operation = vi.fn().mockResolvedValue({ id: 'saved-task' });
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'box-live' }]),
+      box: { findFirst: vi.fn().mockResolvedValue({ id: 'box-live' }) },
+      stockBalance: { aggregate: vi.fn().mockResolvedValue({ _sum: { quantity: 2 } }) },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (db: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    const reservations = vi.spyOn(service as any, 'fbsTsdReservationRowsBySku')
+      .mockResolvedValue(new Map([['sku-1', []]]));
+
+    await expect(
+      (service as any).withActivePalletSortBoxLock(
+        {
+          boxId: 'box-live',
+          clientId: 'client-1',
+          skuId: 'sku-1',
+          requiredQuantity: 2,
+          warehouseId: 'warehouse-1',
+          excludeTaskId: 'task-current',
+        },
+        operation,
+      ),
+    ).resolves.toEqual({ id: 'saved-task' });
+
+    expect(tx.box.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'box-live',
+        clientId: 'client-1',
+        warehouseId: 'warehouse-1',
+        status: 'active',
+        storagePlacement: {
+          is: { pallet: { clientId: 'client-1', warehouseId: 'warehouse-1' } },
+        },
+      },
+      select: { id: true },
+    });
+    expect(tx.stockBalance.aggregate).toHaveBeenCalledWith({
+      where: {
+        boxId: 'box-live',
+        clientId: 'client-1',
+        skuId: 'sku-1',
+        status: StockStatus.AVAILABLE,
+        quantity: { gt: 0 },
+      },
+      _sum: { quantity: true },
+    });
+    expect(reservations).toHaveBeenCalledWith(
+      {
+        clientId: 'client-1',
+        skuIds: ['sku-1'],
+        excludeTaskId: 'task-current',
+      },
+      tx,
+    );
+    expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.stockBalance.aggregate.mock.invocationCallOrder[0],
+    );
+    expect(tx.stockBalance.aggregate.mock.invocationCallOrder[0]).toBeLessThan(
+      operation.mock.invocationCallOrder[0],
+    );
+  });
+
+  // TEST: a second concurrent reservation sees the first one after waiting for the Box lock.
+  it('does not reserve the same physical unit twice under the shared Box lock', async () => {
+    const operation = vi.fn();
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'box-live' }]),
+      box: { findFirst: vi.fn().mockResolvedValue({ id: 'box-live' }) },
+      stockBalance: { aggregate: vi.fn().mockResolvedValue({ _sum: { quantity: 1 } }) },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (db: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    const reservations = vi.spyOn(service as any, 'fbsTsdReservationRowsBySku')
+      .mockResolvedValue(new Map([['sku-1', [{
+        taskId: 'task-first',
+        boxId: 'box-live',
+        itemCount: 1,
+        releasableBackground: false,
+      }]]]));
+
+    await expect(
+      (service as any).withActivePalletSortBoxLock(
+        {
+          boxId: 'box-live',
+          clientId: 'client-1',
+          skuId: 'sku-1',
+          requiredQuantity: 1,
+          warehouseId: 'warehouse-1',
+          excludeTaskId: 'task-second',
+        },
+        operation,
+      ),
+    ).resolves.toBeNull();
+
+    expect(reservations).toHaveBeenCalledOnce();
+    expect(operation).not.toHaveBeenCalled();
+  });
+
+  // TEST: a serializable conflict caused by waiting for the Box lock is retried with a fresh snapshot.
+  it('retries a pallet-sort reservation once after PostgreSQL serialization conflict', async () => {
+    const operation = vi.fn().mockResolvedValue({ id: 'saved-after-retry' });
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'box-live' }]),
+      box: { findFirst: vi.fn().mockResolvedValue({ id: 'box-live' }) },
+      stockBalance: { aggregate: vi.fn().mockResolvedValue({ _sum: { quantity: 1 } }) },
+    };
+    const serializationError = new Prisma.PrismaClientKnownRequestError(
+      'serialization conflict',
+      { code: 'P2034', clientVersion: 'test' },
+    );
+    const transaction = vi.fn()
+      .mockRejectedValueOnce(serializationError)
+      .mockImplementationOnce(async (callback: (db: typeof tx) => unknown) => callback(tx));
+    const service = new MarketplaceConnectionsService(
+      { $transaction: transaction } as never,
+      {} as never,
+    );
+    vi.spyOn(service as any, 'fbsTsdReservationRowsBySku')
+      .mockResolvedValue(new Map([['sku-1', []]]));
+
+    await expect(
+      (service as any).withActivePalletSortBoxLock(
+        {
+          boxId: 'box-live',
+          clientId: 'client-1',
+          skuId: 'sku-1',
+          requiredQuantity: 1,
+          warehouseId: 'warehouse-1',
+          excludeTaskId: null,
+        },
+        operation,
+      ),
+    ).resolves.toEqual({ id: 'saved-after-retry' });
+
+    expect(transaction).toHaveBeenCalledTimes(2);
+    expect(operation).toHaveBeenCalledOnce();
+  });
+
+  // TEST: fallback may only clear the exact untouched AUTO reservation from its snapshot.
+  it('uses strict CAS when a background box recheck rejects a stale reservation', async () => {
+    const updatedAt = new Date('2026-08-27T11:00:00.000Z');
+    const existing = {
+      id: 'task-background-1',
+      clientId: 'client-1',
+      marketplace: MarketplaceType.WILDBERRIES,
+      connectionId: 'connection-1',
+      orderId: '5355000001',
+      requestId: 'request-1',
+      skuId: 'sku-1',
+      sourceSkuId: null,
+      status: 'RESERVED',
+      itemCount: 1,
+      deviceCode: 'AUTO:FBS:PALLET_SORT',
+      workerUserId: null,
+      workerName: null,
+      reservedBoxId: 'box-old',
+      reservedBoxCode: 'FFL_OLD',
+      reservedAt: new Date('2026-08-27T10:59:00.000Z'),
+      boxId: null,
+      boxCode: null,
+      sourceBarcode: null,
+      barcode: null,
+      kiz: null,
+      completedAt: null,
+      relabelConfirmedAt: null,
+      updatedAt,
+    };
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const prisma = {
+      client: { findUnique: vi.fn().mockResolvedValue({ storesWithoutBoxes: false }) },
+      clientRequestItem: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: 'item-1', requestId: 'request-1', skuId: 'sku-1' },
+        ]),
+      },
+      fbsTsdAssembly: {
+        findMany: vi.fn().mockResolvedValue([existing]),
+        updateMany,
+      },
+      stockBalance: {
+        findMany: vi.fn().mockResolvedValue([{
+          skuId: 'sku-1',
+          boxId: 'box-new',
+          quantity: 1,
+          box: {
+            id: 'box-new',
+            code: 'FFL_NEW',
+            warehouseId: 'warehouse-1',
+            storagePlacement: {
+              pallet: {
+                id: 'pallet-1',
+                code: 'PS-001',
+                warehouseId: 'warehouse-1',
+                status: 'active',
+              },
+            },
+          },
+        }]),
+      },
+      storagePalletBox: { findMany: vi.fn().mockResolvedValue([]) },
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    vi.spyOn(service as any, 'fbsTsdReservationRowsBySku')
+      .mockResolvedValue(new Map([['sku-1', []]]));
+    vi.spyOn(service as any, 'resolveFbsWarehouseFromWildberries')
+      .mockResolvedValue('warehouse-1');
+    vi.spyOn(service as any, 'withActivePalletSortBoxLock').mockResolvedValue(null);
+
+    await (service as any).syncFbsPalletSortReservations('client-1', [
+      fbsOrder({
+        id: '5355000001',
+        request: { id: 'request-1', warehouseId: 'warehouse-1' },
+        warehouseId: 'wb-warehouse-1',
+        officeId: 'wb-office-1',
+      }),
+    ]);
+
+    expect(updateMany).toHaveBeenCalledWith({
+      where: {
+        id: existing.id,
+        status: existing.status,
+        updatedAt,
+        deviceCode: existing.deviceCode,
+        workerUserId: null,
+        reservedBoxId: existing.reservedBoxId,
+        reservedBoxCode: existing.reservedBoxCode,
+        boxId: null,
+        sourceBarcode: null,
+        barcode: null,
+        kiz: null,
+        completedAt: null,
+        relabelConfirmedAt: null,
+      },
+      data: expect.objectContaining({
+        status: 'WAITING_STOCK',
+        reservedBoxId: null,
+        reservedBoxCode: null,
+      }),
+    });
+  });
+
+  // TEST: manager route repair uses the locked recheck and falls back to WAITING_STOCK on a stale box.
+  it('does not attach manager route repair to a box archived during recalculation', async () => {
+    const request = {
+      id: 'request-repair-1',
+      number: 311,
+      clientId: 'client-1',
+      warehouseId: 'warehouse-1',
+      type: ClientRequestType.OUTBOUND,
+      status: ClientRequestStatus.IN_WORK,
+      client: { storesWithoutBoxes: false },
+      fbsOrderLinks: [{
+        marketplace: MarketplaceType.WILDBERRIES,
+        connectionId: 'connection-1',
+        orderId: 'order-1',
+        lastSupplyId: 'supply-1',
+        lastSkuId: 'sku-1',
+        lastItemCount: 1,
+      }],
+      items: [{
+        id: 'item-1',
+        skuId: 'sku-1',
+        barcode: '4600000000012',
+        name: 'Костюм',
+        sku: {
+          id: 'sku-1',
+          internalSku: 'SKU-1',
+          clientSku: null,
+          article: 'ART-1',
+          name: 'Костюм',
+          needsChestnyZnak: false,
+          isUnmarked: false,
+          barcodes: [{ value: '4600000000012' }],
+        },
+      }],
+    };
+    const task = {
+      id: 'task-repair-1',
+      requestId: request.id,
+      connectionId: 'connection-1',
+      orderId: 'order-1',
+      skuId: 'sku-1',
+      sourceSkuId: null,
+      itemCount: 1,
+      status: 'RESERVED',
+      boxId: null,
+      barcode: null,
+      kiz: null,
+      sourceBarcode: null,
+      relabelConfirmedAt: null,
+      updatedAt: new Date('2026-08-27T10:00:00.000Z'),
+    };
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const prisma = {
+      clientRequest: { findUnique: vi.fn().mockResolvedValue(request) },
+      fbsTsdAssembly: {
+        findMany: vi.fn()
+          .mockResolvedValueOnce([task])
+          .mockResolvedValueOnce([task]),
+        updateMany,
+      },
+      stockBalance: {
+        findMany: vi.fn().mockResolvedValue([{
+          skuId: 'sku-1',
+          boxId: 'box-stale',
+          quantity: 1,
+          box: {
+            id: 'box-stale',
+            code: 'FFL_STALE',
+            warehouseId: 'warehouse-1',
+            storagePlacement: { pallet: { code: 'PALLET-1' } },
+          },
+        }]),
+      },
+      clientRequestEvent: { create: vi.fn().mockResolvedValue({}) },
+    };
+    const clientScopes = { requireClientAccess: vi.fn() };
+    const service = new MarketplaceConnectionsService(prisma as never, clientScopes as never);
+    vi.spyOn(service as any, 'getFbsRequestRoute')
+      .mockResolvedValueOnce({ version: 1, boxes: [] })
+      .mockResolvedValueOnce({ version: 1, boxes: [] });
+    vi.spyOn(service as any, 'fbsTsdReservationRows').mockResolvedValue([]);
+    const lock = vi.spyOn(service as any, 'withActivePalletSortBoxLock').mockResolvedValue(null);
+
+    await service.repairFbsRequestSelection(request.id, { id: 'admin-1' } as never);
+
+    expect(lock).toHaveBeenCalledWith(
+      {
+        boxId: 'box-stale',
+        clientId: 'client-1',
+        skuId: 'sku-1',
+        requiredQuantity: 1,
+        warehouseId: 'warehouse-1',
+        excludeTaskId: 'task-repair-1',
+      },
+      expect.any(Function),
+    );
+    expect(updateMany).toHaveBeenLastCalledWith({
+      where: expect.objectContaining({
+        id: 'task-repair-1',
+        status: 'RESERVED',
+        updatedAt: task.updatedAt,
+        boxId: null,
+        sourceBarcode: null,
+        barcode: null,
+        kiz: null,
+        relabelConfirmedAt: null,
+      }),
+      data: expect.objectContaining({
+        status: 'WAITING_STOCK',
+        reservedBoxId: null,
+        reservedBoxCode: null,
+        reservedAt: null,
+      }),
+    });
   });
 
   // ADDED: Regression for a physical box whose pallet-sort placement is being rebuilt.
@@ -7409,6 +7823,8 @@ describe('MarketplaceConnectionsService', () => {
       itemCount: 1,
       relabelRequired: false,
       reservedAt: null,
+      reservedBoxId: null,
+      reservedBoxCode: null,
       boxId: null,
       boxCode: null,
       sourceBarcode: null,
@@ -7419,6 +7835,7 @@ describe('MarketplaceConnectionsService', () => {
       workerName: 'Надежда',
       deviceCode: 'TSD-1',
       errorMessage: null,
+      updatedAt: new Date('2026-08-27T10:00:00.000Z'),
     };
     const accepted = {
       ...task,
@@ -7427,25 +7844,55 @@ describe('MarketplaceConnectionsService', () => {
       boxId: 'box-physical',
       boxCode: 'FFL_LKB2107_55',
     };
-    const prisma = {
-      storagePallet: { findFirst: vi.fn().mockResolvedValue(null) },
-      box: {
-        findFirst: vi.fn().mockResolvedValue({
-          id: 'box-physical',
-          code: 'FFL_LKB2107_55',
-          storagePlacement: null,
+    const tx = {
+      $executeRaw: vi.fn().mockResolvedValue(1),
+      // TEST: the FBS claim and administrative retirement serialize on the same Box row.
+      $queryRaw: vi.fn().mockResolvedValue([{
+        status: 'active',
+        clientId: 'client-1',
+        warehouseId: 'warehouse-1',
+      }]),
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue({
+          clientId: 'client-1',
+          warehouseId: 'warehouse-1',
         }),
       },
       stockBalance: {
         aggregate: vi.fn().mockResolvedValue({ _sum: { quantity: 1 } }),
       },
       fbsTsdAssembly: {
-        update: vi.fn().mockResolvedValue(accepted),
+        findUnique: vi.fn()
+          .mockResolvedValueOnce(task)
+          .mockResolvedValueOnce(accepted),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
+    };
+    const prisma = {
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue({
+          clientId: 'client-1',
+          warehouseId: 'warehouse-1',
+        }),
+      },
+      storagePallet: { findFirst: vi.fn().mockResolvedValue(null) },
+      box: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'box-physical',
+          code: 'FFL_LKB2107_55',
+          warehouseId: 'warehouse-1',
+          storagePlacement: null,
+        }),
+      },
+      stockBalance: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { quantity: 1 } }),
+      },
+      $transaction: vi.fn(async (callback: (db: typeof tx) => unknown) => callback(tx)),
     };
     const service = new MarketplaceConnectionsService(prisma as never, {} as never);
     vi.spyOn(service as any, 'loadOwnedFbsTsdAssembly').mockResolvedValue(task);
     vi.spyOn(service as any, 'fbsTsdReservationRows').mockResolvedValue([]);
+    vi.spyOn(service as any, 'fbsTsdReservationRowsBySku').mockResolvedValue(new Map([['sku-needed', []]]));
     vi.spyOn(service as any, 'formatFbsTsdAssembly').mockImplementation(
       async (updated: unknown, _user: unknown, message: string) => ({ task: updated, message }),
     );
@@ -7478,12 +7925,229 @@ describe('MarketplaceConnectionsService', () => {
       },
       select: expect.any(Object),
     });
-    expect(prisma.fbsTsdAssembly.update).toHaveBeenCalledWith({
-      where: { id: 'task-1' },
-      data: expect.objectContaining({
-        boxId: 'box-physical',
-        boxCode: 'FFL_LKB2107_55',
-      }),
+    expect(tx.$queryRaw).toHaveBeenCalledOnce();
+    expect(tx.fbsTsdAssembly.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'task-1',
+        status: 'IN_PROGRESS',
+        workerUserId: 'user-1',
+        deviceCode: 'TSD-1',
+        updatedAt: task.updatedAt,
+      },
+      data: expect.objectContaining({ boxId: 'box-physical', boxCode: 'FFL_LKB2107_55' }),
+    });
+    expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.fbsTsdAssembly.updateMany.mock.invocationCallOrder[0],
+    );
+  });
+
+  // TEST: a request in branch A must never claim a physical box from branch B.
+  it('rejects a physical FBS box from another request warehouse', async () => {
+    const task = {
+      id: 'task-cross-warehouse',
+      clientId: 'client-1',
+      requestId: 'request-warehouse-a',
+      skuId: 'sku-1',
+      sourceSkuId: null,
+      status: 'IN_PROGRESS',
+      itemCount: 1,
+      relabelRequired: false,
+      boxId: null,
+      boxCode: null,
+      sourceBarcode: null,
+      barcode: null,
+      kiz: null,
+      relabelConfirmedAt: null,
+      workerUserId: 'user-1',
+      workerName: 'Надежда',
+      deviceCode: 'TSD-1',
+      updatedAt: new Date('2026-08-27T12:00:00.000Z'),
+    };
+    const stockAggregate = vi.fn();
+    const transaction = vi.fn();
+    const service = new MarketplaceConnectionsService({
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue({
+          clientId: 'client-1',
+          warehouseId: 'warehouse-a',
+        }),
+      },
+      storagePallet: { findFirst: vi.fn().mockResolvedValue(null) },
+      box: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'box-warehouse-b',
+          code: 'FFL_OTHER_BRANCH',
+          warehouseId: 'warehouse-b',
+          storagePlacement: null,
+        }),
+      },
+      stockBalance: { aggregate: stockAggregate },
+      $transaction: transaction,
+    } as never, {} as never);
+    vi.spyOn(service as any, 'loadOwnedFbsTsdAssembly').mockResolvedValue(task);
+
+    await expect(
+      service.scanFbsTsdBox(
+        task.id,
+        { boxCode: 'FFL_OTHER_BRANCH' },
+        { id: 'user-1', deviceCode: 'TSD-1' } as never,
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(stockAggregate).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  // TEST: a legacy request without warehouseId is scoped by the existing default-Moscow rule.
+  it('rejects a non-Moscow box for a legacy FBS request without warehouseId', async () => {
+    const task = {
+      id: 'task-legacy-warehouse',
+      clientId: 'client-1',
+      requestId: 'request-legacy',
+      status: 'IN_PROGRESS',
+      reservedBoxId: null,
+    };
+    const transaction = vi.fn();
+    const warehouseFindFirst = vi.fn().mockResolvedValue({ id: 'warehouse-moscow' });
+    const service = new MarketplaceConnectionsService({
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue({ clientId: 'client-1', warehouseId: null }),
+      },
+      warehouse: { findFirst: warehouseFindFirst },
+      storagePallet: { findFirst: vi.fn().mockResolvedValue(null) },
+      box: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'box-kazan',
+          code: 'FFL_KAZAN',
+          warehouseId: 'warehouse-kazan',
+          storagePlacement: null,
+        }),
+      },
+      $transaction: transaction,
+    } as never, {} as never);
+    vi.spyOn(service as any, 'loadOwnedFbsTsdAssembly').mockResolvedValue(task);
+
+    await expect(
+      service.scanFbsTsdBox(
+        task.id,
+        { boxCode: 'FFL_KAZAN' },
+        { id: 'user-1', deviceCode: 'TSD-1' } as never,
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(warehouseFindFirst).toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  // TEST: an AUTO task is fail-closed unless its saved reservation fixes the exact branch.
+  it('rejects an AUTO FBS box outside the saved reservation warehouse', async () => {
+    const task = {
+      id: 'task-auto-warehouse',
+      clientId: 'client-1',
+      requestId: 'AUTO:WILDBERRIES:connection-1:order-1',
+      status: 'IN_PROGRESS',
+      reservedBoxId: 'box-route',
+    };
+    const transaction = vi.fn();
+    const service = new MarketplaceConnectionsService({
+      clientRequest: { findUnique: vi.fn().mockResolvedValue(null) },
+      storagePallet: { findFirst: vi.fn().mockResolvedValue(null) },
+      box: {
+        findUnique: vi.fn().mockResolvedValue({
+          clientId: 'client-1',
+          warehouseId: 'warehouse-a',
+          status: 'active',
+        }),
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'box-other',
+          code: 'FFL_OTHER',
+          warehouseId: 'warehouse-b',
+          storagePlacement: null,
+        }),
+      },
+      $transaction: transaction,
+    } as never, {} as never);
+    vi.spyOn(service as any, 'loadOwnedFbsTsdAssembly').mockResolvedValue(task);
+
+    await expect(
+      service.scanFbsTsdBox(
+        task.id,
+        { boxCode: 'FFL_OTHER' },
+        { id: 'user-1', deviceCode: 'TSD-1' } as never,
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  // TEST: losing the physical task CAS must return a stale conflict and perform no claim.
+  it('rejects a physical FBS claim when the lease CAS no longer matches', async () => {
+    const updatedAt = new Date('2026-08-27T12:30:00.000Z');
+    const task = {
+      id: 'task-cas-lost',
+      clientId: 'client-1',
+      requestId: 'request-1',
+      skuId: 'sku-1',
+      sourceSkuId: null,
+      status: 'IN_PROGRESS',
+      itemCount: 1,
+      relabelRequired: false,
+      reservedAt: null,
+      reservedBoxId: null,
+      boxId: null,
+      sourceBarcode: null,
+      barcode: null,
+      kiz: null,
+      relabelConfirmedAt: null,
+      workerUserId: 'user-1',
+      workerName: 'Надежда',
+      deviceCode: 'TSD-1',
+      updatedAt,
+    };
+    const updateMany = vi.fn().mockResolvedValue({ count: 0 });
+    const tx = {
+      $executeRaw: vi.fn().mockResolvedValue(1),
+      $queryRaw: vi.fn().mockResolvedValue([{
+        status: 'active',
+        clientId: 'client-1',
+        warehouseId: 'warehouse-1',
+      }]),
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue({
+          clientId: 'client-1',
+          warehouseId: 'warehouse-1',
+        }),
+      },
+      stockBalance: { aggregate: vi.fn().mockResolvedValue({ _sum: { quantity: 1 } }) },
+      fbsTsdAssembly: {
+        findUnique: vi.fn().mockResolvedValue(task),
+        updateMany,
+      },
+    };
+    const service = new MarketplaceConnectionsService({
+      $transaction: vi.fn(async (callback: (db: typeof tx) => unknown) => callback(tx)),
+    } as never, {} as never);
+    vi.spyOn(service as any, 'fbsTsdReservationRowsBySku')
+      .mockResolvedValue(new Map([['sku-1', []]]));
+
+    await expect(
+      (service as any).claimFbsTsdBoxAtomically(
+        task,
+        { id: 'box-1', code: 'FFL_BOX_1', warehouseId: 'warehouse-1' },
+        'warehouse-1',
+        { id: 'user-1', deviceCode: 'TSD-1' },
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(updateMany).toHaveBeenCalledWith({
+      where: {
+        id: task.id,
+        status: 'IN_PROGRESS',
+        workerUserId: 'user-1',
+        deviceCode: 'TSD-1',
+        updatedAt,
+      },
+      data: expect.objectContaining({ boxId: 'box-1', boxCode: 'FFL_BOX_1' }),
     });
   });
 

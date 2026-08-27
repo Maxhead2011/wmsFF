@@ -36,9 +36,10 @@ import { KizIssuesPanel } from '../kiz/KizIssuesPanel';
 import { AdministrationPhantomStockPanel } from './AdministrationPhantomStock';
 import { AdministrationInternalApis } from './AdministrationInternalApis';
 import { AdministrationTsdWorkloadsPanel } from './AdministrationTsdWorkloads';
+import { AdministrationUnpalletedWriteoff, canUseUnpalletedWriteoff } from './AdministrationUnpalletedWriteoff';
 
 type Props = { session: AuthSession };
-type SectionId = AdministrationTechnicalWorkCategory | 'KIZ' | 'TSD' | 'PHANTOM_STOCK' | 'INTERNAL_APIS';
+type SectionId = AdministrationTechnicalWorkCategory | 'KIZ' | 'TSD' | 'PHANTOM_STOCK' | 'INTERNAL_APIS' | 'UNPALLETED_WRITEOFF';
 type TechnicalAction = AdministrationTechnicalWorkIssue['actions'][number];
 
 type SectionDefinition = {
@@ -52,6 +53,8 @@ const sections: SectionDefinition[] = [
   { id: 'REQUESTS', title: 'Заявки', description: 'Очереди ТСД и ошибки маршрута сборки', icon: ClipboardList },
   { id: 'PALLET_SORTS', title: 'Паллет-сорты', description: 'Короба без паллет-сорта и неверные источники', icon: Container },
   { id: 'BOXES', title: 'Короба', description: 'Пустые, архивные, отсутствующие и занятые короба', icon: Boxes },
+  // FIX: this destructive entry point is additionally filtered by system:admin below.
+  { id: 'UNPALLETED_WRITEOFF', title: 'Списание коробов без паллет-сорта', description: 'Только ИП Лукин Илья Ильич: анализ, списание остатков и архив', icon: Boxes },
   { id: 'KIZ', title: 'КИЗы', description: 'Конфликты кодов, расхождения и подтверждённые исправления', icon: Tags },
   { id: 'MARKETPLACE_STATUS', title: 'Статусы WB', description: 'Не передан статус, возврат товара или решение менеджера', icon: Send },
   { id: 'TSD', title: 'Занятые ТСД', description: 'Зависшие задания и безопасное освобождение устройств', icon: Tablet },
@@ -59,6 +62,13 @@ const sections: SectionDefinition[] = [
   // ADDED: Internal routes are documented separately from external WB/Ozon connections.
   { id: 'INTERNAL_APIS', title: 'Внутренние API', description: 'Состояние, назначение, логика и защищённый перезапуск', icon: ServerCog },
 ];
+
+// FIX: keep the real tile source testable so a client cannot regain the destructive entry point.
+export function visibleTechnicalWorkSections(session: AuthSession) {
+  return sections.filter(
+    (section) => section.id !== 'UNPALLETED_WRITEOFF' || canUseUnpalletedWriteoff(session),
+  );
+}
 
 export function AdministrationTechnicalWork({ session }: Props) {
   const [selected, setSelected] = useState<SectionId | null>(null);
@@ -200,6 +210,7 @@ export function AdministrationTechnicalWork({ session }: Props) {
         {selected === 'TSD' ? <AdministrationTsdWorkloadsPanel session={session} /> : null}
         {selected === 'PHANTOM_STOCK' ? <AdministrationPhantomStockPanel session={session} /> : null}
         {selected === 'INTERNAL_APIS' ? <AdministrationInternalApis session={session} /> : null}
+        {selected === 'UNPALLETED_WRITEOFF' && canUseUnpalletedWriteoff(session) ? <AdministrationUnpalletedWriteoff session={session} /> : null}
         {selected === 'PALLET_SORTS' ? (
           <PalletSortScanRecovery
             session={session}
@@ -245,7 +256,7 @@ export function AdministrationTechnicalWork({ session }: Props) {
       </header>
       {error ? <div className="admin-message admin-message--error"><AlertTriangle size={18} />{error}</div> : null}
       <div className="admin-tech-grid">
-        {sections.map((section) => {
+        {visibleTechnicalWorkSections(session).map((section) => {
           const Icon = section.icon;
           const diagnosis = isDiagnosticSection(section.id) ? diagnoses[section.id] : null;
           const count = diagnosis?.summary.issues ?? (section.id === 'MARKETPLACE_STATUS' ? overview?.statusProblems : undefined);
