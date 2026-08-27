@@ -178,7 +178,11 @@ public interface WmsApi {
     );
 
     @GET("api/v1/inventory/dashboard")
-    Call<TsdInventoryDashboard> inventoryDashboard(@Header("Authorization") String authorization);
+    // FIX: work queue and closed-box archive request different payload scopes.
+    Call<TsdInventoryDashboard> inventoryDashboard(
+        @Header("Authorization") String authorization,
+        @Query("workOnly") boolean workOnly
+    );
 
     @POST("api/v1/inventory/sessions")
     Call<TsdInventorySession> startInventory(
@@ -187,9 +191,11 @@ public interface WmsApi {
     );
 
     @GET("api/v1/inventory/sessions/{id}")
+    // FIX: keep session reloads explicit about whether closed boxes are required.
     Call<TsdInventorySession> getInventory(
         @Header("Authorization") String authorization,
-        @Path("id") String id
+        @Path("id") String id,
+        @Query("workOnly") boolean workOnly
     );
 
     @POST("api/v1/inventory/sessions/{id}/boxes/open")

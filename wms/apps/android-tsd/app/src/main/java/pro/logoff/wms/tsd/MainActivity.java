@@ -1853,7 +1853,8 @@ public class MainActivity extends Activity {
         }
         runBackground(() -> {
             WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
-            Response<TsdInventoryDashboard> response = api.inventoryDashboard(session.authorizationHeader(), true).execute();
+            // FIX: archive needs closed box rows; workOnly=true intentionally removes RESOLVED boxes.
+            Response<TsdInventoryDashboard> response = api.inventoryDashboard(session.authorizationHeader(), false).execute();
             if (!response.isSuccessful() || response.body() == null) {
                 throw new IOException("HTTP " + response.code());
             }
@@ -1881,12 +1882,45 @@ public class MainActivity extends Activity {
 
         if (inventoryArchiveMode) {
             List<TsdInventorySession> archive = completedBoxCheckSessions();
-            if (archive.isEmpty()) {
+            List<TsdInventoryBox> closedBoxes = InventoryClosedBoxHistory.closedBoxes(
+                inventoryDashboard == null ? null : inventoryDashboard.historySessions
+            );
+            if (closedBoxes.isEmpty() && archive.isEmpty()) {
                 root.addView(feedbackView(
                     tr("Завершённых проверок коробов пока нет.", "Tugallangan quti tekshiruvlari hozircha yo‘q."),
                     LIGHT_GRAY
                 ));
-            } else {
+            }
+            if (!closedBoxes.isEmpty()) {
+                // FIX: show each physically closed box even when the mini-inventory
+                // session itself was not finished by the operator.
+                root.addView(label(
+                    tr("Закрытые короба", "Yopilgan qutilar") + ": " + closedBoxes.size()
+                ));
+                for (TsdInventoryBox box : closedBoxes) {
+                    int expected = InventoryClosedBoxHistory.expectedQuantity(box);
+                    int counted = InventoryClosedBoxHistory.countedQuantity(box);
+                    int difference = counted - expected;
+                    String details = safeText(box.clientName) + "\n" +
+                        ("MATCHED".equals(box.status)
+                            ? tr("Совпало с WMS", "WMS bilan mos")
+                            : tr("Остатки актуализированы", "Qoldiqlar yangilangan")) +
+                        " · WMS: " + expected + " · " + tr("Факт", "Amalda") + ": " + counted +
+                        " · " + tr("Разница", "Farq") + ": " + (difference > 0 ? "+" : "") + difference;
+                    if (!safeText(box.completedAt).isEmpty()) {
+                        details += "\n" + tr("Закрыт: ", "Yopilgan: ") + box.completedAt;
+                    }
+                    if (!safeText(box.countedByName).isEmpty()) {
+                        details += " · " + box.countedByName;
+                    }
+                    root.addView(taskRow(
+                        safeText(box.boxCode),
+                        details,
+                        difference == 0 ? BOX_FOUND_GREEN : Color.rgb(254, 215, 170)
+                    ));
+                }
+            }
+            if (!archive.isEmpty()) {
                 root.addView(label(tr("Завершённые проверки", "Tugallangan tekshiruvlar")));
                 for (TsdInventorySession item : archive) {
                     String progress = item.progress == null

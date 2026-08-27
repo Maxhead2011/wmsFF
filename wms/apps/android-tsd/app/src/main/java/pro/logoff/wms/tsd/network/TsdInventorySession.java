@@ -11,6 +11,9 @@ public class TsdInventorySession {
     public String title;
     public String comment;
     public String createdByName;
+    // FIX: fields already returned by the inventory API and shown in the archive.
+    public String completedByName;
+    public String completedAt;
     public List<TsdInventoryBox> boxes = new ArrayList<>();
     public TsdInventoryProgress progress;
 }

@@ -11,5 +11,8 @@ public class TsdInventoryBox {
     public String clientId;
     public String clientName;
     public String status;
+    // FIX: closing metadata for the mini-inventory box list.
+    public String countedByName;
+    public String completedAt;
     public List<TsdInventoryLine> lines = new ArrayList<>();
 }
