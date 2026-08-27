@@ -4712,11 +4712,21 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     }
     if (current) {
-      return this.formatFbsTsdAssembly(
+      const formatted = await this.formatFbsTsdAssembly(
         current,
         user,
         'Продолжите начатый заказ.',
       );
+      // FIX: do not pin a picker to a SCAN_BOX task after its last live box
+      // disappeared from a pallet-sort or was consumed by another task.
+      if (
+        formatted.state !== 'SCAN_BOX' ||
+        formatted.task.recommendedBoxCode ||
+        !(await this.releaseFbsTsdTaskWithoutLiveRoute(current, user))
+      ) {
+        return formatted;
+      }
+      current = null;
     }
 
     const previousBatch = await this.prisma.fbsTsdAssembly.findFirst({
@@ -5076,13 +5086,23 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             } else {
               task = await this.prisma.fbsTsdAssembly.create({ data });
             }
-            return this.formatFbsTsdAssembly(
+            const formatted = await this.formatFbsTsdAssembly(
               task,
               user,
               request.fbsEmergencyAssemblyAt
                 ? `Аварийная локальная сборка: ${fbsMarketplaceDisplayName(order.marketplace)} не изменяется. Следуйте подсказке на экране.`
                 : 'Заказ назначен. Следуйте подсказке на экране.',
             );
+            // FIX: stock in an unpalleted box is not a usable TSD route. Return
+            // the untouched task to the queue and try the next order instead.
+            if (
+              formatted.state === 'SCAN_BOX' &&
+              !formatted.task.recommendedBoxCode &&
+              await this.releaseFbsTsdTaskWithoutLiveRoute(task, user)
+            ) {
+              continue;
+            }
+            return formatted;
           } catch (caught) {
             if (caught instanceof Prisma.PrismaClientKnownRequestError && caught.code === 'P2002') {
               continue;
@@ -7667,22 +7687,25 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         productLabel: [task.productName, task.article].filter(Boolean).join(' · '),
         availableQuantity: available._sum.quantity ?? 0,
       });
-      throw new ConflictException({
-        code: rejection.code,
-        message: rejection.message,
-        route: await this.getFbsRequestRoute(task.requestId, user),
-      });
+      // FIX: Android replaces its current route only on a successful response.
+      // Return the live next box (or the next order) instead of leaving the
+      // employee on the stale route behind an HTTP 409 dialog.
+      return this.refreshFbsTsdRouteAfterRejectedBox(
+        task,
+        user,
+        `${rejection.message} Маршрут обновлён.`,
+      );
     }
 
     const updated = await this.claimFbsTsdBoxAtomically(task, box, user);
     if (!updated) {
       // FIX: The balance changed after the preview check. Return the new live
       // route instead of accepting the same physical unit twice.
-      throw new ConflictException({
-        code: 'FBS_ROUTE_STALE',
-        message: `Товар из короба ${box.code} успела забрать другая заявка. Маршрут обновлён.`,
-        route: await this.getFbsRequestRoute(task.requestId, user),
-      });
+      return this.refreshFbsTsdRouteAfterRejectedBox(
+        task,
+        user,
+        `Товар из короба ${box.code} успела забрать другая заявка. Маршрут обновлён.`,
+      );
     }
     return this.formatFbsTsdAssembly(
       updated,
@@ -13379,6 +13402,63 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       task: null,
       progress: { completedToday, recentStickers },
     };
+  }
+
+  // FIX: release only an untouched lease. Scanned physical facts are never
+  // reset by route refresh, and the optimistic version protects newer scans.
+  private async releaseFbsTsdTaskWithoutLiveRoute(
+    task: FbsTsdAssemblyRecord,
+    user: AuthUser,
+  ) {
+    if (
+      task.status !== 'IN_PROGRESS' ||
+      task.boxId ||
+      task.sourceBarcode ||
+      task.barcode ||
+      task.kiz
+    ) {
+      return false;
+    }
+    const released = await this.prisma.fbsTsdAssembly.updateMany({
+      where: {
+        id: task.id,
+        status: 'IN_PROGRESS',
+        workerUserId: user.id,
+        updatedAt: task.updatedAt,
+        boxId: null,
+        sourceBarcode: null,
+        barcode: null,
+        kiz: null,
+      },
+      data: {
+        status: task.reservedBoxId ? FBS_TSD_RESERVED_STATUS : 'RELEASED',
+        deviceCode: task.reservedBoxId
+          ? FBS_TSD_AUTO_RESERVATION_DEVICE
+          : task.deviceCode,
+        workerUserId: null,
+        workerName: null,
+        errorMessage: 'Задание освобождено: для товара больше нет доступного короба на паллетсорте.',
+      },
+    });
+    return released.count === 1;
+  }
+
+  // FIX: a successful response lets the existing Android client immediately
+  // render the recalculated route; a route-less task is released atomically.
+  private async refreshFbsTsdRouteAfterRejectedBox(
+    task: FbsTsdAssemblyRecord,
+    user: AuthUser,
+    message: string,
+  ) {
+    const refreshed = await this.formatFbsTsdAssembly(task, user, message);
+    if (
+      refreshed.state !== 'SCAN_BOX' ||
+      refreshed.task.recommendedBoxCode ||
+      !(await this.releaseFbsTsdTaskWithoutLiveRoute(task, user))
+    ) {
+      return refreshed;
+    }
+    return this.getNextFbsTsdAssembly(task.deviceCode, user, task.requestId);
   }
 
   private async formatFbsTsdAssembly(task: FbsTsdAssemblyRecord, user: AuthUser, message: string) {
