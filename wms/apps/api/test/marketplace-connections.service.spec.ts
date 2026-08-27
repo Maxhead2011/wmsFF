@@ -570,6 +570,216 @@ describe('MarketplaceConnectionsService', () => {
     expect(maximumActive).toBe(1);
   });
 
+  // TEST: an untouched assignment must not keep the TSD on an order whose
+  // live stock no longer has any box attached to a pallet-sort.
+  it('releases an untouched current FBS task when its live route has no pallet box', async () => {
+    const updatedAt = new Date('2026-08-27T13:34:00.000Z');
+    const currentTask = {
+      id: 'task-request-345',
+      clientId: 'client-1',
+      requestId: 'request-345',
+      orderId: '5535521441',
+      status: 'IN_PROGRESS',
+      deviceCode: 'TSD-INSTALL-345',
+      workerUserId: 'admin-1',
+      workerName: 'Администратор',
+      reservedBoxId: null,
+      boxId: null,
+      sourceBarcode: null,
+      barcode: null,
+      kiz: null,
+      updatedAt,
+    };
+    const prisma = {
+      fbsTsdAssembly: {
+        findFirst: vi.fn()
+          .mockResolvedValueOnce(currentTask)
+          .mockResolvedValueOnce(null),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      clientMarketplaceConnection: { findMany: vi.fn().mockResolvedValue([]) },
+    };
+    const clientScopes = {
+      requireClientAccess: vi.fn(),
+      resolveClientFilter: vi.fn().mockReturnValue('client-1'),
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, clientScopes as never);
+    vi.spyOn(service as any, 'formatFbsTsdAssembly').mockResolvedValue({
+      state: 'SCAN_BOX',
+      message: 'Продолжите начатый заказ.',
+      task: { id: currentTask.id, recommendedBoxCode: null },
+    });
+    vi.spyOn(service as any, 'emptyFbsTsdAssembly').mockResolvedValue({
+      state: 'EMPTY',
+      message: 'Нет доступного маршрута.',
+      task: null,
+    });
+
+    await expect(service.getNextFbsTsdAssembly(
+      'TSD-INSTALL-345',
+      { id: 'admin-1', name: 'Администратор' } as never,
+    )).resolves.toMatchObject({ state: 'EMPTY', task: null });
+    expect(prisma.fbsTsdAssembly.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: currentTask.id,
+        status: 'IN_PROGRESS',
+        workerUserId: 'admin-1',
+        updatedAt,
+        boxId: null,
+        sourceBarcode: null,
+        barcode: null,
+        kiz: null,
+      },
+      data: expect.objectContaining({
+        status: 'RELEASED',
+        workerUserId: null,
+        workerName: null,
+      }),
+    });
+  });
+
+  // TEST: a candidate backed only by an unpalleted box must be skipped before
+  // it can pin the employee to an unusable SCAN_BOX screen.
+  it('skips a newly assigned FBS candidate when formatting finds no live pallet route', async () => {
+    const createdAt = new Date('2026-08-27T13:40:00.000Z');
+    const createdTask = {
+      id: 'task-unpalleted',
+      clientId: 'client-1',
+      requestId: 'request-345',
+      orderId: '5535521441',
+      status: 'IN_PROGRESS',
+      deviceCode: 'TSD-INSTALL-345',
+      workerUserId: 'admin-1',
+      workerName: 'Администратор',
+      reservedBoxId: null,
+      boxId: null,
+      sourceBarcode: null,
+      barcode: null,
+      kiz: null,
+      updatedAt: createdAt,
+    };
+    const fbsTsdAssembly = {
+      findFirst: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(null),
+      findUnique: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue(createdTask),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+    };
+    const prisma = {
+      fbsTsdAssembly,
+      clientMarketplaceConnection: {
+        findMany: vi.fn().mockResolvedValue([{ clientId: 'client-1' }]),
+      },
+      clientRequestItem: { findFirst: vi.fn().mockResolvedValue({ id: 'item-345' }) },
+    };
+    const service = new MarketplaceConnectionsService(
+      prisma as never,
+      {
+        requireClientAccess: vi.fn(),
+        resolveClientFilter: vi.fn().mockReturnValue('client-1'),
+      } as never,
+    );
+    const response = {
+      orders: [fbsOrder({
+        id: '5535521441',
+        request: { id: 'request-345', number: 345, status: ClientRequestStatus.IN_WORK },
+        storageBoxes: [{ code: 'FFL_LKB2506_86', quantity: 4, status: StockStatus.AVAILABLE }],
+      })],
+    };
+    vi.spyOn(service as any, 'loadFbsOrders').mockResolvedValue(response);
+    vi.spyOn(service as any, 'mergeSyncedFbsTsdRequestOrders').mockResolvedValue(response);
+    vi.spyOn(service as any, 'resolveFbsTsdStockSource').mockResolvedValue({
+      sourceSkuId: null,
+      sourceProductName: null,
+      sourceArticle: null,
+      sourceBarcodes: [],
+      storageBoxes: [{ code: 'FFL_LKB2506_86', quantity: 4, status: StockStatus.AVAILABLE }],
+      withoutBoxQuantity: 0,
+      relabelRequired: false,
+    });
+    vi.spyOn(service as any, 'formatFbsTsdAssembly').mockResolvedValue({
+      state: 'SCAN_BOX',
+      task: { id: createdTask.id, recommendedBoxCode: null },
+    });
+    vi.spyOn(service as any, 'emptyFbsTsdAssembly').mockResolvedValue({
+      state: 'EMPTY',
+      message: 'Нет доступного маршрута.',
+      task: null,
+    });
+
+    await expect(service.getNextFbsTsdAssembly(
+      'TSD-INSTALL-345',
+      { id: 'admin-1', name: 'Администратор' } as never,
+    )).resolves.toMatchObject({ state: 'EMPTY', task: null });
+    expect(fbsTsdAssembly.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: createdTask.id, status: 'IN_PROGRESS' }),
+      data: expect.objectContaining({ status: 'RELEASED', workerUserId: null }),
+    }));
+  });
+
+  // TEST: when another picker takes the last free unit, the box scan must
+  // return a refreshed route that Android can render instead of an HTTP 409.
+  it('refreshes the FBS route after a scanned box loses its free stock', async () => {
+    const task = {
+      id: 'task-request-345',
+      clientId: 'client-1',
+      requestId: 'request-345',
+      skuId: 'sku-1',
+      sourceSkuId: null,
+      productName: 'Костюм',
+      article: 'ART-345',
+      itemCount: 1,
+      relabelRequired: false,
+      reservedBoxId: null,
+      reservedBoxCode: 'FFL_LKB2107_128',
+      boxId: null,
+      boxCode: null,
+      sourceBarcode: null,
+      barcode: null,
+      kiz: null,
+      relabelConfirmedAt: null,
+      status: 'IN_PROGRESS',
+    };
+    const prisma = {
+      storagePallet: { findFirst: vi.fn().mockResolvedValue(null) },
+      box: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'box-stale',
+          code: 'FFL_LKB2107_128',
+          storagePlacement: { pallet: { code: 'PALET_SORT_19' } },
+        }),
+      },
+      stockBalance: { aggregate: vi.fn().mockResolvedValue({ _sum: { quantity: 0 } }) },
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    vi.spyOn(service as any, 'loadOwnedFbsTsdAssembly').mockResolvedValue(task);
+    vi.spyOn(service as any, 'assertFbsTsdLeaseVersion').mockResolvedValue(task);
+    vi.spyOn(service as any, 'fbsTsdReservationRows').mockResolvedValue([]);
+    vi.spyOn(service as any, 'releaseUntouchedFbsReservationsForScannedBox').mockResolvedValue(0);
+    vi.spyOn(service as any, 'useRelabelingSourceForCurrentFbsTask').mockResolvedValue(null);
+    vi.spyOn(service as any, 'switchFbsTsdAssemblyToBox').mockResolvedValue(null);
+    vi.spyOn(service as any, 'formatFbsTsdAssembly').mockResolvedValue({
+      state: 'SCAN_BOX',
+      message: 'Маршрут обновлён.',
+      task: {
+        id: task.id,
+        recommendedBoxCode: 'FFL_LKB1807_68',
+        recommendedLocation: { palletCode: 'PALET_SORT_27' },
+      },
+    });
+
+    await expect(service.scanFbsTsdBox(
+      task.id,
+      { boxCode: 'FFL_LKB2107_128' },
+      { id: 'admin-1', name: 'Администратор' } as never,
+    )).resolves.toMatchObject({
+      state: 'SCAN_BOX',
+      task: {
+        recommendedBoxCode: 'FFL_LKB1807_68',
+        recommendedLocation: { palletCode: 'PALET_SORT_27' },
+      },
+    });
+  });
+
   it('rejects a stale KIZ scan before any stock or marketplace side effect', async () => {
     const firstVersion = new Date('2026-08-14T10:00:00.000Z');
     const secondVersion = new Date('2026-08-14T10:00:01.000Z');
