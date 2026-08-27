@@ -39,6 +39,10 @@ import {
   FBS_PRODUCT_REPORT_XLSX_MIME,
   FbsProductShipmentsReportService,
 } from './fbs-product-shipments-report.service';
+import {
+  FBS_PENALTIES_REPORT_XLSX_MIME,
+  FbsPenaltiesReportService,
+} from './fbs-penalties-report.service';
 import { FbsStockMonitoringService } from './fbs-stock-monitoring.service';
 import { MarketplaceConnectionsService } from './marketplace-connections.service';
 
@@ -50,6 +54,8 @@ export class MarketplaceConnectionsController {
     private readonly connections: MarketplaceConnectionsService,
     private readonly logistics: LogisticsService,
     private readonly productShipmentsReport: FbsProductShipmentsReportService,
+    // ADDED: read-only WB Finance report for the 13th FBS tile.
+    private readonly penaltiesReport: FbsPenaltiesReportService,
     private readonly stockMonitoring: FbsStockMonitoringService,
   ) {}
 
@@ -161,6 +167,47 @@ export class MarketplaceConnectionsController {
     response.setHeader(
       'Content-Disposition',
       `attachment; filename="fbs-products.xlsx"; filename*=UTF-8''${encodeURIComponent(file.fileName)}`,
+    );
+    return new StreamableFile(file.buffer);
+  }
+
+  @Get('fbs/penalties-report')
+  @RequirePermissions()
+  penalties(
+    @CurrentUser() user: AuthUser,
+    @Query('clientId') clientId?: string,
+    @Query('connectionId') connectionId?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('search') search?: string,
+  ) {
+    // ADDED: client scope is checked again inside the report service.
+    return this.penaltiesReport.report(
+      { clientId, connectionId, dateFrom, dateTo, search },
+      user,
+    );
+  }
+
+  @Get('fbs/penalties-report.xlsx')
+  @RequirePermissions()
+  async penaltiesXlsx(
+    @CurrentUser() user: AuthUser,
+    @Res({ passthrough: true }) response: Response,
+    @Query('clientId') clientId?: string,
+    @Query('connectionId') connectionId?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('search') search?: string,
+  ) {
+    const file = await this.penaltiesReport.export(
+      { clientId, connectionId, dateFrom, dateTo, search },
+      user,
+    );
+    response.setHeader('Content-Type', FBS_PENALTIES_REPORT_XLSX_MIME);
+    response.setHeader('Content-Length', String(file.buffer.length));
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename="fbs-penalties.xlsx"; filename*=UTF-8''${encodeURIComponent(file.fileName)}`,
     );
     return new StreamableFile(file.buffer);
   }
