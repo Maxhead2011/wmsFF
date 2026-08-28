@@ -51,6 +51,7 @@ import {
   deleteFbsPass,
   deliverFbsSupplies,
   downloadFbsCargoPlaceStickersPdf,
+  downloadFbsCancelledOrdersXlsx,
   downloadFbsDeadlineSelectedOrdersXlsx,
   downloadFbsPenaltiesReport,
   downloadFbsProductShipmentReport,
@@ -124,12 +125,21 @@ type FbsPanelProps = {
   onOpenRequest?: (requestId: string) => void;
 };
 
+const FBS_CANCELLED_REPORT_MAX_ORDERS = 50_000;
+
 // FIX: keep the row interaction independently testable and select the exact order object.
 export function openFbsDeadlineOrderDetails(
   order: FbsOrderSummary,
   selectOrder: (order: FbsOrderSummary) => void,
 ) {
   selectOrder(order);
+}
+
+export function cancelledFbsOrderSelectionItems(orders: FbsOrderSummary[]) {
+  // FIX: export only the already filtered cancelled rows and never trust display values.
+  return orders
+    .filter((order) => order.category === 'cancelled')
+    .map((order) => ({ connectionId: order.connectionId, id: order.id }));
 }
 
 // FIX: navigation must use the internal WMS request UUID, not a visible request number or WB order id.
@@ -1864,6 +1874,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
         ) : activeView === 'active' || activeView === 'shipped' || activeView === 'cancelled' || activeView === 'archive' ? (
           <FbsOrdersView
             data={data}
+            session={session}
             view={activeView}
             search={search}
             selectedOrderKeys={selectedOrderKeys}
@@ -4852,6 +4863,7 @@ function FbsCargoPackingView({
 
 function FbsOrdersView({
   data,
+  session,
   search,
   view,
   selectedOrderKeys,
@@ -4882,6 +4894,7 @@ function FbsOrdersView({
   onCloseSynchronizationAudit,
 }: {
   data: ClientFbsOrders | null;
+  session: AuthSession;
   search: string;
   // FIX: the allocation tile is not an orders-table view.
   view: Exclude<FbsView, 'deadlines' | 'stocks' | 'cargo' | 'cost' | 'calculator' | 'pricing' | 'passes' | 'report' | 'allocation' | 'penalties'>;
@@ -4923,6 +4936,8 @@ function FbsOrdersView({
   const [orderSort, setOrderSort] = useState<FbsOrderSort>('date-oldest');
   const [shippedDateFrom, setShippedDateFrom] = useState('');
   const [shippedDateTo, setShippedDateTo] = useState('');
+  const [cancelledExportBusy, setCancelledExportBusy] = useState(false);
+  const [cancelledExportError, setCancelledExportError] = useState('');
   const [clockNow, setClockNow] = useState(() => Date.now());
   useEffect(() => {
     const interval = window.setInterval(() => setClockNow(Date.now()), 60_000);
@@ -4930,6 +4945,7 @@ function FbsOrdersView({
   }, []);
   useEffect(() => {
     setExpandedGroupKeys(new Set());
+    setCancelledExportError('');
   }, [view]);
   const category = view;
   const orders = (data?.orders ?? [])
@@ -5002,6 +5018,39 @@ function FbsOrdersView({
   const bulkSelectableOrders = visibleOrders;
   const bulkSelectableKeys = bulkSelectableOrders.map(fbsOrderSelectionKey);
   const selectedOrders = visibleOrders.filter((order) => selectedOrderKeys.has(fbsOrderSelectionKey(order)));
+
+  // ADDED: export exactly the rows visible in the existing cancelled-orders report.
+  async function downloadCancelledOrders() {
+    if (view !== 'cancelled' || !data?.client.id || cancelledExportBusy) return;
+    const orders = cancelledFbsOrderSelectionItems(visibleOrders);
+    if (orders.length === 0) return;
+    if (orders.length > FBS_CANCELLED_REPORT_MAX_ORDERS) {
+      setCancelledExportError(
+        `В отчёте ${orders.length} заказов. Уточните поиск или выберите склад, чтобы осталось не более ${FBS_CANCELLED_REPORT_MAX_ORDERS}.`,
+      );
+      return;
+    }
+    setCancelledExportBusy(true);
+    setCancelledExportError('');
+    try {
+      const blob = await downloadFbsCancelledOrdersXlsx(session.accessToken, {
+        clientId: data.client.id,
+        orders,
+      });
+      downloadFbsBlob(
+        blob,
+        `FBS_отменённые_заказы_${orders.length}_${fileDateTime(new Date())}.xlsx`,
+      );
+    } catch (caught) {
+      setCancelledExportError(
+        caught instanceof Error
+          ? caught.message
+          : 'Не удалось сформировать Excel по отменённым заказам.',
+      );
+    } finally {
+      setCancelledExportBusy(false);
+    }
+  }
   const assemblyOrders = selectedOrders.filter(
     (order) =>
       (order.marketplace === 'WILDBERRIES' && order.supplierStatus === 'new') ||
@@ -5351,6 +5400,29 @@ function FbsOrdersView({
           </select>
         </label>
       </div>
+
+      {view === 'cancelled' && visibleOrders.length > 0 ? (
+        <div className="fbs-cancelled-export">
+          <div>
+            <strong>Отчёт по отменённым заказам</strong>
+            <small>В Excel попадут {visibleOrders.length} заказов с учётом текущего поиска и выбранного склада.</small>
+          </div>
+          <button
+            type="button"
+            className="button button-primary"
+            disabled={cancelledExportBusy}
+            onClick={() => void downloadCancelledOrders()}
+          >
+            <Download size={16} aria-hidden="true" />
+            {cancelledExportBusy ? 'Формирую Excel…' : 'Скачать Excel'}
+          </button>
+        </div>
+      ) : null}
+      {view === 'cancelled' && cancelledExportError ? (
+        <div className="fbs-action-message fbs-action-message--error" role="alert">
+          {cancelledExportError}
+        </div>
+      ) : null}
 
       <div className="fbs-order-summary">
         <article>

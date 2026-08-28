@@ -15,6 +15,7 @@ import {
   FbsSupplyReconciliationPreviewDto,
 } from './dto/fbs-supply-reconciliation.dto';
 import { FbsOrderSelectionDto } from './dto/fbs-order-selection.dto';
+import { FbsCancelledOrdersReportDto } from './dto/fbs-cancelled-orders-report.dto';
 import { FbsPassDto } from './dto/fbs-pass.dto';
 import { FbsStockPublicationBulkDto } from './dto/fbs-stock-publication-bulk.dto';
 import { FbsStockPublicationDto } from './dto/fbs-stock-publication.dto';
@@ -44,6 +45,7 @@ import {
   FbsPenaltiesReportService,
 } from './fbs-penalties-report.service';
 import { FBS_DEADLINE_REPORT_XLSX_MIME } from './fbs-deadline-report-xlsx';
+import { FBS_CANCELLED_REPORT_XLSX_MIME } from './fbs-cancelled-report-xlsx';
 import { FbsStockMonitoringService } from './fbs-stock-monitoring.service';
 import { MarketplaceConnectionsService } from './marketplace-connections.service';
 
@@ -657,6 +659,24 @@ export class MarketplaceConnectionsController {
     response.setHeader(
       'Content-Disposition',
       `attachment; filename="fbs-selected-deadlines.xlsx"; filename*=UTF-8''${encodeURIComponent(file.fileName)}`,
+    );
+    return new StreamableFile(file.buffer);
+  }
+
+  // ADDED: protected XLSX download for the existing cancelled-orders report.
+  @Post('fbs/orders/cancelled-report.xlsx')
+  @RequirePermissions('clients:read')
+  async exportFbsCancelledOrders(
+    @Body() dto: FbsCancelledOrdersReportDto,
+    @CurrentUser() user: AuthUser,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const file = await this.connections.exportFbsCancelledOrders(dto, user);
+    response.setHeader('Content-Type', FBS_CANCELLED_REPORT_XLSX_MIME);
+    response.setHeader('Content-Length', String(file.buffer.length));
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename="fbs-cancelled-orders.xlsx"; filename*=UTF-8''${encodeURIComponent(file.fileName)}`,
     );
     return new StreamableFile(file.buffer);
   }

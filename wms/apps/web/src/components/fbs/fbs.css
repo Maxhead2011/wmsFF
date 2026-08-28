@@ -1083,6 +1083,38 @@
   font-weight: 750;
 }
 
+/* FIX: isolated export action for the read-only cancelled-orders report. */
+.fbs-cancelled-export {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid rgba(220, 38, 38, 0.2);
+  border-radius: 14px;
+  background: rgba(254, 242, 242, 0.72);
+}
+
+.fbs-cancelled-export > div {
+  display: grid;
+  gap: 4px;
+}
+
+.fbs-cancelled-export small {
+  color: var(--muted);
+}
+
+.fbs-cancelled-export .button {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 720px) {
+  .fbs-cancelled-export {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 .fbs-order-summary article,
 .fbs-cost-summary article {
   display: grid;

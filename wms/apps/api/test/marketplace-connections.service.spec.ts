@@ -8547,6 +8547,67 @@ describe('MarketplaceConnectionsService', () => {
     }
   });
 
+  it('exports cancelled orders only after checking the current client scope and server snapshot', async () => {
+    const clientScopes = { requireClientAccess: vi.fn() };
+    const service = new MarketplaceConnectionsService({} as never, clientScopes as never);
+    const cancelled = fbsOrder({
+      category: 'cancelled',
+      supplierStatus: 'cancel',
+      wbStatus: 'canceled_by_client',
+      statusLabel: 'Отменён покупателем',
+      deliveryDate: '2026-08-27T12:34:56.000Z',
+    });
+    const resolve = vi.spyOn(service as any, 'resolveSelectedFbsOrders').mockResolvedValue({
+      response: {},
+      orders: [cancelled],
+    });
+    const scopedResponse = { orders: [cancelled] } as never;
+    const list = vi.spyOn(service, 'listFbsOrders').mockResolvedValue(scopedResponse);
+    const user = { id: 'user-1' } as never;
+
+    const result = await service.exportFbsCancelledOrders(
+      {
+        clientId: ' client-1 ',
+        orders: [{ connectionId: 'connection-1', id: '5355000001' }],
+      },
+      user,
+    );
+
+    // TEST: access and fresh resolution happen before the workbook is returned.
+    expect(clientScopes.requireClientAccess).toHaveBeenCalledWith(user, 'client-1', 'read');
+    expect(list).toHaveBeenCalledWith('client-1', user, true);
+    expect(resolve).toHaveBeenCalledWith(
+      'client-1',
+      [{ connectionId: 'connection-1', id: '5355000001' }],
+      scopedResponse,
+    );
+    expect(result.buffer.subarray(0, 2).toString()).toBe('PK');
+    expect(result.fileName).toMatch(/^FBS-cancelled-orders-.*\.xlsx$/);
+  });
+
+  it('rejects an order whose current server status is no longer cancelled', async () => {
+    const service = new MarketplaceConnectionsService(
+      {} as never,
+      { requireClientAccess: vi.fn() } as never,
+    );
+    vi.spyOn(service as any, 'resolveSelectedFbsOrders').mockResolvedValue({
+      response: {},
+      orders: [fbsOrder({ category: 'active' })],
+    });
+    vi.spyOn(service, 'listFbsOrders').mockResolvedValue({ orders: [] } as never);
+
+    // TEST: a stale browser row cannot be exported after its marketplace status changes.
+    await expect(
+      service.exportFbsCancelledOrders(
+        {
+          clientId: 'client-1',
+          orders: [{ connectionId: 'connection-1', id: '5355000001' }],
+        },
+        { id: 'user-1' } as never,
+      ),
+    ).rejects.toThrow(BadRequestException);
+  });
+
 });
 
 function fbsOrder(overrides: Record<string, unknown> = {}) {
