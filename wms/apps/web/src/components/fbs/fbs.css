@@ -4878,6 +4878,15 @@
 
 .fbs-deadline-report__table {
   max-height: 640px;
+  /* FIX: the report owns both axes of scrolling even when the parent workspace clips overflow. */
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.fbs-deadline-report__table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
 }
 
 .fbs-deadline-report__table td {
@@ -4897,6 +4906,32 @@
 .fbs-deadline-report__row.is-critical { background: #fff7f7; }
 .fbs-deadline-report__row.is-warning { background: #fffdf2; }
 .fbs-deadline-report__row.is-normal { background: #f7fff9; }
+
+.fbs-deadline-report__row {
+  cursor: pointer;
+}
+
+.fbs-deadline-report__row:hover,
+.fbs-deadline-report__row:focus-within {
+  outline: 2px solid rgb(37 99 235 / 35%);
+  outline-offset: -2px;
+}
+
+.fbs-deadline-report__order-button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+}
+
+.fbs-deadline-report__order-button:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
 
 .fbs-deadline-report__tone {
   display: inline-flex;
@@ -4930,6 +4965,78 @@
   text-align: center !important;
 }
 
+/* FIX: isolated order-details dialog; no shared FBS modal rules are changed. */
+.fbs-deadline-details {
+  position: fixed;
+  z-index: 90;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  background: rgb(15 23 42 / 48%);
+  padding: 24px;
+}
+
+.fbs-deadline-details__dialog {
+  display: grid;
+  width: min(980px, 100%);
+  max-height: calc(100vh - 48px);
+  gap: 18px;
+  overflow: auto;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgb(15 23 42 / 28%);
+  padding: 22px;
+}
+
+.fbs-deadline-details__dialog > header,
+.fbs-deadline-details__dialog > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.fbs-deadline-details__dialog h3,
+.fbs-deadline-details__dialog p {
+  margin: 0;
+}
+
+.fbs-deadline-details__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.fbs-deadline-details__item {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 11px 12px;
+}
+
+.fbs-deadline-details__item.is-wide {
+  grid-column: 1 / -1;
+}
+
+.fbs-deadline-details__item span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.fbs-deadline-details__item strong {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.fbs-deadline-details__dialog > footer {
+  justify-content: flex-end;
+}
+
 @media (max-width: 1180px) {
   .fbs-deadline-report__filters { grid-template-columns: repeat(3, minmax(150px, 1fr)); }
 }
@@ -4938,6 +5045,11 @@
   .fbs-deadline-report__hero { align-items: stretch; flex-direction: column; }
   .fbs-deadline-report__filters { grid-template-columns: 1fr; }
   .fbs-deadline-report__filters button { width: 100%; justify-content: center; }
+  .fbs-deadline-details { padding: 10px; }
+  .fbs-deadline-details__dialog { max-height: calc(100vh - 20px); padding: 16px; }
+  .fbs-deadline-details__grid { grid-template-columns: 1fr; }
+  .fbs-deadline-details__dialog > footer { align-items: stretch; flex-direction: column-reverse; }
+  .fbs-deadline-details__dialog > footer .button { width: 100%; justify-content: center; }
 }
 
 /* ADDED: Isolated styles for the optional FBS stock allocation tile. */

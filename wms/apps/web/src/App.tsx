@@ -164,6 +164,7 @@ export function App() {
   const [clientNotifications, setClientNotifications] = useState<ClientNotificationSummary[]>([]);
   const [notificationCenterOpen, setNotificationCenterOpen] = useState(false);
   const [modernSidebarCollapsed, setModernSidebarCollapsed] = useState(false);
+  const [focusedRequestId, setFocusedRequestId] = useState<string | null>(null);
   const workspaceContentRef = useRef<HTMLElement | null>(null);
   const modernSearchRef = useRef<HTMLInputElement | null>(null);
   const notificationCenterRef = useRef<HTMLDivElement | null>(null);
@@ -784,6 +785,13 @@ export function App() {
             uiTheme,
             branches,
             kizUnread,
+            focusedRequestId,
+            (requestId) => {
+              // FIX: carry the exact WMS request UUID from the FBS report into the request workspace.
+              setFocusedRequestId(requestId);
+              setActiveWorkspaceId('requests');
+            },
+            () => setFocusedRequestId(null),
           )}
         </section>
 
@@ -881,6 +889,9 @@ function renderWorkspace(
   uiTheme: UiTheme,
   branches: BranchSummary[],
   kizUnread: number,
+  focusedRequestId: string | null,
+  openRequestFromFbs: (requestId: string) => void,
+  clearFocusedRequest: () => void,
 ) {
   switch (activeWorkspaceId) {
     case 'ai':
@@ -924,13 +935,13 @@ function renderWorkspace(
     case 'turnover':
       return <TurnoverPanel session={session} />;
     case 'requests':
-      return <Suspense fallback={<div className="workspace-loading">Загружаю заявки…</div>}><ClientRequestsPanel session={session} onOpenFbsOrders={() => setActiveWorkspaceId('fbs')} /></Suspense>;
+      return <Suspense fallback={<div className="workspace-loading">Загружаю заявки…</div>}><ClientRequestsPanel session={session} onOpenFbsOrders={() => setActiveWorkspaceId('fbs')} focusRequestId={focusedRequestId} onFocusRequestHandled={clearFocusedRequest} /></Suspense>;
     case 'order-assembly':
       return <Suspense fallback={<div className="workspace-loading">Загружаю сборку заказов…</div>}><OrderAssemblyPanel session={session} /></Suspense>;
     case 'contracts':
       return <ContractsPanel session={session} />;
     case 'fbs':
-      return <Suspense fallback={<div className="workspace-loading">Загружаю FBS…</div>}><FbsPanel session={session} /></Suspense>;
+      return <Suspense fallback={<div className="workspace-loading">Загружаю FBS…</div>}><FbsPanel session={session} onOpenRequest={availableWorkspaces.some((item) => item.id === 'requests') ? openRequestFromFbs : undefined} /></Suspense>;
     case 'factory':
       return <Suspense fallback={<div className="workspace-loading">Загружаю фабрику…</div>}><FactoryPanel session={session} /></Suspense>;
     case 'fbs-packed':
