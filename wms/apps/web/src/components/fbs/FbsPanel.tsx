@@ -51,6 +51,7 @@ import {
   deleteFbsPass,
   deliverFbsSupplies,
   downloadFbsCargoPlaceStickersPdf,
+  downloadFbsDeadlineSelectedOrdersXlsx,
   downloadFbsPenaltiesReport,
   downloadFbsProductShipmentReport,
   downloadFbsOrderStickersPdf,
@@ -139,6 +140,36 @@ export function openFbsDeadlineRequest(
   if (!order.request?.id || !onOpenRequest) return false;
   onOpenRequest(order.request.id);
   return true;
+}
+
+export function selectedFbsDeadlineOrderItems(
+  orders: Array<Pick<FbsOrderSummary, 'connectionId' | 'id'>>,
+  selectedKeys: Set<string>,
+) {
+  // FIX: selection is scoped by cabinet + order ID. The same WB number from
+  // another cabinet must never be added accidentally.
+  const selected = new Map<string, { connectionId: string; id: string }>();
+  for (const order of orders) {
+    const key = fbsOrderSelectionKey(order);
+    if (selectedKeys.has(key)) {
+      selected.set(key, { connectionId: order.connectionId, id: order.id });
+    }
+  }
+  return [...selected.values()];
+}
+
+export function updateFbsDeadlineVisibleSelection(
+  current: Set<string>,
+  visibleOrders: Array<Pick<FbsOrderSummary, 'connectionId' | 'id'>>,
+  checked: boolean,
+) {
+  const next = new Set(current);
+  for (const order of visibleOrders) {
+    const key = fbsOrderSelectionKey(order);
+    if (checked) next.add(key);
+    else next.delete(key);
+  }
+  return next;
 }
 
 type FbsMarketplace = 'WILDBERRIES' | 'OZON' | 'YANDEX_MARKET';
@@ -1827,7 +1858,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
             text={`Проверяем подключённые кабинеты ${marketplaceLabel(marketplace)}.`}
           />
         ) : activeView === 'deadlines' ? (
-          <FbsAutoCancelReportView data={data} onOpenRequest={onOpenRequest} />
+          <FbsAutoCancelReportView data={data} session={session} onOpenRequest={onOpenRequest} />
         ) : activeView === 'cost' ? (
           <FbsCostView data={data} />
         ) : activeView === 'active' || activeView === 'shipped' || activeView === 'cancelled' || activeView === 'archive' ? (
@@ -1907,9 +1938,11 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
 
 function FbsAutoCancelReportView({
   data,
+  session,
   onOpenRequest,
 }: {
   data: ClientFbsOrders | null;
+  session: AuthSession;
   onOpenRequest?: (requestId: string) => void;
 }) {
   // ADDED: the report is read-only and derives rows from the same scoped order snapshot as FBS.
@@ -1922,6 +1955,9 @@ function FbsAutoCancelReportView({
   const [stockFilter, setStockFilter] = useState<FbsDeadlineStockFilter>('all');
   const [clockNow, setClockNow] = useState(() => Date.now());
   const [selectedOrder, setSelectedOrder] = useState<FbsOrderSummary | null>(null);
+  const [selectedOrderKeys, setSelectedOrderKeys] = useState<Set<string>>(() => new Set());
+  const [isExportingSelection, setExportingSelection] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   useEffect(() => {
     const interval = window.setInterval(() => setClockNow(Date.now()), 60_000);
@@ -1937,6 +1973,8 @@ function FbsAutoCancelReportView({
     setSupplyId('');
     setStockFilter('all');
     setSelectedOrder(null);
+    setSelectedOrderKeys(new Set());
+    setExportError(null);
   }, [data?.client.id]);
 
   const commonFilters = {
@@ -1964,6 +2002,13 @@ function FbsAutoCancelReportView({
     { normal: 0, warning: 0, critical: 0 },
   );
   const invalidPeriod = Boolean(dateFrom && dateTo && dateFrom > dateTo);
+  const selectedItems = useMemo(
+    () => selectedFbsDeadlineOrderItems(data?.orders ?? [], selectedOrderKeys),
+    [data?.orders, selectedOrderKeys],
+  );
+  const allVisibleSelected = rows.length > 0 && rows.every(
+    (order) => selectedOrderKeys.has(fbsOrderSelectionKey(order)),
+  );
 
   function clearFilters() {
     setToneFilter('critical');
@@ -1973,6 +2018,26 @@ function FbsAutoCancelReportView({
     setRequestNumber('');
     setSupplyId('');
     setStockFilter('all');
+  }
+
+  async function downloadSelectedOrders() {
+    if (!data?.client.id || selectedItems.length === 0 || isExportingSelection) return;
+    setExportError(null);
+    setExportingSelection(true);
+    try {
+      const blob = await downloadFbsDeadlineSelectedOrdersXlsx(session.accessToken, {
+        clientId: data.client.id,
+        orders: selectedItems,
+      });
+      downloadFbsBlob(
+        blob,
+        `FBS_сроки_выбрано_${selectedItems.length}_${fileDateTime(new Date())}.xlsx`,
+      );
+    } catch (caught) {
+      setExportError(caught instanceof Error ? caught.message : 'Не удалось сформировать Excel по выбранным заказам.');
+    } finally {
+      setExportingSelection(false);
+    }
   }
 
   return (
@@ -2047,10 +2112,36 @@ function FbsAutoCancelReportView({
         <p className="fbs-deadline-report__error">Дата начала периода не может быть позже даты окончания.</p>
       ) : null}
 
+      <div className="fbs-deadline-report__selection" role="group" aria-label="Выгрузка выбранных заказов">
+        <label>
+          <input
+            type="checkbox"
+            checked={allVisibleSelected}
+            disabled={rows.length === 0}
+            onChange={(event) => setSelectedOrderKeys((current) =>
+              updateFbsDeadlineVisibleSelection(current, rows, event.target.checked))}
+          />
+          <span>Выбрать все показанные</span>
+        </label>
+        <strong>Выбрано: {selectedItems.length.toLocaleString('ru-RU')}</strong>
+        <button
+          type="button"
+          className="button button-primary"
+          disabled={selectedItems.length === 0 || isExportingSelection}
+          onClick={() => void downloadSelectedOrders()}
+        >
+          <Download size={17} aria-hidden="true" />
+          {isExportingSelection ? 'Формирую Excel…' : 'Скачать выбранные в Excel'}
+        </button>
+      </div>
+
+      {exportError ? <p className="fbs-deadline-report__error">{exportError}</p> : null}
+
       <div className="fbs-table-wrap fbs-deadline-report__table">
         <table className="fbs-table">
           <thead>
             <tr>
+              <th aria-label="Выбор заказа" />
               <th>Критичность</th>
               <th>Заказ WB</th>
               <th>Создан</th>
@@ -2072,6 +2163,18 @@ function FbsAutoCancelReportView({
                   className={`fbs-deadline-report__row is-${tone}`}
                   onClick={() => openFbsDeadlineOrderDetails(order, setSelectedOrder)}
                 >
+                  <td
+                    className="fbs-deadline-report__checkbox"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedOrderKeys.has(fbsOrderSelectionKey(order))}
+                      aria-label={`Выбрать заказ WB ${order.id}`}
+                      onChange={(event) => setSelectedOrderKeys((current) =>
+                        updateFbsDeadlineVisibleSelection(current, [order], event.target.checked))}
+                    />
+                  </td>
                   <td><FbsDeadlineToneBadge tone={tone} /></td>
                   <td>
                     <button
@@ -2122,7 +2225,7 @@ function FbsAutoCancelReportView({
               );
             }) : (
               <tr>
-                <td colSpan={8} className="fbs-deadline-report__empty">
+                <td colSpan={9} className="fbs-deadline-report__empty">
                   {invalidPeriod ? 'Исправьте выбранный период.' : 'Заказов по выбранным фильтрам нет.'}
                 </td>
               </tr>

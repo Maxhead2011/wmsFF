@@ -4,6 +4,8 @@ import type { FbsOrderSummary } from '../../lib/api';
 import {
   openFbsDeadlineOrderDetails,
   openFbsDeadlineRequest,
+  selectedFbsDeadlineOrderItems,
+  updateFbsDeadlineVisibleSelection,
 } from './FbsPanel';
 
 function reportOrder(overrides: Partial<FbsOrderSummary> = {}): FbsOrderSummary {
@@ -63,5 +65,29 @@ describe('FBS auto-cancel report UI', () => {
   // TEST: the request action stays disabled when App does not grant access to the request workspace.
   it('does not navigate when the request workspace callback is unavailable', () => {
     expect(openFbsDeadlineRequest(reportOrder(), undefined)).toBe(false);
+  });
+
+  // TEST: selecting a visible row exports only its composite cabinet + order key.
+  it('builds the Excel payload only from explicitly selected orders', () => {
+    const first = reportOrder({ connectionId: 'cabinet-1' });
+    const sameNumberOtherCabinet = reportOrder({ connectionId: 'cabinet-2' });
+    const selected = updateFbsDeadlineVisibleSelection(new Set(), [first], true);
+
+    expect(selectedFbsDeadlineOrderItems([first, sameNumberOtherCabinet], selected)).toEqual([
+      { connectionId: 'cabinet-1', id: '5508811674' },
+    ]);
+  });
+
+  // TEST: "select all" affects the currently visible rows and keeps an earlier explicit selection.
+  it('selects and clears only the currently visible deadline rows', () => {
+    const hidden = reportOrder({ id: 'hidden', connectionId: 'cabinet-1' });
+    const visible = reportOrder({ id: 'visible', connectionId: 'cabinet-1' });
+    const current = new Set(['cabinet-1:hidden']);
+
+    const selected = updateFbsDeadlineVisibleSelection(current, [visible], true);
+    expect([...selected].sort()).toEqual(['cabinet-1:hidden', 'cabinet-1:visible']);
+
+    const cleared = updateFbsDeadlineVisibleSelection(selected, [visible], false);
+    expect([...cleared]).toEqual(['cabinet-1:hidden']);
   });
 });

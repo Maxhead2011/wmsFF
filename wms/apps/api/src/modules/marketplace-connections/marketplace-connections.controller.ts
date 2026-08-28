@@ -43,6 +43,7 @@ import {
   FBS_PENALTIES_REPORT_XLSX_MIME,
   FbsPenaltiesReportService,
 } from './fbs-penalties-report.service';
+import { FBS_DEADLINE_REPORT_XLSX_MIME } from './fbs-deadline-report-xlsx';
 import { FbsStockMonitoringService } from './fbs-stock-monitoring.service';
 import { MarketplaceConnectionsService } from './marketplace-connections.service';
 
@@ -640,6 +641,23 @@ export class MarketplaceConnectionsController {
     response.setHeader('Content-Type', file.contentType);
     response.setHeader('Content-Length', String(file.buffer.length));
     response.setHeader('Content-Disposition', `attachment; filename="${file.fileName}"`);
+    return new StreamableFile(file.buffer);
+  }
+
+  @Post('fbs/orders/deadline-report.xlsx')
+  @RequirePermissions()
+  async exportFbsDeadlineSelectedOrders(
+    @Body() dto: FbsOrderSelectionDto,
+    @CurrentUser() user: AuthUser,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const file = await this.connections.exportFbsDeadlineSelectedOrders(dto, user);
+    response.setHeader('Content-Type', FBS_DEADLINE_REPORT_XLSX_MIME);
+    response.setHeader('Content-Length', String(file.buffer.length));
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename="fbs-selected-deadlines.xlsx"; filename*=UTF-8''${encodeURIComponent(file.fileName)}`,
+    );
     return new StreamableFile(file.buffer);
   }
 

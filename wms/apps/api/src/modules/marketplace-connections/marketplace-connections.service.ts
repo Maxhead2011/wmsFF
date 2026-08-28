@@ -99,6 +99,7 @@ import {
   runFbsBoxClaimTransaction,
   sameFbsBoxClaimInput,
 } from './fbs-box-claim-retry';
+import { buildFbsDeadlineReportXlsx } from './fbs-deadline-report-xlsx';
 import {
   buildFbsCargoPlaceStickersPdf,
   buildFbsPickListPdf,
@@ -18783,6 +18784,35 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     });
     if (!connection) throw new NotFoundException('Подключение Wildberries не найдено или отключено.');
     return connection;
+  }
+
+  async exportFbsDeadlineSelectedOrders(dto: FbsOrderSelectionDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    this.clientScopes.requireClientAccess(user, clientId, 'read');
+    const { response, orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders);
+    const unavailable = orders.filter(
+      (order) =>
+        order.marketplace !== MarketplaceType.WILDBERRIES ||
+        order.category !== 'active',
+    );
+    if (unavailable.length > 0) {
+      throw new BadRequestException(
+        `В отчёт сроков можно выгрузить только активные заказы Wildberries. Проверьте: ${unavailable
+          .map((order) => order.id)
+          .join(', ')}.`,
+      );
+    }
+
+    // FIX: selected IDs are resolved against the current server snapshot after
+    // access checks, so the generated workbook cannot contain forged browser data.
+    const buffer = buildFbsDeadlineReportXlsx(
+      orders,
+      response.deliveryPlan.requiresCargoPlaces,
+    );
+    return {
+      buffer,
+      fileName: `FBS-selected-deadlines-${fileTimestamp(new Date())}.xlsx`,
+    };
   }
 
   async getFbsOrderStickersPdf(dto: FbsOrderSelectionDto, user: AuthUser) {
