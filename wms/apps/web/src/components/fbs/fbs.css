@@ -4876,6 +4876,41 @@
   white-space: nowrap;
 }
 
+/* FIX: selection controls are isolated from the filters and stay usable on narrow screens. */
+.fbs-deadline-report__selection {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border: 1px solid #dbe5f0;
+  border-radius: 14px;
+  background: #f8fafc;
+  padding: 12px 14px;
+}
+
+.fbs-deadline-report__selection label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.fbs-deadline-report__selection input,
+.fbs-deadline-report__checkbox input {
+  width: 18px;
+  height: 18px;
+  accent-color: #2563eb;
+}
+
+.fbs-deadline-report__selection strong {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.fbs-deadline-report__checkbox {
+  width: 44px;
+  text-align: center;
+}
+
 .fbs-deadline-report__table {
   max-height: 640px;
   /* FIX: the report owns both axes of scrolling even when the parent workspace clips overflow. */
@@ -5045,6 +5080,9 @@
   .fbs-deadline-report__hero { align-items: stretch; flex-direction: column; }
   .fbs-deadline-report__filters { grid-template-columns: 1fr; }
   .fbs-deadline-report__filters button { width: 100%; justify-content: center; }
+  .fbs-deadline-report__selection { align-items: stretch; flex-direction: column; }
+  .fbs-deadline-report__selection strong { margin-left: 0; }
+  .fbs-deadline-report__selection .button { width: 100%; justify-content: center; }
   .fbs-deadline-details { padding: 10px; }
   .fbs-deadline-details__dialog { max-height: calc(100vh - 20px); padding: 16px; }
   .fbs-deadline-details__grid { grid-template-columns: 1fr; }

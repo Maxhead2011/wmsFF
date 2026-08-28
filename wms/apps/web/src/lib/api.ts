@@ -9764,6 +9764,17 @@ export async function downloadFbsOrderStickersPdf(accessToken: string, payload: 
   });
 }
 
+export async function downloadFbsDeadlineSelectedOrdersXlsx(
+  accessToken: string,
+  payload: FbsOrderSelectionPayload,
+) {
+  // FIX: send identifiers only; the API re-reads current order, WMS stock and request data.
+  return requestBlob('/marketplace-connections/fbs/orders/deadline-report.xlsx', accessToken, {
+    method: 'POST',
+    body: sanitizeFbsOrderSelectionPayload(payload),
+  });
+}
+
 export async function fetchKizCirculationOverview(accessToken: string, clientId: string) {
   return request<KizCirculationOverview>(
     withQuery('/kiz-circulation/overview', { clientId }),
