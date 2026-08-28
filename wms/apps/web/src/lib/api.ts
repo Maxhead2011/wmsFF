@@ -5730,6 +5730,25 @@ export async function fetchTsdDevices(accessToken: string) {
   });
 }
 
+export type FbsOnlineRequestRefresh = {
+  requestId: string;
+  requestNumber: number;
+  syncedAt: string;
+  activeOrders: number;
+  readyForAssembly: number;
+  removedOrderIds: string[];
+  conflictOrderIds: string[];
+  message: string;
+};
+
+export async function refreshFbsOnlineRequest(accessToken: string, requestId: string) {
+  // FIX: сервер сначала сверяет WB и перестраивает маршрут, затем UI читает план.
+  return request<FbsOnlineRequestRefresh>(
+    `/marketplace-connections/fbs/requests/${requestId}/online-refresh`,
+    { method: 'POST', accessToken },
+  );
+}
+
 export async function fetchTsdAssemblyPlan(accessToken: string, requestId: string) {
   return request<TsdAssemblyPlan>(`/tsd/requests/${requestId}`, {
     accessToken,

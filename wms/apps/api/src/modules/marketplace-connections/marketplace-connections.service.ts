@@ -3268,6 +3268,96 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
+  async refreshFbsOnlineRequest(requestId: string, user: AuthUser) {
+    const select = {
+      id: true,
+      number: true,
+      clientId: true,
+      type: true,
+      status: true,
+      fbsOrderLinks: {
+        select: {
+          orderId: true,
+          syncStatus: true,
+          lastSupplierStatus: true,
+        },
+      },
+    } satisfies Prisma.ClientRequestSelect;
+    const before = await this.prisma.clientRequest.findUnique({
+      where: { id: requestId },
+      select,
+    });
+    if (!before) throw new NotFoundException('FBS-заявка не найдена.');
+    this.clientScopes.requireClientAccess(user, before.clientId, 'write');
+    if (before.type !== ClientRequestType.OUTBOUND || before.fbsOrderLinks.length === 0) {
+      throw new BadRequestException('Полное обновление доступно только для FBS-заявки.');
+    }
+
+    // FIX: кнопка обновления выполняет реальную сверку с WB, а не повторно
+    // читает устаревший онлайн-план из WMS.
+    const marketplace = await this.refreshFbsOrdersCache(before.clientId, {
+      invalidateHistory: true,
+      historyMode: 'full',
+    });
+    this.fbsTsdRequestFallbackCache.delete(before.clientId);
+
+    const after = await this.prisma.clientRequest.findUnique({
+      where: { id: requestId },
+      select,
+    });
+    if (!after) throw new NotFoundException('FBS-заявка была удалена во время обновления.');
+
+    const previousStatusByOrder = new Map(
+      before.fbsOrderLinks.map((link) => [link.orderId, link.syncStatus]),
+    );
+    const removedOrderIds = after.fbsOrderLinks
+      .filter(
+        (link) =>
+          link.syncStatus === FBS_REQUEST_LINK_REMOVED &&
+          previousStatusByOrder.get(link.orderId) !== FBS_REQUEST_LINK_REMOVED,
+      )
+      .map((link) => link.orderId);
+    const conflictOrderIds = after.fbsOrderLinks
+      .filter((link) => link.syncStatus === FBS_REQUEST_LINK_RETURN_REQUIRED)
+      .map((link) => link.orderId);
+    const activeLinks = after.fbsOrderLinks.filter(
+      (link) => link.syncStatus === FBS_REQUEST_LINK_ACTIVE,
+    );
+    const confirmedActiveLinks = activeLinks.filter(
+      (link) => link.lastSupplierStatus === 'confirm',
+    );
+
+    let route: Awaited<ReturnType<MarketplaceConnectionsService['getFbsRequestRoute']>>;
+    let diff = { addedBoxes: [] as string[], removedBoxes: [] as string[] };
+    if (
+      confirmedActiveLinks.length > 0 &&
+      !FBS_REQUEST_CLOSED_STATUSES.has(after.status)
+    ) {
+      const repaired = await this.repairFbsRequestSelection(requestId, user);
+      route = repaired.route;
+      diff = repaired.diff;
+    } else {
+      route = await this.getFbsRequestRoute(requestId, user);
+    }
+
+    return {
+      requestId: after.id,
+      requestNumber: after.number,
+      syncedAt: marketplace.fetchedAt,
+      activeOrders: activeLinks.length,
+      readyForAssembly: confirmedActiveLinks.length,
+      removedOrderIds,
+      conflictOrderIds,
+      route,
+      diff,
+      message:
+        `Онлайн-заявка №${String(after.number).padStart(6, '0')} полностью сверена с WB: ` +
+        `активных заказов ${activeLinks.length}, готовых к сборке ${confirmedActiveLinks.length}, ` +
+        `удалено отменённых ${removedOrderIds.length}, требуют решения ${conflictOrderIds.length}, ` +
+        `маршрутных коробов ${route.boxes.length}. Заказы и маршрут на экране обновлены.`,
+    };
+  }
+
   /**
    * Releases unstarted FBS tasks in one request and rebuilds their automatic
    * pallet-sort reservations from the live stock balances.  A task that has
@@ -3293,7 +3383,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new BadRequestException('Маршрут доступен только для FBS-заявки.');
     }
     const tasks = await this.prisma.fbsTsdAssembly.findMany({
-      where: { requestId },
+      where: {
+        requestId,
+        // FIX: отменённые задания не возвращаются в маршрут после сверки с WB.
+        status: { not: 'RELEASED' },
+      },
       select: {
         id: true,
         orderId: true,
@@ -3591,6 +3685,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const tasks = await this.prisma.fbsTsdAssembly.findMany({
       where: {
         requestId,
+        OR: request.fbsOrderLinks.map((link) => ({
+          connectionId: link.connectionId,
+          orderId: link.orderId,
+        })),
         status: {
           in: [
             FBS_TSD_RESERVED_STATUS,

@@ -26,6 +26,7 @@ import {
   packageClientRequest,
   pickClientRequest,
   refreshPickInstruction as refreshPickInstructionDocument,
+  refreshFbsOnlineRequest,
   rollbackEmergencyCloseClientRequest,
   saveClientRequestManualBoxSelection,
   shipClientRequest,
@@ -121,6 +122,10 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     message?: string;
     error?: string;
   }>({ orderId: null });
+  const [onlineRefresh, setOnlineRefresh] = useState<{
+    message?: string;
+    error?: string;
+  }>({});
   const [emergencyUpload, setEmergencyUpload] = useState<{
     request: ClientRequestSummary;
     file: File | null;
@@ -507,6 +512,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
   async function openOnlineExecution(request: ClientRequestSummary) {
     setOnlinePreview({ request, plan: null, status: 'loading' });
     setOnlineFbsMove({ orderId: null });
+    setOnlineRefresh({});
     setError(null);
 
     try {
@@ -523,13 +529,20 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
     }
 
     const request = onlinePreview.request;
-    setOnlinePreview((current) => (current ? { ...current, status: current.plan ? 'ready' : 'loading', error: undefined } : current));
+    setOnlineRefresh({});
+    setOnlinePreview((current) => (current ? { ...current, status: 'loading', error: undefined } : current));
 
     try {
+      // FIX: обновление включает сверку WB, удаление отменённых строк и
+      // пересборку маршрута до повторного чтения онлайн-плана.
+      const refreshed = await refreshFbsOnlineRequest(session.accessToken, request.id);
       const plan = await fetchTsdAssemblyPlan(session.accessToken, request.id);
       setOnlinePreview({ request, plan, status: 'ready' });
+      setOnlineRefresh({ message: refreshed.message });
+      await loadData();
     } catch (caught) {
       setOnlinePreview({ request, plan: onlinePreview.plan, status: 'error', error: errorMessage(caught) });
+      setOnlineRefresh({ error: errorMessage(caught) });
     }
   }
 
@@ -974,6 +987,8 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           movingOrderId={onlineFbsMove.orderId}
           moveMessage={onlineFbsMove.message}
           moveError={onlineFbsMove.error}
+          refreshMessage={onlineRefresh.message}
+          refreshError={onlineRefresh.error}
           onMoveOrder={
             canWrite
               ? (order) => void moveOnlineFbsOrder(onlinePreview.request, order)
@@ -987,6 +1002,7 @@ export function ClientRequestsPanel({ session }: ClientRequestsPanelProps) {
           onClose={() => {
             setOnlinePreview(null);
             setOnlineFbsMove({ orderId: null });
+            setOnlineRefresh({});
           }}
           onRefresh={() => void refreshOnlineExecution()}
           onDownloadBoxes={() => void downloadOnlineOutgoingBoxes(onlinePreview.request)}
@@ -1774,6 +1790,8 @@ type OnlineExecutionModalProps = {
   movingOrderId: string | null;
   moveMessage?: string;
   moveError?: string;
+  refreshMessage?: string;
+  refreshError?: string;
   onMoveOrder?: (order: { id: string; connectionId: string }) => void;
   onMoveOrders?: (orders: Array<{ id: string; connectionId: string }>) => void;
   onClose: () => void;
@@ -1791,6 +1809,8 @@ function OnlineExecutionModal({
   movingOrderId,
   moveMessage,
   moveError,
+  refreshMessage,
+  refreshError,
   onMoveOrder,
   onMoveOrders,
   onClose,
@@ -1909,8 +1929,16 @@ function OnlineExecutionModal({
               <FileDown size={16} aria-hidden="true" />
               Состав Excel
             </button>
-            <button className="icon-button" type="button" onClick={onRefresh} title="Обновить онлайн-данные" disabled={status === 'loading'}>
-              <RefreshCw size={18} aria-hidden="true" />
+            <button
+              className="client-request-action-button"
+              type="button"
+              onClick={onRefresh}
+              title="Сверить заказы с WB, убрать отменённые и перестроить маршруты"
+              disabled={status === 'loading'}
+              aria-busy={status === 'loading'}
+            >
+              <RefreshCw size={16} aria-hidden="true" />
+              {status === 'loading' ? 'Обновляю всё…' : 'Обновить всё'}
             </button>
             <button className="icon-button" type="button" onClick={onClose} title="Закрыть">
               <X size={18} aria-hidden="true" />
@@ -1922,6 +1950,8 @@ function OnlineExecutionModal({
         {status === 'error' ? <p className="form-error">{error ?? 'Не удалось получить онлайн-выполнение.'}</p> : null}
         {moveMessage ? <p className="online-execution-action-message">{moveMessage}</p> : null}
         {moveError ? <p className="form-error online-execution-action-error">{moveError}</p> : null}
+        {refreshMessage ? <p className="online-execution-action-message">{refreshMessage}</p> : null}
+        {refreshError ? <p className="form-error online-execution-action-error">{refreshError}</p> : null}
 
         {plan ? (
           <div className="online-execution-modal__body">

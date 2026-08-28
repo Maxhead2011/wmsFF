@@ -7499,6 +7499,99 @@ describe('MarketplaceConnectionsService', () => {
     );
   });
 
+  it('refreshes an online FBS request from WB and rebuilds only its current route', async () => {
+    // TEST: одно действие менеджера запускает сверку WB, показывает удалённые
+    // заказы и конфликты, затем перестраивает актуальный маршрут.
+    const before = {
+      id: 'request-1', number: 31, clientId: 'client-1',
+      type: ClientRequestType.OUTBOUND, status: ClientRequestStatus.IN_WORK,
+      fbsOrderLinks: [
+        { orderId: '5355000001', syncStatus: 'ACTIVE', lastSupplierStatus: 'confirm' },
+        { orderId: '5355000002', syncStatus: 'ACTIVE', lastSupplierStatus: 'confirm' },
+        { orderId: '5355000003', syncStatus: 'ACTIVE', lastSupplierStatus: 'confirm' },
+      ],
+    };
+    const after = {
+      ...before,
+      fbsOrderLinks: [
+        { orderId: '5355000001', syncStatus: 'ACTIVE', lastSupplierStatus: 'confirm' },
+        { orderId: '5355000002', syncStatus: 'REMOVED', lastSupplierStatus: 'cancel' },
+        { orderId: '5355000003', syncStatus: 'RETURN_REQUIRED', lastSupplierStatus: 'cancel' },
+      ],
+    };
+    const prisma: any = {
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValueOnce(before).mockResolvedValueOnce(after),
+      },
+    };
+    const scopes = { requireClientAccess: vi.fn() };
+    const service = new MarketplaceConnectionsService(prisma as never, scopes as never);
+    const refreshSpy = vi
+      .spyOn(service as any, 'refreshFbsOrdersCache')
+      .mockResolvedValue({ fetchedAt: '2026-08-28T12:00:00.000Z', orders: [] });
+    const route = {
+      requestId: 'request-1', requestNumber: 31, version: 'route-v2',
+      boxes: ['FFL_TEST_001'], pallets: [], items: [],
+      summary: { total: 1, gathered: 0, routed: 1, unavailable: 0 },
+    };
+    vi.spyOn(service, 'repairFbsRequestSelection').mockResolvedValue({
+      requestId: 'request-1', requestNumber: 31, restoredTasks: 0,
+      repairedTasks: 1, reservedTasks: 1, waitingStockTasks: 0,
+      preservedStartedTasks: 0, route,
+      diff: { addedBoxes: ['FFL_TEST_001'], removedBoxes: ['FFL_OLD_001'] },
+      message: 'Маршрут обновлён.', sync: null,
+    } as never);
+
+    const result = await service.refreshFbsOnlineRequest(
+      'request-1',
+      { id: 'admin-1', name: 'Администратор' } as never,
+    );
+
+    expect(refreshSpy).toHaveBeenCalledWith('client-1', {
+      invalidateHistory: true,
+      historyMode: 'full',
+    });
+    expect(service.repairFbsRequestSelection).toHaveBeenCalledWith(
+      'request-1',
+      expect.objectContaining({ id: 'admin-1' }),
+    );
+    expect(result).toMatchObject({
+      requestId: 'request-1', requestNumber: 31,
+      removedOrderIds: ['5355000002'], conflictOrderIds: ['5355000003'],
+      activeOrders: 1, route,
+    });
+  });
+
+  it('does not return released orders into a rebuilt FBS route', async () => {
+    // TEST: отменённый заказ после сверки с WB исчезает из маршрута и не
+    // получает новый резерв паллет-сорта.
+    const prisma: any = {
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'request-1', number: 31, title: 'FBS — 1 заказ',
+          clientId: 'client-1', type: ClientRequestType.OUTBOUND,
+          updatedAt: new Date('2026-08-28T12:00:00.000Z'),
+          _count: { fbsOrderLinks: 2 },
+        }),
+      },
+      fbsTsdAssembly: { findMany: vi.fn().mockResolvedValue([]) },
+    };
+    const scopes = { requireClientAccess: vi.fn() };
+    const service = new MarketplaceConnectionsService(prisma as never, scopes as never);
+    vi.spyOn(service as any, 'fbsTsdReservationRowsBySku').mockResolvedValue(new Map());
+
+    await service.getFbsRequestRoute(
+      'request-1',
+      { id: 'admin-1', name: 'Администратор' } as never,
+    );
+
+    expect(prisma.fbsTsdAssembly.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { requestId: 'request-1', status: { not: 'RELEASED' } },
+      }),
+    );
+  });
+
   it('removes an unstarted cancelled FBS order from the linked WMS request and cancels an empty request', async () => {
     const link = fbsRequestLink({
       orderId: '5355000001',

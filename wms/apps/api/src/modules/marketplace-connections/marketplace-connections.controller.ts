@@ -116,6 +116,16 @@ export class MarketplaceConnectionsController {
     return this.connections.createFbsRequest(dto, user);
   }
 
+  @Post('fbs/requests/:requestId/online-refresh')
+  @RequirePermissions('stock:write')
+  refreshFbsOnlineRequest(
+    @Param('requestId') requestId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    // FIX: единое действие сверяет WB и перестраивает маршрут заявки.
+    return this.connections.refreshFbsOnlineRequest(requestId, user);
+  }
+
   @Post('fbs/orders/stickers.pdf')
   @RequirePermissions()
   async getFbsOrderStickersPdf(
