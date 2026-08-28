@@ -10210,6 +10210,13 @@ export async function createStorageZone(
   });
 }
 
+export async function deleteStorageZone(accessToken: string, id: string) {
+  return request<{ id: string; code: string; name: string; deleted: true }>(
+    `/warehouse/storage-locations/zones/${id}`,
+    { method: 'DELETE', accessToken },
+  );
+}
+
 export async function createStoragePallet(
   accessToken: string,
   payload: { warehouseId: string; clientId: string; code: string; zoneId?: string },

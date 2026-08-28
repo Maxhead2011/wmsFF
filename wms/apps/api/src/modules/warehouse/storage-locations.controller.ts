@@ -38,6 +38,12 @@ export class StorageLocationsController {
     return this.storage.createZone(body, user);
   }
 
+  @Delete('zones/:id')
+  @RequirePermissions('warehouse:write')
+  deleteZone(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.storage.deleteZone(id, user);
+  }
+
   @Post('pallets')
   @RequirePermissions('warehouse:write')
   createPallet(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {

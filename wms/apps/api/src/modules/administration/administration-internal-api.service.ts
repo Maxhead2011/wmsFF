@@ -293,7 +293,8 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'warehouse',
     name: 'Склад и размещение',
     prefixes: ['/warehouse', '/warehouse/storage-locations'],
-    routeCount: 39,
+    // FIX: account for DELETE /warehouse/storage-locations/zones/:id.
+    routeCount: 40,
     description: 'Короба, паллет-сорты, зоны, ячейки и физическое размещение товара.',
     logic: ['Создаёт и изменяет складские места.', 'Размещает и перемещает короба.', 'Показывает содержимое и актуальную иерархию хранения.'],
     dependencies: ['Основная БД', 'Складские движения'],
