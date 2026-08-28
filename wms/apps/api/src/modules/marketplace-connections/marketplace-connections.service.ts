@@ -12788,7 +12788,26 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       (total, movement) => total + movement.quantity,
       0,
     );
-    if (activeReservedQuantity >= quantity) return;
+    const syncProductMarkToPacking = async () => {
+      if (!task.kiz) return;
+      // FIX: the exact scanned KIZ follows the balance from AVAILABLE to PACKING.
+      await tx.productMark.updateMany({
+        where: {
+          clientId: task.clientId,
+          skuId: task.skuId,
+          value: task.kiz,
+          status: StockStatus.AVAILABLE,
+        },
+        data: {
+          status: StockStatus.PACKING,
+          boxId: task.boxId,
+        },
+      });
+    };
+    if (activeReservedQuantity >= quantity) {
+      await syncProductMarkToPacking();
+      return;
+    }
 
     // ADDED: an undo/re-scan may reserve the same task again without reusing
     // StockMovement idempotency keys from the previous physical item.
@@ -12919,6 +12938,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         },
       });
     }
+    await syncProductMarkToPacking();
   }
 
   private async reserveAcceptedWildberriesStock(task: FbsTsdAssemblyRecord) {
@@ -13069,6 +13089,21 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         comment: `Товар заказа WB ${task.orderId} возвращён в доступный остаток.`,
       },
     });
+    if (task.kiz) {
+      // FIX: reservation rollback restores the same KIZ together with AVAILABLE.
+      await tx.productMark.updateMany({
+        where: {
+          clientId: task.clientId,
+          skuId: task.skuId,
+          value: task.kiz,
+          status: StockStatus.PACKING,
+        },
+        data: {
+          status: StockStatus.AVAILABLE,
+          boxId,
+        },
+      });
+    }
   }
 
   async undoFbsTsdKiz(taskId: string, user: AuthUser) {
