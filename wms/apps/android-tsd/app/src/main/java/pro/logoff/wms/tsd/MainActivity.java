@@ -4132,9 +4132,21 @@ public class MainActivity extends Activity {
             Color.rgb(254, 240, 138)
         ));
         root.addView(fbsOrderStickerWarehouseBanner(task));
+        String contentType = nonEmpty(task.orderSticker.contentType, "application/pdf");
+        // FIX: never call the native PDF renderer for an Ozon label on ATOL hardware.
+        if (!OzonLabelSafety.canRenderOnTsd(contentType)) {
+            root.addView(feedbackView(
+                tr(
+                    "Этикетка Ozon готовится в безопасном формате. Нажмите «Обновить» через несколько секунд.",
+                    "Ozon stikeri xavfsiz formatda tayyorlanmoqda. Bir necha soniyadan keyin «Yangilash»ni bosing."
+                ),
+                BOX_NOT_NEEDED_RED
+            ));
+            return false;
+        }
         ImageView stickerView = fbsOrderStickerView(
             task.orderSticker.imageBase64,
-            nonEmpty(task.orderSticker.contentType, "application/pdf")
+            contentType
         );
         if (stickerView != null) {
             root.addView(stickerView);

@@ -9,6 +9,7 @@ import {
   VolumeSource,
 } from '@prisma/client';
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { PDFDocument } from 'pdf-lib';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FBS_UNLIMITED_CARGO_PLACE_CAPACITY } from '../src/modules/marketplace-connections/fbs.constants';
 import {
@@ -762,7 +763,8 @@ describe('MarketplaceConnectionsService', () => {
     });
   });
 
-  it('loads and persists the Ozon PDF label for a submitted TSD order', async () => {
+  // TEST: Ozon PDF must be rasterized on the API so an old ATOL never opens PdfRenderer.
+  it('loads the Ozon PDF label and persists a TSD-safe PNG', async () => {
     const prisma = {
       clientMarketplaceConnection: {
         findFirst: vi.fn().mockResolvedValue({ sellerId: '123456', apiKey: 'ozon-api-key' }),
@@ -771,7 +773,9 @@ describe('MarketplaceConnectionsService', () => {
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
     };
-    const pdf = Buffer.from('%PDF-1.4 Ozon label');
+    const pdfDocument = await PDFDocument.create();
+    pdfDocument.addPage([164.25, 113.25]);
+    const pdf = Buffer.from(await pdfDocument.save());
     const fetchMock = vi.fn(async () => new Response(pdf, {
       status: 200,
       headers: { 'Content-Type': 'application/pdf' },
@@ -793,9 +797,12 @@ describe('MarketplaceConnectionsService', () => {
     expect(result).toEqual(expect.objectContaining({
       marketplace: MarketplaceType.OZON,
       barcode: '59639100-0681-1',
-      contentType: 'application/pdf',
-      imageBase64: pdf.toString('base64'),
+      contentType: 'image/png',
+      imageBase64: expect.any(String),
     }));
+    expect(Buffer.from(result.imageBase64, 'base64').subarray(0, 8)).toEqual(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
     expect(fetchMock).toHaveBeenCalledWith(
       'https://api-seller.ozon.ru/v2/posting/fbs/package-label',
       expect.objectContaining({
@@ -806,10 +813,34 @@ describe('MarketplaceConnectionsService', () => {
     expect(prisma.fbsTsdAssembly.updateMany).toHaveBeenCalledWith({
       where: { id: 'task-ozon' },
       data: expect.objectContaining({
-        marketplaceLabelBase64: pdf.toString('base64'),
-        marketplaceLabelContentType: 'application/pdf',
+        marketplaceLabelBase64: expect.any(String),
+        marketplaceLabelContentType: 'image/png',
         stickerBarcode: '59639100-0681-1',
       }),
+    });
+  });
+
+  // TEST: an already stored PDF from an affected order is migrated before it reaches the TSD.
+  it('converts an existing stored Ozon PDF label to PNG', async () => {
+    const pdfDocument = await PDFDocument.create();
+    pdfDocument.addPage([164.25, 113.25]);
+    const pdf = Buffer.from(await pdfDocument.save());
+    const prisma = {
+      fbsTsdAssembly: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+
+    const result = await (service as any).loadOzonFbsTsdOrderSticker({
+      id: 'task-existing-ozon-pdf',
+      orderId: '0126929054-0054-1',
+      marketplaceLabelBase64: pdf.toString('base64'),
+      marketplaceLabelContentType: 'application/pdf',
+    });
+
+    expect(result.contentType).toBe('image/png');
+    expect(prisma.fbsTsdAssembly.updateMany).toHaveBeenCalledWith({
+      where: { id: 'task-existing-ozon-pdf' },
+      data: expect.objectContaining({ marketplaceLabelContentType: 'image/png' }),
     });
   });
 
