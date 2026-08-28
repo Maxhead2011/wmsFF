@@ -7091,6 +7091,113 @@ describe('MarketplaceConnectionsService', () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
+  // TEST: A marketplace status delay must not be reported as a WMS stock failure.
+  it('explains that a selected FBS request is waiting for marketplace readiness', async () => {
+    const request = {
+      id: 'request-421',
+      clientId: 'client-1',
+      number: 421,
+      status: ClientRequestStatus.IN_WORK,
+      fbsEmergencyAssemblyAt: null,
+    };
+    const order = fbsOrder({
+      supplierStatus: 'new',
+      request,
+    });
+    const prisma = {
+      fbsTsdAssembly: {
+        findFirst: vi.fn().mockResolvedValue(null),
+      },
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue(request),
+      },
+      clientMarketplaceConnection: {
+        findMany: vi.fn().mockResolvedValue([{ clientId: 'client-1' }]),
+      },
+    };
+    const service = new MarketplaceConnectionsService(
+      prisma as never,
+      { requireClientAccess: vi.fn() } as never,
+    );
+    const response = {
+      orders: [order],
+      counts: { active: 1, shipped: 0, cancelled: 0, archive: 0, all: 1 },
+    };
+    vi.spyOn(service as any, 'loadFbsTsdRequestOrders').mockResolvedValue(response);
+    vi.spyOn(service as any, 'mergeSyncedFbsTsdRequestOrders').mockResolvedValue(response);
+    vi.spyOn(service as any, 'emptyFbsTsdAssembly').mockImplementation(
+      async (_deviceCode: string, _user: unknown, message: string) => ({
+        state: 'EMPTY',
+        message,
+        task: null,
+      }),
+    );
+
+    await expect(
+      service.getNextFbsTsdAssembly(
+        'TSD-1',
+        { id: 'worker-1', name: 'Сборщик' } as never,
+        request.id,
+      ),
+    ).resolves.toMatchObject({
+      state: 'EMPTY',
+      message: expect.stringContaining('нет заказов, которые WB или Ozon разрешил собирать'),
+    });
+  });
+
+  // TEST: A real shortage remains explicit and is never masked as a generic empty queue.
+  it('reports a confirmed WMS shortage for an eligible FBS order', async () => {
+    const request = {
+      id: 'request-421',
+      clientId: 'client-1',
+      number: 421,
+      status: ClientRequestStatus.IN_WORK,
+      fbsEmergencyAssemblyAt: null,
+    };
+    const order = fbsOrder({ request });
+    const prisma = {
+      fbsTsdAssembly: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue(request),
+      },
+      clientMarketplaceConnection: {
+        findMany: vi.fn().mockResolvedValue([{ clientId: 'client-1' }]),
+      },
+    };
+    const service = new MarketplaceConnectionsService(
+      prisma as never,
+      { requireClientAccess: vi.fn() } as never,
+    );
+    const response = {
+      orders: [order],
+      counts: { active: 1, shipped: 0, cancelled: 0, archive: 0, all: 1 },
+    };
+    vi.spyOn(service as any, 'loadFbsTsdRequestOrders').mockResolvedValue(response);
+    vi.spyOn(service as any, 'mergeSyncedFbsTsdRequestOrders').mockResolvedValue(response);
+    vi.spyOn(service as any, 'resolveFbsTsdStockSource').mockResolvedValue(null);
+    vi.spyOn(service as any, 'emptyFbsTsdAssembly').mockImplementation(
+      async (_deviceCode: string, _user: unknown, message: string) => ({
+        state: 'EMPTY',
+        message,
+        task: null,
+      }),
+    );
+
+    await expect(
+      service.getNextFbsTsdAssembly(
+        'TSD-1',
+        { id: 'worker-1', name: 'Сборщик' } as never,
+        request.id,
+      ),
+    ).resolves.toMatchObject({
+      state: 'EMPTY',
+      message: expect.stringContaining('действительно нет свободного остатка WMS'),
+    });
+  });
+
   it('shows a shipped request in the TSD picker when emergency assembly is enabled', async () => {
     const prisma = {
       fbsTsdAssembly: {

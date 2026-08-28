@@ -5074,6 +5074,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const clientIds = uniqueStrings(connections.map((connection) => connection.clientId));
     let lastMarketplaceError = '';
     let blockedBatchOrder: { orderId: string; workerName: string } | null = null;
+    // FIX: Preserve the real reason why a selected request has no assignable task.
+    // The previous generic message mixed marketplace status, WMS shortage and already handled orders.
+    let marketplaceEligibleOrders = 0;
+    let unavailableStockOrders = 0;
+    let missingWmsRequestItems = 0;
+    let alreadyHandledOrders = 0;
 
     for (const clientId of clientIds) {
       try {
@@ -5132,6 +5138,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               !['DONE', 'CANCELLED', 'REJECTED'].includes(order.request?.status ?? ''),
           )
           .sort((left, right) => (left.createdAt ?? '').localeCompare(right.createdAt ?? ''));
+        marketplaceEligibleOrders += candidates.length;
         const sameBatchCandidates = !selectedRequestId && previousBatch
           ? candidates.filter((order) =>
               previousBatch.supplyId
@@ -5195,6 +5202,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             !stockSource ||
             !fbsTsdStockSourceHasAvailableStock(stockSource)
           ) {
+            unavailableStockOrders += 1;
             continue;
           }
           const sourceWithoutBox = stockSource.withoutBoxQuantity > 0;
@@ -5219,6 +5227,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               stockSource.withoutBoxQuantity - reservedQuantity <
               Math.max(1, order.itemCount)
             ) {
+              unavailableStockOrders += 1;
               continue;
             }
           }
@@ -5226,9 +5235,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             where: { requestId: request.id, skuId: product.id },
             select: { id: true },
           });
-          if (!requestItem) continue;
+          if (!requestItem) {
+            missingWmsRequestItems += 1;
+            continue;
+          }
 
-          if (existing?.status === 'COMPLETED' || existing?.status === FBS_TSD_RETURN_REQUIRED) continue;
+          if (existing?.status === 'COMPLETED' || existing?.status === FBS_TSD_RETURN_REQUIRED) {
+            alreadyHandledOrders += 1;
+            continue;
+          }
           if (existing?.status === 'IN_PROGRESS') {
             const staleUnstarted =
               !existing.boxId &&
@@ -5406,9 +5421,40 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         : blockedBatchOrder
           ? `В текущей поставке остался заказ ${blockedBatchOrder.orderId}, но он закреплён за сотрудником ${blockedBatchOrder.workerName}. Продолжите его на том ТСД или отложите там задание.`
           : selectedRequest
-            ? `По FBS-заявке №${String(selectedRequest.number).padStart(6, '0')} пока нет готовых к сборке заказов. Проверьте статус заказа на маркетплейсе и доступные остатки.`
+            ? this.fbsTsdSelectedRequestEmptyMessage(selectedRequest.number, {
+                marketplaceEligibleOrders,
+                unavailableStockOrders,
+                missingWmsRequestItems,
+                alreadyHandledOrders,
+              })
             : 'Готовых заказов нет. Заказы появятся после создания заявки и перевода поставки в статус «На сборке».',
     );
+  }
+
+  private fbsTsdSelectedRequestEmptyMessage(
+    requestNumber: number,
+    diagnostics: {
+      marketplaceEligibleOrders: number;
+      unavailableStockOrders: number;
+      missingWmsRequestItems: number;
+      alreadyHandledOrders: number;
+    },
+  ) {
+    const number = String(requestNumber).padStart(6, '0');
+    if (diagnostics.marketplaceEligibleOrders === 0) {
+      // FIX: This is a marketplace-readiness state, not a WMS stock error.
+      return `FBS-заявка №${number} сохранена. Сейчас в ней нет заказов, которые WB или Ozon разрешил собирать. Обновите список после перевода заказов в статус сборки.`;
+    }
+    if (diagnostics.unavailableStockOrders > 0) {
+      return `FBS-заявка №${number}: ${diagnostics.unavailableStockOrders} заказ(ов) готовы со стороны маркетплейса, но для них действительно нет свободного остатка WMS. Проверьте фактический товар и остатки по позициям заявки.`;
+    }
+    if (diagnostics.missingWmsRequestItems > 0) {
+      return `FBS-заявка №${number}: у ${diagnostics.missingWmsRequestItems} заказ(ов) не найдена связанная позиция WMS. Выполните синхронизацию заявки в веб-интерфейсе.`;
+    }
+    if (diagnostics.alreadyHandledOrders > 0) {
+      return `FBS-заявка №${number}: доступные заказы уже собраны либо ожидают возврата. Новых заказов для назначения сейчас нет.`;
+    }
+    return `FBS-заявка №${number}: свободных заказов для назначения сейчас нет. Обновите список — другой сотрудник мог забрать последний доступный заказ.`;
   }
 
   // ADDED: Release only untouched WB assignments. Once a physical scan exists,

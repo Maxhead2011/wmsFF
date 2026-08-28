@@ -222,7 +222,8 @@ export function ClientRequestsTable({
                   <strong className="client-request-title" title={request.title}>{request.title}</strong>
                 )}
                 <span className="client-request-list-meta">
-                  {requestTypeLabel(request.type)} · {requestPriorityLabel(request.priority)}
+                  {/* FIX: FBS is stored as OUTBOUND; show its operational kind instead of the storage enum. */}
+                  {requestDisplayTypeLabel(request)} · {requestPriorityLabel(request.priority)}
                 </span>
                 <span className="client-request-city">
                   <span>Склад</span>
@@ -616,6 +617,11 @@ function isFbsRequest(request: ClientRequestSummary) {
       ?.toLocaleLowerCase('ru-RU')
       .includes('создано из fbs-заказов:') === true
   );
+}
+
+export function requestDisplayTypeLabel(request: ClientRequestSummary) {
+  // FIX: Keep the database type unchanged and derive FBS from its existing links/markers.
+  return isFbsRequest(request) ? 'FBS' : requestTypeLabel(request.type);
 }
 
 function canSelectManualBoxes(request: ClientRequestSummary) {
