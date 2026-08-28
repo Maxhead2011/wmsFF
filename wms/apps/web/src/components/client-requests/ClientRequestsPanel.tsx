@@ -85,6 +85,7 @@ import { ConfirmDialog } from '../common/ConfirmDialog';
 import { PickWaveBalanceReviewPanel } from './PickWaveBalanceReviewPanel';
 import { useRememberedClientId } from '../../lib/rememberedClient';
 import { resolveFbsSyncConflictBatch } from './fbsSyncConflictBatch';
+import { rebuildFbsRoutesBatch, type FbsRouteBatchProgress } from './fbsRouteBatch';
 
 type LoadState<T> = {
   status: 'idle' | 'loading' | 'ready' | 'error';
@@ -199,6 +200,7 @@ export function ClientRequestsPanel({
   const [documentPreview, setDocumentPreview] = useState<ClientRequestDocument | null>(null);
   const [pickInstructionPreview, setPickInstructionPreview] = useState<PickInstructionDocument | null>(null);
   const [refreshingInstructionId, setRefreshingInstructionId] = useState<string | null>(null);
+  const [fbsRouteBatchProgress, setFbsRouteBatchProgress] = useState<FbsRouteBatchProgress | null>(null);
   const [syncingTsdRequestId, setSyncingTsdRequestId] = useState<string | null>(null);
   const [checkingSupplyRequestId, setCheckingSupplyRequestId] = useState<string | null>(null);
   const [routeLoadingRequestId, setRouteLoadingRequestId] = useState<string | null>(null);
@@ -300,6 +302,10 @@ export function ClientRequestsPanel({
       displayedRequests.data.filter((request) =>
         canMergeFbsRequestTail(request),
       ),
+    [displayedRequests.data],
+  );
+  const activeFbsRouteRequests = useMemo(
+    () => displayedRequests.data.filter(canMergeFbsRequestTail),
     [displayedRequests.data],
   );
   const fbsTailClients = useMemo(
@@ -1633,6 +1639,43 @@ export function ClientRequestsPanel({
     }
   }
 
+  // ADDED: Use the existing per-request repair endpoint sequentially for every active FBS request.
+  async function rebuildAllFbsRoutes() {
+    if (fbsRouteBatchProgress || activeFbsRouteRequests.length === 0) return;
+
+    setError(null);
+    setActionMessage(null);
+    setFbsRouteBatchProgress({
+      completed: 0,
+      total: activeFbsRouteRequests.length,
+      succeeded: 0,
+      failed: 0,
+      currentRequestNumber: activeFbsRouteRequests[0].number,
+    });
+
+    try {
+      const result = await rebuildFbsRoutesBatch(
+        activeFbsRouteRequests.map((request) => ({ id: request.id, number: request.number })),
+        (requestId) => rebuildFbsRequestRoute(session.accessToken, requestId),
+        setFbsRouteBatchProgress,
+      );
+
+      const failedNumbers = result.failures
+        .map((failure) => `№${String(failure.requestNumber).padStart(6, '0')}`)
+        .join(', ');
+      setActionMessage(
+        result.failed === 0
+          ? `Маршруты и паллетсорты обновлены во всех ${result.succeeded} активных FBS-заявках.`
+          : `Маршруты обновлены в ${result.succeeded} из ${result.total} заявок. Не удалось обновить: ${failedNumbers}.`,
+      );
+      await loadData();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setFbsRouteBatchProgress(null);
+    }
+  }
+
   async function openFbsSupplyConsistency(request: ClientRequestSummary) {
     setError(null);
     setCheckingSupplyRequestId(request.id);
@@ -2074,6 +2117,26 @@ export function ClientRequestsPanel({
             <option value="asc">Сначала маленькие / старые</option>
           </select>
         </label>
+        {canPickOutbound && activeFbsRouteRequests.length > 0 ? (
+          <button
+            className="primary-button client-request-route-refresh-all"
+            type="button"
+            onClick={() => void rebuildAllFbsRoutes()}
+            disabled={Boolean(fbsRouteBatchProgress)}
+            title="Перестроить короба, паллетсорты и маршруты всех активных FBS-заявок"
+          >
+            <RefreshCw
+              className={fbsRouteBatchProgress ? 'is-spinning' : undefined}
+              size={16}
+              aria-hidden="true"
+            />
+            <span>
+              {fbsRouteBatchProgress
+                ? `Обновляю ${fbsRouteBatchProgress.completed} из ${fbsRouteBatchProgress.total}`
+                : 'Обновить все маршруты'}
+            </span>
+          </button>
+        ) : null}
         <strong>{displayedRequests.data.length} заявок</strong>
       </div>
 

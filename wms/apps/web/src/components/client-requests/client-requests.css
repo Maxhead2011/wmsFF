@@ -976,6 +976,20 @@
   font-size: 13px;
 }
 
+/* ADDED: Keep the bulk route action visible directly above the requests table. */
+.client-request-route-refresh-all {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.client-request-route-refresh-all + strong {
+  margin-left: 0;
+}
+
+.client-request-route-refresh-all .is-spinning {
+  animation: client-request-fbs-audit-spin .9s linear infinite;
+}
+
 @media (max-width: 720px) {
   .client-request-sortbar {
     align-items: stretch;
@@ -988,6 +1002,12 @@
 
   .client-request-sortbar > strong {
     margin-left: 0;
+  }
+
+  .client-request-route-refresh-all {
+    justify-content: center;
+    margin-left: 0;
+    width: 100%;
   }
 }
 
