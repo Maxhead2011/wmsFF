@@ -3950,15 +3950,19 @@ describe('MarketplaceConnectionsService', () => {
     expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith('/trbx'))).toBe(false);
   });
 
-  it('moves a linked new/waiting WB order without a supply to a new supply and WMS request', async () => {
+  // TEST: request 424 contains active confirm/waiting orders without a WB supply.
+  it.each([
+    ['new', 'Новый'],
+    ['confirm', 'На сборке'],
+  ])('moves a linked %s/waiting WB order without a supply to a new supply and WMS request', async (supplierStatus, statusLabel) => {
     const order = {
       id: '5355000001',
       connectionId: 'connection-1',
       marketplace: MarketplaceType.WILDBERRIES,
       category: 'active',
-      supplierStatus: 'new',
+      supplierStatus,
       wbStatus: 'waiting',
-      statusLabel: 'Новый',
+      statusLabel,
       supplyId: null,
       warehouseId: '1935323',
       warehouseName: 'СЦ Белая дача',
