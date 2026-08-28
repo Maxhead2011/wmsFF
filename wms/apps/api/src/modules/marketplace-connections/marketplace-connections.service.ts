@@ -16656,32 +16656,34 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         Boolean(order.supplyId) &&
         Boolean(order.product),
     );
-    const unassignedNewOrders = resolvedSelectedOrders.filter(
+    // FIX: WB can return an active waiting order as `confirm` before assigning
+    // it to a supply. Treat it as unassigned; WB validates the actual move.
+    const unassignedOrders = resolvedSelectedOrders.filter(
       (order) =>
         order.marketplace === MarketplaceType.WILDBERRIES &&
         order.category === 'active' &&
-        order.supplierStatus === 'new' &&
+        (order.supplierStatus === 'new' || order.supplierStatus === 'confirm') &&
         !order.supplyId &&
         Boolean(order.product),
     );
     // FIX: one order already archived by WB must not block all other orders in
     // a large transfer. Only orders that WB can still accept are moved.
     const transferableIds = new Set(
-      [...confirmedOrders, ...unassignedNewOrders].map((order) => order.id),
+      [...confirmedOrders, ...unassignedOrders].map((order) => order.id),
     );
     const unavailable = resolvedSelectedOrders.filter(
       (order) => !transferableIds.has(order.id),
     );
     const movesConfirmedOrders = confirmedOrders.length > 0;
-    const movesUnassignedNewOrders = unassignedNewOrders.length > 0;
-    if (movesConfirmedOrders && movesUnassignedNewOrders) {
+    const movesUnassignedOrders = unassignedOrders.length > 0;
+    if (movesConfirmedOrders && movesUnassignedOrders) {
       throw new BadRequestException(
-        'Одновременно выбраны заказы «На сборке» и новые заказы без поставки. Перенесите эти две группы отдельно.',
+        'Одновременно выбраны заказы из существующей поставки и заказы без поставки. Перенесите эти две группы отдельно.',
       );
     }
     const selectedOrders = movesConfirmedOrders
       ? confirmedOrders
-      : unassignedNewOrders;
+      : unassignedOrders;
     if (selectedOrders.length === 0) {
       throw new BadRequestException(
         `Перенести можно только активные заказы WB с найденным товаром WMS: новые без поставки или со статусом «На сборке». Проверьте: ${unavailable
@@ -17700,10 +17702,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           ? {
               ...order,
               supplyId: targetSupplyId,
-              // FIX: WB changes a new order to confirm when it accepts the
-              // PATCH. Preserve that verified transition while its history
+              // FIX: WB keeps an unassigned order at confirm after accepting
+              // the PATCH. Preserve that verified state while its history
               // endpoint is still eventually consistent.
-              ...(movesUnassignedNewOrders
+              ...(movesUnassignedOrders
                 ? {
                     supplierStatus: 'confirm',
                     category: 'active' as const,
