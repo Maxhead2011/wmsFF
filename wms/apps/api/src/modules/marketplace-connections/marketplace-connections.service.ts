@@ -83,6 +83,11 @@ import {
   fbsRouteFingerprint,
 } from './fbs-route-availability';
 import {
+  fbsBoxClaimInput,
+  runFbsBoxClaimTransaction,
+  sameFbsBoxClaimInput,
+} from './fbs-box-claim-retry';
+import {
   buildFbsCargoPlaceStickersPdf,
   buildFbsPickListPdf,
   buildFbsSupplyStickersPdf,
@@ -7698,20 +7703,28 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     box: { id: string; code: string },
     user: AuthUser,
   ) {
-    const stockSkuId = task.relabelRequired && task.sourceSkuId
-      ? task.sourceSkuId
-      : task.skuId;
-    const requiredQuantity = Math.max(1, task.itemCount);
-    try {
-      return await this.prisma.$transaction(async (tx) => {
+    // FIX: Background route synchronization may abort a serializable
+    // transaction even when this is the only active picker. Retry that exact
+    // database claim instead of reporting a fictitious competing request.
+    return runFbsBoxClaimTransaction(() =>
+      this.prisma.$transaction(async (tx) => {
+        // FIX: Every retry starts from the current task route. A background
+        // refresh may have changed the SKU or quantity after the previous
+        // serializable transaction was rolled back.
+        const taskBeforeLock = await tx.fbsTsdAssembly.findUnique({ where: { id: task.id } });
+        this.requireCurrentFbsTsdLease(taskBeforeLock, user);
+        const claimInput = fbsBoxClaimInput(taskBeforeLock);
         // FIX: The database lock, not frontend order, decides the first winner.
         // FIX: pg_advisory_xact_lock returns PostgreSQL void. $queryRaw tries
         // to deserialize it and turns a valid TSD scan into HTTP 500.
         await tx.$executeRaw(
-          Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`fbs:${task.clientId}:${box.id}:${stockSkuId}`}))`,
+          Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`fbs:${taskBeforeLock.clientId}:${box.id}:${claimInput.stockSkuId}`}))`,
         );
         const freshTask = await tx.fbsTsdAssembly.findUnique({ where: { id: task.id } });
         this.requireCurrentFbsTsdLease(freshTask, user);
+        if (!sameFbsBoxClaimInput(claimInput, fbsBoxClaimInput(freshTask))) {
+          this.throwFbsTsdTaskStale(freshTask, user);
+        }
         if (
           freshTask.sourceBarcode ||
           freshTask.barcode ||
@@ -7725,7 +7738,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           tx.stockBalance.aggregate({
             where: {
               clientId: freshTask.clientId,
-              skuId: stockSkuId,
+              skuId: claimInput.stockSkuId,
               boxId: box.id,
               status: StockStatus.AVAILABLE,
             },
@@ -7733,24 +7746,24 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           }),
           this.fbsTsdReservationRowsBySku({
             clientId: freshTask.clientId,
-            skuIds: [stockSkuId],
+            skuIds: [claimInput.stockSkuId],
             excludeTaskId: null,
           }, tx),
         ]);
-        let reservations = reservationRowsBySku.get(stockSkuId) ?? [];
+        let reservations = reservationRowsBySku.get(claimInput.stockSkuId) ?? [];
         let decision = evaluateFbsBoxAvailability({
           boxId: box.id,
           availableQuantity: balance._sum.quantity ?? 0,
           candidateTaskId: freshTask.id,
           candidateAssignedBoxId: freshTask.boxId ?? freshTask.reservedBoxId,
-          requiredQuantity,
+          requiredQuantity: claimInput.requiredQuantity,
           reservations,
         });
         if (!decision.accepted) return null;
 
         const protectedForCandidate =
           decision.freeQuantity + decision.ownReservationQuantity;
-        let shortage = Math.max(0, requiredQuantity - protectedForCandidate);
+        let shortage = Math.max(0, claimInput.requiredQuantity - protectedForCandidate);
         const releaseIds: string[] = [];
         for (const reservation of reservations) {
           if (
@@ -7827,15 +7840,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           }
           reservations = (await this.fbsTsdReservationRowsBySku({
             clientId: freshTask.clientId,
-            skuIds: [stockSkuId],
+            skuIds: [claimInput.stockSkuId],
             excludeTaskId: null,
-          }, tx)).get(stockSkuId) ?? [];
+          }, tx)).get(claimInput.stockSkuId) ?? [];
           decision = evaluateFbsBoxAvailability({
             boxId: box.id,
             availableQuantity: balance._sum.quantity ?? 0,
             candidateTaskId: freshTask.id,
             candidateAssignedBoxId: freshTask.boxId ?? freshTask.reservedBoxId,
-            requiredQuantity,
+            requiredQuantity: claimInput.requiredQuantity,
             reservations,
           });
         }
@@ -7860,16 +7873,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         });
         if (claimed.count !== 1) this.throwFbsTsdTaskStale(freshTask, user);
         return tx.fbsTsdAssembly.findUnique({ where: { id: freshTask.id } });
-      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
-    } catch (caught) {
-      if (
-        caught instanceof Prisma.PrismaClientKnownRequestError &&
-        caught.code === 'P2034'
-      ) {
-        return null;
-      }
-      throw caught;
-    }
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }),
+    );
   }
 
   private async useRelabelingSourceForCurrentFbsTask(
