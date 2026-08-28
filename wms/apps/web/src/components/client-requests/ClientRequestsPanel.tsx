@@ -95,6 +95,8 @@ type LoadState<T> = {
 type ClientRequestsPanelProps = {
   session: AuthSession;
   onOpenFbsOrders?: (request: ClientRequestSummary) => void;
+  focusRequestId?: string | null;
+  onFocusRequestHandled?: () => void;
 };
 
 type RequestSortField = 'number' | 'createdAt' | 'quantity';
@@ -170,7 +172,12 @@ type FbsSynchronizationAudit = {
   failures: string[];
 };
 
-export function ClientRequestsPanel({ session, onOpenFbsOrders }: ClientRequestsPanelProps) {
+export function ClientRequestsPanel({
+  session,
+  onOpenFbsOrders,
+  focusRequestId = null,
+  onFocusRequestHandled,
+}: ClientRequestsPanelProps) {
   const canRead = canUse(session.user, 'client-requests:read');
   const canWrite = canUse(session.user, 'client-requests:write');
   const canChangeStatus = canUse(session.user, 'client-requests:status');
@@ -357,6 +364,32 @@ export function ClientRequestsPanel({ session, onOpenFbsOrders }: ClientRequests
       void loadData();
     }
   }, [canRead, showArchive, appliedArchiveBoxSearch]);
+
+  useEffect(() => {
+    if (!focusRequestId) return;
+    if (!canRead) {
+      onFocusRequestHandled?.();
+      return;
+    }
+
+    // FIX: open the exact request document received from FBS; this also works for archived requests.
+    let cancelled = false;
+    setError(null);
+    void fetchClientRequestDocument(session.accessToken, focusRequestId)
+      .then((document) => {
+        if (!cancelled) setDocumentPreview(document);
+      })
+      .catch((caught) => {
+        if (!cancelled) setError(errorMessage(caught));
+      })
+      .finally(() => {
+        if (!cancelled) onFocusRequestHandled?.();
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canRead, focusRequestId, session.accessToken]);
 
   useEffect(() => {
     const requestId = onlinePreview?.request.id;

@@ -120,7 +120,26 @@ import { useRememberedClientId, validRememberedClientId } from '../../lib/rememb
 
 type FbsPanelProps = {
   session: AuthSession;
+  onOpenRequest?: (requestId: string) => void;
 };
+
+// FIX: keep the row interaction independently testable and select the exact order object.
+export function openFbsDeadlineOrderDetails(
+  order: FbsOrderSummary,
+  selectOrder: (order: FbsOrderSummary) => void,
+) {
+  selectOrder(order);
+}
+
+// FIX: navigation must use the internal WMS request UUID, not a visible request number or WB order id.
+export function openFbsDeadlineRequest(
+  order: FbsOrderSummary,
+  onOpenRequest?: (requestId: string) => void,
+) {
+  if (!order.request?.id || !onOpenRequest) return false;
+  onOpenRequest(order.request.id);
+  return true;
+}
 
 type FbsMarketplace = 'WILDBERRIES' | 'OZON' | 'YANDEX_MARKET';
 
@@ -298,7 +317,7 @@ const fbsViews = [
 // FIX: both WB-only reports stay hidden for Ozon and Yandex after merging their tiles.
 const ozonHiddenViews = new Set<FbsView>(['deadlines', 'stocks', 'allocation', 'cargo', 'report', 'passes', 'penalties']);
 
-export function FbsPanel({ session }: FbsPanelProps) {
+export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
   const [marketplace, setMarketplace] = useState<FbsMarketplace | null>(null);
   const [activeView, setActiveView] = useState<FbsView>('active');
   const [clients, setClients] = useState<ClientSummary[]>([]);
@@ -1808,7 +1827,7 @@ export function FbsPanel({ session }: FbsPanelProps) {
             text={`Проверяем подключённые кабинеты ${marketplaceLabel(marketplace)}.`}
           />
         ) : activeView === 'deadlines' ? (
-          <FbsAutoCancelReportView data={data} />
+          <FbsAutoCancelReportView data={data} onOpenRequest={onOpenRequest} />
         ) : activeView === 'cost' ? (
           <FbsCostView data={data} />
         ) : activeView === 'active' || activeView === 'shipped' || activeView === 'cancelled' || activeView === 'archive' ? (
@@ -1886,7 +1905,13 @@ export function FbsPanel({ session }: FbsPanelProps) {
   );
 }
 
-function FbsAutoCancelReportView({ data }: { data: ClientFbsOrders | null }) {
+function FbsAutoCancelReportView({
+  data,
+  onOpenRequest,
+}: {
+  data: ClientFbsOrders | null;
+  onOpenRequest?: (requestId: string) => void;
+}) {
   // ADDED: the report is read-only and derives rows from the same scoped order snapshot as FBS.
   const [toneFilter, setToneFilter] = useState<FbsDeadlineToneFilter>('critical');
   const [dateFrom, setDateFrom] = useState('');
@@ -1896,6 +1921,7 @@ function FbsAutoCancelReportView({ data }: { data: ClientFbsOrders | null }) {
   const [supplyId, setSupplyId] = useState('');
   const [stockFilter, setStockFilter] = useState<FbsDeadlineStockFilter>('all');
   const [clockNow, setClockNow] = useState(() => Date.now());
+  const [selectedOrder, setSelectedOrder] = useState<FbsOrderSummary | null>(null);
 
   useEffect(() => {
     const interval = window.setInterval(() => setClockNow(Date.now()), 60_000);
@@ -1910,6 +1936,7 @@ function FbsAutoCancelReportView({ data }: { data: ClientFbsOrders | null }) {
     setRequestNumber('');
     setSupplyId('');
     setStockFilter('all');
+    setSelectedOrder(null);
   }, [data?.client.id]);
 
   const commonFilters = {
@@ -2040,10 +2067,24 @@ function FbsAutoCancelReportView({ data }: { data: ClientFbsOrders | null }) {
               const stock = fbsDeadlineStockSnapshot(order);
               const tone = snapshot?.tone ?? 'normal';
               return (
-                <tr key={`${order.connectionId}:${order.id}`} className={`fbs-deadline-report__row is-${tone}`}>
+                <tr
+                  key={`${order.connectionId}:${order.id}`}
+                  className={`fbs-deadline-report__row is-${tone}`}
+                  onClick={() => openFbsDeadlineOrderDetails(order, setSelectedOrder)}
+                >
                   <td><FbsDeadlineToneBadge tone={tone} /></td>
                   <td>
-                    <strong>№ {order.id}</strong>
+                    <button
+                      type="button"
+                      className="fbs-deadline-report__order-button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openFbsDeadlineOrderDetails(order, setSelectedOrder);
+                      }}
+                      aria-label={`Открыть информацию о заказе WB ${order.id}`}
+                    >
+                      № {order.id}
+                    </button>
                     {order.orderUid && order.orderUid !== order.id ? <small>{order.orderUid}</small> : null}
                   </td>
                   <td>
@@ -2089,7 +2130,152 @@ function FbsAutoCancelReportView({ data }: { data: ClientFbsOrders | null }) {
           </tbody>
         </table>
       </div>
+
+      {selectedOrder ? (
+        <FbsDeadlineOrderDetailsDialog
+          order={selectedOrder}
+          clockNow={clockNow}
+          requiresCargoPlaces={data?.deliveryPlan.requiresCargoPlaces === true}
+          canOpenRequest={Boolean(selectedOrder.request?.id && onOpenRequest)}
+          onOpenRequest={() => {
+            if (openFbsDeadlineRequest(selectedOrder, onOpenRequest)) setSelectedOrder(null);
+          }}
+          onClose={() => setSelectedOrder(null)}
+        />
+      ) : null}
     </section>
+  );
+}
+
+function FbsDeadlineOrderDetailsDialog({
+  order,
+  clockNow,
+  requiresCargoPlaces,
+  canOpenRequest,
+  onOpenRequest,
+  onClose,
+}: {
+  order: FbsOrderSummary;
+  clockNow: number;
+  requiresCargoPlaces: boolean;
+  canOpenRequest: boolean;
+  onOpenRequest: () => void;
+  onClose: () => void;
+}) {
+  const stock = fbsDeadlineStockSnapshot(order);
+  const deadline = fbsDeadlineSnapshot(order, clockNow);
+  const dialogRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dialog = dialogRef.current;
+    const focusableSelector = 'button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+    const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>(focusableSelector) ?? []);
+    focusable()[0]?.focus();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const elements = focusable();
+      if (elements.length === 0) return;
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      previousFocus?.focus();
+    };
+  }, [onClose]);
+
+  return (
+    <div className="fbs-deadline-details" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onClose();
+    }}>
+      <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="fbs-deadline-details-title" className="fbs-deadline-details__dialog">
+        <header>
+          <div>
+            <p className="eyebrow">Wildberries · полная информация</p>
+            <h3 id="fbs-deadline-details-title">Заказ WB № {order.id}</h3>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="Закрыть информацию о заказе">
+            <XCircle size={20} aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="fbs-deadline-details__grid">
+          <FbsDeadlineDetail label="Статус WB" value={`${order.statusLabel || 'Не указан'} · ${order.supplierStatus || '—'} / ${order.wbStatus || '—'}`} />
+          <FbsDeadlineDetail label="UID заказа" value={order.orderUid || 'Не указан'} mono />
+          <FbsDeadlineDetail label="Товар" value={order.product?.name || 'Карточка товара не найдена'} />
+          <FbsDeadlineDetail label="Размер" value={order.product?.size || 'Не указан'} />
+          <FbsDeadlineDetail label="Артикулы" value={[order.product?.internalSku, order.product?.clientSku, order.article, order.nmId].filter(Boolean).join(' · ') || 'Не указаны'} />
+          <FbsDeadlineDetail label="Штрихкоды" value={order.barcodes.join(', ') || 'Не указаны'} mono />
+          <FbsDeadlineDetail label="Количество" value={`${order.itemCount.toLocaleString('ru-RU')} шт.`} />
+          <FbsDeadlineDetail label="Кабинет WB" value={order.accountName || 'Не указан'} />
+          <FbsDeadlineDetail label="Создан" value={formatDateTime(order.createdAt)} />
+          <FbsDeadlineDetail label="До автоотмены" value={deadline ? formatDeadlineRemaining(deadline.remainingMilliseconds) : 'Не рассчитано'} />
+          <FbsDeadlineDetail label="Автоотмена в" value={deadline ? formatDateTime(new Date(deadline.createdAt + FBS_AUTO_CANCEL_HOURS * 60 * 60 * 1000).toISOString()) : 'Не рассчитано'} />
+          <FbsDeadlineDetail label="Дата продавца" value={formatDateTime(order.sellerDate)} />
+          <FbsDeadlineDetail label="Дата доставки" value={formatDateTime(order.deliveryDate)} />
+          <FbsDeadlineDetail label="Поставка WB" value={order.supplyId || 'Без поставки'} mono />
+          <FbsDeadlineDetail label="Направление" value={fbsShipmentDestinationLabel(order, requiresCargoPlaces)} />
+          <FbsDeadlineDetail label="Склад WB" value={order.warehouseName || (order.warehouseId ? `Склад ${order.warehouseId}` : 'Не указан')} />
+          <FbsDeadlineDetail label="Заявка WMS" value={order.request ? `№${String(order.request.number).padStart(6, '0')} · ${order.request.title}` : 'Заказ не привязан к заявке'} />
+          <FbsDeadlineDetail label="Статус заявки" value={order.request?.status || 'Не указан'} />
+          <FbsDeadlineDetail label="Наличие WMS" value={stock.available ? `${stock.quantity.toLocaleString('ru-RU')} шт.` : 'Свободного товара нет'} />
+          <FbsDeadlineDetail label="Все короба WMS" value={order.storageBoxes.map((box) => `${box.code} — ${box.quantity} шт. (${box.status})`).join(', ') || order.reservation?.boxCode || 'Не найдены'} mono />
+          <FbsDeadlineDetail label="Паллетсорт" value={order.reservation?.palletCode || 'Не указан'} mono />
+          <FbsDeadlineDetail label="Резерв" value={order.reservation ? `${order.reservation.status}${order.reservation.problem ? ` · ${order.reservation.problem}` : ''}` : 'Нет данных'} />
+          <FbsDeadlineDetail label="Грузоместа" value={order.shipmentPlan ? `${order.shipmentPlan.cargoPlaceCount} · ${order.shipmentPlan.cargoPlaceIds.join(', ') || 'ID ещё не назначены'}` : 'Не сформированы'} mono />
+          <FbsDeadlineDetail label="Отправлено в WB" value={order.shipmentPlan?.sentToWbAt ? `${formatDateTime(order.shipmentPlan.sentToWbAt)} · ${order.shipmentPlan.sentToWbBy?.name || 'пользователь не указан'}` : 'Ещё не отправлено'} />
+          <FbsDeadlineDetail label="Служебные данные WB" value={[order.officeId && `office ${order.officeId}`, order.cargoType && `cargo ${order.cargoType}`, order.crossBorderType && `cross-border ${order.crossBorderType}`].filter(Boolean).join(' · ') || 'Не указаны'} mono />
+          <FbsDeadlineDetail label="Обязательные данные" value={order.requiredMeta.join(', ') || 'Нет'} />
+          <FbsDeadlineDetail label="Дополнительные данные" value={order.optionalMeta.join(', ') || 'Нет'} />
+          <FbsDeadlineDetail label="Перемаркировка" value={order.relabeling ? `${order.relabeling.sourceProductName || order.relabeling.sourceArticle} · ${order.relabeling.sourceBarcodes.join(', ') || 'без ШК'}` : 'Не требуется'} />
+          <FbsDeadlineDetail label="Начисление" value={order.billing ? `${order.billing.totalRub.toLocaleString('ru-RU')} ₽ · ${order.billing.status}${order.billing.invoiceNumber ? ` · счёт ${order.billing.invoiceNumber}` : ''}` : 'Не рассчитано'} />
+          <FbsDeadlineDetail label="Комментарий" value={order.comment || 'Нет комментария'} wide />
+        </div>
+
+        <footer>
+          <button type="button" className="button button-secondary" onClick={onClose}>Закрыть</button>
+          <button type="button" className="button button-primary" onClick={onOpenRequest} disabled={!canOpenRequest}>
+            <ClipboardList size={17} aria-hidden="true" />
+            {canOpenRequest ? 'Перейти в заявку' : 'Заявка WMS не создана'}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function FbsDeadlineDetail({
+  label,
+  value,
+  mono = false,
+  wide = false,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+  wide?: boolean;
+}) {
+  return (
+    <div className={`fbs-deadline-details__item${wide ? ' is-wide' : ''}`}>
+      <span>{label}</span>
+      <strong className={mono ? 'fbs-mono' : undefined}>{value}</strong>
+    </div>
   );
 }
 
