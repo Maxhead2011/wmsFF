@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Prisma } from '@prisma/client';
 import { StorageLocationsService } from '../src/modules/warehouse/storage-locations.service';
 
 describe('StorageLocationsService', () => {
@@ -240,6 +241,198 @@ describe('StorageLocationsService', () => {
         }),
       }),
     );
+  });
+
+  // TEST: an empty zone is deleted by one conditional write and audited in the same transaction.
+  it('atomically deletes an empty zone and writes an audit event', async () => {
+    const emptyZone = {
+      id: 'zone-empty',
+      code: 'ZONE_EMPTY',
+      name: 'Пустая зона',
+      warehouseId: 'warehouse-1',
+      _count: { storagePallets: 0, pallets: 0, boxes: 0 },
+    };
+    const tx = {
+      zone: {
+        findUnique: vi.fn().mockResolvedValue(emptyZone),
+        deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue({}),
+      },
+    };
+    const prisma = {
+      ...tx,
+      $transaction: vi.fn(async (callback: (db: typeof tx) => Promise<unknown>) => callback(tx)),
+    };
+    const service = new StorageLocationsService(prisma as never, boxCodePolicy() as never, balances() as never);
+
+    await expect(
+      service.deleteZone('zone-empty', {
+        id: 'admin-1',
+        name: 'Администратор',
+        permissionCodes: ['system:admin'],
+      } as never),
+    ).resolves.toMatchObject({ id: 'zone-empty', code: 'ZONE_EMPTY', deleted: true });
+
+    expect(prisma.$transaction).toHaveBeenCalledOnce();
+    expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+      isolationLevel: 'Serializable',
+    });
+    expect(tx.zone.deleteMany).toHaveBeenCalledWith({
+      where: {
+        id: 'zone-empty',
+        warehouseId: 'warehouse-1',
+        storagePallets: { none: {} },
+        pallets: { none: {} },
+        boxes: { none: {} },
+      },
+    });
+    expect(tx.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'STORAGE_ZONE_DELETED',
+          entity: 'Zone',
+          entityId: 'zone-empty',
+          userId: 'admin-1',
+        }),
+      }),
+    );
+  });
+
+  // TEST: every supported zone relation blocks deletion before the conditional delete and audit.
+  it.each([
+    ['storagePallets', { storagePallets: 1, pallets: 0, boxes: 0 }],
+    ['legacy pallets', { storagePallets: 0, pallets: 1, boxes: 0 }],
+    ['direct boxes', { storagePallets: 0, pallets: 0, boxes: 1 }],
+  ] as const)('does not delete a zone containing %s', async (_relation, relationCounts) => {
+    const occupiedZone = {
+      id: 'zone-occupied',
+      code: 'ZONE_OCCUPIED',
+      name: 'Занятая зона',
+      warehouseId: 'warehouse-1',
+      _count: relationCounts,
+    };
+    const tx = {
+      zone: {
+        findUnique: vi.fn().mockResolvedValue(occupiedZone),
+        deleteMany: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+    };
+    const prisma = {
+      ...tx,
+      $transaction: vi.fn(async (callback: (db: typeof tx) => Promise<unknown>) => callback(tx)),
+    };
+    const service = new StorageLocationsService(prisma as never, boxCodePolicy() as never, balances() as never);
+
+    await expect(
+      service.deleteZone('zone-occupied', {
+        id: 'admin-1',
+        name: 'Администратор',
+        permissionCodes: ['system:admin'],
+      } as never),
+    ).rejects.toThrow();
+
+    expect(tx.zone.deleteMany).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  // TEST: a concurrent placement must fail closed and must not leave a false audit event.
+  it('does not delete or audit a zone that becomes occupied during deletion', async () => {
+    const tx = {
+      zone: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'zone-race',
+          code: 'ZONE_RACE',
+          name: 'Зона с гонкой',
+          warehouseId: 'warehouse-1',
+          _count: { storagePallets: 0, pallets: 0, boxes: 0 },
+        }),
+        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+    };
+    const prisma = {
+      ...tx,
+      $transaction: vi.fn(async (callback: (db: typeof tx) => Promise<unknown>) => callback(tx)),
+    };
+    const service = new StorageLocationsService(prisma as never, boxCodePolicy() as never, balances() as never);
+
+    await expect(
+      service.deleteZone('zone-race', {
+        id: 'admin-1',
+        name: 'Администратор',
+        permissionCodes: ['system:admin'],
+      } as never),
+    ).rejects.toThrow('Состав зоны изменился');
+
+    expect(tx.zone.deleteMany).toHaveBeenCalledOnce();
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  // TEST: Prisma serialization/FK conflicts are exposed as a safe, actionable validation error.
+  it.each(['P2034', 'P2003'] as const)('maps Prisma %s during zone deletion to a safe conflict', async (code) => {
+    const prisma = {
+      $transaction: vi.fn().mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('concurrent zone change', {
+          code,
+          clientVersion: 'test',
+        }),
+      ),
+    };
+    const service = new StorageLocationsService(prisma as never, boxCodePolicy() as never, balances() as never);
+
+    await expect(
+      service.deleteZone('zone-race', {
+        id: 'admin-1',
+        name: 'Администратор',
+        permissionCodes: ['system:admin'],
+      } as never),
+    ).rejects.toThrow('Состав зоны изменился');
+  });
+
+  // TEST: a branch-scoped employee cannot remove a zone from another warehouse.
+  it('does not delete a zone outside the active writable warehouse', async () => {
+    const tx = {
+      zone: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'zone-foreign',
+          code: 'ZONE_FOREIGN',
+          name: 'Чужая зона',
+          warehouseId: 'warehouse-2',
+          _count: { storagePallets: 0, pallets: 0, boxes: 0 },
+        }),
+        deleteMany: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+    };
+    const prisma = {
+      ...tx,
+      $transaction: vi.fn(async (callback: (db: typeof tx) => Promise<unknown>) => callback(tx)),
+    };
+    const service = new StorageLocationsService(prisma as never, boxCodePolicy() as never, balances() as never);
+
+    await expect(
+      service.deleteZone('zone-foreign', {
+        id: 'manager-1',
+        name: 'Менеджер филиала',
+        permissionCodes: ['warehouse:write'],
+        roleCodes: ['MANAGER'],
+        activeWarehouseId: 'warehouse-1',
+        warehouseIds: ['warehouse-1'],
+        writableWarehouseIds: ['warehouse-1'],
+      } as never),
+    ).rejects.toThrow('Данные другого филиала недоступны');
+
+    expect(tx.zone.deleteMany).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
   });
 
   it('deletes an empty pallet and writes an audit event', async () => {

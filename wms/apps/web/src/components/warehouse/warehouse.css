@@ -181,7 +181,7 @@
 .storage-zones__zone-statistics > header strong { font-size: 14px; }
 .storage-zones__zone-statistics > header span, .storage-zones__zone-statistics > header small { color: var(--muted); font-size: 10px; }
 .storage-zones__zone-statistics-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
-.storage-zones__zone-statistics-grid > article { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; min-width: 0; border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; background: color-mix(in srgb, var(--surface) 95%, #64748b); }
+.storage-zones__zone-statistics-grid > article { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 9px; min-width: 0; border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; background: color-mix(in srgb, var(--surface) 95%, #64748b); }
 .storage-zones__zone-statistics-grid > article.is-unassigned { border-color: #f2c55c; background: color-mix(in srgb, var(--surface) 90%, #fef3c7); }
 .storage-zones__zone-marker { display: grid; width: 29px; height: 29px; place-items: center; border-radius: 8px; background: color-mix(in srgb, var(--red-dark) 10%, var(--surface)); color: var(--red-dark); }
 .storage-zones__zone-statistics-grid article > div { display: grid; min-width: 0; gap: 1px; }
@@ -192,6 +192,10 @@
 .storage-zones__zone-statistics-grid dl > div { display: grid; min-width: 58px; gap: 1px; border-left: 1px solid var(--line); padding-left: 7px; }
 .storage-zones__zone-statistics-grid dt { color: var(--muted); font-size: 8px; font-weight: 700; }
 .storage-zones__zone-statistics-grid dd { margin: 0; font-size: 13px; font-weight: 850; font-variant-numeric: tabular-nums; }
+.storage-zone-delete-button { display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid color-mix(in srgb, var(--danger) 34%, var(--line)); border-radius: 8px; background: color-mix(in srgb, var(--danger) 8%, var(--surface)); color: var(--danger); cursor: pointer; }
+.storage-zone-delete-button:hover:not(:disabled) { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, var(--surface)); }
+.storage-zone-delete-button:disabled { cursor: wait; opacity: .55; }
+.storage-zones__zone-statistics-grid > article.is-unassigned { grid-template-columns: auto minmax(0, 1fr) auto; }
 .storage-zones__prefixes { align-items: center; background: color-mix(in srgb, var(--surface) 94%, var(--red-dark)); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 10px 14px; }
 .storage-zones__prefixes strong { color: var(--text); }
 .storage-zones__prefixes span { color: var(--muted); font-size: 12px; }

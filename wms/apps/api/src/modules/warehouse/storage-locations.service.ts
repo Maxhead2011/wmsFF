@@ -139,6 +139,78 @@ export class StorageLocationsService {
     });
   }
 
+  async deleteZone(id: string, user: AuthUser) {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const zone = await tx.zone.findUnique({
+          where: { id },
+          select: {
+            id: true,
+            warehouseId: true,
+            code: true,
+            name: true,
+            _count: { select: { storagePallets: true, pallets: true, boxes: true } },
+          },
+        });
+        if (!zone) {
+          throw new NotFoundException('Зона хранения не найдена.');
+        }
+        this.requireWarehouseScope(user, zone.warehouseId, 'write');
+
+        const linkedCount = zone._count.storagePallets + zone._count.pallets + zone._count.boxes;
+        if (linkedCount > 0) {
+          throw new BadRequestException(
+            `Зона «${zone.name}» не пуста: паллет-сортов — ${zone._count.storagePallets}, паллет — ${zone._count.pallets}, коробов — ${zone._count.boxes}. Сначала перенесите их в другую зону.`,
+          );
+        }
+
+        // FIX: the relation filters make the delete fail closed if placement changes
+        // between the preview in the browser and this transaction.
+        const deleted = await tx.zone.deleteMany({
+          where: {
+            id: zone.id,
+            warehouseId: zone.warehouseId,
+            storagePallets: { none: {} },
+            pallets: { none: {} },
+            boxes: { none: {} },
+          },
+        });
+        if (deleted.count !== 1) {
+          throw new BadRequestException(
+            'Состав зоны изменился. Ничего не удалено; обновите список и повторите попытку.',
+          );
+        }
+
+        await tx.auditLog.create({
+          data: {
+            userId: user.id,
+            action: 'STORAGE_ZONE_DELETED',
+            entity: 'Zone',
+            entityId: zone.id,
+            payload: {
+              warehouseId: zone.warehouseId,
+              zoneCode: zone.code,
+              zoneName: zone.name,
+            },
+          },
+        });
+
+        return { id: zone.id, code: zone.code, name: zone.name, deleted: true as const };
+      }, { isolationLevel: 'Serializable' });
+    } catch (caught) {
+      // FIX: concurrent placement must remain a clear, recoverable conflict instead of HTTP 500.
+      if (
+        caught instanceof Prisma.PrismaClientKnownRequestError &&
+        ['P2003', 'P2034'].includes(caught.code)
+      ) {
+        throw new BadRequestException(
+          'Состав зоны изменился. Ничего не удалено; обновите список и повторите попытку.',
+        );
+      }
+      throw caught;
+    }
+  }
+
   async createPallet(body: Record<string, unknown>, user: AuthUser) {
     const warehouseId = this.requireWarehouseScope(user, this.text(body.warehouseId), 'write');
     const warehouse = await this.resolveWarehouse(warehouseId);

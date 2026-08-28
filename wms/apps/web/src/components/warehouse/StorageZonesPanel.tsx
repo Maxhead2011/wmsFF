@@ -17,6 +17,7 @@ import {
   createStoragePallet,
   createStorageZone,
   clearStoragePallet,
+  deleteStorageZone,
   deleteStoragePallet,
   deleteStoragePallets,
   fetchClients,
@@ -154,6 +155,20 @@ export function StorageZonesPanel({ session }: { session: AuthSession }) {
       `Зона «${zoneName.trim()}» создана.`,
     );
     setZoneName('');
+  }
+
+  // FIX: deleting a zone is explicit and never detaches warehouse objects implicitly.
+  async function deleteZone(zone: StorageLayout['zones'][number]) {
+    if (!window.confirm(
+      `Удалить зону «${zone.name}» (${zone.code}), если она полностью пустая? Сервер повторно проверит паллеты и короба. Это действие нельзя отменить.`,
+    )) {
+      return;
+    }
+    await run(
+      `delete-zone:${zone.id}`,
+      () => deleteStorageZone(session.accessToken, zone.id),
+      `Зона «${zone.name}» удалена.`,
+    );
   }
 
   async function submitPallet(event: FormEvent) {
@@ -340,6 +355,16 @@ export function StorageZonesPanel({ session }: { session: AuthSession }) {
                   <div><dt>Паллеты</dt><dd>{zone.palletCount.toLocaleString('ru-RU')}</dd></div>
                   <div><dt>Короба</dt><dd>{zone.boxCount.toLocaleString('ru-RU')}</dd></div>
                 </dl>
+                <button
+                  className="storage-zone-delete-button"
+                  type="button"
+                  aria-label={`Удалить зону ${zone.name}`}
+                  title={zone.palletCount || zone.boxCount ? 'Сначала освободите зону' : 'Удалить пустую зону'}
+                  disabled={busy === `delete-zone:${zone.id}`}
+                  onClick={() => void deleteZone(zone)}
+                >
+                  <Trash2 size={15} />
+                </button>
               </article>
             ))}
             {data.summary.unassignedPallets > 0 ? (
