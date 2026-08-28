@@ -43,6 +43,7 @@ import {
 } from '../logistics/fbs-calculator';
 import { LogisticsService } from '../logistics/logistics.service';
 import type { FbsOrderSelectionDto } from './dto/fbs-order-selection.dto';
+import type { FbsCancelledOrdersReportDto } from './dto/fbs-cancelled-orders-report.dto';
 import type { ApplyFbsRelabelReconciliationDto } from './dto/apply-fbs-relabel-reconciliation.dto';
 import type { FbsPassDto } from './dto/fbs-pass.dto';
 import type { FbsStockPublicationBulkDto } from './dto/fbs-stock-publication-bulk.dto';
@@ -100,6 +101,7 @@ import {
   sameFbsBoxClaimInput,
 } from './fbs-box-claim-retry';
 import { buildFbsDeadlineReportXlsx } from './fbs-deadline-report-xlsx';
+import { buildFbsCancelledReportXlsx } from './fbs-cancelled-report-xlsx';
 import {
   buildFbsCargoPlaceStickersPdf,
   buildFbsPickListPdf,
@@ -18847,6 +18849,33 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return {
       buffer,
       fileName: `FBS-selected-deadlines-${fileTimestamp(new Date())}.xlsx`,
+    };
+  }
+
+  async exportFbsCancelledOrders(dto: FbsCancelledOrdersReportDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    this.clientScopes.requireClientAccess(user, clientId, 'read');
+    // FIX: use the same branch-scoped snapshot as the FBS screen before resolving IDs.
+    const scopedResponse = await this.listFbsOrders(clientId, user, true);
+    const { orders } = await this.resolveSelectedFbsOrders(
+      clientId,
+      dto.orders,
+      scopedResponse,
+    );
+    const unavailable = orders.filter((order) => order.category !== 'cancelled');
+    if (unavailable.length > 0) {
+      throw new BadRequestException(
+        `В отчёт отменённых заказов можно выгрузить только заказы с актуальным статусом отмены. Проверьте: ${unavailable
+          .map((order) => order.id)
+          .join(', ')}.`,
+      );
+    }
+
+    // FIX: re-resolve identifiers under the current client scope immediately before export.
+    const buffer = buildFbsCancelledReportXlsx(orders);
+    return {
+      buffer,
+      fileName: `FBS-cancelled-orders-${fileTimestamp(new Date())}.xlsx`,
     };
   }
 

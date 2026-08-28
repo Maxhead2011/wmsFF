@@ -9775,6 +9775,17 @@ export async function downloadFbsDeadlineSelectedOrdersXlsx(
   });
 }
 
+export async function downloadFbsCancelledOrdersXlsx(
+  accessToken: string,
+  payload: FbsOrderSelectionPayload,
+) {
+  // FIX: the browser sends identifiers only; the API validates current statuses and access.
+  return requestBlob('/marketplace-connections/fbs/orders/cancelled-report.xlsx', accessToken, {
+    method: 'POST',
+    body: sanitizeFbsOrderSelectionPayload(payload),
+  });
+}
+
 export async function fetchKizCirculationOverview(accessToken: string, clientId: string) {
   return request<KizCirculationOverview>(
     withQuery('/kiz-circulation/overview', { clientId }),
