@@ -50,11 +50,17 @@ export function evaluateFbsBoxAvailability(input: {
     )
     .reduce((sum, reservation) => sum + Math.max(1, reservation.itemCount), 0);
   const freeQuantity = Math.max(0, input.availableQuantity - reservedQuantity);
+  // FIX: logical reservations can only release claims against live AVAILABLE
+  // stock; they must never recreate a unit already moved to PACKING.
+  const effectiveOwnReservationQuantity =
+    input.candidateAssignedBoxId === input.boxId ? ownReservationQuantity : 0;
+  const protectedOtherQuantity = Math.max(
+    0,
+    reservedQuantity - effectiveOwnReservationQuantity - releasableBackgroundQuantity,
+  );
   const claimableQuantity = Math.max(
     0,
-    freeQuantity +
-      releasableBackgroundQuantity +
-      (input.candidateAssignedBoxId === input.boxId ? ownReservationQuantity : 0),
+    input.availableQuantity - protectedOtherQuantity,
   );
   return {
     availableQuantity: input.availableQuantity,
