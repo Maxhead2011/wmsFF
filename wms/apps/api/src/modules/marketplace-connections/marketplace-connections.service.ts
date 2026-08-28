@@ -29,6 +29,7 @@ import {
   StockStatus,
   VolumeSource,
 } from '@prisma/client';
+import { PDFParse } from 'pdf-parse';
 import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
 import { BoxCodePolicyService } from '../../common/boxes/box-code-policy.service';
 import { ArchivedEmptyBoxPalletDetachService } from '../../common/boxes/archived-empty-box-pallet-detach.service';
@@ -15735,14 +15736,34 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   private async loadOzonFbsTsdOrderSticker(task: FbsTsdAssemblyRecord) {
     if (task.marketplaceLabelBase64) {
-      return {
-        marketplace: MarketplaceType.OZON,
-        partA: '',
-        partB: '',
-        barcode: task.orderId,
-        contentType: task.marketplaceLabelContentType || 'application/pdf',
-        imageBase64: task.marketplaceLabelBase64,
-      };
+      try {
+        // FIX: migrate cached Ozon PDFs before an ATOL TSD can invoke Android PdfRenderer.
+        const label = await this.prepareOzonFbsTsdLabel(
+          Buffer.from(task.marketplaceLabelBase64, 'base64'),
+          task.marketplaceLabelContentType || 'application/pdf',
+        );
+        if (label.contentType !== task.marketplaceLabelContentType) {
+          await this.prisma.fbsTsdAssembly.updateMany({
+            where: { id: task.id },
+            data: {
+              marketplaceLabelBase64: label.buffer.toString('base64'),
+              marketplaceLabelContentType: label.contentType,
+            },
+          });
+        }
+        return {
+          marketplace: MarketplaceType.OZON,
+          partA: '',
+          partB: '',
+          barcode: task.orderId,
+          contentType: label.contentType,
+          imageBase64: label.buffer.toString('base64'),
+        };
+      } catch (caught) {
+        const reason = marketplaceErrorMessage(caught);
+        this.logger.warn(`Ozon label cannot be prepared for FBS TSD order ${task.orderId}: ${reason}`);
+        return null;
+      }
     }
     const connection = await this.prisma.clientMarketplaceConnection.findFirst({
       where: {
@@ -15766,12 +15787,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           body: JSON.stringify({ posting_number: [task.orderId] }),
         },
       );
-      const imageBase64 = label.buffer.toString('base64');
+      // FIX: rasterize Ozon's PDF on the API; the old ATOL native renderer can crash the process.
+      const preparedLabel = await this.prepareOzonFbsTsdLabel(label.buffer, label.contentType);
+      const imageBase64 = preparedLabel.buffer.toString('base64');
       await this.prisma.fbsTsdAssembly.updateMany({
         where: { id: task.id },
         data: {
           marketplaceLabelBase64: imageBase64,
-          marketplaceLabelContentType: label.contentType,
+          marketplaceLabelContentType: preparedLabel.contentType,
           stickerBarcode: task.orderId,
           marketplaceSubmitError: null,
           errorMessage: null,
@@ -15782,7 +15805,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         partA: '',
         partB: '',
         barcode: task.orderId,
-        contentType: label.contentType,
+        contentType: preparedLabel.contentType,
         imageBase64,
       };
     } catch (caught) {
@@ -15793,6 +15816,24 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         data: { marketplaceSubmitError: reason },
       });
       return null;
+    }
+  }
+
+  private async prepareOzonFbsTsdLabel(buffer: Buffer, contentType: string) {
+    if (!contentType.toLowerCase().includes('pdf')) return { buffer, contentType };
+    const parser = new PDFParse({ data: buffer });
+    try {
+      const screenshot = await parser.getScreenshot({
+        desiredWidth: 1095,
+        first: 1,
+        imageDataUrl: false,
+        imageBuffer: true,
+      });
+      const firstPage = screenshot.pages[0]?.data;
+      if (!firstPage?.length) throw new Error('Ozon label PDF has no renderable page.');
+      return { buffer: Buffer.from(firstPage), contentType: 'image/png' };
+    } finally {
+      await parser.destroy();
     }
   }
 
