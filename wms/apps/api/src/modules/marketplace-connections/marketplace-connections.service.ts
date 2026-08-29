@@ -434,6 +434,9 @@ type RelabelReconciliationPair = {
   target: RelabelReconciliationSku | null;
 };
 const FBS_TSD_STALE_UNSTARTED_TASK_MS = 2 * 60 * 60 * 1_000;
+// FIX: allow 90 seconds (18 missed five-second heartbeats) before releasing
+// only an untouched FBS lease; short Wi-Fi interruptions stay protected.
+const FBS_TSD_OFFLINE_TASK_RELEASE_MS = 90_000;
 const FBS_TSD_REQUEST_FALLBACK_CACHE_MS = 2 * 60 * 1_000;
 const FBS_TSD_NO_BOX_CODE = 'БЕЗ КОРОБА';
 const FBS_TSD_RESERVED_STATUS = 'RESERVED';
@@ -5075,6 +5078,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const clientIds = uniqueStrings(connections.map((connection) => connection.clientId));
     let lastMarketplaceError = '';
     let blockedBatchOrder: { orderId: string; workerName: string } | null = null;
+    // FIX: one queue refresh can meet many orders held by the same device.
+    // Reuse its observed monitor state within this request.
+    const offlineTsdByDevice = new Map<string, boolean>();
 
     for (const clientId of clientIds) {
       try {
@@ -5140,12 +5146,25 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
                 : order.request?.id === previousBatch.requestId,
             )
           : [];
-        const baseCandidates = sameBatchCandidates.length > 0 ? sameBatchCandidates : candidates;
-        const orderedCandidates = [...baseCandidates].sort((left, right) => {
+        // FIX: keep the current supply first, but do not let its order held by
+        // another online TSD hide all free orders from subsequent supplies.
+        const sameBatchSet = new Set(sameBatchCandidates);
+        const prioritizeCurrentPallet = (
+          left: (typeof candidates)[number],
+          right: (typeof candidates)[number],
+        ) => {
           const leftOnCurrentPallet = left.storageBoxes.some((box) => preferredPalletBoxCodes.has(box.code));
           const rightOnCurrentPallet = right.storageBoxes.some((box) => preferredPalletBoxCodes.has(box.code));
           return Number(rightOnCurrentPallet) - Number(leftOnCurrentPallet);
-        });
+        };
+        const orderedCandidates = sameBatchCandidates.length > 0
+          ? [
+              ...[...sameBatchCandidates].sort(prioritizeCurrentPallet),
+              ...candidates
+                .filter((order) => !sameBatchSet.has(order))
+                .sort(prioritizeCurrentPallet),
+            ]
+          : [...candidates].sort(prioritizeCurrentPallet);
 
         for (const order of orderedCandidates) {
           const product = order.product!;
@@ -5231,43 +5250,57 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
           if (existing?.status === 'COMPLETED' || existing?.status === FBS_TSD_RETURN_REQUIRED) continue;
           if (existing?.status === 'IN_PROGRESS') {
+            const unstarted = this.isFbsTsdTaskUntouchedForAutoRelease(existing);
             const staleUnstarted =
-              !existing.boxId &&
-              !existing.sourceBarcode &&
-              !existing.barcode &&
-              !existing.kiz &&
+              unstarted &&
               existing.updatedAt.getTime() <= Date.now() - FBS_TSD_STALE_UNSTARTED_TASK_MS;
-            if (!staleUnstarted) {
+            // FIX: a physical TSD that is offline must not keep an untouched
+            // order locked. Missing heartbeat data is treated as unknown, not
+            // offline, so legacy or temporarily unmonitored devices are safe.
+            let offlineReleased = false;
+            if (unstarted && !staleUnstarted) {
+              let deviceOffline = offlineTsdByDevice.get(existing.deviceCode);
+              if (deviceOffline === undefined) {
+                deviceOffline = await this.isFbsTsdDeviceOffline(existing.deviceCode);
+                offlineTsdByDevice.set(existing.deviceCode, deviceOffline);
+              }
+              if (deviceOffline) {
+                offlineReleased = await this.releaseOfflineUntouchedFbsTsdTask(existing);
+              }
+            }
+            if (!staleUnstarted && !offlineReleased) {
               blockedBatchOrder = {
                 orderId: existing.orderId,
                 workerName: existing.workerName ?? existing.deviceCode,
               };
               continue;
             }
-            const released = await this.prisma.fbsTsdAssembly.updateMany({
-              where: {
-                id: existing.id,
-                status: 'IN_PROGRESS',
-                workerUserId: existing.workerUserId,
-                updatedAt: existing.updatedAt,
-                boxId: null,
-                sourceBarcode: null,
-                barcode: null,
-                kiz: null,
-              },
-              data: {
-                status: existing.reservedBoxId
-                  ? FBS_TSD_RESERVED_STATUS
-                  : 'RELEASED',
-                deviceCode: existing.reservedBoxId
-                  ? FBS_TSD_AUTO_RESERVATION_DEVICE
-                  : existing.deviceCode,
-                workerUserId: null,
-                workerName: null,
-                errorMessage: `Пустое задание автоматически возвращено в очередь спустя ${FBS_TSD_STALE_UNSTARTED_TASK_MS / 3_600_000} ч. без сканирования.`,
-              },
-            });
-            if (released.count === 0) continue;
+            if (staleUnstarted) {
+              const released = await this.prisma.fbsTsdAssembly.updateMany({
+                where: {
+                  id: existing.id,
+                  status: 'IN_PROGRESS',
+                  workerUserId: existing.workerUserId,
+                  updatedAt: existing.updatedAt,
+                  boxId: null,
+                  sourceBarcode: null,
+                  barcode: null,
+                  kiz: null,
+                },
+                data: {
+                  status: existing.reservedBoxId
+                    ? FBS_TSD_RESERVED_STATUS
+                    : 'RELEASED',
+                  deviceCode: existing.reservedBoxId
+                    ? FBS_TSD_AUTO_RESERVATION_DEVICE
+                    : existing.deviceCode,
+                  workerUserId: null,
+                  workerName: null,
+                  errorMessage: `Пустое задание автоматически возвращено в очередь спустя ${FBS_TSD_STALE_UNSTARTED_TASK_MS / 3_600_000} ч. без сканирования.`,
+                },
+              });
+              if (released.count === 0) continue;
+            }
             existing = await this.prisma.fbsTsdAssembly.findUnique({
               where: { id: existing.id },
             });
@@ -13441,6 +13474,124 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const fresh = await this.prisma.fbsTsdAssembly.findUnique({ where: { id: task.id } });
     this.requireCurrentFbsTsdLease(fresh, user);
     return fresh;
+  }
+
+  // FIX: mirror every physical, marketplace, label and packing marker used by
+  // the legacy-lease recovery. The automatic "no box" marker is not a scan.
+  private isFbsTsdTaskUntouchedForAutoRelease(task: FbsTsdAssemblyRecord) {
+    return (
+      !task.boxId &&
+      (!task.boxCode || task.boxCode === FBS_TSD_NO_BOX_CODE) &&
+      !task.sourceBarcode &&
+      !task.barcode &&
+      !task.kiz &&
+      !task.relabelConfirmedAt &&
+      ['PENDING', 'NOT_REQUIRED'].includes(task.wbMetaStatus) &&
+      !task.marketplaceSubmittedAt &&
+      !task.marketplaceLabelBase64 &&
+      !task.marketplaceLabelContentType &&
+      !task.marketplaceSubmitError &&
+      !task.stickerPartA &&
+      !task.stickerPartB &&
+      !task.stickerBarcode &&
+      !task.sourceBoxPending &&
+      !task.cargoPackingId &&
+      !task.cargoPackedAt &&
+      !task.cargoPackedByUserId &&
+      !task.cargoPackedByName &&
+      !task.completedAt
+    );
+  }
+
+  // FIX: return true only when the monitor has positively observed this exact
+  // physical device before and its heartbeat is now expired. No row means the
+  // state is unknown and must never be used to steal a task.
+  private async isFbsTsdDeviceOffline(deviceCode: string) {
+    if (typeof this.prisma.tsdOperation?.findUnique !== 'function') return false;
+    try {
+      const heartbeat = await this.prisma.tsdOperation.findUnique({
+        where: { operationKey: `monitor-heartbeat:${deviceCode}` },
+        select: { updatedAt: true },
+      });
+      return Boolean(
+        heartbeat?.updatedAt &&
+        heartbeat.updatedAt.getTime() <= Date.now() - FBS_TSD_OFFLINE_TASK_RELEASE_MS,
+      );
+    } catch (caught) {
+      this.logger.warn(
+        `FBS TSD heartbeat check failed for ${deviceCode}: ${caught instanceof Error ? caught.message : String(caught)}`,
+      );
+      return false;
+    }
+  }
+
+  // FIX: lock the heartbeat row before the final check and guarded release.
+  // A reconnect that started first refreshes the row and prevents release; a
+  // reconnect that starts later receives a stale-lease response on its task.
+  private async releaseOfflineUntouchedFbsTsdTask(task: FbsTsdAssemblyRecord) {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const heartbeats = await tx.$queryRaw<Array<{ updatedAt: Date }>>(Prisma.sql`
+          SELECT "updatedAt"
+          FROM "TsdOperation"
+          WHERE "operationKey" = ${`monitor-heartbeat:${task.deviceCode}`}
+            AND "operationType" = 'monitor_heartbeat'
+          FOR UPDATE
+        `);
+        const heartbeat = heartbeats[0];
+        if (
+          !heartbeat?.updatedAt ||
+          heartbeat.updatedAt.getTime() > Date.now() - FBS_TSD_OFFLINE_TASK_RELEASE_MS
+        ) {
+          return false;
+        }
+
+        const released = await tx.fbsTsdAssembly.updateMany({
+          where: {
+            id: task.id,
+            status: 'IN_PROGRESS',
+            workerUserId: task.workerUserId,
+            deviceCode: task.deviceCode,
+            updatedAt: task.updatedAt,
+            boxId: null,
+            OR: [{ boxCode: null }, { boxCode: FBS_TSD_NO_BOX_CODE }],
+            sourceBarcode: null,
+            barcode: null,
+            kiz: null,
+            relabelConfirmedAt: null,
+            wbMetaStatus: { in: ['PENDING', 'NOT_REQUIRED'] },
+            marketplaceSubmittedAt: null,
+            marketplaceLabelBase64: null,
+            marketplaceLabelContentType: null,
+            marketplaceSubmitError: null,
+            stickerPartA: null,
+            stickerPartB: null,
+            stickerBarcode: null,
+            sourceBoxPending: false,
+            cargoPackingId: null,
+            cargoPackedAt: null,
+            cargoPackedByUserId: null,
+            cargoPackedByName: null,
+            completedAt: null,
+          },
+          data: {
+            status: task.reservedBoxId ? FBS_TSD_RESERVED_STATUS : 'RELEASED',
+            deviceCode: task.reservedBoxId
+              ? FBS_TSD_AUTO_RESERVATION_DEVICE
+              : task.deviceCode,
+            workerUserId: null,
+            workerName: null,
+            errorMessage: `Пустое задание автоматически возвращено в очередь: ТСД ${task.deviceCode} офлайн более ${FBS_TSD_OFFLINE_TASK_RELEASE_MS / 1_000} сек.`,
+          },
+        });
+        return released.count === 1;
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    } catch (caught) {
+      this.logger.warn(
+        `FBS TSD offline lease release failed for ${task.deviceCode}: ${caught instanceof Error ? caught.message : String(caught)}`,
+      );
+      return false;
+    }
   }
 
   private fbsTsdDeviceCode(deviceCodeValue: unknown, user: AuthUser) {
