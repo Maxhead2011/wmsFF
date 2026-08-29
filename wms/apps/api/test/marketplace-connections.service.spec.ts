@@ -41,6 +41,37 @@ describe('MarketplaceConnectionsService', () => {
     expect(message).toContain('req-409');
   });
 
+  // TEST: the full WB history may exceed PostgreSQL's 32,767 bind-variable limit.
+  it('loads FBS request links in bounded batches without losing orders', async () => {
+    const findMany = vi.fn(async (args: { where: { orderId: { in: string[] } } }) =>
+      args.where.orderId.in.map((orderId) => ({
+        connectionId: 'connection-1',
+        orderId,
+        request: { id: `request-${orderId}` },
+      })),
+    );
+    const service = new MarketplaceConnectionsService(
+      { fbsOrderRequestLink: { findMany } } as never,
+      {} as never,
+    );
+    const orders = Array.from({ length: 32_768 }, (_, index) => ({
+      connectionId: 'connection-1',
+      id: String(index + 1),
+    }));
+
+    const links = await (service as any).loadActiveFbsOrderRequestLinks(
+      'client-1',
+      orders,
+    );
+
+    expect(findMany).toHaveBeenCalledTimes(7);
+    expect(
+      findMany.mock.calls.every(([args]) => args.where.orderId.in.length <= 5_000),
+    ).toBe(true);
+    expect(findMany.mock.calls.flatMap(([args]) => args.where.orderId.in)).toHaveLength(32_768);
+    expect(links).toHaveLength(32_768);
+  });
+
   it('защищает расчёт FBS от старых коробов и заявок без филиала, относя их только к Москве', async () => {
     const stockFindMany = vi.fn().mockResolvedValue([
       { skuId: 'sku-1', quantity: 100, box: { status: 'active' } },
