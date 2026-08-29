@@ -7332,6 +7332,497 @@ describe('MarketplaceConnectionsService', () => {
     ]);
   });
 
+  // TEST: a WB supply sent with 200 orders must return only the 50 physically
+  // unfinished orders; the 150 valid completed scans must remain untouched.
+  it('finds only unfinished orders in a WB-delivered branch supply', async () => {
+    const orders = Array.from({ length: 200 }, (_, index) => fbsOrder({
+      id: String(5_600_000_000 + index),
+      category: 'shipped',
+      supplierStatus: 'complete',
+      wbStatus: 'waiting',
+      statusLabel: 'В доставке',
+      supplyId: 'WB-GI-200',
+      warehouseId: 'wb-warehouse-moscow',
+      request: {
+        id: 'request-source',
+        number: 400,
+        title: 'FBS — 200 заказов',
+        status: ClientRequestStatus.DONE,
+        warehouseId: 'warehouse-moscow',
+        fbsEmergencyAssemblyAt: null,
+        fbsEmergencyAssemblyByUserId: null,
+        fbsEmergencyAssemblyByName: null,
+      },
+    }));
+    const links = orders.map((order) => ({
+      id: `link-${order.id}`,
+      connectionId: order.connectionId,
+      orderId: order.id,
+      requestId: 'request-source',
+      syncStatus: 'ACTIVE',
+      lastCategory: 'shipped',
+      lastSupplierStatus: 'complete',
+      lastWbStatus: 'waiting',
+      lastSupplyId: 'WB-GI-200',
+      lastSkuId: 'sku-1',
+      lastItemCount: 1,
+      request: {
+        id: 'request-source',
+        number: 400,
+        status: ClientRequestStatus.DONE,
+        warehouseId: 'warehouse-moscow',
+        fbsEmergencyAssemblyAt: null,
+      },
+    }));
+    const tasks = orders.slice(0, 175).map((order, index) => ({
+      id: `task-${order.id}`,
+      connectionId: order.connectionId,
+      orderId: order.id,
+      requestId: 'request-source',
+      requestItemId: 'source-item',
+      skuId: 'sku-1',
+      itemCount: 1,
+      productName: 'Костюм',
+      article: 'ART-1',
+      barcodes: ['460000000001'],
+      status: index < 150 ? 'COMPLETED' : 'IN_PROGRESS',
+      barcode: index < 150 ? '460000000001' : null,
+      kiz: index < 150 ? `010460000000001121${order.id}` : null,
+      requiresKiz: true,
+      wbMetaStatus: index < 150 ? 'ACCEPTED' : 'PENDING',
+      boxCode: index < 150 ? 'FFL_TEST_001' : null,
+      reservedBoxCode: null,
+      completedAt: index < 150 ? new Date('2026-08-29T07:00:00.000Z') : null,
+    }));
+    const prisma = {
+      fbsOrderRequestLink: { findMany: vi.fn().mockResolvedValue(links) },
+      fbsTsdAssembly: { findMany: vi.fn().mockResolvedValue(tasks) },
+      clientMarketplaceConnection: {
+        findMany: vi.fn().mockResolvedValue([{
+          id: 'connection-1',
+          marketplace: MarketplaceType.WILDBERRIES,
+          fbsExecutionWarehouseId: 'warehouse-moscow',
+          fbsAutoRouteNewWarehouses: true,
+        }]),
+      },
+      fbsWarehouseRoutingRule: { findMany: vi.fn().mockResolvedValue([]) },
+      warehouse: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'warehouse-moscow',
+          code: 'MSK',
+          name: 'Москва',
+          city: 'Москва',
+        }),
+      },
+    };
+    const service = new MarketplaceConnectionsService(
+      prisma as never,
+      { requireClientAccess: vi.fn() } as never,
+    );
+    vi.spyOn(service as any, 'refreshFbsOrdersCache').mockResolvedValue({
+      client: { id: 'client-1', code: 'CL-1', name: 'Клиент' },
+      connected: true,
+      connections: [{ id: 'connection-1', marketplace: MarketplaceType.WILDBERRIES }],
+      fetchedAt: '2026-08-29T10:00:00.000Z',
+      deliveryPlan: {},
+      counts: { active: 0, shipped: 200, cancelled: 0, archive: 0, all: 200 },
+      orders,
+    });
+
+    const result = await service.checkFbsBranchDeliveryRecovery(
+      'client-1',
+      {
+        id: 'admin-1',
+        name: 'Администратор',
+        roleCodes: ['ADMIN'],
+        permissionCodes: ['system:admin'],
+        activeWarehouseId: 'warehouse-moscow',
+        warehouseIds: ['warehouse-moscow'],
+      } as never,
+    );
+
+    expect(result.counts).toMatchObject({
+      supplies: 1,
+      orders: 200,
+      assembled: 150,
+      recoveryRequired: 50,
+      assemble: 25,
+      complete: 25,
+      reassemble: 0,
+    });
+    expect(result.recoveryOrders).toHaveLength(50);
+    expect(result.recoveryOrders.filter((order) => order.action === 'COMPLETE')).toHaveLength(25);
+    expect(result.recoveryOrders.filter((order) => order.action === 'ASSEMBLE')).toHaveLength(25);
+    // TEST: a closed historical request is the exact premature-WB-send case
+    // and must not block creation of the local recovery request.
+    expect(result.recoveryOrders.every((order) => order.canSelect)).toBe(true);
+    expect(result.recoveryOrders).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ orderId: orders[0]!.id }),
+      ]),
+    );
+  });
+
+  // TEST: the normal "send to WB" path must stop before the WB mutation when
+  // a 200-order supply has only 150 complete physical TSD scans.
+  it('blocks sending a 200-order WB supply when 50 orders are not collected', async () => {
+    const orders = Array.from({ length: 200 }, (_, index) => fbsOrder({
+      id: String(5_610_000_000 + index),
+      supplyId: 'WB-GI-GUARD-200',
+      category: 'active',
+      supplierStatus: 'confirm',
+      statusLabel: 'На сборке',
+    }));
+    const links = orders.map((order) => ({
+      connectionId: order.connectionId,
+      orderId: order.id,
+      requestId: 'request-guard',
+      syncStatus: 'ACTIVE',
+      lastCategory: 'active',
+      lastSupplierStatus: 'confirm',
+      lastWbStatus: 'waiting',
+      request: {
+        id: 'request-guard',
+        number: 410,
+        status: ClientRequestStatus.IN_WORK,
+      },
+    }));
+    const tasks = orders.slice(0, 150).map((order) => ({
+      requestId: 'request-guard',
+      connectionId: order.connectionId,
+      orderId: order.id,
+      status: 'COMPLETED',
+      requiresKiz: true,
+      kiz: `010460000000001121${order.id}`,
+      wbMetaStatus: 'ACCEPTED',
+      barcode: '460000000001',
+    }));
+    const service = new MarketplaceConnectionsService({
+      fbsOrderRequestLink: { findMany: vi.fn().mockResolvedValue(links) },
+      fbsTsdAssembly: { findMany: vi.fn().mockResolvedValue(tasks) },
+    } as never, {} as never);
+
+    await expect(
+      (service as any).assertFbsDeliveryReadiness(
+        'client-1',
+        { orders },
+        [orders[0]],
+      ),
+    ).rejects.toThrow('не собраны на ТСД (50)');
+  });
+
+  // TEST: branch audit scope is taken from an explicit WB -> WMS routing rule,
+  // not from a city/name guess and not from another branch's supply.
+  it('checks only supplies routed to the active WMS branch', async () => {
+    const moscowOrder = fbsOrder({
+      id: '5600001001',
+      category: 'shipped',
+      supplierStatus: 'complete',
+      statusLabel: 'В доставке',
+      supplyId: 'WB-GI-MSK',
+      warehouseId: 'wb-msk',
+      request: null,
+    });
+    const noginskOrder = fbsOrder({
+      id: '5600001002',
+      category: 'shipped',
+      supplierStatus: 'complete',
+      statusLabel: 'В доставке',
+      supplyId: 'WB-GI-NOG',
+      warehouseId: 'wb-nog',
+      request: null,
+    });
+    const prisma = {
+      fbsOrderRequestLink: { findMany: vi.fn().mockResolvedValue([]) },
+      fbsTsdAssembly: { findMany: vi.fn().mockResolvedValue([]) },
+      clientMarketplaceConnection: {
+        findMany: vi.fn().mockResolvedValue([{
+          id: 'connection-1',
+          marketplace: MarketplaceType.WILDBERRIES,
+          fbsExecutionWarehouseId: 'warehouse-moscow',
+          fbsAutoRouteNewWarehouses: false,
+        }]),
+      },
+      fbsWarehouseRoutingRule: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            connectionId: 'connection-1',
+            marketplaceWarehouseId: 'wb-msk',
+            mode: 'BRANCH',
+            executionWarehouseId: 'warehouse-moscow',
+          },
+          {
+            connectionId: 'connection-1',
+            marketplaceWarehouseId: 'wb-nog',
+            mode: 'BRANCH',
+            executionWarehouseId: 'warehouse-noginsk',
+          },
+        ]),
+      },
+      warehouse: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'warehouse-moscow',
+          code: 'MSK',
+          name: 'Москва',
+          city: 'Москва',
+        }),
+      },
+    };
+    const service = new MarketplaceConnectionsService(
+      prisma as never,
+      { requireClientAccess: vi.fn() } as never,
+    );
+    vi.spyOn(service as any, 'refreshFbsOrdersCache').mockResolvedValue({
+      client: { id: 'client-1', code: 'CL-1', name: 'Клиент' },
+      connected: true,
+      connections: [{ id: 'connection-1', marketplace: MarketplaceType.WILDBERRIES }],
+      fetchedAt: '2026-08-29T10:00:00.000Z',
+      deliveryPlan: {},
+      counts: { active: 0, shipped: 2, cancelled: 0, archive: 0, all: 2 },
+      orders: [moscowOrder, noginskOrder],
+    });
+
+    const result = await service.checkFbsBranchDeliveryRecovery(
+      'client-1',
+      {
+        id: 'admin-1',
+        name: 'Администратор',
+        roleCodes: ['ADMIN'],
+        permissionCodes: ['system:admin'],
+        activeWarehouseId: 'warehouse-moscow',
+        warehouseIds: ['warehouse-moscow'],
+      } as never,
+    );
+
+    expect(result.supplies.map((supply) => supply.supplyId)).toEqual(['WB-GI-MSK']);
+    expect(result.recoveryOrders.map((order) => order.orderId)).toEqual(['5600001001']);
+  });
+
+  // TEST: creating a recovery request moves only the selected unfinished
+  // orders, starts it without a pass and performs no mutation in Wildberries.
+  it('creates an idempotent local delivery-recovery request without touching completed orders or WB', async () => {
+    const sourceRequest = {
+      id: 'request-source',
+      number: 400,
+      status: ClientRequestStatus.DONE,
+      fbsEmergencyAssemblyAt: null,
+    };
+    const recoveryOrders = [
+      {
+        connectionId: 'connection-1',
+        orderId: '5600000151',
+        supplyId: 'WB-GI-200',
+        warehouseId: 'wb-warehouse-moscow',
+        warehouseName: 'Москва',
+        requestId: sourceRequest.id,
+        requestNumber: sourceRequest.number,
+        requestStatus: sourceRequest.status,
+        action: 'COMPLETE',
+        actionLabel: 'Дособрать',
+        reason: 'Сборка начата, но не завершена.',
+        canSelect: true,
+        blocker: null,
+        itemCount: 1,
+        skuId: 'sku-1',
+        productName: 'Костюм',
+        article: 'ART-1',
+        size: 'M',
+        barcode: '460000000001',
+        requiresKiz: true,
+        assemblyId: 'task-151',
+        assemblyStatus: 'IN_PROGRESS',
+        scannedBarcode: null,
+        kiz: null,
+        boxCode: 'FFL_TEST_001',
+      },
+      {
+        connectionId: 'connection-1',
+        orderId: '5600000176',
+        supplyId: 'WB-GI-200',
+        warehouseId: 'wb-warehouse-moscow',
+        warehouseName: 'Москва',
+        requestId: sourceRequest.id,
+        requestNumber: sourceRequest.number,
+        requestStatus: sourceRequest.status,
+        action: 'ASSEMBLE',
+        actionLabel: 'Собрать',
+        reason: 'Сборка не начиналась.',
+        canSelect: true,
+        blocker: null,
+        itemCount: 1,
+        skuId: 'sku-1',
+        productName: 'Костюм',
+        article: 'ART-1',
+        size: 'M',
+        barcode: '460000000001',
+        requiresKiz: true,
+        assemblyId: null,
+        assemblyStatus: null,
+        scannedBarcode: null,
+        kiz: null,
+        boxCode: null,
+      },
+    ];
+    const links = recoveryOrders.map((order) => ({
+      id: `link-${order.orderId}`,
+      connectionId: order.connectionId,
+      orderId: order.orderId,
+      requestId: sourceRequest.id,
+      syncStatus: 'ACTIVE',
+      request: sourceRequest,
+    }));
+    const tx = {
+      clientRequest: {
+        create: vi.fn().mockResolvedValue({
+          id: 'request-recovery',
+          number: 401,
+          title: 'FBS ДОВОЗ — 2 заказа',
+          status: ClientRequestStatus.IN_WORK,
+          fbsEmergencyAssemblyAt: new Date('2026-08-29T10:00:00.000Z'),
+          items: [{ id: 'recovery-item', skuId: 'sku-1', name: 'Костюм', quantity: 2 }],
+        }),
+      },
+      clientRequestItem: {
+        update: vi.fn().mockResolvedValue({}),
+        delete: vi.fn().mockResolvedValue({}),
+      },
+      fbsOrderRequestLink: { update: vi.fn().mockResolvedValue({}) },
+      fbsTsdAssembly: { update: vi.fn().mockResolvedValue({}) },
+      clientRequestEvent: { create: vi.fn().mockResolvedValue({}) },
+      auditLog: { create: vi.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      fbsOrderRequestLink: { findMany: vi.fn().mockResolvedValue(links) },
+      fbsTsdAssembly: {
+        findMany: vi.fn().mockResolvedValue([{
+          id: 'task-151',
+          connectionId: 'connection-1',
+          orderId: '5600000151',
+          requestId: sourceRequest.id,
+          requestItemId: 'source-item',
+          status: 'IN_PROGRESS',
+        }]),
+      },
+      clientRequestItem: {
+        findMany: vi.fn().mockResolvedValue([{
+          id: 'source-item',
+          requestId: sourceRequest.id,
+          skuId: 'sku-1',
+          quantity: 200,
+        }]),
+      },
+      $transaction: vi.fn(async (callback: (value: typeof tx) => unknown) => callback(tx)),
+    };
+    const clientScopes = { requireClientAccess: vi.fn() };
+    const service = new MarketplaceConnectionsService(prisma as never, clientScopes as never);
+    vi.spyOn(service, 'checkFbsBranchDeliveryRecovery').mockResolvedValue({
+      client: { id: 'client-1', code: 'CL-1', name: 'Клиент' },
+      branch: { id: 'warehouse-moscow', code: 'MSK', name: 'Москва', city: 'Москва' },
+      checkedAt: '2026-08-29T10:00:00.000Z',
+      counts: {
+        supplies: 1,
+        orders: 200,
+        assembled: 150,
+        recoveryRequired: 50,
+        assemble: 25,
+        complete: 25,
+        reassemble: 0,
+        readyToSendWb: 0,
+        routeIssues: 0,
+      },
+      supplies: [],
+      recoveryOrders: recoveryOrders as never,
+      routeIssues: [],
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await service.createFbsDeliveryRecoveryRequest(
+      {
+        clientId: 'client-1',
+        orders: recoveryOrders.map((order) => ({
+          connectionId: order.connectionId,
+          id: order.orderId,
+        })),
+      },
+      {
+        id: 'admin-1',
+        name: 'Администратор',
+        roleCodes: ['ADMIN'],
+        permissionCodes: ['system:admin'],
+        activeWarehouseId: 'warehouse-moscow',
+        warehouseIds: ['warehouse-moscow'],
+      } as never,
+    );
+
+    expect(tx.clientRequest.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: ClientRequestStatus.IN_WORK,
+        title: 'FBS ДОВОЗ — 2 заказа',
+        fbsEmergencyAssemblyAt: expect.any(Date),
+        items: { create: [expect.objectContaining({ skuId: 'sku-1', quantity: 2 })] },
+      }),
+    }));
+    expect(tx.fbsOrderRequestLink.update).toHaveBeenCalledTimes(2);
+    expect(tx.fbsTsdAssembly.update).toHaveBeenCalledTimes(1);
+    expect(tx.clientRequestItem.update).toHaveBeenCalledWith({
+      where: { id: 'source-item' },
+      data: { quantity: 198 },
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      status: 'CREATED',
+      linkedOrders: 2,
+      request: {
+        id: 'request-recovery',
+        number: 401,
+        status: ClientRequestStatus.IN_WORK,
+      },
+    });
+
+    // TEST: a repeated click returns the already active recovery request and
+    // never opens a second write transaction.
+    prisma.fbsOrderRequestLink.findMany.mockResolvedValueOnce(
+      recoveryOrders.map((order) => ({
+        id: `link-${order.orderId}`,
+        connectionId: order.connectionId,
+        orderId: order.orderId,
+        requestId: 'request-recovery',
+        syncStatus: 'ACTIVE',
+        request: {
+          id: 'request-recovery',
+          number: 401,
+          status: ClientRequestStatus.IN_WORK,
+          fbsEmergencyAssemblyAt: new Date('2026-08-29T10:00:00.000Z'),
+        },
+      })),
+    );
+    const repeated = await service.createFbsDeliveryRecoveryRequest(
+      {
+        clientId: 'client-1',
+        orders: recoveryOrders.map((order) => ({
+          connectionId: order.connectionId,
+          id: order.orderId,
+        })),
+      },
+      {
+        id: 'admin-1',
+        name: 'Администратор',
+        roleCodes: ['ADMIN'],
+        permissionCodes: ['system:admin'],
+        activeWarehouseId: 'warehouse-moscow',
+        warehouseIds: ['warehouse-moscow'],
+      } as never,
+    );
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(repeated).toMatchObject({
+      status: 'ALREADY_EXISTS',
+      linkedOrders: 2,
+      request: { id: 'request-recovery', number: 401 },
+    });
+  });
+
   it('enables idempotent local emergency assembly for a shipped FBS request without calling Wildberries', async () => {
     const request = {
       id: 'request-65',

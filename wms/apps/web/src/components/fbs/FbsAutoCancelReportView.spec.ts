@@ -1,10 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import type { FbsOrderSummary } from '../../lib/api';
+import type { FbsDeliveryRecoveryOrder, FbsOrderSummary } from '../../lib/api';
 import {
   openFbsDeadlineOrderDetails,
   openFbsDeadlineRequest,
+  selectedFbsDeliveryRecoveryOrderItems,
   selectedFbsDeadlineOrderItems,
+  updateFbsDeliveryRecoveryVisibleSelection,
   updateFbsDeadlineVisibleSelection,
 } from './FbsPanel';
 
@@ -89,5 +91,68 @@ describe('FBS auto-cancel report UI', () => {
 
     const cleared = updateFbsDeadlineVisibleSelection(selected, [visible], false);
     expect([...cleared]).toEqual(['cabinet-1:hidden']);
+  });
+
+  // TEST: only explicitly selectable recovery orders may be submitted to the
+  // server; a completed or blocked order must never be reset by bulk selection.
+  it('builds a delivery-recovery request only from selectable unfinished orders', () => {
+    const rows = [
+      {
+        connectionId: 'cabinet-1',
+        orderId: 'assemble-1',
+        action: 'ASSEMBLE',
+        canSelect: true,
+      },
+      {
+        connectionId: 'cabinet-1',
+        orderId: 'complete-1',
+        action: 'COMPLETE',
+        canSelect: true,
+      },
+      {
+        connectionId: 'cabinet-1',
+        orderId: 'blocked-1',
+        action: 'REASSEMBLE',
+        canSelect: false,
+      },
+    ] as FbsDeliveryRecoveryOrder[];
+
+    const selected = updateFbsDeliveryRecoveryVisibleSelection(new Set(), rows, true);
+
+    expect([...selected].sort()).toEqual([
+      'cabinet-1:assemble-1',
+      'cabinet-1:complete-1',
+    ]);
+    expect(selectedFbsDeliveryRecoveryOrderItems(rows, selected)).toEqual([
+      { connectionId: 'cabinet-1', id: 'assemble-1' },
+      { connectionId: 'cabinet-1', id: 'complete-1' },
+    ]);
+  });
+
+  // TEST: the branch audit and recovery table are visible actions inside the
+  // existing auto-cancel tile rather than a second disconnected FBS module.
+  it('renders branch verification and recovery-request controls in the existing tile', () => {
+    const source = readFileSync(new URL('./FbsPanel.tsx', import.meta.url), 'utf8');
+
+    expect(source).toContain('Проверить поставки филиала');
+    expect(source).toContain('Сформировать заявку на довоз');
+    expect(source).toContain('FBS ДОВОЗ');
+  });
+
+  // TEST: recovery requests must be visually distinguishable without changing
+  // the Android application; the web list uses the existing emergency flag.
+  it('marks delivery-recovery requests with an orange web-list row', () => {
+    const source = readFileSync(
+      new URL('../client-requests/ClientRequestsTable.tsx', import.meta.url),
+      'utf8',
+    );
+    const css = readFileSync(
+      new URL('../client-requests/client-requests.css', import.meta.url),
+      'utf8',
+    );
+
+    expect(source).toContain('client-request-row--fbs-recovery');
+    expect(source).toContain('ДОВОЗ WB');
+    expect(css).toMatch(/\.client-request-table tbody tr\.client-request-row--fbs-recovery > td\s*{[^}]*background:/s);
   });
 });

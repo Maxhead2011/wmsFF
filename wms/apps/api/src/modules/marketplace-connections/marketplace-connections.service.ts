@@ -312,6 +312,74 @@ type FbsDeliveryRecovery = {
   cancelledOrders: FbsDeliveryRecoveryItem[];
 };
 
+type FbsBranchDeliveryRecoveryAction = 'ASSEMBLE' | 'COMPLETE' | 'REASSEMBLE';
+
+type FbsBranchDeliveryRecoveryOrder = {
+  connectionId: string;
+  orderId: string;
+  supplyId: string;
+  warehouseId: string | null;
+  warehouseName: string | null;
+  requestId: string | null;
+  requestNumber: number | null;
+  requestStatus: ClientRequestStatus | null;
+  action: FbsBranchDeliveryRecoveryAction;
+  actionLabel: string;
+  reason: string;
+  canSelect: boolean;
+  blocker: string | null;
+  itemCount: number;
+  skuId: string | null;
+  productName: string;
+  article: string | null;
+  size: string | null;
+  barcode: string | null;
+  requiresKiz: boolean;
+  assemblyId: string | null;
+  assemblyStatus: string | null;
+  scannedBarcode: string | null;
+  kiz: string | null;
+  boxCode: string | null;
+};
+
+type FbsBranchDeliveryRecoveryReport = {
+  client: FbsOrdersResponse['client'];
+  branch: { id: string; code: string; name: string; city: string };
+  checkedAt: string;
+  counts: {
+    supplies: number;
+    orders: number;
+    assembled: number;
+    recoveryRequired: number;
+    assemble: number;
+    complete: number;
+    reassemble: number;
+    readyToSendWb: number;
+    routeIssues: number;
+  };
+  supplies: Array<{
+    connectionId: string;
+    supplyId: string;
+    warehouseId: string | null;
+    warehouseName: string | null;
+    orderCount: number;
+    wbDeliveredOrders: number;
+    assembledOrders: number;
+    recoveryRequired: number;
+    readyToSendWb: number;
+    status: 'OK' | 'RECOVERY_REQUIRED' | 'READY_TO_SEND_WB' | 'ASSEMBLY_INCOMPLETE';
+    statusLabel: string;
+  }>;
+  recoveryOrders: FbsBranchDeliveryRecoveryOrder[];
+  routeIssues: Array<{
+    connectionId: string;
+    orderId: string;
+    supplyId: string | null;
+    warehouseId: string | null;
+    reason: string;
+  }>;
+};
+
 type FbsTsdAssemblyRecord = Prisma.FbsTsdAssemblyGetPayload<{}>;
 type FbsTsdStockSource = {
   sourceSkuId: string | null;
@@ -478,6 +546,8 @@ const FBS_KIZ_LOCAL_STATUS_CONFLICT_ACTION = 'FBS_KIZ_LOCAL_STATUS_CONFLICT';
 const FBS_KIZ_WB_STATUS_CONFLICT_ACTION = 'FBS_KIZ_WB_STATUS_CONFLICT';
 const FBS_SUPPLY_SENT_TO_WB_ACTION = 'FBS_SUPPLY_SENT_TO_WB';
 const FBS_EMERGENCY_ASSEMBLY_ENABLED_ACTION = 'FBS_EMERGENCY_ASSEMBLY_ENABLED';
+const FBS_DELIVERY_RECOVERY_REQUEST_CREATED_ACTION = 'FBS_DELIVERY_RECOVERY_REQUEST_CREATED';
+const FBS_DELIVERY_RECOVERY_TITLE_PREFIX = 'FBS ДОВОЗ';
 const FBS_TSD_WB_READ_TIMEOUT_MS = 20_000;
 const FBS_TSD_STICKER_TIMEOUT_MS = 8_000;
 const FBS_REQUEST_CLOSED_STATUSES = new Set<ClientRequestStatus>([
@@ -2047,6 +2117,405 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         all: orders.length,
       },
       orders,
+    };
+  }
+
+  // FIX: the delivery audit must use the explicitly selected WMS branch even
+  // for administrators, whose ordinary FBS list is intentionally global.
+  private async fbsOrdersRoutedToWarehouse(
+    response: FbsOrdersResponse,
+    clientId: string,
+    warehouseId: string,
+  ) {
+    const candidateOrders = response.orders.filter(
+      (order) =>
+        order.marketplace === MarketplaceType.WILDBERRIES &&
+        Boolean(order.supplyId) &&
+        order.category !== 'cancelled' &&
+        order.category !== 'archive',
+    );
+    const connectionIds = uniqueStrings(candidateOrders.map((order) => order.connectionId));
+    const marketplaceWarehouseIds = uniqueStrings(
+      candidateOrders.map((order) => order.warehouseId ?? ''),
+    );
+    const [connections, routingRules] = await Promise.all([
+      connectionIds.length > 0
+        ? this.prisma.clientMarketplaceConnection.findMany({
+            where: {
+              id: { in: connectionIds },
+              clientId,
+              marketplace: MarketplaceType.WILDBERRIES,
+              isActive: true,
+            },
+            select: {
+              id: true,
+              marketplace: true,
+              fbsExecutionWarehouseId: true,
+              fbsAutoRouteNewWarehouses: true,
+            },
+          })
+        : Promise.resolve([]),
+      connectionIds.length > 0 && marketplaceWarehouseIds.length > 0
+        ? this.prisma.fbsWarehouseRoutingRule.findMany({
+            where: {
+              connectionId: { in: connectionIds },
+              marketplaceWarehouseId: { in: marketplaceWarehouseIds },
+            },
+            select: {
+              connectionId: true,
+              marketplaceWarehouseId: true,
+              mode: true,
+              executionWarehouseId: true,
+            },
+          })
+        : Promise.resolve([]),
+    ]);
+    const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
+    const ruleByKey = new Map(
+      routingRules.map((rule) => [
+        `${rule.connectionId}:${rule.marketplaceWarehouseId}`,
+        rule,
+      ]),
+    );
+    const orders: FbsOrderSummary[] = [];
+    const routeIssues: FbsBranchDeliveryRecoveryReport['routeIssues'] = [];
+
+    for (const order of candidateOrders) {
+      const connection = connectionById.get(order.connectionId);
+      if (!connection) {
+        if (!order.warehouseId && order.request?.warehouseId === warehouseId) {
+          orders.push(order);
+          continue;
+        }
+        routeIssues.push({
+          connectionId: order.connectionId,
+          orderId: order.id,
+          supplyId: order.supplyId,
+          warehouseId: order.warehouseId,
+          reason: 'Активное подключение WB не найдено.',
+        });
+        continue;
+      }
+      const rule = order.warehouseId
+        ? ruleByKey.get(`${order.connectionId}:${order.warehouseId}`)
+        : null;
+      const mode = normalizeFbsWarehouseRouteMode(rule?.mode);
+      if (mode === 'EXCLUDED') continue;
+      if (mode === 'BRANCH') {
+        if (rule?.executionWarehouseId === warehouseId) orders.push(order);
+        continue;
+      }
+      if (mode === 'CENTRAL') {
+        if (connection.fbsExecutionWarehouseId === warehouseId) orders.push(order);
+        continue;
+      }
+      if (
+        connection.fbsAutoRouteNewWarehouses &&
+        connection.fbsExecutionWarehouseId === warehouseId
+      ) {
+        orders.push(order);
+        continue;
+      }
+      // A historical request placement is only a fallback when WB did not
+      // return the marketplace warehouse required for the current route.
+      if (!order.warehouseId && order.request?.warehouseId === warehouseId) {
+        orders.push(order);
+        continue;
+      }
+      routeIssues.push({
+        connectionId: order.connectionId,
+        orderId: order.id,
+        supplyId: order.supplyId,
+        warehouseId: order.warehouseId,
+        reason: 'Для склада WB не задан маршрут в филиал WMS.',
+      });
+    }
+    return { orders, routeIssues };
+  }
+
+  // FIX: one explicit branch-scoped check compares live WB supply state with
+  // per-order physical TSD evidence. It never changes WB or WMS data.
+  async checkFbsBranchDeliveryRecovery(
+    clientIdValue: string,
+    user: AuthUser,
+  ): Promise<FbsBranchDeliveryRecoveryReport> {
+    requireFbsEmergencyAssemblyAccess(user);
+    const clientId = requiredFbsTsdText(clientIdValue, 'Не указан клиент для проверки поставок.');
+    this.clientScopes.requireClientAccess(user, clientId, 'read');
+    const activeWarehouseId = user.activeWarehouseId?.trim() ?? '';
+    if (!activeWarehouseId) {
+      throw new BadRequestException('Сначала выберите филиал WMS, поставки которого нужно проверить.');
+    }
+    const branch = await this.prisma.warehouse.findUnique({
+      where: { id: activeWarehouseId },
+      select: { id: true, code: true, name: true, city: true, isActive: true },
+    });
+    if (!branch?.isActive && branch?.isActive !== undefined) {
+      throw new BadRequestException('Выбранный филиал WMS отключён.');
+    }
+    if (!branch) {
+      throw new BadRequestException('Выбранный филиал WMS не найден.');
+    }
+
+    const response = await this.refreshFbsOrdersCache(clientId);
+    const scoped = await this.fbsOrdersRoutedToWarehouse(
+      response,
+      clientId,
+      activeWarehouseId,
+    );
+    const orderIds = uniqueStrings(scoped.orders.map((order) => order.id));
+    const connectionIds = uniqueStrings(scoped.orders.map((order) => order.connectionId));
+    const [links, tasks] = orderIds.length > 0
+      ? await Promise.all([
+          this.prisma.fbsOrderRequestLink.findMany({
+            where: {
+              clientId,
+              marketplace: MarketplaceType.WILDBERRIES,
+              connectionId: { in: connectionIds },
+              orderId: { in: orderIds },
+              syncStatus: { not: FBS_REQUEST_LINK_REMOVED },
+            },
+            select: {
+              id: true,
+              connectionId: true,
+              orderId: true,
+              requestId: true,
+              syncStatus: true,
+              lastCategory: true,
+              lastSupplierStatus: true,
+              lastWbStatus: true,
+              lastSupplyId: true,
+              lastSkuId: true,
+              lastItemCount: true,
+              request: {
+                select: {
+                  id: true,
+                  number: true,
+                  status: true,
+                  warehouseId: true,
+                  fbsEmergencyAssemblyAt: true,
+                },
+              },
+            },
+          }),
+          this.prisma.fbsTsdAssembly.findMany({
+            where: {
+              clientId,
+              marketplace: MarketplaceType.WILDBERRIES,
+              connectionId: { in: connectionIds },
+              orderId: { in: orderIds },
+            },
+            select: {
+              id: true,
+              connectionId: true,
+              orderId: true,
+              requestId: true,
+              requestItemId: true,
+              skuId: true,
+              itemCount: true,
+              productName: true,
+              article: true,
+              status: true,
+              barcode: true,
+              barcodes: true,
+              kiz: true,
+              requiresKiz: true,
+              wbMetaStatus: true,
+              boxCode: true,
+              reservedBoxCode: true,
+              completedAt: true,
+            },
+          }),
+        ])
+      : [[], []];
+    const linkByKey = new Map(
+      links.map((link) => [selectionKey(link.connectionId, link.orderId), link]),
+    );
+    const taskByKey = new Map(
+      tasks.map((task) => [selectionKey(task.connectionId, task.orderId), task]),
+    );
+    const recoveryOrders: FbsBranchDeliveryRecoveryOrder[] = [];
+    let assembled = 0;
+    let readyToSendWb = 0;
+
+    for (const order of scoped.orders) {
+      const key = selectionKey(order.connectionId, order.id);
+      const link = linkByKey.get(key);
+      const task = taskByKey.get(key);
+      const request = order.request ?? link?.request ?? null;
+      const wbDelivered =
+        order.category === 'shipped' ||
+        ['complete', 'delivering', 'delivered'].includes(order.supplierStatus.trim().toLowerCase());
+      const validAssembly = Boolean(
+        task &&
+        task.status === 'COMPLETED' &&
+        task.barcode &&
+        (!task.requiresKiz || (task.kiz && task.wbMetaStatus === 'ACCEPTED')),
+      );
+      if (validAssembly) {
+        assembled += 1;
+        if (!wbDelivered) readyToSendWb += 1;
+        continue;
+      }
+      if (!wbDelivered) continue;
+
+      let action: FbsBranchDeliveryRecoveryAction = 'ASSEMBLE';
+      let actionLabel = 'Собрать';
+      let reason = 'Сборка этого заказа в WMS не начиналась.';
+      if (task) {
+        const touched = Boolean(
+          task.status === 'IN_PROGRESS' ||
+          task.barcode ||
+          task.kiz ||
+          task.boxCode,
+        );
+        if (task.status === 'COMPLETED' || task.status === FBS_TSD_RETURN_REQUIRED) {
+          action = 'REASSEMBLE';
+          actionLabel = 'Пересобрать';
+          reason = 'Прежняя сборка завершена с неполными или конфликтующими данными.';
+        } else if (touched) {
+          action = 'COMPLETE';
+          actionLabel = 'Дособрать';
+          reason = 'Сборка начата, но товар, КИЗ или стикер ещё не подтверждены полностью.';
+        }
+      }
+      let blocker: string | null = null;
+      if (!order.product) blocker = 'Товар заказа не сопоставлен с номенклатурой WMS.';
+      else if (link?.syncStatus === FBS_REQUEST_LINK_RETURN_REQUIRED) {
+        blocker = 'По заказу требуется решение менеджера по конфликту синхронизации.';
+      }
+      // FIX: a prematurely sent WB supply often leaves its original WMS
+      // request in DONE. Recovery must still be possible because the physical
+      // TSD evidence, not the historical request status, is authoritative here.
+      recoveryOrders.push({
+        connectionId: order.connectionId,
+        orderId: order.id,
+        supplyId: order.supplyId!,
+        warehouseId: order.warehouseId,
+        warehouseName: order.warehouseName,
+        requestId: request?.id ?? null,
+        requestNumber: request?.number ?? null,
+        requestStatus: request?.status ?? null,
+        action,
+        actionLabel,
+        reason,
+        canSelect: !blocker,
+        blocker,
+        itemCount: Math.max(1, order.itemCount),
+        skuId: order.product?.id ?? task?.skuId ?? null,
+        productName: order.product?.name ?? task?.productName ?? order.article ?? 'Товар не определён',
+        article: order.product?.article ?? task?.article ?? order.article,
+        size: order.product?.size ?? null,
+        barcode: order.barcodes[0] ?? jsonStringArray(task?.barcodes)[0] ?? null,
+        requiresKiz: order.product?.needsChestnyZnak ?? task?.requiresKiz ?? false,
+        assemblyId: task?.id ?? null,
+        assemblyStatus: task?.status ?? null,
+        scannedBarcode: task?.barcode ?? null,
+        kiz: task?.kiz ?? null,
+        boxCode: task?.boxCode ?? task?.reservedBoxCode ?? null,
+      });
+    }
+
+    const supplyGroups = new Map<string, typeof scoped.orders>();
+    for (const order of scoped.orders) {
+      const key = `${order.connectionId}:${order.supplyId}`;
+      const group = supplyGroups.get(key) ?? [];
+      group.push(order);
+      supplyGroups.set(key, group);
+    }
+    const recoveryByKey = new Map(
+      recoveryOrders.map((order) => [selectionKey(order.connectionId, order.orderId), order]),
+    );
+    const supplies = [...supplyGroups.values()].map((orders) => {
+      const first = orders[0]!;
+      const wbDeliveredOrders = orders.filter(
+        (order) =>
+          order.category === 'shipped' ||
+          ['complete', 'delivering', 'delivered'].includes(order.supplierStatus.trim().toLowerCase()),
+      ).length;
+      const recoveryRequired = orders.filter((order) =>
+        recoveryByKey.has(selectionKey(order.connectionId, order.id)),
+      ).length;
+      const assembledOrders = orders.filter((order) => {
+        const task = taskByKey.get(selectionKey(order.connectionId, order.id));
+        return Boolean(
+          task &&
+          task.status === 'COMPLETED' &&
+          task.barcode &&
+          (!task.requiresKiz || (task.kiz && task.wbMetaStatus === 'ACCEPTED')),
+        );
+      }).length;
+      const readyToSend = orders.filter((order) => {
+        const task = taskByKey.get(selectionKey(order.connectionId, order.id));
+        const delivered =
+          order.category === 'shipped' ||
+          ['complete', 'delivering', 'delivered'].includes(order.supplierStatus.trim().toLowerCase());
+        return !delivered && Boolean(
+          task &&
+          task.status === 'COMPLETED' &&
+          task.barcode &&
+          (!task.requiresKiz || (task.kiz && task.wbMetaStatus === 'ACCEPTED')),
+        );
+      }).length;
+      const status = recoveryRequired > 0
+        ? 'RECOVERY_REQUIRED' as const
+        : readyToSend > 0
+          ? 'READY_TO_SEND_WB' as const
+          : assembledOrders < orders.length
+            ? 'ASSEMBLY_INCOMPLETE' as const
+            : 'OK' as const;
+      return {
+        connectionId: first.connectionId,
+        supplyId: first.supplyId!,
+        warehouseId: first.warehouseId,
+        warehouseName: first.warehouseName,
+        orderCount: orders.length,
+        wbDeliveredOrders,
+        assembledOrders,
+        recoveryRequired,
+        readyToSendWb: readyToSend,
+        status,
+        statusLabel:
+          status === 'RECOVERY_REQUIRED'
+            ? `В WB отправлено, но нужно собрать ${recoveryRequired}`
+            : status === 'READY_TO_SEND_WB'
+              ? `Готово к отправке в WB: ${readyToSend}`
+              : status === 'ASSEMBLY_INCOMPLETE'
+                ? 'Сборка поставки не завершена'
+                : 'Всё собрано и отправлено',
+      };
+    }).sort((left, right) =>
+      Number(right.recoveryRequired > 0) - Number(left.recoveryRequired > 0) ||
+      left.supplyId.localeCompare(right.supplyId, 'ru-RU'),
+    );
+
+    return {
+      client: response.client,
+      branch: {
+        id: branch.id,
+        code: branch.code,
+        name: branch.name,
+        city: branch.city,
+      },
+      checkedAt: new Date().toISOString(),
+      counts: {
+        supplies: supplies.length,
+        orders: scoped.orders.length,
+        assembled,
+        recoveryRequired: recoveryOrders.length,
+        assemble: recoveryOrders.filter((order) => order.action === 'ASSEMBLE').length,
+        complete: recoveryOrders.filter((order) => order.action === 'COMPLETE').length,
+        reassemble: recoveryOrders.filter((order) => order.action === 'REASSEMBLE').length,
+        readyToSendWb,
+        routeIssues: scoped.routeIssues.length,
+      },
+      supplies,
+      recoveryOrders: recoveryOrders.sort((left, right) =>
+        Number(right.canSelect) - Number(left.canSelect) ||
+        left.supplyId.localeCompare(right.supplyId, 'ru-RU') ||
+        naturalFbsIdCompare(left.orderId, right.orderId),
+      ),
+      routeIssues: scoped.routeIssues,
     };
   }
 
@@ -20361,6 +20830,384 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       supplyOrders: supplyOrders.length,
       skippedLinkedOrders: activeOrders.length - unlinkedOrders.length,
       skippedInactiveOrders: supplyOrders.length - activeOrders.length,
+    };
+  }
+
+  // FIX: forms a local-only request from the exact unfinished orders found by
+  // the branch audit. WB statuses and metadata are deliberately never mutated.
+  async createFbsDeliveryRecoveryRequest(
+    dto: FbsOrderSelectionDto,
+    user: AuthUser,
+  ) {
+    requireFbsEmergencyAssemblyAccess(user);
+    const clientId = requiredFbsTsdText(dto.clientId, 'Не указан клиент для заявки на довоз.');
+    this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const selections = new Map(
+      dto.orders.map((order) => [selectionKey(order.connectionId, order.id), order]),
+    );
+    if (selections.size === 0) {
+      throw new BadRequestException('Выберите хотя бы один заказ для заявки на довоз.');
+    }
+
+    const report = await this.checkFbsBranchDeliveryRecovery(clientId, user);
+    const recoveryByKey = new Map(
+      report.recoveryOrders.map((order) => [selectionKey(order.connectionId, order.orderId), order]),
+    );
+    const selected = [...selections.keys()].map((key) => recoveryByKey.get(key));
+    const missing = [...selections.entries()]
+      .filter(([key]) => !recoveryByKey.has(key))
+      .map(([, order]) => order.id);
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        `Заказы больше не требуют довоза или относятся к другому филиалу: ${missing.join(', ')}. Обновите проверку.`,
+      );
+    }
+    const blocked = selected.filter(
+      (order): order is FbsBranchDeliveryRecoveryOrder => Boolean(order && !order.canSelect),
+    );
+    if (blocked.length > 0) {
+      throw new BadRequestException(
+        `Заявка не создана. Заблокированные заказы: ${blocked
+          .map((order) => `${order.orderId} — ${order.blocker}`)
+          .join('; ')}.`,
+      );
+    }
+    const orders = selected.filter(
+      (order): order is FbsBranchDeliveryRecoveryOrder => Boolean(order),
+    );
+    if (orders.some((order) => !order.skuId)) {
+      throw new BadRequestException('У одного из выбранных заказов не определён товар WMS.');
+    }
+
+    const orderIds = orders.map((order) => order.orderId);
+    const connectionIds = uniqueStrings(orders.map((order) => order.connectionId));
+    const [links, tasks] = await Promise.all([
+      this.prisma.fbsOrderRequestLink.findMany({
+        where: {
+          clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          connectionId: { in: connectionIds },
+          orderId: { in: orderIds },
+          syncStatus: { not: FBS_REQUEST_LINK_REMOVED },
+        },
+        include: {
+          request: {
+            select: {
+              id: true,
+              number: true,
+              status: true,
+              fbsEmergencyAssemblyAt: true,
+            },
+          },
+        },
+      }),
+      this.prisma.fbsTsdAssembly.findMany({
+        where: {
+          clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          connectionId: { in: connectionIds },
+          orderId: { in: orderIds },
+        },
+      }),
+    ]);
+    const selectedKeys = new Set(
+      orders.map((order) => selectionKey(order.connectionId, order.orderId)),
+    );
+    const selectedLinks = links.filter((link) =>
+      selectedKeys.has(selectionKey(link.connectionId, link.orderId)),
+    );
+    const existingRecoveryRequests = [
+      ...new Map(
+        selectedLinks
+          .filter(
+            (link) =>
+              Boolean(link.request.fbsEmergencyAssemblyAt) &&
+              FBS_REQUEST_COMPOSITION_STATUSES.has(link.request.status),
+          )
+          .map((link) => [link.request.id, link.request]),
+      ).values(),
+    ];
+    if (
+      existingRecoveryRequests.length === 1 &&
+      selectedLinks.length === orders.length &&
+      selectedLinks.every((link) => link.requestId === existingRecoveryRequests[0]!.id)
+    ) {
+      const current = existingRecoveryRequests[0]!;
+      return {
+        status: 'ALREADY_EXISTS' as const,
+        linkedOrders: orders.length,
+        request: {
+          id: current.id,
+          number: current.number,
+          status: current.status,
+          fbsEmergencyAssemblyAt: current.fbsEmergencyAssemblyAt,
+        },
+      };
+    }
+
+    const sourceRequestIds = uniqueStrings(selectedLinks.map((link) => link.requestId));
+    const skuIds = uniqueStrings(orders.map((order) => order.skuId ?? ''));
+    const sourceItems = sourceRequestIds.length > 0
+      ? await this.prisma.clientRequestItem.findMany({
+          where: {
+            requestId: { in: sourceRequestIds },
+            skuId: { in: skuIds },
+          },
+          select: { id: true, requestId: true, skuId: true, quantity: true },
+        })
+      : [];
+    const itemGroups = new Map<
+      string,
+      {
+        skuId: string;
+        barcode: string | null;
+        name: string;
+        quantity: number;
+        orderIds: string[];
+      }
+    >();
+    for (const order of orders) {
+      const skuId = order.skuId!;
+      const current = itemGroups.get(skuId);
+      if (current) {
+        current.quantity += order.itemCount;
+        current.orderIds.push(order.orderId);
+      } else {
+        itemGroups.set(skuId, {
+          skuId,
+          barcode: order.barcode,
+          name: order.productName,
+          quantity: order.itemCount,
+          orderIds: [order.orderId],
+        });
+      }
+    }
+    const movedBySourceItem = new Map<string, number>();
+    for (const order of orders) {
+      const link = selectedLinks.find(
+        (candidate) =>
+          candidate.connectionId === order.connectionId &&
+          candidate.orderId === order.orderId,
+      );
+      if (!link) continue;
+      const sourceItem = sourceItems.find(
+        (item) => item.requestId === link.requestId && item.skuId === order.skuId,
+      );
+      if (!sourceItem) continue;
+      movedBySourceItem.set(
+        sourceItem.id,
+        (movedBySourceItem.get(sourceItem.id) ?? 0) + order.itemCount,
+      );
+    }
+
+    const createdAt = new Date();
+    const orderWord = orders.length === 1
+      ? 'заказ'
+      : orders.length >= 2 && orders.length <= 4
+        ? 'заказа'
+        : 'заказов';
+    const title = `${FBS_DELIVERY_RECOVERY_TITLE_PREFIX} — ${orders.length} ${orderWord}`;
+    const created = await this.prisma.$transaction(async (tx) => {
+      const request = await tx.clientRequest.create({
+        data: {
+          clientId,
+          warehouseId: report.branch.id,
+          type: ClientRequestType.OUTBOUND,
+          status: ClientRequestStatus.IN_WORK,
+          priority: 'HIGH',
+          title,
+          destinationCity: `Довоз WB · ${report.branch.name}`,
+          comment:
+            `Локальная сборка без повторной отправки в WB. Поставки: ${uniqueStrings(
+              orders.map((order) => order.supplyId),
+            ).join(', ')}. Заказы: ${orderIds.join(', ')}.`,
+          createdByUserId: user.id,
+          fbsEmergencyAssemblyAt: createdAt,
+          fbsEmergencyAssemblyByUserId: user.id,
+          fbsEmergencyAssemblyByName: user.name,
+          items: {
+            create: [...itemGroups.values()].map((item) => ({
+              skuId: item.skuId,
+              barcode: item.barcode,
+              name: item.name,
+              quantity: item.quantity,
+              comment: `FBS-заказы на довоз: ${item.orderIds.join(', ')}`,
+            })),
+          },
+        },
+        select: {
+          id: true,
+          number: true,
+          title: true,
+          status: true,
+          fbsEmergencyAssemblyAt: true,
+          items: { select: { id: true, skuId: true, name: true, quantity: true } },
+        },
+      });
+      const requestItemIdBySku = new Map(
+        request.items
+          .filter((item): item is typeof item & { skuId: string } => Boolean(item.skuId))
+          .map((item) => [item.skuId, item.id]),
+      );
+
+      for (const sourceItem of sourceItems) {
+        const moved = movedBySourceItem.get(sourceItem.id) ?? 0;
+        if (moved <= 0) continue;
+        const remaining = Math.max(0, sourceItem.quantity - moved);
+        if (remaining === 0) {
+          await tx.clientRequestItem.delete({ where: { id: sourceItem.id } });
+        } else {
+          await tx.clientRequestItem.update({
+            where: { id: sourceItem.id },
+            data: { quantity: remaining },
+          });
+        }
+      }
+
+      for (const order of orders) {
+        const requestItemId = requestItemIdBySku.get(order.skuId!);
+        if (!requestItemId) {
+          throw new Error(`Не создана позиция заявки для заказа ${order.orderId}.`);
+        }
+        const link = selectedLinks.find(
+          (candidate) =>
+            candidate.connectionId === order.connectionId &&
+            candidate.orderId === order.orderId,
+        );
+        if (link) {
+          await tx.fbsOrderRequestLink.update({
+            where: { id: link.id },
+            data: {
+              requestId: request.id,
+              createdByUserId: user.id,
+              syncStatus: FBS_REQUEST_LINK_ACTIVE,
+              syncIssue: null,
+              lastCategory: 'shipped',
+              lastSupplierStatus: 'complete',
+              lastSupplyId: order.supplyId,
+              lastSkuId: order.skuId,
+              lastItemCount: order.itemCount,
+              lastSeenAt: createdAt,
+            },
+          });
+        } else {
+          await tx.fbsOrderRequestLink.create({
+            data: {
+              clientId,
+              marketplace: MarketplaceType.WILDBERRIES,
+              connectionId: order.connectionId,
+              orderId: order.orderId,
+              requestId: request.id,
+              createdByUserId: user.id,
+              syncStatus: FBS_REQUEST_LINK_ACTIVE,
+              lastCategory: 'shipped',
+              lastSupplierStatus: 'complete',
+              lastSupplyId: order.supplyId,
+              lastSkuId: order.skuId,
+              lastItemCount: order.itemCount,
+              lastSeenAt: createdAt,
+            },
+          });
+        }
+        const task = tasks.find(
+          (candidate) =>
+            candidate.connectionId === order.connectionId &&
+            candidate.orderId === order.orderId,
+        );
+        if (!task) continue;
+        const reassemble = order.action === 'REASSEMBLE';
+        const untouched = order.action === 'ASSEMBLE';
+        await tx.fbsTsdAssembly.update({
+          where: { id: task.id },
+          data: {
+            requestId: request.id,
+            requestItemId,
+            supplyId: order.supplyId,
+            ...(reassemble || untouched
+              ? {
+                  status: FBS_TSD_WAITING_STOCK_STATUS,
+                  deviceCode: FBS_TSD_AUTO_RESERVATION_DEVICE,
+                  workerUserId: null,
+                  workerName: null,
+                  reservedBoxId: null,
+                  reservedBoxCode: null,
+                  reservedAt: null,
+                  boxId: null,
+                  boxCode: null,
+                  sourceBarcode: null,
+                  barcode: null,
+                  relabelConfirmedAt: null,
+                  kiz: null,
+                  wbMetaStatus: task.requiresKiz ? 'PENDING' : 'NOT_REQUIRED',
+                  completedAt: null,
+                }
+              : {}),
+            errorMessage:
+              `Заказ включён в заявку на довоз №${String(request.number).padStart(6, '0')}. ` +
+              'Wildberries повторно не изменяется.',
+          },
+        });
+      }
+
+      await tx.clientRequestEvent.create({
+        data: {
+          requestId: request.id,
+          clientId,
+          eventType: ClientRequestEventType.CREATED,
+          title: 'Создана FBS-заявка на довоз',
+          body:
+            `${orders.length} заказ(а/ов) уже находятся в доставке WB, но требуют локальной сборки. ` +
+            'Повторная отправка статусов и КИЗов в WB отключена.',
+          statusTo: ClientRequestStatus.IN_WORK,
+          createdByUserId: user.id,
+          createdAt,
+        },
+      });
+      for (const sourceRequestId of sourceRequestIds) {
+        const movedOrderIds = selectedLinks
+          .filter((link) => link.requestId === sourceRequestId)
+          .map((link) => link.orderId);
+        if (movedOrderIds.length === 0) continue;
+        await tx.clientRequestEvent.create({
+          data: {
+            requestId: sourceRequestId,
+            clientId,
+            eventType: ClientRequestEventType.COMMENT,
+            title: 'Несобранные заказы вынесены в заявку на довоз',
+            body:
+              `Заявка №${String(request.number).padStart(6, '0')}. Заказы: ${movedOrderIds.join(', ')}.`,
+            createdByUserId: user.id,
+            createdAt,
+          },
+        });
+      }
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: FBS_DELIVERY_RECOVERY_REQUEST_CREATED_ACTION,
+          entity: 'ClientRequest',
+          entityId: request.id,
+          payload: {
+            clientId,
+            branchId: report.branch.id,
+            requestNumber: request.number,
+            orderIds,
+            supplyIds: uniqueStrings(orders.map((order) => order.supplyId)),
+            sourceRequestIds,
+            wbMutationPerformed: false,
+            createdAt: createdAt.toISOString(),
+          },
+        },
+      });
+      return request;
+    }, { maxWait: 10_000, timeout: 120_000 });
+
+    this.fbsOrdersCache.delete(clientId);
+    this.fbsTsdRequestFallbackCache.delete(clientId);
+    return {
+      status: 'CREATED' as const,
+      linkedOrders: orders.length,
+      request: created,
     };
   }
 
