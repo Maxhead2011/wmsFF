@@ -23232,6 +23232,55 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
   }
 
+  private async loadActiveFbsOrderRequestLinks(
+    clientId: string,
+    orders: Array<Pick<FbsOrderSummary, 'connectionId' | 'id'>>,
+  ) {
+    const orderIdsByConnection = new Map<string, string[]>();
+    for (const order of orders) {
+      const orderIds = orderIdsByConnection.get(order.connectionId) ?? [];
+      orderIds.push(order.id);
+      orderIdsByConnection.set(order.connectionId, orderIds);
+    }
+    const findLinks = (connectionId: string, orderIds: string[]) =>
+      this.prisma.fbsOrderRequestLink.findMany({
+        where: {
+          clientId,
+          connectionId,
+          orderId: { in: orderIds },
+          syncStatus: {
+            in: [
+              FBS_REQUEST_LINK_ACTIVE,
+              FBS_REQUEST_LINK_MOVING,
+              FBS_REQUEST_LINK_RETURN_REQUIRED,
+            ],
+          },
+        },
+        include: {
+          request: {
+            select: {
+              id: true,
+              number: true,
+              title: true,
+              status: true,
+              warehouseId: true,
+              fbsEmergencyAssemblyAt: true,
+              fbsEmergencyAssemblyByUserId: true,
+              fbsEmergencyAssemblyByName: true,
+            },
+          },
+        },
+      });
+    const links: Awaited<ReturnType<typeof findLinks>> = [];
+    for (const [connectionId, connectionOrderIds] of orderIdsByConnection) {
+      // FIX: keep every Prisma query far below PostgreSQL's 32,767 bind-variable limit.
+      for (const orderIds of chunks(uniqueStrings(connectionOrderIds), 5_000)) {
+        links.push(...(await findLinks(connectionId, orderIds)));
+      }
+    }
+    return links;
+  }
+
   private async loadFbsOrdersUncached(
     clientId: string,
     previousOrderStates?: ReadonlyMap<string, string>,
@@ -23507,36 +23556,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (!previousOrderStates) {
       await this.syncFbsRequestsFromMarketplace(clientId, ordersWithStockSources);
     }
-    const requestLinks = ordersWithStockSources.length > 0
-      ? await this.prisma.fbsOrderRequestLink.findMany({
-          where: {
-            clientId,
-            connectionId: { in: uniqueStrings(ordersWithStockSources.map((order) => order.connectionId)) },
-            orderId: { in: uniqueStrings(ordersWithStockSources.map((order) => order.id)) },
-            syncStatus: {
-              in: [
-                FBS_REQUEST_LINK_ACTIVE,
-                FBS_REQUEST_LINK_MOVING,
-                FBS_REQUEST_LINK_RETURN_REQUIRED,
-              ],
-            },
-          },
-          include: {
-            request: {
-              select: {
-                id: true,
-                number: true,
-                title: true,
-                status: true,
-                warehouseId: true,
-                fbsEmergencyAssemblyAt: true,
-                fbsEmergencyAssemblyByUserId: true,
-                fbsEmergencyAssemblyByName: true,
-              },
-            },
-          },
-        })
-      : [];
+    const requestLinks = await this.loadActiveFbsOrderRequestLinks(
+      clientId,
+      ordersWithStockSources,
+    );
     const requestByOrder = new Map(
       requestLinks.map((link) => [selectionKey(link.connectionId, link.orderId), link.request]),
     );
