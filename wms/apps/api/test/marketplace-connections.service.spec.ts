@@ -7866,7 +7866,8 @@ describe('MarketplaceConnectionsService', () => {
         id: 'box-archived',
         clientId: 'client-1',
         warehouseId: 'warehouse-1',
-        status: 'active',
+        // TEST: every operational box state is eligible; retired states are excluded.
+        status: { notIn: ['deleted', 'archived'] },
         storagePlacement: {
           is: { pallet: { clientId: 'client-1', warehouseId: 'warehouse-1' } },
         },
@@ -7910,7 +7911,8 @@ describe('MarketplaceConnectionsService', () => {
         id: 'box-live',
         clientId: 'client-1',
         warehouseId: 'warehouse-1',
-        status: 'active',
+        // TEST: receiving and active boxes share the same locked eligibility rule.
+        status: { notIn: ['deleted', 'archived'] },
         storagePlacement: {
           is: { pallet: { clientId: 'client-1', warehouseId: 'warehouse-1' } },
         },
