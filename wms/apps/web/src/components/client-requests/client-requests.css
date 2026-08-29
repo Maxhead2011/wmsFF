@@ -1387,6 +1387,31 @@
   box-shadow: inset 3px 0 #2563eb;
 }
 
+/* FIX: local WB delivery recovery is operationally different from a normal request. */
+.client-request-table tbody tr.client-request-row--fbs-recovery > td {
+  background: rgba(255, 237, 213, 0.94);
+  border-top-color: rgba(234, 88, 12, 0.34);
+  border-bottom-color: rgba(234, 88, 12, 0.24);
+}
+
+.client-request-table tbody tr.client-request-row--fbs-recovery > td:first-child {
+  box-shadow: inset 5px 0 0 #ea580c;
+}
+
+.client-request-fbs-recovery-badge {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 6px;
+  padding: 3px 8px;
+  border: 1px solid rgba(194, 65, 12, 0.28);
+  border-radius: 999px;
+  color: #9a3412;
+  background: #ffedd5;
+  font-size: 0.7rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+}
+
 .client-request-title {
   display: -webkit-box;
   max-width: 100%;

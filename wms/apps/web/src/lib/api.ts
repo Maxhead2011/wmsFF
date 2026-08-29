@@ -1441,6 +1441,9 @@ export type ClientRequestSummary = {
   managerComment: string | null;
   createdAt: string;
   updatedAt: string;
+  // FIX: existing server flag also marks local-only FBS delivery recovery.
+  fbsEmergencyAssemblyAt?: string | null;
+  fbsEmergencyAssemblyByName?: string | null;
   client: Pick<ClientSummary, 'id' | 'code' | 'name'> & {
     storesWithoutBoxes?: boolean;
   };
@@ -3713,6 +3716,86 @@ export type FbsDeliveryRecoveryItem = {
   boxCode: string | null;
   cargoPlaceCode: string | null;
   reason: string;
+};
+
+export type FbsDeliveryRecoveryAction = 'ASSEMBLE' | 'COMPLETE' | 'REASSEMBLE';
+
+export type FbsDeliveryRecoveryOrder = {
+  connectionId: string;
+  orderId: string;
+  supplyId: string;
+  warehouseId: string | null;
+  warehouseName: string | null;
+  requestId: string | null;
+  requestNumber: number | null;
+  requestStatus: ClientRequestStatus | null;
+  action: FbsDeliveryRecoveryAction;
+  actionLabel: string;
+  reason: string;
+  canSelect: boolean;
+  blocker: string | null;
+  itemCount: number;
+  skuId: string | null;
+  productName: string;
+  article: string | null;
+  size: string | null;
+  barcode: string | null;
+  requiresKiz: boolean;
+  assemblyId: string | null;
+  assemblyStatus: string | null;
+  scannedBarcode: string | null;
+  kiz: string | null;
+  boxCode: string | null;
+};
+
+export type FbsBranchDeliveryRecoveryReport = {
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  branch: { id: string; code: string; name: string; city: string };
+  checkedAt: string;
+  counts: {
+    supplies: number;
+    orders: number;
+    assembled: number;
+    recoveryRequired: number;
+    assemble: number;
+    complete: number;
+    reassemble: number;
+    readyToSendWb: number;
+    routeIssues: number;
+  };
+  supplies: Array<{
+    connectionId: string;
+    supplyId: string;
+    warehouseId: string | null;
+    warehouseName: string | null;
+    orderCount: number;
+    wbDeliveredOrders: number;
+    assembledOrders: number;
+    recoveryRequired: number;
+    readyToSendWb: number;
+    status: 'OK' | 'RECOVERY_REQUIRED' | 'READY_TO_SEND_WB' | 'ASSEMBLY_INCOMPLETE';
+    statusLabel: string;
+  }>;
+  recoveryOrders: FbsDeliveryRecoveryOrder[];
+  routeIssues: Array<{
+    connectionId: string;
+    orderId: string;
+    supplyId: string | null;
+    warehouseId: string | null;
+    reason: string;
+  }>;
+};
+
+export type CreateFbsDeliveryRecoveryRequestResult = {
+  status: 'CREATED' | 'ALREADY_EXISTS';
+  linkedOrders: number;
+  request: {
+    id: string;
+    number: number;
+    title?: string;
+    status: ClientRequestStatus;
+    fbsEmergencyAssemblyAt: string;
+  };
 };
 
 export type ChangeFbsSupplyDestinationResult = {
@@ -9246,6 +9329,31 @@ export async function fetchFbsOrders(accessToken: string, clientId: string, refr
       refresh: refresh ? '1' : undefined,
     }),
     { accessToken },
+  );
+}
+
+// FIX: live branch audit is deliberately separate from the cached FBS table.
+export async function checkFbsBranchDeliveryRecovery(
+  accessToken: string,
+  clientId: string,
+) {
+  return request<FbsBranchDeliveryRecoveryReport>(
+    withQuery('/marketplace-connections/fbs/delivery-recovery', { clientId }),
+    { accessToken },
+  );
+}
+
+export async function createFbsDeliveryRecoveryRequest(
+  accessToken: string,
+  payload: FbsOrderSelectionPayload,
+) {
+  return request<CreateFbsDeliveryRecoveryRequestResult>(
+    '/marketplace-connections/fbs/delivery-recovery/request',
+    {
+      method: 'POST',
+      accessToken,
+      body: sanitizeFbsOrderSelectionPayload(payload),
+    },
   );
 }
 

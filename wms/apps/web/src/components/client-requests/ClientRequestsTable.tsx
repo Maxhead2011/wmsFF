@@ -167,11 +167,18 @@ export function ClientRequestsTable({
             const requestNumberPrefix = formattedRequestNumber.slice(0, -3);
             const requestNumberAccent = formattedRequestNumber.slice(-3);
             const transferOrigin = parseFbsTransferOrigin(request.comment);
+            // FIX: distinguish only auto-created WB delivery recovery requests;
+            // ordinary emergency operations keep their existing status colour.
+            const deliveryRecovery = Boolean(
+              request.fbsEmergencyAssemblyAt && request.title.startsWith('FBS ДОВОЗ'),
+            );
 
             return (
             <tr
               key={request.id}
-              className={`client-request-row client-request-row--${requestStatusTone(request.status)}`}
+              className={`client-request-row client-request-row--${requestStatusTone(request.status)}${
+                deliveryRecovery ? ' client-request-row--fbs-recovery' : ''
+              }`}
             >
               {showRequestSelection ? (
                 <td
@@ -193,6 +200,9 @@ export function ClientRequestsTable({
                   <span className="client-request-number__prefix">№{requestNumberPrefix}</span>
                   <strong className="client-request-number__accent">{requestNumberAccent}</strong>
                 </span>
+                {deliveryRecovery ? (
+                  <span className="client-request-fbs-recovery-badge">ДОВОЗ WB</span>
+                ) : null}
                 {/* ADDED: shipped and archived requests share this table, so the WB supply stays visible. */}
                 {request.status === 'DONE' && request.wbSupplyIds?.length ? (
                   <span className="client-request-wb-supplies">

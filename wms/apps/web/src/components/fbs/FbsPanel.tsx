@@ -43,9 +43,11 @@ import {
   assembleFbsOrders,
   cancelFbsOrders,
   changeFbsSuppliesDestination,
+  checkFbsBranchDeliveryRecovery,
   connectFbsStockWarehouse,
   createFbsPass,
   createFbsMarketplaceConnection,
+  createFbsDeliveryRecoveryRequest,
   createFbsRequest,
   createFbsRequestFromSupply,
   deleteFbsPass,
@@ -86,10 +88,12 @@ import {
   type ClientFbsOrders,
   type ClientSummary,
   type FbsBillingSettings,
+  type FbsBranchDeliveryRecoveryReport,
   type FbsActiveClientSummary,
   type FbsCargoPackingsResponse,
   type FbsDeliveryDestination,
   type FbsDeliveryRecoveryItem,
+  type FbsDeliveryRecoveryOrder,
   type FbsOrderSummary,
   type FbsPenaltiesReport,
   type FbsPenaltyReportRow,
@@ -180,6 +184,37 @@ export function updateFbsDeadlineVisibleSelection(
     else next.delete(key);
   }
   return next;
+}
+
+// FIX: bulk recovery selection never includes a completed/blocked row.
+export function updateFbsDeliveryRecoveryVisibleSelection(
+  current: Set<string>,
+  visibleOrders: Array<Pick<FbsDeliveryRecoveryOrder, 'connectionId' | 'orderId' | 'canSelect'>>,
+  checked: boolean,
+) {
+  const next = new Set(current);
+  for (const order of visibleOrders) {
+    const key = `${order.connectionId}:${order.orderId}`;
+    if (!order.canSelect) {
+      next.delete(key);
+      continue;
+    }
+    if (checked) next.add(key);
+    else next.delete(key);
+  }
+  return next;
+}
+
+export function selectedFbsDeliveryRecoveryOrderItems(
+  orders: Array<Pick<FbsDeliveryRecoveryOrder, 'connectionId' | 'orderId' | 'canSelect'>>,
+  selectedKeys: Set<string>,
+) {
+  return orders.flatMap((order) => {
+    const key = `${order.connectionId}:${order.orderId}`;
+    return order.canSelect && selectedKeys.has(key)
+      ? [{ connectionId: order.connectionId, id: order.orderId }]
+      : [];
+  });
 }
 
 type FbsMarketplace = 'WILDBERRIES' | 'OZON' | 'YANDEX_MARKET';
@@ -2069,6 +2104,12 @@ function FbsAutoCancelReportView({
         </div>
       </header>
 
+      <FbsBranchDeliveryRecoverySection
+        clientId={data?.client.id ?? null}
+        session={session}
+        onOpenRequest={onOpenRequest}
+      />
+
       <div className="fbs-deadline-report__zones" role="group" aria-label="Фильтр по цветовой зоне">
         <button type="button" className={toneFilter === 'all' ? 'is-active' : ''} onClick={() => setToneFilter('all')}>
           Все · {rowsWithoutTone.length}
@@ -2416,6 +2457,271 @@ function formatDeadlineDuration(milliseconds: number) {
   if (days > 0) return `${days} д ${hours} ч`;
   if (hours > 0) return `${hours} ч ${minutes} мин`;
   return `${minutes} мин`;
+}
+
+function FbsBranchDeliveryRecoverySection({
+  clientId,
+  session,
+  onOpenRequest,
+}: {
+  clientId: string | null;
+  session: AuthSession;
+  onOpenRequest?: (requestId: string) => void;
+}) {
+  const [report, setReport] = useState<FbsBranchDeliveryRecoveryReport | null>(null);
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set());
+  const [checking, setChecking] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [createdRequest, setCreatedRequest] = useState<{ id: string; number: number } | null>(null);
+
+  useEffect(() => {
+    setReport(null);
+    setSelectedKeys(new Set());
+    setError(null);
+    setCreatedRequest(null);
+  }, [clientId]);
+
+  const selectedOrders = useMemo(
+    () => selectedFbsDeliveryRecoveryOrderItems(report?.recoveryOrders ?? [], selectedKeys),
+    [report?.recoveryOrders, selectedKeys],
+  );
+  const selectableOrders = report?.recoveryOrders.filter((order) => order.canSelect) ?? [];
+  const allSelectableSelected = selectableOrders.length > 0 && selectableOrders.every(
+    (order) => selectedKeys.has(`${order.connectionId}:${order.orderId}`),
+  );
+
+  async function runCheck() {
+    if (!clientId || checking) return;
+    setChecking(true);
+    setError(null);
+    try {
+      const next = await checkFbsBranchDeliveryRecovery(session.accessToken, clientId);
+      setReport(next);
+      setSelectedKeys((current) => {
+        const valid = new Set(
+          next.recoveryOrders
+            .filter((order) => order.canSelect)
+            .map((order) => `${order.connectionId}:${order.orderId}`),
+        );
+        return new Set([...current].filter((key) => valid.has(key)));
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Не удалось проверить поставки филиала.');
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  async function createRecoveryRequest() {
+    if (!clientId || selectedOrders.length === 0 || creating) return;
+    setCreating(true);
+    setError(null);
+    try {
+      const result = await createFbsDeliveryRecoveryRequest(session.accessToken, {
+        clientId,
+        orders: selectedOrders,
+      });
+      setCreatedRequest({ id: result.request.id, number: result.request.number });
+      setSelectedKeys(new Set());
+      await runCheck();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Не удалось сформировать заявку на довоз.');
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  return (
+    <section className="fbs-delivery-audit" aria-label="Проверка отправленных поставок филиала">
+      <header className="fbs-delivery-audit__header">
+        <div>
+          <p className="eyebrow">FBS ДОВОЗ · сверка WB и WMS</p>
+          <h4>Поставки филиала</h4>
+          <p>
+            Проверка заново читает WB и сопоставляет все поставки с текущим филиалом по маршрутам.
+            Собранные заказы не возвращаются в работу.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="button button-primary"
+          disabled={!clientId || checking || creating}
+          onClick={() => void runCheck()}
+        >
+          <RefreshCw size={17} aria-hidden="true" className={checking ? 'is-spinning' : undefined} />
+          {checking ? 'Проверяю WB и WMS…' : 'Проверить поставки филиала'}
+        </button>
+      </header>
+
+      {error ? <p className="fbs-deadline-report__error">{error}</p> : null}
+      {createdRequest ? (
+        <div className="fbs-delivery-audit__created" role="status">
+          <CircleCheckBig size={20} aria-hidden="true" />
+          <span>
+            Создана заявка на довоз №{String(createdRequest.number).padStart(6, '0')}.
+            Wildberries повторно не изменялся.
+          </span>
+          {onOpenRequest ? (
+            <button type="button" className="button button-secondary" onClick={() => onOpenRequest(createdRequest.id)}>
+              Открыть заявку
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {report ? (
+        <>
+          <div className="fbs-delivery-audit__summary">
+            <article><small>Филиал</small><strong>{report.branch.name}</strong><span>{report.branch.code}</span></article>
+            <article><small>Поставок</small><strong>{report.counts.supplies}</strong><span>{report.counts.orders} заказов</span></article>
+            <article className="is-ok"><small>Собрано</small><strong>{report.counts.assembled}</strong><span>не трогаем</span></article>
+            <article className="is-warning"><small>Нужен довоз</small><strong>{report.counts.recoveryRequired}</strong><span>требуют действий</span></article>
+            <article><small>Готово отправить</small><strong>{report.counts.readyToSendWb}</strong><span>ещё не в доставке WB</span></article>
+          </div>
+
+          <div className="fbs-table-wrap fbs-delivery-audit__supplies">
+            <table className="fbs-table">
+              <thead>
+                <tr>
+                  <th>Поставка WB</th>
+                  <th>Склад WB</th>
+                  <th>Всего</th>
+                  <th>В доставке WB</th>
+                  <th>Собрано WMS</th>
+                  <th>Нужен довоз</th>
+                  <th>Результат</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.supplies.length > 0 ? report.supplies.map((supply) => (
+                  <tr key={`${supply.connectionId}:${supply.supplyId}`} className={`is-${supply.status.toLowerCase()}`}>
+                    <td><strong className="fbs-mono">{supply.supplyId}</strong></td>
+                    <td>{supply.warehouseName || supply.warehouseId || 'Не указан'}</td>
+                    <td>{supply.orderCount}</td>
+                    <td>{supply.wbDeliveredOrders}</td>
+                    <td>{supply.assembledOrders}</td>
+                    <td>{supply.recoveryRequired}</td>
+                    <td><strong>{supply.statusLabel}</strong></td>
+                  </tr>
+                )) : (
+                  <tr><td colSpan={7} className="fbs-deadline-report__empty">Поставок по маршрутам филиала не найдено.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="fbs-delivery-audit__actions">
+            <label>
+              <input
+                type="checkbox"
+                checked={allSelectableSelected}
+                disabled={selectableOrders.length === 0 || creating}
+                onChange={(event) => setSelectedKeys((current) =>
+                  updateFbsDeliveryRecoveryVisibleSelection(
+                    current,
+                    report.recoveryOrders,
+                    event.target.checked,
+                  ))}
+              />
+              <span>Выбрать все доступные</span>
+            </label>
+            <strong>Выбрано: {selectedOrders.length}</strong>
+            <button
+              type="button"
+              className="button button-primary"
+              disabled={selectedOrders.length === 0 || creating || checking}
+              onClick={() => void createRecoveryRequest()}
+            >
+              <FilePlus2 size={17} aria-hidden="true" />
+              {creating ? 'Создаю заявку…' : 'Сформировать заявку на довоз'}
+            </button>
+          </div>
+
+          <div className="fbs-table-wrap fbs-delivery-audit__orders">
+            <table className="fbs-table">
+              <thead>
+                <tr>
+                  <th aria-label="Выбор заказа" />
+                  <th>Действие</th>
+                  <th>Заказ WB</th>
+                  <th>Поставка</th>
+                  <th>Товар</th>
+                  <th>Исходная заявка</th>
+                  <th>Состояние WMS</th>
+                  <th>Причина</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.recoveryOrders.length > 0 ? report.recoveryOrders.map((order) => {
+                  const key = `${order.connectionId}:${order.orderId}`;
+                  return (
+                    <tr key={key} className={`is-${order.action.toLowerCase()}${order.canSelect ? '' : ' is-blocked'}`}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={order.canSelect && selectedKeys.has(key)}
+                          disabled={!order.canSelect || creating}
+                          aria-label={`Выбрать заказ WB ${order.orderId}`}
+                          onChange={(event) => setSelectedKeys((current) =>
+                            updateFbsDeliveryRecoveryVisibleSelection(current, [order], event.target.checked))}
+                        />
+                      </td>
+                      <td><strong>{order.actionLabel}</strong></td>
+                      <td><strong>№{order.orderId}</strong></td>
+                      <td><span className="fbs-mono">{order.supplyId}</span></td>
+                      <td>
+                        <strong>{order.article || order.productName}</strong>
+                        <small>{order.size ? `Размер ${order.size}` : order.productName}</small>
+                      </td>
+                      <td>
+                        <strong>{order.requestNumber ? `№${String(order.requestNumber).padStart(6, '0')}` : 'Без заявки'}</strong>
+                        <small>{order.requestStatus || 'Заявка WMS не найдена'}</small>
+                      </td>
+                      <td>
+                        <strong>{order.assemblyStatus || 'Задание не создано'}</strong>
+                        <small>{order.boxCode || 'Короб ещё не подтверждён'}</small>
+                      </td>
+                      <td>
+                        <span>{order.reason}</span>
+                        {order.blocker ? <small className="is-error">{order.blocker}</small> : null}
+                      </td>
+                    </tr>
+                  );
+                }) : (
+                  <tr>
+                    <td colSpan={8} className="fbs-deadline-report__empty">
+                      Все отправленные заказы филиала имеют подтверждённую сборку WMS.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {report.routeIssues.length > 0 ? (
+            <details className="fbs-delivery-audit__route-issues">
+              <summary>Не определён маршрут: {report.routeIssues.length}</summary>
+              <ul>
+                {report.routeIssues.map((issue) => (
+                  <li key={`${issue.connectionId}:${issue.orderId}`}>
+                    Заказ №{issue.orderId}{issue.supplyId ? ` · ${issue.supplyId}` : ''}: {issue.reason}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
+          <small className="fbs-delivery-audit__checked-at">
+            Проверено: {formatDateTime(report.checkedAt)}
+          </small>
+        </>
+      ) : (
+        <p className="fbs-delivery-audit__empty">
+          Нажмите проверку, чтобы увидеть поставки текущего филиала и заказы, которые WB уже считает отправленными, а WMS ещё не собрал.
+        </p>
+      )}
+    </section>
+  );
 }
 
 function FbsProductShipmentsReportView({

@@ -108,6 +108,25 @@ export class MarketplaceConnectionsController {
     return this.connections.listFbsOrders(clientId, user, refresh === 'true' || refresh === '1');
   }
 
+  // FIX: explicit live audit of every WB supply routed to the user's active branch.
+  @Get('fbs/delivery-recovery')
+  @RequirePermissions()
+  checkFbsBranchDeliveryRecovery(
+    @CurrentUser() user: AuthUser,
+    @Query('clientId') clientId: string,
+  ) {
+    return this.connections.checkFbsBranchDeliveryRecovery(clientId, user);
+  }
+
+  @Post('fbs/delivery-recovery/request')
+  @RequirePermissions()
+  createFbsDeliveryRecoveryRequest(
+    @Body() dto: FbsOrderSelectionDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.connections.createFbsDeliveryRecoveryRequest(dto, user);
+  }
+
   @Get('fbs/packed-items')
   @RequirePermissions()
   listFbsPackedItems(
