@@ -8580,6 +8580,81 @@ describe('MarketplaceConnectionsService', () => {
     });
   });
 
+  // TEST: a box that is still in the receiving workflow is already a valid
+  // physical FBS source when it has AVAILABLE stock and belongs to the branch.
+  it('claims an FBS box with receiving status instead of reporting another request', async () => {
+    const updatedAt = new Date('2026-08-29T09:30:00.000Z');
+    const task = {
+      id: 'task-receiving-box',
+      clientId: 'client-1',
+      requestId: 'request-1',
+      skuId: 'sku-1',
+      sourceSkuId: null,
+      status: 'IN_PROGRESS',
+      itemCount: 1,
+      relabelRequired: false,
+      reservedAt: null,
+      reservedBoxId: 'box-receiving',
+      boxId: null,
+      sourceBarcode: null,
+      barcode: null,
+      kiz: null,
+      relabelConfirmedAt: null,
+      workerUserId: 'user-1',
+      workerName: 'Сборщик',
+      deviceCode: 'TSD-1',
+      updatedAt,
+    };
+    const claimedTask = {
+      ...task,
+      boxId: 'box-receiving',
+      boxCode: 'FFL_RECEIVING_1',
+    };
+    const tx = {
+      $executeRaw: vi.fn().mockResolvedValue(1),
+      $queryRaw: vi.fn().mockResolvedValue([{
+        status: 'receiving',
+        clientId: 'client-1',
+        warehouseId: 'warehouse-1',
+      }]),
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue({
+          clientId: 'client-1',
+          warehouseId: 'warehouse-1',
+        }),
+      },
+      stockBalance: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { quantity: 4 } }),
+      },
+      fbsTsdAssembly: {
+        findUnique: vi.fn()
+          .mockResolvedValueOnce(task)
+          .mockResolvedValueOnce(task)
+          .mockResolvedValueOnce(claimedTask),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+    const service = new MarketplaceConnectionsService({
+      $transaction: vi.fn(async (callback: (db: typeof tx) => unknown) => callback(tx)),
+    } as never, {} as never);
+    vi.spyOn(service as any, 'fbsTsdReservationRowsBySku')
+      .mockResolvedValue(new Map([['sku-1', []]]));
+
+    await expect(
+      (service as any).claimFbsTsdBoxAtomically(
+        task,
+        { id: 'box-receiving', code: 'FFL_RECEIVING_1', warehouseId: 'warehouse-1' },
+        'warehouse-1',
+        { id: 'user-1', deviceCode: 'TSD-1' },
+      ),
+    ).resolves.toMatchObject({
+      id: 'task-receiving-box',
+      boxId: 'box-receiving',
+      boxCode: 'FFL_RECEIVING_1',
+    });
+    expect(tx.fbsTsdAssembly.updateMany).toHaveBeenCalledOnce();
+  });
+
   it('показывает на паллетсорте только короба, закреплённые за текущей FBS-заявкой', async () => {
     const prisma = {
       fbsTsdAssembly: {
