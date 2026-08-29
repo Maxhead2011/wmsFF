@@ -8255,7 +8255,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         );
         const lockedBox = lockedBoxes[0];
         if (
-          lockedBox?.status !== 'active' ||
+          // FIX: `receiving` is an operational WMS box state. The outer FBS
+          // scan and route builder already allow every state except a retired
+          // box; the locked recheck must use the same rule.
+          !lockedBox ||
+          ['deleted', 'archived'].includes(lockedBox.status) ||
           lockedBox.clientId !== task.clientId ||
           lockedBox.warehouseId !== expectedWarehouseId
         ) return null;
@@ -8398,7 +8402,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (
       !reservedBox ||
       reservedBox.clientId !== task.clientId ||
-      reservedBox.status !== 'active'
+      // FIX: an AUTO task may legitimately point at a receiving box that has
+      // AVAILABLE stock; only retired boxes are outside the FBS route.
+      ['deleted', 'archived'].includes(reservedBox.status)
     ) {
       return null;
     }
@@ -8430,7 +8436,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               id: input.boxId,
               clientId: input.clientId,
               warehouseId: input.warehouseId,
-              status: 'active',
+              // FIX: keep manager/background route locking consistent with
+              // physical TSD scanning for operational receiving boxes.
+              status: { notIn: ['deleted', 'archived'] },
               storagePlacement: {
                 is: {
                   pallet: {
