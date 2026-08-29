@@ -2185,9 +2185,28 @@ describe('MarketplaceConnectionsService', () => {
       status: 'RELEASED',
       deviceCode: 'USER:old-worker',
       workerName: null,
+      reservedBoxId: null,
+      reservedBoxCode: null,
       boxId: null,
+      boxCode: null,
+      sourceBarcode: null,
       barcode: null,
       kiz: null,
+      relabelConfirmedAt: null,
+      wbMetaStatus: 'NOT_REQUIRED',
+      marketplaceSubmittedAt: null,
+      marketplaceLabelBase64: null,
+      marketplaceLabelContentType: null,
+      marketplaceSubmitError: null,
+      stickerPartA: null,
+      stickerPartB: null,
+      stickerBarcode: null,
+      sourceBoxPending: false,
+      cargoPackingId: null,
+      cargoPackedAt: null,
+      cargoPackedByUserId: null,
+      cargoPackedByName: null,
+      completedAt: null,
       updatedAt: releasedUpdatedAt,
     };
     const fbsTsdAssembly = {
@@ -2284,6 +2303,350 @@ describe('MarketplaceConnectionsService', () => {
     });
     expect(fbsTsdAssembly.create).not.toHaveBeenCalled();
     expect(result).toMatchObject({ orderId: 'order-from-current-supply' });
+  });
+
+  // TEST: a recently assigned but untouched task must not remain locked by a
+  // physical TSD whose monitor heartbeat has expired.
+  it('reassigns an untouched FBS task immediately when its physical TSD is offline', async () => {
+    const recentUpdatedAt = new Date(Date.now() - 30_000);
+    const releasedUpdatedAt = new Date();
+    const releasedTask = {
+      id: 'offline-task',
+      orderId: '5573896135',
+      status: 'RELEASED',
+      deviceCode: 'TSD-INSTALL-OFFLINE',
+      workerName: null,
+      reservedBoxId: null,
+      reservedBoxCode: null,
+      boxCode: null,
+      sourceBarcode: null,
+      boxId: null,
+      barcode: null,
+      kiz: null,
+      relabelConfirmedAt: null,
+      wbMetaStatus: 'NOT_REQUIRED',
+      marketplaceSubmittedAt: null,
+      marketplaceLabelBase64: null,
+      marketplaceLabelContentType: null,
+      marketplaceSubmitError: null,
+      stickerPartA: null,
+      stickerPartB: null,
+      stickerBarcode: null,
+      sourceBoxPending: false,
+      cargoPackingId: null,
+      cargoPackedAt: null,
+      cargoPackedByUserId: null,
+      cargoPackedByName: null,
+      completedAt: null,
+      updatedAt: releasedUpdatedAt,
+    };
+    const fbsTsdAssembly = {
+      findFirst: vi.fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ requestId: 'request-311', supplyId: 'WB-GI-311' }),
+      findMany: vi.fn().mockResolvedValue([]),
+      findUnique: vi.fn()
+        .mockResolvedValueOnce({
+          ...releasedTask,
+          status: 'IN_PROGRESS',
+          workerUserId: 'worker-nadezhda',
+          workerName: 'Надежда',
+          updatedAt: recentUpdatedAt,
+        })
+        .mockResolvedValueOnce(releasedTask)
+        .mockResolvedValueOnce({
+          ...releasedTask,
+          status: 'IN_PROGRESS',
+          deviceCode: 'TSD-INSTALL-CURRENT',
+          workerUserId: 'worker-current',
+          workerName: 'Сборщик',
+        }),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      count: vi.fn().mockResolvedValue(0),
+      create: vi.fn(),
+    };
+    const prisma = {
+      fbsTsdAssembly,
+      tsdOperation: {
+        findUnique: vi.fn().mockResolvedValue({
+          updatedAt: new Date(Date.now() - 120_000),
+        }),
+      },
+      clientMarketplaceConnection: { findMany: vi.fn().mockResolvedValue([{ clientId: 'client-1' }]) },
+      clientRequestItem: { findFirst: vi.fn().mockResolvedValue({ id: 'request-item-311' }) },
+      $transaction: vi.fn(async (callback: (tx: Record<string, unknown>) => unknown) => callback({
+        $queryRaw: vi.fn().mockResolvedValue([{ updatedAt: new Date(Date.now() - 120_000) }]),
+        fbsTsdAssembly,
+      })),
+    };
+    const clientScopes = {
+      resolveClientFilter: vi.fn().mockReturnValue('client-1'),
+      requireClientAccess: vi.fn(),
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, clientScopes as never);
+    vi.spyOn(service as any, 'loadFbsOrders').mockResolvedValue({
+      orders: [{
+        id: '5573896135',
+        connectionId: 'connection-1',
+        marketplace: MarketplaceType.WILDBERRIES,
+        category: 'active',
+        supplierStatus: 'confirm',
+        product: {
+          id: 'sku-311',
+          name: 'Костюм',
+          article: 'ARTICLE-311',
+          clientSku: null,
+          internalSku: 'SKU-311',
+          needsChestnyZnak: false,
+          isUnmarked: true,
+        },
+        request: { id: 'request-311', status: 'SUBMITTED' },
+        supplyId: 'WB-GI-311',
+        storageBoxes: [{ code: 'FFL_TEST_311', quantity: 1, status: 'AVAILABLE' }],
+        requiredMeta: [],
+        optionalMeta: [],
+        barcodes: ['4600000000311'],
+        itemCount: 1,
+        createdAt: new Date().toISOString(),
+      }],
+    });
+    vi.spyOn(service as any, 'formatFbsTsdAssembly').mockImplementation(async (task: unknown) => task);
+
+    const result = await service.getNextFbsTsdAssembly(undefined, {
+      id: 'worker-current',
+      name: 'Сборщик',
+      deviceCode: 'TSD-INSTALL-CURRENT',
+    } as never);
+
+    expect(prisma.tsdOperation.findUnique).toHaveBeenCalledWith({
+      where: { operationKey: 'monitor-heartbeat:TSD-INSTALL-OFFLINE' },
+      select: { updatedAt: true },
+    });
+    expect(fbsTsdAssembly.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        id: 'offline-task',
+        status: 'IN_PROGRESS',
+        workerUserId: 'worker-nadezhda',
+        updatedAt: recentUpdatedAt,
+        sourceBarcode: null,
+        boxId: null,
+        barcode: null,
+        kiz: null,
+      }),
+      data: expect.objectContaining({
+        status: 'RELEASED',
+        workerUserId: null,
+        workerName: null,
+        errorMessage: expect.stringContaining('ТСД TSD-INSTALL-OFFLINE офлайн'),
+      }),
+    });
+    expect(fbsTsdAssembly.updateMany).toHaveBeenLastCalledWith({
+      where: {
+        id: 'offline-task',
+        status: 'RELEASED',
+        updatedAt: releasedUpdatedAt,
+      },
+      data: expect.objectContaining({
+        orderId: '5573896135',
+        requestId: 'request-311',
+        deviceCode: 'TSD-INSTALL-CURRENT',
+      }),
+    });
+    expect(result).toMatchObject({
+      orderId: '5573896135',
+      deviceCode: 'TSD-INSTALL-CURRENT',
+      workerUserId: 'worker-current',
+    });
+  });
+
+  // TEST: an active order in the previous supply keeps its owner, while the
+  // queue continues with the first free order from the following supply.
+  it('continues to the next supply when the previous supply order belongs to an online TSD', async () => {
+    const onlineTask = {
+      id: 'online-task',
+      orderId: '5573896135',
+      status: 'IN_PROGRESS',
+      deviceCode: 'TSD-INSTALL-NADEZHDA',
+      workerUserId: 'worker-nadezhda',
+      workerName: 'Надежда',
+      reservedBoxId: null,
+      reservedBoxCode: null,
+      boxId: null,
+      boxCode: null,
+      sourceBarcode: null,
+      barcode: null,
+      kiz: null,
+      relabelConfirmedAt: null,
+      wbMetaStatus: 'NOT_REQUIRED',
+      marketplaceSubmittedAt: null,
+      marketplaceLabelBase64: null,
+      marketplaceLabelContentType: null,
+      marketplaceSubmitError: null,
+      stickerPartA: null,
+      stickerPartB: null,
+      stickerBarcode: null,
+      sourceBoxPending: false,
+      cargoPackingId: null,
+      cargoPackedAt: null,
+      cargoPackedByUserId: null,
+      cargoPackedByName: null,
+      completedAt: null,
+      updatedAt: new Date(),
+    };
+    const fbsTsdAssembly = {
+      findFirst: vi.fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ requestId: 'request-311', supplyId: 'WB-GI-311' }),
+      findMany: vi.fn().mockResolvedValue([]),
+      findUnique: vi.fn()
+        .mockResolvedValueOnce(onlineTask)
+        .mockResolvedValueOnce(null),
+      updateMany: vi.fn(),
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
+        id: 'next-supply-task',
+        ...data,
+      })),
+    };
+    const prisma = {
+      fbsTsdAssembly,
+      tsdOperation: {
+        findUnique: vi.fn().mockResolvedValue({ updatedAt: new Date(Date.now() - 30_000) }),
+      },
+      clientMarketplaceConnection: { findMany: vi.fn().mockResolvedValue([{ clientId: 'client-1' }]) },
+      clientRequestItem: { findFirst: vi.fn().mockResolvedValue({ id: 'request-item' }) },
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {
+      resolveClientFilter: vi.fn().mockReturnValue('client-1'),
+      requireClientAccess: vi.fn(),
+    } as never);
+    const order = (id: string, requestId: string, supplyId: string, createdAt: string) => ({
+      id,
+      connectionId: 'connection-1',
+      marketplace: MarketplaceType.WILDBERRIES,
+      category: 'active',
+      supplierStatus: 'confirm',
+      product: {
+        id: `sku-${requestId}`,
+        name: `Товар ${requestId}`,
+        article: requestId,
+        clientSku: null,
+        internalSku: requestId,
+        needsChestnyZnak: false,
+        isUnmarked: true,
+      },
+      request: { id: requestId, status: 'SUBMITTED' },
+      supplyId,
+      storageBoxes: [{ code: `FFL_${requestId}`, quantity: 1, status: 'AVAILABLE' }],
+      requiredMeta: [],
+      optionalMeta: [],
+      barcodes: ['4600000000311'],
+      itemCount: 1,
+      createdAt,
+    });
+    vi.spyOn(service as any, 'loadFbsOrders').mockResolvedValue({
+      orders: [
+        order('5573896135', 'request-311', 'WB-GI-311', '2026-08-29T08:00:00.000Z'),
+        order('5573897000', 'request-312', 'WB-GI-312', '2026-08-29T08:01:00.000Z'),
+      ],
+    });
+    vi.spyOn(service as any, 'formatFbsTsdAssembly').mockImplementation(async (task: unknown) => task);
+
+    const result = await service.getNextFbsTsdAssembly(undefined, {
+      id: 'worker-current',
+      name: 'Сборщик',
+      deviceCode: 'TSD-INSTALL-CURRENT',
+    } as never);
+
+    expect(fbsTsdAssembly.updateMany).not.toHaveBeenCalled();
+    expect(fbsTsdAssembly.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        orderId: '5573897000',
+        requestId: 'request-312',
+        supplyId: 'WB-GI-312',
+        deviceCode: 'TSD-INSTALL-CURRENT',
+      }),
+    });
+    expect(result).toMatchObject({ orderId: '5573897000' });
+  });
+
+  // TEST: an online TSD remains the exclusive owner of its FBS task.
+  it('keeps a physical TSD online while its monitor heartbeat is fresh', async () => {
+    const prisma = {
+      tsdOperation: {
+        findUnique: vi.fn().mockResolvedValue({ updatedAt: new Date(Date.now() - 30_000) }),
+      },
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+
+    await expect(
+      (service as any).isFbsTsdDeviceOffline('TSD-INSTALL-ONLINE'),
+    ).resolves.toBe(false);
+  });
+
+  // TEST: absent monitor data is unknown and cannot authorize task stealing.
+  it('does not classify a TSD with no monitor heartbeat as offline', async () => {
+    const prisma = {
+      tsdOperation: { findUnique: vi.fn().mockResolvedValue(null) },
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+
+    await expect(
+      (service as any).isFbsTsdDeviceOffline('TSD-INSTALL-UNKNOWN'),
+    ).resolves.toBe(false);
+  });
+
+  // TEST: labels and other non-scan progress protect a task from automatic
+  // release just like a scanned box, product barcode or KIZ.
+  it('does not treat a task with generated sticker progress as untouched', () => {
+    const service = new MarketplaceConnectionsService({} as never, {} as never);
+    const task = {
+      boxId: null,
+      boxCode: null,
+      sourceBarcode: null,
+      barcode: null,
+      kiz: null,
+      relabelConfirmedAt: null,
+      wbMetaStatus: 'NOT_REQUIRED',
+      marketplaceSubmittedAt: null,
+      marketplaceLabelBase64: null,
+      marketplaceLabelContentType: null,
+      marketplaceSubmitError: null,
+      stickerPartA: null,
+      stickerPartB: null,
+      stickerBarcode: 'WB-STICKER-1234',
+      sourceBoxPending: false,
+      cargoPackingId: null,
+      cargoPackedAt: null,
+      cargoPackedByUserId: null,
+      cargoPackedByName: null,
+      completedAt: null,
+    };
+
+    expect((service as any).isFbsTsdTaskUntouchedForAutoRelease(task)).toBe(false);
+  });
+
+  // TEST: the final locked heartbeat read wins over an earlier stale snapshot.
+  it('does not release an FBS task when its TSD reconnects before the guarded update', async () => {
+    const updateMany = vi.fn();
+    const prisma = {
+      $transaction: vi.fn(async (callback: (tx: Record<string, unknown>) => unknown) => callback({
+        $queryRaw: vi.fn().mockResolvedValue([{ updatedAt: new Date(Date.now() - 10_000) }]),
+        fbsTsdAssembly: { updateMany },
+      })),
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+
+    await expect(
+      (service as any).releaseOfflineUntouchedFbsTsdTask({
+        id: 'reconnected-task',
+        deviceCode: 'TSD-INSTALL-RECONNECTED',
+        workerUserId: 'worker-1',
+        workerName: 'Сборщик',
+        reservedBoxId: null,
+        updatedAt: new Date(),
+      }),
+    ).resolves.toBe(false);
+    expect(updateMany).not.toHaveBeenCalled();
   });
 
   it('continues the TSD queue from a synced WMS request when the WB API is temporarily unavailable', async () => {
