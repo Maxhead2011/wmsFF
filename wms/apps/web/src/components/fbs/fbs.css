@@ -660,6 +660,110 @@
   color: #b91c1c;
 }
 
+/* ADDED: complete WB supply/request audit in the Active orders workspace. */
+.fbs-supply-request-audit {
+  display: grid;
+  gap: 11px;
+  border: 1px solid #93c5fd;
+  border-radius: 15px;
+  background: linear-gradient(135deg, #eff6ff 0%, #fff 72%);
+  padding: 13px 15px;
+}
+
+.fbs-supply-request-audit__header {
+  display: grid;
+  grid-template-columns: auto minmax(240px, 1fr) auto;
+  align-items: center;
+  gap: 10px 12px;
+}
+
+.fbs-supply-request-audit__icon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 12px;
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.fbs-supply-request-audit__header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.fbs-supply-request-audit__header strong {
+  color: #1e3a8a;
+  font-size: 13px;
+}
+
+.fbs-supply-request-audit__header small,
+.fbs-supply-request-audit__result > small {
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.fbs-supply-request-audit__message,
+.fbs-supply-request-audit__result > p {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.fbs-supply-request-audit .is-success {
+  color: #15803d;
+}
+
+.fbs-supply-request-audit .is-warning {
+  color: #b45309;
+}
+
+.fbs-supply-request-audit .is-error {
+  color: #b91c1c;
+}
+
+.fbs-supply-request-audit__result {
+  display: grid;
+  gap: 6px;
+}
+
+.fbs-supply-request-audit__issues {
+  display: grid;
+  max-height: 360px;
+  gap: 8px;
+  overflow: auto;
+  padding-right: 3px;
+}
+
+.fbs-supply-request-audit__issues article {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #fed7aa;
+  border-radius: 11px;
+  background: #fffaf5;
+  padding: 10px 12px;
+}
+
+.fbs-supply-request-audit__issues article > div {
+  display: grid;
+  gap: 2px;
+}
+
+.fbs-supply-request-audit__issues article span {
+  color: #b45309;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.fbs-supply-request-audit__issues article small {
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .fbs-warehouse-board {
   display: grid;
   gap: 12px;
@@ -3739,6 +3843,20 @@
   }
 
   .fbs-supply-request-tool .button {
+    width: 100%;
+  }
+
+  .fbs-supply-request-audit__header,
+  .fbs-supply-request-audit__issues article {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .fbs-supply-request-audit__icon {
+    display: none;
+  }
+
+  .fbs-supply-request-audit .button {
     width: 100%;
   }
 

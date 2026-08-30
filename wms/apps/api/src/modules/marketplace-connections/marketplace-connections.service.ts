@@ -60,6 +60,7 @@ import {
   type ResolveFbsSyncConflictDto,
 } from './dto/resolve-fbs-sync-conflict.dto';
 import type { FbsStockSyncDto } from './dto/fbs-stock-sync.dto';
+import type { FbsSupplyRequestAuditDto } from './dto/fbs-supply-request-audit.dto';
 import type { FbsSupplyRequestDto } from './dto/fbs-supply-request.dto';
 import type {
   ApplyFbsSupplyReconciliationDto,
@@ -83,6 +84,7 @@ import {
   wildberriesReadRequestKey,
 } from './wildberries-request-scheduler';
 import { buildFbsPrimaryProcessingBreakdown } from './fbs-primary-processing';
+import { buildFbsSupplyRequestAudit } from './fbs-supply-request-audit';
 import { allocateFbsStock } from './fbs-stock-allocation';
 import { FbsStockAllocationService } from './fbs-stock-allocation.service';
 import {
@@ -20831,6 +20833,35 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       skippedLinkedOrders: activeOrders.length - unlinkedOrders.length,
       skippedInactiveOrders: supplyOrders.length - activeOrders.length,
     };
+  }
+
+  // ADDED: force-refresh active WB orders, then compare every visible supply
+  // with authoritative local request links. This method never writes to WB/WMS.
+  async auditFbsSupplyRequests(dto: FbsSupplyRequestAuditDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    this.clientScopes.requireClientAccess(user, clientId, 'read');
+
+    const freshResponse = await this.refreshFbsOrdersCache(clientId, {
+      invalidateHistory: false,
+      historyMode: 'cache-only',
+    });
+    const visibleResponse = await this.scopeFbsOrdersForUser(freshResponse, user);
+    const candidateOrders = visibleResponse.orders.filter(
+      (order) =>
+        order.marketplace === MarketplaceType.WILDBERRIES &&
+        order.category === 'active' &&
+        order.supplierStatus === 'confirm' &&
+        Boolean(order.supplyId?.trim()),
+    );
+    const links = candidateOrders.length
+      ? await this.loadActiveFbsOrderRequestLinks(clientId, candidateOrders)
+      : [];
+
+    return buildFbsSupplyRequestAudit({
+      checkedAt: visibleResponse.fetchedAt,
+      orders: candidateOrders,
+      links,
+    });
   }
 
   // FIX: forms a local-only request from the exact unfinished orders found by

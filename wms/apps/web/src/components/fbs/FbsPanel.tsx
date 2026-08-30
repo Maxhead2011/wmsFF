@@ -39,6 +39,7 @@ import {
 } from 'lucide-react';
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  auditFbsSupplyRequests,
   applyFbsSupplyReconciliation,
   assembleFbsOrders,
   cancelFbsOrders,
@@ -103,6 +104,7 @@ import {
   type FbsProductShipmentReport,
   type FbsProductShipmentReportRow,
   type FbsStocksResponse,
+  type FbsSupplyRequestAudit,
   type FbsSupplyReconciliation,
   type FbsWarehouseRouteMode,
   type FbsWarehouseRoutesResponse,
@@ -416,6 +418,12 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     tone: 'success' | 'error';
     text: string;
   } | null>(null);
+  // ADDED: full WB supply/request audit, independent of table filters and pagination.
+  const [supplyRequestAudit, setSupplyRequestAudit] = useState<FbsSupplyRequestAudit | null>(null);
+  const [supplyRequestAuditBusy, setSupplyRequestAuditBusy] = useState(false);
+  const [supplyRequestAuditCreatingId, setSupplyRequestAuditCreatingId] = useState<string | null>(null);
+  const [supplyRequestAuditError, setSupplyRequestAuditError] = useState('');
+  const [supplyRequestAuditNotice, setSupplyRequestAuditNotice] = useState('');
   // ADDED: two-step WB supply composition repair; preview is always required.
   const [supplyReconcileId, setSupplyReconcileId] = useState('');
   const [supplyReconcileBusy, setSupplyReconcileBusy] = useState(false);
@@ -457,6 +465,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
   const loadSequence = useRef(0);
   const marketplaceCountsLoadSequence = useRef(0);
   const supplyReconcileRequestSequence = useRef(0);
+  const supplyRequestAuditSequence = useRef(0);
   const canManagePricing =
     session.user.permissionCodes.includes('system:admin') ||
     session.user.permissionCodes.includes('billing:write') ||
@@ -678,6 +687,12 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     setSyncAudit(null);
     setSupplyRequestId('');
     setSupplyRequestFeedback(null);
+    setSupplyRequestAudit(null);
+    setSupplyRequestAuditBusy(false);
+    setSupplyRequestAuditCreatingId(null);
+    setSupplyRequestAuditError('');
+    setSupplyRequestAuditNotice('');
+    supplyRequestAuditSequence.current += 1;
     // FIX: a preview is scoped to one client/marketplace and must never survive
     // switching to another workspace.
     setSupplyReconcileId('');
@@ -796,6 +811,65 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
       });
     } finally {
       setSupplyRequestBusy(false);
+    }
+  }
+
+  async function runSupplyRequestAudit() {
+    if (!selectedClientId || supplyRequestAuditBusy || supplyRequestAuditCreatingId) return;
+    const clientId = selectedClientId;
+    const sequence = ++supplyRequestAuditSequence.current;
+    setSupplyRequestAuditBusy(true);
+    setSupplyRequestAuditError('');
+    setSupplyRequestAuditNotice('');
+    try {
+      const result = await auditFbsSupplyRequests(session.accessToken, clientId);
+      if (sequence !== supplyRequestAuditSequence.current || clientId !== selectedClientId) return;
+      setSupplyRequestAudit(result);
+    } catch (caught) {
+      if (sequence !== supplyRequestAuditSequence.current || clientId !== selectedClientId) return;
+      setSupplyRequestAuditError(
+        caught instanceof Error
+          ? caught.message
+          : 'Не удалось сверить поставки WB с заявками WMS.',
+      );
+    } finally {
+      if (sequence === supplyRequestAuditSequence.current) {
+        setSupplyRequestAuditBusy(false);
+      }
+    }
+  }
+
+  async function createRequestFromAuditSupply(supplyId: string) {
+    if (!selectedClientId || supplyRequestAuditBusy || supplyRequestAuditCreatingId) return;
+    const clientId = selectedClientId;
+    const sequence = ++supplyRequestAuditSequence.current;
+    setSupplyRequestAuditCreatingId(supplyId);
+    setSupplyRequestAuditError('');
+    setSupplyRequestAuditNotice('');
+    try {
+      const created = await createFbsRequestFromSupply(session.accessToken, {
+        clientId,
+        supplyId,
+      });
+      await loadOrders(true);
+      const refreshedAudit = await auditFbsSupplyRequests(session.accessToken, clientId);
+      if (sequence !== supplyRequestAuditSequence.current || clientId !== selectedClientId) return;
+      setSupplyRequestAudit(refreshedAudit);
+      setSupplyRequestAuditNotice(
+        `Создана заявка WMS №${String(created.request.number).padStart(6, '0')} — ` +
+          `${created.linkedOrders} заказ(а/ов) поставки ${created.supplyId}.`,
+      );
+    } catch (caught) {
+      if (sequence !== supplyRequestAuditSequence.current || clientId !== selectedClientId) return;
+      setSupplyRequestAuditError(
+        caught instanceof Error
+          ? caught.message
+          : `Не удалось создать заявку из поставки ${supplyId}.`,
+      );
+    } finally {
+      if (sequence === supplyRequestAuditSequence.current) {
+        setSupplyRequestAuditCreatingId(null);
+      }
     }
   }
 
@@ -1715,6 +1789,91 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
             ) : null}
           </div> : null}
         </div>
+
+        {marketplace === 'WILDBERRIES' && activeView === 'active' && selectedClientId ? (
+          <section className="fbs-supply-request-audit" aria-label="Проверка поставок WB и заявок WMS">
+            <div className="fbs-supply-request-audit__header">
+              <span className="fbs-supply-request-audit__icon">
+                <ListChecks size={20} aria-hidden="true" />
+              </span>
+              <div>
+                <strong>Проверить поставки WB и заявки WMS</strong>
+                <small>
+                  Проверяет все активные заказы WB со статусом «На сборке», а не только строки на экране.
+                </small>
+              </div>
+              <button
+                className="button button-primary"
+                type="button"
+                onClick={() => void runSupplyRequestAudit()}
+                disabled={supplyRequestAuditBusy || Boolean(supplyRequestAuditCreatingId)}
+              >
+                <RefreshCw size={16} aria-hidden="true" />
+                {supplyRequestAuditBusy ? 'Сверяю…' : 'Проверить поставки'}
+              </button>
+            </div>
+
+            {supplyRequestAuditError ? (
+              <p className="fbs-supply-request-audit__message is-error">{supplyRequestAuditError}</p>
+            ) : null}
+            {supplyRequestAuditNotice ? (
+              <p className="fbs-supply-request-audit__message is-success">{supplyRequestAuditNotice}</p>
+            ) : null}
+
+            {supplyRequestAudit ? (
+              <div className="fbs-supply-request-audit__result">
+                <p className={supplyRequestAudit.issues.length ? 'is-warning' : 'is-success'}>
+                  {supplyRequestAudit.issues.length
+                    ? `Найдены поставки без полной заявки WMS: ${supplyRequestAudit.missingRequestSupplies}. ` +
+                      `Не привязано заказов: ${supplyRequestAudit.missingRequestOrders}.`
+                    : `Проверено ${supplyRequestAudit.checkedSupplies} поставок и ` +
+                      `${supplyRequestAudit.checkedOrders} заказов — пропущенных заявок нет.`}
+                </p>
+                <small>
+                  Актуально на {new Date(supplyRequestAudit.checkedAt).toLocaleString('ru-RU')}
+                </small>
+
+                {supplyRequestAudit.issues.length ? (
+                  <div className="fbs-supply-request-audit__issues">
+                    {supplyRequestAudit.issues.map((issue) => (
+                      <article key={`${issue.connectionId}:${issue.supplyId}`}>
+                        <div>
+                          <strong>{issue.supplyId}</strong>
+                          <span>
+                            {issue.status === 'MISSING'
+                              ? 'Заявка WMS отсутствует'
+                              : 'Заявка создана не на все заказы'}
+                          </span>
+                          <small>
+                            {issue.accountName || 'Кабинет WB'} · {issue.warehouseName || issue.warehouseId || 'Склад не указан'} ·{' '}
+                            без заявки {issue.unlinkedOrderCount} из {issue.activeOrderCount}
+                            {issue.requestNumbers.length
+                              ? ` · уже в заявках №${issue.requestNumbers
+                                  .map((number) => String(number).padStart(6, '0'))
+                                  .join(', №')}`
+                              : ''}
+                          </small>
+                        </div>
+                        <button
+                          className="button button-primary"
+                          type="button"
+                          disabled={
+                            supplyRequestAuditBusy || Boolean(supplyRequestAuditCreatingId)
+                          }
+                          onClick={() => void createRequestFromAuditSupply(issue.supplyId)}
+                        >
+                          {supplyRequestAuditCreatingId === issue.supplyId
+                            ? 'Создаю…'
+                            : 'Создать заявку'}
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
 
         {marketplace === 'WILDBERRIES' && activeView === 'active' && selectedClientId ? (
           <form className="fbs-supply-request-tool" onSubmit={submitSupplyRequest}>
