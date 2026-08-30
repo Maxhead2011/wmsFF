@@ -3865,6 +3865,29 @@ export type CreateFbsRequestFromSupplyResult = CreateFbsRequestResult & {
   skippedInactiveOrders: number;
 };
 
+// ADDED: complete WB supply-to-WMS-request audit, independent of table pagination.
+export type FbsSupplyRequestAudit = {
+  checkedAt: string;
+  checkedConnections: number;
+  checkedSupplies: number;
+  checkedOrders: number;
+  missingRequestSupplies: number;
+  missingRequestOrders: number;
+  issues: Array<{
+    connectionId: string;
+    accountName: string | null;
+    supplyId: string;
+    warehouseId: string | null;
+    warehouseName: string | null;
+    status: 'MISSING' | 'PARTIAL';
+    activeOrderCount: number;
+    linkedOrderCount: number;
+    unlinkedOrderCount: number;
+    unlinkedOrderIds: string[];
+    requestNumbers: number[];
+  }>;
+};
+
 // ADDED: preview/apply contract for supplies combined manually in WB.
 export type FbsSupplyReconciliation = {
   clientId: string;
@@ -9812,6 +9835,17 @@ export async function createFbsRequestFromSupply(
       method: 'POST',
       accessToken,
       body: payload,
+    },
+  );
+}
+
+export async function auditFbsSupplyRequests(accessToken: string, clientId: string) {
+  return request<FbsSupplyRequestAudit>(
+    '/marketplace-connections/fbs/supplies/request-audit',
+    {
+      method: 'POST',
+      accessToken,
+      body: { clientId },
     },
   );
 }

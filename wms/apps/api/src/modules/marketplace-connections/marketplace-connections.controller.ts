@@ -27,6 +27,7 @@ import {
 } from './dto/fbs-stock-allocation.dto';
 import { ReconcileFbsStockItemDto } from './dto/reconcile-fbs-stock-item.dto';
 import { FbsStockSyncDto } from './dto/fbs-stock-sync.dto';
+import { FbsSupplyRequestAuditDto } from './dto/fbs-supply-request-audit.dto';
 import { FbsSupplyRequestDto } from './dto/fbs-supply-request.dto';
 import { QuoteFbsCalculatorDto } from './dto/quote-fbs-calculator.dto';
 import { UpdateFbsBillingSettingsDto } from './dto/update-fbs-billing-settings.dto';
@@ -581,6 +582,16 @@ export class MarketplaceConnectionsController {
   @RequirePermissions()
   createFbsRequestFromSupply(@Body() dto: FbsSupplyRequestDto, @CurrentUser() user: AuthUser) {
     return this.connections.createFbsRequestFromSupply(dto, user);
+  }
+
+  // ADDED: read-only check of WB supplies that have orders but no complete WMS request.
+  @Post('fbs/supplies/request-audit')
+  @RequirePermissions()
+  auditFbsSupplyRequests(
+    @Body() dto: FbsSupplyRequestAuditDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.connections.auditFbsSupplyRequests(dto, user);
   }
 
   // ADDED: two-step, client-scoped repair for supplies merged manually in WB.

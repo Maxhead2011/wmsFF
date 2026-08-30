@@ -193,10 +193,10 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'marketplace-connections',
     name: 'Маркетплейсы и FBS',
     prefixes: ['/marketplace-connections', '/marketplace-connection', '/external/v1/fbs'],
-    // FIX: keep monitoring in sync with the FBS delivery-recovery check and request routes.
-    routeCount: 98,
+    // FIX: keep monitoring in sync with the WB supply/request audit route.
+    routeCount: 99,
     description: 'Подключения WB/Ozon, заказы FBS, поставки, статусы, финансовые отчёты и распределение остатков.',
-    logic: ['Синхронизирует кабинеты, склады и заказы.', 'Резервирует товар WMS и передаёт статусы сборки.', 'Проверяет поставки филиала и создаёт локальные заявки FBS ДОВОЗ без повторной отправки статуса в WB.', 'Получает финансовые штрафы FBS без передачи токена WB в браузер.', 'Рассчитывает и выгружает распределённые остатки по складам.'],
+    logic: ['Синхронизирует кабинеты, склады и заказы.', 'Сверяет активные поставки WB с заявками WMS и показывает отсутствующие привязки без записи в WB.', 'Резервирует товар WMS и передаёт статусы сборки.', 'Проверяет поставки филиала и создаёт локальные заявки FBS ДОВОЗ без повторной отправки статуса в WB.', 'Получает финансовые штрафы FBS без передачи токена WB в браузер.', 'Рассчитывает и выгружает распределённые остатки по складам.'],
     dependencies: ['Основная БД', 'WB API', 'Ozon API'],
   },
   {
