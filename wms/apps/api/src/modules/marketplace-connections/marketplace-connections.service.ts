@@ -8845,7 +8845,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         });
         if (claimed.count !== 1) this.throwFbsTsdTaskStale(freshTask, user);
         return tx.fbsTsdAssembly.findUnique({ where: { id: freshTask.id } });
-      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }),
+      }, {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        // FIX: alternative physical box selection can wait for a concurrent
+        // route refresh; Prisma's five-second default must not roll it back.
+        maxWait: 10_000,
+        timeout: 15_000,
+      }),
     );
   }
 
