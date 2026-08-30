@@ -15464,8 +15464,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         marketplace: task.marketplace,
         connectionId: task.connectionId,
         requestId: task.requestId,
-        // FIX: room count belongs only to the current supply.
-        supplyId: task.supplyId ?? null,
+        // FIX: one WMS request can combine several WB supplies. Pallet scans
+        // must use the same request-wide route which is shown to the picker.
         status: {
           in: [
             FBS_TSD_RESERVED_STATUS,
