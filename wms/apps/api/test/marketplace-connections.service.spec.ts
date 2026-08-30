@@ -3879,6 +3879,111 @@ describe('MarketplaceConnectionsService', () => {
     expect(loadLiveOrders).not.toHaveBeenCalled();
   });
 
+  // TEST: a virtual route on another online TSD must not hide the order from
+  // the employee who physically scans the required box first.
+  it('switches a physically scanned box from another untouched active TSD route', async () => {
+    const currentTask = {
+      id: 'task-current',
+      clientId: 'client-1',
+      marketplace: MarketplaceType.WILDBERRIES,
+      connectionId: 'connection-1',
+      orderId: 'order-current',
+      requestId: 'request-469',
+      supplyId: 'WB-GI-469',
+      skuId: 'sku-current',
+      sourceSkuId: null,
+      itemCount: 1,
+      deviceCode: 'TSD-WORKER-1',
+      workerUserId: 'worker-1',
+      workerName: 'Первый сборщик',
+      status: 'IN_PROGRESS',
+      reservedBoxId: 'box-current',
+      boxId: null,
+      sourceBarcode: null,
+      barcode: null,
+      kiz: null,
+      relabelConfirmedAt: null,
+    };
+    const targetTask = {
+      ...currentTask,
+      id: 'task-target',
+      orderId: 'order-target',
+      skuId: 'sku-in-scanned-box',
+      deviceCode: 'TSD-WORKER-2',
+      workerUserId: 'worker-2',
+      workerName: 'Второй сборщик',
+      reservedBoxId: 'box-scanned',
+      reservedBoxCode: 'FFL_LKB0807_009',
+    };
+    const switchedTask = {
+      ...targetTask,
+      deviceCode: currentTask.deviceCode,
+      workerUserId: currentTask.workerUserId,
+      workerName: currentTask.workerName,
+      boxId: 'box-scanned',
+      boxCode: 'FFL_LKB0807_009',
+    };
+    const tx = {
+      fbsTsdAssembly: {
+        findUnique: vi.fn()
+          .mockResolvedValueOnce(currentTask)
+          .mockResolvedValueOnce(targetTask),
+        update: vi.fn()
+          .mockResolvedValueOnce({ ...currentTask, status: 'RESERVED' })
+          .mockResolvedValueOnce(switchedTask),
+      },
+    };
+    const findMany = vi.fn(async ({ where }: { where: { status?: { in?: string[] } } }) =>
+      where.status?.in?.includes('IN_PROGRESS') ? [targetTask] : [],
+    );
+    const prisma = {
+      fbsTsdAssembly: { findMany },
+      stockBalance: {
+        findMany: vi.fn().mockResolvedValue([
+          { skuId: 'sku-in-scanned-box', quantity: 1 },
+        ]),
+      },
+      $transaction: vi.fn(async (callback: (client: typeof tx) => Promise<unknown>) => callback(tx)),
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    vi.spyOn(service as any, 'fbsTsdReservationRows').mockResolvedValue([]);
+    vi.spyOn(service as any, 'loadFbsTsdRequestOrders').mockResolvedValue({
+      orders: [],
+      counts: { active: 0, shipped: 0, cancelled: 0, archive: 0, all: 0 },
+    });
+    vi.spyOn(service as any, 'loadFbsOrders').mockResolvedValue({
+      orders: [],
+      counts: { active: 0, shipped: 0, cancelled: 0, archive: 0, all: 0 },
+    });
+    vi.spyOn(service as any, 'formatFbsTsdAssembly').mockImplementation(
+      async (task: unknown, _user: unknown, message: string) => ({ task, message }),
+    );
+
+    await expect(
+      (service as any).switchFbsTsdAssemblyToBox(
+        currentTask,
+        { id: 'box-scanned', code: 'FFL_LKB0807_009' },
+        { id: 'worker-1', name: 'Первый сборщик', deviceCode: 'TSD-WORKER-1' },
+      ),
+    ).resolves.toMatchObject({
+      task: {
+        id: 'task-target',
+        workerUserId: 'worker-1',
+        boxId: 'box-scanned',
+      },
+      message: expect.stringContaining('Короб FFL_LKB0807_009 нужен заявке'),
+    });
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        status: expect.objectContaining({ in: expect.arrayContaining(['IN_PROGRESS']) }),
+        boxId: null,
+        sourceBarcode: null,
+        barcode: null,
+        kiz: null,
+      }),
+    }));
+  });
+
   it('переключается на любой нужный товар по ШК, даже если он не следующий по маршруту', async () => {
     const currentTask = {
       id: 'task-current',
@@ -9195,6 +9300,75 @@ describe('MarketplaceConnectionsService', () => {
       select: { boxCode: true },
     });
     expect(prisma.clientRequestItem.findMany).not.toHaveBeenCalled();
+  });
+
+  // TEST: scanning a pallet-sort must keep boxes visible when their orders are
+  // only virtually assigned to another employee and no physical scan exists.
+  it('shows a box on the pallet when another active TSD route is still untouched', async () => {
+    const currentTask = {
+      id: 'task-current',
+      clientId: 'client-1',
+      marketplace: MarketplaceType.WILDBERRIES,
+      connectionId: 'connection-1',
+      requestId: 'request-469',
+      supplyId: 'WB-GI-469',
+      skuId: 'sku-current',
+      sourceSkuId: null,
+      itemCount: 1,
+      status: 'IN_PROGRESS',
+      boxId: null,
+      sourceBarcode: null,
+      barcode: null,
+      kiz: null,
+      relabelConfirmedAt: null,
+    };
+    const otherActiveTask = {
+      ...currentTask,
+      id: 'task-other-worker',
+      skuId: 'sku-on-pallet',
+      reservedBoxId: 'box-on-pallet',
+      reservedBoxCode: 'FFL_LKB0807_009',
+    };
+    const findMany = vi.fn(async ({ where }: { where: { status?: { in?: string[] } } }) =>
+      where.status?.in?.includes('IN_PROGRESS') ? [otherActiveTask] : [],
+    );
+    const prisma = {
+      fbsTsdAssembly: { findMany },
+      stockBalance: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            skuId: 'sku-on-pallet',
+            boxId: 'box-on-pallet',
+            quantity: 1,
+          },
+        ]),
+      },
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    vi.spyOn(service as any, 'fbsTsdReservationRowsBySku').mockResolvedValue(new Map([
+      ['sku-on-pallet', [{
+        taskId: 'task-other-worker',
+        boxId: 'box-on-pallet',
+        itemCount: 1,
+        releasableBackground: false,
+      }]],
+      ['sku-current', []],
+    ]));
+
+    await expect(
+      (service as any).neededFbsRequestBoxesFromPlacements(currentTask, [
+        { boxId: 'box-on-pallet', boxCode: 'FFL_LKB0807_009' },
+      ]),
+    ).resolves.toEqual(['FFL_LKB0807_009']);
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        status: expect.objectContaining({ in: expect.arrayContaining(['IN_PROGRESS']) }),
+        boxId: null,
+        sourceBarcode: null,
+        barcode: null,
+        kiz: null,
+      }),
+    }));
   });
 
   it('освобождает нетронутый фоновый резерв, когда короб физически выбран для заявки', async () => {

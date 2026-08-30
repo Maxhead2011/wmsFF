@@ -9115,6 +9115,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             FBS_TSD_RESERVED_STATUS,
             FBS_TSD_WAITING_STOCK_STATUS,
             FBS_TSD_RESCAN_REQUIRED_STATUS,
+            // FIX: another employee's untouched route is only a virtual hint;
+            // the first physical box scan must be able to claim it.
+            'IN_PROGRESS',
           ],
         },
         boxId: null,
@@ -9214,6 +9217,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               FBS_TSD_RESERVED_STATUS,
               FBS_TSD_WAITING_STOCK_STATUS,
               FBS_TSD_RESCAN_REQUIRED_STATUS,
+              // FIX: allow reassignment only while the other active route has
+              // no physical box, product barcode or KIZ evidence.
+              'IN_PROGRESS',
             ].includes(freshTarget.status) ||
             freshTarget.boxId ||
             freshTarget.sourceBarcode ||
@@ -15465,6 +15471,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             FBS_TSD_RESERVED_STATUS,
             FBS_TSD_WAITING_STOCK_STATUS,
             FBS_TSD_RESCAN_REQUIRED_STATUS,
+            // FIX: pallet contents must include untouched active routes so a
+            // needed pallet never becomes "not needed" after another TSD got
+            // only a virtual assignment.
+            'IN_PROGRESS',
           ],
         },
         boxId: null,
