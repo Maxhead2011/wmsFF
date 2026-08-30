@@ -23,6 +23,8 @@ public class TsdFbsAssemblyResponse {
         public Relabeling relabeling;
         public int itemCount;
         public boolean sourceWithoutBox;
+        // ADDED: true means the manager must select the real source during request close.
+        public boolean sourceBoxPending;
         public boolean requiresKiz;
         public String recommendedBoxCode;
         public StorageLocation recommendedLocation;

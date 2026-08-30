@@ -1,4 +1,4 @@
-import { MarketplaceType, StockStatus } from '@prisma/client';
+import { MarketplaceType } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import { MarketplaceConnectionsService } from '../src/modules/marketplace-connections/marketplace-connections.service';
 
@@ -121,6 +121,30 @@ describe('FBS product-first source selection', () => {
       },
       message: expect.stringContaining('при закрытии заявки'),
     });
+  });
+
+  // TEST: the button cannot bypass request matching when no product was scanned.
+  it('rejects the deferred source before the product barcode is accepted', async () => {
+    const task = {
+      id: 'task-no-product',
+      clientId: 'client-1',
+      requestId: 'request-1',
+      status: 'IN_PROGRESS',
+      barcode: null,
+      sourceBarcode: null,
+      boxId: null,
+      boxCode: null,
+      kiz: null,
+      relabelConfirmedAt: null,
+    };
+    const service = new MarketplaceConnectionsService({} as never, {} as never);
+    vi.spyOn(service as any, 'loadOwnedFbsTsdAssembly').mockResolvedValue(task);
+    const update = vi.spyOn(service as any, 'updateFbsTsdUnderLease');
+
+    await expect(
+      service.scanFbsTsdBox(task.id, { boxCode: 'БЕЗ КОРОБА' }, worker as never),
+    ).rejects.toThrow('Сначала отсканируйте ШК товара');
+    expect(update).not.toHaveBeenCalled();
   });
 
   // TEST: the deferred source must not create a PACKING balance or reduce random stock.

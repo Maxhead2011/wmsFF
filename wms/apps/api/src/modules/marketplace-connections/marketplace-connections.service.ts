@@ -8448,7 +8448,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       return this.scanFbsTsdKiz(taskId, { kiz: rawCode }, user);
     }
     if (
-      state === 'SCAN_BOX' &&
+      ['SCAN_BOX', 'SCAN_SOURCE_BOX'].includes(state) &&
       [task.sourceBarcode, task.barcode]
         .filter((value): value is string => Boolean(value))
         .some((value) => value.toLowerCase() === scannedCode.toLowerCase())
@@ -8459,11 +8459,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         `ШК ${scannedCode} уже принят для заказа №${task.orderId}. Теперь отсканируйте короб, бокс или паллетсорт, откуда взят товар.`,
       );
     }
-    if (state === 'SCAN_BOX' && !fbsTsdKizFormatError(rawCode, allowedBoxPrefixes)) {
+    if (
+      ['SCAN_BOX', 'SCAN_SOURCE_BOX'].includes(state) &&
+      !fbsTsdKizFormatError(rawCode, allowedBoxPrefixes)
+    ) {
       return this.formatFbsTsdAssembly(
         task,
         user,
-        'КИЗ распознан, но пока не записан. Сначала отсканируйте короб, бокс или паллетсорт, затем повторите сканирование КИЗ.',
+        'КИЗ распознан, но пока не записан. Сначала укажите короб или выберите «Без короба», затем повторите сканирование КИЗ.',
       );
     }
     if (task.boxId || fbsTsdUsesNoBox(task)) {
@@ -8477,7 +8480,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
     const switched = await this.switchFbsTsdAssemblyToBarcode(task, scannedCode, user);
     if (switched) return switched;
-    if (state === 'SCAN_BOX') {
+    if (['SCAN_BOX', 'SCAN_SOURCE_BOX'].includes(state)) {
       throw new BadRequestException(
         `Товар с ШК ${scannedCode} не нужен в оставшейся части этой FBS-заявки.`,
       );
@@ -8493,6 +8496,43 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const scannedCode = normalizeFbsScannerCode(
       requiredFbsTsdText(payload.boxCode, 'Отсканируйте номер короба или QR паллетсорта.'),
     );
+    if (scannedCode === normalizeFbsScannerCode(FBS_TSD_NO_BOX_CODE)) {
+      // FIX: a physically scanned product is authoritative. The picker may
+      // defer the exact source box to the existing request-closing workflow.
+      if (task.boxId) {
+        throw new BadRequestException(
+          `Источник уже подтверждён: короб ${task.boxCode}. Завершите заказ или сбросьте сборку.`,
+        );
+      }
+      if (!task.barcode && !task.sourceBarcode) {
+        throw new BadRequestException(
+          'Сначала отсканируйте ШК товара, чтобы WMS проверила, что он нужен этой FBS-заявке.',
+        );
+      }
+      if (task.kiz || task.relabelConfirmedAt) {
+        throw new BadRequestException(
+          'Источник можно отложить только до сканирования КИЗа и завершения переклейки.',
+        );
+      }
+      if (task.sourceBoxPending && fbsTsdUsesNoBox(task)) {
+        return this.formatFbsTsdAssembly(
+          task,
+          user,
+          'Источник уже отложен. Фактический короб будет указан при закрытии заявки.',
+        );
+      }
+      const updated = await this.updateFbsTsdUnderLease(task, user, {
+        boxId: null,
+        boxCode: FBS_TSD_NO_BOX_CODE,
+        sourceBoxPending: true,
+        errorMessage: null,
+      });
+      return this.formatFbsTsdAssembly(
+        updated,
+        user,
+        'Товар принят без указания источника. Фактический короб обязательно укажите при закрытии заявки.',
+      );
+    }
     // FIX: Branch scope is mandatory. Legacy requests use the existing
     // default-Moscow resolver; AUTO tasks use their saved reservation route.
     const expectedWarehouseId = await this.resolveFbsTsdExpectedWarehouseId(task);
@@ -8686,9 +8726,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return this.formatFbsTsdAssembly(
       updated,
       user,
-      task.relabelRequired
-        ? `Короб ${box.code} с палет-сорта ${box.storagePlacement?.pallet.code ?? '—'} принят. Найдите исходный товар «${task.sourceProductName ?? task.sourceArticle ?? 'для переклейки'}» и сканируйте его ШК.`
-        : `Короб ${box.code} с палет-сорта ${box.storagePlacement?.pallet.code ?? '—'} принят. Теперь сканируйте ШК товара.`,
+      task.sourceBarcode
+        ? `Короб ${box.code} принят как источник уже отсканированного товара. Выполните переклейку и отсканируйте новый ШК.`
+        : task.barcode
+          ? task.requiresKiz
+            ? `Короб ${box.code} принят как источник уже отсканированного товара. Теперь сканируйте КИЗ.`
+            : `Короб ${box.code} принят как источник уже отсканированного товара. Переходите к наклейке.`
+          : task.relabelRequired
+            ? `Короб ${box.code} с палет-сорта ${box.storagePlacement?.pallet.code ?? '—'} принят. Найдите исходный товар «${task.sourceProductName ?? task.sourceArticle ?? 'для переклейки'}» и сканируйте его ШК.`
+            : `Короб ${box.code} с палет-сорта ${box.storagePlacement?.pallet.code ?? '—'} принят. Теперь сканируйте ШК товара.`,
     );
   }
 
@@ -8753,7 +8799,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         ) {
           return null;
         }
-        if (freshTask.sourceBarcode || freshTask.barcode || freshTask.kiz || freshTask.relabelConfirmedAt) {
+        // FIX: product-first collection intentionally keeps the accepted
+        // barcode while the employee identifies the physical source box.
+        if (freshTask.kiz || freshTask.relabelConfirmedAt) {
           this.throwFbsTsdTaskStale(freshTask, user);
         }
         const [balance, reservationRowsBySku] = await Promise.all([
@@ -8840,7 +8888,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           data: {
             reservedBoxId: box.id, reservedBoxCode: box.code,
             reservedAt: freshTask.reservedAt ?? new Date(), boxId: box.id,
-            boxCode: box.code, errorMessage: null,
+            boxCode: box.code,
+            sourceBoxPending: false,
+            errorMessage: null,
           },
         });
         if (claimed.count !== 1) this.throwFbsTsdTaskStale(freshTask, user);
@@ -13283,7 +13333,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           clientId: fresh.clientId,
           eventType: ClientRequestEventType.COMMENT,
           title: 'FBS-заказ собран на ТСД',
-          body: `Заказ ${fresh.orderId}; ${fbsTsdUsesNoBox(fresh) ? 'товар взят из хранения без коробов' : `короб ${fresh.boxCode}`}; сотрудник ${fresh.workerName ?? fresh.deviceCode}${fresh.kiz ? `; КИЗ ${printableFbsKiz(fresh.kiz)}` : ''}${fresh.stickerPartB ? `; наклейка WB ${fresh.stickerPartB}` : ''}.`,
+          body: `Заказ ${fresh.orderId}; ${fresh.sourceBoxPending ? 'источник будет указан при закрытии заявки' : fbsTsdUsesNoBox(fresh) ? 'товар взят из хранения без коробов' : `короб ${fresh.boxCode}`}; сотрудник ${fresh.workerName ?? fresh.deviceCode}${fresh.kiz ? `; КИЗ ${printableFbsKiz(fresh.kiz)}` : ''}${fresh.stickerPartB ? `; наклейка WB ${fresh.stickerPartB}` : ''}.`,
           createdByUserId: user.id,
         },
       });
@@ -13300,7 +13350,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     task: FbsTsdAssemblyRecord,
     requestWarehouseId: string | null,
   ) {
-    if (task.marketplace !== MarketplaceType.WILDBERRIES || task.completedAt) return;
+    // FIX: a deferred source is resolved by the manager during request close.
+    // Reserving it here would deduct an arbitrary box or create phantom PACKING.
+    if (
+      task.marketplace !== MarketplaceType.WILDBERRIES ||
+      task.completedAt ||
+      task.sourceBoxPending
+    ) return;
 
     const quantity = Math.max(1, task.itemCount);
     const movementPrefix = `fbs-sticker-pick:${task.id}`;
@@ -14680,7 +14736,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   private async formatFbsTsdAssembly(task: FbsTsdAssemblyRecord, user: AuthUser, message: string) {
     let state = fbsTsdStage(task);
-    const needsStorageRouting = state === 'SCAN_BOX';
+    const needsStorageRouting = state === 'SCAN_BOX' || state === 'SCAN_SOURCE_BOX';
     const needsSourceBoxUsage = state === 'SCAN_BARCODE';
     const stockSkuId =
       task.relabelRequired && !task.relabelConfirmedAt && task.sourceSkuId
@@ -14951,7 +15007,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             }
           : null,
         itemCount: task.itemCount,
-        sourceWithoutBox: fbsTsdUsesNoBox(task),
+        sourceWithoutBox: fbsTsdUsesNoBox(task) && !task.sourceBoxPending,
+        // ADDED: the TSD distinguishes true no-box storage from a source that
+        // must be supplied by the manager when the request is closed.
+        sourceBoxPending: task.sourceBoxPending,
         requiresKiz: task.requiresKiz,
         recommendedBoxCode,
         // FIX: detailed alternative/next routes never leave the employee API.
@@ -27629,7 +27688,12 @@ function jsonStringArraysEqual(
 
 function fbsTsdStage(task: FbsTsdAssemblyRecord) {
   if (task.status === 'COMPLETED') return 'COMPLETED';
-  if (!task.boxId && !fbsTsdUsesNoBox(task)) return 'SCAN_BOX';
+  if (!task.boxId && !fbsTsdUsesNoBox(task)) {
+    // FIX: once a product barcode is accepted, source selection becomes an
+    // explicit next step instead of forcing the old box-first route.
+    if (task.sourceBarcode || task.barcode) return 'SCAN_SOURCE_BOX';
+    return 'SCAN_BOX';
+  }
   if (task.relabelRequired && !task.sourceBarcode) return 'SCAN_SOURCE_BARCODE';
   if (task.relabelRequired && !task.barcode) return 'SCAN_RELABEL_BARCODE';
   if (!task.barcode) return 'SCAN_BARCODE';

@@ -3860,8 +3860,8 @@ public class MainActivity extends Activity {
                     tr("ПАЛЛЕТА: ", "PALLET: ") + nonEmpty(task.recommendedLocation.palletCode, "-");
             }
             root.addView(feedbackView(
-                tr("1. НАЙДИТЕ И ОТСКАНИРУЙТЕ КОРОБ\nМожно сначала пикнуть QR паллетсорта.\n",
-                    "1. QUTINI TOPING VA SKANERLANG\nAvval palletsort QR kodini skanerlash mumkin.\n") +
+                tr("1. ОТСКАНИРУЙТЕ ТОВАР ИЛИ КОРОБ\nМожно сначала пикнуть ШК товара, QR паллетсорта или короб.\n",
+                    "1. MAHSULOT YOKI QUTINI SKANERLANG\nAvval mahsulot SHK, palletsort QR yoki qutini skanerlash mumkin.\n") +
                     boxCode + locationHint,
                 BOX_MOVEMENT_BLUE
             ));
@@ -3884,13 +3884,40 @@ public class MainActivity extends Activity {
                     tr("РАЗМЕР: ", "O‘LCHAM: ") + (relabelRequired ? sourceSize : size)
             ));
             fbsScanInput = input(tr(
-                "Номер короба или QR паллетсорта",
-                "Quti raqami yoki palletsort QR"
+                "ШК товара, короб или QR паллетсорта",
+                "Mahsulot SHK, quti yoki palletsort QR"
             ));
             root.addView(fbsScanInput);
             root.addView(primaryMenuButton(
                 tr("Проверить скан", "Skanni tekshirish"),
                 view -> submitFbsScan()
+            ));
+        } else if ("SCAN_SOURCE_BOX".equals(state)) {
+            // FIX: product-first flow asks only for the physical source after
+            // the API has confirmed that the scanned product belongs to this request.
+            root.addView(feedbackView(
+                tr("ТОВАР НУЖЕН ЭТОЙ ЗАЯВКЕ", "MAHSULOT BU ARIZA UCHUN KERAK"),
+                BOX_FOUND_GREEN
+            ));
+            root.addView(feedbackView(
+                tr(
+                    "2. УКАЖИТЕ, ОТКУДА ВЗЯТ ТОВАР\nОтсканируйте короб или QR паллетсорта. Если короб сейчас неизвестен — выберите «Без короба».",
+                    "2. MAHSULOT QAYERDAN OLINGANINI KO‘RSATING\nQuti yoki palletsort QR kodini skanerlang. Quti noma’lum bo‘lsa — «Qutisiz»ni tanlang."
+                ),
+                Color.rgb(254, 240, 138)
+            ));
+            fbsScanInput = input(tr(
+                "Номер короба или QR паллетсорта",
+                "Quti raqami yoki palletsort QR"
+            ));
+            root.addView(fbsScanInput);
+            root.addView(primaryMenuButton(
+                tr("Подтвердить источник", "Manbani tasdiqlash"),
+                view -> submitFbsScan()
+            ));
+            root.addView(secondaryButton(
+                tr("БЕЗ КОРОБА — УКАЗАТЬ ПРИ ЗАКРЫТИИ", "QUTISIZ — YOPISHDA KO‘RSATISH"),
+                view -> executeFbsAction("scan-box", "boxCode", "БЕЗ КОРОБА")
             ));
         } else if ("SCAN_SOURCE_BARCODE".equals(state)) {
             root.addView(feedbackView(
@@ -3932,9 +3959,11 @@ public class MainActivity extends Activity {
             ));
         } else if ("SCAN_BARCODE".equals(state)) {
             root.addView(feedbackView(
-                task.sourceWithoutBox
-                    ? tr("ИСТОЧНИК: ХРАНЕНИЕ БЕЗ КОРОБОВ", "MANBA: QUTISIZ SAQLASH")
-                    : tr("Короб подтверждён: ", "Quti tasdiqlandi: ") + nonEmpty(task.scannedBoxCode, "-"),
+                task.sourceBoxPending
+                    ? tr("ИСТОЧНИК БУДЕТ УКАЗАН ПРИ ЗАКРЫТИИ ЗАЯВКИ", "MANBA ARIZA YOPILGANDA KO‘RSATILADI")
+                    : task.sourceWithoutBox
+                        ? tr("ИСТОЧНИК: ХРАНЕНИЕ БЕЗ КОРОБОВ", "MANBA: QUTISIZ SAQLASH")
+                        : tr("Короб подтверждён: ", "Quti tasdiqlandi: ") + nonEmpty(task.scannedBoxCode, "-"),
                 BOX_FOUND_GREEN
             ));
             if (task.sourceBoxUsage != null) {
@@ -3990,6 +4019,15 @@ public class MainActivity extends Activity {
                 tr("Товар подтверждён", "Mahsulot tasdiqlandi"),
                 BOX_FOUND_GREEN
             ));
+            if (task.sourceBoxPending) {
+                root.addView(feedbackView(
+                    tr(
+                        "ИСТОЧНИК ОТЛОЖЕН\nФактический короб обязательно укажите при закрытии заявки.",
+                        "MANBA KEYINGA QOLDIRILDI\nHaqiqiy qutini ariza yopilganda ko‘rsating."
+                    ),
+                    Color.rgb(254, 240, 138)
+                ));
+            }
             root.addView(feedbackView(
                 tr("3. ТЕПЕРЬ ОТСКАНИРУЙТЕ КИЗ DATA MATRIX\nНе сканируйте обычный ШК повторно.",
                     "3. ENDI DATA MATRIX KIZNI SKANERLANG\nOddiy SHKni qayta skanerlamang."),
