@@ -8852,16 +8852,21 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               errorMessage: `Фоновый маршрут освобождён после физического скана короба ${box.code}.`,
             },
           });
-          // FIX: another employee's assignment is only a route hint until a
-          // box, product barcode or KIZ is physically scanned. Keep their task
-          // assigned, but force its next poll to calculate another box.
+          // FIX: another employee's assignment is only a route hint until the
+          // product barcode or KIZ is physically scanned. A box scan alone does
+          // not prove that the unit was taken from that box.
           await tx.fbsTsdAssembly.updateMany({
             where: {
-              id: { in: releaseIds }, status: 'IN_PROGRESS', boxId: null,
-              reservedBoxId: box.id, sourceBarcode: null, barcode: null,
+              id: { in: releaseIds }, status: 'IN_PROGRESS',
+              OR: [
+                { boxId: box.id },
+                { boxId: null, reservedBoxId: box.id },
+              ],
+              sourceBarcode: null, barcode: null,
               kiz: null, relabelConfirmedAt: null,
             },
             data: {
+              boxId: null, boxCode: null,
               reservedBoxId: null, reservedBoxCode: null, reservedAt: null,
               errorMessage: `Маршрут изменён: короб ${box.code} физически выбран другим сотрудником. Используйте новый маршрут на экране.`,
             },
@@ -15102,8 +15107,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   /**
    * A physical scan has priority over a virtual box hint. Untouched AUTO
    * reservations return to the queue; untouched assigned tasks keep their
-   * employee/order and calculate another box on the next poll. A box, product
-   * barcode or KIZ already scanned by another worker is never moved.
+   * employee/order and calculate another box on the next poll. A box scan alone
+   * is still only a route hint; a scanned product barcode or KIZ is protected.
    */
   private async releaseUntouchedFbsReservationsForScannedBox(input: {
     clientId: string;
@@ -15137,8 +15142,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       where: {
         id: input.taskId ? { not: input.taskId } : undefined,
         clientId: input.clientId,
-        boxId: null,
-        reservedBoxId: input.boxId,
+        OR: [
+          { boxId: input.boxId },
+          { boxId: null, reservedBoxId: input.boxId },
+        ],
         sourceBarcode: null,
         barcode: null,
         kiz: null,
@@ -15206,11 +15213,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const activeReleased = activeIds.length > 0
       ? await this.prisma.fbsTsdAssembly.updateMany({
           where: {
-            id: { in: activeIds }, status: 'IN_PROGRESS', boxId: null,
-            reservedBoxId: input.boxId, sourceBarcode: null, barcode: null,
+            id: { in: activeIds }, status: 'IN_PROGRESS',
+            OR: [
+              { boxId: input.boxId },
+              { boxId: null, reservedBoxId: input.boxId },
+            ],
+            sourceBarcode: null, barcode: null,
             kiz: null, relabelConfirmedAt: null,
           },
           data: {
+            boxId: null, boxCode: null,
             reservedBoxId: null, reservedBoxCode: null, reservedAt: null,
             errorMessage: `Маршрут изменён: короб ${input.boxCode} физически выбран другим сотрудником. Используйте новый маршрут на экране.`,
           },
@@ -15992,11 +16004,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         boxId: task.boxId ?? task.reservedBoxId,
         itemCount: Math.max(1, task.itemCount),
         releasableBackground:
-          // FIX: a route is only a hint until this employee scans a physical
-          // box or product. The physical picker wins; the untouched task stays
-          // assigned and receives another route on its next poll.
-          !task.boxId &&
-          Boolean(task.reservedBoxId) &&
+          // FIX: a route, including a box-only scan, is only a hint until a
+          // product barcode or KIZ is scanned. The employee holding the product
+          // wins; the untouched task receives another box on its next poll.
+          Boolean(task.boxId || task.reservedBoxId) &&
           !task.sourceBarcode &&
           !task.barcode &&
           !task.kiz &&

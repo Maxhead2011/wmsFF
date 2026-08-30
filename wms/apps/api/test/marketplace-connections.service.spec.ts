@@ -9438,8 +9438,8 @@ describe('MarketplaceConnectionsService', () => {
     const prisma = {
       fbsTsdAssembly: {
         findMany: vi.fn().mockResolvedValue([
-          { id: 'auto-new', itemCount: 1 },
-          { id: 'auto-old', itemCount: 1 },
+          { id: 'auto-new', itemCount: 1, status: 'RESERVED', deviceCode: 'AUTO:FBS:PALLET_SORT' },
+          { id: 'auto-old', itemCount: 1, status: 'RESERVED', deviceCode: 'AUTO:FBS:PALLET_SORT' },
         ]),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
@@ -9451,7 +9451,7 @@ describe('MarketplaceConnectionsService', () => {
     ]);
 
     await expect(
-      (service as any).releaseBackgroundFbsReservationsForScannedBox({
+      (service as any).releaseUntouchedFbsReservationsForScannedBox({
         clientId: 'client-1',
         requestId: 'request-175',
         taskId: 'task-current',
@@ -9466,7 +9466,7 @@ describe('MarketplaceConnectionsService', () => {
       expect.objectContaining({
         where: expect.objectContaining({
           id: { in: ['auto-new'] },
-          requestId: { startsWith: 'AUTO:' },
+          deviceCode: 'AUTO:FBS:PALLET_SORT',
           boxId: null,
           reservedBoxId: 'box-15',
         }),

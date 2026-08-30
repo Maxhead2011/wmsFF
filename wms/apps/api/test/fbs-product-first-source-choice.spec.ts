@@ -85,6 +85,158 @@ describe('FBS product-first source selection', () => {
     });
   });
 
+  // TEST: a different task that only scanned the box must not block the
+  // employee who is physically holding and already scanned the product.
+  it('replaces a box-only reservation when the product-first picker claims its source', async () => {
+    const updatedAt = new Date('2026-08-30T18:30:00.000Z');
+    const task = {
+      id: 'task-with-product',
+      clientId: 'client-1',
+      requestId: 'request-466',
+      skuId: 'sku-1',
+      sourceSkuId: null,
+      status: 'IN_PROGRESS',
+      itemCount: 1,
+      relabelRequired: false,
+      reservedAt: null,
+      reservedBoxId: null,
+      boxId: null,
+      boxCode: null,
+      sourceBarcode: null,
+      barcode: '4600000000012',
+      kiz: null,
+      relabelConfirmedAt: null,
+      workerUserId: worker.id,
+      deviceCode: worker.deviceCode,
+      updatedAt,
+    };
+    const claimed = {
+      ...task,
+      reservedBoxId: 'box-1',
+      reservedBoxCode: 'FFL_BOX_1',
+      boxId: 'box-1',
+      boxCode: 'FFL_BOX_1',
+    };
+    const updateMany = vi.fn()
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 1 });
+    const tx = {
+      $executeRaw: vi.fn().mockResolvedValue(1),
+      $queryRaw: vi.fn().mockResolvedValue([{
+        status: 'active',
+        clientId: task.clientId,
+        warehouseId: 'warehouse-1',
+      }]),
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue({
+          clientId: task.clientId,
+          warehouseId: 'warehouse-1',
+        }),
+      },
+      stockBalance: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { quantity: 1 } }),
+      },
+      fbsTsdAssembly: {
+        findUnique: vi.fn()
+          .mockResolvedValueOnce(task)
+          .mockResolvedValueOnce(task)
+          .mockResolvedValueOnce(claimed),
+        updateMany,
+      },
+    };
+    const service = new MarketplaceConnectionsService({
+      $transaction: vi.fn(async (callback: (db: typeof tx) => unknown) => callback(tx)),
+    } as never, {} as never);
+    vi.spyOn(service as any, 'fbsTsdReservationRowsBySku')
+      .mockResolvedValueOnce(new Map([['sku-1', [{
+        taskId: 'task-box-only',
+        boxId: 'box-1',
+        itemCount: 1,
+        releasableBackground: true,
+      }]]]))
+      .mockResolvedValueOnce(new Map([['sku-1', []]]));
+
+    await expect(
+      (service as any).claimFbsTsdBoxAtomically(
+        task,
+        { id: 'box-1', code: 'FFL_BOX_1', warehouseId: 'warehouse-1' },
+        'warehouse-1',
+        worker,
+      ),
+    ).resolves.toMatchObject({ id: task.id, boxId: 'box-1', barcode: task.barcode });
+
+    expect(updateMany).toHaveBeenNthCalledWith(2, {
+      where: expect.objectContaining({
+        id: { in: ['task-box-only'] },
+        status: 'IN_PROGRESS',
+        OR: [
+          { boxId: 'box-1' },
+          { boxId: null, reservedBoxId: 'box-1' },
+        ],
+        barcode: null,
+        kiz: null,
+      }),
+      data: expect.objectContaining({
+        boxId: null,
+        boxCode: null,
+        reservedBoxId: null,
+        reservedBoxCode: null,
+      }),
+    });
+  });
+
+  // TEST: the preflight used by the public scan endpoint must find both a
+  // virtual route and a box-only active route as releasable competitors.
+  it('clears an untouched active task even when it already scanned only the box', async () => {
+    const findMany = vi.fn().mockResolvedValue([{
+      id: 'task-box-only',
+      itemCount: 1,
+      status: 'IN_PROGRESS',
+      deviceCode: 'TSD-OTHER',
+    }]);
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const service = new MarketplaceConnectionsService({
+      fbsTsdAssembly: { findMany, updateMany },
+    } as never, {} as never);
+    vi.spyOn(service as any, 'fbsTsdReservationRows').mockResolvedValue([{
+      boxId: 'box-1',
+      itemCount: 1,
+    }]);
+
+    await expect(
+      (service as any).releaseUntouchedFbsReservationsForScannedBox({
+        clientId: 'client-1',
+        requestId: 'request-466',
+        taskId: 'task-current',
+        skuId: 'sku-1',
+        boxId: 'box-1',
+        boxCode: 'FFL_BOX_1',
+        requiredQuantity: 1,
+        availableQuantity: 1,
+      }),
+    ).resolves.toBe(1);
+
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        OR: [
+          { boxId: 'box-1' },
+          { boxId: null, reservedBoxId: 'box-1' },
+        ],
+        barcode: null,
+        kiz: null,
+      }),
+    }));
+    expect(updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        boxId: null,
+        boxCode: null,
+        reservedBoxId: null,
+        reservedBoxCode: null,
+      }),
+    }));
+  });
+
   // TEST: "Без короба" is allowed only after a product barcode was accepted.
   it('marks the source as pending after the product was scanned', async () => {
     const task = {
