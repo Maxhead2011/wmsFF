@@ -9127,8 +9127,9 @@ describe('MarketplaceConnectionsService', () => {
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
     };
+    const transaction = vi.fn(async (callback: (db: typeof tx) => unknown) => callback(tx));
     const service = new MarketplaceConnectionsService({
-      $transaction: vi.fn(async (callback: (db: typeof tx) => unknown) => callback(tx)),
+      $transaction: transaction,
     } as never, {} as never);
     vi.spyOn(service as any, 'fbsTsdReservationRowsBySku')
       .mockResolvedValue(new Map([['sku-1', []]]));
@@ -9146,6 +9147,13 @@ describe('MarketplaceConnectionsService', () => {
       boxCode: 'FFL_RECEIVING_1',
     });
     expect(tx.fbsTsdAssembly.updateMany).toHaveBeenCalledOnce();
+    // TEST: a physical alternative-box scan must not inherit Prisma's
+    // five-second interactive transaction timeout.
+    expect(transaction).toHaveBeenCalledWith(expect.any(Function), {
+      isolationLevel: 'Serializable',
+      maxWait: 10_000,
+      timeout: 15_000,
+    });
   });
 
   it('показывает на паллетсорте только короба, закреплённые за текущей FBS-заявкой', async () => {
