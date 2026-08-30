@@ -40,6 +40,15 @@ public class TsdFbsAssemblyResponse {
         public String marketplaceSubmitError;
         public String errorMessage;
         public String status;
+        // FIX: the API already marks delivery recovery as local-only; the TSD
+        // uses this marker instead of waiting forever for an unavailable WB label.
+        public EmergencyAssembly emergencyAssembly;
+    }
+
+    public static class EmergencyAssembly {
+        public String enabledAt;
+        public String enabledByName;
+        public boolean wbMutationAllowed;
     }
 
     public static class Relabeling {
