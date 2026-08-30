@@ -1,6 +1,6 @@
 {
-  "versionCode": 76,
-  "versionName": "0.1.76",
+  "versionCode": 148,
+  "versionName": "0.1.149",
   "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd.apk",
-  "releaseNotes": "Полностью отработанные FBS-заявки и полностью упакованные FBS-поставки помечаются зелёным цветом."
+  "releaseNotes": "Локальные заявки «FBS ДОВОЗ» завершаются без повторной наклейки, которую WB уже не возвращает для complete/shipped-заказов; обычные WB-заказы по-прежнему требуют настоящую наклейку."
 }

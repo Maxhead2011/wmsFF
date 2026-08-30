@@ -3761,22 +3761,42 @@ public class MainActivity extends Activity {
         Button stickerAppliedButton = null;
         if ("READY_TO_COMPLETE".equals(state)) {
             String taskMarketplace = nonEmpty(task.marketplace, "WILDBERRIES");
+            boolean localOnlyRecovery = FbsLocalRecoveryPolicy.canCompleteWithoutSticker(
+                taskMarketplace,
+                task.emergencyAssembly != null,
+                task.emergencyAssembly == null || task.emergencyAssembly.wbMutationAllowed
+            );
             boolean hasRenderableSticker = !"WILDBERRIES".equalsIgnoreCase(taskMarketplace)
                 && !"OZON".equalsIgnoreCase(taskMarketplace)
                 || task.orderSticker != null
                     && !nonEmpty(task.orderSticker.imageBase64, "").isEmpty();
-            if (hasRenderableSticker) {
+            if (hasRenderableSticker || localOnlyRecovery) {
                 stickerAppliedButton = primaryMenuButton(
-                    tr("НАКЛЕЙКА НАКЛЕЕНА", "STIKER YOPISHTIRILDI"),
+                    localOnlyRecovery && !hasRenderableSticker
+                        ? tr("ТОВАР ОТОБРАН", "MAHSULOT OLINDI")
+                        : tr("НАКЛЕЙКА НАКЛЕЕНА", "STIKER YOPISHTIRILDI"),
                     view -> completeFbsAssembly()
                 );
                 root.addView(stickerAppliedButton);
             }
-            orderStickerReady = "WILDBERRIES".equalsIgnoreCase(nonEmpty(task.marketplace, "WILDBERRIES"))
-                ? renderFbsOrderSticker(root, task)
-                : "OZON".equalsIgnoreCase(nonEmpty(task.marketplace, ""))
-                    ? renderOzonOrderSticker(root, task)
-                    : renderNonWbOrderStickerInstruction(root, task);
+            if (localOnlyRecovery && !hasRenderableSticker) {
+                // FIX: a delivery-recovery order is already complete/shipped in WB,
+                // so WB legitimately returns an empty sticker list on every refresh.
+                root.addView(feedbackView(
+                    tr(
+                        "ЛОКАЛЬНЫЙ ДОВОЗ\nWB уже принял этот заказ. Повторная наклейка недоступна и не требуется. Проверьте товар и нажмите «ТОВАР ОТОБРАН».",
+                        "MAHALLIY YETKAZISH\nWB bu buyurtmani qabul qilgan. Qayta stiker mavjud emas va talab qilinmaydi. Mahsulotni tekshirib, «MAHSULOT OLINDI» tugmasini bosing."
+                    ),
+                    Color.rgb(254, 240, 138)
+                ));
+                orderStickerReady = true;
+            } else {
+                orderStickerReady = "WILDBERRIES".equalsIgnoreCase(nonEmpty(task.marketplace, "WILDBERRIES"))
+                    ? renderFbsOrderSticker(root, task)
+                    : "OZON".equalsIgnoreCase(nonEmpty(task.marketplace, ""))
+                        ? renderOzonOrderSticker(root, task)
+                        : renderNonWbOrderStickerInstruction(root, task);
+            }
         }
         if (fbsAssembly.progress != null && fbsAssembly.progress.requestTotalItems > 0) {
             String requestNumber = fbsAssembly.progress.requestNumber > 0

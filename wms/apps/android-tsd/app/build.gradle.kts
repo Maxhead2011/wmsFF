@@ -15,8 +15,8 @@ android {
         applicationId = "pro.logoff.wms.tsd"
         minSdk = 26
         targetSdk = 35
-        versionCode = 76
-        versionName = "0.1.76"
+        versionCode = 148 // FIX: allow local WB delivery recovery without a stale sticker loop.
+        versionName = "0.1.149"
     }
 
     signingConfigs {
