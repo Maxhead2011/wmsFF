@@ -9371,6 +9371,69 @@ describe('MarketplaceConnectionsService', () => {
     }));
   });
 
+  // TEST: one WMS request may contain several WB supplies. A pallet shown for
+  // an untouched order from another supply must remain valid when scanned.
+  it('accepts a needed pallet across supplies of the same FBS request', async () => {
+    const currentTask = {
+      id: 'task-current',
+      clientId: 'client-1',
+      marketplace: MarketplaceType.WILDBERRIES,
+      connectionId: 'connection-1',
+      requestId: 'request-466',
+      supplyId: 'WB-GI-SUPPLY-A',
+      skuId: 'sku-current',
+      sourceSkuId: null,
+      itemCount: 1,
+      status: 'IN_PROGRESS',
+      boxId: null,
+      sourceBarcode: null,
+      barcode: null,
+      kiz: null,
+      relabelConfirmedAt: null,
+    };
+    const taskFromAnotherSupply = {
+      ...currentTask,
+      id: 'task-supply-b',
+      supplyId: 'WB-GI-SUPPLY-B',
+      skuId: 'sku-on-pallet',
+      status: 'RESERVED',
+      reservedBoxId: 'box-on-pallet',
+      reservedBoxCode: 'FFL_LKB0207_219',
+    };
+    const findMany = vi.fn(async ({ where }: { where: { supplyId?: string | null } }) =>
+      where.supplyId === undefined ? [taskFromAnotherSupply] : [],
+    );
+    const prisma = {
+      fbsTsdAssembly: { findMany },
+      stockBalance: {
+        findMany: vi.fn().mockResolvedValue([{
+          skuId: 'sku-on-pallet',
+          boxId: 'box-on-pallet',
+          quantity: 1,
+        }]),
+      },
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    vi.spyOn(service as any, 'fbsTsdReservationRowsBySku').mockResolvedValue(new Map([
+      ['sku-current', []],
+      ['sku-on-pallet', [{
+        taskId: 'task-supply-b',
+        boxId: 'box-on-pallet',
+        itemCount: 1,
+        releasableBackground: true,
+      }]],
+    ]));
+
+    await expect(
+      (service as any).neededFbsRequestBoxesFromPlacements(currentTask, [
+        { boxId: 'box-on-pallet', boxCode: 'FFL_LKB0207_219' },
+      ]),
+    ).resolves.toEqual(['FFL_LKB0207_219']);
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.not.objectContaining({ supplyId: expect.anything() }),
+    }));
+  });
+
   it('освобождает нетронутый фоновый резерв, когда короб физически выбран для заявки', async () => {
     const prisma = {
       fbsTsdAssembly: {
