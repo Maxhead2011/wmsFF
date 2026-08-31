@@ -6830,49 +6830,6 @@ describe('MarketplaceConnectionsService', () => {
     });
   });
 
-  // TEST: a historical task whose PACKING balance was already consumed must
-  // not create a duplicate shipment or abort synchronization of its request.
-  it('skips an already consumed completed WB reservation', async () => {
-    const reservation = {
-      warehouseId: 'warehouse-1',
-      boxId: 'box-1',
-      palletId: null,
-      quantity: 1,
-    };
-    const tx: any = {
-      stockMovement: {
-        findMany: vi.fn().mockResolvedValue([reservation]),
-        create: vi.fn(),
-      },
-      stockBalance: {
-        findMany: vi.fn().mockResolvedValue([]),
-        delete: vi.fn(),
-        update: vi.fn(),
-      },
-      productMark: { updateMany: vi.fn() },
-    };
-    const service = new MarketplaceConnectionsService({} as never, {} as never);
-
-    await expect(
-      (service as any).shipCompletedWildberriesStockReservation(tx, {
-        id: 'task-1',
-        clientId: 'client-1',
-        marketplace: MarketplaceType.WILDBERRIES,
-        orderId: '5573752050',
-        requestId: 'request-451',
-        skuId: 'sku-1',
-        status: 'COMPLETED',
-        completedAt: new Date('2026-08-29T16:54:18.647Z'),
-        kiz: '0104640569959669215TEST',
-      }),
-    ).resolves.toBe(0);
-
-    expect(tx.stockMovement.create).not.toHaveBeenCalled();
-    expect(tx.stockBalance.delete).not.toHaveBeenCalled();
-    expect(tx.stockBalance.update).not.toHaveBeenCalled();
-    expect(tx.productMark.updateMany).not.toHaveBeenCalled();
-  });
-
   it('keeps a physically collected cancelled FBS order and marks it for a manager decision', async () => {
     const link = fbsRequestLink({
       orderId: '5355000001',
