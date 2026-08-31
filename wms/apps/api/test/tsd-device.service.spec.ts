@@ -69,6 +69,172 @@ describe('TsdDeviceService', () => {
       device: { id: 'device-1', code: 'TSD-01' },
     });
   });
+
+  // TEST: a shared physical TSD must not keep the first employee's name after rebind.
+  it('обновляет имя общего ТСД при входе другого сотрудника', async () => {
+    const current = {
+      id: 'device-1',
+      code: 'TSD-INSTALL-8F4AD3F8D15EA12C',
+      name: 'Надежда · D15EA12C',
+      userId: 'user-nadezhda',
+      status: TsdDeviceStatus.ACTIVE,
+    };
+    const rebound = {
+      ...current,
+      name: 'Валерон · D15EA12C',
+      userId: 'user-valeron',
+    };
+    const tx = {
+      tsdDevice: {
+        findUnique: vi.fn()
+          .mockResolvedValueOnce(current)
+          .mockResolvedValueOnce(rebound),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      fbsTsdAssembly: {
+        findMany: vi.fn().mockResolvedValue([]),
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+      },
+      clientRequest: { findMany: vi.fn() },
+      auditLog: { create: vi.fn().mockResolvedValue({}) },
+    };
+    const service = new TsdDeviceService(
+      { $transaction: vi.fn(async (callback: (db: typeof tx) => unknown) => callback(tx)) } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      (service as any).rebindSharedInstallation(current, {
+        id: 'user-valeron',
+        name: 'Валерон',
+      }),
+    ).resolves.toMatchObject(rebound);
+    expect(tx.tsdDevice.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        userId: 'user-valeron',
+        name: 'Валерон · D15EA12C',
+      }),
+    }));
+  });
+
+  // TEST: a stale display name is also repaired when the correct user is
+  // already bound to the device and simply logs in again.
+  it('исправляет старое имя ТСД при повторном входе того же сотрудника', async () => {
+    const current = {
+      id: 'device-1',
+      code: 'TSD-INSTALL-8F4AD3F8D15EA12C',
+      name: 'Надежда · D15EA12C',
+      userId: 'user-valeron',
+      status: TsdDeviceStatus.ACTIVE,
+    };
+    const repaired = { ...current, name: 'Валерон · D15EA12C' };
+    const tx = {
+      tsdDevice: {
+        findUnique: vi.fn()
+          .mockResolvedValueOnce(current)
+          .mockResolvedValueOnce(repaired),
+        update: vi.fn().mockResolvedValue(repaired),
+      },
+      fbsTsdAssembly: { findMany: vi.fn().mockResolvedValue([]), updateMany: vi.fn() },
+      clientRequest: { findMany: vi.fn() },
+      auditLog: { create: vi.fn() },
+    };
+    const service = new TsdDeviceService(
+      { $transaction: vi.fn(async (callback: (db: typeof tx) => unknown) => callback(tx)) } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      (service as any).rebindSharedInstallation(current, {
+        id: 'user-valeron',
+        name: 'Валерон',
+      }),
+    ).resolves.toMatchObject(repaired);
+    expect(tx.tsdDevice.update).toHaveBeenCalledWith({
+      where: { id: 'device-1' },
+      data: expect.objectContaining({ name: 'Валерон · D15EA12C' }),
+    });
+    expect(tx.fbsTsdAssembly.updateMany).not.toHaveBeenCalled();
+  });
+
+  // TEST: a ghost task from a closed request must be parked instead of being
+  // rebound to every employee who signs in on the shared physical TSD.
+  it('не переносит за новым сотрудником задание уже закрытой FBS-заявки', async () => {
+    const current = {
+      id: 'device-1',
+      code: 'TSD-INSTALL-8F4AD3F8D15EA12C',
+      name: 'Надежда · D15EA12C',
+      userId: 'user-nadezhda',
+      status: TsdDeviceStatus.ACTIVE,
+    };
+    const rebound = {
+      ...current,
+      name: 'Валерон · D15EA12C',
+      userId: 'user-valeron',
+    };
+    const updateMany = vi.fn()
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 1 });
+    const tx = {
+      tsdDevice: {
+        findUnique: vi.fn()
+          .mockResolvedValueOnce(current)
+          .mockResolvedValueOnce(rebound),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      fbsTsdAssembly: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: 'ghost-task', requestId: 'closed-request' },
+          { id: 'live-task', requestId: 'open-request' },
+        ]),
+        updateMany,
+      },
+      clientRequest: {
+        findMany: vi.fn().mockResolvedValue([{ id: 'open-request' }]),
+      },
+      auditLog: { create: vi.fn().mockResolvedValue({}) },
+    };
+    const service = new TsdDeviceService(
+      { $transaction: vi.fn(async (callback: (db: typeof tx) => unknown) => callback(tx)) } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await (service as any).rebindSharedInstallation(current, {
+      id: 'user-valeron',
+      name: 'Валерон',
+    });
+
+    expect(updateMany).toHaveBeenNthCalledWith(1, {
+      where: expect.objectContaining({
+        id: { in: ['ghost-task'] },
+        workerUserId: 'user-nadezhda',
+        status: 'IN_PROGRESS',
+      }),
+      data: expect.objectContaining({
+        status: 'RETURN_REQUIRED',
+        deviceCode: 'AUTO:FBS:PALLET_SORT',
+        workerUserId: null,
+        workerName: null,
+      }),
+    });
+    expect(updateMany).toHaveBeenNthCalledWith(2, {
+      where: expect.objectContaining({
+        id: { in: ['live-task'] },
+        workerUserId: 'user-nadezhda',
+        status: 'IN_PROGRESS',
+      }),
+      data: expect.objectContaining({
+        workerUserId: 'user-valeron',
+        workerName: 'Валерон',
+      }),
+    });
+  });
 });
 
 function operatorUser() {

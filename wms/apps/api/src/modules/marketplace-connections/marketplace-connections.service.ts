@@ -5433,6 +5433,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
     if (current) {
       this.clientScopes.requireClientAccess(user, current.clientId, 'write');
+      // FIX: the parent request can be closed after the employee received the
+      // task. Never keep returning that ghost task from the TSD queue.
+      if (await this.parkFbsTsdAssignmentFromClosedRequest(current)) {
+        current = null;
+      }
+    }
+    if (current) {
       // FIX: A forced route repair can preserve an old empty assignment while WB
       // temporarily returns the order to `new`. Do not let that saved assignment
       // bypass the normal `confirm` filter used for fresh TSD queue candidates.
@@ -5914,6 +5921,36 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             ? `По FBS-заявке №${String(selectedRequest.number).padStart(6, '0')} пока нет готовых к сборке заказов. Проверьте статус заказа на маркетплейсе и доступные остатки.`
             : 'Готовых заказов нет. Заказы появятся после создания заявки и перевода поставки в статус «На сборке».',
     );
+  }
+
+  // FIX: preserve all physical scan evidence, but detach an assignment whose
+  // WMS request no longer exists or is already closed. It must be reviewed by
+  // a manager and must not follow the next employee on the handheld.
+  private async parkFbsTsdAssignmentFromClosedRequest(task: FbsTsdAssemblyRecord) {
+    if (typeof this.prisma.clientRequest?.findUnique !== 'function') return false;
+    const request = await this.prisma.clientRequest.findUnique({
+      where: { id: task.requestId },
+      select: { id: true, status: true },
+    });
+    if (request && !FBS_REQUEST_CLOSED_STATUSES.has(request.status)) return false;
+    const parked = await this.prisma.fbsTsdAssembly.updateMany({
+      where: {
+        id: task.id,
+        status: 'IN_PROGRESS',
+        deviceCode: task.deviceCode,
+        workerUserId: task.workerUserId,
+        updatedAt: task.updatedAt,
+      },
+      data: {
+        status: FBS_TSD_RETURN_REQUIRED,
+        deviceCode: FBS_TSD_AUTO_RESERVATION_DEVICE,
+        workerUserId: null,
+        workerName: null,
+        errorMessage:
+          'Задание снято с ТСД: исходная FBS-заявка уже закрыта или удалена.',
+      },
+    });
+    return parked.count === 1;
   }
 
   // ADDED: Release only untouched WB assignments. Once a physical scan exists,

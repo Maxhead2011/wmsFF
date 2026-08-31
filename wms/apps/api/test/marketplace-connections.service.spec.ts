@@ -2756,6 +2756,53 @@ describe('MarketplaceConnectionsService', () => {
     });
   });
 
+  // TEST: a task whose parent request has already been closed must disappear
+  // from the handheld queue without losing its saved scan evidence.
+  it('parks a ghost TSD task from a closed FBS request', async () => {
+    const updatedAt = new Date('2026-08-31T09:02:47.947Z');
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const prisma = {
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'request-454',
+          status: ClientRequestStatus.DONE,
+        }),
+      },
+      fbsTsdAssembly: { updateMany },
+    };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    const task = {
+      id: 'ghost-task',
+      requestId: 'request-454',
+      status: 'IN_PROGRESS',
+      deviceCode: 'TSD-INSTALL-8F4AD3F8D15EA12C',
+      workerUserId: 'worker-valeron',
+      workerName: 'Валерон',
+      barcode: '4673735179493',
+      kiz: 'accepted-kiz',
+      updatedAt,
+    };
+
+    await expect(
+      (service as any).parkFbsTsdAssignmentFromClosedRequest(task),
+    ).resolves.toBe(true);
+    expect(updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'ghost-task',
+        status: 'IN_PROGRESS',
+        deviceCode: 'TSD-INSTALL-8F4AD3F8D15EA12C',
+        workerUserId: 'worker-valeron',
+        updatedAt,
+      },
+      data: expect.objectContaining({
+        status: 'RETURN_REQUIRED',
+        deviceCode: 'AUTO:FBS:PALLET_SORT',
+        workerUserId: null,
+        workerName: null,
+      }),
+    });
+  });
+
   // ADDED: A saved empty assignment cannot bypass the WB `confirm` queue filter.
   it('releases an untouched WB task while the order is temporarily new', async () => {
     const updatedAt = new Date('2026-08-16T11:53:22.000Z');
