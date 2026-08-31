@@ -13597,6 +13597,120 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
+  private async shipCompletedWildberriesStockReservation(
+    tx: Prisma.TransactionClient,
+    task: FbsTsdAssemblyRecord,
+  ) {
+    // FIX: WB completion is allowed to consume only the exact physical
+    // reservation previously created by this completed TSD task. A remote
+    // status without an internal PACKING movement still cannot change stock.
+    if (
+      task.marketplace !== MarketplaceType.WILDBERRIES ||
+      task.status !== 'COMPLETED' ||
+      !task.completedAt
+    ) return 0;
+
+    const movementPrefix = `fbs-sticker-pick:${task.id}`;
+    const movements = await tx.stockMovement.findMany({
+      where: {
+        idempotencyKey: { startsWith: `${movementPrefix}:` },
+        status: StockStatus.PACKING,
+      },
+      select: {
+        warehouseId: true,
+        boxId: true,
+        palletId: true,
+        quantity: true,
+      },
+    });
+    const activeByLocation = new Map<
+      string,
+      { warehouseId: string; boxId: string | null; palletId: string | null; quantity: number }
+    >();
+    movements.forEach((movement) => {
+      const warehouseId = requireFbsBalanceWarehouseId(movement.warehouseId);
+      const key = `${warehouseId}:${movement.boxId ?? 'no-box'}:${movement.palletId ?? 'no-pallet'}`;
+      const current = activeByLocation.get(key) ?? {
+        warehouseId,
+        boxId: movement.boxId,
+        palletId: movement.palletId,
+        quantity: 0,
+      };
+      current.quantity += movement.quantity;
+      activeByLocation.set(key, current);
+    });
+
+    let shippedQuantity = 0;
+    for (const [locationKey, location] of activeByLocation) {
+      if (location.quantity <= 0) continue;
+      const movementKey = `${movementPrefix}:marketplace-complete:${locationKey}`;
+      // FIX: the unique movement is written before the balance mutation, so
+      // concurrent marketplace refreshes cannot consume the same unit twice.
+      await tx.stockMovement.create({
+        data: {
+          warehouseId: location.warehouseId,
+          clientId: task.clientId,
+          skuId: task.skuId,
+          boxId: location.boxId,
+          palletId: location.palletId,
+          type: MovementType.SHIP,
+          status: StockStatus.PACKING,
+          quantity: -location.quantity,
+          sourceDocument: task.requestId,
+          idempotencyKey: movementKey,
+          comment: `Заказ WB ${task.orderId} завершён; физический резерв ТСД списан из WMS.`,
+        },
+      });
+
+      const balances = await tx.stockBalance.findMany({
+        where: {
+          warehouseId: location.warehouseId,
+          clientId: task.clientId,
+          skuId: task.skuId,
+          boxId: location.boxId,
+          palletId: location.palletId,
+          status: StockStatus.PACKING,
+          quantity: { gt: 0 },
+        },
+        orderBy: { updatedAt: 'asc' },
+      });
+      let remaining = location.quantity;
+      for (const balance of balances) {
+        if (remaining === 0) break;
+        const quantity = Math.min(balance.quantity, remaining);
+        if (quantity === balance.quantity) {
+          await tx.stockBalance.delete({ where: { id: balance.id } });
+        } else {
+          await tx.stockBalance.update({
+            where: { id: balance.id },
+            data: { quantity: { decrement: quantity } },
+          });
+        }
+        remaining -= quantity;
+      }
+      if (remaining > 0) {
+        throw new BadRequestException(
+          `Не удалось списать ${remaining} шт. завершённого заказа WB ${task.orderId}: ` +
+            'его физический резерв PACKING уже изменён.',
+        );
+      }
+      shippedQuantity += location.quantity;
+    }
+
+    if (shippedQuantity > 0 && task.kiz) {
+      await tx.productMark.updateMany({
+        where: {
+          clientId: task.clientId,
+          skuId: task.skuId,
+          value: task.kiz,
+          status: StockStatus.PACKING,
+        },
+        data: { status: StockStatus.SHIPPING },
+      });
+    }
+    return shippedQuantity;
+  }
+
   private async returnCompletedWildberriesStockReservation(
     tx: Prisma.TransactionClient,
     task: FbsTsdAssemblyRecord,
@@ -22977,6 +23091,21 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         const snapshotChanged = !hadSnapshot || fbsOrderLinkChanged(link, order);
         if (hadSnapshot && snapshotChanged) {
           statusChanges.push(fbsOrderLinkChangeText(link, order));
+        }
+
+        if (
+          order.marketplace === MarketplaceType.WILDBERRIES &&
+          order.supplierStatus === 'complete' &&
+          (order.category === 'shipped' || order.category === 'archive') &&
+          task?.status === 'COMPLETED' &&
+          task.completedAt
+        ) {
+          // FIX: a completed WB order may close only its own already-confirmed
+          // physical TSD reservation; untouched AVAILABLE stock is never used.
+          const shipped = await this.shipCompletedWildberriesStockReservation(tx, task);
+          if (shipped > 0) {
+            statusChanges.push(`Заказ ${order.id}: списан физический резерв ${shipped} шт.`);
+          }
         }
 
         if (order.category === 'cancelled') {

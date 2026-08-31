@@ -4,6 +4,7 @@ import {
   FbsDeliveryDestination,
   BillingPriceTaxMode,
   MarketplaceType,
+  MovementType,
   Prisma,
   StockStatus,
   VolumeSource,
@@ -6760,6 +6761,73 @@ describe('MarketplaceConnectionsService', () => {
     await (service as any).syncFbsRequestsFromMarketplace('client-1', [order]);
 
     expect(tx.fbsTsdAssembly.update).not.toHaveBeenCalled();
+  });
+
+  // TEST: a final WB status may consume only the PACKING movement created by
+  // the same completed TSD task, and a repeated refresh must be a no-op.
+  it('ships a completed WB task physical reservation exactly once', async () => {
+    const reservation = {
+      warehouseId: 'warehouse-1',
+      boxId: 'box-1',
+      palletId: null,
+      quantity: 1,
+    };
+    const shipped = { ...reservation, quantity: -1 };
+    const tx: any = {
+      stockMovement: {
+        findMany: vi
+          .fn()
+          .mockResolvedValueOnce([reservation])
+          .mockResolvedValueOnce([reservation, shipped]),
+        create: vi.fn().mockResolvedValue({ id: 'ship-1' }),
+      },
+      stockBalance: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: 'packing-balance-1', quantity: 1 },
+        ]),
+        delete: vi.fn().mockResolvedValue({}),
+        update: vi.fn(),
+      },
+      productMark: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+    };
+    const service = new MarketplaceConnectionsService({} as never, {} as never);
+    const task = {
+      id: 'task-1',
+      clientId: 'client-1',
+      marketplace: MarketplaceType.WILDBERRIES,
+      orderId: '5573752050',
+      requestId: 'request-451',
+      skuId: 'sku-1',
+      status: 'COMPLETED',
+      completedAt: new Date('2026-08-29T16:54:18.647Z'),
+      kiz: '0104640569959669215TEST',
+    };
+
+    await expect(
+      (service as any).shipCompletedWildberriesStockReservation(tx, task),
+    ).resolves.toBe(1);
+    await expect(
+      (service as any).shipCompletedWildberriesStockReservation(tx, task),
+    ).resolves.toBe(0);
+
+    expect(tx.stockMovement.create).toHaveBeenCalledTimes(1);
+    expect(tx.stockMovement.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        type: MovementType.SHIP,
+        status: StockStatus.PACKING,
+        quantity: -1,
+        idempotencyKey:
+          'fbs-sticker-pick:task-1:marketplace-complete:warehouse-1:box-1:no-pallet',
+      }),
+    });
+    expect(tx.stockBalance.delete).toHaveBeenCalledWith({
+      where: { id: 'packing-balance-1' },
+    });
+    expect(tx.stockBalance.update).not.toHaveBeenCalled();
+    expect(tx.productMark.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({ status: StockStatus.PACKING }),
+      data: { status: StockStatus.SHIPPING },
+    });
   });
 
   it('keeps a physically collected cancelled FBS order and marks it for a manager decision', async () => {
