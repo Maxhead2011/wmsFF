@@ -13644,6 +13644,24 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     for (const [locationKey, location] of activeByLocation) {
       if (location.quantity <= 0) continue;
       const movementKey = `${movementPrefix}:marketplace-complete:${locationKey}`;
+      const balances = await tx.stockBalance.findMany({
+        where: {
+          warehouseId: location.warehouseId,
+          clientId: task.clientId,
+          skuId: task.skuId,
+          boxId: location.boxId,
+          palletId: location.palletId,
+          status: StockStatus.PACKING,
+          quantity: { gt: 0 },
+        },
+        orderBy: { updatedAt: 'asc' },
+      });
+      // FIX: historical reservations can already be consumed by a prior
+      // workflow. Do not create a second SHIP movement or block the whole
+      // request sync when its PACKING balance is no longer present.
+      const availablePacking = balances.reduce((sum, balance) => sum + balance.quantity, 0);
+      if (availablePacking < location.quantity) continue;
+
       // FIX: the unique movement is written before the balance mutation, so
       // concurrent marketplace refreshes cannot consume the same unit twice.
       await tx.stockMovement.create({
@@ -13662,18 +13680,6 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         },
       });
 
-      const balances = await tx.stockBalance.findMany({
-        where: {
-          warehouseId: location.warehouseId,
-          clientId: task.clientId,
-          skuId: task.skuId,
-          boxId: location.boxId,
-          palletId: location.palletId,
-          status: StockStatus.PACKING,
-          quantity: { gt: 0 },
-        },
-        orderBy: { updatedAt: 'asc' },
-      });
       let remaining = location.quantity;
       for (const balance of balances) {
         if (remaining === 0) break;
@@ -13687,12 +13693,6 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           });
         }
         remaining -= quantity;
-      }
-      if (remaining > 0) {
-        throw new BadRequestException(
-          `Не удалось списать ${remaining} шт. завершённого заказа WB ${task.orderId}: ` +
-            'его физический резерв PACKING уже изменён.',
-        );
       }
       shippedQuantity += location.quantity;
     }
