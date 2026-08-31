@@ -2803,6 +2803,33 @@ describe('MarketplaceConnectionsService', () => {
     });
   });
 
+  // TEST: duplicate active Ozon connections return the same posting twice and
+  // used to double the requested quantity in one FBS request.
+  it('rejects a second active Ozon connection with the same Client-Id', async () => {
+    const findFirst = vi.fn().mockResolvedValue({ id: 'existing-ozon-connection' });
+    const service = new MarketplaceConnectionsService({
+      clientMarketplaceConnection: { findFirst },
+    } as never, {} as never);
+
+    await expect(
+      (service as any).requireUniqueActiveOzonSeller({
+        clientId: 'client-bushkova',
+        marketplace: MarketplaceType.OZON,
+        sellerId: ' 4732619 ',
+        isActive: true,
+      }),
+    ).rejects.toThrow('Ozon Client-Id 4732619 уже подключён');
+    expect(findFirst).toHaveBeenCalledWith({
+      where: {
+        clientId: 'client-bushkova',
+        marketplace: MarketplaceType.OZON,
+        sellerId: '4732619',
+        isActive: true,
+      },
+      select: { id: true },
+    });
+  });
+
   // ADDED: A saved empty assignment cannot bypass the WB `confirm` queue filter.
   it('releases an untouched WB task while the order is temporarily new', async () => {
     const updatedAt = new Date('2026-08-16T11:53:22.000Z');

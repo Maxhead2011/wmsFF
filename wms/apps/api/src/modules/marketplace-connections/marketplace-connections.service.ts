@@ -26131,6 +26131,42 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
   }
 
+  // FIX: one Ozon Client-Id is one seller cabinet. Two active rows for the
+  // same cabinet return the same posting and duplicate it in an FBS request.
+  private async requireUniqueActiveOzonSeller(input: {
+    clientId: string;
+    marketplace: MarketplaceType;
+    sellerId?: string | null;
+    isActive?: boolean;
+    excludeConnectionId?: string;
+  }) {
+    const sellerId = input.sellerId?.trim();
+    if (
+      input.marketplace !== MarketplaceType.OZON ||
+      input.isActive === false ||
+      !sellerId
+    ) {
+      return;
+    }
+    const duplicate = await this.prisma.clientMarketplaceConnection.findFirst({
+      where: {
+        clientId: input.clientId,
+        marketplace: MarketplaceType.OZON,
+        sellerId,
+        isActive: true,
+        ...(input.excludeConnectionId
+          ? { id: { not: input.excludeConnectionId } }
+          : {}),
+      },
+      select: { id: true },
+    });
+    if (duplicate) {
+      throw new BadRequestException(
+        `Ozon Client-Id ${sellerId} уже подключён для этого клиента. Отредактируйте существующее подключение вместо создания второго.`,
+      );
+    }
+  }
+
   async createFbsConnection(dto: UpsertMarketplaceConnectionDto, user: AuthUser) {
     requireFbsRoutingSettingsAccess(dto, user);
     if (
@@ -26149,6 +26185,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new BadRequestException('Для Яндекс Маркета укажите Campaign ID.');
     }
 
+    await this.requireUniqueActiveOzonSeller(dto);
     await this.validateFbsRoutingSettings(dto);
 
     try {
@@ -26174,6 +26211,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     requireFbsRoutingSettingsAccess(dto, user);
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
     await this.requireBranchOwnedClientConfiguration(user, dto.clientId);
+    await this.requireUniqueActiveOzonSeller(dto);
     await this.validateFbsRoutingSettings(dto);
 
     try {
@@ -26205,6 +26243,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       where: { id },
       select: {
         clientId: true,
+        marketplace: true,
+        sellerId: true,
+        isActive: true,
         fbsExecutionWarehouseId: true,
         fbsDropoffWarehouseId: true,
         fbsAutoRouteNewWarehouses: true,
@@ -26220,6 +26261,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
       await this.requireBranchOwnedClientConfiguration(user, dto.clientId);
     }
+    await this.requireUniqueActiveOzonSeller({
+      clientId: dto.clientId ?? existing.clientId,
+      marketplace: dto.marketplace ?? existing.marketplace,
+      sellerId: dto.sellerId === undefined ? existing.sellerId : dto.sellerId,
+      isActive: dto.isActive ?? existing.isActive,
+      excludeConnectionId: id,
+    });
     await this.validateFbsRoutingSettings(dto, existing);
 
     try {
