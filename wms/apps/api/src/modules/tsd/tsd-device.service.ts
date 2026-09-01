@@ -111,7 +111,7 @@ export class TsdDeviceService {
       throw new BadRequestException('Для журнала ошибки нужны код ТСД и текст ошибки.');
     }
     await this.touchActiveDevice(user.deviceId);
-    await this.prisma.tsdOperation.create({
+    const operation = await this.prisma.tsdOperation.create({
       data: {
         deviceId: deviceCode,
         operationKey: `monitor-error:${deviceCode}:${Date.now()}:${randomUUID()}`,
@@ -121,7 +121,41 @@ export class TsdDeviceService {
         serverMessage: message,
       },
     });
-    return { accepted: true, serverTime: new Date().toISOString() };
+    return { accepted: true, operationId: operation.id, serverTime: new Date().toISOString() };
+  }
+
+  async attachMonitorErrorScreenshot(
+    operationId: string,
+    file: Express.Multer.File | undefined,
+    user: AuthUser,
+  ) {
+    if (!file?.buffer?.length) throw new BadRequestException('Снимок экрана не получен.');
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) {
+      throw new BadRequestException('Допустимы снимки JPEG, PNG или WebP.');
+    }
+    if (file.buffer.length > 750 * 1024) {
+      throw new BadRequestException('Снимок экрана превышает 750 КБ.');
+    }
+    const operation = await this.prisma.tsdOperation.findUnique({
+      where: { id: operationId },
+      select: { id: true, operationType: true, payload: true },
+    });
+    const payload = operation ? jsonPayload(operation.payload) : {};
+    if (!operation || operation.operationType !== 'monitor_error') {
+      throw new BadRequestException('Операция ошибки ТСД не найдена.');
+    }
+    if (monitorText(payload.workerUserId) !== user.id) {
+      throw new UnauthorizedException('Нельзя прикрепить снимок к ошибке другого сотрудника.');
+    }
+    await this.prisma.tsdOperation.update({
+      where: { id: operationId },
+      data: {
+        screenshotData: Uint8Array.from(file.buffer) as Uint8Array<ArrayBuffer>,
+        screenshotMimeType: file.mimetype,
+        screenshotCapturedAt: new Date(),
+      },
+    });
+    return { accepted: true, operationId, size: file.buffer.length };
   }
 
   async createDevice(dto: CreateTsdDeviceDto) {
@@ -616,6 +650,18 @@ function monitorPayload(body: Record<string, unknown>, deviceCode: string, worke
     orderId: monitorText(body.orderId),
     productName: monitorText(body.productName),
     boxCode: monitorText(body.boxCode),
+    palletCode: monitorText(body.palletCode),
+    barcode: monitorText(body.barcode),
+    kiz: monitorText(body.kiz),
+    skuId: monitorText(body.skuId),
+    article: monitorText(body.article),
+    productSize: monitorText(body.productSize),
+    productColor: monitorText(body.productColor),
+    inventorySessionId: monitorText(body.inventorySessionId),
+    inventoryType: monitorText(body.inventoryType),
+    inventoryMandatory: body.inventoryMandatory === true,
+    inventoryBoxId: monitorText(body.inventoryBoxId),
+    inventoryBoxCode: monitorText(body.inventoryBoxCode),
     total: monitorNumber(body.total),
     completed: monitorNumber(body.completed),
     remaining: monitorNumber(body.remaining),
@@ -625,6 +671,12 @@ function monitorPayload(body: Record<string, unknown>, deviceCode: string, worke
     appVersion: monitorText(body.appVersion),
     reportedAt: new Date().toISOString(),
   };
+}
+
+function jsonPayload(value: Prisma.JsonValue) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Prisma.JsonObject)
+    : {};
 }
 
 function monitorText(value: unknown) {

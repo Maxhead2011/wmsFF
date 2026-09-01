@@ -6,6 +6,7 @@ import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { StockOperationsService } from '../stock/stock-operations.service';
 import { ResolveTsdReviewDto } from './dto/resolve-tsd-review.dto';
+import { ListTsdOperationHistoryDto } from './dto/list-tsd-operation-history.dto';
 import { TsdPayloadParser } from './tsd-payload.parser';
 
 @Injectable()
@@ -592,6 +593,129 @@ export class TsdReviewService {
     });
   }
 
+  // FIX: This is the complete operational log. The old review history above intentionally
+  // contains only manager-reviewed exceptions and remains unchanged for compatibility.
+  async listOperationHistory(user: AuthUser, dto: ListTsdOperationHistoryDto) {
+    this.clientScopes.requireGlobalClientAccess(user);
+    const page = dto.page || 1;
+    const pageSize = dto.pageSize || 50;
+    const where = operationHistoryWhere(dto);
+    const [total, operations] = await Promise.all([
+      this.prisma.tsdOperation.count({ where }),
+      this.prisma.tsdOperation.findMany({
+        where,
+        omit: { screenshotData: true },
+        include: {
+          reviewedBy: { select: { id: true, email: true, name: true } },
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+    ]);
+
+    return {
+      items: await this.enrichOperationHistory(operations),
+      total,
+      page,
+      pageSize,
+      pageCount: Math.max(1, Math.ceil(total / pageSize)),
+    };
+  }
+
+  async getOperationHistoryItem(id: string, user: AuthUser) {
+    this.clientScopes.requireGlobalClientAccess(user);
+    const operation = await this.prisma.tsdOperation.findUnique({
+      where: { id },
+      omit: { screenshotData: true },
+      include: {
+        reviewedBy: { select: { id: true, email: true, name: true } },
+      },
+    });
+    if (!operation) throw new NotFoundException('Операция ТСД не найдена.');
+    return (await this.enrichOperationHistory([operation]))[0];
+  }
+
+  async getOperationScreenshot(id: string, user: AuthUser) {
+    this.clientScopes.requireGlobalClientAccess(user);
+    const operation = await this.prisma.tsdOperation.findUnique({
+      where: { id },
+      select: {
+        screenshotData: true,
+        screenshotMimeType: true,
+        screenshotCapturedAt: true,
+      },
+    });
+    if (!operation?.screenshotData || !operation.screenshotMimeType) {
+      throw new NotFoundException('Снимок экрана для этой операции не сохранён.');
+    }
+    return {
+      content: Buffer.from(operation.screenshotData),
+      mimeType: operation.screenshotMimeType,
+      capturedAt: operation.screenshotCapturedAt?.toISOString() ?? null,
+    };
+  }
+
+  private async enrichOperationHistory<
+    T extends {
+      id: string;
+      deviceId: string;
+      payload: Prisma.JsonValue;
+      screenshotMimeType?: string | null;
+      screenshotCapturedAt?: Date | null;
+      createdAt: Date;
+      updatedAt: Date;
+      reviewedAt?: Date | null;
+    },
+  >(operations: T[]) {
+    const deviceIds = unique(operations.map((operation) => operation.deviceId));
+    const devices = deviceIds.length
+      ? await this.prisma.tsdDevice.findMany({
+          where: { OR: [{ code: { in: deviceIds } }, { id: { in: deviceIds } }] },
+          select: {
+            id: true,
+            code: true,
+            name: true,
+            user: { select: { id: true, name: true, email: true } },
+          },
+        })
+      : [];
+    const deviceByKey = new Map<string, (typeof devices)[number]>();
+    devices.forEach((device) => {
+      deviceByKey.set(device.id, device);
+      deviceByKey.set(device.code, device);
+    });
+
+    return operations.map((operation) => {
+      const payload = jsonObject(operation.payload);
+      const actorPayload = jsonObject(payload.actor);
+      const device = deviceByKey.get(operation.deviceId);
+      const actorName = historyText(actorPayload.name) || historyText(payload.workerName);
+      const actorId = historyText(actorPayload.userId) || historyText(payload.workerUserId);
+      const actorEmail = historyText(actorPayload.email);
+      return {
+        ...operation,
+        device: {
+          id: device?.id ?? null,
+          code: device?.code ?? operation.deviceId,
+          name: device?.name ?? operation.deviceId,
+        },
+        actor: actorName || actorId || device?.user
+          ? {
+              id: actorId || device?.user.id || null,
+              name: actorName || device?.user.name || 'Сотрудник не определён',
+              email: actorEmail || device?.user.email || null,
+            }
+          : null,
+        hasScreenshot: Boolean(operation.screenshotMimeType),
+        screenshotCapturedAt: operation.screenshotCapturedAt?.toISOString() ?? null,
+        createdAt: operation.createdAt.toISOString(),
+        updatedAt: operation.updatedAt.toISOString(),
+        reviewedAt: operation.reviewedAt?.toISOString() ?? null,
+      };
+    });
+  }
+
   private reviewClientId(operationType: string, payload: unknown) {
     const rawPayload = payload as Record<string, unknown>;
 
@@ -677,6 +801,55 @@ function receiptReviewResult(operation: {
     return 'REJECTED' as const;
   }
   return 'NOT_ACCEPTED' as const;
+}
+
+function operationHistoryWhere(dto: ListTsdOperationHistoryDto): Prisma.TsdOperationWhereInput {
+  const search = dto.search?.trim();
+  const payloadSearchPaths = [
+    ['palletCode'], ['palletSortCode'], ['boxCode'], ['fromBoxCode'], ['toBoxCode'],
+    ['productName'], ['article'], ['barcode'], ['kiz'], ['orderId'], ['requestId'],
+    ['requestNumber'], ['supplyId'], ['clientName'], ['warehouseName'], ['workerName'],
+    ['request', 'body', 'palletCode'], ['request', 'body', 'boxCode'],
+    ['request', 'body', 'productName'], ['request', 'body', 'article'],
+    ['request', 'body', 'barcode'], ['request', 'body', 'kiz'],
+    ['request', 'body', 'orderId'], ['request', 'body', 'requestId'],
+    ['response', 'palletCode'], ['response', 'boxCode'], ['response', 'productName'],
+    ['response', 'barcode'], ['response', 'kiz'], ['response', 'orderId'],
+  ];
+  return {
+    createdAt:
+      dto.dateFrom || dto.dateTo
+        ? {
+            gte: dto.dateFrom ? new Date(dto.dateFrom) : undefined,
+            lte: dto.dateTo ? new Date(dto.dateTo) : undefined,
+          }
+        : undefined,
+    deviceId: dto.deviceId?.trim() || undefined,
+    operationType: dto.operationType?.trim() || undefined,
+    status: dto.status as TsdOperationStatus | undefined,
+    OR: search
+      ? [
+          { operationKey: { contains: search, mode: Prisma.QueryMode.insensitive } },
+          { operationType: { contains: search, mode: Prisma.QueryMode.insensitive } },
+          { deviceId: { contains: search, mode: Prisma.QueryMode.insensitive } },
+          { serverMessage: { contains: search, mode: Prisma.QueryMode.insensitive } },
+          { resolutionMessage: { contains: search, mode: Prisma.QueryMode.insensitive } },
+          ...payloadSearchPaths.map((path) => ({
+            payload: { path, string_contains: search, mode: Prisma.QueryMode.insensitive },
+          })),
+        ]
+      : undefined,
+  };
+}
+
+function jsonObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function historyText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 function sumReceiptOperationQuantity(

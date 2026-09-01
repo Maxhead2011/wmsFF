@@ -11,10 +11,33 @@ import retrofit2.http.Path;
 import retrofit2.http.POST;
 import retrofit2.http.PATCH;
 import retrofit2.http.Query;
+import retrofit2.http.Multipart;
+import retrofit2.http.Part;
+import okhttp3.MultipartBody;
 
 public interface WmsApi {
     @POST("api/v1/tsd/login")
     Call<TsdLoginResponse> login(@Body TsdLoginRequest request);
+
+    @POST("api/v1/tsd/monitor/heartbeat")
+    Call<Map<String, Object>> sendMonitorHeartbeat(
+        @Header("Authorization") String authorization,
+        @Body Map<String, Object> request
+    );
+
+    @POST("api/v1/tsd/monitor/error")
+    Call<Map<String, Object>> sendMonitorError(
+        @Header("Authorization") String authorization,
+        @Body Map<String, Object> request
+    );
+
+    @Multipart
+    @POST("api/v1/tsd/monitor/error/{id}/screenshot")
+    Call<Map<String, Object>> uploadMonitorErrorScreenshot(
+        @Header("Authorization") String authorization,
+        @Path("id") String operationId,
+        @Part MultipartBody.Part screenshot
+    );
 
     @POST("api/v1/tsd/operations")
     Call<TsdOperationResponse> sendOperation(

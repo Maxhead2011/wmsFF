@@ -17,7 +17,6 @@ import {
   fetchStockBalances,
   downloadTsdReceiptReviewBoxesXlsx,
   fetchTsdReceiptReviewDashboard,
-  fetchTsdReviewHistory,
   fetchTsdReviewQueue,
   resolveTsdReviewOperation,
   type AuthSession,
@@ -33,6 +32,7 @@ import {
 } from '../lib/api';
 import { stockStatusLabel } from './client-cabinet/clientCabinetFormat';
 import { TsdReceiptReviewPanel } from './tsd/TsdReceiptReviewPanel';
+import { TsdOperationHistoryPanel } from './tsd/TsdOperationHistoryPanel';
 
 const dataTabs = [
   { id: 'clients', label: 'Клиенты', permission: 'clients:read', icon: UsersRound },
@@ -87,7 +87,6 @@ export function DashboardDataPanel({ session }: DashboardDataPanelProps) {
     status: 'idle',
     data: null,
   });
-  const [tsdHistory, setTsdHistory] = useState<LoadState<TsdReviewOperation>>({ status: 'idle', data: [] });
   const [roles, setRoles] = useState<LoadState<RoleSummary>>({ status: 'idle', data: [] });
   const [tariffs, setTariffs] = useState<LoadState<LogisticsTariffSetSummary>>({ status: 'idle', data: [] });
   const [rejectReasons, setRejectReasons] = useState<Record<string, TsdReviewReason>>({});
@@ -158,16 +157,7 @@ export function DashboardDataPanel({ session }: DashboardDataPanelProps) {
     }
 
     if (tab === 'tsdHistory') {
-      if (!force && tsdHistory.status !== 'idle') {
-        return;
-      }
-
-      setTsdHistory((current) => ({ ...current, status: 'loading', error: undefined }));
-      try {
-        setTsdHistory({ status: 'ready', data: await fetchTsdReviewHistory(session.accessToken) });
-      } catch (caught) {
-        setTsdHistory((current) => ({ ...current, status: 'error', error: errorMessage(caught) }));
-      }
+      return;
     }
 
     if (tab === 'roles') {
@@ -283,7 +273,7 @@ export function DashboardDataPanel({ session }: DashboardDataPanelProps) {
     }
 
     if (activeTab === 'tsdHistory') {
-      return renderLoadState(tsdHistory, 'История разбора ТСД пока пустая.', renderTsdReviewHistory);
+      return <TsdOperationHistoryPanel accessToken={session.accessToken} />;
     }
 
     if (activeTab === 'roles') {

@@ -3007,11 +3007,16 @@ model TsdOperation {
   reviewedByUserId  String?
   reviewedBy        User?              @relation("TsdOperationReviewedBy", fields: [reviewedByUserId], references: [id])
   reviewedAt        DateTime?
+  screenshotData       Bytes?
+  screenshotMimeType   String?
+  screenshotCapturedAt DateTime?
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
 
   @@index([status, createdAt])
   @@index([deviceId])
+  @@index([deviceId, createdAt])
+  @@index([operationType, createdAt])
   @@index([reviewReason])
   @@index([reviewedAt])
   @@index([reviewedByUserId])

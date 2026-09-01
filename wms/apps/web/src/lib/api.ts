@@ -5651,6 +5651,32 @@ export type TsdReviewOperation = {
   updatedAt: string;
 };
 
+export type TsdOperationHistoryItem = TsdReviewOperation & {
+  device: { id: string | null; code: string; name: string };
+  actor: { id: string | null; name: string; email: string | null } | null;
+  hasScreenshot: boolean;
+  screenshotCapturedAt: string | null;
+};
+
+export type TsdOperationHistoryPage = {
+  items: TsdOperationHistoryItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+};
+
+export type TsdOperationHistoryFilters = {
+  dateFrom?: string;
+  dateTo?: string;
+  deviceId?: string;
+  operationType?: string;
+  status?: TsdOperationHistoryItem['status'] | '';
+  search?: string;
+  page?: number;
+  pageSize?: number;
+};
+
 export type ResolveTsdReviewPayload = {
   action: 'APPLY_INVENTORY_ADJUSTMENT' | 'ACCEPT_RECEIPT_WITH_ERROR' | 'REJECT';
   comment?: string;
@@ -10856,6 +10882,27 @@ export async function fetchTsdReviewHistory(accessToken: string) {
   return request<TsdReviewOperation[]>('/tsd/review/history', {
     accessToken,
   });
+}
+
+export async function fetchTsdOperationHistory(
+  accessToken: string,
+  filters: TsdOperationHistoryFilters = {},
+) {
+  const query = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') query.set(key, String(value));
+  });
+  return request<TsdOperationHistoryPage>(`/tsd/history${query.size ? `?${query}` : ''}`, {
+    accessToken,
+  });
+}
+
+export async function fetchTsdOperationHistoryItem(accessToken: string, operationId: string) {
+  return request<TsdOperationHistoryItem>(`/tsd/history/${operationId}`, { accessToken });
+}
+
+export async function fetchTsdOperationScreenshot(accessToken: string, operationId: string) {
+  return requestBlob(`/tsd/history/${operationId}/screenshot`, accessToken);
 }
 
 export async function resolveTsdReviewOperation(
