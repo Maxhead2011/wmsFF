@@ -266,7 +266,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'tsd',
     name: 'ТСД',
     prefixes: ['/tsd'],
-    routeCount: 71,
+    routeCount: 75, // FIX: complete TSD history (list, detail, screenshot) plus screenshot upload.
     description: 'Приёмка, размещение, сборка FBS, перемещения и синхронизация ТСД.',
     logic: ['Выдаёт следующее действие сборщику.', 'Проверяет паллет-сорт, короб, товар и КИЗ.', 'Фиксирует сканы, операции и восстановление сессий устройства.'],
     dependencies: ['Основная БД', 'Склад', 'JWT устройства'],

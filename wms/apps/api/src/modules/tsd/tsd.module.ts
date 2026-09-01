@@ -12,6 +12,7 @@ import { TsdReceiptService } from './tsd-receipt.service';
 import { TsdReviewService } from './tsd-review.service';
 import { TsdSyncController } from './tsd-sync.controller';
 import { TsdSyncService } from './tsd-sync.service';
+import { TsdAuditInterceptor } from './tsd-audit.interceptor';
 
 @Module({
   imports: [AuthModule, StockModule, MarketplaceConnectionsModule, WarehouseModule],
@@ -24,6 +25,7 @@ import { TsdSyncService } from './tsd-sync.service';
     TsdReceiptService,
     TsdReviewService,
     TsdSyncService,
+    TsdAuditInterceptor,
   ],
 })
 export class TsdModule {}

@@ -50,6 +50,7 @@ import android.widget.TextView;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.FileInputStream;
@@ -110,6 +111,9 @@ import pro.logoff.wms.tsd.network.WmsApiFactory;
 import pro.logoff.wms.tsd.printing.NiimbotB1Printer;
 import pro.logoff.wms.tsd.sync.TsdSyncRunner;
 import pro.logoff.wms.tsd.sync.TsdSyncSummary;
+import okhttp3.MediaType;
+import okhttp3.MultipartBody;
+import okhttp3.RequestBody;
 import retrofit2.Response;
 
 public class MainActivity extends Activity {
@@ -7276,14 +7280,52 @@ public class MainActivity extends Activity {
         if (session == null || monitorExecutor.isShutdown()) return;
         Map<String, Object> payload = buildMonitorPayload();
         payload.put("message", nonEmpty(message, "Ошибка сканирования"));
+        // FIX: this branch builds the LOGOFF TSD application; capture only its app window,
+        // never the Android system UI or content from another application.
+        byte[] screenshot = captureAppScreenshot();
         monitorExecutor.execute(() -> {
             try {
-                WmsApiFactory.create(DEFAULT_BASE_URL)
+                WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+                Response<Map<String, Object>> response = api
                     .sendMonitorError(session.authorizationHeader(), payload)
                     .execute();
+                if (screenshot == null || !response.isSuccessful() || response.body() == null) return;
+                String operationId = String.valueOf(response.body().get("operationId"));
+                if (operationId.isBlank() || "null".equals(operationId)) return;
+                RequestBody image = RequestBody.create(screenshot, MediaType.parse("image/jpeg"));
+                MultipartBody.Part part = MultipartBody.Part.createFormData(
+                    "screenshot",
+                    "tsd-error-" + System.currentTimeMillis() + ".jpg",
+                    image
+                );
+                api.uploadMonitorErrorScreenshot(session.authorizationHeader(), operationId, part).execute();
             } catch (Throwable ignored) {
             }
         });
+    }
+
+    private byte[] captureAppScreenshot() {
+        try {
+            View root = getWindow().getDecorView().getRootView();
+            int width = root.getWidth();
+            int height = root.getHeight();
+            if (width <= 0 || height <= 0) return null;
+            Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565);
+            root.draw(new Canvas(bitmap));
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 58, output);
+            bitmap.recycle();
+            byte[] bytes = output.toByteArray();
+            if (bytes.length <= 700 * 1024) return bytes;
+            Bitmap retry = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565);
+            root.draw(new Canvas(retry));
+            output.reset();
+            retry.compress(Bitmap.CompressFormat.JPEG, 34, output);
+            retry.recycle();
+            return output.size() <= 700 * 1024 ? output.toByteArray() : null;
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     private Map<String, Object> buildMonitorPayload() {
@@ -7319,6 +7361,17 @@ public class MainActivity extends Activity {
                 payload.put("productName", task.product == null ? "" : task.product.name);
                 payload.put("clientName", task.client == null ? "" : task.client.name);
                 payload.put("boxCode", nonEmpty(task.scannedBoxCode, task.recommendedBoxCode));
+                payload.put("warehouseName", nonEmpty(task.warehouseName, ""));
+                payload.put("barcode", nonEmpty(task.scannedBarcode, ""));
+                if (task.product != null) {
+                    payload.put("skuId", nonEmpty(task.product.id, ""));
+                    payload.put("article", nonEmpty(task.product.article, ""));
+                    payload.put("productSize", nonEmpty(task.product.size, ""));
+                    payload.put("productColor", nonEmpty(task.product.color, ""));
+                }
+                if (task.recommendedLocation != null) {
+                    payload.put("palletCode", nonEmpty(task.recommendedLocation.palletCode, ""));
+                }
             }
             if (fbsAssembly.progress != null) {
                 payload.put("requestNumber", String.valueOf(fbsAssembly.progress.requestNumber));
@@ -7336,6 +7389,9 @@ public class MainActivity extends Activity {
             payload.put("accepted", receiptAcceptedItems);
             payload.put("completed", receiptAcceptedItems);
             payload.put("boxCode", receiptBoxCode);
+        }
+        if (fbsAssembly != null && fbsAssembly.kizMoveProposal != null) {
+            payload.put("kiz", nonEmpty(fbsAssembly.kizMoveProposal.kiz, ""));
         }
         return payload;
     }

@@ -1,4 +1,5 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, Res, StreamableFile } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, Res, StreamableFile, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import type { AuthUser } from '../auth/auth.types';
@@ -14,8 +15,10 @@ import { LoginTsdDeviceDto } from './dto/login-tsd-device.dto';
 import { TsdAssemblyService } from './tsd-assembly.service';
 import { TsdDeviceService } from './tsd-device.service';
 import { TsdReceiptService } from './tsd-receipt.service';
+import { TsdAuditInterceptor } from './tsd-audit.interceptor';
 
 @ApiTags('tsd')
+@UseInterceptors(TsdAuditInterceptor)
 @Controller('tsd')
 export class TsdDeviceController {
   constructor(
@@ -644,6 +647,18 @@ export class TsdDeviceController {
   @RequirePermissions('stock:write')
   monitorError(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {
     return this.devices.recordMonitorError(body, user);
+  }
+
+  @Post('monitor/error/:id/screenshot')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  @UseInterceptors(FileInterceptor('screenshot', { limits: { fileSize: 750 * 1024 } }))
+  uploadMonitorErrorScreenshot(
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.devices.attachMonitorErrorScreenshot(id, file, user);
   }
 
   @Post('devices')
