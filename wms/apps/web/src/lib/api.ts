@@ -4235,6 +4235,54 @@ export type ServiceClientStockSummary = {
   productMarks: number;
 };
 
+export type ServiceStorageOptimizationReport = {
+  client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
+  generatedAt: string;
+  summary: {
+    totalUnits: number;
+    sourceBoxes: number;
+    targetBoxes: number;
+    sourcePalletSorts: number;
+    targetPalletSorts: number;
+    idealTargetPalletSorts: number;
+    movementUnits: number;
+    idealTargetBoxes: number;
+    excludedUnits: number;
+  };
+  targetBoxes: Array<{
+    id: string;
+    label: string;
+    physicalBoxCode: string | null;
+    warehouseId: string;
+    warehouseName: string;
+    strategy: 'BARCODE' | 'ARTICLE';
+    article: string;
+    colors: string[];
+    sizes: string[];
+    barcodes: string[];
+    plannedQuantity: number;
+    targetPalletSort: string;
+  }>;
+  rows: Array<{
+    warehouseId: string;
+    warehouseName: string;
+    skuId: string;
+    barcode: string | null;
+    article: string | null;
+    productName: string;
+    color: string | null;
+    size: string | null;
+    sourcePalletSort: string | null;
+    sourceBox: string;
+    quantity: number;
+    destinationBox: string;
+    destinationPhysicalBox: string | null;
+    destinationPalletSort: string;
+    strategy: 'BARCODE' | 'ARTICLE';
+    action: 'KEEP' | 'MOVE';
+  }>;
+};
+
 export type ServiceClientStockCleanupPreview = {
   client: Pick<ClientSummary, 'id' | 'code' | 'name' | 'status'>;
   summary: ServiceClientStockSummary;
@@ -9339,6 +9387,17 @@ export async function logout(accessToken: string) {
     method: 'POST',
     accessToken,
   });
+}
+
+export async function fetchServiceStorageOptimization(accessToken: string, clientId: string) {
+  // FIX: report generation does not submit a warehouse operation.
+  return request<ServiceStorageOptimizationReport>(`/service/clients/${clientId}/storage-optimization`, {
+    accessToken,
+  });
+}
+
+export async function downloadServiceStorageOptimization(accessToken: string, clientId: string) {
+  return requestBlob(`/service/clients/${clientId}/storage-optimization.xlsx`, accessToken);
 }
 
 export async function fetchAnalyticsClients(accessToken: string) {
