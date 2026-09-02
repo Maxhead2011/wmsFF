@@ -239,9 +239,9 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'service',
     name: 'Сервисный центр',
     prefixes: ['/service'],
-    routeCount: 15,
+    routeCount: 17, // FIX: include the storage optimization preview and XLSX download routes.
     description: 'Сервисные обращения, диагностика и история ремонтных работ.',
-    logic: ['Регистрирует обращение и устройство.', 'Ведёт этапы диагностики и ремонта.', 'Хранит исполнителей, комментарии и результат.'],
+    logic: ['Регистрирует обращение и устройство.', 'Ведёт этапы диагностики и ремонта.', 'Формирует read-only рекомендации по оптимизации хранения.', 'Хранит исполнителей, комментарии и результат.'],
     dependencies: ['Основная БД'],
   },
   {

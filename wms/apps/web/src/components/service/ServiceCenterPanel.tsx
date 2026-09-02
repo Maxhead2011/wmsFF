@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   Bell,
+  Boxes,
   CheckCircle2,
   Database,
   Download,
@@ -44,6 +45,7 @@ import {
   type ServiceTelegramSettings,
   type TelegramNotificationSection,
 } from '../../lib/api';
+import { StorageOptimizationPanel } from './StorageOptimizationPanel';
 import './service-center.css';
 import { useRememberedClientId } from '../../lib/rememberedClient';
 
@@ -82,6 +84,7 @@ const tabs = [
   { id: 'sessions', label: 'Сессии', icon: Users },
   { id: 'telegram', label: 'Telegram', icon: Bell },
   { id: 'kiz', label: 'КИЗ', icon: Search },
+  { id: 'storageOptimization', label: 'Оптимизация хранения', icon: Boxes },
   { id: 'stock', label: 'Остатки', icon: Database },
   { id: 'requests', label: 'Заявки', icon: Trash2 },
 ] as const;
@@ -736,6 +739,14 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
             onAction={() => void purgeStock()}
           />
         </Section>
+      ) : null}
+
+      {activeTab === 'storageOptimization' ? (
+        <StorageOptimizationPanel
+          accessToken={session.accessToken}
+          clientId={selectedClientId}
+          clientName={selectedClient?.name ?? ''}
+        />
       ) : null}
 
       {activeTab === 'requests' ? (
