@@ -39,8 +39,9 @@ import {
 } from '../../lib/api';
 import './inventory.css';
 import { useRememberedClientId } from '../../lib/rememberedClient';
+import { SkuCollectionPanel } from './SkuCollectionPanel';
 
-type InventoryMode = InventorySessionType | 'RECONCILIATION';
+type InventoryMode = InventorySessionType | 'RECONCILIATION' | 'SKU_COLLECTION';
 
 const modes: Array<{
   id: InventoryMode;
@@ -78,6 +79,13 @@ const modes: Array<{
     title: 'Актуализация остатков на базе инвентаризации',
     description: 'Журнал всех проверок и решения менеджера по расхождениям.',
     icon: Settings2,
+  },
+  {
+    id: 'SKU_COLLECTION',
+    number: '05',
+    title: 'Сборка по SKU',
+    description: 'Собрать одинаковый маркированный товар из разных коробов и принять его заново.',
+    icon: Boxes,
   },
 ];
 
@@ -255,6 +263,8 @@ export function InventoryPanel({ session }: { session: AuthSession }) {
               session={session}
               onChanged={refreshDashboard}
             />
+          ) : mode === 'SKU_COLLECTION' ? (
+            <SkuCollectionPanel session={session} clients={clients} />
           ) : (
             <InventoryOperation
               type={mode}

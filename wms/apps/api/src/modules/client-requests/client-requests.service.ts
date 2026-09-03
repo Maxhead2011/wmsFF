@@ -436,7 +436,7 @@ export class ClientRequestsService {
   async update(id: string, dto: UpdateClientRequestDto, user: AuthUser) {
     const request = await this.prisma.clientRequest.findUnique({
       where: { id },
-      select: { id: true, clientId: true, warehouseId: true, status: true },
+      select: { id: true, clientId: true, warehouseId: true, type: true, status: true },
     });
 
     if (!request) {
@@ -445,6 +445,10 @@ export class ClientRequestsService {
 
     this.clientScopes.requireClientAccess(user, request.clientId, 'write');
     assertWarehouseAccess(user, request, 'write', 'Заявка не найдена в выбранном филиале.');
+    if (request.type === ClientRequestType.SKU_COLLECTION) {
+      // FIX: source rows and quantities are immutable after the reservation is created.
+      throw new BadRequestException('Заявка «Сборка по SKU» изменяется только через специальную форму и ТСД.');
+    }
 
     if (!canEditClientRequestAnyStatus(user) && !clientEditableStatuses.has(request.status)) {
       throw new BadRequestException('Заявку можно редактировать только до начала работы склада.');
@@ -1376,6 +1380,10 @@ export class ClientRequestsService {
     // Русский комментарий: даже менеджер с ограниченным scope не меняет статусы чужого клиента.
     this.clientScopes.requireClientAccess(user, request.clientId, 'write');
     assertWarehouseAccess(user, request, 'write', 'Заявка не найдена в выбранном филиале.');
+    if (request.type === ClientRequestType.SKU_COLLECTION) {
+      // FIX: status is derived only from atomic SKU scans; manual status changes could strand reserved stock.
+      throw new BadRequestException('Статус заявки «Сборка по SKU» изменяется только сканированием на ТСД.');
+    }
 
     const shouldFinalizeStockRequest =
       dto.status === ClientRequestStatus.DONE &&
@@ -1712,7 +1720,7 @@ export class ClientRequestsService {
   async cancel(id: string, user: AuthUser) {
     const request = await this.prisma.clientRequest.findUnique({
       where: { id },
-      select: { id: true, clientId: true, warehouseId: true, status: true, title: true },
+      select: { id: true, clientId: true, warehouseId: true, type: true, status: true, title: true },
     });
 
     if (!request) {
@@ -1721,6 +1729,9 @@ export class ClientRequestsService {
 
     this.clientScopes.requireClientAccess(user, request.clientId, 'write');
     assertWarehouseAccess(user, request, 'write', 'Заявка не найдена в выбранном филиале.');
+    if (request.type === ClientRequestType.SKU_COLLECTION) {
+      throw new BadRequestException('Эту заявку нельзя отменить из общего списка: сначала завершите сборку и повторную приёмку.');
+    }
 
     if (request.status === ClientRequestStatus.CANCELLED) {
       return this.get(id, user);

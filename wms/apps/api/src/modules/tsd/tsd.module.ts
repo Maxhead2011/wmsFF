@@ -3,6 +3,7 @@ import { AuthModule } from '../auth/auth.module';
 import { StockModule } from '../stock/stock.module';
 import { MarketplaceConnectionsModule } from '../marketplace-connections/marketplace-connections.module';
 import { WarehouseModule } from '../warehouse/warehouse.module';
+import { InventoryModule } from '../inventory/inventory.module';
 import { TsdDeviceController } from './tsd-device.controller';
 import { TsdAssemblyService } from './tsd-assembly.service';
 import { TsdDeviceService } from './tsd-device.service';
@@ -15,7 +16,7 @@ import { TsdSyncService } from './tsd-sync.service';
 import { TsdAuditInterceptor } from './tsd-audit.interceptor';
 
 @Module({
-  imports: [AuthModule, StockModule, MarketplaceConnectionsModule, WarehouseModule],
+  imports: [AuthModule, StockModule, MarketplaceConnectionsModule, WarehouseModule, InventoryModule],
   controllers: [TsdDeviceController, TsdSyncController],
   providers: [
     TsdAssemblyService,

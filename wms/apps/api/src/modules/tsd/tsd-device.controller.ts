@@ -16,6 +16,8 @@ import { TsdAssemblyService } from './tsd-assembly.service';
 import { TsdDeviceService } from './tsd-device.service';
 import { TsdReceiptService } from './tsd-receipt.service';
 import { TsdAuditInterceptor } from './tsd-audit.interceptor';
+import { SkuCollectionService } from '../inventory/sku-collection.service';
+import { ScanSkuCollectionPickDto, ScanSkuCollectionReceiptDto } from '../inventory/dto/sku-collection.dto';
 
 @ApiTags('tsd')
 @UseInterceptors(TsdAuditInterceptor)
@@ -28,7 +30,44 @@ export class TsdDeviceController {
     private readonly marketplace: MarketplaceConnectionsService,
     private readonly storageLocations: StorageLocationsService,
     private readonly stockOperations: StockOperationsService,
+    private readonly skuCollections: SkuCollectionService,
   ) {}
+
+  @Get('sku-collections')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  listSkuCollections(@CurrentUser() user: AuthUser) {
+    return this.skuCollections.list(user);
+  }
+
+  @Get('sku-collections/:id')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  getSkuCollection(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.skuCollections.get(id, user);
+  }
+
+  @Post('sku-collections/:id/pick')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  pickSkuCollection(
+    @Param('id') id: string,
+    @Body() dto: ScanSkuCollectionPickDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.skuCollections.pick(id, dto, user);
+  }
+
+  @Post('sku-collections/:id/receive')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  receiveSkuCollection(
+    @Param('id') id: string,
+    @Body() dto: ScanSkuCollectionReceiptDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.skuCollections.receive(id, dto, user);
+  }
 
   @Get('storage-pallet/current')
   @ApiBearerAuth()

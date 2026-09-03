@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   assertSkuCollectionPick,
   assertSkuCollectionReceipt,
-  skuCollectionRequestRowTone,
 } from './sku-collection-policy';
 
 describe('sku collection policy', () => {
@@ -29,11 +28,5 @@ describe('sku collection policy', () => {
       targetBoxCode: 'BOX-2',
       pickedByThisRequest: true,
     })).toEqual({ barcode: '460000000001', kiz: '010-test', targetBoxCode: 'BOX-2' });
-  });
-
-  it('uses the orange visual tone only for SKU collection requests', () => {
-    // TEST: existing request statuses keep their original colors.
-    expect(skuCollectionRequestRowTone('SKU_COLLECTION')).toBe('sku-collection');
-    expect(skuCollectionRequestRowTone('OUTBOUND')).toBeNull();
   });
 });

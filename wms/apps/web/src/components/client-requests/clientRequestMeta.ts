@@ -28,6 +28,7 @@ export const requestPriorityOptions: Array<{ value: ClientRequestPriority; label
 ];
 
 export function requestTypeLabel(value: ClientRequestType) {
+  if (value === 'SKU_COLLECTION') return 'Сборка по SKU';
   return requestTypeOptions.find((option) => option.value === value)?.label ?? value;
 }
 
