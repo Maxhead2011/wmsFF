@@ -11,6 +11,7 @@ import {
   requestStatusTone,
   requestTypeLabel,
 } from './clientRequestMeta';
+import { isSkuCollectionRequest } from './skuCollectionRow';
 
 type ClientRequestsTableProps = {
   items: ClientRequestSummary[];
@@ -178,7 +179,7 @@ export function ClientRequestsTable({
               key={request.id}
               className={`client-request-row client-request-row--${requestStatusTone(request.status)}${
                 deliveryRecovery ? ' client-request-row--fbs-recovery' : ''
-              }`}
+              }${isSkuCollectionRequest(request) ? ' client-request-row--sku-collection' : ''}`}
             >
               {showRequestSelection ? (
                 <td
@@ -202,6 +203,9 @@ export function ClientRequestsTable({
                 </span>
                 {deliveryRecovery ? (
                   <span className="client-request-fbs-recovery-badge">ДОВОЗ WB</span>
+                ) : null}
+                {isSkuCollectionRequest(request) ? (
+                  <span className="client-request-sku-collection-badge">СБОРКА ПО SKU</span>
                 ) : null}
                 {/* ADDED: shipped and archived requests share this table, so the WB supply stays visible. */}
                 {request.status === 'DONE' && request.wbSupplyIds?.length ? (
@@ -535,7 +539,7 @@ export function ClientRequestsTable({
               {canCancelRequests ? (
                 <td className="client-request-table__actions-cell" data-label="Действия">
                   <div className="client-request-actions client-request-actions--main">
-                  {canEditRequest(request, canEditAnyRequest) ? (
+                  {!isSkuCollectionRequest(request) && canEditRequest(request, canEditAnyRequest) ? (
                     <button
                       className="client-request-action-button client-request-action-button--edit"
                       type="button"
@@ -546,7 +550,7 @@ export function ClientRequestsTable({
                       <span>Редактировать</span>
                     </button>
                   ) : null}
-                  {canCancelRequest(request) ? (
+                  {!isSkuCollectionRequest(request) && canCancelRequest(request) ? (
                     <button
                       className="client-request-action-button client-request-action-button--cancel"
                       type="button"
@@ -564,7 +568,9 @@ export function ClientRequestsTable({
               ) : null}
               {canChangeStatus ? (
                 <td className="client-request-table__process-cell" data-label="Процесс">
-                  <label className="client-request-status-select">
+                  {isSkuCollectionRequest(request) ? (
+                    <span className="client-request-sku-collection-process">Управляется ТСД</span>
+                  ) : <label className="client-request-status-select">
                     <CheckCircle2 size={15} aria-hidden="true" />
                     <select
                       aria-label={`Статус заявки ${request.title}`}
@@ -578,7 +584,7 @@ export function ClientRequestsTable({
                         </option>
                       ))}
                     </select>
-                  </label>
+                  </label>}
                 </td>
               ) : null}
             </tr>

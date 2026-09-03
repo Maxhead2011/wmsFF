@@ -55,6 +55,30 @@ public interface WmsApi {
     @GET("api/v1/tsd/clients")
     Call<List<TsdClientSummary>> listClients(@Header("Authorization") String authorization);
 
+    // FIX: isolated SKU collection endpoints preserve all existing transfer and FBS routes.
+    @GET("api/v1/tsd/sku-collections")
+    Call<List<TsdSkuCollection>> listSkuCollections(@Header("Authorization") String authorization);
+
+    @GET("api/v1/tsd/sku-collections/{id}")
+    Call<TsdSkuCollection> getSkuCollection(
+        @Header("Authorization") String authorization,
+        @Path("id") String id
+    );
+
+    @POST("api/v1/tsd/sku-collections/{id}/pick")
+    Call<TsdSkuCollection> pickSkuCollection(
+        @Header("Authorization") String authorization,
+        @Path("id") String id,
+        @Body Map<String, Object> request
+    );
+
+    @POST("api/v1/tsd/sku-collections/{id}/receive")
+    Call<TsdSkuCollection> receiveSkuCollection(
+        @Header("Authorization") String authorization,
+        @Path("id") String id,
+        @Body Map<String, Object> request
+    );
+
     @GET("api/v1/tsd/transfers/source")
     Call<TsdTransferResponse> inspectTransferSource(
         @Header("Authorization") String authorization,

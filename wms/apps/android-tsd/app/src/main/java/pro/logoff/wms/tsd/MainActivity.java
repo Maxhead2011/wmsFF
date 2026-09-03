@@ -106,6 +106,7 @@ import pro.logoff.wms.tsd.network.TsdInventorySession;
 import pro.logoff.wms.tsd.network.TsdOzonFboOverview;
 import pro.logoff.wms.tsd.network.TsdOzonFboPlan;
 import pro.logoff.wms.tsd.network.TsdSkuInfo;
+import pro.logoff.wms.tsd.network.TsdSkuCollection;
 import pro.logoff.wms.tsd.network.WmsApi;
 import pro.logoff.wms.tsd.network.WmsApiFactory;
 import pro.logoff.wms.tsd.printing.NiimbotB1Printer;
@@ -139,6 +140,7 @@ public class MainActivity extends Activity {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final List<TsdClientSummary> clients = new ArrayList<>();
     private final List<TsdAssemblyRequestSummary> assemblyRequests = new ArrayList<>();
+    private final List<TsdSkuCollection> skuCollections = new ArrayList<>();
 
     private OperationOutbox outbox;
     private TsdSessionStore sessionStore;
@@ -170,6 +172,7 @@ public class MainActivity extends Activity {
     private EditText ozonFboScanInput;
     private EditText storagePalletScanInput;
     private EditText transferScanInput;
+    private EditText skuCollectionScanInput;
     private TsdAssemblyPlan assemblyPlan;
     private TsdBoxlessPackingResponse boxlessPacking;
     private TsdRelabelTask activeRelabelTask;
@@ -187,6 +190,9 @@ public class MainActivity extends Activity {
     private String storagePalletRecoveryOperationId = "";
     private String storagePalletRecoveryBoxCode = "";
     private TsdTransferResponse transferWorkflow;
+    private TsdSkuCollection activeSkuCollection;
+    private SkuCollectionScanState skuCollectionScanState;
+    private boolean skuCollectionBusy;
     private String storagePalletClientId = "";
     private String selectedFbsCargoPlanId = "";
     private String selectedFbsRequestId = "";
@@ -1589,6 +1595,10 @@ public class MainActivity extends Activity {
             tr("3. Проверка содержимого короба", "3. Quti tarkibini tekshirish"),
             view -> openInventoryMode("BOX_CHECK")
         ));
+        root.addView(primaryMenuButton(
+            tr("4. Сборка по SKU", "4. SKU bo‘yicha yig‘ish"),
+            view -> openSkuCollections()
+        ));
         root.addView(secondaryButton(
             tr("Архив проверок коробок", "Qutilar tekshiruvi arxivi"),
             view -> openInventoryBoxCheckArchive()
@@ -1600,6 +1610,180 @@ public class MainActivity extends Activity {
         root.addView(versionView());
         setScrollableContent(root);
         refreshHeaderText();
+    }
+
+    private void openSkuCollections() {
+        TsdSession session = safeSession();
+        if (session == null) {
+            renderSettingsScreen();
+            return;
+        }
+        screen = Screen.SKU_COLLECTION;
+        activeSkuCollection = null;
+        skuCollectionScanState = null;
+        skuCollectionBusy = true;
+        statusMessage = tr("Загружаю заявки…", "Arizalar yuklanmoqda…");
+        renderSkuCollectionScreen();
+        runBackground(() -> {
+            Response<List<TsdSkuCollection>> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                .listSkuCollections(session.authorizationHeader())
+                .execute();
+            if (!response.isSuccessful() || response.body() == null) throw new IOException(inventoryHttpError(response));
+            List<TsdSkuCollection> loaded = response.body();
+            mainHandler.post(() -> {
+                skuCollections.clear();
+                skuCollections.addAll(loaded);
+                skuCollectionBusy = false;
+                statusMessage = loaded.isEmpty()
+                    ? tr("Активных заявок нет.", "Faol arizalar yo‘q.")
+                    : tr("Выберите оранжевую заявку.", "To‘q sariq arizani tanlang.");
+                renderSkuCollectionScreen();
+            });
+        });
+    }
+
+    private void renderSkuCollectionScreen() {
+        screen = Screen.SKU_COLLECTION;
+        skuCollectionScanInput = null;
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title(tr("Сборка по SKU", "SKU bo‘yicha yig‘ish")));
+        if (!statusMessage.isEmpty()) root.addView(messageView(statusMessage));
+
+        if (activeSkuCollection == null) {
+            for (TsdSkuCollection request : skuCollections) {
+                Button button = primaryMenuButton(
+                    "№" + request.number + " · " + safeText(request.title) + "\n" +
+                        tr("Собрано", "Yig‘ildi") + ": " + request.picked() + "/" + request.planned() +
+                        " · " + tr("Принято", "Qabul qilindi") + ": " + request.received(),
+                    view -> selectSkuCollection(request)
+                );
+                button.setBackgroundColor(Color.rgb(249, 115, 22));
+                root.addView(button);
+            }
+            root.addView(secondaryButton(tr("Обновить", "Yangilash"), view -> openSkuCollections()));
+            root.addView(secondaryButton(tr("Назад", "Orqaga"), view -> renderInventoryMenu()));
+        } else {
+            boolean receiving = "PACKED".equals(activeSkuCollection.status);
+            root.addView(feedbackView(
+                "№" + activeSkuCollection.number + " · " + safeText(activeSkuCollection.title) + "\n" +
+                    tr("Собрано", "Yig‘ildi") + ": " + activeSkuCollection.picked() + "/" + activeSkuCollection.planned() +
+                    " · " + tr("Принято", "Qabul qilindi") + ": " + activeSkuCollection.received(),
+                Color.rgb(255, 237, 213)
+            ));
+            if (receiving) {
+                root.addView(messageView(tr(
+                    "Повторная приёмка: короб назначения → ШК товара → тот же КИЗ.",
+                    "Qayta qabul: maqsad quti → tovar SHK → o‘sha KIZ."
+                )));
+            } else {
+                root.addView(messageView(tr(
+                    "Сборка: исходный короб → ШК товара → КИЗ.",
+                    "Yig‘ish: manba quti → tovar SHK → KIZ."
+                )));
+                for (TsdSkuCollection.Source source : activeSkuCollection.skuCollectionSources) {
+                    if (source.pickedQuantity < source.plannedQuantity) {
+                        root.addView(taskRow(source.sourceBoxCode,
+                            tr("Осталось", "Qoldi") + ": " + (source.plannedQuantity - source.pickedQuantity),
+                            Color.WHITE));
+                    }
+                }
+            }
+
+            if (skuCollectionScanState == null) {
+                skuCollectionScanState = new SkuCollectionScanState(receiving);
+            }
+            String stage = skuCollectionScanState.stage();
+            String hint = "BARCODE".equals(stage)
+                ? tr("ШК товара", "Tovar SHK")
+                : "KIZ".equals(stage)
+                    ? "КИЗ"
+                    : receiving ? tr("Короб назначения", "Maqsad quti") : tr("Исходный короб", "Manba quti");
+            skuCollectionScanInput = input(hint);
+            skuCollectionScanInput.setOnEditorActionListener((view, actionId, event) -> {
+                submitSkuCollectionScan();
+                return true;
+            });
+            root.addView(skuCollectionScanInput);
+            root.addView(primaryMenuButton(tr("Подтвердить скан", "Skanni tasdiqlash"), view -> submitSkuCollectionScan()));
+            root.addView(secondaryButton(tr("К списку заявок", "Arizalar ro‘yxatiga"), view -> openSkuCollections()));
+        }
+        if (skuCollectionBusy) root.addView(messageView(tr("Проверяю…", "Tekshirilmoqda…")));
+        root.addView(versionView());
+        setScrollableContent(root);
+        refreshHeaderText();
+        if (skuCollectionScanInput != null && !skuCollectionBusy) skuCollectionScanInput.requestFocus();
+    }
+
+    private void selectSkuCollection(TsdSkuCollection request) {
+        activeSkuCollection = request;
+        skuCollectionScanState = new SkuCollectionScanState("PACKED".equals(request.status));
+        statusMessage = "";
+        renderSkuCollectionScreen();
+    }
+
+    private void submitSkuCollectionScan() {
+        if (skuCollectionBusy || activeSkuCollection == null || skuCollectionScanState == null) return;
+        String value = textValue(skuCollectionScanInput);
+        if (value.isEmpty()) {
+            showScanningErrorDialog(tr("Отсканируйте значение.", "Qiymatni skanerlang."));
+            return;
+        }
+        String stage = skuCollectionScanState.stage();
+        if (!"KIZ".equals(stage)) {
+            skuCollectionScanState.accept(value);
+            statusMessage = "BARCODE".equals(skuCollectionScanState.stage())
+                ? tr("Теперь сканируйте ШК товара.", "Endi tovar SHK ni skanerlang.")
+                : tr("Теперь сканируйте КИЗ.", "Endi KIZ ni skanerlang.");
+            renderSkuCollectionScreen();
+            return;
+        }
+
+        TsdSession session = safeSession();
+        if (session == null) return;
+        boolean receiving = "PACKED".equals(activeSkuCollection.status);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put(receiving ? "targetBoxCode" : "sourceBoxCode", skuCollectionScanState.boxCode());
+        payload.put("barcode", skuCollectionScanState.barcode());
+        payload.put("kiz", value);
+        String requestId = activeSkuCollection.id;
+        skuCollectionBusy = true;
+        statusMessage = tr("Сохраняю товар…", "Tovar saqlanmoqda…");
+        renderSkuCollectionScreen();
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<TsdSkuCollection> response = receiving
+                ? api.receiveSkuCollection(session.authorizationHeader(), requestId, payload).execute()
+                : api.pickSkuCollection(session.authorizationHeader(), requestId, payload).execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                String message = responseErrorMessage(response, tr("Товар не сохранён.", "Tovar saqlanmadi."));
+                mainHandler.post(() -> {
+                    skuCollectionBusy = false;
+                    statusMessage = message;
+                    renderSkuCollectionScreen();
+                    showScanningErrorDialog(message);
+                });
+                return;
+            }
+            TsdSkuCollection loaded = response.body();
+            mainHandler.post(() -> {
+                activeSkuCollection = loaded;
+                boolean nextReceiving = "PACKED".equals(loaded.status);
+                if ("DONE".equals(loaded.status)) {
+                    statusMessage = tr("Заявка полностью собрана и принята.", "Ariza to‘liq yig‘ildi va qabul qilindi.");
+                    openSkuCollections();
+                    return;
+                }
+                if (nextReceiving != receiving) skuCollectionScanState = new SkuCollectionScanState(true);
+                else skuCollectionScanState.nextUnit();
+                skuCollectionBusy = false;
+                statusMessage = nextReceiving
+                    ? tr("Товар принят. Продолжайте приёмку.", "Tovar qabul qilindi. Davom eting.")
+                    : tr("Товар из короба списан. Продолжайте сборку.", "Tovar qutidan chiqarildi. Davom eting.");
+                playFbsSuccess();
+                renderSkuCollectionScreen();
+            });
+        });
     }
 
     private void restoreMandatoryFbsAuditState() {
@@ -7553,6 +7737,9 @@ public class MainActivity extends Activity {
                     if (screen == Screen.INVENTORY_COUNT) {
                         inventoryRequestBusy = false;
                     }
+                    if (screen == Screen.SKU_COLLECTION) {
+                        skuCollectionBusy = false;
+                    }
                     boolean networkFailure = isNetworkFailure(error);
                     String failureMessage = networkFailure
                         ? tr(
@@ -7822,6 +8009,7 @@ public class MainActivity extends Activity {
             case INVENTORY_MENU:
             case INVENTORY_START:
             case INVENTORY_COUNT: return "Инвентаризация";
+            case SKU_COLLECTION: return "Сборка по SKU";
             case SETTINGS: return "Настройки";
             case INFO: return "Информация";
             case MAIN:
@@ -8998,6 +9186,8 @@ public class MainActivity extends Activity {
             renderInventoryStartScreen();
         } else if (screen == Screen.INVENTORY_COUNT) {
             renderInventoryCountScreen();
+        } else if (screen == Screen.SKU_COLLECTION) {
+            renderSkuCollectionScreen();
         } else if (screen == Screen.INFO) {
             renderMainScreen();
         } else {
@@ -9384,6 +9574,7 @@ public class MainActivity extends Activity {
         INVENTORY_MENU,
         INVENTORY_START,
         INVENTORY_COUNT,
+        SKU_COLLECTION,
         INFO
     }
 

@@ -15,8 +15,8 @@ android {
         applicationId = "pro.logoff.wms.tsd"
         minSdk = 24
         targetSdk = 35
-        versionCode = 150 // FIX: publish complete TSD operation history and error screenshots.
-        versionName = "0.1.151"
+        versionCode = 151 // FIX: publish SKU collection without reusing the installed TSD version code.
+        versionName = "0.1.152"
     }
 
     flavorDimensions += "brand"

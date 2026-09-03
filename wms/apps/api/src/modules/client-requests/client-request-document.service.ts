@@ -417,6 +417,7 @@ function requestTypeLabel(value: ClientRequestType) {
     RETURN: 'Возврат',
     DELIVERY: 'Доставка',
     SERVICE: 'Услуга',
+    SKU_COLLECTION: 'Сборка по SKU',
     OTHER: 'Другое',
   };
   return labels[value];

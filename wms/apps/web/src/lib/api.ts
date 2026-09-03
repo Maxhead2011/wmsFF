@@ -450,7 +450,31 @@ export type ClientStorageBillingMode = 'MONTHLY' | 'ON_SHIPMENT';
 
 export type MarketplaceType = 'WILDBERRIES' | 'OZON' | 'YANDEX_MARKET' | 'SBER_MARKET' | 'OTHER';
 
-export type ClientRequestType = 'INBOUND' | 'OUTBOUND' | 'RETURN' | 'DELIVERY' | 'SERVICE' | 'OTHER';
+export type ClientRequestType = 'INBOUND' | 'OUTBOUND' | 'RETURN' | 'DELIVERY' | 'SERVICE' | 'SKU_COLLECTION' | 'OTHER';
+
+export type SkuCollectionCandidate = {
+  id: string;
+  internalSku: string;
+  clientSku: string | null;
+  article: string | null;
+  name: string;
+  color: string | null;
+  size: string | null;
+  needsChestnyZnak: boolean;
+  barcodes: string[];
+  availableQuantity: number;
+  boxes: Array<{ id: string; code: string; palletCode: string | null; quantity: number }>;
+};
+
+export type SkuCollectionRequest = ClientRequestSummary & {
+  skuCollectionSources: Array<{
+    id: string;
+    sourceBoxCode: string;
+    plannedQuantity: number;
+    pickedQuantity: number;
+    receivedQuantity: number;
+  }>;
+};
 
 export type ClientRequestStatus =
   | 'SUBMITTED'
@@ -8354,6 +8378,18 @@ export async function restoreBillingAdvance(accessToken: string, advanceId: stri
 
 export function fetchInventoryDashboard(accessToken: string) {
   return request<InventoryDashboard>('/inventory/dashboard', { accessToken });
+}
+
+export function searchSkuCollectionCandidates(accessToken: string, clientId: string, search: string) {
+  return request<SkuCollectionCandidate[]>(withQuery('/inventory/sku-collections/search', { clientId, search }), { accessToken });
+}
+
+export function createSkuCollection(accessToken: string, clientId: string, skuId: string) {
+  return request<SkuCollectionRequest>('/inventory/sku-collections', {
+    method: 'POST',
+    body: { clientId, skuId },
+    accessToken,
+  });
 }
 
 export function fetchInventorySession(accessToken: string, id: string) {

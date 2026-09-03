@@ -80,7 +80,13 @@ enum ClientRequestType {
   RETURN
   DELIVERY
   SERVICE
+  SKU_COLLECTION
   OTHER
+}
+
+enum SkuCollectionScanStatus {
+  PICKED
+  RECEIVED
 }
 
 enum ClientRequestStatus {
@@ -1573,6 +1579,8 @@ model ClientRequest {
   fbsOrderLinks                FbsOrderRequestLink[]
   expenseEntries               ExpenseEntry[]
   expenseMaterialMovements     ExpenseMaterialMovement[]
+  skuCollectionSources         SkuCollectionSource[]       @relation("SkuCollectionRequestSources")
+  skuCollectionScans           SkuCollectionScan[]         @relation("SkuCollectionRequestScans")
   createdAt                    DateTime                   @default(now())
   updatedAt                    DateTime                   @updatedAt
 
@@ -1581,6 +1589,55 @@ model ClientRequest {
   @@index([type, status])
   @@index([createdByUserId])
   @@index([assignedToUserId])
+}
+
+model SkuCollectionSource {
+  id              String              @id @default(uuid())
+  requestId       String
+  clientId        String
+  warehouseId     String
+  skuId           String
+  sourceBoxId     String
+  sourceBoxCode   String
+  plannedQuantity Int
+  pickedQuantity  Int                 @default(0)
+  receivedQuantity Int                @default(0)
+  request         ClientRequest       @relation("SkuCollectionRequestSources", fields: [requestId], references: [id], onDelete: Cascade)
+  scans           SkuCollectionScan[]
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@unique([requestId, sourceBoxId, skuId])
+  @@index([warehouseId, clientId, skuId])
+  @@index([requestId, pickedQuantity])
+}
+
+model SkuCollectionScan {
+  id              String                  @id @default(uuid())
+  requestId       String
+  sourceId        String
+  skuId           String
+  barcode         String
+  kiz             String
+  sourceBoxId     String
+  sourceBoxCode   String
+  targetBoxId     String?
+  targetBoxCode   String?
+  status          SkuCollectionScanStatus @default(PICKED)
+  pickedByUserId  String?
+  pickedByName    String?
+  pickedAt        DateTime                @default(now())
+  receivedByUserId String?
+  receivedByName  String?
+  receivedAt      DateTime?
+  request         ClientRequest           @relation("SkuCollectionRequestScans", fields: [requestId], references: [id], onDelete: Cascade)
+  source          SkuCollectionSource     @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  @@unique([requestId, kiz])
+  @@index([requestId, status])
+  @@index([sourceId, status])
 }
 
 model FbsOrderRequestLink {
