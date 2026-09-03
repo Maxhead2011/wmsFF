@@ -11,10 +11,15 @@ const user = {
   writableWarehouseIds: ['wh-1'], clientScopeMode: 'ALL', clientIds: [], writableClientIds: [],
 } as any;
 
-function fixture() {
+function fixture(initialMarkBox = 'source', markValue = kiz) {
   let sourceQuantity = 2;
   let targetQuantity = 0;
-  let markBoxId = 'source';
+  let markBoxId = initialMarkBox;
+  const oldBox = { id: 'old', code: 'FFL_OLD', clientId: 'client-1', warehouseId: 'wh-1', status: 'active' };
+  const oldBalances: any[] = [];
+  const auditRows: any[] = [];
+  const mark = { id: 'mark-1', clientId: 'client-1', skuId: 'sku-1', value: markValue,
+    status: 'AVAILABLE', stockMovementId: 'receipt-1', updatedAt: new Date('2026-07-20') };
   const sku = { id: 'sku-1', clientId: 'client-1', name: 'Костюм', internalSku: 'SKU-1',
     needsChestnyZnak: true, isUnmarked: false, barcodes: [{ value: barcode }] };
   const balance = () => ({ id: 'source-balance', skuId: sku.id, clientId: 'client-1',
@@ -27,21 +32,32 @@ function fixture() {
     box: {
       findUnique: vi.fn(async ({ where }: any) => {
         const code = where.code ?? where.clientId_code?.code;
+        if (where.id === 'old') return oldBox;
+        if (where.id === 'target') return target;
         return code === 'FFL_SOURCE' ? source() : code === target.code ? target : null;
       }),
       create: vi.fn(), update: vi.fn(),
     },
     sku: { findFirst: vi.fn(async () => sku) },
     productMark: {
-      findFirst: vi.fn(async ({ where }: any) => where.value?.equals === kiz &&
+      findFirst: vi.fn(async ({ where }: any) => (where.value?.equals ?? where.value) === mark.value &&
+        (!where.clientId || where.clientId === mark.clientId) &&
+        (!where.status || where.status === mark.status) &&
         (!where.boxId || where.boxId === markBoxId)
-        ? { id: 'mark-1', skuId: sku.id, boxId: markBoxId, status: 'AVAILABLE' } : null),
+        ? { ...mark, boxId: markBoxId } : null),
       count: vi.fn(async () => markBoxId === 'source' ? 1 : 0),
       create: vi.fn(),
       update: vi.fn(async ({ data }: any) => { markBoxId = data.boxId; }),
+      updateMany: vi.fn(async ({ where, data }: any) => {
+        if (where.boxId !== markBoxId || where.status !== mark.status) return { count: 0 };
+        markBoxId = data.boxId;
+        return { count: 1 };
+      }),
     },
     stockBalance: {
-      findFirst: vi.fn(async () => balance()),
+      findFirst: vi.fn(async ({ where }: any) => where.boxId === 'old'
+        ? oldBalances.find(row => row.quantity !== 0) ?? null
+        : where.boxId === 'target' ? (targetQuantity > 0 ? { quantity: targetQuantity } : null) : balance()),
       update: vi.fn(async ({ data }: any) => {
         sourceQuantity -= data.quantity.decrement;
         return balance();
@@ -58,15 +74,27 @@ function fixture() {
         return row;
       }),
     },
-    $transaction: vi.fn(async (fn: any) => fn(db)),
+    fbsTsdAssembly: { findFirst: vi.fn(async (_args: any): Promise<any> => null) },
+    shippedKizHistory: { findFirst: vi.fn(async (_args: any): Promise<any> => null) },
+    fbsWebKizStickerPrint: { findFirst: vi.fn(async (_args: any): Promise<any> => null) },
+    auditLog: { create: vi.fn(async ({ data }: any) => { auditRows.push(data); return data; }) },
+    $transaction: vi.fn(async (fn: any) => {
+      const before = { sourceQuantity, targetQuantity, markBoxId, movements: new Map(movements), audits: [...auditRows] };
+      try { return await fn(db); } catch (error) {
+        ({ sourceQuantity, targetQuantity, markBoxId } = before);
+        movements.clear(); before.movements.forEach((value, key) => movements.set(key, value));
+        auditRows.splice(0, auditRows.length, ...before.audits);
+        throw error;
+      }
+    }),
   };
   const codes = new BoxCodePolicyService({ get: vi.fn(async () => ({ storageBoxPrefix: 'SBOX_' })) } as never);
   const scopes = { requireClientAccess: vi.fn() };
   const service = new StockOperationsService(db as never, scopes as never,
     { balanceKey: () => 'target-key' } as never, undefined, undefined, undefined, codes);
   const payload = { transferMode: 'BOX_TO_STORAGE_BOX', fromBoxCode: 'FFL_SOURCE',
-    toBoxCode: 'SBOX_001', barcode, scanCode: kiz, idempotencyKey: 'move-1' };
-  return { service, codes, db, sku, target, payload, scopes,
+    toBoxCode: 'SBOX_001', barcode, scanCode: markValue, idempotencyKey: 'move-1' };
+  return { service, codes, db, sku, target, payload, scopes, oldBox, oldBalances, mark, auditRows,
     quantities: () => [sourceQuantity, targetQuantity], markBox: () => markBoxId };
 }
 
@@ -169,5 +197,142 @@ describe('TSD storage-box transfer', () => {
     f.target.status = 'archived';
     await expect(f.service.executeTsdTransfer(f.payload, user)).rejects.toThrow(/архив/);
     expect(f.db.stockBalance.update).not.toHaveBeenCalled();
+  });
+});
+
+// TEST: inventory can correct quantities while a known KIZ remains on an empty old box.
+describe('storage-box stale KIZ reconciliation', () => {
+  it('accepts a known KIZ from an empty old box without writes during inspection', async () => {
+    const f = fixture('old');
+    await expect(f.service.inspectTsdTransferItem(f.payload, user)).resolves.toMatchObject({ state: 'SCAN_TARGET' });
+    expect(f.markBox()).toBe('old');
+    expect(f.quantities()).toEqual([2, 0]);
+    expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
+    expect(f.db.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('reconciles the mark and moves one physical unit atomically, with an audit and retry protection', async () => {
+    const f = fixture('old');
+    await expect(f.service.executeTsdTransfer(f.payload, user)).resolves.toMatchObject({ status: 'APPLIED' });
+    expect(f.quantities()).toEqual([1, 1]);
+    expect(f.oldBalances).toEqual([]);
+    expect(f.markBox()).toBe('target');
+    expect(f.db.productMark.create).not.toHaveBeenCalled();
+    expect(f.auditRows).toEqual([expect.objectContaining({
+      userId: user.id, entityId: 'mark-1', action: 'TSD_STORAGE_BOX_KIZ_RECONCILIATION',
+      payload: expect.objectContaining({ previousBoxId: 'old', physicalBoxId: 'source',
+        targetBoxId: 'target', kiz, deviceCode: 'TSD-01', idempotencyKey: 'move-1' }),
+    })]);
+    await expect(f.service.executeTsdTransfer(f.payload, user)).resolves.toMatchObject({ status: 'ALREADY_APPLIED' });
+    expect(f.quantities()).toEqual([1, 1]);
+    expect(f.auditRows).toHaveLength(1);
+  });
+
+  it.each(['AVAILABLE', 'RESERVED', 'SHIPPING'])('rejects an old box with %s stock', async status => {
+    const f = fixture('old'); f.oldBalances.push({ quantity: 1, status });
+    await expect(f.service.executeTsdTransfer(f.payload, user)).rejects.toThrow(/старом коробе/);
+    expect(f.quantities()).toEqual([2, 0]);
+    expect(f.db.stockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['RESERVED', 'SHIPPING'])('rejects a %s mark even when source quantity is available', async status => {
+    const f = fixture('old'); f.mark.status = status;
+    await expect(f.service.inspectTsdTransferItem(f.payload, user)).rejects.toThrow(/недоступен/);
+  });
+
+  it.each([{ clientId: 'other' }, { warehouseId: 'other' }, { warehouseId: null }])(
+    'does not reconcile across client/branch boundaries: %j', async change => {
+      const f = fixture('old'); Object.assign(f.oldBox, change);
+      await expect(f.service.executeTsdTransfer(f.payload, user)).rejects.toThrow(/клиент|филиал/);
+      expect(f.quantities()).toEqual([2, 0]);
+    });
+
+  it('rejects a KIZ of another SKU, and never replaces another mark to make room', async () => {
+    const wrong = fixture('old'); wrong.mark.skuId = 'other';
+    await expect(wrong.service.inspectTsdTransferItem(wrong.payload, user)).rejects.toThrow(/не соответствует/);
+    const full = fixture('old'); full.db.productMark.count.mockResolvedValue(2);
+    await expect(full.service.executeTsdTransfer(full.payload, user)).rejects.toThrow(/привязаны/);
+    expect(full.db.productMark.updateMany).not.toHaveBeenCalled();
+  });
+
+  it.each(['fbsTsdAssembly', 'shippedKizHistory', 'fbsWebKizStickerPrint'] as const)(
+    'rejects a mark already referenced by %s', async model => {
+      const f = fixture('old'); f.db[model].findFirst.mockResolvedValue({ id: 'used', orderId: '123' });
+      await expect(f.service.executeTsdTransfer(f.payload, user)).rejects.toThrow(/заказ|отгруж|этикет/);
+      expect(f.db.stockMovement.create).not.toHaveBeenCalled();
+    });
+
+  it('rejects a box/SKU task even if its KIZ has not been scanned yet', async () => {
+    const f = fixture('old');
+    f.db.fbsTsdAssembly.findFirst.mockImplementation(async ({ where }: any) => where.kiz ? null : { id: 'reserved' });
+    await expect(f.service.executeTsdTransfer(f.payload, user)).rejects.toThrow(/сборк/);
+    expect(f.db.stockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('rechecks protection after inspection, before any stock movement', async () => {
+    const f = fixture('old');
+    await f.service.inspectTsdTransferItem(f.payload, user);
+    f.db.shippedKizHistory.findFirst.mockResolvedValue({ id: 'shipped-between-scans' });
+    await expect(f.service.executeTsdTransfer(f.payload, user)).rejects.toThrow();
+    expect(f.quantities()).toEqual([2, 0]);
+  });
+
+  it.each(['audit failure', 'concurrent mark change'])('rolls back the complete operation on %s', async fault => {
+    const f = fixture('old');
+    if (fault === 'audit failure') f.db.auditLog.create.mockRejectedValue(new Error('audit failure'));
+    else f.db.productMark.updateMany.mockResolvedValue({ count: 0 });
+    await expect(f.service.executeTsdTransfer(f.payload, user)).rejects.toThrow();
+    expect(f.quantities()).toEqual([2, 0]);
+    expect(f.markBox()).toBe('old');
+    expect(f.auditRows).toEqual([]);
+    expect(f.db.productMark.updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves legacy inspection strict and unchanged', async () => {
+    const f = fixture('old');
+    await expect(f.service.inspectTsdTransferItem({ ...f.payload, transferMode: undefined }, user)).rejects.toThrow();
+    expect(f.db.fbsTsdAssembly.findFirst).not.toHaveBeenCalled();
+    expect(f.markBox()).toBe('old');
+  });
+
+  // TEST: GS/crypto bytes are retained; existing order ownership is checked by identity.
+  it('protects a KIZ whose order record has a different crypto tail', async () => {
+    const identity = '0104600000000001215TEST-serial1';
+    const f = fixture('old', `${identity}\u001d91TEST\u001d92CRYPTO`);
+    f.db.fbsTsdAssembly.findFirst.mockImplementation(async ({ where }: any) =>
+      where.kiz?.startsWith === identity ? { id: 'existing-order' } : null);
+    await expect(f.service.executeTsdTransfer(f.payload, user)).rejects.toThrow(/заказ/);
+    expect(f.db.stockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('preserves the full KIZ including GS separators in the reconciliation audit', async () => {
+    const fullKiz = '0104600000000001215TEST-serial1\u001d91TEST\u001d92CRYPTO';
+    const f = fixture('old', fullKiz);
+    await f.service.executeTsdTransfer(f.payload, user);
+    expect(f.auditRows[0].payload.kiz).toBe(fullKiz);
+    expect(f.mark.value).toBe(fullKiz);
+  });
+
+  it('does not accept a mark owned by another client or guess a missing old box', async () => {
+    const foreign = fixture('old'); foreign.mark.clientId = 'other-client';
+    await expect(foreign.service.inspectTsdTransferItem(foreign.payload, user)).rejects.toThrow(/не найден/);
+    const missing = fixture('unknown-box');
+    await expect(missing.service.inspectTsdTransferItem(missing.payload, user)).rejects.toThrow(/клиент|филиал/);
+    expect(missing.db.productMark.create).not.toHaveBeenCalled();
+  });
+
+  it('does not bypass source client access', async () => {
+    const f = fixture('old'); f.scopes.requireClientAccess.mockImplementation(() => { throw new Error('access denied'); });
+    await expect(f.service.executeTsdTransfer(f.payload, user)).rejects.toThrow('access denied');
+    expect(f.db.productMark.findFirst).not.toHaveBeenCalled();
+    expect(f.quantities()).toEqual([2, 0]);
+  });
+
+  it('keeps the old association when destination validation fails', async () => {
+    const f = fixture('old'); f.target.clientId = 'other-client';
+    await expect(f.service.executeTsdTransfer(f.payload, user)).rejects.toThrow();
+    expect(f.markBox()).toBe('old');
+    expect(f.auditRows).toEqual([]);
+    expect(f.quantities()).toEqual([2, 0]);
   });
 });
