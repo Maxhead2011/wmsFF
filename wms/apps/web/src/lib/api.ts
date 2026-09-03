@@ -452,6 +452,7 @@ export type MarketplaceType = 'WILDBERRIES' | 'OZON' | 'YANDEX_MARKET' | 'SBER_M
 
 export type ClientRequestType = 'INBOUND' | 'OUTBOUND' | 'RETURN' | 'DELIVERY' | 'SERVICE' | 'SKU_COLLECTION' | 'OTHER';
 
+// FIX: expose only the DTOs required by the isolated SKU collection panel.
 export type SkuCollectionCandidate = {
   id: string;
   internalSku: string;
@@ -3611,6 +3612,8 @@ export type FbsOrderSelectionPayload = {
   clientId: string;
   orders: Array<{ connectionId: string; id: string }>;
   deliveryDestination?: FbsDeliveryDestination;
+  destinationOfficeId?: string;
+  plannedDeliveryDate?: string;
   marketplaceWarehouseKey?: string;
   sourceRequestId?: string;
 };
@@ -3624,6 +3627,12 @@ function sanitizeFbsOrderSelectionPayload(
     ...(payload.deliveryDestination === undefined
       ? {}
       : { deliveryDestination: payload.deliveryDestination }),
+    ...(payload.destinationOfficeId === undefined
+      ? {}
+      : { destinationOfficeId: payload.destinationOfficeId }),
+    ...(payload.plannedDeliveryDate === undefined
+      ? {}
+      : { plannedDeliveryDate: payload.plannedDeliveryDate }),
     ...(payload.marketplaceWarehouseKey === undefined
       ? {}
       : { marketplaceWarehouseKey: payload.marketplaceWarehouseKey }),
@@ -3726,6 +3735,27 @@ export type FbsOrderActionResult = {
     cancelledOrders: FbsDeliveryRecoveryItem[];
   };
   orders: ClientFbsOrders;
+};
+
+export type FbsSupplyDeliveryOptions = {
+  supplies: Array<{
+    connectionId: string;
+    supplyId: string;
+    orderCount: number;
+    itemCount: number;
+    destinationOfficeId: string | null;
+    destinationOfficeName: string | null;
+  }>;
+  offices: Array<{
+    id: string;
+    name: string;
+    city: string;
+    compatible: boolean;
+  }>;
+  requiredDestinationOfficeId: string | null;
+  earliestWbDeliveryDate: string | null;
+  defaultPlannedDeliveryDate: string;
+  blockers: string[];
 };
 
 export type FbsDeliveryRecoveryItem = {
@@ -8380,6 +8410,7 @@ export function fetchInventoryDashboard(accessToken: string) {
   return request<InventoryDashboard>('/inventory/dashboard', { accessToken });
 }
 
+// FIX: keep current FBS API exports intact while adding SKU collection calls.
 export function searchSkuCollectionCandidates(accessToken: string, clientId: string, search: string) {
   return request<SkuCollectionCandidate[]>(withQuery('/inventory/sku-collections/search', { clientId, search }), { accessToken });
 }
@@ -9906,6 +9937,22 @@ export async function deliverFbsSupplies(accessToken: string, payload: FbsOrderS
     accessToken,
     body: sanitizeFbsOrderSelectionPayload(payload),
   });
+}
+
+// ADDED: load the current WB office and the date hint before the irreversible
+// supply delivery request.
+export async function fetchFbsSupplyDeliveryOptions(
+  accessToken: string,
+  payload: FbsOrderSelectionPayload,
+) {
+  return request<FbsSupplyDeliveryOptions>(
+    '/marketplace-connections/fbs/supplies/delivery-options',
+    {
+      method: 'POST',
+      accessToken,
+      body: sanitizeFbsOrderSelectionPayload(payload),
+    },
+  );
 }
 
 export async function changeFbsSuppliesDestination(
