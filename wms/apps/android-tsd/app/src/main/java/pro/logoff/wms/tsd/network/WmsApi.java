@@ -5,6 +5,7 @@ import java.util.Map;
 
 import retrofit2.Call;
 import retrofit2.http.Body;
+import retrofit2.http.DELETE;
 import retrofit2.http.GET;
 import retrofit2.http.Header;
 import retrofit2.http.Path;
@@ -54,6 +55,7 @@ public interface WmsApi {
     @GET("api/v1/tsd/clients")
     Call<List<TsdClientSummary>> listClients(@Header("Authorization") String authorization);
 
+    // FIX: isolated SKU collection endpoints preserve all existing transfer and FBS routes.
     @GET("api/v1/tsd/sku-collections")
     Call<List<TsdSkuCollection>> listSkuCollections(@Header("Authorization") String authorization);
 
@@ -77,14 +79,91 @@ public interface WmsApi {
         @Body Map<String, Object> request
     );
 
-    @GET("api/v1/tsd/fbs/next")
-    Call<TsdFbsAssemblyResponse> nextFbsAssembly(
+    @GET("api/v1/tsd/transfers/source")
+    Call<TsdTransferResponse> inspectTransferSource(
+        @Header("Authorization") String authorization,
+        @Query("boxCode") String boxCode
+    );
+
+    @POST("api/v1/tsd/transfers/item")
+    Call<TsdTransferResponse> inspectTransferItem(
+        @Header("Authorization") String authorization,
+        @Body Map<String, Object> request
+    );
+
+    @POST("api/v1/tsd/transfers/execute")
+    Call<TsdTransferResponse> executeTransfer(
+        @Header("Authorization") String authorization,
+        @Body Map<String, Object> request
+    );
+
+    @POST("api/v1/tsd/transfers/execute-batch")
+    Call<TsdTransferResponse> executeTransferBatch(
+        @Header("Authorization") String authorization,
+        @Body Map<String, Object> request
+    );
+
+    @GET("api/v1/tsd/storage-pallet/current")
+    Call<TsdStoragePalletResponse> currentStoragePallet(
         @Header("Authorization") String authorization,
         @Query("deviceCode") String deviceCode
     );
 
+    @POST("api/v1/tsd/storage-pallet/open")
+    Call<TsdStoragePalletResponse> openStoragePallet(
+        @Header("Authorization") String authorization,
+        @Body Map<String, Object> request
+    );
+
+    @POST("api/v1/tsd/storage-pallet/{id}/scan-box")
+    Call<TsdStoragePalletResponse> scanStoragePalletBox(
+        @Header("Authorization") String authorization,
+        @Path("id") String id,
+        @Body Map<String, Object> request
+    );
+
+    @POST("api/v1/tsd/storage-pallet/{id}/restore-box")
+    Call<TsdStoragePalletResponse> restoreStoragePalletBox(
+        @Header("Authorization") String authorization,
+        @Path("id") String id,
+        @Body Map<String, Object> request
+    );
+
+    @POST("api/v1/tsd/storage-pallet/{id}/close")
+    Call<TsdStoragePalletResponse> closeStoragePallet(
+        @Header("Authorization") String authorization,
+        @Path("id") String id
+    );
+
+    @DELETE("api/v1/tsd/storage-pallet/{id}")
+    Call<TsdStoragePalletResponse> deleteStoragePallet(
+        @Header("Authorization") String authorization,
+        @Path("id") String id
+    );
+
+    @GET("api/v1/tsd/fbs/next")
+    Call<TsdFbsAssemblyResponse> nextFbsAssembly(
+        @Header("Authorization") String authorization,
+        @Query("deviceCode") String deviceCode,
+        @Query("requestId") String requestId
+    );
+
+    @GET("api/v1/tsd/fbs/requests")
+    Call<TsdFbsRequestsResponse> listFbsAssemblyRequests(
+        @Header("Authorization") String authorization,
+        @Query("deviceCode") String deviceCode,
+        @Query("archive") String archive
+    );
+
     @POST("api/v1/tsd/fbs/tasks/{id}/scan-box")
     Call<TsdFbsAssemblyResponse> scanFbsBox(
+        @Header("Authorization") String authorization,
+        @Path("id") String id,
+        @Body Map<String, Object> request
+    );
+
+    @POST("api/v1/tsd/fbs/tasks/{id}/scan")
+    Call<TsdFbsAssemblyResponse> scanFbsCode(
         @Header("Authorization") String authorization,
         @Path("id") String id,
         @Body Map<String, Object> request
@@ -102,6 +181,12 @@ public interface WmsApi {
         @Header("Authorization") String authorization,
         @Path("id") String id,
         @Body Map<String, Object> request
+    );
+
+    @POST("api/v1/tsd/fbs/tasks/{id}/undo-kiz")
+    Call<TsdFbsAssemblyResponse> undoFbsKiz(
+        @Header("Authorization") String authorization,
+        @Path("id") String id
     );
 
     @POST("api/v1/tsd/fbs/tasks/{id}/complete")
@@ -141,8 +226,39 @@ public interface WmsApi {
         @Path("id") String id
     );
 
+    @POST("api/v1/tsd/fbs/cargo/{id}/cancel")
+    Call<TsdFbsCargoPackingResponse> cancelFbsCargoPacking(
+        @Header("Authorization") String authorization,
+        @Path("id") String id
+    );
+
     @POST("api/v1/tsd/fbs/cargo/{id}/close")
     Call<TsdFbsCargoPackingResponse> closeFbsCargoPacking(
+        @Header("Authorization") String authorization,
+        @Path("id") String id
+    );
+
+    @GET("api/v1/ozon-fbo/overview")
+    Call<TsdOzonFboOverview> listOzonFboPlans(
+        @Header("Authorization") String authorization,
+        @Query("clientId") String clientId
+    );
+
+    @GET("api/v1/ozon-fbo/plans/{id}")
+    Call<TsdOzonFboPlan> getOzonFboPlan(
+        @Header("Authorization") String authorization,
+        @Path("id") String id
+    );
+
+    @POST("api/v1/ozon-fbo/boxes/{id}/scan")
+    Call<TsdOzonFboPlan.Box> scanOzonFboBox(
+        @Header("Authorization") String authorization,
+        @Path("id") String id,
+        @Body Map<String, String> request
+    );
+
+    @POST("api/v1/ozon-fbo/boxes/{id}/close")
+    Call<TsdOzonFboPlan> closeOzonFboBox(
         @Header("Authorization") String authorization,
         @Path("id") String id
     );
@@ -224,7 +340,10 @@ public interface WmsApi {
     );
 
     @GET("api/v1/inventory/dashboard")
-    Call<TsdInventoryDashboard> inventoryDashboard(@Header("Authorization") String authorization);
+    Call<TsdInventoryDashboard> inventoryDashboard(
+        @Header("Authorization") String authorization,
+        @Query("workOnly") boolean workOnly
+    );
 
     @POST("api/v1/inventory/sessions")
     Call<TsdInventorySession> startInventory(
@@ -235,7 +354,8 @@ public interface WmsApi {
     @GET("api/v1/inventory/sessions/{id}")
     Call<TsdInventorySession> getInventory(
         @Header("Authorization") String authorization,
-        @Path("id") String id
+        @Path("id") String id,
+        @Query("workOnly") boolean workOnly
     );
 
     @POST("api/v1/inventory/sessions/{id}/boxes/open")
@@ -263,6 +383,13 @@ public interface WmsApi {
     Call<TsdInventoryBox> finishInventoryBox(
         @Header("Authorization") String authorization,
         @Path("id") String id
+    );
+
+    @POST("api/v1/inventory/boxes/{id}/resolve")
+    Call<TsdInventoryBox> resolveInventoryBox(
+        @Header("Authorization") String authorization,
+        @Path("id") String id,
+        @Body Map<String, Object> request
     );
 
     @POST("api/v1/inventory/sessions/{id}/review")

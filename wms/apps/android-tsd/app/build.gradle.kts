@@ -13,10 +13,47 @@ android {
 
     defaultConfig {
         applicationId = "pro.logoff.wms.tsd"
-        minSdk = 26
+        minSdk = 24
         targetSdk = 35
-        versionCode = 150 // FIX: add the isolated SKU collection and re-receipt workflow.
-        versionName = "0.1.151"
+        versionCode = 151 // FIX: publish SKU collection without reusing the installed TSD version code.
+        versionName = "0.1.152"
+    }
+
+    flavorDimensions += "brand"
+    productFlavors {
+        create("logoff") {
+            dimension = "brand"
+            applicationId = "pro.logoff.wms.tsd"
+            resValue("string", "app_name", "LOGOFF WMS TSD")
+            buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
+            buildConfigField("String", "API_BASE_URL", "\"https://wms.logoff.pro/\"")
+            buildConfigField("String", "APK_URL", "\"https://wms.logoff.pro/downloads/logoff-tsd.apk\"")
+            manifestPlaceholders["usesCleartextTraffic"] = "false"
+        }
+        create("ffullhab") {
+            dimension = "brand"
+            applicationId = "pro.ffullhab.wms.tsd"
+            versionNameSuffix = "-ff"
+            resValue("string", "app_name", "ФФУЛЛ-ХАБ WMS TSD")
+            buildConfigField("String", "BRAND_NAME", "\"ФФУЛЛ-ХАБ ТСД\"")
+            buildConfigField("String", "API_BASE_URL", "\"https://wms.ffullhab.ru/\"")
+            buildConfigField("String", "APK_URL", "\"https://wms.ffullhab.ru/downloads/ff-tsd.apk\"")
+            manifestPlaceholders["usesCleartextTraffic"] = "false"
+        }
+        create("platform") {
+            dimension = "brand"
+            applicationId = "ru.ffwb.wms.tsd"
+            versionNameSuffix = "-platform"
+            resValue("string", "app_name", "WMS Platform TSD")
+            buildConfigField("String", "BRAND_NAME", "\"WMS PLATFORM ТСД\"")
+            buildConfigField("String", "API_BASE_URL", "\"http://62.113.104.175/\"")
+            buildConfigField("String", "APK_URL", "\"http://62.113.104.175/downloads/wms-tsd.apk\"")
+            manifestPlaceholders["usesCleartextTraffic"] = "true"
+        }
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     signingConfigs {
