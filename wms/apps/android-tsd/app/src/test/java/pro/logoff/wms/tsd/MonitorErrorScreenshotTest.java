@@ -33,7 +33,10 @@ public class MonitorErrorScreenshotTest {
     private static String source(String relative) throws IOException {
         Path[] candidates = { Paths.get(relative), Paths.get("app").resolve(relative) };
         for (Path candidate : candidates) {
-            if (Files.isRegularFile(candidate)) return Files.readString(candidate, StandardCharsets.UTF_8);
+            // TEST: Android unit tests compile with Java 8 language APIs.
+            if (Files.isRegularFile(candidate)) {
+                return new String(Files.readAllBytes(candidate), StandardCharsets.UTF_8);
+            }
         }
         throw new IOException("Source file not found: " + relative);
     }

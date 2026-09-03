@@ -266,6 +266,20 @@ export class StockOperationsService {
   }
 
   async inspectTsdTransferItem(payload: Record<string, unknown>, user: AuthUser) {
+    // FIX: opt-in piece-by-piece mode validates scans without replacing or creating KIZ records.
+    if (payload.transferMode === 'BOX_TO_STORAGE_BOX') {
+      const sourceBox = await this.loadTsdTransferSourceBox(this.prisma,
+        requiredTsdTransferText(payload.fromBoxCode, 'Сначала отсканируйте исходный короб.'), user);
+      const item = await this.resolveStorageBoxTransferItem(this.prisma, sourceBox, payload, false);
+      return {
+        state: item.requiresKizRegistration ? 'SCAN_KIZ' : 'SCAN_TARGET',
+        sourceBox: this.formatTsdTransferSource(sourceBox).sourceBox,
+        item: formatTsdTransferItem(item),
+        message: item.requiresKizRegistration
+          ? `ШК товара «${item.sku.name}» принят. Отсканируйте КИЗ этой единицы.`
+          : `Товар «${item.sku.name}» проверен. Отсканируйте бокс назначения.`,
+      };
+    }
     const fromBoxCode = requiredTsdTransferText(
       payload.fromBoxCode,
       'Сначала отсканируйте исходный короб.',
@@ -312,12 +326,20 @@ export class StockOperationsService {
   async executeTsdTransfer(payload: Record<string, unknown>, user: AuthUser) {
     await this.inventoryLock?.assertStockMovementsAllowed();
     const warehouseId = this.resolveWritableWarehouseId(user);
+    const storageBoxMode = payload.transferMode === 'BOX_TO_STORAGE_BOX';
+    if (storageBoxMode && !this.boxCodes) {
+      throw new BadRequestException('Настройки префикса боксов хранения недоступны.');
+    }
     const fromBoxCode = this.boxCodes
       ? await this.boxCodes.normalize(
           requiredTsdTransferText(payload.fromBoxCode, 'Сначала отсканируйте исходный короб.'),
         )
       : requiredTsdTransferText(payload.fromBoxCode, 'Сначала отсканируйте исходный короб.');
-    const toBoxCode = this.boxCodes
+    const toBoxCode = storageBoxMode
+      ? await this.boxCodes!.requireStorageBox(
+          requiredTsdTransferText(payload.toBoxCode, 'Отсканируйте бокс назначения.'),
+        )
+      : this.boxCodes
       ? await this.boxCodes.requireAllowed(
           requiredTsdTransferText(payload.toBoxCode, 'Отсканируйте короб назначения.'),
         )
@@ -338,6 +360,9 @@ export class StockOperationsService {
       });
       if (existing) {
         this.clientScopes.requireClientAccess(user, existing.clientId, 'write');
+        if (storageBoxMode && warehouseId && existing.warehouseId !== warehouseId) {
+          throw new ForbiddenException('Перемещение относится к другому филиалу.');
+        }
         const inbound = await tx.stockMovement.findUnique({
           where: { idempotencyKey: `${idempotencyKey}:in` },
           include: { box: { select: { code: true } } },
@@ -365,7 +390,9 @@ export class StockOperationsService {
       const operationWarehouseId =
         warehouseId ??
         this.requireBalanceWarehouseId(sourceBox.warehouseId ?? user.activeWarehouseId);
-      const item = await this.resolveTsdTransferScannedItem(tx, sourceBox, scanCode);
+      const item = storageBoxMode
+        ? await this.resolveStorageBoxTransferItem(tx, sourceBox, payload, true)
+        : await this.resolveTsdTransferScannedItem(tx, sourceBox, scanCode);
       await this.applyTransferBetweenBoxes(tx, {
         clientId: sourceBox.clientId,
         skuId: item.sku.id,
@@ -374,7 +401,9 @@ export class StockOperationsService {
         quantity: 1,
         status: StockStatus.AVAILABLE,
         idempotencyKey,
-        sourceDocument: `TSD ${user.deviceCode ?? user.id}`,
+        sourceDocument: storageBoxMode
+          ? `TSD ${user.deviceCode ?? user.id}; worker ${user.id}; BOX_TO_STORAGE_BOX`
+          : `TSD ${user.deviceCode ?? user.id}`,
         comment: `Перемещение на ТСД: ${sourceBox.code} → ${toBoxCode}`,
       }, operationWarehouseId);
 
@@ -3922,6 +3951,34 @@ export class StockOperationsService {
         })),
       },
     };
+  }
+
+  // FIX: revalidate the barcode/KIZ pair inside the same transaction as the movement.
+  private async resolveStorageBoxTransferItem(
+    db: TsdTransferDb,
+    sourceBox: TsdTransferSourceBox,
+    payload: Record<string, unknown>,
+    complete: boolean,
+  ): Promise<TsdTransferScannedItem> {
+    const scanCode = requiredTsdTransferText(payload.scanCode, 'Отсканируйте товар.');
+    const hasBarcode = typeof payload.barcode === 'string' && payload.barcode.trim().length > 0;
+    if (complete && !hasBarcode) {
+      throw new BadRequestException('Сначала отсканируйте ШК товара.');
+    }
+    const barcode = hasBarcode ? String(payload.barcode).trim() : scanCode;
+    const product = await this.resolveTsdTransferScannedItem(db, sourceBox, barcode);
+    if (product.scanType !== 'BARCODE') {
+      throw new BadRequestException('Сначала отсканируйте ШК товара, затем его КИЗ.');
+    }
+    if (!hasBarcode) return product;
+    const item = await this.resolveTsdTransferScannedItem(db, sourceBox, scanCode);
+    if (item.sku.id !== product.sku.id) {
+      throw new BadRequestException('КИЗ не соответствует отсканированному ШК товара.');
+    }
+    if (product.requiresKizRegistration && !item.productMarkId) {
+      throw new BadRequestException('После ШК товара отсканируйте КИЗ этой единицы.');
+    }
+    return item;
   }
 
   private async resolveTsdTransferScannedItem(

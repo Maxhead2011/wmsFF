@@ -13,6 +13,9 @@ public class TsdFbsCargoPackingResponse {
         public Client client;
         public String connectionId;
         public String supplyId;
+        public String warehouseId;
+        public String warehouseName;
+        public List<Integer> requestNumbers;
         public String deliveryDestination;
         public String packingMode;
         public int itemsPerCargoPlace;
@@ -24,6 +27,7 @@ public class TsdFbsCargoPackingResponse {
         public int waitingAssembly;
         public int closedCargoPlaces;
         public boolean readyToDeliver;
+        public boolean ignored;
         public List<Packing> cargoPlaces;
     }
 
@@ -35,6 +39,10 @@ public class TsdFbsCargoPackingResponse {
 
     public static class Packing {
         public String id;
+        public String supplyId;
+        public String warehouseId;
+        public String warehouseName;
+        public List<Integer> requestNumbers;
         public String cargoPlaceId;
         public String cargoPlaceBarcode;
         public String deliveryDestination;
@@ -53,6 +61,7 @@ public class TsdFbsCargoPackingResponse {
     public static class Order {
         public String orderId;
         public String requestId;
+        public int requestNumber;
         public String productName;
         public String article;
         public String color;

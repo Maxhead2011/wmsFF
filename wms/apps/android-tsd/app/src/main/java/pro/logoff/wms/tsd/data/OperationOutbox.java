@@ -21,6 +21,7 @@ public class OperationOutbox {
         int quantity,
         String status,
         String sourceDocument,
+        String receiptMode,
         String comment
     ) {
         Map<String, String> payload = compactPayload();
@@ -31,6 +32,7 @@ public class OperationOutbox {
         put(payload, "quantity", String.valueOf(quantity));
         put(payload, "status", status);
         put(payload, "sourceDocument", sourceDocument);
+        put(payload, "receiptMode", receiptMode);
         put(payload, "comment", comment);
 
         PendingOperation operation = new PendingOperation(

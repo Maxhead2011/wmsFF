@@ -612,6 +612,13 @@ public class MainActivity extends Activity {
         TsdTransferResponse.SourceBox source =
             transferWorkflow == null ? null : transferWorkflow.sourceBox;
         if (source == null) {
+            // FIX: isolated one-unit flow keeps the existing batch transfer unchanged.
+            if ("logoff".equals(BuildConfig.FLAVOR)) {
+                root.addView(primaryMenuButton(
+                    tr("ИЗ КОРОБА В БОКС ХРАНЕНИЯ", "QUTIDAN SAQLASH BOKSIGA"),
+                    view -> startActivity(new Intent(this, StorageBoxTransferActivity.class))
+                ));
+            }
             root.addView(messageView(tr(
                 "Шаг 1 из 3. Отсканируйте исходный короб.",
                 "1/3-qadam. Manba qutini skanerlang."

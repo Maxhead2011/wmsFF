@@ -9,4 +9,13 @@ public class TsdSearchBoxTask {
     public boolean requiresRelabel;
     public boolean requiresMovement;
     public boolean shipsWhole;
+    public StorageLocation storageLocation;
+
+    public static class StorageLocation {
+        public String palletId;
+        public String palletCode;
+        public String zoneId;
+        public String zoneCode;
+        public String zoneName;
+    }
 }
