@@ -1981,6 +1981,9 @@ model FbsSupplyPlan {
   sentToWbAt               DateTime?
   sentToWbByUserId         String?
   sentToWbByName           String?
+  destinationOfficeId      String?
+  destinationOfficeName    String?
+  plannedDeliveryDate      DateTime?              @db.Date
   ignoredAt                DateTime?
   ignoredByUserId          String?
   ignoredByName            String?
