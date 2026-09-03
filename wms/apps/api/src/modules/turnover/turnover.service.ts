@@ -1111,8 +1111,11 @@ export class TurnoverService {
       }
 
       if (dto.action === TurnoverActionKind.ADD) {
-        const targetBox = dto.targetBoxCode
-          ? await this.ensureBox(tx, dto.clientId, dto.targetBoxCode, warehouseScope)
+        // FIX: "Без короба" is a UI label, not a physical box code. Treat it
+        // exactly like an empty target so boxless clients keep sellable stock.
+        const targetBoxCode = normalizeTurnoverTargetBoxCode(dto.targetBoxCode);
+        const targetBox = targetBoxCode
+          ? await this.ensureBox(tx, dto.clientId, targetBoxCode, warehouseScope)
           : null;
         if (!targetBox) {
           this.assertUnambiguousBoxlessClient(dto.clientId, warehouseScope);
@@ -2361,6 +2364,14 @@ function warehouseScopedInternalWarehouseId(user: AuthUser) {
     return null;
   }
   return user.activeWarehouseId;
+}
+
+export function normalizeTurnoverTargetBoxCode(value?: string) {
+  const cleanCode = value?.trim();
+  if (!cleanCode) return null;
+  return cleanCode.toLocaleUpperCase('ru-RU') === 'БЕЗ КОРОБА'
+    ? null
+    : cleanCode;
 }
 
 const DOCUMENT_MOVEMENT_TYPES: MovementType[] = [...INCOMING_DOCUMENT_MOVEMENT_TYPES, MovementType.SHIP];
