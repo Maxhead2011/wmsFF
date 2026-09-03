@@ -1,6 +1,9 @@
 {
-  "versionCode": 148,
-  "versionName": "0.1.149",
+  "versionCode": 151,
+  "versionName": "0.1.152",
   "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd.apk",
-  "releaseNotes": "Локальные заявки «FBS ДОВОЗ» завершаются без повторной наклейки, которую WB уже не возвращает для complete/shipped-заказов; обычные WB-заказы по-прежнему требуют настоящую наклейку."
+  "sha256": "a5d7d4bd7c9b3c1ae73a424bc87f01d14a4ed85800c0665ef685d675bed6796a",
+  "size": 2222533,
+  "releasedAt": "2026-09-03T16:34:15+00:00",
+  "releaseNotes": "Добавлена внутренняя «Сборка по SKU»: отбор по исходному коробу, ШК и КИЗ, затем повторная приёмка в бокс с переносом КИЗ."
 }
