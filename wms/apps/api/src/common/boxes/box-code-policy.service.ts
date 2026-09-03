@@ -85,6 +85,16 @@ export class BoxCodePolicyService {
     this.cached = null;
     return policy;
   }
+
+  // FIX: storage boxes have their own configured prefix; ordinary box rules stay unchanged.
+  async requireStorageBox(value: string) {
+    const { storageBoxPrefix } = await this.getPolicy();
+    const normalized = await this.normalize(value);
+    if (!normalized.startsWith(storageBoxPrefix) || normalized.length <= storageBoxPrefix.length) {
+      throw new BadRequestException(`Отсканируйте бокс хранения с префиксом ${storageBoxPrefix} и номером.`);
+    }
+    return normalized;
+  }
 }
 
 export function normalizeBoxCodePolicy(value: unknown): BoxCodePolicy {

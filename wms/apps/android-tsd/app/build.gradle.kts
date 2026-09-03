@@ -15,8 +15,8 @@ android {
         applicationId = "pro.logoff.wms.tsd"
         minSdk = 24
         targetSdk = 35
-        versionCode = 151 // FIX: publish SKU collection without reusing the installed TSD version code.
-        versionName = "0.1.152"
+        versionCode = 152 // FIX: publish box-to-storage-box flow without reusing an installed version code.
+        versionName = "0.1.153"
     }
 
     flavorDimensions += "brand"

@@ -150,6 +150,15 @@ public class TsdFbsAssemblyResponse {
         public List<String> neededBoxCodes;
         // FIX: Employee UI receives only the aggregate, without next-pallet details.
         public int additionalPalletCount;
+        // FIX: restore the field consumed by the current TSD pallet screen.
+        public List<NearbyPallet> nearbyPallets;
+    }
+
+    public static class NearbyPallet {
+        public String id;
+        public String code;
+        public int neededBoxes;
+        public List<String> neededBoxCodes;
     }
 
     public static class StorageZone {
