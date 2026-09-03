@@ -1398,6 +1398,12 @@
   box-shadow: inset 5px 0 0 #ea580c;
 }
 
+/* FIX: internal SKU collection remains visibly orange at every workflow status. */
+.client-request-table tbody tr.client-request-row--sku-collection > td { background: #fff7ed; border-bottom-color: #fed7aa; }
+.client-request-table tbody tr.client-request-row--sku-collection > td:first-child { box-shadow: inset 4px 0 0 #f97316; }
+.client-request-sku-collection-badge { background: #ffedd5; border: 1px solid #fdba74; border-radius: 999px; color: #9a3412; display: inline-flex; font-size: 10px; font-weight: 900; margin-top: 5px; padding: 3px 7px; }
+.client-request-sku-collection-process { color: #9a3412; display: inline-block; font-size: 11px; font-weight: 800; line-height: 1.3; }
+
 .client-request-fbs-recovery-badge {
   display: inline-flex;
   width: fit-content;

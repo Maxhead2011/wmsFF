@@ -67,6 +67,7 @@ const requestTypeLabels: Record<ClientRequestType, string> = {
   RETURN: 'Возврат',
   DELIVERY: 'Доставка',
   SERVICE: 'Услуга',
+  SKU_COLLECTION: 'Сборка по SKU',
   OTHER: 'Другое',
 };
 

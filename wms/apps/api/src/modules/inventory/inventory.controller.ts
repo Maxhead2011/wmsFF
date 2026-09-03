@@ -13,12 +13,28 @@ import {
   StartInventoryDto,
 } from './dto/inventory.dto';
 import { InventoryService } from './inventory.service';
+import { CreateSkuCollectionDto, SearchSkuCollectionDto } from './dto/sku-collection.dto';
+import { SkuCollectionService } from './sku-collection.service';
 
 @ApiTags('inventory')
 @RequirePermissions('stock:read')
 @Controller('inventory')
 export class InventoryController {
-  constructor(private readonly inventory: InventoryService) {}
+  constructor(
+    private readonly inventory: InventoryService,
+    private readonly skuCollections: SkuCollectionService,
+  ) {}
+
+  @Get('sku-collections/search')
+  searchSkuCollection(@Query() dto: SearchSkuCollectionDto, @CurrentUser() user: AuthUser) {
+    return this.skuCollections.search(dto.clientId, dto.search, user);
+  }
+
+  @Post('sku-collections')
+  @RequirePermissions('stock:write')
+  createSkuCollection(@Body() dto: CreateSkuCollectionDto, @CurrentUser() user: AuthUser) {
+    return this.skuCollections.create(dto, user);
+  }
 
   @Get('dashboard')
   dashboard(@Query('workOnly') workOnly: string | undefined, @CurrentUser() user: AuthUser) {

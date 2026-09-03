@@ -15,8 +15,8 @@ android {
         applicationId = "pro.logoff.wms.tsd"
         minSdk = 26
         targetSdk = 35
-        versionCode = 149 // FIX: publish complete TSD operation history and error screenshots.
-        versionName = "0.1.150"
+        versionCode = 150 // FIX: add the isolated SKU collection and re-receipt workflow.
+        versionName = "0.1.151"
     }
 
     signingConfigs {
@@ -51,4 +51,5 @@ dependencies {
     implementation("com.squareup.retrofit2:retrofit:2.11.0")
     implementation("com.squareup.retrofit2:converter-moshi:2.11.0")
     annotationProcessor("androidx.room:room-compiler:2.7.1")
+    testImplementation("junit:junit:4.13.2")
 }
