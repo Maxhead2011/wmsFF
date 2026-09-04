@@ -859,11 +859,7 @@ export class TsdAssemblyService {
   }
 
   private async loadFbsAssemblyFacts(requestId: string, requestRows: PickInstructionDocument['rows']) {
-    const [request, links, assemblyRows, duplicateKizEvents, localKizConflictEvents] = await Promise.all([
-      this.prisma.clientRequest.findUnique({
-        where: { id: requestId },
-        select: { fbsEmergencyAssemblyAt: true },
-      }),
+    const [links, rows, duplicateKizEvents, localKizConflictEvents] = await Promise.all([
       this.prisma.fbsOrderRequestLink.findMany({
         where: {
           requestId,
@@ -939,13 +935,8 @@ export class TsdAssemblyService {
     if (links.length === 0) {
       return null;
     }
-    const emergencyAssemblyAt = request?.fbsEmergencyAssemblyAt?.getTime() ?? null;
-    const rows = assemblyRows.filter(
-      (row) =>
-        row.status !== 'COMPLETED' ||
-        emergencyAssemblyAt === null ||
-        Boolean(row.completedAt && row.completedAt.getTime() >= emergencyAssemblyAt),
-    );
+    // FIX: keep saved completion facts across local-search activation, matching TSD and online progress.
+    // Full emergency reset explicitly changes task statuses and remains unaffected.
     const skuIds = uniqueSorted([
       ...rows.map((row) => row.skuId),
       ...requestRows.map((row) => row.skuId).filter((value): value is string => Boolean(value)),
