@@ -5148,21 +5148,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           },
         })
       : [];
-    const emergencyAssemblyAtByRequest = new Map(
-      links.map((link) => [
-        link.requestId,
-        link.request.fbsEmergencyAssemblyAt?.getTime() ?? null,
-      ]),
-    );
     const requestOrderKey = (requestId: string, connectionId: string, orderId: string) =>
       `${requestId}:${selectionKey(connectionId, orderId)}`;
     const completedOrderKeys = new Set(
       activeTasks
-        .filter((task) => {
-          if (task.status !== 'COMPLETED') return false;
-          const emergencyAt = emergencyAssemblyAtByRequest.get(task.requestId);
-          return emergencyAt == null || Boolean(task.completedAt && task.completedAt.getTime() >= emergencyAt);
-        })
+        // FIX: completed tasks stay completed when only the missing remainder is searched.
+        // Full emergency restoration explicitly resets task statuses in its own transaction.
+        .filter((task) => task.status === 'COMPLETED')
         .map((task) => requestOrderKey(task.requestId, task.connectionId, task.orderId)),
     );
     const pendingLinks = activeLinks.filter(
@@ -5329,6 +5321,20 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         choice.noAvailableStock += 1;
       } else {
         choice.readyOrders += 1;
+      }
+    }
+
+    // FIX: retain the legacy pending total, but show full progress in the existing TSD title.
+    for (const link of activeLinks) {
+      const choice = choices.get(link.requestId);
+      if (choice?.emergencyAssemblyAt &&
+          completedOrderKeys.has(requestOrderKey(link.requestId, link.connectionId, link.orderId))) {
+        choice.completedOrders += 1;
+      }
+    }
+    for (const choice of choices.values()) {
+      if (choice.emergencyAssemblyAt && choice.completedOrders > 0) {
+        choice.title += ` · Собрано ${choice.completedOrders}/${choice.completedOrders + choice.totalOrders} · Локальный поиск`;
       }
     }
 
@@ -21447,6 +21453,69 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
       throw caught;
     }
+  }
+
+  // ADDED: explicitly authorized local search, without resetting completed or physical work.
+  async enableFbsRemainingSearch(requestIdValue: string, user: AuthUser) {
+    requireFbsEmergencyAssemblyAccess(user);
+    const requestId = requiredFbsTsdText(requestIdValue, 'Не указана заявка FBS.');
+    const result = await this.prisma.$transaction(async (tx) => {
+      const request = await tx.clientRequest.findUnique({ where: { id: requestId }, select: {
+        id: true, number: true, clientId: true, type: true, status: true, updatedAt: true,
+        fbsEmergencyAssemblyAt: true,
+        fbsOrderLinks: { select: { marketplace: true, connectionId: true, orderId: true,
+          syncStatus: true, lastCategory: true, lastSupplierStatus: true } },
+      } });
+      if (!request) throw new NotFoundException('FBS-заявка не найдена.');
+      this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+      if (request.type !== ClientRequestType.OUTBOUND || !FBS_REQUEST_COMPOSITION_STATUSES.has(request.status)) {
+        throw new BadRequestException('Локальный поиск доступен только для незакрытой заявки на отгрузку.');
+      }
+      const links = request.fbsOrderLinks.filter((link) => link.syncStatus === FBS_REQUEST_LINK_ACTIVE);
+      if (!links.length || links.some((link) => link.marketplace !== MarketplaceType.WILDBERRIES)) {
+        throw new BadRequestException('Локальный поиск доступен только для FBS-заявки Wildberries.');
+      }
+      const tasks = await tx.fbsTsdAssembly.findMany({ where: { requestId }, select: {
+        marketplace: true, connectionId: true, orderId: true, status: true, boxId: true,
+        sourceBarcode: true, barcode: true, kiz: true, relabelConfirmedAt: true, completedAt: true,
+      } });
+      const completedKeys = new Set(tasks.filter((task) => task.status === 'COMPLETED')
+        .map((task) => selectionKey(task.connectionId, task.orderId)));
+      const pending = links.filter((link) => !completedKeys.has(selectionKey(link.connectionId, link.orderId)));
+      const counts = { completedOrders: links.length - pending.length, remainingOrders: pending.length };
+      if (request.fbsEmergencyAssemblyAt) {
+        return { status: 'ALREADY_APPLIED' as const, requestId, clientId: request.clientId, ...counts };
+      }
+      if (!pending.length) throw new BadRequestException('Все заказы уже собраны. Повторный поиск не требуется.');
+      if (pending.some((link) => !['shipped', 'archive'].includes(link.lastCategory ?? '') || link.lastSupplierStatus !== 'complete')) {
+        throw new BadRequestException('Остались активные или отменённые заказы WB. Их нельзя переводить в локальный поиск этой командой.');
+      }
+      const pendingKeys = new Set(pending.map((link) => selectionKey(link.connectionId, link.orderId)));
+      if (tasks.some((task) => pendingKeys.has(selectionKey(task.connectionId, task.orderId)) &&
+          (![FBS_TSD_RESERVED_STATUS, FBS_TSD_WAITING_STOCK_STATUS, 'RELEASED'].includes(task.status) ||
+            task.boxId || task.sourceBarcode || task.barcode || task.kiz || task.relabelConfirmedAt || task.completedAt))) {
+        throw new BadRequestException('Осталось задание с начатым отбором или возвратом. Требуется отдельная проверка, сброс не выполнен.');
+      }
+      const enabledAt = new Date();
+      const changed = await tx.clientRequest.updateMany({ where: {
+        id: requestId, updatedAt: request.updatedAt, fbsEmergencyAssemblyAt: null,
+        status: { in: [...FBS_REQUEST_COMPOSITION_STATUSES] },
+      }, data: { status: ClientRequestStatus.IN_WORK, fbsEmergencyAssemblyAt: enabledAt,
+        fbsEmergencyAssemblyByUserId: user.id, fbsEmergencyAssemblyByName: user.name } });
+      if (changed.count !== 1) throw new BadRequestException('Заявка изменилась. Обновите её и повторите проверку.');
+      await tx.clientRequestEvent.create({ data: { requestId, clientId: request.clientId,
+        eventType: ClientRequestEventType.COMMENT, title: 'Включён локальный поиск несобранных FBS-заказов',
+        body: `Собрано ${counts.completedOrders}/${links.length}. Найти: ${pending.map((link) => link.orderId).join(', ')}. Собранные заказы сохранены; WB и остатки не изменялись.`,
+        createdByUserId: user.id } });
+      await tx.auditLog.create({ data: { userId: user.id, action: 'FBS_REMAINING_SEARCH_ENABLED',
+        entity: 'ClientRequest', entityId: requestId, payload: { requestNumber: request.number,
+          ...counts, orderIds: pending.map((link) => link.orderId), previousStatus: request.status,
+          enabledAt: enabledAt.toISOString(), wbMutationPerformed: false, resetAssemblies: 0 } } });
+      return { status: 'APPLIED' as const, requestId, clientId: request.clientId, ...counts };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    this.fbsOrdersCache.delete(result.clientId);
+    this.fbsTsdRequestFallbackCache.delete(result.clientId);
+    return result;
   }
 
   async enableFbsEmergencyAssembly(requestIdValue: string, user: AuthUser) {
