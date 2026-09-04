@@ -10,4 +10,7 @@ public class TsdInventoryLine {
     public int countedQuantity;
     public int difference;
     public String decision;
+    // ADDED: optional response fields for LOGOFF barcode/KIZ counting.
+    public String scanState;
+    public boolean duplicate;
 }

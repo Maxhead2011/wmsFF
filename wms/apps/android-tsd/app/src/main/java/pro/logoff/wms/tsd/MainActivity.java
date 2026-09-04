@@ -166,6 +166,9 @@ public class MainActivity extends Activity {
     private EditText inventoryBoxInput;
     private EditText inventoryItemInput;
     private EditText inventoryQuantityInput;
+    // ADDED: only LOGOFF opts in; sold-VM barcode workflow stays unchanged.
+    private boolean inventoryCaptureKiz = "logoff".equals(BuildConfig.FLAVOR);
+    private final InventoryKizScanState inventoryKizScan = new InventoryKizScanState();
     private EditText inventoryTransferTargetInput;
     private EditText fbsScanInput;
     private EditText fbsCargoScanInput;
@@ -2002,8 +2005,10 @@ public class MainActivity extends Activity {
                 mandatoryFbsAuditSessionId = created.id;
                 persistMandatoryFbsAuditState();
                 statusMessage = tr(
-                    "Отсканируйте каждую единицу только по ШК товара. КИЗ в этой проверке не требуется.",
-                    "Har bir birlikni faqat mahsulot SHKsi bilan skanerlang. Bu tekshiruvda KIZ kerak emas."
+                    inventoryCaptureKiz ? "Сканируйте ШК каждой единицы, затем КИЗ маркированного товара."
+                        : "Отсканируйте каждую единицу только по ШК товара. КИЗ в этой проверке не требуется.",
+                    inventoryCaptureKiz ? "Har bir birlik SHKini, keyin markirovkalangan tovar KIZini skanerlang."
+                        : "Har bir birlikni faqat mahsulot SHKsi bilan skanerlang. Bu tekshiruvda KIZ kerak emas."
                 );
                 if (continueAfterMandatoryFbsAuditIfReady()) {
                     return;
@@ -2012,8 +2017,12 @@ public class MainActivity extends Activity {
                 new AlertDialog.Builder(this)
                     .setTitle(tr("Обязательная проверка короба", "Qutini majburiy tekshirish"))
                     .setMessage(tr(
-                        "Сборка FBS приостановлена. Полностью пропикайте короб " + mandatoryFbsAuditBoxCode + " только по ШК товара. После сверки подтвердите актуализацию.",
-                        "FBS yig‘ish to‘xtatildi. " + mandatoryFbsAuditBoxCode + " qutisini faqat mahsulot SHKsi bilan to‘liq tekshiring."
+                        "Сборка FBS приостановлена. Полностью пропикайте короб " + mandatoryFbsAuditBoxCode
+                            + (inventoryCaptureKiz ? " по ШК и КИЗ маркированных товаров. После сверки подтвердите актуализацию."
+                                : " только по ШК товара. После сверки подтвердите актуализацию."),
+                        "FBS yig‘ish to‘xtatildi. " + mandatoryFbsAuditBoxCode
+                            + (inventoryCaptureKiz ? " qutisini SHK va markirovkalangan tovar KIZi bilan to‘liq tekshiring."
+                                : " qutisini faqat mahsulot SHKsi bilan to‘liq tekshiring.")
                     ))
                     .setPositiveButton(tr("Понятно", "Tushunarli"), null)
                     .show();
@@ -2332,6 +2341,7 @@ public class MainActivity extends Activity {
 
     private void renderInventoryCountScreen() {
         screen = Screen.INVENTORY_COUNT;
+        inventoryKizScan.syncBox(activeInventoryBox == null ? null : activeInventoryBox.id);
         inventoryBoxInput = null;
         inventoryItemInput = null;
         inventoryTransferTargetInput = null;
@@ -2394,12 +2404,26 @@ public class MainActivity extends Activity {
             ));
             addInventoryLines(root, activeInventoryBox);
             if ("COUNTING".equals(activeInventoryBox.status)) {
-                inventoryItemInput = input(tr("Штрихкод товара", "Tovar shtrix-kodi"));
+                if ("logoff".equals(BuildConfig.FLAVOR)) {
+                    root.addView(secondaryButton(
+                        inventoryCaptureKiz ? tr("Режим: ШК + КИЗ", "Rejim: SHK + KIZ")
+                            : tr("Режим: только ШК", "Rejim: faqat SHK"),
+                        view -> { inventoryCaptureKiz = !inventoryCaptureKiz; inventoryKizScan.clear(); renderInventoryCountScreen(); }
+                    ));
+                }
+                boolean awaitingKiz = inventoryCaptureKiz && inventoryKizScan.waitingForKiz();
+                if (awaitingKiz) {
+                    root.addView(messageView(tr("ШК принят: ", "SHK qabul qilindi: ") + inventoryKizScan.barcode()
+                        + tr(". Отсканируйте КИЗ этой единицы.", ". Shu birlikning KIZini skanerlang.")));
+                    root.addView(secondaryButton(tr("Сменить ШК", "SHKni almashtirish"),
+                        view -> { inventoryKizScan.clear(); renderInventoryCountScreen(); }));
+                }
+                inventoryItemInput = input(awaitingKiz ? tr("КИЗ товара", "Tovar KIZi") : tr("Штрихкод товара", "Tovar shtrix-kodi"));
                 inventoryQuantityInput = input(tr("Количество (по умолчанию 1)", "Miqdor (odatda 1)"));
                 inventoryQuantityInput.setInputType(InputType.TYPE_CLASS_NUMBER);
                 inventoryQuantityInput.setText("1");
                 root.addView(inventoryItemInput);
-                if (!mandatoryFbsAuditActive) root.addView(inventoryQuantityInput);
+                if (!mandatoryFbsAuditActive && !awaitingKiz) root.addView(inventoryQuantityInput);
                 root.addView(primaryMenuButton(
                     tr("Учесть товар", "Tovarni hisobga olish"),
                     view -> scanInventoryItem()
@@ -2680,12 +2704,15 @@ public class MainActivity extends Activity {
             renderInventoryCountScreen();
             return;
         }
-        String barcode = scannedValue;
-        String barcodeError = receiptBarcodeError(barcode);
+        inventoryKizScan.syncBox(activeInventoryBox.id);
+        final String auditBoxId = activeInventoryBox.id;
+        final boolean awaitingKiz = inventoryCaptureKiz && inventoryKizScan.waitingForKiz();
+        String barcode = awaitingKiz ? inventoryKizScan.barcode() : scannedValue;
+        String barcodeError = awaitingKiz ? receiptKizError(scannedValue) : receiptBarcodeError(barcode);
         if (!barcodeError.isEmpty()) {
             statusMessage = tr(
-                "При инвентаризации можно сканировать только ШК товара. " + barcodeError,
-                "Inventarizatsiyada faqat tovar shtrix-kodini skanerlash mumkin."
+                barcodeError,
+                awaitingKiz ? "Tovar KIZini qayta skanerlang." : "Tovar shtrix-kodini qayta skanerlang."
             );
             inventoryItemInput.setText("");
             renderInventoryCountScreen();
@@ -2697,32 +2724,42 @@ public class MainActivity extends Activity {
         } catch (NumberFormatException ignored) {
         }
         int finalQuantity = quantity;
+        final Map<String, Object> request = inventoryKizScan.payload(scannedValue,
+            mandatoryFbsAuditActive ? 1 : finalQuantity, inventoryCaptureKiz);
         inventoryRequestBusy = true;
         statusMessage = tr("Учитываю товар…", "Tovar hisobga olinmoqda…");
         renderInventoryCountScreen();
         runBackground(() -> {
-            Map<String, Object> request = new LinkedHashMap<>();
-            request.put("barcode", barcode);
-            request.put("quantity", mandatoryFbsAuditActive ? 1 : finalQuantity);
             if (mandatoryFbsAuditActive) {
                 request.put("requireKiz", false);
             }
             WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
             Response<TsdInventoryLine> response = api.scanInventoryItem(
                 session.authorizationHeader(),
-                activeInventoryBox.id,
+                auditBoxId,
                 request
             ).execute();
-            if (!response.isSuccessful()) {
+            if (!response.isSuccessful() || response.body() == null) {
                 String message = inventoryHttpError(response);
                 throw new IOException(message);
             }
+            final TsdInventoryLine counted = response.body();
             mainHandler.post(() -> {
                 online = true;
                 inventoryRequestBusy = false;
+                if (activeInventoryBox == null || !auditBoxId.equals(activeInventoryBox.id)) return;
+                if ("SCAN_KIZ".equals(counted.scanState)) {
+                    inventoryKizScan.awaitKiz(barcode);
+                    statusMessage = tr("ШК принят. Теперь отсканируйте КИЗ.", "SHK qabul qilindi. Endi KIZni skanerlang.");
+                    renderInventoryCountScreen();
+                    return;
+                }
+                inventoryKizScan.clear();
                 mandatoryFbsAuditPendingBarcode = "";
                 persistMandatoryFbsAuditState();
-                statusMessage = tr("Товар учтён: ", "Tovar hisobga olindi: ") + barcode;
+                statusMessage = counted.duplicate
+                    ? tr("Этот КИЗ уже учтён. Повтор не добавлен.", "Bu KIZ hisobga olingan. Takror qo‘shilmadi.")
+                    : tr("Товар учтён: ", "Tovar hisobga olindi: ") + barcode;
                 reloadInventorySession(true);
             });
         });
@@ -2812,6 +2849,12 @@ public class MainActivity extends Activity {
     private void finishInventoryBox() {
         TsdSession session = safeSession();
         if (session == null || activeInventoryBox == null || inventoryRequestBusy) {
+            return;
+        }
+        if (inventoryCaptureKiz && inventoryKizScan.waitingForKiz()) {
+            statusMessage = tr("Сначала отсканируйте КИЗ или отмените выбранный ШК кнопкой «Сменить ШК».",
+                "Avval KIZni skanerlang yoki tanlangan SHKni bekor qiling.");
+            renderInventoryCountScreen();
             return;
         }
         String boxId = activeInventoryBox.id;

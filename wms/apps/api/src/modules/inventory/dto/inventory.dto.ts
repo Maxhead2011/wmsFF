@@ -51,6 +51,11 @@ export class CountInventoryItemDto {
   @IsOptional()
   @IsBoolean()
   requireKiz?: boolean;
+
+  // ADDED: opt-in physical barcode/KIZ counting; legacy barcode-only clients stay unchanged.
+  @IsOptional()
+  @IsBoolean()
+  captureKiz?: boolean;
 }
 
 export class SetInventoryCountDto {
