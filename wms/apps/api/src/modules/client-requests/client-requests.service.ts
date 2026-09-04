@@ -201,9 +201,6 @@ export class ClientRequestsService {
         wbSupplyIdsByRequest.set(link.requestId, requestSupplyIds);
       }
     }
-    const emergencyAssemblyAtByRequest = new Map(
-      requests.map((request) => [request.id, request.fbsEmergencyAssemblyAt?.getTime() ?? null]),
-    );
     const activeOrdersByRequest = new Map<string, Set<string>>();
     for (const link of links) {
       const orders = activeOrdersByRequest.get(link.requestId) ?? new Set<string>();
@@ -214,13 +211,11 @@ export class ClientRequestsService {
     for (const assembly of assemblies) {
       if (
         assembly.status !== 'COMPLETED' ||
-        !activeOrdersByRequest.get(assembly.requestId)?.has(assembly.orderId) ||
-        (emergencyAssemblyAtByRequest.get(assembly.requestId) !== null &&
-          (!assembly.completedAt ||
-            assembly.completedAt.getTime() < (emergencyAssemblyAtByRequest.get(assembly.requestId) ?? 0)))
+        !activeOrdersByRequest.get(assembly.requestId)?.has(assembly.orderId)
       ) {
         continue;
       }
+      // FIX: local-search activation does not invalidate physical completions; full reset changes task statuses.
       const orders = completedOrdersByRequest.get(assembly.requestId) ?? new Set<string>();
       orders.add(assembly.orderId);
       completedOrdersByRequest.set(assembly.requestId, orders);
