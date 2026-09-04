@@ -1690,7 +1690,8 @@ public class MainActivity extends Activity {
                 )));
                 for (TsdSkuCollection.Source source : activeSkuCollection.skuCollectionSources) {
                     if (source.pickedQuantity < source.plannedQuantity) {
-                        root.addView(taskRow(source.sourceBoxCode,
+                        // FIX: display the current room → pallet-sort → box; do not restrict which required box is scanned.
+                        root.addView(taskRow(tr(source.routeLabel(false), source.routeLabel(true)),
                             tr("Осталось", "Qoldi") + ": " + (source.plannedQuantity - source.pickedQuantity),
                             Color.WHITE));
                     }

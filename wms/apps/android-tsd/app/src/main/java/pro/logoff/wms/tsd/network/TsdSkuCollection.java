@@ -36,6 +36,30 @@ public class TsdSkuCollection {
         public int plannedQuantity;
         public int pickedQuantity;
         public int receivedQuantity;
+        public StorageLocation storageLocation;
+
+        // FIX: keep a readable route even with an older API or an unknown placement.
+        public String routeLabel(boolean uzbek) {
+            String unknown = uzbek ? "ko‘rsatilmagan" : "не указано";
+            String room = storageLocation == null ? null : storageLocation.zoneName;
+            if (room == null || room.trim().isEmpty()) {
+                room = storageLocation == null ? null : storageLocation.zoneCode;
+            }
+            String pallet = storageLocation == null ? null : storageLocation.palletCode;
+            return (uzbek ? "Xona: " : "Помещение: ") + valueOr(room, unknown) + "\n"
+                + (uzbek ? "Pallet-sort: " : "Паллетсорт: ") + valueOr(pallet, uzbek ? unknown : "не указан") + "\n"
+                + (uzbek ? "Quti: " : "Короб: ") + valueOr(sourceBoxCode, uzbek ? unknown : "не указан");
+        }
+
+        private static String valueOr(String value, String fallback) {
+            return value == null || value.trim().isEmpty() ? fallback : value.trim();
+        }
+    }
+
+    public static class StorageLocation {
+        public String palletCode;
+        public String zoneName;
+        public String zoneCode;
     }
 
     public static class Scan {

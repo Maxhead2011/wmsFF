@@ -213,14 +213,14 @@ export class SkuCollectionService {
         }
       }
 
-      return tx.clientRequest.findUniqueOrThrow({ where: { id: request.id }, include: requestInclude });
+      return this.summary(tx, request.id);
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
   async list(user: AuthUser) {
     const warehouseId = this.requireWarehouse(user, 'read');
     const clientId = this.clientScopes.resolveClientFilter(user);
-    return this.prisma.clientRequest.findMany({
+    const requests = await this.prisma.clientRequest.findMany({
       where: {
         warehouseId,
         clientId,
@@ -230,6 +230,7 @@ export class SkuCollectionService {
       include: requestInclude,
       orderBy: { createdAt: 'asc' },
     });
+    return this.withRoutes(requests);
   }
 
   async get(id: string, user: AuthUser) {
@@ -240,7 +241,7 @@ export class SkuCollectionService {
     if (!request) throw new NotFoundException('Заявка «Сборка по SKU» не найдена.');
     this.clientScopes.requireClientAccess(user, request.clientId, 'read');
     if (request.warehouseId !== this.requireWarehouse(user, 'read')) throw new NotFoundException('Заявка относится к другому филиалу.');
-    return request;
+    return (await this.withRoutes([request]))[0];
   }
 
   async pick(id: string, dto: ScanSkuCollectionPickDto, user: AuthUser) {
@@ -346,8 +347,56 @@ export class SkuCollectionService {
     await tx.clientRequest.update({ where: { id: requestId }, data: { status } });
   }
 
-  private summary(tx: Prisma.TransactionClient, requestId: string) {
-    return tx.clientRequest.findUniqueOrThrow({ where: { id: requestId }, include: requestInclude });
+  private async summary(tx: Prisma.TransactionClient, requestId: string) {
+    const request = await tx.clientRequest.findUniqueOrThrow({ where: { id: requestId }, include: requestInclude });
+    return (await this.withRoutes([request], tx))[0];
+  }
+
+  private async withRoutes(
+    requests: Prisma.ClientRequestGetPayload<{ include: typeof requestInclude }>[],
+    db: Prisma.TransactionClient = this.prisma,
+  ) {
+    // FIX: read current pallet-sort placement (as FBO does), never the legacy Box.pallet snapshot.
+    const scopes = requests.filter((request) => request.warehouseId && request.skuCollectionSources.length);
+    const placements = scopes.length ? await db.storagePalletBox.findMany({
+      where: {
+        OR: scopes.map((request) => ({
+          pallet: { warehouseId: request.warehouseId!, clientId: request.clientId },
+          OR: request.skuCollectionSources.flatMap((source) => [
+            { boxId: source.sourceBoxId },
+            { boxCode: { equals: source.sourceBoxCode, mode: 'insensitive' as const } },
+          ]),
+        })),
+      },
+      include: { pallet: { include: { zone: true } } },
+    }) : [];
+    const key = (clientId: string, warehouseId: string | null, value: string) =>
+      JSON.stringify([clientId, warehouseId, value.trim().toLocaleUpperCase('ru-RU')]);
+    const byId = new Map(placements.filter((item) => item.boxId).map((item) =>
+      [key(item.pallet.clientId, item.pallet.warehouseId, item.boxId!), item]));
+    const byCode = new Map(placements.filter((item) => !item.boxId).map((item) =>
+      [key(item.pallet.clientId, item.pallet.warehouseId, item.boxCode), item]));
+    const compare = new Intl.Collator('ru', { numeric: true }).compare;
+    return requests.map((request) => ({
+      ...request,
+      skuCollectionSources: request.skuCollectionSources.map((source) => {
+        const placement = byId.get(key(request.clientId, request.warehouseId, source.sourceBoxId))
+          ?? byCode.get(key(request.clientId, request.warehouseId, source.sourceBoxCode));
+        return {
+          ...source,
+          storageLocation: placement ? {
+            palletId: placement.palletId,
+            palletCode: placement.pallet.code,
+            zoneId: placement.pallet.zoneId,
+            zoneCode: placement.pallet.zone?.code ?? null,
+            zoneName: placement.pallet.zone?.name ?? null,
+          } : null,
+        };
+      }).sort((a, b) =>
+        compare(a.storageLocation?.zoneName ?? a.storageLocation?.zoneCode ?? '\uffff', b.storageLocation?.zoneName ?? b.storageLocation?.zoneCode ?? '\uffff') ||
+        compare(a.storageLocation?.palletCode ?? '\uffff', b.storageLocation?.palletCode ?? '\uffff') ||
+        compare(a.sourceBoxCode, b.sourceBoxCode)),
+    }));
   }
 
   private async moveBalance(
