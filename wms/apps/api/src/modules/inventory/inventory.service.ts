@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import {
   InventoryBoxStatus,
   InventoryLineDecision,
@@ -459,6 +460,56 @@ export class InventoryService {
       throw new NotFoundException(
         `ШК товара ${value} не найден у клиента ${auditBox.clientName}. При инвентаризации сканируйте только ШК товара, не КИЗ и не внутренний SKU.`,
       );
+    }
+    // FIX: count physical evidence without trusting stale ProductMark ownership.
+    // Stock and mark corrections remain separate from the counting phase.
+    if (dto.captureKiz && sku.needsChestnyZnak && !sku.isUnmarked) {
+      if (!dto.kiz?.trim()) {
+        return { scanState: 'SCAN_KIZ', skuId: sku.id, skuName: sku.name, barcode: value };
+      }
+      if ((dto.quantity ?? 1) !== 1) {
+        throw new BadRequestException('Один КИЗ подтверждает только одну единицу товара.');
+      }
+      const kiz = dto.kiz.trim().replace(/^\]d2/i, '').replace(/<GS>/gi, '\u001d');
+      const identity = /^(01\d{14}21[^\u0000-\u001f]{13})(?:\u001d|$)/.exec(kiz)?.[1];
+      if (!identity) throw new BadRequestException('После ШК отсканируйте полный КИЗ этой единицы.');
+      const evidenceId = createHash('sha256')
+        .update(JSON.stringify([auditBoxId, auditBox.startedAt.toISOString(), identity])).digest('hex');
+      return this.runSerializableInventoryDecision(async (tx) => {
+        // FIX: serialize counting against finish/reopen and concurrent scanners.
+        const active = await tx.inventoryAuditBox.updateMany({
+          where: { id: auditBoxId, status: InventoryBoxStatus.COUNTING, startedAt: auditBox.startedAt,
+            session: { status: InventorySessionStatus.ACTIVE } },
+          data: { updatedAt: new Date() },
+        });
+        if (active.count !== 1) throw new ConflictException('Подсчёт короба изменился. Откройте короб повторно.');
+        const evidence = await tx.auditLog.findUnique({ where: { id: evidenceId } });
+        const existing = await tx.inventoryAuditLine.findUnique({
+          where: { auditBoxId_skuId: { auditBoxId, skuId: sku.id } },
+        });
+        if (evidence) {
+          const payload = evidence.payload as { skuId?: string } | null;
+          if (payload?.skuId !== sku.id || !existing) {
+            throw new ConflictException('Этот КИЗ уже учтён с другим товаром в текущей проверке.');
+          }
+          return { ...existing, scanState: 'COUNTED', duplicate: true };
+        }
+        const line = existing
+          ? await tx.inventoryAuditLine.update({ where: { id: existing.id }, data: {
+              countedQuantity: { increment: 1 }, difference: existing.countedQuantity + 1 - existing.expectedQuantity,
+            } })
+          : await tx.inventoryAuditLine.create({ data: { auditBoxId, skuId: sku.id, skuName: sku.name,
+              internalSku: sku.internalSku, barcode: value, expectedQuantity: 0, countedQuantity: 1, difference: 1,
+            } });
+        await tx.auditLog.create({ data: { id: evidenceId, userId: user.id,
+          action: 'INVENTORY_KIZ_SCAN', entity: 'InventoryAuditBox', entityId: auditBoxId,
+          payload: { sessionId: auditBox.sessionId, roundStartedAt: auditBox.startedAt.toISOString(),
+            boxId: auditBox.boxId, boxCode: auditBox.boxCode, clientId: auditBox.clientId,
+            warehouseId: auditBox.session.warehouseId, skuId: sku.id, barcode: value, kiz,
+            deviceCode: user.deviceCode ?? null, lineId: line.id, quantity: 1 },
+        } });
+        return { ...line, scanState: 'COUNTED', duplicate: false };
+      });
     }
     if (dto.requireKiz && sku.needsChestnyZnak && !sku.isUnmarked) {
       const kiz = dto.kiz?.trim();
