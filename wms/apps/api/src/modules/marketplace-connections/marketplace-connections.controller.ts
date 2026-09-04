@@ -622,6 +622,13 @@ export class MarketplaceConnectionsController {
     return this.connections.enableFbsEmergencyAssembly(requestId, user);
   }
 
+  // ADDED: admin authorization is enforced by the service; no full emergency reset.
+  @Post('fbs/requests/:requestId/remaining-search')
+  @RequirePermissions()
+  enableFbsRemainingSearch(@Param('requestId') requestId: string, @CurrentUser() user: AuthUser) {
+    return this.connections.enableFbsRemainingSearch(requestId, user);
+  }
+
   @Post('fbs/requests/:requestId/repair-selection')
   @RequirePermissions('stock:write')
   repairFbsRequestSelection(
