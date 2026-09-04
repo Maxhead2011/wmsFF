@@ -15716,7 +15716,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           !physicallyPickedTaskIds.has(task.id) &&
           // FIX: untouched routes from a closed request or an already shipped
           // WB order are stale metadata, not a physical stock reservation.
-          (task.status !== FBS_TSD_RESERVED_STATUS ||
+          // FIX: a rescan from a closed request or shipped order is stale capacity too.
+          (![FBS_TSD_RESERVED_STATUS, FBS_TSD_RESCAN_REQUIRED_STATUS].includes(task.status) ||
             (openTaskRequestIds.has(task.requestId) &&
               (!canCheckCompletedOrderLinks ||
                 !obsoleteCompletedOrderKeys.has(
@@ -15888,7 +15889,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       // this task in the virtual reservation list would subtract it twice.
       if (physicallyPickedTaskIds.has(task.id)) return;
       if (
-        task.status === FBS_TSD_RESERVED_STATUS &&
+        // FIX: keep route previews consistent with single-order reservation checks.
+        [FBS_TSD_RESERVED_STATUS, FBS_TSD_RESCAN_REQUIRED_STATUS].includes(task.status) &&
         (!openTaskRequestIds.has(task.requestId) ||
           (canCheckCompletedOrderLinks &&
             obsoleteCompletedOrderKeys.has(
