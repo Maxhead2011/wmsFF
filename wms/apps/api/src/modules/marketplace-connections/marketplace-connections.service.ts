@@ -8602,12 +8602,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         },
         _sum: { quantity: true },
       }),
-      this.fbsTsdReservationRows({
+      this.fbsTsdReservationRowsBySku({
         clientId: task.clientId,
-        skuId: stockSkuId,
-        boxId: box.id,
+        skuIds: [stockSkuId],
         excludeTaskId: task.id,
-      }),
+      }).then((rows) => rows.get(stockSkuId) ?? []),
     ]);
     let reservations = initialReservations;
     let availability = evaluateFbsBoxAvailability({
@@ -8616,10 +8615,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       candidateTaskId: task.id,
       candidateAssignedBoxId: task.boxId ?? task.reservedBoxId,
       requiredQuantity: task.itemCount,
-      reservations: reservations.map((reservation, index) => ({
-        taskId: `protected:${index}`, boxId: reservation.boxId,
-        itemCount: reservation.itemCount, releasableBackground: false,
-      })),
+      // FIX: use the same physical-vs-background reservation rules as the locked claim.
+      reservations,
     });
     if (!availability.accepted) {
       const released = await this.releaseUntouchedFbsReservationsForScannedBox({
@@ -8633,22 +8630,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         availableQuantity: available._sum.quantity ?? 0,
       });
       if (released > 0) {
-        reservations = await this.fbsTsdReservationRows({
+        reservations = (await this.fbsTsdReservationRowsBySku({
           clientId: task.clientId,
-          skuId: stockSkuId,
-          boxId: box.id,
+          skuIds: [stockSkuId],
           excludeTaskId: task.id,
-        });
+        })).get(stockSkuId) ?? [];
         availability = evaluateFbsBoxAvailability({
           boxId: box.id,
           availableQuantity: available._sum.quantity ?? 0,
           candidateTaskId: task.id,
           candidateAssignedBoxId: task.boxId ?? task.reservedBoxId,
           requiredQuantity: task.itemCount,
-          reservations: reservations.map((reservation, index) => ({
-            taskId: `protected:${index}`, boxId: reservation.boxId,
-            itemCount: reservation.itemCount, releasableBackground: false,
-          })),
+          reservations,
         });
       }
     }
@@ -8669,11 +8662,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         productLabel: [task.productName, task.article].filter(Boolean).join(' · '),
         availableQuantity: available._sum.quantity ?? 0,
       });
-      throw new ConflictException({
-        code: rejection.code,
-        message: rejection.message,
-        route: await this.getFbsRequestRoute(task.requestId, user),
-      });
+      if (rejection.code === 'FBS_WRONG_BOX') {
+        throw new ConflictException({
+          code: rejection.code, message: rejection.message,
+          route: await this.getFbsRequestRoute(task.requestId, user),
+        });
+      }
+      // FIX: refresh the task payload understood by installed TSDs, not an error dialog with a web-only route.
+      return this.refreshFbsTsdBoxRoute(task.id, box.code, user);
     }
 
     const updated = await this.claimFbsTsdBoxAtomically(
@@ -8683,11 +8679,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       user,
     );
     if (!updated) {
-      throw new ConflictException({
-        code: 'FBS_ROUTE_STALE',
-        message: `Товар из короба ${box.code} успела забрать другая заявка. Маршрут обновлён.`,
-        route: await this.getFbsRequestRoute(task.requestId, user),
-      });
+      return this.refreshFbsTsdBoxRoute(task.id, box.code, user);
     }
     return this.formatFbsTsdAssembly(
       updated,
@@ -8696,6 +8688,22 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         ? `Короб ${box.code} с палет-сорта ${box.storagePlacement?.pallet.code ?? '—'} принят. Найдите исходный товар «${task.sourceProductName ?? task.sourceArticle ?? 'для переклейки'}» и сканируйте его ШК.`
         : `Короб ${box.code} с палет-сорта ${box.storagePlacement?.pallet.code ?? '—'} принят. Теперь сканируйте ШК товара.`,
     );
+  }
+
+  // ADDED: stale availability is normal under concurrent picking; never pretend a claim succeeded.
+  private async refreshFbsTsdBoxRoute(taskId: string, scannedBoxCode: string, user: AuthUser) {
+    const fresh = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    requireFbsTaskWithoutSyncConflict(fresh);
+    const response = await this.formatFbsTsdAssembly(fresh, user, 'Задание обновлено. Продолжайте с текущего шага.');
+    if (response.state !== 'SCAN_BOX') return response;
+    const nextBox = response.task.recommendedBoxCode;
+    return {
+      ...response,
+      routeRefreshed: true,
+      message: nextBox
+        ? `Доступность короба ${scannedBoxCode} изменилась. Маршрут обновлён: сканируйте ${nextBox}.`
+        : `В коробе ${scannedBoxCode} сейчас нет свободного для отбора количества. Другой доступный короб не найден. Задание сохранено; повторять скан этого короба пока не нужно.`,
+    };
   }
 
   private async claimFbsTsdBoxAtomically(
@@ -14724,11 +14732,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           })
         : Promise.resolve([]),
       needsStorageRouting
-        ? this.fbsTsdReservationRows({
+        ? this.fbsTsdReservationRowsBySku({
             clientId: task.clientId,
-            skuId: stockSkuId,
+            skuIds: [stockSkuId],
             excludeTaskId: task.id,
-          })
+          }).then((rows) => rows.get(stockSkuId) ?? [])
         : Promise.resolve([]),
       this.fbsTsdCompletedToday(task.deviceCode, user),
       this.prisma.clientRequest.findUnique({
@@ -14785,14 +14793,6 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     ) {
       state = 'READY_TO_COMPLETE';
     }
-    const reservedByBox = new Map<string, number>();
-    reservations.forEach((reservation) => {
-      if (!reservation.boxId) return;
-      reservedByBox.set(
-        reservation.boxId,
-        (reservedByBox.get(reservation.boxId) ?? 0) + reservation.itemCount,
-      );
-    });
     const boxesById = new Map<string, { id: string; code: string; quantity: number }>();
     balances.forEach((balance) => {
       if (!balance.boxId || !balance.box) return;
@@ -14805,7 +14805,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       boxesById.set(balance.boxId, current);
     });
     let storageBoxes = [...boxesById.values()]
-      .map((box) => ({ ...box, quantity: box.quantity - (reservedByBox.get(box.id) ?? 0) }))
+      // FIX: displayed capacity must match pallet validation and the atomic scan claim.
+      .map((box) => ({ ...box, quantity: evaluateFbsBoxAvailability({
+        boxId: box.id, availableQuantity: box.quantity, candidateTaskId: task.id,
+        candidateAssignedBoxId: task.boxId ?? task.reservedBoxId,
+        requiredQuantity: task.itemCount, reservations,
+      }).claimableQuantity }))
       .filter((box) => box.quantity >= task.itemCount || box.id === task.boxId)
       .sort((left, right) => left.quantity - right.quantity || left.code.localeCompare(right.code, 'ru-RU'));
     const previousCompleted = !needsStorageRouting || task.boxCode
