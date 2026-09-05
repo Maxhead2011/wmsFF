@@ -883,8 +883,9 @@ export class MarketplaceConnectionsController {
 
   @Get('fbs/web-order-assembly/history')
   @RequirePermissions()
-  webOrderAssemblyHistory(@CurrentUser() user: AuthUser) {
-    return this.connections.webOrderAssemblyHistory(user);
+  webOrderAssemblyHistory(@CurrentUser() user: AuthUser, @Query('orderId') orderId?: string) {
+    // FIX: reuse the permission-scoped history endpoint for exact order search.
+    return this.connections.webOrderAssemblyHistory(user, orderId);
   }
 
   @Post('fbs/web-order-assembly/history/:id/reprint')

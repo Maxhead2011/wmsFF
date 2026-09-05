@@ -16474,7 +16474,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     await this.prisma.auditLog.create({ data: { userId: user.id, action: success ? 'FBS_TWO_LABELS_PRINTED' : 'FBS_TWO_LABELS_PRINT_FAILED', entity: 'FbsPrintJob', entityId: job.id, payload: { stationId: job.stationId, orderId: job.orderId, deviceCode: job.deviceCode, error: job.errorMessage } } });
     return job;
   }
-  async webOrderAssemblyHistory(user: AuthUser) {
+  async webOrderAssemblyHistory(user: AuthUser, orderIdValue?: string) {
+    // FIX: exact order lookup happens before the history limit; it never assembles or prints an order.
+    const orderId = typeof orderIdValue === 'string' ? orderIdValue.trim() : '';
+    if ((orderIdValue !== undefined && typeof orderIdValue !== 'string') || (orderId && !/^\d{1,30}$/.test(orderId))) {
+      throw new BadRequestException('Номер заказа WB должен содержать только цифры (до 30 знаков).');
+    }
     let clientFilter = this.clientScopes.resolveClientFilter(user);
     if (user.clientScopeMode === 'LIMITED' && user.clientIds.length === 0 && user.activeWarehouseId) {
       const branchClients = await this.prisma.warehouseClient.findMany({
@@ -16482,7 +16487,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       });
       clientFilter = { in: uniqueStrings(branchClients.map((item) => item.clientId)) };
     }
-    const rows = await this.prisma.fbsWebKizStickerPrint.findMany({ where: { clientId: clientFilter }, orderBy: { printedAt: 'desc' }, take: 300 });
+    const rows = await this.prisma.fbsWebKizStickerPrint.findMany({ where: { clientId: clientFilter, ...(orderId ? { orderId } : {}) }, orderBy: { printedAt: 'desc' }, take: 300 });
     const tasks = await this.prisma.fbsTsdAssembly.findMany({ where: { id: { in: rows.map((row) => row.assemblyId) } }, select: { id: true, skuId: true, requestId: true, supplyId: true, productName: true, article: true } });
     const skus = await this.prisma.sku.findMany({ where: { id: { in: uniqueStrings(tasks.map((task) => task.skuId)) } }, select: { id: true, name: true, article: true, size: true, color: true } });
     const requests = await this.prisma.clientRequest.findMany({ where: { id: { in: uniqueStrings(tasks.map((task) => task.requestId)) } }, select: { id: true, number: true } });
