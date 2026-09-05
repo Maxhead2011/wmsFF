@@ -147,7 +147,9 @@ export class SkuCollectionService {
           status: ClientRequestStatus.APPROVED,
           priority: ClientRequestPriority.NORMAL,
           title: `Сборка по SKU · ${sku.name}`,
-          comment: '[SKU_COLLECTION] Внутренняя сборка для повторной приёмки по коробам.',
+          comment: process.env.WMS_SKU_SORTING_ENABLED === 'true'
+            ? '[SKU_SORTING_V2] Внутрискладская сортировка без резервирования.'
+            : '[SKU_COLLECTION] Внутренняя сборка для повторной приёмки по коробам.',
           createdByUserId: user.id,
           items: { create: { skuId: sku.id, barcode, name: sku.name, quantity } },
           skuCollectionSources: {
@@ -173,6 +175,8 @@ export class SkuCollectionService {
       });
 
       for (const balance of available) {
+        // FIX: sorting is a route snapshot, not a reservation of saleable stock.
+        if (process.env.WMS_SKU_SORTING_ENABLED === 'true') continue;
         // FIX: reserve the exact current stock so ordinary routes cannot select it while consolidation is active.
         await this.moveBalance(tx, balance, StockStatus.RESERVED, balance.quantity);
         await tx.stockMovement.createMany({
@@ -250,6 +254,10 @@ export class SkuCollectionService {
       // FIX: one request-level row lock prevents two TSDs from consuming the same last unit.
       await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "ClientRequest" WHERE "id" = ${id} FOR UPDATE`);
       const request = await this.requireRequest(tx, id, user, [ClientRequestStatus.APPROVED, ClientRequestStatus.IN_WORK]);
+      // FIX: old APKs must not run the legacy two-phase picker on an unreserved route.
+      if (request.comment?.includes('[SKU_SORTING_V2]')) {
+        throw new BadRequestException('Откройте единую сортировку в обновлённом ТСД: ШК → КИЗ → целевой короб.');
+      }
       const existing = await tx.skuCollectionScan.findUnique({ where: { requestId_kiz: { requestId: id, kiz: scan.kiz } } });
       if (existing) return this.summary(tx, id);
 
@@ -294,10 +302,22 @@ export class SkuCollectionService {
     const scan = assertSkuCollectionReceipt({ ...dto, pickedByThisRequest: Boolean(existing) });
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "ClientRequest" WHERE "id" = ${id} FOR UPDATE`);
-      const request = await this.requireRequest(tx, id, user, [ClientRequestStatus.PACKED]);
+      // FIX: legacy items already in PACKING can be placed without finishing every source first.
+      const request = await this.requireRequest(tx, id, user, process.env.WMS_SKU_SORTING_ENABLED === 'true'
+        ? [ClientRequestStatus.APPROVED, ClientRequestStatus.IN_WORK, ClientRequestStatus.PACKED, ClientRequestStatus.DONE]
+        : [ClientRequestStatus.PACKED]);
       const picked = await tx.skuCollectionScan.findUnique({ where: { requestId_kiz: { requestId: id, kiz: scan.kiz } } });
       if (!picked) throw new BadRequestException('КИЗ не был отобран этой заявкой.');
-      if (picked.status === SkuCollectionScanStatus.RECEIVED) return this.summary(tx, id);
+      if (picked.status === SkuCollectionScanStatus.RECEIVED) {
+        if (process.env.WMS_SKU_SORTING_ENABLED === 'true' && picked.targetBoxCode?.toUpperCase() !== scan.targetBoxCode.toUpperCase()) {
+          throw new BadRequestException('КИЗ уже размещён в другом коробе. Повторное размещение не выполнено.');
+        }
+        return this.summary(tx, id);
+      }
+      if (process.env.WMS_SKU_SORTING_ENABLED === 'true') {
+        const mark = await tx.productMark.findFirst({ where: { clientId: request.clientId, value: scan.kiz, sourceDocument: id, status: StockStatus.PACKING, boxId: null } });
+        if (!mark || mark.skuId !== picked.skuId) throw new BadRequestException('КИЗ больше не находится в отборе этой заявки. Остатки не изменены.');
+      }
       await this.assertBarcode(tx, picked.skuId, scan.barcode);
 
       const targetBox = await tx.box.findFirst({
@@ -307,9 +327,17 @@ export class SkuCollectionService {
       const packing = await tx.stockBalance.findFirst({ where: { warehouseId: request.warehouseId!, clientId: request.clientId, skuId: picked.skuId, boxId: null, palletId: null, status: StockStatus.PACKING, quantity: { gt: 0 } } });
       if (!packing) throw new BadRequestException('Отобранный товар уже принят или отсутствует в промежуточном остатке.');
       await this.moveBalance(tx, packing, StockStatus.AVAILABLE, 1, targetBox.id, targetBox.palletId);
-      const movement = await tx.stockMovement.create({ data: { warehouseId: request.warehouseId, clientId: request.clientId, skuId: picked.skuId, boxId: targetBox.id, palletId: targetBox.palletId, type: MovementType.RECEIPT, status: StockStatus.AVAILABLE, quantity: 1, sourceDocument: id, comment: `Повторная приёмка сборки по SKU в ${targetBox.code}` } });
+      const sorting = process.env.WMS_SKU_SORTING_ENABLED === 'true';
+      // FIX: recovering a legacy pick must not look like newly received stock in the ledger.
+      if (sorting) await tx.stockMovement.create({ data: { warehouseId: request.warehouseId, clientId: request.clientId, skuId: picked.skuId,
+        type: MovementType.MOVE, status: StockStatus.PACKING, quantity: -1, sourceDocument: id, comment: `Размещение ранее отобранного SKU в ${targetBox.code}` } });
+      const movement = await tx.stockMovement.create({ data: { warehouseId: request.warehouseId, clientId: request.clientId, skuId: picked.skuId, boxId: targetBox.id, palletId: targetBox.palletId, type: sorting ? MovementType.MOVE : MovementType.RECEIPT, status: StockStatus.AVAILABLE, quantity: 1, sourceDocument: id, comment: sorting ? `Размещение ранее отобранного SKU в ${targetBox.code}` : `Повторная приёмка сборки по SKU в ${targetBox.code}` } });
       // FIX: this is the only duplicate-KIZ exception; the same mark is moved instead of being recreated.
-      await tx.productMark.updateMany({ where: { clientId: request.clientId, value: { equals: scan.kiz, mode: 'insensitive' }, sourceDocument: id }, data: { boxId: targetBox.id, skuId: picked.skuId, status: StockStatus.AVAILABLE, stockMovementId: movement.id } });
+      const updatedMark = await tx.productMark.updateMany({ where: { clientId: request.clientId,
+        value: sorting ? scan.kiz : { equals: scan.kiz, mode: 'insensitive' }, sourceDocument: id,
+        ...(sorting ? { status: StockStatus.PACKING, boxId: null, skuId: picked.skuId } : {}) },
+        data: { boxId: targetBox.id, skuId: picked.skuId, status: StockStatus.AVAILABLE, stockMovementId: movement.id } });
+      if (sorting && updatedMark.count !== 1) throw new BadRequestException('КИЗ изменился параллельно. Размещение не выполнено.');
       await tx.skuCollectionScan.update({ where: { id: picked.id }, data: { status: SkuCollectionScanStatus.RECEIVED, targetBoxId: targetBox.id, targetBoxCode: targetBox.code, receivedByUserId: user.id, receivedByName: user.name, receivedAt: new Date() } });
       await tx.skuCollectionSource.update({ where: { id: picked.sourceId }, data: { receivedQuantity: { increment: 1 } } });
       await this.refreshRequestStatus(tx, id);
@@ -379,6 +407,8 @@ export class SkuCollectionService {
     const compare = new Intl.Collator('ru', { numeric: true }).compare;
     return requests.map((request) => ({
       ...request,
+      // FIX: capability drives the LOGOFF-only UI; other installations keep legacy behavior.
+      sortingWorkflow: process.env.WMS_SKU_SORTING_ENABLED === 'true',
       skuCollectionSources: request.skuCollectionSources.map((source) => {
         const placement = byId.get(key(request.clientId, request.warehouseId, source.sourceBoxId))
           ?? byCode.get(key(request.clientId, request.warehouseId, source.sourceBoxCode));
