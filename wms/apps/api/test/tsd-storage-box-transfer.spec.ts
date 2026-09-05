@@ -11,7 +11,7 @@ const user = {
   writableWarehouseIds: ['wh-1'], clientScopeMode: 'ALL', clientIds: [], writableClientIds: [],
 } as any;
 
-function fixture(initialMarkBox = 'source', markValue = kiz) {
+function fixture(initialMarkBox = 'source', markValue = kiz, storageBoxAliases: string[] = []) {
   let sourceQuantity = 2;
   let targetQuantity = 0;
   let markBoxId = initialMarkBox;
@@ -110,7 +110,7 @@ function fixture(initialMarkBox = 'source', markValue = kiz) {
       }
     }),
   };
-  const codes = new BoxCodePolicyService({ get: vi.fn(async () => ({ storageBoxPrefix: 'SBOX_' })) } as never);
+  const codes = new BoxCodePolicyService({ get: vi.fn(async () => ({ storageBoxPrefix: 'SBOX_', storageBoxAliases })) } as never);
   const scopes = { requireClientAccess: vi.fn() };
   const service = new StockOperationsService(db as never, scopes as never,
     { balanceKey: () => 'target-key' } as never, undefined, undefined, undefined, codes);
@@ -121,6 +121,18 @@ function fixture(initialMarkBox = 'source', markValue = kiz) {
 }
 
 describe('TSD storage-box transfer', () => {
+  // TEST: the configured alias works through actual transfer validation, without duplicate stock.
+  it('transfers to an FFL_LKBBOX destination using an explicitly enabled alias', async () => {
+    const f = fixture('source', kiz, ['FFL_LKBBOX']);
+    f.target.code = 'FFL_LKBBOX001';
+    f.payload.toBoxCode = 'ffl_lkbbox001';
+    await expect(f.service.executeTsdTransfer(f.payload, user)).resolves.toMatchObject({ status: 'APPLIED' });
+    expect(f.quantities()).toEqual([1, 1]);
+    expect(f.markBox()).toBe('target');
+    await expect(f.service.executeTsdTransfer(f.payload, user)).resolves.toMatchObject({ status: 'ALREADY_APPLIED' });
+    expect(f.quantities()).toEqual([1, 1]);
+  });
+
   it('accepts the configured storage prefix without loosening ordinary box validation', async () => {
     const { codes } = fixture();
     await expect((codes as any).requireStorageBox(' sbox_001 ')).resolves.toBe('SBOX_001');
