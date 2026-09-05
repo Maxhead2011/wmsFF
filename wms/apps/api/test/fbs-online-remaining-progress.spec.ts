@@ -1,7 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ClientScopeService } from '../src/modules/auth/client-scope.service';
 import { ClientRequestsService } from '../src/modules/client-requests/client-requests.service';
 import { TsdAssemblyService } from '../src/modules/tsd/tsd-assembly.service';
+
+afterEach(() => vi.unstubAllEnvs());
 
 // TEST: online progress must preserve physical completions predating local-search activation.
 function fixture(enabled = true, completed = 12, reset = false) {
@@ -33,6 +35,16 @@ function fixture(enabled = true, completed = 12, reset = false) {
 }
 
 describe('FBS online remaining-search progress', () => {
+  it('shows receipt-required only for physical returns and only with the lifecycle flag enabled', async () => {
+    // TEST: frontend must not guess receipt requirements or change sold-installation actions.
+    const f = fixture(true);
+    f.tasks[0].status = 'RETURN_REQUIRED';
+    vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', 'true');
+    expect((await f.detail.loadFbsAssemblyFacts('request-592', f.rows)).returnRequired.rows[0])
+      .toMatchObject({ requiresReturnReceipt: true, returnRequiresKiz: true });
+    vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', 'false');
+    expect((await f.detail.loadFbsAssemblyFacts('request-592', f.rows)).returnRequired.rows[0].requiresReturnReceipt).toBe(false);
+  });
   it.each([true, false])('list keeps 12/13 completions (local mode: %s)', async enabled => {
     const f = fixture(enabled);
     const result = await f.list.list({}, f.user);

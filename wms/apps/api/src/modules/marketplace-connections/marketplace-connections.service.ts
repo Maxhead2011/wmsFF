@@ -35,6 +35,7 @@ import { PDFParse } from 'pdf-parse';
 import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
 import { BoxCodePolicyService, permanentStorageBoxesEnabled, preserveEmptyStorageBox } from '../../common/boxes/box-code-policy.service';
 import { ArchivedEmptyBoxPalletDetachService } from '../../common/boxes/archived-empty-box-pallet-detach.service';
+import { requiresFbsReturnReceipt, validateFbsReturnReceipt, type FbsReturnReceipt } from './fbs-return-receipt';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService, type ClientFilter } from '../auth/client-scope.service';
@@ -11981,6 +11982,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new NotFoundException('Связь FBS-заказа с заявкой не найдена. Обновите заявку.');
     }
 
+    // FIX: validate scans, branch/client access and placement before any external KIZ mutation.
+    await validateFbsReturnReceipt(this.prisma, task, dto, user, this.boxCodes);
     const orderCancelled = link.lastCategory === 'cancelled';
     if (
       !orderCancelled &&
@@ -12033,6 +12036,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         );
       }
 
+      // FIX: validate again under the stock transaction; a stale web screen cannot redirect a KIZ.
+      const receipt = await validateFbsReturnReceipt(tx, freshTask, dto, user, this.boxCodes);
+      if (receipt && freshTask.updatedAt.getTime() !== task.updatedAt.getTime()) {
+        throw new BadRequestException('Заказ изменился. Обновите заявку и повторите приёмку.');
+      }
       if (freshTask.completedAt && freshTask.boxId) {
         const selection = await tx.clientRequestBoxSelection.findUnique({
           where: {
@@ -12055,8 +12063,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
 
       // FIX: release the early KIZ reserve before the completed task is reset.
-      if (freshTask.completedAt) {
-        await this.returnCompletedWildberriesStockReservation(tx, freshTask);
+      if (freshTask.completedAt || receipt) {
+        await this.returnCompletedWildberriesStockReservation(tx, freshTask, receipt);
       }
 
       if (freshTask.cargoPackingId) {
@@ -12072,8 +12080,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
 
       const freshOrderCancelled = freshLink.lastCategory === 'cancelled';
-      const actionLabel =
-        dto.action === FbsSyncConflictResolutionAction.RETURN_TO_STOCK
+      const actionLabel = receipt
+        ? `Товар повторно принят в бокс ${receipt.boxCode}`
+        : dto.action === FbsSyncConflictResolutionAction.RETURN_TO_STOCK
           ? 'Товар возвращён на склад'
           : 'Решение менеджера подтверждено';
       const sourceLocation = freshTask.boxCode || freshTask.reservedBoxCode || 'хранение без короба';
@@ -12151,6 +12160,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             sourceBoxCode: freshTask.boxCode,
             kiz: freshTask.kiz,
             quantity: Math.max(1, freshTask.itemCount),
+            // FIX: receipt evidence remains after the cancelled assembly is cleared.
+            ...(receipt ? { returnBoxId: receipt.boxId, returnBoxCode: receipt.boxCode,
+              returnBarcode: dto.returnBarcode, returnKiz: dto.returnKiz, receivedByUserId: user.id } : {}),
             marketplaceCategory: freshLink.lastCategory,
             supplierStatus: freshLink.lastSupplierStatus,
             wbStatus: freshLink.lastWbStatus,
@@ -13480,7 +13492,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const previousPackingMovements = await tx.stockMovement.findMany({
       where: {
         idempotencyKey: { startsWith: `${movementPrefix}:` },
-        status: StockStatus.PACKING,
+        // FIX: packed returns must close the earlier reservation before a new pick.
+        ...(permanentStorageBoxesEnabled() ? { OR: [
+          { status: StockStatus.PACKING },
+          { type: MovementType.RETURN, status: StockStatus.SHIPPING, quantity: { lt: 0 } },
+        ] } : { status: StockStatus.PACKING }),
       },
       select: { quantity: true },
     });
@@ -13676,14 +13692,23 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   private async returnCompletedWildberriesStockReservation(
     tx: Prisma.TransactionClient,
     task: FbsTsdAssemblyRecord,
+    receipt?: FbsReturnReceipt,
   ) {
+    // FIX: never restore a completed/physically picked cancellation to its old box implicitly.
+    if (requiresFbsReturnReceipt(task) && !receipt) {
+      throw new BadRequestException('Для изъятого товара нужна повторная приёмка в отсканированный бокс.');
+    }
     if (task.marketplace !== MarketplaceType.WILDBERRIES) return;
 
     const movementKey = `fbs-sticker-pick:${task.id}`;
-    const reservationMovements = await tx.stockMovement.findMany({
+    const allReservationMovements = await tx.stockMovement.findMany({
       where: {
         idempotencyKey: { startsWith: `${movementKey}:` },
-        status: StockStatus.PACKING,
+        // FIX: include prior returns removed from the packing/shipping balance.
+        ...(permanentStorageBoxesEnabled() ? { OR: [
+          { status: StockStatus.PACKING },
+          { type: MovementType.RETURN, status: StockStatus.SHIPPING, quantity: { lt: 0 } },
+        ] } : { status: StockStatus.PACKING }),
       },
       select: {
         warehouseId: true,
@@ -13692,13 +13717,24 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         quantity: true,
       },
     });
+    // FIX: a repeated pick can use another box; keep all attempts for unique return keys.
+    const reservationMovements = receipt
+      ? allReservationMovements.filter(row => row.boxId === task.boxId)
+      : allReservationMovements;
     const reservedQuantity = Math.max(0, reservationMovements.reduce(
       (total, movement) => total + movement.quantity,
       0,
     ));
-    if (reservedQuantity === 0) return;
+    if (reservedQuantity === 0) {
+      if (receipt) throw new BadRequestException('Учёт отобранного товара уже изменён. Повторная приёмка не выполнена; проверьте движения заказа.');
+      return;
+    }
+    if (receipt && (reservedQuantity !== Math.max(1, task.itemCount) ||
+        reservationMovements.some(row => row.warehouseId !== receipt.warehouseId))) {
+      throw new BadRequestException('Количество или филиал отобранного товара не совпадает с возвратом. Остатки не изменены.');
+    }
     const returnAttempt =
-      reservationMovements.filter((movement) => movement.quantity < 0).length + 1;
+      allReservationMovements.filter((movement) => movement.quantity < 0).length + 1;
     const returnKey = returnAttempt === 1
       ? `${movementKey}:return`
       : `${movementKey}:return-${returnAttempt}`;
@@ -13753,12 +13789,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     }
 
+    // FIX: inbound placement comes only from fresh receipt scans, not historical source fields.
+    const returnBoxId = receipt?.boxId ?? boxId;
+    const returnPalletId = receipt ? receipt.palletId : palletId;
     const availableBalanceKey = fbsStockBalanceKey({
       warehouseId,
       clientId: task.clientId,
       skuId: task.skuId,
-      boxId,
-      palletId,
+      boxId: returnBoxId,
+      palletId: returnPalletId,
       status: StockStatus.AVAILABLE,
     });
     await tx.stockBalance.upsert({
@@ -13769,19 +13808,19 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         warehouseId,
         clientId: task.clientId,
         skuId: task.skuId,
-        boxId,
-        palletId,
+        boxId: returnBoxId,
+        palletId: returnPalletId,
         status: StockStatus.AVAILABLE,
         quantity: reservedQuantity,
       },
     });
-    await tx.stockMovement.create({
+    const returnMovement = await tx.stockMovement.create({
       data: {
         warehouseId,
         clientId: task.clientId,
         skuId: task.skuId,
-        boxId,
-        palletId,
+        boxId: returnBoxId,
+        palletId: returnPalletId,
         type: MovementType.RETURN,
         status: StockStatus.AVAILABLE,
         quantity: reservedQuantity,
@@ -13792,18 +13831,21 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     });
     if (task.kiz) {
       // FIX: reservation rollback restores the same KIZ together with AVAILABLE.
-      await tx.productMark.updateMany({
+      const returnedMark = await tx.productMark.updateMany({
         where: {
           clientId: task.clientId,
           skuId: task.skuId,
           value: task.kiz,
           status: StockStatus.PACKING,
+          ...(receipt?.mark ? { id: receipt.mark.id, boxId: receipt.mark.boxId, updatedAt: receipt.mark.updatedAt } : {}),
         },
         data: {
           status: StockStatus.AVAILABLE,
-          boxId,
+          boxId: returnBoxId,
+          ...(receipt ? { stockMovementId: returnMovement.id } : {}),
         },
       });
+      if (receipt && returnedMark.count !== 1) throw new BadRequestException('КИЗ изменился во время приёмки. Остатки не изменены.');
     }
   }
 

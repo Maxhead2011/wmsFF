@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
+import { requiresFbsReturnReceipt } from '../marketplace-connections/fbs-return-receipt';
 import {
   ClientRequestStatus,
   ClientRequestType,
@@ -893,6 +894,7 @@ export class TsdAssemblyService {
           workerName: true,
           deviceCode: true,
           completedAt: true,
+          relabelConfirmedAt: true, // FIX: distinguish physical picks requiring return receipt.
           updatedAt: true,
           cargoPackingId: true,
           cargoPackedAt: true,
@@ -1004,6 +1006,9 @@ export class TsdAssemblyService {
       statusLabel: fbsAssemblyStatusLabel(row.status),
       sourceBoxPending: row.sourceBoxPending,
       syncIssue: row.errorMessage,
+      // FIX: web clients request fresh receipt scans only when our installation requires them.
+      requiresReturnReceipt: requiresFbsReturnReceipt(row),
+      returnRequiresKiz: row.requiresKiz || Boolean(row.kiz),
       workerName: row.workerName,
       completionSource: row.deviceCode.startsWith('SOS-WB:') ? 'SOS_WB' : 'STANDARD',
       completedAt: row.completedAt?.toISOString() ?? null,
