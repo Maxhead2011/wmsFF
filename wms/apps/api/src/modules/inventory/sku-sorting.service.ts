@@ -7,11 +7,11 @@ import { ClientScopeService } from '../auth/client-scope.service';
 import type { AuthUser } from '../auth/auth.types';
 import { StockBalancesService } from '../stock/stock-balances.service';
 import { InventoryService } from './inventory.service';
+import { skuSortingAllowed } from './sku-sorting-policy';
 import { SkuCollectionService } from './sku-collection.service';
 import type { MoveSkuSortingDto, CheckSkuSortingDto, ReadySkuSortingSourceDto } from './dto/sku-collection.dto';
 
 // FIX: opt-in only on our WMS; the sold installation keeps its previous workflow.
-export const skuSortingEnabled = () => process.env.WMS_SKU_SORTING_ENABLED === 'true';
 const marker = '[SKU_SORTING_V2]';
 const same = (a: string, b: string) => a.trim().toUpperCase() === b.trim().toUpperCase();
 
@@ -27,7 +27,7 @@ export class SkuSortingService {
   ) {}
 
   private async request(db: Prisma.TransactionClient, id: string, user: AuthUser) {
-    if (!skuSortingEnabled()) throw new ForbiddenException('Единая сортировка пока не включена на этом сервере.');
+    if (!skuSortingAllowed(user, id)) throw new ForbiddenException('Единая сортировка недоступна для этой пары ТСД и заявки.');
     const request = await db.clientRequest.findFirst({ where: { id, type: 'SKU_COLLECTION',
       status: { in: ['APPROVED', 'IN_WORK', 'PACKED', 'DONE'] } }, include: { skuCollectionSources: true } });
     if (!request) throw new BadRequestException('Активная заявка сортировки не найдена.');
