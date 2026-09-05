@@ -328,7 +328,8 @@ describe('LogisticsService', () => {
   it('создает заявку на доставку с автоматическим расчетом тарифа', async () => {
     const prisma = {
       clientRequest: {
-        findFirst: vi.fn().mockResolvedValue({ id: 'request-1', packages: [{ packageType: 'BOX' }] }),
+        // TEST: the selected linked request carries the delivery branch.
+        findFirst: vi.fn().mockResolvedValue({ id: 'request-1', warehouseId: 'warehouse-1', packages: [{ packageType: 'BOX' }] }),
       },
       logisticsTariffSet: {
         findUnique: vi.fn().mockResolvedValue({
@@ -381,6 +382,7 @@ describe('LogisticsService', () => {
           clientId: 'client-1',
           requestId: 'request-1',
           origin: 'Москва',
+          warehouseId: 'warehouse-1',
           status: 'QUOTED',
           estimatedTotalRub: 5000,
           boxes: 1,
@@ -403,6 +405,7 @@ describe('LogisticsService', () => {
       clientRequest: {
         findFirst: vi.fn().mockResolvedValue({
           id: 'request-1',
+          warehouseId: 'warehouse-1',
           packages: Array.from({ length: 80 }, () => ({ packageType: 'BOX' })),
         }),
       },
@@ -451,6 +454,7 @@ describe('LogisticsService', () => {
         data: expect.objectContaining({
           tariffSetId: 'tariff-1',
           boxes: 80,
+          warehouseId: 'warehouse-1',
           pallets: 5,
           estimatedTotalRub: 35000,
           requiresManualReview: false,
@@ -670,7 +674,7 @@ describe('LogisticsService', () => {
       plannedDate: '2026-06-28',
       vehicleNumber: 'A123BC',
       driverName: 'Иван',
-    });
+    }, { ...user(), permissionCodes: ['logistics:write'], warehouseIds: [], writableWarehouseIds: [] });
 
     expect(prisma.logisticsTrip.count).toHaveBeenCalledWith({
       where: { code: { startsWith: 'TRIP-20260628' } },
@@ -685,6 +689,18 @@ describe('LogisticsService', () => {
         }),
       }),
     );
+  });
+
+  // TEST: a branch-scoped actor cannot change network-wide trips.
+  it('запрещает филиальному менеджеру создавать общий рейс без записи', async () => {
+    const prisma = { logisticsCarrier: { findFirst: vi.fn() }, logisticsTrip: { count: vi.fn(), create: vi.fn() } };
+    const deliveryService = new LogisticsService(prisma as never, { requireClientAccess: vi.fn() } as never);
+    await expect(deliveryService.createTrip({ plannedDate: '2026-06-28' }, {
+      ...user(), roleCodes: ['BRANCH_MANAGER'], permissionCodes: ['logistics:write'],
+      activeWarehouseId: 'warehouse-1', warehouseIds: ['warehouse-1'], writableWarehouseIds: ['warehouse-1'],
+    })).rejects.toThrow('Общие рейсы и перевозчиков изменяет только администратор сети.');
+    expect(prisma.logisticsCarrier.findFirst).not.toHaveBeenCalled();
+    expect(prisma.logisticsTrip.create).not.toHaveBeenCalled();
   });
 
   it('назначает доставку в рейс и переводит заявку в план', async () => {
@@ -731,6 +747,7 @@ describe('LogisticsService', () => {
       clientRequest: {
         findFirst: vi.fn().mockResolvedValue({
           id: 'request-1',
+          warehouseId: 'warehouse-1',
           packages: [{ packageType: 'BOX' }, { packageType: 'PALLET' }, { packageType: 'ПАЛЛЕТ' }],
         }),
       },
@@ -784,6 +801,7 @@ describe('LogisticsService', () => {
         data: expect.objectContaining({
           boxes: 1,
           pallets: 2,
+          warehouseId: 'warehouse-1',
           estimatedTotalRub: 6000,
         }),
       }),

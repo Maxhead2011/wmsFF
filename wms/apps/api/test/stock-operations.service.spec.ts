@@ -17,6 +17,23 @@ describe('StockOperationsService', () => {
     expect(() => service.planTransferQuantities(2, 0, 3)).toThrow(BadRequestException);
   });
 
+  // TEST: complete actors with missing/read-only branch scope must fail before any stock transaction.
+  it.each([
+    { scope: { activeWarehouseId: null }, message: 'Выберите активный филиал.' },
+    { scope: { writableWarehouseIds: [] }, message: 'Филиал не назначен сотруднику для складских операций.' },
+  ])('не начинает корректировку остатков при недоступном write scope: $message', async ({ scope, message }) => {
+    const transaction = vi.fn();
+    const adjustmentService = new StockOperationsService(
+      { $transaction: transaction } as never,
+      { requireClientAccess: vi.fn() } as never,
+      { balanceKey: vi.fn() } as never,
+    );
+    await expect(adjustmentService.adjustInventoryToCounted({
+      clientId: 'client-1', skuId: 'sku-1', boxCode: 'BOX-1', countedQuantity: 2, idempotencyKey: 'denied-adjustment',
+    }, { ...user(), ...scope })).rejects.toThrow(message);
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
   it('создает отрицательную корректировку инвентаризации через ledger', async () => {
     const tx = {
       stockMovement: {
@@ -27,10 +44,10 @@ describe('StockOperationsService', () => {
         findFirst: vi.fn().mockResolvedValue({ id: 'sku-1' }),
       },
       box: {
-        findUnique: vi.fn().mockResolvedValue({ id: 'box-1', code: 'BOX-1', palletId: null }),
+        findUnique: vi.fn().mockResolvedValue({ id: 'box-1', code: 'BOX-1', palletId: null, warehouseId: 'warehouse-1' }),
       },
       stockBalance: {
-        findFirst: vi.fn().mockResolvedValue({ id: 'balance-1', quantity: 5 }),
+        findFirst: vi.fn().mockResolvedValue({ id: 'balance-1', quantity: 5, warehouseId: 'warehouse-1' }),
         update: vi.fn().mockResolvedValue({ id: 'balance-1', quantity: 2 }),
         delete: vi.fn().mockResolvedValue(undefined),
       },
@@ -86,6 +103,7 @@ describe('StockOperationsService', () => {
         findUnique: vi.fn().mockResolvedValue({
           id: 'request-1',
           clientId: 'client-1',
+          warehouseId: 'warehouse-1',
           type: 'OUTBOUND',
           status: 'APPROVED',
           title: 'Отгрузка',
@@ -107,6 +125,7 @@ describe('StockOperationsService', () => {
             id: 'balance-1',
             balanceKey: 'client-1:sku-1:box-1:AVAILABLE',
             clientId: 'client-1',
+            warehouseId: 'warehouse-1',
             skuId: 'sku-1',
             boxId: 'box-1',
             palletId: null,
@@ -194,17 +213,20 @@ describe('StockOperationsService', () => {
     const tx = {
       stockMovement: {
         findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn(),
       },
       clientRequest: {
         findUnique: vi.fn().mockResolvedValue({
           id: 'request-1',
           clientId: 'client-1',
+          warehouseId: 'warehouse-1',
           type: 'OUTBOUND',
           status: 'IN_WORK',
           title: 'Отгрузка',
           managerComment: null,
           items: [{ id: 'item-1', skuId: 'sku-1', barcode: null, quantity: 2 }],
         }),
+        update: vi.fn(),
       },
       stockBalance: {
         findMany: vi.fn(),
@@ -216,17 +238,18 @@ describe('StockOperationsService', () => {
       { balanceKey: vi.fn() } as never,
     );
 
-    await expect(
-      pickService.pickClientRequest(
-        {
-          requestId: 'request-1',
-          idempotencyKey: 'pick-again',
-        },
-        user(),
-      ),
-    ).rejects.toThrow(BadRequestException);
+    // TEST: IN_WORK is rejected by the request-state guard, not missing branch context.
+    const attempt = pickService.pickClientRequest(
+      { requestId: 'request-1', idempotencyKey: 'pick-again' },
+      user(),
+    );
+    await expect(attempt).rejects.toThrow(BadRequestException);
+    await expect(attempt).rejects.toThrow('Сборку можно запускать только для новой, проверяемой или согласованной заявки.');
 
+    expect(tx.clientRequest.findUnique).toHaveBeenCalledOnce();
     expect(tx.stockBalance.findMany).not.toHaveBeenCalled();
+    expect(tx.stockMovement.create).not.toHaveBeenCalled();
+    expect(tx.clientRequest.update).not.toHaveBeenCalled();
   });
 
   it('упаковывает собранную outbound-заявку в SHIPPING через PACK-движения', async () => {
@@ -242,6 +265,7 @@ describe('StockOperationsService', () => {
         findUnique: vi.fn().mockResolvedValue({
           id: 'request-1',
           clientId: 'client-1',
+          warehouseId: 'warehouse-1',
           type: 'OUTBOUND',
           status: 'IN_WORK',
           title: 'Отгрузка',
@@ -262,6 +286,7 @@ describe('StockOperationsService', () => {
             id: 'packing-balance',
             balanceKey: 'client-1:sku-1:box-1:PACKING',
             clientId: 'client-1',
+            warehouseId: 'warehouse-1',
             skuId: 'sku-1',
             boxId: 'box-1',
             palletId: null,
@@ -385,6 +410,7 @@ describe('StockOperationsService', () => {
         findUnique: vi.fn().mockResolvedValue({
           id: 'request-1',
           clientId: 'client-1',
+          warehouseId: 'warehouse-1',
           type: 'OUTBOUND',
           status: 'IN_WORK',
           title: 'Отгрузка',
@@ -405,6 +431,7 @@ describe('StockOperationsService', () => {
             id: 'packing-balance',
             balanceKey: 'client-1:sku-1:box-1:PACKING',
             clientId: 'client-1',
+            warehouseId: 'warehouse-1',
             skuId: 'sku-1',
             boxId: 'box-1',
             palletId: null,
@@ -490,6 +517,7 @@ describe('StockOperationsService', () => {
         findUnique: vi.fn().mockResolvedValue({
           id: 'request-1',
           clientId: 'client-1',
+          warehouseId: 'warehouse-1',
           type: 'OUTBOUND',
           status: 'PACKED',
           title: 'Отгрузка',
@@ -510,6 +538,7 @@ describe('StockOperationsService', () => {
             id: 'shipping-balance',
             balanceKey: 'client-1:sku-1:box-1:SHIPPING',
             clientId: 'client-1',
+            warehouseId: 'warehouse-1',
             skuId: 'sku-1',
             boxId: 'box-1',
             palletId: null,
@@ -583,6 +612,7 @@ describe('StockOperationsService', () => {
         findUnique: vi.fn().mockResolvedValue({
           id: 'request-1',
           clientId: 'client-1',
+          warehouseId: 'warehouse-1',
           type: 'DELIVERY',
           status: 'APPROVED',
           title: 'Ручная сдача',
@@ -606,7 +636,7 @@ describe('StockOperationsService', () => {
             skuId: 'sku-1',
             boxId: 'box-selected',
             quantity: 3,
-            box: { code: 'FFL_SELECTED' },
+            box: { code: 'FFL_SELECTED', warehouseId: 'warehouse-1' },
           },
         ]),
       },
@@ -619,25 +649,27 @@ describe('StockOperationsService', () => {
             id: 'other-balance',
             balanceKey: 'client-1:sku-1:box-other:no-pallet:AVAILABLE',
             clientId: 'client-1',
+            warehouseId: 'warehouse-1',
             skuId: 'sku-1',
             boxId: 'box-other',
             palletId: null,
             status: 'AVAILABLE',
             quantity: 20,
             updatedAt: new Date('2026-07-01T00:00:00.000Z'),
-            box: { code: 'FFL_OTHER' },
+            box: { code: 'FFL_OTHER', warehouseId: 'warehouse-1' },
           },
           {
             id: 'selected-balance',
             balanceKey: 'client-1:sku-1:box-selected:no-pallet:AVAILABLE',
             clientId: 'client-1',
+            warehouseId: 'warehouse-1',
             skuId: 'sku-1',
             boxId: 'box-selected',
             palletId: null,
             status: 'AVAILABLE',
             quantity: 3,
             updatedAt: new Date('2026-07-03T00:00:00.000Z'),
-            box: { code: 'FFL_SELECTED' },
+            box: { code: 'FFL_SELECTED', warehouseId: 'warehouse-1' },
           },
         ]),
         update: vi.fn().mockResolvedValue({ id: 'selected-balance', quantity: 0 }),
@@ -725,6 +757,7 @@ describe('StockOperationsService', () => {
             boxId: 'box-1',
             status: 'AVAILABLE',
             quantity: 1,
+            warehouseId: 'warehouse-1',
           },
         ]),
         upsert: vi.fn().mockResolvedValue({ id: 'shipping-balance' }),
@@ -735,6 +768,7 @@ describe('StockOperationsService', () => {
             id: 'box-1',
             code: 'FFL_LKB1107_213',
             palletId: null,
+            warehouseId: 'warehouse-1',
           },
         ]),
       },
@@ -774,6 +808,7 @@ describe('StockOperationsService', () => {
           box: { code: string };
         }>,
         baseKey: string,
+        warehouseId?: string,
       ) => Promise<void>;
     }).restoreCompletedFbsSelectionShortages(
       tx,
@@ -793,13 +828,15 @@ describe('StockOperationsService', () => {
         },
       ],
       'manual-status-done:request-32',
+      'warehouse-1',
     );
 
     expect(tx.stockBalance.upsert).toHaveBeenCalledWith({
       where: { balanceKey: 'client-1:sku-1:box-1:no-pallet:SHIPPING' },
-      update: { quantity: { increment: 7 } },
+      update: { quantity: { increment: 7 }, warehouseId: 'warehouse-1' },
       create: {
         balanceKey: 'client-1:sku-1:box-1:no-pallet:SHIPPING',
+        warehouseId: 'warehouse-1',
         clientId: 'client-1',
         skuId: 'sku-1',
         boxId: 'box-1',
@@ -826,6 +863,7 @@ describe('StockOperationsService', () => {
       id: 'available-balance',
       balanceKey: 'client-1:sku-1:box-1:no-pallet:AVAILABLE',
       clientId: 'client-1',
+      warehouseId: 'warehouse-1',
       skuId: 'sku-1',
       boxId: 'box-1',
       palletId: null,
@@ -857,6 +895,7 @@ describe('StockOperationsService', () => {
             id: 'box-1',
             code: 'FFL_LKB1107_245',
             palletId: null,
+            warehouseId: 'warehouse-1',
           },
         ]),
       },
@@ -898,6 +937,7 @@ describe('StockOperationsService', () => {
           box: { code: string };
         }>,
         baseKey: string,
+        warehouseId?: string,
       ) => Promise<void>;
     }).restoreCompletedFbsSelectionShortages(
       tx,
@@ -917,6 +957,7 @@ describe('StockOperationsService', () => {
         },
       ],
       'manual-status-done:request-35',
+      'warehouse-1',
     );
 
     expect(tx.stockBalance.update).toHaveBeenCalledWith({
@@ -925,7 +966,7 @@ describe('StockOperationsService', () => {
     });
     expect(tx.stockBalance.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
-        update: { quantity: { increment: 1 } },
+        update: { quantity: { increment: 1 }, warehouseId: 'warehouse-1' },
         create: expect.objectContaining({
           status: 'SHIPPING',
           quantity: 1,
@@ -960,18 +1001,20 @@ describe('StockOperationsService', () => {
       id: 'balance-1',
       balanceKey: 'client-1:sku-1:box-1:no-pallet:AVAILABLE',
       clientId: 'client-1',
+      warehouseId: 'warehouse-1',
       skuId: 'sku-1',
       boxId: 'box-1',
       palletId: null,
       status: 'AVAILABLE',
       quantity: 1,
       updatedAt: new Date('2026-07-25T00:00:00.000Z'),
-      box: { code: 'FFL_LKB1107_245' },
+      box: { code: 'FFL_LKB1107_245', warehouseId: 'warehouse-1' },
     };
     const reconciledBalance = {
       id: 'shipping-1',
       balanceKey: 'client-1:sku-1:box-1:no-pallet:SHIPPING',
       clientId: 'client-1',
+      warehouseId: 'warehouse-1',
       skuId: 'sku-1',
       boxId: 'box-1',
       palletId: null,
@@ -993,6 +1036,7 @@ describe('StockOperationsService', () => {
             id: 'box-1',
             code: 'FFL_LKB1107_245',
             palletId: null,
+            warehouseId: 'warehouse-1',
           },
         ]),
       },
@@ -1029,6 +1073,7 @@ describe('StockOperationsService', () => {
         selections: never[],
         sources: Array<{ requestItemId: string; boxCode: string; quantity: number }>,
         baseKey: string,
+        warehouseId?: string,
       ) => Promise<{
         lines: Array<{ allocations: Array<{ quantity: number }> }>;
       }>;
@@ -1048,6 +1093,7 @@ describe('StockOperationsService', () => {
         },
       ],
       'manual-status-done:request-35',
+      'warehouse-1',
     );
 
     expect(plan.lines[0]?.allocations.map((allocation) => allocation.quantity)).toEqual([1, 1]);
@@ -1155,8 +1201,9 @@ describe('StockOperationsService', () => {
   it('позволяет подтвердить физический товар без короба', async () => {
     const reconciledBalance = {
       id: 'shipping-no-box',
-      balanceKey: 'client-1:sku-1:no-box:no-pallet:SHIPPING',
+      balanceKey: 'client-1:sku-1:no-box:no-pallet:SHIPPING:warehouse:warehouse-1',
       clientId: 'client-1',
+      warehouseId: 'warehouse-1',
       skuId: 'sku-1',
       boxId: null,
       palletId: null,
@@ -1208,6 +1255,7 @@ describe('StockOperationsService', () => {
         selections: never[],
         sources: Array<{ requestItemId: string; noBox: true; quantity: number }>,
         baseKey: string,
+        warehouseId?: string,
       ) => Promise<{
         lines: Array<{
           allocations: Array<{ balance: { boxId: string | null }; quantity: number }>;
@@ -1223,6 +1271,7 @@ describe('StockOperationsService', () => {
       [],
       [{ requestItemId: 'item-1', noBox: true, quantity: 1 }],
       'manual-status-done:request-35',
+      'warehouse-1',
     );
 
     expect(plan.lines[0]?.allocations[0]).toMatchObject({
@@ -1405,6 +1454,7 @@ describe('StockOperationsService', () => {
     const sourceBoxBase = {
       id: 'box-source',
       clientId: 'client-1',
+      warehouseId: 'warehouse-1',
       code: 'FFL_SOURCE_001',
       status: 'active',
       palletId: null,
@@ -1413,6 +1463,7 @@ describe('StockOperationsService', () => {
     const targetBox = {
       id: 'box-target',
       clientId: 'client-1',
+      warehouseId: 'warehouse-1',
       code: 'FFL_TARGET_001',
       status: 'active',
       palletId: null,
@@ -1421,6 +1472,7 @@ describe('StockOperationsService', () => {
       id: 'balance-source',
       balanceKey: 'source-key',
       clientId: 'client-1',
+      warehouseId: 'warehouse-1',
       skuId: 'sku-1',
       boxId: 'box-source',
       palletId: null,
@@ -1519,8 +1571,12 @@ function user(): AuthUser {
     name: 'Operator',
     roleCodes: ['OPERATOR'],
     permissionCodes: ['stock:write'],
-    clientScopeMode: 'ALL',
-    clientIds: [],
-    writableClientIds: [],
+    // TEST: exercise stock guards with a complete, narrowly scoped operator.
+    clientScopeMode: 'LIMITED',
+    clientIds: ['client-1'],
+    writableClientIds: ['client-1'],
+    activeWarehouseId: 'warehouse-1',
+    warehouseIds: ['warehouse-1'],
+    writableWarehouseIds: ['warehouse-1'],
   };
 }

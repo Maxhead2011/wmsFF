@@ -283,7 +283,8 @@ describe('warehouse audit history scope', () => {
       {
         boxId: 'box-empty',
         userId: 'user-branch',
-        reason: 'warehouse-box-integrity-write-off',
+        // TEST: reason is audit metadata; box, actor and transaction remain exact.
+        reason: 'warehouse-box-integrity',
       },
       tx,
     );

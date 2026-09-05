@@ -225,13 +225,14 @@ describe('ClientRequestEmergencyService', () => {
     expect(tx.stockBalance.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { balanceKey: 'client-1:sku-1:box-1:no-pallet:AVAILABLE' },
-        create: expect.objectContaining({ quantity: 5, boxId: 'box-1' }),
+        create: expect.objectContaining({ quantity: 5, boxId: 'box-1', warehouseId: 'warehouse-1' }),
       }),
     );
     expect(tx.stockMovement.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
           type: 'INVENTORY_ADJUSTMENT',
+          warehouseId: 'warehouse-1',
           quantity: 5,
           sourceDocument: 'request-1',
         }),
@@ -242,6 +243,23 @@ describe('ClientRequestEmergencyService', () => {
     );
     expect(tx.clientRequestPackage.deleteMany).toHaveBeenCalledWith({ where: { requestId: 'request-1' } });
     expect(tx.clientRequestItem.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ['auto-item-1'] } } });
+  });
+
+  // TEST: ambiguous historical stock must never be restored into a guessed branch.
+  it('не восстанавливает остаток без филиала движения и заявки', async () => {
+    const tx = buildRollbackTransaction({ warehouseId: null });
+    const prisma = {
+      clientRequest: { findUnique: vi.fn().mockResolvedValue({ id: 'request-1', clientId: 'client-1' }) },
+      $transaction: (callback: (transaction: typeof tx) => unknown) => callback(tx),
+    };
+    const service = new ClientRequestEmergencyService(prisma as never, { requireClientAccess: vi.fn() } as never);
+
+    await expect(service.rollbackPackedXlsx('request-1', user())).rejects.toThrow(
+      'Не удалось определить филиал возвращаемого остатка. Откат остановлен без изменений.',
+    );
+    expect(tx.stockBalance.upsert).not.toHaveBeenCalled();
+    expect(tx.stockMovement.create).not.toHaveBeenCalled();
+    expect(tx.clientRequest.update).not.toHaveBeenCalled();
   });
 
   it('не меняет склад, если автоматический счет уже выставлен', async () => {
@@ -265,14 +283,17 @@ describe('ClientRequestEmergencyService', () => {
   });
 });
 
-function buildRollbackTransaction(options: { invoiceStatus?: 'DRAFT' | 'ISSUED' } = {}) {
+function buildRollbackTransaction(options: { invoiceStatus?: 'DRAFT' | 'ISSUED'; warehouseId?: string | null } = {}) {
   const closedAt = new Date('2026-07-15T10:00:00.000Z');
+  // TEST: both persisted request and stock movement carry their physical branch.
+  const warehouseId = options.warehouseId === undefined ? 'warehouse-1' : options.warehouseId;
   return {
     clientRequest: {
       findUnique: vi.fn().mockResolvedValue({
         id: 'request-1',
         clientId: 'client-1',
         title: 'Поставка WB',
+        warehouseId,
         type: 'OUTBOUND',
         status: 'PACKED',
         managerComment: 'Аварийно упаковано',
@@ -293,6 +314,7 @@ function buildRollbackTransaction(options: { invoiceStatus?: 'DRAFT' | 'ISSUED' 
       findMany: vi.fn().mockResolvedValue([
         {
           id: 'movement-1',
+          warehouseId,
           clientId: 'client-1',
           skuId: 'sku-1',
           boxId: 'box-1',

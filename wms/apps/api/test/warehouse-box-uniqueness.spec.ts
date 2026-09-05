@@ -31,9 +31,20 @@ describe('WarehouseService: уникальность номера короба',
     await expect(
       service.openOnlineReceiptBox(
         { clientId: 'client-1', boxCode: 'FFL_BOX_1', sourceDocument: 'RECEIPT-1' },
-        { id: 'user-1', email: 'operator@example.test' } as never,
+        // TEST: reach the duplicate-number guard with a valid non-admin warehouse scope.
+        {
+          id: 'user-1', email: 'operator@example.test', name: 'Operator',
+          roleCodes: ['OPERATOR'], permissionCodes: ['stock:write'],
+          clientScopeMode: 'LIMITED', clientIds: ['client-1'], writableClientIds: ['client-1'],
+          activeWarehouseId: 'warehouse-1', warehouseIds: ['warehouse-1'],
+          writableWarehouseIds: ['warehouse-1'],
+        },
       ),
     ).rejects.toBeInstanceOf(BadRequestException);
+    expect(tx.box.findFirst).toHaveBeenCalledWith({
+      where: { code: 'FFL_BOX_1' },
+      select: { id: true, clientId: true, status: true },
+    });
     expect(tx.box.create).not.toHaveBeenCalled();
   });
 

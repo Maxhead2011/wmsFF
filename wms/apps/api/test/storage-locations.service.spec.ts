@@ -106,6 +106,7 @@ describe('StorageLocationsService', () => {
       id: 'pallet-1',
       code: 'PALET_SORT_001',
       clientId: 'client-1',
+      warehouseId: 'warehouse-1',
       status: 'OPEN',
       client: { id: 'client-1', code: 'CLIENT', name: 'Клиент' },
       zone: null,
@@ -118,13 +119,14 @@ describe('StorageLocationsService', () => {
       box: {
         findUnique: vi.fn().mockResolvedValue(null),
       },
+      storagePalletBox: { findUnique: vi.fn().mockResolvedValue(null) },
     };
     const service = new StorageLocationsService(prisma as never, boxCodePolicy() as never, balances() as never);
 
     const result = await service.scanTsdPalletBox(
       'pallet-1',
       { boxCode: 'FFL_MISSING_001' },
-      { id: 'worker-1', name: 'Сборщик' } as never,
+      branchOperator('worker-1', 'Сборщик'),
     );
 
     expect(result).toMatchObject({
@@ -165,7 +167,7 @@ describe('StorageLocationsService', () => {
 
     const result = await service.relocateBox(
       { boxCode: sourcePlacement.boxCode, targetPalletId: targetPallet.id },
-      { id: 'admin-1', name: 'Администратор' } as never,
+      branchOperator('admin-1', 'Администратор'),
     );
 
     expect(result).toMatchObject({
@@ -223,7 +225,7 @@ describe('StorageLocationsService', () => {
         targetPalletId: targetPallet.id,
         swapBoxCode: swapPlacement.boxCode,
       },
-      { id: 'admin-1', name: 'Администратор' } as never,
+      branchOperator('admin-1', 'Администратор'),
     );
 
     expect(result).toMatchObject({
@@ -448,6 +450,7 @@ describe('StorageLocationsService', () => {
         findUnique: vi.fn().mockResolvedValue(emptyPallet),
         delete: vi.fn().mockResolvedValue(emptyPallet),
       },
+      storagePalletBox: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
       auditLog: {
         create: vi.fn().mockResolvedValue({}),
       },
@@ -456,11 +459,12 @@ describe('StorageLocationsService', () => {
     const service = new StorageLocationsService(prisma as never, boxCodePolicy() as never, balances() as never);
 
     await expect(
-      service.deletePallet('pallet-empty', { id: 'admin-1', name: 'Администратор' } as never),
+      service.deletePallet('pallet-empty', branchOperator('admin-1', 'Администратор')),
     ).resolves.toEqual({
       id: 'pallet-empty',
       code: 'PALLET_EMPTY',
       deleted: true,
+      detachedBoxCount: 0,
     });
     expect(prisma.auditLog.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -472,9 +476,11 @@ describe('StorageLocationsService', () => {
       }),
     );
     expect(prisma.storagePallet.delete).toHaveBeenCalledWith({ where: { id: 'pallet-empty' } });
+    expect(prisma.storagePalletBox.deleteMany).toHaveBeenCalledWith({ where: { palletId: 'pallet-empty' } });
   });
 
-  it('does not delete a pallet that still contains boxes', async () => {
+  // TEST: 2026-09-05 business clarification permits rebuilding a pallet while all stock stays intact.
+  it('deletes an occupied pallet for rebuilding, detaches placements and preserves boxes and stock', async () => {
     const occupiedPallet = {
       ...pallet('pallet-full', 'PALLET_FULL'),
       zoneId: 'zone-1',
@@ -485,13 +491,39 @@ describe('StorageLocationsService', () => {
     const prisma = {
       storagePallet: {
         findUnique: vi.fn().mockResolvedValue(occupiedPallet),
+        delete: vi.fn().mockResolvedValue(occupiedPallet),
       },
+      storagePalletBox: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      box: protectedStockWrites(),
+      stockBalance: protectedStockWrites(),
+      productMark: protectedStockWrites(),
+      stockMovement: protectedStockWrites(),
+      auditLog: { create: vi.fn().mockResolvedValue({}) },
+      $transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback(prisma)),
     };
     const service = new StorageLocationsService(prisma as never, boxCodePolicy() as never, balances() as never);
 
     await expect(
-      service.deletePallet('pallet-full', { id: 'admin-1', name: 'Администратор' } as never),
-    ).rejects.toThrow('Сначала перенесите их на другую паллету');
+      service.deletePallet('pallet-full', branchOperator('admin-1', 'Администратор')),
+    ).resolves.toEqual({ id: 'pallet-full', code: 'PALLET_FULL', deleted: true, detachedBoxCount: 1 });
+    expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: 'Serializable' });
+    expect(prisma.storagePalletBox.deleteMany).toHaveBeenCalledOnce();
+    expect(prisma.storagePalletBox.deleteMany).toHaveBeenCalledWith({ where: { palletId: 'pallet-full' } });
+    expect(prisma.storagePallet.delete).toHaveBeenCalledOnce();
+    expect(prisma.storagePallet.delete).toHaveBeenCalledWith({ where: { id: 'pallet-full' } });
+    expect(prisma.auditLog.create).toHaveBeenCalledOnce();
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        userId: 'admin-1', action: 'STORAGE_PALLET_DELETED', entity: 'StoragePallet', entityId: 'pallet-full',
+        payload: {
+          palletCode: 'PALLET_FULL', clientId: 'client-1', warehouseId: 'warehouse-1', zoneId: 'zone-1',
+          source: 'MANUAL', status: 'CLOSED', detachedBoxCount: 1, boxCodes: ['FFL_BOX_001'], deletionMode: 'HARD_DELETE',
+        },
+      },
+    });
+    for (const delegate of [prisma.box, prisma.stockBalance, prisma.productMark, prisma.stockMovement]) {
+      for (const write of Object.values(delegate)) expect(write).not.toHaveBeenCalled();
+    }
   });
 
   // ADDED: Google data was a one-time migration source; ordinary layout reads
@@ -554,6 +586,24 @@ describe('StorageLocationsService', () => {
     expect.soft(googleWrites.warehouseCreate).not.toHaveBeenCalled();
   });
 });
+
+// TEST: removing a layout container must never create, update or delete factual stock entities.
+function protectedStockWrites() {
+  return {
+    create: vi.fn(), createMany: vi.fn(), update: vi.fn(), updateMany: vi.fn(),
+    upsert: vi.fn(), delete: vi.fn(), deleteMany: vi.fn(),
+  };
+}
+
+// TEST: layout mutations use a complete ordinary actor, without an administrator bypass.
+function branchOperator(id: string, name: string) {
+  return {
+    id, name, email: 'operator@example.test', roleCodes: ['OPERATOR'],
+    permissionCodes: ['warehouse:write'], clientScopeMode: 'LIMITED' as const,
+    clientIds: ['client-1'], writableClientIds: ['client-1'],
+    activeWarehouseId: 'warehouse-1', warehouseIds: ['warehouse-1'], writableWarehouseIds: ['warehouse-1'],
+  };
+}
 
 function pallet(id: string, code: string) {
   return {

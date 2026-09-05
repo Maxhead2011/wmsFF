@@ -15,6 +15,7 @@ describe('PickWaveDocumentService', () => {
         findMany: vi.fn().mockResolvedValue([
           {
             id: 'balance-1',
+            warehouseId: 'warehouse-1',
             clientId: 'client-1',
             skuId: 'sku-1',
             boxId: 'box-1',
@@ -40,6 +41,10 @@ describe('PickWaveDocumentService', () => {
     const document = await service.getWaveDocument('wave-1', user());
 
     expect(scopes.requireClientAccess).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }), 'client-1', 'read');
+    // TEST: a printable plan cannot allocate another branch's stock.
+    expect(prisma.stockBalance.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ warehouseId: 'warehouse-1' }),
+    }));
     expect(document).toMatchObject({
       waveId: 'wave-1',
       waveNumber: 'WAVE-1',
@@ -126,6 +131,7 @@ describe('PickWaveDocumentService', () => {
         findMany: vi.fn().mockResolvedValue([
           {
             id: 'balance-1',
+            warehouseId: 'warehouse-1',
             clientId: 'client-1',
             skuId: 'sku-1',
             boxId: 'box-1',
@@ -164,6 +170,26 @@ describe('PickWaveDocumentService', () => {
     expect(boxRows[0]).toMatchObject({ Зона: 'A-01 · Зона A', Короб: 'BOX-A1', Паллета: 'PAL-01', Количество: 3 });
   });
 
+  // TEST: reject mixed-branch data and cross-branch access before reading stock for print.
+  it.each([
+    { requestWarehouseId: 'warehouse-2', activeWarehouseId: 'warehouse-1', message: 'Волна содержит заявки разных филиалов или не привязана к филиалу.' },
+    { requestWarehouseId: 'warehouse-1', activeWarehouseId: 'warehouse-2', message: 'Волна не найдена в выбранном филиале.' },
+  ])('не печатает недоступную волну: $message', async ({ requestWarehouseId, activeWarehouseId, message }) => {
+    const wave = waveFixture();
+    wave.requests[0].request.warehouseId = requestWarehouseId;
+    const prisma = {
+      pickWave: { findUnique: vi.fn().mockResolvedValue(wave) },
+      stockBalance: { findMany: vi.fn() }, box: { findMany: vi.fn() }, pallet: { findMany: vi.fn() },
+    };
+    const service = new PickWaveDocumentService(prisma as never, { requireClientAccess: vi.fn() } as never);
+    await expect(service.getWaveDocument(wave.id, {
+      ...user(), activeWarehouseId, warehouseIds: [activeWarehouseId], writableWarehouseIds: [activeWarehouseId],
+    })).rejects.toThrow(message);
+    expect(prisma.stockBalance.findMany).not.toHaveBeenCalled();
+    expect(prisma.box.findMany).not.toHaveBeenCalled();
+    expect(prisma.pallet.findMany).not.toHaveBeenCalled();
+  });
+
   it('возвращает 404 для неизвестной волны', async () => {
     const service = new PickWaveDocumentService(
       { pickWave: { findUnique: vi.fn().mockResolvedValue(null) } } as never,
@@ -177,6 +203,7 @@ describe('PickWaveDocumentService', () => {
 function waveFixture(overrides: { status?: PickWaveStatus; linkStatus?: PickWaveRequestStatus; result?: unknown } = {}) {
   return {
     id: 'wave-1',
+    warehouseId: 'warehouse-1',
     waveNumber: 'WAVE-1',
     status: overrides.status ?? PickWaveStatus.PLANNED,
     comment: 'Первая волна',
@@ -202,6 +229,7 @@ function waveFixture(overrides: { status?: PickWaveStatus; linkStatus?: PickWave
         request: {
           id: 'request-1',
           clientId: 'client-1',
+          warehouseId: 'warehouse-1',
           title: 'Отгрузка',
           status: ClientRequestStatus.APPROVED,
           client: {
@@ -237,6 +265,9 @@ function user(): AuthUser {
     name: 'Operator',
     roleCodes: ['OPERATOR'],
     permissionCodes: ['stock:write'],
+    activeWarehouseId: 'warehouse-1',
+    warehouseIds: ['warehouse-1'],
+    writableWarehouseIds: ['warehouse-1'],
     clientScopeMode: 'ALL',
     clientIds: [],
     writableClientIds: [],

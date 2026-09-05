@@ -12,7 +12,7 @@ describe('StockOperationsService: предпросмотр перемещени�
     };
     const prisma = {
       box: {
-        findMany: vi.fn().mockResolvedValue([{ code: 'FFL_SOURCE' }]),
+        findMany: vi.fn().mockResolvedValue([{ code: 'FFL_SOURCE', warehouseId: 'warehouse-1' }]),
       },
       barcode: {
         findMany: vi.fn().mockResolvedValue([{ value: '4600000000001', sku }]),
@@ -21,8 +21,9 @@ describe('StockOperationsService: предпросмотр перемещени�
         findMany: vi.fn().mockResolvedValue([
           {
             skuId: sku.id,
+            warehouseId: 'warehouse-1',
             quantity: 5,
-            box: { code: 'FFL_SOURCE' },
+            box: { code: 'FFL_SOURCE', warehouseId: 'warehouse-1' },
           },
         ]),
       },
@@ -46,11 +47,15 @@ describe('StockOperationsService: предпросмотр перемещени�
         id: 'admin-1',
         email: 'admin@example.test',
         name: 'Администратор',
-        roleCodes: ['ADMIN'],
+        // TEST: preview executes under an ordinary operator's complete branch scope.
+        roleCodes: ['OPERATOR'],
         permissionCodes: ['stock:write'],
-        clientScopeMode: 'ALL',
-        clientIds: [],
-        writableClientIds: [],
+        clientScopeMode: 'LIMITED',
+        clientIds: ['client-1'],
+        writableClientIds: ['client-1'],
+        activeWarehouseId: 'warehouse-1',
+        warehouseIds: ['warehouse-1'],
+        writableWarehouseIds: ['warehouse-1'],
       },
     );
 

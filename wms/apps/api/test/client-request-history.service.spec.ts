@@ -43,14 +43,13 @@ describe('ClientRequestHistoryService', () => {
       clientNotification: {
         create: vi.fn().mockResolvedValue({ id: 'notification-1' }),
       },
-      clientNotificationPreference: {
-        findUnique: vi.fn().mockResolvedValue(null),
-      },
     };
     const prisma = {
       clientRequest: {
         findUnique: vi.fn().mockResolvedValue(request()),
       },
+      // TEST: notification preference is read before entering the write transaction.
+      clientNotificationPreference: { findUnique: vi.fn().mockResolvedValue(null) },
       $transaction: vi.fn((callback) => callback(tx)),
     };
     const service = new ClientRequestHistoryService(prisma as never, new ClientScopeService());

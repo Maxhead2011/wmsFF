@@ -28,9 +28,13 @@ describe('TurnoverService receipt batch export', () => {
     expect(prisma.stockMovement.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          clientId: 'client-1',
-          type: MovementType.RECEIPT,
-          box: { code: { startsWith: 'FFL_LKB1807', mode: 'insensitive' } },
+          // TEST: preserve all batch predicates inside the warehouse-scope AND composition.
+          AND: [{
+            clientId: 'client-1',
+            quantity: { gt: 0 },
+            type: MovementType.RECEIPT,
+            box: { code: { startsWith: 'FFL_LKB1807', mode: 'insensitive' } },
+          }],
         }),
       }),
     );
