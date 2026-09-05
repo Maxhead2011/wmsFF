@@ -267,7 +267,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'tsd',
     name: 'ТСД',
     prefixes: ['/tsd'],
-    routeCount: 79, // FIX: 69 device handlers (including SKU collection) plus 10 sync handlers.
+    routeCount: 84, // FIX: five opt-in sorting handlers, 69 existing device handlers and 10 sync handlers.
     description: 'Приёмка, размещение, сборка FBS, перемещения и синхронизация ТСД.',
     logic: ['Выдаёт следующее действие сборщику.', 'Проверяет паллет-сорт, короб, товар и КИЗ.', 'Фиксирует сканы, операции и восстановление сессий устройства.'],
     dependencies: ['Основная БД', 'Склад', 'JWT устройства'],

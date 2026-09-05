@@ -8,6 +8,7 @@ public class TsdSkuCollection {
     public int number;
     public String title;
     public String status;
+    public boolean sortingWorkflow; // FIX: opt-in capability from our API.
     public TsdAssemblyClient client;
     public List<Source> skuCollectionSources = new ArrayList<>();
     public List<Scan> skuCollectionScans = new ArrayList<>();
@@ -65,6 +66,7 @@ public class TsdSkuCollection {
     public static class Scan {
         public String id;
         public String kiz;
+        public String barcode;
         public String sourceBoxCode;
         public String targetBoxCode;
         public String status;

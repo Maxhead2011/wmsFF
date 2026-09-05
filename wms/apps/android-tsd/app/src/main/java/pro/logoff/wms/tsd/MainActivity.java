@@ -107,6 +107,7 @@ import pro.logoff.wms.tsd.network.TsdOzonFboOverview;
 import pro.logoff.wms.tsd.network.TsdOzonFboPlan;
 import pro.logoff.wms.tsd.network.TsdSkuInfo;
 import pro.logoff.wms.tsd.network.TsdSkuCollection;
+import pro.logoff.wms.tsd.network.TsdSkuSortingSource;
 import pro.logoff.wms.tsd.network.WmsApi;
 import pro.logoff.wms.tsd.network.WmsApiFactory;
 import pro.logoff.wms.tsd.printing.NiimbotB1Printer;
@@ -196,6 +197,10 @@ public class MainActivity extends Activity {
     private TsdSkuCollection activeSkuCollection;
     private SkuCollectionScanState skuCollectionScanState;
     private boolean skuCollectionBusy;
+    // FIX: separate context, never reuse mandatory FBS audit state.
+    private SkuSortingScanState skuSortingState;
+    private boolean skuSortingAudit;
+    private String skuSortingPallet = "";
     private String storagePalletClientId = "";
     private String selectedFbsCargoPlanId = "";
     private String selectedFbsRequestId = "";
@@ -428,6 +433,10 @@ public class MainActivity extends Activity {
                 submitStockTransferScan();
                 return true;
             }
+            if (screen == Screen.SKU_COLLECTION && skuCollectionScanInput != null) {
+                submitSkuCollectionScan();
+                return true;
+            }
             if (screen == Screen.INVENTORY_COUNT) {
                 if (activeInventoryBox == null && inventoryBoxInput != null) {
                     openInventoryBox();
@@ -500,6 +509,12 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        // FIX: do not discard a pending SKU movement through the hardware Back button.
+        if (isUnifiedSkuSorting() && (screen == Screen.SKU_COLLECTION || skuSortingAudit) &&
+            skuSortingState != null && !skuSortingState.canLeave(skuCollectionBusy || inventoryRequestBusy)) {
+            showScanningErrorDialog("Сначала дождитесь ответа или повторите скан того же целевого короба, чтобы уточнить результат перемещения.");
+            return;
+        }
         if (mandatoryFbsAuditActive) {
             statusMessage = tr(
                 "Обязательную проверку нельзя закрыть. Сначала полностью пропикайте и актуализируйте короб.",
@@ -1573,6 +1588,7 @@ public class MainActivity extends Activity {
     }
 
     private void renderInventoryMenu() {
+        skuSortingAudit = false; // FIX: ordinary checks must never inherit a sorting return context.
         if (mandatoryFbsAuditActive || !pendingFbsAuditBoxes.isEmpty()) {
             resumeMandatoryFbsAudit();
             return;
@@ -1653,6 +1669,7 @@ public class MainActivity extends Activity {
     }
 
     private void renderSkuCollectionScreen() {
+        if (isUnifiedSkuSorting()) { renderSkuSortingScreen(); return; }
         screen = Screen.SKU_COLLECTION;
         skuCollectionScanInput = null;
         LinearLayout root = baseRoot();
@@ -1726,7 +1743,230 @@ public class MainActivity extends Activity {
         if (skuCollectionScanInput != null && !skuCollectionBusy) skuCollectionScanInput.requestFocus();
     }
 
+    private boolean isUnifiedSkuSorting() {
+        return activeSkuCollection != null && activeSkuCollection.sortingWorkflow && "logoff".equals(BuildConfig.FLAVOR);
+    }
+
+    // FIX: the entire storage-sorting journey stays in one request context.
+    private void renderSkuSortingScreen() {
+        screen = Screen.SKU_COLLECTION;
+        skuCollectionScanInput = null;
+        if (skuSortingState == null) skuSortingState = new SkuSortingScanState();
+        LinearLayout root = baseRoot();
+        root.addView(header());
+        root.addView(title("Сортировка по SKU · №" + activeSkuCollection.number));
+        root.addView(messageView("Внутри склада, без резерва и отгрузки. Размещено: " + activeSkuCollection.received() + "/" + activeSkuCollection.planned()));
+        if (!statusMessage.isEmpty()) root.addView(messageView(statusMessage));
+        if ("DONE".equals(activeSkuCollection.status)) {
+            root.addView(feedbackView("Сортировка завершена. Товары находятся в целевых коробах.", BOX_FOUND_GREEN));
+        } else {
+            String stage = skuSortingState.stage();
+            if ("SOURCE_BOX".equals(stage)) {
+                for (TsdSkuCollection.Scan picked : activeSkuCollection.skuCollectionScans) {
+                    if (!"RECEIVED".equals(picked.status)) {
+                        root.addView(secondaryButton("Разместить отобранное из " + safeText(picked.sourceBoxCode) + "\n" + safeText(picked.barcode), view -> {
+                            if (skuCollectionBusy) return;
+                            skuSortingState.resumePicked(picked.sourceBoxCode, picked.barcode, picked.kiz);
+                            statusMessage = "Подтвердите ШК и КИЗ ранее отобранной единицы, затем целевой короб. Повторного списания не будет.";
+                            renderSkuCollectionScreen();
+                        }));
+                    }
+                }
+                for (TsdSkuCollection.Source source : activeSkuCollection.skuCollectionSources) {
+                    if (source.pickedQuantity >= source.plannedQuantity) continue;
+                    if (!skuSortingPallet.isEmpty() && (source.storageLocation == null || !sameBox(source.storageLocation.palletCode, skuSortingPallet))) continue;
+                    root.addView(taskRow(source.routeLabel(false), "По маршруту осталось: " + (source.plannedQuantity - source.pickedQuantity), Color.WHITE));
+                }
+                if (!skuSortingPallet.isEmpty()) root.addView(secondaryButton("Показать весь маршрут", view -> { skuSortingPallet = ""; renderSkuCollectionScreen(); }));
+            } else {
+                root.addView(messageView("Исходный короб: " + skuSortingState.source()));
+            }
+            if ("ACTUALIZE".equals(stage)) {
+                root.addView(messageView("Откройте короб и проверьте всё содержимое. После актуализации программа вернёт вас к отбору нужного SKU."));
+                Button button = primaryMenuButton("Актуализировать содержимое короба", view -> openSkuSortingInventory());
+                button.setEnabled(!skuCollectionBusy); root.addView(button);
+            } else {
+                String hint = "SOURCE_BOX".equals(stage) ? "Паллет-сорт или исходный короб"
+                    : "BARCODE".equals(stage) ? "ШК нужного товара" : "KIZ".equals(stage) ? "КИЗ этой единицы" : "Целевой короб для хранения";
+                if ("TARGET_BOX".equals(stage)) root.addView(messageView("ШК и КИЗ проверены. Положите эту единицу в целевой короб и отсканируйте его."));
+                skuCollectionScanInput = input(hint);
+                if (!skuSortingState.pendingTarget().isEmpty()) {
+                    root.addView(messageView("Уточните результат: повторите размещение в " + skuSortingState.pendingTarget() + ". Не перекладывайте товар в другой короб."));
+                    skuCollectionScanInput.setText(skuSortingState.pendingTarget());
+                }
+                skuCollectionScanInput.setEnabled(!skuCollectionBusy);
+                skuCollectionScanInput.setOnEditorActionListener((view, actionId, event) -> { submitSkuSortingScan(); return true; });
+                root.addView(skuCollectionScanInput);
+                Button button = primaryMenuButton("Подтвердить скан", view -> submitSkuSortingScan());
+                button.setEnabled(!skuCollectionBusy); root.addView(button);
+            }
+            if (!"SOURCE_BOX".equals(stage)) root.addView(secondaryButton("Выбрать другой исходный короб", view -> {
+                if (skuCollectionBusy) return;
+                if (!skuSortingState.pendingTarget().isEmpty()) return;
+                skuSortingState = new SkuSortingScanState(); statusMessage = "Остатки меняются только после успешного скана целевого короба.";
+                renderSkuCollectionScreen();
+            }));
+            if ("KIZ".equals(stage) || "TARGET_BOX".equals(stage)) root.addView(secondaryButton("Сменить ШК / КИЗ", view -> {
+                if (skuCollectionBusy) return;
+                if (!skuSortingState.pendingTarget().isEmpty()) return;
+                skuSortingState.resetPair(); statusMessage = "Отсканируйте ШК товара заново."; renderSkuCollectionScreen();
+            }));
+        }
+        root.addView(secondaryButton("К списку заявок", view -> {
+            if (!skuSortingState.canLeave(skuCollectionBusy)) {
+                showScanningErrorDialog("Сначала уточните результат размещения в целевой короб.");
+                return;
+            }
+            skuSortingAudit = false; openSkuCollections();
+        }));
+        root.addView(versionView()); setScrollableContent(root); refreshHeaderText();
+        if (skuCollectionScanInput != null && !skuCollectionBusy) skuCollectionScanInput.requestFocus();
+    }
+
+    private void openSkuSortingInventory() {
+        openSkuSortingInventory(false);
+    }
+
+    private void openSkuSortingInventory(boolean recount) {
+        TsdSession session = safeSession();
+        if (session == null || skuCollectionBusy) return;
+        Map<String, Object> body = new LinkedHashMap<>(); body.put("sourceBoxCode", skuSortingState.source()); body.put("recount", recount);
+        String id = activeSkuCollection.id;
+        skuCollectionBusy = true; renderSkuCollectionScreen();
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Response<TsdSkuSortingSource> response = api.openSkuSortingSource(session.authorizationHeader(), id, body).execute();
+            if (!response.isSuccessful() || response.body() == null) throw new IOException(inventoryHttpError(response));
+            Response<TsdInventoryDashboard> dashboard = api.inventoryDashboard(session.authorizationHeader(), false).execute();
+            TsdSkuSortingSource opened = response.body();
+            mainHandler.post(() -> {
+                skuCollectionBusy = false; skuSortingAudit = true;
+                inventoryDashboard = dashboard.isSuccessful() ? dashboard.body() : null;
+                activeInventory = opened.session; activeInventoryBox = opened.box;
+                inventoryType = "BOX_CHECK"; inventoryTransferMode = false; inventoryCaptureKiz = true;
+                inventoryKizScan.clear(); statusMessage = "Сверьте все товары исходного короба, затем продолжите сортировку.";
+                renderInventoryCountScreen();
+            });
+        });
+    }
+
+    private void continueSkuSortingAfterInventory() {
+        if (!skuSortingAudit || activeInventoryBox == null ||
+            (!"MATCHED".equals(activeInventoryBox.status) && !"RESOLVED".equals(activeInventoryBox.status))) return;
+        TsdSession session = safeSession();
+        if (session == null || inventoryRequestBusy) return;
+        String auditId = activeInventoryBox.id, requestId = activeSkuCollection.id;
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("sourceBoxCode", skuSortingState.source()); body.put("auditBoxId", auditId);
+        inventoryRequestBusy = true;
+        renderInventoryCountScreen();
+        runBackground(() -> {
+            Response<TsdSkuCollection> response = WmsApiFactory.create(DEFAULT_BASE_URL).readySkuSorting(session.authorizationHeader(), requestId, body).execute();
+            if (!response.isSuccessful() || response.body() == null) throw new IOException(inventoryHttpError(response));
+            mainHandler.post(() -> {
+                inventoryRequestBusy = false; activeSkuCollection = response.body();
+                skuSortingState.inventoryReady(auditId); skuSortingAudit = false; inventoryTransferMode = false;
+                boolean remaining = false;
+                for (TsdSkuCollection.Source source : activeSkuCollection.skuCollectionSources) {
+                    if (sameBox(source.sourceBoxCode, skuSortingState.source()) && source.pickedQuantity < source.plannedQuantity) remaining = true;
+                }
+                if (!remaining) skuSortingState = new SkuSortingScanState();
+                statusMessage = remaining ? "Короб проверен. Отсканируйте ШК нужного SKU, затем КИЗ." : "В этом коробе нет свободного SKU для сортировки. Маршрут обновлён.";
+                renderSkuCollectionScreen();
+            });
+        });
+    }
+
+    private void submitSkuSortingScan() {
+        TsdSession session = safeSession();
+        if (session == null || skuCollectionBusy || skuSortingState == null || skuCollectionScanInput == null) return;
+        String value = textValue(skuCollectionScanInput);
+        skuCollectionScanInput.setText("");
+        if (value.isEmpty()) return;
+        String stage = skuSortingState.stage();
+        if ("SOURCE_BOX".equals(stage)) {
+            for (TsdSkuCollection.Source source : activeSkuCollection.skuCollectionSources) {
+                if (source.pickedQuantity < source.plannedQuantity && sameBox(source.sourceBoxCode, value)) {
+                    skuSortingState.source(source.sourceBoxCode); statusMessage = ""; renderSkuCollectionScreen(); return;
+                }
+            }
+            for (TsdSkuCollection.Source source : activeSkuCollection.skuCollectionSources) {
+                if (source.pickedQuantity < source.plannedQuantity && source.storageLocation != null && sameBox(source.storageLocation.palletCode, value)) {
+                    skuSortingPallet = source.storageLocation.palletCode; statusMessage = "Выберите нужный короб на этом паллет-сорте."; renderSkuCollectionScreen(); return;
+                }
+            }
+            showScanningErrorDialog("Этот паллет-сорт или короб не входит в оставшийся маршрут."); return;
+        }
+        if ("BARCODE".equals(stage)) {
+            try { skuSortingState.barcode(value); statusMessage = "Теперь КИЗ этой единицы."; renderSkuCollectionScreen(); }
+            catch (IllegalArgumentException error) { showScanningErrorDialog(error.getMessage()); }
+            return;
+        }
+        if ("KIZ".equals(stage) && skuSortingState.legacy()) {
+            try { skuSortingState.kizChecked(value); statusMessage = "Единица подтверждена. Отсканируйте целевой короб."; renderSkuCollectionScreen(); }
+            catch (IllegalArgumentException error) { showScanningErrorDialog(error.getMessage()); }
+            return;
+        }
+        if (!"KIZ".equals(stage) && !"TARGET_BOX".equals(stage)) return;
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("sourceBoxCode", skuSortingState.source()); body.put("barcode", skuSortingState.barcode());
+        body.put("auditBoxId", skuSortingState.audit()); body.put("kiz", "KIZ".equals(stage) ? value : skuSortingState.kiz());
+        if ("TARGET_BOX".equals(stage)) {
+            try { skuSortingState.targetAttempted(value); }
+            catch (IllegalStateException error) { showScanningErrorDialog(error.getMessage()); return; }
+            body.put("targetBoxCode", value);
+        }
+        String id = activeSkuCollection.id;
+        boolean legacy = skuSortingState.legacy();
+        skuCollectionBusy = true; statusMessage = "Проверяю…"; renderSkuCollectionScreen();
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            if ("KIZ".equals(stage)) {
+                Response<Map<String, Object>> response = api.checkSkuSorting(session.authorizationHeader(), id, body).execute();
+                if (!response.isSuccessful() || response.body() == null) throw new IOException(inventoryHttpError(response));
+                mainHandler.post(() -> { skuCollectionBusy = false; skuSortingState.kizChecked(value); statusMessage = "Отсканируйте целевой короб."; renderSkuCollectionScreen(); });
+            } else {
+                if (legacy) { body.remove("auditBoxId"); body.remove("sourceBoxCode"); }
+                Response<TsdSkuCollection> response = legacy ? api.receiveSkuCollection(session.authorizationHeader(), id, body).execute()
+                    : api.moveSkuSorting(session.authorizationHeader(), id, body).execute();
+                if (!response.isSuccessful() || response.body() == null) {
+                    if (response.code() >= 400 && response.code() < 500) mainHandler.post(() -> skuSortingState.targetRejected());
+                    throw new IOException(inventoryHttpError(response));
+                }
+                mainHandler.post(() -> {
+                    skuCollectionBusy = false; activeSkuCollection = response.body(); skuSortingState.moved();
+                    boolean remaining = false;
+                    for (TsdSkuCollection.Source source : activeSkuCollection.skuCollectionSources) {
+                        if (sameBox(source.sourceBoxCode, skuSortingState.source()) && source.pickedQuantity < source.plannedQuantity) remaining = true;
+                    }
+                    if (!remaining) skuSortingState = new SkuSortingScanState();
+                    statusMessage = "Одна единица размещена в " + value + ". Общий остаток склада не изменён.";
+                    renderSkuCollectionScreen();
+                });
+            }
+        });
+    }
+
     private void selectSkuCollection(TsdSkuCollection request) {
+        if (request.sortingWorkflow && "logoff".equals(BuildConfig.FLAVOR)) {
+            TsdSession session = safeSession();
+            if (session == null || skuCollectionBusy) return;
+            skuCollectionBusy = true;
+            statusMessage = "Открываю сортировку…";
+            renderSkuCollectionScreen();
+            runBackground(() -> {
+                Response<TsdSkuCollection> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                    .startSkuSorting(session.authorizationHeader(), request.id).execute();
+                if (!response.isSuccessful() || response.body() == null) throw new IOException(inventoryHttpError(response));
+                mainHandler.post(() -> {
+                    activeSkuCollection = response.body(); skuCollectionBusy = false;
+                    skuSortingState = new SkuSortingScanState(); skuSortingAudit = false; skuSortingPallet = "";
+                    statusMessage = "Сортировка не резервирует остатки. Выберите исходный короб.";
+                    renderSkuCollectionScreen();
+                });
+            });
+            return;
+        }
         activeSkuCollection = request;
         skuCollectionScanState = new SkuCollectionScanState("PACKED".equals(request.status));
         statusMessage = "";
@@ -1734,6 +1974,7 @@ public class MainActivity extends Activity {
     }
 
     private void submitSkuCollectionScan() {
+        if (isUnifiedSkuSorting()) { submitSkuSortingScan(); return; }
         if (skuCollectionBusy || activeSkuCollection == null || skuCollectionScanState == null) return;
         String value = textValue(skuCollectionScanInput);
         if (value.isEmpty()) {
@@ -2436,7 +2677,11 @@ public class MainActivity extends Activity {
             } else {
                 addInventoryResult(root, activeInventoryBox);
                 addInventoryAdminActions(root, activeInventoryBox);
-                addInventoryTransferAction(root, activeInventoryBox);
+                if (skuSortingAudit) {
+                    if ("MATCHED".equals(activeInventoryBox.status) || "RESOLVED".equals(activeInventoryBox.status)) {
+                        root.addView(primaryMenuButton("Продолжить отбор SKU из этого короба", view -> continueSkuSortingAfterInventory()));
+                    } else root.addView(messageView("Примените актуализацию по существующим правам, затем продолжите сортировку здесь."));
+                } else addInventoryTransferAction(root, activeInventoryBox);
                 if (mandatoryFbsAuditActive) {
                     if ("MATCHED".equals(activeInventoryBox.status) || "RESOLVED".equals(activeInventoryBox.status)) {
                         root.addView(primaryMenuButton(
@@ -2456,7 +2701,7 @@ public class MainActivity extends Activity {
                             view -> reloadInventorySession(true)
                         ));
                     }
-                } else {
+                } else if (!skuSortingAudit) {
                     root.addView(primaryMenuButton(
                         tr("Проверить следующий короб", "Keyingi qutini tekshirish"),
                         view -> {
@@ -2471,7 +2716,19 @@ public class MainActivity extends Activity {
             }
         }
 
-        if (!mandatoryFbsAuditActive) {
+        if (skuSortingAudit) {
+            Button refresh = secondaryButton("Обновить состояние проверки", view -> { if (!inventoryRequestBusy) reloadInventorySession(true); });
+            refresh.setEnabled(!inventoryRequestBusy); root.addView(refresh);
+            if (activeInventoryBox != null && !"COUNTING".equals(activeInventoryBox.status)) {
+                Button recount = secondaryButton("Начать свежую проверку этого короба", view -> { if (!inventoryRequestBusy) openSkuSortingInventory(true); });
+                recount.setEnabled(!inventoryRequestBusy); root.addView(recount);
+            }
+            Button back = secondaryButton("Вернуться в эту сортировку", view -> {
+                if (inventoryRequestBusy) return;
+                skuSortingAudit = false; renderSkuCollectionScreen();
+            });
+            back.setEnabled(!inventoryRequestBusy); root.addView(back);
+        } else if (!mandatoryFbsAuditActive) {
             root.addView(secondaryButton(
                 "BOX_CHECK".equals(inventoryType)
                     ? tr("Завершить проверку", "Tekshiruvni yakunlash")
@@ -2557,7 +2814,11 @@ public class MainActivity extends Activity {
             ));
             return;
         }
-        root.addView(primaryMenuButton(
+        if (skuSortingAudit) {
+            root.addView(primaryMenuButton("Актуализировать по факту и продолжить сортировку", view -> confirmResolveInventoryBox("APPLY_ACTUAL", false)));
+            return;
+        }
+        if (!skuSortingAudit) root.addView(primaryMenuButton(
             tr("Актуализировать и переместить в другой короб", "Yangilash va boshqa qutiga ko‘chirish"),
             view -> confirmResolveInventoryBox("APPLY_ACTUAL", true)
         ));
@@ -2614,6 +2875,10 @@ public class MainActivity extends Activity {
         if (session == null || activeInventoryBox == null) {
             return;
         }
+        if (skuSortingAudit) {
+            if (inventoryRequestBusy) return;
+            inventoryRequestBusy = true;
+        }
         String boxId = activeInventoryBox.id;
         statusMessage = "APPLY_ACTUAL".equals(action)
             ? tr("Актуализирую остатки…", "Qoldiqlar yangilanmoqda…")
@@ -2636,6 +2901,7 @@ public class MainActivity extends Activity {
             mainHandler.post(() -> {
                 online = true;
                 activeInventoryBox = resolved;
+                if (skuSortingAudit) inventoryRequestBusy = false;
                 inventoryTransferMode = moveAfterResolve;
                 statusMessage = "APPLY_ACTUAL".equals(action)
                     ? moveAfterResolve
@@ -8200,6 +8466,7 @@ public class MainActivity extends Activity {
         if (screen == Screen.STOCK_TRANSFER) {
             return transferScanInput;
         }
+        if (screen == Screen.SKU_COLLECTION) return skuCollectionScanInput;
         if (
             screen == Screen.BOX_SEARCH ||
             screen == Screen.RELABEL_BOX ||
@@ -8340,6 +8607,8 @@ public class MainActivity extends Activity {
             submitStoragePalletScan();
         } else if (screen == Screen.STOCK_TRANSFER) {
             submitStockTransferScan();
+        } else if (screen == Screen.SKU_COLLECTION) {
+            submitSkuCollectionScan();
         } else if (screen == Screen.INVENTORY_COUNT) {
             if (inventoryTransferMode) {
                 transferInventoryBox();

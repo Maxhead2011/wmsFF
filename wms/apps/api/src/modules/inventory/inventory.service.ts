@@ -224,7 +224,7 @@ export class InventoryService {
     });
   }
 
-  async openBox(sessionId: string, rawBoxCode: string, user: AuthUser) {
+  async openBox(sessionId: string, rawBoxCode: string, user: AuthUser, sortingRescan = false) {
     const boxCode = rawBoxCode.trim();
     if (!boxCode) {
       throw new BadRequestException('Укажите номер короба.');
@@ -279,7 +279,8 @@ export class InventoryService {
     const forcedFbsBoxCheck =
       Boolean(user.deviceCode) &&
       (session.comment?.includes('[FBS_MANDATORY_BOX_CHECK]') ?? false);
-    const autoApproveRescan = canApproveInventoryRescan(user) || forcedFbsBoxCheck;
+    // FIX: validated SKU route may start a fresh check; this is not exposed by the generic API.
+    const autoApproveRescan = canApproveInventoryRescan(user) || forcedFbsBoxCheck || sortingRescan;
     const rescanRequest = await this.prisma.inventoryBoxRescanRequest.findFirst({
       where: {
         boxId: box.id,
@@ -850,6 +851,10 @@ export class InventoryService {
           line.auditBox.session.warehouseId !== freshBox.warehouseId
         ) {
           throw new ForbiddenException('Короб относится к другому филиалу инвентаризации.');
+        }
+        // FIX: sorting does not lock saleable stock while counting. Reject stale counts instead of restoring parallel picks.
+        if (line.auditBox.session.comment?.includes('[SKU_SORTING_SOURCE]')) {
+          await assertSortingInventorySnapshot(tx, freshBox.id, line.skuId, line.auditBox.startedAt);
         }
         const balance = await tx.stockBalance.findFirst({
           where: {
@@ -1435,6 +1440,16 @@ function normalizeInventoryBoxCode(value: string) {
     .trim()
     .toLocaleUpperCase('ru-RU')
     .replace(/[^A-ZА-ЯЁ0-9]/g, '');
+}
+
+// FIX: isolated to sorting-origin checks; ordinary inventory rules are unchanged.
+export async function assertSortingInventorySnapshot(
+  db: Pick<Prisma.TransactionClient, 'stockBalance' | 'stockMovement'>, boxId: string, skuId: string, startedAt: Date,
+) {
+  const reserved = await db.stockBalance.findFirst({ where: { boxId, skuId, quantity: { gt: 0 }, status: { not: StockStatus.AVAILABLE } }, select: { id: true } });
+  if (reserved) throw new ConflictException('В коробе есть резерв или другой несвободный остаток. Его нельзя повторно добавить актуализацией. Нужна проверка расхождения.');
+  const changed = await db.stockMovement.findFirst({ where: { boxId, skuId, createdAt: { gt: startedAt } }, select: { id: true } });
+  if (changed) throw new ConflictException('Остаток изменился во время подсчёта. Проведите свежую проверку короба; старый подсчёт не применён.');
 }
 
 function isMandatoryFbsBoxCheck(session: {

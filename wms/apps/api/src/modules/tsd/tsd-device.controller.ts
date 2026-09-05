@@ -18,6 +18,8 @@ import { TsdReceiptService } from './tsd-receipt.service';
 import { TsdAuditInterceptor } from './tsd-audit.interceptor';
 import { SkuCollectionService } from '../inventory/sku-collection.service';
 import { ScanSkuCollectionPickDto, ScanSkuCollectionReceiptDto } from '../inventory/dto/sku-collection.dto';
+import { CheckSkuSortingDto, MoveSkuSortingDto, OpenSkuSortingSourceDto, ReadySkuSortingSourceDto } from '../inventory/dto/sku-collection.dto';
+import { SkuSortingService } from '../inventory/sku-sorting.service';
 
 @ApiTags('tsd')
 @UseInterceptors(TsdAuditInterceptor)
@@ -31,7 +33,44 @@ export class TsdDeviceController {
     private readonly storageLocations: StorageLocationsService,
     private readonly stockOperations: StockOperationsService,
     private readonly skuCollections: SkuCollectionService,
+    private readonly skuSorting: SkuSortingService,
   ) {}
+
+  // FIX: a dedicated storage workflow; ordinary FBS/transfers are unchanged.
+  @Post('sku-collections/:id/sorting/start')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  startSkuSorting(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.skuSorting.start(id, user);
+  }
+
+  @Post('sku-collections/:id/sorting/source')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  openSkuSortingSource(@Param('id') id: string, @Body() dto: OpenSkuSortingSourceDto, @CurrentUser() user: AuthUser) {
+    return this.skuSorting.openSource(id, dto.sourceBoxCode, user, dto.recount);
+  }
+
+  @Post('sku-collections/:id/sorting/check')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  checkSkuSorting(@Param('id') id: string, @Body() dto: CheckSkuSortingDto, @CurrentUser() user: AuthUser) {
+    return this.skuSorting.check(id, dto, user);
+  }
+
+  @Post('sku-collections/:id/sorting/ready')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  readySkuSorting(@Param('id') id: string, @Body() dto: ReadySkuSortingSourceDto, @CurrentUser() user: AuthUser) {
+    return this.skuSorting.ready(id, dto, user);
+  }
+
+  @Post('sku-collections/:id/sorting/move')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  moveSkuSorting(@Param('id') id: string, @Body() dto: MoveSkuSortingDto, @CurrentUser() user: AuthUser) {
+    return this.skuSorting.move(id, dto, user);
+  }
 
   @Get('sku-collections')
   @ApiBearerAuth()
