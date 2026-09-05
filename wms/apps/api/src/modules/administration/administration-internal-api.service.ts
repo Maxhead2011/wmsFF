@@ -192,9 +192,10 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
   {
     id: 'marketplace-connections',
     name: 'Маркетплейсы и FBS',
-    prefixes: ['/marketplace-connections', '/marketplace-connection', '/external/v1/fbs'],
-    // FIX: count 95 marketplace handlers plus 3 external FBS handlers; aliases are not extra handlers.
-    routeCount: 98,
+    prefixes: ['/marketplace-connections', '/marketplace-connection', '/external/v1/fbs',
+      '/marketplace-connections/fbs/repeat-assembly', '/marketplace-connection/fbs/repeat-assembly'],
+    // FIX: also register the three independent-repeat handlers; aliases are counted once.
+    routeCount: 101,
     description: 'Подключения WB/Ozon, заказы FBS, поставки, статусы, финансовые отчёты и распределение остатков.',
     logic: ['Синхронизирует кабинеты, склады и заказы.', 'Сверяет активные поставки WB с заявками WMS и показывает отсутствующие привязки без записи в WB.', 'Резервирует товар WMS и передаёт статусы сборки.', 'Проверяет поставки филиала и создаёт локальные заявки FBS ДОВОЗ без повторной отправки статуса в WB.', 'Получает финансовые штрафы FBS без передачи токена WB в браузер.', 'Рассчитывает и выгружает распределённые остатки по складам.'],
     dependencies: ['Основная БД', 'WB API', 'Ozon API'],

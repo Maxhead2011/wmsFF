@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import {
   ClientRequestStatus,
   ClientRequestType,
@@ -932,6 +933,11 @@ export class TsdAssemblyService {
         take: 100,
       }),
     ]);
+    // FIX: the original online request retains the factual collection history.
+    for (const historical of await readFbsAttemptHistory(this.prisma, { requestId })) {
+      if (!rows.some(row => row.id === historical.task.id)) rows.push(historical.task);
+      if (!links.some(link => link.orderId === historical.link.orderId && link.connectionId === historical.link.connectionId)) links.push(historical.link);
+    }
     if (links.length === 0) {
       return null;
     }

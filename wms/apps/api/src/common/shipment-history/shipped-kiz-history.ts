@@ -1,4 +1,5 @@
 import { ClientRequestStatus, MovementType, Prisma, StockStatus } from '@prisma/client';
+import { appendFbsAttemptHistory } from './fbs-attempt-history';
 
 export async function captureShippedKizHistory(
   tx: Prisma.TransactionClient,
@@ -38,6 +39,7 @@ export async function captureShippedKizHistory(
       completedAt: true,
     },
   });
+  await appendFbsAttemptHistory(tx, assemblies, { requestId });
   if (assemblies.length === 0) return 0;
 
   const skuIds = [...new Set(assemblies.map((row) => row.skuId))];
