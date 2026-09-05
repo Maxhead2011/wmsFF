@@ -23,8 +23,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 155 // FIX: separately delivered LOGOFF-only SKU sorting pilot; shared update metadata stays unchanged.
-            versionName = "0.1.156-sku-pilot"
+            versionCode = 156 // FIX: separately delivered KIZ-to-box transfer update; shared update metadata stays unchanged.
+            versionName = "0.1.157-kiz-transfer"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

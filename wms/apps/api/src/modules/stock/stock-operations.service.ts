@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import * as XLSX from 'xlsx';
 import {
@@ -287,6 +287,17 @@ export class StockOperationsService {
   }
 
   async inspectTsdTransferItem(payload: Record<string, unknown>, user: AuthUser) {
+    // FIX: opt-in automatic source discovery is read-only; never register an unknown KIZ.
+    if (payload.transferMode === 'KIZ_TO_STORAGE_BOX') {
+      if (!payload.barcode) {
+        requiredTsdTransferText(payload.scanCode, 'Отсканируйте ШК товара.');
+        return { state: 'SCAN_KIZ', message: 'ШК принят. Отсканируйте КИЗ этой единицы: WMS определит исходный короб.' };
+      }
+      const { sourceBox, item } = await this.resolveAutoSourceStorageTransfer(this.prisma, payload, user);
+      return { state: 'SCAN_TARGET', sourceBox: this.formatTsdTransferSource(sourceBox).sourceBox,
+        item: formatTsdTransferItem(item),
+        message: `КИЗ найден в ${sourceBox.code}. Отсканируйте бокс назначения: будет перемещена 1 единица.` };
+    }
     // FIX: opt-in piece-by-piece mode validates scans without replacing or creating KIZ records.
     if (payload.transferMode === 'BOX_TO_STORAGE_BOX') {
       const sourceBox = await this.loadTsdTransferSourceBox(this.prisma,
@@ -355,7 +366,8 @@ export class StockOperationsService {
   async executeTsdTransfer(payload: Record<string, unknown>, user: AuthUser) {
     await this.inventoryLock?.assertStockMovementsAllowed();
     const warehouseId = this.resolveWritableWarehouseId(user);
-    const storageBoxMode = payload.transferMode === 'BOX_TO_STORAGE_BOX';
+    const autoSourceMode = payload.transferMode === 'KIZ_TO_STORAGE_BOX';
+    const storageBoxMode = payload.transferMode === 'BOX_TO_STORAGE_BOX' || autoSourceMode;
     if (storageBoxMode && !this.boxCodes) {
       throw new BadRequestException('Настройки префикса боксов хранения недоступны.');
     }
@@ -378,12 +390,16 @@ export class StockOperationsService {
       payload.idempotencyKey,
       'Не удалось создать номер операции. Повторите перемещение.',
     ).slice(0, 220);
+    // FIX: bind completed automatic operations to the exact user, scans and destination.
+    const autoSourceDocument = autoSourceMode ? `TSD KIZ_TO_STORAGE_BOX; worker ${user.id}; sha256 ` +
+      createHash('sha256').update(JSON.stringify([user.id, user.deviceCode ?? null, warehouseId ?? null,
+        fromBoxCode, toBoxCode, requiredTsdTransferText(payload.barcode, 'Сначала отсканируйте ШК товара.'), scanCode])).digest('hex') : null;
     if (fromBoxCode.toLocaleUpperCase('ru-RU') === toBoxCode.toLocaleUpperCase('ru-RU')) {
       throw new BadRequestException('Исходный короб и короб назначения совпадают.');
     }
 
     // FIX: live WB read before opening the stock transaction, and never on a completed retry.
-    const cancellation = storageBoxMode && (cancelledWbTransferEnabled() || cancelledBoxTaskTransferEnabled()) &&
+    const cancellation = storageBoxMode && !autoSourceMode && (cancelledWbTransferEnabled() || cancelledBoxTaskTransferEnabled()) &&
       !await this.prisma.stockMovement.findUnique({ where: { idempotencyKey: `${idempotencyKey}:out` }, select: { id: true } })
       ? await this.prepareCancelledStorageBoxTransfer(await this.loadTsdTransferSourceBox(this.prisma, fromBoxCode, user), payload)
       : undefined;
@@ -395,6 +411,9 @@ export class StockOperationsService {
       });
       if (existing) {
         this.clientScopes.requireClientAccess(user, existing.clientId, 'write');
+        if (autoSourceMode && existing.sourceDocument !== autoSourceDocument) {
+          throw new BadRequestException('Номер операции уже использован с другими данными. Повторите проверку товара.');
+        }
         if (storageBoxMode && warehouseId && existing.warehouseId !== warehouseId) {
           throw new ForbiddenException('Перемещение относится к другому филиалу.');
         }
@@ -421,13 +440,18 @@ export class StockOperationsService {
         };
       }
 
-      const sourceBox = await this.loadTsdTransferSourceBox(tx, fromBoxCode, user);
+      // FIX: resolve again inside the serializable transaction, not from stale inspection data.
+      const automatic = autoSourceMode ? await this.resolveAutoSourceStorageTransfer(tx, payload, user) : null;
+      const sourceBox = automatic?.sourceBox ?? await this.loadTsdTransferSourceBox(tx, fromBoxCode, user);
+      if (automatic && sourceBox.code !== fromBoxCode) {
+        throw new BadRequestException('КИЗ уже перемещён в другой короб. Отмените текущую единицу и повторно отсканируйте ШК и КИЗ.');
+      }
       const operationWarehouseId =
         warehouseId ??
         this.requireBalanceWarehouseId(sourceBox.warehouseId ?? user.activeWarehouseId);
-      const item = storageBoxMode
+      const item = automatic?.item ?? (storageBoxMode
         ? await this.resolveStorageBoxTransferItem(tx, sourceBox, payload, true, cancellation)
-        : await this.resolveTsdTransferScannedItem(tx, sourceBox, scanCode);
+        : await this.resolveTsdTransferScannedItem(tx, sourceBox, scanCode));
       await this.applyTransferBetweenBoxes(tx, {
         clientId: sourceBox.clientId,
         skuId: item.sku.id,
@@ -436,9 +460,9 @@ export class StockOperationsService {
         quantity: 1,
         status: StockStatus.AVAILABLE,
         idempotencyKey,
-        sourceDocument: storageBoxMode
+        sourceDocument: autoSourceDocument ?? (storageBoxMode
           ? `TSD ${user.deviceCode ?? user.id}; worker ${user.id}; BOX_TO_STORAGE_BOX`
-          : `TSD ${user.deviceCode ?? user.id}`,
+          : `TSD ${user.deviceCode ?? user.id}`),
         comment: `Перемещение на ТСД: ${sourceBox.code} → ${toBoxCode}`,
       }, operationWarehouseId);
 
@@ -498,7 +522,14 @@ export class StockOperationsService {
           where: { idempotencyKey: `${idempotencyKey}:in` },
           select: { id: true },
         });
-        if (item.reconciledMark) {
+        if (automatic) {
+          // FIX: stock and KIZ relocation roll back together if another worker changed the mark.
+          if (!inbound) throw new BadRequestException('Не удалось подтвердить перемещение. Повторите сканирование бокса.');
+          const changed = await tx.productMark.updateMany({ where: { id: automatic.mark.id,
+            boxId: sourceBox.id, skuId: item.sku.id, status: StockStatus.AVAILABLE,
+            updatedAt: automatic.mark.updatedAt }, data: { boxId: targetBox.id, stockMovementId: inbound.id } });
+          if (changed.count !== 1) throw new BadRequestException('КИЗ изменился во время перемещения. Повторите проверку товара.');
+        } else if (item.reconciledMark) {
           // FIX: no intermediate stock receipt or second write-off; correct only this mark.
           const previous = item.reconciledMark;
           const changed = await tx.productMark.updateMany({
@@ -4001,6 +4032,68 @@ export class StockOperationsService {
     }
 
     return candidate;
+  }
+
+  // FIX: authoritative source only; no guessed box, receipt, mark replacement or reserve release.
+  private async resolveAutoSourceStorageTransfer(db: StorageBoxTransferDb, payload: Record<string, unknown>, user: AuthUser) {
+    const scanCode = requiredTsdTransferText(payload.scanCode, 'Отсканируйте КИЗ товара.');
+    const barcode = requiredTsdTransferText(payload.barcode, 'Сначала отсканируйте ШК товара.');
+    const identity = storageBoxTransferKizIdentity(scanCode);
+    if (!identity) throw new BadRequestException('После ШК товара отсканируйте полный КИЗ Data Matrix.');
+    const { gtin, serial } = identity;
+    const prefixes = [`01${gtin}21${serial}`, `]d201${gtin}21${serial}`,
+      `(01)${gtin}(21)${serial}`, `01${gtin}\u001d21${serial}`,
+      `]d201${gtin}\u001d21${serial}`, `01${gtin}<GS>21${serial}`];
+    const candidates = await db.productMark.findMany({
+      where: { OR: prefixes.map(prefix => ({ value: { startsWith: prefix } })) }, take: 101,
+      select: { id: true, clientId: true, skuId: true, boxId: true, value: true, status: true, updatedAt: true },
+    });
+    const matches = candidates.filter(mark => {
+      const parsed = storageBoxTransferKizIdentity(mark.value);
+      return parsed?.gtin === gtin && parsed.serial === serial;
+    });
+    if (candidates.length > 100 || matches.length > 1) {
+      throw new BadRequestException('У КИЗ несколько возможных привязок. Нужна проверка менеджера; остатки не изменены.');
+    }
+    const mark = matches[0];
+    if (!mark) throw new NotFoundException('КИЗ не зарегистрирован в WMS. Используйте перемещение со сканированием исходного короба.');
+    this.clientScopes.requireClientAccess(user, mark.clientId, 'write');
+    if (mark.status !== StockStatus.AVAILABLE) {
+      throw new BadRequestException('КИЗ зарезервирован или отгружен. Автоматическое перемещение не снимает резерв и не возвращает отгрузку на остаток.');
+    }
+    if (!mark.boxId) throw new BadRequestException('У КИЗ нет исходного короба. Проверьте его размещение через актуализацию.');
+    const source = await db.box.findUnique({ where: { id: mark.boxId }, select: { code: true } });
+    if (!source) throw new NotFoundException('Исходный короб КИЗ не найден.');
+    const sourceBox = await this.loadTsdTransferSourceBox(db, source.code, user);
+    if (sourceBox.id !== mark.boxId || sourceBox.clientId !== mark.clientId) {
+      throw new BadRequestException('КИЗ и исходный короб относятся к разным остаткам. Нужна проверка менеджера.');
+    }
+    const balance = sourceBox.balances.find(row => row.skuId === mark.skuId && row.quantity >= 1);
+    if (!balance || !balance.sku.barcodes.some(row => row.value === barcode)) {
+      throw new BadRequestException('ШК не соответствует товару этого КИЗ или в исходном коробе нет доступной единицы. Проверьте содержимое короба.');
+    }
+    const historyDb = (db as Partial<Pick<Prisma.TransactionClient, 'fbsAssemblyAttemptHistory'>>).fbsAssemblyAttemptHistory;
+    if (['true', 'read-only'].includes(process.env.WMS_FBS_REPEAT_ASSEMBLY_ENABLED ?? '') && !historyDb) {
+      throw new BadRequestException('История предыдущих сборок недоступна. Перемещение временно остановлено.');
+    }
+    const kizWhere = { OR: prefixes.map(prefix => ({ kiz: { startsWith: prefix } })) };
+    const protectedRows = await Promise.all([
+      db.fbsTsdAssembly.findFirst({ where: kizWhere, select: { id: true } }),
+      db.shippedKizHistory.findFirst({ where: kizWhere, select: { id: true } }),
+      db.fbsWebKizStickerPrint.findFirst({ where: kizWhere, select: { id: true } }),
+      db.fbsTsdAssembly.findFirst({ where: { clientId: sourceBox.clientId,
+        status: { in: ['IN_PROGRESS', 'RETURN_REQUIRED'] }, AND: [
+          { OR: [{ skuId: mark.skuId }, { sourceSkuId: mark.skuId }] },
+          { OR: [{ boxId: sourceBox.id }, { reservedBoxId: sourceBox.id }] },
+        ] }, select: { id: true } }),
+      historyDb ? historyDb.findFirst({ where: kizWhere, select: { id: true } }) : null,
+    ]);
+    if (protectedRows.some(Boolean)) {
+      throw new BadRequestException('КИЗ или товар связан со сборкой, отгрузкой или печатью этикетки. Автоматическое перемещение остановлено.');
+    }
+    const item: TsdTransferScannedItem = { sku: balance.sku, availableQuantity: balance.quantity,
+      scanCode, scanType: 'KIZ', productMarkId: mark.id, requiresKizRegistration: false };
+    return { sourceBox, item, mark };
   }
 
   private async loadTsdTransferSourceBox(
