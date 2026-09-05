@@ -10144,6 +10144,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       remoteKizValues: string[];
       alreadyAttached: boolean;
     } | null = null;
+    let pendingWbKizReplacement = false;
     if (
       !emergencyAssembly &&
       (!task.marketplace || task.marketplace === MarketplaceType.WILDBERRIES)
@@ -10170,20 +10171,6 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
       if (
         !wbKizPreflight.alreadyAttached &&
-        wbKizPreflight.remoteKizValues.length > 0
-      ) {
-        const message = await this.parkFbsTsdOrderAfterWbKizConflict(
-          task,
-          kiz,
-          wbKizPreflight.supplierStatus,
-          wbKizPreflight.wbStatus,
-          'у заказа уже указан другой КИЗ',
-          user,
-        );
-        throw new BadRequestException(message);
-      }
-      if (
-        !wbKizPreflight.alreadyAttached &&
         wbKizPreflight.supplierStatus !== 'confirm'
       ) {
         const message = await this.parkFbsTsdOrderAfterWbKizConflict(
@@ -10195,6 +10182,34 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           user,
         );
         throw new BadRequestException(message);
+      }
+      // FIX: after an uncertain DELETE/PUT, WB can be empty. A repeat of that
+      // replacement must retain safe reconciliation instead of legacy rejection.
+      if (
+        !wbKizPreflight.alreadyAttached &&
+        wbKizPreflight.remoteKizValues.length === 0 &&
+        task.kiz && task.wbMetaStatus === 'PENDING'
+      ) {
+        try {
+          pendingWbKizReplacement = Boolean(await this.prisma.auditLog.findFirst({
+            where: {
+              action: 'FBS_WB_KIZ_REPLACEMENT_STARTED',
+              entity: 'FbsTsdAssembly',
+              entityId: task.id,
+              AND: [
+                { payload: { path: ['scannedKiz'], equals: task.kiz } },
+                { payload: { path: ['clientId'], equals: task.clientId } },
+                { payload: { path: ['connectionId'], equals: task.connectionId } },
+                { payload: { path: ['orderId'], equals: task.orderId } },
+              ],
+            },
+            select: { id: true },
+          }));
+        } catch {
+          throw new BadRequestException(
+            'Не удалось проверить журнал замены КИЗ в WMS. Wildberries не изменялся. Повторите сканирование того же КИЗ позже.',
+          );
+        }
       }
     }
 
@@ -10413,7 +10428,17 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     }
 
-    if (!wbKizPreflight.alreadyAttached) {
+    // FIX: a validated physical scan may replace stale WB metadata without
+    // manager confirmation. Keep the ordinary first-attachment path unchanged.
+    if (!wbKizPreflight.alreadyAttached && (wbKizPreflight.remoteKizValues.length > 0 || pendingWbKizReplacement)) {
+      task = await this.replaceWildberriesFbsKizAfterProductPick(
+        task,
+        kiz,
+        wbKizPreflight.remoteKizValues,
+        wbConnection.apiKey,
+        user,
+      );
+    } else if (!wbKizPreflight.alreadyAttached) {
       try {
         task = await this.assertFbsTsdLeaseVersion(task, user);
         await marketplaceJsonOnce(
@@ -12460,6 +12485,97 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
+  }
+
+  // FIX: persist the preimage before destructive WB writes and never blindly
+  // compensate an uncertain result: WB may have accepted the new KIZ already.
+  private async replaceWildberriesFbsKizAfterProductPick(
+    task: FbsTsdAssemblyRecord,
+    kiz: string,
+    previousKizValues: string[],
+    apiKey: string,
+    user: AuthUser,
+  ) {
+    task = await this.updateFbsTsdUnderLease(task, user, {
+      kiz,
+      wbMetaStatus: 'PENDING',
+      errorMessage: null,
+    });
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'FBS_WB_KIZ_REPLACEMENT_STARTED',
+          entity: 'FbsTsdAssembly',
+          entityId: task.id,
+          payload: cleanJson({
+            clientId: task.clientId,
+            requestId: task.requestId,
+            orderId: task.orderId,
+            connectionId: task.connectionId,
+            previousKizValues,
+            scannedKiz: kiz,
+            boxCode: task.boxCode ?? FBS_TSD_NO_BOX_CODE,
+            deviceCode: task.deviceCode,
+            workerName: task.workerName ?? user.name,
+            leaseVersion: task.updatedAt.toISOString(),
+            startedAt: new Date().toISOString(),
+          }),
+        },
+      });
+    } catch {
+      throw new BadRequestException(
+        'Не удалось сохранить замену КИЗ в журнале WMS. Wildberries не изменялся. Повторите сканирование того же КИЗ.',
+      );
+    }
+
+    task = await this.assertFbsTsdLeaseVersion(task, user);
+    const metadataUrl = `https://marketplace-api.wildberries.ru/api/v3/orders/${numericWbOrderId(task.orderId)}/meta`;
+    try {
+      if (previousKizValues.length > 0) {
+        await marketplaceJsonOnce(`${metadataUrl}?key=sgtin`, {
+          method: 'DELETE',
+          headers: wbHeaders(apiKey),
+          signal: AbortSignal.timeout(FBS_TSD_WB_READ_TIMEOUT_MS),
+        });
+      }
+      // FIX: DELETE is an await boundary; the former worker must not PUT for a
+      // task whose owner, device or version changed while WB was responding.
+      task = await this.assertFbsTsdLeaseVersion(task, user);
+      await marketplaceJsonOnce(`${metadataUrl}/sgtin`, {
+        method: 'PUT',
+        headers: wbHeaders(apiKey),
+        body: JSON.stringify({ sgtins: [kiz] }),
+        signal: AbortSignal.timeout(FBS_TSD_WB_READ_TIMEOUT_MS),
+      });
+    } catch {
+      task = await this.assertFbsTsdLeaseVersion(task, user);
+      let attached = false;
+      try {
+        const refreshed = await this.loadWildberriesFbsKizPreflight(apiKey, task.orderId, kiz);
+        attached = refreshed.alreadyAttached;
+      } catch {
+        // No reliable readback. Keep the scan and historical mark: either WB
+        // mutation may have completed despite the lost acknowledgement.
+      }
+      task = await this.assertFbsTsdLeaseVersion(task, user);
+      if (attached) return task;
+
+      // FIX: even an empty read is not an atomic condition for restoring the
+      // old array. No more remote writes, mark rollback or stock consumption.
+      const message =
+        `Замена КИЗ заказа WB №${task.orderId} пока не подтверждена. ` +
+        'Старый и новый КИЗ сохранены в журнале WMS; товар не списан. ' +
+        'Повторите сканирование того же КИЗ после восстановления связи с WB. ' +
+        'Если ошибка повторяется, менеджеру нужно сверить КИЗ и статус заказа в WB.';
+      await this.updateFbsTsdUnderLease(task, user, {
+        kiz,
+        wbMetaStatus: 'PENDING',
+        errorMessage: message,
+      });
+      throw new BadRequestException(message);
+    }
+    return task;
   }
 
   private async recordAcceptedFbsKizScan(task: FbsTsdAssemblyRecord, kiz: string, user: AuthUser) {
