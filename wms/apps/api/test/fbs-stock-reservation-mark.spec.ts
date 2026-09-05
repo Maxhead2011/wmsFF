@@ -1,5 +1,5 @@
 import { MarketplaceType, StockStatus } from '@prisma/client';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MarketplaceConnectionsService } from '../src/modules/marketplace-connections/marketplace-connections.service';
 
 const task = {
@@ -17,8 +17,11 @@ const task = {
 };
 
 describe('FBS stock reservation ProductMark synchronization', () => {
+  afterEach(() => vi.unstubAllEnvs());
   // TEST: a picked KIZ must leave AVAILABLE together with its stock balance.
-  it('marks the exact picked KIZ as PACKING', async () => {
+  it.each([false, true])('marks the exact picked KIZ as PACKING, lifecycle flag %s', async (enabled) => {
+    // TEST: physical picking removes the active source association, not the task's history.
+    vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', String(enabled));
     const productMarkUpdateMany = vi.fn().mockResolvedValue({ count: 1 });
     const tx = {
       stockMovement: {
@@ -64,13 +67,15 @@ describe('FBS stock reservation ProductMark synchronization', () => {
       },
       data: {
         status: StockStatus.PACKING,
-        boxId: 'box-live',
+        boxId: enabled ? null : 'box-live',
       },
     });
+    expect(task.boxId).toBe('box-live');
   });
 
   // TEST: undoing the reservation restores the exact KIZ to AVAILABLE.
-  it('returns the exact KIZ to AVAILABLE when the reservation is cancelled', async () => {
+  it.each([false, true])('returns the exact KIZ to AVAILABLE when cancelled; lifecycle flag %s', async enabled => {
+    vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', String(enabled));
     const productMarkUpdateMany = vi.fn().mockResolvedValue({ count: 1 });
     const tx = {
       stockMovement: {

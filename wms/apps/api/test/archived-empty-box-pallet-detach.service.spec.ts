@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BoxCodePolicyService } from '../src/common/boxes/box-code-policy.service';
 import { ArchivedEmptyBoxPalletDetachService } from '../src/common/boxes/archived-empty-box-pallet-detach.service';
 
 type TestOptions = {
@@ -61,6 +62,17 @@ function testContext(options: TestOptions = {}) {
 }
 
 describe('ArchivedEmptyBoxPalletDetachService', () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it('does not detach a permanent box even if an older process archived it', async () => {
+    // TEST: background reconciliation cannot remove permanent storage placement.
+    vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', 'true');
+    const f = testContext();
+    const row = await f.tx.box.findUnique();
+    row.code = 'SBOX_014';
+    Object.assign(f.service, { boxCodes: new BoxCodePolicyService({ get: async () => ({}) } as never) });
+    expect(await f.service.detachIfArchivedAndEmpty({ boxId: 'box-1' })).toMatchObject({ detached: false });
+    expect(f.tx.storagePalletBox.deleteMany).not.toHaveBeenCalled();
+  });
   // TEST: only the conjunction "archived AND factual quantity = 0" may detach a box.
   it('detaches an archived box with no balance rows and writes the required audit event', async () => {
     const context = testContext({ balanceCount: 0, balanceSum: null });

@@ -33,7 +33,7 @@ import {
 } from '@prisma/client';
 import { PDFParse } from 'pdf-parse';
 import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
-import { BoxCodePolicyService } from '../../common/boxes/box-code-policy.service';
+import { BoxCodePolicyService, permanentStorageBoxesEnabled, preserveEmptyStorageBox } from '../../common/boxes/box-code-policy.service';
 import { ArchivedEmptyBoxPalletDetachService } from '../../common/boxes/archived-empty-box-pallet-detach.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
@@ -13227,7 +13227,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           tx.stockBalance.count({ where: { boxId: freshMark.boxId, quantity: { gt: 0 } } }),
           tx.productMark.count({ where: { boxId: freshMark.boxId } }),
         ]);
-        if (remainingBalances === 0 && remainingMarks === 0) {
+        // FIX: a KIZ relink must not archive a permanent source box.
+        if (remainingBalances === 0 && remainingMarks === 0 && !await preserveEmptyStorageBox(freshMark.box.code, this.boxCodes)) {
           await tx.box.update({ where: { id: freshMark.boxId }, data: { status: 'archived' } });
           // FIX: KIZ relinking cannot leave an archived empty source box on a pallet-sort.
           await this.archivedEmptyBoxDetach?.detachIfArchivedAndEmpty(
@@ -13330,7 +13331,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         tx.stockBalance.count({ where: { boxId: freshMark.boxId, quantity: { gt: 0 } } }),
         tx.productMark.count({ where: { boxId: freshMark.boxId } }),
       ]);
-      if (remainingBalances === 0 && remainingMarks === 0) {
+      // FIX: moving the last KIZ does not remove permanent storage.
+      if (remainingBalances === 0 && remainingMarks === 0 && !await preserveEmptyStorageBox(freshMark.box.code, this.boxCodes)) {
         await tx.box.update({ where: { id: freshMark.boxId }, data: { status: 'archived' } });
         // FIX: KIZ movement uses the same atomic archived-empty lifecycle rule.
         await this.archivedEmptyBoxDetach?.detachIfArchivedAndEmpty(
@@ -13498,7 +13500,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         },
         data: {
           status: StockStatus.PACKING,
-          boxId: task.boxId,
+          // FIX: source location remains in the task/movement history, not active KIZ placement.
+          boxId: permanentStorageBoxesEnabled() ? null : task.boxId,
         },
       });
     };

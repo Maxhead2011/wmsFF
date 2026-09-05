@@ -11,8 +11,8 @@ const user = {
   writableWarehouseIds: ['wh-1'], clientScopeMode: 'ALL', clientIds: [], writableClientIds: [],
 } as any;
 
-function fixture(initialMarkBox = 'source', markValue = kiz, storageBoxAliases: string[] = []) {
-  let sourceQuantity = 2;
+function fixture(initialMarkBox = 'source', markValue = kiz, storageBoxAliases: string[] = [], sourceCode = 'FFL_SOURCE', quantity = 2) {
+  let sourceQuantity = quantity;
   let targetQuantity = 0;
   let markBoxId = initialMarkBox;
   const oldBox = { id: 'old', code: 'FFL_OLD', clientId: 'client-1', warehouseId: 'wh-1', status: 'active' };
@@ -25,7 +25,7 @@ function fixture(initialMarkBox = 'source', markValue = kiz, storageBoxAliases: 
     needsChestnyZnak: true, isUnmarked: false, barcodes: [{ value: barcode }] };
   const balance = () => ({ id: 'source-balance', skuId: sku.id, clientId: 'client-1',
     warehouseId: 'wh-1', boxId: 'source', status: 'AVAILABLE', quantity: sourceQuantity, sku });
-  const source = () => ({ id: 'source', code: 'FFL_SOURCE', clientId: 'client-1',
+  const source = () => ({ id: 'source', code: sourceCode, clientId: 'client-1',
     warehouseId: 'wh-1', status: 'active', client: { id: 'client-1' }, balances: [balance()] });
   const target = { id: 'target', code: 'SBOX_001', clientId: 'client-1', warehouseId: 'wh-1', status: 'active' };
   const movements = new Map<string, any>();
@@ -47,7 +47,7 @@ function fixture(initialMarkBox = 'source', markValue = kiz, storageBoxAliases: 
         const code = where.code ?? where.clientId_code?.code;
         if (where.id === 'old') return oldBox;
         if (where.id === 'target') return target;
-        return code === 'FFL_SOURCE' ? source() : code === target.code ? target : null;
+        return code === sourceCode ? source() : code === target.code ? target : null;
       }),
       create: vi.fn(), update: vi.fn(),
     },
@@ -118,11 +118,45 @@ function fixture(initialMarkBox = 'source', markValue = kiz, storageBoxAliases: 
   const scopes = { requireClientAccess: vi.fn() };
   const service = new StockOperationsService(db as never, scopes as never,
     { balanceKey: () => 'target-key' } as never, undefined, undefined, undefined, codes);
-  const payload = { transferMode: 'BOX_TO_STORAGE_BOX', fromBoxCode: 'FFL_SOURCE',
+  const payload = { transferMode: 'BOX_TO_STORAGE_BOX', fromBoxCode: sourceCode,
     toBoxCode: 'SBOX_001', barcode, scanCode: markValue, idempotencyKey: 'move-1' };
   return { service, codes, db, sku, target, payload, scopes, oldBox, oldBalances, mark, auditRows, addedMarks,
     quantities: () => [sourceQuantity, targetQuantity], markBox: () => markBoxId };
 }
+
+// TEST: empty permanent storage remains placed; the exact mark moves once, without new stock.
+describe('permanent storage box lifecycle', () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it('keeps the last-unit source active through the Android batch endpoint and its retry', async () => {
+    // TEST: Android batch transfer preserves both source placement and exact target mark.
+    vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', 'true');
+    const f = fixture('source', kiz, ['FFL_LKBBOX'], 'FFL_LKBBOX_014', 1);
+    f.target.code = 'FFL_TARGET';
+    const payload = { fromBoxCode: 'FFL_LKBBOX_014', toBoxCode: 'FFL_TARGET', scanCodes: [kiz], idempotencyKey: 'batch-1' };
+    await expect(f.service.executeTsdTransferBatch(payload, user)).resolves.toMatchObject({ sourceBoxArchived: false, sourceRemaining: 0 });
+    await expect(f.service.executeTsdTransferBatch(payload, user)).resolves.toMatchObject({ status: 'ALREADY_APPLIED', sourceBoxArchived: false });
+    expect(f.quantities()).toEqual([0, 1]);
+    expect(f.markBox()).toBe('target');
+    expect(f.db.box.update).not.toHaveBeenCalled();
+  });
+  it.each([
+    ['true', 'FFL_LKBBOX_014', false],
+    ['true', 'SBOX_014', false],
+    ['true', 'FFL_SOURCE', true],
+    ['false', 'FFL_LKBBOX_014', true],
+  ])('flag %s source %s archived %s', async (flag, sourceCode, archived) => {
+    vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', flag as string);
+    const f = fixture('source', kiz, ['FFL_LKBBOX'], sourceCode as string, 1);
+    const result = await f.service.executeTsdTransfer(f.payload, user);
+    expect(result).toMatchObject({ sourceRemaining: 0, sourceBoxArchived: archived });
+    expect(f.quantities()).toEqual([0, 1]);
+    expect(f.markBox()).toBe('target');
+    expect(f.db.productMark.create).not.toHaveBeenCalled();
+    if (!archived) expect(f.db.box.update).not.toHaveBeenCalled();
+    await f.service.executeTsdTransfer(f.payload, user);
+    expect(f.quantities()).toEqual([0, 1]);
+  });
+});
 
 // TEST: a different KIZ in an old cancelled return task must not freeze all stock of the SKU.
 describe('unregistered KIZ with a cancelled source-box return task', () => {

@@ -1,11 +1,30 @@
 import { BadRequestException } from '@nestjs/common';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   BOX_CODE_POLICY_SETTING,
   BoxCodePolicyService,
+  preserveEmptyStorageBox,
 } from '../src/common/boxes/box-code-policy.service';
 
 describe('BoxCodePolicyService', () => {
+  afterEach(() => vi.unstubAllEnvs());
+  // TEST: the lifecycle guard uses configured aliases, not a hardcoded FFL prefix.
+  it.each([
+    ['SBOX_014', true], [' ffl_lkbbox_014 ', true], ['FFL_LKB1007_327', false],
+    ['FFL_LKBBOX', false], ['SBOX_', false], ['', false],
+  ])('permanent storage classification: %s', async (code, expected) => {
+    vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', 'true');
+    const policy = new BoxCodePolicyService({ get: async () => ({ storageBoxAliases: ['FFL_LKBBOX'] }) } as never);
+    expect(await preserveEmptyStorageBox(code as string, policy)).toBe(expected);
+  });
+  it('does not load settings when disabled, and fails closed without settings when enabled', async () => {
+    vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', 'false');
+    expect(await preserveEmptyStorageBox('SBOX_014')).toBe(false);
+    vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', 'true');
+    await expect(preserveEmptyStorageBox('SBOX_014')).rejects.toThrow('Политика');
+    const policy = new BoxCodePolicyService({ get: async () => { throw new Error('settings unavailable'); } } as never);
+    await expect(preserveEmptyStorageBox('SBOX_014', policy)).rejects.toThrow('settings unavailable');
+  });
   // TEST: additional storage prefixes are opt-in per WMS and never replace the primary prefix.
   it('accepts FFL_LKBBOX aliases while keeping the configured primary and rejecting ordinary boxes', async () => {
     const service = new BoxCodePolicyService({ get: async () => ({

@@ -8,6 +8,7 @@ import {
 } from '@prisma/client';
 import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
 import { ArchivedEmptyBoxPalletDetachService } from '../../common/boxes/archived-empty-box-pallet-detach.service';
+import { BoxCodePolicyService, preserveEmptyStorageBox } from '../../common/boxes/box-code-policy.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
@@ -41,6 +42,7 @@ export class WarehouseBoxIntegrityService {
     private readonly balances: StockBalancesService,
     private readonly inventoryLock: InventoryLockService,
     private readonly archivedEmptyBoxDetach?: ArchivedEmptyBoxPalletDetachService,
+    private readonly boxCodes?: BoxCodePolicyService,
   ) {}
 
   async listChecks(user: AuthUser, clientIdValue?: string) {
@@ -593,7 +595,8 @@ export class WarehouseBoxIntegrityService {
         const positiveBalances = await tx.stockBalance.count({
           where: { warehouseId, boxId: box.id, quantity: { gt: 0 } },
         });
-        if (positiveBalances === 0) {
+        // FIX: a zero-count decision changes stock, not permanent storage placement.
+        if (positiveBalances === 0 && !await preserveEmptyStorageBox(box.code, this.boxCodes)) {
           await tx.box.update({
             where: { id: box.id },
             data: { status: 'archived', palletId: null, zoneId: null },

@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SkuSortingService } from '../src/modules/inventory/sku-sorting.service';
+import { BoxCodePolicyService } from '../src/common/boxes/box-code-policy.service';
 
 afterEach(() => vi.unstubAllEnvs());
 const user: any = { id: 'user', name: 'Test', activeWarehouseId: 'warehouse', permissionCodes: ['system:admin'] };
-function fixture() {
+function fixture(sourceCode = 'BOX') {
   vi.stubEnv('WMS_SKU_SORTING_ENABLED', 'true');
-  const source = { id: 'source', sourceBoxId: 'box', sourceBoxCode: 'BOX', skuId: 'sku', plannedQuantity: 2, pickedQuantity: 0, receivedQuantity: 0 };
+  const source = { id: 'source', sourceBoxId: 'box', sourceBoxCode: sourceCode, skuId: 'sku', plannedQuantity: 2, pickedQuantity: 0, receivedQuantity: 0 };
   const request = { id: 'request', type: 'SKU_COLLECTION', status: 'IN_WORK', clientId: 'client', warehouseId: 'warehouse', comment: '[SKU_SORTING_V2]', skuCollectionSources: [source] };
   const tx: any = {
     $queryRaw: vi.fn().mockResolvedValue([]),
@@ -28,10 +29,21 @@ function fixture() {
   const collection: any = { get: vi.fn().mockResolvedValue(request) };
   const service = new SkuSortingService(prisma, { requireClientAccess: vi.fn() } as any,
     { balanceKey: () => 'target-key' } as any, collection, {} as any, {} as any);
-  const dto = { sourceBoxCode: 'BOX', targetBoxCode: 'TARGET', barcode: '123', kiz: 'kiz', auditBoxId: 'audit' };
+  Object.assign(service, { boxCodes: new BoxCodePolicyService({ get: async () => ({ storageBoxAliases: ['FFL_LKBBOX'] }) } as never) });
+  const dto = { sourceBoxCode: sourceCode, targetBoxCode: 'TARGET', barcode: '123', kiz: 'kiz', auditBoxId: 'audit' };
   return { service, tx, dto, request };
 }
 describe('atomic SKU storage sorting', () => {
+  it('keeps a permanent source box after the last unit is sorted', async () => {
+    // TEST: no archive update or pallet detach, but the same KIZ is active at the destination.
+    vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', 'true');
+    const { service, tx, dto } = fixture('FFL_LKBBOX_014');
+    await service.move('request', dto as any, user);
+    expect(tx.box.updateMany).not.toHaveBeenCalled();
+    expect(tx.productMark.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ boxId: 'target' }),
+    }));
+  });
   it('registers an unrecorded physical KIZ only with this audit evidence and a free mark slot', async () => {
     // TEST: seven physical units with only four old marks must not create more stock or skip evidence.
     const { service, tx, dto } = fixture();

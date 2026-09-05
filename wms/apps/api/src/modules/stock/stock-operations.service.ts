@@ -19,7 +19,7 @@ import {
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
 import { captureShippedKizHistory } from '../../common/shipment-history/shipped-kiz-history';
-import { BoxCodePolicyService } from '../../common/boxes/box-code-policy.service';
+import { BoxCodePolicyService, preserveEmptyStorageBox } from '../../common/boxes/box-code-policy.service';
 import { ArchivedEmptyBoxPalletDetachService } from '../../common/boxes/archived-empty-box-pallet-detach.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
@@ -557,7 +557,9 @@ export class StockOperationsService {
         }),
       ]);
       const sourceRemaining = remainingBalance._sum.quantity ?? 0;
-      const sourceBoxArchived = sourceRemaining === 0 && remainingMarks === 0;
+      // FIX: empty reusable storage stays active and retains its pallet placement.
+      const sourceBoxArchived = sourceRemaining === 0 && remainingMarks === 0 &&
+        !await preserveEmptyStorageBox(sourceBox.code, this.boxCodes);
       if (sourceBoxArchived) {
         await tx.box.update({
           where: { id: sourceBox.id },
@@ -707,7 +709,9 @@ export class StockOperationsService {
         }),
       ]);
       const sourceRemaining = remainingBalance._sum.quantity ?? 0;
-      const sourceBoxArchived = sourceRemaining === 0 && remainingMarks === 0;
+      // FIX: batch transfers follow the same permanent-storage lifecycle.
+      const sourceBoxArchived = sourceRemaining === 0 && remainingMarks === 0 &&
+        !await preserveEmptyStorageBox(initialSourceBox.code, this.boxCodes);
       if (sourceBoxArchived) {
         await tx.box.update({
           where: { id: initialSourceBox.id },
@@ -904,7 +908,9 @@ export class StockOperationsService {
         tx.stockBalance.count({ where: { boxId: sourceBox.id, quantity: { gt: 0 } } }),
         tx.productMark.count({ where: { boxId: sourceBox.id } }),
       ]);
-      const sourceArchived = remainingBalances === 0 && remainingMarks === 0;
+      // FIX: whole-box transfers do not delete a reusable source location.
+      const sourceArchived = remainingBalances === 0 && remainingMarks === 0 &&
+        !await preserveEmptyStorageBox(sourceBox.code, this.boxCodes);
       if (sourceArchived) {
         await tx.box.update({
           where: { id: sourceBox.id },

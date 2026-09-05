@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { ClientRequestStatus, InventorySessionType, Prisma, StockStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ArchivedEmptyBoxPalletDetachService } from '../../common/boxes/archived-empty-box-pallet-detach.service';
+import { BoxCodePolicyService, preserveEmptyStorageBox } from '../../common/boxes/box-code-policy.service';
 import { ClientScopeService } from '../auth/client-scope.service';
 import type { AuthUser } from '../auth/auth.types';
 import { StockBalancesService } from '../stock/stock-balances.service';
@@ -24,6 +25,7 @@ export class SkuSortingService {
     private readonly collections: SkuCollectionService,
     private readonly inventory: InventoryService,
     private readonly emptyBoxes: ArchivedEmptyBoxPalletDetachService,
+    private readonly boxCodes?: BoxCodePolicyService,
   ) {}
 
   private async request(db: Prisma.TransactionClient, id: string, user: AuthUser) {
@@ -210,7 +212,10 @@ export class SkuSortingService {
         plannedQuantity: source.pickedQuantity + balance.quantity, pickedQuantity: { increment: 1 }, receivedQuantity: { increment: 1 },
       } });
       await this.refreshTotals(tx, id);
-      const archived = await tx.box.updateMany({ where: { id: source.sourceBoxId, balances: { none: { quantity: { gt: 0 } } } }, data: { status: 'archived' } });
+      // FIX: sorting removes units, not the reusable source storage location.
+      const archived = await preserveEmptyStorageBox(source.sourceBoxCode, this.boxCodes)
+        ? { count: 0 }
+        : await tx.box.updateMany({ where: { id: source.sourceBoxId, balances: { none: { quantity: { gt: 0 } } } }, data: { status: 'archived' } });
       if (archived.count) await this.emptyBoxes.detachIfArchivedAndEmpty({ boxId: source.sourceBoxId, userId: user.id, reason: 'sku-sorting' }, tx);
     }, { isolationLevel: 'Serializable', timeout: 15000 });
     return this.collections.get(id, user);
