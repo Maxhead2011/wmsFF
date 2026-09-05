@@ -1,17 +1,23 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as XLSX from 'xlsx';
 import type { AuthUser } from '../src/modules/auth/auth.types';
+import { ClientScopeService } from '../src/modules/auth/client-scope.service';
 import { ClientsService } from '../src/modules/clients/clients.service';
 
 describe('ClientsService', () => {
   it('обновляет реквизиты клиента и очищает пустые поля', async () => {
     const prisma = {
+      // TEST: branch management requires both a writable client scope and one active branch link.
+      warehouseClient: {
+        count: vi.fn().mockResolvedValue(1),
+        findFirst: vi.fn().mockResolvedValue({ clientId: 'client-1' }),
+      },
       client: {
         update: vi.fn().mockResolvedValue({ id: 'client-1', code: 'CLIENT', name: 'ООО Клиент' }),
       },
     };
     const scopes = {
-      requireGlobalClientAccess: vi.fn(),
+      requireClientAccess: vi.fn(),
     };
     const service = new ClientsService(prisma as never, scopes as never);
 
@@ -24,10 +30,15 @@ describe('ClientsService', () => {
         bankAccount: ' 40702810000000000001 ',
         fbsCalculatorEnabled: true,
       },
-      user(),
+      branchUser(),
     );
 
-    expect(scopes.requireGlobalClientAccess).toHaveBeenCalledWith(expect.any(Object));
+    expect(scopes.requireClientAccess).toHaveBeenCalledWith(branchUser(), 'client-1', 'write');
+    expect(prisma.warehouseClient.count).toHaveBeenCalledWith({ where: { clientId: 'client-1', status: 'ACTIVE' } });
+    expect(prisma.warehouseClient.findFirst).toHaveBeenCalledWith({
+      where: { warehouseId: 'warehouse-1', clientId: 'client-1', status: 'ACTIVE' },
+      select: { clientId: true },
+    });
     expect(prisma.client.update).toHaveBeenCalledWith({
       where: { id: 'client-1' },
       data: {
@@ -44,6 +55,23 @@ describe('ClientsService', () => {
         fulfillmentManagerUserId: true,
       }),
     });
+  });
+
+  // TEST: a branch manager cannot edit shared client details or bypass client write scope.
+  it.each([
+    { writable: true, branches: 2, message: 'Клиент работает в нескольких филиалах.' },
+    { writable: false, branches: 1, message: 'Нет доступа к данным этого клиента.' },
+  ])('отказывает в записи реквизитов: $message', async ({ writable, branches, message }) => {
+    const prisma = {
+      client: { update: vi.fn() },
+      warehouseClient: { count: vi.fn().mockResolvedValue(branches), findFirst: vi.fn() },
+    };
+    const service = new ClientsService(prisma as never, new ClientScopeService());
+    const actor = { ...branchUser(), writableClientIds: writable ? ['client-1'] : [] };
+    await expect(service.update('client-1', { name: 'Изменение' }, actor)).rejects.toThrow(message);
+    expect(prisma.client.update).not.toHaveBeenCalled();
+    expect(prisma.warehouseClient.findFirst).not.toHaveBeenCalled();
+    if (!writable) expect(prisma.warehouseClient.count).not.toHaveBeenCalled();
   });
 
   it('генерирует код клиента и сохраняет обязательные реквизиты', async () => {
@@ -255,6 +283,19 @@ function user(): AuthUser {
     clientScopeMode: 'ALL',
     clientIds: [],
     writableClientIds: [],
+  };
+}
+
+function branchUser(): AuthUser {
+  return {
+    ...user(),
+    roleCodes: ['BRANCH_MANAGER'],
+    clientScopeMode: 'LIMITED',
+    clientIds: ['client-1'],
+    writableClientIds: ['client-1'],
+    activeWarehouseId: 'warehouse-1',
+    warehouseIds: ['warehouse-1'],
+    writableWarehouseIds: ['warehouse-1'],
   };
 }
 

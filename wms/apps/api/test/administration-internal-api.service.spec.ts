@@ -18,6 +18,24 @@ afterEach(() => {
 });
 
 describe('AdministrationInternalApiService', () => {
+  // TEST: a surplus in one group must not conceal missing handlers in another.
+  it.each(INTERNAL_API_DEFINITIONS)('счётчик маршрутов группы $id соответствует её контроллерам', (definition) => {
+    const matchingControllers = controllerFiles(join(__dirname, '../src/modules'))
+      .map((file) => readFileSync(file, 'utf8'))
+      .filter((source) => {
+        const decorator = source.match(/@Controller\(([\s\S]*?)\)/)?.[1] ?? '';
+        const prefixes = [...decorator.matchAll(/['"]([^'"]+)['"]/g)].map((match) => `/${match[1]}`);
+        // TEST: include shared-prefix controllers, but count an aliased controller only once.
+        return prefixes.some((prefix) => definition.prefixes.includes(prefix));
+      });
+    expect(matchingControllers.length).toBeGreaterThan(0);
+    const routeCount = matchingControllers.reduce(
+      (sum, source) => sum + [...source.matchAll(/@(Get|Post|Patch|Put|Delete)\s*\(/g)].length,
+      0,
+    );
+    expect(definition.routeCount).toBe(routeCount);
+  });
+
   it('описывает все контроллеры и все маршруты текущего AppModule', () => {
     const controllerSources = controllerFiles(join(__dirname, '../src/modules'))
       .map((file) => readFileSync(file, 'utf8'));

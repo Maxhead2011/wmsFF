@@ -256,6 +256,8 @@ describe('ClientRequestsService', () => {
       },
     };
     const prisma = {
+      // TEST: a client-cabinet request explicitly selects an active client branch.
+      warehouseClient: { findFirst: vi.fn().mockResolvedValue({ clientId: 'client-1' }) },
       sku: {
         findMany: vi.fn().mockResolvedValue([{ id: 'sku-1' }]),
       },
@@ -266,6 +268,7 @@ describe('ClientRequestsService', () => {
     await service.create(
       {
         clientId: 'client-1',
+        warehouseId: 'warehouse-1',
         type: ClientRequestType.OUTBOUND,
         priority: ClientRequestPriority.HIGH,
         title: 'Отгрузка на маркетплейс',
@@ -279,6 +282,7 @@ describe('ClientRequestsService', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           clientId: 'client-1',
+          warehouseId: 'warehouse-1',
           destinationCity: 'Казань',
           status: ClientRequestStatus.SUBMITTED,
           createdByUserId: 'user-1',
@@ -298,6 +302,9 @@ describe('ClientRequestsService', () => {
 
   it('запрещает добавить в заявку SKU другого клиента', async () => {
     const prisma = {
+      // TEST: do not let a missing warehouse mask the foreign-SKU rejection.
+      warehouseClient: { findFirst: vi.fn().mockResolvedValue({ clientId: 'client-1' }) },
+      $transaction: vi.fn(),
       sku: {
         findMany: vi.fn().mockResolvedValue([]),
       },
@@ -308,6 +315,7 @@ describe('ClientRequestsService', () => {
       service.create(
         {
           clientId: 'client-1',
+          warehouseId: 'warehouse-1',
           type: ClientRequestType.OUTBOUND,
           title: 'Чужая SKU',
           destinationCity: 'Казань',
@@ -315,11 +323,16 @@ describe('ClientRequestsService', () => {
         },
         user({ clientIds: ['client-1'], writableClientIds: ['client-1'] }),
       ),
-    ).rejects.toThrow(BadRequestException);
+    ).rejects.toThrow('Одна или несколько SKU в заявке не принадлежат выбранному клиенту.');
+    expect(prisma.sku.findMany).toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('требует город поставки при создании заявки', async () => {
     const prisma = {
+      // TEST: reach city validation, not the earlier branch precondition.
+      warehouseClient: { findFirst: vi.fn().mockResolvedValue({ clientId: 'client-1' }) },
+      $transaction: vi.fn(),
       sku: {
         findMany: vi.fn().mockResolvedValue([]),
       },
@@ -330,13 +343,15 @@ describe('ClientRequestsService', () => {
       service.create(
         {
           clientId: 'client-1',
+          warehouseId: 'warehouse-1',
           type: ClientRequestType.OUTBOUND,
           title: 'Без города',
           destinationCity: ' ',
         },
         user({ clientIds: ['client-1'], writableClientIds: ['client-1'] }),
       ),
-    ).rejects.toThrow(BadRequestException);
+    ).rejects.toThrow('Город поставки обязателен.');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('при ручном статусе DONE списывает outbound-заявку через складское SHIP-движение', async () => {

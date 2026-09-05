@@ -60,6 +60,8 @@ describe('TsdAssemblyService: активная очередь', () => {
 describe('TsdAssemblyService: факт сборки FBS', () => {
   it('возвращает короб, заказ, ШК товара, размер и четыре цифры наклейки WB', async () => {
     const prisma = {
+      // TEST: no later pallet placement exists for these instruction allocations.
+      storagePalletBox: { findMany: vi.fn().mockResolvedValue([]) },
       fbsOrderRequestLink: {
         findMany: vi.fn().mockResolvedValue([
           { orderId: '5355303495', connectionId: 'connection-1', lastSkuId: 'sku-1' },
@@ -70,6 +72,7 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
         findMany: vi.fn().mockResolvedValue([
           {
             id: 'task-1',
+            deviceCode: 'TSD-TEST-1',
             orderId: '5355303495',
             requestItemId: 'item-1',
             skuId: 'sku-1',
@@ -129,6 +132,7 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
           wbStickerPartB: '9753',
           wbStickerBarcode: 'WB-FULL-BARCODE',
           statusLabel: 'Собрано',
+          completionSource: 'STANDARD',
         },
       ],
       notCollected: {
@@ -146,8 +150,8 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
             collectedQuantity: 1,
             remainingQuantity: 1,
             orderIds: ['5355303496'],
-            orders: [{ id: '5355303496', connectionId: 'connection-1' }],
-            availableBoxes: [{ boxCode: 'FFL_LKB0106_039', quantity: 2 }],
+            orders: [{ id: '5355303496', connectionId: 'connection-1', assemblyId: null, requiresKiz: false, kizAccepted: false }],
+            availableBoxes: [{ boxCode: 'FFL_LKB0106_039', quantity: 2, palletId: undefined, palletCode: undefined, storageLocation: null }],
           }),
         ],
       },
@@ -156,6 +160,8 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
 
   it('показывает изменённый после сборки заказ как требующий решения и не считает его несобранным', async () => {
     const prisma = {
+      // TEST: current physical placement lookup is a dependency even for return-required facts.
+      storagePalletBox: { findMany: vi.fn().mockResolvedValue([]) },
       fbsOrderRequestLink: {
         findMany: vi.fn().mockResolvedValue([
           { orderId: '5355303495', connectionId: 'connection-1', lastSkuId: 'sku-1' },
@@ -165,6 +171,7 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
         findMany: vi.fn().mockResolvedValue([
           {
             id: 'task-1',
+            deviceCode: 'TSD-TEST-1',
             orderId: '5355303495',
             requestItemId: 'item-1',
             skuId: 'sku-1',

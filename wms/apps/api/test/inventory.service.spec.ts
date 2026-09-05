@@ -167,14 +167,21 @@ describe('InventoryService box checks', () => {
   });
 
   it('allows a manager to resolve a mismatch from an already completed box check', async () => {
-    const lineUpdate = vi.fn().mockResolvedValue({});
-    const boxUpdate = vi.fn().mockResolvedValue({});
+    // TEST: Prisma returns PENDING/decidedAt for an unresolved line, never undefined.
+    const auditBox = {
+      id: 'audit-box-1', boxId: 'box-1', clientId: 'client-1', sessionId: 'session-1',
+      status: InventoryBoxStatus.MISMATCH, session: { warehouseId: null }, lines: [],
+    };
+    const lineUpdate = vi.fn().mockResolvedValue({ count: 1 });
+    const boxUpdate = vi.fn().mockResolvedValue({ ...auditBox, status: InventoryBoxStatus.RESOLVED });
     const prisma = {
       inventoryAuditLine: {
         findUnique: vi.fn().mockResolvedValue({
           id: 'line-1',
           auditBoxId: 'audit-box-1',
           difference: -1,
+          decision: InventoryLineDecision.PENDING,
+          decidedAt: null,
           auditBox: {
             clientId: 'client-1',
             session: {
@@ -183,13 +190,17 @@ describe('InventoryService box checks', () => {
             },
           },
         }),
-        update: lineUpdate,
+        updateMany: lineUpdate,
         count: vi.fn().mockResolvedValue(0),
       },
       inventoryAuditBox: {
         update: boxUpdate,
-        findUnique: vi.fn().mockResolvedValue({ id: 'audit-box-1', lines: [] }),
+        findUnique: vi.fn().mockResolvedValue(auditBox),
       },
+      inventorySession: { findUnique: vi.fn().mockResolvedValue(null) },
+      box: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      stockMovement: { create: vi.fn() },
+      $transaction: vi.fn(async (operation: (tx: unknown) => unknown) => operation(prisma)),
     };
     const scopes = { requireClientAccess: vi.fn() };
     const service = new InventoryService(prisma as never, scopes as never, {} as never);
@@ -201,11 +212,40 @@ describe('InventoryService box checks', () => {
     );
 
     expect(lineUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'line-1', decision: InventoryLineDecision.PENDING, decidedAt: null },
       data: expect.objectContaining({ decision: InventoryLineDecision.KEEP_SYSTEM }),
     }));
     expect(boxUpdate).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ status: InventoryBoxStatus.RESOLVED }),
     }));
+    expect(prisma.stockMovement.create).not.toHaveBeenCalled();
+  });
+
+  // TEST: correcting a PENDING fixture must not permit replacing a real final decision.
+  it('does not replace an already applied decision in a completed box check', async () => {
+    const prisma = {
+      inventoryAuditLine: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'line-final', auditBoxId: 'audit-box-1',
+          decision: InventoryLineDecision.APPLY_ACTUAL,
+          decisionComment: '[APPLY_ACTUAL]', decidedAt: new Date('2026-09-01T10:00:00Z'),
+          auditBox: {
+            clientId: 'client-1',
+            session: { type: InventorySessionType.BOX_CHECK, status: InventorySessionStatus.COMPLETED },
+          },
+        }),
+        updateMany: vi.fn(),
+      },
+      $transaction: vi.fn(),
+      stockMovement: { create: vi.fn() },
+    };
+    const service = new InventoryService(prisma as never, { requireClientAccess: vi.fn() } as never, {} as never);
+
+    await expect(service.decideLine('line-final', { action: InventoryResolutionAction.ACCEPT_AS_IS }, manager))
+      .rejects.toThrow('Решение по позиции уже применено (APPLY_ACTUAL)');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.inventoryAuditLine.updateMany).not.toHaveBeenCalled();
+    expect(prisma.stockMovement.create).not.toHaveBeenCalled();
   });
 
   // ADDED: prevents an actualized receiving box from remaining invisible to whole-box transfers.
@@ -222,11 +262,14 @@ describe('InventoryService box checks', () => {
     };
     const prisma = {
       inventorySession: { findUnique: vi.fn().mockResolvedValue(null) },
+      // TEST: resolution and receiving-box activation share the transaction boundary.
+      inventoryAuditLine: { count: vi.fn().mockResolvedValue(0) },
       inventoryAuditBox: {
         findUnique: vi.fn().mockResolvedValue(auditBox),
         update: vi.fn().mockResolvedValue({ ...auditBox, status: InventoryBoxStatus.RESOLVED }),
       },
       box: { updateMany: activateBox },
+      $transaction: vi.fn(async (operation: (tx: unknown) => unknown) => operation(prisma)),
     };
     const scopes = { requireClientAccess: vi.fn() };
     const service = new InventoryService(prisma as never, scopes as never, {} as never);
@@ -240,9 +283,11 @@ describe('InventoryService box checks', () => {
     expect(activateBox).toHaveBeenCalledWith({
       where: {
         id: 'box-1',
+        clientId: 'client-1',
         status: 'receiving',
         balances: {
           some: {
+            clientId: 'client-1',
             status: 'AVAILABLE',
             quantity: { gt: 0 },
           },

@@ -1,4 +1,3 @@
-import { BadRequestException } from '@nestjs/common';
 import { ClientRequestStatus, ClientRequestType, PickWaveRequestStatus, PickWaveStatus } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import type { AuthUser } from '../src/modules/auth/auth.types';
@@ -60,7 +59,7 @@ describe('FulfillmentWaveService.cancelWave', () => {
   it('не отменяет волну с уже собранной заявкой', async () => {
     const wave = waveFixture();
     wave.requests[0].status = PickWaveRequestStatus.PICKED;
-    const prisma = { pickWave: { findUnique: vi.fn().mockResolvedValue(wave) } };
+    const prisma = { pickWave: { findUnique: vi.fn().mockResolvedValue(wave) }, $transaction: vi.fn() };
     const service = new FulfillmentWaveService(
       prisma as never,
       { requireClientAccess: vi.fn() } as never,
@@ -69,7 +68,11 @@ describe('FulfillmentWaveService.cancelWave', () => {
       {} as never,
     );
 
-    await expect(service.cancelWave(wave.id, user())).rejects.toThrow(BadRequestException);
+    // TEST: reach the picked-request guard, not an unrelated missing-warehouse error.
+    await expect(service.cancelWave(wave.id, user())).rejects.toThrow(
+      'В волне уже есть собранные заявки. Отмена может повредить складские остатки.',
+    );
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('не отменяет волну, если по ней уже есть складское списание', async () => {
@@ -77,6 +80,7 @@ describe('FulfillmentWaveService.cancelWave', () => {
     const prisma = {
       pickWave: { findUnique: vi.fn().mockResolvedValue(wave) },
       stockMovement: { count: vi.fn().mockResolvedValue(1) },
+      $transaction: vi.fn(),
     };
     const service = new FulfillmentWaveService(
       prisma as never,
@@ -86,13 +90,22 @@ describe('FulfillmentWaveService.cancelWave', () => {
       {} as never,
     );
 
-    await expect(service.cancelWave(wave.id, user())).rejects.toThrow(BadRequestException);
+    // TEST: a posted movement prevents cancellation before the write transaction.
+    await expect(service.cancelWave(wave.id, user())).rejects.toThrow(
+      'По волне уже проведены складские движения. Безопасная отмена невозможна.',
+    );
+    expect(prisma.stockMovement.count).toHaveBeenCalledWith({
+      where: { type: 'PICK', sourceDocument: { in: ['request-1'] }, idempotencyKey: { contains: wave.id } },
+    });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 });
 
 function waveFixture() {
   return {
     id: 'wave-1',
+    // TEST: wave and its request belong to the actor's concrete branch.
+    warehouseId: 'warehouse-1',
     waveNumber: 'WAVE-1',
     status: PickWaveStatus.FROZEN,
     comment: null,
@@ -104,6 +117,7 @@ function waveFixture() {
         request: {
           id: 'request-1',
           clientId: 'client-1',
+          warehouseId: 'warehouse-1',
           title: 'Отгрузка',
           type: ClientRequestType.OUTBOUND,
           status: ClientRequestStatus.IN_WORK,
@@ -125,6 +139,9 @@ function user(): AuthUser {
     name: 'Администратор',
     roleCodes: ['ADMIN'],
     permissionCodes: ['stock:write'],
+    activeWarehouseId: 'warehouse-1',
+    warehouseIds: ['warehouse-1'],
+    writableWarehouseIds: ['warehouse-1'],
     clientScopeMode: 'ALL',
     clientIds: [],
     writableClientIds: [],

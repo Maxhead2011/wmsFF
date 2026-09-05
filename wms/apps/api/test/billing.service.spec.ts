@@ -1172,8 +1172,10 @@ describe('BillingService', () => {
 
   it('stores a canonical WMS city for fixed FBS processing plus logistics', async () => {
     const prisma = {
-      client: { count: vi.fn().mockResolvedValue(1) },
+      // TEST: current billing settings are read before mode validation and upsert.
+      client: { findUnique: vi.fn().mockResolvedValue({ id: 'client-1', code: 'CLIENT', name: 'Клиент' }) },
       clientFbsBillingSettings: {
+        findUnique: vi.fn().mockResolvedValue(null),
         upsert: vi.fn().mockImplementation(async ({ create }) => ({
           ...create,
         })),
@@ -1235,8 +1237,9 @@ describe('BillingService', () => {
 
   it('rejects simultaneous FBS turnkey and fixed plus logistics modes', async () => {
     const prisma = {
-      client: { count: vi.fn().mockResolvedValue(1) },
-      clientFbsBillingSettings: { upsert: vi.fn() },
+      // TEST: reach the conflicting-mode guard with a valid client fixture.
+      client: { findUnique: vi.fn().mockResolvedValue({ id: 'client-1', code: 'CLIENT', name: 'Клиент' }) },
+      clientFbsBillingSettings: { findUnique: vi.fn().mockResolvedValue(null), upsert: vi.fn() },
     };
     const service = new BillingService(prisma as never, clientScopes());
 

@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import { SkusService } from '../src/modules/skus/skus.service';
+import type { AuthUser } from '../src/modules/auth/auth.types';
 import { VolumeService } from '../src/modules/stock/volume.service';
 
 describe('SkusService', () => {
@@ -115,7 +116,7 @@ describe('SkusService', () => {
       color: 'синий',
       size: 'L',
       needsChestnyZnak: true,
-    });
+    }, networkCatalogUser());
 
     expect(prisma.nomenclatureItem.update).toHaveBeenCalledWith({
       where: { id: 'nomenclature-1' },
@@ -130,6 +131,21 @@ describe('SkusService', () => {
         needsChestnyZnak: true,
       }),
     });
+  });
+
+  // TEST: updating the shared catalogue is not granted to branch-scoped staff.
+  it('rejects shared nomenclature updates by a branch-scoped manager without writing', async () => {
+    const prisma = { nomenclatureItem: { findUnique: vi.fn(), update: vi.fn() } };
+    const service = new SkusService(prisma as never, {} as never, new VolumeService());
+    await expect(service.updateNomenclature('nomenclature-1', { name: 'Изменение' }, {
+      ...networkCatalogUser(),
+      roleCodes: ['BRANCH_MANAGER'],
+      activeWarehouseId: 'warehouse-1',
+      warehouseIds: ['warehouse-1'],
+      writableWarehouseIds: ['warehouse-1'],
+    })).rejects.toThrow('Общий справочник номенклатуры изменяет только администратор сети.');
+    expect(prisma.nomenclatureItem.findUnique).not.toHaveBeenCalled();
+    expect(prisma.nomenclatureItem.update).not.toHaveBeenCalled();
   });
 
   it('mass updates selected SKU volume as a manual override and writes audit', async () => {
@@ -319,3 +335,13 @@ describe('SkusService', () => {
     ).rejects.toThrow(BadRequestException);
   });
 });
+
+// TEST: explicit network-level fixture, not a blanket system:admin bypass.
+function networkCatalogUser(): AuthUser {
+  return {
+    id: 'catalog-manager-1', email: 'catalog@example.com', name: 'Catalog manager',
+    roleCodes: ['MANAGER'], permissionCodes: ['skus:write'],
+    clientScopeMode: 'ALL', clientIds: [], writableClientIds: [],
+    warehouseIds: [], writableWarehouseIds: [],
+  };
+}

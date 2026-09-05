@@ -354,6 +354,26 @@ describe('PickInstructionService', () => {
         remainingQuantity: 3,
       }),
     ]);
+    // TEST: reservations are loaded only from the wave's selected physical branch.
+    expect(prisma.stockBalance.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ warehouseId: 'warehouse-1', clientId: 'client-1' }),
+    }));
+  });
+
+  // TEST: same-client requests in different branches cannot share a warehouse plan.
+  it('не строит общую волну для заявок разных филиалов', async () => {
+    const prisma = {
+      clientRequest: { findMany: vi.fn().mockResolvedValue([
+        requestFixture({ id: 'request-1' }),
+        requestFixture({ id: 'request-2', warehouseId: 'warehouse-2' }),
+      ]) },
+      stockBalance: { findMany: vi.fn() },
+    };
+    const service = new PickInstructionService(prisma as never, new ClientScopeService());
+    await expect(service.buildWaveDraft(['request-1', 'request-2'], user({
+      clientIds: ['client-1'], writableClientIds: ['client-1'],
+    }))).rejects.toThrow('Все заявки волны должны относиться к одному выбранному филиалу.');
+    expect(prisma.stockBalance.findMany).not.toHaveBeenCalled();
   });
 
   it('отклоняет инструкцию для не outbound-заявки', async () => {
@@ -428,11 +448,14 @@ function requestFixture(
     id?: string;
     createdAt?: Date;
     destinationCity?: string;
+    warehouseId?: string;
   } = {},
 ) {
   const requestId = overrides.id ?? 'request-1';
   return {
     id: requestId,
+    // TEST: request fixtures model the current branch-bound warehouse contract.
+    warehouseId: overrides.warehouseId ?? 'warehouse-1',
     clientId: 'client-1',
     title: 'Excel сборка',
     type: overrides.type ?? ClientRequestType.OUTBOUND,
@@ -496,6 +519,7 @@ function balanceFixture(input: {
   return {
     id: input.id,
     balanceKey: `key-${input.id}`,
+    warehouseId: 'warehouse-1',
     clientId: 'client-1',
     skuId: input.skuId ?? 'sku-1',
     boxId: input.boxId,
@@ -538,6 +562,9 @@ function user(overrides: Partial<AuthUser>): AuthUser {
     name: 'User',
     roleCodes: ['MANAGER'],
     permissionCodes: ['stock:write'],
+    activeWarehouseId: 'warehouse-1',
+    warehouseIds: ['warehouse-1'],
+    writableWarehouseIds: ['warehouse-1'],
     clientScopeMode: 'LIMITED',
     clientIds: [],
     writableClientIds: [],

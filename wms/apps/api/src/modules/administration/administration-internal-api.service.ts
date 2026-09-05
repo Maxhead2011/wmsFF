@@ -157,7 +157,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'inventory',
     name: 'Инвентаризация',
     prefixes: ['/inventory'],
-    routeCount: 14,
+    routeCount: 16, // FIX: include both SKU collection handlers.
     description: 'Создание пересчётов, сканирование и безопасная актуализация остатков коробов.',
     logic: ['Фиксирует снимок ожидаемых остатков.', 'Сравнивает факт со снимком.', 'Применяет подтверждённые расхождения через движения склада.'],
     dependencies: ['Основная БД', 'Складские движения'],
@@ -193,8 +193,8 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'marketplace-connections',
     name: 'Маркетплейсы и FBS',
     prefixes: ['/marketplace-connections', '/marketplace-connection', '/external/v1/fbs'],
-    // FIX: keep monitoring in sync with the WB supply/request audit route.
-    routeCount: 99,
+    // FIX: count 95 marketplace handlers plus 3 external FBS handlers; aliases are not extra handlers.
+    routeCount: 98,
     description: 'Подключения WB/Ozon, заказы FBS, поставки, статусы, финансовые отчёты и распределение остатков.',
     logic: ['Синхронизирует кабинеты, склады и заказы.', 'Сверяет активные поставки WB с заявками WMS и показывает отсутствующие привязки без записи в WB.', 'Резервирует товар WMS и передаёт статусы сборки.', 'Проверяет поставки филиала и создаёт локальные заявки FBS ДОВОЗ без повторной отправки статуса в WB.', 'Получает финансовые штрафы FBS без передачи токена WB в браузер.', 'Рассчитывает и выгружает распределённые остатки по складам.'],
     dependencies: ['Основная БД', 'WB API', 'Ozon API'],
@@ -266,7 +266,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'tsd',
     name: 'ТСД',
     prefixes: ['/tsd'],
-    routeCount: 75, // FIX: complete TSD history (list, detail, screenshot) plus screenshot upload.
+    routeCount: 79, // FIX: 69 device handlers (including SKU collection) plus 10 sync handlers.
     description: 'Приёмка, размещение, сборка FBS, перемещения и синхронизация ТСД.',
     logic: ['Выдаёт следующее действие сборщику.', 'Проверяет паллет-сорт, короб, товар и КИЗ.', 'Фиксирует сканы, операции и восстановление сессий устройства.'],
     dependencies: ['Основная БД', 'Склад', 'JWT устройства'],
@@ -293,8 +293,8 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'warehouse',
     name: 'Склад и размещение',
     prefixes: ['/warehouse', '/warehouse/storage-locations'],
-    // FIX: account for DELETE /warehouse/storage-locations/zones/:id.
-    routeCount: 40,
+    // FIX: 30 warehouse handlers plus 12 storage-location handlers.
+    routeCount: 42,
     description: 'Короба, паллет-сорты, зоны, ячейки и физическое размещение товара.',
     logic: ['Создаёт и изменяет складские места.', 'Размещает и перемещает короба.', 'Показывает содержимое и актуальную иерархию хранения.'],
     dependencies: ['Основная БД', 'Складские движения'],

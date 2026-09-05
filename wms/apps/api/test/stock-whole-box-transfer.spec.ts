@@ -8,6 +8,7 @@ describe('StockOperationsService: объединение коробов', () => 
       id: 'balance-1',
       balanceKey: 'source-key',
       clientId: 'client-1',
+      warehouseId: 'warehouse-1',
       skuId: 'sku-1',
       boxId: 'box-source',
       palletId: null,
@@ -26,6 +27,7 @@ describe('StockOperationsService: объединение коробов', () => 
           .mockResolvedValueOnce({
             id: 'box-source',
             clientId: 'client-1',
+            warehouseId: 'warehouse-1',
             code: 'FFL_SOURCE',
             status: 'active',
             palletId: null,
@@ -36,6 +38,7 @@ describe('StockOperationsService: объединение коробов', () => 
         create: vi.fn().mockResolvedValue({
           id: 'box-target',
           clientId: 'client-1',
+          warehouseId: 'warehouse-1',
           code: 'FFL_TARGET',
           status: 'active',
           palletId: null,
@@ -80,9 +83,13 @@ describe('StockOperationsService: объединение коробов', () => 
         name: 'Сотрудник',
         roleCodes: ['WAREHOUSE'],
         permissionCodes: ['stock:read', 'stock:write'],
-        clientScopeMode: 'ALL',
-        clientIds: [],
-        writableClientIds: [],
+        // TEST: the source, destination and operator belong to the same writable branch.
+        clientScopeMode: 'LIMITED',
+        clientIds: ['client-1'],
+        writableClientIds: ['client-1'],
+        activeWarehouseId: 'warehouse-1',
+        warehouseIds: ['warehouse-1'],
+        writableWarehouseIds: ['warehouse-1'],
       },
     );
 
