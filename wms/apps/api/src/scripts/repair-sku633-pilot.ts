@@ -13,6 +13,10 @@ const movedCodes = ['FFL_LKB1007_196', 'FFL_LKB1107_176', 'FFL_LKVOZ2208_06'];
 const key = 'sku633-confirmed-seven-20260905';
 const scope = { clientId, warehouseId, skuId };
 function assert(ok: unknown, message: string): asserts ok { if (!ok) throw new Error(message); }
+export function mutationBoxIds633(sources: Array<{ sourceBoxId: string; sourceBoxCode: string; plannedQuantity: number; pickedQuantity: number }>) {
+  // FIX: old emptied sources change route metadata only, not their inventory or marks.
+  return [...sources.filter(s => s.plannedQuantity > s.pickedQuantity && !movedCodes.includes(s.sourceBoxCode)).map(s => s.sourceBoxId), targetId];
+}
 
 export function validate633Facts(f: { available: number; reserved: number; moved: number[]; ownReserve: number; picked: number; received: number; totalPlan: number; blockers: number }) {
   if (f.available !== 7 || f.reserved !== 7 || JSON.stringify(f.moved) !== '[2,4,1]' ||
@@ -32,6 +36,7 @@ export async function repair633(db: PrismaClient, applyHash?: string) {
     const sources = request.skuCollectionSources;
     assert(sources.length === 9 && sources.every(s => s.skuId === skuId && s.clientId === clientId && s.warehouseId === warehouseId), 'Изменился состав заявки');
     const affected = [...sources.filter(s => s.plannedQuantity > s.pickedQuantity).map(s => s.sourceBoxId), targetId];
+    const stockWriteBoxes = mutationBoxIds633(sources);
     const balances = await tx.stockBalance.findMany({ where: { ...scope, boxId: { in: affected } }, orderBy: { id: 'asc' } });
     const marks = await tx.productMark.findMany({ where: { clientId, skuId, boxId: { in: affected } }, orderBy: { id: 'asc' } });
     const target = await tx.box.findUniqueOrThrow({ where: { id: targetId } });
@@ -39,7 +44,7 @@ export async function repair633(db: PrismaClient, applyHash?: string) {
     const [assemblies, counting, full] = await Promise.all([
       tx.fbsTsdAssembly.count({ where: { clientId, skuId, status: { in: ['IN_PROGRESS', 'RETURN_REQUIRED'] },
         OR: [{ boxId: { in: affected } }, { reservedBoxId: { in: affected } }, { kiz: { in: marks.map(m => m.value) } }] } }),
-      tx.inventoryAuditBox.count({ where: { boxId: { in: affected }, status: 'COUNTING' } }),
+      tx.inventoryAuditBox.count({ where: { boxId: { in: stockWriteBoxes }, status: 'COUNTING' } }),
       tx.inventorySession.count({ where: { type: 'FULL', status: { in: ['ACTIVE', 'REVIEW'] } } }),
     ]);
     const positiveTarget = balances.filter(b => b.boxId === targetId && b.quantity > 0);
@@ -96,7 +101,7 @@ export async function repair633(db: PrismaClient, applyHash?: string) {
       ] });
     }
     // FIX: only this SKU's own reserved marks; SHIPPING/PACKING and other SKUs are untouched.
-    await tx.productMark.updateMany({ where: { id: { in: marks.filter(m => m.status === 'RESERVED').map(m => m.id) }, status: 'RESERVED' }, data: { status: 'AVAILABLE' } });
+    await tx.productMark.updateMany({ where: { id: { in: marks.filter(m => m.status === 'RESERVED' && m.boxId && stockWriteBoxes.includes(m.boxId)).map(m => m.id) }, status: 'RESERVED' }, data: { status: 'AVAILABLE' } });
     for (const s of relocated) await tx.skuCollectionSource.update({ where: { id: s!.id }, data: { plannedQuantity: 0 } });
     await tx.skuCollectionSource.create({ data: { ...scope, requestId, sourceBoxId: targetId, sourceBoxCode: targetCode, plannedQuantity: 7 } });
     await tx.clientRequest.update({ where: { id: requestId }, data: { comment: `${request.comment ?? ''}\n[SKU_SORTING_V2]\n[${key}] Факт 7 подтверждён Константином; маршрут восстановлен по переносам.` } });
