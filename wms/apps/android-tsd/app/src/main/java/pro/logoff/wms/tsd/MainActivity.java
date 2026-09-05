@@ -636,6 +636,12 @@ public class MainActivity extends Activity {
                     tr("ИЗ КОРОБА В БОКС ХРАНЕНИЯ", "QUTIDAN SAQLASH BOKSIGA"),
                     view -> startActivity(new Intent(this, StorageBoxTransferActivity.class))
                 ));
+                // FIX: source is resolved by WMS after the product barcode and its KIZ.
+                root.addView(primaryMenuButton(
+                    tr("В БОКС ПО ШК И КИЗ (БЕЗ ИСХОДНОГО КОРОБА)", "SHK VA KIZ BO‘YICHA BOKSGA"),
+                    view -> startActivity(new Intent(this, StorageBoxTransferActivity.class)
+                        .putExtra(StorageBoxTransferActivity.AUTO_SOURCE, true))
+                ));
             }
             root.addView(messageView(tr(
                 "Шаг 1 из 3. Отсканируйте исходный короб.",

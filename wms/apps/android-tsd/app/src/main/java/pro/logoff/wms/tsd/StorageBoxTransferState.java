@@ -10,6 +10,23 @@ public final class StorageBoxTransferState {
     private String scanCode = "";
     private String operationKey = "";
     private String pendingTarget = "";
+    private final boolean autoSource;
+
+    public StorageBoxTransferState() { this(false); }
+
+    // FIX: an additional mode; the source-first workflow keeps its original stages.
+    public StorageBoxTransferState(boolean autoSource) {
+        this.autoSource = autoSource;
+        if (autoSource) stage = "BARCODE";
+    }
+
+    public boolean autoSource() { return autoSource; }
+
+    public void autoSourceAccepted(String value) {
+        requireStage("KIZ");
+        if (!autoSource) throw new IllegalStateException("Automatic source mode is not enabled");
+        source = required(value);
+    }
 
     public String stage() { return stage; }
     public String sourceCode() { return source; }
@@ -32,7 +49,12 @@ public final class StorageBoxTransferState {
 
     // FIX: preserve the identity of an uncertain request across process restarts.
     public static StorageBoxTransferState restorePending(String source, String barcode, String scan, String key, String target) {
-        StorageBoxTransferState result = new StorageBoxTransferState();
+        return restorePending(source, barcode, scan, key, target, false);
+    }
+
+    // FIX: retain mode on uncertain request recovery; old saved operations default to source-first.
+    public static StorageBoxTransferState restorePending(String source, String barcode, String scan, String key, String target, boolean autoSource) {
+        StorageBoxTransferState result = new StorageBoxTransferState(autoSource);
         result.source = required(source);
         result.barcode = required(barcode);
         result.scanCode = required(scan);
@@ -53,11 +75,12 @@ public final class StorageBoxTransferState {
         barcode = required(value);
         scanCode = barcode;
         operationKey = "tsd-storage-box:" + UUID.randomUUID();
-        stage = needsKiz ? "KIZ" : "TARGET";
+        stage = (autoSource || needsKiz) ? "KIZ" : "TARGET";
     }
 
     public void kizAccepted(String value) {
         requireStage("KIZ");
+        if (autoSource && source.isEmpty()) throw new IllegalStateException("WMS ещё не определила исходный короб");
         scanCode = required(value);
         stage = "TARGET";
     }
@@ -66,7 +89,7 @@ public final class StorageBoxTransferState {
         requireStage("TARGET");
         pendingTarget = "";
         cancelUnit();
-        if (sourceArchived) { source = ""; stage = "SOURCE"; }
+        if (sourceArchived && !autoSource) { source = ""; stage = "SOURCE"; }
     }
 
     public void cancelUnit() {
@@ -74,7 +97,8 @@ public final class StorageBoxTransferState {
         barcode = "";
         scanCode = "";
         operationKey = "";
-        stage = source.isEmpty() ? "SOURCE" : "BARCODE";
+        if (autoSource) source = "";
+        stage = autoSource || !source.isEmpty() ? "BARCODE" : "SOURCE";
     }
 
     private void requireStage(String expected) {

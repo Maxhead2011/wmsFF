@@ -4,6 +4,42 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class StorageBoxTransferStateTest {
+    // TEST: additional flow discovers the source only after barcode + KIZ.
+    @Test public void autoSourceRequiresKizAndClearsSourceAfterEachUnit() {
+        StorageBoxTransferState s = new StorageBoxTransferState(true);
+        assertEquals("BARCODE", s.stage());
+        s.barcodeAccepted("BAR", false);
+        assertEquals("KIZ", s.stage());
+        s.autoSourceAccepted("SOURCE");
+        s.kizAccepted("KIZ");
+        s.beginTransfer("SBOX_1");
+        s.completed(false);
+        assertEquals("BARCODE", s.stage());
+        assertEquals("", s.sourceCode());
+        s.barcodeAccepted("BAR", true);
+        s.autoSourceAccepted("ANOTHER");
+        s.kizAccepted("KIZ2");
+        s.completed(true);
+        assertEquals("BARCODE", s.stage());
+    }
+
+    // TEST: no transfer may start until the server identifies a source.
+    @Test(expected = IllegalStateException.class) public void autoSourceCannotSkipDiscovery() {
+        StorageBoxTransferState s = new StorageBoxTransferState(true);
+        s.barcodeAccepted("BAR", true);
+        s.kizAccepted("KIZ");
+    }
+
+    // TEST: restart/retry preserves mode and destination, cancellation clears discovered source.
+    @Test public void autoSourcePendingRestoresModeAndCannotChangeTarget() {
+        StorageBoxTransferState s = StorageBoxTransferState.restorePending("SOURCE", "BAR", "KIZ", "key", "SBOX_1", true);
+        assertTrue(s.autoSource());
+        try { s.beginTransfer("SBOX_2"); fail("must retain target"); } catch (IllegalStateException expected) { }
+        s.transferRejected();
+        s.cancelUnit();
+        assertEquals("BARCODE", s.stage());
+        assertEquals("", s.sourceCode());
+    }
     @Test public void requiresSourceBarcodeKizTargetAndKeepsSourceForNextUnit() {
         // TEST: no extra Finish button, and each unit requires its own destination scan.
         StorageBoxTransferState s = new StorageBoxTransferState();

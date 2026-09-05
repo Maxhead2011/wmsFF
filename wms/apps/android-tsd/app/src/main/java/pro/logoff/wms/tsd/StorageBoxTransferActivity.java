@@ -31,6 +31,7 @@ import retrofit2.Response;
 
 /** FIX: isolated TSD workflow: source box -> barcode -> KIZ -> storage box. */
 public final class StorageBoxTransferActivity extends Activity {
+    public static final String AUTO_SOURCE = "autoSourceByKiz";
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int GREEN = Color.rgb(22, 163, 74);
     private static final int TEXT = Color.rgb(30, 41, 59);
@@ -54,6 +55,9 @@ public final class StorageBoxTransferActivity extends Activity {
             finish();
             return;
         }
+        // FIX: a pending operation always takes precedence over the newly selected mode.
+        state = new StorageBoxTransferState(getIntent().getBooleanExtra(AUTO_SOURCE, false));
+        if (state.autoSource()) message = "Сканируйте ШК товара, затем КИЗ. Исходный короб определит WMS.";
         restorePending();
         render();
     }
@@ -87,7 +91,7 @@ public final class StorageBoxTransferActivity extends Activity {
         scroll.addView(root, new ScrollView.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        TextView title = text("КОРОБ → БОКС", 26, true);
+        TextView title = text(state.autoSource() ? "ШК → КИЗ → БОКС" : "КОРОБ → БОКС", 26, true);
         title.setTextColor(RED);
         root.addView(title);
         root.addView(text("Перемещение по одной единице", 16, true));
@@ -128,6 +132,7 @@ public final class StorageBoxTransferActivity extends Activity {
             cancelUnit.setEnabled(!busy && !state.hasPendingTransfer());
             cancelUnit.setOnClickListener(view -> {
                 state.cancelUnit();
+                if (state.autoSource()) sourceBox = null;
                 currentItem = null;
                 message = "Текущая единица отменена. Сканируйте следующий ШК.";
                 success = false;
@@ -138,7 +143,7 @@ public final class StorageBoxTransferActivity extends Activity {
             Button anotherSource = button("ДРУГОЙ ИСХОДНЫЙ КОРОБ", Color.rgb(15, 23, 42));
             anotherSource.setEnabled(!busy && !state.hasPendingTransfer());
             anotherSource.setOnClickListener(view -> resetSource());
-            root.addView(anotherSource, margins(0, dp(8), 0, 0));
+            if (!state.autoSource()) root.addView(anotherSource, margins(0, dp(8), 0, 0));
         }
         setContentView(scroll);
         if (!busy) {
@@ -179,7 +184,7 @@ public final class StorageBoxTransferActivity extends Activity {
     private void inspectItem(String scanned, boolean isKiz) {
         String authorization = session.authorizationHeader();
         Map<String, Object> request = new LinkedHashMap<>();
-        request.put("transferMode", "BOX_TO_STORAGE_BOX");
+        request.put("transferMode", state.autoSource() ? "KIZ_TO_STORAGE_BOX" : "BOX_TO_STORAGE_BOX");
         request.put("fromBoxCode", state.sourceCode());
         request.put("scanCode", scanned);
         if (isKiz) request.put("barcode", state.barcode());
@@ -187,6 +192,10 @@ public final class StorageBoxTransferActivity extends Activity {
             .inspectTransferItem(authorization, request).execute(), response -> {
                 currentItem = response.item;
                 if (isKiz) {
+                    if (state.autoSource()) {
+                        sourceBox = response.sourceBox;
+                        state.autoSourceAccepted(sourceBox.code);
+                    }
                     state.kizAccepted(scanned);
                 } else {
                     state.barcodeAccepted(scanned, "SCAN_KIZ".equals(response.state));
@@ -207,7 +216,7 @@ public final class StorageBoxTransferActivity extends Activity {
         }
         String authorization = session.authorizationHeader();
         Map<String, Object> request = new LinkedHashMap<>();
-        request.put("transferMode", "BOX_TO_STORAGE_BOX");
+        request.put("transferMode", state.autoSource() ? "KIZ_TO_STORAGE_BOX" : "BOX_TO_STORAGE_BOX");
         request.put("fromBoxCode", state.sourceCode());
         request.put("toBoxCode", targetCode);
         request.put("barcode", state.barcode());
@@ -217,12 +226,13 @@ public final class StorageBoxTransferActivity extends Activity {
             .executeTransfer(authorization, request).execute(), response -> {
                 message = response.message + (response.sourceBoxArchived
                     ? " Исходный короб пуст и отправлен в архив."
+                    : state.autoSource() ? " Сканируйте ШК следующей единицы — её источник определится заново."
                     : " Можно сканировать следующую единицу из этого же короба.");
                 success = true;
                 state.completed(response.sourceBoxArchived);
                 clearPending();
                 currentItem = null;
-                if (response.sourceBoxArchived) {
+                if (response.sourceBoxArchived || state.autoSource()) {
                     sourceBox = null;
                 } else if (sourceBox != null) {
                     sourceBox.totalQuantity = response.sourceRemaining;
@@ -283,12 +293,12 @@ public final class StorageBoxTransferActivity extends Activity {
 
     private void resetSource() {
         if (busy || state.hasPendingTransfer()) return;
-        state = new StorageBoxTransferState();
+        state = new StorageBoxTransferState(state.autoSource());
         sourceBox = null;
         currentItem = null;
         busy = false;
         success = false;
-        message = "Отсканируйте исходный короб";
+        message = state.autoSource() ? "Отсканируйте ШК товара" : "Отсканируйте исходный короб";
         render();
     }
 
@@ -370,6 +380,7 @@ public final class StorageBoxTransferActivity extends Activity {
         value.put("scan", state.scanCode());
         value.put("key", state.operationKey());
         value.put("target", state.pendingTarget());
+        value.put("autoSource", state.autoSource());
         if (!getSharedPreferences("storage_transfer_pending", MODE_PRIVATE).edit()
             .putString(pendingKey(), value.toString()).commit()) {
             state.transferRejected();
@@ -383,7 +394,7 @@ public final class StorageBoxTransferActivity extends Activity {
         try {
             JSONObject value = new JSONObject(saved);
             state = StorageBoxTransferState.restorePending(value.getString("source"), value.getString("barcode"),
-                value.getString("scan"), value.getString("key"), value.getString("target"));
+                value.getString("scan"), value.getString("key"), value.getString("target"), value.optBoolean("autoSource", false));
             sourceBox = new TsdTransferResponse.SourceBox();
             sourceBox.code = state.sourceCode();
             message = "Есть неподтверждённое перемещение. Повторно отсканируйте бокс " + state.pendingTarget() + ". Двойного перемещения не будет.";
