@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import * as XLSX from 'xlsx';
 import {
   BillingChargeSource,
@@ -2311,6 +2312,11 @@ export class StockOperationsService {
         completedAt: true,
       },
     });
+    for (const previous of await readFbsAttemptHistory(tx, { requestId: request.id })) {
+      if (selections.some(selection => selection.requestItemId === previous.task.requestItemId && selection.boxId === previous.task.boxId)) {
+        completedTasks.push(previous.task);
+      }
+    }
     if (completedTasks.length === 0) return;
 
     const completedBySelection = new Map<string, number>();
@@ -2704,6 +2710,10 @@ export class StockOperationsService {
         },
       }),
     ]);
+    for (const previous of await readFbsAttemptHistory(tx, { requestId: request.id })) {
+      fbsLinks.push(previous.link);
+      fbsTasks.push(previous.task);
+    }
     const completedFbsOrders = new Set(
       fbsTasks
         .filter((task) => task.status === 'COMPLETED')

@@ -1,0 +1,5 @@
+services:
+  api:
+    image: logoff-api:repeat38-20260905
+    environment:
+      WMS_FBS_REPEAT_ASSEMBLY_ENABLED: "true"

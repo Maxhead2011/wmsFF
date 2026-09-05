@@ -17,6 +17,21 @@ import retrofit2.http.Part;
 import okhttp3.MultipartBody;
 
 public interface WmsApi {
+    // FIX: dedicated storage-only endpoints, no FBS order submission.
+    @POST("api/v1/tsd/sku-collections/{id}/sorting/start")
+    Call<TsdSkuCollection> startSkuSorting(@Header("Authorization") String authorization, @Path("id") String id);
+
+    @POST("api/v1/tsd/sku-collections/{id}/sorting/source")
+    Call<TsdSkuSortingSource> openSkuSortingSource(@Header("Authorization") String authorization, @Path("id") String id, @Body Map<String, Object> request);
+
+    @POST("api/v1/tsd/sku-collections/{id}/sorting/ready")
+    Call<TsdSkuCollection> readySkuSorting(@Header("Authorization") String authorization, @Path("id") String id, @Body Map<String, Object> request);
+
+    @POST("api/v1/tsd/sku-collections/{id}/sorting/check")
+    Call<Map<String, Object>> checkSkuSorting(@Header("Authorization") String authorization, @Path("id") String id, @Body Map<String, Object> request);
+
+    @POST("api/v1/tsd/sku-collections/{id}/sorting/move")
+    Call<TsdSkuCollection> moveSkuSorting(@Header("Authorization") String authorization, @Path("id") String id, @Body Map<String, Object> request);
     @POST("api/v1/tsd/login")
     Call<TsdLoginResponse> login(@Body TsdLoginRequest request);
 

@@ -1,3 +1,4 @@
+import { appendFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import {
   BadRequestException,
   Injectable,
@@ -86,6 +87,11 @@ export class ExpensesService {
       },
       orderBy: { completedAt: 'asc' },
       take: 50000,
+    });
+    // FIX: a repeat must not remove the earlier worker's completed output.
+    await appendFbsAttemptHistory(this.prisma, tasks, {
+      clientId: { in: visibleClients.map(client => client.id) },
+      completedAt: { gte: period.from, lt: period.toExclusive }, workerUserId: { not: null },
     });
     const workerIds = [...new Set(tasks.map((task) => task.workerUserId).filter((id): id is string => Boolean(id)))];
     const [users, payrollSettings] = await Promise.all([

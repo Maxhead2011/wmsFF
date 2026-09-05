@@ -29,11 +29,35 @@ export function OrderAssemblyPanel({ session }: { session: AuthSession }) {
   const [history, setHistory] = useState<WebOrderAssemblyHistoryItem[]>([]);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  // FIX: history lookup is independent of the mutating KIZ scan input.
+  const [orderSearch, setOrderSearch] = useState('');
+  const [searchedOrder, setSearchedOrder] = useState('');
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyError, setHistoryError] = useState('');
+  const historyQuery = useRef('');
+  const historyGeneration = useRef(0);
   const [printer, setPrinter] = useState(() => localStorage.getItem('web-order-printer') || 'XP-365B');
   const input = useRef<HTMLInputElement>(null);
   const scanTimer = useRef<number | undefined>(undefined);
   const submittedCode = useRef('');
-  const reload = () => fetchWebOrderAssemblyHistory(session.accessToken).then(setHistory).catch(() => undefined);
+  async function reload(orderId = historyQuery.current) {
+    historyQuery.current = orderId;
+    const generation = ++historyGeneration.current;
+    setSearchedOrder(orderId); setHistoryBusy(true); setHistoryError(''); setHistory([]);
+    try {
+      const rows = await fetchWebOrderAssemblyHistory(session.accessToken, orderId);
+      if (generation === historyGeneration.current) setHistory(rows);
+    } catch (error) {
+      if (generation === historyGeneration.current) setHistoryError(error instanceof Error ? error.message : 'Не удалось загрузить историю печати.');
+    } finally {
+      if (generation === historyGeneration.current) setHistoryBusy(false);
+    }
+  }
+  function searchOrder(event: FormEvent) {
+    event.preventDefault();
+    setDateFrom(''); setDateTo('');
+    void reload(orderSearch.trim());
+  }
   const filteredHistory = history.filter((row) => {
     const value = new Date(row.printedAt).getTime();
     return (!dateFrom || value >= new Date(`${dateFrom}T00:00:00`).getTime()) && (!dateTo || value <= new Date(`${dateTo}T23:59:59.999`).getTime());
@@ -53,7 +77,10 @@ export function OrderAssemblyPanel({ session }: { session: AuthSession }) {
     const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8' })); link.download = `fbs-assembly-${dateFrom || 'all'}-${dateTo || 'all'}.xls`; link.click(); URL.revokeObjectURL(link.href);
   }
 
-  useEffect(() => { input.current?.focus(); void reload(); }, [session.accessToken]);
+  useEffect(() => {
+    input.current?.focus(); void reload();
+    return () => { ++historyGeneration.current; };
+  }, [session.accessToken]);
   useEffect(() => {
     window.clearTimeout(scanTimer.current);
     if (busy || code.trim().length < 8 || code.trim() === submittedCode.current) return;
@@ -88,7 +115,19 @@ export function OrderAssemblyPanel({ session }: { session: AuthSession }) {
     <div className={`order-assembly__status ${message.includes('Выдано') ? 'is-ok' : ''}`}><ShieldCheck /><b>{message}</b></div>
     {last && <article><CheckCircle2 /><div><small>ПОСЛЕДНИЙ СТИКЕР</small><h3>Заказ №{last.orderId}</h3><p>{last.productName}{last.article ? ` · ${last.article}` : ''}</p><span>Короб: {last.boxCode || 'без короба'}</span></div></article>}
     <p className="order-assembly__rule">Повтор КИЗ и повтор стикера блокируются сервером на всех компьютерах.</p>
-    <section className="order-assembly__history"><div className="order-assembly__history-head"><h3>Отсканированные КИЗ и выданные стикеры</h3><label>С <input type="date" value={dateFrom} onChange={(e)=>setDateFrom(e.target.value)}/></label><label>По <input type="date" value={dateTo} onChange={(e)=>setDateTo(e.target.value)}/></label><button type="button" onClick={downloadExcel}><Download size={16}/> Скачать Excel</button></div><div className="table-scroll"><table>
+    <section className="order-assembly__history">
+      {/* FIX: search does not print automatically; the existing row action performs the reprint. */}
+      <form onSubmit={searchOrder} aria-label="Поиск заказа для повторной печати">
+        <label htmlFor="assembly-order-search">Номер заказа WB</label>
+        <input id="assembly-order-search" type="search" inputMode="numeric" pattern="[0-9 ]*" maxLength={30} autoComplete="off" value={orderSearch} onChange={event => setOrderSearch(event.target.value)} placeholder="Введите полный номер заказа" />
+        <button type="submit" disabled={historyBusy || !orderSearch.trim()}>{historyBusy ? 'Ищу…' : 'Найти заказ'}</button>
+        <button type="button" style={{ minHeight: 44, justifySelf: 'start' }} onClick={() => { setOrderSearch(''); setDateFrom(''); setDateTo(''); void reload(''); }}>Сбросить поиск</button>
+      </form>
+      <p>Поиск по всей доступной истории печати. В найденной строке нажмите кнопку ↻ «Повторная печать».</p>
+      {historyError && <p role="alert">{historyError}</p>}
+      <p role="status">{historyBusy ? 'Загружаю историю…' : historyError ? '' : searchedOrder ? `Заказ №${searchedOrder}: найдено записей — ${filteredHistory.length}` : `Последние записи: ${filteredHistory.length}`}</p>
+      {!historyBusy && !historyError && searchedOrder && !filteredHistory.length && <p>В доступной истории печати заказ не найден. Проверьте номер и выбранный кабинет; при заданном периоде также проверьте даты.</p>}
+      <div className="order-assembly__history-head"><h3>Отсканированные КИЗ и выданные стикеры</h3><label>С <input type="date" value={dateFrom} onChange={(e)=>setDateFrom(e.target.value)}/></label><label>По <input type="date" value={dateTo} onChange={(e)=>setDateTo(e.target.value)}/></label><button type="button" disabled={historyBusy || !!historyError} onClick={downloadExcel}><Download size={16}/> Скачать Excel</button></div><div className="table-scroll"><table>
       <thead><tr><th>Время</th><th>КИЗ</th><th>Костюм / название</th><th>Артикул</th><th>Размер</th><th>Цвет</th><th>Заказ WB</th><th>Номер стикера</th><th>Сотрудник</th><th>Действия</th></tr></thead>
       <tbody>{filteredHistory.map((row) => <tr key={row.id}><td>{new Date(row.printedAt).toLocaleString('ru-RU')}</td><td title={row.kiz} style={{ maxWidth: 300, whiteSpace: 'normal', overflowWrap: 'anywhere', fontFamily: 'monospace' }}>{row.kiz}</td><td>{row.productName || '—'}</td><td>{row.article || '—'}</td><td>{row.size || '—'}</td><td>{row.color || '—'}</td><td>{row.orderId}</td><td>{row.stickerCode || '—'}</td><td>{row.printedBy}</td><td><button title="Повторная печать" onClick={async () => { try { const result = await reprintWebOrderAssemblyHistory(session.accessToken, row.id); setLast(result); printLabels(result); setMessage(`Повторно напечатан заказ №${result.orderId}`); } catch (error) { setMessage(error instanceof Error ? error.message : 'Ошибка повторной печати.'); } finally { input.current?.focus(); } }}><RotateCcw size={16}/></button><button title="Удалить и разрешить повторную печать" onClick={async () => { if (!confirm(`Удалить запись заказа №${row.orderId} и разрешить повторную печать?`)) return; await deleteWebOrderAssemblyHistory(session.accessToken, row.id); await reload(); input.current?.focus(); }}><Trash2 size={16}/></button></td></tr>)}</tbody>
     </table></div></section>

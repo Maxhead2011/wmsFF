@@ -10272,7 +10272,11 @@ export async function scanWebOrderAssembly(accessToken: string, code: string) {
     method: 'POST', accessToken, body: { code },
   });
 }
-export async function fetchWebOrderAssemblyHistory(accessToken:string){return request<WebOrderAssemblyHistoryItem[]>('/marketplace-connections/fbs/web-order-assembly/history',{accessToken});}
+// FIX: optional server-side lookup also finds orders outside the latest 300 history rows.
+export async function fetchWebOrderAssemblyHistory(accessToken:string, orderId = '') {
+  const query = orderId.trim() ? `?${new URLSearchParams({ orderId: orderId.trim() })}` : '';
+  return request<WebOrderAssemblyHistoryItem[]>(`/marketplace-connections/fbs/web-order-assembly/history${query}`, { accessToken });
+}
 export async function reprintWebOrderAssemblyHistory(accessToken:string,id:string){return request<WebOrderAssemblyResult>(`/marketplace-connections/fbs/web-order-assembly/history/${id}/reprint`,{method:'POST',accessToken});}
 export async function deleteWebOrderAssemblyHistory(accessToken:string,id:string){return request<{deleted:boolean;orderId:string}>(`/marketplace-connections/fbs/web-order-assembly/history/${id}`,{method:'DELETE',accessToken});}
 
@@ -12067,6 +12071,23 @@ export function revokeWmsApiCredential(accessToken: string, id: string) {
     `/integration-access/credentials/${id}/revoke`,
     { method: 'POST', accessToken },
   );
+}
+
+export type FbsRepeatSelection = { clientId: string; orders: Array<{ id: string; connectionId: string; assemblyId?: string }> };
+export type FbsRepeatPreview = {
+  previewToken: string; orderCount: number; additionalUnits: number; warning: string;
+  orders: Array<{ id: string; connectionId: string; assemblyId: string; productName: string;
+    article: string | null; sourceRequestNumber: number; sourceSupplyId: string | null;
+    boxCode: string; palletCode: string | null; sourceSkuId: string }>;
+};
+export function fetchFbsRepeatCapabilities(accessToken: string) {
+  return request<{ enabled: boolean }>('/marketplace-connections/fbs/repeat-assembly/capabilities', { accessToken });
+}
+export function previewFbsRepeatAssembly(accessToken: string, selection: FbsRepeatSelection) {
+  return request<FbsRepeatPreview>('/marketplace-connections/fbs/repeat-assembly/preview', { method: 'POST', accessToken, body: selection });
+}
+export function createFbsRepeatAssembly(accessToken: string, selection: FbsRepeatSelection & { previewToken: string; confirmAdditionalStockConsumption: true }) {
+  return request<{ status: string; request: { id: string; number: number } }>('/marketplace-connections/fbs/repeat-assembly', { method: 'POST', accessToken, body: selection });
 }
 
 async function request<T>(
