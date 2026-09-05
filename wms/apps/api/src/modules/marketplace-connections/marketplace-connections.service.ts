@@ -87,6 +87,7 @@ import { buildFbsPrimaryProcessingBreakdown } from './fbs-primary-processing';
 import { buildFbsSupplyRequestAudit } from './fbs-supply-request-audit';
 import { allocateFbsStock } from './fbs-stock-allocation';
 import { FbsStockAllocationService } from './fbs-stock-allocation.service';
+import { MarketplaceStockControlService } from './marketplace-stock-control.service';
 import {
   FbsStockMonitoringService,
   type FbsStockMonitorProbeInput,
@@ -632,6 +633,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     private readonly stockAllocation?: FbsStockAllocationService,
     private readonly stockMonitoring?: FbsStockMonitoringService,
     private readonly archivedEmptyBoxDetach?: ArchivedEmptyBoxPalletDetachService,
+    private readonly stockControl: MarketplaceStockControlService = new MarketplaceStockControlService(prisma, clientScopes),
   ) {}
 
   pruneExpiredRuntimeCaches(now = Date.now()) {
@@ -1068,6 +1070,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     ) {
       return;
     }
+    // FIX: keep order refresh running while skipping stock publication for sales-managed clients.
+    if (!await this.stockControl.isEnabled(clientId)) return;
     const connections = await this.prisma.clientMarketplaceConnection.findMany({
       where: {
         clientId,
@@ -1158,6 +1162,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       try {
         for (const batch of chunks(prepared, 1000)) {
           await this.putWildberriesStocks(
+            connection.clientId,
             connection.apiKey,
             wbWarehouseId,
             batch.map((item) => ({
@@ -1442,6 +1447,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         const changed = rows.filter((row) => row.needsSync);
         for (const batch of chunks(changed, 1000)) {
           await this.putWildberriesStocks(
+            connection.clientId,
             connection.apiKey,
             warehouseId,
             batch.map((row) => ({ chrtId: row.chrtId, amount: row.amount })),
@@ -6474,7 +6480,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const amount = amounts.targetAmount;
 
     try {
-      await this.putWildberriesStocks(context.connection.apiKey, context.warehouse.id, [
+      await this.putWildberriesStocks(context.client.id, context.connection.apiKey, context.warehouse.id, [
         { chrtId: ids.chrtId, amount },
       ]);
       const syncedAt = new Date();
@@ -6570,6 +6576,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
 
     const externalResponse = await this.putWildberriesStocks(
+      prepared.context.connection.clientId,
       prepared.context.connection.apiKey,
       prepared.context.warehouse.id,
       [{ chrtId: prepared.ids.chrtId, amount: targetAmount }],
@@ -6824,6 +6831,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     try {
       for (const batch of chunks(preparedWithAmounts, 1000)) {
         await this.putWildberriesStocks(
+          context.client.id,
           context.connection.apiKey,
           context.warehouse.id,
           batch.map((item) => ({ chrtId: item.chrtId, amount: item.amount })),
@@ -7001,6 +7009,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     for (const batch of chunks(prepared, 1000)) {
       try {
         await this.putWildberriesStocks(
+          context.client.id,
           context.connection.apiKey,
           context.warehouse.id,
           batch.map((item) => ({ chrtId: item.chrtId, amount: item.targetAmount })),
@@ -7735,14 +7744,17 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   private async putWildberriesStocks(
+    clientId: string,
     apiKey: string,
     warehouseId: string,
     stocks: Array<{ chrtId: number; amount: number }>,
   ) {
     if (stocks.length === 0) return {};
+    // FIX: every writer (automatic, allocation, manual and reconciliation) shares this gate.
+    await this.stockControl.assertEnabled(clientId);
     // ADDED: callers may persist the real WB acknowledgement in an audit
     // history; existing callers can continue ignoring the return value.
-    return marketplaceJson(
+    return marketplaceJsonUncached(
       `https://marketplace-api.wildberries.ru/api/v3/stocks/${numericPositiveId(warehouseId, 'склада WB')}`,
       {
         method: 'PUT',
@@ -7754,6 +7766,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           })),
         }),
       },
+      () => this.stockControl.assertEnabled(clientId),
     );
   }
 
@@ -27851,9 +27864,12 @@ async function marketplaceFetch(
   url: string,
   init: RequestInit,
   rateLimitRetries = MARKETPLACE_RATE_LIMIT_RETRIES,
+  beforeFetch?: () => Promise<void>,
 ) {
   for (let attempt = 0; attempt <= rateLimitRetries; attempt += 1) {
     await waitForWbRequestSlot(url, init);
+    // FIX: queued stock writes and 429 retries recheck the client switch at dispatch time.
+    await beforeFetch?.();
     const response = await fetch(url, init);
     if (response.status !== 429) {
       return response;
@@ -27888,8 +27904,8 @@ async function marketplaceJson(url: string, init: RequestInit) {
   }
 }
 
-async function marketplaceJsonUncached(url: string, init: RequestInit) {
-  const response = await marketplaceFetch(url, init);
+async function marketplaceJsonUncached(url: string, init: RequestInit, beforeFetch?: () => Promise<void>) {
+  const response = await marketplaceFetch(url, init, MARKETPLACE_RATE_LIMIT_RETRIES, beforeFetch);
   const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
     throw new BadRequestException(

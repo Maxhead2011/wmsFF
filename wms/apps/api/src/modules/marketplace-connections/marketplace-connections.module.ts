@@ -9,11 +9,13 @@ import { FbsStockAllocationService } from './fbs-stock-allocation.service';
 import { FbsStockMonitoringService } from './fbs-stock-monitoring.service';
 import { MarketplaceConnectionsController } from './marketplace-connections.controller';
 import { MarketplaceConnectionsService } from './marketplace-connections.service';
+import { MarketplaceStockControlService } from './marketplace-stock-control.service';
 
 @Module({
   imports: [AuthModule, LogisticsModule],
   controllers: [MarketplaceConnectionsController, FbsStockAllocationExternalController],
   providers: [
+    MarketplaceStockControlService,
     MarketplaceConnectionsService,
     // ADDED: isolated read-only WB Finance integration for FBS penalties.
     FbsPenaltiesReportService,
@@ -23,6 +25,6 @@ import { MarketplaceConnectionsService } from './marketplace-connections.service
     // ADDED: one read-only availability calculation is shared by reports and Excel.
     WmsStockAvailabilityService,
   ],
-  exports: [MarketplaceConnectionsService, FbsStockMonitoringService],
+  exports: [MarketplaceConnectionsService, FbsStockMonitoringService, MarketplaceStockControlService],
 })
 export class MarketplaceConnectionsModule {}

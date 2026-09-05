@@ -60,13 +60,14 @@ import { AdministrationPhantomStockPanel } from './AdministrationPhantomStock';
 import { AdministrationTsdWorkloadsPanel } from './AdministrationTsdWorkloads';
 import { AdministrationFbsErrorCorrection } from './AdministrationFbsErrorCorrection';
 import { AdministrationTechnicalWork } from './AdministrationTechnicalWork';
+import { AdministrationMarketplaceStockControl, canManageMarketplaceStockControl } from './AdministrationMarketplaceStockControl';
 
 type AdministrationPanelProps = {
   session: AuthSession;
   onOpenWorkspace: (id: WorkspaceId) => void;
 };
 
-type TabId = 'overview' | 'technical-work' | 'error-correction' | 'tsd-workloads' | 'phantom-stock' | 'stock-check' | 'settings' | 'integrations' | 'visibility' | 'assistant' | 'documentation' | 'audit';
+type TabId = 'overview' | 'technical-work' | 'error-correction' | 'tsd-workloads' | 'phantom-stock' | 'stock-check' | 'marketplace-stock-control' | 'settings' | 'integrations' | 'visibility' | 'assistant' | 'documentation' | 'audit';
 
 const tabs: Array<{ id: TabId; label: string; icon: typeof Crown }> = [
   { id: 'overview', label: 'Центр управления', icon: Crown },
@@ -76,6 +77,7 @@ const tabs: Array<{ id: TabId; label: string; icon: typeof Crown }> = [
   { id: 'tsd-workloads', label: 'Занятые ТСД', icon: Tablet },
   { id: 'phantom-stock', label: 'Фантомные остатки', icon: AlertTriangle },
   { id: 'stock-check', label: 'Проверка остатков', icon: FileSpreadsheet },
+  { id: 'marketplace-stock-control', label: 'Контроль остатков на МП', icon: CloudCog },
   { id: 'settings', label: 'Настройки', icon: Settings2 },
   { id: 'integrations', label: 'API и склады', icon: CloudCog },
   { id: 'visibility', label: 'Видимость', icon: Eye },
@@ -301,6 +303,7 @@ export function AdministrationPanel({ session, onOpenWorkspace }: Administration
 
       <nav className="admin-tabs" aria-label="Разделы администрирования">
         {tabs.map((tab) => {
+          if (tab.id === 'marketplace-stock-control' && !canManageMarketplaceStockControl(session)) return null;
           const Icon = tab.icon;
           return (
             <button
@@ -339,6 +342,7 @@ export function AdministrationPanel({ session, onOpenWorkspace }: Administration
         />
       ) : null}
       {activeTab === 'stock-check' ? <AdministrationStockCheck session={session} /> : null}
+      {activeTab === 'marketplace-stock-control' ? <AdministrationMarketplaceStockControl session={session} /> : null}
       {activeTab === 'technical-work' ? <AdministrationTechnicalWork session={session} /> : null}
       {activeTab === 'error-correction' ? <AdministrationFbsErrorCorrection session={session} /> : null}
       {activeTab === 'tsd-workloads' ? <AdministrationTsdWorkloadsPanel session={session} /> : null}
