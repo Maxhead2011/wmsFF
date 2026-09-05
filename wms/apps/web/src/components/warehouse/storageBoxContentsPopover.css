@@ -1,0 +1,18 @@
+/* FIX: isolated read-only preview; do not change pallet action button styles. */
+.storage-box-preview__trigger { min-width: 0; display: grid; gap: 2px; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; font: inherit; cursor: help; }
+.storage-box-preview__trigger:focus-visible { outline: 2px solid #2563eb; outline-offset: 4px; border-radius: 3px; }
+.storage-box-preview { z-index: 1200; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; background: var(--surface, #fff); color: var(--text, #172033); border: 1px solid var(--line, #d7dee8); border-radius: 12px; box-shadow: 0 12px 35px #0f172a30; font-size: 13px; line-height: 1.45; }
+.storage-box-preview > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--line, #d7dee8); }
+.storage-box-preview > header > div { min-width: 0; display: grid; gap: 3px; overflow-wrap: anywhere; }
+.storage-box-preview > header small { color: var(--muted, #64748b); }
+.storage-box-preview > header > button { flex-shrink: 0; border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 23px; line-height: 1; padding: 0 4px; }
+.storage-box-preview__body { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 12px 14px; }
+.storage-box-preview__body > p { margin: 0; }
+.storage-box-preview__items { list-style: none; padding: 0; margin: 10px 0 0; }
+.storage-box-preview__items > li { padding: 10px 0; border-top: 1px solid var(--line, #d7dee8); overflow-wrap: anywhere; }
+.storage-box-preview__product { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.storage-box-preview__product > b { flex-shrink: 0; white-space: nowrap; }
+.storage-box-preview__items p { margin: 5px 0; }
+.storage-box-preview__items small { color: var(--muted, #64748b); }
+.storage-box-preview__barcode { font-variant-numeric: tabular-nums; }
+.storage-box-preview__retry { margin-top: 12px; padding: 6px 10px; border: 1px solid var(--line, #d7dee8); border-radius: 6px; color: inherit; background: transparent; cursor: pointer; }
