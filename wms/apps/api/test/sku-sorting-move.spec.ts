@@ -32,6 +32,22 @@ function fixture() {
   return { service, tx, dto, request };
 }
 describe('atomic SKU storage sorting', () => {
+  it('registers an unrecorded physical KIZ only with this audit evidence and a free mark slot', async () => {
+    // TEST: seven physical units with only four old marks must not create more stock or skip evidence.
+    const { service, tx, dto } = fixture();
+    dto.kiz = '0104680992593139215a%9RNyiE_KVd\u001d91EE12';
+    tx.productMark.findFirst.mockResolvedValue(null);
+    tx.productMark.count = vi.fn().mockResolvedValue(1);
+    tx.productMark.create = vi.fn();
+    tx.inventoryAuditBox.findUnique.mockResolvedValue({ boxId: 'box', clientId: 'client', status: 'MATCHED',
+      startedAt: new Date('2026-09-05T10:00:00Z'), session: { warehouseId: 'warehouse' }, lines: [] });
+    tx.auditLog = { findUnique: vi.fn().mockResolvedValue({ action: 'INVENTORY_KIZ_SCAN', payload: { boxId: 'box', skuId: 'sku' } }) };
+    await service.move('request', dto as any, user);
+    expect(tx.productMark.create.mock.calls[0][0].data).toMatchObject({ value: dto.kiz, status: 'AVAILABLE', boxId: 'target' });
+    expect(tx.stockMovement.createMany.mock.calls[0][0].data.map((e: any) => e.quantity)).toEqual([-1, 1]);
+    tx.auditLog.findUnique.mockResolvedValue(null);
+    await expect(service.check('request', dto as any, user)).rejects.toThrow();
+  });
   it('does not treat ACCEPT_AS_IS discrepancies as completed actualization', async () => {
     // TEST: RESOLVED alone does not prove that the actual count was applied.
     const { service, tx, dto } = fixture();

@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { ClientRequestStatus, InventorySessionType, Prisma, StockStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ArchivedEmptyBoxPalletDetachService } from '../../common/boxes/archived-empty-box-pallet-detach.service';
@@ -113,7 +113,7 @@ export class SkuSortingService {
     }
     const counting = await tx.inventoryAuditBox.findFirst({ where: { boxId: source.sourceBoxId, status: 'COUNTING' }, select: { id: true } });
     if (counting) throw new ConflictException('В исходном коробе начат новый подсчёт. Завершите его перед перемещением.');
-    return { request, source };
+    return { request, source, audit };
   }
 
   async ready(id: string, dto: ReadySkuSortingSourceDto, user: AuthUser) {
@@ -131,15 +131,15 @@ export class SkuSortingService {
   }
 
   private async candidate(tx: Prisma.TransactionClient, id: string, dto: CheckSkuSortingDto, user: AuthUser) {
-    const { request, source } = await this.checkedSource(tx, id, dto, user);
+    const { request, source, audit } = await this.checkedSource(tx, id, dto, user);
     const sku = await tx.sku.findUnique({ where: { id: source.skuId }, include: { barcodes: true } });
     if (!sku?.barcodes.some(b => b.value === dto.barcode.trim())) throw new BadRequestException('ШК не соответствует SKU заявки.');
     // FIX: KIZ identity is case-sensitive. Never seize a mark already picked/shipped for another task.
-    const mark = await tx.productMark.findFirst({ where: { clientId: request.clientId, value: dto.kiz.trim() } });
-    if (!mark || mark.skuId !== source.skuId || mark.boxId !== source.sourceBoxId || mark.status !== 'AVAILABLE') {
+    const identity = dto.kiz.trim().split('\u001d')[0];
+    const mark = await tx.productMark.findFirst({ where: { clientId: request.clientId, value: { startsWith: identity } } });
+    if (mark && (mark.skuId !== source.skuId || mark.boxId !== source.sourceBoxId || mark.status !== 'AVAILABLE')) {
       throw new ConflictException('КИЗ не числится доступным за этим товаром в исходном коробе. Остатки не изменены.');
     }
-    const identity = mark.value.split('\u001d')[0];
     const [assembly, shipped, printed] = await Promise.all([
       tx.fbsTsdAssembly.findFirst({ where: { kiz: { startsWith: identity }, status: { in: ['IN_PROGRESS', 'RETURN_REQUIRED', 'COMPLETED'] } }, select: { id: true } }),
       tx.shippedKizHistory.findFirst({ where: { kiz: { startsWith: identity } }, select: { id: true } }),
@@ -149,6 +149,17 @@ export class SkuSortingService {
     const balance = await tx.stockBalance.findFirst({ where: { warehouseId: request.warehouseId!, clientId: request.clientId, skuId: source.skuId,
       boxId: source.sourceBoxId, status: 'AVAILABLE', quantity: { gt: 0 } } });
     if (!balance) throw new ConflictException('Свободный товар в исходном коробе закончился. Обновите маршрут.');
+    if (!mark) {
+      // FIX: reuse actualization scan evidence to bind an unrecorded KIZ without adding stock.
+      if (!/^01\d{14}21[^\u0000-\u001f]{13}$/.test(identity)) throw new BadRequestException('Отсканируйте полный КИЗ единицы из проверки короба.');
+      const evidenceId = createHash('sha256').update(JSON.stringify([dto.auditBoxId, audit.startedAt.toISOString(), identity])).digest('hex');
+      const evidence = await tx.auditLog.findUnique({ where: { id: evidenceId } });
+      const payload = evidence?.payload as { skuId?: string; boxId?: string } | null;
+      const registered = await tx.productMark.count({ where: { clientId: request.clientId, skuId: source.skuId, boxId: source.sourceBoxId, status: 'AVAILABLE' } });
+      if (evidence?.action !== 'INVENTORY_KIZ_SCAN' || payload?.skuId !== source.skuId || payload.boxId !== source.sourceBoxId || registered >= balance.quantity) {
+        throw new ConflictException('Новый КИЗ не подтверждён этой актуализацией или все единицы уже имеют КИЗ. Остатки не изменены.');
+      }
+    }
     return { request, source, mark, balance };
   }
 
@@ -185,8 +196,13 @@ export class SkuSortingService {
         { ...input, boxId: source.sourceBoxId, palletId: balance.palletId, type: 'MOVE', quantity: -1, sourceDocument: id, comment: `Сортировка: в ${target.code}` },
         { ...input, id: movementId, type: 'MOVE', quantity: 1, sourceDocument: id, comment: `Сортировка: из ${source.sourceBoxCode}` },
       ] });
-      const updated = await tx.productMark.updateMany({ where: { id: mark.id, boxId: source.sourceBoxId, status: 'AVAILABLE' }, data: { boxId: target.id, stockMovementId: movementId } });
-      if (updated.count !== 1) throw new ConflictException('КИЗ изменился параллельно. Остатки не изменены.');
+      if (mark) {
+        const updated = await tx.productMark.updateMany({ where: { id: mark.id, boxId: source.sourceBoxId, status: 'AVAILABLE' }, data: { boxId: target.id, stockMovementId: movementId } });
+        if (updated.count !== 1) throw new ConflictException('КИЗ изменился параллельно. Остатки не изменены.');
+      } else {
+        await tx.productMark.create({ data: { clientId: request.clientId, skuId: source.skuId, value: dto.kiz.trim(), boxId: target.id,
+          status: 'AVAILABLE', sourceDocument: id, stockMovementId: movementId } });
+      }
       await tx.skuCollectionScan.create({ data: { requestId: id, sourceId: source.id, skuId: source.skuId, barcode: dto.barcode.trim(), kiz: dto.kiz.trim(),
         sourceBoxId: source.sourceBoxId, sourceBoxCode: source.sourceBoxCode, targetBoxId: target.id, targetBoxCode: target.code,
         status: 'RECEIVED', pickedByUserId: user.id, pickedByName: user.name, receivedByUserId: user.id, receivedByName: user.name, receivedAt: new Date() } });
