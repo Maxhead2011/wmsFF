@@ -1,9 +1,54 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Prisma } from '@prisma/client';
 import { StorageLocationsService } from '../src/modules/warehouse/storage-locations.service';
+import { BoxCodePolicyService } from '../src/common/boxes/box-code-policy.service';
 
 describe('StorageLocationsService', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+
+  // TEST: a storage box is a real empty Box, not an unlinked name in the pallet contents.
+  it.each(['FFL_LKBBOX001', 'SBOX_001'])('creates and attaches missing storage box %s without stock writes', async code => {
+    vi.stubEnv('WMS_TSD_PALLET_CREATE_STORAGE_BOX_ENABLED', 'true');
+    const openPallet = { id: 'pallet-1', code: 'PALET_SORT_1', status: 'OPEN',
+      clientId: 'client-1', warehouseId: 'warehouse-1', boxes: [], zone: null, client: { name: 'Client' } };
+    let box: any = null;
+    const db: any = {
+      box: { findUnique: vi.fn(async () => box), upsert: vi.fn(async ({ create }: any) => (box = { id: 'created-box', ...create, balances: [] })) },
+      $queryRaw: vi.fn(async () => box ? [box] : []),
+      storagePallet: { findUnique: vi.fn(async () => openPallet), update: vi.fn() },
+      storagePalletBox: { findUnique: vi.fn(async () => null), upsert: vi.fn(async ({ create }: any) => create) },
+      auditLog: { create: vi.fn() }, stockBalance: { create: vi.fn() }, stockMovement: { create: vi.fn() },
+    };
+    db.$transaction = vi.fn(async (fn: any) => fn(db));
+    const codes = new BoxCodePolicyService({ get: async () => ({ storageBoxAliases: ['FFL_LKBBOX'] }) } as never);
+    const service = new StorageLocationsService(db, codes, balances() as never);
+    const result = await service.scanTsdPalletBox(openPallet.id, { boxCode: code }, googleMigrationAdmin());
+    expect(result).toMatchObject({ state: 'SCAN_BOX', recovery: null });
+    expect(box).toMatchObject({ code, clientId: 'client-1', warehouseId: 'warehouse-1', status: 'active' });
+    expect(db.storagePalletBox.upsert).toHaveBeenCalledWith(expect.objectContaining({ create: expect.objectContaining({ boxId: 'created-box', palletId: 'pallet-1' }) }));
+    expect(db.stockBalance.create).not.toHaveBeenCalled();
+    expect(db.stockMovement.create).not.toHaveBeenCalled();
+    expect(db.auditLog.create).toHaveBeenCalledOnce();
+    await service.scanTsdPalletBox(openPallet.id, { boxCode: code }, googleMigrationAdmin());
+    expect(db.box.upsert).toHaveBeenCalledOnce();
+  });
+
+  // TEST: creation racing with another scanner still checks ownership/status before placement.
+  it.each([
+    { clientId: 'other-client' }, { warehouseId: 'other-warehouse' }, { status: 'archived' },
+  ])('does not attach a concurrently created foreign/archived storage box: %j', async change => {
+    const pallet = { id: 'pallet-1', code: 'PALLET-1', status: 'OPEN', clientId: 'client-1', warehouseId: 'warehouse-1' };
+    const tx: any = {
+      $queryRaw: vi.fn(async () => []),
+      box: { upsert: vi.fn(async () => ({ id: 'box-1', clientId: pallet.clientId, warehouseId: pallet.warehouseId, status: 'active', ...change })) },
+      storagePallet: { findUnique: vi.fn(async () => pallet), update: vi.fn() },
+      storagePalletBox: { findUnique: vi.fn(async () => null), upsert: vi.fn() }, auditLog: { create: vi.fn() },
+    };
+    tx.$transaction = async (fn: any) => fn(tx);
+    const service = new StorageLocationsService(tx, boxCodePolicy() as never, balances() as never);
+    await expect((service as any).placeBox(pallet, 'FFL_LKBBOX001', 'TSD', googleMigrationAdmin(), true)).rejects.toThrow();
+    expect(tx.storagePalletBox.upsert).not.toHaveBeenCalled();
+  });
 
   // TEST: ordinary MANUAL/TSD placement takes the shared Box lock before writing the pallet-sort link.
   it('блокирует активный короб до размещения на паллет-сорте', async () => {

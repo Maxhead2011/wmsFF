@@ -124,6 +124,85 @@ function fixture(initialMarkBox = 'source', markValue = kiz, storageBoxAliases: 
     quantities: () => [sourceQuantity, targetQuantity], markBox: () => markBoxId };
 }
 
+// TEST: a different KIZ in an old cancelled return task must not freeze all stock of the SKU.
+describe('unregistered KIZ with a cancelled source-box return task', () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+  const setup = () => {
+    vi.stubEnv('WMS_TSD_CANCELLED_BOX_TASK_TRANSFER_ENABLED', 'true');
+    const f = fixture();
+    f.payload.scanCode = '0104600000000001215NEW-serial01\u001d91TEST\u001d92CRYPTO';
+    const task = { id: 'return-task', clientId: 'client-1', marketplace: 'WILDBERRIES',
+      connectionId: 'connection-1', orderId: '5545446176', status: 'RETURN_REQUIRED',
+      kiz, updatedAt: new Date('2026-09-01'), boxId: 'source', reservedBoxId: 'source', skuId: 'sku-1', sourceSkuId: 'sku-1' };
+    f.db.fbsTsdAssembly.findMany.mockImplementation(async () => [{ ...task }]);
+    f.db.fbsTsdAssembly.findFirst.mockImplementation(async ({ where }: any) => where.AND && !where.id?.notIn?.includes(task.id) ? { ...task } : null);
+    const remote = vi.fn(async () => new Response(JSON.stringify({ orders: [{ id: 5545446176, supplierStatus: 'complete', wbStatus: 'canceled_by_client' }] })));
+    vi.stubGlobal('fetch', remote);
+    return { ...f, task, remote };
+  };
+  it('checks WB, registers a new mark and moves one unit without rewriting the old task', async () => {
+    const f = setup();
+    await expect(f.service.inspectTsdTransferItem(f.payload, user)).resolves.toMatchObject({ state: 'SCAN_TARGET' });
+    expect(f.addedMarks).toHaveLength(0);
+    await expect(f.service.executeTsdTransfer(f.payload, user)).resolves.toMatchObject({ status: 'APPLIED' });
+    expect(f.quantities()).toEqual([1, 1]);
+    expect(f.addedMarks).toHaveLength(1);
+    expect(f.task.status).toBe('RETURN_REQUIRED');
+    expect(f.auditRows.some(row => row.action === 'TSD_CANCELLED_BOX_TASK_TRANSFER')).toBe(true);
+    const calls = f.remote.mock.calls.length;
+    await expect(f.service.executeTsdTransfer(f.payload, user)).resolves.toMatchObject({ status: 'ALREADY_APPLIED' });
+    expect(f.remote).toHaveBeenCalledTimes(calls);
+  });
+  it.each(['active', 'sold', 'WB unavailable', 'race', 'own history', 'flag off',
+    'same KIZ', 'missing KIZ', 'foreign client', 'other marketplace', 'missing connection',
+    'too many tasks', 'duplicate WB status', 'missing WB status', 'expired proof', 'new task'])('retains protection for %s', async fault => {
+    const f = setup();
+    if (fault === 'active') f.task.status = 'IN_PROGRESS';
+    if (fault === 'sold') f.remote.mockImplementation(async () => new Response(JSON.stringify({ orders: [{ id: 5545446176, supplierStatus: 'complete', wbStatus: 'sold' }] })));
+    if (fault === 'WB unavailable') f.remote.mockImplementation(async () => { throw new Error('offline'); });
+    if (fault === 'race') f.remote.mockImplementation(async () => { f.task.updatedAt = new Date(); return new Response(JSON.stringify({ orders: [{ id: 5545446176, supplierStatus: 'complete', wbStatus: 'canceled_by_client' }] })); });
+    if (fault === 'own history') f.db.shippedKizHistory.findFirst.mockResolvedValue({ id: 'shipment' });
+    if (fault === 'flag off') vi.stubEnv('WMS_TSD_CANCELLED_BOX_TASK_TRANSFER_ENABLED', 'false');
+    if (fault === 'same KIZ') f.task.kiz = f.payload.scanCode;
+    if (fault === 'missing KIZ') f.task.kiz = '';
+    if (fault === 'foreign client') f.task.clientId = 'other';
+    if (fault === 'other marketplace') f.task.marketplace = 'OZON';
+    if (fault === 'missing connection') f.db.clientMarketplaceConnection.findUnique.mockResolvedValue(null);
+    if (fault === 'too many tasks') f.db.fbsTsdAssembly.findMany.mockResolvedValue(Array.from({ length: 11 }, (_, i) => ({ ...f.task, id: `task-${i}` })));
+    if (fault === 'duplicate WB status') f.remote.mockImplementation(async () => new Response(JSON.stringify({ orders: [1, 2].map(() => ({ id: 5545446176, supplierStatus: 'complete', wbStatus: 'canceled_by_client' })) })));
+    if (fault === 'missing WB status') f.remote.mockImplementation(async () => new Response('{"orders":[]}'));
+    if (fault === 'expired proof') {
+      const original = f.db.$transaction.getMockImplementation()!;
+      f.db.$transaction.mockImplementation(async fn => {
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 16_000);
+        try { return await original(fn); } finally { clock.mockRestore(); }
+      });
+    }
+    if (fault === 'new task') f.remote.mockImplementation(async () => {
+      f.db.fbsTsdAssembly.findMany.mockResolvedValue([{ ...f.task }, { ...f.task, id: 'new-task', status: 'IN_PROGRESS' }]);
+      return new Response(JSON.stringify({ orders: [{ id: 5545446176, supplierStatus: 'complete', wbStatus: 'canceled_by_client' }] }));
+    });
+    await expect(f.service.executeTsdTransfer(f.payload, user)).rejects.toThrow();
+    expect(f.quantities()).toEqual([2, 0]);
+    expect(f.addedMarks).toHaveLength(0);
+  });
+  it('performs the bounded WB request outside the stock transaction and rolls back on audit failure', async () => {
+    const f = setup();
+    let inTransaction = false;
+    const original = f.db.$transaction.getMockImplementation()!;
+    f.db.$transaction.mockImplementation(async fn => { inTransaction = true; try { return await original(fn); } finally { inTransaction = false; } });
+    f.remote.mockImplementation(async () => {
+      expect(inTransaction).toBe(false);
+      return new Response(JSON.stringify({ orders: [{ id: 5545446176, supplierStatus: 'complete', wbStatus: 'canceled_by_client' }] }));
+    });
+    f.db.auditLog.create.mockRejectedValue(new Error('audit unavailable'));
+    await expect(f.service.executeTsdTransfer(f.payload, user)).rejects.toThrow('audit unavailable');
+    expect(f.quantities()).toEqual([2, 0]);
+    expect(f.addedMarks).toHaveLength(0);
+    expect(f.remote).toHaveBeenCalledOnce();
+  });
+});
+
 // TEST: the real stock service must read live cancellation, not trust a stale SHIPPING flag.
 describe('TSD cancelled WB order physical transfer', () => {
   afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
