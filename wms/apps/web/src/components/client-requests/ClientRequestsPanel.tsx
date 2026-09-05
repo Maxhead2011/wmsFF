@@ -1,5 +1,6 @@
 import { AlertTriangle, Archive, ArrowLeft, ArrowRightLeft, Boxes, CheckCircle2, ClipboardList, FileDown, FileUp, MapPinned, PackageX, RefreshCw, RotateCcw, Search, ShieldAlert, Truck, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { FbsExcludedOrders } from './FbsExcludedOrders';
 import {
   cancelClientRequest,
   checkFbsRequestSupplyConsistency,
@@ -3787,7 +3788,7 @@ function OnlineExecutionModal({
     returnRequiredIds.length > 0 &&
     returnRequiredIds.every((id) => selectedSyncConflictIds.includes(id));
   const rescanRequiredRows = (fbsAssembly?.rows ?? []).filter(
-    (row) => row.status === 'RESCAN_REQUIRED',
+    (row) => row.status === 'RESCAN_REQUIRED' && !fbsAssembly?.notForAssembly?.some(excluded => excluded.id === row.id),
   );
   const normalizedFbsAssemblySearch = fbsAssemblySearch.trim().toLocaleLowerCase('ru-RU');
   const filteredFbsAssemblyRows = (fbsAssembly?.rows ?? []).filter((row) =>
@@ -4235,6 +4236,7 @@ function OnlineExecutionModal({
                   </details>
                 ) : null}
 
+                <FbsExcludedOrders rows={fbsAssembly?.notForAssembly ?? []} />
                 {returnRequired && returnRequired.rows.length > 0 ? (
                   <section className="online-execution-section online-execution-section--sync-conflict">
                     <div className="online-execution-section__heading">

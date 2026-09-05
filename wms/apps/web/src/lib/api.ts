@@ -2353,6 +2353,17 @@ export type TsdAssemblyPlan = {
       message: string;
       updatedAt: string;
     }>;
+    notForAssembly?: Array<{
+      id: string;
+      orderId: string;
+      wbStatus: string;
+      productName: string;
+      productBarcode: string | null;
+      kiz: string | null;
+      sourceBoxCode: string | null;
+      workerName: string | null;
+      syncIssue: string | null;
+    }>;
     returnRequired: {
       orders: number;
       units: number;
