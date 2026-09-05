@@ -10272,7 +10272,11 @@ export async function scanWebOrderAssembly(accessToken: string, code: string) {
     method: 'POST', accessToken, body: { code },
   });
 }
-export async function fetchWebOrderAssemblyHistory(accessToken:string){return request<WebOrderAssemblyHistoryItem[]>('/marketplace-connections/fbs/web-order-assembly/history',{accessToken});}
+// FIX: optional server-side lookup also finds orders outside the latest 300 history rows.
+export async function fetchWebOrderAssemblyHistory(accessToken:string, orderId = '') {
+  const query = orderId.trim() ? `?${new URLSearchParams({ orderId: orderId.trim() })}` : '';
+  return request<WebOrderAssemblyHistoryItem[]>(`/marketplace-connections/fbs/web-order-assembly/history${query}`, { accessToken });
+}
 export async function reprintWebOrderAssemblyHistory(accessToken:string,id:string){return request<WebOrderAssemblyResult>(`/marketplace-connections/fbs/web-order-assembly/history/${id}/reprint`,{method:'POST',accessToken});}
 export async function deleteWebOrderAssemblyHistory(accessToken:string,id:string){return request<{deleted:boolean;orderId:string}>(`/marketplace-connections/fbs/web-order-assembly/history/${id}`,{method:'DELETE',accessToken});}
 
