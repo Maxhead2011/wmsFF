@@ -83,6 +83,8 @@ type TsdTransferScannedItem = {
   productMarkId: string | null;
   availableQuantity: number;
   requiresKizRegistration: boolean;
+  // FIX: a validated new physical KIZ is created only with the storage-box movement.
+  registerMissingMark?: boolean;
   // FIX: inspection only proposes reconciliation; execution commits it with the movement.
   reconciledMark?: {
     previousSkuId: string;
@@ -290,6 +292,8 @@ export class StockOperationsService {
           ? `ШК товара «${item.sku.name}» принят. Отсканируйте КИЗ этой единицы.`
           : item.reconciledMark
           ? `КИЗ проверен. Старая привязка будет исправлена при перемещении из ${sourceBox.code}. Отсканируйте бокс назначения.`
+          : item.registerMissingMark
+          ? 'Новый КИЗ принят. Он будет зарегистрирован при перемещении без увеличения остатка. Отсканируйте бокс назначения.'
           : `Товар «${item.sku.name}» проверен. Отсканируйте бокс назначения.`,
       };
     }
@@ -425,7 +429,33 @@ export class StockOperationsService {
       if (!targetBox || targetBox.clientId !== sourceBox.clientId) {
         throw new BadRequestException(`Короб назначения ${toBoxCode} не удалось открыть.`);
       }
-      if (item.productMarkId) {
+      if (item.registerMissingMark) {
+        // FIX: registration, one-unit transfer and audit commit or roll back together.
+        const inbound = await tx.stockMovement.findUnique({
+          where: { idempotencyKey: `${idempotencyKey}:in` }, select: { id: true },
+        });
+        if (!inbound) throw new BadRequestException('Не удалось подтвердить перемещение. Повторите сканирование бокса.');
+        try {
+          const created = await tx.productMark.create({ data: {
+            clientId: sourceBox.clientId, skuId: item.sku.id, boxId: targetBox.id,
+            value: item.scanCode, status: StockStatus.AVAILABLE, stockMovementId: inbound.id,
+            sourceDocument: `TSD ${user.deviceCode ?? user.id}; BOX_TO_STORAGE_BOX; ${idempotencyKey}`,
+          }, select: { id: true } });
+          await tx.auditLog.create({ data: {
+            userId: user.id, action: 'TSD_STORAGE_BOX_KIZ_REGISTERED', entity: 'ProductMark', entityId: created.id,
+            payload: { physicalBoxId: sourceBox.id, physicalBoxCode: sourceBox.code,
+              targetBoxId: targetBox.id, targetBoxCode: targetBox.code, clientId: sourceBox.clientId,
+              warehouseId: operationWarehouseId, skuId: item.sku.id, kiz: item.scanCode,
+              deviceCode: user.deviceCode ?? null, idempotencyKey, quantity: 1,
+              reason: 'Регистрация физически отсканированного КИЗ при перемещении без увеличения общего остатка.' },
+          } });
+        } catch (caught) {
+          if (isUniqueConstraintError(caught)) {
+            throw new BadRequestException('КИЗ уже зарегистрирован другой операцией. Повторите проверку товара.');
+          }
+          throw caught;
+        }
+      } else if (item.productMarkId) {
         const inbound = await tx.stockMovement.findUnique({
           where: { idempotencyKey: `${idempotencyKey}:in` },
           select: { id: true },
@@ -4013,7 +4043,7 @@ export class StockOperationsService {
     if (!hasBarcode) return product;
     // FIX: known marked goods may have a stale box link after barcode-only inventory.
     if (product.requiresKizRegistration) {
-      return this.resolveStorageBoxTransferMark(db, sourceBox, product, scanCode);
+      return this.resolveStorageBoxTransferMark(db, sourceBox, product, scanCode, true);
     }
     const item = await this.resolveTsdTransferScannedItem(db, sourceBox, scanCode);
     if (item.sku.id !== product.sku.id) {
@@ -4031,6 +4061,7 @@ export class StockOperationsService {
     sourceBox: TsdTransferSourceBox,
     product: TsdTransferScannedItem,
     scanCode: string,
+    allowRegistration = false,
   ): Promise<TsdTransferScannedItem> {
     const mark = await db.productMark.findFirst({
       where: { clientId: sourceBox.clientId, value: scanCode },
@@ -4038,7 +4069,11 @@ export class StockOperationsService {
         updatedAt: true, stockMovementId: true },
     });
     if (!mark) {
-      throw new BadRequestException('КИЗ не найден у клиента. Отсканируйте полный КИЗ товара или передайте короб менеджеру.');
+      // FIX: this mode already has a physical barcode; do not require a prior receipt of its KIZ.
+      if (!allowRegistration) {
+        throw new BadRequestException('КИЗ не найден у клиента. Отсканируйте полный КИЗ товара или передайте короб менеджеру.');
+      }
+      return this.resolveUnregisteredStorageBoxTransferMark(db, sourceBox, product, scanCode);
     }
     if (mark.status !== StockStatus.AVAILABLE) {
       throw new BadRequestException('КИЗ недоступен для перемещения: товар зарезервирован или отгружен.');
@@ -4091,6 +4126,63 @@ export class StockOperationsService {
     return { ...item, reconciledMark: { previousBoxId: oldBox.id, previousBoxCode: oldBox.code,
       previousSkuId: mark.skuId,
       value: mark.value, stockMovementId: mark.stockMovementId, updatedAt: mark.updatedAt } };
+  }
+
+  // FIX: read-only eligibility for a previously unregistered KIZ, rechecked in Serializable execution.
+  private async resolveUnregisteredStorageBoxTransferMark(
+    db: StorageBoxTransferDb,
+    sourceBox: TsdTransferSourceBox,
+    product: TsdTransferScannedItem,
+    scanCode: string,
+  ): Promise<TsdTransferScannedItem> {
+    const identity = storageBoxTransferKizIdentity(scanCode);
+    if (!identity) {
+      throw new BadRequestException('После ШК товара отсканируйте полный КИЗ Data Matrix с GTIN и серийным номером.');
+    }
+    const { gtin, serial } = identity;
+    const prefixes = [`01${gtin}21${serial}`, `]d201${gtin}21${serial}`,
+      `(01)${gtin}(21)${serial}`, `01${gtin}\u001d21${serial}`,
+      `]d201${gtin}\u001d21${serial}`, `01${gtin}<GS>21${serial}`];
+    // All clients/statuses: a missing local exact value is not proof of a new physical unit.
+    const known = await db.productMark.findFirst({
+      where: { OR: prefixes.map(prefix => ({ value: { startsWith: prefix } })) },
+      select: { id: true, clientId: true, value: true },
+    });
+    if (known) {
+      if (known.clientId !== sourceBox.clientId) {
+        throw new BadRequestException('КИЗ зарегистрирован у другого клиента. Перемещение остановлено.');
+      }
+      const knownIdentity = storageBoxTransferKizIdentity(known.value);
+      if (knownIdentity?.gtin !== gtin || knownIdentity.serial !== serial) {
+        // Prefix/LIKE matches are not proof of identity (serials may contain % or _).
+        throw new BadRequestException('Найден похожий КИЗ, но серийный номер отличается. Нужна проверка менеджера.');
+      }
+      if (known.value === scanCode) {
+        throw new BadRequestException('Привязка КИЗ изменилась. Повторите проверку товара.');
+      }
+    }
+    const [registered, assembly, shipped, printed, boxTask] = await Promise.all([
+      db.productMark.count({ where: { clientId: sourceBox.clientId, skuId: product.sku.id,
+        boxId: sourceBox.id, status: StockStatus.AVAILABLE } }),
+      db.fbsTsdAssembly.findFirst({ where: { OR: prefixes.map(prefix => ({ kiz: { startsWith: prefix } })) }, select: { id: true } }),
+      db.shippedKizHistory.findFirst({ where: { OR: prefixes.map(prefix => ({ kiz: { startsWith: prefix } })) }, select: { id: true } }),
+      db.fbsWebKizStickerPrint.findFirst({ where: { OR: prefixes.map(prefix => ({ kiz: { startsWith: prefix } })) }, select: { id: true } }),
+      db.fbsTsdAssembly.findFirst({ where: { clientId: sourceBox.clientId,
+        status: { in: ['IN_PROGRESS', 'RETURN_REQUIRED'] }, AND: [
+          { OR: [{ skuId: product.sku.id }, { sourceSkuId: product.sku.id }] },
+          { OR: [{ boxId: sourceBox.id }, { reservedBoxId: sourceBox.id }] },
+        ] }, select: { id: true } }),
+    ]);
+    if (!known && registered >= product.availableQuantity) {
+      throw new BadRequestException(`В коробе ${sourceBox.code} все доступные единицы уже привязаны к КИЗам. Нужна проверка менеджера.`);
+    }
+    if (assembly || shipped || printed || boxTask) {
+      throw new BadRequestException('КИЗ или товар связан со сборкой, отгрузкой или печатью этикетки. Нужна проверка менеджера.');
+    }
+    // FIX: alternate crypto/scanner forms must pass history checks before known-mark reuse.
+    if (known) return this.resolveStorageBoxTransferMark(db, sourceBox, product, known.value, true);
+    return { ...product, scanCode, scanType: 'KIZ', productMarkId: null,
+      requiresKizRegistration: false, registerMissingMark: true };
   }
 
   private async resolveTsdTransferScannedItem(
@@ -4494,6 +4586,18 @@ function isFbsRelabelInventoryAdjustment(movement: {
     key.startsWith('relabel-reconcile:') ||
     movement.sourceDocument?.startsWith('FBS TSD,') === true
   );
+}
+
+// FIX: identity comparison only; the physical scanner value is never rewritten on registration.
+function storageBoxTransferKizIdentity(value: string) {
+  const normalized = value.replace(/^\]d2/i, '').replace(/<GS>/gi, '\u001d')
+    .replace(/^\(01\)(\d{14})\(21\)/, (_all, gtin) => `01${gtin}21`)
+    .replace(/^(01\d{14})\u001d21/, (_all, gtin) => `${gtin}21`);
+  const parsed = /^01(\d{14})21([^\u001d\s]+)(?:\u001d|$)/.exec(normalized);
+  let serial = parsed?.[2] ?? '';
+  if (serial.length > 20 && serial.slice(13).startsWith('91')) serial = serial.slice(0, 13);
+  if (!parsed || normalized.length < 21 || normalized.length > 135 || serial.length < 1 || serial.length > 20) return null;
+  return { gtin: parsed[1], serial };
 }
 
 function duplicateKizMessage(boxCode?: string | null) {
