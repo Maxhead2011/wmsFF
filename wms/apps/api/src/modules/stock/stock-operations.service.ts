@@ -4161,7 +4161,16 @@ export class StockOperationsService {
         throw new BadRequestException('Привязка КИЗ изменилась. Повторите проверку товара.');
       }
     }
-    const [registered, assembly, shipped, printed, boxTask] = await Promise.all([
+    // FIX: repeat assembly archives prior KIZs; preserve protection after the live task is replaced.
+    // Optional capability keeps older installations independent of the repeat-assembly schema.
+    const historyEnabled = ['true', 'read-only'].includes(process.env.WMS_FBS_REPEAT_ASSEMBLY_ENABLED ?? '');
+    const historyDb = (db as unknown as { fbsAssemblyAttemptHistory?: {
+      findFirst(args: { where: { OR: Array<{ kiz: { startsWith: string } }> }; select: { id: true } }): Promise<{ id: string } | null>;
+    } }).fbsAssemblyAttemptHistory;
+    if (historyEnabled && !historyDb) {
+      throw new BadRequestException('История предыдущих сборок недоступна. Регистрация КИЗ временно остановлена.');
+    }
+    const [registered, assembly, shipped, printed, boxTask, archived] = await Promise.all([
       db.productMark.count({ where: { clientId: sourceBox.clientId, skuId: product.sku.id,
         boxId: sourceBox.id, status: StockStatus.AVAILABLE } }),
       db.fbsTsdAssembly.findFirst({ where: { OR: prefixes.map(prefix => ({ kiz: { startsWith: prefix } })) }, select: { id: true } }),
@@ -4172,11 +4181,13 @@ export class StockOperationsService {
           { OR: [{ skuId: product.sku.id }, { sourceSkuId: product.sku.id }] },
           { OR: [{ boxId: sourceBox.id }, { reservedBoxId: sourceBox.id }] },
         ] }, select: { id: true } }),
+      // FIX: disabling new repeats does not erase already archived KIZ ownership.
+      historyDb ? historyDb.findFirst({ where: { OR: prefixes.map(prefix => ({ kiz: { startsWith: prefix } })) }, select: { id: true } }) : null,
     ]);
     if (!known && registered >= product.availableQuantity) {
       throw new BadRequestException(`В коробе ${sourceBox.code} все доступные единицы уже привязаны к КИЗам. Нужна проверка менеджера.`);
     }
-    if (assembly || shipped || printed || boxTask) {
+    if (assembly || shipped || printed || boxTask || archived) {
       throw new BadRequestException('КИЗ или товар связан со сборкой, отгрузкой или печатью этикетки. Нужна проверка менеджера.');
     }
     // FIX: alternate crypto/scanner forms must pass history checks before known-mark reuse.

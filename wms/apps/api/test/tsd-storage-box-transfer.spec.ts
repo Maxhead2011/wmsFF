@@ -378,6 +378,42 @@ describe('storage-box transfer with an unregistered KIZ', () => {
     expect(f.db.productMark.create).not.toHaveBeenCalled();
     expect(f.db.stockMovement.create).not.toHaveBeenCalled();
   });
+
+  // TEST: production now archives completed FBS attempts outside the live task table.
+  it.each(['true', 'read-only', 'false'])('protects archived FBS KIZ when repeats are %s', async mode => {
+    vi.stubEnv('WMS_FBS_REPEAT_ASSEMBLY_ENABLED', mode);
+    try {
+      const f = prepare();
+      const findFirst = vi.fn(async () => ({ id: 'archived-attempt' }));
+      (f.db as any).fbsAssemblyAttemptHistory = { findFirst };
+      await expect(f.service.executeTsdTransfer(f.payload, user)).rejects.toThrow(/сборк|отгруз/);
+      expect(findFirst).toHaveBeenCalledTimes(1);
+      expect(f.quantities()).toEqual([2, 0]);
+      expect(f.addedMarks).toEqual([]);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.each(['missing delegate', 'unavailable database'])('fails closed if enabled history is %s', async fault => {
+    vi.stubEnv('WMS_FBS_REPEAT_ASSEMBLY_ENABLED', 'true');
+    try {
+      const f = prepare();
+      if (fault === 'unavailable database') (f.db as any).fbsAssemblyAttemptHistory = {
+        findFirst: vi.fn().mockRejectedValue(new Error('history unavailable')),
+      };
+      await expect(f.service.executeTsdTransfer(f.payload, user)).rejects.toThrow();
+      expect(f.quantities()).toEqual([2, 0]);
+      expect(f.db.productMark.create).not.toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it('does not require repeat-assembly schema on installations without that feature', async () => {
+    vi.stubEnv('WMS_FBS_REPEAT_ASSEMBLY_ENABLED', 'false');
+    try {
+      const f = prepare();
+      await expect(f.service.executeTsdTransfer(f.payload, user)).resolves.toMatchObject({ status: 'APPLIED' });
+      expect(f.quantities()).toEqual([1, 1]);
+    } finally { vi.unstubAllEnvs(); }
+  });
 });
 
 // TEST: existing Android clients send the SKU returned after barcode, then bindMissingKiz.
