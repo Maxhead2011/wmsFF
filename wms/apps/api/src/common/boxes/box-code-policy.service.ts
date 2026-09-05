@@ -16,6 +16,8 @@ export type BoxCodePolicy = {
   rackSlotPrefix: string;
   rackPrefix: string;
   storageBoxPrefix: string;
+  // FIX: additional storage prefixes are configured per installation, not enabled globally.
+  storageBoxAliases: string[];
   autoCorrections: Record<string, string>;
 };
 
@@ -31,6 +33,7 @@ export const DEFAULT_BOX_CODE_POLICY: BoxCodePolicy = {
   rackSlotPrefix: 'SLOT_',
   rackPrefix: 'RACK_',
   storageBoxPrefix: 'SBOX_',
+  storageBoxAliases: [],
   autoCorrections: {
     FL_: 'FFL_',
   },
@@ -76,7 +79,14 @@ export class BoxCodePolicyService {
   }
 
   async updatePolicy(value: unknown, userId: string) {
-    const policy = normalizeBoxCodePolicy(value);
+    // FIX: older settings screens omit aliases; preserve them unless explicitly replaced.
+    const input = asRecord(value);
+    const policy = normalizeBoxCodePolicy({
+      ...input,
+      storageBoxAliases: input.storageBoxAliases === undefined
+        ? (await this.getPolicy(true)).storageBoxAliases
+        : input.storageBoxAliases,
+    });
     await this.settings.set(
       BOX_CODE_POLICY_SETTING,
       policy as unknown as Prisma.InputJsonValue,
@@ -88,10 +98,12 @@ export class BoxCodePolicyService {
 
   // FIX: storage boxes have their own configured prefix; ordinary box rules stay unchanged.
   async requireStorageBox(value: string) {
-    const { storageBoxPrefix } = await this.getPolicy();
+    const { storageBoxPrefix, storageBoxAliases } = await this.getPolicy();
+    // FIX: keep the primary generation prefix and accept only explicitly configured aliases.
+    const prefixes = [storageBoxPrefix, ...storageBoxAliases];
     const normalized = await this.normalize(value);
-    if (!normalized.startsWith(storageBoxPrefix) || normalized.length <= storageBoxPrefix.length) {
-      throw new BadRequestException(`Отсканируйте бокс хранения с префиксом ${storageBoxPrefix} и номером.`);
+    if (!prefixes.some(prefix => normalized.startsWith(prefix) && normalized.length > prefix.length)) {
+      throw new BadRequestException(`Отсканируйте бокс хранения с префиксом ${prefixes.join(', ')} и номером.`);
     }
     return normalized;
   }
@@ -125,6 +137,10 @@ export function normalizeBoxCodePolicy(value: unknown): BoxCodePolicy {
     input.storageBoxPrefix,
     DEFAULT_BOX_CODE_POLICY.storageBoxPrefix,
   );
+  // FIX: no aliases by default, so other installations keep their previous behavior.
+  const storageBoxAliases = Array.isArray(input.storageBoxAliases) && input.storageBoxAliases.length
+    ? uniquePrefixes(input.storageBoxAliases, storageBoxPrefix)
+    : [];
   const autoCorrections = normalizeCorrections(input.autoCorrections);
 
   if (!allowedPrefixes.some((prefix) => primaryPrefix.startsWith(prefix) || prefix.startsWith(primaryPrefix))) {
@@ -143,6 +159,7 @@ export function normalizeBoxCodePolicy(value: unknown): BoxCodePolicy {
     rackSlotPrefix,
     rackPrefix,
     storageBoxPrefix,
+    storageBoxAliases,
     autoCorrections,
   };
 }
