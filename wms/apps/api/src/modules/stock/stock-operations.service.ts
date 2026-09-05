@@ -31,6 +31,8 @@ import { PickClientRequestDto } from './dto/pick-client-request.dto';
 import { TransferBetweenBoxesDto } from './dto/transfer-between-boxes.dto';
 import { TransferWholeBoxDto } from './dto/transfer-whole-box.dto';
 import { StockBalancesService } from './stock-balances.service';
+import { cancelledBoxTaskTransferEnabled, prepareCancelledBoxTaskTransfer, validateCancelledBoxTaskTransfer,
+  type CancelledBoxTaskProof } from './cancelled-box-task-transfer';
 import { cancelledWbTransferEnabled, prepareCancelledWbTransfer, validateCancelledWbTransfer,
   type CancelledWbTransferProof } from './cancelled-wb-transfer';
 
@@ -89,6 +91,7 @@ type TsdTransferScannedItem = {
   registerMissingMark?: boolean;
   // FIX: cancellation authorizes physical relocation only, not resale or history deletion.
   cancelledWbTransfer?: CancelledWbTransferProof;
+  cancelledBoxTasks?: CancelledBoxTaskProof;
   // FIX: inspection only proposes reconciliation; execution commits it with the movement.
   reconciledMark?: {
     previousSkuId: string;
@@ -379,7 +382,7 @@ export class StockOperationsService {
     }
 
     // FIX: live WB read before opening the stock transaction, and never on a completed retry.
-    const cancellation = storageBoxMode && cancelledWbTransferEnabled() &&
+    const cancellation = storageBoxMode && (cancelledWbTransferEnabled() || cancelledBoxTaskTransferEnabled()) &&
       !await this.prisma.stockMovement.findUnique({ where: { idempotencyKey: `${idempotencyKey}:out` }, select: { id: true } })
       ? await this.prepareCancelledStorageBoxTransfer(await this.loadTsdTransferSourceBox(this.prisma, fromBoxCode, user), payload)
       : undefined;
@@ -529,6 +532,15 @@ export class StockOperationsService {
         }
       }
 
+      if (item.cancelledBoxTasks) {
+        // FIX: record exactly which stale return tasks were ignored, without altering those tasks.
+        const proof = item.cancelledBoxTasks;
+        await tx.auditLog.create({ data: { userId: user.id, action: 'TSD_CANCELLED_BOX_TASK_TRANSFER',
+          entity: 'Box', entityId: sourceBox.id, payload: { taskIds: proof.taskIds, orders: proof.orders,
+            connectionId: proof.connectionId, checkedAt: new Date(proof.checkedAt).toISOString(),
+            clientId: sourceBox.clientId, warehouseId: operationWarehouseId, skuId: item.sku.id,
+            sourceBoxCode: sourceBox.code, targetBoxCode: targetBox.code, quantity: 1, idempotencyKey } } });
+      }
       const [remainingBalance, remainingMarks] = await Promise.all([
         tx.stockBalance.aggregate({
           where: { boxId: sourceBox.id, quantity: { gt: 0 } },
@@ -4059,12 +4071,14 @@ export class StockOperationsService {
 
   // FIX: revalidate the barcode/KIZ pair inside the same transaction as the movement.
   private async prepareCancelledStorageBoxTransfer(sourceBox: TsdTransferSourceBox, payload: Record<string, unknown>) {
-    if (!cancelledWbTransferEnabled() || typeof payload.barcode !== 'string' || !payload.barcode.trim()) return undefined;
+    if ((!cancelledWbTransferEnabled() && !cancelledBoxTaskTransferEnabled()) || typeof payload.barcode !== 'string' || !payload.barcode.trim()) return undefined;
     const product = await this.resolveTsdTransferScannedItem(this.prisma, sourceBox, payload.barcode.trim());
     if (product.scanType !== 'BARCODE' || !product.requiresKizRegistration) return undefined;
-    return prepareCancelledWbTransfer(this.prisma, { source: sourceBox, skuId: product.sku.id,
+    const input = { source: sourceBox, skuId: product.sku.id,
       availableQuantity: product.availableQuantity,
-      scanCode: requiredTsdTransferText(payload.scanCode, 'Отсканируйте КИЗ товара.') }, storageBoxTransferKizIdentity);
+      scanCode: requiredTsdTransferText(payload.scanCode, 'Отсканируйте КИЗ товара.') };
+    return { mark: await prepareCancelledWbTransfer(this.prisma, input, storageBoxTransferKizIdentity),
+      tasks: await prepareCancelledBoxTaskTransfer(this.prisma, input, storageBoxTransferKizIdentity) };
   }
 
   // FIX: revalidate the barcode/KIZ pair inside the same transaction as the movement.
@@ -4073,7 +4087,7 @@ export class StockOperationsService {
     sourceBox: TsdTransferSourceBox,
     payload: Record<string, unknown>,
     complete: boolean,
-    cancellation?: CancelledWbTransferProof,
+    prepared?: { mark?: CancelledWbTransferProof; tasks?: CancelledBoxTaskProof },
   ): Promise<TsdTransferScannedItem> {
     const scanCode = requiredTsdTransferText(payload.scanCode, 'Отсканируйте товар.');
     const hasBarcode = typeof payload.barcode === 'string' && payload.barcode.trim().length > 0;
@@ -4086,6 +4100,7 @@ export class StockOperationsService {
       throw new BadRequestException('Сначала отсканируйте ШК товара, затем его КИЗ.');
     }
     if (!hasBarcode) return product;
+    const cancellation = prepared?.mark;
     if (product.requiresKizRegistration && cancellation) {
       await validateCancelledWbTransfer(db, cancellation, { source: sourceBox, skuId: product.sku.id,
         availableQuantity: product.availableQuantity, scanCode }, storageBoxTransferKizIdentity);
@@ -4094,7 +4109,11 @@ export class StockOperationsService {
     }
     // FIX: known marked goods may have a stale box link after barcode-only inventory.
     if (product.requiresKizRegistration) {
-      return this.resolveStorageBoxTransferMark(db, sourceBox, product, scanCode, true);
+      if (prepared?.tasks) {
+        await validateCancelledBoxTaskTransfer(db, prepared.tasks, { source: sourceBox, skuId: product.sku.id,
+          availableQuantity: product.availableQuantity, scanCode }, storageBoxTransferKizIdentity);
+      }
+      return this.resolveStorageBoxTransferMark(db, sourceBox, product, scanCode, true, prepared?.tasks);
     }
     const item = await this.resolveTsdTransferScannedItem(db, sourceBox, scanCode);
     if (item.sku.id !== product.sku.id) {
@@ -4113,6 +4132,7 @@ export class StockOperationsService {
     product: TsdTransferScannedItem,
     scanCode: string,
     allowRegistration = false,
+    cancelledBoxTasks?: CancelledBoxTaskProof,
   ): Promise<TsdTransferScannedItem> {
     const mark = await db.productMark.findFirst({
       where: { clientId: sourceBox.clientId, value: scanCode },
@@ -4124,7 +4144,7 @@ export class StockOperationsService {
       if (!allowRegistration) {
         throw new BadRequestException('КИЗ не найден у клиента. Отсканируйте полный КИЗ товара или передайте короб менеджеру.');
       }
-      return this.resolveUnregisteredStorageBoxTransferMark(db, sourceBox, product, scanCode);
+      return this.resolveUnregisteredStorageBoxTransferMark(db, sourceBox, product, scanCode, cancelledBoxTasks);
     }
     if (mark.status !== StockStatus.AVAILABLE) {
       throw new BadRequestException('КИЗ недоступен для перемещения: товар зарезервирован или отгружен.');
@@ -4185,6 +4205,7 @@ export class StockOperationsService {
     sourceBox: TsdTransferSourceBox,
     product: TsdTransferScannedItem,
     scanCode: string,
+    cancelledBoxTasks?: CancelledBoxTaskProof,
   ): Promise<TsdTransferScannedItem> {
     const identity = storageBoxTransferKizIdentity(scanCode);
     if (!identity) {
@@ -4228,6 +4249,8 @@ export class StockOperationsService {
       db.shippedKizHistory.findFirst({ where: { OR: prefixes.map(prefix => ({ kiz: { startsWith: prefix } })) }, select: { id: true } }),
       db.fbsWebKizStickerPrint.findFirst({ where: { OR: prefixes.map(prefix => ({ kiz: { startsWith: prefix } })) }, select: { id: true } }),
       db.fbsTsdAssembly.findFirst({ where: { clientId: sourceBox.clientId,
+        // FIX: only server-verified cancelled RETURN_REQUIRED tasks; own KIZ histories remain blocking.
+        ...(cancelledBoxTasks ? { id: { notIn: cancelledBoxTasks.taskIds } } : {}),
         status: { in: ['IN_PROGRESS', 'RETURN_REQUIRED'] }, AND: [
           { OR: [{ skuId: product.sku.id }, { sourceSkuId: product.sku.id }] },
           { OR: [{ boxId: sourceBox.id }, { reservedBoxId: sourceBox.id }] },
@@ -4244,7 +4267,7 @@ export class StockOperationsService {
     // FIX: alternate crypto/scanner forms must pass history checks before known-mark reuse.
     if (known) return this.resolveStorageBoxTransferMark(db, sourceBox, product, known.value, true);
     return { ...product, scanCode, scanType: 'KIZ', productMarkId: null,
-      requiresKizRegistration: false, registerMissingMark: true };
+      requiresKizRegistration: false, registerMissingMark: true, cancelledBoxTasks };
   }
 
   private async resolveTsdTransferScannedItem(

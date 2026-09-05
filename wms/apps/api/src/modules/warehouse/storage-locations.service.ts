@@ -662,9 +662,18 @@ export class StorageLocationsService {
   }
 
   async scanTsdPalletBox(id: string, body: Record<string, unknown>, user: AuthUser) {
-    const boxCode = await this.boxCodes.requireAllowed(
-      this.requiredText(body.boxCode, 'Отсканируйте номер короба.'),
-    );
+    const scannedCode = this.requiredText(body.boxCode, 'Отсканируйте номер короба.');
+    // FIX: storage boxes use their own configured prefixes; ordinary boxes keep recovery rules.
+    let createStorageBox = false;
+    if (process.env.WMS_TSD_PALLET_CREATE_STORAGE_BOX_ENABLED === 'true') {
+      const policy = await this.boxCodes.getPolicy();
+      const normalized = await this.boxCodes.normalize(scannedCode);
+      createStorageBox = [policy.storageBoxPrefix, ...policy.storageBoxAliases]
+        .some(prefix => normalized.startsWith(prefix));
+    }
+    const boxCode = createStorageBox
+      ? await this.boxCodes.requireStorageBox(scannedCode)
+      : await this.boxCodes.requireAllowed(scannedCode);
     const pallet = await this.prisma.storagePallet.findUnique({ where: { id } });
     if (!pallet || pallet.status !== 'OPEN') {
       throw new BadRequestException('Сначала откройте паллету.');
@@ -685,6 +694,10 @@ export class StorageLocationsService {
     }
     this.assertBoxWarehouse(box, pallet.warehouseId, boxCode);
     if (!box) {
+      if (createStorageBox) {
+        await this.placeBox(pallet, boxCode, 'TSD', user, true);
+        return this.tsdPalletResponse(pallet.id, `Бокс ${boxCode} создан и добавлен на паллетсорт. Остаток не изменён.`);
+      }
       return this.tsdPalletResponse(
         pallet.id,
         `Короб ${boxCode} не найден в WMS. Пропикайте всё содержимое короба по ШК товара.`,
@@ -1158,6 +1171,7 @@ export class StorageLocationsService {
     boxCode: string,
     source: 'MANUAL' | 'TSD',
     user: AuthUser,
+    createMissingStorageBox = false,
   ) {
     this.requirePalletAccess(user, pallet, 'write');
     return this.prisma.$transaction(async (tx) => {
@@ -1170,7 +1184,21 @@ export class StorageLocationsService {
       }>>(
         Prisma.sql`SELECT "id", "status", "clientId", "warehouseId" FROM "Box" WHERE "code" = ${boxCode} FOR UPDATE`,
       );
-      const box = lockedBoxes[0] ?? null;
+      let box = lockedBoxes[0] ?? null;
+      if (!box && createMissingStorageBox) {
+        // FIX: create only the container, atomically with placement; never create stock balances.
+        const currentPallet = await tx.storagePallet.findUnique({ where: { id: pallet.id } });
+        if (!currentPallet || currentPallet.status !== 'OPEN' || currentPallet.clientId !== pallet.clientId ||
+            currentPallet.warehouseId !== pallet.warehouseId) {
+          throw new BadRequestException('Паллетсорт изменён или закрыт. Откройте его заново.');
+        }
+        box = await tx.box.upsert({ where: { code: boxCode }, update: {}, create: {
+          code: boxCode, clientId: pallet.clientId, warehouseId: pallet.warehouseId, status: 'active',
+        } });
+        await tx.auditLog.create({ data: { userId: user.id, action: 'TSD_STORAGE_BOX_CREATED_ON_PALLET',
+          entity: 'Box', entityId: box.id, payload: { boxCode, palletId: pallet.id,
+            clientId: pallet.clientId, warehouseId: pallet.warehouseId, quantityAdded: 0 } } });
+      }
       if (box?.status !== undefined && box.status !== 'active') {
         throw new BadRequestException(
           `Короб ${boxCode} находится в архиве или неактивен. Сначала восстановите его через актуализацию.`,
