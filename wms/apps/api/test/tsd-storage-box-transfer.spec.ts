@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BoxCodePolicyService } from '../src/common/boxes/box-code-policy.service';
 import { StockOperationsService } from '../src/modules/stock/stock-operations.service';
 
@@ -69,6 +69,7 @@ function fixture(initialMarkBox = 'source', markValue = kiz, storageBoxAliases: 
             (where.skuId && where.skuId !== mark.skuId) || where.updatedAt !== mark.updatedAt) return { count: 0 };
         markBoxId = data.boxId;
         if (data.skuId) mark.skuId = data.skuId;
+        if (data.stockMovementId) mark.stockMovementId = data.stockMovementId;
         return { count: 1 };
       }),
     },
@@ -87,16 +88,19 @@ function fixture(initialMarkBox = 'source', markValue = kiz, storageBoxAliases: 
     stockMovement: {
       findFirst: vi.fn(async ({ where }: any) => [...movements.values()].find(row =>
         row.idempotencyKey.startsWith(where.idempotencyKey.startsWith)) ?? null),
-      findUnique: vi.fn(async ({ where }: any) => movements.get(where.idempotencyKey) ?? null),
+      findUnique: vi.fn(async ({ where }: any) => (where.id
+        ? [...movements.values()].find(row => row.id === where.id)
+        : movements.get(where.idempotencyKey)) ?? null),
       create: vi.fn(async ({ data }: any) => {
         const row = { ...data, id: `movement-${movements.size}`, sku, box: target };
         movements.set(data.idempotencyKey, row);
         return row;
       }),
     },
-    fbsTsdAssembly: { findFirst: vi.fn(async (_args: any): Promise<any> => null) },
-    shippedKizHistory: { findFirst: vi.fn(async (_args: any): Promise<any> => null) },
-    fbsWebKizStickerPrint: { findFirst: vi.fn(async (_args: any): Promise<any> => null) },
+    fbsTsdAssembly: { findFirst: vi.fn(async (_args: any): Promise<any> => null), findMany: vi.fn(async (): Promise<any[]> => []) },
+    shippedKizHistory: { findFirst: vi.fn(async (_args: any): Promise<any> => null), findMany: vi.fn(async (): Promise<any[]> => []) },
+    fbsWebKizStickerPrint: { findFirst: vi.fn(async (_args: any): Promise<any> => null), findMany: vi.fn(async (): Promise<any[]> => []) },
+    clientMarketplaceConnection: { findUnique: vi.fn(async (): Promise<any> => ({ id: 'connection-1', clientId: 'client-1', marketplace: 'WILDBERRIES', isActive: true, apiKey: 'test-only-key' })) },
     auditLog: { create: vi.fn(async ({ data }: any) => { auditRows.push(data); return data; }) },
     $transaction: vi.fn(async (fn: any) => {
       const before = { sourceQuantity, targetQuantity, markBoxId, mark: { ...mark }, movements: new Map(movements), audits: [...auditRows], addedMarks: addedMarks.map(row => ({ ...row })) };
@@ -119,6 +123,105 @@ function fixture(initialMarkBox = 'source', markValue = kiz, storageBoxAliases: 
   return { service, codes, db, sku, target, payload, scopes, oldBox, oldBalances, mark, auditRows, addedMarks,
     quantities: () => [sourceQuantity, targetQuantity], markBox: () => markBoxId };
 }
+
+// TEST: the real stock service must read live cancellation, not trust a stale SHIPPING flag.
+describe('TSD cancelled WB order physical transfer', () => {
+  afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
+  const cancelledFixture = () => {
+    vi.stubEnv('WMS_TSD_CANCELLED_WB_TRANSFER_ENABLED', 'true');
+    const f = fixture('old');
+    f.mark.status = 'SHIPPING';
+    const task = { id: 'assembly-1', clientId: 'client-1', marketplace: 'WILDBERRIES',
+      connectionId: 'connection-1', orderId: '5544665829', kiz, status: 'COMPLETED', updatedAt: new Date('2026-08-24') };
+    f.db.fbsTsdAssembly.findMany.mockResolvedValue([task]);
+    f.db.shippedKizHistory.findMany.mockResolvedValue([{ id: 'history-1', assemblyId: task.id,
+      clientId: task.clientId, orderId: task.orderId, kiz }]);
+    const remote = vi.fn(async () => new Response(JSON.stringify({ orders: [{ id: 5544665829,
+      supplierStatus: 'cancel', wbStatus: 'canceled' }] }), { status: 200 }));
+    vi.stubGlobal('fetch', remote);
+    return { ...f, remote, task };
+  };
+
+  it('checks during inspection and before movement; preserves historical status and total quantity', async () => {
+    const f = cancelledFixture();
+    await expect(f.service.inspectTsdTransferItem(f.payload, user)).resolves.toMatchObject({ state: 'SCAN_TARGET' });
+    expect(f.db.stockMovement.create).not.toHaveBeenCalled();
+    expect(f.markBox()).toBe('old');
+    expect(f.remote).toHaveBeenCalledTimes(1);
+    await expect(f.service.executeTsdTransfer(f.payload, user)).resolves.toMatchObject({ status: 'APPLIED' });
+    expect(f.remote).toHaveBeenCalledTimes(2);
+    expect(f.quantities()).toEqual([1, 1]);
+    expect(f.markBox()).toBe('target');
+    expect(f.mark.status).toBe('SHIPPING');
+    expect(f.db.productMark.create).not.toHaveBeenCalled();
+    expect(f.auditRows).toEqual([expect.objectContaining({ action: 'TSD_CANCELLED_WB_PHYSICAL_TRANSFER',
+      payload: expect.objectContaining({ orderId: '5544665829', wbStatus: 'canceled', quantity: 1 }) })]);
+    await expect(f.service.executeTsdTransfer(f.payload, user)).resolves.toMatchObject({ status: 'ALREADY_APPLIED' });
+    expect(f.remote).toHaveBeenCalledTimes(2);
+    expect(f.quantities()).toEqual([1, 1]);
+  });
+
+  it.each(['sold', 'waiting', 'unknown'])('keeps stock untouched when WB reports %s', async wbStatus => {
+    const f = cancelledFixture();
+    f.remote.mockResolvedValue(new Response(JSON.stringify({ orders: [{ id: 5544665829,
+      supplierStatus: 'complete', wbStatus }] }), { status: 200 }));
+    await expect(f.service.executeTsdTransfer(f.payload, user)).rejects.toThrow(/WB/);
+    expect(f.remote).toHaveBeenCalledTimes(1);
+    expect(f.quantities()).toEqual([2, 0]);
+  });
+
+  // TEST: a new operation ID must not consume a second unit for the same relocated physical KIZ.
+  it('rejects another operation from the old physical source after a completed relocation', async () => {
+    const f = cancelledFixture();
+    await f.service.executeTsdTransfer(f.payload, user);
+    await expect(f.service.executeTsdTransfer({ ...f.payload, idempotencyKey: 'move-again' }, user)).rejects.toThrow();
+    expect(f.quantities()).toEqual([1, 1]);
+    expect(f.db.stockMovement.create).toHaveBeenCalledTimes(2);
+  });
+
+  it('rechecks WB after inspection instead of accepting client-supplied confirmation', async () => {
+    const f = cancelledFixture();
+    await f.service.inspectTsdTransferItem(f.payload, user);
+    f.remote.mockResolvedValue(new Response(JSON.stringify({ orders: [{ id: 5544665829,
+      supplierStatus: 'complete', wbStatus: 'sold' }] }), { status: 200 }));
+    await expect(f.service.executeTsdTransfer({ ...f.payload, cancelledWbTransfer: { wbStatus: 'canceled' } }, user)).rejects.toThrow();
+    expect(f.quantities()).toEqual([2, 0]);
+  });
+
+  it.each([401, 429, 500])('does not treat WB HTTP %s as cancellation', async status => {
+    const f = cancelledFixture(); f.remote.mockResolvedValue(new Response('{}', { status }));
+    await expect(f.service.executeTsdTransfer(f.payload, user)).rejects.toThrow(/проверить.*WB/);
+    expect(f.db.stockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('does not call WB inside a stock transaction', async () => {
+    const f = cancelledFixture(); let inside = false;
+    const original = f.db.$transaction.getMockImplementation()!;
+    f.db.$transaction.mockImplementation(async fn => { inside = true; try { return await original(fn); } finally { inside = false; } });
+    f.remote.mockImplementation(async () => { expect(inside).toBe(false); return new Response(JSON.stringify({ orders: [{ id: 5544665829, supplierStatus: 'cancel', wbStatus: 'canceled' }] })); });
+    await f.service.executeTsdTransfer(f.payload, user);
+  });
+
+  it.each(['audit', 'mark race', 'task race'])('rolls back or blocks on %s', async fault => {
+    const f = cancelledFixture();
+    if (fault === 'audit') f.db.auditLog.create.mockRejectedValue(new Error('audit failed'));
+    if (fault === 'mark race') f.db.productMark.updateMany.mockResolvedValue({ count: 0 });
+    if (fault === 'task race') f.remote.mockImplementation(async () => { f.task.updatedAt = new Date(); return new Response(JSON.stringify({ orders: [{ id: 5544665829, supplierStatus: 'cancel', wbStatus: 'canceled' }] })); });
+    await expect(f.service.executeTsdTransfer(f.payload, user)).rejects.toThrow();
+    expect(f.remote).toHaveBeenCalledTimes(1);
+    expect(f.quantities()).toEqual([2, 0]);
+    expect(f.markBox()).toBe('old');
+    expect(f.auditRows).toEqual([]);
+  });
+
+  it('does not enable this behavior on other installations or ordinary transfers', async () => {
+    const f = cancelledFixture(); vi.stubEnv('WMS_TSD_CANCELLED_WB_TRANSFER_ENABLED', 'false');
+    await expect(f.service.inspectTsdTransferItem(f.payload, user)).rejects.toThrow(/недоступен/);
+    vi.stubEnv('WMS_TSD_CANCELLED_WB_TRANSFER_ENABLED', 'true');
+    await expect(f.service.inspectTsdTransferItem({ ...f.payload, transferMode: undefined }, user)).rejects.toThrow();
+    expect(f.remote).not.toHaveBeenCalled();
+  });
+});
 
 describe('TSD storage-box transfer', () => {
   // TEST: the configured alias works through actual transfer validation, without duplicate stock.

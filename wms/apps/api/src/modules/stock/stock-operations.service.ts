@@ -32,6 +32,8 @@ import { PickClientRequestDto } from './dto/pick-client-request.dto';
 import { TransferBetweenBoxesDto } from './dto/transfer-between-boxes.dto';
 import { TransferWholeBoxDto } from './dto/transfer-whole-box.dto';
 import { StockBalancesService } from './stock-balances.service';
+import { cancelledWbTransferEnabled, prepareCancelledWbTransfer, validateCancelledWbTransfer,
+  type CancelledWbTransferProof } from './cancelled-wb-transfer';
 
 const allocationBoxSelect = {
   code: true,
@@ -60,7 +62,7 @@ type TsdTransferDb = Pick<
   'barcode' | 'box' | 'productMark' | 'stockBalance'
 >;
 type StorageBoxTransferDb = TsdTransferDb & Pick<Prisma.TransactionClient,
-  'fbsTsdAssembly' | 'shippedKizHistory' | 'fbsWebKizStickerPrint'>;
+  'fbsTsdAssembly' | 'shippedKizHistory' | 'fbsWebKizStickerPrint' | 'clientMarketplaceConnection' | 'stockMovement'>;
 type TsdTransferSourceBox = Prisma.BoxGetPayload<{
   include: {
     client: { select: { id: true; code: true; name: true } };
@@ -86,6 +88,8 @@ type TsdTransferScannedItem = {
   requiresKizRegistration: boolean;
   // FIX: a validated new physical KIZ is created only with the storage-box movement.
   registerMissingMark?: boolean;
+  // FIX: cancellation authorizes physical relocation only, not resale or history deletion.
+  cancelledWbTransfer?: CancelledWbTransferProof;
   // FIX: inspection only proposes reconciliation; execution commits it with the movement.
   reconciledMark?: {
     previousSkuId: string;
@@ -284,13 +288,16 @@ export class StockOperationsService {
     if (payload.transferMode === 'BOX_TO_STORAGE_BOX') {
       const sourceBox = await this.loadTsdTransferSourceBox(this.prisma,
         requiredTsdTransferText(payload.fromBoxCode, 'Сначала отсканируйте исходный короб.'), user);
-      const item = await this.resolveStorageBoxTransferItem(this.prisma, sourceBox, payload, false);
+      const cancellation = await this.prepareCancelledStorageBoxTransfer(sourceBox, payload);
+      const item = await this.resolveStorageBoxTransferItem(this.prisma, sourceBox, payload, false, cancellation);
       return {
         state: item.requiresKizRegistration ? 'SCAN_KIZ' : 'SCAN_TARGET',
         sourceBox: this.formatTsdTransferSource(sourceBox).sourceBox,
         item: formatTsdTransferItem(item),
         message: item.requiresKizRegistration
           ? `ШК товара «${item.sku.name}» принят. Отсканируйте КИЗ этой единицы.`
+          : item.cancelledWbTransfer
+          ? 'WB подтвердил отмену заказа. Отсканируйте бокс: будет перемещена 1 единица без увеличения остатка. История КИЗ сохранится.'
           : item.reconciledMark
           ? `КИЗ проверен. Старая привязка будет исправлена при перемещении из ${sourceBox.code}. Отсканируйте бокс назначения.`
           : item.registerMissingMark
@@ -372,6 +379,12 @@ export class StockOperationsService {
       throw new BadRequestException('Исходный короб и короб назначения совпадают.');
     }
 
+    // FIX: live WB read before opening the stock transaction, and never on a completed retry.
+    const cancellation = storageBoxMode && cancelledWbTransferEnabled() &&
+      !await this.prisma.stockMovement.findUnique({ where: { idempotencyKey: `${idempotencyKey}:out` }, select: { id: true } })
+      ? await this.prepareCancelledStorageBoxTransfer(await this.loadTsdTransferSourceBox(this.prisma, fromBoxCode, user), payload)
+      : undefined;
+
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.stockMovement.findUnique({
         where: { idempotencyKey: `${idempotencyKey}:out` },
@@ -410,7 +423,7 @@ export class StockOperationsService {
         warehouseId ??
         this.requireBalanceWarehouseId(sourceBox.warehouseId ?? user.activeWarehouseId);
       const item = storageBoxMode
-        ? await this.resolveStorageBoxTransferItem(tx, sourceBox, payload, true)
+        ? await this.resolveStorageBoxTransferItem(tx, sourceBox, payload, true, cancellation)
         : await this.resolveTsdTransferScannedItem(tx, sourceBox, scanCode);
       await this.applyTransferBetweenBoxes(tx, {
         clientId: sourceBox.clientId,
@@ -430,7 +443,28 @@ export class StockOperationsService {
       if (!targetBox || targetBox.clientId !== sourceBox.clientId) {
         throw new BadRequestException(`Короб назначения ${toBoxCode} не удалось открыть.`);
       }
-      if (item.registerMissingMark) {
+      if (item.cancelledWbTransfer) {
+        // FIX: retain RESERVED/SHIPPING and shipment evidence; only move the physically scanned unit.
+        const proof = item.cancelledWbTransfer;
+        const previous = proof.mark;
+        const inbound = await tx.stockMovement.findUnique({ where: { idempotencyKey: `${idempotencyKey}:in` }, select: { id: true } });
+        if (!inbound) throw new BadRequestException('Не удалось подтвердить перемещение. Повторите сканирование.');
+        const changed = await tx.productMark.updateMany({ where: { id: previous.id, boxId: previous.boxId,
+          skuId: previous.skuId, status: previous.status, updatedAt: previous.updatedAt },
+          data: { boxId: targetBox.id, stockMovementId: inbound.id } });
+        if (changed.count !== 1) throw new BadRequestException('КИЗ изменился после проверки WB. Повторите сканирование.');
+        await tx.auditLog.create({ data: { userId: user.id, action: 'TSD_CANCELLED_WB_PHYSICAL_TRANSFER',
+          entity: 'ProductMark', entityId: previous.id, payload: {
+            orderId: proof.orderId, connectionId: proof.connectionId, supplierStatus: proof.supplierStatus,
+            wbStatus: proof.wbStatus, checkedAt: new Date(proof.checkedAt).toISOString(),
+            previousBoxId: previous.boxId, previousStockMovementId: previous.stockMovementId,
+            preservedMarkStatus: previous.status, physicalBoxId: sourceBox.id, physicalBoxCode: sourceBox.code,
+            targetBoxId: targetBox.id, targetBoxCode: targetBox.code, clientId: sourceBox.clientId,
+            warehouseId: operationWarehouseId, skuId: item.sku.id, kiz: previous.value,
+            quantity: 1, idempotencyKey, deviceCode: user.deviceCode ?? null,
+            reason: 'Физическое перемещение после подтверждения отмены WB. История и запрет повторной продажи КИЗ сохранены.',
+          } } });
+      } else if (item.registerMissingMark) {
         // FIX: registration, one-unit transfer and audit commit or roll back together.
         const inbound = await tx.stockMovement.findUnique({
           where: { idempotencyKey: `${idempotencyKey}:in` }, select: { id: true },
@@ -4034,11 +4068,22 @@ export class StockOperationsService {
   }
 
   // FIX: revalidate the barcode/KIZ pair inside the same transaction as the movement.
+  private async prepareCancelledStorageBoxTransfer(sourceBox: TsdTransferSourceBox, payload: Record<string, unknown>) {
+    if (!cancelledWbTransferEnabled() || typeof payload.barcode !== 'string' || !payload.barcode.trim()) return undefined;
+    const product = await this.resolveTsdTransferScannedItem(this.prisma, sourceBox, payload.barcode.trim());
+    if (product.scanType !== 'BARCODE' || !product.requiresKizRegistration) return undefined;
+    return prepareCancelledWbTransfer(this.prisma, { source: sourceBox, skuId: product.sku.id,
+      availableQuantity: product.availableQuantity,
+      scanCode: requiredTsdTransferText(payload.scanCode, 'Отсканируйте КИЗ товара.') }, storageBoxTransferKizIdentity);
+  }
+
+  // FIX: revalidate the barcode/KIZ pair inside the same transaction as the movement.
   private async resolveStorageBoxTransferItem(
     db: StorageBoxTransferDb,
     sourceBox: TsdTransferSourceBox,
     payload: Record<string, unknown>,
     complete: boolean,
+    cancellation?: CancelledWbTransferProof,
   ): Promise<TsdTransferScannedItem> {
     const scanCode = requiredTsdTransferText(payload.scanCode, 'Отсканируйте товар.');
     const hasBarcode = typeof payload.barcode === 'string' && payload.barcode.trim().length > 0;
@@ -4051,6 +4096,12 @@ export class StockOperationsService {
       throw new BadRequestException('Сначала отсканируйте ШК товара, затем его КИЗ.');
     }
     if (!hasBarcode) return product;
+    if (product.requiresKizRegistration && cancellation) {
+      await validateCancelledWbTransfer(db, cancellation, { source: sourceBox, skuId: product.sku.id,
+        availableQuantity: product.availableQuantity, scanCode }, storageBoxTransferKizIdentity);
+      return { ...product, scanCode: cancellation.mark.value, scanType: 'KIZ',
+        productMarkId: cancellation.mark.id, requiresKizRegistration: false, cancelledWbTransfer: cancellation };
+    }
     // FIX: known marked goods may have a stale box link after barcode-only inventory.
     if (product.requiresKizRegistration) {
       return this.resolveStorageBoxTransferMark(db, sourceBox, product, scanCode, true);
