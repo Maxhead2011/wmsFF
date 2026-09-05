@@ -30,6 +30,7 @@ import {
   type StorageLayout,
 } from '../../lib/api';
 import './warehouse.css';
+import { StorageBoxContentsPopover } from './StorageBoxContentsPopover';
 import { useRememberedClientId, validRememberedClientId } from '../../lib/rememberedClient';
 import {
   allVisiblePalletsSelected,
@@ -610,12 +611,15 @@ export function StorageZonesPanel({ session }: { session: AuthSession }) {
                       {pallet.boxes.length === 0 ? <p>На паллете пока нет коробов.</p> : null}
                       {pallet.boxes.map((placement) => (
                         <div key={placement.id}>
-                          <span>
+                          {/* FIX: load the existing read-only box details only on hover/focus. */}
+                          <StorageBoxContentsPopover accessToken={session.accessToken}
+                            warehouseId={session.user.activeWarehouseId} clientId={pallet.clientId}
+                            boxCode={placement.boxCode} exists={Boolean(placement.box)} revision={state.data}>
                             <strong>{placement.boxCode}</strong>
                             <small>
                               {placement.box?.client.name ?? 'Короб пока не найден в WMS'} · {sourceLabel(placement.source)}
                             </small>
-                          </span>
+                          </StorageBoxContentsPopover>
                           <div className="storage-pallet__box-actions">
                             <button
                               className="is-move"

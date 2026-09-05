@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Тест состава короба</title></head>
+<body><div id="root"></div><script type="module">
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { StorageZonesPanel } from '/src/components/warehouse/StorageZonesPanel.tsx';
+import '/src/styles.css';
+// TEST: synthetic account and mocked network only; never a production session.
+const session = { accessToken: 'test-only-token', tokenType: 'Bearer', user: { id: 'preview-user', name: 'Тест', email: 'test@example.invalid',
+  roleCodes: ['ADMIN'], permissionCodes: ['system:admin', 'stock:read'], activeWarehouseId: 'warehouse-1',
+  clientScopeMode: 'ALL', clientIds: [], writableClientIds: [] } };
+createRoot(document.getElementById('root')).render(React.createElement('main', { className: 'app-layout', style: { display: 'block', padding: 24 } },
+  React.createElement(StorageZonesPanel, { session })));
+</script></body></html>
