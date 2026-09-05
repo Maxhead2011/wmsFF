@@ -1,3 +1,4 @@
+import { appendFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import {
   BadRequestException,
   ConflictException,
@@ -495,6 +496,10 @@ export class AdministrationService {
       }),
     ]);
 
+    // FIX: keep both physical attempts in their original day/worker statistics.
+    await appendFbsAttemptHistory(this.prisma, completedFbsTasks, {
+      completedAt: { gte: statisticsPeriod.from, lt: statisticsPeriod.to }, workerUserId: { not: null },
+    });
     const statisticRequestIds = [...new Set(completedFbsTasks.map((task) => task.requestId))];
     const statisticRequests = statisticRequestIds.length
       ? await this.prisma.clientRequest.findMany({

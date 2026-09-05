@@ -2541,10 +2541,43 @@ model FbsTsdAssembly {
   @@index([cargoPackingId, cargoPackedAt])
 }
 
+// FIX: immutable evidence of the completed physical attempt before a repeat.
+model FbsAssemblyAttemptHistory {
+  id                 String   @id
+  clientId           String
+  requestId          String
+  orderId            String
+  workerUserId       String?
+  completedAt        DateTime
+  successorId        String   @unique
+  repeatRunId        String
+  taskSnapshot       Json
+  kiz                String?
+  linkSnapshot       Json
+  archivedByUserId   String
+  archivedAt         DateTime @default(now())
+
+  @@index([requestId])
+  @@index([clientId, completedAt])
+  @@index([completedAt, workerUserId])
+  @@index([repeatRunId])
+  @@index([clientId, kiz])
+}
+
+model FbsRepeatAssemblyRun {
+  id               String   @id @default(uuid())
+  fingerprint      String   @unique
+  clientId         String
+  warehouseId      String
+  requestId        String   @unique
+  createdByUserId  String
+  createdAt        DateTime @default(now())
+}
+
 model FbsWebKizStickerPrint {
   id          String   @id @default(uuid())
   kiz         String   @unique
-  orderId     String   @unique
+  orderId     String
   assemblyId  String
   clientId    String
   requestId   String
@@ -2553,6 +2586,7 @@ model FbsWebKizStickerPrint {
   printedBy   String
   printedAt   DateTime @default(now())
 
+  @@unique([orderId, assemblyId])
   @@index([clientId, printedAt])
   @@index([requestId, printedAt])
 }

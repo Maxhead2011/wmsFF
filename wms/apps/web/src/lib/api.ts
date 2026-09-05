@@ -12069,6 +12069,23 @@ export function revokeWmsApiCredential(accessToken: string, id: string) {
   );
 }
 
+export type FbsRepeatSelection = { clientId: string; orders: Array<{ id: string; connectionId: string; assemblyId?: string }> };
+export type FbsRepeatPreview = {
+  previewToken: string; orderCount: number; additionalUnits: number; warning: string;
+  orders: Array<{ id: string; connectionId: string; assemblyId: string; productName: string;
+    article: string | null; sourceRequestNumber: number; sourceSupplyId: string | null;
+    boxCode: string; palletCode: string | null; sourceSkuId: string }>;
+};
+export function fetchFbsRepeatCapabilities(accessToken: string) {
+  return request<{ enabled: boolean }>('/marketplace-connections/fbs/repeat-assembly/capabilities', { accessToken });
+}
+export function previewFbsRepeatAssembly(accessToken: string, selection: FbsRepeatSelection) {
+  return request<FbsRepeatPreview>('/marketplace-connections/fbs/repeat-assembly/preview', { method: 'POST', accessToken, body: selection });
+}
+export function createFbsRepeatAssembly(accessToken: string, selection: FbsRepeatSelection & { previewToken: string; confirmAdditionalStockConsumption: true }) {
+  return request<{ status: string; request: { id: string; number: number } }>('/marketplace-connections/fbs/repeat-assembly', { method: 'POST', accessToken, body: selection });
+}
+
 async function request<T>(
   path: string,
   options: { method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: unknown; accessToken?: string } = {},

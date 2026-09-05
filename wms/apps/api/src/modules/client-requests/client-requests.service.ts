@@ -9,6 +9,7 @@ import { TelegramNotificationService } from '../client-notifications/telegram-no
 import { StockOperationsService } from '../stock/stock-operations.service';
 import { clientRequestFileSummarySelect } from './client-request-files.service';
 import { clientRequestPackageInclude } from './client-request-packages.include';
+import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import {
   assertWarehouseAccess,
   effectiveWarehouseId,
@@ -102,6 +103,10 @@ export class ClientRequestsService {
       orderBy: [{ updatedAt: 'desc' }],
       take: 200,
     });
+    const previousAttempts = await readFbsAttemptHistory(this.prisma, { requestId: { in: requests.map(request => request.id) } });
+    for (const request of requests) {
+      request._count.fbsOrderLinks += previousAttempts.filter(row => row.task.requestId === request.id).length;
+    }
     const fbsRequestIds = requests
       .filter((request) => request._count.fbsOrderLinks > 0)
       .map((request) => request.id);
@@ -130,6 +135,10 @@ export class ClientRequestsService {
         select: { requestId: true, orderId: true, status: true, completedAt: true },
       }),
     ]);
+    for (const previous of previousAttempts) {
+      links.push(previous.link);
+      assemblies.push(previous.task);
+    }
     // FIX: номер поставки нужен только отгруженным заявкам; активные не запускают архивный fallback-запрос.
     const doneFbsRequestIds = new Set(
       requests
@@ -580,6 +589,10 @@ export class ClientRequestsService {
         },
       }),
     ]);
+    for (const previous of await readFbsAttemptHistory(this.prisma, { requestId: request.id })) {
+      fbsOrderLinks.push(previous.link);
+      fbsTasks.push(previous.task);
+    }
     const fbsTaskByOrder = new Map(
       fbsTasks.map((task) => [`${task.connectionId}:${task.orderId}`, task]),
     );

@@ -1,0 +1,1104 @@
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index e0b0715..dfef5e2 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -2538,24 +2538,58 @@ model FbsTsdAssembly {
+   @@index([clientId, reservedBoxId, status])
+   @@index([requestId, deviceCode, status, completedAt])
+   @@index([status, completedAt])
+-  @@index([cargoPackingId, cargoPackedAt])
+-}
+-
+-model FbsWebKizStickerPrint {
+-  id          String   @id @default(uuid())
+-  kiz         String   @unique
+-  orderId     String   @unique
+-  assemblyId  String
+-  clientId    String
+-  requestId   String
++  @@index([cargoPackingId, cargoPackedAt])
++}
++
++// FIX: immutable evidence of the completed physical attempt before a repeat.
++model FbsAssemblyAttemptHistory {
++  id                 String   @id
++  clientId           String
++  requestId          String
++  orderId            String
++  workerUserId       String?
++  completedAt        DateTime
++  successorId        String   @unique
++  repeatRunId        String
++  taskSnapshot       Json
++  kiz                String?
++  linkSnapshot       Json
++  archivedByUserId   String
++  archivedAt         DateTime @default(now())
++
++  @@index([requestId])
++  @@index([clientId, completedAt])
++  @@index([completedAt, workerUserId])
++  @@index([repeatRunId])
++  @@index([clientId, kiz])
++}
++
++model FbsRepeatAssemblyRun {
++  id               String   @id @default(uuid())
++  fingerprint      String   @unique
++  clientId         String
++  warehouseId      String
++  requestId        String   @unique
++  createdByUserId  String
++  createdAt        DateTime @default(now())
++}
++
++model FbsWebKizStickerPrint {
++  id          String   @id @default(uuid())
++  kiz         String   @unique
++  orderId     String
++  assemblyId  String
++  clientId    String
++  requestId   String
+   stickerCode String?
+   printedById String
+-  printedBy   String
+-  printedAt   DateTime @default(now())
+-
+-  @@index([clientId, printedAt])
+-  @@index([requestId, printedAt])
+-}
++  printedBy   String
++  printedAt   DateTime @default(now())
++
++  @@unique([orderId, assemblyId])
++  @@index([clientId, printedAt])
++  @@index([requestId, printedAt])
++}
+ 
+ enum FbsPrintJobStatus {
+   QUEUED
+diff --git a/src/common/shipment-history/shipped-kiz-history.ts b/src/common/shipment-history/shipped-kiz-history.ts
+index dc73316..084ebbc 100644
+--- a/src/common/shipment-history/shipped-kiz-history.ts
++++ b/src/common/shipment-history/shipped-kiz-history.ts
+@@ -1,4 +1,5 @@
+ import { ClientRequestStatus, MovementType, Prisma, StockStatus } from '@prisma/client';
++import { appendFbsAttemptHistory } from './fbs-attempt-history';
+ 
+ export async function captureShippedKizHistory(
+   tx: Prisma.TransactionClient,
+@@ -38,6 +39,7 @@ export async function captureShippedKizHistory(
+       completedAt: true,
+     },
+   });
++  await appendFbsAttemptHistory(tx, assemblies, { requestId });
+   if (assemblies.length === 0) return 0;
+ 
+   const skuIds = [...new Set(assemblies.map((row) => row.skuId))];
+diff --git a/src/modules/administration/administration-internal-api.service.ts b/src/modules/administration/administration-internal-api.service.ts
+index 0c55ad1..43bbd8f 100644
+--- a/src/modules/administration/administration-internal-api.service.ts
++++ b/src/modules/administration/administration-internal-api.service.ts
+@@ -192,9 +192,10 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
+   {
+     id: 'marketplace-connections',
+     name: 'Маркетплейсы и FBS',
+-    prefixes: ['/marketplace-connections', '/marketplace-connection', '/external/v1/fbs'],
+-    // FIX: keep monitoring in sync with the WB supply/request audit route.
+-    routeCount: 99,
++    prefixes: ['/marketplace-connections', '/marketplace-connection', '/external/v1/fbs',
++      '/marketplace-connections/fbs/repeat-assembly', '/marketplace-connection/fbs/repeat-assembly'],
++    // FIX: preserve deployed routes and add the three repeat handlers.
++    routeCount: 102,
+     description: 'Подключения WB/Ozon, заказы FBS, поставки, статусы, финансовые отчёты и распределение остатков.',
+     logic: ['Синхронизирует кабинеты, склады и заказы.', 'Сверяет активные поставки WB с заявками WMS и показывает отсутствующие привязки без записи в WB.', 'Резервирует товар WMS и передаёт статусы сборки.', 'Проверяет поставки филиала и создаёт локальные заявки FBS ДОВОЗ без повторной отправки статуса в WB.', 'Получает финансовые штрафы FBS без передачи токена WB в браузер.', 'Рассчитывает и выгружает распределённые остатки по складам.'],
+     dependencies: ['Основная БД', 'WB API', 'Ozon API'],
+diff --git a/src/modules/administration/administration.service.ts b/src/modules/administration/administration.service.ts
+index ecaee7d..77f0308 100644
+--- a/src/modules/administration/administration.service.ts
++++ b/src/modules/administration/administration.service.ts
+@@ -1,3 +1,4 @@
++import { appendFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
+ import {
+   BadRequestException,
+   ConflictException,
+@@ -495,6 +496,10 @@ export class AdministrationService {
+       }),
+     ]);
+ 
++    // FIX: keep both physical attempts in their original day/worker statistics.
++    await appendFbsAttemptHistory(this.prisma, completedFbsTasks, {
++      completedAt: { gte: statisticsPeriod.from, lt: statisticsPeriod.to }, workerUserId: { not: null },
++    });
+     const statisticRequestIds = [...new Set(completedFbsTasks.map((task) => task.requestId))];
+     const statisticRequests = statisticRequestIds.length
+       ? await this.prisma.clientRequest.findMany({
+diff --git a/src/modules/client-requests/client-requests.service.ts b/src/modules/client-requests/client-requests.service.ts
+index 7923993..5e59d9f 100644
+--- a/src/modules/client-requests/client-requests.service.ts
++++ b/src/modules/client-requests/client-requests.service.ts
+@@ -9,6 +9,7 @@ import { TelegramNotificationService } from '../client-notifications/telegram-no
+ import { StockOperationsService } from '../stock/stock-operations.service';
+ import { clientRequestFileSummarySelect } from './client-request-files.service';
+ import { clientRequestPackageInclude } from './client-request-packages.include';
++import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
+ import {
+   assertWarehouseAccess,
+   effectiveWarehouseId,
+@@ -102,6 +103,10 @@ export class ClientRequestsService {
+       orderBy: [{ updatedAt: 'desc' }],
+       take: 200,
+     });
++    const previousAttempts = await readFbsAttemptHistory(this.prisma, { requestId: { in: requests.map(request => request.id) } });
++    for (const request of requests) {
++      request._count.fbsOrderLinks += previousAttempts.filter(row => row.task.requestId === request.id).length;
++    }
+     const fbsRequestIds = requests
+       .filter((request) => request._count.fbsOrderLinks > 0)
+       .map((request) => request.id);
+@@ -130,6 +135,10 @@ export class ClientRequestsService {
+         select: { requestId: true, orderId: true, status: true, completedAt: true },
+       }),
+     ]);
++    for (const previous of previousAttempts) {
++      links.push(previous.link);
++      assemblies.push(previous.task);
++    }
+     // FIX: номер поставки нужен только отгруженным заявкам; активные не запускают архивный fallback-запрос.
+     const doneFbsRequestIds = new Set(
+       requests
+@@ -580,6 +589,10 @@ export class ClientRequestsService {
+         },
+       }),
+     ]);
++    for (const previous of await readFbsAttemptHistory(this.prisma, { requestId: request.id })) {
++      fbsOrderLinks.push(previous.link);
++      fbsTasks.push(previous.task);
++    }
+     const fbsTaskByOrder = new Map(
+       fbsTasks.map((task) => [`${task.connectionId}:${task.orderId}`, task]),
+     );
+diff --git a/src/modules/expenses/expenses.service.ts b/src/modules/expenses/expenses.service.ts
+index f03012c..aabf0bc 100644
+--- a/src/modules/expenses/expenses.service.ts
++++ b/src/modules/expenses/expenses.service.ts
+@@ -1,3 +1,4 @@
++import { appendFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
+ import {
+   BadRequestException,
+   Injectable,
+@@ -87,6 +88,11 @@ export class ExpensesService {
+       orderBy: { completedAt: 'asc' },
+       take: 50000,
+     });
++    // FIX: a repeat must not remove the earlier worker's completed output.
++    await appendFbsAttemptHistory(this.prisma, tasks, {
++      clientId: { in: visibleClients.map(client => client.id) },
++      completedAt: { gte: period.from, lt: period.toExclusive }, workerUserId: { not: null },
++    });
+     const workerIds = [...new Set(tasks.map((task) => task.workerUserId).filter((id): id is string => Boolean(id)))];
+     const [users, payrollSettings] = await Promise.all([
+       this.prisma.user.findMany({
+diff --git a/src/modules/marketplace-connections/marketplace-connections.module.ts b/src/modules/marketplace-connections/marketplace-connections.module.ts
+index 0568bab..7d195de 100644
+--- a/src/modules/marketplace-connections/marketplace-connections.module.ts
++++ b/src/modules/marketplace-connections/marketplace-connections.module.ts
+@@ -10,12 +10,16 @@ import { FbsStockMonitoringService } from './fbs-stock-monitoring.service';
+ import { MarketplaceConnectionsController } from './marketplace-connections.controller';
+ import { MarketplaceConnectionsService } from './marketplace-connections.service';
+ import { MarketplaceStockControlService } from './marketplace-stock-control.service';
++import { FbsRepeatAssemblyService } from './fbs-repeat-assembly.service';
++import { FbsRepeatAssemblyController } from './fbs-repeat-assembly.controller';
+ 
+ @Module({
+   imports: [AuthModule, LogisticsModule],
+-  controllers: [MarketplaceConnectionsController, FbsStockAllocationExternalController],
++  controllers: [MarketplaceConnectionsController, FbsStockAllocationExternalController, FbsRepeatAssemblyController],
+   providers: [
+     MarketplaceStockControlService,
++    // FIX: keep current stock-control registration when adding independent repeats.
++    FbsRepeatAssemblyService,
+     MarketplaceConnectionsService,
+     // ADDED: isolated read-only WB Finance integration for FBS penalties.
+     FbsPenaltiesReportService,
+diff --git a/src/modules/marketplace-connections/marketplace-connections.service.ts b/src/modules/marketplace-connections/marketplace-connections.service.ts
+index 695e71e..15ab1fa 100644
+--- a/src/modules/marketplace-connections/marketplace-connections.service.ts
++++ b/src/modules/marketplace-connections/marketplace-connections.service.ts
+@@ -1,4 +1,6 @@
+ import { createHash } from 'node:crypto';
++import { appendFbsAttemptHistory, readFbsAttemptHistory, hasFbsAttemptHistory, restoreAttemptSnapshot } from '../../common/shipment-history/fbs-attempt-history';
++import { fbsAttemptPageWindow, mergeFbsAttemptPage } from '../../common/shipment-history/fbs-attempt-page';
+ import { isDeepStrictEqual } from 'node:util';
+ import {
+   BadRequestException,
+@@ -2718,13 +2720,26 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
+         : {}),
+     };
+ 
+-    const [total, rows] = await Promise.all([
++    const historicalPackedRows = (await readFbsAttemptHistory(this.prisma, { clientId, completedAt })).map(row => row.task).filter(task => {
++      if (marketplace && task.marketplace !== marketplace) return false;
++      if (['true', '1'].includes(query.requiresKiz ?? '') && !task.requiresKiz) return false;
++      if (!search) return true;
++      const needle = search.toLocaleLowerCase('ru-RU');
++      return [task.orderId, task.supplyId, task.productName, task.article, task.sourceProductName,
++        task.sourceArticle, task.barcode, task.sourceBarcode, task.kiz, task.boxCode, task.reservedBoxCode,
++        task.stickerPartA, task.stickerPartB, task.stickerBarcode, task.workerName, task.deviceCode,
++        task.cargoPacking?.cargoPlaceId].some(value => value?.toLocaleLowerCase('ru-RU').includes(needle)) ||
++        relatedRequestIds.includes(task.requestId) || relatedClientIds.includes(task.clientId) ||
++        relatedBoxIds.includes(task.boxId ?? '') || relatedBoxIds.includes(task.reservedBoxId ?? '');
++    });
++    const historyWindow = fbsAttemptPageWindow(page, pageSize, historicalPackedRows.length);
++    let [total, rows] = await Promise.all([
+       this.prisma.fbsTsdAssembly.count({ where }),
+       this.prisma.fbsTsdAssembly.findMany({
+         where,
+-        orderBy: [{ completedAt: 'desc' }, { updatedAt: 'desc' }],
+-        skip: (page - 1) * pageSize,
+-        take: pageSize,
++        orderBy: [{ completedAt: 'desc' }, { updatedAt: 'desc' }, ...(hasFbsAttemptHistory() ? [{ id: 'desc' as const }] : [])],
++        skip: historyWindow.skip,
++        take: historyWindow.take,
+         select: {
+           id: true,
+           clientId: true,
+@@ -2769,6 +2784,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
+       }),
+     ]);
+ 
++    if (historicalPackedRows.length) {
++      total += historicalPackedRows.length;
++      rows = mergeFbsAttemptPage(rows, historicalPackedRows, historyWindow.offset, pageSize);
++    }
+     const clientIds = uniqueStrings(rows.map((row) => row.clientId));
+     const skuIds = uniqueStrings(rows.flatMap((row) => [row.skuId, row.sourceSkuId ?? '']));
+     const requestIds = uniqueStrings(rows.map((row) => row.requestId));
+@@ -4134,7 +4153,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
+     });
+     if (!request) throw new NotFoundException('FBS-заявка не найдена.');
+     this.clientScopes.requireClientAccess(user, request.clientId, 'read');
+-    if (request.type !== ClientRequestType.OUTBOUND || request._count.fbsOrderLinks === 0) {
++    const priorRouteAttempts = await readFbsAttemptHistory(this.prisma, { requestId });
++    if (request.type !== ClientRequestType.OUTBOUND || request._count.fbsOrderLinks + priorRouteAttempts.length === 0) {
+       throw new BadRequestException('Маршрут доступен только для FBS-заявки.');
+     }
+     const tasks = await this.prisma.fbsTsdAssembly.findMany({
+@@ -4147,6 +4167,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
+       },
+       orderBy: [{ status: 'asc' }, { orderId: 'asc' }],
+     });
++    tasks.push(...priorRouteAttempts.map(row => row.task));
+     const boxIds = uniqueStrings(tasks.flatMap((task) => [task.boxId ?? '', task.reservedBoxId ?? '']));
+     const boxes = boxIds.length > 0
+       ? await this.prisma.box.findMany({
+@@ -13213,6 +13234,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
+     if (assembly) return { source: 'ASSEMBLY' as const, ...assembly };
+     if (shipped) return { source: 'SHIPMENT' as const, ...shipped };
+     if (printed) return { source: 'PRINT' as const, ...printed };
++    if (hasFbsAttemptHistory()) {
++      const historical = await this.prisma.fbsAssemblyAttemptHistory.findFirst({
++        where: { clientId, kiz: { equals: kiz, mode: 'insensitive' } },
++      });
++      if (historical) return { source: 'ASSEMBLY' as const, orderId: historical.orderId,
++        requestId: historical.requestId, completedAt: historical.completedAt };
++    }
+     return null;
+   }
+ 
+@@ -16107,6 +16135,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
+             where: {
+               requestId: { in: taskRequestIds },
+               lastCategory: { in: ['shipped', 'archive'] },
++              // FIX: a deliberately reopened physical queue still reserves stock.
++              ...(hasFbsAttemptHistory() ? { request: { fbsEmergencyAssemblyAt: null } } : {}),
+               lastSupplierStatus: 'complete',
+             },
+             select: { connectionId: true, orderId: true },
+@@ -16299,6 +16329,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
+             where: {
+               requestId: { in: taskRequestIds },
+               lastCategory: { in: ['shipped', 'archive'] },
++              // FIX: WB complete does not invalidate a new emergency reservation.
++              ...(hasFbsAttemptHistory() ? { request: { fbsEmergencyAssemblyAt: null } } : {}),
+               lastSupplierStatus: 'complete',
+             },
+             select: { connectionId: true, orderId: true },
+@@ -16679,7 +16711,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
+     const task = candidates[0];
+     if (!task.kiz) throw new BadRequestException('У найденного заказа КИЗ не сохранён.');
+     const existing = await this.prisma.fbsWebKizStickerPrint.findFirst({
+-      where: { OR: [{ kiz: task.kiz }, { orderId: task.orderId }] },
++      where: { OR: [{ kiz: task.kiz }, {
++        orderId: task.orderId,
++        // FIX: a deliberately created repeat may print once for its new attempt.
++        ...(hasFbsAttemptHistory() &&
++          await this.prisma.fbsAssemblyAttemptHistory.findUnique({ where: { successorId: task.id } })
++          ? { assemblyId: task.id } : {}),
++      }] },
+     });
+     if (existing) {
+       throw new ConflictException(`Повторная печать запрещена. Заказ №${task.orderId} уже напечатан ${existing.printedAt.toLocaleString('ru-RU')} пользователем ${existing.printedBy}.`);
+@@ -16774,6 +16812,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
+     }
+     const rows = await this.prisma.fbsWebKizStickerPrint.findMany({ where: { clientId: clientFilter }, orderBy: { printedAt: 'desc' }, take: 300 });
+     const tasks = await this.prisma.fbsTsdAssembly.findMany({ where: { id: { in: rows.map((row) => row.assemblyId) } }, select: { id: true, skuId: true, requestId: true, supplyId: true, productName: true, article: true } });
++    await appendFbsAttemptHistory(this.prisma, tasks, { id: { in: rows.map(row => row.assemblyId) } });
+     const skus = await this.prisma.sku.findMany({ where: { id: { in: uniqueStrings(tasks.map((task) => task.skuId)) } }, select: { id: true, name: true, article: true, size: true, color: true } });
+     const requests = await this.prisma.clientRequest.findMany({ where: { id: { in: uniqueStrings(tasks.map((task) => task.requestId)) } }, select: { id: true, number: true } });
+     const skuById = new Map(skus.map((sku) => [sku.id, sku]));
+@@ -16793,7 +16832,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
+       allowedClientIds = uniqueStrings(branchClients.map((item) => item.clientId));
+     }
+     if (user.clientScopeMode === 'LIMITED' && !allowedClientIds.includes(record.clientId)) throw new ForbiddenException('Нет доступа к клиенту этой этикетки.');
+-    const task = await this.prisma.fbsTsdAssembly.findUnique({ where: { id: record.assemblyId } });
++    const task = await this.prisma.fbsTsdAssembly.findUnique({ where: { id: record.assemblyId } }) ??
++      (await readFbsAttemptHistory(this.prisma, { id: record.assemblyId }))[0]?.task;
+     if (!task) throw new NotFoundException('Заказ для повторной печати не найден.');
+     const sticker = await this.loadFbsTsdOrderSticker(task);
+     if (!sticker?.imageBase64) throw new BadRequestException(`Этикетка WB для заказа №${task.orderId} временно недоступна.`);
+@@ -16956,6 +16996,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
+       orderBy: { completedAt: 'desc' },
+       take: 50,
+     });
++    if (hasFbsAttemptHistory()) {
++      const history = await this.prisma.fbsAssemblyAttemptHistory.findMany({
++        where: { clientId: clientFilter, taskSnapshot: { path: ['deviceCode'], equals: deviceCode } },
++        orderBy: { completedAt: 'desc' }, take: 50,
++      });
++      rows.push(...history.map(row => restoreAttemptSnapshot(row.taskSnapshot)).filter(task => task.stickerPartB || task.stickerBarcode));
++      rows.sort((a, b) => (b.completedAt?.getTime() ?? 0) - (a.completedAt?.getTime() ?? 0));
++      rows.splice(50);
++    }
+     const skuIds = uniqueStrings(rows.map((row) => row.skuId));
+     const skus = skuIds.length > 0
+       ? await this.prisma.sku.findMany({
+@@ -16991,7 +17040,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
+     const today = new Date();
+     today.setHours(0, 0, 0, 0);
+     const clientFilter = this.clientScopes.resolveClientFilter(user);
+-    return this.prisma.fbsTsdAssembly.count({
++    const currentCount = await this.prisma.fbsTsdAssembly.count({
+       where: {
+         deviceCode,
+         status: 'COMPLETED',
+@@ -16999,6 +17048,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
+         clientId: clientFilter,
+       },
+     });
++    const previousCount = hasFbsAttemptHistory() ? await this.prisma.fbsAssemblyAttemptHistory.count({
++      where: { clientId: clientFilter, completedAt: { gte: today }, taskSnapshot: { path: ['deviceCode'], equals: deviceCode } },
++    }) : 0;
++    return currentCount + previousCount;
+   }
+ 
+   async assembleFbsOrders(dto: FbsOrderSelectionDto, user: AuthUser) {
+@@ -21509,6 +21562,39 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
+     });
+   }
+ 
++  // FIX: targeted read uses the existing WB limiter, not the global refresh
++  // that can reconcile unrelated requests/stock as a side effect.
++  async readRepeatAssemblyWbStatuses(clientId: string, connectionId: string, orderIds: string[], user: AuthUser) {
++    requireFbsEmergencyAssemblyAccess(user);
++    this.clientScopes.requireClientAccess(user, clientId, 'write');
++    const connection = await this.prisma.clientMarketplaceConnection.findFirst({
++      where: { id: connectionId, clientId, marketplace: MarketplaceType.WILDBERRIES, isActive: true },
++    });
++    if (!connection) throw new BadRequestException('Действующее подключение WB не найдено.');
++    const result = new Map<string, { supplierStatus: string; wbStatus: string }>();
++    for (const ids of chunks(orderIds, 1000)) {
++      const numericIds = ids.map(id => Number(id));
++      if (numericIds.some(id => !Number.isSafeInteger(id) || id <= 0)) throw new BadRequestException('Некорректный номер заказа WB.');
++      const response = await marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/orders/status', {
++        method: 'POST', headers: { Authorization: connection.apiKey, 'Content-Type': 'application/json' },
++        body: JSON.stringify({ orders: numericIds }),
++      });
++      for (const status of asArray<Record<string, unknown>>(response.orders)) {
++        result.set(textValue(status.id), { supplierStatus: textValue(status.supplierStatus), wbStatus: textValue(status.wbStatus) });
++      }
++    }
++    return result;
++  }
++
++  async repeatAssemblyStockReservations(clientId: string, skuIds: string[], db: Prisma.TransactionClient) {
++    return this.fbsTsdReservationRowsBySku({ clientId, skuIds, excludeTaskId: null }, db);
++  }
++
++  invalidateRepeatAssemblyCache(clientId: string) {
++    this.fbsOrdersCache.delete(clientId);
++    this.fbsTsdRequestFallbackCache.delete(clientId);
++  }
++
+   // FIX: forms a local-only request from the exact unfinished orders found by
+   // the branch audit. WB statuses and metadata are deliberately never mutated.
+   async createFbsDeliveryRecoveryRequest(
+@@ -23433,7 +23519,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
+         return { changed: false, summary: 'заявка уже закрыта' };
+       }
+ 
+-      if (FBS_REQUEST_COMPOSITION_STATUSES.has(requestHeader.status)) {
++      const repeatRun = hasFbsAttemptHistory()
++        ? await tx.fbsRepeatAssemblyRun.findUnique({ where: { requestId } })
++        : null;
++      // FIX: a repeat is an explicitly selected physical batch, not a mirror
++      // of every order that later appears in one of its original WB supplies.
++      if (!repeatRun && FBS_REQUEST_COMPOSITION_STATUSES.has(requestHeader.status)) {
+         for (const order of additions) {
+           const existing = await tx.fbsOrderRequestLink.findUnique({
+             where: {
+@@ -23698,6 +23789,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
+         });
+       }
+ 
++      // FIX: WB synchronization must not subtract the first physical attempt
++      // from its original request after the current link moved to a repeat.
++      for (const previous of await readFbsAttemptHistory(tx, { requestId })) {
++        addFbsDesiredItem(desiredItems, desiredSkuByOrder, {
++          orderId: previous.task.orderId, skuId: previous.task.skuId,
++          barcode: jsonStringArray(previous.task.barcodes)[0] ?? previous.task.barcode,
++          name: previous.task.productName, quantity: previous.task.itemCount,
++        });
++      }
+       const itemChanges: string[] = [];
+       if (!compositionLocked) {
+         const itemBySku = new Map(
+@@ -23823,8 +23923,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
+       const effectiveOrderIds = uniqueStrings(
+         [...desiredItems.values()].flatMap((item) => item.orderIds),
+       ).sort(naturalFbsIdCompare);
+-      const nextTitle = `FBS — ${effectiveOrderIds.length} заказ(а/ов)`;
+-      const nextComment = fbsRequestCompositionComment(
++      const nextTitle = repeatRun
++        ? `Повторная сборка WB — ${effectiveOrderIds.length} заказов`
++        : `FBS — ${effectiveOrderIds.length} заказ(а/ов)`;
++      const nextComment = repeatRun ? request.comment : fbsRequestCompositionComment(
+         effectiveOrderIds,
+         request.comment,
+       );
+diff --git a/src/modules/stock/stock-operations.service.ts b/src/modules/stock/stock-operations.service.ts
+index f04fd65..e5d0a59 100644
+--- a/src/modules/stock/stock-operations.service.ts
++++ b/src/modules/stock/stock-operations.service.ts
+@@ -1,8 +1,9 @@
+-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+-import { randomUUID } from 'node:crypto';
+-import * as XLSX from 'xlsx';
+-import {
+-  BillingChargeSource,
++import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
++import { randomUUID } from 'node:crypto';
++import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
++import * as XLSX from 'xlsx';
++import {
++  BillingChargeSource,
+   BillingChargeStatus,
+   BillingPriceTaxMode,
+   BillingUnit,
+@@ -2235,6 +2236,11 @@ export class StockOperationsService {
+         completedAt: true,
+       },
+     });
++    for (const previous of await readFbsAttemptHistory(tx, { requestId: request.id })) {
++      if (selections.some(selection => selection.requestItemId === previous.task.requestItemId && selection.boxId === previous.task.boxId)) {
++        completedTasks.push(previous.task);
++      }
++    }
+     if (completedTasks.length === 0) return;
+ 
+     const completedBySelection = new Map<string, number>();
+@@ -2628,6 +2634,10 @@ export class StockOperationsService {
+         },
+       }),
+     ]);
++    for (const previous of await readFbsAttemptHistory(tx, { requestId: request.id })) {
++      fbsLinks.push(previous.link);
++      fbsTasks.push(previous.task);
++    }
+     const completedFbsOrders = new Set(
+       fbsTasks
+         .filter((task) => task.status === 'COMPLETED')
+diff --git a/src/modules/tsd/tsd-assembly.service.ts b/src/modules/tsd/tsd-assembly.service.ts
+index 65069c3..1c738d6 100644
+--- a/src/modules/tsd/tsd-assembly.service.ts
++++ b/src/modules/tsd/tsd-assembly.service.ts
+@@ -1,7 +1,8 @@
+-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+-import {
+-  ClientRequestStatus,
+-  ClientRequestType,
++import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
++import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
++import {
++  ClientRequestStatus,
++  ClientRequestType,
+   MovementType,
+   PickWaveBalanceReviewStatus,
+   PickWaveStatus,
+@@ -932,6 +933,11 @@ export class TsdAssemblyService {
+         take: 100,
+       }),
+     ]);
++    // FIX: the original online request retains the factual collection history.
++    for (const historical of await readFbsAttemptHistory(this.prisma, { requestId })) {
++      if (!rows.some(row => row.id === historical.task.id)) rows.push(historical.task);
++      if (!links.some(link => link.orderId === historical.link.orderId && link.connectionId === historical.link.connectionId)) links.push(historical.link);
++    }
+     if (links.length === 0) {
+       return null;
+     }
+diff --git a/prisma/migrations/20260905121000_fbs_repeat_attempt_history/migration.sql b/prisma/migrations/20260905121000_fbs_repeat_attempt_history/migration.sql
+new file mode 100644
+--- /dev/null
++++ b/prisma/migrations/20260905121000_fbs_repeat_attempt_history/migration.sql
+@@ -0,0 +1,42 @@
++-- FIX: deploy only to our WMS after backup/review. Creation is opt-in.
++CREATE TABLE "FbsAssemblyAttemptHistory" (
++  "id" TEXT NOT NULL PRIMARY KEY,
++  "clientId" TEXT NOT NULL,
++  "requestId" TEXT NOT NULL,
++  "orderId" TEXT NOT NULL,
++  "workerUserId" TEXT,
++  "completedAt" TIMESTAMP(3) NOT NULL,
++  "successorId" TEXT NOT NULL,
++  "repeatRunId" TEXT NOT NULL,
++  "taskSnapshot" JSONB NOT NULL,
++  "kiz" TEXT,
++  "linkSnapshot" JSONB NOT NULL,
++  "archivedByUserId" TEXT NOT NULL,
++  "archivedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
++);
++CREATE UNIQUE INDEX "FbsAssemblyAttemptHistory_successorId_key" ON "FbsAssemblyAttemptHistory"("successorId");
++CREATE INDEX "FbsAssemblyAttemptHistory_requestId_idx" ON "FbsAssemblyAttemptHistory"("requestId");
++CREATE INDEX "FbsAssemblyAttemptHistory_clientId_completedAt_idx" ON "FbsAssemblyAttemptHistory"("clientId", "completedAt");
++CREATE INDEX "FbsAssemblyAttemptHistory_completedAt_workerUserId_idx" ON "FbsAssemblyAttemptHistory"("completedAt", "workerUserId");
++CREATE INDEX "FbsAssemblyAttemptHistory_repeatRunId_idx" ON "FbsAssemblyAttemptHistory"("repeatRunId");
++CREATE INDEX "FbsAssemblyAttemptHistory_clientId_kiz_idx" ON "FbsAssemblyAttemptHistory"("clientId", "kiz");
++CREATE TABLE "FbsRepeatAssemblyRun" (
++  "id" TEXT NOT NULL PRIMARY KEY,
++  "fingerprint" TEXT NOT NULL,
++  "clientId" TEXT NOT NULL,
++  "warehouseId" TEXT NOT NULL,
++  "requestId" TEXT NOT NULL,
++  "createdByUserId" TEXT NOT NULL,
++  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
++);
++CREATE UNIQUE INDEX "FbsRepeatAssemblyRun_fingerprint_key" ON "FbsRepeatAssemblyRun"("fingerprint");
++CREATE UNIQUE INDEX "FbsRepeatAssemblyRun_requestId_key" ON "FbsRepeatAssemblyRun"("requestId");
++-- FIX: do not hold a write-blocking index build on the existing print history.
++-- Run outside a transaction. After the first repeat, rollback is read-only mode, not removal of history.
++CREATE UNIQUE INDEX CONCURRENTLY "FbsWebKizStickerPrint_orderId_assemblyId_key" ON "FbsWebKizStickerPrint"("orderId", "assemblyId");
++-- Older db-push installations own the index through a UNIQUE constraint.
++-- The new composite index exists before either legacy form is removed.
++SET lock_timeout = '5s';
++ALTER TABLE "FbsWebKizStickerPrint" DROP CONSTRAINT IF EXISTS "FbsWebKizStickerPrint_orderId_key";
++DROP INDEX CONCURRENTLY IF EXISTS "FbsWebKizStickerPrint_orderId_key";
++RESET lock_timeout;
+diff --git a/src/common/shipment-history/fbs-attempt-history.ts b/src/common/shipment-history/fbs-attempt-history.ts
+new file mode 100644
+--- /dev/null
++++ b/src/common/shipment-history/fbs-attempt-history.ts
+@@ -0,0 +1,54 @@
++import type { FbsTsdAssembly, FbsOrderRequestLink, FbsCargoPlacePacking, Prisma } from '@prisma/client';
++
++type HistoryDb = Pick<Prisma.TransactionClient, 'fbsAssemblyAttemptHistory'>;
++export type HistoricalFbsAttempt = FbsTsdAssembly & { cargoPacking: FbsCargoPlacePacking | null };
++
++// FIX: pausing new repeats must not hide previously archived work/payroll.
++export const hasFbsAttemptHistory = () => ['true', 'read-only'].includes(process.env.WMS_FBS_REPEAT_ASSEMBLY_ENABLED ?? '');
++
++// FIX: restoration is read-only; never write a historical snapshot to live stock.
++export function restoreAttemptSnapshot(value: Prisma.JsonValue): HistoricalFbsAttempt {
++  const snapshot = structuredClone(value) as unknown as HistoricalFbsAttempt;
++  if (!snapshot || typeof snapshot.id !== 'string' || snapshot.status !== 'COMPLETED') {
++    throw new Error('Invalid completed FBS attempt snapshot');
++  }
++  restoreDates(snapshot as unknown as Record<string, unknown>);
++  if (snapshot.cargoPacking) restoreDates(snapshot.cargoPacking as unknown as Record<string, unknown>);
++  return snapshot;
++}
++
++function restoreDates(record: Record<string, unknown>) {
++  for (const key of Object.keys(record)) {
++    if (key.endsWith('At') && typeof record[key] === 'string') {
++      const date = new Date(record[key] as string);
++      if (!Number.isFinite(date.getTime())) throw new Error(`Invalid FBS attempt date: ${key}`);
++      record[key] = date;
++    }
++  }
++}
++
++export async function readFbsAttemptHistory(
++  db: HistoryDb,
++  where: Prisma.FbsAssemblyAttemptHistoryWhereInput,
++) {
++  // No additional queries/schema dependency in installations without this feature.
++  if (!hasFbsAttemptHistory()) return [];
++  const rows = await db.fbsAssemblyAttemptHistory.findMany({ where, orderBy: { completedAt: 'asc' } });
++  return rows.map(row => ({
++    task: restoreAttemptSnapshot(row.taskSnapshot),
++    link: row.linkSnapshot as unknown as FbsOrderRequestLink,
++    successorId: row.successorId,
++  }));
++}
++
++export async function appendFbsAttemptHistory<T extends { id: string }>(
++  db: HistoryDb,
++  current: T[],
++  where: Prisma.FbsAssemblyAttemptHistoryWhereInput,
++): Promise<void> {
++  const ids = new Set(current.map(row => row.id));
++  const history = await readFbsAttemptHistory(db, where);
++  for (const row of history) {
++    if (!ids.has(row.task.id)) current.push(row.task as unknown as T);
++  }
++}
+diff --git a/src/common/shipment-history/fbs-attempt-page.ts b/src/common/shipment-history/fbs-attempt-page.ts
+new file mode 100644
+--- /dev/null
++++ b/src/common/shipment-history/fbs-attempt-page.ts
+@@ -0,0 +1,16 @@
++type DatedAttempt = { id: string; completedAt: Date | null; updatedAt: Date };
++
++// FIX: fetch only a history-sized overlap, not every preceding live page.
++export function fbsAttemptPageWindow(page: number, pageSize: number, historyCount: number) {
++  const target = (page - 1) * pageSize;
++  const skip = Math.max(0, target - historyCount);
++  return { skip, take: pageSize + historyCount, offset: target - skip };
++}
++
++export function mergeFbsAttemptPage<T extends DatedAttempt>(current: T[], history: T[], offset: number, size: number) {
++  return [...current, ...history].sort((a, b) =>
++    (b.completedAt?.getTime() ?? 0) - (a.completedAt?.getTime() ?? 0) ||
++    b.updatedAt.getTime() - a.updatedAt.getTime() ||
++    (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
++  ).slice(offset, offset + size);
++}
+diff --git a/src/modules/marketplace-connections/dto/fbs-repeat-assembly.dto.ts b/src/modules/marketplace-connections/dto/fbs-repeat-assembly.dto.ts
+new file mode 100644
+--- /dev/null
++++ b/src/modules/marketplace-connections/dto/fbs-repeat-assembly.dto.ts
+@@ -0,0 +1,22 @@
++import { Type } from 'class-transformer';
++import { ArrayMaxSize, ArrayMinSize, Equals, IsArray, IsOptional, IsString, Length, ValidateNested } from 'class-validator';
++
++class RepeatAssemblyOrderDto {
++  @IsString() @Length(1, 100) connectionId!: string;
++  @IsString() @Length(1, 100) id!: string;
++  // FIX: stale screens/retries must refer to the exact previous physical attempt.
++  @IsOptional() @IsString() @Length(1, 100) assemblyId?: string;
++}
++
++export class PreviewFbsRepeatAssemblyDto {
++  @IsString() @Length(1, 100) clientId!: string;
++  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(100)
++  @ValidateNested({ each: true }) @Type(() => RepeatAssemblyOrderDto)
++  orders!: RepeatAssemblyOrderDto[];
++}
++
++export class CreateFbsRepeatAssemblyDto extends PreviewFbsRepeatAssemblyDto {
++  @IsString() @Length(64, 64) previewToken!: string;
++  @Equals(true, { message: 'Подтвердите дополнительное физическое списание товара.' })
++  confirmAdditionalStockConsumption!: boolean;
++}
+diff --git a/src/modules/marketplace-connections/fbs-repeat-assembly.controller.ts b/src/modules/marketplace-connections/fbs-repeat-assembly.controller.ts
+new file mode 100644
+--- /dev/null
++++ b/src/modules/marketplace-connections/fbs-repeat-assembly.controller.ts
+@@ -0,0 +1,25 @@
++import { Body, Controller, Get, Post } from '@nestjs/common';
++import type { AuthUser } from '../auth/auth.types';
++import { CurrentUser } from '../auth/decorators/current-user.decorator';
++import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
++import { CreateFbsRepeatAssemblyDto, PreviewFbsRepeatAssemblyDto } from './dto/fbs-repeat-assembly.dto';
++import { FbsRepeatAssemblyService } from './fbs-repeat-assembly.service';
++
++@Controller(['marketplace-connections/fbs/repeat-assembly', 'marketplace-connection/fbs/repeat-assembly'])
++@RequirePermissions('clients:write')
++export class FbsRepeatAssemblyController {
++  constructor(private readonly repeats: FbsRepeatAssemblyService) {}
++
++  @Get('capabilities')
++  capabilities(@CurrentUser() user: AuthUser) { return this.repeats.capabilities(user); }
++
++  @Post('preview')
++  preview(@Body() dto: PreviewFbsRepeatAssemblyDto, @CurrentUser() user: AuthUser) {
++    return this.repeats.preview(dto, user);
++  }
++
++  @Post()
++  create(@Body() dto: CreateFbsRepeatAssemblyDto, @CurrentUser() user: AuthUser) {
++    return this.repeats.create(dto, user);
++  }
++}
+diff --git a/src/modules/marketplace-connections/fbs-repeat-assembly.service.ts b/src/modules/marketplace-connections/fbs-repeat-assembly.service.ts
+new file mode 100644
+--- /dev/null
++++ b/src/modules/marketplace-connections/fbs-repeat-assembly.service.ts
+@@ -0,0 +1,248 @@
++import { createHash, randomUUID } from 'node:crypto';
++import { BadRequestException, ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
++import { Prisma } from '@prisma/client';
++import { PrismaService } from '../../common/prisma/prisma.service';
++import { ClientScopeService } from '../auth/client-scope.service';
++import type { AuthUser } from '../auth/auth.types';
++import { MarketplaceConnectionsService } from './marketplace-connections.service';
++import type { CreateFbsRepeatAssemblyDto, PreviewFbsRepeatAssemblyDto } from './dto/fbs-repeat-assembly.dto';
++import { assertRepeatAssemblyEnabled, assertRepeatCandidate, createRepeatAttemptData, repeatSelectionFingerprint } from './fbs-repeat-assembly';
++import { allocateRepeatStock } from './fbs-repeat-stock-plan';
++
++type WbStatuses = Map<string, { supplierStatus: string; wbStatus: string }>;
++const key = (text: string | null | undefined) => (text ?? '').trim().toLocaleLowerCase('ru-RU');
++const jsonSnapshot = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
++const allowed = (user: AuthUser) => !user.isDemo && user.roleCodes.some(role => ['ADMIN', 'OWNER'].includes(role));
++
++@Injectable()
++export class FbsRepeatAssemblyService {
++  constructor(
++    private readonly prisma: PrismaService,
++    private readonly scopes: ClientScopeService,
++    private readonly connections: MarketplaceConnectionsService,
++  ) {}
++
++  capabilities(user: AuthUser) {
++    return { enabled: allowed(user) && process.env.WMS_FBS_REPEAT_ASSEMBLY_ENABLED === 'true' };
++  }
++
++  private authorize(dto: PreviewFbsRepeatAssemblyDto, user: AuthUser) {
++    assertRepeatAssemblyEnabled();
++    if (!allowed(user)) throw new ForbiddenException('Повторную физическую сборку создаёт администратор или владелец.');
++    this.scopes.requireClientAccess(user, dto.clientId, 'write');
++    const warehouseId = user.activeWarehouseId;
++    if (!warehouseId || (user.writableWarehouseIds && !user.writableWarehouseIds.includes(warehouseId))) {
++      throw new ForbiddenException('Выберите доступный для работы филиал.');
++    }
++    if (!dto.orders.length || dto.orders.length > 100) {
++      throw new BadRequestException('Выберите от 1 до 100 заказов с идентификаторами предыдущих сборок.');
++    }
++    const connections = new Set(dto.orders.map(order => order.connectionId));
++    if (connections.size !== 1 || new Set(dto.orders.map(order => order.id)).size !== dto.orders.length) {
++      throw new BadRequestException('Выберите неповторяющиеся заказы одного кабинета WB.');
++    }
++    return warehouseId;
++  }
++
++  private async wb(dto: PreviewFbsRepeatAssemblyDto, user: AuthUser) {
++    return this.connections.readRepeatAssemblyWbStatuses(dto.clientId, dto.orders[0].connectionId, dto.orders.map(row => row.id), user);
++  }
++
++  async preview(dto: PreviewFbsRepeatAssemblyDto, user: AuthUser) {
++    const warehouseId = this.authorize(dto, user);
++    const statuses = await this.wb(dto, user);
++    return this.prisma.$transaction(async tx => {
++      const plan = await this.plan(tx, dto, warehouseId, statuses);
++      return this.describe(plan);
++    }, { isolationLevel: 'RepeatableRead', timeout: 30_000 });
++  }
++
++  async create(dto: CreateFbsRepeatAssemblyDto, user: AuthUser) {
++    const warehouseId = this.authorize(dto, user);
++    if (dto.confirmAdditionalStockConsumption !== true) throw new BadRequestException('Подтвердите дополнительное физическое списание.');
++    if (dto.orders.some(order => !order.assemblyId)) throw new BadRequestException('Сначала выполните предварительную проверку сборок.');
++    const fingerprint = repeatSelectionFingerprint(dto.clientId, warehouseId, dto.orders);
++    const previous = await this.existing(fingerprint);
++    if (previous) return previous;
++    const statuses = await this.wb(dto, user);
++    const checkedAt = Date.now();
++    try {
++      const request = await this.prisma.$transaction(async tx => {
++        // FIX: serialize repeat submissions for the same selection. Normal scans
++        // are guarded below by the old task id and updatedAt, never by order id.
++        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${fingerprint}))::text`;
++        const same = await tx.fbsRepeatAssemblyRun.findUnique({ where: { fingerprint } });
++        if (same) return tx.clientRequest.findUniqueOrThrow({ where: { id: same.requestId } });
++        const plan = await this.plan(tx, dto, warehouseId, statuses);
++        if (Date.now() - checkedAt > 60_000 || this.describe(plan).previewToken !== dto.previewToken) {
++          throw new ConflictException('Данные изменились. Повторите предварительную проверку; новая заявка не создана.');
++        }
++        const now = new Date();
++        const runId = randomUUID();
++        const sourceNumbers = [...new Set(plan.rows.map(row => row.link.request.number))];
++        const sourceSupplies = [...new Set(plan.rows.map(row => row.task.supplyId).filter(Boolean))];
++        const itemGroups = new Map<string, { skuId: string; name: string; barcode: string | null; quantity: number; comment: string }>();
++        for (const row of plan.rows) {
++          const group = itemGroups.get(row.task.skuId);
++          if (group) { group.quantity++; group.comment += `, ${row.task.orderId}`; }
++          else itemGroups.set(row.task.skuId, { skuId: row.task.skuId, name: row.task.productName,
++            barcode: Array.isArray(row.task.barcodes) ? String(row.task.barcodes[0] ?? '') : null,
++            quantity: 1, comment: `FBS-заказы (повторная сборка): ${row.task.orderId}` });
++        }
++        const created = await tx.clientRequest.create({ data: {
++          clientId: dto.clientId, warehouseId, type: 'OUTBOUND', status: 'IN_WORK', priority: 'HIGH',
++          title: `Повторная сборка WB — ${plan.rows.length} заказов`, destinationCity: 'Повторный довоз WB',
++          comment: `ОТДЕЛЬНАЯ ПОВТОРНАЯ СБОРКА. Дополнительный физический расход подтверждён ${user.name}. ` +
++            `Исходные заявки: ${sourceNumbers.join(', ')}. Поставки: ${sourceSupplies.join(', ')}. ` +
++            'Прежние КИЗ, печать, списания и выработка сохранены. Статусы и КИЗ в WB не изменяются.',
++          createdByUserId: user.id, fbsEmergencyAssemblyAt: now,
++          fbsEmergencyAssemblyByUserId: user.id, fbsEmergencyAssemblyByName: user.name,
++          items: { create: [...itemGroups.values()] },
++        }, include: { items: true } });
++        await tx.fbsRepeatAssemblyRun.create({ data: { id: runId, fingerprint, clientId: dto.clientId,
++          warehouseId, requestId: created.id, createdByUserId: user.id } });
++        for (const row of plan.rows) {
++          // FIX: all orders of one SKU share the correct aggregate item quantity.
++          const item = created.items.find(item => item.skuId === row.task.skuId)!;
++          const successorId = randomUUID();
++          await tx.fbsAssemblyAttemptHistory.create({ data: {
++            id: row.task.id, clientId: row.task.clientId, requestId: row.task.requestId,
++            orderId: row.task.orderId, workerUserId: row.task.workerUserId,
++            completedAt: row.task.completedAt!, successorId, repeatRunId: runId,
++            taskSnapshot: jsonSnapshot(row.task), kiz: row.task.kiz, linkSnapshot: jsonSnapshot(row.link), archivedByUserId: user.id,
++          } });
++          const allocation = row.allocation;
++          const source = row.source;
++          const relabel = source.id !== row.task.skuId;
++          const changed = await tx.fbsTsdAssembly.updateMany({
++            where: { id: row.task.id, updatedAt: row.task.updatedAt, status: 'COMPLETED', requestId: row.task.requestId },
++            data: {
++              ...createRepeatAttemptData(row.task, successorId, created.id, item.id, now),
++              status: 'RESERVED', reservedBoxId: allocation.boxId, reservedBoxCode: allocation.box!.code, reservedAt: now,
++              sourceSkuId: relabel ? source.id : null, sourceProductName: relabel ? source.name : null,
++              sourceArticle: relabel ? source.article : null,
++              sourceBarcodes: relabel ? source.barcodes.map(barcode => barcode.value) : [],
++              relabelRequired: relabel,
++              storageBoxes: [{ code: allocation.box!.code, quantity: 1 }],
++            },
++          });
++          if (changed.count !== 1) throw new ConflictException(`Сборка заказа ${row.task.orderId} изменилась; все изменения отменены.`);
++          const linked = await tx.fbsOrderRequestLink.updateMany({
++            where: { id: row.link.id, updatedAt: row.link.updatedAt, requestId: row.task.requestId },
++            data: { requestId: created.id, syncStatus: 'ACTIVE', syncIssue: null,
++              lastCategory: 'shipped', lastSupplierStatus: 'complete', lastWbStatus: 'waiting',
++              lastSeenAt: now, createdByUserId: user.id },
++          });
++          if (linked.count !== 1) throw new ConflictException(`Привязка заказа ${row.task.orderId} изменилась; все изменения отменены.`);
++          await tx.clientRequestBoxSelection.upsert({
++            where: { requestItemId_boxId: { requestItemId: item.id, boxId: allocation.boxId! } },
++            create: { requestItemId: item.id, skuId: source.id, boxId: allocation.boxId!, quantity: 1 },
++            update: { quantity: { increment: 1 } },
++          });
++        }
++        await tx.auditLog.create({ data: { userId: user.id, action: 'FBS_INDEPENDENT_REPEAT_CREATED',
++          entity: 'ClientRequest', entityId: created.id,
++          payload: { runId, fingerprint, clientId: dto.clientId, warehouseId,
++            orderIds: plan.rows.map(row => row.task.orderId), previousAttemptIds: plan.rows.map(row => row.task.id),
++            additionalStockConsumptionApproved: true, wbMutationPerformed: false },
++        } });
++        await tx.clientRequestEvent.create({ data: { requestId: created.id, clientId: dto.clientId,
++          eventType: 'CREATED', title: 'Создана отдельная повторная сборка',
++          body: `Исходные заявки: ${sourceNumbers.join(', ')}. Прежняя история сохранена.`,
++          statusTo: 'IN_WORK', createdByUserId: user.id },
++        });
++        return created;
++      }, { isolationLevel: 'Serializable', timeout: 60_000, maxWait: 10_000 });
++      this.connections.invalidateRepeatAssemblyCache(dto.clientId);
++      return { status: 'CREATED', request };
++    } catch (error) {
++      if (error instanceof Prisma.PrismaClientKnownRequestError && ['P2002', 'P2034'].includes(error.code)) {
++        const existing = await this.existing(fingerprint);
++        if (existing) return existing;
++        throw new ConflictException('Остатки или сборка изменились параллельно. Повторите проверку; заявка не создана.');
++      }
++      throw error;
++    }
++  }
++
++  private async existing(fingerprint: string) {
++    const run = await this.prisma.fbsRepeatAssemblyRun.findUnique({ where: { fingerprint } });
++    if (!run) return null;
++    return { status: 'ALREADY_EXISTS', request: await this.prisma.clientRequest.findUniqueOrThrow({ where: { id: run.requestId } }) };
++  }
++
++  private async plan(db: Prisma.TransactionClient, dto: PreviewFbsRepeatAssemblyDto, warehouseId: string, wb: WbStatuses) {
++    const [client, tasks, links, skus, mappings, warehouse] = await Promise.all([
++      db.client.findUniqueOrThrow({ where: { id: dto.clientId } }),
++      db.fbsTsdAssembly.findMany({ where: { clientId: dto.clientId, marketplace: 'WILDBERRIES',
++        connectionId: dto.orders[0].connectionId, orderId: { in: dto.orders.map(row => row.id) } }, include: { cargoPacking: true } }),
++      db.fbsOrderRequestLink.findMany({ where: { clientId: dto.clientId, marketplace: 'WILDBERRIES',
++        connectionId: dto.orders[0].connectionId, orderId: { in: dto.orders.map(row => row.id) } }, include: { request: true } }),
++      db.sku.findMany({ where: { clientId: dto.clientId }, include: { barcodes: true } }),
++      db.clientArticleMapping.findMany({ where: { clientId: dto.clientId } }),
++      db.warehouse.findFirst({ where: { id: warehouseId, isActive: true } }),
++    ]);
++    if (!warehouse || client.isDemo) throw new ForbiddenException('Рабочий филиал или клиент недоступен.');
++    const selected = dto.orders.map(order => {
++      const task = tasks.find(task => (!order.assemblyId || task.id === order.assemblyId) && task.orderId === order.id);
++      const link = links.find(link => link.orderId === order.id && link.requestId === task?.requestId);
++      if (!task || !link || link.request.warehouseId !== warehouseId || ['REMOVED', 'MOVING', 'RETURN_REQUIRED'].includes(link.syncStatus)) {
++        throw new ConflictException(`Заказ ${order.id} изменился или относится к другому филиалу.`);
++      }
++      assertRepeatCandidate(task, wb.get(order.id) ?? null);
++      const target = skus.find(sku => sku.id === task.skuId);
++      if (!target) throw new BadRequestException(`Карточка товара заказа ${order.id} не найдена.`);
++      const rules = client.relabelingEnabled ? mappings.filter(mapping =>
++        [target.article, target.clientSku, target.internalSku, task.article].map(key).includes(key(mapping.targetArticle))) : [];
++      const candidateSkuIds = [target.id, ...skus.filter(sku => key(sku.size) === key(target.size) && rules.some(mapping =>
++        [sku.article, sku.clientSku, sku.internalSku].map(key).includes(key(mapping.sourceArticle)) ||
++        key(sku.internalSku).startsWith(`${key(mapping.sourceArticle)}-`))).map(sku => sku.id)];
++      return { task, link, candidateSkuIds };
++    });
++    const skuIds = [...new Set(selected.flatMap(row => row.candidateSkuIds))];
++    const [balances, reservations] = await Promise.all([
++      db.stockBalance.findMany({ where: { clientId: dto.clientId, warehouseId, skuId: { in: skuIds },
++        status: 'AVAILABLE', quantity: { gt: 0 }, boxId: { not: null },
++        box: { clientId: dto.clientId, warehouseId, status: { notIn: ['deleted', 'archived', 'shipped'] } } },
++        include: { box: true }, orderBy: { id: 'asc' } }),
++      this.connections.repeatAssemblyStockReservations(dto.clientId, skuIds, db),
++    ]);
++    const placements = await db.storagePalletBox.findMany({ where: {
++      boxCode: { in: balances.map(balance => balance.box!.code) }, pallet: { clientId: dto.clientId, warehouseId },
++    }, include: { pallet: true } });
++    const usable = balances.filter(balance => client.stockBalanceMode !== 'PALLET_SORT' || placements.some(row => row.boxCode === balance.box!.code));
++    const buckets = usable.map(balance => ({ ...balance, boxId: balance.boxId!, quantity: Math.max(0, balance.quantity -
++      (reservations.get(balance.skuId) ?? []).filter(row => row.boxId === balance.boxId).reduce((sum, row) => sum + row.itemCount, 0)) }));
++    const allocations = allocateRepeatStock(selected.map(row => ({ id: row.task.orderId, candidateSkuIds: row.candidateSkuIds })), buckets);
++    // The existing selection key is item+box, not item+box+physical-SKU.
++    // Fail closed instead of silently recording the wrong relabel source.
++    const sourceByItemBox = new Map<string, string>();
++    for (const row of selected) {
++      const allocation = allocations.get(row.task.orderId)!;
++      const selectionKey = `${row.task.skuId}:${allocation.boxId}`;
++      const previousSource = sourceByItemBox.get(selectionKey);
++      if (previousSource && previousSource !== allocation.skuId) {
++        throw new BadRequestException('В одном коробе выбраны разные исходные артикулы для одной позиции. Разделите повторную сборку на две заявки.');
++      }
++      sourceByItemBox.set(selectionKey, allocation.skuId);
++    }
++    return { rows: selected.map(row => {
++      const allocation = usable.find(balance => balance.id === allocations.get(row.task.orderId)!.id)!;
++      return { ...row, allocation, source: skus.find(sku => sku.id === allocation.skuId)!,
++        palletCode: placements.find(placement => placement.boxCode === allocation.box!.code)?.pallet.code ?? null };
++    }) };
++  }
++
++  private describe(plan: Awaited<ReturnType<FbsRepeatAssemblyService['plan']>>) {
++    const orders = plan.rows.map(row => ({ id: row.task.orderId, connectionId: row.task.connectionId,
++      assemblyId: row.task.id, productName: row.task.productName, article: row.task.article,
++      sourceRequestNumber: row.link.request.number, sourceSupplyId: row.task.supplyId,
++      boxCode: row.allocation.box!.code, palletCode: row.palletCode, sourceSkuId: row.source.id,
++    }));
++    const revision = plan.rows.map(row => [row.task.id, row.task.updatedAt, row.link.updatedAt,
++      row.allocation.id, row.allocation.updatedAt, row.source.id]);
++    return { orders, orderCount: orders.length, additionalUnits: orders.length,
++      previewToken: createHash('sha256').update(JSON.stringify(revision)).digest('hex'),
++      warning: 'Это дополнительная физическая сборка с новым расходом остатков. Прежняя сборка и её списания сохраняются. КИЗ и статусы в WB не изменяются.' };
++  }
++}
+diff --git a/src/modules/marketplace-connections/fbs-repeat-assembly.ts b/src/modules/marketplace-connections/fbs-repeat-assembly.ts
+new file mode 100644
+--- /dev/null
++++ b/src/modules/marketplace-connections/fbs-repeat-assembly.ts
+@@ -0,0 +1,77 @@
++import { createHash } from 'node:crypto';
++import { BadRequestException, ForbiddenException } from '@nestjs/common';
++
++// FIX: opt-in only; deployments for the sold WMS keep their existing workflow.
++export function assertRepeatAssemblyEnabled() {
++  if (process.env.WMS_FBS_REPEAT_ASSEMBLY_ENABLED !== 'true') {
++    throw new ForbiddenException('Отдельная повторная сборка не включена для этой WMS.');
++  }
++}
++
++type CompletedAttempt = {
++  id: string;
++  status: string;
++  barcode: string | null;
++  requiresKiz: boolean;
++  kiz: string | null;
++  wbMetaStatus: string;
++  completedAt: Date | null;
++  itemCount: number;
++  cargoPackingId?: string | null;
++};
++
++export function assertRepeatCandidate(
++  task: CompletedAttempt,
++  wb: { supplierStatus: string; wbStatus: string } | null,
++) {
++  if (task.status !== 'COMPLETED' || !task.completedAt || !task.barcode ||
++      (task.requiresKiz && (!task.kiz || task.wbMetaStatus !== 'ACCEPTED'))) {
++    throw new BadRequestException('Повторная сборка разрешена только после завершённой предыдущей попытки.');
++  }
++  if (task.itemCount !== 1) {
++    throw new BadRequestException('Повторная сборка поддерживает только поштучные заказы WB.');
++  }
++  if (task.cargoPackingId) {
++    throw new BadRequestException('Заказ уже включён в грузокороб. Отдельная повторная упаковка грузомест пока не поддерживается; прежний грузокороб не изменён.');
++  }
++  if (!wb || wb.supplierStatus !== 'complete' || wb.wbStatus !== 'waiting') {
++    throw new BadRequestException('WB не подтверждает состояние complete/waiting. Отменённый или уже доставленный заказ нельзя собирать повторно.');
++  }
++}
++
++// FIX: old movement/history idempotency keys remain attached to the old id.
++// Do not mutate the snapshot, reset stock, return old marks or rewrite WB here.
++export function createRepeatAttemptData(
++  previous: Pick<CompletedAttempt, 'id' | 'requiresKiz'>,
++  id: string,
++  requestId: string,
++  requestItemId: string,
++  createdAt: Date,
++) {
++  if (!id || id === previous.id) throw new BadRequestException('Для повторной сборки требуется новый идентификатор.');
++  return {
++    id, requestId, requestItemId, createdAt,
++    status: 'WAITING_STOCK', deviceCode: 'AUTO', workerUserId: null, workerName: null,
++    startedAt: null, reservedBoxId: null, reservedBoxCode: null, reservedAt: null,
++    boxId: null, boxCode: null, sourceBoxPending: false, sourceBarcode: null, barcode: null,
++    sourceSkuId: null, sourceProductName: null, sourceArticle: null, sourceBarcodes: [],
++    storageBoxes: [], relabelRequired: false, relabelConfirmedAt: null,
++    kiz: null, wbMetaStatus: previous.requiresKiz ? 'PENDING' : 'NOT_REQUIRED',
++    stickerPartA: null, stickerPartB: null, stickerBarcode: null,
++    marketplaceSubmittedAt: null, marketplaceLabelBase64: null,
++    marketplaceLabelContentType: null, marketplaceSubmitError: null,
++    cargoPackingId: null, cargoPackedAt: null, cargoPackedByUserId: null, cargoPackedByName: null,
++    errorMessage: null, completedAt: null,
++  };
++}
++
++export function repeatSelectionFingerprint(
++  clientId: string,
++  warehouseId: string,
++  orders: ReadonlyArray<{ connectionId: string; id: string; assemblyId?: string | null }>,
++) {
++  const keys = [...new Set(orders.map(order => JSON.stringify([
++    order.connectionId, order.id, order.assemblyId,
++  ])))].sort();
++  return createHash('sha256').update(JSON.stringify([clientId, warehouseId, keys])).digest('hex');
++}
+diff --git a/src/modules/marketplace-connections/fbs-repeat-stock-plan.ts b/src/modules/marketplace-connections/fbs-repeat-stock-plan.ts
+new file mode 100644
+--- /dev/null
++++ b/src/modules/marketplace-connections/fbs-repeat-stock-plan.ts
+@@ -0,0 +1,31 @@
++import { BadRequestException } from '@nestjs/common';
++
++export type RepeatStockBucket = { id: string; skuId: string; boxId: string; quantity: number };
++
++// FIX: augmenting-path matching avoids spending the only matching unit of a
++// constrained order on another order that could use a relabel alternative.
++export function allocateRepeatStock(
++  demands: Array<{ id: string; candidateSkuIds: string[] }>,
++  buckets: RepeatStockBucket[],
++) {
++  const slots = buckets.flatMap(bucket => Array.from({ length: Math.min(demands.length, Math.max(0, bucket.quantity)) }, () => bucket));
++  const owners = new Map<number, string>();
++  const demandById = new Map(demands.map(demand => [demand.id, demand]));
++  if (demandById.size !== demands.length) throw new BadRequestException('Повторяющиеся заказы в плане.');
++  function match(id: string, visited: Set<number>): boolean {
++    for (let slot = 0; slot < slots.length; slot++) {
++      if (visited.has(slot) || !demandById.get(id)!.candidateSkuIds.includes(slots[slot].skuId)) continue;
++      visited.add(slot);
++      const previous = owners.get(slot);
++      if (!previous || match(previous, visited)) {
++        owners.set(slot, id);
++        return true;
++      }
++    }
++    return false;
++  }
++  for (const demand of demands) {
++    if (!match(demand.id, new Set())) throw new BadRequestException(`Недостаточно свободных остатков для заказа ${demand.id}. Заявка не создана.`);
++  }
++  return new Map([...owners].map(([slot, id]) => [id, slots[slot]]));
++}

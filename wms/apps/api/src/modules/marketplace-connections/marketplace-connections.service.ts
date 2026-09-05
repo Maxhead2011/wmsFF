@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { appendFbsAttemptHistory, readFbsAttemptHistory, hasFbsAttemptHistory, restoreAttemptSnapshot } from '../../common/shipment-history/fbs-attempt-history';
+import { fbsAttemptPageWindow, mergeFbsAttemptPage } from '../../common/shipment-history/fbs-attempt-page';
 import { isDeepStrictEqual } from 'node:util';
 import {
   BadRequestException,
@@ -2689,13 +2691,26 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         : {}),
     };
 
-    const [total, rows] = await Promise.all([
+    const historicalPackedRows = (await readFbsAttemptHistory(this.prisma, { clientId, completedAt })).map(row => row.task).filter(task => {
+      if (marketplace && task.marketplace !== marketplace) return false;
+      if (['true', '1'].includes(query.requiresKiz ?? '') && !task.requiresKiz) return false;
+      if (!search) return true;
+      const needle = search.toLocaleLowerCase('ru-RU');
+      return [task.orderId, task.supplyId, task.productName, task.article, task.sourceProductName,
+        task.sourceArticle, task.barcode, task.sourceBarcode, task.kiz, task.boxCode, task.reservedBoxCode,
+        task.stickerPartA, task.stickerPartB, task.stickerBarcode, task.workerName, task.deviceCode,
+        task.cargoPacking?.cargoPlaceId].some(value => value?.toLocaleLowerCase('ru-RU').includes(needle)) ||
+        relatedRequestIds.includes(task.requestId) || relatedClientIds.includes(task.clientId) ||
+        relatedBoxIds.includes(task.boxId ?? '') || relatedBoxIds.includes(task.reservedBoxId ?? '');
+    });
+    const historyWindow = fbsAttemptPageWindow(page, pageSize, historicalPackedRows.length);
+    let [total, rows] = await Promise.all([
       this.prisma.fbsTsdAssembly.count({ where }),
       this.prisma.fbsTsdAssembly.findMany({
         where,
-        orderBy: [{ completedAt: 'desc' }, { updatedAt: 'desc' }],
-        skip: (page - 1) * pageSize,
-        take: pageSize,
+        orderBy: [{ completedAt: 'desc' }, { updatedAt: 'desc' }, ...(hasFbsAttemptHistory() ? [{ id: 'desc' as const }] : [])],
+        skip: historyWindow.skip,
+        take: historyWindow.take,
         select: {
           id: true,
           clientId: true,
@@ -2740,6 +2755,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }),
     ]);
 
+    if (historicalPackedRows.length) {
+      total += historicalPackedRows.length;
+      rows = mergeFbsAttemptPage(rows, historicalPackedRows, historyWindow.offset, pageSize);
+    }
     const clientIds = uniqueStrings(rows.map((row) => row.clientId));
     const skuIds = uniqueStrings(rows.flatMap((row) => [row.skuId, row.sourceSkuId ?? '']));
     const requestIds = uniqueStrings(rows.map((row) => row.requestId));
@@ -4105,7 +4124,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     });
     if (!request) throw new NotFoundException('FBS-заявка не найдена.');
     this.clientScopes.requireClientAccess(user, request.clientId, 'read');
-    if (request.type !== ClientRequestType.OUTBOUND || request._count.fbsOrderLinks === 0) {
+    const priorRouteAttempts = await readFbsAttemptHistory(this.prisma, { requestId });
+    if (request.type !== ClientRequestType.OUTBOUND || request._count.fbsOrderLinks + priorRouteAttempts.length === 0) {
       throw new BadRequestException('Маршрут доступен только для FBS-заявки.');
     }
     const tasks = await this.prisma.fbsTsdAssembly.findMany({
@@ -4118,6 +4138,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       },
       orderBy: [{ status: 'asc' }, { orderId: 'asc' }],
     });
+    tasks.push(...priorRouteAttempts.map(row => row.task));
     const boxIds = uniqueStrings(tasks.flatMap((task) => [task.boxId ?? '', task.reservedBoxId ?? '']));
     const boxes = boxIds.length > 0
       ? await this.prisma.box.findMany({
@@ -12969,6 +12990,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (assembly) return { source: 'ASSEMBLY' as const, ...assembly };
     if (shipped) return { source: 'SHIPMENT' as const, ...shipped };
     if (printed) return { source: 'PRINT' as const, ...printed };
+    if (hasFbsAttemptHistory()) {
+      const historical = await this.prisma.fbsAssemblyAttemptHistory.findFirst({
+        where: { clientId, kiz: { equals: kiz, mode: 'insensitive' } },
+      });
+      if (historical) return { source: 'ASSEMBLY' as const, orderId: historical.orderId,
+        requestId: historical.requestId, completedAt: historical.completedAt };
+    }
     return null;
   }
 
@@ -15816,6 +15844,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             where: {
               requestId: { in: taskRequestIds },
               lastCategory: { in: ['shipped', 'archive'] },
+              // FIX: a deliberately reopened physical queue still reserves stock.
+              ...(hasFbsAttemptHistory() ? { request: { fbsEmergencyAssemblyAt: null } } : {}),
               lastSupplierStatus: 'complete',
             },
             select: { connectionId: true, orderId: true },
@@ -16008,6 +16038,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             where: {
               requestId: { in: taskRequestIds },
               lastCategory: { in: ['shipped', 'archive'] },
+              // FIX: WB complete does not invalidate a new emergency reservation.
+              ...(hasFbsAttemptHistory() ? { request: { fbsEmergencyAssemblyAt: null } } : {}),
               lastSupplierStatus: 'complete',
             },
             select: { connectionId: true, orderId: true },
@@ -16389,7 +16421,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const task = candidates[0];
     if (!task.kiz) throw new BadRequestException('У найденного заказа КИЗ не сохранён.');
     const existing = await this.prisma.fbsWebKizStickerPrint.findFirst({
-      where: { OR: [{ kiz: task.kiz }, { orderId: task.orderId }] },
+      where: { OR: [{ kiz: task.kiz }, {
+        orderId: task.orderId,
+        // FIX: a deliberately created repeat may print once for its new attempt.
+        ...(hasFbsAttemptHistory() &&
+          await this.prisma.fbsAssemblyAttemptHistory.findUnique({ where: { successorId: task.id } })
+          ? { assemblyId: task.id } : {}),
+      }] },
     });
     if (existing) {
       throw new ConflictException(`Повторная печать запрещена. Заказ №${task.orderId} уже напечатан ${existing.printedAt.toLocaleString('ru-RU')} пользователем ${existing.printedBy}.`);
@@ -16484,6 +16522,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
     const rows = await this.prisma.fbsWebKizStickerPrint.findMany({ where: { clientId: clientFilter }, orderBy: { printedAt: 'desc' }, take: 300 });
     const tasks = await this.prisma.fbsTsdAssembly.findMany({ where: { id: { in: rows.map((row) => row.assemblyId) } }, select: { id: true, skuId: true, requestId: true, supplyId: true, productName: true, article: true } });
+    await appendFbsAttemptHistory(this.prisma, tasks, { id: { in: rows.map(row => row.assemblyId) } });
     const skus = await this.prisma.sku.findMany({ where: { id: { in: uniqueStrings(tasks.map((task) => task.skuId)) } }, select: { id: true, name: true, article: true, size: true, color: true } });
     const requests = await this.prisma.clientRequest.findMany({ where: { id: { in: uniqueStrings(tasks.map((task) => task.requestId)) } }, select: { id: true, number: true } });
     const skuById = new Map(skus.map((sku) => [sku.id, sku]));
@@ -16503,7 +16542,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       allowedClientIds = uniqueStrings(branchClients.map((item) => item.clientId));
     }
     if (user.clientScopeMode === 'LIMITED' && !allowedClientIds.includes(record.clientId)) throw new ForbiddenException('Нет доступа к клиенту этой этикетки.');
-    const task = await this.prisma.fbsTsdAssembly.findUnique({ where: { id: record.assemblyId } });
+    const task = await this.prisma.fbsTsdAssembly.findUnique({ where: { id: record.assemblyId } }) ??
+      (await readFbsAttemptHistory(this.prisma, { id: record.assemblyId }))[0]?.task;
     if (!task) throw new NotFoundException('Заказ для повторной печати не найден.');
     const sticker = await this.loadFbsTsdOrderSticker(task);
     if (!sticker?.imageBase64) throw new BadRequestException(`Этикетка WB для заказа №${task.orderId} временно недоступна.`);
@@ -16666,6 +16706,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       orderBy: { completedAt: 'desc' },
       take: 50,
     });
+    if (hasFbsAttemptHistory()) {
+      const history = await this.prisma.fbsAssemblyAttemptHistory.findMany({
+        where: { clientId: clientFilter, taskSnapshot: { path: ['deviceCode'], equals: deviceCode } },
+        orderBy: { completedAt: 'desc' }, take: 50,
+      });
+      rows.push(...history.map(row => restoreAttemptSnapshot(row.taskSnapshot)).filter(task => task.stickerPartB || task.stickerBarcode));
+      rows.sort((a, b) => (b.completedAt?.getTime() ?? 0) - (a.completedAt?.getTime() ?? 0));
+      rows.splice(50);
+    }
     const skuIds = uniqueStrings(rows.map((row) => row.skuId));
     const skus = skuIds.length > 0
       ? await this.prisma.sku.findMany({
@@ -16701,7 +16750,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const clientFilter = this.clientScopes.resolveClientFilter(user);
-    return this.prisma.fbsTsdAssembly.count({
+    const currentCount = await this.prisma.fbsTsdAssembly.count({
       where: {
         deviceCode,
         status: 'COMPLETED',
@@ -16709,6 +16758,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         clientId: clientFilter,
       },
     });
+    const previousCount = hasFbsAttemptHistory() ? await this.prisma.fbsAssemblyAttemptHistory.count({
+      where: { clientId: clientFilter, completedAt: { gte: today }, taskSnapshot: { path: ['deviceCode'], equals: deviceCode } },
+    }) : 0;
+    return currentCount + previousCount;
   }
 
   async assembleFbsOrders(dto: FbsOrderSelectionDto, user: AuthUser) {
@@ -21022,6 +21075,39 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     });
   }
 
+  // FIX: targeted read uses the existing WB limiter, not the global refresh
+  // that can reconcile unrelated requests/stock as a side effect.
+  async readRepeatAssemblyWbStatuses(clientId: string, connectionId: string, orderIds: string[], user: AuthUser) {
+    requireFbsEmergencyAssemblyAccess(user);
+    this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const connection = await this.prisma.clientMarketplaceConnection.findFirst({
+      where: { id: connectionId, clientId, marketplace: MarketplaceType.WILDBERRIES, isActive: true },
+    });
+    if (!connection) throw new BadRequestException('Действующее подключение WB не найдено.');
+    const result = new Map<string, { supplierStatus: string; wbStatus: string }>();
+    for (const ids of chunks(orderIds, 1000)) {
+      const numericIds = ids.map(id => Number(id));
+      if (numericIds.some(id => !Number.isSafeInteger(id) || id <= 0)) throw new BadRequestException('Некорректный номер заказа WB.');
+      const response = await marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/orders/status', {
+        method: 'POST', headers: { Authorization: connection.apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orders: numericIds }),
+      });
+      for (const status of asArray<Record<string, unknown>>(response.orders)) {
+        result.set(textValue(status.id), { supplierStatus: textValue(status.supplierStatus), wbStatus: textValue(status.wbStatus) });
+      }
+    }
+    return result;
+  }
+
+  async repeatAssemblyStockReservations(clientId: string, skuIds: string[], db: Prisma.TransactionClient) {
+    return this.fbsTsdReservationRowsBySku({ clientId, skuIds, excludeTaskId: null }, db);
+  }
+
+  invalidateRepeatAssemblyCache(clientId: string) {
+    this.fbsOrdersCache.delete(clientId);
+    this.fbsTsdRequestFallbackCache.delete(clientId);
+  }
+
   // FIX: forms a local-only request from the exact unfinished orders found by
   // the branch audit. WB statuses and metadata are deliberately never mutated.
   async createFbsDeliveryRecoveryRequest(
@@ -22946,7 +23032,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         return { changed: false, summary: 'заявка уже закрыта' };
       }
 
-      if (FBS_REQUEST_COMPOSITION_STATUSES.has(requestHeader.status)) {
+      const repeatRun = hasFbsAttemptHistory()
+        ? await tx.fbsRepeatAssemblyRun.findUnique({ where: { requestId } })
+        : null;
+      // FIX: a repeat is an explicitly selected physical batch, not a mirror
+      // of every order that later appears in one of its original WB supplies.
+      if (!repeatRun && FBS_REQUEST_COMPOSITION_STATUSES.has(requestHeader.status)) {
         for (const order of additions) {
           const existing = await tx.fbsOrderRequestLink.findUnique({
             where: {
@@ -23211,6 +23302,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         });
       }
 
+      // FIX: WB synchronization must not subtract the first physical attempt
+      // from its original request after the current link moved to a repeat.
+      for (const previous of await readFbsAttemptHistory(tx, { requestId })) {
+        addFbsDesiredItem(desiredItems, desiredSkuByOrder, {
+          orderId: previous.task.orderId, skuId: previous.task.skuId,
+          barcode: jsonStringArray(previous.task.barcodes)[0] ?? previous.task.barcode,
+          name: previous.task.productName, quantity: previous.task.itemCount,
+        });
+      }
       const itemChanges: string[] = [];
       if (!compositionLocked) {
         const itemBySku = new Map(
@@ -23336,8 +23436,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const effectiveOrderIds = uniqueStrings(
         [...desiredItems.values()].flatMap((item) => item.orderIds),
       ).sort(naturalFbsIdCompare);
-      const nextTitle = `FBS — ${effectiveOrderIds.length} заказ(а/ов)`;
-      const nextComment = fbsRequestCompositionComment(
+      const nextTitle = repeatRun
+        ? `Повторная сборка WB — ${effectiveOrderIds.length} заказов`
+        : `FBS — ${effectiveOrderIds.length} заказ(а/ов)`;
+      const nextComment = repeatRun ? request.comment : fbsRequestCompositionComment(
         effectiveOrderIds,
         request.comment,
       );
