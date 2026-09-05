@@ -1238,7 +1238,7 @@ describe('MarketplaceConnectionsService', () => {
     );
 
     expect(clientScopes.requireClientAccess).toHaveBeenCalledWith(expect.anything(), 'client-1', 'read');
-    expect(putStocks).toHaveBeenCalledWith('secret', '1693195', [
+    expect(putStocks).toHaveBeenCalledWith('client-1', 'secret', '1693195', [
       { chrtId: 200600, amount: 0 },
     ]);
     expect(prisma.fbsStockPublication.upsert).toHaveBeenCalledWith(
@@ -1324,7 +1324,7 @@ describe('MarketplaceConnectionsService', () => {
       },
     );
 
-    expect(putStocks).toHaveBeenCalledWith('secret', '1693195', [
+    expect(putStocks).toHaveBeenCalledWith('client-1', 'secret', '1693195', [
       { chrtId: 200600, amount: 15 },
     ]);
     expect(result).toMatchObject({ updated: true, enabled: true, amount: 15 });
@@ -1395,7 +1395,7 @@ describe('MarketplaceConnectionsService', () => {
       },
     );
 
-    expect(putStocks).toHaveBeenCalledWith('secret', '1693195', [{ chrtId: 200600, amount: 15 }]);
+    expect(putStocks).toHaveBeenCalledWith('client-1', 'secret', '1693195', [{ chrtId: 200600, amount: 15 }]);
     expect(prisma.fbsStockPublication.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         create: expect.objectContaining({ saleLimit: 50 }),
@@ -1470,7 +1470,7 @@ describe('MarketplaceConnectionsService', () => {
     );
 
     expect(clientScopes.requireClientAccess).toHaveBeenCalledWith(expect.anything(), 'client-1', 'read');
-    expect(putStocks).toHaveBeenCalledWith('secret', '1693195', [
+    expect(putStocks).toHaveBeenCalledWith('client-1', 'secret', '1693195', [
       { chrtId: 200600, amount: 0 },
       { chrtId: 200601, amount: 0 },
     ]);
@@ -1545,7 +1545,7 @@ describe('MarketplaceConnectionsService', () => {
       },
     );
 
-    expect(putStocks).toHaveBeenCalledWith('secret', '1693195', [
+    expect(putStocks).toHaveBeenCalledWith('client-1', 'secret', '1693195', [
       { chrtId: 200600, amount: 3 },
       { chrtId: 200601, amount: 5 },
     ]);

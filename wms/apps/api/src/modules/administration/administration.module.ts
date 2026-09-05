@@ -8,10 +8,11 @@ import { AdministrationTechnicalWorkService } from './administration-technical-w
 import { AdministrationInternalApiService } from './administration-internal-api.service';
 import { AdministrationUnpalletedWriteoffService } from './administration-unpalleted-writeoff.service';
 import { InventoryModule } from '../inventory/inventory.module';
+import { AdministrationMarketplaceStockControlController } from './administration-marketplace-stock-control.controller';
 
 @Module({
   imports: [MarketplaceConnectionsModule, StockModule, InventoryModule],
-  controllers: [AdministrationController],
+  controllers: [AdministrationController, AdministrationMarketplaceStockControlController],
   // ADDED: Internal API diagnostics are isolated from existing technical-work repair logic.
   providers: [
     AdministrationService,

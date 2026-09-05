@@ -7175,6 +7175,26 @@ export async function fetchAdministrationOverview(accessToken: string) {
   return request<AdministrationOverview>('/administration/overview', { accessToken });
 }
 
+// FIX: client-wide control affects only outbound marketplace stock quantities.
+export type MarketplaceStockControlRow = {
+  id: string;
+  code: string;
+  name: string;
+  enabled: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
+};
+
+export function fetchMarketplaceStockControl(accessToken: string) {
+  return request<MarketplaceStockControlRow[]>('/administration/marketplace-stock-control', { accessToken });
+}
+
+export function updateMarketplaceStockControl(accessToken: string, row: MarketplaceStockControlRow, enabled: boolean) {
+  return request<MarketplaceStockControlRow>(`/administration/marketplace-stock-control/${encodeURIComponent(row.id)}`, {
+    accessToken, method: 'PUT', body: { enabled, expectedEnabled: row.enabled },
+  });
+}
+
 // ADDED: Technical-work diagnostics expose only server-whitelisted repairs.
 export async function fetchAdministrationTechnicalWork(accessToken: string) {
   return request<AdministrationTechnicalWorkOverview>('/administration/technical-work', { accessToken });
