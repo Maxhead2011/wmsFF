@@ -1,3 +1,4 @@
+import { FbsRepeatAssemblyPanel } from './FbsRepeatAssemblyPanel';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -2069,6 +2070,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
           <FbsOrdersView
             data={data}
             session={session}
+            onOpenRequest={onOpenRequest}
             view={activeView}
             search={search}
             selectedOrderKeys={selectedOrderKeys}
@@ -5329,6 +5331,7 @@ function FbsCargoPackingView({
 function FbsOrdersView({
   data,
   session,
+  onOpenRequest,
   search,
   view,
   selectedOrderKeys,
@@ -5360,6 +5363,7 @@ function FbsOrdersView({
 }: {
   data: ClientFbsOrders | null;
   session: AuthSession;
+  onOpenRequest?: (requestId: string) => void;
   search: string;
   // FIX: the allocation tile is not an orders-table view.
   view: Exclude<FbsView, 'deadlines' | 'stocks' | 'cargo' | 'cost' | 'calculator' | 'pricing' | 'passes' | 'report' | 'allocation' | 'penalties'>;
@@ -5674,6 +5678,8 @@ function FbsOrdersView({
 
   return (
     <>
+      {view === 'shipped' && data && <FbsRepeatAssemblyPanel session={session} onOpenRequest={onOpenRequest}
+        selection={{ clientId: data.client.id, orders: selectedOrders.map(order => ({ id: order.id, connectionId: order.connectionId })) }} />}
       <section className="fbs-warehouse-board" aria-label="Представление заказов FBS">
         <header className="fbs-warehouse-board__header">
           <div>

@@ -1,0 +1,95 @@
+{
+  "baseImage": "sha256:cd5117c4395cbf31a2c3c360deb4c21d660df8478afa08bbd45404d1f6fe8259",
+  "files": [
+    {
+      "path": "prisma/schema.prisma",
+      "beforeHash": "14BD49C77763709D647D4B20E9FBE0D232E8E32851C66249F36A464248823B13",
+      "afterHash": "A737D498218FFB0FEDBC89D2056F703B8CB90B7FFB0C6F34FF7B4FBDBB3A6A3A"
+    },
+    {
+      "path": "src/common/shipment-history/shipped-kiz-history.ts",
+      "beforeHash": "4F4A4C56971C8083504006C954B8B3AF62200F3222F1135FB40E0ECE5F99507C",
+      "afterHash": "D2174F044B7B4FBAAD7BB2002EA4DBB4C95D902422F7E708A9CB02C85FC0BE7F"
+    },
+    {
+      "path": "src/modules/administration/administration-internal-api.service.ts",
+      "beforeHash": "F09F370155260E72137C74742FBACF253B5A2B755E052CF621AFDE626FD62E1E",
+      "afterHash": "6EB5DAD2CD02DF59E4F9C19C22B1F4DDFED6DF36CF5956C7A9E1D61BA0E44113"
+    },
+    {
+      "path": "src/modules/administration/administration.service.ts",
+      "beforeHash": "64A8CD8D9847990E8E752534E557DE50ECBDB787701BBD6A343D19F26992DAC0",
+      "afterHash": "2862061895CD0B4674C538CDDB8C65E8829F2F6AA09ABB7B34FBA930DCE67D1E"
+    },
+    {
+      "path": "src/modules/client-requests/client-requests.service.ts",
+      "beforeHash": "BCB2F147327E64CD284CDE96CF2633A56707610C7FB600D8AE4D4397ED667A40",
+      "afterHash": "1887796CD4914DE9DAC6A5419C4CDBB8E4CCEBB0172E871F3CB8D11C2EA8172F"
+    },
+    {
+      "path": "src/modules/expenses/expenses.service.ts",
+      "beforeHash": "09BE8BBBFF1773668F70A7D62A4742D0B5C23031E2508C552CD6C309B3C988AC",
+      "afterHash": "4098C59198760305006A8A2F86E938ABEE138497B63898C7CDA8C105A3493939"
+    },
+    {
+      "path": "src/modules/marketplace-connections/marketplace-connections.module.ts",
+      "beforeHash": "D1AF5B441D238559C27387F1AA2A52CDFC7F02EAD4A430E4C8705E0804BDC199",
+      "afterHash": "971913F57641DDAFEE3D02EED14EAECBA5BF278E69F0CBFACADD93EA9CF72F05"
+    },
+    {
+      "path": "src/modules/marketplace-connections/marketplace-connections.service.ts",
+      "beforeHash": "62E61BBA16F50388D7E4B03E6D5E9DEE7B96C11FC18196A9083AC3326E8F3766",
+      "afterHash": "A5B503D0B7D2A35D1FBCC20EBC57FD26F6AC26333078CE9E49397569568A15D2"
+    },
+    {
+      "path": "src/modules/stock/stock-operations.service.ts",
+      "beforeHash": "5B46E9F0E45D2F3404A2BD312CF379F574655DD8F12AAB68C0DA15AF2CD24F05",
+      "afterHash": "5401EDE347037F00F856ED46321A4C7C093EF43E731823A930D550DF0599567A"
+    },
+    {
+      "path": "src/modules/tsd/tsd-assembly.service.ts",
+      "beforeHash": "F6103EF94E2F401EF64A839AE693DC52DA1B915C40C06FCB9A517CD3456689CF",
+      "afterHash": "45C84BDBA98BA8D7F9DA01853840B5CCBED7F5B6C82D7D40E04125527D447B34"
+    },
+    {
+      "path": "prisma/migrations/20260905121000_fbs_repeat_attempt_history/migration.sql",
+      "beforeHash": null,
+      "afterHash": "5B71CD79BD9F951F9B81AA2DCA5241065D80598BDFC24145CE89606A597934C3"
+    },
+    {
+      "path": "src/common/shipment-history/fbs-attempt-history.ts",
+      "beforeHash": null,
+      "afterHash": "C25DC87CCCB4997EB8EA37625B48C8416B08670A068B5FE8C04E021BBCE0E23A"
+    },
+    {
+      "path": "src/common/shipment-history/fbs-attempt-page.ts",
+      "beforeHash": null,
+      "afterHash": "602BA5570C4E66BBA92D2EF5172D768752BD5B908EF36505A718C10786FAE655"
+    },
+    {
+      "path": "src/modules/marketplace-connections/dto/fbs-repeat-assembly.dto.ts",
+      "beforeHash": null,
+      "afterHash": "6AEB51B2DB147EC116F6CD505F2BFC142A7E65CB1627BBA6B0D37535DC32529E"
+    },
+    {
+      "path": "src/modules/marketplace-connections/fbs-repeat-assembly.controller.ts",
+      "beforeHash": null,
+      "afterHash": "AC48E17500D0E630EDC03328A46D248470747B32269631E903D3748953BF4C48"
+    },
+    {
+      "path": "src/modules/marketplace-connections/fbs-repeat-assembly.service.ts",
+      "beforeHash": null,
+      "afterHash": "CDE8348D4C691E2EEF0BBC34DDBC8919041AB08311092612E3D91F0F2C7296C5"
+    },
+    {
+      "path": "src/modules/marketplace-connections/fbs-repeat-assembly.ts",
+      "beforeHash": null,
+      "afterHash": "4C9506BCB2AEF9F0BFAC18B638099D97CFD89146C6701D377D34BD4123A3707A"
+    },
+    {
+      "path": "src/modules/marketplace-connections/fbs-repeat-stock-plan.ts",
+      "beforeHash": null,
+      "afterHash": "7ACF88169BB4675B40DB9D712AE8E204019DC6C9AE61F967D93EFE7D8B5DA3E1"
+    }
+  ]
+}
