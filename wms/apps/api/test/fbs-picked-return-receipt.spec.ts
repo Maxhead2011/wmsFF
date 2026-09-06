@@ -211,9 +211,10 @@ describe('physically picked cancellation requires re-receipt', () => {
     await expect(f.apply()).rejects.toThrow('audit unavailable');
     expect(f.quantities()).toEqual([1, 0]); expect(f.mark.boxId).toBe(null);
   });
-  it('keeps sold-installation legacy behavior with the flag disabled', async () => {
+  // TEST: disabling new receipts preserves each installation's pre-existing return placement.
+  it('preserves installation baseline with the flag disabled', async () => {
     const f = fixture(); vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', 'false');
     await f.apply({ action: 'RETURN_TO_STOCK' });
-    expect(f.tx.stockBalance.upsert.mock.calls[0][0].create.boxId).toBe('source');
+    expect(f.tx.stockBalance.upsert.mock.calls[0][0].create.boxId).toBe(process.env.WMS_TEST_OUR_LIVE_BASELINE === 'true' ? null : 'source');
   });
 });

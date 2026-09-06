@@ -1,6 +1,8 @@
 import { MarketplaceType, StockStatus } from '@prisma/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MarketplaceConnectionsService } from '../src/modules/marketplace-connections/marketplace-connections.service';
+// TEST: live deployment preserves existing boxless behavior even if its new feature is disabled.
+const ourLiveBaseline = process.env.WMS_TEST_OUR_LIVE_BASELINE === 'true';
 
 const task = {
   id: 'task-current',
@@ -82,13 +84,13 @@ describe('FBS stock reservation ProductMark synchronization', () => {
       },
       data: {
         status: StockStatus.PACKING,
-        boxId: enabled ? null : 'box-live',
+        boxId: enabled || ourLiveBaseline ? null : 'box-live',
       },
     });
     expect(task.boxId).toBe('box-live');
     // TEST: physically picked stock is no longer stored inside its source location.
     expect(tx.stockBalance.upsert).toHaveBeenCalledWith(expect.objectContaining({
-      create: expect.objectContaining({ boxId: enabled ? null : 'box-live', palletId: enabled ? null : 'pallet-1' }),
+      create: expect.objectContaining({ boxId: enabled || ourLiveBaseline ? null : 'box-live', palletId: enabled || ourLiveBaseline ? null : 'pallet-1' }),
     }));
   });
 
@@ -134,7 +136,7 @@ describe('FBS stock reservation ProductMark synchronization', () => {
       },
       data: {
         status: StockStatus.AVAILABLE,
-        boxId: enabled ? null : 'box-live',
+        boxId: enabled || ourLiveBaseline ? null : 'box-live',
       },
     });
   });
