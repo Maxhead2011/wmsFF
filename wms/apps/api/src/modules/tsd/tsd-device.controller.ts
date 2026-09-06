@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, Res, StreamableFile, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, Res, ServiceUnavailableException, StreamableFile, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
@@ -196,6 +196,37 @@ export class TsdDeviceController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.stockOperations.executeTsdTransfer(body, user);
+  }
+
+  // ADDED: explicit preview/confirm; stock permission plus employee/branch checks in the service.
+  @Post('transfers/kiz-recount/preview')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  async previewKizRecount(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {
+    const result = await this.stockOperations.previewTsdKizRecount(body, user);
+    if (result.state !== 'ADMIN_REVIEW_REQUIRED') return result;
+    return this.marketplace.adminTsdKizRecount(body, user, false,
+      tx => this.stockOperations.loadAdminKizRecountInput(body, user, tx),
+      (tx, ids) => this.stockOperations.applyAdminKizRecount(tx, body, user, ids));
+  }
+
+  @Post('transfers/kiz-recount/confirm')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  async confirmKizRecount(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {
+    if (body.adminRelease === true) return this.marketplace.adminTsdKizRecount(body, user, true,
+      tx => this.stockOperations.loadAdminKizRecountInput(body, user, tx),
+      (tx, ids) => this.stockOperations.applyAdminKizRecount(tx, body, user, ids));
+    const result = await this.stockOperations.confirmTsdKizRecount(body, user);
+    if (result.state === 'RECOUNT_APPLIED' && 'affectedRequestIds' in result) {
+      try {
+        for (const requestId of result.affectedRequestIds ?? []) await this.marketplace.repairFbsRequestSelection(requestId, user);
+      } catch {
+        // FIX: retain the same confirmation on the TSD; the count was committed, only routes need retry.
+        throw new ServiceUnavailableException('Сверка сохранена, но маршруты пока не обновлены. Повторите подтверждение: остатки второй раз не изменятся.');
+      }
+    }
+    return result;
   }
 
   @Post('transfers/execute-batch')

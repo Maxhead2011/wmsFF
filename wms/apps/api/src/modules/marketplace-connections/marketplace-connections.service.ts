@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto';
+import { loadAdminRecountContext, requireAdminRecount, runAdminRecount, type AdminRecountContext } from './tsd-admin-recount-release';
+import { physicalStockRecoveryEnabled } from '../stock/tsd-physical-stock-reconciliation';
+import { recountHash } from '../stock/tsd-transfer-kiz-recount';
 import { fbsTerminalQueueFilterEnabled, isFbsTerminalQueueOrder } from '../../common/fbs-terminal-queue';
 import { appendFbsAttemptHistory, readFbsAttemptHistory, hasFbsAttemptHistory, restoreAttemptSnapshot } from '../../common/shipment-history/fbs-attempt-history';
 import { fbsAttemptPageWindow, mergeFbsAttemptPage } from '../../common/shipment-history/fbs-attempt-page';
@@ -11759,6 +11762,93 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       virtualSourceBox: task.reservedBoxCode ?? FBS_TSD_NO_BOX_CODE,
       message: 'КОСТЮМ НУЖЕН. Теперь отсканируйте КИЗ.',
     };
+  }
+
+  // ADDED: admin-only physical recount. The ordinary reset below is deliberately unchanged.
+  async adminTsdKizRecount(payload: Record<string, unknown>, user: AuthUser, confirm: boolean,
+    loadInput: (tx: Prisma.TransactionClient) => Parameters<typeof loadAdminRecountContext>[1] | Promise<Parameters<typeof loadAdminRecountContext>[1]>,
+    applyCount: (tx: Prisma.TransactionClient, releasedIds: string[]) => Promise<unknown>) {
+    requireAdminRecount(user, physicalStockRecoveryEnabled());
+    await this.inventoryLock?.assertStockMovementsAllowed();
+    const input = await loadInput(this.prisma); // Current client/branch rights, also on every replay.
+    const key = textValue(payload.idempotencyKey);
+    if (!key || key.length > 200) throw new BadRequestException('Отсутствует номер физической сверки.');
+    const load = async (tx: Prisma.TransactionClient) => loadAdminRecountContext(tx, await loadInput(tx));
+    if (!confirm) {
+      const context = await load(this.prisma);
+      return { state: 'RECOUNT_READY', adminRelease: true, adminConfirmationRequired: true, snapshot: context.snapshot,
+        message: `Решение администратора: физически ${input.scans.length} шт. в ${input.source.code}. Снять привязку и пересобрать маршруты заказов: ` +
+          context.tasks.map(task => `№${task.orderId} (заявка ${task.requestId})`).join(', ') + '. Заказы WB не отменяются; наклейки этих сборок больше не использовать.' };
+    }
+    if (payload.adminConfirmed !== true || typeof payload.snapshot !== 'string' || !/^[a-f0-9]{64}$/.test(payload.snapshot)) throw new BadRequestException('Подтвердите решение администратора после предварительной проверки.');
+    const id = `tsd-admin-recount:${recountHash([user.id, user.deviceCode ?? null, key])}`;
+    const fingerprint = recountHash([user.id, user.deviceCode ?? null, user.activeWarehouseId, input.source.id, input.skuId,
+      input.scans.map(scan => scan.key), payload.snapshot, true]);
+    return runAdminRecount({ db: this.prisma, user, id, fingerprint, snapshot: payload.snapshot, load, abort: payload.adminAbort === true,
+      releaseWb: async context => {
+        if (context.source.id !== input.source.id || context.source.warehouseId !== input.source.warehouseId || context.skuId !== input.skuId) throw new BadRequestException('Изменился источник сверки.');
+        for (const task of context.tasks) {
+          const fresh = await this.prisma.fbsTsdAssembly.findUnique({ where: { id: task.id } });
+          if (fresh?.status !== 'ADMIN_RECOUNT_PENDING' || fresh.kiz !== task.kiz) throw new ConflictException('Сборка изменилась; освобождение КИЗа остановлено.');
+          const connection = await this.prisma.clientMarketplaceConnection.findFirst({ where: {
+            id: task.connectionId, clientId: task.clientId, marketplace: MarketplaceType.WILDBERRIES, isActive: true }, select: { apiKey: true } });
+          if (!connection) throw new BadRequestException('Подключение WB недоступно. Повторите подтверждение на ТСД после восстановления связи.');
+          const remote = await this.loadWildberriesFbsKizPreflight(connection.apiKey, task.orderId, task.kiz ?? '');
+          if (remote.supplierStatus !== 'confirm' || remote.wbStatus !== 'waiting') throw new BadRequestException(`WB №${task.orderId}: ${remote.supplierStatus}/${remote.wbStatus}. Автоматический возврат отгруженного или отменённого заказа не выполнен.`);
+          if (remote.remoteKizValues.length && (!remote.alreadyAttached || remote.remoteKizValues.length !== 1)) throw new BadRequestException(`WB №${task.orderId}: в заказе другой КИЗ. Его не изменяли.`);
+          if (remote.alreadyAttached) await marketplaceJson(`https://marketplace-api.wildberries.ru/api/v3/orders/${numericWbOrderId(task.orderId)}/meta?key=sgtin`, {
+            method: 'DELETE', headers: wbHeaders(connection.apiKey), signal: AbortSignal.timeout(FBS_TSD_WB_READ_TIMEOUT_MS) });
+        }
+      },
+      apply: async (tx, context) => {
+        await this.applyAdminRecountRelease(tx, context, user);
+        return applyCount(tx, context.tasks.map(task => task.id));
+      },
+      repair: async requestId => { await this.repairFbsRequestSelection(requestId, user); },
+    });
+  }
+
+  private async applyAdminRecountRelease(tx: Prisma.TransactionClient, context: AdminRecountContext, user: AuthUser) {
+    // FIX: a prepared physical count cannot overwrite intervening movements while WB was unavailable.
+    const marks = await tx.productMark.findMany({ where: { OR: [{ id: { in: context.marks.map(mark => mark.id) } },
+      { boxId: context.source.id, skuId: context.skuId }] }, orderBy: { id: 'asc' } });
+    const balances = await tx.stockBalance.findMany({ where: { boxId: context.source.id, skuId: context.skuId }, orderBy: { id: 'asc' } });
+    if (recountHash(marks) !== recountHash(context.marks) || recountHash(balances) !== recountHash(context.balances)) {
+      throw new ConflictException('Изменился состав короба после подтверждения. Старый пересчёт не применён; остатки не увеличены.');
+    }
+    for (const original of context.tasks) {
+      const task = await tx.fbsTsdAssembly.findUnique({ where: { id: original.id } });
+      if (!task || task.status !== 'ADMIN_RECOUNT_PENDING' || task.clientId !== context.source.clientId || task.skuId !== context.skuId ||
+          task.kiz !== original.kiz || task.boxId !== original.boxId || task.completedAt || task.cargoPackingId) throw new ConflictException('Сборка изменилась. Остатки не изменены.');
+      const mark = task.kiz ? await tx.productMark.findFirst({ where: { clientId: task.clientId, value: task.kiz } }) : null;
+      const movements = await tx.stockMovement.findMany({ where: { idempotencyKey: { startsWith: `fbs-sticker-pick:${task.id}:` },
+        OR: [{ status: StockStatus.PACKING }, { type: MovementType.RETURN, status: StockStatus.SHIPPING, quantity: { lt: 0 } }] } });
+      const picked = movements.reduce((sum, row) => sum + row.quantity, 0);
+      if (picked > 0) {
+        if (!mark || mark.status !== 'PACKING' || picked !== 1) throw new BadRequestException('КИЗ не совпадает с учётом отобранной единицы. Возврат не выполнен.');
+        await this.returnCompletedWildberriesStockReservation(tx, task, { boxId: context.source.id, boxCode: context.source.code,
+          warehouseId: context.source.warehouseId, palletId: context.source.palletId, mark });
+      } else if (picked < 0 || mark && (mark.status !== 'AVAILABLE' || mark.boxId !== context.source.id)) {
+        throw new BadRequestException('Остаток и статус КИЗа не согласованы с историей отбора. Возврат не выполнен.');
+      }
+      const selection = await tx.clientRequestBoxSelection.findUnique({ where: { requestItemId_boxId: {
+        requestItemId: task.requestItemId, boxId: context.source.id } } });
+      if (selection) {
+        if (selection.skuId !== context.skuId || selection.quantity < 1) throw new BadRequestException('Резерв заявки изменился.');
+        if (selection.quantity === 1) await tx.clientRequestBoxSelection.delete({ where: { id: selection.id } });
+        else await tx.clientRequestBoxSelection.update({ where: { id: selection.id }, data: { quantity: { decrement: 1 } } });
+      }
+      await tx.fbsPrintJob.updateMany({ where: { assemblyId: task.id, status: { in: ['QUEUED', 'CLAIMED', 'FAILED'] } }, data: { status: 'CANCELLED' } });
+      await tx.fbsTsdAssembly.update({ where: { id: task.id }, data: {
+        status: FBS_TSD_WAITING_STOCK_STATUS, deviceCode: FBS_TSD_AUTO_RESERVATION_DEVICE, workerUserId: null, workerName: null,
+        reservedBoxId: null, reservedBoxCode: null, reservedAt: null, boxId: null, boxCode: null, sourceBoxPending: false,
+        sourceBarcode: null, barcode: null, relabelConfirmedAt: null, kiz: null, wbMetaStatus: task.requiresKiz ? 'PENDING' : 'NOT_REQUIRED',
+        stickerPartA: null, stickerPartB: null, stickerBarcode: null, errorMessage: 'Администратор подтвердил физическое наличие; нужен повторный подбор.' } });
+      await tx.clientRequestEvent.create({ data: { requestId: task.requestId, clientId: task.clientId,
+        eventType: ClientRequestEventType.COMMENT, title: 'Физическая сверка администратором на ТСД',
+        body: `Заказ WB №${task.orderId}: привязка снята, товар принят в ${context.source.code}. Маршрут будет перестроен. Старый стикер не использовать.`, createdByUserId: user.id } });
+      this.fbsOrdersCache.delete(task.clientId); this.fbsTsdRequestFallbackCache.delete(task.clientId);
+    }
   }
 
   /**

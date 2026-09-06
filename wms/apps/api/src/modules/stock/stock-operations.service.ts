@@ -34,6 +34,7 @@ import { TransferBetweenBoxesDto } from './dto/transfer-between-boxes.dto';
 import { TransferWholeBoxDto } from './dto/transfer-whole-box.dto';
 import { StockBalancesService } from './stock-balances.service';
 import { physicalStockRecoveryEnabled, readPhysicalStockRecovery, type PhysicalStockRecovery } from './tsd-physical-stock-reconciliation';
+import { KizRecountReviewRequired, parseRecountScans, planKizRecount, recountHash, requireRecountSnapshot } from './tsd-transfer-kiz-recount';
 import { cancelledBoxTaskTransferEnabled, prepareCancelledBoxTaskTransfer, validateCancelledBoxTaskTransfer,
   type CancelledBoxTaskProof } from './cancelled-box-task-transfer';
 import { cancelledWbTransferEnabled, prepareCancelledWbTransfer, validateCancelledWbTransfer,
@@ -289,7 +290,134 @@ export class StockOperationsService {
       user,
       physicalStockRecoveryEnabled() && !user.roleCodes.includes('CLIENT'),
     );
-    return this.formatTsdTransferSource(sourceBox);
+    return { ...this.formatTsdTransferSource(sourceBox), kizRecountEnabled: physicalStockRecoveryEnabled() && !user.roleCodes.includes('CLIENT') };
+  }
+
+  // ADDED: explicit full-SKU recount, isolated from normal FBS and movement paths.
+  async previewTsdKizRecount(payload: Record<string, unknown>, user: AuthUser) {
+    return this.runTsdKizRecount(payload, user, false);
+  }
+
+  async confirmTsdKizRecount(payload: Record<string, unknown>, user: AuthUser) {
+    return this.runTsdKizRecount(payload, user, true);
+  }
+
+  // ADDED: internal orchestration only; client input cannot supply released assembly IDs.
+  async loadAdminKizRecountInput(payload: Record<string, unknown>, user: AuthUser, tx: Prisma.TransactionClient = this.prisma) {
+    if (!physicalStockRecoveryEnabled() || !canAutoApproveStockChecks(user) || user.isDemo || user.roleCodes.includes('CLIENT')) throw new ForbiddenException('Требуются права администратора WMS.');
+    const source = await this.loadTsdTransferSourceBox(tx, requiredTsdTransferText(payload.fromBoxCode, 'Сканируйте короб.'), user, true);
+    const barcode = requiredTsdTransferText(payload.barcode, 'Сканируйте ШК.');
+    const sku = await tx.sku.findFirst({ where: { clientId: source.clientId, barcodes: { some: { value: barcode } } } });
+    if (!sku?.needsChestnyZnak || sku.isUnmarked) throw new BadRequestException('Не найден маркированный товар клиента.');
+    return { source, skuId: sku.id, scans: parseRecountScans(payload, storageBoxTransferKizIdentity) };
+  }
+
+  async applyAdminKizRecount(tx: Prisma.TransactionClient, payload: Record<string, unknown>, user: AuthUser, releasedIds: string[]) {
+    if (!canAutoApproveStockChecks(user) || payload.adminConfirmed !== true) throw new ForbiddenException('Подтвердите решение администратора.');
+    return this.runTsdKizRecount(payload, user, true, { tx, releasedIds });
+  }
+
+  private async runTsdKizRecount(payload: Record<string, unknown>, user: AuthUser, confirm: boolean,
+    internal?: { tx: Prisma.TransactionClient; releasedIds: string[] }) {
+    if (!physicalStockRecoveryEnabled() || user.roleCodes.includes('CLIENT')) {
+      throw new ForbiddenException('Сверка КИЗов доступна только сотрудникам WMS при включённой функции.');
+    }
+    const administrator = canAutoApproveStockChecks(user) && !user.isDemo;
+    if (payload.adminConfirmed === true && !administrator) throw new ForbiddenException('Это решение доступно только с правами администратора.');
+    const scans = parseRecountScans(payload, storageBoxTransferKizIdentity);
+    const fromBoxCode = requiredTsdTransferText(payload.fromBoxCode, 'Отсканируйте исходный короб.');
+    const barcode = requiredTsdTransferText(payload.barcode, 'Отсканируйте ШК выбранного товара.');
+    const key = requiredTsdTransferText(payload.idempotencyKey, 'Повторите сверку: отсутствует номер операции.');
+    if (key.length > 200) throw new BadRequestException('Некорректный номер сверки.');
+    if (confirm && (typeof payload.snapshot !== 'string' || !/^[a-f0-9]{64}$/.test(payload.snapshot))) {
+      throw new BadRequestException('Сначала выполните предварительную проверку КИЗов.');
+    }
+    const auditId = `tsd-kiz-recount:${recountHash([user.id, user.deviceCode ?? null, key])}`;
+    const fingerprint = recountHash([user.id, user.deviceCode ?? null, user.activeWarehouseId ?? null, fromBoxCode, barcode, scans.map(scan => scan.key), payload.snapshot ?? null, payload.adminConfirmed === true]);
+    await this.inventoryLock?.assertStockMovementsAllowed();
+    // FIX: validate current scopes and all histories again inside Serializable, including on replay.
+    const execute = async (tx: Prisma.TransactionClient) => {
+      const source = await this.loadTsdTransferSourceBox(tx, fromBoxCode, user, true);
+      const sku = await tx.sku.findFirst({ where: { clientId: source.clientId, barcodes: { some: { value: barcode } } } });
+      if (!sku || !sku.needsChestnyZnak || sku.isUnmarked) throw new BadRequestException('ШК должен принадлежать маркированному товару этого клиента.');
+      if (confirm) {
+        const done = await tx.auditLog.findUnique({ where: { id: auditId } });
+        if (done) {
+          if ((done.payload as { fingerprint?: string })?.fingerprint !== fingerprint) throw new BadRequestException('Номер сверки уже использован с другими данными.');
+          return { state: 'RECOUNT_APPLIED', affectedRequestIds: ((done.payload as { affectedRequestIds?: string[] })?.affectedRequestIds ?? []), message: 'Сверка уже применена. Повторных изменений нет.' };
+        }
+      }
+      let plan: Awaited<ReturnType<typeof planKizRecount>>;
+      try {
+        plan = await planKizRecount(tx, source, sku.id, scans, storageBoxTransferKizIdentity, administrator, internal?.releasedIds);
+      } catch (error) {
+        if (!(error instanceof KizRecountReviewRequired)) throw error;
+        if (internal) throw new BadRequestException(error.message);
+        if (administrator) return { state: 'ADMIN_REVIEW_REQUIRED', message: error.message };
+        // FIX: durable, deduplicated manager queue; not a successful stock adjustment.
+        const operationKey = `tsd-stock-recount:${recountHash([user.id, key, source.id, sku.id, scans.map(scan => scan.key), error.message])}`;
+        const review = await tx.tsdOperation.upsert({ where: { operationKey }, update: {}, create: {
+          operationKey, deviceId: user.deviceCode ?? `USER:${user.id}`, operationType: 'tsd_stock_recount',
+          status: 'NEEDS_REVIEW', reviewReason: 'INVENTORY_MISMATCH', serverMessage: error.message,
+          payload: { actor: { userId: user.id, name: user.name }, clientId: source.clientId, warehouseId: source.warehouseId,
+            boxCode: source.code, skuId: sku.id, productName: sku.name, barcode, countedQuantity: scans.length,
+            kizCodes: scans.map(scan => scan.raw), status: 'AVAILABLE', reason: error.message },
+        } });
+        return { state: 'NEEDS_REVIEW', reviewId: review.id, message: review.status !== 'NEEDS_REVIEW'
+          ? `Эта сверка уже рассмотрена менеджером: ${review.resolutionMessage ?? review.serverMessage ?? 'см. историю ТСД'}. Для нового пересчёта начните новую сверку.`
+          : `${error.message} Сверка записана в WMS → История ТСД → Спорные сверки КИЗов.` };
+      }
+      if (!confirm) return { state: 'RECOUNT_READY', snapshot: plan.snapshot, quantity: plan.quantity,
+        previousQuantity: plan.previousQuantity, delta: plan.delta, adminConfirmationRequired: plan.delta !== 0 || source.status === 'archived',
+        retiredCount: plan.retired.length, registeredCount: plan.registered.length,
+        message: `Проверено ${plan.quantity} КИЗов. Старых привязок убрать: ${plan.retired.length}; зарегистрировать: ${plan.registered.length}. ` +
+          (plan.delta ? `Решение администратора: остаток ${plan.previousQuantity} → ${plan.quantity}, изменение ${plan.delta > 0 ? '+' : ''}${plan.delta}.` : 'Количество не изменится.') };
+      if (!internal) requireRecountSnapshot(plan.snapshot, payload.snapshot);
+      if ((plan.delta !== 0 || source.status === 'archived') && (!administrator || payload.adminConfirmed !== true)) throw new BadRequestException('Подтвердите решение администратора по фактическому остатку.');
+      const affectedRequestIds = administrator ? (await tx.clientRequest.findMany({ where: {
+          clientId: source.clientId, warehouseId: source.warehouseId, items: { some: { skuId: sku.id } },
+          type: 'OUTBOUND', status: { notIn: ['DONE', 'CANCELLED', 'REJECTED'] },
+          fbsOrderLinks: { some: { syncStatus: 'ACTIVE', lastSupplierStatus: 'confirm' } } },
+        select: { id: true } })).map(row => row.id) : [];
+      if (source.status === 'archived') {
+        const restored = await tx.box.updateMany({ where: { id: source.id, status: 'archived' }, data: { status: 'active' } });
+        if (restored.count !== 1) throw new BadRequestException('Статус короба изменился. Повторите проверку.');
+      }
+      // FIX: an admin-confirmed full count changes only AVAILABLE, atomically with KIZs and the audit.
+      if (plan.delta > 0) await this.incrementTargetBalance(tx, { clientId: source.clientId, warehouseId: source.warehouseId!,
+        skuId: sku.id, boxId: source.id, palletId: source.palletId, status: StockStatus.AVAILABLE, quantity: plan.delta });
+      if (plan.delta < 0) {
+        let remaining = -plan.delta;
+        for (const balance of plan.balances.filter(row => row.status === 'AVAILABLE' && row.quantity > 0)) {
+          if (!remaining) break;
+          const taken = Math.min(balance.quantity, remaining);
+          await this.decrementSourceBalance(tx, balance, taken); remaining -= taken;
+        }
+        if (remaining) throw new BadRequestException('Остаток изменился. Повторите решение администратора.');
+      }
+      if (plan.delta !== 0) await tx.stockMovement.create({ data: { clientId: source.clientId, warehouseId: source.warehouseId!,
+        skuId: sku.id, boxId: source.id, palletId: source.palletId, status: StockStatus.AVAILABLE,
+        type: MovementType.INVENTORY_ADJUSTMENT, quantity: plan.delta, idempotencyKey: auditId,
+        sourceDocument: auditId, comment: `Администратор ${user.name}: полный физический пересчёт КИЗов, ${plan.previousQuantity} → ${plan.quantity}.` } });
+      for (const mark of plan.retired) {
+        const changed = await tx.productMark.updateMany({ where: { id: mark.id, boxId: source.id, skuId: sku.id,
+          clientId: source.clientId, status: 'AVAILABLE', updatedAt: mark.updatedAt }, data: { boxId: null, status: 'BLOCKED' } });
+        if (changed.count !== 1) throw new BadRequestException('Привязка КИЗ изменилась. Повторите сверку.');
+      }
+      for (const scan of plan.registered) await tx.productMark.create({ data: { clientId: source.clientId,
+        skuId: sku.id, boxId: source.id, value: scan.raw, status: 'AVAILABLE', sourceDocument: auditId } });
+      await tx.auditLog.create({ data: { id: auditId, userId: user.id, action: 'TSD_KIZ_RECOUNT', entity: 'Box', entityId: source.id,
+        payload: { fingerprint, clientId: source.clientId, warehouseId: source.warehouseId, boxCode: source.code,
+          skuId: sku.id, barcode, quantity: plan.quantity, previousQuantity: plan.previousQuantity, delta: plan.delta,
+          adminConfirmed: administrator && payload.adminConfirmed === true, deviceCode: user.deviceCode ?? null, affectedRequestIds,
+          scannedKizs: scans.map(scan => scan.raw), previousMarks: JSON.parse(JSON.stringify(plan.previousMarks)),
+          retiredMarkIds: plan.retired.map(mark => mark.id), snapshot: plan.snapshot } } });
+      return { state: 'RECOUNT_APPLIED', affectedRequestIds, message: 'КИЗы сверены. ' +
+        (plan.delta ? `По решению администратора остаток ${plan.previousQuantity} → ${plan.quantity}. ` : 'Количество не изменено. ') +
+        'Повторно сканируйте ШК и КИЗ для перемещения.' };
+    };
+    return internal ? execute(internal.tx) : this.prisma.$transaction(execute,
+      { ...STOCK_TRANSFER_TRANSACTION_OPTIONS, isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
   async inspectTsdTransferItem(payload: Record<string, unknown>, user: AuthUser) {
@@ -4948,7 +5076,7 @@ function isFbsRelabelInventoryAdjustment(movement: {
 }
 
 // FIX: identity comparison only; the physical scanner value is never rewritten on registration.
-function storageBoxTransferKizIdentity(value: string) {
+export function storageBoxTransferKizIdentity(value: string) {
   const normalized = value.replace(/^\]d2/i, '').replace(/<GS>/gi, '\u001d')
     .replace(/^\(01\)(\d{14})\(21\)/, (_all, gtin) => `01${gtin}21`)
     .replace(/^(01\d{14})\u001d21/, (_all, gtin) => `${gtin}21`);

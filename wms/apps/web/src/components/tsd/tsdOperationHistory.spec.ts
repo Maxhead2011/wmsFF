@@ -31,4 +31,10 @@ describe('История ТСД', () => {
     expect(operationPrimaryTitle('monitor_error', {})).toBe('Ошибка на ТСД');
     expect(operationPrimaryTitle('receipt_scan', {})).toBe('Приёмка товара');
   });
+
+  // TEST: manager queue exposes the physical count, not a misleading successful movement.
+  it('объясняет спорную сверку и фактическое количество', () => {
+    expect(operationPrimaryTitle('tsd_stock_recount', {})).toBe('Спорная сверка КИЗов');
+    expect(operationContextEntries({ boxCode: 'FFL_SOURCE', countedQuantity: 3 })).toContainEqual(['Отсканировано', '3']);
+  });
 });

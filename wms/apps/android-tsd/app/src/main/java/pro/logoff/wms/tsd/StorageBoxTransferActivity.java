@@ -1,6 +1,7 @@
 package pro.logoff.wms.tsd;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Handler;
@@ -16,9 +17,11 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import org.json.JSONObject;
+import org.json.JSONArray;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -46,6 +49,10 @@ public final class StorageBoxTransferActivity extends Activity {
     private String message = "Отсканируйте исходный короб";
     private boolean busy;
     private boolean success;
+    // ADDED: only source-first logoff transfers expose explicit physical recount.
+    private boolean recountEnabled;
+    private StorageKizRecountState recount;
+    private boolean recountPending;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -59,6 +66,7 @@ public final class StorageBoxTransferActivity extends Activity {
         state = new StorageBoxTransferState(getIntent().getBooleanExtra(AUTO_SOURCE, false));
         if (state.autoSource()) message = "Сканируйте ШК товара, затем КИЗ. Исходный короб определит WMS.";
         restorePending();
+        if (!state.hasPendingTransfer() && !busy) restoreRecount();
         render();
     }
 
@@ -118,20 +126,60 @@ public final class StorageBoxTransferActivity extends Activity {
         scanInput.setTextSize(20);
         scanInput.setSingleLine(true);
         scanInput.setInputType(InputType.TYPE_CLASS_TEXT);
-        scanInput.setEnabled(!busy);
+        scanInput.setEnabled(!busy && (recount == null || !recount.ready()));
         scanInput.setPadding(dp(14), dp(14), dp(14), dp(14));
         root.addView(scanInput, margins(dp(0), dp(12), dp(0), dp(8)));
 
         Button submit = button(busy ? "ПОДОЖДИТЕ…" : "ПОДТВЕРДИТЬ СКАН", RED);
-        submit.setEnabled(!busy);
+        submit.setEnabled(!busy && (recount == null || !recount.ready()));
         submit.setOnClickListener(view -> submitScan());
         root.addView(submit);
 
+        if (recount != null) {
+            root.addView(card("СВЕРКА КИЗОВ", "Выбранный ШК: " + state.barcode() + "\nОтсканировано: " + recount.scans().size()
+                + "\nСканируйте ВСЕ КИЗы только этого товара в исходном коробе. Остальные товары не пересчитываются.", Color.rgb(254, 243, 199)));
+            Button finishCount = button(recount.adminAbort() ? "ПОВТОРИТЬ ОТМЕНУ СВЕРКИ" : recount.ready() ? "ПОДТВЕРДИТЬ СВЕРКУ" : "ВСЕ КИЗЫ ЭТОГО ТОВАРА ОТСКАНИРОВАНЫ", GREEN);
+            finishCount.setEnabled(!busy && !recount.scans().isEmpty());
+            finishCount.setOnClickListener(view -> {
+                if (recount.ready()) {
+                    if (recount.adminConfirmationRequired() && !recount.adminConfirmed()) {
+                        new AlertDialog.Builder(this).setTitle("РЕШЕНИЕ АДМИНИСТРАТОРА")
+                            .setMessage(message + "\n\nПодтверждаю физическое наличие всех отсканированных единиц и указанные изменения. Старые наклейки снятых сборок не использовать.")
+                            .setPositiveButton("Подтверждаю", (dialog, which) -> { recount.confirmAdministrator(); sendRecount(true); })
+                            .setNegativeButton("Отмена", null).show();
+                    } else sendRecount(true);
+                }
+                else new AlertDialog.Builder(this).setTitle("Полный пересчёт товара")
+                    .setMessage("Вы отсканировали все " + recount.scans().size() + " единиц товара с ШК " + state.barcode() + " в коробе " + state.sourceCode() + "?")
+                    .setPositiveButton("Да, все", (dialog, which) -> sendRecount(false)).setNegativeButton("Продолжить сканы", null).show();
+            });
+            root.addView(finishCount, margins(0, dp(8), 0, 0));
+            if (recountPending && recount.adminRelease() && !recount.adminAbort()) {
+                Button abort = button("ОТМЕНИТЬ НЕЗАВЕРШЁННУЮ СВЕРКУ", RED);
+                abort.setEnabled(!busy);
+                abort.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Отменить сверку?")
+                    .setMessage("Остатки не изменятся. Удерживаемые задания вернутся на проверку КИЗ. Если сверка уже применена, WMS только завершит обновление маршрутов. После отмены пересканируйте все КИЗы заново.")
+                    .setPositiveButton("Отменить сверку", (dialog, which) -> { recount.abortAdministrator(); sendRecount(true); })
+                    .setNegativeButton("Назад", null).show());
+                root.addView(abort);
+            }
+        } else if (recountEnabled && !state.autoSource() && "KIZ".equals(state.stage())) {
+            Button startCount = button("СВЕРИТЬ КИЗЫ ЭТОГО ТОВАРА", Color.rgb(180, 83, 9));
+            startCount.setEnabled(!busy && !state.hasPendingTransfer());
+            startCount.setOnClickListener(view -> {
+                recount = new StorageKizRecountState();
+                message = "Сканируйте по очереди все физические КИЗы выбранного товара. Затем подтвердите полный список.";
+                render();
+            });
+            root.addView(startCount, margins(0, dp(8), 0, 0));
+        }
+
         if (!"SOURCE".equals(state.stage())) {
             Button cancelUnit = button("ОТМЕНИТЬ ТЕКУЩУЮ ЕДИНИЦУ", Color.rgb(71, 85, 105));
-            cancelUnit.setEnabled(!busy && !state.hasPendingTransfer());
+            cancelUnit.setEnabled(!busy && !state.hasPendingTransfer() && !recountPending);
             cancelUnit.setOnClickListener(view -> {
                 state.cancelUnit();
+                recount = null;
                 if (state.autoSource()) sourceBox = null;
                 currentItem = null;
                 message = "Текущая единица отменена. Сканируйте следующий ШК.";
@@ -141,7 +189,7 @@ public final class StorageBoxTransferActivity extends Activity {
             root.addView(cancelUnit, margins(0, dp(8), 0, 0));
 
             Button anotherSource = button("ДРУГОЙ ИСХОДНЫЙ КОРОБ", Color.rgb(15, 23, 42));
-            anotherSource.setEnabled(!busy && !state.hasPendingTransfer());
+            anotherSource.setEnabled(!busy && !state.hasPendingTransfer() && !recountPending);
             anotherSource.setOnClickListener(view -> resetSource());
             if (!state.autoSource()) root.addView(anotherSource, margins(0, dp(8), 0, 0));
         }
@@ -161,6 +209,11 @@ public final class StorageBoxTransferActivity extends Activity {
             render();
             return;
         }
+        if (recount != null) {
+            try { message = recount.add(scanned) ? "КИЗ учтён. Сканируйте следующую единицу этого товара." : "Этот КИЗ уже учтён; повтор не добавлен."; }
+            catch (Exception error) { message = error.getMessage(); }
+            render(); return;
+        }
         switch (state.stage()) {
             case "SOURCE": inspectSource(scanned); break;
             case "BARCODE": inspectItem(scanned, false); break;
@@ -176,6 +229,7 @@ public final class StorageBoxTransferActivity extends Activity {
             .inspectTransferSource(authorization, code).execute(), response -> {
                 state.sourceAccepted(response.sourceBox.code);
                 sourceBox = response.sourceBox;
+                recountEnabled = response.kizRecountEnabled;
                 currentItem = null;
                 message = "Короб открыт. Сканируйте ШК товара.";
             });
@@ -240,6 +294,56 @@ public final class StorageBoxTransferActivity extends Activity {
             });
     }
 
+    // FIX: preview never changes stock; persist the exact confirmation before sending it.
+    private void sendRecount(boolean confirm) {
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("fromBoxCode", state.sourceCode()); request.put("barcode", state.barcode());
+        request.put("kizCodes", recount.scans()); request.put("allUnitsScanned", true);
+        request.put("idempotencyKey", recount.operationKey()); request.put("snapshot", recount.snapshot());
+        request.put("adminRelease", recount.adminRelease()); request.put("adminConfirmed", recount.adminConfirmed());
+        request.put("adminAbort", recount.adminAbort());
+        if (confirm) {
+            try {
+                JSONObject saved = new JSONObject(request);
+                if (!getSharedPreferences("storage_recount_pending", MODE_PRIVATE).edit().putString(pendingKey(), saved.toString()).commit())
+                    throw new IllegalStateException("Не удалось сохранить сверку. Подтверждение не отправлено.");
+                recountPending = true;
+            } catch (Exception error) { message = error.getMessage(); render(); return; }
+        }
+        WmsApi api = WmsApiFactory.create(BuildConfig.API_BASE_URL);
+        runRequest(() -> (confirm ? api.confirmKizRecount(session.authorizationHeader(), request)
+            : api.previewKizRecount(session.authorizationHeader(), request)).execute(), response -> {
+                message = response.message;
+                if ("RECOUNT_READY".equals(response.state)) recount.ready(response.snapshot, response.adminRelease, response.adminConfirmationRequired);
+                else if ("RECOUNT_APPLIED".equals(response.state) || "RECOUNT_CANCELLED".equals(response.state) || "NEEDS_REVIEW".equals(response.state)) {
+                    clearRecountPending(); recount = null; state.cancelUnit(); currentItem = null;
+                    success = "RECOUNT_APPLIED".equals(response.state);
+                } else message = "Неизвестный результат сверки. Повторите подтверждение; данные операции сохранены.";
+            });
+    }
+
+    private void clearRecountPending() {
+        getSharedPreferences("storage_recount_pending", MODE_PRIVATE).edit().remove(pendingKey()).commit();
+        recountPending = false;
+    }
+
+    private void restoreRecount() {
+        String saved = getSharedPreferences("storage_recount_pending", MODE_PRIVATE).getString(pendingKey(), null);
+        if (saved == null) return;
+        try {
+            JSONObject value = new JSONObject(saved); JSONArray array = value.getJSONArray("kizCodes");
+            ArrayList<String> codes = new ArrayList<>(); for (int i = 0; i < array.length(); i++) codes.add(array.getString(i));
+            state = new StorageBoxTransferState(); state.sourceAccepted(value.getString("fromBoxCode"));
+            state.barcodeAccepted(value.getString("barcode"), true);
+            recount = StorageKizRecountState.restore(codes, value.getString("snapshot"), value.getString("idempotencyKey"));
+            recount.restoreAdminDecision(value.optBoolean("adminRelease"), value.optBoolean("adminConfirmed"));
+            if (value.optBoolean("adminAbort")) recount.abortAdministrator();
+            recountEnabled = true; recountPending = true;
+            sourceBox = new TsdTransferResponse.SourceBox(); sourceBox.code = state.sourceCode();
+            message = "Есть неподтверждённая сверка. Нажмите ПОДТВЕРДИТЬ СВЕРКУ. Повторных изменений не будет.";
+        } catch (Exception error) { busy = true; message = "Не удалось восстановить сверку. Нужна проверка менеджера перед новым перемещением."; }
+    }
+
     private <T> void runRequest(RequestCall<T> request, Success<T> onSuccess) {
         TsdSession owner = session;
         busy = true;
@@ -266,6 +370,8 @@ public final class StorageBoxTransferActivity extends Activity {
                     if (error instanceof HttpFailure) {
                         int code = ((HttpFailure) error).code;
                         if (code >= 400 && code < 500 && code != 408) {
+                            // FIX: a confirmed admin operation may already hold an order or have removed WB metadata.
+                            if (recount != null && !(recountPending && recount.adminRelease())) { clearRecountPending(); recount.repeatPreview(); }
                             state.transferRejected();
                             clearPending();
                         }
@@ -292,7 +398,8 @@ public final class StorageBoxTransferActivity extends Activity {
     }
 
     private void resetSource() {
-        if (busy || state.hasPendingTransfer()) return;
+        if (busy || state.hasPendingTransfer() || recountPending) return;
+        recount = null; recountEnabled = false;
         state = new StorageBoxTransferState(state.autoSource());
         sourceBox = null;
         currentItem = null;
@@ -303,6 +410,7 @@ public final class StorageBoxTransferActivity extends Activity {
     }
 
     private String prompt() {
+        if (recount != null) return recount.ready() ? "Проверьте результат и подтвердите сверку" : "Сканируйте все КИЗы выбранного товара";
         switch (state.stage()) {
             case "BARCODE": return "1. Сканируйте ШК товара";
             case "KIZ": return "2. Сканируйте КИЗ этой единицы";
@@ -312,6 +420,7 @@ public final class StorageBoxTransferActivity extends Activity {
     }
 
     private String inputHint() {
+        if (recount != null) return "КИЗ следующей единицы";
         switch (state.stage()) {
             case "BARCODE": return "ШК товара";
             case "KIZ": return "КИЗ";
