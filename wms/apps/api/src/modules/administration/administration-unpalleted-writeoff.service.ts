@@ -11,6 +11,7 @@ import {
 } from '@prisma/client';
 import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { BoxCodePolicyService, preserveEmptyStorageBox } from '../../common/boxes/box-code-policy.service';
 import type { AuthUser } from '../auth/auth.types';
 import { InventoryService } from '../inventory/inventory.service';
 import { MarketplaceConnectionsService } from '../marketplace-connections/marketplace-connections.service';
@@ -129,6 +130,7 @@ export class AdministrationUnpalletedWriteoffService {
     private readonly inventoryLock: InventoryLockService,
     @Optional() private readonly marketplaceConnections?: MarketplaceConnectionsService,
     @Optional() private readonly inventory?: InventoryService,
+    private readonly boxCodes?: BoxCodePolicyService,
   ) {}
 
   async preview(user: AuthUser) {
@@ -268,9 +270,12 @@ export class AdministrationUnpalletedWriteoffService {
 
     const placedBoxIds = new Set(placements.map((placement) => placement.boxId).filter(isString));
     const placedBoxCodes = new Set(placements.map((placement) => normalizeCode(placement.boxCode)));
-    const candidates = boxes.filter(
-      (box) => !placedBoxIds.has(box.id) && !placedBoxCodes.has(normalizeCode(box.code)),
-    );
+    // FIX: mass disposal never includes reusable storage, even when temporarily unpalleted.
+    const candidates: PreviewBox[] = [];
+    for (const box of boxes) {
+      if (!placedBoxIds.has(box.id) && !placedBoxCodes.has(normalizeCode(box.code)) &&
+          !await preserveEmptyStorageBox(box.code, this.boxCodes)) candidates.push(box);
+    }
     const requestBoxIds = new Set(requestSelections.map((selection) => selection.boxId));
     const inventoryBoxIds = new Set(inventoryBoxes.map((inventoryBox) => inventoryBox.boxId));
     const balanceBoxIds = new Map(
@@ -527,6 +532,8 @@ export class AdministrationUnpalletedWriteoffService {
     })) as PreviewBox | null;
 
     if (!box) return skipped(boxId, null, 'BOX_NOT_ACTIVE_OR_EMPTY');
+    // FIX: repeat the protection inside the transaction for stale/manual selections.
+    if (await preserveEmptyStorageBox(box.code, this.boxCodes)) return skipped(box.id, box.code, 'PERMANENT_STORAGE_BOX');
 
     const placement = await tx.storagePalletBox.findFirst({
       where: {

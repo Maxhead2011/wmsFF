@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { ArchivedEmptyBoxPalletDetachService } from '../common/boxes/archived-empty-box-pallet-detach.service';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { BoxCodePolicyService } from '../common/boxes/box-code-policy.service';
+import { SystemSettingsService } from '../common/settings/system-settings.service';
 
 type ReconcileArguments = {
   apply: boolean;
@@ -82,7 +84,8 @@ export async function applyCandidateSnapshot(
 async function main() {
   const options = parseReconcileArguments(process.argv.slice(2));
   const prisma = new PrismaService();
-  const lifecycle = new ArchivedEmptyBoxPalletDetachService(prisma);
+  // FIX: CLI uses the same configured permanent-box protection as the Nest application.
+  const lifecycle = new ArchivedEmptyBoxPalletDetachService(prisma, new BoxCodePolicyService(new SystemSettingsService(prisma)));
   await prisma.$connect();
   try {
     const preview = await collectCandidateSnapshot(prisma, lifecycle);

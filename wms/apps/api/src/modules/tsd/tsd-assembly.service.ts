@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
+import { requiresFbsReturnReceipt } from '../marketplace-connections/fbs-return-receipt';
 import { fbsTerminalQueueFilterEnabled, isFbsTerminalQueueOrder } from '../../common/fbs-terminal-queue';
 import {
   ClientRequestStatus,
@@ -896,6 +897,7 @@ export class TsdAssemblyService {
           workerName: true,
           deviceCode: true,
           completedAt: true,
+          relabelConfirmedAt: true, // FIX: distinguish physical picks requiring return receipt.
           updatedAt: true,
           cargoPackingId: true,
           cargoPackedAt: true,
@@ -1012,6 +1014,9 @@ export class TsdAssemblyService {
       statusLabel: fbsAssemblyStatusLabel(row.status),
       sourceBoxPending: row.sourceBoxPending,
       syncIssue: row.errorMessage,
+      // FIX: web clients request fresh receipt scans only when our installation requires them.
+      requiresReturnReceipt: requiresFbsReturnReceipt(row),
+      returnRequiresKiz: row.requiresKiz || Boolean(row.kiz),
       workerName: row.workerName,
       completionSource: row.deviceCode.startsWith('SOS-WB:') ? 'SOS_WB' : 'STANDARD',
       completedAt: row.completedAt?.toISOString() ?? null,
@@ -1041,7 +1046,12 @@ export class TsdAssemblyService {
       };
     });
     const completedRows = rows.filter((row) => row.status === 'COMPLETED');
-    const returnRequiredRows = rows.filter((row) => row.status === 'RETURN_REQUIRED' && !terminalTaskIds.has(row.id));
+    // FIX: terminal cancellation blocks collection, not receipt of an already picked return.
+    const cancelledReceiptKeys = new Set(terminalLinks.filter(link => link.lastCategory === 'cancelled' &&
+      link.lastWbStatus?.trim().toLowerCase() !== 'sold').map(link => `${link.connectionId}:${link.orderId}`));
+    const returnRequiredRows = rows.filter((row) => row.status === 'RETURN_REQUIRED' &&
+      (!terminalTaskIds.has(row.id) || (requiresFbsReturnReceipt(row) && cancelledReceiptKeys.has(`${row.connectionId}:${row.orderId}`))));
+    const returnRequiredIds = new Set(returnRequiredRows.map(row => row.id));
     const handledRows = [...completedRows, ...returnRequiredRows];
     const handledOrderIds = new Set(handledRows.map((row) => row.orderId));
     const linkedOrderIds = new Set(links.map((link) => link.orderId));
@@ -1290,7 +1300,7 @@ export class TsdAssemblyService {
       returnRequired: {
         orders: returnRequiredRows.length,
         units: returnRequiredRows.reduce((sum, row) => sum + Math.max(1, row.itemCount), 0),
-        rows: facts.filter((row) => row.status === 'RETURN_REQUIRED' && !terminalTaskIds.has(row.id)),
+        rows: facts.filter((row) => returnRequiredIds.has(row.id)),
       },
       notForAssembly,
       rows: facts,

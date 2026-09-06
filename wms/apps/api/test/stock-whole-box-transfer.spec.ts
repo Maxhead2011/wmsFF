@@ -1,9 +1,13 @@
 import { StockStatus } from '@prisma/client';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BoxCodePolicyService } from '../src/common/boxes/box-code-policy.service';
 import { StockOperationsService } from '../src/modules/stock/stock-operations.service';
 
 describe('StockOperationsService: объединение коробов', () => {
-  it('переносит весь остаток и КИЗ, затем архивирует пустой исходный короб', async () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it.each([false, true])('переносит весь остаток и КИЗ; постоянный бокс: %s', async (permanent) => {
+    // TEST: whole-box transfer preserves reusable storage but keeps disposable-box behavior.
+    vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', 'true');
     const sourceBalance = {
       id: 'balance-1',
       balanceKey: 'source-key',
@@ -70,6 +74,10 @@ describe('StockOperationsService: объединение коробов', () => 
       inventoryLock as never,
     );
 
+    Object.assign(service, { boxCodes: new BoxCodePolicyService({ get: async () => ({
+      storageBoxPrefix: permanent ? 'FFL_SOURCE' : 'SBOX_',
+      storageBoxAliases: permanent ? ['FFL_'] : [],
+    }) } as never) });
     const result = await service.transferWholeBox(
       {
         clientId: 'client-1',
@@ -107,13 +115,14 @@ describe('StockOperationsService: объединение коробов', () => 
       lines: 1,
       quantity: 3,
       movedMarks: 1,
-      sourceArchived: true,
+      sourceArchived: !permanent,
     });
     expect(tx.productMark.updateMany).toHaveBeenCalledWith({
       where: { boxId: 'box-source', skuId: 'sku-1', status: StockStatus.AVAILABLE },
       data: { boxId: 'box-target', stockMovementId: 'move-in' },
     });
-    expect(tx.box.update).toHaveBeenCalledWith({
+    if (permanent) expect(tx.box.update).not.toHaveBeenCalled();
+    else expect(tx.box.update).toHaveBeenCalledWith({
       where: { id: 'box-source' },
       data: { status: 'archived' },
     });

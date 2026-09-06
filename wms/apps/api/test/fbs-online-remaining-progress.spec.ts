@@ -1,7 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ClientScopeService } from '../src/modules/auth/client-scope.service';
 import { ClientRequestsService } from '../src/modules/client-requests/client-requests.service';
 import { TsdAssemblyService } from '../src/modules/tsd/tsd-assembly.service';
+
+afterEach(() => vi.unstubAllEnvs());
 
 // TEST: online progress must preserve physical completions predating local-search activation.
 function fixture(enabled = true, completed = 12, reset = false) {
@@ -33,6 +35,31 @@ function fixture(enabled = true, completed = 12, reset = false) {
 }
 
 describe('FBS online remaining-search progress', () => {
+  // TEST: both release flags must expose a cancelled physical return, never new picking.
+  it.each([['canceled_by_client', true, 1], ['sold', true, 0], ['canceled_by_client', false, 0]])(
+    'terminal %s with receipt flag %s exposes %s returns', async (status, enabled, count) => {
+      const f = fixture();
+      Object.assign(f.tasks[0], { status: 'RETURN_REQUIRED', connectionId: 'wb-1' });
+      const links = await f.db.fbsOrderRequestLink.findMany();
+      Object.assign(links[0], { lastCategory: 'cancelled', lastWbStatus: status });
+      vi.stubEnv('WMS_FBS_TERMINAL_QUEUE_FILTER_ENABLED', 'true');
+      vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', String(enabled));
+      const result = await f.detail.loadFbsAssemblyFacts('request-592', f.rows);
+      expect(result.returnRequired.rows).toHaveLength(count);
+      expect(result.returnRequired.orders).toBe(count);
+      expect(result.notCollected.pendingOrderIds).not.toContain('order-0');
+      expect(result.notForAssembly.some(row => row.orderId === 'order-0')).toBe(true);
+    });
+  it('shows receipt-required only for physical returns and only with the lifecycle flag enabled', async () => {
+    // TEST: frontend must not guess receipt requirements or change sold-installation actions.
+    const f = fixture(true);
+    f.tasks[0].status = 'RETURN_REQUIRED';
+    vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', 'true');
+    expect((await f.detail.loadFbsAssemblyFacts('request-592', f.rows)).returnRequired.rows[0])
+      .toMatchObject({ requiresReturnReceipt: true, returnRequiresKiz: true });
+    vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', 'false');
+    expect((await f.detail.loadFbsAssemblyFacts('request-592', f.rows)).returnRequired.rows[0].requiresReturnReceipt).toBe(false);
+  });
   it.each([true, false])('list keeps 12/13 completions (local mode: %s)', async enabled => {
     const f = fixture(enabled);
     const result = await f.list.list({}, f.user);

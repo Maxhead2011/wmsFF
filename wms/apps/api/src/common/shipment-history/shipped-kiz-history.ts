@@ -1,5 +1,6 @@
 import { ClientRequestStatus, MovementType, Prisma, StockStatus } from '@prisma/client';
 import { appendFbsAttemptHistory } from './fbs-attempt-history';
+import { permanentStorageBoxesEnabled } from '../boxes/box-code-policy.service';
 
 export async function captureShippedKizHistory(
   tx: Prisma.TransactionClient,
@@ -39,6 +40,8 @@ export async function captureShippedKizHistory(
       completedAt: true,
     },
   });
+  // FIX: archived attempts are history only; they cannot own a currently active KIZ.
+  const currentAssemblies = [...assemblies];
   await appendFbsAttemptHistory(tx, assemblies, { requestId });
   if (assemblies.length === 0) return 0;
 
@@ -143,6 +146,25 @@ export async function captureShippedKizHistory(
     data: rows,
     skipDuplicates: true,
   });
+  if (permanentStorageBoxesEnabled()) {
+    // FIX: refreshing a completed request only fills history, never rewrites recovered stock.
+    if (request.status !== ClientRequestStatus.DONE) {
+      for (const assembly of currentAssemblies) {
+        if (!assembly.kiz || !assembly.completedAt) continue;
+        await tx.productMark.updateMany({
+          where: {
+            clientId: request.clientId, skuId: assembly.skuId, value: assembly.kiz,
+            status: { in: [StockStatus.AVAILABLE, StockStatus.RESERVED, StockStatus.PACKING, StockStatus.SHIPPING] },
+            // FIX: a later receipt/move/rebind or another box must survive a delayed shipment/retry.
+            updatedAt: { lte: assembly.completedAt },
+            OR: [{ boxId: assembly.boxId }, { boxId: null, status: StockStatus.PACKING }],
+          },
+          data: { status: StockStatus.SHIPPING, boxId: null },
+        });
+      }
+    }
+    return result.count;
+  }
   await tx.productMark.updateMany({
     where: {
       clientId: request.clientId,
