@@ -3,6 +3,8 @@ import { BoxCodePolicyService } from '../src/common/boxes/box-code-policy.servic
 import { MarketplaceConnectionsService } from '../src/modules/marketplace-connections/marketplace-connections.service';
 
 afterEach(() => vi.unstubAllEnvs());
+// TEST: the reviewed our-VM runtime already has boxless picks and disposable-box cleanup.
+const ourLiveBaseline = process.env.WMS_TEST_OUR_LIVE_BASELINE === 'true';
 
 // TEST: both FBS KIZ relocation branches preserve a reusable source, but still move the mark.
 describe('FBS permanent storage after KIZ relocation', () => {
@@ -46,7 +48,7 @@ describe('FBS last pick from a refillable storage cell', () => {
     ['FFL_SOURCE', 0, 0, true, true],
     ['FFL_SOURCE', 1, 0, true, false],
     ['FFL_SOURCE', 0, 1, true, false],
-    ['FFL_SOURCE', 0, 0, false, false],
+    ['FFL_SOURCE', 0, 0, false, ourLiveBaseline],
   ])('%s, balances %s, marks %s, enabled %s', async (code, balances, marks, enabled, archive) => {
     vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', String(enabled));
     const source = { id: 'source', code, warehouseId: 'wh', palletId: 'pallet', zoneId: 'zone', status: 'active' };
@@ -69,7 +71,7 @@ describe('FBS last pick from a refillable storage cell', () => {
     expect(detach.detachIfArchivedAndEmpty).toHaveBeenCalledTimes(archive ? 1 : 0);
     if (!archive) expect(source).toMatchObject({ status: 'active', palletId: 'pallet', zoneId: 'zone' });
     expect(tx.productMark.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      data: { status: 'PACKING', boxId: enabled ? null : 'source' },
+      data: { status: 'PACKING', boxId: enabled || ourLiveBaseline ? null : 'source' },
     }));
   });
 });
