@@ -28,6 +28,7 @@ import { ExpenseAutomationService } from '../expenses/expense-automation.service
 import { clientRequestPackageInclude } from '../client-requests/client-request-packages.include';
 import { LogisticsService } from '../logistics/logistics.service';
 import { FulfillClientRequestDto } from './dto/fulfill-client-request.dto';
+import { readFbsPickedStockProof, subtractPickedQuantities, type FbsPickedProof } from './fbs-picked-stock-proof';
 import { PickClientRequestDto } from './dto/pick-client-request.dto';
 import { TransferBetweenBoxesDto } from './dto/transfer-between-boxes.dto';
 import { TransferWholeBoxDto } from './dto/transfer-whole-box.dto';
@@ -1837,42 +1838,7 @@ export class StockOperationsService {
         request.items.reduce((total, item) => total + item.quantity, 0),
       );
       const savedSelections = await this.loadRequestBoxSelections(tx, request.id, operationWarehouseId);
-      // An explicitly confirmed physical source replaces the saved box selection.
-      // Restoring old FBS selections as well would leave phantom PACKING/SHIPPING
-      // balances in those boxes after the confirmed source has been shipped.
-      if (savedSelections.length && physicalSources.length === 0) {
-        await this.restoreCompletedFbsSelectionShortages(
-          tx,
-          request,
-          savedSelections,
-          baseKey,
-          operationWarehouseId,
-        );
-      }
-      const plan = physicalSources.length
-        ? await this.planRequestAllocationsWithPhysicalSources(
-            tx,
-            request,
-            savedSelections,
-            physicalSources,
-            baseKey,
-            operationWarehouseId,
-          )
-        : savedSelections.length
-          ? await this.planRequestAllocationsFromSelections(
-            tx,
-            request.clientId,
-            request.items,
-            savedSelections,
-            [StockStatus.SHIPPING, StockStatus.PACKING, StockStatus.AVAILABLE],
-            operationWarehouseId,
-          )
-          : await this.planRequestShipment(
-              tx,
-              request.clientId,
-              request.items,
-              operationWarehouseId,
-            );
+      const plan = await this.planFbsSafeManualShipment(tx, request, savedSelections, physicalSources, baseKey, operationWarehouseId);
       await tx.clientRequestPackage.deleteMany({ where: { requestId: request.id } });
       const packages = await this.createRequestPackages(tx, {
         request,
@@ -2217,11 +2183,126 @@ export class StockOperationsService {
     return this.planRequestAllocations(tx, clientId, items, StockStatus.AVAILABLE, warehouseId);
   }
 
+  // FIX: completed physical picks are allocated before legacy closing can touch AVAILABLE.
+  private async planFbsSafeManualShipment(
+    tx: Prisma.TransactionClient,
+    request: { id: string; clientId: string; items: RequestItemForAllocation[] },
+    selections: RequestBoxSelectionForAllocation[],
+    sources: PhysicalStockSourceInput[],
+    baseKey: string,
+    warehouseId?: string,
+    pickedProofs?: FbsPickedProof[],
+  ): Promise<RequestAllocationPlan> {
+    const proofs = pickedProofs ?? await readFbsPickedStockProof(tx, request, warehouseId);
+    const credits: RequestAllocationPlan = { lines: [] };
+    const reserved = new Map<string, number>();
+    if (proofs.length) {
+      // Validate the original confirmation before reducing already-picked quantities.
+      const seen = new Set<string>();
+      const totals = new Map<string, number>();
+      for (const source of sources) {
+        const code = source.boxCode?.trim();
+        if (!request.items.some(item => item.id === source.requestItemId)) {
+          throw new BadRequestException('В фактических источниках указан товар, которого нет в заявке.');
+        }
+        if (Boolean(code) === (source.noBox === true) || !Number.isInteger(source.quantity) || source.quantity <= 0) {
+          throw new BadRequestException('Укажите корректный фактический источник и положительное количество.');
+        }
+        const key = `${source.requestItemId}:${code?.toLocaleUpperCase('ru-RU') ?? 'NO_BOX'}`;
+        if (seen.has(key)) throw new BadRequestException('Один фактический источник нельзя указывать для позиции дважды.');
+        seen.add(key);
+        totals.set(source.requestItemId, (totals.get(source.requestItemId) ?? 0) + source.quantity);
+      }
+      for (const item of request.items) {
+        if (totals.has(item.id) && totals.get(item.id) !== item.quantity) {
+          throw new BadRequestException(`Для подтверждённой позиции нужно указать источник всех ${item.quantity} шт.`);
+        }
+      }
+      const codes = sources.map(source => source.boxCode?.trim()).filter((code): code is string => Boolean(code));
+      if (codes.length) {
+        const boxes = await tx.box.findMany({ where: { clientId: request.clientId,
+          code: { in: codes, mode: 'insensitive' }, status: { notIn: ['deleted', 'archived'] },
+          ...(this.warehouseScopedBoxWhere(warehouseId) ?? {}) }, select: { code: true } });
+        if (codes.some(code => !boxes.some(box => box.code.toLocaleUpperCase('ru-RU') === code.toLocaleUpperCase('ru-RU')))) {
+          throw new BadRequestException('Фактический короб не найден в активных коробах клиента и филиала.');
+        }
+      }
+      const process = await tx.stockBalance.findMany({ where: { clientId: request.clientId, warehouseId,
+        skuId: { in: [...new Set(proofs.map(proof => proof.skuId))] },
+        status: { in: [StockStatus.SHIPPING, StockStatus.PACKING] }, quantity: { gt: 0 } },
+        include: { box: { select: allocationBoxSelect } }, orderBy: [{ updatedAt: 'asc' }] });
+      for (const [index, proof] of proofs.entries()) {
+        let line = credits.lines.find(candidate => candidate.itemId === proof.itemId);
+        if (!line) {
+          const item = request.items.find(candidate => candidate.id === proof.itemId)!;
+          const sku = await this.resolveSku(tx, { clientId: request.clientId, skuId: proof.skuId });
+          line = { itemId: item.id, skuId: sku.id, skuWeightGrams: sku.weightGrams,
+            barcode: item.barcode, requestedQuantity: item.quantity, allocations: [] };
+          credits.lines.push(line);
+        }
+        let remaining = proof.quantity;
+        for (const balance of process) {
+          if (balance.skuId !== proof.skuId || balance.boxId !== proof.boxId || balance.palletId !== proof.palletId) continue;
+          const quantity = Math.min(remaining, Math.max(0, balance.quantity - (reserved.get(balance.id) ?? 0)));
+          if (!quantity) continue;
+          line.allocations.push({ balance, quantity });
+          reserved.set(balance.id, (reserved.get(balance.id) ?? 0) + quantity);
+          remaining -= quantity;
+        }
+        if (remaining > 0) {
+          // Reconcile only internal SHIPPING, consumed by this same closing transaction.
+          // AVAILABLE and marks are never increased or deducted here.
+          const balance = await this.incrementTargetBalance(tx, { clientId: request.clientId,
+            warehouseId: proof.warehouseId, skuId: proof.skuId, boxId: proof.boxId,
+            palletId: proof.palletId, status: StockStatus.SHIPPING, quantity: remaining });
+          await tx.stockMovement.create({ data: { clientId: request.clientId, warehouseId: proof.warehouseId,
+            skuId: proof.skuId, boxId: proof.boxId, palletId: proof.palletId,
+            type: MovementType.INVENTORY_ADJUSTMENT, status: StockStatus.SHIPPING, quantity: remaining,
+            sourceDocument: request.id, idempotencyKey: `${baseKey}:picked-proof:${index}:in`,
+            comment: `Подготовлено к закрытию без повторного списания AVAILABLE; факт отбора: ${proof.movementIds.join(', ')}` } });
+          line.allocations.push({ balance: { ...balance, box: null }, quantity: remaining });
+          reserved.set(balance.id, (reserved.get(balance.id) ?? 0) + remaining);
+        }
+      }
+    }
+    const items = request.items.map(item => ({ ...item, quantity: item.quantity - proofs
+      .filter(proof => proof.itemId === item.id).reduce((sum, proof) => sum + proof.quantity, 0) })).filter(item => item.quantity > 0);
+    const remainingRequest = { ...request, items };
+    const remainingSelections = subtractPickedQuantities(selections, proofs);
+    const remainingSources = subtractPickedQuantities(sources, proofs);
+    if (!proofs.length && remainingSelections.length && !sources.length) {
+      await this.restoreCompletedFbsSelectionShortages(tx, remainingRequest, remainingSelections, baseKey, warehouseId);
+    }
+    const plan: RequestAllocationPlan = !items.length ? { lines: [] } : remainingSources.length
+      ? await this.planRequestAllocationsWithPhysicalSources(tx, remainingRequest, remainingSelections, remainingSources, baseKey, warehouseId, reserved)
+      : remainingSelections.length
+        ? await this.planRequestAllocationsFromSelections(tx, request.clientId, items, remainingSelections,
+          [StockStatus.SHIPPING, StockStatus.PACKING, StockStatus.AVAILABLE], warehouseId, reserved)
+        : await this.planRequestShipment(tx, request.clientId, items, warehouseId, reserved);
+    for (const line of plan.lines) {
+      const credit = credits.lines.find(candidate => candidate.itemId === line.itemId);
+      if (credit) credit.allocations.push(...line.allocations);
+      else credits.lines.push(line);
+    }
+    // Coalesce the same balance to keep existing shipment idempotency keys unique.
+    for (const line of credits.lines) {
+      const allocations = new Map<string, (typeof line.allocations)[number]>();
+      for (const allocation of line.allocations) {
+        const existing = allocations.get(allocation.balance.id);
+        if (existing) existing.quantity += allocation.quantity;
+        else allocations.set(allocation.balance.id, { ...allocation });
+      }
+      line.allocations = [...allocations.values()];
+    }
+    return credits;
+  }
+
   private async planRequestShipment(
     tx: Prisma.TransactionClient,
     clientId: string,
     items: RequestItemForAllocation[],
     warehouseId?: string,
+    reserved: ReadonlyMap<string, number> = new Map(),
   ): Promise<RequestAllocationPlan> {
     const client = 'client' in tx
       ? await tx.client.findUnique({
@@ -2273,7 +2354,7 @@ export class StockOperationsService {
           break;
         }
 
-        const available = balanceRemaining.has(balance.id) ? balanceRemaining.get(balance.id)! : balance.quantity;
+        const available = balanceRemaining.has(balance.id) ? balanceRemaining.get(balance.id)! : balance.quantity - (reserved.get(balance.id) ?? 0);
         if (available <= 0) {
           continue;
         }
@@ -2568,6 +2649,7 @@ export class StockOperationsService {
     selections: RequestBoxSelectionForAllocation[],
     sourceStatuses: StockStatus[],
     warehouseId?: string,
+    reserved: ReadonlyMap<string, number> = new Map(),
   ): Promise<RequestAllocationPlan> {
     const resolvedItems: Array<{
       item: RequestItemForAllocation;
@@ -2631,7 +2713,7 @@ export class StockOperationsService {
         );
         for (const balance of matchingBalances) {
           if (remaining <= 0) break;
-          const available = balanceRemaining.has(balance.id) ? balanceRemaining.get(balance.id)! : balance.quantity;
+          const available = balanceRemaining.has(balance.id) ? balanceRemaining.get(balance.id)! : balance.quantity - (reserved.get(balance.id) ?? 0);
           if (available <= 0) continue;
           const quantity = Math.min(available, remaining);
           allocations.push({ balance, quantity });
@@ -2676,6 +2758,7 @@ export class StockOperationsService {
     physicalSources: PhysicalStockSourceInput[],
     baseKey: string,
     warehouseId?: string,
+    reserved: ReadonlyMap<string, number> = new Map(),
   ): Promise<RequestAllocationPlan> {
     const itemById = new Map(request.items.map((item) => [item.id, item]));
     const sourcesByItem = new Map<string, PhysicalStockSourceInput[]>();
@@ -2843,7 +2926,7 @@ export class StockOperationsService {
         if (balance.skuId !== skuId || !matches(balance)) continue;
         const available = remainingByBalance.has(balance.id)
           ? remainingByBalance.get(balance.id)!
-          : balance.quantity;
+          : balance.quantity - (reserved.get(balance.id) ?? 0);
         if (available <= 0) continue;
         const allocated = Math.min(available, remaining);
         allocations.push({ balance, quantity: allocated });
@@ -2961,12 +3044,39 @@ export class StockOperationsService {
     return { lines };
   }
 
+  // FIX: use the same exact-pick protection for ordinary packing and shipment too.
+  private async prepareFbsPickedStock(
+    tx: Prisma.TransactionClient,
+    request: { id: string; clientId: string; items: RequestItemForAllocation[] },
+    baseKey: string,
+    targetStatus: StockStatus,
+    warehouseId?: string,
+  ) {
+    const proofs = await readFbsPickedStockProof(tx, request, warehouseId);
+    if (!proofs.length) return false;
+    const selections = await this.loadRequestBoxSelections(tx, request.id, warehouseId);
+    const plan = await this.planFbsSafeManualShipment(tx, request, selections, [], baseKey, warehouseId, proofs);
+    for (const sourceStatus of [StockStatus.AVAILABLE, StockStatus.PACKING, StockStatus.SHIPPING]) {
+      if (sourceStatus === targetStatus) continue;
+      const lines = plan.lines.map(line => ({ ...line,
+        allocations: line.allocations.filter(allocation => allocation.balance.status === sourceStatus),
+      })).filter(line => line.allocations.length);
+      if (!lines.length) continue;
+      await this.applyStatusMove(tx, { request, plan: { lines }, baseKey: `${baseKey}:proved:${sourceStatus}`,
+        movementType: targetStatus === StockStatus.SHIPPING ? MovementType.PACK : MovementType.PICK,
+        sourceStatus, targetStatus, sourceComment: 'Подготовка FBS с учётом фактического отбора',
+        targetComment: 'Подготовка FBS без повторного списания отобранного товара' });
+    }
+    return true;
+  }
+
   private async ensurePackedStockIsInShipping(
     tx: Prisma.TransactionClient,
     request: { id: string; clientId: string; title?: string | null; items: RequestItemForAllocation[] },
     baseKey: string,
     warehouseId?: string,
   ) {
+    if (await this.prepareFbsPickedStock(tx, request, baseKey, StockStatus.SHIPPING, warehouseId)) return;
     const missingItems = await this.findItemsMissingInStatus(
       tx,
       request.clientId,
@@ -3012,6 +3122,7 @@ export class StockOperationsService {
     baseKey: string,
     warehouseId?: string,
   ) {
+    if (await this.prepareFbsPickedStock(tx, request, baseKey, StockStatus.PACKING, warehouseId)) return;
     const missingItems = await this.findItemsMissingInStatus(
       tx,
       request.clientId,
