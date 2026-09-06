@@ -18,6 +18,18 @@ const task = {
 
 describe('FBS stock reservation ProductMark synchronization', () => {
   afterEach(() => vi.unstubAllEnvs());
+  // TEST: preserve the live safeguard; an unknown source cannot create a phantom reserve.
+  it('does not reserve or mutate a KIZ when sourceBoxPending is true', async () => {
+    vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', 'true');
+    const findMany = vi.fn().mockResolvedValue([{ quantity: 1 }]);
+    const updateMany = vi.fn();
+    const service = new MarketplaceConnectionsService({} as never, {} as never);
+    await (service as any).reserveCompletedWildberriesStock(
+      { stockMovement: { findMany }, productMark: { updateMany } },
+      { ...task, sourceBoxPending: true }, 'warehouse-1');
+    expect(findMany).not.toHaveBeenCalled();
+    expect(updateMany).not.toHaveBeenCalled();
+  });
   // TEST: a picked KIZ must leave AVAILABLE together with its stock balance.
   it.each([false, true])('marks the exact picked KIZ as PACKING, lifecycle flag %s', async (enabled) => {
     // TEST: physical picking removes the active source association, not the task's history.
@@ -29,6 +41,7 @@ describe('FBS stock reservation ProductMark synchronization', () => {
         create: vi.fn().mockResolvedValue({ id: 'movement-1' }),
       },
       box: {
+        update: vi.fn(),
         findUnique: vi.fn().mockResolvedValue({
           id: 'box-live',
           code: 'FFL_LKX32708_06',
@@ -37,6 +50,7 @@ describe('FBS stock reservation ProductMark synchronization', () => {
         }),
       },
       stockBalance: {
+        count: vi.fn().mockResolvedValue(0),
         findMany: vi.fn().mockResolvedValue([{
           id: 'balance-available',
           warehouseId: 'warehouse-1',
@@ -48,9 +62,10 @@ describe('FBS stock reservation ProductMark synchronization', () => {
         update: vi.fn().mockResolvedValue({}),
         upsert: vi.fn().mockResolvedValue({}),
       },
-      productMark: { updateMany: productMarkUpdateMany },
+      productMark: { updateMany: productMarkUpdateMany, count: vi.fn().mockResolvedValue(0) },
     };
     const service = new MarketplaceConnectionsService({} as never, {} as never);
+    Object.assign(service, { boxCodes: { getPolicy: async () => ({ storageBoxPrefix: 'SBOX_', storageBoxAliases: ['FFL_LKBBOX'] }), normalize: async (code: string) => code } });
 
     await (service as any).reserveCompletedWildberriesStock(
       tx,
@@ -71,6 +86,10 @@ describe('FBS stock reservation ProductMark synchronization', () => {
       },
     });
     expect(task.boxId).toBe('box-live');
+    // TEST: physically picked stock is no longer stored inside its source location.
+    expect(tx.stockBalance.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ boxId: enabled ? null : 'box-live', palletId: enabled ? null : 'pallet-1' }),
+    }));
   });
 
   // TEST: undoing the reservation restores the exact KIZ to AVAILABLE.
@@ -115,7 +134,7 @@ describe('FBS stock reservation ProductMark synchronization', () => {
       },
       data: {
         status: StockStatus.AVAILABLE,
-        boxId: 'box-live',
+        boxId: enabled ? null : 'box-live',
       },
     });
   });

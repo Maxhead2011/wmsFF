@@ -13517,7 +13517,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     task: FbsTsdAssemblyRecord,
     requestWarehouseId: string | null,
   ) {
-    if (task.marketplace !== MarketplaceType.WILDBERRIES || task.completedAt) return;
+    // FIX: preserve our production safeguard until the physical source is resolved.
+    if (task.marketplace !== MarketplaceType.WILDBERRIES || task.completedAt ||
+        (permanentStorageBoxesEnabled() && task.sourceBoxPending)) return;
 
     const quantity = Math.max(1, task.itemCount);
     const movementPrefix = `fbs-sticker-pick:${task.id}`;
@@ -13592,8 +13594,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const balanceWarehouseId = requireFbsBalanceWarehouseId(
       availableBalances[0]?.warehouseId ?? box?.warehouseId ?? requestWarehouseId,
     );
-    const targetBoxId = box?.id ?? null;
-    const targetPalletId = box?.palletId ?? availableBalances[0]?.palletId ?? null;
+    // FIX: preserve the live outbound model: picked stock is not inside the storage cell.
+    const targetBoxId = permanentStorageBoxesEnabled() ? null : box?.id ?? null;
+    const targetPalletId = permanentStorageBoxesEnabled() ? null : box?.palletId ?? availableBalances[0]?.palletId ?? null;
     let shiftedFromAvailable = 0;
 
     for (const balance of availableBalances) {
@@ -13688,6 +13691,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       });
     }
     await syncProductMarkToPacking();
+    // FIX: retain live cleanup for disposable boxes, never retire a refillable storage cell.
+    if (permanentStorageBoxesEnabled() && shiftedFromAvailable > 0 && box?.id &&
+        !await preserveEmptyStorageBox(box.code, this.boxCodes)) {
+      const [remainingBalances, remainingMarks] = await Promise.all([
+        tx.stockBalance.count({ where: { boxId: box.id, quantity: { gt: 0 } } }),
+        tx.productMark.count({ where: { boxId: box.id, status: { not: StockStatus.SHIPPING } } }),
+      ]);
+      if (remainingBalances === 0 && remainingMarks === 0) {
+        await tx.box.update({ where: { id: box.id }, data: { status: 'archived', palletId: null, zoneId: null } });
+        await this.archivedEmptyBoxDetach?.detachIfArchivedAndEmpty({ boxId: box.id, reason: 'fbs-completed-pick' }, tx);
+      }
+    }
   }
 
   private async reserveAcceptedWildberriesStock(task: FbsTsdAssemblyRecord) {
@@ -13749,10 +13764,23 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         quantity: true,
       },
     });
-    // FIX: a repeated pick can use another box; keep all attempts for unique return keys.
-    const reservationMovements = receipt
-      ? allReservationMovements.filter(row => row.boxId === task.boxId)
-      : allReservationMovements;
+    // FIX: live PACKING is boxless. Net each location before selecting the active attempt;
+    // completed earlier returns must not choose the old source or hide a conflicting reserve.
+    let reservationMovements = allReservationMovements;
+    if (receipt) {
+      const byLocation = new Map<string, typeof allReservationMovements[number]>();
+      for (const row of allReservationMovements) {
+        const key = JSON.stringify([row.warehouseId, row.boxId, row.palletId]);
+        const previous = byLocation.get(key);
+        byLocation.set(key, { ...row, quantity: (previous?.quantity ?? 0) + row.quantity });
+      }
+      const groups = [...byLocation.values()];
+      reservationMovements = groups.filter(row => row.quantity > 0);
+      if (groups.some(row => row.quantity < 0) || reservationMovements.length > 1 ||
+          reservationMovements.some(row => row.boxId !== null && row.boxId !== task.boxId)) {
+        throw new BadRequestException('Движения отобранного товара противоречат друг другу. Приёмка не выполнена; проверьте резерв заказа.');
+      }
+    }
     const reservedQuantity = Math.max(0, reservationMovements.reduce(
       (total, movement) => total + movement.quantity,
       0,
@@ -13822,8 +13850,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
 
     // FIX: inbound placement comes only from fresh receipt scans, not historical source fields.
-    const returnBoxId = receipt?.boxId ?? boxId;
-    const returnPalletId = receipt ? receipt.palletId : palletId;
+    const returnBoxId = receipt ? receipt.boxId : permanentStorageBoxesEnabled() ? null : boxId;
+    const returnPalletId = receipt ? receipt.palletId : permanentStorageBoxesEnabled() ? null : palletId;
     const availableBalanceKey = fbsStockBalanceKey({
       warehouseId,
       clientId: task.clientId,

@@ -37,3 +37,39 @@ describe('FBS permanent storage after KIZ relocation', () => {
     expect(tx.stockMovement.create).toHaveBeenCalledTimes(mode === 'MOVED' ? 2 : 0);
   });
 });
+
+// TEST: the live last-pick cleanup must preserve reusable cells and their pallet/zone.
+describe('FBS last pick from a refillable storage cell', () => {
+  it.each([
+    ['FFL_LKBBOX_014', 0, 0, true, false],
+    ['SBOX_014', 0, 0, true, false],
+    ['FFL_SOURCE', 0, 0, true, true],
+    ['FFL_SOURCE', 1, 0, true, false],
+    ['FFL_SOURCE', 0, 1, true, false],
+    ['FFL_SOURCE', 0, 0, false, false],
+  ])('%s, balances %s, marks %s, enabled %s', async (code, balances, marks, enabled, archive) => {
+    vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', String(enabled));
+    const source = { id: 'source', code, warehouseId: 'wh', palletId: 'pallet', zoneId: 'zone', status: 'active' };
+    const tx = {
+      box: { findUnique: vi.fn(async () => source), update: vi.fn(async ({ data }: any) => Object.assign(source, data)) },
+      stockBalance: { findMany: vi.fn(async () => [{ id: 'available', quantity: 1, warehouseId: 'wh', boxId: 'source', palletId: 'pallet' }]),
+        delete: vi.fn(), update: vi.fn(), upsert: vi.fn(), count: vi.fn(async () => balances) },
+      stockMovement: { findMany: vi.fn(async () => []), create: vi.fn(async () => ({ id: 'movement' })) },
+      productMark: { updateMany: vi.fn(async () => ({ count: 1 })), count: vi.fn(async () => marks) },
+    };
+    const service = new MarketplaceConnectionsService({} as never, {} as never);
+    const detach = { detachIfArchivedAndEmpty: vi.fn() };
+    Object.assign(service, { archivedEmptyBoxDetach: detach,
+      boxCodes: new BoxCodePolicyService({ get: async () => ({ storageBoxAliases: ['FFL_LKBBOX'] }) } as never) });
+    await (service as any).reserveCompletedWildberriesStock(tx, {
+      id: 'task', marketplace: 'WILDBERRIES', completedAt: null, boxId: 'source', boxCode: code,
+      itemCount: 1, clientId: 'client', skuId: 'sku', requestId: 'request', orderId: 'order', kiz: 'KIZ',
+    }, 'wh');
+    expect(tx.box.update).toHaveBeenCalledTimes(archive ? 1 : 0);
+    expect(detach.detachIfArchivedAndEmpty).toHaveBeenCalledTimes(archive ? 1 : 0);
+    if (!archive) expect(source).toMatchObject({ status: 'active', palletId: 'pallet', zoneId: 'zone' });
+    expect(tx.productMark.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: { status: 'PACKING', boxId: enabled ? null : 'source' },
+    }));
+  });
+});

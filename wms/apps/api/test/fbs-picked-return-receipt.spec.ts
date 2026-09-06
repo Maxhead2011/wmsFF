@@ -57,6 +57,68 @@ function fixture() {
 }
 
 describe('physically picked cancellation requires re-receipt', () => {
+  // TEST: repeat physical pick -> cancellation -> scanned receipt into the SAME storage cell.
+  it('empties and refills a permanent cell twice without archiving it or duplicating stock/KIZ', async () => {
+    const f = fixture();
+    const originalTask = { ...f.task };
+    Object.assign(f.target, { id: 'source', zoneId: 'zone' });
+    const balances = new Map<string, any>([['initial', { id: 'initial', warehouseId: 'wh',
+      clientId: 'client', skuId: 'sku', boxId: 'source', palletId: 'pallet', status: 'AVAILABLE', quantity: 1 }]]);
+    f.tx.box.update = vi.fn();
+    f.tx.stockMovement.findMany.mockImplementation(async () => f.movements.filter(row =>
+      row.status === 'PACKING' || (row.type === 'RETURN' && row.status === 'SHIPPING' && row.quantity < 0)));
+    f.tx.stockBalance.findMany.mockImplementation(async ({ where }: any) => [...balances.values()].filter(row =>
+      row.warehouseId === where.warehouseId && row.clientId === where.clientId && row.skuId === where.skuId &&
+      row.boxId === where.boxId && (typeof where.status === 'string' ? row.status === where.status : where.status.in.includes(row.status))));
+    f.tx.stockBalance.delete.mockImplementation(async ({ where }: any) => balances.delete(where.id));
+    f.tx.stockBalance.upsert.mockImplementation(async ({ where, create, update }: any) => {
+      const existing = balances.get(where.balanceKey);
+      balances.set(where.balanceKey, existing ? { ...existing, quantity: existing.quantity + update.quantity.increment }
+        : { ...create, id: where.balanceKey });
+    });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      Object.assign(f.task, originalTask, { completedAt: null, status: 'IN_PROGRESS', boxCode: f.target.code });
+      Object.assign(f.link, { requestId: 'request', syncStatus: 'RETURN_REQUIRED', lastCategory: 'cancelled' });
+      Object.assign(f.mark, { status: 'AVAILABLE', boxId: 'source' });
+      await (f.service as any).reserveCompletedWildberriesStock(f.tx, f.task, 'wh');
+      expect([...balances.values()]).toEqual([expect.objectContaining({ boxId: null, palletId: null, status: 'PACKING', quantity: 1 })]);
+      expect(f.mark).toMatchObject({ boxId: null, status: 'PACKING' });
+      Object.assign(f.task, { completedAt: new Date(), status: 'RETURN_REQUIRED' });
+      await f.apply();
+      expect([...balances.values()]).toEqual([expect.objectContaining({ boxId: 'source', palletId: 'pallet', status: 'AVAILABLE', quantity: 1 })]);
+      expect(f.mark).toMatchObject({ id: 'mark', boxId: 'source', status: 'AVAILABLE' });
+      expect(f.target).toMatchObject({ status: 'active', palletId: 'pallet', zoneId: 'zone' });
+      expect(f.tx.box.update).not.toHaveBeenCalled();
+    }
+    expect(f.movements).toHaveLength(8);
+    expect(new Set(f.movements.map(row => row.idempotencyKey)).size).toBe(8);
+  });
+  // TEST: production keeps picked reserves outside boxes, including after a prior return.
+  it.each([false, true])('receives a boxless reserve after previous attempt %s', async previous => {
+    const f = fixture();
+    const row = { warehouseId: 'wh', boxId: null, palletId: null, quantity: 1 };
+    f.tx.stockMovement.findMany.mockResolvedValue([
+      ...(previous ? [{ ...row, boxId: 'earlier', quantity: 1 }, { ...row, boxId: 'earlier', quantity: -1 }] : []), row,
+    ]);
+    f.tx.stockBalance.findMany.mockImplementation(async ({ where }: any) => where.boxId === null
+      ? [{ id: 'packing', ...row, status: 'PACKING' }] : []);
+    await f.apply();
+    expect(f.quantities()).toEqual([0, 1]);
+    expect(f.movements[0]).toMatchObject({ boxId: null, quantity: -1 });
+    expect(f.movements[1]).toMatchObject({ boxId: 'target', quantity: 1 });
+    expect(f.mark).toMatchObject({ boxId: 'target', status: 'AVAILABLE' });
+  });
+  // TEST: neither another source's active pick nor contradictory history may be ignored.
+  it.each(['another active source', 'negative history'])('rejects %s before changing stock', async fault => {
+    const f = fixture();
+    f.tx.stockMovement.findMany.mockResolvedValue([
+      { warehouseId: 'wh', boxId: 'source', palletId: null, quantity: 1 },
+      { warehouseId: 'wh', boxId: 'other', palletId: null, quantity: fault === 'negative history' ? -1 : 1 },
+    ]);
+    await expect(f.apply()).rejects.toThrow();
+    expect(f.tx.stockBalance.delete).not.toHaveBeenCalled();
+    expect(f.quantities()).toEqual([1, 0]);
+  });
   it.each(['RETURN_TO_STOCK', 'MANAGER_CONFIRMED'])('cannot restore stock through %s without receipt scans', async action => {
     const f = fixture();
     await expect(f.apply({ action, comment: 'approved' })).rejects.toThrow(/при[её]м|скан/i);
