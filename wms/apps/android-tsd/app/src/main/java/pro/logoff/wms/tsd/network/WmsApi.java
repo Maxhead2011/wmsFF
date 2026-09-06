@@ -118,6 +118,13 @@ public interface WmsApi {
         @Body Map<String, Object> request
     );
 
+    // ADDED: explicit full-SKU evidence before atomic mark-only reconciliation.
+    @POST("api/v1/tsd/transfers/kiz-recount/preview")
+    Call<TsdTransferResponse> previewKizRecount(@Header("Authorization") String authorization, @Body Map<String, Object> request);
+
+    @POST("api/v1/tsd/transfers/kiz-recount/confirm")
+    Call<TsdTransferResponse> confirmKizRecount(@Header("Authorization") String authorization, @Body Map<String, Object> request);
+
     @GET("api/v1/tsd/storage-pallet/current")
     Call<TsdStoragePalletResponse> currentStoragePallet(
         @Header("Authorization") String authorization,

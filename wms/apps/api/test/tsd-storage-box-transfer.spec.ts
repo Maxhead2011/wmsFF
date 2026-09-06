@@ -16,6 +16,7 @@ function fixture(initialMarkBox = 'source', markValue = kiz, storageBoxAliases: 
   let sourceQuantity = quantity;
   let targetQuantity = 0;
   let markBoxId = initialMarkBox;
+  let sourceStatus = 'active';
   const oldBox = { id: 'old', code: 'FFL_OLD', clientId: 'client-1', warehouseId: 'wh-1', status: 'active' };
   const oldBalances: any[] = [];
   const auditRows: any[] = [];
@@ -27,7 +28,7 @@ function fixture(initialMarkBox = 'source', markValue = kiz, storageBoxAliases: 
   const balance = () => ({ id: 'source-balance', skuId: sku.id, clientId: 'client-1',
     warehouseId: 'wh-1', boxId: 'source', status: 'AVAILABLE', quantity: sourceQuantity, sku });
   const source = () => ({ id: 'source', code: sourceCode, clientId: 'client-1',
-    warehouseId: 'wh-1', status: 'active', client: { id: 'client-1' }, balances: [balance()] });
+    warehouseId: 'wh-1', status: sourceStatus, client: { id: 'client-1' }, balances: sourceQuantity > 0 ? [balance()] : [] });
   const target = { id: 'target', code: 'SBOX_001', clientId: 'client-1', warehouseId: 'wh-1', status: 'active' };
   const movements = new Map<string, any>();
   // TEST: model newly registered marks as well as the pre-existing mark.
@@ -51,7 +52,7 @@ function fixture(initialMarkBox = 'source', markValue = kiz, storageBoxAliases: 
         if (where.id === 'source') return source();
         return code === sourceCode ? source() : code === target.code ? target : null;
       }),
-      create: vi.fn(), update: vi.fn(),
+      create: vi.fn(), update: vi.fn(async ({ where, data }: any) => { if (where.id === 'source') sourceStatus = data.status; }),
     },
     sku: { findFirst: vi.fn(async () => sku) },
     productMark: {
@@ -79,12 +80,13 @@ function fixture(initialMarkBox = 'source', markValue = kiz, storageBoxAliases: 
     stockBalance: {
       findFirst: vi.fn(async ({ where }: any) => where.boxId === 'old'
         ? oldBalances.find(row => row.quantity !== 0) ?? null
-        : where.boxId === 'target' ? (targetQuantity > 0 ? { quantity: targetQuantity } : null) : balance()),
+        : where.boxId === 'target' ? (targetQuantity > 0 ? { quantity: targetQuantity } : null) : sourceQuantity > 0 ? balance() : null),
       update: vi.fn(async ({ data }: any) => {
         sourceQuantity -= data.quantity.decrement;
         return balance();
       }),
-      upsert: vi.fn(async ({ create }: any) => { targetQuantity += create.quantity; return { quantity: targetQuantity }; }),
+      upsert: vi.fn(async ({ create }: any) => { if (create.boxId === 'source') { sourceQuantity += create.quantity; return balance(); }
+        targetQuantity += create.quantity; return { quantity: targetQuantity }; }),
       delete: vi.fn(),
       aggregate: vi.fn(async () => ({ _sum: { quantity: sourceQuantity } })),
     },
@@ -103,12 +105,15 @@ function fixture(initialMarkBox = 'source', markValue = kiz, storageBoxAliases: 
     fbsTsdAssembly: { findFirst: vi.fn(async (_args: any): Promise<any> => null), findMany: vi.fn(async (): Promise<any[]> => []) },
     shippedKizHistory: { findFirst: vi.fn(async (_args: any): Promise<any> => null), findMany: vi.fn(async (): Promise<any[]> => []) },
     fbsWebKizStickerPrint: { findFirst: vi.fn(async (_args: any): Promise<any> => null), findMany: vi.fn(async (): Promise<any[]> => []) },
+    fbsPrintJob: { findFirst: vi.fn(async (): Promise<any> => null) },
+    fbsAssemblyAttemptHistory: { findFirst: vi.fn(async (): Promise<any> => null) },
+    kizCirculationItem: { findFirst: vi.fn(async (): Promise<any> => null) },
     clientMarketplaceConnection: { findUnique: vi.fn(async (): Promise<any> => ({ id: 'connection-1', clientId: 'client-1', marketplace: 'WILDBERRIES', isActive: true, apiKey: 'test-only-key' })) },
     auditLog: { create: vi.fn(async ({ data }: any) => { auditRows.push(data); return data; }) },
     $transaction: vi.fn(async (fn: any) => {
-      const before = { sourceQuantity, targetQuantity, markBoxId, mark: { ...mark }, movements: new Map(movements), audits: [...auditRows], addedMarks: addedMarks.map(row => ({ ...row })) };
+      const before = { sourceQuantity, targetQuantity, sourceStatus, markBoxId, mark: { ...mark }, movements: new Map(movements), audits: [...auditRows], addedMarks: addedMarks.map(row => ({ ...row })) };
       try { return await fn(db); } catch (error) {
-        ({ sourceQuantity, targetQuantity, markBoxId } = before);
+        ({ sourceQuantity, targetQuantity, sourceStatus, markBoxId } = before);
         Object.assign(mark, before.mark);
         movements.clear(); before.movements.forEach((value, key) => movements.set(key, value));
         auditRows.splice(0, auditRows.length, ...before.audits);
@@ -124,8 +129,96 @@ function fixture(initialMarkBox = 'source', markValue = kiz, storageBoxAliases: 
   const payload = { transferMode: 'BOX_TO_STORAGE_BOX', fromBoxCode: sourceCode,
     toBoxCode: 'SBOX_001', barcode, scanCode: markValue, idempotencyKey: 'move-1' };
   return { service, codes, db, sku, target, payload, scopes, oldBox, oldBalances, mark, auditRows, addedMarks,
-    quantities: () => [sourceQuantity, targetQuantity], markBox: () => markBoxId };
+    quantities: () => [sourceQuantity, targetQuantity], markBox: () => markBoxId,
+    setSourceStatus: (status: string) => { sourceStatus = status; } };
 }
+
+// TEST: physical scans must open an empty source without silently receiving stock.
+describe('physical stock reconciliation entry', () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it('allows opening a zero-balance source only when recovery is enabled', async () => {
+    vi.stubEnv('WMS_TSD_PHYSICAL_STOCK_RECONCILIATION_ENABLED', 'true');
+    const f = fixture('source', kiz, [], 'FFL_SOURCE', 0);
+    await expect(f.service.inspectTsdTransferSource('FFL_SOURCE', user)).resolves.toMatchObject({ state: 'SCAN_ITEM', sourceBox: { totalQuantity: 0 } });
+    expect(f.db.stockMovement.create).not.toHaveBeenCalled();
+  });
+  it('accepts the catalog barcode in an empty source and asks for its KIZ, without a write', async () => {
+    vi.stubEnv('WMS_TSD_PHYSICAL_STOCK_RECONCILIATION_ENABLED', 'true');
+    const f = fixture('source', kiz, [], 'FFL_SOURCE', 0);
+    await expect(f.service.inspectTsdTransferItem({ transferMode: 'BOX_TO_STORAGE_BOX', fromBoxCode: 'FFL_SOURCE', scanCode: barcode }, user))
+      .resolves.toMatchObject({ state: 'SCAN_KIZ', item: { availableQuantity: 0 } });
+    expect(f.db.stockMovement.create).not.toHaveBeenCalled();
+  });
+  it('preserves the old empty-source restriction when disabled', async () => {
+    vi.stubEnv('WMS_TSD_PHYSICAL_STOCK_RECONCILIATION_ENABLED', 'false');
+    const f = fixture('source', kiz, [], 'FFL_SOURCE', 0);
+    await expect(f.service.inspectTsdTransferSource('FFL_SOURCE', user)).rejects.toThrow('нет доступного');
+  });
+  it.each([true, false])('atomically restores and transfers one unit, known KIZ=%s', async known => {
+    vi.stubEnv('WMS_TSD_PHYSICAL_STOCK_RECONCILIATION_ENABLED', 'true');
+    const f = fixture('source', kiz, [], 'FFL_SOURCE', 0);
+    if (!known) f.payload.scanCode = '010460000000000121NEW-SERIAL01';
+    await expect(f.service.inspectTsdTransferItem(f.payload, user)).resolves.toMatchObject({ state: 'SCAN_TARGET' });
+    expect(f.quantities()).toEqual([0, 0]);
+    await expect(f.service.executeTsdTransfer(f.payload, user)).resolves.toMatchObject({ status: 'APPLIED' });
+    expect(f.quantities()).toEqual([0, 1]);
+    expect(f.auditRows.some(row => row.action === 'TSD_PHYSICAL_STOCK_RECOVERY')).toBe(true);
+    expect(f.db.stockMovement.create.mock.calls.filter(([args]) => args.data.type === 'INVENTORY_ADJUSTMENT')).toHaveLength(1);
+    expect(f.db.$transaction.mock.calls[0][1]).toMatchObject({ isolationLevel: 'Serializable' });
+    if (known) { expect(f.markBox()).toBe('target'); expect(f.db.productMark.create).not.toHaveBeenCalled(); }
+    else expect(f.addedMarks[0]).toMatchObject({ boxId: 'target', status: 'AVAILABLE', value: f.payload.scanCode });
+    await expect(f.service.executeTsdTransfer(f.payload, user)).resolves.toMatchObject({ status: 'ALREADY_APPLIED' });
+    expect(f.quantities()).toEqual([0, 1]);
+    await expect(f.service.executeTsdTransfer({ ...f.payload, idempotencyKey: 'another-operation' }, user)).rejects.toThrow();
+    expect(f.quantities()).toEqual([0, 1]);
+  });
+  it.each(['target', 'mark'])('rolls back recovery when %s fails', async failure => {
+    vi.stubEnv('WMS_TSD_PHYSICAL_STOCK_RECONCILIATION_ENABLED', 'true');
+    const f = fixture('source', kiz, [], 'FFL_SOURCE', 0);
+    if (failure === 'mark') f.db.productMark.updateMany.mockResolvedValue({ count: 0 });
+    else f.target.clientId = 'another-client';
+    await expect(f.service.executeTsdTransfer(f.payload, user)).rejects.toThrow();
+    expect(f.quantities()).toEqual([0, 0]); expect(f.markBox()).toBe('source');
+    expect(f.auditRows).toHaveLength(0);
+  });
+  it('binds a retry to the original worker, scans and destination', async () => {
+    vi.stubEnv('WMS_TSD_PHYSICAL_STOCK_RECONCILIATION_ENABLED', 'true');
+    const f = fixture('source', kiz, [], 'FFL_SOURCE', 0);
+    await f.service.executeTsdTransfer(f.payload, user);
+    await expect(f.service.executeTsdTransfer({ ...f.payload, barcode: 'different' }, user)).rejects.toThrow('другими данными');
+    await expect(f.service.executeTsdTransfer(f.payload, { ...user, id: 'another-worker' })).rejects.toThrow('другими данными');
+    expect(f.quantities()).toEqual([0, 1]);
+  });
+  it('accepts an already completed legacy retry after the flag is enabled', async () => {
+    vi.stubEnv('WMS_TSD_PHYSICAL_STOCK_RECONCILIATION_ENABLED', 'false');
+    const f = fixture(); await f.service.executeTsdTransfer(f.payload, user);
+    vi.stubEnv('WMS_TSD_PHYSICAL_STOCK_RECONCILIATION_ENABLED', 'true');
+    await expect(f.service.executeTsdTransfer(f.payload, user)).resolves.toMatchObject({ status: 'ALREADY_APPLIED' });
+    expect(f.quantities()).toEqual([1, 1]);
+  });
+  it('recognizes a completed recovery after the feature is disabled', async () => {
+    vi.stubEnv('WMS_TSD_PHYSICAL_STOCK_RECONCILIATION_ENABLED', 'true');
+    const f = fixture('source', kiz, [], 'FFL_SOURCE', 0); await f.service.executeTsdTransfer(f.payload, user);
+    vi.stubEnv('WMS_TSD_PHYSICAL_STOCK_RECONCILIATION_ENABLED', 'false');
+    await expect(f.service.executeTsdTransfer(f.payload, user)).resolves.toMatchObject({ status: 'ALREADY_APPLIED' });
+    await expect(f.service.executeTsdTransfer({ ...f.payload, barcode: 'changed' }, user)).rejects.toThrow('другими данными');
+    expect(f.quantities()).toEqual([0, 1]);
+  });
+  it('denies client-role recovery even if the source contains a different product', async () => {
+    vi.stubEnv('WMS_TSD_PHYSICAL_STOCK_RECONCILIATION_ENABLED', 'true');
+    const f = fixture('source', kiz, [], 'FFL_SOURCE', 0);
+    await expect(f.service.executeTsdTransfer(f.payload, { ...user, roleCodes: ['CLIENT'] })).rejects.toThrow();
+    expect(f.quantities()).toEqual([0, 0]);
+  });
+  it('allows a physically scanned archived source without changing it during inspection', async () => {
+    vi.stubEnv('WMS_TSD_PHYSICAL_STOCK_RECONCILIATION_ENABLED', 'true');
+    const f = fixture('source', kiz, [], 'FFL_SOURCE', 0); f.setSourceStatus('archived');
+    await expect(f.service.inspectTsdTransferSource('FFL_SOURCE', user)).resolves.toMatchObject({ sourceBox: { totalQuantity: 0 } });
+    expect(f.db.box.update).not.toHaveBeenCalled();
+    await f.service.executeTsdTransfer(f.payload, user);
+    expect(f.quantities()).toEqual([0, 1]);
+  });
+});
 
 // TEST: empty permanent storage remains placed; the exact mark moves once, without new stock.
 describe('permanent storage box lifecycle', () => {
@@ -715,6 +808,7 @@ describe('storage-box transfer with an unregistered KIZ', () => {
     vi.stubEnv('WMS_FBS_REPEAT_ASSEMBLY_ENABLED', 'true');
     try {
       const f = prepare();
+      if (fault === 'missing delegate') delete (f.db as any).fbsAssemblyAttemptHistory;
       if (fault === 'unavailable database') (f.db as any).fbsAssemblyAttemptHistory = {
         findFirst: vi.fn().mockRejectedValue(new Error('history unavailable')),
       };

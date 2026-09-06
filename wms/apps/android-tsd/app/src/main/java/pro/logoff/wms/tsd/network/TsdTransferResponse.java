@@ -6,6 +6,17 @@ public class TsdTransferResponse {
     public String state;
     public String status;
     public String message;
+    // ADDED: older servers default this capability to false.
+    public boolean kizRecountEnabled;
+    public String snapshot;
+    public String reviewId;
+    public int quantity;
+    public int retiredCount;
+    public int registeredCount;
+    public boolean adminRelease;
+    public boolean adminConfirmationRequired;
+    public int previousQuantity;
+    public int delta;
     public SourceBox sourceBox;
     public Item item;
     public String sourceBoxCode;
