@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { fbsTerminalQueueFilterEnabled, isFbsTerminalQueueOrder } from '../../common/fbs-terminal-queue';
 import { appendFbsAttemptHistory, readFbsAttemptHistory, hasFbsAttemptHistory, restoreAttemptSnapshot } from '../../common/shipment-history/fbs-attempt-history';
 import { fbsAttemptPageWindow, mergeFbsAttemptPage } from '../../common/shipment-history/fbs-attempt-page';
 import { isDeepStrictEqual } from 'node:util';
@@ -4129,10 +4130,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (request.type !== ClientRequestType.OUTBOUND || request._count.fbsOrderLinks + priorRouteAttempts.length === 0) {
       throw new BadRequestException('Маршрут доступен только для FBS-заявки.');
     }
-    const tasks = await this.prisma.fbsTsdAssembly.findMany({
+    let tasks = await this.prisma.fbsTsdAssembly.findMany({
       where: { requestId },
       select: {
-        id: true, orderId: true, skuId: true, sourceSkuId: true,
+        id: true, orderId: true, connectionId: true, skuId: true, sourceSkuId: true,
         productName: true, article: true, itemCount: true, status: true,
         reservedBoxId: true, reservedBoxCode: true, boxId: true, boxCode: true,
         barcode: true, kiz: true, errorMessage: true, workerName: true, updatedAt: true,
@@ -4140,6 +4141,17 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       orderBy: [{ status: 'asc' }, { orderId: 'asc' }],
     });
     tasks.push(...priorRouteAttempts.map(row => row.task));
+    if (fbsTerminalQueueFilterEnabled()) {
+      const links = await this.prisma.fbsOrderRequestLink.findMany({ where: { requestId }, select: {
+        connectionId: true, orderId: true, marketplace: true, lastCategory: true,
+        lastSupplierStatus: true, lastWbStatus: true,
+      } });
+      const terminalKeys = new Set(links.filter(isFbsTerminalQueueOrder)
+        .map(link => selectionKey(link.connectionId, link.orderId)));
+      // FIX: preserve gathered history but never send a picker to a terminal order's box.
+      tasks = tasks.filter(task => task.status === 'COMPLETED' ||
+        !terminalKeys.has(selectionKey(task.connectionId, task.orderId)));
+    }
     const boxIds = uniqueStrings(tasks.flatMap((task) => [task.boxId ?? '', task.reservedBoxId ?? '']));
     const boxes = boxIds.length > 0
       ? await this.prisma.box.findMany({
@@ -5061,6 +5073,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         lastSupplierStatus: true,
         lastSupplyId: true,
         lastSkuId: true,
+        lastWbStatus: true,
         request: {
           select: {
             id: true,
@@ -5156,9 +5169,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     // administrator explicitly enabled local emergency assembly.
     const activeLinks = links.filter(
       (link) =>
-        Boolean(link.request.fbsEmergencyAssemblyAt) ||
+        !isFbsTerminalQueueOrder(link) && (Boolean(link.request.fbsEmergencyAssemblyAt) ||
         !link.lastCategory ||
-        link.lastCategory === 'active',
+        link.lastCategory === 'active'),
     );
     const taskRequestIds = uniqueStrings(links.map((link) => link.requestId));
     const activeTasks = taskRequestIds.length > 0
@@ -5366,7 +5379,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
     }
 
-    if (current && !choices.has(current.requestId)) {
+    // FIX: a saved assignment must not reintroduce a terminal order into the selector.
+    const currentQueueLink = current && fbsTerminalQueueFilterEnabled()
+      ? await this.prisma.fbsOrderRequestLink.findUnique({
+          where: { marketplace_connectionId_orderId: {
+            marketplace: current.marketplace, connectionId: current.connectionId, orderId: current.orderId,
+          } },
+          select: { marketplace: true, lastCategory: true, lastSupplierStatus: true, lastWbStatus: true },
+        }) : null;
+    const currentIsTerminal = isFbsTerminalQueueOrder(currentQueueLink);
+    if (current && !currentIsTerminal && !choices.has(current.requestId)) {
       const currentRequest = await this.prisma.clientRequest.findUnique({
         where: { id: current.requestId },
         select: {
@@ -5389,7 +5411,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       for (const task of activeTasks) {
         const choice = choices.get(task.requestId);
         if (!choice) continue;
-        if (task.status === 'IN_PROGRESS') choice.inProgressOrders += 1;
+        if (task.status === 'IN_PROGRESS' && !isFbsTerminalQueueOrder(links.find(link =>
+          link.requestId === task.requestId && link.connectionId === task.connectionId && link.orderId === task.orderId))) {
+          choice.inProgressOrders += 1;
+        }
       }
     }
 
@@ -5418,7 +5443,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
     return {
       currentRequestId: currentHasScans ? current?.requestId ?? null : null,
-      message: currentHasScans
+      message: currentIsTerminal
+        ? 'Открытый заказ не требуется собирать. Сканы сохранены. Отложите задание; учёт взятого товара проверяет менеджер.'
+        : currentHasScans
         ? 'Сначала завершите или отложите уже открытый заказ этой FBS-заявки.'
         : 'Выберите FBS-заявку для сборки.',
       requests,
@@ -8449,6 +8476,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     );
     const scannedCode = normalizeFbsScannerCode(rawCode);
     const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    await this.requireFbsOrderStillCollectable(task);
     requireFbsTaskWithoutSyncConflict(task);
     if (task.status === 'COMPLETED') {
       return this.formatFbsTsdAssembly(task, user, 'Заказ уже собран.');
@@ -8528,6 +8556,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   async scanFbsTsdBox(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
     let task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    await this.requireFbsOrderStillCollectable(task);
     task = await this.assertFbsTsdLeaseVersion(task, user);
     requireFbsTaskWithoutSyncConflict(task);
     if (task.status === 'COMPLETED') return this.formatFbsTsdAssembly(task, user, 'Заказ уже собран.');
@@ -9752,6 +9781,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   async scanFbsTsdBarcode(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
     let task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    await this.requireFbsOrderStillCollectable(task);
     task = await this.assertFbsTsdLeaseVersion(task, user);
     requireFbsTaskWithoutSyncConflict(task);
     if (!task.boxId && !fbsTsdUsesNoBox(task)) {
@@ -9955,6 +9985,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   async scanFbsTsdKiz(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
     let task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    await this.requireFbsOrderStillCollectable(task);
     task = await this.assertFbsTsdLeaseVersion(task, user);
     requireFbsTaskWithoutSyncConflict(task);
     if (!task.requiresKiz) throw new BadRequestException('Для этого товара КИЗ не требуется.');
@@ -13358,6 +13389,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   async completeFbsTsdAssembly(taskId: string, user: AuthUser) {
     const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    await this.requireFbsOrderStillCollectable(task);
     requireFbsTaskWithoutSyncConflict(task);
     if (task.status === 'COMPLETED') return this.formatFbsTsdAssembly(task, user, 'Заказ уже собран.');
     if ((!task.boxId && !fbsTsdUsesNoBox(task)) || !task.barcode) {
@@ -14050,6 +14082,19 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       },
     });
     return this.emptyFbsTsdAssembly(task.deviceCode, user, 'Заказ отложен. Можно взять следующий.');
+  }
+
+  // FIX: old open screens cannot bypass terminal-status filtering. Release/return
+  // actions intentionally do not call this guard; managers must retain those controls.
+  private async requireFbsOrderStillCollectable(task: FbsTsdAssemblyRecord) {
+    if (!fbsTerminalQueueFilterEnabled() || task.marketplace !== MarketplaceType.WILDBERRIES || task.status === 'COMPLETED') return;
+    const link = await this.prisma.fbsOrderRequestLink.findUnique({ where: {
+      marketplace_connectionId_orderId: { marketplace: task.marketplace, connectionId: task.connectionId, orderId: task.orderId },
+    }, select: { marketplace: true, lastCategory: true, lastSupplierStatus: true, lastWbStatus: true } });
+    if (isFbsTerminalQueueOrder(link)) throw new BadRequestException(
+      `Заказ WB №${task.orderId} не требуется собирать. Статус WB: ${link?.lastSupplierStatus}/${link?.lastWbStatus}. ` +
+      'Сканы и списания сохранены. Отложите задание; решение по уже взятому товару принимает менеджер.',
+    );
   }
 
   private async loadOwnedFbsTsdAssembly(taskId: string, user: AuthUser) {
@@ -24446,7 +24491,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
 
     const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
-    const relevantLinks = links.filter((link) => connectionById.has(link.connectionId));
+    const relevantLinks = links.filter((link) => connectionById.has(link.connectionId) && !isFbsTerminalQueueOrder(link));
     const skuIds = uniqueStrings(relevantLinks.map((link) => link.lastSkuId ?? ''));
     const skus = skuIds.length > 0
       ? await this.prisma.sku.findMany({
@@ -29383,6 +29428,9 @@ function normalizeFbsWarehouseRouteMode(
 }
 
 function isFbsTsdAssemblyOrderEligible(order: FbsOrderSummary) {
+  // FIX: emergency mode does not revive cancelled, sold or defective WB orders.
+  if (isFbsTerminalQueueOrder({ marketplace: order.marketplace, lastCategory: order.category,
+    lastSupplierStatus: order.supplierStatus, lastWbStatus: order.wbStatus })) return false;
   return (
     Boolean(order.request?.fbsEmergencyAssemblyAt) ||
     (

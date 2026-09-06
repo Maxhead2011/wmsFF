@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import { requiresFbsReturnReceipt } from '../marketplace-connections/fbs-return-receipt';
+import { fbsTerminalQueueFilterEnabled, isFbsTerminalQueueOrder } from '../../common/fbs-terminal-queue';
 import {
   ClientRequestStatus,
   ClientRequestType,
@@ -861,14 +862,15 @@ export class TsdAssemblyService {
   }
 
   private async loadFbsAssemblyFacts(requestId: string, requestRows: PickInstructionDocument['rows']) {
-    const [links, rows, duplicateKizEvents, localKizConflictEvents] = await Promise.all([
+    const [savedLinks, rows, duplicateKizEvents, localKizConflictEvents] = await Promise.all([
       this.prisma.fbsOrderRequestLink.findMany({
         where: {
           requestId,
           syncStatus: { in: ['ACTIVE', 'RETURN_REQUIRED'] },
-          lastCategory: { not: 'cancelled' },
+          ...(!fbsTerminalQueueFilterEnabled() ? { lastCategory: { not: 'cancelled' } } : {}),
         },
-        select: { orderId: true, connectionId: true, lastSkuId: true },
+        select: { orderId: true, connectionId: true, lastSkuId: true, lastItemCount: true,
+          marketplace: true, lastCategory: true, lastSupplierStatus: true, lastWbStatus: true },
         orderBy: { createdAt: 'asc' },
       }),
       this.prisma.fbsTsdAssembly.findMany({
@@ -878,6 +880,7 @@ export class TsdAssemblyService {
           orderId: true,
           requestItemId: true,
           skuId: true,
+          connectionId: true,
           productName: true,
           article: true,
           boxCode: true,
@@ -938,9 +941,14 @@ export class TsdAssemblyService {
     // FIX: the original online request retains the factual collection history.
     for (const historical of await readFbsAttemptHistory(this.prisma, { requestId })) {
       if (!rows.some(row => row.id === historical.task.id)) rows.push(historical.task);
-      if (!links.some(link => link.orderId === historical.link.orderId && link.connectionId === historical.link.connectionId)) links.push(historical.link);
+      if (!savedLinks.some(link => link.orderId === historical.link.orderId && link.connectionId === historical.link.connectionId)) savedLinks.push(historical.link);
     }
-    if (links.length === 0) {
+    // FIX: filter only the collection plan. All task rows/KIZ/return evidence remain below.
+    const completedQueueKeys = new Set(rows.filter(row => row.status === 'COMPLETED')
+      .map(row => `${row.connectionId}:${row.orderId}`));
+    const links = savedLinks.filter(link => !isFbsTerminalQueueOrder(link) ||
+      completedQueueKeys.has(`${link.connectionId}:${link.orderId}`));
+    if (links.length === 0 && !(fbsTerminalQueueFilterEnabled() && (rows.length > 0 || savedLinks.length > 0))) {
       return null;
     }
     // FIX: keep saved completion facts across local-search activation, matching TSD and online progress.
@@ -1018,8 +1026,32 @@ export class TsdAssemblyService {
       cargoPackedByName: row.cargoPackedByName,
       wmsBoxCode: row.cargoPacking?.cargoPlaceId ?? null,
     }));
+    // FIX: terminal orders are read-only evidence, never a new collection/KIZ action.
+    const terminalLinks = savedLinks.filter(isFbsTerminalQueueOrder);
+    const terminalKeys = new Set(terminalLinks.map(link => `${link.connectionId}:${link.orderId}`));
+    const terminalTaskIds = new Set(rows.filter(row => terminalKeys.has(`${row.connectionId}:${row.orderId}`)).map(row => row.id));
+    const notForAssembly = terminalLinks.map(link => {
+      const task = rows.find(row => row.connectionId === link.connectionId && row.orderId === link.orderId);
+      const fact = task ? facts.find(row => row.id === task.id) : null;
+      return {
+        id: task?.id ?? `${link.connectionId}:${link.orderId}`,
+        orderId: link.orderId,
+        wbStatus: `${link.lastSupplierStatus ?? '—'}/${link.lastWbStatus ?? '—'}`,
+        productName: fact?.productName ?? requestRows.find(row => row.skuId === link.lastSkuId)?.name ?? 'Товар',
+        productBarcode: fact?.productBarcode ?? null,
+        kiz: fact?.kiz ?? null,
+        sourceBoxCode: fact?.sourceBoxCode ?? null,
+        workerName: fact?.workerName ?? null,
+        syncIssue: fact?.syncIssue ?? null,
+      };
+    });
     const completedRows = rows.filter((row) => row.status === 'COMPLETED');
-    const returnRequiredRows = rows.filter((row) => row.status === 'RETURN_REQUIRED');
+    // FIX: terminal cancellation blocks collection, not receipt of an already picked return.
+    const cancelledReceiptKeys = new Set(terminalLinks.filter(link => link.lastCategory === 'cancelled' &&
+      link.lastWbStatus?.trim().toLowerCase() !== 'sold').map(link => `${link.connectionId}:${link.orderId}`));
+    const returnRequiredRows = rows.filter((row) => row.status === 'RETURN_REQUIRED' &&
+      (!terminalTaskIds.has(row.id) || (requiresFbsReturnReceipt(row) && cancelledReceiptKeys.has(`${row.connectionId}:${row.orderId}`))));
+    const returnRequiredIds = new Set(returnRequiredRows.map(row => row.id));
     const handledRows = [...completedRows, ...returnRequiredRows];
     const handledOrderIds = new Set(handledRows.map((row) => row.orderId));
     const linkedOrderIds = new Set(links.map((link) => link.orderId));
@@ -1049,7 +1081,7 @@ export class TsdAssemblyService {
       .map((row) => {
         const requiredQuantity = Math.max(0, row.requestedQuantity);
         const collectedQuantity = Math.min(requiredQuantity, handledByRequestItem.get(row.itemId) ?? 0);
-        const remainingQuantity = Math.max(0, requiredQuantity - collectedQuantity);
+        const savedRemainingQuantity = Math.max(0, requiredQuantity - collectedQuantity);
         const sku = row.skuId ? skuById.get(row.skuId) : null;
         const linkedSkuOrderIds = row.skuId
           ? (pendingLinksBySku.get(row.skuId) ?? []).map((link) => link.orderId)
@@ -1057,6 +1089,16 @@ export class TsdAssemblyService {
         const commentOrderIds = (row.comment?.match(/\d{6,}/g) ?? [])
           .filter((orderId) => linkedOrderIds.has(orderId) && !handledOrderIds.has(orderId));
         const orderIds = uniqueSorted([...linkedSkuOrderIds, ...commentOrderIds]);
+        // FIX: an old requestedQuantity is not demand after WB ended an order.
+        const eligibleOrderIds = fbsTerminalQueueFilterEnabled() ? orderIds.filter(orderId => {
+          const task = rowByOrderId.get(orderId);
+          if (task?.requestItemId) return task.requestItemId === row.itemId;
+          return requestRows.find(candidate => candidate.skuId === row.skuId)?.itemId === row.itemId;
+        }) : orderIds;
+        const remainingQuantity = fbsTerminalQueueFilterEnabled()
+          ? eligibleOrderIds.reduce((sum, orderId) => sum + Math.max(1,
+              linkByOrderId.get(orderId)?.lastItemCount ?? rowByOrderId.get(orderId)?.itemCount ?? 1), 0)
+          : savedRemainingQuantity;
         return {
           requestItemId: row.itemId,
           skuId: row.skuId,
@@ -1068,8 +1110,8 @@ export class TsdAssemblyService {
           requiredQuantity,
           collectedQuantity,
           remainingQuantity,
-          orderIds,
-          orders: orderIds
+          orderIds: eligibleOrderIds,
+          orders: eligibleOrderIds
             .map((orderId) => {
               const link = linkByOrderId.get(orderId);
               const task = rowByOrderId.get(orderId);
@@ -1172,6 +1214,7 @@ export class TsdAssemblyService {
       wmsBoxMap.set(packing.id, current);
     });
     const notPackedRows = links
+      .filter(link => !isFbsTerminalQueueOrder(link))
       .map((link) => {
         const task = rowByOrderId.get(link.orderId);
         if (task?.cargoPackingId) return null;
@@ -1204,7 +1247,7 @@ export class TsdAssemblyService {
       .filter((event) => {
         const row = factById.get(event.assemblyId);
         if (
-          !row ||
+          !row || terminalTaskIds.has(row.id) ||
           row.status !== 'IN_PROGRESS' ||
           (row.wbMetaStatus === 'ACCEPTED' && Boolean(row.kiz))
         ) {
@@ -1238,7 +1281,7 @@ export class TsdAssemblyService {
         ...facts
           .filter(
             (row) =>
-              row.wbMetaStatus === 'REJECTED' &&
+              !terminalTaskIds.has(row.id) && row.wbMetaStatus === 'REJECTED' &&
               Boolean(row.kiz) &&
               Boolean(row.syncIssue),
           )
@@ -1257,8 +1300,9 @@ export class TsdAssemblyService {
       returnRequired: {
         orders: returnRequiredRows.length,
         units: returnRequiredRows.reduce((sum, row) => sum + Math.max(1, row.itemCount), 0),
-        rows: facts.filter((row) => row.status === 'RETURN_REQUIRED'),
+        rows: facts.filter((row) => returnRequiredIds.has(row.id)),
       },
+      notForAssembly,
       rows: facts,
       wmsBoxes: {
         totalBoxes: wmsBoxMap.size,

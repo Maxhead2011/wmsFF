@@ -11,6 +11,7 @@ const user = {
   writableWarehouseIds: ['wh-1'], clientScopeMode: 'ALL', clientIds: [], writableClientIds: [],
 } as any;
 
+// TEST: retain configurable source codes and quantities for both merged workflows.
 function fixture(initialMarkBox = 'source', markValue = kiz, storageBoxAliases: string[] = [], sourceCode = 'FFL_SOURCE', quantity = 2) {
   let sourceQuantity = quantity;
   let targetQuantity = 0;
@@ -47,12 +48,14 @@ function fixture(initialMarkBox = 'source', markValue = kiz, storageBoxAliases: 
         const code = where.code ?? where.clientId_code?.code;
         if (where.id === 'old') return oldBox;
         if (where.id === 'target') return target;
+        if (where.id === 'source') return source();
         return code === sourceCode ? source() : code === target.code ? target : null;
       }),
       create: vi.fn(), update: vi.fn(),
     },
     sku: { findFirst: vi.fn(async () => sku) },
     productMark: {
+      findMany: vi.fn(async ({ where }: any) => marks().filter(row => matchesMark(row, where))),
       findFirst: vi.fn(async ({ where }: any) => marks().find(row => matchesMark(row, where)) ?? null),
       count: vi.fn(async ({ where }: any) => marks().filter(row => matchesMark(row, where)).length),
       create: vi.fn(async ({ data }: any) => {
@@ -155,6 +158,93 @@ describe('permanent storage box lifecycle', () => {
     if (!archived) expect(f.db.box.update).not.toHaveBeenCalled();
     await f.service.executeTsdTransfer(f.payload, user);
     expect(f.quantities()).toEqual([0, 1]);
+  });
+});
+
+// TEST: automatic source discovery must never manufacture or double-move stock.
+describe('KIZ → storage box with automatic source', () => {
+  const setup = () => {
+    const f = fixture();
+    f.payload.transferMode = 'KIZ_TO_STORAGE_BOX';
+    return f;
+  };
+  it('asks for KIZ without requiring a source scan', async () => {
+    const f = setup();
+    await expect(f.service.inspectTsdTransferItem({ transferMode: f.payload.transferMode, scanCode: barcode }, user))
+      .resolves.toMatchObject({ state: 'SCAN_KIZ' });
+    expect(f.db.stockMovement.create).not.toHaveBeenCalled();
+  });
+  it('discovers the registered source from KIZ, then moves exactly one unit', async () => {
+    const f = setup();
+    await expect(f.service.inspectTsdTransferItem({ ...f.payload, fromBoxCode: undefined }, user))
+      .resolves.toMatchObject({ state: 'SCAN_TARGET', sourceBox: { code: 'FFL_SOURCE' } });
+    expect(f.quantities()).toEqual([2, 0]);
+    await expect(f.service.executeTsdTransfer(f.payload, user)).resolves.toMatchObject({ status: 'APPLIED' });
+    expect(f.quantities()).toEqual([1, 1]);
+    expect(f.markBox()).toBe('target');
+    expect(f.db.productMark.create).not.toHaveBeenCalled();
+    await expect(f.service.executeTsdTransfer(f.payload, user)).resolves.toMatchObject({ status: 'ALREADY_APPLIED' });
+    expect(f.quantities()).toEqual([1, 1]);
+  });
+  it('matches scanner GS forms by case-sensitive GTIN and serial', async () => {
+    const f = setup();
+    await expect(f.service.inspectTsdTransferItem({ ...f.payload, fromBoxCode: undefined,
+      scanCode: `]d2${kiz}<GS>91TEST<GS>92CRYPTO` }, user))
+      .resolves.toMatchObject({ state: 'SCAN_TARGET', item: { skuId: 'sku-1', scanType: 'KIZ' } });
+  });
+  it.each(['unknown', 'wrong barcode', 'reserved', 'shipped', 'ambiguous', 'no source', 'foreign warehouse',
+    'foreign client', 'assembly', 'printed', 'shipment history', 'source changed', 'CAS race'])('rejects %s without mutations', async fault => {
+    const f = setup();
+    if (fault === 'unknown') f.payload.scanCode = '010460000000000121OTHER-SERIAL';
+    if (fault === 'wrong barcode') f.payload.barcode = '999999';
+    if (fault === 'reserved') f.mark.status = 'RESERVED';
+    if (fault === 'shipped') f.mark.status = 'SHIPPING';
+    if (fault === 'ambiguous') f.addedMarks.push({ ...f.mark, id: 'mark-2', boxId: 'source' });
+    if (fault === 'no source') f.db.productMark.findMany.mockResolvedValue([{ ...f.mark, boxId: null }] as any);
+    if (fault === 'foreign warehouse') f.db.box.findUnique.mockResolvedValue({ id: 'source', code: 'FFL_SOURCE', clientId: 'client-1', warehouseId: 'wh-2', status: 'active', balances: [] } as any);
+    if (fault === 'foreign client') f.scopes.requireClientAccess.mockImplementation(() => { throw new Error('Нет доступа к клиенту'); });
+    if (fault === 'assembly') f.db.fbsTsdAssembly.findFirst.mockResolvedValue({ id: 'task' });
+    if (fault === 'printed') f.db.fbsWebKizStickerPrint.findFirst.mockResolvedValue({ id: 'print' });
+    if (fault === 'shipment history') f.db.shippedKizHistory.findFirst.mockResolvedValue({ id: 'shipment' });
+    if (fault === 'source changed') f.db.productMark.findMany.mockResolvedValue([{ ...f.mark, boxId: 'target' }] as any);
+    if (fault === 'CAS race') f.db.productMark.updateMany.mockResolvedValue({ count: 0 });
+    await expect(f.service.executeTsdTransfer(f.payload, user)).rejects.toThrow();
+    expect(f.quantities()).toEqual([2, 0]);
+    expect(f.markBox()).toBe('source');
+    expect(f.db.productMark.create).not.toHaveBeenCalled();
+    expect(await f.db.stockMovement.findUnique({ where: { idempotencyKey: 'move-1:out' } })).toBeNull();
+  });
+  it.each(['toBoxCode', 'barcode', 'scanCode'])('does not reuse a completed key for another %s', async field => {
+    const f = setup();
+    await f.service.executeTsdTransfer(f.payload, user);
+    await expect(f.service.executeTsdTransfer({ ...f.payload, [field]: field === 'toBoxCode' ? 'SBOX_002' : 'changed' }, user)).rejects.toThrow();
+    expect(f.quantities()).toEqual([1, 1]);
+  });
+  it('archives a source after the last unit, and does not recreate it on retry', async () => {
+    const f = fixture('source', kiz, [], 'FFL_SOURCE', 1);
+    f.payload.transferMode = 'KIZ_TO_STORAGE_BOX';
+    await expect(f.service.executeTsdTransfer(f.payload, user)).resolves.toMatchObject({ sourceBoxArchived: true });
+    expect(f.quantities()).toEqual([0, 1]);
+    expect(f.db.box.update).toHaveBeenCalledWith({ where: { id: 'source' }, data: { status: 'archived' } });
+    await expect(f.service.executeTsdTransfer(f.payload, user)).resolves.toMatchObject({ status: 'ALREADY_APPLIED' });
+    expect(f.quantities()).toEqual([0, 1]);
+  });
+  it('rolls back both balances, KIZ and ledger if final archiving fails', async () => {
+    const f = fixture('source', kiz, [], 'FFL_SOURCE', 1);
+    f.payload.transferMode = 'KIZ_TO_STORAGE_BOX';
+    f.db.box.update.mockRejectedValue(new Error('archive unavailable'));
+    await expect(f.service.executeTsdTransfer(f.payload, user)).rejects.toThrow('archive unavailable');
+    expect(f.quantities()).toEqual([1, 0]);
+    expect(f.markBox()).toBe('source');
+    expect(await f.db.stockMovement.findUnique({ where: { idempotencyKey: 'move-1:in' } })).toBeNull();
+  });
+  it('rechecks reservation after successful read-only inspection', async () => {
+    const f = setup();
+    await f.service.inspectTsdTransferItem(f.payload, user);
+    f.mark.status = 'RESERVED';
+    await expect(f.service.executeTsdTransfer(f.payload, user)).rejects.toThrow('зарезервирован');
+    expect(f.quantities()).toEqual([2, 0]);
+    expect(f.db.stockMovement.create).not.toHaveBeenCalled();
   });
 });
 
