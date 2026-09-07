@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { collectedFbsBoxMessage } from './fbs-collected-box-message';
 import { loadAdminRecountContext, requireAdminRecount, runAdminRecount, type AdminRecountContext } from './tsd-admin-recount-release';
 import { physicalStockRecoveryEnabled } from '../stock/tsd-physical-stock-reconciliation';
 import { recountHash } from '../stock/tsd-transfer-kiz-recount';
@@ -8729,9 +8730,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         productLabel: [task.productName, task.article].filter(Boolean).join(' · '),
         availableQuantity: available._sum.quantity ?? 0,
       });
-      if (rejection.code === 'FBS_WRONG_BOX') {
+      // FIX: explain fulfilled demand after trying all orders, even without a next assigned box.
+      const collectedMessage = (available._sum.quantity ?? 0) <= 0
+        ? await collectedFbsBoxMessage(this.prisma, {
+          requestId: task.requestId, clientId: task.clientId,
+          warehouseId: expectedWarehouseId, boxId: box.id,
+        }) : null;
+      if (collectedMessage || rejection.code === 'FBS_WRONG_BOX') {
         throw new ConflictException({
-          code: rejection.code, message: rejection.message,
+          code: 'FBS_WRONG_BOX', message: collectedMessage ?? rejection.message,
           route: await this.getFbsRequestRoute(task.requestId, user),
         });
       }
