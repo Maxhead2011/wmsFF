@@ -6961,6 +6961,8 @@ describe('MarketplaceConnectionsService', () => {
   });
 
   it('returns a cancelled FBS sync conflict to stock and releases its reservation', async () => {
+    // TEST: our deployed baseline keeps an unreceived return boxless; sold/default keeps its previous rule.
+    const returnedBoxId = process.env.WMS_TEST_OUR_LIVE_BASELINE === 'true' ? null : 'box-1';
     const task = {
       id: 'task-return-1',
       clientId: 'client-1',
@@ -7054,13 +7056,13 @@ describe('MarketplaceConnectionsService', () => {
     expect(tx.stockBalance.delete).toHaveBeenCalledWith({ where: { id: 'packing-balance' } });
     expect(tx.stockBalance.upsert).toHaveBeenCalledWith(expect.objectContaining({
       create: expect.objectContaining({ warehouseId: 'warehouse-1', clientId: 'client-1',
-        skuId: 'sku-1', boxId: 'box-1', quantity: 1, status: StockStatus.AVAILABLE }),
+        skuId: 'sku-1', boxId: returnedBoxId, quantity: 1, status: StockStatus.AVAILABLE }),
       update: { quantity: { increment: 1 }, warehouseId: 'warehouse-1' },
     }));
     expect(tx.stockMovement.create).toHaveBeenCalledTimes(2);
     expect(tx.productMark.updateMany).toHaveBeenCalledWith({
       where: { clientId: task.clientId, skuId: task.skuId, value: task.kiz, status: StockStatus.PACKING },
-      data: { status: StockStatus.AVAILABLE, boxId: task.boxId },
+      data: { status: StockStatus.AVAILABLE, boxId: returnedBoxId },
     });
     expect(tx.fbsTsdAssembly.update).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -7387,6 +7389,8 @@ describe('MarketplaceConnectionsService', () => {
   });
 
   it('records the user who sent an FBS supply to Wildberries', async () => {
+    // TEST: current live delivery requires its actual office plus an explicit logistics date.
+    const liveBaseline = process.env.WMS_TEST_OUR_LIVE_BASELINE === 'true';
     const order = fbsOrder({
       id: '5355000001',
       supplyId: 'WB-GI-1',
@@ -7435,6 +7439,9 @@ describe('MarketplaceConnectionsService', () => {
       orders: [order],
     });
     vi.spyOn(service as any, 'assertFbsDeliveryReadiness').mockResolvedValue(undefined);
+    if (liveBaseline) vi.spyOn(service as any, 'resolveFbsSupplyDeliveryOptions').mockResolvedValue({
+      blockers: [], requiredDestinationOfficeId: '123', offices: [{ id: '123', name: 'Synthetic WB office' }],
+    });
     vi.spyOn(service as any, 'loadSelectedConnections').mockResolvedValue([
       { id: 'connection-1', apiKey: 'secret-key' },
     ]);
@@ -7452,6 +7459,7 @@ describe('MarketplaceConnectionsService', () => {
         {
           clientId: 'client-1',
           orders: [{ connectionId: 'connection-1', id: order.id }],
+          ...(liveBaseline ? { destinationOfficeId: '123', plannedDeliveryDate: '2099-09-08' } : {}),
         },
         {
           id: 'user-1',
@@ -7472,6 +7480,7 @@ describe('MarketplaceConnectionsService', () => {
         sentToWbAt: expect.any(Date),
         sentToWbByUserId: 'user-1',
         sentToWbByName: 'Иван Петров',
+        ...(liveBaseline ? { destinationOfficeId: '123', destinationOfficeName: 'Synthetic WB office', plannedDeliveryDate: expect.any(Date) } : {}),
       },
     });
     expect(prisma.auditLog.create).toHaveBeenCalledWith({

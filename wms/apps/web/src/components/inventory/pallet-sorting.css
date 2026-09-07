@@ -1,0 +1,16 @@
+/* ADDED: styles are isolated to the new sorting screen. */
+.pallet-sorting { max-width: 1100px; padding: 16px; }
+.pallet-sorting fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.pallet-sorting label { display: block; margin: 12px 0; }
+.pallet-sorting input:not([type=checkbox]), .pallet-sorting select { display: block; width: min(100%, 580px); min-height: 44px; padding: 8px; margin-top: 6px; }
+.pallet-sorting button { min-height: 44px; padding: 10px 16px; margin: 6px 8px 6px 0; }
+.pallet-sorting button:disabled { opacity: .5; cursor: not-allowed; }
+.pallet-sorting-actions { display: flex; flex-wrap: wrap; margin: 16px 0; }
+.pallet-sorting details { margin: 16px 0; }
+.pallet-sorting-confirm { position: fixed; z-index: 1000; width: min(900px, calc(100vw - 48px)); max-height: 84vh; padding: 24px; background: white; color: #17212e; border: 2px solid #b32332; overflow: auto; }
+.pallet-sorting-confirm::backdrop { background: #0008; }
+.pallet-sorting-table { max-height: 40vh; overflow: auto; }
+.pallet-sorting-table table { border-collapse: collapse; width: 100%; min-width: 600px; }
+.pallet-sorting-table th { position: sticky; top: 0; background: #f4f6f8; }
+.pallet-sorting-table td, .pallet-sorting-table th { padding: 8px; text-align: left; border-bottom: 1px solid #d8dce1; }
+@media (max-width: 600px) { .pallet-sorting-confirm { inset: 12px; padding: 12px; } }

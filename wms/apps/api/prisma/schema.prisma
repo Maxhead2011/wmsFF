@@ -1443,6 +1443,22 @@ model KizCirculationItem {
   @@index([orderId])
 }
 
+// ADDED: independent admin sorting sessions; no FBS request or stock reservation.
+model PalletSortingSession {
+  id              String   @id
+  warehouseId     String
+  clientId        String
+  createdByUserId String
+  state           Json
+  version         Int      @default(1)
+  completedAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([warehouseId, completedAt])
+  @@index([clientId])
+}
+
 model InventorySession {
   id                String                 @id @default(uuid())
   type              InventorySessionType

@@ -177,6 +177,7 @@ public class MainActivity extends Activity {
     private EditText storagePalletScanInput;
     private EditText transferScanInput;
     private EditText skuCollectionScanInput;
+    private PalletSortingScreen palletSortingScreen; // ADDED: independent administrator workflow.
     private TsdAssemblyPlan assemblyPlan;
     private TsdBoxlessPackingResponse boxlessPacking;
     private TsdRelabelTask activeRelabelTask;
@@ -376,6 +377,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (palletSortingScreen != null) palletSortingScreen.close();
         mainHandler.removeCallbacks(monitorHeartbeatTask);
         cancelOzonLabelAutoRefresh();
         try {
@@ -392,6 +394,10 @@ public class MainActivity extends Activity {
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN && event.getKeyCode() == KeyEvent.KEYCODE_ENTER) {
+            if (screen == Screen.PALLET_SORTING && palletSortingScreen != null) {
+                palletSortingScreen.submit();
+                return true;
+            }
             if (screen == Screen.RECEIPT && scanInput != null) {
                 submitReceiptInput();
                 return true;
@@ -509,6 +515,16 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (screen == Screen.PALLET_SORTING && palletSortingScreen != null) {
+            if (!palletSortingScreen.canLeave()) {
+                showScanningErrorDialog("Сначала завершите текущую единицу или подтвердите результат запроса.");
+                return;
+            }
+            palletSortingScreen.close();
+            palletSortingScreen = null;
+            renderMainScreen();
+            return;
+        }
         // FIX: do not discard a pending SKU movement through the hardware Back button.
         if (isUnifiedSkuSorting() && (screen == Screen.SKU_COLLECTION || skuSortingAudit) &&
             skuSortingState != null && !skuSortingState.canLeave(skuCollectionBusy || inventoryRequestBusy)) {
@@ -540,6 +556,17 @@ public class MainActivity extends Activity {
         LinearLayout root = baseRoot();
         root.addView(header());
         root.addView(mainStatusLine());
+        // ADDED: sold flavors and non-ADMIN roles do not receive this menu.
+        if ("logoff".equals(BuildConfig.FLAVOR) && session.hasRole("ADMIN")) {
+            root.addView(primaryMenuButton("Сортировка и перемещение", view -> {
+                screen = Screen.PALLET_SORTING;
+                if (palletSortingScreen != null) palletSortingScreen.close();
+                palletSortingScreen = new PalletSortingScreen(this, session, WmsApiFactory.create(DEFAULT_BASE_URL), () -> {
+                    palletSortingScreen = null;
+                    renderMainScreen();
+                });
+            }));
+        }
         if (isWarehouseKeeperOnly(session)) {
             root.addView(primaryMenuButton(tr("Перемещения", "Ko‘chirish"), view -> openStockTransfer()));
             root.addView(primaryMenuButton(
@@ -8485,6 +8512,7 @@ public class MainActivity extends Activity {
             return transferScanInput;
         }
         if (screen == Screen.SKU_COLLECTION) return skuCollectionScanInput;
+        if (screen == Screen.PALLET_SORTING && palletSortingScreen != null) return palletSortingScreen.scannerField();
         if (
             screen == Screen.BOX_SEARCH ||
             screen == Screen.RELABEL_BOX ||
@@ -8596,6 +8624,7 @@ public class MainActivity extends Activity {
     }
 
     private void submitPhoneCameraScan() {
+        if (screen == Screen.PALLET_SORTING && palletSortingScreen != null) { palletSortingScreen.submit(); return; }
         if (screen == Screen.RECEIPT) {
             submitReceiptInput();
         } else if (screen == Screen.BOX_SEARCH) {
@@ -9476,6 +9505,10 @@ public class MainActivity extends Activity {
     }
 
     private void refreshCurrentScreen() {
+        if (screen == Screen.PALLET_SORTING && palletSortingScreen != null && safeSession() != null) {
+            // FIX: the sorting screen refreshes after its own commands; heartbeat must not erase a scan.
+            return;
+        }
         if (safeSession() == null && screen != Screen.SETTINGS) {
             renderSettingsScreen();
             return;
@@ -9913,6 +9946,7 @@ public class MainActivity extends Activity {
         INVENTORY_START,
         INVENTORY_COUNT,
         SKU_COLLECTION,
+        PALLET_SORTING,
         INFO
     }
 

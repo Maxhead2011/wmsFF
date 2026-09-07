@@ -48,6 +48,7 @@ export type WorkspaceId =
   | 'warehouse'
   | 'storage-zones'
   | 'inventory'
+  | 'pallet-sorting'
   | 'kiz'
   | 'kiz-circulation'
   | 'turnover'
@@ -180,6 +181,16 @@ export const workspaceNav: WorkspaceNavItem[] = [
     permissions: ['warehouse:read', 'warehouse:write'],
     permissionMode: 'all',
     icon: MapPinned,
+    status: 'ready',
+    audience: 'internal',
+  },
+  {
+    id: 'pallet-sorting',
+    title: 'Сортировка и перемещение',
+    eyebrow: 'Складской контроль',
+    description: 'Сверка паллет-сорта, формирование новых коробов и подтверждённое списание недостачи.',
+    permissions: ['stock:write'],
+    icon: Boxes,
     status: 'ready',
     audience: 'internal',
   },
@@ -464,6 +475,8 @@ export const workspaceNav: WorkspaceNavItem[] = [
 ];
 
 export function canOpenWorkspace(user: AuthUser, item: WorkspaceNavItem) {
+  // ADDED: dedicated opt-in and strict role check before the system:admin bypass.
+  if (item.id === 'pallet-sorting' && (import.meta.env.VITE_PALLET_SORTING_ENABLED !== 'true' || !user.roleCodes.includes('ADMIN'))) return false;
   if (user.workspaceVisibility?.[item.id] === false) {
     return false;
   }
