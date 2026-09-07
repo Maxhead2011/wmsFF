@@ -25,7 +25,11 @@ function fixture(enabled = false) {
       if (request.fbsEmergencyAssemblyAt || where.updatedAt !== request.updatedAt) return { count: 0 };
       Object.assign(request, data); return { count: 1 };
     }) },
-    fbsOrderRequestLink: { findMany: vi.fn(async () => request.fbsOrderLinks.map(link => ({ ...link, request }))) },
+    // TEST: complete/waiting remains collectable; use the fixture's actual saved link.
+    fbsOrderRequestLink: {
+      findUnique: vi.fn(async ({ where }) => request.fbsOrderLinks.find(link => link.orderId === where.marketplace_connectionId_orderId.orderId) ?? null),
+      findMany: vi.fn(async () => request.fbsOrderLinks.map(link => ({ ...link, request }))),
+    },
     fbsTsdAssembly: { findFirst: vi.fn(async () => null), findMany: vi.fn(async () => tasks), updateMany: vi.fn() },
     stockBalance: { findMany: vi.fn(async () => [{ skuId: 'sku-12', clientId: request.clientId, boxId: 'box-126' }]), update: vi.fn() },
     stockMovement: { create: vi.fn() }, productMark: { update: vi.fn() },

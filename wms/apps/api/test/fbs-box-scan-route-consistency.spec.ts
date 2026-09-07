@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MarketplaceConnectionsService } from '../src/modules/marketplace-connections/marketplace-connections.service';
 
 // TEST: real scan/format entry points; a route is a hint, physical reservations stay protected.
 function fixture(releasableBackground = false, available = 1) {
+  // TEST: exercise the real enabled terminal-order guard, not an absent Prisma delegate.
+  vi.stubEnv('WMS_FBS_TERMINAL_QUEUE_FILTER_ENABLED', 'true');
   const task: any = { id: 'current', requestId: 'request-585', clientId: 'client', skuId: 'sku',
     connectionId: 'wb', marketplace: 'WILDBERRIES', orderId: 'order', itemCount: 1,
     status: 'IN_PROGRESS', deviceCode: 'TSD-1', workerUserId: 'user', productName: 'Костюм',
@@ -12,6 +14,7 @@ function fixture(releasableBackground = false, available = 1) {
   const box = { id: 'box', code: 'FFL_G_LKB0707_021', warehouseId: 'warehouse', storagePlacement: null };
   const reservations = [{ taskId: 'other', boxId: 'box', itemCount: 1, releasableBackground }];
   const db: any = {
+    fbsOrderRequestLink: { findUnique: vi.fn(async () => ({ marketplace: 'WILDBERRIES', lastCategory: 'active', lastSupplierStatus: 'confirm', lastWbStatus: 'waiting' })) },
     storagePallet: { findFirst: vi.fn(async () => null) }, box: { findFirst: vi.fn(async () => box) },
     stockBalance: { aggregate: vi.fn(async () => ({ _sum: { quantity: available } })),
       findMany: vi.fn(async () => available ? [{ boxId: box.id, box, quantity: available }] : []) },
@@ -41,7 +44,15 @@ function fixture(releasableBackground = false, available = 1) {
   return { service, task, db, box, reservations, user: { id: 'user', deviceCode: 'TSD-1' } };
 }
 
+afterEach(() => vi.unstubAllEnvs());
 describe('FBS consistent live box route', () => {
+  it('stops a cancelled order before claiming physical stock', async () => {
+    // TEST: completing the mock must not bypass the enabled cancellation guard.
+    const f = fixture(true);
+    f.db.fbsOrderRequestLink.findUnique.mockResolvedValue({ marketplace: 'WILDBERRIES', lastWbStatus: 'canceled_by_client' });
+    await expect(f.service.scanFbsTsdBox(f.task.id, { boxCode: f.box.code }, f.user)).rejects.toThrow('не требуется собирать');
+    expect(f.service.claimFbsTsdBoxAtomically).not.toHaveBeenCalled();
+  });
   it('shows a box with an untouched background reservation as claimable', async () => {
     const f = fixture(true);
     expect(await f.service.formatFbsTsdAssembly(f.task, f.user, '')).toMatchObject({ task: { recommendedBoxCode: f.box.code } });
