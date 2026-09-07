@@ -857,23 +857,32 @@ export class StockOperationsService {
     return { sourceBoxId: source.id, targetBoxId: target.id, skuId: item.sku.id, movementId: inbound.id };
   }
 
-  // FIX: only admin sorting may account for a physical unit from a non-existent source.
+  // FIX: only admin sorting may account for a physical unit missing from source stock.
   // The caller owns the Serializable transaction, session lock, and inventory lock checks.
   async recoverSortingUnit(tx: Prisma.TransactionClient, input: {
     clientId: string; sourceBoxCode: string; toBoxCode: string; barcode: string; kiz: string;
     idempotencyKey: string; sessionId: string;
+    knownSource?: { id: string; placementId: string | null };
   }, user: AuthUser) {
     assertSortingAdmin(user);
     this.clientScopes.requireClientAccess(user, input.clientId, 'write');
     const identity = sortingKizIdentity(input.kiz);
     await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`sorting-kiz:${identity}`}))`);
-    if (await tx.box.findUnique({ where: { code: input.sourceBoxCode } })) {
+    const source = await tx.box.findUnique({ where: { code: input.sourceBoxCode }, include: { storagePlacement: true } });
+    // FIX: evidence comes only from the locked session, never from a client-supplied bypass flag.
+    if (input.knownSource) {
+      if (!source || source.id !== input.knownSource.id || source.status !== 'active' || source.clientId !== input.clientId ||
+          source.warehouseId !== user.activeWarehouseId || (source.storagePlacement?.palletId ?? null) !== input.knownSource.placementId) {
+        throw new BadRequestException('Исходный короб изменился: проверьте его состояние и паллет-сорт. Новый приход не выполнен.');
+      }
+    } else if (source) {
       throw new BadRequestException('Исходный короб уже существует. Повторите проверку; новый приход не выполнен.');
     }
     const target = await tx.box.findUnique({ where: { code: input.toBoxCode } });
     if (!target || target.status !== 'active' || target.clientId !== input.clientId || target.warehouseId !== user.activeWarehouseId) {
       throw new BadRequestException('Нужен действующий целевой короб этого клиента в выбранном филиале.');
     }
+    if (source?.id === target.id) throw new BadRequestException('Исходный короб и короб назначения совпадают.');
     const products = await tx.barcode.findMany({ where: { value: input.barcode, sku: { clientId: input.clientId } }, include: { sku: true }, take: 2 });
     if (products.length !== 1) throw new BadRequestException('ШК товара не найден или неоднозначен у выбранного клиента.');
     const sku = products[0].sku;
@@ -886,6 +895,10 @@ export class StockOperationsService {
       const mark = await tx.productMark.findFirst({ where: { stockMovementId: prior.id, value: { startsWith: identity.replace(/[\\%_]/g, '\\$&') } } });
       if (!mark) throw new BadRequestException('КИЗ не совпадает с ранее учтённой единицей.');
       return { skuId: sku.id, movementId: prior.id };
+    }
+    // FIX: zero AVAILABLE alone is insufficient: never recover over reserved, shipped or negative stock.
+    if (source && await tx.stockBalance.findFirst({ where: { boxId: source.id, skuId: sku.id, quantity: { not: 0 } }, select: { id: true } })) {
+      throw new BadRequestException('В исходном коробе есть учтённый остаток этого товара, резерв или некорректное количество. Обновите проверку; повторный приход не выполнен.');
     }
     // FIX: look across clients and scanner encodings, including old shipment/print history.
     const gtin = identity.slice(2, 16), serial = identity.slice(18);
@@ -908,7 +921,7 @@ export class StockOperationsService {
     const movement = await tx.stockMovement.create({ data: { warehouseId: target.warehouseId!, clientId: input.clientId,
       skuId: sku.id, boxId: target.id, palletId: target.palletId, type: 'INVENTORY_ADJUSTMENT', status: StockStatus.AVAILABLE,
       quantity: 1, idempotencyKey: input.idempotencyKey, sourceDocument: `PALLET_SORTING:${input.sessionId}`,
-      comment: `Найденный товар при сортировке: исходный короб ${input.sourceBoxCode} отсутствует в WMS; → ${target.code}; администратор ${user.id}` } });
+      comment: `Найденный товар при сортировке: исходный короб ${input.sourceBoxCode} ${source ? '— расхождение: учтённый остаток по ШК ' + input.barcode + ' равен 0, физически найдена 1 ед.' : 'отсутствует в WMS'}; → ${target.code}; администратор ${user.id}` } });
     await tx.productMark.create({ data: { clientId: input.clientId, skuId: sku.id, boxId: target.id, value: input.kiz,
       status: StockStatus.AVAILABLE, stockMovementId: movement.id, sourceDocument: `PALLET_SORTING:${input.sessionId}` } });
     return { skuId: sku.id, movementId: movement.id };

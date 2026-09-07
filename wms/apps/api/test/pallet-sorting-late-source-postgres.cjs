@@ -40,7 +40,7 @@ async function main() {
   const command = { action: 'MOVE', version: state.version, operationId: randomUUID(), sourceBoxCode: source.code,
     barcode: '4600000000001', kiz: '010460000000000121ABCDEFGHIJKLM' };
   // TEST: invalid barcode cannot persist source addition, audit, mark or movement.
-  await assert.rejects(s.action(state.id, { ...command, barcode: 'UNKNOWN', operationId: randomUUID() }, user), /нет доступного остатка по ШК/);
+  await assert.rejects(s.action(state.id, { ...command, barcode: 'UNKNOWN', operationId: randomUUID() }, user), /ШК товара не найден/);
   assert.equal((await s.get(state.id, user)).sources.length, 0);
   assert.equal(await p.auditLog.count({ where: { action: 'PALLET_SORTING_LATE_SOURCE_SCANNED' } }), 0);
   assert.equal(await p.stockMovement.count(), 0);
