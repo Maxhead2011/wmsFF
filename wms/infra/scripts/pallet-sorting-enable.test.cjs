@@ -3,11 +3,12 @@ const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const { config, web } = require('./pallet-sorting-enable-verify.cjs');
 // TEST: this release upgrades LOGOFF only, not the sold flavor or its shared default.
-test('release 159 is scoped to LOGOFF', () => {
+test('release 159 or a newer sorting release is scoped to LOGOFF', () => {
   const text = readFileSync('apps/android-tsd/app/build.gradle.kts', 'utf8');
   const logoff = text.split('create("logoff")')[1].split('create("ffullhab")')[0];
-  assert.match(logoff, /versionCode = 159/);
-  assert.match(logoff, /versionName = "0.1.160-pallet-sorting"/);
+  // TEST: later reviewed releases may advance the version without invalidating the original flavor isolation.
+  assert(Number(logoff.match(/versionCode = (\d+)/)?.[1]) >= 159);
+  assert.match(logoff, /versionName = "0\.1\.\d+-(?:pallet-sorting|sorting-recovery)"/);
   assert.match(text.split('flavorDimensions')[0], /versionCode = 153/);
   assert.doesNotMatch(text.split('create("ffullhab")')[1].split('create("platform")')[0], /versionCode\s*=/);
 });

@@ -1,13 +1,16 @@
 export type SortingState = {
   id: string; version: number; sourceCode: string; stage: 'CHECKING' | 'FORMING' | 'COMPLETED';
   sources: Array<{ id: string; code: string; scanned: boolean; archived: boolean; preservedOnPallet?: boolean }>;
+  // FIX: additive state keeps older saved sorting sessions compatible.
+  problemSources?: Array<{ code: string; scanned: boolean; reason: 'BOX_NOT_FOUND' }>;
   targets: Array<{ id: string; code: string; closed: boolean; quantity: number; palletCode: string }>;
   activeTargetId?: string | null;
   pendingRoutes: Array<{ requestId: string; taskIds: string[]; error?: string }>;
-  moves: Array<{ identity: string }>;
+  moves: Array<{ identity: string; recovered?: boolean }>;
 };
 export type SortingPreview = {
   fingerprint: string; quantity: number; affectedOrders: string[];
+  problemSources?: SortingState['problemSources']; recoveredQuantity?: number;
   boxes: Array<{ id: string; code: string; preserveOnPallet?: boolean; balances: Array<{ id: string; quantity: number; sku: { article: string; name: string; size: string; color: string } }> }>;
 };
 export class SortingHttpError extends Error { constructor(public status: number, message: string) { super(message); } }

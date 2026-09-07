@@ -68,7 +68,10 @@ public final class PalletSortingScreen {
             for (Map<String, Object> row : sessions) button("Продолжить " + text(row, "sourceCode"), () -> open(text(row, "id")), true);
         } else {
             label(text(state, "sourceCode") + " · " + ("CHECKING".equals(stage()) ? "Сверка коробов" : "FORMING".equals(stage()) ? "Формирование новых коробов" : "Завершено"), 21);
-            label("Перемещено: " + rows(state, "moves").size() + " ед.", 19);
+            // FIX: found stock is a +1 adjustment, not a balanced movement from a fictional box.
+            int recovered = PalletSortingProblemFormatter.recovered(state);
+            label("Перемещено: " + (rows(state, "moves").size() - recovered) + " ед. · Оприходовано найденных: " + recovered + " ед.", 19);
+            for (Map<String, Object> box : rows(state, "problemSources")) label(PalletSortingProblemFormatter.source(box), 18);
             // FIX: permanent storage remains active; completion must not be labelled as archival.
             for (Map<String, Object> box : rows(state, "sources")) label(text(box, "code") + " — " + (yes(box, "preservedOnPallet") ? "пустой бокс · сохранён на месте" : yes(box, "archived") ? "архив" : yes(box, "scanned") ? "подтверждён" : "не отсканирован"), 16);
             if (!rows(state, "pendingRoutes").isEmpty()) {
@@ -86,6 +89,7 @@ public final class PalletSortingScreen {
         if (target != null) {
             label("Заполняется " + text(target, "code") + " · " + number(target, "quantity") + " ед.", 20);
             sourceInput = field("Исходный короб (если КИЗ ещё не привязан)", source);
+            label("Неизвестный короб отметим как проблемный. Новый КИЗ из него учтём в целевом коробе как найденный товар.", 15);
             sourceInput.setOnEditorActionListener((v, id, event) -> { source = sourceInput.getText().toString().trim(); if (input != null) input.requestFocus(); return true; });
         }
         if (!"COMPLETED".equals(stage())) {
@@ -154,7 +158,11 @@ public final class PalletSortingScreen {
                 } else command.uncertain();
                 throw new IOException(error(response));
             }
-            state = response.body(); command.confirmed(); barcode = ""; message = "Действие сохранено.";
+            int before = state == null ? 0 : PalletSortingProblemFormatter.recovered(state);
+            state = response.body(); command.confirmed(); barcode = "";
+            message = PalletSortingProblemFormatter.recovered(state) > before
+                ? "Найденная единица учтена в целевом коробе. Исходный короб отмечен как проблемный."
+                : "Действие сохранено.";
             if (!rows(state, "pendingRoutes").isEmpty()) state = require(api.postPalletSorting(session.authorizationHeader(), BASE + "/" + text(state, "id") + "/routes", new LinkedHashMap<>()).execute());
         });
     }
@@ -175,6 +183,8 @@ public final class PalletSortingScreen {
         confirming = true;
         LinearLayout content = new LinearLayout(activity); content.setOrientation(LinearLayout.VERTICAL); content.setPadding(20, 10, 20, 10);
         TextView report = new TextView(activity); StringBuilder text = new StringBuilder("К списанию: " + number(preview, "quantity") + " ед.\n");
+        text.append("Оприходовано найденных: ").append(number(preview, "recoveredQuantity")).append(" ед.\n");
+        for (Map<String, Object> box : rows(preview, "problemSources")) text.append(PalletSortingProblemFormatter.source(box)).append("\n");
         for (Map<String, Object> box : rows(preview, "boxes")) {
             text.append("\n").append(text(box, "code")).append(yes(box, "preserveOnPallet") ? " — останется активным на своём месте\n" : " — будет архивирован\n");
             for (Map<String, Object> balance : rows(box, "balances")) {
