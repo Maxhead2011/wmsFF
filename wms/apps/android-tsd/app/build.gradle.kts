@@ -23,8 +23,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 158 // FIX: Logoff-only cross-box administrator confirmation; other flavors unchanged.
-            versionName = "0.1.159-admin-box-count"
+            versionCode = 159 // FIX: enable the administrator sorting screen in LOGOFF only; sold flavor unchanged.
+            versionName = "0.1.160-pallet-sorting"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
