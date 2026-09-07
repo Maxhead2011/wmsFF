@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { assertSortingAdmin } from '../inventory/pallet-sorting-policy';
 import { appendFbsAttemptHistory, readFbsAttemptHistory, hasFbsAttemptHistory, restoreAttemptSnapshot } from '../../common/shipment-history/fbs-attempt-history';
 import { fbsAttemptPageWindow, mergeFbsAttemptPage } from '../../common/shipment-history/fbs-attempt-page';
 import { isDeepStrictEqual } from 'node:util';
@@ -4223,7 +4224,55 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
-  async repairFbsRequestSelection(requestId: string, user: AuthUser) {
+  // ADDED: AUTO reservations have no ClientRequest. Reuse the normal availability and box-lock rules.
+  async repairFbsSortingAutomaticTasks(taskIds: string[], clientId: string, user: AuthUser) {
+    assertSortingAdmin(user);
+    this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const warehouseId = user.activeWarehouseId!;
+    const tasks = await this.prisma.fbsTsdAssembly.findMany({ where: { clientId, id: { in: taskIds },
+      requestId: { startsWith: 'AUTO:' }, status: { in: ['RESERVED', 'WAITING_STOCK', 'RELEASED', 'IN_PROGRESS'] },
+      boxId: null, barcode: null, sourceBarcode: null, kiz: null, relabelConfirmedAt: null }, orderBy: { createdAt: 'asc' } });
+    for (const task of tasks) {
+      const skuId = task.sourceSkuId ?? task.skuId;
+      const balances = await this.prisma.stockBalance.findMany({ where: { clientId, warehouseId, skuId,
+        status: StockStatus.AVAILABLE, quantity: { gt: 0 }, boxId: { not: null },
+        box: { status: 'active', warehouseId, storagePlacement: { pallet: { clientId, warehouseId } } } },
+        include: { box: { include: { storagePlacement: { include: { pallet: true } } } } } });
+      const reserved = await this.fbsTsdReservationRows({ clientId, skuId, excludeTaskId: task.id });
+      const boxes = new Map<string, { id: string; code: string; quantity: number; palletCode: string }>();
+      for (const balance of balances) {
+        if (!balance.boxId || !balance.box?.storagePlacement) continue;
+        const row = boxes.get(balance.boxId) ?? { id: balance.boxId, code: balance.box.code, quantity: 0, palletCode: balance.box.storagePlacement.pallet.code };
+        row.quantity += balance.quantity; boxes.set(row.id, row);
+      }
+      const eligible = [...boxes.values()].map(box => ({ ...box,
+        freeQuantity: box.quantity - reserved.filter(r => r.boxId === box.id).reduce((n, r) => n + r.itemCount, 0),
+      })).filter(box => box.freeQuantity >= Math.max(1, task.itemCount))
+        .sort((a, b) => a.freeQuantity - b.freeQuantity || a.code.localeCompare(b.code, 'ru-RU'));
+      const candidate = eligible[0] ?? null;
+      const persist = (db: Prisma.TransactionClient | PrismaService, box: typeof candidate | null) => db.fbsTsdAssembly.updateMany({
+        where: { id: task.id, requestId: task.requestId, updatedAt: task.updatedAt, status: task.status,
+          boxId: null, barcode: null, sourceBarcode: null, kiz: null, relabelConfirmedAt: null },
+        data: { reservedBoxId: box?.id ?? null, reservedBoxCode: box?.code ?? null, reservedAt: box ? new Date() : null,
+          status: task.status === 'IN_PROGRESS' ? task.status : box ? FBS_TSD_RESERVED_STATUS : FBS_TSD_WAITING_STOCK_STATUS,
+          storageBoxes: box ? eligible.map(b => ({ code: b.code, quantity: b.freeQuantity, status: 'AVAILABLE', palletCode: b.palletCode })) : [],
+          errorMessage: box ? null : 'После сортировки в выбранном филиале нет свободного товара на паллет-сортах.' },
+      });
+      const result = candidate ? await this.withActivePalletSortBoxLock({ boxId: candidate.id, warehouseId, clientId,
+        skuId, requiredQuantity: Math.max(1, task.itemCount), excludeTaskId: task.id }, tx => persist(tx, candidate)) : await persist(this.prisma, null);
+      const saved = !result && candidate ? await persist(this.prisma, null) : result;
+      // FIX: an uncommitted repair stays in the sorting retry queue.
+      if (saved?.count !== 1) throw new ConflictException('Задание изменилось во время перестроения. Повторите проверку маршрута.');
+    }
+    return { checkedTasks: tasks.length };
+  }
+
+  async repairFbsRequestSelection(requestId: string, user: AuthUser, onlyTaskIds?: string[]) {
+    // ADDED: sorting may repair an exact affected subset; ordinary repair is unchanged.
+    if (onlyTaskIds) {
+      assertSortingAdmin(user);
+      if (!onlyTaskIds.length) throw new BadRequestException('Не указаны затронутые задания.');
+    }
     const request = await this.prisma.clientRequest.findUnique({
       where: { id: requestId },
       select: {
@@ -4272,6 +4321,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     });
     if (!request) throw new NotFoundException('FBS-заявка не найдена.');
     this.clientScopes.requireClientAccess(user, request.clientId, 'write');
+    if (onlyTaskIds && request.warehouseId !== user.activeWarehouseId) {
+      throw new ForbiddenException('Заявка относится к другому филиалу.');
+    }
     if (request.type !== ClientRequestType.OUTBOUND || request.fbsOrderLinks.length === 0) {
       throw new BadRequestException('Исправление подбора доступно только для FBS-заявки.');
     }
@@ -4289,7 +4341,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         .filter((item): item is (typeof request.items)[number] & { skuId: string } => Boolean(item.skuId))
         .map((item) => [item.skuId, item]),
     );
-    const linkedTasks = await this.prisma.fbsTsdAssembly.findMany({
+    const linkedTasks = onlyTaskIds ? [] : await this.prisma.fbsTsdAssembly.findMany({
       where: {
         OR: request.fbsOrderLinks.map((link) => ({
           marketplace: link.marketplace,
@@ -4345,7 +4397,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const existingTaskKeys = new Set(
       linkedTasks.map((task) => selectionKey(task.connectionId, task.orderId)),
     );
-    const missingTaskRows = request.fbsOrderLinks.flatMap((link) => {
+    const missingTaskRows = (onlyTaskIds ? [] : request.fbsOrderLinks).flatMap((link) => {
       const key = selectionKey(link.connectionId, link.orderId);
       const item = link.lastSkuId ? itemBySkuId.get(link.lastSkuId) : null;
       if (existingTaskKeys.has(key) || !item?.sku) return [];
@@ -4388,6 +4440,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const tasks = await this.prisma.fbsTsdAssembly.findMany({
       where: {
         requestId,
+        ...(onlyTaskIds ? { id: { in: onlyTaskIds } } : {}),
         status: {
           in: [
             FBS_TSD_RESERVED_STATUS,
@@ -4427,7 +4480,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     // returning an older order while its unfinished WMS task must remain.
     let reservedTasks = 0;
     if (repairableTaskIds.length > 0) {
-      if (request.client.storesWithoutBoxes) {
+      // FIX: a sorting route follows physical boxes even for a mixed/boxless client.
+      if (request.client.storesWithoutBoxes && !onlyTaskIds) {
         for (const task of repairableTasks) {
           const stockSkuId = task.sourceSkuId ?? task.skuId;
           const [balance, reservations] = await Promise.all([
@@ -4478,7 +4532,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         );
         // FIX: A manager-triggered repair of a real request has priority over
         // untouched AUTO reservations. Physical/started tasks stay protected.
-        if (stockSkuIds.length > 0) {
+        if (stockSkuIds.length > 0 && !onlyTaskIds) {
           await this.prisma.fbsTsdAssembly.updateMany({
             where: {
               clientId: request.clientId,
@@ -4649,9 +4703,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               )
             : await persistRepairSelection(this.prisma, null);
           if (!persisted && selectedBox) {
-            await persistRepairSelection(this.prisma, null);
+            const fallback = await persistRepairSelection(this.prisma, null);
+            if (onlyTaskIds && fallback.count !== 1) throw new ConflictException('Задание изменилось во время перестроения. Повторите проверку маршрута.');
           } else if (selectedBox && persisted?.count === 1) {
             reservedTasks += 1;
+          } else if (onlyTaskIds && persisted?.count !== 1) {
+            throw new ConflictException('Задание изменилось во время перестроения. Повторите проверку маршрута.');
           }
         }
       }

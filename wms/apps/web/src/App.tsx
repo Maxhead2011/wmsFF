@@ -29,6 +29,7 @@ import { DebugPanel } from './components/debug/DebugPanel';
 import { ExpensesPanel } from './components/expenses/ExpensesPanel';
 import { ImportPanel } from './components/imports/ImportPanel';
 import { InventoryPanel } from './components/inventory/InventoryPanel';
+import { PalletSortingPanel } from './components/inventory/PalletSortingPanel';
 import { KizIssuesPanel } from './components/kiz/KizIssuesPanel';
 import { SpaceServiceShelf } from './components/layout/SpaceServiceShelf';
 import { SpaceTopNav } from './components/layout/SpaceTopNav';
@@ -928,6 +929,8 @@ function renderWorkspace(
       return <StorageZonesPanel session={session} />;
     case 'inventory':
       return <InventoryPanel session={session} />;
+    case 'pallet-sorting':
+      return <PalletSortingPanel session={session} />;
     case 'kiz':
       return <KizIssuesPanel session={session} />;
     case 'kiz-circulation':

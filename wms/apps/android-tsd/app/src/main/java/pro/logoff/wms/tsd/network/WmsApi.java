@@ -14,9 +14,17 @@ import retrofit2.http.PATCH;
 import retrofit2.http.Query;
 import retrofit2.http.Multipart;
 import retrofit2.http.Part;
+import retrofit2.http.Url;
 import okhttp3.MultipartBody;
 
 public interface WmsApi {
+    // ADDED: independent administrator sorting; ordinary transfer APIs are unchanged.
+    @GET("api/v1/pallet-sorting")
+    Call<List<Map<String, Object>>> listPalletSortings(@Header("Authorization") String authorization);
+    @GET
+    Call<Map<String, Object>> getPalletSorting(@Header("Authorization") String authorization, @Url String path);
+    @POST
+    Call<Map<String, Object>> postPalletSorting(@Header("Authorization") String authorization, @Url String path, @Body Map<String, Object> request);
     // FIX: dedicated storage-only endpoints, no FBS order submission.
     @POST("api/v1/tsd/sku-collections/{id}/sorting/start")
     Call<TsdSkuCollection> startSkuSorting(@Header("Authorization") String authorization, @Path("id") String id);

@@ -614,6 +614,45 @@ export class StockOperationsService {
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
+  // ADDED: transaction-owned sorting entry point. Existing TSD transfers are unchanged.
+  async transferSortingUnit(tx: Prisma.TransactionClient, input: {
+    fromBoxCode: string; toBoxCode: string; barcode: string; kiz: string;
+    idempotencyKey: string; sessionId: string;
+  }, user: AuthUser) {
+    const source = await this.loadTsdTransferSourceBox(tx, input.fromBoxCode, user);
+    const target = await tx.box.findUnique({ where: { code: input.toBoxCode } });
+    if (!target || target.id === source.id || target.clientId !== source.clientId ||
+        target.warehouseId !== source.warehouseId || target.status !== 'active') {
+      throw new BadRequestException('Нужен другой действующий целевой короб того же клиента и филиала.');
+    }
+    const item = await this.resolveStorageBoxTransferItem(tx, source, {
+      barcode: input.barcode, scanCode: input.kiz,
+    }, true);
+    if (item.reconciledMark || item.cancelledWbTransfer || !item.productMarkId && !item.registerMissingMark) {
+      throw new BadRequestException('КИЗ не подтверждён в исходном составе сортировки. Сначала проверьте его привязку.');
+    }
+    await this.applyTransferBetweenBoxes(tx, {
+      clientId: source.clientId, skuId: item.sku.id, fromBoxCode: source.code,
+      toBoxCode: target.code, quantity: 1, status: StockStatus.AVAILABLE,
+      idempotencyKey: input.idempotencyKey, sourceDocument: `PALLET_SORTING:${input.sessionId}`,
+      comment: `Сортировка: ${source.code} → ${target.code}; администратор ${user.id}`,
+    }, source.warehouseId!);
+    const inbound = await tx.stockMovement.findUnique({ where: { idempotencyKey: `${input.idempotencyKey}:in` }, select: { id: true } });
+    if (!inbound) throw new BadRequestException('Не подтверждено движение товара. Операция отменена.');
+    if (item.productMarkId) {
+      const changed = await tx.productMark.updateMany({
+        where: { id: item.productMarkId, boxId: source.id, status: StockStatus.AVAILABLE },
+        data: { boxId: target.id, stockMovementId: inbound.id },
+      });
+      if (changed.count !== 1) throw new BadRequestException('КИЗ изменился параллельно. Повторите проверку.');
+    } else {
+      await tx.productMark.create({ data: { clientId: source.clientId, skuId: item.sku.id,
+        boxId: target.id, value: item.scanCode, status: StockStatus.AVAILABLE,
+        stockMovementId: inbound.id, sourceDocument: `PALLET_SORTING:${input.sessionId}` } });
+    }
+    return { sourceBoxId: source.id, targetBoxId: target.id, skuId: item.sku.id, movementId: inbound.id };
+  }
+
   async executeTsdTransferBatch(payload: Record<string, unknown>, user: AuthUser) {
     await this.inventoryLock?.assertStockMovementsAllowed();
     const warehouseId = this.resolveWritableWarehouseId(user);
