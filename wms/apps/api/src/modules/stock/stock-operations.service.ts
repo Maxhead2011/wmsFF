@@ -35,6 +35,7 @@ import { TransferWholeBoxDto } from './dto/transfer-whole-box.dto';
 import { StockBalancesService } from './stock-balances.service';
 import { physicalStockRecoveryEnabled, readPhysicalStockRecovery, type PhysicalStockRecovery } from './tsd-physical-stock-reconciliation';
 import { KizRecountReviewRequired, parseRecountScans, planKizRecount, recountHash, requireRecountSnapshot } from './tsd-transfer-kiz-recount';
+import { planAdminOldBoxes } from './tsd-admin-box-recount';
 import { cancelledBoxTaskTransferEnabled, prepareCancelledBoxTaskTransfer, validateCancelledBoxTaskTransfer,
   type CancelledBoxTaskProof } from './cancelled-box-task-transfer';
 import { cancelledWbTransferEnabled, prepareCancelledWbTransfer, validateCancelledWbTransfer,
@@ -323,6 +324,7 @@ export class StockOperationsService {
       throw new ForbiddenException('Сверка КИЗов доступна только сотрудникам WMS при включённой функции.');
     }
     const administrator = canAutoApproveStockChecks(user) && !user.isDemo;
+    if (payload.oldBoxCounts !== undefined && !administrator) throw new ForbiddenException('Фактические остатки старых коробов подтверждаются с правами администратора.');
     if (payload.adminConfirmed === true && !administrator) throw new ForbiddenException('Это решение доступно только с правами администратора.');
     const scans = parseRecountScans(payload, storageBoxTransferKizIdentity);
     const fromBoxCode = requiredTsdTransferText(payload.fromBoxCode, 'Отсканируйте исходный короб.');
@@ -333,7 +335,8 @@ export class StockOperationsService {
       throw new BadRequestException('Сначала выполните предварительную проверку КИЗов.');
     }
     const auditId = `tsd-kiz-recount:${recountHash([user.id, user.deviceCode ?? null, key])}`;
-    const fingerprint = recountHash([user.id, user.deviceCode ?? null, user.activeWarehouseId ?? null, fromBoxCode, barcode, scans.map(scan => scan.key), payload.snapshot ?? null, payload.adminConfirmed === true]);
+    const fingerprint = recountHash([user.id, user.deviceCode ?? null, user.activeWarehouseId ?? null, fromBoxCode, barcode, scans.map(scan => scan.key), payload.snapshot ?? null, payload.adminConfirmed === true,
+      ...(payload.oldBoxCounts === undefined ? [] : [payload.oldBoxCounts])]);
     await this.inventoryLock?.assertStockMovementsAllowed();
     // FIX: validate current scopes and all histories again inside Serializable, including on replay.
     const execute = async (tx: Prisma.TransactionClient) => {
@@ -348,8 +351,15 @@ export class StockOperationsService {
         }
       }
       let plan: Awaited<ReturnType<typeof planKizRecount>>;
+      // FIX: cross-box ownership needs an explicit physical count, not a blanket admin bypass.
+      const old = administrator && !internal ? await planAdminOldBoxes(tx, source, sku.id, scans, payload.oldBoxCounts) : null;
+      if (old?.needsCounts) {
+        if (confirm) throw new BadRequestException('Сначала подтвердите фактические остатки старых коробов.');
+        return { state: 'ADMIN_BOX_COUNTS_REQUIRED', oldBoxes: old.boxes.map(b => ({ boxCode: b.code, previousQuantity: b.previousQuantity })),
+          message: 'КИЗ числится в другом коробе. Укажите, сколько единиц этого товара физически осталось в каждом старом коробе.' };
+      }
       try {
-        plan = await planKizRecount(tx, source, sku.id, scans, storageBoxTransferKizIdentity, administrator, internal?.releasedIds);
+        plan = await planKizRecount(tx, source, sku.id, scans, storageBoxTransferKizIdentity, administrator, internal?.releasedIds, old?.adopted.map(m => m.id));
       } catch (error) {
         if (!(error instanceof KizRecountReviewRequired)) throw error;
         if (internal) throw new BadRequestException(error.message);
@@ -367,13 +377,43 @@ export class StockOperationsService {
           ? `Эта сверка уже рассмотрена менеджером: ${review.resolutionMessage ?? review.serverMessage ?? 'см. историю ТСД'}. Для нового пересчёта начните новую сверку.`
           : `${error.message} Сверка записана в WMS → История ТСД → Спорные сверки КИЗов.` };
       }
+      if (old) plan.snapshot = recountHash([plan.snapshot, old.snapshot]);
+      const oldSummary = old?.boxes.map(b => `${b.code}: ${b.previousQuantity} → ${b.quantity}`).join('; ');
       if (!confirm) return { state: 'RECOUNT_READY', snapshot: plan.snapshot, quantity: plan.quantity,
-        previousQuantity: plan.previousQuantity, delta: plan.delta, adminConfirmationRequired: plan.delta !== 0 || source.status === 'archived',
+        previousQuantity: plan.previousQuantity, delta: plan.delta, adminConfirmationRequired: !!old || plan.delta !== 0 || source.status === 'archived',
         retiredCount: plan.retired.length, registeredCount: plan.registered.length,
         message: `Проверено ${plan.quantity} КИЗов. Старых привязок убрать: ${plan.retired.length}; зарегистрировать: ${plan.registered.length}. ` +
-          (plan.delta ? `Решение администратора: остаток ${plan.previousQuantity} → ${plan.quantity}, изменение ${plan.delta > 0 ? '+' : ''}${plan.delta}.` : 'Количество не изменится.') };
+          (plan.delta ? `Решение администратора: остаток ${plan.previousQuantity} → ${plan.quantity}, изменение ${plan.delta > 0 ? '+' : ''}${plan.delta}.` : 'Количество в текущем коробе не изменится.') +
+          (old ? ` Старые короба: ${oldSummary}. Перепривязать КИЗов: ${old.adopted.length}.` : '') };
       if (!internal) requireRecountSnapshot(plan.snapshot, payload.snapshot);
-      if ((plan.delta !== 0 || source.status === 'archived') && (!administrator || payload.adminConfirmed !== true)) throw new BadRequestException('Подтвердите решение администратора по фактическому остатку.');
+      if ((old || plan.delta !== 0 || source.status === 'archived') && (!administrator || payload.adminConfirmed !== true)) throw new BadRequestException('Подтвердите решение администратора по фактическому остатку.');
+      if (old) {
+        for (const box of old.boxes) {
+          const delta = box.quantity! - box.previousQuantity;
+          if (delta > 0) await this.incrementTargetBalance(tx, { clientId: source.clientId, warehouseId: source.warehouseId!, skuId: sku.id,
+            boxId: box.id, palletId: box.palletId, status: StockStatus.AVAILABLE, quantity: delta });
+          let remaining = Math.max(0, -delta);
+          for (const balance of box.balances.filter(b => b.status === 'AVAILABLE' && b.quantity > 0)) {
+            const take = Math.min(remaining, balance.quantity); if (!take) break;
+            await this.decrementSourceBalance(tx, balance, take); remaining -= take;
+          }
+          if (remaining) throw new BadRequestException('Старый остаток изменился. Повторите сверку.');
+          if (delta) await tx.stockMovement.create({ data: { clientId: source.clientId, warehouseId: source.warehouseId!, skuId: sku.id,
+            boxId: box.id, palletId: box.palletId, type: MovementType.INVENTORY_ADJUSTMENT, status: StockStatus.AVAILABLE,
+            quantity: delta, idempotencyKey: `${auditId}:${box.id}`, sourceDocument: auditId,
+            comment: `Администратор ${user.name}: физический остаток старого короба ${box.code}, ${box.previousQuantity} → ${box.quantity}.` } });
+          for (const mark of box.retired) {
+            const changed = await tx.productMark.updateMany({ where: { id: mark.id, boxId: box.id, skuId: sku.id, clientId: source.clientId,
+              status: 'AVAILABLE', updatedAt: mark.updatedAt }, data: { boxId: null, status: 'BLOCKED' } });
+            if (changed.count !== 1) throw new BadRequestException('Состав старого короба изменился. Повторите сверку.');
+          }
+        }
+        for (const mark of old.adopted) {
+          const changed = await tx.productMark.updateMany({ where: { id: mark.id, boxId: mark.boxId, clientId: source.clientId,
+            skuId: sku.id, status: 'AVAILABLE', updatedAt: mark.updatedAt }, data: { boxId: source.id } });
+          if (changed.count !== 1) throw new BadRequestException('КИЗ изменился. Повторите сверку.');
+        }
+      }
       const affectedRequestIds = administrator ? (await tx.clientRequest.findMany({ where: {
           clientId: source.clientId, warehouseId: source.warehouseId, items: { some: { skuId: sku.id } },
           type: 'OUTBOUND', status: { notIn: ['DONE', 'CANCELLED', 'REJECTED'] },
@@ -410,6 +450,7 @@ export class StockOperationsService {
         payload: { fingerprint, clientId: source.clientId, warehouseId: source.warehouseId, boxCode: source.code,
           skuId: sku.id, barcode, quantity: plan.quantity, previousQuantity: plan.previousQuantity, delta: plan.delta,
           adminConfirmed: administrator && payload.adminConfirmed === true, deviceCode: user.deviceCode ?? null, affectedRequestIds,
+          ...(old ? { oldBoxes: JSON.parse(JSON.stringify(old.boxes)), adoptedMarks: JSON.parse(JSON.stringify(old.adopted)) } : {}),
           scannedKizs: scans.map(scan => scan.raw), previousMarks: JSON.parse(JSON.stringify(plan.previousMarks)),
           retiredMarkIds: plan.retired.map(mark => mark.id), snapshot: plan.snapshot } } });
       return { state: 'RECOUNT_APPLIED', affectedRequestIds, message: 'КИЗы сверены. ' +

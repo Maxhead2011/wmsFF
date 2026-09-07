@@ -35,6 +35,7 @@ import retrofit2.Response;
 /** FIX: isolated TSD workflow: source box -> barcode -> KIZ -> storage box. */
 public final class StorageBoxTransferActivity extends Activity {
     public static final String AUTO_SOURCE = "autoSourceByKiz";
+    public static final String INITIAL_SOURCE = "reconcileSourceBox";
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int GREEN = Color.rgb(22, 163, 74);
     private static final int TEXT = Color.rgb(30, 41, 59);
@@ -68,6 +69,8 @@ public final class StorageBoxTransferActivity extends Activity {
         restorePending();
         if (!state.hasPendingTransfer() && !busy) restoreRecount();
         render();
+        String initialSource = getIntent().getStringExtra(INITIAL_SOURCE);
+        if (!busy && !recountPending && !state.hasPendingTransfer() && "SOURCE".equals(state.stage()) && initialSource != null && !initialSource.isEmpty()) inspectSource(initialSource);
     }
 
     @Override
@@ -302,6 +305,7 @@ public final class StorageBoxTransferActivity extends Activity {
         request.put("idempotencyKey", recount.operationKey()); request.put("snapshot", recount.snapshot());
         request.put("adminRelease", recount.adminRelease()); request.put("adminConfirmed", recount.adminConfirmed());
         request.put("adminAbort", recount.adminAbort());
+        if (!recount.oldBoxCounts().isEmpty()) request.put("oldBoxCounts", recount.oldBoxCounts());
         if (confirm) {
             try {
                 JSONObject saved = new JSONObject(request);
@@ -315,11 +319,40 @@ public final class StorageBoxTransferActivity extends Activity {
             : api.previewKizRecount(session.authorizationHeader(), request)).execute(), response -> {
                 message = response.message;
                 if ("RECOUNT_READY".equals(response.state)) recount.ready(response.snapshot, response.adminRelease, response.adminConfirmationRequired);
+                else if ("ADMIN_BOX_COUNTS_REQUIRED".equals(response.state)) promptOldBoxCounts(response);
                 else if ("RECOUNT_APPLIED".equals(response.state) || "RECOUNT_CANCELLED".equals(response.state) || "NEEDS_REVIEW".equals(response.state)) {
                     clearRecountPending(); recount = null; state.cancelUnit(); currentItem = null;
                     success = "RECOUNT_APPLIED".equals(response.state);
                 } else message = "Неизвестный результат сверки. Повторите подтверждение; данные операции сохранены.";
             });
+    }
+
+    // FIX: no default zero or silent stock change; the administrator enters each physical count.
+    private void promptOldBoxCounts(TsdTransferResponse response) {
+        if (response.oldBoxes == null || response.oldBoxes.isEmpty() || response.oldBoxes.size() > 10) {
+            message = "Не получен список старых коробов. Повторите проверку."; return;
+        }
+        LinearLayout form = new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL); form.setPadding(dp(16), dp(8), dp(16), dp(8));
+        TextView info = new TextView(this); info.setText(getString(R.string.recount_previous_box_instruction, state.barcode())); form.addView(info);
+        ArrayList<EditText> inputs = new ArrayList<>();
+        for (TsdTransferResponse.OldBoxCount box : response.oldBoxes) {
+            TextView label = new TextView(this); label.setText(getString(R.string.recount_previous_box_quantity, box.boxCode, box.previousQuantity)); form.addView(label);
+            EditText input = new EditText(this); input.setInputType(InputType.TYPE_CLASS_NUMBER); input.setHint("Фактическое количество"); form.addView(input); inputs.add(input);
+        }
+        ScrollView scroll = new ScrollView(this); scroll.addView(form);
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Решение администратора").setView(scroll)
+            .setPositiveButton("Проверить изменения", null).setNegativeButton("Отмена", null).create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
+            if (recount == null || busy) return;
+            int[] values = new int[inputs.size()];
+            for (int i = 0; i < inputs.size(); i++) {
+                try { values[i] = Integer.parseInt(inputs.get(i).getText().toString().trim()); if (values[i] < 0 || values[i] > 10000) throw new NumberFormatException(); }
+                catch (NumberFormatException error) { inputs.get(i).setError("Введите количество от 0 до 10000"); return; }
+            }
+            for (int i = 0; i < inputs.size(); i++) recount.oldBoxCount(response.oldBoxes.get(i).boxCode, values[i]);
+            dialog.dismiss(); sendRecount(false);
+        }));
+        dialog.show();
     }
 
     private void clearRecountPending() {
@@ -335,7 +368,12 @@ public final class StorageBoxTransferActivity extends Activity {
             ArrayList<String> codes = new ArrayList<>(); for (int i = 0; i < array.length(); i++) codes.add(array.getString(i));
             state = new StorageBoxTransferState(); state.sourceAccepted(value.getString("fromBoxCode"));
             state.barcodeAccepted(value.getString("barcode"), true);
-            recount = StorageKizRecountState.restore(codes, value.getString("snapshot"), value.getString("idempotencyKey"));
+            ArrayList<Map<String, Object>> oldCounts = new ArrayList<>(); JSONArray oldArray = value.optJSONArray("oldBoxCounts");
+            if (oldArray != null) for (int i = 0; i < oldArray.length(); i++) {
+                JSONObject row = oldArray.getJSONObject(i); Map<String, Object> count = new LinkedHashMap<>();
+                count.put("boxCode", row.getString("boxCode")); count.put("quantity", row.getInt("quantity")); oldCounts.add(count);
+            }
+            recount = StorageKizRecountState.restore(codes, value.getString("snapshot"), value.getString("idempotencyKey"), oldCounts);
             recount.restoreAdminDecision(value.optBoolean("adminRelease"), value.optBoolean("adminConfirmed"));
             if (value.optBoolean("adminAbort")) recount.abortAdministrator();
             recountEnabled = true; recountPending = true;

@@ -17,6 +17,9 @@ public class TsdTransferResponse {
     public boolean adminConfirmationRequired;
     public int previousQuantity;
     public int delta;
+    // ADDED: explicit old-box counts requested only by an administrator preview.
+    public List<OldBoxCount> oldBoxes;
+    public static class OldBoxCount { public String boxCode; public int previousQuantity; }
     public SourceBox sourceBox;
     public Item item;
     public String sourceBoxCode;
