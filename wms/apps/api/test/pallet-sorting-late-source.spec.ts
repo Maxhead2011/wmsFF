@@ -78,14 +78,37 @@ it.each(['assertUnclaimed', 'assertMovementAllowed'])('retains %s protection for
   await expect(f.service.move(f.tx, f.state, f.dto, user)).rejects.toThrow('BUSY_SOURCE');
   expect(f.state.sources).toHaveLength(1);
 });
-it('explains a barcode absent from the selected known box, not a missing KIZ source', async () => {
-  // TEST: scanning an arbitrary box is not a substitute for the actual SKU source.
+it('recovers a physically scanned unit absent from the selected known box using stock validation', async () => {
+  // TEST: physical discrepancy must use the guarded recovery, not a fictitious transfer.
   const f = fixture(); f.tx.stockBalance.findMany.mockResolvedValue([]);
-  await expect(f.service.move(f.tx, f.state, f.dto, user)).rejects.toThrow(/нет доступного остатка по ШК/);
-  expect(f.service.stock.recoverSortingUnit).not.toHaveBeenCalled();
+  f.service.stock.recoverSortingUnit.mockResolvedValue({ skuId: 'sku' });
+  await f.service.move(f.tx, f.state, f.dto, user);
+  await f.service.move(f.tx, f.state, f.dto, user);
+  expect(f.service.stock.recoverSortingUnit).toHaveBeenCalledTimes(1);
+  expect(f.service.stock.recoverSortingUnit).toHaveBeenCalledWith(f.tx, expect.objectContaining({
+    sourceBoxCode: code, knownSource: { id: 'late', placementId: 'pallet' },
+  }), user);
+  expect(f.state.moves).toEqual([expect.objectContaining({ sourceBoxId: 'late', recovered: true, recoveryReason: 'SKU_STOCK_MISSING' })]);
+  expect(f.service.audit).toHaveBeenCalledWith(f.tx, f.state, user, 'UNIT_RECOVERED', expect.objectContaining({ reason: 'SKU_STOCK_MISSING', sourceBoxId: 'late' }));
+  expect(f.state.targets[0].quantity).toBe(1);
+  expect(f.state.problemSources ?? []).toEqual([]); // Known box is not falsely labelled BOX_NOT_FOUND.
+  expect(f.service.stock.transferSortingUnit).not.toHaveBeenCalled();
 });
 it('does not consume a KIZ belonging to another source than the explicit scan', async () => {
   const f = fixture(); f.tx.productMark.findMany.mockResolvedValue([{ boxId: 'old', status: 'AVAILABLE', value: kiz }]);
   await expect(f.service.move(f.tx, f.state, f.dto, user)).rejects.toThrow();
   expect(f.service.stock.transferSortingUnit).not.toHaveBeenCalled();
+});
+it.each(['unscanned', 'archived', 'preserved'])('does not recover from an ineligible manifest source: %s', async kind => {
+  // TEST: the fallback does not reopen archived/preserved boxes or confirm them implicitly.
+  const f = fixture(); f.tx.stockBalance.findMany.mockResolvedValue([]);
+  f.state.sources.push({ id: 'late', code, scanned: kind !== 'unscanned', archived: kind === 'archived', preservedOnPallet: kind === 'preserved', placementId: 'pallet' });
+  await expect(f.service.move(f.tx, f.state, f.dto, user)).rejects.toThrow('подтверждённый');
+  expect(f.service.stock.recoverSortingUnit).not.toHaveBeenCalled();
+});
+it('does not guess a known zero-stock source without an explicit source scan', async () => {
+  // TEST: physical origin must be supplied, even if the manifest has only one source.
+  const f = fixture(); f.tx.stockBalance.findMany.mockResolvedValue([]);
+  await expect(f.service.move(f.tx, f.state, { barcode, kiz }, user)).rejects.toThrow('исходный');
+  expect(f.service.stock.recoverSortingUnit).not.toHaveBeenCalled();
 });

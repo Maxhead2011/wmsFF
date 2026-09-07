@@ -20,7 +20,7 @@ export type PalletSortingState = {
   stage: 'CHECKING' | 'FORMING' | 'COMPLETED'; version: number;
   sources: Source[]; targets: Target[]; activeTargetId?: string | null;
   problemSources?: ProblemSource[];
-  moves: Array<{ identity: string; barcode: string; sourceBoxId: string | null; targetBoxId: string; sourceBoxCode?: string; recovered?: boolean }>;
+  moves: Array<{ identity: string; barcode: string; sourceBoxId: string | null; targetBoxId: string; sourceBoxCode?: string; recovered?: boolean; recoveryReason?: 'BOX_NOT_FOUND' | 'SKU_STOCK_MISSING' }>;
   pendingRoutes: Array<{ requestId: string; taskIds: string[]; revision: number; error?: string }>;
 };
 type Row = { state: PalletSortingState; version: number; createdByUserId: string; warehouseId: string; clientId: string };
@@ -249,20 +249,22 @@ export class PalletSortingService {
         status: 'AVAILABLE', quantity: { gt: 0 }, sku: { barcodes: { some: { value: barcode } } } }, select: { boxId: true } });
       const ids = [...new Set(candidates.map(b => b.boxId))];
       if (!ids.length) {
-        // FIX: a scanned unknown source authorizes an explicit surplus, never a guessed debit.
-        if (code && state.sources.some(b => b.code === code)) {
-          throw new ConflictException(`В исходном коробе ${code} нет доступного остатка по ШК ${barcode}. Проверьте фактический товар и остаток; повторный приход не выполнен.`);
-        }
+        // FIX: an explicitly scanned known source may have a physical surplus too.
+        // Stock service rechecks zero SKU balance in ALL statuses and global KIZ history.
+        const known = code ? state.sources.find(b => b.code === code) : undefined;
+        if (known && (!known.scanned || known.archived || known.preservedOnPallet)) throw new ConflictException('Нужен подтверждённый активный исходный короб сортировки.');
         const problems = (state.problemSources ?? []).filter(b => b.scanned && (!code || b.code === code));
-        if (problems.length === 1) {
-          const problem = problems[0];
+        if (known || problems.length === 1) {
+          const problem = known ?? problems[0];
+          const reason = known ? 'SKU_STOCK_MISSING' : 'BOX_NOT_FOUND';
           const recovered = await this.stock.recoverSortingUnit(tx, { clientId: state.clientId, sourceBoxCode: problem.code,
+            ...(known ? { knownSource: { id: known.id, placementId: known.placementId } } : {}),
             toBoxCode: target.code, barcode, kiz: (dto.kiz ?? '').replace(/<GS>/gi, '\u001d').trim(),
             sessionId: state.id, idempotencyKey: `sorting:${state.id}:${hash(identity)}` }, user);
-          state.moves.push({ identity, barcode, sourceBoxId: null, sourceBoxCode: problem.code, targetBoxId: target.id, recovered: true });
+          state.moves.push({ identity, barcode, sourceBoxId: known?.id ?? null, sourceBoxCode: problem.code, targetBoxId: target.id, recovered: true, recoveryReason: reason });
           target.quantity++;
-          await this.audit(tx, state, user, 'UNIT_RECOVERED', { sourceBoxCode: problem.code, targetBoxId: target.id,
-            barcode, identity, skuId: recovered.skuId, quantity: 1, reason: 'BOX_NOT_FOUND' });
+          await this.audit(tx, state, user, 'UNIT_RECOVERED', { sourceBoxCode: problem.code, sourceBoxId: known?.id ?? null, targetBoxId: target.id,
+            barcode, identity, skuId: recovered.skuId, quantity: 1, reason });
           return;
         }
       }

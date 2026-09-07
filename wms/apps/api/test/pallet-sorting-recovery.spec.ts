@@ -127,6 +127,62 @@ function stockFixture() {
   const input = { clientId: 'client', sourceBoxCode: 'UNKNOWN', toBoxCode: 'TARGET', barcode: '4600000000001', kiz, sessionId: 'session', idempotencyKey: 'recover-key' };
   return { service, tx, input };
 }
+function knownStockFixture() {
+  const f = stockFixture();
+  const source = { id: 'source', code: 'SOURCE', clientId: 'client', warehouseId: 'wh', status: 'active', storagePlacement: { palletId: 'pallet' } };
+  const findBox = f.tx.box.findUnique.getMockImplementation();
+  f.tx.box.findUnique.mockImplementation((query: any) => query.where.code === 'SOURCE' ? source : findBox(query));
+  f.tx.stockBalance = { findFirst: vi.fn().mockResolvedValue(null) };
+  return { ...f, source, input: { ...f.input, sourceBoxCode: 'SOURCE', knownSource: { id: 'source', placementId: 'pallet' as string | null } } };
+}
+it('accounts for a new physical KIZ from an exhausted known source without debiting other boxes', async () => {
+  // TEST: the incident's known box has zero WMS stock for the scanned SKU, not a missing Box.
+  const f = knownStockFixture();
+  await f.service.recoverSortingUnit(f.tx, f.input, user);
+  expect(f.tx.stockBalance.findFirst).toHaveBeenCalledWith({ where: { boxId: 'source', skuId: 'sku', quantity: { not: 0 } }, select: { id: true } });
+  expect(f.service.incrementTargetBalance).toHaveBeenCalledTimes(1);
+  expect(f.tx.stockMovement.create.mock.calls[0][0].data).toMatchObject({ quantity: 1, type: 'INVENTORY_ADJUSTMENT', boxId: 'target' });
+  expect(f.tx.stockMovement.create.mock.calls[0][0].data.comment).toContain('расхождение');
+  expect(f.tx.stockMovement.create.mock.calls[0][0].data.comment).not.toContain('отсутствует в WMS');
+});
+it.each(['client', 'warehouse', 'archived', 'placement', 'id', 'self'])('rejects invalid known-source evidence: %s', async kind => {
+  // TEST: explicit scan is not permission to use another client, pallet, archived or target box.
+  const f = knownStockFixture();
+  if (kind === 'client') f.source.clientId = 'other';
+  if (kind === 'warehouse') f.source.warehouseId = 'other';
+  if (kind === 'archived') f.source.status = 'archived';
+  if (kind === 'placement') f.source.storagePlacement.palletId = 'other';
+  if (kind === 'id') f.source.id = 'other';
+  if (kind === 'self') { f.source.id = 'target'; f.input.knownSource.id = 'target'; }
+  await expect(f.service.recoverSortingUnit(f.tx, f.input, user)).rejects.toThrow();
+  expect(f.service.incrementTargetBalance).not.toHaveBeenCalled();
+});
+it('rejects a known source that disappeared, instead of treating it as unknown', async () => {
+  const f = knownStockFixture(); f.tx.box.findUnique.mockResolvedValue(null);
+  await expect(f.service.recoverSortingUnit(f.tx, f.input, user)).rejects.toThrow();
+  expect(f.service.incrementTargetBalance).not.toHaveBeenCalled();
+});
+it.each(['AVAILABLE', 'RESERVED', 'SHIPPING', 'NEGATIVE'])('does not recover over any nonzero source SKU balance: %s', async status => {
+  // TEST: status-independent query prevents converting a reservation or negative balance to a surplus.
+  const f = knownStockFixture(); f.tx.stockBalance.findFirst.mockResolvedValue({ id: 'balance', status });
+  await expect(f.service.recoverSortingUnit(f.tx, f.input, user)).rejects.toThrow();
+  expect(f.tx.stockBalance.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { boxId: 'source', skuId: 'sku', quantity: { not: 0 } } }));
+  expect(f.service.incrementTargetBalance).not.toHaveBeenCalled();
+});
+it.each(['productMark', 'fbsTsdAssembly', 'shippedKizHistory', 'fbsWebKizStickerPrint', 'fbsAssemblyAttemptHistory', 'fbsPrintJob', 'kizCirculationItem'])('preserves %s history protection for known-source recovery', async delegate => {
+  const f = knownStockFixture(); f.tx[delegate].findFirst.mockResolvedValue({ id: 'known' });
+  await expect(f.service.recoverSortingUnit(f.tx, f.input, user)).rejects.toThrow('КИЗ');
+  expect(f.service.incrementTargetBalance).not.toHaveBeenCalled();
+});
+it('replays a known-source receipt without checking or changing later balances', async () => {
+  // TEST: replay returns the completed operation even if source stock was received afterwards.
+  const f = knownStockFixture();
+  f.tx.stockMovement.findUnique.mockResolvedValue({ id: 'receipt', clientId: 'client', warehouseId: 'wh', boxId: 'target', skuId: 'sku', sourceDocument: 'PALLET_SORTING:session', type: 'INVENTORY_ADJUSTMENT', quantity: 1 });
+  f.tx.productMark.findFirst.mockResolvedValue({ id: 'mark' });
+  expect(await f.service.recoverSortingUnit(f.tx, f.input, user)).toEqual({ skuId: 'sku', movementId: 'receipt' });
+  expect(f.tx.stockBalance.findFirst).not.toHaveBeenCalled();
+  expect(f.service.incrementTargetBalance).not.toHaveBeenCalled();
+});
 it('creates an audited +1 adjustment and one mark in the target, never a fictitious debit', async () => {
   // TEST: recovered physical stock has honest ledger provenance and existing balance-key rules.
   const f = stockFixture();
