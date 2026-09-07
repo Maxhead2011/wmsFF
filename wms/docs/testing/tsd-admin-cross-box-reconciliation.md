@@ -1,7 +1,7 @@
 # WMSFF2207: administrative cross-box KIZ reconciliation
 
-Status: implemented locally, NOT published. No production stock writes, migration,
-APK installation or forced device update were performed in this change.
+Status: publication authorized; candidate under verification. No production stock
+writes, APK installation or forced device update performed yet.
 
 Branch: `fix/tsd-admin-cross-box-reconciliation`, based on `5173b2d`.
 Proposed PR target: `fix/fbs-box-scan-route-consistency` (WMSFF2207 only).
@@ -92,3 +92,26 @@ FBS safeguards not all present in the host checkout), rerun runtime tests,
 increment/sign the Logoff APK only and verify upgrade on an ATOL. Never deploy
 the entire stale host checkout. Apply the confirmed exact SKU correction via
 the audited reconciliation and verify route refresh; no blanket box zeroing.
+
+## Authorized release preparation (2026-09-07)
+
+- Logoff APK versionCode 158, versionName `0.1.159-admin-box-count`.
+  Signed release build and release lintVital passed, 48 tests for each flavor.
+- APK SHA256 `022edfc8dbaeeac7118752ff6a641a3e57a950da8f47985bf6f81a2bf332ca3b`.
+  Certificate SHA256 `52916d7797ade50cc1c50bba8787b9d2307b1e5dfd4ea725bd7c3be0e64f989b`,
+  unchanged from prior Logoff release. No physical-device install claimed.
+- Added guarded release script, live-image overlay Dockerfile, artifact and
+  full-test comparison gate. Tests reject unexpected module/web changes.
+- Added exact-scope repair script using existing authenticated preview/confirm
+  endpoints. It validates user, SKU, old/current ownership and counts, saves
+  the exact pending request privately, uses existing route refresh, and revokes
+  its temporary maintenance session. No direct balance writes.
+- API 1,287, web 54 tests rerun successfully before release commit.
+- Stage applied with `git apply --check` without conflicts; private database
+  backup created. Live source safeguards are preserved, not replaced from Git.
+- API/web baseline images respectively `29358b8ee669c901d144fc2695f388334d0623f82d72317d0cdc68929e8acf45`
+  and `1981a1fef31c2fa945a04859fef82cf407b4878b61903c5239cc261ecb114af6`.
+- Private backup/staging directories: `/opt/logoff-wms-backups/tsd-cross-box-20260907`
+  and `/opt/logoff-wms-releases/tsd-cross-box-20260907`.
+- Shared update metadata and every existing web/download file remain unchanged;
+  the new APK is additive at `/downloads/logoff-tsd-admin-box-count-158.apk`.
