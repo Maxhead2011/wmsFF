@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { StockStatus } from '@prisma/client';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BoxCodePolicyService } from '../src/common/boxes/box-code-policy.service';
 import { REQUIRED_PERMISSIONS_KEY } from '../src/modules/auth/decorators/require-permissions.decorator';
 import { AdministrationController } from '../src/modules/administration/administration.controller';
 import {
@@ -66,6 +67,24 @@ function box(id: string, code: string, balances: ReturnType<typeof balance>[]) {
 
 // TEST: the preview is read-only and treats a code-only pallet link case-insensitively.
 describe('AdministrationUnpalletedWriteoffService', () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it('excludes permanent storage from the mass-disposal preview without hiding ordinary boxes', async () => {
+    // TEST: reusable storage must never be offered by the bulk archive operation.
+    vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', 'true');
+    const prisma: any = {
+      client: { findUnique: vi.fn(async () => targetClient) },
+      box: { findMany: vi.fn(async () => [box('permanent', 'SBOX_014', [balance('p', 'permanent')]),
+        box('ordinary', 'FFL_LKB_14', [balance('o', 'ordinary')])]) },
+    };
+    for (const model of ['storagePalletBox', 'clientRequestBoxSelection', 'fbsTsdAssembly',
+      'inventoryAuditBox', 'productMark', 'pickWaveBalanceLine', 'warehouseBoxCheckRow']) {
+      prisma[model] = { findMany: vi.fn(async () => []) };
+    }
+    const service = new AdministrationUnpalletedWriteoffService(prisma, {} as never);
+    Object.assign(service, { boxCodes: new BoxCodePolicyService({ get: async () => ({}) } as never) });
+    const result = await service.preview(admin as never);
+    expect(result.rows.map(row => row.boxId)).toEqual(['ordinary']);
+  });
   // TEST: all three HTTP endpoints require system:admin before the service is reached.
   it('защищает preview, recheck и apply декоратором system:admin', () => {
     expect(
@@ -375,10 +394,13 @@ describe('AdministrationUnpalletedWriteoffService', () => {
   });
 
   // TEST: a successful apply writes an exact negative ledger movement and archives the empty box.
-  it('списывает AVAILABLE, блокирует только AVAILABLE КИЗы и архивирует короб атомарно', async () => {
+  it.each([false, true])('списание и архивация: постоянный бокс %s', async permanent => {
+    // TEST: a stale mass-cleanup selection must not remove permanent storage.
+    vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', 'true');
     const sourceBalance = balance('bal-safe', 'box-safe', StockStatus.AVAILABLE, 2);
     sourceBalance.sku.needsChestnyZnak = true;
     const sourceBox = box('box-safe', 'FFL_LKB_SAFE', [sourceBalance]);
+    if (permanent) sourceBox.code = 'SBOX_014';
     const tx = {
       $executeRaw: vi.fn().mockResolvedValue(0),
       box: {
@@ -413,12 +435,19 @@ describe('AdministrationUnpalletedWriteoffService', () => {
       prisma as never,
       inventoryLock as never,
     );
+    Object.assign(service, { boxCodes: new BoxCodePolicyService({ get: async () => ({}) } as never) });
 
     const result = await service.apply(
       { boxIds: ['box-safe'], confirmation: UNPALLETED_WRITEOFF_CONFIRMATION },
       admin as never,
     );
 
+    if (permanent) {
+      expect(result.results[0]).toMatchObject({ outcome: 'SKIPPED', reason: 'PERMANENT_STORAGE_BOX' });
+      expect(tx.stockMovement.create).not.toHaveBeenCalled();
+      expect(tx.box.update).not.toHaveBeenCalled();
+      return;
+    }
     expect(inventoryLock.assertStockMovementsAllowed).toHaveBeenCalledTimes(1);
     expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
       isolationLevel: 'Serializable',

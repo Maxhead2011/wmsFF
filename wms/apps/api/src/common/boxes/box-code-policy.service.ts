@@ -4,6 +4,20 @@ import { SystemSettingsService } from '../settings/system-settings.service';
 
 export const BOX_CODE_POLICY_SETTING = 'warehouse.boxCodePolicy';
 
+// FIX: opt-in for WMSFF2207; sold installations retain their existing lifecycle.
+export const permanentStorageBoxesEnabled = () => process.env.WMS_PERMANENT_STORAGE_BOXES_ENABLED === 'true';
+
+export async function preserveEmptyStorageBox(code: string, boxCodes?: BoxCodePolicyService): Promise<boolean> {
+  if (!permanentStorageBoxesEnabled()) return false;
+  // FIX: a missing policy must fail closed, not archive an unidentified permanent location.
+  if (!boxCodes) throw new Error('Политика постоянных боксов недоступна. Операция отменена.');
+  const policy = await boxCodes.getPolicy();
+  const normalized = await boxCodes.normalize(code);
+  return [policy.storageBoxPrefix, ...policy.storageBoxAliases].some(
+    prefix => normalized.startsWith(prefix) && normalized.length > prefix.length,
+  );
+}
+
 export type BoxCodePolicy = {
   primaryPrefix: string;
   allowedPrefixes: string[];

@@ -4,12 +4,14 @@ import {
   StockStatus,
   WarehouseBoxCheckDecision,
 } from '@prisma/client';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BoxCodePolicyService } from '../src/common/boxes/box-code-policy.service';
 import { captureShippedKizHistory } from '../src/common/shipment-history/shipped-kiz-history';
 import type { AuthUser } from '../src/modules/auth/auth.types';
 import { WarehouseBoxIntegrityService } from '../src/modules/warehouse/warehouse-box-integrity.service';
 import { WarehouseShipmentHistoryService } from '../src/modules/warehouse/warehouse-shipment-history.service';
 
+afterEach(() => vi.unstubAllEnvs());
 function branchUser(overrides: Partial<AuthUser> = {}): AuthUser {
   return {
     id: 'user-branch',
@@ -208,7 +210,9 @@ describe('warehouse audit history scope', () => {
   });
 
   // TEST: box-check write-off archives first and delegates placement removal to the shared rule.
-  it('uses the shared archived-empty rule after writing off the last box unit', async () => {
+  it.each([false, true])('last unit writeoff; permanent storage %s', async permanent => {
+    // TEST: actualization changes quantity, not the permanent storage location.
+    vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', 'true');
     const detachIfArchivedAndEmpty = vi.fn().mockResolvedValue({ detached: true });
     const directPlacementDelete = vi.fn();
     const tx = {
@@ -223,7 +227,7 @@ describe('warehouse audit history scope', () => {
       box: {
         findUnique: vi.fn().mockResolvedValue({
           id: 'box-empty',
-          code: 'FFL_EMPTY',
+          code: permanent ? 'SBOX_014' : 'FFL_EMPTY',
           palletId: 'pallet-1',
           warehouseId: 'warehouse-msk',
         }),
@@ -267,6 +271,7 @@ describe('warehouse audit history scope', () => {
       { assertStockMovementsAllowed: vi.fn().mockResolvedValue(undefined) } as never,
       { detachIfArchivedAndEmpty } as never,
     );
+    Object.assign(service, { boxCodes: new BoxCodePolicyService({ get: async () => ({}) } as never) });
 
     await service.decideRow(
       'row-empty',
@@ -274,6 +279,12 @@ describe('warehouse audit history scope', () => {
       branchUser(),
     );
 
+    if (permanent) {
+      expect(tx.stockBalance.delete).toHaveBeenCalledOnce();
+      expect(tx.box.update).not.toHaveBeenCalled();
+      expect(detachIfArchivedAndEmpty).not.toHaveBeenCalled();
+      return;
+    }
     expect(tx.box.update).toHaveBeenCalledWith({
       where: { id: 'box-empty' },
       data: { status: 'archived', palletId: null, zoneId: null },

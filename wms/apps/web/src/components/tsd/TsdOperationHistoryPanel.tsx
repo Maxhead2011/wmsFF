@@ -97,6 +97,14 @@ export function TsdOperationHistoryPanel({ accessToken }: Props) {
         <label><span>Результат</span><select value={filters.status ?? ''} onChange={(e) => setFilters({ ...filters, status: e.target.value as TsdOperationHistoryFilters['status'] })}><option value="">Все</option><option value="ACCEPTED">Успешно</option><option value="NEEDS_REVIEW">Нужен разбор</option><option value="REJECTED">Ошибка</option></select></label>
         <label className="tsd-history__search"><span>Поиск по всем данным</span><div><Search size={16} /><input value={draftSearch} onChange={(e) => setDraftSearch(e.target.value)} placeholder="Паллет, короб, товар, ШК, КИЗ, заказ…" /></div></label>
         <button type="submit">Показать</button>
+        {/* FIX: queue is server-filtered over all pages, independent of the current search/period. */}
+        <button type="button" disabled={loading} onClick={() => {
+          const next: TsdOperationHistoryFilters = { page: 1, pageSize: 50, status: 'NEEDS_REVIEW', operationType: 'tsd_stock_recount' };
+          setDraftSearch(''); setFilters(next); void load(next);
+        }}>Спорные сверки КИЗов</button>
+        <button type="button" disabled={loading} onClick={() => {
+          const next = { page: 1, pageSize: 50 }; setDraftSearch(''); setFilters(next); void load(next);
+        }}>Все операции</button>
       </form>
 
       {error ? <div className="tsd-history__error"><AlertTriangle size={18} />{error}</div> : null}

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { BoxCodePolicyService, preserveEmptyStorageBox } from './box-code-policy.service';
 
 const DETACH_AUDIT_MESSAGE = 'Пустой архивный короб автоматически удалён с паллетсорта';
 
@@ -17,7 +18,7 @@ export type ArchivedEmptyBoxDetachInput = {
 
 @Injectable()
 export class ArchivedEmptyBoxPalletDetachService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly boxCodes?: BoxCodePolicyService) {}
 
   async previewIfArchivedAndEmpty(input: ArchivedEmptyBoxDetachInput, db?: DetachDb) {
     // FIX: reconciliation can perform the exact canonical check without mutating the placement.
@@ -100,6 +101,10 @@ export class ArchivedEmptyBoxPalletDetachService {
     });
     if (!box || box.status !== 'archived') {
       return { eligible: false, boxId: input.boxId, quantity: null };
+    }
+    // FIX: old archived status is not authority to detach permanent storage in reconciliation.
+    if (await preserveEmptyStorageBox(box.code, this.boxCodes)) {
+      return { eligible: false, boxId: box.id, quantity: null };
     }
 
     // FIX: NULL is zero only when the aggregate confirms that no balance rows exist.

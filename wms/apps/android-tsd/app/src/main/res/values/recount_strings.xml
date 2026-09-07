@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- FIX: localized format strings for explicit administrator stock confirmation. -->
+    <string name="recount_previous_box_instruction">ШК %1$s. Сколько этого товара осталось физически в каждом старом коробе? Ноль указывайте только после проверки.</string>
+    <string name="recount_previous_box_quantity">%1$s · в WMS: %2$d</string>
+</resources>

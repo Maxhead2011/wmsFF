@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto';
+// FIX: preserve both sorting and release-158 recount/terminal-queue dependencies.
 import { assertSortingAdmin } from '../inventory/pallet-sorting-policy';
+import { loadAdminRecountContext, requireAdminRecount, runAdminRecount, type AdminRecountContext } from './tsd-admin-recount-release';
+import { physicalStockRecoveryEnabled } from '../stock/tsd-physical-stock-reconciliation';
+import { recountHash } from '../stock/tsd-transfer-kiz-recount';
+import { fbsTerminalQueueFilterEnabled, isFbsTerminalQueueOrder } from '../../common/fbs-terminal-queue';
 import { appendFbsAttemptHistory, readFbsAttemptHistory, hasFbsAttemptHistory, restoreAttemptSnapshot } from '../../common/shipment-history/fbs-attempt-history';
 import { fbsAttemptPageWindow, mergeFbsAttemptPage } from '../../common/shipment-history/fbs-attempt-page';
 import { isDeepStrictEqual } from 'node:util';
@@ -34,8 +39,9 @@ import {
 } from '@prisma/client';
 import { PDFParse } from 'pdf-parse';
 import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
-import { BoxCodePolicyService } from '../../common/boxes/box-code-policy.service';
+import { BoxCodePolicyService, permanentStorageBoxesEnabled, preserveEmptyStorageBox } from '../../common/boxes/box-code-policy.service';
 import { ArchivedEmptyBoxPalletDetachService } from '../../common/boxes/archived-empty-box-pallet-detach.service';
+import { requiresFbsReturnReceipt, validateFbsReturnReceipt, type FbsReturnReceipt } from './fbs-return-receipt';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService, type ClientFilter } from '../auth/client-scope.service';
@@ -4129,10 +4135,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (request.type !== ClientRequestType.OUTBOUND || request._count.fbsOrderLinks + priorRouteAttempts.length === 0) {
       throw new BadRequestException('Маршрут доступен только для FBS-заявки.');
     }
-    const tasks = await this.prisma.fbsTsdAssembly.findMany({
+    let tasks = await this.prisma.fbsTsdAssembly.findMany({
       where: { requestId },
       select: {
-        id: true, orderId: true, skuId: true, sourceSkuId: true,
+        id: true, orderId: true, connectionId: true, skuId: true, sourceSkuId: true,
         productName: true, article: true, itemCount: true, status: true,
         reservedBoxId: true, reservedBoxCode: true, boxId: true, boxCode: true,
         barcode: true, kiz: true, errorMessage: true, workerName: true, updatedAt: true,
@@ -4140,6 +4146,17 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       orderBy: [{ status: 'asc' }, { orderId: 'asc' }],
     });
     tasks.push(...priorRouteAttempts.map(row => row.task));
+    if (fbsTerminalQueueFilterEnabled()) {
+      const links = await this.prisma.fbsOrderRequestLink.findMany({ where: { requestId }, select: {
+        connectionId: true, orderId: true, marketplace: true, lastCategory: true,
+        lastSupplierStatus: true, lastWbStatus: true,
+      } });
+      const terminalKeys = new Set(links.filter(isFbsTerminalQueueOrder)
+        .map(link => selectionKey(link.connectionId, link.orderId)));
+      // FIX: preserve gathered history but never send a picker to a terminal order's box.
+      tasks = tasks.filter(task => task.status === 'COMPLETED' ||
+        !terminalKeys.has(selectionKey(task.connectionId, task.orderId)));
+    }
     const boxIds = uniqueStrings(tasks.flatMap((task) => [task.boxId ?? '', task.reservedBoxId ?? '']));
     const boxes = boxIds.length > 0
       ? await this.prisma.box.findMany({
@@ -5117,6 +5134,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         lastSupplierStatus: true,
         lastSupplyId: true,
         lastSkuId: true,
+        lastWbStatus: true,
         request: {
           select: {
             id: true,
@@ -5212,9 +5230,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     // administrator explicitly enabled local emergency assembly.
     const activeLinks = links.filter(
       (link) =>
-        Boolean(link.request.fbsEmergencyAssemblyAt) ||
+        !isFbsTerminalQueueOrder(link) && (Boolean(link.request.fbsEmergencyAssemblyAt) ||
         !link.lastCategory ||
-        link.lastCategory === 'active',
+        link.lastCategory === 'active'),
     );
     const taskRequestIds = uniqueStrings(links.map((link) => link.requestId));
     const activeTasks = taskRequestIds.length > 0
@@ -5422,7 +5440,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
     }
 
-    if (current && !choices.has(current.requestId)) {
+    // FIX: a saved assignment must not reintroduce a terminal order into the selector.
+    const currentQueueLink = current && fbsTerminalQueueFilterEnabled()
+      ? await this.prisma.fbsOrderRequestLink.findUnique({
+          where: { marketplace_connectionId_orderId: {
+            marketplace: current.marketplace, connectionId: current.connectionId, orderId: current.orderId,
+          } },
+          select: { marketplace: true, lastCategory: true, lastSupplierStatus: true, lastWbStatus: true },
+        }) : null;
+    const currentIsTerminal = isFbsTerminalQueueOrder(currentQueueLink);
+    if (current && !currentIsTerminal && !choices.has(current.requestId)) {
       const currentRequest = await this.prisma.clientRequest.findUnique({
         where: { id: current.requestId },
         select: {
@@ -5445,7 +5472,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       for (const task of activeTasks) {
         const choice = choices.get(task.requestId);
         if (!choice) continue;
-        if (task.status === 'IN_PROGRESS') choice.inProgressOrders += 1;
+        if (task.status === 'IN_PROGRESS' && !isFbsTerminalQueueOrder(links.find(link =>
+          link.requestId === task.requestId && link.connectionId === task.connectionId && link.orderId === task.orderId))) {
+          choice.inProgressOrders += 1;
+        }
       }
     }
 
@@ -5474,7 +5504,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
     return {
       currentRequestId: currentHasScans ? current?.requestId ?? null : null,
-      message: currentHasScans
+      message: currentIsTerminal
+        ? 'Открытый заказ не требуется собирать. Сканы сохранены. Отложите задание; учёт взятого товара проверяет менеджер.'
+        : currentHasScans
         ? 'Сначала завершите или отложите уже открытый заказ этой FBS-заявки.'
         : 'Выберите FBS-заявку для сборки.',
       requests,
@@ -8505,6 +8537,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     );
     const scannedCode = normalizeFbsScannerCode(rawCode);
     const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    await this.requireFbsOrderStillCollectable(task);
     requireFbsTaskWithoutSyncConflict(task);
     if (task.status === 'COMPLETED') {
       return this.formatFbsTsdAssembly(task, user, 'Заказ уже собран.');
@@ -8584,6 +8617,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   async scanFbsTsdBox(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
     let task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    await this.requireFbsOrderStillCollectable(task);
     task = await this.assertFbsTsdLeaseVersion(task, user);
     requireFbsTaskWithoutSyncConflict(task);
     if (task.status === 'COMPLETED') return this.formatFbsTsdAssembly(task, user, 'Заказ уже собран.');
@@ -9808,6 +9842,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   async scanFbsTsdBarcode(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
     let task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    await this.requireFbsOrderStillCollectable(task);
     task = await this.assertFbsTsdLeaseVersion(task, user);
     requireFbsTaskWithoutSyncConflict(task);
     if (!task.boxId && !fbsTsdUsesNoBox(task)) {
@@ -10011,6 +10046,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   async scanFbsTsdKiz(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
     let task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    await this.requireFbsOrderStillCollectable(task);
     task = await this.assertFbsTsdLeaseVersion(task, user);
     requireFbsTaskWithoutSyncConflict(task);
     if (!task.requiresKiz) throw new BadRequestException('Для этого товара КИЗ не требуется.');
@@ -11786,6 +11822,93 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
+  // ADDED: admin-only physical recount. The ordinary reset below is deliberately unchanged.
+  async adminTsdKizRecount(payload: Record<string, unknown>, user: AuthUser, confirm: boolean,
+    loadInput: (tx: Prisma.TransactionClient) => Parameters<typeof loadAdminRecountContext>[1] | Promise<Parameters<typeof loadAdminRecountContext>[1]>,
+    applyCount: (tx: Prisma.TransactionClient, releasedIds: string[]) => Promise<unknown>) {
+    requireAdminRecount(user, physicalStockRecoveryEnabled());
+    await this.inventoryLock?.assertStockMovementsAllowed();
+    const input = await loadInput(this.prisma); // Current client/branch rights, also on every replay.
+    const key = textValue(payload.idempotencyKey);
+    if (!key || key.length > 200) throw new BadRequestException('Отсутствует номер физической сверки.');
+    const load = async (tx: Prisma.TransactionClient) => loadAdminRecountContext(tx, await loadInput(tx));
+    if (!confirm) {
+      const context = await load(this.prisma);
+      return { state: 'RECOUNT_READY', adminRelease: true, adminConfirmationRequired: true, snapshot: context.snapshot,
+        message: `Решение администратора: физически ${input.scans.length} шт. в ${input.source.code}. Снять привязку и пересобрать маршруты заказов: ` +
+          context.tasks.map(task => `№${task.orderId} (заявка ${task.requestId})`).join(', ') + '. Заказы WB не отменяются; наклейки этих сборок больше не использовать.' };
+    }
+    if (payload.adminConfirmed !== true || typeof payload.snapshot !== 'string' || !/^[a-f0-9]{64}$/.test(payload.snapshot)) throw new BadRequestException('Подтвердите решение администратора после предварительной проверки.');
+    const id = `tsd-admin-recount:${recountHash([user.id, user.deviceCode ?? null, key])}`;
+    const fingerprint = recountHash([user.id, user.deviceCode ?? null, user.activeWarehouseId, input.source.id, input.skuId,
+      input.scans.map(scan => scan.key), payload.snapshot, true]);
+    return runAdminRecount({ db: this.prisma, user, id, fingerprint, snapshot: payload.snapshot, load, abort: payload.adminAbort === true,
+      releaseWb: async context => {
+        if (context.source.id !== input.source.id || context.source.warehouseId !== input.source.warehouseId || context.skuId !== input.skuId) throw new BadRequestException('Изменился источник сверки.');
+        for (const task of context.tasks) {
+          const fresh = await this.prisma.fbsTsdAssembly.findUnique({ where: { id: task.id } });
+          if (fresh?.status !== 'ADMIN_RECOUNT_PENDING' || fresh.kiz !== task.kiz) throw new ConflictException('Сборка изменилась; освобождение КИЗа остановлено.');
+          const connection = await this.prisma.clientMarketplaceConnection.findFirst({ where: {
+            id: task.connectionId, clientId: task.clientId, marketplace: MarketplaceType.WILDBERRIES, isActive: true }, select: { apiKey: true } });
+          if (!connection) throw new BadRequestException('Подключение WB недоступно. Повторите подтверждение на ТСД после восстановления связи.');
+          const remote = await this.loadWildberriesFbsKizPreflight(connection.apiKey, task.orderId, task.kiz ?? '');
+          if (remote.supplierStatus !== 'confirm' || remote.wbStatus !== 'waiting') throw new BadRequestException(`WB №${task.orderId}: ${remote.supplierStatus}/${remote.wbStatus}. Автоматический возврат отгруженного или отменённого заказа не выполнен.`);
+          if (remote.remoteKizValues.length && (!remote.alreadyAttached || remote.remoteKizValues.length !== 1)) throw new BadRequestException(`WB №${task.orderId}: в заказе другой КИЗ. Его не изменяли.`);
+          if (remote.alreadyAttached) await marketplaceJson(`https://marketplace-api.wildberries.ru/api/v3/orders/${numericWbOrderId(task.orderId)}/meta?key=sgtin`, {
+            method: 'DELETE', headers: wbHeaders(connection.apiKey), signal: AbortSignal.timeout(FBS_TSD_WB_READ_TIMEOUT_MS) });
+        }
+      },
+      apply: async (tx, context) => {
+        await this.applyAdminRecountRelease(tx, context, user);
+        return applyCount(tx, context.tasks.map(task => task.id));
+      },
+      repair: async requestId => { await this.repairFbsRequestSelection(requestId, user); },
+    });
+  }
+
+  private async applyAdminRecountRelease(tx: Prisma.TransactionClient, context: AdminRecountContext, user: AuthUser) {
+    // FIX: a prepared physical count cannot overwrite intervening movements while WB was unavailable.
+    const marks = await tx.productMark.findMany({ where: { OR: [{ id: { in: context.marks.map(mark => mark.id) } },
+      { boxId: context.source.id, skuId: context.skuId }] }, orderBy: { id: 'asc' } });
+    const balances = await tx.stockBalance.findMany({ where: { boxId: context.source.id, skuId: context.skuId }, orderBy: { id: 'asc' } });
+    if (recountHash(marks) !== recountHash(context.marks) || recountHash(balances) !== recountHash(context.balances)) {
+      throw new ConflictException('Изменился состав короба после подтверждения. Старый пересчёт не применён; остатки не увеличены.');
+    }
+    for (const original of context.tasks) {
+      const task = await tx.fbsTsdAssembly.findUnique({ where: { id: original.id } });
+      if (!task || task.status !== 'ADMIN_RECOUNT_PENDING' || task.clientId !== context.source.clientId || task.skuId !== context.skuId ||
+          task.kiz !== original.kiz || task.boxId !== original.boxId || task.completedAt || task.cargoPackingId) throw new ConflictException('Сборка изменилась. Остатки не изменены.');
+      const mark = task.kiz ? await tx.productMark.findFirst({ where: { clientId: task.clientId, value: task.kiz } }) : null;
+      const movements = await tx.stockMovement.findMany({ where: { idempotencyKey: { startsWith: `fbs-sticker-pick:${task.id}:` },
+        OR: [{ status: StockStatus.PACKING }, { type: MovementType.RETURN, status: StockStatus.SHIPPING, quantity: { lt: 0 } }] } });
+      const picked = movements.reduce((sum, row) => sum + row.quantity, 0);
+      if (picked > 0) {
+        if (!mark || mark.status !== 'PACKING' || picked !== 1) throw new BadRequestException('КИЗ не совпадает с учётом отобранной единицы. Возврат не выполнен.');
+        await this.returnCompletedWildberriesStockReservation(tx, task, { boxId: context.source.id, boxCode: context.source.code,
+          warehouseId: context.source.warehouseId, palletId: context.source.palletId, mark });
+      } else if (picked < 0 || mark && (mark.status !== 'AVAILABLE' || mark.boxId !== context.source.id)) {
+        throw new BadRequestException('Остаток и статус КИЗа не согласованы с историей отбора. Возврат не выполнен.');
+      }
+      const selection = await tx.clientRequestBoxSelection.findUnique({ where: { requestItemId_boxId: {
+        requestItemId: task.requestItemId, boxId: context.source.id } } });
+      if (selection) {
+        if (selection.skuId !== context.skuId || selection.quantity < 1) throw new BadRequestException('Резерв заявки изменился.');
+        if (selection.quantity === 1) await tx.clientRequestBoxSelection.delete({ where: { id: selection.id } });
+        else await tx.clientRequestBoxSelection.update({ where: { id: selection.id }, data: { quantity: { decrement: 1 } } });
+      }
+      await tx.fbsPrintJob.updateMany({ where: { assemblyId: task.id, status: { in: ['QUEUED', 'CLAIMED', 'FAILED'] } }, data: { status: 'CANCELLED' } });
+      await tx.fbsTsdAssembly.update({ where: { id: task.id }, data: {
+        status: FBS_TSD_WAITING_STOCK_STATUS, deviceCode: FBS_TSD_AUTO_RESERVATION_DEVICE, workerUserId: null, workerName: null,
+        reservedBoxId: null, reservedBoxCode: null, reservedAt: null, boxId: null, boxCode: null, sourceBoxPending: false,
+        sourceBarcode: null, barcode: null, relabelConfirmedAt: null, kiz: null, wbMetaStatus: task.requiresKiz ? 'PENDING' : 'NOT_REQUIRED',
+        stickerPartA: null, stickerPartB: null, stickerBarcode: null, errorMessage: 'Администратор подтвердил физическое наличие; нужен повторный подбор.' } });
+      await tx.clientRequestEvent.create({ data: { requestId: task.requestId, clientId: task.clientId,
+        eventType: ClientRequestEventType.COMMENT, title: 'Физическая сверка администратором на ТСД',
+        body: `Заказ WB №${task.orderId}: привязка снята, товар принят в ${context.source.code}. Маршрут будет перестроен. Старый стикер не использовать.`, createdByUserId: user.id } });
+      this.fbsOrdersCache.delete(task.clientId); this.fbsTsdRequestFallbackCache.delete(task.clientId);
+    }
+  }
+
   /**
    * Resets an individual, unfinished FBS order back to the handheld queue.
    * This deliberately does not remove the WB order or alter request quantities:
@@ -12038,6 +12161,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new NotFoundException('Связь FBS-заказа с заявкой не найдена. Обновите заявку.');
     }
 
+    // FIX: validate scans, branch/client access and placement before any external KIZ mutation.
+    await validateFbsReturnReceipt(this.prisma, task, dto, user, this.boxCodes);
     const orderCancelled = link.lastCategory === 'cancelled';
     if (
       !orderCancelled &&
@@ -12090,6 +12215,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         );
       }
 
+      // FIX: validate again under the stock transaction; a stale web screen cannot redirect a KIZ.
+      const receipt = await validateFbsReturnReceipt(tx, freshTask, dto, user, this.boxCodes);
+      if (receipt && freshTask.updatedAt.getTime() !== task.updatedAt.getTime()) {
+        throw new BadRequestException('Заказ изменился. Обновите заявку и повторите приёмку.');
+      }
       if (freshTask.completedAt && freshTask.boxId) {
         const selection = await tx.clientRequestBoxSelection.findUnique({
           where: {
@@ -12112,8 +12242,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
 
       // FIX: release the early KIZ reserve before the completed task is reset.
-      if (freshTask.completedAt) {
-        await this.returnCompletedWildberriesStockReservation(tx, freshTask);
+      if (freshTask.completedAt || receipt) {
+        await this.returnCompletedWildberriesStockReservation(tx, freshTask, receipt);
       }
 
       if (freshTask.cargoPackingId) {
@@ -12129,8 +12259,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
 
       const freshOrderCancelled = freshLink.lastCategory === 'cancelled';
-      const actionLabel =
-        dto.action === FbsSyncConflictResolutionAction.RETURN_TO_STOCK
+      const actionLabel = receipt
+        ? `Товар повторно принят в бокс ${receipt.boxCode}`
+        : dto.action === FbsSyncConflictResolutionAction.RETURN_TO_STOCK
           ? 'Товар возвращён на склад'
           : 'Решение менеджера подтверждено';
       const sourceLocation = freshTask.boxCode || freshTask.reservedBoxCode || 'хранение без короба';
@@ -12208,6 +12339,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             sourceBoxCode: freshTask.boxCode,
             kiz: freshTask.kiz,
             quantity: Math.max(1, freshTask.itemCount),
+            // FIX: receipt evidence remains after the cancelled assembly is cleared.
+            ...(receipt ? { returnBoxId: receipt.boxId, returnBoxCode: receipt.boxCode,
+              returnBarcode: dto.returnBarcode, returnKiz: dto.returnKiz, receivedByUserId: user.id } : {}),
             marketplaceCategory: freshLink.lastCategory,
             supplierStatus: freshLink.lastSupplierStatus,
             wbStatus: freshLink.lastWbStatus,
@@ -13284,7 +13418,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           tx.stockBalance.count({ where: { boxId: freshMark.boxId, quantity: { gt: 0 } } }),
           tx.productMark.count({ where: { boxId: freshMark.boxId } }),
         ]);
-        if (remainingBalances === 0 && remainingMarks === 0) {
+        // FIX: a KIZ relink must not archive a permanent source box.
+        if (remainingBalances === 0 && remainingMarks === 0 && !await preserveEmptyStorageBox(freshMark.box.code, this.boxCodes)) {
           await tx.box.update({ where: { id: freshMark.boxId }, data: { status: 'archived' } });
           // FIX: KIZ relinking cannot leave an archived empty source box on a pallet-sort.
           await this.archivedEmptyBoxDetach?.detachIfArchivedAndEmpty(
@@ -13387,7 +13522,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         tx.stockBalance.count({ where: { boxId: freshMark.boxId, quantity: { gt: 0 } } }),
         tx.productMark.count({ where: { boxId: freshMark.boxId } }),
       ]);
-      if (remainingBalances === 0 && remainingMarks === 0) {
+      // FIX: moving the last KIZ does not remove permanent storage.
+      if (remainingBalances === 0 && remainingMarks === 0 && !await preserveEmptyStorageBox(freshMark.box.code, this.boxCodes)) {
         await tx.box.update({ where: { id: freshMark.boxId }, data: { status: 'archived' } });
         // FIX: KIZ movement uses the same atomic archived-empty lifecycle rule.
         await this.archivedEmptyBoxDetach?.detachIfArchivedAndEmpty(
@@ -13401,6 +13537,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   async completeFbsTsdAssembly(taskId: string, user: AuthUser) {
     const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    await this.requireFbsOrderStillCollectable(task);
     requireFbsTaskWithoutSyncConflict(task);
     if (task.status === 'COMPLETED') return this.formatFbsTsdAssembly(task, user, 'Заказ уже собран.');
     if ((!task.boxId && !fbsTsdUsesNoBox(task)) || !task.barcode) {
@@ -13528,14 +13665,20 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     task: FbsTsdAssemblyRecord,
     requestWarehouseId: string | null,
   ) {
-    if (task.marketplace !== MarketplaceType.WILDBERRIES || task.completedAt) return;
+    // FIX: preserve our production safeguard until the physical source is resolved.
+    if (task.marketplace !== MarketplaceType.WILDBERRIES || task.completedAt ||
+        (permanentStorageBoxesEnabled() && task.sourceBoxPending)) return;
 
     const quantity = Math.max(1, task.itemCount);
     const movementPrefix = `fbs-sticker-pick:${task.id}`;
     const previousPackingMovements = await tx.stockMovement.findMany({
       where: {
         idempotencyKey: { startsWith: `${movementPrefix}:` },
-        status: StockStatus.PACKING,
+        // FIX: packed returns must close the earlier reservation before a new pick.
+        ...(permanentStorageBoxesEnabled() ? { OR: [
+          { status: StockStatus.PACKING },
+          { type: MovementType.RETURN, status: StockStatus.SHIPPING, quantity: { lt: 0 } },
+        ] } : { status: StockStatus.PACKING }),
       },
       select: { quantity: true },
     });
@@ -13555,7 +13698,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         },
         data: {
           status: StockStatus.PACKING,
-          boxId: task.boxId,
+          // FIX: source location remains in the task/movement history, not active KIZ placement.
+          boxId: permanentStorageBoxesEnabled() ? null : task.boxId,
         },
       });
     };
@@ -13598,8 +13742,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const balanceWarehouseId = requireFbsBalanceWarehouseId(
       availableBalances[0]?.warehouseId ?? box?.warehouseId ?? requestWarehouseId,
     );
-    const targetBoxId = box?.id ?? null;
-    const targetPalletId = box?.palletId ?? availableBalances[0]?.palletId ?? null;
+    // FIX: preserve the live outbound model: picked stock is not inside the storage cell.
+    const targetBoxId = permanentStorageBoxesEnabled() ? null : box?.id ?? null;
+    const targetPalletId = permanentStorageBoxesEnabled() ? null : box?.palletId ?? availableBalances[0]?.palletId ?? null;
     let shiftedFromAvailable = 0;
 
     for (const balance of availableBalances) {
@@ -13694,6 +13839,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       });
     }
     await syncProductMarkToPacking();
+    // FIX: retain live cleanup for disposable boxes, never retire a refillable storage cell.
+    if (permanentStorageBoxesEnabled() && shiftedFromAvailable > 0 && box?.id &&
+        !await preserveEmptyStorageBox(box.code, this.boxCodes)) {
+      const [remainingBalances, remainingMarks] = await Promise.all([
+        tx.stockBalance.count({ where: { boxId: box.id, quantity: { gt: 0 } } }),
+        tx.productMark.count({ where: { boxId: box.id, status: { not: StockStatus.SHIPPING } } }),
+      ]);
+      if (remainingBalances === 0 && remainingMarks === 0) {
+        await tx.box.update({ where: { id: box.id }, data: { status: 'archived', palletId: null, zoneId: null } });
+        await this.archivedEmptyBoxDetach?.detachIfArchivedAndEmpty({ boxId: box.id, reason: 'fbs-completed-pick' }, tx);
+      }
+    }
   }
 
   private async reserveAcceptedWildberriesStock(task: FbsTsdAssemblyRecord) {
@@ -13730,14 +13887,23 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   private async returnCompletedWildberriesStockReservation(
     tx: Prisma.TransactionClient,
     task: FbsTsdAssemblyRecord,
+    receipt?: FbsReturnReceipt,
   ) {
+    // FIX: never restore a completed/physically picked cancellation to its old box implicitly.
+    if (requiresFbsReturnReceipt(task) && !receipt) {
+      throw new BadRequestException('Для изъятого товара нужна повторная приёмка в отсканированный бокс.');
+    }
     if (task.marketplace !== MarketplaceType.WILDBERRIES) return;
 
     const movementKey = `fbs-sticker-pick:${task.id}`;
-    const reservationMovements = await tx.stockMovement.findMany({
+    const allReservationMovements = await tx.stockMovement.findMany({
       where: {
         idempotencyKey: { startsWith: `${movementKey}:` },
-        status: StockStatus.PACKING,
+        // FIX: include prior returns removed from the packing/shipping balance.
+        ...(permanentStorageBoxesEnabled() ? { OR: [
+          { status: StockStatus.PACKING },
+          { type: MovementType.RETURN, status: StockStatus.SHIPPING, quantity: { lt: 0 } },
+        ] } : { status: StockStatus.PACKING }),
       },
       select: {
         warehouseId: true,
@@ -13746,13 +13912,37 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         quantity: true,
       },
     });
+    // FIX: live PACKING is boxless. Net each location before selecting the active attempt;
+    // completed earlier returns must not choose the old source or hide a conflicting reserve.
+    let reservationMovements = allReservationMovements;
+    if (receipt) {
+      const byLocation = new Map<string, typeof allReservationMovements[number]>();
+      for (const row of allReservationMovements) {
+        const key = JSON.stringify([row.warehouseId, row.boxId, row.palletId]);
+        const previous = byLocation.get(key);
+        byLocation.set(key, { ...row, quantity: (previous?.quantity ?? 0) + row.quantity });
+      }
+      const groups = [...byLocation.values()];
+      reservationMovements = groups.filter(row => row.quantity > 0);
+      if (groups.some(row => row.quantity < 0) || reservationMovements.length > 1 ||
+          reservationMovements.some(row => row.boxId !== null && row.boxId !== task.boxId)) {
+        throw new BadRequestException('Движения отобранного товара противоречат друг другу. Приёмка не выполнена; проверьте резерв заказа.');
+      }
+    }
     const reservedQuantity = Math.max(0, reservationMovements.reduce(
       (total, movement) => total + movement.quantity,
       0,
     ));
-    if (reservedQuantity === 0) return;
+    if (reservedQuantity === 0) {
+      if (receipt) throw new BadRequestException('Учёт отобранного товара уже изменён. Повторная приёмка не выполнена; проверьте движения заказа.');
+      return;
+    }
+    if (receipt && (reservedQuantity !== Math.max(1, task.itemCount) ||
+        reservationMovements.some(row => row.warehouseId !== receipt.warehouseId))) {
+      throw new BadRequestException('Количество или филиал отобранного товара не совпадает с возвратом. Остатки не изменены.');
+    }
     const returnAttempt =
-      reservationMovements.filter((movement) => movement.quantity < 0).length + 1;
+      allReservationMovements.filter((movement) => movement.quantity < 0).length + 1;
     const returnKey = returnAttempt === 1
       ? `${movementKey}:return`
       : `${movementKey}:return-${returnAttempt}`;
@@ -13807,12 +13997,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     }
 
+    // FIX: inbound placement comes only from fresh receipt scans, not historical source fields.
+    const returnBoxId = receipt ? receipt.boxId : permanentStorageBoxesEnabled() ? null : boxId;
+    const returnPalletId = receipt ? receipt.palletId : permanentStorageBoxesEnabled() ? null : palletId;
     const availableBalanceKey = fbsStockBalanceKey({
       warehouseId,
       clientId: task.clientId,
       skuId: task.skuId,
-      boxId,
-      palletId,
+      boxId: returnBoxId,
+      palletId: returnPalletId,
       status: StockStatus.AVAILABLE,
     });
     await tx.stockBalance.upsert({
@@ -13823,19 +14016,19 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         warehouseId,
         clientId: task.clientId,
         skuId: task.skuId,
-        boxId,
-        palletId,
+        boxId: returnBoxId,
+        palletId: returnPalletId,
         status: StockStatus.AVAILABLE,
         quantity: reservedQuantity,
       },
     });
-    await tx.stockMovement.create({
+    const returnMovement = await tx.stockMovement.create({
       data: {
         warehouseId,
         clientId: task.clientId,
         skuId: task.skuId,
-        boxId,
-        palletId,
+        boxId: returnBoxId,
+        palletId: returnPalletId,
         type: MovementType.RETURN,
         status: StockStatus.AVAILABLE,
         quantity: reservedQuantity,
@@ -13846,18 +14039,21 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     });
     if (task.kiz) {
       // FIX: reservation rollback restores the same KIZ together with AVAILABLE.
-      await tx.productMark.updateMany({
+      const returnedMark = await tx.productMark.updateMany({
         where: {
           clientId: task.clientId,
           skuId: task.skuId,
           value: task.kiz,
           status: StockStatus.PACKING,
+          ...(receipt?.mark ? { id: receipt.mark.id, boxId: receipt.mark.boxId, updatedAt: receipt.mark.updatedAt } : {}),
         },
         data: {
           status: StockStatus.AVAILABLE,
-          boxId,
+          boxId: returnBoxId,
+          ...(receipt ? { stockMovementId: returnMovement.id } : {}),
         },
       });
+      if (receipt && returnedMark.count !== 1) throw new BadRequestException('КИЗ изменился во время приёмки. Остатки не изменены.');
     }
   }
 
@@ -14062,6 +14258,19 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       },
     });
     return this.emptyFbsTsdAssembly(task.deviceCode, user, 'Заказ отложен. Можно взять следующий.');
+  }
+
+  // FIX: old open screens cannot bypass terminal-status filtering. Release/return
+  // actions intentionally do not call this guard; managers must retain those controls.
+  private async requireFbsOrderStillCollectable(task: FbsTsdAssemblyRecord) {
+    if (!fbsTerminalQueueFilterEnabled() || task.marketplace !== MarketplaceType.WILDBERRIES || task.status === 'COMPLETED') return;
+    const link = await this.prisma.fbsOrderRequestLink.findUnique({ where: {
+      marketplace_connectionId_orderId: { marketplace: task.marketplace, connectionId: task.connectionId, orderId: task.orderId },
+    }, select: { marketplace: true, lastCategory: true, lastSupplierStatus: true, lastWbStatus: true } });
+    if (isFbsTerminalQueueOrder(link)) throw new BadRequestException(
+      `Заказ WB №${task.orderId} не требуется собирать. Статус WB: ${link?.lastSupplierStatus}/${link?.lastWbStatus}. ` +
+      'Сканы и списания сохранены. Отложите задание; решение по уже взятому товару принимает менеджер.',
+    );
   }
 
   private async loadOwnedFbsTsdAssembly(taskId: string, user: AuthUser) {
@@ -24458,7 +24667,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
 
     const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
-    const relevantLinks = links.filter((link) => connectionById.has(link.connectionId));
+    const relevantLinks = links.filter((link) => connectionById.has(link.connectionId) && !isFbsTerminalQueueOrder(link));
     const skuIds = uniqueStrings(relevantLinks.map((link) => link.lastSkuId ?? ''));
     const skus = skuIds.length > 0
       ? await this.prisma.sku.findMany({
@@ -29395,6 +29604,9 @@ function normalizeFbsWarehouseRouteMode(
 }
 
 function isFbsTsdAssemblyOrderEligible(order: FbsOrderSummary) {
+  // FIX: emergency mode does not revive cancelled, sold or defective WB orders.
+  if (isFbsTerminalQueueOrder({ marketplace: order.marketplace, lastCategory: order.category,
+    lastSupplierStatus: order.supplierStatus, lastWbStatus: order.wbStatus })) return false;
   return (
     Boolean(order.request?.fbsEmergencyAssemblyAt) ||
     (

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Тест приёмки возврата</title></head>
+<body><div id="root"></div><script type="module">
+import React, { useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import { FbsReturnReceiptDialog } from '/src/components/client-requests/FbsReturnReceiptDialog.tsx';
+import '/src/styles.css';
+// TEST: no API, no real client/order/KIZ. Completion is controlled by the browser test.
+window.receipts = [];
+function Harness() {
+  const [open, setOpen] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  return React.createElement('main', null,
+    React.createElement('button', { onClick: () => { setError(''); setOpen(true); } }, 'Открыть тест'),
+    open && React.createElement(FbsReturnReceiptDialog, {
+      orderId: 'TEST-ORDER', productName: 'Тестовый костюм', requiresKiz: true, busy, error,
+      onClose: () => setOpen(false),
+      onSubmit: async scans => {
+        window.receipts.push(scans); setBusy(true); setError('');
+        const message = await new Promise(resolve => { window.finishReceipt = resolve; });
+        setBusy(false);
+        if (message) setError(message); else setOpen(false);
+      },
+    }));
+}
+createRoot(document.getElementById('root')).render(React.createElement(Harness));
+</script></body></html>

@@ -13,4 +13,20 @@ export class ResolveFbsSyncConflictDto {
   @IsString()
   @MaxLength(1000)
   comment?: string;
+
+  // FIX: scans are required by the service only for physically picked returns in our WMS.
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  returnBoxCode?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  returnBarcode?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  returnKiz?: string;
 }

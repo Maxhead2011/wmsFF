@@ -15,6 +15,7 @@ const labels: Record<string, string> = {
   productColor: 'Цвет',
   color: 'Цвет',
   barcode: 'ШК',
+  countedQuantity: 'Отсканировано',
   sourceBarcode: 'Исходный ШК',
   kiz: 'КИЗ',
   orderId: 'Заказ',
@@ -33,6 +34,7 @@ const operationLabels: Record<string, string> = {
   receipt_scan: 'Приёмка товара',
   move_scan: 'Перемещение товара',
   inventory_scan: 'Инвентаризация',
+  tsd_stock_recount: 'Спорная сверка КИЗов',
   assembly_stage: 'Этап сборки',
   monitor_heartbeat: 'Состояние ТСД',
 };

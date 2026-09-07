@@ -1,5 +1,6 @@
 import { AlertTriangle, Archive, ArrowLeft, ArrowRightLeft, Boxes, CheckCircle2, ClipboardList, FileDown, FileUp, MapPinned, PackageX, RefreshCw, RotateCcw, Search, ShieldAlert, Truck, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { FbsExcludedOrders } from './FbsExcludedOrders';
 import {
   cancelClientRequest,
   checkFbsRequestSupplyConsistency,
@@ -85,6 +86,7 @@ import { ConfirmDialog } from '../common/ConfirmDialog';
 import { PickWaveBalanceReviewPanel } from './PickWaveBalanceReviewPanel';
 import { useRememberedClientId } from '../../lib/rememberedClient';
 import { resolveFbsSyncConflictBatch } from './fbsSyncConflictBatch';
+import { FbsReturnReceiptDialog, type FbsReturnReceiptScans } from './FbsReturnReceiptDialog';
 
 type LoadState<T> = {
   status: 'idle' | 'loading' | 'ready' | 'error';
@@ -227,6 +229,10 @@ export function ClientRequestsPanel({
     message?: string;
     error?: string;
   }>({ assemblyId: null });
+  // FIX: picked cancellations remain pending until fresh return scans are submitted.
+  const [returnReceipt, setReturnReceipt] = useState<{
+    request: ClientRequestSummary; assemblyId: string; orderId: string; productName: string; requiresKiz: boolean;
+  } | null>(null);
   const [emergencyUpload, setEmergencyUpload] = useState<{
     request: ClientRequestSummary;
     file: File | null;
@@ -1162,10 +1168,21 @@ export function ClientRequestsPanel({
     request: ClientRequestSummary,
     assemblyId: string,
     action: FbsSyncConflictResolutionAction,
+    receipt?: FbsReturnReceiptScans,
   ) {
+    const row = onlinePreview?.plan?.fbsAssembly?.returnRequired.rows.find(item => item.id === assemblyId);
+    if (row?.requiresReturnReceipt && !receipt) {
+      if (action !== 'RETURN_TO_STOCK') {
+        setOnlineFbsSyncResolution({ assemblyId: null, error: 'Товар уже изъят. Используйте «Принять возврат в бокс» и отсканируйте товар.' });
+      } else {
+        setOnlineFbsSyncResolution({ assemblyId: null });
+        setReturnReceipt({ request, assemblyId, orderId: row.orderId, productName: row.productName, requiresKiz: Boolean(row.returnRequiresKiz) });
+      }
+      return;
+    }
     let comment: string | undefined;
     if (action === 'RETURN_TO_STOCK') {
-      const confirmed = window.confirm(
+      const confirmed = receipt || window.confirm(
         'Подтвердите, что товар физически возвращён в указанный короб или в хранение без коробов. Резерв FBS и отсканированные данные будут сняты.',
       );
       if (!confirmed) return;
@@ -1191,7 +1208,7 @@ export function ClientRequestsPanel({
         session.accessToken,
         request.id,
         assemblyId,
-        { action, comment },
+        { action, comment, ...receipt },
       );
       const plan = await fetchTsdAssemblyPlan(session.accessToken, request.id);
       setOnlinePreview((current) =>
@@ -1200,6 +1217,7 @@ export function ClientRequestsPanel({
           : current,
       );
       setOnlineFbsSyncResolution({ assemblyId: null, message: result.message });
+      if (receipt) setReturnReceipt(null);
       await loadData();
     } catch (caught) {
       setOnlineFbsSyncResolution({
@@ -1216,6 +1234,11 @@ export function ClientRequestsPanel({
   ) {
     const selectedIds = [...new Set(assemblyIds.filter(Boolean))];
     if (selectedIds.length === 0) return;
+    // FIX: mass confirmation cannot replace per-unit receipt scans.
+    if (onlinePreview?.plan?.fbsAssembly?.returnRequired.rows.some(row => selectedIds.includes(row.id) && row.requiresReturnReceipt)) {
+      setOnlineFbsSyncResolution({ assemblyId: null, error: 'Среди выбранных есть уже изъятые товары. Для каждого нажмите «Принять возврат в бокс» и отсканируйте ШК и КИЗ.' });
+      return;
+    }
 
     let comment: string | undefined;
     if (action === 'RETURN_TO_STOCK') {
@@ -1856,6 +1879,11 @@ export function ClientRequestsPanel({
 
   return (
     <section className="client-requests-panel" aria-label="Клиентские заявки">
+      {returnReceipt ? <FbsReturnReceiptDialog key={returnReceipt.assemblyId}
+        orderId={returnReceipt.orderId} productName={returnReceipt.productName} requiresKiz={returnReceipt.requiresKiz}
+        busy={onlineFbsSyncResolution.assemblyId !== null} error={onlineFbsSyncResolution.error}
+        onClose={() => setReturnReceipt(null)}
+        onSubmit={scans => resolveOnlineFbsSyncConflict(returnReceipt.request, returnReceipt.assemblyId, 'RETURN_TO_STOCK', scans)} /> : null}
       <div className="section-heading client-requests-panel__heading">
         <div>
           <p className="eyebrow">Клиентские заявки</p>
@@ -3787,7 +3815,7 @@ function OnlineExecutionModal({
     returnRequiredIds.length > 0 &&
     returnRequiredIds.every((id) => selectedSyncConflictIds.includes(id));
   const rescanRequiredRows = (fbsAssembly?.rows ?? []).filter(
-    (row) => row.status === 'RESCAN_REQUIRED',
+    (row) => row.status === 'RESCAN_REQUIRED' && !fbsAssembly?.notForAssembly?.some(excluded => excluded.id === row.id),
   );
   const normalizedFbsAssemblySearch = fbsAssemblySearch.trim().toLocaleLowerCase('ru-RU');
   const filteredFbsAssemblyRows = (fbsAssembly?.rows ?? []).filter((row) =>
@@ -4235,6 +4263,7 @@ function OnlineExecutionModal({
                   </details>
                 ) : null}
 
+                <FbsExcludedOrders rows={fbsAssembly?.notForAssembly ?? []} />
                 {returnRequired && returnRequired.rows.length > 0 ? (
                   <section className="online-execution-section online-execution-section--sync-conflict">
                     <div className="online-execution-section__heading">
@@ -4364,13 +4393,14 @@ function OnlineExecutionModal({
                                       <RotateCcw size={14} aria-hidden="true" />
                                       {resolvingSyncConflictId === row.id
                                         ? 'Возвращаю…'
-                                        : 'Вернуть на склад'}
+                                        : row.requiresReturnReceipt ? 'Принять возврат в бокс' : 'Вернуть на склад'}
                                     </button>
                                     <button
                                       type="button"
                                       className="online-execution-sync-conflict-button is-manager"
                                       onClick={() => onResolveSyncConflict(row.id, 'MANAGER_CONFIRMED')}
-                                      disabled={resolvingSyncConflictId !== null}
+                                      disabled={resolvingSyncConflictId !== null || Boolean(row.requiresReturnReceipt)}
+                                      title={row.requiresReturnReceipt ? 'Для изъятого товара нужна повторная приёмка со сканами.' : undefined}
                                     >
                                       <CheckCircle2 size={14} aria-hidden="true" />
                                       {resolvingSyncConflictId === row.id

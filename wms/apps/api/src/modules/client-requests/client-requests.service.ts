@@ -10,6 +10,7 @@ import { StockOperationsService } from '../stock/stock-operations.service';
 import { clientRequestFileSummarySelect } from './client-request-files.service';
 import { clientRequestPackageInclude } from './client-request-packages.include';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
+import { fbsTerminalQueueFilterEnabled, isFbsTerminalQueueOrder } from '../../common/fbs-terminal-queue';
 import {
   assertWarehouseAccess,
   effectiveWarehouseId,
@@ -119,7 +120,7 @@ export class ClientRequestsService {
         where: {
           requestId: { in: fbsRequestIds },
           syncStatus: { notIn: ['REMOVED', 'MOVING'] },
-          lastCategory: { not: 'cancelled' },
+          ...(!fbsTerminalQueueFilterEnabled() ? { lastCategory: { not: 'cancelled' } } : {}),
         },
         select: {
           requestId: true,
@@ -128,11 +129,14 @@ export class ClientRequestsService {
           marketplace: true,
           orderId: true,
           lastSupplyId: true,
+          lastCategory: true,
+          lastSupplierStatus: true,
+          lastWbStatus: true,
         },
       }),
       this.prisma.fbsTsdAssembly.findMany({
         where: { requestId: { in: fbsRequestIds } },
-        select: { requestId: true, orderId: true, status: true, completedAt: true },
+        select: { requestId: true, connectionId: true, orderId: true, status: true, completedAt: true },
       }),
     ]);
     for (const previous of previousAttempts) {
@@ -211,7 +215,12 @@ export class ClientRequestsService {
       }
     }
     const activeOrdersByRequest = new Map<string, Set<string>>();
+    const completedQueueKeys = new Set(assemblies.filter(task => task.status === 'COMPLETED')
+      .map(task => `${task.requestId}:${task.connectionId}:${task.orderId}`));
     for (const link of links) {
+      // FIX: do not ask to recollect terminal orders; retain their completed physical history.
+      if (isFbsTerminalQueueOrder(link) &&
+        !completedQueueKeys.has(`${link.requestId}:${link.connectionId}:${link.orderId}`)) continue;
       const orders = activeOrdersByRequest.get(link.requestId) ?? new Set<string>();
       orders.add(link.orderId);
       activeOrdersByRequest.set(link.requestId, orders);
@@ -236,6 +245,11 @@ export class ClientRequestsService {
         left.localeCompare(right),
       );
       if (totalOrders === 0) {
+        if (fbsTerminalQueueFilterEnabled() && fbsRequestIds.includes(request.id)) {
+          return { ...request, wbSupplyIds, fbsCompletion: {
+            totalOrders: 0, completedOrders: 0, percent: 0, completed: false,
+          } };
+        }
         return wbSupplyIds.length > 0 ? { ...request, wbSupplyIds } : request;
       }
       const completedOrders = completedOrdersByRequest.get(request.id)?.size ?? 0;

@@ -2353,6 +2353,17 @@ export type TsdAssemblyPlan = {
       message: string;
       updatedAt: string;
     }>;
+    notForAssembly?: Array<{
+      id: string;
+      orderId: string;
+      wbStatus: string;
+      productName: string;
+      productBarcode: string | null;
+      kiz: string | null;
+      sourceBoxCode: string | null;
+      workerName: string | null;
+      syncIssue: string | null;
+    }>;
     returnRequired: {
       orders: number;
       units: number;
@@ -2370,6 +2381,8 @@ export type TsdAssemblyPlan = {
         status: string;
         statusLabel: string;
         syncIssue: string | null;
+        requiresReturnReceipt?: boolean;
+        returnRequiresKiz?: boolean;
         workerName: string | null;
         completedAt: string | null;
         updatedAt: string;
@@ -10955,6 +10968,10 @@ export async function resolveTsdFbsSyncConflict(
   payload: {
     action: FbsSyncConflictResolutionAction;
     comment?: string;
+    // FIX: physical return evidence, required server-side only with the WMSFF2207 flag.
+    returnBoxCode?: string;
+    returnBarcode?: string;
+    returnKiz?: string;
   },
 ) {
   return request<{
