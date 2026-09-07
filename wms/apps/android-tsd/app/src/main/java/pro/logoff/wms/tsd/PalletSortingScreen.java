@@ -69,7 +69,8 @@ public final class PalletSortingScreen {
         } else {
             label(text(state, "sourceCode") + " · " + ("CHECKING".equals(stage()) ? "Сверка коробов" : "FORMING".equals(stage()) ? "Формирование новых коробов" : "Завершено"), 21);
             label("Перемещено: " + rows(state, "moves").size() + " ед.", 19);
-            for (Map<String, Object> box : rows(state, "sources")) label(text(box, "code") + " — " + (yes(box, "archived") ? "архив" : yes(box, "scanned") ? "подтверждён" : "не отсканирован"), 16);
+            // FIX: permanent storage remains active; completion must not be labelled as archival.
+            for (Map<String, Object> box : rows(state, "sources")) label(text(box, "code") + " — " + (yes(box, "preservedOnPallet") ? "пустой бокс · сохранён на месте" : yes(box, "archived") ? "архив" : yes(box, "scanned") ? "подтверждён" : "не отсканирован"), 16);
             if (!rows(state, "pendingRoutes").isEmpty()) {
                 label("Перестроение FBS ещё не завершено.", 18);
                 for (Map<String, Object> row : rows(state, "pendingRoutes")) if (!text(row, "error").isEmpty()) label(text(row, "error"), 16);
@@ -98,7 +99,7 @@ public final class PalletSortingScreen {
             button(state == null ? "Начать сортировку" : "Подтвердить скан", this::submit, true);
         }
         if ("CHECKING".equals(stage())) {
-            long missing = rows(state, "sources").stream().filter(b -> !yes(b, "scanned") && !yes(b, "archived")).count();
+            long missing = rows(state, "sources").stream().filter(b -> !yes(b, "scanned") && !yes(b, "archived") && !yes(b, "preservedOnPallet")).count();
             if (missing > 0) button("Расхождения по коробам: " + missing, () -> preview("ARCHIVE_MISSING"), true);
             button("Приступить к формированию новых коробов", () -> action("BEGIN_FORMING", new LinkedHashMap<>()), missing == 0);
         }
@@ -175,7 +176,7 @@ public final class PalletSortingScreen {
         LinearLayout content = new LinearLayout(activity); content.setOrientation(LinearLayout.VERTICAL); content.setPadding(20, 10, 20, 10);
         TextView report = new TextView(activity); StringBuilder text = new StringBuilder("К списанию: " + number(preview, "quantity") + " ед.\n");
         for (Map<String, Object> box : rows(preview, "boxes")) {
-            text.append("\n").append(text(box, "code")).append("\n");
+            text.append("\n").append(text(box, "code")).append(yes(box, "preserveOnPallet") ? " — останется активным на своём месте\n" : " — будет архивирован\n");
             for (Map<String, Object> balance : rows(box, "balances")) {
                 Map<String, Object> sku = map(balance.get("sku"));
                 text.append(text(sku, "article")).append(" / ").append(text(sku, "size")).append(" / ").append(text(sku, "color")).append(": ").append(number(balance, "quantity")).append(" ед.\n");
@@ -186,7 +187,7 @@ public final class PalletSortingScreen {
         ScrollView scroll = new ScrollView(activity); scroll.addView(content);
         AlertDialog dialog = new AlertDialog.Builder(activity).setTitle("Подтверждение расхождений").setView(scroll)
             .setNegativeButton("Отмена", (d, w) -> {})
-            .setPositiveButton("Архивировать", (d, w) -> {
+            .setPositiveButton("Применить решение", (d, w) -> {
                 Map<String, Object> body = new LinkedHashMap<>(); body.put("fingerprint", text(preview, "fingerprint")); body.put("confirmWriteOff", consent.isChecked());
                 action(action, body);
             }).create();

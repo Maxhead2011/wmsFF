@@ -18,7 +18,7 @@ page.on('pageerror', e => consoleErrors.push(e.message));
 let state = null, moves = 0, writeoffs = 0, simulateLostReply = true, loseWriteoffReply = true;
 const commands = new Map();
 const snapshot = () => ({ fingerprint: `snapshot-${state.version}`, quantity: 1,
-  affectedOrders: ['QA-ORDER'], boxes: [{ id: 'missing', code: 'QA-SOURCE-B', balances: Array.from({ length: 35 }, (_, i) => ({ id: `row-${i}`, quantity: i === 0 ? 1 : 0, sku: { article: `QA-SKU-${i}`, name: 'Тестовый костюм', size: '44', color: 'Синий' } })) }] });
+  affectedOrders: ['QA-ORDER'], boxes: [{ id: state.stage === 'CHECKING' ? 'b' : 'a', code: state.stage === 'CHECKING' ? 'QA-SOURCE-B' : 'QA-SOURCE-A', preserveOnPallet: state.stage === 'CHECKING', balances: Array.from({ length: 35 }, (_, i) => ({ id: `row-${i}`, quantity: i === 0 ? 1 : 0, sku: { article: `QA-SKU-${i}`, name: 'Тестовый костюм', size: '44', color: 'Синий' } })) }] });
 await page.route('**/api/v1/pallet-sorting**', async route => {
   const req = route.request(), url = new URL(req.url()), body = req.method() === 'POST' ? req.postDataJSON() : null;
   let data, status = 200;
@@ -34,7 +34,11 @@ await page.route('**/api/v1/pallet-sorting**', async route => {
     if (body.action === 'ARCHIVE_MISSING' || body.action === 'COMPLETE') {
       assert.equal(body.fingerprint, `snapshot-${state.version}`); assert.equal(body.confirmWriteOff, true);
       writeoffs++;
-      state.sources.forEach(b => { if (!b.scanned || body.action === 'COMPLETE') b.archived = true; });
+      state.sources.forEach(b => {
+        if (b.preservedOnPallet) return;
+        if (b.id === 'b') b.preservedOnPallet = true;
+        else if (body.action === 'COMPLETE') b.archived = true;
+      });
       if (body.action === 'COMPLETE') state.stage = 'COMPLETED';
     }
     if (body.action === 'BEGIN_FORMING') state.stage = 'FORMING';
@@ -62,7 +66,8 @@ try {
   await page.getByRole('button', { name: 'Расхождения по коробам: 1' }).click();
   const dialog = page.getByRole('dialog');
   await dialog.waitFor();
-  assert.equal(await dialog.getByRole('button', { name: 'Подтвердить архивирование и списание' }).isEnabled(), false);
+  assert.equal(await dialog.getByRole('button', { name: 'Применить решение и списать недостачу' }).isEnabled(), false);
+  assert.match(await dialog.textContent(), /Постоянных боксов: 1/);
   assert.equal(await page.getByRole('button', { name: 'Подтвердить скан', exact: true }).isEnabled(), false);
   const table = page.locator('.pallet-sorting-table');
   assert.equal(await table.evaluate(e => e.scrollHeight > e.clientHeight), true);
@@ -73,10 +78,12 @@ try {
   assert.equal(writeoffs, 0);
   await page.getByRole('button', { name: 'Расхождения по коробам: 1' }).click();
   await dialog.getByRole('checkbox').check();
-  await dialog.getByRole('button', { name: 'Подтвердить архивирование и списание' }).click();
+  await dialog.getByRole('button', { name: 'Применить решение и списать недостачу' }).click();
   // TEST: uncertain write-off can be retried without escaping the modal or writing off twice.
   await dialog.getByRole('button', { name: 'Повторить тот же запрос' }).click({ timeout: 2500 });
   assert.equal(writeoffs, 1);
+  // TEST: a settled permanent box is not labelled archived and does not block the next stage.
+  await page.getByText('QA-SOURCE-B — пустой бокс · сохранён на месте', { exact: true }).waitFor({ state: 'attached', timeout: 2500 });
   await page.getByRole('button', { name: 'Приступить к формированию новых коробов' }).click();
   await page.getByRole('textbox', { name: 'Фактический паллет-сорт целевого короба' }).fill('QA-TARGET-PALLET');
   await scan('Новый целевой короб', 'QA-TARGET');
@@ -101,7 +108,7 @@ try {
   await page.screenshot({ path: join(out, 'mobile-discrepancies.png') });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await dialog.getByRole('checkbox').check();
-  await dialog.getByRole('button', { name: 'Подтвердить архивирование и списание' }).click();
+  await dialog.getByRole('button', { name: 'Применить решение и списать недостачу' }).click();
   await page.getByRole('heading', { name: 'QA-PALLET · Сортировка завершена' }).waitFor();
   assert.equal(writeoffs, 2); assert.equal(moves, 1); assert.deepEqual(consoleErrors, []);
   console.log(JSON.stringify({ result: 'PASS', scenario: 'source scan, consent cancel/accept, native modal, wheel scroll, invalid KIZ clear, lost-response retry, reload/resume, close vs complete, 375px layout', moves, writeoffs, consoleErrors, screenshots: out }));

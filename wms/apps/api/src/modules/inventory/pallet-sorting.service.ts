@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { createHash } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { BoxCodePolicyService } from '../../common/boxes/box-code-policy.service';
+import { BoxCodePolicyService, preserveEmptyStorageBox } from '../../common/boxes/box-code-policy.service';
 import { ArchivedEmptyBoxPalletDetachService } from '../../common/boxes/archived-empty-box-pallet-detach.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
@@ -11,7 +11,7 @@ import { MarketplaceConnectionsService } from '../marketplace-connections/market
 import { assertSortingAdmin, confirmSortingSnapshot, sortingKizIdentity, sortingTaskCanReroute } from './pallet-sorting-policy';
 import type { PalletSortingActionDto, StartPalletSortingDto } from './dto/pallet-sorting.dto';
 
-type Source = { id: string; code: string; scanned: boolean; archived: boolean; placementId: string | null };
+type Source = { id: string; code: string; scanned: boolean; archived: boolean; placementId: string | null; preservedOnPallet?: boolean };
 type Target = { id: string; code: string; closed: boolean; palletCode: string; quantity: number };
 export type PalletSortingState = {
   id: string; clientId: string; warehouseId: string; sourceCode: string; sourcePalletId: string | null;
@@ -114,7 +114,7 @@ export class PalletSortingService {
       }
       if (state.version !== dto.version) throw new ConflictException('Сессия изменилась. Обновите её перед следующим действием.');
       if (state.stage === 'COMPLETED') throw new ConflictException('Сортировка уже завершена.');
-      await this.assertMovementAllowed(tx, [...state.sources.filter(b => !b.archived).map(b => b.id), ...state.targets.map(b => b.id)]);
+      await this.assertMovementAllowed(tx, [...state.sources.filter(b => !b.archived && !b.preservedOnPallet).map(b => b.id), ...state.targets.map(b => b.id)]);
       await this.runAction(tx, state, dto, user);
       state.version++;
       await this.save(tx, state);
@@ -128,11 +128,11 @@ export class PalletSortingService {
     if (dto.action === 'SCAN_SOURCE') {
       if (state.stage !== 'CHECKING') throw new ConflictException('Сверка исходных коробов уже завершена.');
       const code = await this.boxCodes.normalize(dto.code ?? '');
-      const box = state.sources.find(b => b.code === code && !b.archived);
+      const box = state.sources.find(b => b.code === code && !b.archived && !b.preservedOnPallet);
       if (!box) throw new BadRequestException('Этот короб не входит в исходный состав сортировки.');
       box.scanned = true;
     } else if (dto.action === 'BEGIN_FORMING') {
-      if (state.stage !== 'CHECKING' || state.sources.some(b => !b.archived && !b.scanned)) throw new ConflictException('Сначала отсканируйте все исходные короба или подтвердите архивирование отсутствующих.');
+      if (state.stage !== 'CHECKING' || state.sources.some(b => !b.archived && !b.preservedOnPallet && !b.scanned)) throw new ConflictException('Сначала отсканируйте все исходные короба или подтвердите обработку отсутствующих.');
       state.stage = 'FORMING';
     } else if (dto.action === 'ARCHIVE_MISSING' || dto.action === 'COMPLETE') {
       const completing = dto.action === 'COMPLETE';
@@ -193,13 +193,13 @@ export class PalletSortingService {
     const marks = await tx.productMark.findMany({ where: { clientId: state.clientId, value: { startsWith: identity } }, take: 2 });
     if (marks.length > 1) throw new ConflictException('Найдено несколько записей одного КИЗ. Требуется разбор дубликата.');
     const mark = marks[0];
-    let source = mark ? state.sources.find(b => b.id === mark.boxId && b.scanned && !b.archived) : undefined;
+    let source = mark ? state.sources.find(b => b.id === mark.boxId && b.scanned && !b.archived && !b.preservedOnPallet) : undefined;
     if (mark && (!source || mark.status !== 'AVAILABLE')) throw new ConflictException('КИЗ не относится к доступному товару в отсканированных исходных коробах.');
     if (!mark) {
       // ADDED: unknown KIZ never guesses which of several physical source boxes to debit.
       const code = dto.sourceBoxCode ? await this.boxCodes.normalize(dto.sourceBoxCode) : null;
       const candidates = await tx.stockBalance.findMany({ where: { clientId: state.clientId, warehouseId: state.warehouseId,
-        boxId: { in: state.sources.filter(b => b.scanned && !b.archived && (!code || b.code === code)).map(b => b.id) },
+        boxId: { in: state.sources.filter(b => b.scanned && !b.archived && !b.preservedOnPallet && (!code || b.code === code)).map(b => b.id) },
         status: 'AVAILABLE', quantity: { gt: 0 }, sku: { barcodes: { some: { value: barcode } } } }, select: { boxId: true } });
       const ids = [...new Set(candidates.map(b => b.boxId))];
       if (ids.length !== 1) throw new ConflictException('КИЗ ещё не привязан: укажите исходный короб этой единицы. Если остатка нет — сначала требуется актуализация, новая приёмка здесь не создаётся.');
@@ -219,7 +219,7 @@ export class PalletSortingService {
   }
 
   private async previewInTx(tx: Prisma.TransactionClient, state: PalletSortingState, kind: 'missing' | 'remaining') {
-    const sources = state.sources.filter(b => !b.archived && (kind === 'remaining' || !b.scanned));
+    const sources = state.sources.filter(b => !b.archived && !b.preservedOnPallet && (kind === 'remaining' || !b.scanned));
     const boxes = await tx.box.findMany({ where: { id: { in: sources.map(b => b.id) } }, orderBy: { id: 'asc' },
       include: { storagePlacement: true, balances: { orderBy: { id: 'asc' }, include: { sku: { select: { clientId: true, article: true, name: true, size: true, color: true } } } },
         productMarks: { orderBy: { id: 'asc' }, select: { id: true, clientId: true, status: true, updatedAt: true } } } });
@@ -236,7 +236,9 @@ export class PalletSortingService {
     }
     const tasks = await tx.fbsTsdAssembly.findMany({ where: { clientId: state.clientId, OR: [{ boxId: { in: sources.map(b => b.id) } }, { reservedBoxId: { in: sources.map(b => b.id) } }] }, orderBy: { id: 'asc' } });
     const quantity = boxes.reduce((sum, box) => sum + box.balances.reduce((n, row) => n + row.quantity, 0), 0);
-    return { fingerprint: hash([state.id, state.version, kind, boxes, tasks]), quantity, boxes,
+    // FIX: the confirmation covers box lifecycle as well as quantity; never guess its policy.
+    const decisions = await Promise.all(boxes.map(async box => ({ ...box, preserveOnPallet: await preserveEmptyStorageBox(box.code, this.boxCodes) })));
+    return { fingerprint: hash([state.id, state.version, kind, decisions, tasks]), quantity, boxes: decisions,
       affectedOrders: tasks.filter(t => sortingTaskCanReroute(t, sources.map(b => b.id))).map(t => t.orderId) };
   }
 
@@ -254,12 +256,20 @@ export class PalletSortingService {
       }
       // ADDED: retain the KIZ and its old box as history; shipment evidence is immutable.
       await tx.productMark.updateMany({ where: { boxId: box.id, clientId: state.clientId, status: 'AVAILABLE' }, data: { status: 'BLOCKED' } });
-      await tx.box.update({ where: { id: box.id }, data: { status: 'archived' } });
-      await this.emptyBoxes.detachIfArchivedAndEmpty({ boxId: box.id, userId: user.id, reason: `pallet-sorting:${state.id}` }, tx);
-      state.sources.find(b => b.id === box.id)!.archived = true;
+      const source = state.sources.find(b => b.id === box.id)!;
+      // FIX: settled permanent storage stays active and keeps its actual pallet placement.
+      if (box.preserveOnPallet) {
+        source.preservedOnPallet = true;
+      } else {
+        await tx.box.update({ where: { id: box.id }, data: { status: 'archived' } });
+        const detached = await this.emptyBoxes.detachIfArchivedAndEmpty({ boxId: box.id, userId: user.id, reason: `pallet-sorting:${state.id}` }, tx);
+        // FIX: abort the owning transaction if policy/state changed before detachment.
+        if (box.storagePlacement && !detached.detached) throw new ConflictException(`Не удалось снять с паллет-сорта короб ${box.code}. Получите свежие расхождения.`);
+        source.archived = true;
+      }
     }
     await this.audit(tx, state, user, 'SHORTAGE_CONFIRMED', { fingerprint: preview.fingerprint, quantity: preview.quantity,
-      boxes: preview.boxes.map(b => ({ id: b.id, code: b.code, balances: b.balances.map(r => ({ skuId: r.skuId, quantity: r.quantity, status: r.status })) })), affectedOrders: preview.affectedOrders });
+      boxes: preview.boxes.map(b => ({ id: b.id, code: b.code, disposition: b.preserveOnPallet ? 'PRESERVED_ON_PALLET' : 'ARCHIVED', balances: b.balances.map(r => ({ skuId: r.skuId, quantity: r.quantity, status: r.status })) })), affectedOrders: preview.affectedOrders });
   }
 
   private async resetAffectedRoutes(tx: Prisma.TransactionClient, state: PalletSortingState, ids: string[], user: AuthUser, skuId?: string) {

@@ -84,7 +84,8 @@ function SortingWorkspace({ session }: { session: AuthSession }) {
     const data = await sortingRequest<SortingPreview>(token, `/${state!.id}/preview?kind=${name === 'ARCHIVE_MISSING' ? 'missing' : 'remaining'}`);
     setConsent(false); setPreview({ data, action: name });
   });
-  const missing = state?.sources.filter(b => !b.scanned && !b.archived) ?? [];
+  // FIX: a preserved permanent box is settled, not archived or still missing.
+  const missing = state?.sources.filter(b => !b.scanned && !b.archived && !b.preservedOnPallet) ?? [];
   const target = state?.targets.find(b => b.id === state.activeTargetId);
   const hint = !state ? 'Паллет-сорт или короб' : state.stage === 'CHECKING' ? 'Исходный короб на паллет-сорте' : !target ? 'Новый целевой короб' : !barcode ? 'ШК товара' : 'КИЗ товара';
 
@@ -99,10 +100,10 @@ function SortingWorkspace({ session }: { session: AuthSession }) {
         <h3>{state.sourceCode} · {state.stage === 'CHECKING' ? 'Сверка коробов' : state.stage === 'FORMING' ? 'Формирование новых коробов' : 'Сортировка завершена'}</h3>
         <p>Перемещено: {state.moves.length} ед. · Целевых коробов: {state.targets.length}</p>
         {state.pendingRoutes.length > 0 && <div role="alert"><p>Остатки сохранены, но перестроение FBS-маршрутов ещё не завершено.</p>{state.pendingRoutes.map(p => <p key={p.requestId}>{p.taskIds.length} заданий: {p.error ?? 'ожидают перестроения'}</p>)}<button onClick={() => void run(async () => setState(await sortingRequest<SortingState>(token, `/${state.id}/routes`, {})))}>Повторить перестроение маршрутов</button></div>}
-        <details><summary>Исходные короба ({state.sources.length})</summary><ul>{state.sources.map(box => <li key={box.id}>{box.code} — {box.archived ? 'архив' : box.scanned ? 'подтверждён' : 'не отсканирован'}</li>)}</ul></details>
+        <details><summary>Исходные короба ({state.sources.length})</summary><ul>{state.sources.map(box => <li key={box.id}>{box.code} — {box.preservedOnPallet ? 'пустой бокс · сохранён на месте' : box.archived ? 'архив' : box.scanned ? 'подтверждён' : 'не отсканирован'}</li>)}</ul></details>
       </>}
       {state?.stage === 'FORMING' && !target && <label>Фактический паллет-сорт целевого короба<input value={pallet} onChange={e => setPallet(e.target.value)} placeholder="Отсканируйте паллет-сорт" onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); input.current?.focus(); } }} /></label>}
-      {target && <><h3>Заполняется {target.code} · {target.quantity} ед.</h3><label>Исходный короб — только если новый КИЗ ещё не привязан<select value={source} onChange={e => setSource(e.target.value)}><option value="">Определить по КИЗ</option>{state!.sources.filter(b => b.scanned && !b.archived).map(b => <option key={b.id} value={b.code}>{b.code}</option>)}</select></label></>}
+      {target && <><h3>Заполняется {target.code} · {target.quantity} ед.</h3><label>Исходный короб — только если новый КИЗ ещё не привязан<select value={source} onChange={e => setSource(e.target.value)}><option value="">Определить по КИЗ</option>{state!.sources.filter(b => b.scanned && !b.archived && !b.preservedOnPallet).map(b => <option key={b.id} value={b.code}>{b.code}</option>)}</select></label></>}
       {state?.stage !== 'COMPLETED' && <form onSubmit={submitScan}><label>{hint}<input ref={input} value={scan} onChange={e => setScan(e.target.value)} autoComplete="off" aria-label={hint} /></label>{barcode && <p>ШК: {barcode} <button type="button" onClick={() => { setBarcode(''); setScan(''); }}>Отменить текущую единицу</button></p>}<button type="submit">{!state ? 'Начать сортировку' : 'Подтвердить скан'}</button></form>}
       {state?.stage === 'CHECKING' && <div className="pallet-sorting-actions">{missing.length > 0 && <button onClick={() => void inspect('ARCHIVE_MISSING')}>Расхождения по коробам: {missing.length}</button>}<button disabled={missing.length > 0} onClick={() => action('BEGIN_FORMING')}>Приступить к формированию новых коробов</button></div>}
       {state?.stage === 'FORMING' && <div className="pallet-sorting-actions"><button disabled={!target || Boolean(barcode)} onClick={() => action('CLOSE_TARGET')}>Закрыть короб</button><button disabled={Boolean(target) || Boolean(barcode)} onClick={() => void inspect('COMPLETE')}>Завершить сортировку</button></div>}
@@ -113,11 +114,12 @@ function SortingWorkspace({ session }: { session: AuthSession }) {
       {/* FIX: a lost write-off response must be recoverable inside the active modal. */}
       {message && <p role="alert">{message}</p>}
       {pending && !busy && <div><p>Результат списания пока не подтверждён. Повторяем ту же операцию без повторного списания.</p><button onClick={() => void send(pending.path, pending.body)}>Повторить тот же запрос</button></div>}
-      <h3>Проверка перед архивированием</h3><p>Коробов: {preview.data.boxes.length}. К списанию: <strong>{preview.data.quantity} ед.</strong></p>
+      <h3>Проверка перед завершением</h3><p>Коробов: {preview.data.boxes.length}. К списанию: <strong>{preview.data.quantity} ед.</strong></p>
+      <p>Постоянных боксов: {preview.data.boxes.filter(b => b.preserveOnPallet).length} — останутся активными на своих местах. Обычных коробов: {preview.data.boxes.filter(b => !b.preserveOnPallet).length} — будут архивированы.</p>
       <div className="pallet-sorting-table"><table><thead><tr><th>Короб</th><th>Артикул / товар</th><th>Размер</th><th>Цвет</th><th>К списанию</th></tr></thead><tbody>{preview.data.boxes.map(b => b.balances.length ? b.balances.map(r => <tr key={r.id}><td>{b.code}</td><td>{r.sku.article || r.sku.name}</td><td>{r.sku.size}</td><td>{r.sku.color}</td><td>{r.quantity}</td></tr>) : <tr key={b.id}><td>{b.code}</td><td colSpan={4}>Пустой короб</td></tr>)}</tbody></table></div>
       <p>Будет проверено маршрутов FBS: {preview.data.affectedOrders.length}. История КИЗ сохранится.</p>
       {preview.data.quantity > 0 && <label><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} />Подтверждаю отсутствие перечисленного товара и его списание</label>}
-      <button disabled={busy || Boolean(pending) || preview.data.quantity > 0 && !consent} onClick={() => action(preview.action, { fingerprint: preview.data.fingerprint, confirmWriteOff: consent })}>Подтвердить архивирование{preview.data.quantity > 0 ? ' и списание' : ''}</button>
+      <button disabled={busy || Boolean(pending) || preview.data.quantity > 0 && !consent} onClick={() => action(preview.action, { fingerprint: preview.data.fingerprint, confirmWriteOff: consent })}>Применить решение{preview.data.quantity > 0 ? ' и списать недостачу' : ''}</button>
       <button disabled={busy || Boolean(pending)} onClick={() => setPreview(null)}>Отмена — ничего не списывать</button>
     </dialog>}
   </section>;

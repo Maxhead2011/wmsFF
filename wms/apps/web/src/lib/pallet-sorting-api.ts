@@ -1,6 +1,6 @@
 export type SortingState = {
   id: string; version: number; sourceCode: string; stage: 'CHECKING' | 'FORMING' | 'COMPLETED';
-  sources: Array<{ id: string; code: string; scanned: boolean; archived: boolean }>;
+  sources: Array<{ id: string; code: string; scanned: boolean; archived: boolean; preservedOnPallet?: boolean }>;
   targets: Array<{ id: string; code: string; closed: boolean; quantity: number; palletCode: string }>;
   activeTargetId?: string | null;
   pendingRoutes: Array<{ requestId: string; taskIds: string[]; error?: string }>;
@@ -8,7 +8,7 @@ export type SortingState = {
 };
 export type SortingPreview = {
   fingerprint: string; quantity: number; affectedOrders: string[];
-  boxes: Array<{ id: string; code: string; balances: Array<{ id: string; quantity: number; sku: { article: string; name: string; size: string; color: string } }> }>;
+  boxes: Array<{ id: string; code: string; preserveOnPallet?: boolean; balances: Array<{ id: string; quantity: number; sku: { article: string; name: string; size: string; color: string } }> }>;
 };
 export class SortingHttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 
