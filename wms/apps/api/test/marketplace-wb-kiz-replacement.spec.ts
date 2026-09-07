@@ -173,7 +173,8 @@ function fixture(options: Options = {}) {
     clientMarketplaceConnection: { findFirst: vi.fn(async () => ({ apiKey: 'test-only-wb-key' })) },
     stockBalance: { ...writeSpies(), aggregate: vi.fn(async () => ({ _sum: { quantity: 3 } })) },
     stockMovement: { ...writeSpies(), findFirst: vi.fn(async () => null) },
-    fbsOrderRequestLink: { updateMany: vi.fn(async () => ({ count: 1 })) },
+    // TEST: the queue guard reads the saved WB status before KIZ handling.
+    fbsOrderRequestLink: { findUnique: vi.fn(async () => ({ marketplace: 'WILDBERRIES', lastCategory: 'active', lastSupplierStatus: 'confirm', lastWbStatus: 'waiting' })), updateMany: vi.fn(async () => ({ count: 1 })) },
     clientRequestEvent: { create: vi.fn(async () => ({})) },
     auditLog: {
       // TEST: replacement recovery is scoped to this task, scan and marketplace context.
