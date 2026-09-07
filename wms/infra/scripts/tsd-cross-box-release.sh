@@ -39,6 +39,7 @@ case "${1:-}" in
   done
   hashapi infra-api:tsd-cross-box-20260907 > "$b/api-candidate.sha256"
   hashweb infra-web:tsd-cross-box-20260907 > "$b/web-candidate.sha256"
+  docker run --rm --network none --user nginx --entrypoint sh infra-web:tsd-cross-box-20260907 -c 'test -r /usr/share/nginx/html/downloads/logoff-tsd-admin-box-count-158.apk'
   echo BUILT;;
  test)
   unchanged
@@ -53,7 +54,7 @@ case "${1:-}" in
   cat "$b/verification.json";;
  publish)
   unchanged; cd /opt/logoff-wms/wms; test ! -e "$b/published-at"
-  node -e 'const p=require(process.argv[1]);if(!p.merged||!p.merge_commit_sha||p.head.ref!=="fix/tsd-admin-cross-box-reconciliation"||p.base.ref!=="fix/fbs-box-scan-route-consistency")process.exit(1)' "$b/pr-merged.json"
+  node -e 'const p=require(process.argv[1]);if(!p.merged||!p.merge_commit_sha||p.head.ref!=="fix/tsd-cross-box-apk-download"||p.base.ref!=="fix/fbs-box-scan-route-consistency")process.exit(1)' "$b/pr-merged.json"
   cmp .env "$b/env-before"; cmp infra/docker-compose.yml "$b/compose-before.yml"; sha256sum -c "$b/wms.dump.sha256"
   node /tmp/tsd-cross-box-verify.cjs "$b"
   hashapi "$api" > "$b/api-before-now"; cmp "$b/api-before.sha256" "$b/api-before-now"
@@ -61,6 +62,7 @@ case "${1:-}" in
   an=$(docker image inspect infra-api:tsd-cross-box-20260907 --format '{{.Id}}'); wn=$(docker image inspect infra-web:tsd-cross-box-20260907 --format '{{.Id}}')
   hashapi "$an" > "$b/api-candidate-now"; cmp "$b/api-candidate.sha256" "$b/api-candidate-now"
   hashweb "$wn" > "$b/web-candidate-now"; cmp "$b/web-candidate.sha256" "$b/web-candidate-now"
+  docker run --rm --network none --user nginx --entrypoint sh "$wn" -c 'test -r /usr/share/nginx/html/downloads/logoff-tsd-admin-box-count-158.apk'
   rollback(){
    trap - ERR
    ca=$(docker inspect infra-api-1 --format '{{.Image}}'); cw=$(docker inspect infra-web-1 --format '{{.Image}}')

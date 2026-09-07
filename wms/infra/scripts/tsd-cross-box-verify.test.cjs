@@ -13,6 +13,10 @@ function fixture(){
  fs.writeFileSync(path.join(dir,'apk.sha256'),b);
  return {dir,run:()=>spawnSync(process.execPath,[path.join(__dirname,'tsd-cross-box-verify.cjs'),dir],{encoding:'utf8'}),cleanup:()=>fs.rmSync(dir,{recursive:true})};
 }
+test('public APK mode is explicitly readable by nginx despite private staging umask',()=>{
+ const dockerfile=fs.readFileSync(path.join(__dirname,'../tsd-cross-box.Dockerfile'),'utf8');
+ assert.match(dockerfile,/RUN chmod 0644 \/usr\/share\/nginx\/html\/downloads\/logoff-tsd-admin-box-count-158\.apk/);
+});
 test('accepts only reviewed patch and additive APK',()=>{const f=fixture();try{const r=f.run();assert.equal(r.status,0,r.stderr)}finally{f.cleanup()}});
 test('rejects newly failing tests',()=>{const f=fixture();try{fs.writeFileSync(path.join(f.dir,'full-candidate.json'),JSON.stringify({numPassedTests:10,numFailedTests:1,testResults:[{name:'suite',status:'failed',assertionResults:[]}]}));assert.notEqual(f.run().status,0)}finally{f.cleanup()}});
 test('rejects changed existing web files and bad APK digest',()=>{for(const file of ['web-candidate.sha256','apk.sha256']){const f=fixture();try{fs.appendFileSync(path.join(f.dir,file),'bad');assert.notEqual(f.run().status,0)}finally{f.cleanup()}}});

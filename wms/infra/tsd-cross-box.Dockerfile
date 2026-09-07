@@ -8,3 +8,5 @@ RUN cd /app/apps/api && node ../../node_modules/typescript/bin/tsc -p tsconfig.j
 FROM ${BASE_WEB} AS web
 # FIX: additive download only; keep all existing UI assets and APKs byte-identical.
 COPY logoff-tsd-admin-box-count-158.apk /usr/share/nginx/html/downloads/logoff-tsd-admin-box-count-158.apk
+# FIX: staging is private (umask 077), but this signed download must be nginx-readable.
+RUN chmod 0644 /usr/share/nginx/html/downloads/logoff-tsd-admin-box-count-158.apk
