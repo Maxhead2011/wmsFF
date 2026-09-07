@@ -4,7 +4,7 @@ function verify(before,after){
  const changed=[];assert.equal(before.size,after.size);
  for(const [p,h] of before){assert(after.has(p));if(after.get(p)!==h)changed.push(p)}
  assert.deepEqual(changed.sort(),['/usr/share/nginx/html/downloads/logoff-tsd.apk','/usr/share/nginx/html/downloads/logoff-tsd.json']);
- assert.equal(after.get('/usr/share/nginx/html/downloads/logoff-tsd.apk'),'022edfc8dbaeeac7118752ff6a641a3e57a950da8f47985bf6f81a2bf332ca3b');
+ assert.equal(after.get('/usr/share/nginx/html/downloads/logoff-tsd.apk'),'c6bdd49cf28aa630918326cab6e0a900a54a6b5946ab546fea1ada70d4796af5');
 }
 module.exports={verify};
 if(require.main===module){
