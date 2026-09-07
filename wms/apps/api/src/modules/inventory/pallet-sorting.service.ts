@@ -13,11 +13,14 @@ import type { PalletSortingActionDto, StartPalletSortingDto } from './dto/pallet
 
 type Source = { id: string; code: string; scanned: boolean; archived: boolean; placementId: string | null; preservedOnPallet?: boolean };
 type Target = { id: string; code: string; closed: boolean; palletCode: string; quantity: number };
+// FIX: missing database boxes are evidence, not invented Box IDs or zero balances.
+type ProblemSource = { code: string; scanned: boolean; reason: 'BOX_NOT_FOUND' };
 export type PalletSortingState = {
   id: string; clientId: string; warehouseId: string; sourceCode: string; sourcePalletId: string | null;
   stage: 'CHECKING' | 'FORMING' | 'COMPLETED'; version: number;
   sources: Source[]; targets: Target[]; activeTargetId?: string | null;
-  moves: Array<{ identity: string; barcode: string; sourceBoxId: string; targetBoxId: string }>;
+  problemSources?: ProblemSource[];
+  moves: Array<{ identity: string; barcode: string; sourceBoxId: string | null; targetBoxId: string; sourceBoxCode?: string; recovered?: boolean }>;
   pendingRoutes: Array<{ requestId: string; taskIds: string[]; revision: number; error?: string }>;
 };
 type Row = { state: PalletSortingState; version: number; createdByUserId: string; warehouseId: string; clientId: string };
@@ -73,13 +76,21 @@ export class PalletSortingService {
       if (!pallet && (!box || box.warehouseId !== user.activeWarehouseId || box.status !== 'active')) throw new BadRequestException('Действующий короб или паллет-сорт в выбранном филиале не найден.');
       const clientId = pallet?.clientId ?? box!.clientId;
       this.scopes.requireClientAccess(user, clientId, 'write');
-      const ids = pallet ? pallet.boxes.map(b => b.boxId) : [box!.id];
-      if (!ids.length || ids.some(id => !id)) throw new ConflictException('В паллет-сорте нет коробов или есть неподтверждённые привязки. Сначала проверьте его состав.');
+      const ids = pallet ? pallet.boxes.map(b => b.boxId).filter((id): id is string => Boolean(id)) : [box!.id];
+      // FIX: an orphan pallet placement is shown as problematic and may be physically scanned.
+      const problemSources: ProblemSource[] = [];
+      for (const placement of pallet?.boxes.filter(b => !b.boxId) ?? []) {
+        const problemCode = await this.boxCodes.normalize(placement.boxCode);
+        if (!problemCode || await tx.box.findUnique({ where: { code: problemCode } })) {
+          throw new ConflictException('Код короба найден, но его привязка к паллет-сорту не подтверждена. Проверьте состав.');
+        }
+        problemSources.push({ code: problemCode, scanned: false, reason: 'BOX_NOT_FOUND' });
+      }
       const sources = await tx.box.findMany({ where: { id: { in: ids as string[] } }, include: { storagePlacement: true } });
       if (sources.length !== ids.length || sources.some(b => b.status !== 'active' || b.clientId !== clientId || b.warehouseId !== user.activeWarehouseId)) throw new ConflictException('Состав паллет-сорта содержит неактивный короб или короб другого клиента/филиала.');
       await this.assertUnclaimed(tx, sources.map(b => b.id), dto.id, user.activeWarehouseId!);
       const state: PalletSortingState = { id: dto.id, clientId, warehouseId: user.activeWarehouseId!, sourceCode: code,
-        sourcePalletId: pallet?.id ?? null, stage: 'CHECKING', version: 1, targets: [], moves: [], pendingRoutes: [],
+        sourcePalletId: pallet?.id ?? null, stage: 'CHECKING', version: 1, targets: [], moves: [], pendingRoutes: [], problemSources,
         sources: sources.map(b => ({ id: b.id, code: b.code, scanned: !pallet, archived: false, placementId: b.storagePlacement?.palletId ?? null })) };
       await tx.$executeRaw(Prisma.sql`INSERT INTO "PalletSortingSession" ("id", "warehouseId", "clientId", "createdByUserId", "state")
         VALUES (${dto.id}, ${state.warehouseId}, ${clientId}, ${user.id}, ${JSON.stringify(state)}::jsonb)`);
@@ -129,8 +140,8 @@ export class PalletSortingService {
       if (state.stage !== 'CHECKING') throw new ConflictException('Сверка исходных коробов уже завершена.');
       const code = await this.boxCodes.normalize(dto.code ?? '');
       const box = state.sources.find(b => b.code === code && !b.archived && !b.preservedOnPallet);
-      if (!box) throw new BadRequestException('Этот короб не входит в исходный состав сортировки.');
-      box.scanned = true;
+      if (box) box.scanned = true;
+      else await this.recordProblemSource(tx, state, code, user);
     } else if (dto.action === 'BEGIN_FORMING') {
       if (state.stage !== 'CHECKING' || state.sources.some(b => !b.archived && !b.preservedOnPallet && !b.scanned)) throw new ConflictException('Сначала отсканируйте все исходные короба или подтвердите обработку отсутствующих.');
       state.stage = 'FORMING';
@@ -155,10 +166,24 @@ export class PalletSortingService {
     } else throw new BadRequestException('Неизвестное действие сортировки.');
   }
 
+  // FIX: no receipt and no reassignment of an existing/foreign box at source scanning.
+  private async recordProblemSource(tx: Prisma.TransactionClient, state: PalletSortingState, value: string, user: AuthUser) {
+    const code = await this.boxCodes.requireAllowed(value);
+    if (await tx.box.findUnique({ where: { code } })) throw new ConflictException('Этот короб существует в WMS, но не входит в исходный состав сортировки.');
+    const problems = state.problemSources ??= [];
+    const prior = problems.find(b => b.code === code);
+    if (prior?.scanned) return prior;
+    const problem: ProblemSource = prior ?? { code, reason: 'BOX_NOT_FOUND', scanned: false };
+    problem.scanned = true;
+    if (!prior) problems.push(problem);
+    await this.audit(tx, state, user, 'PROBLEM_SOURCE_SCANNED', problem);
+    return problem;
+  }
+
   private async openTarget(tx: Prisma.TransactionClient, state: PalletSortingState, dto: PalletSortingActionDto, user: AuthUser) {
     await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`pallet-sorting:${state.warehouseId}`}))`);
     const code = await this.boxCodes.requireAllowed(dto.code ?? '');
-    if (state.sources.some(b => b.code === code) || state.targets.some(b => b.code === code)) throw new ConflictException('Нужен новый целевой короб, который не является исходным или уже закрытым.');
+    if (state.sources.some(b => b.code === code) || state.problemSources?.some(b => b.code === code) || state.targets.some(b => b.code === code)) throw new ConflictException('Нужен новый целевой короб, который не является исходным или уже закрытым.');
     // ADDED: never invent a physical storage location for a newly formed box.
     const pallet = await tx.storagePallet.findFirst({ where: { clientId: state.clientId, warehouseId: state.warehouseId,
       code: { equals: (dto.palletCode ?? '').trim(), mode: 'insensitive' }, status: { notIn: ['DELETED', 'ARCHIVED'] } } });
@@ -202,7 +227,23 @@ export class PalletSortingService {
         boxId: { in: state.sources.filter(b => b.scanned && !b.archived && !b.preservedOnPallet && (!code || b.code === code)).map(b => b.id) },
         status: 'AVAILABLE', quantity: { gt: 0 }, sku: { barcodes: { some: { value: barcode } } } }, select: { boxId: true } });
       const ids = [...new Set(candidates.map(b => b.boxId))];
-      if (ids.length !== 1) throw new ConflictException('КИЗ ещё не привязан: укажите исходный короб этой единицы. Если остатка нет — сначала требуется актуализация, новая приёмка здесь не создаётся.');
+      if (!ids.length) {
+        // FIX: a scanned unknown source authorizes an explicit surplus, never a guessed debit.
+        if (code && !state.sources.some(b => b.code === code)) await this.recordProblemSource(tx, state, code, user);
+        const problems = (state.problemSources ?? []).filter(b => b.scanned && (!code || b.code === code));
+        if (problems.length === 1) {
+          const problem = problems[0];
+          const recovered = await this.stock.recoverSortingUnit(tx, { clientId: state.clientId, sourceBoxCode: problem.code,
+            toBoxCode: target.code, barcode, kiz: (dto.kiz ?? '').replace(/<GS>/gi, '\u001d').trim(),
+            sessionId: state.id, idempotencyKey: `sorting:${state.id}:${hash(identity)}` }, user);
+          state.moves.push({ identity, barcode, sourceBoxId: null, sourceBoxCode: problem.code, targetBoxId: target.id, recovered: true });
+          target.quantity++;
+          await this.audit(tx, state, user, 'UNIT_RECOVERED', { sourceBoxCode: problem.code, targetBoxId: target.id,
+            barcode, identity, skuId: recovered.skuId, quantity: 1, reason: 'BOX_NOT_FOUND' });
+          return;
+        }
+      }
+      if (ids.length !== 1) throw new ConflictException('КИЗ не привязан: отсканируйте исходный короб этой единицы. Неизвестный короб будет отмечен как проблемный; товар учтётся в целевом коробе.');
       source = state.sources.find(b => b.id === ids[0]);
     }
     if (!source) throw new ConflictException('Исходный короб не найден.');
@@ -238,7 +279,8 @@ export class PalletSortingService {
     const quantity = boxes.reduce((sum, box) => sum + box.balances.reduce((n, row) => n + row.quantity, 0), 0);
     // FIX: the confirmation covers box lifecycle as well as quantity; never guess its policy.
     const decisions = await Promise.all(boxes.map(async box => ({ ...box, preserveOnPallet: await preserveEmptyStorageBox(box.code, this.boxCodes) })));
-    return { fingerprint: hash([state.id, state.version, kind, decisions, tasks]), quantity, boxes: decisions,
+    return { fingerprint: hash([state.id, state.version, kind, decisions, tasks, state.problemSources, state.moves.filter(m => m.recovered)]), quantity, boxes: decisions,
+      problemSources: state.problemSources ?? [], recoveredQuantity: state.moves.filter(m => m.recovered).length,
       affectedOrders: tasks.filter(t => sortingTaskCanReroute(t, sources.map(b => b.id))).map(t => t.orderId) };
   }
 

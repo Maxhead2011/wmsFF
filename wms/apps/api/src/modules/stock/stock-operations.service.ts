@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
+import { assertSortingAdmin, sortingKizIdentity } from '../inventory/pallet-sorting-policy';
 import * as XLSX from 'xlsx';
 import {
   BillingChargeSource,
@@ -854,6 +855,63 @@ export class StockOperationsService {
         stockMovementId: inbound.id, sourceDocument: `PALLET_SORTING:${input.sessionId}` } });
     }
     return { sourceBoxId: source.id, targetBoxId: target.id, skuId: item.sku.id, movementId: inbound.id };
+  }
+
+  // FIX: only admin sorting may account for a physical unit from a non-existent source.
+  // The caller owns the Serializable transaction, session lock, and inventory lock checks.
+  async recoverSortingUnit(tx: Prisma.TransactionClient, input: {
+    clientId: string; sourceBoxCode: string; toBoxCode: string; barcode: string; kiz: string;
+    idempotencyKey: string; sessionId: string;
+  }, user: AuthUser) {
+    assertSortingAdmin(user);
+    this.clientScopes.requireClientAccess(user, input.clientId, 'write');
+    const identity = sortingKizIdentity(input.kiz);
+    await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`sorting-kiz:${identity}`}))`);
+    if (await tx.box.findUnique({ where: { code: input.sourceBoxCode } })) {
+      throw new BadRequestException('Исходный короб уже существует. Повторите проверку; новый приход не выполнен.');
+    }
+    const target = await tx.box.findUnique({ where: { code: input.toBoxCode } });
+    if (!target || target.status !== 'active' || target.clientId !== input.clientId || target.warehouseId !== user.activeWarehouseId) {
+      throw new BadRequestException('Нужен действующий целевой короб этого клиента в выбранном филиале.');
+    }
+    const products = await tx.barcode.findMany({ where: { value: input.barcode, sku: { clientId: input.clientId } }, include: { sku: true }, take: 2 });
+    if (products.length !== 1) throw new BadRequestException('ШК товара не найден или неоднозначен у выбранного клиента.');
+    const sku = products[0].sku;
+    const prior = await tx.stockMovement.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
+    if (prior) {
+      if (prior.clientId !== input.clientId || prior.warehouseId !== user.activeWarehouseId || prior.boxId !== target.id || prior.skuId !== sku.id ||
+          prior.sourceDocument !== `PALLET_SORTING:${input.sessionId}` || prior.type !== 'INVENTORY_ADJUSTMENT' || prior.quantity !== 1) {
+        throw new BadRequestException('Номер операции уже использован с другими данными.');
+      }
+      const mark = await tx.productMark.findFirst({ where: { stockMovementId: prior.id, value: { startsWith: identity.replace(/[\\%_]/g, '\\$&') } } });
+      if (!mark) throw new BadRequestException('КИЗ не совпадает с ранее учтённой единицей.');
+      return { skuId: sku.id, movementId: prior.id };
+    }
+    // FIX: look across clients and scanner encodings, including old shipment/print history.
+    const gtin = identity.slice(2, 16), serial = identity.slice(18);
+    const prefixes = [identity, `]d2${identity}`, `(01)${gtin}(21)${serial}`, `01${gtin}\u001d21${serial}`,
+      `]d201${gtin}\u001d21${serial}`, `01${gtin}<GS>21${serial}`, `]d201${gtin}<GS>21${serial}`];
+    const markWhere = { OR: prefixes.map(p => ({ value: { startsWith: p.replace(/[\\%_]/g, '\\$&') } })) };
+    const historyWhere = { OR: prefixes.map(p => ({ kiz: { startsWith: p.replace(/[\\%_]/g, '\\$&') } })) };
+    const evidence = await Promise.all([
+      tx.productMark.findFirst({ where: markWhere, select: { id: true } }),
+      tx.fbsTsdAssembly.findFirst({ where: historyWhere, select: { id: true } }),
+      tx.shippedKizHistory.findFirst({ where: historyWhere, select: { id: true } }),
+      tx.fbsWebKizStickerPrint.findFirst({ where: historyWhere, select: { id: true } }),
+      tx.fbsAssemblyAttemptHistory.findFirst({ where: historyWhere, select: { id: true } }),
+      tx.fbsPrintJob.findFirst({ where: historyWhere, select: { id: true } }),
+      tx.kizCirculationItem.findFirst({ where: { OR: prefixes.map(p => ({ kizRaw: { startsWith: p.replace(/[\\%_]/g, '\\$&') } })) }, select: { id: true } }),
+    ]);
+    if (evidence.some(Boolean)) throw new BadRequestException('КИЗ уже учтён или связан со сборкой, отгрузкой либо печатью. Повторный приход запрещён.');
+    await this.incrementTargetBalance(tx, { warehouseId: target.warehouseId!, clientId: input.clientId,
+      skuId: sku.id, boxId: target.id, palletId: target.palletId, status: StockStatus.AVAILABLE, quantity: 1 });
+    const movement = await tx.stockMovement.create({ data: { warehouseId: target.warehouseId!, clientId: input.clientId,
+      skuId: sku.id, boxId: target.id, palletId: target.palletId, type: 'INVENTORY_ADJUSTMENT', status: StockStatus.AVAILABLE,
+      quantity: 1, idempotencyKey: input.idempotencyKey, sourceDocument: `PALLET_SORTING:${input.sessionId}`,
+      comment: `Найденный товар при сортировке: исходный короб ${input.sourceBoxCode} отсутствует в WMS; → ${target.code}; администратор ${user.id}` } });
+    await tx.productMark.create({ data: { clientId: input.clientId, skuId: sku.id, boxId: target.id, value: input.kiz,
+      status: StockStatus.AVAILABLE, stockMovementId: movement.id, sourceDocument: `PALLET_SORTING:${input.sessionId}` } });
+    return { skuId: sku.id, movementId: movement.id };
   }
 
   async executeTsdTransferBatch(payload: Record<string, unknown>, user: AuthUser) {
