@@ -1,10 +1,30 @@
 import { MovementType } from '@prisma/client';
 import * as XLSX from 'xlsx';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AuthUser } from '../src/modules/auth/auth.types';
 import { TurnoverService } from '../src/modules/turnover/turnover.service';
 
 describe('TurnoverService receipt batch export', () => {
+  afterEach(() => vi.unstubAllEnvs());
+  // TEST: Noginsk receipt export retains branch scope and accepts branch box numbers.
+  it('exports a branch receipt under the opt-in flag', async () => {
+    vi.stubEnv('WMS_NOGINSK_RECEIPT_SCOPE_FIX_ENABLED', 'true');
+    const movement = { ...receiptMovement('ng', 'FFL_NLKB0109_10'),
+      createdAt: new Date('2026-09-01T08:00:00Z'), sourceDocument: 'TSD-RECEIPT-20260901' };
+    const prisma = { client: { findUnique: vi.fn().mockResolvedValue({id:'client-1',code:'LUKIN',name:'Лукин'}) },
+      stockMovement: { findMany: vi.fn().mockResolvedValue([movement]) } };
+    const service = new TurnoverService(prisma as never, {requireClientAccess:vi.fn()} as never);
+    vi.spyOn(service as any, 'resolveWarehouseScope').mockResolvedValue({ warehouseIds: ['noginsk'] });
+    vi.spyOn(service as any, 'movementWarehouseWhere').mockReturnValue({ warehouseId:'noginsk' });
+    const file = await service.getReceiptPeriodXlsx({clientId:'client-1',receiptBatchDate:'2026-09-01'},adminUser);
+    expect(prisma.stockMovement.findMany.mock.calls[0][0].where.AND).toEqual([
+      {clientId:'client-1',quantity:{gt:0},type:MovementType.RECEIPT,OR:[
+        {box:{code:{startsWith:'FFL_LKB0109',mode:'insensitive'}}},
+        {sourceDocument:{startsWith:'TSD-RECEIPT-'}}]}, {warehouseId:'noginsk'}]);
+    const workbook = XLSX.read(file.content);
+    expect(XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[workbook.SheetNames[1]],{header:1}).flat().map(String))
+      .toContain('FFL_NLKB0109_10');
+  });
   it('exports movements by the date encoded in the box number', async () => {
     const prisma = {
       client: {

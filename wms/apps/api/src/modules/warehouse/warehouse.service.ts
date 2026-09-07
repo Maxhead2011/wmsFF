@@ -523,7 +523,9 @@ export class WarehouseService {
       : null;
     const resultBoxes = currentBatchDate
       ? receiptBoxes.filter(
-          (box) => receiptDateFromBoxCode(box.boxCode, onlineReceiptActivityDate(box), receiptPrefix) === currentBatchDate,
+          // FIX: opt-in for WMSFF2207; older open receipts remain actionable after branch correction.
+          (box) => (process.env.WMS_NOGINSK_RECEIPT_SCOPE_FIX_ENABLED === 'true' && box.status === 'receiving') ||
+            receiptDateFromBoxCode(box.boxCode, onlineReceiptActivityDate(box), receiptPrefix) === currentBatchDate,
         )
       : [];
     const activeBoxCodes = new Set(resultBoxes.map((box) => box.boxCode));
@@ -566,7 +568,13 @@ export class WarehouseService {
         warehouseId,
         type: MovementType.RECEIPT,
         quantity: { gt: 0 },
-        box: { code: { startsWith: receiptPrefix, mode: Prisma.QueryMode.insensitive } },
+        // FIX: branch receipt prefixes differ; document provenance is valid without a Moscow prefix.
+        ...(process.env.WMS_NOGINSK_RECEIPT_SCOPE_FIX_ENABLED === 'true'
+          ? { OR: [
+              { box: { code: { startsWith: receiptPrefix, mode: Prisma.QueryMode.insensitive } } },
+              { sourceDocument: { startsWith: 'TSD-RECEIPT-' } },
+            ] }
+          : { box: { code: { startsWith: receiptPrefix, mode: Prisma.QueryMode.insensitive } } }),
       },
       select: {
         quantity: true,

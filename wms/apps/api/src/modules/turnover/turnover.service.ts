@@ -1351,7 +1351,13 @@ export class TurnoverService {
             type: receiptBatchDate ? MovementType.RECEIPT : { in: INCOMING_DOCUMENT_MOVEMENT_TYPES },
             ...(movementDateRange ? { createdAt: movementDateRange } : {}),
             ...(receiptBoxPrefix
-              ? { box: { code: { startsWith: receiptBoxPrefix, mode: Prisma.QueryMode.insensitive } } }
+              // FIX: branch receipts have their own prefix; retain client, warehouse and final batch-date filters.
+              ? process.env.WMS_NOGINSK_RECEIPT_SCOPE_FIX_ENABLED === 'true'
+                ? { OR: [
+                    { box: { code: { startsWith: receiptBoxPrefix, mode: Prisma.QueryMode.insensitive } } },
+                    { sourceDocument: { startsWith: 'TSD-RECEIPT-' } },
+                  ] }
+                : { box: { code: { startsWith: receiptBoxPrefix, mode: Prisma.QueryMode.insensitive } } }
               : {}),
           },
           ...(movementScopeWhere ? [movementScopeWhere] : []),
