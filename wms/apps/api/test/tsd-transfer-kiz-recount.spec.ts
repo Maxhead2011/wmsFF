@@ -54,6 +54,88 @@ function fixture() {
 }
 afterEach(() => vi.unstubAllEnvs());
 describe('TSD physical KIZ recount', () => {
+  // TEST: an administrator confirms physical counts in both boxes, without duplicating stock.
+  function crossBoxFixture() {
+    const f = fixture();
+    const oldBox = { ...f.source, id: 'old-box', code: 'FFL_OLD' };
+    const oldBalance = { ...f.balance, id: 'old-balance', boxId: oldBox.id, quantity: 5 };
+    f.marks[0].boxId = oldBox.id; f.marks[0].value = newKiz;
+    f.marks.push({ ...f.marks[0], id: 'missing', value: kiz('missing') });
+    f.db.box.findUnique.mockImplementation(async ({ where }: any) => where.id === oldBox.id ? oldBox : f.source);
+    f.db.stockBalance.findMany.mockImplementation(async ({ where }: any) => structuredClone(where.boxId === oldBox.id ? [oldBalance] : [f.balance]));
+    f.db.stockBalance.update.mockImplementation(async ({ where, data }: any) => {
+      const row = where.id === oldBalance.id ? oldBalance : f.balance; row.quantity -= data.quantity.decrement; return row;
+    });
+    const transaction = f.db.$transaction.getMockImplementation();
+    f.db.$transaction.mockImplementation(async (fn: any) => { const before = oldBalance.quantity;
+      try { return await transaction(fn); } catch (error) { oldBalance.quantity = before; throw error; } });
+    return { ...f, oldBox, oldBalance };
+  }
+  it('asks the admin for the old box physical count instead of a manager handoff', async () => {
+    const f = crossBoxFixture();
+    expect(await f.preview(admin)).toMatchObject({ state: 'ADMIN_BOX_COUNTS_REQUIRED',
+      oldBoxes: [{ boxCode: 'FFL_OLD', previousQuantity: 5 }] });
+    expect(f.db.stockMovement.create).not.toHaveBeenCalled(); expect(f.reviews).toHaveLength(0);
+  });
+  it('reconciles old 5 to physical 0 and current 1 to physical 1 exactly once', async () => {
+    const f = crossBoxFixture(); f.payload.oldBoxCounts = [{ boxCode: 'FFL_OLD', quantity: 0 }];
+    const p = await f.preview(admin); expect(p).toMatchObject({ state: 'RECOUNT_READY', adminConfirmationRequired: true });
+    f.payload.adminConfirmed = true;
+    await f.confirm(p.snapshot, admin); await f.confirm(p.snapshot, admin);
+    expect(f.oldBalance.quantity).toBe(0); expect(f.balance.quantity).toBe(1);
+    expect(f.marks.find(x => x.id === 'old')).toMatchObject({ boxId: 'box', status: 'AVAILABLE' });
+    expect(f.marks.find(x => x.id === 'missing')).toMatchObject({ boxId: null, status: 'BLOCKED' });
+    expect(f.db.productMark.create).not.toHaveBeenCalled();
+    expect(f.db.stockMovement.create).toHaveBeenCalledTimes(1);
+    expect(f.db.stockMovement.create.mock.calls[0][0].data).toMatchObject({ boxId: 'old-box', quantity: -5 });
+    expect(f.audits[0].payload.oldBoxes[0]).toMatchObject({ boxCode: 'FFL_OLD', previousQuantity: 5, quantity: 0 });
+  });
+  it('requires an explicit administrator confirmation even when current quantity does not change', async () => {
+    const f = crossBoxFixture(); f.payload.oldBoxCounts = [{ boxCode: 'FFL_OLD', quantity: 0 }];
+    const p = await f.preview(admin); await expect(f.confirm(p.snapshot, admin)).rejects.toThrow('администратора');
+    expect(f.oldBalance.quantity).toBe(5);
+  });
+  it('refuses a stale old-box balance without changing either box', async () => {
+    const f = crossBoxFixture(); f.payload.oldBoxCounts = [{ boxCode: 'FFL_OLD', quantity: 0 }];
+    const p = await f.preview(admin); f.oldBalance.quantity = 4; f.payload.adminConfirmed = true;
+    await expect(f.confirm(p.snapshot, admin)).rejects.toThrow('Повторите сверку');
+    expect(f.oldBalance.quantity).toBe(4); expect(f.balance.quantity).toBe(1);
+  });
+  it('rolls back both boxes and KIZ ownership on audit failure', async () => {
+    const f = crossBoxFixture(); f.payload.oldBoxCounts = [{ boxCode: 'FFL_OLD', quantity: 0 }];
+    const p = await f.preview(admin); f.payload.adminConfirmed = true;
+    f.db.auditLog.create.mockRejectedValue(new Error('audit failed'));
+    await expect(f.confirm(p.snapshot, admin)).rejects.toThrow('audit failed');
+    expect(f.oldBalance.quantity).toBe(5); expect(f.marks[0].boxId).toBe('old-box');
+  });
+  it('does not grant cross-box correction to an employee', async () => {
+    const f = crossBoxFixture(); f.payload.oldBoxCounts = [{ boxCode: 'FFL_OLD', quantity: 0 }];
+    await expect(f.preview()).rejects.toThrow('администратора'); expect(f.oldBalance.quantity).toBe(5);
+  });
+  it('recognizes a foreign-box KIZ stored with a scanner prefix', async () => {
+    const f = crossBoxFixture(); f.marks[0].value = ']d2' + newKiz;
+    expect(await f.preview(admin)).toMatchObject({ state: 'ADMIN_BOX_COUNTS_REQUIRED' });
+  });
+  it.each([null, [], [{ boxCode: 'FFL_OLD', quantity: -1 }], [{ boxCode: 'FFL_OLD', quantity: 1.5 }], [{ boxCode: 'OTHER', quantity: 0 }]])('rejects invalid old-box counts %j', async counts => {
+    const f = crossBoxFixture(); f.payload.oldBoxCounts = counts;
+    await expect(f.preview(admin)).rejects.toThrow(); expect(f.oldBalance.quantity).toBe(5);
+  });
+  it('refuses another warehouse and preserves historical non-available marks', async () => {
+    const f = crossBoxFixture(); f.oldBox.warehouseId = 'other';
+    await expect(f.preview(admin)).rejects.toThrow('филиалу'); f.oldBox.warehouseId = 'wh';
+    f.marks.push({ ...f.marks[0], id: 'historical', value: kiz('shipped'), status: 'SHIPPING' });
+    f.payload.oldBoxCounts = [{ boxCode: 'FFL_OLD', quantity: 0 }]; f.payload.adminConfirmed = true;
+    const p = await f.preview(admin); await f.confirm(p.snapshot, admin);
+    expect(f.marks.find(m=>m.id==='historical')).toMatchObject({ status: 'SHIPPING', boxId: 'old-box' });
+  });
+  it('includes both-box correction in route rebuild and protects a stale mark', async () => {
+    const f = crossBoxFixture(); f.payload.oldBoxCounts = [{ boxCode: 'FFL_OLD', quantity: 0 }];
+    f.db.clientRequest.findMany.mockResolvedValue([{ id: 'affected' }]);
+    const p = await f.preview(admin); f.payload.adminConfirmed = true;
+    f.marks[0].updatedAt = new Date(7);
+    await expect(f.confirm(p.snapshot, admin)).rejects.toThrow('Повторите сверку');
+    const fresh = await f.preview(admin); expect(await f.confirm(fresh.snapshot, admin)).toMatchObject({ affectedRequestIds: ['affected'] });
+  });
   // TEST: correction records affected open FBS requests for route refresh, including on retry.
   it('persists affected routes with the count and returns them on idempotent replay', async () => {
     const f = fixture(); f.balance.quantity = 0; f.payload.adminConfirmed = true;

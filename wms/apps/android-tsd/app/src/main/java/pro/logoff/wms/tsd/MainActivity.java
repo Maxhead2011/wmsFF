@@ -629,6 +629,18 @@ public class MainActivity extends Activity {
 
         TsdTransferResponse.SourceBox source =
             transferWorkflow == null ? null : transferWorkflow.sourceBox;
+        // FIX: administrators can explicitly reconcile the source without losing a selected batch.
+        TsdSession correctionSession = safeSession();
+        if (source != null && StorageKizRecountState.canEnterFromTransfer(
+            BuildConfig.FLAVOR, correctionSession == null ? null : correctionSession.roleCodes,
+            transferBusy, transferSelectedItems.size())) {
+            root.addView(primaryMenuButton("ИСПРАВИТЬ ОСТАТКИ И КИЗЫ (АДМИНИСТРАТОР)", view -> {
+                String sourceCode = source.code;
+                openStockTransfer();
+                startActivity(new Intent(this, StorageBoxTransferActivity.class)
+                    .putExtra(StorageBoxTransferActivity.INITIAL_SOURCE, sourceCode));
+            }));
+        }
         if (source == null) {
             // FIX: isolated one-unit flow keeps the existing batch transfer unchanged.
             if ("logoff".equals(BuildConfig.FLAVOR)) {

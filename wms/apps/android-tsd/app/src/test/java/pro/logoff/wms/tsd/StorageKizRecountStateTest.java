@@ -5,6 +5,30 @@ import static org.junit.Assert.*;
 
 // TEST: explicit full-SKU confirmation, identity deduplication and immutable uncertain request.
 public class StorageKizRecountStateTest {
+    // TEST: entry from batch transfer must not lose selected units or expose an admin action to CLIENT/sold.
+    @Test public void correctionEntryPreservesBatchAndBrandBoundaries() {
+        assertTrue(StorageKizRecountState.canEnterFromTransfer("logoff", java.util.Arrays.asList("ADMIN"), false, 0));
+        assertFalse(StorageKizRecountState.canEnterFromTransfer("ffullhab", java.util.Arrays.asList("ADMIN"), false, 0));
+        assertFalse(StorageKizRecountState.canEnterFromTransfer("logoff", java.util.Arrays.asList("ADMIN", "CLIENT"), false, 0));
+        assertFalse(StorageKizRecountState.canEnterFromTransfer("logoff", java.util.Arrays.asList("OPERATOR"), false, 0));
+        assertFalse(StorageKizRecountState.canEnterFromTransfer("logoff", java.util.Arrays.asList("ADMIN"), true, 0));
+        assertFalse(StorageKizRecountState.canEnterFromTransfer("logoff", java.util.Arrays.asList("ADMIN"), false, 1));
+    }
+    // TEST: explicitly entered old-box counts survive retries, never default to zero.
+    @Test public void oldBoxCountsAreExplicitAndRestored() {
+        StorageKizRecountState state = new StorageKizRecountState(); state.add(kiz("5abcdefghijkl"));
+        assertTrue(state.oldBoxCounts().isEmpty()); state.oldBoxCount("FFL_OLD", 0); state.ready("snapshot");
+        StorageKizRecountState restored = StorageKizRecountState.restore(state.scans(), state.snapshot(), state.operationKey(), state.oldBoxCounts());
+        assertEquals(state.oldBoxCounts(), restored.oldBoxCounts());
+        try { state.oldBoxCount("FFL_OLD", 2); fail(); } catch (IllegalStateException expected) { }
+        state.oldBoxCounts().clear(); assertEquals(1, state.oldBoxCounts().size());
+    }
+    @Test public void invalidOldCountIsRejectedAndRescanClearsIt() {
+        StorageKizRecountState state = new StorageKizRecountState(); state.add(kiz("5abcdefghijkl"));
+        try { state.oldBoxCount("FFL_OLD", -1); fail(); } catch (IllegalArgumentException expected) { }
+        try { state.oldBoxCount("", 0); fail(); } catch (IllegalArgumentException expected) { }
+        state.oldBoxCount("FFL_OLD", 0); state.add(kiz("5bcdefghijklm")); assertTrue(state.oldBoxCounts().isEmpty());
+    }
     // TEST: administrative confirmation survives restart and cannot be silently reused for a new preview.
     @Test public void adminDecisionMustBeExplicitAndRestoredForRetry() {
         StorageKizRecountState state = new StorageKizRecountState(); state.add(kiz("5abcdefghijkl"));

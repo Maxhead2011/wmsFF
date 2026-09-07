@@ -26,7 +26,7 @@ export function parseRecountScans(payload: Record<string, unknown>, parse: Parse
 
 // FIX: reuse stock, mark and history tables; no new inventory balance or parallel movement ledger.
 export async function planKizRecount(db: Db, source: Source, skuId: string,
-  scans: ReturnType<typeof parseRecountScans>, parse: Parse, administrator = false, releasedAssemblyIds: string[] = []) {
+  scans: ReturnType<typeof parseRecountScans>, parse: Parse, administrator = false, releasedAssemblyIds: string[] = [], adoptedMarkIds: string[] = []) {
   const review = (message: string): never => { throw new KizRecountReviewRequired(message); };
   if (!source.warehouseId || !['active', 'receiving', ...(administrator ? ['archived'] : [])].includes(source.status)) review('Короб не находится в активном хранении. Нужен разбор WMS.');
   const balances = await db.stockBalance.findMany({ where: { boxId: source.id, skuId }, orderBy: { id: 'asc' } });
@@ -53,7 +53,7 @@ export async function planKizRecount(db: Db, source: Source, skuId: string,
     const identity = parse(row.value);
     const key = identity ? `01${identity.gtin}21${identity.serial}` : '';
     if (!identities.some(scan => scan.key === key) || known.has(key) || row.clientId !== source.clientId ||
-        row.skuId !== skuId || row.boxId !== source.id || row.status !== 'AVAILABLE') {
+        row.skuId !== skuId || (row.boxId !== source.id && !(administrator && adoptedMarkIds.includes(row.id))) || row.status !== 'AVAILABLE') {
       review('КИЗ имеет другую принадлежность, статус или дублирующую запись. Нужен разбор WMS.');
     }
     known.set(key, row);

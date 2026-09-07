@@ -3,13 +3,25 @@ package pro.logoff.wms.tsd;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /** FIX: physical recount stays separate from the normal one-unit transfer state. */
 public final class StorageKizRecountState {
+    // FIX: do not discard a selected batch or expose administrative correction in the sold flavor.
+    public static boolean canEnterFromTransfer(String flavor, List<String> roles, boolean busy, int selectedCount) {
+        if (!"logoff".equals(flavor) || busy || selectedCount != 0 || roles == null) return false;
+        boolean administrator = false;
+        for (String role : roles) {
+            if ("CLIENT".equalsIgnoreCase(role)) return false;
+            if ("ADMIN".equalsIgnoreCase(role)) administrator = true;
+        }
+        return administrator;
+    }
     private final LinkedHashMap<String, String> scans = new LinkedHashMap<>();
+    private final LinkedHashMap<String, Integer> oldCounts = new LinkedHashMap<>();
     private String key = "tsd-recount:" + UUID.randomUUID();
     private String snapshot = "";
     private boolean adminRelease, adminConfirmationRequired, adminConfirmed, adminAbort;
@@ -29,7 +41,22 @@ public final class StorageKizRecountState {
         if (scans.containsKey(identity)) return false;
         if (scans.size() >= 200) throw new IllegalArgumentException("Не более 200 КИЗов за сверку.");
         scans.put(identity, raw);
+        oldCounts.clear(); // FIX: another physical item invalidates the previous-box confirmation.
         return true;
+    }
+
+    public void oldBoxCount(String box, int quantity) {
+        if (ready()) throw new IllegalStateException("Сверка уже проверена. Начните проверку заново.");
+        if (box == null || box.trim().isEmpty() || box.length() > 200 || quantity < 0 || quantity > 10000)
+            throw new IllegalArgumentException("Укажите фактическое количество от 0 до 10000.");
+        oldCounts.put(box, quantity);
+    }
+    public List<Map<String, Object>> oldBoxCounts() {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Map.Entry<String, Integer> e : oldCounts.entrySet()) {
+            Map<String, Object> row = new LinkedHashMap<>(); row.put("boxCode", e.getKey()); row.put("quantity", e.getValue()); result.add(row);
+        }
+        return result;
     }
 
     public List<String> scans() { return new ArrayList<>(scans.values()); }
@@ -61,9 +88,13 @@ public final class StorageKizRecountState {
     }
     public void repeatPreview() { snapshot = ""; adminRelease = false; adminConfirmationRequired = false; adminConfirmed = false; adminAbort = false; }
     public static StorageKizRecountState restore(List<String> values, String snapshot, String key) {
+        return restore(values, snapshot, key, new ArrayList<>());
+    }
+    public static StorageKizRecountState restore(List<String> values, String snapshot, String key, List<Map<String, Object>> counts) {
         if (key == null || key.isEmpty()) throw new IllegalArgumentException("Нет номера сверки");
         StorageKizRecountState result = new StorageKizRecountState();
         for (String value : values) result.add(value);
+        for (Map<String, Object> row : counts) result.oldBoxCount((String) row.get("boxCode"), ((Number) row.get("quantity")).intValue());
         result.ready(snapshot); result.key = key;
         return result;
     }
