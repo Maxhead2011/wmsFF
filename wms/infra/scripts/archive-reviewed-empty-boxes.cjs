@@ -155,5 +155,6 @@ async function main() {
     console.log(JSON.stringify({ summary: results.reduce((a,r) => (a[r.status] = (a[r.status] || 0) + 1, a), {}) }));
   } finally { await db.$disconnect(); }
 }
-module.exports = { reasons, applyOne, validateManifest };
+// FIX: reuse the read-only dependency collector in other explicitly scoped maintenance.
+module.exports = { reasons, applyOne, validateManifest, collect };
 if (require.main === module) main().catch(e => { console.error(e.message); process.exitCode = 1; });
