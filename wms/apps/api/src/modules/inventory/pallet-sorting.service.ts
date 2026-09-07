@@ -141,7 +141,7 @@ export class PalletSortingService {
       const code = await this.boxCodes.normalize(dto.code ?? '');
       const box = state.sources.find(b => b.code === code && !b.archived && !b.preservedOnPallet);
       if (box) box.scanned = true;
-      else await this.recordProblemSource(tx, state, code, user);
+      else await this.includeScannedSource(tx, state, code, user);
     } else if (dto.action === 'BEGIN_FORMING') {
       if (state.stage !== 'CHECKING' || state.sources.some(b => !b.archived && !b.preservedOnPallet && !b.scanned)) throw new ConflictException('Сначала отсканируйте все исходные короба или подтвердите обработку отсутствующих.');
       state.stage = 'FORMING';
@@ -164,6 +164,24 @@ export class PalletSortingService {
     } else if (dto.action === 'MOVE') {
       await this.move(tx, state, dto, user);
     } else throw new BadRequestException('Неизвестное действие сортировки.');
+  }
+
+  // FIX: an old session snapshot may miss a box physically scanned on the same pallet.
+  // Never auto-import the entire live pallet or turn an existing balance into a surplus.
+  private async includeScannedSource(tx: Prisma.TransactionClient, state: PalletSortingState, value: string, user: AuthUser) {
+    const code = await this.boxCodes.requireAllowed(value);
+    await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`pallet-sorting:${state.warehouseId}`}))`);
+    const box = await tx.box.findUnique({ where: { code }, include: { storagePlacement: true } });
+    if (!box) { await this.recordProblemSource(tx, state, code, user); return; }
+    if (!state.sourcePalletId || box.status !== 'active' || box.clientId !== state.clientId || box.warehouseId !== state.warehouseId ||
+        box.storagePlacement?.palletId !== state.sourcePalletId || state.targets.some(b => b.id === box.id) || state.sources.some(b => b.id === box.id)) {
+      throw new ConflictException('Исходный короб должен быть действующим коробом того же клиента и филиала на исходном паллет-сорте; целевые и уже обработанные короба использовать нельзя.');
+    }
+    await this.assertUnclaimed(tx, [box.id], state.id, state.warehouseId);
+    await this.assertMovementAllowed(tx, [box.id]);
+    state.sources.push({ id: box.id, code: box.code, scanned: true, archived: false, placementId: state.sourcePalletId });
+    state.problemSources = (state.problemSources ?? []).filter(b => b.code !== code);
+    await this.audit(tx, state, user, 'LATE_SOURCE_SCANNED', { boxId: box.id, code, palletId: state.sourcePalletId });
   }
 
   // FIX: no receipt and no reassignment of an existing/foreign box at source scanning.
@@ -215,21 +233,26 @@ export class PalletSortingService {
       if (prior.barcode === barcode && prior.targetBoxId === target.id) return;
       throw new ConflictException('Этот КИЗ уже перемещён в другой целевой короб этой сортировки.');
     }
+    // FIX: validate the explicitly scanned physical source before resolving the KIZ.
+    const code = dto.sourceBoxCode ? await this.boxCodes.normalize(dto.sourceBoxCode) : null;
+    if (code && !state.sources.some(b => b.code === code)) await this.includeScannedSource(tx, state, code, user);
     const marks = await tx.productMark.findMany({ where: { clientId: state.clientId, value: { startsWith: identity } }, take: 2 });
     if (marks.length > 1) throw new ConflictException('Найдено несколько записей одного КИЗ. Требуется разбор дубликата.');
     const mark = marks[0];
     let source = mark ? state.sources.find(b => b.id === mark.boxId && b.scanned && !b.archived && !b.preservedOnPallet) : undefined;
     if (mark && (!source || mark.status !== 'AVAILABLE')) throw new ConflictException('КИЗ не относится к доступному товару в отсканированных исходных коробах.');
+    if (source && code && source.code !== code) throw new ConflictException('КИЗ привязан к другому исходному коробу, а не к отсканированному. Проверьте фактический источник.');
     if (!mark) {
       // ADDED: unknown KIZ never guesses which of several physical source boxes to debit.
-      const code = dto.sourceBoxCode ? await this.boxCodes.normalize(dto.sourceBoxCode) : null;
       const candidates = await tx.stockBalance.findMany({ where: { clientId: state.clientId, warehouseId: state.warehouseId,
         boxId: { in: state.sources.filter(b => b.scanned && !b.archived && !b.preservedOnPallet && (!code || b.code === code)).map(b => b.id) },
         status: 'AVAILABLE', quantity: { gt: 0 }, sku: { barcodes: { some: { value: barcode } } } }, select: { boxId: true } });
       const ids = [...new Set(candidates.map(b => b.boxId))];
       if (!ids.length) {
         // FIX: a scanned unknown source authorizes an explicit surplus, never a guessed debit.
-        if (code && !state.sources.some(b => b.code === code)) await this.recordProblemSource(tx, state, code, user);
+        if (code && state.sources.some(b => b.code === code)) {
+          throw new ConflictException(`В исходном коробе ${code} нет доступного остатка по ШК ${barcode}. Проверьте фактический товар и остаток; повторный приход не выполнен.`);
+        }
         const problems = (state.problemSources ?? []).filter(b => b.scanned && (!code || b.code === code));
         if (problems.length === 1) {
           const problem = problems[0];
