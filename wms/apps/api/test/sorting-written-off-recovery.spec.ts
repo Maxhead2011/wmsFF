@@ -54,6 +54,41 @@ async function preview(f: ReturnType<typeof fixture>) {
   try { await f.service.restoreWrittenOffSortingUnit(f.tx, f.input, user); throw Error('Expected confirmation'); }
   catch(e: any) { const body=e.getResponse(); expect(body.code).toBe('SORTING_WRITEOFF_CONFIRM_REQUIRED'); return body.fingerprint; }
 }
+function availableFixture() {
+  const f=fixture(); f.mark.status='AVAILABLE'; f.mark.boxId='old' as any;
+  f.mark.sourceDocument='TSD-RECEIPT'; f.writeoff.type='SHIP'; f.writeoff.quantity=-1;
+  f.writeoff.sourceDocument='done-request'; f.writeoff.createdAt=new Date('2026-08-31T09:02:26Z');
+  f.tx.box.findUnique.mockImplementation(async ({where}:any)=>where.id==='old'?{id:'old',clientId:'client',warehouseId:'wh',code:'OLD'}:f.target);
+  f.tx.clientRequest={findFirst:vi.fn().mockResolvedValue({id:'done-request'})};
+  f.tx.fbsTsdAssembly.findMany=vi.fn().mockResolvedValue([{id:'other-assembly',status:'COMPLETED',completedAt:new Date(),kiz:'010460000000000121OTHER00000001',boxCode:'DIFFERENT'}]);
+  return f;
+}
+it('confirms AVAILABLE KIZ with zero balance after closing a request that collected another KIZ from another box',async()=>{
+  // TEST: incident 397 / box 260: mark remained AVAILABLE after quantity was shipped.
+  const f=availableFixture(); f.input.restoreFingerprint=await preview(f);
+  expect(f.tx.stockMovement.create).not.toHaveBeenCalled(); f.input.confirmRestore=true;
+  await f.service.restoreWrittenOffSortingUnit(f.tx,f.input,user);
+  expect(f.tx.productMark.updateMany).toHaveBeenCalledWith(expect.objectContaining({where:expect.objectContaining({status:'AVAILABLE',boxId:'old'})}));
+  expect(f.service.incrementTargetBalance).toHaveBeenCalledWith(f.tx,expect.objectContaining({quantity:1,boxId:'target'}));
+});
+it.each(['reserve','missing-box','foreign-box','no-request','own-kiz','same-box','no-kiz','ambiguous','not-completed','newer-credit'])('refuses unsafe AVAILABLE recovery: %s',async kind=>{
+  // TEST: no blind +1 when request evidence or physical source identity is ambiguous.
+  const f=availableFixture();
+  if(kind==='reserve')f.tx.stockBalance.findFirst.mockResolvedValue({quantity:1});
+  if(kind==='missing-box')f.tx.box.findUnique.mockImplementation(async({where}:any)=>where.id?null:f.target);
+  if(kind==='foreign-box')f.tx.box.findUnique.mockImplementation(async({where}:any)=>where.id?{id:'old',clientId:'other',warehouseId:'wh'}:f.target);
+  if(kind==='no-request')f.tx.clientRequest.findFirst.mockResolvedValue(null);
+  const row={id:'assembly',status:'COMPLETED',completedAt:new Date(),kiz:'010460000000000121OTHER00000001',boxCode:'DIFFERENT'};
+  if(kind==='own-kiz')row.kiz=kiz;
+  if(kind==='same-box')row.boxCode='OLD';
+  if(kind==='no-kiz')row.kiz='';
+  if(kind==='not-completed')row.status='PICKING';
+  if(['own-kiz','same-box','no-kiz','not-completed'].includes(kind))f.tx.fbsTsdAssembly.findMany.mockResolvedValue([row]);
+  if(kind==='ambiguous')f.tx.fbsTsdAssembly.findMany.mockResolvedValue([row,row]);
+  if(kind==='newer-credit')f.writeoff.quantity=1;
+  await expect(f.service.restoreWrittenOffSortingUnit(f.tx,f.input,user)).rejects.toThrow();
+  expect(f.service.incrementTargetBalance).not.toHaveBeenCalled();
+});
 it('offers confirmation without writing and restores the same previously written-off KIZ once confirmed', async()=>{
   // TEST: reproduces BLOCKED/no box after a -5 adjustment; only the physically found unit returns.
   const f=fixture(); f.input.restoreFingerprint=await preview(f);

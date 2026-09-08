@@ -45,7 +45,7 @@ function fixture() {
   for (const table of ['fbsTsdAssembly', 'shippedKizHistory', 'fbsWebKizStickerPrint', 'fbsAssemblyAttemptHistory', 'fbsPrintJob', 'kizCirculationItem']) tx[table] = { findFirst: vi.fn(async () => null) };
   const state: any = { id: 'session', version: 104, clientId: 'client', warehouseId: 'wh', sourcePalletId: 'pallet', stage: 'FORMING',
     sources: [physical], targets: [{ id: 'target', code: 'FFL_LKBS0709_07', quantity: 3, closed: false }], activeTargetId: 'target', moves: [], pendingRoutes: [] };
-  service.stock = { recoverSortingUnit: vi.fn(), transferSortingUnit: vi.fn(async (_tx: any, input: any) => {
+  service.stock = { recoverSortingUnit: vi.fn(), restoreWrittenOffSortingUnit: vi.fn().mockRejectedValue(new Error('NO_VERIFIED_WRITEOFF')), transferSortingUnit: vi.fn(async (_tx: any, input: any) => {
     expect(input.fromBoxCode).toBe(recorded.code);
     if (quantity < 1) throw new Error('NO_STOCK');
     quantity--; marks.find(m => m.value === input.kiz)!.boxId = 'target';
@@ -135,6 +135,16 @@ it('propagates a transfer race before writing the session result', async () => {
   const f = fixture(); f.service.stock.transferSortingUnit.mockRejectedValue(new Error('CONCURRENT_STOCK_CHANGE'));
   await expect(f.service.move(f.tx, f.state, f.dto, user)).rejects.toThrow('CONCURRENT_STOCK_CHANGE');
   expect(f.state.moves).toEqual([]); expect(f.state.targets[0].quantity).toBe(3); expect(f.service.audit).not.toHaveBeenCalled();
+});
+it.each([false,true])('offers admin recovery for zero-balance AVAILABLE KIZ (source in manifest: %s)',async inManifest=>{
+  // TEST: same user-visible failure, including a source already scanned in this sorting session.
+  const f=fixture(); f.tx.stockBalance.findFirst.mockResolvedValue(null);
+  f.service.stock.restoreWrittenOffSortingUnit=vi.fn().mockResolvedValue({skuId:'sku',movementId:'recovered'});
+  if(inManifest)f.state.sources.push({id:'recorded',code:f.recorded.code,scanned:true,archived:false});
+  await f.service.move(f.tx,f.state,{...f.dto,sourceBoxCode:'',confirmRestore:true,restoreFingerprint:'proof'},user);
+  expect(f.service.stock.restoreWrittenOffSortingUnit).toHaveBeenCalledTimes(1);
+  expect(f.service.stock.transferSortingUnit).not.toHaveBeenCalled();
+  expect(f.state.moves[0]).toMatchObject({recovered:true});expect(f.state.targets[0].quantity).toBe(4);
 });
 
 it.each(['no-code', 'unknown-code', 'unscanned', 'archived-snapshot', 'preserved-snapshot', 'moved-pallet', 'missing-physical-box', 'old-recorded-snapshot'])('accepts an available KIZ without a source manifest prerequisite: %s', async kind => {

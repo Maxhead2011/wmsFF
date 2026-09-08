@@ -60,6 +60,25 @@ async function main(){
  const blocked=await confirmation(second.value);
  await p.fbsWebKizStickerPrint.create({data:{id:randomUUID(),kiz:second.value,orderId:'QA_ORDER',assemblyId:'QA_TASK',clientId:client.id,requestId:'QA_REQUEST',printedById:user.id,printedBy:'Test admin'}});
  await assert.rejects(s.action(state.id,blocked,user),/заказ/);assert.equal((await p.stockBalance.aggregate({_sum:{quantity:true}}))._sum.quantity,2);
- console.log(JSON.stringify({result:'PASS',confirmation:true,sameMark:true,receiptQuantity:2,retry:true,concurrency:true,rollback:true,lateShipmentBlocked:true}));
+ // TEST: AVAILABLE mark retained in a now-empty box after request-level SHIP of another KIZ.
+ const source=await p.box.create({data:{clientId:client.id,warehouseId:wh.id,code:'FFL_QA_ZERO',status:'active'}});
+ const missingSku=await p.sku.create({data:{clientId:client.id,internalSku:'QA_ZERO',name:'Zero stock',barcodes:{create:{value:'4600000000002'}}}});
+ const found=await p.productMark.create({data:{clientId:client.id,skuId:missingSku.id,boxId:source.id,value:canonical('ZERO000000001'),status:'AVAILABLE',sourceDocument:'TSD-RECEIPT',updatedAt:new Date('2026-08-25T15:27:21Z')}});
+ const request=await p.clientRequest.create({data:{clientId:client.id,warehouseId:wh.id,type:'OUTBOUND',status:'DONE',title:'Synthetic closed request'}});
+ await p.stockMovement.create({data:{clientId:client.id,warehouseId:wh.id,skuId:missingSku.id,boxId:source.id,type:'MOVE',status:'PACKING',quantity:1,createdAt:new Date('2026-08-25T15:27:20Z')}});
+ const debit=await p.stockMovement.create({data:{clientId:client.id,warehouseId:wh.id,skuId:missingSku.id,boxId:source.id,type:'SHIP',status:'PACKING',quantity:-1,sourceDocument:request.id,createdAt:new Date('2026-08-31T09:02:26Z')}});
+ await p.fbsTsdAssembly.create({data:{clientId:client.id,connectionId:'qa',requestId:request.id,requestItemId:'qa',skuId:missingSku.id,orderId:'QA_OTHER',productName:'Other collected',barcodes:[],storageBoxes:[],deviceCode:'QA',status:'COMPLETED',completedAt:new Date('2026-08-24T19:03:21Z'),kiz:canonical('OTHER00000001'),boxCode:'FFL_QA_DIFFERENT'}});
+ const zeroScan={action:'MOVE',barcode:'4600000000002',kiz:found.value,version:state.version,operationId:randomUUID()};
+ let proof;try{await s.action(state.id,zeroScan,user);assert.fail('Preview expected');}catch(e){assert.equal(e.getResponse().code,'SORTING_WRITEOFF_CONFIRM_REQUIRED');proof=e.getResponse().fingerprint;}
+ assert.equal(await p.stockBalance.count({where:{skuId:missingSku.id}}),0);
+ const zeroCmd={...zeroScan,operationId:randomUUID(),confirmRestore:true,restoreFingerprint:proof};
+ const zeroRace=await Promise.allSettled([s.action(state.id,zeroCmd,user),s.action(state.id,zeroCmd,user)]);assert.ok(zeroRace.some(r=>r.status==='fulfilled'));
+ state=await s.action(state.id,zeroCmd,user);
+ assert.equal((await p.stockBalance.aggregate({where:{skuId:missingSku.id},_sum:{quantity:true}}))._sum.quantity,1);
+ assert.equal((await p.productMark.findUnique({where:{id:found.id}})).boxId,target);
+ assert.equal((await p.stockMovement.findUnique({where:{id:debit.id}})).quantity,-1);
+ assert.equal(await p.productMark.count({where:{value:found.value}}),1);
+ assert.equal(state.targets[0].quantity,3);
+ console.log(JSON.stringify({result:'PASS',confirmation:true,sameMark:true,receiptQuantity:3,retry:true,concurrency:true,rollback:true,lateShipmentBlocked:true,availableWithoutBalance:true,oldDebitPreserved:true}));
 }
 main().catch(e=>{console.error(e);process.exitCode=1;}).finally(()=>p.$disconnect());
