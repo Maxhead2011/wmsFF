@@ -23,8 +23,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 160 // FIX: publish problem-box recovery in LOGOFF only; sold flavor unchanged.
-            versionName = "0.1.161-sorting-recovery"
+            versionCode = 161 // FIX: deliver source-independent sorting and barcode-to-KIZ focus in LOGOFF only.
+            versionName = "0.1.162-sorting-scan"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

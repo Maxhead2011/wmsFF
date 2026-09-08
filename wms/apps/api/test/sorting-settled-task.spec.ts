@@ -127,13 +127,15 @@ it('invalidates logical routes at the physical source scan without changing stoc
 it('invalidates an old session source before attempting a transfer', async () => {
   // TEST: sessions already FORMING must not require restarting or losing earlier scans.
   const service: any = Object.create(PalletSortingService.prototype);
-  service.boxCodes = { normalize: async (s: string) => s }; service.audit = vi.fn();
+  service.boxCodes = { normalize: async (s: string) => s, requireAllowed: async (s: string) => s }; service.audit = vi.fn();
+  service.assertUnclaimed = vi.fn(); service.assertMovementAllowed = vi.fn(); // TEST: move owns its source checks.
   const events: string[] = [];
   service.resetAffectedRoutes = vi.fn(async () => events.push('reset'));
   service.stock = { transferSortingUnit: vi.fn(async () => { events.push('move'); return { skuId: 'sku' }; }) };
   const state: any = { stage: 'FORMING', id: 'session', clientId: 'client', warehouseId: 'wh', sources: [{ id: 'source', code: 'SOURCE', scanned: true }],
     activeTargetId: 'target', targets: [{ id: 'target', code: 'TARGET', quantity: 0 }], moves: [] };
-  const tx = { productMark: { findMany: async () => [] }, stockBalance: { findMany: async () => [{ boxId: 'source' }] } };
+  const tx = { productMark: { findMany: async () => [] }, stockBalance: { findMany: async () => [{ boxId: 'source' }] },
+    box: { findUnique: async () => ({ id: 'source', code: 'SOURCE', status: 'active', clientId: 'client', warehouseId: 'wh', storagePlacement: null }) } };
   await service.move(tx, state, { barcode: 'barcode', kiz, sourceBoxCode: 'SOURCE' }, { id: 'admin' });
   expect(events[0]).toBe('reset'); expect(events).toContain('move');
 });

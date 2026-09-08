@@ -3,6 +3,10 @@ package pro.logoff.wms.tsd;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.graphics.Color;
+import android.os.Handler;
+import android.os.Looper;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.KeyEvent;
 import android.view.View;
 import android.widget.Button;
@@ -33,6 +37,12 @@ public final class PalletSortingScreen {
     private final Runnable back;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final PalletSortingCommand command = new PalletSortingCommand();
+    // FIX: local to this LOGOFF-only screen; other scanner workflows are unchanged.
+    private final Handler scanHandler = new Handler(Looper.getMainLooper());
+    private final PalletSortingAutoSubmit autoSubmit = new PalletSortingAutoSubmit(new PalletSortingAutoSubmit.Scheduler() {
+        public void post(Runnable job, long delay) { scanHandler.postDelayed(job, delay); }
+        public void remove(Runnable job) { scanHandler.removeCallbacks(job); }
+    }, this::submit);
     private Map<String, Object> state;
     private List<Map<String, Object>> sessions = new ArrayList<>();
     private EditText input, palletInput, sourceInput;
@@ -46,7 +56,7 @@ public final class PalletSortingScreen {
         render(); loadList();
     }
     public boolean canLeave() { return !busy && !command.pending() && barcode.isEmpty() && !confirming; }
-    public void close() { closed = true; executor.shutdown(); }
+    public void close() { closed = true; autoSubmit.cancel(); executor.shutdown(); }
     public EditText scannerField() {
         View focused = activity.getCurrentFocus();
         return focused instanceof EditText ? (EditText) focused : input;
@@ -54,6 +64,7 @@ public final class PalletSortingScreen {
     private boolean active() { return !closed && !activity.isDestroyed(); }
     public void render() {
         if (!active()) return;
+        autoSubmit.cancel(); // FIX: a callback from a replaced barcode field cannot submit the next KIZ.
         root = new LinearLayout(activity); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(20, 16, 20, 24);
         root.setBackgroundColor(Color.WHITE);
         label("Сортировка и перемещение", 24);
@@ -89,7 +100,7 @@ public final class PalletSortingScreen {
         if (target != null) {
             label("Заполняется " + text(target, "code") + " · " + number(target, "quantity") + " ед.", 20);
             sourceInput = field("Исходный короб (если КИЗ ещё не привязан)", source);
-            label("Неизвестный короб отметим как проблемный. Новый КИЗ из него учтём в целевом коробе как найденный товар.", 15);
+            label("Для учтённого КИЗа исходный короб не нужен. Если КИЗ ещё не привязан, укажите фактический короб; совпадение с исходным паллетом не требуется.", 15);
             sourceInput.setOnEditorActionListener((v, id, event) -> { source = sourceInput.getText().toString().trim(); if (input != null) input.requestFocus(); return true; });
         }
         if (!"COMPLETED".equals(stage())) {
@@ -99,6 +110,14 @@ public final class PalletSortingScreen {
                 button("Отменить текущую единицу", () -> { barcode = ""; render(); }, true);
             }
             input = field(hint, "");
+            input.addTextChangedListener(new TextWatcher() {
+                public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+                public void onTextChanged(CharSequence s, int start, int before, int count) {}
+                public void afterTextChanged(Editable value) {
+                    autoSubmit.changed(value.toString(), "FORMING".equals(stage()) && target() != null && barcode.isEmpty(),
+                        active() && !busy && !confirming && !command.pending());
+                }
+            });
             input.setOnEditorActionListener((v, id, event) -> { if (event == null || event.getAction() == KeyEvent.ACTION_UP) submit(); return true; });
             button(state == null ? "Начать сортировку" : "Подтвердить скан", this::submit, true);
         }
@@ -114,10 +133,21 @@ public final class PalletSortingScreen {
         if (state != null) for (Map<String, Object> box : rows(state, "targets")) label(text(box, "code") + " · " + number(box, "quantity") + " ед. · " + text(box, "palletCode") + (yes(box, "closed") ? " · закрыт" : " · открыт"), 16);
         button("В главное меню (сессия сохранена)", () -> { if (canLeave()) { close(); back.run(); } }, barcode.isEmpty());
         ScrollView scroll = new ScrollView(activity); scroll.addView(root); activity.setContentView(scroll);
-        if (input != null && !busy && !command.pending()) input.requestFocus();
+        if (input != null && !busy && !command.pending()) {
+            // FIX: scroll/focus after layout, including transition from barcode to the replacement KIZ field.
+            EditText next = input;
+            next.requestFocus();
+            next.post(() -> {
+                if (active() && input == next && !busy && !command.pending() && !confirming) {
+                    next.requestFocus();
+                    next.requestRectangleOnScreen(new android.graphics.Rect(0, 0, next.getWidth(), next.getHeight()));
+                }
+            });
+        }
     }
     public void submit() {
-        if (busy || confirming || command.pending() || input == null) return;
+        autoSubmit.cancel(); // FIX: Enter/button and automatic submission share one scan, never two.
+        if (closed || busy || confirming || command.pending() || input == null) return;
         if (palletInput != null) {
             pallet = palletInput.getText().toString().trim();
             if (palletInput.hasFocus()) { input.requestFocus(); return; }
