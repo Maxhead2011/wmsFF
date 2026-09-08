@@ -10,6 +10,7 @@ function fixture() {
   service.previewInTx = vi.fn().mockResolvedValue({ fingerprint: 'fresh', quantity: 2, boxes: [] });
   service.archiveSources = vi.fn();
   service.audit = vi.fn();
+  service.resetAffectedRoutes = vi.fn();
   return { service, state: state(), tx: {}, user: { id: 'admin' } };
 }
 it('rejects stale write-off consent without changing stock', async () => {

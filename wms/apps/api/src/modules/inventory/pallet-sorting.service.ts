@@ -92,6 +92,11 @@ export class PalletSortingService {
       const state: PalletSortingState = { id: dto.id, clientId, warehouseId: user.activeWarehouseId!, sourceCode: code,
         sourcePalletId: pallet?.id ?? null, stage: 'CHECKING', version: 1, targets: [], moves: [], pendingRoutes: [], problemSources,
         sources: sources.map(b => ({ id: b.id, code: b.code, scanned: !pallet, archived: false, placementId: b.storagePlacement?.palletId ?? null })) };
+      // FIX: a directly scanned box has already been physically confirmed.
+      if (!pallet) {
+        await this.assertMovementAllowed(tx, [box!.id]);
+        await this.resetAffectedRoutes(tx, state, [box!.id], user);
+      }
       await tx.$executeRaw(Prisma.sql`INSERT INTO "PalletSortingSession" ("id", "warehouseId", "clientId", "createdByUserId", "state")
         VALUES (${dto.id}, ${state.warehouseId}, ${clientId}, ${user.id}, ${JSON.stringify(state)}::jsonb)`);
       await this.audit(tx, state, user, 'STARTED', { code });
@@ -140,7 +145,11 @@ export class PalletSortingService {
       if (state.stage !== 'CHECKING') throw new ConflictException('Сверка исходных коробов уже завершена.');
       const code = await this.boxCodes.normalize(dto.code ?? '');
       const box = state.sources.find(b => b.code === code && !b.archived && !b.preservedOnPallet);
-      if (box) box.scanned = true;
+      if (box) {
+        box.scanned = true;
+        // FIX: release logical routes before the first unit scan.
+        await this.resetAffectedRoutes(tx, state, [box.id], user);
+      }
       else await this.includeScannedSource(tx, state, code, user);
     } else if (dto.action === 'BEGIN_FORMING') {
       if (state.stage !== 'CHECKING' || state.sources.some(b => !b.archived && !b.preservedOnPallet && !b.scanned)) throw new ConflictException('Сначала отсканируйте все исходные короба или подтвердите обработку отсутствующих.');
@@ -180,6 +189,7 @@ export class PalletSortingService {
     await this.assertUnclaimed(tx, [box.id], state.id, state.warehouseId);
     await this.assertMovementAllowed(tx, [box.id]);
     state.sources.push({ id: box.id, code: box.code, scanned: true, archived: false, placementId: state.sourcePalletId });
+    await this.resetAffectedRoutes(tx, state, [box.id], user);
     state.problemSources = (state.problemSources ?? []).filter(b => b.code !== code);
     await this.audit(tx, state, user, 'LATE_SOURCE_SCANNED', { boxId: box.id, code, palletId: state.sourcePalletId });
   }
@@ -272,12 +282,15 @@ export class PalletSortingService {
       source = state.sources.find(b => b.id === ids[0]);
     }
     if (!source) throw new ConflictException('Исходный короб не найден.');
+    // FIX: existing FORMING sessions also release logical routes before transfer.
+    await this.resetAffectedRoutes(tx, state, [source.id], user);
     const moved = await this.stock.transferSortingUnit(tx, { fromBoxCode: source.code, toBoxCode: target.code, barcode,
       kiz: mark?.value ?? (dto.kiz ?? '').replace(/<GS>/gi, '\u001d').trim(), idempotencyKey: `sorting:${state.id}:${hash(identity)}`, sessionId: state.id }, user);
     state.moves.push({ identity, barcode, sourceBoxId: source.id, targetBoxId: target.id });
     target.quantity++;
     await this.resetAffectedRoutes(tx, state, [source.id], user, moved.skuId);
-    await this.audit(tx, state, user, 'UNIT_MOVED', { sourceBoxId: source.id, targetBoxId: target.id, barcode, identity });
+    await this.audit(tx, state, user, 'UNIT_MOVED', { sourceBoxId: source.id, targetBoxId: target.id, barcode, identity,
+      ignoredSettledTaskIds: moved.sortingSettledTaskIds ?? [] });
   }
 
   async preview(id: string, kind: 'missing' | 'remaining', user: AuthUser) {

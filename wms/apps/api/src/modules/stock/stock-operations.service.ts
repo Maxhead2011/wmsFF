@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { createHash, randomUUID } from 'node:crypto';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import { assertSortingAdmin, sortingKizIdentity } from '../inventory/pallet-sorting-policy';
+import { sortingSettledBoxTaskIds } from './sorting-settled-box-tasks';
 import * as XLSX from 'xlsx';
 import {
   BillingChargeSource,
@@ -101,6 +102,7 @@ type TsdTransferScannedItem = {
   // FIX: cancellation authorizes physical relocation only, not resale or history deletion.
   cancelledWbTransfer?: CancelledWbTransferProof;
   cancelledBoxTasks?: CancelledBoxTaskProof;
+  sortingSettledTaskIds?: string[];
   // FIX: inspection only proposes reconciliation; execution commits it with the movement.
   reconciledMark?: {
     previousSkuId: string;
@@ -823,6 +825,8 @@ export class StockOperationsService {
     fromBoxCode: string; toBoxCode: string; barcode: string; kiz: string;
     idempotencyKey: string; sessionId: string;
   }, user: AuthUser) {
+    // FIX: the historical-task exception is exclusive to enabled ADMIN sorting.
+    assertSortingAdmin(user);
     const source = await this.loadTsdTransferSourceBox(tx, input.fromBoxCode, user);
     const target = await tx.box.findUnique({ where: { code: input.toBoxCode } });
     if (!target || target.id === source.id || target.clientId !== source.clientId ||
@@ -831,7 +835,7 @@ export class StockOperationsService {
     }
     const item = await this.resolveStorageBoxTransferItem(tx, source, {
       barcode: input.barcode, scanCode: input.kiz,
-    }, true);
+    }, true, undefined, true);
     if (item.reconciledMark || item.cancelledWbTransfer || !item.productMarkId && !item.registerMissingMark) {
       throw new BadRequestException('КИЗ не подтверждён в исходном составе сортировки. Сначала проверьте его привязку.');
     }
@@ -854,7 +858,8 @@ export class StockOperationsService {
         boxId: target.id, value: item.scanCode, status: StockStatus.AVAILABLE,
         stockMovementId: inbound.id, sourceDocument: `PALLET_SORTING:${input.sessionId}` } });
     }
-    return { sourceBoxId: source.id, targetBoxId: target.id, skuId: item.sku.id, movementId: inbound.id };
+    return { sourceBoxId: source.id, targetBoxId: target.id, skuId: item.sku.id, movementId: inbound.id,
+      sortingSettledTaskIds: item.sortingSettledTaskIds ?? [] };
   }
 
   // FIX: only admin sorting may account for a physical unit missing from source stock.
@@ -4634,6 +4639,7 @@ export class StockOperationsService {
     payload: Record<string, unknown>,
     complete: boolean,
     prepared?: { mark?: CancelledWbTransferProof; tasks?: CancelledBoxTaskProof },
+    sorting = false,
   ): Promise<TsdTransferScannedItem> {
     const scanCode = requiredTsdTransferText(payload.scanCode, 'Отсканируйте товар.');
     const hasBarcode = typeof payload.barcode === 'string' && payload.barcode.trim().length > 0;
@@ -4666,7 +4672,7 @@ export class StockOperationsService {
         await validateCancelledBoxTaskTransfer(db, prepared.tasks, { source: sourceBox, skuId: product.sku.id,
           availableQuantity: product.availableQuantity, scanCode }, storageBoxTransferKizIdentity);
       }
-      return this.resolveStorageBoxTransferMark(db, sourceBox, product, scanCode, true, prepared?.tasks);
+      return this.resolveStorageBoxTransferMark(db, sourceBox, product, scanCode, true, prepared?.tasks, sorting);
     }
     const item = await this.resolveTsdTransferScannedItem(db, sourceBox, scanCode);
     if (item.sku.id !== product.sku.id) {
@@ -4686,6 +4692,7 @@ export class StockOperationsService {
     scanCode: string,
     allowRegistration = false,
     cancelledBoxTasks?: CancelledBoxTaskProof,
+    sorting = false,
   ): Promise<TsdTransferScannedItem> {
     const mark = await db.productMark.findFirst({
       where: { clientId: sourceBox.clientId, value: scanCode },
@@ -4697,7 +4704,7 @@ export class StockOperationsService {
       if (!allowRegistration) {
         throw new BadRequestException('КИЗ не найден у клиента. Отсканируйте полный КИЗ товара или передайте короб менеджеру.');
       }
-      return this.resolveUnregisteredStorageBoxTransferMark(db, sourceBox, product, scanCode, cancelledBoxTasks);
+      return this.resolveUnregisteredStorageBoxTransferMark(db, sourceBox, product, scanCode, cancelledBoxTasks, sorting);
     }
     if (mark.status !== StockStatus.AVAILABLE) {
       throw new BadRequestException('КИЗ недоступен для перемещения: товар зарезервирован или отгружен.');
@@ -4759,6 +4766,7 @@ export class StockOperationsService {
     product: TsdTransferScannedItem,
     scanCode: string,
     cancelledBoxTasks?: CancelledBoxTaskProof,
+    sorting = false,
   ): Promise<TsdTransferScannedItem> {
     const identity = storageBoxTransferKizIdentity(scanCode);
     if (!identity) {
@@ -4792,9 +4800,18 @@ export class StockOperationsService {
     const historyDb = (db as unknown as { fbsAssemblyAttemptHistory?: {
       findFirst(args: { where: { OR: Array<{ kiz: { startsWith: string } }> }; select: { id: true } }): Promise<{ id: string } | null>;
     } }).fbsAssemblyAttemptHistory;
-    if (historyEnabled && !historyDb) {
+    if ((historyEnabled || sorting) && !historyDb) {
       throw new BadRequestException('История предыдущих сборок недоступна. Регистрация КИЗ временно остановлена.');
     }
+    // FIX: own KIZ history remains blocking; only different, fully deducted tasks qualify.
+    const settledIds = sorting && !known
+      ? await sortingSettledBoxTaskIds(db, sourceBox, product.sku.id, scanCode, storageBoxTransferKizIdentity) : [];
+    const excludedTaskIds = [...(cancelledBoxTasks?.taskIds ?? []), ...settledIds];
+    // FIX: the sorting exception must also respect print-queue and circulation history.
+    const sortingHistory = sorting ? await Promise.all([
+      db.fbsPrintJob.findFirst({ where: { OR: prefixes.map(prefix => ({ kiz: { startsWith: prefix } })) }, select: { id: true } }),
+      db.kizCirculationItem.findFirst({ where: { OR: prefixes.map(prefix => ({ kizRaw: { startsWith: prefix } })) }, select: { id: true } }),
+    ]) : [];
     const [registered, assembly, shipped, printed, boxTask, archived] = await Promise.all([
       db.productMark.count({ where: { clientId: sourceBox.clientId, skuId: product.sku.id,
         boxId: sourceBox.id, status: StockStatus.AVAILABLE } }),
@@ -4803,7 +4820,7 @@ export class StockOperationsService {
       db.fbsWebKizStickerPrint.findFirst({ where: { OR: prefixes.map(prefix => ({ kiz: { startsWith: prefix } })) }, select: { id: true } }),
       db.fbsTsdAssembly.findFirst({ where: { clientId: sourceBox.clientId,
         // FIX: only server-verified cancelled RETURN_REQUIRED tasks; own KIZ histories remain blocking.
-        ...(cancelledBoxTasks ? { id: { notIn: cancelledBoxTasks.taskIds } } : {}),
+        ...(excludedTaskIds.length ? { id: { notIn: excludedTaskIds } } : {}),
         status: { in: ['IN_PROGRESS', 'RETURN_REQUIRED'] }, AND: [
           { OR: [{ skuId: product.sku.id }, { sourceSkuId: product.sku.id }] },
           { OR: [{ boxId: sourceBox.id }, { reservedBoxId: sourceBox.id }] },
@@ -4814,13 +4831,14 @@ export class StockOperationsService {
     if (!known && registered >= product.availableQuantity) {
       throw new BadRequestException(`В коробе ${sourceBox.code} все доступные единицы уже привязаны к КИЗам. Нужна проверка менеджера.`);
     }
-    if (assembly || shipped || printed || boxTask || archived) {
+    if (assembly || shipped || printed || boxTask || archived || sortingHistory.some(Boolean)) {
       throw new BadRequestException('КИЗ или товар связан со сборкой, отгрузкой или печатью этикетки. Нужна проверка менеджера.');
     }
     // FIX: alternate crypto/scanner forms must pass history checks before known-mark reuse.
     if (known) return this.resolveStorageBoxTransferMark(db, sourceBox, product, known.value, true);
     return { ...product, scanCode, scanType: 'KIZ', productMarkId: null,
-      requiresKizRegistration: false, registerMissingMark: true, cancelledBoxTasks };
+      requiresKizRegistration: false, registerMissingMark: true, cancelledBoxTasks,
+      ...(sorting ? { sortingSettledTaskIds: settledIds } : {}) };
   }
 
   private async resolveTsdTransferScannedItem(
