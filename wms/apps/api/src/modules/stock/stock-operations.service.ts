@@ -999,6 +999,28 @@ export class StockOperationsService {
         this.requireBalanceWarehouseId(initialSourceBox.warehouseId ?? user.activeWarehouseId);
       const normalizedKizScans = new Set<string>();
       const movedItems: ReturnType<typeof formatTsdTransferItem>[] = [];
+      // FIX: validate the complete batch against one source snapshot before creating a target or writing stock.
+      const requestedBySku = new Map<string, { quantity: number; available: number; name: string }>();
+      const preflightKiz = new Set<string>();
+      for (const scanCode of scanCodes) {
+        const item = await this.resolveTsdTransferScannedItem(tx, initialSourceBox, scanCode);
+        if (item.scanType === 'KIZ') {
+          const key = item.productMarkId ?? item.scanCode.toLocaleLowerCase('ru-RU');
+          if (preflightKiz.has(key)) throw new BadRequestException('КИЗ отсканирован в этом перемещении повторно. Перемещение не выполнено.');
+          preflightKiz.add(key);
+        }
+        const requested = requestedBySku.get(item.sku.id) ?? {
+          quantity: 0, available: item.availableQuantity,
+          name: [item.sku.article ?? item.sku.name, item.sku.size].filter(Boolean).join(' / '),
+        };
+        requested.quantity++;
+        requestedBySku.set(item.sku.id, requested);
+      }
+      for (const requested of requestedBySku.values()) {
+        if (requested.quantity > requested.available) throw new BadRequestException(
+          `Расхождение в коробе ${initialSourceBox.code}: ${requested.name} — отсканировано ${requested.quantity} ед., доступно ${requested.available} ед. в WMS. Весь пакет сохранён на ТСД, перемещение не выполнено. Требуется сверка фактического остатка и истории списаний.`,
+        );
+      }
       const targetBox = await this.ensureTargetBox(
         tx,
         initialSourceBox.clientId,
