@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#123d38"><meta name="description" content="LOGOFF Дурак: игра против компьютера в браузере и отдельная Windows-версия на Unreal Engine."><title>Дурак — LOGOFF Games</title><link rel="stylesheet" href="./web/style.css"><script type="module" src="./web/app.mjs"></script></head>
+<!-- Print faces share the same source artwork as the native client. -->
+<body>
+<header class="masthead"><a class="brand" href="./" aria-label="LOGOFF Games, главная">LOGOFF<span>GAMES</span></a><span class="edition">КАРТОЧНАЯ КОМНАТА</span><a href="#windows">Версия для Windows ↗</a></header>
+<main>
+<section class="lobby" id="lobby" aria-labelledby="title">
+  <div class="intro"><p class="eyebrow">36 КАРТ. ОДИН КОЗЫРЬ.</p><h1 id="title">Дурак<span>Ход за вами.</span></h1><p class="lead">Знакомые правила. Стол на двоих.<br>И ни одной лишней карты.</p>
+  <fieldset class="modes"><legend>Выберите правила</legend><label><input type="radio" name="mode" value="throw-in" checked><span>Подкидной</span></label><label><input type="radio" name="mode" value="transfer"><span>Переводной</span></label><label><input type="radio" name="mode" value="simple"><span>Простой</span></label></fieldset>
+  <button id="start" class="primary">Сесть за стол <span>↗</span></button><p class="caption">В браузере · против компьютера · без регистрации</p></div>
+  <div class="card-art" aria-hidden="true"><div class="orbit"></div><div class="royal-card jack"><img src="./web/cards/JD.svg" alt=""></div><div class="royal-card queen"><img src="./web/cards/QH.svg" alt=""></div><div class="seal">КОЗЫРЬ<br><strong>♥</strong><br>РЕШАЕТ</div></div>
+</section>
+<section id="game" class="game" hidden aria-label="Карточный стол">
+  <div class="game-head"><div><p class="eyebrow">ПАРТИЯ ПРОТИВ КОМПЬЮТЕРА</p><h2 id="mode-title">Подкидной</h2></div><button id="new-game" class="quiet">Новая партия</button></div>
+  <div class="table-wrap"><div class="table-felt">
+    <div class="opponent"><span id="opponent-label"></span><div id="opponent-hand" class="backs" aria-hidden="true"></div></div>
+    <aside class="deck-zone"><span>КОЗЫРЬ</span><div id="trump"></div><strong id="deck-count"></strong></aside>
+    <div class="center-zone"><p id="round"></p><div id="pairs" class="pairs"></div><p id="empty-table">Ваш карточный стол</p></div>
+    <aside class="discard-zone"><span>ОТБОЙ</span><strong id="discard-count">0</strong><span>карт</span></aside>
+  </div></div>
+  <div id="message" class="message" role="status" aria-live="polite"></div>
+  <div class="actions"><button id="take">Взять карты</button><button id="pass">Бито</button><button id="transfer" aria-pressed="false">Перевести</button><span id="hand-label"></span></div>
+  <div id="hand" class="hand" aria-label="Ваши карты"></div>
+  <p class="hint">Нажмите подсвеченную карту. При нескольких атаках сначала выберите карту на столе.</p>
+</section>
+<section class="windows" id="windows"><div class="windows-mark" aria-hidden="true">J <span>×</span> Q</div><div><p class="eyebrow">ДРУГОЙ МАСШТАБ ИГРЫ</p><h2>Карты становятся<br>настоящими бойцами.</h2><p>Windows-версия на Unreal Engine: валет, дама, король и туз выходят на арену. Детализированные модели, красный свет козыря и возврат к вашей партии после поединка. Постановка ударов ещё дорабатывается.</p><a id="download" class="primary download" hidden>Скачать для Windows ↗</a><p id="download-status" class="caption">Проверяем доступность Windows-сборки…</p><p class="caption">Браузерная версия использует лёгкую карточную графику, не Unreal. Онлайн-мультиплеер пока не подключён.</p></div></section>
+<details class="rules"><summary>Напомнить правила</summary><p>Колода — 36 карт. Старшая карта той же масти бьёт младшую. Козырь бьёт любую некозырную карту. Максимум за один отбой — 6 карт, но не больше, чем было у защищающегося в начале отбоя.</p><p>В подкидном можно добавить совпадающий номинал. В переводном можно передать атаку картой того же номинала, пока ни одна карта не побита и у следующего игрока хватает карт. В простом режиме подкидывания нет.</p><p>Если берёте карты, соперник может закончить подкидывание. Первым добирает атакующий, затем защищавшийся. Побеждает тот, кто первым избавится от карт после окончания колоды.</p></details>
+</main><footer><span>LOGOFF GAMES</span><span>Отдельная игра. Не использует данные ВМС.</span></footer>
+<dialog id="restart-dialog"><h2>Начать новую партию?</h2><p>Текущая раздача будет завершена.</p><form method="dialog"><button value="cancel">Продолжить игру</button><button value="restart" class="primary">Новая партия</button></form></dialog>
+<noscript>Для игры включите JavaScript в браузере.</noscript>
+</body></html>

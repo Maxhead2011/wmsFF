@@ -1,0 +1,8 @@
+/* FIX: printed faces, paper edge, satin highlights and contact shadows. */
+body .card{padding:0!important;background:#f7f4e9;border-radius:7px;box-shadow:0 1px #d4cdbb,0 2px #b1a58b,2px 6px 7px #0005;overflow:hidden}
+.card img{display:block;width:100%;height:100%;object-fit:fill;pointer-events:none}
+.card::after,.royal-card::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:linear-gradient(125deg,#fff2 0%,transparent 35%,#4335170c 100%);box-shadow:inset 0 0 0 1px #b0a08044,inset 0 -3px 5px #352d2112;mix-blend-mode:multiply}
+body .royal-card{border:0;padding:0;background:#f7f4e9;box-shadow:1px 1px #cec4ad,2px 3px #aa987b,10px 26px 35px #0009;overflow:hidden}
+.royal-card img{width:100%;height:100%;display:block}
+body .back{background-image:url('./cards/1B.svg');background-size:100% 100%;border:0}
+.card:disabled{opacity:.75!important;filter:saturate(.75)}

@@ -1,0 +1,13 @@
+node_modules/
+.vite/
+**/Binaries/
+**/Intermediate/
+**/Saved/
+**/DerivedDataCache/
+art/output/
+build/
+**/__pycache__/
+# Licensed third-party source assets are acquired through the user's Fab library.
+unreal/DurakArena/Content/ParagonKwang/
+unreal/DurakArena/Content/ParagonCountess/
+unreal/DurakArena/Content/Art/DuelReactions/
