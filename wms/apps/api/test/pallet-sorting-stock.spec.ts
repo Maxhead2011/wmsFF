@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { StockOperationsService } from '../src/modules/stock/stock-operations.service';
+afterEach(() => vi.unstubAllEnvs());
 
 describe('sorting unit movement', () => {
   function fixture() {
+    vi.stubEnv('WMS_PALLET_SORTING_ENABLED', 'true');
     const service = Object.create(StockOperationsService.prototype) as any;
     service.loadTsdTransferSourceBox = vi.fn().mockResolvedValue({ id: 'source', clientId: 'client', code: 'SOURCE', warehouseId: 'wh' });
     service.resolveStorageBoxTransferItem = vi.fn().mockResolvedValue({ productMarkId: 'mark', sku: { id: 'sku' }, scanCode: 'kiz' });
@@ -13,7 +15,7 @@ describe('sorting unit movement', () => {
       productMark: { updateMany: vi.fn().mockResolvedValue({ count: 1 }), create: vi.fn() },
     };
     const input = { fromBoxCode: 'SOURCE', toBoxCode: 'TARGET', barcode: 'barcode', kiz: 'kiz', idempotencyKey: 'op', sessionId: 'session' };
-    return { service, tx, input, user: { id: 'admin', activeWarehouseId: 'wh' } };
+    return { service, tx, input, user: { id: 'admin', activeWarehouseId: 'wh', roleCodes: ['ADMIN'] } };
   }
   it('uses the existing paired MOVE operation and moves the mark, without early archival', async () => {
     // TEST: no receipt, FBS shipment, or independent transaction is created by sorting.
