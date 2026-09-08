@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import { assertSortingAdmin, sortingKizIdentity } from '../inventory/pallet-sorting-policy';
 import { sortingSettledBoxTaskIds } from './sorting-settled-box-tasks';
+import { restoreWrittenOffSortingUnit, type WrittenOffSortingInput } from './sorting-written-off-recovery';
 import * as XLSX from 'xlsx';
 import {
   BillingChargeSource,
@@ -930,6 +931,13 @@ export class StockOperationsService {
     await tx.productMark.create({ data: { clientId: input.clientId, skuId: sku.id, boxId: target.id, value: input.kiz,
       status: StockStatus.AVAILABLE, stockMovementId: movement.id, sourceDocument: `PALLET_SORTING:${input.sessionId}` } });
     return { skuId: sku.id, movementId: movement.id };
+  }
+
+  // FIX: only the explicit admin sorting workflow can restore previously written-off identities.
+  async restoreWrittenOffSortingUnit(tx: Prisma.TransactionClient, input: WrittenOffSortingInput, user: AuthUser) {
+    assertSortingAdmin(user);
+    this.clientScopes.requireClientAccess(user, input.clientId, 'write');
+    return restoreWrittenOffSortingUnit(tx, input, user, balance => this.incrementTargetBalance(tx, balance));
   }
 
   async executeTsdTransferBatch(payload: Record<string, unknown>, user: AuthUser) {

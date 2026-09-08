@@ -17,4 +17,7 @@ export class PalletSortingActionDto {
   @IsOptional() @IsString() @MaxLength(300) kiz?: string;
   @IsOptional() @IsString() @MaxLength(64) fingerprint?: string;
   @IsOptional() @IsBoolean() confirmWriteOff?: boolean;
+  // ADDED: separate consent for a +1 found-unit receipt, not a shortage write-off.
+  @IsOptional() @IsBoolean() confirmRestore?: boolean;
+  @IsOptional() @IsString() @MaxLength(64) restoreFingerprint?: string;
 }

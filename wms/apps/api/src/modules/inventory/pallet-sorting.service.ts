@@ -20,7 +20,7 @@ export type PalletSortingState = {
   stage: 'CHECKING' | 'FORMING' | 'COMPLETED'; version: number;
   sources: Source[]; targets: Target[]; activeTargetId?: string | null;
   problemSources?: ProblemSource[];
-  moves: Array<{ identity: string; barcode: string; sourceBoxId: string | null; targetBoxId: string; sourceBoxCode?: string; recovered?: boolean; recoveryReason?: 'BOX_NOT_FOUND' | 'SKU_STOCK_MISSING';
+  moves: Array<{ identity: string; barcode: string; sourceBoxId: string | null; targetBoxId: string; sourceBoxCode?: string; recovered?: boolean; recoveryReason?: 'BOX_NOT_FOUND' | 'SKU_STOCK_MISSING' | 'WRITTEN_OFF_KIZ';
     sourceCorrection?: { physicalBoxId: string | null; physicalBoxCode: string | null; recordedBoxCode: string } }>;
   pendingRoutes: Array<{ requestId: string; taskIds: string[]; revision: number; error?: string }>;
 };
@@ -251,6 +251,17 @@ export class PalletSortingService {
     const marks = await tx.productMark.findMany({ where: { clientId: state.clientId, value: { startsWith: identity.replace(/[\\%_]/g, '\\$&') } }, take: 2 });
     if (marks.length > 1) throw new ConflictException('Найдено несколько записей одного КИЗ. Требуется разбор дубликата.');
     const mark = marks[0];
+    // FIX: a previously written-off identity is a confirmed +1 receipt, never an ordinary transfer.
+    if (mark?.status === 'BLOCKED') {
+      const restored = await this.stock.restoreWrittenOffSortingUnit(tx, { clientId: state.clientId, toBoxCode: target.code,
+        barcode, kiz: dto.kiz!, sessionId: state.id, version: state.version, confirmRestore: dto.confirmRestore,
+        restoreFingerprint: dto.restoreFingerprint, idempotencyKey: `sorting:${state.id}:${hash(identity)}` }, user);
+      state.moves.push({ identity, barcode, sourceBoxId: null, targetBoxId: target.id, recovered: true, recoveryReason: 'WRITTEN_OFF_KIZ' });
+      target.quantity++;
+      await this.audit(tx, state, user, 'UNIT_RECOVERED', { identity, barcode, targetBoxId: target.id, skuId: restored.skuId,
+        movementId: restored.movementId, quantity: 1, reason: 'WRITTEN_OFF_KIZ' });
+      return;
+    }
     let source = mark ? state.sources.find(b => b.id === mark.boxId && b.scanned && !b.archived && !b.preservedOnPallet) : undefined;
     // FIX: explicit physical source scan can reconcile an AVAILABLE KIZ recorded in another box.
     if (mark?.status === 'AVAILABLE' && (!source || code && source.code !== code)) {
