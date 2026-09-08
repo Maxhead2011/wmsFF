@@ -7,15 +7,14 @@ process.env.WMS_PALLET_SORTING_ENABLED='true';
 const {PrismaClient}=require('@prisma/client');
 const {PalletSortingService}=require('../dist/modules/inventory/pallet-sorting.service');
 const {StockOperationsService}=require('../dist/modules/stock/stock-operations.service');
-const {restoreWrittenOffSortingUnit}=require('../dist/modules/stock/sorting-written-off-recovery');
 const {StockBalancesService}=require('../dist/modules/stock/stock-balances.service');
 const {ClientScopeService}=require('../dist/modules/auth/client-scope.service');
 const {BoxCodePolicyService,DEFAULT_BOX_CODE_POLICY}=require('../dist/common/boxes/box-code-policy.service');
 const {ArchivedEmptyBoxPalletDetachService}=require('../dist/common/boxes/archived-empty-box-pallet-detach.service');
 const p=new PrismaClient(),scopes=new ClientScopeService(),policy=new BoxCodePolicyService({get:async()=>DEFAULT_BOX_CODE_POLICY});
 const stock=new StockOperationsService(p,scopes,new StockBalancesService(p,scopes),undefined,undefined,undefined,policy);
-// TEST: exercise the new isolated helper against the current production stock service adapter.
-stock.restoreWrittenOffSortingUnit=(tx,input,user)=>{scopes.requireClientAccess(user,input.clientId,'write');return restoreWrittenOffSortingUnit(tx,input,user,b=>stock.incrementTargetBalance(tx,b));};
+// TEST: use the candidate's real adapter, including ADMIN and client-scope checks.
+assert.equal(typeof stock.restoreWrittenOffSortingUnit,'function');
 const make=db=>new PalletSortingService(db,scopes,policy,stock,new ArchivedEmptyBoxPalletDetachService(p,policy),{});
 async function main(){
  assert.equal(await p.client.count(),0);
