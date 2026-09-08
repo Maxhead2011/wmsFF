@@ -253,14 +253,7 @@ export class PalletSortingService {
     const mark = marks[0];
     // FIX: a previously written-off identity is a confirmed +1 receipt, never an ordinary transfer.
     if (mark?.status === 'BLOCKED') {
-      const restored = await this.stock.restoreWrittenOffSortingUnit(tx, { clientId: state.clientId, toBoxCode: target.code,
-        barcode, kiz: dto.kiz!, sessionId: state.id, version: state.version, confirmRestore: dto.confirmRestore,
-        restoreFingerprint: dto.restoreFingerprint, idempotencyKey: `sorting:${state.id}:${hash(identity)}` }, user);
-      state.moves.push({ identity, barcode, sourceBoxId: null, targetBoxId: target.id, recovered: true, recoveryReason: 'WRITTEN_OFF_KIZ' });
-      target.quantity++;
-      await this.audit(tx, state, user, 'UNIT_RECOVERED', { identity, barcode, targetBoxId: target.id, skuId: restored.skuId,
-        movementId: restored.movementId, quantity: 1, reason: 'WRITTEN_OFF_KIZ' });
-      return;
+      return this.recoverWrittenOffUnit(tx, state, dto, user, target, identity);
     }
     let source = mark ? state.sources.find(b => b.id === mark.boxId && b.scanned && !b.archived && !b.preservedOnPallet) : undefined;
     // FIX: explicit physical source scan can reconcile an AVAILABLE KIZ recorded in another box.
@@ -317,6 +310,11 @@ export class PalletSortingService {
     // FIX: retain source concurrency/inventory protection after removing the unrelated blanket check.
     await this.assertUnclaimed(tx, [source.id], state.id, state.warehouseId);
     await this.assertMovementAllowed(tx, [source.id]);
+    // FIX: a scanned source in this session needs the same zero-stock recovery as an external source.
+    if (mark && !await tx.stockBalance.findFirst({ where: { boxId: source.id, skuId: mark.skuId, clientId: state.clientId,
+      warehouseId: state.warehouseId, status: 'AVAILABLE', quantity: { gt: 0 } }, select: { id: true } })) {
+      return this.recoverWrittenOffUnit(tx, state, dto, user, target, identity);
+    }
     // FIX: existing FORMING sessions also release logical routes before transfer.
     await this.resetAffectedRoutes(tx, state, [source.id], user);
     const moved = await this.stock.transferSortingUnit(tx, { fromBoxCode: source.code, toBoxCode: target.code, barcode,
@@ -349,7 +347,9 @@ export class PalletSortingService {
     const sku = await tx.sku.findFirst({ where: { id: mark.skuId, clientId: state.clientId, barcodes: { some: { value: dto.barcode!.trim() } } }, select: { id: true } });
     const balance = await tx.stockBalance.findFirst({ where: { boxId: recorded.id, skuId: mark.skuId, clientId: state.clientId,
       warehouseId: state.warehouseId, status: 'AVAILABLE', quantity: { gt: 0 } }, select: { quantity: true } });
-    if (!sku || !balance || balance.quantity < 1) throw new ConflictException('В учётном коробе нет доступной единицы с этим ШК. Повторный приход не выполнен.');
+    if (!sku) throw new ConflictException('ШК не соответствует товару этого КИЗа.');
+    // FIX: absence of balance is a discrepancy to confirm, not proof that the scanned unit was shipped.
+    if (!balance || balance.quantity < 1) return this.recoverWrittenOffUnit(tx, state, dto, user, target, identity);
     const gtin = identity.slice(2, 16), serial = identity.slice(18);
     const prefixes = [identity, `]d2${identity}`, `(01)${gtin}(21)${serial}`, `01${gtin}\u001d21${serial}`,
       `]d201${gtin}\u001d21${serial}`, `01${gtin}<GS>21${serial}`, `]d201${gtin}<GS>21${serial}`].map(p => p.replace(/[\\%_]/g, '\\$&'));
@@ -382,6 +382,19 @@ export class PalletSortingService {
 
   async preview(id: string, kind: 'missing' | 'remaining', user: AuthUser) {
     return this.prisma.$transaction(async tx => this.previewInTx(tx, await this.load(tx, id, user), kind), { isolationLevel: 'RepeatableRead', timeout: 30000 });
+  }
+
+  // FIX: keep the existing confirmation, idempotency and session accounting identical for both discrepancies.
+  private async recoverWrittenOffUnit(tx: Prisma.TransactionClient, state: PalletSortingState, dto: PalletSortingActionDto,
+    user: AuthUser, target: Target, identity: string) {
+    const barcode = dto.barcode!.trim();
+    const restored = await this.stock.restoreWrittenOffSortingUnit(tx, { clientId: state.clientId, toBoxCode: target.code,
+      barcode, kiz: dto.kiz!, sessionId: state.id, version: state.version, confirmRestore: dto.confirmRestore,
+      restoreFingerprint: dto.restoreFingerprint, idempotencyKey: `sorting:${state.id}:${hash(identity)}` }, user);
+    state.moves.push({ identity, barcode, sourceBoxId: null, targetBoxId: target.id, recovered: true, recoveryReason: 'WRITTEN_OFF_KIZ' });
+    target.quantity++;
+    await this.audit(tx, state, user, 'UNIT_RECOVERED', { identity, barcode, targetBoxId: target.id, skuId: restored.skuId,
+      movementId: restored.movementId, quantity: 1, reason: 'WRITTEN_OFF_KIZ' });
   }
 
   private async previewInTx(tx: Prisma.TransactionClient, state: PalletSortingState, kind: 'missing' | 'remaining') {
