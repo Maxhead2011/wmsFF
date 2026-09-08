@@ -49,7 +49,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     name: 'Администрирование',
     prefixes: ['/administration', '/administration/marketplace-stock-control'],
     // FIX: include the client stock-control list and update handlers.
-    routeCount: 37,
+    routeCount: 39, // ADDED: send/list TSD monitor messages.
     description: 'Диагностика WMS, технические работы, настройки, аудит, контроль внутренних API и включение/отключение отправки остатков на МП по клиентам.',
     logic: ['Собирает административные показатели и журнал действий.', 'Диагностирует заявки, паллет-сорты, короба, КИЗ и задания ТСД.', 'Разрешает только серверные, повторно проверяемые исправления.'],
     dependencies: ['Основная БД', 'Права system:admin'],
@@ -267,7 +267,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'tsd',
     name: 'ТСД',
     prefixes: ['/tsd'],
-    routeCount: 86, // FIX: 84 existing handlers plus opt-in KIZ recount preview/confirm.
+    routeCount: 87, // ADDED: 86 existing handlers plus explicit message read acknowledgement.
     description: 'Приёмка, размещение, сборка FBS, перемещения и синхронизация ТСД.',
     logic: ['Выдаёт следующее действие сборщику.', 'Проверяет паллет-сорт, короб, товар и КИЗ.', 'Фиксирует сканы, операции и восстановление сессий устройства.'],
     dependencies: ['Основная БД', 'Склад', 'JWT устройства'],

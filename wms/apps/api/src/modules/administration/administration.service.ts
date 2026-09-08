@@ -1,4 +1,5 @@
 import { appendFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
+import { TsdMonitorMessages } from '../tsd/tsd-monitor-messages';
 import {
   BadRequestException,
   ConflictException,
@@ -461,7 +462,7 @@ export class AdministrationService {
       this.prisma.tsdOperation.findMany({
         where: {
           createdAt: { gte: since },
-          operationType: { notIn: ['monitor_heartbeat', 'monitor_command'] },
+          operationType: { notIn: ['monitor_heartbeat', 'monitor_command', 'monitor_message'] },
         },
         orderBy: { createdAt: 'desc' },
         take: 1000,
@@ -835,6 +836,15 @@ export class AdministrationService {
           ? 'ТСД скачает и установит актуальную версию при ближайшем подключении.'
           : 'Команда перезагрузки заявки будет выполнена при ближайшем подключении ТСД.',
     };
+  }
+
+  // ADDED: message delivery never invokes workload/inventory commands.
+  sendTsdMessage(code: string, body: { text?: unknown; requestId?: unknown }, user: AuthUser) {
+    return new TsdMonitorMessages(this.prisma).send(code, body, user);
+  }
+
+  listTsdMessages(code: string, user: AuthUser) {
+    return new TsdMonitorMessages(this.prisma).list(code, user);
   }
 
   private async unlockTsdInventory(

@@ -49,6 +49,10 @@ public interface WmsApi {
         @Body Map<String, Object> request
     );
 
+    // ADDED: separate explicit read receipt; retries are idempotent.
+    @POST("api/v1/tsd/monitor/messages/{id}/read")
+    Call<Map<String, Object>> acknowledgeMonitorMessage(@Header("Authorization") String authorization, @Path("id") String id);
+
     @POST("api/v1/tsd/monitor/error")
     Call<Map<String, Object>> sendMonitorError(
         @Header("Authorization") String authorization,

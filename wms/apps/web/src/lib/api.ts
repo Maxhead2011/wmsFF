@@ -7444,6 +7444,15 @@ export async function sendTsdMonitorAction(
   );
 }
 
+// ADDED: explicit message/read receipt API, separate from administrative commands.
+export type TsdMonitorMessage = { id: string; text: string; senderName: string; recipientUserId: string; createdAt: string; readAt: string | null };
+export function fetchTsdMessages(accessToken: string, deviceCode: string) {
+  return request<{ supported: boolean; messages: TsdMonitorMessage[] }>(`/administration/tsd-monitor/devices/${encodeURIComponent(deviceCode)}/messages`, { accessToken });
+}
+export function sendTsdMessage(accessToken: string, deviceCode: string, text: string, requestId: string) {
+  return request<TsdMonitorMessage>(`/administration/tsd-monitor/devices/${encodeURIComponent(deviceCode)}/messages`, { method: 'POST', accessToken, body: { text, requestId } });
+}
+
 export async function fetchAdministrationFbsErrorRequests(accessToken: string) {
   return request<AdministrationFbsErrorRequest[]>('/administration/fbs-request-errors/requests', { accessToken });
 }

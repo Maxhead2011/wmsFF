@@ -220,6 +220,19 @@ export class AdministrationController {
     return this.administration.issueTsdMonitorAction(deviceCode, body.action, user);
   }
 
+  // ADDED: same monitoring owner scope, no client/demo access.
+  @RequirePermissions('system:admin')
+  @Get('tsd-monitor/devices/:deviceCode/messages')
+  tsdMessages(@Param('deviceCode') code: string, @CurrentUser() user: AuthUser) {
+    return this.administration.listTsdMessages(code, user);
+  }
+
+  @RequirePermissions('system:admin')
+  @Post('tsd-monitor/devices/:deviceCode/messages')
+  sendTsdMessage(@Param('deviceCode') code: string, @Body() body: { text?: unknown; requestId?: unknown }, @CurrentUser() user: AuthUser) {
+    return this.administration.sendTsdMessage(code, body, user);
+  }
+
   @Post('tsd-workloads/release')
   releaseTsdWorkload(
     @Body() body: { kind?: string; workloadId?: string; requestId?: string; deviceCode?: string },

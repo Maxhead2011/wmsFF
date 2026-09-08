@@ -262,6 +262,16 @@
   .tsd-picker-statistics__totals { justify-content: flex-start; }
 }
 
+/* ADDED: bounded accessible composer, independent of monitoring grid scroll. */
+.tsd-messages { box-sizing: border-box; width: min(640px, 94vw); max-height: 90vh; overflow: auto; border: 1px solid #ccc; border-radius: 14px; padding: 24px; color: #17202a; background: white; font-family: inherit; }
+.tsd-messages::backdrop { background: rgb(0 0 0 / 55%); }
+.tsd-messages textarea { display: block; width: 100%; box-sizing: border-box; margin: 8px 0; font: inherit; }
+.tsd-messages__buttons { display: flex; gap: 12px; margin: 16px 0; }
+.tsd-messages__buttons button { padding: 12px; }
+.tsd-messages__history article { border-top: 1px solid #ddd; padding: 12px 0; }
+.tsd-messages__history p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.tsd-messages__history strong { display: block; margin-top: 8px; }
+
 @media (max-width: 480px) {
   .tsd-monitor__summary { grid-template-columns: 1fr; }
   .tsd-monitor__summary > div { border-right: 0; border-bottom: 1px solid var(--monitor-line); }

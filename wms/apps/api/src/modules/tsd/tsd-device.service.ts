@@ -8,6 +8,7 @@ import { ClientScopeService } from '../auth/client-scope.service';
 import { PasswordService } from '../auth/password.service';
 import { CreateTsdDeviceDto } from './dto/create-tsd-device.dto';
 import { LoginTsdDeviceDto } from './dto/login-tsd-device.dto';
+import { TsdMonitorMessages } from './tsd-monitor-messages';
 
 const FBS_TSD_RESERVED_STATUS = 'RESERVED';
 const FBS_TSD_AUTO_RESERVATION_DEVICE = 'AUTO:FBS:PALLET_SORT';
@@ -90,6 +91,8 @@ export class TsdDeviceService {
     return {
       accepted: true,
       serverTime: new Date().toISOString(),
+      // ADDED: optional capability keeps old Android clients unchanged.
+      message: body.monitorMessages === true ? await new TsdMonitorMessages(this.prisma).next(deviceCode, user) : null,
       command: command
         ? {
             id: command.id,
@@ -122,6 +125,12 @@ export class TsdDeviceService {
       },
     });
     return { accepted: true, operationId: operation.id, serverTime: new Date().toISOString() };
+  }
+
+  // ADDED: acknowledgement is an independent, retry-safe action.
+  async acknowledgeMonitorMessage(id: string, user: AuthUser) {
+    await this.touchActiveDevice(user.deviceId);
+    return new TsdMonitorMessages(this.prisma).ack(id, user);
   }
 
   async attachMonitorErrorScreenshot(
@@ -637,6 +646,7 @@ export class TsdDeviceService {
 
 function monitorPayload(body: Record<string, unknown>, deviceCode: string, workerName: string, workerUserId: string) {
   return {
+    monitorMessages: body.monitorMessages === true,
     deviceCode,
     workerName,
     workerUserId,
