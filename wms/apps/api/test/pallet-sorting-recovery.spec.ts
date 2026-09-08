@@ -31,6 +31,7 @@ function fixture() {
   service.boxCodes = { normalize: vi.fn(async (s: string) => s.trim().toUpperCase()), requireAllowed: vi.fn(async (s: string) => s.trim().toUpperCase()) };
   service.scopes = { requireClientAccess: vi.fn() };
   service.audit = vi.fn(); service.assertUnclaimed = vi.fn(); service.resetAffectedRoutes = vi.fn();
+  service.assertMovementAllowed = vi.fn(); // TEST: source locks are now checked inside move, not only action.
   service.stock = { recoverSortingUnit: vi.fn().mockResolvedValue({ skuId: 'sku' }), transferSortingUnit: vi.fn().mockResolvedValue({ skuId: 'sku' }) };
   const tx: any = { $executeRaw: vi.fn(), $queryRaw: vi.fn().mockResolvedValue([]),
     box: { findUnique: vi.fn().mockResolvedValue(null), findMany: vi.fn().mockResolvedValue([]) },
@@ -109,6 +110,23 @@ it('keeps an already registered or shipped KIZ out of the recovery path', async 
   const f = forming(); f.tx.productMark.findMany.mockResolvedValue([{ id: 'mark', boxId: 'old', status: 'SHIPPING' }]);
   await expect(f.service.move(f.tx, f.state, { barcode: '4600000000001', kiz }, user)).rejects.toThrow();
   expect(f.service.stock.recoverSortingUnit).not.toHaveBeenCalled();
+});
+
+it.each([0, 2])('uses an explicit source outside the pallet checklist with %s available units', async quantity => {
+  // TEST: forming may use another pallet without silently appending its boxes to the final write-off.
+  const f = forming();
+  f.service.assertUnclaimed = vi.fn(); f.service.assertMovementAllowed = vi.fn(); f.service.resetAffectedRoutes = vi.fn();
+  const box = { id: 'external', code: 'EXTERNAL', clientId: 'client', warehouseId: 'wh', status: 'active', storagePlacement: { palletId: 'other-pallet' } };
+  f.tx.box.findUnique.mockResolvedValue(box);
+  f.tx.stockBalance.findMany.mockImplementation(async ({ where }: any) => quantity > 0 && where.boxId.in.includes('external') ? [{ boxId: 'external' }] : []);
+  await f.service.move(f.tx, f.state, { barcode: '4600000000001', kiz, sourceBoxCode: 'EXTERNAL' }, user);
+  expect(f.state.sources).toEqual([]);
+  if (quantity) {
+    expect(f.service.stock.transferSortingUnit).toHaveBeenCalledWith(f.tx, expect.objectContaining({ fromBoxCode: 'EXTERNAL' }), user);
+    expect(f.service.stock.recoverSortingUnit).not.toHaveBeenCalled();
+  } else {
+    expect(f.service.stock.recoverSortingUnit).toHaveBeenCalledWith(f.tx, expect.objectContaining({ knownSource: { id: 'external', placementId: 'other-pallet' } }), user);
+  }
 });
 
 function stockFixture() {

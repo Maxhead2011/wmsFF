@@ -24,7 +24,7 @@ afterEach(() => vi.unstubAllEnvs());
 function fixture() {
   vi.stubEnv('WMS_PALLET_SORTING_ENABLED', 'true');
   const service: any = Object.create(PalletSortingService.prototype);
-  service.boxCodes = { normalize: async (s: string) => s.trim().toUpperCase() };
+  service.boxCodes = { normalize: async (s: string) => s.trim().toUpperCase(), requireAllowed: async (s: string) => s.trim().toUpperCase() };
   service.scopes = { requireClientAccess: vi.fn() };
   service.assertUnclaimed = vi.fn(); service.assertMovementAllowed = vi.fn(); service.resetAffectedRoutes = vi.fn(); service.audit = vi.fn();
   const physical: any = { id: 'physical', code: 'FFL_LKB2107_44', scanned: true, archived: false, placementId: 'pallet' };
@@ -33,6 +33,7 @@ function fixture() {
   const marks: any[] = identities.map((value, i) => ({ id: `mark${i}`, value, status: 'AVAILABLE', boxId: 'recorded', skuId: 'sku', clientId: 'client' }));
   let quantity = 2;
   const tx: any = {
+    $executeRaw: vi.fn(),
     box: { findUnique: vi.fn(async ({ where }: any) => where.id === 'recorded' ? recorded : where.id === 'physical' ? physicalBox : null) },
     productMark: { findMany: vi.fn(async ({ where }: any) => {
       if (where.value) return marks.filter(m => m.value === where.value.startsWith.replace(/\\([%_\\])/g, '$1'));
@@ -71,7 +72,7 @@ it('a repeated KIZ does not debit either box twice', async () => {
   const f = fixture(); await f.service.move(f.tx, f.state, f.dto, user); await f.service.move(f.tx, f.state, f.dto, user);
   expect(f.quantity()).toBe(1); expect(f.service.stock.transferSortingUnit).toHaveBeenCalledTimes(1);
 });
-it.each(['unscanned', 'archived', 'preserved', 'no-physical-code', 'foreign-client', 'foreign-warehouse', 'inactive-recorded', 'target-recorded', 'packing-mark', 'zero-stock', 'wrong-barcode', 'physical-moved'])('rejects unsafe correction: %s', async kind => {
+it.each(['foreign-client', 'foreign-warehouse', 'inactive-recorded', 'target-recorded', 'packing-mark', 'zero-stock', 'wrong-barcode'])('rejects unsafe correction: %s', async kind => {
   // TEST: physical source confirmation never authorizes arbitrary stock or history replacement.
   const f = fixture();
   if (kind === 'unscanned') f.physical.scanned = false;
@@ -104,7 +105,7 @@ it.each(['operator', 'disabled'])('correction is not accessible to %s', async ki
   await expect(f.service.move(f.tx, f.state, f.dto, { ...user, roleCodes: kind === 'operator' ? ['OPERATOR'] : ['ADMIN'] })).rejects.toThrow();
   expect(f.service.stock.transferSortingUnit).not.toHaveBeenCalled();
 });
-it.each(['missing-box-link', 'closed-source', 'duplicate', 'mark-moved', 'mark-status-changed', 'mark-sku-changed', 'scope-denied', 'recorded-missing', 'actual-missing'])('handles invalid or changed evidence: %s', async kind => {
+it.each(['missing-box-link', 'duplicate', 'mark-moved', 'mark-status-changed', 'mark-sku-changed', 'scope-denied', 'recorded-missing'])('handles invalid or changed evidence: %s', async kind => {
   // TEST: re-read ownership after acquiring the extra source-box locks.
   const f = fixture();
   if (kind === 'missing-box-link') f.marks[0].boxId = null;
@@ -134,4 +135,39 @@ it('propagates a transfer race before writing the session result', async () => {
   const f = fixture(); f.service.stock.transferSortingUnit.mockRejectedValue(new Error('CONCURRENT_STOCK_CHANGE'));
   await expect(f.service.move(f.tx, f.state, f.dto, user)).rejects.toThrow('CONCURRENT_STOCK_CHANGE');
   expect(f.state.moves).toEqual([]); expect(f.state.targets[0].quantity).toBe(3); expect(f.service.audit).not.toHaveBeenCalled();
+});
+
+it.each(['no-code', 'unknown-code', 'unscanned', 'archived-snapshot', 'preserved-snapshot', 'moved-pallet', 'missing-physical-box', 'old-recorded-snapshot'])('accepts an available KIZ without a source manifest prerequisite: %s', async kind => {
+  // TEST: physical SKU + KIZ selects the accounting source, not an obsolete pallet checklist.
+  const f = fixture();
+  if (kind === 'no-code') f.dto.sourceBoxCode = '';
+  if (kind === 'unknown-code') f.dto.sourceBoxCode = 'FFL_LKB0207_49';
+  if (kind === 'unscanned') f.physical.scanned = false;
+  if (kind === 'archived-snapshot') f.physical.archived = true;
+  if (kind === 'preserved-snapshot') f.physical.preservedOnPallet = true;
+  if (kind === 'moved-pallet') f.physicalBox.storagePlacement.palletId = 'other';
+  if (kind === 'missing-physical-box') f.tx.box.findUnique.mockImplementation(async ({ where }: any) => where.id === 'recorded' ? f.recorded : null);
+  if (kind === 'old-recorded-snapshot') f.state.sources.push({ id: 'recorded', code: f.recorded.code, archived: true });
+  const before = structuredClone(f.state.sources);
+  await f.service.move(f.tx, f.state, f.dto, user);
+  await f.service.move(f.tx, f.state, f.dto, user);
+  expect(f.quantity()).toBe(1);
+  expect(f.service.stock.transferSortingUnit).toHaveBeenCalledTimes(1);
+  expect(f.service.stock.recoverSortingUnit).not.toHaveBeenCalled();
+  expect(f.state.sources).toEqual(before); // never add an external box to the write-off list
+  expect(f.state.moves[0].sourceBoxId).toBe('recorded');
+});
+
+it.each(['MOVE', 'OPEN_TARGET', 'CLOSE_TARGET'])('does not lock unrelated source boxes during %s', async action => {
+  // TEST: an unrelated original box may have an inventory lock; only this operation's boxes matter.
+  const f = fixture();
+  f.service.load = vi.fn().mockResolvedValue(f.state);
+  f.service.save = vi.fn(); f.service.runAction = vi.fn();
+  f.tx.auditLog = { findUnique: vi.fn().mockResolvedValue(null), create: vi.fn() };
+  f.service.prisma = { $transaction: async (job: any) => job(f.tx) };
+  f.service.assertMovementAllowed.mockImplementation(async (_tx: any, ids: string[]) => {
+    if (ids.includes('physical')) throw new Error('UNRELATED_SOURCE_LOCK');
+  });
+  await f.service.action('session', { action, operationId: 'op', version: 104 }, user);
+  expect(f.service.runAction).toHaveBeenCalledTimes(1);
 });

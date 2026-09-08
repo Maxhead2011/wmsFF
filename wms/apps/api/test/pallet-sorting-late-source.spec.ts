@@ -26,27 +26,30 @@ function fixture() {
   const service: any = Object.create(PalletSortingService.prototype);
   service.boxCodes = { normalize: async (s: string) => s.trim().toUpperCase(), requireAllowed: async (s: string) => s.trim().toUpperCase() };
   service.audit = vi.fn(); service.assertUnclaimed = vi.fn(); service.assertMovementAllowed = vi.fn(); service.resetAffectedRoutes = vi.fn();
+  service.scopes = { requireClientAccess: vi.fn() }; // TEST: recorded-source path checks client scope itself.
   service.stock = { transferSortingUnit: vi.fn().mockResolvedValue({ skuId: 'sku' }), recoverSortingUnit: vi.fn() };
   const box: any = { id: 'late', code, status: 'active', clientId: 'client', warehouseId: 'wh', storagePlacement: { palletId: 'pallet' } };
   const tx: any = { $executeRaw: vi.fn(), box: { findUnique: vi.fn(async () => box) }, productMark: { findMany: vi.fn(async () => []) },
-    stockBalance: { findMany: vi.fn(async ({ where }: any) => where.boxId.in.includes('late') ? [{ boxId: 'late' }] : []) } };
+    stockBalance: { findMany: vi.fn(async ({ where }: any) => where.boxId.in.includes('late') ? [{ boxId: 'late' }] : []), findFirst: vi.fn(async () => ({ quantity: 1 })) },
+    sku: { findFirst: vi.fn(async () => ({ id: 'sku' })) } };
+  for (const table of ['fbsTsdAssembly', 'shippedKizHistory', 'fbsWebKizStickerPrint', 'fbsAssemblyAttemptHistory', 'fbsPrintJob', 'kizCirculationItem']) tx[table] = { findFirst: vi.fn(async () => null) };
   const state: any = { id: 'session', sourcePalletId: 'pallet', sourceCode: 'PALET_SORT_03', clientId: 'client', warehouseId: 'wh',
     stage: 'FORMING', version: 5, sources: [{ id: 'old', code: 'FFL_OLD', scanned: true, archived: false }],
     targets: [{ id: 'target', code: 'FFL_TARGET', quantity: 0, closed: false }], activeTargetId: 'target', moves: [], pendingRoutes: [] };
   const dto = { barcode, kiz, sourceBoxCode: code };
   return { service, box, tx, state, dto };
 }
-it('includes the physically scanned late box on the same pallet and transfers without surplus', async () => {
-  // TEST: real incident — current pallet contains a box absent from the session snapshot.
+it('uses the physically scanned late box without adding it to the write-off manifest', async () => {
+  // TEST: MOVE records the actual source but does not silently extend the final archive checklist.
   const f = fixture();
   await f.service.move(f.tx, f.state, f.dto, user);
-  expect(f.state.sources).toContainEqual(expect.objectContaining({ id: 'late', scanned: true, placementId: 'pallet' }));
+  expect(f.state.sources).not.toContainEqual(expect.objectContaining({ id: 'late' }));
   expect(f.service.stock.transferSortingUnit).toHaveBeenCalledWith(f.tx, expect.objectContaining({ fromBoxCode: code, toBoxCode: 'FFL_TARGET' }), user);
   expect(f.service.stock.recoverSortingUnit).not.toHaveBeenCalled();
   expect(f.service.assertUnclaimed).toHaveBeenCalled(); expect(f.service.assertMovementAllowed).toHaveBeenCalled();
   await f.service.move(f.tx, f.state, f.dto, user);
   expect(f.service.stock.transferSortingUnit).toHaveBeenCalledTimes(1);
-  expect(f.state.sources.filter((s: any) => s.id === 'late')).toHaveLength(1);
+  expect(f.state.sources.filter((s: any) => s.id === 'late')).toHaveLength(0);
 });
 it('accepts the same late source at the initial physical box check', async () => {
   // TEST: no stock operation occurs merely because a source was scanned.
@@ -56,12 +59,12 @@ it('accepts the same late source at the initial physical box check', async () =>
   expect(f.service.stock.transferSortingUnit).not.toHaveBeenCalled();
 });
 it('accepts an AVAILABLE KIZ already attached to the late source', async () => {
-  const f = fixture(); f.tx.productMark.findMany.mockResolvedValue([{ boxId: 'late', status: 'AVAILABLE', value: kiz }]);
+  const f = fixture(); f.tx.productMark.findMany.mockResolvedValue([{ id: 'mark', clientId: 'client', skuId: 'sku', boxId: 'late', status: 'AVAILABLE', value: kiz }]);
   await f.service.move(f.tx, f.state, f.dto, user);
   expect(f.service.stock.transferSortingUnit).toHaveBeenCalledTimes(1);
 });
-it.each(['client', 'warehouse', 'pallet', 'detached', 'archived', 'single-box', 'target'])('rejects unsafe late source: %s', async kind => {
-  // TEST: absence from snapshot never grants cross-pallet/client access or target consumption.
+it.each(['client', 'warehouse', 'archived', 'target'])('rejects unsafe late source: %s', async kind => {
+  // TEST: free pallet choice does not grant access to another client/branch or target consumption.
   const f = fixture();
   if (kind === 'client') f.box.clientId = 'other';
   if (kind === 'warehouse') f.box.warehouseId = 'other';
@@ -94,17 +97,30 @@ it('recovers a physically scanned unit absent from the selected known box using 
   expect(f.state.problemSources ?? []).toEqual([]); // Known box is not falsely labelled BOX_NOT_FOUND.
   expect(f.service.stock.transferSortingUnit).not.toHaveBeenCalled();
 });
-it('does not consume a KIZ belonging to another source than the explicit scan', async () => {
-  const f = fixture(); f.tx.productMark.findMany.mockResolvedValue([{ boxId: 'old', status: 'AVAILABLE', value: kiz }]);
-  await expect(f.service.move(f.tx, f.state, f.dto, user)).rejects.toThrow();
-  expect(f.service.stock.transferSortingUnit).not.toHaveBeenCalled();
+it('uses the recorded source when an old physical hint names another box', async () => {
+  // TEST: a stale source field never overrides the KIZ accounting source or blocks the unit.
+  const f = fixture(); f.tx.productMark.findMany.mockResolvedValue([{ id: 'mark', clientId: 'client', skuId: 'sku', boxId: 'late', status: 'AVAILABLE', value: kiz }]);
+  await f.service.move(f.tx, f.state, { ...f.dto, sourceBoxCode: 'FFL_OLD' }, user);
+  expect(f.service.stock.transferSortingUnit).toHaveBeenCalledWith(f.tx, expect.objectContaining({ fromBoxCode: code }), user);
 });
-it.each(['unscanned', 'archived', 'preserved'])('does not recover from an ineligible manifest source: %s', async kind => {
-  // TEST: the fallback does not reopen archived/preserved boxes or confirm them implicitly.
+it.each(['unscanned', 'archived', 'preserved'])('uses current active source data despite an outdated manifest flag: %s', async kind => {
+  // TEST: current DB remains active; reading a stale session flag must not block physical recovery.
   const f = fixture(); f.tx.stockBalance.findMany.mockResolvedValue([]);
+  f.service.stock.recoverSortingUnit.mockResolvedValue({ skuId: 'sku' });
   f.state.sources.push({ id: 'late', code, scanned: kind !== 'unscanned', archived: kind === 'archived', preservedOnPallet: kind === 'preserved', placementId: 'pallet' });
-  await expect(f.service.move(f.tx, f.state, f.dto, user)).rejects.toThrow('подтверждённый');
-  expect(f.service.stock.recoverSortingUnit).not.toHaveBeenCalled();
+  const before = structuredClone(f.state.sources);
+  await f.service.move(f.tx, f.state, f.dto, user);
+  expect(f.service.stock.recoverSortingUnit).toHaveBeenCalledTimes(1);
+  expect(f.state.sources).toEqual(before);
+});
+it.each(['other-pallet', 'detached', 'single-box'])('allows source choice while forming: %s', async kind => {
+  // TEST: pallet membership is not an eligibility condition for a physical unit.
+  const f = fixture();
+  if (kind === 'other-pallet') f.box.storagePlacement.palletId = 'different';
+  if (kind === 'detached') f.box.storagePlacement = null;
+  if (kind === 'single-box') f.state.sourcePalletId = null;
+  await f.service.move(f.tx, f.state, f.dto, user);
+  expect(f.service.stock.transferSortingUnit).toHaveBeenCalledTimes(1);
 });
 it('does not guess a known zero-stock source without an explicit source scan', async () => {
   // TEST: physical origin must be supplied, even if the manifest has only one source.
