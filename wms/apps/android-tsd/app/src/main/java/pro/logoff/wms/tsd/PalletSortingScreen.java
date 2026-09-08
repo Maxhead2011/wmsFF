@@ -37,6 +37,7 @@ public final class PalletSortingScreen {
     private final Runnable back;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final PalletSortingCommand command = new PalletSortingCommand();
+    private final PalletSortingRestoreConsent restoreConsent = new PalletSortingRestoreConsent(); // ADDED
     // FIX: local to this LOGOFF-only screen; other scanner workflows are unchanged.
     private final Handler scanHandler = new Handler(Looper.getMainLooper());
     private final PalletSortingAutoSubmit autoSubmit = new PalletSortingAutoSubmit(new PalletSortingAutoSubmit.Scheduler() {
@@ -55,8 +56,8 @@ public final class PalletSortingScreen {
         this.activity = activity; this.session = session; this.api = api; this.back = back;
         render(); loadList();
     }
-    public boolean canLeave() { return !busy && !command.pending() && barcode.isEmpty() && !confirming; }
-    public void close() { closed = true; autoSubmit.cancel(); executor.shutdown(); }
+    public boolean canLeave() { return !busy && !command.pending() && !restoreConsent.pending() && barcode.isEmpty() && !confirming; }
+    public void close() { closed = true; restoreConsent.clear(); autoSubmit.cancel(); executor.shutdown(); }
     public EditText scannerField() {
         View focused = activity.getCurrentFocus();
         return focused instanceof EditText ? (EditText) focused : input;
@@ -182,16 +183,22 @@ public final class PalletSortingScreen {
         work(() -> {
             Response<Map<String, Object>> response = api.postPalletSorting(session.authorizationHeader(), BASE + path, body).execute();
             if (!response.isSuccessful() || response.body() == null) {
+                // FIX: read the body once. A confirmation challenge is not an automatic stock mutation.
+                String failureBody = response.errorBody() == null ? "" : response.errorBody().string();
                 if (response.code() >= 400 && response.code() < 500) {
                     command.confirmed();
                     if (state != null) state = require(api.getPalletSorting(session.authorizationHeader(), BASE + "/" + text(state, "id")).execute());
                 } else command.uncertain();
-                throw new IOException(error(response));
+                try {
+                    JSONObject failure = new JSONObject(failureBody);
+                    if (response.code() == 409 && restoreConsent.offer(failure.optString("code"), failure.optString("fingerprint"), failure.optString("message"), body)) return;
+                    throw new IOException(failure.optString("message", "Ошибка " + response.code()));
+                } catch (org.json.JSONException invalid) { throw new IOException("Ошибка сервера " + response.code() + ". Повторите проверку."); }
             }
             int before = state == null ? 0 : PalletSortingProblemFormatter.recovered(state);
             state = response.body(); command.confirmed(); barcode = "";
             message = PalletSortingProblemFormatter.recovered(state) > before
-                ? "Найденная единица учтена в целевом коробе. Исходный короб отмечен как проблемный."
+                ? "Найденная единица учтена в целевом коробе. История операции сохранена."
                 : "Действие сохранено.";
             if (!rows(state, "pendingRoutes").isEmpty()) state = require(api.postPalletSorting(session.authorizationHeader(), BASE + "/" + text(state, "id") + "/routes", new LinkedHashMap<>()).execute());
         });
@@ -243,8 +250,23 @@ public final class PalletSortingScreen {
         busy = true; message = ""; render();
         executor.execute(() -> {
             try { job.run(); } catch (Exception error) { message = error.getMessage() == null ? "Ошибка сети. Повторите запрос." : error.getMessage(); }
-            activity.runOnUiThread(() -> { busy = false; if (active()) render(); });
+            activity.runOnUiThread(() -> { busy = false; if (active()) { render(); showRestoreConsent(); } });
         });
+    }
+    // ADDED: touch-only confirmation; scanner Enter must never approve a +1 inventory adjustment.
+    private void showRestoreConsent() {
+        if (!active() || busy || confirming || !restoreConsent.pending()) return;
+        confirming = true; autoSubmit.cancel();
+        AlertDialog dialog = new AlertDialog.Builder(activity).setTitle("Найден ранее списанный товар")
+            .setMessage(restoreConsent.message()).setCancelable(false)
+            .setNegativeButton("Отмена", (d,w) -> { restoreConsent.clear(); message="Восстановление отменено. Остатки не изменены."; })
+            .setPositiveButton("Товар у меня — восстановить 1 шт.", (d,w) -> {
+                Map<String,Object> confirmed = restoreConsent.confirm(); confirming=false;
+                if (active() && confirmed != null) action("MOVE",confirmed);
+            }).create();
+        dialog.setOnKeyListener((d,key,event) -> true);
+        dialog.setOnDismissListener(d -> { confirming=false; if(active() && !busy) render(); });
+        dialog.show();
     }
     private void label(String text, int size) { TextView view = new TextView(activity); view.setText(text); view.setTextSize(size); view.setTextColor(Color.rgb(25, 35, 45)); view.setPadding(0, 8, 0, 8); root.addView(view); }
     private EditText field(String hint, String value) { EditText view = new EditText(activity); view.setHint(hint); view.setText(value); view.setSingleLine(true); view.setTextSize(20); view.setEnabled(!busy && !command.pending()); root.addView(view); return view; }
