@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shlex
 import time
+from windows_archive import validate_archive
 
 BASE='/var/www/logoff-durak'
 CONFIG='/etc/nginx/sites-available/wms.logoff.pro'
@@ -73,6 +74,8 @@ def main():
     if not files or not (site/'index.html').is_file(): raise ValueError('Site is incomplete')
     if release.get('windows'):
         archive=site/'downloads/LOGOFF-Durak-Windows.zip'
+        # FIX: refuse ZIPs hidden by Windows Explorer before connecting to production.
+        validate_archive(archive)
         if digest(archive)!=release['windows']['sha256']: raise ValueError('Windows archive hash mismatch')
     if args.publish and not re.fullmatch(r'https://github.com/Maxhead2011/wmsFF/pull/\d+',args.review):
         raise ValueError('A reviewed game PR URL is required')

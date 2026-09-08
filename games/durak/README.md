@@ -9,7 +9,11 @@ This section supersedes historical branch/publication notes below. Release branc
 - Browser artifact: `node web/build.mjs`. For the Windows download, pass a fresh
   output directory under `build/` and the real packaged ZIP as the second argument.
 - Windows: run `Package-Durak.ps1` in the asset-equipped development checkout,
-  smoke-test the standalone executable, then archive the complete Windows folder.
+  smoke-test the standalone executable, then run
+  `python deploy/windows_archive.py <cooked-client-folder> <new-output.zip>`.
+  Do not use `tar ... .`: its `./` ZIP root is hidden by Windows Explorer, even
+  when CRC and SHA-256 checks pass. Test the archive with Windows Shell and
+  `Expand-Archive`, and repeat against the actual public download.
   An Unreal Editor executable is not a distributable client.
 - `python deploy/test_publish.py` validates the isolated Nginx route and public-file
   allowlist. `python deploy/publish.py build/site` is a read-only deployment check.
