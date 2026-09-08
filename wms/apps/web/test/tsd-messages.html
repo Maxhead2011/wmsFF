@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body><div id="root"></div><script type="module">
+// TEST: local-only fixture, not imported into the production bundle.
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { TsdMessagesDialog } from '/src/components/monitoring/TsdMessagesDialog.tsx';
+import '/src/styles.css';
+import '/src/components/monitoring/tsd-monitoring.css';
+createRoot(document.getElementById('root')).render(React.createElement(TsdMessagesDialog, {
+  token: 'synthetic-test-token', deviceCode: 'TSD-TEST-ONE', name: 'Тестовый сборщик', onClose: () => document.querySelector('dialog').close(),
+}));
+</script></body></html>

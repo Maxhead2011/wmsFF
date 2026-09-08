@@ -288,6 +288,8 @@ public class MainActivity extends Activity {
     private int receiptFeedbackColor = 0;
     private Screen screen = Screen.MAIN;
     private AlertDialog activeErrorDialog;
+    // ADDED: LOGOFF-only messaging; no FFULHAB behavior change.
+    private MonitorMessageOverlay monitorMessageOverlay;
     private AlertDialog fbsGuidedScanDialog;
     private String fbsGuidedScanDialogKey = "";
     private Runnable fbsGuidedAutoSubmitTask;
@@ -369,6 +371,9 @@ public class MainActivity extends Activity {
             if (sessionStore.load() != null) {
                 loadClients(false);
             }
+            if ("logoff".equals(BuildConfig.FLAVOR)) {
+                monitorMessageOverlay = new MonitorMessageOverlay(this, this::safeSession, this::acknowledgeMonitorMessage);
+            }
             mainHandler.post(monitorHeartbeatTask);
         } catch (Throwable error) {
             renderFatalScreen(error);
@@ -377,6 +382,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (monitorMessageOverlay != null) monitorMessageOverlay.close();
         if (palletSortingScreen != null) palletSortingScreen.close();
         mainHandler.removeCallbacks(monitorHeartbeatTask);
         cancelOzonLabelAutoRefresh();
@@ -8064,6 +8070,8 @@ public class MainActivity extends Activity {
     private void clearSession() {
         clearMandatoryFbsAuditState();
         sessionStore.clear();
+        // FIX: dismiss the previous employee's message immediately on logout.
+        if (monitorMessageOverlay != null) monitorMessageOverlay.sessionChanged();
         resetReceiptState();
         clients.clear();
         refreshClientOptions();
@@ -8151,6 +8159,7 @@ public class MainActivity extends Activity {
     }
 
     private void sendMonitorHeartbeat() {
+        if (monitorMessageOverlay != null) monitorMessageOverlay.sessionChanged();
         TsdSession session = safeSession();
         if (session == null || monitorExecutor.isShutdown()) return;
         Map<String, Object> payload = buildMonitorPayload();
@@ -8160,6 +8169,14 @@ public class MainActivity extends Activity {
                     .sendMonitorHeartbeat(session.authorizationHeader(), payload)
                     .execute();
                 Map<String, Object> body = response.body();
+                // ADDED: render only for the same authenticated employee who polled.
+                if (response.isSuccessful() && body != null && body.get("message") instanceof Map) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> message = (Map<String, Object>) body.get("message");
+                    mainHandler.post(() -> {
+                        if (monitorMessageOverlay != null) monitorMessageOverlay.offer(message, session);
+                    });
+                }
                 if (response.isSuccessful() && body != null && body.get("command") instanceof Map) {
                     @SuppressWarnings("unchecked")
                     Map<String, Object> command = (Map<String, Object>) body.get("command");
@@ -8199,6 +8216,21 @@ public class MainActivity extends Activity {
         } else {
             refreshCurrentScreen();
         }
+    }
+
+    // ADDED: independent executor keeps a read receipt out of the scan queue.
+    private void acknowledgeMonitorMessage(String id, TsdSession session, java.util.function.Consumer<Boolean> done) {
+        if (!session.hasSameAccessToken(safeSession()) || monitorExecutor.isShutdown()) { done.accept(false); return; }
+        monitorExecutor.execute(() -> {
+            boolean accepted = false;
+            try {
+                Response<Map<String, Object>> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                    .acknowledgeMonitorMessage(session.authorizationHeader(), id).execute();
+                accepted = response.isSuccessful() && response.body() != null && Boolean.TRUE.equals(response.body().get("accepted"));
+            } catch (Exception ignored) { }
+            final boolean result = accepted;
+            mainHandler.post(() -> done.accept(result));
+        });
     }
 
     private void unlockInventoryFromMonitor() {
@@ -8282,6 +8314,7 @@ public class MainActivity extends Activity {
 
     private Map<String, Object> buildMonitorPayload() {
         Map<String, Object> payload = new LinkedHashMap<>();
+        if ("logoff".equals(BuildConfig.FLAVOR)) payload.put("monitorMessages", true);
         TsdSession session = safeSession();
         if (session != null) {
             payload.put("deviceCode", session.deviceCode);

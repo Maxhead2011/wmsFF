@@ -23,8 +23,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 161 // FIX: deliver source-independent sorting and barcode-to-KIZ focus in LOGOFF only.
-            versionName = "0.1.162-sorting-scan"
+            versionCode = 162 // FIX: publish monitor messages/read receipts for LOGOFF only.
+            versionName = "0.1.163-messages"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

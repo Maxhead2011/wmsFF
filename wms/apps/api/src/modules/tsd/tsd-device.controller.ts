@@ -758,6 +758,14 @@ export class TsdDeviceController {
     return this.devices.recordMonitorError(body, user);
   }
 
+  // ADDED: only explicit OK on the recipient TSD records readAt.
+  @Post('monitor/messages/:id/read')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  acknowledgeMonitorMessage(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.devices.acknowledgeMonitorMessage(id, user);
+  }
+
   @Post('monitor/error/:id/screenshot')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')

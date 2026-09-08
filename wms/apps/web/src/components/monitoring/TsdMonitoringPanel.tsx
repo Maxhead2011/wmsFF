@@ -29,6 +29,7 @@ import {
   type TsdMonitoring,
 } from '../../lib/api';
 import './tsd-monitoring.css';
+import { TsdMessagesDialog } from './TsdMessagesDialog';
 
 type Props = { session: AuthSession };
 type Device = TsdMonitoring['devices'][number];
@@ -54,6 +55,7 @@ export function TsdMonitoringPanel({ session }: Props) {
   const [error, setError] = useState('');
   const [commandDevice, setCommandDevice] = useState('');
   const [notice, setNotice] = useState('');
+  const [messageDevice, setMessageDevice] = useState<Device | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all');
   const [errorDeviceCode, setErrorDeviceCode] = useState('');
@@ -273,6 +275,8 @@ export function TsdMonitoringPanel({ session }: Props) {
 
   return (
     <section className="tsd-monitor">
+      {/* ADDED: message composer is separate from destructive monitor commands. */}
+      {messageDevice ? <TsdMessagesDialog key={messageDevice.deviceCode} token={session.accessToken} deviceCode={messageDevice.deviceCode} name={messageDevice.user?.name || messageDevice.deviceName || messageDevice.deviceCode} onClose={() => setMessageDevice(null)} /> : null}
       <header className="tsd-monitor__header">
         <div>
           <h2>Мониторинг ТСД</h2>
@@ -321,6 +325,7 @@ export function TsdMonitoringPanel({ session }: Props) {
             onCommand={sendCommand}
             onDisconnectTask={disconnectCurrentTask}
             onOpenErrors={() => setErrorDeviceCode(device.deviceCode)}
+            onMessage={() => setMessageDevice(device)}
           />
         ))}
       </div>
@@ -520,6 +525,7 @@ function DeviceFeed({
   onCommand,
   onDisconnectTask,
   onOpenErrors,
+  onMessage,
 }: {
   device: Device;
   commandBusy: boolean;
@@ -527,6 +533,7 @@ function DeviceFeed({
   onCommand: (device: Device, action: MonitorAction) => void;
   onDisconnectTask: (device: Device) => void;
   onOpenErrors: () => void;
+  onMessage: () => void;
 }) {
   const current = device.workloads[0] ?? null;
   const state = device.liveState;
@@ -631,6 +638,7 @@ function DeviceFeed({
       </div>
 
       <div className="tsd-feed__controls">
+        <button type="button" onClick={onMessage}>Сообщение</button>
         <button
           type="button"
           className={`is-unlock${inventoryLocked ? ' is-active' : ''}`}
