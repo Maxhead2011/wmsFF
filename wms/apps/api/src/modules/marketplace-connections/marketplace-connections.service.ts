@@ -11154,27 +11154,50 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         relabelRequired: false,
         status: { in: [FBS_TSD_RESERVED_STATUS, FBS_TSD_WAITING_STOCK_STATUS, 'RELEASED'] },
       },
-      select: { requestId: true },
+      select: { requestId: true, connectionId: true, orderId: true },
     });
-    const requestIds = uniqueStrings(tasks.map((task) => task.requestId));
+    const taskRequestIds = uniqueStrings(tasks.map((task) => task.requestId));
+    // FIX: preserve the deployed active/shipped-link eligibility, but bound each
+    // query below Prisma's bind-variable limit (including its extra predicates).
+    const eligibleLinkKeys = new Set<string>();
+    for (const requestIdBatch of chunks(taskRequestIds, 1000)) {
+      const links = await this.prisma.fbsOrderRequestLink.findMany({
+        where: {
+          requestId: { in: requestIdBatch },
+          marketplace: MarketplaceType.WILDBERRIES,
+          syncStatus: FBS_REQUEST_LINK_ACTIVE,
+          lastCategory: { in: ['active', 'shipped'] },
+        },
+        select: { requestId: true, connectionId: true, orderId: true },
+      });
+      links.forEach((link) => eligibleLinkKeys.add(`${link.requestId}:${link.connectionId}:${link.orderId}`));
+    }
+    const eligibleTasks = tasks.filter((task) =>
+      eligibleLinkKeys.has(`${task.requestId}:${task.connectionId}:${task.orderId}`),
+    );
+    const requestIds = uniqueStrings(eligibleTasks.map((task) => task.requestId));
     const availableByRequest = new Map<string, number>();
-    tasks.forEach((task) => availableByRequest.set(task.requestId, (availableByRequest.get(task.requestId) ?? 0) + 1));
+    eligibleTasks.forEach((task) => availableByRequest.set(task.requestId, (availableByRequest.get(task.requestId) ?? 0) + 1));
     if (!requestIds.length) return { requests: [] };
-    const requests = await this.prisma.clientRequest.findMany({
-      where: {
-        id: { in: requestIds },
-        status: { notIn: [...FBS_REQUEST_CLOSED_STATUSES] },
-        ...(user.activeWarehouseId ? { warehouseId: user.activeWarehouseId } : {}),
-      },
-      select: {
-        id: true,
-        number: true,
-        title: true,
-        status: true,
-        client: { select: { id: true, code: true, name: true } },
-      },
-      orderBy: [{ number: 'desc' }, { createdAt: 'desc' }],
-    });
+    const requestSelect = {
+      id: true, number: true, title: true, status: true, createdAt: true,
+      client: { select: { id: true, code: true, name: true } },
+    } satisfies Prisma.ClientRequestSelect;
+    const requests: Array<Prisma.ClientRequestGetPayload<{ select: typeof requestSelect }>> = [];
+    // FIX: the second IN query also needs a bound; keep global, not per-batch, order.
+    for (const requestIdBatch of chunks(requestIds, 1000)) {
+      const batch = await this.prisma.clientRequest.findMany({
+        where: {
+          id: { in: requestIdBatch },
+          status: { notIn: [...FBS_REQUEST_CLOSED_STATUSES] },
+          ...(user.activeWarehouseId ? { warehouseId: user.activeWarehouseId } : {}),
+        },
+        select: requestSelect,
+        orderBy: [{ number: 'desc' }, { createdAt: 'desc' }],
+      });
+      requests.push(...batch);
+    }
+    requests.sort((a, b) => b.number - a.number || b.createdAt.getTime() - a.createdAt.getTime());
     return {
       requests: requests.map((request) => ({
         requestId: request.id,
