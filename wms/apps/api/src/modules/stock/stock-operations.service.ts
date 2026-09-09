@@ -4,6 +4,7 @@ import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt
 import { assertSortingAdmin, sortingKizIdentity } from '../inventory/pallet-sorting-policy';
 import { sortingSettledBoxTaskIds } from './sorting-settled-box-tasks';
 import { restoreWrittenOffSortingUnit, type WrittenOffSortingInput } from './sorting-written-off-recovery';
+import { receiveSkuCollectionSortingUnit } from './sorting-sku-collection-receipt';
 import * as XLSX from 'xlsx';
 import {
   BillingChargeSource,
@@ -939,6 +940,13 @@ export class StockOperationsService {
     assertSortingAdmin(user);
     this.clientScopes.requireClientAccess(user, input.clientId, 'write');
     return restoreWrittenOffSortingUnit(tx, input, user, balance => this.incrementTargetBalance(tx, balance), validateSource);
+  }
+
+  // FIX: restricted adapter; other transfer/receipt endpoints keep their current behaviour.
+  async receiveSkuCollectionSortingUnit(tx: Prisma.TransactionClient, input: WrittenOffSortingInput, user: AuthUser) {
+    assertSortingAdmin(user);
+    this.clientScopes.requireClientAccess(user, input.clientId, 'write');
+    return receiveSkuCollectionSortingUnit(tx, input, user, balance => this.incrementTargetBalance(tx, balance));
   }
 
   async executeTsdTransferBatch(payload: Record<string, unknown>, user: AuthUser) {
