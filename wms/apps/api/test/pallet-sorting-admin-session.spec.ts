@@ -11,6 +11,7 @@ function fixture() {
   service.audit = vi.fn(); service.resetAffectedRoutes = vi.fn(); service.assertUnclaimed = vi.fn();
   service.stock = { reconcileAdminSortingUnit: vi.fn().mockResolvedValue({ skuId: 'sku', sourceBoxId: 'recorded', sourceClientId: 'other-client', sourceWarehouseId: 'other-wh', targetClientId: 'target-client', targetWarehouseId: 'target-wh', recovered: false, alreadyApplied: false }) };
   const tx: any = { $executeRaw: vi.fn(), $queryRaw: vi.fn().mockResolvedValue([]),
+    stockBalance: { aggregate: vi.fn().mockResolvedValue({ _sum: { quantity: 4 }, _min: { quantity: 4 } }) },
     box: { findUnique: vi.fn().mockResolvedValue(null) },
     productMark: { findMany: vi.fn().mockResolvedValue([{ id: 'mark', value: kiz, boxId: 'recorded', status: 'PACKING', clientId: 'other-client', skuId: 'old-sku' }]) },
     inventorySession: { findFirst: vi.fn().mockResolvedValue({ id: 'inventory' }) },
@@ -65,6 +66,7 @@ it('opens a nonempty archived target using that box client/branch and revives on
   expect(f.tx.storagePallet.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ clientId: 'target-client', warehouseId: 'target-wh' }) }));
   expect(f.tx.box.update).toHaveBeenCalledWith({ where: { id: 'target' }, data: { status: 'active' } });
   expect(f.state.activeTargetId).toBe('target');
+  expect(f.state.targets[0].quantity).toBe(4); // TEST: archived nonempty top-up preserves the counter.
 });
 it('does not load a visible-client session that references a hidden-client destination', async () => {
   // TEST: session owner alone cannot authorize disclosure of imported cross-client contents.

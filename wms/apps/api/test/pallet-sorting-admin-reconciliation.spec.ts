@@ -24,6 +24,21 @@ function fixture() {
   const input = {toBoxCode:'TARGET',barcode:'4600000000001',kiz,sessionId:'session',idempotencyKey:'admin-unit',sourceBoxCode:'SOURCE'};
   return {service,tx,input,mark,source,target,balance};
 }
+it('settles SKU collection receipt and debits its boxless PACKING stock through the ADMIN entry point',async()=>{
+  // TEST: merge regression: physical reconciliation must not strand the original PICKED scan.
+  const f=fixture();Object.assign(f.mark,{boxId:null,status:'PACKING',sourceDocument:'collection',stockMovementId:'pick'});
+  Object.assign(f.balance,{boxId:null,status:'PACKING'});
+  f.tx.stockMovement.findUnique.mockResolvedValue({warehouseId:'old-wh',clientId:'old-client',skuId:'old-sku'});
+  const source={id:'collection-source',requestId:'collection',clientId:'old-client',skuId:'old-sku',receivedQuantity:0,updatedAt:new Date()};
+  f.tx.clientRequest={findUnique:vi.fn().mockResolvedValue({id:'collection',clientId:'old-client',type:'SKU_COLLECTION',status:'PACKED'}),update:vi.fn()};
+  f.tx.skuCollectionScan={findMany:vi.fn().mockResolvedValue([{id:'scan',kiz,source,updatedAt:new Date()}]),updateMany:vi.fn().mockResolvedValue({count:1})};
+  f.tx.skuCollectionSource={updateMany:vi.fn().mockResolvedValue({count:1}),aggregate:vi.fn().mockResolvedValue({_sum:{plannedQuantity:1,pickedQuantity:1,receivedQuantity:1}})};
+  const result=await f.service.reconcileAdminSortingUnit(f.tx,f.input,user);
+  expect(result).toMatchObject({recovered:false,sourceBoxId:null});
+  expect(f.tx.stockMovement.create.mock.calls.map((c:any)=>c[0].data.quantity)).toEqual([-1,1]);
+  expect(f.tx.skuCollectionScan.updateMany).toHaveBeenCalledWith(expect.objectContaining({data:expect.objectContaining({status:'RECEIVED',targetBoxId:'target'})}));
+  expect(f.tx.clientRequest.update).toHaveBeenCalledWith({where:{id:'collection'},data:{status:'DONE'}});
+});
 it('moves a reserved foreign-client unit to the target ownership without increasing total stock',async()=>{
   // TEST: ADMIN physical truth overrides stale ownership/status, but the old quantity is consumed.
   const f=fixture(); const result=await f.service.reconcileAdminSortingUnit(f.tx,f.input,user);

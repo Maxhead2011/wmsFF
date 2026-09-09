@@ -11,8 +11,9 @@ import { MarketplaceConnectionsService } from '../marketplace-connections/market
 import { assertSortingAdmin, confirmSortingSnapshot, sortingKizIdentity, sortingTaskCanReroute } from './pallet-sorting-policy';
 import type { PalletSortingActionDto, StartPalletSortingDto } from './dto/pallet-sorting.dto';
 
-type Source = { id: string; code: string; scanned: boolean; archived: boolean; placementId: string | null; preservedOnPallet?: boolean; clientId?: string; warehouseId?: string | null };
+type Source = { id: string; code: string; scanned: boolean; archived: boolean; placementId: string | null; preservedOnPallet?: boolean; retainedReason?: string; clientId?: string; warehouseId?: string | null };
 type Target = { id: string; code: string; closed: boolean; palletCode: string; quantity: number; clientId?: string; warehouseId?: string };
+
 // FIX: missing database boxes are evidence, not invented Box IDs or zero balances.
 type ProblemSource = { code: string; scanned: boolean; reason: 'BOX_NOT_FOUND' };
 export type PalletSortingState = {
@@ -145,7 +146,8 @@ export class PalletSortingService {
       if (state.stage === 'COMPLETED') throw new ConflictException('Сортировка уже завершена.');
       // FIX: forming checks the actual moved source below, not every old checklist box.
       const checkSources = !['MOVE', 'OPEN_TARGET', 'CLOSE_TARGET'].includes(dto.action);
-      await this.assertMovementAllowed(tx, [...(checkSources ? state.sources.filter(b => !b.archived && !b.preservedOnPallet).map(b => b.id) : []), ...state.targets.map(b => b.id)], state, user);
+      await this.assertMovementAllowed(tx, [...(checkSources ? state.sources.filter(b => !b.archived && (!b.preservedOnPallet || b.retainedReason)).map(b => b.id) : []), ...state.targets.map(b => b.id)], state, user);
+
       await this.runAction(tx, state, dto, user);
       state.version++;
       await this.save(tx, state);
@@ -226,6 +228,9 @@ export class PalletSortingService {
     const code = await this.boxCodes.requireAllowed(dto.code ?? '');
     if (state.sources.some(b => b.code === code) || state.problemSources?.some(b => b.code === code)) throw new ConflictException('Исходный короб нельзя одновременно закрыть как новый целевой.');
     let box = await tx.box.findUnique({ where: { code }, include: { storagePlacement: true } });
+    // FIX: a closed destination must still refer to the original box, never a recreated code.
+    const previous = state.targets.find(b => b.code === code);
+    if (previous && (!box || box.id !== previous.id || !previous.closed)) throw new ConflictException('Закрытый целевой короб изменился. Проверьте его фактическое размещение.');
     // FIX: an existing destination defines ownership; scanning it does not rewrite other contents.
     const clientId = box?.clientId ?? state.clientId, warehouseId = box?.warehouseId ?? state.warehouseId;
     this.assertVisibleClient(user, clientId);
@@ -252,9 +257,15 @@ export class PalletSortingService {
     if (!box.storagePlacement) await tx.storagePalletBox.create({ data: { palletId: pallet.id, boxId: box.id, boxCode: box.code, source: 'MANUAL' } });
     const prior = state.targets.find(b => b.id === box!.id);
     if (prior) { prior.closed = false; prior.palletCode = pallet.code; }
-    else state.targets.push({ id: box.id, code: box.code, closed: false, quantity: 0, palletCode: pallet.code, clientId, warehouseId });
+    else {
+      // FIX: topping up an existing box preserves its quantity without repeating receipt.
+      const contents = await tx.stockBalance.aggregate({ where: { boxId: box.id }, _sum: { quantity: true }, _min: { quantity: true } });
+      if ((contents._min.quantity ?? 0) < 0) throw new ConflictException('В целевом коробе есть отрицательный остаток. Сначала подтвердите корректировку остатков.');
+      state.targets.push({ id: box.id, code: box.code, closed: false, quantity: contents._sum.quantity ?? 0, palletCode: pallet.code, clientId, warehouseId });
+    }
     state.activeTargetId = box.id;
     await this.audit(tx, state, user, 'TARGET_OPENED', { boxId: box.id, palletId: pallet.id, clientId, warehouseId });
+
   }
 
   // FIX: this menu is an ADMIN-only physical reconciliation, not ordinary picking.
@@ -302,6 +313,7 @@ export class PalletSortingService {
       sourceClientId: moved.sourceClientId, sourceWarehouseId: moved.sourceWarehouseId,
       targetClientId: moved.targetClientId, targetWarehouseId: moved.targetWarehouseId, physicalTruth: true,
     });
+
   }
 
   async preview(id: string, kind: 'missing' | 'remaining', user: AuthUser) {
@@ -309,29 +321,39 @@ export class PalletSortingService {
   }
 
   private async previewInTx(tx: Prisma.TransactionClient, state: PalletSortingState, kind: 'missing' | 'remaining') {
-    const sources = state.sources.filter(b => !b.archived && !b.preservedOnPallet && (kind === 'remaining' || !b.scanned));
+    // FIX: legacy retained discrepancies are not settled permanent boxes; re-preview under fresh consent.
+    const sources = state.sources.filter(b => !b.archived && (!b.preservedOnPallet || b.retainedReason) && (kind === 'remaining' || !b.scanned));
     const boxes = await tx.box.findMany({ where: { id: { in: sources.map(b => b.id) } }, orderBy: { id: 'asc' },
       include: { storagePlacement: true, balances: { orderBy: { id: 'asc' }, include: { sku: { select: { clientId: true, article: true, name: true, size: true, color: true } } } },
         productMarks: { orderBy: { id: 'asc' }, select: { id: true, clientId: true, status: true, updatedAt: true } } } });
     if (boxes.length !== sources.length) throw new ConflictException('Исходный состав изменился. Обновите сортировку.');
-    for (const box of boxes) {
-      // FIX: current ownership, lifecycle and reserved statuses are included in the consent
-      // fingerprint, not a reason to reject the administrator's physical reconciliation.
-      if (box.balances.some(b => !Number.isInteger(b.quantity) || b.quantity < 0)) throw new ConflictException(`В коробе ${box.code} некорректный отрицательный остаток. Нельзя вычислить подтверждаемую недостачу.`);
-    }
+    // FIX: current ownership is included in consent; corrupt quantities are retained below.
     const tasks = await tx.fbsTsdAssembly.findMany({ where: { OR: [{ boxId: { in: sources.map(b => b.id) } }, { reservedBoxId: { in: sources.map(b => b.id) } }] }, orderBy: { id: 'asc' } });
-    const quantity = boxes.reduce((sum, box) => sum + box.balances.reduce((n, row) => n + row.quantity, 0), 0);
+
     // FIX: the confirmation covers box lifecycle as well as quantity; never guess its policy.
-    const decisions = await Promise.all(boxes.map(async box => ({ ...box, preserveOnPallet: await preserveEmptyStorageBox(box.code, this.boxCodes) })));
+    const decisions = await Promise.all(boxes.map(async box => ({ ...box, preserveOnPallet: await preserveEmptyStorageBox(box.code, this.boxCodes),
+      // FIX: administrator shortage consent covers positive reservations too, not only AVAILABLE.
+      // Negative/corrupt quantities need a separate recount; do not silently turn them into a receipt.
+      retainedReason: box.balances.some(b => !Number.isInteger(b.quantity) || b.quantity < 0)
+        ? 'Короб сохранён: отрицательный или некорректный остаток требует фактического пересчёта.' : null })));
+    const quantity = decisions.filter(b => !b.retainedReason).reduce((sum, box) => sum + box.balances.reduce((n, row) => n + row.quantity, 0), 0);
     return { fingerprint: hash([state.id, state.version, kind, decisions, tasks, state.problemSources, state.moves.filter(m => m.recovered)]), quantity, boxes: decisions,
       problemSources: state.problemSources ?? [], recoveredQuantity: state.moves.filter(m => m.recovered).length,
-      affectedOrders: tasks.filter(t => sortingTaskCanReroute(t, sources.map(b => b.id))).map(t => t.orderId) };
+      affectedOrders: tasks.filter(t => sortingTaskCanReroute(t, decisions.filter(b => !b.retainedReason).map(b => b.id))).map(t => t.orderId) };
   }
 
   private async archiveSources(tx: Prisma.TransactionClient, state: PalletSortingState, preview: Awaited<ReturnType<PalletSortingService['previewInTx']>>, user: AuthUser) {
     for (const box of preview.boxes) {
       this.assertVisibleClient(user, box.clientId);
+      // FIX: preserve existing retained-discrepancy handling without blocking other boxes.
+      if (box.retainedReason) {
+        const source = state.sources.find(b => b.id === box.id)!;
+        source.retainedReason = box.retainedReason;
+        source.preservedOnPallet = true;
+        continue;
+      }
       await this.resetAffectedRoutes(tx, state, [box.id], user, undefined, { clientId: box.clientId ?? state.clientId, warehouseId: box.warehouseId ?? state.warehouseId });
+
       for (const balance of box.balances.filter(b => b.quantity > 0)) {
         this.assertVisibleClient(user, balance.clientId);
         const changed = await tx.stockBalance.updateMany({ where: { id: balance.id, quantity: balance.quantity, updatedAt: balance.updatedAt }, data: { quantity: 0 } });
@@ -342,8 +364,11 @@ export class PalletSortingService {
           comment: `Подтверждённая недостача при сортировке; администратор ${user.id}` } });
       }
       // ADDED: retain the KIZ and its old box as history; shipment evidence is immutable.
-      await tx.productMark.updateMany({ where: { boxId: box.id, status: 'AVAILABLE' }, data: { status: 'BLOCKED' } });
+      await tx.productMark.updateMany({ where: { boxId: box.id, status: { in: ['AVAILABLE', 'PACKING', 'RESERVED'] } }, data: { status: 'BLOCKED' } });
+
       const source = state.sources.find(b => b.id === box.id)!;
+      delete source.retainedReason;
+      delete source.preservedOnPallet;
       // FIX: settled permanent storage stays active and keeps its actual pallet placement.
       if (box.preserveOnPallet) {
         source.preservedOnPallet = true;
@@ -356,7 +381,8 @@ export class PalletSortingService {
       }
     }
     await this.audit(tx, state, user, 'SHORTAGE_CONFIRMED', { fingerprint: preview.fingerprint, quantity: preview.quantity,
-      boxes: preview.boxes.map(b => ({ id: b.id, code: b.code, disposition: b.preserveOnPallet ? 'PRESERVED_ON_PALLET' : 'ARCHIVED', balances: b.balances.map(r => ({ skuId: r.skuId, quantity: r.quantity, status: r.status })) })), affectedOrders: preview.affectedOrders });
+      boxes: preview.boxes.map(b => ({ id: b.id, code: b.code, disposition: b.retainedReason ? 'RETAINED_DISCREPANCY' : b.preserveOnPallet ? 'PRESERVED_ON_PALLET' : 'ARCHIVED', retainedReason: b.retainedReason,
+        balances: b.balances.map(r => ({ skuId: r.skuId, quantity: r.quantity, status: r.status })) })), affectedOrders: preview.affectedOrders });
   }
 
   private async resetAffectedRoutes(tx: Prisma.TransactionClient, state: PalletSortingState, ids: string[], user: AuthUser, skuId?: string,

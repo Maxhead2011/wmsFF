@@ -23,8 +23,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 163 // FIX: publish explicit written-off KIZ recovery for LOGOFF only.
-            versionName = "0.1.164-kiz-recovery"
+            versionCode = 164 // FIX: publish administrator sorting recovery and destination top-up for LOGOFF only.
+            versionName = "0.1.165-sorting-admin"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

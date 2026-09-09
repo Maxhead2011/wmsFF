@@ -52,8 +52,8 @@ it('cannot finish with an open destination or without separate shortage consent'
   await expect(f.service.runAction(f.tx, f.state, { action: 'COMPLETE', fingerprint: 'fresh', confirmWriteOff: false }, f.user)).rejects.toThrow('подтверждение');
   expect(f.service.archiveSources).not.toHaveBeenCalled();
 });
-it('writes off only remaining balances and leaves PACKING/SHIPPING mark history unchanged', async () => {
-  // TEST: picked stock must not be written off or have its KIZ changed a second time.
+it('writes off confirmed missing balances and retires active marks without changing SHIPPING history', async () => {
+  // TEST: only remaining balances are adjusted; shipment history is not cleared.
   const f = fixture();
   delete f.service.archiveSources;
   f.service.resetAffectedRoutes = vi.fn();
@@ -63,7 +63,8 @@ it('writes off only remaining balances and leaves PACKING/SHIPPING mark history 
   const preview = { fingerprint: 'fresh', quantity: 2, affectedOrders: [], boxes: [{ id: 'a', code: 'A', balances: [{ id: 'balance', skuId: 'sku', quantity: 2, status: 'AVAILABLE', updatedAt: new Date(), palletId: null }] }] };
   await f.service.archiveSources(tx, f.state, preview, f.user);
   expect(tx.stockMovement.create.mock.calls[0][0].data).toMatchObject({ type: 'INVENTORY_ADJUSTMENT', quantity: -2, status: 'AVAILABLE' });
-  expect(tx.productMark.updateMany).toHaveBeenCalledWith({ where: { boxId: 'a', status: 'AVAILABLE' }, data: { status: 'BLOCKED' } });
+  expect(tx.productMark.updateMany).toHaveBeenCalledWith({ where: { boxId: 'a', status: { in: ['AVAILABLE', 'PACKING', 'RESERVED'] } }, data: { status: 'BLOCKED' } });
+
   expect(f.state.sources[0].archived).toBe(true);
 });
 it('includes current foreign-client content in the explicit administrative write-off snapshot', async () => {

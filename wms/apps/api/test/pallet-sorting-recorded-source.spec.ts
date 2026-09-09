@@ -17,6 +17,7 @@ function fixture() {
     targets: [{ id: 'target', code: 'FFL_LKBS0709_07', quantity: 3, closed: false }], activeTargetId: 'target', moves: [], pendingRoutes: [] };
   const dto = { operationId: 'op1', barcode: '2052399249995', kiz, sourceBoxCode: 'FFL_LKB2107_44' };
   return { service, tx, state, dto, result };
+
 }
 it('preserves the physical source hint while the accounting helper chooses the actual source', async () => {
   // TEST: the old accounting box is not silently included in final archive/write-off.
@@ -58,6 +59,7 @@ it('propagates a transaction failure before writing the session move or count', 
 });
 it.each(['no-code', 'unscanned', 'archived-snapshot', 'preserved-snapshot'])('does not let a stale manifest reject a scanned KIZ: %s', async condition => {
   // TEST: the manifest controls final shortage consent, not barcode/KIZ ownership.
+
   const f = fixture();
   if (condition === 'no-code') f.dto.sourceBoxCode = '';
   if (condition === 'unscanned') f.state.sources[0].scanned = false;

@@ -5,6 +5,7 @@ import { assertSortingAdmin, sortingKizIdentity } from '../inventory/pallet-sort
 import { sortingSettledBoxTaskIds } from './sorting-settled-box-tasks';
 import { restoreWrittenOffSortingUnit, type WrittenOffSortingInput } from './sorting-written-off-recovery';
 import { reconcileAdminSortingUnit, type AdminSortingUnitInput } from './sorting-admin-unit-reconciliation';
+import { receiveSkuCollectionSortingUnit } from './sorting-sku-collection-receipt';
 import * as XLSX from 'xlsx';
 import {
   BillingChargeSource,
@@ -940,10 +941,18 @@ export class StockOperationsService {
   }
 
   // FIX: only the explicit admin sorting workflow can restore previously written-off identities.
-  async restoreWrittenOffSortingUnit(tx: Prisma.TransactionClient, input: WrittenOffSortingInput, user: AuthUser) {
+  async restoreWrittenOffSortingUnit(tx: Prisma.TransactionClient, input: WrittenOffSortingInput, user: AuthUser,
+    validateSource?: (boxId: string) => Promise<void>) {
     assertSortingAdmin(user);
     this.clientScopes.requireClientAccess(user, input.clientId, 'write');
-    return restoreWrittenOffSortingUnit(tx, input, user, balance => this.incrementTargetBalance(tx, balance));
+    return restoreWrittenOffSortingUnit(tx, input, user, balance => this.incrementTargetBalance(tx, balance), validateSource);
+  }
+
+  // FIX: restricted adapter; other transfer/receipt endpoints keep their current behaviour.
+  async receiveSkuCollectionSortingUnit(tx: Prisma.TransactionClient, input: WrittenOffSortingInput, user: AuthUser) {
+    assertSortingAdmin(user);
+    this.clientScopes.requireClientAccess(user, input.clientId, 'write');
+    return receiveSkuCollectionSortingUnit(tx, input, user, balance => this.incrementTargetBalance(tx, balance));
   }
 
   async executeTsdTransferBatch(payload: Record<string, unknown>, user: AuthUser) {

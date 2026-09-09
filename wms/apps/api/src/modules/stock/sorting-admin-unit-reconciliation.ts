@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { Prisma, StockStatus } from '@prisma/client';
 import type { AuthUser } from '../auth/auth.types';
 import { assertSortingAdmin, sortingKizIdentity } from '../inventory/pallet-sorting-policy';
+import { settleAdminSortingSkuReceipt } from './sorting-admin-sku-receipt';
 
 export type AdminSortingUnitInput = {
   toBoxCode: string; barcode: string; kiz: string; sessionId: string; idempotencyKey: string;
@@ -111,6 +112,8 @@ export async function reconcileAdminSortingUnit(tx: Prisma.TransactionClient, in
     return result;
   }
   const sourceDocument=`PALLET_SORTING:${input.sessionId}`;
+  // FIX: keep the newly shipped SKU-collection receipt bookkeeping within this transaction.
+  await settleAdminSortingSkuReceipt(tx, mark, target, { gtin, serial }, parseIdentity, user);
   const comment=`Фактическое перемещение ШК ${barcode}; администратор ${user.id}; КИЗ ${identity}`;
   if (source) {
     const changed=await tx.stockBalance.updateMany({where:{id:source.id,quantity:{gte:1}},data:{quantity:{decrement:1}}});
