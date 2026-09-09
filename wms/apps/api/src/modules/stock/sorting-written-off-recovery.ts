@@ -41,21 +41,20 @@ export async function restoreWrittenOffSortingUnit(tx: Prisma.TransactionClient,
   let requestProof: unknown = null;
   if(missingAvailable){
     // FIX: request-level SHIP may have consumed a different box while leaving this KIZ AVAILABLE.
-    // Require the latest event to be that debit and the completed request to prove OTHER collected identities/boxes.
+    // FIX: keep the debit proof; unrelated request completeness is not proof of this identity's shipment.
     const source=await tx.box.findUnique({where:{id:mark.boxId!}});
     if(!source||source.clientId!==input.clientId||source.warehouseId!==user.activeWarehouseId||
       writeoff.type!=='SHIP'||writeoff.quantity>=0||!Number.isInteger(writeoff.quantity)||writeoff.quantity < -1000||
       !writeoff.sourceDocument||writeoffs[1]?.createdAt.getTime()===writeoff.createdAt.getTime())
       throw new ConflictException('Нет однозначного списания из учётного короба. Восстановление не выполнено.');
-    const request=await tx.clientRequest.findFirst({where:{id:writeoff.sourceDocument,clientId:input.clientId,status:'DONE'},select:{id:true}});
-    if(!request)throw new ConflictException('Заявка списания не закрыта или не найдена.');
-    const assemblies=await tx.fbsTsdAssembly.findMany({where:{requestId:request.id,clientId:input.clientId,skuId:mark.skuId},
-      select:{id:true,status:true,completedAt:true,kiz:true,boxCode:true,updatedAt:true},take:-writeoff.quantity+1});
+    const request=await tx.clientRequest.findFirst({where:{id:writeoff.sourceDocument,clientId:input.clientId},select:{id:true,status:true,updatedAt:true}});
+    const assemblies=request ? await tx.fbsTsdAssembly.findMany({where:{requestId:request.id,clientId:input.clientId,skuId:mark.skuId},
+      select:{id:true,status:true,completedAt:true,kiz:true,boxCode:true,updatedAt:true},orderBy:{id:'asc'},take:1001}) : [];
     const otherIdentities=assemblies.map(a=>{try{return sortingKizIdentity(a.kiz??'');}catch{return null;}});
-    if(assemblies.length!==-writeoff.quantity||new Set(otherIdentities).size!==assemblies.length||
-      assemblies.some((a,i)=>a.status!=='COMPLETED'||!a.completedAt||!a.boxCode||a.boxCode===source.code||!otherIdentities[i]||otherIdentities[i]===identity))
-      throw new ConflictException('Нельзя доказать, что заявка собрала другие КИЗы из других коробов.');
-    requestProof=assemblies.map((a,i)=>[a.id,a.updatedAt,a.boxCode,otherIdentities[i]]).sort((a,b)=>String(a[0]).localeCompare(String(b[0])));
+    if(otherIdentities.includes(identity)) throw new ConflictException('Этот КИЗ связан со сборкой заказа. Восстановление не выполнено.');
+    // FIX: preserve missing/incomplete request evidence in consent and audit, never fabricate completion.
+    // The global checks below still reject any order/shipment/print history for the exact scanned KIZ.
+    requestProof={request,assemblies:assemblies.map((a,i)=>[a.id,a.status,a.completedAt,a.updatedAt,a.boxCode,otherIdentities[i]])};
   }
   if(await tx.stockBalance.findFirst({where:{boxId:writeoff.boxId,skuId:mark.skuId,quantity:{not:0}},select:{id:true}}))
     throw new ConflictException('В прежнем коробе есть учтённый остаток или резерв этого товара. Повторный приход не выполнен.');
@@ -70,7 +69,7 @@ export async function restoreWrittenOffSortingUnit(tx: Prisma.TransactionClient,
     mark.id,mark.updatedAt,mark.boxId,mark.sourceDocument,writeoff.id,writeoff.quantity,mark.status,requestProof])).digest('hex');
   if(input.confirmRestore!==true||input.restoreFingerprint!==fingerprint) throw new ConflictException({
     code:'SORTING_WRITEOFF_CONFIRM_REQUIRED',fingerprint,
-    message:`${missingAvailable ? 'КИЗ числится доступным, но остаток его короба списан при закрытии заявки с другими КИЗами.' : 'Этот КИЗ ранее списан.'} Подтвердите, что товар с ШК ${input.barcode} физически у вас. В короб ${target.code} будет восстановлена ровно 1 единица.`,
+    message:`${missingAvailable ? 'КИЗ числится доступным, но в учётном коробе нет остатка после списания. История старой заявки может быть неполной; связей именно этого КИЗа с заказами и отгрузкой не найдено.' : 'Этот КИЗ ранее списан.'} Подтвердите, что товар с ШК ${input.barcode} физически у вас. В короб ${target.code} будет восстановлена ровно 1 единица.`,
   });
   if(await tx.stockMovement.findUnique({where:{idempotencyKey:input.idempotencyKey}}))throw new ConflictException('Эта единица уже восстановлена. Обновите сортировку.');
   const movement=await tx.stockMovement.create({data:{clientId:input.clientId,warehouseId:user.activeWarehouseId!,skuId:mark.skuId,

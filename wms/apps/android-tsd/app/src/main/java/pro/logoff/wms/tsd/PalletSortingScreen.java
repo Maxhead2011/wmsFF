@@ -85,7 +85,7 @@ public final class PalletSortingScreen {
             label("Перемещено: " + (rows(state, "moves").size() - recovered) + " ед. · Оприходовано найденных: " + recovered + " ед.", 19);
             for (Map<String, Object> box : rows(state, "problemSources")) label(PalletSortingProblemFormatter.source(box), 18);
             // FIX: permanent storage remains active; completion must not be labelled as archival.
-            for (Map<String, Object> box : rows(state, "sources")) label(text(box, "code") + " — " + (yes(box, "preservedOnPallet") ? "пустой бокс · сохранён на месте" : yes(box, "archived") ? "архив" : yes(box, "scanned") ? "подтверждён" : "не отсканирован"), 16);
+            for (Map<String, Object> box : rows(state, "sources")) label(PalletSortingProblemFormatter.sourceState(box), 16); // FIX
             if (!rows(state, "pendingRoutes").isEmpty()) {
                 label("Перестроение FBS ещё не завершено.", 18);
                 for (Map<String, Object> row : rows(state, "pendingRoutes")) if (!text(row, "error").isEmpty()) label(text(row, "error"), 16);
@@ -105,7 +105,7 @@ public final class PalletSortingScreen {
             sourceInput.setOnEditorActionListener((v, id, event) -> { source = sourceInput.getText().toString().trim(); if (input != null) input.requestFocus(); return true; });
         }
         if (!"COMPLETED".equals(stage())) {
-            String hint = state == null ? "Паллет-сорт или короб" : "CHECKING".equals(stage()) ? "Исходный короб" : target == null ? "Новый целевой короб" : barcode.isEmpty() ? "ШК товара" : "КИЗ товара";
+            String hint = state == null ? "Паллет-сорт или короб" : "CHECKING".equals(stage()) ? "Исходный короб" : target == null ? "Целевой короб — новый или закрытый" : barcode.isEmpty() ? "ШК товара" : "КИЗ товара"; // FIX
             if (!barcode.isEmpty()) {
                 label("ШК: " + barcode, 18);
                 button("Отменить текущую единицу", () -> { barcode = ""; render(); }, true);
@@ -131,7 +131,15 @@ public final class PalletSortingScreen {
             button("Закрыть короб", () -> action("CLOSE_TARGET", new LinkedHashMap<>()), target != null && barcode.isEmpty());
             button("Завершить сортировку", () -> preview("COMPLETE"), target == null && barcode.isEmpty());
         }
-        if (state != null) for (Map<String, Object> box : rows(state, "targets")) label(text(box, "code") + " · " + number(box, "quantity") + " ед. · " + text(box, "palletCode") + (yes(box, "closed") ? " · закрыт" : " · открыт"), 16);
+        if (state != null) for (Map<String, Object> box : rows(state, "targets")) {
+            label(text(box, "code") + " · " + number(box, "quantity") + " ед. · " + text(box, "palletCode") + (yes(box, "closed") ? " · закрыт" : " · открыт"), 16);
+            // FIX: reopen the same target through the versioned/idempotent server command.
+            if ("FORMING".equals(stage()) && yes(box, "closed")) button("Доложить в " + text(box, "code"), () -> {
+                Map<String,Object> body = new LinkedHashMap<>();
+                body.put("code", text(box, "code")); body.put("palletCode", text(box, "palletCode"));
+                action("OPEN_TARGET", body);
+            }, target == null && barcode.isEmpty());
+        }
         button("В главное меню (сессия сохранена)", () -> { if (canLeave()) { close(); back.run(); } }, barcode.isEmpty());
         ScrollView scroll = new ScrollView(activity); scroll.addView(root); activity.setContentView(scroll);
         if (input != null && !busy && !command.pending()) {
@@ -223,7 +231,7 @@ public final class PalletSortingScreen {
         text.append("Оприходовано найденных: ").append(number(preview, "recoveredQuantity")).append(" ед.\n");
         for (Map<String, Object> box : rows(preview, "problemSources")) text.append(PalletSortingProblemFormatter.source(box)).append("\n");
         for (Map<String, Object> box : rows(preview, "boxes")) {
-            text.append("\n").append(text(box, "code")).append(yes(box, "preserveOnPallet") ? " — останется активным на своём месте\n" : " — будет архивирован\n");
+            text.append("\n").append(text(box, "code")).append(PalletSortingProblemFormatter.disposition(box)); // FIX
             for (Map<String, Object> balance : rows(box, "balances")) {
                 Map<String, Object> sku = map(balance.get("sku"));
                 text.append(text(sku, "article")).append(" / ").append(text(sku, "size")).append(" / ").append(text(sku, "color")).append(": ").append(number(balance, "quantity")).append(" ед.\n");
