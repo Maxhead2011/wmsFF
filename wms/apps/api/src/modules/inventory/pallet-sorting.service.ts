@@ -266,6 +266,17 @@ export class PalletSortingService {
     const marks = await tx.productMark.findMany({ where: { clientId: state.clientId, value: { startsWith: identity.replace(/[\\%_]/g, '\\$&') } }, take: 2 });
     if (marks.length > 1) throw new ConflictException('Найдено несколько записей одного КИЗ. Требуется разбор дубликата.');
     const mark = marks[0];
+    // FIX: previously picked SKU stock must be received, not recreated or debited from its old box.
+    if (mark?.status === 'PACKING' && !mark.boxId) {
+      const received = await this.stock.receiveSkuCollectionSortingUnit(tx, { clientId: state.clientId,
+        toBoxCode: target.code, barcode, kiz: dto.kiz!, sessionId: state.id, version: state.version,
+        idempotencyKey: `sorting:${state.id}:${hash(identity)}` }, user);
+      state.moves.push({ identity, barcode, sourceBoxId: null, targetBoxId: target.id });
+      target.quantity++;
+      await this.audit(tx, state, user, 'UNIT_RECEIVED_FROM_SKU_COLLECTION', { identity, barcode,
+        targetBoxId: target.id, ...received, quantity: 1 });
+      return;
+    }
     // FIX: a previously written-off identity is a confirmed +1 receipt, never an ordinary transfer.
     if (mark?.status === 'BLOCKED') {
       return this.recoverWrittenOffUnit(tx, state, dto, user, target, identity);

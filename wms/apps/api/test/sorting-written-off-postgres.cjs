@@ -132,6 +132,44 @@ async function main(){
  assert.equal((await p.productMark.findUnique({where:{id:packed.id}})).status,'BLOCKED');
  assert.deepEqual(await p.productMark.findUnique({where:{id:shipped.id}}),shipped);
  assert.equal(await p.stockMovement.count({where:{boxId:empty.id,type:'INVENTORY_ADJUSTMENT',quantity:-2}}),1);
- console.log(JSON.stringify({result:'PASS',confirmation:true,retry:true,concurrency:true,rollback:true,lateShipmentBlocked:true,orphanTransferNoDoubleStock:true,packingArchive:true,shippingHistoryPreserved:true}));
+ // TEST: request 633 variant. Receive picked SKU stock in this same sorting transaction.
+ const collection=await p.clientRequest.create({data:{clientId:client.id,warehouseId:wh.id,type:'SKU_COLLECTION',status:'IN_WORK',title:'Synthetic SKU collection'}});
+ const collectionSource=await p.skuCollectionSource.create({data:{requestId:collection.id,clientId:client.id,warehouseId:wh.id,skuId:sku.id,
+   sourceBoxId:old.id,sourceBoxCode:old.code,plannedQuantity:2,pickedQuantity:2}});
+ const packing=await p.stockBalance.create({data:{balanceKey:[client.id,sku.id,'no-box','no-pallet','PACKING','warehouse',wh.id].join(':'),clientId:client.id,warehouseId:wh.id,skuId:sku.id,status:'PACKING',quantity:2}});
+ async function collected(serial){
+   const pick=await p.stockMovement.create({data:{clientId:client.id,warehouseId:wh.id,skuId:sku.id,type:'PICK',status:'PACKING',quantity:1,sourceDocument:collection.id}});
+   const mark=await p.productMark.create({data:{clientId:client.id,skuId:sku.id,value:canonical(serial),status:'PACKING',stockMovementId:pick.id,sourceDocument:collection.id}});
+   const scan=await p.skuCollectionScan.create({data:{requestId:collection.id,sourceId:collectionSource.id,skuId:sku.id,barcode:'4600000000001',kiz:mark.value,sourceBoxId:old.id,sourceBoxCode:old.code}});
+   return {mark,scan};
+ }
+ const collectedOne=await collected('COLLECT000001'),collectedTwo=await collected('COLLECT000002');
+ const beforeCollection=(await p.stockBalance.aggregate({_sum:{quantity:true}}))._sum.quantity;
+ const collectCmd={action:'MOVE',version:state.version,operationId:randomUUID(),barcode:'4600000000001',kiz:collectedOne.mark.value};
+ await assert.rejects(make(faulty).action(state.id,collectCmd,user),/TEST_ROLLBACK/);
+ assert.equal((await p.skuCollectionScan.findUnique({where:{id:collectedOne.scan.id}})).status,'PICKED');
+ assert.equal((await p.stockBalance.findUnique({where:{id:packing.id}})).quantity,2);
+ const receivedResults=await Promise.allSettled([s.action(state.id,collectCmd,user),s.action(state.id,collectCmd,user)]);
+ assert(receivedResults.some(r=>r.status==='fulfilled'));
+ state=await s.action(state.id,collectCmd,user);
+ assert.equal((await p.stockBalance.aggregate({_sum:{quantity:true}}))._sum.quantity,beforeCollection);
+ assert.equal((await p.stockBalance.findUnique({where:{id:packing.id}})).quantity,1);
+ const acknowledged=await p.skuCollectionScan.findUnique({where:{id:collectedOne.scan.id}});
+ assert.equal(acknowledged.status,'RECEIVED');assert.equal(acknowledged.targetBoxId,target);assert.equal(acknowledged.receivedByUserId,user.id);
+ assert.equal((await p.skuCollectionSource.findUnique({where:{id:collectionSource.id}})).receivedQuantity,1);
+ assert.equal((await p.clientRequest.findUnique({where:{id:collection.id}})).status,'PACKED');
+ assert.notEqual(state.moves.at(-1).recovered,true);
+ assert.equal(await p.stockMovement.count({where:{sourceDocument:collection.id,type:'MOVE'}}),2);
+ assert.equal(await p.stockMovement.count({where:{sourceDocument:collection.id,type:'RECEIPT'}}),0);
+ // TEST: technical repair is attributed explicitly, never masquerades as the original picker.
+ const technical={...user,id:undefined,name:'Technical correction confirmed by owner'};
+ const technicalCmd={action:'MOVE',version:state.version,operationId:randomUUID(),barcode:'4600000000001',kiz:collectedTwo.mark.value};
+ state=await s.action(state.id,technicalCmd,technical);
+ const technicalScan=await p.skuCollectionScan.findUnique({where:{id:collectedTwo.scan.id}});
+ assert.equal(technicalScan.receivedByUserId,null);assert.equal(technicalScan.receivedByName,technical.name);
+ assert.equal((await p.clientRequest.findUnique({where:{id:collection.id}})).status,'DONE');
+ assert.equal((await p.stockBalance.aggregate({_sum:{quantity:true}}))._sum.quantity,beforeCollection);
+ assert.equal((await p.auditLog.findFirst({where:{entityId:collectedTwo.mark.id,action:'PALLET_SORTING_SKU_COLLECTION_RECEIVED'}})).userId,null);
+ console.log(JSON.stringify({result:'PASS',confirmation:true,retry:true,concurrency:true,rollback:true,lateShipmentBlocked:true,orphanTransferNoDoubleStock:true,packingArchive:true,shippingHistoryPreserved:true,skuCollectionReceipt:true,skuCollectionNoDoubleStock:true,technicalAttribution:true}));
 }
 main().catch(e=>{console.error(e);process.exitCode=1;}).finally(()=>p.$disconnect());
