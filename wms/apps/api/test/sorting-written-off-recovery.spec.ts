@@ -54,6 +54,49 @@ async function preview(f: ReturnType<typeof fixture>) {
   try { await f.service.restoreWrittenOffSortingUnit(f.tx, f.input, user); throw Error('Expected confirmation'); }
   catch(e: any) { const body=e.getResponse(); expect(body.code).toBe('SORTING_WRITEOFF_CONFIRM_REQUIRED'); return body.fingerprint; }
 }
+function orphanFixture() {
+  const f=fixture();
+  f.mark.sourceDocument='repair:inventory-after-movement:20260827';
+  Object.assign(f.mark,{stockMovementId:'writeoff'});
+  f.tx.stockMovement.findUnique.mockImplementation(async({where}:any)=>where.id==='writeoff'?f.writeoff:null);
+  f.tx.box.findUnique.mockImplementation(async({where}:any)=>where.id==='old'?{id:'old',code:'OLD',status:'active',clientId:'client',warehouseId:'wh'}:f.target);
+  f.tx.stockBalance.findMany=vi.fn().mockResolvedValue([]);
+  f.tx.stockBalance.updateMany=vi.fn().mockResolvedValue({count:1});
+  f.tx.productMark.findMany.mockImplementation(async({where}:any)=>where.boxId?[]:[f.mark]);
+  return f;
+}
+it.each([0,1])('uses linked ledger evidence for an orphan BLOCKED KIZ with %s available source units',async quantity=>{
+  // TEST: FFL_LKB1807_240 / 2051754300715: do not require one hard-coded repair document name.
+  const f=orphanFixture();
+  if(quantity) f.tx.stockBalance.findMany.mockResolvedValue([{id:'balance',quantity,status:'AVAILABLE',clientId:'client',warehouseId:'wh',skuId:'sku',boxId:'old',palletId:null,updatedAt:new Date()}]);
+  f.input.restoreFingerprint=await preview(f);
+  expect(f.tx.stockMovement.create).not.toHaveBeenCalled();
+  f.input.confirmRestore=true;
+  await f.service.restoreWrittenOffSortingUnit(f.tx,f.input,user);
+  expect(f.tx.stockMovement.create).toHaveBeenCalledTimes(quantity?2:1);
+  expect(f.service.incrementTargetBalance).toHaveBeenCalledWith(f.tx,expect.objectContaining({boxId:'target',quantity:1}));
+  if(quantity) expect(f.tx.stockMovement.create).toHaveBeenCalledWith(expect.objectContaining({data:expect.objectContaining({boxId:'old',quantity:-1,type:'MOVE'})}));
+});
+it.each(['foreign-ledger','foreign-source','stale-balance','shipment','sku'])('rejects unsafe orphan correction: %s',async kind=>{
+  // TEST: administrative confirmation cannot change identity ownership or use stale quantities.
+  const f=orphanFixture(); f.input.restoreFingerprint=await preview(f); f.input.confirmRestore=true;
+  if(kind==='foreign-ledger')f.writeoff.warehouseId='other';
+  if(kind==='foreign-source') f.tx.box.findUnique.mockImplementation(async({where}:any)=>where.id?{id:'old',clientId:'other',warehouseId:'wh'}:f.target);
+  if(kind==='stale-balance') f.tx.stockBalance.findMany.mockResolvedValue([{id:'balance',quantity:1,status:'AVAILABLE',updatedAt:new Date()}]);
+  if(kind==='shipment')f.tx.shippedKizHistory.findFirst.mockResolvedValue({id:'shipped'});
+  if(kind==='sku')f.mark.skuId='other';
+  await expect(f.service.restoreWrittenOffSortingUnit(f.tx,f.input,user)).rejects.toThrow();
+  expect(f.service.incrementTargetBalance).not.toHaveBeenCalled();
+});
+it('lets the administrator confirm an orphan from a physical snapshot retaining its original receipt',async()=>{
+  // TEST: another real repair variant has a RECEIPT FK, not a negative adjustment FK.
+  const f=orphanFixture(); f.mark.sourceDocument='admin-unpalleted-physical-snapshot-20260827';
+  f.writeoff.type='RECEIPT';f.writeoff.quantity=1;
+  f.input.restoreFingerprint=await preview(f); f.input.confirmRestore=true;
+  await f.service.restoreWrittenOffSortingUnit(f.tx,f.input,user);
+  expect(f.service.incrementTargetBalance).toHaveBeenCalledTimes(1);
+  expect(f.tx.auditLog.create.mock.calls[0][0].data.payload).toMatchObject({previousSourceDocument:f.mark.sourceDocument,discrepancy:'ORPHAN_KIZ_PHYSICAL_CONFIRMATION'});
+});
 function availableFixture() {
   const f=fixture(); f.mark.status='AVAILABLE'; f.mark.boxId='old' as any;
   f.mark.sourceDocument='TSD-RECEIPT'; f.writeoff.type='SHIP'; f.writeoff.quantity=-1;

@@ -89,6 +89,49 @@ async function main(){
  let missingProof;try{await s.action(state.id,missingScan,user);assert.fail('Preview expected');}catch(e){assert.equal(e.getResponse().code,'SORTING_WRITEOFF_CONFIRM_REQUIRED');missingProof=e.getResponse().fingerprint;}
  state=await s.action(state.id,{...missingScan,operationId:randomUUID(),confirmRestore:true,restoreFingerprint:missingProof},user);
  assert.equal(state.targets[0].quantity,4);assert.equal((await p.productMark.findUnique({where:{id:missingRequestMark.id}})).boxId,target);
- console.log(JSON.stringify({result:'PASS',confirmation:true,sameMark:true,receiptQuantity:3,retry:true,concurrency:true,rollback:true,lateShipmentBlocked:true,availableWithoutBalance:true,oldDebitPreserved:true}));
+ // TEST: orphan BLOCKED identity from a repair job + existing AVAILABLE stock is a transfer, not +1.
+ const orphanSource=await p.box.create({data:{clientId:client.id,warehouseId:wh.id,code:'FFL_QA_ORPHAN',status:'active'}});
+ const orphanDebit=await p.stockMovement.create({data:{clientId:client.id,warehouseId:wh.id,skuId:sku.id,boxId:orphanSource.id,type:'INVENTORY_ADJUSTMENT',status:'AVAILABLE',quantity:-1,sourceDocument:'historical-inventory'}});
+ const orphan=await p.productMark.create({data:{clientId:client.id,skuId:sku.id,value:canonical('ORPHAN0000001'),status:'BLOCKED',stockMovementId:orphanDebit.id,sourceDocument:'repair:inventory-after-movement:20260827'}});
+ await p.stockBalance.create({data:{balanceKey:randomUUID(),clientId:client.id,warehouseId:wh.id,skuId:sku.id,boxId:orphanSource.id,status:'AVAILABLE',quantity:1}});
+ const totalBefore=(await p.stockBalance.aggregate({_sum:{quantity:true}}))._sum.quantity;
+ const orphanCommand=await confirmation(orphan.value);
+ await assert.rejects(make(faulty).action(state.id,orphanCommand,user),/TEST_ROLLBACK/);
+ assert.equal((await p.stockBalance.findFirst({where:{boxId:orphanSource.id}})).quantity,1);
+ assert.equal((await p.productMark.findUnique({where:{id:orphan.id}})).status,'BLOCKED');
+ state=await s.action(state.id,orphanCommand,user);state=await s.action(state.id,orphanCommand,user);
+ assert.equal((await p.stockBalance.aggregate({_sum:{quantity:true}}))._sum.quantity,totalBefore);
+ assert.equal((await p.stockBalance.findFirst({where:{boxId:orphanSource.id}})).quantity,0);
+ assert.equal((await p.productMark.findUnique({where:{id:orphan.id}})).boxId,target);
+ assert.equal(state.moves.at(-1).recovered,false);
+ assert.equal(await p.stockMovement.count({where:{boxId:orphanSource.id,type:'MOVE',quantity:-1}}),1);
+ // TEST: a historical physical snapshot can preserve the original RECEIPT FK, not a write-off FK.
+ const oldReceipt=await p.stockMovement.create({data:{clientId:client.id,warehouseId:wh.id,skuId:sku.id,boxId:orphanSource.id,type:'RECEIPT',status:'AVAILABLE',quantity:1,sourceDocument:'original-receipt'}});
+ const snapshotMark=await p.productMark.create({data:{clientId:client.id,skuId:sku.id,value:canonical('SNAPSHOT00001'),status:'BLOCKED',stockMovementId:oldReceipt.id,sourceDocument:'admin-unpalleted-physical-snapshot'}});
+ const snapshotCommand=await confirmation(snapshotMark.value);
+ state=await s.action(state.id,snapshotCommand,user);state=await s.action(state.id,snapshotCommand,user);
+ assert.equal((await p.productMark.findUnique({where:{id:snapshotMark.id}})).boxId,target);
+ assert.equal((await p.stockBalance.aggregate({_sum:{quantity:true}}))._sum.quantity,totalBefore+1);
+ // TEST: ordinary empty PACKING source archives, SHIPPING evidence remains, replay cannot repeat -2.
+ const empty=await p.box.create({data:{clientId:client.id,warehouseId:wh.id,code:'FFL_QA_EMPTY_PACKING',status:'active'}});
+ await p.storagePalletBox.create({data:{palletId:pallet.id,boxId:empty.id,boxCode:empty.code}});
+ await p.stockBalance.create({data:{balanceKey:randomUUID(),clientId:client.id,warehouseId:wh.id,skuId:sku.id,boxId:empty.id,status:'PACKING',quantity:2}});
+ const packed=await p.productMark.create({data:{clientId:client.id,skuId:sku.id,boxId:empty.id,status:'PACKING',value:canonical('PACKING000001')}});
+ const shipped=await p.productMark.create({data:{clientId:client.id,skuId:sku.id,boxId:empty.id,status:'SHIPPING',value:canonical('SHIPPED000001')}});
+ let emptyState=await s.start({id:randomUUID(),code:empty.code},user);
+ emptyState=await s.action(emptyState.id,{action:'BEGIN_FORMING',version:emptyState.version,operationId:randomUUID()},user);
+ // TEST: resume a retained source from an older server version under the new confirmation rules.
+ Object.assign(emptyState.sources[0],{preservedOnPallet:true,retainedReason:'legacy PACKING reservation'});
+ await p.$executeRawUnsafe('UPDATE "PalletSortingSession" SET state=$1::jsonb WHERE id=$2',JSON.stringify(emptyState),emptyState.id);
+ const emptyPreview=await s.preview(emptyState.id,'remaining',user);assert.equal(emptyPreview.quantity,2);
+ const finish={action:'COMPLETE',version:emptyState.version,operationId:randomUUID(),confirmWriteOff:true,fingerprint:emptyPreview.fingerprint};
+ await s.action(emptyState.id,finish,user);await s.action(emptyState.id,finish,user);
+ assert.equal((await p.box.findUnique({where:{id:empty.id}})).status,'archived');
+ assert.equal(await p.storagePalletBox.count({where:{boxId:empty.id}}),0);
+ assert.equal((await p.stockBalance.findFirst({where:{boxId:empty.id}})).quantity,0);
+ assert.equal((await p.productMark.findUnique({where:{id:packed.id}})).status,'BLOCKED');
+ assert.deepEqual(await p.productMark.findUnique({where:{id:shipped.id}}),shipped);
+ assert.equal(await p.stockMovement.count({where:{boxId:empty.id,type:'INVENTORY_ADJUSTMENT',quantity:-2}}),1);
+ console.log(JSON.stringify({result:'PASS',confirmation:true,retry:true,concurrency:true,rollback:true,lateShipmentBlocked:true,orphanTransferNoDoubleStock:true,packingArchive:true,shippingHistoryPreserved:true}));
 }
 main().catch(e=>{console.error(e);process.exitCode=1;}).finally(()=>p.$disconnect());

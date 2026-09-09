@@ -934,10 +934,11 @@ export class StockOperationsService {
   }
 
   // FIX: only the explicit admin sorting workflow can restore previously written-off identities.
-  async restoreWrittenOffSortingUnit(tx: Prisma.TransactionClient, input: WrittenOffSortingInput, user: AuthUser) {
+  async restoreWrittenOffSortingUnit(tx: Prisma.TransactionClient, input: WrittenOffSortingInput, user: AuthUser,
+    validateSource?: (boxId: string) => Promise<void>) {
     assertSortingAdmin(user);
     this.clientScopes.requireClientAccess(user, input.clientId, 'write');
-    return restoreWrittenOffSortingUnit(tx, input, user, balance => this.incrementTargetBalance(tx, balance));
+    return restoreWrittenOffSortingUnit(tx, input, user, balance => this.incrementTargetBalance(tx, balance), validateSource);
   }
 
   async executeTsdTransferBatch(payload: Record<string, unknown>, user: AuthUser) {
