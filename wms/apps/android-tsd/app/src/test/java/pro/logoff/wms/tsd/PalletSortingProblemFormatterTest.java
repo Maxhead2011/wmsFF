@@ -7,6 +7,13 @@ import java.util.Map;
 import static org.junit.Assert.*;
 
 public class PalletSortingProblemFormatterTest {
+    @Test public void retainedPackingIsNotLabelledEmptyOrWrittenOff() {
+        // TEST: completion keeps reserved goods in place and explains that to the administrator.
+        Map<String,Object> box = new LinkedHashMap<>();
+        box.put("code", "BOX"); box.put("retainedReason", "Есть PACKING"); box.put("preservedOnPallet", true);
+        assertEquals("BOX — Есть PACKING", PalletSortingProblemFormatter.sourceState(box));
+        assertEquals(" — НЕ списывается: Есть PACKING\n", PalletSortingProblemFormatter.disposition(box));
+    }
     @Test public void showsProblemAndPhysicalScanSeparately() {
         // TEST: a scanned unknown box is still a problem, not a valid WMS source.
         Map<String, Object> box = new LinkedHashMap<>();

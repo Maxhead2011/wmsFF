@@ -11,7 +11,7 @@ import { MarketplaceConnectionsService } from '../marketplace-connections/market
 import { assertSortingAdmin, confirmSortingSnapshot, sortingKizIdentity, sortingTaskCanReroute } from './pallet-sorting-policy';
 import type { PalletSortingActionDto, StartPalletSortingDto } from './dto/pallet-sorting.dto';
 
-type Source = { id: string; code: string; scanned: boolean; archived: boolean; placementId: string | null; preservedOnPallet?: boolean };
+type Source = { id: string; code: string; scanned: boolean; archived: boolean; placementId: string | null; preservedOnPallet?: boolean; retainedReason?: string }; // FIX: retained discrepancies are not empty boxes.
 type Target = { id: string; code: string; closed: boolean; palletCode: string; quantity: number };
 // FIX: missing database boxes are evidence, not invented Box IDs or zero balances.
 type ProblemSource = { code: string; scanned: boolean; reason: 'BOX_NOT_FOUND' };
@@ -214,7 +214,8 @@ export class PalletSortingService {
   private async openTarget(tx: Prisma.TransactionClient, state: PalletSortingState, dto: PalletSortingActionDto, user: AuthUser) {
     await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`pallet-sorting:${state.warehouseId}`}))`);
     const code = await this.boxCodes.requireAllowed(dto.code ?? '');
-    if (state.sources.some(b => b.code === code) || state.problemSources?.some(b => b.code === code) || state.targets.some(b => b.code === code)) throw new ConflictException('Нужен новый целевой короб, который не является исходным или уже закрытым.');
+    if (state.sources.some(b => b.code === code) || state.problemSources?.some(b => b.code === code)) throw new ConflictException('Исходный короб нельзя использовать как целевой. Отсканируйте новый короб или закрытый целевой короб этой сортировки.');
+    const previous = state.targets.find(b => b.code === code);
     // ADDED: never invent a physical storage location for a newly formed box.
     const pallet = await tx.storagePallet.findFirst({ where: { clientId: state.clientId, warehouseId: state.warehouseId,
       code: { equals: (dto.palletCode ?? '').trim(), mode: 'insensitive' }, status: { notIn: ['DELETED', 'ARCHIVED'] } } });
@@ -222,6 +223,18 @@ export class PalletSortingService {
     let box = await tx.box.findUnique({ where: { code }, include: { storagePlacement: true } });
     if (box && (box.clientId !== state.clientId || box.warehouseId !== state.warehouseId || box.status !== 'active' ||
         box.storagePlacement && box.storagePlacement.palletId !== pallet.id)) throw new ConflictException('Целевой короб недоступен или находится на другом паллет-сорте.');
+    // FIX: reopening is local to this active session; never recreate a deleted destination or zero its count.
+    if (previous) {
+      if (!box || box.id !== previous.id || !previous.closed || box.storagePlacement?.palletId !== pallet.id)
+        throw new ConflictException('Закрытый целевой короб изменился. Проверьте его фактическое размещение.');
+      await this.assertUnclaimed(tx, [box.id], state.id, state.warehouseId);
+      await this.assertMovementAllowed(tx, [box.id]);
+      previous.closed = false;
+      previous.palletCode = pallet.code;
+      state.activeTargetId = box.id;
+      await this.audit(tx, state, user, 'TARGET_REOPENED', { boxId: box.id, palletId: pallet.id, quantity: previous.quantity });
+      return;
+    }
     if (box) {
       await this.assertUnclaimed(tx, [box.id], state.id, state.warehouseId);
       if (await tx.stockBalance.count({ where: { boxId: box.id, quantity: { not: 0 } } }) ||
@@ -409,23 +422,33 @@ export class PalletSortingService {
       }
       if (box.clientId !== state.clientId || box.warehouseId !== state.warehouseId || box.status !== 'active' ||
           (box.storagePlacement?.palletId ?? null) !== sources.find(b => b.id === box.id)!.placementId) throw new ConflictException(`Изменилось расположение или состояние короба ${box.code}. Списание не выполнено.`);
-      if (box.balances.some(b => b.clientId !== state.clientId || b.warehouseId !== state.warehouseId || b.quantity < 0 || b.quantity > 0 && b.status !== 'AVAILABLE')) {
-        throw new ConflictException(`В коробе ${box.code} есть складской резерв, иной статус или некорректный остаток. Требуется разбор перед списанием; логические FBS-маршруты перестраиваются автоматически.`);
+      if (box.balances.some(b => b.clientId !== state.clientId || b.warehouseId !== state.warehouseId)) {
+        throw new ConflictException(`Остатки короба ${box.code} относятся к другому клиенту или филиалу.`);
       }
     }
     const tasks = await tx.fbsTsdAssembly.findMany({ where: { clientId: state.clientId, OR: [{ boxId: { in: sources.map(b => b.id) } }, { reservedBoxId: { in: sources.map(b => b.id) } }] }, orderBy: { id: 'asc' } });
-    const quantity = boxes.reduce((sum, box) => sum + box.balances.reduce((n, row) => n + row.quantity, 0), 0);
     // FIX: the confirmation covers box lifecycle as well as quantity; never guess its policy.
-    const decisions = await Promise.all(boxes.map(async box => ({ ...box, preserveOnPallet: await preserveEmptyStorageBox(box.code, this.boxCodes) })));
+    const decisions = await Promise.all(boxes.map(async box => ({ ...box, preserveOnPallet: await preserveEmptyStorageBox(box.code, this.boxCodes),
+      // FIX: do not erase PACKING/RESERVED/invalid balances to finish other independent sources.
+      retainedReason: box.balances.some(b => b.quantity < 0 || b.quantity > 0 && b.status !== 'AVAILABLE')
+        ? 'Остаток и короб сохранены без списания: есть резерв, иной статус или отрицательное количество.' : null })));
+    const quantity = decisions.filter(b => !b.retainedReason).reduce((sum, box) => sum + box.balances.reduce((n, row) => n + row.quantity, 0), 0);
     return { fingerprint: hash([state.id, state.version, kind, decisions, tasks, state.problemSources, state.moves.filter(m => m.recovered)]), quantity, boxes: decisions,
       problemSources: state.problemSources ?? [], recoveredQuantity: state.moves.filter(m => m.recovered).length,
-      affectedOrders: tasks.filter(t => sortingTaskCanReroute(t, sources.map(b => b.id))).map(t => t.orderId) };
+      affectedOrders: tasks.filter(t => sortingTaskCanReroute(t, decisions.filter(b => !b.retainedReason).map(b => b.id))).map(t => t.orderId) };
   }
 
   private async archiveSources(tx: Prisma.TransactionClient, state: PalletSortingState, preview: Awaited<ReturnType<PalletSortingService['previewInTx']>>, user: AuthUser) {
-    const ids = preview.boxes.map(b => b.id);
+    const ids = preview.boxes.filter(b => !b.retainedReason).map(b => b.id);
     await this.resetAffectedRoutes(tx, state, ids, user);
     for (const box of preview.boxes) {
+      // FIX: explicitly retained discrepancies keep ledger, KIZ, lifecycle and pallet unchanged.
+      if (box.retainedReason) {
+        const source = state.sources.find(b => b.id === box.id)!;
+        source.retainedReason = box.retainedReason;
+        source.preservedOnPallet = true;
+        continue;
+      }
       for (const balance of box.balances.filter(b => b.quantity > 0)) {
         const changed = await tx.stockBalance.updateMany({ where: { id: balance.id, quantity: balance.quantity, updatedAt: balance.updatedAt }, data: { quantity: 0 } });
         if (changed.count !== 1) throw new ConflictException('Остаток изменился во время списания. Получите свежие расхождения.');
@@ -449,7 +472,8 @@ export class PalletSortingService {
       }
     }
     await this.audit(tx, state, user, 'SHORTAGE_CONFIRMED', { fingerprint: preview.fingerprint, quantity: preview.quantity,
-      boxes: preview.boxes.map(b => ({ id: b.id, code: b.code, disposition: b.preserveOnPallet ? 'PRESERVED_ON_PALLET' : 'ARCHIVED', balances: b.balances.map(r => ({ skuId: r.skuId, quantity: r.quantity, status: r.status })) })), affectedOrders: preview.affectedOrders });
+      boxes: preview.boxes.map(b => ({ id: b.id, code: b.code, disposition: b.retainedReason ? 'RETAINED_DISCREPANCY' : b.preserveOnPallet ? 'PRESERVED_ON_PALLET' : 'ARCHIVED', retainedReason: b.retainedReason,
+        balances: b.balances.map(r => ({ skuId: r.skuId, quantity: r.quantity, status: r.status })) })), affectedOrders: preview.affectedOrders });
   }
 
   private async resetAffectedRoutes(tx: Prisma.TransactionClient, state: PalletSortingState, ids: string[], user: AuthUser, skuId?: string) {

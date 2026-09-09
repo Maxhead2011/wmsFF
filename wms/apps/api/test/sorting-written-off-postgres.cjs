@@ -79,6 +79,16 @@ async function main(){
  assert.equal((await p.stockMovement.findUnique({where:{id:debit.id}})).quantity,-1);
  assert.equal(await p.productMark.count({where:{value:found.value}}),1);
  assert.equal(state.targets[0].quantity,3);
+ // TEST: close/reopen keeps stock and the original destination; late scans use the same command path.
+ await act('CLOSE_TARGET');await act('OPEN_TARGET',{code:'FFL_QA_NEW',palletCode:pallet.code});
+ assert.equal(state.activeTargetId,target);assert.equal(state.targets.length,1);assert.equal(state.targets[0].quantity,3);
+ // TEST: a deleted/missing request is evidence to audit, not an automatic refusal for an unrelated KIZ.
+ const missingRequestMark=await p.productMark.create({data:{clientId:client.id,skuId:missingSku.id,boxId:source.id,value:canonical('NOORDER000001'),status:'AVAILABLE',sourceDocument:'TSD-RECEIPT',updatedAt:new Date('2026-08-25T15:27:21Z')}});
+ await p.stockMovement.create({data:{clientId:client.id,warehouseId:wh.id,skuId:missingSku.id,boxId:source.id,type:'SHIP',status:'PACKING',quantity:-1,sourceDocument:'MISSING-REQUEST',createdAt:new Date('2026-09-01T09:02:26Z')}});
+ const missingScan={action:'MOVE',barcode:'4600000000002',kiz:missingRequestMark.value,version:state.version,operationId:randomUUID()};
+ let missingProof;try{await s.action(state.id,missingScan,user);assert.fail('Preview expected');}catch(e){assert.equal(e.getResponse().code,'SORTING_WRITEOFF_CONFIRM_REQUIRED');missingProof=e.getResponse().fingerprint;}
+ state=await s.action(state.id,{...missingScan,operationId:randomUUID(),confirmRestore:true,restoreFingerprint:missingProof},user);
+ assert.equal(state.targets[0].quantity,4);assert.equal((await p.productMark.findUnique({where:{id:missingRequestMark.id}})).boxId,target);
  console.log(JSON.stringify({result:'PASS',confirmation:true,sameMark:true,receiptQuantity:3,retry:true,concurrency:true,rollback:true,lateShipmentBlocked:true,availableWithoutBalance:true,oldDebitPreserved:true}));
 }
 main().catch(e=>{console.error(e);process.exitCode=1;}).finally(()=>p.$disconnect());

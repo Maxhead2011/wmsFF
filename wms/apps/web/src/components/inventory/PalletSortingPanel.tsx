@@ -19,6 +19,13 @@ export function SortingProblemSummary({ problems = [], recovered }: { problems?:
   </aside>;
 }
 
+// FIX: distinguish preserving discrepancies from archiving an empty box.
+export function SortingRetainedNotice({ boxes }: { boxes: Array<{ code: string; retainedReason?: string | null }> }) {
+  const retained = boxes.filter(b => b.retainedReason);
+  return retained.length ? <aside aria-label="Без списания"><h4>Без списания — остатки и размещение сохранены</h4>
+    {retained.map(b => <p key={b.code}>{b.code}: {b.retainedReason}</p>)}</aside> : null;
+}
+
 function SortingWorkspace({ session }: { session: AuthSession }) {
   const [state, setState] = useState<SortingState | null>(null);
   const [sessions, setSessions] = useState<SortingState[]>([]);
@@ -111,7 +118,7 @@ function SortingWorkspace({ session }: { session: AuthSession }) {
         <p>Обработано: {state.moves.length} ед. · Перемещено: {state.moves.filter(m => !m.recovered).length} ед. · Целевых коробов: {state.targets.length}</p>
         <SortingProblemSummary problems={state.problemSources} recovered={state.moves.filter(m => m.recovered).length} />
         {state.pendingRoutes.length > 0 && <div role="alert"><p>Остатки сохранены, но перестроение FBS-маршрутов ещё не завершено.</p>{state.pendingRoutes.map(p => <p key={p.requestId}>{p.taskIds.length} заданий: {p.error ?? 'ожидают перестроения'}</p>)}<button onClick={() => void run(async () => setState(await sortingRequest<SortingState>(token, `/${state.id}/routes`, {})))}>Повторить перестроение маршрутов</button></div>}
-        <details><summary>Исходные короба ({state.sources.length})</summary><ul>{state.sources.map(box => <li key={box.id}>{box.code} — {box.preservedOnPallet ? 'пустой бокс · сохранён на месте' : box.archived ? 'архив' : box.scanned ? 'подтверждён' : 'не отсканирован'}</li>)}</ul></details>
+        <details><summary>Исходные короба ({state.sources.length})</summary><ul>{state.sources.map(box => <li key={box.id}>{box.code} — {box.retainedReason || (box.preservedOnPallet ? 'пустой бокс · сохранён на месте' : box.archived ? 'архив' : box.scanned ? 'подтверждён' : 'не отсканирован')}</li>)}</ul></details>
       </>}
       {state?.stage === 'FORMING' && !target && <label>Фактический паллет-сорт целевого короба<input value={pallet} onChange={e => setPallet(e.target.value)} placeholder="Отсканируйте паллет-сорт" onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); input.current?.focus(); } }} /></label>}
       {target && <><h3>Заполняется {target.code} · {target.quantity} ед.</h3><label>Исходный короб — если КИЗ ещё не привязан<input list="sorting-source-codes" value={source} onChange={e => setSource(e.target.value)} placeholder="Отсканируйте короб; неизвестный отметим как проблемный" onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); input.current?.focus(); } }} /><datalist id="sorting-source-codes">{state!.sources.filter(b => b.scanned && !b.archived && !b.preservedOnPallet).map(b => <option key={b.id} value={b.code} />)}{state!.problemSources?.filter(b => b.scanned).map(b => <option key={b.code} value={b.code}>Проблемный</option>)}</datalist></label></>}
@@ -127,8 +134,9 @@ function SortingWorkspace({ session }: { session: AuthSession }) {
       {pending && !busy && <div><p>Результат списания пока не подтверждён. Повторяем ту же операцию без повторного списания.</p><button onClick={() => void send(pending.path, pending.body)}>Повторить тот же запрос</button></div>}
       <h3>Проверка перед завершением</h3><p>Коробов: {preview.data.boxes.length}. К списанию: <strong>{preview.data.quantity} ед.</strong></p>
       <SortingProblemSummary problems={preview.data.problemSources} recovered={preview.data.recoveredQuantity ?? 0} />
-      <p>Постоянных боксов: {preview.data.boxes.filter(b => b.preserveOnPallet).length} — останутся активными на своих местах. Обычных коробов: {preview.data.boxes.filter(b => !b.preserveOnPallet).length} — будут архивированы.</p>
-      <div className="pallet-sorting-table"><table><thead><tr><th>Короб</th><th>Артикул / товар</th><th>Размер</th><th>Цвет</th><th>К списанию</th></tr></thead><tbody>{preview.data.boxes.map(b => b.balances.length ? b.balances.map(r => <tr key={r.id}><td>{b.code}</td><td>{r.sku.article || r.sku.name}</td><td>{r.sku.size}</td><td>{r.sku.color}</td><td>{r.quantity}</td></tr>) : <tr key={b.id}><td>{b.code}</td><td colSpan={4}>Пустой короб</td></tr>)}</tbody></table></div>
+      <SortingRetainedNotice boxes={preview.data.boxes} />
+      <p>Постоянных боксов: {preview.data.boxes.filter(b => b.preserveOnPallet && !b.retainedReason).length} — останутся активными на своих местах. Обычных коробов: {preview.data.boxes.filter(b => !b.preserveOnPallet && !b.retainedReason).length} — будут архивированы.</p>
+      <div className="pallet-sorting-table"><table><thead><tr><th>Короб</th><th>Артикул / товар</th><th>Размер</th><th>Цвет</th><th>К списанию</th></tr></thead><tbody>{preview.data.boxes.map(b => b.balances.length ? b.balances.map(r => <tr key={r.id}><td>{b.code}</td><td>{r.sku.article || r.sku.name}</td><td>{r.sku.size}</td><td>{r.sku.color}</td><td>{b.retainedReason ? 'Не списывается' : r.quantity}</td></tr>) : <tr key={b.id}><td>{b.code}</td><td colSpan={4}>Пустой короб</td></tr>)}</tbody></table></div>
       <p>Будет проверено маршрутов FBS: {preview.data.affectedOrders.length}. История КИЗ сохранится.</p>
       {preview.data.quantity > 0 && <label><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} />Подтверждаю отсутствие перечисленного товара и его списание</label>}
       <button disabled={busy || Boolean(pending) || preview.data.quantity > 0 && !consent} onClick={() => action(preview.action, { fingerprint: preview.data.fingerprint, confirmWriteOff: consent })}>Применить решение{preview.data.quantity > 0 ? ' и списать недостачу' : ''}</button>

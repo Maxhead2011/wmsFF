@@ -35,6 +35,20 @@ function fixture(action = 'COMPLETE') {
   return { service, db, boxes, policy, state, user: { id: 'admin' }, kind: action === 'COMPLETE' ? 'remaining' : 'missing' };
 }
 
+it('finishes other sources while retaining a PACKING box and its KIZ without write-off',async()=>{
+  // TEST: FFL_LKB2107_246 must not block the whole session or lose its return-required goods.
+  const f=fixture();f.boxes[2].balances[0].status='PACKING';
+  const preview=await f.service.previewInTx(f.db,f.state,'remaining');
+  expect(preview.quantity).toBe(2);
+  expect(preview.boxes[2].retainedReason).toBeTruthy();
+  await f.service.runAction(f.db,f.state,{action:'COMPLETE',fingerprint:preview.fingerprint,confirmWriteOff:true},f.user);
+  expect(f.state.stage).toBe('COMPLETED');expect(f.boxes[2].balances[0].quantity).toBe(2);
+  expect(f.boxes[2].status).toBe('active');expect(f.boxes[2].storagePlacement).toBeTruthy();
+  expect(f.state.sources[2].retainedReason).toBeTruthy();
+  expect(f.db.stockMovement.create.mock.calls.every(([q]:any)=>q.data.boxId!=='box-2')).toBe(true);
+  expect(f.db.productMark.updateMany.mock.calls.every(([q]:any)=>q.where.boxId!=='box-2')).toBe(true);
+});
+
 it.each(['COMPLETE', 'ARCHIVE_MISSING'])('preserves permanent boxes and archives only ordinary sources during %s', async action => {
   // TEST: use the real sorting + empty-box detach services together, not a mocked detach.
   const f = fixture(action);
