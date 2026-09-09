@@ -35,18 +35,41 @@ function fixture(action = 'COMPLETE') {
   return { service, db, boxes, policy, state, user: { id: 'admin' }, kind: action === 'COMPLETE' ? 'remaining' : 'missing' };
 }
 
-it('finishes other sources while retaining a PACKING box and its KIZ without write-off',async()=>{
-  // TEST: FFL_LKB2107_246 must not block the whole session or lose its return-required goods.
+it('archives a physically empty PACKING source after explicit administrator shortage consent',async()=>{
+  // TEST: FFL_LKB2107_246: a confirmed empty ordinary box must not remain on the pallet.
   const f=fixture();f.boxes[2].balances[0].status='PACKING';
   const preview=await f.service.previewInTx(f.db,f.state,'remaining');
-  expect(preview.quantity).toBe(2);
-  expect(preview.boxes[2].retainedReason).toBeTruthy();
+  expect(preview.quantity).toBe(4);
+  expect(preview.boxes[2].retainedReason).toBeNull();
   await f.service.runAction(f.db,f.state,{action:'COMPLETE',fingerprint:preview.fingerprint,confirmWriteOff:true},f.user);
-  expect(f.state.stage).toBe('COMPLETED');expect(f.boxes[2].balances[0].quantity).toBe(2);
-  expect(f.boxes[2].status).toBe('active');expect(f.boxes[2].storagePlacement).toBeTruthy();
-  expect(f.state.sources[2].retainedReason).toBeTruthy();
-  expect(f.db.stockMovement.create.mock.calls.every(([q]:any)=>q.data.boxId!=='box-2')).toBe(true);
-  expect(f.db.productMark.updateMany.mock.calls.every(([q]:any)=>q.where.boxId!=='box-2')).toBe(true);
+  expect(f.state.stage).toBe('COMPLETED');expect(f.boxes[2].balances[0].quantity).toBe(0);
+  expect(f.boxes[2].status).toBe('archived');expect(f.boxes[2].storagePlacement).toBeNull();
+  expect(f.state.sources[2].archived).toBe(true);
+  expect(f.db.stockMovement.create).toHaveBeenCalledWith(expect.objectContaining({data:expect.objectContaining({boxId:'box-2',status:'PACKING',quantity:-2,type:'INVENTORY_ADJUSTMENT'})}));
+  // Shipment/return history is retained, never fabricated or deleted to archive the source.
+  expect(f.db.productMark.updateMany).toHaveBeenCalledWith(expect.objectContaining({where:expect.objectContaining({boxId:'box-2',status:{in:['AVAILABLE','PACKING','RESERVED']}}),data:{status:'BLOCKED'}}));
+});
+
+it('requires fresh consent for reserved quantities and retains invalid negative balances',async()=>{
+  // TEST: no silent cancellation of stock; preview covers every quantity being corrected.
+  const f=fixture(); f.boxes[2].balances[0].status='RESERVED';
+  let preview=await f.service.previewInTx(f.db,f.state,'remaining');
+  await expect(f.service.runAction(f.db,f.state,{action:'COMPLETE',fingerprint:preview.fingerprint,confirmWriteOff:false},f.user)).rejects.toThrow('подтверждение');
+  expect(f.db.stockMovement.create).not.toHaveBeenCalled();
+  f.boxes[2].balances[0].quantity=-1;
+  preview=await f.service.previewInTx(f.db,f.state,'remaining');
+  expect(preview.boxes[2].retainedReason).toBeTruthy();
+});
+it('rechecks legacy retained discrepancies instead of treating them as permanent empty storage',async()=>{
+  // TEST: an unfinished old sorting must not silently carry the same retained PACKING box forward.
+  const f=fixture(); f.boxes[2].balances[0].status='PACKING';
+  Object.assign(f.state.sources[2],{preservedOnPallet:true,retainedReason:'legacy reservation'});
+  const preview=await f.service.previewInTx(f.db,f.state,'remaining');
+  expect(preview.quantity).toBe(4);
+  await f.service.runAction(f.db,f.state,{action:'COMPLETE',fingerprint:preview.fingerprint,confirmWriteOff:true},f.user);
+  expect(f.state.sources[2]).toMatchObject({archived:true});
+  expect(f.state.sources[2].retainedReason).toBeUndefined();
+  expect(f.state.sources[2].preservedOnPallet).toBeUndefined();
 });
 
 it.each(['COMPLETE', 'ARCHIVE_MISSING'])('preserves permanent boxes and archives only ordinary sources during %s', async action => {

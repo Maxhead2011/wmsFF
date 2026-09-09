@@ -133,7 +133,7 @@ export class PalletSortingService {
       if (state.stage === 'COMPLETED') throw new ConflictException('Сортировка уже завершена.');
       // FIX: forming checks the actual moved source below, not every old checklist box.
       const checkSources = !['MOVE', 'OPEN_TARGET', 'CLOSE_TARGET'].includes(dto.action);
-      await this.assertMovementAllowed(tx, [...(checkSources ? state.sources.filter(b => !b.archived && !b.preservedOnPallet).map(b => b.id) : []), ...state.targets.map(b => b.id)]);
+      await this.assertMovementAllowed(tx, [...(checkSources ? state.sources.filter(b => !b.archived && (!b.preservedOnPallet || b.retainedReason)).map(b => b.id) : []), ...state.targets.map(b => b.id)]);
       await this.runAction(tx, state, dto, user);
       state.version++;
       await this.save(tx, state);
@@ -405,15 +405,24 @@ export class PalletSortingService {
     const barcode = dto.barcode!.trim();
     const restored = await this.stock.restoreWrittenOffSortingUnit(tx, { clientId: state.clientId, toBoxCode: target.code,
       barcode, kiz: dto.kiz!, sessionId: state.id, version: state.version, confirmRestore: dto.confirmRestore,
-      restoreFingerprint: dto.restoreFingerprint, idempotencyKey: `sorting:${state.id}:${hash(identity)}` }, user);
-    state.moves.push({ identity, barcode, sourceBoxId: null, targetBoxId: target.id, recovered: true, recoveryReason: 'WRITTEN_OFF_KIZ' });
+      restoreFingerprint: dto.restoreFingerprint, idempotencyKey: `sorting:${state.id}:${hash(identity)}` }, user, async sourceId => {
+        // FIX: recovered accounting sources obey the same locks as ordinary sorting transfers.
+        await this.assertUnclaimed(tx, [sourceId], state.id, state.warehouseId);
+        await this.assertMovementAllowed(tx, [sourceId]);
+        await this.resetAffectedRoutes(tx, state, [sourceId], user);
+      });
+    // FIX: transferring an already counted unit is not an additional found-stock receipt.
+    state.moves.push({ identity, barcode, sourceBoxId: restored.sourceBoxId ?? null, targetBoxId: target.id,
+      recovered: !restored.sourceBoxId, ...(!restored.sourceBoxId ? { recoveryReason: 'WRITTEN_OFF_KIZ' as const } : {}) });
     target.quantity++;
-    await this.audit(tx, state, user, 'UNIT_RECOVERED', { identity, barcode, targetBoxId: target.id, skuId: restored.skuId,
+    await this.audit(tx, state, user, restored.sourceBoxId ? 'UNIT_MOVED_SOURCE_CORRECTED' : 'UNIT_RECOVERED', {
+      identity, barcode, sourceBoxId: restored.sourceBoxId ?? null, targetBoxId: target.id, skuId: restored.skuId,
       movementId: restored.movementId, quantity: 1, reason: 'WRITTEN_OFF_KIZ' });
   }
 
   private async previewInTx(tx: Prisma.TransactionClient, state: PalletSortingState, kind: 'missing' | 'remaining') {
-    const sources = state.sources.filter(b => !b.archived && !b.preservedOnPallet && (kind === 'remaining' || !b.scanned));
+    // FIX: legacy retained discrepancies are not settled permanent boxes; re-preview under fresh consent.
+    const sources = state.sources.filter(b => !b.archived && (!b.preservedOnPallet || b.retainedReason) && (kind === 'remaining' || !b.scanned));
     const boxes = await tx.box.findMany({ where: { id: { in: sources.map(b => b.id) } }, orderBy: { id: 'asc' },
       include: { storagePlacement: true, balances: { orderBy: { id: 'asc' }, include: { sku: { select: { clientId: true, article: true, name: true, size: true, color: true } } } },
         productMarks: { orderBy: { id: 'asc' }, select: { id: true, clientId: true, status: true, updatedAt: true } } } });
@@ -431,9 +440,10 @@ export class PalletSortingService {
     const tasks = await tx.fbsTsdAssembly.findMany({ where: { clientId: state.clientId, OR: [{ boxId: { in: sources.map(b => b.id) } }, { reservedBoxId: { in: sources.map(b => b.id) } }] }, orderBy: { id: 'asc' } });
     // FIX: the confirmation covers box lifecycle as well as quantity; never guess its policy.
     const decisions = await Promise.all(boxes.map(async box => ({ ...box, preserveOnPallet: await preserveEmptyStorageBox(box.code, this.boxCodes),
-      // FIX: do not erase PACKING/RESERVED/invalid balances to finish other independent sources.
-      retainedReason: box.balances.some(b => b.quantity < 0 || b.quantity > 0 && b.status !== 'AVAILABLE')
-        ? 'Остаток и короб сохранены без списания: есть резерв, иной статус или отрицательное количество.' : null })));
+      // FIX: administrator shortage consent covers positive reservations too, not only AVAILABLE.
+      // Negative/corrupt quantities need a separate recount; do not silently turn them into a receipt.
+      retainedReason: box.balances.some(b => !Number.isInteger(b.quantity) || b.quantity < 0)
+        ? 'Короб сохранён: отрицательный или некорректный остаток требует фактического пересчёта.' : null })));
     const quantity = decisions.filter(b => !b.retainedReason).reduce((sum, box) => sum + box.balances.reduce((n, row) => n + row.quantity, 0), 0);
     return { fingerprint: hash([state.id, state.version, kind, decisions, tasks, state.problemSources, state.moves.filter(m => m.recovered)]), quantity, boxes: decisions,
       problemSources: state.problemSources ?? [], recoveredQuantity: state.moves.filter(m => m.recovered).length,
@@ -460,8 +470,11 @@ export class PalletSortingService {
           comment: `Подтверждённая недостача при сортировке; администратор ${user.id}` } });
       }
       // ADDED: retain the KIZ and its old box as history; shipment evidence is immutable.
-      await tx.productMark.updateMany({ where: { boxId: box.id, clientId: state.clientId, status: 'AVAILABLE' }, data: { status: 'BLOCKED' } });
+      // FIX: remove missing units from the active box composition; keep SHIPPING and all order history.
+      await tx.productMark.updateMany({ where: { boxId: box.id, clientId: state.clientId, status: { in: ['AVAILABLE', 'PACKING', 'RESERVED'] } }, data: { status: 'BLOCKED' } });
       const source = state.sources.find(b => b.id === box.id)!;
+      delete source.retainedReason;
+      delete source.preservedOnPallet;
       // FIX: settled permanent storage stays active and keeps its actual pallet placement.
       if (box.preserveOnPallet) {
         source.preservedOnPallet = true;
