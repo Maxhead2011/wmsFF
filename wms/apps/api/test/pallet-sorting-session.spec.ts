@@ -74,6 +74,8 @@ it('includes current foreign-client content in the explicit administrative write
   const tx: any = { box: { findMany: vi.fn().mockResolvedValue([{ id: 'a', code: 'A', clientId: 'client', warehouseId: 'wh', status: 'active', storagePlacement: null, balances: [], productMarks: [{ id: 'foreign', clientId: 'other', status: 'AVAILABLE' }] }]) }, fbsTsdAssembly: { findMany: vi.fn().mockResolvedValue([]) } };
   (f.state.sources[0] as any).placementId = null;
   f.service.boxCodes.isPermanentStorageBox = vi.fn().mockResolvedValue(false);
+  // TEST: production also supports the policy-object adapter; A is not a permanent box.
+  f.service.boxCodes.getPolicy = vi.fn().mockResolvedValue({ storageBoxPrefix: 'BOX_', storageBoxAliases: [] });
   f.service.boxCodes.normalize = vi.fn(async (value: string) => value);
   const preview = await f.service.previewInTx(tx, f.state, 'missing');
   expect(preview.boxes[0].productMarks).toContainEqual(expect.objectContaining({ clientId: 'other' }));
