@@ -237,14 +237,16 @@ export class PalletSortingService {
     }
     if (box) {
       await this.assertUnclaimed(tx, [box.id], state.id, state.warehouseId);
-      if (await tx.stockBalance.count({ where: { boxId: box.id, quantity: { not: 0 } } }) ||
-          await tx.productMark.count({ where: { boxId: box.id, status: { not: 'SHIPPING' } } })) throw new ConflictException('Для формирования нужен пустой целевой короб.');
     } else box = await tx.box.create({ data: { code, clientId: state.clientId, warehouseId: state.warehouseId, status: 'active' }, include: { storagePlacement: true } });
     await this.assertMovementAllowed(tx, [box.id]);
+    // FIX: an existing destination can be topped up in a new session; opening never re-receives its stock or KIZs.
+    const contents = await tx.stockBalance.aggregate({ where: { boxId: box.id }, _sum: { quantity: true }, _min: { quantity: true } });
+    if ((contents._min.quantity ?? 0) < 0) throw new ConflictException('В целевом коробе есть отрицательный остаток. Сначала подтвердите корректировку остатков.');
+    const quantity = contents._sum.quantity ?? 0;
     if (!box.storagePlacement) await tx.storagePalletBox.create({ data: { palletId: pallet.id, boxId: box.id, boxCode: box.code, source: 'MANUAL' } });
-    state.targets.push({ id: box.id, code: box.code, closed: false, quantity: 0, palletCode: pallet.code });
+    state.targets.push({ id: box.id, code: box.code, closed: false, quantity, palletCode: pallet.code });
     state.activeTargetId = box.id;
-    await this.audit(tx, state, user, 'TARGET_OPENED', { boxId: box.id, palletId: pallet.id });
+    await this.audit(tx, state, user, 'TARGET_OPENED', { boxId: box.id, palletId: pallet.id, quantity });
   }
 
   private async move(tx: Prisma.TransactionClient, state: PalletSortingState, dto: PalletSortingActionDto, user: AuthUser) {
