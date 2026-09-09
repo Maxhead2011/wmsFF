@@ -4,6 +4,7 @@ import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt
 import { assertSortingAdmin, sortingKizIdentity } from '../inventory/pallet-sorting-policy';
 import { sortingSettledBoxTaskIds } from './sorting-settled-box-tasks';
 import { restoreWrittenOffSortingUnit, type WrittenOffSortingInput } from './sorting-written-off-recovery';
+import { reconcileAdminSortingUnit, type AdminSortingUnitInput } from './sorting-admin-unit-reconciliation';
 import * as XLSX from 'xlsx';
 import {
   BillingChargeSource,
@@ -931,6 +932,11 @@ export class StockOperationsService {
     await tx.productMark.create({ data: { clientId: input.clientId, skuId: sku.id, boxId: target.id, value: input.kiz,
       status: StockStatus.AVAILABLE, stockMovementId: movement.id, sourceDocument: `PALLET_SORTING:${input.sessionId}` } });
     return { skuId: sku.id, movementId: movement.id };
+  }
+
+  // FIX: dedicated ADMIN sorting entry; ordinary transfer/recovery rules remain unchanged.
+  async reconcileAdminSortingUnit(tx: Prisma.TransactionClient, input: AdminSortingUnitInput, user: AuthUser) {
+    return reconcileAdminSortingUnit(tx, input, user, balance => this.incrementTargetBalance(tx, balance), storageBoxTransferKizIdentity);
   }
 
   // FIX: only the explicit admin sorting workflow can restore previously written-off identities.

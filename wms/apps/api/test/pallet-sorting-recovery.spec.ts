@@ -32,7 +32,9 @@ function fixture() {
   service.scopes = { requireClientAccess: vi.fn() };
   service.audit = vi.fn(); service.assertUnclaimed = vi.fn(); service.resetAffectedRoutes = vi.fn();
   service.assertMovementAllowed = vi.fn(); // TEST: source locks are now checked inside move, not only action.
-  service.stock = { recoverSortingUnit: vi.fn().mockResolvedValue({ skuId: 'sku' }), transferSortingUnit: vi.fn().mockResolvedValue({ skuId: 'sku' }) };
+  service.stock = { recoverSortingUnit: vi.fn().mockResolvedValue({ skuId: 'sku' }), transferSortingUnit: vi.fn().mockResolvedValue({ skuId: 'sku' }),
+    // TEST: only the admin session delegates to the new physical-truth path; legacy helper tests below remain unchanged.
+    reconcileAdminSortingUnit: vi.fn().mockResolvedValue({ skuId: 'sku', sourceBoxId: null, recovered: true, alreadyApplied: false }) };
   const tx: any = { $executeRaw: vi.fn(), $queryRaw: vi.fn().mockResolvedValue([]),
     box: { findUnique: vi.fn().mockResolvedValue(null), findMany: vi.fn().mockResolvedValue([]) },
     storagePallet: { findFirst: vi.fn().mockResolvedValue({ id: 'pallet', code: 'PAL', clientId: 'client', boxes: [{ boxId: null, boxCode: 'UNKNOWN' }] }) },
@@ -61,10 +63,11 @@ it('records an unknown physical box once at initial scan and allows forming', as
   expect(f.state.stage).toBe('FORMING');
   expect(f.service.stock.recoverSortingUnit).not.toHaveBeenCalled();
 });
-it('does not disguise an existing foreign or out-of-manifest box as missing', async () => {
-  // TEST: absence from this manifest is not absence from the WMS database.
-  const f = fixture(); f.tx.box.findUnique.mockResolvedValue({ id: 'foreign', clientId: 'other' });
-  await expect(f.service.runAction(f.tx, f.state, { action: 'SCAN_SOURCE', code: 'FOREIGN' }, user)).rejects.toThrow();
+it('records an existing foreign source as real, not missing', async () => {
+  // TEST: ADMIN may confirm its location but must not invent an absent box.
+  const f = fixture(); f.tx.box.findUnique.mockResolvedValue({ id: 'foreign', code: 'FOREIGN', clientId: 'other', warehouseId: 'other-wh', status: 'active' });
+  await f.service.runAction(f.tx, f.state, { action: 'SCAN_SOURCE', code: 'FOREIGN' }, user);
+  expect(f.state.sources).toEqual([expect.objectContaining({ id: 'foreign', scanned: true })]);
   expect(f.state.problemSources).toEqual([]);
 });
 function forming() {
@@ -77,9 +80,9 @@ it('recovers an unknown KIZ in the target and distinguishes recovery from moveme
   // TEST: one scanned problem source can be used without forcing another menu.
   const f = forming(); const dto = { barcode: '4600000000001', kiz };
   await f.service.move(f.tx, f.state, dto, user);
+  f.service.stock.reconcileAdminSortingUnit.mockResolvedValue({ skuId: 'sku', sourceBoxId: null, recovered: false, alreadyApplied: true });
   await f.service.move(f.tx, f.state, dto, user);
-  expect(f.service.stock.recoverSortingUnit).toHaveBeenCalledTimes(1);
-  expect(f.service.stock.recoverSortingUnit).toHaveBeenCalledWith(f.tx, expect.objectContaining({ sourceBoxCode: 'UNKNOWN', toBoxCode: 'TARGET', barcode: dto.barcode, kiz }), user);
+  expect(f.service.stock.reconcileAdminSortingUnit).toHaveBeenCalledWith(f.tx, expect.objectContaining({ sourceBoxCode: 'UNKNOWN', toBoxCode: 'TARGET', barcode: dto.barcode, kiz }), user);
   expect(f.state.moves).toEqual([expect.objectContaining({ sourceBoxId: null, sourceBoxCode: 'UNKNOWN', recovered: true })]);
   expect(f.state.targets[0].quantity).toBe(1);
   expect(f.service.stock.transferSortingUnit).not.toHaveBeenCalled();
@@ -87,15 +90,18 @@ it('recovers an unknown KIZ in the target and distinguishes recovery from moveme
 it('uses a real available source when it is unambiguous and does not increase total stock', async () => {
   // TEST: recovery is a fallback, never an alternative to a known available unit.
   const f = forming(); f.state.sources = [{ id: 'a', code: 'A', scanned: true }];
-  f.tx.stockBalance.findMany.mockResolvedValue([{ boxId: 'a' }]);
+  f.service.stock.reconcileAdminSortingUnit.mockResolvedValue({ skuId: 'sku', sourceBoxId: 'a', recovered: false, alreadyApplied: false });
   await f.service.move(f.tx, f.state, { barcode: '4600000000001', kiz }, user);
-  expect(f.service.stock.transferSortingUnit).toHaveBeenCalledTimes(1);
+  expect(f.service.stock.reconcileAdminSortingUnit).toHaveBeenCalledWith(f.tx, expect.objectContaining({ sourceBoxIds: ['a'] }), user);
+  expect(f.state.moves[0].sourceBoxId).toBe('a');
+  expect(f.state.moves[0].recovered).not.toBe(true);
   expect(f.service.stock.recoverSortingUnit).not.toHaveBeenCalled();
 });
-it.each([false, true])('requires a physically scanned problem source (unscanned=%s)', async unscanned => {
-  // TEST: an arbitrary text entered after formation cannot authorize a new receipt.
+it.each([false, true])('allows an ADMIN physical scan without a problem-source blocker (unscanned=%s)', async unscanned => {
+  // TEST: SKU + KIZ is the fact; the helper resolves or receives the unit atomically.
   const f = forming(); f.state.problemSources = unscanned ? [{ code: 'UNKNOWN', scanned: false, reason: 'BOX_NOT_FOUND' }] : [];
-  await expect(f.service.move(f.tx, f.state, { barcode: '4600000000001', kiz }, user)).rejects.toThrow();
+  await f.service.move(f.tx, f.state, { barcode: '4600000000001', kiz }, user);
+  expect(f.service.stock.reconcileAdminSortingUnit).toHaveBeenCalledTimes(1);
   expect(f.service.stock.recoverSortingUnit).not.toHaveBeenCalled();
 });
 it('also records an unknown source scanned in an already forming session', async () => {
@@ -103,12 +109,13 @@ it('also records an unknown source scanned in an already forming session', async
   const f = forming(); f.state.problemSources = [];
   await f.service.move(f.tx, f.state, { barcode: '4600000000001', kiz, sourceBoxCode: 'UNKNOWN' }, user);
   expect(f.state.problemSources).toEqual([expect.objectContaining({ code: 'UNKNOWN', scanned: true })]);
-  expect(f.service.stock.recoverSortingUnit).toHaveBeenCalledTimes(1);
+  expect(f.service.stock.reconcileAdminSortingUnit).toHaveBeenCalledTimes(1);
 });
-it('keeps an already registered or shipped KIZ out of the recovery path', async () => {
-  // TEST: physical possession does not erase shipment history.
+it('delegates a registered or shipped KIZ without invoking the old history blocker', async () => {
+  // TEST: history preservation and current physical reassignment coexist in the new helper.
   const f = forming(); f.tx.productMark.findMany.mockResolvedValue([{ id: 'mark', boxId: 'old', status: 'SHIPPING' }]);
-  await expect(f.service.move(f.tx, f.state, { barcode: '4600000000001', kiz }, user)).rejects.toThrow();
+  await f.service.move(f.tx, f.state, { barcode: '4600000000001', kiz }, user);
+  expect(f.service.stock.reconcileAdminSortingUnit).toHaveBeenCalledTimes(1);
   expect(f.service.stock.recoverSortingUnit).not.toHaveBeenCalled();
 });
 
@@ -118,15 +125,12 @@ it.each([0, 2])('uses an explicit source outside the pallet checklist with %s av
   f.service.assertUnclaimed = vi.fn(); f.service.assertMovementAllowed = vi.fn(); f.service.resetAffectedRoutes = vi.fn();
   const box = { id: 'external', code: 'EXTERNAL', clientId: 'client', warehouseId: 'wh', status: 'active', storagePlacement: { palletId: 'other-pallet' } };
   f.tx.box.findUnique.mockResolvedValue(box);
-  f.tx.stockBalance.findMany.mockImplementation(async ({ where }: any) => quantity > 0 && where.boxId.in.includes('external') ? [{ boxId: 'external' }] : []);
+  f.service.stock.reconcileAdminSortingUnit.mockResolvedValue({ skuId: 'sku', sourceBoxId: 'external', recovered: !quantity, alreadyApplied: false });
   await f.service.move(f.tx, f.state, { barcode: '4600000000001', kiz, sourceBoxCode: 'EXTERNAL' }, user);
   expect(f.state.sources).toEqual([]);
-  if (quantity) {
-    expect(f.service.stock.transferSortingUnit).toHaveBeenCalledWith(f.tx, expect.objectContaining({ fromBoxCode: 'EXTERNAL' }), user);
-    expect(f.service.stock.recoverSortingUnit).not.toHaveBeenCalled();
-  } else {
-    expect(f.service.stock.recoverSortingUnit).toHaveBeenCalledWith(f.tx, expect.objectContaining({ knownSource: { id: 'external', placementId: 'other-pallet' } }), user);
-  }
+  expect(f.service.stock.reconcileAdminSortingUnit).toHaveBeenCalledWith(f.tx, expect.objectContaining({ sourceBoxCode: 'EXTERNAL' }), user);
+  expect(Boolean(f.state.moves[0].recovered)).toBe(!quantity);
+  expect(f.service.stock.recoverSortingUnit).not.toHaveBeenCalled();
 });
 
 function stockFixture() {
@@ -275,10 +279,21 @@ it('does not turn a problem source into its own target box', async () => {
   await expect(f.service.openTarget(f.tx, f.state, { code: 'UNKNOWN', palletCode: 'PAL' }, user)).rejects.toThrow('новый');
 });
 it('does not guess between multiple scanned unknown boxes', async () => {
-  // TEST: request only the source scan, not a detour to another application menu.
+  // TEST: accept the physical unit without inventing which missing box contained it.
   const f = forming(); f.state.problemSources.push({ code: 'UNKNOWN_2', scanned: true, reason: 'BOX_NOT_FOUND' });
-  await expect(f.service.move(f.tx, f.state, { barcode: '4600000000001', kiz }, user)).rejects.toThrow('исходный');
+  await f.service.move(f.tx, f.state, { barcode: '4600000000001', kiz }, user);
   expect(f.service.stock.recoverSortingUnit).not.toHaveBeenCalled();
-  await f.service.move(f.tx, f.state, { barcode: '4600000000001', kiz, sourceBoxCode: 'UNKNOWN_2' }, user);
-  expect(f.service.stock.recoverSortingUnit).toHaveBeenCalledTimes(1);
+  expect(f.service.stock.reconcileAdminSortingUnit).toHaveBeenCalledWith(f.tx, expect.objectContaining({ sourceBoxCode: undefined }), user);
+  expect(f.state.moves[0].sourceBoxCode).toBeUndefined();
+});
+it('resolves an orphan pallet placement by its existing box code without inventing stock', async () => {
+  // TEST: stale placement.boxId is metadata, not an ADMIN business blocker.
+  const f = fixture();
+  const box = { id: 'real-box', code: 'UNKNOWN', clientId: 'client', warehouseId: 'wh', status: 'archived', storagePlacement: null };
+  f.tx.box.findUnique.mockResolvedValue(box);
+  f.tx.box.findMany.mockResolvedValue([box]);
+  const result = await f.service.start({ id: 'session', code: 'PAL' }, user);
+  expect(result.sources).toEqual([expect.objectContaining({ id: 'real-box', scanned: false })]);
+  expect(result.problemSources).toEqual([]);
+  expect(f.service.stock.reconcileAdminSortingUnit).not.toHaveBeenCalled();
 });

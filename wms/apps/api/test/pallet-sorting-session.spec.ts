@@ -63,27 +63,32 @@ it('writes off only remaining balances and leaves PACKING/SHIPPING mark history 
   const preview = { fingerprint: 'fresh', quantity: 2, affectedOrders: [], boxes: [{ id: 'a', code: 'A', balances: [{ id: 'balance', skuId: 'sku', quantity: 2, status: 'AVAILABLE', updatedAt: new Date(), palletId: null }] }] };
   await f.service.archiveSources(tx, f.state, preview, f.user);
   expect(tx.stockMovement.create.mock.calls[0][0].data).toMatchObject({ type: 'INVENTORY_ADJUSTMENT', quantity: -2, status: 'AVAILABLE' });
-  expect(tx.productMark.updateMany).toHaveBeenCalledWith({ where: { boxId: 'a', clientId: 'client', status: 'AVAILABLE' }, data: { status: 'BLOCKED' } });
+  expect(tx.productMark.updateMany).toHaveBeenCalledWith({ where: { boxId: 'a', status: 'AVAILABLE' }, data: { status: 'BLOCKED' } });
   expect(f.state.sources[0].archived).toBe(true);
 });
-it('does not include a foreign-client KIZ in an administrative write-off snapshot', async () => {
-  // TEST: corrupted cross-client contents must fail closed, even for ADMIN.
+it('includes current foreign-client content in the explicit administrative write-off snapshot', async () => {
+  // TEST: user-authorized reconciliation includes actual contents in consent instead of hiding them.
   const f = fixture();
   delete f.service.previewInTx;
   const tx: any = { box: { findMany: vi.fn().mockResolvedValue([{ id: 'a', code: 'A', clientId: 'client', warehouseId: 'wh', status: 'active', storagePlacement: null, balances: [], productMarks: [{ id: 'foreign', clientId: 'other', status: 'AVAILABLE' }] }]) }, fbsTsdAssembly: { findMany: vi.fn().mockResolvedValue([]) } };
   (f.state.sources[0] as any).placementId = null;
-  await expect(f.service.previewInTx(tx, f.state, 'missing')).rejects.toThrow('клиент');
+  f.service.boxCodes.isPermanentStorageBox = vi.fn().mockResolvedValue(false);
+  f.service.boxCodes.normalize = vi.fn(async (value: string) => value);
+  const preview = await f.service.previewInTx(tx, f.state, 'missing');
+  expect(preview.boxes[0].productMarks).toContainEqual(expect.objectContaining({ clientId: 'other' }));
 });
-it('does not bypass an unresolved recount or a non-FBS active request', async () => {
-  // TEST: the FBS reroute permission is not a blanket permission to erase other warehouse work.
+it('audits administrative overrides of recount and non-FBS holds without erasing their work', async () => {
+  // TEST: source row locks remain; inventory and request history are not deleted.
   const f = fixture();
   const tx: any = { $executeRaw: vi.fn(), $queryRaw: vi.fn(), inventorySession: { findFirst: vi.fn().mockResolvedValue(null) },
     inventoryAuditBox: { findFirst: vi.fn(async (q: any) => q.where.status?.in?.includes('MISMATCH') ? { id: 'audit' } : null) },
     clientRequestBoxSelection: { findFirst: vi.fn().mockResolvedValue(null) } };
-  await expect(f.service.assertMovementAllowed(tx, ['a'])).rejects.toThrow('актуализац');
+  await f.service.assertMovementAllowed(tx, ['a'], f.state, f.user);
+  expect(f.service.audit).toHaveBeenCalledWith(tx, f.state, f.user, 'LOCKS_OVERRIDDEN', expect.objectContaining({ recountId: 'audit' }));
   tx.inventoryAuditBox.findFirst.mockResolvedValue(null);
   tx.clientRequestBoxSelection.findFirst.mockResolvedValue({ id: 'manual-outbound' });
-  await expect(f.service.assertMovementAllowed(tx, ['a'])).rejects.toThrow('FBS');
+  await f.service.assertMovementAllowed(tx, ['a'], f.state, f.user);
+  expect(f.service.audit).toHaveBeenCalledWith(tx, f.state, f.user, 'LOCKS_OVERRIDDEN', expect.objectContaining({ requestSelectionId: 'manual-outbound' }));
 });
 
 it('replays an acknowledged command without executing or saving the stock mutation again', async () => {

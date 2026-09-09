@@ -475,8 +475,9 @@ export const workspaceNav: WorkspaceNavItem[] = [
 ];
 
 export function canOpenWorkspace(user: AuthUser, item: WorkspaceNavItem) {
-  // ADDED: dedicated opt-in and strict role check before the system:admin bypass.
-  if (item.id === 'pallet-sorting' && (import.meta.env.VITE_PALLET_SORTING_ENABLED !== 'true' || !user.roleCodes.includes('ADMIN'))) return false;
+  // FIX: this menu is role-governed; stale individual visibility/stock permissions
+  // must not block ADMIN. Other workspaces keep their existing permission rules.
+  if (item.id === 'pallet-sorting') return import.meta.env.VITE_PALLET_SORTING_ENABLED === 'true' && user.roleCodes.includes('ADMIN') && !user.isDemo;
   if (user.workspaceVisibility?.[item.id] === false) {
     return false;
   }

@@ -852,6 +852,25 @@ export class InventoryService {
         ) {
           throw new ForbiddenException('Короб относится к другому филиалу инвентаризации.');
         }
+        // FIX: administrative pallet sorting overrides old inventory holds. A pending FULL
+        // or BOX_CHECK decision must not restore/deplete a unit moved since its count began.
+        // Keep the check inside the decision transaction so a conflict rolls its claim back.
+        if (process.env.WMS_PALLET_SORTING_ENABLED === 'true') {
+          const sortingMovement = await tx.stockMovement.findFirst({
+            where: {
+              boxId: freshBox.id,
+              skuId: line.skuId,
+              createdAt: { gte: line.auditBox.startedAt },
+              sourceDocument: { startsWith: 'PALLET_SORTING:' },
+            },
+            select: { id: true },
+          });
+          if (sortingMovement) {
+            throw new ConflictException(
+              `Остаток в коробе ${line.auditBox.boxCode} изменён при административной сортировке после начала пересчёта. Старое решение не применено. Выполните новую проверку содержимого короба.`,
+            );
+          }
+        }
         // FIX: sorting does not lock saleable stock while counting. Reject stale counts instead of restoring parallel picks.
         if (line.auditBox.session.comment?.includes('[SKU_SORTING_SOURCE]')) {
           await assertSortingInventorySnapshot(tx, freshBox.id, line.skuId, line.auditBox.startedAt);
