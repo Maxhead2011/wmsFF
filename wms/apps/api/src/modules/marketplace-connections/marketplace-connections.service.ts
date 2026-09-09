@@ -4341,6 +4341,25 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (onlyTaskIds && request.warehouseId !== user.activeWarehouseId) {
       throw new ForbiddenException('Заявка относится к другому филиалу.');
     }
+    // FIX: an FBS request with only completed/cancelled orders has no confirm links.
+    // The exact sorting retry is a no-op, not a new pick or an invalid request type.
+    if (onlyTaskIds && request.type === ClientRequestType.OUTBOUND && request.fbsOrderLinks.length === 0) {
+      const ids = [...new Set(onlyTaskIds)];
+      const tasks = await this.prisma.fbsTsdAssembly.findMany({ where: { id: { in: ids }, requestId, clientId: request.clientId },
+        select: { id: true, requestId: true, clientId: true, marketplace: true, connectionId: true, orderId: true, status: true,
+          boxId: true, barcode: true, kiz: true, sourceBarcode: true, relabelConfirmedAt: true } });
+      const links = await this.prisma.fbsOrderRequestLink.findMany({ where: { requestId, clientId: request.clientId,
+        OR: tasks.map(t => ({ marketplace: t.marketplace, connectionId: t.connectionId, orderId: t.orderId })) },
+        select: { requestId: true, clientId: true, marketplace: true, connectionId: true, orderId: true, lastSupplierStatus: true } });
+      const terminal = tasks.length === ids.length && tasks.every(t => ids.includes(t.id) && t.requestId === requestId && t.clientId === request.clientId &&
+        t.marketplace === MarketplaceType.WILDBERRIES && ['RESERVED','WAITING_STOCK','RELEASED','IN_PROGRESS'].includes(t.status) &&
+        !t.boxId && !t.barcode && !t.kiz && !t.sourceBarcode && !t.relabelConfirmedAt &&
+        links.filter(l => l.requestId === requestId && l.clientId === request.clientId && l.marketplace === t.marketplace &&
+          l.connectionId === t.connectionId && l.orderId === t.orderId && ['complete','cancel'].includes(l.lastSupplierStatus ?? '')).length === 1);
+      if (terminal) return { requestId, requestNumber: request.number, restoredTasks: 0, repairedTasks: 0, reservedTasks: 0,
+        waitingStockTasks: 0, preservedStartedTasks: 0, skippedTaskIds: ids, route: null, diff: null, sync: null,
+        message: 'Перестроение не требуется: затронутые заказы уже завершены или отменены в WB. Остатки и история не изменены.' };
+    }
     if (request.type !== ClientRequestType.OUTBOUND || request.fbsOrderLinks.length === 0) {
       throw new BadRequestException('Исправление подбора доступно только для FBS-заявки.');
     }
