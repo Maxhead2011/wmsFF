@@ -28,7 +28,8 @@ it('receives a previously picked SKU into the sorting target instead of rejectin
   vi.stubEnv('WMS_PALLET_SORTING_ENABLED', 'true');
   const service: any = Object.create(PalletSortingService.prototype);
   service.audit = vi.fn();
-  service.stock = { receiveSkuCollectionSortingUnit: vi.fn().mockResolvedValue({ skuId: 'sku', movementId: 'move', requestId: 'collection', scanId: 'scan' }) };
+  service.assertUnclaimed = vi.fn(); service.assertMovementAllowed = vi.fn();
+  service.stock = { reconcileAdminSortingUnit: vi.fn().mockResolvedValue({ skuId: 'sku', sourceBoxId: null, recovered: false, alreadyApplied: false }) };
   const state: any = { id: 'session', clientId: 'client', warehouseId: 'wh', stage: 'FORMING', version: 1,
     sources: [], targets: [{ id: 'target', code: 'TARGET', quantity: 0, closed: false }], activeTargetId: 'target', moves: [] };
   const tx: any = { productMark: { findMany: vi.fn().mockResolvedValue([{ id: 'mark', status: 'PACKING', boxId: null }]) } };
@@ -36,8 +37,10 @@ it('receives a previously picked SKU into the sorting target instead of rejectin
   expect(state.targets[0].quantity).toBe(1);
   expect(state.moves).toHaveLength(1);
   expect(state.moves[0].recovered).not.toBe(true);
+  service.stock.reconcileAdminSortingUnit.mockResolvedValue({ alreadyApplied: true });
   await service.move(tx, state, { barcode: '2051621250518', kiz }, user);
-  expect(service.stock.receiveSkuCollectionSortingUnit).toHaveBeenCalledTimes(1);
+  expect(service.stock.reconcileAdminSortingUnit).toHaveBeenCalledTimes(2);
+  expect(state.targets[0].quantity).toBe(1);
 });
 
 function fixture() {

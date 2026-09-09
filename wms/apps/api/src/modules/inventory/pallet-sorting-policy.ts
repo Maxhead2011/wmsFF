@@ -2,8 +2,9 @@ import { BadRequestException, ConflictException, ForbiddenException } from '@nes
 import type { AuthUser } from '../auth/auth.types';
 
 // ADDED: opt-in, role-based, branch-scoped access; no effect on the sold installation.
-export function assertSortingAdmin(user: Pick<AuthUser, 'roleCodes' | 'activeWarehouseId'>) {
-  if (process.env.WMS_PALLET_SORTING_ENABLED !== 'true' || !user.roleCodes.includes('ADMIN')) {
+export function assertSortingAdmin(user: Pick<AuthUser, 'roleCodes' | 'activeWarehouseId' | 'isDemo'>) {
+  // FIX: ADMIN authority never bridges the demo/production data boundary.
+  if (process.env.WMS_PALLET_SORTING_ENABLED !== 'true' || !user.roleCodes.includes('ADMIN') || user.isDemo) {
     throw new ForbiddenException('Сортировка и перемещение доступны только администратору при включённом сервисе.');
   }
   if (!user.activeWarehouseId) throw new BadRequestException('Сначала выберите филиал.');

@@ -19,17 +19,18 @@ if(process.env.SORTING_WRITEOFF_COVERAGE==='true'){
     expect(covered/fn.ranges.length).toBeGreaterThanOrEqual(0.8);
   }finally{await post('Profiler.stopPreciseCoverage');profiler.disconnect();}});
 }
-it('routes a written-off KIZ to the administrator confirmation instead of the misleading source-box refusal',async()=>{
-  // TEST: actual pre-existing move path, not a missing new method.
+it('routes a written-off KIZ to administrative physical reconciliation without the old confirmation gate',async()=>{
+  // TEST: the separate legacy restoration helper retains its own protections below.
   vi.stubEnv('WMS_PALLET_SORTING_ENABLED','true');
   const service:any=Object.create(PalletSortingService.prototype);
-  service.stock={restoreWrittenOffSortingUnit:vi.fn().mockResolvedValue({skuId:'sku',movementId:'receipt'})};
-  service.audit=vi.fn();
+  service.stock={reconcileAdminSortingUnit:vi.fn().mockResolvedValue({skuId:'sku',movementId:'receipt',sourceBoxId:null,recovered:true,alreadyApplied:false})};
+  service.audit=vi.fn(); service.assertUnclaimed=vi.fn(); service.assertMovementAllowed=vi.fn();
   const state:any={id:'session',clientId:'client',warehouseId:'wh',version:1,stage:'FORMING',sources:[],moves:[],pendingRoutes:[],
     activeTargetId:'target',targets:[{id:'target',code:'TARGET',quantity:0,closed:false}]};
   const tx:any={productMark:{findMany:vi.fn().mockResolvedValue([{id:'mark',status:'BLOCKED',boxId:null}])}};
-  await service.move(tx,state,{barcode:'4600000000001',kiz,confirmRestore:true,restoreFingerprint:'proof'},user);
-  expect(state.targets[0].quantity).toBe(1);expect(state.moves[0]).toMatchObject({recovered:true,recoveryReason:'WRITTEN_OFF_KIZ'});
+  await service.move(tx,state,{barcode:'4600000000001',kiz},user);
+  expect(service.stock.reconcileAdminSortingUnit).toHaveBeenCalledWith(tx,expect.objectContaining({barcode:'4600000000001',kiz}),user);
+  expect(state.targets[0].quantity).toBe(1);expect(state.moves[0]).toMatchObject({recovered:true});
 });
 afterEach(() => vi.unstubAllEnvs());
 function fixture() {

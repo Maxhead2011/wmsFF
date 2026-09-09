@@ -119,25 +119,26 @@ it('invalidates logical routes at the physical source scan without changing stoc
   // TEST: previously this happened only after a successful MOVE.
   const service: any = Object.create(PalletSortingService.prototype);
   service.boxCodes = { normalize: async (s: string) => s }; service.resetAffectedRoutes = vi.fn();
-  const state: any = { stage: 'CHECKING', sources: [{ id: 'source', code: 'SOURCE' }] };
+  const state: any = { stage: 'CHECKING', clientId: 'client', warehouseId: 'wh', sources: [{ id: 'source', code: 'SOURCE' }] };
   const tx = {}, user = { id: 'admin' };
   await service.runAction(tx, state, { action: 'SCAN_SOURCE', code: 'SOURCE' }, user);
-  expect(service.resetAffectedRoutes).toHaveBeenCalledWith(tx, state, ['source'], user);
+  expect(service.resetAffectedRoutes).toHaveBeenCalledWith(tx, state, ['source'], user, undefined, { clientId: 'client', warehouseId: 'wh' });
 });
-it('invalidates an old session source before attempting a transfer', async () => {
-  // TEST: sessions already FORMING must not require restarting or losing earlier scans.
+it('invalidates the reconciled source within the same administrative transaction', async () => {
+  // TEST: old FORMING sessions delegate accounting then invalidate the proven source, before commit.
+  vi.stubEnv('WMS_PALLET_SORTING_ENABLED', 'true');
   const service: any = Object.create(PalletSortingService.prototype);
   service.boxCodes = { normalize: async (s: string) => s, requireAllowed: async (s: string) => s }; service.audit = vi.fn();
   service.assertUnclaimed = vi.fn(); service.assertMovementAllowed = vi.fn(); // TEST: move owns its source checks.
   const events: string[] = [];
   service.resetAffectedRoutes = vi.fn(async () => events.push('reset'));
-  service.stock = { transferSortingUnit: vi.fn(async () => { events.push('move'); return { skuId: 'sku' }; }) };
+  service.stock = { reconcileAdminSortingUnit: vi.fn(async () => { events.push('move'); return { skuId: 'sku', sourceBoxId: 'source', sourceClientId: 'client', sourceWarehouseId: 'wh', recovered: false, alreadyApplied: false }; }) };
   const state: any = { stage: 'FORMING', id: 'session', clientId: 'client', warehouseId: 'wh', sources: [{ id: 'source', code: 'SOURCE', scanned: true }],
     activeTargetId: 'target', targets: [{ id: 'target', code: 'TARGET', quantity: 0 }], moves: [] };
   const tx = { productMark: { findMany: async () => [] }, stockBalance: { findMany: async () => [{ boxId: 'source' }] },
     box: { findUnique: async () => ({ id: 'source', code: 'SOURCE', status: 'active', clientId: 'client', warehouseId: 'wh', storagePlacement: null }) } };
-  await service.move(tx, state, { barcode: 'barcode', kiz, sourceBoxCode: 'SOURCE' }, { id: 'admin' });
-  expect(events[0]).toBe('reset'); expect(events).toContain('move');
+  await service.move(tx, state, { barcode: 'barcode', kiz, sourceBoxCode: 'SOURCE' }, { id: 'admin', roleCodes: ['ADMIN'], activeWarehouseId: 'wh' });
+  expect(events).toEqual(['move', 'reset']);
 });
 
 it.each(['logical', 'picked', 'physical-scan', 'return-required', 'foreign-branch', 'race'])('real route invalidation preserves stock and handles %s', async kind => {
@@ -152,14 +153,18 @@ it.each(['logical', 'picked', 'physical-scan', 'return-required', 'foreign-branc
     clientRequest: { findUnique: vi.fn(async () => ({ warehouseId: kind === 'foreign-branch' ? 'other' : 'wh', clientId: 'client' })) } };
   const state: any = { id: 'session', clientId: 'client', warehouseId: 'wh', version: 4, pendingRoutes: [] };
   const run = () => service.resetAffectedRoutes(tx, state, ['source'], { id: 'admin' });
-  if (['foreign-branch', 'race'].includes(kind)) { await expect(run()).rejects.toThrow(); expect(state.pendingRoutes).toEqual([]); return; }
+  if (kind === 'race') { await expect(run()).rejects.toThrow(); expect(state.pendingRoutes).toEqual([]); return; }
   await run();
   if (kind === 'logical') {
     expect(tx.fbsTsdAssembly.updateMany).toHaveBeenCalledWith({ where: expect.objectContaining({ updatedAt: task.updatedAt, barcode: null, kiz: null }),
       data: expect.objectContaining({ boxId: null, reservedBoxId: null, storageBoxes: [], status: 'IN_PROGRESS' }) });
-    expect(state.pendingRoutes).toEqual([{ requestId: 'request', taskIds: ['task'], revision: 5 }]);
+    expect(state.pendingRoutes).toEqual([{ requestId: 'request', taskIds: ['task'], revision: 5, clientId: 'client', warehouseId: 'wh' }]);
     expect(service.audit).toHaveBeenCalledWith(tx, state, { id: 'admin' }, 'FBS_ROUTE_INVALIDATED', expect.objectContaining({ taskId: 'task' }));
   } else {
     expect(tx.fbsTsdAssembly.updateMany).not.toHaveBeenCalled(); expect(state.pendingRoutes).toEqual([]);
+    if (kind === 'foreign-branch') {
+      // TEST: inconsistent request provenance is audited, not guessed or allowed to block the physical unit.
+      expect(service.audit).toHaveBeenCalledWith(tx, state, { id: 'admin' }, 'FBS_ROUTE_SCOPE_CONFLICT', expect.objectContaining({ taskId: 'task' }));
+    }
   }
 });

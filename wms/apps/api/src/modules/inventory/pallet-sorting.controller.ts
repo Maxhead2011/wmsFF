@@ -1,7 +1,6 @@
 import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import type { AuthUser } from '../auth/auth.types';
 import { PalletSortingService } from './pallet-sorting.service';
 import { PalletSortingActionDto, StartPalletSortingDto } from './dto/pallet-sorting.dto';
@@ -9,7 +8,8 @@ import { PalletSortingActionDto, StartPalletSortingDto } from './dto/pallet-sort
 // ADDED: web and TSD share the same authorized, idempotent workflow.
 @ApiTags('pallet-sorting')
 @Controller('pallet-sorting')
-@RequirePermissions('stock:write')
+// FIX: every service entry enforces ADMIN + the installation flag. No second
+// stock:write permission is required; global authentication remains unchanged.
 export class PalletSortingController {
   constructor(private readonly sorting: PalletSortingService) {}
   @Get('capabilities') capabilities(@CurrentUser() user: AuthUser) { return this.sorting.capabilities(user); }

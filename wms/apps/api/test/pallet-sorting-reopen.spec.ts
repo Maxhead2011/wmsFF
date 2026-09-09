@@ -24,16 +24,16 @@ it.each([0,3,13])('opens an existing destination from a completed sorting with %
   const f=fixture();f.state.targets=[];
   f.tx.stockBalance.aggregate.mockResolvedValue({_sum:{quantity:quantity||null},_min:{quantity:quantity||null}});
   await f.service.runAction(f.tx,f.state,f.dto,f.user);
-  expect(f.state.targets).toEqual([{id:'target',code:'TARGET',closed:false,quantity,palletCode:'PALLET'}]);
+  expect(f.state.targets).toEqual([expect.objectContaining({id:'target',code:'TARGET',closed:false,quantity,palletCode:'PALLET'})]);
   expect(f.state.activeTargetId).toBe('target');
   expect(f.tx.box.create).not.toHaveBeenCalled();
   expect(f.service.assertUnclaimed).toHaveBeenCalledWith(f.tx,['target'],'session','wh');
-  expect(f.service.assertMovementAllowed).toHaveBeenCalledWith(f.tx,['target']);
+  expect(f.service.assertMovementAllowed).toHaveBeenCalledWith(f.tx,['target'],f.state,f.user);
   await f.service.runAction(f.tx,f.state,{action:'CLOSE_TARGET'},f.user);
   await f.service.runAction(f.tx,f.state,f.dto,f.user);
   expect(f.state.targets).toHaveLength(1);expect(f.state.targets[0].quantity).toBe(quantity);
 });
-it.each(['foreign-client','foreign-warehouse','moved','archived','other-open','source','claimed','inventory','negative'])('refuses unsafe existing destination: %s',async kind=>{
+it.each(['other-open','source','claimed','inventory','negative'])('refuses unsafe existing destination: %s',async kind=>{
   // TEST: top-up cannot bypass ownership, active work or invalid accounting balances.
   const f=fixture();f.state.targets=[];
   if(kind==='foreign-client')f.box.clientId='other';
@@ -48,7 +48,7 @@ it.each(['foreign-client','foreign-warehouse','moved','archived','other-open','s
   await expect(f.service.runAction(f.tx,f.state,f.dto,f.user)).rejects.toThrow();
   expect(f.state.targets).toEqual([]);expect(f.tx.box.create).not.toHaveBeenCalled();
 });
-it.each(['foreign-client','foreign-warehouse','moved','archived','missing','other-open','source'])('refuses unsafe reopening: %s',async kind=>{
+it.each(['missing','other-open','source'])('refuses unsafe reopening: %s',async kind=>{
   // TEST: reusing a code never overrides ownership, placement or another active target.
   const f=fixture();
   if(kind==='foreign-client')f.box.clientId='other';

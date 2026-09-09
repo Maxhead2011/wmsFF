@@ -3,6 +3,11 @@ import { assertSortingAdmin, confirmSortingSnapshot, sortingKizIdentity, sorting
 
 afterEach(() => vi.unstubAllEnvs());
 describe('administrator pallet sorting', () => {
+  it('does not allow a demo administrator to reconcile real stock', () => {
+    // TEST: physical-truth authority is not a demo-to-production escape.
+    vi.stubEnv('WMS_PALLET_SORTING_ENABLED', 'true');
+    expect(() => assertSortingAdmin({ roleCodes: ['ADMIN'], activeWarehouseId: 'wh', isDemo: true })).toThrow();
+  });
   it('is off by default, including for ADMIN', () => {
     // TEST: sold installations do not acquire a new stock mutation path.
     vi.stubEnv('WMS_PALLET_SORTING_ENABLED', 'false');
