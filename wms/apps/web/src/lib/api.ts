@@ -866,6 +866,9 @@ export type BillingPaymentSummary = {
 };
 
 export type BillingInvoiceSummary = {
+  // ADDED: category/branch in the period register; older endpoints remain compatible.
+  serviceCategory?: BillingServiceCategory;
+  warehouse?: { id: string; name: string } | null;
   id: string;
   number: string;
   clientId: string;
@@ -8288,9 +8291,32 @@ export async function generateStorageCharge(accessToken: string, payload: Genera
   });
 }
 
+export type BillingServiceCategory = 'FBS' | 'PROCESSING' | 'PRR' | 'STORAGE' | 'OTHER';
+export type BillingPeriodInput = {
+  clientId?: string; periodFrom: string; periodTo: string;
+  categories: BillingServiceCategory[]; excludeLukin: boolean;
+};
+export type BillingPeriodPreview = {
+  previewHash: string; periodFrom: string; periodTo: string;
+  groups: Array<{ key: string; clientId: string; clientName: string; warehouseId: string;
+    category: BillingServiceCategory; chargeIds: string[]; invoiceIds: string[]; totalRub: number; itemCount: number;
+    action: 'CREATE' | 'EXISTING'; existingInvoiceId?: string;
+    lines: Array<{ sourceType: 'CHARGE' | 'INVOICE'; sourceId: string; sourceNumber?: string; invoiceItemId?: string;
+      chargeId?: string; description: string; serviceDate: string; unit: string; quantity: string; unitPriceRub: string; totalRub: string }> }>;
+  issues: Array<{ id: string; clientName: string; message: string }>;
+  alreadyBilledCount: number; zeroCount: number;
+};
+// ADDED: server-calculated preview, followed by explicit confirmed draft creation.
+export function previewBillingPeriod(accessToken: string, input: BillingPeriodInput) {
+  return request<BillingPeriodPreview>('/billing/invoices/period/preview', { method: 'POST', accessToken, body: input });
+}
+export function generateBillingPeriod(accessToken: string, input: BillingPeriodInput & { previewHash: string }) {
+  return request<{ invoices: Array<{ id: string; number: string; disposition?: 'CREATED' | 'EXISTING' }>; replayed: boolean }>('/billing/invoices/period/generate',
+    { method: 'POST', accessToken, body: input });
+}
 export async function fetchBillingInvoices(
   accessToken: string,
-  filter: { clientId?: string; status?: BillingInvoiceStatus; periodFrom?: string; periodTo?: string } = {},
+  filter: { clientId?: string; status?: BillingInvoiceStatus; periodFrom?: string; periodTo?: string; serviceCategory?: BillingServiceCategory } = {},
 ) {
   return request<BillingInvoiceSummary[]>(withQuery('/billing/invoices', filter), {
     accessToken,

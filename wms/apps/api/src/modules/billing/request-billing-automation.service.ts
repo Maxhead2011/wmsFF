@@ -9,6 +9,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
+import { runBillingMutation, withBillingDb } from './billing-mutation';
 
 type ApprovedCharge = Prisma.BillingChargeGetPayload<{
   select: {
@@ -30,6 +31,12 @@ export class RequestBillingAutomationService {
   constructor(private readonly prisma: PrismaService) {}
 
   async generateForDoneRequest(requestId: string, user: AuthUser) {
+    // FIX: select charges and allocate invoice numbers under the shared financial lock.
+    return runBillingMutation(this.prisma, (db) =>
+      withBillingDb(this, db).generateForDoneRequestLocked(requestId, user));
+  }
+
+  private async generateForDoneRequestLocked(requestId: string, user: AuthUser) {
     const request = await this.prisma.clientRequest.findUnique({
       where: { id: requestId },
       select: {

@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   BillingChargeSource,
   BillingChargeStatus,
@@ -39,6 +39,8 @@ import { UpdateClientFbsTurnkeyDto } from './dto/update-client-fbs-turnkey.dto';
 import { UpdateFbsLogisticsTripDto } from './dto/update-fbs-logistics-trip.dto';
 import { UpdateInvoicePaymentAccountDto } from './dto/update-invoice-payment-account.dto';
 import { UpsertClientBillingServiceDto } from './dto/upsert-client-billing-service.dto';
+import { classifyBillingInvoice, parseBillingPeriod, type PeriodCharge, type PeriodInvoice, type BillingServiceCategory } from './billing-period-policy';
+import { afterBillingCommit, runBillingMutation, withBillingDb } from './billing-mutation';
 
 type MergeInvoiceRow = {
   chargeId: string | null;
@@ -60,6 +62,25 @@ export class BillingService {
     private readonly marketplaceConnections?: MarketplaceConnectionsService,
     private readonly ownCompanies?: OwnCompaniesService,
   ) {}
+
+  // FIX: called after the financial lock; IDs alone never authorize a branch write.
+  private requireInvoiceWrite(invoice: { clientId: string; warehouseId?: string | null; request?: { warehouseId: string | null } | null; comment?: string | null }, user: AuthUser) {
+    this.clientScopes.requireClientAccess(user, invoice.clientId, 'write');
+    const warehouseId = invoice.warehouseId ?? invoice.request?.warehouseId;
+    this.requireWarehouseWrite(warehouseId, user);
+    const comment = invoice.comment?.trim() ?? '';
+    if (comment.startsWith(FBS_MERGED_SOURCE_COMMENT_PREFIX) || comment.startsWith(INVOICE_MERGED_SOURCE_COMMENT_PREFIX)) {
+      throw new BadRequestException('Счёт уже объединён в другой документ. Изменение или оплата источника запрещены.');
+    }
+  }
+
+  private requireWarehouseWrite(warehouseId: string | null | undefined, user: AuthUser) {
+    if (!warehouseId) throw new BadRequestException('Не определён филиал документа. Сначала уточните филиал.');
+    if (user.activeWarehouseId && user.activeWarehouseId !== warehouseId) throw new ForbiddenException('Документ относится к другому филиалу.');
+    if (!user.permissionCodes.includes('system:admin') && (!user.activeWarehouseId || !user.writableWarehouseIds?.includes(warehouseId))) {
+      throw new ForbiddenException('Нет права записи в филиале документа.');
+    }
+  }
 
   async listServices(user: AuthUser) {
     await this.ensureStandardBillingServices();
@@ -265,6 +286,11 @@ export class BillingService {
   }
 
   async createAdvance(dto: CreateBillingAdvanceDto, user: AuthUser) {
+    // FIX: all eligibility reads and writes share the financial transaction lock.
+    return runBillingMutation(this.prisma, db => withBillingDb(this, db).createAdvanceLocked(dto, user));
+  }
+
+  private async createAdvanceLocked(dto: CreateBillingAdvanceDto, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
     const client = await this.prisma.client.findUnique({
       where: { id: dto.clientId },
@@ -305,19 +331,24 @@ export class BillingService {
       return created;
     });
 
-    void this.telegram?.notifyClient(
+    afterBillingCommit(() => this.telegram?.notifyClient(
       dto.clientId,
       [
         'LOGOFF WMS: зачислен аванс.',
         `Сумма: ${formatRub(dto.amountRub)} руб.`,
         'Платеж не привязан к счету и уменьшает общий долг.',
       ].join('\n'),
-    );
+    ));
 
     return payment;
   }
 
   async cancelAdvance(id: string, user: AuthUser) {
+    // FIX: all eligibility reads and writes share the financial transaction lock.
+    return runBillingMutation(this.prisma, db => withBillingDb(this, db).cancelAdvanceLocked(id, user));
+  }
+
+  private async cancelAdvanceLocked(id: string, user: AuthUser) {
     const payment = await this.prisma.billingPayment.findFirst({
       where: { id, invoiceId: null },
       select: { id: true, clientId: true, status: true },
@@ -339,6 +370,11 @@ export class BillingService {
   }
 
   async applyAdvance(id: string, user: AuthUser) {
+    // FIX: all eligibility reads and writes share the financial transaction lock.
+    return runBillingMutation(this.prisma, db => withBillingDb(this, db).applyAdvanceLocked(id, user));
+  }
+
+  private async applyAdvanceLocked(id: string, user: AuthUser) {
     const advance = await this.prisma.billingPayment.findFirst({
       where: { id, invoiceId: null },
       include: billingAdvanceInclude,
@@ -377,6 +413,11 @@ export class BillingService {
   }
 
   async restoreAdvance(id: string, user: AuthUser) {
+    // FIX: all eligibility reads and writes share the financial transaction lock.
+    return runBillingMutation(this.prisma, db => withBillingDb(this, db).restoreAdvanceLocked(id, user));
+  }
+
+  private async restoreAdvanceLocked(id: string, user: AuthUser) {
     const advance = await this.prisma.billingPayment.findFirst({
       where: { id, invoiceId: null },
       include: billingAdvanceInclude,
@@ -422,6 +463,10 @@ export class BillingService {
   }
 
   private async applyAdvanceToInvoicesLegacy(id: string, user: AuthUser) {
+    return runBillingMutation(this.prisma, db => withBillingDb(this, db).applyAdvanceToInvoicesLegacyLocked(id, user));
+  }
+
+  private async applyAdvanceToInvoicesLegacyLocked(id: string, user: AuthUser) {
     const advance = await this.prisma.billingPayment.findFirst({
       where: { id, invoiceId: null },
       select: {
@@ -447,6 +492,7 @@ export class BillingService {
       const invoices = await tx.billingInvoice.findMany({
         where: {
           clientId: advance.clientId,
+          ...billingInvoiceWarehouseWhere(user),
           status: { in: [BillingInvoiceStatus.DRAFT, BillingInvoiceStatus.ISSUED] },
           NOT: [
             { comment: { startsWith: FBS_MERGED_SOURCE_COMMENT_PREFIX } },
@@ -456,6 +502,10 @@ export class BillingService {
         select: {
           id: true,
           number: true,
+          clientId: true,
+          warehouseId: true,
+          request: { select: { warehouseId: true } },
+          comment: true,
           status: true,
           totalRub: true,
           paidRub: true,
@@ -469,6 +519,7 @@ export class BillingService {
       let remainingAdvanceRub = roundMoney(decimalToNumber(advance.amountRub) ?? 0);
       const appliedInvoices = [];
       for (const invoice of invoices) {
+        this.requireInvoiceWrite(invoice, user);
         if (remainingAdvanceRub <= 0.009) {
           break;
         }
@@ -553,14 +604,14 @@ export class BillingService {
       return { appliedInvoices, remainingAdvanceRub };
     });
 
-    void this.telegram?.notifyClient(
+    afterBillingCommit(() => this.telegram?.notifyClient(
       advance.clientId,
       [
         'LOGOFF WMS: аванс зачтён в счета.',
         `Зачтено: ${formatRub(result.appliedInvoices.reduce((sum, invoice) => sum + invoice.amountRub, 0))} руб.`,
         `Счета: ${result.appliedInvoices.map((invoice) => invoice.number).join(', ')}.`,
       ].join('\n'),
-    );
+    ));
 
     return result;
   }
@@ -884,7 +935,13 @@ export class BillingService {
   }
 
   async createCharge(dto: CreateBillingChargeDto, user: AuthUser) {
+    // FIX: all eligibility reads and writes share the financial transaction lock.
+    return runBillingMutation(this.prisma, db => withBillingDb(this, db).createChargeLocked(dto, user));
+  }
+
+  private async createChargeLocked(dto: CreateBillingChargeDto, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+    this.requireWarehouseWrite(user.activeWarehouseId, user);
 
     const [service] = await Promise.all([
       dto.serviceId
@@ -892,7 +949,7 @@ export class BillingService {
             where: { id: dto.serviceId },
           })
         : Promise.resolve(null),
-      this.ensureRequestBelongsToClient(dto.clientId, dto.requestId),
+      this.ensureRequestBelongsToClient(dto.clientId, dto.requestId, user),
     ]);
 
     if (dto.serviceId && !service) {
@@ -917,6 +974,7 @@ export class BillingService {
         clientId: dto.clientId,
         serviceId: dto.serviceId,
         requestId: dto.requestId,
+        metadata: { warehouseId: user.activeWarehouseId! },
         description,
         unit,
         quantity: dto.quantity,
@@ -931,6 +989,11 @@ export class BillingService {
   }
 
   async generateStorageCharge(dto: GenerateStorageChargeDto, user: AuthUser) {
+    // FIX: all eligibility reads and writes share the financial transaction lock.
+    return runBillingMutation(this.prisma, db => withBillingDb(this, db).generateStorageChargeLocked(dto, user));
+  }
+
+  private async generateStorageChargeLocked(dto: GenerateStorageChargeDto, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
 
     const periodFrom = parseDate(dto.periodFrom);
@@ -953,7 +1016,6 @@ export class BillingService {
       },
     });
 
-    const storageService = await this.ensureStorageService();
     const client = await this.prisma.client.findUnique({
       where: { id: dto.clientId },
       select: { storageAccountingEnabled: true, storagePriceRubPerLiterDay: true },
@@ -968,6 +1030,7 @@ export class BillingService {
       },
       select: {
         skuId: true,
+        warehouseId: true,
         type: true,
         status: true,
         quantity: true,
@@ -1010,6 +1073,18 @@ export class BillingService {
           })
         : [];
 
+    // FIX: attribute storage only from the actual ledger/snapshot used below. The
+    // selected branch and current client membership are not evidence for old stock.
+    const sourceRows = movements.length > 0 ? movements : balances;
+    if (!sourceRows.length) throw new BadRequestException('Нет остатков с заполненным литражом для начисления хранения.');
+    const warehouses = new Set(sourceRows.map(row => row.warehouseId));
+    if (warehouses.size !== 1 || sourceRows.some(row => !row.warehouseId)) {
+      throw new BadRequestException('В источниках расчёта хранения смешаны филиалы или филиал не определён. Нужна проверка исходных движений/остатков.');
+    }
+    const warehouseId = sourceRows[0].warehouseId!;
+    this.requireWarehouseWrite(warehouseId, user);
+    const storageService = await this.ensureStorageService();
+
     const unitPriceRub =
       dto.unitPriceRub ?? decimalToNumber(client?.storagePriceRubPerLiterDay) ?? decimalToNumber(storageService.defaultPriceRub);
     if (unitPriceRub == null) {
@@ -1040,6 +1115,7 @@ export class BillingService {
       source: BillingChargeSource.STORAGE,
       sourceKey,
       metadata: {
+        warehouseId,
         periodFrom: formatDateKey(periodFrom),
         periodTo: formatDateKey(periodTo),
         calculationMode: details.calculationMode,
@@ -1077,6 +1153,11 @@ export class BillingService {
   }
 
   async updateChargeStatus(chargeId: string, dto: UpdateBillingChargeStatusDto, user: AuthUser) {
+    // FIX: all eligibility reads and writes share the financial transaction lock.
+    return runBillingMutation(this.prisma, db => withBillingDb(this, db).updateChargeStatusLocked(chargeId, dto, user));
+  }
+
+  private async updateChargeStatusLocked(chargeId: string, dto: UpdateBillingChargeStatusDto, user: AuthUser) {
     const charge = await this.prisma.billingCharge.findUnique({
       where: { id: chargeId },
       select: { id: true, clientId: true },
@@ -1104,14 +1185,20 @@ export class BillingService {
     dto: UpdateFbsLogisticsTripDto,
     user: AuthUser,
   ) {
+    // FIX: logistics edits must not race invoice merging or payment.
+    return runBillingMutation(this.prisma, db => withBillingDb(this, db).updateFbsLogisticsTripLocked(chargeId, dto, user));
+  }
+
+  private async updateFbsLogisticsTripLocked(chargeId: string, dto: UpdateFbsLogisticsTripDto, user: AuthUser) {
     const charge = await this.prisma.billingCharge.findUnique({
       where: { id: chargeId },
       include: {
+        request: { select: { warehouseId: true } },
         invoiceItems: {
           where: { invoice: { status: { not: BillingInvoiceStatus.CANCELLED } } },
           select: {
             id: true,
-            invoice: { select: { id: true, number: true, status: true } },
+            invoice: { select: { id: true, number: true, status: true, clientId: true, paidRub: true, payments: { select: { id: true } }, comment: true, warehouseId: true, request: { select: { warehouseId: true } } } },
           },
         },
       },
@@ -1120,11 +1207,14 @@ export class BillingService {
       throw new NotFoundException('Начисление биллинга не найдено.');
     }
     this.clientScopes.requireClientAccess(user, charge.clientId, 'write');
+    const chargeWarehouseId = charge.request?.warehouseId ?? asRecord(charge.metadata)?.warehouseId;
+    this.requireWarehouseWrite(typeof chargeWarehouseId === 'string' ? chargeWarehouseId : null, user);
+    for (const { invoice } of charge.invoiceItems) this.requireInvoiceWrite(invoice, user);
     if (charge.status !== BillingChargeStatus.DRAFT) {
       throw new BadRequestException('Изменить количество выездов можно только в черновом начислении.');
     }
     const lockedInvoice = charge.invoiceItems.find(
-      (item) => item.invoice.status !== BillingInvoiceStatus.DRAFT,
+      (item) => item.invoice.status !== BillingInvoiceStatus.DRAFT || Number(item.invoice.paidRub) !== 0 || item.invoice.payments.length > 0,
     );
     if (lockedInvoice) {
       throw new BadRequestException(
@@ -1250,6 +1340,11 @@ export class BillingService {
   }
 
   async deleteStorageChargeDay(chargeId: string, date: string, user: AuthUser) {
+    // FIX: all eligibility reads and writes share the financial transaction lock.
+    return runBillingMutation(this.prisma, db => withBillingDb(this, db).deleteStorageChargeDayLocked(chargeId, date, user));
+  }
+
+  private async deleteStorageChargeDayLocked(chargeId: string, date: string, user: AuthUser) {
     const charge = await this.prisma.billingCharge.findUnique({
       where: { id: chargeId },
       include: {
@@ -1308,7 +1403,7 @@ export class BillingService {
     return this.getStorageChargeBreakdown(chargeId, user);
   }
 
-  listInvoices(query: ListBillingInvoicesDto, user: AuthUser) {
+  async listInvoices(query: ListBillingInvoicesDto, user: AuthUser) {
     const hideDraftInvoices = isClientBillingUser(user);
     if (
       hideDraftInvoices &&
@@ -1337,15 +1432,64 @@ export class BillingService {
               comment: { startsWith: INVOICE_MERGED_SOURCE_COMMENT_PREFIX },
             },
           ],
-      periodFrom: query.periodFrom ? { gte: parseDate(query.periodFrom) } : undefined,
-      periodTo: query.periodTo ? { lte: parseDate(query.periodTo, 'endOfDay') } : undefined,
+      // FIX: registry shows invoices intersecting the selected service period (Moscow dates).
+      periodFrom: query.periodTo ? { lte: parseBillingPeriod(query.periodTo.slice(0, 10), query.periodTo.slice(0, 10)).to } : undefined,
+      periodTo: query.periodFrom ? { gte: parseBillingPeriod(query.periodFrom.slice(0, 10), query.periodFrom.slice(0, 10)).from } : undefined,
     };
 
-    return this.prisma.billingInvoice.findMany({
+    if (query.periodFrom && query.periodTo) parseBillingPeriod(query.periodFrom.slice(0, 10), query.periodTo.slice(0, 10));
+    const invoices = await this.prisma.billingInvoice.findMany({
       where,
-      include: billingInvoiceInclude,
+      include: { ...billingInvoiceInclude, warehouse: { select: { id: true, name: true } } },
       orderBy: [{ periodFrom: 'desc' }, { createdAt: 'desc' }],
     });
+    return invoices.map(invoice => ({ ...invoice, serviceCategory: classifyBillingInvoice(invoice) }))
+      .filter(invoice => !query.serviceCategory || invoice.serviceCategory === query.serviceCategory);
+  }
+
+  // ADDED: called only by the locked, revalidated period transaction. Existing row snapshots,
+  // rounding, numbering and payment-account resolver are reused; no tariffs are recomputed.
+  async writePeriodDraft(tx: Prisma.TransactionClient, input: {
+    clientId: string; warehouseId: string; category: BillingServiceCategory; periodFrom: string; periodTo: string;
+    sourceKey: string; charges: PeriodCharge[]; invoices: PeriodInvoice[];
+  }, user: AuthUser) {
+    this.requireInvoiceWrite({ clientId: input.clientId, warehouseId: input.warehouseId }, user);
+    for (const invoice of input.invoices) this.requireInvoiceWrite(invoice, user);
+    const { from, to } = parseBillingPeriod(input.periodFrom, input.periodTo);
+    if (input.invoices.some(i => i.status !== 'DRAFT' || Number(i.paidRub) !== 0 || i.payments.length)) {
+      throw new BadRequestException('Объединять можно только неоплаченные черновики.');
+    }
+    if (input.invoices.length === 1 && !input.charges.length &&
+      input.invoices[0].periodFrom.toISOString().slice(0, 10) === input.periodFrom &&
+      input.invoices[0].periodTo.toISOString().slice(0, 10) === input.periodTo) return input.invoices[0];
+    const ids = input.invoices.map(i => i.id);
+    const sourceRows = [...input.invoices.flatMap(i => i.items), ...input.charges.map(c => ({ ...c, chargeId: c.id }))];
+    const chargeIds = sourceRows.map(r => r.chargeId).filter((id): id is string => Boolean(id));
+    if (new Set(chargeIds).size !== chargeIds.length) throw new BadRequestException('Начисление повторяется в исходных счетах.');
+    // FIX: a concurrently invoiced source cannot be billed a second time.
+    if (chargeIds.length && await tx.billingInvoiceItem.count({ where: { chargeId: { in: chargeIds }, invoice: { id: { notIn: ids }, status: { not: 'CANCELLED' } } } })) {
+      throw new BadRequestException('Начисления уже попали в другой счёт. Обновите расчёт.');
+    }
+    const rows = prepareMergedInvoiceRows(sourceRows.map(row => ({ chargeId: row.chargeId, description: row.description,
+      unit: row.unit as BillingUnit, quantity: row.quantity.toString(), unitPriceRub: row.unitPriceRub.toString(),
+      totalRub: row.totalRub.toString(), serviceDate: row.serviceDate })), { aggregateSameItems: false, excludeZeroTotalItems: false });
+    const totalRub = roundMoney(rows.reduce((n, r) => n + Number(r.totalRub), 0));
+    assertPositiveInvoiceTotal(totalRub);
+    const number = await this.nextInvoiceNumber(new Date(`${input.periodFrom}T12:00:00+03:00`), tx);
+    const paymentAccount = await this.paymentAccountSnapshot(input.clientId, undefined, input.warehouseId);
+    const invoice = await tx.billingInvoice.create({ data: { clientId: input.clientId, warehouseId: input.warehouseId,
+      number, periodFrom: from, periodTo: to, status: 'DRAFT', source: 'MANUAL', sourceKey: input.sourceKey,
+      totalRub, ...paymentAccount, createdByUserId: user.id,
+      comment: `Счёт за период ${input.periodFrom} — ${input.periodTo}; ${input.category}. Исходные счета: ${input.invoices.map(i => i.number).join(', ') || 'нет'}.`,
+      items: { create: rows.map(r => ({ ...r })) } }, include: billingInvoiceInclude });
+    if (ids.length) {
+      const changed = await tx.billingInvoice.updateMany({ where: { id: { in: ids }, status: 'DRAFT', paidRub: 0, payments: { none: {} } },
+        data: { status: 'CANCELLED', comment: `${INVOICE_MERGED_SOURCE_COMMENT_PREFIX} ${number}.` } });
+      if (changed.count !== ids.length) throw new BadRequestException('Исходные счета изменились. Операция отменена.');
+    }
+    await tx.auditLog.create({ data: { userId: user.id, action: 'billing.invoices.period-merge', entity: 'billing-invoice', entityId: invoice.id,
+      payload: { sourceInvoiceIds: ids, chargeIds, totalRub, category: input.category, warehouseId: input.warehouseId } } });
+    return invoice;
   }
 
   async listClientPaymentAccounts(clientId: string, user: AuthUser) {
@@ -1361,6 +1505,11 @@ export class BillingService {
     dto: UpdateInvoicePaymentAccountDto,
     user: AuthUser,
   ) {
+    // FIX: account changes recheck paid state after the common lock.
+    return runBillingMutation(this.prisma, db => withBillingDb(this, db).updateInvoicePaymentAccountLocked(invoiceId, dto, user));
+  }
+
+  private async updateInvoicePaymentAccountLocked(invoiceId: string, dto: UpdateInvoicePaymentAccountDto, user: AuthUser) {
     const invoice = await this.prisma.billingInvoice.findUnique({
       where: { id: invoiceId },
       include: billingInvoiceInclude,
@@ -1368,7 +1517,8 @@ export class BillingService {
     if (!invoice) {
       throw new NotFoundException('Счёт не найден.');
     }
-    this.clientScopes.requireClientAccess(user, invoice.clientId, 'write');
+    this.requireInvoiceWrite(invoice, user);
+    if (invoice.status === BillingInvoiceStatus.CANCELLED) throw new BadRequestException('Нельзя менять отменённый счёт.');
     if (invoice.status === BillingInvoiceStatus.PAID || invoice.payments.length > 0) {
       throw new BadRequestException('Нельзя менять расчётный счёт после регистрации оплаты.');
     }
@@ -1814,12 +1964,15 @@ export class BillingService {
         clientId: true,
         status: true,
         sourceKey: true,
+        warehouseId: true,
+        request: { select: { warehouseId: true } },
+        comment: true,
       },
     });
     if (!invoice) {
       throw new NotFoundException('Счет биллинга не найден.');
     }
-    this.clientScopes.requireClientAccess(user, invoice.clientId, 'write');
+    this.requireInvoiceWrite(invoice, user);
     if (invoice.status !== BillingInvoiceStatus.DRAFT) {
       throw new BadRequestException(
         'Первичную обработку можно автоматически добавить только в черновик счета.',
@@ -1864,6 +2017,18 @@ export class BillingService {
     }
 
     await this.marketplaceConnections.recalculateFbsDraftBilling(invoice.clientId);
+    // FIX: potentially external recalculation stays outside the financial lock. Re-read
+    // the original invoice after it, then keep preview and merge in one transaction.
+    return runBillingMutation(this.prisma, db => withBillingDb(this, db).addInvoicePrimaryProcessingLocked(invoiceId, user));
+  }
+
+  private async addInvoicePrimaryProcessingLocked(invoiceId: string, user: AuthUser) {
+    const invoice = await this.prisma.billingInvoice.findUnique({ where: { id: invoiceId }, include: billingInvoiceInclude });
+    if (!invoice) throw new NotFoundException('Счёт не найден.');
+    this.requireInvoiceWrite(invoice, user);
+    if (invoice.status !== BillingInvoiceStatus.DRAFT || Number(invoice.paidRub) !== 0 || invoice.payments.length) {
+      throw new BadRequestException('Исходный счёт уже изменился или оплачен. Обновите список счетов.');
+    }
     const preview = await this.getFbsMergePreview(invoice.clientId, user);
     if (
       !preview.primaryProcessing.available ||
@@ -1893,6 +2058,11 @@ export class BillingService {
   }
 
   async mergeFbsInvoices(dto: MergeFbsInvoicesDto, user: AuthUser) {
+    // FIX: all eligibility reads and writes share the financial transaction lock.
+    return runBillingMutation(this.prisma, db => withBillingDb(this, db).mergeFbsInvoicesLocked(dto, user));
+  }
+
+  private async mergeFbsInvoicesLocked(dto: MergeFbsInvoicesDto, user: AuthUser) {
     const selection = await this.loadFbsMergeSelection(dto.clientId, user, dto.invoiceIds);
     const includePrimaryProcessing =
       dto.includePrimaryProcessing === true ||
@@ -1917,6 +2087,7 @@ export class BillingService {
       ? selection.primaryInvoices
       : [];
     const selectedInvoices = [...selection.invoices, ...primaryInvoices];
+    for (const invoice of selectedInvoices) this.requireInvoiceWrite(invoice, user);
     const sourceInvoices = [
       ...selection.invoices.filter(
         (invoice) => !isMergedFbsInvoiceSourceKey(invoice.sourceKey, dto.clientId),
@@ -2169,6 +2340,11 @@ export class BillingService {
   }
 
   async mergeInvoices(dto: MergeBillingInvoicesDto, user: AuthUser) {
+    // FIX: all eligibility reads and writes share the financial transaction lock.
+    return runBillingMutation(this.prisma, db => withBillingDb(this, db).mergeInvoicesLocked(dto, user));
+  }
+
+  private async mergeInvoicesLocked(dto: MergeBillingInvoicesDto, user: AuthUser) {
     const invoiceIds = [...new Set(dto.invoiceIds)];
     if (invoiceIds.length < 2) {
       throw new BadRequestException('Для объединения выберите минимум два счёта.');
@@ -2188,6 +2364,7 @@ export class BillingService {
 
     const clientId = invoices[0].clientId;
     this.clientScopes.requireClientAccess(user, clientId, 'write');
+    for (const invoice of invoices) this.requireInvoiceWrite(invoice, user);
     if (invoices.some((invoice) => invoice.clientId !== clientId)) {
       throw new BadRequestException('Объединять можно только счета одного клиента.');
     }
@@ -2477,7 +2654,13 @@ export class BillingService {
   }
 
   async createInvoice(dto: CreateBillingInvoiceDto, user: AuthUser) {
+    // FIX: all eligibility reads and writes share the financial transaction lock.
+    return runBillingMutation(this.prisma, db => withBillingDb(this, db).createInvoiceLocked(dto, user));
+  }
+
+  private async createInvoiceLocked(dto: CreateBillingInvoiceDto, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+    this.requireWarehouseWrite(user.activeWarehouseId, user);
 
     const periodFrom = parseDate(dto.periodFrom);
     const periodTo = parseDate(dto.periodTo, 'endOfDay');
@@ -2491,6 +2674,10 @@ export class BillingService {
         clientId: dto.clientId,
         id: chargeIds ? { in: chargeIds } : undefined,
         status: BillingChargeStatus.APPROVED,
+        OR: [
+          { request: { warehouseId: user.activeWarehouseId! } },
+          { requestId: null, metadata: { path: ['warehouseId'], equals: user.activeWarehouseId! } },
+        ],
         serviceDate: {
           gte: periodFrom,
           lte: periodTo,
@@ -2506,6 +2693,7 @@ export class BillingService {
         },
       },
       orderBy: [{ serviceDate: 'asc' }, { createdAt: 'asc' }],
+      include: { request: { select: { warehouseId: true } } },
     });
 
     if (chargeIds && charges.length !== chargeIds.length) {
@@ -2514,6 +2702,11 @@ export class BillingService {
 
     if (charges.length === 0) {
       throw new BadRequestException('Для счета нет утвержденных начислений за выбранный период.');
+    }
+
+    for (const charge of charges) {
+      const warehouseId = charge.request?.warehouseId ?? asRecord(charge.metadata)?.warehouseId;
+      this.requireWarehouseWrite(typeof warehouseId === 'string' ? warehouseId : null, user);
     }
 
     const totalRub = roundMoney(charges.reduce((sum, charge) => sum + (decimalToNumber(charge.totalRub) ?? 0), 0));
@@ -2555,7 +2748,13 @@ export class BillingService {
   }
 
   async createManualInvoice(dto: CreateManualBillingInvoiceDto, user: AuthUser) {
+    // FIX: all eligibility reads and writes share the financial transaction lock.
+    return runBillingMutation(this.prisma, db => withBillingDb(this, db).createManualInvoiceLocked(dto, user));
+  }
+
+  private async createManualInvoiceLocked(dto: CreateManualBillingInvoiceDto, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+    this.requireWarehouseWrite(user.activeWarehouseId, user);
     if (!dto.rows?.length) {
       throw new BadRequestException('Для счета нужна хотя бы одна строка.');
     }
@@ -2616,6 +2815,7 @@ export class BillingService {
         metadata: {
           priceBeforeTaxRub: baseUnitPriceRub,
           taxMode,
+          warehouseId: user.activeWarehouseId!,
         },
       };
     });
@@ -2686,6 +2886,11 @@ export class BillingService {
   }
 
   async updateManualInvoice(invoiceId: string, dto: CreateManualBillingInvoiceDto, user: AuthUser) {
+    // FIX: all eligibility reads and writes share the financial transaction lock.
+    return runBillingMutation(this.prisma, db => withBillingDb(this, db).updateManualInvoiceLocked(invoiceId, dto, user));
+  }
+
+  private async updateManualInvoiceLocked(invoiceId: string, dto: CreateManualBillingInvoiceDto, user: AuthUser) {
     if (!dto.rows?.length) {
       throw new BadRequestException('Для счета нужна хотя бы одна строка.');
     }
@@ -2697,7 +2902,7 @@ export class BillingService {
     if (!invoice) {
       throw new NotFoundException('Счет не найден.');
     }
-    this.clientScopes.requireClientAccess(user, invoice.clientId, 'write');
+    this.requireInvoiceWrite(invoice, user);
     const clientChanged = invoice.clientId !== dto.clientId;
     if (clientChanged) {
       this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
@@ -2903,6 +3108,11 @@ export class BillingService {
   }
 
   async updateInvoiceStatus(invoiceId: string, dto: UpdateBillingInvoiceStatusDto, user: AuthUser) {
+    // FIX: all eligibility reads and writes share the financial transaction lock.
+    return runBillingMutation(this.prisma, db => withBillingDb(this, db).updateInvoiceStatusLocked(invoiceId, dto, user));
+  }
+
+  private async updateInvoiceStatusLocked(invoiceId: string, dto: UpdateBillingInvoiceStatusDto, user: AuthUser) {
     const invoice = await this.prisma.billingInvoice.findUnique({
       where: { id: invoiceId },
       select: {
@@ -2914,6 +3124,9 @@ export class BillingService {
         paidRub: true,
         issuedAt: true,
         paidAt: true,
+        warehouseId: true,
+        request: { select: { warehouseId: true } },
+        comment: true,
       },
     });
 
@@ -2921,7 +3134,7 @@ export class BillingService {
       throw new NotFoundException('Счет биллинга не найден.');
     }
 
-    this.clientScopes.requireClientAccess(user, invoice.clientId, 'write');
+    this.requireInvoiceWrite(invoice, user);
 
     const paidRub = decimalToNumber(invoice.paidRub) ?? 0;
     const totalRub = decimalToNumber(invoice.totalRub) ?? 0;
@@ -2975,20 +3188,25 @@ export class BillingService {
     });
 
     if (invoice.status !== dto.status) {
-      void this.telegram?.notifyClient(
+      afterBillingCommit(() => this.telegram?.notifyClient(
         invoice.clientId,
         [
           'LOGOFF WMS: изменен статус счета.',
           `Счет № ${invoice.number}`,
           `Статус: ${billingInvoiceStatusLabel(invoice.status)} -> ${billingInvoiceStatusLabel(dto.status)}`,
         ].join('\n'),
-      );
+      ));
     }
 
     return updated;
   }
 
   async createIncomingPayment(dto: CreateIncomingPaymentDto, user: AuthUser) {
+    // FIX: all eligibility reads and writes share the financial transaction lock.
+    return runBillingMutation(this.prisma, db => withBillingDb(this, db).createIncomingPaymentLocked(dto, user));
+  }
+
+  private async createIncomingPaymentLocked(dto: CreateIncomingPaymentDto, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
     const invoiceIds = dto.allocations.map((allocation) => allocation.invoiceId);
     if (new Set(invoiceIds).size !== invoiceIds.length) {
@@ -3023,6 +3241,8 @@ export class BillingService {
             paidRub: true,
             issuedAt: true,
             comment: true,
+            warehouseId: true,
+            request: { select: { warehouseId: true } },
           },
         }),
       ]);
@@ -3035,6 +3255,7 @@ export class BillingService {
       if (invoices.some((invoice) => invoice.clientId !== dto.clientId)) {
         throw new BadRequestException('Один или несколько выбранных счетов не принадлежат клиенту.');
       }
+      for (const invoice of invoices) this.requireInvoiceWrite(invoice, user);
       const mergedSource = invoices.find((invoice) => {
         const comment = invoice.comment?.trim() ?? '';
         return (
@@ -3130,7 +3351,7 @@ export class BillingService {
       return { client, invoices: updatedInvoices };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
-    void this.telegram?.notifyClient(
+    afterBillingCommit(() => this.telegram?.notifyClient(
       dto.clientId,
       [
         'LOGOFF WMS: зарегистрирован приход денежных средств.',
@@ -3140,7 +3361,7 @@ export class BillingService {
           return `Счёт №${invoice?.number ?? allocation.invoiceId}: ${formatRub(allocation.amountRub)} руб.`;
         }),
       ].join('\n'),
-    );
+    ));
 
     return {
       client: result.client,
@@ -3151,6 +3372,11 @@ export class BillingService {
   }
 
   async createPayment(dto: CreateBillingPaymentDto, user: AuthUser) {
+    // FIX: all eligibility reads and writes share the financial transaction lock.
+    return runBillingMutation(this.prisma, db => withBillingDb(this, db).createPaymentLocked(dto, user));
+  }
+
+  private async createPaymentLocked(dto: CreateBillingPaymentDto, user: AuthUser) {
     const invoice = await this.prisma.billingInvoice.findUnique({
       where: { id: dto.invoiceId },
       select: {
@@ -3161,6 +3387,9 @@ export class BillingService {
         totalRub: true,
         paidRub: true,
         issuedAt: true,
+        warehouseId: true,
+        request: { select: { warehouseId: true } },
+        comment: true,
       },
     });
 
@@ -3168,7 +3397,7 @@ export class BillingService {
       throw new NotFoundException('Счет биллинга не найден.');
     }
 
-    this.clientScopes.requireClientAccess(user, invoice.clientId, 'write');
+    this.requireInvoiceWrite(invoice, user);
 
     if (invoice.status === BillingInvoiceStatus.CANCELLED) {
       throw new BadRequestException('Нельзя принять оплату по отмененному счету.');
@@ -3177,6 +3406,9 @@ export class BillingService {
     const totalRub = decimalToNumber(invoice.totalRub) ?? 0;
     const paidRub = decimalToNumber(invoice.paidRub) ?? 0;
     const remainingRub = roundMoney(totalRub - paidRub);
+    if (!Number.isFinite(dto.amountRub) || dto.amountRub <= 0 || remainingRub <= 0) {
+      throw new BadRequestException('Сумма оплаты должна быть положительной; полностью оплаченный счёт повторно оплатить нельзя.');
+    }
     if (dto.amountRub > remainingRub) {
       throw new BadRequestException('Сумма оплаты превышает остаток по счету.');
     }
@@ -3225,7 +3457,7 @@ export class BillingService {
       return updated;
     });
 
-    void this.telegram?.notifyClient(
+    afterBillingCommit(() => this.telegram?.notifyClient(
       invoice.clientId,
       [
         'LOGOFF WMS: получена оплата по счету.',
@@ -3233,12 +3465,12 @@ export class BillingService {
         `Оплата: ${formatRub(dto.amountRub)} руб.`,
         `Оплачено: ${formatRub(nextPaidRub)} из ${formatRub(totalRub)} руб.`,
       ].join('\n'),
-    );
+    ));
 
     return updated;
   }
 
-  private async ensureRequestBelongsToClient(clientId: string, requestId?: string) {
+  private async ensureRequestBelongsToClient(clientId: string, requestId?: string, user?: AuthUser) {
     if (!requestId) {
       return;
     }
@@ -3248,12 +3480,13 @@ export class BillingService {
         id: requestId,
         clientId,
       },
-      select: { id: true },
+      select: { id: true, warehouseId: true },
     });
 
     if (!request) {
       throw new BadRequestException('Заявка не принадлежит выбранному клиенту.');
     }
+    if (user) this.requireWarehouseWrite(request.warehouseId, user);
   }
 
   private async ensureStandardBillingServices() {
@@ -3361,9 +3594,9 @@ export class BillingService {
     );
   }
 
-  private async nextInvoiceNumber(periodFrom: Date) {
+  private async nextInvoiceNumber(periodFrom: Date, db: Pick<Prisma.TransactionClient, 'billingInvoice'> = this.prisma) {
     const prefix = `INV-${periodFrom.getUTCFullYear()}${String(periodFrom.getUTCMonth() + 1).padStart(2, '0')}`;
-    const count = await this.prisma.billingInvoice.count({
+    const count = await db.billingInvoice.count({
       where: {
         number: {
           startsWith: prefix,
@@ -3553,6 +3786,8 @@ const billingChargeInclude = {
 } satisfies Prisma.BillingChargeInclude;
 
 const billingInvoiceInclude = {
+  // FIX: historical invoices resolve their branch through the request when warehouseId is null.
+  request: { select: { warehouseId: true } },
   client: {
     select: {
       id: true,
@@ -3577,6 +3812,8 @@ const billingInvoiceInclude = {
           status: true,
           sourceKey: true,
           metadata: true,
+          source: true,
+          service: { select: { code: true } },
         },
       },
     },

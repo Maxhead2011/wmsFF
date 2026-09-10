@@ -18,6 +18,14 @@ import {
   MarketplaceConnectionsService,
 } from '../src/modules/marketplace-connections/marketplace-connections.service';
 
+// TEST: financial wrappers use the real shared lock helper with the existing DB mocks.
+function withBillingTransactionMock<T extends object>(db: T) {
+  return Object.assign(db, {
+    $queryRaw: vi.fn().mockResolvedValue([]),
+    $transaction: vi.fn(async (callback: (tx: T) => Promise<unknown>) => callback(db)),
+  });
+}
+
 describe('MarketplaceConnectionsService', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -186,7 +194,7 @@ describe('MarketplaceConnectionsService', () => {
         updateMany: vi.fn(),
       },
     };
-    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    const service = new MarketplaceConnectionsService(withBillingTransactionMock(prisma) as never, {} as never);
 
     await (service as any).ensureFbsPrimaryProcessingInvoice({
       clientId: 'client-1',
@@ -1614,6 +1622,7 @@ describe('MarketplaceConnectionsService', () => {
         ]),
       },
     };
+    withBillingTransactionMock(prisma);
     const clientScopes = { requireClientAccess: vi.fn() };
     vi.stubGlobal(
       'fetch',
@@ -3296,7 +3305,7 @@ describe('MarketplaceConnectionsService', () => {
         findUnique: vi.fn().mockResolvedValue(null),
       },
     };
-    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    const service = new MarketplaceConnectionsService(withBillingTransactionMock(prisma) as never, {} as never);
 
     const result = await (service as any).ensureFbsProcessingCharges('client-1', [
       {
@@ -3648,7 +3657,13 @@ describe('MarketplaceConnectionsService', () => {
           { chargeId: 'legacy-charge-2' },
         ]),
       },
-      $transaction: vi.fn(async (callback: (client: typeof tx) => Promise<unknown>) => callback(tx)),
+      // TEST: reads previously outside the transaction now use the same fixture as writes.
+      $transaction: vi.fn(async (callback: (client: unknown) => Promise<unknown>) => callback({
+        $queryRaw: vi.fn().mockResolvedValue([]),
+        billingInvoice: { ...prisma.billingInvoice, ...tx.billingInvoice },
+        billingCharge: { ...prisma.billingCharge, ...tx.billingCharge },
+        billingInvoiceItem: { ...prisma.billingInvoiceItem, ...tx.billingInvoiceItem },
+      })),
     };
     const service = new MarketplaceConnectionsService(prisma as never, {} as never);
     const orders = ['1001', '1002'].map((id) => ({

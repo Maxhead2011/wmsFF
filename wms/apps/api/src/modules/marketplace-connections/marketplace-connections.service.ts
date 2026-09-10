@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isOwnedUnpaidDraft, runBillingMutation, withBillingDb } from '../billing/billing-mutation';
 // FIX: preserve both sorting and release-158 recount/terminal-queue dependencies.
 import { assertSortingAdmin } from '../inventory/pallet-sorting-policy';
 import { loadAdminRecountContext, requireAdminRecount, runAdminRecount, type AdminRecountContext } from './tsd-admin-recount-release';
@@ -25555,6 +25556,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   private async ensureFbsProcessingCharges(clientId: string, orders: FbsOrderSummary[]) {
+    // FIX: lock before source-charge reads, not only when the resulting invoice is written.
+    return runBillingMutation(this.prisma, (db) =>
+      withBillingDb(this, db).ensureFbsProcessingChargesLocked(clientId, orders));
+  }
+
+  private async ensureFbsProcessingChargesLocked(clientId: string, orders: FbsOrderSummary[]) {
     const result = new Map<string, NonNullable<FbsOrderSummary['billing']>>();
     if (orders.length === 0) {
       return result;
@@ -25713,8 +25720,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         include: {
           invoiceItems: {
             where: { invoice: { status: { not: 'CANCELLED' } } },
-            select: { invoice: { select: { number: true, status: true } } },
-            take: 1,
+            select: { invoice: { select: { number: true, status: true, sourceKey: true, paidRub: true, _count: { select: { payments: true } } } } },
           },
         },
       });
@@ -25892,7 +25898,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       });
       const mergedSourceInvoice =
         lockedInvoice?.status === BillingInvoiceStatus.CANCELLED &&
-        lockedInvoice.comment?.startsWith('Объединено в FBS-счёт');
+        // FIX: period consolidation uses the generic merge marker too.
+        ['Объединено в FBS-счёт', 'Объединено в счёт'].some(prefix => lockedInvoice.comment?.startsWith(prefix));
       if (
         lockedInvoice &&
         lockedInvoice.status !== BillingInvoiceStatus.DRAFT &&
@@ -26003,7 +26010,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const unitPriceRub = calculatedUnitPriceRub;
       const shouldUpdate =
         existing?.status === BillingChargeStatus.DRAFT &&
-        existing.invoiceItems.every((item) => item.invoice.status === BillingInvoiceStatus.DRAFT) &&
+        existing.invoiceItems.every((item) => isOwnedUnpaidDraft(item.invoice, `fbs-invoice:${clientId}:${shipmentKey}`)) &&
         (existing.serviceId !== fbsService.id ||
           existing.requestId !== requestId ||
           existing.description !== description ||
@@ -26123,6 +26130,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   async cancelFbsPrimaryDraftBilling(clientId: string) {
+    // FIX: automatic cancellation must serialize with payments and period consolidation.
+    return runBillingMutation(this.prisma, (db) =>
+      withBillingDb(this, db).cancelFbsPrimaryDraftBillingLocked(clientId));
+  }
+
+  private async cancelFbsPrimaryDraftBillingLocked(clientId: string) {
     const invoicePrefix = `fbs-primary-invoice:${clientId}:`;
     const chargePrefix = `fbs-primary:${clientId}:`;
     return this.prisma.$transaction(async (tx) => {
@@ -26131,6 +26144,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           clientId,
           sourceKey: { startsWith: invoicePrefix },
           status: BillingInvoiceStatus.DRAFT,
+          paidRub: 0,
+          payments: { none: {} },
         },
         select: { id: true },
       });
@@ -26145,6 +26160,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           clientId,
           sourceKey: { startsWith: chargePrefix },
           status: BillingChargeStatus.DRAFT,
+          invoiceItems: { none: { invoice: { status: { not: BillingInvoiceStatus.CANCELLED } } } },
         },
         data: { status: BillingChargeStatus.CANCELLED },
       });
@@ -26155,7 +26171,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     });
   }
 
-  private async ensureFbsPrimaryProcessingInvoice(input: {
+  private async ensureFbsPrimaryProcessingInvoice(input: Parameters<MarketplaceConnectionsService['ensureFbsPrimaryProcessingInvoiceLocked']>[0]) {
+    // FIX: do not regenerate a source concurrently with manual or period billing.
+    return runBillingMutation(this.prisma, (db) =>
+      withBillingDb(this, db).ensureFbsPrimaryProcessingInvoiceLocked(input));
+  }
+
+  private async ensureFbsPrimaryProcessingInvoiceLocked(input: {
     clientId: string;
     shipmentKey: string;
     shipmentOrders: FbsOrderSummary[];
@@ -26168,10 +26190,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }) {
     const invoiceSourceKey = `fbs-primary-invoice:${input.clientId}:${input.shipmentKey}`;
     const chargePrefix = `fbs-primary:${input.clientId}:${input.shipmentKey}:`;
-    let invoice = await this.prisma.billingInvoice.findUnique({
+    const invoiceState = await this.prisma.billingInvoice.findUnique({
       where: { sourceKey: invoiceSourceKey },
-      select: { id: true, number: true, status: true },
+      select: { id: true, number: true, status: true, comment: true, paidRub: true, _count: { select: { payments: true } } },
     });
+    let invoice = invoiceState ? { id: invoiceState.id, number: invoiceState.number, status: invoiceState.status } : null;
+    // FIX: cancelled merge sources and payment-bearing drafts are immutable to automation.
+    if (invoiceState && (Number(invoiceState.paidRub ?? 0) > 0 || (invoiceState._count?.payments ?? 0) > 0 ||
+      (invoiceState.status === BillingInvoiceStatus.CANCELLED && invoiceState.comment?.startsWith('Объединено в ')))) {
+      return invoice;
+    }
     if (
       invoice &&
       invoice.status !== BillingInvoiceStatus.DRAFT &&
@@ -26190,8 +26218,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           where: {
             invoice: {
               status: {
-                notIn: [BillingInvoiceStatus.DRAFT, BillingInvoiceStatus.CANCELLED],
+                not: BillingInvoiceStatus.CANCELLED,
               },
+              ...(invoice?.status === BillingInvoiceStatus.DRAFT ? { id: { not: invoice.id } } : {}),
             },
           },
           select: { id: true },
@@ -26374,6 +26403,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     orders: FbsOrderSummary[],
     billingByOrder: Map<string, NonNullable<FbsOrderSummary['billing']>>,
   ) {
+    // FIX: preserve source snapshots and numbering across all billing entry points.
+    return runBillingMutation(this.prisma, (db) =>
+      withBillingDb(this, db).ensureFbsShipmentInvoicesLocked(clientId, orders, billingByOrder));
+  }
+
+  private async ensureFbsShipmentInvoicesLocked(
+    clientId: string,
+    orders: FbsOrderSummary[],
+    billingByOrder: Map<string, NonNullable<FbsOrderSummary['billing']>>,
+  ) {
     const eligibleOrders = orders.filter((order) => order.shipmentPlan && order.supplyId);
     const shipments = groupFbsOrdersByShipment(eligibleOrders);
     for (const [shipmentKey, shipmentOrders] of shipments) {
@@ -26384,21 +26423,24 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         select: { id: true, number: true, status: true, comment: true },
       });
       if (invoice && invoice.status !== BillingInvoiceStatus.DRAFT) {
+        // FIX: follow either merge route, preserving the active monthly invoice display.
+        const mergedPrefix = ['Объединено в FBS-счёт', 'Объединено в счёт']
+          .find(prefix => invoice?.comment?.startsWith(prefix));
         if (
           invoice.status === BillingInvoiceStatus.CANCELLED &&
-          invoice.comment?.startsWith('Объединено в FBS-счёт')
+          mergedPrefix && invoice.comment
         ) {
           const mergedInvoiceNumber = invoice.comment
-            .slice('Объединено в FBS-счёт'.length)
+            .slice(mergedPrefix.length)
             .trim()
             .replace(/\.$/, '');
           const mergedInvoice = mergedInvoiceNumber
             ? await this.prisma.billingInvoice.findUnique({
                 where: { number: mergedInvoiceNumber },
-                select: { id: true, number: true, status: true },
+                select: { id: true, clientId: true, number: true, status: true },
               })
             : null;
-          if (mergedInvoice && mergedInvoice.status !== BillingInvoiceStatus.CANCELLED) {
+          if (mergedInvoice && mergedInvoice.clientId === clientId && mergedInvoice.status !== BillingInvoiceStatus.CANCELLED) {
             shipmentOrders.forEach((order) => {
               const billing = billingByOrder.get(fbsOrderKey(order));
               if (billing) {
@@ -26428,10 +26470,17 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         shipmentOrders.map((order) => billingByOrder.get(fbsOrderKey(order))?.chargeId ?? ''),
       );
       const charges = await this.prisma.billingCharge.findMany({
-        where: { id: { in: chargeIds }, clientId },
+        where: {
+          id: { in: chargeIds }, clientId,
+          invoiceItems: { none: { invoice: {
+            status: { not: BillingInvoiceStatus.CANCELLED },
+            ...(invoice ? { id: { not: invoice.id } } : {}),
+          } } },
+        },
         orderBy: [{ serviceDate: 'asc' }, { createdAt: 'asc' }],
       });
-      if (charges.length === 0) continue;
+      // FIX: never silently form a partial duplicate when charges are already invoiced elsewhere.
+      if (charges.length === 0 || charges.length !== chargeIds.length) continue;
       const periodFrom = charges.reduce(
         (date, charge) => (charge.serviceDate < date ? charge.serviceDate : date),
         charges[0].serviceDate,
@@ -26492,7 +26541,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           .filter((chargeId) => !chargeIds.includes(chargeId));
         await this.prisma.$transaction(async (tx) => {
           const editableInvoice = await tx.billingInvoice.findFirst({
-            where: { id: invoice!.id, status: BillingInvoiceStatus.DRAFT },
+            where: { id: invoice!.id, status: BillingInvoiceStatus.DRAFT, paidRub: 0, payments: { none: {} } },
             select: { id: true },
           });
           if (!editableInvoice) return;
@@ -26526,6 +26575,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
                 id: { in: previousChargeIds },
                 clientId,
                 status: BillingChargeStatus.DRAFT,
+                invoiceItems: { none: { invoice: { status: { not: BillingInvoiceStatus.CANCELLED } } } },
               },
               data: { status: BillingChargeStatus.CANCELLED },
             });

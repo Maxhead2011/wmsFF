@@ -9,6 +9,7 @@ import { BillingDocumentService } from './billing-document.service';
 import { BillingPdfService } from './billing-pdf.service';
 import { BillingController } from './billing.controller';
 import { BillingService } from './billing.service';
+import { BillingPeriodService } from './billing-period.service';
 
 @Module({
   imports: [
@@ -20,7 +21,7 @@ import { BillingService } from './billing.service';
     OwnCompaniesModule,
   ],
   controllers: [BillingController],
-  providers: [BillingService, BillingDocumentService, BillingPdfService],
+  providers: [BillingService, BillingDocumentService, BillingPdfService, BillingPeriodService],
   exports: [BillingService],
 })
 export class BillingModule {}
