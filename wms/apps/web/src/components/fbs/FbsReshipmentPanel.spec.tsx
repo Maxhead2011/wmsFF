@@ -1,7 +1,30 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { FbsReshipmentController, FbsReshipmentView } from './FbsReshipmentPanel';
+import { canUseFbsReshipment, FbsReshipmentController, FbsReshipmentView } from './FbsReshipmentPanel';
+import type { AuthSession } from '../../lib/api';
+
+// TEST: granting the tool never grants global client or administrator access.
+describe('WB reshipment client access', () => {
+  const session = { user: { roleCodes: ['CLIENT'], permissionCodes: ['clients:read', 'client-requests:write'],
+    clientScopeMode: 'LIMITED', clientIds: ['own'], writableClientIds: ['own'], isDemo: false } } as AuthSession;
+  it('allows CLIENT to use the tool for its writable client without clients:write', () => {
+    expect(canUseFbsReshipment(session, 'own')).toBe(true);
+  });
+  it.each([
+    { clientIds: [] }, { writableClientIds: [] }, { permissionCodes: ['clients:read'] }, { isDemo: true },
+    { roleCodes: ['MANAGER'] },
+  ])('denies unavailable client role/scope %j', patch => {
+    expect(canUseFbsReshipment({ ...session, user: { ...session.user, ...patch } }, 'own')).toBe(false);
+  });
+  it('does not let CLIENT bypass its explicit scope using ALL or system:admin', () => {
+    expect(canUseFbsReshipment({ ...session, user: { ...session.user, clientScopeMode: 'ALL',
+      roleCodes: ['CLIENT', 'ADMIN'], permissionCodes: ['system:admin', 'client-requests:write'] } }, 'foreign')).toBe(false);
+  });
+  it.each(['ADMIN', 'OWNER'])('preserves %s access', role => {
+    expect(canUseFbsReshipment({ ...session, user: { ...session.user, roleCodes: [role] } }, 'foreign')).toBe(true);
+  });
+});
 
 const candidate = { id: '123', connectionId: 'cabinet', productName: 'Костюм', article: 'S', barcode: '205',
   sourceRequestNumber: 712, sourceSupplyId: 'WB-GI-1', assemblyStatus: 'COMPLETED', supplierStatus: 'complete',

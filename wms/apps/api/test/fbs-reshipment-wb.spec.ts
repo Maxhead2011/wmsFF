@@ -17,6 +17,33 @@ describe('WB reshipment gateway', () => {
     return { service, prisma, scopes, fetch };
   }
   const response = (value: unknown) => new Response(JSON.stringify(value), { status: 200 });
+  const clientUser: AuthUser = { ...user, roleCodes: ['CLIENT'], permissionCodes: ['client-requests:write'],
+    clientScopeMode: 'LIMITED', clientIds: ['c'], writableClientIds: ['c'] };
+  // TEST: only the reshipment gateway is opened; the emergency assembly gateway remains privileged.
+  it('allows a scoped client fresh reshipment status reads and preserves emergency denial', async () => {
+    const f = fixture(); f.fetch.mockImplementation(async () => response({ orders: [{ id: 123, supplierStatus: 'confirm', wbStatus: 'waiting' }] }));
+    expect(await f.service.readReshipmentWbStatuses('c', 'wb', ['123'], clientUser)).toEqual(new Map([['123', { supplierStatus: 'confirm', wbStatus: 'waiting' }]]));
+    expect(f.prisma.clientMarketplaceConnection.findFirst).toHaveBeenCalledWith({ where: { id: 'wb', clientId: 'c', marketplace: 'WILDBERRIES', isActive: true } });
+    f.fetch.mockClear();
+    await expect(f.service.readRepeatAssemblyWbStatuses('c', 'wb', ['123'], clientUser)).rejects.toThrow('администратор');
+    expect(f.fetch).not.toHaveBeenCalled();
+  });
+  it('allows scoped client discovery and supply creation without exposing credentials', async () => {
+    const f = fixture(); f.fetch.mockImplementation(async (url: string) => response(url.endsWith('/reshipment') ? { orders: [{ orderID: 123, supplyID: 'old' }] } : { id: 'new' }));
+    expect(await f.service.readReshipmentWbCandidates('c', clientUser)).toEqual([{ id: '123', connectionId: 'wb', supplyId: 'old' }]);
+    expect(await f.service.createReshipmentWbSupply('c', 'wb', 'name', clientUser)).toBe('new');
+  });
+  it('rejects foreign client, missing permission, demo and forged connection before WB', async () => {
+    const f = fixture();
+    for (const auth of [{ ...clientUser, clientIds: [] }, { ...clientUser, writableClientIds: [] },
+      { ...clientUser, permissionCodes: ['system:admin'] }, { ...clientUser, isDemo: true }]) {
+      await expect(f.service.readReshipmentWbCandidates('c', auth)).rejects.toThrow();
+    }
+    await expect(f.service.createReshipmentWbSupply('foreign', 'wb', 'name', { ...clientUser, clientScopeMode: 'ALL', permissionCodes: [...clientUser.permissionCodes, 'system:admin'] })).rejects.toThrow();
+    f.prisma.clientMarketplaceConnection.findFirst.mockResolvedValue(null);
+    await expect(f.service.readReshipmentWbStatuses('c', 'foreign', ['123'], clientUser)).rejects.toThrow();
+    expect(f.fetch).not.toHaveBeenCalled();
+  });
   it('discovers only WB reshipment IDs without refreshing or mutating WMS', async () => {
     const f = fixture(); f.fetch.mockResolvedValue(response({ orders: [{ orderID: 123, supplyID: 'WB-GI-old' }] }));
     expect(await f.service.readReshipmentWbCandidates('c', user)).toEqual([{ id: '123', connectionId: 'wb', supplyId: 'WB-GI-old' }]);

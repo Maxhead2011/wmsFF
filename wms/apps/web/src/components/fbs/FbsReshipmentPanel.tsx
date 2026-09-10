@@ -118,11 +118,22 @@ export class FbsReshipmentController {
   private saveRun(run: FbsReshipmentRun) { this.update({ runs: [run, ...this.state.runs.filter(item => item.runId !== run.runId)] }); }
 }
 
+// FIX: CLIENT always requires explicit own-client write scope, even with a mixed role.
+export function canUseFbsReshipment(session: AuthSession, clientId: string) {
+  const user = session.user;
+  if (user.isDemo) return false;
+  if (user.roleCodes.includes('CLIENT')) return user.permissionCodes.includes('client-requests:write')
+    && user.clientIds.includes(clientId) && user.writableClientIds.includes(clientId);
+  return user.roleCodes.some(role => role === 'ADMIN' || role === 'OWNER');
+}
+
 export function FbsReshipmentPanel(props: { session: AuthSession; clientId: string; onOpenRequest?: (id: string) => void }) {
-  if (!props.session.user.roleCodes.some(role => role === 'ADMIN' || role === 'OWNER')) return null;
+  if (!canUseFbsReshipment(props.session, props.clientId)) return null;
   // FIX: remount all capabilities, responses and confirmation on account/client/branch changes.
   return <ScopedReshipmentPanel key={JSON.stringify([props.session.accessToken, props.session.user.id,
-    props.session.user.activeWarehouseId, props.clientId, props.session.user.roleCodes])} {...props} />;
+    props.session.user.activeWarehouseId, props.clientId, props.session.user.roleCodes,
+    props.session.user.permissionCodes, props.session.user.clientIds, props.session.user.writableClientIds,
+    props.session.user.warehouseIds, props.session.user.writableWarehouseIds])} {...props} />;
 }
 function ScopedReshipmentPanel({ session, clientId, onOpenRequest }: { session: AuthSession; clientId: string; onOpenRequest?: (id: string) => void }) {
   const [enabled, setEnabled] = useState(false);

@@ -79,7 +79,29 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       await page.getByRole('button', { name: 'Проверить WB', exact: true }).waitFor();
       assert.equal(await page.getByRole('checkbox', { name: 'Выбрать заказ 123 кабинета cabinet' }).count(), 0);
     }
-    enabled = false; await page.reload();
+    // TEST: CLIENT without clients:write can confirm both modes only for its own client.
+    failCreate = false; runs = [];
+    await page.goto(`${process.env.QA_URL || 'http://127.0.0.1:5181/test/fbs-reshipment.html'}?role=CLIENT`);
+    for (const [mode, name] of [['SAME_ITEM', 'Довезти уже собранное'], ['NEW_ITEM', 'Собрать заново']]) {
+      await page.getByRole('button', { name: 'Проверить WB', exact: true }).click();
+      await page.getByRole('radio', { name, exact: true }).check();
+      await page.getByRole('checkbox', { name: 'Выбрать заказ 123 кабинета cabinet' }).check();
+      await page.getByRole('button', { name: 'Проверить выбранные · 1' }).click();
+      assert(await submit.isDisabled());
+      await page.getByRole('checkbox', { name: /^Подтверждаю/ }).check();
+      const before = createCalls.length;
+      await submit.click(); await page.getByText(/Заявка создана/).waitFor();
+      assert.equal(createCalls.length, before + 1);
+      assert.equal(createCalls.at(-1).clientId, 'test-client'); assert.equal(createCalls.at(-1).mode, mode);
+    }
+    await page.getByRole('button', { name: 'Переключить право заявок' }).click();
+    assert.equal(await page.getByRole('button', { name: 'Проверить WB', exact: true }).count(), 0);
+    await page.getByRole('button', { name: 'Переключить право заявок' }).click();
+    await page.getByRole('button', { name: 'Проверить WB', exact: true }).waitFor();
+    assert.equal(await submit.count(), 0);
+    await page.getByRole('button', { name: 'Сменить клиента', exact: true }).click();
+    assert.equal(await page.getByRole('button', { name: 'Проверить WB', exact: true }).count(), 0);
+    enabled = false; await page.goto(process.env.QA_URL || 'http://127.0.0.1:5181/test/fbs-reshipment.html');
     await page.getByRole('button', { name: 'Сменить клиента', exact: true }).waitFor();
     assert.equal(await page.getByRole('button', { name: 'Проверить WB', exact: true }).count(), 0);
     assert.deepEqual(errors, []);

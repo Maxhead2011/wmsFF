@@ -55,17 +55,62 @@ describe('WB reshipment journal', () => {
       try { return await fn(db); } catch (error) { runs.splice(0, runs.length, ...before); throw error; }
     });
     wb = { readReshipmentWbCandidates: vi.fn(async () => [{ id: 'order', connectionId: 'connection', supplyId: 'old-supply' }]),
-      readRepeatAssemblyWbStatuses: vi.fn(async () => new Map([['order', { supplierStatus: 'complete', wbStatus: 'waiting' }]])),
+      readReshipmentWbStatuses: vi.fn(async () => new Map([['order', { supplierStatus: 'complete', wbStatus: 'waiting' }]])),
       findReshipmentWbSupply: vi.fn(async () => null), createReshipmentWbSupply: vi.fn(async () => 'new-supply'),
       readReshipmentWbSupply: vi.fn(async () => ({ id: 'new-supply', done: false, orderIds: [] })),
       addReshipmentWbOrders: vi.fn(async () => {
         wb.readReshipmentWbSupply.mockResolvedValue({ id: 'new-supply', done: false, orderIds: ['order'] });
-        wb.readRepeatAssemblyWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'confirm', wbStatus: 'waiting' }]]));
+        wb.readReshipmentWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'confirm', wbStatus: 'waiting' }]]));
       }), invalidateRepeatAssemblyCache: vi.fn(),
     };
     service = new FbsReshipmentService(db, { requireClientAccess: vi.fn() } as never, wb);
   });
   afterEach(() => vi.unstubAllEnvs());
+  // TEST: a scoped client can use both approved modes, but never another tenant/branch or revoked access.
+  const clientUser = { id: 'client-user', name: 'Client', email: 'client@example.invalid', roleCodes: ['CLIENT'],
+    permissionCodes: ['client-requests:write'], clientScopeMode: 'LIMITED', clientIds: ['client'], writableClientIds: ['client'],
+    activeWarehouseId: 'warehouse', writableWarehouseIds: ['warehouse'] } as AuthUser;
+  it.each(['SAME_ITEM', 'NEW_ITEM'] as const)('allows scoped CLIENT check, preview, create and resume in %s', async mode => {
+    expect(service.capabilities(clientUser)).toEqual({ enabled: true });
+    expect((await service.check({ clientId: 'client' }, clientUser)).candidates).toHaveLength(1);
+    const input = { ...dto, mode }; const preview = await service.preview(input, clientUser);
+    const result = await service.create({ ...input, previewToken: preview.previewToken, confirm: true }, clientUser);
+    expect(result.status).toBe('CREATED');
+    // TEST: client confirmation must not be falsely attributed to an administrator.
+    if (mode === 'NEW_ITEM') {
+      expect(db.clientRequest.create.mock.calls[0][0].data.comment).toContain('Дополнительный расход подтверждён пользователем');
+    }
+    expect((await service.resume({ clientId: 'client', runId: result.runId }, clientUser)).runId).toBe(result.runId);
+    expect(db.stockMovement.create).not.toHaveBeenCalled();
+  });
+  it('rechecks revoked client rights before create and resume', async () => {
+    const preview = await service.preview(dto, clientUser);
+    const revoked = { ...clientUser, permissionCodes: [] };
+    await expect(service.create({ ...dto, previewToken: preview.previewToken, confirm: true }, revoked)).rejects.toThrow();
+    await expect(service.resume({ clientId: 'client', runId: 'run' }, revoked)).rejects.toThrow();
+    expect(wb.createReshipmentWbSupply).not.toHaveBeenCalled(); expect(db.fbsReshipmentRun.create).not.toHaveBeenCalled();
+  });
+  // TEST: client recovery must pass the real pending journal path, not only return an already-created run.
+  it('allows own pending run recovery without another WB supply POST', async () => {
+    wb.createReshipmentWbSupply.mockRejectedValue(new Error('lost response'));
+    const preview = await service.preview(dto, clientUser);
+    const pending = await service.create({ ...dto, previewToken: preview.previewToken, confirm: true }, clientUser);
+    expect(pending.status).toBe('NEEDS_RECONCILIATION');
+    wb.findReshipmentWbSupply.mockResolvedValue({ id: 'new-supply', done: false, orderIds: [] });
+    const resumed = await service.resume({ clientId: 'client', runId: pending.runId }, clientUser);
+    expect(resumed.status).toBe('CREATED'); expect(wb.createReshipmentWbSupply).toHaveBeenCalledTimes(1);
+    expect(db.clientRequest.create).toHaveBeenCalledTimes(1); expect(db.stockMovement.create).not.toHaveBeenCalled();
+  });
+  it('rejects foreign tenant even with accidental ALL/system:admin and refuses foreign warehouse/run', async () => {
+    const broad = { ...clientUser, clientScopeMode: 'ALL' as const, permissionCodes: [...clientUser.permissionCodes, 'system:admin'] };
+    await expect(service.check({ clientId: 'foreign' }, broad)).rejects.toThrow();
+    await expect(service.preview(dto, { ...clientUser, activeWarehouseId: 'foreign' })).rejects.toThrow();
+    for (const row of [{ id: 'foreign', clientId: 'foreign', warehouseId: 'warehouse' }, { id: 'foreign-wh', clientId: 'client', warehouseId: 'foreign' }]) {
+      runs.push(row);
+      await expect(service.resume({ clientId: 'client', runId: row.id }, clientUser)).rejects.toThrow('не найдена');
+    }
+    expect(wb.readReshipmentWbCandidates).not.toHaveBeenCalled(); expect(wb.findReshipmentWbSupply).not.toHaveBeenCalled();
+  });
   it('check is read-only, exposes previous request and two modes', async () => {
     const result = await service.check({ clientId: 'client' }, user);
     expect(result.candidates[0]).toMatchObject({ id: 'order', sourceRequestNumber: 712, eligibleModes: ['SAME_ITEM', 'NEW_ITEM'] });
@@ -75,11 +120,11 @@ describe('WB reshipment journal', () => {
   it.each(['sold', 'canceled', 'canceled_by_client', 'declined_by_client', 'defect', 'canceled_by_carrier',
     'sorted', 'ready_for_pickup', 'postponed_delivery', 'accepted_by_carrier', 'sent_to_carrier'])(
     'hides %s orders even when the WB reshipment list still includes them', async wbStatus => {
-      wb.readRepeatAssemblyWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'complete', wbStatus }]]));
+      wb.readReshipmentWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'complete', wbStatus }]]));
       expect(await service.check({ clientId: 'client' }, user)).toMatchObject({ candidates: [], unverifiedCount: 0 });
     });
   it.each(['cancel', 'cancel_carrier'])('hides supplier cancellation %s even with waiting WB state', async supplierStatus => {
-    wb.readRepeatAssemblyWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus, wbStatus: 'waiting' }]]));
+    wb.readReshipmentWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus, wbStatus: 'waiting' }]]));
     expect(await service.check({ clientId: 'client' }, user)).toMatchObject({ candidates: [], unverifiedCount: 0 });
   });
   // TEST: hiding a row is not authorization; forged selections and previously valid tokens remain blocked server-side.
@@ -97,7 +142,7 @@ describe('WB reshipment journal', () => {
       const input = { ...dto, mode };
       return { ...input, previewToken: (await service.preview(input, user)).previewToken, confirm: true };
     }));
-    wb.readRepeatAssemblyWbStatuses.mockResolvedValue(new Map([['order', status]]));
+    wb.readReshipmentWbStatuses.mockResolvedValue(new Map([['order', status]]));
     expect((await service.check({ clientId: 'client' }, user)).candidates).toEqual([]);
     for (const input of inputs) {
       await expect(service.preview(input, user)).rejects.toThrow('WB не подтверждает');
@@ -111,14 +156,14 @@ describe('WB reshipment journal', () => {
   it('still polls historical delivery orders but hides normal complete/waiting deliveries without reshipment proof', async () => {
     wb.readReshipmentWbCandidates.mockResolvedValue([]);
     expect(await service.check({ clientId: 'client' }, user)).toMatchObject({ candidates: [], unverifiedCount: 0 });
-    expect(wb.readRepeatAssemblyWbStatuses).toHaveBeenCalledWith('client', 'connection', ['order'], user);
-    wb.readRepeatAssemblyWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'confirm', wbStatus: 'waiting' }]]));
+    expect(wb.readReshipmentWbStatuses).toHaveBeenCalledWith('client', 'connection', ['order'], user);
+    wb.readReshipmentWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'confirm', wbStatus: 'waiting' }]]));
     expect((await service.check({ clientId: 'client' }, user)).candidates).toHaveLength(1);
   });
   it.each([null, { supplierStatus: 'complete', wbStatus: '' }, { supplierStatus: '', wbStatus: 'waiting' },
     { supplierStatus: 'future', wbStatus: 'waiting' }, { supplierStatus: 'complete', wbStatus: 'future' }])(
     'counts unavailable/unknown status %j separately without claiming an actionable order', async status => {
-      wb.readRepeatAssemblyWbStatuses.mockResolvedValue(new Map(status ? [['order', status]] : []));
+      wb.readReshipmentWbStatuses.mockResolvedValue(new Map(status ? [['order', status]] : []));
       expect(await service.check({ clientId: 'client' }, user)).toMatchObject({ candidates: [], unverifiedCount: 1 });
     });
   it('keeps fresh WB-listed missing-local and mismatched-supply orders visible but unselectable', async () => {
@@ -140,7 +185,7 @@ describe('WB reshipment journal', () => {
     });
   it('keeps independent unfinished runs visible when the related candidate is now cancelled', async () => {
     runs.push({ id: 'pending', status: 'NEEDS_RECONCILIATION', mode: 'SAME_ITEM', requestId: null, supplyId: null });
-    wb.readRepeatAssemblyWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'complete', wbStatus: 'canceled_by_client' }]]));
+    wb.readReshipmentWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'complete', wbStatus: 'canceled_by_client' }]]));
     const result = await service.check({ clientId: 'client' }, user);
     expect(result.candidates).toEqual([]);
     expect(result.runs).toEqual([expect.objectContaining({ runId: 'pending', status: 'NEEDS_RECONCILIATION' })]);
@@ -200,7 +245,7 @@ describe('WB reshipment journal', () => {
   it('reconciles membership after ambiguous PATCH before considering another PATCH', async () => {
     wb.addReshipmentWbOrders.mockImplementation(async () => {
       wb.readReshipmentWbSupply.mockResolvedValue({ id: 'new-supply', done: false, orderIds: ['order'] });
-      wb.readRepeatAssemblyWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'confirm', wbStatus: 'waiting' }]]));
+      wb.readReshipmentWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'confirm', wbStatus: 'waiting' }]]));
       throw new Error('lost PATCH response');
     });
     const preview = await service.preview(dto, user); const first = await service.create({ ...dto, previewToken: preview.previewToken, confirm: true }, user);
@@ -218,7 +263,7 @@ describe('WB reshipment journal', () => {
   });
   it('detects confirmed return from exact persisted transition, not unrelated audit history', async () => {
     wb.readReshipmentWbCandidates.mockResolvedValue([]);
-    wb.readRepeatAssemblyWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'confirm', wbStatus: 'waiting' }]]));
+    wb.readReshipmentWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'confirm', wbStatus: 'waiting' }]]));
     Object.assign(link, { lastSupplierStatus: 'confirm', lastCategory: 'assembly', lastSupplyId: 'new-wb-supply' });
     const event = { entityId: 'link', payload: { clientId: 'client', connectionId: 'connection', orderId: 'order',
       requestId: 'old-request', assemblyId: 'physical', sourceSupplyId: 'old-supply', targetSupplyId: 'new-wb-supply',
@@ -243,7 +288,7 @@ describe('WB reshipment journal', () => {
     runs.push({ id: 'leased', clientId: 'client', warehouseId: 'warehouse', status: 'PENDING',
       leaseToken: 'other-worker', leaseUntil: new Date(Date.now() + 60_000) });
     expect((await service.resume({ clientId: 'client', runId: 'leased' }, user)).status).toBe('PENDING');
-    expect(wb.readRepeatAssemblyWbStatuses).not.toHaveBeenCalled();
+    expect(wb.readReshipmentWbStatuses).not.toHaveBeenCalled();
   });
   it('does not commit a request when WB has not confirmed all memberships', async () => {
     wb.addReshipmentWbOrders.mockResolvedValue(undefined);
@@ -254,7 +299,7 @@ describe('WB reshipment journal', () => {
   it('does not commit or take new stock if cancellation arrives after remote mutation', async () => {
     wb.addReshipmentWbOrders.mockImplementation(async () => {
       wb.readReshipmentWbSupply.mockResolvedValue({ id: 'new-supply', done: false, orderIds: ['order'] });
-      wb.readRepeatAssemblyWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'cancel', wbStatus: 'canceled' }]]));
+      wb.readReshipmentWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'cancel', wbStatus: 'canceled' }]]));
     });
     const preview = await service.preview(dto, user);
     expect((await service.create({ ...dto, previewToken: preview.previewToken, confirm: true }, user)).status).toBe('NEEDS_RECONCILIATION');
@@ -272,7 +317,7 @@ describe('WB reshipment journal', () => {
     wb.addReshipmentWbOrders.mockImplementation(async () => {
       task.startedAt = new Date();
       wb.readReshipmentWbSupply.mockResolvedValue({ id: 'new-supply', done: false, orderIds: ['order'] });
-      wb.readRepeatAssemblyWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'confirm', wbStatus: 'waiting' }]]));
+      wb.readReshipmentWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'confirm', wbStatus: 'waiting' }]]));
     });
     const input = { ...dto, mode: 'NEW_ITEM' as const }; const preview = await service.preview(input, user);
     expect((await service.create({ ...input, previewToken: preview.previewToken, confirm: true }, user)).status).toBe('NEEDS_RECONCILIATION');
@@ -350,12 +395,12 @@ describe('WB reshipment journal', () => {
     db.fbsTsdAssembly.updateMany.mockImplementation(async ({ where, data }: any) => { Object.assign(where.id === task.id ? task : secondTask, data); return { count: 1 }; });
     db.fbsOrderRequestLink.updateMany.mockImplementation(async ({ where, data }: any) => { Object.assign(where.id === link.id ? link : secondLink, data); return { count: 1 }; });
     wb.readReshipmentWbCandidates.mockResolvedValue([{ id: 'order', connectionId: 'connection', supplyId: 'old-supply' }, { id: 'second', connectionId: 'connection', supplyId: 'old-supply' }]);
-    wb.readRepeatAssemblyWbStatuses.mockResolvedValue(new Map(['order', 'second'].map(id => [id, { supplierStatus: 'complete', wbStatus: 'waiting' }])));
+    wb.readReshipmentWbStatuses.mockResolvedValue(new Map(['order', 'second'].map(id => [id, { supplierStatus: 'complete', wbStatus: 'waiting' }])));
     wb.readReshipmentWbSupply.mockResolvedValue({ id: 'new-supply', done: false, orderIds: ['order'] });
     wb.addReshipmentWbOrders.mockImplementation(async (_c: string, _connection: string, _s: string, orders: string[]) => {
       expect(orders).toEqual(['second']);
       wb.readReshipmentWbSupply.mockResolvedValue({ id: 'new-supply', done: false, orderIds: ['order', 'second'] });
-      wb.readRepeatAssemblyWbStatuses.mockResolvedValue(new Map(['order', 'second'].map(id => [id, { supplierStatus: 'confirm', wbStatus: 'waiting' }])));
+      wb.readReshipmentWbStatuses.mockResolvedValue(new Map(['order', 'second'].map(id => [id, { supplierStatus: 'confirm', wbStatus: 'waiting' }])));
     });
     const input = { ...dto, orders: [...dto.orders, { id: 'second', connectionId: 'connection' }] };
     const preview = await service.preview(input, user);

@@ -5,15 +5,27 @@ import { validateSync } from 'class-validator';
 import { FbsReshipmentController } from '../src/modules/marketplace-connections/fbs-reshipment.controller';
 import { CreateFbsReshipmentDto, PreviewFbsReshipmentDto } from '../src/modules/marketplace-connections/dto/fbs-reshipment.dto';
 import type { AuthUser } from '../src/modules/auth/auth.types';
+import { Reflector } from '@nestjs/core';
+import { PermissionsGuard } from '../src/modules/auth/guards/permissions.guard';
 
 // TEST: real route metadata/DTO validation; no external service is bootstrapped.
 describe('reshipment HTTP contract', () => {
   it('registers only the isolated permission-protected endpoints', () => {
     expect(Reflect.getMetadata('path', FbsReshipmentController)).toContain('marketplace-connections/fbs/reshipment');
-    expect(Reflect.getMetadata('requiredPermissions', FbsReshipmentController)).toEqual(['clients:write']);
+    expect(Reflect.getMetadata('requiredAnyPermissions', FbsReshipmentController)).toEqual(['clients:write', 'client-requests:write']);
     for (const name of ['check', 'preview', 'create', 'resume'] as const) {
       expect(Reflect.getMetadata('path', FbsReshipmentController.prototype[name])).toBe(name);
       expect(Reflect.getMetadata('method', FbsReshipmentController.prototype[name])).toBe(1); // POST
+    }
+  });
+  // TEST: evaluate the actual endpoint metadata with the real global guard.
+  it('allows client request writers through every endpoint guard, but not read-only clients', () => {
+    const guard = new PermissionsGuard(new Reflector());
+    for (const name of ['capabilities', 'check', 'preview', 'create', 'resume'] as const) {
+      const context = (permissionCodes: string[]) => ({ getHandler: () => FbsReshipmentController.prototype[name],
+        getClass: () => FbsReshipmentController, switchToHttp: () => ({ getRequest: () => ({ user: { roleCodes: ['CLIENT'], permissionCodes } }) }) }) as never;
+      expect(guard.canActivate(context(['client-requests:write']))).toBe(true);
+      expect(() => guard.canActivate(context(['client-requests:read']))).toThrow();
     }
   });
   it('passes authenticated context and exact body through each isolated action', async () => {
