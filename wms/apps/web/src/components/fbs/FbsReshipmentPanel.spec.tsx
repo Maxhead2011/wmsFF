@@ -51,12 +51,12 @@ describe('WB reshipment UI // TEST', () => {
   });
   it('does not select blocked candidates or orders from different cabinets', async () => {
     const { api, model } = setup();
-    const blocked = { ...candidate, id: 'blocked', eligibleModes: [], blockedReason: 'Получен покупателем' };
+    const blocked = { ...candidate, id: 'blocked', eligibleModes: [], blockedReason: 'Сначала распакуйте грузокороб' };
     const other = { ...candidate, id: 'other', connectionId: 'other-cabinet' };
     api.check.mockResolvedValue({ candidates: [candidate, blocked, other], runs: [] });
     await model.check(); model.toggle(blocked); model.toggle(candidate); model.toggle(other);
     expect(model.state.selected).toEqual([candidate]);
-    expect(renderToStaticMarkup(<FbsReshipmentView model={model} />)).toContain('Получен покупателем');
+    expect(renderToStaticMarkup(<FbsReshipmentView model={model} />)).toContain('Сначала распакуйте грузокороб');
   });
   it('discards late async responses after account/client/warehouse scope unmount', async () => {
     const { api, model } = setup();
@@ -74,5 +74,62 @@ describe('WB reshipment UI // TEST', () => {
     await model.check(); await Promise.all([model.resume('run1'), model.resume('run1')]);
     expect(api.resume).toHaveBeenCalledTimes(1);
     expect(api.resume).toHaveBeenCalledWith({ clientId: 'client', runId: 'run1' });
+  });
+  // TEST: filters operate on the complete returned problem list, not just a page.
+  it.each(['123', '712', 'wb-gi-1', '205', 'костюм', ' S '])('finds order by search %s', async query => {
+    const { api, model } = setup();
+    api.check.mockResolvedValue({ candidates: [candidate, { ...candidate, id: '999', productName: 'Джинсы',
+      article: 'D', barcode: '888', sourceRequestNumber: 900, sourceSupplyId: 'WB-GI-9' }], runs: [] });
+    await model.check(); model.setFilters({ query });
+    expect(model.visibleCandidates().map(row => row.id)).toEqual(['123']);
+  });
+  it('combines cabinet, search and availability; keeps review rows unselectable', async () => {
+    const { api, model } = setup();
+    const blocked = { ...candidate, id: 'blocked', eligibleModes: [], blockedReason: 'Распакуйте грузокороб' };
+    api.check.mockResolvedValue({ candidates: [candidate, blocked, { ...candidate, id: 'other', connectionId: 'other' }], runs: [] });
+    await model.check(); model.setFilters({ query: 'костюм', connectionId: 'cabinet', availability: 'REVIEW' });
+    expect(model.visibleCandidates().map(row => row.id)).toEqual(['blocked']); model.selectAllVisible();
+    expect(model.state.selected).toEqual([]);
+    model.setFilters({ availability: 'AVAILABLE' }); model.selectAllVisible();
+    expect(model.state.selected).toEqual([candidate]);
+  });
+  it('selects all visible eligible orders once and clears confirmation on filtering and clear', async () => {
+    const { api, model } = setup(); const second = { ...candidate, id: '124' };
+    api.check.mockResolvedValue({ candidates: [candidate, second], runs: [] });
+    await model.check(); model.selectAllVisible(); model.selectAllVisible();
+    expect(model.state.selected).toEqual([candidate, second]);
+    await model.preview(); model.confirm(true); model.setFilters({ query: '124' });
+    expect(model.state.selected).toEqual([]); expect(model.state.preview).toBeNull(); expect(model.state.confirmed).toBe(false);
+    model.selectAllVisible(); await model.preview(); model.confirm(true); model.clearSelection();
+    expect(model.state.selected).toEqual([]); expect(model.state.preview).toBeNull(); expect(model.state.confirmed).toBe(false);
+  });
+  it('does not silently select a cabinet or truncate a bulk selection above 100', async () => {
+    const { api, model } = setup();
+    api.check.mockResolvedValue({ candidates: [candidate, { ...candidate, id: 'other', connectionId: 'other' }], runs: [] });
+    await model.check(); model.selectAllVisible();
+    expect(model.state.selected).toEqual([]); expect(model.state.error).toMatch(/кабинет/i);
+    api.check.mockResolvedValue({ candidates: Array.from({ length: 101 }, (_, i) => ({ ...candidate, id: String(i) })), runs: [] });
+    await model.check(); model.selectAllVisible(); expect(model.state.selected).toEqual([]); expect(model.state.error).toContain('100');
+    api.check.mockResolvedValue({ candidates: Array.from({ length: 100 }, (_, i) => ({ ...candidate, id: String(i) })), runs: [] });
+    await model.check(); model.selectAllVisible(); expect(model.state.selected).toHaveLength(100);
+  });
+  it('blocks bulk/filter changes during requests and after disposal', async () => {
+    const { api, model } = setup(); await model.check(); model.selectAllVisible();
+    let resolve!: (v: any) => void; api.preview.mockReturnValueOnce(new Promise(r => { resolve = r; }));
+    const pending = model.preview(); model.setFilters({ query: 'no' }); model.clearSelection(); model.selectAllVisible();
+    expect(model.state.selected).toEqual([candidate]); expect(model.visibleCandidates()).toEqual([candidate]);
+    resolve({ previewToken: 'proof', orders: [candidate], orderCount: 1, additionalUnits: 0, warning: '' }); await pending;
+    model.dispose(); model.clearSelection(); model.setFilters({ query: 'no' });
+    expect(model.state.selected).toEqual([candidate]); expect(model.visibleCandidates()).toEqual([candidate]);
+  });
+  it('uses current action for availability and keeps uncertain operations outside filters', async () => {
+    const { api, model } = setup(); const newOnly = { ...candidate, eligibleModes: ['NEW_ITEM'] as ('NEW_ITEM')[] };
+    api.check.mockResolvedValue({ candidates: [newOnly], unverifiedCount: 3, runs: [{ runId: 'pending', status: 'NEEDS_RECONCILIATION',
+      mode: 'SAME_ITEM', supplyId: null, requestId: null, errorMessage: 'Проверьте результат WB' }] });
+    await model.check(); model.setFilters({ availability: 'AVAILABLE' }); expect(model.visibleCandidates()).toEqual([]);
+    model.setMode('NEW_ITEM'); expect(model.visibleCandidates()).toEqual([newOnly]);
+    model.setFilters({ query: 'no-match' }); const html = renderToStaticMarkup(<FbsReshipmentView model={model} />);
+    expect(html).toContain('Статус WB не подтверждён: 3'); expect(html).toContain('Проверьте результат WB');
+    expect(html).toContain('По выбранным фильтрам заказов нет'); expect(html).toContain('Сохранённые операции');
   });
 });

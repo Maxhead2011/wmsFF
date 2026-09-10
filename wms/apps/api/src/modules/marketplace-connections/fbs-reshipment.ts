@@ -16,6 +16,20 @@ export function reshipmentFingerprint(clientId: string, warehouseId: string, mod
   return reshipmentHash([clientId, warehouseId, mode,
     orders.map(row => JSON.stringify([row.connectionId, row.id, row.cycle])).sort()]);
 }
+// FIX: discovery history is not a work list. WB complete means "in delivery", not received.
+// This presentation classifier deliberately does not grant permission to create/resume.
+export function reshipmentVisibility(wb: { supplierStatus: string; wbStatus: string } | null,
+  directListed: boolean, returnedEvidence: boolean): 'ACTIONABLE' | 'HIDDEN' | 'UNVERIFIED' {
+  if (!wb) return 'UNVERIFIED';
+  if (['cancel', 'cancel_carrier'].includes(wb.supplierStatus) ||
+    ['sold', 'canceled', 'canceled_by_client', 'declined_by_client', 'defect', 'canceled_by_carrier'].includes(wb.wbStatus)) return 'HIDDEN';
+  if (!['new', 'confirm', 'complete'].includes(wb.supplierStatus) ||
+    !['waiting', 'sorted', 'ready_for_pickup', 'postponed_delivery', 'accepted_by_carrier', 'sent_to_carrier'].includes(wb.wbStatus)) return 'UNVERIFIED';
+  if (wb.wbStatus !== 'waiting') return 'HIDDEN';
+  if (wb.supplierStatus === 'complete' && directListed) return 'ACTIONABLE';
+  if (wb.supplierStatus === 'confirm' && (directListed || returnedEvidence)) return 'ACTIONABLE';
+  return 'HIDDEN';
+}
 export function reshipmentEligibility(
   task: { status: string; barcode: string | null; kiz: string | null; requiresKiz: boolean;
     completedAt: Date | null; itemCount: number; cargoPackingId: string | null; supplyId: string | null;

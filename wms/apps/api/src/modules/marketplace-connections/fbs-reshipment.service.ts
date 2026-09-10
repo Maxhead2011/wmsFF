@@ -6,7 +6,7 @@ import { ClientScopeService } from '../auth/client-scope.service';
 import type { AuthUser } from '../auth/auth.types';
 import { MarketplaceConnectionsService } from './marketplace-connections.service';
 import { createRepeatAttemptData } from './fbs-repeat-assembly';
-import { assertReshipmentEnabled, reshipmentCycle, reshipmentEligibility, reshipmentFingerprint, reshipmentHash, supplyRecoveryAction, type ReshipmentMode } from './fbs-reshipment';
+import { assertReshipmentEnabled, reshipmentCycle, reshipmentEligibility, reshipmentFingerprint, reshipmentHash, reshipmentVisibility, supplyRecoveryAction, type ReshipmentMode } from './fbs-reshipment';
 import type { CheckFbsReshipmentDto, CreateFbsReshipmentDto, PreviewFbsReshipmentDto, ResumeFbsReshipmentDto } from './dto/fbs-reshipment.dto';
 
 type Link = Prisma.FbsOrderRequestLinkGetPayload<{ include: { request: true } }>;
@@ -120,14 +120,18 @@ export class FbsReshipmentService {
       const task = local.tasks.find(row => row.connectionId === order.connectionId && row.orderId === order.id);
       const link = local.links.find(row => row.connectionId === order.connectionId && row.orderId === order.id && row.requestId === task?.requestId);
       const status = statuses.get(identity(order)) ?? null;
+      // FIX: retain WB-listed inconsistencies for review, without relaxing supply-match eligibility.
+      const directListed = direct.some(row => identity(row) === identity(order));
       const directCandidate = direct.some(row => identity(row) === identity(order) && (!row.supplyId || row.supplyId === task?.supplyId));
       const evidence = link ? returnEvidence(task, link) : null;
+      const returned = !!evidence || (!!task && !!link && link.lastSupplierStatus === 'complete' &&
+        link.lastCategory === 'shipped' && !!link.lastSupplyId && link.lastSupplyId === task.supplyId);
       const historicalSupply = evidence && typeof evidence === 'object' && !Array.isArray(evidence) && typeof evidence.sourceSupplyId === 'string' ? evidence.sourceSupplyId : null;
       const modeReason = (mode: ReshipmentMode) => !task || !link || link.request.warehouseId !== warehouseId ? 'Нет подтверждённой сборки и заявки в выбранном филиале.' :
         reshipmentEligibility(task, link, status, directCandidate, mode, !!evidence);
       const eligibleModes = (['SAME_ITEM', 'NEW_ITEM'] as ReshipmentMode[]).filter(mode => !modeReason(mode));
       const blockedReason = eligibleModes.length ? null : modeReason('NEW_ITEM');
-      return { task, link, status, directCandidate, view: { ...order,
+      return { task, link, status, directCandidate, visibility: reshipmentVisibility(status, directListed, returned), view: { ...order,
         sourceRequestNumber: link?.request.number ?? null, sourceSupplyId: historicalSupply ?? task?.supplyId ?? null,
         productName: task?.productName ?? null, article: task?.article ?? null,
         barcode: task?.barcode ?? (Array.isArray(task?.barcodes) ? String(task.barcodes[0] ?? '') : null),
@@ -141,7 +145,10 @@ export class FbsReshipmentService {
     const warehouseId = await this.authorize(dto.clientId, user);
     const [rows, runs] = await Promise.all([this.inspect(dto.clientId, warehouseId, user),
       this.prisma.fbsReshipmentRun.findMany({ where: { clientId: dto.clientId, warehouseId }, orderBy: { createdAt: 'desc' }, take: 50 })]);
-    return { candidates: rows.map(row => row.view), runs: await Promise.all(runs.map(run => this.view(run))) };
+    // FIX: filtering affects the check response only; mutation validation and recovery runs are independent.
+    return { candidates: rows.filter(row => row.visibility === 'ACTIONABLE').map(row => row.view),
+      unverifiedCount: rows.filter(row => row.visibility === 'UNVERIFIED').length,
+      runs: await Promise.all(runs.map(run => this.view(run))) };
   }
 
   private async plan(dto: PreviewFbsReshipmentDto, warehouseId: string, user: AuthUser) {

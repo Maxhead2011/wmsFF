@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { reshipmentEligibility, reshipmentFingerprint, reshipmentCycle, assertReshipmentEnabled, supplyRecoveryAction } from '../src/modules/marketplace-connections/fbs-reshipment';
+import { reshipmentEligibility, reshipmentFingerprint, reshipmentCycle, assertReshipmentEnabled, supplyRecoveryAction, reshipmentVisibility } from '../src/modules/marketplace-connections/fbs-reshipment';
 
 // TEST: returned-to-assembly is not synonymous with every WB confirm order.
 describe('WB reshipment safety rules', () => {
@@ -44,5 +44,25 @@ describe('WB reshipment safety rules', () => {
     expect(supplyRecoveryAction('WB_CREATE_STARTED', null)).toBe('RECONCILE_ONLY');
     expect(supplyRecoveryAction('WB_CREATE_STARTED', { id: 's', done: false })).toBe('USE_EXISTING');
     expect(() => supplyRecoveryAction('PLANNED', { id: 's', done: true })).toThrow();
+  });
+});
+
+// TEST: list visibility is based on fresh WB evidence, never local completion or error wording.
+describe('WB reshipment work-list visibility', () => {
+  it.each([
+    [null, true, true, 'UNVERIFIED'],
+    [{ supplierStatus: 'complete', wbStatus: 'future' }, true, true, 'UNVERIFIED'],
+    [{ supplierStatus: 'future', wbStatus: 'waiting' }, true, true, 'UNVERIFIED'],
+    [{ supplierStatus: 'future', wbStatus: 'sold' }, true, true, 'HIDDEN'],
+    [{ supplierStatus: 'cancel', wbStatus: 'future' }, true, true, 'HIDDEN'],
+    [{ supplierStatus: 'complete', wbStatus: 'sorted' }, true, true, 'HIDDEN'],
+    [{ supplierStatus: 'complete', wbStatus: 'waiting' }, true, false, 'ACTIONABLE'],
+    [{ supplierStatus: 'complete', wbStatus: 'waiting' }, false, true, 'HIDDEN'],
+    [{ supplierStatus: 'confirm', wbStatus: 'waiting' }, true, false, 'ACTIONABLE'],
+    [{ supplierStatus: 'confirm', wbStatus: 'waiting' }, false, true, 'ACTIONABLE'],
+    [{ supplierStatus: 'confirm', wbStatus: 'waiting' }, false, false, 'HIDDEN'],
+    [{ supplierStatus: 'new', wbStatus: 'waiting' }, true, true, 'HIDDEN'],
+  ] as const)('classifies %j / direct %s / returned %s as %s', (status, direct, returned, expected) => {
+    expect(reshipmentVisibility(status, direct, returned)).toBe(expected);
   });
 });
