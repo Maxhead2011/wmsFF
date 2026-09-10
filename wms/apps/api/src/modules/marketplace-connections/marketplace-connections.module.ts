@@ -12,14 +12,17 @@ import { MarketplaceConnectionsService } from './marketplace-connections.service
 import { MarketplaceStockControlService } from './marketplace-stock-control.service';
 import { FbsRepeatAssemblyService } from './fbs-repeat-assembly.service';
 import { FbsRepeatAssemblyController } from './fbs-repeat-assembly.controller';
+import { FbsReshipmentController } from './fbs-reshipment.controller';
+import { FbsReshipmentService } from './fbs-reshipment.service';
 
 @Module({
   imports: [AuthModule, LogisticsModule],
-  controllers: [MarketplaceConnectionsController, FbsStockAllocationExternalController, FbsRepeatAssemblyController],
+  controllers: [MarketplaceConnectionsController, FbsStockAllocationExternalController, FbsRepeatAssemblyController, FbsReshipmentController],
   providers: [
     MarketplaceStockControlService,
     // FIX: keep current stock-control registration when adding independent repeats.
     FbsRepeatAssemblyService,
+    FbsReshipmentService,
     MarketplaceConnectionsService,
     // ADDED: isolated read-only WB Finance integration for FBS penalties.
     FbsPenaltiesReportService,
