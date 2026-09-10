@@ -65,3 +65,22 @@
 После тестового PostgreSQL gate: согласование Gate2; PR; backup и миграция только нашей WMS; сначала feature-off, smoke-test, затем явное включение. Проверить один согласованный заказ в каждом режиме без необратимого массового переноса.
 
 При проблемах установить `WMS_FBS_RESHIPMENT_ENABLED=read-only`, сохранить совместимый reader истории. Не удалять новые таблицы, claims, снимки или WB поставки: они нужны для сверки неопределённых операций. Откат к старому коду может скрыть SAME_ITEM provenance и старую выработку; предпочтительно отключение записи новым флагом, а не потеря reader. Удаление таблиц допустимо только в изолированном пустом тестовом окружении.
+
+## Перенос на live-совместимую базу, 10.09.2026
+
+После подтверждения Константина объединена база PR89 `7c38ff85f55471d5199ab1a8d32dd3a34b492927`
+в `feature/wb-reshipment-live-20260910`; конфликты разрешены только после отдельного разрешения.
+Биллинг, delivery-options и текущий FBS интерфейс сохранены. Реестр: RED 106 вместо 107 → GREEN 107.
+
+- Полный API: **182 файла / 1913 тестов PASS**, 19:44:38, 98.50 с.
+- Полный web: **25 файлов / 108 тестов PASS**. API/web TypeScript и сборки PASS.
+- Реальный Edge на отдельном порту 5193: StrictMode, preview/confirm, смена режима/области, двойное нажатие, resume, feature-off PASS.
+- Изолированный PostgreSQL 16 в временном контейнере без сети, production volumes и портов: миграция и откат, UNIQUE fingerprint/overlapping claims, transaction rollback, lease expiry/takeover/stale fencing, mode CHECK/FK RESTRICT PASS.
+  Это тест PostgreSQL контрактов, не всей application saga. Synthetic schema и контейнер удалены; production/WB не изменялись.
+- Добавлены `infra/scripts/wb-reshipment-release.{cjs,sh}`, `.test.cjs`, `wb-reshipment-postgres.sh`, `infra/wb-reshipment.Dockerfile`.
+  Два теста release allowlist/hash drift PASS. Артефакты формируются только из Git HEAD, проверяются перед сборкой.
+  Live API и web исходники сверяются с базой, старый web сначала пересобирается с точным совпадением public artifacts.
+  Выпуск ограничен новыми таблицами и reviewed API/web overlay; APK/downloads и инфраструктурные контейнеры не меняются.
+
+База нового PR — `feature/billing-period-register-20260910`, чтобы сохранить опубликованные PR88/89.
+Состояние публикации будет подтверждено отдельно после server stage и PR.
