@@ -566,6 +566,13 @@ export class MarketplaceConnectionsController {
     return this.connections.deliverFbsSupplies(dto, user);
   }
 
+  // FIX: preserve the deployed delivery confirmation endpoint.
+  @Post('fbs/supplies/delivery-options')
+  @RequirePermissions()
+  getFbsSupplyDeliveryOptions(@Body() dto: FbsOrderSelectionDto, @CurrentUser() user: AuthUser) {
+    return this.connections.getFbsSupplyDeliveryOptions(dto, user);
+  }
+
   @Post('fbs/supplies/change-destination')
   @RequirePermissions()
   changeFbsSuppliesDestination(@Body() dto: FbsOrderSelectionDto, @CurrentUser() user: AuthUser) {

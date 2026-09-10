@@ -13,6 +13,8 @@ type BillingInvoicesTableProps = {
   onOpenDocument?: (invoice: BillingInvoiceSummary, kind: 'invoice' | 'act') => void;
   onDownloadPdf?: (invoice: BillingInvoiceSummary, kind: 'invoice' | 'act') => void;
   onEdit?: (invoice: BillingInvoiceSummary) => void;
+  onOpen?: (invoice: BillingInvoiceSummary) => void;
+  groupFbsDrafts?: boolean;
   onStatusChange: (invoiceId: string, status: BillingInvoiceStatus) => void;
 };
 
@@ -37,16 +39,19 @@ export function BillingInvoicesTable({
   onOpenDocument,
   onDownloadPdf,
   onEdit,
+  onOpen,
+  groupFbsDrafts = false,
   onStatusChange,
 }: BillingInvoicesTableProps) {
   const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<string>>(() => new Set());
-  const invoiceGroups = groupBillingInvoices(invoices);
+  // FIX: the registry shows one row per document; grouping remains optional.
+  const invoiceGroups = groupFbsDrafts ? groupBillingInvoices(invoices) : invoices.map(invoice => ({ key: invoice.id, invoices: [invoice], isGrouped: false }));
   const selectableInvoices = invoices.filter((invoice) => selectableInvoiceIds.has(invoice.id));
   const showInvoiceSelection = Boolean(onInvoiceSelectionChange) && selectableInvoices.length > 0;
   const allSelectableSelected =
     selectableInvoices.length > 0 && selectableInvoices.every((invoice) => selectedInvoiceIds.has(invoice.id));
   const tableColumnCount =
-    7 +
+    9 +
     (showInvoiceSelection ? 1 : 0) +
     (showClientColumn ? 1 : 0) +
     (onOpenDocument || onDownloadPdf ? 1 : 0) +
@@ -104,8 +109,10 @@ export function BillingInvoicesTable({
               </th>
             ) : null}
             <th>Счет</th>
+            <th>Дата документа</th>
             <th>Вид</th>
             {showClientColumn ? <th>Клиент</th> : null}
+            <th>Филиал</th>
             <th>Период</th>
             <th>Сумма</th>
             <th>Оплачено</th>
@@ -167,9 +174,24 @@ export function BillingInvoicesTable({
             ) : null}
             {!isCollapsed ? group.invoices.map((invoice) => {
             const remaining = Math.max(0, Number(invoice.totalRub) - Number(invoice.paidRub));
+            const comment = invoice.comment?.trim() ?? '';
+            const isMergedSource = comment.startsWith('Объединено в FBS-счёт') || comment.startsWith('Объединено в счёт');
 
             return (
-              <tr key={invoice.id}>
+              <tr key={invoice.id}
+                className={onOpen ? 'billing-invoice-row' : undefined}
+                tabIndex={onOpen ? 0 : undefined}
+                aria-label={onOpen ? `Открыть счёт ${invoice.number}` : undefined}
+                onClick={(event) => {
+                  if (!(event.target as Element).closest('button, input, select, a, label')) onOpen?.(invoice);
+                }}
+                onKeyDown={(event) => {
+                  if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+                    event.preventDefault();
+                    onOpen?.(invoice);
+                  }
+                }}
+              >
                 {showInvoiceSelection ? (
                   <td className="billing-invoice-selection-cell">
                     {selectableInvoiceIds.has(invoice.id) ? (
@@ -186,6 +208,7 @@ export function BillingInvoicesTable({
                   <strong>{invoice.number}</strong>
                   {invoice.dueDate ? <span>до {formatDate(invoice.dueDate)}</span> : null}
                 </td>
+                <td>{formatDate(invoice.createdAt)}</td>
                 <td>
                   <div className="billing-invoice-kinds">
                     {invoiceKindLabels(invoice).map((label) => (
@@ -201,6 +224,7 @@ export function BillingInvoicesTable({
                     <span>{invoice.client.name}</span>
                   </td>
                 ) : null}
+                <td>{invoice.warehouse?.name ?? '—'}</td>
                 <td>
                   <strong>{formatDate(invoice.periodFrom)}</strong>
                   <span>{formatDate(invoice.periodTo)}</span>
@@ -275,7 +299,7 @@ export function BillingInvoicesTable({
                 ) : null}
                 {canWrite ? (
                   <td>
-                    <div className="billing-invoice-process-actions">
+                    {!isMergedSource ? <div className="billing-invoice-process-actions">
                       {(invoice.status === 'DRAFT' || invoice.status === 'ISSUED') && onEdit ? (
                         <button className="document-open-button" type="button" onClick={() => onEdit(invoice)} title="Редактировать счет">
                           <Pencil size={15} aria-hidden="true" />
@@ -295,7 +319,7 @@ export function BillingInvoicesTable({
                           ))}
                         </select>
                       </label>
-                    </div>
+                    </div> : <span>Объединён</span>}
                   </td>
                 ) : null}
               </tr>
@@ -358,6 +382,9 @@ function isAutomaticFbsDraft(invoice: BillingInvoiceSummary) {
 }
 
 function invoiceKindLabels(invoice: BillingInvoiceSummary) {
+  if (invoice.serviceCategory) {
+    return [{ FBS: 'FBS', PROCESSING: 'Первичная обработка', PRR: 'ПРР', STORAGE: 'Хранение', OTHER: 'Другие услуги' }[invoice.serviceCategory]];
+  }
   const kinds = new Set<string>();
   if (invoice.sourceKey?.startsWith('fbs-')) {
     kinds.add('FBS');

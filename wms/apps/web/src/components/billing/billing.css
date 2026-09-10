@@ -847,6 +847,21 @@
   gap: 10px;
 }
 
+/* FIX: compact, keyboard-accessible invoice registry scoped to billing. */
+.billing-register-filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 16px; }
+.billing-register-filters label { display: grid; gap: 5px; font-size: 12px; }
+.billing-register-filters input, .billing-register-filters select { min-height: 36px; padding: 6px 8px; border: 1px solid #ccd3dd; border-radius: 5px; background: var(--surface, #fff); color: inherit; }
+.billing-invoice-row { cursor: pointer; }
+.billing-invoice-row:hover { background: rgba(63, 111, 177, .06); }
+.billing-invoice-row:focus-visible { outline: 2px solid #3678bb; outline-offset: -2px; }
+.billing-invoice-register__detail .billing-table--invoices td { padding: 9px 10px; }
+.billing-invoice-register__detail .billing-table-wrap--invoices { max-height: 64vh; overflow: auto; }
+.billing-invoice-register__detail .billing-table--invoices th { position: sticky; top: 0; z-index: 1; background: var(--surface, #f5f7fa); }
+.billing-register-totals { display: flex; flex-wrap: wrap; gap: 20px; padding: 12px 0; font-size: 13px; }
+.billing-invoice-card-payment { margin: 16px 0; padding: 12px; border: 1px solid #ccd3dd; border-radius: 6px; }
+.billing-period-actions, .billing-period-categories { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 12px 0; }
+.billing-period-categories label { display: inline-flex; align-items: center; gap: 6px; }
+
 .billing-client-register {
   overflow: hidden;
   border: 1px solid var(--line);

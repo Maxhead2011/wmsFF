@@ -52,6 +52,11 @@ describe('RequestBillingAutomationService', () => {
         }),
       },
     };
+    // TEST: production billing now reads and writes through one locked transaction.
+    Object.assign(prisma, {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      $transaction: vi.fn(async (callback: (db: typeof prisma) => Promise<unknown>) => callback(prisma)),
+    });
     const service = new RequestBillingAutomationService(prisma as never);
 
     await expect(service.generateForDoneRequest('request-1', user())).resolves.toMatchObject({
