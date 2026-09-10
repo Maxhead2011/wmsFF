@@ -81,6 +81,7 @@ import pro.logoff.wms.tsd.auth.TsdSessionStore;
 import pro.logoff.wms.tsd.data.OperationOutbox;
 import pro.logoff.wms.tsd.data.OperationOutboxCounts;
 import pro.logoff.wms.tsd.data.PendingOperation;
+import pro.logoff.wms.tsd.data.ReceiptCloseBatch;
 import pro.logoff.wms.tsd.data.TsdDatabase;
 import pro.logoff.wms.tsd.network.TsdClientSummary;
 import pro.logoff.wms.tsd.network.TsdAssemblyProcess;
@@ -262,6 +263,7 @@ public class MainActivity extends Activity {
     private Runnable fbsOzonLabelRefreshTask;
     private boolean receiptOpeningBox;
     private boolean receiptClosingBox;
+    private ReceiptCloseBatch receiptCloseBatch;
     private boolean fbsBusy;
     private boolean fbsRequestsBusy;
     private boolean fbsRequestsArchiveMode;
@@ -3549,6 +3551,16 @@ public class MainActivity extends Activity {
             return;
         }
 
+        if ("logoff".equals(BuildConfig.FLAVOR) && receiptCloseBatch != null) {
+            // FIX: a captured batch cannot change while its durable save is being retried.
+            scanInput = null;
+            root.addView(messageView("Закрытие короба: " + receiptBoxCode));
+            if (!receiptClosingBox) root.addView(secondaryButton("Повторить закрытие", view -> closeReceiptBox()));
+            setScrollableContent(root);
+            refreshHeaderText();
+            return;
+        }
+
         if (receiptBoxCode.isEmpty()) {
             boxCodeInput = input("Сканируйте ШК нового короба");
             boxCodeInput.setOnEditorActionListener((view, actionId, event) -> {
@@ -3589,7 +3601,7 @@ public class MainActivity extends Activity {
             root.addView(boxCodeInput);
             root.addView(primaryMenuButton("Открыть короб", view -> openReceiptBoxFromInput()));
             root.addView(secondaryButton("Проверить принятые КИЗы", view -> startReceiptKizAudit()));
-            if (receiptClosedBoxes > 0) {
+            if (receiptClosedBoxes > 0 || ("logoff".equals(BuildConfig.FLAVOR) && !receiptSessionBoxes.isEmpty())) {
                 root.addView(primaryMenuButton("Закрыть приемку", view -> finishReceipt()));
             }
             root.addView(secondaryButton("Сменить клиента", view -> resetReceiptSession()));
@@ -7608,6 +7620,7 @@ public class MainActivity extends Activity {
     }
 
     private void handleReceiptBarcodeScan() {
+        if ("logoff".equals(BuildConfig.FLAVOR) && receiptCloseBatch != null) return;
         TsdSession session = safeSession();
         if (session == null) {
             statusMessage = "Сначала войдите на ТСД.";
@@ -7740,6 +7753,7 @@ public class MainActivity extends Activity {
     }
 
     private void addReceiptItem(String barcode, String kiz, TsdSkuInfo sku, String message) {
+        if ("logoff".equals(BuildConfig.FLAVOR) && receiptCloseBatch != null) return;
         if (!receiptUsesBoxes()) {
             enqueueUnboxedReceiptItem(barcode, kiz, sku, message);
             return;
@@ -7857,6 +7871,10 @@ public class MainActivity extends Activity {
 
         String closedBoxCode = receiptBoxCode;
         List<ReceiptItem> itemsToSend = new ArrayList<>(receiptCurrentItems);
+        if ("logoff".equals(BuildConfig.FLAVOR)) {
+            closeReceiptBoxOnServer(session, closedBoxCode, itemsToSend);
+            return;
+        }
         receiptClosingBox = true;
         statusMessage = "Сохраняю короб " + closedBoxCode + " в WMS. Не нажимайте кнопку повторно.";
         renderReceiptScreen();
@@ -7905,13 +7923,80 @@ public class MainActivity extends Activity {
         });
     }
 
+    // FIX: LOGOFF closes the server box after its own scans, not a global sync summary.
+    private void closeReceiptBoxOnServer(TsdSession session, String closedBoxCode, List<ReceiptItem> items) {
+        if (receiptCloseBatch == null) {
+            List<Map<String, String>> payloads = new ArrayList<>();
+            for (ReceiptItem item : items) {
+                Map<String, String> payload = new LinkedHashMap<>();
+                payload.put("barcode", item.barcode);
+                payload.put("kiz", item.kiz);
+                payload.put("comment", "Приемка ТСД: короб " + closedBoxCode);
+                payloads.add(payload);
+            }
+            try {
+                receiptCloseBatch = ReceiptCloseBatch.create(receiptClientId, closedBoxCode, receiptSourceDocument, payloads);
+            } catch (IllegalArgumentException error) {
+                // FIX: keep the scanned items on validation failure instead of crashing the UI.
+                statusMessage = error.getMessage();
+                receiptFeedbackColor = BOX_NOT_NEEDED_RED;
+                renderReceiptScreen();
+                return;
+            }
+        }
+        ReceiptCloseBatch batch = receiptCloseBatch;
+        receiptClosingBox = true;
+        statusMessage = "Передаю и закрываю короб " + closedBoxCode + " в WMS.";
+        renderReceiptScreen();
+        runBackground(() -> {
+            try {
+                outbox.enqueueReceiptBatch(batch);
+                WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+                TsdSyncSummary summary = new TsdSyncRunner(outbox, api, session.deviceCode)
+                    .syncReceiptBatch(session.authorizationHeader(), batch.closeKey);
+                PendingOperation close = outbox.findOperation(batch.closeKey);
+                boolean confirmed = batch.isConfirmed(close);
+                mainHandler.post(() -> {
+                    if (!session.hasSameAccessToken(safeSession()) || receiptCloseBatch != batch) return;
+                    receiptClosingBox = false;
+                    receiptCloseBatch = null;
+                    online = summary.retried == 0;
+                    if (confirmed) {
+                        receiptClosedBoxes++;
+                        receiptAcceptedItems += items.size();
+                    }
+                    receiptSessionBoxes.add(normalizeBoxCode(closedBoxCode));
+                    receiptBoxCode = "";
+                    receiptCurrentItems.clear();
+                    clearPendingReceiptProductFields();
+                    receiptFeedbackColor = summary.rejected > 0 ? BOX_NOT_NEEDED_RED : 0;
+                    statusMessage = confirmed
+                        ? "Короб закрыт в WMS и готов к постановке на паллетсорт: " + closedBoxCode
+                        : summary.rejected > 0
+                            ? "Короб " + closedBoxCode + " ещё не закрыт. " + summary.message + ". Операции сохранены в очереди."
+                            : "Короб " + closedBoxCode + " сохранён в очереди и ожидает подтверждения закрытия WMS.";
+                    renderReceiptScreen();
+                    refreshQueue(null);
+                });
+            } catch (Throwable error) {
+                mainHandler.post(() -> {
+                    if (receiptCloseBatch == batch) receiptClosingBox = false;
+                });
+                throw error;
+            }
+        });
+    }
+
     private void finishReceipt() {
         if (!receiptBoxCode.isEmpty() && !receiptCurrentItems.isEmpty()) {
             statusMessage = "Сначала закройте текущий короб.";
             renderReceiptScreen();
             return;
         }
-        String summary = !receiptUsesBoxes()
+        String summary = "logoff".equals(BuildConfig.FLAVOR) && receiptUsesBoxes()
+            ? "Приемка завершена на ТСД. Подтверждено закрытие коробов: " + receiptClosedBoxes
+                + ". Неподтвержденные операции остаются в очереди синхронизации."
+            : !receiptUsesBoxes()
             ? "Приемка закрыта. Товаров: " + receiptAcceptedItems + "."
             : "Приемка по боксам закрыта. Боксов: " + receiptClosedBoxes + ", товаров: " + receiptAcceptedItems + ".";
         resetReceiptState();
@@ -7949,6 +8034,7 @@ public class MainActivity extends Activity {
         receiptCheckingKiz = false;
         receiptOpeningBox = false;
         receiptClosingBox = false;
+        receiptCloseBatch = null;
         receiptKizAuditMode = false;
         receiptFeedbackColor = 0;
         clearPendingReceiptProductFields();

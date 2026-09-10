@@ -5,12 +5,47 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.json.JSONArray;
 
 public class OperationOutbox {
     private final OperationDao dao;
 
     public OperationOutbox(OperationDao dao) {
         this.dao = dao;
+    }
+
+    // FIX: persist scans plus closure together, before contacting the server.
+    public void enqueueReceiptBatch(ReceiptCloseBatch batch) {
+        List<OperationEntity> entities = new ArrayList<>();
+        for (PendingOperation operation : batch.operations) entities.add(OperationEntity.fromPending(operation));
+        dao.insertReceiptBatch(entities);
+    }
+
+    public PendingOperation findOperation(String key) {
+        OperationEntity entity = dao.findByKey(key);
+        return entity == null ? null : entity.toPendingOperation();
+    }
+
+    public List<PendingOperation> pendingReceiptBatch(String closeKey) {
+        PendingOperation close = findOperation(closeKey);
+        if (close == null || !"receipt_close".equals(close.operationType)) return new ArrayList<>();
+        List<String> keys = new ArrayList<>();
+        try {
+            JSONArray dependencies = new JSONArray(close.payload.get("receiptOperationKeys"));
+            for (int i = 0; i < dependencies.length(); i++) keys.add(dependencies.getString(i));
+        } catch (Exception error) {
+            throw new IllegalStateException("Повреждена локальная порция закрытия короба.", error);
+        }
+        keys.add(closeKey);
+        List<PendingOperation> pending = new ArrayList<>();
+        for (List<String> chunk : ReceiptCloseBatch.queryKeyChunks(keys)) {
+            pending.addAll(toPendingOperations(dao.findPendingReceiptBatch(chunk)));
+        }
+        pending.sort((left, right) -> {
+            int byTime = Long.compare(left.createdAt, right.createdAt);
+            return byTime != 0 ? byTime : left.operationKey.compareTo(right.operationKey);
+        });
+        return new ArrayList<>(pending.subList(0, Math.min(50, pending.size())));
     }
 
     public PendingOperation enqueueReceipt(

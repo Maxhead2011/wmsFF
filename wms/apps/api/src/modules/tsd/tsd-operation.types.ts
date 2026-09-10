@@ -4,7 +4,8 @@ import { ScanOperationDto } from './dto/scan-operation.dto';
 export type TsdOperationResult = {
   operationKey: string;
   operationType: ScanOperationDto['operationType'];
-  status: 'ACCEPTED' | 'APPLIED' | 'ALREADY_APPLIED' | 'NEEDS_REVIEW' | 'REJECTED';
+  // FIX: receipt_close may wait for its own scans without caching a terminal failure.
+  status: 'ACCEPTED' | 'APPLIED' | 'ALREADY_APPLIED' | 'NEEDS_REVIEW' | 'REJECTED' | 'RETRY';
   message?: string;
   reviewReason?: TsdReviewReason;
   resolutionMessage?: string;
