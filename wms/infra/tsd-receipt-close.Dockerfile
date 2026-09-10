@@ -15,6 +15,8 @@ COPY --from=build /app/apps/api/dist/modules/tsd/tsd-operation.types.js /app/app
 COPY --from=build /app/apps/api/dist/modules/tsd/dto/scan-operation.dto.js /app/apps/api/dist/modules/tsd/dto/scan-operation.dto.js
 FROM ${BASE_WEB} AS web
 # FIX: publish only the LOGOFF download channel; application assets stay unchanged.
-COPY --chmod=644 wms/apps/web/public/downloads/logoff-tsd.apk /usr/share/nginx/html/downloads/logoff-tsd.apk
-COPY --chmod=644 wms/apps/web/public/downloads/logoff-tsd.apk /usr/share/nginx/html/downloads/logoff-tsd-receipt-close-165.apk
-COPY --chmod=644 wms/apps/web/public/downloads/logoff-tsd.json /usr/share/nginx/html/downloads/logoff-tsd.json
+COPY wms/apps/web/public/downloads/logoff-tsd.apk /usr/share/nginx/html/downloads/logoff-tsd.apk
+COPY wms/apps/web/public/downloads/logoff-tsd.apk /usr/share/nginx/html/downloads/logoff-tsd-receipt-close-165.apk
+COPY wms/apps/web/public/downloads/logoff-tsd.json /usr/share/nginx/html/downloads/logoff-tsd.json
+# FIX: legacy Docker builder cannot process COPY --chmod.
+RUN chmod 644 /usr/share/nginx/html/downloads/logoff-tsd.apk /usr/share/nginx/html/downloads/logoff-tsd-receipt-close-165.apk /usr/share/nginx/html/downloads/logoff-tsd.json

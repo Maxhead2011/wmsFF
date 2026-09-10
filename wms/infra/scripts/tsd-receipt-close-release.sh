@@ -15,8 +15,10 @@ hashapi(){ docker run --rm --network none --entrypoint sh "$1" -c 'find /app/app
 hashweb(){ docker run --rm --network none --entrypoint sh "$1" -c 'find /usr/share/nginx/html -type f -exec sha256sum {} +' | sort; }
 verify(){ node "$r/wms/infra/scripts/tsd-receipt-close-artifacts.cjs" "$b" "$r"; }
 case "${1:-}" in
- stage)
-  same; test ! -e "$b"; mkdir -m 700 "$b"
+ stage|resume-stage)
+  same
+  if test "$1" = stage; then
+  test ! -e "$b"; mkdir -m 700 "$b"
   cp /opt/logoff-wms/wms/.env "$b/env-before"; cp /opt/logoff-wms/wms/infra/docker-compose.yml "$b/compose-before"
   unchanged > "$b/unchanged-before"
   docker tag "$api" infra-api:before-tsd-receipt-close-165
@@ -24,7 +26,14 @@ case "${1:-}" in
   docker exec infra-postgres-1 pg_dump -U wms -d wms -Fc > "$b/wms.dump"
   docker exec -i infra-postgres-1 pg_restore --list < "$b/wms.dump" > "$b/backup-contents"
   sha256sum "$b/wms.dump" > "$b/backup.sha256"
-  mkdir "$b/live-src"
+  else
+   test ! -e "$b/staged-at"; test ! -e "$b/published-at"
+   sha256sum -c "$b/backup.sha256"
+   cmp /opt/logoff-wms/wms/.env "$b/env-before"
+   cmp /opt/logoff-wms/wms/infra/docker-compose.yml "$b/compose-before"
+   unchanged > "$b/unchanged-resume"; cmp "$b/unchanged-before" "$b/unchanged-resume"
+  fi
+  mkdir -p "$b/live-src"
   for name in tsd-receipt.service tsd-sync.service tsd-operation.types dto/scan-operation.dto; do
    mkdir -p "$b/live-src/$(dirname "$name")"
    docker cp "infra-api-1:/app/apps/api/src/modules/tsd/$name.ts" "$b/live-src/$name.ts"
@@ -89,5 +98,5 @@ NODE
   cmp .env "$b/env-before"; cmp infra/docker-compose.yml "$b/compose-before"
   test "$(docker inspect infra-api-1 --format '{{.Image}}')" = "$an"; test "$(docker inspect infra-web-1 --format '{{.Image}}')" = "$wn"
   trap - ERR; date -u +'%Y-%m-%dT%H:%M:%SZ' > "$b/published-at"; echo RECEIPT_CLOSE_165_PUBLISHED;;
- *) echo 'stage|publish'; exit 2;;
+ *) echo 'stage|resume-stage|publish'; exit 2;;
 esac

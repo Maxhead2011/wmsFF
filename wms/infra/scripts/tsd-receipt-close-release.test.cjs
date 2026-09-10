@@ -21,3 +21,9 @@ test('bump belongs only to LOGOFF', () => {
   assert.match(code,/create\("logoff"\)[\s\S]*?versionCode = 165/);
   assert.match(code,/defaultConfig[\s\S]*?versionCode = 153/);
 });
+// TEST: the live host uses Docker's legacy builder (without BuildKit).
+test('Dockerfile can be built without BuildKit', () => {
+  const code=fs.readFileSync(path.join(__dirname,'../tsd-receipt-close.Dockerfile'),'utf8');
+  assert(!/^COPY --chmod/m.test(code));
+  assert.match(code,/RUN chmod 644/);
+});
