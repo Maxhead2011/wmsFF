@@ -12162,7 +12162,8 @@ export function fetchFbsReshipmentCapabilities(accessToken: string) {
   return request<{ enabled: boolean }>('/marketplace-connections/fbs/reshipment/capabilities', { accessToken });
 }
 export function checkFbsReshipment(accessToken: string, input: { clientId: string }) {
-  return request<{ candidates: FbsReshipmentCandidate[]; runs: FbsReshipmentRun[] }>('/marketplace-connections/fbs/reshipment/check', { method: 'POST', accessToken, body: input });
+  // FIX: keep missing WB statuses separate from actionable/inspectable candidates.
+  return request<{ candidates: FbsReshipmentCandidate[]; runs: FbsReshipmentRun[]; unverifiedCount?: number }>('/marketplace-connections/fbs/reshipment/check', { method: 'POST', accessToken, body: input });
 }
 export function previewFbsReshipment(accessToken: string, input: FbsReshipmentSelection) {
   return request<FbsReshipmentPreview>('/marketplace-connections/fbs/reshipment/preview', { method: 'POST', accessToken, body: input });

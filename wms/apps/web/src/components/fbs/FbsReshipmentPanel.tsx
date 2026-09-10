@@ -4,22 +4,24 @@ import { checkFbsReshipment, createFbsReshipment, fetchFbsReshipmentCapabilities
   type FbsReshipmentPreview, type FbsReshipmentRun, type FbsReshipmentSelection } from '../../lib/api';
 
 type ReshipmentApi = {
-  check: (input: { clientId: string }) => Promise<{ candidates: FbsReshipmentCandidate[]; runs: FbsReshipmentRun[] }>;
+  check: (input: { clientId: string }) => Promise<{ candidates: FbsReshipmentCandidate[]; runs: FbsReshipmentRun[]; unverifiedCount?: number }>;
   preview: (input: FbsReshipmentSelection) => Promise<FbsReshipmentPreview>;
   create: (input: FbsReshipmentSelection & { previewToken: string; confirm: true }) => Promise<FbsReshipmentRun>;
   resume: (input: { clientId: string; runId: string }) => Promise<FbsReshipmentRun>;
 };
+type Filters = { query: string; connectionId: string; availability: 'ALL' | 'AVAILABLE' | 'REVIEW' };
 type State = {
   candidates: FbsReshipmentCandidate[]; selected: FbsReshipmentCandidate[]; runs: FbsReshipmentRun[];
   mode: FbsReshipmentMode; preview: FbsReshipmentPreview | null; confirmed: boolean;
-  busy: boolean; checked: boolean; error: string;
+  busy: boolean; checked: boolean; error: string; filters: Filters; unverifiedCount: number;
 };
 const orderKey = (order: Pick<FbsReshipmentCandidate, 'id' | 'connectionId'>) => `${order.connectionId}:${order.id}`;
 
 // FIX: scoped controller synchronously locks actions and discards obsolete async results.
 export class FbsReshipmentController {
   state: State = { candidates: [], selected: [], runs: [], mode: 'SAME_ITEM', preview: null,
-    confirmed: false, busy: false, checked: false, error: '' };
+    confirmed: false, busy: false, checked: false, error: '',
+    filters: { query: '', connectionId: '', availability: 'ALL' }, unverifiedCount: 0 };
   private listeners = new Set<() => void>();
   private disposed = false;
   constructor(private clientId: string, private api: ReshipmentApi) {}
@@ -37,26 +39,57 @@ export class FbsReshipmentController {
       ...(uncertainCreate ? { preview: null, confirmed: false, selected: [], checked: false } : {}) }); }
     finally { this.update({ busy: false }); }
   }
+  private eligible(order: FbsReshipmentCandidate) {
+    return !order.blockedReason && order.eligibleModes.includes(this.state.mode);
+  }
   canSelect(order: FbsReshipmentCandidate) {
-    return !order.blockedReason && order.eligibleModes.includes(this.state.mode)
+    return this.eligible(order)
       && (!this.state.selected.length || this.state.selected[0].connectionId === order.connectionId);
+  }
+  // FIX: selection is always visible; any filter change invalidates the old preview.
+  setFilters(patch: Partial<Filters>) {
+    if (this.state.busy || this.disposed) return;
+    this.update({ filters: { ...this.state.filters, ...patch }, selected: [], preview: null, confirmed: false, error: '' });
+  }
+  visibleCandidates() {
+    const { query, connectionId, availability } = this.state.filters;
+    const words = query.trim().toLocaleLowerCase('ru').split(/\s+/).filter(Boolean);
+    return this.state.candidates.filter(order => {
+      if (connectionId && order.connectionId !== connectionId) return false;
+      if (availability === 'AVAILABLE' && !this.eligible(order)) return false;
+      if (availability === 'REVIEW' && this.eligible(order)) return false;
+      const text = [order.id, order.sourceRequestNumber, order.sourceRequestNumber ? `№${order.sourceRequestNumber}` : '',
+        order.sourceSupplyId, order.productName, order.article, order.barcode].join(' ').toLocaleLowerCase('ru');
+      return words.every(word => text.includes(word));
+    });
+  }
+  selectAllVisible() {
+    if (!this.state.checked || this.state.busy || this.disposed) return;
+    const rows = [...new Map(this.visibleCandidates().filter(order => this.eligible(order)).map(order => [orderKey(order), order])).values()];
+    // FIX: never silently choose the first cabinet or truncate the requested set.
+    const error = new Set(rows.map(order => order.connectionId)).size > 1 ? 'Выберите один кабинет WB в фильтре для массового выбора.' :
+      rows.length > 100 ? `Найдено ${rows.length} доступных заказов. За одну операцию можно выбрать не более 100. Уточните фильтр или выберите заказы вручную.` : '';
+    this.update({ ...(error ? {} : { selected: rows }), error, preview: null, confirmed: false });
+  }
+  clearSelection() {
+    if (!this.state.busy && !this.disposed) this.update({ selected: [], preview: null, confirmed: false, error: '' });
   }
   toggle(order: FbsReshipmentCandidate) {
     if (this.state.busy || this.disposed) return;
     const selected = this.state.selected.some(item => orderKey(item) === orderKey(order));
-    if (!selected && (!this.canSelect(order) || this.state.selected.length >= 100 || !this.state.candidates.some(item => orderKey(item) === orderKey(order)))) return;
+    if (!selected && (!this.canSelect(order) || this.state.selected.length >= 100 || !this.visibleCandidates().some(item => orderKey(item) === orderKey(order)))) return;
     this.update({ selected: selected ? this.state.selected.filter(item => orderKey(item) !== orderKey(order)) : [...this.state.selected, order], preview: null, confirmed: false });
   }
   setMode(mode: FbsReshipmentMode) {
     if (this.state.busy || this.disposed) return;
-    this.update({ mode, selected: this.state.selected.filter(order => order.eligibleModes.includes(mode)), preview: null, confirmed: false });
+    this.update({ mode, selected: [], preview: null, confirmed: false, error: '' });
   }
   confirm(confirmed: boolean) { if (!this.state.busy && this.state.preview) this.update({ confirmed }); }
   check() {
     return this.execute(async () => {
-      this.update({ selected: [], preview: null, confirmed: false, candidates: [], checked: false });
+      this.update({ selected: [], preview: null, confirmed: false, candidates: [], checked: false, unverifiedCount: 0 });
       const result = await this.api.check({ clientId: this.clientId });
-      this.update({ ...result, checked: true });
+      this.update({ ...result, unverifiedCount: result.unverifiedCount ?? 0, checked: true });
     });
   }
   private selection(): FbsReshipmentSelection {
@@ -117,23 +150,47 @@ export function FbsReshipmentView({ model, onOpenRequest }: { model: FbsReshipme
   const [, render] = useState(0);
   useEffect(() => model.subscribe(() => render(value => value + 1)), [model]);
   const state = model.state;
+  const visible = model.visibleCandidates();
+  const cabinets = [...new Set([...state.candidates.map(order => order.connectionId), state.filters.connectionId].filter(Boolean))].sort();
   return <section className="fbs-delivery-recovery" aria-label="Повторная отгрузка / довоз" aria-busy={state.busy}>
     <h4>Повторная отгрузка / довоз</h4>
-    <p>Проверка получает специальный список WB для повторной отгрузки. Она не меняет поставки, заявки, остатки и КИЗы.</p>
+    <p>Показываем только заказы, требующие повторной отгрузки или разбора. Завершённые и отменённые заказы WB скрыты. Проверка не меняет поставки, заявки, остатки и КИЗы.</p>
     <button type="button" className="button-secondary" disabled={state.busy} onClick={() => void model.check()}>Проверить WB</button>
     {state.busy && <p role="status">Выполняется операция…</p>}
     {state.error && <p role="alert" className="form-error">{state.error}</p>}
     {state.checked && <>
+      {state.unverifiedCount > 0 && <p role="status">Статус WB не подтверждён: {state.unverifiedCount}. Эти заказы не включены в выбор. Повторите проверку WB.</p>}
       <fieldset disabled={state.busy}><legend>Что нужно сделать</legend>
         <label><input type="radio" name="reshipment-mode" checked={state.mode === 'SAME_ITEM'} onChange={() => model.setMode('SAME_ITEM')} />Довезти уже собранное</label>
         <label><input type="radio" name="reshipment-mode" checked={state.mode === 'NEW_ITEM'} onChange={() => model.setMode('NEW_ITEM')} />Собрать заново</label>
       </fieldset>
       <p>{state.mode === 'SAME_ITEM' ? 'Сохраняем прежние КИЗы и списание. Вторую вещь со склада брать не нужно.' : 'Внимание: новая физическая сборка — это дополнительное списание товара. Прежняя сборка остаётся в истории.'}</p>
       <p>За одну операцию — один кабинет WB, не более 100 заказов. Для другого кабинета создайте отдельную заявку.</p>
-      {!state.candidates.length ? <p role="status">WB не вернул заказов для повторной отгрузки в выбранной области.</p> :
+      <fieldset disabled={state.busy}><legend>Фильтры заказов</legend>
+        <label>Поиск по заказу, заявке, поставке, ШК или товару
+          <input type="search" value={state.filters.query} onChange={event => model.setFilters({ query: event.target.value })} />
+        </label>
+        <label>Кабинет WB
+          <select aria-label="Кабинет WB" value={state.filters.connectionId} onChange={event => model.setFilters({ connectionId: event.target.value })}>
+            <option value="">Все кабинеты</option>{cabinets.map(id => <option key={id} value={id}>{id}</option>)}
+          </select>
+        </label>
+        <label>Доступность для выбранного действия
+          <select aria-label="Доступность для выбранного действия" value={state.filters.availability} onChange={event => model.setFilters({ availability: event.target.value as Filters['availability'] })}>
+            <option value="ALL">Все требующие действий</option><option value="AVAILABLE">Доступны к созданию</option>
+            <option value="REVIEW">Требуют разбора / недоступны для действия</option>
+          </select>
+        </label>
+        <button type="button" className="button-secondary" onClick={() => model.setFilters({ query: '', connectionId: '', availability: 'ALL' })}>Сбросить фильтры</button>
+      </fieldset>
+      <p role="status">Показано: {visible.length} из {state.candidates.length}. Выбрано: {state.selected.length}.</p>
+      <button type="button" className="button-secondary" disabled={state.busy || !visible.some(order => !order.blockedReason && order.eligibleModes.includes(state.mode))}
+        onClick={() => model.selectAllVisible()}>Выбрать все доступные по фильтру</button>
+      <button type="button" className="button-secondary" disabled={state.busy || !state.selected.length} onClick={() => model.clearSelection()}>Снять выбор</button>
+      {!state.candidates.length ? <p role="status">Подтверждённых заказов для повторной отгрузки в выбранной области нет.</p> : !visible.length ? <p role="status">По выбранным фильтрам заказов нет.</p> :
         <div style={{ overflow: 'auto', maxHeight: 400 }} role="region" tabIndex={0} aria-label="Заказы WB для повторной отгрузки">
           <table><thead><tr><th>Выбор</th><th>Заказ / кабинет</th><th>Товар</th><th>Прежняя заявка / поставка</th><th>Сборка / WB</th><th>Ограничение</th></tr></thead>
-            <tbody>{state.candidates.map(order => <tr key={orderKey(order)}>
+            <tbody>{visible.map(order => <tr key={orderKey(order)}>
               <td><input type="checkbox" aria-label={`Выбрать заказ ${order.id} кабинета ${order.connectionId}`} checked={state.selected.some(item => orderKey(item) === orderKey(order))}
                 disabled={state.busy || !model.canSelect(order)} onChange={() => model.toggle(order)} /></td>
               <td>{order.id}<br /><small>{order.connectionId}</small></td>

@@ -15,7 +15,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       if (endpoint === 'capabilities') return route.fulfill({ json: { enabled } });
       if (endpoint === 'check') {
         if (blockCheck) await new Promise(resolve => { delayed = resolve; });
-        return route.fulfill({ json: { candidates: [order, { ...order, id: 'blocked', eligibleModes: [], blockedReason: 'Получен покупателем' }], runs } });
+        return route.fulfill({ json: { candidates: [order, { ...order, id: 'blocked', eligibleModes: [], blockedReason: 'Сначала распакуйте грузокороб' }], runs, unverifiedCount: 2 } });
       }
       const body = route.request().postDataJSON();
       if (endpoint === 'preview') return route.fulfill({ json: { previewToken: 'signed-proof', orders: [order], orderCount: 1, additionalUnits: body.mode === 'NEW_ITEM' ? 1 : 0, warning: 'Проверка WB выполнена' } });
@@ -31,12 +31,30 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await page.getByRole('checkbox', { name: 'Выбрать заказ 123 кабинета cabinet' }).waitFor();
     assert.equal(createCalls.length, 0);
     assert(await page.getByRole('checkbox', { name: 'Выбрать заказ blocked кабинета cabinet' }).isDisabled());
+    // TEST: real filter controls, bulk selection and invalidation; no hidden selections.
+    await page.getByText(/Статус WB не подтверждён: 2/).waitFor();
+    await page.getByLabel('Кабинет WB', { exact: true }).selectOption('cabinet');
+    await page.getByLabel('Доступность для выбранного действия').selectOption('REVIEW');
+    assert.equal(await page.getByRole('checkbox', { name: 'Выбрать заказ 123 кабинета cabinet' }).count(), 0);
+    assert(await page.getByRole('button', { name: 'Выбрать все доступные по фильтру' }).isDisabled());
+    await page.getByLabel('Доступность для выбранного действия').selectOption('AVAILABLE');
+    await page.getByLabel('Поиск по заказу, заявке, поставке, ШК или товару').fill('712 костюм');
+    await page.getByRole('button', { name: 'Выбрать все доступные по фильтру' }).click();
+    assert(await page.getByRole('checkbox', { name: 'Выбрать заказ 123 кабинета cabinet' }).isChecked());
+    await page.getByRole('button', { name: 'Снять выбор', exact: true }).click();
+    assert(!(await page.getByRole('checkbox', { name: 'Выбрать заказ 123 кабинета cabinet' }).isChecked()));
+    await page.getByRole('button', { name: 'Выбрать все доступные по фильтру' }).click();
+    await page.getByLabel('Поиск по заказу, заявке, поставке, ШК или товару').fill('нет совпадений');
+    await page.getByText('По выбранным фильтрам заказов нет.', { exact: true }).waitFor();
+    assert(await page.getByRole('button', { name: 'Проверить выбранные · 0' }).isDisabled());
+    await page.getByRole('button', { name: 'Сбросить фильтры', exact: true }).click();
     await page.getByRole('checkbox', { name: 'Выбрать заказ 123 кабинета cabinet' }).check();
     await page.getByRole('button', { name: 'Проверить выбранные · 1' }).click();
     const submit = page.getByRole('button', { name: 'Создать поставку WB и заявку WMS' });
     assert(await submit.isDisabled());
     await page.getByRole('radio', { name: 'Собрать заново', exact: true }).check();
     assert.equal(await submit.count(), 0);
+    await page.getByRole('button', { name: 'Выбрать все доступные по фильтру' }).click();
     await page.getByRole('button', { name: 'Проверить выбранные · 1' }).click();
     await page.getByText('Заказов: 1. Дополнительный расход: 1 ед.', { exact: true }).waitFor();
     await page.getByRole('checkbox', { name: /Подтверждаю изменения в WB/ }).check();
@@ -65,6 +83,6 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await page.getByRole('button', { name: 'Сменить клиента', exact: true }).waitFor();
     assert.equal(await page.getByRole('button', { name: 'Проверить WB', exact: true }).count(), 0);
     assert.deepEqual(errors, []);
-    console.log('PASS: StrictMode, WB-only check, disabled reason, confirmation, mode invalidation, double click, durable resume, client/branch/user isolation, feature off.');
+    console.log('PASS: filters, bulk selection, hidden selection invalidation, status warning, StrictMode, WB-only check, disabled reason, confirmation, mode invalidation, double click, durable resume, client/branch/user isolation, feature off.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
