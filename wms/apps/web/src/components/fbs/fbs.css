@@ -1528,6 +1528,90 @@
   margin-top: 20px;
 }
 
+/* FIX: explicit WB destination/date confirmation before closing a supply. */
+.fbs-supply-delivery-dialog {
+  width: min(680px, 100%);
+}
+
+.fbs-supply-delivery-dialog__icon {
+  background: #7c3aed;
+}
+
+.fbs-supply-delivery-dialog__fields,
+.fbs-supply-delivery-dialog__supplies {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.fbs-supply-delivery-dialog__fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.fbs-supply-delivery-dialog__fields label {
+  display: grid;
+  gap: 7px;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.fbs-supply-delivery-dialog__fields select,
+.fbs-supply-delivery-dialog__fields input {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #fff;
+  color: #0f172a;
+  padding: 0 12px;
+  font: inherit;
+}
+
+.fbs-supply-delivery-dialog__fields small {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.fbs-supply-delivery-dialog__supplies {
+  max-height: 190px;
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #f8fafc;
+  padding: 10px;
+}
+
+.fbs-supply-delivery-dialog__supplies > div {
+  display: grid;
+  grid-template-columns: minmax(120px, auto) 1fr auto;
+  align-items: center;
+  gap: 10px;
+  border-radius: 10px;
+  background: #fff;
+  padding: 10px 12px;
+  color: #334155;
+  font-size: 11px;
+}
+
+.fbs-supply-delivery-dialog__supplies small {
+  color: #64748b;
+}
+
+@media (max-width: 640px) {
+  .fbs-supply-delivery-dialog__fields {
+    grid-template-columns: 1fr;
+  }
+
+  .fbs-supply-delivery-dialog__supplies > div {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+}
+
 .fbs-stocks__routing-button {
   white-space: nowrap;
 }

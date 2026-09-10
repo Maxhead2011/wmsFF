@@ -67,9 +67,9 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'billing',
     name: 'Биллинг и счета',
     prefixes: ['/billing'],
-    routeCount: 39,
+    routeCount: 41, // ADDED: period preview and confirmed draft generation.
     description: 'Расчёт услуг, начислений, счетов, оплат и закрывающих документов.',
-    logic: ['Считает услуги по тарифам и операциям WMS.', 'Формирует счета, акты и печатные документы.', 'Учитывает оплаты, долги и ручные корректировки с аудитом.'],
+    logic: ['Считает услуги по тарифам и операциям WMS.', 'Формирует счета, акты и печатные документы.', 'Готовит предварительный расчёт отдельных счетов по услугам за выбранный период.', 'Учитывает оплаты, долги и ручные корректировки с аудитом.'],
     dependencies: ['Основная БД', 'PDF-генератор'],
   },
   {
@@ -195,8 +195,8 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     prefixes: ['/marketplace-connections', '/marketplace-connection', '/external/v1/fbs',
       '/marketplace-connections/fbs/repeat-assembly', '/marketplace-connection/fbs/repeat-assembly',
       '/marketplace-connections/fbs/reshipment', '/marketplace-connection/fbs/reshipment'],
-    // FIX: register five reshipment handlers; controller aliases are counted once.
-    routeCount: 106,
+    // FIX: preserve delivery-options plus five reshipment handlers; aliases count once.
+    routeCount: 107,
     description: 'Подключения WB/Ozon, заказы FBS, поставки, статусы, финансовые отчёты и распределение остатков.',
     logic: ['Синхронизирует кабинеты, склады и заказы.', 'Сверяет активные поставки WB с заявками WMS и показывает отсутствующие привязки без записи в WB.', 'Резервирует товар WMS и передаёт статусы сборки.', 'Проверяет поставки филиала и создаёт локальные заявки FBS ДОВОЗ без повторной отправки статуса в WB.', 'Повторная отгрузка / довоз: проверяет доступность функции и заказы без изменений; после подтверждения администратора создаёт поставку WB и связанную заявку WMS, продолжает сохранённую операцию без дублирования.', 'Получает финансовые штрафы FBS без передачи токена WB в браузер.', 'Рассчитывает и выгружает распределённые остатки по складам.'],
     dependencies: ['Основная БД', 'WB API', 'Ozon API'],

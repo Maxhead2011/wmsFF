@@ -19,7 +19,7 @@ describe('BillingService', () => {
         findMany: vi.fn().mockResolvedValue([]),
       },
     };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     await service.listCharges({}, user({ clientIds: ['client-1'] }));
 
@@ -43,13 +43,13 @@ describe('BillingService', () => {
         }),
       },
       clientRequest: {
-        findFirst: vi.fn().mockResolvedValue({ id: 'request-1' }),
+        findFirst: vi.fn().mockResolvedValue({ id: 'request-1', warehouseId: 'warehouse-msk' }),
       },
       billingCharge: {
         create: vi.fn().mockResolvedValue({ id: 'charge-1' }),
       },
     };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     await service.createCharge(
       {
@@ -84,7 +84,7 @@ describe('BillingService', () => {
         findFirst: vi.fn().mockResolvedValue(null),
       },
     };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     await expect(
       service.createCharge(
@@ -120,6 +120,7 @@ describe('BillingService', () => {
         findMany: vi.fn().mockResolvedValue([
           {
             skuId: 'sku-1',
+            warehouseId: 'warehouse-msk',
             type: MovementType.RECEIPT,
             status: 'AVAILABLE',
             quantity: 2,
@@ -128,6 +129,7 @@ describe('BillingService', () => {
           },
           {
             skuId: 'sku-2',
+            warehouseId: 'warehouse-msk',
             type: MovementType.RECEIPT,
             status: 'AVAILABLE',
             quantity: 3,
@@ -140,7 +142,7 @@ describe('BillingService', () => {
         findMany: vi.fn(),
       },
     };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     await service.generateStorageCharge(
       {
@@ -196,7 +198,7 @@ describe('BillingService', () => {
   it('hides invoices of demo clients from administrators', async () => {
     const findMany = vi.fn().mockResolvedValue([]);
     const prisma = { billingInvoice: { findMany } };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     await service.listInvoices(
       {},
@@ -218,7 +220,7 @@ describe('BillingService', () => {
   it('scopes administrator invoices to the active warehouse', async () => {
     const findMany = vi.fn().mockResolvedValue([]);
     const prisma = { billingInvoice: { findMany } };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     await service.listInvoices(
       {},
@@ -244,7 +246,7 @@ describe('BillingService', () => {
   it('keeps client invoice listing unscoped by the active warehouse', async () => {
     const findMany = vi.fn().mockResolvedValue([]);
     const prisma = { billingInvoice: { findMany } };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     await service.listInvoices(
       {},
@@ -279,6 +281,7 @@ describe('BillingService', () => {
         findMany: vi.fn().mockResolvedValue([
           {
             skuId: 'sku-1',
+            warehouseId: 'warehouse-msk',
             type: MovementType.RECEIPT,
             status: 'AVAILABLE',
             quantity: 100,
@@ -287,6 +290,7 @@ describe('BillingService', () => {
           },
           {
             skuId: 'sku-1',
+            warehouseId: 'warehouse-msk',
             type: MovementType.SHIP,
             status: 'AVAILABLE',
             quantity: -20,
@@ -299,7 +303,7 @@ describe('BillingService', () => {
         findMany: vi.fn(),
       },
     };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     await service.generateStorageCharge(
       {
@@ -348,7 +352,7 @@ describe('BillingService', () => {
         findMany: vi.fn(),
       },
     };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     await expect(
       service.generateStorageCharge(
@@ -388,13 +392,13 @@ describe('BillingService', () => {
       },
       stockBalance: {
         findMany: vi.fn().mockResolvedValue([
-          { quantity: 2, sku: { volumeLiters: '1.500' } },
-          { quantity: 3, sku: { volumeLiters: '2.000' } },
-          { quantity: 1, sku: { volumeLiters: null } },
+          { warehouseId: 'warehouse-msk', quantity: 2, sku: { volumeLiters: '1.500' } },
+          { warehouseId: 'warehouse-msk', quantity: 3, sku: { volumeLiters: '2.000' } },
+          { warehouseId: 'warehouse-msk', quantity: 1, sku: { volumeLiters: null } },
         ]),
       },
     };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     await service.generateStorageCharge(
       {
@@ -455,6 +459,7 @@ describe('BillingService', () => {
         findMany: vi.fn().mockResolvedValue([
           {
             quantity: 2,
+            warehouseId: 'warehouse-msk',
             sku: {
               id: 'sku-1',
               internalSku: 'SKU-1',
@@ -468,7 +473,7 @@ describe('BillingService', () => {
         ]),
       },
     };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     await service.generateStorageCharge(
       {
@@ -519,12 +524,12 @@ describe('BillingService', () => {
       },
       stockBalance: {
         findMany: vi.fn().mockResolvedValue([
-          { quantity: 2, sku: { volumeLiters: '1.500' } },
-          { quantity: 3, sku: { volumeLiters: '2.000' } },
+          { warehouseId: 'warehouse-msk', quantity: 2, sku: { volumeLiters: '1.500' } },
+          { warehouseId: 'warehouse-msk', quantity: 3, sku: { volumeLiters: '2.000' } },
         ]),
       },
     };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     await service.generateStorageCharge(
       {
@@ -561,7 +566,7 @@ describe('BillingService', () => {
         update: vi.fn().mockResolvedValue({ id: 'charge-1', status: BillingChargeStatus.APPROVED }),
       },
     };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     await service.updateChargeStatus(
       'charge-1',
@@ -587,6 +592,7 @@ describe('BillingService', () => {
       status: BillingChargeStatus.DRAFT,
       quantity: 2,
       metadata: {
+        warehouseId: 'warehouse-msk',
         kind: 'FBS',
         logisticsTrip: {
           billingDay: '2026-07-20',
@@ -627,7 +633,7 @@ describe('BillingService', () => {
         async (callback: (client: typeof tx) => Promise<unknown>) => callback(tx),
       ),
     };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     await service.updateFbsLogisticsTrip(
       charge.id,
@@ -663,6 +669,7 @@ describe('BillingService', () => {
         findMany: vi.fn().mockResolvedValue([
           {
             id: 'charge-1',
+            metadata: { warehouseId: 'warehouse-msk' },
             description: 'РҐСЂР°РЅРµРЅРёРµ',
             unit: BillingUnit.LITER,
             quantity: '10',
@@ -672,6 +679,7 @@ describe('BillingService', () => {
           },
           {
             id: 'charge-2',
+            metadata: { warehouseId: 'warehouse-msk' },
             description: 'РџСЂРёРµРјРєР°',
             unit: BillingUnit.BOX,
             quantity: '3',
@@ -686,7 +694,7 @@ describe('BillingService', () => {
         create: vi.fn().mockResolvedValue({ id: 'invoice-1', number: 'INV-202606-0001' }),
       },
     };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     await service.createInvoice(
       {
@@ -731,7 +739,7 @@ describe('BillingService', () => {
         findMany: vi.fn().mockResolvedValue([]),
       },
     };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     await expect(
       service.createInvoice(
@@ -765,6 +773,7 @@ describe('BillingService', () => {
           clientId: 'client-1',
           totalRub: '100.00',
           paidRub: '40.00',
+          warehouseId: 'warehouse-msk',
           status: BillingInvoiceStatus.ISSUED,
           issuedAt: new Date('2026-06-15T00:00:00.000Z'),
           paidAt: null,
@@ -772,7 +781,7 @@ describe('BillingService', () => {
       },
       $transaction: vi.fn((callback) => callback(tx)),
     };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     await service.updateInvoiceStatus(
       'invoice-1',
@@ -811,6 +820,7 @@ describe('BillingService', () => {
           clientId: 'client-1',
           totalRub: '100.00',
           paidRub: '0.00',
+          warehouseId: 'warehouse-msk',
           status: BillingInvoiceStatus.DRAFT,
           issuedAt: null,
           paidAt: null,
@@ -818,7 +828,7 @@ describe('BillingService', () => {
       },
       $transaction: vi.fn((callback) => callback(tx)),
     };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     await service.updateInvoiceStatus(
       'invoice-1',
@@ -855,6 +865,7 @@ describe('BillingService', () => {
           id: 'invoice-1',
           number: 'INV-1',
           clientId: 'client-1',
+          warehouseId: 'warehouse-msk',
           status: BillingInvoiceStatus.ISSUED,
           totalRub: '100.00',
           paidRub: '40.00',
@@ -873,7 +884,7 @@ describe('BillingService', () => {
       },
       $transaction: vi.fn((callback) => callback(prisma)),
     };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     await service.createPayment(
       {
@@ -962,7 +973,7 @@ describe('BillingService', () => {
         ]),
       },
     };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     const report = await service.listReconciliation(
       { periodFrom: '2026-06-01', periodTo: '2026-06-30' },
@@ -1043,7 +1054,7 @@ describe('BillingService', () => {
         ]),
       },
     };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     const history = await service.listServiceHistory(
       { clientId: 'client-1', periodFrom: '2026-06-01', periodTo: '2026-06-30' },
@@ -1119,7 +1130,7 @@ describe('BillingService', () => {
       },
       $transaction: vi.fn((callback) => callback(tx)),
     };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     await service.updateManualInvoice(
       'invoice-1',
@@ -1193,7 +1204,7 @@ describe('BillingService', () => {
       }),
     };
     const service = new BillingService(
-      prisma as never,
+      financialFixture(prisma) as never,
       clientScopes(),
       undefined,
       logistics as never,
@@ -1241,7 +1252,7 @@ describe('BillingService', () => {
       client: { findUnique: vi.fn().mockResolvedValue({ id: 'client-1', code: 'CLIENT', name: 'Клиент' }) },
       clientFbsBillingSettings: { findUnique: vi.fn().mockResolvedValue(null), upsert: vi.fn() },
     };
-    const service = new BillingService(prisma as never, clientScopes());
+    const service = new BillingService(financialFixture(prisma) as never, clientScopes());
 
     await expect(
       service.updateClientFbsTurnkey(
@@ -1280,6 +1291,9 @@ function user(overrides: Partial<AuthUser>): AuthUser {
     clientScopeMode: 'LIMITED',
     clientIds: [],
     writableClientIds: [],
+    activeWarehouseId: 'warehouse-msk',
+    warehouseIds: ['warehouse-msk'],
+    writableWarehouseIds: ['warehouse-msk'],
     ...overrides,
   };
 }
@@ -1299,7 +1313,7 @@ function billingCharge(overrides: Record<string, unknown>) {
     serviceDate: new Date('2026-06-20T00:00:00.000Z'),
     source: BillingChargeSource.MANUAL,
     sourceKey: null,
-    metadata: null,
+    metadata: { warehouseId: 'warehouse-msk' },
     comment: null,
     approvedAt: null,
     createdAt: new Date('2026-06-20T00:00:00.000Z'),
@@ -1318,6 +1332,8 @@ function billingInvoice(overrides: Record<string, unknown>) {
     id: 'invoice-1',
     number: 'INV-202606-0001',
     clientId: 'client-1',
+    warehouseId: 'warehouse-msk',
+    request: null,
     periodFrom: new Date('2026-06-01T00:00:00.000Z'),
     periodTo: new Date('2026-06-30T23:59:59.999Z'),
     dueDate: new Date('2026-06-15T23:59:59.999Z'),
@@ -1333,4 +1349,22 @@ function billingInvoice(overrides: Record<string, unknown>) {
     client: { id: 'client-1', code: 'CLIENT', name: 'Client' },
     ...overrides,
   };
+}
+
+// TEST: explicit transaction fixture for financial locking. Existing delegate mocks and
+// business assertions remain unchanged; reads and writes now share the transaction.
+function financialFixture(prisma: any) {
+  const transaction = prisma.$transaction;
+  const merge = (tx: any) => {
+    const combined: any = { ...prisma, ...tx, $queryRaw: vi.fn().mockResolvedValue([]) };
+    for (const key of Object.keys(prisma)) {
+      if (prisma[key] && tx[key] && typeof prisma[key] === 'object' && typeof tx[key] === 'object') {
+        combined[key] = { ...prisma[key], ...tx[key] };
+      }
+    }
+    return combined;
+  };
+  return { ...prisma, $transaction: (callback: any) => transaction
+    ? transaction((tx: any) => callback(merge(tx)))
+    : callback(merge(prisma)) };
 }

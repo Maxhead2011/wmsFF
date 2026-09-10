@@ -7,6 +7,8 @@ import { RequirePermissions } from '../auth/decorators/require-permissions.decor
 import { BillingDocumentService } from './billing-document.service';
 import { BillingPdfService } from './billing-pdf.service';
 import { BillingService } from './billing.service';
+import { BillingPeriodService } from './billing-period.service';
+import { GenerateBillingPeriodDto, PreviewBillingPeriodDto } from './dto/generate-billing-period.dto';
 import { CreateBillingAdvanceDto } from './dto/create-billing-advance.dto';
 import { CreateBillingChargeDto } from './dto/create-billing-charge.dto';
 import { CreateBillingInvoiceDto } from './dto/create-billing-invoice.dto';
@@ -36,7 +38,21 @@ export class BillingController {
     private readonly billing: BillingService,
     private readonly documents: BillingDocumentService,
     private readonly pdf: BillingPdfService,
+    private readonly periods: BillingPeriodService,
   ) {}
+
+  // ADDED: preview is read-only; generation requires its current fingerprint.
+  @Post('invoices/period/preview')
+  @RequirePermissions('billing:write')
+  previewPeriod(@Body() dto: PreviewBillingPeriodDto, @CurrentUser() user: AuthUser) {
+    return this.periods.previewPeriod(dto, user);
+  }
+
+  @Post('invoices/period/generate')
+  @RequirePermissions('billing:write')
+  generatePeriod(@Body() dto: GenerateBillingPeriodDto, @CurrentUser() user: AuthUser) {
+    return this.periods.generatePeriod(dto, user);
+  }
 
   @Get('services')
   listServices(@CurrentUser() user: AuthUser) {

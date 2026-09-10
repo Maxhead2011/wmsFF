@@ -15,6 +15,7 @@ const OLD_KIZ_VALUES = [
 const FOREIGN_KIZ = '010590000000001221SOMEONEELSE123\u001d91OTHER';
 const STARTED = 'FBS_WB_KIZ_REPLACEMENT_STARTED';
 const ACCEPTED = 'FBS_KIZ_SCAN_ACCEPTED';
+const REPLACED = 'FBS_WB_KIZ_REPLACED_AFTER_PRODUCT_PICK';
 const user: AuthUser = {
   id: 'worker-1', name: 'Сборщик', email: 'worker@example.test',
   roleCodes: ['WAREHOUSE_KEEPER'], permissionCodes: ['stock:read', 'stock:write'],
@@ -30,6 +31,7 @@ type Options = {
   foreignSku?: boolean;
   history?: 'ASSEMBLY' | 'SHIPMENT' | 'PRINT';
   auditFailure?: boolean;
+  replacementSummaryFailure?: boolean;
   auditLookupFailure?: boolean;
   registeredMark?: boolean;
   deleteUnknown?: boolean;
@@ -184,6 +186,7 @@ function fixture(options: Options = {}) {
       }),
       create: vi.fn(async ({ data }: Row) => {
         if (data.action === STARTED && options.auditFailure) throw new Error('Audit storage unavailable');
+        if (data.action === REPLACED && options.replacementSummaryFailure) throw new Error('Optional replacement summary unavailable');
         state.audits.push(copy(data));
         state.events.push(`audit:${data.action}`);
         return { id: `audit-${state.audits.length}`, ...copy(data) };
@@ -332,6 +335,16 @@ describe('scanFbsTsdKiz: safe automatic WB KIZ replacement', () => {
     expect(f.reserve).toHaveBeenCalledTimes(1);
     expect(f.reserve).toHaveBeenCalledWith(expect.objectContaining({ kiz: NEW_KIZ, wbMetaStatus: 'ACCEPTED' }));
     expect(f.state.audits.filter((audit) => audit.action === ACCEPTED)).toHaveLength(1);
+    // TEST: the live completion summary complements the mandatory durable pre-mutation audit.
+    expect(f.state.audits.filter((audit) => audit.action === REPLACED)).toEqual([
+      expect.objectContaining({ userId: user.id, entity: 'FbsTsdAssembly', entityId: 'task-1',
+        payload: expect.objectContaining({ clientId: 'client-1', requestId: 'request-1', orderId: ORDER_ID,
+          previousKiz: OLD_KIZ_VALUES.map(value => value.replaceAll('\u001d', '<GS>')),
+          scannedKiz: NEW_KIZ.replaceAll('\u001d', '<GS>'),
+          boxCode: 'FFL_TEST_001', deviceCode: 'TSD-1', workerName: user.name, replacedAt: expect.any(String),
+        }),
+      }),
+    ]);
     expect(f.prisma.clientRequestEvent.create).not.toHaveBeenCalled();
     expect(f.prisma.fbsOrderRequestLink.updateMany).not.toHaveBeenCalled();
     expectNoStockWrites(f);
@@ -345,6 +358,16 @@ describe('scanFbsTsdKiz: safe automatic WB KIZ replacement', () => {
     expect(f.state.wbWrites).toEqual([]);
     expect(f.state.audits.filter((audit) => audit.action === STARTED)).toEqual([]);
     expectNoAcceptance(f);
+  });
+
+  // TEST: an optional post-success summary failure cannot undo an already accepted WB mutation.
+  it('keeps acceptance when the optional live replacement summary cannot be stored', async () => {
+    const f = fixture({ replacementSummaryFailure: true });
+    await expect(f.scan()).resolves.toMatchObject({ task: { kiz: NEW_KIZ, wbMetaStatus: 'ACCEPTED' } });
+    expect(f.prisma.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ action: REPLACED }) }));
+    expectDurableStart(f);
+    expect(f.state.wbWrites.map(write => write.method)).toEqual(['DELETE', 'PUT']);
+    expect(f.reserve).toHaveBeenCalledTimes(1);
   });
 
   it('accepts an already attached scan even outside confirm without DELETE or PUT', async () => {

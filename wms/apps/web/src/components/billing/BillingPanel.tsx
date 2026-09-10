@@ -1,5 +1,5 @@
 import { ArrowLeft, Calculator, ChevronRight, Files, ReceiptText, RefreshCw, X } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   downloadCombinedBillingInvoicesPdf,
   downloadBillingInvoiceActPdf,
@@ -43,6 +43,9 @@ import { BillingInvoicesTable } from './BillingInvoicesTable';
 import { BillingPeriodSummary } from './BillingPeriodSummary';
 import { BillingReconciliationPanel } from './BillingReconciliationPanel';
 import { BillingServiceForm } from './BillingServiceForm';
+import { BillingPaymentForm } from './BillingPaymentForm';
+import { BillingPeriodGenerationDialog } from './BillingPeriodGenerationDialog';
+import { billingInvoiceStatusLabel, billingInvoiceStatusOptions } from './billingMeta';
 
 type LoadState<T> = {
   status: 'idle' | 'loading' | 'ready' | 'error';
@@ -69,7 +72,7 @@ const billingTabs = [
 ] as const;
 
 type BillingTab = 'home' | (typeof billingTabs)[number]['id'];
-type InvoiceKindFilter = 'ALL' | 'FBS' | 'PRIMARY_PROCESSING' | 'OTHER';
+type InvoiceKindFilter = 'ALL' | 'FBS' | 'PRIMARY_PROCESSING' | 'PROCESSING' | 'PRR' | 'STORAGE' | 'OTHER';
 type InvoiceView = 'topics' | 'list';
 
 export function BillingPanel({ session }: BillingPanelProps) {
@@ -77,6 +80,8 @@ export function BillingPanel({ session }: BillingPanelProps) {
   const canWrite = canUse(session.user, 'billing:write');
   const [charges, setCharges] = useState<LoadState<BillingChargeSummary>>({ status: 'idle', data: [] });
   const [invoices, setInvoices] = useState<LoadState<BillingInvoiceSummary>>({ status: 'idle', data: [] });
+  const [registerInvoices, setRegisterInvoices] = useState<LoadState<BillingInvoiceSummary>>({ status: 'idle', data: [] });
+  const [registerRevision, setRegisterRevision] = useState(0);
   const [services, setServices] = useState<LoadState<BillingServiceSummary>>({ status: 'idle', data: [] });
   const [clients, setClients] = useState<LoadState<ClientSummary>>({ status: 'idle', data: [] });
   const [requests, setRequests] = useState<LoadState<ClientRequestSummary>>({ status: 'idle', data: [] });
@@ -84,8 +89,9 @@ export function BillingPanel({ session }: BillingPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [documentPreview, setDocumentPreview] = useState<BillingInvoiceDocument | null>(null);
   const [editingInvoice, setEditingInvoice] = useState<BillingInvoiceSummary | null>(null);
+  const invoiceCardRef = useRef<HTMLDivElement>(null);
   const [settingsClient, setSettingsClient] = useState<ClientSummary | null>(null);
-  const [activeTab, setActiveTab] = useState<BillingTab>('home');
+  const [activeTab, setActiveTab] = useState<BillingTab>('invoices');
   const [selectedClientId, setSelectedClientId] = useRememberedClientId(session.user.id);
   const [invoiceClientId, setInvoiceClientId] = useRememberedClientId(session.user.id);
   const [isCombiningInvoices, setIsCombiningInvoices] = useState(false);
@@ -101,7 +107,9 @@ export function BillingPanel({ session }: BillingPanelProps) {
   const [mergeAggregateSameItems, setMergeAggregateSameItems] = useState(true);
   const [mergeExcludeZeroTotalItems, setMergeExcludeZeroTotalItems] = useState(true);
   const [invoiceKindFilter, setInvoiceKindFilter] = useState<InvoiceKindFilter>('ALL');
-  const [invoiceView, setInvoiceView] = useState<InvoiceView>('topics');
+  const [invoiceView, setInvoiceView] = useState<InvoiceView>('list');
+  const [invoiceStatusFilter, setInvoiceStatusFilter] = useState<BillingInvoiceStatus | ''>('');
+  const [showPeriodGeneration, setShowPeriodGeneration] = useState(false);
   const [invoicePeriodFrom, setInvoicePeriodFrom] = useState(currentMonthStart());
   const [invoicePeriodTo, setInvoicePeriodTo] = useState(todayDate());
 
@@ -119,16 +127,16 @@ export function BillingPanel({ session }: BillingPanelProps) {
     [invoiceClientId, invoices.data],
   );
   const invoiceRegisterSourceInvoices = useMemo(
-    () => (invoiceClientId ? selectedClientInvoices : invoices.data),
-    [invoiceClientId, invoices.data, selectedClientInvoices],
+    () => registerInvoices.data,
+    [registerInvoices.data],
   );
   const invoiceRegisterInvoices = useMemo(() => {
-    return invoiceRegisterSourceInvoices.filter(
-      (invoice) =>
-        matchesInvoiceKind(invoice, invoiceKindFilter) &&
-        matchesInvoicePeriod(invoice, invoicePeriodFrom, invoicePeriodTo),
-    );
-  }, [invoiceKindFilter, invoicePeriodFrom, invoicePeriodTo, invoiceRegisterSourceInvoices]);
+    return filterBillingRegisterInvoices(invoiceRegisterSourceInvoices, {
+      clientId: invoiceClientId, from: invoicePeriodFrom, to: invoicePeriodTo,
+      category: invoiceKindFilter === 'PRIMARY_PROCESSING' ? 'PROCESSING' : invoiceKindFilter,
+      status: invoiceStatusFilter,
+    });
+  }, [invoiceClientId, invoiceKindFilter, invoiceStatusFilter, invoicePeriodFrom, invoicePeriodTo, invoiceRegisterSourceInvoices]);
   const invoiceKindTiles = useMemo(
     () => (['ALL', 'FBS', 'PRIMARY_PROCESSING', 'OTHER'] as InvoiceKindFilter[]).map((kind) => {
       const items = invoiceRegisterSourceInvoices.filter(
@@ -154,8 +162,8 @@ export function BillingPanel({ session }: BillingPanelProps) {
   );
   const selectedInvoiceClient = clients.data.find((client) => client.id === invoiceClientId);
   const selectableInvoiceIds = useMemo(
-    () => new Set(selectedClientInvoices.filter(isSelectableDraft).map((invoice) => invoice.id)),
-    [selectedClientInvoices],
+    () => new Set(invoiceRegisterInvoices.filter(isSelectableDraft).map((invoice) => invoice.id)),
+    [invoiceRegisterInvoices],
   );
   const combinedInvoicesClientId =
     invoiceClientId || (clients.status === 'ready' && clients.data.length === 1 ? clients.data[0].id : '');
@@ -177,13 +185,35 @@ export function BillingPanel({ session }: BillingPanelProps) {
 
   useEffect(() => {
     setSelectedInvoiceIds(new Set());
-  }, [invoiceClientId]);
+  }, [invoiceClientId, invoicePeriodFrom, invoicePeriodTo, invoiceKindFilter, invoiceStatusFilter]);
+
+  useEffect(() => {
+    if (!editingInvoice) return;
+    const opener = document.activeElement as HTMLElement | null;
+    invoiceCardRef.current?.querySelector<HTMLButtonElement>('button[aria-label="Закрыть"]')?.focus();
+    return () => { if (opener?.isConnected) opener.focus(); };
+  }, [editingInvoice?.id]);
+
+  // FIX: a separate server-filtered registry preserves the overview/payment dataset.
+  useEffect(() => {
+    if (!canRead) return;
+    let active = true;
+    setRegisterInvoices({ status: 'loading', data: [] });
+    const serviceCategory = invoiceKindFilter === 'ALL' ? undefined : invoiceKindFilter === 'PRIMARY_PROCESSING' ? 'PROCESSING' : invoiceKindFilter;
+    void fetchBillingInvoices(session.accessToken, {
+      clientId: invoiceClientId || undefined, periodFrom: invoicePeriodFrom || undefined,
+      periodTo: invoicePeriodTo || undefined, status: invoiceStatusFilter || undefined, serviceCategory,
+    }).then(data => { if (active) setRegisterInvoices({ status: 'ready', data }); })
+      .catch(caught => { if (active) setRegisterInvoices({ status: 'error', data: [], error: errorMessage(caught) }); });
+    return () => { active = false; };
+  }, [canRead, session.accessToken, invoiceClientId, invoicePeriodFrom, invoicePeriodTo, invoiceKindFilter, invoiceStatusFilter, registerRevision]);
 
   if (!canRead) {
     return null;
   }
 
   async function loadData() {
+    setRegisterRevision(value => value + 1);
     setError(null);
     setCharges((current) => ({ ...current, status: 'loading', error: undefined }));
     setInvoices((current) => ({ ...current, status: 'loading', error: undefined }));
@@ -265,6 +295,8 @@ export function BillingPanel({ session }: BillingPanelProps) {
       data: [invoice, ...current.data.filter((item) => item.id !== invoice.id)],
     }));
     setEditingInvoice(invoice);
+    setRegisterInvoices(current => ({ ...current, data: current.data.map(item => item.id === invoice.id ? invoice : item) }));
+    setRegisterRevision(value => value + 1);
     void refreshReconciliation();
   }
 
@@ -274,6 +306,12 @@ export function BillingPanel({ session }: BillingPanelProps) {
       status: 'ready',
       data: current.data.map((invoice) => updatedById.get(invoice.id) ?? invoice),
     }));
+    // FIX: bulk payments also refresh the independent period/status registry.
+    setRegisterInvoices((current) => ({
+      ...current,
+      data: current.data.map((invoice) => updatedById.get(invoice.id) ?? invoice),
+    }));
+    setRegisterRevision(value => value + 1);
     void refreshReconciliation();
   }
 
@@ -391,12 +429,19 @@ export function BillingPanel({ session }: BillingPanelProps) {
       setError('Сначала выберите клиента.');
       return;
     }
-    const invoiceIds = [...selectedInvoiceIds].filter((id) => selectableInvoiceIds.has(id));
+    // FIX: implicit selection is confined to the visible service period.
+    const invoiceIds = selectedInvoiceIds.size > 0
+      ? [...selectedInvoiceIds].filter((id) => selectableInvoiceIds.has(id))
+      : invoiceRegisterInvoices.filter(isSelectableFbsDraft).map(invoice => invoice.id);
+    if (invoiceIds.length === 0) {
+      setError('В выбранном периоде нет доступных FBS-черновиков.');
+      return;
+    }
     if (invoiceIds.length === 1) {
       setError('Для объединения выберите минимум два FBS-черновика.');
       return;
     }
-    const selectedInvoices = selectedClientInvoices.filter((invoice) => invoiceIds.includes(invoice.id));
+    const selectedInvoices = invoiceRegisterInvoices.filter((invoice) => invoiceIds.includes(invoice.id));
     const useSpecialFbsMerge =
       invoiceIds.length === 0 ||
       (selectedInvoices.some((invoice) => invoice.sourceKey?.startsWith('fbs-invoice:') === true) &&
@@ -492,7 +537,7 @@ export function BillingPanel({ session }: BillingPanelProps) {
   function openBillingSection(tab: Exclude<BillingTab, 'home'>) {
     setActiveTab(tab);
     if (tab === 'invoices') {
-      setInvoiceView('topics');
+      setInvoiceView('list');
       if (!invoiceClientId && selectedClientId) {
         setInvoiceClientId(selectedClientId);
       }
@@ -661,6 +706,18 @@ export function BillingPanel({ session }: BillingPanelProps) {
             </section>
           ) : (
           <section className="billing-invoice-register__detail" aria-label="Счета выбранного клиента">
+            <div className="billing-register-filters" aria-label="Фильтры реестра счетов">
+              <label><span>Услуги с</span><input type="date" value={invoicePeriodFrom} onChange={event => setInvoicePeriodFrom(event.target.value)} /></label>
+              <label><span>Услуги по</span><input type="date" value={invoicePeriodTo} onChange={event => setInvoicePeriodTo(event.target.value)} /></label>
+              <button className="secondary-button" type="button" onClick={() => { const period = previousMonthPeriod(); setInvoicePeriodFrom(period.from); setInvoicePeriodTo(period.to); }}>Предыдущий месяц</button>
+              <button className="secondary-button" type="button" onClick={() => { setInvoicePeriodFrom(''); setInvoicePeriodTo(''); }}>Весь период</button>
+              <label><span>Вид услуг</span><select value={invoiceKindFilter} onChange={event => setInvoiceKindFilter(event.target.value as InvoiceKindFilter)}>
+                <option value="ALL">Все виды услуг</option><option value="FBS">FBS</option><option value="PROCESSING">Первичная обработка</option><option value="PRR">ПРР</option><option value="STORAGE">Хранение</option><option value="OTHER">Другие услуги</option>
+              </select></label>
+              <label><span>Статус</span><select value={invoiceStatusFilter} onChange={event => setInvoiceStatusFilter(event.target.value as BillingInvoiceStatus | '')}>
+                <option value="">Все статусы</option>{billingInvoiceStatusOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select></label>
+            </div>
             <div className="billing-panel__subheading billing-panel__subheading--toolbar">
               <div>
                 <div className="billing-invoice-register__title-row">
@@ -681,6 +738,11 @@ export function BillingPanel({ session }: BillingPanelProps) {
                 </span>
               </div>
             <div className="billing-panel__actions">
+              {canWrite ? (
+                <button className="primary-button" type="button" onClick={() => setShowPeriodGeneration(true)} disabled={clients.status !== 'ready'}>
+                  Сформировать за период
+                </button>
+              ) : null}
               {canWrite ? (
                 <button className="primary-button" type="button" onClick={() => setActiveTab('create')}>
                   <ReceiptText size={17} aria-hidden="true" />
@@ -736,7 +798,7 @@ export function BillingPanel({ session }: BillingPanelProps) {
             </div>
             <div className="billing-panel__list">
               {renderInvoices(
-                { ...invoices, data: invoiceRegisterInvoices },
+                { ...registerInvoices, data: invoiceRegisterInvoices },
                 canWrite,
                 (invoice, kind) => void openInvoiceDocument(invoice, kind),
                 (invoice, kind) => void downloadInvoicePdf(invoice, kind),
@@ -747,6 +809,11 @@ export function BillingPanel({ session }: BillingPanelProps) {
                 selectedInvoiceIds,
                 invoiceClientId ? setSelectedInvoiceIds : undefined,
               )}
+            </div>
+            <div className="billing-register-totals" aria-label="Итого по реестру">
+              <span>Сумма: <strong>{formatMoney(invoiceRegisterInvoices.reduce((sum, invoice) => sum + Number(invoice.totalRub), 0))} ₽</strong></span>
+              <span>Оплачено: <strong>{formatMoney(invoiceRegisterInvoices.reduce((sum, invoice) => sum + Number(invoice.paidRub), 0))} ₽</strong></span>
+              <span>Долг: <strong>{formatMoney(invoiceRegisterInvoices.filter(invoice => invoice.status === 'ISSUED').reduce((sum, invoice) => sum + Math.max(0, Number(invoice.totalRub) - Number(invoice.paidRub)), 0))} ₽</strong></span>
             </div>
           </section>
           )}
@@ -1030,12 +1097,25 @@ export function BillingPanel({ session }: BillingPanelProps) {
         </div>
       ) : null}
 
+      {showPeriodGeneration ? <BillingPeriodGenerationDialog
+        session={session} clients={clients.data} clientId={invoiceClientId || undefined}
+        periodFrom={invoicePeriodFrom || currentMonthStart()} periodTo={invoicePeriodTo || todayDate()}
+        onClose={() => setShowPeriodGeneration(false)} onCreated={() => { void loadData(); }}
+      /> : null}
       {editingInvoice && clients.status === 'ready' ? (
-        <div className="billing-invoice-edit-modal" role="dialog" aria-modal="true" aria-label="Редактирование счета">
+        <div ref={invoiceCardRef} className="billing-invoice-edit-modal" role="dialog" aria-modal="true" aria-label="Карточка счёта"
+          onKeyDown={event => {
+            if (event.key === 'Escape') setEditingInvoice(null);
+            if (event.key !== 'Tab') return;
+            const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]')).filter(element => element.getClientRects().length > 0);
+            const first = controls[0]; const last = controls[controls.length - 1];
+            if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+            if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+          }}>
           <section className="billing-invoice-edit-modal__panel">
             <header className="billing-invoice-edit-modal__header">
               <div>
-                <span>{editingInvoice.status === 'ISSUED' ? 'Редактирование выставленного счета' : 'Редактирование черновика'}</span>
+                <span>{billingInvoiceStatusLabel(editingInvoice.status)} · {editingInvoice.client.name}</span>
                 <h3>{editingInvoice.number}</h3>
               </div>
               <button className="icon-button" type="button" onClick={() => setEditingInvoice(null)} title="Закрыть" aria-label="Закрыть">
@@ -1043,13 +1123,33 @@ export function BillingPanel({ session }: BillingPanelProps) {
               </button>
             </header>
             <div className="billing-invoice-edit-modal__body">
-              <BillingInvoiceForm
+              <div className="billing-register-totals">
+                <span>Сумма: <strong>{formatMoney(Number(editingInvoice.totalRub))} ₽</strong></span>
+                <span>Оплачено: <strong>{formatMoney(Number(editingInvoice.paidRub))} ₽</strong></span>
+                <span>Остаток: <strong>{formatMoney(billingInvoiceCardPermissions(editingInvoice, canWrite).remainingRub)} ₽</strong></span>
+              </div>
+              <div className="billing-panel__actions">
+                <button className="secondary-button" type="button" onClick={() => void openInvoiceDocument(editingInvoice, 'invoice')}>Счёт</button>
+                <button className="secondary-button" type="button" onClick={() => void openInvoiceDocument(editingInvoice, 'act')}>Акт</button>
+              </div>
+              {billingInvoiceCardPermissions(editingInvoice, canWrite).canPay ? <section className="billing-invoice-card-payment" aria-label="Регистрация оплаты счёта">
+                <h4>Зарегистрировать оплату</h4>
+                <BillingPaymentForm key={`${editingInvoice.id}:${editingInvoice.paidRub}`} invoices={[editingInvoice]} session={session} onPaid={acceptMutatedInvoice} />
+              </section> : null}
+              {billingInvoiceCardPermissions(editingInvoice, canWrite).canEdit ? <BillingInvoiceForm
+                key={editingInvoice.id}
                 clients={clients.data}
                 session={session}
                 invoice={editingInvoice}
                 onCreated={acceptEditedInvoice}
                 onMutated={acceptMutatedInvoice}
-              />
+              /> : <div className="billing-table-wrap"><table className="data-table billing-table">
+                <thead><tr><th>Услуга</th><th>Дата услуги</th><th>Количество</th><th>Тариф</th><th>Сумма</th></tr></thead>
+                <tbody>{editingInvoice.items.map(item => <tr key={item.id}><td>{item.description}</td><td>{formatShortDate(item.serviceDate)}</td><td>{String(item.quantity)}</td><td>{formatMoney(Number(item.unitPriceRub))}</td><td>{formatMoney(Number(item.totalRub))}</td></tr>)}</tbody>
+              </table></div>}
+              {editingInvoice.payments.length > 0 ? <section aria-label="История оплат"><h4>История оплат</h4><ul>
+                {editingInvoice.payments.map(payment => <li key={payment.id}>{formatShortDate(payment.paidAt)} · {formatMoney(Number(payment.amountRub))} ₽ · {payment.method || 'Способ не указан'}{payment.status === 'CANCELLED' ? ' · отменена' : ''}</li>)}
+              </ul></section> : null}
             </div>
           </section>
         </div>
@@ -1101,6 +1201,7 @@ function renderInvoices(
         onDownloadPdf={onDownloadPdf}
         onStatusChange={onStatusChange}
         onEdit={onEdit}
+        onOpen={onEdit}
       />
     </>
   );
@@ -1246,7 +1347,7 @@ function actFileName(invoiceNumber: string) {
 
 function isSelectableFbsDraft(invoice: BillingInvoiceSummary) {
   return (
-    invoice.status === 'DRAFT' &&
+    isSelectableDraft(invoice) &&
     (invoice.sourceKey?.startsWith('fbs-invoice:') === true ||
       invoice.sourceKey?.startsWith('fbs-primary-invoice:') === true)
   );
@@ -1255,6 +1356,7 @@ function isSelectableFbsDraft(invoice: BillingInvoiceSummary) {
 function isSelectableDraft(invoice: BillingInvoiceSummary) {
   return (
     invoice.status === 'DRAFT' &&
+    billingInvoiceCardPermissions(invoice, true).canEdit &&
     Number(invoice.paidRub) <= 0 &&
     invoice.payments.length === 0
   );
@@ -1264,12 +1366,14 @@ function matchesInvoiceKind(invoice: BillingInvoiceSummary, filter: InvoiceKindF
   if (filter === 'ALL') {
     return true;
   }
+  if (invoice.serviceCategory) return invoice.serviceCategory === (filter === 'PRIMARY_PROCESSING' ? 'PROCESSING' : filter);
+  if (filter === 'STORAGE' || filter === 'PRR') return false;
 
   const kinds = invoiceKinds(invoice);
   if (filter === 'FBS') {
     return kinds.has('FBS');
   }
-  if (filter === 'PRIMARY_PROCESSING') {
+  if (filter === 'PRIMARY_PROCESSING' || filter === 'PROCESSING') {
     return kinds.has('PRIMARY_PROCESSING');
   }
   return kinds.size === 0;
@@ -1333,9 +1437,27 @@ function matchesInvoicePeriod(invoice: BillingInvoiceSummary, from: string, to: 
   return (!from || invoiceTo >= from) && (!to || invoiceFrom <= to);
 }
 
+// FIX: all register filters share service-period overlap semantics with the API.
+export function filterBillingRegisterInvoices(invoices: BillingInvoiceSummary[], filter: {
+  clientId?: string; from?: string; to?: string; category?: InvoiceKindFilter; status?: BillingInvoiceStatus | '';
+}) {
+  return invoices.filter(invoice => (!filter.clientId || invoice.clientId === filter.clientId)
+    && matchesInvoicePeriod(invoice, filter.from || '', filter.to || '')
+    && (!filter.category || matchesInvoiceKind(invoice, filter.category))
+    && (!filter.status || invoice.status === filter.status));
+}
+
+// FIX: the existing editor and payment form are exposed only for eligible documents.
+export function billingInvoiceCardPermissions(invoice: BillingInvoiceSummary, canWrite: boolean) {
+  const comment = invoice.comment?.trim() ?? '';
+  const merged = comment.startsWith('Объединено в FBS-счёт') || comment.startsWith('Объединено в счёт');
+  const active = invoice.status === 'DRAFT' || invoice.status === 'ISSUED';
+  const remainingRub = Math.max(0, Number(invoice.totalRub) - Number(invoice.paidRub));
+  return { canEdit: canWrite && active && !merged, canPay: canWrite && active && !merged && remainingRub > 0, remainingRub };
+}
+
 function dateKey(value: Date) {
-  const offset = value.getTimezoneOffset() * 60_000;
-  return new Date(value.getTime() - offset).toISOString().slice(0, 10);
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit' }).format(value);
 }
 
 function todayDate() {
@@ -1343,15 +1465,14 @@ function todayDate() {
 }
 
 function currentMonthStart() {
-  const value = new Date();
-  return dateKey(new Date(value.getFullYear(), value.getMonth(), 1));
+  return `${todayDate().slice(0, 7)}-01`;
 }
 
 function previousMonthPeriod() {
-  const value = new Date();
+  const [year, month] = todayDate().split('-').map(Number);
   return {
-    from: dateKey(new Date(value.getFullYear(), value.getMonth() - 1, 1)),
-    to: dateKey(new Date(value.getFullYear(), value.getMonth(), 0)),
+    from: new Date(Date.UTC(year, month - 2, 1)).toISOString().slice(0, 10),
+    to: new Date(Date.UTC(year, month - 1, 0)).toISOString().slice(0, 10),
   };
 }
 
