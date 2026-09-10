@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Optional } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Optional } from '@nestjs/common';
 import { StockStatus, TsdReviewReason } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
@@ -10,6 +10,7 @@ import { TsdAssemblyService } from './tsd-assembly.service';
 import { TsdOperationLogService } from './tsd-operation-log.service';
 import { TsdOperationResult } from './tsd-operation.types';
 import { TsdPayloadParser } from './tsd-payload.parser';
+import { TsdReceiptService } from './tsd-receipt.service';
 
 @Injectable()
 export class TsdSyncService {
@@ -23,6 +24,7 @@ export class TsdSyncService {
     private readonly payloadParser: TsdPayloadParser,
     private readonly operationLog: TsdOperationLogService,
     @Optional() private readonly assembly?: TsdAssemblyService,
+    @Optional() private readonly receipts?: TsdReceiptService,
   ) {}
 
   async acceptOperation(operation: ScanOperationDto, user: AuthUser) {
@@ -47,6 +49,24 @@ export class TsdSyncService {
   }
 
   private async applyOperation(operation: ScanOperationDto, user: AuthUser): Promise<TsdOperationResult> {
+    // FIX: close owns its transactional idempotency and scope checks. RETRY must
+    // never enter recordResult(), whose persisted statuses are terminal.
+    if (operation.operationType === 'receipt_close') {
+      try {
+        if (!this.receipts) throw new Error('Серверное закрытие приемки временно недоступно.');
+        return await this.receipts.closeBox(operation, user);
+      } catch (caught) {
+        return {
+          operationKey: operation.operationKey,
+          operationType: operation.operationType,
+          status: caught instanceof BadRequestException || caught instanceof ForbiddenException ? 'REJECTED' : 'RETRY',
+          message: caught instanceof BadRequestException || caught instanceof ForbiddenException
+            ? caught.message
+            : 'Не удалось подтвердить закрытие короба. Повторим синхронизацию без повторного прихода.',
+          serverTime: new Date().toISOString(),
+        };
+      }
+    }
     try {
       if (user.deviceCode && operation.deviceId !== user.deviceCode) {
         return await this.operationLog.recordResult(

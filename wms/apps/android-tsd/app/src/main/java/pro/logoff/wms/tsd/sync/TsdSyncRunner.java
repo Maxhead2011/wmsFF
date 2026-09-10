@@ -27,7 +27,28 @@ public class TsdSyncRunner {
     }
 
     public TsdSyncSummary syncPending(String authorization) {
-        List<PendingOperation> operations = outbox.pending();
+        return syncOperations(authorization, outbox.pending());
+    }
+
+    // FIX: a closed box does not wait behind unrelated batches. Drain only its scans.
+    public TsdSyncSummary syncReceiptBatch(String authorization, String closeKey) {
+        int sent = 0, applied = 0, rejected = 0, retried = 0;
+        String message = "Нет операций для синхронизации";
+        for (int page = 0; page < 21; page++) {
+            List<PendingOperation> operations = outbox.pendingReceiptBatch(closeKey);
+            if (operations.isEmpty()) break;
+            TsdSyncSummary part = syncOperations(authorization, operations);
+            sent += part.sent;
+            applied += part.applied;
+            rejected += part.rejected;
+            retried += part.retried;
+            message = part.message;
+            if (part.rejected > 0 || part.retried > 0 || part.applied == 0) break;
+        }
+        return new TsdSyncSummary(sent, applied, rejected, retried, message);
+    }
+
+    private TsdSyncSummary syncOperations(String authorization, List<PendingOperation> operations) {
         if (operations.isEmpty()) {
             return new TsdSyncSummary(0, 0, 0, 0, "Нет операций для синхронизации");
         }
@@ -79,6 +100,9 @@ public class TsdSyncRunner {
                 } else {
                     outbox.markRetry(operation.operationKey, operatorMessage == null ? "Нет ответа по операции" : operatorMessage);
                     retried++;
+                    if ("receipt_close".equals(operation.operationType)) {
+                        addDecisionMessage(item, operation, operatorMessage, decisionMessages);
+                    }
                 }
             }
 
@@ -133,7 +157,9 @@ public class TsdSyncRunner {
         if (response == null || operatorMessage == null) {
             return;
         }
-        if (response.reviewReason == null && response.resolutionMessage == null) {
+        // FIX: close results carry their actionable explanation in message.
+        if (response.reviewReason == null && response.resolutionMessage == null
+            && !"receipt_close".equals(operation.operationType)) {
             return;
         }
 

@@ -12,6 +12,16 @@ public interface OperationDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     void insert(OperationEntity operation);
 
+    // FIX: Room executes a multi-row insert atomically; retry preserves terminal rows.
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    void insertReceiptBatch(List<OperationEntity> operations);
+
+    @Query("SELECT * FROM tsd_operations WHERE operationKey = :operationKey LIMIT 1")
+    OperationEntity findByKey(String operationKey);
+
+    @Query("SELECT * FROM tsd_operations WHERE operationKey IN (:keys) AND status = 'PENDING' ORDER BY createdAt ASC, operationKey ASC LIMIT 50")
+    List<OperationEntity> findPendingReceiptBatch(List<String> keys);
+
     @Query("SELECT * FROM tsd_operations WHERE status = :status ORDER BY createdAt ASC LIMIT :limit")
     List<OperationEntity> findByStatus(String status, int limit);
 

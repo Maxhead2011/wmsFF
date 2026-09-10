@@ -23,8 +23,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 164 // FIX: publish administrator sorting recovery and destination top-up for LOGOFF only.
-            versionName = "0.1.165-sorting-admin"
+            versionCode = 165 // FIX: close received boxes on the server after their own receipt packet.
+            versionName = "0.1.166-receipt-close"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
