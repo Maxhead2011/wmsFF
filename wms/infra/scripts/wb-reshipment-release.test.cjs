@@ -1,7 +1,10 @@
 // TEST: release verifier rejects changed, missing and additional upload artifacts.
 const { test } = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const { verify, sources, base, sha, artifactDiff } = require('./wb-reshipment-release.cjs');
+const { verify, sources, base, sha, artifactDiff, schemaBaseline } = require('./wb-reshipment-release.cjs');
+test('schema compatibility exception cannot accept arbitrary server metadata', () => {
+  assert.throws(() => schemaBaseline(Buffer.from('model Unknown {}'), Buffer.from('model Unknown {}')));
+});
 test('closed source allowlist and hash verification', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wms-reshipment-proof-'));
   try {

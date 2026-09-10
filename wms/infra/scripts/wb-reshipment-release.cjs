@@ -12,6 +12,14 @@ const sources = [...api.map(p => `wms/apps/api/src/${p}.ts`),
   'wms/apps/api/prisma/schema.prisma', 'wms/apps/api/prisma/migrations/20260910144000_fbs_reshipment/migration.sql',
   ...['components/fbs/FbsPanel.tsx', 'components/fbs/FbsReshipmentPanel.tsx', 'lib/api.ts'].map(p => `wms/apps/web/src/${p}`)];
 const sha = b => crypto.createHash('sha256').update(b).digest('hex');
+function schemaBaseline(live, committed) {
+  // FIX: live Prisma metadata predates the already deployed raw-SQL sorting table.
+  // This is the sole reviewed exception; it cannot mask another field/model change.
+  assert.equal(sha(live), 'a737d498218ffb0fedbc89d2056f703b8cb90b7ffb0c6f34ff7b4fbdbb3a6a3a');
+  const withoutSorting = committed.toString().replace(/\/\/ ADDED: independent admin sorting sessions; no FBS request or stock reservation\.\r?\nmodel PalletSortingSession \{[^}]+\}\r?\n\r?\n/, '');
+  assert.notEqual(withoutSorting, committed.toString());
+  assert.equal(withoutSorting.replace(/\r\n/g, '\n'), live.toString().replace(/\r\n/g, '\n'));
+}
 function put(root, name, bytes) { const file = path.join(root, name); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, bytes); }
 function walk(root, prefix = '') { return fs.readdirSync(path.join(root, prefix)).flatMap(n => {
   const p = prefix ? `${prefix}/${n}` : n; const s = fs.lstatSync(path.join(root, p)); assert(!s.isSymbolicLink(), 'No artifact symlinks');
@@ -77,4 +85,4 @@ if (require.main === module) {
   else if (mode === 'artifacts') artifactDiff(...args);
   else throw Error('pack|verify|overlay|artifacts');
 }
-module.exports = { verify, sources, base, sha, artifactDiff };
+module.exports = { verify, sources, base, sha, artifactDiff, schemaBaseline };

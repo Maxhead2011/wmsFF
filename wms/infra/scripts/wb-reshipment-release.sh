@@ -14,18 +14,22 @@ infra(){ docker inspect infra-postgres-1 infra-analytics-postgres-1 infra-redis-
 hashapi(){ docker run --rm --network none --entrypoint sh "$1" -c 'find /app/apps/api/src /app/apps/api/dist -type f -exec sha256sum {} +' | sort; }
 hashweb(){ docker run --rm --network none --entrypoint sh "$1" -c 'find /usr/share/nginx/html -type f -exec sha256sum {} +' | sort; }
 case "${1:?stage or publish}" in
-stage)
- same; test ! -e "$b"; mkdir -m 700 "$b"
+stage|resume-stage)
+ same
+ if test "$1" = stage; then test ! -e "$b"; mkdir -m 700 "$b";
+ else test -s "$b/backup.sha256"; test ! -e "$b/tests-passed"; test ! -e "$b/published-at"; sha256sum -c "$b/backup.sha256"; cmp /opt/logoff-wms/wms/.env "$b/env-before"; cmp /opt/logoff-wms/wms/infra/docker-compose.yml "$b/compose-before"; fi
  node "$verify" verify "$r"
+ if test "$1" = stage; then
  cp /opt/logoff-wms/wms/.env "$b/env-before"; cp /opt/logoff-wms/wms/infra/docker-compose.yml "$b/compose-before"
  infra > "$b/infra-before"
  docker tag "$api" infra-api:before-wb-reshipment-20260910; docker tag "$web" infra-web:before-wb-reshipment-20260910
  docker exec infra-postgres-1 pg_dump -U wms -d wms -Fc > "$b/wms.dump"
  docker exec -i infra-postgres-1 pg_restore --list < "$b/wms.dump" > "$b/backup-list"
  sha256sum "$b/wms.dump" > "$b/backup.sha256"
+ fi
  context=$(mktemp -d "$b/context.XXXXXX"); cp -a "$r/." "$context/"
  node "$verify" verify "$context"
- docker cp infra-api-1:/app/apps/api/src "$b/live-api-src"
+ if test "$1" = stage; then docker cp infra-api-1:/app/apps/api/src "$b/live-api-src"; fi
  docker cp infra-api-1:/app/apps/api/prisma/schema.prisma "$b/live-schema.prisma"
  mkdir "$context/live-web"
  cp -a /opt/logoff-wms-releases/billing-register-20260910/candidate/wms/apps/web/src/. "$context/live-web/"
@@ -35,7 +39,10 @@ const m=JSON.parse(fs.readFileSync(r+'/manifest.json')); const sha=p=>crypto.cre
 for(const [p,h] of Object.entries(m.files)) if(h.before){
  let live;
  if(p.startsWith('wms/apps/api/src/')) live=b+'/live-api-src/'+p.slice('wms/apps/api/src/'.length);
- else if(p==='wms/apps/api/prisma/schema.prisma') live=b+'/live-schema.prisma';
+ else if(p==='wms/apps/api/prisma/schema.prisma') {
+   require(r+'/wms/infra/scripts/wb-reshipment-release.cjs').schemaBaseline(fs.readFileSync(b+'/live-schema.prisma'),fs.readFileSync(r+'/baseline/'+p));
+   continue;
+ }
  else if(p.startsWith('wms/apps/web/src/')) live=r+'/live-web/'+p.slice('wms/apps/web/src/'.length);
  else throw Error('Unexpected existing baseline '+p);
  assert.equal(sha(live),h.before,'Live baseline drift: '+p);
