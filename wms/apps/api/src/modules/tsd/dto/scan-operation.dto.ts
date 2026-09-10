@@ -10,8 +10,9 @@ export class ScanOperationDto {
   @IsNotEmpty()
   operationKey!: string;
 
-  @IsIn(['receipt_scan', 'move_scan', 'inventory_scan', 'assembly_stage'])
-  operationType!: 'receipt_scan' | 'move_scan' | 'inventory_scan' | 'assembly_stage';
+  // FIX: closing a received box is a separate, idempotent outbox operation.
+  @IsIn(['receipt_scan', 'receipt_close', 'move_scan', 'inventory_scan', 'assembly_stage'])
+  operationType!: 'receipt_scan' | 'receipt_close' | 'move_scan' | 'inventory_scan' | 'assembly_stage';
 
   @IsObject()
   payload!: Record<string, unknown>;
