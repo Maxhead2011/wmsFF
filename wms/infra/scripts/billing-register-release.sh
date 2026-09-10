@@ -8,6 +8,7 @@ web=sha256:319e40701a7834f7be2b74e638795260d9947ca34aecb11c2e59dbfb3d8cfeb7
 ca=infra-api:billing-register-20260910
 cw=infra-web:billing-register-20260910
 verify="$r/wms/infra/scripts/billing-release-artifacts.cjs"
+sourceproof="$r/wms/infra/scripts/billing-release-source-proof.cjs"
 exec 9>/run/logoff-wms-api-release.lock; flock -n 9
 exec 8>/run/logoff-wms-web-release.lock; flock -n 8
 same(){ test "$(docker inspect infra-api-1 --format '{{.Image}}')" = "$api"; test "$(docker inspect infra-web-1 --format '{{.Image}}')" = "$web"; }
@@ -15,8 +16,10 @@ unchanged(){ docker inspect infra-postgres-1 infra-analytics-postgres-1 infra-re
 hashapi(){ docker run --rm --network none --entrypoint sh "$1" -c 'find /app/apps/api/src /app/apps/api/dist -type f -exec sha256sum {} +' | sort; }
 hashweb(){ docker run --rm --network none --entrypoint sh "$1" -c 'find /usr/share/nginx/html -type f -exec sha256sum {} +' | sort; }
 case "$1" in
- stage)
-  same; test ! -e "$b"; mkdir -m 700 "$b"
+ stage|resume-stage)
+  same
+  if test "$1" = stage; then
+  test ! -e "$b"; mkdir -m 700 "$b"
   cp /opt/logoff-wms/wms/.env "$b/env-before"; cp /opt/logoff-wms/wms/infra/docker-compose.yml "$b/compose-before"
   unchanged > "$b/unchanged-before"
   docker tag "$api" infra-api:before-billing-register-20260910
@@ -26,19 +29,41 @@ case "$1" in
   docker exec -i infra-postgres-1 pg_restore --list < "$b/wms.dump" > "$b/backup-contents"
   sha256sum "$b/wms.dump" > "$b/backup.sha256"
   docker cp infra-api-1:/app/apps/api/src "$b/live-api-src"
-  node "$verify" baseline "$r/base" "$b/live-api-src"
+  else
+   # FIX: never replace the recovery copy or reuse an already published/tested candidate.
+   test -s "$b/backup.sha256"; test -s "$b/wms.dump"
+   test ! -e "$b/published-at"; test ! -s "$b/tests-passed"
+   sha256sum -c "$b/backup.sha256"
+   cmp /opt/logoff-wms/wms/.env "$b/env-before"
+   cmp /opt/logoff-wms/wms/infra/docker-compose.yml "$b/compose-before"
+   test "$(docker image inspect infra-api:before-billing-register-20260910 --format '{{.Id}}')" = "$api"
+   test "$(docker image inspect infra-web:before-billing-register-20260910 --format '{{.Id}}')" = "$web"
+   unchanged > "$b/unchanged-resume"; cmp "$b/unchanged-before" "$b/unchanged-resume"
+  fi
+  node "$verify" baseline "$b/live-api-src"
+  # FIX: freeze every build input before verification so another upload cannot mix revisions.
+  context=$(mktemp -d "$b/build-context.XXXXXX")
+  mkdir -p "$context/candidate" "$context/wms/infra"
+  cp -a "$r/candidate/." "$context/candidate/"
+  cp "$r/source-proof.json" "$context/source-proof.json"
+  cp "$r/head-sha" "$context/head-sha"
+  cp "$r/wms/infra/billing-register.Dockerfile" "$context/wms/infra/billing-register.Dockerfile"
+  stagehead=$(cat "$context/head-sha")
+  # FIX: reject a mixed upload during copying; only this verified private snapshot is built.
+  node "$sourceproof" verify "$context/source-proof.json" "$context/candidate" "$stagehead"
   echo PROVE_WEB_BASELINE
-  docker build --network none --build-arg BASE_API="$api" --build-arg BASE_WEB="$web" --target web-proof -f "$r/wms/infra/billing-register.Dockerfile" -t infra-web-proof:billing-register-20260910 "$r" > "$b/web-proof.log" 2>&1
+  docker build --network none --build-arg BASE_API="$api" --build-arg BASE_WEB="$web" --target web-proof -f "$context/wms/infra/billing-register.Dockerfile" -t infra-web-proof:billing-register-20260910 "$context" > "$b/web-proof.log" 2>&1
   proof=$(docker create --network none infra-web-proof:billing-register-20260910)
-  docker cp "$proof:/app/apps/web/dist" "$b/proof-dist"; docker rm "$proof" >/dev/null
+  proofdir=$(mktemp -d "$b/web-proof.XXXXXX")
+  docker cp "$proof:/app/apps/web/dist/." "$proofdir"; docker rm "$proof" >/dev/null
   docker exec infra-web-1 cat /usr/share/nginx/html/index.html > "$b/live-index.html"
-  cmp "$b/proof-dist/index.html" "$b/live-index.html"
+  cmp "$proofdir/index.html" "$b/live-index.html"
   while IFS= read -r p; do
-   test "$(sha256sum "$b/proof-dist/$p" | cut -d' ' -f1)" = "$(docker exec infra-web-1 sha256sum "/usr/share/nginx/html/$p" | cut -d' ' -f1)"
-  done < <(cd "$b/proof-dist" && find assets -type f)
+   test "$(sha256sum "$proofdir/$p" | cut -d' ' -f1)" = "$(docker exec infra-web-1 sha256sum "/usr/share/nginx/html/$p" | cut -d' ' -f1)"
+  done < <(cd "$proofdir" && find assets -type f)
   echo LIVE_BASELINES_MATCH
   for kind in api web; do
-   docker build --network none --build-arg BASE_API="$api" --build-arg BASE_WEB="$web" --target "$kind" -f "$r/wms/infra/billing-register.Dockerfile" -t "infra-$kind:billing-register-20260910" "$r" > "$b/$kind-build.log" 2>&1
+   docker build --network none --build-arg BASE_API="$api" --build-arg BASE_WEB="$web" --target "$kind" -f "$context/wms/infra/billing-register.Dockerfile" -t "infra-$kind:billing-register-20260910" "$context" > "$b/$kind-build.log" 2>&1
   done
   hashapi "$api" > "$b/api-before.sha256"; hashapi "$ca" > "$b/api-after.sha256"
   hashweb "$web" > "$b/web-before.sha256"; hashweb "$cw" > "$b/web-after.sha256"
@@ -54,13 +79,19 @@ const [a,b]=process.argv.slice(2).map(p=>JSON.parse(fs.readFileSync(p)));
 assert(JSON.stringify(a)===JSON.stringify(b),'Container configuration drift');
 NODE
   done
+  # FIX: bind the staged image manifests to the source verified before the build.
+  cp "$context/head-sha" "$b/staged-head"
   same; date -u +'%FT%TZ' > "$b/staged-at"; echo BILLING_CANDIDATES_STAGED;;
  publish)
   same; test -s "$b/staged-at"; test -s "$b/tests-passed"; test ! -e "$b/published-at"
   node "$verify" pr "$r/pr-merged.json" "$(cat "$r/head-sha")"
+  cmp "$r/head-sha" "$b/staged-head"
+  node "$sourceproof" verify "$r/source-proof.json" "$r/candidate" "$(cat "$r/head-sha")"
   cd /opt/logoff-wms/wms
   cmp .env "$b/env-before"; cmp infra/docker-compose.yml "$b/compose-before"; sha256sum -c "$b/backup.sha256"
   an=$(docker image inspect "$ca" --format '{{.Id}}'); wn=$(docker image inspect "$cw" --format '{{.Id}}')
+  # FIX: an old or unbound test marker cannot authorize different images or source.
+  node "$verify" tests "$b/tests-passed" "$an" "$wn" "$(cat "$r/head-sha")"
   hashapi "$an" > "$b/api-now.sha256"; cmp "$b/api-after.sha256" "$b/api-now.sha256"
   hashweb "$wn" > "$b/web-now.sha256"; cmp "$b/web-after.sha256" "$b/web-now.sha256"
   rollback(){
@@ -90,6 +121,5 @@ NODE
   cmp .env "$b/env-before"; cmp infra/docker-compose.yml "$b/compose-before"
   test "$(docker inspect infra-api-1 --format '{{.Image}}')" = "$an"; test "$(docker inspect infra-web-1 --format '{{.Image}}')" = "$wn"
   trap - ERR; date -u +'%FT%TZ' > "$b/published-at"; echo BILLING_REGISTER_PUBLISHED;;
- *) echo 'stage|publish'; exit 2;;
+ *) echo 'stage|resume-stage|publish'; exit 2;;
 esac
-

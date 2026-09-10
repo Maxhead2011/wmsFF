@@ -26,8 +26,8 @@ COPY --from=build /app/apps/api/src/modules/billing/billing-period.service.ts /a
 COPY --from=build /app/apps/api/dist/modules/billing/billing-period.service.js /app/apps/api/dist/modules/billing/billing-period.service.js
 COPY --from=build /app/apps/api/src/modules/billing/dto/generate-billing-period.dto.ts /app/apps/api/src/modules/billing/dto/generate-billing-period.dto.ts
 COPY --from=build /app/apps/api/dist/modules/billing/dto/generate-billing-period.dto.js /app/apps/api/dist/modules/billing/dto/generate-billing-period.dto.js
-FROM sha256:4c2317440ce7f368d1b251a8b044a5f3e864723bda88d8411facf85d67e2261e AS web-proof
-COPY base/wms/apps/web/src/ /app/apps/web/src/
+# FIX: rebuild the verified live web source, never the stale historical Git snapshot.
+FROM sha256:dac013135170e749479da1f2c3b7deb3e22146b3193a4ec5e7c0d4e10d93fb36 AS web-proof
 RUN cd /app/apps/web && node ../../node_modules/typescript/bin/tsc -p tsconfig.json && node node_modules/vite/bin/vite.js build
 FROM web-proof AS web-build
 COPY candidate/wms/apps/web/src/ /app/apps/web/src/
