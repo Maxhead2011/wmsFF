@@ -39,15 +39,17 @@ function pack(out) {
   assert.equal(git(['diff', '--name-only', 'HEAD']).toString().trim(), '', 'Commit reviewed code first');
   const head = git(['rev-parse', 'HEAD']).toString().trim();
   fs.mkdirSync(out); const files = {};
-  const oldFiles = new Set(git(['ls-tree', '-r', '--name-only', base]).toString().trim().split('\n'));
+  const oldFiles = new Set(git(['ls-tree', '--full-tree', '-r', '--name-only', base]).toString().trim().split('\n'));
   for (const p of sources) {
     const bytes = git(['show', `${head}:${p}`]); put(path.join(out, 'candidate'), p, bytes);
     files[p] = { next: sha(bytes), before: null };
     if (oldFiles.has(p)) { const old = git(['show', `${base}:${p}`]); put(path.join(out, 'baseline'), p, old); files[p].before = sha(old); }
   }
-  const support = git(['ls-tree', '-r', '--name-only', head]).toString().trim().split('\n').filter(p =>
+  const support = git(['ls-tree', '--full-tree', '-r', '--name-only', head]).toString().trim().split('\n').filter(p =>
     /^wms\/apps\/api\/test\/(fbs-reshipment[^/]*|administration-internal-api.service.spec.ts|billing-live-compat.spec.ts)$/.test(p) ||
     /^wms\/infra\/(wb-reshipment.Dockerfile|scripts\/wb-reshipment[^/]*)$/.test(p));
+  assert.equal(Object.values(files).filter(f => f.before).length, 7, 'Every existing live source must have a baseline');
+  assert(support.includes('wms/infra/scripts/wb-reshipment-release.sh'), 'Release script missing');
   for (const p of support) put(out, p, git(['show', `${head}:${p}`]));
   const manifest = { base, head, files }; put(out, 'manifest.json', JSON.stringify(manifest, null, 2)); verify(out, manifest);
   console.log(JSON.stringify({ head, files: sources.length, out }));
