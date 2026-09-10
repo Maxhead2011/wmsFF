@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isOwnedUnpaidDraft, runBillingMutation, withBillingDb } from '../billing/billing-mutation';
+import { collectedFbsBoxMessage } from './fbs-collected-box-message';
 // FIX: preserve both sorting and release-158 recount/terminal-queue dependencies.
 import { assertSortingAdmin } from '../inventory/pallet-sorting-policy';
 import { loadAdminRecountContext, requireAdminRecount, runAdminRecount, type AdminRecountContext } from './tsd-admin-recount-release';
@@ -1560,6 +1561,42 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
     if (warehouseIds.length === 1) {
       return warehouseIds[0];
+    }
+
+    // FIX: a client may have stock in several WMS branches. Orders without a
+    // request/reservation still belong to the execution branch configured on
+    // their marketplace connection and must not make the whole FBS feed fail.
+    const connectionIds = uniqueStrings(orders.map((order) => order.connectionId));
+    if (
+      connectionIds.length > 0 &&
+      typeof this.prisma.clientMarketplaceConnection?.findMany === 'function'
+    ) {
+      const connections = await this.prisma.clientMarketplaceConnection.findMany({
+        where: {
+          id: { in: connectionIds },
+          clientId,
+          isActive: true,
+        },
+        select: { id: true, fbsExecutionWarehouseId: true },
+      });
+      const configuredWarehouseIds = uniqueStrings(
+        connections.map((connection) => connection.fbsExecutionWarehouseId ?? ''),
+      );
+      if (configuredWarehouseIds.length > 1) {
+        throw new BadRequestException(
+          'В одной FBS-поставке обнаружены подключения разных филиалов. Счёт не создан.',
+        );
+      }
+      if (configuredWarehouseIds.length === 1) {
+        // FIX: a partial connection lookup cannot establish the branch of the whole invoice.
+        if (connectionIds.some((id) => !connections.some((connection) =>
+          connection.id === id && connection.fbsExecutionWarehouseId === configuredWarehouseIds[0]))) {
+          throw new BadRequestException(
+            'Не удалось определить филиал всех подключений FBS-поставки. Счёт не создан.',
+          );
+        }
+        return configuredWarehouseIds[0];
+      }
     }
 
     const activeLinks = await this.prisma.warehouseClient.findMany({
@@ -5575,6 +5612,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
     if (current) {
       this.clientScopes.requireClientAccess(user, current.clientId, 'write');
+      // FIX: the parent request can be closed after the employee received the
+      // task. Never keep returning that ghost task from the TSD queue.
+      if (await this.parkFbsTsdAssignmentFromClosedRequest(current)) {
+        current = null;
+      }
+    }
+    if (current) {
       // FIX: A forced route repair can preserve an old empty assignment while WB
       // temporarily returns the order to `new`. Do not let that saved assignment
       // bypass the normal `confirm` filter used for fresh TSD queue candidates.
@@ -6056,6 +6100,44 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             ? `По FBS-заявке №${String(selectedRequest.number).padStart(6, '0')} пока нет готовых к сборке заказов. Проверьте статус заказа на маркетплейсе и доступные остатки.`
             : 'Готовых заказов нет. Заказы появятся после создания заявки и перевода поставки в статус «На сборке».',
     );
+  }
+
+  // FIX: preserve all physical scan evidence, but detach an assignment whose
+  // WMS request no longer exists or is already closed. It must be reviewed by
+  // a manager and must not follow the next employee on the handheld.
+  private async parkFbsTsdAssignmentFromClosedRequest(task: FbsTsdAssemblyRecord) {
+    if (typeof this.prisma.clientRequest?.findUnique !== 'function') return false;
+    const request = await this.prisma.clientRequest.findUnique({
+      where: { id: task.requestId },
+      select: { id: true, status: true },
+    });
+    if (request && !FBS_REQUEST_CLOSED_STATUSES.has(request.status)) return false;
+    const parked = await this.prisma.fbsTsdAssembly.updateMany({
+      where: {
+        id: task.id,
+        status: 'IN_PROGRESS',
+        deviceCode: task.deviceCode,
+        workerUserId: task.workerUserId,
+        updatedAt: task.updatedAt,
+      },
+      data: {
+        status: FBS_TSD_RETURN_REQUIRED,
+        deviceCode: FBS_TSD_AUTO_RESERVATION_DEVICE,
+        workerUserId: null,
+        workerName: null,
+        errorMessage:
+          'Задание снято с ТСД: исходная FBS-заявка уже закрыта или удалена.',
+      },
+    });
+    // FIX: a lost compare-and-swap must not return a stale assignment to the handheld.
+    if (parked.count !== 1) {
+      throw new ConflictException({
+        code: 'FBS_TASK_STALE',
+        message: 'Задание на ТСД уже изменилось. Очередь будет обновлена автоматически.',
+        taskId: task.id,
+      });
+    }
+    return true;
   }
 
   // ADDED: Release only untouched WB assignments. Once a physical scan exists,
@@ -8598,7 +8680,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       return this.scanFbsTsdKiz(taskId, { kiz: rawCode }, user);
     }
     if (
-      state === 'SCAN_BOX' &&
+      ['SCAN_BOX', 'SCAN_SOURCE_BOX'].includes(state) &&
       [task.sourceBarcode, task.barcode]
         .filter((value): value is string => Boolean(value))
         .some((value) => value.toLowerCase() === scannedCode.toLowerCase())
@@ -8609,11 +8691,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         `ШК ${scannedCode} уже принят для заказа №${task.orderId}. Теперь отсканируйте короб, бокс или паллетсорт, откуда взят товар.`,
       );
     }
-    if (state === 'SCAN_BOX' && !fbsTsdKizFormatError(rawCode, allowedBoxPrefixes)) {
+    if (
+      ['SCAN_BOX', 'SCAN_SOURCE_BOX'].includes(state) &&
+      !fbsTsdKizFormatError(rawCode, allowedBoxPrefixes)
+    ) {
       return this.formatFbsTsdAssembly(
         task,
         user,
-        'КИЗ распознан, но пока не записан. Сначала отсканируйте короб, бокс или паллетсорт, затем повторите сканирование КИЗ.',
+        'КИЗ распознан, но пока не записан. Сначала укажите короб или выберите «Без короба», затем повторите сканирование КИЗ.',
       );
     }
     if (task.boxId || fbsTsdUsesNoBox(task)) {
@@ -8627,7 +8712,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
     const switched = await this.switchFbsTsdAssemblyToBarcode(task, scannedCode, user);
     if (switched) return switched;
-    if (state === 'SCAN_BOX') {
+    if (['SCAN_BOX', 'SCAN_SOURCE_BOX'].includes(state)) {
       throw new BadRequestException(
         `Товар с ШК ${scannedCode} не нужен в оставшейся части этой FBS-заявки.`,
       );
@@ -8644,6 +8729,43 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const scannedCode = normalizeFbsScannerCode(
       requiredFbsTsdText(payload.boxCode, 'Отсканируйте номер короба или QR паллетсорта.'),
     );
+    if (scannedCode === normalizeFbsScannerCode(FBS_TSD_NO_BOX_CODE)) {
+      // FIX: a physically scanned product is authoritative. The picker may
+      // defer the exact source box to the existing request-closing workflow.
+      if (task.boxId) {
+        throw new BadRequestException(
+          `Источник уже подтверждён: короб ${task.boxCode}. Завершите заказ или сбросьте сборку.`,
+        );
+      }
+      if (!task.barcode && !task.sourceBarcode) {
+        throw new BadRequestException(
+          'Сначала отсканируйте ШК товара, чтобы WMS проверила, что он нужен этой FBS-заявке.',
+        );
+      }
+      if (task.kiz || task.relabelConfirmedAt) {
+        throw new BadRequestException(
+          'Источник можно отложить только до сканирования КИЗа и завершения переклейки.',
+        );
+      }
+      if (task.sourceBoxPending && fbsTsdUsesNoBox(task)) {
+        return this.formatFbsTsdAssembly(
+          task,
+          user,
+          'Источник уже отложен. Фактический короб будет указан при закрытии заявки.',
+        );
+      }
+      const updated = await this.updateFbsTsdUnderLease(task, user, {
+        boxId: null,
+        boxCode: FBS_TSD_NO_BOX_CODE,
+        sourceBoxPending: true,
+        errorMessage: null,
+      });
+      return this.formatFbsTsdAssembly(
+        updated,
+        user,
+        'Товар принят без указания источника. Фактический короб обязательно укажите при закрытии заявки.',
+      );
+    }
     // FIX: Branch scope is mandatory. Legacy requests use the existing
     // default-Moscow resolver; AUTO tasks use their saved reservation route.
     const expectedWarehouseId = await this.resolveFbsTsdExpectedWarehouseId(task);
@@ -8807,9 +8929,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         productLabel: [task.productName, task.article].filter(Boolean).join(' · '),
         availableQuantity: available._sum.quantity ?? 0,
       });
-      if (rejection.code === 'FBS_WRONG_BOX') {
+      // FIX: explain fulfilled demand after trying all orders, even without a next assigned box.
+      const collectedMessage = (available._sum.quantity ?? 0) <= 0
+        ? await collectedFbsBoxMessage(this.prisma, {
+          requestId: task.requestId, clientId: task.clientId,
+          warehouseId: expectedWarehouseId, boxId: box.id,
+        }) : null;
+      if (collectedMessage || rejection.code === 'FBS_WRONG_BOX') {
         throw new ConflictException({
-          code: rejection.code, message: rejection.message,
+          code: 'FBS_WRONG_BOX', message: collectedMessage ?? rejection.message,
           route: await this.getFbsRequestRoute(task.requestId, user),
         });
       }
@@ -8829,9 +8957,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return this.formatFbsTsdAssembly(
       updated,
       user,
-      task.relabelRequired
-        ? `Короб ${box.code} с палет-сорта ${box.storagePlacement?.pallet.code ?? '—'} принят. Найдите исходный товар «${task.sourceProductName ?? task.sourceArticle ?? 'для переклейки'}» и сканируйте его ШК.`
-        : `Короб ${box.code} с палет-сорта ${box.storagePlacement?.pallet.code ?? '—'} принят. Теперь сканируйте ШК товара.`,
+      task.sourceBarcode
+        ? `Короб ${box.code} принят как источник уже отсканированного товара. Выполните переклейку и отсканируйте новый ШК.`
+        : task.barcode
+          ? task.requiresKiz
+            ? `Короб ${box.code} принят как источник уже отсканированного товара. Теперь сканируйте КИЗ.`
+            : `Короб ${box.code} принят как источник уже отсканированного товара. Переходите к наклейке.`
+          : task.relabelRequired
+            ? `Короб ${box.code} с палет-сорта ${box.storagePlacement?.pallet.code ?? '—'} принят. Найдите исходный товар «${task.sourceProductName ?? task.sourceArticle ?? 'для переклейки'}» и сканируйте его ШК.`
+            : `Короб ${box.code} с палет-сорта ${box.storagePlacement?.pallet.code ?? '—'} принят. Теперь сканируйте ШК товара.`,
     );
   }
 
@@ -8912,7 +9046,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         ) {
           return null;
         }
-        if (freshTask.sourceBarcode || freshTask.barcode || freshTask.kiz || freshTask.relabelConfirmedAt) {
+        // FIX: product-first collection intentionally keeps the accepted
+        // barcode while the employee identifies the physical source box.
+        if (freshTask.kiz || freshTask.relabelConfirmedAt) {
           this.throwFbsTsdTaskStale(freshTask, user);
         }
         const [balance, reservationRowsBySku] = await Promise.all([
@@ -8963,16 +9099,21 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               errorMessage: `Фоновый маршрут освобождён после физического скана короба ${box.code}.`,
             },
           });
-          // FIX: another employee's assignment is only a route hint until a
-          // box, product barcode or KIZ is physically scanned. Keep their task
-          // assigned, but force its next poll to calculate another box.
+          // FIX: another employee's assignment is only a route hint until the
+          // product barcode or KIZ is physically scanned. A box scan alone does
+          // not prove that the unit was taken from that box.
           await tx.fbsTsdAssembly.updateMany({
             where: {
-              id: { in: releaseIds }, status: 'IN_PROGRESS', boxId: null,
-              reservedBoxId: box.id, sourceBarcode: null, barcode: null,
+              id: { in: releaseIds }, status: 'IN_PROGRESS',
+              OR: [
+                { boxId: box.id },
+                { boxId: null, reservedBoxId: box.id },
+              ],
+              sourceBarcode: null, barcode: null,
               kiz: null, relabelConfirmedAt: null,
             },
             data: {
+              boxId: null, boxCode: null,
               reservedBoxId: null, reservedBoxCode: null, reservedAt: null,
               errorMessage: `Маршрут изменён: короб ${box.code} физически выбран другим сотрудником. Используйте новый маршрут на экране.`,
             },
@@ -8999,7 +9140,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           data: {
             reservedBoxId: box.id, reservedBoxCode: box.code,
             reservedAt: freshTask.reservedAt ?? new Date(), boxId: box.id,
-            boxCode: box.code, errorMessage: null,
+            boxCode: box.code,
+            sourceBoxPending: false,
+            errorMessage: null,
           },
         });
         if (claimed.count !== 1) this.throwFbsTsdTaskStale(freshTask, user);
@@ -10278,6 +10421,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       remoteKizValues: string[];
       alreadyAttached: boolean;
     } | null = null;
+    // FIX: the product barcode already scanned into this task identifies the
+    // physical unit in the worker's hands. Keep the task leased and replace a
+    // stale WB KIZ only after the normal confirm-status preflight succeeds.
+    let replacedRemoteKizValues: string[] = [];
     let pendingWbKizReplacement = false;
     if (
       !emergencyAssembly &&
@@ -10316,6 +10463,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           user,
         );
         throw new BadRequestException(message);
+      }
+      if (
+        !wbKizPreflight.alreadyAttached &&
+        wbKizPreflight.remoteKizValues.length > 0
+      ) {
+        replacedRemoteKizValues = [...wbKizPreflight.remoteKizValues];
       }
       // FIX: after an uncertain DELETE/PUT, WB can be empty. A repeat of that
       // replacement must retain safe reconciliation instead of legacy rejection.
@@ -10646,13 +10799,23 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       { kiz, wbMetaStatus: 'ACCEPTED', errorMessage: null },
     );
     await this.recordAcceptedFbsKizScan(updated, kiz, user);
+    if (replacedRemoteKizValues.length > 0) {
+      await this.recordReplacedWildberriesKizAfterProductPick(
+        updated,
+        replacedRemoteKizValues,
+        kiz,
+        user,
+      );
+    }
     // FIX: after box + barcode + accepted KIZ, remove the unit from sellable
     // stock immediately instead of waiting for the whole request to close.
     await this.reserveAcceptedWildberriesStock(updated);
     return this.formatFbsTsdAssembly(
       updated,
       user,
-      boxCorrection?.mode === 'RELINKED'
+      replacedRemoteKizValues.length > 0
+        ? 'КИЗ принят Wildberries: прежний КИЗ заменён на фактически отсканированный. Подтвердите сборку заказа.'
+        : boxCorrection?.mode === 'RELINKED'
         ? `КИЗ принят Wildberries и перепривязан к фактической единице в коробе ${task.boxCode}. Количество товара не изменялось. Подтвердите сборку заказа.`
         : boxCorrection
         ? `КИЗ принят Wildberries. Товар перемещён из короба ${mark?.box?.code ?? 'без номера'} в ${task.boxCode}. Подтвердите сборку заказа.`
@@ -11225,27 +11388,50 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         relabelRequired: false,
         status: { in: [FBS_TSD_RESERVED_STATUS, FBS_TSD_WAITING_STOCK_STATUS, 'RELEASED'] },
       },
-      select: { requestId: true },
+      select: { requestId: true, connectionId: true, orderId: true },
     });
-    const requestIds = uniqueStrings(tasks.map((task) => task.requestId));
+    const taskRequestIds = uniqueStrings(tasks.map((task) => task.requestId));
+    // FIX: preserve the deployed active/shipped-link eligibility, but bound each
+    // query below Prisma's bind-variable limit (including its extra predicates).
+    const eligibleLinkKeys = new Set<string>();
+    for (const requestIdBatch of chunks(taskRequestIds, 1000)) {
+      const links = await this.prisma.fbsOrderRequestLink.findMany({
+        where: {
+          requestId: { in: requestIdBatch },
+          marketplace: MarketplaceType.WILDBERRIES,
+          syncStatus: FBS_REQUEST_LINK_ACTIVE,
+          lastCategory: { in: ['active', 'shipped'] },
+        },
+        select: { requestId: true, connectionId: true, orderId: true },
+      });
+      links.forEach((link) => eligibleLinkKeys.add(`${link.requestId}:${link.connectionId}:${link.orderId}`));
+    }
+    const eligibleTasks = tasks.filter((task) =>
+      eligibleLinkKeys.has(`${task.requestId}:${task.connectionId}:${task.orderId}`),
+    );
+    const requestIds = uniqueStrings(eligibleTasks.map((task) => task.requestId));
     const availableByRequest = new Map<string, number>();
-    tasks.forEach((task) => availableByRequest.set(task.requestId, (availableByRequest.get(task.requestId) ?? 0) + 1));
+    eligibleTasks.forEach((task) => availableByRequest.set(task.requestId, (availableByRequest.get(task.requestId) ?? 0) + 1));
     if (!requestIds.length) return { requests: [] };
-    const requests = await this.prisma.clientRequest.findMany({
-      where: {
-        id: { in: requestIds },
-        status: { notIn: [...FBS_REQUEST_CLOSED_STATUSES] },
-        ...(user.activeWarehouseId ? { warehouseId: user.activeWarehouseId } : {}),
-      },
-      select: {
-        id: true,
-        number: true,
-        title: true,
-        status: true,
-        client: { select: { id: true, code: true, name: true } },
-      },
-      orderBy: [{ number: 'desc' }, { createdAt: 'desc' }],
-    });
+    const requestSelect = {
+      id: true, number: true, title: true, status: true, createdAt: true,
+      client: { select: { id: true, code: true, name: true } },
+    } satisfies Prisma.ClientRequestSelect;
+    const requests: Array<Prisma.ClientRequestGetPayload<{ select: typeof requestSelect }>> = [];
+    // FIX: the second IN query also needs a bound; keep global, not per-batch, order.
+    for (const requestIdBatch of chunks(requestIds, 1000)) {
+      const batch = await this.prisma.clientRequest.findMany({
+        where: {
+          id: { in: requestIdBatch },
+          status: { notIn: [...FBS_REQUEST_CLOSED_STATUSES] },
+          ...(user.activeWarehouseId ? { warehouseId: user.activeWarehouseId } : {}),
+        },
+        select: requestSelect,
+        orderBy: [{ number: 'desc' }, { createdAt: 'desc' }],
+      });
+      requests.push(...batch);
+    }
+    requests.sort((a, b) => b.number - a.number || b.createdAt.getTime() - a.createdAt.getTime());
     return {
       requests: requests.map((request) => ({
         requestId: request.id,
@@ -11352,21 +11538,24 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             requestId: { in: requestIds },
             marketplace: MarketplaceType.WILDBERRIES,
             syncStatus: FBS_REQUEST_LINK_ACTIVE,
-            lastCategory: 'active',
+            // FIX: a shipped WB order may still be physically unfinished in
+            // WMS; SOS completes that local fact without reopening WB.
+            lastCategory: { in: ['active', 'shipped'] },
           },
           select: { requestId: true, connectionId: true, orderId: true },
         }),
       ]);
       const requestById = new Map(requests.map((request) => [request.id, request]));
-      const activeLinkKeys = new Set(links.map((link) => `${link.requestId}:${link.connectionId}:${link.orderId}`));
+      const eligibleLinkKeys = new Set(links.map((link) => `${link.requestId}:${link.connectionId}:${link.orderId}`));
       const eligible = barcodeCandidates
         .filter((task) => requestById.has(task.requestId))
-        .filter((task) => activeLinkKeys.has(`${task.requestId}:${task.connectionId}:${task.orderId}`))
+        .filter((task) => eligibleLinkKeys.has(`${task.requestId}:${task.connectionId}:${task.orderId}`))
         .sort((left, right) =>
           (requestById.get(right.requestId)?.number ?? 0) - (requestById.get(left.requestId)?.number ?? 0) ||
           left.createdAt.getTime() - right.createdAt.getTime(),
         );
 
+      let claimRaceDetected = false;
       for (const candidate of eligible) {
         const request = requestById.get(candidate.requestId);
         if (!request) continue;
@@ -11441,9 +11630,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           const selected = [...quantityByBox.entries()]
             .filter(([, value]) => value.quantity >= Math.max(1, candidate.itemCount))
             .sort((left, right) => left[1].quantity - right[1].quantity || left[1].code.localeCompare(right[1].code, 'ru-RU'))[0];
-          if (!selected) continue;
-          virtualBoxId = selected[0];
-          virtualBoxCode = selected[1].code;
+          if (selected) {
+            virtualBoxId = selected[0];
+            virtualBoxCode = selected[1].code;
+          } else {
+            // FIX: SOS starts from a physical product already held by the
+            // employee. A missing virtual reserve must not reject that scan;
+            // the source remains pending until the KIZ/closing reconciliation.
+            virtualBoxId = null;
+            virtualBoxCode = FBS_TSD_NO_BOX_CODE;
+          }
         } else if (!virtualBoxId && request.client.storesWithoutBoxes) {
           const stockSkuId = candidate.sourceSkuId ?? candidate.skuId;
           const [available, reservations] = await Promise.all([
@@ -11494,7 +11690,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             errorMessage: null,
           },
         });
-        if (claimed.count !== 1) continue;
+        if (claimed.count !== 1) {
+          claimRaceDetected = true;
+          continue;
+        }
         const task = await this.prisma.fbsTsdAssembly.findUnique({ where: { id: candidate.id } });
         if (!task) continue;
         await this.prisma.auditLog.create({
@@ -11520,7 +11719,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         color: 'RED',
         message: scannedSourceBox
           ? `В коробе ${scannedSourceBox.code} нет свободной единицы этого товара для активных заказов. Отсканируйте следующий ШК или выберите другой короб.`
-          : 'Подходящий заказ только что забрал другой сотрудник. Отсканируйте ШК ещё раз.',
+          : claimRaceDetected
+            ? 'Подходящий заказ действительно был назначен другому сотруднику. Обновите очередь SOS.'
+            : 'Подходящий заказ по этому ШК уже не активен в Wildberries или исключён из выбранной заявки. Обновите список SOS.',
       };
     });
   }
@@ -11617,59 +11818,85 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     });
     if (duplicate) throw new BadRequestException(`Этот КИЗ уже привязан к заказу №${duplicate.orderId}.`);
 
-    const connection = await this.prisma.clientMarketplaceConnection.findFirst({
+    const requestLink = await this.prisma.fbsOrderRequestLink.findUnique({
       where: {
-        id: task.connectionId,
-        clientId: task.clientId,
-        marketplace: MarketplaceType.WILDBERRIES,
-        isActive: true,
-      },
-      select: { apiKey: true },
-    });
-    if (!connection) throw new BadRequestException('Подключение Wildberries отключено.');
-    const preflight = await this.loadWildberriesFbsKizPreflight(connection.apiKey, task.orderId, kiz);
-    let replacedRemoteKizValues: string[] = [];
-    if (!preflight.alreadyAttached && preflight.remoteKizValues.length > 0) {
-      if (payload.confirmReplace !== true) {
-        return {
-          completed: false,
-          color: 'RED',
-          conflict: 'REMOTE_KIZ',
-          canReplace: true,
-          taskId: task.id,
-          requestId: task.requestId,
+        marketplace_connectionId_orderId: {
+          marketplace: MarketplaceType.WILDBERRIES,
+          connectionId: task.connectionId,
           orderId: task.orderId,
-          scannedKiz: printableFbsKiz(kiz),
-          remoteKiz: preflight.remoteKizValues.map(printableFbsKiz),
-          message: 'В Wildberries у заказа уже записан другой КИЗ. Проверьте старую маркировку и нажмите «Заменить КИЗ в WB», если перед вами другая физическая единица.',
-        };
-      }
-      if (preflight.supplierStatus !== 'confirm') {
-        throw new BadRequestException(`Нельзя заменить КИЗ: заказ WB имеет статус ${preflight.supplierStatus || 'неизвестно'}, нужен confirm.`);
-      }
-      await marketplaceJsonOnce(
-        `https://marketplace-api.wildberries.ru/api/v3/orders/${numericWbOrderId(task.orderId)}/meta?key=sgtin`,
-        {
-          method: 'DELETE',
-          headers: wbHeaders(connection.apiKey),
-          signal: AbortSignal.timeout(FBS_TSD_WB_READ_TIMEOUT_MS),
         },
-      );
-      replacedRemoteKizValues = [...preflight.remoteKizValues];
-    }
-    if (!preflight.alreadyAttached && preflight.supplierStatus !== 'confirm') {
-      throw new BadRequestException(`Wildberries не разрешает запись КИЗ: заказ имеет статус ${preflight.supplierStatus || 'неизвестно'}, нужен confirm.`);
-    }
-    if (!preflight.alreadyAttached) {
-      await marketplaceJsonOnce(
-        `https://marketplace-api.wildberries.ru/api/v3/orders/${numericWbOrderId(task.orderId)}/meta/sgtin`,
-        {
-          method: 'PUT',
-          headers: wbHeaders(connection.apiKey),
-          body: JSON.stringify({ sgtins: [kiz] }),
-          signal: AbortSignal.timeout(FBS_TSD_WB_READ_TIMEOUT_MS),
+      },
+      select: {
+        requestId: true,
+        syncStatus: true,
+        lastCategory: true,
+        lastSupplierStatus: true,
+      },
+    });
+    // FIX: WB rejects metadata changes after shipment. The SOS scan is still
+    // an authoritative physical WMS fact, so record it locally and never send
+    // a mutation to the already completed external order.
+    const localOnlyRecovery = Boolean(
+      requestLink &&
+      requestLink.requestId === task.requestId &&
+      requestLink.syncStatus === FBS_REQUEST_LINK_ACTIVE &&
+      (requestLink.lastCategory === 'shipped' || requestLink.lastSupplierStatus === 'complete'),
+    );
+    let replacedRemoteKizValues: string[] = [];
+    if (!localOnlyRecovery) {
+      const connection = await this.prisma.clientMarketplaceConnection.findFirst({
+        where: {
+          id: task.connectionId,
+          clientId: task.clientId,
+          marketplace: MarketplaceType.WILDBERRIES,
+          isActive: true,
         },
-      );
+        select: { apiKey: true },
+      });
+      if (!connection) throw new BadRequestException('Подключение Wildberries отключено.');
+      const preflight = await this.loadWildberriesFbsKizPreflight(connection.apiKey, task.orderId, kiz);
+      if (!preflight.alreadyAttached && preflight.remoteKizValues.length > 0) {
+        if (payload.confirmReplace !== true) {
+          return {
+            completed: false,
+            color: 'RED',
+            conflict: 'REMOTE_KIZ',
+            canReplace: true,
+            taskId: task.id,
+            requestId: task.requestId,
+            orderId: task.orderId,
+            scannedKiz: printableFbsKiz(kiz),
+            remoteKiz: preflight.remoteKizValues.map(printableFbsKiz),
+            message: 'В Wildberries у заказа уже записан другой КИЗ. Проверьте старую маркировку и нажмите «Заменить КИЗ в WB», если перед вами другая физическая единица.',
+          };
+        }
+        if (preflight.supplierStatus !== 'confirm') {
+          throw new BadRequestException(`Нельзя заменить КИЗ: заказ WB имеет статус ${preflight.supplierStatus || 'неизвестно'}, нужен confirm.`);
+        }
+        await marketplaceJsonOnce(
+          `https://marketplace-api.wildberries.ru/api/v3/orders/${numericWbOrderId(task.orderId)}/meta?key=sgtin`,
+          {
+            method: 'DELETE',
+            headers: wbHeaders(connection.apiKey),
+            signal: AbortSignal.timeout(FBS_TSD_WB_READ_TIMEOUT_MS),
+          },
+        );
+        replacedRemoteKizValues = [...preflight.remoteKizValues];
+      }
+      if (!preflight.alreadyAttached && preflight.supplierStatus !== 'confirm') {
+        throw new BadRequestException(`Wildberries не разрешает запись КИЗ: заказ имеет статус ${preflight.supplierStatus || 'неизвестно'}, нужен confirm.`);
+      }
+      if (!preflight.alreadyAttached) {
+        await marketplaceJsonOnce(
+          `https://marketplace-api.wildberries.ru/api/v3/orders/${numericWbOrderId(task.orderId)}/meta/sgtin`,
+          {
+            method: 'PUT',
+            headers: wbHeaders(connection.apiKey),
+            body: JSON.stringify({ sgtins: [kiz] }),
+            signal: AbortSignal.timeout(FBS_TSD_WB_READ_TIMEOUT_MS),
+          },
+        );
+      }
     }
 
     const completed = await this.prisma.$transaction(async (tx) => {
@@ -11726,6 +11953,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             kiz: printableFbsKiz(kiz),
             sourceBoxCode: hasPhysicalSourceBox ? fresh.boxCode : null,
             sourceMode: hasPhysicalSourceBox ? 'BOX_AND_PRODUCT' : 'AUTO_VIRTUAL_RESERVE',
+            wbMutationPerformed: !localOnlyRecovery,
             deviceCode,
             workerName: user.name,
           }),
@@ -11769,9 +11997,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       sourceBoxPending: !hasPhysicalSourceBox,
       sourceBoxCode: hasPhysicalSourceBox ? completed.boxCode : null,
       completionSource: 'SOS_WB',
-      message: hasPhysicalSourceBox
-        ? `Готово. КИЗ записан в Wildberries. Заказ №${completed.orderId} собран из короба ${completed.boxCode}. Сделано SOS.`
-        : `Готово. КИЗ записан в Wildberries. Заказ №${completed.orderId} собран; короб будет указан при закрытии заявки. Сделано SOS.`,
+      message: localOnlyRecovery
+        ? hasPhysicalSourceBox
+          ? `Готово. КИЗ принят локально в WMS, заказ №${completed.orderId} собран из короба ${completed.boxCode}. Wildberries не изменялся.`
+          : `Готово. КИЗ принят локально в WMS, заказ №${completed.orderId} собран; короб будет указан при закрытии заявки. Wildberries не изменялся.`
+        : hasPhysicalSourceBox
+          ? `Готово. КИЗ записан в Wildberries. Заказ №${completed.orderId} собран из короба ${completed.boxCode}. Сделано SOS.`
+          : `Готово. КИЗ записан в Wildberries. Заказ №${completed.orderId} собран; короб будет указан при закрытии заявки. Сделано SOS.`,
     };
   }
 
@@ -12810,6 +13042,40 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return task;
   }
 
+  // FIX: keep a separate audit trail for an automatic WB metadata replacement.
+  private async recordReplacedWildberriesKizAfterProductPick(
+    task: FbsTsdAssemblyRecord,
+    previousKizValues: string[],
+    scannedKiz: string,
+    user: AuthUser,
+  ) {
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'FBS_WB_KIZ_REPLACED_AFTER_PRODUCT_PICK',
+          entity: 'FbsTsdAssembly',
+          entityId: task.id,
+          payload: cleanJson({
+            clientId: task.clientId,
+            requestId: task.requestId,
+            orderId: task.orderId,
+            previousKiz: previousKizValues.map(printableFbsKiz),
+            scannedKiz: printableFbsKiz(scannedKiz),
+            boxCode: task.boxCode ?? FBS_TSD_NO_BOX_CODE,
+            deviceCode: task.deviceCode,
+            workerName: task.workerName ?? user.name,
+            replacedAt: new Date().toISOString(),
+          }),
+        },
+      });
+    } catch (caught) {
+      this.logger.warn(
+        `Could not write replaced WB KIZ audit for task ${task.id}: ${caught instanceof Error ? caught.message : 'unknown error'}`,
+      );
+    }
+  }
+
   private async recordAcceptedFbsKizScan(task: FbsTsdAssemblyRecord, kiz: string, user: AuthUser) {
     try {
       await this.prisma.auditLog.create({
@@ -13668,7 +13934,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           clientId: fresh.clientId,
           eventType: ClientRequestEventType.COMMENT,
           title: 'FBS-заказ собран на ТСД',
-          body: `Заказ ${fresh.orderId}; ${fbsTsdUsesNoBox(fresh) ? 'товар взят из хранения без коробов' : `короб ${fresh.boxCode}`}; сотрудник ${fresh.workerName ?? fresh.deviceCode}${fresh.kiz ? `; КИЗ ${printableFbsKiz(fresh.kiz)}` : ''}${fresh.stickerPartB ? `; наклейка WB ${fresh.stickerPartB}` : ''}.`,
+          body: `Заказ ${fresh.orderId}; ${fresh.sourceBoxPending ? 'источник будет указан при закрытии заявки' : fbsTsdUsesNoBox(fresh) ? 'товар взят из хранения без коробов' : `короб ${fresh.boxCode}`}; сотрудник ${fresh.workerName ?? fresh.deviceCode}${fresh.kiz ? `; КИЗ ${printableFbsKiz(fresh.kiz)}` : ''}${fresh.stickerPartB ? `; наклейка WB ${fresh.stickerPartB}` : ''}.`,
           createdByUserId: user.id,
         },
       });
@@ -15137,7 +15403,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   private async formatFbsTsdAssembly(task: FbsTsdAssemblyRecord, user: AuthUser, message: string) {
     let state = fbsTsdStage(task);
-    const needsStorageRouting = state === 'SCAN_BOX';
+    const needsStorageRouting = state === 'SCAN_BOX' || state === 'SCAN_SOURCE_BOX';
     const needsSourceBoxUsage = state === 'SCAN_BARCODE';
     const stockSkuId =
       task.relabelRequired && !task.relabelConfirmedAt && task.sourceSkuId
@@ -15405,7 +15671,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             }
           : null,
         itemCount: task.itemCount,
-        sourceWithoutBox: fbsTsdUsesNoBox(task),
+        sourceWithoutBox: fbsTsdUsesNoBox(task) && !task.sourceBoxPending,
+        // ADDED: the TSD distinguishes true no-box storage from a source that
+        // must be supplied by the manager when the request is closed.
+        sourceBoxPending: task.sourceBoxPending,
         requiresKiz: task.requiresKiz,
         recommendedBoxCode,
         // FIX: detailed alternative/next routes never leave the employee API.
@@ -15497,8 +15766,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   /**
    * A physical scan has priority over a virtual box hint. Untouched AUTO
    * reservations return to the queue; untouched assigned tasks keep their
-   * employee/order and calculate another box on the next poll. A box, product
-   * barcode or KIZ already scanned by another worker is never moved.
+   * employee/order and calculate another box on the next poll. A box scan alone
+   * is still only a route hint; a scanned product barcode or KIZ is protected.
    */
   private async releaseUntouchedFbsReservationsForScannedBox(input: {
     clientId: string;
@@ -15532,8 +15801,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       where: {
         id: input.taskId ? { not: input.taskId } : undefined,
         clientId: input.clientId,
-        boxId: null,
-        reservedBoxId: input.boxId,
+        OR: [
+          { boxId: input.boxId },
+          { boxId: null, reservedBoxId: input.boxId },
+        ],
         sourceBarcode: null,
         barcode: null,
         kiz: null,
@@ -15601,11 +15872,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const activeReleased = activeIds.length > 0
       ? await this.prisma.fbsTsdAssembly.updateMany({
           where: {
-            id: { in: activeIds }, status: 'IN_PROGRESS', boxId: null,
-            reservedBoxId: input.boxId, sourceBarcode: null, barcode: null,
+            id: { in: activeIds }, status: 'IN_PROGRESS',
+            OR: [
+              { boxId: input.boxId },
+              { boxId: null, reservedBoxId: input.boxId },
+            ],
+            sourceBarcode: null, barcode: null,
             kiz: null, relabelConfirmedAt: null,
           },
           data: {
+            boxId: null, boxCode: null,
             reservedBoxId: null, reservedBoxCode: null, reservedAt: null,
             errorMessage: `Маршрут изменён: короб ${input.boxCode} физически выбран другим сотрудником. Используйте новый маршрут на экране.`,
           },
@@ -16393,11 +16669,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         boxId: task.boxId ?? task.reservedBoxId,
         itemCount: Math.max(1, task.itemCount),
         releasableBackground:
-          // FIX: a route is only a hint until this employee scans a physical
-          // box or product. The physical picker wins; the untouched task stays
-          // assigned and receives another route on its next poll.
-          !task.boxId &&
-          Boolean(task.reservedBoxId) &&
+          // FIX: a route, including a box-only scan, is only a hint until a
+          // product barcode or KIZ is scanned. The employee holding the product
+          // wins; the untouched task receives another box on its next poll.
+          Boolean(task.boxId || task.reservedBoxId) &&
           !task.sourceBarcode &&
           !task.barcode &&
           !task.kiz &&
@@ -19534,6 +19809,32 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       dto.orders,
       freshResponse,
     );
+    // FIX: WB fixes the destination when the first order enters a supply. The
+    // operator must confirm that exact office and a local logistics date before
+    // WMS makes the irreversible delivery call.
+    const selectedDestinationOfficeId = dto.destinationOfficeId?.trim() ?? '';
+    const plannedDeliveryDate = parseFbsPlannedDeliveryDate(dto.plannedDeliveryDate);
+    if (!selectedDestinationOfficeId || !plannedDeliveryDate) {
+      throw new BadRequestException(
+        'Перед отправкой выберите склад Wildberries и плановую дату доставки.',
+      );
+    }
+    const deliveryOptions = await this.resolveFbsSupplyDeliveryOptions(clientId, orders);
+    if (deliveryOptions.blockers.length > 0) {
+      throw new BadRequestException(deliveryOptions.blockers.join(' '));
+    }
+    if (
+      !deliveryOptions.requiredDestinationOfficeId ||
+      selectedDestinationOfficeId !== deliveryOptions.requiredDestinationOfficeId
+    ) {
+      throw new BadRequestException(
+        `Выбранный склад не совпадает со складом назначения поставки WB. ` +
+          `Обновите окно отправки и выберите склад №${deliveryOptions.requiredDestinationOfficeId ?? '—'}.`,
+      );
+    }
+    const selectedDestinationOffice = deliveryOptions.offices.find(
+      (office) => office.id === selectedDestinationOfficeId,
+    );
     try {
       await this.assertFbsDeliveryReadiness(clientId, response, orders);
     } catch (caught) {
@@ -19673,6 +19974,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
                 sentToWbAt,
                 sentToWbByUserId: user.id,
                 sentToWbByName: user.name,
+                // ADDED: operational delivery plan selected by the manager.
+                destinationOfficeId: selectedDestinationOfficeId,
+                destinationOfficeName: selectedDestinationOffice?.name ?? null,
+                plannedDeliveryDate,
               },
             });
             await this.prisma.auditLog.create({
@@ -19687,6 +19992,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
                   supplyId: supply.supplyId,
                   sentToWbAt: sentToWbAt.toISOString(),
                   userName: user.name,
+                  destinationOfficeId: selectedDestinationOfficeId,
+                  destinationOfficeName: selectedDestinationOffice?.name ?? null,
+                  plannedDeliveryDate: fbsDateOnly(plannedDeliveryDate),
+                  // The official FBS API derives the office from the supply and
+                  // does not accept a delivery-date field in /deliver.
+                  wbDeliveryDateSubmitted: false,
                 },
               },
             });
@@ -19721,6 +20032,167 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
     }
     return { delivered: delivered.length, failed, recovery, orders: refreshedOrders };
+  }
+
+  async getFbsSupplyDeliveryOptions(dto: FbsOrderSelectionDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    this.clientScopes.requireClientAccess(user, clientId, 'write');
+    // ADDED: use a fresh WB snapshot so the dialog never confirms a stale
+    // supply destination or orders that have already changed status.
+    const freshResponse = await this.refreshFbsOrdersCache(clientId);
+    const { orders } = await this.resolveSelectedFbsOrders(
+      clientId,
+      dto.orders,
+      freshResponse,
+    );
+    const unavailable = orders.filter(
+      (order) =>
+        order.marketplace !== MarketplaceType.WILDBERRIES ||
+        order.supplierStatus !== 'confirm' ||
+        !order.supplyId,
+    );
+    if (unavailable.length > 0) {
+      throw new BadRequestException(
+        `Параметры доставки доступны только для поставок WB со статусом «На сборке». Проверьте: ${unavailable
+          .map((order) => order.id)
+          .join(', ')}.`,
+      );
+    }
+    return this.resolveFbsSupplyDeliveryOptions(clientId, orders);
+  }
+
+  private async resolveFbsSupplyDeliveryOptions(
+    clientId: string,
+    orders: FbsOrderSummary[],
+  ) {
+    const connections = await this.loadSelectedConnections(clientId, orders);
+    const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
+    const supplies = new Map<
+      string,
+      { connectionId: string; supplyId: string; orders: FbsOrderSummary[] }
+    >();
+    for (const order of orders) {
+      if (!order.supplyId) continue;
+      const key = `${order.connectionId}:${order.supplyId}`;
+      const supply = supplies.get(key) ?? {
+        connectionId: order.connectionId,
+        supplyId: order.supplyId,
+        orders: [],
+      };
+      supply.orders.push(order);
+      supplies.set(key, supply);
+    }
+
+    const officesByConnection = new Map<string, FbsWarehouseOffice[]>();
+    await Promise.all(
+      connections.map(async (connection) => {
+        officesByConnection.set(
+          connection.id,
+          await this.fetchWildberriesOffices(connection.apiKey),
+        );
+      }),
+    );
+
+    const blockers: string[] = [];
+    const destinationIds = new Set<string>();
+    const supplyRows = await Promise.all(
+      [...supplies.values()].map(async (supply) => {
+        const connection = connectionById.get(supply.connectionId);
+        if (!connection) {
+          blockers.push(`Подключение WB для поставки ${supply.supplyId} не найдено.`);
+          return null;
+        }
+        const details = await marketplaceJson(
+          `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(supply.supplyId)}`,
+          { method: 'GET', headers: wbHeaders(connection.apiKey) },
+        );
+        const orderOfficeIds = uniqueStrings(
+          supply.orders.map((order) => order.officeId ?? ''),
+        );
+        if (orderOfficeIds.length > 1) {
+          blockers.push(
+            `В поставке ${supply.supplyId} заказы относятся к разным складам WB: ${orderOfficeIds.join(', ')}.`,
+          );
+        }
+        const wbDestinationOfficeId = textValue(details.destinationOfficeId);
+        const destinationOfficeId = wbDestinationOfficeId || orderOfficeIds[0] || '';
+        if (!destinationOfficeId) {
+          blockers.push(
+            `Wildberries не вернул склад назначения поставки ${supply.supplyId}. Обновите заказы WB и повторите.`,
+          );
+        } else {
+          destinationIds.add(destinationOfficeId);
+        }
+        if (
+          wbDestinationOfficeId &&
+          orderOfficeIds.length === 1 &&
+          wbDestinationOfficeId !== orderOfficeIds[0]
+        ) {
+          blockers.push(
+            `Поставка ${supply.supplyId} направлена на склад WB №${wbDestinationOfficeId}, ` +
+              `а её заказы относятся к складу №${orderOfficeIds[0]}. Отправка остановлена.`,
+          );
+        }
+        const office = (officesByConnection.get(supply.connectionId) ?? []).find(
+          (item) => item.id === destinationOfficeId,
+        );
+        return {
+          connectionId: supply.connectionId,
+          supplyId: supply.supplyId,
+          orderCount: supply.orders.length,
+          itemCount: supply.orders.reduce(
+            (sum, order) => sum + Math.max(1, order.itemCount),
+            0,
+          ),
+          destinationOfficeId: destinationOfficeId || null,
+          destinationOfficeName: office?.name || null,
+        };
+      }),
+    );
+    if (destinationIds.size > 1) {
+      blockers.push(
+        `Выбраны поставки на разные склады WB: ${[...destinationIds].join(', ')}. Передайте их отдельно.`,
+      );
+    }
+
+    const requiredDestinationOfficeId =
+      destinationIds.size === 1 ? [...destinationIds][0] : null;
+    const officeMap = new Map<string, FbsWarehouseOffice>();
+    for (const offices of officesByConnection.values()) {
+      for (const office of offices) officeMap.set(office.id, office);
+    }
+    if (requiredDestinationOfficeId && !officeMap.has(requiredDestinationOfficeId)) {
+      officeMap.set(requiredDestinationOfficeId, {
+        id: requiredDestinationOfficeId,
+        name: `Склад WB №${requiredDestinationOfficeId}`,
+        city: '',
+      });
+    }
+    const today = fbsMoscowDateOnly(new Date());
+    const wbDeliveryDates = uniqueStrings(
+      orders.map((order) => normalizeWbFbsDate(order.deliveryDate)),
+    ).sort();
+    const earliestWbDeliveryDate = wbDeliveryDates[0] ?? null;
+    return {
+      supplies: supplyRows.filter((supply): supply is NonNullable<typeof supply> => Boolean(supply)),
+      offices: [...officeMap.values()]
+        .map((office) => ({
+          ...office,
+          compatible: office.id === requiredDestinationOfficeId,
+        }))
+        .sort(
+          (left, right) =>
+            Number(right.compatible) - Number(left.compatible) ||
+            left.name.localeCompare(right.name, 'ru-RU'),
+        ),
+      requiredDestinationOfficeId,
+      earliestWbDeliveryDate,
+      defaultPlannedDeliveryDate:
+        earliestWbDeliveryDate && earliestWbDeliveryDate >= today
+          ? earliestWbDeliveryDate
+          : today,
+      blockers,
+    };
   }
 
   async changeFbsSuppliesDestination(dto: FbsOrderSelectionDto, user: AuthUser) {
@@ -26671,6 +27143,42 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
   }
 
+  // FIX: one Ozon Client-Id is one seller cabinet. Two active rows for the
+  // same cabinet return the same posting and duplicate it in an FBS request.
+  private async requireUniqueActiveOzonSeller(input: {
+    clientId: string;
+    marketplace: MarketplaceType;
+    sellerId?: string | null;
+    isActive?: boolean;
+    excludeConnectionId?: string;
+  }) {
+    const sellerId = input.sellerId?.trim();
+    if (
+      input.marketplace !== MarketplaceType.OZON ||
+      input.isActive === false ||
+      !sellerId
+    ) {
+      return;
+    }
+    const duplicate = await this.prisma.clientMarketplaceConnection.findFirst({
+      where: {
+        clientId: input.clientId,
+        marketplace: MarketplaceType.OZON,
+        sellerId,
+        isActive: true,
+        ...(input.excludeConnectionId
+          ? { id: { not: input.excludeConnectionId } }
+          : {}),
+      },
+      select: { id: true },
+    });
+    if (duplicate) {
+      throw new BadRequestException(
+        `Ozon Client-Id ${sellerId} уже подключён для этого клиента. Отредактируйте существующее подключение вместо создания второго.`,
+      );
+    }
+  }
+
   async createFbsConnection(dto: UpsertMarketplaceConnectionDto, user: AuthUser) {
     requireFbsRoutingSettingsAccess(dto, user);
     if (
@@ -26689,6 +27197,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new BadRequestException('Для Яндекс Маркета укажите Campaign ID.');
     }
 
+    await this.requireUniqueActiveOzonSeller(dto);
     await this.validateFbsRoutingSettings(dto);
 
     try {
@@ -26714,6 +27223,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     requireFbsRoutingSettingsAccess(dto, user);
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
     await this.requireBranchOwnedClientConfiguration(user, dto.clientId);
+    await this.requireUniqueActiveOzonSeller(dto);
     await this.validateFbsRoutingSettings(dto);
 
     try {
@@ -26745,6 +27255,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       where: { id },
       select: {
         clientId: true,
+        marketplace: true,
+        sellerId: true,
+        isActive: true,
         fbsExecutionWarehouseId: true,
         fbsDropoffWarehouseId: true,
         fbsAutoRouteNewWarehouses: true,
@@ -26760,6 +27273,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
       await this.requireBranchOwnedClientConfiguration(user, dto.clientId);
     }
+    await this.requireUniqueActiveOzonSeller({
+      clientId: dto.clientId ?? existing.clientId,
+      marketplace: dto.marketplace ?? existing.marketplace,
+      sellerId: dto.sellerId === undefined ? existing.sellerId : dto.sellerId,
+      isActive: dto.isActive ?? existing.isActive,
+      excludeConnectionId: id,
+    });
     await this.validateFbsRoutingSettings(dto, existing);
 
     try {
@@ -28276,7 +28796,12 @@ function jsonStringArraysEqual(
 
 function fbsTsdStage(task: FbsTsdAssemblyRecord) {
   if (task.status === 'COMPLETED') return 'COMPLETED';
-  if (!task.boxId && !fbsTsdUsesNoBox(task)) return 'SCAN_BOX';
+  if (!task.boxId && !fbsTsdUsesNoBox(task)) {
+    // FIX: once a product barcode is accepted, source selection becomes an
+    // explicit next step instead of forcing the old box-first route.
+    if (task.sourceBarcode || task.barcode) return 'SCAN_SOURCE_BOX';
+    return 'SCAN_BOX';
+  }
   if (task.relabelRequired && !task.sourceBarcode) return 'SCAN_SOURCE_BARCODE';
   if (task.relabelRequired && !task.barcode) return 'SCAN_RELABEL_BARCODE';
   if (!task.barcode) return 'SCAN_BARCODE';
@@ -28683,6 +29208,44 @@ function fbsSupplyPlanKey(marketplace: MarketplaceType, connectionId: string, su
 function fbsSupplyName(clientCode: string, index: number, total: number) {
   const suffix = total > 1 ? ` ${index}-${total}` : '';
   return `LOGOFF ${clientCode} ${fileTimestamp(new Date())}${suffix}`.slice(0, 128);
+}
+
+// ADDED: accept the date-only value produced by the delivery dialog and store
+// it without a timezone-driven day shift.
+function parseFbsPlannedDeliveryDate(value: string | undefined) {
+  const normalized = value?.trim() ?? '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return null;
+  const parsed = new Date(`${normalized}T00:00:00.000Z`);
+  return Number.isNaN(parsed.getTime()) || fbsDateOnly(parsed) !== normalized
+    ? null
+    : parsed;
+}
+
+function fbsDateOnly(value: Date) {
+  return value.toISOString().slice(0, 10);
+}
+
+function fbsMoscowDateOnly(value: Date) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Moscow',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  })
+    .formatToParts(value)
+    .reduce<Record<string, string>>(
+      (result, part) => ({ ...result, [part.type]: part.value }),
+      {},
+    );
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function normalizeWbFbsDate(value: string | null) {
+  const normalized = value?.trim() ?? '';
+  const isoMatch = normalized.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+  const ruMatch = normalized.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  return ruMatch ? `${ruMatch[3]}-${ruMatch[2]}-${ruMatch[1]}` : '';
 }
 
 function fileTimestamp(value: Date) {

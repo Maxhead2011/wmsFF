@@ -27,6 +27,79 @@ function withBillingTransactionMock<T extends object>(db: T) {
 }
 
 describe('MarketplaceConnectionsService', () => {
+  it('blocks delivery when the selected office differs from the live WB destination', async () => {
+    // TEST: an incompatible office must fail before PATCH /deliver.
+    const order = fbsOrder({ officeId: '123', supplyId: 'WB-GI-1' });
+    const response = {
+      client: { id: 'client-1', code: 'CL-1', name: 'Клиент' },
+      connected: true,
+      connections: [],
+      fetchedAt: '2026-09-01T08:00:00.000Z',
+      deliveryPlan: {
+        destination: FbsDeliveryDestination.VNUKOVO_SORTING_CENTER,
+        itemsPerCargoPlace: FBS_UNLIMITED_CARGO_PLACE_CAPACITY,
+        requiresCargoPlaces: false,
+      },
+      counts: { active: 1, shipped: 0, cancelled: 0, archive: 0, all: 1 },
+      orders: [order],
+    };
+    const service = new MarketplaceConnectionsService(
+      {} as never,
+      { requireClientAccess: vi.fn() } as never,
+    );
+    vi.spyOn(service as any, 'refreshFbsOrdersCache').mockResolvedValue(response);
+    vi.spyOn(service as any, 'resolveSelectedFbsOrders').mockResolvedValue({ response, orders: [order] });
+    vi.spyOn(service as any, 'loadSelectedConnections').mockResolvedValue([
+      { id: 'connection-1', apiKey: 'secret-key' },
+    ]);
+    const fetchMock = vi.fn(async (input: string | URL | Request) => ({
+      ok: true,
+      status: 200,
+      json: async () => String(input).endsWith('/api/v3/offices')
+        ? [{ id: 123, name: 'Коледино', city: 'Подольск' }]
+        : { destinationOfficeId: 123 },
+    } as Response));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      service.deliverFbsSupplies(
+        {
+          clientId: 'client-1',
+          orders: [{ connectionId: 'connection-1', id: order.id }],
+          destinationOfficeId: '456',
+          plannedDeliveryDate: '2099-09-02',
+        },
+        { id: 'user-1', name: 'Менеджер' } as never,
+      ),
+    ).rejects.toThrow('Выбранный склад не совпадает');
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/deliver'))).toBe(false);
+  });
+  // TEST: duplicate active Ozon connections return the same posting twice and
+  // used to double the requested quantity in one FBS request.
+  it('rejects a second active Ozon connection with the same Client-Id', async () => {
+    const findFirst = vi.fn().mockResolvedValue({ id: 'existing-ozon-connection' });
+    const service = new MarketplaceConnectionsService({
+      clientMarketplaceConnection: { findFirst },
+    } as never, {} as never);
+
+    await expect(
+      (service as any).requireUniqueActiveOzonSeller({
+        clientId: 'client-bushkova',
+        marketplace: MarketplaceType.OZON,
+        sellerId: ' 4732619 ',
+        isActive: true,
+      }),
+    ).rejects.toThrow('Ozon Client-Id 4732619 уже подключён');
+    expect(findFirst).toHaveBeenCalledWith({
+      where: {
+        clientId: 'client-bushkova',
+        marketplace: MarketplaceType.OZON,
+        sellerId: '4732619',
+        isActive: true,
+      },
+      select: { id: true },
+    });
+  });
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -7405,7 +7478,6 @@ describe('MarketplaceConnectionsService', () => {
 
   it('records the user who sent an FBS supply to Wildberries', async () => {
     // TEST: current live delivery requires its actual office plus an explicit logistics date.
-    const liveBaseline = process.env.WMS_TEST_OUR_LIVE_BASELINE === 'true';
     const order = fbsOrder({
       id: '5355000001',
       supplyId: 'WB-GI-1',
@@ -7454,7 +7526,7 @@ describe('MarketplaceConnectionsService', () => {
       orders: [order],
     });
     vi.spyOn(service as any, 'assertFbsDeliveryReadiness').mockResolvedValue(undefined);
-    if (liveBaseline) vi.spyOn(service as any, 'resolveFbsSupplyDeliveryOptions').mockResolvedValue({
+    vi.spyOn(service as any, 'resolveFbsSupplyDeliveryOptions').mockResolvedValue({
       blockers: [], requiredDestinationOfficeId: '123', offices: [{ id: '123', name: 'Synthetic WB office' }],
     });
     vi.spyOn(service as any, 'loadSelectedConnections').mockResolvedValue([
@@ -7474,7 +7546,7 @@ describe('MarketplaceConnectionsService', () => {
         {
           clientId: 'client-1',
           orders: [{ connectionId: 'connection-1', id: order.id }],
-          ...(liveBaseline ? { destinationOfficeId: '123', plannedDeliveryDate: '2099-09-08' } : {}),
+          destinationOfficeId: '123', plannedDeliveryDate: '2099-09-08',
         },
         {
           id: 'user-1',
@@ -7495,7 +7567,7 @@ describe('MarketplaceConnectionsService', () => {
         sentToWbAt: expect.any(Date),
         sentToWbByUserId: 'user-1',
         sentToWbByName: 'Иван Петров',
-        ...(liveBaseline ? { destinationOfficeId: '123', destinationOfficeName: 'Synthetic WB office', plannedDeliveryDate: expect.any(Date) } : {}),
+        destinationOfficeId: '123', destinationOfficeName: 'Synthetic WB office', plannedDeliveryDate: new Date('2099-09-08T00:00:00Z'),
       },
     });
     expect(prisma.auditLog.create).toHaveBeenCalledWith({
