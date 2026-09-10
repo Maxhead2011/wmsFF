@@ -6,6 +6,8 @@ import {
   IsArray,
   IsBoolean,
   IsEnum,
+  IsISO8601,
+  Matches,
   IsOptional,
   IsString,
   Length,
@@ -56,6 +58,17 @@ export class FbsOrderSelectionDto {
   @IsOptional()
   @IsEnum(FbsDeliveryDestination)
   deliveryDestination?: FbsDeliveryDestination;
+
+  // FIX: restore the deployed destination/date contract alongside billing.
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  @Length(1, 20)
+  destinationOfficeId?: string;
+
+  @IsOptional()
+  @IsISO8601({ strict: true })
+  plannedDeliveryDate?: string;
 
   @IsOptional()
   @IsString()

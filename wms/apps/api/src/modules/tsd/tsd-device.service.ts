@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
-import { ClientStatus, Prisma, TsdDeviceStatus, TsdOperationStatus, UserStatus } from '@prisma/client';
+import { ClientRequestStatus, ClientStatus, Prisma, TsdDeviceStatus, TsdOperationStatus, UserStatus } from '@prisma/client';
 import { randomBytes, randomUUID } from 'crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AccessTokenService } from '../auth/access-token.service';
@@ -13,6 +13,11 @@ import { TsdMonitorMessages } from './tsd-monitor-messages';
 const FBS_TSD_RESERVED_STATUS = 'RESERVED';
 const FBS_TSD_AUTO_RESERVATION_DEVICE = 'AUTO:FBS:PALLET_SORT';
 const TSD_PHYSICAL_INSTALLATION_PREFIX = 'TSD-INSTALL-';
+const TSD_CLOSED_REQUEST_STATUSES = [
+  ClientRequestStatus.DONE,
+  ClientRequestStatus.CANCELLED,
+  ClientRequestStatus.REJECTED,
+];
 
 @Injectable()
 export class TsdDeviceService {
@@ -487,26 +492,99 @@ export class TsdDeviceService {
         if (!current || current.status !== TsdDeviceStatus.ACTIVE) {
           throw new UnauthorizedException('Этот физический ТСД заблокирован или удалён.');
         }
+        // FIX: the original device name contains the first employee's name.
+        // Keep the physical suffix but always display the current employee.
+        const currentEmployeeDeviceName = `${user.name} · ${current.code.slice(-8)}`;
+        // FIX: a closed/deleted request must never follow the physical TSD to
+        // every employee who signs in later. Preserve its scan evidence for
+        // manager review, but remove the stale lease from the handheld.
+        const assignedTasks = await tx.fbsTsdAssembly.findMany({
+          where: {
+            deviceCode: current.code,
+            workerUserId: current.userId,
+            status: 'IN_PROGRESS',
+          },
+          select: { id: true, requestId: true },
+        });
+        const assignedRequestIds = [...new Set(assignedTasks.map((task) => task.requestId))];
+        const openRequests = assignedRequestIds.length
+          ? await tx.clientRequest.findMany({
+              where: {
+                id: { in: assignedRequestIds },
+                status: { notIn: TSD_CLOSED_REQUEST_STATUSES },
+              },
+              select: { id: true },
+            })
+          : [];
+        const openRequestIds = new Set(openRequests.map((request) => request.id));
+        const liveTaskIds = assignedTasks
+          .filter((task) => openRequestIds.has(task.requestId))
+          .map((task) => task.id);
+        const staleTaskIds = assignedTasks
+          .filter((task) => !openRequestIds.has(task.requestId))
+          .map((task) => task.id);
+        const parkedStaleTasks = staleTaskIds.length
+          ? await tx.fbsTsdAssembly.updateMany({
+              where: {
+                id: { in: staleTaskIds },
+                deviceCode: current.code,
+                workerUserId: current.userId,
+                status: 'IN_PROGRESS',
+              },
+              data: {
+                status: 'RETURN_REQUIRED',
+                deviceCode: FBS_TSD_AUTO_RESERVATION_DEVICE,
+                workerUserId: null,
+                workerName: null,
+                errorMessage:
+                  'Задание снято с ТСД: исходная FBS-заявка уже закрыта или удалена.',
+              },
+            })
+          : { count: 0 };
+        if (parkedStaleTasks.count > 0) {
+          await tx.auditLog.create({
+            data: {
+              userId: user.id,
+              action: 'TSD_STALE_FBS_TASKS_PARKED',
+              entity: 'TsdDevice',
+              entityId: current.id,
+              payload: {
+                deviceCode: current.code,
+                previousUserId: current.userId,
+                staleTaskIds,
+                parkedTasks: parkedStaleTasks.count,
+              },
+            },
+          });
+        }
         if (current.userId !== user.id) {
           const rebound = await tx.tsdDevice.updateMany({
             where: { id: current.id, userId: current.userId, status: TsdDeviceStatus.ACTIVE },
-            data: { userId: user.id, lastLoginAt: new Date(), lastSeenAt: new Date() },
+            data: {
+              userId: user.id,
+              name: currentEmployeeDeviceName,
+              lastLoginAt: new Date(),
+              lastSeenAt: new Date(),
+            },
           });
           if (rebound.count !== 1) {
             throw new UnauthorizedException('Сотрудник на этом ТСД уже изменился. Повторите вход.');
           }
-          const movedTasks = await tx.fbsTsdAssembly.updateMany({
-            where: {
-              deviceCode: current.code,
-              workerUserId: current.userId,
-              status: 'IN_PROGRESS',
-            },
-            data: {
-              workerUserId: user.id,
-              workerName: user.name,
-              errorMessage: null,
-            },
-          });
+          const movedTasks = liveTaskIds.length
+            ? await tx.fbsTsdAssembly.updateMany({
+                where: {
+                  id: { in: liveTaskIds },
+                  deviceCode: current.code,
+                  workerUserId: current.userId,
+                  status: 'IN_PROGRESS',
+                },
+                data: {
+                  workerUserId: user.id,
+                  workerName: user.name,
+                  errorMessage: null,
+                },
+              })
+            : { count: 0 };
           await tx.auditLog.create({
             data: {
               userId: user.id,
@@ -518,13 +596,18 @@ export class TsdDeviceService {
                 previousUserId: current.userId,
                 nextUserId: user.id,
                 movedFbsTasks: movedTasks.count,
+                parkedStaleFbsTasks: parkedStaleTasks.count,
               },
             },
           });
         } else {
           await tx.tsdDevice.update({
             where: { id: current.id },
-            data: { lastLoginAt: new Date(), lastSeenAt: new Date() },
+            data: {
+              name: currentEmployeeDeviceName,
+              lastLoginAt: new Date(),
+              lastSeenAt: new Date(),
+            },
           });
         }
         const reboundDevice = await tx.tsdDevice.findUnique({

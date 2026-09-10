@@ -5797,16 +5797,13 @@ export function validateBoxWeight(
 
   const calculatedWeightGrams = items.reduce((sum, item) => sum + (item.skuWeightGrams ?? 0) * item.quantity, 0);
   if (calculatedWeightGrams > MAX_BOX_WEIGHT_GRAMS) {
-    if (!allowOverweightPackages) {
-      throw new BadRequestException(`Расчетный вес короба ${packageCode} превышает 25 кг.`);
-    }
-    // FIX: разрешаем только повторное закрытие с явным подтверждением из web.
+    // FIX: справочный расчёт по карточкам SKU не должен блокировать фактически собранный короб.
     return {
       calculatedWeightGrams,
       warnings: [
         {
-          code: 'BOX_WEIGHT_OVER_LIMIT_CONFIRMED',
-          message: `Расчетный вес короба ${packageCode} превышает 25 кг; перевес подтвержден менеджером.`,
+          code: 'BOX_CALCULATED_WEIGHT_OVER_LIMIT',
+          message: `Расчетный вес короба ${packageCode} превышает 25 кг; закрытие разрешено с предупреждением.`,
           limitGrams: MAX_BOX_WEIGHT_GRAMS,
         },
       ],
