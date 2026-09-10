@@ -1,3 +1,5 @@
+// FIX: keep reshipment alongside the deployed FBS delivery controls.
+import { FbsReshipmentPanel } from './FbsReshipmentPanel';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -1836,6 +1838,10 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
             ) : null}
           </div> : null}
         </div>
+
+        {marketplace === 'WILDBERRIES' && activeView === 'active' && selectedClientId ? (
+          <FbsReshipmentPanel session={session} clientId={selectedClientId} onOpenRequest={onOpenRequest} />
+        ) : null}
 
         {marketplace === 'WILDBERRIES' && activeView === 'active' && selectedClientId ? (
           <section className="fbs-supply-request-audit" aria-label="Проверка поставок WB и заявок WMS">

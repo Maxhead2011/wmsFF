@@ -2590,6 +2590,48 @@ model FbsRepeatAssemblyRun {
   createdAt        DateTime @default(now())
 }
 
+// FIX: durable saga before any WB mutation. Original physical attempts remain
+// immutable JSON evidence; SAME_ITEM does not duplicate their analytics rows.
+model FbsReshipmentRun {
+  id              String   @id @default(uuid())
+  fingerprint     String   @unique
+  previewToken    String
+  clientId        String
+  warehouseId     String
+  connectionId    String
+  mode            String
+  status          String   @default("PENDING")
+  phase           String   @default("PLANNED")
+  supplyName      String   @unique
+  supplyId        String?
+  requestId       String?  @unique
+  sourceRequestIds String[] @default([])
+  snapshot        Json
+  errorMessage    String?
+  leaseToken      String?
+  leaseUntil      DateTime?
+  createdByUserId  String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  claims          FbsReshipmentClaim[]
+
+  @@index([clientId, warehouseId, createdAt])
+  @@index([sourceRequestIds], type: Gin)
+}
+
+// FIX: overlapping selections and different modes cannot own the same cycle.
+model FbsReshipmentClaim {
+  id           String @id @default(uuid())
+  runId        String
+  connectionId String
+  orderId      String
+  cycle        String
+  run          FbsReshipmentRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+
+  @@unique([connectionId, orderId, cycle])
+  @@index([runId])
+}
+
 model FbsWebKizStickerPrint {
   id          String   @id @default(uuid())
   kiz         String   @unique

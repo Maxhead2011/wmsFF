@@ -8,6 +8,7 @@ import { physicalStockRecoveryEnabled } from '../stock/tsd-physical-stock-reconc
 import { recountHash } from '../stock/tsd-transfer-kiz-recount';
 import { fbsTerminalQueueFilterEnabled, isFbsTerminalQueueOrder } from '../../common/fbs-terminal-queue';
 import { appendFbsAttemptHistory, readFbsAttemptHistory, hasFbsAttemptHistory, restoreAttemptSnapshot } from '../../common/shipment-history/fbs-attempt-history';
+import { recordReshipmentTransition } from './fbs-reshipment-transition';
 import { fbsAttemptPageWindow, mergeFbsAttemptPage } from '../../common/shipment-history/fbs-attempt-page';
 import { isDeepStrictEqual } from 'node:util';
 import {
@@ -21862,6 +21863,125 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return result;
   }
 
+  // FIX: isolated, fresh WB reshipment gateway. Discovery never invokes global
+  // reconciliation; mutating calls are single-shot and recovered by the journal.
+  private authorizeReshipmentGateway(clientId: string, user: AuthUser) {
+    if (process.env.WMS_FBS_RESHIPMENT_ENABLED !== 'true') {
+      throw new ForbiddenException('Повторная отгрузка не включена для этой WMS.');
+    }
+    requireFbsEmergencyAssemblyAccess(user);
+    this.clientScopes.requireClientAccess(user, clientId, 'write');
+  }
+
+  private async reshipmentConnection(clientId: string, connectionId: string, user: AuthUser) {
+    this.authorizeReshipmentGateway(clientId, user);
+    const connection = await this.prisma.clientMarketplaceConnection.findFirst({
+      where: { id: connectionId, clientId, marketplace: MarketplaceType.WILDBERRIES, isActive: true },
+    });
+    if (!connection) throw new BadRequestException('Действующее подключение WB не найдено.');
+    return connection;
+  }
+
+  private reshipmentOrderId(value: unknown) {
+    const id = textValue(value);
+    if (!/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id))) {
+      throw new BadRequestException('Некорректный номер заказа WB в переотгрузке.');
+    }
+    return id;
+  }
+
+  async readReshipmentWbCandidates(clientId: string, user: AuthUser) {
+    this.authorizeReshipmentGateway(clientId, user);
+    const connections = await this.prisma.clientMarketplaceConnection.findMany({
+      where: { clientId, marketplace: MarketplaceType.WILDBERRIES, isActive: true },
+    });
+    const result: Array<{ id: string; connectionId: string; supplyId: string }> = [];
+    for (const connection of connections) {
+      const payload = await marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/supplies/orders/reshipment', {
+        method: 'GET', headers: wbHeaders(connection.apiKey), signal: AbortSignal.timeout(20_000),
+      });
+      if (!Array.isArray(payload.orders)) throw new BadRequestException('WB не вернул полный список переотгрузки. Повторите проверку.');
+      const seen = new Map<string, string>();
+      for (const raw of payload.orders) {
+        const row = asRecord(raw);
+        const id = this.reshipmentOrderId(row.orderID ?? row.orderId);
+        const supplyId = textValue(row.supplyID ?? row.supplyId);
+        if (!supplyId || (seen.has(id) && seen.get(id) !== supplyId)) throw new BadRequestException('WB вернул противоречивую исходную поставку.');
+        if (seen.has(id)) continue;
+        seen.set(id, supplyId);
+        result.push({ id, connectionId: connection.id, supplyId });
+      }
+    }
+    return result;
+  }
+
+  async createReshipmentWbSupply(clientId: string, connectionId: string, name: string, user: AuthUser) {
+    const connection = await this.reshipmentConnection(clientId, connectionId, user);
+    if (!name || name.length > 128) throw new BadRequestException('Некорректное имя поставки переотгрузки.');
+    const payload = await marketplaceJsonOnce('https://marketplace-api.wildberries.ru/api/v3/supplies', {
+      method: 'POST', headers: wbHeaders(connection.apiKey), body: JSON.stringify({ name }), signal: AbortSignal.timeout(20_000),
+    });
+    const id = textValue(payload.id);
+    if (!id) throw new BadRequestException('WB не вернул номер созданной поставки. Требуется сверка операции.');
+    return id;
+  }
+
+  async readReshipmentWbSupply(clientId: string, connectionId: string, supplyId: string, user: AuthUser) {
+    const connection = await this.reshipmentConnection(clientId, connectionId, user);
+    if (!supplyId) throw new BadRequestException('Не указана поставка переотгрузки.');
+    const headers = wbHeaders(connection.apiKey);
+    const info = await marketplaceJson(`https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(supplyId)}`, {
+      method: 'GET', headers, signal: AbortSignal.timeout(20_000),
+    });
+    if (textValue(info.id) !== supplyId || typeof info.done !== 'boolean') throw new BadRequestException('WB не подтвердил состояние поставки.');
+    const membership = await marketplaceJson(`https://marketplace-api.wildberries.ru/api/marketplace/v3/supplies/${encodeURIComponent(supplyId)}/order-ids`, {
+      method: 'GET', headers, signal: AbortSignal.timeout(20_000),
+    });
+    if (!Array.isArray(membership.orderIds)) throw new BadRequestException('WB не подтвердил состав поставки.');
+    return { id: supplyId, done: info.done, orderIds: [...new Set(membership.orderIds.map(id => this.reshipmentOrderId(id)))] };
+  }
+
+  async findReshipmentWbSupply(clientId: string, connectionId: string, name: string, user: AuthUser) {
+    const connection = await this.reshipmentConnection(clientId, connectionId, user);
+    const seen = new Set<number>();
+    const matches = new Set<string>();
+    let next = 0;
+    for (let page = 0; page < 100; page++) {
+      if (seen.has(next)) throw new BadRequestException('WB повторяет страницу поставок. Сверка не завершена.');
+      seen.add(next);
+      const payload = await marketplaceJson(`https://marketplace-api.wildberries.ru/api/v3/supplies?limit=1000&next=${next}`, {
+        method: 'GET', headers: wbHeaders(connection.apiKey), signal: AbortSignal.timeout(20_000),
+      });
+      if (!Array.isArray(payload.supplies) || !Number.isSafeInteger(payload.next) || Number(payload.next) < 0) {
+        throw new BadRequestException('WB не подтвердил полноту списка поставок.');
+      }
+      for (const raw of payload.supplies) {
+        const supply = asRecord(raw);
+        if (supply.name === name) {
+          const id = textValue(supply.id);
+          if (!id) throw new BadRequestException('У найденной поставки WB нет номера.');
+          matches.add(id);
+        }
+      }
+      if (matches.size > 1) throw new BadRequestException('Найдено несколько поставок этой операции. Требуется проверка.');
+      next = Number(payload.next);
+      if (next === 0) {
+        const id = [...matches][0];
+        return id ? this.readReshipmentWbSupply(clientId, connectionId, id, user) : null;
+      }
+    }
+    throw new BadRequestException('Список поставок WB слишком большой: сверка не завершена, новая поставка не создавалась.');
+  }
+
+  async addReshipmentWbOrders(clientId: string, connectionId: string, supplyId: string, orderIds: string[], user: AuthUser) {
+    const connection = await this.reshipmentConnection(clientId, connectionId, user);
+    const ids = orderIds.map(id => this.reshipmentOrderId(id));
+    if (!supplyId || !ids.length || ids.length > 100 || new Set(ids).size !== ids.length) throw new BadRequestException('Выберите от 1 до 100 неповторяющихся заказов.');
+    await marketplaceJsonOnce(`https://marketplace-api.wildberries.ru/api/marketplace/v3/supplies/${encodeURIComponent(supplyId)}/orders`, {
+      method: 'PATCH', headers: wbHeaders(connection.apiKey), body: JSON.stringify({ orders: ids.map(Number) }), signal: AbortSignal.timeout(20_000),
+    });
+  }
+
   async repeatAssemblyStockReservations(clientId: string, skuIds: string[], db: Prisma.TransactionClient) {
     return this.fbsTsdReservationRowsBySku({ clientId, skuIds, excludeTaskId: null }, db);
   }
@@ -23798,9 +23918,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const repeatRun = hasFbsAttemptHistory()
         ? await tx.fbsRepeatAssemblyRun.findUnique({ where: { requestId } })
         : null;
+      const reshipmentRun = ['true', 'read-only'].includes(process.env.WMS_FBS_RESHIPMENT_ENABLED ?? '')
+        ? await tx.fbsReshipmentRun.findUnique({ where: { requestId } }) : null;
+      const explicitBatch = repeatRun || reshipmentRun;
       // FIX: a repeat is an explicitly selected physical batch, not a mirror
       // of every order that later appears in one of its original WB supplies.
-      if (!repeatRun && FBS_REQUEST_COMPOSITION_STATUSES.has(requestHeader.status)) {
+      if (!explicitBatch && FBS_REQUEST_COMPOSITION_STATUSES.has(requestHeader.status)) {
         for (const order of additions) {
           const existing = await tx.fbsOrderRequestLink.findUnique({
             where: {
@@ -23927,6 +24050,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         }
         const hadSnapshot = Boolean(link.lastSeenAt);
         const snapshotChanged = !hadSnapshot || fbsOrderLinkChanged(link, order);
+        // FIX: retain proof of a WB return even after this synchronization replaces lastCategory.
+        if (hadSnapshot && snapshotChanged) await recordReshipmentTransition(tx, link, order, task);
         if (hadSnapshot && snapshotChanged) {
           statusChanges.push(fbsOrderLinkChangeText(link, order));
         }
@@ -24199,10 +24324,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const effectiveOrderIds = uniqueStrings(
         [...desiredItems.values()].flatMap((item) => item.orderIds),
       ).sort(naturalFbsIdCompare);
-      const nextTitle = repeatRun
+      const nextTitle = reshipmentRun ? request.title : repeatRun
         ? `Повторная сборка WB — ${effectiveOrderIds.length} заказов`
         : `FBS — ${effectiveOrderIds.length} заказ(а/ов)`;
-      const nextComment = repeatRun ? request.comment : fbsRequestCompositionComment(
+      const nextComment = explicitBatch ? request.comment : fbsRequestCompositionComment(
         effectiveOrderIds,
         request.comment,
       );

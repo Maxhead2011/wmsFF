@@ -12142,6 +12142,38 @@ export function createFbsRepeatAssembly(accessToken: string, selection: FbsRepea
   return request<{ status: string; request: { id: string; number: number } }>('/marketplace-connections/fbs/repeat-assembly', { method: 'POST', accessToken, body: selection });
 }
 
+// FIX: WB-only repeat delivery has its own discovery and durable operation contract.
+export type FbsReshipmentMode = 'SAME_ITEM' | 'NEW_ITEM';
+export type FbsReshipmentCandidate = {
+  id: string; connectionId: string; productName: string; article: string | null; barcode: string | null;
+  sourceRequestNumber: number | null; sourceSupplyId: string | null; assemblyStatus: string | null;
+  supplierStatus: string | null; wbStatus: string | null;
+  eligibleModes: FbsReshipmentMode[]; blockedReason: string | null;
+};
+export type FbsReshipmentRun = {
+  runId: string; status: 'CREATED' | 'NEEDS_RECONCILIATION' | 'PENDING'; mode: FbsReshipmentMode;
+  supplyId: string | null; requestId: string | null; requestNumber?: number | null; errorMessage: string | null;
+};
+export type FbsReshipmentSelection = { clientId: string; orders: Array<{ id: string; connectionId: string }>; mode: FbsReshipmentMode };
+export type FbsReshipmentPreview = {
+  orders: FbsReshipmentCandidate[]; orderCount: number; additionalUnits: number; previewToken: string; warning: string;
+};
+export function fetchFbsReshipmentCapabilities(accessToken: string) {
+  return request<{ enabled: boolean }>('/marketplace-connections/fbs/reshipment/capabilities', { accessToken });
+}
+export function checkFbsReshipment(accessToken: string, input: { clientId: string }) {
+  return request<{ candidates: FbsReshipmentCandidate[]; runs: FbsReshipmentRun[] }>('/marketplace-connections/fbs/reshipment/check', { method: 'POST', accessToken, body: input });
+}
+export function previewFbsReshipment(accessToken: string, input: FbsReshipmentSelection) {
+  return request<FbsReshipmentPreview>('/marketplace-connections/fbs/reshipment/preview', { method: 'POST', accessToken, body: input });
+}
+export function createFbsReshipment(accessToken: string, input: FbsReshipmentSelection & { previewToken: string; confirm: true }) {
+  return request<FbsReshipmentRun>('/marketplace-connections/fbs/reshipment/create', { method: 'POST', accessToken, body: input });
+}
+export function resumeFbsReshipment(accessToken: string, input: { clientId: string; runId: string }) {
+  return request<FbsReshipmentRun>('/marketplace-connections/fbs/reshipment/resume', { method: 'POST', accessToken, body: input });
+}
+
 async function request<T>(
   path: string,
   options: { method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: unknown; accessToken?: string } = {},
