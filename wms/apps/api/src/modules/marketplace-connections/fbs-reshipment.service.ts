@@ -5,6 +5,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { ClientScopeService } from '../auth/client-scope.service';
 import type { AuthUser } from '../auth/auth.types';
 import { MarketplaceConnectionsService } from './marketplace-connections.service';
+import { canUseFbsReshipment, requireFbsReshipmentClientAccess } from './fbs-reshipment-access';
 import { createRepeatAttemptData } from './fbs-repeat-assembly';
 import { assertReshipmentEnabled, reshipmentCycle, reshipmentEligibility, reshipmentFingerprint, reshipmentHash, reshipmentVisibility, supplyRecoveryAction, type ReshipmentMode } from './fbs-reshipment';
 import type { CheckFbsReshipmentDto, CreateFbsReshipmentDto, PreviewFbsReshipmentDto, ResumeFbsReshipmentDto } from './dto/fbs-reshipment.dto';
@@ -16,7 +17,6 @@ type JournalRow = { id: string; connectionId: string; cycle: string; taskId: str
   requestId: string; sourceSupplyId: string | null; taskRevision: string; linkRevision: string };
 type Delivery = Pick<FbsSupplyPlan, 'deliveryDestination' | 'marketplaceWarehouseId' | 'marketplaceWarehouseName' |
   'destinationOfficeId' | 'destinationOfficeName' | 'itemsPerCargoPlace'>;
-const allowed = (user: AuthUser) => !user.isDemo && user.roleCodes.some(role => ['ADMIN', 'OWNER'].includes(role));
 const identity = (order: OrderKey) => `${order.connectionId}:${order.id}`;
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 const linkRevision = (link: Link) => reshipmentHash([link.id, link.requestId, link.clientId, link.connectionId,
@@ -33,12 +33,12 @@ export class FbsReshipmentService {
     private readonly connections: MarketplaceConnectionsService) {}
 
   capabilities(user: AuthUser) {
-    return { enabled: allowed(user) && process.env.WMS_FBS_RESHIPMENT_ENABLED === 'true' };
+    return { enabled: canUseFbsReshipment(user) && process.env.WMS_FBS_RESHIPMENT_ENABLED === 'true' };
   }
 
   private async authorize(clientId: string, user: AuthUser) {
     assertReshipmentEnabled();
-    if (!allowed(user)) throw new ForbiddenException('Повторную отгрузку подтверждает администратор или владелец.');
+    requireFbsReshipmentClientAccess(user, clientId);
     this.scopes.requireClientAccess(user, clientId, 'write');
     const warehouseId = user.activeWarehouseId;
     if (!warehouseId || (user.writableWarehouseIds && !user.writableWarehouseIds.includes(warehouseId))) {
@@ -112,7 +112,7 @@ export class FbsReshipmentService {
       const connectionRows = values.filter(row => row.connectionId === connectionId);
       for (let offset = 0; offset < connectionRows.length; offset += 100) {
         const current = connectionRows.slice(offset, offset + 100);
-        const result = await this.connections.readRepeatAssemblyWbStatuses(clientId, connectionId, current.map(row => row.id), user);
+        const result = await this.connections.readReshipmentWbStatuses(clientId, connectionId, current.map(row => row.id), user);
         for (const row of current) { const status = result.get(row.id); if (status) statuses.set(identity(row), status); }
       }
     }
@@ -250,7 +250,7 @@ export class FbsReshipmentService {
   }
 
   private async freshStatuses(run: FbsReshipmentRun, rows: JournalRow[], user: AuthUser, mustConfirm = false) {
-    const statuses = await this.connections.readRepeatAssemblyWbStatuses(run.clientId, run.connectionId, rows.map(row => row.id), user);
+    const statuses = await this.connections.readReshipmentWbStatuses(run.clientId, run.connectionId, rows.map(row => row.id), user);
     for (const row of rows) {
       const status = statuses.get(row.id);
       if (!status || status.wbStatus !== 'waiting' || !(mustConfirm ? ['confirm'] : ['complete', 'confirm']).includes(status.supplierStatus)) {
@@ -378,7 +378,7 @@ export class FbsReshipmentService {
       const request = await tx.clientRequest.create({ data: { clientId: run.clientId, warehouseId: run.warehouseId,
         type: 'OUTBOUND', status: 'IN_WORK', priority: 'HIGH', title: `${run.mode === 'SAME_ITEM' ? 'Довоз собранного' : 'Повторная сборка'} WB — ${rows.length} заказов`,
         destinationCity: 'Повторная отгрузка WB', comment: `Поставка WB: ${run.supplyId}. Исходные заявки: ${sourceNumbers.join(', ')}. ` +
-          (run.mode === 'SAME_ITEM' ? 'ДОВОЗ УЖЕ СОБРАННОГО. Прежние КИЗ и списания сохранены; второй отбор запрещён.' : 'НОВЫЙ ФИЗИЧЕСКИЙ ОТБОР. Дополнительный расход подтверждён администратором; списание только при сканировании.'),
+          (run.mode === 'SAME_ITEM' ? 'ДОВОЗ УЖЕ СОБРАННОГО. Прежние КИЗ и списания сохранены; второй отбор запрещён.' : 'НОВЫЙ ФИЗИЧЕСКИЙ ОТБОР. Дополнительный расход подтверждён пользователем; списание только при сканировании.'),
         createdByUserId: user.id, items: { create: [...groups.values()] } }, include: { items: true } });
       for (const { task, link } of selected) {
         const item = request.items.find(item => item.skuId === task.skuId)!;

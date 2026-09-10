@@ -9,6 +9,7 @@ import { recountHash } from '../stock/tsd-transfer-kiz-recount';
 import { fbsTerminalQueueFilterEnabled, isFbsTerminalQueueOrder } from '../../common/fbs-terminal-queue';
 import { appendFbsAttemptHistory, readFbsAttemptHistory, hasFbsAttemptHistory, restoreAttemptSnapshot } from '../../common/shipment-history/fbs-attempt-history';
 import { recordReshipmentTransition } from './fbs-reshipment-transition';
+import { requireFbsReshipmentClientAccess } from './fbs-reshipment-access';
 import { fbsAttemptPageWindow, mergeFbsAttemptPage } from '../../common/shipment-history/fbs-attempt-page';
 import { isDeepStrictEqual } from 'node:util';
 import {
@@ -21848,12 +21849,22 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       where: { id: connectionId, clientId, marketplace: MarketplaceType.WILDBERRIES, isActive: true },
     });
     if (!connection) throw new BadRequestException('Действующее подключение WB не найдено.');
+    return this.readWbStatusesForConnection(connection.apiKey, orderIds);
+  }
+
+  // FIX: separate authorization boundary; never relax emergency assembly to enable self-service.
+  async readReshipmentWbStatuses(clientId: string, connectionId: string, orderIds: string[], user: AuthUser) {
+    const connection = await this.reshipmentConnection(clientId, connectionId, user);
+    return this.readWbStatusesForConnection(connection.apiKey, orderIds);
+  }
+
+  private async readWbStatusesForConnection(apiKey: string, orderIds: string[]) {
     const result = new Map<string, { supplierStatus: string; wbStatus: string }>();
     for (const ids of chunks(orderIds, 1000)) {
       const numericIds = ids.map(id => Number(id));
       if (numericIds.some(id => !Number.isSafeInteger(id) || id <= 0)) throw new BadRequestException('Некорректный номер заказа WB.');
       const response = await marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/orders/status', {
-        method: 'POST', headers: { Authorization: connection.apiKey, 'Content-Type': 'application/json' },
+        method: 'POST', headers: { Authorization: apiKey, 'Content-Type': 'application/json' },
         body: JSON.stringify({ orders: numericIds }),
       });
       for (const status of asArray<Record<string, unknown>>(response.orders)) {
@@ -21869,7 +21880,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (process.env.WMS_FBS_RESHIPMENT_ENABLED !== 'true') {
       throw new ForbiddenException('Повторная отгрузка не включена для этой WMS.');
     }
-    requireFbsEmergencyAssemblyAccess(user);
+    requireFbsReshipmentClientAccess(user, clientId);
     this.clientScopes.requireClientAccess(user, clientId, 'write');
   }
 
