@@ -2,6 +2,8 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import { requiresFbsReturnReceipt } from '../marketplace-connections/fbs-return-receipt';
 import { fbsTerminalQueueFilterEnabled, isFbsTerminalQueueOrder } from '../../common/fbs-terminal-queue';
+import { fbsManagerDisposition } from '../marketplace-connections/fbs-manager-decision';
+import { permanentStorageBoxesEnabled } from '../../common/boxes/box-code-policy.service';
 import {
   ClientRequestStatus,
   ClientRequestType,
@@ -866,11 +868,13 @@ export class TsdAssemblyService {
       this.prisma.fbsOrderRequestLink.findMany({
         where: {
           requestId,
-          syncStatus: { in: ['ACTIVE', 'RETURN_REQUIRED'] },
-          ...(!fbsTerminalQueueFilterEnabled() ? { lastCategory: { not: 'cancelled' } } : {}),
+          syncStatus: { in: ['ACTIVE', 'RETURN_REQUIRED', ...(permanentStorageBoxesEnabled() ? ['MANAGER_CONFIRMED_SHIPMENT', 'MANAGER_CONFIRMED_RETURN'] : [])] },
+          ...(!fbsTerminalQueueFilterEnabled() ? (permanentStorageBoxesEnabled()
+            ? { OR: [{ lastCategory: { not: 'cancelled' } }, { syncStatus: { in: ['MANAGER_CONFIRMED_SHIPMENT', 'MANAGER_CONFIRMED_RETURN'] } }] }
+            : { lastCategory: { not: 'cancelled' } }) : {}),
         },
         select: { orderId: true, connectionId: true, lastSkuId: true, lastItemCount: true,
-          marketplace: true, lastCategory: true, lastSupplierStatus: true, lastWbStatus: true },
+          marketplace: true, lastCategory: true, lastSupplierStatus: true, lastWbStatus: true, syncStatus: true },
         orderBy: { createdAt: 'asc' },
       }),
       this.prisma.fbsTsdAssembly.findMany({
@@ -1016,6 +1020,8 @@ export class TsdAssemblyService {
       syncIssue: row.errorMessage,
       // FIX: web clients request fresh receipt scans only when our installation requires them.
       requiresReturnReceipt: requiresFbsReturnReceipt(row),
+      // FIX: deferred receipt remains visible after the manager resolves the marketplace conflict.
+      managerDisposition: fbsManagerDisposition(savedLinks.find(link => link.connectionId === row.connectionId && link.orderId === row.orderId)?.syncStatus),
       returnRequiresKiz: row.requiresKiz || Boolean(row.kiz),
       workerName: row.workerName,
       completionSource: row.deviceCode.startsWith('SOS-WB:') ? 'SOS_WB' : 'STANDARD',
@@ -1050,7 +1056,8 @@ export class TsdAssemblyService {
     const cancelledReceiptKeys = new Set(terminalLinks.filter(link => link.lastCategory === 'cancelled' &&
       link.lastWbStatus?.trim().toLowerCase() !== 'sold').map(link => `${link.connectionId}:${link.orderId}`));
     const returnRequiredRows = rows.filter((row) => row.status === 'RETURN_REQUIRED' &&
-      (!terminalTaskIds.has(row.id) || (requiresFbsReturnReceipt(row) && cancelledReceiptKeys.has(`${row.connectionId}:${row.orderId}`))));
+      (facts.find(fact => fact.id === row.id)?.managerDisposition === 'AWAIT_RETURN_RECEIPT' ||
+       !terminalTaskIds.has(row.id) || (requiresFbsReturnReceipt(row) && cancelledReceiptKeys.has(`${row.connectionId}:${row.orderId}`))));
     const returnRequiredIds = new Set(returnRequiredRows.map(row => row.id));
     const handledRows = [...completedRows, ...returnRequiredRows];
     const handledOrderIds = new Set(handledRows.map((row) => row.orderId));

@@ -36,7 +36,7 @@ function fixture() {
       upsert: vi.fn(async ({ create }: any) => { available += create.quantity; return create; }) },
     productMark: { findFirst: vi.fn(async () => ({ ...mark })), updateMany: vi.fn(async ({ data }: any) => { Object.assign(mark, data); return { count: 1 }; }) },
     clientRequestBoxSelection: { findUnique: vi.fn(async () => ({ id: 'selection', quantity: 1 })), delete: vi.fn(), update: vi.fn() },
-    fbsCargoPlacePacking: { updateMany: vi.fn() }, clientRequestEvent: { create: vi.fn() }, auditLog: { create: vi.fn() },
+    fbsCargoPlacePacking: { updateMany: vi.fn() }, clientRequestEvent: { create: vi.fn() }, auditLog: { create: vi.fn(), findFirst: vi.fn(async () => null) },
   };
   const db = { ...tx, $transaction: async (fn: any) => {
     const before = structuredClone({ task, link, mark, packing, available, movements });
@@ -57,6 +57,93 @@ function fixture() {
 }
 
 describe('physically picked cancellation requires re-receipt', () => {
+  // TEST: a manager records the physical outcome without undoing the original pick.
+  it.each(['SHIP_WITH_WB_LABEL', 'AWAIT_RETURN_RECEIPT'])('accepts manager disposition %s without restoring stock', async pickedDisposition => {
+    const f = fixture(); const before = structuredClone(f.task); const markBefore = structuredClone(f.mark);
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);
+    const result = await f.apply({ action: 'MANAGER_CONFIRMED', comment: 'Фактическое решение', pickedDisposition });
+    expect(result.resolved).toBe(true);
+    expect(f.quantities()).toEqual([1, 0]); expect(f.mark).toEqual(markBefore);
+    expect(f.movements).toEqual([]); expect(fetchMock).not.toHaveBeenCalled();
+    expect(f.task).toMatchObject({ kiz: before.kiz, barcode: before.barcode, boxId: before.boxId,
+      completedAt: before.completedAt, wbMetaStatus: before.wbMetaStatus });
+    expect(f.task.status).toBe(pickedDisposition === 'SHIP_WITH_WB_LABEL' ? 'COMPLETED' : 'RETURN_REQUIRED');
+    expect(f.link.syncStatus).toBe(pickedDisposition === 'SHIP_WITH_WB_LABEL' ? 'MANAGER_CONFIRMED_SHIPMENT' : 'MANAGER_CONFIRMED_RETURN');
+    expect(f.tx.stockBalance.upsert).not.toHaveBeenCalled();
+    expect(f.tx.productMark.updateMany).not.toHaveBeenCalled();
+    expect(f.tx.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
+      action: 'FBS_SYNC_CONFLICT_MANAGER_CONFIRMED', payload: expect.objectContaining({ pickedDisposition, stockRestored: false }),
+    }) }));
+  });
+  // TEST: the deferred unit becomes available only on its later physical receipt, even after dispatch.
+  it('receives a manager-deferred unit later without restoring it twice', async () => {
+    const f = fixture();
+    await f.apply({ action: 'MANAGER_CONFIRMED', comment: 'Отложен без этикетки', pickedDisposition: 'AWAIT_RETURN_RECEIPT' });
+    expect(f.quantities()).toEqual([1, 0]);
+    f.request.status = 'DONE';
+    await f.apply();
+    expect(f.quantities()).toEqual([0, 1]); expect(f.mark.boxId).toBe('target');
+    expect(f.movements).toHaveLength(2);
+    await expect(f.apply()).rejects.toThrow();
+    expect(f.quantities()).toEqual([0, 1]); expect(f.movements).toHaveLength(2);
+  });
+  it.each(['SHIP_WITH_WB_LABEL', 'AWAIT_RETURN_RECEIPT'])('retries manager disposition %s without duplicate records', async pickedDisposition => {
+    const f = fixture(); const body = { action: 'MANAGER_CONFIRMED', comment: 'Проверено', pickedDisposition };
+    await f.apply(body); await f.apply(body);
+    expect(f.tx.auditLog.create).toHaveBeenCalledTimes(1);
+    expect(f.movements).toEqual([]); expect(f.quantities()).toEqual([1, 0]);
+  });
+  // TEST: removing dispatch demand at deferral must not subtract another unit on receipt.
+  it('subtracts the deferred selection only once across decision and receipt', async () => {
+    const f = fixture(); f.tx.clientRequestBoxSelection.findUnique.mockResolvedValue({ id: 'selection', quantity: 3 });
+    await f.apply({ action: 'MANAGER_CONFIRMED', comment: 'Отложен', pickedDisposition: 'AWAIT_RETURN_RECEIPT' });
+    await f.apply();
+    expect(f.tx.clientRequestBoxSelection.update).toHaveBeenCalledTimes(1);
+    expect(f.tx.clientRequestBoxSelection.update).toHaveBeenCalledWith({ where: { id: 'selection' }, data: { quantity: { decrement: 1 } } });
+  });
+  // TEST: a new WB snapshot must not release another unit's selection after deferral.
+  it.each(['RETURN_TO_STOCK', 'MANAGER_CONFIRMED'])('keeps selection released when a deferred conflict reopens: %s', async action => {
+    const f = fixture(); f.tx.clientRequestBoxSelection.findUnique.mockResolvedValue({ id: 'selection', quantity: 3 });
+    const decision = { action: 'MANAGER_CONFIRMED', comment: 'Отложен', pickedDisposition: 'AWAIT_RETURN_RECEIPT' };
+    await f.apply(decision);
+    f.tx.auditLog.findFirst.mockResolvedValue(f.tx.auditLog.create.mock.calls[0][0].data);
+    f.link.syncStatus = 'RETURN_REQUIRED';
+    await f.apply(action === 'RETURN_TO_STOCK' ? f.dto : decision);
+    expect(f.tx.clientRequestBoxSelection.update).toHaveBeenCalledTimes(1);
+    expect(f.quantities()).toEqual(action === 'RETURN_TO_STOCK' ? [0, 1] : [1, 0]);
+  });
+  // TEST: a previous physical attempt cannot suppress release of the current selection.
+  it.each(['older-pick', 'returned', 'reset'])('ignores stale selection-release evidence: %s', async kind => {
+    const f = fixture(); f.tx.clientRequestBoxSelection.findUnique.mockResolvedValue({ id: 'selection', quantity: 3 });
+    await f.apply({ action: 'MANAGER_CONFIRMED', comment: 'Отложен', pickedDisposition: 'AWAIT_RETURN_RECEIPT' });
+    const event = structuredClone(f.tx.auditLog.create.mock.calls[0][0].data);
+    if (kind === 'older-pick') event.payload.completedAt = '2026-09-05T10:00:00.000Z';
+    else event.action = kind === 'returned' ? 'FBS_SYNC_CONFLICT_RETURNED_TO_STOCK' : 'FBS_ASSEMBLY_ORDER_RESET';
+    f.tx.auditLog.findFirst.mockResolvedValue(event); f.link.syncStatus = 'RETURN_REQUIRED';
+    await f.apply();
+    expect(f.tx.clientRequestBoxSelection.update).toHaveBeenCalledTimes(2);
+  });
+  it.each([
+    { activeWarehouseId: 'foreign' }, { writableWarehouseIds: [] }, { isDemo: true }, { roleCodes: ['CLIENT'] },
+  ])('rejects manager decisions outside the permitted scope: %j', async override => {
+    const f = fixture();
+    await expect(f.apply({ action: 'MANAGER_CONFIRMED', comment: 'Проверено', pickedDisposition: 'AWAIT_RETURN_RECEIPT' }, { ...user, ...override })).rejects.toThrow();
+    expect(f.task.status).toBe('RETURN_REQUIRED'); expect(f.movements).toEqual([]);
+    expect(f.tx.auditLog.create).not.toHaveBeenCalled();
+  });
+  it('rejects a concurrent task change before acknowledging a pick', async () => {
+    const f = fixture();
+    f.tx.fbsTsdAssembly.findUnique.mockResolvedValueOnce({ ...f.task }).mockResolvedValue({ ...f.task, updatedAt: new Date('2026-09-07T10:00:00Z') });
+    await expect(f.apply({ action: 'MANAGER_CONFIRMED', comment: 'Проверено', pickedDisposition: 'SHIP_WITH_WB_LABEL' })).rejects.toThrow(/изменил|изменён|изменился/);
+    expect(f.tx.fbsTsdAssembly.update).not.toHaveBeenCalled();
+    expect(f.tx.auditLog.create).not.toHaveBeenCalled(); expect(f.movements).toEqual([]);
+  });
+  it('rolls back workflow acknowledgement if audit recording fails', async () => {
+    const f = fixture(); f.tx.auditLog.create.mockRejectedValue(new Error('audit unavailable'));
+    await expect(f.apply({ action: 'MANAGER_CONFIRMED', comment: 'Проверено', pickedDisposition: 'SHIP_WITH_WB_LABEL' })).rejects.toThrow('audit unavailable');
+    expect(f.task.status).toBe('RETURN_REQUIRED'); expect(f.link.syncStatus).toBe('RETURN_REQUIRED');
+    expect(f.quantities()).toEqual([1, 0]); expect(f.movements).toEqual([]);
+  });
   // TEST: repeat physical pick -> cancellation -> scanned receipt into the SAME storage cell.
   it('empties and refills a permanent cell twice without archiving it or duplicating stock/KIZ', async () => {
     const f = fixture();

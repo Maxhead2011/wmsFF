@@ -42,6 +42,31 @@ function fixture() {
 }
 afterEach(() => vi.unstubAllEnvs());
 describe('our WMS terminal-order queue isolation', () => {
+  // TEST: an acknowledged deferred unit stays visible for receipt, not for repeated collection.
+  it.each(['true', 'false'])('shows deferred manager returns with KIZ with terminal filter %s', async terminalFilter => {
+    vi.stubEnv('WMS_FBS_TERMINAL_QUEUE_FILTER_ENABLED', terminalFilter);
+    vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', 'true');
+    const f = fixture(); f.links[2].syncStatus = 'MANAGER_CONFIRMED_RETURN';
+    const result = await f.detail.loadFbsAssemblyFacts(f.request.id, f.rows);
+    expect(result.returnRequired.rows).toEqual([expect.objectContaining({ id: 'task-2',
+      managerDisposition: 'AWAIT_RETURN_RECEIPT', requiresReturnReceipt: true, kiz: 'physical-mark-keep' })]);
+    expect(result.notCollected.pendingOrderIds).not.toContain('order-2');
+    expect(f.db.fbsOrderRequestLink.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ syncStatus: { in: expect.arrayContaining(['MANAGER_CONFIRMED_RETURN', 'MANAGER_CONFIRMED_SHIPMENT']) } }),
+    }));
+    if (terminalFilter === 'false') expect(f.db.fbsOrderRequestLink.findMany.mock.calls[0][0].where.OR)
+      .toContainEqual({ syncStatus: { in: ['MANAGER_CONFIRMED_SHIPMENT', 'MANAGER_CONFIRMED_RETURN'] } });
+  });
+  it('retains manager-confirmed labelled shipment in completed facts without requiring return', async () => {
+    vi.stubEnv('WMS_FBS_TERMINAL_QUEUE_FILTER_ENABLED', 'true');
+    vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', 'true');
+    const f = fixture(); f.links[2].syncStatus = 'MANAGER_CONFIRMED_SHIPMENT'; f.tasks[2].status = 'COMPLETED';
+    const result = await f.detail.loadFbsAssemblyFacts(f.request.id, f.rows);
+    expect(result.rows.find(row => row.id === 'task-2')).toMatchObject({ status: 'COMPLETED',
+      managerDisposition: 'SHIP_WITH_WB_LABEL', kiz: 'physical-mark-keep' });
+    expect(result.returnRequired.rows).toEqual([]);
+    expect(f.db.stockBalance.update).not.toHaveBeenCalled();
+  });
   it('excludes terminal orders from request counters without altering history', async () => {
     vi.stubEnv('WMS_FBS_TERMINAL_QUEUE_FILTER_ENABLED', 'true');
     const f = fixture(); const before = structuredClone(f.tasks);
