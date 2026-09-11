@@ -46,6 +46,7 @@ import { InventoryLockService } from '../../common/inventory/inventory-lock.serv
 import { BoxCodePolicyService, permanentStorageBoxesEnabled, preserveEmptyStorageBox } from '../../common/boxes/box-code-policy.service';
 import { ArchivedEmptyBoxPalletDetachService } from '../../common/boxes/archived-empty-box-pallet-detach.service';
 import { requiresFbsReturnReceipt, validateFbsReturnReceipt, type FbsReturnReceipt } from './fbs-return-receipt';
+import { confirmFbsPickedManagerDecision, fbsManagerDisposition, wasFbsDispatchSelectionReleased } from './fbs-manager-decision';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService, type ClientFilter } from '../auth/client-scope.service';
@@ -12396,7 +12397,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new NotFoundException('Проблемный FBS-заказ в этой заявке не найден.');
     }
     this.clientScopes.requireClientAccess(user, task.clientId, 'write');
-    if (task.status !== FBS_TSD_RETURN_REQUIRED) {
+    if (task.status !== FBS_TSD_RETURN_REQUIRED && !(permanentStorageBoxesEnabled() && dto.action === FbsSyncConflictResolutionAction.MANAGER_CONFIRMED && task.status === 'COMPLETED')) {
       throw new BadRequestException(
         'Эта проблема уже решена или состояние заказа изменилось. Обновите заявку.',
       );
@@ -12413,6 +12414,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     });
     if (!link || link.requestId !== requestId) {
       throw new NotFoundException('Связь FBS-заказа с заявкой не найдена. Обновите заявку.');
+    }
+
+    // FIX: confirming a physical pick never runs the stock-return/KIZ-release workflow.
+    if (dto.action === FbsSyncConflictResolutionAction.MANAGER_CONFIRMED &&
+      (requiresFbsReturnReceipt(task) || fbsManagerDisposition(link.syncStatus))) {
+      const result = await confirmFbsPickedManagerDecision(this.prisma, task, link, dto, user);
+      this.fbsOrdersCache.delete(task.clientId);
+      this.fbsTsdRequestFallbackCache.delete(task.clientId);
+      return result;
     }
 
     // FIX: validate scans, branch/client access and placement before any external KIZ mutation.
@@ -12462,7 +12472,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         !freshTask ||
         !freshLink ||
         freshTask.status !== FBS_TSD_RETURN_REQUIRED ||
-        freshLink.syncStatus !== FBS_REQUEST_LINK_RETURN_REQUIRED
+        (freshLink.syncStatus !== FBS_REQUEST_LINK_RETURN_REQUIRED && fbsManagerDisposition(freshLink.syncStatus) !== 'AWAIT_RETURN_RECEIPT')
       ) {
         throw new BadRequestException(
           'Состояние заказа уже изменилось. Обновите заявку и проверьте результат.',
@@ -12474,7 +12484,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       if (receipt && freshTask.updatedAt.getTime() !== task.updatedAt.getTime()) {
         throw new BadRequestException('Заказ изменился. Обновите заявку и повторите приёмку.');
       }
-      if (freshTask.completedAt && freshTask.boxId) {
+      if (freshTask.completedAt && freshTask.boxId && !(await wasFbsDispatchSelectionReleased(tx, freshTask, freshLink))) {
         const selection = await tx.clientRequestBoxSelection.findUnique({
           where: {
             requestItemId_boxId: {
@@ -24037,6 +24047,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         .map((order) => order.id);
       const statusChanges: string[] = [];
       const conflicts: string[] = [];
+      let deferredManagerReturns = 0;
       let compositionLocked = request.status === ClientRequestStatus.PACKED;
 
       for (const link of liveLinks) {
@@ -24065,6 +24076,22 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         if (hadSnapshot && snapshotChanged) await recordReshipmentTransition(tx, link, order, task);
         if (hadSnapshot && snapshotChanged) {
           statusChanges.push(fbsOrderLinkChangeText(link, order));
+        }
+
+        // FIX: unchanged WB data cannot undo an explicit decision about physically deducted stock.
+        const managerDisposition = fbsManagerDisposition(link.syncStatus);
+        if (task && managerDisposition && !snapshotChanged) {
+          if (managerDisposition === 'SHIP_WITH_WB_LABEL') {
+            addFbsDesiredItem(desiredItems, desiredSkuByOrder, {
+              orderId: order.id, skuId: task.skuId,
+              barcode: jsonStringArray(task.barcodes)[0] ?? task.barcode,
+              name: task.productName, quantity: Math.max(1, task.itemCount),
+            });
+          } else {
+            // The unit stays deducted and traceable on the task, but is not dispatch demand.
+            deferredManagerReturns += 1;
+          }
+          continue;
         }
 
         if (order.category === 'cancelled') {
@@ -24411,7 +24438,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             clientId,
             eventType: ClientRequestEventType.STATUS_CHANGED,
             title: 'Заявка отменена после синхронизации FBS',
-            body: 'Все заказы группы отменены до начала физической сборки.',
+            body: deferredManagerReturns > 0
+              ? 'В группе не осталось заказов к отправке. Отложенные товары остаются списанными до отдельной повторной приёмки.'
+              : 'Все заказы группы отменены до начала физической сборки.',
             statusFrom: request.status,
             statusTo: ClientRequestStatus.CANCELLED,
           },

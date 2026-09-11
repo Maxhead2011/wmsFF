@@ -5,6 +5,12 @@ export enum FbsSyncConflictResolutionAction {
   MANAGER_CONFIRMED = 'MANAGER_CONFIRMED',
 }
 
+// FIX: an explicit physical outcome never implies receipt into available stock.
+export enum FbsPickedDisposition {
+  SHIP_WITH_WB_LABEL = 'SHIP_WITH_WB_LABEL',
+  AWAIT_RETURN_RECEIPT = 'AWAIT_RETURN_RECEIPT',
+}
+
 export class ResolveFbsSyncConflictDto {
   @IsEnum(FbsSyncConflictResolutionAction)
   action!: FbsSyncConflictResolutionAction;
@@ -13,6 +19,10 @@ export class ResolveFbsSyncConflictDto {
   @IsString()
   @MaxLength(1000)
   comment?: string;
+
+  @IsOptional()
+  @IsEnum(FbsPickedDisposition)
+  pickedDisposition?: FbsPickedDisposition;
 
   // FIX: scans are required by the service only for physically picked returns in our WMS.
   @IsOptional()

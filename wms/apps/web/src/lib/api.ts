@@ -2385,6 +2385,7 @@ export type TsdAssemblyPlan = {
         statusLabel: string;
         syncIssue: string | null;
         requiresReturnReceipt?: boolean;
+        managerDisposition?: FbsPickedDisposition;
         returnRequiresKiz?: boolean;
         workerName: string | null;
         completedAt: string | null;
@@ -10996,6 +10997,8 @@ export type FbsSyncConflictResolutionAction =
   | 'RETURN_TO_STOCK'
   | 'MANAGER_CONFIRMED';
 
+export type FbsPickedDisposition = 'SHIP_WITH_WB_LABEL' | 'AWAIT_RETURN_RECEIPT';
+
 export async function resolveTsdFbsSyncConflict(
   accessToken: string,
   requestId: string,
@@ -11003,6 +11006,7 @@ export async function resolveTsdFbsSyncConflict(
   payload: {
     action: FbsSyncConflictResolutionAction;
     comment?: string;
+    pickedDisposition?: FbsPickedDisposition;
     // FIX: physical return evidence, required server-side only with the WMSFF2207 flag.
     returnBoxCode?: string;
     returnBarcode?: string;
