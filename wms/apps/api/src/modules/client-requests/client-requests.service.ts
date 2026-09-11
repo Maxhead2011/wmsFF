@@ -1051,9 +1051,9 @@ export class ClientRequestsService {
         const rightConfirmed = right.confirmedOrderIds.length > 0 ? 0 : 1;
         return leftConfirmed - rightConfirmed || left.boxCode.localeCompare(right.boxCode, 'ru-RU');
       });
-    const resultBoxes = allCandidateBoxes.filter(
-      (box) => box.orderIds.length > 1 || box.confirmedOrderIds.length > 0,
-    );
+    // FIX: a free box for one unassigned order is also a valid assembly source.
+    // Eligibility and reservation checks have already been applied above.
+    const resultBoxes = allCandidateBoxes;
     const foundOrderIds = new Set(allCandidateBoxes.flatMap((box) => box.orderIds));
 
     const { storesWithoutBoxes: _storesWithoutBoxes, ...client } = request.client;
@@ -1164,7 +1164,7 @@ export class ClientRequestsService {
       ['Подтверждено через ТСД', data.summary.confirmedOrders],
       ['Сформировано', generatedAt],
       [],
-      ['Проверка', 'В файл включены только короба, общие для нескольких FBS-заказов, и короба, точно подтвержденные через ТСД.'],
+      ['Проверка', 'В файл включены короба со свободным товаром для одного или нескольких FBS-заказов и короба, подтвержденные через ТСД.'],
     ];
     const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
     summarySheet['!cols'] = [{ wch: 27 }, { wch: 92 }];

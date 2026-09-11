@@ -2656,7 +2656,8 @@ function FbsBoxSearchModal({
             <small>
               {state.request.client.name} · {withoutBoxes
                 ? 'поштучный учет без привязки к коробам и палет-сортам'
-                : 'показаны только короба, общие для нескольких заказов'}
+                // FIX: single-order candidates are included in the FBS box search.
+                : 'короба с товаром для одного или нескольких заказов'}
             </small>
           </div>
           <button className="icon-button" type="button" onClick={onClose} title="Закрыть" aria-label="Закрыть">
@@ -2745,7 +2746,9 @@ function FbsBoxSearchModal({
                         {box.confirmedOrderIds.length ? (
                           <span className="is-confirmed">Точно подтверждено ТСД: №{box.confirmedOrderIds.join(', №')}</span>
                         ) : (
-                          <span>В этом коробе совпали товары нескольких заказов</span>
+                          <span>{box.orderIds.length === 1
+                            ? 'В коробе есть свободный товар для этого заказа'
+                            : 'В этом коробе совпали товары нескольких заказов'}</span>
                         )}
                       </div>
                       <div className="fbs-box-search-card__items">
@@ -2773,7 +2776,7 @@ function FbsBoxSearchModal({
                       : 'Поштучного остатка по товарам этой заявки на складе нет.'
                     : state.data.boxes.length
                       ? 'По этому запросу короб не найден.'
-                      : 'Общих коробов для нескольких заказов этой заявки нет.'}
+                      : 'Коробов со свободным товаром или подтвержденным отбором для этой заявки нет.'}
                 </p>
               )}
 
