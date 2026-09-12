@@ -45,8 +45,18 @@ describe('explicit stock transfer eligibility', () => {
   it.each(['sold', 'sorted', 'canceled', 'accepted_by_carrier', 'ready_for_pickup'])('blocks WB %s', wbStatus => {
     expect(stockTransferBlockedReason(task, link, { supplierStatus: 'complete', wbStatus })).toBeTruthy();
   });
-  it.each(['barcode', 'sourceBarcode', 'boxId', 'kiz', 'cargoPackingId', 'stickerBarcode', 'startedAt', 'completedAt'])('preserves %s evidence', field => {
-    expect(stockTransferBlockedReason({ ...task, [field]: 'evidence' }, link, { supplierStatus: 'complete', wbStatus: 'waiting' })).toBeTruthy();
+  it.each(['barcode', 'sourceBarcode', 'boxId', 'kiz', 'cargoPackingId', 'stickerBarcode', 'stickerPartA', 'stickerPartB', 'completedAt', 'sourceBoxPending', 'relabelConfirmedAt', 'cargoPackedAt', 'marketplaceSubmittedAt'])('preserves %s evidence', field => {
+    expect(stockTransferBlockedReason({ ...task, startedAt: new Date('2026-09-04T16:48:58.961Z'), [field]: 'evidence' }, link, { supplierStatus: 'complete', wbStatus: 'waiting' })).toBeTruthy();
+  });
+  // TEST: claiming a task before stock ran out is not a physical scan (request 630).
+  it.each(['WAITING_STOCK', 'RESERVED', 'RELEASED'])('allows an unscanned %s task with an earlier start date', status => {
+    expect(stockTransferBlockedReason({ ...task, status, startedAt: new Date('2026-09-04T16:48:58.961Z') },
+      link, { supplierStatus: 'confirm', wbStatus: 'waiting' })).toBeNull();
+  });
+  // TEST: an actively claimed or completed task still cannot be transferred.
+  it.each(['IN_PROGRESS', 'RESCAN_REQUIRED', 'COMPLETED', 'RETURN_REQUIRED'])('blocks %s even without scans', status => {
+    expect(stockTransferBlockedReason({ ...task, status, startedAt: new Date('2026-09-04T16:48:58.961Z') },
+      link, { supplierStatus: 'confirm', wbStatus: 'waiting' })).toBeTruthy();
   });
   it.each(['REMOVED', 'MOVING', 'RETURN_REQUIRED'])('blocks %s links', syncStatus => {
     expect(stockTransferBlockedReason(task, { syncStatus }, { supplierStatus: 'complete', wbStatus: 'waiting' })).toBeTruthy();

@@ -14,9 +14,12 @@ export function stockTransferBlockedReason(task: FbsTsdAssembly, link: { syncSta
     return 'Исходная заявка уже упакована, закрыта или отменена.';
   }
   if (task.itemCount !== 1) return 'Перенос поддерживает поштучные заказы WB.';
+  // FIX: startedAt records a task claim, not a physical pick. Passive unscanned
+  // tasks can be transferred; active work and all scan/packing evidence still block it.
   if (!['WAITING_STOCK', 'RESERVED', 'RELEASED'].includes(task.status) || task.boxId || task.barcode ||
-    task.kiz || task.sourceBarcode || task.startedAt || task.completedAt || task.cargoPackingId || task.stickerBarcode ||
-    task.stickerPartA || task.stickerPartB) {
+    task.kiz || task.sourceBarcode || task.completedAt || task.cargoPackingId || task.stickerBarcode ||
+    task.stickerPartA || task.stickerPartB || task.sourceBoxPending || task.relabelConfirmedAt ||
+    task.cargoPackedAt || task.marketplaceSubmittedAt) {
     return 'Товар уже отбирали или упаковали. Сначала требуется решение менеджера по физической сборке.';
   }
   return null;
