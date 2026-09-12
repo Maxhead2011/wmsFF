@@ -28,10 +28,11 @@ export class SkuSortingService {
     private readonly boxCodes?: BoxCodePolicyService,
   ) {}
 
-  private async request(db: Prisma.TransactionClient, id: string, user: AuthUser) {
+  private async request(db: Prisma.TransactionClient, id: string, user: AuthUser,
+    statuses: ClientRequestStatus[] = ['APPROVED', 'IN_WORK', 'PACKED', 'DONE']) {
     if (!skuSortingAllowed(user, id)) throw new ForbiddenException('Единая сортировка недоступна для этой пары ТСД и заявки.');
     const request = await db.clientRequest.findFirst({ where: { id, type: 'SKU_COLLECTION',
-      status: { in: ['APPROVED', 'IN_WORK', 'PACKED', 'DONE'] } }, include: { skuCollectionSources: true } });
+      status: { in: statuses } }, include: { skuCollectionSources: true } });
     if (!request) throw new BadRequestException('Активная заявка сортировки не найдена.');
     this.scopes.requireClientAccess(user, request.clientId, 'write');
     if (!request.warehouseId || request.warehouseId !== user.activeWarehouseId ||
@@ -41,38 +42,79 @@ export class SkuSortingService {
     return request;
   }
 
+  // FIX: only our enabled sorting workflow exposes cancellation to warehouse staff.
+  cancelCapabilities(user: AuthUser) {
+    return { canCancel: process.env.WMS_SKU_SORTING_ENABLED === 'true' && !user.isDemo &&
+      !user.roleCodes?.includes('CLIENT') && user.permissionCodes.some(code => ['stock:write', 'system:admin'].includes(code)) };
+  }
+
+  async cancel(id: string, user: AuthUser) {
+    if (!this.cancelCapabilities(user).canCancel) throw new ForbiddenException('Снятие задачи сборки по SKU недоступно.');
+    return this.prisma.$transaction(async tx => {
+      // FIX: the same lock as TSD pick/move/receive prevents cancellation racing a physical scan.
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "ClientRequest" WHERE "id" = ${id} FOR UPDATE`);
+      const request = await this.request(tx, id, user, ['APPROVED', 'IN_WORK', 'PACKED', 'CANCELLED']);
+      if (request.status === 'CANCELLED') return { id, status: ClientRequestStatus.CANCELLED };
+      const previousStatus = request.status;
+      const unreceived = await tx.skuCollectionScan.count({ where: { requestId: id, status: 'PICKED' } });
+      if (unreceived || request.skuCollectionSources.some(source => source.pickedQuantity !== source.receivedQuantity)) {
+        throw new ConflictException('Есть изъятый товар без завершённой приёмки. Сначала разместите его в коробах по ШК и КИЗ, затем снимите задачу.');
+      }
+      const counting = await tx.inventoryAuditBox.findFirst({ where: {
+        boxId: { in: request.skuCollectionSources.map(source => source.sourceBoxId) }, status: 'COUNTING',
+      }, select: { id: true } });
+      if (counting) throw new ConflictException('В исходном коробе идёт пересчёт. Завершите проверку перед снятием задачи.');
+      if (!request.comment?.includes(marker)) await this.releaseLegacyReservation(tx, request);
+      await tx.clientRequest.update({ where: { id }, data: { status: 'CANCELLED', assignedToUserId: null } });
+      await tx.auditLog.create({ data: { userId: user.id, action: 'SKU_COLLECTION_CANCELLED', entity: 'ClientRequest', entityId: id,
+        payload: { clientId: request.clientId, warehouseId: request.warehouseId, previousStatus,
+          completedUnits: request.skuCollectionSources.reduce((sum, source) => sum + source.receivedQuantity, 0),
+          physicalMovementsPreserved: true, legacyReservationReleased: !request.comment?.includes(marker) } } });
+      await tx.clientRequestEvent.create({ data: { requestId: id, clientId: request.clientId, eventType: 'STATUS_CHANGED',
+        title: 'Задача сборки по SKU снята', body: 'Задача убрана из активной очереди ВМС и ТСД. Выполненные перемещения и история сохранены.',
+        statusFrom: previousStatus, statusTo: 'CANCELLED', createdByUserId: user.id } });
+      return { id, status: ClientRequestStatus.CANCELLED };
+    }, { isolationLevel: 'Serializable', timeout: 30000 });
+  }
+
+  // FIX: start and cancellation release the same provable legacy reserve under the request lock.
+  private async releaseLegacyReservation(tx: Prisma.TransactionClient, request: Prisma.ClientRequestGetPayload<{ include: { skuCollectionSources: true } }>) {
+    const id = request.id;
+    await this.assertMovementAllowed(tx);
+    for (const source of request.skuCollectionSources) {
+      const remaining = source.plannedQuantity - source.pickedQuantity;
+      if (remaining <= 0) continue;
+      const scope = { warehouseId: request.warehouseId!, clientId: request.clientId, skuId: source.skuId, boxId: source.sourceBoxId };
+      const [reserved, evidence, assembly] = await Promise.all([
+        tx.stockBalance.findMany({ where: { ...scope, status: 'RESERVED', quantity: { gt: 0 } } }),
+        tx.stockMovement.aggregate({ where: { ...scope, sourceDocument: id, type: 'RESERVE', status: 'RESERVED' }, _sum: { quantity: true } }),
+        tx.fbsTsdAssembly.findFirst({ where: { clientId: request.clientId, skuId: source.skuId,
+          status: { in: ['IN_PROGRESS', 'RETURN_REQUIRED'] }, OR: [{ boxId: source.sourceBoxId }, { reservedBoxId: source.sourceBoxId }] }, select: { id: true } }),
+      ]);
+      if (assembly || reserved.length !== 1 || reserved[0].quantity !== remaining ||
+          (evidence._sum.quantity ?? 0) - source.pickedQuantity !== remaining) {
+        throw new ConflictException(`Резерв короба ${source.sourceBoxCode} нельзя однозначно отнести к этой заявке. Остатки не изменены.`);
+      }
+      const row = reserved[0];
+      await tx.stockBalance.delete({ where: { id: row.id } });
+      const input = { ...scope, palletId: row.palletId, status: StockStatus.AVAILABLE };
+      await tx.stockBalance.upsert({ where: { balanceKey: this.balances.balanceKey(input) },
+        create: { ...input, balanceKey: this.balances.balanceKey(input), quantity: remaining }, update: { quantity: { increment: remaining } } });
+      await tx.stockMovement.createMany({ data: [
+        { ...scope, palletId: row.palletId, type: 'RESERVE', status: 'RESERVED', quantity: -remaining, sourceDocument: id, comment: 'Снятие собственного резерва: сортировка без блокировки продаж' },
+        { ...scope, palletId: row.palletId, type: 'RESERVE', status: 'AVAILABLE', quantity: remaining, sourceDocument: id, comment: 'Снятие собственного резерва: сортировка без блокировки продаж' },
+      ] });
+      await tx.productMark.updateMany({ where: { clientId: request.clientId, skuId: source.skuId, boxId: source.sourceBoxId, status: 'RESERVED' }, data: { status: 'AVAILABLE' } });
+    }
+  }
+
   async start(id: string, user: AuthUser) {
     // FIX: explicit POST, never a mutating GET. Release only a provable legacy reservation once.
     await this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "ClientRequest" WHERE "id" = ${id} FOR UPDATE`);
       const request = await this.request(tx, id, user);
       if (request.comment?.includes(marker)) return;
-      await this.assertMovementAllowed(tx);
-      for (const source of request.skuCollectionSources) {
-        const remaining = source.plannedQuantity - source.pickedQuantity;
-        if (remaining <= 0) continue;
-        const scope = { warehouseId: request.warehouseId!, clientId: request.clientId, skuId: source.skuId, boxId: source.sourceBoxId };
-        const [reserved, evidence, assembly] = await Promise.all([
-          tx.stockBalance.findMany({ where: { ...scope, status: 'RESERVED', quantity: { gt: 0 } } }),
-          tx.stockMovement.aggregate({ where: { ...scope, sourceDocument: id, type: 'RESERVE', status: 'RESERVED' }, _sum: { quantity: true } }),
-          tx.fbsTsdAssembly.findFirst({ where: { clientId: request.clientId, skuId: source.skuId,
-            status: { in: ['IN_PROGRESS', 'RETURN_REQUIRED'] }, OR: [{ boxId: source.sourceBoxId }, { reservedBoxId: source.sourceBoxId }] }, select: { id: true } }),
-        ]);
-        if (assembly || reserved.length !== 1 || reserved[0].quantity !== remaining ||
-            (evidence._sum.quantity ?? 0) - source.pickedQuantity !== remaining) {
-          throw new ConflictException(`Резерв короба ${source.sourceBoxCode} нельзя однозначно отнести к этой заявке. Остатки не изменены.`);
-        }
-        const row = reserved[0];
-        await tx.stockBalance.delete({ where: { id: row.id } });
-        const input = { ...scope, palletId: row.palletId, status: StockStatus.AVAILABLE };
-        await tx.stockBalance.upsert({ where: { balanceKey: this.balances.balanceKey(input) },
-          create: { ...input, balanceKey: this.balances.balanceKey(input), quantity: remaining }, update: { quantity: { increment: remaining } } });
-        await tx.stockMovement.createMany({ data: [
-          { ...scope, palletId: row.palletId, type: 'RESERVE', status: 'RESERVED', quantity: -remaining, sourceDocument: id, comment: 'Снятие собственного резерва: сортировка без блокировки продаж' },
-          { ...scope, palletId: row.palletId, type: 'RESERVE', status: 'AVAILABLE', quantity: remaining, sourceDocument: id, comment: 'Снятие собственного резерва: сортировка без блокировки продаж' },
-        ] });
-        await tx.productMark.updateMany({ where: { clientId: request.clientId, skuId: source.skuId, boxId: source.sourceBoxId, status: 'RESERVED' }, data: { status: 'AVAILABLE' } });
-      }
+      await this.releaseLegacyReservation(tx, request);
       await tx.clientRequest.update({ where: { id }, data: { comment: `${request.comment ?? ''}\n${marker}` } });
       await tx.auditLog.create({ data: { userId: user.id, action: 'SKU_SORTING_RESERVATION_RELEASED', entity: 'ClientRequest', entityId: id,
         payload: { warehouseId: request.warehouseId, clientId: request.clientId } } });

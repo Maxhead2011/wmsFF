@@ -15,6 +15,7 @@ import {
 import { InventoryService } from './inventory.service';
 import { CreateSkuCollectionDto, SearchSkuCollectionDto } from './dto/sku-collection.dto';
 import { SkuCollectionService } from './sku-collection.service';
+import { SkuSortingService } from './sku-sorting.service';
 
 @ApiTags('inventory')
 @RequirePermissions('stock:read')
@@ -23,7 +24,21 @@ export class InventoryController {
   constructor(
     private readonly inventory: InventoryService,
     private readonly skuCollections: SkuCollectionService,
+    private readonly skuSorting: SkuSortingService,
   ) {}
+
+  @Get('sku-collections/capabilities')
+  @RequirePermissions('stock:write')
+  skuCollectionCapabilities(@CurrentUser() user: AuthUser) {
+    return this.skuSorting.cancelCapabilities(user);
+  }
+
+  // FIX: dedicated cancellation preserves collection evidence and releases only its own reserves.
+  @Post('sku-collections/:id/cancel')
+  @RequirePermissions('stock:write')
+  cancelSkuCollection(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.skuSorting.cancel(id, user);
+  }
 
   @Get('sku-collections/search')
   searchSkuCollection(@Query() dto: SearchSkuCollectionDto, @CurrentUser() user: AuthUser) {
