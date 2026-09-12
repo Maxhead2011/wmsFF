@@ -1703,7 +1703,7 @@ export class AdministrationService {
     this.assertOwner(user);
     const [users, visibility] = await Promise.all([
       this.prisma.user.findMany({
-        where: { isDemo: Boolean(user.isDemo) },
+        where: { isDemo: Boolean(user.isDemo), status: { not: 'ARCHIVED' } },
         select: {
           id: true,
           email: true,

@@ -29,6 +29,13 @@ export class UsersController {
     return this.users.create(dto, user);
   }
 
+  // FIX: role/branch authorization is rechecked from the DB inside the transaction.
+  @Delete(':id')
+  @RequirePermissions('users:write')
+  deleteUser(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.users.deleteUser(id, user);
+  }
+
   @Patch(':id/client-scopes')
   @RequirePermissions('users:write')
   updateClientScopes(@Param('id') id: string, @Body() dto: UpdateUserClientScopesDto, @CurrentUser() user: AuthUser) {
