@@ -48,12 +48,31 @@ describe('WB reshipment gateway', () => {
   it('reads transfer eligibility and fresh stickers without image or key leakage', async () => {
     const f = fixture(); f.fetch.mockResolvedValueOnce(response({ orders: [{ id: 123, supplierStatus: 'complete', wbStatus: 'waiting', isTransferable: true }] }));
     expect((await f.service.readReshipmentWbStatuses('c', 'wb', ['123'], user)).get('123')?.isTransferable).toBe(true);
-    f.fetch.mockResolvedValueOnce(response({ stickers: [{ orderId: 123, barcode: '57884350051', file: 'image-data' }] }));
+    f.fetch.mockResolvedValueOnce(response({ stickers: [{ orderId: 123, partA: '5788435', partB: '0051', barcode: '*DWprgLsG', file: 'image-data' }] }));
     expect(await f.service.readReshipmentWbStickers('c', 'wb', ['123'], user)).toEqual(new Map([['123', '57884350051']]));
     f.fetch.mockResolvedValueOnce(response({ stickers: [] }));
     await expect(f.service.readReshipmentWbStickers('c', 'wb', ['123'], user)).rejects.toThrow('всех');
-    f.fetch.mockResolvedValueOnce(response({ stickers: [{ orderId: 456, barcode: '57884350051' }] }));
+    f.fetch.mockResolvedValueOnce(response({ stickers: [{ orderId: 456, partA: '5788435', partB: '0051', barcode: '*DWprgLsG' }] }));
     await expect(f.service.readReshipmentWbStickers('c', 'wb', ['123'], user)).rejects.toThrow('некорректные');
+  });
+
+  // TEST: real WB response uses encoded barcode; printable ID is partA + partB.
+  it('reads the production sticker shape and preserves leading zeros in partB', async () => {
+    const f = fixture();
+    f.fetch.mockResolvedValue(response({ stickers: [{ orderId: 5675266516, partA: '5762000', partB: '5051', barcode: '*DWprgLsG' },
+      { orderId: 123, partA: '5788435', partB: '0051', barcode: '!uKEtQZVx' }] }));
+    expect(await f.service.readReshipmentWbStickers('c', 'wb', ['5675266516', '123'], user))
+      .toEqual(new Map([['5675266516', '57620005051'], ['123', '57884350051']]));
+  });
+  it.each([{ partA: '', partB: '0051' }, { partA: '5788435' }, { partA: 'bad', partB: '0051' },
+    { partA: '5788435', partB: 51 }, { partA: '5788435', partB: '5e01' }])('rejects incomplete printable IDs without falling back to barcode: %j', async parts => {
+    const f = fixture(); f.fetch.mockResolvedValue(response({ stickers: [{ orderId: 123, barcode: '57884350051', ...parts }] }));
+    await expect(f.service.readReshipmentWbStickers('c', 'wb', ['123'], user)).rejects.toThrow();
+  });
+  it('rejects duplicate sticker rows even with valid printable IDs', async () => {
+    const f = fixture(); const row = { orderId: 123, partA: '5788435', partB: '0051', barcode: '*DWprgLsG' };
+    f.fetch.mockResolvedValue(response({ stickers: [row, row] }));
+    await expect(f.service.readReshipmentWbStickers('c', 'wb', ['123'], user)).rejects.toThrow();
   });
 
   it('discovers only WB reshipment IDs without refreshing or mutating WMS', async () => {

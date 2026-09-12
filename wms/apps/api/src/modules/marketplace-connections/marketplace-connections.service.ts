@@ -22025,9 +22025,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       if (!Array.isArray(payload.stickers)) throw new BadRequestException('WB не вернул стикеры выбранных заказов.');
       for (const raw of payload.stickers) {
         const sticker = asRecord(raw); const id = this.reshipmentOrderId(sticker.orderId);
-        const barcode = textValue(sticker.barcode);
-        if (!ids.includes(id) || result.has(id) || !/^[1-9]\d*$/.test(barcode)) throw new BadRequestException('WB вернул некорректные стикеры.');
-        result.set(id, barcode);
+        // FIX: WB barcode is encoded data; the printable sticker ID is partA + partB.
+        // Keep both parts as strings so leading zeros in the suffix are retained.
+        const partA = sticker.partA; const partB = sticker.partB;
+        const stickerId = typeof partA === 'string' && typeof partB === 'string' &&
+          /^[1-9]\d*$/.test(partA) && /^\d+$/.test(partB) ? partA + partB : '';
+        if (!ids.includes(id) || result.has(id) || !stickerId) throw new BadRequestException('WB вернул некорректные стикеры.');
+        result.set(id, stickerId);
       }
       if (ids.some(id => !result.has(id))) throw new BadRequestException('WB не подтвердил стикеры всех выбранных заказов.');
     }
