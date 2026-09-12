@@ -20,7 +20,7 @@ describe('transfer snapshot billing isolation', () => {
     const { service } = fixture(); const billing = { amountRub: 123, status: 'INVOICED' };
     const cached = { orders: [{ id: '5675266516', connectionId: 'wb', marketplace: 'WILDBERRIES', billing }] };
     service.fbsOrdersCache.set('client', { value: cached });
-    const result = await service.refreshFbsOrdersCache('client', { historyMode: 'cache-only', invalidateHistory: false, skipBillingSync: true });
+    const result = await service.refreshFbsOrdersCache('client', { historyMode: 'cache-only', invalidateHistory: false, billingMode: 'skip' });
     expect(result.orders[0]).toMatchObject({ id: '5675266516', supplierStatus: 'complete', wbStatus: 'waiting', billing });
     expect(service.ensureFbsProcessingCharges).not.toHaveBeenCalled(); expect(service.fetchWildberriesFbsOrders).toHaveBeenCalled();
     expect(service.fbsOrdersCache.get('client').value).toBe(cached);
@@ -37,7 +37,7 @@ describe('transfer snapshot billing isolation', () => {
     const financial = service.loadFbsOrders('client', undefined, { historyMode: 'cache-only' });
     await vi.waitFor(() => expect(service.ensureFbsProcessingCharges).toHaveBeenCalledTimes(1));
     try {
-      const operational = await Promise.race([service.loadFbsOrders('client', undefined, { historyMode: 'cache-only', skipBillingSync: true }),
+      const operational = await Promise.race([service.loadFbsOrders('client', undefined, { historyMode: 'cache-only', billingMode: 'skip' }),
         new Promise((_, reject) => setTimeout(() => reject(new Error('joined billing refresh')), 300))]);
       expect(operational.orders[0].id).toBe('5675266516');
       expect(service.ensureFbsProcessingCharges).toHaveBeenCalledTimes(1);

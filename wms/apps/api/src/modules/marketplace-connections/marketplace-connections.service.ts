@@ -18134,8 +18134,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   // FIX: use the existing our-WMS transfer gate; sold WMS keeps its original billing path.
-  private fbsTransferReadOptions(): { skipBillingSync?: boolean } {
-    return process.env.WMS_FBS_NO_STOCK_TRANSFER_ENABLED === 'true' ? { skipBillingSync: true } : {};
+  private fbsTransferReadOptions(): { billingMode?: 'sync' | 'skip' } {
+    return process.env.WMS_FBS_NO_STOCK_TRANSFER_ENABLED === 'true' ? { billingMode: 'skip' } : {};
   }
 
   // FIX: fresh, branch-scoped stock routing for an explicitly selected transfer.
@@ -19383,7 +19383,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           targetRequest.id,
         ]),
       );
-      if (this.fbsTransferReadOptions().skipBillingSync) this.fbsOrdersCache.delete(clientId);
+      if (this.fbsTransferReadOptions().billingMode === 'skip') this.fbsOrdersCache.delete(clientId);
       else this.fbsOrdersCache.set(clientId, {
         expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
         value: patchedResponse,
@@ -19442,7 +19442,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     // FIX: use the same complete snapshot that produced the operator's
     // selection. A forced WB refresh can temporarily omit existing supplies;
     // the proven move path below still performs its own safety validation.
-    const selectionResponse = this.fbsTransferReadOptions().skipBillingSync
+    const selectionResponse = this.fbsTransferReadOptions().billingMode === 'skip'
       ? await this.loadFbsOrders(clientId, undefined, this.fbsTransferReadOptions())
       : await this.loadFbsOrders(clientId);
     const { orders: selectedOrders } = await this.resolveSelectedFbsOrders(
@@ -23550,7 +23550,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   private async refreshFbsOrdersCache(
     clientId: string,
-    options: { invalidateHistory?: boolean; historyMode?: FbsOrderHistoryMode; skipBillingSync?: boolean } = {},
+    options: { invalidateHistory?: boolean; historyMode?: FbsOrderHistoryMode; billingMode?: 'sync' | 'skip' } = {},
   ) {
     const connections = await this.prisma.clientMarketplaceConnection.findMany({
       where: { clientId, marketplace: MarketplaceType.WILDBERRIES },
@@ -23569,7 +23569,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     );
     const value = await this.loadFbsOrders(clientId, undefined, options);
     // FIX: an operational snapshot must not overwrite the financial/general FBS cache.
-    if (options.skipBillingSync) return value;
+    if (options.billingMode === 'skip') return value;
     this.fbsOrdersCache.set(clientId, {
       expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
       value,
@@ -25679,17 +25679,17 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   private async loadFbsOrders(
     clientId: string,
     previousOrderStates?: ReadonlyMap<string, string>,
-    options: { historyMode?: FbsOrderHistoryMode; skipBillingSync?: boolean } = {},
+    options: { historyMode?: FbsOrderHistoryMode; billingMode?: 'sync' | 'skip' } = {},
   ): Promise<FbsOrdersResponse> {
     const historyMode = options.historyMode ?? 'full';
     // FIX: transfers cannot join a financial refresh that is waiting on invoice locks.
-    const loadKey = `${clientId}:${previousOrderStates ? 'incremental' : 'full'}:${historyMode}${options.skipBillingSync ? ':transfer' : ''}`;
+    const loadKey = `${clientId}:${previousOrderStates ? 'incremental' : 'full'}:${historyMode}:${options.billingMode ?? 'sync'}`;
     const current = this.fbsOrdersLoads.get(loadKey);
     if (current) {
       return current;
     }
 
-    const promise = this.loadFbsOrdersUncached(clientId, previousOrderStates, { historyMode, ...(options.skipBillingSync ? { skipBillingSync: true } : {}) });
+    const promise = this.loadFbsOrdersUncached(clientId, previousOrderStates, { historyMode, ...(options.billingMode === 'skip' ? { billingMode: 'skip' } : {}) });
     this.fbsOrdersLoads.set(loadKey, promise);
     try {
       return await promise;
@@ -25753,7 +25753,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   private async loadFbsOrdersUncached(
     clientId: string,
     previousOrderStates?: ReadonlyMap<string, string>,
-    options: { historyMode?: FbsOrderHistoryMode; skipBillingSync?: boolean } = {},
+    options: { historyMode?: FbsOrderHistoryMode; billingMode?: 'sync' | 'skip' } = {},
   ): Promise<FbsOrdersResponse> {
     const [client, connections, deliveryPlan] = await Promise.all([
       this.prisma.client.findUnique({
@@ -26062,7 +26062,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }));
     // FIX: moving an order does not require regenerating invoices for the client's full history.
     // Cached amounts remain informational; a missing value stays unknown, never zero.
-    const billingByOrder = options.skipBillingSync
+    const billingByOrder = options.billingMode === 'skip'
       ? new Map((this.fbsOrdersCache.get(clientId)?.value.orders ?? []).map(order => [fbsOrderKey(order), order.billing]))
       : await this.ensureFbsProcessingCharges(
           clientId,
@@ -27116,7 +27116,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const charges: Prisma.BillingChargeGetPayload<{}>[] = [];
     for (const line of configuredLines) {
       const sourceKey = `${chargePrefix}${line.key}`;
-      const totalRub = round(line.unitPriceRub * line.quantity, 2);
+      // FIX: retain full precision until the grossed-up line total is rounded.
+      const totalRub = fbsPrimaryPriceWithTax(line.priceBeforeTaxRub * line.quantity, line.taxMode);
       const data = {
         clientId: input.clientId,
         serviceId: line.serviceId,

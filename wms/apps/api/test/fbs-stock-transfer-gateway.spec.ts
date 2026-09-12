@@ -30,13 +30,13 @@ describe('WB stock transfer gateway', () => {
     const { service, dto, user } = setup();
     const load = service.refreshFbsOrdersCache.getMockImplementation();
     service.refreshFbsOrdersCache.mockImplementation(async (clientId: string, options: any) => {
-      if (!options.skipBillingSync) throw new Error('billing transaction timed out');
+      if (options.billingMode !== 'skip') throw new Error('billing transaction timed out');
       return load(clientId, options);
     });
     try {
       vi.stubEnv('WMS_FBS_NO_STOCK_TRANSFER_ENABLED', 'true');
       expect((await service.prepareFbsStockTransfer(dto, user)).orders).toHaveLength(1);
-      expect(service.refreshFbsOrdersCache).toHaveBeenCalledWith('client', { invalidateHistory: false, historyMode: 'cache-only', skipBillingSync: true });
+      expect(service.refreshFbsOrdersCache).toHaveBeenCalledWith('client', { invalidateHistory: false, historyMode: 'cache-only', billingMode: 'skip' });
       vi.stubEnv('WMS_FBS_NO_STOCK_TRANSFER_ENABLED', 'false');
       await expect(service.prepareFbsStockTransfer(dto, user)).rejects.toThrow('billing transaction timed out');
     } finally { vi.unstubAllEnvs(); }
