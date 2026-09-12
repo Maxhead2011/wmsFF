@@ -18146,9 +18146,19 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   // FIX: WB membership/status were verified by the journal. Reconcile both old and new WMS compositions.
   async finishStockTransferRequests(clientId: string, connectionId: string, supplyId: string,
     rows: Array<{ id: string; requestId: string }>) {
+    const ids = new Set(rows.map(row => row.id));
+    // FIX: WB history is cached for six hours. Preserve the verified target before
+    // any source reconciliation, which can fail and need a journal retry.
+    const history = this.wildberriesFbsHistoryCache.get(connectionId);
+    if (history) {
+      this.wildberriesFbsHistoryCache.set(connectionId, {
+        ...history,
+        orders: history.orders.map(order => ids.has(textValue(order.id))
+          ? { ...order, supplyId, supplyID: supplyId } : order),
+      });
+    }
     const cached = this.fbsOrdersCache.get(clientId)?.value;
     const response = cached ?? await this.refreshFbsOrdersCache(clientId, { invalidateHistory: false, historyMode: 'cache-only' });
-    const ids = new Set(rows.map(row => row.id));
     const orders = response.orders.map(order => order.connectionId === connectionId && ids.has(order.id)
       ? { ...order, category: 'active' as const, supplierStatus: 'confirm', wbStatus: 'waiting', supplyId } : order);
     const orderByKey = new Map(orders.map(order => [selectionKey(order.connectionId, order.id), order]));
