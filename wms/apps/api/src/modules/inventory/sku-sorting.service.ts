@@ -29,8 +29,8 @@ export class SkuSortingService {
   ) {}
 
   private async request(db: Prisma.TransactionClient, id: string, user: AuthUser,
-    statuses: ClientRequestStatus[] = ['APPROVED', 'IN_WORK', 'PACKED', 'DONE']) {
-    if (!skuSortingAllowed(user, id)) throw new ForbiddenException('Единая сортировка недоступна для этой пары ТСД и заявки.');
+    statuses: ClientRequestStatus[] = ['APPROVED', 'IN_WORK', 'PACKED', 'DONE'], requireSorting = true) {
+    if (requireSorting && !skuSortingAllowed(user, id)) throw new ForbiddenException('Единая сортировка недоступна для этой пары ТСД и заявки.');
     const request = await db.clientRequest.findFirst({ where: { id, type: 'SKU_COLLECTION',
       status: { in: statuses } }, include: { skuCollectionSources: true } });
     if (!request) throw new BadRequestException('Активная заявка сортировки не найдена.');
@@ -42,9 +42,9 @@ export class SkuSortingService {
     return request;
   }
 
-  // FIX: only our enabled sorting workflow exposes cancellation to warehouse staff.
+  // FIX: cancellation is opt-in independently of the existing TSD sorting workflow.
   cancelCapabilities(user: AuthUser) {
-    return { canCancel: process.env.WMS_SKU_SORTING_ENABLED === 'true' && !user.isDemo &&
+    return { canCancel: process.env.WMS_SKU_COLLECTION_CANCEL_ENABLED === 'true' && !user.isDemo &&
       !user.roleCodes?.includes('CLIENT') && user.permissionCodes.some(code => ['stock:write', 'system:admin'].includes(code)) };
   }
 
@@ -53,7 +53,7 @@ export class SkuSortingService {
     return this.prisma.$transaction(async tx => {
       // FIX: the same lock as TSD pick/move/receive prevents cancellation racing a physical scan.
       await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "ClientRequest" WHERE "id" = ${id} FOR UPDATE`);
-      const request = await this.request(tx, id, user, ['APPROVED', 'IN_WORK', 'PACKED', 'CANCELLED']);
+      const request = await this.request(tx, id, user, ['APPROVED', 'IN_WORK', 'PACKED', 'CANCELLED'], false);
       if (request.status === 'CANCELLED') return { id, status: ClientRequestStatus.CANCELLED };
       const previousStatus = request.status;
       const unreceived = await tx.skuCollectionScan.count({ where: { requestId: id, status: 'PICKED' } });

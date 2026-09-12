@@ -7,6 +7,7 @@ afterEach(() => vi.unstubAllEnvs());
 // TEST: cancellation is a workflow transition; no physical pick/receipt is fabricated.
 function fixture() {
   vi.stubEnv('WMS_SKU_SORTING_ENABLED', 'true');
+  vi.stubEnv('WMS_SKU_COLLECTION_CANCEL_ENABLED', 'true');
   const user: any = { id: 'worker', name: 'Worker', permissionCodes: ['stock:write'], roleCodes: ['WAREHOUSE'],
     activeWarehouseId: 'warehouse', warehouseIds: ['warehouse'], writableWarehouseIds: ['warehouse'], clientIds: ['client'], writableClientIds: ['client'] };
   const request: any = { id: 'collection', type: 'SKU_COLLECTION', number: 42, clientId: 'client', warehouseId: 'warehouse',
@@ -32,6 +33,16 @@ function fixture() {
 }
 
 describe('cancel SKU collection from WMS', () => {
+  // TEST: our production keeps global sorting disabled; removing a task must not enable it.
+  it('cancels a legacy task with only the dedicated cancellation flag enabled', async () => {
+    const f = fixture();
+    vi.stubEnv('WMS_SKU_SORTING_ENABLED', 'false');
+    f.request.comment = '[SKU_COLLECTION]';
+    expect(f.service.cancelCapabilities(f.user)).toEqual({ canCancel: true });
+    await f.run();
+    expect(f.request.status).toBe('CANCELLED');
+    expect(f.tx.stockBalance.delete).toHaveBeenCalledOnce();
+  });
   it('removes a partially sorted task from the TSD queue and preserves physical stock', async () => {
     const f=fixture();await f.run();
     expect(f.request.status).toBe('CANCELLED');
@@ -66,7 +77,7 @@ describe('cancel SKU collection from WMS', () => {
   });
   it.each(['flag','demo','client-role','read-only','client-scope','warehouse'])('rejects outside authorized scope: %s', async kind => {
     const f=fixture();
-    if(kind==='flag')vi.stubEnv('WMS_SKU_SORTING_ENABLED','false');
+    if(kind==='flag')vi.stubEnv('WMS_SKU_COLLECTION_CANCEL_ENABLED','false');
     if(kind==='demo')f.user.isDemo=true;if(kind==='client-role')f.user.roleCodes=['CLIENT'];if(kind==='read-only')f.user.permissionCodes=['stock:read'];
     if(kind==='client-scope')f.user.writableClientIds=[];if(kind==='warehouse')f.user.activeWarehouseId='other';
     await expect(f.run()).rejects.toThrow();expect(f.tx.clientRequest.update).not.toHaveBeenCalled();expect(f.tx.stockBalance.delete).not.toHaveBeenCalled();
