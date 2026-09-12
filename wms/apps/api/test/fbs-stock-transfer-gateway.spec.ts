@@ -25,6 +25,14 @@ function setup() {
   return { service, db, dto, user, order, task, link };
 }
 describe('WB stock transfer gateway', () => {
+  // TEST: transfer preparation must explicitly avoid the slow automatic billing transaction.
+  it('requests fresh operational orders without automatic billing', async () => {
+    const { service, dto, user } = setup();
+    await service.prepareFbsStockTransfer(dto, user);
+    expect(service.refreshFbsOrdersCache).toHaveBeenCalledWith('client', {
+      invalidateHistory: false, historyMode: 'cache-only', billingMode: 'skip',
+    });
+  });
   it('uses the relabel source SKU and only usable balances in the active client and branch', async () => {
     const { service, db, dto, user } = setup();
     expect((await service.prepareFbsStockTransfer(dto, user)).orders[0].noStock).toBe(false);
@@ -62,6 +70,67 @@ describe('WB stock transfer gateway', () => {
     await expect(service.prepareFbsStockTransfer(dto, user)).rejects.toThrow();
     await expect(service.prepareFbsStockTransfer({ ...dto, orders: [...dto.orders, ...dto.orders] }, user)).rejects.toThrow();
     expect(db.stockBalance.findMany).not.toHaveBeenCalled();
+  });
+});
+
+// TEST: exercise the real order loader with a failing billing writer, including cache isolation.
+describe('transfer loading independent of billing', () => {
+  function loader() {
+    const db = {
+      client: { findUnique: vi.fn(async () => ({ id: 'client', code: 'CLIENT', name: 'Client' })) },
+      clientMarketplaceConnection: { findMany: vi.fn(async () => [{ id: 'cabinet', marketplace: 'WILDBERRIES' }]) },
+    };
+    const service: any = new MarketplaceConnectionsService(db as never, {} as never);
+    service.loadFbsDeliveryPlan = vi.fn(async () => ({}));
+    service.fetchWildberriesFbsOrders = vi.fn(async () => [{ id: '5737342163', connectionId: 'cabinet',
+      marketplace: 'WILDBERRIES', supplierStatus: 'complete', wbStatus: 'waiting' }]);
+    service.applyFbsRelabelingStockSources = vi.fn(async (_client, rows) => rows);
+    service.syncFbsRequestsFromMarketplace = vi.fn(async () => undefined);
+    service.loadActiveFbsOrderRequestLinks = vi.fn(async () => []);
+    service.syncFbsPalletSortReservations = vi.fn(async () => new Map());
+    service.ensureFbsProcessingCharges = vi.fn(async () => { throw new Error('Transaction already closed: 60000 ms'); });
+    return service;
+  }
+
+  it('loads live shipped orders despite an unavailable billing writer', async () => {
+    const service = loader();
+    const result = await service.loadFbsOrders('client', undefined, { historyMode: 'cache-only', billingMode: 'skip' });
+    expect(result.orders).toMatchObject([{ id: '5737342163', supplierStatus: 'complete', wbStatus: 'waiting' }]);
+    expect(service.fetchWildberriesFbsOrders).toHaveBeenCalled();
+    expect(service.ensureFbsProcessingCharges).not.toHaveBeenCalled();
+  });
+
+  it('keeps default billing enabled', async () => {
+    const service = loader();
+    await expect(service.loadFbsOrders('client')).rejects.toThrow('Transaction already closed');
+    expect(service.ensureFbsProcessingCharges).toHaveBeenCalledWith('client', expect.arrayContaining([
+      expect.objectContaining({ id: '5737342163', category: 'shipped' }),
+    ]));
+  });
+
+  it('does not join an in-flight billing load', async () => {
+    const service = loader();
+    const billing = service.loadFbsOrders('client', undefined, { historyMode: 'cache-only' });
+    const checkedBilling = expect(billing).rejects.toThrow('Transaction already closed');
+    const operational = service.loadFbsOrders('client', undefined, { historyMode: 'cache-only', billingMode: 'skip' });
+    await expect(operational).resolves.toMatchObject({ orders: [{ id: '5737342163' }] });
+    await checkedBilling;
+  });
+
+  it('does not replace the shared billed cache with an operational response', async () => {
+    const service = loader();
+    const cached = { expiresAt: Date.now() + 60000, value: { orders: [{ id: 'old', billing: { totalRub: 100 } }] } };
+    service.fbsOrdersCache.set('client', cached);
+    await service.refreshFbsOrdersCache('client', { invalidateHistory: false, historyMode: 'cache-only', billingMode: 'skip' });
+    expect(service.fbsOrdersCache.get('client')).toBe(cached);
+  });
+
+  it('finishes reconciliation with no cached orders even when billing fails', async () => {
+    const service = loader();
+    service.syncOneFbsRequest = vi.fn(async () => ({ changed: true, summary: '' }));
+    await service.finishStockTransferRequests('client', 'cabinet', 'target', [{ id: '5737342163', requestId: 'source' }]);
+    expect(service.syncOneFbsRequest).toHaveBeenCalledWith('client', 'source', expect.any(Map), []);
+    expect(service.ensureFbsProcessingCharges).not.toHaveBeenCalled();
   });
 });
 

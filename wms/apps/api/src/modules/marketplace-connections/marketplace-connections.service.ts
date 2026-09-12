@@ -18099,7 +18099,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new ForbiddenException('Выберите доступный для работы филиал.');
     }
     if (!dto.orders.length || new Set(dto.orders.map(row => selectionKey(row.connectionId, row.id))).size !== dto.orders.length) throw new BadRequestException('Выберите неповторяющиеся заказы.');
-    const fresh = await this.refreshFbsOrdersCache(dto.clientId, { invalidateHistory: false, historyMode: 'cache-only' });
+    // FIX: transferring a selected order must not wait for client-wide billing writes.
+    const fresh = await this.refreshFbsOrdersCache(dto.clientId, { invalidateHistory: false, historyMode: 'cache-only', billingMode: 'skip' });
     const { orders } = await this.resolveSelectedFbsOrders(dto.clientId, dto.orders, fresh);
     const tasks = await this.prisma.fbsTsdAssembly.findMany({ where: { clientId: dto.clientId, marketplace: 'WILDBERRIES',
       OR: orders.map(order => ({ connectionId: order.connectionId, orderId: order.id })) } });
@@ -18158,7 +18159,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       });
     }
     const cached = this.fbsOrdersCache.get(clientId)?.value;
-    const response = cached ?? await this.refreshFbsOrdersCache(clientId, { invalidateHistory: false, historyMode: 'cache-only' });
+    const response = cached ?? await this.refreshFbsOrdersCache(clientId, { invalidateHistory: false, historyMode: 'cache-only', billingMode: 'skip' });
     const orders = response.orders.map(order => order.connectionId === connectionId && ids.has(order.id)
       ? { ...order, category: 'active' as const, supplierStatus: 'confirm', wbStatus: 'waiting', supplyId } : order);
     const orderByKey = new Map(orders.map(order => [selectionKey(order.connectionId, order.id), order]));
@@ -23468,7 +23469,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   private async refreshFbsOrdersCache(
     clientId: string,
-    options: { invalidateHistory?: boolean; historyMode?: FbsOrderHistoryMode } = {},
+    options: { invalidateHistory?: boolean; historyMode?: FbsOrderHistoryMode; billingMode?: 'sync' | 'skip' } = {},
   ) {
     const connections = await this.prisma.clientMarketplaceConnection.findMany({
       where: { clientId, marketplace: MarketplaceType.WILDBERRIES },
@@ -23486,6 +23487,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       this.wildberriesFbsStatusCache.delete(connection.id),
     );
     const value = await this.loadFbsOrders(clientId, undefined, options);
+    // FIX: operational results omit billing and must not replace the shared billed response.
+    if (options.billingMode === 'skip') return value;
     this.fbsOrdersCache.set(clientId, {
       expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
       value,
@@ -25585,16 +25588,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   private async loadFbsOrders(
     clientId: string,
     previousOrderStates?: ReadonlyMap<string, string>,
-    options: { historyMode?: FbsOrderHistoryMode } = {},
+    options: { historyMode?: FbsOrderHistoryMode; billingMode?: 'sync' | 'skip' } = {},
   ): Promise<FbsOrdersResponse> {
     const historyMode = options.historyMode ?? 'full';
-    const loadKey = `${clientId}:${previousOrderStates ? 'incremental' : 'full'}:${historyMode}`;
+    const billingMode = options.billingMode ?? 'sync';
+    // FIX: an operational load cannot share the promise of a pending billing transaction.
+    const loadKey = `${clientId}:${previousOrderStates ? 'incremental' : 'full'}:${historyMode}:${billingMode}`;
     const current = this.fbsOrdersLoads.get(loadKey);
     if (current) {
       return current;
     }
 
-    const promise = this.loadFbsOrdersUncached(clientId, previousOrderStates, { historyMode });
+    const promise = this.loadFbsOrdersUncached(clientId, previousOrderStates, { historyMode, billingMode });
     this.fbsOrdersLoads.set(loadKey, promise);
     try {
       return await promise;
@@ -25657,7 +25662,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   private async loadFbsOrdersUncached(
     clientId: string,
     previousOrderStates?: ReadonlyMap<string, string>,
-    options: { historyMode?: FbsOrderHistoryMode } = {},
+    options: { historyMode?: FbsOrderHistoryMode; billingMode?: 'sync' | 'skip' } = {},
   ): Promise<FbsOrdersResponse> {
     const [client, connections, deliveryPlan] = await Promise.all([
       this.prisma.client.findUnique({
@@ -25962,7 +25967,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         reservationByOrder.get(selectionKey(order.connectionId, order.id)) ??
         null,
     }));
-    const billingByOrder = await this.ensureFbsProcessingCharges(
+    const billingByOrder = options.billingMode === 'skip' ? new Map() : await this.ensureFbsProcessingCharges(
       clientId,
       ordersWithReservations.filter((order) => order.category === 'shipped'),
     );
