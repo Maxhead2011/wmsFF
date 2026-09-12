@@ -112,7 +112,7 @@ export class FbsReshipmentController {
     }, true);
   }
   resume(runId: string) {
-    if (!this.state.runs.some(run => run.runId === runId && run.status !== 'CREATED')) return Promise.resolve();
+    if (!this.state.runs.some(run => run.runId === runId && (run.status !== 'CREATED' || run.sourceSyncPending))) return Promise.resolve();
     return this.execute(async () => { this.saveRun(await this.api.resume({ clientId: this.clientId, runId })); });
   }
   private saveRun(run: FbsReshipmentRun) { this.update({ runs: [run, ...this.state.runs.filter(item => item.runId !== run.runId)] }); }
@@ -224,11 +224,11 @@ export function FbsReshipmentView({ model, onOpenRequest }: { model: FbsReshipme
     {state.runs.length > 0 && <div aria-label="Результаты повторной отгрузки">
       <h4>Сохранённые операции</h4>
       {state.runs.map(run => <div key={run.runId}>
-        <p>{run.mode === 'SAME_ITEM' ? 'Довоз собранного' : 'Новая сборка'} · {run.status === 'CREATED' ? 'Заявка создана' : 'Требуется продолжение проверки'}<br />
+        <p>{run.transferPurpose === 'NO_STOCK' ? 'logoff нет на складе' : run.mode === 'SAME_ITEM' ? 'Довоз собранного' : 'Новая сборка'} · {run.status === 'CREATED' ? 'Заявка создана' : 'Требуется продолжение проверки'}<br />
           Поставка: {run.supplyId || 'Пока не подтверждена'} · Заявка: {run.requestNumber ? `№${run.requestNumber}` : 'Пока не создана'}</p>
         {run.errorMessage && <p role="alert">{run.errorMessage}</p>}
         {run.requestId && onOpenRequest && <button type="button" className="button-secondary" onClick={() => onOpenRequest(run.requestId!)}>Открыть заявку</button>}
-        {run.status !== 'CREATED' && <button type="button" className="button-secondary" disabled={state.busy} onClick={() => void model.resume(run.runId)}>Проверить и продолжить сохранённую операцию</button>}
+        {(run.status !== 'CREATED' || run.sourceSyncPending) && <button type="button" className="button-secondary" disabled={state.busy} onClick={() => void model.resume(run.runId)}>Проверить и продолжить сохранённую операцию</button>}
       </div>)}
     </div>}
   </section>;

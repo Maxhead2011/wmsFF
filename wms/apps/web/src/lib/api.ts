@@ -3233,6 +3233,7 @@ export type FbsOrderSummary = {
 };
 
 export type ClientFbsOrders = {
+  stockTransferEnabled?: boolean;
   client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
   connected: boolean;
   connections: Array<{
@@ -3676,6 +3677,16 @@ export type AssembleFbsOrdersResult = {
     cargoPlaceIds: string[];
   }>;
   orders: ClientFbsOrders;
+};
+
+// FIX: explicit union keeps legacy callers and partial transfer results distinct.
+export type RoutedFbsStockTransferResult = {
+  routedTransfer: true;
+  transfers: Array<{ runId: string; status: string; supplyName: string; supplyId: string | null;
+    requestNumber: number | null; errorMessage: string | null; orderCount: number }>;
+  regularTransfer: MoveFbsOrdersToNewSupplyResult | null;
+  errors: string[];
+  skippedOrders: Array<{ id: string; reason: string }>;
 };
 
 export type MoveFbsOrdersToNewSupplyResult = {
@@ -9954,7 +9965,7 @@ export async function moveFbsOrdersToNewSupply(
   accessToken: string,
   payload: FbsOrderSelectionPayload,
 ) {
-  return request<MoveFbsOrdersToNewSupplyResult>(
+  return request<MoveFbsOrdersToNewSupplyResult | RoutedFbsStockTransferResult>(
     '/marketplace-connections/fbs/orders/move-to-new-supply',
     {
       method: 'POST',
@@ -12155,6 +12166,7 @@ export type FbsReshipmentCandidate = {
   eligibleModes: FbsReshipmentMode[]; blockedReason: string | null;
 };
 export type FbsReshipmentRun = {
+  sourceSyncPending?: boolean; supplyName?: string; transferPurpose?: 'NO_STOCK' | 'TRANSFER' | null;
   runId: string; status: 'CREATED' | 'NEEDS_RECONCILIATION' | 'PENDING'; mode: FbsReshipmentMode;
   supplyId: string | null; requestId: string | null; requestNumber?: number | null; errorMessage: string | null;
 };
