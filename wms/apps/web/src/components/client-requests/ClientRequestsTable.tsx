@@ -29,6 +29,8 @@ type ClientRequestsTableProps = {
   routeLoadingRequestId?: string | null;
   onStatusChange: (requestId: string, status: ClientRequestStatus) => void;
   onCancelRequest: (request: ClientRequestSummary) => void;
+  onCancelSkuCollection?: (request: ClientRequestSummary) => void;
+  cancellingSkuCollectionId?: string | null;
   onEditRequest: (request: ClientRequestSummary) => void;
   onOpenDocument?: (request: ClientRequestSummary) => void;
   onDownloadRequestItems?: (request: ClientRequestSummary) => void;
@@ -83,6 +85,8 @@ export function ClientRequestsTable({
   routeLoadingRequestId,
   onStatusChange,
   onCancelRequest,
+  onCancelSkuCollection,
+  cancellingSkuCollectionId,
   onEditRequest,
   onOpenDocument,
   onDownloadRequestItems,
@@ -156,7 +160,7 @@ export function ClientRequestsTable({
             <th className="client-request-table__due-heading">Срок</th>
             <th className="client-request-table__status-heading">Статус</th>
             {canPickOutbound ? <th className="client-request-table__warehouse-heading">Склад</th> : null}
-            {canCancelRequests ? <th className="client-request-table__actions-heading">Действия</th> : null}
+            {canCancelRequests || onCancelSkuCollection ? <th className="client-request-table__actions-heading">Действия</th> : null}
             {canChangeStatus ? <th className="client-request-table__process-heading">Процесс</th> : null}
           </tr>
         </thead>
@@ -536,10 +540,19 @@ export function ClientRequestsTable({
                   )}
                 </td>
               ) : null}
-              {canCancelRequests ? (
+              {canCancelRequests || onCancelSkuCollection ? (
                 <td className="client-request-table__actions-cell" data-label="Действия">
                   <div className="client-request-actions client-request-actions--main">
-                  {!isSkuCollectionRequest(request) && canEditRequest(request, canEditAnyRequest) ? (
+                  {/* FIX: remove only active SKU tasks through the dedicated stock-safe workflow. */}
+                  {onCancelSkuCollection && isSkuCollectionRequest(request) && ['APPROVED', 'IN_WORK', 'PACKED'].includes(request.status) ? (
+                    <button className="client-request-action-button client-request-action-button--cancel" type="button"
+                      onClick={() => onCancelSkuCollection(request)} disabled={Boolean(cancellingSkuCollectionId)}
+                      title="Снять задачу сборки по SKU из активной очереди ВМС и ТСД">
+                      <XCircle size={15} aria-hidden="true" />
+                      <span>{cancellingSkuCollectionId === request.id ? 'Снимаю…' : 'Снять задачу'}</span>
+                    </button>
+                  ) : null}
+                  {canCancelRequests && !isSkuCollectionRequest(request) && canEditRequest(request, canEditAnyRequest) ? (
                     <button
                       className="client-request-action-button client-request-action-button--edit"
                       type="button"
@@ -550,7 +563,7 @@ export function ClientRequestsTable({
                       <span>Редактировать</span>
                     </button>
                   ) : null}
-                  {!isSkuCollectionRequest(request) && canCancelRequest(request) ? (
+                  {canCancelRequests && !isSkuCollectionRequest(request) && canCancelRequest(request) ? (
                     <button
                       className="client-request-action-button client-request-action-button--cancel"
                       type="button"

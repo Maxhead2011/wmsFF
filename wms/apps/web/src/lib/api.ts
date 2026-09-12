@@ -8512,6 +8512,17 @@ export function createSkuCollection(accessToken: string, clientId: string, skuId
   });
 }
 
+// FIX: cancellation capability is supplied by our enabled server, not inferred from the request type.
+export function fetchSkuCollectionCapabilities(accessToken: string) {
+  return request<{ canCancel: boolean }>('/inventory/sku-collections/capabilities', { accessToken });
+}
+
+export function cancelSkuCollection(accessToken: string, id: string) {
+  return request<{ id: string; status: 'CANCELLED' }>(`/inventory/sku-collections/${encodeURIComponent(id)}/cancel`, {
+    method: 'POST', accessToken,
+  });
+}
+
 export function fetchInventorySession(accessToken: string, id: string) {
   return request<InventorySession>(`/inventory/sessions/${id}`, { accessToken });
 }
