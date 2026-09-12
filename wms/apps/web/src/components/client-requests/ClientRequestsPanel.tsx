@@ -1,3 +1,4 @@
+import { describeStockTransfer } from '../../lib/fbs-stock-transfer';
 import { AlertTriangle, Archive, ArrowLeft, ArrowRightLeft, Boxes, CheckCircle2, ClipboardList, FileDown, FileUp, MapPinned, PackageX, RefreshCw, RotateCcw, Search, ShieldAlert, Truck, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FbsExcludedOrders } from './FbsExcludedOrders';
@@ -85,8 +86,9 @@ import { requestStatusLabel } from './clientRequestMeta';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import { PickWaveBalanceReviewPanel } from './PickWaveBalanceReviewPanel';
 import { useRememberedClientId } from '../../lib/rememberedClient';
-import { resolveFbsSyncConflictBatch } from './fbsSyncConflictBatch';
+import { FbsSyncConflictBatchError, resolveFbsSyncConflictBatch } from './fbsSyncConflictBatch';
 import { FbsReturnReceiptDialog, type FbsReturnReceiptScans } from './FbsReturnReceiptDialog';
+import { FbsManagerDecisionDialog, needsFbsReturnScans, type FbsManagerDecision } from './FbsManagerDecisionDialog';
 
 type LoadState<T> = {
   status: 'idle' | 'loading' | 'ready' | 'error';
@@ -233,6 +235,8 @@ export function ClientRequestsPanel({
   const [returnReceipt, setReturnReceipt] = useState<{
     request: ClientRequestSummary; assemblyId: string; orderId: string; productName: string; requiresKiz: boolean;
   } | null>(null);
+  // FIX: physical manager outcomes are distinct from receipt scans and require an explicit choice.
+  const [managerDecision, setManagerDecision] = useState<{ request: ClientRequestSummary; assemblyIds: string[] } | null>(null);
   const [emergencyUpload, setEmergencyUpload] = useState<{
     request: ClientRequestSummary;
     file: File | null;
@@ -1171,13 +1175,14 @@ export function ClientRequestsPanel({
     receipt?: FbsReturnReceiptScans,
   ) {
     const row = onlinePreview?.plan?.fbsAssembly?.returnRequired.rows.find(item => item.id === assemblyId);
-    if (row?.requiresReturnReceipt && !receipt) {
-      if (action !== 'RETURN_TO_STOCK') {
-        setOnlineFbsSyncResolution({ assemblyId: null, error: 'Товар уже изъят. Используйте «Принять возврат в бокс» и отсканируйте товар.' });
-      } else {
-        setOnlineFbsSyncResolution({ assemblyId: null });
-        setReturnReceipt({ request, assemblyId, orderId: row.orderId, productName: row.productName, requiresKiz: Boolean(row.returnRequiresKiz) });
-      }
+    if (action === 'MANAGER_CONFIRMED' && row?.requiresReturnReceipt) {
+      setOnlineFbsSyncResolution({ assemblyId: null });
+      setManagerDecision({ request, assemblyIds: [assemblyId] });
+      return;
+    }
+    if (row && needsFbsReturnScans(action, [row]) && !receipt) {
+      setOnlineFbsSyncResolution({ assemblyId: null });
+      setReturnReceipt({ request, assemblyId, orderId: row.orderId, productName: row.productName, requiresKiz: Boolean(row.returnRequiresKiz) });
       return;
     }
     let comment: string | undefined;
@@ -1231,22 +1236,29 @@ export function ClientRequestsPanel({
     request: ClientRequestSummary,
     assemblyIds: string[],
     action: FbsSyncConflictResolutionAction,
+    decision?: FbsManagerDecision,
   ) {
     const selectedIds = [...new Set(assemblyIds.filter(Boolean))];
     if (selectedIds.length === 0) return;
-    // FIX: mass confirmation cannot replace per-unit receipt scans.
-    if (onlinePreview?.plan?.fbsAssembly?.returnRequired.rows.some(row => selectedIds.includes(row.id) && row.requiresReturnReceipt)) {
+    const selectedRows = onlinePreview?.plan?.fbsAssembly?.returnRequired.rows.filter(row => selectedIds.includes(row.id)) ?? [];
+    // FIX: bulk stock returns still need per-unit scans; manager decisions preserve the deduction.
+    if (needsFbsReturnScans(action, selectedRows)) {
       setOnlineFbsSyncResolution({ assemblyId: null, error: 'Среди выбранных есть уже изъятые товары. Для каждого нажмите «Принять возврат в бокс» и отсканируйте ШК и КИЗ.' });
       return;
     }
+    if (action === 'MANAGER_CONFIRMED' && !decision && selectedRows.some(row => row.requiresReturnReceipt)) {
+      setOnlineFbsSyncResolution({ assemblyId: null });
+      setManagerDecision({ request, assemblyIds: selectedIds });
+      return;
+    }
 
-    let comment: string | undefined;
+    let comment: string | undefined = decision?.comment;
     if (action === 'RETURN_TO_STOCK') {
       const confirmed = window.confirm(
         `Вернуть на склад все выбранные товары (${selectedIds.length} шт.)?\n\nПодтвердите, что товары физически возвращены в указанные короба или в хранение без коробов.`,
       );
       if (!confirmed) return;
-    } else {
+    } else if (!decision) {
       const managerComment = window.prompt(
         `Опишите одно решение менеджера для всех выбранных товаров (${selectedIds.length} шт.):`,
         '',
@@ -1269,7 +1281,7 @@ export function ClientRequestsPanel({
           session.accessToken,
           request.id,
           assemblyId,
-          { action, comment },
+          { action, comment, ...(decision ? { pickedDisposition: decision.pickedDisposition } : {}) },
         ),
       );
       const plan = await fetchTsdAssemblyPlan(session.accessToken, request.id);
@@ -1280,10 +1292,17 @@ export function ClientRequestsPanel({
       );
       setOnlineFbsSyncResolution({
         assemblyId: null,
-        message: `Готово: обработано выбранных позиций — ${result.completed}.`,
+        message: decision
+          ? `Решение сохранено для ${result.completed} поз. Списание сохранено, доступный остаток не восстановлен.`
+          : `Готово: обработано выбранных позиций — ${result.completed}.`,
       });
+      if (decision) setManagerDecision(null);
       await loadData();
     } catch (caught) {
+      // FIX: a partial batch retry starts at the first unresolved item, preserving completed decisions.
+      if (decision && caught instanceof FbsSyncConflictBatchError && caught.completed > 0) {
+        setManagerDecision({ request, assemblyIds: selectedIds.slice(caught.completed) });
+      }
       try {
         const plan = await fetchTsdAssemblyPlan(session.accessToken, request.id);
         setOnlinePreview((current) =>
@@ -1416,9 +1435,10 @@ export function ClientRequestsPanel({
     try {
       const result = await moveFbsOrdersToNewSupply(session.accessToken, {
         clientId: request.clientId,
+        sourceRequestId: request.id,
         orders,
       });
-      const message =
+      const message = 'routedTransfer' in result ? describeStockTransfer(result) :
         `${orders.length === 1 ? `Заказ №${orders[0]!.id} перенесён` : `${orders.length} заказов перенесены`} в поставку ${result.targetSupply.id} ` +
         `и заявку №${String(result.targetRequest.number).padStart(6, '0')}.`;
       setOnlineFbsMove({ orderId: null, message });
@@ -1884,6 +1904,10 @@ export function ClientRequestsPanel({
         busy={onlineFbsSyncResolution.assemblyId !== null} error={onlineFbsSyncResolution.error}
         onClose={() => setReturnReceipt(null)}
         onSubmit={scans => resolveOnlineFbsSyncConflict(returnReceipt.request, returnReceipt.assemblyId, 'RETURN_TO_STOCK', scans)} /> : null}
+      {managerDecision ? <FbsManagerDecisionDialog
+        orderCount={managerDecision.assemblyIds.length} busy={onlineFbsSyncResolution.assemblyId !== null} error={onlineFbsSyncResolution.error}
+        onClose={() => setManagerDecision(null)}
+        onSubmit={decision => resolveOnlineFbsSyncConflicts(managerDecision.request, managerDecision.assemblyIds, 'MANAGER_CONFIRMED', decision)} /> : null}
       <div className="section-heading client-requests-panel__heading">
         <div>
           <p className="eyebrow">Клиентские заявки</p>
@@ -2656,7 +2680,8 @@ function FbsBoxSearchModal({
             <small>
               {state.request.client.name} · {withoutBoxes
                 ? 'поштучный учет без привязки к коробам и палет-сортам'
-                : 'показаны только короба, общие для нескольких заказов'}
+                // FIX: single-order candidates are included in the FBS box search.
+                : 'короба с товаром для одного или нескольких заказов'}
             </small>
           </div>
           <button className="icon-button" type="button" onClick={onClose} title="Закрыть" aria-label="Закрыть">
@@ -2745,7 +2770,9 @@ function FbsBoxSearchModal({
                         {box.confirmedOrderIds.length ? (
                           <span className="is-confirmed">Точно подтверждено ТСД: №{box.confirmedOrderIds.join(', №')}</span>
                         ) : (
-                          <span>В этом коробе совпали товары нескольких заказов</span>
+                          <span>{box.orderIds.length === 1
+                            ? 'В коробе есть свободный товар для этого заказа'
+                            : 'В этом коробе совпали товары нескольких заказов'}</span>
                         )}
                       </div>
                       <div className="fbs-box-search-card__items">
@@ -2773,7 +2800,7 @@ function FbsBoxSearchModal({
                       : 'Поштучного остатка по товарам этой заявки на складе нет.'
                     : state.data.boxes.length
                       ? 'По этому запросу короб не найден.'
-                      : 'Общих коробов для нескольких заказов этой заявки нет.'}
+                      : 'Коробов со свободным товаром или подтвержденным отбором для этой заявки нет.'}
                 </p>
               )}
 
@@ -3810,7 +3837,8 @@ function OnlineExecutionModal({
   const wmsBoxes = fbsAssembly?.wmsBoxes ?? null;
   const notCollected = fbsAssembly?.notCollected ?? null;
   const returnRequired = fbsAssembly?.returnRequired ?? null;
-  const returnRequiredIds = (returnRequired?.rows ?? []).map((row) => row.id);
+  const returnRequiredIds = (returnRequired?.rows ?? []).filter(row => !row.managerDisposition).map((row) => row.id);
+  const onlyDeferredReturns = Boolean(returnRequired?.rows.length) && returnRequired!.rows.every(row => row.managerDisposition === 'AWAIT_RETURN_RECEIPT');
   const allSyncConflictsSelected =
     returnRequiredIds.length > 0 &&
     returnRequiredIds.every((id) => selectedSyncConflictIds.includes(id));
@@ -3979,8 +4007,8 @@ function OnlineExecutionModal({
                 </article>
               ) : null}
               {returnRequired && returnRequired.orders > 0 ? (
-                <article className="is-danger">
-                  <span>Требует решения</span>
+                <article className={onlyDeferredReturns ? '' : 'is-danger'}>
+                  <span>{onlyDeferredReturns ? 'Ожидает приёмки' : 'Требует решения / приёмки'}</span>
                   <strong>{returnRequired.orders}</strong>
                 </article>
               ) : null}
@@ -4265,15 +4293,17 @@ function OnlineExecutionModal({
 
                 <FbsExcludedOrders rows={fbsAssembly?.notForAssembly ?? []} />
                 {returnRequired && returnRequired.rows.length > 0 ? (
-                  <section className="online-execution-section online-execution-section--sync-conflict">
+                  <section className={`online-execution-section${onlyDeferredReturns ? '' : ' online-execution-section--sync-conflict'}`}>
                     <div className="online-execution-section__heading">
                       <div>
                         <h4>
                           <AlertTriangle size={17} aria-hidden="true" />
-                          Изменения FBS после начала сборки
+                          {onlyDeferredReturns ? 'Отложены до повторной приёмки' : 'Изменения FBS после начала сборки'}
                         </h4>
                         <span>
-                          Эти товары нельзя молча убрать из заявки: верните их на склад или подтвердите решение менеджера.
+                          {onlyDeferredReturns
+                            ? 'Решение менеджера принято. Списание сохранено; примите товар по ШК и КИЗ, когда он фактически поступит в отдельный бокс.'
+                            : 'Выберите решение менеджера по товару или оформите его фактическую приёмку на склад.'}
                         </span>
                       </div>
                       <strong>{returnRequired.units} шт.</strong>
@@ -4366,7 +4396,7 @@ function OnlineExecutionModal({
                                         : current.filter((id) => id !== row.id),
                                     )
                                   }
-                                  disabled={resolvingSyncConflictId !== null}
+                                  disabled={resolvingSyncConflictId !== null || Boolean(row.managerDisposition)}
                                 />
                               </td>
                               <td><strong>№{row.orderId}</strong></td>
@@ -4399,13 +4429,13 @@ function OnlineExecutionModal({
                                       type="button"
                                       className="online-execution-sync-conflict-button is-manager"
                                       onClick={() => onResolveSyncConflict(row.id, 'MANAGER_CONFIRMED')}
-                                      disabled={resolvingSyncConflictId !== null || Boolean(row.requiresReturnReceipt)}
-                                      title={row.requiresReturnReceipt ? 'Для изъятого товара нужна повторная приёмка со сканами.' : undefined}
+                                      disabled={resolvingSyncConflictId !== null || Boolean(row.managerDisposition)}
+                                      title={row.managerDisposition ? 'Решение уже сохранено; приёмка товара выполняется отдельно.' : undefined}
                                     >
                                       <CheckCircle2 size={14} aria-hidden="true" />
                                       {resolvingSyncConflictId === row.id
                                         ? 'Подтверждаю…'
-                                        : 'Решение менеджера'}
+                                        : row.managerDisposition ? 'Решение принято' : 'Решение менеджера'}
                                     </button>
                                   </div>
                                 ) : (

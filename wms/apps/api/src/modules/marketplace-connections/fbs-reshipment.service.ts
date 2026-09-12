@@ -1,3 +1,5 @@
+import type { FbsOrderSelectionDto } from './dto/fbs-order-selection.dto';
+import { NO_STOCK_SUPPLY_NAME, stockTransferBlockedReason, type StockTransferPurpose } from './fbs-stock-transfer';
 import { randomUUID } from 'node:crypto';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, type FbsReshipmentRun, type FbsTsdAssembly, type FbsSupplyPlan } from '@prisma/client';
@@ -84,8 +86,8 @@ export class FbsReshipmentService {
     return { links, tasks };
   }
 
-  private async inspect(clientId: string, warehouseId: string, user: AuthUser, selected?: OrderKey[]) {
-    const [direct, events] = await Promise.all([this.connections.readReshipmentWbCandidates(clientId, user),
+  private async inspect(clientId: string, warehouseId: string, user: AuthUser, selected?: OrderKey[], purpose?: StockTransferPurpose) {
+    const [direct, events] = await Promise.all([purpose ? Promise.resolve([]) : this.connections.readReshipmentWbCandidates(clientId, user),
       this.prisma.auditLog.findMany({ where: { action: 'FBS_WB_RETURNED_TO_ASSEMBLY', entity: 'FbsOrderRequestLink',
         payload: { path: ['clientId'], equals: clientId } }, select: { entityId: true, payload: true } })]);
     const local = await this.local(clientId, warehouseId, selected, { direct, linkIds: events.map(row => row.entityId).filter((id): id is string => !!id) });
@@ -128,7 +130,7 @@ export class FbsReshipmentService {
         link.lastCategory === 'shipped' && !!link.lastSupplyId && link.lastSupplyId === task.supplyId);
       const historicalSupply = evidence && typeof evidence === 'object' && !Array.isArray(evidence) && typeof evidence.sourceSupplyId === 'string' ? evidence.sourceSupplyId : null;
       const modeReason = (mode: ReshipmentMode) => !task || !link || link.request.warehouseId !== warehouseId ? 'Нет подтверждённой сборки и заявки в выбранном филиале.' :
-        reshipmentEligibility(task, link, status, directCandidate, mode, !!evidence);
+        purpose ? stockTransferBlockedReason(task, link, status) : reshipmentEligibility(task, link, status, directCandidate, mode, !!evidence);
       const eligibleModes = (['SAME_ITEM', 'NEW_ITEM'] as ReshipmentMode[]).filter(mode => !modeReason(mode));
       const blockedReason = eligibleModes.length ? null : modeReason('NEW_ITEM');
       return { task, link, status, directCandidate, visibility: reshipmentVisibility(status, directListed, returned), view: { ...order,
@@ -151,9 +153,44 @@ export class FbsReshipmentService {
       runs: await Promise.all(runs.map(run => this.view(run))) };
   }
 
-  private async plan(dto: PreviewFbsReshipmentDto, warehouseId: string, user: AuthUser) {
+  // FIX: the ordinary move button routes shortages separately; journal handles survive partial WB failures.
+  async moveWithStockRouting(dto: FbsOrderSelectionDto, user: AuthUser) {
+    if (process.env.WMS_FBS_NO_STOCK_TRANSFER_ENABLED !== 'true') return this.connections.moveFbsOrdersToNewSupply(dto, user);
+    const warehouseId = await this.authorize(dto.clientId, user);
+    const selection = await this.connections.prepareFbsStockTransfer(dto, user);
+    const regular = selection.orders.filter(row => !row.noStock && row.supplierStatus !== 'complete');
+    const routed = selection.orders.filter(row => row.noStock || row.supplierStatus === 'complete');
+    const groups = new Map<string, typeof routed>();
+    for (const row of routed) {
+      const key = JSON.stringify([row.connectionId, row.warehouseId || row.officeId, row.cargoType, row.crossBorderType, row.noStock]);
+      const group = groups.get(key) ?? []; group.push(row); groups.set(key, group);
+    }
+    const planned = [];
+    for (const group of groups.values()) for (let offset = 0; offset < group.length; offset += 100) {
+      const rows = group.slice(offset, offset + 100);
+      const purpose: StockTransferPurpose = rows[0].noStock ? 'NO_STOCK' : 'TRANSFER';
+      const input = { clientId: dto.clientId, orders: rows.map(row => ({ id: row.id, connectionId: row.connectionId })), mode: 'NEW_ITEM' as const };
+      planned.push({ input, purpose, plan: await this.plan(input, warehouseId, user, purpose) });
+    }
+    const transfers: Array<Awaited<ReturnType<FbsReshipmentService['view']>> & { orderCount: number }> = [];
+    const errors: string[] = [];
+    // Resolve an existing in-flight cycle via the same fingerprint before any second POST.
+    for (const item of planned) {
+      try { transfers.push({ ...await this.createPlanned({ ...item.input, confirm: true, previewToken: item.plan.previewToken },
+        warehouseId, user, item.plan, item.purpose), orderCount: item.input.orders.length }); }
+      catch (error) { errors.push(`${item.input.orders.map(row => row.id).join(', ')}: ${error instanceof Error ? error.message : 'Перенос не выполнен.'}`); }
+    }
+    let regularTransfer: Awaited<ReturnType<MarketplaceConnectionsService['moveFbsOrdersToNewSupply']>> | null = null;
+    if (regular.length) {
+      try { regularTransfer = await this.connections.moveFbsOrdersToNewSupply({ ...dto, orders: regular.map(row => ({ id: row.id, connectionId: row.connectionId })) }, user); }
+      catch (error) { errors.push(`Заказы с остатком: ${error instanceof Error ? error.message : 'Перенос не выполнен.'}`); }
+    }
+    return { routedTransfer: true as const, transfers, regularTransfer, errors, skippedOrders: selection.skippedOrders };
+  }
+
+  private async plan(dto: PreviewFbsReshipmentDto, warehouseId: string, user: AuthUser, purpose?: StockTransferPurpose) {
     this.selection(dto);
-    const inspected = await this.inspect(dto.clientId, warehouseId, user, dto.orders);
+    const inspected = await this.inspect(dto.clientId, warehouseId, user, dto.orders, purpose);
     const rows = dto.orders.map(order => {
       const row = inspected.find(row => identity(row.view) === identity(order));
       if (!row?.task || !row.link || !row.view.eligibleModes.includes(dto.mode)) {
@@ -166,8 +203,9 @@ export class FbsReshipmentService {
       sourceSupplyId: row.task.supplyId, taskRevision: taskRevision(row.task), linkRevision: linkRevision(row.link) }));
     const plans = await this.prisma.fbsSupplyPlan.findMany({ where: { clientId: dto.clientId, marketplace: 'WILDBERRIES',
       connectionId: dto.orders[0].connectionId, supplyId: { in: rows.map(row => row.view.sourceSupplyId).filter((id): id is string => !!id) } } });
+    const fallback = purpose && rows.some(row => !row.view.sourceSupplyId) ? await this.connections.stockTransferDefaultDelivery(dto.clientId) : null;
     const deliveryPlans = rows.map(row => {
-      const plan = plans.find(plan => plan.supplyId === row.view.sourceSupplyId);
+      const plan = plans.find(plan => plan.supplyId === row.view.sourceSupplyId) ?? (!row.view.sourceSupplyId ? fallback : null);
       if (!plan || !['PICKUP_POINT', 'VNUKOVO_SORTING_CENTER'].includes(plan.deliveryDestination)) {
         throw new ConflictException(`Для заказа ${row.task.orderId} неизвестно назначение прежней поставки. Сначала укажите его в WMS.`);
       }
@@ -178,7 +216,7 @@ export class FbsReshipmentService {
     });
     if (new Set(deliveryPlans.map(reshipmentHash)).size !== 1) throw new ConflictException('Разные назначения поставок: создайте отдельную заявку для каждого назначения.');
     const delivery = deliveryPlans[0];
-    return { rows, journal, delivery, previewToken: reshipmentHash([dto.clientId, warehouseId, dto.mode, journal, delivery]) };
+    return { rows, journal, delivery, previewToken: reshipmentHash([dto.clientId, warehouseId, dto.mode, journal, delivery, ...(purpose ? [purpose] : [])]) };
   }
 
   async preview(dto: PreviewFbsReshipmentDto, user: AuthUser) {
@@ -204,6 +242,11 @@ export class FbsReshipmentService {
     }
     const plan = await this.plan(dto, warehouseId, user);
     if (plan.previewToken !== dto.previewToken) throw new ConflictException('Данные изменились. Повторите предварительную проверку.');
+    return this.createPlanned(dto, warehouseId, user, plan);
+  }
+
+  private async createPlanned(dto: CreateFbsReshipmentDto, warehouseId: string, user: AuthUser,
+    plan: Awaited<ReturnType<FbsReshipmentService['plan']>>, purpose?: StockTransferPurpose) {
     const fingerprint = reshipmentFingerprint(dto.clientId, warehouseId, dto.mode, plan.journal);
     const id = randomUUID();
     let run: FbsReshipmentRun;
@@ -211,12 +254,16 @@ export class FbsReshipmentService {
       run = await this.prisma.$transaction(async tx => {
         await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${fingerprint}))::text`;
         const existing = await tx.fbsReshipmentRun.findUnique({ where: { fingerprint } });
-        if (existing) return existing;
+        if (existing) {
+          if (this.transferPurpose(existing) !== purpose) throw new ConflictException('У заказа уже есть другая операция. Продолжите её через журнал.');
+          return existing;
+        }
         const created = await tx.fbsReshipmentRun.create({ data: { id, fingerprint, previewToken: dto.previewToken,
           clientId: dto.clientId, warehouseId, connectionId: dto.orders[0].connectionId, mode: dto.mode,
+          // FIX: journal supplyName is unique in the DB; the WB display name is derived separately.
           supplyName: `WMS-RES-${id}`, createdByUserId: user.id,
           sourceRequestIds: [...new Set(plan.journal.map(row => row.requestId))],
-          snapshot: json({ orders: plan.journal, delivery: plan.delivery, physicalEvidence: plan.rows.map(row => ({ task: row.task, link: row.link })) }) } });
+          snapshot: json({ ...(purpose ? { transferPurpose: purpose } : {}), orders: plan.journal, delivery: plan.delivery, physicalEvidence: plan.rows.map(row => ({ task: row.task, link: row.link })) }) } });
         // FIX: unique per-order cycle claims also protect overlapping selections.
         await tx.fbsReshipmentClaim.createMany({ data: plan.journal.map(row => ({ runId: id, connectionId: row.connectionId, orderId: row.id, cycle: row.cycle })) });
         return created;
@@ -260,7 +307,9 @@ export class FbsReshipmentService {
   }
 
   private async validateBeforeMutation(run: FbsReshipmentRun, rows: JournalRow[], user: AuthUser) {
-    const inspected = await this.inspect(run.clientId, run.warehouseId, user, rows);
+    const purpose = this.transferPurpose(run);
+    if (purpose && process.env.WMS_FBS_NO_STOCK_TRANSFER_ENABLED !== 'true') throw new ForbiddenException('Перенос с проверкой остатка отключён.');
+    const inspected = await this.inspect(run.clientId, run.warehouseId, user, rows, purpose);
     for (const row of rows) {
       const current = inspected.find(item => identity(item.view) === identity(row));
       if (!current?.task || !current.link || !current.view.eligibleModes.includes(run.mode as ReshipmentMode) ||
@@ -274,7 +323,10 @@ export class FbsReshipmentService {
   private async drive(id: string, clientId: string, warehouseId: string, user: AuthUser) {
     let run = await this.prisma.fbsReshipmentRun.findFirst({ where: { id, clientId, warehouseId } });
     if (!run) throw new NotFoundException('Операция не найдена в выбранном клиенте и филиале.');
-    if (run.status === 'CREATED') return this.view(run);
+    if (run.status === 'CREATED') {
+      if (this.transferPurpose(run) && run.phase === 'SOURCE_SYNC_PENDING') await this.finishSourceSync(run);
+      return this.view((await this.prisma.fbsReshipmentRun.findUnique({ where: { id } }))!);
+    }
     const leaseToken = randomUUID();
     const lease = await this.prisma.fbsReshipmentRun.updateMany({ where: { id, status: { not: 'CREATED' },
       OR: [{ leaseUntil: null }, { leaseUntil: { lt: new Date() } }] },
@@ -297,16 +349,21 @@ export class FbsReshipmentService {
       const rows = this.journal(run);
       await this.validateBeforeMutation(run, rows, user);
       if (!run.supplyId) {
-        const found = await this.connections.findReshipmentWbSupply(clientId, run.connectionId, run.supplyName, user);
+        // FIX: fixed display names are not operation identifiers. Never adopt another transfer's supply.
+        // A lost POST response stays in the journal for manual reconciliation; never repeat that POST.
+        const found = this.transferPurpose(run) === 'NO_STOCK' ? null :
+          await this.connections.findReshipmentWbSupply(clientId, run.connectionId, run.supplyName, user);
         const action = supplyRecoveryAction(run.phase, found);
-        if (action === 'RECONCILE_ONLY') throw new ConflictException('Ответ WB при создании поставки неизвестен. Новую поставку повторно не создаём; повторите сверку позже.');
+        if (action === 'RECONCILE_ONLY') throw new ConflictException(this.transferPurpose(run) === 'NO_STOCK'
+          ? 'Ответ WB при создании поставки неизвестен. Требуется ручная сверка идентификатора поставки администратором. Повторно поставку не создаём.'
+          : 'Ответ WB при создании поставки неизвестен. Новую поставку повторно не создаём; повторите сверку позже.');
         if (found) await save({ supplyId: found.id, phase: 'SUPPLY_READY' });
         else {
           // FIX: durable intent BEFORE POST; any crash after this point is read-only recovery.
           await this.validateBeforeMutation(run, rows, user);
           await fence();
           await save({ phase: 'WB_CREATE_STARTED' });
-          const supplyId = await this.connections.createReshipmentWbSupply(clientId, run.connectionId, run.supplyName, user);
+          const supplyId = await this.connections.createReshipmentWbSupply(clientId, run.connectionId, this.supplyDisplayName(run), user);
           await save({ supplyId, phase: 'SUPPLY_READY' });
         }
       }
@@ -330,6 +387,7 @@ export class FbsReshipmentService {
       await fence();
       await save({ phase: 'WB_VERIFIED' });
       await this.finalize(run, rows, leaseToken, user);
+      if (this.transferPurpose(run)) await this.finishSourceSync(run);
       this.connections.invalidateRepeatAssemblyCache(clientId);
     } catch (error) {
       // Return the durable operation handle even for an unknown remote outcome.
@@ -353,7 +411,7 @@ export class FbsReshipmentService {
       const links = await tx.fbsOrderRequestLink.findMany({ where: { id: { in: rows.map(row => row.linkId) } }, include: { request: true } });
       const selected = rows.map(row => {
         const task = tasks.find(task => task.id === row.taskId); const link = links.find(link => link.id === row.linkId);
-        if (!task || !link || taskRevision(task) !== row.taskRevision || linkRevision(link) !== row.linkRevision ||
+        if (!task || !link || (this.transferPurpose(run) && stockTransferBlockedReason(task, link, { supplierStatus: 'confirm', wbStatus: 'waiting' })) || taskRevision(task) !== row.taskRevision || linkRevision(link) !== row.linkRevision ||
           task.clientId !== run.clientId || link.request.warehouseId !== run.warehouseId ||
           ![row.sourceSupplyId, run.supplyId].includes(task.supplyId)) throw new ConflictException(`Сборка заказа ${row.id} изменилась. WB перенос проверен, но новая заявка требует сверки.`);
         return { row, task, link };
@@ -376,14 +434,19 @@ export class FbsReshipmentService {
         connectionId: run.connectionId, supplyId: run.supplyId!, orderIds: rows.map(row => row.id),
         cargoPlaceCount: 0, cargoPlaceIds: [], cargoPlaceBarcodes: {}, createdByUserId: user.id } });
       const request = await tx.clientRequest.create({ data: { clientId: run.clientId, warehouseId: run.warehouseId,
-        type: 'OUTBOUND', status: 'IN_WORK', priority: 'HIGH', title: `${run.mode === 'SAME_ITEM' ? 'Довоз собранного' : 'Повторная сборка'} WB — ${rows.length} заказов`,
+        type: 'OUTBOUND', status: 'IN_WORK', priority: 'HIGH', title: this.transferPurpose(run) === 'NO_STOCK' ? NO_STOCK_SUPPLY_NAME : `${run.mode === 'SAME_ITEM' ? 'Довоз собранного' : 'Повторная сборка'} WB — ${rows.length} заказов`,
         destinationCity: 'Повторная отгрузка WB', comment: `Поставка WB: ${run.supplyId}. Исходные заявки: ${sourceNumbers.join(', ')}. ` +
-          (run.mode === 'SAME_ITEM' ? 'ДОВОЗ УЖЕ СОБРАННОГО. Прежние КИЗ и списания сохранены; второй отбор запрещён.' : 'НОВЫЙ ФИЗИЧЕСКИЙ ОТБОР. Дополнительный расход подтверждён пользователем; списание только при сканировании.'),
+          (this.transferPurpose(run) ? 'ПЕРЕНОС НЕОТОБРАННОГО ТОВАРА. Списание только при физической сборке.' : run.mode === 'SAME_ITEM' ? 'ДОВОЗ УЖЕ СОБРАННОГО. Прежние КИЗ и списания сохранены; второй отбор запрещён.' : 'НОВЫЙ ФИЗИЧЕСКИЙ ОТБОР. Дополнительный расход подтверждён пользователем; списание только при сканировании.'),
         createdByUserId: user.id, items: { create: [...groups.values()] } }, include: { items: true } });
       for (const { task, link } of selected) {
         const item = request.items.find(item => item.skuId === task.skuId)!;
         let data: Prisma.FbsTsdAssemblyUpdateManyMutationInput = { requestId: request.id, requestItemId: item.id, supplyId: run.supplyId };
-        if (run.mode === 'NEW_ITEM') {
+        if (this.transferPurpose(run) === 'NO_STOCK') {
+          // FIX: transfer the existing untouched task; do not invent a second physical attempt.
+          data = { ...data, status: 'WAITING_STOCK', reservedBoxId: null, reservedBoxCode: null, reservedAt: null,
+            deviceCode: 'AUTO', workerUserId: null, workerName: null, storageBoxes: [],
+            errorMessage: 'Перенесён в поставку logoff нет на складе. Ожидается доступный товар.' };
+        } else if (run.mode === 'NEW_ITEM' && !this.transferPurpose(run)) {
           const successorId = randomUUID();
           if (task.status === 'COMPLETED' && task.completedAt) await tx.fbsAssemblyAttemptHistory.create({ data: { id: task.id, clientId: task.clientId, requestId: task.requestId,
             orderId: task.orderId, workerUserId: task.workerUserId, completedAt: task.completedAt!, successorId,
@@ -396,18 +459,44 @@ export class FbsReshipmentService {
             lastCategory: 'active', lastSupplyId: run.supplyId, lastSkuId: task.skuId, lastItemCount: task.itemCount, lastSeenAt: now } });
         if (changed.count !== 1 || linked.count !== 1) throw new ConflictException('Параллельное изменение сборки. Заявка не создана.');
       }
+      if (this.transferPurpose(run)) for (const requestId of new Set(rows.map(row => row.requestId))) {
+        await tx.clientRequestEvent.create({ data: { requestId, clientId: run.clientId, eventType: 'COMMENT',
+          title: 'Неотобранные заказы перенесены', body: `Поставка ${run.supplyId}, заявка №${request.number}. Заказы: ${rows.filter(row => row.requestId === requestId).map(row => row.id).join(', ')}.`, createdByUserId: user.id } });
+      }
       await tx.clientRequestEvent.create({ data: { requestId: request.id, clientId: run.clientId, eventType: 'CREATED',
         title: 'Повторная отгрузка WB', body: `Операция ${run.id}; исходные заявки ${sourceNumbers.join(', ')}.`, statusTo: 'IN_WORK', createdByUserId: user.id } });
       await tx.auditLog.create({ data: { userId: user.id, action: 'FBS_RESHIPMENT_CREATED', entity: 'ClientRequest', entityId: request.id,
         payload: { runId: run.id, mode: run.mode, supplyId: run.supplyId, orderIds: rows.map(row => row.id), previousRequestIds: rows.map(row => row.requestId),
-          physicalStockMutationPerformed: false, additionalStockConsumptionConfirmed: run.mode === 'NEW_ITEM' } } });
-      await tx.fbsReshipmentRun.update({ where: { id: run.id }, data: { status: 'CREATED', phase: 'COMPLETED', requestId: request.id, errorMessage: null } });
+          physicalStockMutationPerformed: false, additionalStockConsumptionConfirmed: !this.transferPurpose(run) && run.mode === 'NEW_ITEM' } } });
+      await tx.fbsReshipmentRun.update({ where: { id: run.id }, data: { status: 'CREATED', phase: this.transferPurpose(run) ? 'SOURCE_SYNC_PENDING' : 'COMPLETED', requestId: request.id, errorMessage: null } });
     }, { isolationLevel: 'Serializable', timeout: 60_000 });
+  }
+
+  // FIX: a crash after local commit leaves a resumable source-composition step, without repeating WB mutations.
+  private async finishSourceSync(run: FbsReshipmentRun) {
+    try {
+      await this.connections.finishStockTransferRequests(run.clientId, run.connectionId, run.supplyId!, this.journal(run));
+      await this.prisma.fbsReshipmentRun.updateMany({ where: { id: run.id, status: 'CREATED', phase: 'SOURCE_SYNC_PENDING' },
+        data: { phase: 'COMPLETED', errorMessage: null } });
+    } catch (error) {
+      await this.prisma.fbsReshipmentRun.updateMany({ where: { id: run.id, status: 'CREATED', phase: 'SOURCE_SYNC_PENDING' },
+        data: { errorMessage: `Перенос подтверждён. Требуется пересчёт исходной заявки: ${error instanceof Error ? error.message : 'ошибка синхронизации'}` } });
+    }
+  }
+
+  private supplyDisplayName(run: FbsReshipmentRun) {
+    return this.transferPurpose(run) === 'NO_STOCK' ? NO_STOCK_SUPPLY_NAME : run.supplyName;
+  }
+
+  private transferPurpose(run: FbsReshipmentRun): StockTransferPurpose | undefined {
+    const snapshot = run.snapshot;
+    const purpose = snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot) ? snapshot.transferPurpose : null;
+    return purpose === 'NO_STOCK' || purpose === 'TRANSFER' ? purpose : undefined;
   }
 
   private async view(run: FbsReshipmentRun) {
     const request = run.requestId ? await this.prisma.clientRequest.findUnique({ where: { id: run.requestId }, select: { number: true } }) : null;
-    return { runId: run.id, status: run.status, mode: run.mode, supplyId: run.supplyId, requestId: run.requestId,
-      requestNumber: request?.number ?? null, errorMessage: run.errorMessage ?? null };
+    return { runId: run.id, status: run.status, mode: run.mode, supplyName: this.supplyDisplayName(run), transferPurpose: this.transferPurpose(run) ?? null, supplyId: run.supplyId, requestId: run.requestId,
+      requestNumber: request?.number ?? null, sourceSyncPending: this.transferPurpose(run) ? run.phase === 'SOURCE_SYNC_PENDING' : false, errorMessage: run.errorMessage ?? null };
   }
 }

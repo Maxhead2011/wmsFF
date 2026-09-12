@@ -277,18 +277,25 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
     }
   }
 
-  async function loadBoxDetails(nextBoxCode = boxSearch) {
+  async function loadBoxDetails(nextBoxCode = boxSearch, clientId = selectedClientId) {
     const cleanBoxCode = nextBoxCode.trim();
     if (!cleanBoxCode) {
       setBoxDetails({ status: 'error', data: null, error: 'Укажите номер короба.' });
       return;
     }
 
+    // FIX: the boxless label is not a box identifier, including when typed manually.
+    if (cleanBoxCode.toLocaleUpperCase('ru-RU') === 'БЕЗ КОРОБА') {
+      setBoxDetails({ status: 'error', data: null, error: 'Товар не привязан к коробу. «Без короба» — обозначение остатка, а не номер короба.' });
+      return;
+    }
+
     setBoxSearch(cleanBoxCode);
-    setBoxDetails((current) => ({ ...current, status: 'loading', error: undefined }));
+    setBoxDetails({ status: 'loading', data: null });
 
     try {
-      const loaded = await fetchTurnoverBoxDetails(session.accessToken, cleanBoxCode);
+      // FIX: keep the selected product owner even when barcode search spans clients.
+      const loaded = await fetchTurnoverBoxDetails(session.accessToken, cleanBoxCode, { clientId: clientId || undefined });
       setBoxDetails({ status: 'ready', data: loaded });
     } catch (caught) {
       setBoxDetails({ status: 'error', data: null, error: errorMessage(caught) });
@@ -645,10 +652,11 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
             <div className="turnover-quick-tool__locations">
               {selectedReportItem.currentCells.length === 0 ? <span className="turnover-quick-tool__empty">На складе нет доступного остатка.</span> : null}
               {selectedReportItem.currentCells.map((cell) => (
-                <button type="button" key={`${cell.boxId ?? cell.boxCode}-${cell.status}-${cell.palletSortCode ?? ''}`} onClick={() => void loadBoxDetails(cell.boxCode)}>
+                <button type="button" key={`${cell.boxId ?? cell.boxCode}-${cell.status}-${cell.palletSortCode ?? ''}`} disabled={!cell.boxId} onClick={() => { if (cell.boxId) void loadBoxDetails(cell.boxCode, selectedReportItem.client.id); }}>
                   <strong>{cell.boxCode}</strong>
                   <span>{storageZoneLabel(cell)} · {cell.palletSortCode ?? cell.palletCode ?? 'без палет-сорта'}</span>
                   <small>{formatNumber(cell.quantity)} шт · {stockStatusLabel(cell.status)}</small>
+                  {!cell.boxId ? <small>Товар не привязан к коробу</small> : null}
                 </button>
               ))}
             </div>

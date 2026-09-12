@@ -35,6 +35,7 @@ import {
 } from '../../lib/api';
 import type { WorkspaceId } from '../../lib/workspaces';
 import { ConfirmDialog } from '../common/ConfirmDialog';
+import { UserDeleteButton } from '../access/UserDeleteButton';
 import './debug.css';
 import { useRememberedClientId } from '../../lib/rememberedClient';
 
@@ -848,6 +849,8 @@ export function DebugPanel({ session, onOpenWorkspace }: DebugPanelProps) {
                 <Save size={16} aria-hidden="true" />
                 <span>{isSavingUser ? 'Сохранение' : 'Сохранить пользователя'}</span>
               </button>
+              {selectedUser ? <UserDeleteButton key={selectedUser.id} session={session} user={selectedUser} disabled={isSavingUser}
+                onDeleted={id => { setUsers(current => current.filter(user => user.id !== id)); setSelectedUserId(''); }} /> : null}
             </div>
 
             <div className="debug-code-box">

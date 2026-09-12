@@ -1,6 +1,6 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { moscowDay, StatisticsTable } from './OperationsStatisticsPanel';
 import { canOpenWorkspace, workspaceNav } from '../../lib/workspaces';
 import { spaceSectionForWorkspace } from '../../lib/spaceNavigation';
@@ -11,6 +11,20 @@ const summary = { total: 1, timedShipped: 1, pending: 0, pendingOver24h: 0, canc
 const report = { summary, branches: [{ id: 'msk', name: 'Филиал Москва', summary,
   warehouses: [{ id: 'seller', name: 'Склад продавца 42', marketplace: 'OZON', clientName: 'Клиент', accountName: 'Кабинет', summary }] }] } as OperationsStatisticsReport;
 describe('statistics table and navigation // TEST', () => {
+  it('preserves admin monitoring opt-in without opening statistics to clients or demo users', () => {
+    // TEST: regression coverage for the approved release merge conflict.
+    vi.stubEnv('VITE_ADMIN_MONITORING_ENABLED', 'true');
+    try {
+      const admin = { roleCodes: ['ADMIN'], permissionCodes: ['system:admin'], isDemo: false,
+        workspaceVisibility: { monitoring: false } } as unknown as AuthUser;
+      const monitoring = workspaceNav.find(v => v.id === 'monitoring')!;
+      const statistics = workspaceNav.find(v => v.id === 'operations-statistics')!;
+      expect(canOpenWorkspace(admin, monitoring)).toBe(true);
+      expect(canOpenWorkspace(admin, statistics)).toBe(true);
+      expect(canOpenWorkspace({ ...admin, isDemo: true }, statistics)).toBe(false);
+      expect(canOpenWorkspace({ ...admin, roleCodes: ['CLIENT'] }, statistics)).toBe(false);
+    } finally { vi.unstubAllEnvs(); }
+  });
   it('starts with branch totals and expands to seller warehouses', () => {
     const collapsed = renderToStaticMarkup(<StatisticsTable data={report} expanded={[]} onToggle={() => {}} />);
     expect(collapsed).toContain('Филиал Москва'); expect(collapsed).not.toContain('Склад продавца 42'); expect(collapsed).toContain('aria-expanded="false"');

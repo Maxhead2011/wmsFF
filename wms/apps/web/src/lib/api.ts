@@ -2385,6 +2385,7 @@ export type TsdAssemblyPlan = {
         statusLabel: string;
         syncIssue: string | null;
         requiresReturnReceipt?: boolean;
+        managerDisposition?: FbsPickedDisposition;
         returnRequiresKiz?: boolean;
         workerName: string | null;
         completedAt: string | null;
@@ -3232,6 +3233,7 @@ export type FbsOrderSummary = {
 };
 
 export type ClientFbsOrders = {
+  stockTransferEnabled?: boolean;
   client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
   connected: boolean;
   connections: Array<{
@@ -3675,6 +3677,16 @@ export type AssembleFbsOrdersResult = {
     cargoPlaceIds: string[];
   }>;
   orders: ClientFbsOrders;
+};
+
+// FIX: explicit union keeps legacy callers and partial transfer results distinct.
+export type RoutedFbsStockTransferResult = {
+  routedTransfer: true;
+  transfers: Array<{ runId: string; status: string; supplyName: string; supplyId: string | null;
+    requestNumber: number | null; errorMessage: string | null; orderCount: number }>;
+  regularTransfer: MoveFbsOrdersToNewSupplyResult | null;
+  errors: string[];
+  skippedOrders: Array<{ id: string; reason: string }>;
 };
 
 export type MoveFbsOrdersToNewSupplyResult = {
@@ -5586,6 +5598,7 @@ export type UserPrinterScope = {
 
 export type UserSummary = {
   id: string;
+  canDelete?: boolean;
   email: string;
   name: string;
   status: string;
@@ -9970,7 +9983,7 @@ export async function moveFbsOrdersToNewSupply(
   accessToken: string,
   payload: FbsOrderSelectionPayload,
 ) {
-  return request<MoveFbsOrdersToNewSupplyResult>(
+  return request<MoveFbsOrdersToNewSupplyResult | RoutedFbsStockTransferResult>(
     '/marketplace-connections/fbs/orders/move-to-new-supply',
     {
       method: 'POST',
@@ -10876,6 +10889,13 @@ export async function createUser(accessToken: string, payload: CreateUserPayload
   });
 }
 
+// FIX: preserve the user record and history; the server enforces role and branch restrictions.
+export async function deleteUser(accessToken: string, userId: string) {
+  return request<{ id: string; status: 'ARCHIVED' }>(`/users/${encodeURIComponent(userId)}`, {
+    method: 'DELETE', accessToken,
+  });
+}
+
 export async function updateUserClientScopes(
   accessToken: string,
   userId: string,
@@ -11013,6 +11033,8 @@ export type FbsSyncConflictResolutionAction =
   | 'RETURN_TO_STOCK'
   | 'MANAGER_CONFIRMED';
 
+export type FbsPickedDisposition = 'SHIP_WITH_WB_LABEL' | 'AWAIT_RETURN_RECEIPT';
+
 export async function resolveTsdFbsSyncConflict(
   accessToken: string,
   requestId: string,
@@ -11020,6 +11042,7 @@ export async function resolveTsdFbsSyncConflict(
   payload: {
     action: FbsSyncConflictResolutionAction;
     comment?: string;
+    pickedDisposition?: FbsPickedDisposition;
     // FIX: physical return evidence, required server-side only with the WMSFF2207 flag.
     returnBoxCode?: string;
     returnBarcode?: string;
@@ -12168,6 +12191,7 @@ export type FbsReshipmentCandidate = {
   eligibleModes: FbsReshipmentMode[]; blockedReason: string | null;
 };
 export type FbsReshipmentRun = {
+  sourceSyncPending?: boolean; supplyName?: string; transferPurpose?: 'NO_STOCK' | 'TRANSFER' | null;
   runId: string; status: 'CREATED' | 'NEEDS_RECONCILIATION' | 'PENDING'; mode: FbsReshipmentMode;
   supplyId: string | null; requestId: string | null; requestNumber?: number | null; errorMessage: string | null;
 };

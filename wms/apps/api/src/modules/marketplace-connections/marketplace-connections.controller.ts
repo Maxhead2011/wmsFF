@@ -1,3 +1,4 @@
+import { FbsReshipmentService } from './fbs-reshipment.service';
 import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Res, StreamableFile } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
@@ -61,6 +62,7 @@ export class MarketplaceConnectionsController {
     // ADDED: read-only WB Finance report for the 13th FBS tile.
     private readonly penaltiesReport: FbsPenaltiesReportService,
     private readonly stockMonitoring: FbsStockMonitoringService,
+    private readonly reshipment: FbsReshipmentService,
   ) {}
 
   @Get()
@@ -101,12 +103,13 @@ export class MarketplaceConnectionsController {
 
   @Get('fbs/orders')
   @RequirePermissions()
-  listFbsOrders(
+  async listFbsOrders(
     @CurrentUser() user: AuthUser,
     @Query('clientId') clientId: string,
     @Query('refresh') refresh?: string,
   ) {
-    return this.connections.listFbsOrders(clientId, user, refresh === 'true' || refresh === '1');
+    const result = await this.connections.listFbsOrders(clientId, user, refresh === 'true' || refresh === '1');
+    return { ...result, ...(process.env.WMS_FBS_NO_STOCK_TRANSFER_ENABLED === 'true' && process.env.WMS_FBS_RESHIPMENT_ENABLED === 'true' ? { stockTransferEnabled: true } : {}) };
   }
 
   // FIX: explicit live audit of every WB supply routed to the user's active branch.
@@ -538,7 +541,10 @@ export class MarketplaceConnectionsController {
   @Post('fbs/orders/move-to-new-supply')
   @RequirePermissions()
   moveFbsOrdersToNewSupply(@Body() dto: FbsOrderSelectionDto, @CurrentUser() user: AuthUser) {
-    return this.connections.moveFbsOrdersToNewSupply(dto, user);
+    // FIX: sold WMS retains its original endpoint behavior unless explicitly enabled.
+    return process.env.WMS_FBS_NO_STOCK_TRANSFER_ENABLED === 'true'
+      ? this.reshipment.moveWithStockRouting(dto, user)
+      : this.connections.moveFbsOrdersToNewSupply(dto, user);
   }
 
   // ADDED: safe recovery for mixed/partially unavailable online-request orders.

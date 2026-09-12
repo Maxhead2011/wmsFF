@@ -1,3 +1,4 @@
+import { stockTransferBlockedReason, ordersWithoutTransferStock } from './fbs-stock-transfer';
 import { createHash } from 'node:crypto';
 import { timingSnapshot, type SourceOrderTiming } from '../operations-statistics/order-timing';
 import { isOwnedUnpaidDraft, runBillingMutation, withBillingDb } from '../billing/billing-mutation';
@@ -47,6 +48,7 @@ import { InventoryLockService } from '../../common/inventory/inventory-lock.serv
 import { BoxCodePolicyService, permanentStorageBoxesEnabled, preserveEmptyStorageBox } from '../../common/boxes/box-code-policy.service';
 import { ArchivedEmptyBoxPalletDetachService } from '../../common/boxes/archived-empty-box-pallet-detach.service';
 import { requiresFbsReturnReceipt, validateFbsReturnReceipt, type FbsReturnReceipt } from './fbs-return-receipt';
+import { confirmFbsPickedManagerDecision, fbsManagerDisposition, wasFbsDispatchSelectionReleased } from './fbs-manager-decision';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService, type ClientFilter } from '../auth/client-scope.service';
@@ -12399,7 +12401,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new NotFoundException('Проблемный FBS-заказ в этой заявке не найден.');
     }
     this.clientScopes.requireClientAccess(user, task.clientId, 'write');
-    if (task.status !== FBS_TSD_RETURN_REQUIRED) {
+    if (task.status !== FBS_TSD_RETURN_REQUIRED && !(permanentStorageBoxesEnabled() && dto.action === FbsSyncConflictResolutionAction.MANAGER_CONFIRMED && task.status === 'COMPLETED')) {
       throw new BadRequestException(
         'Эта проблема уже решена или состояние заказа изменилось. Обновите заявку.',
       );
@@ -12416,6 +12418,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     });
     if (!link || link.requestId !== requestId) {
       throw new NotFoundException('Связь FBS-заказа с заявкой не найдена. Обновите заявку.');
+    }
+
+    // FIX: confirming a physical pick never runs the stock-return/KIZ-release workflow.
+    if (dto.action === FbsSyncConflictResolutionAction.MANAGER_CONFIRMED &&
+      (requiresFbsReturnReceipt(task) || fbsManagerDisposition(link.syncStatus))) {
+      const result = await confirmFbsPickedManagerDecision(this.prisma, task, link, dto, user);
+      this.fbsOrdersCache.delete(task.clientId);
+      this.fbsTsdRequestFallbackCache.delete(task.clientId);
+      return result;
     }
 
     // FIX: validate scans, branch/client access and placement before any external KIZ mutation.
@@ -12465,7 +12476,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         !freshTask ||
         !freshLink ||
         freshTask.status !== FBS_TSD_RETURN_REQUIRED ||
-        freshLink.syncStatus !== FBS_REQUEST_LINK_RETURN_REQUIRED
+        (freshLink.syncStatus !== FBS_REQUEST_LINK_RETURN_REQUIRED && fbsManagerDisposition(freshLink.syncStatus) !== 'AWAIT_RETURN_RECEIPT')
       ) {
         throw new BadRequestException(
           'Состояние заказа уже изменилось. Обновите заявку и проверьте результат.',
@@ -12477,7 +12488,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       if (receipt && freshTask.updatedAt.getTime() !== task.updatedAt.getTime()) {
         throw new BadRequestException('Заказ изменился. Обновите заявку и повторите приёмку.');
       }
-      if (freshTask.completedAt && freshTask.boxId) {
+      if (freshTask.completedAt && freshTask.boxId && !(await wasFbsDispatchSelectionReleased(tx, freshTask, freshLink))) {
         const selection = await tx.clientRequestBoxSelection.findUnique({
           where: {
             requestItemId_boxId: {
@@ -18083,6 +18094,91 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
+  // FIX: fresh, branch-scoped stock routing for an explicitly selected transfer.
+  async prepareFbsStockTransfer(dto: FbsOrderSelectionDto, user: AuthUser) {
+    this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+    const warehouseId = user.activeWarehouseId;
+    if (!warehouseId || (user.writableWarehouseIds && !user.writableWarehouseIds.includes(warehouseId))) {
+      throw new ForbiddenException('Выберите доступный для работы филиал.');
+    }
+    if (!dto.orders.length || new Set(dto.orders.map(row => selectionKey(row.connectionId, row.id))).size !== dto.orders.length) throw new BadRequestException('Выберите неповторяющиеся заказы.');
+    // FIX: transferring a selected order must not wait for client-wide billing writes.
+    const fresh = await this.refreshFbsOrdersCache(dto.clientId, { invalidateHistory: false, historyMode: 'cache-only', billingMode: 'skip' });
+    const { orders } = await this.resolveSelectedFbsOrders(dto.clientId, dto.orders, fresh);
+    const tasks = await this.prisma.fbsTsdAssembly.findMany({ where: { clientId: dto.clientId, marketplace: 'WILDBERRIES',
+      OR: orders.map(order => ({ connectionId: order.connectionId, orderId: order.id })) } });
+    const links = await this.prisma.fbsOrderRequestLink.findMany({ where: { clientId: dto.clientId, marketplace: 'WILDBERRIES',
+      request: { warehouseId }, OR: orders.map(order => ({ connectionId: order.connectionId, orderId: order.id })) }, include: { request: true } });
+    const skippedOrders: Array<{ id: string; reason: string }> = [];
+    const eligible = orders.filter(order => {
+      const task = tasks.find(task => task.orderId === order.id && task.connectionId === order.connectionId);
+      const link = links.find(link => link.orderId === order.id && link.connectionId === order.connectionId && link.requestId === task?.requestId);
+      const reason = order.marketplace !== 'WILDBERRIES' || !order.product ? 'Товар WMS не найден.' :
+        !task || !link ? 'Нет сборки и заявки в выбранном филиале.' :
+        dto.sourceRequestId && link.requestId !== dto.sourceRequestId ? 'Заказ уже перенесён из исходной заявки.' :
+        stockTransferBlockedReason(task, link, { supplierStatus: order.supplierStatus ?? '', wbStatus: order.wbStatus ?? '' });
+      if (reason) skippedOrders.push({ id: order.id, reason });
+      return !reason;
+    });
+    if (!eligible.length) throw new BadRequestException(skippedOrders.map(row => `№${row.id}: ${row.reason}`).join(' '));
+    const selected = eligible.map(order => {
+      const task = tasks.find(task => task.orderId === order.id && task.connectionId === order.connectionId)!;
+      return { key: selectionKey(order.connectionId, order.id), taskId: task.id,
+        skuId: order.relabeling?.sourceSkuId || order.product!.id, itemCount: Math.max(1, order.itemCount) };
+    });
+    const client = await this.prisma.client.findUniqueOrThrow({ where: { id: dto.clientId }, select: { storesWithoutBoxes: true } });
+    const skuIds = uniqueStrings(selected.map(row => row.skuId));
+    const balances = await this.prisma.stockBalance.findMany({ where: { clientId: dto.clientId, warehouseId,
+      skuId: { in: skuIds }, status: 'AVAILABLE', quantity: { gt: 0 },
+      ...(client.storesWithoutBoxes ? { OR: [{ boxId: null }, { box: { warehouseId, status: { notIn: ['deleted', 'archived', 'shipped'] } } }] } :
+        { boxId: { not: null }, box: { clientId: dto.clientId, warehouseId, status: { notIn: ['deleted', 'archived', 'shipped'] },
+          storagePlacement: { pallet: { clientId: dto.clientId, warehouseId } } } }) },
+      select: { skuId: true, boxId: true, quantity: true } });
+    const reservations = await this.fbsTsdReservationRowsBySku({ clientId: dto.clientId, skuIds, excludeTaskId: null,
+      withoutBox: client.storesWithoutBoxes });
+    if (client.storesWithoutBoxes) {
+      const requests = await this.prisma.clientRequest.findMany({ where: { clientId: dto.clientId, warehouseId }, select: { id: true } });
+      const scoped = await this.prisma.fbsTsdAssembly.findMany({ where: { clientId: dto.clientId,
+        requestId: { in: requests.map(row => row.id) }, id: { in: [...reservations.values()].flat().map(row => row.taskId) } }, select: { id: true } });
+      const ids = new Set(scoped.map(row => row.id));
+      for (const [skuId, rows] of reservations) reservations.set(skuId, rows.filter(row => ids.has(row.taskId)));
+    }
+    const missing = ordersWithoutTransferStock(selected, balances, reservations, client.storesWithoutBoxes);
+    return { orders: eligible.map(order => ({ ...order, noStock: missing.has(selectionKey(order.connectionId, order.id)) })), skippedOrders };
+  }
+
+  // FIX: WB membership/status were verified by the journal. Reconcile both old and new WMS compositions.
+  async finishStockTransferRequests(clientId: string, connectionId: string, supplyId: string,
+    rows: Array<{ id: string; requestId: string }>) {
+    const ids = new Set(rows.map(row => row.id));
+    // FIX: WB history is cached for six hours. Preserve the verified target before
+    // any source reconciliation, which can fail and need a journal retry.
+    const history = this.wildberriesFbsHistoryCache.get(connectionId);
+    if (history) {
+      this.wildberriesFbsHistoryCache.set(connectionId, {
+        ...history,
+        orders: history.orders.map(order => ids.has(textValue(order.id))
+          ? { ...order, supplyId, supplyID: supplyId } : order),
+      });
+    }
+    const cached = this.fbsOrdersCache.get(clientId)?.value;
+    const response = cached ?? await this.refreshFbsOrdersCache(clientId, { invalidateHistory: false, historyMode: 'cache-only', billingMode: 'skip' });
+    const orders = response.orders.map(order => order.connectionId === connectionId && ids.has(order.id)
+      ? { ...order, category: 'active' as const, supplierStatus: 'confirm', wbStatus: 'waiting', supplyId } : order);
+    const orderByKey = new Map(orders.map(order => [selectionKey(order.connectionId, order.id), order]));
+    for (const requestId of uniqueStrings(rows.map(row => row.requestId))) {
+      const result = await this.syncOneFbsRequest(clientId, requestId, orderByKey, []);
+      if (!result.changed && result.summary.includes('не все связанные заказы')) throw new ConflictException('Не все заказы исходной заявки доступны для пересчёта.');
+    }
+    this.fbsOrdersCache.delete(clientId);
+  }
+
+  async stockTransferDefaultDelivery(clientId: string) {
+    const plan = await this.loadFbsDeliveryPlan(clientId);
+    return { deliveryDestination: plan.destination, itemsPerCargoPlace: plan.itemsPerCargoPlace,
+      marketplaceWarehouseId: null, marketplaceWarehouseName: null, destinationOfficeId: null, destinationOfficeName: null };
+  }
+
   async moveFbsOrdersToNewSupply(dto: FbsOrderSelectionDto, user: AuthUser) {
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'write');
@@ -23376,7 +23472,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   private async refreshFbsOrdersCache(
     clientId: string,
-    options: { invalidateHistory?: boolean; historyMode?: FbsOrderHistoryMode } = {},
+    options: { invalidateHistory?: boolean; historyMode?: FbsOrderHistoryMode; billingMode?: 'sync' | 'skip' } = {},
   ) {
     const connections = await this.prisma.clientMarketplaceConnection.findMany({
       where: { clientId, marketplace: MarketplaceType.WILDBERRIES },
@@ -23394,6 +23490,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       this.wildberriesFbsStatusCache.delete(connection.id),
     );
     const value = await this.loadFbsOrders(clientId, undefined, options);
+    // FIX: operational results omit billing and must not replace the shared billed response.
+    if (options.billingMode === 'skip') return value;
     this.fbsOrdersCache.set(clientId, {
       expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
       value,
@@ -24040,6 +24138,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         .map((order) => order.id);
       const statusChanges: string[] = [];
       const conflicts: string[] = [];
+      let deferredManagerReturns = 0;
       let compositionLocked = request.status === ClientRequestStatus.PACKED;
 
       for (const link of liveLinks) {
@@ -24068,6 +24167,22 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         if (hadSnapshot && snapshotChanged) await recordReshipmentTransition(tx, link, order, task);
         if (hadSnapshot && snapshotChanged) {
           statusChanges.push(fbsOrderLinkChangeText(link, order));
+        }
+
+        // FIX: unchanged WB data cannot undo an explicit decision about physically deducted stock.
+        const managerDisposition = fbsManagerDisposition(link.syncStatus);
+        if (task && managerDisposition && !snapshotChanged) {
+          if (managerDisposition === 'SHIP_WITH_WB_LABEL') {
+            addFbsDesiredItem(desiredItems, desiredSkuByOrder, {
+              orderId: order.id, skuId: task.skuId,
+              barcode: jsonStringArray(task.barcodes)[0] ?? task.barcode,
+              name: task.productName, quantity: Math.max(1, task.itemCount),
+            });
+          } else {
+            // The unit stays deducted and traceable on the task, but is not dispatch demand.
+            deferredManagerReturns += 1;
+          }
+          continue;
         }
 
         if (order.category === 'cancelled') {
@@ -24416,7 +24531,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             clientId,
             eventType: ClientRequestEventType.STATUS_CHANGED,
             title: 'Заявка отменена после синхронизации FBS',
-            body: 'Все заказы группы отменены до начала физической сборки.',
+            body: deferredManagerReturns > 0
+              ? 'В группе не осталось заказов к отправке. Отложенные товары остаются списанными до отдельной повторной приёмки.'
+              : 'Все заказы группы отменены до начала физической сборки.',
             statusFrom: request.status,
             statusTo: ClientRequestStatus.CANCELLED,
           },
@@ -25476,16 +25593,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   private async loadFbsOrders(
     clientId: string,
     previousOrderStates?: ReadonlyMap<string, string>,
-    options: { historyMode?: FbsOrderHistoryMode } = {},
+    options: { historyMode?: FbsOrderHistoryMode; billingMode?: 'sync' | 'skip' } = {},
   ): Promise<FbsOrdersResponse> {
     const historyMode = options.historyMode ?? 'full';
-    const loadKey = `${clientId}:${previousOrderStates ? 'incremental' : 'full'}:${historyMode}`;
+    const billingMode = options.billingMode ?? 'sync';
+    // FIX: an operational load cannot share the promise of a pending billing transaction.
+    const loadKey = `${clientId}:${previousOrderStates ? 'incremental' : 'full'}:${historyMode}:${billingMode}`;
     const current = this.fbsOrdersLoads.get(loadKey);
     if (current) {
       return current;
     }
 
-    const promise = this.loadFbsOrdersUncached(clientId, previousOrderStates, { historyMode });
+    const promise = this.loadFbsOrdersUncached(clientId, previousOrderStates, { historyMode, billingMode });
     this.fbsOrdersLoads.set(loadKey, promise);
     try {
       return await promise;
@@ -25548,7 +25667,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   private async loadFbsOrdersUncached(
     clientId: string,
     previousOrderStates?: ReadonlyMap<string, string>,
-    options: { historyMode?: FbsOrderHistoryMode } = {},
+    options: { historyMode?: FbsOrderHistoryMode; billingMode?: 'sync' | 'skip' } = {},
   ): Promise<FbsOrdersResponse> {
     const [client, connections, deliveryPlan] = await Promise.all([
       this.prisma.client.findUnique({
@@ -25858,7 +25977,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         reservationByOrder.get(selectionKey(order.connectionId, order.id)) ??
         null,
     }));
-    const billingByOrder = await this.ensureFbsProcessingCharges(
+    const billingByOrder = options.billingMode === 'skip' ? new Map() : await this.ensureFbsProcessingCharges(
       clientId,
       ordersWithReservations.filter((order) => order.category === 'shipped'),
     );
@@ -26910,7 +27029,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const charges: Prisma.BillingChargeGetPayload<{}>[] = [];
     for (const line of configuredLines) {
       const sourceKey = `${chargePrefix}${line.key}`;
-      const totalRub = round(line.unitPriceRub * line.quantity, 2);
+      // FIX: retain full precision until the grossed-up line total is rounded.
+      const totalRub = fbsPrimaryPriceWithTax(line.priceBeforeTaxRub * line.quantity, line.taxMode);
       const data = {
         clientId: input.clientId,
         serviceId: line.serviceId,

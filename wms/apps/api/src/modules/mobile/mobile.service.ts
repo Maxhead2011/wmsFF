@@ -811,6 +811,7 @@ export class MobileService {
       const rows = await this.prisma.user.findMany({
         where: {
           isDemo: false,
+          status: { not: 'ARCHIVED' },
           OR: contains ? [{ name: contains }, { email: contains }] : undefined,
         },
         include: {

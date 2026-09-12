@@ -3,6 +3,7 @@ import type { FbsTsdAssembly, Prisma } from '@prisma/client';
 import { BoxCodePolicyService, permanentStorageBoxesEnabled } from '../../common/boxes/box-code-policy.service';
 import type { AuthUser } from '../auth/auth.types';
 import type { ResolveFbsSyncConflictDto } from './dto/resolve-fbs-sync-conflict.dto';
+import { fbsManagerDisposition } from './fbs-manager-decision';
 
 type ReturnTask = Pick<FbsTsdAssembly, 'completedAt' | 'status' | 'kiz' | 'barcode' | 'relabelConfirmedAt'>;
 // FIX: a logical reservation is different from a physically scanned/completed pick.
@@ -35,7 +36,12 @@ export async function validateFbsReturnReceipt(
   if (!requiresFbsReturnReceipt(task)) return undefined;
   if (user.isDemo || user.roleCodes?.includes('CLIENT')) throw new ForbiddenException('Приёмка возврата доступна только сотрудникам WMS.');
   const request = await tx.clientRequest.findUnique({ where: { id: task.requestId }, select: { clientId: true, warehouseId: true, status: true } });
-  if (!request?.warehouseId || request.clientId !== task.clientId || request.status === 'DONE') {
+  // FIX: dispatch of the original request does not receive a separately deferred unit.
+  const deferredLink = request?.status === 'DONE' ? await tx.fbsOrderRequestLink.findUnique({
+    where: { marketplace_connectionId_orderId: { marketplace: task.marketplace, connectionId: task.connectionId, orderId: task.orderId } },
+  }) : null;
+  const deferredReceipt = deferredLink?.requestId === task.requestId && fbsManagerDisposition(deferredLink?.syncStatus) === 'AWAIT_RETURN_RECEIPT';
+  if (!request?.warehouseId || request.clientId !== task.clientId || (request.status === 'DONE' && !deferredReceipt)) {
     throw new BadRequestException('Заявка уже отгружена или её склад не определён. Нужна проверка возврата после отгрузки.');
   }
   if (user.activeWarehouseId !== request.warehouseId ||

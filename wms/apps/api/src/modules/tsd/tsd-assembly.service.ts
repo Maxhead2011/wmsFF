@@ -2,6 +2,8 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import { requiresFbsReturnReceipt } from '../marketplace-connections/fbs-return-receipt';
 import { fbsTerminalQueueFilterEnabled, isFbsTerminalQueueOrder } from '../../common/fbs-terminal-queue';
+import { fbsManagerDisposition } from '../marketplace-connections/fbs-manager-decision';
+import { permanentStorageBoxesEnabled } from '../../common/boxes/box-code-policy.service';
 import {
   ClientRequestStatus,
   ClientRequestType,
@@ -9,6 +11,7 @@ import {
   PickWaveBalanceReviewStatus,
   PickWaveStatus,
   Prisma,
+  StockStatus,
   TsdOperationStatus,
 } from '@prisma/client';
 import * as XLSX from 'xlsx';
@@ -866,11 +869,13 @@ export class TsdAssemblyService {
       this.prisma.fbsOrderRequestLink.findMany({
         where: {
           requestId,
-          syncStatus: { in: ['ACTIVE', 'RETURN_REQUIRED'] },
-          ...(!fbsTerminalQueueFilterEnabled() ? { lastCategory: { not: 'cancelled' } } : {}),
+          syncStatus: { in: ['ACTIVE', 'RETURN_REQUIRED', ...(permanentStorageBoxesEnabled() ? ['MANAGER_CONFIRMED_SHIPMENT', 'MANAGER_CONFIRMED_RETURN'] : [])] },
+          ...(!fbsTerminalQueueFilterEnabled() ? (permanentStorageBoxesEnabled()
+            ? { OR: [{ lastCategory: { not: 'cancelled' } }, { syncStatus: { in: ['MANAGER_CONFIRMED_SHIPMENT', 'MANAGER_CONFIRMED_RETURN'] } }] }
+            : { lastCategory: { not: 'cancelled' } }) : {}),
         },
         select: { orderId: true, connectionId: true, lastSkuId: true, lastItemCount: true,
-          marketplace: true, lastCategory: true, lastSupplierStatus: true, lastWbStatus: true },
+          marketplace: true, lastCategory: true, lastSupplierStatus: true, lastWbStatus: true, syncStatus: true },
         orderBy: { createdAt: 'asc' },
       }),
       this.prisma.fbsTsdAssembly.findMany({
@@ -998,6 +1003,8 @@ export class TsdAssemblyService {
         },
       ]),
     );
+    // FIX: historical pick allocations are not proof of current available stock.
+    const currentAllocationQuantities = await this.loadCurrentFbsAllocationQuantities(requestId, requestRows);
     const facts = rows.map((row) => ({
       id: row.id,
       orderId: row.orderId,
@@ -1016,6 +1023,8 @@ export class TsdAssemblyService {
       syncIssue: row.errorMessage,
       // FIX: web clients request fresh receipt scans only when our installation requires them.
       requiresReturnReceipt: requiresFbsReturnReceipt(row),
+      // FIX: deferred receipt remains visible after the manager resolves the marketplace conflict.
+      managerDisposition: fbsManagerDisposition(savedLinks.find(link => link.connectionId === row.connectionId && link.orderId === row.orderId)?.syncStatus),
       returnRequiresKiz: row.requiresKiz || Boolean(row.kiz),
       workerName: row.workerName,
       completionSource: row.deviceCode.startsWith('SOS-WB:') ? 'SOS_WB' : 'STANDARD',
@@ -1050,7 +1059,8 @@ export class TsdAssemblyService {
     const cancelledReceiptKeys = new Set(terminalLinks.filter(link => link.lastCategory === 'cancelled' &&
       link.lastWbStatus?.trim().toLowerCase() !== 'sold').map(link => `${link.connectionId}:${link.orderId}`));
     const returnRequiredRows = rows.filter((row) => row.status === 'RETURN_REQUIRED' &&
-      (!terminalTaskIds.has(row.id) || (requiresFbsReturnReceipt(row) && cancelledReceiptKeys.has(`${row.connectionId}:${row.orderId}`))));
+      (facts.find(fact => fact.id === row.id)?.managerDisposition === 'AWAIT_RETURN_RECEIPT' ||
+       !terminalTaskIds.has(row.id) || (requiresFbsReturnReceipt(row) && cancelledReceiptKeys.has(`${row.connectionId}:${row.orderId}`))));
     const returnRequiredIds = new Set(returnRequiredRows.map(row => row.id));
     const handledRows = [...completedRows, ...returnRequiredRows];
     const handledOrderIds = new Set(handledRows.map((row) => row.orderId));
@@ -1137,16 +1147,22 @@ export class TsdAssemblyService {
               } =>
                 Boolean(order),
             ),
-          availableBoxes: row.allocations.map((allocation) => {
+          availableBoxes: row.allocations.flatMap((allocation) => {
+            if (remainingQuantity <= 0) return [];
+            const balanceKey = `${row.skuId}:${normalizeBoxCode(allocation.boxCode)}`;
+            const available = currentAllocationQuantities.get(balanceKey) ?? 0;
+            const quantity = Math.min(allocation.quantity, available);
+            if (quantity <= 0) return [];
+            currentAllocationQuantities.set(balanceKey, available - quantity);
             const storageLocation = allocationLocationByBox.get(normalizeBoxCode(allocation.boxCode)) ?? null;
-            return {
+            return [{
               boxCode: allocation.boxCode,
-              quantity: allocation.quantity,
+              quantity,
               // FIX: prefer the current placement over the stale instruction snapshot.
               palletId: storageLocation?.palletId ?? allocation.palletId,
               palletCode: storageLocation?.palletCode ?? allocation.palletCode,
               storageLocation,
-            };
+            }];
           }),
         };
       })
@@ -1320,6 +1336,34 @@ export class TsdAssemblyService {
         rows: notCollectedRows,
       },
     };
+  }
+
+  private async loadCurrentFbsAllocationQuantities(requestId: string, requestRows: PickInstructionDocument['rows']) {
+    const boxCodes = uniqueSorted(requestRows.flatMap(row => row.allocations.map(allocation => allocation.boxCode)));
+    const skuIds = uniqueSorted(requestRows.map(row => row.skuId).filter((id): id is string => Boolean(id)));
+    const quantities = new Map<string, number>();
+    if (boxCodes.length === 0 || skuIds.length === 0) return quantities;
+    const balances = await this.prisma.stockBalance.findMany({
+      where: {
+        skuId: { in: skuIds },
+        status: StockStatus.AVAILABLE,
+        quantity: { gt: 0 },
+        // FIX: use the request's owner and branch, never a global box-code match.
+        sku: { client: { requests: { some: { id: requestId } } } },
+        warehouse: { requests: { some: { id: requestId } } },
+        box: {
+          status: { notIn: ['deleted', 'archived'] },
+          OR: boxCodes.map(code => ({ code: { equals: code, mode: 'insensitive' as const } })),
+        },
+      },
+      select: { skuId: true, quantity: true, box: { select: { code: true } } },
+    });
+    for (const balance of balances) {
+      if (!balance.box) continue;
+      const key = `${balance.skuId}:${normalizeBoxCode(balance.box.code)}`;
+      quantities.set(key, (quantities.get(key) ?? 0) + balance.quantity);
+    }
+    return quantities;
   }
 
   private async loadMovementProgress(document: PickInstructionDocument, tasks: TsdMovementPlanTask[]) {

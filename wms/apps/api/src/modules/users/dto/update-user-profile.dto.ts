@@ -1,5 +1,5 @@
 import { UserStatus } from '@prisma/client';
-import { IsBoolean, IsEnum, IsOptional, IsString, IsUUID, Length, ValidateIf } from 'class-validator';
+import { IsBoolean, IsIn, IsOptional, IsString, IsUUID, Length, ValidateIf } from 'class-validator';
 
 export class UpdateUserProfileDto {
   @IsOptional()
@@ -21,7 +21,8 @@ export class UpdateUserProfileDto {
   password?: string;
 
   @IsOptional()
-  @IsEnum(UserStatus)
+  // FIX: archival must go through the role-checked deletion endpoint.
+  @IsIn([UserStatus.ACTIVE, UserStatus.BLOCKED])
   status?: UserStatus;
 
   @IsOptional()
