@@ -38,6 +38,20 @@ function setup() {
 }
 
 describe('WB reshipment UI // TEST', () => {
+  // TEST: recovery clearly distinguishes a browser command from read-only reconciliation and new-label printing.
+  it('shows extension installation and one-click continuation, then both sticker identifiers', async () => {
+    const { api, model } = setup();
+    const run = { runId: 'run1', status: 'PENDING', mode: 'NEW_ITEM', supplyId: 'WB-GI-2', requestId: null, errorMessage: null,
+      portal: { ready: true, started: false, sourceSupplyId: 'WB-GI-1', targetSupplyId: 'WB-GI-2', targetSupplyName: 'Target', connectionId: 'cabinet', orderIds: ['123'], stickers: [] } };
+    api.check.mockResolvedValue({ candidates: [], runs: [run] }); await model.check();
+    let html = renderToStaticMarkup(<FbsReshipmentView model={model} />);
+    expect(html).toContain('Перенести через кабинет WB'); expect(html).toContain('/downloads/logoff-wb-transfer.zip');
+    api.resume.mockResolvedValue({ ...run, status: 'CREATED', requestId: 'new-request', portal: { ...run.portal, ready: false, started: true,
+      stickers: [{ orderId: '123', oldStickerId: '57692994752', newStickerId: '57884350051' }] } });
+    await model.resume('run1'); html = renderToStaticMarkup(<FbsReshipmentView model={model} />);
+    expect(html).toContain('57692994752'); expect(html).toContain('57884350051'); expect(html).toContain('Скачать новые стикеры WB');
+    expect(html).not.toContain('Перенести через кабинет WB');
+  });
   // TEST: a committed transfer still offers recovery when only source composition remains pending.
   it('can continue source recalculation for an already created no-stock request', async () => {
     const { api, model } = setup();

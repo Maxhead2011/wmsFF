@@ -70,6 +70,27 @@ describe('WB stock transfer gateway', () => {
 describe('confirmed stock transfer history', () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  // TEST: a six-hour complete/waiting cache must not undo a verified return to assembly.
+  it('updates the status cache and evicts old print/fallback caches only with the portal flag', async () => {
+    vi.stubEnv('WMS_WB_PORTAL_TRANSFER_ENABLED', 'true');
+    try {
+      const service: any = new MarketplaceConnectionsService({} as never, {} as never);
+      service.wildberriesFbsStatusCache.set('cabinet', { expiresAt: Date.now() + 60000,
+        statuses: new Map([['101', { supplierStatus: 'complete', wbStatus: 'waiting' }], ['102', { supplierStatus: 'complete', wbStatus: 'sold' }]]) });
+      service.fbsOrdersCache.set('client', { value: { orders: [] } });
+      service.fbsTsdRequestFallbackCache.set('client', { old: true });
+      service.fbsTsdStickerCache.set('cabinet:101', { old: true });
+      service.fbsTsdStickerCache.set('cabinet:102', { untouched: true });
+      service.syncOneFbsRequest = vi.fn(async () => { throw new Error('temporary failure'); });
+      await expect(service.finishStockTransferRequests('client', 'cabinet', 'new-supply', [{ id: '101', requestId: 'source-request' }])).rejects.toThrow();
+      expect(service.wildberriesFbsStatusCache.get('cabinet').statuses.get('101')).toEqual({ supplierStatus: 'confirm', wbStatus: 'waiting' });
+      expect(service.wildberriesFbsStatusCache.get('cabinet').statuses.get('102').wbStatus).toBe('sold');
+      expect(service.fbsTsdStickerCache.has('cabinet:101')).toBe(false);
+      expect(service.fbsTsdStickerCache.has('cabinet:102')).toBe(true);
+      expect(service.fbsTsdRequestFallbackCache.has('client')).toBe(false);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it.each([false, true])('keeps the target supply on refresh when source sync fails: %s', async (failSourceSync) => {
     const service: any = new MarketplaceConnectionsService({} as never, {} as never);
     const connection = { id: 'cabinet', apiKey: 'test-key', accountName: 'WB' };

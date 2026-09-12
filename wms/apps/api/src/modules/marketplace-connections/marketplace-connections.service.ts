@@ -18189,6 +18189,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   async finishStockTransferRequests(clientId: string, connectionId: string, supplyId: string,
     rows: Array<{ id: string; requestId: string }>) {
     const ids = new Set(rows.map(row => row.id));
+    // FIX: the old complete/waiting status and sticker must not overwrite the verified portal result.
+    if (process.env.WMS_WB_PORTAL_TRANSFER_ENABLED === 'true') {
+      const pending = this.fbsOrdersLoads.get(clientId);
+      if (pending) await pending.catch(() => undefined);
+      const cachedStatuses = this.wildberriesFbsStatusCache.get(connectionId);
+      if (cachedStatuses) for (const id of ids) cachedStatuses.statuses.set(id, { supplierStatus: 'confirm', wbStatus: 'waiting' });
+      for (const id of ids) this.fbsTsdStickerCache.delete(`${connectionId}:${id}`);
+      this.fbsTsdRequestFallbackCache.delete(clientId);
+    }
     // FIX: WB history is cached for six hours. Preserve the verified target before
     // any source reconciliation, which can fail and need a journal retry.
     const history = this.wildberriesFbsHistoryCache.get(connectionId);
@@ -21995,8 +22004,29 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return this.readWbStatusesForConnection(connection.apiKey, orderIds);
   }
 
+  // FIX: fresh sticker identifiers are independent proof; browser responses are never trusted as completion.
+  async readReshipmentWbStickers(clientId: string, connectionId: string, orderIds: string[], user: AuthUser) {
+    const connection = await this.reshipmentConnection(clientId, connectionId, user);
+    const result = new Map<string, string>();
+    for (const ids of chunks(orderIds, 100)) {
+      const orders = ids.map(id => Number(this.reshipmentOrderId(id)));
+      const payload = await marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/orders/stickers?type=png&width=58&height=40', {
+        method: 'POST', headers: wbHeaders(connection.apiKey), body: JSON.stringify({ orders }), signal: AbortSignal.timeout(20_000),
+      });
+      if (!Array.isArray(payload.stickers)) throw new BadRequestException('WB не вернул стикеры выбранных заказов.');
+      for (const raw of payload.stickers) {
+        const sticker = asRecord(raw); const id = this.reshipmentOrderId(sticker.orderId);
+        const barcode = textValue(sticker.barcode);
+        if (!ids.includes(id) || result.has(id) || !/^[1-9]\d*$/.test(barcode)) throw new BadRequestException('WB вернул некорректные стикеры.');
+        result.set(id, barcode);
+      }
+      if (ids.some(id => !result.has(id))) throw new BadRequestException('WB не подтвердил стикеры всех выбранных заказов.');
+    }
+    return result;
+  }
+
   private async readWbStatusesForConnection(apiKey: string, orderIds: string[]) {
-    const result = new Map<string, { supplierStatus: string; wbStatus: string }>();
+    const result = new Map<string, { supplierStatus: string; wbStatus: string; isTransferable?: boolean }>();
     for (const ids of chunks(orderIds, 1000)) {
       const numericIds = ids.map(id => Number(id));
       if (numericIds.some(id => !Number.isSafeInteger(id) || id <= 0)) throw new BadRequestException('Некорректный номер заказа WB.');
@@ -22005,7 +22035,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         body: JSON.stringify({ orders: numericIds }),
       });
       for (const status of asArray<Record<string, unknown>>(response.orders)) {
-        result.set(textValue(status.id), { supplierStatus: textValue(status.supplierStatus), wbStatus: textValue(status.wbStatus) });
+        result.set(textValue(status.id), { supplierStatus: textValue(status.supplierStatus), wbStatus: textValue(status.wbStatus),
+          ...(typeof status.isTransferable === 'boolean' ? { isTransferable: status.isTransferable } : {}) });
       }
     }
     return result;

@@ -44,6 +44,18 @@ describe('WB reshipment gateway', () => {
     await expect(f.service.readReshipmentWbStatuses('c', 'foreign', ['123'], clientUser)).rejects.toThrow();
     expect(f.fetch).not.toHaveBeenCalled();
   });
+  // TEST: retain WB eligibility and independently read every fresh sticker identifier.
+  it('reads transfer eligibility and fresh stickers without image or key leakage', async () => {
+    const f = fixture(); f.fetch.mockResolvedValueOnce(response({ orders: [{ id: 123, supplierStatus: 'complete', wbStatus: 'waiting', isTransferable: true }] }));
+    expect((await f.service.readReshipmentWbStatuses('c', 'wb', ['123'], user)).get('123')?.isTransferable).toBe(true);
+    f.fetch.mockResolvedValueOnce(response({ stickers: [{ orderId: 123, barcode: '57884350051', file: 'image-data' }] }));
+    expect(await f.service.readReshipmentWbStickers('c', 'wb', ['123'], user)).toEqual(new Map([['123', '57884350051']]));
+    f.fetch.mockResolvedValueOnce(response({ stickers: [] }));
+    await expect(f.service.readReshipmentWbStickers('c', 'wb', ['123'], user)).rejects.toThrow('всех');
+    f.fetch.mockResolvedValueOnce(response({ stickers: [{ orderId: 456, barcode: '57884350051' }] }));
+    await expect(f.service.readReshipmentWbStickers('c', 'wb', ['123'], user)).rejects.toThrow('некорректные');
+  });
+
   it('discovers only WB reshipment IDs without refreshing or mutating WMS', async () => {
     const f = fixture(); f.fetch.mockResolvedValue(response({ orders: [{ orderID: 123, supplyID: 'WB-GI-old' }] }));
     expect(await f.service.readReshipmentWbCandidates('c', user)).toEqual([{ id: '123', connectionId: 'wb', supplyId: 'WB-GI-old' }]);

@@ -14,5 +14,7 @@ export class FbsReshipmentController {
   @Post('check') check(@Body() dto: CheckFbsReshipmentDto, @CurrentUser() user: AuthUser) { return this.reshipments.check(dto, user); }
   @Post('preview') preview(@Body() dto: PreviewFbsReshipmentDto, @CurrentUser() user: AuthUser) { return this.reshipments.preview(dto, user); }
   @Post('create') create(@Body() dto: CreateFbsReshipmentDto, @CurrentUser() user: AuthUser) { return this.reshipments.create(dto, user); }
+  // FIX: scoped, one-time browser transfer authorization.
+  @Post('portal/start') startPortal(@Body() dto: ResumeFbsReshipmentDto, @CurrentUser() user: AuthUser) { return this.reshipments.startPortal(dto, user); }
   @Post('resume') resume(@Body() dto: ResumeFbsReshipmentDto, @CurrentUser() user: AuthUser) { return this.reshipments.resume(dto, user); }
 }
