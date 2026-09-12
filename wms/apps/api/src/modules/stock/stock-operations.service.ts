@@ -4018,7 +4018,8 @@ export class StockOperationsService {
       }
 
       const unitPriceRub = applyFulfillmentTaxMode(Number(clientPrice.priceRub), clientPrice.taxMode);
-      const totalRub = roundMoney(unitPriceRub * row.quantity);
+      // FIX: gross up the line base before rounding, not the rounded unit price.
+      const totalRub = applyFulfillmentTaxMode(Number(clientPrice.priceRub) * row.quantity, clientPrice.taxMode);
       await tx.billingCharge.create({
         data: {
           clientId: input.request.clientId,
