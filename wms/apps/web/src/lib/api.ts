@@ -11076,11 +11076,11 @@ export async function resetTsdFbsAssemblyOrder(
   });
 }
 
-// FIX: this explicit manager action performs no WB transfer or physical stock write.
+// FIX: pass the DTO object; request() serializes JSON once for the explicit manager action.
 export async function accountFbsOrderByWb(accessToken: string, requestId: string, assemblyId: string, comment: string) {
   return request<{ accounted: boolean; orderId: string; assemblyId: string; requestId: string; message: string }>(
     `/marketplace-connections/fbs/requests/${requestId}/orders/${assemblyId}/account-by-wb`, {
-      method: 'POST', accessToken, body: JSON.stringify({ comment }),
+      method: 'POST', accessToken, body: { comment },
     });
 }
 

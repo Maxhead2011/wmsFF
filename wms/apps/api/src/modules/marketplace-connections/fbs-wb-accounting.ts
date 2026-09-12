@@ -30,12 +30,15 @@ export async function accountFbsOrderByWb(
   const task = await prisma.fbsTsdAssembly.findUnique({ where: { id: taskId } });
   if (!task || task.requestId !== requestId || task.marketplace !== 'WILDBERRIES') throw new NotFoundException('Заказ WB в этой заявке не найден.');
   scopes.requireClientAccess(user, task.clientId, 'write');
+  // FIX: PACKED is eligible only for an exact-pair shipment (or its idempotent replay).
+  const shipPair = isFbsWbKizShipmentCandidate(task);
+  const packedShipment = shipPair || (task.status === FBS_WB_ACCOUNTED && task.itemCount === 1 && Boolean(task.kiz?.trim() && task.barcode?.trim()));
   const checkRequest = (request: { clientId: string; warehouseId: string | null; status: string } | null) => {
     if (!request?.warehouseId || request.clientId !== task.clientId || request.warehouseId !== user.activeWarehouseId ||
       (!user.permissionCodes.includes('system:admin') && !user.writableWarehouseIds?.includes(request.warehouseId))) {
       throw new ForbiddenException('Заявка находится в недоступном филиале.');
     }
-    if (!['SUBMITTED', 'IN_REVIEW', 'APPROVED', 'IN_WORK'].includes(request.status)) throw new ConflictException('Заявка уже закрыта или упакована.');
+    if (!['SUBMITTED', 'IN_REVIEW', 'APPROVED', 'IN_WORK', ...(packedShipment ? ['PACKED'] : [])].includes(request.status)) throw new ConflictException('Заявка уже закрыта или упакована.');
   };
   const linkWhere = { marketplace_connectionId_orderId: { marketplace: task.marketplace, connectionId: task.connectionId, orderId: task.orderId } };
   const [request, link] = await Promise.all([
@@ -43,7 +46,6 @@ export async function accountFbsOrderByWb(
     prisma.fbsOrderRequestLink.findUnique({ where: linkWhere }),
   ]);
   checkRequest(request);
-  const shipPair = isFbsWbKizShipmentCandidate(task);
   if (shipPair && !user.permissionCodes.some(code => ['stock:write', 'system:admin'].includes(code))) {
     throw new ForbiddenException('Списание по КИЗ требует права на складские операции.');
   }
