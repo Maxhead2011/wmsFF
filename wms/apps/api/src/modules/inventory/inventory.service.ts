@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { AdminNotificationsService } from '../admin-notifications/admin-notifications.service';
 import { createHash } from 'node:crypto';
 import {
   InventoryBoxStatus,
@@ -36,6 +37,7 @@ export class InventoryService {
     private readonly clientScopes: ClientScopeService,
     private readonly balances: StockBalancesService,
     private readonly archivedEmptyBoxDetach?: ArchivedEmptyBoxPalletDetachService,
+    private readonly adminNotifications?: AdminNotificationsService,
   ) {}
 
   async dashboard(user: AuthUser, hideResolvedBoxes = false) {
@@ -210,7 +212,7 @@ export class InventoryService {
         return existingFbsCheck;
       }
     }
-    return this.prisma.inventorySession.create({
+    const create = async (tx: Prisma.TransactionClient) => tx.inventorySession.create({
       data: {
         type: dto.type,
         clientId: dto.type === InventorySessionType.FULL ? null : dto.clientId,
@@ -221,6 +223,55 @@ export class InventoryService {
         createdByName: user.name,
       },
       include: sessionInclude,
+    });
+    // FIX: a missing-box signal is committed together with its inventory task.
+    if (fbsCheckMarker !== '[FBS_MISSING_PALLET_BOX]' || !this.adminNotifications?.enabled) return create(this.prisma);
+    return this.adminNotifications.withEvent(async tx => {
+      // FIX: serialize retries of the same unresolved TSD signal before creating its task.
+      const signalKey = JSON.stringify([dto.clientId, warehouseId, requestedTitle]);
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${signalKey}))`;
+      const existing = await tx.inventorySession.findFirst({
+        where: { type: InventorySessionType.BOX_CHECK, clientId: dto.clientId, warehouseId,
+          title: requestedTitle, comment: { contains: '[FBS_MISSING_PALLET_BOX]' },
+          status: { in: [InventorySessionStatus.ACTIVE, InventorySessionStatus.REVIEW] } },
+        include: sessionInclude,
+      });
+      return existing ?? create(tx);
+    }, result => ({
+      type: 'MISSING_PALLET_BOX', dedupeKey: `missing:${result.id}`, title: requestedTitle,
+      body: `${user.name} · ${requestedComment ?? ''}`, clientId: dto.clientId!, warehouseId,
+      actorId: user.id, actorName: user.name, isDemo: user.isDemo, sessionId: result.id,
+    }));
+  }
+
+  // FIX: only an explicit user-opening POST produces this event; GET/polling never does.
+  async recordViewed(sessionId: string, auditBoxId: string | undefined, openingId: string, user: AuthUser) {
+    if (!this.adminNotifications?.enabled) return { recorded: false };
+    const session = await this.getSession(sessionId, user);
+    const audit = auditBoxId ? session.boxes.find(item => item.id === auditBoxId) : undefined;
+    if (auditBoxId && !audit) throw new NotFoundException('Короб отсутствует в этой проверке.');
+    const clientId = audit?.clientId ?? session.clientId;
+    if (!clientId) return { recorded: false };
+    this.clientScopes.requireClientAccess(user, clientId, 'read');
+    const physical = audit ? await this.prisma.box.findUnique({ where: { id: audit.boxId }, select: { warehouseId: true } }) : null;
+    await this.adminNotifications.record(this.prisma, {
+      type: 'BOX_CHECK_OPENED', dedupeKey: `view:${sessionId}:${auditBoxId ?? '-'}:${user.id}:${openingId}`,
+      title: audit ? `Открыта актуализация короба ${audit.boxCode}` : `Открыта проверка: ${session.title}`,
+      body: `${user.name} открыл существующую проверку`, clientId,
+      warehouseId: physical?.warehouseId ?? session.warehouseId,
+      actorId: user.id, actorName: user.name, isDemo: user.isDemo, sessionId, auditBoxId,
+    });
+    return { recorded: true };
+  }
+
+  private async notifyBoxStarted(tx: Prisma.TransactionClient, audit: { id: string; boxCode: string; clientId: string; startedAt: Date },
+    sessionId: string, warehouseId: string | null, user: AuthUser) {
+    if (!this.adminNotifications?.enabled) return;
+    await this.adminNotifications.record(tx, {
+      type: 'BOX_CHECK_STARTED', dedupeKey: `start:${audit.id}:${audit.startedAt.toISOString()}`,
+      title: `Начата актуализация короба ${audit.boxCode}`, body: `${user.name} начал проверку содержимого короба`,
+      clientId: audit.clientId, warehouseId, actorId: user.id, actorName: user.name,
+      isDemo: user.isDemo, sessionId, auditBoxId: audit.id,
     });
   }
 
@@ -388,6 +439,7 @@ export class InventoryService {
             },
           });
         }
+        await this.notifyBoxStarted(tx, reopened, sessionId, box.warehouseId, user);
         return reopened;
       });
     }
@@ -418,6 +470,7 @@ export class InventoryService {
           },
         });
       }
+      await this.notifyBoxStarted(tx, created, sessionId, box.warehouseId, user);
       return created;
     });
   }

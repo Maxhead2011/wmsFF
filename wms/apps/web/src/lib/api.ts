@@ -12219,7 +12219,7 @@ export function resumeFbsReshipment(accessToken: string, input: { clientId: stri
   return request<FbsReshipmentRun>('/marketplace-connections/fbs/reshipment/resume', { method: 'POST', accessToken, body: input });
 }
 
-async function request<T>(
+export async function request<T>(
   path: string,
   options: { method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: unknown; accessToken?: string } = {},
 ) {

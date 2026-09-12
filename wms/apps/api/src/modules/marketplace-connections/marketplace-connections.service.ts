@@ -1,3 +1,4 @@
+import { AdminNotificationsService } from '../admin-notifications/admin-notifications.service';
 import { FBS_WB_ACCOUNTED, isFbsWbAccounted } from '../../common/fbs-wb-accounting';
 import { AccountFbsOrderByWbDto, accountFbsOrderByWb } from './fbs-wb-accounting';
 import { stockTransferBlockedReason, ordersWithoutTransferStock } from './fbs-stock-transfer';
@@ -651,6 +652,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     private readonly stockAllocation?: FbsStockAllocationService,
     private readonly stockMonitoring?: FbsStockMonitoringService,
     private readonly archivedEmptyBoxDetach?: ArchivedEmptyBoxPalletDetachService,
+    private readonly adminNotifications?: AdminNotificationsService,
     private readonly stockControl: MarketplaceStockControlService = new MarketplaceStockControlService(prisma, clientScopes),
   ) {}
 
@@ -14564,8 +14566,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (task.relabelConfirmedAt) {
       throw new BadRequestException('Переклейка уже подтверждена и учтена в остатках. Завершите этот заказ.');
     }
-    await this.prisma.fbsTsdAssembly.update({
-      where: { id: task.id },
+    const release = async (tx: Prisma.TransactionClient) => tx.fbsTsdAssembly.update({
+      where: { id: task.id, ...(this.adminNotifications?.enabled
+        ? { updatedAt: task.updatedAt, workerUserId: user.id, deviceCode: task.deviceCode } : {}) },
       data: {
         status: task.reservedBoxId
           ? FBS_TSD_RESERVED_STATUS
@@ -14582,6 +14585,19 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         errorMessage: 'Сотрудник отложил заказ на ТСД.',
       },
     });
+    // FIX: capture the task snapshot before worker/box fields are cleared.
+    if (this.adminNotifications) {
+      await this.adminNotifications.withEvent(release, async (_, tx) => {
+        const request = await tx.clientRequest.findUnique({ where: { id: task.requestId }, select: { warehouseId: true } });
+        return {
+          type: 'PRODUCT_PROBLEM', dedupeKey: `problem:${task.id}:${task.startedAt?.toISOString() ?? task.updatedAt.toISOString()}`,
+          title: `Проблема с товаром: ${task.productName}`,
+          body: `${user.name} · короб ${task.boxCode ?? task.reservedBoxCode ?? 'не отсканирован'} · заказ ${task.orderId}${task.article ? ` · артикул ${task.article}` : ''}`,
+          clientId: task.clientId, warehouseId: request?.warehouseId,
+          actorId: user.id, actorName: user.name, isDemo: user.isDemo, requestId: task.requestId,
+        };
+      });
+    } else { await release(this.prisma); }
     return this.emptyFbsTsdAssembly(task.deviceCode, user, 'Заказ отложен. Можно взять следующий.');
   }
 
