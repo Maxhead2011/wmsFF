@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { FbsExcludedOrders } from './FbsExcludedOrders';
 import {
   cancelClientRequest,
+  cancelSkuCollection,
+  fetchSkuCollectionCapabilities,
   checkFbsRequestSupplyConsistency,
   downloadClientRequestFile,
   downloadClientRequestItemsXlsx,
@@ -186,6 +188,17 @@ export function ClientRequestsPanel({
   const canWrite = canUse(session.user, 'client-requests:write');
   const canChangeStatus = canUse(session.user, 'client-requests:status');
   const canPickOutbound = canUse(session.user, 'stock:write');
+  const [canCancelSkuCollection, setCanCancelSkuCollection] = useState(false);
+  const [cancellingSkuCollectionId, setCancellingSkuCollectionId] = useState<string | null>(null);
+  const skuCancellationBusy = useRef(false);
+  useEffect(() => {
+    let active = true;
+    setCanCancelSkuCollection(false);
+    if (canPickOutbound) void fetchSkuCollectionCapabilities(session.accessToken)
+      .then(result => { if (active) setCanCancelSkuCollection(result.canCancel); })
+      .catch(() => { if (active) setCanCancelSkuCollection(false); });
+    return () => { active = false; };
+  }, [session.accessToken, canPickOutbound]);
   const canEditAnyRequest = canEditRequestAnyStatus(session.user);
   const canUploadManualInstruction = canUploadOwnInstruction(session.user);
   const canDownloadOriginalRequest = canAdministerRequestFiles(session.user);
@@ -1232,6 +1245,26 @@ export function ClientRequestsPanel({
     }
   }
 
+  // FIX: use a dedicated endpoint; generic cancellation deliberately rejects SKU collections.
+  async function removeSkuCollection(request: ClientRequestSummary) {
+    if (!canCancelSkuCollection || skuCancellationBusy.current) return;
+    if (!window.confirm(`Снять задачу №${String(request.number).padStart(6, '0')} «${request.title}»?\n\nОна исчезнет из активного списка ВМС и очереди ТСД. История и выполненные перемещения сохранятся. Неизъятый резерв будет освобождён.`)) return;
+    skuCancellationBusy.current = true;
+    setCancellingSkuCollectionId(request.id);
+    setError(null);
+    setActionMessage(null);
+    try {
+      const result = await cancelSkuCollection(session.accessToken, request.id);
+      setRequests(current => ({ ...current, data: current.data.map(item => item.id === result.id ? { ...item, status: result.status } : item) }));
+      setActionMessage(`Задача №${String(request.number).padStart(6, '0')} снята. История сохранена в архиве заявок.`);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      skuCancellationBusy.current = false;
+      setCancellingSkuCollectionId(null);
+    }
+  }
+
   async function resolveOnlineFbsSyncConflicts(
     request: ClientRequestSummary,
     assemblyIds: string[],
@@ -2173,6 +2206,8 @@ export function ClientRequestsPanel({
           (request) => void pickOutboundRequest(request),
           (request) => void packageOutboundRequest(request),
           (request) => void shipOutboundRequest(request),
+          canCancelSkuCollection ? (request) => void removeSkuCollection(request) : undefined,
+          cancellingSkuCollectionId,
         )}
       </div>
 
@@ -5257,6 +5292,8 @@ function renderRequests(
   onPickOutbound: (request: ClientRequestSummary) => void,
   onPackageOutbound: (request: ClientRequestSummary) => void,
   onShipOutbound: (request: ClientRequestSummary) => void,
+  onCancelSkuCollection?: (request: ClientRequestSummary) => void,
+  cancellingSkuCollectionId?: string | null,
 ) {
   if (state.status === 'idle' || (state.status === 'loading' && state.data.length === 0)) {
     return (
@@ -5294,6 +5331,8 @@ function renderRequests(
         routeLoadingRequestId={routeLoadingRequestId}
         onStatusChange={onStatusChange}
         onCancelRequest={onCancelRequest}
+        onCancelSkuCollection={onCancelSkuCollection}
+        cancellingSkuCollectionId={cancellingSkuCollectionId}
         onEditRequest={onEditRequest}
         onOpenDocument={onOpenDocument}
         onDownloadRequestItems={onDownloadRequestItems}
