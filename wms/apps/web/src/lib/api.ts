@@ -5598,6 +5598,7 @@ export type UserPrinterScope = {
 
 export type UserSummary = {
   id: string;
+  canDelete?: boolean;
   email: string;
   name: string;
   status: string;
@@ -10868,6 +10869,13 @@ export async function createUser(accessToken: string, payload: CreateUserPayload
     method: 'POST',
     body: payload,
     accessToken,
+  });
+}
+
+// FIX: preserve the user record and history; the server enforces role and branch restrictions.
+export async function deleteUser(accessToken: string, userId: string) {
+  return request<{ id: string; status: 'ARCHIVED' }>(`/users/${encodeURIComponent(userId)}`, {
+    method: 'DELETE', accessToken,
   });
 }
 

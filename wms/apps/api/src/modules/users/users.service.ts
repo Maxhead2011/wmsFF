@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, UserStatus } from '@prisma/client';
 import { AccessModelService } from '../auth/access-model.service';
 import { PasswordService } from '../auth/password.service';
@@ -11,6 +11,7 @@ import { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 import { UpdateUserRolesDto } from './dto/update-user-roles.dto';
 import { normalizePrinterGroupCode } from '../auth/printer-scope.service';
 import type { AuthUser } from '../auth/auth.types';
+import { canDeleteUser } from './user-deletion-policy';
 
 @Injectable()
 export class UsersService {
@@ -24,6 +25,7 @@ export class UsersService {
     const users = await this.prisma.user.findMany({
       where: {
         isDemo: Boolean(currentUser.isDemo),
+        status: { not: UserStatus.ARCHIVED },
         ...(currentUser.permissionCodes.includes('system:admin') || !(currentUser.warehouseIds?.length)
           ? {}
           : {
@@ -40,7 +42,36 @@ export class UsersService {
       orderBy: { createdAt: 'desc' },
       select: this.userSummarySelect(),
     });
-    return users.map((user) => this.toUserSummary(user));
+    const actor = users.find(user => user.id === currentUser.id);
+    return users.map((user) => ({ ...this.toUserSummary(user), canDelete: canDeleteUser(actor, user) }));
+  }
+
+  // FIX: archive atomically with access revocation and audit; never delete historical user relations.
+  async deleteUser(userId: string, currentUser: AuthUser) {
+    try {
+      return await this.prisma.$transaction(async tx => {
+        const [actor, target] = await Promise.all([currentUser.id, userId].map(id => tx.user.findFirst({
+          where: { id, isDemo: Boolean(currentUser.isDemo) }, select: this.userSummarySelect(),
+        })));
+        if (!target) throw new NotFoundException('Пользователь не найден.');
+        if (!canDeleteUser(actor, target)) throw new ForbiddenException('Удалять пользователей может owner или администратор закреплённого филиала. Администратор не может удалить администратора или owner.');
+        if (target.status === UserStatus.ARCHIVED) return { id: userId, status: 'ARCHIVED' as const };
+        const now = new Date();
+        await tx.user.update({ where: { id: userId }, data: { status: UserStatus.ARCHIVED, tsdActivationCodeHash: null } });
+        await tx.userSession.updateMany({ where: { userId }, data: { expiresAt: now } });
+        await tx.mobileSession.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: now } });
+        await tx.tsdDevice.updateMany({ where: { userId }, data: { status: 'BLOCKED' } });
+        await tx.auditLog.create({ data: { userId: currentUser.id, action: 'USER_ARCHIVED', entity: 'User', entityId: userId,
+          payload: { name: target.name, previousStatus: target.status, roles: target.roles.map(row => row.role.code),
+            warehouseIds: target.warehouseScopes.map(row => row.warehouse.id) } } });
+        return { id: userId, status: 'ARCHIVED' as const };
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
+        throw new ConflictException('Права или данные пользователя изменились. Обновите список и повторите удаление.');
+      }
+      throw error;
+    }
   }
 
   async create(dto: CreateUserDto, currentUser: AuthUser) {
@@ -476,7 +507,7 @@ export class UsersService {
 
   private async ensureUserInSameMode(userId: string, currentUser: AuthUser) {
     const target = await this.prisma.user.findFirst({
-      where: { id: userId, isDemo: Boolean(currentUser.isDemo) },
+      where: { id: userId, isDemo: Boolean(currentUser.isDemo), status: { not: UserStatus.ARCHIVED } },
       select: { id: true },
     });
     if (!target) {

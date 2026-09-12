@@ -7,14 +7,16 @@ import { UserCreateForm } from './UserCreateForm';
 import { UserRoleEditor } from './UserRoleEditor';
 import { UserPrinterScopeEditor } from './UserPrinterScopeEditor';
 import { UserScopeEditor } from './UserScopeEditor';
+import { UserDeletePanel } from './UserDeletePanel';
 
 type AccessAdminPanelProps = {
   session: AuthSession;
 };
 
-type AccessTab = 'create' | 'roles' | 'scopes' | 'printers' | 'tsd';
+type AccessTab = 'create' | 'roles' | 'scopes' | 'printers' | 'tsd' | 'users';
 
 const accessTopics = [
+  { id: 'users', label: 'Пользователи', text: 'Удаление пользователей с сохранением истории операций.', icon: UserPlus },
   { id: 'create', label: 'Создать сотрудника', text: 'Новый пользователь, роль и стартовые доступы.', icon: UserPlus },
   { id: 'roles', label: 'Роли', text: 'Настройте наборы прав для должностей.', icon: KeyRound },
   { id: 'scopes', label: 'Доступы', text: 'Ограничьте клиентов, филиалы и разделы для сотрудника.', icon: ShieldCheck },
@@ -44,6 +46,7 @@ export function AccessAdminPanel({ session }: AccessAdminPanelProps) {
 
       {activeTab ? <div className="access-tabs" role="tablist" aria-label="Раздел доступа">
         <button className="access-tabs__back" type="button" onClick={() => setActiveTab(null)}><ArrowLeft size={16} /><span>Разделы</span></button>
+        <button aria-selected={activeTab === 'users'} className={activeTab === 'users' ? 'active' : ''} onClick={() => setActiveTab('users')} role="tab" type="button">Пользователи</button>
         <button
           aria-selected={activeTab === 'create'}
           className={activeTab === 'create' ? 'active' : ''}
@@ -97,6 +100,7 @@ export function AccessAdminPanel({ session }: AccessAdminPanelProps) {
       </div> : null}
 
       {activeTab === 'create' ? <UserCreateForm session={session} /> : null}
+      {activeTab === 'users' ? <UserDeletePanel session={session} /> : null}
       {activeTab === 'roles' ? <UserRoleEditor session={session} /> : null}
       {activeTab === 'scopes' ? <UserScopeEditor session={session} /> : null}
       {activeTab === 'printers' ? <UserPrinterScopeEditor session={session} /> : null}
