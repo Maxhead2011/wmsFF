@@ -1,3 +1,4 @@
+import { FBS_WB_ACCOUNTED, FBS_WB_ACCOUNTED_ACTION, fbsWbAccountingEnabled, isFbsWbAccounted, isFbsWbAccountingStatus, isFbsWbAccountingUntouched } from '../../common/fbs-wb-accounting';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import { requiresFbsReturnReceipt } from '../marketplace-connections/fbs-return-receipt';
@@ -868,7 +869,7 @@ export class TsdAssemblyService {
       this.prisma.fbsOrderRequestLink.findMany({
         where: {
           requestId,
-          syncStatus: { in: ['ACTIVE', 'RETURN_REQUIRED', ...(permanentStorageBoxesEnabled() ? ['MANAGER_CONFIRMED_SHIPMENT', 'MANAGER_CONFIRMED_RETURN'] : [])] },
+          syncStatus: { in: ['ACTIVE', 'RETURN_REQUIRED', FBS_WB_ACCOUNTED, ...(permanentStorageBoxesEnabled() ? ['MANAGER_CONFIRMED_SHIPMENT', 'MANAGER_CONFIRMED_RETURN'] : [])] },
           ...(!fbsTerminalQueueFilterEnabled() ? (permanentStorageBoxesEnabled()
             ? { OR: [{ lastCategory: { not: 'cancelled' } }, { syncStatus: { in: ['MANAGER_CONFIRMED_SHIPMENT', 'MANAGER_CONFIRMED_RETURN'] } }] }
             : { lastCategory: { not: 'cancelled' } }) : {}),
@@ -898,6 +899,7 @@ export class TsdAssemblyService {
           itemCount: true,
           requiresKiz: true,
           sourceBoxPending: true,
+          boxId: true, sourceBarcode: true, stickerPartA: true, marketplaceSubmittedAt: true,
           workerName: true,
           deviceCode: true,
           completedAt: true,
@@ -1036,7 +1038,7 @@ export class TsdAssemblyService {
     const terminalLinks = savedLinks.filter(isFbsTerminalQueueOrder);
     const terminalKeys = new Set(terminalLinks.map(link => `${link.connectionId}:${link.orderId}`));
     const terminalTaskIds = new Set(rows.filter(row => terminalKeys.has(`${row.connectionId}:${row.orderId}`)).map(row => row.id));
-    const notForAssembly = terminalLinks.map(link => {
+    const notForAssembly = terminalLinks.filter(link => !isFbsWbAccounted(link)).map(link => {
       const task = rows.find(row => row.connectionId === link.connectionId && row.orderId === link.orderId);
       const fact = task ? facts.find(row => row.id === task.id) : null;
       return {
@@ -1051,6 +1053,34 @@ export class TsdAssemblyService {
         syncIssue: fact?.syncIssue ?? null,
       };
     });
+    // FIX: separately record WB-based accounting, without incrementing physical collection facts.
+    const accountingEvents = savedLinks.some(isFbsWbAccounted) ? await this.prisma.auditLog.findMany({
+      where: { action: FBS_WB_ACCOUNTED_ACTION, entity: 'ClientRequest', entityId: requestId },
+      select: { payload: true, createdAt: true }, orderBy: { createdAt: 'desc' },
+    }) : [];
+    const wbAccounting = {
+      enabled: fbsWbAccountingEnabled(),
+      candidates: fbsWbAccountingEnabled() ? rows.flatMap(task => {
+        const link = savedLinks.find(link => link.connectionId === task.connectionId && link.orderId === task.orderId);
+        if (!link || link.marketplace !== 'WILDBERRIES' || link.syncStatus !== 'ACTIVE' || !isFbsWbAccountingUntouched(task) ||
+          !isFbsWbAccountingStatus({ supplierStatus: link.lastSupplierStatus, wbStatus: link.lastWbStatus })) return [];
+        return [{ id: task.id, orderId: task.orderId, productName: task.productName, wbStatus: `${link.lastSupplierStatus}/${link.lastWbStatus}` }];
+      }) : [],
+      accounted: savedLinks.filter(isFbsWbAccounted).map(link => {
+        const task = rows.find(row => row.connectionId === link.connectionId && row.orderId === link.orderId);
+        const event = accountingEvents.find(event => {
+          const payload = event.payload as Prisma.JsonObject | null;
+          return payload?.orderId === link.orderId && payload.connectionId === link.connectionId;
+        });
+        const payload = event?.payload as Prisma.JsonObject | null;
+        return { id: task?.id ?? `${link.connectionId}:${link.orderId}`, orderId: link.orderId,
+          productName: task?.productName ?? requestRows.find(row => row.skuId === link.lastSkuId)?.name ?? 'Товар',
+          wbStatus: `${payload?.supplierStatus ?? link.lastSupplierStatus}/${payload?.wbStatus ?? link.lastWbStatus}`,
+          confirmedAt: event?.createdAt.toISOString() ?? null,
+          confirmedByName: typeof payload?.confirmedByName === 'string' ? payload.confirmedByName : null,
+          comment: typeof payload?.comment === 'string' ? payload.comment : null };
+      }),
+    };
     const completedRows = rows.filter((row) => row.status === 'COMPLETED');
     // FIX: terminal cancellation blocks collection, not receipt of an already picked return.
     const cancelledReceiptKeys = new Set(terminalLinks.filter(link => link.lastCategory === 'cancelled' &&
@@ -1278,7 +1308,7 @@ export class TsdAssemblyService {
     return {
       totalOrders: links.length,
       startedOrders: facts.filter(
-        (row) => !['WAITING_STOCK', 'RELEASED'].includes(row.status),
+        (row) => !['WAITING_STOCK', 'RELEASED', FBS_WB_ACCOUNTED].includes(row.status),
       ).length,
       completedOrders: facts.filter((row) => row.status === 'COMPLETED').length,
       duplicateKizScans: duplicateKizEvents
@@ -1310,7 +1340,8 @@ export class TsdAssemblyService {
         rows: facts.filter((row) => returnRequiredIds.has(row.id)),
       },
       notForAssembly,
-      rows: facts,
+      wbAccounting,
+      rows: facts.filter(row => row.status !== FBS_WB_ACCOUNTED),
       wmsBoxes: {
         totalBoxes: wmsBoxMap.size,
         closedBoxes: [...wmsBoxMap.values()].filter((box) => box.status === 'CLOSED').length,

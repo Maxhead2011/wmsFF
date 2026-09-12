@@ -2157,6 +2157,14 @@ export type PickInstructionDocument = {
   }>;
 };
 
+// FIX: WB accounting is separate from physical completion and has its own audit evidence.
+export type FbsWbAccountingView = {
+  enabled: boolean;
+  candidates: Array<{ id: string; orderId: string; productName: string; wbStatus: string }>;
+  accounted: Array<{ id: string; orderId: string; productName: string; wbStatus: string;
+    confirmedAt: string | null; confirmedByName: string | null; comment: string | null }>;
+};
+
 export type TsdAssemblyPlan = {
   id: string;
   requestId: string;
@@ -2313,6 +2321,7 @@ export type TsdAssemblyPlan = {
     }>;
   };
   fbsAssembly?: {
+    wbAccounting?: FbsWbAccountingView;
     totalOrders: number;
     startedOrders: number;
     completedOrders: number;
@@ -11064,6 +11073,14 @@ export async function resetTsdFbsAssemblyOrder(
     method: 'POST',
     accessToken,
   });
+}
+
+// FIX: this explicit manager action performs no WB transfer or physical stock write.
+export async function accountFbsOrderByWb(accessToken: string, requestId: string, assemblyId: string, comment: string) {
+  return request<{ accounted: boolean; orderId: string; assemblyId: string; requestId: string; message: string }>(
+    `/marketplace-connections/fbs/requests/${requestId}/orders/${assemblyId}/account-by-wb`, {
+      method: 'POST', accessToken, body: JSON.stringify({ comment }),
+    });
 }
 
 export async function markTsdFbsAssemblyPackedWithoutSource(

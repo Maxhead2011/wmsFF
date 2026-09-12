@@ -92,6 +92,20 @@ describe('WB reshipment journal', () => {
       product: { id: 'sku' }, noStock: true }], skippedOrders: [] }));
     wb.moveFbsOrdersToNewSupply = vi.fn(async () => ({ moved: 1, targetSupply: { id: 'regular' } }));
   }
+  // TEST: a historical claim timestamp must not block the journal or its final physical recheck.
+  it('transfers a waiting-stock task with an old start date without consuming or duplicating stock', async () => {
+    setupStockTransfer();
+    task.startedAt = new Date('2026-09-04T16:48:58.961Z');
+    const result: any = await service.moveWithStockRouting({ clientId: 'client', orders: dto.orders }, user);
+    expect(result.transfers[0]).toMatchObject({ status: 'CREATED', supplyName: 'logoff нет на складе' });
+    expect(task).toMatchObject({ id: 'physical', status: 'WAITING_STOCK', requestId: 'new-request', supplyId: 'new-supply' });
+    expect(link).toMatchObject({ requestId: 'new-request', lastSupplyId: 'new-supply', syncStatus: 'ACTIVE' });
+    expect(wb.addReshipmentWbOrders).toHaveBeenCalledTimes(1);
+    expect(db.stockBalance.update).not.toHaveBeenCalled();
+    expect(db.stockMovement.create).not.toHaveBeenCalled();
+    expect(db.productMark.update).not.toHaveBeenCalled();
+    expect(db.fbsAssemblyAttemptHistory.create).not.toHaveBeenCalled();
+  });
   // TEST: sold WMS uses precisely its previous code path when the flag is absent.
   it('keeps the legacy move unchanged with stock routing disabled', async () => {
     wb.moveFbsOrdersToNewSupply = vi.fn(async () => ({ moved: 1 }));

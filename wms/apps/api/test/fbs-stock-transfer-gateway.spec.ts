@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MarketplaceConnectionsService } from '../src/modules/marketplace-connections/marketplace-connections.service';
 
 // TEST: exercise the actual stock query and routing boundary, not a mocked noStock flag.
@@ -62,5 +62,48 @@ describe('WB stock transfer gateway', () => {
     await expect(service.prepareFbsStockTransfer(dto, user)).rejects.toThrow();
     await expect(service.prepareFbsStockTransfer({ ...dto, orders: [...dto.orders, ...dto.orders] }, user)).rejects.toThrow();
     expect(db.stockBalance.findMany).not.toHaveBeenCalled();
+  });
+});
+
+
+// TEST: a confirmed move must survive the next real WB refresh, including a source-sync retry.
+describe('confirmed stock transfer history', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([false, true])('keeps the target supply on refresh when source sync fails: %s', async (failSourceSync) => {
+    const service: any = new MarketplaceConnectionsService({} as never, {} as never);
+    const connection = { id: 'cabinet', apiKey: 'test-key', accountName: 'WB' };
+    const moved = { id: 101, supplyId: 'old-supply', supplyID: 'old-supply', article: 'MOVED' };
+    const untouched = { id: 102, supplyId: 'old-supply', article: 'UNTOUCHED' };
+    const foreignHistory = { expiresAt: Date.now() + 60_000, orders: [{ ...moved }] };
+    service.wildberriesFbsHistoryCache.set('cabinet', { expiresAt: Date.now() + 60_000, orders: [moved, untouched] });
+    service.wildberriesFbsHistoryCache.set('other-cabinet', foreignHistory);
+    service.fbsOrdersCache.set('client', { expiresAt: Date.now() + 60_000, value: {
+      orders: [moved, untouched].map(order => ({ ...order, id: String(order.id), connectionId: 'cabinet' })),
+    } });
+    service.syncOneFbsRequest = failSourceSync
+      ? vi.fn(async () => { throw new Error('source sync unavailable'); })
+      : vi.fn(async () => ({ changed: true, summary: '' }));
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      let payload: unknown;
+      if (url.endsWith('/orders/status')) {
+        payload = { orders: JSON.parse(String(init?.body)).orders.map((id: number) => ({ id, supplierStatus: 'confirm', wbStatus: 'waiting' })) };
+      } else if (url.endsWith('/orders/new') || url.endsWith('/supplies/orders/reshipment')) {
+        payload = { orders: [] };
+      } else if (url.endsWith('/api/v3/warehouses')) {
+        payload = [];
+      } else {
+        throw new Error(`Unexpected WB endpoint: ${url}`);
+      }
+      return { ok: true, status: 200, json: async () => payload } as Response;
+    }));
+
+    const finish = service.finishStockTransferRequests('client', 'cabinet', 'new-supply', [{ id: '101', requestId: 'source-request' }]);
+    if (failSourceSync) await expect(finish).rejects.toThrow('source sync unavailable');
+    else await finish;
+    const refreshed = await service.fetchWildberriesFbsOrders(connection, 'cache-only');
+    expect(refreshed.find((order: any) => String(order.id) === '101')).toMatchObject({ supplyId: 'new-supply', supplyID: 'new-supply' });
+    expect(refreshed.find((order: any) => String(order.id) === '102')).toMatchObject({ supplyId: 'old-supply', article: 'UNTOUCHED' });
+    expect(service.wildberriesFbsHistoryCache.get('other-cabinet')).toEqual(foreignHistory);
   });
 });

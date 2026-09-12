@@ -1,3 +1,4 @@
+import { AccountFbsOrderByWbDto } from './fbs-wb-accounting';
 import { FbsReshipmentService } from './fbs-reshipment.service';
 import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Res, StreamableFile } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
@@ -99,6 +100,14 @@ export class MarketplaceConnectionsController {
   @RequirePermissions('clients:write')
   checkDbsIntegration(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.connections.checkDbsIntegration(id, user);
+  }
+
+  // FIX: an explicit manager action, never a side effect of a failed WB transfer.
+  @Post('fbs/requests/:requestId/orders/:taskId/account-by-wb')
+  @RequireAnyPermissions('client-requests:write', 'system:admin')
+  accountFbsOrderByWb(@Param('requestId') requestId: string, @Param('taskId') taskId: string,
+    @Body() dto: AccountFbsOrderByWbDto, @CurrentUser() user: AuthUser) {
+    return this.connections.accountFbsOrderByWb(requestId, taskId, dto, user);
   }
 
   @Get('fbs/orders')

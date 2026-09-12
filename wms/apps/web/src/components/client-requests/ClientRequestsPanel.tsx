@@ -1,8 +1,10 @@
+import { FbsWbAccounting } from './FbsWbAccounting';
 import { describeStockTransfer } from '../../lib/fbs-stock-transfer';
 import { AlertTriangle, Archive, ArrowLeft, ArrowRightLeft, Boxes, CheckCircle2, ClipboardList, FileDown, FileUp, MapPinned, PackageX, RefreshCw, RotateCcw, Search, ShieldAlert, Truck, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FbsExcludedOrders } from './FbsExcludedOrders';
 import {
+  accountFbsOrderByWb,
   cancelClientRequest,
   cancelSkuCollection,
   fetchSkuCollectionCapabilities,
@@ -1387,6 +1389,27 @@ export function ClientRequestsPanel({
     }
   }
 
+  // FIX: a successful accounting response remains success even if refreshing the screen fails.
+  async function accountOnlineFbsOrder(request: ClientRequestSummary, assemblyId: string, _orderId: string, comment: string) {
+    setOnlineFbsSyncResolution({ assemblyId });
+    let result;
+    try {
+      result = await accountFbsOrderByWb(session.accessToken, request.id, assemblyId, comment);
+    } catch (caught) {
+      setOnlineFbsSyncResolution({ assemblyId: null, error: errorMessage(caught) });
+      return false;
+    }
+    setOnlineFbsSyncResolution({ assemblyId: null, message: result.message });
+    try {
+      const plan = await fetchTsdAssemblyPlan(session.accessToken, request.id);
+      setOnlinePreview(current => current?.request.id === request.id ? { ...current, plan, status: 'ready', error: undefined } : current);
+      await loadData();
+    } catch {
+      setOnlineFbsSyncResolution({ assemblyId: null, message: `${result.message} Обновите страницу для отображения результата.` });
+    }
+    return true;
+  }
+
   async function markOnlineFbsOrderPackedWithoutSource(
     request: ClientRequestSummary,
     assemblyId: string,
@@ -2327,6 +2350,9 @@ export function ClientRequestsPanel({
                   )
               : undefined
           }
+          onAccountByWb={canWrite && !session.user.isDemo && !session.user.roleCodes.includes('CLIENT')
+            ? (assemblyId, orderId, comment) => accountOnlineFbsOrder(onlinePreview.request, assemblyId, orderId, comment)
+            : undefined}
           onMarkPackedWithoutSource={
             canWrite
               ? (assemblyId, orderId) =>
@@ -3788,6 +3814,7 @@ type OnlineExecutionModalProps = {
     action: FbsSyncConflictResolutionAction,
   ) => void;
   onResetFbsAssembly?: (assemblyId: string, orderId: string) => void;
+  onAccountByWb?: (assemblyId: string, orderId: string, comment: string) => Promise<boolean>;
   onMarkPackedWithoutSource?: (assemblyId: string, orderId: string) => void;
   onMoveOrder?: (order: { id: string; connectionId: string }) => void;
   onMoveOrders?: (orders: Array<{ id: string; connectionId: string }>) => void;
@@ -3819,6 +3846,7 @@ function OnlineExecutionModal({
   onResolveSyncConflicts,
   onResetFbsAssembly,
   onMarkPackedWithoutSource,
+  onAccountByWb,
   onMoveOrder,
   onMoveOrders,
   onRepairMoveOrders,
@@ -4326,6 +4354,8 @@ function OnlineExecutionModal({
                   </details>
                 ) : null}
 
+                <FbsWbAccounting data={fbsAssembly?.wbAccounting} busy={resolvingSyncConflictId !== null}
+                  error={syncConflictResolutionError} onAccount={onAccountByWb} />
                 <FbsExcludedOrders rows={fbsAssembly?.notForAssembly ?? []} />
                 {returnRequired && returnRequired.rows.length > 0 ? (
                   <section className={`online-execution-section${onlyDeferredReturns ? '' : ' online-execution-section--sync-conflict'}`}>

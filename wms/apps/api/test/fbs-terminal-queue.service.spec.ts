@@ -42,6 +42,28 @@ function fixture() {
 }
 afterEach(() => vi.unstubAllEnvs());
 describe('our WMS terminal-order queue isolation', () => {
+  // TEST: a manager-accounted WB order is evidence, not another physical collection.
+  it('keeps WB-accounted orders in a separate group and out of collection, packing and request demand', async () => {
+    vi.stubEnv('WMS_FBS_TERMINAL_QUEUE_FILTER_ENABLED', 'true');
+    vi.stubEnv('WMS_FBS_NO_STOCK_TRANSFER_ENABLED', 'true');
+    vi.stubEnv('WMS_FBS_RESHIPMENT_ENABLED', 'true');
+    const f = fixture();
+    f.db.fbsAssemblyAttemptHistory = { findMany: vi.fn(async () => []) };
+    f.db.fbsReshipmentRun = { findMany: vi.fn(async () => []) };
+    f.links[1].syncStatus = 'WB_ACCOUNTED'; f.links[1].lastSupplierStatus = 'complete'; f.links[1].lastWbStatus = 'sorted';
+    f.tasks[1].status = 'WB_ACCOUNTED';
+    const before = structuredClone(f.tasks);
+    const result = await f.detail.loadFbsAssemblyFacts(f.request.id, f.rows);
+    expect(result.notCollected.pendingOrderIds).not.toContain('order-1');
+    expect(result.wmsBoxes.notPacked.map(row => row.orderId)).not.toContain('order-1');
+    expect(result.wbAccounting.accounted).toEqual([expect.objectContaining({ orderId: 'order-1' })]);
+    expect(result.rows.map(row => row.orderId)).not.toContain('order-1');
+    expect(result.completedOrders).toBe(1);
+    expect((await f.list.list({}, f.user))[0].fbsCompletion).toMatchObject({ totalOrders: 1, completedOrders: 1 });
+    expect((await f.routes.getFbsRequestRoute(f.request.id, f.user)).items.map(row => row.orderId)).not.toContain('order-1');
+    expect(f.tasks).toEqual(before); expect(f.db.stockBalance.update).not.toHaveBeenCalled();
+  });
+
   // TEST: an acknowledged deferred unit stays visible for receipt, not for repeated collection.
   it.each(['true', 'false'])('shows deferred manager returns with KIZ with terminal filter %s', async terminalFilter => {
     vi.stubEnv('WMS_FBS_TERMINAL_QUEUE_FILTER_ENABLED', terminalFilter);

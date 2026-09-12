@@ -1,3 +1,5 @@
+import { FBS_WB_ACCOUNTED, isFbsWbAccounted } from '../../common/fbs-wb-accounting';
+import { AccountFbsOrderByWbDto, accountFbsOrderByWb } from './fbs-wb-accounting';
 import { stockTransferBlockedReason, ordersWithoutTransferStock } from './fbs-stock-transfer';
 import { createHash } from 'node:crypto';
 import { isOwnedUnpaidDraft, runBillingMutation, withBillingDb } from '../billing/billing-mutation';
@@ -165,6 +167,7 @@ type WildberriesFbsOrder = Record<string, unknown> & {
 };
 
 type FbsOrderSummary = {
+  wbAccounted?: boolean;
   id: string;
   orderUid: string | null;
   connectionId: string;
@@ -4191,7 +4194,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (fbsTerminalQueueFilterEnabled()) {
       const links = await this.prisma.fbsOrderRequestLink.findMany({ where: { requestId }, select: {
         connectionId: true, orderId: true, marketplace: true, lastCategory: true,
-        lastSupplierStatus: true, lastWbStatus: true,
+        lastSupplierStatus: true, lastWbStatus: true, syncStatus: true,
       } });
       const terminalKeys = new Set(links.filter(isFbsTerminalQueueOrder)
         .map(link => selectionKey(link.connectionId, link.orderId)));
@@ -5507,7 +5510,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           where: { marketplace_connectionId_orderId: {
             marketplace: current.marketplace, connectionId: current.connectionId, orderId: current.orderId,
           } },
-          select: { marketplace: true, lastCategory: true, lastSupplierStatus: true, lastWbStatus: true },
+          select: { marketplace: true, lastCategory: true, lastSupplierStatus: true, lastWbStatus: true, syncStatus: true },
         }) : null;
     const currentIsTerminal = isFbsTerminalQueueOrder(currentQueueLink);
     if (current && !currentIsTerminal && !choices.has(current.requestId)) {
@@ -11204,6 +11207,29 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
+  // FIX: use live WB status before the manager accounts an unscanned order.
+  async accountFbsOrderByWb(requestId: string, taskId: string, dto: AccountFbsOrderByWbDto, user: AuthUser) {
+    const result = await accountFbsOrderByWb(this.prisma, this.clientScopes, requestId, taskId, dto, user, async task => {
+      const connection = await this.prisma.clientMarketplaceConnection.findFirst({ where: {
+        id: task.connectionId, clientId: task.clientId, marketplace: MarketplaceType.WILDBERRIES, isActive: true,
+      } });
+      if (!connection) throw new BadRequestException('Действующее подключение WB не найдено.');
+      const payload = await marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/orders/status', {
+        method: 'POST', headers: wbHeaders(connection.apiKey), body: JSON.stringify({ orders: [numericWbOrderId(task.orderId)] }),
+        signal: AbortSignal.timeout(20_000),
+      });
+      const matching = asArray<Record<string, unknown>>(payload.orders).filter(row => textValue(row.id) === task.orderId);
+      if (matching.length !== 1) throw new BadRequestException('WB не вернул однозначный статус заказа.');
+      const row = matching[0]!;
+      return { supplierStatus: textValue(row.supplierStatus), wbStatus: textValue(row.wbStatus),
+        isTransferable: typeof row.isTransferable === 'boolean' ? row.isTransferable : undefined };
+    });
+    // Remove list caches; the durable link remains authoritative on the next refresh.
+    const { clientId, ...response } = result;
+    this.invalidateRepeatAssemblyCache(clientId);
+    return response;
+  }
+
   /**
    * Confirms that an operator has physically packed an FBS order while the
    * source storage box is not yet known. The order is counted as assembled,
@@ -14565,7 +14591,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (!fbsTerminalQueueFilterEnabled() || task.marketplace !== MarketplaceType.WILDBERRIES || task.status === 'COMPLETED') return;
     const link = await this.prisma.fbsOrderRequestLink.findUnique({ where: {
       marketplace_connectionId_orderId: { marketplace: task.marketplace, connectionId: task.connectionId, orderId: task.orderId },
-    }, select: { marketplace: true, lastCategory: true, lastSupplierStatus: true, lastWbStatus: true } });
+    }, select: { marketplace: true, lastCategory: true, lastSupplierStatus: true, lastWbStatus: true, syncStatus: true } });
     if (isFbsTerminalQueueOrder(link)) throw new BadRequestException(
       `Заказ WB №${task.orderId} не требуется собирать. Статус WB: ${link?.lastSupplierStatus}/${link?.lastWbStatus}. ` +
       'Сканы и списания сохранены. Отложите задание; решение по уже взятому товару принимает менеджер.',
@@ -18146,9 +18172,19 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   // FIX: WB membership/status were verified by the journal. Reconcile both old and new WMS compositions.
   async finishStockTransferRequests(clientId: string, connectionId: string, supplyId: string,
     rows: Array<{ id: string; requestId: string }>) {
+    const ids = new Set(rows.map(row => row.id));
+    // FIX: WB history is cached for six hours. Preserve the verified target before
+    // any source reconciliation, which can fail and need a journal retry.
+    const history = this.wildberriesFbsHistoryCache.get(connectionId);
+    if (history) {
+      this.wildberriesFbsHistoryCache.set(connectionId, {
+        ...history,
+        orders: history.orders.map(order => ids.has(textValue(order.id))
+          ? { ...order, supplyId, supplyID: supplyId } : order),
+      });
+    }
     const cached = this.fbsOrdersCache.get(clientId)?.value;
     const response = cached ?? await this.refreshFbsOrdersCache(clientId, { invalidateHistory: false, historyMode: 'cache-only' });
-    const ids = new Set(rows.map(row => row.id));
     const orders = response.orders.map(order => order.connectionId === connectionId && ids.has(order.id)
       ? { ...order, category: 'active' as const, supplierStatus: 'confirm', wbStatus: 'waiting', supplyId } : order);
     const orderByKey = new Map(orders.map(order => [selectionKey(order.connectionId, order.id), order]));
@@ -24126,6 +24162,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       let compositionLocked = request.status === ClientRequestStatus.PACKED;
 
       for (const link of liveLinks) {
+        // FIX: accounting is a durable manager decision; status refresh cannot recreate collection.
+        if (isFbsWbAccounted(link)) {
+          const accountedTask = taskByKey.get(selectionKey(link.connectionId, link.orderId));
+          if (accountedTask) addFbsDesiredItem(desiredItems, desiredSkuByOrder, {
+            orderId: link.orderId, skuId: accountedTask.skuId, barcode: jsonStringArray(accountedTask.barcodes)[0] ?? null,
+            name: accountedTask.productName, quantity: Math.max(1, accountedTask.itemCount),
+          });
+          else compositionLocked = true;
+          continue;
+        }
         const order = orderByKey.get(selectionKey(link.connectionId, link.orderId))!;
         const task = taskByKey.get(selectionKey(link.connectionId, link.orderId));
         if (
@@ -24389,7 +24435,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             // FIX: Once /fbs/next has leased a task to a picker, background
             // metadata refreshes must not change its optimistic-lock version.
             // Marketplace status/conflict handling above remains authoritative.
-            task.status === 'IN_PROGRESS' ||
+            task.status === 'IN_PROGRESS' || task.status === FBS_WB_ACCOUNTED ||
             fbsTsdTaskWasPhysicallyHandled(task)
           ) {
             continue;
@@ -25616,6 +25662,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               FBS_REQUEST_LINK_ACTIVE,
               FBS_REQUEST_LINK_MOVING,
               FBS_REQUEST_LINK_RETURN_REQUIRED,
+              FBS_WB_ACCOUNTED,
             ],
           },
         },
@@ -25926,9 +25973,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const requestByOrder = new Map(
       requestLinks.map((link) => [selectionKey(link.connectionId, link.orderId), link.request]),
     );
+    const accountedKeys = new Set(requestLinks.filter(isFbsWbAccounted).map(link => selectionKey(link.connectionId, link.orderId)));
     const ordersWithRequests = ordersWithStockSources.map((order) => ({
       ...order,
       request: requestByOrder.get(selectionKey(order.connectionId, order.id)) ?? null,
+      wbAccounted: accountedKeys.has(selectionKey(order.connectionId, order.id)),
     }));
     let reservationByOrder = new Map<
       string,
@@ -30476,6 +30525,7 @@ function normalizeFbsWarehouseRouteMode(
 }
 
 function isFbsTsdAssemblyOrderEligible(order: FbsOrderSummary) {
+  if (order.wbAccounted) return false;
   // FIX: emergency mode does not revive cancelled, sold or defective WB orders.
   if (isFbsTerminalQueueOrder({ marketplace: order.marketplace, lastCategory: order.category,
     lastSupplierStatus: order.supplierStatus, lastWbStatus: order.wbStatus })) return false;
