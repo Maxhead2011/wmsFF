@@ -11,6 +11,7 @@ import {
   PickWaveBalanceReviewStatus,
   PickWaveStatus,
   Prisma,
+  StockStatus,
   TsdOperationStatus,
 } from '@prisma/client';
 import * as XLSX from 'xlsx';
@@ -1002,6 +1003,8 @@ export class TsdAssemblyService {
         },
       ]),
     );
+    // FIX: historical pick allocations are not proof of current available stock.
+    const currentAllocationQuantities = await this.loadCurrentFbsAllocationQuantities(requestId, requestRows);
     const facts = rows.map((row) => ({
       id: row.id,
       orderId: row.orderId,
@@ -1144,16 +1147,22 @@ export class TsdAssemblyService {
               } =>
                 Boolean(order),
             ),
-          availableBoxes: row.allocations.map((allocation) => {
+          availableBoxes: row.allocations.flatMap((allocation) => {
+            if (remainingQuantity <= 0) return [];
+            const balanceKey = `${row.skuId}:${normalizeBoxCode(allocation.boxCode)}`;
+            const available = currentAllocationQuantities.get(balanceKey) ?? 0;
+            const quantity = Math.min(allocation.quantity, available);
+            if (quantity <= 0) return [];
+            currentAllocationQuantities.set(balanceKey, available - quantity);
             const storageLocation = allocationLocationByBox.get(normalizeBoxCode(allocation.boxCode)) ?? null;
-            return {
+            return [{
               boxCode: allocation.boxCode,
-              quantity: allocation.quantity,
+              quantity,
               // FIX: prefer the current placement over the stale instruction snapshot.
               palletId: storageLocation?.palletId ?? allocation.palletId,
               palletCode: storageLocation?.palletCode ?? allocation.palletCode,
               storageLocation,
-            };
+            }];
           }),
         };
       })
@@ -1327,6 +1336,34 @@ export class TsdAssemblyService {
         rows: notCollectedRows,
       },
     };
+  }
+
+  private async loadCurrentFbsAllocationQuantities(requestId: string, requestRows: PickInstructionDocument['rows']) {
+    const boxCodes = uniqueSorted(requestRows.flatMap(row => row.allocations.map(allocation => allocation.boxCode)));
+    const skuIds = uniqueSorted(requestRows.map(row => row.skuId).filter((id): id is string => Boolean(id)));
+    const quantities = new Map<string, number>();
+    if (boxCodes.length === 0 || skuIds.length === 0) return quantities;
+    const balances = await this.prisma.stockBalance.findMany({
+      where: {
+        skuId: { in: skuIds },
+        status: StockStatus.AVAILABLE,
+        quantity: { gt: 0 },
+        // FIX: use the request's owner and branch, never a global box-code match.
+        sku: { client: { requests: { some: { id: requestId } } } },
+        warehouse: { requests: { some: { id: requestId } } },
+        box: {
+          status: { notIn: ['deleted', 'archived'] },
+          OR: boxCodes.map(code => ({ code: { equals: code, mode: 'insensitive' as const } })),
+        },
+      },
+      select: { skuId: true, quantity: true, box: { select: { code: true } } },
+    });
+    for (const balance of balances) {
+      if (!balance.box) continue;
+      const key = `${balance.skuId}:${normalizeBoxCode(balance.box.code)}`;
+      quantities.set(key, (quantities.get(key) ?? 0) + balance.quantity);
+    }
+    return quantities;
   }
 
   private async loadMovementProgress(document: PickInstructionDocument, tasks: TsdMovementPlanTask[]) {

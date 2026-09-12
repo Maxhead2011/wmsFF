@@ -62,6 +62,8 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
     const prisma = {
       // TEST: no later pallet placement exists for these instruction allocations.
       storagePalletBox: { findMany: vi.fn().mockResolvedValue([]) },
+      // TEST: the pending unit is still physically available in the planned box.
+      stockBalance: { findMany: vi.fn().mockResolvedValue([{skuId:'sku-1',quantity:2,box:{code:'FFL_LKB0106_039'}}]) },
       fbsOrderRequestLink: {
         findMany: vi.fn().mockResolvedValue([
           { orderId: '5355303495', connectionId: 'connection-1', lastSkuId: 'sku-1' },
@@ -162,6 +164,7 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
     const prisma = {
       // TEST: current physical placement lookup is a dependency even for return-required facts.
       storagePalletBox: { findMany: vi.fn().mockResolvedValue([]) },
+      stockBalance: { findMany: vi.fn().mockResolvedValue([]) },
       fbsOrderRequestLink: {
         findMany: vi.fn().mockResolvedValue([
           { orderId: '5355303495', connectionId: 'connection-1', lastSkuId: 'sku-1' },
