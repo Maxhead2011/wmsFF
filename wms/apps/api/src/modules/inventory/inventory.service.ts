@@ -229,7 +229,8 @@ export class InventoryService {
     return this.adminNotifications.withEvent(async tx => {
       // FIX: serialize retries of the same unresolved TSD signal before creating its task.
       const signalKey = JSON.stringify([dto.clientId, warehouseId, requestedTitle]);
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${signalKey}))`;
+      // FIX: execute the void-returning lock without Prisma result deserialization.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${signalKey}))`;
       const existing = await tx.inventorySession.findFirst({
         where: { type: InventorySessionType.BOX_CHECK, clientId: dto.clientId, warehouseId,
           title: requestedTitle, comment: { contains: '[FBS_MISSING_PALLET_BOX]' },

@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, afterAll, describe, expect, it } from 'vitest';
 import { PrismaClient } from '@prisma/client';
 import { AdminNotificationsService, type AdminEvent } from '../src/modules/admin-notifications/admin-notifications.service';
+import { InventoryService } from '../src/modules/inventory/inventory.service';
 import type { AuthUser } from '../src/modules/auth/auth.types';
 
 const databaseUrl = process.env.ADMIN_NOTIFICATIONS_TEST_DATABASE_URL;
@@ -95,4 +96,48 @@ describe.skipIf(!databaseUrl)('admin notifications PostgreSQL integration', () =
     }, () => { throw new Error('event failure'); })).rejects.toThrow('event failure');
     expect(await prisma.adminNotification.count()).toBe(0);
   });
+  // TEST: execute the real InventoryService SQL through Prisma/PostgreSQL, including
+  // its void-returning advisory lock. Only inventory storage is stubbed; transactions
+  // and administrator notifications use the dedicated database above.
+  function missingBoxService() {
+    let task: any = null;
+    let created = 0;
+    const inventorySession = {
+      findFirst: async () => task,
+      create: async ({ data }: any) => {
+        created += 1;
+        task = { ...data, id: 'missing-box-task', status: 'ACTIVE', boxes: [] };
+        return task;
+      },
+    };
+    const scoped = (db: any): any => new Proxy(db, { get(target, key) {
+      if (key === 'inventorySession') return inventorySession;
+      if (key === '$transaction') return (fn: any) => prisma.$transaction(tx => fn(scoped(tx)));
+      const value = target[key];
+      return typeof value === 'function' ? value.bind(target) : value;
+    } });
+    const db = scoped(prisma);
+    const notifications = new AdminNotificationsService(db, { get: () => 'true' } as never);
+    const inventory = new InventoryService(db, { requireClientAccess: () => {} } as never,
+      {} as never, undefined, notifications);
+    const report = () => inventory.startSession({ type: 'BOX_CHECK', clientId: 'client-a',
+      title: 'Missing BOX-1 on P-1', comment: '[FBS_MISSING_PALLET_BOX] BOX-1; P-1' }, admin);
+    return { report, created: () => created };
+  }
+  it('accepts a missing-pallet-box signal without decoding the PostgreSQL void result', async () => {
+    const missing = missingBoxService();
+    await expect(missing.report()).resolves.toMatchObject({ id: 'missing-box-task', status: 'ACTIVE' });
+    expect(missing.created()).toBe(1);
+    expect(await prisma.adminNotification.findMany()).toMatchObject([
+      { type: 'MISSING_PALLET_BOX', sessionId: 'missing-box-task', actorId: admin.id },
+    ]);
+  });
+  it('serializes concurrent missing-box signals into one task and one notification', async () => {
+    const missing = missingBoxService();
+    const results = await Promise.all(Array.from({ length: 4 }, () => missing.report()));
+    expect(results.every(result => result.id === 'missing-box-task')).toBe(true);
+    expect(missing.created()).toBe(1);
+    expect(await prisma.adminNotification.count()).toBe(1);
+  });
+
 });
