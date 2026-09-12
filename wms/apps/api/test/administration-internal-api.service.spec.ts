@@ -66,7 +66,8 @@ describe('AdministrationInternalApiService', () => {
     // ADDED: A new controller or endpoint must also receive an explanation in the admin registry.
     expect(new Set(registryPrefixes)).toEqual(new Set(sourcePrefixes));
     expect(registryRoutes).toBe(sourceRoutes);
-    expect(INTERNAL_API_DEFINITIONS).toHaveLength(31);
+    // TEST: includes the warehouse processing-time statistics controller.
+    expect(INTERNAL_API_DEFINITIONS).toHaveLength(32);
   });
 
   it('не рисует ложный зелёный статус при ошибке основной БД', async () => {

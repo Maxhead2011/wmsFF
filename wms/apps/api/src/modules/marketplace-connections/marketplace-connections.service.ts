@@ -1,5 +1,6 @@
 import { stockTransferBlockedReason, ordersWithoutTransferStock } from './fbs-stock-transfer';
 import { createHash } from 'node:crypto';
+import { timingSnapshot, type SourceOrderTiming } from '../operations-statistics/order-timing';
 import { isOwnedUnpaidDraft, runBillingMutation, withBillingDb } from '../billing/billing-mutation';
 import { collectedFbsBoxMessage } from './fbs-collected-box-message';
 // FIX: preserve both sorting and release-158 recount/terminal-queue dependencies.
@@ -165,6 +166,8 @@ type WildberriesFbsOrder = Record<string, unknown> & {
 };
 
 type FbsOrderSummary = {
+  // FIX: only real marketplace responses populate this; fallback WMS rows cannot forge dates.
+  sourceTiming?: SourceOrderTiming;
   id: string;
   orderUid: string | null;
   connectionId: string;
@@ -24295,6 +24298,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
         if (
           snapshotChanged ||
+          Object.entries(timingSnapshot(order.sourceTiming)).some(([field, value]) =>
+            String((link as unknown as Record<string, unknown>)[field] ?? '') !== String(value)) ||
           link.syncStatus !== FBS_REQUEST_LINK_ACTIVE ||
           Boolean(link.syncIssue)
         ) {
@@ -25846,6 +25851,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             : [],
           relabeling: null,
           createdAt: textValue(order.createdAt) || null,
+          sourceTiming: {
+            placedAt: order.marketplace === MarketplaceType.OZON ? textValue(order.in_process_at) : textValue(order.createdAt),
+            handedOverAt: order.marketplace === MarketplaceType.OZON ? textValue(order.delivering_date) : null,
+            warehouseId: textValue(order.warehouseId), warehouseName: textValue(order.warehouseName),
+          },
           sellerDate: textValue(order.sellerDate) || null,
           deliveryDate: textValue(order.ddate) || null,
           supplyId: textValue(order.supplyId) || textValue(order.supplyID) || null,
@@ -29607,6 +29617,7 @@ function fbsOrderRefreshFingerprint(order: {
 
 function fbsOrderLinkSnapshot(order: FbsOrderSummary) {
   return {
+    ...timingSnapshot(order.sourceTiming),
     lastCategory: order.category,
     lastSupplierStatus: order.supplierStatus,
     lastWbStatus: order.wbStatus,

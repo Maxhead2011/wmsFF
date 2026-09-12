@@ -107,6 +107,8 @@ const RelabelingPanel = lazy(() =>
 const OrderAssemblyPanel = lazy(() =>
   import('./components/order-assembly/OrderAssemblyPanel').then((module) => ({ default: module.OrderAssemblyPanel })),
 );
+const OperationsStatisticsPanel = lazy(() => import('./components/operations-statistics/OperationsStatisticsPanel')
+  .then(module => ({ default: module.OperationsStatisticsPanel })));
 
 const statusLabel = {
   ready: 'готово',
@@ -895,6 +897,8 @@ function renderWorkspace(
   clearFocusedRequest: () => void,
 ) {
   switch (activeWorkspaceId) {
+    case 'operations-statistics':
+      return <Suspense fallback={<div className="workspace-loading">Загружаю статистику…</div>}><OperationsStatisticsPanel session={session} /></Suspense>;
     case 'ai':
       return <WmsAiPanel session={session} />;
     case 'cabinet':
@@ -1235,6 +1239,7 @@ function groupWorkspaces(items: WorkspaceNavItem[]) {
 }
 
 function sectionForWorkspace(id: WorkspaceId): WorkspaceSection {
+  if (id === 'operations-statistics') return 'operations';
   if (id === 'overview') {
     return 'main';
   }
