@@ -2160,9 +2160,10 @@ export type PickInstructionDocument = {
 // FIX: WB accounting is separate from physical completion and has its own audit evidence.
 export type FbsWbAccountingView = {
   enabled: boolean;
-  candidates: Array<{ id: string; orderId: string; productName: string; wbStatus: string }>;
+  candidates: Array<{ id: string; orderId: string; productName: string; wbStatus: string; kiz?: string | null; barcode?: string | null }>;
   accounted: Array<{ id: string; orderId: string; productName: string; wbStatus: string;
-    confirmedAt: string | null; confirmedByName: string | null; comment: string | null }>;
+    confirmedAt: string | null; confirmedByName: string | null; comment: string | null;
+    shipped?: boolean; kiz?: string | null; barcode?: string | null; sourceBoxCode?: string | null }>;
 };
 
 export type TsdAssemblyPlan = {
