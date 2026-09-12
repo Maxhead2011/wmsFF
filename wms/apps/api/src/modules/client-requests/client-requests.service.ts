@@ -132,6 +132,7 @@ export class ClientRequestsService {
           lastCategory: true,
           lastSupplierStatus: true,
           lastWbStatus: true,
+          syncStatus: true,
         },
       }),
       this.prisma.fbsTsdAssembly.findMany({
