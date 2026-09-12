@@ -475,6 +475,11 @@ export const workspaceNav: WorkspaceNavItem[] = [
 ];
 
 export function canOpenWorkspace(user: AuthUser, item: WorkspaceNavItem) {
+  // FIX: monitoring is available to ADMIN on opted-in installations, including
+  // accounts with a stale per-user visibility override. Other menus are unchanged.
+  if (item.id === 'monitoring' && import.meta.env.VITE_ADMIN_MONITORING_ENABLED === 'true'
+    && !user.isDemo && user.roleCodes.includes('ADMIN')
+    && user.permissionCodes.includes('system:admin')) return true;
   // FIX: this menu is role-governed; stale individual visibility/stock permissions
   // must not block ADMIN. Other workspaces keep their existing permission rules.
   if (item.id === 'pallet-sorting') return import.meta.env.VITE_PALLET_SORTING_ENABLED === 'true' && user.roleCodes.includes('ADMIN') && !user.isDemo;

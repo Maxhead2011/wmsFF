@@ -276,7 +276,12 @@ export class AdministrationService {
   }
 
   async listTsdWorkloads(user: AuthUser) {
-    this.assertOwner(user);
+    // FIX: our installation grants ADMIN monitoring reads without owner mutations.
+    const adminMonitoring = process.env.ADMIN_MONITORING_ENABLED === 'true'
+      && !user.isDemo
+      && user.roleCodes?.includes('ADMIN')
+      && user.permissionCodes?.includes('system:admin');
+    if (!adminMonitoring) this.assertOwner(user);
     const since = new Date(Date.now() - 30 * 60 * 1000);
     const [devices, fbsTasks, operations] = await Promise.all([
       this.prisma.tsdDevice.findMany({

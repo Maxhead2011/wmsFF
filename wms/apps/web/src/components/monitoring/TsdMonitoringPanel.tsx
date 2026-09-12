@@ -321,6 +321,8 @@ export function TsdMonitoringPanel({ session }: Props) {
             key={device.deviceCode}
             device={device}
             commandBusy={commandDevice === device.deviceCode}
+            // FIX: newly admitted ADMIN viewers do not gain owner-only device commands.
+            showControls={import.meta.env.VITE_ADMIN_MONITORING_ENABLED !== 'true' || Boolean(session.user.administrationEnabled)}
             latestVersion={latestTsdVersion}
             onCommand={sendCommand}
             onDisconnectTask={disconnectCurrentTask}
@@ -521,6 +523,7 @@ function PickerWorkerCard({ worker }: { worker: PickerWorker }) {
 function DeviceFeed({
   device,
   commandBusy,
+  showControls,
   latestVersion,
   onCommand,
   onDisconnectTask,
@@ -529,6 +532,7 @@ function DeviceFeed({
 }: {
   device: Device;
   commandBusy: boolean;
+  showControls: boolean;
   latestVersion: string;
   onCommand: (device: Device, action: MonitorAction) => void;
   onDisconnectTask: (device: Device) => void;
@@ -637,7 +641,7 @@ function DeviceFeed({
         <span>Версия {state?.appVersion || 'не определена'}</span>
       </div>
 
-      <div className="tsd-feed__controls">
+      {showControls ? <div className="tsd-feed__controls">
         <button type="button" onClick={onMessage}>Сообщение</button>
         <button
           type="button"
@@ -679,7 +683,7 @@ function DeviceFeed({
           <LogOut size={15} />
           Выйти из аккаунта
         </button>
-      </div>
+      </div> : null}
 
     </article>
   );
