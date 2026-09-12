@@ -814,6 +814,11 @@ export class TurnoverService {
       throw new BadRequestException('Укажите номер короба.');
     }
 
+    // FIX: never resolve the virtual boxless label to a historical physical Box.
+    if (!normalizeTurnoverTargetBoxCode(cleanCode)) {
+      throw new BadRequestException('«Без короба» — обозначение остатка без привязки, а не номер короба.');
+    }
+
     const clientFilter = this.clientScopes.resolveClientFilter(user, query.clientId);
     const warehouseScope = await this.resolveWarehouseScope(user, clientFilter);
     const box = await this.prisma.box.findFirst({
