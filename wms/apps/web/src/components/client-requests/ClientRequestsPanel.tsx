@@ -2350,6 +2350,7 @@ export function ClientRequestsPanel({
                   )
               : undefined
           }
+          canShipByWb={canUse(session.user, 'stock:write') || canUse(session.user, 'system:admin')}
           onAccountByWb={canWrite && !session.user.isDemo && !session.user.roleCodes.includes('CLIENT')
             ? (assemblyId, orderId, comment) => accountOnlineFbsOrder(onlinePreview.request, assemblyId, orderId, comment)
             : undefined}
@@ -3814,6 +3815,7 @@ type OnlineExecutionModalProps = {
     action: FbsSyncConflictResolutionAction,
   ) => void;
   onResetFbsAssembly?: (assemblyId: string, orderId: string) => void;
+  canShipByWb?: boolean;
   onAccountByWb?: (assemblyId: string, orderId: string, comment: string) => Promise<boolean>;
   onMarkPackedWithoutSource?: (assemblyId: string, orderId: string) => void;
   onMoveOrder?: (order: { id: string; connectionId: string }) => void;
@@ -3847,6 +3849,7 @@ function OnlineExecutionModal({
   onResetFbsAssembly,
   onMarkPackedWithoutSource,
   onAccountByWb,
+  canShipByWb,
   onMoveOrder,
   onMoveOrders,
   onRepairMoveOrders,
@@ -4354,7 +4357,7 @@ function OnlineExecutionModal({
                   </details>
                 ) : null}
 
-                <FbsWbAccounting data={fbsAssembly?.wbAccounting} busy={resolvingSyncConflictId !== null}
+                <FbsWbAccounting canShip={canShipByWb} data={fbsAssembly?.wbAccounting} busy={resolvingSyncConflictId !== null}
                   error={syncConflictResolutionError} onAccount={onAccountByWb} />
                 <FbsExcludedOrders rows={fbsAssembly?.notForAssembly ?? []} />
                 {returnRequired && returnRequired.rows.length > 0 ? (

@@ -1,3 +1,6 @@
+import { fbsWbAccountingEnabled } from '../../common/fbs-wb-accounting';
+import { readWbShippedUnits, withoutWbShippedItems, type WbShippedUnit } from './fbs-wb-shipped-units';
+import { WB_KIZ_SHIPMENT_PREFIX } from '../marketplace-connections/fbs-wb-kiz-shipment';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
@@ -165,7 +168,7 @@ type RequestAllocationPlan = {
     skuWeightGrams: number | null;
     barcode: string | null;
     requestedQuantity: number;
-    allocations: Array<{ balance: StockBalanceForAllocation; quantity: number }>;
+    allocations: Array<{ balance: StockBalanceForAllocation; quantity: number; alreadyShipped?: boolean }>;
   }>;
 };
 
@@ -1753,6 +1756,7 @@ export class StockOperationsService {
         };
       }
 
+      if (fbsWbAccountingEnabled()) await tx.$queryRaw`SELECT id FROM "ClientRequest" WHERE id = ${dto.requestId} FOR UPDATE`;
       const request = await tx.clientRequest.findUnique({
         where: { id: dto.requestId },
         include: {
@@ -1789,21 +1793,24 @@ export class StockOperationsService {
       }
 
       const savedSelections = await this.loadRequestBoxSelections(tx, request.id, operationWarehouseId);
-      const plan = savedSelections.length
+      const plan = await this.planWithWbShipments(tx, request, savedSelections, operationWarehouseId, async (remaining, selections) => {
+        return selections.length
         ? await this.planRequestAllocationsFromSelections(
             tx,
             request.clientId,
-            request.items,
-            savedSelections,
+            remaining.items,
+            selections,
             [StockStatus.AVAILABLE],
             operationWarehouseId,
           )
-        : await this.planRequestPick(tx, request.clientId, request.items, operationWarehouseId);
+        : await this.planRequestPick(tx, request.clientId, remaining.items, operationWarehouseId);
+      });
 
       // Русский комментарий: сначала строим полный план по всем строкам, и только потом меняем остатки,
       // чтобы нехватка по одной позиции не оставила заявку частично собранной.
       for (const line of plan.lines) {
         for (const allocation of line.allocations) {
+          if (allocation.alreadyShipped) continue; // FIX: this unit has its own committed WB shipment.
           await this.decrementSourceBalance(tx, allocation.balance, allocation.quantity);
           await this.incrementTargetBalance(tx, {
             warehouseId: this.requireBalanceWarehouseId(allocation.balance.warehouseId),
@@ -1904,22 +1911,24 @@ export class StockOperationsService {
       );
 
       const savedSelections = await this.loadRequestBoxSelections(tx, request.id, operationWarehouseId);
-      const plan = savedSelections.length
+      const plan = await this.planWithWbShipments(tx, request, savedSelections, operationWarehouseId, async (remaining, selections) => {
+        return selections.length
         ? await this.planRequestAllocationsFromSelections(
             tx,
             request.clientId,
-            request.items,
-            savedSelections,
+            remaining.items,
+            selections,
             [StockStatus.PACKING],
             operationWarehouseId,
           )
         : await this.planRequestAllocations(
             tx,
             request.clientId,
-            request.items,
+            remaining.items,
             StockStatus.PACKING,
             operationWarehouseId,
           );
+      });
 
       // Русский комментарий: упаковка переводит уже собранный товар из PACKING в SHIPPING,
       // чтобы отгрузка работала только с упакованным остатком.
@@ -2009,6 +2018,7 @@ export class StockOperationsService {
               sourceDocument: request.id,
               type: MovementType.SHIP,
               quantity: { lt: 0 },
+              OR: [{ idempotencyKey: null }, { idempotencyKey: { not: { startsWith: WB_KIZ_SHIPMENT_PREFIX } } }],
             },
           ],
         },
@@ -2052,25 +2062,28 @@ export class StockOperationsService {
       );
 
       const savedSelections = await this.loadRequestBoxSelections(tx, request.id, operationWarehouseId);
-      const plan = savedSelections.length
+      const plan = await this.planWithWbShipments(tx, request, savedSelections, operationWarehouseId, async (remaining, selections) => {
+        return selections.length
         ? await this.planRequestAllocationsFromSelections(
             tx,
             request.clientId,
-            request.items,
-            savedSelections,
+            remaining.items,
+            selections,
             [StockStatus.SHIPPING],
             operationWarehouseId,
           )
         : await this.planRequestAllocations(
             tx,
             request.clientId,
-            request.items,
+            remaining.items,
             StockStatus.SHIPPING,
             operationWarehouseId,
           );
+      });
 
       for (const line of plan.lines) {
         for (const allocation of line.allocations) {
+          if (allocation.alreadyShipped) continue; // FIX: this unit has its own committed WB shipment.
           await this.decrementSourceBalance(tx, allocation.balance, allocation.quantity);
 
           await tx.stockMovement.create({
@@ -2153,6 +2166,7 @@ export class StockOperationsService {
               sourceDocument: dto.requestId,
               type: MovementType.SHIP,
               quantity: { lt: 0 },
+              OR: [{ idempotencyKey: null }, { idempotencyKey: { not: { startsWith: WB_KIZ_SHIPMENT_PREFIX } } }],
             },
           ],
         },
@@ -2217,6 +2231,7 @@ export class StockOperationsService {
 
       for (const line of plan.lines) {
         for (const allocation of line.allocations) {
+          if (allocation.alreadyShipped) continue; // FIX: this unit has its own committed WB shipment.
           await this.decrementSourceBalance(tx, allocation.balance, allocation.quantity);
 
           await tx.stockMovement.create({
@@ -2545,7 +2560,50 @@ export class StockOperationsService {
   }
 
   // FIX: completed physical picks are allocated before legacy closing can touch AVAILABLE.
+  // FIX: an earlier per-order shipment remains in packages/history, but is not allocated again.
   private async planFbsSafeManualShipment(
+    tx: Prisma.TransactionClient,
+    request: { id: string; clientId: string; items: RequestItemForAllocation[] },
+    selections: RequestBoxSelectionForAllocation[], sources: PhysicalStockSourceInput[], baseKey: string,
+    warehouseId?: string, pickedProofs?: FbsPickedProof[],
+  ): Promise<RequestAllocationPlan> {
+    return this.planWithWbShipments(tx, request, selections, warehouseId, (remaining, remainingSelections, shipped) =>
+      this.planFbsSafeManualShipmentRemaining(tx, remaining, remainingSelections,
+        subtractPickedQuantities(sources, shipped), baseKey, warehouseId, pickedProofs));
+  }
+
+  private async planWithWbShipments(
+    tx: Prisma.TransactionClient,
+    request: { id: string; clientId: string; items: RequestItemForAllocation[] },
+    selections: RequestBoxSelectionForAllocation[], warehouseId: string | undefined,
+    build: (remaining: typeof request, selections: RequestBoxSelectionForAllocation[], shipped: WbShippedUnit[]) => Promise<RequestAllocationPlan>,
+  ): Promise<RequestAllocationPlan> {
+    const shipped = await readWbShippedUnits(tx, request, warehouseId);
+    if (!shipped.length) return build(request, selections, []);
+    const remaining = withoutWbShippedItems(request, shipped);
+    const plan = remaining.items.length ? await build(remaining, subtractPickedQuantities(selections, shipped), shipped) : { lines: [] };
+    for (const unit of shipped) {
+      const item = request.items.find(row => row.id === unit.itemId)!;
+      let line = plan.lines.find(row => row.itemId === unit.itemId);
+      if (!line) {
+        const sku = await this.resolveSku(tx, { clientId: request.clientId, skuId: unit.skuId });
+        line = { itemId: item.id, skuId: unit.skuId, skuWeightGrams: sku.weightGrams,
+          barcode: item.barcode, requestedQuantity: item.quantity, allocations: [] };
+        plan.lines.push(line);
+      }
+      line.requestedQuantity = item.quantity;
+      line.allocations.push({ alreadyShipped: true, quantity: 1, balance: {
+        id: `wb-shipped:${unit.movementId}`, balanceKey: `wb-shipped:${unit.movementId}`,
+        clientId: request.clientId, warehouseId: unit.warehouseId, skuId: unit.skuId,
+        boxId: unit.boxId, palletId: null, status: StockStatus.SHIPPING, quantity: 0, updatedAt: unit.shippedAt,
+        box: unit.boxId ? { code: unit.sourceBoxCode, warehouseId: unit.warehouseId,
+          zoneId: null, palletId: null, zone: null, pallet: null } : null,
+      } });
+    }
+    return plan;
+  }
+
+  private async planFbsSafeManualShipmentRemaining(
     tx: Prisma.TransactionClient,
     request: { id: string; clientId: string; items: RequestItemForAllocation[] },
     selections: RequestBoxSelectionForAllocation[],
@@ -3437,6 +3495,8 @@ export class StockOperationsService {
     baseKey: string,
     warehouseId?: string,
   ) {
+    request = withoutWbShippedItems(request, await readWbShippedUnits(tx, request, warehouseId));
+    if (!request.items.length) return;
     if (await this.prepareFbsPickedStock(tx, request, baseKey, StockStatus.SHIPPING, warehouseId)) return;
     const missingItems = await this.findItemsMissingInStatus(
       tx,
@@ -3483,6 +3543,8 @@ export class StockOperationsService {
     baseKey: string,
     warehouseId?: string,
   ) {
+    request = withoutWbShippedItems(request, await readWbShippedUnits(tx, request, warehouseId));
+    if (!request.items.length) return;
     if (await this.prepareFbsPickedStock(tx, request, baseKey, StockStatus.PACKING, warehouseId)) return;
     const missingItems = await this.findItemsMissingInStatus(
       tx,
@@ -3651,6 +3713,7 @@ export class StockOperationsService {
     operationName: string,
     allowDelivery = false,
   ) {
+    if (fbsWbAccountingEnabled()) await tx.$queryRaw`SELECT id FROM "ClientRequest" WHERE id = ${requestId} FOR UPDATE`;
     const request = await tx.clientRequest.findUnique({
       where: { id: requestId },
       include: {
@@ -4345,6 +4408,7 @@ export class StockOperationsService {
   ) {
     for (const line of input.plan.lines) {
       for (const allocation of line.allocations) {
+        if (allocation.alreadyShipped) continue; // FIX: this unit has its own committed WB shipment.
         await this.decrementSourceBalance(tx, allocation.balance, allocation.quantity);
         await this.incrementTargetBalance(tx, {
           warehouseId: this.requireBalanceWarehouseId(allocation.balance.warehouseId),

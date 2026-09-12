@@ -11223,7 +11223,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const row = matching[0]!;
       return { supplierStatus: textValue(row.supplierStatus), wbStatus: textValue(row.wbStatus),
         isTransferable: typeof row.isTransferable === 'boolean' ? row.isTransferable : undefined };
-    });
+    }, async () => { await this.inventoryLock?.assertStockMovementsAllowed(); });
     // Remove list caches; the durable link remains authoritative on the next refresh.
     const { clientId, ...response } = result;
     this.invalidateRepeatAssemblyCache(clientId);
