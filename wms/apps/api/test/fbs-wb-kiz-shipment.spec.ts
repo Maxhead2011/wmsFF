@@ -63,6 +63,31 @@ describe('WB shipment source evidence', () => {
 });
 
 describe('WB shipment with an exact KIZ/barcode pair', () => {
+  // TEST: request 783 is PACKED; an exact confirmed pair can be shipped once without reopening it.
+  it('ships an exact pair from a packed request and replays without another deduction', async () => {
+    const f = fixture(); f.request.number = 783; f.request.status = 'PACKED';
+    await expect(f.run()).resolves.toMatchObject({ shipped: true });
+    await expect(f.run()).resolves.toMatchObject({ shipped: true });
+    expect(f.request.status).toBe('PACKED');
+    expect(f.db.shippedKizHistory.create).toHaveBeenCalledTimes(1);
+    expect(f.db.stockMovement.create.mock.calls.filter(([arg]) => arg.data.type === 'SHIP')).toHaveLength(1);
+    expect(f.read).toHaveBeenCalledTimes(1);
+  });
+  // TEST: the packed exception cannot reopen a request or repeat a request-wide shipment.
+  it.each(['no-pair', 'closed', 'previous-shipment', 'closed-during-check'])('keeps %s blocked for packed accounting', async scenario => {
+    const f = fixture(); f.request.status = 'PACKED';
+    if (scenario === 'no-pair') { f.task.kiz = null; f.task.barcode = null; }
+    if (scenario === 'closed') f.request.status = 'DONE';
+    if (scenario === 'previous-shipment') f.db.stockMovement.findMany.mockResolvedValue([{ idempotencyKey: 'whole-request-shipment' }]);
+    if (scenario === 'closed-during-check') f.read.mockImplementation(async () => {
+      f.request.status = 'DONE'; return { supplierStatus: 'complete', wbStatus: 'sorted', isTransferable: false };
+    });
+    await expect(f.run()).rejects.toThrow();
+    expect(f.db.stockMovement.create).not.toHaveBeenCalled();
+    expect(f.db.shippedKizHistory.create).not.toHaveBeenCalled();
+    if (scenario === 'previous-shipment') expect(f.db.stockMovement.findMany).toHaveBeenCalled();
+    if (scenario === 'closed-during-check') expect(f.read).toHaveBeenCalledTimes(1);
+  });
   // TEST: previously a linked KIZ was rejected, even when WB confirmed shipment.
   it('records the exact pair and explicitly uses no box when no source mapping exists', async () => {
     const f = fixture();
