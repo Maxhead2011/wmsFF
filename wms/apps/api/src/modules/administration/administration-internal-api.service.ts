@@ -81,6 +81,16 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     logic: ['Создаёт и обновляет филиалы.', 'Назначает активный склад пользователя.', 'Ограничивает операции разрешёнными филиалами.'],
     dependencies: ['Основная БД'],
   },
+  // FIX: register the operational notification API alongside its role and scope rules.
+  {
+    id: 'admin-notifications',
+    name: 'Сигналы администраторам',
+    prefixes: ['/admin-notifications'],
+    routeCount: 3,
+    description: 'Отсутствующие короба, проблемы с товаром и открытие проверок содержимого.',
+    logic: ['Выдаёт события только роли ADMIN в доступных клиентах и филиалах.', 'Хранит прочтение и подтверждение показа отдельно для каждого администратора.', 'Запись и доставка включаются настройкой ADMIN_OPERATIONAL_NOTIFICATIONS_ENABLED.'],
+    dependencies: ['Основная БД', 'Роль ADMIN'],
+  },
   {
     id: 'client-notifications',
     name: 'Уведомления клиентов',
@@ -157,7 +167,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'inventory',
     name: 'Инвентаризация и сортировка',
     prefixes: ['/inventory', '/pallet-sorting'],
-    routeCount: 25, // FIX: include SKU collection cancellation and capability endpoints.
+    routeCount: 26, // FIX: include SKU collection cancellation and capability endpoints.
     description: 'Пересчёты, актуализация и отдельная сортировка паллет-сорта или короба для администратора.',
     logic: ['Фиксирует снимок ожидаемых остатков.', 'Сравнивает факт со снимком.', 'Применяет подтверждённые расхождения через движения склада.', 'Сортировка переносит товар и КИЗ в новые короба без приёмки; списывает недостачу только по свежему подтверждению и перестраивает затронутые FBS-маршруты.', 'Снятие сборки по SKU сохраняет историю и выполненные перемещения; доступно при включённом флаге снятия задач в пределах разрешённых клиента и склада.'],
     dependencies: ['Основная БД', 'Складские движения'],

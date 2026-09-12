@@ -3297,3 +3297,33 @@ model WmsApiCredential {
   @@index([expiresAt])
   @@index([createdByUserId])
 }
+
+// FIX: immutable operational events with independent per-administrator receipts.
+model AdminNotification {
+  id          Int      @id @default(autoincrement())
+  type        String
+  dedupeKey   String   @unique
+  title       String
+  body        String
+  clientId    String
+  warehouseId String?
+  actorId     String
+  actorName   String
+  isDemo      Boolean  @default(false)
+  sessionId   String?
+  auditBoxId  String?
+  requestId   String?
+  createdAt   DateTime @default(now())
+  receipts    AdminNotificationReceipt[]
+  @@index([clientId, id])
+  @@index([warehouseId, id])
+}
+model AdminNotificationReceipt {
+  notificationId Int
+  userId         String
+  readAt         DateTime?
+  popupShownAt   DateTime?
+  notification   AdminNotification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  @@id([notificationId, userId])
+  @@index([userId, readAt])
+}

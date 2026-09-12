@@ -1,3 +1,4 @@
+import { AdminNotificationsModule } from './modules/admin-notifications/admin-notifications.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
@@ -41,6 +42,7 @@ import { WmsAiModule } from './modules/wms-ai/wms-ai.module';
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     CommonModule,
+    AdminNotificationsModule,
     AdministrationModule,
     AnalyticsModule,
     AuthModule,
