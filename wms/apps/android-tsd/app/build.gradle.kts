@@ -23,8 +23,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 165 // FIX: close received boxes on the server after their own receipt packet.
-            versionName = "0.1.166-receipt-close"
+            versionCode = 166 // FIX: personal welcome after successful employee login on our TSD.
+            versionName = "0.1.167-personal-welcome"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
