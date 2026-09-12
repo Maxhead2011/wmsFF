@@ -1,6 +1,8 @@
 import { Crown, Download, Eye, KeyRound, LogIn, ScanBarcode, ShieldPlus, Smartphone } from 'lucide-react';
 import { FormEvent, useState } from 'react';
 import { bootstrapAdmin, login, type AuthSession } from '../lib/api';
+import { shouldShowPersonalWelcome } from '../lib/personal-login-welcome';
+import { PersonalLoginWelcome } from './PersonalLoginWelcome';
 
 type AuthPanelProps = {
   onSession: (session: AuthSession) => void;
@@ -17,6 +19,7 @@ export function AuthPanel({ onSession, onBack }: AuthPanelProps) {
   const [bootstrapSecret, setBootstrapSecret] = useState('');
   const [error, setError] = useState('');
   const [isSubmitting, setSubmitting] = useState(false);
+  const [welcomeSession, setWelcomeSession] = useState<AuthSession | null>(null);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -34,7 +37,12 @@ export function AuthPanel({ onSession, onBack }: AuthPanelProps) {
               bootstrapSecret,
             });
 
-      onSession(session);
+      // FIX: show the personal greeting only for a successful explicit login on our installation.
+      if (mode === 'login' && shouldShowPersonalWelcome(session.user.id, window.location.hostname)) {
+        setWelcomeSession(session);
+      } else {
+        onSession(session);
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Не удалось выполнить вход.');
     } finally {
@@ -58,6 +66,8 @@ export function AuthPanel({ onSession, onBack }: AuthPanelProps) {
       setSubmitting(false);
     }
   }
+
+  if (welcomeSession) return <PersonalLoginWelcome onComplete={() => onSession(welcomeSession)} />;
 
   return (
     <main className="auth-shell">
