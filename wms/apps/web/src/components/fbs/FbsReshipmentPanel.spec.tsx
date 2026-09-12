@@ -38,6 +38,19 @@ function setup() {
 }
 
 describe('WB reshipment UI // TEST', () => {
+  // TEST: a committed transfer still offers recovery when only source composition remains pending.
+  it('can continue source recalculation for an already created no-stock request', async () => {
+    const { api, model } = setup();
+    api.check.mockResolvedValue({ candidates: [], runs: [{ runId: 'run1', status: 'CREATED', mode: 'NEW_ITEM',
+      supplyId: 'WB-GI-2', requestId: 'r1', requestNumber: 713, errorMessage: 'Source sync pending',
+      sourceSyncPending: true, transferPurpose: 'NO_STOCK' }] });
+    await model.check();
+    const html = renderToStaticMarkup(<FbsReshipmentView model={model} />);
+    expect(html).toContain('logoff нет на складе');
+    expect(html).toContain('Проверить и продолжить сохранённую операцию');
+    await model.resume('run1');
+    expect(api.resume).toHaveBeenCalledWith({ clientId: 'client', runId: 'run1' });
+  });
   it('checks only the dedicated WB candidates and never creates during discovery', async () => {
     const { api, model } = setup();
     await model.check();

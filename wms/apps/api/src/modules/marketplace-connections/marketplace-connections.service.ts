@@ -1,3 +1,4 @@
+import { stockTransferBlockedReason, ordersWithoutTransferStock } from './fbs-stock-transfer';
 import { createHash } from 'node:crypto';
 import { isOwnedUnpaidDraft, runBillingMutation, withBillingDb } from '../billing/billing-mutation';
 import { collectedFbsBoxMessage } from './fbs-collected-box-message';
@@ -18088,6 +18089,80 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       sourceCity: sourcePlan.marketplaceWarehouseName ?? 'город не указан',
       candidates,
     };
+  }
+
+  // FIX: fresh, branch-scoped stock routing for an explicitly selected transfer.
+  async prepareFbsStockTransfer(dto: FbsOrderSelectionDto, user: AuthUser) {
+    this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
+    const warehouseId = user.activeWarehouseId;
+    if (!warehouseId || (user.writableWarehouseIds && !user.writableWarehouseIds.includes(warehouseId))) {
+      throw new ForbiddenException('Выберите доступный для работы филиал.');
+    }
+    if (!dto.orders.length || new Set(dto.orders.map(row => selectionKey(row.connectionId, row.id))).size !== dto.orders.length) throw new BadRequestException('Выберите неповторяющиеся заказы.');
+    const fresh = await this.refreshFbsOrdersCache(dto.clientId, { invalidateHistory: false, historyMode: 'cache-only' });
+    const { orders } = await this.resolveSelectedFbsOrders(dto.clientId, dto.orders, fresh);
+    const tasks = await this.prisma.fbsTsdAssembly.findMany({ where: { clientId: dto.clientId, marketplace: 'WILDBERRIES',
+      OR: orders.map(order => ({ connectionId: order.connectionId, orderId: order.id })) } });
+    const links = await this.prisma.fbsOrderRequestLink.findMany({ where: { clientId: dto.clientId, marketplace: 'WILDBERRIES',
+      request: { warehouseId }, OR: orders.map(order => ({ connectionId: order.connectionId, orderId: order.id })) }, include: { request: true } });
+    const skippedOrders: Array<{ id: string; reason: string }> = [];
+    const eligible = orders.filter(order => {
+      const task = tasks.find(task => task.orderId === order.id && task.connectionId === order.connectionId);
+      const link = links.find(link => link.orderId === order.id && link.connectionId === order.connectionId && link.requestId === task?.requestId);
+      const reason = order.marketplace !== 'WILDBERRIES' || !order.product ? 'Товар WMS не найден.' :
+        !task || !link ? 'Нет сборки и заявки в выбранном филиале.' :
+        dto.sourceRequestId && link.requestId !== dto.sourceRequestId ? 'Заказ уже перенесён из исходной заявки.' :
+        stockTransferBlockedReason(task, link, { supplierStatus: order.supplierStatus ?? '', wbStatus: order.wbStatus ?? '' });
+      if (reason) skippedOrders.push({ id: order.id, reason });
+      return !reason;
+    });
+    if (!eligible.length) throw new BadRequestException(skippedOrders.map(row => `№${row.id}: ${row.reason}`).join(' '));
+    const selected = eligible.map(order => {
+      const task = tasks.find(task => task.orderId === order.id && task.connectionId === order.connectionId)!;
+      return { key: selectionKey(order.connectionId, order.id), taskId: task.id,
+        skuId: order.relabeling?.sourceSkuId || order.product!.id, itemCount: Math.max(1, order.itemCount) };
+    });
+    const client = await this.prisma.client.findUniqueOrThrow({ where: { id: dto.clientId }, select: { storesWithoutBoxes: true } });
+    const skuIds = uniqueStrings(selected.map(row => row.skuId));
+    const balances = await this.prisma.stockBalance.findMany({ where: { clientId: dto.clientId, warehouseId,
+      skuId: { in: skuIds }, status: 'AVAILABLE', quantity: { gt: 0 },
+      ...(client.storesWithoutBoxes ? { OR: [{ boxId: null }, { box: { warehouseId, status: { notIn: ['deleted', 'archived', 'shipped'] } } }] } :
+        { boxId: { not: null }, box: { clientId: dto.clientId, warehouseId, status: { notIn: ['deleted', 'archived', 'shipped'] },
+          storagePlacement: { pallet: { clientId: dto.clientId, warehouseId } } } }) },
+      select: { skuId: true, boxId: true, quantity: true } });
+    const reservations = await this.fbsTsdReservationRowsBySku({ clientId: dto.clientId, skuIds, excludeTaskId: null,
+      withoutBox: client.storesWithoutBoxes });
+    if (client.storesWithoutBoxes) {
+      const requests = await this.prisma.clientRequest.findMany({ where: { clientId: dto.clientId, warehouseId }, select: { id: true } });
+      const scoped = await this.prisma.fbsTsdAssembly.findMany({ where: { clientId: dto.clientId,
+        requestId: { in: requests.map(row => row.id) }, id: { in: [...reservations.values()].flat().map(row => row.taskId) } }, select: { id: true } });
+      const ids = new Set(scoped.map(row => row.id));
+      for (const [skuId, rows] of reservations) reservations.set(skuId, rows.filter(row => ids.has(row.taskId)));
+    }
+    const missing = ordersWithoutTransferStock(selected, balances, reservations, client.storesWithoutBoxes);
+    return { orders: eligible.map(order => ({ ...order, noStock: missing.has(selectionKey(order.connectionId, order.id)) })), skippedOrders };
+  }
+
+  // FIX: WB membership/status were verified by the journal. Reconcile both old and new WMS compositions.
+  async finishStockTransferRequests(clientId: string, connectionId: string, supplyId: string,
+    rows: Array<{ id: string; requestId: string }>) {
+    const cached = this.fbsOrdersCache.get(clientId)?.value;
+    const response = cached ?? await this.refreshFbsOrdersCache(clientId, { invalidateHistory: false, historyMode: 'cache-only' });
+    const ids = new Set(rows.map(row => row.id));
+    const orders = response.orders.map(order => order.connectionId === connectionId && ids.has(order.id)
+      ? { ...order, category: 'active' as const, supplierStatus: 'confirm', wbStatus: 'waiting', supplyId } : order);
+    const orderByKey = new Map(orders.map(order => [selectionKey(order.connectionId, order.id), order]));
+    for (const requestId of uniqueStrings(rows.map(row => row.requestId))) {
+      const result = await this.syncOneFbsRequest(clientId, requestId, orderByKey, []);
+      if (!result.changed && result.summary.includes('не все связанные заказы')) throw new ConflictException('Не все заказы исходной заявки доступны для пересчёта.');
+    }
+    this.fbsOrdersCache.delete(clientId);
+  }
+
+  async stockTransferDefaultDelivery(clientId: string) {
+    const plan = await this.loadFbsDeliveryPlan(clientId);
+    return { deliveryDestination: plan.destination, itemsPerCargoPlace: plan.itemsPerCargoPlace,
+      marketplaceWarehouseId: null, marketplaceWarehouseName: null, destinationOfficeId: null, destinationOfficeName: null };
   }
 
   async moveFbsOrdersToNewSupply(dto: FbsOrderSelectionDto, user: AuthUser) {

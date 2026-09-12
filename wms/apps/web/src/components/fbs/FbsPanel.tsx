@@ -1,4 +1,5 @@
 // FIX: keep reshipment alongside the deployed FBS delivery controls.
+import { describeStockTransfer } from '../../lib/fbs-stock-transfer';
 import { FbsReshipmentPanel } from './FbsReshipmentPanel';
 import {
   AlertTriangle,
@@ -1238,7 +1239,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     if (!window.confirm(
       `Перенести ${orders.length} заказ(а/ов) из поставки ${sourceSupplyId} в новую поставку WB?\n\n` +
       `Для них будет создана отдельная заявка WMS. Заявка №${String(sourceRequestNumber ?? '').padStart(6, '0')} ` +
-      'автоматически пересчитается. Статус заказов в WB останется «На сборке».',
+      'автоматически пересчитается после подтверждения переноса WB.',
     )) return;
 
     setOrderAction('move');
@@ -1252,6 +1253,13 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
           id: order.id,
         })),
       });
+      if ('routedTransfer' in result) {
+        setSelectedOrderKeys(new Set());
+        setOrderActionMessage(describeStockTransfer(result));
+        void loadOrders(true);
+        void loadCargoPackings();
+        return;
+      }
       ++loadSequence.current;
       setOrdersState({ status: 'ready', data: result.orders, error: '' });
       setSelectedOrderKeys(new Set());
@@ -5733,7 +5741,7 @@ function FbsOrdersView({
   const changeDestinationSupplyCount = new Set(
     changeDestinationOrders.map((order) => `${order.connectionId}:${order.supplyId}`),
   ).size;
-  const moveOrders = selectedOrders.filter(isFbsOrderMoveCandidate);
+  const moveOrders = selectedOrders.filter(order => isFbsOrderMoveCandidate(order, data?.stockTransferEnabled === true));
   const selectedMoveWarehouseKeys = new Set(
     moveOrders.map(
       (order) =>
@@ -7841,7 +7849,11 @@ function groupFbsOrdersForRequestsByWarehouse(orders: FbsOrderSummary[], separat
   );
 }
 
-function isFbsOrderMoveCandidate(order: FbsOrderSummary) {
+function isFbsOrderMoveCandidate(order: FbsOrderSummary, stockTransferEnabled = false) {
+  // FIX: expose delivery/new orders only when this WMS enables the new transfer route.
+  if (stockTransferEnabled) return order.marketplace === 'WILDBERRIES' && order.wbStatus === 'waiting' &&
+    ['new', 'confirm', 'complete'].includes(order.supplierStatus ?? '') && Boolean(order.product && order.request);
+
   return (
     order.marketplace === 'WILDBERRIES' &&
     order.category === 'active' &&

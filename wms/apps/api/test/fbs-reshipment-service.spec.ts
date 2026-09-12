@@ -18,7 +18,7 @@ describe('WB reshipment journal', () => {
       completedAt: now, updatedAt: now, cargoPackingId: null, workerUserId: 'worker', workerName: 'Worker', wbMetaStatus: 'ACCEPTED' };
     link = { id: 'link', requestId: 'old-request', clientId: 'client', connectionId: 'connection', orderId: 'order',
       lastSupplierStatus: 'complete', lastCategory: 'shipped', lastSupplyId: 'old-supply', syncStatus: 'ACTIVE', updatedAt: now,
-      request: { id: 'old-request', number: 712, warehouseId: 'warehouse' } };
+      request: { id: 'old-request', number: 712, status: 'SUBMITTED', warehouseId: 'warehouse' } };
     const matches = (r: any, w: any) => (!w.id || r.id === w.id) && (!w.fingerprint || r.fingerprint === w.fingerprint) &&
       (!w.clientId || r.clientId === w.clientId) && (!w.warehouseId || r.warehouseId === w.warehouseId) &&
       (!w.leaseToken || r.leaseToken === w.leaseToken) && (!w.status?.not || r.status !== w.status.not) &&
@@ -61,9 +61,132 @@ describe('WB reshipment journal', () => {
       addReshipmentWbOrders: vi.fn(async () => {
         wb.readReshipmentWbSupply.mockResolvedValue({ id: 'new-supply', done: false, orderIds: ['order'] });
         wb.readReshipmentWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'confirm', wbStatus: 'waiting' }]]));
-      }), invalidateRepeatAssemblyCache: vi.fn(),
+      }), invalidateRepeatAssemblyCache: vi.fn(), finishStockTransferRequests: vi.fn(async () => undefined),
     };
     service = new FbsReshipmentService(db, { requireClientAccess: vi.fn() } as never, wb);
+  });
+
+  // TEST: a delivery order without stock uses the named supply, without reshipment-report evidence or stock deductions.
+  it('routes an unpicked delivery order to the no-stock supply', async () => {
+    vi.stubEnv('WMS_FBS_NO_STOCK_TRANSFER_ENABLED', 'true');
+    Object.assign(task, { status: 'WAITING_STOCK', barcode: null, kiz: null, completedAt: null, workerUserId: null });
+    wb.readReshipmentWbCandidates.mockResolvedValue([]);
+    wb.prepareFbsStockTransfer = vi.fn(async () => ({ orders: [{ id: 'order', connectionId: 'connection',
+      warehouseId: 'wb-warehouse', cargoType: '1', crossBorderType: '0', supplierStatus: 'complete',
+      product: { id: 'sku' }, noStock: true }], skippedOrders: [] }));
+    const result = await (service as any).moveWithStockRouting({ clientId: 'client', orders: dto.orders }, user);
+    expect(result.transfers[0]).toMatchObject({ status: 'CREATED', supplyName: 'logoff нет на складе', orderCount: 1 });
+    expect(wb.createReshipmentWbSupply).toHaveBeenCalledWith('client', 'connection', 'logoff нет на складе', user);
+    expect(link.lastSupplierStatus).toBe('confirm');
+    expect(task.status).toBe('WAITING_STOCK');
+    expect(db.stockMovement.create).not.toHaveBeenCalled();
+    expect(db.fbsAssemblyAttemptHistory.create).not.toHaveBeenCalled();
+  });
+
+  function setupStockTransfer() {
+    vi.stubEnv('WMS_FBS_NO_STOCK_TRANSFER_ENABLED', 'true');
+    Object.assign(task, { status: 'WAITING_STOCK', barcode: null, kiz: null, completedAt: null, workerUserId: null });
+    wb.readReshipmentWbCandidates.mockResolvedValue([]);
+    wb.prepareFbsStockTransfer = vi.fn(async () => ({ orders: [{ id: 'order', connectionId: 'connection',
+      warehouseId: 'wb-warehouse', cargoType: '1', crossBorderType: '0', supplierStatus: 'complete',
+      product: { id: 'sku' }, noStock: true }], skippedOrders: [] }));
+    wb.moveFbsOrdersToNewSupply = vi.fn(async () => ({ moved: 1, targetSupply: { id: 'regular' } }));
+  }
+  // TEST: sold WMS uses precisely its previous code path when the flag is absent.
+  it('keeps the legacy move unchanged with stock routing disabled', async () => {
+    wb.moveFbsOrdersToNewSupply = vi.fn(async () => ({ moved: 1 }));
+    expect(await service.moveWithStockRouting({ clientId: 'client', orders: dto.orders }, user)).toEqual({ moved: 1 });
+    expect(wb.moveFbsOrdersToNewSupply).toHaveBeenCalledTimes(1);
+    expect(wb.createReshipmentWbSupply).not.toHaveBeenCalled();
+  });
+  // TEST: a lost fixed-name POST must not adopt someone else's same-name supply or create a duplicate.
+  it('keeps an unknown no-stock supply POST in reconciliation on retry', async () => {
+    setupStockTransfer();
+    wb.createReshipmentWbSupply.mockRejectedValue(new Error('timeout'));
+    wb.findReshipmentWbSupply.mockResolvedValue({ id: 'unrelated-same-name', done: false, orderIds: [] });
+    const result: any = await service.moveWithStockRouting({ clientId: 'client', orders: dto.orders }, user);
+    expect(result.transfers[0].status).toBe('NEEDS_RECONCILIATION');
+    const retry: any = await service.moveWithStockRouting({ clientId: 'client', orders: dto.orders }, user);
+    expect(retry.transfers[0].runId).toBe(result.transfers[0].runId);
+    expect(wb.createReshipmentWbSupply).toHaveBeenCalledTimes(1);
+    expect(wb.findReshipmentWbSupply).not.toHaveBeenCalled();
+    expect(wb.addReshipmentWbOrders).not.toHaveBeenCalled();
+    expect(db.clientRequest.create).not.toHaveBeenCalled();
+  });
+  it('recovers a lost order-move response by membership without another PATCH', async () => {
+    setupStockTransfer();
+    wb.addReshipmentWbOrders.mockImplementation(async () => {
+      wb.readReshipmentWbSupply.mockResolvedValue({ id: 'new-supply', done: false, orderIds: ['order'] });
+      wb.readReshipmentWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'confirm', wbStatus: 'waiting' }]]));
+      throw new Error('lost response');
+    });
+    const result: any = await service.moveWithStockRouting({ clientId: 'client', orders: dto.orders }, user);
+    expect(result.transfers[0].status).toBe('NEEDS_RECONCILIATION');
+    const recovered = await service.resume({ clientId: 'client', runId: result.transfers[0].runId }, user);
+    expect(recovered.status).toBe('CREATED');
+    expect(wb.addReshipmentWbOrders).toHaveBeenCalledTimes(1);
+    expect(db.clientRequest.create).toHaveBeenCalledTimes(1);
+  });
+  it('does not finalize local state when WB refuses delivery transfer', async () => {
+    setupStockTransfer(); wb.addReshipmentWbOrders.mockRejectedValue(new Error('WB 409'));
+    const result: any = await service.moveWithStockRouting({ clientId: 'client', orders: dto.orders }, user);
+    expect(result.transfers[0]).toMatchObject({ status: 'NEEDS_RECONCILIATION', errorMessage: 'WB 409' });
+    expect(link.lastSupplyId).toBe('old-supply'); expect(task.requestId).toBe('old-request');
+    expect(db.clientRequest.create).not.toHaveBeenCalled(); expect(db.stockMovement.create).not.toHaveBeenCalled();
+  });
+  it('partitions stock shortages from ordinary transfers and reports a failed ordinary group', async () => {
+    setupStockTransfer();
+    const prepare = wb.prepareFbsStockTransfer.getMockImplementation();
+    wb.prepareFbsStockTransfer.mockImplementation(async () => {
+      const selected = await prepare();
+      return { ...selected, orders: [...selected.orders, { ...selected.orders[0], id: 'regular-order', noStock: false, supplierStatus: 'confirm' }] };
+    });
+    wb.moveFbsOrdersToNewSupply.mockRejectedValue(new Error('regular failed'));
+    const result: any = await service.moveWithStockRouting({ clientId: 'client', orders: [...dto.orders, { id: 'regular-order', connectionId: 'connection' }] }, user);
+    expect(result.transfers[0].status).toBe('CREATED'); expect(result.errors[0]).toContain('regular failed');
+    expect(wb.moveFbsOrdersToNewSupply.mock.calls[0][0].orders).toEqual([{ id: 'regular-order', connectionId: 'connection' }]);
+    expect(wb.addReshipmentWbOrders.mock.calls[0][3]).toEqual(['order']);
+  });
+  it('transfers a delivery order with stock using an ordinary distinct supply name', async () => {
+    setupStockTransfer();
+    const prepare = wb.prepareFbsStockTransfer.getMockImplementation();
+    wb.prepareFbsStockTransfer.mockImplementation(async () => { const value = await prepare(); value.orders[0].noStock = false; return value; });
+    const result: any = await service.moveWithStockRouting({ clientId: 'client', orders: dto.orders }, user);
+    expect(result.transfers[0].status).toBe('CREATED'); expect(result.transfers[0].supplyName).toMatch(/^WMS-RES-/);
+    expect(wb.moveFbsOrdersToNewSupply).not.toHaveBeenCalled();
+  });
+  it('uses configured delivery defaults for a new order without a previous supply', async () => {
+    setupStockTransfer(); task.supplyId = null; link.lastSupplyId = null;
+    wb.readReshipmentWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'new', wbStatus: 'waiting' }]]));
+    wb.stockTransferDefaultDelivery = vi.fn(async () => ({ deliveryDestination: 'PICKUP_POINT', itemsPerCargoPlace: 100 }));
+    const result: any = await service.moveWithStockRouting({ clientId: 'client', orders: dto.orders }, user);
+    expect(result.transfers[0].status).toBe('CREATED'); expect(wb.stockTransferDefaultDelivery).toHaveBeenCalledWith('client');
+    expect(wb.finishStockTransferRequests).toHaveBeenCalledWith('client', 'connection', 'new-supply', expect.arrayContaining([expect.objectContaining({ requestId: 'old-request' })]));
+  });
+  it('rejects a physical scan appearing after planning but before WB mutation', async () => {
+    setupStockTransfer();
+    db.fbsReshipmentClaim.createMany.mockImplementation(async () => { task.barcode = 'scanned'; return { count: 1 }; });
+    const result: any = await service.moveWithStockRouting({ clientId: 'client', orders: dto.orders }, user);
+    expect(result.transfers[0].status).toBe('NEEDS_RECONCILIATION');
+    expect(wb.createReshipmentWbSupply).not.toHaveBeenCalled(); expect(db.stockMovement.create).not.toHaveBeenCalled();
+  });
+  // TEST: the unique journal key must never be replaced by a repeating WB display name.
+  it('retains a unique journal identity for the fixed WB name', async () => {
+    setupStockTransfer();
+    const result: any = await service.moveWithStockRouting({ clientId: 'client', orders: dto.orders }, user);
+    expect(runs[0].supplyName).toBe(`WMS-RES-${runs[0].id}`);
+    expect(result.transfers[0].supplyName).toBe('logoff нет на складе');
+    expect(db.auditLog.create.mock.calls[0][0].data.payload.additionalStockConsumptionConfirmed).toBe(false);
+  });
+  it('resumes source composition after local commit without repeating WB or creating a request', async () => {
+    setupStockTransfer(); wb.finishStockTransferRequests.mockRejectedValueOnce(new Error('database busy'));
+    const result: any = await service.moveWithStockRouting({ clientId: 'client', orders: dto.orders }, user);
+    expect(result.transfers[0]).toMatchObject({ status: 'CREATED', sourceSyncPending: true });
+    expect(result.transfers[0].errorMessage).toContain('database busy');
+    const resumed = await service.resume({ clientId: 'client', runId: result.transfers[0].runId }, user);
+    expect(resumed).toMatchObject({ status: 'CREATED', sourceSyncPending: false, errorMessage: null });
+    expect(wb.finishStockTransferRequests).toHaveBeenCalledTimes(2);
+    expect(wb.addReshipmentWbOrders).toHaveBeenCalledTimes(1); expect(db.clientRequest.create).toHaveBeenCalledTimes(1);
   });
   afterEach(() => vi.unstubAllEnvs());
   // TEST: a scoped client can use both approved modes, but never another tenant/branch or revoked access.

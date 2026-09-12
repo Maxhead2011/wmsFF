@@ -1,3 +1,4 @@
+import { describeStockTransfer } from '../../lib/fbs-stock-transfer';
 import { AlertTriangle, Archive, ArrowLeft, ArrowRightLeft, Boxes, CheckCircle2, ClipboardList, FileDown, FileUp, MapPinned, PackageX, RefreshCw, RotateCcw, Search, ShieldAlert, Truck, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FbsExcludedOrders } from './FbsExcludedOrders';
@@ -1434,9 +1435,10 @@ export function ClientRequestsPanel({
     try {
       const result = await moveFbsOrdersToNewSupply(session.accessToken, {
         clientId: request.clientId,
+        sourceRequestId: request.id,
         orders,
       });
-      const message =
+      const message = 'routedTransfer' in result ? describeStockTransfer(result) :
         `${orders.length === 1 ? `Заказ №${orders[0]!.id} перенесён` : `${orders.length} заказов перенесены`} в поставку ${result.targetSupply.id} ` +
         `и заявку №${String(result.targetRequest.number).padStart(6, '0')}.`;
       setOnlineFbsMove({ orderId: null, message });
