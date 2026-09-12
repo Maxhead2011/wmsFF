@@ -82,7 +82,10 @@ export function OperationsStatisticsPanel({ session }: { session: AuthSession })
 
 function Cells({ summary }: { summary: OperationsStatisticsSummary }) {
   return <><td>{number(summary.total)}</td><td>{number(summary.timedShipped)}</td>
-    {summary.buckets.map(b => <td key={b.color} className={`ops-zone ops-zone--${b.color}`}><strong>{number(b.count)}</strong><small>{number(b.percent)}%</small></td>)}
+    {/* FIX: no denominator means missing measurements, not 0% performance. */}
+    {summary.buckets.map(b => <td key={b.color} className={`ops-zone ops-zone--${b.color}`}>
+      {summary.timedShipped ? <><strong>{number(b.count)}</strong><small>{number(b.percent)}%</small></>
+        : <span title="Нет рассчитанных сроков">—</span>}</td>)}
     <td>{number(summary.pending)}<small>24+ ч: {number(summary.pendingOver24h)}</small></td><td>{number(summary.cancelled)}</td><td>{number(summary.unknown)}</td></>;
 }
 export function StatisticsTable({ data, expanded, onToggle }: {

@@ -11,6 +11,14 @@ const summary = { total: 1, timedShipped: 1, pending: 0, pendingOver24h: 0, canc
 const report = { summary, branches: [{ id: 'msk', name: 'Филиал Москва', summary,
   warehouses: [{ id: 'seller', name: 'Склад продавца 42', marketplace: 'OZON', clientName: 'Клиент', accountName: 'Кабинет', summary }] }] } as OperationsStatisticsReport;
 describe('statistics table and navigation // TEST', () => {
+  it('shows missing timings rather than misleading zero percentages', () => {
+    // TEST: orders exist, but no reliable duration can be calculated.
+    const noTiming = { ...summary, timedShipped: 0, unknown: 1, averageHours: null,
+      buckets: summary.buckets.map(b => ({ ...b, count: 0, percent: 0 })) };
+    const html = renderToStaticMarkup(<StatisticsTable data={{ ...report, summary: noTiming, branches: [] }} expanded={[]} onToggle={() => {}} />);
+    expect(html).not.toContain('0%');
+    expect(html).toContain('Нет рассчитанных сроков');
+  });
   it('preserves admin monitoring opt-in without opening statistics to clients or demo users', () => {
     // TEST: regression coverage for the approved release merge conflict.
     vi.stubEnv('VITE_ADMIN_MONITORING_ENABLED', 'true');

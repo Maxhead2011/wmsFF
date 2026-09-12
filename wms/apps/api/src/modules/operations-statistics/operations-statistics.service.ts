@@ -7,6 +7,22 @@ import { summarizeOrders, type TimingObservation } from './order-timing';
 
 const key = (marketplace: string, connectionId: string, orderId: string) => JSON.stringify([marketplace, connectionId, orderId]);
 const DAY = 86_400_000;
+type StatisticsConnection = {
+  fbsWarehouseId: string | null; fbsExecutionWarehouseId: string | null; fbsAutoRouteNewWarehouses: boolean;
+  fbsWarehouseRoutes: { marketplaceWarehouseId: string; mode: string; executionWarehouseId: string | null }[];
+};
+// FIX: scope follows actual service routing, not a warehouse name or a stale request.
+export function servicedBranch(connection: StatisticsConnection, warehouseId: string | null): string | null {
+  if (!warehouseId) return null;
+  const route = connection.fbsWarehouseRoutes.find(r => r.marketplaceWarehouseId === warehouseId);
+  if (route) {
+    if (route.mode === 'BRANCH') return route.executionWarehouseId;
+    if (route.mode === 'CENTRAL') return connection.fbsExecutionWarehouseId;
+    return null; // EXCLUDED and unknown modes fail closed.
+  }
+  return warehouseId === connection.fbsWarehouseId || connection.fbsAutoRouteNewWarehouses
+    ? connection.fbsExecutionWarehouseId : null;
+}
 export function statisticsPeriod(from: string, to: string) {
   const start = new Date(`${from}T00:00:00+03:00`), end = new Date(`${to}T00:00:00+03:00`);
   const valid = (text: string, date: Date) => /^\d{4}-\d{2}-\d{2}$/.test(text) && Number.isFinite(+date)
@@ -40,11 +56,11 @@ export class OperationsStatisticsService {
     const branchFilter = filter.branchId ? { id: filter.branchId } : admin ? {} : { id: { in: user.warehouseIds ?? [] } };
     const [branches, connections] = await Promise.all([
       this.prisma.warehouse.findMany({ where: { ...branchFilter, isActive: true }, select: { id: true, name: true }, orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }] }),
-      this.prisma.clientMarketplaceConnection.findMany({ where: { clientId: clientFilter, client: { isDemo: false },
+      this.prisma.clientMarketplaceConnection.findMany({ where: { clientId: clientFilter, client: { isDemo: false }, isActive: true,
         marketplace: filter.marketplace ?? { in: ['WILDBERRIES', 'OZON'] } },
         select: { id: true, clientId: true, marketplace: true, accountName: true, fbsWarehouseId: true, fbsWarehouseName: true,
-          fbsExecutionWarehouseId: true, client: { select: { name: true } },
-          fbsWarehouseRoutes: { select: { marketplaceWarehouseId: true, marketplaceWarehouseName: true, executionWarehouseId: true } } } }),
+          fbsExecutionWarehouseId: true, fbsAutoRouteNewWarehouses: true, client: { select: { name: true } },
+          fbsWarehouseRoutes: { select: { marketplaceWarehouseId: true, marketplaceWarehouseName: true, mode: true, executionWarehouseId: true } } } }),
     ]);
     const branchIds = branches.map(b => b.id), connectionIds = connections.map(c => c.id);
     const connectionById = new Map(connections.map(c => [c.id, c]));
@@ -52,14 +68,14 @@ export class OperationsStatisticsService {
     const groups = new Map(branches.map(b => [b.id, { ...b, orders: [] as TimingObservation[], sellers: new Map<string, Seller>() }]));
     const seller = (branchId: string, connectionId: string, warehouseId: string | null, name: string | null) => {
       const branch = groups.get(branchId), connection = connectionById.get(connectionId);
-      if (!branch || !connection) return null;
+      if (!branch || !connection || !groups.has(servicedBranch(connection, warehouseId) ?? '')) return null;
       const id = JSON.stringify([connectionId, warehouseId]);
       if (!branch.sellers.has(id)) branch.sellers.set(id, { id, name: name || (warehouseId ? `Склад ${warehouseId}` : 'Склад продавца не определён'),
         clientName: connection.client.name, accountName: connection.accountName || '', marketplace: connection.marketplace, orders: [] });
       return branch.sellers.get(id)!;
     };
     for (const c of connections) {
-      for (const r of c.fbsWarehouseRoutes) seller(r.executionWarehouseId ?? c.fbsExecutionWarehouseId ?? '', c.id, r.marketplaceWarehouseId, r.marketplaceWarehouseName);
+      for (const r of c.fbsWarehouseRoutes) seller(servicedBranch(c, r.marketplaceWarehouseId) ?? '', c.id, r.marketplaceWarehouseId, r.marketplaceWarehouseName);
       if (c.fbsWarehouseId && !c.fbsWarehouseRoutes.some(r => r.marketplaceWarehouseId === c.fbsWarehouseId)) {
         seller(c.fbsExecutionWarehouseId ?? '', c.id, c.fbsWarehouseId, c.fbsWarehouseName);
       }
@@ -99,15 +115,18 @@ export class OperationsStatisticsService {
       for (const event of events) { const k = key(event.marketplace, event.connectionId, event.orderId); if (!origins.has(k)) origins.set(k, event); }
       for (const link of links) {
         const k = key(link.marketplace, link.connectionId, link.orderId), origin = origins.get(k);
+        const shipment = shipments.get(k);
+        const warehouseId = link.sellerWarehouseId ?? origin?.marketplaceWarehouseId ?? shipment?.warehouseId ?? null;
+        const connection = connectionById.get(link.connectionId);
+        if (!connection || !groups.has(servicedBranch(connection, warehouseId) ?? '')) continue;
         const placed = link.orderPlacedAt ?? origin?.saleAt;
         // Unknown dates cannot be assigned to an order-date cohort. Report separately, never fabricate durations.
         if (!placed) { missingOrderDate++; continue; }
         if (placed < period.start || placed >= period.end) continue;
-        const shipment = shipments.get(k);
         const row = observation(placed, link.handedOverAt ?? shipment?.at ?? null, link.lastCategory, now);
         const branch = groups.get(link.request.warehouseId!);
         if (!branch) continue;
-        const s = seller(branch.id, link.connectionId, link.sellerWarehouseId ?? origin?.marketplaceWarehouseId ?? shipment?.warehouseId ?? null,
+        const s = seller(branch.id, link.connectionId, warehouseId,
           link.sellerWarehouseName ?? origin?.marketplaceWarehouseName ?? shipment?.warehouseName ?? null);
         if (!s) continue;
         branch.orders.push(row); s.orders.push(row); totals.push(row);
@@ -118,7 +137,7 @@ export class OperationsStatisticsService {
     }
     return { period: { dateFrom: filter.dateFrom, dateTo: filter.dateTo, basis: 'order-created' as const, timezone: 'Europe/Moscow' },
       generatedAt: now.toISOString(), lastSyncedAt: lastSyncedAt?.toISOString() ?? null, missingOrderDate,
-      summary: summarizeOrders(totals), branches: [...groups.values()].map(b => ({ id: b.id, name: b.name, summary: summarizeOrders(b.orders),
+      summary: summarizeOrders(totals), branches: [...groups.values()].filter(b => b.sellers.size > 0).map(b => ({ id: b.id, name: b.name, summary: summarizeOrders(b.orders),
         warehouses: [...b.sellers.values()].map(({ orders, ...s }) => ({ ...s, summary: summarizeOrders(orders) })) })) };
   }
 }

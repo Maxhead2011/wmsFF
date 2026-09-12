@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { OperationsStatisticsService, observation, statisticsPeriod } from './operations-statistics.service';
+import { OperationsStatisticsService, observation, servicedBranch, statisticsPeriod } from './operations-statistics.service';
 import { ClientScopeService } from '../auth/client-scope.service';
 import type { AuthUser } from '../auth/auth.types';
 
@@ -21,11 +21,48 @@ function setup(links = [makeLink('1')]) {
   return { db, service: new OperationsStatisticsService(db as never, new ClientScopeService()) };
 }
 describe('operations statistics // TEST', () => {
-  it('groups by branch then seller and preserves zero branches; 14h is yellow', async () => {
+  it('respects automatic routing but never overrides exclusions or broken branch rules', () => {
+    const c = { fbsWarehouseId: 'default', fbsExecutionWarehouseId: 'msk', fbsAutoRouteNewWarehouses: false,
+      fbsWarehouseRoutes: [{ marketplaceWarehouseId: 'excluded', mode: 'EXCLUDED', executionWarehouseId: 'ng' },
+        { marketplaceWarehouseId: 'broken', mode: 'BRANCH', executionWarehouseId: null }] };
+    expect(servicedBranch(c, 'outside')).toBeNull();
+    expect(servicedBranch(c, 'default')).toBe('msk');
+    expect(servicedBranch({ ...c, fbsAutoRouteNewWarehouses: true }, 'new')).toBe('msk');
+    expect(servicedBranch({ ...c, fbsAutoRouteNewWarehouses: true }, 'excluded')).toBeNull();
+    expect(servicedBranch(c, 'broken')).toBeNull();
+    expect(servicedBranch(c, null)).toBeNull();
+  });
+  it('groups by branch then seller and hides branches without serviced warehouses; 14h is yellow', async () => {
     const { service } = setup(); const r = await service.report(filter, user);
     expect(r.summary.buckets[1]).toMatchObject({ count: 1, percent: 100 });
     expect(r.branches[0].warehouses[0].summary.total).toBe(1);
-    expect(r.branches[1].summary.total).toBe(0);
+    expect(r.branches.map(b => b.id)).toEqual(['msk']);
+  });
+  // TEST: an old WMS request must not reintroduce an excluded or unconfigured seller warehouse.
+  it('only includes serviced warehouses and honors explicit exclusions over the default', async () => {
+    const { service, db } = setup([
+      makeLink('1'), makeLink('2', { sellerWarehouseId: 'excluded', orderPlacedAt: null }),
+      makeLink('3', { sellerWarehouseId: 'outside' }), makeLink('4', { sellerWarehouseId: null }),
+    ]);
+    const connection = (await db.clientMarketplaceConnection.findMany())[0];
+    db.clientMarketplaceConnection.findMany.mockResolvedValue([{ ...connection, fbsWarehouseId: 'excluded',
+      fbsWarehouseRoutes: [
+        { marketplaceWarehouseId: 'seller1', marketplaceWarehouseName: 'Наш склад', mode: 'CENTRAL', executionWarehouseId: null },
+        { marketplaceWarehouseId: 'excluded', marketplaceWarehouseName: 'Чужой склад', mode: 'EXCLUDED', executionWarehouseId: 'msk' },
+      ] } as never]);
+    const r = await service.report(filter, user);
+    expect(r.summary.total).toBe(1);
+    expect(r.missingOrderDate).toBe(0);
+    expect(r.branches.flatMap(b => b.warehouses).map(w => w.name)).toEqual(['Наш склад']);
+  });
+  it('uses BRANCH routing without falling back to the central warehouse', async () => {
+    const { service, db } = setup([makeLink('1', { request: { warehouseId: 'ng' } })]);
+    const connection = (await db.clientMarketplaceConnection.findMany())[0];
+    db.clientMarketplaceConnection.findMany.mockResolvedValue([{ ...connection,
+      fbsWarehouseRoutes: [{ marketplaceWarehouseId: 'seller1', marketplaceWarehouseName: 'Наш Ногинск', mode: 'BRANCH', executionWarehouseId: 'ng' }] } as never]);
+    const r = await service.report(filter, user);
+    expect(r.branches.map(b => b.id)).toEqual(['ng']);
+    expect(r.summary.total).toBe(1);
   });
   it('excludes cancellations; delivered orders without a delivery timestamp are unknown, not pending', async () => {
     const { service } = setup([makeLink('1', { lastCategory: 'cancelled' }), makeLink('3')]);
