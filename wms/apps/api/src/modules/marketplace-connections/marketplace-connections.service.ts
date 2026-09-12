@@ -27014,7 +27014,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const charges: Prisma.BillingChargeGetPayload<{}>[] = [];
     for (const line of configuredLines) {
       const sourceKey = `${chargePrefix}${line.key}`;
-      const totalRub = round(line.unitPriceRub * line.quantity, 2);
+      // FIX: retain full precision until the grossed-up line total is rounded.
+      const totalRub = fbsPrimaryPriceWithTax(line.priceBeforeTaxRub * line.quantity, line.taxMode);
       const data = {
         clientId: input.clientId,
         serviceId: line.serviceId,

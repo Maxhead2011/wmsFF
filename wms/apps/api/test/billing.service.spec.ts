@@ -1354,6 +1354,8 @@ function billingInvoice(overrides: Record<string, unknown>) {
 // TEST: explicit transaction fixture for financial locking. Existing delegate mocks and
 // business assertions remain unchanged; reads and writes now share the transaction.
 function financialFixture(prisma: any) {
+  // TEST: absent tariff keeps the historical INCLUDED behavior in these fixtures.
+  prisma.clientBillingService ??= { findUnique: vi.fn().mockResolvedValue(null) };
   const transaction = prisma.$transaction;
   const merge = (tx: any) => {
     const combined: any = { ...prisma, ...tx, $queryRaw: vi.fn().mockResolvedValue([]) };

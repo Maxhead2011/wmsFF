@@ -127,6 +127,8 @@ describe('storage charge proven branch attribution', () => {
   function storage(warehouses: Array<string | null>, mode: 'ledger' | 'snapshot' = 'ledger', existing = false) {
     const { db } = setup();
     db.client.findUnique.mockResolvedValue({ storageAccountingEnabled: true, storagePriceRubPerLiterDay: 0.5 });
+    // TEST: this legacy storage fixture has no client tax override.
+    db.clientBillingService = { findUnique: vi.fn().mockResolvedValue(null) };
     db.billingService = { upsert: vi.fn(async () => ({ id: 'storage', defaultPriceRub: 0.5 })) };
     db.billingCharge = { findFirst: vi.fn(async () => existing ? { id: 'charge', invoiceItems: [] } : null),
       create: vi.fn(async ({ data }: any) => data), update: vi.fn(async ({ data }: any) => data) };

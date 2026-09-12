@@ -1085,11 +1085,18 @@ export class BillingService {
     this.requireWarehouseWrite(warehouseId, user);
     const storageService = await this.ensureStorageService();
 
-    const unitPriceRub =
-      dto.unitPriceRub ?? decimalToNumber(client?.storagePriceRubPerLiterDay) ?? decimalToNumber(storageService.defaultPriceRub);
-    if (unitPriceRub == null) {
+    // FIX: storage uses the client's configured base price and gross-up mode too.
+    const configuredPrice = await this.prisma.clientBillingService.findUnique({
+      where: { clientId_serviceId: { clientId: dto.clientId, serviceId: storageService.id } },
+    });
+    const activePrice = configuredPrice?.isActive ? configuredPrice : null;
+    const taxMode = activePrice?.taxMode ?? BillingPriceTaxMode.INCLUDED;
+    const priceBeforeTaxRub = dto.unitPriceRub ?? decimalToNumber(activePrice?.priceRub) ??
+      decimalToNumber(client?.storagePriceRubPerLiterDay) ?? decimalToNumber(storageService.defaultPriceRub);
+    if (priceBeforeTaxRub == null) {
       throw new BadRequestException('Для хранения нужна цена за литро-день.');
     }
+    const unitPriceRub = applyTaxMode(priceBeforeTaxRub, taxMode);
 
     const details =
       movements.length > 0
@@ -1100,7 +1107,7 @@ export class BillingService {
       throw new BadRequestException('Нет остатков с заполненным литражом для начисления хранения.');
     }
 
-    const totalRub = roundMoney(details.literDays * unitPriceRub);
+    const totalRub = applyTaxMode(details.literDays * priceBeforeTaxRub, taxMode);
     const isApproved = dto.approve === true;
     const chargeData = {
       clientId: dto.clientId,
@@ -1118,6 +1125,8 @@ export class BillingService {
         warehouseId,
         periodFrom: formatDateKey(periodFrom),
         periodTo: formatDateKey(periodTo),
+        priceBeforeTaxRub,
+        taxMode,
         calculationMode: details.calculationMode,
         days: details.days,
         totalLiters: details.totalLiters,
@@ -1380,7 +1389,12 @@ export class BillingService {
 
     const unitPriceRub = decimalToNumber(charge.unitPriceRub) ?? 0;
     const literDays = roundQuantity(nextDaily.reduce((sum, row) => sum + row.literDays, 0));
-    const totalRub = roundMoney(literDays * unitPriceRub);
+    // FIX: preserve the recorded base and tax when removing a storage day.
+    const recordedBase = decimalToNumber(metadata?.priceBeforeTaxRub as number | undefined);
+    const totalRub = recordedBase != null &&
+      (metadata?.taxMode === BillingPriceTaxMode.ADD_6_PERCENT || metadata?.taxMode === BillingPriceTaxMode.INCLUDED)
+      ? applyTaxMode(literDays * recordedBase, metadata.taxMode)
+      : roundMoney(literDays * unitPriceRub);
     const nextMetadata = {
       ...(metadata ?? {}),
       daily: nextDaily,
