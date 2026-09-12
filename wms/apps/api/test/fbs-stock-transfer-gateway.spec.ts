@@ -25,6 +25,23 @@ function setup() {
   return { service, db, dto, user, order, task, link };
 }
 describe('WB stock transfer gateway', () => {
+  // TEST: the actual transfer entry point opts out of billing only on our WMS.
+  it('requests an isolated snapshot for stock routing when the our-WMS flag is enabled', async () => {
+    const { service, dto, user } = setup();
+    const load = service.refreshFbsOrdersCache.getMockImplementation();
+    service.refreshFbsOrdersCache.mockImplementation(async (clientId: string, options: any) => {
+      if (options.billingMode !== 'skip') throw new Error('billing transaction timed out');
+      return load(clientId, options);
+    });
+    try {
+      vi.stubEnv('WMS_FBS_NO_STOCK_TRANSFER_ENABLED', 'true');
+      expect((await service.prepareFbsStockTransfer(dto, user)).orders).toHaveLength(1);
+      expect(service.refreshFbsOrdersCache).toHaveBeenCalledWith('client', { invalidateHistory: false, historyMode: 'cache-only', billingMode: 'skip' });
+      vi.stubEnv('WMS_FBS_NO_STOCK_TRANSFER_ENABLED', 'false');
+      await expect(service.prepareFbsStockTransfer(dto, user)).rejects.toThrow('billing transaction timed out');
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it('uses the relabel source SKU and only usable balances in the active client and branch', async () => {
     const { service, db, dto, user } = setup();
     expect((await service.prepareFbsStockTransfer(dto, user)).orders[0].noStock).toBe(false);
@@ -69,6 +86,27 @@ describe('WB stock transfer gateway', () => {
 // TEST: a confirmed move must survive the next real WB refresh, including a source-sync retry.
 describe('confirmed stock transfer history', () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  // TEST: a six-hour complete/waiting cache must not undo a verified return to assembly.
+  it('updates the status cache and evicts old print/fallback caches only with the portal flag', async () => {
+    vi.stubEnv('WMS_WB_PORTAL_TRANSFER_ENABLED', 'true');
+    try {
+      const service: any = new MarketplaceConnectionsService({} as never, {} as never);
+      service.wildberriesFbsStatusCache.set('cabinet', { expiresAt: Date.now() + 60000,
+        statuses: new Map([['101', { supplierStatus: 'complete', wbStatus: 'waiting' }], ['102', { supplierStatus: 'complete', wbStatus: 'sold' }]]) });
+      service.fbsOrdersCache.set('client', { value: { orders: [] } });
+      service.fbsTsdRequestFallbackCache.set('client', { old: true });
+      service.fbsTsdStickerCache.set('cabinet:101', { old: true });
+      service.fbsTsdStickerCache.set('cabinet:102', { untouched: true });
+      service.syncOneFbsRequest = vi.fn(async () => { throw new Error('temporary failure'); });
+      await expect(service.finishStockTransferRequests('client', 'cabinet', 'new-supply', [{ id: '101', requestId: 'source-request' }])).rejects.toThrow();
+      expect(service.wildberriesFbsStatusCache.get('cabinet').statuses.get('101')).toEqual({ supplierStatus: 'confirm', wbStatus: 'waiting' });
+      expect(service.wildberriesFbsStatusCache.get('cabinet').statuses.get('102').wbStatus).toBe('sold');
+      expect(service.fbsTsdStickerCache.has('cabinet:101')).toBe(false);
+      expect(service.fbsTsdStickerCache.has('cabinet:102')).toBe(true);
+      expect(service.fbsTsdRequestFallbackCache.has('client')).toBe(false);
+    } finally { vi.unstubAllEnvs(); }
+  });
 
   it.each([false, true])('keeps the target supply on refresh when source sync fails: %s', async (failSourceSync) => {
     const service: any = new MarketplaceConnectionsService({} as never, {} as never);

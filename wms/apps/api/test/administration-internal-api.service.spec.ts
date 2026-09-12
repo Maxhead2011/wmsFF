@@ -18,16 +18,17 @@ afterEach(() => {
 });
 
 describe('AdministrationInternalApiService', () => {
-  // TEST: reshipment belongs to FBS; both controller aliases describe the same five handlers.
+  // TEST: reshipment belongs to FBS; both controller aliases describe the same six handlers.
   it('регистрирует переотгрузку WB без дублирования алиаса и объясняет подтверждённую запись', () => {
     const definition = INTERNAL_API_DEFINITIONS.find((item) => item.id === 'marketplace-connections')!;
     expect(definition.prefixes).toContain('/marketplace-connections/fbs/reshipment');
     expect(definition.prefixes).toContain('/marketplace-connection/fbs/reshipment');
-    // TEST: merged live delivery-options and all five reshipment handlers coexist.
-    expect(definition.routeCount).toBe(108); // TEST: includes explicit WB accounting.
+    // TEST: merged live delivery-options and all six reshipment handlers coexist.
+    expect(definition.routeCount).toBe(109); // TEST: includes the one-time portal command.
     const controller = readFileSync(join(__dirname, '../src/modules/marketplace-connections/fbs-reshipment.controller.ts'), 'utf8');
     expect([...controller.matchAll(/@(Get|Post)\('([^']+)'\)/g)].map((match) => `${match[1]} ${match[2]}`))
-      .toEqual(['Get capabilities', 'Post check', 'Post preview', 'Post create', 'Post resume']);
+      .toEqual(['Get capabilities', 'Post check', 'Post preview', 'Post create', 'Post portal/start', 'Post resume']);
+    expect(definition.logic.join(' ')).toContain('Перенос из доставки через расширение');
     expect(definition.logic.join(' ')).toContain('Повторная отгрузка / довоз');
     expect(definition.logic.join(' ')).toContain('после подтверждения');
   });
