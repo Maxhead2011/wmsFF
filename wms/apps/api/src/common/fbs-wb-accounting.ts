@@ -17,6 +17,12 @@ export function isFbsWbAccountingStatus(status?: { supplierStatus?: string | nul
   return status?.supplierStatus === 'complete' && ['sorted', 'sold', 'ready_for_pickup', 'accepted_by_carrier'].includes(status.wbStatus ?? '');
 }
 
+// FIX: a linked exact pair can be shipped after WB verification, including an unknown source box.
+export function isFbsWbKizShipmentCandidate(task: { status: string; itemCount: number; kiz?: string | null; barcode?: string | null }) {
+  return task.itemCount === 1 && Boolean(task.kiz?.trim() && task.barcode?.trim()) &&
+    ['WAITING_STOCK', 'RESERVED', 'RELEASED', 'IN_PROGRESS', 'COMPLETED', 'RETURN_REQUIRED'].includes(task.status);
+}
+
 export function isFbsWbAccountingUntouched(task: {
   status: string; itemCount: number; boxId?: string | null; barcode?: string | null;
   sourceBarcode?: string | null; kiz?: string | null; completedAt?: Date | null;

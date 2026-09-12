@@ -1,4 +1,4 @@
-import { FBS_WB_ACCOUNTED, FBS_WB_ACCOUNTED_ACTION, fbsWbAccountingEnabled, isFbsWbAccounted, isFbsWbAccountingStatus, isFbsWbAccountingUntouched } from '../../common/fbs-wb-accounting';
+import { FBS_WB_ACCOUNTED, FBS_WB_ACCOUNTED_ACTION, fbsWbAccountingEnabled, isFbsWbAccounted, isFbsWbAccountingStatus, isFbsWbAccountingUntouched, isFbsWbKizShipmentCandidate } from '../../common/fbs-wb-accounting';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import { requiresFbsReturnReceipt } from '../marketplace-connections/fbs-return-receipt';
@@ -1062,9 +1062,9 @@ export class TsdAssemblyService {
       enabled: fbsWbAccountingEnabled(),
       candidates: fbsWbAccountingEnabled() ? rows.flatMap(task => {
         const link = savedLinks.find(link => link.connectionId === task.connectionId && link.orderId === task.orderId);
-        if (!link || link.marketplace !== 'WILDBERRIES' || link.syncStatus !== 'ACTIVE' || !isFbsWbAccountingUntouched(task) ||
+        if (!link || link.marketplace !== 'WILDBERRIES' || !['ACTIVE', 'RETURN_REQUIRED'].includes(link.syncStatus) || !(isFbsWbAccountingUntouched(task) || isFbsWbKizShipmentCandidate(task)) ||
           !isFbsWbAccountingStatus({ supplierStatus: link.lastSupplierStatus, wbStatus: link.lastWbStatus })) return [];
-        return [{ id: task.id, orderId: task.orderId, productName: task.productName, wbStatus: `${link.lastSupplierStatus}/${link.lastWbStatus}` }];
+        return [{ id: task.id, orderId: task.orderId, productName: task.productName, kiz: task.kiz, barcode: task.barcode, wbStatus: `${link.lastSupplierStatus}/${link.lastWbStatus}` }];
       }) : [],
       accounted: savedLinks.filter(isFbsWbAccounted).map(link => {
         const task = rows.find(row => row.connectionId === link.connectionId && row.orderId === link.orderId);
@@ -1078,7 +1078,9 @@ export class TsdAssemblyService {
           wbStatus: `${payload?.supplierStatus ?? link.lastSupplierStatus}/${payload?.wbStatus ?? link.lastWbStatus}`,
           confirmedAt: event?.createdAt.toISOString() ?? null,
           confirmedByName: typeof payload?.confirmedByName === 'string' ? payload.confirmedByName : null,
-          comment: typeof payload?.comment === 'string' ? payload.comment : null };
+          comment: typeof payload?.comment === 'string' ? payload.comment : null,
+          shipped: payload?.shipped === true, kiz: task?.kiz ?? null, barcode: task?.barcode ?? null,
+          sourceBoxCode: typeof payload?.sourceBoxCode === 'string' ? payload.sourceBoxCode : null };
       }),
     };
     const completedRows = rows.filter((row) => row.status === 'COMPLETED');
