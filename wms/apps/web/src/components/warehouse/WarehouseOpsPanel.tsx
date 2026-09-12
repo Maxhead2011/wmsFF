@@ -1,4 +1,5 @@
-import { ArrowLeft, ArrowRightLeft, ChevronRight, ClipboardCheck, History, PackageCheck, PackagePlus, PackageSearch, RefreshCw, Truck } from 'lucide-react';
+import { ArrowLeft, ArrowRightLeft, BarChart3, ChevronRight, ClipboardCheck, History, PackageCheck, PackagePlus, PackageSearch, RefreshCw, Truck } from 'lucide-react';
+import { OperationsStatisticsPanel } from '../operations-statistics/OperationsStatisticsPanel';
 import { useEffect, useState, type ReactNode } from 'react';
 import { deleteSku, fetchClients, fetchSkus, type AuthSession, type AuthUser, type ClientSummary, type SkuSummary } from '../../lib/api';
 import { BoxTransferForm } from './BoxTransferForm';
@@ -18,6 +19,7 @@ type WarehouseOpsPanelProps = {
 };
 
 type WarehouseTopic =
+  | 'statistics'
   | 'online-receipts'
   | 'arrivals'
   | 'receipt-batches'
@@ -44,6 +46,7 @@ export function WarehouseOpsPanel({ onOpenCatalog, session }: WarehouseOpsPanelP
           <span>Разделы склада</span>
         </button>
       ) : null}
+      {activeTopic === 'statistics' ? <OperationsStatisticsPanel session={session} /> : null}
 
       {activeTopic === 'online-receipts' ? <section className="warehouse-panel warehouse-panel--online-receipts" aria-label="Онлайн приемка">
         <div className="section-heading warehouse-panel__heading">
@@ -138,6 +141,7 @@ export function WarehouseOpsPanel({ onOpenCatalog, session }: WarehouseOpsPanelP
 
 function WarehouseTopicPicker({ onOpen }: { onOpen: (topic: WarehouseTopic) => void }) {
   const topics: Array<{ id: WarehouseTopic; eyebrow: string; title: string; description: string; icon: ReactNode }> = [
+    { id: 'statistics', eyebrow: 'Сроки обработки', title: 'Статистика', description: 'От заказа до передачи в доставку WB/Ozon, по клиентам, филиалам и складам.', icon: <BarChart3 size={23} /> },
     { id: 'online-receipts', eyebrow: 'ТСД и приемка', title: 'Онлайн-приёмка', description: 'Проверяйте приёмку, которую ведут сотрудники на ТСД.', icon: <PackageCheck size={23} /> },
     { id: 'arrivals', eyebrow: 'Приход и ППР', title: 'Приход товара', description: 'Создайте и ведите приход товаров на склад.', icon: <Truck size={23} /> },
     { id: 'receipt-batches', eyebrow: 'Документы', title: 'Файлы приёмки', description: 'Загрузки и документы, связанные с поставками.', icon: <PackagePlus size={23} /> },

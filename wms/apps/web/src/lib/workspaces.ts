@@ -35,6 +35,7 @@ import type { LucideIcon } from 'lucide-react';
 import type { AuthUser } from './api';
 
 export type WorkspaceId =
+  | 'operations-statistics'
   | 'overview'
   | 'ai'
   | 'cabinet'
@@ -89,6 +90,9 @@ export type WorkspaceNavItem = {
 };
 
 export const workspaceNav: WorkspaceNavItem[] = [
+  { id: 'operations-statistics', title: 'Статистика', eyebrow: 'Склад и операции',
+    description: 'Время от заказа до передачи в доставку, по клиентам, филиалам и складам WB/Ozon.',
+    permissions: ['stock:read'], icon: BarChart3, status: 'ready', audience: 'internal' },
   {
     id: 'overview',
     title: 'Обзор',
@@ -475,6 +479,7 @@ export const workspaceNav: WorkspaceNavItem[] = [
 ];
 
 export function canOpenWorkspace(user: AuthUser, item: WorkspaceNavItem) {
+  if (item.id === 'operations-statistics' && (user.isDemo || user.roleCodes.includes('CLIENT'))) return false;
   // FIX: this menu is role-governed; stale individual visibility/stock permissions
   // must not block ADMIN. Other workspaces keep their existing permission rules.
   if (item.id === 'pallet-sorting') return import.meta.env.VITE_PALLET_SORTING_ENABLED === 'true' && user.roleCodes.includes('ADMIN') && !user.isDemo;

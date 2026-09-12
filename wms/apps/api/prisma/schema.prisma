@@ -1673,6 +1673,11 @@ model FbsOrderRequestLink {
   lastSkuId          String?
   lastItemCount      Int?
   lastSeenAt         DateTime?
+  // FIX: marketplace timestamps, not WMS import/assembly timestamps.
+  orderPlacedAt      DateTime?
+  handedOverAt       DateTime?
+  sellerWarehouseId  String?
+  sellerWarehouseName String?
   request            ClientRequest   @relation(fields: [requestId], references: [id], onDelete: Cascade)
   createdAt          DateTime        @default(now())
   updatedAt          DateTime        @updatedAt

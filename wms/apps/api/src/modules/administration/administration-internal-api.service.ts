@@ -25,6 +25,16 @@ export type InternalApiDefinition = {
 // ADDED: Explicit registry documents every controller group loaded by AppModule.
 // Keeping it declarative avoids a global interceptor and therefore does not touch normal API traffic.
 export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object.freeze([
+  // FIX: register the read-only warehouse processing-time report.
+  {
+    id: 'operations-statistics',
+    name: 'Статистика обработки заказов',
+    prefixes: ['/operations-statistics'],
+    routeCount: 1,
+    description: 'Количество и доля заказов по времени до передачи в доставку WB/Ozon.',
+    logic: ['Группирует заказы по филиалам и складам продавца.', 'Применяет область доступа пользователя, фильтры клиента и периода.', 'Показывает неизвестные даты отдельно, не изменяет заказы и остатки.'],
+    dependencies: ['Основная БД', 'Права stock:read'],
+  },
   {
     id: 'health',
     name: 'Состояние сервиса',

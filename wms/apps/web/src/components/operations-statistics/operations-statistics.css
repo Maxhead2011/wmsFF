@@ -1,0 +1,26 @@
+.ops-statistics { display: grid; gap: 18px; min-width: 0; }
+.ops-statistics__heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.ops-statistics h2 { margin: 4px 0; }
+.ops-statistics__filters { display: flex; gap: 12px; flex-wrap: wrap; }
+.ops-statistics__filters label { display: grid; gap: 6px; min-width: 155px; flex: 1; }
+.ops-statistics__filters input, .ops-statistics__filters select { width: 100%; padding: 9px; border: 1px solid #94a3b8; border-radius: 8px; background: var(--surface, #fff); color: var(--text, #172033); }
+.ops-statistics__cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.ops-statistics__cards article { border: 1px solid #94a3b866; border-radius: 12px; padding: 16px; display: grid; gap: 8px; }
+.ops-statistics__cards strong { font-size: 28px; font-variant-numeric: tabular-nums; }
+.ops-statistics__note { font-size: 13px; line-height: 1.6; margin: 0; }
+.ops-statistics__warning { background: #fff4d6; color: #694600; padding: 12px 16px; border-radius: 8px; line-height: 1.5; }
+.ops-statistics__scroll { overflow-x: auto; border: 1px solid #94a3b866; border-radius: 12px; }
+.ops-statistics table { width: 100%; min-width: 1050px; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.ops-statistics caption { text-align: left; padding: 12px; font-size: 13px; }
+.ops-statistics th, .ops-statistics td { padding: 12px 10px; border-bottom: 1px solid #94a3b844; text-align: right; }
+.ops-statistics th:first-child { text-align: left; min-width: 245px; max-width: 330px; }
+.ops-statistics small { display: block; font-size: 12px; margin-top: 4px; font-weight: normal; }
+.ops-statistics__branch button { text-align: left; white-space: normal; }
+.ops-statistics__total { font-weight: 700; }
+.ops-statistics .ops-statistics__seller { padding-left: 30px; font-weight: 500; }
+.ops-statistics .ops-zone--green { background: #e3f5e9; color: #165b31; }
+.ops-statistics .ops-zone--yellow { background: #fff6c9; color: #66500b; }
+.ops-statistics .ops-zone--orange { background: #ffe8cf; color: #85420d; }
+.ops-statistics .ops-zone--red { background: #ffe0e0; color: #922b2b; }
+.ops-statistics .ops-zone--darkred { background: #f3cbd4; color: #701b31; }
+@media (max-width: 800px) { .ops-statistics__cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

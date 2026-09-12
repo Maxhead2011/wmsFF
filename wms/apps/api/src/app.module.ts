@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { OperationsStatisticsModule } from './modules/operations-statistics/operations-statistics.module';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
@@ -72,6 +73,7 @@ import { WmsAiModule } from './modules/wms-ai/wms-ai.module';
     ServiceCenterModule,
     TsdModule,
     TurnoverModule,
+    OperationsStatisticsModule,
   ],
   controllers: [HealthController],
   providers: [

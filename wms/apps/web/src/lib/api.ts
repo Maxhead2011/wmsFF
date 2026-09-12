@@ -7631,6 +7631,23 @@ export async function compareAdministrationWbStockApi(
   });
 }
 
+// FIX: read-only order-to-delivery statistics; dates are marketplace dates, not assembly dates.
+export type OperationsStatisticsSummary = {
+  total: number; timedShipped: number; pending: number; pendingOver24h: number; cancelled: number; unknown: number;
+  averageHours: number | null; buckets: Array<{ label: string; color: string; count: number; percent: number }>;
+};
+export type OperationsStatisticsReport = {
+  period: { dateFrom: string; dateTo: string; basis: 'order-created'; timezone: string };
+  generatedAt: string; lastSyncedAt: string | null; missingOrderDate: number; summary: OperationsStatisticsSummary;
+  branches: Array<{ id: string; name: string; summary: OperationsStatisticsSummary;
+    warehouses: Array<{ id: string; name: string; clientName: string; accountName: string; marketplace: string; summary: OperationsStatisticsSummary }> }>;
+};
+export function fetchOperationsStatistics(accessToken: string, filter: {
+  dateFrom: string; dateTo: string; clientId?: string; branchId?: string; marketplace?: string;
+}) {
+  return request<OperationsStatisticsReport>(withQuery('/operations-statistics', filter), { accessToken });
+}
+
 export async function fetchClients(accessToken: string, options: { includeArchived?: boolean } = {}) {
   return request<ClientSummary[]>(
     withQuery('/clients', {
