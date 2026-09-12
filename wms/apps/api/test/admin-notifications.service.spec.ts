@@ -23,6 +23,7 @@ function fixture(enabled = true) {
     stockBalance: { findMany: vi.fn().mockResolvedValue([]) },
     adminNotification: { upsert: vi.fn().mockResolvedValue({}) },
     $queryRaw: vi.fn().mockResolvedValue([]),
+    $executeRaw: vi.fn().mockResolvedValue(1),
     $transaction: vi.fn(async (fn: any) => fn(prisma)),
   };
   const scopes = { requireClientAccess: vi.fn(), requireGlobalClientAccess: vi.fn() };
@@ -64,7 +65,7 @@ describe('inventory operational event sources', () => {
   it('records a missing box together with the created TSD task', async () => {
     const { prisma, service } = fixture();
     await service.startSession(signal, picker);
-    expect(prisma.$queryRaw).toHaveBeenCalledOnce();
+    expect(prisma.$executeRaw).toHaveBeenCalledOnce();
     expect(prisma.adminNotification.upsert).toHaveBeenCalledWith(expect.objectContaining({ create: expect.objectContaining({ type: 'MISSING_PALLET_BOX', sessionId: 'session', actorId: 'picker' }) }));
   });
   it('reuses a task created by a simultaneous missing-box report', async () => {
@@ -120,6 +121,7 @@ describe('inventory operational event sources', () => {
     expect(await service.recordViewed('session', 'audit', 'click', picker)).toEqual({ recorded: false });
     expect(prisma.adminNotification.upsert).not.toHaveBeenCalled();
     expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
   });
 });
 
