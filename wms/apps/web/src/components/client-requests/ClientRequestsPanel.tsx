@@ -1,4 +1,5 @@
 import { FbsWbAccounting } from './FbsWbAccounting';
+import { runWbAccountingBatch, type WbAccountingBatchHandler, type WbAccountingOrder } from '../../lib/fbs-wb-accounting-batch';
 import { describeStockTransfer } from '../../lib/fbs-stock-transfer';
 import { AlertTriangle, Archive, ArrowLeft, ArrowRightLeft, Boxes, CheckCircle2, ClipboardList, FileDown, FileUp, MapPinned, PackageX, RefreshCw, RotateCcw, Search, ShieldAlert, Truck, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -1410,6 +1411,27 @@ export function ClientRequestsPanel({
     return true;
   }
 
+  // FIX: keep the batch busy until one final refresh; refresh errors never erase committed results.
+  async function accountOnlineFbsOrders(request: ClientRequestSummary, orders: WbAccountingOrder[], comment: string,
+    onProgress: (completed: number, total: number) => void) {
+    setOnlineFbsSyncResolution({ assemblyId: '__wb_batch__' });
+    try {
+      const results = await runWbAccountingBatch(orders, comment,
+        (order, note) => accountFbsOrderByWb(session.accessToken, request.id, order.id, note), onProgress);
+      let message = `Подтверждено по WB: ${results.filter(row => row.accounted).length} из ${results.length}.`;
+      try {
+        const plan = await fetchTsdAssemblyPlan(session.accessToken, request.id);
+        setOnlinePreview(current => current?.request.id === request.id ? { ...current, plan, status: 'ready', error: undefined } : current);
+        await loadData();
+      } catch { message += ' Обновите страницу для отображения актуального состояния.'; }
+      setOnlineFbsSyncResolution({ assemblyId: null, message });
+      return results;
+    } catch (caught) {
+      setOnlineFbsSyncResolution({ assemblyId: null, error: errorMessage(caught) });
+      throw caught;
+    }
+  }
+
   async function markOnlineFbsOrderPackedWithoutSource(
     request: ClientRequestSummary,
     assemblyId: string,
@@ -2354,6 +2376,9 @@ export function ClientRequestsPanel({
           onAccountByWb={canWrite && !session.user.isDemo && !session.user.roleCodes.includes('CLIENT')
             ? (assemblyId, orderId, comment) => accountOnlineFbsOrder(onlinePreview.request, assemblyId, orderId, comment)
             : undefined}
+          onAccountManyByWb={canWrite && !session.user.isDemo && !session.user.roleCodes.includes('CLIENT')
+            ? (orders, comment, onProgress) => accountOnlineFbsOrders(onlinePreview.request, orders, comment, onProgress)
+            : undefined}
           onMarkPackedWithoutSource={
             canWrite
               ? (assemblyId, orderId) =>
@@ -2380,6 +2405,7 @@ export function ClientRequestsPanel({
               : undefined
           }
           onClose={() => {
+            if (onlineFbsSyncResolution.assemblyId === '__wb_batch__') return;
             setOnlinePreview(null);
             setOnlineFbsMove({ orderId: null });
             setOnlineKizResolution({ assemblyId: null });
@@ -3817,6 +3843,7 @@ type OnlineExecutionModalProps = {
   onResetFbsAssembly?: (assemblyId: string, orderId: string) => void;
   canShipByWb?: boolean;
   onAccountByWb?: (assemblyId: string, orderId: string, comment: string) => Promise<boolean>;
+  onAccountManyByWb?: WbAccountingBatchHandler;
   onMarkPackedWithoutSource?: (assemblyId: string, orderId: string) => void;
   onMoveOrder?: (order: { id: string; connectionId: string }) => void;
   onMoveOrders?: (orders: Array<{ id: string; connectionId: string }>) => void;
@@ -3849,6 +3876,7 @@ function OnlineExecutionModal({
   onResetFbsAssembly,
   onMarkPackedWithoutSource,
   onAccountByWb,
+  onAccountManyByWb,
   canShipByWb,
   onMoveOrder,
   onMoveOrders,
@@ -4358,7 +4386,7 @@ function OnlineExecutionModal({
                 ) : null}
 
                 <FbsWbAccounting canShip={canShipByWb} data={fbsAssembly?.wbAccounting} busy={resolvingSyncConflictId !== null}
-                  error={syncConflictResolutionError} onAccount={onAccountByWb} />
+                  error={syncConflictResolutionError} onAccount={onAccountByWb} onAccountMany={onAccountManyByWb} />
                 <FbsExcludedOrders rows={fbsAssembly?.notForAssembly ?? []} />
                 {returnRequired && returnRequired.rows.length > 0 ? (
                   <section className={`online-execution-section${onlyDeferredReturns ? '' : ' online-execution-section--sync-conflict'}`}>
