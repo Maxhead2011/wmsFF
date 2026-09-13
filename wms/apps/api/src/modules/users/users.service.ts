@@ -60,7 +60,11 @@ export class UsersService {
         await tx.user.update({ where: { id: userId }, data: { status: UserStatus.ARCHIVED, tsdActivationCodeHash: null } });
         await tx.userSession.updateMany({ where: { userId }, data: { expiresAt: now } });
         await tx.mobileSession.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: now } });
-        await tx.tsdDevice.updateMany({ where: { userId }, data: { status: 'BLOCKED' } });
+        // FIX: revoke the employee's access without blocking a shared physical TSD.
+        // Auth gates reject ARCHIVED users; keep the sold installation's behavior unless opted in.
+        if (process.env.WMS_USER_DELETION_PRESERVE_TSD_DEVICES !== 'true') {
+          await tx.tsdDevice.updateMany({ where: { userId }, data: { status: 'BLOCKED' } });
+        }
         await tx.auditLog.create({ data: { userId: currentUser.id, action: 'USER_ARCHIVED', entity: 'User', entityId: userId,
           payload: { name: target.name, previousStatus: target.status, roles: target.roles.map(row => row.role.code),
             warehouseIds: target.warehouseScopes.map(row => row.warehouse.id) } } });
