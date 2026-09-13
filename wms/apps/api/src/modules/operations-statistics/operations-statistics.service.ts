@@ -49,20 +49,33 @@ export class OperationsStatisticsService {
 
   // FIX: share identical read scopes with the isolated reporting-cache refresh.
   async scope(filter: OperationsStatisticsDto, user: AuthUser) {
-    if (user.roleCodes.includes('CLIENT') || user.isDemo) throw new ForbiddenException('Статистика доступна сотрудникам WMS.');
+    if (user.isDemo) throw new ForbiddenException('Статистика доступна сотрудникам WMS и клиентам вне деморежима.');
     const period = statisticsPeriod(filter.dateFrom, filter.dateTo), now = new Date();
+    // FIX: CLIENT never inherits global staff scope, even with ALL/system:admin.
+    const isClient = user.roleCodes.includes('CLIENT');
+    const ownClientIds = [...new Set((user.clientIds ?? []).filter(id => id && !(user.hiddenClientIds ?? []).includes(id)))];
+    if (isClient && (!ownClientIds.length || (filter.clientId && !ownClientIds.includes(filter.clientId)))) {
+      throw new ForbiddenException('Статистика этого клиента недоступна.');
+    }
     const admin = user.permissionCodes.includes('system:admin');
-    if (filter.branchId && !admin && !(user.warehouseIds ?? []).includes(filter.branchId)) throw new ForbiddenException('Филиал недоступен.');
-    const clientFilter = this.scopes.resolveClientFilter(user, filter.clientId);
-    const branchFilter = filter.branchId ? { id: filter.branchId } : admin ? {} : { id: { in: user.warehouseIds ?? [] } };
-    const [branches, connections] = await Promise.all([
-      this.prisma.warehouse.findMany({ where: { ...branchFilter, isActive: true }, select: { id: true, name: true }, orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }] }),
-      this.prisma.clientMarketplaceConnection.findMany({ where: { clientId: clientFilter, client: { isDemo: false }, isActive: true,
+    if (!isClient && filter.branchId && !admin && !(user.warehouseIds ?? []).includes(filter.branchId)) throw new ForbiddenException('Филиал недоступен.');
+    const clientFilter = isClient ? filter.clientId || { in: ownClientIds } : this.scopes.resolveClientFilter(user, filter.clientId);
+    const connections = await this.prisma.clientMarketplaceConnection.findMany({ where: { clientId: clientFilter, client: { isDemo: false }, isActive: true,
         marketplace: filter.marketplace ?? { in: ['WILDBERRIES', 'OZON'] } },
         select: { id: true, clientId: true, marketplace: true, accountName: true, fbsWarehouseId: true, fbsWarehouseName: true,
           fbsExecutionWarehouseId: true, fbsAutoRouteNewWarehouses: true, client: { select: { name: true } },
-          fbsWarehouseRoutes: { select: { marketplaceWarehouseId: true, marketplaceWarehouseName: true, mode: true, executionWarehouseId: true } } } }),
-    ]);
+          fbsWarehouseRoutes: { select: { marketplaceWarehouseId: true, marketplaceWarehouseName: true, mode: true, executionWarehouseId: true } } } });
+    // FIX: clients need no staff warehouse grants; derive branches from their own service routes.
+    const ownBranchIds = [...new Set(connections.flatMap(connection => [
+      servicedBranch(connection, connection.fbsWarehouseId),
+      ...(connection.fbsAutoRouteNewWarehouses ? [connection.fbsExecutionWarehouseId] : []),
+      ...connection.fbsWarehouseRoutes.map(route => servicedBranch(connection, route.marketplaceWarehouseId)),
+    ]).filter((id): id is string => !!id))];
+    if (isClient && filter.branchId && !ownBranchIds.includes(filter.branchId)) throw new ForbiddenException('Филиал недоступен.');
+    const branchFilter = filter.branchId ? { id: filter.branchId } : isClient ? { id: { in: ownBranchIds } }
+      : admin ? {} : { id: { in: user.warehouseIds ?? [] } };
+    const branches = await this.prisma.warehouse.findMany({ where: { ...branchFilter, isActive: true },
+      select: { id: true, name: true }, orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }] });
     return { branches, connections, period, now, clientFilter };
   }
 

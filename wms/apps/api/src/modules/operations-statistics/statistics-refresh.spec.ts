@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../marketplace-connections/marketplace-connections.service', () => ({ marketplaceJson: vi.fn() }));
 import { marketplaceJson } from '../marketplace-connections/marketplace-connections.service';
 import { StatisticsRefreshService } from './statistics-refresh.service';
+import { OperationsStatisticsService } from './operations-statistics.service';
+import { ClientScopeService } from '../auth/client-scope.service';
 import type { AuthUser } from '../auth/auth.types';
 const request = vi.mocked(marketplaceJson);
 const connection = { id: 'c', clientId: 'client', marketplace: 'WILDBERRIES', accountName: 'WB', client: { name: 'Client' },
@@ -29,6 +31,14 @@ beforeEach(() => {
   });
 });
 describe('report refresh isolation // TEST', () => {
+  // TEST: real shared authorization rejects forged customer refresh before credentials/WB.
+  it('uses the real customer scope before starting external work', async () => {
+    const db = {} as never;
+    const service = new StatisticsRefreshService(db, new OperationsStatisticsService(db, new ClientScopeService()));
+    await expect(service.start({ dateFrom: '2026-09-01', dateTo: '2026-09-02', clientId: 'foreign' },
+      { ...user, roleCodes: ['CLIENT'], clientIds: ['own'], permissionCodes: ['system:admin'] })).rejects.toThrow('клиента');
+    expect(request).not.toHaveBeenCalled();
+  });
   it('consumes subsequent pages and upserts the same identity on retry, without double counting duplicate rows', async () => {
     request.mockImplementation(async url => {
       if (url.endsWith('/reshipment')) return { orders: [] };
@@ -101,5 +111,14 @@ describe('report refresh isolation // TEST', () => {
     const job = await service.start({ dateFrom: '2026-09-01', dateTo: '2026-09-02' }, user);
     expect(() => service.progress(job.id, { ...user, id: 'other' })).toThrow('недоступно');
     await expect(service.start({ dateFrom: '2026-09-01', dateTo: '2026-09-02' }, user)).rejects.toThrow('недавно');
+  });
+  // TEST: job results cannot cross customer identity or a changed tenant assignment.
+  it('isolates refresh progress between clients and after access changes', async () => {
+    const { service } = setup();
+    const client = { ...user, id: 'customer', roleCodes: ['CLIENT'], clientScopeMode: 'LIMITED' as const, clientIds: ['client'] };
+    const job = await service.start({ dateFrom: '2026-09-01', dateTo: '2026-09-02' }, client);
+    expect(service.progress(job.id, client).id).toBe(job.id);
+    expect(() => service.progress(job.id, { ...client, id: 'other', clientIds: ['other-client'] })).toThrow('недоступно');
+    expect(() => service.progress(job.id, { ...client, clientIds: [] })).toThrow('недоступно');
   });
 });

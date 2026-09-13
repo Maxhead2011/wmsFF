@@ -1,10 +1,10 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { moscowDay, StatisticsTable } from './OperationsStatisticsPanel';
+import { moscowDay, StatisticsTable, OperationsStatisticsPanel } from './OperationsStatisticsPanel';
 import { canOpenWorkspace, workspaceNav } from '../../lib/workspaces';
 import { spaceSectionForWorkspace } from '../../lib/spaceNavigation';
-import type { AuthUser, OperationsStatisticsReport } from '../../lib/api';
+import type { AuthUser, AuthSession, OperationsStatisticsReport } from '../../lib/api';
 
 const summary = { total: 1, timedShipped: 1, pending: 0, pendingOver24h: 0, cancelled: 0, unknown: 0, averageHours: 14,
   acceptance: { confirmed: 0, waiting: 1, reshipment: 0, cancelled: 0, unknown: 0 }, timingSources: { orderScan: 0, supplyScan: 1 },
@@ -25,7 +25,7 @@ describe('statistics table and navigation // TEST', () => {
     expect(html).not.toContain('0%');
     expect(html).toContain('Нет рассчитанных сроков');
   });
-  it('preserves admin monitoring opt-in without opening statistics to clients or demo users', () => {
+  it('preserves admin monitoring opt-in and denies demo statistics', () => {
     // TEST: regression coverage for the approved release merge conflict.
     vi.stubEnv('VITE_ADMIN_MONITORING_ENABLED', 'true');
     try {
@@ -36,7 +36,7 @@ describe('statistics table and navigation // TEST', () => {
       expect(canOpenWorkspace(admin, monitoring)).toBe(true);
       expect(canOpenWorkspace(admin, statistics)).toBe(true);
       expect(canOpenWorkspace({ ...admin, isDemo: true }, statistics)).toBe(false);
-      expect(canOpenWorkspace({ ...admin, roleCodes: ['CLIENT'] }, statistics)).toBe(false);
+      expect(canOpenWorkspace({ ...admin, roleCodes: ['CLIENT'] }, statistics)).toBe(true);
     } finally { vi.unstubAllEnvs(); }
   });
   it('starts with branch totals and expands to seller warehouses', () => {
@@ -54,11 +54,25 @@ describe('statistics table and navigation // TEST', () => {
     expect(spaceSectionForWorkspace(item.id)).toBe('warehouse');
     const user = { roleCodes: ['MANAGER'], permissionCodes: ['stock:read'], isDemo: false } as AuthUser;
     expect(canOpenWorkspace(user, item)).toBe(true);
-    expect(canOpenWorkspace({ ...user, roleCodes: ['CLIENT'] }, item)).toBe(false);
+    expect(canOpenWorkspace({ ...user, roleCodes: ['CLIENT'] }, item)).toBe(true);
+    expect(canOpenWorkspace({ ...user, roleCodes: ['CLIENT'], permissionCodes: [] }, item)).toBe(false);
+    expect(canOpenWorkspace({ ...user, roleCodes: ['CLIENT'], workspaceVisibility: { 'operations-statistics': false } }, item)).toBe(false);
     expect(canOpenWorkspace({ ...user, isDemo: true }, item)).toBe(false);
     expect(canOpenWorkspace({ ...user, permissionCodes: [] }, item)).toBe(false);
   });
   it('defaults to Moscow calendar day regardless of browser timezone', () => {
     expect(moscowDay(new Date('2026-09-01T21:30:00Z'))).toBe('2026-09-02');
+  });
+  // TEST: customer view has dates/marketplace, but no staff client/branch pickers.
+  it('hides staff scope selectors only for clients', () => {
+    const session = { accessToken: 'test', user: { id: 'customer', roleCodes: ['CLIENT'] } } as AuthSession;
+    const clientHtml = renderToStaticMarkup(<OperationsStatisticsPanel session={session} />);
+    expect(clientHtml).not.toContain('Все доступные клиенты');
+    expect(clientHtml).not.toContain('Все доступные филиалы');
+    expect(clientHtml).toContain('Заказы созданы с');
+    expect(clientHtml).toContain('Маркетплейс');
+    const staffHtml = renderToStaticMarkup(<OperationsStatisticsPanel session={{ ...session, user: { ...session.user, roleCodes: ['MANAGER'] } }} />);
+    expect(staffHtml).toContain('Все доступные клиенты');
+    expect(staffHtml).toContain('Все доступные филиалы');
   });
 });
