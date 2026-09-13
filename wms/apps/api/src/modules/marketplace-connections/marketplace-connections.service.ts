@@ -130,6 +130,7 @@ import {
   mergeFbsStickerPdfs,
   type FbsStickerImage,
 } from './fbs-stickers-pdf';
+import { buildFbsSortingLabel } from './fbs-sorting-label';
 
 type MarketplaceConnectionWithClient = Prisma.ClientMarketplaceConnectionGetPayload<{
   include: { client: { select: { id: true; code: true; name: true } } };
@@ -17015,6 +17016,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (stationId && !await this.prisma.fbsPrintStation.findFirst({ where: { id: stationId, enabled: true } })) {
       throw new BadRequestException('Печатная станция не найдена или отключена.');
     }
+    // FIX: render the shared label before recording a print; rendering failure must not consume the KIZ.
+    const linkedRequest = await this.prisma.clientRequest.findUnique({ where: { id: task.requestId }, select: { number: true } });
+    const warehouseName = textValue((await this.prisma.fbsSupplyPlan.findFirst({ where: { supplyId: task.supplyId ?? undefined, connectionId: task.connectionId }, select: { marketplaceWarehouseName: true } }))?.marketplaceWarehouseName) || 'СКЛАД НЕ УКАЗАН';
+    const sortingLabel = await buildFbsSortingLabel({ requestNumber: linkedRequest?.number ?? null, orderId: task.orderId, warehouseName });
     let history: { id: string };
     try {
       history = await this.prisma.fbsWebKizStickerPrint.create({
@@ -17027,8 +17032,6 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     } catch {
       throw new ConflictException(`Повторная печать запрещена: КИЗ или стикер заказа №${task.orderId} уже обработан.`);
     }
-    const linkedRequest = await this.prisma.clientRequest.findUnique({ where: { id: task.requestId }, select: { number: true } });
-    const warehouseName = textValue((await this.prisma.fbsSupplyPlan.findFirst({ where: { supplyId: task.supplyId ?? undefined, connectionId: task.connectionId }, select: { marketplaceWarehouseName: true } }))?.marketplaceWarehouseName) || 'СКЛАД НЕ УКАЗАН';
     let printJobId: string | null = null;
     if (stationId) {
       const job = await this.prisma.fbsPrintJob.create({ data: {
@@ -17045,7 +17048,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       orderId: task.orderId, requestId: task.requestId, productName: task.productName,
       requestNumber: linkedRequest?.number ?? null,
       article: task.article, boxCode: task.boxCode, stickerBarcode: sticker.barcode,
-      warehouseName, printJobId, printStatus: printJobId ? 'QUEUED' : null,
+      warehouseName, sortingLabel, printJobId, printStatus: printJobId ? 'QUEUED' : null,
       contentType: 'image/png', imageBase64: sticker.imageBase64,
     };
   }
@@ -17082,7 +17085,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const stale = new Date(Date.now() - 120_000);
     const job = await this.prisma.fbsPrintJob.findFirst({ where: { stationId, OR: [{ status: 'QUEUED' }, { status: 'CLAIMED', claimedAt: { lt: stale } }] }, orderBy: { createdAt: 'asc' } });
     if (!job) return null;
-    return this.prisma.fbsPrintJob.update({ where: { id: job.id }, data: { status: 'CLAIMED', claimedAt: new Date(), attempts: { increment: 1 }, errorMessage: null } });
+    // FIX: use queued job metadata so direct WMS and TSD-initiated prints share one layout.
+    const sortingLabel = await buildFbsSortingLabel(job);
+    const claimed = await this.prisma.fbsPrintJob.update({ where: { id: job.id }, data: { status: 'CLAIMED', claimedAt: new Date(), attempts: { increment: 1 }, errorMessage: null } });
+    return { ...claimed, sortingLabel };
   }
   async finishFbsPrintJob(id: string, success: boolean, error: unknown, user: AuthUser) {
     const job = await this.prisma.fbsPrintJob.update({ where: { id }, data: success ? { status: 'PRINTED', printedAt: new Date(), errorMessage: null } : { status: 'FAILED', failedAt: new Date(), errorMessage: textValue(error).trim() || 'Ошибка печати' } });
@@ -17131,7 +17137,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (!sticker?.imageBase64) throw new BadRequestException(`Этикетка WB для заказа №${task.orderId} временно недоступна.`);
     const linkedRequest = await this.prisma.clientRequest.findUnique({ where: { id: task.requestId }, select: { number: true } });
     const supply = await this.prisma.fbsSupplyPlan.findFirst({ where: { supplyId: task.supplyId ?? undefined, connectionId: task.connectionId }, select: { marketplaceWarehouseName: true } });
-    return { orderId: task.orderId, requestId: task.requestId, productName: task.productName, requestNumber: linkedRequest?.number ?? null, article: task.article, boxCode: task.boxCode, stickerBarcode: sticker.barcode, warehouseName: textValue(supply?.marketplaceWarehouseName) || 'СКЛАД НЕ УКАЗАН', contentType: 'image/png', imageBase64: sticker.imageBase64 };
+    const warehouseName = textValue(supply?.marketplaceWarehouseName) || 'СКЛАД НЕ УКАЗАН';
+    const sortingLabel = await buildFbsSortingLabel({ requestNumber: linkedRequest?.number ?? null, orderId: task.orderId, warehouseName });
+    return { orderId: task.orderId, requestId: task.requestId, productName: task.productName, requestNumber: linkedRequest?.number ?? null, article: task.article, boxCode: task.boxCode, stickerBarcode: sticker.barcode, warehouseName, sortingLabel, contentType: 'image/png', imageBase64: sticker.imageBase64 };
   }
   async deleteWebOrderAssemblyHistory(idValue: string, user: AuthUser) {
     const record = await this.prisma.fbsWebKizStickerPrint.findUnique({ where: { id: idValue.trim() } });
