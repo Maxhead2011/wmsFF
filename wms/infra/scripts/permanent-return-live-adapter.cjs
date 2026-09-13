@@ -18,7 +18,7 @@ const liveHashes = {
 };
 const desiredHashes = {
   // FIX: reviewed exact-source KIZ guard; preserve the same five live adaptations.
-  [reserveName]: 'ca222ab5befdbba77baaf00312ea363d1c8884125519c2f1ae961cc13a185ee0',
+  [reserveName]: '5aa3202f20c5469731412754342850391daeecf5d99b4fa7a7483c7003a38578',
   [returnName]: 'e35ce2dab019c0cb6356a360217170254ece38e9fb1f6d50fcab9e620dab3253',
 };
 function once(text, before, after) {

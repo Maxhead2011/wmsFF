@@ -12,6 +12,25 @@ import pro.logoff.wms.tsd.network.TsdFbsAssemblyResponse;
 
 public class FbsTaskSafetyTest {
     @Test
+    public void routesOnlyOurCurrentScopedStockStopIncludingWbAcceptedTasks() {
+        // TEST: wrong-box, old-task, server errors and sold flavors must never enter this audit.
+        TsdFbsAssemblyResponse.Task task = new TsdFbsAssemblyResponse.Task();
+        task.id = "task"; task.scannedBoxCode = "FFL_BOX016";
+        task.client = new TsdFbsAssemblyResponse.Client(); task.client.id = "client";
+        assertTrue(FbsTaskSafety.requiresKizAudit("logoff", 400, "FBS_STOCK_AUDIT_REQUIRED", "task", "client", "FFL_BOX016", task));
+        task.kizAccepted = true;
+        assertTrue(FbsTaskSafety.requiresKizAudit("logoff", 400, "FBS_STOCK_AUDIT_REQUIRED", "task", "client", "FFL_BOX016", task));
+        assertFalse(FbsTaskSafety.requiresKizAudit("ffullhab", 400, "FBS_STOCK_AUDIT_REQUIRED", "task", "client", "FFL_BOX016", task));
+        assertFalse(FbsTaskSafety.requiresKizAudit("platform", 400, "FBS_STOCK_AUDIT_REQUIRED", "task", "client", "FFL_BOX016", task));
+        assertFalse(FbsTaskSafety.requiresKizAudit("logoff", 500, "FBS_STOCK_AUDIT_REQUIRED", "task", "client", "FFL_BOX016", task));
+        assertFalse(FbsTaskSafety.requiresKizAudit("logoff", 400, "", "task", "client", "FFL_BOX016", task));
+        assertFalse(FbsTaskSafety.requiresKizAudit("logoff", 400, "FBS_STOCK_AUDIT_REQUIRED", "other", "client", "FFL_BOX016", task));
+        assertFalse(FbsTaskSafety.requiresKizAudit("logoff", 400, "FBS_STOCK_AUDIT_REQUIRED", "task", "other", "FFL_BOX016", task));
+        assertFalse(FbsTaskSafety.requiresKizAudit("logoff", 400, "FBS_STOCK_AUDIT_REQUIRED", "task", "client", "FFL_OTHER", task));
+        assertFalse(FbsTaskSafety.requiresKizAudit("logoff", 400, "FBS_STOCK_AUDIT_REQUIRED", "task", "client", "", task));
+    }
+
+    @Test
     public void routesBoxAndKizDirectlyWithoutUniversalClassification() {
         // TEST: direct box scanning must stay on the fast specialized endpoint.
         assertEquals("scan-box", FbsTaskSafety.scanActionForState("SCAN_BOX"));

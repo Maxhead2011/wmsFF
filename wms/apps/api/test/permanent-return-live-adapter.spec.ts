@@ -10,7 +10,7 @@ function checkedAdaptation(name: string) {
   // TEST: live code is already transformed. Require the exact output of the approved Git adapter.
   const expected: Record<string, string> = {
     // TEST: exact-source KIZ protection plus the unchanged live storage adaptations.
-    reserveCompletedWildberriesStock: 'bb73aa48d6ede7051281582f1a43d8c19916be067ed0aeae6c79c55adb4083e1',
+    reserveCompletedWildberriesStock: '1e622dea2d3686137efdd18b967392134c0bf34dfa196bcef8e3c807bbd443cf',
     returnCompletedWildberriesStockReservation: '894edcc3343d307ab4a78d34063cb5a03f3fb83066acd2105c5eb9651020bb08',
   };
   expect(createHash('sha256').update(text).digest('hex')).toBe(expected[name]);

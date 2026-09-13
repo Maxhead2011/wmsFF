@@ -23,8 +23,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 165 // FIX: close received boxes on the server after their own receipt packet.
-            versionName = "0.1.166-receipt-close"
+            versionCode = 167 // FIX: mandatory physical KIZ audit before resuming an interrupted FBS pick.
+            versionName = "0.1.168-fbs-kiz-audit"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
