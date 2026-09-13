@@ -10352,6 +10352,7 @@ export function resolveInventoryBox(
 }
 
 export type WebOrderAssemblyResult = {
+  sortingLabel: { contentType: 'image/png'; imageBase64: string; widthMm: number; heightMm: number; templateVersion?: string };
   orderId: string; requestId: string; requestNumber:number|null; productName: string; article: string | null;
   boxCode: string | null; stickerBarcode: string; warehouseName:string; contentType: string; imageBase64: string;
 };

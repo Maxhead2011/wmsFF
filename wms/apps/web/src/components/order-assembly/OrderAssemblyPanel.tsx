@@ -1,23 +1,16 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Download, Monitor, Printer, RotateCcw, ScanLine, ShieldCheck, Smartphone, Trash2 } from 'lucide-react';
+import { orderAssemblyPrintHtml } from './orderAssemblyLabels';
 import {
   deleteWebOrderAssemblyHistory, fetchWebOrderAssemblyHistory, reprintWebOrderAssemblyHistory,
   scanWebOrderAssembly, type AuthSession, type WebOrderAssemblyHistoryItem, type WebOrderAssemblyResult,
 } from '../../lib/api';
 
 function printLabels(result: WebOrderAssemblyResult) {
+  const html = orderAssemblyPrintHtml(result);
   const win = window.open('', '_blank', 'width=700,height=600');
   if (!win) throw new Error('Разрешите всплывающие окна для WMS.');
-  win.document.write(`<html><head><title>WB ${result.orderId}</title><style>
-    @page{size:58mm 40mm;margin:0}*{box-sizing:border-box}html,body{margin:0}
-    .label{width:58mm;height:40mm;break-after:page;display:flex;align-items:center;justify-content:center;overflow:hidden}
-    .label:last-of-type{break-after:auto}.label img{width:58mm;height:40mm;object-fit:contain}
-    .sorting{padding:2mm;flex-direction:column;text-align:center;font-family:Arial,sans-serif;border:1px solid #000}
-    .sorting small{font-size:8pt}.sorting b{font-size:17pt;line-height:1.05;margin:.7mm 0}.sorting strong{font-size:13pt;line-height:1.05;text-transform:uppercase}
-  </style></head><body><section class="label"><img src="data:${result.contentType};base64,${result.imageBase64}"></section>
-  <section class="label sorting"><small>ЗАЯВКА WMS</small><b>№${String(result.requestNumber || '—').padStart(6, '0')}</b>
-  <small>ЗАКАЗ WB</small><b>${result.orderId}</b><small>СКЛАД</small><strong>${result.warehouseName}</strong></section>
-  <script>window.onload=()=>setTimeout(()=>{print();close()},180)</script></body></html>`);
+  win.document.write(html);
   win.document.close();
 }
 
