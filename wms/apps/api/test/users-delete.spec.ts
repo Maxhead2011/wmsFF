@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { validate } from 'class-validator';
 import { UsersService } from '../src/modules/users/users.service';
 import { UpdateUserProfileDto } from '../src/modules/users/dto/update-user-profile.dto';
@@ -7,6 +7,9 @@ import { AuthService } from '../src/modules/auth/auth.service';
 import { MobileAuthService } from '../src/modules/mobile/mobile-auth.service';
 import { MobileService } from '../src/modules/mobile/mobile.service';
 import { AdministrationService } from '../src/modules/administration/administration.service';
+import { TsdDeviceService } from '../src/modules/tsd/tsd-device.service';
+
+afterEach(() => vi.unstubAllEnvs());
 
 // TEST: authorization uses persisted roles and assignments, never the active branch or request roles.
 function setup(actorRoles = ['ADMIN'], actorBranch: string | null = 'moscow', targetRoles = ['OPERATOR'], targetBranch: string | null = 'moscow') {
@@ -32,6 +35,47 @@ function setup(actorRoles = ['ADMIN'], actorBranch: string | null = 'moscow', ta
 }
 
 describe('soft deletion of users', () => {
+  // TEST: deleting an employee must not prevent another employee signing into the shared handheld.
+  it('preserves a shared TSD for the next employee while revoking the deleted account', async () => {
+    vi.stubEnv('WMS_USER_DELETION_PRESERVE_TSD_DEVICES', 'true');
+    const { service, db, user } = setup();
+    const device = { id: 'physical-device', code: 'TSD-INSTALL-SHARED', name: 'Shared', userId: 'target', status: 'ACTIVE' };
+    db.tsdDevice.updateMany.mockImplementation(async ({ data }: any) => { Object.assign(device, data); return { count: 1 }; });
+    await service.deleteUser('target', user);
+    expect(device.status).toBe('ACTIVE');
+    expect(db.tsdDevice.updateMany).not.toHaveBeenCalled();
+    expect(db.user.update).toHaveBeenCalledWith({ where: { id: 'target' }, data: { status: 'ARCHIVED', tsdActivationCodeHash: null } });
+    expect(db.userSession.updateMany).toHaveBeenCalledWith({ where: { userId: 'target' }, data: { expiresAt: expect.any(Date) } });
+    expect(db.mobileSession.updateMany).toHaveBeenCalledWith({ where: { userId: 'target', revokedAt: null }, data: { revokedAt: expect.any(Date) } });
+
+    const nextUser = { id: 'next-employee', name: 'Next', email: 'next', status: 'ACTIVE', passwordHash: 'hash',
+      roles: [{ role: { code: 'OPERATOR', permissions: [{ permission: { code: 'stock:write' } }] } }] };
+    const sign = vi.fn(() => 'next-user-token');
+    const tsd: any = new TsdDeviceService({ user: { findUnique: async () => nextUser },
+      tsdDevice: { findUnique: async () => device } } as never, { verify: async () => true } as never, { sign } as never);
+    tsd.rebindSharedInstallation = vi.fn(async () => ({ ...device, userId: nextUser.id }));
+    tsd.releaseUntouchedLegacyFbsLeases = vi.fn(async () => undefined);
+    await expect(tsd.login({ login: 'next', password: 'correct', installationCode: device.code })).resolves.toMatchObject({ accessToken: 'next-user-token' });
+    expect(tsd.rebindSharedInstallation).toHaveBeenCalledWith(device, nextUser);
+    expect(sign).toHaveBeenCalledWith(nextUser.id, { deviceId: device.id, deviceCode: device.code });
+  });
+  // TEST: preserving shared devices must never undo a deliberate administrator device block.
+  it('preserves an existing manual TSD block when its employee is archived', async () => {
+    vi.stubEnv('WMS_USER_DELETION_PRESERVE_TSD_DEVICES', 'true');
+    const { service, db, user } = setup();
+    const device = { status: 'BLOCKED' };
+    db.tsdDevice.updateMany.mockImplementation(async ({ data }: any) => { Object.assign(device, data); return { count: 1 }; });
+    await service.deleteUser('target', user);
+    expect(device.status).toBe('BLOCKED');
+    expect(db.tsdDevice.updateMany).not.toHaveBeenCalled();
+  });
+  // TEST: installations without the opt-in retain their existing deletion behavior.
+  it('keeps the sold installation behavior when shared-device preservation is disabled', async () => {
+    vi.stubEnv('WMS_USER_DELETION_PRESERVE_TSD_DEVICES', 'false');
+    const { service, db, user } = setup();
+    await service.deleteUser('target', user);
+    expect(db.tsdDevice.updateMany).toHaveBeenCalledWith({ where: { userId: 'target' }, data: { status: 'BLOCKED' } });
+  });
   it('hides archived users from mobile and workspace-access selectors', async () => {
     const findMany = vi.fn(async () => []);
     const mobile: any = Object.create(MobileService.prototype);
@@ -111,6 +155,18 @@ describe('soft deletion of users', () => {
 
 // TEST: existing authentication gates must reject the new archived status on all entry paths.
 describe('archived account authentication', () => {
+  // TEST: an ACTIVE physical device does not restore its archived employee's credentials.
+  it.each(['password', 'device-secret'])('rejects archived TSD account via %s after device unblocking', async method => {
+    const archived = { id: 'deleted', status: 'ARCHIVED', passwordHash: 'hash' };
+    const sign = vi.fn();
+    const tsd = new TsdDeviceService({ user: { findUnique: async () => archived },
+      tsdDevice: { findUnique: async () => ({ status: 'ACTIVE', secretHash: 'hash', user: archived }) } } as never,
+      { verify: async () => true } as never, { sign } as never);
+    const login = method === 'password' ? { login: 'deleted', password: 'correct', installationCode: 'TSD-INSTALL-SHARED' }
+      : { code: 'TSD-INSTALL-SHARED', secret: 'correct' };
+    await expect(tsd.login(login)).rejects.toThrow(/Пользователь.*заблокирован/);
+    expect(sign).not.toHaveBeenCalled();
+  });
   it.each([undefined, 'tsd-device'])('rejects a previously issued token (device: %s)', async deviceId => {
     const guard = new AuthGuard({ getAllAndOverride: () => false } as never,
       { verify: () => ({ sub: 'deleted', deviceId }) } as never,
