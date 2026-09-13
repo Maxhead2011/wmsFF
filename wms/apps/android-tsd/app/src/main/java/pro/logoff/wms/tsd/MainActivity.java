@@ -216,6 +216,9 @@ public class MainActivity extends Activity {
     private String mandatoryFbsAuditBoxCode = "";
     private String mandatoryFbsAuditClientId = "";
     private String mandatoryFbsAuditSessionId = "";
+    // FIX: preserve the interrupted task across restart without undoing its accepted WB KIZ.
+    private String mandatoryFbsKizAuditTaskId = "";
+    private String mandatoryFbsKizAuditRequestId = "";
     private String mandatoryFbsAuditPendingBarcode = "";
     private String mandatoryFbsAuditOwnerKey = "";
     private String confirmedFbsBoxTaskId = "";
@@ -2107,6 +2110,9 @@ public class MainActivity extends Activity {
         mandatoryFbsAuditBoxCode = progressStore.getString("mandatory_fbs_audit_box", "");
         mandatoryFbsAuditClientId = progressStore.getString("mandatory_fbs_audit_client", "");
         mandatoryFbsAuditSessionId = progressStore.getString("mandatory_fbs_audit_session", "");
+        mandatoryFbsKizAuditTaskId = progressStore.getString("mandatory_fbs_kiz_audit_task", "");
+        mandatoryFbsKizAuditRequestId = progressStore.getString("mandatory_fbs_kiz_audit_request", "");
+        if (!mandatoryFbsKizAuditTaskId.isEmpty()) inventoryCaptureKiz = true;
         // Mandatory FBS box audits count physical units by the product barcode only.
         // Discard the obsolete KIZ step persisted by versions newer than 0.1.23.
         mandatoryFbsAuditPendingBarcode = "";
@@ -2124,6 +2130,8 @@ public class MainActivity extends Activity {
             .putString("mandatory_fbs_audit_box", mandatoryFbsAuditBoxCode)
             .putString("mandatory_fbs_audit_client", mandatoryFbsAuditClientId)
             .putString("mandatory_fbs_audit_session", mandatoryFbsAuditSessionId)
+            .putString("mandatory_fbs_kiz_audit_task", mandatoryFbsKizAuditTaskId)
+            .putString("mandatory_fbs_kiz_audit_request", mandatoryFbsKizAuditRequestId)
             .putString("mandatory_fbs_audit_owner", mandatoryFbsAuditOwnerKey)
             .putString("mandatory_fbs_audit_barcode", mandatoryFbsAuditPendingBarcode)
             .putStringSet("mandatory_fbs_audit_kiz", new LinkedHashSet<>(mandatoryFbsAuditKizValues))
@@ -2145,6 +2153,8 @@ public class MainActivity extends Activity {
     }
 
     private void clearMandatoryFbsAuditState() {
+        mandatoryFbsKizAuditTaskId = "";
+        mandatoryFbsKizAuditRequestId = "";
         pendingFbsAuditBoxes.clear();
         inventoryRequestBusy = false;
         mandatoryFbsAuditActive = false;
@@ -2161,6 +2171,8 @@ public class MainActivity extends Activity {
                 .remove("mandatory_fbs_audit_box")
                 .remove("mandatory_fbs_audit_client")
                 .remove("mandatory_fbs_audit_session")
+                .remove("mandatory_fbs_kiz_audit_task")
+                .remove("mandatory_fbs_kiz_audit_request")
                 .remove("mandatory_fbs_audit_owner")
                 .remove("mandatory_fbs_audit_barcode")
                 .remove("mandatory_fbs_audit_kiz")
@@ -2201,6 +2213,7 @@ public class MainActivity extends Activity {
     }
 
     private void resumeMandatoryFbsAudit() {
+        if (!mandatoryFbsKizAuditTaskId.isEmpty()) inventoryCaptureKiz = true;
         if (!mandatoryFbsAuditActive) {
             if (pendingFbsAuditBoxes.isEmpty()) {
                 openFbsAssembly();
@@ -2252,6 +2265,11 @@ public class MainActivity extends Activity {
             request.put("clientId", mandatoryFbsAuditClientId);
             request.put("title", "Обязательная проверка после сборки FBS · " + mandatoryFbsAuditBoxCode);
             request.put("comment", "[FBS_MANDATORY_BOX_CHECK] Короб выбран в FBS, но нужный товар не был подтверждён.");
+            if (!mandatoryFbsKizAuditTaskId.isEmpty()) {
+                request.put("title", "Проверка КИЗ FBS · " + mandatoryFbsAuditBoxCode + " · " + mandatoryFbsKizAuditTaskId);
+                request.put("comment", "[FBS_MANDATORY_BOX_CHECK] [FBS_KIZ_STOCK_CHECK] " + mandatoryFbsKizAuditTaskId
+                    + "; расхождение при отборе. Сканировать только содержимое короба. Уже отобранный товар сюда не возвращать.");
+            }
             Response<TsdInventoryDashboard> dashboardResponse = api.inventoryDashboard(
                 session.authorizationHeader(),
                 true
@@ -2697,8 +2715,11 @@ public class MainActivity extends Activity {
                     " · " + safeText(activeInventoryBox.clientName)
             ));
             addInventoryLines(root, activeInventoryBox);
+            if (!mandatoryFbsKizAuditTaskId.isEmpty()) root.addView(messageView(tr(
+                "Сканируйте только содержимое короба. Уже отобранные товары не возвращайте в пересчёт; возврат принимается отдельно в отсканированный короб.",
+                "Faqat quti ichidagini skanerlang. Olingan tovarni sanashga qaytarmang; qaytarish alohida qabul qilinadi.")));
             if ("COUNTING".equals(activeInventoryBox.status)) {
-                if ("logoff".equals(BuildConfig.FLAVOR)) {
+                if ("logoff".equals(BuildConfig.FLAVOR) && mandatoryFbsKizAuditTaskId.isEmpty()) {
                     root.addView(secondaryButton(
                         inventoryCaptureKiz ? tr("Режим: ШК + КИЗ", "Rejim: SHK + KIZ")
                             : tr("Режим: только ШК", "Rejim: faqat SHK"),
@@ -2734,8 +2755,17 @@ public class MainActivity extends Activity {
                     if ("MATCHED".equals(activeInventoryBox.status) || "RESOLVED".equals(activeInventoryBox.status)) {
                         root.addView(primaryMenuButton("Продолжить отбор SKU из этого короба", view -> continueSkuSortingAfterInventory()));
                     } else root.addView(messageView("Примените актуализацию по существующим правам, затем продолжите сортировку здесь."));
-                } else addInventoryTransferAction(root, activeInventoryBox);
+                } else if (mandatoryFbsKizAuditTaskId.isEmpty()) addInventoryTransferAction(root, activeInventoryBox);
                 if (mandatoryFbsAuditActive) {
+                    if (!mandatoryFbsKizAuditTaskId.isEmpty() && "COMPLETED".equals(activeInventory.status)) {
+                        root.addView(secondaryButton(tr("Пересчитать короб заново", "Qutini qayta sanash"), view -> {
+                            if (inventoryRequestBusy) return;
+                            mandatoryFbsAuditSessionId = "";
+                            inventoryKizScan.clear();
+                            persistMandatoryFbsAuditState();
+                            startMandatoryFbsAuditSession();
+                        }));
+                    }
                     if ("MATCHED".equals(activeInventoryBox.status) || "RESOLVED".equals(activeInventoryBox.status)) {
                         root.addView(primaryMenuButton(
                             tr("Проверка завершена — продолжить FBS", "Tekshiruv tugadi — FBSni davom ettirish"),
@@ -2818,6 +2848,11 @@ public class MainActivity extends Activity {
     }
 
     private void addInventoryResult(LinearLayout root, TsdInventoryBox box) {
+        if (!mandatoryFbsKizAuditTaskId.isEmpty()) {
+            root.addView(messageView(tr("Проверяется содержимое этого короба. Уже отобранный товар не включайте в пересчёт. Количество и состав КИЗ проверяются отдельно.",
+                "Faqat shu quti tarkibi tekshiriladi. Avval olingan tovarni qayta sanamang. Miqdor va KIZlar alohida tekshiriladi.")));
+            return;
+        }
         int mismatches = 0;
         if (box.lines != null) {
             for (TsdInventoryLine line : box.lines) {
@@ -2871,7 +2906,7 @@ public class MainActivity extends Activity {
             root.addView(primaryMenuButton("Актуализировать по факту и продолжить сортировку", view -> confirmResolveInventoryBox("APPLY_ACTUAL", false)));
             return;
         }
-        if (!skuSortingAudit) root.addView(primaryMenuButton(
+        if (!skuSortingAudit && mandatoryFbsKizAuditTaskId.isEmpty()) root.addView(primaryMenuButton(
             tr("Актуализировать и переместить в другой короб", "Yangilash va boshqa qutiga ko‘chirish"),
             view -> confirmResolveInventoryBox("APPLY_ACTUAL", true)
         ));
@@ -3087,6 +3122,10 @@ public class MainActivity extends Activity {
     private void finishMandatoryFbsAudit() {
         TsdSession session = safeSession();
         if (session == null || activeInventory == null || activeInventoryBox == null || inventoryRequestBusy) return;
+        if (!mandatoryFbsKizAuditTaskId.isEmpty()) {
+            validateMandatoryFbsKizAudit();
+            return;
+        }
         if (!"MATCHED".equals(activeInventoryBox.status) && !"RESOLVED".equals(activeInventoryBox.status)) {
             statusMessage = tr(
                 "Сначала завершите подсчёт и актуализируйте расхождения.",
@@ -3134,7 +3173,9 @@ public class MainActivity extends Activity {
         )) {
             return false;
         }
-        if (FbsTaskSafety.mandatoryAuditAlreadyCompleted(activeInventory.status)) {
+        if (!mandatoryFbsKizAuditTaskId.isEmpty()) {
+            validateMandatoryFbsKizAudit();
+        } else if (FbsTaskSafety.mandatoryAuditAlreadyCompleted(activeInventory.status)) {
             completeMandatoryFbsAuditLocally(mandatoryFbsAuditClientId, mandatoryFbsAuditBoxCode);
         } else {
             finishMandatoryFbsAudit();
@@ -3143,6 +3184,9 @@ public class MainActivity extends Activity {
     }
 
     private void completeMandatoryFbsAuditLocally(String completedClientId, String completedBoxCode) {
+        String resumeRequestId = mandatoryFbsKizAuditRequestId;
+        mandatoryFbsKizAuditTaskId = "";
+        mandatoryFbsKizAuditRequestId = "";
         inventoryRequestBusy = false;
         removeEquivalentMandatoryFbsAudit(completedClientId, completedBoxCode);
         mandatoryFbsAuditActive = false;
@@ -3162,7 +3206,45 @@ public class MainActivity extends Activity {
             "Quti tekshirildi va yangilandi. FBS blokdan chiqarildi."
         );
         if (!pendingFbsAuditBoxes.isEmpty()) resumeMandatoryFbsAudit();
-        else openFbsAssembly();
+        else if (!resumeRequestId.isEmpty()) {
+            selectedFbsRequestId = resumeRequestId;
+            loadNextFbsAssembly();
+        } else openFbsAssembly();
+    }
+
+    // FIX: MATCHED quantities alone cannot unblock a KIZ discrepancy, even after restart.
+    private void validateMandatoryFbsKizAudit() {
+        TsdSession session = safeSession();
+        if (session == null || activeInventory == null || inventoryRequestBusy) return;
+        String owner = fbsSessionOwnerKey(session);
+        String taskId = mandatoryFbsKizAuditTaskId;
+        String auditId = activeInventory.id;
+        String clientId = mandatoryFbsAuditClientId;
+        String boxCode = mandatoryFbsAuditBoxCode;
+        inventoryRequestBusy = true;
+        statusMessage = tr("Проверяю состав КИЗ перед возвратом к заказу…", "Buyurtmaga qaytishdan oldin KIZlar tekshirilmoqda…");
+        renderInventoryCountScreen();
+        runBackground(() -> {
+            Map<String, Object> request = new LinkedHashMap<>();
+            request.put("sessionId", auditId);
+            Response<Map<String, Object>> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                .validateFbsStockAudit(session.authorizationHeader(), taskId, request).execute();
+            String failure = response.isSuccessful() ? "" : responseErrorMessage(response,
+                tr("Нужен разбор администратора. Проверка не завершена.", "Administrator tekshiruvi kerak."));
+            Map<String, Object> body = response.body();
+            boolean ready = response.isSuccessful() && body != null && Boolean.TRUE.equals(body.get("ready"))
+                && taskId.equals(body.get("taskId")) && auditId.equals(body.get("sessionId"));
+            mainHandler.post(() -> {
+                if (!owner.equals(fbsSessionOwnerKey(safeSession())) || !taskId.equals(mandatoryFbsKizAuditTaskId)
+                    || !auditId.equals(mandatoryFbsAuditSessionId)) return;
+                inventoryRequestBusy = false;
+                if (ready) completeMandatoryFbsAuditLocally(clientId, boxCode);
+                else {
+                    statusMessage = nonEmpty(failure, tr("Состав КИЗ не подтверждён. Нужен разбор администратора.", "KIZlar tasdiqlanmadi. Administrator kerak."));
+                    renderInventoryCountScreen();
+                }
+            });
+        });
     }
 
     private void finishInventoryBox() {
@@ -5634,6 +5716,27 @@ public class MainActivity extends Activity {
                 ));
                 if (FbsTaskSafety.isStaleTaskConflict(response.code(), errorDetails.code)) {
                     mainHandler.post(() -> reloadFbsAfterStaleTask(errorDetails.message));
+                    return;
+                }
+                if (FbsTaskSafety.requiresKizAudit(BuildConfig.FLAVOR, response.code(), errorDetails.code,
+                    errorDetails.taskId, errorDetails.clientId, errorDetails.boxCode, currentTask)) {
+                    mainHandler.post(() -> {
+                        if (!actionOwnerKey.equals(fbsSessionOwnerKey(safeSession())) || fbsAssembly == null
+                            || fbsAssembly.task == null || !taskId.equals(fbsAssembly.task.id)) return;
+                        fbsBusy = false;
+                        queueMandatoryFbsAudit(errorDetails.clientId, errorDetails.boxCode);
+                        mandatoryFbsAuditClientId = errorDetails.clientId;
+                        mandatoryFbsAuditBoxCode = errorDetails.boxCode;
+                        mandatoryFbsAuditSessionId = "";
+                        mandatoryFbsKizAuditTaskId = taskId;
+                        mandatoryFbsKizAuditRequestId = nonEmpty(currentTask.requestId, selectedFbsRequestId);
+                        mandatoryFbsAuditActive = true;
+                        inventoryCaptureKiz = true;
+                        inventoryKizScan.clear();
+                        persistMandatoryFbsAuditState();
+                        // No release/undo: WB-accepted KIZ and the order remain owned by this picker.
+                        resumeMandatoryFbsAudit();
+                    });
                     return;
                 }
                 boolean clearRejectedScan = FbsTaskSafety.shouldClearRejectedScan(
@@ -9700,12 +9803,16 @@ public class MainActivity extends Activity {
     private ApiErrorDetails responseErrorDetails(Response<?> response, String fallback) {
         String code = "";
         String messageText = fallback;
+        String taskId = "", clientId = "", boxCode = "";
         try {
             if (response.errorBody() == null) return new ApiErrorDetails(code, messageText);
             String body = response.errorBody().string();
             if (body == null || body.trim().isEmpty()) return new ApiErrorDetails(code, messageText);
             JSONObject payload = new JSONObject(body);
             code = nonEmpty(payload.optString("code", ""), "");
+            taskId = payload.optString("taskId", "");
+            clientId = payload.optString("clientId", "");
+            boxCode = payload.optString("boxCode", "");
             Object message = payload.opt("message");
             if (message != null && !JSONObject.NULL.equals(message)) {
                 String text = String.valueOf(message).trim();
@@ -9713,16 +9820,24 @@ public class MainActivity extends Activity {
             }
         } catch (Throwable ignored) {
         }
-        return new ApiErrorDetails(code, messageText);
+        return new ApiErrorDetails(code, messageText, taskId, clientId, boxCode);
     }
 
     private static final class ApiErrorDetails {
         final String code;
         final String message;
+        final String taskId, clientId, boxCode;
 
         ApiErrorDetails(String code, String message) {
+            this(code, message, "", "", "");
+        }
+
+        ApiErrorDetails(String code, String message, String taskId, String clientId, String boxCode) {
             this.code = code == null ? "" : code;
             this.message = message == null ? "" : message;
+            this.taskId = taskId;
+            this.clientId = clientId;
+            this.boxCode = boxCode;
         }
     }
 

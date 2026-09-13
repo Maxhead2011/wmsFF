@@ -1,4 +1,5 @@
 import { stockTransferBlockedReason, ordersWithoutTransferStock } from './fbs-stock-transfer';
+import { fbsStockAuditError, fbsKizAuditEnabled, validateFbsStockAudit } from './fbs-stock-audit';
 import { createHash } from 'node:crypto';
 import { timingSnapshot, type SourceOrderTiming } from '../operations-statistics/order-timing';
 import { isOwnedUnpaidDraft, runBillingMutation, withBillingDb } from '../billing/billing-mutation';
@@ -12787,12 +12788,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   // FIX: opt in only on our WMS; sold installations retain their configured workflow.
   private assertFbsKizRegistrationCapacity(
-    task: Pick<FbsTsdAssemblyRecord, 'boxCode'>,
+    task: Pick<FbsTsdAssemblyRecord, 'boxCode'> & Partial<FbsTsdAssemblyRecord>,
     availableQuantity: number,
     registeredMarks: number,
   ) {
     if (process.env.WMS_FBS_PRESERVE_STOCK_KIZ !== 'true' || availableQuantity > registeredMarks) return;
-    throw new BadRequestException(
+    throw fbsStockAuditError(task,
       `КИЗ не зарегистрирован в WMS, а в коробе ${task.boxCode ?? 'без номера'} ` +
       'нет доступной единицы без записанного КИЗ. Проверьте короб и выполните актуализацию с администратором. ' +
       'Замена существующего КИЗ и списание товара остановлены.',
@@ -14047,7 +14048,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         },
       });
       if (preserveStockKiz && activeReservedQuantity < quantity && changed.count !== 1) {
-        throw new BadRequestException('КИЗ изменился во время списания. Обновите задание и проверьте короб.');
+        throw fbsStockAuditError(task, 'КИЗ изменился во время списания. Обновите задание и проверьте короб.');
       }
     };
     if (activeReservedQuantity >= quantity) {
@@ -14070,7 +14071,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         select: { id: true },
       });
       if (!physicalMark) {
-        throw new BadRequestException('КИЗ не найден в доступном остатке выбранного короба. Проверьте короб и выполните актуализацию с администратором.');
+        throw fbsStockAuditError(task, 'КИЗ не найден в доступном остатке выбранного короба. Проверьте короб и выполните актуализацию с администратором.');
       }
     }
     const box = task.boxId
@@ -14099,7 +14100,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     // FIX: a KIZ alone cannot create missing stock during a physical pick.
     if (preserveStockKiz && task.kiz &&
         availableBalances.reduce((sum, balance) => sum + balance.quantity, 0) < quantityToReserve) {
-      throw new BadRequestException('Недостаточно доступного остатка в выбранном коробе. Проверьте короб и выполните актуализацию с администратором.');
+      throw fbsStockAuditError(task, 'Недостаточно доступного остатка в выбранном коробе. Проверьте короб и выполните актуализацию с администратором.');
     }
     const balanceWarehouseId = requireFbsBalanceWarehouseId(
       availableBalances[0]?.warehouseId ?? box?.warehouseId ?? requestWarehouseId,
@@ -14633,6 +14634,24 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       `Заказ WB №${task.orderId} не требуется собирать. Статус WB: ${link?.lastSupplierStatus}/${link?.lastWbStatus}. ` +
       'Сканы и списания сохранены. Отложите задание; решение по уже взятому товару принимает менеджер.',
     );
+  }
+
+  // FIX: verify the same task lease and physical audit without submitting WB metadata or reserving stock.
+  async validateFbsTsdStockAudit(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
+    if (!fbsKizAuditEnabled()) throw new NotFoundException('Проверка недоступна.');
+    const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : '';
+    if (!sessionId || sessionId.length > 100) throw new BadRequestException('Укажите проверку короба.');
+    return this.prisma.$transaction(async tx => {
+      const fresh = await tx.fbsTsdAssembly.findUnique({ where: { id: taskId } });
+      if (!fresh) throw new NotFoundException('Задание FBS не найдено.');
+      this.clientScopes.requireClientAccess(user, fresh.clientId, 'write');
+      // FIX: a manager may have completed a return meanwhile. Validate this worker's audit,
+      // but do not revive the released task or its historical box/KIZ placement.
+      if (!['COMPLETED', 'RELEASED', FBS_TSD_RETURN_REQUIRED].includes(fresh.status)) {
+        this.requireCurrentFbsTsdLease(fresh, user);
+      }
+      return validateFbsStockAudit(tx, fresh, sessionId, user.id);
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
   }
 
   private async loadOwnedFbsTsdAssembly(taskId: string, user: AuthUser) {

@@ -354,6 +354,14 @@ export class TsdDeviceController {
     return this.marketplace.scanFbsTsdKiz(id, body, user);
   }
 
+  // FIX: returning from a KIZ discrepancy requires server verification, including after a TSD restart.
+  @Post('fbs/tasks/:id/validate-stock-audit')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  validateFbsStockAudit(@Param('id') id: string, @Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {
+    return this.marketplace.validateFbsTsdStockAudit(id, body, user);
+  }
+
   @Post('fbs/tasks/:id/undo-kiz')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')

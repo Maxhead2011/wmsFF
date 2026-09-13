@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
+import { fbsKizAuditEnabled, FBS_KIZ_AUDIT_MARKER } from '../marketplace-connections/fbs-stock-audit';
 import {
   InventoryBoxStatus,
   InventoryLineDecision,
@@ -464,7 +465,8 @@ export class InventoryService {
     }
     // FIX: count physical evidence without trusting stale ProductMark ownership.
     // Stock and mark corrections remain separate from the counting phase.
-    if (dto.captureKiz && sku.needsChestnyZnak && !sku.isUnmarked) {
+    const stockKizAudit = fbsKizAuditEnabled() && auditBox.session.comment?.includes(FBS_KIZ_AUDIT_MARKER);
+    if ((dto.captureKiz || stockKizAudit) && sku.needsChestnyZnak && !sku.isUnmarked) {
       if (!dto.kiz?.trim()) {
         return { scanState: 'SCAN_KIZ', skuId: sku.id, skuName: sku.name, barcode: value };
       }

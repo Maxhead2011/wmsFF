@@ -278,7 +278,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'tsd',
     name: 'ТСД',
     prefixes: ['/tsd'],
-    routeCount: 87, // ADDED: 86 existing handlers plus explicit message read acknowledgement.
+    routeCount: 88, // FIX: include the read-only FBS physical KIZ audit return gate.
     description: 'Приёмка, размещение, сборка FBS, перемещения и синхронизация ТСД.',
     logic: ['Выдаёт следующее действие сборщику.', 'Проверяет паллет-сорт, короб, товар и КИЗ.', 'Фиксирует сканы, операции и восстановление сессий устройства.'],
     dependencies: ['Основная БД', 'Склад', 'JWT устройства'],

@@ -12,6 +12,15 @@ final class FbsTaskSafety {
         return httpStatus == 409 && "FBS_TASK_STALE".equals(errorCode);
     }
 
+    // FIX: only our structured stock stop for the current task and scanned box may start an audit.
+    static boolean requiresKizAudit(String flavor, int status, String code, String taskId,
+        String clientId, String boxCode, TsdFbsAssemblyResponse.Task task) {
+        return "logoff".equals(flavor) && status == 400 && "FBS_STOCK_AUDIT_REQUIRED".equals(code)
+            && task != null && task.client != null && !nonEmpty(taskId).isEmpty()
+            && taskId.equals(task.id) && !nonEmpty(clientId).isEmpty() && clientId.equals(task.client.id)
+            && !normalizeBox(boxCode).isEmpty() && normalizeBox(boxCode).equals(normalizeBox(task.scannedBoxCode));
+    }
+
     // FIX: clear only values which the server has actually rejected as scan
     // data. Authorization, throttling, server and stale-task errors retain it.
     static boolean shouldClearRejectedScan(

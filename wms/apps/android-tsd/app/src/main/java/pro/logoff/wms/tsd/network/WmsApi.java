@@ -223,6 +223,14 @@ public interface WmsApi {
         @Path("id") String id
     );
 
+    // FIX: read-only physical audit gate; no release, undo or WB submission.
+    @POST("api/v1/tsd/fbs/tasks/{id}/validate-stock-audit")
+    Call<java.util.Map<String, Object>> validateFbsStockAudit(
+        @Header("Authorization") String authorization,
+        @Path("id") String id,
+        @Body java.util.Map<String, Object> body
+    );
+
     @POST("api/v1/tsd/fbs/tasks/{id}/complete")
     Call<TsdFbsAssemblyResponse> completeFbsAssembly(
         @Header("Authorization") String authorization,

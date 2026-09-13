@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InventoryService } from '../src/modules/inventory/inventory.service';
 
 const barcode = '2045143989162';
+afterEach(() => vi.unstubAllEnvs());
 const kiz = '010460000000000121SERIAL0000001\u001d91TEST\u001d92CRYPTO';
 const user = { id: 'worker', name: 'Worker', roleCodes: ['ADMIN'], permissionCodes: ['system:admin'], deviceCode: 'TSD' } as any;
 
@@ -40,6 +41,17 @@ function fixture() {
 
 // TEST: physically observed KIZ is count evidence, not a mutation of stock or order ownership.
 describe('inventory barcode + KIZ counting', () => {
+  // TEST: a stale or modified TSD cannot turn a mandatory KIZ check into barcode-only counting.
+  it('forces physical KIZ evidence for the opt-in FBS stock discrepancy', async () => {
+    vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT', 'true');
+    const f = fixture(); (f.box.session as any).comment = '[FBS_KIZ_STOCK_CHECK] task';
+    await expect(f.service.scanItem('audit', { barcode, captureKiz: false } as any, user))
+      .resolves.toMatchObject({ scanState: 'SCAN_KIZ' });
+    expect(f.line()).toBeNull();
+    await expect(f.service.scanItem('audit', { barcode, kiz, captureKiz: false } as any, user))
+      .resolves.toMatchObject({ countedQuantity: 1 });
+    expect(f.logs.size).toBe(1);
+  });
   it('asks for KIZ after barcode without incrementing a marked product', async () => {
     const f = fixture();
     await expect(f.service.scanItem('audit', { barcode, captureKiz: true } as any, user))
