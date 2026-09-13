@@ -8,6 +8,13 @@ const number = (value: number) => value.toLocaleString('ru-RU');
 const time = (value: string) => new Date(value).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' });
 
 export function OperationsStatisticsPanel({ session }: { session: AuthSession }) {
+  // FIX: discard old report, filters and pending jobs when identity/access changes.
+  const scopeKey = JSON.stringify([session.accessToken, session.user]);
+  return <ScopedOperationsStatisticsPanel key={scopeKey} session={session} />;
+}
+
+function ScopedOperationsStatisticsPanel({ session }: { session: AuthSession }) {
+  const isClient = session.user.roleCodes.includes('CLIENT');
   const [clients, setClients] = useState<ClientSummary[]>([]), [branches, setBranches] = useState<BranchSummary[]>([]);
   const [clientId, setClientId] = useState(''), [branchId, setBranchId] = useState(''), [marketplace, setMarketplace] = useState('');
   const [dateFrom, setDateFrom] = useState(() => moscowDay(new Date(Date.now() - 6 * 86_400_000)));
@@ -41,11 +48,13 @@ export function OperationsStatisticsPanel({ session }: { session: AuthSession })
   }, [refresh?.id, refreshRunning, session.accessToken]);
   useEffect(() => {
     let active = true;
+    // FIX: clients use server-assigned scope and never request staff directories.
+    if (isClient) return;
     Promise.all([fetchClients(session.accessToken), fetchBranches(session.accessToken)]).then(([c, b]) => {
       if (active) { setClients(c); setBranches(b); setOptionsError(''); }
     }).catch(() => { if (active) setOptionsError('Не удалось загрузить фильтры. Обновите страницу.'); });
     return () => { active = false; };
-  }, [session.accessToken]);
+  }, [session.accessToken, isClient]);
   useEffect(() => {
     let active = true, loading = false;
     setData(null);
@@ -70,10 +79,10 @@ export function OperationsStatisticsPanel({ session }: { session: AuthSession })
       <button type="button" disabled={starting || refreshRunning || marketplace === 'OZON' || !dateFrom || !dateTo} onClick={() => void refreshMarketplace()}>
         {starting || refreshRunning ? 'Проверяю WB…' : 'Получить даты и статусы WB'}</button></header>
     <div className="ops-statistics__filters">
-      <label>Клиент<select value={clientId} onChange={e => setClientId(e.target.value)}><option value="">Все доступные клиенты</option>
+      {!isClient && <><label>Клиент<select value={clientId} onChange={e => setClientId(e.target.value)}><option value="">Все доступные клиенты</option>
         {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
       <label>Филиал<select value={branchId} onChange={e => setBranchId(e.target.value)}><option value="">Все доступные филиалы</option>
-        {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select></label>
+        {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select></label></>}
       <label>Маркетплейс<select value={marketplace} onChange={e => setMarketplace(e.target.value)}><option value="">WB и Ozon</option>
         <option value="WILDBERRIES">Wildberries</option><option value="OZON">Ozon</option></select></label>
       <label>Заказы созданы с<input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></label>

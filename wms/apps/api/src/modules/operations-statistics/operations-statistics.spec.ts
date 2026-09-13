@@ -101,8 +101,52 @@ describe('operations statistics // TEST', () => {
     await expect(service.report({ ...filter, branchId: 'foreign' }, limited)).rejects.toThrow('Филиал недоступен');
     expect(db.warehouse.findMany).not.toHaveBeenCalled();
   });
-  it.each([{ roleCodes: ['CLIENT'] }, { isDemo: true }])('rejects client/demo access %j', async patch => {
+  it.each([{ isDemo: true }])('rejects demo access %j', async patch => {
     await expect(setup().service.report(filter, { ...user, ...patch })).rejects.toThrow('сотрудникам');
+  });
+  // TEST: client statistics cannot inherit global staff privileges or arbitrary client IDs.
+  const customer = { ...user, id: 'customer', roleCodes: ['CLIENT'], permissionCodes: ['stock:read'],
+    clientScopeMode: 'LIMITED' as const, clientIds: ['client'], warehouseIds: [] };
+  it('allows a client without staff branch grants and scopes every report query', async () => {
+    const { service, db } = setup();
+    const report = await service.report({ dateFrom: filter.dateFrom, dateTo: filter.dateTo }, customer);
+    expect(report.summary.total).toBe(1);
+    expect(db.clientMarketplaceConnection.findMany.mock.calls[0][0].where.clientId).toEqual({ in: ['client'] });
+    expect(db.warehouse.findMany.mock.calls[0][0].where.id).toEqual({ in: ['msk'] });
+    expect(db.fbsOrderRequestLink.findMany.mock.calls[0][0].where).toMatchObject({ clientId: { in: ['client'] }, request: { clientId: { in: ['client'] } } });
+    expect(db.operationsStatisticsFact.findMany.mock.calls[0][0].where.clientId).toEqual({ in: ['client'] });
+  });
+  it('rejects a forged clientId despite ALL mode and system:admin on a CLIENT role', async () => {
+    const { service, db } = setup();
+    await expect(service.scope({ ...filter, clientId: 'foreign' }, { ...customer, clientScopeMode: 'ALL', permissionCodes: ['system:admin'] })).rejects.toThrow('клиента');
+    expect(db.clientMarketplaceConnection.findMany).not.toHaveBeenCalled();
+  });
+  it('fails closed for unassigned or hidden client identities', async () => {
+    for (const patch of [{ clientIds: [] }, { hiddenClientIds: ['client'] }]) {
+      const { service, db } = setup();
+      await expect(service.scope(filter, { ...customer, ...patch })).rejects.toThrow();
+      expect(db.clientMarketplaceConnection.findMany).not.toHaveBeenCalled();
+    }
+  });
+  it('allows only branches serving the own client, not a forged staff warehouse grant', async () => {
+    const { service, db } = setup();
+    await expect(service.scope({ ...filter, branchId: 'foreign' }, { ...customer, warehouseIds: ['foreign'] })).rejects.toThrow('Филиал недоступен');
+    expect(db.warehouse.findMany).not.toHaveBeenCalled();
+    await expect(service.scope({ ...filter, branchId: 'msk' }, customer)).resolves.toMatchObject({ clientFilter: 'client' });
+  });
+  // TEST: client branch derivation honors explicit exclusions and alternative routes.
+  it.each([
+    { mode: 'EXCLUDED', executionWarehouseId: 'ng', expected: [] },
+    { mode: 'BRANCH', executionWarehouseId: 'ng', expected: ['ng'] },
+    { mode: 'BRANCH', executionWarehouseId: null, expected: [] },
+    { mode: 'CENTRAL', executionWarehouseId: 'ng', expected: ['msk'] },
+  ])('derives own branches for $mode / $executionWarehouseId', async ({ mode, executionWarehouseId, expected }) => {
+    const { service, db } = setup();
+    const connection = (await db.clientMarketplaceConnection.findMany())[0];
+    db.clientMarketplaceConnection.findMany.mockResolvedValue([{ ...connection,
+      fbsWarehouseRoutes: [{ marketplaceWarehouseId: 'seller1', mode, executionWarehouseId }] } as never]);
+    await service.scope(filter, customer);
+    expect(db.warehouse.findMany.mock.calls[0][0].where.id).toEqual({ in: expected });
   });
   it('reads all pages rather than silently truncating the first 500 orders', async () => {
     const { service, db } = setup();

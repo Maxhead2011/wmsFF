@@ -92,7 +92,7 @@ export type WorkspaceNavItem = {
 export const workspaceNav: WorkspaceNavItem[] = [
   { id: 'operations-statistics', title: 'Статистика', eyebrow: 'Склад и операции',
     description: 'Время от заказа до передачи в доставку, по клиентам, филиалам и складам WB/Ozon.',
-    permissions: ['stock:read'], icon: BarChart3, status: 'ready', audience: 'internal' },
+    permissions: ['stock:read'], icon: BarChart3, status: 'ready', audience: 'all' }, // FIX: API restricts CLIENT to own statistics.
   {
     id: 'overview',
     title: 'Обзор',
@@ -480,7 +480,7 @@ export const workspaceNav: WorkspaceNavItem[] = [
 
 export function canOpenWorkspace(user: AuthUser, item: WorkspaceNavItem) {
   // FIX: preserve statistics scope alongside the deployed admin monitoring opt-in.
-  if (item.id === 'operations-statistics' && (user.isDemo || user.roleCodes.includes('CLIENT'))) return false;
+  if (item.id === 'operations-statistics' && user.isDemo) return false;
   // FIX: monitoring is available to ADMIN on opted-in installations, including
   // accounts with a stale per-user visibility override. Other menus are unchanged.
   if (item.id === 'monitoring' && import.meta.env.VITE_ADMIN_MONITORING_ENABLED === 'true'
