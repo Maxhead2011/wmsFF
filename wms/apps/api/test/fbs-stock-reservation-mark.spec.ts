@@ -141,3 +141,92 @@ describe('FBS stock reservation ProductMark synchronization', () => {
     });
   });
 });
+
+// TEST: real accepted-pick service, simulated transactional storage; no live DB/WB.
+describe('FBS exact KIZ source at physical pick', () => {
+  afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+
+  function fixture(options: { wrongBox?: boolean; missing?: boolean; quantity?: number; loseMark?: boolean } = {}) {
+    vi.stubEnv('WMS_FBS_PRESERVE_STOCK_KIZ', 'true');
+    vi.stubEnv('WMS_PERMANENT_STORAGE_BOXES_ENABLED', 'true');
+    const current = { ...task, boxCode: 'FFL_LKBBOX_016', status: 'IN_PROGRESS', wbMetaStatus: 'ACCEPTED' };
+    let state = {
+      available: options.quantity ?? 2, packing: 0,
+      marks: [
+        ...(!options.missing ? [{ clientId: task.clientId, skuId: task.skuId, value: task.kiz,
+          boxId: options.wrongBox ? 'other-box' : task.boxId, status: 'AVAILABLE' }] : []),
+        { clientId: task.clientId, skuId: task.skuId, value: 'other-physical-kiz', boxId: task.boxId, status: 'AVAILABLE' },
+      ] as Array<Record<string, any>>,
+      movements: [] as Array<Record<string, any>>,
+    };
+    const matches = (row: Record<string, any>, where: Record<string, any>) =>
+      Object.entries(where).every(([key, value]) => row[key] === value);
+    const tx = {
+      fbsTsdAssembly: { findUnique: vi.fn(async () => current) },
+      clientRequest: { findUnique: vi.fn(async () => ({ warehouseId: 'warehouse-1' })) },
+      stockMovement: {
+        findMany: vi.fn(async () => state.movements.filter(m => m.status === 'PACKING')),
+        create: vi.fn(async ({ data }: any) => { state.movements.push(data); return data; }),
+      },
+      box: { findUnique: vi.fn(async () => ({ id: task.boxId, code: current.boxCode, warehouseId: 'warehouse-1', palletId: null })) },
+      stockBalance: {
+        findMany: vi.fn(async () => state.available > 0 ? [{ id: 'balance-1', quantity: state.available,
+          warehouseId: 'warehouse-1', boxId: task.boxId, palletId: null }] : []),
+        update: vi.fn(async ({ data }: any) => { state.available -= data.quantity.decrement; }),
+        delete: vi.fn(async () => { state.available = 0; }),
+        upsert: vi.fn(async ({ update }: any) => { state.packing += update.quantity.increment; }),
+      },
+      productMark: {
+        findFirst: vi.fn(async ({ where }: any) => state.marks.find(m => matches(m, where)) ?? null),
+        updateMany: vi.fn(async ({ where, data }: any) => {
+          if (options.loseMark) return { count: 0 };
+          const rows = state.marks.filter(m => matches(m, where));
+          rows.forEach(m => Object.assign(m, data));
+          return { count: rows.length };
+        }),
+      },
+    };
+    const prisma = { $transaction: async (fn: (t: typeof tx) => Promise<void>) => {
+      const before = structuredClone(state);
+      try { await fn(tx); } catch (error) { state = before; throw error; }
+    } };
+    const service = new MarketplaceConnectionsService(prisma as never, {} as never);
+    Object.assign(service, { boxCodes: { getPolicy: async () => ({ storageBoxPrefix: 'SBOX_', storageBoxAliases: ['FFL_LKBBOX'] }), normalize: async (code: string) => code } });
+    return { tx, state: () => structuredClone(state), pick: () => (service as any).reserveAcceptedWildberriesStock(current) };
+  }
+
+  it.each([{ missing: true }, { wrongBox: true }])('rejects a missing or foreign-box KIZ without consuming another unit: %j', async options => {
+    const f = fixture(options), before = f.state();
+    await expect(f.pick()).rejects.toThrow('КИЗ не найден в доступном остатке выбранного короба');
+    expect(f.state()).toEqual(before);
+    expect(f.tx.stockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('moves only the scanned KIZ and one unit to packing; retry does not consume again', async () => {
+    const f = fixture();
+    await f.pick();
+    expect(f.state()).toMatchObject({ available: 1, packing: 1, marks: [
+      { value: task.kiz, boxId: null, status: 'PACKING' },
+      { value: 'other-physical-kiz', boxId: task.boxId, status: 'AVAILABLE' },
+    ] });
+    expect(f.tx.productMark.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ value: task.kiz, boxId: task.boxId, status: 'AVAILABLE' }),
+    }));
+    const picked = f.state();
+    await f.pick();
+    expect(f.state()).toEqual(picked);
+  });
+
+  it('does not invent packed stock for a KIZ whose source has zero balance', async () => {
+    const f = fixture({ quantity: 0 }), before = f.state();
+    await expect(f.pick()).rejects.toThrow('Недостаточно доступного остатка');
+    expect(f.state()).toEqual(before);
+    expect(f.tx.stockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('rolls back balance and movements when the exact KIZ update no longer matches', async () => {
+    const f = fixture({ loseMark: true }), before = f.state();
+    await expect(f.pick()).rejects.toThrow('КИЗ изменился во время списания');
+    expect(f.state()).toEqual(before);
+  });
+});

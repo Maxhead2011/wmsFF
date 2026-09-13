@@ -9,7 +9,8 @@ function checkedAdaptation(name: string) {
   if (process.env.WMS_TEST_OUR_LIVE_BASELINE !== 'true') return adaptDesired(text, name);
   // TEST: live code is already transformed. Require the exact output of the approved Git adapter.
   const expected: Record<string, string> = {
-    reserveCompletedWildberriesStock: '1bcfcb8bee6736784f795d7d8881a231f008f74c14eb4b9ccf5535fd96f063d4',
+    // TEST: exact-source KIZ protection plus the unchanged live storage adaptations.
+    reserveCompletedWildberriesStock: 'bb73aa48d6ede7051281582f1a43d8c19916be067ed0aeae6c79c55adb4083e1',
     returnCompletedWildberriesStockReservation: '894edcc3343d307ab4a78d34063cb5a03f3fb83066acd2105c5eb9651020bb08',
   };
   expect(createHash('sha256').update(text).digest('hex')).toBe(expected[name]);

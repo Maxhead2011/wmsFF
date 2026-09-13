@@ -668,6 +668,30 @@ describe('FBS local stock KIZ preservation', () => {
     expectNoAcceptance(f);
   });
 
+  // TEST: receipt/movement/count evidence must survive; the real unit remains collectable.
+  it.each(['TSD_RECEIPT', 'TSD_STORAGE_BOX_KIZ_REGISTERED', 'PALLET_SORTING', 'INVENTORY_KIZ_SCAN'])(
+    'preserves %s evidence and accepts the original KIZ after rejecting a foreign scan', async (action) => {
+      vi.stubEnv('WMS_FBS_PRESERVE_STOCK_KIZ', 'true');
+      const f = fullBox();
+      f.state.mark!.sourceDocument = `${action}: physical scan into FFL_TEST_001`;
+      f.state.audits.push({ action, entity: 'ProductMark', entityId: f.state.mark!.id,
+        payload: { kiz: FOREIGN_KIZ, boxCode: 'FFL_TEST_001', skuId: 'sku-1' } });
+      const originalMark = copy(f.state.mark!);
+      const evidence = copy(f.state.audits);
+      await expect(f.scan()).rejects.toThrow('Проверьте короб и выполните актуализацию');
+      expectPreserved(f, originalMark);
+      expect(f.state.audits).toEqual(evidence);
+
+      f.state.remote = [FOREIGN_KIZ];
+      const result = await f.service.scanFbsTsdKiz('task-1', { kiz: FOREIGN_KIZ }, user);
+      expect(result).toMatchObject({ task: { kiz: FOREIGN_KIZ, wbMetaStatus: 'ACCEPTED' } });
+      expect(f.state.mark).toEqual(originalMark);
+      expect(f.state.audits.slice(0, evidence.length)).toEqual(evidence);
+      expect(f.reserve).toHaveBeenCalledOnce();
+      expect(f.state.wbWrites).toEqual([]);
+    },
+  );
+
   it('still registers a missing KIZ when an unmarked unit exists', async () => {
     vi.stubEnv('WMS_FBS_PRESERVE_STOCK_KIZ', 'true');
     const f = fixture({ registeredMark: false });

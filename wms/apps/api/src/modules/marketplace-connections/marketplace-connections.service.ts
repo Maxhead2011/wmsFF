@@ -14023,15 +14023,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       (total, movement) => total + movement.quantity,
       0,
     );
+    // FIX: a new physical pick must consume this exact KIZ from this exact source.
+    const preserveStockKiz = process.env.WMS_FBS_PRESERVE_STOCK_KIZ === 'true';
     const syncProductMarkToPacking = async () => {
       if (!task.kiz) return;
       // FIX: the exact scanned KIZ follows the balance from AVAILABLE to PACKING.
-      await tx.productMark.updateMany({
+      const changed = await tx.productMark.updateMany({
         where: {
           clientId: task.clientId,
           skuId: task.skuId,
           value: task.kiz,
           status: StockStatus.AVAILABLE,
+          ...(preserveStockKiz ? { boxId: task.boxId } : {}),
         },
         data: {
           status: StockStatus.PACKING,
@@ -14039,6 +14042,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           boxId: permanentStorageBoxesEnabled() ? null : task.boxId,
         },
       });
+      if (preserveStockKiz && activeReservedQuantity < quantity && changed.count !== 1) {
+        throw new BadRequestException('КИЗ изменился во время списания. Обновите задание и проверьте короб.');
+      }
     };
     if (activeReservedQuantity >= quantity) {
       await syncProductMarkToPacking();
@@ -14053,6 +14059,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       ? movementPrefix
       : `${movementPrefix}:attempt-${reserveAttempt}`;
     const quantityToReserve = quantity - Math.max(0, activeReservedQuantity);
+    if (preserveStockKiz && task.kiz) {
+      const physicalMark = await tx.productMark.findFirst({
+        where: { clientId: task.clientId, skuId: task.skuId, value: task.kiz,
+          boxId: task.boxId, status: StockStatus.AVAILABLE },
+        select: { id: true },
+      });
+      if (!physicalMark) {
+        throw new BadRequestException('КИЗ не найден в доступном остатке выбранного короба. Проверьте короб и выполните актуализацию с администратором.');
+      }
+    }
     const box = task.boxId
       ? await tx.box.findUnique({
           where: { id: task.boxId },
@@ -14076,6 +14092,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       },
       orderBy: { updatedAt: 'asc' },
     });
+    // FIX: a KIZ alone cannot create missing stock during a physical pick.
+    if (preserveStockKiz && task.kiz &&
+        availableBalances.reduce((sum, balance) => sum + balance.quantity, 0) < quantityToReserve) {
+      throw new BadRequestException('Недостаточно доступного остатка в выбранном коробе. Проверьте короб и выполните актуализацию с администратором.');
+    }
     const balanceWarehouseId = requireFbsBalanceWarehouseId(
       availableBalances[0]?.warehouseId ?? box?.warehouseId ?? requestWarehouseId,
     );
