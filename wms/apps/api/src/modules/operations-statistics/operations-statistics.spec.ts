@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { OperationsStatisticsService, observation, statisticsPeriod } from './operations-statistics.service';
+import { OperationsStatisticsService, observation, servicedBranch, statisticsPeriod } from './operations-statistics.service';
 import { ClientScopeService } from '../auth/client-scope.service';
 import type { AuthUser } from '../auth/auth.types';
 
@@ -7,6 +7,7 @@ const user = { roleCodes: ['ADMIN'], permissionCodes: ['system:admin'], isDemo: 
 const filter = { dateFrom: '2026-09-01', dateTo: '2026-09-03', clientId: 'client' };
 const makeLink = (id: string, patch: Record<string, unknown> = {}) => ({ id, marketplace: 'WILDBERRIES', connectionId: 'c1', orderId: id,
   clientId: 'client', orderPlacedAt: new Date('2026-09-01T00:00:00Z'), handedOverAt: null,
+  lastWbStatus: 'sorted', lastSupplierStatus: 'complete', lastSupplyId: 'supply1',
   sellerWarehouseId: 'seller1', sellerWarehouseName: 'WB Москва', lastCategory: 'shipped', lastSeenAt: new Date('2026-09-03T00:00:00Z'),
   createdAt: new Date('2026-09-01T02:00:00Z'), request: { warehouseId: 'msk' }, ...patch });
 function setup(links = [makeLink('1')]) {
@@ -17,15 +18,56 @@ function setup(links = [makeLink('1')]) {
     fbsSupplyPlan: { findMany: vi.fn().mockResolvedValue([{ id: 's1', connectionId: 'c1', orderIds: ['1', '2'], sentToWbAt: new Date('2026-09-01T14:00:00Z'), marketplaceWarehouseId: 'seller1', marketplaceWarehouseName: 'WB Москва' }]) },
     fbsOrderRequestLink: { findMany: vi.fn().mockResolvedValue(links) },
     fbsStockMonitorEvent: { findMany: vi.fn().mockResolvedValue([]) },
+    operationsStatisticsFact: { findMany: vi.fn().mockResolvedValue([{ marketplace: 'WILDBERRIES', connectionId: 'c1', orderId: '1',
+      clientId: 'client', orderPlacedAt: null, sellerWarehouseId: 'seller1', supplyId: 'supply1', supplyScannedAt: new Date('2026-09-01T14:00:00Z'),
+      wbStatus: links.find(l => l.orderId === '1')?.lastCategory === 'cancelled' ? 'canceled_by_client' : 'sorted',
+      supplierStatus: 'complete', requiresReshipment: false, checkedAt: new Date('2026-09-03T00:00:00Z') }]) },
   };
   return { db, service: new OperationsStatisticsService(db as never, new ClientScopeService()) };
 }
 describe('operations statistics // TEST', () => {
-  it('groups by branch then seller and preserves zero branches; 14h is yellow', async () => {
+  it('respects automatic routing but never overrides exclusions or broken branch rules', () => {
+    const c = { fbsWarehouseId: 'default', fbsExecutionWarehouseId: 'msk', fbsAutoRouteNewWarehouses: false,
+      fbsWarehouseRoutes: [{ marketplaceWarehouseId: 'excluded', mode: 'EXCLUDED', executionWarehouseId: 'ng' },
+        { marketplaceWarehouseId: 'broken', mode: 'BRANCH', executionWarehouseId: null }] };
+    expect(servicedBranch(c, 'outside')).toBeNull();
+    expect(servicedBranch(c, 'default')).toBe('msk');
+    expect(servicedBranch({ ...c, fbsAutoRouteNewWarehouses: true }, 'new')).toBe('msk');
+    expect(servicedBranch({ ...c, fbsAutoRouteNewWarehouses: true }, 'excluded')).toBeNull();
+    expect(servicedBranch(c, 'broken')).toBeNull();
+    expect(servicedBranch(c, null)).toBeNull();
+  });
+  it('groups by branch then seller and hides branches without serviced warehouses; 14h is yellow', async () => {
     const { service } = setup(); const r = await service.report(filter, user);
     expect(r.summary.buckets[1]).toMatchObject({ count: 1, percent: 100 });
     expect(r.branches[0].warehouses[0].summary.total).toBe(1);
-    expect(r.branches[1].summary.total).toBe(0);
+    expect(r.branches.map(b => b.id)).toEqual(['msk']);
+  });
+  // TEST: an old WMS request must not reintroduce an excluded or unconfigured seller warehouse.
+  it('only includes serviced warehouses and honors explicit exclusions over the default', async () => {
+    const { service, db } = setup([
+      makeLink('1'), makeLink('2', { sellerWarehouseId: 'excluded', orderPlacedAt: null }),
+      makeLink('3', { sellerWarehouseId: 'outside' }), makeLink('4', { sellerWarehouseId: null }),
+    ]);
+    const connection = (await db.clientMarketplaceConnection.findMany())[0];
+    db.clientMarketplaceConnection.findMany.mockResolvedValue([{ ...connection, fbsWarehouseId: 'excluded',
+      fbsWarehouseRoutes: [
+        { marketplaceWarehouseId: 'seller1', marketplaceWarehouseName: 'Наш склад', mode: 'CENTRAL', executionWarehouseId: null },
+        { marketplaceWarehouseId: 'excluded', marketplaceWarehouseName: 'Чужой склад', mode: 'EXCLUDED', executionWarehouseId: 'msk' },
+      ] } as never]);
+    const r = await service.report(filter, user);
+    expect(r.summary.total).toBe(1);
+    expect(r.missingOrderDate).toBe(0);
+    expect(r.branches.flatMap(b => b.warehouses).map(w => w.name)).toEqual(['Наш склад']);
+  });
+  it('uses BRANCH routing without falling back to the central warehouse', async () => {
+    const { service, db } = setup([makeLink('1', { request: { warehouseId: 'ng' } })]);
+    const connection = (await db.clientMarketplaceConnection.findMany())[0];
+    db.clientMarketplaceConnection.findMany.mockResolvedValue([{ ...connection,
+      fbsWarehouseRoutes: [{ marketplaceWarehouseId: 'seller1', marketplaceWarehouseName: 'Наш Ногинск', mode: 'BRANCH', executionWarehouseId: 'ng' }] } as never]);
+    const r = await service.report(filter, user);
+    expect(r.branches.map(b => b.id)).toEqual(['ng']);
+    expect(r.summary.total).toBe(1);
   });
   it('excludes cancellations; delivered orders without a delivery timestamp are unknown, not pending', async () => {
     const { service } = setup([makeLink('1', { lastCategory: 'cancelled' }), makeLink('3')]);
@@ -69,13 +111,35 @@ describe('operations statistics // TEST', () => {
     expect((await service.report(filter, user)).summary.total).toBe(501);
     expect(db.fbsOrderRequestLink.findMany.mock.calls[1][0].skip).toBe(1);
   });
-  it('accepts exact Ozon delivery timestamp; never completedAt or label submission', async () => {
+  it('does not silently call Ozon in_process_at and electronic delivery a buyer-to-scan measurement', async () => {
     const { service, db } = setup([makeLink('3', { marketplace: 'OZON', handedOverAt: new Date('2026-09-01T18:00:00Z') })]);
     db.clientMarketplaceConnection.findMany.mockResolvedValue([{ id: 'c1', clientId: 'client', marketplace: 'OZON', accountName: 'Ozon',
       client: { name: 'Лукин' }, fbsWarehouseId: 'seller1', fbsWarehouseName: 'Ozon Москва', fbsExecutionWarehouseId: 'msk', fbsWarehouseRoutes: [] }]);
     db.fbsSupplyPlan.findMany.mockResolvedValue([]);
-    expect((await service.report(filter, user)).summary.buckets[2].count).toBe(1);
+    const report = await service.report(filter, user);
+    expect(report.summary.timedShipped).toBe(0);
+    expect(report.missingOrderDate).toBe(1);
     expect(observation(new Date('2026-09-02'), new Date('2026-09-01'), 'shipped', new Date('2026-09-03')).state).toBe('unknown');
+  });
+  it('ignores sentToWbAt and handedOverAt when there is no marketplace scan', async () => {
+    const { service, db } = setup([makeLink('1', { handedOverAt: new Date('2026-09-01T14:00:00Z') })]);
+    db.operationsStatisticsFact.findMany.mockResolvedValue([]);
+    const r = await service.report(filter, user);
+    expect(r.summary).toMatchObject({ timedShipped: 0, unknown: 1, acceptance: { confirmed: 1 } });
+    expect(db.fbsSupplyPlan.findMany).not.toHaveBeenCalled();
+  });
+  it('does not reuse the old supply scan after the order moved to another supply', async () => {
+    const { service } = setup([makeLink('1', { lastSupplyId: 'new-supply', lastWbStatus: 'waiting', lastSeenAt: new Date('2026-09-04T00:00:00Z') })]);
+    expect((await service.report(filter, user)).summary).toMatchObject({ timedShipped: 0, acceptance: { waiting: 1 } });
+  });
+  it('does not attach the stale warehouse name to the newly observed warehouse', async () => {
+    const { service, db } = setup();
+    const c = (await db.clientMarketplaceConnection.findMany())[0];
+    db.clientMarketplaceConnection.findMany.mockResolvedValue([{ ...c, fbsAutoRouteNewWarehouses: true } as never]);
+    const fact = (await db.operationsStatisticsFact.findMany())[0];
+    db.operationsStatisticsFact.findMany.mockResolvedValue([{ ...fact, sellerWarehouseId: 'new' }]);
+    const r = await service.report(filter, user);
+    expect(r.branches[0].warehouses.find(w => w.id === JSON.stringify(['c1', 'new']))?.name).toBe('Склад new');
   });
   it('validates Moscow midnight, invalid dates and maximum period', () => {
     expect(statisticsPeriod('2026-09-01', '2026-09-01').start.toISOString()).toBe('2026-08-31T21:00:00.000Z');

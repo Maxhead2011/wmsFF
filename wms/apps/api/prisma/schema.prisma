@@ -1657,6 +1657,27 @@ model SkuCollectionScan {
   @@index([sourceId, status])
 }
 
+// FIX: isolated reporting cache; never drives stock, assembly or marketplace mutations.
+model OperationsStatisticsFact {
+  id                 String          @id @default(uuid())
+  clientId           String
+  marketplace        MarketplaceType
+  connectionId       String
+  orderId            String
+  orderPlacedAt      DateTime?
+  sellerWarehouseId  String?
+  supplyId           String?
+  supplyScannedAt    DateTime?
+  supplierStatus     String?
+  wbStatus           String?
+  requiresReshipment Boolean?
+  checkedAt          DateTime
+  issue              String?
+
+  @@unique([marketplace, connectionId, orderId])
+  @@index([clientId, orderPlacedAt])
+}
+
 model FbsOrderRequestLink {
   id                 String          @id @default(uuid())
   clientId           String
