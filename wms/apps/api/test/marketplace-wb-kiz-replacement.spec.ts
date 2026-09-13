@@ -264,7 +264,7 @@ function fixture(options: Options = {}) {
     throw new Error('Unexpected mocked PUT body');
   });
   vi.stubGlobal('fetch', fetchMock);
-  return { state, prisma, reserve, fetchMock,
+  return { state, prisma, reserve, fetchMock, service,
     scan: () => {
       state.scanNumber++;
       state.scanReads = { status: 0, meta: 0 };
@@ -590,5 +590,100 @@ describe('scanFbsTsdKiz: safe automatic WB KIZ replacement', () => {
     expect(f.prisma.fbsTsdAssembly.updateMany).not.toHaveBeenCalled();
     expect(f.prisma.productMark.create).not.toHaveBeenCalled();
     expectNoAcceptance(f);
+  });
+});
+
+// TEST: box 016 regression. An unknown scan must not consume another unit's KIZ.
+describe('FBS local stock KIZ preservation', () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+
+  function fullBox() {
+    const f = fixture();
+    f.state.mark!.value = FOREIGN_KIZ;
+    f.prisma.stockBalance.aggregate.mockResolvedValue({ _sum: { quantity: 1 } });
+    return f;
+  }
+
+  function expectPreserved(f: Fixture, before: Row) {
+    expect(f.state.mark).toEqual(before);
+    expect(f.state.task.kiz).toBeNull();
+    expect(f.prisma.productMark.update).not.toHaveBeenCalled();
+    expect(f.prisma.productMark.create).not.toHaveBeenCalled();
+    expect(f.state.wbWrites).toEqual([]);
+    expectNoAcceptance(f);
+  }
+
+  it.each([1, 2])('rejects an unknown scan when %i marks already cover one available unit, including retries', async (count) => {
+    vi.stubEnv('WMS_FBS_PRESERVE_STOCK_KIZ', 'true');
+    const f = fullBox();
+    f.prisma.productMark.count.mockResolvedValue(count);
+    const before = copy(f.state.mark!);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(f.scan()).rejects.toThrow('Проверьте короб и выполните актуализацию');
+      expectPreserved(f, before);
+    }
+  });
+
+  it('rejects unknown scans with no stock and no candidate instead of creating an extra mark', async () => {
+    vi.stubEnv('WMS_FBS_PRESERVE_STOCK_KIZ', 'true');
+    const f = fixture({ registeredMark: false });
+    f.prisma.stockBalance.aggregate.mockResolvedValue({ _sum: { quantity: 0 } });
+    await expect(f.scan()).rejects.toThrow('Проверьте короб и выполните актуализацию');
+    expect(f.state.mark).toBeNull();
+    expect(f.prisma.productMark.create).not.toHaveBeenCalled();
+    expect(f.state.wbWrites).toEqual([]);
+    expectNoAcceptance(f);
+  });
+
+  it('preserves marks when restoring an already WB-accepted KIZ absent from a fully marked box', async () => {
+    vi.stubEnv('WMS_FBS_PRESERVE_STOCK_KIZ', 'true');
+    const f = fullBox();
+    const before = copy(f.state.mark!);
+    await expect((f.service as any).restoreAcceptedFbsKiz(copy(f.state.task), NEW_KIZ, user))
+      .rejects.toThrow('Проверьте короб и выполните актуализацию');
+    expectPreserved(f, before);
+  });
+
+  it('accepts an existing matching KIZ without changing its value', async () => {
+    vi.stubEnv('WMS_FBS_PRESERVE_STOCK_KIZ', 'true');
+    const f = fixture();
+    await f.scan();
+    expect(f.state.mark!.value).toBe(NEW_KIZ);
+    expect(f.prisma.productMark.update).not.toHaveBeenCalled();
+    expect(f.reserve).toHaveBeenCalledOnce();
+  });
+
+  it('blocks conflict recovery before WB writes when the box has no unmarked unit', async () => {
+    vi.stubEnv('WMS_FBS_PRESERVE_STOCK_KIZ', 'true');
+    const f = fullBox();
+    f.state.task.kiz = NEW_KIZ;
+    f.state.task.wbMetaStatus = 'REJECTED';
+    f.state.remote = [];
+    (f.service as any).clientScopes = { requireClientAccess: vi.fn() };
+    const before = copy({ task: f.state.task, mark: f.state.mark });
+    await expect(f.service.resolveFbsKizConflict('request-1', 'task-1', user))
+      .rejects.toThrow('Проверьте короб и выполните актуализацию');
+    expect({ task: f.state.task, mark: f.state.mark }).toEqual(before);
+    expect(f.state.wbWrites).toEqual([]);
+    expectNoAcceptance(f);
+  });
+
+  it('still registers a missing KIZ when an unmarked unit exists', async () => {
+    vi.stubEnv('WMS_FBS_PRESERVE_STOCK_KIZ', 'true');
+    const f = fixture({ registeredMark: false });
+    await f.scan();
+    expect(f.prisma.productMark.create).toHaveBeenCalledOnce();
+    expect(f.prisma.productMark.update).not.toHaveBeenCalled();
+    expect(f.reserve).toHaveBeenCalledOnce();
+  });
+
+  it.each(['false', undefined])('preserves sold WMS legacy behavior when flag is %s', async (flag) => {
+    vi.stubEnv('WMS_FBS_PRESERVE_STOCK_KIZ', flag);
+    const f = fullBox();
+    await f.scan();
+    expect(f.prisma.productMark.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ value: NEW_KIZ }),
+    }));
+    expect(f.reserve).toHaveBeenCalledOnce();
   });
 });

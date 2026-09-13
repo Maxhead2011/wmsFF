@@ -10535,6 +10535,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               },
             }),
           ]);
+          // FIX: another unit's registered KIZ is not evidence of a stale record.
+          this.assertFbsKizRegistrationCapacity(task, available._sum.quantity ?? 0, registeredMarks);
           if ((available._sum.quantity ?? 0) <= registeredMarks) {
             const usedMarkCandidates = await tx.fbsTsdAssembly.findMany({
               where: {
@@ -10932,6 +10934,26 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         requestId: task.requestId,
         message,
       };
+    }
+
+    // FIX: reject a local inventory discrepancy before conflict recovery writes to WB.
+    // restoreAcceptedFbsKiz repeats the capacity check inside its transaction.
+    if (process.env.WMS_FBS_PRESERVE_STOCK_KIZ === 'true') {
+      const existingMark = await this.prisma.productMark.findFirst({
+        where: { value: { equals: kiz, mode: Prisma.QueryMode.insensitive } },
+        select: { id: true },
+      });
+      if (!existingMark) {
+        const where = {
+          clientId: task.clientId, skuId: task.skuId,
+          boxId: task.boxId, status: StockStatus.AVAILABLE,
+        };
+        const [available, registeredMarks] = await Promise.all([
+          this.prisma.stockBalance.aggregate({ where, _sum: { quantity: true } }),
+          this.prisma.productMark.count({ where }),
+        ]);
+        this.assertFbsKizRegistrationCapacity(task, available._sum.quantity ?? 0, registeredMarks);
+      }
     }
 
     if (!alreadyAttachedToCurrentOrder) {
@@ -12759,6 +12781,20 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
+  // FIX: opt in only on our WMS; sold installations retain their configured workflow.
+  private assertFbsKizRegistrationCapacity(
+    task: Pick<FbsTsdAssemblyRecord, 'boxCode'>,
+    availableQuantity: number,
+    registeredMarks: number,
+  ) {
+    if (process.env.WMS_FBS_PRESERVE_STOCK_KIZ !== 'true' || availableQuantity > registeredMarks) return;
+    throw new BadRequestException(
+      `КИЗ не зарегистрирован в WMS, а в коробе ${task.boxCode ?? 'без номера'} ` +
+      'нет доступной единицы без записанного КИЗ. Проверьте короб и выполните актуализацию с администратором. ' +
+      'Замена существующего КИЗ и списание товара остановлены.',
+    );
+  }
+
   private async restoreAcceptedFbsKiz(
     task: FbsTsdAssemblyRecord,
     kiz: string,
@@ -12905,6 +12941,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             },
           }),
         ]);
+        // FIX: recovery must not bypass the same protection used by the scanner.
+        this.assertFbsKizRegistrationCapacity(task, available._sum.quantity ?? 0, registeredMarks);
         if ((available._sum.quantity ?? 0) > registeredMarks) {
           await tx.productMark.create({
             data: {
