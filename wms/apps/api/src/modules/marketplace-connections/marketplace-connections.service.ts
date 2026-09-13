@@ -29235,7 +29235,8 @@ async function marketplaceFetch(
   throw new Error('Не удалось выполнить запрос к маркетплейсу.');
 }
 
-async function marketplaceJson(url: string, init: RequestInit) {
+// FIX: reporting refresh shares the existing per-seller scheduler; it must not create an independent WB request queue.
+export async function marketplaceJson(url: string, init: RequestInit) {
   const readKey = wildberriesReadRequestKey(url, init);
   if (!readKey) {
     return marketplaceJsonUncached(url, init);

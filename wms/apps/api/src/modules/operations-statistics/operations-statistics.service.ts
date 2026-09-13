@@ -4,6 +4,7 @@ import { ClientScopeService } from '../auth/client-scope.service';
 import type { AuthUser } from '../auth/auth.types';
 import { OperationsStatisticsDto } from './operations-statistics.dto';
 import { summarizeOrders, type TimingObservation } from './order-timing';
+import { acceptanceObservation } from './acceptance';
 
 const key = (marketplace: string, connectionId: string, orderId: string) => JSON.stringify([marketplace, connectionId, orderId]);
 const DAY = 86_400_000;
@@ -46,8 +47,8 @@ export class OperationsStatisticsService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(ClientScopeService) private readonly scopes: ClientScopeService) {}
 
-  // FIX: read-only, client- and branch-scoped. Never call marketplace synchronization from a report.
-  async report(filter: OperationsStatisticsDto, user: AuthUser) {
+  // FIX: share identical read scopes with the isolated reporting-cache refresh.
+  async scope(filter: OperationsStatisticsDto, user: AuthUser) {
     if (user.roleCodes.includes('CLIENT') || user.isDemo) throw new ForbiddenException('Статистика доступна сотрудникам WMS.');
     const period = statisticsPeriod(filter.dateFrom, filter.dateTo), now = new Date();
     const admin = user.permissionCodes.includes('system:admin');
@@ -62,6 +63,12 @@ export class OperationsStatisticsService {
           fbsExecutionWarehouseId: true, fbsAutoRouteNewWarehouses: true, client: { select: { name: true } },
           fbsWarehouseRoutes: { select: { marketplaceWarehouseId: true, marketplaceWarehouseName: true, mode: true, executionWarehouseId: true } } } }),
     ]);
+    return { branches, connections, period, now, clientFilter };
+  }
+
+  // FIX: read-only; electronic delivery timestamps never substitute marketplace scans.
+  async report(filter: OperationsStatisticsDto, user: AuthUser) {
+    const { branches, connections, period, now, clientFilter } = await this.scope(filter, user);
     const branchIds = branches.map(b => b.id), connectionIds = connections.map(c => c.id);
     const connectionById = new Map(connections.map(c => [c.id, c]));
     type Seller = { id: string; name: string; clientName: string; accountName: string; marketplace: string; orders: TimingObservation[] };
@@ -80,23 +87,7 @@ export class OperationsStatisticsService {
         seller(c.fbsExecutionWarehouseId ?? '', c.id, c.fbsWarehouseId, c.fbsWarehouseName);
       }
     }
-    // WB delivery is recorded per supply. Match its exact order list, not SKU or display number.
-    const shipments = new Map<string, { at: Date; warehouseId: string | null; warehouseName: string | null }>();
-    let planCursor: string | undefined;
-    for (;;) {
-      const plans = await this.prisma.fbsSupplyPlan.findMany({ where: { connectionId: { in: connectionIds }, clientId: clientFilter,
-        marketplace: 'WILDBERRIES', sentToWbAt: { not: null, gte: period.start, lte: now } },
-        select: { id: true, connectionId: true, orderIds: true, sentToWbAt: true, marketplaceWarehouseId: true, marketplaceWarehouseName: true },
-        orderBy: { id: 'asc' }, take: 500, ...(planCursor ? { cursor: { id: planCursor }, skip: 1 } : {}) });
-      for (const plan of plans) for (const orderId of Array.isArray(plan.orderIds) ? plan.orderIds : []) {
-        if (typeof orderId !== 'string' && typeof orderId !== 'number') continue;
-        const k = key('WILDBERRIES', plan.connectionId, String(orderId)), previous = shipments.get(k);
-        if (!previous || plan.sentToWbAt! < previous.at) shipments.set(k, { at: plan.sentToWbAt!, warehouseId: plan.marketplaceWarehouseId, warehouseName: plan.marketplaceWarehouseName });
-      }
-      if (plans.length < 500) break;
-      planCursor = plans[plans.length - 1].id;
-    }
-    let cursor: string | undefined, missingOrderDate = 0, lastSyncedAt: Date | null = null;
+    let cursor: string | undefined, missingOrderDate = 0, lastSyncedAt: Date | null = null, oldestCheckedAt: Date | null = null, uncheckedOrders = 0;
     const totals: TimingObservation[] = [];
     for (;;) {
       const links = await this.prisma.fbsOrderRequestLink.findMany({ where: {
@@ -104,39 +95,58 @@ export class OperationsStatisticsService {
         request: { clientId: clientFilter, client: { isDemo: false }, warehouseId: { in: branchIds } },
         OR: [{ orderPlacedAt: { gte: period.start, lt: period.end } }, { orderPlacedAt: null }],
       }, select: { id: true, marketplace: true, connectionId: true, orderId: true, clientId: true, orderPlacedAt: true, handedOverAt: true,
-        sellerWarehouseId: true, sellerWarehouseName: true, lastCategory: true, lastSeenAt: true, createdAt: true,
+        sellerWarehouseId: true, sellerWarehouseName: true, lastCategory: true, lastSupplierStatus: true, lastWbStatus: true, lastSupplyId: true, lastSeenAt: true, createdAt: true,
         request: { select: { warehouseId: true } } }, orderBy: { id: 'asc' }, take: 500,
         ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}) });
       if (!links.length) break;
-      const events = links.some(l => !l.orderPlacedAt) ? await this.prisma.fbsStockMonitorEvent.findMany({ where: { clientId: clientFilter, eventType: 'SALE',
-        OR: links.filter(l => !l.orderPlacedAt).map(l => ({ marketplace: l.marketplace, connectionId: l.connectionId, orderId: l.orderId })) },
+      const facts = await this.prisma.operationsStatisticsFact.findMany({ where: { clientId: clientFilter,
+        OR: links.map(l => ({ marketplace: l.marketplace, connectionId: l.connectionId, orderId: l.orderId })) } });
+      const factByKey = new Map(facts.map(f => [key(f.marketplace, f.connectionId, f.orderId), f]));
+      const events = links.some(l => !l.orderPlacedAt || !l.sellerWarehouseId) ? await this.prisma.fbsStockMonitorEvent.findMany({ where: { clientId: clientFilter, eventType: 'SALE',
+        OR: links.filter(l => !l.orderPlacedAt || !l.sellerWarehouseId).map(l => ({ marketplace: l.marketplace, connectionId: l.connectionId, orderId: l.orderId })) },
         select: { marketplace: true, connectionId: true, orderId: true, saleAt: true, marketplaceWarehouseId: true, marketplaceWarehouseName: true }, orderBy: { saleAt: 'asc' } }) : [];
       const origins = new Map<string, typeof events[number]>();
       for (const event of events) { const k = key(event.marketplace, event.connectionId, event.orderId); if (!origins.has(k)) origins.set(k, event); }
       for (const link of links) {
         const k = key(link.marketplace, link.connectionId, link.orderId), origin = origins.get(k);
-        const shipment = shipments.get(k);
-        const warehouseId = link.sellerWarehouseId ?? origin?.marketplaceWarehouseId ?? shipment?.warehouseId ?? null;
+        const fact = factByKey.get(k);
+        const warehouseId = fact?.sellerWarehouseId ?? link.sellerWarehouseId ?? origin?.marketplaceWarehouseId ?? null;
         const connection = connectionById.get(link.connectionId);
         if (!connection || !groups.has(servicedBranch(connection, warehouseId) ?? '')) continue;
-        const placed = link.orderPlacedAt ?? origin?.saleAt;
+        // Ozon in_process_at is not the buyer's order creation time. Do not mix it into this KPI.
+        const placed = fact?.orderPlacedAt ?? (link.marketplace === 'WILDBERRIES' ? link.orderPlacedAt ?? origin?.saleAt : null);
         // Unknown dates cannot be assigned to an order-date cohort. Report separately, never fabricate durations.
         if (!placed) { missingOrderDate++; continue; }
         if (placed < period.start || placed >= period.end) continue;
-        const row = observation(placed, link.handedOverAt ?? shipment?.at ?? null, link.lastCategory, now);
+        const newerLink = !!fact && !!link.lastSeenAt && link.lastSeenAt > fact.checkedAt;
+        const supplyChanged = newerLink && link.lastSupplyId !== fact?.supplyId;
+        const row = acceptanceObservation(placed, {
+          supplierStatus: newerLink ? link.lastSupplierStatus : fact?.supplierStatus ?? link.lastSupplierStatus,
+          wbStatus: newerLink ? link.lastWbStatus : fact?.wbStatus ?? link.lastWbStatus,
+          requiresReshipment: fact?.requiresReshipment,
+          supplyScannedAt: supplyChanged ? null : fact?.supplyScannedAt,
+        }, now);
         const branch = groups.get(link.request.warehouseId!);
         if (!branch) continue;
+        // FIX: a fresh warehouse ID must never inherit another warehouse's stale label.
+        const warehouseName = connection.fbsWarehouseRoutes.find(r => r.marketplaceWarehouseId === warehouseId)?.marketplaceWarehouseName
+          ?? (connection.fbsWarehouseId === warehouseId ? connection.fbsWarehouseName : null)
+          ?? (link.sellerWarehouseId === warehouseId ? link.sellerWarehouseName : null)
+          ?? (origin?.marketplaceWarehouseId === warehouseId ? origin.marketplaceWarehouseName : null);
         const s = seller(branch.id, link.connectionId, warehouseId,
-          link.sellerWarehouseName ?? origin?.marketplaceWarehouseName ?? shipment?.warehouseName ?? null);
+          warehouseName);
         if (!s) continue;
         branch.orders.push(row); s.orders.push(row); totals.push(row);
-        if (link.lastSeenAt && (!lastSyncedAt || link.lastSeenAt > lastSyncedAt)) lastSyncedAt = link.lastSeenAt;
+        if (!fact) uncheckedOrders++;
+        if (fact && (!oldestCheckedAt || fact.checkedAt < oldestCheckedAt)) oldestCheckedAt = fact.checkedAt;
+        if (fact && (!lastSyncedAt || fact.checkedAt > lastSyncedAt)) lastSyncedAt = fact.checkedAt;
       }
       if (links.length < 500) break;
       cursor = links[links.length - 1].id;
     }
     return { period: { dateFrom: filter.dateFrom, dateTo: filter.dateTo, basis: 'order-created' as const, timezone: 'Europe/Moscow' },
-      generatedAt: now.toISOString(), lastSyncedAt: lastSyncedAt?.toISOString() ?? null, missingOrderDate,
+      generatedAt: now.toISOString(), lastSyncedAt: lastSyncedAt?.toISOString() ?? null, oldestCheckedAt: oldestCheckedAt?.toISOString() ?? null,
+      uncheckedOrders, missingOrderDate, timingDefinition: 'marketplace-acceptance' as const,
       summary: summarizeOrders(totals), branches: [...groups.values()].filter(b => b.sellers.size > 0).map(b => ({ id: b.id, name: b.name, summary: summarizeOrders(b.orders),
         warehouses: [...b.sellers.values()].map(({ orders, ...s }) => ({ ...s, summary: summarizeOrders(orders) })) })) };
   }

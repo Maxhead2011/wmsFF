@@ -7644,17 +7644,29 @@ export async function compareAdministrationWbStockApi(
   });
 }
 
-// FIX: read-only order-to-delivery statistics; dates are marketplace dates, not assembly dates.
+// FIX: order-to-scan timing and independent acceptance; no assembly dates or electronic delivery substitutes.
 export type OperationsStatisticsSummary = {
   total: number; timedShipped: number; pending: number; pendingOver24h: number; cancelled: number; unknown: number;
   averageHours: number | null; buckets: Array<{ label: string; color: string; count: number; percent: number }>;
+  acceptance: { confirmed: number; waiting: number; reshipment: number; cancelled: number; unknown: number };
+  timingSources: { orderScan: number; supplyScan: number };
 };
 export type OperationsStatisticsReport = {
   period: { dateFrom: string; dateTo: string; basis: 'order-created'; timezone: string };
   generatedAt: string; lastSyncedAt: string | null; missingOrderDate: number; summary: OperationsStatisticsSummary;
+  oldestCheckedAt: string | null; uncheckedOrders: number; timingDefinition: 'marketplace-acceptance';
   branches: Array<{ id: string; name: string; summary: OperationsStatisticsSummary;
     warehouses: Array<{ id: string; name: string; clientName: string; accountName: string; marketplace: string; summary: OperationsStatisticsSummary }> }>;
 };
+export type StatisticsRefresh = { id: string; status: 'running' | 'complete' | 'partial' | 'failed'; ordersUpdated: number;
+  connectionsDone: number; errors: string[]; startedAt: string; finishedAt: string | null };
+export function startStatisticsRefresh(accessToken: string, filter: { dateFrom: string; dateTo: string; clientId?: string; branchId?: string; marketplace?: string }) {
+  return request<StatisticsRefresh>('/operations-statistics/refreshes', { accessToken, method: 'POST',
+    body: Object.fromEntries(Object.entries(filter).filter(([, value]) => value !== '')) });
+}
+export function fetchStatisticsRefresh(accessToken: string, id: string) {
+  return request<StatisticsRefresh>(`/operations-statistics/refreshes/${encodeURIComponent(id)}`, { accessToken });
+}
 export function fetchOperationsStatistics(accessToken: string, filter: {
   dateFrom: string; dateTo: string; clientId?: string; branchId?: string; marketplace?: string;
 }) {
