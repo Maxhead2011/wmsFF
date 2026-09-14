@@ -316,6 +316,34 @@ async function expectStale(f: Fixture) {
   expectNoAcceptance(f);
 }
 
+describe('physical KIZ relabel entry', () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+  it('keeps an audit preparation scan from attaching an unused KIZ to WB', async () => {
+    // TEST: the audit button is registration-only, even if a picker scans a code with no WB history.
+    vi.stubEnv('WMS_FBS_KIZ_RELABEL_ENABLED', 'true');
+    const f=fixture();
+    await expect(f.service.scanFbsTsdKiz('task-1',{kiz:NEW_KIZ,prepareKizRelabelOnly:true,supportsKizRelabel:true},user)).rejects.toThrow('нет истории');
+    expect(f.state.wbWrites).toEqual([]);expect(f.reserve).not.toHaveBeenCalled();
+  });
+  it('asks an older TSD to update rather than returning an unsupported relabel screen', async () => {
+    vi.stubEnv('WMS_FBS_KIZ_RELABEL_ENABLED', 'true');
+    const f=fixture({history:'ASSEMBLY'});
+    await expect(f.service.scanFbsTsdKiz('task-1',{kiz:NEW_KIZ},user)).rejects.toThrow('обновите приложение');
+    expect(f.state.wbWrites).toEqual([]);expect(f.prisma.productMark.update).not.toHaveBeenCalled();
+  });
+  it('offers explicit replacement of the scanned source KIZ previously used in WB to a regular picker', async () => {
+    // TEST: Marifat's valid physical source was rejected before a replacement could be recorded.
+    vi.stubEnv('WMS_FBS_KIZ_RELABEL_ENABLED', 'true');
+    const f = fixture({history: 'ASSEMBLY'});
+    const proposal = {state: 'CONFIRM_KIZ_RELABEL', kizRelabelProposal: {id: 'proposal', oldKiz: NEW_KIZ}};
+    (f.service as any).proposeFbsPhysicalKizRelabel = vi.fn().mockResolvedValue(proposal);
+    const result = await f.service.scanFbsTsdKiz('task-1', {kiz: NEW_KIZ, supportsKizRelabel: true}, user);
+    expect(result).toEqual(proposal);
+    expect(f.state.wbWrites).toEqual([]);
+    expect(f.reserve).not.toHaveBeenCalled();
+  });
+});
+
 describe('scanFbsTsdKiz: safe automatic WB KIZ replacement', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 

@@ -8,6 +8,8 @@ public class TsdFbsAssemblyResponse {
     public Task task;
     public Progress progress;
     public KizMoveProposal kizMoveProposal;
+    // FIX: an explicit physical replacement remains scoped to its server proposal.
+    public KizRelabelProposal kizRelabelProposal;
     public PalletScan palletScan;
 
     public static class Task {
@@ -94,6 +96,12 @@ public class TsdFbsAssemblyResponse {
         public String toBoxCode;
         public String productName;
         public String article;
+    }
+
+    public static class KizRelabelProposal {
+        public String id;
+        public String oldKiz;
+        public String boxCode;
     }
 
     public static class Client {

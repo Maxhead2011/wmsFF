@@ -37,7 +37,7 @@ final class FbsTaskSafety {
         boolean rejectedKiz =
             (httpStatus == 400 || httpStatus == 409 || httpStatus == 422) &&
             ("scan-any".equals(action) || "scan-kiz".equals(action)) &&
-            "SCAN_KIZ".equals(state);
+            ("SCAN_KIZ".equals(state) || "SCAN_NEW_KIZ".equals(state));
         return rejectedBarcode || rejectedKiz;
     }
 
@@ -45,13 +45,13 @@ final class FbsTaskSafety {
     // must not fall back to the slower universal classifier.
     static String scanActionForState(String state) {
         if ("SCAN_BOX".equals(state) || "PALLET_BOXES".equals(state)) return "scan-box";
-        if ("SCAN_KIZ".equals(state)) return "scan-kiz";
+        if ("SCAN_KIZ".equals(state) || "SCAN_NEW_KIZ".equals(state)) return "scan-kiz";
         return "scan-any";
     }
 
     static String scanFieldForState(String state) {
         if ("SCAN_BOX".equals(state) || "PALLET_BOXES".equals(state)) return "boxCode";
-        if ("SCAN_KIZ".equals(state)) return "kiz";
+        if ("SCAN_KIZ".equals(state) || "SCAN_NEW_KIZ".equals(state)) return "kiz";
         return "code";
     }
 
