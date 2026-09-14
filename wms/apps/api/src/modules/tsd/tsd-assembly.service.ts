@@ -1,6 +1,6 @@
 import { FBS_WB_ACCOUNTED, FBS_WB_ACCOUNTED_ACTION, fbsWbAccountingEnabled, isFbsWbAccounted, isFbsWbAccountingStatus, isFbsWbAccountingUntouched, isFbsWbKizShipmentCandidate } from '../../common/fbs-wb-accounting';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
+import { hasFbsAttemptHistory, readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import { requiresFbsReturnReceipt } from '../marketplace-connections/fbs-return-receipt';
 import { fbsTerminalQueueFilterEnabled, isFbsTerminalQueueOrder } from '../../common/fbs-terminal-queue';
 import { fbsManagerDisposition } from '../marketplace-connections/fbs-manager-decision';
@@ -864,6 +864,58 @@ export class TsdAssemblyService {
     };
   }
 
+  // FIX: repeat picking owns a new reservation; historical instruction allocations
+  // must not hide it or send the picker back to the previous, already emptied box.
+  private async loadFbsReservedDisplayBoxes(requestId: string, tasks: Array<{
+    requestItemId: string; skuId: string; sourceSkuId?: string | null;
+    reservedBoxId?: string | null; status: string; itemCount: number;
+  }>) {
+    type DisplayBox = { boxCode: string; quantity: number; palletId: string | null; palletCode: string | null;
+      storageLocation: { palletId: string; palletCode: string; zoneId: string | null;
+        zoneCode: string | null; zoneName: string | null } | null };
+    const result = new Map<string, DisplayBox[]>();
+    if (!hasFbsAttemptHistory()) return result;
+    const pending = tasks.filter(task => task.reservedBoxId && ['RESERVED', 'IN_PROGRESS'].includes(task.status));
+    if (!pending.length) return result;
+    pending.forEach(task => result.set(task.requestItemId, []));
+    const request = await this.prisma.clientRequest.findUnique({ where: { id: requestId },
+      select: { clientId: true, warehouseId: true } });
+    if (!request?.warehouseId) return result;
+    const balances = await this.prisma.stockBalance.findMany({ where: {
+      clientId: request.clientId, warehouseId: request.warehouseId, status: 'AVAILABLE', quantity: { gt: 0 },
+      boxId: { in: uniqueSorted(pending.map(task => task.reservedBoxId!)) },
+      skuId: { in: uniqueSorted(pending.map(task => task.sourceSkuId ?? task.skuId)) },
+      box: { clientId: request.clientId, warehouseId: request.warehouseId, status: { notIn: ['deleted', 'archived', 'shipped'] } },
+    }, select: { boxId: true, skuId: true, quantity: true,
+      box: { select: { code: true, storagePlacement: { select: { palletId: true,
+        pallet: { select: { code: true, zoneId: true, zone: { select: { code: true, name: true } } } } } } } } } });
+    const quantities = new Map<string, number>();
+    for (const balance of balances) {
+      const key = `${balance.boxId}:${balance.skuId}`;
+      quantities.set(key, (quantities.get(key) ?? 0) + balance.quantity);
+    }
+    for (const task of pending) {
+      const skuId = task.sourceSkuId ?? task.skuId;
+      const balance = balances.find(row => row.boxId === task.reservedBoxId && row.skuId === skuId);
+      if (!balance?.box) continue;
+      const key = `${task.reservedBoxId}:${skuId}`;
+      const available = Math.max(0, quantities.get(key) ?? 0);
+      const quantity = Math.min(Math.max(1, task.itemCount), available);
+      if (quantity <= 0) continue;
+      quantities.set(key, available - quantity);
+      const boxes = result.get(task.requestItemId)!;
+      const existing = boxes.find(box => box.boxCode === balance.box!.code);
+      if (existing) { existing.quantity += quantity; continue; }
+      const placement = balance.box.storagePlacement;
+      const storageLocation = placement ? { palletId: placement.palletId, palletCode: placement.pallet.code,
+        zoneId: placement.pallet.zoneId, zoneCode: placement.pallet.zone?.code ?? null,
+        zoneName: placement.pallet.zone?.name ?? null } : null;
+      boxes.push({ boxCode: balance.box.code, quantity, palletId: storageLocation?.palletId ?? null,
+        palletCode: storageLocation?.palletCode ?? null, storageLocation });
+    }
+    return result;
+  }
+
   private async loadFbsAssemblyFacts(requestId: string, requestRows: PickInstructionDocument['rows']) {
     const [savedLinks, rows, duplicateKizEvents, localKizConflictEvents] = await Promise.all([
       this.prisma.fbsOrderRequestLink.findMany({
@@ -885,6 +937,8 @@ export class TsdAssemblyService {
           orderId: true,
           requestItemId: true,
           skuId: true,
+          sourceSkuId: true,
+          reservedBoxId: true,
           connectionId: true,
           productName: true,
           article: true,
@@ -1098,6 +1152,8 @@ export class TsdAssemblyService {
       links.map((link) => [link.orderId, link]),
     );
     const rowByOrderId = new Map(rows.map((row) => [row.orderId, row]));
+    const reservedDisplayBoxes = await this.loadFbsReservedDisplayBoxes(requestId,
+      rows.filter(row => linkedOrderIds.has(row.orderId) && !handledOrderIds.has(row.orderId)));
     const pendingOrderIds = links
       .map((link) => link.orderId)
       .filter((orderId) => !handledOrderIds.has(orderId));
@@ -1176,7 +1232,7 @@ export class TsdAssemblyService {
               } =>
                 Boolean(order),
             ),
-          availableBoxes: row.allocations.map((allocation) => {
+          availableBoxes: reservedDisplayBoxes.get(row.itemId) ?? row.allocations.map((allocation) => {
             const storageLocation = allocationLocationByBox.get(normalizeBoxCode(allocation.boxCode)) ?? null;
             return {
               boxCode: allocation.boxCode,
