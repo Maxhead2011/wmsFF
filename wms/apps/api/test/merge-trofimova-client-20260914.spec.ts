@@ -69,6 +69,24 @@ describe('Trofimova one-off merge safety',()=>{
     expect(p.find((p:any)=>p.table==='FbsStockMonitorHistory').data).toEqual({eventId:'new-event'});
     expect(p.find((p:any)=>p.table==='UserClient').data).toEqual({clientId:TARGET});
   });
+  // TEST: preserve the two explicitly confirmed invoices, not the later unbilled duplicate estimates.
+  it.each([
+    ['c17901be-c10d-4cd8-8cf8-856ba8381525','faa2c82f-b608-4a08-9230-4590212c094a',306.38,1902.13],
+    ['a6332590-60af-47bf-b12f-b919df327276','21bcc500-0dcf-4053-9525-1c3f9788abe1',264.89,1860.64],
+  ])('preserves confirmed source invoice %s',(oldId,newId,oldAmount,newAmount)=>{
+    const f=fixture();Object.assign(f.BillingCharge[0],{id:oldId,totalRub:oldAmount});
+    Object.assign(f.BillingCharge[1],{id:newId,totalRub:newAmount});f.BillingInvoiceItem[0].chargeId=oldId;
+    const plan=buildPlan(f),charges=plan.filter((p:any)=>p.table==='BillingCharge');
+    expect(charges[0]).toEqual({op:'delete',table:'BillingCharge',key:{id:newId}});
+    expect(charges[1].key.id).toBe(oldId);
+    expect(charges[1].data).not.toHaveProperty('totalRub');
+    expect(plan.some((p:any)=>p.table==='BillingInvoiceItem')).toBe(false);
+    f.BillingCharge[1].totalRub=oldAmount; // TEST: background calculator may already align the unbilled duplicate.
+    expect(()=>buildPlan(f)).not.toThrow();
+    f.BillingCharge[1].totalRub=9999;expect(()=>buildPlan(f)).toThrow('Approved invoiced amounts changed');
+    f.BillingCharge[1].totalRub=newAmount;
+    f.BillingInvoiceItem.push({id:'conflict',chargeId:newId});expect(()=>buildPlan(f)).toThrow('Both charges are invoiced');
+  });
   it('fails closed for new dependencies and different accounts',()=>{
     const f=fixture();f.StockBalance=[{id:'new-stock',clientId:SOURCE}];expect(()=>buildPlan(f)).toThrow('Unreviewed references');
     const g=fixture();g.ClientMarketplaceConnection[1].apiKey='another';expect(()=>buildPlan(g)).toThrow('Different marketplace accounts');
