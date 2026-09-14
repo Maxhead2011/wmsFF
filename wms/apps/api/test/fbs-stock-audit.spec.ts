@@ -56,10 +56,36 @@ describe('FBS stock audit endpoint ownership', () => {
     await expect(f.call()).resolves.toMatchObject({ ready: true });
     expect(f.task.status).toBe('RELEASED'); expect(f.task.boxId).toBeNull();
   });
+  // TEST: administrator release keeps stock-backed tasks RESERVED, not RELEASED.
+  it('returns from a completed audit after administrator release to automatic reservation', async () => {
+    vi.stubEnv('WMS_FBS_KIZ_RELABEL_ENABLED', 'true');
+    const f = endpoint(); Object.assign(f.task, { status: 'RESERVED', workerUserId: null,
+      deviceCode: 'AUTO:FBS:PALLET_SORT', boxId: null, boxCode: null });
+    const before = structuredClone(f.task);
+    await expect(f.call()).resolves.toMatchObject({ ready: true, taskId: 'task', sessionId: 'session' });
+    expect(f.task).toEqual(before);
+  });
+  it.each(['other-worker', 'wrong-device', 'unfinished', 'foreign-audit', 'missing-kiz'])('keeps audit protection after reservation release: %s', async kind => {
+    vi.stubEnv('WMS_FBS_KIZ_RELABEL_ENABLED', 'true');
+    const f = endpoint(); Object.assign(f.task, { status: 'RESERVED', workerUserId: null,
+      deviceCode: 'AUTO:FBS:PALLET_SORT', boxId: null, boxCode: null });
+    if (kind === 'other-worker') f.task.workerUserId = 'other';
+    if (kind === 'wrong-device') f.task.deviceCode = 'TSD-OTHER';
+    if (kind === 'unfinished') f.session.status = 'IN_PROGRESS';
+    if (kind === 'foreign-audit') f.session.createdByUserId = 'other';
+    if (kind === 'missing-kiz') f.evidence.length = 0;
+    await expect(f.call()).rejects.toThrow();
+  });
   it('does not expose the endpoint in a disabled installation', async () => {
     const f = endpoint(); vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT', 'false');
     await expect(f.call()).rejects.toThrow('недоступна');
     expect(f.service.prisma.$transaction).not.toHaveBeenCalled();
+  });
+  it('keeps reserved-task behavior unchanged with the relabel rollout disabled', async () => {
+    vi.stubEnv('WMS_FBS_KIZ_RELABEL_ENABLED', 'false');
+    const f = endpoint(); Object.assign(f.task, { status: 'RESERVED', workerUserId: null,
+      deviceCode: 'AUTO:FBS:PALLET_SORT', boxId: null });
+    await expect(f.call()).rejects.toThrow('Задание на ТСД уже изменилось');
   });
 });
 
