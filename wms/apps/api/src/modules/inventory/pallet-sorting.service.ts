@@ -46,7 +46,11 @@ export class PalletSortingService {
       WHERE "warehouseId" = ${user.activeWarehouseId!} AND "completedAt" IS NULL ORDER BY "updatedAt" DESC LIMIT 100`);
     const visible: PalletSortingState[] = [];
     for (const row of rows) {
-      try { await this.assertStateVisible(this.prisma, row.state, user); visible.push(row.state); }
+      try {
+        await this.assertStateVisible(this.prisma, row.state, user);
+        await this.refreshTargetQuantities(this.prisma, row.state);
+        visible.push(row.state);
+      }
       catch (error) { if (!(error instanceof ForbiddenException)) throw error; }
     }
     return visible;
@@ -60,7 +64,21 @@ export class PalletSortingService {
     this.assertVisibleClient(user, row.clientId);
     await this.assertStateVisible(tx, row.state, user);
     if (row.warehouseId !== user.activeWarehouseId) throw new ForbiddenException('Сортировка относится к другому филиалу.');
+    await this.refreshTargetQuantities(tx, row.state);
     return row.state;
+  }
+
+  // FIX: active sessions may contain old counters including outbound stock.
+  // Refresh their display from AVAILABLE without changing stock or completed history.
+  private async refreshTargetQuantities(db: Pick<Prisma.TransactionClient, 'stockBalance'>, state: PalletSortingState) {
+    if (state.stage === 'COMPLETED' || state.targets.length === 0) return;
+    const quantities = await db.stockBalance.groupBy({
+      by: ['boxId'],
+      where: { boxId: { in: state.targets.map(target => target.id) }, status: 'AVAILABLE' },
+      _sum: { quantity: true },
+    });
+    const byBox = new Map(quantities.map(row => [row.boxId, row._sum.quantity ?? 0]));
+    for (const target of state.targets) target.quantity = byBox.get(target.id) ?? 0;
   }
 
   get(id: string, user: AuthUser) { return this.load(this.prisma, id, user); }
@@ -255,12 +273,14 @@ export class PalletSortingService {
       }
     } else box = await tx.box.create({ data: { code, clientId, warehouseId, status: 'active' }, include: { storagePlacement: true } });
     if (!box.storagePlacement) await tx.storagePalletBox.create({ data: { palletId: pallet.id, boxId: box.id, boxCode: box.code, source: 'MANUAL' } });
+    // FIX: PACKING and SHIPPING units have left the box; reopening also refreshes
+    // the saved counter after picking or a physical recount.
+    const contents = await tx.stockBalance.aggregate({ where: { boxId: box.id, status: 'AVAILABLE' }, _sum: { quantity: true }, _min: { quantity: true } });
+    if ((contents._min.quantity ?? 0) < 0) throw new ConflictException('В целевом коробе есть отрицательный остаток. Сначала подтвердите корректировку остатков.');
     const prior = state.targets.find(b => b.id === box!.id);
-    if (prior) { prior.closed = false; prior.palletCode = pallet.code; }
+    if (prior) { prior.closed = false; prior.palletCode = pallet.code; prior.quantity = contents._sum.quantity ?? 0; }
     else {
       // FIX: topping up an existing box preserves its quantity without repeating receipt.
-      const contents = await tx.stockBalance.aggregate({ where: { boxId: box.id }, _sum: { quantity: true }, _min: { quantity: true } });
-      if ((contents._min.quantity ?? 0) < 0) throw new ConflictException('В целевом коробе есть отрицательный остаток. Сначала подтвердите корректировку остатков.');
       state.targets.push({ id: box.id, code: box.code, closed: false, quantity: contents._sum.quantity ?? 0, palletCode: pallet.code, clientId, warehouseId });
     }
     state.activeTargetId = box.id;
