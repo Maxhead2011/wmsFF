@@ -5,6 +5,7 @@ import { physicalKizRelabelEnabled, readPhysicalKizRelabel, proposePhysicalKizRe
 import { timingSnapshot, type SourceOrderTiming } from '../operations-statistics/order-timing';
 import { isOwnedUnpaidDraft, runBillingMutation, withBillingDb } from '../billing/billing-mutation';
 import { lukinPrimaryLines } from '../billing/lukin-primary-policy';
+import { completedWorkBillingEnabled, loadWorkCharges, otherProcessingOrderKeys, preserveBilledComposition, recoverCompletedWork } from '../billing/completed-fbs-billing';
 import { collectedFbsBoxMessage } from './fbs-collected-box-message';
 // FIX: preserve both sorting and release-158 recount/terminal-queue dependencies.
 import { assertSortingAdmin } from '../inventory/pallet-sorting-policy';
@@ -23647,6 +23648,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   async recalculateFbsDraftBilling(clientId: string) {
     const cached = this.fbsOrdersCache.get(clientId)?.value;
+    // FIX: missing/temporarily unavailable WB feed cannot prevent accounting for local completed work.
+    if (completedWorkBillingEnabled(clientId) && !cached) {
+      const recovery = await recoverCompletedWork(this.prisma, clientId);
+      return { recalculatedCharges: recovery.lines.length,
+        recalculatedInvoices: new Set(recovery.lines.map(line => `${line.warehouseId}:${line.requestId}:${new Date(line.serviceDate.getTime() + 3 * 3600000).toISOString().slice(0, 10)}`)).size,
+        unresolvedWork: recovery.blocked };
+    }
     const value = cached ?? (await this.refreshFbsOrdersCache(clientId));
     const shippedOrders = value.orders.filter((order) => order.category === 'shipped');
     const billingByOrder = cached
@@ -26459,8 +26467,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   private async ensureFbsProcessingCharges(clientId: string, orders: FbsOrderSummary[]) {
     // FIX: lock before source-charge reads, not only when the resulting invoice is written.
-    return runBillingMutation(this.prisma, (db) =>
-      withBillingDb(this, db).ensureFbsProcessingChargesLocked(clientId, orders));
+    return runBillingMutation(this.prisma, async (db) => {
+      // FIX: recover before the shipment writer, which credits these stable order/service entries.
+      await recoverCompletedWork(db, clientId);
+      return withBillingDb(this, db).ensureFbsProcessingChargesLocked(clientId, orders);
+    });
   }
 
   private async ensureFbsProcessingChargesLocked(clientId: string, orders: FbsOrderSummary[]) {
@@ -26470,6 +26481,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
 
     const { fbsService, settings } = await this.ensureFbsBillingBase(clientId);
+    const completedWorkEnabled = completedWorkBillingEnabled(clientId);
+    const priorWorkCharges = completedWorkEnabled ? await loadWorkCharges(this.prisma, clientId) : [];
+    const preservedOrderKeys = new Set<string>();
     const primaryProcessingServices = settings.primaryProcessingEnabled
       ? (await this.prisma.clientBillingService.findMany({
           where: {
@@ -26627,6 +26641,34 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         },
       });
       const existingMetadata = asRecord(existing?.metadata);
+      // FIX: keep the source snapshot, including invoice dates, when WB returns only a tail.
+      if (completedWorkEnabled && existing && (
+        preserveBilledComposition(existing.metadata, batchOrders.map(order => order.id)) ||
+        existing.status !== BillingChargeStatus.DRAFT ||
+        !existing.invoiceItems.every(item => isOwnedUnpaidDraft(item.invoice, `fbs-invoice:${clientId}:${shipmentKey}`))
+      )) {
+        const oldQuantity = Math.max(1, Number(existing.quantity));
+        const oldTrip = asRecord(existingMetadata?.logisticsTrip);
+        const processing = Number(oldTrip?.totalWithoutLogisticsRub ?? existing.totalRub);
+        const invoice = existing.invoiceItems[0]?.invoice;
+        const invoicedOrderIds = new Set(Array.isArray(existingMetadata?.orderIds) ? existingMetadata.orderIds : []);
+        for (const order of batchOrders) {
+          preservedOrderKeys.add(fbsOrderKey(order));
+          if (!invoicedOrderIds.has(order.id)) continue;
+          const share = Math.max(1, order.itemCount) / oldQuantity;
+          const totalRub = round(Number(existing.totalRub) * share, 2);
+          result.set(fbsOrderKey(order), { chargeId: existing.id, status: existing.status,
+            totalRub, unitPriceRub: round(totalRub / Math.max(1, order.itemCount), 2),
+            invoiceNumber: invoice?.number ?? null, invoiceStatus: invoice?.status ?? null,
+            breakdown: { fbsProcessingRub: round(processing * share, 2), additionalServicesRub: 0,
+              deliveryRub: round((Number(existing.totalRub) - processing) * share, 2), boxFormationRub: 0,
+              boxMaterialRub: 0, palletRub: 0, shipmentKey, shipmentItems: oldQuantity,
+              boxCount: calculateFbsBoxes(oldQuantity), palletCount: 0, deliveryDestination: FbsDeliveryDestination.VNUKOVO_SORTING_CENTER } });
+        }
+        continue;
+      }
+      const previouslyProcessed = otherProcessingOrderKeys(priorWorkCharges, sourceKey);
+      const processingWeights = batchOrders.map(order => previouslyProcessed.has(fbsOrderKey(order)) ? 0 : Math.max(1, order.itemCount));
       const existingLogisticsTrip = asRecord(existingMetadata?.logisticsTrip);
       const extraTripOverride = existingLogisticsTrip?.extraTripOverride === true;
       const weights = batchOrders.map((order) => Math.max(1, order.itemCount));
@@ -26714,7 +26756,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         }
       }
       const fixedProcessingTotalRub = round(
-        shipmentItems * fixedPlusLogisticsUnitPriceRub,
+        processingWeights.reduce((sum, quantity) => sum + quantity, 0) * fixedPlusLogisticsUnitPriceRub,
         2,
       );
       const logisticsWithTaxRub = fixedPlusLogisticsEnabled
@@ -26749,7 +26791,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const calculatedUnitPriceRub = round(calculatedTotalRub / shipmentItems, 2);
       const requestIds = uniqueStrings(batchOrders.map((order) => order.request?.id ?? ''));
       const requestId = requestIds.length === 1 ? requestIds[0] : null;
-      if (settings.primaryProcessingEnabled) {
+      if (settings.primaryProcessingEnabled && !completedWorkEnabled) {
+        // FIX: opted-in primary work is accounted per completed order, never rebuilt from a WB tail.
         const primaryBreakdown = buildFbsPrimaryProcessingBreakdown(
           batchOrders.map((order) => {
             const assembly = assemblyByOrder.get(
@@ -26857,6 +26900,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         shipmentKey,
         requestIds,
         orderIds: batchOrders.map((order) => order.id),
+        ...(completedWorkEnabled ? { processingOrderIds: batchOrders.filter((_, index) => processingWeights[index] > 0).map(order => order.id) } : {}),
         quantity: shipmentItems,
         logisticsTrip: {
           groupKey: `${clientId}:${billingDay}`,
@@ -26971,11 +27015,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
       for (const [orderIndex, order] of batchOrders.entries()) {
         const itemCount = Math.max(1, order.itemCount);
-        const totalRub = allocateRub(calculatedTotalRub, weights, orderIndex);
+        const totalRub = completedWorkEnabled && fixedPlusLogisticsEnabled
+          ? round(processingWeights[orderIndex] * fixedPlusLogisticsUnitPriceRub +
+            allocateRub(logisticsTripCharged ? logisticsWithTaxRub : 0, weights, orderIndex), 2)
+          : allocateRub(calculatedTotalRub, weights, orderIndex);
         const fbsProcessingRub = turnkeyEnabled
           ? totalRub
           : fixedPlusLogisticsEnabled
-            ? allocateRub(fixedProcessingTotalRub, weights, orderIndex)
+            ? (completedWorkEnabled ? round(processingWeights[orderIndex] * fixedPlusLogisticsUnitPriceRub, 2)
+              : allocateRub(fixedProcessingTotalRub, weights, orderIndex))
             : allocateRub(
                 (quote!.processingCost + quote!.stickersCost) * 1.5,
                 weights,
@@ -27027,7 +27075,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
     }
 
-    await this.ensureFbsShipmentInvoices(clientId, orders, result);
+    await this.ensureFbsShipmentInvoices(clientId, orders.filter(order => !preservedOrderKeys.has(fbsOrderKey(order))), result);
     return result;
   }
 

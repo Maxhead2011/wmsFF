@@ -12,6 +12,7 @@ import {
   Prisma,
 } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { COMPLETED_WORK_POLICY } from './completed-fbs-billing';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { isClientNotificationEnabled } from '../client-notifications/client-notification-preferences';
@@ -4915,6 +4916,11 @@ function buildFbsMergePreview(
         continue;
       }
 
+      // FIX: physical processing is not proof of dispatch. No logistics row for a supplement.
+      if (metadata.billingPolicy === COMPLETED_WORK_POLICY && metadata.processingOnly === true) {
+        processingTotalRub = roundMoney(processingTotalRub + (decimalToNumber(charge.totalRub) ?? 0));
+        continue;
+      }
       const logisticsTrip = asRecord(metadata.logisticsTrip);
       const billingDay =
         textMetadataValue(logisticsTrip?.billingDay) ?? dateKey(charge.serviceDate);
