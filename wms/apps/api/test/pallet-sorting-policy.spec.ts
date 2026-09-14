@@ -13,10 +13,19 @@ describe('administrator pallet sorting', () => {
     vi.stubEnv('WMS_PALLET_SORTING_ENABLED', 'false');
     expect(() => assertSortingAdmin({ roleCodes: ['ADMIN'], activeWarehouseId: 'wh' } as any)).toThrow();
   });
-  it.each(['OWNER', 'MANAGER', 'OPERATOR', 'CLIENT'])('does not grant %s access even with system:admin', role => {
+  it.each(['MANAGER', 'OPERATOR', 'CLIENT'])('does not grant %s access even with system:admin', role => {
     // TEST: the requested restriction is the ADMIN role, not just a permission.
     vi.stubEnv('WMS_PALLET_SORTING_ENABLED', 'true');
     expect(() => assertSortingAdmin({ roleCodes: [role], permissionCodes: ['system:admin'], activeWarehouseId: 'wh' } as any)).toThrow();
+  });
+  // TEST: OWNER is above ADMIN and does not need an extra ADMIN assignment.
+  it('allows OWNER alone and keeps physical operation scope checks', () => {
+    vi.stubEnv('WMS_PALLET_SORTING_ENABLED', 'true');
+    expect(() => assertSortingAdmin({ roleCodes: ['OWNER'], activeWarehouseId: 'wh' } as any)).not.toThrow();
+    expect(() => assertSortingAdmin({ roleCodes: ['OWNER'], activeWarehouseId: null } as any)).toThrow('выберите филиал');
+    expect(() => assertSortingAdmin({ roleCodes: ['OWNER'], activeWarehouseId: 'wh', isDemo: true })).toThrow();
+    vi.stubEnv('WMS_PALLET_SORTING_ENABLED', 'false');
+    expect(() => assertSortingAdmin({ roleCodes: ['OWNER'], activeWarehouseId: 'wh' } as any)).toThrow();
   });
   it('requires a selected warehouse', () => {
     // TEST: no cross-branch sorting under an unscoped administrator.

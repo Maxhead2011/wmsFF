@@ -567,8 +567,8 @@ public class MainActivity extends Activity {
         LinearLayout root = baseRoot();
         root.addView(header());
         root.addView(mainStatusLine());
-        // ADDED: sold flavors and non-ADMIN roles do not receive this menu.
-        if ("logoff".equals(BuildConfig.FLAVOR) && session.hasRole("ADMIN")) {
+        // FIX: use the tested sorting access policy for the current session and installation.
+        if (PalletSortingAccess.canOpen(BuildConfig.FLAVOR, session)) {
             root.addView(primaryMenuButton("Сортировка и перемещение", view -> {
                 screen = Screen.PALLET_SORTING;
                 if (palletSortingScreen != null) palletSortingScreen.close();

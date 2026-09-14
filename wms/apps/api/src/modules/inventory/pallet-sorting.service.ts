@@ -8,7 +8,7 @@ import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { StockOperationsService } from '../stock/stock-operations.service';
 import { MarketplaceConnectionsService } from '../marketplace-connections/marketplace-connections.service';
-import { assertSortingAdmin, confirmSortingSnapshot, sortingKizIdentity, sortingTaskCanReroute } from './pallet-sorting-policy';
+import { assertSortingAdmin, canUsePalletSorting, confirmSortingSnapshot, sortingKizIdentity, sortingTaskCanReroute } from './pallet-sorting-policy';
 import type { PalletSortingActionDto, StartPalletSortingDto } from './dto/pallet-sorting.dto';
 
 type Source = { id: string; code: string; scanned: boolean; archived: boolean; placementId: string | null; preservedOnPallet?: boolean; retainedReason?: string; clientId?: string; warehouseId?: string | null };
@@ -37,7 +37,8 @@ export class PalletSortingService {
     private readonly marketplace: MarketplaceConnectionsService) {}
 
   capabilities(user: AuthUser) {
-    return { enabled: process.env.WMS_PALLET_SORTING_ENABLED === 'true' && user.roleCodes.includes('ADMIN') && !user.isDemo };
+    // FIX: OWNER sees the same available workflow as ADMIN.
+    return { enabled: canUsePalletSorting(user) };
   }
 
   async list(user: AuthUser) {
