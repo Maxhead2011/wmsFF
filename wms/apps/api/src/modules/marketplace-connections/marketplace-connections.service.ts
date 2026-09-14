@@ -8701,7 +8701,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
     const state = fbsTsdStage(task);
     if (state === 'SCAN_KIZ') {
-      return this.scanFbsTsdKiz(taskId, { kiz: rawCode }, user);
+      // FIX: hardware /scan carries the same explicit relabel intent as /scan-kiz.
+      return this.scanFbsTsdKiz(taskId, physicalKizRelabelEnabled()
+        ? { ...payload, kiz: rawCode } : { kiz: rawCode }, user);
     }
     if (
       ['SCAN_BOX', 'SCAN_SOURCE_BOX'].includes(state) &&
@@ -14698,7 +14700,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       this.clientScopes.requireClientAccess(user, fresh.clientId, 'write');
       // FIX: a manager may have completed a return meanwhile. Validate this worker's audit,
       // but do not revive the released task or its historical box/KIZ placement.
-      if (!['COMPLETED', 'RELEASED', FBS_TSD_RETURN_REQUIRED].includes(fresh.status)) {
+      // FIX: releasing a stock-backed task returns it to the unowned automatic reservation.
+      // Validate only the worker's completed physical audit; never reclaim or modify the task here.
+      const releasedReservation = physicalKizRelabelEnabled() && fresh.status === FBS_TSD_RESERVED_STATUS &&
+        fresh.workerUserId === null && fresh.deviceCode === FBS_TSD_AUTO_RESERVATION_DEVICE;
+      if (!releasedReservation && !['COMPLETED', 'RELEASED', FBS_TSD_RETURN_REQUIRED].includes(fresh.status)) {
         this.requireCurrentFbsTsdLease(fresh, user);
       }
       return validateFbsStockAudit(tx, fresh, sessionId, user.id);
@@ -15781,7 +15787,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       warehouseConnection?.fbsWarehouseName ??
       null;
     return {
-      state: kizRelabelProposal ? 'CONFIRM_KIZ_RELABEL' : state,
+      // FIX: the accepted old scan leads directly to the new physical KIZ scan, also after reload.
+      state: kizRelabelProposal ? 'SCAN_NEW_KIZ' : state,
       kizRelabelProposal,
       message,
       task: {

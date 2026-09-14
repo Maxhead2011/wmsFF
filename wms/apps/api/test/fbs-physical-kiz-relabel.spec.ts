@@ -105,7 +105,7 @@ it('refuses a changed lease version before any inventory mutation', async () => 
   expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
 });
 
-it.each([false,true])('sends the replacement KIZ through normal WB acceptance and makes repeated scans idempotent; audit first: %s', async auditFirst => {
+it.each([[false,false],[true,false],[false,true],[true,true]])('sends the replacement KIZ through normal WB acceptance; audit first: %s, universal scanner: %s', async (auditFirst, universal) => {
   // TEST: execute the public scanner and real replacement transaction together, with WB isolated.
   const f=fixture(); const id=await f.propose();const service:any=Object.create(MarketplaceConnectionsService.prototype);
   service.prisma=f.db;service.loadOwnedFbsTsdAssembly=async()=>copy(f.state.task);
@@ -114,6 +114,7 @@ it.each([false,true])('sends the replacement KIZ through normal WB acceptance an
   service.isFbsEmergencyAssemblyRequest=async()=>false;
   service.loadWildberriesFbsKizPreflight=async()=>({alreadyAttached:false,supplierStatus:'confirm',wbStatus:'waiting',remoteKizValues:[]});
   f.db.clientMarketplaceConnection={findFirst:async()=>({apiKey:'test'})};
+  f.db.storagePallet={findFirst:async()=>null};
   service.updateFbsTsdUnderLease=async(t:any,u:any,data:any)=>f.db.fbsTsdAssembly.update({data});
   service.recordAcceptedFbsKizScan=async()=>{};
   service.formatFbsTsdAssembly=async(t:any)=>({task:t});
@@ -121,11 +122,43 @@ it.each([false,true])('sends the replacement KIZ through normal WB acceptance an
   const fetchMock=vi.fn(async(_url:any,init:any)=>{expect(JSON.parse(init.body)).toEqual({sgtins:[NEW]});return new Response('{}',{status:200});});
   vi.stubGlobal('fetch',fetchMock);
   const payload={kiz:NEW,confirmKizRelabel:true,kizRelabelProposalId:id,registerKizRelabelOnly:auditFirst};
-  await service.scanFbsTsdKiz('t',payload,f.user);await service.scanFbsTsdKiz('t',payload,f.user);
+  // TEST: hardware scanner must forward the explicit replacement confirmation and audit-only mode.
+  const scan = () => universal ? service.scanFbsTsdCode('t',{...payload,code:NEW},f.user)
+    : service.scanFbsTsdKiz('t',payload,f.user);
+  await scan();await scan();
   if(auditFirst){
     expect(fetchMock).not.toHaveBeenCalled();expect(f.state.quantity).toBe(1);expect(f.state.task.wbMetaStatus).toBe('PENDING');
     await service.scanFbsTsdKiz('t',{kiz:NEW},f.user);
   }
   expect(fetchMock).toHaveBeenCalledOnce();expect(f.state.quantity).toBe(0);expect(f.state.marks[0].value).toBe(OLD);
   expect(f.state.task.wbMetaStatus).toBe('ACCEPTED');expect(f.state.audits.filter((a:any)=>a.payload.stage==='APPLIED')).toHaveLength(1);
+});
+
+it('forwards relabel support from the universal scanner for the old KIZ', async () => {
+  // TEST: APK168 sent supportsKizRelabel=true, but /scan silently dropped it.
+  const f=fixture(); const service:any=Object.create(MarketplaceConnectionsService.prototype);
+  service.prisma={storagePallet:{findFirst:async()=>null}};
+  service.loadOwnedFbsTsdAssembly=async()=>f.state.task;
+  service.requireFbsOrderStillCollectable=async()=>{};
+  service.scanFbsTsdKiz=vi.fn(async()=>({state:'SCAN_NEW_KIZ'}));
+  await service.scanFbsTsdCode('t',{code:OLD,supportsKizRelabel:true},f.user);
+  expect(service.scanFbsTsdKiz).toHaveBeenCalledWith('t',expect.objectContaining({kiz:OLD,supportsKizRelabel:true}),f.user);
+});
+
+it('restores a pending old scan directly to scanning the new KIZ in the real response formatter', async () => {
+  // TEST: no extra confirmation screen between old and new physical scans, including after reload.
+  const f=fixture();const id=await f.propose();
+  Object.assign(f.db, {
+    client:{findUnique:async()=>({id:'c',code:'CL',name:'Client'})},
+    sku:{findUnique:async()=>({color:null,size:'M'})},
+    clientRequestItem:{aggregate:async()=>({_sum:{quantity:1}})},
+    clientMarketplaceConnection:{findUnique:async()=>null},
+  });
+  f.db.fbsTsdAssembly.aggregate=async()=>({_sum:{itemCount:0}});
+  const service:any=new MarketplaceConnectionsService(f.db,{} as never);
+  service.fbsTsdCompletedToday=async()=>0;service.fbsTsdStickerHistory=async()=>[];
+  service.fbsTsdNextRequestSources=async()=>[];
+  await expect(service.formatFbsTsdAssembly(f.state.task,f.user,'')).resolves.toMatchObject({
+    state:'SCAN_NEW_KIZ',kizRelabelProposal:{id,oldKiz:OLD},
+  });
 });
