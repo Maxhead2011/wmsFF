@@ -771,15 +771,20 @@ function buildInitialRows(services: ClientBillingServiceSummary[], serviceDate: 
   return standardRows.length ? standardRows : [emptyRow(serviceDate)];
 }
 
-function buildInvoiceRows(invoice: BillingInvoiceSummary, services: ClientBillingServiceSummary[]): InvoiceRow[] {
+export function buildInvoiceRows(invoice: BillingInvoiceSummary, services: ClientBillingServiceSummary[]): InvoiceRow[] {
   return invoice.items.map((item) => {
     const service = services.find((candidate) => candidate.service.id === item.charge?.serviceId);
     const pricing = invoiceItemPricing(item);
+    const metadata = isRecord(item.charge?.metadata) ? item.charge.metadata : null;
+    // FIX: keep the client-specific primary label without renaming the shared service catalogue.
+    const primaryServiceName = metadata?.kind === 'FBS_PRIMARY_PROCESSING' &&
+      metadata?.billingPolicy === 'LUKIN_PRIMARY_V1' && metadata?.serviceCode === 'ITEM_PROCESSING'
+      ? 'Первичная обработка' : null;
     return {
       key: item.id,
       invoiceItemId: item.id,
       serviceId: service?.service.id ?? item.charge?.serviceId ?? '',
-      serviceSearch: service?.service.name ?? item.description,
+      serviceSearch: primaryServiceName ?? service?.service.name ?? item.description,
       description: item.description,
       unit: item.unit,
       quantity: String(item.quantity),
