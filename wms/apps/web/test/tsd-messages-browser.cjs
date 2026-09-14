@@ -38,12 +38,76 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await page.getByText('Ожидает прочтения', { exact: true }).waitFor();
     assert.equal(calls[1].requestId, calls[2].requestId);
     assert.equal(rows.length, 1);
+
+    // TEST: translation is a user-opened public page, not a proxy or automatic TSD send.
+    const original = 'Возьмите 3 товара из TEST_BOX_123 к столу 2.';
+    const translated = 'Take 3 items from TEST_BOX_123 to table 2.';
+    const outbound = [];
+    await page.context().route(/https:\/\/translate\.(google|yandex)\.com\//, route => {
+      outbound.push(route.request().url());
+      return route.fulfill({ contentType: 'text/html', body: '<title>Synthetic translator</title><p>Test only</p>' });
+    });
+    for (const width of [375, 768, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.getByRole('textbox', { name: 'Текст сообщения', exact: true }).fill(original);
+      await page.getByRole('button', { name: 'Перевести на', exact: true }).click();
+      await page.getByLabel('Язык перевода', { exact: true }).waitFor();
+      assert.equal(outbound.length, 0, 'opening the panel must not transmit anything');
+      assert.equal(await page.getByLabel('Язык перевода', { exact: true }).locator('option').count(), 3);
+      assert(await page.evaluate(() => document.querySelector('dialog').scrollWidth <= document.querySelector('dialog').clientWidth));
+      assert(await page.getByRole('button', { name: 'Применить перевод', exact: true }).isDisabled());
+      if (process.env.QA_OUTPUT) await page.screenshot({ path: `${process.env.QA_OUTPUT}/translation-${width}.png` });
+      await page.getByRole('button', { name: 'Перевести на', exact: true }).click();
+    }
+    await page.getByRole('button', { name: 'Перевести на', exact: true }).click();
+    for (const language of ['uz', 'en', 'ky']) {
+      await page.getByLabel('Язык перевода', { exact: true }).selectOption(language);
+      const url = new URL(await page.getByRole('link', { name: 'Открыть переводчик' }).getAttribute('href'));
+      assert.equal(url.searchParams.get('tl'), language);
+      assert.equal(url.searchParams.get('text'), original);
+      assert.equal(url.searchParams.get('token'), null);
+    }
+    await page.getByLabel('Переводчик', { exact: true }).selectOption('yandex');
+    const openTranslator = async () => {
+      const [popup] = await Promise.all([page.waitForEvent('popup'), page.getByRole('link', { name: 'Открыть переводчик' }).click()]);
+      await popup.waitForLoadState(); await popup.close();
+    };
+    await openTranslator();
+    assert.equal(new URL(outbound[0]).searchParams.get('target_lang'), 'ky');
+    assert.equal(calls.length, 3);
+    await page.getByRole('textbox', { name: 'Перевод для проверки' }).fill('Take items from TRANSLATED_BOX_123 to table 2.');
+    await page.getByText(/В переводе изменились коды или числа/).waitFor();
+    assert(await page.getByRole('button', { name: 'Применить перевод' }).isDisabled());
+    await page.getByRole('textbox', { name: 'Перевод для проверки' }).fill(translated);
+    await page.getByRole('textbox', { name: 'Текст сообщения', exact: true }).fill('Изменённое сообщение');
+    await page.getByText(/Исходное сообщение изменилось/).waitFor();
+    assert(await page.getByRole('button', { name: 'Применить перевод' }).isDisabled());
+    await page.getByRole('textbox', { name: 'Текст сообщения', exact: true }).fill(original);
+    await page.getByLabel('Язык перевода', { exact: true }).selectOption('en');
+    assert.equal(await page.getByRole('textbox', { name: 'Перевод для проверки' }).inputValue(), '');
+    assert(await page.getByRole('button', { name: 'Применить перевод' }).isDisabled());
+    await openTranslator();
+    await page.getByRole('textbox', { name: 'Перевод для проверки' }).fill(translated);
+    await page.getByRole('button', { name: 'Применить перевод' }).click();
+    assert.equal(await page.getByRole('textbox', { name: 'Текст сообщения', exact: true }).inputValue(), translated);
+    assert.equal(calls.length, 3, 'applying translation must not send');
+    await page.getByRole('button', { name: 'Вернуть исходный текст' }).click();
+    assert.equal(await page.getByRole('textbox', { name: 'Текст сообщения', exact: true }).inputValue(), original);
+    await page.getByRole('button', { name: 'Перевести на', exact: true }).click();
+    await openTranslator();
+    await page.getByRole('textbox', { name: 'Перевод для проверки' }).fill(translated);
+    await page.getByRole('button', { name: 'Применить перевод' }).click();
+    await page.getByRole('button', { name: 'Отправить на ТСД' }).click();
+    await page.getByRole('textbox', { name: 'Текст сообщения', exact: true }).waitFor();
+    await page.waitForFunction(() => document.querySelector('textarea').value === '');
+    assert.equal(calls[3].text, translated);
+    assert.equal(await page.getByRole('button', { name: 'Вернуть исходный текст' }).count(), 0);
     supported = false;
     await page.reload();
     await page.getByText(/Обновите приложение на этом ТСД/).waitFor();
     await page.getByRole('textbox').fill('Не отправлять');
     assert(await page.getByRole('button', { name: 'Отправить на ТСД' }).isDisabled());
     assert.deepEqual(errors, []);
-    console.log('PASS: 3 viewport widths, send/read, network error, idempotent retry, old-client gate, zero page errors.');
+    console.log('PASS: 3 viewport widths, send/read, network error, idempotent retry, public translation links for 3 languages/2 providers, no automatic transmission, code/number validation, stale draft protection, undo, explicit translated send, old-client gate, zero page errors.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

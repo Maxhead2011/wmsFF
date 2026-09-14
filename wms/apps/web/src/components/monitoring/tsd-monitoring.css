@@ -272,6 +272,14 @@
 .tsd-messages__history p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .tsd-messages__history strong { display: block; margin-top: 8px; }
 
+/* FIX: keep public translation controls within the existing single dialog scroll area. */
+.tsd-translation { margin-top: 12px; }
+.tsd-translation > button { margin: 0 8px 8px 0; }
+.tsd-translation fieldset { min-width: 0; border: 1px solid #ccc; border-radius: 8px; padding: 12px; }
+.tsd-translation p { overflow-wrap: anywhere; }
+.tsd-translation__options { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+.tsd-translation__options select { display: block; max-width: 100%; padding: 8px; font: inherit; }
+
 @media (max-width: 480px) {
   .tsd-monitor__summary { grid-template-columns: 1fr; }
   .tsd-monitor__summary > div { border-right: 0; border-bottom: 1px solid var(--monitor-line); }
