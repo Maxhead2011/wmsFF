@@ -1,6 +1,7 @@
 import { stockTransferBlockedReason, ordersWithoutTransferStock } from './fbs-stock-transfer';
 import { fbsStockAuditError, fbsKizAuditEnabled, validateFbsStockAudit } from './fbs-stock-audit';
 import { createHash } from 'node:crypto';
+import { physicalKizRelabelEnabled, readPhysicalKizRelabel, proposePhysicalKizRelabel, applyPhysicalKizRelabel, cancelPhysicalKizRelabel } from './fbs-physical-kiz-relabel';
 import { timingSnapshot, type SourceOrderTiming } from '../operations-statistics/order-timing';
 import { isOwnedUnpaidDraft, runBillingMutation, withBillingDb } from '../billing/billing-mutation';
 import { lukinPrimaryLines } from '../billing/lukin-primary-policy';
@@ -10230,6 +10231,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
+  // FIX: the ordinary task owner can explicitly relabel a returned physical unit; no administrator override.
+  private async proposeFbsPhysicalKizRelabel(task: FbsTsdAssemblyRecord, kiz: string, user: AuthUser) {
+    await this.inventoryLock?.assertStockMovementsAllowed();
+    task = await this.withFbsTsdLeaseTransaction(task, user, tx => proposePhysicalKizRelabel(tx, task, kiz, user,
+      fresh => this.requireCurrentFbsTsdLease(fresh, user)));
+    return this.formatFbsTsdAssembly(task, user, 'КИЗ уже использован в WB. Для этой единицы можно подтвердить переклейку на новый КИЗ.');
+  }
+
   async scanFbsTsdKiz(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
     let task = await this.loadOwnedFbsTsdAssembly(taskId, user);
     await this.requireFbsOrderStillCollectable(task);
@@ -10249,6 +10258,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         `КИЗ уже принят для ${fbsMarketplaceDisplayName(task.marketplace)}.`,
       );
     }
+    if (payload.cancelKizRelabel === true) {
+      const proposalId = requiredFbsTsdText(payload.kizRelabelProposalId, 'Не указана переклейка.');
+      await this.withFbsTsdLeaseTransaction(task, user, tx => cancelPhysicalKizRelabel(tx, task, user, proposalId,
+        fresh => this.requireCurrentFbsTsdLease(fresh, user)));
+      return this.formatFbsTsdAssembly(task, user, 'Переклейка отменена. Отсканируйте КИЗ другой единицы.');
+    }
     const kiz = requiredFbsTsdText(payload.kiz, 'Отсканируйте КИЗ товара.');
     const confirmBoxMove = payload.confirmBoxMove === true;
     const allowedBoxPrefixes = this.boxCodes
@@ -10257,6 +10272,21 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const kizFormatError = fbsTsdKizFormatError(kiz, allowedBoxPrefixes);
     if (kizFormatError) {
       throw new BadRequestException(kizFormatError);
+    }
+    if (payload.confirmKizRelabel === true) {
+      if (!physicalKizRelabelEnabled()) throw new ForbiddenException('Переклейка КИЗ в этом окружении выключена.');
+      const proposalId = requiredFbsTsdText(payload.kizRelabelProposalId, 'Сначала отсканируйте старый КИЗ.');
+      if (await this.findPreviousWildberriesKizUsage(task.clientId, kiz, task.id)) {
+        throw new BadRequestException('Новый КИЗ уже использовался в WB. Возьмите свободный новый КИЗ.');
+      }
+      await this.inventoryLock?.assertStockMovementsAllowed();
+      task = await this.withFbsTsdLeaseTransaction(task, user, tx => applyPhysicalKizRelabel(tx, task, user, proposalId, kiz,
+        fresh => this.requireCurrentFbsTsdLease(fresh, user)));
+      // FIX: an already opened mandatory audit must record the physical pair before validating its scans.
+      // The audit remains mandatory; normal WB attachment and picking happen only after returning to FBS.
+      if (payload.registerKizRelabelOnly === true) {
+        return this.formatFbsTsdAssembly(task, user, 'Переклейка зарегистрирована. Завершите проверку короба, затем продолжите сборку с новым КИЗ.');
+      }
     }
     if (task.kiz && task.wbMetaStatus === 'PENDING' && task.kiz.toLowerCase() !== kiz.toLowerCase()) {
       throw new BadRequestException(
@@ -10393,11 +10423,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       task.id,
     );
     if (previousWbUsage) {
+      if (physicalKizRelabelEnabled() && mark?.status === StockStatus.AVAILABLE && mark.boxId === task.boxId && !task.kiz) {
+        if (payload.supportsKizRelabel !== true) throw new BadRequestException('Этот КИЗ уже использовался в WB. Для переклейки обновите приложение ТСД через «Проверить обновление».');
+        return this.proposeFbsPhysicalKizRelabel(task, kiz, user);
+      }
       const message = previousWbUsage.orderId
         ? `Этот КИЗ уже передавался в Wildberries для заказа ${previousWbUsage.orderId}. Возьмите другую единицу.`
         : 'Этот КИЗ уже передавался или был отгружен через Wildberries. Возьмите другую единицу.';
       await this.recordLocalFbsKizConflict(task, kiz, mark, message, user, 'WB_HISTORY');
       throw new BadRequestException(message);
+    }
+    if (payload.prepareKizRelabelOnly === true) {
+      throw new BadRequestException('У этого КИЗ нет истории использования в WB. Продолжите проверку короба; переклейка не зарегистрирована.');
     }
     if (
       mark &&
@@ -15512,6 +15549,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   private async formatFbsTsdAssembly(task: FbsTsdAssemblyRecord, user: AuthUser, message: string) {
     let state = fbsTsdStage(task);
+    const kizRelabelProposal = state === 'SCAN_KIZ' ? await readPhysicalKizRelabel(this.prisma, task, user) : null;
     const needsStorageRouting = state === 'SCAN_BOX' || state === 'SCAN_SOURCE_BOX';
     const needsSourceBoxUsage = state === 'SCAN_BARCODE';
     const stockSkuId =
@@ -15743,7 +15781,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       warehouseConnection?.fbsWarehouseName ??
       null;
     return {
-      state,
+      state: kizRelabelProposal ? 'CONFIRM_KIZ_RELABEL' : state,
+      kizRelabelProposal,
       message,
       task: {
         id: task.id,

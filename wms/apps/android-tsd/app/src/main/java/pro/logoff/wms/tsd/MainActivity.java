@@ -2715,6 +2715,9 @@ public class MainActivity extends Activity {
                     " · " + safeText(activeInventoryBox.clientName)
             ));
             addInventoryLines(root, activeInventoryBox);
+            if (!mandatoryFbsKizAuditTaskId.isEmpty()) root.addView(secondaryButton(
+                tr("Переклеить использованный КИЗ", "Ishlatilgan KIZni almashtirish"),
+                view -> showAuditKizRelabelDialog(null)));
             if (!mandatoryFbsKizAuditTaskId.isEmpty()) root.addView(messageView(tr(
                 "Сканируйте только содержимое короба. Уже отобранные товары не возвращайте в пересчёт; возврат принимается отдельно в отсканированный короб.",
                 "Faqat quti ichidagini skanerlang. Olingan tovarni sanashga qaytarmang; qaytarish alohida qabul qilinadi.")));
@@ -3213,6 +3216,46 @@ public class MainActivity extends Activity {
     }
 
     // FIX: MATCHED quantities alone cannot unblock a KIZ discrepancy, even after restart.
+    // FIX: recover an already opened KIZ audit without bypassing its quantity/composition validation.
+    private void showAuditKizRelabelDialog(TsdFbsAssemblyResponse.KizRelabelProposal proposal) {
+        TsdSession session = safeSession();
+        if (session == null || inventoryRequestBusy || mandatoryFbsKizAuditTaskId.isEmpty()) return;
+        String taskId = mandatoryFbsKizAuditTaskId;
+        String owner = fbsSessionOwnerKey(session);
+        EditText scan = input(proposal == null ? tr("Старый КИЗ", "Eski KIZ") : tr("Новый КИЗ", "Yangi KIZ"));
+        new AlertDialog.Builder(this)
+            .setTitle(tr("Переклейка КИЗ", "KIZni almashtirish"))
+            .setMessage(proposal == null
+                ? tr("Отсканируйте старый КИЗ товара из проверяемого короба.", "Tekshirilayotgan qutidagi mahsulotning eski KIZini skanerlang.")
+                : tr("Наклейте новый КИЗ на эту единицу и отсканируйте его. Затем закончите проверку короба.",
+                    "Shu mahsulotga yangi KIZ yopishtiring va skanerlang. Keyin quti tekshiruvini tugating."))
+            .setView(scan)
+            .setNegativeButton(tr("Закрыть", "Yopish"), null)
+            .setPositiveButton(proposal == null ? tr("Проверить старый КИЗ", "Eski KIZni tekshirish") : tr("Подтвердить переклейку", "Almashtirishni tasdiqlash"), (dialog, which) -> {
+                String value = textValue(scan);
+                String invalid = fbsKizScanError(value);
+                if (!invalid.isEmpty()) {statusMessage = invalid; renderInventoryCountScreen(); return;}
+                inventoryRequestBusy = true;
+                runBackground(() -> {
+                    Map<String, Object> data = proposal == null ? FbsKizRelabelRequest.prepare(value)
+                        : FbsKizRelabelRequest.confirm(value, proposal.id, true);
+                    Response<TsdFbsAssemblyResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                        .scanFbsKiz(session.authorizationHeader(), taskId, data).execute();
+                    TsdFbsAssemblyResponse updated = response.body();
+                    String failure = response.isSuccessful() && updated != null ? ""
+                        : responseErrorMessage(response, tr("Переклейка не выполнена. Повторите проверку.", "Almashtirilmadi. Qayta tekshiring."));
+                    mainHandler.post(() -> {
+                        if (!owner.equals(fbsSessionOwnerKey(safeSession())) || !taskId.equals(mandatoryFbsKizAuditTaskId)) return;
+                        inventoryRequestBusy = false;
+                        if (!failure.isEmpty()) {statusMessage = failure; renderInventoryCountScreen(); return;}
+                        statusMessage = nonEmpty(updated.message, tr("Переклейка зарегистрирована. Продолжите проверку короба.", "Almashtirish saqlandi. Quti tekshiruvini davom ettiring."));
+                        renderInventoryCountScreen();
+                        if (proposal == null && updated.kizRelabelProposal != null) showAuditKizRelabelDialog(updated.kizRelabelProposal);
+                    });
+                });
+            }).show();
+    }
+
     private void validateMandatoryFbsKizAudit() {
         TsdSession session = safeSession();
         if (session == null || activeInventory == null || inventoryRequestBusy) return;
@@ -4806,6 +4849,21 @@ public class MainActivity extends Activity {
                 tr("Открыть окно сканирования КИЗ", "KIZ skanerlash oynasini ochish"),
                 view -> showFbsGuidedScanDialog(state, task, productName, article, color, size, marketplaceName)
             ));
+        } else if ("CONFIRM_KIZ_RELABEL".equals(state)) {
+            root.addView(feedbackView(tr("Этот КИЗ уже использовался в WB. Для этой единицы нужна новая маркировка.",
+                "Bu KIZ WBda ishlatilgan. Shu mahsulotga yangi markirovka kerak."), Color.rgb(254, 240, 138)));
+            root.addView(primaryMenuButton(tr("Переклеить КИЗ", "KIZni almashtirish"), view -> {
+                if (fbsBusy || fbsAssembly == null || fbsAssembly.kizRelabelProposal == null) return;
+                fbsAssembly.state = "SCAN_NEW_KIZ";
+                renderFbsAssemblyScreen();
+            }));
+            root.addView(secondaryButton(tr("Взять другую единицу", "Boshqa mahsulotni olish"),
+                view -> executeFbsAction("cancel-kiz-relabel", null, null)));
+        } else if ("SCAN_NEW_KIZ".equals(state)) {
+            root.addView(feedbackView(tr("Наклейте новый КИЗ на эту единицу и отсканируйте его. Старую этикетку сохраните до завершения операции.",
+                "Shu mahsulotga yangi KIZ yopishtiring va skanerlang. Amal tugaguncha eski yorliqni saqlang."), Color.rgb(254, 240, 138)));
+            root.addView(primaryMenuButton(tr("Сканировать новый КИЗ", "Yangi KIZni skanerlash"),
+                view -> showFbsGuidedScanDialog(state, task, productName, article, color, size, marketplaceName)));
         } else if ("CONFIRM_KIZ_MOVE".equals(state)) {
             TsdFbsAssemblyResponse.KizMoveProposal proposal = fbsAssembly.kizMoveProposal;
             String fromBox = proposal == null ? "-" : nonEmpty(proposal.fromBoxCode, "-");
@@ -5256,7 +5314,7 @@ public class MainActivity extends Activity {
         }
 
         dismissFbsGuidedScanDialog();
-        boolean scanKiz = "SCAN_KIZ".equals(state);
+        boolean scanKiz = "SCAN_KIZ".equals(state) || "SCAN_NEW_KIZ".equals(state);
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         content.setPadding(dp(18), dp(8), dp(18), 0);
@@ -5350,7 +5408,7 @@ public class MainActivity extends Activity {
             return;
         }
         String state = nonEmpty(fbsAssembly.state, "");
-        if ("SCAN_KIZ".equals(state)) {
+        if ("SCAN_KIZ".equals(state) || "SCAN_NEW_KIZ".equals(state)) {
             String kizError = fbsKizScanError(value);
             if (!kizError.isEmpty()) {
                 // FIX: a locally rejected KIZ must not remain in the scanner
@@ -5671,6 +5729,12 @@ public class MainActivity extends Activity {
         TsdFbsAssemblyResponse.Task currentTask = fbsAssembly == null ? null : fbsAssembly.task;
         if (session == null || currentTask == null || fbsBusy) return;
         String submittedState = fbsAssembly == null ? "" : nonEmpty(fbsAssembly.state, "");
+        // FIX: capture the proposal with the task before background work; never relabel a different task's unit.
+        String relabelProposalId = fbsAssembly.kizRelabelProposal == null ? "" : nonEmpty(fbsAssembly.kizRelabelProposal.id, "");
+        if (("SCAN_NEW_KIZ".equals(submittedState) || "cancel-kiz-relabel".equals(action)) && relabelProposalId.isEmpty()) {
+            showFbsError(tr("Обновите задание и повторно отсканируйте старый КИЗ.", "Topshiriqni yangilang va eski KIZni qayta skanerlang."), true);
+            return;
+        }
         String actionOwnerKey = fbsSessionOwnerKey(session);
         String previousBoxCode = nonEmpty(currentTask.scannedBoxCode, "");
         boolean previousBoxWasNotPicked =
@@ -5692,7 +5756,15 @@ public class MainActivity extends Activity {
             WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
             Map<String, Object> payload = new LinkedHashMap<>();
             if (field != null) payload.put(field, value);
+            payload.put("supportsKizRelabel", true);
             if ("scan-kiz-move".equals(action)) payload.put("confirmBoxMove", true);
+            if ("SCAN_NEW_KIZ".equals(submittedState) && "scan-kiz".equals(action)) {
+                payload.putAll(FbsKizRelabelRequest.confirm(value, relabelProposalId, false));
+            }
+            if ("cancel-kiz-relabel".equals(action)) {
+                payload.put("cancelKizRelabel", true);
+                payload.put("kizRelabelProposalId", relabelProposalId);
+            }
             Response<TsdFbsAssemblyResponse> response;
             if ("scan-any".equals(action)) {
                 response = api.scanFbsCode(session.authorizationHeader(), taskId, payload).execute();
@@ -5700,7 +5772,7 @@ public class MainActivity extends Activity {
                 response = api.scanFbsBox(session.authorizationHeader(), taskId, payload).execute();
             } else if ("scan-barcode".equals(action)) {
                 response = api.scanFbsBarcode(session.authorizationHeader(), taskId, payload).execute();
-            } else if ("scan-kiz".equals(action) || "scan-kiz-move".equals(action)) {
+            } else if ("scan-kiz".equals(action) || "scan-kiz-move".equals(action) || "cancel-kiz-relabel".equals(action)) {
                 response = api.scanFbsKiz(session.authorizationHeader(), taskId, payload).execute();
             } else if ("undo-kiz".equals(action)) {
                 response = api.undoFbsKiz(session.authorizationHeader(), taskId).execute();
