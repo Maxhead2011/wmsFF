@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { MarketplaceConnectionsService } from '../marketplace-connections/marketplace-connections.service';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import { requiresFbsReturnReceipt } from '../marketplace-connections/fbs-return-receipt';
 import { fbsTerminalQueueFilterEnabled, isFbsTerminalQueueOrder } from '../../common/fbs-terminal-queue';
@@ -77,6 +78,7 @@ export class TsdAssemblyService {
     private readonly pickInstructions: PickInstructionService,
     private readonly stockOperations: StockOperationsService,
     private readonly fbsRequestBoxAudits: FbsRequestBoxAuditService,
+    @Optional() private readonly marketplaceConnections?: MarketplaceConnectionsService,
   ) {}
 
   async listActiveRequests(user: AuthUser) {
@@ -1167,6 +1169,12 @@ export class TsdAssemblyService {
         };
       })
       .filter((row) => row.remainingQuantity > 0);
+    // FIX: online hints must discover stock received/moved after the instruction snapshot.
+    // Keep the warehouse instruction itself frozen and isolate the sold installation.
+    if (process.env.WMS_FBS_LIVE_ONLINE_STOCK_ENABLED === 'true') {
+      const liveBoxes = await this.loadLiveFbsAvailableBoxes(requestId, notCollectedRows);
+      for (const row of notCollectedRows) row.availableBoxes = liveBoxes.get(row.requestItemId) ?? [];
+    }
     const requestRowBySkuId = new Map(
       requestRows
         .filter((row): row is typeof row & { skuId: string } => Boolean(row.skuId))
@@ -1336,6 +1344,69 @@ export class TsdAssemblyService {
         rows: notCollectedRows,
       },
     };
+  }
+
+  private async loadLiveFbsAvailableBoxes(requestId: string, rows: Array<{
+    requestItemId: string; skuId: string | null; remainingQuantity: number;
+    orders: Array<{ assemblyId: string | null }>;
+  }>) {
+    type Hint = { boxCode: string; quantity: number; palletId: string; palletCode: string;
+      storageLocation: { palletId: string; palletCode: string; zoneId: string | null;
+        zoneCode: string | null; zoneName: string | null } };
+    const result = new Map<string, Hint[]>();
+    const skuIds = uniqueSorted(rows.flatMap(row => row.skuId ? [row.skuId] : []));
+    if (!skuIds.length) return result;
+    const request = await this.prisma.clientRequest.findUnique({ where: { id: requestId },
+      select: { clientId: true, warehouseId: true, status: true } });
+    if (!request?.warehouseId || ['DONE', 'CANCELLED', 'REJECTED'].includes(request.status)) return result;
+    if (!this.marketplaceConnections) throw new BadRequestException('Расчёт текущих резервов FBS недоступен.');
+    const [balances, reservations] = await Promise.all([
+      this.prisma.stockBalance.findMany({ where: {
+        clientId: request.clientId, warehouseId: request.warehouseId, skuId: { in: skuIds },
+        status: StockStatus.AVAILABLE, quantity: { gt: 0 },
+        box: { clientId: request.clientId, warehouseId: request.warehouseId,
+          status: { notIn: ['deleted', 'archived'] },
+          storagePlacement: { pallet: { warehouseId: request.warehouseId } } },
+      }, select: { skuId: true, boxId: true, quantity: true,
+        box: { select: { code: true, storagePlacement: { include: { pallet: { include: { zone: true } } } } } } },
+        orderBy: [{ boxId: 'asc' }, { id: 'asc' }] }),
+      // FIX: share the handheld reservation rules, including already physically picked units.
+      this.marketplaceConnections.repeatAssemblyStockReservations(request.clientId, skuIds, this.prisma),
+    ]);
+    const buckets = new Map<string, { quantity: number; used: number; balance: typeof balances[number] }>();
+    for (const balance of balances) {
+      if (!balance.boxId || !balance.box?.storagePlacement) continue;
+      const key = `${balance.skuId}:${balance.boxId}`;
+      const bucket = buckets.get(key) ?? { quantity: 0, used: 0, balance };
+      bucket.quantity += balance.quantity; buckets.set(key, bucket);
+    }
+    const allOwnTasks = new Set(rows.flatMap(row => row.orders.map(order => order.assemblyId)).filter(Boolean));
+    for (const row of rows) {
+      const ownTasks = new Set(row.orders.map(order => order.assemblyId).filter(Boolean));
+      const reserved = reservations.get(row.skuId ?? '') ?? [];
+      const choices = [...buckets.values()].filter(b => b.balance.skuId === row.skuId)
+        .sort((a, b) => Number(reserved.some(r => r.boxId === b.balance.boxId && ownTasks.has(r.taskId))) -
+          Number(reserved.some(r => r.boxId === a.balance.boxId && ownTasks.has(r.taskId))));
+      const hints: Hint[] = []; let remaining = row.remainingQuantity;
+      for (const bucket of choices) {
+        const others = reserved.filter(r => r.boxId === bucket.balance.boxId && !ownTasks.has(r.taskId))
+          .reduce((sum, r) => sum + r.itemCount, 0);
+        const external = reserved.filter(r => r.boxId === bucket.balance.boxId && !allOwnTasks.has(r.taskId))
+          .reduce((sum, r) => sum + r.itemCount, 0);
+        // Both limits matter: retain other orders' reservations and never promise one unit twice.
+        const quantity = Math.min(remaining, Math.max(0, bucket.quantity - others), bucket.quantity - external - bucket.used);
+        if (quantity <= 0) continue;
+        const placement = bucket.balance.box!.storagePlacement!;
+        hints.push({ boxCode: bucket.balance.box!.code, quantity, palletId: placement.palletId,
+          palletCode: placement.pallet.code, storageLocation: { palletId: placement.palletId,
+            palletCode: placement.pallet.code, zoneId: placement.pallet.zoneId,
+            zoneCode: placement.pallet.zone?.code ?? null, zoneName: placement.pallet.zone?.name ?? null } });
+        bucket.used += quantity; remaining -= quantity;
+        if (remaining <= 0) break;
+      }
+      result.set(row.requestItemId, hints);
+    }
+    return result;
   }
 
   private async loadCurrentFbsAllocationQuantities(requestId: string, requestRows: PickInstructionDocument['rows']) {
