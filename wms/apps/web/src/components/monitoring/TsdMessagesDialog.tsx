@@ -16,6 +16,7 @@ export function TsdMessagesDialog({ token, deviceCode, name, onClose }: { token:
   const [messages, setMessages] = useState<TsdMonitorMessage[]>([]);
   const [supported, setSupported] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
+  const [translationBusy, setTranslationBusy] = useState(false); // FIX: never send an unfinished translation.
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const attempt = useRef<{ text: string; id: string } | null>(null);
@@ -35,7 +36,7 @@ export function TsdMessagesDialog({ token, deviceCode, name, onClose }: { token:
     return () => { active = false; window.clearInterval(timer); };
   }, [token, deviceCode]);
   const send = async () => {
-    if (sending.current || !text.trim() || !supported) return;
+    if (sending.current || translationBusy || !text.trim() || !supported) return;
     sending.current = true; setBusy(true); setError(''); setNotice('');
     // FIX: uncertain HTTP retries reuse the same UUID; never duplicate a message.
     if (!attempt.current || attempt.current.text !== text.trim()) attempt.current = { text: text.trim(), id: crypto.randomUUID() };
@@ -54,11 +55,11 @@ export function TsdMessagesDialog({ token, deviceCode, name, onClose }: { token:
     {supported === false ? <p role="alert">Обновите приложение на этом ТСД — текущая версия не поддерживает сообщения.</p> : null}
     {error ? <p role="alert">{error}</p> : null}
     {notice ? <p role="status">{notice}</p> : null}
-    <label>Текст сообщения<textarea autoFocus maxLength={2000} rows={5} value={text} disabled={busy} onChange={event => setText(event.target.value)} /></label>
+    <label>Текст сообщения<textarea autoFocus maxLength={2000} rows={5} value={text} disabled={busy || translationBusy} onChange={event => setText(event.target.value)} /></label>
     {/* FIX: translation edits only the draft; the existing send/ack flow is unchanged. */}
-    <TsdMessageTranslation key={deviceCode} text={text} disabled={busy} onApply={setText} />
+    <TsdMessageTranslation key={deviceCode} text={text} disabled={busy} onApply={setText} onBusyChange={setTranslationBusy} />
     <div className="tsd-messages__buttons">
-      <button type="button" disabled={busy || !supported || !text.trim()} onClick={() => void send()}>{busy ? 'Отправляю…' : 'Отправить на ТСД'}</button>
+      <button type="button" disabled={busy || translationBusy || !supported || !text.trim()} onClick={() => void send()}>{busy ? 'Отправляю…' : 'Отправить на ТСД'}</button>
       <button type="button" disabled={busy} onClick={onClose}>Закрыть</button>
     </div>
     <h3>История сообщений</h3><TsdMessageHistory messages={messages} />
