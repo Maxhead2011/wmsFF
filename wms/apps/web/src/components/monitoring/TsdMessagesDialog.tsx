@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { fetchTsdMessages, sendTsdMessage, type TsdMonitorMessage } from '../../lib/api';
+import { TsdMessageTranslation } from './TsdMessageTranslation';
 
 // ADDED: bounded, polling history; only server readAt counts as read.
 export function TsdMessageHistory({ messages }: { messages: TsdMonitorMessage[] }) {
@@ -54,6 +55,8 @@ export function TsdMessagesDialog({ token, deviceCode, name, onClose }: { token:
     {error ? <p role="alert">{error}</p> : null}
     {notice ? <p role="status">{notice}</p> : null}
     <label>Текст сообщения<textarea autoFocus maxLength={2000} rows={5} value={text} disabled={busy} onChange={event => setText(event.target.value)} /></label>
+    {/* FIX: translation edits only the draft; the existing send/ack flow is unchanged. */}
+    <TsdMessageTranslation key={deviceCode} text={text} disabled={busy} onApply={setText} />
     <div className="tsd-messages__buttons">
       <button type="button" disabled={busy || !supported || !text.trim()} onClick={() => void send()}>{busy ? 'Отправляю…' : 'Отправить на ТСД'}</button>
       <button type="button" disabled={busy} onClick={onClose}>Закрыть</button>
