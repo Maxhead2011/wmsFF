@@ -395,12 +395,14 @@ export class PalletSortingService {
       const picked = await tx.stockMovement.findFirst({ where: { idempotencyKey: { startsWith: `fbs-sticker-pick:${task.id}:` }, quantity: { lt: 0 } }, select: { id: true } });
       if (picked) continue;
       const automatic = task.requestId.startsWith('AUTO:');
-      const request = automatic ? null : await tx.clientRequest.findUnique({ where: { id: task.requestId }, select: { warehouseId: true, clientId: true } });
+      const request = automatic ? null : await tx.clientRequest.findUnique({ where: { id: task.requestId }, select: { warehouseId: true, clientId: true, status: true } });
       // FIX: an AUTO task is scoped by its verified source box; it has no ClientRequest row.
       if (!automatic && (!request || request.warehouseId !== origin.warehouseId || request.clientId !== origin.clientId)) {
         await this.audit(tx, state, user, 'FBS_ROUTE_SCOPE_CONFLICT', { taskId: task.id, orderId: task.orderId, origin, request });
         continue;
       }
+      // FIX: closed requests retain their historical tasks; sorting must not enqueue an impossible repair.
+      if (request && ['DONE', 'CANCELLED', 'REJECTED'].includes(request.status)) continue;
       const changed = await tx.fbsTsdAssembly.updateMany({ where: { id: task.id, updatedAt: task.updatedAt, barcode: null, kiz: null, sourceBarcode: null, relabelConfirmedAt: null },
         data: { boxId: null, boxCode: null, reservedBoxId: null, reservedBoxCode: null, reservedAt: null, storageBoxes: [],
           status: task.status === 'IN_PROGRESS' ? 'IN_PROGRESS' : 'WAITING_STOCK', errorMessage: 'Источник изменён при сортировке. Выполняется перестроение маршрута.' } });

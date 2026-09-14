@@ -4388,6 +4388,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (onlyTaskIds && request.warehouseId !== user.activeWarehouseId) {
       throw new ForbiddenException('Заявка относится к другому филиалу.');
     }
+    // FIX: an exact sorting retry may outlive its request. Acknowledge it without changing tasks, stock or WB.
+    if (onlyTaskIds && request.type === ClientRequestType.OUTBOUND && FBS_REQUEST_CLOSED_STATUSES.has(request.status)) {
+      const ids = [...new Set(onlyTaskIds)];
+      const tasks = await this.prisma.fbsTsdAssembly.findMany({ where: { id: { in: ids }, requestId, clientId: request.clientId },
+        select: { id: true, requestId: true, clientId: true } });
+      if (tasks.length !== ids.length || !ids.every(id => tasks.some(t => t.id === id && t.requestId === requestId && t.clientId === request.clientId))) {
+        throw new ConflictException('Затронутые задания больше не соответствуют заявке. Обновите сортировку.');
+      }
+      return { requestId, requestNumber: request.number, restoredTasks: 0, repairedTasks: 0, reservedTasks: 0,
+        waitingStockTasks: 0, preservedStartedTasks: 0, skippedTaskIds: ids, route: null, diff: null, sync: null,
+        message: 'Перестроение не требуется: заявка закрыта. Остатки и история не изменены.' };
+    }
     // FIX: an FBS request with only completed/cancelled orders has no confirm links.
     // The exact sorting retry is a no-op, not a new pick or an invalid request type.
     if (onlyTaskIds && request.type === ClientRequestType.OUTBOUND && request.fbsOrderLinks.length === 0) {
