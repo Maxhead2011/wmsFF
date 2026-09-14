@@ -3,6 +3,7 @@ import { fbsStockAuditError, fbsKizAuditEnabled, validateFbsStockAudit } from '.
 import { createHash } from 'node:crypto';
 import { timingSnapshot, type SourceOrderTiming } from '../operations-statistics/order-timing';
 import { isOwnedUnpaidDraft, runBillingMutation, withBillingDb } from '../billing/billing-mutation';
+import { lukinPrimaryLines } from '../billing/lukin-primary-policy';
 import { collectedFbsBoxMessage } from './fbs-collected-box-message';
 // FIX: preserve both sorting and release-158 recount/terminal-queue dependencies.
 import { assertSortingAdmin } from '../inventory/pallet-sorting-policy';
@@ -433,6 +434,7 @@ type FbsPrimaryBillingService = Prisma.ClientBillingServiceGetPayload<{
   };
 }>;
 type FbsPrimaryChargeLine = {
+  billingPolicy?: string;
   key: string;
   description: string;
   quantity: number;
@@ -27086,7 +27088,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         priceBeforeTaxRub,
       } satisfies FbsPrimaryChargeLine;
     });
-    const configuredLines = inputLines.filter(
+    // FIX: validate and normalize the opted-in client composition before any charge writes.
+    const configuredLines = lukinPrimaryLines(input.clientId, input.shipmentItems, inputLines).filter(
       (line) => line.quantity > 0 && line.unitPriceRub > 0,
     );
     if (configuredLines.length === 0) {
@@ -27139,6 +27142,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           quantity: input.shipmentItems,
           lineQuantity: line.quantity,
           processingType: line.key,
+          ...(line.billingPolicy ? { billingPolicy: line.billingPolicy } : {}),
           serviceCode: line.serviceCode,
           taxMode: line.taxMode,
           priceBeforeTaxRub: line.priceBeforeTaxRub,
