@@ -133,6 +133,21 @@ describe('physical KIZ audit return gate', () => {
     const f = auditFixture(); f.balances[0].warehouseId = 'sold';
     await expect(f.run()).rejects.toThrow('другая принадлежность');
   });
+  // TEST: administrator BOX_CHECK sessions intentionally have no warehouse restriction.
+  // The box and the FBS request still have to belong to the same physical branch.
+  it('accepts an unrestricted administrator audit in the request warehouse', async () => {
+    const f = auditFixture(); (f.session as any).warehouseId = null;
+    await expect(f.run()).resolves.toMatchObject({ ready: true });
+  });
+  it('does not allow an unrestricted audit to cross the FBS request warehouse', async () => {
+    const f = auditFixture(); (f.session as any).warehouseId = null;
+    f.db.clientRequest.findUnique.mockResolvedValue({ warehouseId: 'other-branch' });
+    await expect(f.run()).rejects.toThrow('филиал');
+  });
+  it('still rejects an explicitly different audit warehouse', async () => {
+    const f = auditFixture(); f.session.warehouseId = 'other-branch';
+    await expect(f.run()).rejects.toThrow('филиал');
+  });
   it('rejects stale quantity after a parallel movement', async () => {
     const f = auditFixture(); f.balances[0].quantity = 0;
     await expect(f.run()).rejects.toThrow('не совпадает');

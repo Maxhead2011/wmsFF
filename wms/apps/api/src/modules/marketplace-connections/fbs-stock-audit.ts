@@ -34,8 +34,9 @@ export async function validateFbsStockAudit(db: Prisma.TransactionClient, task: 
     db.box.findUnique({ where: { id: audit.boxId } }),
     db.clientRequest.findUnique({ where: { id: task.requestId }, select: { warehouseId: true } }),
   ]);
+  // FIX: administrator sessions may be unrestricted; the physical box must still match the request warehouse.
   if (!box || !request || box.clientId !== task.clientId || !box.warehouseId ||
-      box.warehouseId !== session!.warehouseId || box.warehouseId !== request.warehouseId ||
+      (session!.warehouseId !== null && box.warehouseId !== session!.warehouseId) || box.warehouseId !== request.warehouseId ||
       !['active', 'receiving'].includes(box.status)) stop('Короб изменил филиал, клиента или статус. Нужен разбор администратора.');
   const [marks, balances, evidence] = await Promise.all([
     db.productMark.findMany({ where: { boxId: audit.boxId } }),
