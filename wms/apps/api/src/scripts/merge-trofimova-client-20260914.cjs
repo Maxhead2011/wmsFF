@@ -17,6 +17,11 @@ const APPROVED_AMOUNTS = {
   '472d3fe3-cd24-4fce-a0d6-1b008d7f2d62': ['ed8eb4b1-9e21-40b4-a84a-bd6a561ff442', '1902.13', '1922.87'],
   'd1a138dc-1bfc-4fd6-a1fc-ad895fb55e2b': ['be110f08-3eb4-492a-a8a0-ac0c8d73e2f7', '1860.64', '1902.13'],
 };
+// FIX: Konstantin confirmed keeping these two newly created invoices after the first safe abort.
+const APPROVED_INVOICED_SOURCE = {
+  'c17901be-c10d-4cd8-8cf8-856ba8381525': ['faa2c82f-b608-4a08-9230-4590212c094a', '306.38', '1902.13'],
+  'a6332590-60af-47bf-b12f-b919df327276': ['21bcc500-0dcf-4053-9525-1c3f9788abe1', '264.89', '1860.64'],
+};
 const REFS = ['clientId', 'skuId', 'sourceSkuId', 'lastSkuId', 'connectionId', 'marketplaceConnectionId'];
 const SPECIAL = ['Client','ClientMarketplaceConnection','Sku','Barcode','BillingCharge','BillingInvoiceItem',
   'ClientBillingService','ClientFbsBillingSettings','UserClient','WarehouseClient','FbsTsdAssembly',
@@ -66,6 +71,17 @@ function buildPlan(s) {
     const current=charges.find(r=>r.clientId===TARGET && old.sourceKey && r.sourceKey===canonical(old.sourceKey));
     if(!current){remap('BillingCharge',old,{metadata:canonicalJson(old.metadata)});continue;}
     assert(old.status==='DRAFT' && current.status==='DRAFT','Cannot deduplicate non-draft charges');
+    const preserveInvoice=APPROVED_INVOICED_SOURCE[old.id];
+    if(preserveInvoice){
+      assert(preserveInvoice[0]===current.id && Number(preserveInvoice[1])===Number(old.totalRub)
+        && [Number(preserveInvoice[1]),Number(preserveInvoice[2])].includes(Number(current.totalRub)),'Approved invoiced amounts changed');
+      assert(rows(s,'BillingInvoiceItem').some(i=>i.chargeId===old.id),'Confirmed invoice missing');
+      assert(!rows(s,'BillingInvoiceItem').some(i=>i.chargeId===current.id),'Both charges are invoiced');
+      assert(!rows(s,'LogisticsDeliveryRequest').some(r=>r.billingChargeId===current.id),'Canonical charge has logistics dependency');
+      remove('BillingCharge',current);
+      remap('BillingCharge',old,{metadata:canonicalJson(old.metadata)});
+      continue;
+    }
     if(Number(old.totalRub)!==Number(current.totalRub)){
       const approved=APPROVED_AMOUNTS[old.id];
       assert(approved && approved[0]===current.id && Number(approved[1])===Number(old.totalRub) && Number(approved[2])===Number(current.totalRub),'Unapproved billing difference');
@@ -209,7 +225,7 @@ async function merge(db,{mode='preview',actorId,backupSha}={}) {
       assert(result[0].n===0,`Dangling source references: ${t}.${c}`);
     }
     await tx.auditLog.create({data:{id:crypto.randomUUID(),userId:actorId,action:ACTION,entity:'Client',entityId:TARGET,
-      payload:{sourceId:SOURCE,targetId:TARGET,backupSha,counts,skuMap:SKU_MAP,connectionMap:{[OLD_CONNECTION]:CONNECTION},approvedAmounts:APPROVED_AMOUNTS,
+      payload:{sourceId:SOURCE,targetId:TARGET,backupSha,counts,skuMap:SKU_MAP,connectionMap:{[OLD_CONNECTION]:CONNECTION},approvedAmounts:APPROVED_AMOUNTS,approvedInvoicedSource:APPROVED_INVOICED_SOURCE,
         deletedRecords:plan.filter(p=>p.op==='delete').map(p=>({table:p.table,...p.key})),invariants:after}}});
     return {mode,counts,invariants:after};
   },{isolationLevel:'Serializable',timeout:120000,maxWait:5000});
