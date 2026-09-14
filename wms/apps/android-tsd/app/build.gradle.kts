@@ -23,8 +23,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 168 // FIX: explicit physical KIZ replacement for every authorized FBS picker.
-            versionName = "0.1.169-fbs-kiz-relabel"
+            versionCode = 169 // FIX: OWNER inherits administrator access to sorting and movement.
+            versionName = "0.1.170-owner-sorting"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

@@ -2,10 +2,16 @@ import { BadRequestException, ConflictException, ForbiddenException } from '@nes
 import type { AuthUser } from '../auth/auth.types';
 
 // ADDED: opt-in, role-based, branch-scoped access; no effect on the sold installation.
+// FIX: OWNER has ADMIN sorting authority without an additional role assignment.
+export function canUsePalletSorting(user: Pick<AuthUser, 'roleCodes' | 'isDemo'>) {
+  return process.env.WMS_PALLET_SORTING_ENABLED === 'true' &&
+    user.roleCodes.some(role => role === 'ADMIN' || role === 'OWNER') && !user.isDemo;
+}
+
 export function assertSortingAdmin(user: Pick<AuthUser, 'roleCodes' | 'activeWarehouseId' | 'isDemo'>) {
-  // FIX: ADMIN authority never bridges the demo/production data boundary.
-  if (process.env.WMS_PALLET_SORTING_ENABLED !== 'true' || !user.roleCodes.includes('ADMIN') || user.isDemo) {
-    throw new ForbiddenException('Сортировка и перемещение доступны только администратору при включённом сервисе.');
+  // FIX: the menu capability and all sorting actions share the same OWNER/ADMIN policy.
+  if (!canUsePalletSorting(user)) {
+    throw new ForbiddenException('Сортировка и перемещение доступны администратору и собственнику при включённом сервисе.');
   }
   if (!user.activeWarehouseId) throw new BadRequestException('Сначала выберите филиал.');
 }
