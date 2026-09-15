@@ -18,6 +18,9 @@ import retrofit2.http.Url;
 import okhttp3.MultipartBody;
 
 public interface WmsApi {
+    // FIX: read-only administrator lookup; no stock or marketplace mutations.
+    @POST("api/v1/inventory/kiz-location/check")
+    Call<TsdKizLocationResponse> checkKizLocation(@Header("Authorization") String authorization, @Body Map<String, String> request);
     // ADDED: independent administrator sorting; ordinary transfer APIs are unchanged.
     @GET("api/v1/pallet-sorting")
     Call<List<Map<String, Object>>> listPalletSortings(@Header("Authorization") String authorization);

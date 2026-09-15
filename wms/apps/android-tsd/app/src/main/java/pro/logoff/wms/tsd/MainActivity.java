@@ -179,6 +179,7 @@ public class MainActivity extends Activity {
     private EditText transferScanInput;
     private EditText skuCollectionScanInput;
     private PalletSortingScreen palletSortingScreen; // ADDED: independent administrator workflow.
+    private KizLocationScreen kizLocationScreen;
     private TsdAssemblyPlan assemblyPlan;
     private TsdBoxlessPackingResponse boxlessPacking;
     private TsdRelabelTask activeRelabelTask;
@@ -387,6 +388,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (kizLocationScreen != null) kizLocationScreen.close();
         if (monitorMessageOverlay != null) monitorMessageOverlay.close();
         if (palletSortingScreen != null) palletSortingScreen.close();
         mainHandler.removeCallbacks(monitorHeartbeatTask);
@@ -405,6 +407,10 @@ public class MainActivity extends Activity {
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN && event.getKeyCode() == KeyEvent.KEYCODE_ENTER) {
+            if (screen == Screen.KIZ_LOCATION && kizLocationScreen != null) {
+                kizLocationScreen.submit();
+                return true;
+            }
             if (screen == Screen.PALLET_SORTING && palletSortingScreen != null) {
                 palletSortingScreen.submit();
                 return true;
@@ -526,6 +532,12 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (screen == Screen.KIZ_LOCATION && kizLocationScreen != null) {
+            kizLocationScreen.close();
+            kizLocationScreen = null;
+            renderMainScreen();
+            return;
+        }
         if (screen == Screen.PALLET_SORTING && palletSortingScreen != null) {
             if (!palletSortingScreen.canLeave()) {
                 showScanningErrorDialog("Сначала завершите текущую единицу или подтвердите результат запроса.");
@@ -554,6 +566,7 @@ public class MainActivity extends Activity {
     }
 
     private void renderMainScreen() {
+        if (kizLocationScreen != null) { kizLocationScreen.close(); kizLocationScreen = null; }
         TsdSession session = safeSession();
         if (session == null) {
             renderSettingsScreen();
@@ -603,6 +616,10 @@ public class MainActivity extends Activity {
                 view -> openStoragePalletAssembly()
             ));
             root.addView(primaryMenuButton(tr("Инвентаризация", "Inventarizatsiya"), view -> renderInventoryMenu()));
+            // FIX: administrator lookup is immediately below Inventory in our TSD menu.
+            if (KizLocationPolicy.canOpen(BuildConfig.FLAVOR, session)) {
+                root.addView(primaryMenuButton("Проверка КИЗ", view -> openKizLocation()));
+            }
             root.addView(primaryMenuButton(
                 phoneMode
                     ? tr("Телефон: камера включена", "Telefon: kamera yoqilgan")
@@ -634,6 +651,17 @@ public class MainActivity extends Activity {
             if (session.hasRole(role)) return false;
         }
         return true;
+    }
+
+    private void openKizLocation() {
+        TsdSession session = safeSession();
+        if (!KizLocationPolicy.canOpen(BuildConfig.FLAVOR, session)) return;
+        if (kizLocationScreen != null) kizLocationScreen.close();
+        screen = Screen.KIZ_LOCATION;
+        kizLocationScreen = new KizLocationScreen(this, session, WmsApiFactory.create(DEFAULT_BASE_URL), () -> {
+            kizLocationScreen = null;
+            renderMainScreen();
+        });
     }
 
     private void openStockTransfer() {
@@ -1143,6 +1171,7 @@ public class MainActivity extends Activity {
     }
 
     private void renderSettingsScreen() {
+        if (kizLocationScreen != null) { kizLocationScreen.close(); kizLocationScreen = null; }
         screen = Screen.SETTINGS;
         TsdSession session = safeSession();
         LinearLayout root = baseRoot();
@@ -8671,6 +8700,7 @@ public class MainActivity extends Activity {
             case INVENTORY_MENU:
             case INVENTORY_START:
             case INVENTORY_COUNT: return "Инвентаризация";
+            case KIZ_LOCATION: return "\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 \u041a\u0418\u0417";
             case SKU_COLLECTION: return "Сборка по SKU";
             case SETTINGS: return "Настройки";
             case INFO: return "Информация";
@@ -8812,6 +8842,7 @@ public class MainActivity extends Activity {
             return transferScanInput;
         }
         if (screen == Screen.SKU_COLLECTION) return skuCollectionScanInput;
+        if (screen == Screen.KIZ_LOCATION && kizLocationScreen != null) return kizLocationScreen.scannerField();
         if (screen == Screen.PALLET_SORTING && palletSortingScreen != null) return palletSortingScreen.scannerField();
         if (
             screen == Screen.BOX_SEARCH ||
@@ -8924,6 +8955,7 @@ public class MainActivity extends Activity {
     }
 
     private void submitPhoneCameraScan() {
+        if (screen == Screen.KIZ_LOCATION && kizLocationScreen != null) { kizLocationScreen.submit(); return; }
         if (screen == Screen.PALLET_SORTING && palletSortingScreen != null) { palletSortingScreen.submit(); return; }
         if (screen == Screen.RECEIPT) {
             submitReceiptInput();
@@ -9805,6 +9837,14 @@ public class MainActivity extends Activity {
     }
 
     private void refreshCurrentScreen() {
+        if (screen == Screen.KIZ_LOCATION && kizLocationScreen != null) {
+            // FIX: heartbeat preserves the scan; changed login invalidates the old response.
+            if (kizLocationScreen.belongsTo(safeSession())) return;
+            kizLocationScreen.close();
+            kizLocationScreen = null;
+            renderMainScreen();
+            return;
+        }
         if (screen == Screen.PALLET_SORTING && palletSortingScreen != null && safeSession() != null) {
             // FIX: the sorting screen refreshes after its own commands; heartbeat must not erase a scan.
             return;
@@ -10259,6 +10299,7 @@ public class MainActivity extends Activity {
         INVENTORY_COUNT,
         SKU_COLLECTION,
         PALLET_SORTING,
+        KIZ_LOCATION,
         INFO
     }
 
