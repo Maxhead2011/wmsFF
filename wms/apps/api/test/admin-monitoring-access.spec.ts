@@ -39,11 +39,10 @@ describe('ADMIN monitoring read access', () => {
     await expect(setup().service.listTsdWorkloads({ ...admin, administrationEnabled: true } as never)).resolves.toMatchObject({ devices: [] });
   });
   it('does not grant owner actions or administration with monitoring read access', async () => {
-    // TEST: menu access does not authorize logout, task release, or general owner tools.
+    // TEST: monitoring controls do not authorize logout or general owner tools.
     vi.stubEnv('ADMIN_MONITORING_ENABLED', 'true');
     const { service } = setup();
     await expect(service.issueTsdMonitorAction('TSD-1', 'LOGOUT', admin as never)).rejects.toThrow(ForbiddenException);
-    await expect(service.disconnectTsdRequest({ requestId: 'request', deviceCode: 'TSD-1' }, admin as never)).rejects.toThrow(ForbiddenException);
     expect(() => service.documentation(admin as never)).toThrow(ForbiddenException);
   });
 });

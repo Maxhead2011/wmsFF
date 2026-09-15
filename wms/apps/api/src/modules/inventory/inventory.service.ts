@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
-import { fbsKizAuditEnabled, FBS_KIZ_AUDIT_MARKER } from '../marketplace-connections/fbs-stock-audit';
+import { confirmInventoryKizComposition, matchingLatestKizAudit } from './confirmed-kiz-composition';
+import { fbsKizAuditEnabled, FBS_KIZ_AUDIT_MARKER, validateFbsStockAudit } from '../marketplace-connections/fbs-stock-audit';
 import {
   InventoryBoxStatus,
   InventoryLineDecision,
@@ -29,6 +30,12 @@ const sessionInclude = {
     orderBy: { startedAt: 'desc' },
   },
 } satisfies Prisma.InventorySessionInclude;
+
+type KizReviewSession = Prisma.InventorySessionGetPayload<{ include: typeof sessionInclude }> & {
+  boxes: Array<Prisma.InventoryAuditBoxGetPayload<{ include: { lines: true } }> & {
+    kizReview?: { required: boolean; orderId: string; message: string };
+  }>;
+};
 
 @Injectable()
 export class InventoryService {
@@ -84,6 +91,10 @@ export class InventoryService {
         : Promise.resolve([]),
     ]);
 
+    // FIX: completed quantity-matched checks can still block FBS on KIZ composition.
+    // Load their review queue separately so the last 100 historical sessions cannot hide them.
+    const kizReviews = await this.pendingKizReviews(user, warehouseId);
+    const kizReviewIds = new Set(kizReviews.map(session => session.id));
     const totalBoxes = activeFull
       ? await this.prisma.box.count({ where: { status: { notIn: ['deleted', 'archived'] } } })
       : 0;
@@ -101,10 +112,10 @@ export class InventoryService {
       activeSessions: activeSessions
         .filter((session) => canSeeInventorySession(user, session.clientId))
         .map((session) => this.decorateSession(session, undefined, hideResolvedBoxes)),
-      reviewSessions: reviewSessions
+      reviewSessions: [...kizReviews, ...reviewSessions.filter(session => !kizReviewIds.has(session.id))]
         .filter((session) => canSeeInventorySession(user, session.clientId))
         .map((session) => this.decorateSession(session, undefined, hideResolvedBoxes)),
-      historySessions: historySessions
+      historySessions: [...kizReviews, ...historySessions.filter(session => !kizReviewIds.has(session.id))]
         .filter((session) => canSeeInventorySession(user, session.clientId))
         .map((session) => this.decorateSession(session, undefined, hideResolvedBoxes)),
       pendingRescanRequests: pendingRescanRequests.filter((request) =>
@@ -112,6 +123,8 @@ export class InventoryService {
       ),
       canApproveRescan: canApproveInventoryRescan(user),
       canManage: canManageInventory(user),
+      canConfirmKiz: fbsKizAuditEnabled() && !user.isDemo && canManageInventory(user) &&
+        user.roleCodes.some(code => ['ADMIN', 'OWNER'].includes(code)),
     };
   }
 
@@ -148,7 +161,54 @@ export class InventoryService {
       session.type === InventorySessionType.FULL
         ? await this.prisma.box.count({ where: { status: { notIn: ['deleted', 'archived'] } } })
         : undefined;
-    return this.decorateSession(session, totalBoxes, hideResolvedBoxes);
+    const [review] = await this.pendingKizReviews(user, this.resolveScopedWarehouseId(user, 'read'), id);
+    return this.decorateSession(review ?? session, totalBoxes, hideResolvedBoxes);
+  }
+
+  // FIX: inspect the worker's saved round with the same read-only gate as the TSD.
+  // Approval remains the existing resolveBox transaction; listing never changes stock or marks.
+  private async pendingKizReviews(user: AuthUser, warehouseId: string | null, sessionId?: string): Promise<KizReviewSession[]> {
+    if (!fbsKizAuditEnabled() || user.isDemo || !canManageInventory(user)) return [];
+    const sessions = (await this.prisma.inventorySession.findMany({
+      where: { ...(sessionId ? { id: sessionId } : {}), type: InventorySessionType.BOX_CHECK,
+        status: { in: [InventorySessionStatus.ACTIVE, InventorySessionStatus.REVIEW, InventorySessionStatus.COMPLETED] }, comment: { contains: FBS_KIZ_AUDIT_MARKER },
+        ...(warehouseId ? { warehouseId } : {}),
+        boxes: { some: { status: { in: [InventoryBoxStatus.MATCHED, InventoryBoxStatus.RESOLVED, InventoryBoxStatus.MISMATCH] } } } },
+      include: sessionInclude, orderBy: { updatedAt: 'desc' },
+    })).filter(session => canSeeInventorySession(user, session.clientId) &&
+      !user.hiddenClientIds?.includes(session.clientId ?? ''));
+    const taskId = (session: { comment: string | null }) => /\[FBS_KIZ_STOCK_CHECK\] ([^;\s]+);/.exec(session.comment ?? '')?.[1];
+    const ids = sessions.map(taskId).filter((id): id is string => Boolean(id));
+    if (!ids.length) return [];
+    const tasks = await this.prisma.fbsTsdAssembly.findMany({ where: { id: { in: ids },
+      status: { in: ['IN_PROGRESS', 'RETURN_REQUIRED', 'RESERVED'] } } });
+    const result: KizReviewSession[] = [];
+    for (const session of sessions) {
+      const task = tasks.find(task => task.id === taskId(session) && task.clientId === session.clientId);
+      if (!task || session.boxes.length !== 1) continue;
+      const box = session.boxes[0];
+      // FIX: an already applied quantity decision can leave composition/status
+      // unfinished. Keep that retry visible without approving pending quantities.
+      if (box.lines.some(line => line.decision === 'PENDING' || line.difference !== 0 && line.decision !== 'APPLY_ACTUAL')) continue;
+      const latest = await this.prisma.inventoryAuditBox.findFirst({ where: { boxId: box.boxId },
+        orderBy: [{ startedAt: 'desc' }, { id: 'desc' }], select: { id: true } });
+      if (latest?.id !== box.id && (box.status !== InventoryBoxStatus.MISMATCH ||
+          !await matchingLatestKizAudit(this.prisma, { ...box, session }))) continue;
+      try {
+        await validateFbsStockAudit(this.prisma, task, session.id, session.createdByUserId);
+      } catch (error) {
+        const response = error instanceof ConflictException ? error.getResponse() : null;
+        if (!response || typeof response !== 'object' || !('code' in response) || response.code !== 'FBS_STOCK_AUDIT_PENDING') throw error;
+        // Only a composition/stock-status disagreement belongs to this approval button.
+        // An invalid session or changed quantity still needs its existing inventory workflow.
+        if (!(error instanceof Error) || !['Количество проверено, но состав КИЗ не подтверждён.',
+          'В коробе есть резерв, недоступный остаток или другая принадлежность.',
+          ...(box.status === InventoryBoxStatus.MISMATCH ? ['Сначала завершите пересчёт и разбор расхождений короба.'] : [])].some(prefix => error.message.startsWith(prefix))) continue;
+        result.push({ ...session, boxes: [{ ...box, kizReview: { required: true, orderId: task.orderId,
+          message: error instanceof Error ? error.message : 'Требуется подтверждение состава КИЗ.' } }] });
+      }
+    }
+    return result;
   }
 
   async startSession(dto: StartInventoryDto, user: AuthUser) {
@@ -1059,6 +1119,17 @@ export class InventoryService {
       await this.resolveAuditBoxAndReactivateIfReady(auditBox.id, user);
     }
 
+    // FIX: report success to WMS only after the original worker's return gate accepts the result.
+    // Missing physical scans or an intervening change must surface here, not as false confirmation.
+    const taskId = fbsKizAuditEnabled()
+      ? /\[FBS_KIZ_STOCK_CHECK\] ([^;\s]+);/.exec(auditBox.session.comment ?? '')?.[1] : undefined;
+    if (taskId) {
+      const task = await this.prisma.fbsTsdAssembly.findUnique({ where: { id: taskId } });
+      if (task && task.clientId === auditBox.clientId && ['IN_PROGRESS', 'RETURN_REQUIRED', 'RESERVED'].includes(task.status)) {
+        await validateFbsStockAudit(this.prisma, task, auditBox.sessionId, auditBox.session.createdByUserId);
+      }
+    }
+
     return this.prisma.inventoryAuditBox.findUnique({
       where: { id: auditBox.id },
       include: { lines: { orderBy: [{ skuName: 'asc' }, { internalSku: 'asc' }] } },
@@ -1312,6 +1383,8 @@ export class InventoryService {
       if (pending > 0) {
         return null;
       }
+      // FIX: finishing/retrying an administrator-approved box check also confirms its physical KIZ composition.
+      await confirmInventoryKizComposition(tx, auditBoxId, user);
       const current =
         auditBox.status === InventoryBoxStatus.RESOLVED
           ? auditBox
@@ -1425,12 +1498,12 @@ export class InventoryService {
     }
   }
 
-  private decorateSession<T extends { boxes: Array<{ status: InventoryBoxStatus; lines: Array<{ difference: number; decision: InventoryLineDecision; decisionComment?: string | null }> }> }>(
+  private decorateSession<T extends { boxes: Array<{ status: InventoryBoxStatus; kizReview?: { required: boolean }; lines: Array<{ difference: number; decision: InventoryLineDecision; decisionComment?: string | null }> }> }>(
     session: T,
     totalBoxes?: number,
     hideResolvedBoxes = false,
   ) {
-    const mismatchBoxes = session.boxes.filter((box) => box.status === InventoryBoxStatus.MISMATCH).length;
+    const mismatchBoxes = session.boxes.filter((box) => box.status === InventoryBoxStatus.MISMATCH || box.kizReview?.required).length;
     const unresolvedLines = session.boxes.reduce(
       (sum, box) => sum + box.lines.filter((line) => line.difference !== 0 && line.decision === InventoryLineDecision.PENDING).length,
       0,
@@ -1438,7 +1511,7 @@ export class InventoryService {
     return {
       ...session,
       boxes: session.boxes
-        .filter((box) => !hideResolvedBoxes || box.status !== InventoryBoxStatus.RESOLVED)
+        .filter((box) => !hideResolvedBoxes || box.status !== InventoryBoxStatus.RESOLVED || box.kizReview?.required)
         .map((box) => ({
         ...box,
         lines: box.lines.map((line) => ({

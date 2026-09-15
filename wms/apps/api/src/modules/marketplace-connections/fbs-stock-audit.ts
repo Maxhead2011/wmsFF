@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import type { FbsTsdAssembly, Prisma } from '@prisma/client';
+import { confirmedKizCompositionId } from '../inventory/confirmed-kiz-composition';
 
 export const FBS_KIZ_AUDIT_MARKER = '[FBS_KIZ_STOCK_CHECK]';
 export const fbsKizAuditEnabled = () => process.env.WMS_FBS_KIZ_MANDATORY_AUDIT === 'true';
@@ -47,8 +48,19 @@ export async function validateFbsStockAudit(db: Prisma.TransactionClient, task: 
   const skuIds = [...new Set([...audit.lines.map(line => line.skuId), ...marks.map(mark => mark.skuId), ...balances.map(row => row.skuId)])];
   const skus = await db.sku.findMany({ where: { id: { in: skuIds } }, select: { id: true, needsChestnyZnak: true, isUnmarked: true } });
   if (skus.length !== skuIds.length) stop('Не все товары короба найдены. Нужен разбор администратора.');
+  // FIX: administrator-confirmed historical packing remains in its shipment ledger,
+  // but is outside the physical contents that the worker has just counted.
+  const confirmation = fbsKizAuditEnabled() ? await db.auditLog.findUnique({ where: { id: confirmedKizCompositionId(audit.id, audit.startedAt) } }) : null;
+  const confirmed = confirmation?.payload as { auditBoxId?: string; boxId?: string; clientId?: string; warehouseId?: string;
+    roundStartedAt?: string; nonPhysicalBalances?: Array<{ id: string; skuId: string; status: string; quantity: number }> } | null;
+  const approved = confirmation?.action === 'INVENTORY_KIZ_COMPOSITION_CONFIRMED' && confirmed?.auditBoxId === audit.id &&
+    confirmed.boxId === audit.boxId && confirmed.clientId === task.clientId && confirmed.warehouseId === box!.warehouseId &&
+    confirmed.roundStartedAt === audit.startedAt.toISOString();
+  const isHistorical = (row: (typeof balances)[number]) => approved && ['PACKING', 'SHIPPING'].includes(row.status) &&
+    confirmed?.nonPhysicalBalances?.some(previous => previous.id === row.id && previous.skuId === row.skuId &&
+      previous.status === row.status && row.quantity <= previous.quantity);
   if (balances.some(row => row.clientId !== task.clientId || row.warehouseId !== box!.warehouseId ||
-      row.quantity < 0 || (row.status !== 'AVAILABLE' && row.quantity !== 0))) {
+      row.quantity < 0 || (row.status !== 'AVAILABLE' && row.quantity !== 0 && !isHistorical(row)))) {
     stop('В коробе есть резерв, недоступный остаток или другая принадлежность. Нужен разбор администратора.');
   }
   for (const sku of skus) {

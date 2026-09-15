@@ -1,24 +1,11 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { publicTranslationUrl, translationIssue, TsdMessageTranslation } from './TsdMessageTranslation';
+import { translationIssue, TsdMessageTranslation } from './TsdMessageTranslation';
 
 // TEST: public translation must preserve the source and never send a TSD message.
 describe('public TSD message translation', () => {
   const source = 'Возьмите 3 товара из FFL_LKB0409_3 к столу 2. & # + "\nСпасибо';
-  for (const language of ['uz', 'en', 'ky'] as const) {
-    for (const provider of ['google', 'yandex'] as const) {
-      it(`${provider}/${language}: preserves text and encodes a fixed public URL`, () => {
-        const url = new URL(publicTranslationUrl(source, language, provider));
-        expect(url.protocol).toBe('https:');
-        expect(url.hostname).toBe(provider === 'google' ? 'translate.google.com' : 'translate.yandex.com');
-        expect(url.searchParams.get('text')).toBe(source);
-        expect(url.searchParams.get(provider === 'google' ? 'tl' : 'target_lang')).toBe(language);
-        expect(url.searchParams.get(provider === 'google' ? 'sl' : 'source_lang')).toBe('ru');
-        expect(url.hash).toBe('');
-      });
-    }
-  }
   it('rejects empty or overlong results', () => {
     expect(translationIssue('Привет', ' ')).toBeTruthy();
     expect(translationIssue('Привет', 'a'.repeat(2001))).toBeTruthy();

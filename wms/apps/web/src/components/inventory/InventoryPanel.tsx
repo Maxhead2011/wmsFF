@@ -18,6 +18,7 @@ import {
   approveInventoryBoxRescan,
   completeInventorySession,
   decideInventoryLine,
+  resolveInventoryBox,
   fetchClients,
   fetchInventoryDashboard,
   fetchInventorySession,
@@ -666,7 +667,7 @@ function BoxResult({ box }: { box: InventoryAuditBox }) {
   );
 }
 
-function Reconciliation({
+export function Reconciliation({
   dashboard,
   session,
   onChanged,
@@ -679,28 +680,29 @@ function Reconciliation({
   const [busyAction, setBusyAction] = useState<InventoryResolutionAction | null>(null);
   const [lineFeedback, setLineFeedback] = useState<Record<string, { tone: 'success' | 'error'; text: string }>>({});
   const [message, setMessage] = useState('');
+  const [confirmation, setConfirmation] = useState('');
   const history = dashboard.historySessions ?? dashboard.reviewSessions;
   const checkedBoxes = history.flatMap((inventory) => inventory.boxes)
     .filter((box) => box.status !== 'COUNTING');
-  const matchedBoxes = checkedBoxes.filter((box) => box.status === 'MATCHED').length;
+  const matchedBoxes = checkedBoxes.filter((box) => box.status === 'MATCHED' && !box.kizReview?.required).length;
   const visibleReviews = history
     .map((review) => {
       const visibleBoxes = review.type === 'BOX_CHECK'
-        ? review.boxes.filter((box) => box.lines.some(
+        ? review.boxes.filter((box) => box.kizReview?.required || box.lines.some(
           (line) => line.countedQuantity !== line.expectedQuantity,
         ))
         : review.boxes;
       return {
         review,
         boxes: [...visibleBoxes].sort(
-          (left, right) => Number(boxNeedsResolution(right)) - Number(boxNeedsResolution(left)),
+          (left, right) => Number(Boolean(right.kizReview?.required) || boxNeedsResolution(right)) - Number(Boolean(left.kizReview?.required) || boxNeedsResolution(left)),
         ),
       };
     })
     .filter(({ review, boxes }) => review.type !== 'BOX_CHECK' || boxes.length > 0)
     .sort(
       (left, right) =>
-        Number(right.boxes.some(boxNeedsResolution)) - Number(left.boxes.some(boxNeedsResolution)),
+        Number(right.boxes.some(box => box.kizReview?.required || boxNeedsResolution(box))) - Number(left.boxes.some(box => box.kizReview?.required || boxNeedsResolution(box))),
     );
 
   async function resolveLine(lineId: string, action: InventoryResolutionAction) {
@@ -727,6 +729,22 @@ function Reconciliation({
     } finally {
       setBusyLine('');
       setBusyAction(null);
+    }
+  }
+
+  // FIX: approve the original worker's saved scans, without starting another TSD count.
+  async function confirmKiz(box: InventoryAuditBox) {
+    setBusyLine(box.id);
+    setConfirmation('');
+    setLineFeedback(current => ({ ...current, [box.id]: { tone: 'success', text: 'Подтверждаю состав…' } }));
+    try {
+      await resolveInventoryBox(session.accessToken, box.id, 'APPLY_ACTUAL', 'Подтверждение сохранённых сканов КИЗ из меню актуализации WMS.');
+      await onChanged();
+      setConfirmation(`Короб ${box.boxCode}: состав подтверждён. На ТСД можно продолжить сборку.`);
+    } catch (caught) {
+      setLineFeedback(current => ({ ...current, [box.id]: { tone: 'error', text: errorMessage(caught) } }));
+    } finally {
+      setBusyLine('');
     }
   }
 
@@ -774,18 +792,35 @@ function Reconciliation({
             <details className="inventory-review-box" key={box.id}>
               <summary className="inventory-review-box__summary">
                 <strong>Короб {box.boxCode}</strong>
-                <span className={mismatches.length ? 'inventory-review-box__mismatch' : 'inventory-review-box__matched'}>
+                <span className={mismatches.length || box.kizReview?.required ? 'inventory-review-box__mismatch' : 'inventory-review-box__matched'}>
                   {mismatches.length
                     ? `Расхождения: ${mismatches.length} поз. · недостача ${missingQuantity} шт.${excessQuantity ? ` · излишек ${excessQuantity} шт.` : ''}`
-                    : 'Без расхождений'}
+                    : box.kizReview?.required ? 'Требуется подтверждение КИЗ' : 'Без расхождений'}
                 </span>
                 <span className="inventory-review-box__meta">
                   {box.countedByName ? box.countedByName : 'Проверка начата'}
                   {' · '}{formatDate(box.completedAt ?? box.startedAt)}
                 </span>
-                <span className={`inventory-status inventory-status--${box.status.toLowerCase()}`}>{boxStatusLabel(box.status)}</span>
+                <span className={`inventory-status inventory-status--${box.kizReview?.required ? 'mismatch' : box.status.toLowerCase()}`}>{box.kizReview?.required ? 'Проверить КИЗ' : boxStatusLabel(box.status)}</span>
               </summary>
               <div className="inventory-review-box__details">
+              {box.kizReview?.required && (
+                <div className="inventory-alert">
+                  <ShieldAlert size={22} />
+                  <div>
+                    <strong>Состав КИЗ требует подтверждения · заказ {box.kizReview.orderId}</strong>
+                    <p>{box.kizReview.message}</p>
+                    <p>Используются сохранённые сканы: {box.countedByName || 'сборщик'}, {formatDate(box.completedAt ?? box.startedAt)}. Подтверждение обновит привязки по этим сканам. Повторный пересчёт на ТСД не нужен.</p>
+                    {dashboard.canConfirmKiz && (
+                      <button className="primary-button" type="button" disabled={Boolean(busyLine)}
+                        aria-busy={busyLine === box.id} onClick={() => void confirmKiz(box)}>
+                        {busyLine === box.id ? 'Подтверждаю…' : 'Подтвердить состав по сканам'}
+                      </button>
+                    )}
+                    {lineFeedback[box.id] && <p role="status" className={lineFeedback[box.id].tone === 'error' ? 'inventory-alert' : undefined}>{lineFeedback[box.id].text}</p>}
+                  </div>
+                </div>
+              )}
               {box.lines.length > 0 ? <div className="inventory-table-wrap">
                 <table className="inventory-table">
                   <thead><tr><th>Товар</th><th>WMS</th><th>Факт</th><th>Разница</th><th>Результат / решение</th></tr></thead>
@@ -806,7 +841,7 @@ function Reconciliation({
                           {difference === 0 ? (
                             <span className="inventory-decision-done">
                               <CheckCircle2 size={15} />
-                              Совпало
+                              {box.kizReview?.required ? 'Количество совпало' : 'Совпало'}
                             </span>
                           ) : line.decision === 'PENDING' && dashboard.canManage && (
                             review.status === 'REVIEW' ||
@@ -905,6 +940,7 @@ function Reconciliation({
           </div> : null}
         </article>
       ))}
+      {confirmation && <p role="status">{confirmation}</p>}
       {message ? <p className="form-error">{message}</p> : null}
     </div>
   );
