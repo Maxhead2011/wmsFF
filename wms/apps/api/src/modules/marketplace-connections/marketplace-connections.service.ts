@@ -10239,7 +10239,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     await this.inventoryLock?.assertStockMovementsAllowed();
     task = await this.withFbsTsdLeaseTransaction(task, user, tx => proposePhysicalKizRelabel(tx, task, kiz, user,
       fresh => this.requireCurrentFbsTsdLease(fresh, user)));
-    return this.formatFbsTsdAssembly(task, user, 'КИЗ уже использован в WB. Для этой единицы можно подтвердить переклейку на новый КИЗ.');
+    return this.formatFbsTsdAssembly(task, user, 'Старый КИЗ связан с прошлым заказом. Переклейте эту единицу на новый КИЗ.');
   }
 
   async scanFbsTsdKiz(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
@@ -10380,6 +10380,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       },
       select: {
         id: true,
+        clientId: true,
         orderId: true,
         requestId: true,
         skuId: true,
@@ -10417,6 +10418,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         duplicateOpenCompletedRequestIds.has(candidate.requestId),
     );
     if (duplicate) {
+      // FIX: a physical return may keep an immutable historical task. The relabel
+      // transaction checks all competing tasks and the exact sorting movement again.
+      if (duplicate.status === FBS_TSD_RETURN_REQUIRED && duplicate.clientId === task.clientId && physicalKizRelabelEnabled() &&
+          mark?.status === StockStatus.AVAILABLE && mark.boxId === task.boxId && !task.kiz) {
+        if (payload.supportsKizRelabel !== true) {
+          throw new BadRequestException('Для переклейки этой единицы обновите приложение ТСД через «Проверить обновление».');
+        }
+        return this.proposeFbsPhysicalKizRelabel(task, kiz, user);
+      }
       await this.recordDuplicateFbsKizScan(task, kiz, duplicate, user);
       throw new BadRequestException(`Этот КИЗ уже привязан к FBS-заказу ${duplicate.orderId}. Возьмите другую единицу.`);
     }
@@ -17128,7 +17138,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         marketplace: MarketplaceType.WILDBERRIES,
         clientId: clientFilter,
         OR: lookupCodes.map((code) => ({ kiz: { contains: code } })),
-        status: { not: 'CANCELLED' },
+        // FIX: released attempts retain their KIZ as history, not as a printable order.
+        status: { notIn: ['CANCELLED', 'RELEASED'] },
       },
       orderBy: { updatedAt: 'desc' },
       take: 3,
