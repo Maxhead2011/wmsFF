@@ -751,8 +751,8 @@ export class AdministrationService {
   async issueTsdMonitorAction(deviceCodeValue: string, actionValue: string | undefined, user: AuthUser) {
     const deviceCode = String(deviceCodeValue ?? '').trim();
     const action = String(actionValue ?? '').trim().toUpperCase();
-    // FIX: ADMIN may end inventory from monitoring; other device commands remain owner-only.
-    if (action === 'UNLOCK_INVENTORY') this.assertMonitoringControl(user);
+    // FIX: ADMIN may release inventory, reload requests and log out the selected terminal.
+    if (['UNLOCK_INVENTORY', 'RELOAD_REQUEST', 'LOGOUT'].includes(action)) this.assertMonitoringControl(user);
     else this.assertOwner(user);
     if (!['RELOAD_REQUEST', 'UPDATE_APP', 'LOGOUT', 'UNLOCK_INVENTORY'].includes(action)) {
       throw new BadRequestException('Доступны команды RELOAD_REQUEST, UPDATE_APP, UNLOCK_INVENTORY и LOGOUT.');
