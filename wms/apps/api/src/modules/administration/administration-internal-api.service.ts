@@ -241,10 +241,10 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
   {
     id: 'print',
     name: 'Печать',
-    prefixes: ['/print'],
-    routeCount: 16,
+    prefixes: ['/print', '/print/kiz-duplicates'],
+    routeCount: 26, // FIX: ten isolated duplicate KIZ handlers, including agent acknowledgement.
     description: 'Очереди печати, шаблоны, принтеры и повторная печать этикеток.',
-    logic: ['Формирует задания печати.', 'Маршрутизирует задание в группу принтеров.', 'Хранит статус, ошибки и историю повторов.'],
+    logic: ['Формирует задания печати.', 'Маршрутизирует задание в группу принтеров.', 'Хранит статус, ошибки и историю повторов.', 'Дубль КИЗ: исходный код, подпись товара и проверка повторным сканом; без изменения остатков и WB. Включается отдельно.'],
     dependencies: ['Основная БД', 'Принтеры/агент печати'],
   },
   {

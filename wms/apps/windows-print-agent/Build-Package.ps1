@@ -1,7 +1,7 @@
 param([Parameter(Mandatory = $true)][string]$OutputPath)
 $ErrorActionPreference = 'Stop'
 # FIX: package only public sources, never local config.json or saved credentials.
-$files = @('Install-Agent.cmd', 'Setup-Agent.ps1', 'LOGOFF-FBS-Print-Agent.ps1', 'WmsApi.ps1', 'README.txt')
+$files = @('Install-Agent.cmd', 'Setup-Agent.ps1', 'LOGOFF-FBS-Print-Agent.ps1', 'WmsApi.ps1', 'KizDuplicate.ps1', 'README.txt')
 $destination = [IO.Path]::GetFullPath($OutputPath)
 if (Test-Path -LiteralPath $destination) { throw 'Output already exists; choose another output path.' }
 $stage = Join-Path ([IO.Path]::GetTempPath()) ('logoff-print-package-' + [guid]::NewGuid().ToString('N'))

@@ -7,11 +7,13 @@ import { PrintPrinterService } from './print-printer.service';
 import { PrintQueueWorkerService } from './print-queue-worker.service';
 import { PrintController } from './print.controller';
 import { TsplLabelService } from './tspl-label.service';
+import { KizDuplicateController } from './kiz-duplicate.controller';
+import { KizDuplicateService } from './kiz-duplicate.service';
 
 @Module({
   imports: [AuthModule, ConfigModule],
-  controllers: [PrintController],
-  providers: [LabelTemplateService, PrintJobService, PrintPrinterService, PrintQueueWorkerService, TsplLabelService],
+  controllers: [PrintController, KizDuplicateController],
+  providers: [LabelTemplateService, PrintJobService, PrintPrinterService, PrintQueueWorkerService, TsplLabelService, KizDuplicateService],
   exports: [LabelTemplateService, PrintJobService, PrintPrinterService, PrintQueueWorkerService, TsplLabelService],
 })
 export class PrintModule {}

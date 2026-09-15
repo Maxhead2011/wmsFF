@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
 . (Join-Path $PSScriptRoot 'WmsApi.ps1')
+. (Join-Path $PSScriptRoot 'KizDuplicate.ps1')
 
 function Print-OneLabel([byte[]]$bytes, [string]$printer, [int]$widthMm, [int]$heightMm) {
   $stream = [IO.MemoryStream]::new($bytes)
@@ -57,5 +58,7 @@ while ($true) {
       }
     }
   } catch { $script:token = $null }
+  # FIX: disabled/older WMS endpoints do not interrupt the existing WB queue.
+  try { Invoke-KizDuplicateCycle $cfg } catch { Write-Warning $_.Exception.Message }
   Start-Sleep -Seconds 2
 }

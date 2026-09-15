@@ -1222,6 +1222,41 @@ model FactoryShipmentScan {
   @@index([itemId, scannedAt])
 }
 
+// FIX: separate duplicate-label queue: no synthetic FBS orders or stock mutations.
+model KizDuplicatePrinter {
+  stationId   String   @id
+  warehouseId String
+  agentUserId String
+  lastSeenAt  DateTime @default(now())
+}
+
+model KizDuplicateJob {
+  id            String   @id
+  fingerprint   String
+  stationId     String
+  warehouseId   String
+  clientId      String
+  skuId         String
+  kiz           String   @db.Text
+  product       Json
+  imageBase64   String   @db.Text
+  status        String   @default("QUEUED")
+  requestedById String
+  requestedBy   String
+  deviceCode    String
+  claimedById   String?
+  claimedAt     DateTime?
+  printedAt     DateTime?
+  verifiedAt    DateTime?
+  errorMessage  String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([stationId, status, createdAt])
+  @@index([clientId, createdAt])
+  @@index([requestedById, createdAt])
+}
+
 model ProductMark {
   id              String         @id @default(uuid())
   clientId        String
