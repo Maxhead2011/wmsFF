@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { TsdMonitorMessages } from '../src/modules/tsd/tsd-monitor-messages';
 import type { AuthUser } from '../src/modules/auth/auth.types';
 import { TsdDeviceService } from '../src/modules/tsd/tsd-device.service';
@@ -9,6 +9,7 @@ import { TsdDeviceController } from '../src/modules/tsd/tsd-device.controller';
 const admin = { id: 'admin', name: 'Диспетчер', administrationEnabled: true, permissionCodes: ['system:admin'], roleCodes: ['ADMIN'] } as AuthUser;
 const worker = { id: 'worker01-uuid', name: 'Шохида', deviceCode: 'TSD-INSTALL-ONE' } as AuthUser;
 const code = 'TSD-INSTALL-ONE@WORKER01';
+afterEach(() => vi.unstubAllEnvs());
 const heartbeat = { deviceId: code, payload: { workerUserId: worker.id, monitorMessages: true } };
 const message = { id: 'm1', deviceId: code, operationType: 'monitor_message', reviewedAt: null, createdAt: new Date(), payload: { text: 'Подойдите к упаковке', issuedBy: admin.id, senderName: admin.name, recipientUserId: worker.id }, status: 'ACCEPTED' };
 function setup() {
@@ -27,6 +28,8 @@ describe('TSD messages', () => {
     expect(op.upsert).not.toHaveBeenCalled();
   });
   it.each([{ ...admin, administrationEnabled: false }, { ...admin, roleCodes: ['CLIENT'] }, { ...admin, permissionCodes: [] }, { ...admin, isDemo: true }])('denies non-dispatcher access', async (user) => {
+    // TEST: legacy owner-only messaging applies with the installation feature disabled.
+    vi.stubEnv('ADMIN_MONITORING_ENABLED', 'false');
     const { service, op } = setup();
     await expect(service.list(code, user)).rejects.toThrow();
     expect(op.findMany).not.toHaveBeenCalled();
