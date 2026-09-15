@@ -85,6 +85,7 @@ final class FbsTaskSafety {
     }
 
     static boolean shouldQueueMandatoryAuditAfterTaskSwitch(
+        String flavor,
         boolean previousBoxWasLocallyConfirmed,
         boolean previousBoxWasNotPicked,
         boolean releaseAction,
@@ -94,6 +95,9 @@ final class FbsTaskSafety {
         TsdFbsAssemblyResponse.Task updatedTask
     ) {
         if (!previousBoxWasLocallyConfirmed) return false;
+        // FIX: in our WMS a successful switch to another task/box is navigation,
+        // not evidence of a stock discrepancy. Explicit problem reports retain their check.
+        if ("logoff".equals(flavor) && !releaseAction) return false;
         if (releaseAction) return !normalizeBox(previousBoxCode).isEmpty();
 
         // FIX: успешный ШК уже доказывает, что сотрудник взял нужный товар из
@@ -107,6 +111,16 @@ final class FbsTaskSafety {
         // FIX: скан другого нужного размера может законно переключить FBS-заказ,
         // но физический короб остаётся тем же. В этом случае инвентаризация не нужна.
         return !taskCanUseBox(updatedTask, previousBoxCode);
+    }
+
+    static boolean shouldClearConfirmedBoxAfterAudit(String flavor, String completedBoxCode,
+        String ownerKey, String confirmedBoxCode, String confirmedOwnerKey) {
+        // FIX: a completed check consumes the old local box confirmation. A later
+        // release must not reclassify that same, already resolved observation as a new problem.
+        return "logoff".equals(flavor) && !nonEmpty(ownerKey).isEmpty()
+            && nonEmpty(ownerKey).equals(nonEmpty(confirmedOwnerKey))
+            && !normalizeBox(completedBoxCode).isEmpty()
+            && normalizeBox(completedBoxCode).equals(normalizeBox(confirmedBoxCode));
     }
 
     static boolean taskAcceptedScannedBarcode(

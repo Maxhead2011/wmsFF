@@ -77,6 +77,7 @@ public class FbsTaskSafetyTest {
         // TEST: заявка №259 — ШК другого нужного размера переключил заказ,
         // но новый товар физически доступен в уже подтверждённом коробе.
         assertFalse(FbsTaskSafety.shouldQueueMandatoryAuditAfterTaskSwitch(
+            "ffullhab",
             true,
             true,
             false,
@@ -96,6 +97,7 @@ public class FbsTaskSafetyTest {
 
         // TEST: реальный брошенный короб по-прежнему требует обязательной сверки.
         assertTrue(FbsTaskSafety.shouldQueueMandatoryAuditAfterTaskSwitch(
+            "ffullhab",
             true,
             true,
             false,
@@ -115,6 +117,7 @@ public class FbsTaskSafetyTest {
 
         // TEST: явное «Отложить» после открытия короба сохраняет старую защиту.
         assertTrue(FbsTaskSafety.shouldQueueMandatoryAuditAfterTaskSwitch(
+            "ffullhab",
             true,
             true,
             true,
@@ -141,6 +144,7 @@ public class FbsTaskSafetyTest {
         );
         assertTrue(acceptedBarcode);
         assertFalse(FbsTaskSafety.shouldQueueMandatoryAuditAfterTaskSwitch(
+            "ffullhab",
             true,
             true,
             false,
@@ -149,6 +153,67 @@ public class FbsTaskSafetyTest {
             "FFL_LKB1007_166",
             updated.task
         ));
+    }
+
+    @Test
+    public void ourSuccessfulBoxSwitchDoesNotRequireCountingThePreviousBox() {
+        // TEST: 15 September, Marifat: 1009_25 -> BOX_0144; the recount was 27/27.
+        TsdFbsAssemblyResponse.Task next = task("5769475500", storageBox("FFL_LKBBOX_0144", 1));
+        next.scannedBoxCode = "FFL_LKBBOX_0144";
+        assertFalse(FbsTaskSafety.shouldQueueMandatoryAuditAfterTaskSwitch(
+            "logoff", true, true, false, false, "5768315844", "FFL_LKBS1009_25", next));
+        // TEST: the other observed transition, 1009_13 -> BOX_0203, has the same cause.
+        assertFalse(FbsTaskSafety.shouldQueueMandatoryAuditAfterTaskSwitch(
+            "logoff", true, true, false, false, "5768594421", "FFL_LKBS1009_13",
+            task("5770002919", storageBox("FFL_LKBBOX_0203", 1))));
+    }
+
+    @Test
+    public void releaseAfterCompletedAuditDoesNotReuseThePreAuditBoxConfirmation() {
+        // TEST: BAL1007_005 was validated at 17:04:02 and released at 17:04:51 MSK.
+        boolean confirmed = true;
+        if (FbsTaskSafety.shouldClearConfirmedBoxAfterAudit(
+            "logoff", "FFL_BAL1007_005", "worker-device", "FFL_BAL1007_005", "worker-device")) {
+            confirmed = false;
+        }
+        assertFalse(FbsTaskSafety.shouldQueueMandatoryAuditAfterTaskSwitch(
+            "logoff", confirmed, true, true, false, "task", "FFL_BAL1007_005", null));
+    }
+
+    @Test
+    public void completionOnlyClearsOurMatchingBoxAndOwner() {
+        // TEST: completing another box or another worker's session cannot clear this confirmation.
+        assertTrue(FbsTaskSafety.shouldClearConfirmedBoxAfterAudit(
+            "logoff", "FFL_BOX_25", "owner", "]C1FFL_BOX_25", "owner"));
+        for (String flavor : Arrays.asList("ffullhab", "platform")) {
+            assertFalse(FbsTaskSafety.shouldClearConfirmedBoxAfterAudit(
+                flavor, "FFL_BOX_25", "owner", "FFL_BOX_25", "owner"));
+            assertTrue(FbsTaskSafety.shouldQueueMandatoryAuditAfterTaskSwitch(
+                flavor, true, true, false, false, "old", "FFL_BOX_25", task("new")));
+        }
+        assertFalse(FbsTaskSafety.shouldClearConfirmedBoxAfterAudit(
+            "logoff", "FFL_BOX_26", "owner", "FFL_BOX_25", "owner"));
+        assertFalse(FbsTaskSafety.shouldClearConfirmedBoxAfterAudit(
+            "logoff", "FFL_BOX_25", "other-owner", "FFL_BOX_25", "owner"));
+        assertFalse(FbsTaskSafety.shouldClearConfirmedBoxAfterAudit(
+            "logoff", "", "owner", "", "owner"));
+        assertFalse(FbsTaskSafety.shouldClearConfirmedBoxAfterAudit(
+            "logoff", "FFL_BOX_25", "", "FFL_BOX_25", ""));
+    }
+
+    @Test
+    public void newProblemAfterFreshBoxScanStillRequiresAudit() {
+        // TEST: a fresh confirmed scan followed by an explicit problem retains its check.
+        assertTrue(FbsTaskSafety.shouldQueueMandatoryAuditAfterTaskSwitch(
+            "logoff", true, true, true, false, "task", "FFL_BOX_25", null));
+        assertFalse(FbsTaskSafety.shouldQueueMandatoryAuditAfterTaskSwitch(
+            "logoff", false, true, true, false, "task", "FFL_BOX_25", null));
+        // TEST: successful navigation never suppresses a NEW server-reported KIZ discrepancy.
+        TsdFbsAssemblyResponse.Task current = task("task");
+        current.scannedBoxCode = "FFL_BOX_25";
+        current.client = new TsdFbsAssemblyResponse.Client(); current.client.id = "client";
+        assertTrue(FbsTaskSafety.requiresKizAudit("logoff", 400, "FBS_STOCK_AUDIT_REQUIRED",
+            "task", "client", "FFL_BOX_25", current));
     }
 
     private static TsdFbsAssemblyResponse.Task task(
