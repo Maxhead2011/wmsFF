@@ -669,8 +669,8 @@ function DeviceFeed({
           <XCircle size={15} />
           Снять все задания
         </button>
-        {/* FIX: unrelated device maintenance commands retain their existing owner access. */}
-        {showOwnerControls ? <><button
+        {/* FIX: app updates retain owner access; reload and logout follow monitoring access. */}
+        {showOwnerControls ? <button
           type="button"
           className={`is-update${isUpdated ? ' is-updated' : ''}`}
           disabled={isUpdated || !device.online || commandBusy}
@@ -683,7 +683,7 @@ function DeviceFeed({
             ? <CheckCircle2 size={15} />
             : <Download size={15} className={commandBusy ? 'is-spinning' : ''} />}
           {isUpdated ? 'Обновлён' : 'Тихое обновление'}
-        </button>
+        </button> : null}
         <button type="button" disabled={!device.online || commandBusy} onClick={() => onCommand(device, 'RELOAD_REQUEST')}>
           <RefreshCw size={15} className={commandBusy ? 'is-spinning' : ''} />
           Перезагрузить заявку
@@ -691,7 +691,7 @@ function DeviceFeed({
         <button type="button" className="is-danger" disabled={!device.online || commandBusy} onClick={() => onCommand(device, 'LOGOUT')}>
           <LogOut size={15} />
           Выйти из аккаунта
-        </button></> : null}
+        </button>
       </div> : null}
 
     </article>

@@ -24,7 +24,12 @@ describe('ADMIN monitoring buttons', () => {
     vi.stubEnv('VITE_ADMIN_MONITORING_ENABLED', 'true');
     const html = render();
     for (const label of ['Снять все задания', 'Завершить инвентаризацию', '>Сообщение<']) expect(html).toContain(label);
-    for (const label of ['Тихое обновление', 'Перезагрузить заявку', 'Выйти из аккаунта']) expect(html).not.toContain(label);
+    expect(html).not.toContain('Тихое обновление');
+  });
+  // TEST: requested commands must be visible on the real ADMIN monitoring panel.
+  it.each(['Перезагрузить заявку', 'Выйти из аккаунта'])('shows %s for ADMIN', label => {
+    vi.stubEnv('VITE_ADMIN_MONITORING_ENABLED', 'true');
+    expect(render()).toContain(label);
   });
   it('preserves owner controls', () => {
     vi.stubEnv('VITE_ADMIN_MONITORING_ENABLED', 'true');
@@ -40,6 +45,6 @@ describe('ADMIN monitoring buttons', () => {
   it.each([{ roleCodes: ['MANAGER'] }, { roleCodes: ['ADMIN', 'CLIENT'] }, { permissionCodes: [] }, { isDemo: true }])('hides controls for %j', override => {
     vi.stubEnv('VITE_ADMIN_MONITORING_ENABLED', 'true');
     const html = render({ ...admin, ...override });
-    for (const label of ['Снять все задания', 'Завершить инвентаризацию', '>Сообщение<']) expect(html).not.toContain(label);
+    for (const label of ['Снять все задания', 'Завершить инвентаризацию', '>Сообщение<', 'Перезагрузить заявку', 'Выйти из аккаунта']) expect(html).not.toContain(label);
   });
 });

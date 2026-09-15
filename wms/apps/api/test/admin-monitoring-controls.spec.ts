@@ -73,7 +73,16 @@ describe('ADMIN monitoring controls', () => {
     vi.stubEnv('ADMIN_MONITORING_ENABLED', 'true');
     await denied({ ...admin, ...override });
   });
-  it.each(['LOGOUT', 'UPDATE_APP', 'RELOAD_REQUEST'])('keeps %s and general administration owner-only', async action => {
+  // TEST: both commands reach the exact heartbeat device and retain the acting administrator.
+  it.each(['LOGOUT', 'RELOAD_REQUEST'])('allows ADMIN to send %s without changing tasks or inventory', async action => {
+    vi.stubEnv('ADMIN_MONITORING_ENABLED', 'true');
+    const { service, prisma } = setup();
+    await expect(service.issueTsdMonitorAction('TSD-1', action, admin as never)).resolves.toMatchObject({ accepted: true, action });
+    expect(prisma.tsdOperation.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ deviceId: 'TSD-1', operationType: 'monitor_command', status: 'NEEDS_REVIEW', payload: expect.objectContaining({ action, requestedAction: action, issuedBy: admin.id }) }) }));
+    expect(prisma.inventorySession.updateMany).not.toHaveBeenCalled();
+    expect(prisma.fbsTsdAssembly.updateMany).not.toHaveBeenCalled();
+  });
+  it.each(['UPDATE_APP'])('keeps %s and general administration owner-only', async action => {
     vi.stubEnv('ADMIN_MONITORING_ENABLED', 'true');
     const { service, prisma } = setup();
     await expect(service.issueTsdMonitorAction('TSD-1', action, admin as never)).rejects.toThrow(ForbiddenException);
@@ -84,7 +93,10 @@ describe('ADMIN monitoring controls', () => {
 
 async function denied(user: typeof admin) {
   const { service, messages, prisma } = setup();
-  await expect(service.issueTsdMonitorAction('TSD-1', 'UNLOCK_INVENTORY', user as never)).rejects.toThrow(ForbiddenException);
+  // TEST: new commands keep role, demo and installation restrictions.
+  for (const action of ['UNLOCK_INVENTORY', 'LOGOUT', 'RELOAD_REQUEST']) {
+    await expect(service.issueTsdMonitorAction('TSD-1', action, user as never)).rejects.toThrow(ForbiddenException);
+  }
   await expect(service.disconnectTsdRequest({ requestId: 'request', deviceCode: 'TSD-1' }, user as never)).rejects.toThrow(ForbiddenException);
   await expect(service.releaseTsdWorkload({ kind: 'FBS_ORDER', workloadId: 'task' }, user as never)).rejects.toThrow(ForbiddenException);
   await expect(messages.send('TSD-1', body, user as never)).rejects.toThrow(ForbiddenException);
