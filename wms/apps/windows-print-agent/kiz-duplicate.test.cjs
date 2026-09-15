@@ -1,0 +1,7 @@
+const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),{spawn}=require('node:child_process');
+const source=fs.readFileSync(path.join(__dirname,'KizDuplicate.ps1'),'utf8');
+for(const failAck of [false,true]) test(`one duplicate only, acknowledgement failure=${failAck}`,async()=>{
+ // TEST: execute the actual queue handler with an in-memory printer and HTTP transport.
+ const script=`$ErrorActionPreference='Stop'\n${source}\n$script:prints=0;$script:acks=0\nfunction Print-OneLabel { $script:prints++ }\nfunction Invoke-WmsApi($method,$url,$body) { if($url.EndsWith('/claim')) { return @{id='job';contentType='image/png';widthMm=58;heightMm=40;imageBase64='iVBORw0KGgo='} }; if($url.EndsWith('/result')){$script:acks++; if(${failAck?'$true':'$false'} -and $script:acks -eq 1){throw 'timeout'};if(-not $body.success){throw 'print failed'}} }\nInvoke-KizDuplicateCycle @{stationId='station';printerName='test';labelWidthMm=58;labelHeightMm=40}\nif($script:prints -ne 1){throw 'duplicate physical print'}\nif($script:acks -ne ${failAck?2:1}){throw 'wrong acknowledgements'}`;
+ const child=spawn('powershell.exe',['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{windowsHide:true});let error='';child.stdout.resume();child.stderr.on('data',d=>error+=d);const exit=await new Promise((resolve,reject)=>{child.on('error',reject);child.on('exit',resolve)});assert.equal(exit,0,error);
+});
