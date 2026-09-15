@@ -18,6 +18,7 @@ import { recordReshipmentTransition } from './fbs-reshipment-transition';
 import { requireFbsReshipmentClientAccess } from './fbs-reshipment-access';
 import { fbsAttemptPageWindow, mergeFbsAttemptPage } from '../../common/shipment-history/fbs-attempt-page';
 import { isDeepStrictEqual } from 'node:util';
+import { ozonTsdPickingEnabled, ozonScannedItemCount, requireOzonItemsScanned } from './ozon-tsd-picking';
 import {
   BadRequestException,
   ConflictException,
@@ -8733,7 +8734,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         ? jsonStringArray(task.sourceBarcodes)
         : jsonStringArray(task.barcodes);
       if (currentBarcodes.some((barcode) => barcode.toLowerCase() === scannedCode.toLowerCase())) {
-        return this.scanFbsTsdBarcode(taskId, { barcode: scannedCode }, user);
+        return this.scanFbsTsdBarcode(taskId, { ...payload, barcode: scannedCode }, user);
       }
     }
 
@@ -8744,7 +8745,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         `Товар с ШК ${scannedCode} не нужен в оставшейся части этой FBS-заявки.`,
       );
     }
-    return this.scanFbsTsdBarcode(taskId, { barcode: scannedCode }, user);
+    return this.scanFbsTsdBarcode(taskId, { ...payload, barcode: scannedCode }, user);
   }
 
   async scanFbsTsdBox(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
@@ -10038,7 +10039,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (!task.boxId && !fbsTsdUsesNoBox(task)) {
       throw new BadRequestException('Сначала отсканируйте короб, указанный на экране.');
     }
-    if (task.barcode) return this.formatFbsTsdAssembly(task, user, 'Товар уже подтверждён.');
+    if (task.barcode && (!ozonTsdPickingEnabled(task) || task.itemCount <= 1)) return this.formatFbsTsdAssembly(task, user, 'Товар уже подтверждён.');
     const barcode = normalizeFbsScannerCode(
       requiredFbsTsdText(payload.barcode, 'Отсканируйте ШК товара.'),
     );
@@ -10076,6 +10077,26 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           ? `Неверный новый ШК. После переклейки должен получиться «${task.productName}», арт. ${task.article ?? 'не указан'}.`
           : `Неверный товар. Нужен «${task.productName}», арт. ${task.article ?? 'не указан'}. Верните товар и отсканируйте правильный ШК.`,
       );
+    }
+    // FIX: each hardware scan confirms one unit; the previous count makes retries idempotent.
+    if (ozonTsdPickingEnabled(task) && task.itemCount > 1) {
+      if (task.status === 'COMPLETED') return this.formatFbsTsdAssembly(task, user, 'Заказ уже собран.');
+      if (task.requiresKiz || task.relabelRequired) {
+        throw new BadRequestException('Заказ Ozon с несколькими КИЗами или переклейкой требует раздельной сборки. Передайте заказ менеджеру.');
+      }
+      const scanned = ozonScannedItemCount(task);
+      const expected = payload.scannedItemCount;
+      if (typeof expected !== 'number' || !Number.isInteger(expected) || expected < 0) {
+        throw new BadRequestException('Обновите приложение ТСД для поштучной сборки Ozon.');
+      }
+      if (expected > scanned) throw new ConflictException('Счётчик товара изменился. Обновите задание.');
+      if (expected < scanned || scanned >= task.itemCount) {
+        return this.formatFbsTsdAssembly(task, user, `Отсканировано ${scanned} из ${task.itemCount} ед.`);
+      }
+      const updated = await this.updateFbsTsdUnderLease(task, user, {
+        barcode, scannedItemCount: scanned + 1, errorMessage: null,
+      });
+      return this.formatFbsTsdAssembly(updated, user, `Отсканировано ${scanned + 1} из ${task.itemCount} ед.`);
     }
     const updated = task.relabelRequired
       ? await this.completeFbsTsdRelabeling(task, barcode, user)
@@ -13946,6 +13967,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     await this.requireFbsOrderStillCollectable(task);
     requireFbsTaskWithoutSyncConflict(task);
     if (task.status === 'COMPLETED') return this.formatFbsTsdAssembly(task, user, 'Заказ уже собран.');
+    requireOzonItemsScanned(task);
     if ((!task.boxId && !fbsTsdUsesNoBox(task)) || !task.barcode) {
       throw new BadRequestException('Сначала подтвердите источник и товар.');
     }
@@ -13982,6 +14004,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const fresh = await tx.fbsTsdAssembly.findUnique({ where: { id: task.id } });
       if (!fresh) throw new NotFoundException('Задание FBS не найдено.');
       if (fresh.status === 'COMPLETED') return fresh;
+      requireOzonItemsScanned(fresh);
       if (fresh.relabelRequired && !fresh.relabelConfirmedAt) {
         throw new BadRequestException('Переклейка ещё не подтверждена. Обновите задание.');
       }
@@ -15661,6 +15684,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     ]);
     if (
       task.marketplace === MarketplaceType.OZON &&
+      (!ozonTsdPickingEnabled(task) || ['WAIT_MARKETPLACE_LABEL', 'READY_TO_COMPLETE'].includes(state)) &&
       (orderSticker || task.marketplaceLabelBase64) &&
       task.status !== 'COMPLETED'
     ) {
@@ -15838,6 +15862,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           : null,
         itemCount: task.itemCount,
         sourceWithoutBox: fbsTsdUsesNoBox(task) && !task.sourceBoxPending,
+        // FIX: progress survives refresh; never deliver the label bitmap to our TSD.
+        scannedItemCount: ozonTsdPickingEnabled(task) ? ozonScannedItemCount(task) : 0,
+        perUnitScanning: ozonTsdPickingEnabled(task),
         // ADDED: the TSD distinguishes true no-box storage from a source that
         // must be supplied by the manager when the request is closed.
         sourceBoxPending: task.sourceBoxPending,
@@ -15853,7 +15880,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         scannedBarcode: task.barcode,
         kizAccepted: Boolean(task.kiz && task.wbMetaStatus === 'ACCEPTED'),
         wbMetaStatus: task.wbMetaStatus,
-        orderSticker,
+        orderSticker: ozonTsdPickingEnabled(task) && orderSticker
+          ? { ...orderSticker, imageBase64: null } : orderSticker,
         marketplaceSubmittedAt: task.marketplaceSubmittedAt?.toISOString() ?? null,
         marketplaceSubmitError: task.marketplaceSubmitError,
         errorMessage: task.errorMessage,
@@ -17581,6 +17609,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   private async submitOzonFbsTask(task: FbsTsdAssemblyRecord) {
+    // FIX: also enforce the count for submission from WMS, before any Ozon request.
+    requireOzonItemsScanned(task);
     const connection = await this.prisma.clientMarketplaceConnection.findFirst({
       where: {
         id: task.connectionId,
@@ -29278,6 +29308,7 @@ function fbsTsdStage(task: FbsTsdAssemblyRecord) {
   if (task.relabelRequired && !task.sourceBarcode) return 'SCAN_SOURCE_BARCODE';
   if (task.relabelRequired && !task.barcode) return 'SCAN_RELABEL_BARCODE';
   if (!task.barcode) return 'SCAN_BARCODE';
+  if (ozonTsdPickingEnabled(task) && ozonScannedItemCount(task) < task.itemCount) return 'SCAN_BARCODE';
   if (task.requiresKiz && (!task.kiz || task.wbMetaStatus !== 'ACCEPTED')) return 'SCAN_KIZ';
   if (task.marketplace === MarketplaceType.OZON) {
     if (!task.marketplaceSubmittedAt) return 'READY_TO_SUBMIT';

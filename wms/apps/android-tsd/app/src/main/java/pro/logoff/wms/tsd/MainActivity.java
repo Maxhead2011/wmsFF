@@ -4517,6 +4517,10 @@ public class MainActivity extends Activity {
         String sourceSize = sourceProduct == null ? size : nonEmpty(sourceProduct.size, tr("не указан", "ko‘rsatilmagan"));
         boolean relabelRequired = task.relabeling != null && task.relabeling.required;
         String state = nonEmpty(fbsAssembly.state, "SCAN_BOX");
+        // FIX: show the order quantity before picking and after every unit scan.
+        if ("OZON".equalsIgnoreCase(task.marketplace) && OzonLabelSafety.usesTextInstruction(BuildConfig.FLAVOR)) {
+            root.addView(feedbackView(ozonQuantityInstruction(task), Color.rgb(254, 240, 138)));
+        }
         boolean guidedScanDialog = FbsAssemblyUi.shouldUseGuidedScanDialog(state);
         if (!guidedScanDialog) dismissFbsGuidedScanDialog();
         if (!"WAIT_MARKETPLACE_LABEL".equals(state)) {
@@ -5005,10 +5009,27 @@ public class MainActivity extends Activity {
         return true;
     }
 
+    // FIX: the same quantity is visible on the main screen and inside the scan dialog.
+    private String ozonQuantityInstruction(TsdFbsAssemblyResponse.Task task) {
+        String quantity = tr("В ЗАКАЗЕ: ", "BUYURTMADA: ") + Math.max(1, task.itemCount) + tr(" ЕД.", " DONA");
+        if (!task.perUnitScanning) return quantity;
+        return quantity + "\n" + tr("ОТСКАНИРОВАНО: ", "SKANERLANGAN: ") + task.scannedItemCount +
+            tr(" ИЗ ", " / ") + Math.max(1, task.itemCount);
+    }
+
     private boolean renderOzonOrderSticker(
         LinearLayout root,
         TsdFbsAssemblyResponse.Task task
     ) {
+        // FIX: no label bytes, image decoder or PDF renderer on our TSD.
+        if (OzonLabelSafety.usesTextInstruction(BuildConfig.FLAVOR)) {
+            root.addView(feedbackView(
+                tr("НАКЛЕЙТЕ НАКЛЕЙКУ OZON\n№ ", "OZON STIKERINI YOPISHTIRING\n№ ") + nonEmpty(task.orderId, "-"),
+                Color.rgb(254, 240, 138)
+            ));
+            root.addView(fbsOrderStickerWarehouseBanner(task));
+            return !nonEmpty(task.orderId, "").isEmpty();
+        }
         if (task.orderSticker == null || nonEmpty(task.orderSticker.imageBase64, "").isEmpty()) {
             root.addView(feedbackView(
                 tr("Этикетка Ozon ещё не загрузилась. Нажмите «Обновить» и не завершайте заказ без этикетки.",
@@ -5309,7 +5330,7 @@ public class MainActivity extends Activity {
         String marketplaceName
     ) {
         if (!FbsAssemblyUi.shouldUseGuidedScanDialog(state) || task == null) return;
-        String dialogKey = nonEmpty(task.id, "-") + "|" + state;
+        String dialogKey = nonEmpty(task.id, "-") + "|" + state + "|" + task.scannedItemCount;
         if (
             fbsGuidedScanDialog != null &&
             fbsGuidedScanDialog.isShowing() &&
@@ -5323,6 +5344,9 @@ public class MainActivity extends Activity {
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         content.setPadding(dp(18), dp(8), dp(18), 0);
+        if ("OZON".equalsIgnoreCase(task.marketplace) && OzonLabelSafety.usesTextInstruction(BuildConfig.FLAVOR)) {
+            content.addView(feedbackView(ozonQuantityInstruction(task), Color.rgb(254, 240, 138)));
+        }
         content.addView(feedbackView(
             (scanKiz
                 ? tr("ШАГ 2 ИЗ 2 · ОТСКАНИРУЙТЕ КИЗ", "2-QADAM · KIZNI SKANERLANG")
@@ -5332,7 +5356,11 @@ public class MainActivity extends Activity {
                 tr("Цвет: ", "Rang: ") + color + " · " + tr("Размер: ", "O‘lcham: ") + size + "\n" +
                 (scanKiz
                     ? tr("После приёма КИЗ откроется наклейка ", "KIZ qabul qilingach stiker ochiladi: ") + marketplaceName
-                    : tr("После ШК это окно переключится на КИЗ.", "SHKdan keyin oyna KIZga o‘tadi.")),
+                    : task.perUnitScanning && task.itemCount > 1
+                        ? tr("Сканируйте ШК каждой единицы товара.", "Har bir mahsulot SHKini skanerlang.")
+                        : task.requiresKiz
+                            ? tr("После ШК это окно переключится на КИЗ.", "SHKdan keyin oyna KIZga o‘tadi.")
+                            : tr("После ШК подтвердите сборку.", "SHKdan keyin yig‘ishni tasdiqlang.")),
             scanKiz ? Color.rgb(254, 240, 138) : BOX_MOVEMENT_BLUE
         ));
         EditText dialogInput = input(scanKiz
@@ -5761,6 +5789,8 @@ public class MainActivity extends Activity {
             WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
             Map<String, Object> payload = new LinkedHashMap<>();
             if (field != null) payload.put(field, value);
+            // FIX: capture the count with the task; a network retry must not add a unit.
+            if (currentTask.perUnitScanning) payload.put("scannedItemCount", currentTask.scannedItemCount);
             payload.put("supportsKizRelabel", true);
             if ("scan-kiz-move".equals(action)) payload.put("confirmBoxMove", true);
             if ("SCAN_NEW_KIZ".equals(submittedState) && "scan-kiz".equals(action)) {

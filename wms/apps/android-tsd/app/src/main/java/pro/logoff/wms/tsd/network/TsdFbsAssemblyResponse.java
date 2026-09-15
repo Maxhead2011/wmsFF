@@ -24,6 +24,9 @@ public class TsdFbsAssemblyResponse {
         public Product product;
         public Relabeling relabeling;
         public int itemCount;
+        // FIX: server-confirmed unit count, also used to make scan retries safe.
+        public int scannedItemCount;
+        public boolean perUnitScanning;
         public boolean sourceWithoutBox;
         public boolean requiresKiz;
         public String recommendedBoxCode;

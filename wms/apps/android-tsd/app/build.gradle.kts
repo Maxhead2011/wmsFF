@@ -23,8 +23,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 170 // FIX: avoid unnecessary box audits during FBS navigation.
-            versionName = "0.1.171-box-audit"
+            versionCode = 171 // FIX: Ozon text labels and per-unit scanning, following release 170.
+            versionName = "0.1.172-ozon-quantity"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
