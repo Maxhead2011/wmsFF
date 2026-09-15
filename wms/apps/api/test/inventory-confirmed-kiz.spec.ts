@@ -212,3 +212,121 @@ it('does not report a successful WMS approval when a mandatory check has no save
   expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
   expect(f.db.productMark.create).not.toHaveBeenCalled();
 });
+
+// TEST: a physical unit excluded by an old administrative snapshot is not a shipped KIZ.
+function blockedSnapshotFixture() {
+  vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT', 'true');
+  const f = wmsReviewFixture();
+  Object.assign(f.marks[0], { value: kiz, boxId: null, status: 'BLOCKED',
+    sourceDocument: 'admin-unpalleted-physical-snapshot-20260827', updatedAt: new Date('2026-08-27') });
+  for (const model of ['shippedKizHistory', 'fbsWebKizStickerPrint', 'fbsAssemblyAttemptHistory', 'fbsPrintJob', 'kizCirculationItem']) {
+    f.db[model] = { findFirst: vi.fn(async () => null) };
+  }
+  return f;
+}
+it('restores a scanned blocked snapshot mark on admin confirmation, without a second receipt', async () => {
+  const f = blockedSnapshotFixture(), stock = structuredClone(f.balances);
+  await f.service.resolveBox('audit', { action: 'APPLY_ACTUAL' }, f.user);
+  expect(f.marks[0]).toMatchObject({id:'current',status:'AVAILABLE',boxId:'box',value:kiz});
+  expect(f.balances).toEqual(stock);expect(f.db.productMark.create).not.toHaveBeenCalled();
+  await expect(f.run()).resolves.toMatchObject({ready:true});
+  const calls=f.db.productMark.updateMany.mock.calls.length;
+  await f.service.resolveBox('audit',{action:'APPLY_ACTUAL'},f.user);
+  expect(f.db.productMark.updateMany).toHaveBeenCalledTimes(calls);
+});
+it.each(['unexplained-block','still-bound','new-block','assembly','shipped','printed','attempt','print-job','circulation','wrong-client','wrong-sku','db-failure'])('does not restore a blocked mark with unsafe evidence: %s',async kind=>{
+  const f=blockedSnapshotFixture();
+  if(kind==='unexplained-block')f.marks[0].sourceDocument='Manual quarantine';
+  if(kind==='still-bound')f.marks[0].boxId='another-box';
+  if(kind==='new-block')f.marks[0].updatedAt=new Date('2026-09-16');
+  if(kind==='wrong-client')f.marks[0].clientId='another';
+  if(kind==='wrong-sku')f.marks[0].skuId='another';
+  const model:any={assembly:'fbsTsdAssembly',shipped:'shippedKizHistory',printed:'fbsWebKizStickerPrint',attempt:'fbsAssemblyAttemptHistory','print-job':'fbsPrintJob',circulation:'kizCirculationItem'};
+  if(model[kind])f.db[model[kind]].findFirst.mockResolvedValue({id:'history'});
+  if(kind==='db-failure')f.db.shippedKizHistory.findFirst.mockRejectedValue(Error('database failed'));
+  await expect(f.confirm()).rejects.toThrow();
+  expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
+});
+function newerMatchingSnapshotFixture() {
+  const f=blockedSnapshotFixture();
+  f.audit.status='MISMATCH';f.session.status='ACTIVE';
+  const newer:any={...f.audit,id:'newer',status:'MISMATCH',sessionId:'admin-session',startedAt:new Date(+startedAt+60000),
+    lines:f.audit.lines.map((l:any)=>({...l,id:'new-'+l.id})),session:{...f.session,id:'admin-session',status:'COMPLETED',createdByUserId:'admin',warehouseId:null,comment:null}};
+  const scans=f.evidence.map((e:any)=>({...e,id:'new-'+e.id,payload:{...e.payload,lineId:'new-'+e.payload.lineId,
+    sessionId:'admin-session',roundStartedAt:newer.startedAt.toISOString()}}));
+  const approvals=new Map();
+  f.db.inventoryAuditBox.findFirst.mockResolvedValue(newer);
+  f.db.inventoryAuditBox.findUnique.mockImplementation(async({where}:any)=>where.id==='newer'?newer:f.audit);
+  f.db.inventoryAuditBox.update.mockImplementation(async({where,data}:any)=>Object.assign(where.id==='newer'?newer:f.audit,data));
+  f.db.auditLog.findMany.mockImplementation(async({where}:any)=>where.entityId==='newer'?scans:f.evidence);
+  f.db.auditLog.findUnique.mockImplementation(async({where}:any)=>approvals.get(where.id)??null);
+  f.db.auditLog.create.mockImplementation(async({data}:any)=>{approvals.set(data.id,data);return data;});
+  f.service.completeMandatoryFbsSessionIfReady=vi.fn(async()=>{f.session.status='COMPLETED';});
+  return {...f,newer,scans,approvals};
+}
+it('shows a decided but unfinished worker check and confirms it using the same newer physical scan set',async()=>{
+  // TEST: Gulruh's 338 check was hidden after Sonya saved another identical count.
+  const f=newerMatchingSnapshotFixture();const original=structuredClone(f.evidence),stock=structuredClone(f.balances);
+  await expect(f.review()).resolves.toEqual([expect.objectContaining({boxes:[expect.objectContaining({kizReview:expect.objectContaining({required:true})})]})]);
+  await f.service.resolveBox('audit',{action:'APPLY_ACTUAL'},f.user);
+  expect(f.audit.status).toBe('RESOLVED');expect(f.newer.status).toBe('RESOLVED');
+  expect(f.evidence).toEqual(original);expect(f.balances).toEqual(stock);
+  await expect(f.run()).resolves.toMatchObject({ready:true});
+  expect([...f.approvals.values()].find((a:any)=>a.entityId==='audit').payload.confirmedFromAuditId).toBe('newer');
+});
+it.each(['different-scan','different-count','new-count-in-progress','pending-decision','missing-scans','wrong-warehouse','wrong-client'])('never substitutes a newer incompatible count: %s',async kind=>{
+  const f=newerMatchingSnapshotFixture();
+  if(kind==='different-scan')f.scans[0].payload.kiz=kiz.replace('NLnuX2T','ABCDEFG');
+  if(kind==='different-count')f.newer.lines[0].countedQuantity=2;
+  if(kind==='new-count-in-progress')f.newer.status='COUNTING';
+  if(kind==='pending-decision'){f.newer.lines[0].decision='PENDING';f.newer.lines[0].difference=1;}
+  if(kind==='missing-scans')f.scans.length=0;
+  if(kind==='wrong-warehouse')f.newer.session.warehouseId='other';
+  if(kind==='wrong-client')f.newer.clientId='other';
+  await expect(f.confirm()).rejects.toThrow();
+  expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
+  expect(f.db.auditLog.create).not.toHaveBeenCalled();
+});
+it('refuses to complete an old check after movement following the newer count',async()=>{
+  // TEST: equal counts do not authorize using a snapshot across later warehouse movements.
+  const f=newerMatchingSnapshotFixture();f.db.stockMovement.findFirst.mockResolvedValue({id:'later-pick'});
+  await expect(f.confirm()).rejects.toThrow('перемещался');
+  expect(f.db.productMark.updateMany).not.toHaveBeenCalled();expect(f.db.auditLog.create).not.toHaveBeenCalled();
+});
+it('keeps a partially decided mismatch out of the KIZ-only confirmation queue',async()=>{
+  const f=newerMatchingSnapshotFixture();f.audit.lines[0].decision='PENDING';f.audit.lines[0].difference=1;
+  await expect(f.review()).resolves.toEqual([]);expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
+});
+it.each(['off','demo','worker'])('does not restore blocked snapshots outside enabled administrator confirmation: %s',async kind=>{
+  const f=blockedSnapshotFixture();
+  if(kind==='off')vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT','false');
+  if(kind==='demo')f.user.isDemo=true;
+  if(kind==='worker')f.user.roleCodes=['TSD'];
+  await f.confirm();expect(f.marks[0].status).toBe('BLOCKED');expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
+});
+it('replays box 338: two blocked units, one missing registration, two stale bindings and historical packing',async()=>{
+  // TEST: multi-SKU physical snapshot from Gulruh/Sonya, including all three units.
+  const f=newerMatchingSnapshotFixture();
+  const second=kiz.replace('NLnuX2T','ABCDEFG'),third=kiz.replace('NLnuX2T','HIJKLMN');
+  f.audit.lines=[{id:'line',skuId:'sku',countedQuantity:2,difference:2,decision:'APPLY_ACTUAL'},
+    {id:'line-b',skuId:'sku-b',countedQuantity:1,difference:0,decision:'KEEP_SYSTEM'}];
+  f.newer.lines=f.audit.lines.map((l:any)=>({...l,id:'new-'+l.id}));
+  const original=f.evidence[0];
+  f.evidence.splice(0,f.evidence.length,...[kiz,second,third].map((value,i)=>({id:'scan-'+i,payload:{...original.payload,
+    kiz:value,skuId:i===2?'sku-b':'sku',lineId:i===2?'line-b':'line'}})));
+  f.scans.splice(0,f.scans.length,...f.evidence.map((e:any)=>({id:'new-'+e.id,payload:{...e.payload,
+    lineId:'new-'+e.payload.lineId,sessionId:'admin-session',roundStartedAt:f.newer.startedAt.toISOString()}})));
+  f.marks.push({...f.marks[0],id:'blocked-2',value:second},
+    {...f.marks[0],id:'stale-a',boxId:'box',status:'AVAILABLE',value:kiz.replace('NLnuX2T','OLDMARK')},
+    {...f.marks[0],id:'stale-b',boxId:'box',skuId:'sku-c',status:'AVAILABLE',value:kiz.replace('NLnuX2T','STALEXX')});
+  f.balances[0].quantity=2;
+  f.balances.push({...f.balances[0],id:'available-b',skuId:'sku-b',quantity:1},
+    {...f.balances[0],id:'old-packing',skuId:'sku-c',status:'PACKING',quantity:1});
+  f.db.sku.findMany.mockResolvedValue(['sku','sku-b','sku-c'].map(id=>({id,needsChestnyZnak:true,isUnmarked:false})));
+  const stock=structuredClone(f.balances),scans=structuredClone(f.evidence);
+  await f.service.resolveBox('audit',{action:'APPLY_ACTUAL'},f.user);
+  expect(f.marks.filter(m=>m.boxId==='box')).toHaveLength(3);
+  expect(f.marks.filter(m=>m.id.startsWith('stale')).every(m=>m.boxId===null&&m.status==='BLOCKED')).toBe(true);
+  expect(f.db.productMark.create).toHaveBeenCalledOnce();expect(f.balances).toEqual(stock);expect(f.evidence).toEqual(scans);
+  await expect(f.run()).resolves.toMatchObject({ready:true});
+});
