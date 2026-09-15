@@ -17,6 +17,7 @@ export type PeriodCharge = CategorySource & {
 };
 export type PeriodInvoice = {
   id: string; number: string; clientId: string; client: Client; warehouseId: string | null;
+  sourceKey?: string | null;
   request?: { warehouseId: string | null } | null; periodFrom: Date; periodTo: Date;
   status: string; paidRub: Money; totalRub: Money; payments: unknown[]; updatedAt: Date;
   items: Array<{ id: string; chargeId: string | null; charge?: CategorySource | null; description: string; unit: string;
@@ -41,16 +42,19 @@ export function classifyBillingInvoice(invoice: { items: Array<{ charge?: Catego
   return categories.size === 1 ? [...categories][0] : 'OTHER';
 }
 // FIX: recovery invoices may contain FBS processing and its primary/additional services.
-// This is a registry label only: period generation keeps the strict classifier above.
+// The period planner applies all financial/date/duplicate guards after this classification.
 export function classifyBillingRegistryInvoice(invoice: {
-  clientId: string; sourceKey: string | null; items: Array<{ charge?: CategorySource | null }>;
+  clientId: string; sourceKey?: string | null; items: Array<{ charge?: CategorySource | null }>;
 }): BillingServiceCategory {
   const category = classifyBillingInvoice(invoice);
-  if (category !== 'OTHER' || invoice.clientId !== 'c76b78f9-1b83-4e9b-bee3-bc28336ee1c9' ||
-      !invoice.sourceKey?.startsWith(`fbs-invoice:${invoice.clientId}:completed-work:`)) return category;
+  if (category !== 'OTHER' || invoice.clientId !== 'c76b78f9-1b83-4e9b-bee3-bc28336ee1c9') return category;
+  // FIX: preserve classification after consolidation, so a repeated preview reuses the result.
+  const recoveredInvoice = invoice.sourceKey?.startsWith(`fbs-invoice:${invoice.clientId}:completed-work:`);
+  const generatedPeriod = new RegExp(`^billing-period:[a-f0-9]{64}:FBS:${invoice.clientId}$`).test(invoice.sourceKey ?? '');
+  if (!recoveredInvoice && !generatedPeriod) return category;
   const charges = invoice.items.map(item => ({ category: classifyBillingCharge(item.charge), metadata: record(item.charge?.metadata) }));
   const onlyFbsServices = charges.every(charge =>
-    (charge.metadata.kind === 'FBS' && charge.category === 'FBS') ||
+    ((charge.metadata.kind === 'FBS' || generatedPeriod) && charge.category === 'FBS') ||
     (charge.metadata.kind === 'FBS_PRIMARY_PROCESSING' && charge.category === 'PROCESSING'));
   // Persisted provenance, not today's rollout flag: disabling creation must not hide existing invoices.
   const recoveredWork = charges.some(charge => charge.metadata.billingPolicy === COMPLETED_WORK_POLICY && charge.metadata.processingOnly === true);
@@ -124,7 +128,8 @@ export function buildPeriodPlan(input: PeriodInput, charges: PeriodCharge[], inv
     if (!eligibleClient(inv.client) || inv.status === 'CANCELLED') continue;
     const branch = inv.warehouseId ?? inv.request?.warehouseId;
     if (branch && branch !== warehouseId) continue;
-    const category = classifyBillingInvoice(inv);
+    // FIX: include proven recovered FBS bundles without recalculation or new charge creation.
+    const category = classifyBillingRegistryInvoice(inv);
     if (category !== 'OTHER' && !input.categories.includes(category)) continue;
     if (inv.status !== 'DRAFT' || Number(inv.paidRub) !== 0 || inv.payments.length) { alreadyBilledCount++; continue; }
     if (!branch || category === 'OTHER' || !inv.items.length) { issue(inv.id, inv.client, `Счёт ${inv.number}: не определён филиал или смешанные/неопределённые услуги.`); continue; }
