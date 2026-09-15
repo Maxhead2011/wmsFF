@@ -4543,6 +4543,8 @@ public class MainActivity extends Activity {
         ));
         boolean orderStickerReady = false;
         Button stickerAppliedButton = null;
+        boolean physicalPickConfirmation = FbsAssemblyUi.usesPhysicalPickConfirmation(
+            BuildConfig.FLAVOR, task.marketplace, task.physicalPickConfirmation);
         if ("READY_TO_COMPLETE".equals(state)) {
             String taskMarketplace = nonEmpty(task.marketplace, "WILDBERRIES");
             boolean localOnlyRecovery = FbsLocalRecoveryPolicy.canCompleteWithoutSticker(
@@ -4552,7 +4554,15 @@ public class MainActivity extends Activity {
             );
             boolean hasRenderableSticker = task.orderSticker != null
                 && !nonEmpty(task.orderSticker.imageBase64, "").isEmpty();
-            if (localOnlyRecovery && !hasRenderableSticker) {
+            if (physicalPickConfirmation) {
+                // FIX: no WB/Ozon label download, decoding, rendering or printing at the picking step.
+                root.addView(feedbackView(
+                    tr("ПОДТВЕРДИТЕ ФИЗИЧЕСКИЙ ОТБОР\nЗаказ №", "MAHSULOT OLINGANINI TASDIQLANG\nBuyurtma №") +
+                        nonEmpty(task.orderId, "-") + "\n" + Math.max(1, task.itemCount) + tr(" ед.", " dona"),
+                    BOX_FOUND_GREEN
+                ));
+                orderStickerReady = true;
+            } else if (localOnlyRecovery && !hasRenderableSticker) {
                 // FIX: a delivery-recovery order is already complete/shipped in WB,
                 // so WB legitimately returns an empty sticker list on every refresh.
                 root.addView(feedbackView(
@@ -4573,7 +4583,7 @@ public class MainActivity extends Activity {
             }
             if (orderStickerReady) {
                 stickerAppliedButton = primaryMenuButton(
-                    localOnlyRecovery && !hasRenderableSticker
+                    physicalPickConfirmation || (localOnlyRecovery && !hasRenderableSticker)
                         ? tr("ТОВАР ОТОБРАН", "MAHSULOT OLINDI")
                         : tr("НАКЛЕЙКА НАКЛЕЕНА", "STIKER YOPISHTIRILDI"),
                     view -> completeFbsAssembly()
@@ -5355,7 +5365,9 @@ public class MainActivity extends Activity {
                 tr("Артикул: ", "Artikul: ") + article + "\n" +
                 tr("Цвет: ", "Rang: ") + color + " · " + tr("Размер: ", "O‘lcham: ") + size + "\n" +
                 (scanKiz
-                    ? tr("После приёма КИЗ откроется наклейка ", "KIZ qabul qilingach stiker ochiladi: ") + marketplaceName
+                    ? task.physicalPickConfirmation
+                        ? tr("После КИЗ нажмите «ТОВАР ОТОБРАН».", "KIZdan keyin «MAHSULOT OLINDI»ni bosing.")
+                        : tr("После приёма КИЗ откроется наклейка ", "KIZ qabul qilingach stiker ochiladi: ") + marketplaceName
                     : task.perUnitScanning && task.itemCount > 1
                         ? tr("Сканируйте ШК каждой единицы товара.", "Har bir mahsulot SHKini skanerlang.")
                         : task.requiresKiz

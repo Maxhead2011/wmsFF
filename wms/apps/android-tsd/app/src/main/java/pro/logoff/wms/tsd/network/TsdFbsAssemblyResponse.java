@@ -27,6 +27,7 @@ public class TsdFbsAssemblyResponse {
         // FIX: server-confirmed unit count, also used to make scan retries safe.
         public int scannedItemCount;
         public boolean perUnitScanning;
+        public boolean physicalPickConfirmation;
         public boolean sourceWithoutBox;
         public boolean requiresKiz;
         public String recommendedBoxCode;

@@ -121,12 +121,12 @@ describe('Ozon terminal response', () => {
     expect(response.task.scannedItemCount).toBe(1);
     expect(f.label).not.toHaveBeenCalled();
   });
-  it('omits bitmap bytes after all units are scanned', async () => {
+  it('preserves the label for terminals without physical-pick capability', async () => {
     vi.stubEnv('WMS_OZON_TSD_UNIT_SCANS', 'true');
     const f = responseFixture();
     const response = await f.service.formatFbsTsdAssembly({ ...f.task, scannedItemCount: 2 }, user, '');
     expect(response.state).toBe('READY_TO_COMPLETE');
-    expect(response.task.orderSticker.imageBase64).toBeNull();
+    expect(response.task.orderSticker.imageBase64).toBe('large-bitmap');
     expect(response.task.orderId).toBe('0115964331-0187-1');
   });
   it('keeps label rendering and a numeric response for the sold deployment', async () => {
