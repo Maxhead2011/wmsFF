@@ -19,6 +19,7 @@ import { requireFbsReshipmentClientAccess } from './fbs-reshipment-access';
 import { fbsAttemptPageWindow, mergeFbsAttemptPage } from '../../common/shipment-history/fbs-attempt-page';
 import { isDeepStrictEqual } from 'node:util';
 import { ozonTsdPickingEnabled, ozonScannedItemCount, requireOzonItemsScanned } from './ozon-tsd-picking';
+import { physicalPickConfirmationEnabled } from './fbs-physical-pick';
 import {
   BadRequestException,
   ConflictException,
@@ -8701,7 +8702,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     }
 
-    const state = fbsTsdStage(task);
+    const state = fbsTsdStage(task, user);
     if (state === 'SCAN_KIZ') {
       // FIX: hardware /scan carries the same explicit relabel intent as /scan-kiz.
       return this.scanFbsTsdKiz(taskId, physicalKizRelabelEnabled()
@@ -13963,7 +13964,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   async completeFbsTsdAssembly(taskId: string, user: AuthUser) {
-    const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    let task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    const physicalPick = physicalPickConfirmationEnabled(task, user);
     await this.requireFbsOrderStillCollectable(task);
     requireFbsTaskWithoutSyncConflict(task);
     if (task.status === 'COMPLETED') return this.formatFbsTsdAssembly(task, user, 'Заказ уже собран.');
@@ -13981,14 +13983,17 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
     if (task.marketplace === MarketplaceType.OZON && !task.marketplaceSubmittedAt) {
       const submitted = await this.submitOzonFbsTask(task);
-      return this.formatFbsTsdAssembly(
+      if (!physicalPick) return this.formatFbsTsdAssembly(
         submitted,
         user,
         `Заказ ${task.orderId} передан в Ozon. Ozon формирует этикетку; нажмите «Обновить» через несколько секунд.`,
       );
+      // FIX: one physical-pick confirmation completes WMS after Ozon accepts the contents.
+      task = submitted;
     }
     if (
       task.marketplace === MarketplaceType.OZON &&
+      !physicalPick &&
       !task.marketplaceLabelBase64
     ) {
       throw new BadRequestException(
@@ -15588,7 +15593,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   private async formatFbsTsdAssembly(task: FbsTsdAssemblyRecord, user: AuthUser, message: string) {
-    let state = fbsTsdStage(task);
+    const physicalPickConfirmation = physicalPickConfirmationEnabled(task, user);
+    let state = fbsTsdStage(task, user);
     const kizRelabelProposal = state === 'SCAN_KIZ' ? await readPhysicalKizRelabel(this.prisma, task, user) : null;
     const needsStorageRouting = state === 'SCAN_BOX' || state === 'SCAN_SOURCE_BOX';
     const needsSourceBoxUsage = state === 'SCAN_BARCODE';
@@ -15654,11 +15660,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         },
         _sum: { itemCount: true },
       }),
-      state === 'READY_TO_COMPLETE' &&
+      // FIX: preserve WB sticker identifiers for cargo packing, but omit the bitmap from the TSD response.
+      (task.marketplace === MarketplaceType.WILDBERRIES || !physicalPickConfirmation) && state === 'READY_TO_COMPLETE' &&
       (task.marketplace === MarketplaceType.WILDBERRIES ||
         task.marketplace === MarketplaceType.OZON)
         ? this.loadFbsTsdOrderSticker(task)
-        : state === 'WAIT_MARKETPLACE_LABEL' && task.marketplace === MarketplaceType.OZON
+        : !physicalPickConfirmation && state === 'WAIT_MARKETPLACE_LABEL' && task.marketplace === MarketplaceType.OZON
           ? this.loadFbsTsdOrderSticker(task)
         : Promise.resolve(null),
       this.fbsTsdStickerHistory(task.deviceCode, user),
@@ -15862,9 +15869,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           : null,
         itemCount: task.itemCount,
         sourceWithoutBox: fbsTsdUsesNoBox(task) && !task.sourceBoxPending,
-        // FIX: progress survives refresh; never deliver the label bitmap to our TSD.
+        // FIX: server-confirmed unit progress survives refresh.
         scannedItemCount: ozonTsdPickingEnabled(task) ? ozonScannedItemCount(task) : 0,
         perUnitScanning: ozonTsdPickingEnabled(task),
+        physicalPickConfirmation,
         // ADDED: the TSD distinguishes true no-box storage from a source that
         // must be supplied by the manager when the request is closed.
         sourceBoxPending: task.sourceBoxPending,
@@ -15880,8 +15888,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         scannedBarcode: task.barcode,
         kizAccepted: Boolean(task.kiz && task.wbMetaStatus === 'ACCEPTED'),
         wbMetaStatus: task.wbMetaStatus,
-        orderSticker: ozonTsdPickingEnabled(task) && orderSticker
-          ? { ...orderSticker, imageBase64: null } : orderSticker,
+        // FIX: keep legacy label responses for terminals which have not updated yet.
+        orderSticker: physicalPickConfirmation ? null : orderSticker,
         marketplaceSubmittedAt: task.marketplaceSubmittedAt?.toISOString() ?? null,
         marketplaceSubmitError: task.marketplaceSubmitError,
         errorMessage: task.errorMessage,
@@ -29297,7 +29305,7 @@ function jsonStringArraysEqual(
   );
 }
 
-function fbsTsdStage(task: FbsTsdAssemblyRecord) {
+function fbsTsdStage(task: FbsTsdAssemblyRecord, user?: AuthUser) {
   if (task.status === 'COMPLETED') return 'COMPLETED';
   if (!task.boxId && !fbsTsdUsesNoBox(task)) {
     // FIX: once a product barcode is accepted, source selection becomes an
@@ -29310,6 +29318,8 @@ function fbsTsdStage(task: FbsTsdAssemblyRecord) {
   if (!task.barcode) return 'SCAN_BARCODE';
   if (ozonTsdPickingEnabled(task) && ozonScannedItemCount(task) < task.itemCount) return 'SCAN_BARCODE';
   if (task.requiresKiz && (!task.kiz || task.wbMetaStatus !== 'ACCEPTED')) return 'SCAN_KIZ';
+  // FIX: barcode, quantity and KIZ checks precede physical confirmation; labels are unrelated.
+  if (physicalPickConfirmationEnabled(task, user)) return 'READY_TO_COMPLETE';
   if (task.marketplace === MarketplaceType.OZON) {
     if (!task.marketplaceSubmittedAt) return 'READY_TO_SUBMIT';
     if (!task.marketplaceLabelBase64) return 'WAIT_MARKETPLACE_LABEL';

@@ -23,8 +23,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 171 // FIX: Ozon text labels and per-unit scanning, following release 170.
-            versionName = "0.1.172-ozon-quantity"
+            versionCode = 173 // FIX: verify that the released APK contains the Ozon UI changes.
+            versionName = "0.1.174-physical-pick"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

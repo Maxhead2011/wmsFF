@@ -4,6 +4,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { CurrentFbsTsdUser } from './tsd-fbs-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { MarketplaceConnectionsService } from '../marketplace-connections/marketplace-connections.service';
@@ -245,7 +246,7 @@ export class TsdDeviceController {
   getNextFbsAssembly(
     @Query('deviceCode') deviceCode: string | undefined,
     @Query('requestId') requestId: string | undefined,
-    @CurrentUser() user: AuthUser,
+    @CurrentFbsTsdUser() user: AuthUser,
   ) {
     return this.marketplace.getNextFbsTsdAssembly(deviceCode, user, requestId);
   }
@@ -316,7 +317,7 @@ export class TsdDeviceController {
   scanFbsBox(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
-    @CurrentUser() user: AuthUser,
+    @CurrentFbsTsdUser() user: AuthUser,
   ) {
     return this.marketplace.scanFbsTsdBox(id, body, user);
   }
@@ -327,7 +328,7 @@ export class TsdDeviceController {
   scanFbsCode(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
-    @CurrentUser() user: AuthUser,
+    @CurrentFbsTsdUser() user: AuthUser,
   ) {
     return this.marketplace.scanFbsTsdCode(id, body, user);
   }
@@ -338,7 +339,7 @@ export class TsdDeviceController {
   scanFbsBarcode(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
-    @CurrentUser() user: AuthUser,
+    @CurrentFbsTsdUser() user: AuthUser,
   ) {
     return this.marketplace.scanFbsTsdBarcode(id, body, user);
   }
@@ -349,7 +350,7 @@ export class TsdDeviceController {
   scanFbsKiz(
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
-    @CurrentUser() user: AuthUser,
+    @CurrentFbsTsdUser() user: AuthUser,
   ) {
     return this.marketplace.scanFbsTsdKiz(id, body, user);
   }
@@ -358,28 +359,28 @@ export class TsdDeviceController {
   @Post('fbs/tasks/:id/validate-stock-audit')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
-  validateFbsStockAudit(@Param('id') id: string, @Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {
+  validateFbsStockAudit(@Param('id') id: string, @Body() body: Record<string, unknown>, @CurrentFbsTsdUser() user: AuthUser) {
     return this.marketplace.validateFbsTsdStockAudit(id, body, user);
   }
 
   @Post('fbs/tasks/:id/undo-kiz')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
-  undoFbsKiz(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+  undoFbsKiz(@Param('id') id: string, @CurrentFbsTsdUser() user: AuthUser) {
     return this.marketplace.undoFbsTsdKiz(id, user);
   }
 
   @Post('fbs/tasks/:id/complete')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
-  completeFbsAssembly(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+  completeFbsAssembly(@Param('id') id: string, @CurrentFbsTsdUser() user: AuthUser) {
     return this.marketplace.completeFbsTsdAssembly(id, user);
   }
 
   @Post('fbs/tasks/:id/release')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
-  releaseFbsAssembly(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+  releaseFbsAssembly(@Param('id') id: string, @CurrentFbsTsdUser() user: AuthUser) {
     return this.marketplace.releaseFbsTsdAssembly(id, user);
   }
 
