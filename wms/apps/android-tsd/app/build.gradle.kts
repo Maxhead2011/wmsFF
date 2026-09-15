@@ -23,8 +23,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 169 // FIX: OWNER inherits administrator access to sorting and movement.
-            versionName = "0.1.170-owner-sorting"
+            versionCode = 171 // FIX: Ozon text labels and per-unit scanning, following release 170.
+            versionName = "0.1.172-ozon-quantity"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
