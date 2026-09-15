@@ -3187,6 +3187,11 @@ public class MainActivity extends Activity {
     }
 
     private void completeMandatoryFbsAuditLocally(String completedClientId, String completedBoxCode) {
+        // FIX: persist the removal only after finish/validation succeeds, before returning to FBS.
+        if (FbsTaskSafety.shouldClearConfirmedBoxAfterAudit(BuildConfig.FLAVOR, completedBoxCode,
+            fbsSessionOwnerKey(safeSession()), confirmedFbsBoxCode, confirmedFbsBoxOwnerKey)) {
+            clearConfirmedFbsBoxScan();
+        }
         String resumeRequestId = mandatoryFbsKizAuditRequestId;
         mandatoryFbsKizAuditTaskId = "";
         mandatoryFbsKizAuditRequestId = "";
@@ -5844,6 +5849,7 @@ public class MainActivity extends Activity {
                 // FIX: не отправляем сотрудника в обязательную инвентаризацию,
                 // если сервер уже принял ШК и переключил заказ на нужный размер.
                 if (FbsTaskSafety.shouldQueueMandatoryAuditAfterTaskSwitch(
+                    BuildConfig.FLAVOR,
                     previousBoxWasLocallyConfirmed,
                     previousBoxWasNotPicked,
                     problemWasReportedAfterBoxScan,
