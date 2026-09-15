@@ -23,8 +23,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 170 // FIX: avoid unnecessary box audits during FBS navigation.
-            versionName = "0.1.171-box-audit"
+            versionCode = 172 // FIX: publish administrator KIZ location checking above release 171.
+            versionName = "0.1.173-kiz-location"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

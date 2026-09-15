@@ -57,6 +57,14 @@ describe('administrator KIZ location check (read only)', () => {
     await expect(service.lookup(full, { ...user, warehouseIds: ['other'] })).rejects.toThrow();
     expect(db.productMark.findMany).not.toHaveBeenCalled();
   });
+  it('honors existing system administrator warehouse access without explicit warehouse scopes', async () => {
+    // TEST: global owners retain selected-warehouse filtering and the existing hidden-demo-client exclusion.
+    const { service, db } = setup();
+    expect((await service.lookup(full, { ...user, roleCodes: ['OWNER'], permissionCodes: ['system:admin'], warehouseIds: [], hiddenClientIds: ['demo'] })).found).toBe(true);
+    const query = db.productMark.findMany.mock.calls[0]?.[0] as any;
+    expect(query.where.clientId).toEqual({ notIn: ['demo'] });
+    expect(query.where.AND[1].OR[0]).toEqual({ box: { warehouseId: 'wh' } });
+  });
   it('applies client and warehouse scope in the database query', async () => {
     // TEST: another client's code must not be disclosed even to a limited administrator.
     const { service, db } = setup([]); await service.lookup(full, user);

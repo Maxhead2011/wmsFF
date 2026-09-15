@@ -15,7 +15,10 @@ export class KizLocationService {
     }
     const warehouseId = user.activeWarehouseId;
     if (!warehouseId) throw new BadRequestException('Сначала выберите филиал.');
-    if (user.warehouseIds && !user.warehouseIds.includes(warehouseId)) throw new ForbiddenException('Нет доступа к выбранному филиалу.');
+    // FIX: honor the auth module's global warehouse permission while retaining selected-warehouse/client query scope.
+    if (!user.permissionCodes.includes('system:admin') && user.warehouseIds && !user.warehouseIds.includes(warehouseId)) {
+      throw new ForbiddenException('Нет доступа к выбранному филиалу.');
+    }
     const raw = typeof kiz === 'string' ? kiz.trim() : '';
     const parsed = raw.length <= 1024 ? storageBoxTransferKizIdentity(raw) : null;
     if (!parsed) throw new BadRequestException('Отсканируйте полный КИЗ Data Matrix, а не штрихкод товара.');
