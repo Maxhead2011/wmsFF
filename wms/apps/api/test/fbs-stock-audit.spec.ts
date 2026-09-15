@@ -109,7 +109,7 @@ function auditFixture() {
     clientRequest: { findUnique: vi.fn(async () => ({ warehouseId: 'warehouse' })) },
     productMark: { findMany: vi.fn(async () => marks), findFirst: vi.fn(async () => marks[0] ?? null) },
     stockBalance: { findMany: vi.fn(async () => balances) },
-    auditLog: { findMany: vi.fn(async () => evidence) },
+    auditLog: { findMany: vi.fn(async () => evidence), findUnique: vi.fn(async () => null) },
     sku: { findMany: vi.fn(async () => [{ id: 'sku', needsChestnyZnak: true, isUnmarked: false }]) },
     stockMovement: { findMany: vi.fn(async () => [] as { quantity: number }[]) },
   };

@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
+import { confirmInventoryKizComposition } from './confirmed-kiz-composition';
 import { fbsKizAuditEnabled, FBS_KIZ_AUDIT_MARKER } from '../marketplace-connections/fbs-stock-audit';
 import {
   InventoryBoxStatus,
@@ -1312,6 +1313,8 @@ export class InventoryService {
       if (pending > 0) {
         return null;
       }
+      // FIX: finishing/retrying an administrator-approved box check also confirms its physical KIZ composition.
+      await confirmInventoryKizComposition(tx, auditBoxId, user);
       const current =
         auditBox.status === InventoryBoxStatus.RESOLVED
           ? auditBox
