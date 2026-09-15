@@ -12,7 +12,9 @@ export class TsdMonitorMessages {
   constructor(private readonly prisma: PrismaService) {}
 
   private assertDispatcher(user: AuthUser) {
-    if (!user.administrationEnabled || !user.permissionCodes.includes('system:admin') || user.isDemo || user.roleCodes.includes('CLIENT')) {
+    // FIX: enable ADMIN messaging only on installations with administrator monitoring.
+    const adminMonitoring = process.env.ADMIN_MONITORING_ENABLED === 'true' && user.roleCodes.includes('ADMIN');
+    if ((!user.administrationEnabled && !adminMonitoring) || !user.permissionCodes.includes('system:admin') || user.isDemo || user.roleCodes.includes('CLIENT')) {
       throw new ForbiddenException('Отправка сообщений ТСД доступна только диспетчеру WMS.');
     }
   }
