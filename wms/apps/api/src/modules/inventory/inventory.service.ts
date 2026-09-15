@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
-import { confirmInventoryKizComposition } from './confirmed-kiz-composition';
+import { confirmInventoryKizComposition, matchingLatestKizAudit } from './confirmed-kiz-composition';
 import { fbsKizAuditEnabled, FBS_KIZ_AUDIT_MARKER, validateFbsStockAudit } from '../marketplace-connections/fbs-stock-audit';
 import {
   InventoryBoxStatus,
@@ -171,9 +171,9 @@ export class InventoryService {
     if (!fbsKizAuditEnabled() || user.isDemo || !canManageInventory(user)) return [];
     const sessions = (await this.prisma.inventorySession.findMany({
       where: { ...(sessionId ? { id: sessionId } : {}), type: InventorySessionType.BOX_CHECK,
-        status: InventorySessionStatus.COMPLETED, comment: { contains: FBS_KIZ_AUDIT_MARKER },
+        status: { in: [InventorySessionStatus.ACTIVE, InventorySessionStatus.REVIEW, InventorySessionStatus.COMPLETED] }, comment: { contains: FBS_KIZ_AUDIT_MARKER },
         ...(warehouseId ? { warehouseId } : {}),
-        boxes: { some: { status: { in: [InventoryBoxStatus.MATCHED, InventoryBoxStatus.RESOLVED] } } } },
+        boxes: { some: { status: { in: [InventoryBoxStatus.MATCHED, InventoryBoxStatus.RESOLVED, InventoryBoxStatus.MISMATCH] } } } },
       include: sessionInclude, orderBy: { updatedAt: 'desc' },
     })).filter(session => canSeeInventorySession(user, session.clientId) &&
       !user.hiddenClientIds?.includes(session.clientId ?? ''));
@@ -187,9 +187,13 @@ export class InventoryService {
       const task = tasks.find(task => task.id === taskId(session) && task.clientId === session.clientId);
       if (!task || session.boxes.length !== 1) continue;
       const box = session.boxes[0];
+      // FIX: an already applied quantity decision can leave composition/status
+      // unfinished. Keep that retry visible without approving pending quantities.
+      if (box.lines.some(line => line.decision === 'PENDING' || line.difference !== 0 && line.decision !== 'APPLY_ACTUAL')) continue;
       const latest = await this.prisma.inventoryAuditBox.findFirst({ where: { boxId: box.boxId },
         orderBy: [{ startedAt: 'desc' }, { id: 'desc' }], select: { id: true } });
-      if (latest?.id !== box.id) continue;
+      if (latest?.id !== box.id && (box.status !== InventoryBoxStatus.MISMATCH ||
+          !await matchingLatestKizAudit(this.prisma, { ...box, session }))) continue;
       try {
         await validateFbsStockAudit(this.prisma, task, session.id, session.createdByUserId);
       } catch (error) {
@@ -198,7 +202,8 @@ export class InventoryService {
         // Only a composition/stock-status disagreement belongs to this approval button.
         // An invalid session or changed quantity still needs its existing inventory workflow.
         if (!(error instanceof Error) || !['Количество проверено, но состав КИЗ не подтверждён.',
-          'В коробе есть резерв, недоступный остаток или другая принадлежность.'].some(prefix => error.message.startsWith(prefix))) continue;
+          'В коробе есть резерв, недоступный остаток или другая принадлежность.',
+          ...(box.status === InventoryBoxStatus.MISMATCH ? ['Сначала завершите пересчёт и разбор расхождений короба.'] : [])].some(prefix => error.message.startsWith(prefix))) continue;
         result.push({ ...session, boxes: [{ ...box, kizReview: { required: true, orderId: task.orderId,
           message: error instanceof Error ? error.message : 'Требуется подтверждение состава КИЗ.' } }] });
       }
