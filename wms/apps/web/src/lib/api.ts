@@ -2536,6 +2536,7 @@ export type PreviewClientRequestAvailabilityPayload = Pick<CreateClientRequestPa
 export type OutboundRequestXlsxPayload = {
   file: File;
   clientId: string;
+  warehouseId?: string;
   title?: string;
   priority?: ClientRequestPriority;
   comment?: string;
@@ -11832,6 +11833,8 @@ function outboundRequestXlsxForm(payload: OutboundRequestXlsxPayload) {
   const form = new FormData();
   form.append('file', payload.file);
   form.append('clientId', payload.clientId);
+  // FIX: a client without a profile branch supplies it with the workbook.
+  appendOptional(form, 'warehouseId', payload.warehouseId);
   appendOptional(form, 'title', payload.title);
   appendOptional(form, 'priority', payload.priority);
   appendOptional(form, 'comment', payload.comment);

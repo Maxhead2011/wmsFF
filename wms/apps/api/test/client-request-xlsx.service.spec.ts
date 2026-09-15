@@ -6,6 +6,21 @@ import { ClientScopeService } from '../src/modules/auth/client-scope.service';
 import { ClientRequestXlsxService } from '../src/modules/client-requests/client-request-xlsx.service';
 
 describe('ClientRequestXlsxService', () => {
+  // TEST: Svetlana has no profile branch; preview and commit must retain the form's warehouse.
+  it('passes the selected warehouse through Excel preview and creation for a client without a profile branch', async () => {
+    const clientRequests = {
+      create: vi.fn().mockResolvedValue({ id: 'request-1', clientId: 'client-1' }),
+      previewAvailability: vi.fn().mockResolvedValue({ lines: [availabilityLine({ index: 0, skuId: 'sku-1', requestedQuantity: 7, stockQuantity: 7, availableQuantity: 7 })] }),
+    };
+    const prisma = { barcode: { findMany: vi.fn().mockResolvedValue([{ skuId: 'sku-1', value: '2047945587614', sku: { id: 'sku-1', name: 'Товар', internalSku: 'SKU-1' } }]) } };
+    const service = new ClientRequestXlsxService(prisma as never, new ClientScopeService(), clientRequests as never);
+    const dto = { clientId: 'client-1', warehouseId: 'warehouse-msk', destinationCity: 'Москва', desiredDate: '2026-09-18' };
+    await service.createOutboundRequest(fileFixture([['Баркод', 'Количество'], ['2047945587614', 7]]), dto,
+      user({ activeWarehouseId: null, writableClientIds: ['client-1'], clientIds: ['client-1'] }));
+    expect(clientRequests.previewAvailability).toHaveBeenCalledWith(expect.objectContaining({ warehouseId: 'warehouse-msk' }), expect.anything());
+    expect(clientRequests.create).toHaveBeenCalledWith(expect.objectContaining({ warehouseId: 'warehouse-msk', desiredDate: '2026-09-18' }), expect.anything());
+  });
+
   it('показывает доступность SKU и дефицит по Excel-файлу', async () => {
     const prisma = {
       barcode: {

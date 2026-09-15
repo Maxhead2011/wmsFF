@@ -123,6 +123,8 @@ export class ClientRequestXlsxService {
     const request = await this.clientRequests.create(
       {
         clientId: preview.clientId,
+        // FIX: creation must use the same branch as the Excel availability check.
+        warehouseId: dto.warehouseId,
         type: ClientRequestType.OUTBOUND,
         priority: dto.priority ?? ClientRequestPriority.NORMAL,
         title: preview.title,
@@ -149,7 +151,10 @@ export class ClientRequestXlsxService {
     const clientId = normalizeRequiredText(dto.clientId, 'Клиент обязателен.');
     normalizeRequiredText(dto.destinationCity, 'Город поставки обязателен.');
     this.clientScopes.requireClientAccess(user, clientId, 'write');
-    const warehouseId = effectiveWarehouseId(user, 'write') ?? user.activeWarehouseId ?? undefined;
+    // FIX: client users select the branch per request; internal scope still takes precedence.
+    const warehouseId = (effectiveWarehouseId(user, 'write') ?? (user.roleCodes.includes('CLIENT')
+      ? dto.warehouseId?.trim()
+      : user.activeWarehouseId || dto.warehouseId?.trim())) || undefined;
 
     const parsed = parseOutboundRequestXlsxRows(this.readFirstSheet(buffer));
     const barcodes = parsed.lines.map((line) => line.barcode).filter((barcode): barcode is string => Boolean(barcode));
@@ -235,6 +240,7 @@ export class ClientRequestXlsxService {
     const availability = await this.clientRequests.previewAvailability(
       {
         clientId,
+        warehouseId: dto.warehouseId,
         type: ClientRequestType.OUTBOUND,
         items: resolvedLines.map(({ line, match }) => ({
           skuId: match && match !== 'duplicate' ? match.sku.id : undefined,

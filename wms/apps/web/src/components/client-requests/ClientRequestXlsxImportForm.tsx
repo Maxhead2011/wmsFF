@@ -1,10 +1,12 @@
 import { AlertTriangle, CheckCircle2, FileSpreadsheet, Send, Trash2, Upload, Wand2 } from 'lucide-react';
-import { useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   createClientRequest,
+  fetchBranches,
   previewOutboundRequestXlsx,
   uploadClientRequestFile,
   type AuthSession,
+  type BranchSummary,
   type ClientRequestPriority,
   type ClientRequestSummary,
   type ClientSummary,
@@ -35,6 +37,10 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
     initialClientId: writableClients[0]?.id ?? '',
   });
   const [title, setTitle] = useState('');
+  // FIX: the adjacent manual form cannot supply the Excel import's branch.
+  const [branches, setBranches] = useState<BranchSummary[]>([]);
+  const [warehouseId, setWarehouseId] = useState(session.user.activeWarehouseId ?? '');
+  const previewVersion = useRef(0);
   const [priority, setPriority] = useState<ClientRequestPriority>('NORMAL');
   const [desiredDate, setDesiredDate] = useState('');
   const [destinationCity, setDestinationCity] = useState('');
@@ -48,12 +54,38 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
   const [isPreviewing, setPreviewing] = useState(false);
   const [isCommitting, setCommitting] = useState(false);
 
+  useEffect(() => {
+    let cancelled = false;
+    void fetchBranches(session.accessToken).then((rows) => {
+      if (cancelled) return;
+      setBranches(rows);
+      setWarehouseId((current) => rows.some((row) => row.id === current) ? current : rows[0]?.id ?? '');
+    }).catch((caught) => {
+      if (!cancelled) setError(caught instanceof Error ? caught.message : 'Не удалось загрузить филиалы.');
+    });
+    return () => { cancelled = true; };
+  }, [session.accessToken]);
+
+  useEffect(() => {
+    // FIX: discard stale availability while retaining the selected file.
+    previewVersion.current += 1;
+    setPreview(null);
+    setEditableLines([]);
+    setConfirmedRelabels({});
+    setMessage('');
+    setError(null);
+  }, [clientId, warehouseId]);
+
   if (writableClients.length === 0) {
     return null;
   }
 
   async function previewFile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!warehouseId) {
+      setError('Выберите филиал исполнения для Excel.');
+      return;
+    }
     if (!file) {
       setError('Выберите Excel-файл.');
       return;
@@ -63,15 +95,18 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
     setError(null);
     setMessage('');
 
+    const version = ++previewVersion.current;
     try {
       const nextPreview = await previewOutboundRequestXlsx(session.accessToken, {
         file,
         clientId,
+        warehouseId,
         title: title || undefined,
         priority,
         destinationCity,
         desiredDate: desiredDate || undefined,
       });
+      if (version !== previewVersion.current) return;
       setPreview(nextPreview);
       setEditableLines(
         nextPreview.lines.map((line, index) => ({
@@ -89,7 +124,7 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
       setConfirmedRelabels({});
       setMessage(nextPreview.canCommit ? 'Файл готов к созданию заявки.' : 'Файл требует исправлений.');
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Не удалось проверить файл.');
+      if (version === previewVersion.current) setError(caught instanceof Error ? caught.message : 'Не удалось проверить файл.');
     } finally {
       setPreviewing(false);
     }
@@ -119,6 +154,7 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
     try {
       createdRequest = await createClientRequest(session.accessToken, {
         clientId,
+        warehouseId,
         type: 'OUTBOUND',
         priority,
         title: title || preview.title,
@@ -176,8 +212,16 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
 
       <div className="client-request-fields client-request-fields--xlsx">
         <label>
+          <span>Филиал исполнения для Excel</span>
+          <select required value={warehouseId} disabled={isPreviewing || isCommitting}
+            onChange={(event) => setWarehouseId(event.target.value)}>
+            <option value="">Выберите филиал</option>
+            {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.city} · {branch.name}</option>)}
+          </select>
+        </label>
+        <label>
           <span>Клиент</span>
-          <select value={clientId} onChange={(event) => setClientId(event.target.value)}>
+          <select value={clientId} disabled={isPreviewing || isCommitting} onChange={(event) => setClientId(event.target.value)}>
             {writableClients.map((client) => (
               <option key={client.id} value={client.id}>
                 {client.code} · {client.name}
@@ -213,8 +257,14 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
             key={fileInputKey}
             accept=".xlsx,.xls"
             type="file"
+            disabled={isPreviewing || isCommitting}
             onChange={(event) => {
-              setFile(event.target.files?.[0] ?? null);
+              // FIX: cancelling the picker must not discard the selected workbook.
+              const selectedFile = event.target.files?.[0];
+              if (!selectedFile) return;
+              previewVersion.current += 1;
+              setFile(selectedFile);
+              setError(null);
               setPreview(null);
               setEditableLines([]);
               setMessage('');
@@ -223,6 +273,7 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
         </label>
       </div>
 
+      {file ? <p className="inline-status">Выбран файл: {file.name}</p> : null}
       {preview ? (
         <div className="client-request-xlsx-preview">
           <div className="client-request-xlsx-summary">
@@ -356,13 +407,13 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
       ) : null}
 
       <div className="client-request-xlsx-actions">
-        <button className="primary-button client-request-secondary-button" disabled={isPreviewing || !file} type="submit">
+        <button className="primary-button client-request-secondary-button" disabled={isPreviewing || isCommitting || !warehouseId || !file} type="submit">
           <Upload size={16} aria-hidden="true" />
           <span>{isPreviewing ? 'Проверяю' : 'Проверить файл'}</span>
         </button>
         <button
           className="primary-button"
-          disabled={isCommitting || !destinationCity.trim() || !file || !preview || hasBlockingLines || !relabelConfirmed || editableLines.length === 0}
+          disabled={isCommitting || isPreviewing || !warehouseId || !destinationCity.trim() || !file || !preview || hasBlockingLines || !relabelConfirmed || editableLines.length === 0}
           type="button"
           onClick={() => void createRequest()}
         >
