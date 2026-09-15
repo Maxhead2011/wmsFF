@@ -321,8 +321,14 @@ export function TsdMonitoringPanel({ session }: Props) {
             key={device.deviceCode}
             device={device}
             commandBusy={commandDevice === device.deviceCode}
-            // FIX: newly admitted ADMIN viewers do not gain owner-only device commands.
-            showControls={import.meta.env.VITE_ADMIN_MONITORING_ENABLED !== 'true' || Boolean(session.user.administrationEnabled)}
+            // FIX: ADMIN gets task/inventory release and messaging on our installation.
+            showControls={import.meta.env.VITE_ADMIN_MONITORING_ENABLED !== 'true' || Boolean(session.user.administrationEnabled) || (
+              !session.user.isDemo
+              && session.user.roleCodes.includes('ADMIN')
+              && !session.user.roleCodes.includes('CLIENT')
+              && session.user.permissionCodes.includes('system:admin')
+            )}
+            showOwnerControls={import.meta.env.VITE_ADMIN_MONITORING_ENABLED !== 'true' || Boolean(session.user.administrationEnabled)}
             latestVersion={latestTsdVersion}
             onCommand={sendCommand}
             onDisconnectTask={disconnectCurrentTask}
@@ -524,6 +530,7 @@ function DeviceFeed({
   device,
   commandBusy,
   showControls,
+  showOwnerControls,
   latestVersion,
   onCommand,
   onDisconnectTask,
@@ -533,6 +540,7 @@ function DeviceFeed({
   device: Device;
   commandBusy: boolean;
   showControls: boolean;
+  showOwnerControls: boolean;
   latestVersion: string;
   onCommand: (device: Device, action: MonitorAction) => void;
   onDisconnectTask: (device: Device) => void;
@@ -661,7 +669,8 @@ function DeviceFeed({
           <XCircle size={15} />
           Снять все задания
         </button>
-        <button
+        {/* FIX: unrelated device maintenance commands retain their existing owner access. */}
+        {showOwnerControls ? <><button
           type="button"
           className={`is-update${isUpdated ? ' is-updated' : ''}`}
           disabled={isUpdated || !device.online || commandBusy}
@@ -682,7 +691,7 @@ function DeviceFeed({
         <button type="button" className="is-danger" disabled={!device.online || commandBusy} onClick={() => onCommand(device, 'LOGOUT')}>
           <LogOut size={15} />
           Выйти из аккаунта
-        </button>
+        </button></> : null}
       </div> : null}
 
     </article>

@@ -749,9 +749,11 @@ export class AdministrationService {
   }
 
   async issueTsdMonitorAction(deviceCodeValue: string, actionValue: string | undefined, user: AuthUser) {
-    this.assertOwner(user);
     const deviceCode = String(deviceCodeValue ?? '').trim();
     const action = String(actionValue ?? '').trim().toUpperCase();
+    // FIX: ADMIN may end inventory from monitoring; other device commands remain owner-only.
+    if (action === 'UNLOCK_INVENTORY') this.assertMonitoringControl(user);
+    else this.assertOwner(user);
     if (!['RELOAD_REQUEST', 'UPDATE_APP', 'LOGOUT', 'UNLOCK_INVENTORY'].includes(action)) {
       throw new BadRequestException('Доступны команды RELOAD_REQUEST, UPDATE_APP, UNLOCK_INVENTORY и LOGOUT.');
     }
@@ -963,7 +965,8 @@ export class AdministrationService {
     body: { kind?: string; workloadId?: string; requestId?: string; deviceCode?: string },
     user: AuthUser,
   ) {
-    this.assertOwner(user);
+    // FIX: use the existing task protections for authorized monitoring administrators.
+    this.assertMonitoringControl(user);
     const kind = String(body.kind ?? '').trim();
     if (kind === 'FBS_ORDER') {
       const taskId = String(body.workloadId ?? '').trim();
@@ -981,7 +984,8 @@ export class AdministrationService {
   }
 
   async disconnectTsdRequest(body: { requestId?: string; deviceCode?: string }, user: AuthUser) {
-    this.assertOwner(user);
+    // FIX: monitoring administrators can release tasks without owner privileges elsewhere.
+    this.assertMonitoringControl(user);
     const requestId = String(body.requestId ?? '').trim();
     const deviceCode = String(body.deviceCode ?? '').trim();
     if (!requestId || !deviceCode) throw new BadRequestException('Не указаны заявка или ТСД.');
@@ -2014,6 +2018,16 @@ export class AdministrationService {
         },
       ],
     };
+  }
+
+  // FIX: installation-scoped monitoring rights never promote ADMIN to WMS owner.
+  private assertMonitoringControl(user: AuthUser) {
+    const adminMonitoring = process.env.ADMIN_MONITORING_ENABLED === 'true'
+      && !user.isDemo
+      && user.roleCodes?.includes('ADMIN')
+      && !user.roleCodes?.includes('CLIENT')
+      && user.permissionCodes?.includes('system:admin');
+    if (!adminMonitoring) this.assertOwner(user);
   }
 
   private assertOwner(user: AuthUser) {
