@@ -40,7 +40,7 @@ import { UpdateClientFbsTurnkeyDto } from './dto/update-client-fbs-turnkey.dto';
 import { UpdateFbsLogisticsTripDto } from './dto/update-fbs-logistics-trip.dto';
 import { UpdateInvoicePaymentAccountDto } from './dto/update-invoice-payment-account.dto';
 import { UpsertClientBillingServiceDto } from './dto/upsert-client-billing-service.dto';
-import { classifyBillingInvoice, parseBillingPeriod, type PeriodCharge, type PeriodInvoice, type BillingServiceCategory } from './billing-period-policy';
+import { classifyBillingRegistryInvoice, parseBillingPeriod, type PeriodCharge, type PeriodInvoice, type BillingServiceCategory } from './billing-period-policy';
 import { afterBillingCommit, runBillingMutation, withBillingDb } from './billing-mutation';
 
 type MergeInvoiceRow = {
@@ -1458,7 +1458,8 @@ export class BillingService {
       include: { ...billingInvoiceInclude, warehouse: { select: { id: true, name: true } } },
       orderBy: [{ periodFrom: 'desc' }, { createdAt: 'desc' }],
     });
-    return invoices.map(invoice => ({ ...invoice, serviceCategory: classifyBillingInvoice(invoice) }))
+    // FIX: include mixed completed-work recoveries in the FBS registry and merge selection.
+    return invoices.map(invoice => ({ ...invoice, serviceCategory: classifyBillingRegistryInvoice(invoice) }))
       .filter(invoice => !query.serviceCategory || invoice.serviceCategory === query.serviceCategory);
   }
 

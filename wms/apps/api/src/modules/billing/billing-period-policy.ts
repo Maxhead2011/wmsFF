@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
+import { COMPLETED_WORK_POLICY } from './completed-fbs-billing';
 
 // ADDED: shared registry/generation policy. No tariff calculation or stock writes.
 export const BILLING_CATEGORIES = ['FBS', 'PROCESSING', 'PRR', 'STORAGE', 'OTHER'] as const;
@@ -38,6 +39,22 @@ export function classifyBillingCharge(charge?: CategorySource | null): BillingSe
 export function classifyBillingInvoice(invoice: { items: Array<{ charge?: CategorySource | null }> }): BillingServiceCategory {
   const categories = new Set(invoice.items.map(item => classifyBillingCharge(item.charge)));
   return categories.size === 1 ? [...categories][0] : 'OTHER';
+}
+// FIX: recovery invoices may contain FBS processing and its primary/additional services.
+// This is a registry label only: period generation keeps the strict classifier above.
+export function classifyBillingRegistryInvoice(invoice: {
+  clientId: string; sourceKey: string | null; items: Array<{ charge?: CategorySource | null }>;
+}): BillingServiceCategory {
+  const category = classifyBillingInvoice(invoice);
+  if (category !== 'OTHER' || invoice.clientId !== 'c76b78f9-1b83-4e9b-bee3-bc28336ee1c9' ||
+      !invoice.sourceKey?.startsWith(`fbs-invoice:${invoice.clientId}:completed-work:`)) return category;
+  const charges = invoice.items.map(item => ({ category: classifyBillingCharge(item.charge), metadata: record(item.charge?.metadata) }));
+  const onlyFbsServices = charges.every(charge =>
+    (charge.metadata.kind === 'FBS' && charge.category === 'FBS') ||
+    (charge.metadata.kind === 'FBS_PRIMARY_PROCESSING' && charge.category === 'PROCESSING'));
+  // Persisted provenance, not today's rollout flag: disabling creation must not hide existing invoices.
+  const recoveredWork = charges.some(charge => charge.metadata.billingPolicy === COMPLETED_WORK_POLICY && charge.metadata.processingOnly === true);
+  return onlyFbsServices && recoveredWork && charges.some(charge => charge.category === 'FBS') ? 'FBS' : category;
 }
 export function parseBillingPeriod(start: string, end: string) {
   const date = (value: string, endOfDay: boolean) => {
