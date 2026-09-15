@@ -5,6 +5,11 @@ export class ImportOutboundRequestXlsxDto {
   @IsString()
   clientId!: string;
 
+  // FIX: retain the branch selected in the Excel form through DTO validation.
+  @IsOptional()
+  @IsString()
+  warehouseId?: string;
+
   @IsOptional()
   @IsString()
   title?: string;
