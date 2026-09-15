@@ -2536,6 +2536,8 @@ model FbsTsdAssembly {
   sourceBarcodes      Json?
   storageBoxes        Json
   itemCount           Int                   @default(1)
+  // FIX: count confirmed physical Ozon units; a barcode alone proves only one.
+  scannedItemCount    Int                   @default(0)
   requiresKiz         Boolean               @default(false)
   status              String                @default("IN_PROGRESS")
   deviceCode          String
