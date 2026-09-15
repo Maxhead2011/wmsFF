@@ -61,7 +61,7 @@ async function source(tx: Tx, task: Task, oldKiz: string) {
     tx.stockMovement.findFirst({where: {idempotencyKey: {startsWith: `fbs-sticker-pick:${task.id}:`}, quantity: {lt: 0}}}),
     tx.fbsTsdAssembly.findMany({where: {id: {not: task.id}, clientId: task.clientId,
       kiz: {equals: oldKiz, mode: 'insensitive'}, status: {in: ['IN_PROGRESS', 'COMPLETED', 'RETURN_REQUIRED']}},
-      select: {requestId: true, status: true}}),
+      select: {requestId: true, status: true, clientId: true, skuId: true, updatedAt: true}}),
   ]);
   if ((balance._sum.quantity ?? 0) < Math.max(1, count) || picked) {
     throw new BadRequestException('Остаток или состав КИЗ изменился, либо товар уже списан. Переклейка остановлена.');
@@ -69,7 +69,27 @@ async function source(tx: Tx, task: Task, oldKiz: string) {
   const requestIds = [...new Set(linked.map(t => t.requestId))];
   const closedRequests = requestIds.length ? await tx.clientRequest.count({where: {id: {in: requestIds}, clientId: task.clientId,
     status: {in: ['DONE', 'CANCELLED', 'REJECTED']}}}) : 0;
-  if (closedRequests !== requestIds.length || linked.some(t => t.status !== 'COMPLETED')) throw new BadRequestException('Старый КИЗ занят другой незавершённой или неподтверждённой сборкой.');
+  if (closedRequests !== requestIds.length || linked.some(t => !['COMPLETED', 'RETURN_REQUIRED'].includes(t.status))) {
+    throw new BadRequestException('Старый КИЗ занят другой незавершённой или неподтверждённой сборкой.');
+  }
+  // FIX: only a later, completed admin sorting movement proves that a historical
+  // RETURN_REQUIRED unit is physically available again. Keep its old task/KIZ intact;
+  // this proof permits replacement, never reuse, and is rechecked on application.
+  const returns = linked.filter(t => t.status === 'RETURN_REQUIRED');
+  if (returns.length) {
+    const movement = mark.stockMovementId
+      ? await tx.stockMovement.findUnique({where: {id: mark.stockMovementId}}) : null;
+    const sessionId = movement?.sourceDocument?.match(/^PALLET_SORTING:(.+)$/)?.[1];
+    const sorting = sessionId ? await tx.palletSortingSession.findUnique({where: {id: sessionId}}) : null;
+    if (!movement || !sorting?.completedAt || sorting.clientId !== task.clientId || sorting.warehouseId !== box.warehouseId ||
+        movement.clientId !== task.clientId || movement.skuId !== task.skuId || movement.boxId !== task.boxId ||
+        movement.warehouseId !== box.warehouseId || movement.status !== 'AVAILABLE' || movement.quantity !== 1 ||
+        !['TRANSFER', 'INVENTORY_ADJUSTMENT'].includes(movement.type) ||
+        returns.some(t => t.clientId !== task.clientId || t.skuId !== task.skuId ||
+          !(movement.createdAt > t.updatedAt))) {
+      throw new BadRequestException('Возврат старого КИЗ в этот короб не подтверждён завершённой сортировкой. Администратору нужно разобрать старую заявку.');
+    }
+  }
   return mark;
 }
 

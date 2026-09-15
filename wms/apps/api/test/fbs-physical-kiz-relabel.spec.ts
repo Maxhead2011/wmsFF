@@ -162,3 +162,69 @@ it('restores a pending old scan directly to scanning the new KIZ in the real res
     state:'SCAN_NEW_KIZ',kizRelabelProposal:{id,oldKiz:OLD},
   });
 });
+
+// TEST: RETURN_REQUIRED from a closed request must permit a proven physical return to be relabelled.
+function sortedReturnFixture() {
+  const f = fixture();
+  f.state.linked = [{id:'historic',requestId:'closed',clientId:'c',skuId:'sku',status:'RETURN_REQUIRED',updatedAt:new Date(500)}];
+  f.state.openRequests = 1; // count of closed linked requests in the existing fixture
+  f.state.marks[0].stockMovementId = 'sorted-in';
+  const movement:any = {id:'sorted-in',clientId:'c',warehouseId:'w',skuId:'sku',boxId:'box',status:'AVAILABLE',quantity:1,
+    type:'INVENTORY_ADJUSTMENT',sourceDocument:'PALLET_SORTING:sorting',createdAt:new Date(1500)};
+  const session:any = {id:'sorting',clientId:'c',warehouseId:'w',completedAt:new Date(1700)};
+  f.db.stockMovement.findUnique = vi.fn(async()=>copy(movement));
+  f.db.palletSortingSession = {findUnique:vi.fn(async()=>copy(session))};
+  return {...f,movement,session};
+}
+it('relabels an available sorted unit blocked by a closed RETURN_REQUIRED task without rewriting its history', async()=>{
+  const f=sortedReturnFixture(), linked=copy(f.state.linked);
+  const id=await f.propose(); await f.apply(id);
+  expect(f.state.linked).toEqual(linked);expect(f.state.quantity).toBe(1);
+  expect(f.state.marks[0]).toMatchObject({value:OLD,status:'BLOCKED',boxId:null});
+  expect(f.state.task).toMatchObject({kiz:NEW,wbMetaStatus:'PENDING'});
+});
+it.each(['open-request','active-task','missing-proof','old-proof','wrong-client','wrong-sku','wrong-box','wrong-warehouse','wrong-status','wrong-quantity','wrong-type','unfinished-sorting','foreign-session'])('refuses an unproven old return: %s',async kind=>{
+  const f=sortedReturnFixture();
+  if(kind==='open-request')f.state.openRequests=0;
+  if(kind==='active-task')f.state.linked[0].status='IN_PROGRESS';
+  if(kind==='missing-proof')f.state.marks[0].stockMovementId=null;
+  if(kind==='old-proof')f.movement.createdAt=new Date(100);
+  if(kind==='wrong-client')f.movement.clientId='other';
+  if(kind==='wrong-sku')f.movement.skuId='other';
+  if(kind==='wrong-box')f.movement.boxId='other';
+  if(kind==='wrong-warehouse')f.movement.warehouseId='other';
+  if(kind==='wrong-status')f.movement.status='PACKING';
+  if(kind==='wrong-quantity')f.movement.quantity=-1;
+  if(kind==='wrong-type')f.movement.type='PICK';
+  if(kind==='unfinished-sorting')f.session.completedAt=null;
+  if(kind==='foreign-session')f.session.clientId='other';
+  const before=copy(f.state);await expect(f.propose()).rejects.toThrow();expect(f.state).toEqual(before);
+});
+it('rechecks the sorting proof when applying an already proposed replacement',async()=>{
+  const f=sortedReturnFixture();const id=await f.propose();f.movement.boxId='other';
+  const before=copy(f.state);await expect(f.apply(id)).rejects.toThrow();expect(f.state).toEqual(before);
+});
+it('the real KIZ scanner sends a returned historical conflict to the transactional relabel checks',async()=>{
+  const f=sortedReturnFixture();const service:any=Object.create(MarketplaceConnectionsService.prototype);
+  service.prisma=f.db;service.loadOwnedFbsTsdAssembly=async()=>copy(f.state.task);
+  service.requireFbsOrderStillCollectable=async()=>{};service.assertFbsTsdLeaseVersion=async(t:any)=>t;
+  service.requireCurrentFbsTsdLease=f.lease;
+  service.withFbsTsdLeaseTransaction=async(_t:any,_u:any,run:any)=>f.db.$transaction(run);
+  service.formatFbsTsdAssembly=async()=>({state:'SCAN_NEW_KIZ'});
+  service.recordDuplicateFbsKizScan=vi.fn();
+  await expect(service.scanFbsTsdKiz('t',{kiz:OLD,supportsKizRelabel:true},f.user)).resolves.toEqual({state:'SCAN_NEW_KIZ'});
+  expect(f.state.audits.at(-1).payload.stage).toBe('PROPOSED');
+  expect(f.state.task.kiz).toBeNull();expect(f.state.quantity).toBe(1);
+});
+it.each(['disabled','foreign-client','active-task','old-apk'])('the scanner keeps existing protections for %s',async kind=>{
+  // TEST: the new route cannot bypass a live lease, tenant boundary or disabled feature.
+  const f=sortedReturnFixture();const service:any=Object.create(MarketplaceConnectionsService.prototype);
+  if(kind==='disabled')vi.stubEnv('WMS_FBS_KIZ_RELABEL_ENABLED','false');
+  if(kind==='foreign-client')f.state.linked[0].clientId='other';
+  if(kind==='active-task')f.state.linked[0].status='IN_PROGRESS';
+  service.prisma=f.db;service.loadOwnedFbsTsdAssembly=async()=>copy(f.state.task);
+  service.requireFbsOrderStillCollectable=async()=>{};service.assertFbsTsdLeaseVersion=async(t:any)=>t;
+  service.recordDuplicateFbsKizScan=vi.fn();service.proposeFbsPhysicalKizRelabel=vi.fn();
+  await expect(service.scanFbsTsdKiz('t',{kiz:OLD,supportsKizRelabel:kind!=='old-apk'},f.user)).rejects.toThrow();
+  expect(service.proposeFbsPhysicalKizRelabel).not.toHaveBeenCalled();expect(f.state.task.kiz).toBeNull();
+});
