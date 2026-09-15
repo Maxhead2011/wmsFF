@@ -34,9 +34,9 @@ const preview: any = {
   issues: [{ id: 'missing', clientName: 'Клиент', message: 'Нет тарифа ПРР' }], alreadyBilledCount: 3, zeroCount: 1,
 };
 let onCreated = vi.fn();
-function render() {
+function render(clientId?: string) {
   hooks.cursor = 0;
-  return BillingPeriodGenerationDialog({ session: { accessToken: 'token', user: {} } as any, clients: [{ id: 'client', code: '001', name: 'Клиент' }] as any, periodFrom: '2026-08-01', periodTo: '2026-08-31', onClose: vi.fn(), onCreated });
+  return BillingPeriodGenerationDialog({ session: { accessToken: 'token', user: {} } as any, clients: [{ id: 'client', code: '001', name: 'Клиент' }] as any, clientId, periodFrom: '2026-08-01', periodTo: '2026-08-31', onClose: vi.fn(), onCreated });
 }
 function button(tree: any, label: string) { return elements(tree).find(node => node.type === 'button' && text(node) === label); }
 async function getPreview() { await button(render(), 'Предварительный расчёт').props.onClick(); return render(); }
@@ -44,6 +44,23 @@ async function getPreview() { await button(render(), 'Предварительн
 describe('billing period generation', () => {
   beforeEach(() => { hooks.values = []; hooks.cursor = 0; vi.clearAllMocks(); onCreated = vi.fn(); vi.mocked(previewBillingPeriod).mockResolvedValue(preview); });
   // TEST: presets use inclusive calendar days, not elapsed hours/local timezone.
+  it('does not silently exclude a client explicitly selected when opening the dialog', async () => {
+    const tree = render('client');
+    const exclusion = elements(tree).find(node => node.type === 'label' && text(node).includes('Исключить ИП Лукин'));
+    expect(elements(exclusion).find(node => node.type === 'input').props).toMatchObject({ disabled: true, checked: false });
+    await button(tree, 'Предварительный расчёт').props.onClick();
+    expect(previewBillingPeriod).toHaveBeenCalledWith('token', expect.objectContaining({ clientId: 'client', excludeLukin: false }));
+  });
+  // TEST: explicit selection overrides only the mass exclusion, not its stored preference.
+  it('includes a selected client and restores exclusion when switching back to all clients', async () => {
+    elements(render()).find(node => node.type === 'select').props.onChange({ target: { value: 'client' } });
+    await getPreview();
+    expect(previewBillingPeriod).toHaveBeenLastCalledWith('token', expect.objectContaining({ clientId: 'client', excludeLukin: false }));
+    elements(render()).find(node => node.type === 'select').props.onChange({ target: { value: '' } });
+    await getPreview();
+    expect(previewBillingPeriod).toHaveBeenLastCalledWith('token', expect.objectContaining({ excludeLukin: true }));
+    expect(vi.mocked(previewBillingPeriod).mock.calls.at(-1)![1].clientId).toBeUndefined();
+  });
   it('calculates seven/fourteen days across month and year boundaries', () => {
     expect(billingPeriodPreset('2026-08-28', 'week')).toEqual({ periodFrom: '2026-08-28', periodTo: '2026-09-03' });
     expect(billingPeriodPreset('2026-12-25', 'fortnight')).toEqual({ periodFrom: '2026-12-25', periodTo: '2027-01-07' });

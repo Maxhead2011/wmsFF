@@ -22,6 +22,7 @@ import { ListBillingInvoicesDto } from './dto/list-billing-invoices.dto';
 import { ListBillingReconciliationDto } from './dto/list-billing-reconciliation.dto';
 import { ListBillingServiceHistoryDto } from './dto/list-billing-service-history.dto';
 import { MergeFbsInvoicesDto } from './dto/merge-fbs-invoices.dto';
+import { PreviewFbsInvoicesDto } from './dto/preview-fbs-invoices.dto';
 import { MergeBillingInvoicesDto } from './dto/merge-billing-invoices.dto';
 import { UpdateBillingChargeStatusDto } from './dto/update-billing-charge-status.dto';
 import { UpdateBillingInvoiceStatusDto } from './dto/update-billing-invoice-status.dto';
@@ -197,6 +198,12 @@ export class BillingController {
     const file = await this.pdf.getCombinedInvoicesPdf(selection.invoiceIds, selection.client.code, user);
     setPdfHeaders(response, file.fileName);
     return new StreamableFile(file.buffer);
+  }
+
+  // FIX: large selections use JSON; same read permission, scope and read-only service as GET.
+  @Post('invoices/fbs-merge-preview')
+  previewFbsMerge(@Body() dto: PreviewFbsInvoicesDto, @CurrentUser() user: AuthUser) {
+    return this.billing.getFbsMergePreview(dto.clientId, user, dto.invoiceIds);
   }
 
   @Get('invoices/fbs-merge-preview')

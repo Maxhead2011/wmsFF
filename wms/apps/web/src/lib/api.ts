@@ -8453,13 +8453,10 @@ export async function fetchFbsInvoiceMergePreview(
   clientId: string,
   invoiceIds?: string[],
 ) {
-  return request<FbsInvoiceMergePreview>(
-    withQuery('/billing/invoices/fbs-merge-preview', {
-      clientId,
-      invoiceIds: invoiceIds?.length ? invoiceIds.join(',') : undefined,
-    }),
-    { accessToken },
-  );
+  // FIX: hundreds of invoice IDs exceed proxy/Node URL limits; keep the exact selection in JSON.
+  return request<FbsInvoiceMergePreview>('/billing/invoices/fbs-merge-preview', {
+    method: 'POST', body: { clientId, invoiceIds }, accessToken,
+  });
 }
 
 export async function mergeFbsInvoices(

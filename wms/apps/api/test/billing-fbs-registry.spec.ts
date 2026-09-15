@@ -70,7 +70,8 @@ describe('recovered FBS invoices in the registry', () => {
     const { service } = setup([recovered({ sourceKey: `fbs-primary-invoice:${clientId}:completed-work:fingerprint`, items: [item('FBS_PRIMARY_PROCESSING', 10.64)] })]);
     expect((await service.listInvoices({}, user))[0].serviceCategory).toBe('PROCESSING');
   });
-  it('does not relax the strict classification used by period generation', () => {
+  // TEST: the fallback classifier remains strict; only proven bundles get the special category.
+  it('does not relax the strict fallback classification of mixed services', () => {
     expect(classifyBillingInvoice(recovered())).toBe('OTHER');
   });
 });
