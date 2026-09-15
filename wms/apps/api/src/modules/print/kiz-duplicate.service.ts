@@ -66,8 +66,10 @@ export class KizDuplicateService {
     if (barcode) {
       products = await this.prisma.sku.findMany({ where: { clientId, barcodes: { some: { value: barcode } } }, select: productSelect, take: 2 });
       if (products.length !== 1) throw new BadRequestException('ШК не найден у выбранного клиента или соответствует нескольким товарам.');
-      if (candidates.length && !candidates.some(c => c.skuId === products[0].id)) {
-        throw new ConflictException('КИЗ/GTIN относится к другому товару. Проверьте вещь и этикетку.');
+      // FIX: GTIN history does not bind an unknown serial number to a SKU.
+      // The scanned barcode supplies its caption; an exact KIZ binding still wins.
+      if (exact.length && !exact.some(c => c.skuId === products[0].id)) {
+        throw new ConflictException('Этот КИЗ уже привязан в ВМС к другому товару. Проверьте вещь и этикетку.');
       }
     } else {
       products = candidates.length === 1

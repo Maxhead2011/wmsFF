@@ -29,6 +29,19 @@ describe('isolated duplicate KIZ workflow',()=>{
  it('resolves an exact KIZ',async()=>{const {service}=fixture();expect(await service.lookup({clientId:'client',kiz:raw},user)).toMatchObject({state:'READY',match:'EXACT_KIZ',kiz:raw,product})});
  it('asks for barcode instead of selecting one of several GTIN matches',async()=>{const {service,db}=fixture();db.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([{skuId:'a'},{skuId:'b'}]);expect(await service.lookup({clientId:'client',kiz:raw},user)).toMatchObject({state:'NEED_BARCODE',product:null});expect(db.sku.findMany).not.toHaveBeenCalled()});
  it('unknown KIZ plus barcode supplies the label caption without registering a mark',async()=>{const {service,db}=fixture();db.$queryRaw.mockResolvedValue([]);expect(await service.lookup({clientId:'client',kiz:raw,barcode:'2050000000000'},user)).toMatchObject({state:'READY',match:'BARCODE_CONFIRMED'});expect(db.auditLog.create).not.toHaveBeenCalled()});
+ // TEST: other serial numbers sharing this GTIN are suggestions, not this KIZ's binding.
+ it('accepts the scanned barcode for an unknown KIZ despite other GTIN products',async()=>{
+  const {service,db}=fixture();db.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([{skuId:'other-a'},{skuId:'other-b'}]);
+  expect(await service.lookup({clientId:'client',kiz:raw,barcode:'2050000000000'},user)).toMatchObject({state:'READY',match:'BARCODE_CONFIRMED',kiz:raw,product});
+  expect(db.auditLog.create).not.toHaveBeenCalled();expect(db.kizDuplicateJob.create).not.toHaveBeenCalled();
+ });
+ it('prints the original unknown KIZ with the barcode-confirmed caption after revalidation',async()=>{
+  const {service,db,jobs}=fixture();db.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([{skuId:'other'}]);
+  const body={id:'22222222-2222-4222-8222-222222222222',clientId:'client',stationId:'station',skuId:'sku',deviceCode:'SOS',kiz:raw,barcode:'2050000000000'};
+  expect(await service.create(body,user)).toMatchObject({status:'QUEUED'});
+  expect(buildKizDuplicateLabel).toHaveBeenCalledWith(raw,product);
+  expect(jobs.get(body.id)).toMatchObject({kiz:raw,skuId:'sku',product:{match:'BARCODE_CONFIRMED'}});
+ });
  it('refuses a barcode contradicting the known KIZ',async()=>{const {service,db}=fixture();db.$queryRaw.mockResolvedValue([{skuId:'other'}]);await expect(service.lookup({clientId:'client',kiz:raw,barcode:'2050000000000'},user)).rejects.toThrow('другому товару')});
  it('retries the same request without another label or job',async()=>{
   const {service,db}=fixture();const body={id:'11111111-1111-4111-8111-111111111111',clientId:'client',stationId:'station',skuId:'sku',deviceCode:'SOS',kiz:raw};
