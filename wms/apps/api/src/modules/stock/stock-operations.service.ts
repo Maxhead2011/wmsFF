@@ -1133,6 +1133,52 @@ export class StockOperationsService {
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
+  // FIX: legacy whole-box consolidation moves only marks already attached to the
+  // source. Do not silently leave physically counted KIZ behind in another box.
+  private async assertCountedKizBindingsForConsolidation(
+    tx: Prisma.TransactionClient,
+    source: { id: string; clientId: string; code: string;
+      productMarks: Array<{ skuId: string; status: StockStatus; value: string }> },
+  ) {
+    if (process.env.WMS_PALLET_SORTING_ENABLED !== 'true') return;
+    const audit = await tx.inventoryAuditBox.findFirst({
+      where: { boxId: source.id, clientId: source.clientId },
+      orderBy: [{ startedAt: 'desc' }, { id: 'desc' }],
+      include: { lines: true },
+    });
+    if (!audit || !['MATCHED', 'RESOLVED'].includes(audit.status)) return;
+    const confirmedLines = new Map(audit.lines.filter(line => line.countedQuantity > 0 &&
+      (line.decision === 'APPLY_ACTUAL' || line.decision === 'KEEP_SYSTEM' && line.difference === 0))
+      .map(line => [line.id, line]));
+    if (!confirmedLines.size) return;
+    const evidence = await tx.auditLog.findMany({
+      where: { action: 'INVENTORY_KIZ_SCAN', entity: 'InventoryAuditBox', entityId: audit.id,
+        createdAt: { gte: audit.startedAt } },
+      select: { payload: true },
+    });
+    const key = (value: string) => {
+      const parsed = storageBoxTransferKizIdentity(value);
+      return parsed ? JSON.stringify([parsed.gtin, parsed.serial]) : null;
+    };
+    const current = new Set(source.productMarks.filter(mark => mark.status === StockStatus.AVAILABLE)
+      .map(mark => JSON.stringify([mark.skuId, key(mark.value)])));
+    for (const item of evidence) {
+      const scan = item.payload as { lineId?: string; skuId?: string; clientId?: string;
+        boxId?: string; roundStartedAt?: string; kiz?: string } | null;
+      const line = scan?.lineId ? confirmedLines.get(scan.lineId) : undefined;
+      // FIX: old counting rounds and unrelated audit payloads cannot change this transfer.
+      if (!line || scan?.boxId !== source.id || scan.clientId !== source.clientId ||
+          scan.skuId !== line.skuId || scan.roundStartedAt !== audit.startedAt.toISOString()) continue;
+      const identity = typeof scan.kiz === 'string' ? key(scan.kiz) : null;
+      if (!identity || !current.has(JSON.stringify([line.skuId, identity]))) {
+        throw new BadRequestException(
+          `КИЗ из подтверждённого пересчёта не числится доступным за товаром в коробе ${source.code}. ` +
+          'Объединение не выполнено. Используйте «Сортировка и перемещение», чтобы обновить привязки по физическим сканам.',
+        );
+      }
+    }
+  }
+
   async transferWholeBox(dto: TransferWholeBoxDto, user: AuthUser) {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
     await this.inventoryLock?.assertStockMovementsAllowed();
@@ -1171,7 +1217,7 @@ export class StockOperationsService {
             orderBy: [{ skuId: 'asc' }, { status: 'asc' }],
           },
           productMarks: {
-            select: { id: true, skuId: true, status: true },
+            select: { id: true, skuId: true, status: true, value: true },
           },
         },
       });
@@ -1182,6 +1228,9 @@ export class StockOperationsService {
       if (sourceBox.balances.length === 0) {
         throw new BadRequestException(`В коробе ${sourceBox.code} нет остатка для перемещения.`);
       }
+
+      // FIX: validate before creating the destination or writing any stock/mark movement.
+      await this.assertCountedKizBindingsForConsolidation(tx, sourceBox);
 
       const existingTarget = await tx.box.findUnique({
         where: { clientId_code: { clientId: dto.clientId, code: toBoxCode } },
