@@ -44,6 +44,19 @@ const invoice: any = {
   status: 'ISSUED', serviceCategory: 'STORAGE', totalRub: 100, paidRub: 25, payments: [], items: [], comment: '',
 };
 describe('billing register filters and invoice card', () => {
+  // TEST: recovered mixed invoices use the server's FBS label without losing period/client/status filters.
+  it('includes mixed recovered FBS invoices once in the FBS register', () => {
+    const recovery = { ...invoice, id: 'recovery', status: 'DRAFT', serviceCategory: 'FBS',
+      sourceKey: 'fbs-invoice:lukin:completed-work:hash', periodFrom: '2026-09-04', periodTo: '2026-09-04',
+      items: [{ description: 'Обработка FBS' }, { description: 'Первичная обработка' }, { description: 'Дополнительные услуги' }] };
+    const rows = [recovery, { ...recovery, id: 'other', serviceCategory: 'OTHER' },
+      { ...recovery, id: 'different-client', clientId: 'other', client: { id: 'other' } },
+      { ...recovery, id: 'issued', status: 'ISSUED' },
+      { ...recovery, id: 'outside-period', periodFrom: '2026-08-31', periodTo: '2026-08-31' }];
+    const result = filterBillingRegisterInvoices(rows, { clientId: 'lukin', from: '2026-09-01', to: '2026-09-14', category: 'FBS', status: 'DRAFT' });
+    expect(result.map(row => row.id)).toEqual(['recovery']);
+    expect(result[0]).toBe(recovery);
+  });
   // TEST: bulk incoming payments must update the independent registry and request a refresh.
   it('shows the paid state in the registry after a bulk incoming payment', async () => {
     hooks.values = []; hooks.cursor = 0; vi.clearAllMocks();

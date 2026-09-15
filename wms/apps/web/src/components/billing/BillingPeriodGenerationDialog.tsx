@@ -59,7 +59,8 @@ export function BillingPeriodGenerationDialog(props: Props) {
     setError(null);
   }
   function input() {
-    return { ...(clientId ? { clientId } : {}), periodFrom, periodTo, categories, excludeLukin };
+    // FIX: explicit client selection overrides the mass-only exclusion without losing its preference.
+    return { ...(clientId ? { clientId } : {}), periodFrom, periodTo, categories, excludeLukin: !clientId && excludeLukin };
   }
   function preset(value: 'week' | 'fortnight' | 'month') {
     if (requestLock.current) return;
@@ -159,7 +160,8 @@ export function BillingPeriodGenerationDialog(props: Props) {
                 }} /> {categoryLabels[category]}</label>
               ))}
             </div>
-            <label><input type="checkbox" checked={excludeLukin} onChange={event => { invalidate(); setExcludeLukin(event.target.checked); }} /> Исключить ИП Лукин</label>
+            <label><input type="checkbox" disabled={Boolean(clientId)} checked={!clientId && excludeLukin} onChange={event => { invalidate(); setExcludeLukin(event.target.checked); }} /> Исключить ИП Лукин</label>
+            {clientId && <p>Исключение Лукина действует только при расчёте по всем контрагентам. Выбранный клиент включён в расчёт.</p>}
           </fieldset>
           <p>Нулевые счета не создаются. Неподтверждённые начисления, неизвестные тарифы и другие спорные суммы не включаются в итог автоматически.</p>
           <button className="secondary-button" type="button" disabled={busy} onClick={calculate}>Предварительный расчёт</button>
