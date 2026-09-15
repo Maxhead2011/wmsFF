@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { validateFbsStockAudit } from '../src/modules/marketplace-connections/fbs-stock-audit';
 import { confirmInventoryKizComposition } from '../src/modules/inventory/confirmed-kiz-composition';
 import { InventoryService } from '../src/modules/inventory/inventory.service';
+import { InventoryController } from '../src/modules/inventory/inventory.controller';
 
 afterEach(() => vi.unstubAllEnvs());
 const startedAt = new Date('2026-09-15T08:37:43.695Z');
@@ -120,4 +121,94 @@ it.each(['flag-off', 'worker', 'demo', 'no-scans'])('does not rewrite ownership 
   await f.confirm();
   expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
   expect(f.db.auditLog.create).not.toHaveBeenCalled();
+});
+
+function wmsReviewFixture() {
+  const f = mutationFixture();
+  Object.assign(f.task, { status: 'IN_PROGRESS', boxId: 'box', orderId: '5765104936' });
+  Object.assign(f.audit, { status: 'MATCHED', boxCode: 'FFL_G_LKB0707_045' });
+  f.balances.splice(1);
+  f.marks[0].value = kiz.replace('NLnuX2T+l\'zW', 'OLD123456789');
+  f.db.inventorySession.findMany = vi.fn(async () => [f.session]);
+  f.db.inventorySession.findFirst = vi.fn(async () => null);
+  f.db.fbsTsdAssembly.findMany = vi.fn(async () => f.task.status === 'COMPLETED' ? [] : [f.task]);
+  f.db.fbsTsdAssembly.findUnique = vi.fn(async () => f.task);
+  f.db.inventoryAuditBox.update = vi.fn(async ({ data }: any) => Object.assign(f.audit, data));
+  f.db.inventoryAuditLine = { count: vi.fn(async () => 0) };
+  f.db.inventoryBoxRescanRequest = { findMany: vi.fn(async () => []) };
+  f.db.box.updateMany = vi.fn(async () => ({ count: 0 }));
+  f.db.$transaction = vi.fn(async (fn: any) => fn(f.db));
+  const service: any = new InventoryService(f.db, { requireClientAccess: vi.fn() } as never, {} as never);
+  return { ...f, service, review: () => service.pendingKizReviews(f.user, null) };
+}
+
+it('exposes a saved quantity-matched worker count in the WMS review queue without writing', async () => {
+  // TEST: the menu must include KIZ-only mismatches even when quantity is 7 of 7.
+  vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT', 'true'); const f = wmsReviewFixture();
+  await expect(f.review()).resolves.toEqual([expect.objectContaining({ id: 'session', boxes: [expect.objectContaining({
+    id: 'audit', status: 'MATCHED', kizReview: expect.objectContaining({ required: true, orderId: '5765104936' }),
+  })] })]);
+  expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
+  expect(f.db.auditLog.create).not.toHaveBeenCalled();
+});
+
+it('approves the original worker round through the WMS controller, then permits FBS without a new count', async () => {
+  // TEST: exercise the real web endpoint and subsequent TSD gate, not a second administrator scan.
+  vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT', 'true'); const f = wmsReviewFixture();
+  const controller = new InventoryController(f.service, {} as never);
+  const originalScans = structuredClone(f.evidence), stock = structuredClone(f.balances);
+  await controller.resolveBox('audit', { action: 'APPLY_ACTUAL' } as never, f.user);
+  expect(f.audit.status).toBe('RESOLVED');
+  expect(f.marks.find(m => m.id === 'current')).toMatchObject({ boxId: null, status: 'BLOCKED' });
+  expect(f.marks.find(m => m.boxId === 'box')).toMatchObject({ value: kiz, status: 'AVAILABLE' });
+  expect(f.evidence).toEqual(originalScans);
+  expect(f.balances).toEqual(stock);
+  await expect(f.run()).resolves.toMatchObject({ ready: true });
+  await expect(f.review()).resolves.toEqual([]);
+  await controller.resolveBox('audit', { action: 'APPLY_ACTUAL' } as never, f.user);
+  expect(f.db.productMark.create).toHaveBeenCalledTimes(1);
+});
+
+it('includes pending KIZ checks outside the ordinary last-100 history page and keeps them in work-only views', async () => {
+  // TEST: a busy warehouse must not lose an older blocked worker's review behind newer sessions.
+  vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT', 'true'); const f = wmsReviewFixture();
+  f.db.inventorySession.findMany.mockImplementation(async ({ where }: any) => where.comment ? [f.session] : []);
+  f.audit.status = 'RESOLVED';
+  const result = await f.service.dashboard(f.user, true);
+  expect(result.historySessions[0].boxes[0].kizReview.required).toBe(true);
+  expect(result.reviewSessions[0].boxes[0].id).toBe('audit');
+  expect(result.canConfirmKiz).toBe(true);
+  expect(result.historySessions[0].progress.mismatchBoxes).toBe(1);
+});
+
+it.each(['flag-off', 'demo', 'worker', 'hidden-client', 'other-client', 'completed-task', 'newer-count', 'matching-kiz', 'quantity-changed'])('does not offer the KIZ-only approval for %s', async kind => {
+  // TEST: limit the additional queue to this deployment, authorized scope and the current blocked round.
+  vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT', kind === 'flag-off' ? 'false' : 'true'); const f = wmsReviewFixture();
+  if (kind === 'demo') f.user.isDemo = true;
+  if (kind === 'worker') { f.user.roleCodes = ['TSD']; f.user.permissionCodes = []; }
+  if (kind === 'hidden-client') f.user.hiddenClientIds = ['client'];
+  if (kind === 'other-client') { f.user.clientScopeMode = 'LIMITED'; f.user.clientIds = ['other']; f.user.permissionCodes = []; }
+  if (kind === 'completed-task') f.task.status = 'COMPLETED';
+  if (kind === 'newer-count') f.db.inventoryAuditBox.findFirst.mockResolvedValue({ id: 'newer' });
+  if (kind === 'matching-kiz') f.marks[0].value = kiz;
+  if (kind === 'quantity-changed') f.balances[0].quantity = 0;
+  await expect(f.review()).resolves.toEqual([]);
+  expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
+});
+
+it('propagates a failed database read instead of showing no pending problems', async () => {
+  // TEST: a broken query is not evidence that the physical composition is correct.
+  vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT', 'true'); const f = wmsReviewFixture();
+  f.db.stockBalance.findMany.mockRejectedValue(new Error('database unavailable'));
+  await expect(f.review()).rejects.toThrow('database unavailable');
+});
+
+it('does not report a successful WMS approval when a mandatory check has no saved KIZ scans', async () => {
+  // TEST: a quantity-only no-op must not tell the administrator that FBS is unblocked.
+  vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT', 'true'); const f = wmsReviewFixture();
+  f.evidence.length = 0;
+  const controller = new InventoryController(f.service, {} as never);
+  await expect(controller.resolveBox('audit', { action: 'APPLY_ACTUAL' } as never, f.user)).rejects.toThrow('состав КИЗ не подтверждён');
+  expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
+  expect(f.db.productMark.create).not.toHaveBeenCalled();
 });
