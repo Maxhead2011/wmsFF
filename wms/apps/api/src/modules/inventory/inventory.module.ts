@@ -8,11 +8,13 @@ import { SkuSortingService } from './sku-sorting.service';
 import { MarketplaceConnectionsModule } from '../marketplace-connections/marketplace-connections.module';
 import { PalletSortingController } from './pallet-sorting.controller';
 import { PalletSortingService } from './pallet-sorting.service';
+import { KizLocationController } from './kiz-location.controller';
+import { KizLocationService } from './kiz-location.service';
 
 @Module({
   imports: [AuthModule, StockModule, MarketplaceConnectionsModule],
-  controllers: [InventoryController, PalletSortingController],
-  providers: [InventoryService, SkuCollectionService, SkuSortingService, PalletSortingService],
+  controllers: [InventoryController, PalletSortingController, KizLocationController],
+  providers: [InventoryService, SkuCollectionService, SkuSortingService, PalletSortingService, KizLocationService],
   // FIX: administration reuses the inventory-owned resolved-session invariant.
   exports: [InventoryService, SkuCollectionService, SkuSortingService],
 })
