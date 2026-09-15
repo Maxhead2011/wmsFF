@@ -373,6 +373,8 @@ export type AnalyticsDashboard = {
 };
 
 export type InventoryAuditBox = {
+  // FIX: quantity can match while the saved physical KIZ composition still needs approval.
+  kizReview?: { required: boolean; orderId: string; message: string };
   id: string;
   sessionId: string;
   boxId: string;
@@ -428,6 +430,7 @@ export type InventoryBoxRescanRequest = {
 };
 
 export type InventoryDashboard = {
+  canConfirmKiz?: boolean;
   movementLock: {
     active: boolean;
     sessionId?: string;
