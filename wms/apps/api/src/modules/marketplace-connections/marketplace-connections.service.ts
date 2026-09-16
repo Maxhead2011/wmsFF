@@ -27033,8 +27033,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const requestId = requestIds.length === 1 ? requestIds[0] : null;
       if (settings.primaryProcessingEnabled && !completedWorkEnabled) {
         // FIX: opted-in primary work is accounted per completed order, never rebuilt from a WB tail.
-        const primaryBreakdown = buildFbsPrimaryProcessingBreakdown(
-          batchOrders.map((order) => {
+        const primaryLinesFor = (orders: FbsOrderSummary[]) => fbsPrimaryChargeLines({
+          breakdown: buildFbsPrimaryProcessingBreakdown(
+          orders.map((order) => {
             const assembly = order.processingEvidence ?? assemblyByOrder.get(
               selectionKey(order.connectionId, order.id),
             );
@@ -27049,7 +27050,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             };
           }),
           receiptTypePrefixes,
-        );
+          ),
+          whiteUnitPriceRub: Number(settings.primaryWhiteUnitPriceRub),
+          grayUnitPriceRub: Number(settings.primaryGrayUnitPriceRub),
+          returnUnitPriceRub: Number(settings.primaryReturnUnitPriceRub),
+          relabelService,
+          primaryServices: configuredPrimaryServices,
+          orders,
+        });
         await this.ensureFbsPrimaryProcessingInvoice({
           clientId,
           shipmentKey,
@@ -27058,15 +27066,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           shipmentItems,
           serviceDate,
           requestId,
-          lines: fbsPrimaryChargeLines({
-            breakdown: primaryBreakdown,
-            whiteUnitPriceRub: Number(settings.primaryWhiteUnitPriceRub),
-            grayUnitPriceRub: Number(settings.primaryGrayUnitPriceRub),
-            returnUnitPriceRub: Number(settings.primaryReturnUnitPriceRub),
-            relabelService,
-            primaryServices: configuredPrimaryServices,
-            orders: batchOrders,
-          }),
+          lines: primaryLinesFor(batchOrders),
+          // FIX: service quantities and billed order IDs must use the same per-order evidence.
+          ...(wbOrderStockLifecycleEnabled() ? {
+            orderLines: batchOrders.map(order => ({ order, lines: primaryLinesFor([order]) })),
+          } : {}),
         });
       }
       const invoiceSourceKey = `fbs-invoice:${clientId}:${shipmentKey}`;
@@ -27378,6 +27382,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     requestId: string | null;
     lines?: FbsPrimaryChargeLine[];
     services?: FbsPrimaryBillingService[];
+    orderLines?: Array<{ order: FbsOrderSummary; lines: FbsPrimaryChargeLine[] }>;
   }) {
     const invoiceSourceKey = `fbs-primary-invoice:${input.clientId}:${input.shipmentKey}`;
     const chargePrefix = `fbs-primary:${input.clientId}:${input.shipmentKey}:`;
@@ -27386,6 +27391,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       select: { id: true, number: true, status: true, comment: true, paidRub: true, _count: { select: { payments: true } } },
     });
     let invoice = invoiceState ? { id: invoiceState.id, number: invoiceState.number, status: invoiceState.status } : null;
+    // FIX: preserve primary history just like the lifecycle processing invoice.
+    if (wbOrderStockLifecycleEnabled() && invoiceState) return invoice;
     // FIX: cancelled merge sources and payment-bearing drafts are immutable to automation.
     if (invoiceState && (Number(invoiceState.paidRub ?? 0) > 0 || (invoiceState._count?.payments ?? 0) > 0 ||
       (invoiceState.status === BillingInvoiceStatus.CANCELLED && invoiceState.comment?.startsWith('Объединено в ')))) {
@@ -27436,9 +27443,39 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       } satisfies FbsPrimaryChargeLine;
     });
     // FIX: validate and normalize the opted-in client composition before any charge writes.
-    const configuredLines = lukinPrimaryLines(input.clientId, input.shipmentItems, inputLines).filter(
+    let configuredLines = lukinPrimaryLines(input.clientId, input.shipmentItems, inputLines).filter(
       (line) => line.quantity > 0 && line.unitPriceRub > 0,
     );
+    const billedOrderIds = new Map<string, string[]>();
+    if (wbOrderStockLifecycleEnabled() && input.orderLines) {
+      // FIX: credit the physical order/service across changed supply IDs and dates, inside the billing lock.
+      const covered = new Set<string>();
+      for (const charge of await loadWorkCharges(this.prisma, input.clientId)) {
+        const metadata = asRecord(charge.metadata);
+        if (charge.status === BillingChargeStatus.CANCELLED || metadata.kind !== 'FBS_PRIMARY_PROCESSING') continue;
+        const match = /^(WILDBERRIES|OZON):([^:]+):/.exec(String(metadata.shipmentKey ?? ''));
+        const market = metadata.marketplace ?? match?.[1];
+        const connection = metadata.connectionId ?? match?.[2];
+        const service = metadata.serviceCode ?? charge.serviceId ?? metadata.processingType;
+        if (!market || !connection || !service) continue;
+        const attempt = typeof metadata.billingAttemptId === 'string' ? `:attempt:${metadata.billingAttemptId}` : '';
+        for (const orderId of Array.isArray(metadata.orderIds) ? metadata.orderIds : []) {
+          covered.add(`${market}:${connection}:${orderId}${attempt}:${service}`);
+        }
+      }
+      configuredLines = configuredLines.map(line => {
+        let quantity = 0;
+        const ids: string[] = [];
+        for (const entry of input.orderLines!) {
+          if (covered.has(`${fbsOrderKey(entry.order)}:${line.serviceCode}`)) continue;
+          const part = lukinPrimaryLines(input.clientId, entry.order.itemCount, entry.lines)
+            .find(candidate => candidate.key === line.key);
+          if (part && part.quantity > 0) { quantity += part.quantity; ids.push(entry.order.id); }
+        }
+        billedOrderIds.set(line.key, uniqueStrings(ids));
+        return { ...line, quantity: round(quantity, 3) };
+      }).filter(line => line.quantity > 0);
+    }
     if (configuredLines.length === 0) {
       if (invoice?.status === BillingInvoiceStatus.DRAFT) {
         invoice = await this.prisma.billingInvoice.update({
@@ -27485,7 +27522,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           shipmentKey: input.shipmentKey,
           supplyId: input.shipmentOrders[0]?.supplyId ?? null,
           requestId: input.requestId,
-          orderIds: input.shipmentOrders.map((order) => order.id),
+          orderIds: billedOrderIds.get(line.key) ?? input.shipmentOrders.map((order) => order.id),
+          ...(wbOrderStockLifecycleEnabled() && input.shipmentOrders[0]?.processingAttemptId
+            ? { billingAttemptId: input.shipmentOrders[0].processingAttemptId } : {}),
           quantity: input.shipmentItems,
           lineQuantity: line.quantity,
           processingType: line.key,
