@@ -124,7 +124,8 @@ final class TsdTextCatalog {
         @SuppressWarnings("unchecked") final List<String>[] translated=new List[3];
         Template(String raw) throws IOException {
             canonical=raw;
-            Matcher token=Pattern.compile("\\{[0-9]+}").matcher(raw);int end=0,score=0,count=0;
+            // FIX: Android ICU requires both literal braces to be escaped (unlike the host JVM).
+            Matcher token=Pattern.compile("\\{[0-9]+\\}").matcher(raw);int end=0,score=0,count=0;
             while(token.find()) {
                 String literal=raw.substring(end,token.start());parts.add(literal);score+=literal.length();
                 end=token.end();count++;

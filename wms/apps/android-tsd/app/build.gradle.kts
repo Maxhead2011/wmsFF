@@ -15,6 +15,7 @@ android {
         applicationId = "pro.logoff.wms.tsd"
         minSdk = 24
         targetSdk = 35
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" // TEST: use Android's real regex/runtime.
         versionCode = 153 // FIX: publish the SKU picking route while preserving box-to-storage-box operations.
         versionName = "0.1.154"
     }
@@ -23,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 177 // FIX: language selection and Russian monitoring screenshots, LOGOFF only.
-            versionName = "0.1.178-three-languages"
+            versionCode = 178 // FIX: Android-compatible template parsing; upgrade without clearing device data.
+            versionName = "0.1.179-language-startup"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
@@ -95,4 +96,6 @@ dependencies {
     annotationProcessor("androidx.room:room-compiler:2.7.1")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.16.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }
