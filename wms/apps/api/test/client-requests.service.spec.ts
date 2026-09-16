@@ -162,7 +162,36 @@ describe('ClientRequestsService', () => {
     });
   });
 
-  // ADDED: активные заявки не должны запускать архивный поиск поставок WB.
+  // TEST: активные заявки получают текущие номера WB без дополнительных запросов или архивного fallback.
+  it.each([ClientRequestStatus.SUBMITTED, ClientRequestStatus.IN_WORK, ClientRequestStatus.PACKED, ClientRequestStatus.CANCELLED])(
+    'возвращает текущие номера WB для заявки %s без поиска архивных планов', async (status) => {
+      const link = {
+        requestId: 'request-active', clientId: 'client-1', connectionId: 'connection-1',
+        marketplace: MarketplaceType.WILDBERRIES,
+      };
+      const prisma = {
+        clientRequest: { findMany: vi.fn().mockResolvedValue([
+          { id: 'request-active', status, _count: { fbsOrderLinks: 5 } },
+        ]) },
+        fbsOrderRequestLink: { findMany: vi.fn().mockResolvedValue([
+          { ...link, orderId: 'a', lastSupplyId: ' WB-GI-200 ' },
+          { ...link, orderId: 'b', lastSupplyId: 'WB-GI-100' },
+          { ...link, orderId: 'c', lastSupplyId: 'WB-GI-200' },
+          { ...link, orderId: 'd', lastSupplyId: null },
+          { ...link, orderId: 'e', marketplace: MarketplaceType.OZON, lastSupplyId: 'OZON-123' },
+        ]) },
+        fbsTsdAssembly: { findMany: vi.fn().mockResolvedValue([]) },
+        fbsSupplyPlan: { findMany: vi.fn() },
+      };
+      const service = new ClientRequestsService(prisma as never, new ClientScopeService(), stockOperations() as never);
+      const result = await service.list({ archive: status === ClientRequestStatus.CANCELLED }, user({ clientIds: ['client-1'] }));
+      expect(result[0]).toMatchObject({ wbSupplyIds: ['WB-GI-100', 'WB-GI-200'] });
+      expect(prisma.fbsSupplyPlan.findMany).not.toHaveBeenCalled();
+      expect(prisma.fbsOrderRequestLink.findMany).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  // TEST: отсутствие текущей поставки не запускает архивный поиск для активной заявки.
   it('не ищет номер поставки WB для активной FBS-заявки', async () => {
     const prisma = {
       clientRequest: {
