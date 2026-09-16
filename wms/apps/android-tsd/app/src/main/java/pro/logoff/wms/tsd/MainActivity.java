@@ -180,6 +180,7 @@ public class MainActivity extends Activity {
     private EditText skuCollectionScanInput;
     private PalletSortingScreen palletSortingScreen; // ADDED: independent administrator workflow.
     private KizLocationScreen kizLocationScreen;
+    private FboTwoStageScreen fboTwoStageScreen;
     private TsdAssemblyPlan assemblyPlan;
     private TsdBoxlessPackingResponse boxlessPacking;
     private TsdRelabelTask activeRelabelTask;
@@ -388,6 +389,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (fboTwoStageScreen != null) fboTwoStageScreen.close();
         if (kizLocationScreen != null) kizLocationScreen.close();
         if (monitorMessageOverlay != null) monitorMessageOverlay.close();
         if (palletSortingScreen != null) palletSortingScreen.close();
@@ -407,6 +409,7 @@ public class MainActivity extends Activity {
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN && event.getKeyCode() == KeyEvent.KEYCODE_ENTER) {
+            if (screen == Screen.FBO_TWO_STAGE && fboTwoStageScreen != null) { fboTwoStageScreen.submit(); return true; }
             if (screen == Screen.KIZ_LOCATION && kizLocationScreen != null) {
                 kizLocationScreen.submit();
                 return true;
@@ -532,6 +535,10 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (screen == Screen.FBO_TWO_STAGE && fboTwoStageScreen != null) {
+            if (!fboTwoStageScreen.canLeave()) { showScanningErrorDialog("Дождитесь ответа или повторите неподтверждённый запрос."); return; }
+            fboTwoStageScreen.close(); fboTwoStageScreen = null; renderAssemblyListScreen(); return;
+        }
         if (screen == Screen.KIZ_LOCATION && kizLocationScreen != null) {
             kizLocationScreen.close();
             kizLocationScreen = null;
@@ -6834,6 +6841,13 @@ public class MainActivity extends Activity {
             renderAssemblyListScreen();
             return;
         }
+        if ("FBO_TWO_STAGE".equals(assemblyPlan.assemblyMode) && "logoff".equals(BuildConfig.FLAVOR)) {
+            TsdSession session = safeSession(); if (session == null) return;
+            if (fboTwoStageScreen != null) fboTwoStageScreen.close();
+            screen = Screen.FBO_TWO_STAGE;
+            fboTwoStageScreen = new FboTwoStageScreen(this,session,WmsApiFactory.create(DEFAULT_BASE_URL),DEFAULT_BASE_URL,assemblyPlan.id,()->{fboTwoStageScreen=null;renderAssemblyListScreen();});
+            return;
+        }
         if (isAssemblyPackedOnServer()) {
             renderAssemblyPackedDetailScreen();
             return;
@@ -8846,6 +8860,7 @@ public class MainActivity extends Activity {
         if (screen == Screen.STOCK_TRANSFER) {
             return transferScanInput;
         }
+        if (screen == Screen.FBO_TWO_STAGE && fboTwoStageScreen != null) return fboTwoStageScreen.scannerField();
         if (screen == Screen.SKU_COLLECTION) return skuCollectionScanInput;
         if (screen == Screen.KIZ_LOCATION && kizLocationScreen != null) return kizLocationScreen.scannerField();
         if (screen == Screen.PALLET_SORTING && palletSortingScreen != null) return palletSortingScreen.scannerField();
@@ -8960,6 +8975,7 @@ public class MainActivity extends Activity {
     }
 
     private void submitPhoneCameraScan() {
+        if (screen == Screen.FBO_TWO_STAGE && fboTwoStageScreen != null) { fboTwoStageScreen.submit(); return; }
         if (screen == Screen.KIZ_LOCATION && kizLocationScreen != null) { kizLocationScreen.submit(); return; }
         if (screen == Screen.PALLET_SORTING && palletSortingScreen != null) { palletSortingScreen.submit(); return; }
         if (screen == Screen.RECEIPT) {
@@ -9842,6 +9858,10 @@ public class MainActivity extends Activity {
     }
 
     private void refreshCurrentScreen() {
+        if (screen == Screen.FBO_TWO_STAGE && fboTwoStageScreen != null) {
+            if (fboTwoStageScreen.belongsTo(safeSession())) return;
+            fboTwoStageScreen.close(); fboTwoStageScreen = null; renderMainScreen(); return;
+        }
         if (screen == Screen.KIZ_LOCATION && kizLocationScreen != null) {
             // FIX: heartbeat preserves the scan; changed login invalidates the old response.
             if (kizLocationScreen.belongsTo(safeSession())) return;
@@ -10279,6 +10299,7 @@ public class MainActivity extends Activity {
     }
 
     private enum Screen {
+        FBO_TWO_STAGE,
         MAIN,
         SETTINGS,
         RECEIPT,

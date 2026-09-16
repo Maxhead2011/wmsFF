@@ -22,6 +22,8 @@ import type { PickInstructionDocument } from '../stock/pick-instruction.types';
 import { FbsRequestBoxAuditService } from '../stock/fbs-request-box-audit.service';
 import { StockOperationsService } from '../stock/stock-operations.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { FboTwoStageService } from './fbo-two-stage.service';
+import { fboTwoStageEnabled } from './fbo-two-stage-policy';
 import {
   assertWarehouseAccess,
   effectiveWarehouseId,
@@ -77,6 +79,7 @@ export class TsdAssemblyService {
     private readonly pickInstructions: PickInstructionService,
     private readonly stockOperations: StockOperationsService,
     private readonly fbsRequestBoxAudits: FbsRequestBoxAuditService,
+    private readonly fbo?: FboTwoStageService,
   ) {}
 
   async listActiveRequests(user: AuthUser) {
@@ -181,10 +184,13 @@ export class TsdAssemblyService {
     }
     const document = await this.getCachedInstruction(requestId, user);
     const plan = await this.toTsdPlan(document);
+    const fbo = this.fbo && fboTwoStageEnabled() && await this.fbo.eligible(requestId, user)
+      ? await this.fbo.plan(requestId, user) : undefined;
     return {
       ...plan,
+      fbo,
       storesWithoutBoxes: exists.client.storesWithoutBoxes,
-      assemblyMode: exists.client.storesWithoutBoxes ? 'BOXLESS_PACKING' : 'BOX_WORKFLOW',
+      assemblyMode: fbo ? 'FBO_TWO_STAGE' : exists.client.storesWithoutBoxes ? 'BOXLESS_PACKING' : 'BOX_WORKFLOW',
     };
   }
 
@@ -193,13 +199,15 @@ export class TsdAssemblyService {
     // В этой инсталляции одна и та же физическая позиция может повторно
     // проходить переклейку. Не блокируем сканирование по рассчитанному
     // остатку очереди: фактический ШК/КИЗ и итог заявки проверяются дальше.
-    await this.getRequestPlan(requestId, user);
+    const plan = await this.getRequestPlan(requestId, user);
+    this.requireLegacyPlan(plan);
     void payload;
   }
 
   async assertMovementProgressAvailable(requestId: string, payload: Record<string, unknown>, user: AuthUser) {
     await this.requireRequestAccess(requestId, user, 'write');
     const plan = await this.getRequestPlan(requestId, user);
+    this.requireLegacyPlan(plan);
     const sourceBox = normalizeBoxCode(textValue(payload, 'fromBoxCode'));
     const barcode = normalizeScanCode(textValue(payload, 'barcode'));
     const quantity = Math.max(1, Number(payload.quantity) || 1);
@@ -218,6 +226,7 @@ export class TsdAssemblyService {
   async assertOutgoingBoxAvailable(requestId: string, payload: Record<string, unknown>, user: AuthUser) {
     await this.requireRequestAccess(requestId, user, 'write');
     const plan = await this.getRequestPlan(requestId, user);
+    this.requireLegacyPlan(plan);
     const boxCode = normalizeBoxCode(textValue(payload, 'boxCode'));
     if (!(plan.outgoingBoxCodes ?? []).some((value: string) => normalizeBoxCode(value) === boxCode)) {
       throw new BadRequestException('Короб не входит в актуальный список коробов на отправку. Обновите заявку на ТСД.');
@@ -414,6 +423,7 @@ export class TsdAssemblyService {
   ) {
     await this.requireRequestAccess(requestId, user, 'write');
     const plan = await this.getRequestPlan(requestId, user);
+    this.requireLegacyPlan(plan);
     const scannedCode =
       stage === 'boxless-packing' && action === 'scan-item' && isRecord(body)
         ? textValue(body, 'barcode')
@@ -482,6 +492,11 @@ export class TsdAssemblyService {
       plan: stageData,
       ...(packingProgress ? { packingProgress } : {}),
     };
+  }
+
+  private requireLegacyPlan(plan: { assemblyMode: string }) {
+    // FIX: old clients cannot move stock behind the two-stage unit ledger.
+    if (plan.assemblyMode === 'FBO_TWO_STAGE') throw new BadRequestException('Откройте новую двухэтапную сборку ФБО. При необходимости обновите ТСД.');
   }
 
   async findSkuByBarcode(query: { clientId?: string; barcode?: string }, user: AuthUser) {

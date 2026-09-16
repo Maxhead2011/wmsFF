@@ -1618,6 +1618,7 @@ model ClientRequest {
   warehouse                    Warehouse?                 @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
   createdBy                    User?                      @relation("ClientRequestCreatedBy", fields: [createdByUserId], references: [id])
   assignedTo                   User?                      @relation("ClientRequestAssignedTo", fields: [assignedToUserId], references: [id])
+  fboAssembly                  FboAssembly?
   items                        ClientRequestItem[]
   files                        ClientRequestFile[]
   notifications                ClientNotification[]
@@ -3358,4 +3359,67 @@ model WmsApiCredential {
   @@index([clientId, warehouseId, revokedAt])
   @@index([expiresAt])
   @@index([createdByUserId])
+}
+
+// FIX: durable FBO ownership survives TSD disconnects and separates pick from pack.
+model FboAssembly {
+  requestId String @id
+  phase String @default("PICKING")
+  compositionHash String
+  request ClientRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  units FboAssemblyUnit[]
+  actions FboAssemblyAction[]
+  boxes FboAssemblyBox[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model FboAssemblyBox {
+  id String @id @default(uuid())
+  requestId String
+  boxId String
+  activeBoxId String? @unique
+  boxCode String
+  wholeBox Boolean @default(false)
+  closedAt DateTime?
+  confirmedAt DateTime?
+  confirmedByUserId String?
+  assembly FboAssembly @relation(fields: [requestId], references: [requestId], onDelete: Restrict)
+  @@unique([requestId, boxCode])
+  @@index([boxId])
+}
+
+model FboAssemblyUnit {
+  id String @id @default(uuid())
+  requestId String
+  requestItemId String
+  skuId String
+  barcode String
+  markId String?
+  activeMarkId String? @unique
+  kiz String?
+  sourceBoxId String
+  sourceBoxCode String
+  wholeBox Boolean @default(false)
+  state String @default("PICKED")
+  targetBoxId String?
+  targetBoxCode String?
+  pickedByUserId String
+  packedByUserId String?
+  pickedAt DateTime @default(now())
+  packedAt DateTime?
+  assembly FboAssembly @relation(fields: [requestId], references: [requestId], onDelete: Restrict)
+  @@index([requestId, state])
+  @@index([sourceBoxId, state])
+  @@index([targetBoxId, state])
+}
+
+model FboAssemblyAction {
+  id String @id
+  requestId String
+  payloadHash String
+  actorId String
+  assembly FboAssembly @relation(fields: [requestId], references: [requestId], onDelete: Restrict)
+  createdAt DateTime @default(now())
+  @@index([requestId, createdAt])
 }

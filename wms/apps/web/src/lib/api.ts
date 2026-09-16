@@ -2163,6 +2163,7 @@ export type PickInstructionDocument = {
 };
 
 export type TsdAssemblyPlan = {
+  fbo?: FboPlan;
   id: string;
   requestId: string;
   title: string;
@@ -11007,6 +11008,22 @@ export async function fetchTsdAssemblyPlan(accessToken: string, requestId: strin
     accessToken,
   });
 }
+
+export type FboPlan = {
+  requestId:string; title:string; phase:string; needed:number; picked:number; packed:number; looseRemaining:number; shortage:number;
+  compositionChanged:boolean; wholeBoxes:string[];
+  lines:Array<{id:string;skuId:string;barcode:string;name:string;article:string|null;size:string|null;requiresKiz:boolean;needed:number;picked:number;packed:number;remaining:number}>;
+  route:Array<{boxCode:string;pallet:string;zone:string;wholeBox:boolean;recount:boolean;tasks:Array<{skuId:string;barcode:string;name:string;quantity:number;requiresKiz:boolean}>}>;
+  boxes:Array<{code:string;wholeBox:boolean;closed:boolean;confirmed:boolean;quantity:number}>;
+};
+export type FboAction = {action:string;operationId:string;palletCode?:string;sourceBoxCode?:string;targetBoxCode?:string;barcode?:string;kiz?:string};
+export async function fetchFboPlan(accessToken:string,id:string) { return request<FboPlan>(`/tsd/requests/${id}/fbo`,{accessToken}); }
+export async function actFbo(accessToken:string,id:string,body:FboAction) {
+  const response=await fetch(`${API_BASE_URL}/tsd/requests/${id}/fbo/actions`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${accessToken}`},body:JSON.stringify(body)});
+  if(!response.ok) throw Object.assign(new Error(await responseError(response)),{rejected:response.status>=400&&response.status<500&&response.status!==408});
+  return await response.json() as FboPlan;
+}
+export function downloadFboWbFile(accessToken:string,id:string){return requestBlob(`/tsd/requests/${id}/fbo/wb-packages.xlsx`,accessToken);}
 
 export async function resolveTsdFbsKizConflict(
   accessToken: string,

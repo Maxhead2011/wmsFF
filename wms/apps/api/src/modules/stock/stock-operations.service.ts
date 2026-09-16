@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
+import { isFboTwoStageRequest } from '../tsd/fbo-two-stage-policy';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import { assertSortingAdmin, sortingKizIdentity } from '../inventory/pallet-sorting-policy';
 import { sortingSettledBoxTaskIds } from './sorting-settled-box-tasks';
@@ -1734,6 +1735,9 @@ export class StockOperationsService {
   }
 
   async pickClientRequest(dto: PickClientRequestDto, user: AuthUser) {
+    if (await isFboTwoStageRequest(this.prisma,dto.requestId)) {
+      throw new BadRequestException('Продолжите поштучный отбор ФБО в ТСД или онлайн-сборке.');
+    }
     await this.inventoryLock?.assertStockMovementsAllowed();
     const warehouseId = this.resolveWritableWarehouseId(user);
     const baseKey = dto.idempotencyKey ?? `pick-request:${dto.requestId}`;
@@ -1868,12 +1872,16 @@ export class StockOperationsService {
     });
   }
 
-  async packageClientRequest(dto: FulfillClientRequestDto, user: AuthUser) {
+  async packageClientRequest(dto: FulfillClientRequestDto, user: AuthUser, fboTransaction?: Prisma.TransactionClient) {
+    // FIX: only final FBO control may package its already picked units, in the same transaction.
+    if (!fboTransaction && await isFboTwoStageRequest(this.prisma,dto.requestId)) {
+      throw new BadRequestException('Завершите проверку всех коробов в двухэтапной сборке ФБО.');
+    }
     await this.inventoryLock?.assertStockMovementsAllowed();
     const warehouseId = this.resolveWritableWarehouseId(user);
     const baseKey = dto.idempotencyKey ?? `pack-request:${dto.requestId}`;
 
-    return this.prisma.$transaction(async (tx) => {
+    const execute = async (tx: Prisma.TransactionClient) => {
       const packedAt = new Date();
       const existingMovement = await tx.stockMovement.findFirst({
         where: { idempotencyKey: { startsWith: `${baseKey}:` } },
@@ -1896,7 +1904,7 @@ export class StockOperationsService {
         throw new BadRequestException('Упаковка доступна только после сборки заявки.');
       }
 
-      await this.ensureAvailableStockIsInPacking(
+      if (!fboTransaction) await this.ensureAvailableStockIsInPacking(
         tx,
         request,
         `complete-pick-before-pack:${request.id}:${baseKey}`,
@@ -1972,10 +1980,15 @@ export class StockOperationsService {
         packedLines: this.formatFulfillmentLines(plan, 'packedQuantity'),
         packages,
       };
-    });
+    };
+    return fboTransaction ? execute(fboTransaction) : this.prisma.$transaction(execute);
   }
 
   async shipClientRequest(dto: FulfillClientRequestDto, user: AuthUser) {
+    if (process.env.WMS_FBO_TWO_STAGE_ENABLED === 'true') {
+      const fbo = await this.prisma.fboAssembly.findUnique({where:{requestId:dto.requestId}});
+      if(fbo && fbo.phase !== 'COMPLETED') throw new BadRequestException('Сначала подтвердите все короба поставки ФБО.');
+    }
     await this.inventoryLock?.assertStockMovementsAllowed();
     const warehouseId = this.resolveWritableWarehouseId(user);
     const baseKey = dto.idempotencyKey ?? `ship-request:${dto.requestId}`;
