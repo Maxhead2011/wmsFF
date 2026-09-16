@@ -23,8 +23,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 176 // FIX: publish two-stage FBO above the deployed KIZ-search release.
-            versionName = "0.1.177-fbo-two-stage"
+            versionCode = 177 // FIX: language selection and Russian monitoring screenshots, LOGOFF only.
+            versionName = "0.1.178-three-languages"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
@@ -57,6 +57,9 @@ android {
     buildFeatures {
         buildConfig = true
     }
+
+    // TEST: exercise real Android views and Russian monitoring capture on the JVM.
+    testOptions.unitTests.isIncludeAndroidResources = true
 
     signingConfigs {
         create("logoffRelease") {
@@ -91,4 +94,5 @@ dependencies {
     implementation("com.squareup.retrofit2:converter-moshi:2.11.0")
     annotationProcessor("androidx.room:room-compiler:2.7.1")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.16.1")
 }

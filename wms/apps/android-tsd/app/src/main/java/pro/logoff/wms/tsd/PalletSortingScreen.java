@@ -227,7 +227,7 @@ public final class PalletSortingScreen {
     private void confirm(String action, Map<String, Object> preview) {
         confirming = true;
         LinearLayout content = new LinearLayout(activity); content.setOrientation(LinearLayout.VERTICAL); content.setPadding(20, 10, 20, 10);
-        TextView report = new TextView(activity); StringBuilder text = new StringBuilder("К списанию: " + number(preview, "quantity") + " ед.\n");
+        TextView report = new TsdUi.Label(activity); StringBuilder text = new StringBuilder("К списанию: " + number(preview, "quantity") + " ед.\n");
         text.append("Оприходовано найденных: ").append(number(preview, "recoveredQuantity")).append(" ед.\n");
         for (Map<String, Object> box : rows(preview, "problemSources")) text.append(PalletSortingProblemFormatter.source(box)).append("\n");
         for (Map<String, Object> box : rows(preview, "boxes")) {
@@ -238,9 +238,9 @@ public final class PalletSortingScreen {
             }
         }
         report.setText(text); report.setTextSize(18); content.addView(report);
-        CheckBox consent = new CheckBox(activity); consent.setText("Подтверждаю отсутствие товара и его списание"); content.addView(consent);
+        CheckBox consent = new TsdUi.CheckBox(activity); consent.setText("Подтверждаю отсутствие товара и его списание"); content.addView(consent);
         ScrollView scroll = new ScrollView(activity); scroll.addView(content);
-        AlertDialog dialog = new AlertDialog.Builder(activity).setTitle("Подтверждение расхождений").setView(scroll)
+        AlertDialog dialog = new TsdUi.DialogBuilder(activity).setTitle("Подтверждение расхождений").setView(scroll)
             .setNegativeButton("Отмена", (d, w) -> {})
             .setPositiveButton("Применить решение", (d, w) -> {
                 Map<String, Object> body = new LinkedHashMap<>(); body.put("fingerprint", text(preview, "fingerprint")); body.put("confirmWriteOff", consent.isChecked());
@@ -265,7 +265,7 @@ public final class PalletSortingScreen {
     private void showRestoreConsent() {
         if (!active() || busy || confirming || !restoreConsent.pending()) return;
         confirming = true; autoSubmit.cancel();
-        AlertDialog dialog = new AlertDialog.Builder(activity).setTitle("Найден ранее списанный товар")
+        AlertDialog dialog = new TsdUi.DialogBuilder(activity).setTitle("Найден ранее списанный товар")
             .setMessage(restoreConsent.message()).setCancelable(false)
             .setNegativeButton("Отмена", (d,w) -> { restoreConsent.clear(); message="Восстановление отменено. Остатки не изменены."; })
             .setPositiveButton("Товар у меня — восстановить 1 шт.", (d,w) -> {
@@ -276,9 +276,9 @@ public final class PalletSortingScreen {
         dialog.setOnDismissListener(d -> { confirming=false; if(active() && !busy) render(); });
         dialog.show();
     }
-    private void label(String text, int size) { TextView view = new TextView(activity); view.setText(text); view.setTextSize(size); view.setTextColor(Color.rgb(25, 35, 45)); view.setPadding(0, 8, 0, 8); root.addView(view); }
-    private EditText field(String hint, String value) { EditText view = new EditText(activity); view.setHint(hint); view.setText(value); view.setSingleLine(true); view.setTextSize(20); view.setEnabled(!busy && !command.pending()); root.addView(view); return view; }
-    private void button(String title, Runnable action, boolean enabled) { Button view = new Button(activity); view.setText(title); view.setAllCaps(false); view.setMinHeight(68); view.setEnabled(enabled && !busy && (!command.pending() || title.startsWith("Повторить тот же"))); view.setOnClickListener(v -> action.run()); root.addView(view); }
+    private void label(String text, int size) { TextView view = new TsdUi.Label(activity); view.setText(text); view.setTextSize(size); view.setTextColor(Color.rgb(25, 35, 45)); view.setPadding(0, 8, 0, 8); root.addView(view); }
+    private EditText field(String hint, String value) { EditText view = new EditText(activity); TsdUi.hint(view,hint); view.setText(value); view.setSingleLine(true); view.setTextSize(20); view.setEnabled(!busy && !command.pending()); root.addView(view); return view; }
+    private void button(String title, Runnable action, boolean enabled) { Button view = new TsdUi.Button(activity); view.setText(title); view.setAllCaps(false); view.setMinHeight(68); view.setEnabled(enabled && !busy && (!command.pending() || title.startsWith("Повторить тот же"))); view.setOnClickListener(v -> action.run()); root.addView(view); }
     private String stage() { return text(state, "stage"); }
     private Map<String, Object> target() { for (Map<String, Object> row : rows(state, "targets")) if (text(row, "id").equals(text(state, "activeTargetId"))) return row; return null; }
     private static String text(Map<String, Object> value, String key) { Object result = value == null ? null : value.get(key); return result == null ? "" : String.valueOf(result); }

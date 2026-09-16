@@ -1,0 +1,24 @@
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/KizSearchScreen.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/KizSearchScreen.java
+@@ -56 +56 @@
+-        TextView view = new TextView(activity); view.setText(value); view.setTextSize(size); view.setTextColor(Color.BLACK); view.setPadding(0, 10, 0, 10); root.addView(view); return view;
++        TextView view = new TsdUi.Label(activity); view.setText(value); view.setTextSize(size); view.setTextColor(Color.BLACK); view.setPadding(0, 10, 0, 10); root.addView(view); return view;
+@@ -59 +59 @@
+-        Button button = new Button(activity); button.setText(value); button.setOnClickListener(v -> { if (!busy) action.run(); }); root.addView(button);
++        Button button = new TsdUi.Button(activity); button.setText(value); button.setOnClickListener(v -> { if (!busy) action.run(); }); root.addView(button);
+@@ -97 +97 @@
+-        input = new EditText(activity); input.setSingleLine(true); input.setHint("Сканируйте короб или КИЗ"); input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS); input.setImeOptions(EditorInfo.IME_ACTION_DONE); root.addView(input);
++        input = new EditText(activity); input.setSingleLine(true); TsdUi.hint(input,"Сканируйте короб или КИЗ"); input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS); input.setImeOptions(EditorInfo.IME_ACTION_DONE); root.addView(input);
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/PersonalLoginWelcome.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/PersonalLoginWelcome.java
+@@ -38,0 +39 @@
++        TsdUi.track(dialog);
+@@ -49 +50 @@
+-        TextView name = new TextView(activity);
++        TextView name = new TsdUi.Label(activity);
+@@ -53 +54 @@
+-        TextView phrase = new TextView(activity);
++        TextView phrase = new TsdUi.Label(activity);
+@@ -60 +61 @@
+-        Button skip = new Button(activity);
++        Button skip = new TsdUi.Button(activity);

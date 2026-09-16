@@ -342,6 +342,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        TsdUi.install(this);
         IntentFilter updateFilter = new IntentFilter(UPDATE_INSTALL_ACTION);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(updateInstallReceiver, updateFilter, Context.RECEIVER_NOT_EXPORTED);
@@ -354,7 +355,7 @@ public class MainActivity extends Activity {
             sessionStore = new TsdSessionStore(this);
             progressStore = getSharedPreferences("tsd_assembly_progress", MODE_PRIVATE);
             uiStore = getSharedPreferences("tsd_ui_preferences", MODE_PRIVATE);
-            uiLanguage = uiStore.getString("language", "ru");
+            uiLanguage = TsdLanguage.normalize(uiStore.getString("language", "ru"));
             phoneMode = uiStore.getBoolean("phone_mode", false);
             TsdSession startupSession = sessionStore.load();
             if (startupSession != null && nonEmpty(startupSession.deviceCode, "")
@@ -1187,14 +1188,20 @@ public class MainActivity extends Activity {
 
         root.addView(label(tr("Язык интерфейса", "Interfeys tili")));
         languageSpinner = new Spinner(this);
-        ArrayAdapter<String> languageAdapter = new ArrayAdapter<>(
+        ArrayAdapter<String> languageAdapter = new TsdUi.StringAdapter(
             this,
             android.R.layout.simple_spinner_item,
-            new String[]{"Русский", "O‘zbekcha"}
+            TsdUi.enabled() ? TsdLanguage.NAMES : new String[]{"Русский", "O‘zbekcha"}
         );
         languageAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         languageSpinner.setAdapter(languageAdapter);
-        languageSpinner.setSelection("uz".equals(uiLanguage) ? 1 : 0);
+        languageSpinner.setSelection(TsdUi.enabled() ? TsdLanguage.index(uiLanguage) : "uz".equals(uiLanguage) ? 1 : 0);
+        if (TsdUi.enabled()) languageSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) {
+                if (!TsdLanguage.selected(position).equals(uiLanguage)) saveLanguage();
+            }
+            public void onNothingSelected(android.widget.AdapterView<?> parent) {}
+        });
         root.addView(languageSpinner);
         root.addView(secondaryButton(tr("Сохранить язык", "Tilni saqlash"), view -> saveLanguage()));
 
@@ -1228,13 +1235,20 @@ public class MainActivity extends Activity {
     }
 
     private void saveLanguage() {
-        uiLanguage = languageSpinner != null && languageSpinner.getSelectedItemPosition() == 1 ? "uz" : "ru";
+        // FIX: changing language must not erase a partly entered login or password.
+        String login = textValue(deviceCodeInput), password = textValue(deviceSecretInput), baseUrl = textValue(baseUrlInput);
+        int selected = languageSpinner == null ? 0 : languageSpinner.getSelectedItemPosition();
+        uiLanguage = TsdUi.enabled() ? TsdLanguage.selected(selected) : selected == 1 ? "uz" : "ru";
         uiStore.edit().putString("language", uiLanguage).apply();
         statusMessage = tr("Язык сохранён.", "Til saqlandi.");
         renderSettingsScreen();
+        deviceCodeInput.setText(login); deviceSecretInput.setText(password);
+        if (!baseUrl.isEmpty()) baseUrlInput.setText(baseUrl);
     }
 
     private String tr(String russian, String uzbek) {
+        // FIX: keep canonical Russian in state/errors; display widgets localize it independently.
+        if (TsdUi.enabled()) return russian;
         return "uz".equals(uiLanguage) ? uzbek : russian;
     }
 
@@ -1289,7 +1303,7 @@ public class MainActivity extends Activity {
                 "Avval mijozni tanlang, keyin bo‘sh yoki mavjud pallet shtrix-kodini skanerlang."
             )));
             root.addView(label(tr("Клиент паллет-сорта", "Pallet-sort mijozi")));
-            clientAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new ArrayList<String>());
+            clientAdapter = new TsdUi.StringAdapter(this, android.R.layout.simple_spinner_item, new ArrayList<String>());
             clientAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
             clientSpinner = new Spinner(this);
             clientSpinner.setAdapter(clientAdapter);
@@ -1642,7 +1656,7 @@ public class MainActivity extends Activity {
         TsdStoragePalletResponse.Pallet pallet =
             storagePalletAssembly == null ? null : storagePalletAssembly.pallet;
         if (pallet == null) return;
-        new AlertDialog.Builder(this)
+        new TsdUi.DialogBuilder(this)
             .setTitle(tr("Удалить паллет?", "Pallet o‘chirilsinmi?"))
             .setMessage(
                 tr(
@@ -2362,7 +2376,7 @@ public class MainActivity extends Activity {
                     return;
                 }
                 renderInventoryCountScreen();
-                new AlertDialog.Builder(this)
+                new TsdUi.DialogBuilder(this)
                     .setTitle(tr("Обязательная проверка короба", "Qutini majburiy tekshirish"))
                     .setMessage(tr(
                         "Сборка FBS приостановлена. Полностью пропикайте короб " + mandatoryFbsAuditBoxCode
@@ -2550,7 +2564,7 @@ public class MainActivity extends Activity {
             }
         } else {
             root.addView(label(tr("Клиент", "Mijoz")));
-            clientAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new ArrayList<String>());
+            clientAdapter = new TsdUi.StringAdapter(this, android.R.layout.simple_spinner_item, new ArrayList<String>());
             clientAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
             clientSpinner = new Spinner(this);
             clientSpinner.setAdapter(clientAdapter);
@@ -2990,7 +3004,7 @@ public class MainActivity extends Activity {
                 " Yangilangandan so‘ng shu ekranda maqsad qutini skanerlash ochiladi."
             );
         }
-        new AlertDialog.Builder(this)
+        new TsdUi.DialogBuilder(this)
             .setTitle(titleText)
             .setMessage(messageText + (activeInventoryBox.kizTransferWarnings == null || activeInventoryBox.kizTransferWarnings.isEmpty()
                 ? "" : "\n\n" + android.text.TextUtils.join("\n\n", activeInventoryBox.kizTransferWarnings)))
@@ -3269,7 +3283,7 @@ public class MainActivity extends Activity {
         String taskId = mandatoryFbsKizAuditTaskId;
         String owner = fbsSessionOwnerKey(session);
         EditText scan = input(proposal == null ? tr("Старый КИЗ", "Eski KIZ") : tr("Новый КИЗ", "Yangi KIZ"));
-        new AlertDialog.Builder(this)
+        new TsdUi.DialogBuilder(this)
             .setTitle(tr("Переклейка КИЗ", "KIZni almashtirish"))
             .setMessage(proposal == null
                 ? tr("Отсканируйте старый КИЗ товара из проверяемого короба.", "Tekshirilayotgan qutidagi mahsulotning eski KIZini skanerlang.")
@@ -3647,7 +3661,7 @@ public class MainActivity extends Activity {
         if (receiptClientId.isEmpty()) {
             root.addView(messageView("Режим: " + receiptModeLabel()));
             root.addView(label("Клиент приемки"));
-            clientAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new ArrayList<String>());
+            clientAdapter = new TsdUi.StringAdapter(this, android.R.layout.simple_spinner_item, new ArrayList<String>());
             clientAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
             clientSpinner = new Spinner(this);
             clientSpinner.setAdapter(clientAdapter);
@@ -3864,7 +3878,7 @@ public class MainActivity extends Activity {
                 LIGHT_GRAY
             ));
         } else {
-            clientAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new ArrayList<>());
+            clientAdapter = new TsdUi.StringAdapter(this, android.R.layout.simple_spinner_item, new ArrayList<>());
             clientAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
             clientSpinner = new Spinner(this);
             clientSpinner.setAdapter(clientAdapter);
@@ -5206,7 +5220,7 @@ public class MainActivity extends Activity {
                 for (int index = 0; index < devices.size(); index++) {
                     labels[index] = devices.get(index).displayName();
                 }
-                new AlertDialog.Builder(MainActivity.this)
+                new TsdUi.DialogBuilder(MainActivity.this)
                     .setTitle(tr("Выберите NIIMBOT B1", "NIIMBOT B1 ni tanlang"))
                     .setItems(labels, (dialog, which) -> selectNiimbotPrinter(devices.get(which)))
                     .setNegativeButton(tr("Отмена", "Bekor qilish"), null)
@@ -5333,7 +5347,7 @@ public class MainActivity extends Activity {
         }
         ScrollView scroll = new ScrollView(this);
         scroll.addView(content);
-        new AlertDialog.Builder(this)
+        new TsdUi.DialogBuilder(this)
             .setTitle(tr("История наклеек FBS", "FBS stikerlar tarixi"))
             .setView(scroll)
             .setPositiveButton(tr("Закрыть", "Yopish"), null)
@@ -5396,7 +5410,7 @@ public class MainActivity extends Activity {
         content.addView(dialogInput);
         fbsScanInput = dialogInput;
 
-        AlertDialog dialog = new AlertDialog.Builder(this)
+        AlertDialog dialog = new TsdUi.DialogBuilder(this)
             .setTitle(scanKiz
                 ? tr("КИЗ товара", "Mahsulot KIZi")
                 : tr("Товар из короба ", "Qutidagi mahsulot ") + nonEmpty(task.scannedBoxCode, "-"))
@@ -5482,7 +5496,7 @@ public class MainActivity extends Activity {
 
     private void confirmUndoFbsKiz() {
         if (fbsAssembly == null || fbsAssembly.task == null || fbsBusy) return;
-        new AlertDialog.Builder(this)
+        new TsdUi.DialogBuilder(this)
             .setTitle(tr("Отменить принятый КИЗ?", "Qabul qilingan KIZ bekor qilinsinmi?"))
             .setMessage(tr(
                 "КИЗ будет удалён из заказа Wildberries и освобождён в WMS. После этого отсканируйте правильный КИЗ.",
@@ -5663,7 +5677,7 @@ public class MainActivity extends Activity {
 
     private void confirmReleaseFbsAssembly() {
         if (fbsAssembly == null || fbsAssembly.task == null || fbsBusy) return;
-        new AlertDialog.Builder(this)
+        new TsdUi.DialogBuilder(this)
             .setTitle(tr("Отложить заказ?", "Buyurtmani keyinga qoldirasizmi?"))
             .setMessage(tr(
                 "Заказ вернётся в очередь. Используйте это только если товар или короб найти невозможно.",
@@ -5690,7 +5704,7 @@ public class MainActivity extends Activity {
             return;
         }
         String[] boxCodes = pallet.neededBoxCodes.toArray(new String[0]);
-        new AlertDialog.Builder(this)
+        new TsdUi.DialogBuilder(this)
             .setTitle(tr("Какого короба нет на паллете?", "Palletda qaysi quti yo‘q?"))
             .setItems(boxCodes, (dialog, which) -> {
                 if (which >= 0 && which < boxCodes.length) {
@@ -5704,7 +5718,7 @@ public class MainActivity extends Activity {
     private void confirmMissingFbsPalletBox(String boxCode, String palletCode) {
         String normalizedBoxCode = nonEmpty(boxCode, "");
         if (normalizedBoxCode.isEmpty() || fbsBusy) return;
-        new AlertDialog.Builder(this)
+        new TsdUi.DialogBuilder(this)
             .setTitle(tr("Сообщить об отсутствующем коробе?", "Yo‘q quti haqida xabar berilsinmi?"))
             .setMessage(
                 tr("Короб: ", "Quti: ") + normalizedBoxCode + "\n" +
@@ -6273,7 +6287,7 @@ public class MainActivity extends Activity {
         TsdFbsCargoPackingResponse.Packing current =
             fbsCargoPacking == null ? null : fbsCargoPacking.packing;
         if (current == null || fbsCargoBusy) return;
-        new AlertDialog.Builder(this)
+        new TsdUi.DialogBuilder(this)
             .setTitle(tr("Отменить всю упаковку?", "Butun qadoqlash bekor qilinsinmi?"))
             .setMessage(
                 tr(
@@ -6293,7 +6307,7 @@ public class MainActivity extends Activity {
         TsdFbsCargoPackingResponse.Packing current = fbsCargoPacking == null ? null : fbsCargoPacking.packing;
         if (current == null || fbsCargoBusy) return;
         boolean sortingCenterBox = isSortingCenterPacking(current);
-        new AlertDialog.Builder(this)
+        new TsdUi.DialogBuilder(this)
             .setTitle(sortingCenterBox
                 ? tr("Закрыть короб?", "Qutini yopasizmi?")
                 : tr("Закрыть грузоместо?", "Yuk joyini yopasizmi?"))
@@ -8605,19 +8619,26 @@ public class MainActivity extends Activity {
 
     private byte[] captureAppScreenshot() {
         try {
-            View root = getWindow().getDecorView().getRootView();
+            List<View> windows = TsdUi.monitorWindows(this);
+            return TsdUi.russianSnapshot(windows, () -> drawAppScreenshot(windows));
+        } catch (Throwable ignored) { return null; }
+    }
+
+    private byte[] drawAppScreenshot(List<View> windows) {
+        try {
+            View root = windows.get(0);
             int width = root.getWidth();
             int height = root.getHeight();
             if (width <= 0 || height <= 0) return null;
             Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565);
-            root.draw(new Canvas(bitmap));
+            TsdUi.drawWindows(windows, new Canvas(bitmap));
             ByteArrayOutputStream output = new ByteArrayOutputStream();
             bitmap.compress(Bitmap.CompressFormat.JPEG, 58, output);
             bitmap.recycle();
             byte[] bytes = output.toByteArray();
             if (bytes.length <= 700 * 1024) return bytes;
             Bitmap retry = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565);
-            root.draw(new Canvas(retry));
+            TsdUi.drawWindows(windows, new Canvas(retry));
             output.reset();
             retry.compress(Bitmap.CompressFormat.JPEG, 34, output);
             retry.recycle();
@@ -8641,6 +8662,7 @@ public class MainActivity extends Activity {
         payload.put("stage", monitorScreenLabel(screen));
         payload.put("lastAction", nonEmpty(statusMessage, monitorScreenLabel(screen)));
         payload.put("appVersion", BuildConfig.VERSION_NAME);
+        if (TsdUi.enabled()) { payload.put("uiLanguage", uiLanguage); payload.put("screenshotLanguage", "ru"); }
         payload.put("reportedAt", System.currentTimeMillis());
 
         if (activeInventory != null) {
@@ -8698,6 +8720,8 @@ public class MainActivity extends Activity {
 
     private String monitorScreenLabel(Screen value) {
         switch (value) {
+            case FBO_TWO_STAGE: return "Сборка ФБО";
+            case PALLET_SORTING: return "Сортировка и перемещение";
             case RECEIPT: return "Приёмка";
             case ASSEMBLY_LIST:
             case ASSEMBLY_DETAIL: return "Сборка заявки";
@@ -8734,9 +8758,9 @@ public class MainActivity extends Activity {
         if (text.equals(lastDialogError) && now - lastDialogErrorAt < 1_500L) return;
         lastDialogError = text;
         lastDialogErrorAt = now;
-        reportMonitorError(text);
+        if (!TsdUi.enabled()) reportMonitorError(text);
         if (activeErrorDialog != null && activeErrorDialog.isShowing()) activeErrorDialog.dismiss();
-        activeErrorDialog = new AlertDialog.Builder(this)
+        activeErrorDialog = new TsdUi.DialogBuilder(this)
             .setTitle(tr("Ошибка сканирования", "Skanerlash xatosi"))
             .setMessage(text)
             .setCancelable(false)
@@ -8744,6 +8768,7 @@ public class MainActivity extends Activity {
             .create();
         activeErrorDialog.setOnDismissListener(dialog -> activeErrorDialog = null);
         activeErrorDialog.show();
+        if (TsdUi.enabled()) activeErrorDialog.getWindow().getDecorView().post(() -> reportMonitorError(text));
     }
 
     private void runSilentBackground(ThrowingRunnable task) {
@@ -8761,7 +8786,7 @@ public class MainActivity extends Activity {
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(0, 0, 0, dp(18));
 
-        TextView logo = new TextView(this);
+        TextView logo = new TsdUi.Label(this);
         logo.setText("ТСД");
         logo.setGravity(Gravity.CENTER);
         logo.setTextColor(Color.WHITE);
@@ -8773,10 +8798,10 @@ public class MainActivity extends Activity {
         LinearLayout names = new LinearLayout(this);
         names.setOrientation(LinearLayout.VERTICAL);
         names.setPadding(dp(14), 0, 0, 0);
-        sessionNameView = new TextView(this);
+        sessionNameView = new TsdUi.Label(this);
         sessionNameView.setTextColor(TEXT);
         sessionNameView.setTextSize(16f);
-        sessionCodeView = new TextView(this);
+        sessionCodeView = new TsdUi.Label(this);
         sessionCodeView.setTextColor(TEXT);
         sessionCodeView.setTextSize(16f);
         names.addView(sessionNameView);
@@ -8786,7 +8811,7 @@ public class MainActivity extends Activity {
     }
 
     private TextView mainStatusLine() {
-        queueView = new TextView(this);
+        queueView = new TsdUi.Label(this);
         queueView.setTextColor(TEXT);
         queueView.setTextSize(17f);
         queueView.setPadding(0, 0, 0, dp(16));
@@ -8905,13 +8930,14 @@ public class MainActivity extends Activity {
         }
         try {
             Dialog dialog = new Dialog(this);
+            TsdUi.track(dialog);
             LinearLayout content = new LinearLayout(this);
             content.setOrientation(LinearLayout.VERTICAL);
             content.setPadding(dp(12), dp(12), dp(12), dp(12));
             content.setBackgroundColor(Color.BLACK);
 
             DecoratedBarcodeView barcodeView = new DecoratedBarcodeView(this);
-            barcodeView.setStatusText(tr(
+            TsdUi.label(barcodeView.getStatusView(), tr(
                 "Наведите камеру на штрихкод или КИЗ",
                 "Kamerani shtrix-kod yoki KIZga qarating"
             ));
@@ -9021,7 +9047,7 @@ public class MainActivity extends Activity {
     }
 
     private Button primaryMenuButton(String text, View.OnClickListener listener) {
-        Button button = new Button(this);
+        Button button = new TsdUi.Button(this);
         button.setText(text);
         button.setTextSize(20f);
         button.setTextColor(Color.WHITE);
@@ -9038,7 +9064,7 @@ public class MainActivity extends Activity {
     }
 
     private Button secondaryButton(String text, View.OnClickListener listener) {
-        Button button = new Button(this);
+        Button button = new TsdUi.Button(this);
         button.setText(text);
         button.setTextSize(16f);
         button.setTextColor(TEXT);
@@ -9077,7 +9103,7 @@ public class MainActivity extends Activity {
     }
 
     private TextView title(String text) {
-        TextView view = new TextView(this);
+        TextView view = new TsdUi.Label(this);
         view.setText(text);
         view.setTextColor(TEXT);
         view.setTextSize(22f);
@@ -9087,7 +9113,7 @@ public class MainActivity extends Activity {
     }
 
     private TextView label(String text) {
-        TextView view = new TextView(this);
+        TextView view = new TsdUi.Label(this);
         view.setText(text);
         view.setTextColor(TEXT);
         view.setTextSize(14f);
@@ -9097,7 +9123,7 @@ public class MainActivity extends Activity {
     }
 
     private TextView messageView(String text) {
-        TextView view = new TextView(this);
+        TextView view = new TsdUi.Label(this);
         view.setText(text);
         view.setTextColor(TEXT);
         view.setTextSize(15f);
@@ -9106,7 +9132,7 @@ public class MainActivity extends Activity {
     }
 
     private TextView versionView() {
-        TextView view = new TextView(this);
+        TextView view = new TsdUi.Label(this);
         view.setText("Версия " + installedVersionName());
         view.setTextColor(Color.rgb(100, 116, 139));
         view.setTextSize(13f);
@@ -9117,7 +9143,7 @@ public class MainActivity extends Activity {
 
     private EditText input(String hint) {
         EditText input = new EditText(this);
-        input.setHint(hint);
+        TsdUi.hint(input,hint);
         input.setSingleLine(true);
         input.setTextSize(16f);
         input.setPadding(dp(10), 0, dp(10), 0);
@@ -9148,7 +9174,7 @@ public class MainActivity extends Activity {
     }
 
     private TextView taskRow(String title, String subtitle, int backgroundColor) {
-        TextView view = new TextView(this);
+        TextView view = new TsdUi.Label(this);
         view.setText(title + "\n" + subtitle);
         view.setTextColor(TEXT);
         view.setTextSize(16f);
@@ -9170,7 +9196,7 @@ public class MainActivity extends Activity {
     }
 
     private TextView feedbackView(String text, int backgroundColor) {
-        TextView view = new TextView(this);
+        TextView view = new TsdUi.Label(this);
         view.setText(text);
         view.setTextColor(TEXT);
         view.setTextSize(16f);

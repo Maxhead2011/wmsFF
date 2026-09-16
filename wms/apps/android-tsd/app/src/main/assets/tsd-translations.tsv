@@ -1,0 +1,1474 @@
+# Russian	Uzbek (Latin)	English
+Не удалось прочитать сохранённую операцию.	Saqlangan amalni o‘qib bo‘lmadi.	Could not read the saved operation.
+Сборка ФБО	FBO yig‘ish	FBO picking
+Нужно 	Kerak: 	Required\s
+ · Отобрано 	 · Terildi: 	 · Picked\s
+ · Упаковано 	 · Qadoqlandi: 	 · Packed\s
+Состав заявки изменился. Нужна сверка.	Ariza tarkibi o‘zgardi. Tekshirish kerak.	The request contents have changed. Reconciliation is required.
+Недостаточно доступного остатка: 	Mavjud qoldiq yetarli emas: 	Not enough available stock:\s
+ ед.	 dona	 units
+Начать отбор	Terishni boshlash	Start picking
+Все короба поставки подтверждены	Jo‘natmaning barcha qutilari tasdiqlandi	All shipment boxes are confirmed
+Скачать файл WB	WB faylini yuklab olish	Download WB file
+ШК товара	Tovar SHK	Product barcode
+ШК короба поставки	Jo‘natma qutisining shtrix-kodi	Shipment box barcode
+ШК паллета / короба без паллета	Pallet shtrix-kodi / palletsiz quti	Pallet barcode / box without a pallet
+ШК короба на выбранном паллете	Tanlangan palletdagi qutining shtrix-kodi	Barcode of a box on the selected pallet
+ШК короба для упаковки / целого короба	Qadoqlash qutisi / butun quti shtrix-kodi	Packing box / whole box barcode
+КИЗ товара	Mahsulot KIZi	Product KIZ
+Подтвердить скан	Skanni tasdiqlash	Confirm scan
+Осталось отобрать 	Terish uchun qoldi: 	Units left to pick:\s
+Отберите 	Tering: 	Pick\s
+ ед. · 	 dona · 	 units ·\s
+Для целого короба требуется актуализация: количество и КИЗ расходятся.	Butun qutini qayta sanang: miqdor va KIZlar soni mos kelmayapti.	Recount the whole box: the quantity and KIZ count do not match.
+Короб забран целиком	Quti butunligicha olindi	Whole box picked
+Другой исходный короб	Boshqa manba quti	Another source box
+ · Нужных коробов: 	 · Kerakli qutilar: 	 · Required boxes:\s
+Без паллета	Palletsiz	No pallet
+Паллет 	Pallet 	Pallet\s
+Другой паллет	Boshqa pallet	Another pallet
+Перейти к упаковке	Qadoqlashga o‘tish	Continue to packing
+Осталось вложить 	Qutiga joylash uchun qoldi: 	Units left to pack:\s
+Открыт короб 	Ochiq quti: 	Open box:\s
+Закрыть короб	Qutini yopish	Close box
+Отложить пустой короб	Bo‘sh qutini chetga qo‘yish	Set empty box aside
+Целые короба к добавлению: 	Qo‘shiladigan butun qutilar: 	Whole boxes to add:\s
+Короба разобраны	Qutilarga joylash tugadi	Box packing complete
+Подтверждено коробов 	Tasdiqlangan qutilar: 	Boxes confirmed:\s
+ из 	 / 	 of\s
+Завершить проверку и сформировать файл WB	Tekshirishni tugatish va WB faylini yaratish	Complete checks and generate WB file
+Подтверждён	Tasdiqlangan	Confirmed
+Закрыт	Yopiq	Closed
+Открыт	Ochiq	Open
+Повторить неподтверждённый запрос	Tasdiqlanmagan so‘rovni takrorlash	Retry unconfirmed request
+Обновить	Yangilash	Refresh
+Назад	Orqaga	Back
+Сначала отсканируйте паллет. Короб без паллета можно сканировать сразу.	Avval palletni skanerlang. Palletsiz qutini darhol skanerlash mumkin.	Scan the pallet first. A box without a pallet can be scanned directly.
+Короб не входит в список на этом паллете.	Bu quti ushbu pallet ro‘yxatida yo‘q.	This box is not listed on this pallet.
+Этот ШК не требуется на текущем этапе.	Bu shtrix-kod joriy bosqichda kerak emas.	This barcode is not required at the current step.
+Не удалось обновить: 	Yangilab bo‘lmadi: 	Could not refresh:\s
+Не удалось сохранить операцию. Проверьте память ТСД.	Amalni saqlab bo‘lmadi. TSD xotirasini tekshiring.	Could not save the operation. Check the device storage.
+Операция принята	Amal qabul qilindi	Operation accepted
+Ответ не получен. Повторите тот же запрос.	Javob kelmadi. Xuddi shu so‘rovni takrorlang.	No response received. Retry the same request.
+Ошибка ВМС 	WMS xatosi 	WMS error\s
+Короба ФБО для WB	WB uchun FBO qutilari	FBO boxes for WB
+Файл загружается. Откройте его из уведомления.	Fayl yuklanmoqda. Uni bildirishnomadan oching.	Downloading the file. Open it from the notification.
+Не удалось скачать файл: 	Faylni yuklab bo‘lmadi: 	Could not download the file:\s
+В этом помещении больше нет паллет для этой поставки	Bu xonada ushbu jo‘natma uchun boshqa pallet qolmadi	No more pallets for this shipment in this room
+В этом помещении осталось паллет: 	Bu xonada qolgan palletlar: 	Pallets remaining in this room:\s
+Не удалось получить результат. Повторите проверку.	Natijani olib bo‘lmadi. Tekshirishni takrorlang.	Could not get the result. Check again.
+КИЗ не найден в системе.	KIZ tizimda topilmadi.	KIZ not found in the system.
+Ответ сервера неполный. Повторите проверку.	Server javobi to‘liq emas. Tekshirishni takrorlang.	Incomplete server response. Check again.
+КИЗ найден в нескольких записях. Проверьте привязки:\n\n	KIZ bir nechta yozuvda topildi. Bog‘lanishlarni tekshiring:\n\n	KIZ found in multiple records. Check the links:\n\n
+Товар: 	Mahsulot: 	Product:\s
+не указан	ko‘rsatilmagan	not specified
+\nАртикул: 	\nArtikul: 	\nArticle:\s
+\nРазмер: 	\nO‘lcham: 	\nSize:\s
+\nЦвет: 	\nRang: 	\nColor:\s
+\nКороб: 	\nQuti: 	\nBox:\s
+без привязки к коробу	qutiga bog‘lanmagan	not linked to a box
+\nПаллет: 	\nPallet: 	\nPallet:\s
+не назначен	tayinlanmagan	not assigned
+\nПомещение: 	\nXona: 	\nRoom:\s
+не указано	ko‘rsatilmagan	not specified
+\nФилиал: 	\nFilial: 	\nBranch:\s
+\nКлиент: 	\nMijoz: 	\nClient:\s
+\nСтатус: 	\nHolat: 	\nStatus:\s
+Доступен	Mavjud	Available
+В резерве	Zaxirada	Reserved
+Упаковка — уже отобран	Qadoqlashda — allaqachon terilgan	Packing — already picked
+Отгрузка	Jo‘natish	Shipping
+Брак	Nuqsonli	Defective
+Карантин	Karantin	Quarantine
+Проверка КИЗ	KIZni tekshirish	Check KIZ
+Отсканируйте Честный знак. Размещение по данным выбранного филиала.	Chestny Znak kodini skanerlang. Tanlangan filialdagi joylashuv ko‘rsatiladi.	Scan the Chestny Znak code. Locations are shown for the selected branch.
+КИЗ Data Matrix	KIZ Data Matrix	KIZ Data Matrix
+Проверить	Tekshirish	Check
+Отсканируйте КИЗ.	KIZni skanerlang.	Scan the KIZ.
+Проверяю КИЗ…	KIZ tekshirilmoqda…	Checking KIZ…
+Не удалось проверить КИЗ. Повторите попытку.	KIZni tekshirib bo‘lmadi. Qayta urining.	Could not check the KIZ. Try again.
+Нет ответа от ВМС. Проверьте соединение и повторите сканирование.	WMSdan javob yo‘q. Aloqani tekshiring va qayta skanerlang.	No response from WMS. Check the connection and scan again.
+Android просит подтвердить установку. Нажмите «Обновить» один раз.	Android o‘rnatishni tasdiqlashni so‘rayapti. “Yangilash” tugmasini bir marta bosing.	Android requires installation confirmation. Tap “Update” once.
+Обновление установлено.	Yangilanish o‘rnatildi.	Update installed.
+неизвестная ошибка установки	noma’lum o‘rnatish xatosi	unknown installation error
+Не удалось установить обновление: 	Yangilanishni o‘rnatib bo‘lmadi: 	Could not install the update:\s
+Обновите приложение ТСД и войдите заново: старая общая сессия отключена.	TSD ilovasini yangilang va qayta kiring: eski umumiy seans o‘chirilgan.	Update the TSD app and sign in again: the old shared session is disabled.
+Доступ к Bluetooth запрещён. Разрешите поиск устройств поблизости в настройках приложения.	Bluetooth ruxsati berilmadi. Ilova sozlamalarida yaqin qurilmalarni qidirishga ruxsat bering.	Bluetooth permission denied. Allow nearby devices in the app settings.
+Доступ к камере запрещён. Разрешите камеру в настройках приложения.	Kameraga kirish taqiqlangan. Ilova sozlamalarida kameraga ruxsat bering.	Camera permission denied. Allow camera access in the app settings.
+Дождитесь ответа или повторите неподтверждённый запрос.	Javobni kuting yoki tasdiqlanmagan so‘rovni takrorlang.	Wait for the response or retry the unconfirmed request.
+Сначала завершите текущую единицу или подтвердите результат запроса.	Avval joriy donani tugating yoki so‘rov natijasini tasdiqlang.	Complete the current unit or confirm the request result first.
+Сначала дождитесь ответа или повторите скан того же целевого короба, чтобы уточнить результат перемещения.	Javobni kuting yoki ko‘chirish natijasini aniqlash uchun xuddi shu manzil qutini qayta skanerlang.	Wait for the response or rescan the same destination box to check the transfer result.
+Обязательную проверку нельзя закрыть. Сначала полностью пропикайте и актуализируйте короб.	Majburiy tekshiruvni yopib bo‘lmaydi. Avval qutini to‘liq skanerlang va yangilang.	You cannot close the mandatory check. Scan and recount the entire box first.
+Сортировка и перемещение	Saralash va ko‘chirish	Sorting and transfers
+Перемещения	Ko‘chirish	Transfers
+Сборка паллетов	Palletlarni yig‘ish	Build pallets
+Инвентаризация	Inventarizatsiya	Stocktaking
+Приемка товара	Tovarni qabul qilish	Receive goods
+Сборка заявки	Buyurtmani yig‘ish	Pick request
+Сборка FBS	FBS buyurtmasini yig‘ish	FBS picking
+Сборка FBO Ozon	Ozon FBO yig‘ish	Ozon FBO picking
+Упаковка FBS	FBS qadoqlash	FBS packing
+Телефон: камера включена	Telefon: kamera yoqilgan	Phone: camera enabled
+Телефон	Telefon	Phone
+Синхронизировать очередь	Navbatni sinxronlash	Sync queue
+Обновить клиентов	Mijozlarni yangilash	Refresh clients
+Настройки / вход	Sozlamalar / kirish	Settings / sign in
+Проверить обновление	Yangilanishni tekshirish	Check for updates
+Сбросить вход	Kirishni bekor qilish	Sign out
+Отсканируйте короб, из которого берёте товар.	Tovar olinadigan qutini skanerlang.	Scan the box you are taking the goods from.
+ИСПРАВИТЬ ОСТАТКИ И КИЗЫ (АДМИНИСТРАТОР)	QOLDIQ VA KIZLARNI TUZATISH (ADMINISTRATOR)	CORRECT STOCK AND KIZ (ADMINISTRATOR)
+ИЗ КОРОБА В БОКС ХРАНЕНИЯ	QUTIDAN SAQLASH BOKSIGA	FROM BOX TO STORAGE BIN
+В БОКС ПО ШК И КИЗ (БЕЗ ИСХОДНОГО КОРОБА)	SHK VA KIZ BO‘YICHA BOKSGA	TO BIN BY BARCODE AND KIZ (NO SOURCE BOX)
+Шаг 1 из 3. Отсканируйте исходный короб.	1/3-qadam. Manba qutini skanerlang.	Step 1 of 3. Scan the source box.
+Исходный короб	Manba quti	Source box
+Открыть короб	Qutini ochish	Open box
+ИЗ КОРОБА: 	MANBA QUTI: 	FROM BOX:\s
+Клиент: 	Mijoz: 	Client:\s
+Доступно: 	Mavjud: 	Available:\s
+ШК принят: 	SHK qabul qilindi: 	Barcode accepted:\s
+. Теперь отсканируйте КИЗ этой единицы.	. Endi shu donaning KIZini skanerlang.	. Now scan this unit’s KIZ.
+Шаг 2 из 3. Сначала сканируйте ШК товара. Для маркированного товара ТСД сразу попросит КИЗ.	2/3-qadam. Avval tovar SHKini skanerlang. Belgilangan tovar uchun TSD darhol KIZni so‘raydi.	Step 2 of 3. Scan the product barcode first. For marked goods, the TSD will immediately request the KIZ.
+ШК товара или привязанный КИЗ	Tovar SHKi yoki biriktirilgan KIZ	Product barcode or linked KIZ
+Привязать КИЗ	KIZni biriktirish	Link KIZ
+Добавить товар	Tovar qo‘shish	Add product
+Закончить выбор — 	Tanlashni tugatish — 	Finish selection —\s
+Шаг 3 из 3. Отсканируйте короб назначения для всей выбранной партии.	3/3-qadam. Belgilangan qutini skanerlang.	Step 3 of 3. Scan the destination box for the entire selected batch.
+Отменить выбор ШК	SHK tanlovini bekor qilish	Cancel barcode selection
+ШК отменён. Сканируйте товар заново.	SHK bekor qilindi. Tovarni qayta skanerlang.	Barcode cancelled. Scan the product again.
+Шаг 3 из 3. Отсканируйте короб, куда положили все выбранные вещи.	3/3-qadam. Barcha tanlangan narsalar joylangan qutini skanerlang.	Step 3 of 3. Scan the box where you placed all selected goods.
+К ПЕРЕМЕЩЕНИЮ: 	KO‘CHIRISH UCHUN: 	TO TRANSFER:\s
+Короб назначения	Maqsad quti	Destination box
+Переместить всю партию	Barcha partiyani ko‘chirish	Transfer entire batch
+Добавить ещё товары	Yana tovar qo‘shish	Add more goods
+Продолжайте сканировать товары.	Tovarlarni skanerlashni davom eting.	Continue scanning goods.
+Отменить последний товар	Oxirgi tovarni bekor qilish	Remove last product
+Сменить исходный короб	Manba qutini almashtirish	Change source box
+Проверяю…	Tekshirilmoqda…	Checking…
+В главное меню	Bosh menyuga	Main menu
+Содержимое исходного короба	Manba quti tarkibi	Source box contents
+Остальные позиции скрыты. Сканирование продолжает работать.	Qolgan pozitsiyalar yashirilgan. Skanerlash ishlashda davom etadi.	Other items are hidden. You can continue scanning.
+Артикул: 	Artikul: 	Article:\s
+цвет: 	rang: 	color:\s
+размер: 	o‘lcham: 	size:\s
+ · нужен КИЗ	 · KIZ kerak	 · KIZ required
+Выбрано для перемещения	Ko‘chirish uchun tanlangan	Selected for transfer
+КИЗ	KIZ	KIZ
+ШК	ShK	Barcode
+единица №	birlik №	unit No.
+Ранее выбрано ещё: 	Oldin tanlangan yana: 	Previously selected:\s
+Убран последний товар: 	Oxirgi tovar olib tashlandi: 	Last product removed:\s
+Можно продолжать сканирование.	Skanerlashni davom ettirishingiz mumkin.	You can continue scanning.
+Сначала отсканируйте код.	Avval kodni skanerlang.	Scan a code first.
+Открываю исходный короб…	Manba quti ochilmoqda…	Opening source box…
+Не удалось открыть исходный короб.	Manba qutini ochib bo‘lmadi.	Could not open the source box.
+Короб открыт.	Quti ochildi.	Box opened.
+Проверяю товар…	Tovar tekshirilmoqda…	Checking product…
+Проверяю и привязываю КИЗ…	KIZ tekshirilmoqda va biriktirilmoqda…	Checking and linking KIZ…
+Товар не найден в исходном коробе.	Tovar manba qutida topilmadi.	Product not found in the source box.
+Сервер не вернул данные отсканированного товара.	Server skanerlangan tovar ma’lumotlarini qaytarmadi.	The server did not return the scanned product details.
+ШК принят. Теперь отсканируйте КИЗ этой единицы.	SHK qabul qilindi. Endi shu birlikning KIZini skanerlang.	Barcode accepted. Now scan this unit’s KIZ.
+Этот КИЗ уже выбран. Повтор не добавлен.	Bu KIZ allaqachon tanlangan. Takror qo‘shilmadi.	This KIZ is already selected. Duplicate not added.
+В исходном коробе больше нет свободных единиц товара «	Manba qutida boshqa bo‘sh birlik qolmadi: «	No more available units of this product in the source box: “
+Товар добавлен. Всего выбрано: 	Tovar qo‘shildi. Jami tanlandi: 	Product added. Total selected:\s
+Сначала отсканируйте хотя бы один товар.	Avval kamida bitta tovarni skanerlang.	Scan at least one product first.
+Перемещаю выбранную партию: 	Tanlangan partiya ko‘chirilmoqda: 	Transferring selected batch:\s
+ ед.…	 dona…	 units…
+Перемещение не выполнено.	Ko‘chirish bajarilmadi.	Transfer failed.
+Пакетное перемещение выполнено.	Paketli ko‘chirish bajarildi.	Batch transferred.
+ Исходный короб опустел и перенесён в архив.	 Manba quti bo‘shadi va arxivga o‘tkazildi.	 The source box is now empty and has been archived.
+Язык интерфейса	Interfeys tili	Interface language
+Русский	Русский	Русский
+Сохранить язык	Tilni saqlash	Save language
+Адрес WMS	WMS manzili	WMS address
+Логин сотрудника	Xodim logini	Employee login
+Пароль	Parol	Password
+Войти на ТСД	TSD tizimiga kirish	Sign in to TSD
+Скачать приложение ТСД	TSD ilovasini yuklab olish	Download TSD app
+Сейчас работает	Hozir ishlayapti	Currently signed in
+ТСД	TSD	TSD
+Язык сохранён.	Til saqlandi.	Language saved.
+Проверяю открытую паллету…	Ochiq pallet tekshirilmoqda…	Checking the open pallet…
+Сначала выберите клиента, затем отсканируйте ШК пустой или уже существующей паллеты.	Avval mijozni tanlang, keyin bo‘sh yoki mavjud pallet shtrix-kodini skanerlang.	Select a client, then scan the barcode of an empty or existing pallet.
+Клиент паллет-сорта	Pallet-sort mijozi	Sorting pallet client
+Выберите клиента	Mijozni tanlang	Select a client
+Сканируйте ШК паллеты	Pallet shtrix-kodini skanerlang	Scan pallet barcode
+Открыть паллету	Palletni ochish	Open pallet
+без зоны	zonasiz	no zone
+Клиент	Mijoz	Client
+Зона	Zona	Zone
+Коробов на паллете	Palletdagi qutilar	Boxes on pallet
+Сканируйте номер короба	Quti raqamini skanerlang	Scan box number
+Добавить короб	Qutini qo‘shish	Add box
+Следующая паллета	Keyingi pallet	Next pallet
+Удалить паллет	Palletni o‘chirish	Delete pallet
+Последние добавленные короба	Oxirgi qo‘shilgan qutilar	Recently added boxes
+пока не найден в WMS	WMSda hozircha topilmadi	not found in WMS yet
+Отсканируйте код.	Kodni skanerlang.	Scan a code.
+ОТСКАНИРОВАН НОМЕР КОРОБА 	QUTI RAQAMI SKANERLANDI: 	BOX NUMBER SCANNED:\s
+.\nСейчас нужен QR или ШК паллетсорта. Короба сканируются после открытия паллетсорта.	.\nHozir saralash palletining QR yoki shtrix-kodini skanerlang. Qutilar pallet ochilgandan keyin skanerlanadi.	.\nScan the sorting pallet’s QR code or barcode now. Scan boxes after opening the sorting pallet.
+Выберите клиента паллет-сорта.	Pallet-sort mijozini tanlang.	Select the sorting pallet client.
+Сохраняю…	Saqlanmoqda…	Saving…
+ТРЕБУЕТСЯ ВОССТАНОВЛЕНИЕ КОРОБА\n	QUTINI TIKLASH KERAK\n	BOX RESTORATION REQUIRED\n
+Пропикайте каждый товар обычным ШК. КИЗ и номера коробов не принимаются.	Har bir mahsulotni oddiy shtrix-kod bilan skanerlang. KIZ va quti raqamlari qabul qilinmaydi.	Scan each product’s regular barcode. KIZ codes and box numbers are not accepted.
+Отсканировано единиц	Skanerlangan birliklar	Units scanned
+позиций	pozitsiyalar	items
+Количество	Miqdor	Quantity
+Учесть товар	Tovarni hisobga olish	Count product
+Завершить и восстановить короб	Yakunlash va qutini tiklash	Finish and restore box
+Отменить пересчёт	Qayta sanashni bekor qilish	Cancel recount
+Пропикайте ШК товара.	Tovar shtrix-kodini skanerlang.	Scan the product barcode.
+Можно сканировать только ШК товара. 	Faqat mahsulot shtrix-kodini skanerlash mumkin. 	Only product barcodes can be scanned.\s
+Товар учтён.	Tovar hisobga olindi.	Product counted.
+Сначала пропикайте содержимое короба.	Avval quti tarkibini skanerlang.	Scan the box contents first.
+Восстанавливаю короб и остатки…	Quti va qoldiqlar tiklanmoqda…	Restoring box and stock…
+Пересчёт отменён. Сканируйте следующий короб.	Qayta sanash bekor qilindi. Keyingi qutini skanerlang.	Recount cancelled. Scan the next box.
+Завершаю паллету…	Pallet yakunlanmoqda…	Completing pallet…
+Удалить паллет?	Pallet o‘chirilsinmi?	Delete pallet?
+Паллета 	Pallet 	Pallet\s
+ и её ошибочная привязка коробов будут удалены. После этого паллету можно открыть и пропикать заново.	 va unga noto‘g‘ri bog‘langan qutilar aloqasi o‘chiriladi. Keyin palletni qayta ochib, skanerlashingiz mumkin.	 and its incorrect box links will be deleted. You can then reopen and rescan the pallet.
+Нет	Yo‘q	No
+Удалить	O‘chirish	Delete
+Удаляю паллету…	Pallet o‘chirilmoqda…	Deleting pallet…
+Выберите режим. Актуализация расхождений выполняется менеджером в веб-версии WMS.	Rejimni tanlang. Tafovutlarni tuzatish menejer tomonidan WMS veb-versiyasida bajariladi.	Select a mode. A manager reconciles discrepancies in the WMS web app.
+1. Полная инвентаризация	1. To‘liq inventarizatsiya	1. Full stocktaking
+2. Частичная инвентаризация	2. Qisman inventarizatsiya	2. Partial stocktaking
+3. Проверка содержимого короба	3. Quti tarkibini tekshirish	3. Check box contents
+4. Сборка по SKU	4. SKU bo‘yicha yig‘ish	4. Pick by SKU
+Архив проверок коробок	Qutilar tekshiruvi arxivi	Box check history
+Загружаю заявки…	Arizalar yuklanmoqda…	Loading requests…
+Активных заявок нет.	Faol arizalar yo‘q.	No active requests.
+Выберите оранжевую заявку.	To‘q sariq arizani tanlang.	Select the orange request.
+Сборка по SKU	SKU bo‘yicha yig‘ish	Pick by SKU
+Собрано	Yig‘ildi	Picked
+Принято	Qabul qilindi	Received
+Повторная приёмка: короб назначения → ШК товара → тот же КИЗ.	Qayta qabul: maqsad quti → tovar SHK → o‘sha KIZ.	Receive again: destination box → product barcode → the same KIZ.
+Сборка: исходный короб → ШК товара → КИЗ.	Yig‘ish: manba quti → tovar SHK → KIZ.	Picking: source box → product barcode → KIZ.
+Осталось	Qoldi	Remaining
+К списку заявок	Arizalar ro‘yxatiga	Request list
+Сортировка по SKU · №	SKU bo‘yicha saralash · №	Sort by SKU · No.
+Внутри склада, без резерва и отгрузки. Размещено: 	Ombor ichida, zaxiralash va jo‘natishsiz. Joylandi: 	Within the warehouse, without reservation or shipping. Placed:\s
+Сортировка завершена. Товары находятся в целевых коробах.	Saralash tugadi. Mahsulotlar manzil qutilarida.	Sorting complete. Goods are in the destination boxes.
+Разместить отобранное из 	Terilgan mahsulotni joylash. Manba: 	Place goods picked from\s
+Подтвердите ШК и КИЗ ранее отобранной единицы, затем целевой короб. Повторного списания не будет.	Oldin terilgan donaning shtrix-kodi va KIZini, keyin manzil qutini tasdiqlang. Qoldiq qayta kamaytirilmaydi.	Confirm the barcode and KIZ of the previously picked unit, then the destination box. Stock will not be deducted again.
+По маршруту осталось: 	Yo‘nalishda qoldi: 	Remaining on route:\s
+Показать весь маршрут	To‘liq yo‘nalishni ko‘rsatish	Show full route
+Исходный короб: 	Manba quti: 	Source box:\s
+Откройте короб и проверьте всё содержимое. После актуализации программа вернёт вас к отбору нужного SKU.	Qutini oching va barcha ichidagilarni tekshiring. Qoldiq yangilangach, kerakli SKUni terishga qaytasiz.	Open the box and check all its contents. After reconciliation, you will return to picking the required SKU.
+Актуализировать содержимое короба	Quti tarkibini qayta sanash	Recount box contents
+Паллет-сорт или исходный короб	Saralash palleti yoki manba quti	Sorting pallet or source box
+ШК нужного товара	Kerakli mahsulot shtrix-kodi	Required product barcode
+КИЗ этой единицы	Shu donaning KIZi	This unit’s KIZ
+Целевой короб для хранения	Saqlash uchun manzil quti	Destination storage box
+ШК и КИЗ проверены. Положите эту единицу в целевой короб и отсканируйте его.	Shtrix-kod va KIZ tekshirildi. Bu donani manzil qutiga joylang va qutini skanerlang.	Barcode and KIZ checked. Place this unit in the destination box and scan the box.
+Уточните результат: повторите размещение в 	Natijani aniqlang: shu qutiga joylashni takrorlang: 	Check the result: retry placing into\s
+. Не перекладывайте товар в другой короб.	. Mahsulotni boshqa qutiga ko‘chirmang.	. Do not move the product to another box.
+Выбрать другой исходный короб	Boshqa manba qutini tanlash	Select another source box
+Остатки меняются только после успешного скана целевого короба.	Qoldiq faqat manzil quti muvaffaqiyatli skanerlangandan keyin o‘zgaradi.	Stock changes only after a successful destination box scan.
+Сменить ШК / КИЗ	Shtrix-kod / KIZni almashtirish	Change barcode / KIZ
+Отсканируйте ШК товара заново.	Mahsulot shtrix-kodini qayta skanerlang.	Scan the product barcode again.
+Сначала уточните результат размещения в целевой короб.	Avval manzil qutiga joylash natijasini aniqlang.	Check the destination placement result first.
+Сверьте все товары исходного короба, затем продолжите сортировку.	Manba qutidagi barcha mahsulotlarni tekshiring, keyin saralashni davom ettiring.	Check all goods in the source box, then continue sorting.
+Короб проверен. Отсканируйте ШК нужного SKU, затем КИЗ.	Quti tekshirildi. Kerakli SKU shtrix-kodini, keyin KIZini skanerlang.	Box checked. Scan the required SKU barcode, then its KIZ.
+В этом коробе нет свободного SKU для сортировки. Маршрут обновлён.	Bu qutida saralash uchun bo‘sh SKU yo‘q. Yo‘nalish yangilandi.	No available SKU to sort in this box. Route refreshed.
+Выберите нужный короб на этом паллет-сорте.	Shu saralash palletidagi kerakli qutini tanlang.	Select the required box on this sorting pallet.
+Этот паллет-сорт или короб не входит в оставшийся маршрут.	Bu saralash palleti yoki quti qolgan yo‘nalishga kirmaydi.	This sorting pallet or box is not on the remaining route.
+Теперь КИЗ этой единицы.	Endi shu donaning KIZini skanerlang.	Now scan this unit’s KIZ.
+Единица подтверждена. Отсканируйте целевой короб.	Dona tasdiqlandi. Manzil qutini skanerlang.	Unit confirmed. Scan the destination box.
+Отсканируйте целевой короб.	Manzil qutini skanerlang.	Scan the destination box.
+Одна единица размещена в 	Bitta dona joylandi: 	One unit placed into\s
+. Общий остаток склада не изменён.	. Ombordagi umumiy qoldiq o‘zgarmadi.	. Total warehouse stock is unchanged.
+Открываю сортировку…	Saralash ochilmoqda…	Opening sorting…
+Сортировка не резервирует остатки. Выберите исходный короб.	Saralash qoldiqni zaxiralamaydi. Manba qutini tanlang.	Sorting does not reserve stock. Select a source box.
+Отсканируйте значение.	Qiymatni skanerlang.	Scan a value.
+Теперь сканируйте ШК товара.	Endi tovar SHK ni skanerlang.	Now scan the product barcode.
+Теперь сканируйте КИЗ.	Endi KIZ ni skanerlang.	Now scan the KIZ.
+Сохраняю товар…	Tovar saqlanmoqda…	Saving product…
+Товар не сохранён.	Tovar saqlanmadi.	Product not saved.
+Заявка полностью собрана и принята.	Ariza to‘liq yig‘ildi va qabul qilindi.	Request fully picked and received.
+Товар принят. Продолжайте приёмку.	Tovar qabul qilindi. Davom eting.	Product received. Continue receiving.
+Товар из короба списан. Продолжайте сборку.	Tovar qutidan chiqarildi. Davom eting.	Product deducted from the box. Continue picking.
+Обязательная проверка короба 	Qutini majburiy tekshirish: 	Mandatory box check:\s
+. Сборка FBS продолжится только после сверки и актуализации.	. FBS yig‘ish faqat tekshirish va qoldiqni yangilashdan keyin davom etadi.	. FBS picking will resume only after reconciliation and stock update.
+Обязательная проверка после сборки FBS · 	FBS yig‘ishdan keyingi majburiy tekshiruv · 	Mandatory check after FBS picking ·\s
+[FBS_MANDATORY_BOX_CHECK] Короб выбран в FBS, но нужный товар не был подтверждён.	[FBS_MANDATORY_BOX_CHECK] FBSda quti tanlangan, ammo kerakli mahsulot tasdiqlanmagan.	[FBS_MANDATORY_BOX_CHECK] Box selected in FBS, but the required product was not confirmed.
+Проверка КИЗ FBS · 	FBS KIZ tekshiruvi · 	FBS KIZ check ·\s
+; расхождение при отборе. Сканировать только содержимое короба. Уже отобранный товар сюда не возвращать.	; terishda tafovut. Faqat quti ichidagilarni skanerlang. Terilgan mahsulotni bu yerga qaytarmang.	; discrepancy during picking. Scan only the box contents. Do not return already picked goods here.
+Сканируйте ШК каждой единицы, затем КИЗ маркированного товара.	Har bir donaning shtrix-kodini, so‘ng markirovkali mahsulot KIZini skanerlang.	Scan each unit’s barcode, then the KIZ for marked goods.
+Отсканируйте каждую единицу только по ШК товара. КИЗ в этой проверке не требуется.	Har bir donaning faqat mahsulot shtrix-kodini skanerlang. Bu tekshiruvda KIZ kerak emas.	Scan each unit’s product barcode only. KIZ is not required for this check.
+Обязательная проверка короба	Qutini majburiy tekshirish	Mandatory box check
+Сборка FBS приостановлена. Полностью пропикайте короб 	FBS yig‘ish to‘xtatildi. Qutini to‘liq skanerlang: 	FBS picking paused. Scan the entire box\s
+ по ШК и КИЗ маркированных товаров. После сверки подтвердите актуализацию.	 mahsulot shtrix-kodlari va markirovkali mahsulot KIZlari bo‘yicha. Tekshirgach, qoldiq yangilanishini tasdiqlang.	 using barcodes and KIZ for marked goods. After checking, confirm the stock update.
+ только по ШК товара. После сверки подтвердите актуализацию.	 faqat mahsulot shtrix-kodlari bo‘yicha. Tekshirgach, qoldiq yangilanishini tasdiqlang.	 using product barcodes only. After checking, confirm the stock update.
+Понятно	Tushunarli	Understood
+Загружаю активные инвентаризации…	Faol inventarizatsiyalar yuklanmoqda…	Loading active stocktakes…
+Загружаю архив проверок коробок…	Qutilar tekshiruvi arxivi yuklanmoqda…	Loading box check history…
+Завершённых проверок коробов пока нет.	Tugallangan quti tekshiruvlari hozircha yo‘q.	No completed box checks yet.
+Завершённые проверки	Tugallangan tekshiruvlar	Completed checks
+Проверено коробов	Tekshirilgan qutilar	Boxes checked
+Завершено: 	Yakunlangan: 	Completed:\s
+Сотрудник: 	Xodim: 	Employee:\s
+Обновить архив	Arxivni yangilash	Refresh history
+К очереди проверки коробок	Qutilar tekshiruvi navbatiga	Box check queue
+После запуска все движения товара будут заблокированы до завершения инвентаризации в вебе.	Ishga tushirilgandan so‘ng vebda inventarizatsiya yakunlangunga qadar barcha tovar harakatlari bloklanadi.	Starting will block all stock movements until stocktaking is completed in the web app.
+Начать полную инвентаризацию	To‘liq inventarizatsiyani boshlash	Start full stocktaking
+Начать частичную инвентаризацию	Qisman inventarizatsiyani boshlash	Start partial stocktaking
+Начать проверку коробов	Qutilarni tekshirishni boshlash	Start box checks
+Предыдущие проверки	Oldingi tekshiruvlar	Previous checks
+Сначала войдите на ТСД.	Avval TSD tizimiga kiring.	Sign in to TSD first.
+Выберите клиента.	Mijozni tanlang.	Select a client.
+Запускаю инвентаризацию…	Inventarizatsiya boshlanmoqda…	Starting stocktaking…
+Открываю инвентаризацию…	Inventarizatsiya ochilmoqda…	Opening stocktaking…
+FBS ПРИОСТАНОВЛЕН · обязательная проверка 	FBS TO‘XTATILDI · majburiy tekshiruv 	FBS PAUSED · mandatory check\s
+Инвентаризация не открыта.	Inventarizatsiya ochilmagan.	Stocktaking is not open.
+Расхождений	Tafovutlar	Discrepancies
+Дождитесь ответа WMS. Повторное сканирование временно заблокировано.	WMS javobini kuting. Takroriy skan vaqtincha bloklangan.	Wait for WMS to respond. Rescanning is temporarily disabled.
+Номер короба	Quti raqami	Box number
+Короб	Quti	Box
+Переклеить использованный КИЗ	Ishlatilgan KIZni almashtirish	Replace used KIZ label
+Сканируйте только содержимое короба. Уже отобранные товары не возвращайте в пересчёт; возврат принимается отдельно в отсканированный короб.	Faqat quti ichidagini skanerlang. Olingan tovarni sanashga qaytarmang; qaytarish alohida qabul qilinadi.	Scan only the box contents. Do not include already picked goods in the recount; receive returns separately into a scanned box.
+Режим: ШК + КИЗ	Rejim: SHK + KIZ	Mode: barcode + KIZ
+Режим: только ШК	Rejim: faqat SHK	Mode: barcode only
+. Отсканируйте КИЗ этой единицы.	. Shu birlikning KIZini skanerlang.	. Scan this unit’s KIZ.
+Сменить ШК	SHKni almashtirish	Change barcode
+Штрихкод товара	Tovar shtrix-kodi	Product barcode
+Количество (по умолчанию 1)	Miqdor (odatda 1)	Quantity (default: 1)
+Завершить подсчёт короба	Quti sanog‘ini yakunlash	Finish counting box
+Продолжить отбор SKU из этого короба	Shu qutidan SKUni terishni davom ettirish	Continue picking SKU from this box
+Примените актуализацию по существующим правам, затем продолжите сортировку здесь.	Mavjud huquqlaringiz bilan qoldiqni yangilang, keyin shu yerda saralashni davom ettiring.	Apply the stock update using your existing permissions, then continue sorting here.
+Пересчитать короб заново	Qutini qayta sanash	Recount box again
+Проверка завершена — продолжить FBS	Tekshiruv tugadi — FBSni davom ettirish	Check complete — continue FBS
+Есть расхождения. Сборка останется заблокированной до актуализации короба администратором.	Tafovut bor. Administrator qutini yangilamaguncha FBS bloklangan.	Discrepancies found. Picking will stay blocked until an administrator updates the box stock.
+Проверить статус актуализации	Yangilash holatini tekshirish	Check stock update status
+Проверить следующий короб	Keyingi qutini tekshirish	Check next box
+Обновить состояние проверки	Tekshiruv holatini yangilash	Refresh check status
+Начать свежую проверку этого короба	Shu qutini yangidan tekshirish	Start a new check of this box
+Вернуться в эту сортировку	Shu saralashga qaytish	Return to this sorting task
+Завершить проверку	Tekshiruvni yakunlash	Complete check
+Передать на актуализацию	Tuzatish uchun yuborish	Submit for stock update
+Назад к режимам	Rejimlarga qaytish	Back to modes
+Содержимое короба	Quti tarkibi	Box contents
+По данным WMS короб пуст. Отсканированный товар будет показан как излишек.	WMS bo‘yicha quti bo‘sh. Skanerlangan tovar ortiqcha sifatida ko‘rsatiladi.	WMS shows this box as empty. Scanned goods will be shown as surplus.
+Артикул	Artikul	Article
+Факт	Amalda	Actual
+Разница	Farq	Difference
+Проверяется содержимое этого короба. Уже отобранный товар не включайте в пересчёт. Количество и состав КИЗ проверяются отдельно.	Faqat shu quti tarkibi tekshiriladi. Avval olingan tovarni qayta sanamang. Miqdor va KIZlar alohida tekshiriladi.	Check this box’s contents. Do not include already picked goods in the recount. Quantity and KIZ composition are checked separately.
+Всё в порядке. Содержимое полностью совпадает с WMS.	Hammasi to‘g‘ri. Tarkib WMS bilan to‘liq mos.	Everything matches. The contents fully match WMS.
+Содержимое отличается. Расхождений	Tarkib farq qiladi. Tafovutlar	Contents differ. Discrepancies
+Точные значения показаны выше.	Aniq qiymatlar yuqorida ko‘rsatilgan.	Exact values are shown above.
+Проверка подтверждена администратором.	Tekshiruv administrator tomonidan tasdiqlandi.	Check approved by an administrator.
+Подтвердить проверку короба	Quti tekshiruvini tasdiqlash	Confirm box check
+Актуализировать по факту и продолжить сортировку	Haqiqiy qoldiqni yangilash va saralashni davom ettirish	Update actual stock and continue sorting
+Актуализировать и переместить в другой короб	Yangilash va boshqa qutiga ko‘chirish	Update stock and transfer to another box
+Только актуализировать товары по факту	Faqat tovarlarni amaldagi miqdor bo‘yicha yangilash	Update actual product stock only
+Подтвердить без изменения WMS	WMSni o‘zgartirmasdan tasdiqlash	Confirm without changing WMS
+Актуализировать остатки?	Qoldiqlarni yangilaysizmi?	Update stock?
+Подтвердить без изменений?	O‘zgarishsiz tasdiqlaysizmi?	Confirm without changes?
+Остатки в WMS будут заменены фактически подсчитанными значениями. Действие запишется в журнал.	WMS qoldiqlari amalda sanalgan qiymatlar bilan almashtiriladi. Harakat jurnalga yoziladi.	WMS stock will be replaced with the actual counted quantities. The action will be recorded in the log.
+Фактические расхождения останутся, а значения WMS не изменятся. Действие запишется в журнал.	Amaldagi tafovutlar qoladi, WMS qiymatlari o‘zgarmaydi. Harakat jurnalga yoziladi.	Actual discrepancies will remain and WMS values will not change. The action will be recorded in the log.
+ После актуализации здесь же откроется сканирование целевого короба.	 Yangilangandan so‘ng shu ekranda maqsad qutini skanerlash ochiladi.	 After the update, destination box scanning will open here.
+Отмена	Bekor qilish	Cancel
+Подтвердить	Tasdiqlash	Confirm
+Актуализирую остатки…	Qoldiqlar yangilanmoqda…	Updating stock…
+Подтверждаю проверку…	Tekshiruv tasdiqlanmoqda…	Confirming check…
+Решение принято администратором на ТСД	Qaror TSDda administrator tomonidan qabul qilindi	Decision made by an administrator on TSD
+Остатки актуализированы. Пропикайте короб, куда переместить товар.	Qoldiqlar yangilandi. Tovar ko‘chiriladigan qutini skanerlang.	Stock updated. Scan the box to transfer the goods into.
+Остатки актуализированы.	Qoldiqlar yangilandi.	Stock updated.
+Проверка подтверждена.	Tekshiruv tasdiqlandi.	Check confirmed.
+Пропикайте номер короба.	Quti raqamini skanerlang.	Scan the box number.
+Открываю короб…	Quti ochilmoqda…	Opening box…
+Короб 	Quti 	Box\s
+ в системе не найден.	 tizimda topilmadi.	 not found in the system.
+Пропикайте штрихкод товара.	Tovar shtrix-kodini skanerlang.	Scan the product barcode.
+Учитываю товар…	Tovar hisobga olinmoqda…	Counting product…
+ШК принят. Теперь отсканируйте КИЗ.	SHK qabul qilindi. Endi KIZni skanerlang.	Barcode accepted. Now scan the KIZ.
+Этот КИЗ уже учтён. Повтор не добавлен.	Bu KIZ hisobga olingan. Takror qo‘shilmadi.	This KIZ is already counted. Duplicate not added.
+Товар учтён: 	Tovar hisobga olindi: 	Product counted:\s
+Сначала завершите подсчёт и актуализируйте расхождения.	Avval sanashni tugating va tafovutlarni yangilang.	Finish counting and reconcile discrepancies first.
+Закрываю проверку и возвращаюсь в FBS…	Tekshiruv yopilmoqda va FBSga qaytilmoqda…	Closing check and returning to FBS…
+Короб проверен и актуализирован. Сборка FBS разблокирована.	Quti tekshirildi va yangilandi. FBS blokdan chiqarildi.	Box checked and stock updated. FBS picking is unblocked.
+Старый КИЗ	Eski KIZ	Old KIZ
+Новый КИЗ	Yangi KIZ	New KIZ
+Переклейка КИЗ	KIZni almashtirish	Replace KIZ label
+Отсканируйте старый КИЗ товара из проверяемого короба.	Tekshirilayotgan qutidagi mahsulotning eski KIZini skanerlang.	Scan the old marking code on the item from the box being checked.
+Наклейте новый КИЗ на эту единицу и отсканируйте его. Затем закончите проверку короба.	Shu mahsulotga yangi KIZ yopishtiring va skanerlang. Keyin quti tekshiruvini tugating.	Apply a new marking label to this item and scan it. Then finish checking the box.
+Закрыть	Yopish	Close
+Проверить старый КИЗ	Eski KIZni tekshirish	Check old marking code
+Подтвердить переклейку	Qayta yorliqlashni tasdiqlash	Confirm relabelling
+Переклейка не выполнена. Повторите проверку.	Almashtirilmadi. Qayta tekshiring.	Relabelling was not completed. Check again.
+Переклейка зарегистрирована. Продолжите проверку короба.	Almashtirish saqlandi. Quti tekshiruvini davom ettiring.	Relabelling recorded. Continue checking the box.
+Проверяю состав КИЗ перед возвратом к заказу…	Buyurtmaga qaytishdan oldin KIZlar tekshirilmoqda…	Checking marking codes before returning to the order…
+Нужен разбор администратора. Проверка не завершена.	Administrator tekshiruvi kerak.	Administrator review required. Check is not complete.
+Состав КИЗ не подтверждён. Нужен разбор администратора.	KIZlar tasdiqlanmadi. Administrator kerak.	Marking codes have not been verified. Administrator review required.
+Сначала отсканируйте КИЗ или отмените выбранный ШК кнопкой «Сменить ШК».	Avval KIZni skanerlang yoki tanlangan SHKni bekor qiling.	Scan the marking code first, or cancel the selected barcode using “Change barcode”.
+Сверяю короб…	Quti solishtirilmoqda…	Checking the box…
+Перемещение доступно после устранения расхождений.	Ko‘chirish tafovutlar bartaraf etilgandan keyin mavjud.	Transfer is available after resolving discrepancies.
+Остаток перемещён. Исходный короб отправлен в архив.	Qoldiq ko‘chirildi. Manba quti arxivga yuborildi.	Stock transferred. The source box has been archived.
+Переместить эти товары в другой короб	Bu tovarlarni boshqa qutiga ko‘chirish	Move these items to another box
+Пропикайте целевой короб (новый или существующий)	Maqsad qutini skanerlang (yangi yoki mavjud)	Scan the destination box (new or existing)
+Переместить весь остаток	Barcha qoldiqni ko‘chirish	Transfer all stock
+Ошибка: номер целевого короба должен начинаться с FFL.	Xato: maqsad quti raqami FFL bilan boshlanishi kerak.	Error: the destination box number must start with FFL.
+Исходный и целевой короба совпадают.	Manba va maqsad qutilar bir xil.	Source and destination boxes are the same.
+Объединение остатков после проверки короба 	Quti tekshirilgandan keyin qoldiqlarni birlashtirish: 	Combining stock after checking box\s
+Перемещаю остаток…	Qoldiq ko‘chirilmoqda…	Transferring stock…
+Перемещено 	Ko‘chirildi: 	Transferred\s
+ шт. в короб 	 dona, qutiga: 	 units to box\s
+. Исходный короб отправлен в архив.	. Manba quti arxivga yuborildi.	. The source box has been archived.
+ Администратором автоматически подтверждено проверок: 	 Administrator avtomatik tasdiqlagan tekshiruvlar: 	 Checks automatically approved by the administrator:\s
+Сначала завершите подсчёт открытого короба.	Avval ochiq quti sanog‘ini yakunlang.	Finish counting the open box first.
+Завершаю инвентаризацию…	Inventarizatsiya yakunlanmoqda…	Completing inventory count…
+Проверка завершена.	Tekshiruv yakunlandi.	Check complete.
+Инвентаризация передана менеджеру на актуализацию.	Inventarizatsiya tuzatish uchun menejerga yuborildi.	Inventory count sent to the manager for stock update.
+Полная инвентаризация	To‘liq inventarizatsiya	Full inventory count
+Частичная инвентаризация	Qisman inventarizatsiya	Partial inventory count
+Проверка содержимого короба	Quti tarkibini tekshirish	Box contents check
+Не удалось выполнить операцию в WMS. Повторите попытку.	WMS amalini bajarib bo‘lmadi. Qayta urinib ko‘ring.	Could not complete the WMS operation. Please try again.
+Выберите способ приемки. В обоих режимах один КИЗ можно принять только один раз.	Qabul qilish usulini tanlang. Ikkala rejimda ham har bir KIZ faqat bir marta qabul qilinadi.	Choose a receiving method. Each marking code can only be received once in either mode.
+Обычная приемка	Oddiy qabul qilish	Standard receiving
+Приемка по боксам	Qutilar bo‘yicha qabul qilish	Receiving by boxes
+Приемка по боксам: сканируйте бокс/короб, добавляйте товары, закройте его и переходите к следующему.	Qutilar bo‘yicha qabul: qutini skanerlang, tovarlarni qo‘shing, qutini yoping va keyingisiga o‘ting.	Receiving by boxes: scan a box, add items, close it and move on to the next one.
+Режим: 	Rejim: 	Mode:\s
+Клиент приемки	Qabul qilinayotgan tovar mijozi	Receiving client
+Выбрать клиента	Mijozni tanlash	Select client
+Изменить режим	Rejimni o‘zgartirish	Change mode
+Режим: без коробов · принято товаров: 	Rejim: qutisiz · qabul qilingan tovarlar: 	Mode: no boxes · items received:\s
+Режим: по боксам · закрыто боксов: 	Rejim: qutilar bo‘yicha · yopilgan qutilar: 	Mode: by boxes · boxes closed:\s
+ · товаров: 	 · tovarlar: 	 · items:\s
+ПРОВЕРКА ПРИНЯТЫХ КИЗ\nСканирование здесь ничего повторно не принимает и не меняет остатки.	QABUL QILINGAN KIZLARNI TEKSHIRISH\nBu yerda skanerlash tovarni qayta qabul qilmaydi va qoldiqni o‘zgartirmaydi.	CHECK RECEIVED MARKING CODES\nScanning here does not receive items again or change stock.
+Сканируйте КИЗ для проверки	Tekshirish uchun KIZni skanerlang	Scan a marking code to check
+Проверить КИЗ	KIZni tekshirish	Check marking code
+Вернуться к приемке	Qabul qilishga qaytish	Return to receiving
+Сканируйте КИЗ	KIZni skanerlang	Scan marking code
+Принять КИЗ	KIZni qabul qilish	Receive marking code
+Отменить этот товар	Bu tovarni bekor qilish	Cancel this item
+Сканируйте ШК товара	Tovar SHKini skanerlang	Scan product barcode
+Принять товар	Tovarni qabul qilish	Receive item
+Проверить принятые КИЗы	Qabul qilingan KIZlarni tekshirish	Check received marking codes
+Закрыть приемку	Qabul qilishni yakunlash	Finish receiving
+Синхронизировать очередь (	Navbatni sinxronlash (	Sync queue (
+Сменить клиента	Mijozni almashtirish	Change client
+Закрытие короба: 	Quti yopilmoqda: 	Closing box:\s
+Повторить закрытие	Yopishni qayta urinish	Retry closing
+Сканируйте ШК нового короба	Yangi quti shtrixkodini skanerlang	Scan new box barcode
+Открыт короб: 	Ochiq quti: 	Open box:\s
+ · в коробе: 	 · qutida: 	 · in box:\s
+Приложение не смогло открыть локальную базу. Переустановите приложение или очистите данные ТСД.	Ilova mahalliy bazani ocha olmadi. Ilovani qayta o‘rnating yoki TSD ilovasi ma’lumotlarini tozalang.	The app could not open its local database. Reinstall the app or clear the handheld app data.
+Скачать приложение заново	Ilovani qayta yuklab olish	Download app again
+Сначала выполните вход в настройках.	Avval sozlamalarda tizimga kiring.	Sign in through settings first.
+Выберите клиента FBO Ozon.	Ozon FBO mijozini tanlang.	Select an FBO Ozon client.
+Список клиентов ещё не загружен. Нажмите «Обновить клиентов».	Mijozlar ro‘yxati yuklanmagan.	Client list has not loaded yet. Tap “Refresh clients”.
+Показать поставки FBO Ozon	Ozon FBO yetkazib berishlarini ko‘rsatish	Show FBO Ozon shipments
+Загружаю поставки FBO Ozon...	Ozon FBO yetkazib berishlari yuklanmoqda...	Loading FBO Ozon shipments...
+Не удалось загрузить поставки FBO Ozon.	Ozon FBO ro‘yxatini yuklab bo‘lmadi.	Could not load FBO Ozon shipments.
+Выберите поставку для сборки.	Yig‘ish uchun yetkazib berishni tanlang.	Select a shipment to pick.
+FBO Ozon — поставки	Ozon FBO — yetkazib berishlar	FBO Ozon — shipments
+Подождите, идёт загрузка...	Kutib turing, yuklanmoqda...	Please wait, loading...
+Товары: 	Tovarlar: 	Products:\s
+Короба: 	Qutilar: 	Boxes:\s
+осталось единиц: 	qoldi: 	units remaining:\s
+Посмотреть закрытые короба	Yopilgan qutilarni ko‘rish	View closed boxes
+Открыть сборку	Yig‘ishni ochish	Open picking
+Поставок с созданными коробами пока нет. Сначала создайте короба на этапе 3 в WMS.	Yaratilgan qutilari bor yetkazib berishlar yo‘q.	No shipments with created boxes yet. Create boxes at step 3 in WMS first.
+Обновить список	Ro‘yxatni yangilash	Refresh list
+Загружаю короба...	Qutilar yuklanmoqda...	Loading boxes...
+Не удалось загрузить короба FBO Ozon.	Ozon FBO qutilarini yuklab bo‘lmadi.	Could not load FBO Ozon boxes.
+Отсканируйте номер короба WMS или выберите его из списка.	WMS quti raqamini skanerlang yoki ro‘yxatdan tanlang.	Scan a WMS box number or select it from the list.
+FBO Ozon — короба WMS	Ozon FBO — WMS qutilari	FBO Ozon — WMS boxes
+Подождите...	Kutib turing...	Please wait...
+Сканируйте короб WMS	WMS qutini skanerlang	Scan WMS box
+Короб WMS	WMS qutisi	WMS box
+ шт.	 dona	 units
+Продолжить короб	Qutini davom ettirish	Continue box
+Начать короб	Qutini boshlash	Start box
+Обновить короба	Qutilarni yangilash	Refresh boxes
+К списку поставок	Yetkazib berishlar ro‘yxatiga	Back to shipments
+Отсканируйте номер короба WMS.	WMS quti raqamini skanerlang.	Scan the WMS box number.
+Этот короб уже закрыт.	Bu quti allaqachon yopilgan.	This box is already closed.
+Короб не относится к выбранной поставке FBO Ozon.	Quti tanlangan Ozon FBO yetkazib berishiga tegishli emas.	This box does not belong to the selected FBO Ozon shipment.
+Сканируйте ШК каждой единицы, которую кладёте в короб.	Qutiga qo‘yilgan har bir mahsulot SHKini skanerlang.	Scan the barcode of each item you put into the box.
+Короб не выбран.	Quti tanlanmagan.	No box selected.
+К коробам	Qutilarga	Back to boxes
+Собрано: 	Yig‘ildi: 	Picked:\s
+По коробу заявлено недовложение. Ожидается решение менеджера в WMS.	Quti bo‘yicha kamlik bildirildi. Menejer qarori kutilmoqda.	A shortage was reported for this box. Waiting for the manager’s decision in WMS.
+Обновить короб	Qutini yangilash	Refresh box
+К списку коробов	Qutilar ro‘yxatiga	Back to box list
+Отсканируйте ШК товара.	Mahsulot SHKini skanerlang.	Scan the product barcode.
+Сейчас нужен ШК товара, а не номер короба WMS.	Hozir mahsulot SHKi kerak, WMS quti raqami emas.	Scan the product barcode now, not a WMS box number.
+Товар не принят в короб FBO Ozon.	Tovar Ozon FBO qutisiga qabul qilinmadi.	Item was not accepted into the FBO Ozon box.
+Товар принят. Сканируйте следующую единицу.	Tovar qabul qilindi. Keyingi birlikni skanerlang.	Item accepted. Scan the next item.
+Не удалось закрыть короб.	Qutini yopib bo‘lmadi.	Could not close the box.
+Короб закрыт: 	Quti yopildi: 	Box closed:\s
+Ошибка FBO Ozon.	Ozon FBO xatosi.	FBO Ozon error.
+Загружаю FBS-заявки...	FBS arizalari yuklanmoqda...	Loading FBS requests...
+Не удалось загрузить FBS-заявки. Повторите через минуту.	FBS arizalarini yuklab bo‘lmadi. Bir daqiqadan so‘ng takrorlang.	Could not load FBS requests. Try again in a minute.
+Выберите FBS-заявку.	FBS arizasini tanlang.	Select an FBS request.
+Сборка FBS — заявки	FBS yig‘ish — arizalar	FBS picking — requests
+Архив собранных FBS-заявок	Yig‘ilgan FBS arizalari arxivi	Completed FBS requests archive
+Подождите, загружаю список заявок...	Kutib turing, arizalar ro‘yxati yuklanmoqda...	Please wait, loading requests...
+Собранных FBS-заявок пока нет.	Yig‘ilgan FBS arizalari hozircha yo‘q.	No completed FBS requests yet.
+Открытых FBS-заявок пока нет.	Hozircha ochiq FBS arizalari yo‘q.	No open FBS requests yet.
+Собрано заказов: 	Yig‘ilgan buyurtmalar: 	Orders picked:\s
+Заявка №	Ariza №	Request #
+Готово к сборке: 	Yig‘ishga tayyor: 	Ready to pick:\s
+Осталось заказов: 	Qolgan buyurtmalar: 	Orders remaining:\s
+ · В работе: 	 · Jarayonda: 	 · In progress:\s
+Ждут готовности маркетплейса: 	Marketplace tayyorligini kutmoqda: 	Waiting for marketplace readiness:\s
+Нет доступного остатка: 	Erkin qoldiq yo‘q: 	No available stock:\s
+Открыт незавершённый заказ — продолжите его.	Tugallanmagan buyurtma ochiq — uni davom ettiring.	There is an unfinished order — continue it.
+Продолжить эту заявку	Shu arizani davom ettirish	Continue this request
+Выбрать эту заявку	Shu arizani tanlash	Select this request
+К рабочим FBS-заявкам	Faol FBS arizalariga	Back to active FBS requests
+Архив собранных заявок	Yig‘ilgan arizalar arxivi	Completed requests archive
+Открываю выбранную FBS-заявку...	Tanlangan FBS arizasi ochilmoqda...	Opening the selected FBS request...
+Не удалось получить очередь FBS. Повторите через минуту.	FBS navbatini olib bo‘lmadi. Bir daqiqadan so‘ng takrorlang.	Could not retrieve the FBS queue. Try again in a minute.
+Следуйте подсказке.	Ko‘rsatmaga amal qiling.	Follow the instructions.
+Проверяю готовность этикетки Ozon автоматически...	Ozon stikeri tayyorligini avtomatik tekshiryapman...	Automatically checking whether the Ozon label is ready...
+Собрано сегодня: 	Bugun yig‘ildi: 	Picked today:\s
+История наклеек	Stikerlar tarixi	Label history
+Подождите, загружаю заказ...	Kutib turing, buyurtma yuklanmoqda...	Please wait, loading order...
+Готовых заказов пока нет.	Hozircha tayyor buyurtmalar yo‘q.	No ready orders yet.
+Проверить ещё раз	Yana tekshirish	Check again
+К списку FBS-заявок	FBS arizalari ro‘yxatiga	Back to FBS requests
+ЧТО ЗАБРАТЬ	NIMA OLISH KERAK	WHAT TO PICK
+АРТИКУЛ: 	ARTIKUL: 	ARTICLE:\s
+ЦВЕТ: 	RANG: 	COLOUR:\s
+РАЗМЕР: 	O‘LCHAM: 	SIZE:\s
+Заказ 	Buyurtma 	Order\s
+арт. 	art. 	art.\s
+Цвет: 	Rang: 	Colour:\s
+ЛОКАЛЬНЫЙ ДОВОЗ\nWB уже принял этот заказ. Повторная наклейка недоступна и не требуется. Проверьте товар и нажмите «ТОВАР ОТОБРАН».	MAHALLIY YETKAZISH\nWB bu buyurtmani qabul qilgan. Qayta stiker mavjud emas va talab qilinmaydi. Mahsulotni tekshirib, «MAHSULOT OLINDI» tugmasini bosing.	LOCAL ADDITIONAL DELIVERY\nWB has already accepted this order. Another label is unavailable and not required. Check the item and tap “ITEM PICKED”.
+ТОВАР ОТОБРАН	MAHSULOT OLINDI	ITEM PICKED
+НАКЛЕЙКА НАКЛЕЕНА	STIKER YOPISHTIRILDI	LABEL APPLIED
+ЗАЯВКА №	ARIZA №	REQUEST #
+ОТРАБОТАНА · СОБРАНО: 	BAJARILDI · YIG‘ILDI: 	COMPLETED · PICKED:\s
+из 	/ 	of\s
+Осталось положить: 	Joylash qoldi: 	Still to pack:\s
+не назначена	belgilanmagan	unassigned
+нужных коробов нет	kerakli qutilar yo‘q	no required boxes
+ПАЛЛЕТСОРТ: 	PALLETSORT: 	SORTING PALLET:\s
+Зона: 	Zona: 	Zone:\s
+Нужно коробов для заявки: 	Ariza uchun kerakli qutilar: 	Boxes needed for request:\s
+ПОСЛЕ ЭТОГО ПАЛЛЕТСОРТА ОСТАВАЙТЕСЬ В ЭТОЙ ЗОНЕ	BU PALLETSORTDAN KEYIN SHU ZONADA QOLING	AFTER THIS SORTING PALLET, STAY IN THIS ZONE
+Для этой заявки дальше нужны:	Bu ariza uchun keyin kerak:	Next items needed for this request:
+ короб(а/ов)	 quti	 box(es)
+На паллете отсутствует короб	Palletda quti yo‘q	A box is missing from the pallet
+зона не назначена	zona belgilanmagan	zone unassigned
+ЗОНА: 	ZONA: 	ZONE:\s
+ПАЛЛЕТА: 	PALLET: 	PALLET:\s
+1. НАЙДИТЕ И ОТСКАНИРУЙТЕ КОРОБ\nМожно сначала пикнуть QR паллетсорта.\n	1. QUTINI TOPING VA SKANERLANG\nAvval palletsort QR kodini skanerlash mumkin.\n	1. FIND AND SCAN THE BOX\nYou can scan the sorting pallet QR code first.\n
+НЕСКОЛЬКО ВАРИАНТОВ, ГДЕ ВЗЯТЬ ТОВАР	MAHSULOTNI OLISH UCHUN BIR NECHTA JOY	SEVERAL LOCATIONS TO PICK THE ITEM
+БЕЗ ПАЛЛЕТСОРТА	PALLETSORTSIZ	NO SORTING PALLET
+зона не указана	zona ko‘rsatilmagan	zone unspecified
+НЕ УХОДИТЕ ОТ ЭТОЙ ПАЛЛЕТЫ\nЗдесь ещё нужных коробов: 	BU PALLETDAN KETMANG\nBu yerda yana kerakli qutilar: 	STAY AT THIS PALLET\nMore required boxes here:\s
+ДАЛЬШЕ ПО ЭТОЙ ЗАЯВКЕ	SHU ARIZA BO‘YICHA KEYINGILAR	NEXT IN THIS REQUEST
+ПАЛЛЕТ-СОРТ: 	PALLETSORT: 	SORTING PALLET:\s
+КОРОБ: 	QUTI: 	BOX:\s
+Свернуть список остальных заказов	Qolgan buyurtmalarni yig‘ish	Hide remaining orders
+Показать остальные заказы	Qolgan buyurtmalarni ko‘rsatish	Show remaining orders
+В коробе есть нужный товар: 	Qutida kerakli mahsulot bor: 	The box contains the required item:\s
+Номер короба или QR паллетсорта	Quti raqami yoki palletsort QR	Box number or sorting pallet QR
+Проверить скан	Skanni tekshirish	Check scan
+Короб подтверждён: 	Quti tasdiqlandi: 	Box confirmed:\s
+2. ВОЗЬМИТЕ ИСХОДНЫЙ ТОВАР ДЛЯ ПЕРЕКЛЕЙКИ\n	2. QAYTA YORLIQLASH UCHUN MANBA MAHSULOTNI OLING\n	2. TAKE THE ORIGINAL ITEM FOR RELABELLING\n
+Название: 	Nomi: 	Name:\s
+Сканируйте исходный ШК	Manba SHKni skanerlang	Scan original barcode
+Подтвердить исходный товар	Manba mahsulotni tasdiqlash	Confirm original item
+ИСХОДНЫЙ ТОВАР ВЕРНЫЙ	MANBA MAHSULOT TO‘G‘RI	ORIGINAL ITEM IS CORRECT
+3. ПЕРЕКЛЕЙТЕ ТОВАР И ОТСКАНИРУЙТЕ НОВЫЙ ШК\n	3. YORLIQNI ALMASHTIRING VA YANGI SHKNI SKANERLANG\n	3. RELABEL THE ITEM AND SCAN THE NEW BARCODE\n
+Должно уехать: 	Jo‘natilishi kerak: 	Item to ship:\s
+Сканируйте новый ШК после переклейки	Yangi SHKni skanerlang	Scan the new barcode after relabelling
+ИСТОЧНИК: ХРАНЕНИЕ БЕЗ КОРОБОВ	MANBA: QUTISIZ SAQLASH	SOURCE: STORAGE WITHOUT BOXES
+ИЗ ЭТОГО КОРОБА БУДЕТ ВЗЯТО\n	BU QUTIDAN OLINADI\n	TO BE TAKEN FROM THIS BOX\n
+ ЕДИНИЦ ТОВАРА · 	 DONA · 	 UNITS ·\s
+ ПОЗИЦИЙ	 TA POZITSIYA	 PRODUCTS
+2. ВОЗЬМИТЕ ТОВАР И ОТСКАНИРУЙТЕ ЕГО ШК\n	2. MAHSULOTNI OLING VA SHKNI SKANERLANG\n	2. TAKE THE ITEM AND SCAN ITS BARCODE\n
+Открыть окно сканирования ШК	SHK skanerlash oynasini ochish	Open barcode scanner
+Товар подтверждён	Mahsulot tasdiqlandi	Item confirmed
+3. ТЕПЕРЬ ОТСКАНИРУЙТЕ КИЗ DATA MATRIX\nНе сканируйте обычный ШК повторно.	3. ENDI DATA MATRIX KIZNI SKANERLANG\nOddiy SHKni qayta skanerlamang.	3. NOW SCAN THE DATA MATRIX MARKING CODE\nDo not scan the regular barcode again.
+Открыть окно сканирования КИЗ	KIZ skanerlash oynasini ochish	Open marking code scanner
+Этот КИЗ уже использовался в WB. Для этой единицы нужна новая маркировка.	Bu KIZ WBda ishlatilgan. Shu mahsulotga yangi markirovka kerak.	This marking code has already been used in WB. This item needs a new marking label.
+Переклеить КИЗ	KIZni almashtirish	Replace marking label
+Взять другую единицу	Boshqa mahsulotni olish	Take another item
+Наклейте новый КИЗ на эту единицу и отсканируйте его. Старую этикетку сохраните до завершения операции.	Shu mahsulotga yangi KIZ yopishtiring va skanerlang. Amal tugaguncha eski yorliqni saqlang.	Apply a new marking label to this item and scan it. Keep the old label until the operation is complete.
+Сканировать новый КИЗ	Yangi KIZni skanerlash	Scan new marking code
+КИЗ НАЙДЕН В ДРУГОМ КОРОБЕ	KIZ BOSHQA QUTIDA TOPILDI	MARKING CODE FOUND IN ANOTHER BOX
+Сейчас числится: 	Hozirgi quti: 	Currently recorded in:\s
+Переместить в открытый короб: 	Ochiq qutiga ko‘chirish: 	Move to the open box:\s
+ПЕРЕМЕСТИТЬ И ПРИНЯТЬ КИЗ	KO‘CHIRISH VA KIZNI QABUL QILISH	MOVE AND ACCEPT MARKING CODE
+Нет — отсканировать другой КИЗ	Yo‘q — boshqa KIZni skanerlash	No — scan another marking code
+ТОВАР ОТПИКАН\nТеперь WMS передаст состав заказа и КИЗ в Ozon.	MAHSULOT SKANERLANDI\nEndi WMS buyurtma va KIZni Ozonga yuboradi.	ITEM SCANNED\nWMS will now send the order contents and marking code to Ozon.
+Передать заказ в Ozon	Buyurtmani Ozonga yuborish	Send order to Ozon
+OZON ПРИНЯЛ СБОРКУ\nЭтикетка формируется. WMS проверяет её автоматически каждые 5 секунд — ждать на этом экране можно без нажатий.	OZON YIG‘IMNI QABUL QILDI\nStiker tayyorlanmoqda. WMS uni har 5 soniyada avtomatik tekshiradi.	OZON ACCEPTED THE ORDER\nThe label is being generated. WMS checks automatically every 5 seconds — no need to tap anything while waiting here.
+ШК и КИЗ подтверждены для 	SHK va KIZ tasdiqlandi: 	Barcode and marking code confirmed for\s
+Товар подтверждён. КИЗ не требуется.	Mahsulot tasdiqlandi. KIZ talab qilinmaydi.	Item confirmed. No marking code required.
+ВСЁ ВЕРНО\n	HAMMASI TO‘G‘RI\n	ALL CORRECT\n
+Отменить принятый КИЗ	Qabul qilingan KIZni bekor qilish	Cancel accepted marking code
+ГОТОВО\nЗаказ собран и записан в заявку.	TAYYOR\nBuyurtma yig‘ildi va arizaga yozildi.	DONE\nOrder picked and recorded in the request.
+Следующий заказ	Keyingi buyurtma	Next order
+Проблема с товаром — отложить	Mahsulotda muammo — keyinga qoldirish	Item problem — postpone
+Наклейка WB временно не загрузилась. Нажмите «Обновить» и не завершайте заказ без правильной наклейки.	WB stikeri vaqtincha yuklanmadi. «Yangilash»ni bosing va to‘g‘ri stikersiz buyurtmani yakunlamang.	The WB label could not be loaded temporarily. Tap “Refresh” and do not complete the order without the correct label.
+НАКЛЕЙТЕ ШК ЗАКАЗА WB\nИЩИТЕ НАКЛЕЙКУ С КРУПНЫМИ ЦИФРАМИ: 	WB BUYURTMA SHK STIKERINI YOPISHTIRING\nKATTA RAQAMLI STIKERNI TOPING: 	APPLY THE WB ORDER BARCODE\nFIND THE LABEL WITH THESE LARGE DIGITS:\s
+Наклейка для заказа №	Buyurtma stikeri №	Label for order #
+часть A: 	A qismi: 	part A:\s
+часть B: 	B qismi: 	part B:\s
+ЭТО ЗАКАЗ 	BU BUYURTMA 	THIS IS AN ORDER FROM\s
+Наклейка WB для него не требуется. Наклейте правильную этикетку 	WB stikeri talab qilinmaydi. To‘g‘ri stikerini yopishtiring: 	It does not need a WB label. Apply the correct label from\s
+ для заказа №	 buyurtma №	 for order #
+Этикетка Ozon ещё не загрузилась. Нажмите «Обновить» и не завершайте заказ без этикетки.	Ozon stikeri hali yuklanmadi. «Yangilash»ni bosing.	The Ozon label has not loaded yet. Tap “Refresh” and do not complete the order without a label.
+НАКЛЕЙТЕ ЭТИКЕТКУ OZON\nЗаказ №	OZON STIKERINI YOPISHTIRING\nBuyurtma №	APPLY THE OZON LABEL\nOrder #
+Этикетка Ozon готовится в безопасном формате. Нажмите «Обновить» через несколько секунд.	Ozon stikeri xavfsiz formatda tayyorlanmoqda. Bir necha soniyadan keyin «Yangilash»ni bosing.	The Ozon label is being prepared in a safe format. Tap “Refresh” in a few seconds.
+Этикетка Ozon получена, но ТСД не смог безопасно открыть PDF. Нажмите «Обновить» — приложение больше не закроется.	Ozon stikeri olindi, ammo TSD PDF faylini xavfsiz ocha olmadi. «Yangilash»ni bosing.	The Ozon label was received, but the handheld could not open the PDF safely. Tap “Refresh” — the app will stay open.
+Тихая печать 50×30 · подключить NIIMBOT B1	Jim chop etish 50×30 · NIIMBOT B1 ni ulash	Silent print 50×30 · connect NIIMBOT B1
+Тихая печать 50×30 · 	Jim chop etish 50×30 · 	Silent print 50×30 ·\s
+Печать 2 стикеров 50×30 · подключить NIIMBOT B1	2 ta 50×30 stiker · NIIMBOT B1 ni ulash	Print 2 labels 50×30 · connect NIIMBOT B1
+Печать 2 стикеров 50×30 · 	2 ta 50×30 stiker · 	Print 2 labels 50×30 ·\s
+Сменить принтер NIIMBOT	NIIMBOT printerni almashtirish	Change NIIMBOT printer
+СКЛАД НЕ УКАЗАН	OMBOR KO‘RSATILMAGAN	WAREHOUSE UNSPECIFIED
+Ищу NIIMBOT B1 рядом… Не выключайте принтер.	Yaqindagi NIIMBOT B1 qidirilmoqda… Printerni o‘chirmang.	Searching for nearby NIIMBOT B1… Keep the printer on.
+Выберите NIIMBOT B1	NIIMBOT B1 ni tanlang	Select NIIMBOT B1
+Не удалось подготовить изображение этикетки для печати.	Chop etish uchun stiker tasvirini tayyorlab bo‘lmadi.	Could not prepare the label image for printing.
+НАПЕЧАТАНО · 	CHOP ETILDI · 	PRINTED ·\s
+ · заказ №	 · buyurtma №	 · order #
+ · 50×30 мм	 · 50×30 mm	 · 50×30 mm
+НАПЕЧАТАНО 2 ЭТИКЕТКИ · 	2 TA STIKER CHOP ETILDI · 	2 LABELS PRINTED ·\s
+ Если NIIMBOT открыт на другом телефоне — закройте там приложение и повторите.	 Agar NIIMBOT boshqa telefonda ochiq bo‘lsa, u yerdagi ilovani yoping va takrorlang.	 If NIIMBOT is open on another phone, close the app there and try again.
+Наклеенных ШК пока нет.	Hozircha yopishtirilgan SHK yo‘q.	No applied labels yet.
+КРУПНЫЕ ЦИФРЫ: 	KATTA RAQAMLAR: 	LARGE DIGITS:\s
+Заказ WB №	WB buyurtmasi №	WB order #
+заявка №	ariza №	request #
+Короб: 	Quti: 	Box:\s
+ШК наклейки: 	Stiker SHK: 	Label barcode:\s
+История наклеек FBS	FBS stikerlar tarixi	FBS label history
+ШАГ 2 ИЗ 2 · ОТСКАНИРУЙТЕ КИЗ	2-QADAM · KIZNI SKANERLANG	STEP 2 OF 2 · SCAN MARKING CODE
+ШАГ 1 ИЗ 2 · ОТСКАНИРУЙТЕ ШК	1-QADAM · SHKNI SKANERLANG	STEP 1 OF 2 · SCAN BARCODE
+Размер: 	O‘lcham: 	Size:\s
+После приёма КИЗ откроется наклейка 	KIZ qabul qilingach stiker ochiladi: 	After accepting the marking code, the label will open:\s
+После ШК это окно переключится на КИЗ.	SHKdan keyin oyna KIZga o‘tadi.	After the barcode, this window will switch to marking code scanning.
+Сканируйте КИЗ Data Matrix	Data Matrix KIZni skanerlang	Scan Data Matrix marking code
+Товар из короба 	Qutidagi mahsulot 	Item from box\s
+Свернуть	Yig‘ish	Collapse
+Отменить принятый КИЗ?	Qabul qilingan KIZ bekor qilinsinmi?	Cancel the accepted marking code?
+КИЗ будет удалён из заказа Wildberries и освобождён в WMS. После этого отсканируйте правильный КИЗ.	KIZ Wildberries buyurtmasidan o‘chiriladi va WMSda bo‘shatiladi. Keyin to‘g‘ri KIZni skanerlang.	The marking code will be removed from the Wildberries order and released in WMS. Then scan the correct marking code.
+Да, отменить	Ha, bekor qilish	Yes, cancel
+Отсканируйте другой КИЗ.	Boshqa KIZni skanerlang.	Scan another marking code.
+ЗАКАЗ №	BUYURTMA №	ORDER #
+СКЛАД: 	OMBOR: 	WAREHOUSE:\s
+НЕ УКАЗАН	ANIQLANMAGAN	UNSPECIFIED
+Отложить заказ?	Buyurtmani keyinga qoldirasizmi?	Postpone order?
+Заказ вернётся в очередь. Используйте это только если товар или короб найти невозможно.	Buyurtma navbatga qaytadi. Faqat mahsulot yoki qutini topib bo‘lmasa foydalaning.	The order will return to the queue. Only use this if the item or box cannot be found.
+Отложить	Keyinga qoldirish	Postpone
+Какого короба нет на паллете?	Palletda qaysi quti yo‘q?	Which box is missing from the pallet?
+Сообщить об отсутствующем коробе?	Yo‘q quti haqida xabar berilsinmi?	Report missing box?
+Паллетсорт: 	Palletsort: 	Sorting pallet:\s
+Менеджер увидит задачу проверки в вебе. Остатки и заявка автоматически не изменятся.	Menejer vebda tekshiruv vazifasini ko‘radi. Qoldiq va ariza avtomatik o‘zgarmaydi.	The manager will see a check task in the web app. Stock and request will not change automatically.
+Отправить сигнал	Xabar yuborish	Send report
+СИГНАЛ ТСД: на паллете нет короба 	TSD XABARI: paletda quti yo‘q 	HANDHELD REPORT: box missing from pallet\s
+[FBS_MISSING_PALLET_BOX] Короб: 	[FBS_MISSING_PALLET_BOX] Quti: 	[FBS_MISSING_PALLET_BOX] Box:\s
+; паллетсорт: 	; saralash paleti: 	; sorting pallet:\s
+; заявка: 	; topshiriq: 	; request:\s
+; заказ: 	; buyurtma: 	; order:\s
+Отправляю сигнал менеджеру…	Menejerga xabar yuborilmoqda…	Sending report to manager…
+Сигнал отправлен. Менеджер проверит короб 	Xabar yuborildi. Menejer qutini tekshiradi: 	Report sent. The manager will check box\s
+ в вебе.	 veb-ilovada.	 in the web app.
+Обновите задание и повторно отсканируйте старый КИЗ.	Topshiriqni yangilang va eski KIZni qayta skanerlang.	Refresh the task and scan the old marking code again.
+Проверяю...	Tekshirilmoqda...	Checking...
+Операция не выполнена. Повторите сканирование.	Amal bajarilmadi. Qayta skanerlang.	Operation failed. Scan again.
+Принято.	Qabul qilindi.	Accepted.
+Задание уже изменилось. Обновляю очередь…	Vazifa allaqachon o‘zgargan. Navbat yangilanmoqda…	The task has changed. Refreshing the queue…
+Загружаю поставки FBS для упаковки...	FBS qadoqlash yetkazib berishlari yuklanmoqda...	Loading FBS shipments for packing...
+Не удалось загрузить грузоместа FBS.	FBS yuk joylarini yuklab bo‘lmadi.	Could not load FBS shipping packages.
+Загрузка...	Yuklanmoqda...	Loading...
+ОТКРЫТ КОРОБ\n	QUTI OCHILDI\n	BOX OPEN\n
+ОТКРЫТО ГРУЗОМЕСТО\n	YUK JOYI OCHILDI\n	SHIPPING PACKAGE OPEN\n
+Заполнено: 	To‘ldirildi: 	Filled:\s
+ · без ограничения	 · cheklovsiz	 · no limit
+Поставка WB: 	WB yetkazib berish: 	WB shipment:\s
+Закрыть грузоместо	Yuk joyini yopish	Close shipping package
+Кладите товар в этот короб и сканируйте ШК каждой положенной единицы. Не собранный товар сначала отпикайте в заявке FBS.	Tovarni shu qutiga joylang va har bir birlik SHKini skanerlang. Yig‘ilmagan tovarni avval FBS buyurtmasida yig‘ing.	Put items into this box and scan each product barcode. First scan unpicked items in the FBS request.
+Сканируйте полный ШК с наклейки заказа WB. Один заказ нельзя уложить дважды или в другое грузоместо.	WB buyurtma stikeridagi to‘liq SHKni skanerlang. Bir buyurtmani ikki marta yoki boshqa joyga qo‘yib bo‘lmaydi.	Scan the full barcode on the WB order label. An order cannot be packed twice or into another shipping package.
+Сканируйте ШК заказа WB	WB buyurtma SHK sini skanerlang	Scan WB order barcode
+Положить товар в короб	Tovarni qutiga joylash	Put item into box
+Добавить заказ в грузоместо	Buyurtmani yuk joyiga qo‘shish	Add order to shipping package
+Последние уложенные товары	Oxirgi joylangan tovarlar	Recently packed items
+Последние уложенные заказы	Oxirgi joylangan buyurtmalar	Recently packed orders
+Заявка WMS №	WMS ariza №	WMS request #
+Большие цифры WB: 	WB katta raqamlari: 	Large WB digits:\s
+Заказ №	Buyurtma №	Order #
+Отменить последнее сканирование	Oxirgi skanerlashni bekor qilish	Undo last scan
+Отменить упаковку полностью	Qadoqlashni to‘liq bekor qilish	Cancel all packing
+ПОСТАВКА 	YETKAZIB BERISH 	SHIPMENT\s
+Упаковано: 	Qadoqlandi: 	Packed:\s
+коробов закрыто: 	yopilgan qutilar: 	boxes closed:\s
+мест закрыто: 	yopilgan joylar: 	packages closed:\s
+Возьмите пустой короб для поставки на СЦ и отсканируйте его номер. Затем кладите товары и сканируйте их ШК.	Saralash markazi uchun bo‘sh qutini oling va raqamini skanerlang. Keyin tovarlarni joylab, SHKlarini skanerlang.	Take an empty box for the sorting-centre shipment and scan its number. Then place items inside and scan their barcodes.
+Возьмите пустой физический короб, наклейте на него QR грузоместа WB и отсканируйте этот QR.	Bo‘sh qutini oling, WB yuk joyi QR stikerini yopishtiring va QRni skanerlang.	Take an empty physical box, apply a WB shipping-package QR label and scan the QR code.
+Сканируйте номер короба FFL	FFL quti raqamini skanerlang	Scan FFL box number
+Сканируйте QR грузоместа WB	WB yuk joyi QR kodini skanerlang	Scan WB shipping-package QR
+Открыть грузоместо	Yuk joyini ochish	Open shipping package
+Выбрать другую поставку	Boshqa yetkazib berishni tanlash	Choose another shipment
+Выберите поставку.	Yetkazib berishni tanlang.	Select a shipment.
+Нет поставок FBS для упаковки. Сначала сформируйте поставку и соберите заказы.	Qadoqlash uchun FBS yetkazib berishlari yo‘q. Avval yetkazib berishni yarating va buyurtmalarni yig‘ing.	No FBS shipments to pack. Create a shipment and pick its orders first.
+Выберите поставку	Yetkazib berishni tanlang	Select shipment
+уложить: 	joylash: 	to pack:\s
+ещё собирается: 	hali yig‘ilmoqda: 	still being picked:\s
+Теперь отсканируйте номер пустого короба FFL.	Endi bo‘sh FFL quti raqamini skanerlang.	Now scan the empty FFL box number.
+Теперь отсканируйте QR грузоместа.	Endi yuk joyi QR kodini skanerlang.	Now scan the shipping-package QR code.
+Сначала выберите поставку.	Avval yetkazib berishni tanlang.	Select a shipment first.
+Отменить всю упаковку?	Butun qadoqlash bekor qilinsinmi?	Cancel all packing?
+Все уже добавленные товары будут удалены из этого упаковочного места и вернутся в очередь. Сами заказы и их сборка не отменятся.	Qo‘shilgan barcha tovarlar bu joydan chiqarilib, navbatga qaytariladi. Buyurtmalar va ularning yig‘ilishi bekor qilinmaydi.	All added items will be removed from this package and returned to the queue. The orders and their picking will not be cancelled.
+Сбросить упаковку	Qadoqlashni tiklash	Reset packing
+Закрыть короб?	Qutini yopasizmi?	Close box?
+Закрыть грузоместо?	Yuk joyini yopasizmi?	Close shipping package?
+Внутри зафиксировано: 	Ichida qayd etilgan: 	Items recorded inside:\s
+ единиц. После закрытия повторное сканирование запрещено.	 dona. Yopilgandan keyin qayta skanerlash taqiqlanadi.	 units. Scanning again is not allowed after closing.
+СЦ Внуково	Vnukovo saralash markazi	Vnukovo sorting centre
+ПВЗ	PVZ	Pickup point
+Заявка WMS: 	WMS ariza: 	WMS request:\s
+Готово.	Tayyor.	Done.
+Активных заявок на сборку нет.	Faol terish topshiriqlari yo‘q.	No active picking requests.
+Заявки загружены: 	Yuklangan topshiriqlar: 	Requests loaded:\s
+\nУже в работе: 	\nAllaqachon bajarilmoqda: 	\nAlready in progress:\s
+\nГород: 	\nShahar: 	\nCity:\s
+ · Статус: 	 · Holat: 	 · Status:\s
+ · строк: 	 · qatorlar: 	 · rows:\s
+Сборка по коробам	Qutilar bo‘yicha terish	Picking by boxes
+Заявка: 	Topshiriq: 	Request:\s
+ · осталось: 	 · qoldi: 	 · remaining:\s
+Короба	Qutilar	Boxes
+ шт · 	 dona · 	 units ·\s
+Осталось упаковать	Qadoqlash uchun qoldi	Still to pack
+ · осталось 	 · qoldi 	 · remaining\s
+Завершить упаковку	Qadoqlashni yakunlash	Finish packing
+Назад к заявке	Topshiriqqa qaytish	Back to request
+Номер короба должен начинаться с FFL.	Quti raqami FFL bilan boshlanishi kerak.	The box number must start with FFL.
+Заявка упакована.	Topshiriq qadoqlandi.	Request packed.
+Операция принята.	Amal qabul qilindi.	Operation accepted.
+найдено коробов: 	 topilgan qutilar: 	boxes found:\s
+\nВ работе на ТСД: 	\nTSDda bajarilmoqda: 	\nIn progress on handheld:\s
+\nЭтап: 	\nBosqich: 	\nStage:\s
+\nСейчас работают: 	\nHozir ishlayotganlar: 	\nCurrently working:\s
+; еще 	; yana 	; more\s
+Операция уже выполнена другим сборщиком или отклонена WMS. Обновите заявку.	Amalni boshqa teruvchi bajargan yoki WMS uni rad etgan. Topshiriqni yangilang.	Another picker has already completed the operation, or WMS rejected it. Refresh the request.
+поиск коробов	qutilarni qidirish	finding boxes
+перемаркировка	qayta yorliqlash	relabelling
+перемещения	ko‘chirishlar	transfers
+контроль отгрузки	jo‘natishni tekshirish	shipment check
+сборка по коробам	qutilar bo‘yicha terish	picking by boxes
+открыта заявка	topshiriq ochildi	request opened
+Пустая заявка от сервера	Serverdan bo‘sh topshiriq keldi	Empty request from server
+Заявка открыта.	Topshiriq ochildi.	Request opened.
+Заявка 	Topshiriq 	Request\s
+Город: 	Shahar: 	City:\s
+Статус: 	Holat: 	Status:\s
+Единиц к отгрузке: 	Jo‘natiladigan birliklar: 	Units to ship:\s
+ · коробов найти: 	 · topish kerak bo‘lgan qutilar: 	 · boxes to find:\s
+Поиск коробов: найдено 	Qutilarni qidirish: topildi 	Box search: found\s
+1. Сборка по коробам	1. Qutilar bo‘yicha terish	1. Picking by boxes
+Обновить заявку	Topshiriqni yangilash	Refresh request
+1. Поиск коробов (	1. Qutilarni qidirish (	1. Find boxes (
+2. Перемаркировка	2. Qayta yorliqlash	2. Relabelling
+3. Перемещения	3. Ko‘chirishlar	3. Transfers
+4. Контроль отгрузки (	4. Jo‘natishni tekshirish (	4. Shipment check (
+Заявка упакована	Topshiriq qadoqlandi	Request packed
+Заявка собрана и ждет проверки менеджером.	Topshiriq terildi, menejer tekshiruvini kutmoqda.	Request picked and awaiting manager review.
+Поиск коробов	Qutilarni qidirish	Find boxes
+Найдено: 	Topildi: 	Found:\s
+\nНа этой паллете нужно найти коробов: 	\nBu paletda topish kerak bo‘lgan qutilar: 	\nBoxes to find on this pallet:\s
+СЛЕДУЮЩИЙ КОРОБ: 	KEYINGI QUTI: 	NEXT BOX:\s
+Сканируйте короб	Qutini skanerlang	Scan box
+Нужно найти · 	Topish kerak · 	Find ·\s
+Ошибка: номер короба должен начинаться с FFL.	Xato: quti raqami FFL bilan boshlanishi kerak.	Error: the box number must start with FFL.
+Короб не нужен: 	Bu quti kerak emas: 	Box not required:\s
+Повторный скан отклонен. Короб уже был пропикан: 	Takroriy skan rad etildi. Quti avval skanerlangan: 	Duplicate scan rejected. Box already scanned:\s
+\nКороб найден: 	\nQuti topildi: 	\nBox found:\s
+Перемаркировка	Qayta yorliqlash	Relabelling
+Перемаркировка: 	Qayta yorliqlash: 	Relabelling:\s
+Выберите короб для перемаркировки:	Qayta yorliqlash uchun qutini tanlang:	Select a box for relabelling:
+Перемаркировка завершена или не требуется.	Qayta yorliqlash tugallangan yoki talab qilinmaydi.	Relabelling is complete or not required.
+\nОсталось: 	\nQoldi: 	\nRemaining:\s
+Сканируйте старый ШК товара	Tovarning eski shtrixkodini skanerlang	Scan old product barcode
+\nСканируйте новый ШК: 	\nYangi shtrixkodni skanerlang: 	\nScan new barcode:\s
+Старый ШК	Eski shtrixkod	Old barcode
+Новый ШК	Yangi shtrixkod	New barcode
+ · размер: 	 · o‘lcham: 	 · size:\s
+Назад к коробам	Qutilarga qaytish	Back to boxes
+Старый ШК принят. Сканируйте новый ШК.	Eski shtrixkod qabul qilindi. Yangi shtrixkodni skanerlang.	Old barcode accepted. Scan the new barcode.
+Неверный товар для перемаркировки: 	Qayta yorliqlash uchun noto‘g‘ri tovar: 	Wrong item for relabelling:\s
+Переклейка подтверждена: 	Qayta yorliqlash tasdiqlandi: 	Relabelling confirmed:\s
+Новый ШК неверный. Нужно: 	Yangi shtrixkod noto‘g‘ri. Keraklisi: 	Incorrect new barcode. Required:\s
+Перемещения: 	Ko‘chirishlar: 	Transfers:\s
+Сканируйте короб, из которого нужно переместить товар.	Tovar olinadigan qutini skanerlang.	Scan the box from which to transfer the items.
+Новый короб открыт: 	Yangi quti ochildi: 	New box opened:\s
+. Сканируйте следующий исходный короб.	. Keyingi manba qutini skanerlang.	. Scan the next source box.
+. Сканируйте новый короб поставки, он должен начинаться с FFL.	. Yangi jo‘natma qutisini skanerlang, raqami FFL bilan boshlanishi kerak.	. Scan a new shipment box; its number must start with FFL.
+. Сканируйте новый короб баланса, он должен начинаться с FFL.	. Qoldiq uchun yangi qutini skanerlang, raqami FFL bilan boshlanishi kerak.	. Scan a new stock box; its number must start with FFL.
+Новый короб FFL	Yangi FFL qutisi	New FFL box
+ · новый короб: 	 · yangi quti: 	 · new box:\s
+. Сканируйте товар.	. Tovarni skanerlang.	. Scan the item.
+Короба, из которых нужно переместить товар:	Tovar olinadigan qutilar:	Boxes to transfer items from:
+в новый короб поставки	yangi jo‘natma qutisiga	to a new shipment box
+остаток на баланс	qolgan tovarni saqlashga	remaining stock to storage
+Что нужно переложить из этого короба:	Bu qutidan ko‘chiriladigan tovarlar:	Items to transfer from this box:
+на баланс	saqlashga	to storage
+Продолжить заполнять короб	Qutini to‘ldirishni davom ettirish	Continue filling box
+Сканируйте следующий исходный короб для нового короба 	Yangi quti uchun keyingi manba qutini skanerlang: 	Scan the next source box for new box\s
+Сменить новый короб	Yangi qutini almashtirish	Change new box
+Сбросить выбор	Tanlovni bekor qilish	Clear selection
+Контроль отгрузки	Jo‘natishni tekshirish	Shipment check
+Контроль отгрузки откроется после поиска коробов, перемаркировки и перемещений.	Jo‘natishni tekshirish qutilar topilgach, qayta yorliqlash va ko‘chirishlar tugagach ochiladi.	Shipment check will become available after finding boxes, relabelling and transfers.
+Отпикайте все короба, которые уезжают в поставку.	Jo‘natmaga ketadigan barcha qutilarni skanerlang.	Scan all boxes leaving in the shipment.
+Короба к отгрузке: 	Jo‘natiladigan qutilar: 	Boxes to ship:\s
+ · подтверждено: 	 · tasdiqlandi: 	 · confirmed:\s
+ · паллет примерно: 	 · taxminiy paletlar: 	 · approximate pallets:\s
+ · единиц: 	 · birliklar: 	 · units:\s
+Сканируйте короб к отгрузке	Jo‘natiladigan qutini skanerlang	Scan box to ship
+Нужно отпикать перед упаковкой	Qadoqlashdan oldin skanerlash kerak	Scan before packing
+Этот короб не участвует в перемещении: 	Bu quti ko‘chirishga kirmaydi: 	This box is not part of the transfer:\s
+Этот короб уже обработан: 	Bu quti avval ishlangan: 	This box has already been processed:\s
+Исходный короб выбран: 	Manba quti tanlandi: 	Source box selected:\s
+. Сканируйте новый короб поставки.	. Yangi jo‘natma qutisini skanerlang.	. Scan the new shipment box.
+. Сканируйте новый короб баланса.	. Qoldiq uchun yangi qutini skanerlang.	. Scan the new stock box.
+Ошибка: номер нового короба должен начинаться с FFL.	Xato: yangi quti raqami FFL bilan boshlanishi kerak.	Error: the new box number must start with FFL.
+Новый короб выбран: 	Yangi quti tanlandi: 	New box selected:\s
+. Сканируйте товар из 	. Tovarni shu qutidan skanerlang: 	. Scan the item from\s
+Перемещение по заявке 	Topshiriq bo‘yicha ko‘chirish: 	Transfer for request\s
+Товар перемещен локально: 	Tovar mahalliy ko‘chirildi: 	Item transferred locally:\s
+. Проверьте очередь: отправлено 	. Navbatni tekshiring: yuborildi 	. Check the queue: sent\s
+, принято 	, qabul qilindi 	, accepted\s
+, отклонено 	, rad etildi 	, rejected\s
+, на повтор 	, qayta urinish uchun 	, to retry\s
+Товар перемещен и записан в WMS: 	Tovar ko‘chirildi va WMSga yozildi: 	Item transferred and recorded in WMS:\s
+Исходный короб обработан: 	Manba quti ishlovdan o‘tdi: 	Source box processed:\s
+. Можно продолжить заполнять новый короб или выбрать другой.	. Yangi qutini to‘ldirishni davom ettiring yoki boshqasini tanlang.	. You can keep filling the new box or choose another one.
+Этот товар не нужен из короба 	Bu tovar ushbu qutidan kerak emas: 	This item is not needed from box\s
+Ошибка: номер короба к отгрузке должен начинаться с FFL.	Xato: jo‘natiladigan quti raqami FFL bilan boshlanishi kerak.	Error: the shipping box number must start with FFL.
+Этот короб не входит в отгрузку: 	Bu quti jo‘natmaga kirmaydi: 	This box is not in the shipment:\s
+Короб уже подтвержден к отгрузке: 	Quti jo‘natish uchun avval tasdiqlangan: 	Box already confirmed for shipment:\s
+Короб к отгрузке подтвержден: 	Quti jo‘natish uchun tasdiqlandi: 	Box confirmed for shipment:\s
+Сначала отпикайте все короба, которые уезжают в поставку.	Avval jo‘natmaga ketadigan barcha qutilarni skanerlang.	Scan all boxes leaving in the shipment first.
+Заявка уже отправлена в WMS как собранная.	Topshiriq WMSga terilgan deb yuborilgan.	Request already sent to WMS as picked.
+Все этапы выполнены. Фиксирую сборку в WMS...	Barcha bosqichlar tugadi. Terish natijasi WMSga yozilmoqda...	All stages complete. Recording picking in WMS...
+Не все движения ТСД приняты WMS. Проверьте очередь и повторите.	WMS TSDdagi barcha harakatlarni qabul qilmagan. Navbatni tekshirib, qayta urining.	WMS has not accepted all handheld stock movements. Check the queue and try again.
+Сборка завершена на ТСД.	TSDda terish yakunlandi.	Picking completed on handheld.
+Заявка собрана и передана менеджеру на проверку.	Topshiriq terildi va menejerga tekshirish uchun yuborildi.	Request picked and sent to the manager for review.
+Выберите режим приемки.	Qabul qilish rejimini tanlang.	Choose a receiving mode.
+Выбрана приемка по боксам. Теперь выберите клиента.	Qutilar bo‘yicha qabul tanlandi. Endi mijozni tanlang.	Receiving by boxes selected. Now select the client.
+Выбрана обычная приемка. Теперь выберите клиента.	Oddiy qabul tanlandi. Endi mijozni tanlang.	Standard receiving selected. Now select the client.
+Клиент выбран. Сканируйте ШК товара.	Mijoz tanlandi. Tovar shtrixkodini skanerlang.	Client selected. Scan the product barcode.
+Клиент выбран. Сканируйте новый бокс/короб.	Mijoz tanlandi. Yangi qutini skanerlang.	Client selected. Scan a new box.
+Сначала завершите или отмените текущий товар.	Avval joriy tovarni tugating yoki bekor qiling.	Finish or cancel the current item first.
+Проверка КИЗ включена. Сканируйте уже уложенные КИЗы — повторного прихода не будет.	KIZ tekshiruvi yoqildi. Joylangan KIZlarni skanerlang — qayta qabul qilinmaydi.	Marking-code check enabled. Scan already packed marking codes — no duplicate receiving will occur.
+Проверка завершена. Сканируйте следующий бокс/короб.	Tekshiruv tugadi. Keyingi qutini skanerlang.	Check complete. Scan the next box.
+Проверка завершена. Продолжайте приемку.	Tekshiruv tugadi. Qabul qilishni davom ettiring.	Check complete. Continue receiving.
+Сканируйте КИЗ для проверки.	Tekshirish uchun KIZni skanerlang.	Scan a marking code to check.
+КИЗ уже принят в текущей приемке	KIZ joriy qabulda avval qabul qilingan	Marking code already accepted in this receiving session
+ в 	 ichida: 	 in\s
+\nПовторно ничего не записано.	\nHech narsa qayta yozilmadi.	\nNothing was recorded again.
+КИЗ уже принят в WMS	KIZ WMSda avval qabul qilingan	Marking code already received in WMS
+ в короб 	 qutiga: 	 into box\s
+Этот КИЗ еще не принят в WMS.\nПроверьте, не пропущен ли товар при приемке.	Bu KIZ WMSda hali qabul qilinmagan.\nQabul paytida tovar o‘tkazib yuborilmaganini tekshiring.	This marking code has not been received in WMS yet.\nCheck whether this item was missed during receiving.
+Не удалось проверить КИЗ: нет связи с WMS. Данные не изменены.	KIZni tekshirib bo‘lmadi: WMS bilan aloqa yo‘q. Ma’lumotlar o‘zgarmadi.	Could not check marking code: no connection to WMS. Data was not changed.
+Выберите клиента приемки.	Qabul qilinayotgan tovar mijozini tanlang.	Select the receiving client.
+Сканируйте ШК нового короба.	Yangi quti shtrixkodini skanerlang.	Scan the new box barcode.
+Этот короб уже использовался в текущей приемке.	Bu quti joriy qabulda avval ishlatilgan.	This box has already been used in the current receiving session.
+Короб открыт. Сканируйте товар.	Quti ochildi. Tovarni skanerlang.	Box opened. Scan the item.
+Короб не открыт в WMS: 	Quti WMSda ochilmadi: 	Box not opened in WMS:\s
+Короб открыт в WMS. Сканируйте товар.	Quti WMSda ochildi. Tovarni skanerlang.	Box opened in WMS. Scan the item.
+Короб не открыт в WMS.	Quti WMSda ochilmadi.	Box not opened in WMS.
+Сканируйте ШК товара.	Tovar shtrixkodini skanerlang.	Scan the product barcode.
+Нужен КИЗ. Сканируйте КИЗ товара.	KIZ talab qilinadi. Tovar KIZini skanerlang.	Marking code required. Scan the product marking code.
+Товар не найден. Создается черновик без обязательного КИЗ.	Tovar topilmadi. Majburiy KIZsiz qoralama yaratilmoqda.	Product not found. Creating a draft without a mandatory marking code.
+Не удалось проверить товар: HTTP 	Tovarni tekshirib bo‘lmadi: HTTP 	Could not check product: HTTP\s
+Сканируйте КИЗ.	KIZni skanerlang.	Scan the marking code.
+\nКИЗ: 	\nKIZ: 	\nMarking code:\s
+КИЗ не принят: не удалось проверить уникальность в WMS.\n	KIZ qabul qilinmadi: WMSda uning takrorlanmasligini tekshirib bo‘lmadi.\n	Marking code not accepted: could not verify uniqueness in WMS.\n
+Восстановите связь и отсканируйте этот КИЗ еще раз.	Aloqani tiklang va bu KIZni qayta skanerlang.	Restore the connection and scan this marking code again.
+Товар добавлен в короб: 	Tovar qutiga qo‘shildi: 	Item added to box:\s
+. В коробе: 	. Qutida: 	. In box:\s
+Локальная очередь приемки недоступна.	Mahalliy qabul navbati mavjud emas.	Local receiving queue is unavailable.
+Без короба	Qutisiz	No box
+Сохраняю товар в WMS: 	Tovar WMSga saqlanmoqda: 	Saving item in WMS:\s
+\nСохраняю товар в WMS.	\nTovar WMSga saqlanmoqda.	\nSaving item in WMS.
+Поштучная приемка ТСД без коробов	TSD orqali qutisiz donalab qabul qilish	Handheld receiving of individual items without boxes
+ОШИБКА ПРИЕМКИ\n	QABUL QILISH XATOSI\n	RECEIVING ERROR\n
+Товар сохранен в очереди и будет передан в WMS после восстановления связи.	Tovar navbatga saqlandi va aloqa tiklanganda WMSga yuboriladi.	Item saved in the queue and will be sent to WMS when the connection is restored.
+Товар принят в WMS: 	Tovar WMSda qabul qilindi: 	Item received in WMS:\s
+Скан товара отменен.	Tovar skani bekor qilindi.	Item scan cancelled.
+Локальная очередь недоступна.	Mahalliy navbat mavjud emas.	Local queue unavailable.
+Сначала откройте короб.	Avval qutini oching.	Open a box first.
+Сначала завершите скан товара и КИЗ или отмените этот товар.	Avval tovar shtrixkodi va KIZini skanerlashni tugating yoki bu tovarni bekor qiling.	Finish scanning the product barcode and marking code, or cancel this item first.
+В коробе нет товара. Сканируйте товар или смените короб.	Qutida tovar yo‘q. Tovarni skanerlang yoki qutini almashtiring.	No items in the box. Scan an item or change the box.
+Сохраняю короб 	Quti saqlanmoqda: 	Saving box\s
+ в WMS. Не нажимайте кнопку повторно.	 WMSga. Tugmani qayta bosmang.	 in WMS. Do not press the button again.
+Приемка ТСД: короб 	TSD qabul: quti 	Handheld receiving: box\s
+ДУБЛЬ КИЗ / ОШИБКА ПРИЕМКИ\n	TAKRORIY KIZ / QABUL QILISH XATOSI\n	DUPLICATE MARKING CODE / RECEIVING ERROR\n
+Короб сохранен в очереди: 	Quti navbatga saqlandi: 	Box saved in queue:\s
+. КИЗ будут проверены при синхронизации.	. KIZlar sinxronlash paytida tekshiriladi.	. Marking codes will be checked during sync.
+Короб закрыт и записан в WMS: 	Quti yopildi va WMSga yozildi: 	Box closed and recorded in WMS:\s
+Передаю и закрываю короб 	Quti yuborilmoqda va yopilmoqda: 	Sending and closing box\s
+ в WMS.	 WMSda.	 in WMS.
+Короб закрыт в WMS и готов к постановке на паллетсорт: 	Quti WMSda yopildi va saralash paletiga qo‘yishga tayyor: 	Box closed in WMS and ready to place on a sorting pallet:\s
+ ещё не закрыт. 	 hali yopilmagan. 	 is not closed yet.\s
+. Операции сохранены в очереди.	. Amallar navbatga saqlandi.	. Operations saved in the queue.
+ сохранён в очереди и ожидает подтверждения закрытия WMS.	 navbatga saqlandi, WMSdan yopilish tasdig‘ini kutmoqda.	 saved in the queue and awaiting WMS closing confirmation.
+Сначала закройте текущий короб.	Avval joriy qutini yoping.	Close the current box first.
+Приемка завершена на ТСД. Подтверждено закрытие коробов: 	TSDda qabul tugadi. Yopilishi tasdiqlangan qutilar: 	Receiving finished on handheld. Confirmed closed boxes:\s
+. Неподтвержденные операции остаются в очереди синхронизации.	. Tasdiqlanmagan amallar sinxronlash navbatida qoladi.	. Unconfirmed operations remain in the sync queue.
+Приемка закрыта. Товаров: 	Qabul yopildi. Tovarlar: 	Receiving closed. Items:\s
+Приемка по боксам закрыта. Боксов: 	Qutilar bo‘yicha qabul yopildi. Qutilar: 	Box receiving closed. Boxes:\s
+, товаров: 	, tovarlar: 	, items:\s
+Укажите логин и пароль сотрудника.	Xodim login va parolini kiriting.	Enter the employee login and password.
+Пустой ответ сервера	Serverdan bo‘sh javob	Empty server response
+Вошел сотрудник: 	Kirish qilgan xodim: 	Employee signed in:\s
+. ТСД: 	. TSD: 	. Handheld:\s
+Для этого ТСД нет доступных клиентов.	Bu TSD uchun mijozlar mavjud emas.	No clients available for this handheld.
+Клиенты загружены: 	Yuklangan mijozlar: 	Clients loaded:\s
+: отправлено 	: yuborildi 	: sent\s
+Вход ТСД сброшен.	TSD kirishi tiklandi.	Handheld sign-in reset.
+Нет связи с WMS. Проверьте интернет и повторите.	WMS bilan aloqa yo‘q. Internetni tekshirib, qayta urinib ko‘ring.	No connection to WMS. Check the internet and try again.
+Ошибка приложения.	Ilova xatosi.	Application error.
+Диспетчер перезагрузил текущую заявку.	Dispetcher joriy arizani qayta yukladi.	The dispatcher reloaded the current request.
+Администратор разблокировал инвентаризацию. Можно продолжать работу.	Administrator inventarizatsiyani blokdan chiqardi. Ishni davom ettirish mumkin.	The administrator unlocked the inventory count. You can continue working.
+Ошибка сканирования	Skanerlash xatosi	Scanning error
+Приёмка	Qabul qilish	Receiving
+Переклейка	Qayta yorliqlash	Relabelling
+Упаковка без коробов	Qutisiz qadoqlash	Packing without boxes
+Список FBS-заявок	FBS topshiriqlari ro‘yxati	FBS request list
+Паллетное хранение	Paletlarda saqlash	Pallet storage
+Перемещение товара	Tovarni ko‘chirish	Item transfer
+Настройки	Sozlamalar	Settings
+Информация	Ma’lumot	Information
+Главное меню	Asosiy menyu	Main menu
+Вход сотрудника	Xodim kirishi	Employee sign-in
+не выполнен	kirilmagan	not signed in
+Онлайн	Onlayn	Online
+Офлайн	Oflayn	Offline
+ · очередь: 	 · navbat: 	 · queue:\s
+Сканировать камерой телефона	Telefon kamerasi bilan skanerlash	Scan with phone camera
+Режим телефона включён. На рабочих экранах используйте кнопку сканирования камерой.	Telefon rejimi yoqildi. Ish ekranlarida kamera orqali skanerlash tugmasidan foydalaning.	Phone mode enabled. Use the camera scan button on work screens.
+Режим аппаратного ТСД включён.	Apparat TSD rejimi yoqildi.	Hardware handheld mode enabled.
+На этом экране нет активного поля сканирования.	Bu ekranda faol skanerlash maydoni yo‘q.	There is no active scan field on this screen.
+На устройстве не найдена камера.	Qurilmada kamera topilmadi.	No camera found on this device.
+Наведите камеру на штрихкод или КИЗ	Kamerani shtrix-kod yoki KIZga qarating	Point the camera at a barcode or marking code
+Закрыть камеру	Kamerani yopish	Close camera
+Камера временно недоступна. Закройте другие приложения с камерой и повторите.	Kamera vaqtincha ishlamayapti. Kameradan foydalanayotgan boshqa ilovalarni yoping va qayta urinib ko‘ring.	Camera temporarily unavailable. Close other apps using the camera and try again.
+Версия 	Versiya 	Version\s
+НЕ ОПРЕДЕЛЁН	ANIQLANMAGAN	UNDETERMINED
+СКЛАД WB: 	WB OMBORI: 	WB WAREHOUSE:\s
+ЯНДЕКС	YANDEX	YANDEX
+СКЛАД ЗАКАЗА\n	BUYURTMA OMBORI\n	ORDER WAREHOUSE\n
+СКЛАД 	OMBOR 	WAREHOUSE\s
+МАРК+ПЕРЕМЕЩЕНИЕ	YORLIQLASH+KO‘CHIRISH	RELABEL+TRANSFER
+ПЕРЕМАРКИРОВКА	QAYTA YORLIQLASH	RELABELLING
+ПЕРЕМЕЩЕНИЕ	KO‘CHIRISH	TRANSFER
+ЦЕЛИКОМ	BUTUN QUTI	WHOLE BOX
+Место хранения не задано	Saqlash joyi belgilanmagan	Storage location not set
+ · Паллета: 	 · Pallet: 	 · Pallet:\s
+постав	jo‘natma	shipment
+Откройте приемку заново.	Qabul qilishni qayta oching.	Reopen receiving.
+Обновите клиентов и выберите клиента приемки.	Mijozlar ro‘yxatini yangilang va qabul mijozini tanlang.	Refresh clients and select the receiving client.
+приемка по боксам	qutilar bo‘yicha qabul	receiving by boxes
+обычная приемка	oddiy qabul	standard receiving
+Новый товар без карточки\nШК 	Kartochkasiz yangi tovar\nShtrixkod 	New product without a product card\nBarcode\s
+Ошибка: в поле ШК товара отсканирован номер короба.	Xato: tovar shtrixkodi maydonida quti raqami skanerlangan.	Error: a box number was scanned in the product barcode field.
+Ошибка: ШК товара не должен быть длиннее 13 символов. Возможно, отсканирован КИЗ.	Xato: tovar shtrixkodi 13 belgidan uzun bo‘lmasligi kerak. Ehtimol, KIZ skanerlangan.	Error: product barcode must be no longer than 13 characters. You may have scanned a marking code.
+Ошибка: в поле КИЗ отсканирован номер короба.	Xato: KIZ maydonida quti raqami skanerlangan.	Error: a box number was scanned in the marking code field.
+Ошибка: КИЗ должен быть длиннее 20 символов. Возможно, отсканирован ШК товара.	Xato: KIZ 20 belgidan uzun bo‘lishi kerak. Ehtimol, tovar shtrixkodi skanerlangan.	Error: marking code must be longer than 20 characters. You may have scanned a product barcode.
+[^A-ZА-ЯЁ0-9]	[^A-ZА-ЯЁ0-9]	[^A-ZА-ЯЁ0-9]
+Отсканирован номер короба. Сейчас нужен КИЗ Data Matrix товара.	Quti raqami skanerlandi. Hozir mahsulotning Data Matrix KIZ kodi kerak.	A box number was scanned. Scan the product Data Matrix marking code now.
+ПАЛЛЕТСОРТ	SARALASH PALETI	SORTING PALLET
+Отсканирован код паллетсорта. Сейчас нужен КИЗ Data Matrix товара.	Palletsort kodi skanerlandi. Hozir mahsulotning Data Matrix KIZ kodi kerak.	A sorting pallet code was scanned. Scan the product Data Matrix marking code now.
+Отсканирован обычный ШК товара. Сейчас нужен КИЗ Data Matrix.	Oddiy mahsulot SHK skanerlandi. Hozir Data Matrix KIZ kerak.	A regular product barcode was scanned. Scan the Data Matrix marking code now.
+Отсканирован не КИЗ. Нужен Data Matrix длиной от 21 до 135 символов.	KIZ skanerlanmadi. 21 dan 135 belgigacha Data Matrix kerak.	This is not a marking code. A Data Matrix code of 21 to 135 characters is required.
+Код неверного типа. КИЗ должен содержать группы 01 (GTIN) и 21 (серийный номер).	Kod turi noto‘g‘ri. KIZ 01 (GTIN) va 21 (seriya raqami) guruhlarini o‘z ichiga olishi kerak.	Wrong code type. A marking code must contain groups 01 (GTIN) and 21 (serial number).
+Короб с дублем: 	Takroriy KIZ bo‘lgan quti: 	Box with duplicate:\s
+Дубль найден в текущей приемке.	Joriy qabulda takroriy KIZ topildi.	Duplicate found in the current receiving session.
+Дубль уже есть в WMS.	Takroriy KIZ WMSda mavjud.	Duplicate already exists in WMS.
+ДУБЛЬ КИЗ\n	TAKRORIY KIZ\n	DUPLICATE MARKING CODE\n
+Обновление уже загружается.	Yangilanish allaqachon yuklanmoqda.	Update already downloading.
+Перед обновлением войдите на ТСД и синхронизируйте операции.	Yangilashdan oldin TSDga kiring va amallarni sinxronlang.	Before updating, sign in on the handheld and sync operations.
+Проверяю очередь и синхронизирую данные перед обновлением...	Yangilashdan oldin navbat tekshirilmoqda va ma’lumotlar sinxronlanmoqda...	Checking queue and syncing data before update...
+Очередь синхронизирована. Загружаю обновление...	Navbat sinxronlandi. Yangilanish yuklanmoqda...	Queue synced. Downloading update...
+Обновление остановлено: не отправлено операций — 	Yangilash to‘xtatildi: yuborilmagan amallar — 	Update stopped: unsent operations —\s
+. Проверьте интернет и повторите синхронизацию.	. Internetni tekshiring va qayta sinxronlang.	. Check the internet and sync again.
+Очередь отправлена. Отклоненные операции сохранены на ТСД и в разборе WMS.	Navbat yuborildi. Rad etilgan amallar TSDda va WMS tekshiruv bo‘limida saqlandi.	Queue sent. Rejected operations saved on the handheld and in WMS review.
+Все данные синхронизированы. Загружаю обновление...	Barcha ma’lumotlar sinxronlandi. Yangilanish yuklanmoqda...	All data synced. Downloading update...
+Скачиваю и проверяю обновление ТСД...	TSD yangilanishi yuklanmoqda va tekshirilmoqda...	Downloading and verifying handheld update...
+На ТСД уже установлена актуальная версия.	TSDda eng so‘nggi versiya o‘rnatilgan.	The latest version is already installed on the handheld.
+Не удалось обновить ТСД: 	TSDni yangilab bo‘lmadi: 	Could not update handheld:\s
+ошибка загрузки	yuklash xatosi	download error
+контрольная сумма APK не совпала	APK nazorat summasi mos kelmadi	APK checksum mismatch
+сервер обновлений ответил HTTP 	yangilash serveri HTTP javobini qaytardi: 	update server returned HTTP\s
+СООБЩЕНИЕ ИЗ ВМС\n	WMSDAN XABAR\n	MESSAGE FROM WMS\n
+ОК — прочитано	OK — o‘qidim	OK — read
+Подтверждаю прочтение…	O‘qilganligi tasdiqlanmoqda…	Confirming read receipt…
+Нет подтверждения от ВМС. Проверьте связь и нажмите ОК ещё раз.	WMSdan tasdiq kelmadi. Aloqani tekshiring va OKni qayta bosing.	No confirmation from WMS. Check connection and tap OK again.
+пустой бокс · сохранён на месте	bo‘sh boks · o‘z joyida saqlandi	empty storage box · kept in place
+архив	arxiv	archived
+подтверждён	tasdiqlangan	confirmed
+не отсканирован	skanerlanmagan	not scanned
+ — НЕ списывается: 	 — hisobdan CHIQARILMAYDI: 	 — NOT written off:\s
+ — останется активным на своём месте\n	 — o‘z joyida faol qoladi\n	 — will remain active at its location\n
+ — будет архивирован\n	 — arxivlanadi\n	 — will be archived\n
+ — проблемный: не найден в WMS · 	 — muammo: WMSda topilmadi · 	 — problem: not found in WMS ·\s
+отсканирован	skanerlangan	scanned
+Администратор · 	Administrator · 	Administrator ·\s
+Сохраняю / проверяю… Не сканируйте повторно.	Saqlanmoqda / tekshirilmoqda… Qayta skanerlamang.	Saving / checking… Do not scan again.
+Ответ не подтверждён. Повторяем ту же операцию, без повторного перемещения.	Natija tasdiqlanmagan. Tovar qayta ko‘chirilmasdan, ayni amal takroran so‘ralmoqda.	Result not confirmed. Retrying the same operation without another transfer.
+Повторить тот же запрос	Ayni so‘rovni takrorlash	Retry the same request
+Продолжить 	Davom ettirish 	Continue\s
+Сверка коробов	Qutilarni solishtirish	Box reconciliation
+Формирование новых коробов	Yangi qutilarni shakllantirish	Creating new boxes
+Завершено	Yakunlangan	Completed
+Перемещено: 	Ko‘chirildi: 	Transferred:\s
+ ед. · Оприходовано найденных: 	 dona · topilganidan qabul qilindi: 	 units · found items received:\s
+Перестроение FBS ещё не завершено.	FBS marshrutlarini qayta tuzish hali tugamadi.	FBS route rebuilding is not complete yet.
+Повторить перестроение маршрутов	Marshrutlarni qayta tuzishni takrorlash	Retry rebuilding routes
+Фактический паллет-сорт целевого короба	Maqsad qutining amaldagi saralash paleti	Actual sorting pallet of the destination box
+Заполняется 	To‘ldirilmoqda: 	Filling\s
+Исходный короб (если КИЗ ещё не привязан)	Manba quti (KIZ hali bog‘lanmagan bo‘lsa)	Source box (if marking code is not linked yet)
+Для учтённого КИЗа исходный короб не нужен. Если КИЗ ещё не привязан, укажите фактический короб; совпадение с исходным паллетом не требуется.	Hisobdagi KIZ uchun manba quti kerak emas. KIZ hali bog‘lanmagan bo‘lsa, amaldagi qutini kiriting; u manba paletda bo‘lishi shart emas.	A source box is not needed for a recorded marking code. If the marking code is not linked yet, specify the actual box; it does not have to be on the source pallet.
+Паллет-сорт или короб	Saralash paleti yoki quti	Sorting pallet or box
+Целевой короб — новый или закрытый	Maqsad quti — yangi yoki yopilgan	Destination box — new or closed
+ШК: 	Shtrixkod: 	Barcode:\s
+Отменить текущую единицу	Joriy birlikni bekor qilish	Cancel current item
+Начать сортировку	Saralashni boshlash	Start sorting
+Расхождения по коробам: 	Qutilar bo‘yicha farqlar: 	Box discrepancies:\s
+Приступить к формированию новых коробов	Yangi qutilarni shakllantirishni boshlash	Start creating new boxes
+Завершить сортировку	Saralashni yakunlash	Finish sorting
+ · закрыт	 · yopilgan	 · closed
+ · открыт	 · ochiq	 · open
+Доложить в 	Tovar qo‘shish: 	Add items to\s
+В главное меню (сессия сохранена)	Asosiy menyu (sessiya saqlangan)	Main menu (session saved)
+Ошибка 	Xato 	Error\s
+Ошибка сервера 	Server xatosi 	Server error\s
+. Повторите проверку.	. Qayta tekshiring.	. Check again.
+Найденная единица учтена в целевом коробе. История операции сохранена.	Topilgan birlik maqsad qutida hisobga olindi. Amal tarixi saqlandi.	Found item recorded in the destination box. Operation history saved.
+Действие сохранено.	Amal saqlandi.	Action saved.
+К списанию: 	Hisobdan chiqariladi: 	To write off:\s
+ ед.\n	 dona\n	 units\n
+Оприходовано найденных: 	Topilganidan qabul qilindi: 	Found items received:\s
+Подтверждаю отсутствие товара и его списание	Tovar yo‘qligini va hisobdan chiqarilishini tasdiqlayman	I confirm that the items are missing and should be written off
+Подтверждение расхождений	Farqlarni tasdiqlash	Confirm discrepancies
+Применить решение	Qarorni qo‘llash	Apply decision
+Ошибка сети. Повторите запрос.	Tarmoq xatosi. So‘rovni takrorlang.	Network error. Retry the request.
+Найден ранее списанный товар	Avval hisobdan chiqarilgan tovar topildi	Previously written-off item found
+Восстановление отменено. Остатки не изменены.	Tiklash bekor qilindi. Qoldiq o‘zgarmadi.	Restore cancelled. Stock unchanged.
+Товар у меня — восстановить 1 шт.	Tovar qo‘limda — 1 donani tiklash	I have the item — restore 1 unit
+Повторить тот же	Ayni so‘rovni takrorlash	Retry same request
+Пустой скан	Bo‘sh skan	Empty scan
+Сначала завершите текущий этап	Avval joriy bosqichni tugating	Complete the current stage first
+ШК не соответствует выбранному отобранному товару	Shtrixkod tanlangan terilgan tovarga mos emas	Barcode does not match the selected picked product
+КИЗ не соответствует выбранной отобранной единице	KIZ tanlangan terilgan birlikka mos emas	Marking code does not match the selected picked item
+Сначала уточните результат размещения в 	Avval joylash natijasini tekshiring: 	First check the result of placing into\s
+Повторите целевой короб 	Maqsad qutini qayta skanerlang: 	Scan the destination box again:\s
+: результат предыдущего запроса ещё не подтверждён	: oldingi so‘rov natijasi hali tasdiqlanmagan	: the previous request result is not confirmed yet
+Отсканируйте исходный короб	Manba qutini skanerlang	Scan source box
+Сканируйте ШК товара, затем КИЗ. Исходный короб определит WMS.	Tovar shtrixkodini, so‘ng KIZini skanerlang. Manba qutini WMS aniqlaydi.	Scan the product barcode, then the marking code. WMS will identify the source box.
+ШК → КИЗ → БОКС	SHTRIXKOD → KIZ → BOKS	BARCODE → MARKING CODE → STORAGE BOX
+КОРОБ → БОКС	QUTI → BOKS	BOX → STORAGE BOX
+Перемещение по одной единице	Donalab ko‘chirish	Transfer one item at a time
+ · ТСД: 	 · TSD: 	 · Handheld:\s
+ИЗ КОРОБА	QUTIDAN	FROM BOX
+\nОстаток: 	\nQoldiq: 	\nStock:\s
+ТОВАР	TOVAR	PRODUCT
+СЕЙЧАС	HOZIR	NOW
+ГОТОВО	TAYYOR	DONE
+СТАТУС	HOLAT	STATUS
+ПОДОЖДИТЕ…	KUTING…	PLEASE WAIT…
+ПОДТВЕРДИТЬ СКАН	SKANNI TASDIQLASH	CONFIRM SCAN
+СВЕРКА КИЗОВ	KIZLARNI SOLISHTIRISH	MARKING CODE RECONCILIATION
+Выбранный ШК: 	Tanlangan shtrixkod: 	Selected barcode:\s
+\nОтсканировано: 	\nSkanerlandi: 	\nScanned:\s
+\nСканируйте ВСЕ КИЗы только этого товара в исходном коробе. Остальные товары не пересчитываются.	\nManba qutidagi faqat shu tovarning BARCHA KIZlarini skanerlang. Boshqa tovarlar qayta sanalmaydi.	\nScan ALL marking codes of this product in the source box. Other products will not be recounted.
+ПОВТОРИТЬ ОТМЕНУ СВЕРКИ	SOLISHTIRISHNI BEKOR QILISHNI TAKRORLASH	RETRY CANCELLING RECONCILIATION
+ПОДТВЕРДИТЬ СВЕРКУ	SOLISHTIRISHNI TASDIQLASH	CONFIRM RECONCILIATION
+ВСЕ КИЗЫ ЭТОГО ТОВАРА ОТСКАНИРОВАНЫ	SHU TOVARNING BARCHA KIZLARI SKANERLANDI	ALL MARKING CODES OF THIS PRODUCT SCANNED
+РЕШЕНИЕ АДМИНИСТРАТОРА	ADMINISTRATOR QARORI	ADMINISTRATOR DECISION
+\n\nПодтверждаю физическое наличие всех отсканированных единиц и указанные изменения. Старые наклейки снятых сборок не использовать.	\n\nBarcha skanerlangan birliklar jismonan mavjudligini va ko‘rsatilgan o‘zgarishlarni tasdiqlayman. Bekor qilingan terishlarning eski yorliqlarini ishlatmang.	\n\nI confirm that all scanned items are physically present and approve the listed changes. Do not use old labels from cancelled picking tasks.
+Подтверждаю	Tasdiqlayman	Confirm
+Полный пересчёт товара	Tovarni to‘liq qayta sanash	Full product recount
+Вы отсканировали все 	Barchasini skanerladingizmi: 	Have you scanned all\s
+ единиц товара с ШК 	 dona, shtrixkod 	 units with barcode\s
+ в коробе 	 qutida: 	 in box\s
+Да, все	Ha, barchasi	Yes, all
+Продолжить сканы	Skanerlashni davom ettirish	Continue scanning
+ОТМЕНИТЬ НЕЗАВЕРШЁННУЮ СВЕРКУ	TUGALLANMAGAN SOLISHTIRISHNI BEKOR QILISH	CANCEL UNFINISHED RECONCILIATION
+Отменить сверку?	Solishtirish bekor qilinsinmi?	Cancel reconciliation?
+Остатки не изменятся. Удерживаемые задания вернутся на проверку КИЗ. Если сверка уже применена, WMS только завершит обновление маршрутов. После отмены пересканируйте все КИЗы заново.	Qoldiq o‘zgarmaydi. Ushlab turilgan topshiriqlar KIZ tekshiruviga qaytadi. Solishtirish allaqachon qo‘llangan bo‘lsa, WMS faqat marshrutlarni yangilashni tugatadi. Bekor qilgandan so‘ng barcha KIZlarni qayta skanerlang.	Stock will not change. Held tasks will return to marking-code verification. If reconciliation has already been applied, WMS will only finish updating routes. After cancelling, rescan all marking codes.
+Отменить сверку	Solishtirishni bekor qilish	Cancel reconciliation
+СВЕРИТЬ КИЗЫ ЭТОГО ТОВАРА	SHU TOVARNING KIZLARINI SOLISHTIRISH	RECONCILE THIS PRODUCT’S MARKING CODES
+Сканируйте по очереди все физические КИЗы выбранного товара. Затем подтвердите полный список.	Tanlangan tovarning amaldagi barcha KIZlarini ketma-ket skanerlang. Keyin to‘liq ro‘yxatni tasdiqlang.	Scan all physical marking codes of the selected product one by one. Then confirm the complete list.
+ОТМЕНИТЬ ТЕКУЩУЮ ЕДИНИЦУ	JORIY BIRLIKNI BEKOR QILISH	CANCEL CURRENT ITEM
+Текущая единица отменена. Сканируйте следующий ШК.	Joriy birlik bekor qilindi. Keyingi shtrixkodni skanerlang.	Current item cancelled. Scan the next barcode.
+ДРУГОЙ ИСХОДНЫЙ КОРОБ	BOSHQA MANBA QUTI	ANOTHER SOURCE BOX
+Скан пустой. Повторите сканирование.	Skan bo‘sh. Qayta skanerlang.	Empty scan. Scan again.
+КИЗ учтён. Сканируйте следующую единицу этого товара.	KIZ hisobga olindi. Shu tovarning keyingi birligini skanerlang.	Marking code recorded. Scan the next item of this product.
+Этот КИЗ уже учтён; повтор не добавлен.	Bu KIZ avval hisobga olingan; takroran qo‘shilmadi.	This marking code is already recorded; no duplicate added.
+Короб открыт. Сканируйте ШК товара.	Quti ochildi. Tovar shtrixkodini skanerlang.	Box opened. Scan the product barcode.
+ Исходный короб пуст и отправлен в архив.	 Manba quti bo‘sh va arxivga yuborildi.	 The source box is empty and has been archived.
+ Сканируйте ШК следующей единицы — её источник определится заново.	 Keyingi birlik shtrixkodini skanerlang — uning manbasi qayta aniqlanadi.	 Scan the next item’s barcode — its source will be identified again.
+ Можно сканировать следующую единицу из этого же короба.	 Shu qutidan keyingi birlikni skanerlashingiz mumkin.	 You can scan the next item from the same box.
+Не удалось сохранить сверку. Подтверждение не отправлено.	Solishtirishni saqlab bo‘lmadi. Tasdiq yuborilmadi.	Could not save reconciliation. Confirmation was not sent.
+Неизвестный результат сверки. Повторите подтверждение; данные операции сохранены.	Solishtirish natijasi noma’lum. Tasdiqlashni takrorlang; amal ma’lumotlari saqlangan.	Reconciliation result unknown. Confirm again; operation data has been saved.
+Не получен список старых коробов. Повторите проверку.	Eski qutilar ro‘yxati olinmadi. Qayta tekshiring.	Old box list not received. Check again.
+Фактическое количество	Haqiqiy miqdor	Actual quantity
+Решение администратора	Administrator qarori	Administrator decision
+Проверить изменения	O‘zgarishlarni tekshirish	Check changes
+Введите количество от 0 до 10000	0 dan 10000 gacha miqdor kiriting	Enter a quantity from 0 to 10000
+Есть неподтверждённая сверка. Нажмите ПОДТВЕРДИТЬ СВЕРКУ. Повторных изменений не будет.	Tasdiqlanmagan solishtirish bor. SOLISHTIRISHNI TASDIQLASHni bosing. O‘zgarishlar takroran qo‘llanmaydi.	There is an unconfirmed reconciliation. Tap CONFIRM RECONCILIATION. Changes will not be applied twice.
+Не удалось восстановить сверку. Нужна проверка менеджера перед новым перемещением.	Solishtirishni tiklab bo‘lmadi. Yangi ko‘chirishdan oldin menejer tekshiruvi kerak.	Could not restore reconciliation. Manager review is required before another transfer.
+Проверяем…	Tekshirilmoqda…	Checking…
+Нет связи с WMS. Повторите скан.	WMS bilan aloqa yo‘q. Qayta skanerlang.	No connection to WMS. Scan again.
+WMS вернула ошибку HTTP 	WMS HTTP xatosini qaytardi: 	WMS returned HTTP error\s
+. Повторите сканирование.	. Qayta skanerlang.	. Scan again.
+Отсканируйте ШК товара	Tovar shtrixkodini skanerlang	Scan the product barcode
+Проверьте результат и подтвердите сверку	Natijani tekshiring va solishtirishni tasdiqlang	Check the result and confirm reconciliation
+Сканируйте все КИЗы выбранного товара	Tanlangan tovarning barcha KIZlarini skanerlang	Scan all marking codes of the selected product
+1. Сканируйте ШК товара	1. Tovar shtrixkodini skanerlang	1. Scan the product barcode
+2. Сканируйте КИЗ этой единицы	2. Shu birlik KIZini skanerlang	2. Scan this item’s marking code
+3. Сканируйте бокс хранения	3. Saqlash boksini skanerlang	3. Scan the storage box
+КИЗ следующей единицы	Keyingi birlik KIZi	Next item’s marking code
+Бокс хранения	Saqlash boksi	Storage box
+ · Цвет: 	 · Rang: 	 · Colour:\s
+Не удалось сохранить операцию на ТСД. Перемещение не отправлено.	Amalni TSDda saqlab bo‘lmadi. Ko‘chirish yuborilmadi.	Could not save operation on handheld. Transfer was not sent.
+Есть неподтверждённое перемещение. Повторно отсканируйте бокс 	Tasdiqlanmagan ko‘chirish bor. Boksni qayta skanerlang: 	There is an unconfirmed transfer. Scan the storage box again:\s
+. Двойного перемещения не будет.	. Ko‘chirish takroran bajarilmaydi.	. The transfer will not be performed twice.
+Не удалось восстановить операцию. Обратитесь к администратору перед новым перемещением.	Amalni tiklab bo‘lmadi. Yangi ko‘chirishdan oldin administratorga murojaat qiling.	Could not restore the operation. Contact an administrator before another transfer.
+Сначала подтвердите результат перемещения в 	Avval ko‘chirish natijasini tasdiqlang: 	First confirm the result of the transfer into\s
+. Повторно отсканируйте этот бокс.	. Shu boksni qayta skanerlang.	. Scan this storage box again.
+WMS ещё не определила исходный короб	WMS manba qutini hali aniqlamadi	WMS has not identified the source box yet
+Сначала подтвердите результат перемещения.	Avval ko‘chirish natijasini tasdiqlang.	Confirm the transfer result first.
+Список уже проверен. Подтвердите или отмените сверку.	Ro‘yxat tekshirilgan. Solishtirishni tasdiqlang yoki bekor qiling.	List already checked. Confirm or cancel reconciliation.
+Сканируйте полный КИЗ товара.	Tovarning to‘liq KIZini skanerlang.	Scan the full product marking code.
+Неполный КИЗ. Повторите скан.	KIZ to‘liq emas. Qayta skanerlang.	Incomplete marking code. Scan again.
+Не более 200 КИЗов за сверку.	Bir solishtirishda 200 tadan ortiq KIZ mumkin emas.	No more than 200 marking codes per reconciliation.
+Сверка уже проверена. Начните проверку заново.	Solishtirish avval tekshirilgan. Tekshiruvni qayta boshlang.	Reconciliation already checked. Start checking again.
+Укажите фактическое количество от 0 до 10000.	Haqiqiy miqdorni 0 dan 10000 gacha kiriting.	Enter the actual quantity from 0 to 10000.
+Нет полного списка или проверки WMS.	To‘liq ro‘yxat yoki WMS tekshiruvi yo‘q.	No complete list or WMS verification.
+Нет подтверждённой административной сверки.	Tasdiqlangan administrator solishtiruvi yo‘q.	No confirmed administrative reconciliation.
+Нет административного решения для подтверждения.	Tasdiqlash uchun administrator qarori yo‘q.	No administrator decision to confirm.
+Нет сохранённой сверки.	Saqlangan solishtirish yo‘q.	No saved reconciliation.
+Нет номера сверки	Solishtirish raqami yo‘q	No reconciliation number
+Повреждена локальная порция закрытия короба.	Qutini yopish uchun mahalliy ma’lumotlar buzilgan.	Local box closing batch is corrupted.
+Для закрытия нужны клиент, короб, документ и от 1 до 1000 товаров.	Yopish uchun mijoz, quti, hujjat va 1 dan 1000 tagacha tovar kerak.	Closing requires a client, box, document and 1 to 1000 items.
+Не указан ШК товара.	Tovar shtrixkodi ko‘rsatilmagan.	Product barcode not specified.
+Помещение: 	Xona: 	Room:\s
+Новый товар: 	Yangi tovar: 	New product:\s
+На этом ТСД нет Bluetooth.	Bu TSDda Bluetooth yo‘q.	This handheld has no Bluetooth.
+Включите Bluetooth на ТСД и повторите поиск принтера.	TSDda Bluetoothni yoqing va printerni qayta qidiring.	Enable Bluetooth on the handheld and search for the printer again.
+Не удалось запустить поиск Bluetooth-принтера.	Bluetooth printerni qidirishni boshlab bo‘lmadi.	Could not start Bluetooth printer search.
+Поиск NIIMBOT B1 завершился ошибкой Bluetooth: 	NIIMBOT B1 qidiruvi Bluetooth xatosi bilan tugadi: 	NIIMBOT B1 search ended with Bluetooth error:\s
+Разрешите приложению поиск Bluetooth-устройств.	Ilovaga Bluetooth qurilmalarini qidirishga ruxsat bering.	Allow the app to search for Bluetooth devices.
+NIIMBOT B1 не найден. Включите принтер, закройте приложение NIIMBOT, 	NIIMBOT B1 topilmadi. Printerni yoqing, NIIMBOT ilovasini yoping, 	NIIMBOT B1 not found. Turn on the printer, close the NIIMBOT app,\s
+поднесите принтер к ТСД и повторите поиск.	printerni TSDga yaqinlashtiring va qayta qidiring.	bring the printer closer to the handheld and search again.
+Изображение этикетки не загружено.	Yorliq rasmi yuklanmagan.	Label image not loaded.
+Подключаю NIIMBOT B1…	NIIMBOT B1ga ulanmoqda…	Connecting to NIIMBOT B1…
+Bluetooth-канал занят. Переподключаю NIIMBOT B1…	Bluetooth kanali band. NIIMBOT B1ga qayta ulanmoqda…	Bluetooth channel busy. Reconnecting to NIIMBOT B1…
+ Первая попытка: 	 Birinchi urinish: 	 First attempt:\s
+Готовлю этикетку 50×30 мм…	50×30 mm yorliq tayyorlanmoqda…	Preparing 50×30 mm label…
+Передаю этикетку на принтер…	Yorliq printerga yuborilmoqda…	Sending label to printer…
+Не удалось напечатать на NIIMBOT B1: 	NIIMBOT B1da chop etib bo‘lmadi: 	Could not print on NIIMBOT B1:\s
+Bluetooth выключен.	Bluetooth o‘chirilgan.	Bluetooth is off.
+Сохранённый адрес принтера неверен.	Saqlangan printer manzili noto‘g‘ri.	Saved printer address is invalid.
+принтер не ответил. Включите B1 и закройте приложение NIIMBOT.	printer javob bermadi. B1ni yoqing va NIIMBOT ilovasini yoping.	printer did not respond. Turn on B1 and close the NIIMBOT app.
+устройство не поддерживает протокол NIIMBOT B1.	qurilma NIIMBOT B1 protokolini qo‘llamaydi.	device does not support the NIIMBOT B1 protocol.
+Bluetooth-канал принтера слишком узкий. Перезапустите B1 и повторите.	Printerning Bluetooth kanali sig‘imi yetarli emas. B1ni qayta yoqing va urinib ko‘ring.	Printer Bluetooth channel is too narrow. Restart B1 and try again.
+подключён не B1/B1 Pro (код модели 	ulangan qurilma B1/B1 Pro emas (model kodi 	connected device is not a B1/B1 Pro (model code\s
+NIIMBOT печатает этикетку…	NIIMBOT yorliqni chop etmoqda…	NIIMBOT is printing the label…
+принтер не подтвердил завершение печати за 26 секунд.	printer 26 soniya ichida chop etish tugaganini tasdiqlamadi.	printer did not confirm print completion within 26 seconds.
+принтер не ответил на команду 0x	printer buyruqqa javob bermadi: 0x	printer did not respond to command 0x
+соединение с принтером потеряно.	printer bilan aloqa uzildi.	connection to printer lost.
+Bluetooth-канал NIIMBOT не поддерживает запись.	NIIMBOT Bluetooth kanali yozishni qo‘llamaydi.	NIIMBOT Bluetooth channel does not support writing.
+Bluetooth-буфер принтера занят.	Printer Bluetooth buferi band.	Printer Bluetooth buffer is busy.
+ТСД не получил подтверждение отправки Bluetooth-команды.	TSD Bluetooth buyrug‘i yuborilganini tasdiqlovchi javob olmadi.	Handheld did not receive confirmation that the Bluetooth command was sent.
+Bluetooth отклонил команду печати (код 	Bluetooth chop etish buyrug‘ini rad etdi (kod 	Bluetooth rejected print command (code\s
+не удалось запустить поиск служб NIIMBOT.	NIIMBOT xizmatlarini qidirishni boshlab bo‘lmadi.	could not start NIIMBOT service discovery.
+ошибка подключения Bluetooth 	Bluetooth ulanish xatosi 	Bluetooth connection error\s
+принтер отключился во время обмена данными.	ma’lumot almashish paytida printer uzildi.	printer disconnected during data transfer.
+не удалось прочитать службы NIIMBOT.	NIIMBOT xizmatlarini o‘qib bo‘lmadi.	could not read NIIMBOT services.
+служба NIIMBOT B1 не найдена.	NIIMBOT B1 xizmati topilmadi.	NIIMBOT B1 service not found.
+не удалось включить ответы NIIMBOT на ТСД.	TSDda NIIMBOT javoblarini yoqib bo‘lmadi.	could not enable NIIMBOT responses on handheld.
+NIIMBOT не предоставил канал ответов. Перезапустите принтер.	NIIMBOT javob kanalini bermadi. Printerni qayta yoqing.	NIIMBOT did not provide a response channel. Restart the printer.
+не удалось включить ответы принтера.	Printer javoblarini yoqib bo‘lmadi.	could not enable printer responses.
+принтер не разрешил канал уведомлений.	printer bildirishnoma kanaliga ruxsat bermadi.	printer did not allow the notification channel.
+Нет операций для синхронизации	Sinxronlash uchun amallar yo‘q	No operations to sync
+Операция отклонена сервером	Amal server tomonidan rad etildi	Operation rejected by server
+Операция требует разбора	Amal tekshiruv talab qiladi	Operation needs review
+Нет ответа по операции	Amal bo‘yicha javob yo‘q	No response for operation
+Синхронизация завершена	Sinxronlash yakunlandi	Sync complete
+Синхронизация завершена. Решения: 	Sinxronlash yakunlandi. Qarorlar: 	Sync complete. Decisions:\s
+Ошибка сети	Tarmoq xatosi	Network error
+Ошибка синхронизации	Sinxronlash xatosi	Sync error
+Расхождение инвентаризации	Inventarizatsiya farqi	Inventory count discrepancy
+SKU не найден	SKU topilmadi	SKU not found
+Короб не найден	Quti topilmadi	Box not found
+Ошибка приемки	Qabul qilish xatosi	Receiving error
+Не тот ТСД	Boshqa TSD	Wrong handheld
+Ошибка данных	Ma’lumotlar xatosi	Data error
+Ручное отклонение	Qo‘lda rad etilgan	Manually rejected
+Другая причина	Boshqa sabab	Other reason
+Не удалось получить ответ ВМС. Повторите попытку.	WMSdan javob olib bo‘lmadi. Qayta urining.	Could not get a response from WMS. Try again.
+Нет связи с ВМС. Повторите сканирование.	WMS bilan aloqa yo‘q. Qayta skanerlang.	No connection to WMS. Scan again.
+Поиск КИЗ	KIZni qidirish	Find marking code
+Загружаю назначенные вам заявки…	Sizga biriktirilgan topshiriqlar yuklanmoqda…	Loading requests assigned to you…
+В меню	Menyuga	Menu
+Нет активных заявок поиска.	Faol qidiruv topshiriqlari yo‘q.	No active search requests.
+Выберите заявку. Найденный товар откладывайте отдельно.	Topshiriqni tanlang. Topilgan tovarlarni alohida qo‘ying.	Select a request. Put found items aside.
+ · найдено 	 · topildi 	 · found\s
+Поиск · заявка №	Qidiruv · topshiriq №	Search · request #
+Сначала отсканируйте короб из списка, затем КИЗы товаров внутри.	Avval ro‘yxatdagi qutini, keyin ichidagi tovarlarning KIZlarini skanerlang.	Scan a box from the list first, then scan the marking codes of items inside.
+Сканируйте короб или КИЗ	Quti yoki KIZni skanerlang	Scan box or marking code
+Список заявок	Topshiriqlar ro‘yxati	Request list
+Найдено 	Topildi 	Found\s
+\nПоиск завершён. Отложите найденные товары отдельно.	\nQidiruv tugadi. Topilgan tovarlarni alohida qo‘ying.	\nSearch complete. Put found items aside.
+✓ Найден · 	✓ Topildi · 	✓ Found ·\s
+Найти · 	Topish kerak · 	Find ·\s
+Паллет-сорт не указан	Saralash paleti ko‘rsatilmagan	Sorting pallet unspecified
+\nШК: 	\nShtrixkod: 	\nBarcode:\s
+Короб открыт. Сканируйте КИЗы внутри. Нужный товар отложите отдельно.	Quti ochildi. Ichidagi KIZlarni skanerlang. Kerakli tovarni alohida qo‘ying.	Box opened. Scan marking codes inside. Put the required item aside.
+Сначала отсканируйте нужный короб из списка.	Avval ro‘yxatdagi kerakli qutini skanerlang.	Scan the required box from the list first.
+Этот короб не входит в заявку поиска.	Bu quti qidiruv topshirig‘iga kirmaydi.	This box is not in the search request.
+✧ Элькапоне ✧	✧ Элькапоне ✧	✧ Элькапоне ✧
+Продолжить →	Davom etish →	Continue →
+Инчантикс....волшебная пыль	Enchantix....sehrli chang	Enchantix....magic dust
+Инчантикс....	Enchantix....	Enchantix....
+ПОДТВЕРДИТЕ ФИЗИЧЕСКИЙ ОТБОР\nЗаказ №	MAHSULOT OLINGANINI TASDIQLANG\nBuyurtma №	CONFIRM PHYSICAL PICKING\nOrder #
+В ЗАКАЗЕ: 	BUYURTMADA: 	IN ORDER:\s
+ ЕД.	 DONA	 UNITS
+ОТСКАНИРОВАНО: 	SKANERLANGAN: 	SCANNED:\s
+ ИЗ 	 / 	 OF\s
+НАКЛЕЙТЕ НАКЛЕЙКУ OZON\n№ 	OZON STIKERINI YOPISHTIRING\n№ 	APPLY THE OZON LABEL\n#\s
+После КИЗ нажмите «ТОВАР ОТОБРАН».	KIZdan keyin «MAHSULOT OLINDI»ni bosing.	After the marking code, tap “ITEM PICKED”.
+Сканируйте ШК каждой единицы товара.	Har bir mahsulot SHKini skanerlang.	Scan the barcode of each item.
+После ШК подтвердите сборку.	SHKdan keyin yig‘ishni tasdiqlang.	After the barcode, confirm picking.
+ · осталось единиц: 	 · qolgan birliklar: 	 · units remaining:\s
+Продолжите начатый заказ.	Boshlangan buyurtmani davom ettiring.	Continue the order you started.
+Повторная проверка заказа WB №{0}. Отсканируйте заново только ШК товара{0}. Остальные заказы заявки повторно собирать не нужно.	WB №{0} buyurtmasini qayta tekshirish. Faqat tovar shtrixkodini{0} qayta skanerlang. Topshiriqdagi boshqa buyurtmalarni qayta terish kerak emas.	Rechecking WB order #{0}. Rescan only the product barcode{0}. Other orders in the request do not need to be picked again.
+Аварийная локальная сборка: {0} не изменяется. Следуйте подсказке на экране.	Favqulodda mahalliy terish: {0} o‘zgarmaydi. Ekrandagi ko‘rsatmaga amal qiling.	Emergency local picking: {0} remains unchanged. Follow the on-screen instructions.
+Заказ назначен. Следуйте подсказке на экране.	Buyurtma biriktirildi. Ekrandagi ko‘rsatmaga amal qiling.	Order assigned. Follow the on-screen instructions.
+Не удалось обновить очередь маркетплейса. Повторите через минуту.	Marketpleys navbatini yangilab bo‘lmadi. Bir daqiqadan keyin qayta urining.	Could not refresh the marketplace queue. Try again in a minute.
+В текущей поставке остался заказ {0}, но он закреплён за сотрудником {0}. Продолжите его на том ТСД или отложите там задание.	Joriy jo‘natmada {0} buyurtmasi qoldi, lekin u {0} xodimiga biriktirilgan. O‘sha TSDda davom ettiring yoki o‘sha yerda topshiriqni keyinga qoldiring.	Order {0} remains in this shipment but is assigned to employee {0}. Continue on that handheld or postpone the task there.
+По FBS-заявке №{0} пока нет готовых к сборке заказов. Проверьте статус заказа на маркетплейсе и доступные остатки.	FBS №{0} topshirig‘ida hozircha terishga tayyor buyurtmalar yo‘q. Marketpleysdagi buyurtma holatini va mavjud qoldiqni tekshiring.	FBS request #{0} has no orders ready for picking yet. Check order status on the marketplace and available stock.
+Готовых заказов нет. Заказы появятся после создания заявки и перевода поставки в статус «На сборке».	Tayyor buyurtmalar yo‘q. Ular topshiriq yaratilgach va jo‘natma “Terishda” holatiga o‘tkazilgach paydo bo‘ladi.	No ready orders. Orders will appear after creating a request and setting the shipment to “Picking”.
+Заказ уже собран.	Buyurtma allaqachon terilgan.	Order already picked.
+ШК {0} уже принят для заказа №{0}. Теперь отсканируйте короб, бокс или паллетсорт, откуда взят товар.	{0} shtrixkodi №{0} buyurtmasi uchun qabul qilingan. Endi tovar olingan quti, boks yoki saralash paletini skanerlang.	Barcode {0} is already accepted for order #{0}. Now scan the box, storage box or sorting pallet where the item was taken from.
+КИЗ распознан, но пока не записан. Сначала укажите короб или выберите «Без короба», затем повторите сканирование КИЗ.	KIZ aniqlandi, lekin hali yozilmadi. Avval qutini kiriting yoki “Qutisiz”ni tanlang, keyin KIZni qayta skanerlang.	Marking code recognised but not recorded yet. Specify a box or select “No box” first, then scan the marking code again.
+Источник уже отложен. Фактический короб будет указан при закрытии заявки.	Manbani ko‘rsatish keyinga qoldirilgan. Amaldagi quti topshiriq yopilganda kiritiladi.	Source entry already postponed. The actual box will be specified when closing the request.
+Товар принят без указания источника. Фактический короб обязательно укажите при закрытии заявки.	Tovar manbasiz qabul qilindi. Topshiriqni yopishda amaldagi qutini albatta kiriting.	Item accepted without a source. You must specify the actual box when closing the request.
+Короб {0} уже подтверждён.	{0} qutisi allaqachon tasdiqlangan.	Box {0} is already confirmed.
+Короб {0} принят как источник уже отсканированного товара. Выполните переклейку и отсканируйте новый ШК.	{0} qutisi skanerlangan tovarning manbasi sifatida qabul qilindi. Yorliqni almashtiring va yangi shtrixkodni skanerlang.	Box {0} accepted as the source of the scanned item. Relabel it and scan the new barcode.
+Короб {0} принят как источник уже отсканированного товара. Теперь сканируйте КИЗ.	{0} qutisi skanerlangan tovarning manbasi sifatida qabul qilindi. Endi KIZni skanerlang.	Box {0} accepted as the source of the scanned item. Now scan the marking code.
+Короб {0} принят как источник уже отсканированного товара. Переходите к наклейке.	{0} qutisi skanerlangan tovarning manbasi sifatida qabul qilindi. Yorliqni yopishtirishga o‘ting.	Box {0} accepted as the source of the scanned item. Proceed to applying the label.
+Короб {0} с палет-сорта {0} принят. Найдите исходный товар «{0}» и сканируйте его ШК.	{0} qutisi {0} saralash paletidan qabul qilindi. Asl “{0}” tovarini toping va shtrixkodini skanerlang.	Box {0} from sorting pallet {0} accepted. Find the original item “{0}” and scan its barcode.
+Короб {0} с палет-сорта {0} принят. Теперь сканируйте ШК товара.	{0} qutisi {0} saralash paletidan qabul qilindi. Endi tovar shtrixkodini skanerlang.	Box {0} from sorting pallet {0} accepted. Now scan the product barcode.
+Задание обновлено. Продолжайте с текущего шага.	Topshiriq yangilandi. Joriy bosqichdan davom eting.	Task refreshed. Continue from the current step.
+Короб {0} принят. Готовая единица уже занята другим заказом, поэтому используйте исходный товар «{0}» и выполните переклейку.	{0} qutisi qabul qilindi. Tayyor birlik boshqa buyurtma uchun band, shuning uchun asl “{0}” tovaridan foydalaning va yorlig‘ini almashtiring.	Box {0} accepted. The ready item is assigned to another order, so use the original item “{0}” and relabel it.
+Короб {0} нужен заявке. Переключено на заказ №{0}. Теперь сканируйте ШК товара.	{0} qutisi topshiriq uchun kerak. №{0} buyurtmasiga o‘tildi. Endi tovar shtrixkodini skanerlang.	Box {0} is needed for this request. Switched to order #{0}. Now scan the product barcode.
+Короб {0} нужен заявке. Переключено на заказ №{0}. Найдите исходный товар «{0}» и сканируйте его ШК.	{0} qutisi topshiriq uchun kerak. №{0} buyurtmasiga o‘tildi. Asl “{0}” tovarini toping va shtrixkodini skanerlang.	Box {0} is needed for this request. Switched to order #{0}. Find the original item “{0}” and scan its barcode.
+ШК {0} нужен для заказа №{0}. {0}	{0} shtrixkodi №{0} buyurtmasi uchun kerak. {0}	Barcode {0} is needed for order #{0}. {0}
+Товар уже подтверждён.	Tovar allaqachon tasdiqlangan.	Item already confirmed.
+Исходный товар верный. Переклейте его в «{0}» и отсканируйте новый ШК.	Asl tovar to‘g‘ri. Uni “{0}” deb qayta yorliqlang va yangi shtrixkodni skanerlang.	Original item is correct. Relabel it as “{0}” and scan the new barcode.
+Переклейка подтверждена. Теперь отсканируйте КИЗ.	Qayta yorliqlash tasdiqlandi. Endi KIZni skanerlang.	Relabelling confirmed. Now scan the marking code.
+Товар верный. Теперь отсканируйте КИЗ.	Tovar to‘g‘ri. Endi KIZni skanerlang.	Item is correct. Now scan the marking code.
+Переклейка подтверждена. Подтвердите сборку.	Qayta yorliqlash tasdiqlandi. Terishni tasdiqlang.	Relabelling confirmed. Confirm picking.
+Товар верный. Подтвердите сборку.	Tovar to‘g‘ri. Terishni tasdiqlang.	Item is correct. Confirm picking.
+Старый КИЗ связан с прошлым заказом. Переклейте эту единицу на новый КИЗ.	Eski KIZ oldingi buyurtmaga bog‘langan. Bu birlikka yangi KIZ yorlig‘ini yopishtiring.	The old marking code is linked to a previous order. Apply a new marking label to this item.
+КИЗ уже принят для {0}.	KIZ {0} uchun allaqachon qabul qilingan.	Marking code already accepted for {0}.
+Переклейка отменена. Отсканируйте КИЗ другой единицы.	Qayta yorliqlash bekor qilindi. Boshqa birlikning KIZini skanerlang.	Relabelling cancelled. Scan another item’s marking code.
+Переклейка зарегистрирована. Завершите проверку короба, затем продолжите сборку с новым КИЗ.	Qayta yorliqlash qayd etildi. Quti tekshiruvini tugating, keyin yangi KIZ bilan terishni davom ettiring.	Relabelling recorded. Finish the box check, then continue picking with the new marking code.
+КИЗ числится в коробе {0}, а товар взят из {0}. Подтвердите перенос одной единицы.	KIZ {0} qutisida hisobda, lekin tovar {0} qutisidan olingan. Bir birlik ko‘chirilishini tasdiqlang.	Marking code is recorded in box {0}, but the item was taken from {0}. Confirm transfer of one item.
+КИЗ принят локально в WMS. Товар перемещён в короб {0}. Wildberries не изменялся. Подтвердите сборку заказа.	KIZ WMSda mahalliy qabul qilindi. Tovar {0} qutisiga ko‘chirildi. Wildberries o‘zgarmadi. Buyurtma terilishini tasdiqlang.	Marking code accepted locally in WMS. Item moved to box {0}. Wildberries was not changed. Confirm order picking.
+КИЗ принят локально в аварийном режиме. Wildberries не изменялся. Подтвердите сборку заказа.	KIZ favqulodda rejimda mahalliy qabul qilindi. Wildberries o‘zgarmadi. Buyurtma terilishini tasdiqlang.	Marking code accepted locally in emergency mode. Wildberries was not changed. Confirm order picking.
+КИЗ принят в WMS для {0}. Товар перемещён в короб {0}. Подтвердите сборку заказа.	KIZ WMSda {0} uchun qabul qilindi. Tovar {0} qutisiga ko‘chirildi. Buyurtma terilishini tasdiqlang.	Marking code accepted in WMS for {0}. Item moved to box {0}. Confirm order picking.
+КИЗ принят в WMS для {0}. Подтвердите сборку заказа.	KIZ WMSda {0} uchun qabul qilindi. Buyurtma terilishini tasdiqlang.	Marking code accepted in WMS for {0}. Confirm order picking.
+КИЗ принят Wildberries: прежний КИЗ заменён на фактически отсканированный. Подтвердите сборку заказа.	KIZ Wildberriesda qabul qilindi: eski KIZ amalda skanerlanganiga almashtirildi. Buyurtma terilishini tasdiqlang.	Wildberries accepted the marking code: the old code was replaced with the scanned code. Confirm order picking.
+КИЗ принят Wildberries и перепривязан к фактической единице в коробе {0}. Количество товара не изменялось. Подтвердите сборку заказа.	KIZ Wildberriesda qabul qilindi va {0} qutisidagi haqiqiy birlikka qayta bog‘landi. Tovar soni o‘zgarmadi. Buyurtma terilishini tasdiqlang.	Wildberries accepted the marking code and linked it to the actual item in box {0}. Quantity unchanged. Confirm order picking.
+КИЗ принят Wildberries. Товар перемещён из короба {0} в {0}. Подтвердите сборку заказа.	KIZ Wildberriesda qabul qilindi. Tovar {0} qutisidan {0} qutisiga ko‘chirildi. Buyurtma terilishini tasdiqlang.	Wildberries accepted the marking code. Item moved from box {0} to {0}. Confirm order picking.
+КИЗ принят Wildberries и заменил устаревшую запись в коробе {0}. Количество товара не изменилось. Подтвердите сборку заказа.	KIZ Wildberriesda qabul qilindi va {0} qutisidagi eskirgan yozuvni almashtirdi. Tovar soni o‘zgarmadi. Buyurtma terilishini tasdiqlang.	Wildberries accepted the marking code, replacing an outdated record in box {0}. Quantity unchanged. Confirm order picking.
+КИЗ принят Wildberries и записан в WMS без изменения количества товара. Подтвердите сборку заказа.	KIZ Wildberriesda qabul qilindi va tovar soni o‘zgarmasdan WMSga yozildi. Buyurtma terilishini tasdiqlang.	Wildberries accepted the marking code and it was recorded in WMS without changing quantity. Confirm order picking.
+КИЗ принят Wildberries. Подтвердите сборку заказа.	KIZ Wildberriesda qabul qilindi. Buyurtma terilishini tasdiqlang.	Wildberries accepted the marking code. Confirm order picking.
+Заказ {0} передан в Ozon. Ozon формирует этикетку; нажмите «Обновить» через несколько секунд.	{0} buyurtmasi Ozonga yuborildi. Ozon yorliq tayyorlamoqda; bir necha soniyadan keyin “Yangilash”ni bosing.	Order {0} sent to Ozon. Ozon is generating the label; tap “Refresh” in a few seconds.
+Готово. Заказ собран и записан в заявку.	Tayyor. Buyurtma terildi va topshiriqqa yozildi.	Done. Order picked and recorded in the request.
+Принятого КИЗа в этом заказе нет.	Bu buyurtmada qabul qilingan KIZ yo‘q.	There is no accepted marking code in this order.
+КИЗ освобождён локально в WMS. Wildberries не изменялся. Отсканируйте другой КИЗ.	KIZ WMSda mahalliy bo‘shatildi. Wildberries o‘zgarmadi. Boshqa KIZni skanerlang.	Marking code released locally in WMS. Wildberries unchanged. Scan another marking code.
+КИЗ освобождён в WMS для {0}. Отсканируйте другой КИЗ.	KIZ WMSda {0} uchun bo‘shatildi. Boshqa KIZni skanerlang.	Marking code released in WMS for {0}. Scan another marking code.
+КИЗ уже отменён. Отсканируйте другой КИЗ.	KIZ allaqachon bekor qilingan. Boshqa KIZni skanerlang.	Marking code already cancelled. Scan another marking code.
+КИЗ отменён в Wildberries и освобождён в WMS. Отсканируйте другой КИЗ.	KIZ Wildberriesda bekor qilindi va WMSda bo‘shatildi. Boshqa KIZni skanerlang.	Marking code cancelled in Wildberries and released in WMS. Scan another marking code.
+Заказ отложен. Можно взять следующий.	Buyurtma keyinga qoldirildi. Keyingisini olish mumkin.	Order postponed. You can take the next one.
+Заявка не найдена.	Topshiriq topilmadi.	Request not found.
+Двухэтапная сборка ФБО выключена.	Ikki bosqichli FBO terish o‘chirilgan.	Two-stage FBO picking is disabled.
+Этот режим предназначен для ФБО с учётом по коробам.	Bu rejim qutilar bo‘yicha hisoblanadigan FBO uchun.	This mode is for FBO tracked by boxes.
+Укажите филиал заявки.	Topshiriq filialini kiriting.	Specify the request branch.
+У каждой строки ФБО должны быть товар, ШК и положительное количество.	Har bir FBO qatorida tovar, shtrixkod va musbat miqdor bo‘lishi kerak.	Each FBO line must have a product, barcode and positive quantity.
+Сначала завершите проверку балансов волны.	Avval to‘lqin qoldiqlarini tekshirishni tugating.	Finish checking wave balances first.
+Номер операции уже использован с другими данными.	Amal raqami boshqa ma’lumotlar bilan ishlatilgan.	Operation number already used with different data.
+Заявка недоступна для сборки.	Topshiriq terish uchun mavjud emas.	Request unavailable for picking.
+Сначала начните отбор.	Avval terishni boshlang.	Start picking first.
+Заявка уже обрабатывалась старым способом. Требуется отдельный перенос её состояния.	Topshiriq eski usulda ishlangan. Uning holatini alohida ko‘chirish talab qilinadi.	Request already processed using the old method. Its state requires a separate migration.
+Состав заявки изменён после начала отбора. Нужна сверка собранных единиц.	Terish boshlanganidan keyin topshiriq tarkibi o‘zgardi. Terilgan birliklarni solishtirish kerak.	Request contents changed after picking started. Reconcile the picked items.
+Этап изменился. Обновите заявку.	Bosqich o‘zgardi. Topshiriqni yangilang.	Stage changed. Refresh the request.
+Сначала отсканируйте паллет, на котором сейчас находится этот короб.	Avval bu quti hozir turgan paletni skanerlang.	Scan the pallet where this box is currently located first.
+Состав КИЗ не совпадает с остатком. Выполните актуализацию короба.	KIZlar tarkibi qoldiqqa mos emas. Quti qoldig‘ini yangilang.	Marking codes do not match stock. Recount and update the box.
+Короб нельзя забрать целиком. Отбирайте нужное количество через ШК и КИЗ.	Qutini butunlay olib bo‘lmaydi. Kerakli miqdorni shtrixkod va KIZ orqali tering.	Cannot take the whole box. Pick the required quantity by barcode and marking code.
+Этот товар не требуется или уже полностью отобран.	Bu tovar kerak emas yoki to‘liq terilgan.	This product is not required or has already been fully picked.
+После ШК отсканируйте КИЗ.	Shtrixkoddan keyin KIZni skanerlang.	After the barcode, scan the marking code.
+Этот КИЗ не доступен в указанном коробе для данного товара.	Bu KIZ ko‘rsatilgan qutida shu tovar uchun mavjud emas.	This marking code is not available in the specified box for this product.
+Неоднозначный КИЗ.	KIZ bir nechta yozuvga mos keladi.	Ambiguous marking code.
+КИЗ уже отобран другим сотрудником.	KIZ boshqa xodim tomonidan terilgan.	Marking code already picked by another employee.
+Сначала отберите все единицы заявки.	Avval topshiriqdagi barcha birliklarni tering.	Pick all items in the request first.
+Короб уже закрыт или принадлежит другой сборке.	Quti yopilgan yoki boshqa terishga tegishli.	Box already closed or belongs to another picking task.
+Для упаковки нужен пустой короб.	Qadoqlash uchun bo‘sh quti kerak.	An empty box is required for packing.
+Все отдельные единицы уже вложены.	Barcha alohida birliklar joylangan.	All individual items have already been packed.
+Сначала откройте короб для упаковки.	Avval qadoqlash uchun qutini oching.	Open a packing box first.
+Единица не отобрана для этой заявки или уже вложена. Проверьте ШК и КИЗ.	Birlik bu topshiriq uchun terilmagan yoki allaqachon joylangan. Shtrixkod va KIZni tekshiring.	Item not picked for this request or already packed. Check barcode and marking code.
+КИЗ перемещён после отбора. Нужна сверка.	KIZ terishdan keyin ko‘chirilgan. Solishtirish kerak.	Marking code moved after picking. Reconciliation required.
+Этот короб не отобран целиком или уже добавлен.	Bu quti butunlay terilmagan yoki allaqachon qo‘shilgan.	This box was not picked whole or has already been added.
+Отложить можно только пустой открытый короб этой заявки.	Faqat shu topshiriqning bo‘sh ochiq qutisini keyinga qoldirish mumkin.	Only an empty open box of this request can be set aside.
+Короб не открыт или уже закрыт.	Quti ochilmagan yoki yopilgan.	Box not open or already closed.
+Нельзя закрыть пустой короб.	Bo‘sh qutini yopib bo‘lmaydi.	Cannot close an empty box.
+Не все отобранные единицы разложены по коробам.	Barcha terilgan birliklar qutilarga joylanmagan.	Not all picked items have been packed into boxes.
+Закройте все короба.	Barcha qutilarni yoping.	Close all boxes.
+Короб не входит в поставку.	Quti jo‘natmaga kirmaydi.	Box is not in the shipment.
+Этот короб уже подтверждён.	Bu quti allaqachon tasdiqlangan.	This box is already confirmed.
+Отсканируйте все короба поставки.	Jo‘natmaning barcha qutilarini skanerlang.	Scan all shipment boxes.
+Неизвестное действие.	Noma’lum amal.	Unknown action.
+Сканируйте ШК короба.	Quti shtrixkodini skanerlang.	Scan the box barcode.
+Короб недоступен в филиале и у клиента заявки.	Quti topshiriq filiali va mijozida mavjud emas.	Box unavailable in the request’s branch and client.
+Сканируйте ШК короба FFL.	FFL qutisi shtrixkodini skanerlang.	Scan the FFL box barcode.
+Короб участвует в актуализации или другой активной сборке.	Quti qoldig‘i yangilanmoqda yoki boshqa faol terishda qatnashmoqda.	Box is being recounted or used in another active picking task.
+КИЗ отсутствует или имеет несколько записей. Нужна актуализация.	KIZ yo‘q yoki bir nechta yozuvga ega. Qoldiqni yangilash kerak.	Marking code missing or has multiple records. Recount required.
+Остаток изменился. Обновите задание.	Qoldiq o‘zgardi. Topshiriqni yangilang.	Stock changed. Refresh the task.
+Нет доступного остатка. Выполните актуализацию исходного короба.	Mavjud qoldiq yo‘q. Manba quti qoldig‘ini yangilang.	No available stock. Recount and update the source box.
+В коробе появился посторонний остаток.	Qutida boshqa qoldiq paydo bo‘ldi.	Unrelated stock appeared in the box.
+Состав короба изменился после упаковки.	Qadoqlashdan keyin quti tarkibi o‘zgardi.	Box contents changed after packing.
+КИЗ короба изменились после упаковки.	Qadoqlashdan keyin quti KIZlari o‘zgardi.	Box marking codes changed after packing.
+Сначала подтвердите все короба поставки.	Avval jo‘natmaning barcha qutilarini tasdiqlang.	Confirm all shipment boxes first.
+Заявка для ТСД не найдена.	TSD topshirig‘i topilmadi.	Handheld request not found.
+Волна {0} ожидает проверки балансов клиентом. Сборка еще не зафиксирована.	{0} to‘lqini mijoz qoldiqni tekshirishini kutmoqda. Terish hali qayd etilmagan.	Wave {0} is awaiting the client’s balance check. Picking has not been recorded yet.
+Эта позиция перемещения уже выполнена другим сборщиком. Обновите заявку на ТСД.	Bu ko‘chirish pozitsiyasini boshqa teruvchi bajargan. TSDdagi topshiriqni yangilang.	Another picker already completed this transfer item. Refresh the handheld request.
+Короб не входит в актуальный список коробов на отправку. Обновите заявку на ТСД.	Quti jo‘natiladigan qutilarning joriy ro‘yxatiga kirmaydi. TSDdagi topshiriqni yangilang.	Box not in the current shipping list. Refresh the handheld request.
+Этот короб уже был пропикан и подтвержден к отгрузке. Повторный скан отклонен.	Bu quti avval skanerlangan va jo‘natishga tasdiqlangan. Takroriy skan rad etildi.	This box was already scanned and confirmed for shipment. Duplicate scan rejected.
+Для этого клиента используется обычная сборка по складским коробам.	Bu mijoz uchun ombor qutilari bo‘yicha oddiy terish ishlatiladi.	This client uses standard picking by warehouse boxes.
+Не упаковано товаров: {0}.	Qadoqlanmagan tovarlar: {0}.	Items not packed: {0}.
+Перед завершением закройте все открытые короба.	Yakunlashdan oldin barcha ochiq qutilarni yoping.	Close all open boxes before finishing.
+Откройте новую двухэтапную сборку ФБО. При необходимости обновите ТСД.	Yangi ikki bosqichli FBO terishni oching. Kerak bo‘lsa TSDni yangilang.	Open the new two-stage FBO picking. Update the handheld app if needed.
+Не указан клиент для поиска товара.	Tovar qidirish uchun mijoz ko‘rsatilmagan.	Client not specified for product search.
+Не указан штрихкод товара.	Tovar shtrixkodi ko‘rsatilmagan.	Product barcode not specified.
+Товар по штрихкоду не найден.	Shtrixkod bo‘yicha tovar topilmadi.	Product not found by barcode.
+Этот короб уже был пропикан в данной заявке. Повторный скан отклонен.	Bu quti shu topshiriqda avval skanerlangan. Takroriy skan rad etildi.	This box was already scanned in this request. Duplicate scan rejected.
+Сначала отсканируйте номер нового короба, начинающийся с FFL.	Avval FFL bilan boshlanuvchi yangi quti raqamini skanerlang.	Scan the new box number starting with FFL first.
+КИЗ уже зарегистрирован в другом филиале. Передайте товар менеджеру.	KIZ boshqa filialda ro‘yxatdan o‘tgan. Tovarni menejerga bering.	Marking code already registered in another branch. Give the item to the manager.
+КИЗ свободен.	KIZ bo‘sh.	Marking code is free.
+Закрытие не может зависеть от самого себя.	Yopish o‘ziga bog‘liq bo‘la olmaydi.	Closing cannot depend on itself.
+Закрытие пришло не от устройства из access token.	Yopish so‘rovi kirish tokenidagi qurilmadan kelmagan.	Closing request came from a different device than the access token.
+Выберите филиал для закрытия приемки на ТСД.	TSDda qabulni yopish uchun filialni tanlang.	Select a branch to close handheld receiving.
+Короб не найден в выбранном клиенте и филиале.	Quti tanlangan mijoz va filialda topilmadi.	Box not found for the selected client and branch.
+Ключ закрытия уже использован для другой операции.	Yopish kaliti boshqa amal uchun ishlatilgan.	Closing key already used for another operation.
+Короб {0} не открыт для приемки. Его статус не изменён.	{0} qutisi qabul uchun ochilmagan. Uning holati o‘zgarmadi.	Box {0} is not open for receiving. Its status was not changed.
+Закрытие содержит скан другого устройства, клиента, короба или приемки.	Yopishda boshqa qurilma, mijoz, quti yoki qabul skani bor.	Closing includes a scan from another device, client, box or receiving session.
+Короб уже открыт другой приемкой или устройством. Старое закрытие не применено.	Quti boshqa qabul yoki qurilma tomonidan ochilgan. Eski yopish qo‘llanmadi.	Box already opened by another receiving session or device. Old closing was not applied.
+Сканы относятся к предыдущему заполнению короба. Старое закрытие не применено.	Skanlar qutining oldingi to‘ldirilishiga tegishli. Eski yopish qo‘llanmadi.	Scans belong to the previous box filling. Old closing was not applied.
+Движение по скану не соответствует закрываемому коробу и филиалу.	Skan bo‘yicha harakat yopilayotgan quti va filialga mos emas.	Scan movement does not match the box and branch being closed.
+Выберите филиал для приемки на ТСД.	TSDda qabul qilish uchun filialni tanlang.	Select a branch for handheld receiving.
+Клиент не найден или отправлен в архив.	Mijoz topilmadi yoki arxivga yuborilgan.	Client not found or archived.
+Короб {0} относится к другому клиенту.	{0} qutisi boshqa mijozga tegishli.	Box {0} belongs to another client.
+Короб {0} относится к другому филиалу или не имеет безопасной привязки.	{0} qutisi boshqa filialga tegishli yoki ishonchli bog‘lanmagan.	Box {0} belongs to another branch or lacks a verified association.
+Короб {0} уже есть в WMS. Для новой приемки нужен новый ШК короба.	{0} qutisi WMSda mavjud. Yangi qabul uchun yangi quti shtrixkodi kerak.	Box {0} already exists in WMS. New receiving requires a new box barcode.
+Короб {0} повторно открыт. Продолжайте приемку.	{0} qutisi qayta ochildi. Qabul qilishni davom ettiring.	Box {0} reopened. Continue receiving.
+Короб {0} открыт для приемки.	{0} qutisi qabul uchun ochildi.	Box {0} opened for receiving.
+Выберите доступный для изменения филиал.	O‘zgartirish mumkin bo‘lgan filialni tanlang.	Select a branch you can modify.
+Приемка относится к другому филиалу. Переключите город работы.	Qabul boshqa filialga tegishli. Ish shahrini almashtiring.	Receiving belongs to another branch. Switch the work city.
+Неверный список сканов закрываемого короба.	Yopilayotgan quti skanlari ro‘yxati noto‘g‘ri.	Invalid scan list for the box being closed.
+Для закрытия нужен непустой список уникальных ключей сканов короба.	Yopish uchun quti skanlarining noyob kalitlari bo‘sh bo‘lmagan ro‘yxati kerak.	Closing requires a nonempty list of unique box scan keys.
+Поле {0} обязательно для приемки ТСД.	TSD qabuli uchun {0} maydoni majburiy.	Field {0} is required for handheld receiving.
+Номер короба должен начинаться с FFL. Отсканируйте корректный ШК короба.	Quti raqami FFL bilan boshlanishi kerak. To‘g‘ri quti shtrixkodini skanerlang.	Box number must start with FFL. Scan the correct box barcode.
+Не удалось определить код ТСД для мониторинга.	Monitoring uchun TSD kodini aniqlab bo‘lmadi.	Could not identify the handheld code for monitoring.
+Для журнала ошибки нужны код ТСД и текст ошибки.	Xato jurnali uchun TSD kodi va xato matni kerak.	Error log requires a handheld code and error text.
+Снимок экрана не получен.	Ekran rasmi olinmadi.	Screenshot not received.
+Допустимы снимки JPEG, PNG или WebP.	JPEG, PNG yoki WebP ekran rasmlari ruxsat etiladi.	Screenshots must be JPEG, PNG or WebP.
+Снимок экрана превышает 750 КБ.	Ekran rasmi 750 KBdan katta.	Screenshot exceeds 750 KB.
+Операция ошибки ТСД не найдена.	TSD xato amali topilmadi.	Handheld error operation not found.
+Нельзя прикрепить снимок к ошибке другого сотрудника.	Boshqa xodim xatosiga rasm biriktirib bo‘lmaydi.	Cannot attach a screenshot to another employee’s error.
+Для ТСД нужен активный пользователь-оператор.	TSD uchun faol operator foydalanuvchisi kerak.	Handheld requires an active operator user.
+Пользователь ТСД должен иметь право stock:write.	TSD foydalanuvchisida stock:write huquqi bo‘lishi kerak.	Handheld user must have stock:write permission.
+Укажите логин/пароль или код/секрет ТСД.	Login/parol yoki TSD kodi/maxfiy kodini kiriting.	Enter login/password or handheld code/secret.
+Неверный логин или пароль.	Login yoki parol noto‘g‘ri.	Incorrect login or password.
+Пользователь заблокирован.	Foydalanuvchi bloklangan.	User blocked.
+У пользователя ТСД нет права stock:write.	TSD foydalanuvchisida stock:write huquqi yo‘q.	Handheld user lacks stock:write permission.
+Обновите приложение ТСД и войдите заново: старая версия не передаёт код физического устройства.	TSD ilovasini yangilang va qayta kiring: eski versiya qurilma kodini yubormaydi.	Update the handheld app and sign in again: the old version does not send the physical device code.
+Не удалось зарегистрировать физический ТСД. Повторите вход.	TSD qurilmasini ro‘yxatdan o‘tkazib bo‘lmadi. Qayta kiring.	Could not register the physical handheld. Sign in again.
+Этот физический ТСД заблокирован администратором.	Bu TSD qurilmasi administrator tomonidan bloklangan.	This physical handheld is blocked by an administrator.
+Неверный код или секрет ТСД.	TSD kodi yoki maxfiy kodi noto‘g‘ri.	Incorrect handheld code or secret.
+ТСД заблокирован.	TSD bloklangan.	Handheld blocked.
+Пользователь ТСД заблокирован.	TSD foydalanuvchisi bloklangan.	Handheld user blocked.
+ТСД заблокирован или удален.	TSD bloklangan yoki o‘chirilgan.	Handheld blocked or deleted.
+Этот физический ТСД заблокирован или удалён.	Bu TSD qurilmasi bloklangan yoki o‘chirilgan.	This physical handheld is blocked or deleted.
+Сотрудник на этом ТСД уже изменился. Повторите вход.	Bu TSDdagi xodim o‘zgargan. Qayta kiring.	Employee on this handheld has changed. Sign in again.
+Не удалось перепривязать общий ТСД. Повторите вход.	Umumiy TSDni qayta biriktirib bo‘lmadi. Qayta kiring.	Could not reassign the shared handheld. Sign in again.
+Закрытую, отменённую или отклонённую FBS-заявку нельзя отправить в ТСД.	Yopilgan, bekor qilingan yoki rad etilgan FBS topshirig‘ini TSDga yuborib bo‘lmaydi.	A closed, cancelled or rejected FBS request cannot be sent to a handheld.
+У сотрудника {0} уже начат заказ в другой FBS-заявке. Завершите или отложите его, затем снова откройте выбранную заявку. ТСД не будет автоматически переключать заявку.	{0} xodimi boshqa FBS topshirig‘ida buyurtmani boshlagan. Uni tugating yoki keyinga qoldiring, keyin tanlangan topshiriqni qayta oching. TSD topshiriqni avtomatik almashtirmaydi.	Employee {0} already started an order in another FBS request. Finish or postpone it, then reopen the selected request. The handheld will not switch requests automatically.
+FBS-заявка не найдена. Обновите список заявок на ТСД.	FBS topshirig‘i topilmadi. TSDdagi topshiriqlar ro‘yxatini yangilang.	FBS request not found. Refresh the handheld request list.
+Эта FBS-заявка уже закрыта. Обновите список заявок на ТСД.	Bu FBS topshirig‘i yopilgan. TSDdagi topshiriqlar ro‘yxatini yangilang.	This FBS request is closed. Refresh the handheld request list.
+Товар с ШК {0} не нужен в оставшейся части этой FBS-заявки.	{0} shtrixkodli tovar bu FBS topshirig‘ining qolgan qismida kerak emas.	Product with barcode {0} is not needed in the remaining part of this FBS request.
+Источник уже подтверждён: короб {0}. Завершите заказ или сбросьте сборку.	Manba tasdiqlangan: {0} qutisi. Buyurtmani tugating yoki terishni bekor qiling.	Source already confirmed: box {0}. Finish the order or reset picking.
+Сначала отсканируйте ШК товара, чтобы WMS проверила, что он нужен этой FBS-заявке.	Avval tovar shtrixkodini skanerlang, WMS bu FBS topshirig‘iga kerakligini tekshiradi.	Scan the product barcode first so WMS can check whether it is needed for this FBS request.
+Источник можно отложить только до сканирования КИЗа и завершения переклейки.	Manbani faqat KIZ skanerlanishidan va qayta yorliqlash tugashidan oldin keyinga qoldirish mumkin.	Source entry can only be postponed before scanning the marking code and completing relabelling.
+Не удалось однозначно определить филиал этой FBS-заявки. Обновите маршрут перед сканированием.	Bu FBS topshirig‘ining filialini aniq belgilab bo‘lmadi. Skanerlashdan oldin marshrutni yangilang.	Could not determine this FBS request’s branch unambiguously. Refresh the route before scanning.
+Код не распознан ни как короб, ни как паллетсорт. Короб должен начинаться с: {0}.	Kod quti yoki saralash paleti sifatida tanilmadi. Quti shundan boshlanishi kerak: {0}.	Code not recognised as a box or sorting pallet. Box code must start with: {0}.
+Короб {0} не найден в палет-сорте. Для FBS можно использовать только короба, установленные на палет-сорт.	{0} qutisi saralash paletida topilmadi. FBS uchun faqat saralash paletiga joylangan qutilar ishlatiladi.	Box {0} not found on a sorting pallet. FBS can only use boxes placed on sorting pallets.
+Короб {0} находится в другом филиале и не относится к этой заявке.	{0} qutisi boshqa filialda va bu topshiriqqa tegishli emas.	Box {0} is in another branch and does not belong to this request.
+По заказу уже отсканирован товар из короба {0}. Завершите его или сбросьте сборку заказа.	Buyurtma uchun {0} qutisidan tovar skanerlangan. Uni tugating yoki buyurtma terilishini bekor qiling.	Item from box {0} already scanned for this order. Finish it or reset order picking.
+Филиал заявки изменился. Обновите задание на ТСД.	Topshiriq filiali o‘zgardi. TSDdagi topshiriqni yangilang.	Request branch changed. Refresh the handheld task.
+Сначала отсканируйте короб, указанный на экране.	Avval ekranda ko‘rsatilgan qutini skanerlang.	Scan the box shown on screen first.
+Сейчас нужен ШК товара, а не номер короба.	Hozir quti raqami emas, tovar shtrixkodi kerak.	Product barcode required now, not a box number.
+Сейчас нужен ШК товара. КИЗ будет запрошен следующим шагом.	Hozir tovar shtrixkodi kerak. KIZ keyingi bosqichda so‘raladi.	Product barcode required now. Marking code will be requested next.
+Неверный исходный товар. Возьмите «{0}», арт. {0}, и отсканируйте его ШК.	Asl tovar noto‘g‘ri. “{0}”, artikul {0} tovarini oling va shtrixkodini skanerlang.	Wrong original item. Take “{0}”, article {0}, and scan its barcode.
+Неверный новый ШК. После переклейки должен получиться «{0}», арт. {0}.	Yangi shtrixkod noto‘g‘ri. Qayta yorliqlashdan keyin “{0}”, artikul {0} bo‘lishi kerak.	Wrong new barcode. After relabelling, the item must be “{0}”, article {0}.
+Неверный товар. Нужен «{0}», арт. {0}. Верните товар и отсканируйте правильный ШК.	Tovar noto‘g‘ri. “{0}”, artikul {0} kerak. Tovarni qaytaring va to‘g‘ri shtrixkodni skanerlang.	Wrong item. Need “{0}”, article {0}. Return the item and scan the correct barcode.
+Сначала подтвердите исходный товар для переклейки.	Avval qayta yorliqlash uchun asl tovarni tasdiqlang.	Confirm the original item for relabelling first.
+Задание FBS не найдено.	FBS topshirig‘i topilmadi.	FBS task not found.
+Состояние переклейки изменилось. Обновите задание.	Qayta yorliqlash holati o‘zgardi. Topshiriqni yangilang.	Relabelling state changed. Refresh the task.
+{0} уже недостаточно исходного товара «{0}». Обновите задание.	{0} joyida asl “{0}” tovari endi yetarli emas. Topshiriqni yangilang.	{0} no longer has enough of the original item “{0}”. Refresh the task.
+Для этого товара КИЗ не требуется.	Bu tovar uchun KIZ talab qilinmaydi.	This product does not require a marking code.
+Сначала подтвердите короб и ШК товара.	Avval quti va tovar shtrixkodini tasdiqlang.	Confirm the box and product barcode first.
+Переклейка КИЗ в этом окружении выключена.	Bu muhitda KIZ almashtirish o‘chirilgan.	Marking-label replacement is disabled in this environment.
+Новый КИЗ уже использовался в WB. Возьмите свободный новый КИЗ.	Yangi KIZ WBda ishlatilgan. Ishlatilmagan yangi KIZni oling.	The new marking code was already used in WB. Take an unused new marking code.
+Для этого заказа уже сохранён другой КИЗ и ожидается подтверждение для {0}. Повторно отсканируйте тот же товар.	Bu buyurtma uchun boshqa KIZ saqlangan va {0} tasdig‘i kutilmoqda. Xuddi shu tovarni qayta skanerlang.	A different marking code is saved for this order, awaiting confirmation for {0}. Scan the same item again.
+Отсканирован ШК товара. Сейчас нужен КИЗ Data Matrix.	Tovar shtrixkodi skanerlandi. Hozir Data Matrix KIZ kerak.	Product barcode scanned. Data Matrix marking code required now.
+Этот КИЗ уже зарегистрирован в WMS у другого клиента. Передайте товар менеджеру.	Bu KIZ WMSda boshqa mijozda ro‘yxatdan o‘tgan. Tovarni menejerga bering.	This marking code is registered in WMS for another client. Give the item to the manager.
+Для переклейки этой единицы обновите приложение ТСД через «Проверить обновление».	Bu birlik KIZini almashtirish uchun “Yangilanishni tekshirish” orqali TSD ilovasini yangilang.	To replace this item’s marking label, update the handheld app using “Check for updates”.
+Этот КИЗ уже привязан к FBS-заказу {0}. Возьмите другую единицу.	Bu KIZ FBS {0} buyurtmasiga bog‘langan. Boshqa birlikni oling.	This marking code is linked to FBS order {0}. Take another item.
+Этот КИЗ уже использовался в WB. Для переклейки обновите приложение ТСД через «Проверить обновление».	Bu KIZ WBda ishlatilgan. Almashtirish uchun “Yangilanishni tekshirish” orqali TSD ilovasini yangilang.	This marking code was used in WB. To relabel, update the handheld app using “Check for updates”.
+У этого КИЗ нет истории использования в WB. Продолжите проверку короба; переклейка не зарегистрирована.	Bu KIZning WBda ishlatilish tarixi yo‘q. Quti tekshiruvini davom ettiring; qayta yorliqlash qayd etilmadi.	This marking code has no WB usage history. Continue checking the box; relabelling was not recorded.
+Подключение Wildberries отключено. Обратитесь к администратору.	Wildberries ulanishi o‘chirilgan. Administratorga murojaat qiling.	Wildberries connection disabled. Contact an administrator.
+Не удалось проверить журнал замены КИЗ в WMS. Wildberries не изменялся. Повторите сканирование того же КИЗ позже.	WMSda KIZ almashtirish jurnalini tekshirib bo‘lmadi. Wildberries o‘zgarmadi. Shu KIZni keyinroq qayta skanerlang.	Could not check the marking-code replacement log in WMS. Wildberries unchanged. Scan the same marking code again later.
+Этот КИЗ уже успели зарегистрировать в WMS. Обновите задание и проверьте товар.	Bu KIZ WMSda allaqachon ro‘yxatdan o‘tkazilgan. Topshiriqni yangilang va tovarni tekshiring.	This marking code has just been registered in WMS. Refresh the task and check the item.
+Не удалось подготовить безопасную передачу КИЗа в Wildberries. Обновите задание.	KIZni Wildberriesga xavfsiz yuborishni tayyorlab bo‘lmadi. Topshiriqni yangilang.	Could not prepare safe marking-code transfer to Wildberries. Refresh the task.
+Wildberries не принял КИЗ: {0}	Wildberries KIZni qabul qilmadi: {0}	Wildberries did not accept the marking code: {0}
+Отсутствует номер физической сверки.	Haqiqiy qoldiqni solishtirish raqami yo‘q.	Physical reconciliation number missing.
+Подтвердите решение администратора после предварительной проверки.	Dastlabki tekshiruvdan keyin administrator qarorini tasdiqlang.	Confirm the administrator’s decision after the preliminary check.
+Изменился источник сверки.	Solishtirish manbasi o‘zgardi.	Reconciliation source changed.
+Сборка изменилась; освобождение КИЗа остановлено.	Terish o‘zgardi; KIZni bo‘shatish to‘xtatildi.	Picking changed; marking-code release stopped.
+Подключение WB недоступно. Повторите подтверждение на ТСД после восстановления связи.	WB ulanishi mavjud emas. Aloqa tiklangach, TSDda tasdiqlashni takrorlang.	WB connection unavailable. Confirm again on the handheld when the connection is restored.
+WB №{0}: {0}/{0}. Автоматический возврат отгруженного или отменённого заказа не выполнен.	WB №{0}: {0}/{0}. Jo‘natilgan yoki bekor qilingan buyurtma avtomatik qaytarilmadi.	WB #{0}: {0}/{0}. A shipped or cancelled order was not automatically returned.
+WB №{0}: в заказе другой КИЗ. Его не изменяли.	WB №{0}: buyurtmada boshqa KIZ bor. U o‘zgartirilmadi.	WB #{0}: the order has a different marking code. It was not changed.
+Сначала подтвердите источник и товар.	Avval manba va tovarni tasdiqlang.	Confirm the source and item first.
+Сначала завершите переклейку и отсканируйте новый ШК товара.	Avval qayta yorliqlashni tugating va tovarning yangi shtrixkodini skanerlang.	Finish relabelling and scan the new product barcode first.
+Сначала отсканируйте КИЗ и дождитесь подтверждения для {0}.	Avval KIZni skanerlang va {0} tasdig‘ini kuting.	Scan the marking code and wait for confirmation for {0} first.
+Ozon ещё формирует этикетку. Нажмите «Обновить» и завершайте заказ только после появления этикетки.	Ozon hali yorliq tayyorlamoqda. “Yangilash”ni bosing va faqat yorliq chiqqach buyurtmani yakunlang.	Ozon is still generating the label. Tap “Refresh” and complete the order only after the label appears.
+Переклейка ещё не подтверждена. Обновите задание.	Qayta yorliqlash hali tasdiqlanmagan. Topshiriqni yangilang.	Relabelling not confirmed yet. Refresh the task.
+КИЗ отменяется или ещё не подтверждён для {0}. Обновите задание.	KIZ bekor qilinmoqda yoki {0} uchun hali tasdiqlanmagan. Topshiriqni yangilang.	Marking code is being cancelled or not yet confirmed for {0}. Refresh the task.
+Заявка FBS уже закрыта или отменена. Обновите очередь.	FBS topshirig‘i yopilgan yoki bekor qilingan. Navbatni yangilang.	FBS request already closed or cancelled. Refresh the queue.
+Товар больше не найден в заявке FBS. Обратитесь к администратору.	Tovar FBS topshirig‘ida endi topilmadi. Administratorga murojaat qiling.	Item no longer found in the FBS request. Contact an administrator.
+Нужное количество по этой позиции уже собрано. Обновите очередь.	Bu pozitsiya uchun kerakli miqdor terilgan. Navbatni yangilang.	Required quantity for this item already picked. Refresh the queue.
+Источник товара изменился. Обновите задание.	Tovar manbasi o‘zgardi. Topshiriqni yangilang.	Item source changed. Refresh the task.
+Заказ уже завершён. КИЗ из завершённой сборки отменить нельзя.	Buyurtma yakunlangan. Yakunlangan terishdan KIZni bekor qilib bo‘lmaydi.	Order already completed. Cannot cancel a marking code from completed picking.
+Состояние заказа изменилось. Обновите задание и повторите отмену.	Buyurtma holati o‘zgardi. Topshiriqni yangilang va bekor qilishni takrorlang.	Order state changed. Refresh the task and retry cancellation.
+Не удалось отменить КИЗ в Wildberries: {0}	Wildberriesda KIZni bekor qilib bo‘lmadi: {0}	Could not cancel marking code in Wildberries: {0}
+Собранный заказ нельзя отложить.	Terilgan buyurtmani keyinga qoldirib bo‘lmaydi.	Cannot postpone a picked order.
+КИЗ уже передан Wildberries. Для замены обратитесь к администратору.	KIZ Wildberriesga yuborilgan. Almashtirish uchun administratorga murojaat qiling.	Marking code already sent to Wildberries. Contact an administrator to replace it.
+Переклейка уже подтверждена и учтена в остатках. Завершите этот заказ.	Qayta yorliqlash tasdiqlangan va qoldiqda hisobga olingan. Bu buyurtmani tugating.	Relabelling confirmed and recorded in stock. Finish this order.
+Проверка недоступна.	Tekshiruv mavjud emas.	Check unavailable.
+Укажите проверку короба.	Quti tekshiruvini kiriting.	Specify the box check.
+Задание FBS не найдено. Обновите очередь.	FBS topshirig‘i topilmadi. Navbatni yangilang.	FBS task not found. Refresh the queue.
+Клиент не найден.	Mijoz topilmadi.	Client not found.

@@ -58,6 +58,7 @@ final class MonitorMessageOverlay implements Application.ActivityLifecycleCallba
         if (foreground == null || foreground.isFinishing() || foreground.isDestroyed() || id.isEmpty() || dialog != null) return;
         Activity activity = foreground;
         dialog = new Dialog(activity);
+        TsdUi.track(dialog);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         dialog.setCancelable(false);
         dialog.setCanceledOnTouchOutside(false);
@@ -67,15 +68,15 @@ final class MonitorMessageOverlay implements Application.ActivityLifecycleCallba
         root.setOrientation(LinearLayout.VERTICAL);
         int pad = (int) (20 * activity.getResources().getDisplayMetrics().density);
         root.setPadding(pad, pad, pad, pad); root.setBackgroundColor(Color.WHITE);
-        TextView title = new TextView(activity);
+        TextView title = new TsdUi.Label(activity);
         title.setText("СООБЩЕНИЕ ИЗ ВМС\n" + sender); title.setTextSize(22); title.setTextColor(Color.rgb(160, 20, 30));
         root.addView(title);
         ScrollView scroll = new ScrollView(activity);
-        TextView content = new TextView(activity); content.setText(text); content.setTextSize(28); content.setTextColor(Color.BLACK);
+        TextView content = new TsdUi.Label(activity); TsdUi.data(content,text); content.setTextSize(28); content.setTextColor(Color.BLACK);
         content.setPadding(0, pad, 0, pad); scroll.addView(content);
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-        TextView status = new TextView(activity); status.setTextSize(18); root.addView(status);
-        Button ok = new Button(activity); ok.setText("ОК — прочитано"); ok.setTextSize(24);
+        TextView status = new TsdUi.Label(activity); status.setTextSize(18); root.addView(status);
+        Button ok = new TsdUi.Button(activity); ok.setText("ОК — прочитано"); ok.setTextSize(24);
         ok.setEnabled(!busy); ok.setFocusable(false); root.addView(ok, new LinearLayout.LayoutParams(-1, -2));
         ok.setOnClickListener(v -> {
             sessionChanged();
