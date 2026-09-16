@@ -75,6 +75,7 @@ import { ClientRequestEditModal } from './ClientRequestEditModal';
 import { ClientRequestXlsxImportForm } from './ClientRequestXlsxImportForm';
 import './client-requests.css';
 import { ClientRequestsTable } from './ClientRequestsTable';
+import { FboTwoStagePanel } from './FboTwoStagePanel';
 import {
   buildUnknownSourceNoBoxStockSources,
   isProblemCloseStockSourceItem,
@@ -593,6 +594,12 @@ export function ClientRequestsPanel({
     setError(null);
 
     try {
+      // FIX: new FBO stock is picked by physical scans; the old bulk action only opens its screen.
+      const plan = await fetchTsdAssemblyPlan(session.accessToken, request.id).catch(() => null);
+      if (plan?.fbo) {
+        setOnlinePreview({ request, plan, status: 'ready' });
+        return;
+      }
       await pickClientRequest(session.accessToken, {
         requestId: request.id,
         idempotencyKey: `web-pick:${request.id}`,
@@ -2235,7 +2242,7 @@ export function ClientRequestsPanel({
         />
       ) : null}
 
-      {onlinePreview ? (
+      {onlinePreview?.plan?.fbo ? <FboTwoStagePanel key={`${session.user.id}:${onlinePreview.request.id}`} initial={onlinePreview.plan.fbo} accessToken={session.accessToken} userId={session.user.id} canWrite={canPickOutbound} onClose={()=>setOnlinePreview(null)} /> : onlinePreview ? (
         <OnlineExecutionModal
           request={onlinePreview.request}
           plan={onlinePreview.plan}

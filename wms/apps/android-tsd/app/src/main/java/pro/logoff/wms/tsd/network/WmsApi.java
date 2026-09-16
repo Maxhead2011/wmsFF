@@ -18,6 +18,10 @@ import retrofit2.http.Url;
 import okhttp3.MultipartBody;
 
 public interface WmsApi {
+    @GET("api/v1/tsd/requests/{id}/fbo")
+    Call<TsdFboPlan> getFboPlan(@Header("Authorization") String authorization,@Path("id") String id);
+    @POST("api/v1/tsd/requests/{id}/fbo/actions")
+    Call<TsdFboPlan> actFbo(@Header("Authorization") String authorization,@Path("id") String id,@Body Map<String,String> request);
     // FIX: read-only administrator lookup; no stock or marketplace mutations.
     @POST("api/v1/inventory/kiz-location/check")
     Call<TsdKizLocationResponse> checkKizLocation(@Header("Authorization") String authorization, @Body Map<String, String> request);

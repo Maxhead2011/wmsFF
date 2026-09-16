@@ -14,11 +14,16 @@ import { TsdReviewService } from './tsd-review.service';
 import { TsdSyncController } from './tsd-sync.controller';
 import { TsdSyncService } from './tsd-sync.service';
 import { TsdAuditInterceptor } from './tsd-audit.interceptor';
+import { FboTwoStageService } from './fbo-two-stage.service';
+import { FboTwoStageController } from './fbo-two-stage.controller';
+import { ClientRequestMarketplaceFilesService } from '../client-requests/client-request-marketplace-files.service';
 
 @Module({
   imports: [AuthModule, StockModule, MarketplaceConnectionsModule, WarehouseModule, InventoryModule],
-  controllers: [TsdDeviceController, TsdSyncController],
+  controllers: [TsdDeviceController, TsdSyncController, FboTwoStageController],
   providers: [
+    FboTwoStageService,
+    ClientRequestMarketplaceFilesService,
     TsdAssemblyService,
     TsdDeviceService,
     TsdOperationLogService,

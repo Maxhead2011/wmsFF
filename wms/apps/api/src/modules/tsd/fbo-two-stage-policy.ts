@@ -1,0 +1,53 @@
+import type { Prisma } from '@prisma/client';
+export const fboTwoStageEnabled = () => process.env.WMS_FBO_TWO_STAGE_ENABLED === 'true';
+export async function hasLegacyFboProgress(db: Prisma.TransactionClient, requestId: string) {
+    return !!(await db.stockMovement.findFirst({ where: { sourceDocument: requestId, type: { in: ['PICK', 'PACK', 'SHIP'] } } }) ||
+        await db.tsdOperation.findFirst({ where: { payload: { path: ['requestId'], equals: requestId }, status: 'ACCEPTED', operationType: { in: ['move_scan', 'assembly_stage', 'box_search_scan'] } } }));
+}
+// FIX: both the new screen and old bulk endpoints use the same eligibility rule.
+export async function isFboTwoStageRequest(db: Prisma.TransactionClient, requestId: string) {
+    if (!fboTwoStageEnabled())
+        return false;
+    const r = await db.clientRequest.findUnique({ where: { id: requestId }, select: { type: true, status: true, client: { select: { storesWithoutBoxes: true } }, _count: { select: { fbsOrderLinks: true, packages: true } } } });
+    if (!r || r.type !== 'OUTBOUND' || r._count.fbsOrderLinks || r.client.storesWithoutBoxes)
+        return false;
+    if (await db.fboAssembly.findUnique({ where: { requestId } }))
+        return true;
+    return !r._count.packages && ['SUBMITTED', 'APPROVED', 'IN_WORK'].includes(r.status) && !await hasLegacyFboProgress(db, requestId);
+}
+// FIX: picking and packing count the same physical units; packing is not another pick.
+export function remainingFboLines<T extends {
+    id: string;
+    skuId: string | null;
+    quantity: number;
+}>(lines: T[], units: Array<{
+    requestItemId: string;
+    state: string;
+}>) {
+    return lines.map(line => {
+        const active = units.filter(u => u.requestItemId === line.id && u.state !== 'RETURNED');
+        return { ...line, needed: line.quantity, picked: active.length,
+            packed: active.filter(u => u.state === 'PACKED').length, remaining: Math.max(0, line.quantity - active.length) };
+    });
+}
+// FIX: the whole-box shortcut is allowed only for a complete, reconciled single-SKU box.
+export function wholeBoxDecision(balances: Array<{
+    skuId: string;
+    quantity: number;
+    status: string;
+}>, demand: Record<string, number>, marks: Array<{
+    skuId: string;
+    identity: string;
+    status: string;
+}>, marked: boolean) {
+    const positive = balances.filter(b => b.quantity > 0);
+    if (balances.some(b => b.quantity < 0))
+        return { allowed: false, recount: true, quantity: 0 };
+    const skus = new Set(positive.map(b => b.skuId));
+    if (skus.size !== 1 || positive.some(b => b.status !== 'AVAILABLE'))
+        return { allowed: false, recount: false, quantity: 0 };
+    const skuId = positive[0].skuId;
+    const quantity = positive.reduce((sum, b) => sum + b.quantity, 0);
+    const consistent = marked ? (marks.length === quantity && marks.every(m => m.skuId === skuId && m.status === 'AVAILABLE' && m.identity) && new Set(marks.map(m => m.identity)).size === quantity) : marks.length === 0;
+    return { allowed: consistent && (demand[skuId] ?? 0) >= quantity, recount: !consistent, quantity };
+}

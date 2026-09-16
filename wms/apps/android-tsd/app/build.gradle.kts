@@ -23,8 +23,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 174 // FIX: display source-stock transfer warnings before inventory approval.
-            versionName = "0.1.175-kiz-identity"
+            versionCode = 176 // FIX: publish two-stage FBO above the deployed KIZ-search release.
+            versionName = "0.1.177-fbo-two-stage"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

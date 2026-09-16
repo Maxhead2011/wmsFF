@@ -1,0 +1,1158 @@
+--- /dev/null
++++ b/wms/apps/api/prisma/migrations/202609160002_fbo_two_stage/migration.sql
+@@ -0,0 +1,36 @@
++-- FIX: additive, opt-in FBO ledger; no stock or historical requests are rewritten.
++CREATE TABLE "FboAssembly" (
++  "requestId" TEXT NOT NULL, "phase" TEXT NOT NULL DEFAULT 'PICKING', "compositionHash" TEXT NOT NULL,
++  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP(3) NOT NULL,
++  CONSTRAINT "FboAssembly_pkey" PRIMARY KEY ("requestId"),
++  CONSTRAINT "FboAssembly_requestId_fkey" FOREIGN KEY ("requestId") REFERENCES "ClientRequest"("id") ON DELETE RESTRICT ON UPDATE CASCADE
++);
++CREATE TABLE "FboAssemblyUnit" (
++  "id" TEXT NOT NULL, "requestId" TEXT NOT NULL, "requestItemId" TEXT NOT NULL, "skuId" TEXT NOT NULL,
++  "barcode" TEXT NOT NULL, "markId" TEXT, "activeMarkId" TEXT, "kiz" TEXT, "sourceBoxId" TEXT NOT NULL,
++  "sourceBoxCode" TEXT NOT NULL, "wholeBox" BOOLEAN NOT NULL DEFAULT false, "state" TEXT NOT NULL DEFAULT 'PICKED',
++  "targetBoxId" TEXT, "targetBoxCode" TEXT, "pickedByUserId" TEXT NOT NULL, "packedByUserId" TEXT,
++  "pickedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, "packedAt" TIMESTAMP(3),
++  CONSTRAINT "FboAssemblyUnit_pkey" PRIMARY KEY ("id"),
++  CONSTRAINT "FboAssemblyUnit_requestId_fkey" FOREIGN KEY ("requestId") REFERENCES "FboAssembly"("requestId") ON DELETE RESTRICT ON UPDATE CASCADE
++);
++CREATE UNIQUE INDEX "FboAssemblyUnit_activeMarkId_key" ON "FboAssemblyUnit"("activeMarkId");
++CREATE INDEX "FboAssemblyUnit_requestId_state_idx" ON "FboAssemblyUnit"("requestId", "state");
++CREATE INDEX "FboAssemblyUnit_sourceBoxId_state_idx" ON "FboAssemblyUnit"("sourceBoxId", "state");
++CREATE INDEX "FboAssemblyUnit_targetBoxId_state_idx" ON "FboAssemblyUnit"("targetBoxId", "state");
++CREATE TABLE "FboAssemblyAction" (
++  "id" TEXT NOT NULL, "requestId" TEXT NOT NULL, "payloadHash" TEXT NOT NULL, "actorId" TEXT NOT NULL,
++  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++  CONSTRAINT "FboAssemblyAction_pkey" PRIMARY KEY ("id"),
++  CONSTRAINT "FboAssemblyAction_requestId_fkey" FOREIGN KEY ("requestId") REFERENCES "FboAssembly"("requestId") ON DELETE RESTRICT ON UPDATE CASCADE
++);
++CREATE INDEX "FboAssemblyAction_requestId_createdAt_idx" ON "FboAssemblyAction"("requestId", "createdAt");
++CREATE TABLE "FboAssemblyBox" (
++  "id" TEXT NOT NULL, "requestId" TEXT NOT NULL, "boxId" TEXT NOT NULL, "activeBoxId" TEXT, "boxCode" TEXT NOT NULL,
++  "wholeBox" BOOLEAN NOT NULL DEFAULT false, "closedAt" TIMESTAMP(3), "confirmedAt" TIMESTAMP(3), "confirmedByUserId" TEXT,
++  CONSTRAINT "FboAssemblyBox_pkey" PRIMARY KEY ("id"),
++  CONSTRAINT "FboAssemblyBox_requestId_fkey" FOREIGN KEY ("requestId") REFERENCES "FboAssembly"("requestId") ON DELETE RESTRICT ON UPDATE CASCADE
++);
++CREATE UNIQUE INDEX "FboAssemblyBox_activeBoxId_key" ON "FboAssemblyBox"("activeBoxId");
++CREATE INDEX "FboAssemblyBox_boxId_idx" ON "FboAssemblyBox"("boxId");
++CREATE UNIQUE INDEX "FboAssemblyBox_requestId_boxCode_key" ON "FboAssemblyBox"("requestId", "boxCode");
+--- a/wms/apps/api/prisma/schema.prisma
++++ b/wms/apps/api/prisma/schema.prisma
+@@ -1620,0 +1621 @@
++  fboAssembly                  FboAssembly?
+@@ -3430,0 +3432,63 @@
++
++// FIX: durable FBO ownership survives TSD disconnects and separates pick from pack.
++model FboAssembly {
++  requestId String @id
++  phase String @default("PICKING")
++  compositionHash String
++  request ClientRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
++  units FboAssemblyUnit[]
++  actions FboAssemblyAction[]
++  boxes FboAssemblyBox[]
++  createdAt DateTime @default(now())
++  updatedAt DateTime @updatedAt
++}
++
++model FboAssemblyBox {
++  id String @id @default(uuid())
++  requestId String
++  boxId String
++  activeBoxId String? @unique
++  boxCode String
++  wholeBox Boolean @default(false)
++  closedAt DateTime?
++  confirmedAt DateTime?
++  confirmedByUserId String?
++  assembly FboAssembly @relation(fields: [requestId], references: [requestId], onDelete: Restrict)
++  @@unique([requestId, boxCode])
++  @@index([boxId])
++}
++
++model FboAssemblyUnit {
++  id String @id @default(uuid())
++  requestId String
++  requestItemId String
++  skuId String
++  barcode String
++  markId String?
++  activeMarkId String? @unique
++  kiz String?
++  sourceBoxId String
++  sourceBoxCode String
++  wholeBox Boolean @default(false)
++  state String @default("PICKED")
++  targetBoxId String?
++  targetBoxCode String?
++  pickedByUserId String
++  packedByUserId String?
++  pickedAt DateTime @default(now())
++  packedAt DateTime?
++  assembly FboAssembly @relation(fields: [requestId], references: [requestId], onDelete: Restrict)
++  @@index([requestId, state])
++  @@index([sourceBoxId, state])
++  @@index([targetBoxId, state])
++}
++
++model FboAssemblyAction {
++  id String @id
++  requestId String
++  payloadHash String
++  actorId String
++  assembly FboAssembly @relation(fields: [requestId], references: [requestId], onDelete: Restrict)
++  createdAt DateTime @default(now())
++  @@index([requestId, createdAt])
++}
+--- a/wms/apps/api/src/modules/administration/administration-internal-api.service.ts
++++ b/wms/apps/api/src/modules/administration/administration-internal-api.service.ts
+@@ -300,4 +300,4 @@
+-    prefixes: ['/tsd'],
+-    routeCount: 88, // FIX: include the read-only FBS physical KIZ audit return gate.
+-    description: 'Приёмка, размещение, сборка FBS, перемещения и синхронизация ТСД.',
+-    logic: ['Выдаёт следующее действие сборщику.', 'Проверяет паллет-сорт, короб, товар и КИЗ.', 'Фиксирует сканы, операции и восстановление сессий устройства.'],
++    prefixes: ['/tsd', '/tsd/requests/:id/fbo'],
++    routeCount: 91, // FIX: FBO plan, idempotent action and confirmed WB box workbook.
++    description: 'Приёмка, размещение, сборка FBS/ФБО, перемещения и синхронизация ТСД.',
++    logic: ['Выдаёт следующее действие сборщику.', 'Проверяет паллет-сорт, короб, товар и КИЗ.', 'Фиксирует сканы, операции и восстановление сессий устройства.', 'При включённом WMS_FBO_TWO_STAGE_ENABLED ведёт отбор ФБО, упаковку и финальные сканы всех коробов перед файлом WB.'],
+--- a/wms/apps/api/src/modules/stock/stock-operations.service.ts
++++ b/wms/apps/api/src/modules/stock/stock-operations.service.ts
+@@ -6,0 +7 @@
++import { isFboTwoStageRequest } from '../tsd/fbo-two-stage-policy';
+@@ -1740,0 +1742,3 @@
++    if (await isFboTwoStageRequest(this.prisma,dto.requestId)) {
++      throw new BadRequestException('Продолжите поштучный отбор ФБО в ТСД или онлайн-сборке.');
++    }
+@@ -1879 +1883,5 @@
+-  async packageClientRequest(dto: FulfillClientRequestDto, user: AuthUser) {
++  async packageClientRequest(dto: FulfillClientRequestDto, user: AuthUser, fboTransaction?: Prisma.TransactionClient) {
++    // FIX: only final FBO control may package its already picked units, in the same transaction.
++    if (!fboTransaction && await isFboTwoStageRequest(this.prisma,dto.requestId)) {
++      throw new BadRequestException('Завершите проверку всех коробов в двухэтапной сборке ФБО.');
++    }
+@@ -1884 +1892 @@
+-    return this.prisma.$transaction(async (tx) => {
++    const execute = async (tx: Prisma.TransactionClient) => {
+@@ -1907 +1915 @@
+-      await this.ensureAvailableStockIsInPacking(
++      if (!fboTransaction) await this.ensureAvailableStockIsInPacking(
+@@ -1985 +1993,2 @@
+-    });
++    };
++    return fboTransaction ? execute(fboTransaction) : this.prisma.$transaction(execute);
+@@ -1988,0 +1998,4 @@
++    if (process.env.WMS_FBO_TWO_STAGE_ENABLED === 'true') {
++      const fbo = await this.prisma.fboAssembly.findUnique({where:{requestId:dto.requestId}});
++      if(fbo && fbo.phase !== 'COMPLETED') throw new BadRequestException('Сначала подтвердите все короба поставки ФБО.');
++    }
+--- /dev/null
++++ b/wms/apps/api/src/modules/tsd/dto/fbo-action.dto.ts
+@@ -0,0 +1,29 @@
++import { IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
++export class FboActionDto {
++    @IsIn(['START', 'PICK_UNIT', 'PICK_BOX', 'FINISH_PICK', 'OPEN_BOX', 'PACK_UNIT', 'PACK_BOX', 'CLOSE_BOX', 'CANCEL_EMPTY_BOX', 'SORTED', 'CONFIRM_BOX', 'FINISH'])
++    action!: string;
++    @IsString()
++    @MinLength(8)
++    @MaxLength(100)
++    operationId!: string;
++    @IsOptional()
++    @IsString()
++    @MaxLength(100)
++    palletCode?: string;
++    @IsOptional()
++    @IsString()
++    @MaxLength(100)
++    sourceBoxCode?: string;
++    @IsOptional()
++    @IsString()
++    @MaxLength(100)
++    targetBoxCode?: string;
++    @IsOptional()
++    @IsString()
++    @MaxLength(100)
++    barcode?: string;
++    @IsOptional()
++    @IsString()
++    @MaxLength(1024)
++    kiz?: string;
++}
+--- /dev/null
++++ b/wms/apps/api/src/modules/tsd/fbo-two-stage-policy.ts
+@@ -0,0 +1,53 @@
++import type { Prisma } from '@prisma/client';
++export const fboTwoStageEnabled = () => process.env.WMS_FBO_TWO_STAGE_ENABLED === 'true';
++export async function hasLegacyFboProgress(db: Prisma.TransactionClient, requestId: string) {
++    return !!(await db.stockMovement.findFirst({ where: { sourceDocument: requestId, type: { in: ['PICK', 'PACK', 'SHIP'] } } }) ||
++        await db.tsdOperation.findFirst({ where: { payload: { path: ['requestId'], equals: requestId }, status: 'ACCEPTED', operationType: { in: ['move_scan', 'assembly_stage', 'box_search_scan'] } } }));
++}
++// FIX: both the new screen and old bulk endpoints use the same eligibility rule.
++export async function isFboTwoStageRequest(db: Prisma.TransactionClient, requestId: string) {
++    if (!fboTwoStageEnabled())
++        return false;
++    const r = await db.clientRequest.findUnique({ where: { id: requestId }, select: { type: true, status: true, client: { select: { storesWithoutBoxes: true } }, _count: { select: { fbsOrderLinks: true, packages: true } } } });
++    if (!r || r.type !== 'OUTBOUND' || r._count.fbsOrderLinks || r.client.storesWithoutBoxes)
++        return false;
++    if (await db.fboAssembly.findUnique({ where: { requestId } }))
++        return true;
++    return !r._count.packages && ['SUBMITTED', 'APPROVED', 'IN_WORK'].includes(r.status) && !await hasLegacyFboProgress(db, requestId);
++}
++// FIX: picking and packing count the same physical units; packing is not another pick.
++export function remainingFboLines<T extends {
++    id: string;
++    skuId: string | null;
++    quantity: number;
++}>(lines: T[], units: Array<{
++    requestItemId: string;
++    state: string;
++}>) {
++    return lines.map(line => {
++        const active = units.filter(u => u.requestItemId === line.id && u.state !== 'RETURNED');
++        return { ...line, needed: line.quantity, picked: active.length,
++            packed: active.filter(u => u.state === 'PACKED').length, remaining: Math.max(0, line.quantity - active.length) };
++    });
++}
++// FIX: the whole-box shortcut is allowed only for a complete, reconciled single-SKU box.
++export function wholeBoxDecision(balances: Array<{
++    skuId: string;
++    quantity: number;
++    status: string;
++}>, demand: Record<string, number>, marks: Array<{
++    skuId: string;
++    identity: string;
++    status: string;
++}>, marked: boolean) {
++    const positive = balances.filter(b => b.quantity > 0);
++    if (balances.some(b => b.quantity < 0))
++        return { allowed: false, recount: true, quantity: 0 };
++    const skus = new Set(positive.map(b => b.skuId));
++    if (skus.size !== 1 || positive.some(b => b.status !== 'AVAILABLE'))
++        return { allowed: false, recount: false, quantity: 0 };
++    const skuId = positive[0].skuId;
++    const quantity = positive.reduce((sum, b) => sum + b.quantity, 0);
++    const consistent = marked ? (marks.length === quantity && marks.every(m => m.skuId === skuId && m.status === 'AVAILABLE' && m.identity) && new Set(marks.map(m => m.identity)).size === quantity) : marks.length === 0;
++    return { allowed: consistent && (demand[skuId] ?? 0) >= quantity, recount: !consistent, quantity };
++}
+--- /dev/null
++++ b/wms/apps/api/src/modules/tsd/fbo-two-stage.controller.ts
+@@ -0,0 +1,37 @@
++import { Body, Controller, Get, Param, Post, Res, StreamableFile, UseInterceptors } from '@nestjs/common';
++import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
++import type { Response } from 'express';
++import { CurrentUser } from '../auth/decorators/current-user.decorator';
++import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
++import type { AuthUser } from '../auth/auth.types';
++import { FboTwoStageService } from './fbo-two-stage.service';
++import { FboActionDto } from './dto/fbo-action.dto';
++import { TsdAuditInterceptor } from './tsd-audit.interceptor';
++@ApiTags('tsd')
++@ApiBearerAuth()
++@Controller('tsd/requests/:id/fbo')
++@UseInterceptors(TsdAuditInterceptor)
++export class FboTwoStageController {
++  constructor(private readonly fbo: FboTwoStageService) {}
++
++  @Get()
++  @RequirePermissions('stock:read')
++  plan(@Param('id') id: string, @CurrentUser() user: AuthUser) {
++    return this.fbo.plan(id, user);
++  }
++
++  @Post('actions')
++  @RequirePermissions('stock:write')
++  action(@Param('id') id: string, @Body() dto: FboActionDto, @CurrentUser() user: AuthUser) {
++    return this.fbo.act(id, dto, user);
++  }
++
++  @Get('wb-packages.xlsx')
++  @RequirePermissions('stock:read')
++  async file(@Param('id') id: string, @CurrentUser() user: AuthUser, @Res({ passthrough: true }) res: Response) {
++    const file = await this.fbo.wbFile(id, user);
++    res.setHeader('Content-Type', file.mimeType);
++    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(file.fileName)}`);
++    return new StreamableFile(file.content);
++  }
++}
+--- /dev/null
++++ b/wms/apps/api/src/modules/tsd/fbo-two-stage.service.ts
+@@ -0,0 +1,406 @@
++import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
++import { createHash, randomUUID } from 'node:crypto';
++import { Prisma, StockStatus } from '@prisma/client';
++import { PrismaService } from '../../common/prisma/prisma.service';
++import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
++import { physicalKizIdentity } from '../../common/kiz-physical-identity';
++import { ClientScopeService } from '../auth/client-scope.service';
++import type { AuthUser } from '../auth/auth.types';
++import { assertWarehouseAccess } from '../client-requests/client-request-warehouse-scope';
++import { ClientRequestMarketplaceFilesService } from '../client-requests/client-request-marketplace-files.service';
++import { StockBalancesService } from '../stock/stock-balances.service';
++import { StockOperationsService } from '../stock/stock-operations.service';
++import { fboTwoStageEnabled, hasLegacyFboProgress, isFboTwoStageRequest, remainingFboLines, wholeBoxDecision } from './fbo-two-stage-policy';
++import { FboActionDto } from './dto/fbo-action.dto';
++const include = { items: { include: { sku: { include: { barcodes: true } } } }, client: true,
++    _count: { select: { fbsOrderLinks: true, packages: true } }, pickWaveRequests: { include: { wave: true } } } satisfies Prisma.ClientRequestInclude;
++type Request = Prisma.ClientRequestGetPayload<{
++    include: typeof include;
++}>;
++const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
++const identity = (value: string) => physicalKizIdentity(value) || value.trim();
++const composition = (r: Request) => hash(r.items.map(i => [i.id, i.skuId, i.barcode, i.quantity]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
++@Injectable()
++export class FboTwoStageService {
++    constructor(private readonly prisma: PrismaService, private readonly scopes: ClientScopeService, private readonly balances: StockBalancesService, private readonly stock: StockOperationsService, private readonly lock: InventoryLockService, private readonly files: ClientRequestMarketplaceFilesService) { }
++    async eligible(requestId: string, user: AuthUser) {
++        if (!fboTwoStageEnabled())
++            return false;
++        await this.load(this.prisma, requestId, user, 'read');
++        return isFboTwoStageRequest(this.prisma, requestId);
++    }
++    private async load(db: Prisma.TransactionClient, id: string, user: AuthUser, mode: 'read' | 'write') {
++        const r = await db.clientRequest.findUnique({ where: { id }, include });
++        if (!r)
++            throw new NotFoundException('Заявка не найдена.');
++        this.scopes.requireClientAccess(user, r.clientId, mode);
++        assertWarehouseAccess(user, r, mode);
++        return r;
++    }
++    async plan(id: string, user: AuthUser) {
++        if (!fboTwoStageEnabled())
++            throw new NotFoundException('Двухэтапная сборка ФБО выключена.');
++        return this.prisma.$transaction(async (tx) => {
++            const r = await this.load(tx, id, user, 'read');
++            this.requireFbo(r);
++            return this.snapshot(tx, r);
++        }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 30000 });
++    }
++    private requireFbo(r: Request) {
++        if (r.type !== 'OUTBOUND' || r._count.fbsOrderLinks || r.client.storesWithoutBoxes)
++            throw new BadRequestException('Этот режим предназначен для ФБО с учётом по коробам.');
++        if (!r.warehouseId)
++            throw new BadRequestException('Укажите филиал заявки.');
++        if (!r.items.length || r.items.some(i => !i.skuId || !i.sku || i.sku.clientId !== r.clientId || i.quantity < 1 || !i.barcode))
++            throw new BadRequestException('У каждой строки ФБО должны быть товар, ШК и положительное количество.');
++        if (r.pickWaveRequests.some(w => ['PENDING', 'SUBMITTED'].includes(w.wave.balanceReviewStatus)))
++            throw new ConflictException('Сначала завершите проверку балансов волны.');
++    }
++    private async snapshot(tx: Prisma.TransactionClient, r: Request) {
++        const assembly = await tx.fboAssembly.findUnique({ where: { requestId: r.id }, include: { units: true, boxes: true } });
++        const units = assembly?.units ?? [];
++        const lines = remainingFboLines(r.items, units).map(i => ({ id: i.id, skuId: i.skuId!, barcode: i.barcode!,
++            name: i.name || i.sku!.name, article: i.sku!.article, size: i.sku!.size, requiresKiz: (i.sku!.needsChestnyZnak && !i.sku!.isUnmarked) || units.some(u => u.skuId === i.skuId && !!u.markId),
++            needed: i.needed, picked: i.picked, packed: i.packed, remaining: i.remaining }));
++        const demand: Record<string, number> = {};
++        for (const l of lines)
++            demand[l.skuId] = (demand[l.skuId] ?? 0) + l.remaining;
++        const boxes = assembly?.phase && assembly.phase !== 'PICKING' ? [] : await tx.box.findMany({
++            where: { clientId: r.clientId, warehouseId: r.warehouseId, status: 'active', balances: { some: {
++                        skuId: { in: Object.keys(demand).filter(k => demand[k] > 0) }, status: 'AVAILABLE', quantity: { gt: 0 }
++                    } } },
++            include: { balances: true, productMarks: { where: { status: { not: 'SHIPPING' } } },
++                storagePlacement: { include: { pallet: { include: { zone: true } } } }, pallet: true, zone: true }, orderBy: { code: 'asc' },
++        });
++        const route = [];
++        // FIX: historical stock may have real marks even when the SKU flag was never filled.
++        for (const l of lines)
++            if (boxes.some(b => b.productMarks.some(m => m.skuId === l.skuId && m.status === 'AVAILABLE')))
++                l.requiresKiz = true;
++        boxes.sort((a, b) => (a.storagePlacement?.pallet.code ?? a.pallet?.code ?? '').localeCompare(b.storagePlacement?.pallet.code ?? b.pallet?.code ?? '', 'ru', { numeric: true }) || a.code.localeCompare(b.code, 'ru', { numeric: true }));
++        for (const box of boxes) {
++            const tasks: Array<{
++                skuId: string;
++                barcode: string;
++                name: string;
++                quantity: number;
++                requiresKiz: boolean;
++            }> = [];
++            for (const balance of box.balances) {
++                if (balance.status !== 'AVAILABLE' || balance.quantity <= 0 || (demand[balance.skuId] ?? 0) <= 0)
++                    continue;
++                const l = lines.find(i => i.skuId === balance.skuId)!;
++                const quantity = Math.min(demand[l.skuId], balance.quantity);
++                tasks.push({ skuId: l.skuId, barcode: l.barcode, name: `${l.name} · ${l.article || ''} · ${l.size || ''}`, quantity, requiresKiz: l.requiresKiz });
++                demand[l.skuId] -= quantity;
++            }
++            if (!tasks.length)
++                continue;
++            const decision = wholeBoxDecision(box.balances, Object.fromEntries(tasks.map(t => [t.skuId, t.quantity])), box.productMarks.map(m => ({ ...m, identity: identity(m.value) })), tasks.some(t => t.requiresKiz));
++            route.push({ boxCode: box.code, pallet: box.storagePlacement?.pallet.code ?? box.pallet?.code ?? '',
++                zone: box.storagePlacement?.pallet.zone?.name ?? box.zone?.name ?? '', tasks, wholeBox: decision.allowed, recount: decision.recount });
++        }
++        return { requestId: r.id, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED', lines, route,
++            needed: lines.reduce((s, l) => s + l.needed, 0), picked: lines.reduce((s, l) => s + l.picked, 0), packed: lines.reduce((s, l) => s + l.packed, 0),
++            looseRemaining: units.filter(u => !u.wholeBox && u.state === 'PICKED').length,
++            wholeBoxes: [...new Set(units.filter(u => u.wholeBox && u.state === 'PICKED').map(u => u.sourceBoxCode))],
++            boxes: (assembly?.boxes ?? []).map(b => ({ code: b.boxCode, wholeBox: b.wholeBox, closed: !!b.closedAt, confirmed: !!b.confirmedAt,
++                quantity: units.filter(u => u.targetBoxId === b.boxId && u.state === 'PACKED').length })),
++            shortage: Object.values(demand).reduce((s, n) => s + n, 0), compositionChanged: !!assembly && assembly.compositionHash !== composition(r) };
++    }
++    async act(id: string, dto: FboActionDto, user: AuthUser) {
++        if (!fboTwoStageEnabled())
++            throw new NotFoundException('Двухэтапная сборка ФБО выключена.');
++        await this.lock.assertStockMovementsAllowed();
++        // FIX: one durable operation id and a request lock make retries and concurrent terminals safe.
++        await this.prisma.$transaction(async (tx) => {
++            await tx.$queryRaw `SELECT "id" FROM "ClientRequest" WHERE "id"=${id} FOR UPDATE`;
++            const r = await this.load(tx, id, user, 'write');
++            this.requireFbo(r);
++            // FIX: persisted JSON can change property order after a terminal restart.
++            const key = `${id}:${dto.operationId}`, payloadHash = hash([
++                dto.action, dto.sourceBoxCode ?? null, dto.targetBoxCode ?? null, dto.barcode ?? null, dto.kiz ?? null, dto.palletCode ?? null,
++            ]);
++            const previous = await tx.fboAssemblyAction.findUnique({ where: { id: key } });
++            if (previous) {
++                if (previous.payloadHash !== payloadHash || previous.actorId !== user.id)
++                    throw new ConflictException('Номер операции уже использован с другими данными.');
++                return;
++            }
++            if (!['SUBMITTED', 'APPROVED', 'IN_WORK'].includes(r.status))
++                throw new ConflictException('Заявка недоступна для сборки.');
++            let a = await tx.fboAssembly.findUnique({ where: { requestId: id } });
++            if (!a) {
++                if (dto.action !== 'START')
++                    throw new ConflictException('Сначала начните отбор.');
++                // FIX: never reinterpret a partially executed legacy assembly as a fresh two-stage one.
++                const legacy = await hasLegacyFboProgress(tx, id);
++                if (legacy || r._count.packages)
++                    throw new ConflictException('Заявка уже обрабатывалась старым способом. Требуется отдельный перенос её состояния.');
++                a = await tx.fboAssembly.create({ data: { requestId: id, compositionHash: composition(r) } });
++                await tx.clientRequest.update({ where: { id }, data: { status: 'IN_WORK' } });
++            }
++            if (a.compositionHash !== composition(r))
++                throw new ConflictException('Состав заявки изменён после начала отбора. Нужна сверка собранных единиц.');
++            const units = await tx.fboAssemblyUnit.findMany({ where: { requestId: id, state: { not: 'RETURNED' } } });
++            const lines = remainingFboLines(r.items, units);
++            const requirePhase = (phase: string) => { if (a!.phase !== phase)
++                throw new ConflictException('Этап изменился. Обновите заявку.'); };
++            if (dto.action === 'PICK_UNIT' || dto.action === 'PICK_BOX') {
++                requirePhase('PICKING');
++                const source = await this.box(tx, r, dto.sourceBoxCode);
++                await this.requireIdleBox(tx, source.id, id);
++                const location = await tx.box.findUniqueOrThrow({ where: { id: source.id }, include: { pallet: true, storagePlacement: { include: { pallet: true } } } });
++                const palletCode = location.storagePlacement?.pallet.code ?? location.pallet?.code;
++                if (palletCode && dto.palletCode !== palletCode)
++                    throw new ConflictException('Сначала отсканируйте паллет, на котором сейчас находится этот короб.');
++                const balances = await tx.stockBalance.findMany({ where: { boxId: source.id, clientId: r.clientId, warehouseId: r.warehouseId } });
++                const marks = await tx.productMark.findMany({ where: { boxId: source.id, status: { not: 'SHIPPING' } } });
++                const whole = dto.action === 'PICK_BOX';
++                let chosen: Array<{
++                    skuId: string;
++                    mark: typeof marks[number] | null;
++                }> = [];
++                if (whole) {
++                    const demand: Record<string, number> = {};
++                    for (const l of lines)
++                        demand[l.skuId!] = (demand[l.skuId!] ?? 0) + l.remaining;
++                    const marked = marks.length > 0 || lines.some(l => balances.some(b => b.skuId === l.skuId && b.quantity > 0) && l.sku!.needsChestnyZnak && !l.sku!.isUnmarked);
++                    const decision = wholeBoxDecision(balances, demand, marks.map(m => ({ ...m, identity: identity(m.value) })), marked);
++                    if (decision.recount)
++                        throw new ConflictException({ code: 'FBO_BOX_RECOUNT_REQUIRED', boxCode: source.code, message: 'Состав КИЗ не совпадает с остатком. Выполните актуализацию короба.' });
++                    if (!decision.allowed)
++                        throw new ConflictException('Короб нельзя забрать целиком. Отбирайте нужное количество через ШК и КИЗ.');
++                    const skuId = balances.find(b => b.quantity > 0)!.skuId;
++                    chosen = Array.from({ length: decision.quantity }, (_, i) => ({ skuId, mark: marked ? marks[i] : null }));
++                }
++                else {
++                    const line = lines.find(l => l.remaining > 0 && (l.barcode === dto.barcode || l.sku!.barcodes.some(b => b.value === dto.barcode)));
++                    if (!line)
++                        throw new BadRequestException('Этот товар не требуется или уже полностью отобран.');
++                    const marked = (line.sku!.needsChestnyZnak && !line.sku!.isUnmarked) || marks.some(m => m.skuId === line.skuId && m.status === 'AVAILABLE');
++                    if (marked && !dto.kiz)
++                        throw new BadRequestException('После ШК отсканируйте КИЗ.');
++                    const mark = dto.kiz ? await this.exactMark(tx, dto.kiz) : null;
++                    if (mark && (mark.clientId !== r.clientId || mark.skuId !== line.skuId || mark.boxId !== source.id || mark.status !== 'AVAILABLE'))
++                        throw new ConflictException('Этот КИЗ не доступен в указанном коробе для данного товара.');
++                    chosen = [{ skuId: line.skuId!, mark }];
++                }
++                const holding = whole ? source : await tx.box.upsert({ where: { code: `FBO-PICK-${id}` }, create: { code: `FBO-PICK-${id}`, clientId: r.clientId, warehouseId: r.warehouseId, status: 'fbo-picking' }, update: {} });
++                for (const pick of chosen) {
++                    const line = lines.find(l => l.skuId === pick.skuId && l.remaining > 0)!;
++                    line.remaining--;
++                    if (pick.mark) {
++                        const resolved = await this.exactMark(tx, pick.mark.value);
++                        if (resolved.id !== pick.mark.id)
++                            throw new ConflictException('Неоднозначный КИЗ.');
++                    }
++                    const unitId = randomUUID();
++                    const movement = await this.move(tx, r, pick.skuId, source.id, holding.id, 'AVAILABLE', 'PACKING', 1, `${key}:${unitId}`, user);
++                    if (pick.mark) {
++                        const changed = await tx.productMark.updateMany({ where: { id: pick.mark.id, boxId: source.id, status: 'AVAILABLE' }, data: { boxId: holding.id, status: 'PACKING', stockMovementId: movement.id } });
++                        if (changed.count !== 1)
++                            throw new ConflictException('КИЗ уже отобран другим сотрудником.');
++                    }
++                    await tx.fboAssemblyUnit.create({ data: { id: unitId, requestId: id, requestItemId: line.id, skuId: pick.skuId, barcode: line.barcode!,
++                            markId: pick.mark?.id, activeMarkId: pick.mark?.id, kiz: pick.mark?.value, sourceBoxId: source.id, sourceBoxCode: source.code, wholeBox: whole, pickedByUserId: user.id } });
++                }
++            }
++            else if (dto.action === 'FINISH_PICK') {
++                requirePhase('PICKING');
++                if (lines.some(l => l.remaining))
++                    throw new ConflictException('Сначала отберите все единицы заявки.');
++                await tx.fboAssembly.update({ where: { requestId: id }, data: { phase: 'PACKING' } });
++            }
++            else if (dto.action === 'OPEN_BOX') {
++                requirePhase('PACKING');
++                const target = await this.target(tx, r, dto.targetBoxCode);
++                await this.requireIdleBox(tx, target.id, id);
++                const previousBox = await tx.fboAssemblyBox.findUnique({ where: { activeBoxId: target.id } });
++                if (previousBox) {
++                    if (previousBox.requestId !== id || previousBox.closedAt || previousBox.wholeBox)
++                        throw new ConflictException('Короб уже закрыт или принадлежит другой сборке.');
++                }
++                else {
++                    if (await tx.stockBalance.count({ where: { boxId: target.id, quantity: { not: 0 } } }) || await tx.productMark.count({ where: { boxId: target.id } }))
++                        throw new ConflictException('Для упаковки нужен пустой короб.');
++                    if (!units.some(u => !u.wholeBox && u.state === 'PICKED'))
++                        throw new ConflictException('Все отдельные единицы уже вложены.');
++                    await tx.fboAssemblyBox.create({ data: { requestId: id, boxId: target.id, activeBoxId: target.id, boxCode: target.code } });
++                }
++            }
++            else if (dto.action === 'PACK_UNIT') {
++                requirePhase('PACKING');
++                const target = await this.box(tx, r, dto.targetBoxCode);
++                const parcel = await tx.fboAssemblyBox.findUnique({ where: { activeBoxId: target.id } });
++                if (!parcel || parcel.requestId !== id || parcel.closedAt || parcel.wholeBox)
++                    throw new ConflictException('Сначала откройте короб для упаковки.');
++                const mark = dto.kiz ? await this.exactMark(tx, dto.kiz) : null;
++                const unit = units.find(u => !u.wholeBox && u.state === 'PICKED' && u.barcode === dto.barcode && (mark ? u.markId === mark.id : !u.markId));
++                if (!unit)
++                    throw new ConflictException('Единица не отобрана для этой заявки или уже вложена. Проверьте ШК и КИЗ.');
++                const holding = await tx.box.findUniqueOrThrow({ where: { code: `FBO-PICK-${id}` } });
++                const movement = await this.move(tx, r, unit.skuId, holding.id, target.id, 'PACKING', 'PACKING', 1, key, user);
++                if (mark) {
++                    const moved = await tx.productMark.updateMany({ where: { id: mark.id, boxId: holding.id, status: 'PACKING' }, data: { boxId: target.id, stockMovementId: movement.id } });
++                    if (moved.count !== 1)
++                        throw new ConflictException('КИЗ перемещён после отбора. Нужна сверка.');
++                }
++                await tx.fboAssemblyUnit.update({ where: { id: unit.id }, data: { state: 'PACKED', targetBoxId: target.id, targetBoxCode: target.code, packedAt: new Date(), packedByUserId: user.id } });
++            }
++            else if (dto.action === 'PACK_BOX') {
++                requirePhase('PACKING');
++                const box = await this.box(tx, r, dto.sourceBoxCode);
++                const picked = units.filter(u => u.wholeBox && u.sourceBoxId === box.id && u.state === 'PICKED');
++                if (!picked.length)
++                    throw new ConflictException('Этот короб не отобран целиком или уже добавлен.');
++                await tx.fboAssemblyBox.create({ data: { requestId: id, boxId: box.id, activeBoxId: box.id, boxCode: box.code, wholeBox: true, closedAt: new Date() } });
++                await tx.fboAssemblyUnit.updateMany({ where: { id: { in: picked.map(u => u.id) } }, data: { state: 'PACKED', targetBoxId: box.id, targetBoxCode: box.code, packedAt: new Date(), packedByUserId: user.id } });
++            }
++            else if (dto.action === 'CANCEL_EMPTY_BOX') {
++                requirePhase('PACKING');
++                const target = await this.box(tx, r, dto.targetBoxCode);
++                const b = await tx.fboAssemblyBox.findUnique({ where: { activeBoxId: target.id } });
++                if (!b || b.requestId !== id || b.closedAt || units.some(u => u.targetBoxId === target.id) || await tx.stockBalance.count({ where: { boxId: target.id, quantity: { not: 0 } } }) || await tx.productMark.count({ where: { boxId: target.id } }))
++                    throw new ConflictException('Отложить можно только пустой открытый короб этой заявки.');
++                await tx.fboAssemblyBox.delete({ where: { id: b.id } });
++            }
++            else if (dto.action === 'CLOSE_BOX') {
++                requirePhase('PACKING');
++                const b = await tx.fboAssemblyBox.findUnique({ where: { requestId_boxCode: { requestId: id, boxCode: dto.targetBoxCode ?? '' } } });
++                if (!b || b.closedAt)
++                    throw new ConflictException('Короб не открыт или уже закрыт.');
++                if (!units.some(u => u.targetBoxId === b.boxId && u.state === 'PACKED'))
++                    throw new ConflictException('Нельзя закрыть пустой короб.');
++                await tx.fboAssemblyBox.update({ where: { id: b.id }, data: { closedAt: new Date() } });
++            }
++            else if (dto.action === 'SORTED') {
++                requirePhase('PACKING');
++                if (lines.some(l => l.packed !== l.needed))
++                    throw new ConflictException('Не все отобранные единицы разложены по коробам.');
++                const boxes = await tx.fboAssemblyBox.findMany({ where: { requestId: id } });
++                if (!boxes.length || boxes.some(b => !b.closedAt))
++                    throw new ConflictException('Закройте все короба.');
++                await tx.fboAssembly.update({ where: { requestId: id }, data: { phase: 'CONTROL' } });
++            }
++            else if (dto.action === 'CONFIRM_BOX') {
++                requirePhase('CONTROL');
++                const b = await tx.fboAssemblyBox.findUnique({ where: { requestId_boxCode: { requestId: id, boxCode: dto.targetBoxCode ?? '' } } });
++                if (!b || !b.closedAt)
++                    throw new ConflictException('Короб не входит в поставку.');
++                if (b.confirmedAt)
++                    throw new ConflictException('Этот короб уже подтверждён.');
++                await this.validatePackedBox(tx, r, b.boxId, units);
++                await tx.fboAssemblyBox.update({ where: { id: b.id }, data: { confirmedAt: new Date(), confirmedByUserId: user.id } });
++            }
++            else if (dto.action === 'FINISH') {
++                requirePhase('CONTROL');
++                const boxes = await tx.fboAssemblyBox.findMany({ where: { requestId: id } });
++                if (!boxes.length || boxes.some(b => !b.confirmedAt) || lines.some(l => l.packed !== l.needed))
++                    throw new ConflictException('Отсканируйте все короба поставки.');
++                for (const b of boxes)
++                    await this.validatePackedBox(tx, r, b.boxId, units);
++                await tx.clientRequestBoxSelection.deleteMany({ where: { requestItem: { requestId: id } } });
++                const packages = boxes.map(b => ({ packageCode: b.boxCode, packageType: 'BOX', items: r.items.map(i => ({ requestItemId: i.id, quantity: units.filter(u => u.targetBoxId === b.boxId && u.requestItemId === i.id && u.state === 'PACKED').length })).filter(i => i.quantity) }));
++                for (const b of boxes)
++                    for (const i of packages.find(p => p.packageCode === b.boxCode)!.items)
++                        await tx.clientRequestBoxSelection.create({ data: { requestItemId: i.requestItemId, skuId: r.items.find(l => l.id === i.requestItemId)!.skuId!, boxId: b.boxId, quantity: i.quantity } });
++                await this.stock.packageClientRequest({ requestId: id, idempotencyKey: `fbo-pack:${id}`, boxes: boxes.length, packedUnits: units.length, packages }, user, tx);
++                await tx.productMark.updateMany({ where: { id: { in: units.filter(u => u.markId).map(u => u.markId!) }, status: 'PACKING' }, data: { status: 'SHIPPING' } });
++                // FIX: preserve history, but a later documented return may use the same physical KIZ again.
++                await tx.fboAssemblyUnit.updateMany({ where: { requestId: id }, data: { activeMarkId: null } });
++                await tx.fboAssemblyBox.updateMany({ where: { requestId: id }, data: { activeBoxId: null } });
++                await tx.fboAssembly.update({ where: { requestId: id }, data: { phase: 'COMPLETED' } });
++            }
++            else if (dto.action !== 'START')
++                throw new BadRequestException('Неизвестное действие.');
++            await tx.fboAssemblyAction.create({ data: { id: key, requestId: id, payloadHash, actorId: user.id } });
++            await tx.auditLog.create({ data: { userId: user.id, action: `FBO_${dto.action}`, entity: 'ClientRequest', entityId: id, payload: { operationId: dto.operationId, palletCode: dto.palletCode, sourceBoxCode: dto.sourceBoxCode, targetBoxCode: dto.targetBoxCode, barcode: dto.barcode } } });
++        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 60000 });
++        return this.plan(id, user);
++    }
++    private async box(tx: Prisma.TransactionClient, r: Request, code?: string) {
++        if (!code)
++            throw new BadRequestException('Сканируйте ШК короба.');
++        await tx.$queryRaw `SELECT "id" FROM "Box" WHERE "code"=${code} FOR UPDATE`;
++        const box = await tx.box.findUnique({ where: { code } });
++        if (!box || box.clientId !== r.clientId || box.warehouseId !== r.warehouseId || box.status !== 'active')
++            throw new NotFoundException('Короб недоступен в филиале и у клиента заявки.');
++        return box;
++    }
++    private async target(tx: Prisma.TransactionClient, r: Request, code?: string) {
++        if (!code || !/^FFL[\w-]{1,96}$/i.test(code))
++            throw new BadRequestException('Сканируйте ШК короба FFL.');
++        await tx.box.upsert({ where: { code }, create: { code, clientId: r.clientId, warehouseId: r.warehouseId }, update: {} });
++        return this.box(tx, r, code);
++    }
++    private async requireIdleBox(tx: Prisma.TransactionClient, boxId: string, requestId: string) {
++        const [count, task, selection, parcel] = await Promise.all([
++            tx.inventoryAuditBox.findFirst({ where: { boxId, status: { in: ['COUNTING', 'MISMATCH'] }, session: { status: { in: ['ACTIVE', 'REVIEW'] } } } }),
++            tx.fbsTsdAssembly.findFirst({ where: { OR: [{ boxId }, { reservedBoxId: boxId }], status: { in: ['RESERVED', 'IN_PROGRESS'] } } }),
++            tx.clientRequestBoxSelection.findFirst({ where: { boxId, requestItem: { request: { id: { not: requestId }, status: { in: ['APPROVED', 'IN_WORK'] } } } } }),
++            tx.fboAssemblyBox.findFirst({ where: { activeBoxId: boxId, requestId: { not: requestId } } }),
++        ]);
++        if (count || task || selection || parcel)
++            throw new ConflictException('Короб участвует в актуализации или другой активной сборке.');
++    }
++    private async exactMark(tx: Prisma.TransactionClient, kiz: string) {
++        const key = identity(kiz);
++        const rows = await tx.productMark.findMany({ where: { OR: [key, ']d2' + key, ']D2' + key].map(p => ({ value: { startsWith: p.replace(/[\\%_]/g, '\\$&') } })) } });
++        const matches = rows.filter(m => identity(m.value) === key);
++        if (matches.length !== 1)
++            throw new ConflictException('КИЗ отсутствует или имеет несколько записей. Нужна актуализация.');
++        return matches[0];
++    }
++    private async move(tx: Prisma.TransactionClient, r: Request, skuId: string, from: string, to: string, sourceStatus: StockStatus, targetStatus: StockStatus, quantity: number, key: string, user: AuthUser) {
++        const rows = await tx.stockBalance.findMany({ where: { clientId: r.clientId, warehouseId: r.warehouseId, skuId, boxId: from, status: sourceStatus, quantity: { gt: 0 } }, orderBy: { id: 'asc' } });
++        let left = quantity;
++        for (const b of rows) {
++            const take = Math.min(left, b.quantity);
++            if (!take)
++                continue;
++            const changed = await tx.stockBalance.updateMany({ where: { id: b.id, quantity: { gte: take } }, data: { quantity: { decrement: take } } });
++            if (changed.count !== 1)
++                throw new ConflictException('Остаток изменился. Обновите задание.');
++            await tx.stockMovement.create({ data: { clientId: r.clientId, warehouseId: r.warehouseId, skuId, boxId: from, palletId: b.palletId, status: sourceStatus, type: 'MOVE', quantity: -take, sourceDocument: r.id, idempotencyKey: `${key}:${b.id}:out`, comment: `ФБО: ${user.name || user.id}` } });
++            left -= take;
++        }
++        if (left)
++            throw new ConflictException('Нет доступного остатка. Выполните актуализацию исходного короба.');
++        const target = await tx.box.findUniqueOrThrow({ where: { id: to } });
++        const dimensions = { clientId: r.clientId, warehouseId: r.warehouseId, skuId, boxId: to, palletId: target.palletId, status: targetStatus };
++        const balanceKey = this.balances.balanceKey(dimensions);
++        await tx.stockBalance.upsert({ where: { balanceKey }, create: { ...dimensions, balanceKey, quantity }, update: { quantity: { increment: quantity } } });
++        return tx.stockMovement.create({ data: { ...dimensions, type: 'MOVE', quantity, sourceDocument: r.id, idempotencyKey: `${key}:in`, comment: `ФБО: ${user.name || user.id}` } });
++    }
++    private async validatePackedBox(tx: Prisma.TransactionClient, r: Request, boxId: string, units: Array<{
++        targetBoxId: string | null;
++        skuId: string;
++        markId: string | null;
++        state: string;
++    }>) {
++        await this.box(tx, r, (await tx.box.findUniqueOrThrow({ where: { id: boxId } })).code);
++        const expected = units.filter(u => u.targetBoxId === boxId && u.state === 'PACKED');
++        const balances = await tx.stockBalance.findMany({ where: { boxId, quantity: { not: 0 } } });
++        const actual: Record<string, number> = {};
++        for (const b of balances) {
++            if (b.status !== 'PACKING' || b.clientId !== r.clientId || b.warehouseId !== r.warehouseId)
++                throw new ConflictException('В коробе появился посторонний остаток.');
++            actual[b.skuId] = (actual[b.skuId] ?? 0) + b.quantity;
++        }
++        const wanted: Record<string, number> = {};
++        for (const u of expected)
++            wanted[u.skuId] = (wanted[u.skuId] ?? 0) + 1;
++        if (Object.keys(actual).length !== Object.keys(wanted).length || Object.entries(wanted).some(([s, n]) => actual[s] !== n))
++            throw new ConflictException('Состав короба изменился после упаковки.');
++        const marks = await tx.productMark.findMany({ where: { boxId, status: { not: 'SHIPPING' } } });
++        if (marks.length !== expected.filter(u => u.markId).length || marks.some(m => m.status !== 'PACKING' || !expected.some(u => u.markId === m.id && u.skuId === m.skuId)))
++            throw new ConflictException('КИЗ короба изменились после упаковки.');
++    }
++    async wbFile(id: string, user: AuthUser) {
++        const plan = await this.plan(id, user);
++        if (plan.phase !== 'COMPLETED')
++            throw new ConflictException('Сначала подтвердите все короба поставки.');
++        return this.files.getWbPackagingTemplate(id, user);
++    }
++}
+--- a/wms/apps/api/src/modules/tsd/tsd-assembly.service.ts
++++ b/wms/apps/api/src/modules/tsd/tsd-assembly.service.ts
+@@ -25,0 +26,2 @@
++import { FboTwoStageService } from './fbo-two-stage.service';
++import { fboTwoStageEnabled } from './fbo-two-stage-policy';
+@@ -80,0 +83 @@
++    private readonly fbo?: FboTwoStageService,
+@@ -184,0 +188,2 @@
++    const fbo = this.fbo && fboTwoStageEnabled() && await this.fbo.eligible(requestId, user)
++      ? await this.fbo.plan(requestId, user) : undefined;
+@@ -186,0 +192 @@
++      fbo,
+@@ -188 +194 @@
+-      assemblyMode: exists.client.storesWithoutBoxes ? 'BOXLESS_PACKING' : 'BOX_WORKFLOW',
++      assemblyMode: fbo ? 'FBO_TWO_STAGE' : exists.client.storesWithoutBoxes ? 'BOXLESS_PACKING' : 'BOX_WORKFLOW',
+@@ -197 +203,2 @@
+-    await this.getRequestPlan(requestId, user);
++    const plan = await this.getRequestPlan(requestId, user);
++    this.requireLegacyPlan(plan);
+@@ -203,0 +211 @@
++    this.requireLegacyPlan(plan);
+@@ -221,0 +230 @@
++    this.requireLegacyPlan(plan);
+@@ -417,0 +427 @@
++    this.requireLegacyPlan(plan);
+@@ -485,0 +496,5 @@
++  }
++
++  private requireLegacyPlan(plan: { assemblyMode: string }) {
++    // FIX: old clients cannot move stock behind the two-stage unit ledger.
++    if (plan.assemblyMode === 'FBO_TWO_STAGE') throw new BadRequestException('Откройте новую двухэтапную сборку ФБО. При необходимости обновите ТСД.');
+--- a/wms/apps/api/src/modules/tsd/tsd.module.ts
++++ b/wms/apps/api/src/modules/tsd/tsd.module.ts
+@@ -16,0 +17,3 @@
++import { FboTwoStageService } from './fbo-two-stage.service';
++import { FboTwoStageController } from './fbo-two-stage.controller';
++import { ClientRequestMarketplaceFilesService } from '../client-requests/client-request-marketplace-files.service';
+@@ -20 +23 @@
+-  controllers: [TsdDeviceController, TsdSyncController],
++  controllers: [TsdDeviceController, TsdSyncController, FboTwoStageController],
+@@ -21,0 +25,2 @@
++    FboTwoStageService,
++    ClientRequestMarketplaceFilesService,
+--- /dev/null
++++ b/wms/apps/api/test/fbo-two-stage-policy.spec.ts
+@@ -0,0 +1,27 @@
++import { describe, expect, it } from 'vitest';
++import { wholeBoxDecision, remainingFboLines } from '../src/modules/tsd/fbo-two-stage-policy';
++describe('FBO physical picking', () => {
++    // TEST: a homogeneous box cannot be taken wholesale when demand is smaller.
++    it('requires individual scans for a 20-unit box when only five are required', () => {
++        expect(wholeBoxDecision([{ skuId: 's', quantity: 20, status: 'AVAILABLE' }], { s: 5 }, [], false).allowed).toBe(false);
++    });
++    it('requires a recount when a marked box has fewer KIZs than stock', () => {
++        expect(wholeBoxDecision([{ skuId: 's', quantity: 2, status: 'AVAILABLE' }], { s: 2 }, [{ skuId: 's', identity: 'a', status: 'AVAILABLE' }], true)).toMatchObject({ allowed: false, recount: true });
++    });
++    it('accepts a reconciled whole box and rejects duplicate physical marks', () => {
++        const balances = [{ skuId: 's', quantity: 2, status: 'AVAILABLE' }];
++        const marks = ['a', 'b'].map(identity => ({ skuId: 's', identity, status: 'AVAILABLE' }));
++        expect(wholeBoxDecision(balances, { s: 2 }, marks, true).allowed).toBe(true);
++        expect(wholeBoxDecision(balances, { s: 2 }, [marks[0], marks[0]], true).allowed).toBe(false);
++    });
++    it('never takes mixed contents or reserved units as a whole box', () => {
++        for (const other of [{ skuId: 'x', quantity: 1, status: 'AVAILABLE' }, { skuId: 's', quantity: 1, status: 'RESERVED' }]) {
++            expect(wholeBoxDecision([{ skuId: 's', quantity: 2, status: 'AVAILABLE' }, other], { s: 5, x: 5 }, [], false).allowed).toBe(false);
++        }
++    });
++    it('counts packed units as already picked and excludes explicitly returned units', () => {
++        expect(remainingFboLines([{ id: 'line', skuId: 's', quantity: 3 }], [
++            { requestItemId: 'line', state: 'PACKED' }, { requestItemId: 'line', state: 'PICKED' }, { requestItemId: 'line', state: 'RETURNED' },
++        ])[0]).toMatchObject({ needed: 3, picked: 2, packed: 1, remaining: 1 });
++    });
++});
+--- /dev/null
++++ b/wms/apps/api/test/fbo-two-stage.integration.spec.ts
+@@ -0,0 +1,253 @@
++import 'reflect-metadata';
++import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++import { PrismaClient } from '@prisma/client';
++import { randomUUID } from 'node:crypto';
++import * as XLSX from 'xlsx';
++import { FboTwoStageService } from '../src/modules/tsd/fbo-two-stage.service';
++import { TsdAssemblyService } from '../src/modules/tsd/tsd-assembly.service';
++import { StockBalancesService } from '../src/modules/stock/stock-balances.service';
++import { StockOperationsService } from '../src/modules/stock/stock-operations.service';
++import { ClientRequestMarketplaceFilesService } from '../src/modules/client-requests/client-request-marketplace-files.service';
++import type { AuthUser } from '../src/modules/auth/auth.types';
++const url = process.env.KIZ_DUPLICATE_TEST_DATABASE_URL;
++if (url && !/^postgresql:\/\/codex_tests@127\.0\.0\.1:55469\/kiz_duplicate_tests/.test(url))
++    throw Error('Dedicated local test DB only');
++describe.skipIf(!url).sequential('FBO physical pick, pack and final box control', () => {
++    const p = new PrismaClient(url ? { datasources: { db: { url } } } : undefined);
++    let client: string, wh: string, uid: string, sku: string, other: string, request: string, whole: string, partial: string, target: string, line: string;
++    let user: AuthUser, svc: FboTwoStageService, stock: StockOperationsService;
++    let marks: Array<{
++        id: string;
++        value: string;
++    }>;
++    const scopes = { requireClientAccess: (u: AuthUser, c: string) => { if (c !== client || u.id !== uid)
++            throw Error('Client access denied'); } };
++    const act = (action: string, extra: Record<string, string> = {}) => svc.act(request, { action, operationId: randomUUID(), ...extra }, user);
++    beforeEach(async () => {
++        vi.stubEnv('WMS_FBO_TWO_STAGE_ENABLED', 'true');
++        [client, wh, uid, sku, other, request, whole, partial, target, line] = Array.from({ length: 10 }, () => randomUUID());
++        user = { id: uid, name: 'Picker', email: 'test@invalid', roleCodes: ['ADMIN'], permissionCodes: ['system:admin'], clientScopeMode: 'ALL', clientIds: [], writableClientIds: [] } as AuthUser;
++        await p.warehouse.create({ data: { id: wh, code: wh, name: 'FBO test' } });
++        await p.client.create({ data: { id: client, code: client, name: 'FBO test' } });
++        await p.user.create({ data: { id: uid, name: 'Picker', email: uid + '@invalid', passwordHash: 'test' } });
++        for (const id of [sku, other])
++            await p.sku.create({ data: { id, clientId: client, internalSku: id, name: 'Test suit', needsChestnyZnak: id === sku, barcodes: { create: { value: id === sku ? '2051234567890' : '2051234567883' } } } });
++        for (const [id, quantity] of [[whole, 2], [partial, 3]] as const) {
++            await p.box.create({ data: { id, code: 'FFL_' + id, clientId: client, warehouseId: wh } });
++            await p.stockBalance.create({ data: { balanceKey: randomUUID(), clientId: client, warehouseId: wh, skuId: sku, boxId: id, status: 'AVAILABLE', quantity } });
++        }
++        await p.stockBalance.create({ data: { balanceKey: randomUUID(), clientId: client, warehouseId: wh, skuId: other, boxId: partial, status: 'AVAILABLE', quantity: 1 } });
++        marks = [];
++        for (let i = 0; i < 5; i++)
++            marks.push(await p.productMark.create({ data: { clientId: client, skuId: sku, boxId: i < 2 ? whole : partial, value: `010468099259845521${String(i).padStart(13, 'A')}\u001d91EE12\u001d92${client}`, status: 'AVAILABLE' } }));
++        await p.clientRequest.create({ data: { id: request, clientId: client, warehouseId: wh, type: 'OUTBOUND', title: 'FBO regression', items: { create: { id: line, skuId: sku, barcode: '2051234567890', quantity: 4 } } } });
++        const balances = new StockBalancesService(p as never, scopes as never);
++        stock = new StockOperationsService(p as never, scopes as never, balances);
++        svc = new FboTwoStageService(p as never, scopes as never, balances, stock, { assertStockMovementsAllowed: async () => { } } as never, new ClientRequestMarketplaceFilesService(p as never, scopes as never));
++    });
++    afterEach(async () => {
++        await p.auditLog.deleteMany({ where: { entityId: request } });
++        await p.tsdOperation.deleteMany({ where: { payload: { path: ['requestId'], equals: request } } });
++        await p.fboAssemblyAction.deleteMany({ where: { requestId: request } });
++        await p.fboAssemblyUnit.deleteMany({ where: { requestId: request } });
++        await p.fboAssemblyBox.deleteMany({ where: { requestId: request } });
++        await p.fboAssembly.deleteMany({ where: { requestId: request } });
++        await p.billingCharge.deleteMany({ where: { requestId: request } });
++        await p.clientBillingService.deleteMany({ where: { clientId: client } });
++        await p.clientRequest.deleteMany({ where: { id: request } });
++        await p.productMark.deleteMany({ where: { clientId: client } });
++        await p.stockMovement.deleteMany({ where: { clientId: client } });
++        await p.stockBalance.deleteMany({ where: { clientId: client } });
++        await p.box.deleteMany({ where: { clientId: client } });
++        await p.storagePallet.deleteMany({ where: { clientId: client } });
++        await p.barcode.deleteMany({ where: { sku: { clientId: client } } });
++        await p.sku.deleteMany({ where: { clientId: client } });
++        await p.client.deleteMany({ where: { id: client } });
++        await p.user.deleteMany({ where: { id: uid } });
++        await p.warehouse.deleteMany({ where: { id: wh } });
++        vi.unstubAllEnvs();
++    });
++    afterAll(() => p.$disconnect());
++    async function picked() { await act('START'); await act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole }); for (const m of marks.slice(2, 4))
++        await act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: m.value }); await act('FINISH_PICK'); }
++    async function packed() { await picked(); await act('PACK_BOX', { sourceBoxCode: 'FFL_' + whole }); await act('OPEN_BOX', { targetBoxCode: 'FFL_' + target }); for (const m of marks.slice(2, 4))
++        await act('PACK_UNIT', { targetBoxCode: 'FFL_' + target, barcode: '2051234567890', kiz: m.value }); await act('CLOSE_BOX', { targetBoxCode: 'FFL_' + target }); await act('SORTED'); }
++    it('completes the real mixed workflow with no second AVAILABLE debit, then exports the existing WB template', async () => {
++        // TEST: packing and final box scans must never decrement source stock again.
++        await packed();
++        await expect(svc.wbFile(request, user)).rejects.toThrow('подтвердите');
++        await act('CONFIRM_BOX', { targetBoxCode: 'FFL_' + whole });
++        await expect(act('FINISH')).rejects.toThrow('все короба');
++        await act('CONFIRM_BOX', { targetBoxCode: 'FFL_' + target });
++        const done = await act('FINISH');
++        expect(done.phase).toBe('COMPLETED');
++        const balances = await p.stockBalance.findMany({ where: { clientId: client, skuId: sku } });
++        expect(balances.filter(b => b.status === 'AVAILABLE').reduce((s, b) => s + b.quantity, 0)).toBe(1);
++        expect(balances.filter(b => b.status === 'SHIPPING').reduce((s, b) => s + b.quantity, 0)).toBe(4);
++        expect(balances.filter(b => b.status === 'PACKING').reduce((s, b) => s + b.quantity, 0)).toBe(0);
++        expect(await p.productMark.count({ where: { clientId: client, status: 'SHIPPING' } })).toBe(4);
++        expect(await p.fboAssemblyUnit.count({ where: { requestId: request, activeMarkId: { not: null } } })).toBe(0);
++        expect(await p.fboAssemblyBox.count({ where: { requestId: request, activeBoxId: { not: null } } })).toBe(0);
++        const file = await svc.wbFile(request, user);
++        const workbook = XLSX.read(file.content, { type: 'buffer' });
++        const rows = XLSX.utils.sheet_to_json(workbook.Sheets.TDSheet, { header: 1 }) as unknown[][];
++        expect(rows[0]).toEqual(['Баркод товара', 'Кол-во товаров', 'ШК короба', 'Срок годности']);
++        expect(rows.slice(1).map(r => r[1]).sort()).toEqual([2, 2]);
++        expect(await p.stockMovement.aggregate({ where: { clientId: client, skuId: sku, status: 'AVAILABLE' }, _sum: { quantity: true } })).toMatchObject({ _sum: { quantity: -4 } });
++    });
++    it('retries an unanswered unit scan with the same operation id and refuses changed payloads', async () => {
++        await act('START');
++        const dto = { action: 'PICK_UNIT', operationId: randomUUID(), sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[2].value };
++        await svc.act(request, dto, user);
++        await svc.act(request, Object.fromEntries(Object.entries(dto).reverse()) as typeof dto, user);
++        expect(await p.fboAssemblyUnit.count({ where: { requestId: request } })).toBe(1);
++        await expect(svc.act(request, { ...dto, kiz: marks[3].value }, user)).rejects.toThrow('другими данными');
++        await expect(act('PICK_UNIT', { ...dto, operationId: randomUUID() })).rejects.toThrow('не доступен');
++    });
++    it('rejects a whole box whose marks are incomplete and leaves both ledger and stock intact', async () => {
++        await act('START');
++        await p.productMark.update({ where: { id: marks[0].id }, data: { boxId: null } });
++        await expect(act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole })).rejects.toThrow('актуализацию');
++        expect(await p.fboAssemblyUnit.count({ where: { requestId: request } })).toBe(0);
++        expect(await p.stockMovement.count({ where: { clientId: client } })).toBe(0);
++    });
++    it('rejects a mixed whole box, a foreign KIZ and an excessive pick', async () => {
++        await act('START');
++        await expect(act('PICK_BOX', { sourceBoxCode: 'FFL_' + partial })).rejects.toThrow('нельзя');
++        await expect(act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[0].value })).rejects.toThrow('не доступен');
++        await act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole });
++        for (const m of marks.slice(2, 4))
++            await act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: m.value });
++        await expect(act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[4].value })).rejects.toThrow('полностью отобран');
++    });
++    it('serializes competing terminals so one KIZ is picked once', async () => {
++        await act('START');
++        const payload = { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[2].value };
++        const result = await Promise.allSettled([act('PICK_UNIT', payload), act('PICK_UNIT', payload)]);
++        expect(result.filter(r => r.status === 'fulfilled')).toHaveLength(1);
++        expect(await p.fboAssemblyUnit.count({ where: { requestId: request } })).toBe(1);
++    });
++    it('blocks empty or unclosed parcels, early packing, duplicate final scans and an unrelated box', async () => {
++        await act('START');
++        await expect(act('OPEN_BOX', { targetBoxCode: 'FFL_' + target })).rejects.toThrow('Этап');
++        await act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole });
++        for (const m of marks.slice(2, 4))
++            await act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: m.value });
++        await act('FINISH_PICK');
++        await act('OPEN_BOX', { targetBoxCode: 'FFL_' + target });
++        await expect(act('CLOSE_BOX', { targetBoxCode: 'FFL_' + target })).rejects.toThrow('пустой');
++        await act('PACK_BOX', { sourceBoxCode: 'FFL_' + whole });
++        for (const m of marks.slice(2, 4))
++            await act('PACK_UNIT', { targetBoxCode: 'FFL_' + target, barcode: '2051234567890', kiz: m.value });
++        await expect(act('SORTED')).rejects.toThrow('Закройте');
++        await act('CLOSE_BOX', { targetBoxCode: 'FFL_' + target });
++        await act('SORTED');
++        await expect(act('CONFIRM_BOX', { targetBoxCode: 'FFL_' + partial })).rejects.toThrow('не входит');
++        await act('CONFIRM_BOX', { targetBoxCode: 'FFL_' + whole });
++        await expect(act('CONFIRM_BOX', { targetBoxCode: 'FFL_' + whole })).rejects.toThrow('уже подтверждён');
++    });
++    it('rolls back final confirmation and package/balance writes if billing fails', async () => {
++        await packed();
++        for (const b of [whole, target])
++            await act('CONFIRM_BOX', { targetBoxCode: 'FFL_' + b });
++        vi.spyOn(stock as any, 'createFulfillmentBillingCharges').mockRejectedValueOnce(Error('billing failure'));
++        await expect(act('FINISH')).rejects.toThrow('billing failure');
++        expect((await p.fboAssembly.findUniqueOrThrow({ where: { requestId: request } })).phase).toBe('CONTROL');
++        expect(await p.clientRequestPackage.count({ where: { requestId: request } })).toBe(0);
++        expect(await p.stockBalance.aggregate({ where: { clientId: client, status: 'SHIPPING' }, _sum: { quantity: true } })).toMatchObject({ _sum: { quantity: null } });
++        expect((await act('FINISH')).phase).toBe('COMPLETED');
++    });
++    it('rejects changed contents at final control and request composition changes', async () => {
++        await packed();
++        await p.productMark.update({ where: { id: marks[0].id }, data: { boxId: null } });
++        await expect(act('CONFIRM_BOX', { targetBoxCode: 'FFL_' + whole })).rejects.toThrow('КИЗ');
++        await p.clientRequestItem.update({ where: { id: line }, data: { quantity: 5 } });
++        await expect(act('FINISH')).rejects.toThrow('Состав заявки изменён');
++    });
++    it('isolates disabled installations and cross-client or branch users', async () => {
++        await expect(svc.plan(request, { ...user, id: randomUUID() })).rejects.toThrow('Client access');
++        await expect(svc.plan(request, { ...user, roleCodes: ['EMPLOYEE'], permissionCodes: ['stock:read'], activeWarehouseId: 'other', warehouseIds: ['other'] })).rejects.toThrow('филиале');
++        vi.stubEnv('WMS_FBO_TWO_STAGE_ENABLED', 'false');
++        expect(await svc.eligible(request, user)).toBe(false);
++        await expect(act('START')).rejects.toThrow('выключена');
++        expect(await p.fboAssembly.count({ where: { requestId: request } })).toBe(0);
++    });
++    it('requires the current pallet scan before a box pick and catches a changed placement', async () => {
++        // TEST: a box code alone cannot bypass the pallet step.
++        const pallet = await p.storagePallet.create({ data: { clientId: client, warehouseId: wh, code: 'PALET_SORT_' + client } });
++        await p.storagePalletBox.create({ data: { palletId: pallet.id, boxId: whole, boxCode: 'FFL_' + whole } });
++        const plan = await act('START');
++        expect(plan.route.find(r => r.boxCode === 'FFL_' + whole)?.pallet).toBe(pallet.code);
++        await expect(act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole })).rejects.toThrow('Сначала отсканируйте паллет');
++        await expect(act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole, palletCode: 'PALET_SORT_OTHER' })).rejects.toThrow('Сначала отсканируйте паллет');
++        await act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole, palletCode: pallet.code });
++        expect(await p.fboAssemblyUnit.count({ where: { requestId: request } })).toBe(2);
++    });
++    it('releases an accidentally opened empty box but never removes a packed one', async () => {
++        await picked();
++        await act('OPEN_BOX', { targetBoxCode: 'FFL_' + target });
++        await act('CANCEL_EMPTY_BOX', { targetBoxCode: 'FFL_' + target });
++        expect(await p.fboAssemblyBox.count({ where: { requestId: request } })).toBe(0);
++        await act('OPEN_BOX', { targetBoxCode: 'FFL_' + target });
++        await act('PACK_UNIT', { targetBoxCode: 'FFL_' + target, barcode: '2051234567890', kiz: marks[2].value });
++        await expect(act('CANCEL_EMPTY_BOX', { targetBoxCode: 'FFL_' + target })).rejects.toThrow('пустой');
++        const mark = await p.productMark.findUniqueOrThrow({ where: { id: marks[2].id }, include: { stockMovement: true } });
++        expect(mark.stockMovement).toMatchObject({ boxId: mark.boxId, quantity: 1, status: 'PACKING', sourceDocument: request });
++    });
++    it('supports an explicitly unmarked SKU without inventing KIZs', async () => {
++        await p.clientRequestItem.update({ where: { id: line }, data: { skuId: other, barcode: '2051234567883', quantity: 1 } });
++        await act('START');
++        await act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567883' });
++        await act('FINISH_PICK');
++        await act('OPEN_BOX', { targetBoxCode: 'FFL_' + target });
++        await act('PACK_UNIT', { targetBoxCode: 'FFL_' + target, barcode: '2051234567883' });
++        await act('CLOSE_BOX', { targetBoxCode: 'FFL_' + target });
++        await act('SORTED');
++        await act('CONFIRM_BOX', { targetBoxCode: 'FFL_' + target });
++        expect((await act('FINISH')).phase).toBe('COMPLETED');
++        expect((await p.fboAssemblyUnit.findFirstOrThrow({ where: { requestId: request } })).markId).toBeNull();
++    });
++    it('requires the physical KIZ even if a historical SKU was missing its marking flag', async () => {
++        await p.sku.update({ where: { id: sku }, data: { needsChestnyZnak: false } });
++        const plan = await act('START');
++        expect(plan.lines[0].requiresKiz).toBe(true);
++        await expect(act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890' })).rejects.toThrow('отсканируйте КИЗ');
++        await act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[2].value });
++    });
++    it('preserves legacy assemblies and blocks legacy bulk pick/pack once the new flow starts', async () => {
++        await expect(stock.pickClientRequest({ requestId: request }, user)).rejects.toThrow('поштучный отбор');
++        await p.stockMovement.create({ data: { clientId: client, warehouseId: wh, skuId: sku, status: 'PACKING', quantity: 1, type: 'PICK', sourceDocument: request } });
++        expect(await svc.eligible(request, user)).toBe(false);
++        await expect(act('START')).rejects.toThrow('старым способом');
++        await p.stockMovement.deleteMany({ where: { sourceDocument: request } });
++        await act('START');
++        await expect(stock.pickClientRequest({ requestId: request }, user)).rejects.toThrow('поштучный отбор');
++        await expect(stock.packageClientRequest({ requestId: request }, user)).rejects.toThrow('проверку всех коробов');
++        await expect(stock.shipClientRequest({ requestId: request }, user)).rejects.toThrow('подтвердите');
++    });
++    it('keeps an existing TSD movement workflow in legacy mode even before bulk picking', async () => {
++        await p.tsdOperation.create({ data: { deviceId: 'test', operationKey: randomUUID(), operationType: 'move_scan', payload: { requestId: request }, status: 'ACCEPTED' } });
++        expect(await svc.eligible(request, user)).toBe(false);
++        await expect(act('START')).rejects.toThrow('старым способом');
++    });
++    it('keeps punctuation and physical identity across scanner formats without replacing the stored KIZ', async () => {
++        // TEST: percent and underscore are data, not SQL LIKE wildcards.
++        const key = '010468099259845521AB%_CDEF12345';
++        const value = `${key}\u001d91EE12\u001d92${client}`;
++        await p.productMark.update({ where: { id: marks[2].id }, data: { value } });
++        await act('START');
++        await act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: `]d2${key}91EE1292${client}` });
++        expect(await p.productMark.findUnique({ where: { id: marks[2].id } })).toMatchObject({ value, status: 'PACKING' });
++        await p.productMark.create({ data: { clientId: client, skuId: sku, boxId: partial, value: value + 'duplicate', status: 'AVAILABLE' } });
++        await expect(act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: key })).rejects.toThrow('несколько записей');
++        expect(await p.fboAssemblyUnit.count({ where: { requestId: request } })).toBe(1);
++    });
++    it('blocks old TSD movement and outgoing actions for the new workflow', async () => {
++        const legacy = new TsdAssemblyService(p as never, scopes as never, {} as never, stock, {} as never, svc);
++        vi.spyOn(legacy, 'getRequestPlan').mockResolvedValue({ assemblyMode: 'FBO_TWO_STAGE' } as never);
++        await expect(legacy.assertMovementProgressAvailable(request, {}, user)).rejects.toThrow('двухэтапную');
++        await expect(legacy.assertOutgoingBoxAvailable(request, {}, user)).rejects.toThrow('двухэтапную');
++        await expect(legacy.assertRelabelProgressAvailable(request, {}, user)).rejects.toThrow('двухэтапную');
++        await expect(legacy.handleStageAction(request, 'box-search', 'scan', 'FFL_' + whole, user)).rejects.toThrow('двухэтапную');
++    });
++});
+--- a/wms/apps/web/src/components/client-requests/ClientRequestsPanel.tsx
++++ b/wms/apps/web/src/components/client-requests/ClientRequestsPanel.tsx
+@@ -82,0 +83 @@
++import { FboTwoStagePanel } from './FboTwoStagePanel';
+@@ -611,0 +613,6 @@
++      // FIX: new FBO stock is picked by physical scans; the old bulk action only opens its screen.
++      const plan = await fetchTsdAssemblyPlan(session.accessToken, request.id).catch(() => null);
++      if (plan?.fbo) {
++        setOnlinePreview({ request, plan, status: 'ready' });
++        return;
++      }
+@@ -2318 +2325 @@
+-      {onlinePreview ? (
++      {onlinePreview?.plan?.fbo ? <FboTwoStagePanel key={`${session.user.id}:${onlinePreview.request.id}`} initial={onlinePreview.plan.fbo} accessToken={session.accessToken} userId={session.user.id} canWrite={canPickOutbound} onClose={()=>setOnlinePreview(null)} /> : onlinePreview ? (
+--- /dev/null
++++ b/wms/apps/web/src/components/client-requests/FboTwoStagePanel.spec.tsx
+@@ -0,0 +1,29 @@
++import React from 'react';
++import { renderToStaticMarkup } from 'react-dom/server';
++import { describe, expect, it } from 'vitest';
++import { FboTwoStagePanel, selectFboLocation } from './FboTwoStagePanel';
++import type { FboPlan } from '../../lib/api';
++
++const base:FboPlan={requestId:'r',title:'1029',phase:'PACKING',needed:2,picked:2,packed:2,looseRemaining:0,shortage:0,compositionChanged:false,wholeBoxes:[],lines:[],route:[],boxes:[{code:'FFL_1',quantity:2,wholeBox:false,closed:true,confirmed:false}]};
++const render=(plan:FboPlan)=>renderToStaticMarkup(<FboTwoStagePanel initial={plan} accessToken="test" userId="picker" canWrite onClose={()=>{}}/>);
++describe('FBO packing and final box control',()=>{
++  it('offers box sorting completion before final verification and keeps WB export unavailable',()=>{
++    // TEST: closing parcels is not proof that all shipment boxes were scanned.
++    const html=render(base);expect(html).toContain('Короба разобраны');expect(html).not.toContain('Скачать файл WB');
++  });
++  it('requires each closed box to be scanned before the final button is enabled',()=>{
++    const html=render({...base,phase:'CONTROL'});expect(html).toContain('Подтверждено коробов 0 из 1');
++    expect(html).toMatch(/disabled="">Завершить проверку и сформировать файл WB/);
++  });
++  it('offers the WB workbook only for the completed shipment',()=>{
++    expect(render({...base,phase:'COMPLETED'})).toContain('Скачать файл WB');
++  });
++  it('opens only the selected pallet boxes, with a direct scan for boxes without a pallet',()=>{
++    const route=[{boxCode:'FFL_1',pallet:'PALET_SORT_27',zone:'2',tasks:[],wholeBox:false,recount:false},{boxCode:'FFL_2',pallet:'PALET_SORT_28',zone:'2',tasks:[],wholeBox:false,recount:false},{boxCode:'FFL_3',pallet:'',zone:'',tasks:[],wholeBox:false,recount:false}];
++    expect(selectFboLocation(route,'','FFL_1')).toBeNull();
++    expect(selectFboLocation(route,'','PALET_SORT_27')).toEqual({pallet:'PALET_SORT_27',source:''});
++    expect(selectFboLocation(route,'PALET_SORT_27','FFL_2')).toBeNull();
++    expect(selectFboLocation(route,'PALET_SORT_27','ffl_1')).toEqual({pallet:'PALET_SORT_27',source:'FFL_1'});
++    expect(selectFboLocation(route,'','FFL_3')).toEqual({pallet:'',source:'FFL_3'});
++  });
++});
+--- /dev/null
++++ b/wms/apps/web/src/components/client-requests/FboTwoStagePanel.tsx
+@@ -0,0 +1,74 @@
++import { FormEvent, useRef, useState } from 'react';
++import { actFbo, fetchFboPlan, downloadFboWbFile, type FboPlan, type FboAction } from '../../lib/api';
++
++// FIX: pallet scan narrows the list before the source box can be selected.
++export function selectFboLocation(route:FboPlan['route'], pallet:string, scan:string) {
++  const same=(a:string,b:string)=>a.trim().toUpperCase()===b.trim().toUpperCase();
++  if(!pallet){const match=route.find(r=>r.pallet&&same(r.pallet,scan));if(match)return {pallet:match.pallet,source:''};}
++  const box=route.find(r=>same(r.boxCode,scan)&&r.pallet===pallet);
++  return box?{pallet,source:box.boxCode}:null;
++}
++
++export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClose }: {initial:FboPlan;accessToken:string;userId:string;canWrite:boolean;onClose:()=>void}) {
++  const [plan,setPlan]=useState(initial),[code,setCode]=useState(''),[source,setSource]=useState(''),[target,setTarget]=useState(''),[barcode,setBarcode]=useState('');
++  const [pallet,setPallet]=useState('');
++  const storageKey=`fbo-pending:${userId}:${initial.requestId}`;
++  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[pending,setPending]=useState<FboAction|null>(()=>{
++    try{return JSON.parse(localStorage.getItem(storageKey)||'null');}catch{return null;}
++  });
++  const inFlight=useRef(false),field=useRef<HTMLInputElement>(null);
++  const sourceTask=plan.route.find(b=>b.boxCode===source);
++  const title=plan.phase==='CONTROL'?'Проверка всех коробов поставки':plan.phase==='PACKING'?'2. Упаковка поставки':'1. Отбор товара';
++  async function command(action:string,extra:Partial<FboAction>={}) {
++    if(inFlight.current || !canWrite) return;
++    const dto=pending??{action,operationId:crypto.randomUUID(),palletCode:pallet,...extra};inFlight.current=true;setBusy(true);setError('');setPending(dto);
++    try {localStorage.setItem(storageKey,JSON.stringify(dto));const next=await actFbo(accessToken,plan.requestId,dto);setPlan(next);localStorage.removeItem(storageKey);setPending(null);setBarcode('');setCode('');
++      if(!next.route.some(r=>r.boxCode===source))setSource('');
++      if(!next.route.some(r=>r.pallet===pallet))setPallet('');
++      if(!next.boxes.some(b=>b.code===target&&!b.closed) || next.phase!=='PACKING')setTarget('');
++      if(dto.action==='OPEN_BOX')setTarget(dto.targetBoxCode??'');
++      if(dto.action==='FINISH')void download();
++    }catch(e){setError(e instanceof Error?e.message:'Не удалось выполнить операцию.');if((e as {rejected?:boolean}).rejected){localStorage.removeItem(storageKey);setPending(null);}}
++    finally{inFlight.current=false;setBusy(false);setTimeout(()=>field.current?.focus(),0);}
++  }
++  async function scan(event:FormEvent){event.preventDefault();const value=code.trim();if(!value||busy||pending)return;setCode('');
++    if(plan.phase==='CONTROL'){await command('CONFIRM_BOX',{targetBoxCode:value});return;}
++    if(plan.phase==='PICKING'&&!source){const selected=selectFboLocation(plan.route,pallet,value);if(!selected){setError(pallet?'Короб не входит в список на этом паллете.':'Сначала отсканируйте паллет. Короб без паллета можно сканировать сразу.');return;}setPallet(selected.pallet);setSource(selected.source);setError('');return;}
++    if(plan.phase==='PACKING'&&!target){if(plan.wholeBoxes.includes(value)){await command('PACK_BOX',{sourceBoxCode:value});return;}await command('OPEN_BOX',{targetBoxCode:value});return;}
++    if(barcode){await command(plan.phase==='PICKING'?'PICK_UNIT':'PACK_UNIT',{sourceBoxCode:source,targetBoxCode:target,barcode,kiz:value});return;}
++    const line=plan.lines.find(l=>l.barcode===value&&(plan.phase==='PICKING'?l.remaining>0:l.picked>l.packed));
++    if(!line){setError('Этот ШК не требуется на текущем этапе.');return;}
++    if(line.requiresKiz){setBarcode(value);setError('');}
++    else await command(plan.phase==='PICKING'?'PICK_UNIT':'PACK_UNIT',{sourceBoxCode:source,targetBoxCode:target,barcode:value});
++  }
++  async function refresh(){if(inFlight.current||pending)return;inFlight.current=true;setBusy(true);try{const next=await fetchFboPlan(accessToken,plan.requestId);setPlan(next);if(!next.route.some(r=>r.boxCode===source&&r.pallet===pallet)){setSource('');setBarcode('');}if(!next.route.some(r=>r.pallet===pallet))setPallet('');if(!next.boxes.some(b=>b.code===target&&!b.closed))setTarget('');setError('');}catch(e){setError(String(e));}finally{inFlight.current=false;setBusy(false);}}
++  async function download(){try{const file=await downloadFboWbFile(accessToken,plan.requestId);const a=document.createElement('a');const url=URL.createObjectURL(file);a.href=url;a.download='wb-packages.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){setError(String(e));}}
++  const hint=plan.phase==='CONTROL'?'ШК короба поставки':plan.phase==='PICKING'&&!source?(pallet?'ШК короба на выбранном паллете':'ШК паллета или короба без паллета'):plan.phase==='PACKING'&&!target?'ШК короба для упаковки или целого отобранного короба':barcode?'КИЗ товара':'ШК товара';
++  return <div className="online-execution-modal" role="dialog" aria-modal="true" aria-label="Двухэтапная сборка ФБО"><section className="online-execution-modal__panel" style={{display:'block',maxWidth:1000,width:'95vw',maxHeight:'92vh',overflow:'auto',padding:24}}>
++    <h2>ФБО · {plan.title}</h2><p>Нужно {plan.needed} · Отобрано {plan.picked} · Упаковано {plan.packed}</p>
++    {plan.compositionChanged&&<p role="alert">Состав заявки изменился. Требуется сверка.</p>}
++    {plan.shortage>0&&<p role="alert">Недостаточно доступного остатка: {plan.shortage} ед.</p>}
++    <h3>{plan.phase==='COMPLETED'?'Поставка проверена':title}</h3>
++    {error&&<p role="alert">{error}</p>}
++    {pending&&!busy&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} onClick={()=>void command(pending.action)}>Повторить неподтверждённый запрос</button>}
++    {plan.phase==='NOT_STARTED'&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||!canWrite} onClick={()=>void command('START')}>Начать отбор</button>}
++    {['PICKING','PACKING','CONTROL'].includes(plan.phase)&&<form onSubmit={scan} style={{display:'flex',gap:12,alignItems:'end',flexWrap:'wrap',margin:'20px 0'}}><label style={{display:'grid',gap:8,flex:'1 1 240px'}}>{hint}<input ref={field} autoFocus value={code} onChange={e=>setCode(e.target.value)} disabled={busy||!!pending||!canWrite} style={{minHeight:44,padding:10,border:'1px solid var(--line)',borderRadius:6}}/></label><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||!canWrite}>Подтвердить скан</button></form>}
++    {sourceTask&&plan.phase==='PICKING'&&<div><p>{sourceTask.boxCode} · {sourceTask.pallet} · {sourceTask.zone}</p>{sourceTask.tasks.map(t=><p key={t.skuId}>Отберите {t.quantity} ед. · {t.name} · {t.barcode}</p>)}
++      {sourceTask.recount&&<p role="alert">Количество и КИЗ расходятся. Требуется актуализация короба.</p>}
++      {sourceTask.wholeBox&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||!canWrite} onClick={()=>void command('PICK_BOX',{sourceBoxCode:source})}>Короб забран целиком</button>}
++      <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending} onClick={()=>{setSource('');setBarcode('');}}>Другой исходный короб</button></div>}
++    {plan.phase==='PICKING'&&<><p>Осталось отобрать: {plan.needed-plan.picked}</p><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||plan.picked!==plan.needed||!canWrite} onClick={()=>void command('FINISH_PICK')}>Перейти к упаковке</button>
++      {!!pallet&&<p>Паллет {pallet} <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending} onClick={()=>{setPallet('');setSource('');setBarcode('');}}>Другой паллет</button></p>}
++      {!pallet&&<ul>{[...new Set(plan.route.map(r=>r.pallet).filter(Boolean))].map(p=><li key={p}>{p} · Нужных коробов: {plan.route.filter(r=>r.pallet===p).length}</li>)}</ul>}
++      <div className="online-execution-table-wrap"><table className="online-execution-table"><thead><tr><th>Паллет / зона</th><th>Нужный короб</th><th>Отобрать</th></tr></thead><tbody>{plan.route.filter(r=>r.pallet===pallet).map(r=><tr key={r.boxCode}><td>{r.pallet||'Без паллета'} · {r.zone}</td><td>{r.boxCode}</td><td>{r.tasks.map(t=>`${t.name}: ${t.quantity}`).join('; ')}</td></tr>)}</tbody></table></div></>}
++    {plan.phase==='PACKING'&&<><p>{target?`Открыт короб ${target}`:'Отсканируйте короб для упаковки'} · Осталось вложить {plan.needed-plan.packed}</p>
++      {!!target&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||!canWrite} onClick={()=>void command('CLOSE_BOX',{targetBoxCode:target})}>Закрыть короб</button>}
++      {!!target&&plan.boxes.some(b=>b.code===target&&!b.quantity&&!b.closed)&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||!canWrite} onClick={()=>void command('CANCEL_EMPTY_BOX',{targetBoxCode:target})}>Отложить пустой короб</button>}
++      {plan.wholeBoxes.length>0&&<p>Целые короба к добавлению: {plan.wholeBoxes.join(', ')}</p>}
++      <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||plan.packed!==plan.needed||plan.boxes.some(b=>!b.closed)||!canWrite} onClick={()=>void command('SORTED')}>Короба разобраны</button></>}
++    {['PACKING','CONTROL','COMPLETED'].includes(plan.phase)&&<ul>{plan.boxes.map(b=><li key={b.code}>{b.code} · {b.quantity} ед. · {b.confirmed?'Подтверждён':b.closed?'Закрыт':'Открыт'}</li>)}</ul>}
++    {plan.phase==='CONTROL'&&<><p>Подтверждено коробов {plan.boxes.filter(b=>b.confirmed).length} из {plan.boxes.length}</p><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||plan.boxes.some(b=>!b.confirmed)||!canWrite} onClick={()=>void command('FINISH')}>Завершить проверку и сформировать файл WB</button></>}
++    {plan.phase==='COMPLETED'&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} onClick={()=>void download()}>Скачать файл WB</button>}
++    <p><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending} onClick={()=>void refresh()}>Обновить</button> <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending} onClick={onClose}>Закрыть</button></p>
++  </section></div>;
++}
+--- a/wms/apps/web/src/lib/api.ts
++++ b/wms/apps/web/src/lib/api.ts
+@@ -2176,0 +2177 @@
++  fbo?: FboPlan;
+@@ -11043,0 +11045,16 @@
++export type FboPlan = {
++  requestId:string; title:string; phase:string; needed:number; picked:number; packed:number; looseRemaining:number; shortage:number;
++  compositionChanged:boolean; wholeBoxes:string[];
++  lines:Array<{id:string;skuId:string;barcode:string;name:string;article:string|null;size:string|null;requiresKiz:boolean;needed:number;picked:number;packed:number;remaining:number}>;
++  route:Array<{boxCode:string;pallet:string;zone:string;wholeBox:boolean;recount:boolean;tasks:Array<{skuId:string;barcode:string;name:string;quantity:number;requiresKiz:boolean}>}>;
++  boxes:Array<{code:string;wholeBox:boolean;closed:boolean;confirmed:boolean;quantity:number}>;
++};
++export type FboAction = {action:string;operationId:string;palletCode?:string;sourceBoxCode?:string;targetBoxCode?:string;barcode?:string;kiz?:string};
++export async function fetchFboPlan(accessToken:string,id:string) { return request<FboPlan>(`/tsd/requests/${id}/fbo`,{accessToken}); }
++export async function actFbo(accessToken:string,id:string,body:FboAction) {
++  const response=await fetch(`${API_BASE_URL}/tsd/requests/${id}/fbo/actions`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${accessToken}`},body:JSON.stringify(body)});
++  if(!response.ok) throw Object.assign(new Error(await responseError(response)),{rejected:response.status>=400&&response.status<500&&response.status!==408});
++  return await response.json() as FboPlan;
++}
++export function downloadFboWbFile(accessToken:string,id:string){return requestBlob(`/tsd/requests/${id}/fbo/wb-packages.xlsx`,accessToken);}
++
