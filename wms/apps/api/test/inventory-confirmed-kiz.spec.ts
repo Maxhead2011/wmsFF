@@ -54,7 +54,11 @@ function mutationFixture() {
   Object.assign(f.db, { $queryRaw: vi.fn(), $executeRaw: vi.fn(),
     inventoryAuditBox: { findUnique: vi.fn(async () => f.audit), findFirst: vi.fn(async () => ({ id: f.audit.id })) },
     stockMovement: { findFirst: vi.fn(async () => null) },
-    fbsTsdAssembly: { findFirst: vi.fn(async () => null) } });
+    fbsTsdAssembly: { findFirst: vi.fn(async () => null), findMany: vi.fn(async () => []), updateMany: vi.fn(async () => ({ count: 1 })) } });
+  f.db.stockBalance.updateMany = vi.fn(async ({ where, data }: any) => {
+    const row = f.balances.find(r => r.id === where.id); Object.assign(row, data); return { count: 1 };
+  });
+  f.db.stockMovement.create = vi.fn(async ({ data }: any) => data);
   f.db.auditLog.findUnique = vi.fn(async () => approval);
   f.db.auditLog.create = vi.fn(async ({ data }: any) => { approval = data; return data; });
   f.db.productMark.findMany = vi.fn(async ({ where }: any) => where.boxId ? f.marks.filter(m => m.boxId === where.boxId) : f.marks);
@@ -110,7 +114,7 @@ it('rebuilds KIZ ownership from the confirmed physical scans without any stock w
   expect(f.db.productMark.updateMany).toHaveBeenCalledTimes(writes);
   expect(f.db.productMark.create).toHaveBeenCalledTimes(1);
 });
-it.each(['new-round', 'parallel-pick', 'duplicate-scan', 'missing-unit', 'foreign-client', 'foreign-warehouse', 'active-pick', 'shipped-scan', 'reserve'])('rejects unsafe administrative composition before binding writes: %s', async kind => {
+it.each(['new-round', 'parallel-pick', 'duplicate-scan', 'missing-unit', 'foreign-client', 'foreign-warehouse', 'active-pick', 'shipped-scan'])('rejects unsafe administrative composition before binding writes: %s', async kind => {
   // TEST: authority does not authorize stealing an active/shipped unit or trusting a stale snapshot.
   vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT', 'true'); const f = mutationFixture();
   if (kind === 'new-round') f.db.inventoryAuditBox.findFirst.mockResolvedValue({ id: 'new-audit' });
@@ -121,11 +125,52 @@ it.each(['new-round', 'parallel-pick', 'duplicate-scan', 'missing-unit', 'foreig
   if (kind === 'foreign-warehouse') f.marks[0].box = { warehouseId: 'sold' };
   if (kind === 'active-pick') f.db.fbsTsdAssembly.findFirst.mockResolvedValue({ id: 'active' });
   if (kind === 'shipped-scan') f.marks[0].status = 'SHIPPING';
-  if (kind === 'reserve') f.balances[1].status = 'RESERVED';
   await expect(f.confirm()).rejects.toThrow();
   expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
   expect(f.db.productMark.create).not.toHaveBeenCalled();
   expect(f.db.auditLog.create).not.toHaveBeenCalled();
+});
+it.each(['ADMIN', 'OWNER'])('accepts physical count, retires old reserve and archives absent marks for %s', async role => {
+  // TEST: FFL_LKBS1009_26 retained a two-unit relabelling reserve after the actual count.
+  vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT', 'true'); const f = mutationFixture(); f.user.roleCodes = [role];
+  f.balances.push({ ...f.balances[0], id: 'reserved', status: 'RESERVED', quantity: 2 });
+  f.marks[0].status = 'RESERVED';
+  f.marks.push({ ...f.marks[0], id: 'absent', value: kiz.replace('NLnuX2T+l\'zW', 'AAAAAAAAAAAA') });
+  await f.confirm(); await f.confirm();
+  expect(f.balances[0].quantity).toBe(1); // Count includes all physically present units; never add reserve again.
+  expect(f.balances.find(r => r.id === 'reserved').quantity).toBe(0);
+  expect(f.balances[1].quantity).toBe(2); // Shipment/packing ledger retained.
+  expect(f.marks[0]).toMatchObject({ boxId: 'box', status: 'AVAILABLE' });
+  expect(f.marks[1]).toMatchObject({ boxId: null, status: 'BLOCKED' });
+  expect(f.db.stockMovement.create).toHaveBeenCalledTimes(1);
+  expect(f.db.stockMovement.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'RESERVED', quantity: -2 }) }));
+  expect(f.db.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ payload: expect.objectContaining({ archivedMarkIds: ['absent'], archiveReason: 'Не подтверждено при пересчёте' }) }) }));
+  await expect(f.run()).resolves.toMatchObject({ ready: true });
+});
+it.each(['worker', 'flag-off', 'pending'])('leaves reserve and missing marks for administrator review: %s', async kind => {
+  // TEST: counters cannot resolve their own discrepancies; pending web decisions do not mutate ownership.
+  vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT', kind === 'flag-off' ? 'false' : 'true'); const f = mutationFixture();
+  if (kind === 'worker') f.user.roleCodes = ['WAREHOUSE'];
+  if (kind === 'pending') f.audit.lines[0].decision = 'PENDING';
+  f.balances.push({ ...f.balances[0], id: 'reserved', status: 'RESERVED', quantity: 2 });
+  await f.confirm(); expect(f.db.stockBalance.updateMany).not.toHaveBeenCalled(); expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
+});
+it('releases only unpicked FBS source hints while preserving picked history', async () => {
+  // TEST: rerouting must not debit again or reset a task with physical pick evidence.
+  vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT', 'true'); const f = mutationFixture();
+  f.db.fbsTsdAssembly.findMany.mockResolvedValue([{ id: 'unpicked', status: 'RESERVED', updatedAt: startedAt }, { id: 'picked', status: 'RESERVED', updatedAt: startedAt }]);
+  f.db.stockMovement.findFirst.mockImplementation(async ({ where }: any) => where.idempotencyKey?.startsWith?.includes('picked:') && !where.idempotencyKey.startsWith.includes('unpicked:') ? { id: 'physical-pick' } : null);
+  await f.confirm();
+  expect(f.db.fbsTsdAssembly.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ completedAt: null, kiz: null, status: { in: ['RESERVED', 'WAITING_STOCK', 'RELEASED'] } }) }));
+  expect(f.db.fbsTsdAssembly.updateMany).toHaveBeenCalledTimes(1);
+  expect(f.db.fbsTsdAssembly.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: 'unpicked' }), data: expect.objectContaining({ status: 'WAITING_STOCK', reservedBoxId: null, boxId: null }) }));
+});
+it('does not release a reserve or archive anything when scans are incomplete', async () => {
+  // TEST: failed proof validation happens before mutations; the enclosing transaction is not a partial approval.
+  vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT', 'true'); const f = mutationFixture();
+  f.balances.push({ ...f.balances[0], id: 'reserved', status: 'RESERVED', quantity: 2 });
+  f.evidence.push(f.evidence[0]); await expect(f.confirm()).rejects.toThrow();
+  expect(f.db.stockBalance.updateMany).not.toHaveBeenCalled(); expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
 });
 it('confirms composition on the existing administrator completion/retry path', async () => {
   // TEST: wiring the helper into actual InventoryService completion is required, not just exporting it.
