@@ -1,4 +1,5 @@
 import { wbOrderStockLifecycleEnabled, finalizeWbOrderShipment, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
+import { enqueueFbsPrintBilling, FbsPrintBillingWorker } from './fbs-print-billing-outbox';
 import { physicalKizLookup, physicalKizHistoryFilter } from '../../common/kiz-physical-identity';
 import { stockTransferBlockedReason, ordersWithoutTransferStock } from './fbs-stock-transfer';
 import { fbsStockAuditError, fbsKizAuditEnabled, validateFbsStockAudit } from './fbs-stock-audit';
@@ -655,6 +656,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   private fbsRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   private fbsBackgroundRefreshRunning = false;
   private fbsBackgroundRefreshStopped = false;
+  private printBillingWorker?: FbsPrintBillingWorker;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -691,6 +693,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   onModuleInit() {
+    // FIX: sold installations without the lifecycle flag never access the new queue.
+    if (wbOrderStockLifecycleEnabled()) {
+      this.printBillingWorker = new FbsPrintBillingWorker(this.prisma,
+        clientId => this.ensureFbsProcessingCharges(clientId, []), message => this.logger.warn(message));
+      this.printBillingWorker.start();
+    }
     this.fbsBackgroundRefreshStopped = false;
     // ADDED: monitoring receives read-only probes through existing WB and WMS
     // calculation paths.
@@ -706,12 +714,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     this.scheduleFbsBackgroundRefresh(30_000);
   }
 
-  onModuleDestroy() {
+  async onModuleDestroy() {
     this.fbsBackgroundRefreshStopped = true;
     if (this.fbsRefreshTimer) {
       clearTimeout(this.fbsRefreshTimer);
       this.fbsRefreshTimer = undefined;
     }
+    await this.printBillingWorker?.stop();
   }
 
   private scheduleFbsBackgroundRefresh(
@@ -17271,9 +17280,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       if (task.marketplace === MarketplaceType.WILDBERRIES) {
         const cached = this.fbsOrdersCache.get(task.clientId)?.value.orders.find(order => order.connectionId === task.connectionId && order.id === task.orderId);
         const order = cached ?? await this.localShipmentOrder(task);
-        await this.prisma.$transaction(tx => finalizeWbOrderShipment(tx, task.id, 'PRINT_CONFIRMED', cleanJson(order), job.printedAt ?? undefined), { timeout: 30_000 });
+        // FIX: acknowledge after durable shipment + billing intent, not whole-client billing.
+        await this.prisma.$transaction(async tx => {
+          await finalizeWbOrderShipment(tx, task.id, 'PRINT_CONFIRMED', cleanJson(order), job.printedAt ?? undefined);
+          await enqueueFbsPrintBilling(tx, task.clientId);
+        }, { timeout: 30_000 });
         this.fbsOrdersCache.delete(task.clientId);
-        await this.ensureFbsProcessingCharges(task.clientId, []);
       }
     }
     return job;

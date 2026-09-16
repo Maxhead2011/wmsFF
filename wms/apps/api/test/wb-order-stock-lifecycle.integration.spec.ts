@@ -9,6 +9,7 @@ import { ClientRequestsService } from '../src/modules/client-requests/client-req
 import { StockOperationsService } from '../src/modules/stock/stock-operations.service';
 import { StockBalancesService } from '../src/modules/stock/stock-balances.service';
 import * as completedBilling from '../src/modules/billing/completed-fbs-billing';
+import { enqueueFbsPrintBilling, FbsPrintBillingWorker } from '../src/modules/marketplace-connections/fbs-print-billing-outbox';
 
 const url = process.env.WB_LIFECYCLE_TEST_DATABASE_URL;
 if (url && url !== 'postgresql://codex_tests@127.0.0.1:55469/wb_lifecycle_tests') throw Error('Dedicated local database required');
@@ -166,7 +167,7 @@ describe.skipIf(!url).sequential('WB stock lifecycle SQL integration', () => {
     expect(await db.stockMovement.count({ where: { clientId: f.clientId, type: 'SHIP' } })).toBe(1);
   });
   // TEST: pressing Print/queueing/failure never ships; only a successful SOS agent result does.
-  it('ships once after SOS print success and invokes billing, never on print failure', async () => {
+  it('ships once after SOS print success and queues billing, never on print failure', async () => {
     const f = await fixture();
     const station = await db.fbsPrintStation.create({ data: { name: randomUUID(), agentKey: randomUUID(), printerName: 'test', printerModel: 'test' } });
     const user = await db.user.create({ data: { email: randomUUID() + '@test.invalid', name: 'test', passwordHash: 'not-a-password' } });
@@ -185,7 +186,9 @@ describe.skipIf(!url).sequential('WB stock lifecycle SQL integration', () => {
     await service.finishFbsPrintJob(job.id, true, null, user);
     expect(await db.wbOrderShipment.findFirst({ where: { clientId: f.clientId } })).toEqual(first);
     expect(await db.stockMovement.count({ where: { clientId: f.clientId, type: 'SHIP' } })).toBe(1);
-    expect(service.ensureFbsProcessingCharges).toHaveBeenCalledWith(f.clientId, []);
+    // TEST: shipment remains synchronous; billing survives independently in the outbox.
+    expect(service.ensureFbsProcessingCharges).not.toHaveBeenCalled();
+    expect(await db.fbsPrintBillingOutbox.findUnique({ where: { clientId: f.clientId } })).toMatchObject({ revision: 2 });
   });
   // TEST: remaining request work must not resurrect already shipped packing or consume AVAILABLE twice.
   it.each(['lifecycle', 'legacy-WB'])('closes a partially printed %s request without double shipment credits', async (mode) => {
@@ -457,6 +460,43 @@ describe.skipIf(!url).sequential('WB stock lifecycle SQL integration', () => {
     const rows = await stocks.list({}, { activeWarehouseId: f.warehouseId, roleCodes: ['ADMIN'], permissionCodes: [] } as never);
     expect(rows.reduce((sum, row) => sum + ('freeQuantity' in row ? Number(row.freeQuantity) : row.quantity), 0)).toBe(4);
   });
+  // TEST: real billing writer, invoices and stock must survive remote cancellation without repricing or duplicates.
+  it('retries billing after a committed invoice without creating duplicate charges', async () => {
+    const f = await fixture();
+    const service: any = new MarketplaceConnectionsService(db as never, {} as never);
+    await db.clientFbsBillingSettings.create({ data: { clientId: f.clientId, fixedPlusLogisticsEnabled: true,
+      fixedPlusLogisticsUnitPriceRub: 37.1, pickupPointBasePriceRub: 0, vnukovoBasePriceRub: 0 } });
+    const order = JSON.parse(JSON.stringify(await service.localShipmentOrder(f.task)));
+    await db.$transaction(async tx => {
+      await finalizeWbOrderShipment(tx, f.taskId, 'PRINT_CONFIRMED', order);
+      await enqueueFbsPrintBilling(tx, f.clientId);
+    });
+    const scoped = Object.create(db);
+    Object.defineProperty(scoped, 'fbsPrintBillingOutbox', { value: new Proxy(db.fbsPrintBillingOutbox, {
+      get(target, key) {
+        if (key === 'findFirst') return (args: any) => target.findFirst({ ...args, where: { ...args.where, clientId: f.clientId } });
+        return Reflect.get(target, key);
+      },
+    }) });
+    const report = vi.fn();
+    const failedAck = new FbsPrintBillingWorker(scoped, async id => {
+      await service.ensureFbsProcessingCharges(id, []);
+      throw Error('lost worker acknowledgement after billing commit');
+    }, report);
+    await failedAck.processNext();
+    expect(report).toHaveBeenCalledOnce();
+    const invoices = await db.billingInvoice.findMany({ where: { clientId: f.clientId }, orderBy: { id: 'asc' } });
+    const charges = await db.billingCharge.findMany({ where: { clientId: f.clientId }, orderBy: { id: 'asc' } });
+    expect(invoices.length).toBeGreaterThan(0);
+    expect(charges.length).toBeGreaterThan(0);
+    await db.fbsPrintBillingOutbox.update({ where: { clientId: f.clientId }, data: { nextAttemptAt: new Date(0) } });
+    await new FbsPrintBillingWorker(scoped, id => service.ensureFbsProcessingCharges(id, []), report).processNext();
+    expect(await db.fbsPrintBillingOutbox.findUnique({ where: { clientId: f.clientId } })).toBeNull();
+    expect(await db.billingInvoice.findMany({ where: { clientId: f.clientId }, orderBy: { id: 'asc' } })).toEqual(invoices);
+    expect(await db.billingCharge.findMany({ where: { clientId: f.clientId }, orderBy: { id: 'asc' } })).toEqual(charges);
+    expect(await db.stockMovement.count({ where: { clientId: f.clientId, type: 'SHIP' } })).toBe(1);
+  });
+
   // TEST: real billing writer, invoices and stock must survive remote cancellation without repricing or duplicates.
   it('bills only local shipment and preserves the invoice after WB cancellation or disappearance', async () => {
     const f = await fixture();
