@@ -176,6 +176,8 @@ type FbsOrderSummary = {
   // FIX: billing-only identity of a deliberately repeated physical processing attempt.
   processingAttemptId?: string;
   processingAssemblyId?: string;
+  // FIX: splitting an immutable invoice does not create another physical processing attempt.
+  processingInvoiceId?: string;
   processingEvidence?: { itemCount: number; boxCode: string | null; relabelRequired: boolean };
   // FIX: only real marketplace responses populate this; fallback WMS rows cannot forge dates.
   sourceTiming?: SourceOrderTiming;
@@ -17279,7 +17281,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   private async localShipmentOrder(task: FbsTsdAssemblyRecord): Promise<FbsOrderSummary> {
     const [sku, request] = await Promise.all([
-      this.prisma.sku.findUniqueOrThrow({ where: { id: task.skuId } }),
+      this.prisma.sku.findUniqueOrThrow({ where: { id: task.skuId }, select: { id: true, name: true, internalSku: true, clientSku: true, article: true, size: true, needsChestnyZnak: true, isUnmarked: true } }),
       this.prisma.clientRequest.findUnique({ where: { id: task.requestId } }),
     ]);
     return { id: task.orderId, connectionId: task.connectionId, marketplace: MarketplaceType.WILDBERRIES,
@@ -17295,27 +17297,38 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   private async applyLocalWbShipments(clientId: string, orders: FbsOrderSummary[]) {
     // FIX: recover a committed print acknowledgement if shipment/billing was interrupted afterwards.
-    const printed = await this.prisma.fbsPrintJob.findMany({ where: { status: 'PRINTED', deviceCode: { startsWith: 'SOS-WB:' },
-      assemblyId: { in: (await this.prisma.fbsTsdAssembly.findMany({ where: { clientId, marketplace: MarketplaceType.WILDBERRIES }, select: { id: true } })).map(task => task.id) },
-    }, select: { assemblyId: true, printedAt: true }, distinct: ['assemblyId'], orderBy: { printedAt: 'asc' } });
+    // FIX: historical clients can exceed PostgreSQL's 32767 bind-parameter limit.
     const recorded = new Set((await this.prisma.wbOrderShipment.findMany({ where: { clientId }, select: { assemblyId: true } })).map(fact => fact.assemblyId));
+    const currentTasks = await this.prisma.fbsTsdAssembly.findMany({ where: { clientId, marketplace: MarketplaceType.WILDBERRIES },
+      select: { id: true, requestId: true, connectionId: true, orderId: true, completedAt: true } });
+    const pendingIds = currentTasks.filter(task => !recorded.has(task.id)).map(task => task.id);
+    const printed: Array<{ assemblyId: string; printedAt: Date | null }> = [];
+    for (const ids of chunks(pendingIds, 10000)) printed.push(...await this.prisma.fbsPrintJob.findMany({
+      where: { status: 'PRINTED', deviceCode: { startsWith: 'SOS-WB:' }, assemblyId: { in: ids } },
+      select: { assemblyId: true, printedAt: true }, distinct: ['assemblyId'], orderBy: { printedAt: 'asc' },
+    }));
     for (const print of printed) {
       if (recorded.has(print.assemblyId)) continue;
       const task = await this.prisma.fbsTsdAssembly.findUniqueOrThrow({ where: { id: print.assemblyId } });
       try {
         const order = orders.find(order => order.connectionId === task.connectionId && order.id === task.orderId) ?? await this.localShipmentOrder(task);
         await this.prisma.$transaction(tx => finalizeWbOrderShipment(tx, task.id, 'PRINT_CONFIRMED', cleanJson(order), print.printedAt ?? undefined), { timeout: 30_000 });
+        recorded.add(task.id);
       } catch (error) {
         this.logger.warn(`Printed WB order ${task.orderId} needs stock reconciliation: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
-    const doneRequests = await this.prisma.clientRequest.findMany({ where: { clientId, status: 'DONE',
-      id: { in: (await this.prisma.fbsTsdAssembly.findMany({ where: { clientId, marketplace: MarketplaceType.WILDBERRIES }, select: { requestId: true }, distinct: ['requestId'] })).map(task => task.requestId) },
-    }, select: { id: true } });
-    const tasks = await this.prisma.fbsTsdAssembly.findMany({ where: { clientId, marketplace: MarketplaceType.WILDBERRIES,
-      OR: [{ orderId: { in: orders.filter(order => order.marketplace === MarketplaceType.WILDBERRIES && order.category === 'shipped').map(order => order.id) } },
-        { requestId: { in: doneRequests.map(request => request.id) }, completedAt: { not: null } }],
-    } });
+    const doneRequests: Array<{ id: string }> = [];
+    for (const ids of chunks(uniqueStrings(currentTasks.map(task => task.requestId)), 10000)) {
+      doneRequests.push(...await this.prisma.clientRequest.findMany({ where: { clientId, status: 'DONE', id: { in: ids } }, select: { id: true } }));
+    }
+    const doneIds = new Set(doneRequests.map(request => request.id));
+    const incomingShipped = new Set(orders.filter(order => order.marketplace === MarketplaceType.WILDBERRIES && order.category === 'shipped')
+      .map(order => selectionKey(order.connectionId, order.id)));
+    const reconcileIds = currentTasks.filter(task => !recorded.has(task.id) &&
+      (incomingShipped.has(selectionKey(task.connectionId, task.orderId)) || (doneIds.has(task.requestId) && task.completedAt))).map(task => task.id);
+    const tasks: FbsTsdAssemblyRecord[] = [];
+    for (const ids of chunks(reconcileIds, 10000)) tasks.push(...await this.prisma.fbsTsdAssembly.findMany({ where: { clientId, id: { in: ids } } }));
     for (const task of tasks) {
       if (recorded.has(task.id)) continue;
       const manuallyShipped = doneRequests.some(request => request.id === task.requestId);
@@ -17329,19 +17342,23 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         this.logger.warn(`WB shipment ${task.orderId} needs reconciliation: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
-    const facts = await this.prisma.wbOrderShipment.findMany({ where: { clientId }, orderBy: [{ shippedAt: 'asc' }, { id: 'asc' }] });
     const byOrder = new Map(orders.map(order => [selectionKey(order.connectionId, order.id), order]));
     // FIX: an explicit repeat is current physical work; an older shipment must not hide it.
-    const currentTasks = await this.prisma.fbsTsdAssembly.findMany({ where: { clientId, marketplace: MarketplaceType.WILDBERRIES },
-      select: { id: true, connectionId: true, orderId: true } });
     const currentByOrder = new Map(currentTasks.map(task => [selectionKey(task.connectionId, task.orderId), task.id]));
-    const shippedAssemblies = new Set(facts.map(fact => fact.assemblyId));
-    for (const fact of facts) {
+    const shippedAssemblies = new Set((await this.prisma.wbOrderShipment.findMany({ where: { clientId }, select: { assemblyId: true } })).map(fact => fact.assemblyId));
+    // FIX: bound JSON decoding memory independently of accumulated shipment history.
+    for (let skip = 0; ; skip += 1000) {
+      const facts = await this.prisma.wbOrderShipment.findMany({ where: { clientId }, skip, take: 1000,
+        orderBy: [{ shippedAt: 'asc' }, { id: 'asc' }],
+        select: { assemblyId: true, connectionId: true, orderId: true, orderSnapshot: true, shippedAt: true } });
+      for (const fact of facts) {
       const currentId = currentByOrder.get(selectionKey(fact.connectionId, fact.orderId));
       if (currentId && currentId !== fact.assemblyId && !shippedAssemblies.has(currentId)) continue;
       const frozen = fact.orderSnapshot as unknown as FbsOrderSummary;
       byOrder.set(selectionKey(fact.connectionId, fact.orderId), { ...frozen, category: 'shipped', supplierStatus: 'complete',
         statusLabel: 'Отгружен из ВМС', deliveryDate: fact.shippedAt.toISOString() });
+      }
+      if (facts.length < 1000) break;
     }
     return [...byOrder.values()];
   }
@@ -26629,15 +26646,21 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   private async ensureFbsProcessingCharges(clientId: string, orders: FbsOrderSummary[]) {
     // FIX: bill durable local facts, including successful prints and orders no longer returned by WB.
     if (wbOrderStockLifecycleEnabled()) {
-      const facts = await this.prisma.wbOrderShipment.findMany({ where: { clientId }, orderBy: [{ shippedAt: 'asc' }, { id: 'asc' }] });
-      orders = [...orders.filter(order => order.marketplace !== MarketplaceType.WILDBERRIES),
-        ...facts.map(fact => {
+      orders = orders.filter(order => order.marketplace !== MarketplaceType.WILDBERRIES);
+      // FIX: decode bounded JSON batches rather than three full historical snapshots at once.
+      for (let skip = 0; ; skip += 1000) {
+        const facts = await this.prisma.wbOrderShipment.findMany({ where: { clientId }, skip, take: 1000,
+          orderBy: [{ shippedAt: 'asc' }, { id: 'asc' }],
+          select: { assemblyId: true, assemblySnapshot: true, orderSnapshot: true, quantity: true, shippedAt: true } });
+        orders.push(...facts.map(fact => {
           const evidence = asRecord(fact.assemblySnapshot);
           return { ...(fact.orderSnapshot as unknown as FbsOrderSummary), category: 'shipped' as const, processingAssemblyId: fact.assemblyId,
             ...(typeof evidence.billingAttemptId === 'string' ? { processingAttemptId: evidence.billingAttemptId } : {}),
             processingEvidence: { itemCount: fact.quantity, boxCode: textValue(evidence.boxCode) || null, relabelRequired: Boolean(evidence.relabelConfirmedAt) },
             supplierStatus: 'complete', deliveryDate: fact.shippedAt.toISOString() };
-        })];
+        }));
+        if (facts.length < 1000) break;
+      }
     }
     // FIX: lock before source-charge reads, not only when the resulting invoice is written.
     const result = await runBillingMutation(this.prisma, async (db) => {
@@ -26674,13 +26697,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         const ids = asArray<unknown>(asRecord(charge?.metadata).orderIds);
         if (charge && !ids.includes(order.id) && (charge.status !== BillingChargeStatus.DRAFT ||
           !charge.invoiceItems.every(item => isOwnedUnpaidDraft(item.invoice, `fbs-invoice:${clientId}:${shipmentKey}`)))) {
-          order.processingAttemptId = order.processingAssemblyId;
+          order.processingInvoiceId = order.processingAssemblyId;
         }
       }
     }
     const { fbsService, settings } = await this.ensureFbsBillingBase(clientId);
     const completedWorkEnabled = completedWorkBillingEnabled(clientId);
-    const priorWorkCharges = completedWorkEnabled ? await loadWorkCharges(this.prisma, clientId) : [];
+    // FIX: existing processing must be credited for every lifecycle client, including turnkey tariffs.
+    const processingCreditsEnabled = completedWorkEnabled || wbOrderStockLifecycleEnabled();
+    const priorWorkCharges = processingCreditsEnabled ? await loadWorkCharges(this.prisma, clientId) : [];
     const preservedOrderKeys = new Set<string>();
     const primaryProcessingServices = settings.primaryProcessingEnabled
       ? (await this.prisma.clientBillingService.findMany({
@@ -26729,7 +26754,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             await this.prisma.fbsTsdAssembly.findMany({
               where: {
                 clientId,
-                orderId: { in: uniqueStrings(orders.map((order) => order.id)) },
+                orderId: { in: uniqueStrings(orders.filter(order => !order.processingEvidence).map((order) => order.id)) },
               },
               select: {
                 connectionId: true,
@@ -26871,6 +26896,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
       const previouslyProcessed = otherProcessingOrderKeys(priorWorkCharges, sourceKey);
       const processingWeights = batchOrders.map(order => previouslyProcessed.has(fbsOrderKey(order)) ? 0 : Math.max(1, order.itemCount));
+      if (wbOrderStockLifecycleEnabled() && !existing && processingWeights.every(quantity => quantity === 0)) continue;
       const existingLogisticsTrip = asRecord(existingMetadata?.logisticsTrip);
       const extraTripOverride = existingLogisticsTrip?.extraTripOverride === true;
       const weights = batchOrders.map((order) => Math.max(1, order.itemCount));
@@ -26973,7 +26999,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         ? round((quote.servicesWithMarkup / 94) * 100, 2)
         : 0;
       const totalWithoutLogisticsRub = turnkeyEnabled
-        ? round(shipmentItems * turnkeyUnitPriceRub, 2)
+        ? round(processingWeights.reduce((sum, quantity) => sum + quantity, 0) * turnkeyUnitPriceRub, 2)
         : fixedPlusLogisticsEnabled
           ? fixedProcessingTotalRub
           : builtInTotalWithoutLogisticsRub;
@@ -27103,7 +27129,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         requestIds,
         orderIds: batchOrders.map((order) => order.id),
         ...(batchOrders[0].processingAttemptId ? { billingAttemptId: batchOrders[0].processingAttemptId } : {}),
-        ...(completedWorkEnabled ? { processingOrderIds: batchOrders.filter((_, index) => processingWeights[index] > 0).map(order => order.id) } : {}),
+        ...(processingCreditsEnabled ? { processingOrderIds: batchOrders.filter((_, index) => processingWeights[index] > 0).map(order => order.id) } : {}),
         quantity: shipmentItems,
         logisticsTrip: {
           groupKey: `${clientId}:${billingDay}`,
@@ -27218,14 +27244,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
       for (const [orderIndex, order] of batchOrders.entries()) {
         const itemCount = Math.max(1, order.itemCount);
-        const totalRub = completedWorkEnabled && fixedPlusLogisticsEnabled
+        const totalRub = processingCreditsEnabled && fixedPlusLogisticsEnabled
           ? round(processingWeights[orderIndex] * fixedPlusLogisticsUnitPriceRub +
             allocateRub(logisticsTripCharged ? logisticsWithTaxRub : 0, weights, orderIndex), 2)
           : allocateRub(calculatedTotalRub, weights, orderIndex);
         const fbsProcessingRub = turnkeyEnabled
           ? totalRub
           : fixedPlusLogisticsEnabled
-            ? (completedWorkEnabled ? round(processingWeights[orderIndex] * fixedPlusLogisticsUnitPriceRub, 2)
+            ? (processingCreditsEnabled ? round(processingWeights[orderIndex] * fixedPlusLogisticsUnitPriceRub, 2)
               : allocateRub(fixedProcessingTotalRub, weights, orderIndex))
             : allocateRub(
                 (quote!.processingCost + quote!.stickersCost) * 1.5,
@@ -30945,7 +30971,7 @@ function fbsShipmentKey(order: FbsOrderSummary) {
   const supply = order.supplyId?.trim();
   const date = (order.deliveryDate || order.sellerDate || order.createdAt || '').slice(0, 10);
   const batch = supply ? `supply:${supply}` : date ? `date:${date}` : `order:${order.id}`;
-  return `${order.marketplace}:${order.connectionId}:${batch}${order.processingAttemptId ? `:attempt:${order.processingAttemptId}` : ''}`;
+  return `${order.marketplace}:${order.connectionId}:${batch}${order.processingAttemptId ? `:attempt:${order.processingAttemptId}` : ''}${order.processingInvoiceId ? `:invoice:${order.processingInvoiceId}` : ''}`;
 }
 
 function fbsShipmentServiceDate(orders: FbsOrderSummary[]) {

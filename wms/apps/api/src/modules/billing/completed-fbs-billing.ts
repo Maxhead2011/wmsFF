@@ -172,9 +172,13 @@ async function recoverCompletedWorkLocked(db: PrismaService, clientId: string, a
     primaryEnabled: settings.primaryProcessingEnabled,
     relabelPrice: relabel ? Number(relabel.priceRub) / (relabel.taxMode === 'ADD_6_PERCENT' ? 0.94 : 1) : 0,
     serviceIds: Object.fromEntries(Object.entries(codes).map(([name, code]) => [name, services.find(s => s.code === code)?.id ?? null])) as WorkConfig['serviceIds'] };
-  const work: CompletedWork[] = await db.fbsTsdAssembly.findMany({ where: { clientId, completedAt: { gte: COMPLETED_WORK_FROM } } });
+  // FIX: WB work comes from frozen shipment facts; never load historical labels/box catalogues here.
+  const work: CompletedWork[] = await db.fbsTsdAssembly.findMany({ where: { clientId, completedAt: { gte: COMPLETED_WORK_FROM },
+    ...(wbOrderStockLifecycleEnabled() ? { marketplace: { not: 'WILDBERRIES' as const } } : {}) },
+    select: { id: true, clientId: true, marketplace: true, connectionId: true, orderId: true, requestId: true,
+      itemCount: true, completedAt: true, barcode: true, boxCode: true, workerUserId: true, deviceCode: true, relabelConfirmedAt: true } });
   // FIX: picking is not shipment; only immutable local WB shipment facts trigger new charges.
-  const shipments = wbOrderStockLifecycleEnabled() ? await db.wbOrderShipment.findMany({ where: { clientId } }) : null;
+  const shipments = wbOrderStockLifecycleEnabled();
   // Archived successful attempts are proof too; transfer/reset of the current task cannot erase them.
   const history = db.fbsAssemblyAttemptHistory ? await db.fbsAssemblyAttemptHistory.findMany({ where: { clientId, completedAt: { gte: COMPLETED_WORK_FROM } } }) : [];
   for (const attempt of history) {
@@ -191,7 +195,11 @@ async function recoverCompletedWorkLocked(db: PrismaService, clientId: string, a
     for (let index = work.length - 1; index >= 0; index -= 1) {
       if (work[index].marketplace === 'WILDBERRIES') work.splice(index, 1);
     }
-    for (const fact of shipments) {
+    // FIX: only billing evidence is needed; do not reload complete order snapshots.
+    for (let skip = 0; ; skip += 1000) {
+      const page = await db.wbOrderShipment.findMany({ where: { clientId }, skip, take: 1000, orderBy: { id: 'asc' },
+        select: { assemblyId: true, connectionId: true, orderId: true, requestId: true, quantity: true, shippedAt: true, assemblySnapshot: true } });
+      for (const fact of page) {
       const snapshot = record(fact.assemblySnapshot);
       work.push({ id: fact.assemblyId, clientId, marketplace: 'WILDBERRIES', connectionId: fact.connectionId,
         ...(typeof snapshot.billingAttemptId === 'string' ? { billingAttemptId: snapshot.billingAttemptId } : {}),
@@ -201,6 +209,8 @@ async function recoverCompletedWorkLocked(db: PrismaService, clientId: string, a
         workerUserId: typeof snapshot.workerUserId === 'string' ? snapshot.workerUserId : null,
         deviceCode: typeof snapshot.deviceCode === 'string' ? snapshot.deviceCode : null,
         relabelConfirmedAt: typeof snapshot.relabelConfirmedAt === 'string' ? new Date(snapshot.relabelConfirmedAt) : null });
+      }
+      if (page.length < 1000) break;
     }
   }
   const charges = await loadWorkCharges(db, clientId);

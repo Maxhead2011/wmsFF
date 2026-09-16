@@ -33,9 +33,13 @@ export async function wbReservationQuantities(db: Prisma.TransactionClient, clie
     ...(excludeRequestId ? { id: { not: excludeRequestId } } : {}),
     items: { some: { OR: [{ skuId: { in: skuIds } }, { skuId: null, barcode: { in: [...skuByBarcode.keys()] } }] } },
   }, select: { id: true, items: { select: { skuId: true, barcode: true, quantity: true } } } });
-  const links = tasks.length ? await db.fbsOrderRequestLink.findMany({ where: { clientId, marketplace: 'WILDBERRIES',
-    orderId: { in: [...new Set(tasks.map(task => task.orderId))] },
-    }, select: { connectionId: true, orderId: true, requestId: true, lastCategory: true, request: { select: { status: true, fbsEmergencyAssemblyAt: true } } } }) : [];
+  // FIX: a client's historical order ids can exceed PostgreSQL's bind-parameter limit.
+  const linkBatches = [];
+  for (const ids of chunksOf([...new Set(tasks.map(task => task.orderId))], 10000)) {
+    linkBatches.push(await db.fbsOrderRequestLink.findMany({ where: { clientId, marketplace: 'WILDBERRIES', orderId: { in: ids } },
+      select: { connectionId: true, orderId: true, requestId: true, lastCategory: true, request: { select: { status: true, fbsEmergencyAssemblyAt: true } } } }));
+  }
+  const links = linkBatches.flat();
   const terminalOrders = new Set(links.filter(link => ['shipped', 'archive', 'cancelled'].includes(link.lastCategory ?? '') && !link.request.fbsEmergencyAssemblyAt).map(link => `${link.connectionId}:${link.orderId}`));
   const requestByOrder = new Map(links.filter(link => !['CANCELLED', 'REJECTED'].includes(link.request.status)).map(link => [`${link.connectionId}:${link.orderId}`, link.requestId]));
   const picked: Array<{ idempotencyKey: string | null; quantity: number }> = [];
@@ -52,9 +56,11 @@ export async function wbReservationQuantities(db: Prisma.TransactionClient, clie
     status: 'AVAILABLE', type: { in: ['PICK', 'PACK', 'SHIP', 'RETURN'] },
     OR: [{ idempotencyKey: null }, { NOT: { idempotencyKey: { startsWith: 'fbs-sticker-pick:' } } }],
   }, _sum: { quantity: true } }) : [];
-  const shipments = tasks.length ? await db.wbOrderShipment.findMany({ where: { clientId,
-    assemblyId: { in: tasks.map(t => t.id) } }, select: { assemblyId: true } }) : [];
-  const shipped = new Set(shipments.map(s => s.assemblyId));
+  const shipmentBatches = [];
+  for (const ids of chunksOf(tasks.map(task => task.id), 10000)) shipmentBatches.push(await db.wbOrderShipment.findMany({
+    where: { clientId, assemblyId: { in: ids } }, select: { assemblyId: true },
+  }));
+  const shipped = new Set(shipmentBatches.flat().map(s => s.assemblyId));
   const pickedByTask = new Map<string, number>();
   for (const row of picked) {
     const id = row.idempotencyKey?.split(':')[1];
@@ -146,14 +152,24 @@ export async function finalizeWbOrderShipment(db: Prisma.TransactionClient, asse
     }
     if (remaining) throw new ConflictException('Недостаточно товара в упаковке для подтверждения отгрузки WB.');
   }
-  const { client: _client, items: _items, ...requestSnapshot } = request;
-  const orderSnapshot = JSON.parse(JSON.stringify({ ...(snapshot as object), request: requestSnapshot }));
+  // FIX: the request summary excludes import files and full request-wide metadata.
+  const requestSnapshot = { id: request.id, number: request.number, title: request.title, status: request.status,
+    warehouseId: request.warehouseId, fbsEmergencyAssemblyAt: request.fbsEmergencyAssemblyAt,
+    fbsEmergencyAssemblyByUserId: request.fbsEmergencyAssemblyByUserId, fbsEmergencyAssemblyByName: request.fbsEmergencyAssemblyByName };
+  // FIX: raw marketplace product payloads are not shipment evidence and can consume gigabytes during reconciliation.
+  const order = snapshot as Record<string, unknown>;
+  const product = order.product && typeof order.product === 'object' ? order.product as Record<string, unknown> : null;
+  const productKeys = ['id', 'name', 'internalSku', 'clientSku', 'article', 'size', 'needsChestnyZnak', 'isUnmarked'];
+  const orderSnapshot = JSON.parse(JSON.stringify({ ...order, request: requestSnapshot, storageBoxes: [],
+    ...(product ? { product: Object.fromEntries(productKeys.filter(key => key in product).map(key => [key, product[key]])) } : {}),
+  }));
+  const { storageBoxes: _suggestedBoxes, marketplaceLabelBase64: _labelImage, ...assemblyEvidence } = task;
   const repeat = await db.fbsAssemblyAttemptHistory.findUnique({ where: { successorId: task.id }, select: { id: true } }) ||
     await db.wbOrderShipment.findFirst({ where: { clientId: task.clientId, connectionId: task.connectionId, orderId: task.orderId }, select: { id: true } });
   const fact = await db.wbOrderShipment.create({ data: { clientId: task.clientId, connectionId: task.connectionId,
     orderId: task.orderId, assemblyId: task.id, requestId: task.requestId, warehouseId, skuId: task.skuId,
     quantity: count, kiz: task.kiz, source, shippedAt, orderSnapshot,
-    assemblySnapshot: JSON.parse(JSON.stringify({ ...task, billingAttemptId: repeat ? task.id : null })),
+    assemblySnapshot: JSON.parse(JSON.stringify({ ...assemblyEvidence, billingAttemptId: repeat ? task.id : null })),
   } });
   if (task.kiz) {
     if (!alreadyShipped) await db.productMark.updateMany({ where: { clientId: task.clientId, skuId: task.skuId, value: task.kiz, status: { in: ['PACKING', 'SHIPPING'] } },
@@ -167,4 +183,8 @@ export async function finalizeWbOrderShipment(db: Prisma.TransactionClient, asse
     }] });
   }
   return fact;
+}
+
+function* chunksOf<T>(values: T[], size: number): Generator<T[]> {
+  for (let offset = 0; offset < values.length; offset += size) yield values.slice(offset, offset + size);
 }

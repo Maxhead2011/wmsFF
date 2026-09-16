@@ -8,6 +8,7 @@ import { MarketplaceConnectionsService } from '../src/modules/marketplace-connec
 import { ClientRequestsService } from '../src/modules/client-requests/client-requests.service';
 import { StockOperationsService } from '../src/modules/stock/stock-operations.service';
 import { StockBalancesService } from '../src/modules/stock/stock-balances.service';
+import * as completedBilling from '../src/modules/billing/completed-fbs-billing';
 
 const url = process.env.WB_LIFECYCLE_TEST_DATABASE_URL;
 if (url && url !== 'postgresql://codex_tests@127.0.0.1:55469/wb_lifecycle_tests') throw Error('Dedicated local database required');
@@ -75,6 +76,31 @@ describe.skipIf(!url).sequential('WB stock lifecycle SQL integration', () => {
     expect((await wbReservationQuantities(db, f.clientId, [f.skuId], f.warehouseId)).get(f.skuId)).toBe(0);
     await db.clientRequest.update({ where: { id: f.requestId }, data: { fbsEmergencyAssemblyAt: new Date() } });
     expect((await wbReservationQuantities(db, f.clientId, [f.skuId], f.warehouseId)).get(f.skuId)).toBe(1);
+  });
+  // TEST: use real PostgreSQL parameter binding with a client whose history exceeds 32767 tasks.
+  it('reconciles a large client in bounded SQL batches', async () => {
+    const clientId = randomUUID();
+    const thinTasks = Array.from({ length: 40000 }, (_, i) => ({ id: `old-task-${i}`, requestId: `old-request-${i}`,
+      connectionId: 'old-connection', orderId: `old-order-${i}`, completedAt: null }));
+    const largeHistory = new Proxy(db, { get(target, property) {
+      if (property === 'fbsTsdAssembly') return { findMany: async () => thinTasks };
+      const value = Reflect.get(target, property);
+      return typeof value === 'function' ? value.bind(target) : value;
+    } });
+    const service: any = new MarketplaceConnectionsService(largeHistory as never, {} as never);
+    await expect(service.applyLocalWbShipments(clientId, [])).resolves.toEqual([]);
+  });
+  // TEST: stock exports must also bind order links and immutable shipments in bounded batches.
+  it('calculates free stock for a client with more than 32767 historical orders', async () => {
+    const f = await fixture(false);
+    const tasks = Array.from({ length: 33000 }, (_, i) => ({ ...f.task, id: `large-task-${i}`,
+      requestId: `AUTO:large-${i}`, orderId: `large-order-${i}` }));
+    const largeHistory = new Proxy(db, { get(target, property) {
+      if (property === 'fbsTsdAssembly') return { findMany: async () => tasks };
+      const value = Reflect.get(target, property);
+      return typeof value === 'function' ? value.bind(target) : value;
+    } });
+    expect((await wbReservationQuantities(largeHistory, f.clientId, [f.skuId], f.warehouseId)).get(f.skuId)).toBe(33001);
   });
   // TEST: execute the release migration itself, including warehouse backfill, in an isolated schema.
   it('applies the additive migration and backfills request/box reservation warehouses', async () => {
@@ -199,11 +225,67 @@ describe.skipIf(!url).sequential('WB stock lifecycle SQL integration', () => {
     expect(await db.wbOrderShipment.count({ where: { clientId: f.clientId } })).toBe(2);
     expect((await db.stockMovement.aggregate({ where: { clientId: f.clientId, type: 'SHIP' }, _sum: { quantity: true } }))._sum.quantity).toBe(-2);
   });
+  // TEST: a rehearsed historical fact can be promoted only while both shipment proof and task stay unchanged.
+  it('imports reviewed legacy proof idempotently and refuses changed task or history', async () => {
+    const f = await fixture();
+    await db.$transaction(tx => finalizeWbOrderShipment(tx, f.taskId, 'LEGACY_WMS_SHIPMENT', {}));
+    const payload: any[] = await db.$queryRawUnsafe(`SELECT jsonb_build_object('fact',to_jsonb(f),'history',to_jsonb(h)) payload FROM "WbOrderShipment" f JOIN "ShippedKizHistory" h ON h."assemblyId"=f."assemblyId" WHERE f."assemblyId"=$1`, f.taskId);
+    const sql = readFileSync('../../infra/releases/wb-order-stock-lifecycle/import-legacy.sql', 'utf8');
+    await db.wbOrderShipment.deleteMany({ where: { assemblyId: f.taskId } });
+    expect(await db.$executeRawUnsafe(sql, JSON.stringify(payload.map(row => row.payload)))).toBe(1);
+    expect(await db.$executeRawUnsafe(sql, JSON.stringify(payload.map(row => row.payload)))).toBe(0);
+    await db.wbOrderShipment.deleteMany({ where: { assemblyId: f.taskId } });
+    const changed = JSON.parse(JSON.stringify(payload[0].payload)); changed.history.kiz = 'other-mark';
+    expect(await db.$executeRawUnsafe(sql, JSON.stringify([changed]))).toBe(0);
+    await db.fbsTsdAssembly.update({ where: { id: f.taskId }, data: { workerName: 'changed after rehearsal' } });
+    expect(await db.$executeRawUnsafe(sql, JSON.stringify(payload.map(row => row.payload)))).toBe(0);
+    expect(await db.stockMovement.count({ where: { clientId: f.clientId, type: 'SHIP' } })).toBe(1);
+  });
+  // TEST: immutable billing evidence must not duplicate large catalogue responses or suggested stock lists.
+  it('keeps shipment evidence compact without raw marketplace payloads', async () => {
+    const f = await fixture();
+    await db.fbsTsdAssembly.update({ where: { id: f.taskId }, data: { storageBoxes: [{ code: 'not-physical-evidence', data: 'x'.repeat(200000) }] } });
+    await db.clientRequest.update({ where: { id: f.requestId }, data: { comment: 'x'.repeat(200000) } });
+    const fact = await db.$transaction(tx => finalizeWbOrderShipment(tx, f.taskId, 'PRINT_CONFIRMED', {
+      product: { id: f.skuId, name: 'Test suit', marketplacePayload: { raw: 'x'.repeat(200000) } }, storageBoxes: [{ raw: 'x'.repeat(200000) }],
+    }));
+    expect(JSON.stringify(fact).length).toBeLessThan(16000);
+    expect((fact!.orderSnapshot as any).product).toEqual({ id: f.skuId, name: 'Test suit' });
+    expect((fact!.assemblySnapshot as any).kiz).toBe(f.task.kiz);
+    expect((fact!.assemblySnapshot as any).storageBoxes).toBeUndefined();
+  });
   it('recognizes packing moved to SHIPPING before the print acknowledgement', async () => {
     const f = await fixture();
     await db.stockBalance.updateMany({ where: { clientId: f.clientId }, data: { status: 'SHIPPING' } });
     await db.$transaction(tx => finalizeWbOrderShipment(tx, f.taskId, 'PRINT_CONFIRMED', {}));
     expect(await db.stockMovement.findFirst({ where: { clientId: f.clientId, type: 'SHIP' } })).toMatchObject({ status: 'SHIPPING', quantity: -1 });
+  });
+  // TEST: accumulated shipment JSON must be decoded in bounded batches without losing a page.
+  it('reads every historical shipment in bounded pages for display and billing', async () => {
+    const f = await fixture();
+    const service: any = new MarketplaceConnectionsService(db as never, {} as never);
+    const snapshot = JSON.parse(JSON.stringify(await service.localShipmentOrder(f.task)));
+    const fact = (await db.$transaction(tx => finalizeWbOrderShipment(tx, f.taskId, 'PRINT_CONFIRMED', snapshot)))!;
+    await db.wbOrderShipment.createMany({ data: Array.from({ length: 1000 }, (_, i) => ({ ...fact,
+      id: randomUUID(), assemblyId: randomUUID(), orderId: `history-${i}`,
+      assemblySnapshot: fact.assemblySnapshot!, orderSnapshot: { ...snapshot, id: `history-${i}` },
+    })) });
+    const find = db.wbOrderShipment.findMany.bind(db.wbOrderShipment);
+    const read = (args: any) => {
+      if (!args.select || args.select.orderSnapshot) expect(args.take).toBeLessThanOrEqual(1000);
+      return find(args) as any;
+    };
+    service.prisma = new Proxy(db, { get(target, property) {
+      if (property === 'wbOrderShipment') return { findMany: read };
+      const value = Reflect.get(target, property);
+      return typeof value === 'function' ? value.bind(target) : value;
+    } });
+    const bill = vi.spyOn(service, 'ensureFbsProcessingChargesLocked').mockResolvedValue(new Map());
+    try {
+      expect(await service.applyLocalWbShipments(f.clientId, [])).toHaveLength(1001);
+      await service.ensureFbsProcessingCharges(f.clientId, []);
+      expect(bill.mock.calls[0][1]).toHaveLength(1001);
+    } finally { bill.mockRestore(); }
   });
   it('records an explicit repeat attempt without overwriting the first shipment', async () => {
     const f = await fixture();
@@ -236,7 +318,24 @@ describe.skipIf(!url).sequential('WB stock lifecycle SQL integration', () => {
     expect(await db.stockMovement.count({ where: { clientId: f.clientId, type: 'SHIP' } })).toBe(2);
   });
   // TEST: issuing the first invoice cannot make later printed orders in the same supply free.
-  it('bills later printed orders separately after the first supply invoice is issued', async () => {
+  it('credits turnkey processing already billed under an earlier supply identity', async () => {
+    const f = await fixture();
+    const service: any = new MarketplaceConnectionsService(db as never, {} as never);
+    await db.clientFbsBillingSettings.create({ data: { clientId: f.clientId, turnkeyEnabled: true, turnkeyUnitPriceRub: 75 } });
+    const snapshot = JSON.parse(JSON.stringify(await service.localShipmentOrder(f.task)));
+    await db.$transaction(tx => finalizeWbOrderShipment(tx, f.taskId, 'PRINT_CONFIRMED', snapshot));
+    await service.ensureFbsProcessingCharges(f.clientId, []);
+    const first = await db.billingCharge.findFirstOrThrow({ where: { clientId: f.clientId } });
+    await db.billingCharge.update({ where: { id: first.id }, data: { sourceKey: first.sourceKey + ':earlier-supply' } });
+    const invoice = await db.billingInvoice.findFirstOrThrow({ where: { clientId: f.clientId } });
+    await db.billingInvoice.update({ where: { id: invoice.id }, data: { sourceKey: invoice.sourceKey + ':earlier-supply' } });
+    await service.ensureFbsProcessingCharges(f.clientId, []);
+    await service.ensureFbsProcessingCharges(f.clientId, []);
+    expect(await db.billingInvoice.count({ where: { clientId: f.clientId } })).toBe(1);
+    expect(await db.billingCharge.count({ where: { clientId: f.clientId } })).toBe(1);
+    expect(Number((await db.billingCharge.findUniqueOrThrow({ where: { id: first.id } })).totalRub)).toBe(75);
+  });
+  it.each([false, true])('bills later printed orders separately after the first supply invoice is issued (work credit: %s)', async (workCredit) => {
     const f = await fixture();
     const service: any = new MarketplaceConnectionsService(db as never, {} as never);
     await db.clientFbsBillingSettings.create({ data: { clientId: f.clientId, fixedPlusLogisticsEnabled: true,
@@ -252,11 +351,21 @@ describe.skipIf(!url).sequential('WB stock lifecycle SQL integration', () => {
     await db.stockMovement.create({ data: { clientId: f.clientId, warehouseId: f.warehouseId, skuId: f.skuId,
       status: 'PACKING', type: 'PICK', quantity: 1, sourceDocument: f.requestId, idempotencyKey: `fbs-sticker-pick:${second.id}:in` } });
     await db.$transaction(tx => finalizeWbOrderShipment(tx, second.id, 'PRINT_CONFIRMED', { ...snapshot, id: second.orderId }));
-    await service.ensureFbsProcessingCharges(f.clientId, []);
-    await service.ensureFbsProcessingCharges(f.clientId, []);
-    expect(await db.billingInvoice.count({ where: { clientId: f.clientId } })).toBe(2);
-    expect(await db.billingCharge.count({ where: { clientId: f.clientId } })).toBe(2);
-    expect(await db.billingInvoice.findUniqueOrThrow({ where: { id: first.id } })).toEqual(frozen);
+    // TEST: the production completed-work policy must credit its earlier processing invoice.
+    const policy = workCredit ? vi.spyOn(completedBilling, 'completedWorkBillingEnabled').mockReturnValue(true) : null;
+    const credit = workCredit ? vi.spyOn(completedBilling, 'loadWorkCharges').mockResolvedValue([{
+      id: randomUUID(), sourceKey: 'fbs-work:previous-processing', status: 'DRAFT', serviceId: null,
+      quantity: 1, totalRub: 37.1, invoiceItems: [{ invoice: { status: 'ISSUED' } }],
+      metadata: { kind: 'FBS', marketplace: 'WILDBERRIES', connectionId: second.connectionId, orderIds: [second.orderId] },
+    }]) : null;
+    try {
+      await service.ensureFbsProcessingCharges(f.clientId, []);
+      await service.ensureFbsProcessingCharges(f.clientId, []);
+      expect(await db.billingInvoice.count({ where: { clientId: f.clientId } })).toBe(workCredit ? 1 : 2);
+      const charges = await db.billingCharge.findMany({ where: { clientId: f.clientId, status: { not: 'CANCELLED' } } });
+      expect(charges.reduce((sum, charge) => sum + Number((charge.metadata as any).quote.processingTotalRub), 0)).toBe(workCredit ? 37.1 : 74.2);
+      expect(await db.billingInvoice.findUniqueOrThrow({ where: { id: first.id } })).toEqual(frozen);
+    } finally { credit?.mockRestore(); policy?.mockRestore(); }
   });
   it('rolls back all changes when packing is insufficient after a partial deduction', async () => {
     const f = await fixture();

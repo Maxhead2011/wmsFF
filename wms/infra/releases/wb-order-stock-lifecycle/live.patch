@@ -1,18 +1,9 @@
 --- a/wms/apps/api/prisma/schema.prisma
 +++ b/wms/apps/api/prisma/schema.prisma
-@@ -2563,6 +2563,8 @@
-   requestItemId       String
-   skuId               String
-   sourceSkuId         String?
+@@ -2565,0 +2566,2 @@
 +  // FIX: reservation branch is durable even before a WMS request/box exists.
 +  stockWarehouseId    String?
-   productName         String
-   article             String?
-   sourceProductName   String?
-@@ -2621,6 +2623,28 @@
-   @@index([cargoPackingId, cargoPackedAt])
- }
- 
+@@ -2623,0 +2626,22 @@
 +// FIX: immutable local shipment evidence, independent of later WB statuses.
 +model WbOrderShipment {
 +  id                String   @id @default(uuid())
@@ -35,9 +26,6 @@
 +  @@index([requestId])
 +}
 +
- // FIX: immutable evidence of the completed physical attempt before a repeat.
- model FbsAssemblyAttemptHistory {
-   id                 String   @id
 --- /dev/null
 +++ b/wms/apps/api/prisma/migrations/20260916010000_wb_order_stock_lifecycle/migration.sql
 @@ -0,0 +1,19 @@
@@ -62,7 +50,7 @@
 +CREATE INDEX "WbOrderShipment_requestId_idx" ON "WbOrderShipment"("requestId");
 --- /dev/null
 +++ b/wms/apps/api/src/common/stock/wb-order-stock-lifecycle.ts
-@@ -0,0 +1,170 @@
+@@ -0,0 +1,190 @@
 +import { Prisma, StockStatus } from '@prisma/client';
 +import { ConflictException } from '@nestjs/common';
 +
@@ -98,9 +86,13 @@
 +    ...(excludeRequestId ? { id: { not: excludeRequestId } } : {}),
 +    items: { some: { OR: [{ skuId: { in: skuIds } }, { skuId: null, barcode: { in: [...skuByBarcode.keys()] } }] } },
 +  }, select: { id: true, items: { select: { skuId: true, barcode: true, quantity: true } } } });
-+  const links = tasks.length ? await db.fbsOrderRequestLink.findMany({ where: { clientId, marketplace: 'WILDBERRIES',
-+    orderId: { in: [...new Set(tasks.map(task => task.orderId))] },
-+    }, select: { connectionId: true, orderId: true, requestId: true, lastCategory: true, request: { select: { status: true, fbsEmergencyAssemblyAt: true } } } }) : [];
++  // FIX: a client's historical order ids can exceed PostgreSQL's bind-parameter limit.
++  const linkBatches = [];
++  for (const ids of chunksOf([...new Set(tasks.map(task => task.orderId))], 10000)) {
++    linkBatches.push(await db.fbsOrderRequestLink.findMany({ where: { clientId, marketplace: 'WILDBERRIES', orderId: { in: ids } },
++      select: { connectionId: true, orderId: true, requestId: true, lastCategory: true, request: { select: { status: true, fbsEmergencyAssemblyAt: true } } } }));
++  }
++  const links = linkBatches.flat();
 +  const terminalOrders = new Set(links.filter(link => ['shipped', 'archive', 'cancelled'].includes(link.lastCategory ?? '') && !link.request.fbsEmergencyAssemblyAt).map(link => `${link.connectionId}:${link.orderId}`));
 +  const requestByOrder = new Map(links.filter(link => !['CANCELLED', 'REJECTED'].includes(link.request.status)).map(link => [`${link.connectionId}:${link.orderId}`, link.requestId]));
 +  const picked: Array<{ idempotencyKey: string | null; quantity: number }> = [];
@@ -117,9 +109,11 @@
 +    status: 'AVAILABLE', type: { in: ['PICK', 'PACK', 'SHIP', 'RETURN'] },
 +    OR: [{ idempotencyKey: null }, { NOT: { idempotencyKey: { startsWith: 'fbs-sticker-pick:' } } }],
 +  }, _sum: { quantity: true } }) : [];
-+  const shipments = tasks.length ? await db.wbOrderShipment.findMany({ where: { clientId,
-+    assemblyId: { in: tasks.map(t => t.id) } }, select: { assemblyId: true } }) : [];
-+  const shipped = new Set(shipments.map(s => s.assemblyId));
++  const shipmentBatches = [];
++  for (const ids of chunksOf(tasks.map(task => task.id), 10000)) shipmentBatches.push(await db.wbOrderShipment.findMany({
++    where: { clientId, assemblyId: { in: ids } }, select: { assemblyId: true },
++  }));
++  const shipped = new Set(shipmentBatches.flat().map(s => s.assemblyId));
 +  const pickedByTask = new Map<string, number>();
 +  for (const row of picked) {
 +    const id = row.idempotencyKey?.split(':')[1];
@@ -211,14 +205,24 @@
 +    }
 +    if (remaining) throw new ConflictException('Недостаточно товара в упаковке для подтверждения отгрузки WB.');
 +  }
-+  const { client: _client, items: _items, ...requestSnapshot } = request;
-+  const orderSnapshot = JSON.parse(JSON.stringify({ ...(snapshot as object), request: requestSnapshot }));
++  // FIX: the request summary excludes import files and full request-wide metadata.
++  const requestSnapshot = { id: request.id, number: request.number, title: request.title, status: request.status,
++    warehouseId: request.warehouseId, fbsEmergencyAssemblyAt: request.fbsEmergencyAssemblyAt,
++    fbsEmergencyAssemblyByUserId: request.fbsEmergencyAssemblyByUserId, fbsEmergencyAssemblyByName: request.fbsEmergencyAssemblyByName };
++  // FIX: raw marketplace product payloads are not shipment evidence and can consume gigabytes during reconciliation.
++  const order = snapshot as Record<string, unknown>;
++  const product = order.product && typeof order.product === 'object' ? order.product as Record<string, unknown> : null;
++  const productKeys = ['id', 'name', 'internalSku', 'clientSku', 'article', 'size', 'needsChestnyZnak', 'isUnmarked'];
++  const orderSnapshot = JSON.parse(JSON.stringify({ ...order, request: requestSnapshot, storageBoxes: [],
++    ...(product ? { product: Object.fromEntries(productKeys.filter(key => key in product).map(key => [key, product[key]])) } : {}),
++  }));
++  const { storageBoxes: _suggestedBoxes, marketplaceLabelBase64: _labelImage, ...assemblyEvidence } = task;
 +  const repeat = await db.fbsAssemblyAttemptHistory.findUnique({ where: { successorId: task.id }, select: { id: true } }) ||
 +    await db.wbOrderShipment.findFirst({ where: { clientId: task.clientId, connectionId: task.connectionId, orderId: task.orderId }, select: { id: true } });
 +  const fact = await db.wbOrderShipment.create({ data: { clientId: task.clientId, connectionId: task.connectionId,
 +    orderId: task.orderId, assemblyId: task.id, requestId: task.requestId, warehouseId, skuId: task.skuId,
 +    quantity: count, kiz: task.kiz, source, shippedAt, orderSnapshot,
-+    assemblySnapshot: JSON.parse(JSON.stringify({ ...task, billingAttemptId: repeat ? task.id : null })),
++    assemblySnapshot: JSON.parse(JSON.stringify({ ...assemblyEvidence, billingAttemptId: repeat ? task.id : null })),
 +  } });
 +  if (task.kiz) {
 +    if (!alreadyShipped) await db.productMark.updateMany({ where: { clientId: task.clientId, skuId: task.skuId, value: task.kiz, status: { in: ['PACKING', 'SHIPPING'] } },
@@ -233,78 +237,55 @@
 +  }
 +  return fact;
 +}
++
++function* chunksOf<T>(values: T[], size: number): Generator<T[]> {
++  for (let offset = 0; offset < values.length; offset += size) yield values.slice(offset, offset + size);
++}
 --- a/wms/apps/api/src/modules/billing/completed-fbs-billing.ts
 +++ b/wms/apps/api/src/modules/billing/completed-fbs-billing.ts
-@@ -1,4 +1,5 @@
- import { createHash, randomUUID } from 'node:crypto';
+@@ -1,0 +2 @@
 +import { wbOrderStockLifecycleEnabled } from '../../common/stock/wb-order-stock-lifecycle';
- import { BadRequestException } from '@nestjs/common';
- import { Prisma } from '@prisma/client';
- import type { PrismaService } from '../../common/prisma/prisma.service';
-@@ -18,6 +19,7 @@
- const names: Record<Service, string> = { processing: 'Обработка заказов по FBS', primary: 'Первичная обработка',
-   additional: 'Дополнительные услуги', relabel: 'Перемаркировка' };
- export type CompletedWork = {
+@@ -20,0 +22 @@
 +  billingAttemptId?: string;
-   id: string; clientId: string; marketplace: string; connectionId: string; orderId: string; requestId: string | null;
-   itemCount: number; completedAt: Date | null; barcode: string | null; boxCode: string | null;
-   workerUserId: string | null; deviceCode: string | null; relabelConfirmedAt: Date | null;
-@@ -35,12 +37,14 @@
-   ? value as Record<string, unknown> : {};
- const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter((x): x is string => typeof x === 'string') : [];
- const money = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+@@ -38 +40,2 @@
 -const key = (work: Pick<CompletedWork, 'marketplace' | 'connectionId' | 'orderId'>) => `${work.marketplace}:${work.connectionId}:${work.orderId}`;
 +const key = (work: Pick<CompletedWork, 'marketplace' | 'connectionId' | 'orderId' | 'billingAttemptId'>) =>
 +  `${work.marketplace}:${work.connectionId}:${work.orderId}${work.billingAttemptId ? `:attempt:${work.billingAttemptId}` : ''}`;
- const digest = (value: string) => createHash('sha256').update(value).digest('hex');
- 
+@@ -41 +44 @@
 -function chargeIdentity(metadata: Record<string, unknown>): { marketplace: string; connectionId: string } | null {
 +function chargeIdentity(metadata: Record<string, unknown>): { marketplace: string; connectionId: string; billingAttemptId?: string } | null {
-   if (typeof metadata.marketplace === 'string' && typeof metadata.connectionId === 'string') {
+@@ -43 +46,2 @@
 -    return { marketplace: metadata.marketplace, connectionId: metadata.connectionId };
 +    return { marketplace: metadata.marketplace, connectionId: metadata.connectionId,
 +      ...(typeof metadata.billingAttemptId === 'string' ? { billingAttemptId: metadata.billingAttemptId } : {}) };
-   }
-   const match = typeof metadata.shipmentKey === 'string' && /^(WILDBERRIES|OZON):([^:]+):/.exec(metadata.shipmentKey);
-   return match ? { marketplace: match[1], connectionId: match[2] } : null;
-@@ -128,14 +132,15 @@
-       const price = service === 'processing' ? input.config.processingPrice : service === 'primary' ? 10.64 : service === 'additional' ? 4.26 : input.config.relabelPrice;
-       if (!serviceId || !Number.isFinite(price) || price <= 0) { plan.blocked.push({ orderId: work.orderId, service, reason: 'SERVICE_TARIFF_MISSING' }); continue; }
-       plan.lines.push({ sourceKey, service, serviceId, requestId: work.requestId!, warehouseId,
+@@ -131 +135 @@
 -        description: `${names[service]} — заказ ${work.orderId}`, quantity: work.itemCount,
 +        description: `${names[service]} — ${work.billingAttemptId ? 'повторная обработка, ' : ''}заказ ${work.orderId}`, quantity: work.itemCount,
-         unitPriceRub: money(price), totalRub: money(price * work.itemCount), serviceDate: work.completedAt,
-         metadata: { kind: service === 'processing' ? 'FBS' : 'FBS_PRIMARY_PROCESSING', billingPolicy: COMPLETED_WORK_POLICY,
-           processingOnly: true, marketplace: work.marketplace, connectionId: work.connectionId, orderIds: [work.orderId],
-           processingOrderIds: service === 'processing' ? [work.orderId] : [], requestIds: [work.requestId!],
-           shipmentKey: `${key(work)}:completed-work`, quantity: work.itemCount, lineQuantity: work.itemCount,
-           serviceCode: codes[service], processingType: service === 'relabel' ? 'RELABEL' : `SERVICE:${serviceId}`,
+@@ -138 +142,2 @@
 -          assemblyId: work.id, completedAt: work.completedAt.toISOString(), taxMode: 'INCLUDED' } });
 +          assemblyId: work.id, ...(work.billingAttemptId ? { billingAttemptId: work.billingAttemptId } : {}),
 +          completedAt: work.completedAt.toISOString(), taxMode: 'INCLUDED' } });
-     }
-   }
-   return plan;
-@@ -168,6 +173,8 @@
-     relabelPrice: relabel ? Number(relabel.priceRub) / (relabel.taxMode === 'ADD_6_PERCENT' ? 0.94 : 1) : 0,
-     serviceIds: Object.fromEntries(Object.entries(codes).map(([name, code]) => [name, services.find(s => s.code === code)?.id ?? null])) as WorkConfig['serviceIds'] };
-   const work: CompletedWork[] = await db.fbsTsdAssembly.findMany({ where: { clientId, completedAt: { gte: COMPLETED_WORK_FROM } } });
+@@ -170 +175,7 @@
+-  const work: CompletedWork[] = await db.fbsTsdAssembly.findMany({ where: { clientId, completedAt: { gte: COMPLETED_WORK_FROM } } });
++  // FIX: WB work comes from frozen shipment facts; never load historical labels/box catalogues here.
++  const work: CompletedWork[] = await db.fbsTsdAssembly.findMany({ where: { clientId, completedAt: { gte: COMPLETED_WORK_FROM },
++    ...(wbOrderStockLifecycleEnabled() ? { marketplace: { not: 'WILDBERRIES' as const } } : {}) },
++    select: { id: true, clientId: true, marketplace: true, connectionId: true, orderId: true, requestId: true,
++      itemCount: true, completedAt: true, barcode: true, boxCode: true, workerUserId: true, deviceCode: true, relabelConfirmedAt: true } });
 +  // FIX: picking is not shipment; only immutable local WB shipment facts trigger new charges.
-+  const shipments = wbOrderStockLifecycleEnabled() ? await db.wbOrderShipment.findMany({ where: { clientId } }) : null;
-   // Archived successful attempts are proof too; transfer/reset of the current task cannot erase them.
-   const history = db.fbsAssemblyAttemptHistory ? await db.fbsAssemblyAttemptHistory.findMany({ where: { clientId, completedAt: { gte: COMPLETED_WORK_FROM } } }) : [];
-   for (const attempt of history) {
-@@ -178,6 +185,23 @@
-       workerUserId: attempt.workerUserId, deviceCode: typeof snapshot.deviceCode === 'string' ? snapshot.deviceCode : null,
-       barcode: typeof snapshot.barcode === 'string' ? snapshot.barcode : null, boxCode: typeof snapshot.boxCode === 'string' ? snapshot.boxCode : null,
-       relabelConfirmedAt: typeof snapshot.relabelConfirmedAt === 'string' ? new Date(snapshot.relabelConfirmedAt) : null });
++  const shipments = wbOrderStockLifecycleEnabled();
+@@ -180,0 +192,23 @@
 +  }
 +  if (shipments) {
 +    // FIX: later reassignment/reset cannot alter the identity, quantity or work date already shipped.
 +    for (let index = work.length - 1; index >= 0; index -= 1) {
 +      if (work[index].marketplace === 'WILDBERRIES') work.splice(index, 1);
 +    }
-+    for (const fact of shipments) {
++    // FIX: only billing evidence is needed; do not reload complete order snapshots.
++    for (let skip = 0; ; skip += 1000) {
++      const page = await db.wbOrderShipment.findMany({ where: { clientId }, skip, take: 1000, orderBy: { id: 'asc' },
++        select: { assemblyId: true, connectionId: true, orderId: true, requestId: true, quantity: true, shippedAt: true, assemblySnapshot: true } });
++      for (const fact of page) {
 +      const snapshot = record(fact.assemblySnapshot);
 +      work.push({ id: fact.assemblyId, clientId, marketplace: 'WILDBERRIES', connectionId: fact.connectionId,
 +        ...(typeof snapshot.billingAttemptId === 'string' ? { billingAttemptId: snapshot.billingAttemptId } : {}),
@@ -314,42 +295,22 @@
 +        workerUserId: typeof snapshot.workerUserId === 'string' ? snapshot.workerUserId : null,
 +        deviceCode: typeof snapshot.deviceCode === 'string' ? snapshot.deviceCode : null,
 +        relabelConfirmedAt: typeof snapshot.relabelConfirmedAt === 'string' ? new Date(snapshot.relabelConfirmedAt) : null });
++      }
++      if (page.length < 1000) break;
 +    }
-   }
-   const charges = await loadWorkCharges(db, clientId);
-   const workKeys = new Set(work.map(key));
-@@ -222,7 +246,7 @@
-   const groups = new Map<string, WorkLine[]>();
-   for (const line of plan.lines) {
-     const day = new Date(line.serviceDate.getTime() + 3 * 3600000).toISOString().slice(0, 10);
+@@ -225 +259 @@
 -    const group = `${line.warehouseId}:${line.requestId}:${day}`;
 +    const group = `${line.warehouseId}:${line.requestId}:${day}:${line.metadata.billingAttemptId ? 'repeat' : 'first'}`;
-     groups.set(group, [...(groups.get(group) ?? []), line]);
-   }
-   const invoices: Prisma.BillingInvoiceCreateManyInput[] = [];
 --- a/wms/apps/api/src/modules/client-requests/client-requests.service.ts
 +++ b/wms/apps/api/src/modules/client-requests/client-requests.service.ts
-@@ -1,4 +1,5 @@
- import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+@@ -1,0 +2 @@
 +import { wbOrderStockLifecycleEnabled, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
- import { ClientNotificationEvent, ClientRequestEventType, ClientRequestStatus, ClientRequestType, MarketplaceType, MovementType, Prisma, StockStatus } from '@prisma/client';
- import * as XLSX from 'xlsx';
- import { PrismaService } from '../../common/prisma/prisma.service';
-@@ -1902,6 +1903,10 @@
-       return new Map<string, number>();
-     }
- 
+@@ -1904,0 +1906,4 @@
 +    // FIX: use the same physical stock rules as the client cabinet/export.
 +    const stockClient = wbOrderStockLifecycleEnabled() ? await this.prisma.client.findUniqueOrThrow({
 +      where: { id: clientId }, select: { storesWithoutBoxes: true, stockBalanceMode: true },
 +    }) : null;
-     const stockRows = await this.prisma.stockBalance.groupBy({
-       by: ['skuId'],
-       where: {
-@@ -1909,7 +1914,14 @@
-         skuId: { in: skuIds },
-         status: StockStatus.AVAILABLE,
-         quantity: { gt: 0 },
+@@ -1912 +1917,8 @@
 -        ...(includeLegacyUnassigned
 +        ...(stockClient ? {
 +          OR: [{ warehouseId }, { warehouseId: null, box: { warehouseId } }],
@@ -359,76 +320,36 @@
 +            },
 +          }),
 +        } : includeLegacyUnassigned
-           ? {
-               OR: [
-                 { box: { warehouseId } },
-@@ -1933,6 +1945,11 @@
-     includeLegacyUnassigned = false,
-   ) {
-     const empty = new Map<string, { quantity: number; requests: ClientRequestAvailabilityConflict[] }>();
+@@ -1935,0 +1948,5 @@
 +    // FIX: include incoming WB demand and exclude already physically picked units.
 +    if (wbOrderStockLifecycleEnabled()) {
 +      const quantities = await wbReservationQuantities(this.prisma, clientId, skuIds, warehouseId, excludeRequestId);
 +      return new Map([...quantities].map(([skuId, quantity]) => [skuId, { quantity, requests: [] as ClientRequestAvailabilityConflict[] }]));
 +    }
-     if (skuIds.length === 0 && barcodes.length === 0) {
-       return empty;
-     }
 --- a/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
 +++ b/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
-@@ -1,6 +1,7 @@
- import { AdminNotificationsService } from '../admin-notifications/admin-notifications.service';
- import { FBS_WB_ACCOUNTED, isFbsWbAccounted } from '../../common/fbs-wb-accounting';
- import { AccountFbsOrderByWbDto, accountFbsOrderByWb } from './fbs-wb-accounting';
+@@ -3,0 +4 @@
 +import { wbOrderStockLifecycleEnabled, finalizeWbOrderShipment, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
- import { physicalKizLookup, physicalKizHistoryFilter } from '../../common/kiz-physical-identity';
- import { stockTransferBlockedReason, ordersWithoutTransferStock } from './fbs-stock-transfer';
- import { retainFbsBranchEvidence } from '../billing/fbs-billing-branch-evidence';
-@@ -178,6 +179,10 @@
- };
- 
- type FbsOrderSummary = {
+@@ -180,0 +182,6 @@
 +  // FIX: billing-only identity of a deliberately repeated physical processing attempt.
 +  processingAttemptId?: string;
 +  processingAssemblyId?: string;
++  // FIX: splitting an immutable invoice does not create another physical processing attempt.
++  processingInvoiceId?: string;
 +  processingEvidence?: { itemCount: number; boxCode: string | null; relabelRequired: boolean };
-   // FIX: only real marketplace responses populate this; fallback WMS rows cannot forge dates.
-   sourceTiming?: SourceOrderTiming;
-   wbAccounted?: boolean;
-@@ -7788,6 +7793,12 @@
-       );
-     });
- 
+@@ -7790,0 +7798,6 @@
 +    // FIX: publish the same free stock as WMS/Excel, across all WB accounts of this branch.
 +    if (wbOrderStockLifecycleEnabled()) {
 +      const unified = await wbReservationQuantities(this.prisma, clientId, skuIds, executionWarehouseId ?? undefined);
 +      reservedBySku.clear();
 +      unified.forEach((quantity, skuId) => reservedBySku.set(skuId, quantity));
 +    }
-     skus.forEach((sku) => {
-       const ids = wildberriesStockIds(sku.marketplaceProductId);
-       if (!ids) return;
-@@ -14261,6 +14272,7 @@
-       });
-     }
- 
+@@ -14263,0 +14277 @@
 +    if (wbOrderStockLifecycleEnabled()) await tx.fbsTsdAssembly.update({ where: { id: task.id }, data: { stockWarehouseId: balanceWarehouseId } });
-     const targetBalanceKey = fbsStockBalanceKey({
-       warehouseId: balanceWarehouseId,
-       clientId: task.clientId,
-@@ -14374,6 +14386,8 @@
-     task: FbsTsdAssemblyRecord,
-     receipt?: FbsReturnReceipt,
-   ) {
+@@ -14376,0 +14391,2 @@
 +    if (wbOrderStockLifecycleEnabled() && await tx.wbOrderShipment.findUnique({ where: { assemblyId: task.id } })) return;
 +
-     // FIX: never restore a completed/physically picked cancellation to its old box implicitly.
-     if (requiresFbsReturnReceipt(task) && !receipt) {
-       throw new BadRequestException('Для изъятого товара нужна повторная приёмка в отсканированный бокс.');
-@@ -17321,9 +17335,94 @@
-     return { ...claimed, sortingLabel };
-   }
-   async finishFbsPrintJob(id: string, success: boolean, error: unknown, user: AuthUser) {
+@@ -17324 +17340,6 @@
 -    const job = await this.prisma.fbsPrintJob.update({ where: { id }, data: success ? { status: 'PRINTED', printedAt: new Date(), errorMessage: null } : { status: 'FAILED', failedAt: new Date(), errorMessage: textValue(error).trim() || 'Ошибка печати' } });
 +    const data: Prisma.FbsPrintJobUpdateManyMutationInput = success ? { status: 'PRINTED', printedAt: new Date(), errorMessage: null } : { status: 'FAILED', failedAt: new Date(), errorMessage: textValue(error).trim() || 'Ошибка печати' };
 +    // FIX: a late failed ACK or duplicate success cannot undo the first confirmed print.
@@ -436,7 +357,7 @@
 +    const job = wbOrderStockLifecycleEnabled()
 +      ? await this.prisma.fbsPrintJob.findUniqueOrThrow({ where: { id } })
 +      : await this.prisma.fbsPrintJob.update({ where: { id }, data });
-     await this.prisma.auditLog.create({ data: { userId: user.id, action: success ? 'FBS_TWO_LABELS_PRINTED' : 'FBS_TWO_LABELS_PRINT_FAILED', entity: 'FbsPrintJob', entityId: job.id, payload: { stationId: job.stationId, orderId: job.orderId, deviceCode: job.deviceCode, error: job.errorMessage } } });
+@@ -17325,0 +17347,11 @@
 +    // FIX: only the successful print-agent acknowledgement is a shipment trigger.
 +    if (success && wbOrderStockLifecycleEnabled() && job.deviceCode?.startsWith('SOS-WB:')) {
 +      const task = await this.prisma.fbsTsdAssembly.findUniqueOrThrow({ where: { id: job.assemblyId } });
@@ -448,12 +369,12 @@
 +        await this.ensureFbsProcessingCharges(task.clientId, []);
 +      }
 +    }
-     return job;
+@@ -17326,0 +17359,84 @@
 +  }
 +
 +  private async localShipmentOrder(task: FbsTsdAssemblyRecord): Promise<FbsOrderSummary> {
 +    const [sku, request] = await Promise.all([
-+      this.prisma.sku.findUniqueOrThrow({ where: { id: task.skuId } }),
++      this.prisma.sku.findUniqueOrThrow({ where: { id: task.skuId }, select: { id: true, name: true, internalSku: true, clientSku: true, article: true, size: true, needsChestnyZnak: true, isUnmarked: true } }),
 +      this.prisma.clientRequest.findUnique({ where: { id: task.requestId } }),
 +    ]);
 +    return { id: task.orderId, connectionId: task.connectionId, marketplace: MarketplaceType.WILDBERRIES,
@@ -469,27 +390,38 @@
 +
 +  private async applyLocalWbShipments(clientId: string, orders: FbsOrderSummary[]) {
 +    // FIX: recover a committed print acknowledgement if shipment/billing was interrupted afterwards.
-+    const printed = await this.prisma.fbsPrintJob.findMany({ where: { status: 'PRINTED', deviceCode: { startsWith: 'SOS-WB:' },
-+      assemblyId: { in: (await this.prisma.fbsTsdAssembly.findMany({ where: { clientId, marketplace: MarketplaceType.WILDBERRIES }, select: { id: true } })).map(task => task.id) },
-+    }, select: { assemblyId: true, printedAt: true }, distinct: ['assemblyId'], orderBy: { printedAt: 'asc' } });
++    // FIX: historical clients can exceed PostgreSQL's 32767 bind-parameter limit.
 +    const recorded = new Set((await this.prisma.wbOrderShipment.findMany({ where: { clientId }, select: { assemblyId: true } })).map(fact => fact.assemblyId));
++    const currentTasks = await this.prisma.fbsTsdAssembly.findMany({ where: { clientId, marketplace: MarketplaceType.WILDBERRIES },
++      select: { id: true, requestId: true, connectionId: true, orderId: true, completedAt: true } });
++    const pendingIds = currentTasks.filter(task => !recorded.has(task.id)).map(task => task.id);
++    const printed: Array<{ assemblyId: string; printedAt: Date | null }> = [];
++    for (const ids of chunks(pendingIds, 10000)) printed.push(...await this.prisma.fbsPrintJob.findMany({
++      where: { status: 'PRINTED', deviceCode: { startsWith: 'SOS-WB:' }, assemblyId: { in: ids } },
++      select: { assemblyId: true, printedAt: true }, distinct: ['assemblyId'], orderBy: { printedAt: 'asc' },
++    }));
 +    for (const print of printed) {
 +      if (recorded.has(print.assemblyId)) continue;
 +      const task = await this.prisma.fbsTsdAssembly.findUniqueOrThrow({ where: { id: print.assemblyId } });
 +      try {
 +        const order = orders.find(order => order.connectionId === task.connectionId && order.id === task.orderId) ?? await this.localShipmentOrder(task);
 +        await this.prisma.$transaction(tx => finalizeWbOrderShipment(tx, task.id, 'PRINT_CONFIRMED', cleanJson(order), print.printedAt ?? undefined), { timeout: 30_000 });
++        recorded.add(task.id);
 +      } catch (error) {
 +        this.logger.warn(`Printed WB order ${task.orderId} needs stock reconciliation: ${error instanceof Error ? error.message : String(error)}`);
 +      }
 +    }
-+    const doneRequests = await this.prisma.clientRequest.findMany({ where: { clientId, status: 'DONE',
-+      id: { in: (await this.prisma.fbsTsdAssembly.findMany({ where: { clientId, marketplace: MarketplaceType.WILDBERRIES }, select: { requestId: true }, distinct: ['requestId'] })).map(task => task.requestId) },
-+    }, select: { id: true } });
-+    const tasks = await this.prisma.fbsTsdAssembly.findMany({ where: { clientId, marketplace: MarketplaceType.WILDBERRIES,
-+      OR: [{ orderId: { in: orders.filter(order => order.marketplace === MarketplaceType.WILDBERRIES && order.category === 'shipped').map(order => order.id) } },
-+        { requestId: { in: doneRequests.map(request => request.id) }, completedAt: { not: null } }],
-+    } });
++    const doneRequests: Array<{ id: string }> = [];
++    for (const ids of chunks(uniqueStrings(currentTasks.map(task => task.requestId)), 10000)) {
++      doneRequests.push(...await this.prisma.clientRequest.findMany({ where: { clientId, status: 'DONE', id: { in: ids } }, select: { id: true } }));
++    }
++    const doneIds = new Set(doneRequests.map(request => request.id));
++    const incomingShipped = new Set(orders.filter(order => order.marketplace === MarketplaceType.WILDBERRIES && order.category === 'shipped')
++      .map(order => selectionKey(order.connectionId, order.id)));
++    const reconcileIds = currentTasks.filter(task => !recorded.has(task.id) &&
++      (incomingShipped.has(selectionKey(task.connectionId, task.orderId)) || (doneIds.has(task.requestId) && task.completedAt))).map(task => task.id);
++    const tasks: FbsTsdAssemblyRecord[] = [];
++    for (const ids of chunks(reconcileIds, 10000)) tasks.push(...await this.prisma.fbsTsdAssembly.findMany({ where: { clientId, id: { in: ids } } }));
 +    for (const task of tasks) {
 +      if (recorded.has(task.id)) continue;
 +      const manuallyShipped = doneRequests.some(request => request.id === task.requestId);
@@ -503,31 +435,28 @@
 +        this.logger.warn(`WB shipment ${task.orderId} needs reconciliation: ${error instanceof Error ? error.message : String(error)}`);
 +      }
 +    }
-+    const facts = await this.prisma.wbOrderShipment.findMany({ where: { clientId }, orderBy: [{ shippedAt: 'asc' }, { id: 'asc' }] });
 +    const byOrder = new Map(orders.map(order => [selectionKey(order.connectionId, order.id), order]));
 +    // FIX: an explicit repeat is current physical work; an older shipment must not hide it.
-+    const currentTasks = await this.prisma.fbsTsdAssembly.findMany({ where: { clientId, marketplace: MarketplaceType.WILDBERRIES },
-+      select: { id: true, connectionId: true, orderId: true } });
 +    const currentByOrder = new Map(currentTasks.map(task => [selectionKey(task.connectionId, task.orderId), task.id]));
-+    const shippedAssemblies = new Set(facts.map(fact => fact.assemblyId));
-+    for (const fact of facts) {
++    const shippedAssemblies = new Set((await this.prisma.wbOrderShipment.findMany({ where: { clientId }, select: { assemblyId: true } })).map(fact => fact.assemblyId));
++    // FIX: bound JSON decoding memory independently of accumulated shipment history.
++    for (let skip = 0; ; skip += 1000) {
++      const facts = await this.prisma.wbOrderShipment.findMany({ where: { clientId }, skip, take: 1000,
++        orderBy: [{ shippedAt: 'asc' }, { id: 'asc' }],
++        select: { assemblyId: true, connectionId: true, orderId: true, orderSnapshot: true, shippedAt: true } });
++      for (const fact of facts) {
 +      const currentId = currentByOrder.get(selectionKey(fact.connectionId, fact.orderId));
 +      if (currentId && currentId !== fact.assemblyId && !shippedAssemblies.has(currentId)) continue;
 +      const frozen = fact.orderSnapshot as unknown as FbsOrderSummary;
 +      byOrder.set(selectionKey(fact.connectionId, fact.orderId), { ...frozen, category: 'shipped', supplierStatus: 'complete',
 +        statusLabel: 'Отгружен из ВМС', deliveryDate: fact.shippedAt.toISOString() });
++      }
++      if (facts.length < 1000) break;
 +    }
 +    return [...byOrder.values()];
-   }
-   async webOrderAssemblyHistory(user: AuthUser, orderIdValue?: string) {
-     // FIX: exact order lookup happens before the history limit; it never assembles or prints an order.
-@@ -24933,8 +25032,18 @@
-         ![
-           FBS_TSD_RESERVED_STATUS,
-           FBS_TSD_WAITING_STOCK_STATUS,
+@@ -24935,0 +25052 @@
 +          ...(wbOrderStockLifecycleEnabled() && !task.kiz && !task.completedAt ? ['IN_PROGRESS'] : []),
-         ].includes(task.status)
-       ) {
+@@ -24937,0 +25055,9 @@
 +        continue;
 +      }
 +      // FIX: cancellation cannot erase a KIZ/physical scan that won the race.
@@ -537,109 +466,60 @@
 +          data: { status: 'RELEASED', reservedBoxId: null, reservedBoxCode: null, reservedAt: null,
 +            errorMessage: `Автоматический резерв снят: заказ ${order.id} отменён в маркетплейсе.` },
 +        });
-         continue;
-       }
-       const released = await this.prisma.fbsTsdAssembly.update({
-@@ -24959,7 +25068,7 @@
-       if (
-         order.category !== 'active' ||
-         !order.product ||
+@@ -24962 +25088 @@
 -        order.supplierStatus !== 'confirm'
 +        !(wbOrderStockLifecycleEnabled() ? ['new', 'confirm'].includes(order.supplierStatus) : order.supplierStatus === 'confirm')
-       ) {
-         return false;
-       }
-@@ -25101,7 +25210,7 @@
-       if (
-         order.category !== 'active' ||
-         !order.product ||
+@@ -25104 +25230 @@
 -        order.supplierStatus !== 'confirm'
 +        !(wbOrderStockLifecycleEnabled() ? ['new', 'confirm'].includes(order.supplierStatus) : order.supplierStatus === 'confirm')
-       ) {
-         continue;
-       }
-@@ -25134,11 +25243,12 @@
-       const requestItem = order.request
-         ? requestItemByKey.get(`${order.request.id}:${order.product.id}`) ?? null
-         : null;
+@@ -25137 +25263 @@
 -      let routedWarehouseId = order.request?.warehouseId ?? null;
 +      let routedWarehouseId = order.request?.warehouseId ?? (wbOrderStockLifecycleEnabled() ? existing?.stockWarehouseId : null) ?? null;
-       const keepExistingReservation =
-         existing?.status === FBS_TSD_RESERVED_STATUS &&
-         Boolean(existing.reservedAt);
+@@ -25141 +25267,2 @@
 -      if (!routedWarehouseId && !keepExistingReservation) {
 +      // FIX: legacy reserved orders still need a branch when the new lifecycle is enabled.
 +      if (!routedWarehouseId && (!keepExistingReservation || wbOrderStockLifecycleEnabled())) {
-         try {
-           const routeKey = `${order.connectionId}:${order.warehouseId ?? ''}:${order.officeId ?? ''}`;
-           let routeResolution = routeResolutionByKey.get(routeKey);
-@@ -25192,6 +25302,7 @@
-           requestItemId: requestItem?.id ?? automaticId,
-           skuId: order.product.id,
-           sourceSkuId,
+@@ -25194,0 +25322 @@
 +          ...(wbOrderStockLifecycleEnabled() ? { stockWarehouseId: routedWarehouseId } : {}),
-           productName: order.product.name,
-           article:
-             order.product.article ??
-@@ -25405,6 +25516,7 @@
-         requestItemId: requestItem?.id ?? automaticId,
-         skuId: order.product.id,
-         sourceSkuId,
+@@ -25407,0 +25536 @@
 +          ...(wbOrderStockLifecycleEnabled() ? { stockWarehouseId: warehouseId } : {}),
-         productName: order.product.name,
-         article:
-           order.product.article ??
-@@ -26237,10 +26349,14 @@
-         ? supplyPlanByKey.get(fbsSupplyPlanKey(order.marketplace, order.connectionId, order.supplyId)) ?? null
-         : null,
-     }));
+@@ -26240 +26369 @@
 -    const ordersWithStockSources = await this.applyFbsRelabelingStockSources(
 +    let ordersWithStockSources = await this.applyFbsRelabelingStockSources(
-       clientId,
-       ordersWithShipmentPlans,
-     );
+@@ -26243,0 +26373,4 @@
 +    // FIX: local shipment facts survive later cancellation/return/supply changes in WB.
 +    if (wbOrderStockLifecycleEnabled()) {
 +      ordersWithStockSources = await this.applyLocalWbShipments(clientId, ordersWithStockSources);
 +    }
-     if (!previousOrderStates) {
-       await this.syncFbsRequestsFromMarketplace(clientId, ordersWithStockSources);
-     }
-@@ -26651,12 +26767,29 @@
-   }
- 
-   private async ensureFbsProcessingCharges(clientId: string, orders: FbsOrderSummary[]) {
+@@ -26653,0 +26787,18 @@
 +    // FIX: bill durable local facts, including successful prints and orders no longer returned by WB.
 +    if (wbOrderStockLifecycleEnabled()) {
-+      const facts = await this.prisma.wbOrderShipment.findMany({ where: { clientId }, orderBy: [{ shippedAt: 'asc' }, { id: 'asc' }] });
-+      orders = [...orders.filter(order => order.marketplace !== MarketplaceType.WILDBERRIES),
-+        ...facts.map(fact => {
++      orders = orders.filter(order => order.marketplace !== MarketplaceType.WILDBERRIES);
++      // FIX: decode bounded JSON batches rather than three full historical snapshots at once.
++      for (let skip = 0; ; skip += 1000) {
++        const facts = await this.prisma.wbOrderShipment.findMany({ where: { clientId }, skip, take: 1000,
++          orderBy: [{ shippedAt: 'asc' }, { id: 'asc' }],
++          select: { assemblyId: true, assemblySnapshot: true, orderSnapshot: true, quantity: true, shippedAt: true } });
++        orders.push(...facts.map(fact => {
 +          const evidence = asRecord(fact.assemblySnapshot);
 +          return { ...(fact.orderSnapshot as unknown as FbsOrderSummary), category: 'shipped' as const, processingAssemblyId: fact.assemblyId,
 +            ...(typeof evidence.billingAttemptId === 'string' ? { processingAttemptId: evidence.billingAttemptId } : {}),
 +            processingEvidence: { itemCount: fact.quantity, boxCode: textValue(evidence.boxCode) || null, relabelRequired: Boolean(evidence.relabelConfirmedAt) },
 +            supplierStatus: 'complete', deliveryDate: fact.shippedAt.toISOString() };
-+        })];
++        }));
++        if (facts.length < 1000) break;
++      }
 +    }
-     // FIX: lock before source-charge reads, not only when the resulting invoice is written.
+@@ -26655 +26806 @@
 -    return runBillingMutation(this.prisma, async (db) => {
 +    const result = await runBillingMutation(this.prisma, async (db) => {
-       // FIX: recover before the shipment writer, which credits these stable order/service entries.
-       await recoverCompletedWork(db, clientId);
-       return withBillingDb(this, db).ensureFbsProcessingChargesLocked(clientId, orders);
-     });
+@@ -26659,0 +26811,5 @@
 +    for (const order of orders) {
 +      const billing = result.get(fbsOrderKey(order));
 +      if (order.processingAttemptId && billing) result.set(fbsOrderKey({ ...order, processingAttemptId: undefined }), billing);
 +    }
 +    return result;
-   }
- 
-   private async ensureFbsProcessingChargesLocked(clientId: string, orders: FbsOrderSummary[]) {
-@@ -26665,6 +26798,26 @@
-       return result;
-     }
- 
+@@ -26667,0 +26824,20 @@
 +    // FIX: a sent/paid/consolidated invoice is immutable; subsequent physical work gets a separate invoice.
 +    // This runs under the same billing lock as invoice issue and uses the immutable assembly identity.
 +    if (wbOrderStockLifecycleEnabled()) {
@@ -656,137 +536,84 @@
 +        const ids = asArray<unknown>(asRecord(charge?.metadata).orderIds);
 +        if (charge && !ids.includes(order.id) && (charge.status !== BillingChargeStatus.DRAFT ||
 +          !charge.invoiceItems.every(item => isOwnedUnpaidDraft(item.invoice, `fbs-invoice:${clientId}:${shipmentKey}`)))) {
-+          order.processingAttemptId = order.processingAssemblyId;
++          order.processingInvoiceId = order.processingAssemblyId;
 +        }
 +      }
 +    }
-     const { fbsService, settings } = await this.ensureFbsBillingBase(clientId);
-     const completedWorkEnabled = completedWorkBillingEnabled(clientId);
-     const priorWorkCharges = completedWorkEnabled ? await loadWorkCharges(this.prisma, clientId) : [];
-@@ -26827,7 +26980,11 @@
-       });
-       const existingMetadata = asRecord(existing?.metadata);
-       // FIX: keep the source snapshot, including invoice dates, when WB returns only a tail.
+@@ -26670 +26846,3 @@
+-    const priorWorkCharges = completedWorkEnabled ? await loadWorkCharges(this.prisma, clientId) : [];
++    // FIX: existing processing must be credited for every lifecycle client, including turnkey tariffs.
++    const processingCreditsEnabled = completedWorkEnabled || wbOrderStockLifecycleEnabled();
++    const priorWorkCharges = processingCreditsEnabled ? await loadWorkCharges(this.prisma, clientId) : [];
+@@ -26719 +26897 @@
+-                orderId: { in: uniqueStrings(orders.map((order) => order.id)) },
++                orderId: { in: uniqueStrings(orders.filter(order => !order.processingEvidence).map((order) => order.id)) },
+@@ -26830 +27008,5 @@
 -      if (completedWorkEnabled && existing && (
 +      if ((completedWorkEnabled || wbOrderStockLifecycleEnabled()) && existing && (
 +        // FIX: another physical attempt must not rewrite an already invoiced processing snapshot.
 +        (wbOrderStockLifecycleEnabled() && existing.invoiceItems.length > 0 &&
 +          Array.isArray(existingMetadata.orderIds) && existingMetadata.orderIds.length === batchOrders.length &&
 +          batchOrders.every(order => (existingMetadata.orderIds as unknown[]).includes(order.id))) ||
-         preserveBilledComposition(existing.metadata, batchOrders.map(order => order.id)) ||
-         existing.status !== BillingChargeStatus.DRAFT ||
-         !existing.invoiceItems.every(item => isOwnedUnpaidDraft(item.invoice, `fbs-invoice:${clientId}:${shipmentKey}`))
-@@ -26980,7 +27137,7 @@
-         // FIX: opted-in primary work is accounted per completed order, never rebuilt from a WB tail.
-         const primaryBreakdown = buildFbsPrimaryProcessingBreakdown(
-           batchOrders.map((order) => {
+@@ -26856,0 +27039 @@
++      if (wbOrderStockLifecycleEnabled() && !existing && processingWeights.every(quantity => quantity === 0)) continue;
+@@ -26959 +27142 @@
+-        ? round(shipmentItems * turnkeyUnitPriceRub, 2)
++        ? round(processingWeights.reduce((sum, quantity) => sum + quantity, 0) * turnkeyUnitPriceRub, 2)
+@@ -26983 +27166 @@
 -            const assembly = assemblyByOrder.get(
 +            const assembly = order.processingEvidence ?? assemblyByOrder.get(
-               selectionKey(order.connectionId, order.id),
-             );
-             return {
-@@ -27085,6 +27242,7 @@
-         shipmentKey,
-         requestIds,
-         orderIds: batchOrders.map((order) => order.id),
+@@ -27088 +27271,2 @@
+-        ...(completedWorkEnabled ? { processingOrderIds: batchOrders.filter((_, index) => processingWeights[index] > 0).map(order => order.id) } : {}),
 +        ...(batchOrders[0].processingAttemptId ? { billingAttemptId: batchOrders[0].processingAttemptId } : {}),
-         ...(completedWorkEnabled ? { processingOrderIds: batchOrders.filter((_, index) => processingWeights[index] > 0).map(order => order.id) } : {}),
-         quantity: shipmentItems,
-         logisticsTrip: {
-@@ -27552,7 +27710,9 @@
-     orders: FbsOrderSummary[],
-     billingByOrder: Map<string, NonNullable<FbsOrderSummary['billing']>>,
-   ) {
++        ...(processingCreditsEnabled ? { processingOrderIds: batchOrders.filter((_, index) => processingWeights[index] > 0).map(order => order.id) } : {}),
+@@ -27204 +27388 @@
+-        const totalRub = completedWorkEnabled && fixedPlusLogisticsEnabled
++        const totalRub = processingCreditsEnabled && fixedPlusLogisticsEnabled
+@@ -27211 +27395 @@
+-            ? (completedWorkEnabled ? round(processingWeights[orderIndex] * fixedPlusLogisticsUnitPriceRub, 2)
++            ? (processingCreditsEnabled ? round(processingWeights[orderIndex] * fixedPlusLogisticsUnitPriceRub, 2)
+@@ -27555 +27739,3 @@
 -    const eligibleOrders = orders.filter((order) => order.shipmentPlan && order.supplyId);
 +    // FIX: confirmed WMS work can be invoiced without waiting for a WB supply plan.
 +    const eligibleOrders = orders.filter((order) => (order.shipmentPlan && order.supplyId) ||
 +      (wbOrderStockLifecycleEnabled() && order.marketplace === MarketplaceType.WILDBERRIES && order.request));
-     const shipments = groupFbsOrdersByShipment(eligibleOrders);
-     for (const [shipmentKey, shipmentOrders] of shipments) {
-       const warehouseId = await this.resolveFbsShipmentWarehouseId(clientId, shipmentOrders);
-@@ -30433,8 +30593,8 @@
-   return labels[supplierStatus] || labels[wbStatus] || supplierStatus || wbStatus || 'Статус не определён';
- }
- 
+@@ -30436,2 +30622,2 @@
 -function fbsOrderKey(order: Pick<FbsOrderSummary, 'marketplace' | 'connectionId' | 'id'>) {
 -  return `${order.marketplace}:${order.connectionId}:${order.id}`;
 +function fbsOrderKey(order: Pick<FbsOrderSummary, 'marketplace' | 'connectionId' | 'id' | 'processingAttemptId'>) {
 +  return `${order.marketplace}:${order.connectionId}:${order.id}${order.processingAttemptId ? `:attempt:${order.processingAttemptId}` : ''}`;
- }
- 
- function mapWildberriesCard(card: Record<string, unknown>, size: Record<string, unknown> | null): MarketplaceProductSyncItem {
-@@ -30930,7 +31090,7 @@
-   const supply = order.supplyId?.trim();
-   const date = (order.deliveryDate || order.sellerDate || order.createdAt || '').slice(0, 10);
-   const batch = supply ? `supply:${supply}` : date ? `date:${date}` : `order:${order.id}`;
+@@ -30933 +31119 @@
 -  return `${order.marketplace}:${order.connectionId}:${batch}`;
-+  return `${order.marketplace}:${order.connectionId}:${batch}${order.processingAttemptId ? `:attempt:${order.processingAttemptId}` : ''}`;
- }
- 
- function fbsShipmentServiceDate(orders: FbsOrderSummary[]) {
++  return `${order.marketplace}:${order.connectionId}:${batch}${order.processingAttemptId ? `:attempt:${order.processingAttemptId}` : ''}${order.processingInvoiceId ? `:invoice:${order.processingInvoiceId}` : ''}`;
 --- a/wms/apps/api/src/modules/stock/fbs-picked-stock-proof.ts
 +++ b/wms/apps/api/src/modules/stock/fbs-picked-stock-proof.ts
-@@ -1,4 +1,5 @@
- import { BadRequestException } from '@nestjs/common';
+@@ -1,0 +2 @@
 +import { wbOrderStockLifecycleEnabled } from '../../common/stock/wb-order-stock-lifecycle';
- import { Prisma } from '@prisma/client';
- import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
- 
-@@ -15,6 +16,11 @@
-     if(task.clientId===request.clientId && task.status==='COMPLETED') tasks.set(task.id,task);
-   }
-   if (!tasks.size) return [];
+@@ -17,0 +19,5 @@
 +  // FIX: a print-confirmed shipment cannot become fresh packing credit at request close.
 +  if (wbOrderStockLifecycleEnabled()) {
 +    const facts = await tx.wbOrderShipment.findMany({ where: { requestId: request.id, clientId: request.clientId }, select: { assemblyId: true } });
 +    facts.forEach(fact => tasks.delete(fact.assemblyId));
 +  }
-   if (!warehouseId) throw new BadRequestException('Для проверки фактического отбора нужен филиал заявки.');
-   const result:FbsPickedProof[]=[];
-   const itemRemaining=new Map(request.items.map(i=>[i.id,i.quantity]));
 --- a/wms/apps/api/src/modules/stock/fbs-wb-shipped-units.ts
 +++ b/wms/apps/api/src/modules/stock/fbs-wb-shipped-units.ts
-@@ -2,7 +2,7 @@
- import { Prisma } from '@prisma/client';
- import { WB_KIZ_SHIPMENT_PREFIX } from '../marketplace-connections/fbs-wb-kiz-shipment';
- 
+@@ -5 +5 @@
 -type Request = { id: string; clientId: string; items: Array<{ id: string; skuId: string | null; quantity: number }>; wbShipmentCreditsApplied?: boolean };
 +type Request = { id: string; clientId: string; items: Array<{ id: string; skuId: string | null; quantity: number }>; lifecycleShipmentAssemblyIds?: string[]; wbShipmentCreditsApplied?: boolean };
- export type WbShippedUnit = { itemId: string; skuId: string; quantity: number; boxId: string | null;
-   sourceBoxCode: string; warehouseId: string; movementId: string; shippedAt: Date };
- 
-@@ -11,7 +11,9 @@
-   if (request.wbShipmentCreditsApplied || !tx.shippedKizHistory?.findMany || !tx.fbsTsdAssembly?.findMany) return [];
-   const movements = await tx.stockMovement.findMany({ where: { clientId: request.clientId, sourceDocument: request.id,
-     type: 'SHIP', quantity: { lt: 0 }, idempotencyKey: { startsWith: WB_KIZ_SHIPMENT_PREFIX } } });
+@@ -14 +14,3 @@
 -  const exact = movements.filter(row => row.type === 'SHIP' && row.sourceDocument === request.id &&
 +  // FIX: loadOutboundRequest has already credited these durable lifecycle facts.
 +  const credited = new Set(request.lifecycleShipmentAssemblyIds ?? []);
 +  const exact = movements.filter(row => !credited.has(row.idempotencyKey?.slice(WB_KIZ_SHIPMENT_PREFIX.length) ?? "") && row.type === 'SHIP' && row.sourceDocument === request.id &&
-     row.clientId === request.clientId && row.idempotencyKey?.startsWith(WB_KIZ_SHIPMENT_PREFIX));
-   if (!exact.length) return [];
-   const ids = exact.map(row => row.idempotencyKey!.slice(WB_KIZ_SHIPMENT_PREFIX.length));
 --- a/wms/apps/api/src/modules/stock/stock-balances.service.ts
 +++ b/wms/apps/api/src/modules/stock/stock-balances.service.ts
-@@ -1,4 +1,5 @@
- import { BadRequestException, Injectable } from '@nestjs/common';
+@@ -1,0 +2 @@
 +import { wbOrderStockLifecycleEnabled, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
- import { ClientStockBalanceMode, Prisma, StockStatus } from '@prisma/client';
- import { PrismaService } from '../../common/prisma/prisma.service';
- import type { AuthUser } from '../auth/auth.types';
-@@ -183,7 +184,7 @@
-       sku: skuWhere,
-     };
- 
+@@ -186 +187 @@
 -    return this.prisma.stockBalance.findMany({
 +    const rows = await this.prisma.stockBalance.findMany({
-       where,
-       include: {
-         sku: { include: { barcodes: true } },
-@@ -194,6 +195,22 @@
-       orderBy: [{ updatedAt: 'desc' }],
-       take: search ? 100 : undefined,
-     });
+@@ -196,0 +198,16 @@
 +    // FIX: preserve physical box quantities; expose free stock separately for the cabinet/export.
 +    if (!wbOrderStockLifecycleEnabled()) return rows;
 +    const freeById = new Map<string, number>();
@@ -803,39 +630,15 @@
 +      }
 +    }
 +    return rows.map(row => ({ ...row, freeQuantity: freeById.get(row.id) ?? 0 }));
-   }
- 
-   balanceKey(input: BalanceKeyInput) {
 --- a/wms/apps/api/src/modules/stock/stock-operations.service.ts
 +++ b/wms/apps/api/src/modules/stock/stock-operations.service.ts
-@@ -2,6 +2,7 @@
- import { readWbShippedUnits, withoutWbShippedItems, type WbShippedUnit } from './fbs-wb-shipped-units';
- import { WB_KIZ_SHIPMENT_PREFIX } from '../marketplace-connections/fbs-wb-kiz-shipment';
- import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+@@ -4,0 +5 @@
 +import { wbOrderStockLifecycleEnabled } from '../../common/stock/wb-order-stock-lifecycle';
- import { createHash, randomUUID } from 'node:crypto';
- import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
- import { assertSortingAdmin, sortingKizIdentity } from '../inventory/pallet-sorting-policy';
-@@ -2019,6 +2020,7 @@
-               type: MovementType.SHIP,
-               quantity: { lt: 0 },
-               OR: [{ idempotencyKey: null }, { idempotencyKey: { not: { startsWith: WB_KIZ_SHIPMENT_PREFIX } } }],
+@@ -2021,0 +2023 @@
 +              ...(wbOrderStockLifecycleEnabled() ? { AND: [{ OR: [{ idempotencyKey: null }, { NOT: { idempotencyKey: { startsWith: "wb-order-shipment:" } } }] }] } : {}),
-             },
-           ],
-         },
-@@ -2167,6 +2169,7 @@
-               type: MovementType.SHIP,
-               quantity: { lt: 0 },
-               OR: [{ idempotencyKey: null }, { idempotencyKey: { not: { startsWith: WB_KIZ_SHIPMENT_PREFIX } } }],
+@@ -2169,0 +2172 @@
 +              ...(wbOrderStockLifecycleEnabled() ? { AND: [{ OR: [{ idempotencyKey: null }, { NOT: { idempotencyKey: { startsWith: "wb-order-shipment:" } } }] }] } : {}),
-             },
-           ],
-         },
-@@ -2208,16 +2211,28 @@
-         };
-       }
- 
+@@ -2211,4 +2214,4 @@
 -      this.ensureManualDonePackageInput(
 -        dto,
 -        request.items.reduce((total, item) => total + item.quantity, 0),
@@ -844,7 +647,7 @@
 +      const packageItems = wbOrderStockLifecycleEnabled()
 +        ? await tx.clientRequestItem.findMany({ where: { requestId: request.id } }) : request.items;
 +      this.ensureManualDonePackageInput(dto, packageItems.reduce((total, item) => total + item.quantity, 0));
-       const savedSelections = await this.loadRequestBoxSelections(tx, request.id, operationWarehouseId);
+@@ -2216 +2219,13 @@
 -      const plan = await this.planFbsSafeManualShipment(tx, request, savedSelections, physicalSources, baseKey, operationWarehouseId);
 +      const shippedSources = packageItems.flatMap(item => {
 +        const remaining = request.items.find(row => row.id === item.id)?.quantity ?? 0;
@@ -859,46 +662,20 @@
 +        return { itemId: item.id, skuId: sku.id, skuWeightGrams: sku.weightGrams, barcode: item.barcode,
 +          requestedQuantity: item.quantity, allocations: [] };
 +      })) } : plan;
-       await tx.clientRequestPackage.deleteMany({ where: { requestId: request.id } });
-       const packages = await this.createRequestPackages(tx, {
-         request,
+@@ -2220 +2235 @@
 -        plan,
 +        plan: packagePlan,
-         dto,
-         user,
-       });
-@@ -2661,7 +2676,8 @@
-         }
-         let remaining = proof.quantity;
-         for (const balance of process) {
+@@ -2664 +2679,2 @@
 -          if (balance.skuId !== proof.skuId || balance.boxId !== proof.boxId || balance.palletId !== proof.palletId) continue;
 +          const detachedPacking = wbOrderStockLifecycleEnabled() && balance.boxId === null && balance.palletId === null;
 +          if (balance.skuId !== proof.skuId || (!detachedPacking && (balance.boxId !== proof.boxId || balance.palletId !== proof.palletId))) continue;
-           const quantity = Math.min(remaining, Math.max(0, balance.quantity - (reserved.get(balance.id) ?? 0)));
-           if (!quantity) continue;
-           line.allocations.push({ balance, quantity });
-@@ -2801,7 +2817,7 @@
-     return { lines };
-   }
- 
+@@ -2804 +2820 @@
 -  private loadRequestBoxSelections(
 +  private async loadRequestBoxSelections(
-     tx: Prisma.TransactionClient,
-     requestId: string,
-     warehouseId?: string,
-@@ -2810,7 +2826,7 @@
-     if (!('clientRequestBoxSelection' in tx)) {
-       return Promise.resolve([] as RequestBoxSelectionForAllocation[]);
-     }
+@@ -2813 +2829 @@
 -    return tx.clientRequestBoxSelection.findMany({
 +    const selections = await tx.clientRequestBoxSelection.findMany({
-       where: {
-         requestItem: { requestId },
-         box: this.warehouseScopedBoxWhere(warehouseId),
-@@ -2818,6 +2834,15 @@
-       include: { box: { select: allocationBoxSelect } },
-       orderBy: [{ createdAt: 'asc' }],
-     });
+@@ -2820,0 +2837,9 @@
 +    if (!wbOrderStockLifecycleEnabled() || !selections.length) return selections;
 +    const facts = await tx.wbOrderShipment.findMany({ where: { requestId } });
 +    const tasks = await tx.fbsTsdAssembly.findMany({ where: { id: { in: facts.map(fact => fact.assemblyId) } } });
@@ -908,22 +685,10 @@
 +      const itemId = snapshot.requestItemId ?? task?.requestItemId;
 +      return itemId ? [{ itemId, boxId: snapshot.boxId ?? task?.boxId ?? null, quantity: fact.quantity }] : [];
 +    }));
-   }
- 
-   private async restoreCompletedFbsSelectionShortages(
-@@ -3713,7 +3738,7 @@
-     operationName: string,
-     allowDelivery = false,
-   ) {
+@@ -3716 +3741 @@
 -    if (fbsWbAccountingEnabled()) await tx.$queryRaw`SELECT id FROM "ClientRequest" WHERE id = ${requestId} FOR UPDATE`;
 +    if ((fbsWbAccountingEnabled() || wbOrderStockLifecycleEnabled())) await tx.$queryRaw`SELECT id FROM "ClientRequest" WHERE id = ${requestId} FOR UPDATE`;
-     const request = await tx.clientRequest.findUnique({
-       where: { id: requestId },
-       include: {
-@@ -3738,6 +3763,27 @@
-       );
-     }
- 
+@@ -3740,0 +3766,21 @@
 +    // FIX: shipment already recorded per WB order is excluded from subsequent whole-request operations.
 +    if (wbOrderStockLifecycleEnabled() && request.status !== ClientRequestStatus.DONE) {
 +      this.ensureRequestCanMove(request, operationName);
@@ -945,86 +710,35 @@
 +        return { ...request, items: remaining, lifecycleShipmentAssemblyIds: facts.map(fact => fact.assemblyId) };
 +      }
 +    }
-     return request;
-   }
- 
-@@ -4011,6 +4057,8 @@
-     if (!('billingService' in tx) || !('clientBillingService' in tx) || !('billingCharge' in tx)) {
-       return;
-     }
+@@ -4013,0 +4060,2 @@
 +    // FIX: facts use FBS billing even if an old request lost its order link.
 +    if (wbOrderStockLifecycleEnabled() && await tx.wbOrderShipment.count({ where: { requestId: input.request.id } })) return;
-     if (
-       'fbsOrderRequestLink' in tx &&
-       typeof tx.fbsOrderRequestLink.count === 'function' &&
 --- a/wms/apps/web/src/lib/api.ts
 +++ b/wms/apps/web/src/lib/api.ts
-@@ -4093,6 +4093,8 @@
-   palletId: string | null;
-   status: string;
-   quantity: number;
+@@ -4095,0 +4096,2 @@
 +  // FIX: supplied by the unified WB lifecycle; quantity remains the physical balance.
 +  freeQuantity?: number;
-   updatedAt: string;
-   sku: {
-     id: string;
 --- a/wms/apps/web/src/components/client-cabinet/ClientCabinetPanel.tsx
 +++ b/wms/apps/web/src/components/client-cabinet/ClientCabinetPanel.tsx
-@@ -227,7 +227,9 @@
-     const hideCancelledBilling = isClientUser(session.user);
- 
-     const stock = sortByDate(
+@@ -230 +230,3 @@
 -      state.data.stock.filter((balance) => !clientId || balance.clientId === clientId),
 +      // FIX: cabinet uses the same free amount as Excel; storage screens keep physical quantities.
 +      state.data.stock.filter((balance) => !clientId || balance.clientId === clientId)
 +        .map(balance => balance.freeQuantity === undefined ? balance : { ...balance, quantity: balance.freeQuantity }),
-       (balance) => balance.updatedAt,
-     );
-     const visibleStock = stock.filter((balance) => stockMatchesSearch(balance, stockSearch, isInternalUser(session.user)));
-@@ -1253,7 +1255,7 @@
-   return {
-     client,
-     skuCount: new Set(stock.map((balance) => balance.skuId)).size,
+@@ -1256 +1258 @@
 -    totalQuantity: stock.reduce((sum, balance) => sum + Number(balance.quantity), 0),
 +    totalQuantity: stock.reduce((sum, balance) => sum + Number(balance.freeQuantity ?? balance.quantity), 0),
-     activeRequests: data.requests.filter(
-       (request) => request.clientId === client.id && !['DONE', 'CANCELLED', 'REJECTED'].includes(request.status),
-     ).length,
 --- a/wms/apps/web/src/components/client-cabinet/clientCabinetStockExcelExport.ts
 +++ b/wms/apps/web/src/components/client-cabinet/clientCabinetStockExcelExport.ts
-@@ -57,7 +57,7 @@
-   skuIds: Set<string>;
- };
- 
+@@ -60 +60 @@
 -function aggregateStockRows(stock: StockBalance[], activeRequests: ClientRequestSummary[]) {
 +export function aggregateStockRows(stock: StockBalance[], activeRequests: ClientRequestSummary[]) {
-   const byBarcode = new Map<
-     string,
-     AggregatedStockRow & {
-@@ -69,6 +69,7 @@
-   >();
- 
-   stock.forEach((balance) => {
+@@ -71,0 +72 @@
 +    if (balance.freeQuantity !== undefined && balance.freeQuantity <= 0) return;
-     const barcode = primaryBarcode(balance) || `SKU:${balance.sku.id}`;
-     const existing = byBarcode.get(barcode) ?? {
-       internalSku: '',
-@@ -93,7 +94,8 @@
-     existing.internalSkus.add(balance.sku.internalSku);
-     existing.names.add(balance.sku.name);
-     existing.statuses.add(stockStatusLabel(balance.status));
+@@ -96 +97,2 @@
 -    existing.quantity += Number(balance.quantity);
 +    // FIX: server free stock excludes PACKING and includes incoming WB reservations.
 +    existing.quantity += Number(balance.freeQuantity ?? balance.quantity);
-     existing.updatedAt = latestDateString(existing.updatedAt, balance.updatedAt);
-     existing.internalSku = [...existing.internalSkus].sort((left, right) => left.localeCompare(right, 'ru')).join(', ');
-     existing.name = [...existing.names].sort((left, right) => left.localeCompare(right, 'ru')).join(', ');
-@@ -102,7 +104,7 @@
-     byBarcode.set(barcode, existing);
-   });
- 
+@@ -105 +107 @@
 -  applyActiveRequestReservations(byBarcode, activeRequests);
 +  if (!stock.every(balance => balance.freeQuantity !== undefined)) applyActiveRequestReservations(byBarcode, activeRequests);
- 
-   return [...byBarcode.values()]
-     .filter((row) => row.quantity > 0)
