@@ -40,3 +40,9 @@ Results: 2,591 API tests (including five new real PostgreSQL scenarios), 199 web
 Feature defaults OFF. Enable only for our WMS after deploying the reviewed API/web and publishing the matching LOGOFF APK. Existing inventory/KIZ audit flags remain required. No schema or mass historical-data migration. Historical duplicate identities require explicit review.
 
 Shared modules are touched: sold WMS must keep the new flag unset/false. Feature-off regression suite and all three Android brands are tested. Publication/deployment have not occurred as part of local implementation; PR creation requires the owner's confirmation under the supplied AGENTS instructions.
+
+## Combined deployment verification
+
+The owner authorized combining concurrent live changes on 2026-09-16. The narrow API patch preserves AdminNotificationsService and retainFbsBranchEvidence imports, all existing notification/billing code, and the approved permanent-return adaptations. Production sources were not replaced with older Git files. The combined API passed 95 local targeted tests, including five real PostgreSQL scenarios. Its deployed-image regression comparison introduces no failures relative to the existing live baseline when test-default flags are used; live-image historical tests have 90 pre-existing failures.
+
+The web baseline was rebuilt and matched every deployed output byte before applying the inventory warning patch. All 92 tests in the combined server web source passed. Android is built on the verified deployed physical-pick version 173 sources, preserving Ozon and WB physical pick confirmation; all 558 tests passed. LOGOFF publication uses versionCode 174 / versionName 0.1.175-kiz-identity to allow an in-place upgrade. Other brands retain their version and configuration. Release evidence is retained under D:/WMSFF/_Kof/work/kiz-identity-release-20260916 and the corresponding server release directory.
