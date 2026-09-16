@@ -885,6 +885,8 @@ export class TsdAssemblyService {
           orderId: true,
           requestItemId: true,
           skuId: true,
+          sourceSkuId: true, // FIX: source stock remains under its original SKU until relabeling.
+          reservedBoxCode: true,
           connectionId: true,
           productName: true,
           article: true,
@@ -978,9 +980,19 @@ export class TsdAssemblyService {
     const skuById = new Map(skus.map((sku) => [sku.id, sku]));
     // FIX: allocations in a saved instruction may not contain the pallet-sort that
     // was assigned later. The online request must show the current physical place.
-    const allocationBoxCodes = uniqueSorted(
-      requestRows.flatMap((row) => row.allocations.map((allocation) => allocation.boxCode)),
-    );
+    // FIX: isolate our installation's live relabel hints from the sold VM.
+    const relabelCandidates = process.env.WMS_FBS_ONLINE_RELABEL_LOCATIONS_ENABLED === 'true'
+      ? rows.filter(row => row.sourceSkuId && row.sourceSkuId !== row.skuId &&
+          row.reservedBoxCode && !row.boxCode && !row.barcode && !row.kiz &&
+          ['RESERVED', 'IN_PROGRESS'].includes(row.status) &&
+          links.some(link => link.connectionId === row.connectionId && link.orderId === row.orderId))
+        .map(row => ({ itemId: row.requestItemId, orderId: row.orderId, targetSkuId: row.skuId,
+          skuId: row.sourceSkuId!, boxCode: row.reservedBoxCode!, quantity: Math.max(1, row.itemCount) }))
+      : [];
+    const allocationBoxCodes = uniqueSorted([
+      ...requestRows.flatMap((row) => row.allocations.map((allocation) => allocation.boxCode)),
+      ...relabelCandidates.map(row => row.boxCode),
+    ]);
     const allocationPlacements = allocationBoxCodes.length > 0
       ? await this.prisma.storagePalletBox.findMany({
           where: {
@@ -1004,7 +1016,7 @@ export class TsdAssemblyService {
       ]),
     );
     // FIX: historical pick allocations are not proof of current available stock.
-    const currentAllocationQuantities = await this.loadCurrentFbsAllocationQuantities(requestId, requestRows);
+    const currentAllocationQuantities = await this.loadCurrentFbsAllocationQuantities(requestId, requestRows, relabelCandidates);
     const facts = rows.map((row) => ({
       id: row.id,
       orderId: row.orderId,
@@ -1109,6 +1121,14 @@ export class TsdAssemblyService {
           ? eligibleOrderIds.reduce((sum, orderId) => sum + Math.max(1,
               linkByOrderId.get(orderId)?.lastItemCount ?? rowByOrderId.get(orderId)?.itemCount ?? 1), 0)
           : savedRemainingQuantity;
+        const sourceAllocations = new Map<string, { boxCode: string; quantity: number; stockSkuId: string; palletId: null; palletCode: null }>();
+        for (const candidate of relabelCandidates.filter(candidate => candidate.targetSkuId === row.skuId &&
+          (!candidate.itemId || candidate.itemId === row.itemId) && eligibleOrderIds.includes(candidate.orderId))) {
+          const key = `${candidate.skuId}:${normalizeBoxCode(candidate.boxCode)}`;
+          const previous = sourceAllocations.get(key);
+          sourceAllocations.set(key, { boxCode: candidate.boxCode, quantity: (previous?.quantity ?? 0) + candidate.quantity,
+            stockSkuId: candidate.skuId, palletId: null, palletCode: null });
+        }
         return {
           requestItemId: row.itemId,
           skuId: row.skuId,
@@ -1147,9 +1167,13 @@ export class TsdAssemblyService {
               } =>
                 Boolean(order),
             ),
-          availableBoxes: row.allocations.flatMap((allocation) => {
+          availableBoxes: [
+            ...row.allocations.map(allocation => ({ ...allocation, stockSkuId: row.skuId })),
+            // FIX: only assignments belonging to this pending item/order can supply a source hint.
+            ...sourceAllocations.values(),
+          ].flatMap((allocation) => {
             if (remainingQuantity <= 0) return [];
-            const balanceKey = `${row.skuId}:${normalizeBoxCode(allocation.boxCode)}`;
+            const balanceKey = `${allocation.stockSkuId}:${normalizeBoxCode(allocation.boxCode)}`;
             const available = currentAllocationQuantities.get(balanceKey) ?? 0;
             const quantity = Math.min(allocation.quantity, available);
             if (quantity <= 0) return [];
@@ -1338,9 +1362,10 @@ export class TsdAssemblyService {
     };
   }
 
-  private async loadCurrentFbsAllocationQuantities(requestId: string, requestRows: PickInstructionDocument['rows']) {
-    const boxCodes = uniqueSorted(requestRows.flatMap(row => row.allocations.map(allocation => allocation.boxCode)));
-    const skuIds = uniqueSorted(requestRows.map(row => row.skuId).filter((id): id is string => Boolean(id)));
+  private async loadCurrentFbsAllocationQuantities(requestId: string, requestRows: PickInstructionDocument['rows'],
+    sources: Array<{ skuId: string; boxCode: string }> = []) {
+    const boxCodes = uniqueSorted([...requestRows.flatMap(row => row.allocations.map(allocation => allocation.boxCode)), ...sources.map(row => row.boxCode)]);
+    const skuIds = uniqueSorted([...requestRows.map(row => row.skuId).filter((id): id is string => Boolean(id)), ...sources.map(row => row.skuId)]);
     const quantities = new Map<string, number>();
     if (boxCodes.length === 0 || skuIds.length === 0) return quantities;
     const balances = await this.prisma.stockBalance.findMany({
