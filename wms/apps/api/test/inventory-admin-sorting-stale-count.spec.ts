@@ -74,3 +74,12 @@ it('does not block accepting unchanged stock without a stock mutation', async ()
   expect(f.quantity()).toBe(1); expect(f.db.stockMovement.findFirst).not.toHaveBeenCalled();
   expect(f.db.stockMovement.create).not.toHaveBeenCalled();
 });
+it('cannot restore source quantity from an old count after a confirmed KIZ transfer', async () => {
+  // TEST: replaying a source-box count must not recreate the unit now in another box.
+  const f = fixture(); vi.stubEnv('WMS_KIZ_IDENTITY_TRANSFER_ENABLED', 'true');
+  f.movements[0].sourceDocument = 'inventory-kiz-transfer:target-audit';
+  await expect(f.service.decideLine('line', { action: InventoryResolutionAction.APPLY_ACTUAL }, user)).rejects.toThrow('КИЗ и остаток перенесены');
+  expect(f.quantity()).toBe(1); expect(f.line.decision).toBe('PENDING');
+  expect(f.db.stockBalance.update).not.toHaveBeenCalled();
+  expect(f.db.$transaction).toHaveBeenCalledTimes(1);
+});

@@ -373,6 +373,8 @@ export type AnalyticsDashboard = {
 };
 
 export type InventoryAuditBox = {
+  // FIX: source stock changes are shown before the existing administrator approval.
+  kizTransferWarnings?: string[];
   // FIX: quantity can match while the saved physical KIZ composition still needs approval.
   kizReview?: { required: boolean; orderId: string; message: string };
   id: string;

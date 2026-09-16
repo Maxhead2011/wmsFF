@@ -2744,6 +2744,10 @@ public class MainActivity extends Activity {
                     " · " + safeText(activeInventoryBox.clientName)
             ));
             addInventoryLines(root, activeInventoryBox);
+            // FIX: show source ownership while counting, before any approval.
+            if (activeInventoryBox.kizTransferWarnings != null) {
+                for (String warning : activeInventoryBox.kizTransferWarnings) root.addView(messageView(warning));
+            }
             if (!mandatoryFbsKizAuditTaskId.isEmpty()) root.addView(secondaryButton(
                 tr("Переклеить использованный КИЗ", "Ishlatilgan KIZni almashtirish"),
                 view -> showAuditKizRelabelDialog(null)));
@@ -2981,7 +2985,8 @@ public class MainActivity extends Activity {
         }
         new AlertDialog.Builder(this)
             .setTitle(titleText)
-            .setMessage(messageText)
+            .setMessage(messageText + (activeInventoryBox.kizTransferWarnings == null || activeInventoryBox.kizTransferWarnings.isEmpty()
+                ? "" : "\n\n" + android.text.TextUtils.join("\n\n", activeInventoryBox.kizTransferWarnings)))
             .setNegativeButton(tr("Отмена", "Bekor qilish"), null)
             .setPositiveButton(
                 tr("Подтвердить", "Tasdiqlash"),

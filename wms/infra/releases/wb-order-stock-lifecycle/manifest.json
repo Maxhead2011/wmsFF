@@ -20,8 +20,8 @@
     "after": "847488bbd2335292d51b9a3da795d16deedfffbaac056daeaea19659c7b43772"
   },
   "wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts": {
-    "before": "64470c5367ce7425137a5e163fece6197a7ea10d6568f5529a731635f2eecb69",
-    "after": "f4046efb250386b39b25ea6e5a28841987466a65599c2f7f354cf15b3a2ecb6a"
+    "before": "92cc195ef0ae0e810d9bd9ceb8bdb3c3ff0544f9dd7e6cf32c7abfb9154d40e9",
+    "after": "3c6b9251d6133f98ff4c4556c0ee265d1d01dc903c39cc47f4eded1825cbd472"
   },
   "wms/apps/api/src/modules/stock/fbs-picked-stock-proof.ts": {
     "before": "03f4be1060706b3e225e12c640ea2eadb230175d5c5e6bd0d31b721e5596cf5a",
@@ -40,8 +40,8 @@
     "after": "3c3abc6d82636c9b8cc1d738aad135ec1f21a5d305276ce95b821d3e50ac1ebd"
   },
   "wms/apps/web/src/lib/api.ts": {
-    "before": "2342e488e4c7a93058cffcc065a0986b8674a36e5f4020979482b98de22189e3",
-    "after": "59ed0077c6816b0ac8297586de124a68eece7aeab25a5c72f8f5217ca1151aac"
+    "before": "362b10029a1b5ce9885788c0d11a9d5136cce6d2ecd902932502174f073bfb07",
+    "after": "56e6945d1cda3942e80958f87a912301d36053632e6062786e6e5c9d4a6beca5"
   },
   "wms/apps/web/src/components/client-cabinet/ClientCabinetPanel.tsx": {
     "before": "efbadb0e63b59a9b0804c5eaee08ab092630df7542bab32e2de104d04b7ca2a4",

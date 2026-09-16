@@ -1,4 +1,5 @@
 import { wbOrderStockLifecycleEnabled, finalizeWbOrderShipment, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
+import { physicalKizLookup, physicalKizHistoryFilter } from '../../common/kiz-physical-identity';
 import { stockTransferBlockedReason, ordersWithoutTransferStock } from './fbs-stock-transfer';
 import { fbsStockAuditError, fbsKizAuditEnabled, validateFbsStockAudit } from './fbs-stock-audit';
 import { createHash } from 'node:crypto';
@@ -10312,7 +10313,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
     let mark = await this.prisma.productMark.findFirst({
       where: {
-        value: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+        ...await physicalKizLookup(this.prisma, kiz),
       },
       select: {
         id: true,
@@ -10385,7 +10386,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const duplicateCandidates = await this.prisma.fbsTsdAssembly.findMany({
       where: {
         id: { not: task.id },
-        kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+        ...physicalKizHistoryFilter(kiz),
         status: { in: ['IN_PROGRESS', 'COMPLETED', FBS_TSD_RETURN_REQUIRED] },
       },
       select: {
@@ -11019,7 +11020,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     // restoreAcceptedFbsKiz repeats the capacity check inside its transaction.
     if (process.env.WMS_FBS_PRESERVE_STOCK_KIZ === 'true') {
       const existingMark = await this.prisma.productMark.findFirst({
-        where: { value: { equals: kiz, mode: Prisma.QueryMode.insensitive } },
+        where: { ...await physicalKizLookup(this.prisma, kiz) },
         select: { id: true },
       });
       if (!existingMark) {
@@ -11052,7 +11053,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           where: {
             id: { not: task.id },
             clientId: task.clientId,
-            kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+            ...physicalKizHistoryFilter(kiz),
             status: { in: ['IN_PROGRESS', 'COMPLETED', FBS_TSD_RETURN_REQUIRED] },
           },
           select: {
@@ -11195,7 +11196,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       where: {
         id: { not: task.id },
         clientId: task.clientId,
-        kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+        ...physicalKizHistoryFilter(kiz),
         status: {
           in: [
             'IN_PROGRESS',
@@ -11228,7 +11229,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
 
     const mark = await this.prisma.productMark.findFirst({
-      where: { value: { equals: kiz, mode: Prisma.QueryMode.insensitive } },
+      where: { ...await physicalKizLookup(this.prisma, kiz) },
       select: { clientId: true, skuId: true },
     });
     if (mark && (mark.clientId !== task.clientId || mark.skuId !== task.skuId)) {
@@ -11860,7 +11861,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
 
     let mark = await this.prisma.productMark.findFirst({
-      where: { value: { equals: kiz, mode: Prisma.QueryMode.insensitive } },
+      where: { ...await physicalKizLookup(this.prisma, kiz) },
       select: {
         id: true,
         clientId: true,
@@ -11916,7 +11917,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const duplicate = await this.prisma.fbsTsdAssembly.findFirst({
       where: {
         id: { not: task.id },
-        kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+        ...physicalKizHistoryFilter(kiz),
         status: { in: ['IN_PROGRESS', 'COMPLETED', FBS_TSD_RETURN_REQUIRED] },
       },
       select: { orderId: true },
@@ -12755,7 +12756,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       this.prisma.productMark.findFirst({
         where: {
           clientId: task.clientId,
-          value: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+          ...await physicalKizLookup(this.prisma, kiz),
         },
         select: {
           id: true,
@@ -12770,7 +12771,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         where: {
           id: { not: task.id },
           clientId: task.clientId,
-          kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+          ...physicalKizHistoryFilter(kiz),
         },
         select: {
           id: true,
@@ -12883,7 +12884,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       where: {
         id: { not: task.id },
         clientId: task.clientId,
-        kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+        ...physicalKizHistoryFilter(kiz),
         status: { in: ['IN_PROGRESS', 'COMPLETED', FBS_TSD_RETURN_REQUIRED] },
       },
       select: { id: true, orderId: true, requestId: true, status: true },
@@ -12915,7 +12916,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
     let mark = await this.prisma.productMark.findFirst({
       where: {
-        value: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+        ...await physicalKizLookup(this.prisma, kiz),
       },
       select: {
         id: true,
@@ -13366,7 +13367,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             where: {
               id: { not: task.id },
               clientId: task.clientId,
-              kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+              ...physicalKizHistoryFilter(kiz),
             },
             orderBy: { updatedAt: 'desc' },
             select: {
@@ -13387,7 +13388,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           this.prisma.shippedKizHistory.findFirst({
             where: {
               clientId: task.clientId,
-              kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+              ...physicalKizHistoryFilter(kiz),
               shippedAt: { lte: detectedAt },
             },
             orderBy: { shippedAt: 'desc' },
@@ -13571,7 +13572,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           id: { not: excludedAssemblyId },
           clientId,
           marketplace: MarketplaceType.WILDBERRIES,
-          kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+          ...physicalKizHistoryFilter(kiz),
           wbMetaStatus: 'ACCEPTED',
         },
         select: { orderId: true, requestId: true, completedAt: true },
@@ -13580,7 +13581,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       this.prisma.shippedKizHistory.findFirst({
         where: {
           clientId,
-          kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+          ...physicalKizHistoryFilter(kiz),
         },
         select: { orderId: true, requestId: true, shippedAt: true },
         orderBy: { shippedAt: 'desc' },
@@ -13588,7 +13589,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       this.prisma.fbsWebKizStickerPrint.findFirst({
         where: {
           clientId,
-          kiz: { equals: kiz, mode: Prisma.QueryMode.insensitive },
+          ...physicalKizHistoryFilter(kiz),
         },
         select: { orderId: true, requestId: true, printedAt: true },
         orderBy: { printedAt: 'desc' },
@@ -13599,7 +13600,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (printed) return { source: 'PRINT' as const, ...printed };
     if (hasFbsAttemptHistory()) {
       const historical = await this.prisma.fbsAssemblyAttemptHistory.findFirst({
-        where: { clientId, kiz: { equals: kiz, mode: 'insensitive' } },
+        where: { clientId, ...physicalKizHistoryFilter(kiz) },
       });
       if (historical) return { source: 'ASSEMBLY' as const, orderId: historical.orderId,
         requestId: historical.requestId, completedAt: historical.completedAt };
@@ -14111,7 +14112,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         where: {
           clientId: task.clientId,
           skuId: task.skuId,
-          value: task.kiz,
+          ...await physicalKizLookup(tx, task.kiz, false),
           status: StockStatus.AVAILABLE,
           ...(preserveStockKiz ? { boxId: task.boxId } : {}),
         },
@@ -14140,7 +14141,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const quantityToReserve = quantity - Math.max(0, activeReservedQuantity);
     if (preserveStockKiz && task.kiz) {
       const physicalMark = await tx.productMark.findFirst({
-        where: { clientId: task.clientId, skuId: task.skuId, value: task.kiz,
+        where: { clientId: task.clientId, skuId: task.skuId, ...await physicalKizLookup(tx, task.kiz, false),
           boxId: task.boxId, status: StockStatus.AVAILABLE },
         select: { id: true },
       });
@@ -14483,7 +14484,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         where: {
           clientId: task.clientId,
           skuId: task.skuId,
-          value: task.kiz,
+          ...await physicalKizLookup(tx, task.kiz, false),
           status: StockStatus.PACKING,
           ...(receipt?.mark ? { id: receipt.mark.id, boxId: receipt.mark.boxId, updatedAt: receipt.mark.updatedAt } : {}),
         },
