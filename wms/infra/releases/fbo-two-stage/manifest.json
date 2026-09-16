@@ -4,8 +4,8 @@
     "after": "cdfcb1c7c686e61a151831ba49f846e74f9d39ec0a2edeb815bec02ad70ebf12"
   },
   "wms/apps/api/prisma/schema.prisma": {
-    "before": "b3130596f8d17c2ca379ed42c69c844d8641119bf909d4b0db98d4015d50e064",
-    "after": "ef706208fdcfef94241204a9c2feb2503815ecf222adb1622dcb1375bc9ebdb6"
+    "before": "6b65f42e6739ac5ab4388a48e9401f8a3cbae13dc407543175fa2c4bb3f1ac27",
+    "after": "a656dcc1b933bee48cf83f70c3d0569f6776a0ecfaecf4681380323b9e48c422"
   },
   "wms/apps/api/src/modules/administration/administration-internal-api.service.ts": {
     "before": "7e7858b9185326674e5c37be1882405d73916078060b444ede398dbc0b475165",

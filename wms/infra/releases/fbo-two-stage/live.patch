@@ -41,7 +41,7 @@
 +++ b/wms/apps/api/prisma/schema.prisma
 @@ -1620,0 +1621 @@
 +  fboAssembly                  FboAssembly?
-@@ -3417,0 +3419,63 @@
+@@ -3430,0 +3432,63 @@
 +
 +// FIX: durable FBO ownership survives TSD disconnects and separates pick from pack.
 +model FboAssembly {
