@@ -26356,6 +26356,38 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       cursor = nextCursor;
     }
 
+    // FIX: Ozon postings may omit physical barcodes and use an offer unlike the WMS article.
+    // Resolve only missing barcodes, in batches scoped to this seller, without changing cards or stock.
+    const catalogBarcodes = new Map<string, string[]>();
+    if (process.env.WMS_OZON_FBS_CATALOG_BARCODES === 'true') {
+      const missing = postings.flatMap(posting => {
+        const product = asArray<Record<string, unknown>>(posting.products)[0];
+        return product && asArray<unknown>(product.barcodes).map(textValue).filter(Boolean).length === 0
+          ? [product] : [];
+      });
+      const skuIds = uniqueStrings(missing.map(product => textValue(product.sku)));
+      for (const skuBatch of chunks(skuIds, 100)) {
+        try {
+          const response = await marketplaceJson('https://api-seller.ozon.ru/v3/product/info/list', {
+            method: 'POST', headers, body: JSON.stringify({ sku: skuBatch }),
+          });
+          for (const card of marketplaceResponseItems<Record<string, unknown>>(response)) {
+            const offer = textValue(card.offer_id);
+            const barcodes = uniqueStrings(asArray<unknown>(card.barcodes).map(textValue));
+            for (const source of asArray<Record<string, unknown>>(card.sources)) {
+              const sku = textValue(source.sku);
+              if (skuBatch.includes(sku) && missing.some(product => textValue(product.sku) === sku && textValue(product.offer_id) === offer)) {
+                const key = JSON.stringify([sku, offer]);
+                catalogBarcodes.set(key, uniqueStrings([...(catalogBarcodes.get(key) ?? []), ...barcodes]));
+              }
+            }
+          }
+        } catch {
+          this.logger.warn('Ozon FBS: catalog barcodes unavailable; preserving posting identifiers.');
+        }
+      }
+    }
+
     return postings.map((posting) => {
       const products = asArray<Record<string, unknown>>(posting.products);
       const product = products[0] ?? {};
@@ -26378,6 +26410,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         skus: uniqueStrings([
           ...asArray<unknown>(posting.barcodes).map(textValue),
           ...asArray<unknown>(product.barcodes).map(textValue),
+          ...(catalogBarcodes.get(JSON.stringify([textValue(product.sku), textValue(product.offer_id)])) ?? []),
           textValue(product.offer_id),
         ]),
         createdAt: textValue(posting.in_process_at) || textValue(posting.shipment_date),
@@ -29806,13 +29839,17 @@ function compactWildberriesFbsOrder(order: Record<string, unknown>) {
   return result;
 }
 
-function fbsOrderRefreshFingerprint(order: {
+// FIX: catalog barcode recovery must invalidate an unmapped Ozon order even when its status did not change.
+export function fbsOrderRefreshFingerprint(order: {
   supplierStatus?: unknown;
   wbStatus?: unknown;
   supplyId?: unknown;
   supplyID?: unknown;
   requiresReshipment?: unknown;
   warehouseId?: unknown;
+  marketplace?: unknown;
+  skus?: unknown;
+  barcodes?: unknown;
 }) {
   return [
     textValue(order.supplierStatus),
@@ -29820,6 +29857,9 @@ function fbsOrderRefreshFingerprint(order: {
     textValue(order.supplyId) || textValue(order.supplyID),
     toBoolean(order.requiresReshipment) ? '1' : '0',
     textValue(order.warehouseId),
+    ...(process.env.WMS_OZON_FBS_CATALOG_BARCODES === 'true' && order.marketplace === MarketplaceType.OZON
+      ? [uniqueStrings(asArray<unknown>(order.skus ?? order.barcodes).map(textValue)).sort().join(',')]
+      : []),
   ].join('|');
 }
 
