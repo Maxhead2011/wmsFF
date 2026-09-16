@@ -3,6 +3,7 @@ import { BillingPanel, filterBillingRegisterInvoices, billingInvoiceCardPermissi
 import { BillingPeriodGenerationDialog } from './BillingPeriodGenerationDialog';
 import { BillingCashReceiptPanel } from './BillingCashReceiptPanel';
 import { BillingInvoicesTable } from './BillingInvoicesTable';
+import { BillingInvoiceServiceSummary } from './BillingInvoiceServiceSummary';
 import { fetchBillingInvoices } from '../../lib/api';
 
 const hooks = vi.hoisted(() => ({ values: [] as any[], cursor: 0 }));
@@ -44,6 +45,22 @@ const invoice: any = {
   status: 'ISSUED', serviceCategory: 'STORAGE', totalRub: 100, paidRub: 25, payments: [], items: [], comment: '',
 };
 describe('billing register filters and invoice card', () => {
+  // TEST: invoice cards show a summary first; original editing/payment permissions stay intact.
+  it.each(['ISSUED', 'PAID'])('keeps %s invoice details collapsed and original items available', status => {
+    hooks.values = []; hooks.cursor = 0;
+    const render = () => { hooks.cursor = 0; return BillingPanel({ session: { accessToken: 'token', user: { id: 'user', permissionCodes: ['billing:read', 'billing:write'] } } as any }); };
+    render();
+    const selected = { ...invoice, status, paidRub: status === 'PAID' ? 100 : 0 };
+    hooks.values[1] = { status: 'ready', data: [selected] };
+    hooks.values[2] = { status: 'ready', data: [selected] };
+    elements(render()).find(node => node.type === 'button' && node.props.children === 'Весь период').props.onClick();
+    elements(render()).find(node => node.type === 'button' && node.props.children === 'Счета').props.onClick();
+    elements(render()).find(node => node.type === BillingInvoicesTable).props.onOpen(selected);
+    const nodes = elements(render());
+    expect(nodes.find(node => node.type === BillingInvoiceServiceSummary).props.items).toBe(selected.items);
+    const details = nodes.find(node => node.type === 'details' && elements(node).some(child => child.type === 'summary' && /детализаци/.test(child.props.children)));
+    expect(details).toBeDefined(); expect(details.props.open).not.toBe(true);
+  });
   // TEST: recovered mixed invoices use the server's FBS label without losing period/client/status filters.
   it('includes mixed recovered FBS invoices once in the FBS register', () => {
     const recovery = { ...invoice, id: 'recovery', status: 'DRAFT', serviceCategory: 'FBS',

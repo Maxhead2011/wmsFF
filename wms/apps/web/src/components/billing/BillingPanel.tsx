@@ -1,4 +1,5 @@
 import { ArrowLeft, Calculator, ChevronRight, Files, ReceiptText, RefreshCw, X } from 'lucide-react';
+import { BillingInvoiceServiceSummary } from './BillingInvoiceServiceSummary';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   downloadCombinedBillingInvoicesPdf,
@@ -1136,17 +1137,20 @@ export function BillingPanel({ session }: BillingPanelProps) {
                 <h4>Зарегистрировать оплату</h4>
                 <BillingPaymentForm key={`${editingInvoice.id}:${editingInvoice.paidRub}`} invoices={[editingInvoice]} session={session} onPaid={acceptMutatedInvoice} />
               </section> : null}
-              {billingInvoiceCardPermissions(editingInvoice, canWrite).canEdit ? <BillingInvoiceForm
+              {/* FIX: show summed services by default; editing retains every original source item. */}
+              <BillingInvoiceServiceSummary items={editingInvoice.items} />
+              {billingInvoiceCardPermissions(editingInvoice, canWrite).canEdit ? <details>
+                <summary>Редактировать детализацию услуг</summary><BillingInvoiceForm
                 key={editingInvoice.id}
                 clients={clients.data}
                 session={session}
                 invoice={editingInvoice}
                 onCreated={acceptEditedInvoice}
                 onMutated={acceptMutatedInvoice}
-              /> : <div className="billing-table-wrap"><table className="data-table billing-table">
+              /></details> : <details><summary>Показать детализацию услуг</summary><div className="billing-table-wrap"><table className="data-table billing-table">
                 <thead><tr><th>Услуга</th><th>Дата услуги</th><th>Количество</th><th>Тариф</th><th>Сумма</th></tr></thead>
                 <tbody>{editingInvoice.items.map(item => <tr key={item.id}><td>{item.description}</td><td>{formatShortDate(item.serviceDate)}</td><td>{String(item.quantity)}</td><td>{formatMoney(Number(item.unitPriceRub))}</td><td>{formatMoney(Number(item.totalRub))}</td></tr>)}</tbody>
-              </table></div>}
+              </table></div></details>}
               {editingInvoice.payments.length > 0 ? <section aria-label="История оплат"><h4>История оплат</h4><ul>
                 {editingInvoice.payments.map(payment => <li key={payment.id}>{formatShortDate(payment.paidAt)} · {formatMoney(Number(payment.amountRub))} ₽ · {payment.method || 'Способ не указан'}{payment.status === 'CANCELLED' ? ' · отменена' : ''}</li>)}
               </ul></section> : null}
