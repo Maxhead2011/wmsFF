@@ -1,0 +1,54 @@
+{
+  "wms/apps/api/prisma/schema.prisma": {
+    "before": "4cd1959acb31780196f440fccfcbf82fd24bde5a386704807569dd3efb1ca618",
+    "after": "b3130596f8d17c2ca379ed42c69c844d8641119bf909d4b0db98d4015d50e064"
+  },
+  "wms/apps/api/prisma/migrations/20260916010000_wb_order_stock_lifecycle/migration.sql": {
+    "before": null,
+    "after": "ffa3f57872b5205e6f78144e816d78c7eebed44e0d72485296c5c0a652e681fd"
+  },
+  "wms/apps/api/src/common/stock/wb-order-stock-lifecycle.ts": {
+    "before": null,
+    "after": "d977b7495915fa2a7283d23dd76e7f662cea46d1f2d4fcdd095b15c913ddc962"
+  },
+  "wms/apps/api/src/modules/billing/completed-fbs-billing.ts": {
+    "before": "732b63e2ba8d1d7a1f4ef5bc94d99af95e560801cf0147ed1538239a10dbd6cb",
+    "after": "98b064c9f356517653373187bcea0faa838d919c70e9358d3a19bdc9a0bc1522"
+  },
+  "wms/apps/api/src/modules/client-requests/client-requests.service.ts": {
+    "before": "142f7b45a61befb47a5df8d7e0b2ae2cc6128e58c5d4308043d99414f466fb4d",
+    "after": "847488bbd2335292d51b9a3da795d16deedfffbaac056daeaea19659c7b43772"
+  },
+  "wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts": {
+    "before": "92cc195ef0ae0e810d9bd9ceb8bdb3c3ff0544f9dd7e6cf32c7abfb9154d40e9",
+    "after": "d9bb3061f7403071364eea62d66b86a76cb7b123cfbbbfe8793961448b1c2960"
+  },
+  "wms/apps/api/src/modules/stock/fbs-picked-stock-proof.ts": {
+    "before": "03f4be1060706b3e225e12c640ea2eadb230175d5c5e6bd0d31b721e5596cf5a",
+    "after": "d4e03fedbc90badc8b84ee9e45655ba0d550c426df6c375050151f31b216eb07"
+  },
+  "wms/apps/api/src/modules/stock/fbs-wb-shipped-units.ts": {
+    "before": "4a30da83dae6c3a6afae6204e930d94a746b578f6ecedef0bda5b58d9aad9102",
+    "after": "f928b80658c8113aea29d080879462460ad2b8abda35170571c2106402fe96ca"
+  },
+  "wms/apps/api/src/modules/stock/stock-balances.service.ts": {
+    "before": "fae250e44db912994c3e16f1b93e2f566b37a372554b66050f5d7a79a2c69160",
+    "after": "3752566ab5a4277056bfb8b0a2df748c4b4ac204d0532d57045c44d7b0f7bc8e"
+  },
+  "wms/apps/api/src/modules/stock/stock-operations.service.ts": {
+    "before": "3cfcd595db22ec7b574e3f2ded3bdedae239330bc39af4cb2aad0059b62842dc",
+    "after": "3c3abc6d82636c9b8cc1d738aad135ec1f21a5d305276ce95b821d3e50ac1ebd"
+  },
+  "wms/apps/web/src/lib/api.ts": {
+    "before": "362b10029a1b5ce9885788c0d11a9d5136cce6d2ecd902932502174f073bfb07",
+    "after": "56e6945d1cda3942e80958f87a912301d36053632e6062786e6e5c9d4a6beca5"
+  },
+  "wms/apps/web/src/components/client-cabinet/ClientCabinetPanel.tsx": {
+    "before": "efbadb0e63b59a9b0804c5eaee08ab092630df7542bab32e2de104d04b7ca2a4",
+    "after": "2ece4606f58e5e9da2ea9d35dab3c3ac6b04c6a015c751b6d666fab8feeaf871"
+  },
+  "wms/apps/web/src/components/client-cabinet/clientCabinetStockExcelExport.ts": {
+    "before": "bdf94403b596f206d9ff4126b50903a0f8c5c13a8e7d6a9a0450568673b62880",
+    "after": "df853c1c2ac785ac27b3ba9ee11dca3dbd1faa6f4539759440df857127e7c346"
+  }
+}

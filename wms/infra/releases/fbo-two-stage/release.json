@@ -1,0 +1,20 @@
+{
+  "apiWebBaseline": {
+    "api": "sha256:da6637137e2145fad1f770af033152492477f6844aafe0ac85196f31f30231c3",
+    "web": "sha256:9ad2ec4fcb82c199cf74cca3ce17f2493732fc5e8f9391125a43e9feec6e03df"
+  },
+  "androidBaseline": 175,
+  "androidRelease": 176,
+  "featureFlag": "WMS_FBO_TWO_STAGE_ENABLED",
+  "defaultEnabled": false,
+  "isolatedVariants": [
+    "ffullhab",
+    "platform"
+  ],
+  "validation": {
+    "api": 2667,
+    "web": 206,
+    "liveAndroid": 594
+  },
+  "notes": "Live patches are additive overlays retaining deployed WB lifecycle, physical-pick, KIZ-search and print-agent updates."
+}

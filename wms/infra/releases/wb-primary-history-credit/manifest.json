@@ -1,0 +1,6 @@
+{
+  "wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts": {
+    "before": "d9bb3061f7403071364eea62d66b86a76cb7b123cfbbbfe8793961448b1c2960",
+    "after": "35d48535a6a9a501b5d3cdb1c267bd7a43fd8c8e509825546dbdbe30fec614ed"
+  }
+}

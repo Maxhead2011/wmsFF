@@ -18,8 +18,8 @@ const liveHashes = {
 };
 const desiredHashes = {
   // FIX: reviewed exact-source KIZ guard; preserve the same five live adaptations.
-  [reserveName]: 'a7de60cbee448dfb58d0ef0e532f27a10d2b700cea87adf8ba65d47e3c2b2264',
-  [returnName]: 'e6a98fe26ab53f1a85aef10453c54adebf6de1e9da0506a9209447c355e0f88f',
+  [reserveName]: '314ef2a53599191683f876cc59ccbfa0f99d966b97615653e5656c1152c538d1',
+  [returnName]: '832f9d256c1eba686a7534217a9baa7d30b960e1ed836dd141b1dcf0e73671eb',
 };
 function once(text, before, after) {
   assert.equal(text.split(before).length, 2, 'Approved adaptation anchor changed');

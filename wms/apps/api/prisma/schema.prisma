@@ -2564,6 +2564,8 @@ model FbsTsdAssembly {
   requestItemId       String
   skuId               String
   sourceSkuId         String?
+  // FIX: reservation branch is durable even before a WMS request/box exists.
+  stockWarehouseId    String?
   productName         String
   article             String?
   sourceProductName   String?
@@ -2618,6 +2620,28 @@ model FbsTsdAssembly {
   @@index([requestId, deviceCode, status, completedAt])
   @@index([status, completedAt])
   @@index([cargoPackingId, cargoPackedAt])
+}
+
+// FIX: immutable local shipment evidence, independent of later WB statuses.
+model WbOrderShipment {
+  id                String   @id @default(uuid())
+  clientId          String
+  connectionId      String
+  orderId           String
+  assemblyId        String   @unique
+  requestId         String
+  warehouseId       String
+  skuId             String
+  quantity          Int
+  kiz               String?
+  source            String
+  shippedAt         DateTime @default(now())
+  orderSnapshot     Json
+  assemblySnapshot  Json     @default("{}")
+
+  @@index([clientId, connectionId, orderId])
+  @@index([clientId, warehouseId, shippedAt])
+  @@index([requestId])
 }
 
 // FIX: immutable evidence of the completed physical attempt before a repeat.

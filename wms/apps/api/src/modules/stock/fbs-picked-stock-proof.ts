@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { wbOrderStockLifecycleEnabled } from '../../common/stock/wb-order-stock-lifecycle';
 import { Prisma } from '@prisma/client';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 
@@ -15,6 +16,11 @@ export async function readFbsPickedStockProof(tx: Prisma.TransactionClient, requ
     if(task.clientId===request.clientId && task.status==='COMPLETED') tasks.set(task.id,task);
   }
   if (!tasks.size) return [];
+  // FIX: a print-confirmed shipment cannot become fresh packing credit at request close.
+  if (wbOrderStockLifecycleEnabled()) {
+    const facts = await tx.wbOrderShipment.findMany({ where: { requestId: request.id, clientId: request.clientId }, select: { assemblyId: true } });
+    facts.forEach(fact => tasks.delete(fact.assemblyId));
+  }
   if (!warehouseId) throw new BadRequestException('Для проверки фактического отбора нужен филиал заявки.');
   const result:FbsPickedProof[]=[];
   const itemRemaining=new Map(request.items.map(i=>[i.id,i.quantity]));

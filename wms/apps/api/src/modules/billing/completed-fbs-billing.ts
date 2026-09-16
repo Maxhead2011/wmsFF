@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { wbOrderStockLifecycleEnabled } from '../../common/stock/wb-order-stock-lifecycle';
 import { BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { PrismaService } from '../../common/prisma/prisma.service';
@@ -18,6 +19,7 @@ const codes: Record<Service, string> = { processing: 'FBS_PROCESSING', primary: 
 const names: Record<Service, string> = { processing: 'Обработка заказов по FBS', primary: 'Первичная обработка',
   additional: 'Дополнительные услуги', relabel: 'Перемаркировка' };
 export type CompletedWork = {
+  billingAttemptId?: string;
   id: string; clientId: string; marketplace: string; connectionId: string; orderId: string; requestId: string | null;
   itemCount: number; completedAt: Date | null; barcode: string | null; boxCode: string | null;
   workerUserId: string | null; deviceCode: string | null; relabelConfirmedAt: Date | null;
@@ -35,12 +37,14 @@ const record = (value: unknown): Record<string, unknown> => value && typeof valu
   ? value as Record<string, unknown> : {};
 const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter((x): x is string => typeof x === 'string') : [];
 const money = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
-const key = (work: Pick<CompletedWork, 'marketplace' | 'connectionId' | 'orderId'>) => `${work.marketplace}:${work.connectionId}:${work.orderId}`;
+const key = (work: Pick<CompletedWork, 'marketplace' | 'connectionId' | 'orderId' | 'billingAttemptId'>) =>
+  `${work.marketplace}:${work.connectionId}:${work.orderId}${work.billingAttemptId ? `:attempt:${work.billingAttemptId}` : ''}`;
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 
-function chargeIdentity(metadata: Record<string, unknown>): { marketplace: string; connectionId: string } | null {
+function chargeIdentity(metadata: Record<string, unknown>): { marketplace: string; connectionId: string; billingAttemptId?: string } | null {
   if (typeof metadata.marketplace === 'string' && typeof metadata.connectionId === 'string') {
-    return { marketplace: metadata.marketplace, connectionId: metadata.connectionId };
+    return { marketplace: metadata.marketplace, connectionId: metadata.connectionId,
+      ...(typeof metadata.billingAttemptId === 'string' ? { billingAttemptId: metadata.billingAttemptId } : {}) };
   }
   const match = typeof metadata.shipmentKey === 'string' && /^(WILDBERRIES|OZON):([^:]+):/.exec(metadata.shipmentKey);
   return match ? { marketplace: match[1], connectionId: match[2] } : null;
@@ -128,14 +132,15 @@ export function completedWorkPlan(input: { clientId: string; work: CompletedWork
       const price = service === 'processing' ? input.config.processingPrice : service === 'primary' ? 10.64 : service === 'additional' ? 4.26 : input.config.relabelPrice;
       if (!serviceId || !Number.isFinite(price) || price <= 0) { plan.blocked.push({ orderId: work.orderId, service, reason: 'SERVICE_TARIFF_MISSING' }); continue; }
       plan.lines.push({ sourceKey, service, serviceId, requestId: work.requestId!, warehouseId,
-        description: `${names[service]} — заказ ${work.orderId}`, quantity: work.itemCount,
+        description: `${names[service]} — ${work.billingAttemptId ? 'повторная обработка, ' : ''}заказ ${work.orderId}`, quantity: work.itemCount,
         unitPriceRub: money(price), totalRub: money(price * work.itemCount), serviceDate: work.completedAt,
         metadata: { kind: service === 'processing' ? 'FBS' : 'FBS_PRIMARY_PROCESSING', billingPolicy: COMPLETED_WORK_POLICY,
           processingOnly: true, marketplace: work.marketplace, connectionId: work.connectionId, orderIds: [work.orderId],
           processingOrderIds: service === 'processing' ? [work.orderId] : [], requestIds: [work.requestId!],
           shipmentKey: `${key(work)}:completed-work`, quantity: work.itemCount, lineQuantity: work.itemCount,
           serviceCode: codes[service], processingType: service === 'relabel' ? 'RELABEL' : `SERVICE:${serviceId}`,
-          assemblyId: work.id, completedAt: work.completedAt.toISOString(), taxMode: 'INCLUDED' } });
+          assemblyId: work.id, ...(work.billingAttemptId ? { billingAttemptId: work.billingAttemptId } : {}),
+          completedAt: work.completedAt.toISOString(), taxMode: 'INCLUDED' } });
     }
   }
   return plan;
@@ -167,7 +172,13 @@ async function recoverCompletedWorkLocked(db: PrismaService, clientId: string, a
     primaryEnabled: settings.primaryProcessingEnabled,
     relabelPrice: relabel ? Number(relabel.priceRub) / (relabel.taxMode === 'ADD_6_PERCENT' ? 0.94 : 1) : 0,
     serviceIds: Object.fromEntries(Object.entries(codes).map(([name, code]) => [name, services.find(s => s.code === code)?.id ?? null])) as WorkConfig['serviceIds'] };
-  const work: CompletedWork[] = await db.fbsTsdAssembly.findMany({ where: { clientId, completedAt: { gte: COMPLETED_WORK_FROM } } });
+  // FIX: WB work comes from frozen shipment facts; never load historical labels/box catalogues here.
+  const work: CompletedWork[] = await db.fbsTsdAssembly.findMany({ where: { clientId, completedAt: { gte: COMPLETED_WORK_FROM },
+    ...(wbOrderStockLifecycleEnabled() ? { marketplace: { not: 'WILDBERRIES' as const } } : {}) },
+    select: { id: true, clientId: true, marketplace: true, connectionId: true, orderId: true, requestId: true,
+      itemCount: true, completedAt: true, barcode: true, boxCode: true, workerUserId: true, deviceCode: true, relabelConfirmedAt: true } });
+  // FIX: picking is not shipment; only immutable local WB shipment facts trigger new charges.
+  const shipments = wbOrderStockLifecycleEnabled();
   // Archived successful attempts are proof too; transfer/reset of the current task cannot erase them.
   const history = db.fbsAssemblyAttemptHistory ? await db.fbsAssemblyAttemptHistory.findMany({ where: { clientId, completedAt: { gte: COMPLETED_WORK_FROM } } }) : [];
   for (const attempt of history) {
@@ -178,6 +189,30 @@ async function recoverCompletedWorkLocked(db: PrismaService, clientId: string, a
       workerUserId: attempt.workerUserId, deviceCode: typeof snapshot.deviceCode === 'string' ? snapshot.deviceCode : null,
       barcode: typeof snapshot.barcode === 'string' ? snapshot.barcode : null, boxCode: typeof snapshot.boxCode === 'string' ? snapshot.boxCode : null,
       relabelConfirmedAt: typeof snapshot.relabelConfirmedAt === 'string' ? new Date(snapshot.relabelConfirmedAt) : null });
+  }
+  if (shipments) {
+    // FIX: later reassignment/reset cannot alter the identity, quantity or work date already shipped.
+    for (let index = work.length - 1; index >= 0; index -= 1) {
+      if (work[index].marketplace === 'WILDBERRIES') work.splice(index, 1);
+    }
+    // FIX: only billing evidence is needed; do not reload complete order snapshots.
+    for (let skip = 0; ; skip += 1000) {
+      // FIX: importing a historical shipment is not authorization to reprice its old work.
+      const page = await db.wbOrderShipment.findMany({ where: { clientId, source: { not: 'LEGACY_WMS_SHIPMENT' } }, skip, take: 1000, orderBy: { id: 'asc' },
+        select: { assemblyId: true, connectionId: true, orderId: true, requestId: true, quantity: true, shippedAt: true, assemblySnapshot: true } });
+      for (const fact of page) {
+      const snapshot = record(fact.assemblySnapshot);
+      work.push({ id: fact.assemblyId, clientId, marketplace: 'WILDBERRIES', connectionId: fact.connectionId,
+        ...(typeof snapshot.billingAttemptId === 'string' ? { billingAttemptId: snapshot.billingAttemptId } : {}),
+        orderId: fact.orderId, completedAt: fact.shippedAt, requestId: fact.requestId, itemCount: fact.quantity,
+        barcode: typeof snapshot.barcode === 'string' ? snapshot.barcode : null,
+        boxCode: typeof snapshot.boxCode === 'string' ? snapshot.boxCode : null,
+        workerUserId: typeof snapshot.workerUserId === 'string' ? snapshot.workerUserId : null,
+        deviceCode: typeof snapshot.deviceCode === 'string' ? snapshot.deviceCode : null,
+        relabelConfirmedAt: typeof snapshot.relabelConfirmedAt === 'string' ? new Date(snapshot.relabelConfirmedAt) : null });
+      }
+      if (page.length < 1000) break;
+    }
   }
   const charges = await loadWorkCharges(db, clientId);
   const workKeys = new Set(work.map(key));
@@ -222,7 +257,7 @@ async function recoverCompletedWorkLocked(db: PrismaService, clientId: string, a
   const groups = new Map<string, WorkLine[]>();
   for (const line of plan.lines) {
     const day = new Date(line.serviceDate.getTime() + 3 * 3600000).toISOString().slice(0, 10);
-    const group = `${line.warehouseId}:${line.requestId}:${day}`;
+    const group = `${line.warehouseId}:${line.requestId}:${day}:${line.metadata.billingAttemptId ? 'repeat' : 'first'}`;
     groups.set(group, [...(groups.get(group) ?? []), line]);
   }
   const invoices: Prisma.BillingInvoiceCreateManyInput[] = [];

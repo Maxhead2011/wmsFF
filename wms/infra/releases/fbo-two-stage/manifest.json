@@ -1,0 +1,66 @@
+{
+  "wms/apps/api/prisma/migrations/202609160002_fbo_two_stage/migration.sql": {
+    "before": null,
+    "after": "cdfcb1c7c686e61a151831ba49f846e74f9d39ec0a2edeb815bec02ad70ebf12"
+  },
+  "wms/apps/api/prisma/schema.prisma": {
+    "before": "b3130596f8d17c2ca379ed42c69c844d8641119bf909d4b0db98d4015d50e064",
+    "after": "ef706208fdcfef94241204a9c2feb2503815ecf222adb1622dcb1375bc9ebdb6"
+  },
+  "wms/apps/api/src/modules/administration/administration-internal-api.service.ts": {
+    "before": "7e7858b9185326674e5c37be1882405d73916078060b444ede398dbc0b475165",
+    "after": "522cf374eccaef3146b1578ac7b8992625cfef830fb42abfddeab597a141d810"
+  },
+  "wms/apps/api/src/modules/stock/stock-operations.service.ts": {
+    "before": "3c3abc6d82636c9b8cc1d738aad135ec1f21a5d305276ce95b821d3e50ac1ebd",
+    "after": "c0f9d0cc32b0ca2ca638d1355987656daa90b37a4a0c01d65c61f0c709e99777"
+  },
+  "wms/apps/api/src/modules/tsd/dto/fbo-action.dto.ts": {
+    "before": null,
+    "after": "782062ad558a30d1a6bde91d6b5c734a2fc046e073a92a0c86f40ead238d3a40"
+  },
+  "wms/apps/api/src/modules/tsd/fbo-two-stage-policy.ts": {
+    "before": null,
+    "after": "5d3f40ae6b90ced6ca880735e4479964beac670b31bd08eb5b733df6744e8c3e"
+  },
+  "wms/apps/api/src/modules/tsd/fbo-two-stage.controller.ts": {
+    "before": null,
+    "after": "a3d8636becfd6c9e5597734aaf02bbc4584221188429c6b982a2029aa234b906"
+  },
+  "wms/apps/api/src/modules/tsd/fbo-two-stage.service.ts": {
+    "before": null,
+    "after": "e804266ba0d649568710c96cffa1ac0e4fb1460643e01ea3258e0679fd91fd77"
+  },
+  "wms/apps/api/src/modules/tsd/tsd-assembly.service.ts": {
+    "before": "dd6d04cdd336e8761faa399498e311e23e2afd2dbfc89c2321f20d77bed90734",
+    "after": "768e1214020c30e3c40aaa5c96b2661fe9107281b837241de80d36d72e66b25e"
+  },
+  "wms/apps/api/src/modules/tsd/tsd.module.ts": {
+    "before": "712f992508974a8b7112b3818b943c9ee126164dc6543f56e974e23aef538125",
+    "after": "fe78a8b4bfd0a5e5307f189d02da27d3f17c825b41936099e9c44dacbb20daa4"
+  },
+  "wms/apps/api/test/fbo-two-stage-policy.spec.ts": {
+    "before": null,
+    "after": "c532517861db1485796e3966ae14c76d3075733e4b8f11fb4883409af5bd3ee3"
+  },
+  "wms/apps/api/test/fbo-two-stage.integration.spec.ts": {
+    "before": null,
+    "after": "9c3309bdc4b955d19bf7b0ad6a53732ee2010b4946777fa78b5202c339fcf46a"
+  },
+  "wms/apps/web/src/components/client-requests/ClientRequestsPanel.tsx": {
+    "before": "3ac5f7812aeeeff52d27cc364d029b08d5bf1f1ba18bd259a0cd0bee2fdff1f0",
+    "after": "d64131df06502f98dd085e152f7aee80d0b0cf3f6ce3f084416c8a11609a920c"
+  },
+  "wms/apps/web/src/components/client-requests/FboTwoStagePanel.spec.tsx": {
+    "before": null,
+    "after": "3226d94623e3ea88396709e5c420f12ce3056549f0bf166374c36ffa4ddb4003"
+  },
+  "wms/apps/web/src/components/client-requests/FboTwoStagePanel.tsx": {
+    "before": null,
+    "after": "bd6d5ab5b54e8283bf013fa100affa2ab93ed6f79d2e65a69e56e87404406f5b"
+  },
+  "wms/apps/web/src/lib/api.ts": {
+    "before": "56e6945d1cda3942e80958f87a912301d36053632e6062786e6e5c9d4a6beca5",
+    "after": "ab640517f1b1c22a16dc7e386b54f08053173142c33fb3f4743940b61a1ee080"
+  }
+}
