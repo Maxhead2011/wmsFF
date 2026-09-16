@@ -3,6 +3,10 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
 . (Join-Path $PSScriptRoot 'WmsApi.ps1')
+. (Join-Path $PSScriptRoot 'AgentLoop.ps1')
+# FIX: preserve the optional, separately released duplicate-KIZ queue.
+$duplicateModule = Join-Path $PSScriptRoot 'KizDuplicate.ps1'
+if (Test-Path -LiteralPath $duplicateModule) { . $duplicateModule }
 
 function Print-OneLabel([byte[]]$bytes, [string]$printer, [int]$widthMm, [int]$heightMm) {
   $stream = [IO.MemoryStream]::new($bytes)
@@ -41,21 +45,21 @@ function Print-SortingLabel($job, [string]$printer, [int]$widthMm, [int]$heightM
 $cfg = Read-Config
 $installed = [Drawing.Printing.PrinterSettings]::InstalledPrinters
 if (-not ($installed -contains $cfg.printerName)) { throw "Printer '$($cfg.printerName)' is not installed." }
+$fastPolling = Test-WmsFastPolling $cfg
+$pollClock = [Diagnostics.Stopwatch]::StartNew()
+$lastDuplicatePoll = -2000L
 while ($true) {
+  $hadJob = $false
+  $hadError = $false
   try {
-    Invoke-WmsApi Post "/marketplace-connections/fbs/print-stations/$($cfg.stationId)/heartbeat" @{} | Out-Null
-    $job = Invoke-WmsApi Post "/marketplace-connections/fbs/print-stations/$($cfg.stationId)/claim" @{}
-    if ($job) {
-      try {
-        # Validate both labels before the first physical print to avoid a half-printed pair.
-        if (-not $job.sortingLabel.imageBase64 -or $job.sortingLabel.contentType -ne 'image/png') { throw 'Update the WMS server: sorting label is unavailable.' }
-        Print-OneLabel ([Convert]::FromBase64String($job.stickerBase64)) $cfg.printerName $cfg.labelWidthMm $cfg.labelHeightMm
-        Print-SortingLabel $job $cfg.printerName $cfg.labelWidthMm $cfg.labelHeightMm
-        Invoke-WmsApi Post "/marketplace-connections/fbs/print-jobs/$($job.id)/result" @{ success = $true } | Out-Null
-      } catch {
-        Invoke-WmsApi Post "/marketplace-connections/fbs/print-jobs/$($job.id)/result" @{ success = $false; error = $_.Exception.Message } | Out-Null
-      }
-    }
-  } catch { $script:token = $null }
-  Start-Sleep -Seconds 2
+    $hadJob = Invoke-WmsFbsPrintCycle $cfg $fastPolling
+  } catch { $hadError = $true; $script:token = $null }
+  # FIX: faster WB polling must not multiply traffic to the separate duplicate queue.
+  if (($pollClock.ElapsedMilliseconds - $lastDuplicatePoll) -ge 2000 -and
+      (Get-Command Invoke-KizDuplicateCycle -ErrorAction SilentlyContinue)) {
+    $lastDuplicatePoll = $pollClock.ElapsedMilliseconds
+    try { Invoke-KizDuplicateCycle $cfg } catch { Write-Warning $_.Exception.Message }
+  }
+  $delay = Get-WmsPollDelay $hadJob $hadError $fastPolling
+  if ($delay -gt 0) { Start-Sleep -Milliseconds $delay }
 }
