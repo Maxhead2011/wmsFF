@@ -5,6 +5,36 @@ import type { AuthUser } from '../src/modules/auth/auth.types';
 import { BillingDocumentService } from '../src/modules/billing/billing-document.service';
 
 describe('BillingDocumentService', () => {
+  // TEST: ordinary invoices must consolidate services just like merged invoices, without changing money or stored rows.
+  it.each([null, 'billing-period:august', 'manual:invoice'])('sums equal services across dates for %s', async sourceKey => {
+    const invoice = { ...invoiceFixture(), sourceKey };
+    invoice.items = [
+      { ...invoice.items[0], description: 'Обработка товара', quantity: '2.125', unitPriceRub: '10.00', totalRub: '21.25' },
+      { ...invoice.items[0], id: 'second', description: ' обработка   товара ', quantity: '3.875', unitPriceRub: '10.00', totalRub: '38.75', serviceDate: new Date('2026-06-21') },
+    ];
+    invoice.totalRub = '60.00'; invoice.paidRub = '0.00';
+    const before = structuredClone(invoice);
+    const service = new BillingDocumentService({ billingInvoice: { findUnique: vi.fn().mockResolvedValue(invoice) } } as never, { requireClientAccess: vi.fn() } as never);
+    const document = await service.getInvoiceDocument(invoice.id, user());
+    const act = await service.getInvoiceActDocument(invoice.id, user({ roleCodes: ['ADMIN'], permissionCodes: ['billing:write'] }));
+    expect(document.rows).toHaveLength(1);
+    expect(document.rows[0]).toMatchObject({ quantity: 6, unitPriceRub: 10, totalRub: 60, position: 1 });
+    expect(act.rows).toEqual(document.rows);
+    expect(document.totalRub).toBe(60);
+    expect(document.remainingRub).toBe(60);
+    expect(invoice).toEqual(before);
+  });
+  // TEST: different tariffs/units remain separate; grouping adds saved amounts, not quantity times tariff.
+  it('preserves tariffs, units, zero rows and saved rounded amounts', async () => {
+    const invoice = invoiceFixture();
+    const item = { ...invoice.items[0], description: 'Обработка', quantity: '0.333', unitPriceRub: '1.00', totalRub: '0.33' };
+    invoice.items = [item, { ...item, id: '2' }, { ...item, id: '3', unitPriceRub: '2.00' }, { ...item, id: '4', unit: BillingUnit.BOX }, { ...item, id: '5', description: 'Бесплатно', totalRub: '0.00' }];
+    const service = new BillingDocumentService({ billingInvoice: { findUnique: vi.fn().mockResolvedValue(invoice) } } as never, { requireClientAccess: vi.fn() } as never);
+    const document = await service.getInvoiceDocument(invoice.id, user());
+    expect(document.rows).toHaveLength(4);
+    expect(document.rows.find(row => row.quantity === 0.666)).toMatchObject({ totalRub: 0.66, unitPriceRub: 1 });
+    expect(document.rows.some(row => row.totalRub === 0)).toBe(true);
+  });
   it('С„РѕСЂРјРёСЂСѓРµС‚ РїРµС‡Р°С‚РЅС‹Р№ РґРѕРєСѓРјРµРЅС‚ СЃС‡РµС‚Р° Рё РїСЂРѕРІРµСЂСЏРµС‚ РґРѕСЃС‚СѓРї Рє РєР»РёРµРЅС‚Сѓ', async () => {
     const prisma = {
       billingInvoice: {

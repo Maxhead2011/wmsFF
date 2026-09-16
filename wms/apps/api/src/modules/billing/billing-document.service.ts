@@ -663,17 +663,15 @@ function finalizePrintableRows(
   rows: Array<Omit<InvoiceDocumentPayload['rows'][number], 'position'>>,
   normalizeMergedRows: boolean,
 ) {
-  if (!normalizeMergedRows) {
-    return positionPrintableRows(rows);
-  }
-
+  // FIX: consolidate equal services in every invoice/act, not only manually merged invoices.
+  // Keep the existing merged-invoice zero-row policy; stored items and amounts remain untouched.
   const grouped = new Map<
     string,
     Omit<InvoiceDocumentPayload['rows'][number], 'position'>
   >();
   for (const row of rows) {
     const totalRub = roundMoney(row.totalRub);
-    if (totalRub === 0) {
+    if (normalizeMergedRows && totalRub === 0) {
       continue;
     }
     const description = row.description.trim().replace(/\s+/g, ' ');
