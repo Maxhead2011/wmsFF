@@ -31,12 +31,12 @@ Sold WMS: flag is off by default. Existing branches remain covered by the full r
 
 ## Automated verification
 
-Verified locally on 2026-09-16: API **2601/2601**, web **201/201**, API/web production builds passed. Vite reports existing static asset/chunk warnings; no new build error. No production data was modified.
+Verified locally on 2026-09-16: API **2624/2624**, web **202/202**, API/web production builds passed. Vite reports existing static asset/chunk warnings; no new build error. No production data was modified.
 
 New/extended tests contain `// TEST`; changed logic is marked `// FIX`.
 
 - `wb-order-stock-lifecycle.spec.ts`: demand, deduplication, cancellation, picked/terminal orders, nonnegative free stock.
-- `wb-order-stock-lifecycle.integration.spec.ts`: **real local PostgreSQL**, incoming `new` orders, AUTO linking, branch isolation, SQL migration/backfill, concurrent acknowledgements, missing proof, transaction rollback, partial/whole request close, SHIPPING-stage stock, ordinary WMS picking, relabeling, stock preview/export consistency, immutable invoices and separately billed repeats.
+- `wb-order-stock-lifecycle.integration.spec.ts`: **20 cases on real local PostgreSQL**, incoming `new` orders, AUTO linking, branch isolation, SQL migration/backfill, concurrent acknowledgements, missing proof, transaction rollback, partial/whole request close, SHIPPING-stage stock, ordinary WMS picking, relabeling, stock preview/export consistency, immutable invoices and separately billed repeats.
 - `completed-fbs-billing.spec.ts`: shipment before billing, shipment evidence survives task reset, repeat work gets another processing invoice exactly once.
 - `clientCabinetStockExcelExport.spec.ts`: unified free stock, no PACKING stock, no double reserve, flag-off legacy behavior.
 - `permanent-return-live-adapter.spec.ts`: adapter still validates exact supported source functions.
@@ -63,3 +63,16 @@ The lifecycle integration suite rejects any other database URL. Migration verifi
 6. Compare cabinet export and request preview for the same client/warehouse/SKU. Check cancellation before pick, cancellation after shipment and an explicit repeat request separately.
 
 Once shipment facts have been written, rolling back must preserve their interpretation. Merely disabling the flag re-enables old request-closing behavior and is **not** a safe data rollback. Keep the compatible API/flag enabled while repairing a release; do not delete shipment facts or replay stock deductions.
+
+
+## Approved live adaptation (2026-09-16)
+
+The release retains PR150 KIZ identity changes and the existing live WB accounting module. `infra/releases/wb-order-stock-lifecycle/live.patch` contains the exact overlay; `manifest.json` verifies normalized source SHA256 before applying it. The sold installation must not use this live overlay or enable the flag.
+
+- Legacy WB shipment and its migrated lifecycle fact credit a request exactly once. A PostgreSQL regression reproduces the double credit without the live compatibility filter.
+- Terminal WB links do not retain unpicked stock demand; an explicit emergency repeat still reserves.
+- A previous shipment does not hide an active repeat assembly during WB reconciliation.
+- Work completed after its supply invoice is issued, paid or consolidated receives a separate invoice, using stable assembly identity. The issued invoice stays unchanged, and repeated acknowledgement does not duplicate the new invoice.
+- Local builds and the complete PR suite pass. Live-source lifecycle/billing regression suite: 70/70; web baseline was rebuilt and verified byte-for-byte against the current running assets before generating the updated interface.
+- Historical reconciliation is rehearsed on an isolated copy of the live database before activation. The database backup and rehearsal artifacts stay private in the server release directory; no client data is committed here.
+

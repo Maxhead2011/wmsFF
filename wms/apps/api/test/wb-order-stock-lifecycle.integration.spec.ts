@@ -235,6 +235,29 @@ describe.skipIf(!url).sequential('WB stock lifecycle SQL integration', () => {
     expect(await db.wbOrderShipment.findUnique({ where: { id: first!.id } })).toEqual(first);
     expect(await db.stockMovement.count({ where: { clientId: f.clientId, type: 'SHIP' } })).toBe(2);
   });
+  // TEST: issuing the first invoice cannot make later printed orders in the same supply free.
+  it('bills later printed orders separately after the first supply invoice is issued', async () => {
+    const f = await fixture();
+    const service: any = new MarketplaceConnectionsService(db as never, {} as never);
+    await db.clientFbsBillingSettings.create({ data: { clientId: f.clientId, fixedPlusLogisticsEnabled: true,
+      fixedPlusLogisticsUnitPriceRub: 37.1, pickupPointBasePriceRub: 0, vnukovoBasePriceRub: 0 } });
+    const snapshot = JSON.parse(JSON.stringify(await service.localShipmentOrder(f.task)));
+    await db.$transaction(tx => finalizeWbOrderShipment(tx, f.taskId, 'PRINT_CONFIRMED', snapshot));
+    await service.ensureFbsProcessingCharges(f.clientId, []);
+    const first = await db.billingInvoice.findFirstOrThrow({ where: { clientId: f.clientId } });
+    await db.billingInvoice.update({ where: { id: first.id }, data: { status: 'ISSUED' } });
+    const frozen = await db.billingInvoice.findUniqueOrThrow({ where: { id: first.id } });
+    const second = await db.fbsTsdAssembly.create({ data: { ...f.task, id: randomUUID(), orderId: randomUUID(), kiz: null } });
+    await db.stockBalance.updateMany({ where: { clientId: f.clientId }, data: { quantity: 1 } });
+    await db.stockMovement.create({ data: { clientId: f.clientId, warehouseId: f.warehouseId, skuId: f.skuId,
+      status: 'PACKING', type: 'PICK', quantity: 1, sourceDocument: f.requestId, idempotencyKey: `fbs-sticker-pick:${second.id}:in` } });
+    await db.$transaction(tx => finalizeWbOrderShipment(tx, second.id, 'PRINT_CONFIRMED', { ...snapshot, id: second.orderId }));
+    await service.ensureFbsProcessingCharges(f.clientId, []);
+    await service.ensureFbsProcessingCharges(f.clientId, []);
+    expect(await db.billingInvoice.count({ where: { clientId: f.clientId } })).toBe(2);
+    expect(await db.billingCharge.count({ where: { clientId: f.clientId } })).toBe(2);
+    expect(await db.billingInvoice.findUniqueOrThrow({ where: { id: first.id } })).toEqual(frozen);
+  });
   it('rolls back all changes when packing is insufficient after a partial deduction', async () => {
     const f = await fixture();
     await db.fbsTsdAssembly.update({ where: { id: f.taskId }, data: { itemCount: 2 } });

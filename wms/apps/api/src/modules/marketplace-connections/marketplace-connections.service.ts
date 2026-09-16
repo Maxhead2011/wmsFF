@@ -175,6 +175,7 @@ type WildberriesFbsOrder = Record<string, unknown> & {
 type FbsOrderSummary = {
   // FIX: billing-only identity of a deliberately repeated physical processing attempt.
   processingAttemptId?: string;
+  processingAssemblyId?: string;
   processingEvidence?: { itemCount: number; boxCode: string | null; relabelRequired: boolean };
   // FIX: only real marketplace responses populate this; fallback WMS rows cannot forge dates.
   sourceTiming?: SourceOrderTiming;
@@ -26632,7 +26633,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       orders = [...orders.filter(order => order.marketplace !== MarketplaceType.WILDBERRIES),
         ...facts.map(fact => {
           const evidence = asRecord(fact.assemblySnapshot);
-          return { ...(fact.orderSnapshot as unknown as FbsOrderSummary), category: 'shipped' as const,
+          return { ...(fact.orderSnapshot as unknown as FbsOrderSummary), category: 'shipped' as const, processingAssemblyId: fact.assemblyId,
             ...(typeof evidence.billingAttemptId === 'string' ? { processingAttemptId: evidence.billingAttemptId } : {}),
             processingEvidence: { itemCount: fact.quantity, boxCode: textValue(evidence.boxCode) || null, relabelRequired: Boolean(evidence.relabelConfirmedAt) },
             supplierStatus: 'complete', deliveryDate: fact.shippedAt.toISOString() };
@@ -26657,6 +26658,26 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       return result;
     }
 
+    // FIX: a sent/paid/consolidated invoice is immutable; subsequent physical work gets a separate invoice.
+    // This runs under the same billing lock as invoice issue and uses the immutable assembly identity.
+    if (wbOrderStockLifecycleEnabled()) {
+      const candidates = orders.filter(order => order.marketplace === MarketplaceType.WILDBERRIES && order.processingAssemblyId && !order.processingAttemptId);
+      const sourceKeys = uniqueStrings(candidates.map(order => `fbs-calculator:${clientId}:${fbsShipmentKey(order)}`));
+      const existing = sourceKeys.length ? await this.prisma.billingCharge.findMany({ where: { sourceKey: { in: sourceKeys } },
+        include: { invoiceItems: { where: { invoice: { status: { not: 'CANCELLED' } } },
+          select: { invoice: { select: { status: true, sourceKey: true, paidRub: true, _count: { select: { payments: true } } } } } } },
+      }) : [];
+      const bySource = new Map(existing.map(charge => [charge.sourceKey, charge]));
+      for (const order of candidates) {
+        const shipmentKey = fbsShipmentKey(order);
+        const charge = bySource.get(`fbs-calculator:${clientId}:${shipmentKey}`);
+        const ids = asArray<unknown>(asRecord(charge?.metadata).orderIds);
+        if (charge && !ids.includes(order.id) && (charge.status !== BillingChargeStatus.DRAFT ||
+          !charge.invoiceItems.every(item => isOwnedUnpaidDraft(item.invoice, `fbs-invoice:${clientId}:${shipmentKey}`)))) {
+          order.processingAttemptId = order.processingAssemblyId;
+        }
+      }
+    }
     const { fbsService, settings } = await this.ensureFbsBillingBase(clientId);
     const completedWorkEnabled = completedWorkBillingEnabled(clientId);
     const priorWorkCharges = completedWorkEnabled ? await loadWorkCharges(this.prisma, clientId) : [];

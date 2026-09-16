@@ -21,7 +21,7 @@
   },
   "wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts": {
     "before": "92cc195ef0ae0e810d9bd9ceb8bdb3c3ff0544f9dd7e6cf32c7abfb9154d40e9",
-    "after": "3c6b9251d6133f98ff4c4556c0ee265d1d01dc903c39cc47f4eded1825cbd472"
+    "after": "8210b2b256ccf1e32ad3e8361e0afb7d6786e14ac929110715fb52f1b41326b3"
   },
   "wms/apps/api/src/modules/stock/fbs-picked-stock-proof.ts": {
     "before": "03f4be1060706b3e225e12c640ea2eadb230175d5c5e6bd0d31b721e5596cf5a",

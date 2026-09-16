@@ -384,17 +384,18 @@
  import { physicalKizLookup, physicalKizHistoryFilter } from '../../common/kiz-physical-identity';
  import { stockTransferBlockedReason, ordersWithoutTransferStock } from './fbs-stock-transfer';
  import { retainFbsBranchEvidence } from '../billing/fbs-billing-branch-evidence';
-@@ -178,6 +179,9 @@
+@@ -178,6 +179,10 @@
  };
  
  type FbsOrderSummary = {
 +  // FIX: billing-only identity of a deliberately repeated physical processing attempt.
 +  processingAttemptId?: string;
++  processingAssemblyId?: string;
 +  processingEvidence?: { itemCount: number; boxCode: string | null; relabelRequired: boolean };
    // FIX: only real marketplace responses populate this; fallback WMS rows cannot forge dates.
    sourceTiming?: SourceOrderTiming;
    wbAccounted?: boolean;
-@@ -7788,6 +7792,12 @@
+@@ -7788,6 +7793,12 @@
        );
      });
  
@@ -407,7 +408,7 @@
      skus.forEach((sku) => {
        const ids = wildberriesStockIds(sku.marketplaceProductId);
        if (!ids) return;
-@@ -14261,6 +14271,7 @@
+@@ -14261,6 +14272,7 @@
        });
      }
  
@@ -415,7 +416,7 @@
      const targetBalanceKey = fbsStockBalanceKey({
        warehouseId: balanceWarehouseId,
        clientId: task.clientId,
-@@ -14374,6 +14385,8 @@
+@@ -14374,6 +14386,8 @@
      task: FbsTsdAssemblyRecord,
      receipt?: FbsReturnReceipt,
    ) {
@@ -424,7 +425,7 @@
      // FIX: never restore a completed/physically picked cancellation to its old box implicitly.
      if (requiresFbsReturnReceipt(task) && !receipt) {
        throw new BadRequestException('Для изъятого товара нужна повторная приёмка в отсканированный бокс.');
-@@ -17321,9 +17334,94 @@
+@@ -17321,9 +17335,94 @@
      return { ...claimed, sortingLabel };
    }
    async finishFbsPrintJob(id: string, success: boolean, error: unknown, user: AuthUser) {
@@ -520,7 +521,7 @@
    }
    async webOrderAssemblyHistory(user: AuthUser, orderIdValue?: string) {
      // FIX: exact order lookup happens before the history limit; it never assembles or prints an order.
-@@ -24933,8 +25031,18 @@
+@@ -24933,8 +25032,18 @@
          ![
            FBS_TSD_RESERVED_STATUS,
            FBS_TSD_WAITING_STOCK_STATUS,
@@ -539,7 +540,7 @@
          continue;
        }
        const released = await this.prisma.fbsTsdAssembly.update({
-@@ -24959,7 +25067,7 @@
+@@ -24959,7 +25068,7 @@
        if (
          order.category !== 'active' ||
          !order.product ||
@@ -548,7 +549,7 @@
        ) {
          return false;
        }
-@@ -25101,7 +25209,7 @@
+@@ -25101,7 +25210,7 @@
        if (
          order.category !== 'active' ||
          !order.product ||
@@ -557,7 +558,7 @@
        ) {
          continue;
        }
-@@ -25134,11 +25242,12 @@
+@@ -25134,11 +25243,12 @@
        const requestItem = order.request
          ? requestItemByKey.get(`${order.request.id}:${order.product.id}`) ?? null
          : null;
@@ -572,7 +573,7 @@
          try {
            const routeKey = `${order.connectionId}:${order.warehouseId ?? ''}:${order.officeId ?? ''}`;
            let routeResolution = routeResolutionByKey.get(routeKey);
-@@ -25192,6 +25301,7 @@
+@@ -25192,6 +25302,7 @@
            requestItemId: requestItem?.id ?? automaticId,
            skuId: order.product.id,
            sourceSkuId,
@@ -580,7 +581,7 @@
            productName: order.product.name,
            article:
              order.product.article ??
-@@ -25405,6 +25515,7 @@
+@@ -25405,6 +25516,7 @@
          requestItemId: requestItem?.id ?? automaticId,
          skuId: order.product.id,
          sourceSkuId,
@@ -588,7 +589,7 @@
          productName: order.product.name,
          article:
            order.product.article ??
-@@ -26237,10 +26348,14 @@
+@@ -26237,10 +26349,14 @@
          ? supplyPlanByKey.get(fbsSupplyPlanKey(order.marketplace, order.connectionId, order.supplyId)) ?? null
          : null,
      }));
@@ -604,7 +605,7 @@
      if (!previousOrderStates) {
        await this.syncFbsRequestsFromMarketplace(clientId, ordersWithStockSources);
      }
-@@ -26651,12 +26766,29 @@
+@@ -26651,12 +26767,29 @@
    }
  
    private async ensureFbsProcessingCharges(clientId: string, orders: FbsOrderSummary[]) {
@@ -614,7 +615,7 @@
 +      orders = [...orders.filter(order => order.marketplace !== MarketplaceType.WILDBERRIES),
 +        ...facts.map(fact => {
 +          const evidence = asRecord(fact.assemblySnapshot);
-+          return { ...(fact.orderSnapshot as unknown as FbsOrderSummary), category: 'shipped' as const,
++          return { ...(fact.orderSnapshot as unknown as FbsOrderSummary), category: 'shipped' as const, processingAssemblyId: fact.assemblyId,
 +            ...(typeof evidence.billingAttemptId === 'string' ? { processingAttemptId: evidence.billingAttemptId } : {}),
 +            processingEvidence: { itemCount: fact.quantity, boxCode: textValue(evidence.boxCode) || null, relabelRequired: Boolean(evidence.relabelConfirmedAt) },
 +            supplierStatus: 'complete', deliveryDate: fact.shippedAt.toISOString() };
@@ -635,7 +636,34 @@
    }
  
    private async ensureFbsProcessingChargesLocked(clientId: string, orders: FbsOrderSummary[]) {
-@@ -26827,7 +26959,11 @@
+@@ -26665,6 +26798,26 @@
+       return result;
+     }
+ 
++    // FIX: a sent/paid/consolidated invoice is immutable; subsequent physical work gets a separate invoice.
++    // This runs under the same billing lock as invoice issue and uses the immutable assembly identity.
++    if (wbOrderStockLifecycleEnabled()) {
++      const candidates = orders.filter(order => order.marketplace === MarketplaceType.WILDBERRIES && order.processingAssemblyId && !order.processingAttemptId);
++      const sourceKeys = uniqueStrings(candidates.map(order => `fbs-calculator:${clientId}:${fbsShipmentKey(order)}`));
++      const existing = sourceKeys.length ? await this.prisma.billingCharge.findMany({ where: { sourceKey: { in: sourceKeys } },
++        include: { invoiceItems: { where: { invoice: { status: { not: 'CANCELLED' } } },
++          select: { invoice: { select: { status: true, sourceKey: true, paidRub: true, _count: { select: { payments: true } } } } } } },
++      }) : [];
++      const bySource = new Map(existing.map(charge => [charge.sourceKey, charge]));
++      for (const order of candidates) {
++        const shipmentKey = fbsShipmentKey(order);
++        const charge = bySource.get(`fbs-calculator:${clientId}:${shipmentKey}`);
++        const ids = asArray<unknown>(asRecord(charge?.metadata).orderIds);
++        if (charge && !ids.includes(order.id) && (charge.status !== BillingChargeStatus.DRAFT ||
++          !charge.invoiceItems.every(item => isOwnedUnpaidDraft(item.invoice, `fbs-invoice:${clientId}:${shipmentKey}`)))) {
++          order.processingAttemptId = order.processingAssemblyId;
++        }
++      }
++    }
+     const { fbsService, settings } = await this.ensureFbsBillingBase(clientId);
+     const completedWorkEnabled = completedWorkBillingEnabled(clientId);
+     const priorWorkCharges = completedWorkEnabled ? await loadWorkCharges(this.prisma, clientId) : [];
+@@ -26827,7 +26980,11 @@
        });
        const existingMetadata = asRecord(existing?.metadata);
        // FIX: keep the source snapshot, including invoice dates, when WB returns only a tail.
@@ -648,7 +676,7 @@
          preserveBilledComposition(existing.metadata, batchOrders.map(order => order.id)) ||
          existing.status !== BillingChargeStatus.DRAFT ||
          !existing.invoiceItems.every(item => isOwnedUnpaidDraft(item.invoice, `fbs-invoice:${clientId}:${shipmentKey}`))
-@@ -26980,7 +27116,7 @@
+@@ -26980,7 +27137,7 @@
          // FIX: opted-in primary work is accounted per completed order, never rebuilt from a WB tail.
          const primaryBreakdown = buildFbsPrimaryProcessingBreakdown(
            batchOrders.map((order) => {
@@ -657,7 +685,7 @@
                selectionKey(order.connectionId, order.id),
              );
              return {
-@@ -27085,6 +27221,7 @@
+@@ -27085,6 +27242,7 @@
          shipmentKey,
          requestIds,
          orderIds: batchOrders.map((order) => order.id),
@@ -665,7 +693,7 @@
          ...(completedWorkEnabled ? { processingOrderIds: batchOrders.filter((_, index) => processingWeights[index] > 0).map(order => order.id) } : {}),
          quantity: shipmentItems,
          logisticsTrip: {
-@@ -27552,7 +27689,9 @@
+@@ -27552,7 +27710,9 @@
      orders: FbsOrderSummary[],
      billingByOrder: Map<string, NonNullable<FbsOrderSummary['billing']>>,
    ) {
@@ -676,7 +704,7 @@
      const shipments = groupFbsOrdersByShipment(eligibleOrders);
      for (const [shipmentKey, shipmentOrders] of shipments) {
        const warehouseId = await this.resolveFbsShipmentWarehouseId(clientId, shipmentOrders);
-@@ -30433,8 +30572,8 @@
+@@ -30433,8 +30593,8 @@
    return labels[supplierStatus] || labels[wbStatus] || supplierStatus || wbStatus || 'Статус не определён';
  }
  
@@ -687,7 +715,7 @@
  }
  
  function mapWildberriesCard(card: Record<string, unknown>, size: Record<string, unknown> | null): MarketplaceProductSyncItem {
-@@ -30930,7 +31069,7 @@
+@@ -30930,7 +31090,7 @@
    const supply = order.supplyId?.trim();
    const date = (order.deliveryDate || order.sellerDate || order.createdAt || '').slice(0, 10);
    const batch = supply ? `supply:${supply}` : date ? `date:${date}` : `order:${order.id}`;
