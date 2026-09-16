@@ -274,7 +274,7 @@
 +      itemCount: true, completedAt: true, barcode: true, boxCode: true, workerUserId: true, deviceCode: true, relabelConfirmedAt: true } });
 +  // FIX: picking is not shipment; only immutable local WB shipment facts trigger new charges.
 +  const shipments = wbOrderStockLifecycleEnabled();
-@@ -180,0 +192,23 @@
+@@ -180,0 +192,24 @@
 +  }
 +  if (shipments) {
 +    // FIX: later reassignment/reset cannot alter the identity, quantity or work date already shipped.
@@ -283,7 +283,8 @@
 +    }
 +    // FIX: only billing evidence is needed; do not reload complete order snapshots.
 +    for (let skip = 0; ; skip += 1000) {
-+      const page = await db.wbOrderShipment.findMany({ where: { clientId }, skip, take: 1000, orderBy: { id: 'asc' },
++      // FIX: importing a historical shipment is not authorization to reprice its old work.
++      const page = await db.wbOrderShipment.findMany({ where: { clientId, source: { not: 'LEGACY_WMS_SHIPMENT' } }, skip, take: 1000, orderBy: { id: 'asc' },
 +        select: { assemblyId: true, connectionId: true, orderId: true, requestId: true, quantity: true, shippedAt: true, assemblySnapshot: true } });
 +      for (const fact of page) {
 +      const snapshot = record(fact.assemblySnapshot);
@@ -298,7 +299,7 @@
 +      }
 +      if (page.length < 1000) break;
 +    }
-@@ -225 +259 @@
+@@ -225 +260 @@
 -    const group = `${line.warehouseId}:${line.requestId}:${day}`;
 +    const group = `${line.warehouseId}:${line.requestId}:${day}:${line.metadata.billingAttemptId ? 'repeat' : 'first'}`;
 --- a/wms/apps/api/src/modules/client-requests/client-requests.service.ts
@@ -497,7 +498,7 @@
 +      orders = orders.filter(order => order.marketplace !== MarketplaceType.WILDBERRIES);
 +      // FIX: decode bounded JSON batches rather than three full historical snapshots at once.
 +      for (let skip = 0; ; skip += 1000) {
-+        const facts = await this.prisma.wbOrderShipment.findMany({ where: { clientId }, skip, take: 1000,
++        const facts = await this.prisma.wbOrderShipment.findMany({ where: { clientId, source: { not: 'LEGACY_WMS_SHIPMENT' } }, skip, take: 1000,
 +          orderBy: [{ shippedAt: 'asc' }, { id: 'asc' }],
 +          select: { assemblyId: true, assemblySnapshot: true, orderSnapshot: true, quantity: true, shippedAt: true } });
 +        orders.push(...facts.map(fact => {
@@ -534,56 +535,75 @@
 +        const shipmentKey = fbsShipmentKey(order);
 +        const charge = bySource.get(`fbs-calculator:${clientId}:${shipmentKey}`);
 +        const ids = asArray<unknown>(asRecord(charge?.metadata).orderIds);
-+        if (charge && !ids.includes(order.id) && (charge.status !== BillingChargeStatus.DRAFT ||
-+          !charge.invoiceItems.every(item => isOwnedUnpaidDraft(item.invoice, `fbs-invoice:${clientId}:${shipmentKey}`)))) {
++        // FIX: even an existing draft retains its original prices and composition.
++        if (charge && !ids.includes(order.id)) {
 +          order.processingInvoiceId = order.processingAssemblyId;
 +        }
 +      }
 +    }
-@@ -26670 +26846,3 @@
+@@ -26670 +26846,16 @@
 -    const priorWorkCharges = completedWorkEnabled ? await loadWorkCharges(this.prisma, clientId) : [];
 +    // FIX: existing processing must be credited for every lifecycle client, including turnkey tariffs.
 +    const processingCreditsEnabled = completedWorkEnabled || wbOrderStockLifecycleEnabled();
 +    const priorWorkCharges = processingCreditsEnabled ? await loadWorkCharges(this.prisma, clientId) : [];
-@@ -26719 +26897 @@
++    // FIX: index old processing once; rescanning all historical charges per supply expires the billing transaction.
++    const processingSources = new Map<string, Set<string | null>>();
++    const chargedLogisticsDays = new Set<string>();
++    for (const charge of priorWorkCharges) {
++      const trip = asRecord(asRecord(charge.metadata).logisticsTrip);
++      if (charge.status !== 'CANCELLED' && trip.charged === true && Number(trip.logisticsRub) > 0 && typeof trip.billingDay === 'string') {
++        chargedLogisticsDays.add(trip.billingDay);
++      }
++      for (const key of otherProcessingOrderKeys([charge], '')) {
++        const sources = processingSources.get(key) ?? new Set<string | null>();
++        sources.add(charge.sourceKey); processingSources.set(key, sources);
++      }
++    }
+@@ -26719 +26910 @@
 -                orderId: { in: uniqueStrings(orders.map((order) => order.id)) },
 +                orderId: { in: uniqueStrings(orders.filter(order => !order.processingEvidence).map((order) => order.id)) },
-@@ -26830 +27008,5 @@
+@@ -26817 +27008,2 @@
+-      const automaticPrimaryTrip = primaryShipmentByDay.get(billingDay) === shipmentKey;
++      const automaticPrimaryTrip = primaryShipmentByDay.get(billingDay) === shipmentKey &&
++        !(wbOrderStockLifecycleEnabled() && chargedLogisticsDays.has(billingDay));
+@@ -26830 +27022,3 @@
 -      if (completedWorkEnabled && existing && (
 +      if ((completedWorkEnabled || wbOrderStockLifecycleEnabled()) && existing && (
 +        // FIX: another physical attempt must not rewrite an already invoiced processing snapshot.
-+        (wbOrderStockLifecycleEnabled() && existing.invoiceItems.length > 0 &&
-+          Array.isArray(existingMetadata.orderIds) && existingMetadata.orderIds.length === batchOrders.length &&
-+          batchOrders.every(order => (existingMetadata.orderIds as unknown[]).includes(order.id))) ||
-@@ -26856,0 +27039 @@
++        wbOrderStockLifecycleEnabled() ||
+@@ -26855,2 +27049,3 @@
+-      const previouslyProcessed = otherProcessingOrderKeys(priorWorkCharges, sourceKey);
+-      const processingWeights = batchOrders.map(order => previouslyProcessed.has(fbsOrderKey(order)) ? 0 : Math.max(1, order.itemCount));
++      const processingWeights = batchOrders.map(order => [...(processingSources.get(fbsOrderKey(order)) ?? [])]
++        .some(source => source !== sourceKey) ? 0 : Math.max(1, order.itemCount));
 +      if (wbOrderStockLifecycleEnabled() && !existing && processingWeights.every(quantity => quantity === 0)) continue;
-@@ -26959 +27142 @@
+@@ -26959 +27154 @@
 -        ? round(shipmentItems * turnkeyUnitPriceRub, 2)
 +        ? round(processingWeights.reduce((sum, quantity) => sum + quantity, 0) * turnkeyUnitPriceRub, 2)
-@@ -26983 +27166 @@
+@@ -26983 +27178 @@
 -            const assembly = assemblyByOrder.get(
 +            const assembly = order.processingEvidence ?? assemblyByOrder.get(
-@@ -27088 +27271,2 @@
+@@ -27088 +27283,2 @@
 -        ...(completedWorkEnabled ? { processingOrderIds: batchOrders.filter((_, index) => processingWeights[index] > 0).map(order => order.id) } : {}),
 +        ...(batchOrders[0].processingAttemptId ? { billingAttemptId: batchOrders[0].processingAttemptId } : {}),
 +        ...(processingCreditsEnabled ? { processingOrderIds: batchOrders.filter((_, index) => processingWeights[index] > 0).map(order => order.id) } : {}),
-@@ -27204 +27388 @@
+@@ -27204 +27400 @@
 -        const totalRub = completedWorkEnabled && fixedPlusLogisticsEnabled
 +        const totalRub = processingCreditsEnabled && fixedPlusLogisticsEnabled
-@@ -27211 +27395 @@
+@@ -27211 +27407 @@
 -            ? (completedWorkEnabled ? round(processingWeights[orderIndex] * fixedPlusLogisticsUnitPriceRub, 2)
 +            ? (processingCreditsEnabled ? round(processingWeights[orderIndex] * fixedPlusLogisticsUnitPriceRub, 2)
-@@ -27555 +27739,3 @@
+@@ -27555 +27751,3 @@
 -    const eligibleOrders = orders.filter((order) => order.shipmentPlan && order.supplyId);
 +    // FIX: confirmed WMS work can be invoiced without waiting for a WB supply plan.
 +    const eligibleOrders = orders.filter((order) => (order.shipmentPlan && order.supplyId) ||
 +      (wbOrderStockLifecycleEnabled() && order.marketplace === MarketplaceType.WILDBERRIES && order.request));
-@@ -30436,2 +30622,2 @@
+@@ -30436,2 +30634,2 @@
 -function fbsOrderKey(order: Pick<FbsOrderSummary, 'marketplace' | 'connectionId' | 'id'>) {
 -  return `${order.marketplace}:${order.connectionId}:${order.id}`;
 +function fbsOrderKey(order: Pick<FbsOrderSummary, 'marketplace' | 'connectionId' | 'id' | 'processingAttemptId'>) {
 +  return `${order.marketplace}:${order.connectionId}:${order.id}${order.processingAttemptId ? `:attempt:${order.processingAttemptId}` : ''}`;
-@@ -30933 +31119 @@
+@@ -30933 +31131 @@
 -  return `${order.marketplace}:${order.connectionId}:${batch}`;
 +  return `${order.marketplace}:${order.connectionId}:${batch}${order.processingAttemptId ? `:attempt:${order.processingAttemptId}` : ''}${order.processingInvoiceId ? `:invoice:${order.processingInvoiceId}` : ''}`;
 --- a/wms/apps/api/src/modules/stock/fbs-picked-stock-proof.ts

@@ -26649,7 +26649,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       orders = orders.filter(order => order.marketplace !== MarketplaceType.WILDBERRIES);
       // FIX: decode bounded JSON batches rather than three full historical snapshots at once.
       for (let skip = 0; ; skip += 1000) {
-        const facts = await this.prisma.wbOrderShipment.findMany({ where: { clientId }, skip, take: 1000,
+        const facts = await this.prisma.wbOrderShipment.findMany({ where: { clientId, source: { not: 'LEGACY_WMS_SHIPMENT' } }, skip, take: 1000,
           orderBy: [{ shippedAt: 'asc' }, { id: 'asc' }],
           select: { assemblyId: true, assemblySnapshot: true, orderSnapshot: true, quantity: true, shippedAt: true } });
         orders.push(...facts.map(fact => {
@@ -26695,8 +26695,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         const shipmentKey = fbsShipmentKey(order);
         const charge = bySource.get(`fbs-calculator:${clientId}:${shipmentKey}`);
         const ids = asArray<unknown>(asRecord(charge?.metadata).orderIds);
-        if (charge && !ids.includes(order.id) && (charge.status !== BillingChargeStatus.DRAFT ||
-          !charge.invoiceItems.every(item => isOwnedUnpaidDraft(item.invoice, `fbs-invoice:${clientId}:${shipmentKey}`)))) {
+        // FIX: even an existing draft retains its original prices and composition.
+        if (charge && !ids.includes(order.id)) {
           order.processingInvoiceId = order.processingAssemblyId;
         }
       }
@@ -26706,6 +26706,19 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     // FIX: existing processing must be credited for every lifecycle client, including turnkey tariffs.
     const processingCreditsEnabled = completedWorkEnabled || wbOrderStockLifecycleEnabled();
     const priorWorkCharges = processingCreditsEnabled ? await loadWorkCharges(this.prisma, clientId) : [];
+    // FIX: index old processing once; rescanning all historical charges per supply expires the billing transaction.
+    const processingSources = new Map<string, Set<string | null>>();
+    const chargedLogisticsDays = new Set<string>();
+    for (const charge of priorWorkCharges) {
+      const trip = asRecord(asRecord(charge.metadata).logisticsTrip);
+      if (charge.status !== 'CANCELLED' && trip.charged === true && Number(trip.logisticsRub) > 0 && typeof trip.billingDay === 'string') {
+        chargedLogisticsDays.add(trip.billingDay);
+      }
+      for (const key of otherProcessingOrderKeys([charge], '')) {
+        const sources = processingSources.get(key) ?? new Set<string | null>();
+        sources.add(charge.sourceKey); processingSources.set(key, sources);
+      }
+    }
     const preservedOrderKeys = new Set<string>();
     const primaryProcessingServices = settings.primaryProcessingEnabled
       ? (await this.prisma.clientBillingService.findMany({
@@ -26852,7 +26865,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         0,
       );
       const billingDay = fbsBillingDayKey(serviceDate);
-      const automaticPrimaryTrip = primaryShipmentByDay.get(billingDay) === shipmentKey;
+      const automaticPrimaryTrip = primaryShipmentByDay.get(billingDay) === shipmentKey &&
+        !(wbOrderStockLifecycleEnabled() && chargedLogisticsDays.has(billingDay));
       const sourceKey = `fbs-calculator:${clientId}:${shipmentKey}`;
       const existing = await this.prisma.billingCharge.findUnique({
         where: { sourceKey },
@@ -26867,9 +26881,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       // FIX: keep the source snapshot, including invoice dates, when WB returns only a tail.
       if ((completedWorkEnabled || wbOrderStockLifecycleEnabled()) && existing && (
         // FIX: another physical attempt must not rewrite an already invoiced processing snapshot.
-        (wbOrderStockLifecycleEnabled() && existing.invoiceItems.length > 0 &&
-          Array.isArray(existingMetadata.orderIds) && existingMetadata.orderIds.length === batchOrders.length &&
-          batchOrders.every(order => (existingMetadata.orderIds as unknown[]).includes(order.id))) ||
+        wbOrderStockLifecycleEnabled() ||
         preserveBilledComposition(existing.metadata, batchOrders.map(order => order.id)) ||
         existing.status !== BillingChargeStatus.DRAFT ||
         !existing.invoiceItems.every(item => isOwnedUnpaidDraft(item.invoice, `fbs-invoice:${clientId}:${shipmentKey}`))
@@ -26894,8 +26906,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         }
         continue;
       }
-      const previouslyProcessed = otherProcessingOrderKeys(priorWorkCharges, sourceKey);
-      const processingWeights = batchOrders.map(order => previouslyProcessed.has(fbsOrderKey(order)) ? 0 : Math.max(1, order.itemCount));
+      const processingWeights = batchOrders.map(order => [...(processingSources.get(fbsOrderKey(order)) ?? [])]
+        .some(source => source !== sourceKey) ? 0 : Math.max(1, order.itemCount));
       if (wbOrderStockLifecycleEnabled() && !existing && processingWeights.every(quantity => quantity === 0)) continue;
       const existingLogisticsTrip = asRecord(existingMetadata?.logisticsTrip);
       const extraTripOverride = existingLogisticsTrip?.extraTripOverride === true;

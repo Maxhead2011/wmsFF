@@ -36,7 +36,7 @@ Verified locally on 2026-09-16: API **2624/2624**, web **202/202**, API/web prod
 New/extended tests contain `// TEST`; changed logic is marked `// FIX`.
 
 - `wb-order-stock-lifecycle.spec.ts`: demand, deduplication, cancellation, picked/terminal orders, nonnegative free stock.
-- `wb-order-stock-lifecycle.integration.spec.ts`: **27 cases on real local PostgreSQL**, incoming `new` orders, AUTO linking, branch isolation, SQL migration/backfill, concurrent acknowledgements, missing proof, transaction rollback, partial/whole request close, SHIPPING-stage stock, ordinary WMS picking, relabeling, stock preview/export consistency, immutable invoices and separately billed repeats.
+- `wb-order-stock-lifecycle.integration.spec.ts`: **30 cases on real local PostgreSQL**, incoming `new` orders, AUTO linking, branch isolation, SQL migration/backfill, concurrent acknowledgements, missing proof, transaction rollback, partial/whole request close, SHIPPING-stage stock, ordinary WMS picking, relabeling, stock preview/export consistency, immutable invoices and separately billed repeats.
 - `completed-fbs-billing.spec.ts`: shipment before billing, shipment evidence survives task reset, repeat work gets another processing invoice exactly once.
 - `clientCabinetStockExcelExport.spec.ts`: unified free stock, no PACKING stock, no double reserve, flag-off legacy behavior.
 - `permanent-return-live-adapter.spec.ts`: adapter still validates exact supported source functions.
@@ -73,7 +73,7 @@ The release retains PR150 KIZ identity changes and the existing live WB accounti
 - Terminal WB links do not retain unpicked stock demand; an explicit emergency repeat still reserves.
 - A previous shipment does not hide an active repeat assembly during WB reconciliation.
 - Work completed after its supply invoice is issued, paid or consolidated receives a separate invoice, using stable assembly identity. The issued invoice stays unchanged, and repeated acknowledgement does not duplicate the new invoice.
-- Local builds and the complete PR suite pass. Live-source lifecycle/billing regression suite: 77/77; web baseline was rebuilt and verified byte-for-byte against the current running assets before generating the updated interface.
+- Local builds and the complete PR suite pass. Live-source lifecycle/billing regression suite: 80/80; web baseline was rebuilt and verified byte-for-byte against the current running assets before generating the updated interface.
 - Historical reconciliation is rehearsed on an isolated copy of the live database before activation. The database backup and rehearsal artifacts stay private in the server release directory; no client data is committed here.
 
 
@@ -81,4 +81,6 @@ Historical backfill uses `import-legacy.sql` / `import-legacy.cjs`. It imports o
 
 The deployment overlay uses zero-context hunks; apply only after checking `manifest.json`, with `git apply --unidiff-zero`.
 
-Large-client regressions cover PostgreSQL bind limits (33,000/40,000 historical tasks), bounded shipment JSON pages, compact product/request evidence, and processing credits across old supply identities for turnkey clients. Splitting an invoice retains the physical processing identity and cannot duplicate a completed-work credit. The full API suite currently passes 2,631 tests; web suite: 202.
+Large-client regressions cover PostgreSQL bind limits (33,000/40,000 historical tasks), bounded shipment JSON pages, compact product/request evidence, and processing credits across old supply identities for turnkey clients. Splitting an invoice retains the physical processing identity and cannot duplicate a completed-work credit. The full API suite currently passes 2,634 tests; web suite: 202.
+
+Migration never reprices imported `LEGACY_WMS_SHIPMENT` history. Existing calculator charges and invoices (including drafts) retain their original composition and prices; later work uses a separate assembly-based invoice identity. Prior processing and daily logistics are credited across old supply/date identities. A fresh production-data rehearsal must pass an unchanged-history and duplicate-charge audit before activation.

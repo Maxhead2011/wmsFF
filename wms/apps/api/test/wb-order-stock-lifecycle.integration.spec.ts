@@ -317,7 +317,54 @@ describe.skipIf(!url).sequential('WB stock lifecycle SQL integration', () => {
     expect(await db.wbOrderShipment.findUnique({ where: { id: first!.id } })).toEqual(first);
     expect(await db.stockMovement.count({ where: { clientId: f.clientId, type: 'SHIP' } })).toBe(2);
   });
-  // TEST: issuing the first invoice cannot make later printed orders in the same supply free.
+  // TEST: migration must not rewrite an old unattached charge when another supply already covered its order.
+  it('preserves an existing orphan charge while crediting historical processing', async () => {
+    const f = await fixture();
+    const service: any = new MarketplaceConnectionsService(db as never, {} as never);
+    await db.clientFbsBillingSettings.create({ data: { clientId: f.clientId, turnkeyEnabled: true, turnkeyUnitPriceRub: 75 } });
+    const snapshot = JSON.parse(JSON.stringify(await service.localShipmentOrder(f.task)));
+    await db.$transaction(tx => finalizeWbOrderShipment(tx, f.taskId, 'PRINT_CONFIRMED', snapshot));
+    await service.ensureFbsProcessingCharges(f.clientId, []);
+    const first = await db.billingCharge.findFirstOrThrow({ where: { clientId: f.clientId } });
+    await db.billingInvoiceItem.deleteMany({ where: { chargeId: first.id } });
+    await db.billingCharge.create({ data: { ...first, id: randomUUID(), sourceKey: first.sourceKey + ':older', metadata: first.metadata! } });
+    await service.ensureFbsProcessingCharges(f.clientId, []);
+    expect(await db.billingCharge.findUniqueOrThrow({ where: { id: first.id } })).toEqual(first);
+  });
+  // TEST: importing old shipped facts cannot create charges at today's tariff.
+  it('does not invoice imported legacy shipment history', async () => {
+    const f = await fixture();
+    const service: any = new MarketplaceConnectionsService(db as never, {} as never);
+    await db.clientFbsBillingSettings.create({ data: { clientId: f.clientId, turnkeyEnabled: true, turnkeyUnitPriceRub: 99 } });
+    const snapshot = JSON.parse(JSON.stringify(await service.localShipmentOrder(f.task)));
+    await db.$transaction(tx => finalizeWbOrderShipment(tx, f.taskId, 'LEGACY_WMS_SHIPMENT', snapshot));
+    await service.ensureFbsProcessingCharges(f.clientId, []);
+    expect(await db.billingInvoice.count({ where: { clientId: f.clientId } })).toBe(0);
+    expect(await db.billingCharge.count({ where: { clientId: f.clientId } })).toBe(0);
+  });
+  // TEST: retaining legacy bills must also retain their already charged daily logistics trip.
+  it('credits the logistics trip already invoiced with a legacy shipment', async () => {
+    const f = await fixture();
+    const service: any = new MarketplaceConnectionsService(db as never, {} as never);
+    await db.clientFbsBillingSettings.create({ data: { clientId: f.clientId, fixedPlusLogisticsEnabled: true,
+      fixedPlusLogisticsUnitPriceRub: 37.1 } });
+    const snapshot = JSON.parse(JSON.stringify(await service.localShipmentOrder(f.task)));
+    const fact = (await db.$transaction(tx => finalizeWbOrderShipment(tx, f.taskId, 'PRINT_CONFIRMED', snapshot)))!;
+    await service.ensureFbsProcessingCharges(f.clientId, []);
+    const first = await db.billingCharge.findFirstOrThrow({ where: { clientId: f.clientId } });
+    expect((first.metadata as any).logisticsTrip.logisticsRub).toBeGreaterThan(0);
+    await db.wbOrderShipment.update({ where: { id: fact.id }, data: { source: 'LEGACY_WMS_SHIPMENT' } });
+    const second = await db.fbsTsdAssembly.create({ data: { ...f.task, id: randomUUID(), orderId: randomUUID(), kiz: null } });
+    await db.stockBalance.updateMany({ where: { clientId: f.clientId }, data: { quantity: 1 } });
+    await db.stockMovement.create({ data: { clientId: f.clientId, warehouseId: f.warehouseId, skuId: f.skuId,
+      status: 'PACKING', type: 'PICK', quantity: 1, sourceDocument: f.requestId, idempotencyKey: `fbs-sticker-pick:${second.id}:in` } });
+    await db.$transaction(tx => finalizeWbOrderShipment(tx, second.id, 'PRINT_CONFIRMED', { ...snapshot, id: second.orderId }));
+    await service.ensureFbsProcessingCharges(f.clientId, []);
+    const added = await db.billingCharge.findFirstOrThrow({ where: { clientId: f.clientId, id: { not: first.id } } });
+    expect(Number(added.totalRub)).toBe(37.1);
+    expect(await db.billingCharge.findUniqueOrThrow({ where: { id: first.id } })).toEqual(first);
+  });
+  // TEST: later work preserves both issued invoices and the original price of an existing draft.
   it('credits turnkey processing already billed under an earlier supply identity', async () => {
     const f = await fixture();
     const service: any = new MarketplaceConnectionsService(db as never, {} as never);
@@ -329,10 +376,16 @@ describe.skipIf(!url).sequential('WB stock lifecycle SQL integration', () => {
     await db.billingCharge.update({ where: { id: first.id }, data: { sourceKey: first.sourceKey + ':earlier-supply' } });
     const invoice = await db.billingInvoice.findFirstOrThrow({ where: { clientId: f.clientId } });
     await db.billingInvoice.update({ where: { id: invoice.id }, data: { sourceKey: invoice.sourceKey + ':earlier-supply' } });
-    await service.ensureFbsProcessingCharges(f.clientId, []);
-    await service.ensureFbsProcessingCharges(f.clientId, []);
+    await db.billingCharge.create({ data: { ...first, id: randomUUID(), sourceKey: first.sourceKey + ':cancelled', status: 'CANCELLED', metadata: first.metadata! } });
+    // TEST: large histories must index each charge once instead of rescanning the full list per batch.
+    const creditIndex = vi.spyOn(completedBilling, 'otherProcessingOrderKeys');
+    try {
+      await service.ensureFbsProcessingCharges(f.clientId, []);
+      await service.ensureFbsProcessingCharges(f.clientId, []);
+      expect(creditIndex.mock.calls.every(([charges]) => charges.length === 1)).toBe(true);
+    } finally { creditIndex.mockRestore(); }
     expect(await db.billingInvoice.count({ where: { clientId: f.clientId } })).toBe(1);
-    expect(await db.billingCharge.count({ where: { clientId: f.clientId } })).toBe(1);
+    expect(await db.billingCharge.count({ where: { clientId: f.clientId, status: { not: 'CANCELLED' } } })).toBe(1);
     expect(Number((await db.billingCharge.findUniqueOrThrow({ where: { id: first.id } })).totalRub)).toBe(75);
   });
   it.each([false, true])('bills later printed orders separately after the first supply invoice is issued (work credit: %s)', async (workCredit) => {
@@ -344,7 +397,8 @@ describe.skipIf(!url).sequential('WB stock lifecycle SQL integration', () => {
     await db.$transaction(tx => finalizeWbOrderShipment(tx, f.taskId, 'PRINT_CONFIRMED', snapshot));
     await service.ensureFbsProcessingCharges(f.clientId, []);
     const first = await db.billingInvoice.findFirstOrThrow({ where: { clientId: f.clientId } });
-    await db.billingInvoice.update({ where: { id: first.id }, data: { status: 'ISSUED' } });
+    await db.billingInvoice.update({ where: { id: first.id }, data: { status: workCredit ? 'ISSUED' : 'DRAFT' } });
+    await db.clientFbsBillingSettings.update({ where: { clientId: f.clientId }, data: { fixedPlusLogisticsUnitPriceRub: 50 } });
     const frozen = await db.billingInvoice.findUniqueOrThrow({ where: { id: first.id } });
     const second = await db.fbsTsdAssembly.create({ data: { ...f.task, id: randomUUID(), orderId: randomUUID(), kiz: null } });
     await db.stockBalance.updateMany({ where: { clientId: f.clientId }, data: { quantity: 1 } });
@@ -363,7 +417,7 @@ describe.skipIf(!url).sequential('WB stock lifecycle SQL integration', () => {
       await service.ensureFbsProcessingCharges(f.clientId, []);
       expect(await db.billingInvoice.count({ where: { clientId: f.clientId } })).toBe(workCredit ? 1 : 2);
       const charges = await db.billingCharge.findMany({ where: { clientId: f.clientId, status: { not: 'CANCELLED' } } });
-      expect(charges.reduce((sum, charge) => sum + Number((charge.metadata as any).quote.processingTotalRub), 0)).toBe(workCredit ? 37.1 : 74.2);
+      expect(charges.reduce((sum, charge) => sum + Number((charge.metadata as any).quote.processingTotalRub), 0)).toBe(workCredit ? 37.1 : 87.1);
       expect(await db.billingInvoice.findUniqueOrThrow({ where: { id: first.id } })).toEqual(frozen);
     } finally { credit?.mockRestore(); policy?.mockRestore(); }
   });

@@ -197,7 +197,8 @@ async function recoverCompletedWorkLocked(db: PrismaService, clientId: string, a
     }
     // FIX: only billing evidence is needed; do not reload complete order snapshots.
     for (let skip = 0; ; skip += 1000) {
-      const page = await db.wbOrderShipment.findMany({ where: { clientId }, skip, take: 1000, orderBy: { id: 'asc' },
+      // FIX: importing a historical shipment is not authorization to reprice its old work.
+      const page = await db.wbOrderShipment.findMany({ where: { clientId, source: { not: 'LEGACY_WMS_SHIPMENT' } }, skip, take: 1000, orderBy: { id: 'asc' },
         select: { assemblyId: true, connectionId: true, orderId: true, requestId: true, quantity: true, shippedAt: true, assemblySnapshot: true } });
       for (const fact of page) {
       const snapshot = record(fact.assemblySnapshot);
