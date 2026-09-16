@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TsdAssemblyService } from '../src/modules/tsd/tsd-assembly.service';
 
 function fixture(quantity: number) {
@@ -14,6 +14,36 @@ function fixture(quantity: number) {
   return {db,service,rows};
 }
 describe('FBS current location hints',()=>{
+  afterEach(()=>vi.unstubAllEnvs());
+  // TEST: request 1022 has no target-barcode stock but has a reserved relabel source.
+  it.each([true,false])('uses the live relabel source only when enabled: %s',async(enabled)=>{
+    vi.stubEnv('WMS_FBS_ONLINE_RELABEL_LOCATIONS_ENABLED',String(enabled));
+    const {service,rows,db}=fixture(0);rows[0].allocations=[];
+    db.fbsTsdAssembly.findMany.mockResolvedValue([{
+      id:'task',orderId:'5737342163',connectionId:'wb',requestItemId:'item',skuId:'sku',
+      sourceSkuId:'source',reservedBoxCode:'FFL_LKBS1009_24',status:'RESERVED',itemCount:1,
+      deviceCode:'AUTO',updatedAt:new Date(),boxCode:null,barcode:null,kiz:null,
+    }] as never);
+    db.stockBalance.findMany.mockResolvedValue([{skuId:'source',quantity:9,box:{code:'FFL_LKBS1009_24'}}]);
+    const result=await service.loadFbsAssemblyFacts('request-1022',rows);
+    expect(result.notCollected.rows[0].availableBoxes).toEqual(enabled
+      ?[expect.objectContaining({boxCode:'FFL_LKBS1009_24',quantity:1})]:[]);
+  });
+  // TEST: two orders share one source box; depletion and cancellation must not invent stock.
+  it.each([[9,'RESERVED',2],[1,'RESERVED',1],[0,'RESERVED',0],[9,'RETURN_REQUIRED',0]])(
+    'groups source hints at stock %s and status %s',async(quantity,status,expected)=>{
+      vi.stubEnv('WMS_FBS_ONLINE_RELABEL_LOCATIONS_ENABLED','true');
+      const {service,rows,db}=fixture(0);rows[0].allocations=[];rows[0].requestedQuantity=2;
+      const tasks=['5737342163','5737342164'].map((orderId,i)=>({id:`task-${i}`,orderId,connectionId:'wb',
+        requestItemId:'item',skuId:'sku',sourceSkuId:'source',reservedBoxCode:'FFL_LKBS1009_24',
+        status,itemCount:1,deviceCode:'AUTO',updatedAt:new Date(),boxCode:null,barcode:null,kiz:null}));
+      db.fbsTsdAssembly.findMany.mockResolvedValue(tasks as never);
+      db.fbsOrderRequestLink.findMany.mockResolvedValue(tasks.map(t=>({orderId:t.orderId,connectionId:'wb',lastSkuId:'sku',lastItemCount:1})));
+      db.stockBalance.findMany.mockResolvedValue(quantity?[{skuId:'source',quantity,box:{code:'FFL_LKBS1009_24'}}]:[]);
+      const result=await service.loadFbsAssemblyFacts('request-1022',rows);
+      const hints=result.notCollected.rows.flatMap((r:any)=>r.availableBoxes);
+      expect(hints).toEqual(expected?[expect.objectContaining({boxCode:'FFL_LKBS1009_24',quantity:expected})]:[]);
+    });
   // TEST: request 849 has an old allocation, but the actual available balance is empty.
   it('removes an exhausted box while keeping the pending order and demand',async()=>{
     const {service,rows}=fixture(0);
