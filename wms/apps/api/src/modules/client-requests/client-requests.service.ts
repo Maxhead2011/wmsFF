@@ -139,11 +139,14 @@ export class ClientRequestsService {
         select: { requestId: true, connectionId: true, orderId: true, status: true, completedAt: true },
       }),
     ]);
+    // FIX: expose current WB supplies for every listed request without fetching extra data.
+    // Historical attempts remain an archive-only source of supply numbers.
+    const currentWbLinks = links.filter((link) => link.marketplace === MarketplaceType.WILDBERRIES);
     for (const previous of previousAttempts) {
       links.push(previous.link);
       assemblies.push(previous.task);
     }
-    // FIX: номер поставки нужен только отгруженным заявкам; активные не запускают архивный fallback-запрос.
+    // FIX: только отгруженные заявки запускают прежний архивный fallback-запрос.
     const doneFbsRequestIds = new Set(
       requests
         .filter(
@@ -158,7 +161,7 @@ export class ClientRequestsService {
     // ADDED: номер поставки берём из актуальной ссылки, а для старого архива — из сохранённого плана WB.
     const wbSupplyIdsByRequest = new Map<string, Set<string>>();
     const wbLinksWithoutSupply = doneWbLinks.filter((link) => !link.lastSupplyId?.trim());
-    for (const link of doneWbLinks) {
+    for (const link of [...currentWbLinks, ...doneWbLinks]) {
       const supplyId = link.lastSupplyId?.trim();
       if (!supplyId) {
         continue;

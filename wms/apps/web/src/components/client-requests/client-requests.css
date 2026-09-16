@@ -1491,6 +1491,17 @@
   font-weight: 900;
 }
 
+/* FIX: a known supply is not proof of shipment; keep green only for DONE requests. */
+.client-request-wb-supplies--pending {
+  border-color: rgb(37 99 235 / 0.3);
+  background: rgb(219 234 254 / 0.82);
+  color: #1e40af;
+}
+
+.client-request-wb-supplies--pending strong {
+  color: #1e3a8a;
+}
+
 .client-request-transfer-origin {
   display: grid;
   width: min(100%, 210px);

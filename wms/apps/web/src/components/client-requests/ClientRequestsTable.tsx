@@ -165,8 +165,10 @@ export function ClientRequestsTable({
             const originalFile = findOriginalRequestFile(request);
             const emergencyClosed = isEmergencyClosedRequest(request);
             const formattedRequestNumber = formatRequestNumber(request.number);
-            const requestNumberPrefix = formattedRequestNumber.slice(0, -3);
-            const requestNumberAccent = formattedRequestNumber.slice(-3);
+            // FIX: keep the familiar three-digit accent below 1000, then highlight the entire number.
+            const accentLength = Math.max(3, String(request.number).length);
+            const requestNumberPrefix = formattedRequestNumber.slice(0, -accentLength);
+            const requestNumberAccent = formattedRequestNumber.slice(-accentLength);
             const transferOrigin = parseFbsTransferOrigin(request.comment);
             // FIX: distinguish only auto-created WB delivery recovery requests;
             // ordinary emergency operations keep their existing status colour.
@@ -207,15 +209,6 @@ export function ClientRequestsTable({
                 {isSkuCollectionRequest(request) ? (
                   <span className="client-request-sku-collection-badge">СБОРКА ПО SKU</span>
                 ) : null}
-                {/* ADDED: shipped and archived requests share this table, so the WB supply stays visible. */}
-                {request.status === 'DONE' && request.wbSupplyIds?.length ? (
-                  <span className="client-request-wb-supplies">
-                    <span>{request.wbSupplyIds.length === 1 ? 'Поставка WB' : 'Поставки WB'}</span>
-                    {request.wbSupplyIds.map((supplyId) => (
-                      <strong key={supplyId}>{supplyId}</strong>
-                    ))}
-                  </span>
-                ) : null}
                 {transferOrigin ? (
                   <span className="client-request-transfer-origin" title={request.comment ?? undefined}>
                     <strong>Из заявок: {transferOrigin.sourceRequests}</strong>
@@ -242,6 +235,15 @@ export function ClientRequestsTable({
                   <span>Склад</span>
                   <strong>{request.destinationCity ?? '-'}</strong>
                 </span>
+                {/* FIX: show known WB supplies below the warehouse for active and archived requests. */}
+                {request.wbSupplyIds?.length ? (
+                  <span className={`client-request-wb-supplies${request.status === 'DONE' ? '' : ' client-request-wb-supplies--pending'}`}>
+                    <span>{request.wbSupplyIds.length === 1 ? 'Поставка WB' : 'Поставки WB'}</span>
+                    {request.wbSupplyIds.map((supplyId) => (
+                      <strong key={supplyId}>{supplyId}</strong>
+                    ))}
+                  </span>
+                ) : null}
                 <span className="client-request-list-meta">
                   Создана: {createdAtFormatter.format(new Date(request.createdAt))}
                 </span>
