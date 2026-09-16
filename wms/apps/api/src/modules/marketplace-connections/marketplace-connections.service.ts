@@ -5,6 +5,7 @@ import { stockTransferBlockedReason, ordersWithoutTransferStock } from './fbs-st
 import { fbsStockAuditError, fbsKizAuditEnabled, validateFbsStockAudit } from './fbs-stock-audit';
 import { createHash } from 'node:crypto';
 import { physicalKizRelabelEnabled, pendingSizeKizRelabel, readPhysicalKizRelabel, proposePhysicalKizRelabel, applyPhysicalKizRelabel, cancelPhysicalKizRelabel } from './fbs-physical-kiz-relabel';
+import { retainDovoz1049Route } from './fbs-dovoz1049-route';
 import { timingSnapshot, type SourceOrderTiming } from '../operations-statistics/order-timing';
 import { isOwnedUnpaidDraft, runBillingMutation, withBillingDb } from '../billing/billing-mutation';
 import { lukinPrimaryLines } from '../billing/lukin-primary-policy';
@@ -25011,6 +25012,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
 
     const reservableOrders = relevantOrders.filter((order) => {
+      if (retainDovoz1049Route(taskByKey.get(selectionKey(order.connectionId, order.id)))) return false;
       if (
         order.category !== 'active' ||
         !order.product ||
@@ -25184,6 +25186,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         continue;
       }
 
+      // FIX: request 1049 has explicit one-off size substitutions. Cancellation above still releases them.
+      // Live route/scan validation and explicit route repair remain enabled; only background rewriting is skipped.
+      if (retainDovoz1049Route(existing)) continue;
       const sourceSkuId = order.relabeling?.sourceSkuId ?? null;
       const stockSkuId = sourceSkuId || order.product.id;
       const requestItem = order.request
