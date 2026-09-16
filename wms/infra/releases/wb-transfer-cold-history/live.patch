@@ -1,0 +1,61 @@
+--- a/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
++++ b/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
+@@ -18466 +18466,2 @@
+-    const fresh = await this.refreshFbsOrdersCache(dto.clientId, { invalidateHistory: false, historyMode: 'cache-only', ...this.fbsTransferReadOptions() });
++    const fresh = await this.recoverMissingFbsTransferOrders(dto.clientId, dto.orders,
++      await this.refreshFbsOrdersCache(dto.clientId, { invalidateHistory: false, historyMode: 'cache-only', ...this.fbsTransferReadOptions() }));
+@@ -18560 +18561 @@
+-    const freshResponse = await this.refreshFbsOrdersCache(clientId, {
++    const freshResponse = await this.recoverMissingFbsTransferOrders(clientId, dto.orders, await this.refreshFbsOrdersCache(clientId, {
+@@ -18564 +18565 @@
+-    });
++    }));
+@@ -23361,0 +23363,38 @@
++  }
++
++  // FIX: confirmed WB orders are absent from orders/new. Recover only missing selected history after a cold restart.
++  private async recoverMissingFbsTransferOrders(clientId: string,
++    selections: Array<{ connectionId: string; id: string }>, response: FbsOrdersResponse): Promise<FbsOrdersResponse> {
++    if (!wbOrderStockLifecycleEnabled()) return response;
++    const present = new Set(response.orders.map(order => selectionKey(order.connectionId, order.id)));
++    const missing = selections.filter(row => !present.has(selectionKey(row.connectionId, row.id)));
++    if (!missing.length) return response;
++    const links = await this.prisma.fbsOrderRequestLink.findMany({
++      where: { clientId, marketplace: MarketplaceType.WILDBERRIES,
++        OR: missing.map(row => ({ connectionId: row.connectionId, orderId: row.id })) },
++      select: { connectionId: true, orderId: true, orderPlacedAt: true },
++    });
++    const connections = await this.prisma.clientMarketplaceConnection.findMany({
++      where: { clientId, marketplace: MarketplaceType.WILDBERRIES, isActive: true,
++        id: { in: uniqueStrings(links.map(link => link.connectionId)) } },
++      select: { id: true, apiKey: true },
++    });
++    let recovered = false;
++    for (const connection of connections) {
++      const selectedLinks = links.filter(link => link.connectionId === connection.id);
++      if (!selectedLinks.length) continue;
++      const selectedIds = new Set(selectedLinks.map(link => link.orderId));
++      const dated = selectedLinks.every(link => link.orderPlacedAt && Number.isFinite(link.orderPlacedAt.getTime()));
++      const dateFrom = dated ? Math.floor(Math.min(...selectedLinks.map(link => link.orderPlacedAt!.getTime())) / 86400000) * 86400 : undefined;
++      const orders = await fetchWildberriesFbsHistory({ Authorization: connection.apiKey, 'Content-Type': 'application/json' }, { dateFrom, selectedIds });
++      if (!orders.length) continue;
++      const cached = this.wildberriesFbsHistoryCache.get(connection.id);
++      const merged = new Map((cached?.orders ?? []).map(order => [textValue(order.id), order]));
++      for (const order of orders) merged.set(textValue(order.id), compactWildberriesFbsOrder(order));
++      // Partial recovery must never pretend that the complete six-hour history has been loaded.
++      this.wildberriesFbsHistoryCache.set(connection.id, { expiresAt: cached?.expiresAt ?? 0, orders: [...merged.values()] });
++      recovered = true;
++    }
++    // The normal loader obtains fresh statuses and applies product/client routing. No local row is accepted as WB evidence.
++    return recovered ? this.refreshFbsOrdersCache(clientId,
++      { invalidateHistory: false, historyMode: 'cache-only', billingMode: 'skip' }) : response;
+@@ -30167 +30206,2 @@
+-async function fetchWildberriesFbsHistory(headers: Record<string, string>) {
++async function fetchWildberriesFbsHistory(headers: Record<string, string>,
++  selected?: { dateFrom?: number; selectedIds: ReadonlySet<string> }) {
+@@ -30174,0 +30215 @@
++    if (selected?.dateFrom !== undefined) url.searchParams.set('dateFrom', String(selected.dateFrom));
+@@ -30180 +30221,2 @@
+-    orders.push(...pageOrders);
++    orders.push(...(selected ? pageOrders.filter(order => selected.selectedIds.has(textValue(order.id))) : pageOrders));
++    if (selected && [...selected.selectedIds].every(id => orders.some(order => textValue(order.id) === id))) break;

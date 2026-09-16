@@ -18378,7 +18378,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
     if (!dto.orders.length || new Set(dto.orders.map(row => selectionKey(row.connectionId, row.id))).size !== dto.orders.length) throw new BadRequestException('Выберите неповторяющиеся заказы.');
     // FIX: transferring a selected order must not wait for client-wide billing writes.
-    const fresh = await this.refreshFbsOrdersCache(dto.clientId, { invalidateHistory: false, historyMode: 'cache-only', billingMode: 'skip' });
+    const fresh = await this.recoverMissingFbsTransferOrders(dto.clientId, dto.orders,
+      await this.refreshFbsOrdersCache(dto.clientId, { invalidateHistory: false, historyMode: 'cache-only', billingMode: 'skip' }));
     const { orders } = await this.resolveSelectedFbsOrders(dto.clientId, dto.orders, fresh);
     const tasks = await this.prisma.fbsTsdAssembly.findMany({ where: { clientId: dto.clientId, marketplace: 'WILDBERRIES',
       OR: orders.map(order => ({ connectionId: order.connectionId, orderId: order.id })) } });
@@ -18463,10 +18464,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     // A full WB history refresh may take longer than the HTTP proxy timeout for
     // a large seller. For a transfer we only need fresh active statuses: the
     // current `orders/new` response already contains every transferable order.
-    const freshResponse = await this.refreshFbsOrdersCache(clientId, {
+    const freshResponse = await this.recoverMissingFbsTransferOrders(clientId, dto.orders, await this.refreshFbsOrdersCache(clientId, {
       invalidateHistory: false,
       historyMode: 'cache-only',
-    });
+      ...(wbOrderStockLifecycleEnabled() ? { billingMode: 'skip' as const } : {}),
+    }));
     const { response, orders: resolvedSelectedOrders } =
       await this.resolveSelectedFbsOrders(clientId, dto.orders, freshResponse);
     // FIX: an order already linked to a WMS request can legitimately return to
@@ -23235,6 +23237,44 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       orders: request.fbsOrderLinks.length,
       shippedOrders: shippedLinks.length,
     };
+  }
+
+  // FIX: confirmed WB orders are absent from orders/new. Recover only missing selected history after a cold restart.
+  private async recoverMissingFbsTransferOrders(clientId: string,
+    selections: Array<{ connectionId: string; id: string }>, response: FbsOrdersResponse): Promise<FbsOrdersResponse> {
+    if (!wbOrderStockLifecycleEnabled()) return response;
+    const present = new Set(response.orders.map(order => selectionKey(order.connectionId, order.id)));
+    const missing = selections.filter(row => !present.has(selectionKey(row.connectionId, row.id)));
+    if (!missing.length) return response;
+    const links = await this.prisma.fbsOrderRequestLink.findMany({
+      where: { clientId, marketplace: MarketplaceType.WILDBERRIES,
+        OR: missing.map(row => ({ connectionId: row.connectionId, orderId: row.id })) },
+      select: { connectionId: true, orderId: true, orderPlacedAt: true },
+    });
+    const connections = await this.prisma.clientMarketplaceConnection.findMany({
+      where: { clientId, marketplace: MarketplaceType.WILDBERRIES, isActive: true,
+        id: { in: uniqueStrings(links.map(link => link.connectionId)) } },
+      select: { id: true, apiKey: true },
+    });
+    let recovered = false;
+    for (const connection of connections) {
+      const selectedLinks = links.filter(link => link.connectionId === connection.id);
+      if (!selectedLinks.length) continue;
+      const selectedIds = new Set(selectedLinks.map(link => link.orderId));
+      const dated = selectedLinks.every(link => link.orderPlacedAt && Number.isFinite(link.orderPlacedAt.getTime()));
+      const dateFrom = dated ? Math.floor(Math.min(...selectedLinks.map(link => link.orderPlacedAt!.getTime())) / 86400000) * 86400 : undefined;
+      const orders = await fetchWildberriesFbsHistory({ Authorization: connection.apiKey, 'Content-Type': 'application/json' }, { dateFrom, selectedIds });
+      if (!orders.length) continue;
+      const cached = this.wildberriesFbsHistoryCache.get(connection.id);
+      const merged = new Map((cached?.orders ?? []).map(order => [textValue(order.id), order]));
+      for (const order of orders) merged.set(textValue(order.id), compactWildberriesFbsOrder(order));
+      // Partial recovery must never pretend that the complete six-hour history has been loaded.
+      this.wildberriesFbsHistoryCache.set(connection.id, { expiresAt: cached?.expiresAt ?? 0, orders: [...merged.values()] });
+      recovered = true;
+    }
+    // The normal loader obtains fresh statuses and applies product/client routing. No local row is accepted as WB evidence.
+    return recovered ? this.refreshFbsOrdersCache(clientId,
+      { invalidateHistory: false, historyMode: 'cache-only', billingMode: 'skip' }) : response;
   }
 
   private async resolveSelectedFbsOrders(
@@ -30020,7 +30060,8 @@ async function deleteEmptyWbSupply(supplyId: string, headers: Record<string, str
   }
 }
 
-async function fetchWildberriesFbsHistory(headers: Record<string, string>) {
+async function fetchWildberriesFbsHistory(headers: Record<string, string>,
+  selected?: { dateFrom?: number; selectedIds: ReadonlySet<string> }) {
   const orders: Record<string, unknown>[] = [];
   let next = 0;
 
@@ -30028,12 +30069,14 @@ async function fetchWildberriesFbsHistory(headers: Record<string, string>) {
     const url = new URL('https://marketplace-api.wildberries.ru/api/v3/orders');
     url.searchParams.set('limit', '1000');
     url.searchParams.set('next', String(next));
+    if (selected?.dateFrom !== undefined) url.searchParams.set('dateFrom', String(selected.dateFrom));
     const response = await marketplaceJson(url.toString(), {
       method: 'GET',
       headers,
     });
     const pageOrders = asArray<Record<string, unknown>>(response.orders);
-    orders.push(...pageOrders);
+    orders.push(...(selected ? pageOrders.filter(order => selected.selectedIds.has(textValue(order.id))) : pageOrders));
+    if (selected && [...selected.selectedIds].every(id => orders.some(order => textValue(order.id) === id))) break;
 
     const nextValue = numberValue(response.next);
     if (pageOrders.length < 1000 || !nextValue || nextValue === next) {
