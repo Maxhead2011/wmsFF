@@ -83,7 +83,7 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
   if (intervening) stop('После начала пересчёта доступный товар перемещался или отбирался. Старые привязки не изменены.');
   const balances = await tx.stockBalance.findMany({ where: { boxId: box!.id }, orderBy: { id: 'asc' } });
   if (balances.some(row => row.clientId !== box!.clientId || row.warehouseId !== box!.warehouseId || row.quantity < 0 ||
-      row.quantity !== 0 && !['AVAILABLE', 'PACKING', 'SHIPPING'].includes(row.status))) stop('Нужно отдельно разобрать резерв или принадлежность остатка.');
+      row.quantity !== 0 && !['AVAILABLE', 'RESERVED', 'PACKING', 'SHIPPING'].includes(row.status))) stop('Нужно отдельно разобрать принадлежность или недоступный статус остатка.');
   const evidence = await tx.auditLog.findMany({ where: { action: 'INVENTORY_KIZ_SCAN', entity: 'InventoryAuditBox', entityId: audit.id,
     createdAt: { gte: audit.startedAt } }, select: { id: true, payload: true } });
   const existing = await tx.productMark.findMany({ where: { boxId: box!.id }, orderBy: { id: 'asc' } });
@@ -125,6 +125,9 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
       stop('Отсканированный КИЗ имеет другую принадлежность или дубль.');
     if (matches.some(mark => mark.box?.warehouseId && mark.box.warehouseId !== box!.warehouseId)) stop('КИЗ числится в другом филиале. Нужна проверка перемещения.');
     for (const mark of matches.filter(mark => mark.status !== 'AVAILABLE')) {
+      // FIX: a physically scanned reserved unit belongs to this confirmed count.
+      // Only this box's reservation may be released; another box is not implicitly approved.
+      if (mark.status === 'RESERVED' && mark.boxId === box!.id) continue;
       // FIX: legacy administrative exclusions are recoverable only from physical
       // scans, with no surviving box ownership or evidence of any order/dispatch.
       if (mark.status !== 'BLOCKED' || mark.boxId || !(mark.updatedAt < audit.startedAt) ||
@@ -150,10 +153,42 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
   if (active) stop('Отсканированный КИЗ сейчас используется в сборке. Привязки не изменены.');
   const wanted = new Set(scans.map(scan => scan.identity));
   const retired = existing.filter(mark => !wanted.has(identity(mark.value)));
+  // FIX: actual AVAILABLE quantities already include the entire physical count.
+  // Retire the old quantitative hold without adding it back (relabelled goods may now have another SKU).
+  const releasedReservations = balances.filter(row => row.status === 'RESERVED' && row.quantity > 0).map(row => ({ ...row }));
+  for (const row of releasedReservations) {
+    const changed = await tx.stockBalance.updateMany({ where: { id: row.id, updatedAt: row.updatedAt,
+      quantity: row.quantity, status: 'RESERVED' }, data: { quantity: 0 } });
+    if (changed.count !== 1) stop('Резерв изменился параллельно с подтверждением.');
+    await tx.stockMovement.create({ data: { warehouseId: row.warehouseId, clientId: row.clientId,
+      skuId: row.skuId, boxId: row.boxId, palletId: row.palletId, status: 'RESERVED',
+      type: 'INVENTORY_ADJUSTMENT', quantity: -row.quantity,
+      idempotencyKey: `${id}:reserve:${row.id}`, sourceDocument: id,
+      comment: 'Снятие прежнего резерва: принят фактический состав короба после пересчёта' } });
+  }
+  // FIX: unpicked FBS routes are hints, not shipment history. Let normal allocation
+  // select an available source again; never reset a scanned/picked or completed task.
+  const routes = await tx.fbsTsdAssembly.findMany({ where: { clientId: box!.clientId,
+    status: { in: ['RESERVED', 'WAITING_STOCK', 'RELEASED'] }, kiz: null, barcode: null,
+    sourceBarcode: null, relabelConfirmedAt: null, completedAt: null,
+    OR: [{ boxId: box!.id }, { reservedBoxId: box!.id }] } });
+  const releasedTaskIds: string[] = [];
+  for (const task of routes) {
+    const picked = await tx.stockMovement.findFirst({ where: { idempotencyKey: { startsWith: `fbs-sticker-pick:${task.id}:` },
+      quantity: { lt: 0 } }, select: { id: true } });
+    if (picked) continue;
+    const changed = await tx.fbsTsdAssembly.updateMany({ where: { id: task.id, updatedAt: task.updatedAt,
+      status: task.status, kiz: null, barcode: null, sourceBarcode: null, completedAt: null, relabelConfirmedAt: null },
+      data: { boxId: null, boxCode: null, reservedBoxId: null, reservedBoxCode: null, reservedAt: null,
+        storageBoxes: [], status: 'WAITING_STOCK', errorMessage: null } });
+    if (changed.count !== 1) stop('Задание изменилось параллельно с подтверждением.');
+    releasedTaskIds.push(task.id);
+  }
+  const archivedMarkIds = retired.filter(mark => ['AVAILABLE', 'RESERVED'].includes(mark.status)).map(mark => mark.id);
   // FIX: retain shipment/packing status and every historical task; detach only current box ownership.
   for (const mark of retired) {
     const changed = await tx.productMark.updateMany({ where: { id: mark.id, boxId: box!.id, updatedAt: mark.updatedAt },
-      data: { boxId: null, ...(mark.status === 'AVAILABLE' ? { status: 'BLOCKED' as const } : {}) } });
+      data: { boxId: null, ...(archivedMarkIds.includes(mark.id) ? { status: 'BLOCKED' as const } : {}) } });
     if (changed.count !== 1) stop('КИЗ изменился параллельно с подтверждением.');
   }
   const attached: string[] = [];
@@ -161,7 +196,7 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
   for (const scan of scans) {
     const mark = related.find(mark => identity(mark.value) === scan.identity);
     if (mark) {
-      if (mark.boxId !== box!.id) {
+      if (mark.boxId !== box!.id || mark.status === 'RESERVED') {
         const transfer = await debitConfirmedKizSource(tx, { mark, destination: box!, auditId: audit.id, startedAt: audit.startedAt, userId: user.id });
         if (transfer) transfers.push(transfer);
         const changed = await tx.productMark.updateMany({ where: { id: mark.id, boxId: mark.boxId, updatedAt: mark.updatedAt, status: mark.status }, data: { boxId: box!.id, stockMovementId: null, status: 'AVAILABLE' } });
@@ -176,5 +211,7 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
   await tx.auditLog.create({ data: { id, userId: user.id, action: 'INVENTORY_KIZ_COMPOSITION_CONFIRMED', entity: 'InventoryAuditBox', entityId: audit.id,
     payload: JSON.parse(JSON.stringify({ auditBoxId: audit.id, roundStartedAt: audit.startedAt.toISOString(), boxId: box!.id,
       clientId: box!.clientId, warehouseId: box!.warehouseId, nonPhysicalBalances, retiredMarks: retired, previousScannedMarks: related,
-      attachedMarkIds: attached, scans, transfers, evidenceIds: evidence.map(row => row.id), quantityChanged: -transfers.length })) } });
+      attachedMarkIds: attached, scans, transfers, releasedReservations, releasedTaskIds,
+      archivedMarkIds, archiveReason: 'Не подтверждено при пересчёте',
+      evidenceIds: evidence.map(row => row.id), quantityChanged: -transfers.length - releasedReservations.reduce((sum, row) => sum + row.quantity, 0) })) } });
 }
