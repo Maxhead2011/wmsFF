@@ -1,0 +1,77 @@
+--- a/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
++++ b/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
+@@ -27176,2 +27176,3 @@
+-        const primaryBreakdown = buildFbsPrimaryProcessingBreakdown(
+-          batchOrders.map((order) => {
++        const primaryLinesFor = (orders: FbsOrderSummary[]) => fbsPrimaryChargeLines({
++          breakdown: buildFbsPrimaryProcessingBreakdown(
++          orders.map((order) => {
+@@ -27192 +27193,8 @@
+-        );
++          ),
++          whiteUnitPriceRub: Number(settings.primaryWhiteUnitPriceRub),
++          grayUnitPriceRub: Number(settings.primaryGrayUnitPriceRub),
++          returnUnitPriceRub: Number(settings.primaryReturnUnitPriceRub),
++          relabelService,
++          primaryServices: configuredPrimaryServices,
++          orders,
++        });
+@@ -27201,9 +27209,5 @@
+-          lines: fbsPrimaryChargeLines({
+-            breakdown: primaryBreakdown,
+-            whiteUnitPriceRub: Number(settings.primaryWhiteUnitPriceRub),
+-            grayUnitPriceRub: Number(settings.primaryGrayUnitPriceRub),
+-            returnUnitPriceRub: Number(settings.primaryReturnUnitPriceRub),
+-            relabelService,
+-            primaryServices: configuredPrimaryServices,
+-            orders: batchOrders,
+-          }),
++          lines: primaryLinesFor(batchOrders),
++          // FIX: service quantities and billed order IDs must use the same per-order evidence.
++          ...(wbOrderStockLifecycleEnabled() ? {
++            orderLines: batchOrders.map(order => ({ order, lines: primaryLinesFor([order]) })),
++          } : {}),
+@@ -27521,0 +27526 @@
++    orderLines?: Array<{ order: FbsOrderSummary; lines: FbsPrimaryChargeLine[] }>;
+@@ -27529,0 +27535,2 @@
++    // FIX: preserve primary history just like the lifecycle processing invoice.
++    if (wbOrderStockLifecycleEnabled() && invoiceState) return invoice;
+@@ -27580 +27587 @@
+-    const configuredLines = lukinPrimaryLines(input.clientId, input.shipmentItems, inputLines).filter(
++    let configuredLines = lukinPrimaryLines(input.clientId, input.shipmentItems, inputLines).filter(
+@@ -27582,0 +27590,30 @@
++    const billedOrderIds = new Map<string, string[]>();
++    if (wbOrderStockLifecycleEnabled() && input.orderLines) {
++      // FIX: credit the physical order/service across changed supply IDs and dates, inside the billing lock.
++      const covered = new Set<string>();
++      for (const charge of await loadWorkCharges(this.prisma, input.clientId)) {
++        const metadata = asRecord(charge.metadata);
++        if (charge.status === BillingChargeStatus.CANCELLED || metadata.kind !== 'FBS_PRIMARY_PROCESSING') continue;
++        const match = /^(WILDBERRIES|OZON):([^:]+):/.exec(String(metadata.shipmentKey ?? ''));
++        const market = metadata.marketplace ?? match?.[1];
++        const connection = metadata.connectionId ?? match?.[2];
++        const service = metadata.serviceCode ?? charge.serviceId ?? metadata.processingType;
++        if (!market || !connection || !service) continue;
++        const attempt = typeof metadata.billingAttemptId === 'string' ? `:attempt:${metadata.billingAttemptId}` : '';
++        for (const orderId of Array.isArray(metadata.orderIds) ? metadata.orderIds : []) {
++          covered.add(`${market}:${connection}:${orderId}${attempt}:${service}`);
++        }
++      }
++      configuredLines = configuredLines.map(line => {
++        let quantity = 0;
++        const ids: string[] = [];
++        for (const entry of input.orderLines!) {
++          if (covered.has(`${fbsOrderKey(entry.order)}:${line.serviceCode}`)) continue;
++          const part = lukinPrimaryLines(input.clientId, entry.order.itemCount, entry.lines)
++            .find(candidate => candidate.key === line.key);
++          if (part && part.quantity > 0) { quantity += part.quantity; ids.push(entry.order.id); }
++        }
++        billedOrderIds.set(line.key, uniqueStrings(ids));
++        return { ...line, quantity: round(quantity, 3) };
++      }).filter(line => line.quantity > 0);
++    }
+@@ -27629 +27666,3 @@
+-          orderIds: input.shipmentOrders.map((order) => order.id),
++          orderIds: billedOrderIds.get(line.key) ?? input.shipmentOrders.map((order) => order.id),
++          ...(wbOrderStockLifecycleEnabled() && input.shipmentOrders[0]?.processingAttemptId
++            ? { billingAttemptId: input.shipmentOrders[0].processingAttemptId } : {}),
