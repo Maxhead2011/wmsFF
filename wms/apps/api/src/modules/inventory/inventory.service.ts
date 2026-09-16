@@ -1,3 +1,5 @@
+import { physicalKizIdentity, kizIdentityTransferEnabled } from '../../common/kiz-physical-identity';
+import { inventoryKizTransferWarnings, lockInventoryKizTransferSources } from './confirmed-kiz-transfer';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { confirmInventoryKizComposition, matchingLatestKizAudit } from './confirmed-kiz-composition';
@@ -95,6 +97,14 @@ export class InventoryService {
     // Load their review queue separately so the last 100 historical sessions cannot hide them.
     const kizReviews = await this.pendingKizReviews(user, warehouseId);
     const kizReviewIds = new Set(kizReviews.map(session => session.id));
+    if (kizIdentityTransferEnabled()) {
+      for (const session of [...activeSessions, ...reviewSessions, ...historySessions, ...kizReviews]) {
+        if (!canSeeInventorySession(user, session.clientId)) continue;
+        for (const box of session.boxes) {
+          if (box.status !== 'RESOLVED') Object.assign(box, { kizTransferWarnings: await inventoryKizTransferWarnings(this.prisma, box) });
+        }
+      }
+    }
     const totalBoxes = activeFull
       ? await this.prisma.box.count({ where: { status: { notIn: ['deleted', 'archived'] } } })
       : 0;
@@ -162,6 +172,9 @@ export class InventoryService {
         ? await this.prisma.box.count({ where: { status: { notIn: ['deleted', 'archived'] } } })
         : undefined;
     const [review] = await this.pendingKizReviews(user, this.resolveScopedWarehouseId(user, 'read'), id);
+    if (kizIdentityTransferEnabled()) for (const box of (review ?? session).boxes) {
+      if (box.status !== 'RESOLVED') Object.assign(box, { kizTransferWarnings: await inventoryKizTransferWarnings(this.prisma, box) });
+    }
     return this.decorateSession(review ?? session, totalBoxes, hideResolvedBoxes);
   }
 
@@ -534,7 +547,7 @@ export class InventoryService {
         throw new BadRequestException('Один КИЗ подтверждает только одну единицу товара.');
       }
       const kiz = dto.kiz.trim().replace(/^\]d2/i, '').replace(/<GS>/gi, '\u001d');
-      const identity = /^(01\d{14}21[^\u0000-\u001f]{13})(?:\u001d|$)/.exec(kiz)?.[1];
+      const identity = kizIdentityTransferEnabled() ? physicalKizIdentity(kiz) : /^(01\d{14}21[^\u0000-\u001f]{13})(?:\u001d|$)/.exec(kiz)?.[1];
       if (!identity) throw new BadRequestException('После ШК отсканируйте полный КИЗ этой единицы.');
       const evidenceId = createHash('sha256')
         .update(JSON.stringify([auditBoxId, auditBox.startedAt.toISOString(), identity])).digest('hex');
@@ -765,7 +778,10 @@ export class InventoryService {
     });
   }
 
-  async decideLine(lineId: string, dto: InventoryDecisionDto, user: AuthUser) {
+  async decideLine(lineId: string, dto: InventoryDecisionDto, user: AuthUser): Promise<Prisma.InventoryAuditBoxGetPayload<{ include: { lines: true } }> | null> {
+    // FIX: quantity, source debit, KIZ ownership and approval share one commit.
+    if (kizIdentityTransferEnabled() && !this.inventoryDecisionTx && !user.isDemo)
+      return this.atomicKizDecision(service => service.decideLine(lineId, dto, user));
     this.requireManager(user);
     const action =
       dto.action ??
@@ -917,6 +933,13 @@ export class InventoryService {
         // FIX: administrative pallet sorting overrides old inventory holds. A pending FULL
         // or BOX_CHECK decision must not restore/deplete a unit moved since its count began.
         // Keep the check inside the decision transaction so a conflict rolls its claim back.
+        // FIX: a previously counted source box must not resurrect a unit transferred by KIZ.
+        if (kizIdentityTransferEnabled() && await tx.stockMovement.findFirst({ where: {
+          boxId: freshBox.id, skuId: line.skuId, createdAt: { gte: line.auditBox.startedAt },
+          sourceDocument: { startsWith: 'inventory-kiz-transfer:' },
+        }, select: { id: true } })) {
+          throw new ConflictException('После начала пересчёта КИЗ и остаток перенесены в другой короб. Старое количество не применено; откройте новую проверку.');
+        }
         if (process.env.WMS_PALLET_SORTING_ENABLED === 'true') {
           const sortingMovement = await tx.stockMovement.findFirst({
             where: {
@@ -937,6 +960,7 @@ export class InventoryService {
         if (line.auditBox.session.comment?.includes('[SKU_SORTING_SOURCE]')) {
           await assertSortingInventorySnapshot(tx, freshBox.id, line.skuId, line.auditBox.startedAt);
         }
+        await lockInventoryKizTransferSources(tx, line.auditBoxId);
         const balance = await tx.stockBalance.findFirst({
           where: {
             clientId: line.auditBox.clientId,
@@ -1072,9 +1096,21 @@ export class InventoryService {
 
   // ADDED: PostgreSQL serializable write collisions are safe business
   // conflicts, not opaque HTTP 500 responses.
+  private inventoryDecisionTx?: Prisma.TransactionClient;
+
+  // FIX: transaction context belongs to a per-operation service view, never the singleton.
+  private async atomicKizDecision<T>(operation: (service: InventoryService) => Promise<T>): Promise<T> {
+    return this.runSerializableInventoryDecision(async tx => {
+      const scoped: InventoryService = Object.assign(Object.create(Object.getPrototypeOf(this)), this,
+        { prisma: tx, inventoryDecisionTx: tx });
+      return operation(scoped);
+    });
+  }
+
   private async runSerializableInventoryDecision<T>(
     operation: (tx: Prisma.TransactionClient) => Promise<T>,
   ) {
+    if (this.inventoryDecisionTx) return operation(this.inventoryDecisionTx);
     try {
       return await this.prisma.$transaction(operation, {
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
@@ -1087,7 +1123,10 @@ export class InventoryService {
     }
   }
 
-  async resolveBox(auditBoxId: string, dto: ResolveInventoryBoxDto, user: AuthUser) {
+  async resolveBox(auditBoxId: string, dto: ResolveInventoryBoxDto, user: AuthUser): Promise<Prisma.InventoryAuditBoxGetPayload<{ include: { lines: true } }> | null> {
+    // FIX: resolving multiple lines must roll back every line if any KIZ transfer fails.
+    if (kizIdentityTransferEnabled() && !this.inventoryDecisionTx && !user.isDemo)
+      return this.atomicKizDecision(service => service.resolveBox(auditBoxId, dto, user));
     this.requireManager(user);
     const auditBox = await this.prisma.inventoryAuditBox.findUnique({
       where: { id: auditBoxId },
@@ -1362,7 +1401,7 @@ export class InventoryService {
   // ADDED: resolving the audit and making its usable receiving box active are
   // one serializable operation; a failed activation rolls the RESOLVED write back.
   private async resolveAuditBoxAndReactivateIfReady(auditBoxId: string, user: AuthUser) {
-    const resolved = await this.prisma.$transaction(async (tx) => {
+    const resolved = await this.runSerializableInventoryDecision(async (tx) => {
       const auditBox = await tx.inventoryAuditBox.findUnique({
         where: { id: auditBoxId },
         select: {
@@ -1410,7 +1449,7 @@ export class InventoryService {
         warehouseId: current.session.warehouseId,
       });
       return current;
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    });
     if (resolved) {
       await this.completeMandatoryFbsSessionIfReady(resolved.sessionId, user);
     }

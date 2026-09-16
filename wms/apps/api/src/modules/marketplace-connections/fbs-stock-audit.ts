@@ -1,3 +1,4 @@
+import { physicalKizIdentity, kizIdentityTransferEnabled, physicalKizLookup } from '../../common/kiz-physical-identity';
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import type { FbsTsdAssembly, Prisma } from '@prisma/client';
 import { confirmedKizCompositionId } from '../inventory/confirmed-kiz-composition';
@@ -12,7 +13,7 @@ export function fbsStockAuditError(task: Partial<FbsTsdAssembly>, message: strin
     : message);
 }
 
-const identity = (value: string) => /^(01\d{14}21[^\u0000-\u001f]{13})(?:\u001d|$)/
+const identity = (value: string) => kizIdentityTransferEnabled() ? physicalKizIdentity(value) : /^(01\d{14}21[^\u0000-\u001f]{13})(?:\u001d|$)/
   .exec(value.replace(/^\]d2/i, '').replace(/<GS>/gi, '\u001d'))?.[1] ?? '';
 
 // FIX: this is a read-only return gate, never a KIZ replacement, WB undo or second stock debit.
@@ -90,7 +91,7 @@ export async function validateFbsStockAudit(db: Prisma.TransactionClient, task: 
     }, select: { quantity: true } });
     const picked = movements.reduce((n, row) => n + row.quantity, 0) >= Math.max(1, task.itemCount);
     const mark = await db.productMark.findFirst({ where: { clientId: task.clientId, skuId: task.skuId,
-      value: task.kiz, status: picked ? 'PACKING' : 'AVAILABLE', ...(picked ? {} : { boxId: audit.boxId }) } });
+      ...await physicalKizLookup(db, task.kiz, false), status: picked ? 'PACKING' : 'AVAILABLE', ...(picked ? {} : { boxId: audit.boxId }) } });
     if (!mark) stop('Не подтверждён остаток для принятого WB КИЗ. Привязка WB сохранена; нужен разбор администратора.');
   }
   return { ready: true, taskId: task.id, sessionId, boxCode: audit.boxCode };

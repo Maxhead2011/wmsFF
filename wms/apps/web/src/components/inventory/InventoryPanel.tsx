@@ -804,6 +804,8 @@ export function Reconciliation({
                 <span className={`inventory-status inventory-status--${box.kizReview?.required ? 'mismatch' : box.status.toLowerCase()}`}>{box.kizReview?.required ? 'Проверить КИЗ' : boxStatusLabel(box.status)}</span>
               </summary>
               <div className="inventory-review-box__details">
+              {/* FIX: show both ends of a KIZ transfer before accepting the physical count. */}
+              {box.kizTransferWarnings?.map((message, index) => <p className="inventory-alert" key={`kiz-transfer-${index}`}>{message}</p>)}
               {box.kizReview?.required && (
                 <div className="inventory-alert">
                   <ShieldAlert size={22} />

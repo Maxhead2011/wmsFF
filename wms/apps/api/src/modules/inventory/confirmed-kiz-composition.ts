@@ -1,9 +1,11 @@
+import { physicalKizIdentity, kizIdentityTransferEnabled } from '../../common/kiz-physical-identity';
+import { debitConfirmedKizSource } from './confirmed-kiz-transfer';
 import { ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { AuthUser } from '../auth/auth.types';
 
 export const confirmedKizCompositionId = (auditId: string, startedAt: Date) => `inventory-kiz-confirm:${auditId}:${startedAt.toISOString()}`;
-const identity = (value: string) => /^(01\d{14}21[^\u0000-\u001f]{13})(?:\u001d|$)/
+const identity = (value: string) => kizIdentityTransferEnabled() ? physicalKizIdentity(value) : /^(01\d{14}21[^\u0000-\u001f]{13})(?:\u001d|$)/
   .exec(value.trim().replace(/^\]d2/i, '').replace(/<GS>/gi, '\u001d'))?.[1] ?? '';
 
 type CountedAudit = Prisma.InventoryAuditBoxGetPayload<{ include: { session: true; lines: true } }>;
@@ -108,10 +110,15 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
   if (new Set(scans.map(scan => scan.identity)).size !== scans.length) stop('Один КИЗ указан у нескольких товаров.');
   // FIX: match administrative sorting's KIZ-before-box lock order to avoid a cross-workflow deadlock.
   for (const key of scans.map(scan => scan.identity).sort()) await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`sorting-kiz:${key}`}))`);
-  await tx.$queryRaw(Prisma.sql`SELECT id FROM "Box" WHERE id = ${box!.id} FOR UPDATE`);
-  const variants = scans.flatMap(scan => [scan.identity, ']d2' + scan.identity]);
+  const variants = scans.flatMap(scan => [scan.identity, ']d2' + scan.identity,
+    ...(kizIdentityTransferEnabled() ? [']D2' + scan.identity] : [])]);
   const related = variants.length ? await tx.productMark.findMany({ where: { OR: variants.map(prefix => ({ value: { startsWith: prefix } })) },
     include: { box: { select: { warehouseId: true } } } }) : [];
+  // FIX: deterministic lock order includes both ends of physical transfers.
+  const lockBoxes = kizIdentityTransferEnabled()
+    ? [...new Set([box!.id, ...related.map(mark => mark.boxId).filter((id): id is string => Boolean(id))])].sort()
+    : [box!.id];
+  for (const boxId of lockBoxes) await tx.$queryRaw(Prisma.sql`SELECT id FROM "Box" WHERE id = ${boxId} FOR UPDATE`);
   for (const scan of scans) {
     const matches = related.filter(mark => identity(mark.value) === scan.identity);
     if (matches.length > 1 || matches.some(mark => mark.clientId !== box!.clientId || mark.skuId !== scan.skuId))
@@ -124,7 +131,8 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
           !mark.sourceDocument?.startsWith('admin-unpalleted-physical-snapshot-')) {
         stop('Отсканированный КИЗ заблокирован, отобран или отгружен. Нужна проверка возврата или переклейка КИЗ.');
       }
-      const prefixes = [scan.identity, ']d2' + scan.identity];
+      const prefixes = [scan.identity, ']d2' + scan.identity,
+        ...(kizIdentityTransferEnabled() ? [']D2' + scan.identity] : [])];
       const where = { OR: prefixes.map(prefix => ({ kiz: { startsWith: prefix } })) };
       const history = await Promise.all([
         tx.fbsTsdAssembly.findFirst({ where, select: { id: true } }),
@@ -149,10 +157,13 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
     if (changed.count !== 1) stop('КИЗ изменился параллельно с подтверждением.');
   }
   const attached: string[] = [];
+  const transfers = [];
   for (const scan of scans) {
     const mark = related.find(mark => identity(mark.value) === scan.identity);
     if (mark) {
       if (mark.boxId !== box!.id) {
+        const transfer = await debitConfirmedKizSource(tx, { mark, destination: box!, auditId: audit.id, startedAt: audit.startedAt, userId: user.id });
+        if (transfer) transfers.push(transfer);
         const changed = await tx.productMark.updateMany({ where: { id: mark.id, boxId: mark.boxId, updatedAt: mark.updatedAt, status: mark.status }, data: { boxId: box!.id, stockMovementId: null, status: 'AVAILABLE' } });
         if (changed.count !== 1) stop('КИЗ перемещён параллельно с подтверждением.');
       }
@@ -165,5 +176,5 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
   await tx.auditLog.create({ data: { id, userId: user.id, action: 'INVENTORY_KIZ_COMPOSITION_CONFIRMED', entity: 'InventoryAuditBox', entityId: audit.id,
     payload: JSON.parse(JSON.stringify({ auditBoxId: audit.id, roundStartedAt: audit.startedAt.toISOString(), boxId: box!.id,
       clientId: box!.clientId, warehouseId: box!.warehouseId, nonPhysicalBalances, retiredMarks: retired, previousScannedMarks: related,
-      attachedMarkIds: attached, scans, evidenceIds: evidence.map(row => row.id), quantityChanged: 0 })) } });
+      attachedMarkIds: attached, scans, transfers, evidenceIds: evidence.map(row => row.id), quantityChanged: -transfers.length })) } });
 }
