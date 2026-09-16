@@ -166,6 +166,36 @@ describe('completed work writer', () => {
     expect(db.auditLog.create).toHaveBeenCalledTimes(1);
     expect(rows.every(x => x.metadata.billingPolicy === COMPLETED_WORK_POLICY)).toBe(true);
   });
+  // TEST: under the new lifecycle picking alone cannot bill; shipment survives deletion/reset of the live task.
+  it('bills immutable shipment evidence once instead of mutable completed tasks', async () => {
+    vi.stubEnv('WMS_FBS_COMPLETED_WORK_BILLING_ENABLED', 'true');
+    vi.stubEnv('WMS_LUKIN_PRIMARY_SERVICE_POLICY_ENABLED', 'true');
+    vi.stubEnv('WMS_WB_ORDER_STOCK_LIFECYCLE_ENABLED', 'true');
+    const { db, rows, invoices } = database();
+    const facts: any[] = [];
+    db.wbOrderShipment = { findMany: vi.fn(async () => facts) };
+    await recoverCompletedWork(db, clientId);
+    expect(rows).toHaveLength(0);
+    const shippedAt = new Date('2026-09-16T10:00:00Z');
+    facts.push({ ...work(), assemblyId: 'assembly', quantity: 1, shippedAt, assemblySnapshot: work() });
+    await recoverCompletedWork(db, clientId);
+    expect(rows).toHaveLength(3);
+    expect(rows.every(row => row.serviceDate.toISOString() === shippedAt.toISOString())).toBe(true);
+    db.fbsTsdAssembly.findMany.mockResolvedValue([]);
+    await recoverCompletedWork(db, clientId);
+    expect(rows).toHaveLength(3);
+    expect(invoices).toHaveLength(1);
+    expect(invoices[0].totalRub).toBe(52);
+    // TEST: user-requested repeat is separate completed work even for the same WB order/request/day.
+    facts.push({ ...work(), assemblyId: 'repeat', quantity: 1, shippedAt,
+      assemblySnapshot: { ...work(), id: 'repeat', billingAttemptId: 'repeat' } });
+    await recoverCompletedWork(db, clientId);
+    await recoverCompletedWork(db, clientId);
+    expect(rows).toHaveLength(6);
+    expect(invoices).toHaveLength(2);
+    expect(invoices.map(row => row.totalRub)).toEqual([52, 52]);
+    expect(rows.filter(row => row.metadata.billingAttemptId === 'repeat')).toHaveLength(3);
+  });
   it('attaches an existing uninvoiced charge without recreating or repricing it', async () => {
     vi.stubEnv('WMS_FBS_COMPLETED_WORK_BILLING_ENABLED', 'true');
     vi.stubEnv('WMS_LUKIN_PRIMARY_SERVICE_POLICY_ENABLED', 'true');
