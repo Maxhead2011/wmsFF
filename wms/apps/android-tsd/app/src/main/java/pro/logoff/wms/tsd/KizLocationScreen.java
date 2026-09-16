@@ -40,14 +40,14 @@ final class KizLocationScreen {
         this.activity = activity; this.session = session; this.api = api;
         LinearLayout root = new LinearLayout(activity); root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(24, 20, 24, 24); root.setBackgroundColor(Color.WHITE);
-        TextView title = new TextView(activity); title.setText("Проверка КИЗ"); title.setTextSize(26); title.setTextColor(Color.BLACK); root.addView(title);
-        TextView hint = new TextView(activity); hint.setText("Отсканируйте Честный знак. Размещение по данным выбранного филиала."); hint.setTextSize(17); root.addView(hint);
-        input = new EditText(activity); input.setSingleLine(true); input.setHint("КИЗ Data Matrix");
+        TextView title = new TsdUi.Label(activity); title.setText("Проверка КИЗ"); title.setTextSize(26); title.setTextColor(Color.BLACK); root.addView(title);
+        TextView hint = new TsdUi.Label(activity); hint.setText("Отсканируйте Честный знак. Размещение по данным выбранного филиала."); hint.setTextSize(17); root.addView(hint);
+        input = new EditText(activity); input.setSingleLine(true); TsdUi.hint(input,"КИЗ Data Matrix");
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         input.setImeOptions(EditorInfo.IME_ACTION_DONE); root.addView(input);
-        check = new Button(activity); check.setText("Проверить"); check.setOnClickListener(v -> submit()); root.addView(check);
-        result = new TextView(activity); result.setTextSize(20); result.setTextColor(Color.BLACK); result.setPadding(0, 20, 0, 20); root.addView(result);
-        Button exit = new Button(activity); exit.setText("Назад"); exit.setOnClickListener(v -> { close(); back.run(); }); root.addView(exit);
+        check = new TsdUi.Button(activity); check.setText("Проверить"); check.setOnClickListener(v -> submit()); root.addView(check);
+        result = new TsdUi.Label(activity); result.setTextSize(20); result.setTextColor(Color.BLACK); result.setPadding(0, 20, 0, 20); root.addView(result);
+        Button exit = new TsdUi.Button(activity); exit.setText("Назад"); exit.setOnClickListener(v -> { close(); back.run(); }); root.addView(exit);
         input.setOnEditorActionListener((v, action, event) -> {
             if (action == EditorInfo.IME_ACTION_DONE || action == EditorInfo.IME_ACTION_GO ||
                 (event != null && event.getAction() == KeyEvent.ACTION_DOWN && event.getKeyCode() == KeyEvent.KEYCODE_ENTER)) { submit(); return true; }

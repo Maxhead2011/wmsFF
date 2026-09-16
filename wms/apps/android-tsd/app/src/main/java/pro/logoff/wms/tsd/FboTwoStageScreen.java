@@ -46,8 +46,8 @@ final class FboTwoStageScreen {
     boolean canLeave(){return !busy&&state.pending()==null;}
     EditText scannerField(){return input;}
     void close(){closed=true;handler.removeCallbacks(automatic);executor.shutdownNow();}
-    private void text(LinearLayout root,String value){TextView v=new TextView(activity);v.setText(value);v.setTextSize(19);v.setTextColor(Color.BLACK);v.setPadding(0,9,0,9);root.addView(v);}
-    private void button(LinearLayout root,String title,boolean enabled,Runnable action){Button b=new Button(activity);b.setText(title);b.setAllCaps(false);b.setEnabled(enabled&&!busy);b.setOnClickListener(v->action.run());root.addView(b);}
+    private void text(LinearLayout root,String value){TextView v=new TsdUi.Label(activity);v.setText(value);v.setTextSize(19);v.setTextColor(Color.BLACK);v.setPadding(0,9,0,9);root.addView(v);}
+    private void button(LinearLayout root,String title,boolean enabled,Runnable action){Button b=new TsdUi.Button(activity);b.setText(title);b.setAllCaps(false);b.setEnabled(enabled&&!busy);b.setOnClickListener(v->action.run());root.addView(b);}
     private TsdFboPlan.Route source(){if(plan!=null&&plan.route!=null)for(TsdFboPlan.Route r:plan.route)if(r.boxCode.equals(state.source))return r;return null;}
     private boolean ready(){return state.pending()==null&&!busy;}
     private void render(){
@@ -66,7 +66,7 @@ final class FboTwoStageScreen {
                 else if("PICKING".equals(plan.phase)&&state.source.isEmpty())hint=state.pallet.isEmpty()?"ШК паллета / короба без паллета":"ШК короба на выбранном паллете";
                 else if("PACKING".equals(plan.phase)&&state.target.isEmpty())hint="ШК короба для упаковки / целого короба";
                 else if(!state.barcode.isEmpty())hint="КИЗ товара";
-                text(root,hint);input=new EditText(activity);input.setSingleLine(true);input.setHint(hint);input.setEnabled(ready());root.addView(input);
+                text(root,hint);input=new EditText(activity);input.setSingleLine(true);TsdUi.hint(input,hint);input.setEnabled(ready());root.addView(input);
                 input.setOnEditorActionListener((v,a,e)->{submit();return true;});
                 input.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int a,int c,int f){}public void onTextChanged(CharSequence s,int a,int b,int c){}public void afterTextChanged(Editable s){handler.removeCallbacks(automatic);if(ready()&&s.length()>0)handler.postDelayed(automatic,350);}});
                 button(root,"Подтвердить скан",ready(),this::submit);

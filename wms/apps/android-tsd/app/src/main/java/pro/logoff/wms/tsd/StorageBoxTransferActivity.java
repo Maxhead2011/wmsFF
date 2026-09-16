@@ -125,7 +125,7 @@ public final class StorageBoxTransferActivity extends Activity {
         }
 
         scanInput = new EditText(this);
-        scanInput.setHint(inputHint());
+        TsdUi.hint(scanInput,inputHint());
         scanInput.setTextSize(20);
         scanInput.setSingleLine(true);
         scanInput.setInputType(InputType.TYPE_CLASS_TEXT);
@@ -146,13 +146,13 @@ public final class StorageBoxTransferActivity extends Activity {
             finishCount.setOnClickListener(view -> {
                 if (recount.ready()) {
                     if (recount.adminConfirmationRequired() && !recount.adminConfirmed()) {
-                        new AlertDialog.Builder(this).setTitle("РЕШЕНИЕ АДМИНИСТРАТОРА")
+                        new TsdUi.DialogBuilder(this).setTitle("РЕШЕНИЕ АДМИНИСТРАТОРА")
                             .setMessage(message + "\n\nПодтверждаю физическое наличие всех отсканированных единиц и указанные изменения. Старые наклейки снятых сборок не использовать.")
                             .setPositiveButton("Подтверждаю", (dialog, which) -> { recount.confirmAdministrator(); sendRecount(true); })
                             .setNegativeButton("Отмена", null).show();
                     } else sendRecount(true);
                 }
-                else new AlertDialog.Builder(this).setTitle("Полный пересчёт товара")
+                else new TsdUi.DialogBuilder(this).setTitle("Полный пересчёт товара")
                     .setMessage("Вы отсканировали все " + recount.scans().size() + " единиц товара с ШК " + state.barcode() + " в коробе " + state.sourceCode() + "?")
                     .setPositiveButton("Да, все", (dialog, which) -> sendRecount(false)).setNegativeButton("Продолжить сканы", null).show();
             });
@@ -160,7 +160,7 @@ public final class StorageBoxTransferActivity extends Activity {
             if (recountPending && recount.adminRelease() && !recount.adminAbort()) {
                 Button abort = button("ОТМЕНИТЬ НЕЗАВЕРШЁННУЮ СВЕРКУ", RED);
                 abort.setEnabled(!busy);
-                abort.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Отменить сверку?")
+                abort.setOnClickListener(v -> new TsdUi.DialogBuilder(this).setTitle("Отменить сверку?")
                     .setMessage("Остатки не изменятся. Удерживаемые задания вернутся на проверку КИЗ. Если сверка уже применена, WMS только завершит обновление маршрутов. После отмены пересканируйте все КИЗы заново.")
                     .setPositiveButton("Отменить сверку", (dialog, which) -> { recount.abortAdministrator(); sendRecount(true); })
                     .setNegativeButton("Назад", null).show());
@@ -333,14 +333,14 @@ public final class StorageBoxTransferActivity extends Activity {
             message = "Не получен список старых коробов. Повторите проверку."; return;
         }
         LinearLayout form = new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL); form.setPadding(dp(16), dp(8), dp(16), dp(8));
-        TextView info = new TextView(this); info.setText(getString(R.string.recount_previous_box_instruction, state.barcode())); form.addView(info);
+        TextView info = new TsdUi.Label(this); info.setText(getString(R.string.recount_previous_box_instruction, state.barcode())); form.addView(info);
         ArrayList<EditText> inputs = new ArrayList<>();
         for (TsdTransferResponse.OldBoxCount box : response.oldBoxes) {
-            TextView label = new TextView(this); label.setText(getString(R.string.recount_previous_box_quantity, box.boxCode, box.previousQuantity)); form.addView(label);
-            EditText input = new EditText(this); input.setInputType(InputType.TYPE_CLASS_NUMBER); input.setHint("Фактическое количество"); form.addView(input); inputs.add(input);
+            TextView label = new TsdUi.Label(this); label.setText(getString(R.string.recount_previous_box_quantity, box.boxCode, box.previousQuantity)); form.addView(label);
+            EditText input = new EditText(this); input.setInputType(InputType.TYPE_CLASS_NUMBER); TsdUi.hint(input,"Фактическое количество"); form.addView(input); inputs.add(input);
         }
         ScrollView scroll = new ScrollView(this); scroll.addView(form);
-        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Решение администратора").setView(scroll)
+        AlertDialog dialog = new TsdUi.DialogBuilder(this).setTitle("Решение администратора").setView(scroll)
             .setPositiveButton("Проверить изменения", null).setNegativeButton("Отмена", null).create();
         dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
             if (recount == null || busy) return;
@@ -483,7 +483,7 @@ public final class StorageBoxTransferActivity extends Activity {
     }
 
     private TextView text(String value, int sp, boolean bold) {
-        TextView view = new TextView(this);
+        TextView view = new TsdUi.Label(this);
         view.setText(value);
         view.setTextSize(sp);
         view.setTextColor(TEXT);
@@ -492,7 +492,7 @@ public final class StorageBoxTransferActivity extends Activity {
     }
 
     private Button button(String value, int color) {
-        Button button = new Button(this);
+        Button button = new TsdUi.Button(this);
         button.setText(value);
         button.setTextSize(16);
         button.setTextColor(Color.WHITE);
