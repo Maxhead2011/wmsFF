@@ -107,8 +107,12 @@ export class MarketplaceConnectionsController {
     @CurrentUser() user: AuthUser,
     @Query('clientId') clientId: string,
     @Query('refresh') refresh?: string,
+    @Query('view') view?: string,
   ) {
-    const result = await this.connections.listFbsOrders(clientId, user, refresh === 'true' || refresh === '1');
+    // FIX: only the screen opts into asynchronous reads; legacy/action callers remain strict.
+    const result = view === 'snapshot'
+      ? await this.connections.listFbsOrdersForDisplay(clientId, user, refresh === 'true' || refresh === '1')
+      : await this.connections.listFbsOrders(clientId, user, refresh === 'true' || refresh === '1');
     return { ...result, ...(process.env.WMS_FBS_NO_STOCK_TRANSFER_ENABLED === 'true' && process.env.WMS_FBS_RESHIPMENT_ENABLED === 'true' ? { stockTransferEnabled: true } : {}) };
   }
 
@@ -272,8 +276,9 @@ export class MarketplaceConnectionsController {
   listFbsActiveClients(
     @CurrentUser() user: AuthUser,
     @Query('marketplace') marketplace: string | undefined,
+    @Query('view') view?: string,
   ) {
-    return this.connections.listFbsActiveClients(user, marketplace);
+    return this.connections.listFbsActiveClients(user, marketplace, view === 'snapshot');
   }
 
   @Get('fbs/cargo-packings')

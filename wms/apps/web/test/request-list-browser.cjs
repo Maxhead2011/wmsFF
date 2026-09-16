@@ -21,6 +21,9 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
         assert.equal(await rows.count(), 5);
         for (const [index, number] of [999, 1000, 1001, 10000, 1000000].entries()) {
           const row = rows.nth(index);
+          // TEST: persisted author is visible alongside the creation timestamp at every viewport.
+          assert((await row.innerText()).includes(index === 0 ? 'Автор: не указан' : 'Автор: Тестовый автор заявки'));
+          assert(!(await row.innerText()).includes('hidden@example.test'));
           const accent = row.locator('.client-request-number__accent');
           assert.equal(await accent.innerText(), String(number));
           const metrics = await accent.evaluate(element => {

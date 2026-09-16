@@ -13,7 +13,8 @@ const items: ClientRequestSummary[] = [999, 1000, 1001, 10000, 1000000].map((num
   deliveryAddress: null, desiredDate: null, managerComment: null,
   createdAt: '2026-09-16T07:00:00Z', updatedAt: '2026-09-16T07:00:00Z',
   client: { id: 'qa-client', code: 'QA', name: 'Тестовый клиент' },
-  createdBy: null, assignedTo: null, items: [], files: [], packages: [],
+  createdBy: index === 0 ? null : { id: 'author', name: 'Тестовый автор заявки', email: 'hidden@example.test' },
+  assignedTo: null, items: [], files: [], packages: [],
   wbSupplyIds: index === 0 ? [] : index === 3 ? ['WB-GI-123456789', 'WB-GI-987654321'] : [`WB-GI-${number}`],
 }));
 const noAction = () => {};

@@ -1,6 +1,7 @@
 // FIX: keep reshipment alongside the deployed FBS delivery controls.
 import { describeStockTransfer } from '../../lib/fbs-stock-transfer';
 import { FbsReshipmentPanel } from './FbsReshipmentPanel';
+import { FbsSyncStatus } from './FbsSyncStatus';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -406,6 +407,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [activeClients, setActiveClients] = useState<FbsActiveClientSummary[]>([]);
   const [activeClientsLoading, setActiveClientsLoading] = useState(false);
+  const [activeClientsError, setActiveClientsError] = useState('');
   const [marketplaceOrderCounts, setMarketplaceOrderCounts] = useState<
     Record<FbsMarketplace, FbsMarketplaceActiveCount>
   >(() => ({ ...INITIAL_FBS_MARKETPLACE_COUNTS }));
@@ -478,6 +480,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
   // FIX: state updates are asynchronous; lock delivery callbacks against repeated clicks.
   const supplyDeliveryBusy = useRef(false);
   const marketplaceCountsLoadSequence = useRef(0);
+  const activeClientsSequence = useRef(0);
   const supplyReconcileRequestSequence = useRef(0);
   const supplyRequestAuditSequence = useRef(0);
   const canManagePricing =
@@ -534,19 +537,19 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
         return;
       }
       const sequence = ++loadSequence.current;
-      setOrdersState((current) => ({ status: 'loading', data: current.data, error: '' }));
+      setOrdersState((current) => ({ status: 'loading', data: current.data?.client.id === selectedClientId ? current.data : null, error: '' }));
       try {
-        const data = await fetchFbsOrders(session.accessToken, selectedClientId, refresh);
+        const data = await fetchFbsOrders(session.accessToken, selectedClientId, refresh, 'snapshot');
         if (loadSequence.current === sequence) {
           setOrdersState({ status: 'ready', data, error: '' });
         }
       } catch (caught) {
         if (loadSequence.current === sequence) {
-          setOrdersState({
+          setOrdersState((current) => ({
             status: 'error',
-            data: null,
+            data: current.data?.client.id === selectedClientId ? current.data : null,
             error: caught instanceof Error ? caught.message : 'Не удалось загрузить заказы FBS.',
-          });
+          }));
         }
       }
     },
@@ -575,24 +578,35 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
   }
 
   const loadActiveClients = useCallback(async () => {
+    const sequence = ++activeClientsSequence.current;
     if (!marketplace) {
       setActiveClients([]);
       setActiveClientsLoading(false);
       return;
     }
     setActiveClientsLoading(true);
+    setActiveClientsError('');
     try {
-      const rows = await fetchFbsActiveClients(session.accessToken, marketplace);
+      const rows = await fetchFbsActiveClients(session.accessToken, marketplace, 'snapshot');
+      if (sequence !== activeClientsSequence.current) return;
       setActiveClients(rows);
       setSelectedClientId((current) => {
         if (rows.some((item) => item.client.id === current)) return current;
         return rows[0]?.client.id ?? current;
       });
     } catch {
-      setActiveClients([]);
+      // FIX: retain usable cabinets on a transient failure, with an explicit warning.
+      if (sequence === activeClientsSequence.current) setActiveClientsError('Не удалось обновить кабинеты. Показан последний загруженный список.');
     } finally {
-      setActiveClientsLoading(false);
+      if (sequence === activeClientsSequence.current) setActiveClientsLoading(false);
     }
+  }, [marketplace, session.accessToken]);
+
+  useEffect(() => {
+    // FIX: do not retain one marketplace's cabinets when switching to another.
+    activeClientsSequence.current++;
+    setActiveClients([]);
+    setActiveClientsError('');
   }, [marketplace, session.accessToken]);
 
   const loadMarketplaceOrderCounts = useCallback(async () => {
@@ -608,11 +622,11 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     // а следующие два считают свои маркетплейсы без лишних параллельных запросов к API.
     for (const targetMarketplace of FBS_MARKETPLACES) {
       try {
-        const rows = await fetchFbsActiveClients(session.accessToken, targetMarketplace);
+        const rows = await fetchFbsActiveClients(session.accessToken, targetMarketplace, 'snapshot');
         results.push([
           targetMarketplace,
           {
-            status: 'ready',
+            status: rows.some(item => item.sync?.error) ? 'error' : rows.some(item => item.sync?.partial) ? 'loading' : 'ready',
             count: rows.reduce((sum, item) => sum + item.activeOrders, 0),
           },
         ] as const);
@@ -659,6 +673,19 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     }, 60_000);
     return () => window.clearInterval(timer);
   }, [loadOrders, selectedClientId]);
+
+  // FIX: collect background completion promptly without repeatedly forcing marketplace requests.
+  useEffect(() => {
+    if (!ordersState.data?.sync?.refreshing) return;
+    const timer = window.setTimeout(() => { if (document.visibilityState === 'visible') void loadOrders(); }, 5_000);
+    return () => window.clearTimeout(timer);
+  }, [loadOrders, ordersState.data]);
+
+  useEffect(() => {
+    if (!activeClients.some(item => item.sync?.refreshing)) return;
+    const timer = window.setTimeout(() => { if (document.visibilityState === 'visible') void loadActiveClients(); }, 5_000);
+    return () => window.clearTimeout(timer);
+  }, [loadActiveClients, activeClients]);
 
   useEffect(() => {
     if (!marketplace) return;
@@ -976,17 +1003,17 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     return fbsDeadlineSnapshot(order, Date.now())?.tone === 'critical';
   }).length;
   const tileCounts: Record<FbsView, number | string> = {
-    active: activeOrdersTotal,
+    active: activeClients.some(item => item.sync?.partial) ? '…' : activeOrdersTotal,
     deadlines: criticalOrdersTotal,
     stocks: 'WMS → WB',
     allocation: '100%',
     cargo: cargoState.data?.supplies.filter((supply) => !supply.readyToDeliver && !supply.ignored).length ?? 0,
-    shipped: data?.counts.shipped ?? 0,
-    cancelled: data?.counts.cancelled ?? 0,
+    shipped: data?.sync?.partial ? '…' : data?.counts.shipped ?? 0,
+    cancelled: data?.sync?.partial ? '…' : data?.counts.cancelled ?? 0,
     report: 'Excel',
-    cost: data?.counts.shipped ?? 0,
+    cost: data?.sync?.partial ? '…' : data?.counts.shipped ?? 0,
     calculator: '1–3000',
-    archive: data?.counts.archive ?? 0,
+    archive: data?.sync?.partial ? '…' : data?.counts.archive ?? 0,
     passes: '48 ч',
     pricing: 'тарифы',
     penalties: '₽',
@@ -1721,7 +1748,8 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
                   aria-label={`Клиенты с активными заказами ${marketplaceLabel(marketplace)}`}
                 >
                   <span className="fbs-tile__clients-title">Клиенты с заказами</span>
-                  {activeClientsLoading ? (
+                  {activeClientsError ? <span role="alert">{activeClientsError}</span> : null}
+                  {activeClientsLoading && activeClients.length === 0 ? (
                     <span className="fbs-tile__clients-empty">Обновляю список…</span>
                   ) : activeClients.length > 0 ? (
                     activeClients.map((item) => (
@@ -1735,8 +1763,10 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
                           setSearch('');
                         }}
                       >
-                        <span>{item.client.name}</span>
-                        <strong>{item.activeOrders}</strong>
+                        <span>{item.client.name}{item.sync?.error ? <small>{item.sync.error}</small> : null}</span>
+                        <strong title={item.sync?.partial ? 'Полный список ещё не загружен' : item.sync?.refreshing ? 'Обновляется' : undefined}>
+                          {item.sync?.partial ? '…' : item.activeOrders}
+                        </strong>
                       </button>
                     ))
                   ) : (
@@ -2098,7 +2128,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
               .map((connection) => ({ id: connection.id, accountName: connection.accountName }))}
             session={session}
           />
-        ) : ordersState.status === 'error' ? (
+        ) : ordersState.status === 'error' && !data ? (
           <FbsNotice icon={AlertTriangle} title="Не удалось получить заказы" text={ordersState.error} tone="error" />
         ) : data && !data.connected ? (
           <FbsConnectionPrompt
@@ -2173,10 +2203,14 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
               <Link2 size={14} aria-hidden="true" />
               {data.connections.map((connection) => marketplaceLabel(connection.marketplace)).join(', ')}
             </span>
-            <span>Статусы обновлены {formatDateTime(data.fetchedAt)}</span>
+            <span>{data.fetchedAt ? `Статусы обновлены ${formatDateTime(data.fetchedAt)}` : 'Ожидается первое обновление маркетплейса'}</span>
             <span>Автообновление раз в минуту</span>
           </div>
         ) : null}
+        {ordersState.status === 'error' && data ? (
+          <FbsNotice icon={AlertTriangle} title="Не удалось обновить заказы — показаны сохранённые данные" text={ordersState.error} tone="error" />
+        ) : null}
+        <FbsSyncStatus sync={data?.sync} />
       </section>
       {assemblyDialog ? (
         <FbsAssemblyDestinationDialog

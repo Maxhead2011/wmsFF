@@ -26,6 +26,15 @@ function renderRequest(overrides: Partial<ClientRequestSummary> = {}) {
 
 // TEST: never highlight only the last three digits of a four-or-more-digit number.
 describe('request list number and WB supply display', () => {
+  // TEST: show the recorded author, never substitute the current viewer or expose their email.
+  it('shows the creator next to the creation date', () => {
+    const html = renderRequest({ createdBy: { id: 'creator', name: 'Тестовый автор', email: 'private@example.test' } });
+    expect(html).toMatch(/Создана:.*Автор: Тестовый автор<\/span>/);
+    expect(html).not.toContain('private@example.test');
+  });
+  it('explicitly marks an unknown historical creator', () => {
+    expect(renderRequest()).toContain('Автор: не указан');
+  });
   it.each([
     [1, '000', '001'], [999, '000', '999'], [1000, '00', '1000'],
     [1001, '00', '1001'], [10000, '0', '10000'], [100000, '', '100000'],

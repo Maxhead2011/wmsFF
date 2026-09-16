@@ -3239,6 +3239,7 @@ export type FbsOrderSummary = {
 };
 
 export type ClientFbsOrders = {
+  sync?: FbsDisplaySync;
   stockTransferEnabled?: boolean;
   client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
   connected: boolean;
@@ -3263,10 +3264,18 @@ export type ClientFbsOrders = {
   orders: FbsOrderSummary[];
 };
 
+// FIX: incomplete/cached snapshots must not masquerade as fresh marketplace data.
+export type FbsDisplaySync = {
+  refreshing: boolean;
+  partial: boolean;
+  lastSuccessAt: string | null;
+  error: string | null;
+};
 export type FbsActiveClientSummary = {
   client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
   activeOrders: number;
   fetchedAt: string;
+  sync?: FbsDisplaySync;
 };
 
 export type FbsCargoPackingOrder = {
@@ -9612,11 +9621,12 @@ export async function connectAnalyticsApi(accessToken: string, clientId: string,
   });
 }
 
-export async function fetchFbsOrders(accessToken: string, clientId: string, refresh = false) {
+export async function fetchFbsOrders(accessToken: string, clientId: string, refresh = false, view?: 'snapshot') {
   return request<ClientFbsOrders>(
     withQuery('/marketplace-connections/fbs/orders', {
       clientId,
       refresh: refresh ? '1' : undefined,
+      view,
     }),
     { accessToken },
   );
@@ -9746,9 +9756,10 @@ export async function downloadFbsPenaltiesReport(
 export async function fetchFbsActiveClients(
   accessToken: string,
   marketplace?: 'WILDBERRIES' | 'OZON' | 'YANDEX_MARKET',
+  view?: 'snapshot',
 ) {
   return request<FbsActiveClientSummary[]>(
-    withQuery('/marketplace-connections/fbs/active-clients', { marketplace }),
+    withQuery('/marketplace-connections/fbs/active-clients', { marketplace, view }),
     { accessToken },
   );
 }
