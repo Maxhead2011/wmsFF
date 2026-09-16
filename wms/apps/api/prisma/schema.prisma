@@ -2622,6 +2622,19 @@ model FbsTsdAssembly {
 }
 
 // FIX: immutable local shipment evidence, independent of later WB statuses.
+// FIX: durable, coalesced billing work from successful print acknowledgements.
+model FbsPrintBillingOutbox {
+  clientId      String   @id
+  revision      Int      @default(1)
+  attempts      Int      @default(0)
+  nextAttemptAt DateTime @default(now())
+  leaseToken    String?
+  leaseUntil    DateTime?
+  lastError     String?
+
+  @@index([nextAttemptAt])
+}
+
 model WbOrderShipment {
   id                String   @id @default(uuid())
   clientId          String
