@@ -46,6 +46,16 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     requiresDatabase: false,
   },
   {
+    // FIX: document the isolated scanner search alongside existing internal APIs.
+    id: 'kiz-search',
+    name: 'Поиск КИЗ',
+    prefixes: ['/tsd/kiz-search'],
+    routeCount: 3,
+    description: 'Назначенные сотруднику заявки поиска физических единиц по скану КИЗ.',
+    logic: ['Проверяет назначение, клиента и филиал.', 'Подтверждает находки без изменения остатков и заказов.', 'Доступен только при WMS_TSD_KIZ_SEARCH=true.'],
+    dependencies: ['Основная БД', 'Права stock:read и stock:write'],
+  },
+  {
     id: 'auth',
     name: 'Авторизация',
     prefixes: ['/auth'],
