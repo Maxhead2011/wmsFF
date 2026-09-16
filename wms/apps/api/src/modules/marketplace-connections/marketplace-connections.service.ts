@@ -1,5 +1,6 @@
 import { wbOrderStockLifecycleEnabled, finalizeWbOrderShipment, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
 import { enqueueFbsPrintBilling, FbsPrintBillingWorker } from './fbs-print-billing-outbox';
+import { FbsDisplayCache, type FbsDisplaySync } from './fbs-display-cache';
 import { physicalKizLookup, physicalKizHistoryFilter } from '../../common/kiz-physical-identity';
 import { stockTransferBlockedReason, ordersWithoutTransferStock } from './fbs-stock-transfer';
 import { fbsStockAuditError, fbsKizAuditEnabled, validateFbsStockAudit } from './fbs-stock-audit';
@@ -313,6 +314,7 @@ type FbsSupplyReconciliationPreview = {
 };
 
 type FbsOrdersResponse = {
+  sync?: FbsDisplaySync;
   client: { id: string; code: string; name: string };
   connected: boolean;
   connections: Array<{ id: string; marketplace: MarketplaceType; accountName: string | null }>;
@@ -628,6 +630,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   private readonly logger = new Logger(MarketplaceConnectionsService.name);
   private readonly fbsOrdersCache = new Map<string, { expiresAt: number; value: FbsOrdersResponse }>();
   private readonly fbsOrdersLoads = new Map<string, Promise<FbsOrdersResponse>>();
+  // FIX: isolated display data must never poison the operational/assembly cache.
+  private readonly fbsDisplayCache = new FbsDisplayCache<FbsOrdersResponse>();
   private readonly wildberriesFbsHistoryCache = new Map<
     string,
     { expiresAt: number; orders: Record<string, unknown>[] }
@@ -715,6 +719,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   async onModuleDestroy() {
+    this.fbsDisplayCache.stop();
     this.fbsBackgroundRefreshStopped = true;
     if (this.fbsRefreshTimer) {
       clearTimeout(this.fbsRefreshTimer);
@@ -2016,6 +2021,30 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     );
     this.fbsOrdersCache.delete(connection.clientId);
     return this.listFbsWarehouseRoutes(connectionId, user);
+  }
+
+  // FIX: opt-in screen read. Mutating workflows keep listFbsOrders and its live validation.
+  async listFbsOrdersForDisplay(clientId: string, user: AuthUser, refresh = false): Promise<FbsOrdersResponse> {
+    const id = clientId?.trim();
+    if (!id) throw new BadRequestException('Выберите клиента для просмотра заказов FBS.');
+    this.clientScopes.requireClientAccess(user, id, 'read');
+    const operational = this.fbsOrdersCache.get(id);
+    const display = this.fbsDisplayCache.get(id)?.value;
+    const value = display && (!operational || Date.parse(display.fetchedAt) >= Date.parse(operational.value.fetchedAt))
+      ? display : operational?.value;
+    if (refresh || !value || Date.now() - Date.parse(value.fetchedAt) >= FBS_ORDERS_CACHE_TTL_MS) {
+      this.fbsDisplayCache.refresh(id, () => runWithWildberriesRequestPriority('background',
+        () => this.loadFbsOrders(id, undefined, { readOnly: true, billingMode: 'skip' })), refresh);
+    }
+    // A cold start shows only saved active WMS requests, not a complete WB snapshot.
+    const local = value ? await this.mergeSyncedFbsTsdRequestOrders(id, value)
+      : await this.loadFbsTsdRequestOrders(id, undefined, undefined, true);
+    const scoped = await this.scopeFbsOrdersForUser(local, user);
+    const state = this.fbsDisplayCache.get(id);
+    return { ...scoped, fetchedAt: value?.fetchedAt ?? '', sync: {
+      refreshing: state?.pending ?? false, partial: !value,
+      lastSuccessAt: value?.fetchedAt ?? null, error: state?.error ?? null,
+    } };
   }
 
   async listFbsOrders(clientId: string, user: AuthUser, refresh = false) {
@@ -5134,7 +5163,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
-  async listFbsActiveClients(user: AuthUser, marketplaceValue: unknown = undefined) {
+  async listFbsActiveClients(user: AuthUser, marketplaceValue: unknown = undefined, displayOnly = false) {
     const clientFilter = this.clientScopes.resolveClientFilter(user);
     const requestedMarketplace = textValue(marketplaceValue)?.toUpperCase();
     const marketplace = requestedMarketplace === MarketplaceType.WILDBERRIES
@@ -5160,10 +5189,22 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       client: { id: string; code: string; name: string };
       activeOrders: number;
       fetchedAt: string;
+      sync?: FbsDisplaySync;
     }> = [];
 
     for (const client of clients.values()) {
       try {
+        // FIX: do not rebuild every client's orders/invoices in the cabinet picker.
+        if (displayOnly) {
+          const orders = await this.listFbsOrdersForDisplay(client.id, user);
+          const activeOrders = marketplace
+            ? orders.orders.filter(order => order.marketplace === marketplace && order.category === 'active').length
+            : orders.counts.active;
+          if (orders.connected && (activeOrders > 0 || orders.sync?.partial || orders.sync?.error)) {
+            result.push({ client, activeOrders, fetchedAt: orders.fetchedAt, sync: orders.sync });
+          }
+          continue;
+        }
         const cached = this.fbsOrdersCache.get(client.id);
         const cachedOrders = cached && cached.expiresAt > Date.now() ? cached.value : null;
         if (cached && !cachedOrders) {
@@ -17307,12 +17348,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
-  private async applyLocalWbShipments(clientId: string, orders: FbsOrderSummary[]) {
+  private async applyLocalWbShipments(clientId: string, orders: FbsOrderSummary[], readOnly = false) {
     // FIX: recover a committed print acknowledgement if shipment/billing was interrupted afterwards.
     // FIX: historical clients can exceed PostgreSQL's 32767 bind-parameter limit.
     const recorded = new Set((await this.prisma.wbOrderShipment.findMany({ where: { clientId }, select: { assemblyId: true } })).map(fact => fact.assemblyId));
     const currentTasks = await this.prisma.fbsTsdAssembly.findMany({ where: { clientId, marketplace: MarketplaceType.WILDBERRIES },
       select: { id: true, requestId: true, connectionId: true, orderId: true, completedAt: true } });
+    // FIX: screen reads keep recorded shipment facts below, without retrying old write-offs.
+    if (!readOnly) {
     const pendingIds = currentTasks.filter(task => !recorded.has(task.id)).map(task => task.id);
     const printed: Array<{ assemblyId: string; printedAt: Date | null }> = [];
     for (const ids of chunks(pendingIds, 10000)) printed.push(...await this.prisma.fbsPrintJob.findMany({
@@ -17353,6 +17396,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         // FIX: missing physical evidence cannot manufacture a stock write-off; next sync retries.
         this.logger.warn(`WB shipment ${task.orderId} needs reconciliation: ${error instanceof Error ? error.message : String(error)}`);
       }
+    }
     }
     const byOrder = new Map(orders.map(order => [selectionKey(order.connectionId, order.id), order]));
     // FIX: an explicit repeat is current physical work; an older shipment must not hide it.
@@ -24891,6 +24935,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   private async syncFbsPalletSortReservations(
     clientId: string,
     orders: FbsOrderSummary[],
+    readOnly = false,
   ) {
     const result = new Map<
       string,
@@ -24898,7 +24943,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     >();
     if (
       !this.prisma.fbsTsdAssembly?.findMany ||
-      !this.prisma.stockBalance?.findMany
+      (!readOnly && !this.prisma.stockBalance?.findMany)
     ) {
       return result;
     }
@@ -24932,6 +24977,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const relevantOrderIds = uniqueStrings(
       relevantOrders.map((order) => order.id),
     );
+    // FIX: display mode reads existing routes below; it never allocates/releases stock.
+    if (!readOnly) {
     const existingTaskBatches = [];
     // FIX: Thousands of composite OR branches made PostgreSQL spend tens of
     // seconds planning each lookup. Two IN lists are fast; exact connection +
@@ -25593,6 +25640,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
     }
 
+    }
     const taskBatches = [];
     for (const orderIdBatch of chunks(relevantOrderIds, 20_000)) {
       taskBatches.push(await this.prisma.fbsTsdAssembly.findMany({
@@ -25682,6 +25730,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     clientId: string,
     requestId?: string,
     filterSkuIds?: string[],
+    displayOnly = false,
   ): Promise<FbsOrdersResponse> {
     const requestedSkuIds = uniqueStrings(filterSkuIds ?? []);
     const [client, connections, deliveryPlan, links] = await Promise.all([
@@ -25693,7 +25742,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         where: {
           clientId,
           // FIX: A selected WMS request may contain either WB or Ozon orders.
-          marketplace: { in: [MarketplaceType.WILDBERRIES, MarketplaceType.OZON] },
+          marketplace: { in: [MarketplaceType.WILDBERRIES, MarketplaceType.OZON, ...(displayOnly ? [MarketplaceType.YANDEX_MARKET] : [])] },
           isActive: true,
         },
         select: { id: true, marketplace: true, accountName: true },
@@ -25752,6 +25801,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               fbsEmergencyAssemblyAt: true,
               fbsEmergencyAssemblyByUserId: true,
               fbsEmergencyAssemblyByName: true,
+              warehouseId: true, // FIX: saved display rows retain their branch scope.
             },
           },
         },
@@ -25940,18 +25990,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   private async loadFbsOrders(
     clientId: string,
     previousOrderStates?: ReadonlyMap<string, string>,
-    options: { historyMode?: FbsOrderHistoryMode; billingMode?: 'sync' | 'skip' } = {},
+    options: { historyMode?: FbsOrderHistoryMode; billingMode?: 'sync' | 'skip'; readOnly?: boolean } = {},
   ): Promise<FbsOrdersResponse> {
     const historyMode = options.historyMode ?? 'full';
     const billingMode = options.billingMode ?? 'sync';
     // FIX: an operational load cannot share the promise of a pending billing transaction.
-    const loadKey = `${clientId}:${previousOrderStates ? 'incremental' : 'full'}:${historyMode}:${billingMode}`;
+    const loadKey = `${clientId}:${previousOrderStates ? 'incremental' : 'full'}:${historyMode}:${billingMode}${options.readOnly ? ':display' : ''}`;
     const current = this.fbsOrdersLoads.get(loadKey);
     if (current) {
       return current;
     }
 
-    const promise = this.loadFbsOrdersUncached(clientId, previousOrderStates, { historyMode, billingMode });
+    const promise = this.loadFbsOrdersUncached(clientId, previousOrderStates, { historyMode, billingMode, ...(options.readOnly ? { readOnly: true } : {}) });
     this.fbsOrdersLoads.set(loadKey, promise);
     try {
       return await promise;
@@ -26014,7 +26064,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   private async loadFbsOrdersUncached(
     clientId: string,
     previousOrderStates?: ReadonlyMap<string, string>,
-    options: { historyMode?: FbsOrderHistoryMode; billingMode?: 'sync' | 'skip' } = {},
+    options: { historyMode?: FbsOrderHistoryMode; billingMode?: 'sync' | 'skip'; readOnly?: boolean } = {},
   ): Promise<FbsOrdersResponse> {
     const [client, connections, deliveryPlan] = await Promise.all([
       this.prisma.client.findUnique({
@@ -26234,6 +26284,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       : [];
     await Promise.all(
       supplyPlans.map(async (plan) => {
+        if (options.readOnly) return; // FIX: screen refresh cannot mutate supply plans.
         const warehouseOrder = ordersWithoutBilling.find(
           (order) =>
             order.marketplace === plan.marketplace &&
@@ -26290,9 +26341,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     );
     // FIX: local shipment facts survive later cancellation/return/supply changes in WB.
     if (wbOrderStockLifecycleEnabled()) {
-      ordersWithStockSources = await this.applyLocalWbShipments(clientId, ordersWithStockSources);
+      ordersWithStockSources = await this.applyLocalWbShipments(clientId, ordersWithStockSources, options.readOnly);
     }
-    if (!previousOrderStates) {
+    if (!previousOrderStates && !options.readOnly) {
       await this.syncFbsRequestsFromMarketplace(clientId, ordersWithStockSources);
     }
     const requestLinks = await this.loadActiveFbsOrderRequestLinks(
@@ -26314,6 +26365,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       reservationByOrder = await this.syncFbsPalletSortReservations(
         clientId,
         ordersWithRequests,
+        ...(options.readOnly ? [true] as const : []),
       );
     } catch (caught) {
       const message =
@@ -26328,7 +26380,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         reservationByOrder.get(selectionKey(order.connectionId, order.id)) ??
         null,
     }));
-    const billingByOrder = options.billingMode === 'skip' ? new Map() : await this.ensureFbsProcessingCharges(
+    // FIX: preserve known prices for display; unavailable billing stays unknown, never recalculated here.
+    const billingByOrder = options.readOnly
+      ? new Map((this.fbsOrdersCache.get(clientId)?.value.orders ?? []).map(order => [fbsOrderKey(order), order.billing]))
+      : options.billingMode === 'skip' ? new Map() : await this.ensureFbsProcessingCharges(
       clientId,
       ordersWithReservations.filter((order) => order.category === 'shipped'),
     );
