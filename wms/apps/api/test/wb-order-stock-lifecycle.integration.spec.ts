@@ -67,6 +67,15 @@ describe.skipIf(!url).sequential('WB stock lifecycle SQL integration', () => {
     expect((await wbReservationQuantities(db, f.clientId, [f.skuId], f.warehouseId)).get(f.skuId)).toBe(1);
     expect((await wbReservationQuantities(db, f.clientId, [f.skuId], f.warehouseId, f.requestId)).get(f.skuId)).toBe(0);
   });
+  // TEST: old unstarted tasks must not keep reserving stock after WB shipment or cancellation.
+  it('ignores terminal WB demand while an explicit emergency repeat still reserves', async () => {
+    const f = await fixture(false);
+    await db.fbsOrderRequestLink.create({ data: { clientId: f.clientId, marketplace: 'WILDBERRIES',
+      connectionId: f.task.connectionId, orderId: f.task.orderId, requestId: f.requestId, lastCategory: 'shipped' } });
+    expect((await wbReservationQuantities(db, f.clientId, [f.skuId], f.warehouseId)).get(f.skuId)).toBe(0);
+    await db.clientRequest.update({ where: { id: f.requestId }, data: { fbsEmergencyAssemblyAt: new Date() } });
+    expect((await wbReservationQuantities(db, f.clientId, [f.skuId], f.warehouseId)).get(f.skuId)).toBe(1);
+  });
   // TEST: execute the release migration itself, including warehouse backfill, in an isolated schema.
   it('applies the additive migration and backfills request/box reservation warehouses', async () => {
     const schema = 'lifecycle_' + randomUUID().replaceAll('-', '');
@@ -153,7 +162,7 @@ describe.skipIf(!url).sequential('WB stock lifecycle SQL integration', () => {
     expect(service.ensureFbsProcessingCharges).toHaveBeenCalledWith(f.clientId, []);
   });
   // TEST: remaining request work must not resurrect already shipped packing or consume AVAILABLE twice.
-  it('closes a partially printed request with full package quantities and only the remaining stock write-off', async () => {
+  it.each(['lifecycle', 'legacy-WB'])('closes a partially printed %s request without double shipment credits', async (mode) => {
     const f = await fixture();
     const secondId = randomUUID();
     await db.clientRequestItem.update({ where: { id: f.task.requestItemId }, data: { quantity: 2 } });
@@ -167,6 +176,12 @@ describe.skipIf(!url).sequential('WB stock lifecycle SQL integration', () => {
     } });
     await db.clientRequestBoxSelection.create({ data: { requestItemId: f.task.requestItemId, skuId: f.skuId, boxId: f.boxId, quantity: 2 } });
     await db.$transaction(tx => finalizeWbOrderShipment(tx, f.taskId, 'PRINT_CONFIRMED', {}));
+    // TEST: the old WB shipment and its migrated fact represent one physical unit.
+    if (mode === 'legacy-WB') {
+      await db.stockMovement.updateMany({ where: { clientId: f.clientId, type: 'SHIP' }, data: { idempotencyKey: `fbs-wb-shipment:${f.taskId}` } });
+      await db.fbsTsdAssembly.update({ where: { id: f.taskId }, data: { status: 'WB_ACCOUNTED', barcode: 'legacy-test' } });
+      await db.shippedKizHistory.updateMany({ where: { assemblyId: f.taskId }, data: { barcode: 'legacy-test' } });
+    }
     const user = await db.user.create({ data: { email: randomUUID() + '@test.invalid', name: 'test', passwordHash: 'test' } });
     const service: any = Object.create(StockOperationsService.prototype);
     service.prisma = db;
@@ -202,6 +217,10 @@ describe.skipIf(!url).sequential('WB stock lifecycle SQL integration', () => {
     const firstCharge = await db.billingCharge.findFirstOrThrow({ where: { clientId: f.clientId } });
     const repeatId = randomUUID();
     await db.fbsTsdAssembly.update({ where: { id: f.taskId }, data: { id: repeatId, kiz: randomUUID() } });
+    // TEST: a new physical attempt stays active despite the immutable first shipment.
+    const activeRepeat = { ...snapshot, category: 'active', supplierStatus: 'confirm' };
+    const refreshed = await service.applyLocalWbShipments(f.clientId, [activeRepeat]);
+    expect(refreshed.find((order: any) => order.id === f.task.orderId)?.category).toBe('active');
     await db.stockBalance.updateMany({ where: { clientId: f.clientId }, data: { quantity: 1 } });
     await db.stockMovement.create({ data: { clientId: f.clientId, warehouseId: f.warehouseId, skuId: f.skuId,
       status: 'PACKING', type: 'PICK', quantity: 1, sourceDocument: f.requestId, idempotencyKey: `fbs-sticker-pick:${repeatId}:in` } });

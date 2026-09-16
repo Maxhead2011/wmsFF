@@ -25,7 +25,7 @@ export async function wbReservationQuantities(db: Prisma.TransactionClient, clie
   const skuByBarcode = new Map(skus.flatMap(sku => sku.barcodes.map(barcode => [barcode.value, sku.id] as const)));
   const tasks = await db.fbsTsdAssembly.findMany({ where: { clientId, marketplace: 'WILDBERRIES',
     OR: [{ skuId: { in: skuIds } }, { sourceSkuId: { in: skuIds } }],
-    ...(warehouseId ? { stockWarehouseId: warehouseId } : {}),
+    ...(warehouseId ? { stockWarehouseId: warehouseId } : { stockWarehouseId: { not: null } }),
   } });
   const requests = await db.clientRequest.findMany({ where: { clientId, type: 'OUTBOUND',
     status: { in: ['SUBMITTED', 'IN_REVIEW', 'APPROVED', 'IN_WORK', 'PACKED'] },
@@ -35,9 +35,9 @@ export async function wbReservationQuantities(db: Prisma.TransactionClient, clie
   }, select: { id: true, items: { select: { skuId: true, barcode: true, quantity: true } } } });
   const links = tasks.length ? await db.fbsOrderRequestLink.findMany({ where: { clientId, marketplace: 'WILDBERRIES',
     orderId: { in: [...new Set(tasks.map(task => task.orderId))] },
-    request: { status: { notIn: ['CANCELLED', 'REJECTED'] } },
-  }, select: { connectionId: true, orderId: true, requestId: true } }) : [];
-  const requestByOrder = new Map(links.map(link => [`${link.connectionId}:${link.orderId}`, link.requestId]));
+    }, select: { connectionId: true, orderId: true, requestId: true, lastCategory: true, request: { select: { status: true, fbsEmergencyAssemblyAt: true } } } }) : [];
+  const terminalOrders = new Set(links.filter(link => ['shipped', 'archive', 'cancelled'].includes(link.lastCategory ?? '') && !link.request.fbsEmergencyAssemblyAt).map(link => `${link.connectionId}:${link.orderId}`));
+  const requestByOrder = new Map(links.filter(link => !['CANCELLED', 'REJECTED'].includes(link.request.status)).map(link => [`${link.connectionId}:${link.orderId}`, link.requestId]));
   const picked: Array<{ idempotencyKey: string | null; quantity: number }> = [];
   // FIX: a supply transfer can change requestId; physical evidence belongs to the exact task.
   for (let offset = 0; offset < tasks.length; offset += 100) {
@@ -68,7 +68,7 @@ export async function wbReservationQuantities(db: Prisma.TransactionClient, clie
     if (requestId === excludeRequestId) continue;
     const skuId = task.sourceSkuId && !task.relabelConfirmedAt ? task.sourceSkuId : task.skuId;
     const group = taskGroups.get(skuId) ?? [];
-    group.push({ ...task, requestId, pickedQuantity: Math.max(0, pickedByTask.get(task.id) ?? 0), shipped: shipped.has(task.id) });
+    group.push({ ...task, requestId, pickedQuantity: Math.max(0, pickedByTask.get(task.id) ?? 0), shipped: shipped.has(task.id) || terminalOrders.has(`${task.connectionId}:${task.orderId}`) });
     taskGroups.set(skuId, group);
     if (skuId !== task.skuId) {
       const key = `${requestId}:${task.skuId}`;

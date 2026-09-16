@@ -2010,7 +2010,7 @@ export class StockOperationsService {
               sourceDocument: request.id,
               type: MovementType.SHIP,
               quantity: { lt: 0 },
-              ...(wbOrderStockLifecycleEnabled() ? { NOT: { idempotencyKey: { startsWith: "wb-order-shipment:" } } } : {}),
+              ...(wbOrderStockLifecycleEnabled() ? { OR: [{ idempotencyKey: null }, { NOT: [{ idempotencyKey: { startsWith: "wb-order-shipment:" } }, { idempotencyKey: { startsWith: "fbs-wb-shipment:" } }] }] } : {}),
             },
           ],
         },
@@ -2155,7 +2155,7 @@ export class StockOperationsService {
               sourceDocument: dto.requestId,
               type: MovementType.SHIP,
               quantity: { lt: 0 },
-              ...(wbOrderStockLifecycleEnabled() ? { NOT: { idempotencyKey: { startsWith: "wb-order-shipment:" } } } : {}),
+              ...(wbOrderStockLifecycleEnabled() ? { OR: [{ idempotencyKey: null }, { NOT: [{ idempotencyKey: { startsWith: "wb-order-shipment:" } }, { idempotencyKey: { startsWith: "fbs-wb-shipment:" } }] }] } : {}),
             },
           ],
         },
@@ -3719,7 +3719,7 @@ export class StockOperationsService {
             body: 'Все заказы заявки уже отгружены из ВМС.', createdAt: new Date() });
           return { ...request, status: ClientRequestStatus.DONE };
         }
-        return { ...request, items: remaining };
+        return { ...request, items: remaining, lifecycleShipmentAssemblyIds: facts.map(fact => fact.assemblyId) };
       }
     }
     return request;

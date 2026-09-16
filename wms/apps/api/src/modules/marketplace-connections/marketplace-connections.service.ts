@@ -17329,7 +17329,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
     const facts = await this.prisma.wbOrderShipment.findMany({ where: { clientId }, orderBy: [{ shippedAt: 'asc' }, { id: 'asc' }] });
     const byOrder = new Map(orders.map(order => [selectionKey(order.connectionId, order.id), order]));
+    // FIX: an explicit repeat is current physical work; an older shipment must not hide it.
+    const currentTasks = await this.prisma.fbsTsdAssembly.findMany({ where: { clientId, marketplace: MarketplaceType.WILDBERRIES },
+      select: { id: true, connectionId: true, orderId: true } });
+    const currentByOrder = new Map(currentTasks.map(task => [selectionKey(task.connectionId, task.orderId), task.id]));
+    const shippedAssemblies = new Set(facts.map(fact => fact.assemblyId));
     for (const fact of facts) {
+      const currentId = currentByOrder.get(selectionKey(fact.connectionId, fact.orderId));
+      if (currentId && currentId !== fact.assemblyId && !shippedAssemblies.has(currentId)) continue;
       const frozen = fact.orderSnapshot as unknown as FbsOrderSummary;
       byOrder.set(selectionKey(fact.connectionId, fact.orderId), { ...frozen, category: 'shipped', supplierStatus: 'complete',
         statusLabel: 'Отгружен из ВМС', deliveryDate: fact.shippedAt.toISOString() });
@@ -25104,7 +25111,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const keepExistingReservation =
         existing?.status === FBS_TSD_RESERVED_STATUS &&
         Boolean(existing.reservedAt);
-      if (!routedWarehouseId && !keepExistingReservation) {
+      // FIX: legacy reserved orders still need a branch when the new lifecycle is enabled.
+      if (!routedWarehouseId && (!keepExistingReservation || wbOrderStockLifecycleEnabled())) {
         try {
           const routeKey = `${order.connectionId}:${order.warehouseId ?? ''}:${order.officeId ?? ''}`;
           let routeResolution = routeResolutionByKey.get(routeKey);
