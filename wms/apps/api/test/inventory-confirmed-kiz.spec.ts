@@ -65,6 +65,32 @@ function mutationFixture() {
   f.db.productMark.create = vi.fn(async ({ data }: any) => { const mark = { id: 'new-' + f.marks.length, ...data }; f.marks.push(mark); return mark; });
   return { ...f, user, confirm: () => confirmInventoryKizComposition(f.db, f.audit.id, user) };
 }
+it('retains the same physical mark when the legacy stored code has no GS separators', async () => {
+  // TEST: box 181 must not block the legacy identity and create a second record.
+  vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT', 'true');
+  vi.stubEnv('WMS_KIZ_IDENTITY_TRANSFER_ENABLED', 'true');
+  const f = mutationFixture(); f.marks[0].value = kiz.replaceAll('\u001d', '');
+  await f.confirm();
+  expect(f.db.productMark.create).not.toHaveBeenCalled();
+  expect(f.marks[0]).toMatchObject({ boxId: 'box', status: 'AVAILABLE' });
+});
+it('debits box 177 exactly once when its scanned KIZ is confirmed in box 181', async () => {
+  // TEST: destination quantity was already counted; moving only the mark left phantom source stock.
+  vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT', 'true'); vi.stubEnv('WMS_KIZ_IDENTITY_TRANSFER_ENABLED', 'true');
+  const f = mutationFixture(); const source = { id: 'source-stock', boxId: 'source', clientId: 'client', warehouseId: 'warehouse', skuId: 'sku', status: 'AVAILABLE', quantity: 1, updatedAt: startedAt };
+  Object.assign(f.marks[0], { boxId: 'source', box: { warehouseId: 'warehouse' } });
+  f.db.box.findUnique = vi.fn(async ({ where }: any) => ({ id: where.id, code: where.id, clientId: 'client', warehouseId: 'warehouse', status: 'active' }));
+  f.db.stockBalance.findMany = vi.fn(async ({ where }: any) => where.boxId === 'source' ? [source] : f.balances);
+  f.db.stockBalance.updateMany = vi.fn(async ({ data }: any) => { source.quantity -= data.quantity.decrement; return { count: 1 }; });
+  f.db.stockMovement.create = vi.fn(async ({ data }: any) => ({ id: 'transfer-out', ...data }));
+  f.db.inventoryAuditBox.findFirst = vi.fn(async ({ where }: any) => where.boxId === 'source' ? null : { id: f.audit.id });
+  await f.confirm(); await f.confirm();
+  expect(source.quantity).toBe(0);
+  expect(f.balances[0].quantity).toBe(1);
+  expect(f.marks[0].boxId).toBe('box');
+  expect(f.db.stockMovement.create).toHaveBeenCalledTimes(1);
+  expect(f.db.stockMovement.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ boxId: 'source', quantity: -1, type: 'MOVE' }) }));
+});
 it('rebuilds KIZ ownership from the confirmed physical scans without any stock write, then opens the gate', async () => {
   // TEST: old available/packing/shipping aliases are detached, histories and quantities remain intact.
   vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT', 'true'); const f = mutationFixture();

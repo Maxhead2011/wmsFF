@@ -11,5 +11,7 @@ public class TsdInventoryBox {
     public String clientId;
     public String clientName;
     public String status;
+    // FIX: source inventory impact returned by the server before administrator approval.
+    public List<String> kizTransferWarnings = new ArrayList<>();
     public List<TsdInventoryLine> lines = new ArrayList<>();
 }

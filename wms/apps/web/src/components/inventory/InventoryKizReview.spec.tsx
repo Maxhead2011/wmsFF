@@ -33,3 +33,11 @@ it('shows the pending check without an approval button to a manager without admi
   expect(render(true, false)).toContain('FFL_G_LKB0707_045');
   expect(render(true, false)).not.toContain('Подтвердить состав по сканам');
 });
+it('shows the source debit warning before the KIZ approval button', () => {
+  // TEST: administrator sees the stock effect in both boxes before confirmation.
+  const dashboard = fixture();
+  Object.assign(dashboard.historySessions[0].boxes[0], { kizTransferWarnings: ['КИЗ числится в 177, отсканирован в 181. Будет списана 1 шт. из 177.'] });
+  const html = renderToStaticMarkup(<Reconciliation dashboard={dashboard as never} session={{accessToken:'test'} as never} onChanged={async()=>{}} />);
+  expect(html).toContain('КИЗ числится в 177');
+  expect(html.indexOf('КИЗ числится в 177')).toBeLessThan(html.indexOf('Подтвердить состав по сканам'));
+});
