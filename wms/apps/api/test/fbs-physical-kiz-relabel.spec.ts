@@ -54,6 +54,38 @@ function fixture() {
   return {db,state,user,lease,propose,apply};
 }
 
+it('requires the old source-size KIZ and converts stock only with the new KIZ', async () => {
+  // TEST: scanning the new barcode alone must not orphan the original size's KIZ.
+  const f=fixture(); Object.assign(f.state.task,{sourceSkuId:'source-size',sourceBarcode:'111',relabelRequired:true,relabelConfirmedAt:null});
+  f.db.box.findUniqueOrThrow=f.db.box.findUnique;
+  f.state.marks[0].skuId='source-size';
+  f.db.stockBalance.findFirst=vi.fn(async()=>({id:'balance',clientId:'c',warehouseId:'w',skuId:'source-size',boxId:'box',palletId:null,quantity:1}));
+  f.db.stockBalance.updateMany=vi.fn(async()=>({count:1}));f.db.stockBalance.upsert=vi.fn();f.db.stockMovement.createMany=vi.fn();
+  const id=await f.propose();
+  expect(f.db.stockBalance.updateMany).not.toHaveBeenCalled();
+  await f.apply(id); await f.apply(id);
+  expect(f.db.stockBalance.updateMany).toHaveBeenCalledTimes(1);
+  expect(f.db.stockMovement.createMany).toHaveBeenCalledWith(expect.objectContaining({data:expect.arrayContaining([
+    expect.objectContaining({skuId:'source-size',quantity:-1}),expect.objectContaining({skuId:'sku',quantity:1})])}));
+  expect(f.state.marks[0]).toMatchObject({status:'BLOCKED',boxId:null,skuId:'source-size'});
+  expect(f.state.marks[1]).toMatchObject({status:'AVAILABLE',skuId:'sku',value:NEW});
+  expect(f.state.task.relabelConfirmedAt).toBeInstanceOf(Date);
+});
+
+it('stores a new barcode without changing stock before the source/new KIZ pair', async()=>{
+  // TEST: exercise the actual barcode entrypoint, preserving the sold-VM path when disabled.
+  const f=fixture();Object.assign(f.state.task,{sourceSkuId:'source-size',sourceBarcode:'111',barcode:null,relabelRequired:true,relabelConfirmedAt:null});
+  const service:any=Object.create(MarketplaceConnectionsService.prototype);
+  service.loadOwnedFbsTsdAssembly=async()=>copy(f.state.task);service.requireFbsOrderStillCollectable=async()=>{};
+  service.assertFbsTsdLeaseVersion=async(t:any)=>t;service.updateFbsTsdUnderLease=vi.fn(async(t:any,u:any,data:any)=>({...t,...data}));
+  service.completeFbsTsdRelabeling=vi.fn(async()=>f.state.task);service.formatFbsTsdAssembly=async(t:any)=>t;
+  const result=await service.scanFbsTsdBarcode('t',{barcode:'2042312098151'},f.user);
+  expect(result.barcode).toBe('2042312098151');expect(result.relabelConfirmedAt).toBeNull();
+  expect(service.completeFbsTsdRelabeling).not.toHaveBeenCalled();
+  vi.stubEnv('WMS_FBS_KIZ_RELABEL_ENABLED','false');await service.scanFbsTsdBarcode('t',{barcode:'2042312098151'},f.user);
+  expect(service.completeFbsTsdRelabeling).toHaveBeenCalledTimes(1);
+});
+
 it.each(['TSD', 'OPERATOR', 'ADMIN', 'OWNER'])('registers the exact old/new pair for task owner role %s without changing quantity or history', async role => {
   // TEST: Sonya's explicit repair is now available to every authorized task owner.
   const f=fixture(); f.user.roleCodes=[role]; const history=copy(f.state.history), oldTask=copy(f.state.oldTask);

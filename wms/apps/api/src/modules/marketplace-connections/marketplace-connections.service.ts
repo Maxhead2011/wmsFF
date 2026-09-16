@@ -4,7 +4,7 @@ import { physicalKizLookup, physicalKizHistoryFilter } from '../../common/kiz-ph
 import { stockTransferBlockedReason, ordersWithoutTransferStock } from './fbs-stock-transfer';
 import { fbsStockAuditError, fbsKizAuditEnabled, validateFbsStockAudit } from './fbs-stock-audit';
 import { createHash } from 'node:crypto';
-import { physicalKizRelabelEnabled, readPhysicalKizRelabel, proposePhysicalKizRelabel, applyPhysicalKizRelabel, cancelPhysicalKizRelabel } from './fbs-physical-kiz-relabel';
+import { physicalKizRelabelEnabled, pendingSizeKizRelabel, readPhysicalKizRelabel, proposePhysicalKizRelabel, applyPhysicalKizRelabel, cancelPhysicalKizRelabel } from './fbs-physical-kiz-relabel';
 import { timingSnapshot, type SourceOrderTiming } from '../operations-statistics/order-timing';
 import { isOwnedUnpaidDraft, runBillingMutation, withBillingDb } from '../billing/billing-mutation';
 import { lukinPrimaryLines } from '../billing/lukin-primary-policy';
@@ -10100,6 +10100,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           : `Неверный товар. Нужен «${task.productName}», арт. ${task.article ?? 'не указан'}. Верните товар и отсканируйте правильный ШК.`,
       );
     }
+    // FIX: marked size replacement waits for old/new KIZ scans before any stock conversion.
+    if (pendingSizeKizRelabel(task)) {
+      const updated = await this.updateFbsTsdUnderLease(task, user, { barcode, errorMessage: null });
+      return this.formatFbsTsdAssembly(updated, user, 'Новый ШК принят. Отсканируйте СТАРЫЙ КИЗ снимаемой маркировки, затем новый КИЗ.');
+    }
     const updated = task.relabelRequired
       ? await this.completeFbsTsdRelabeling(task, barcode, user)
       : await this.updateFbsTsdUnderLease(task, user, { barcode, errorMessage: null });
@@ -10262,7 +10267,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     await this.inventoryLock?.assertStockMovementsAllowed();
     task = await this.withFbsTsdLeaseTransaction(task, user, tx => proposePhysicalKizRelabel(tx, task, kiz, user,
       fresh => this.requireCurrentFbsTsdLease(fresh, user)));
-    return this.formatFbsTsdAssembly(task, user, 'Старый КИЗ связан с прошлым заказом. Переклейте эту единицу на новый КИЗ.');
+    return this.formatFbsTsdAssembly(task, user, pendingSizeKizRelabel(task)
+      ? 'Старый КИЗ исходного размера подтверждён. Переклейте товар и отсканируйте НОВЫЙ КИЗ.'
+      : 'Старый КИЗ связан с прошлым заказом. Переклейте эту единицу на новый КИЗ.');
   }
 
   async scanFbsTsdKiz(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
@@ -10298,6 +10305,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const kizFormatError = fbsTsdKizFormatError(kiz, allowedBoxPrefixes);
     if (kizFormatError) {
       throw new BadRequestException(kizFormatError);
+    }
+    // FIX: never submit the source-size KIZ to WB as the new ordered size.
+    if (pendingSizeKizRelabel(task) && payload.confirmKizRelabel !== true) {
+      return this.proposeFbsPhysicalKizRelabel(task, kiz, user);
     }
     if (payload.confirmKizRelabel === true) {
       if (!physicalKizRelabelEnabled()) throw new ForbiddenException('Переклейка КИЗ в этом окружении выключена.');
