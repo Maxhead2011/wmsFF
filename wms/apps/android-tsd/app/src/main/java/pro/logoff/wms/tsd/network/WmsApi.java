@@ -18,6 +18,13 @@ import retrofit2.http.Url;
 import okhttp3.MultipartBody;
 
 public interface WmsApi {
+    // FIX: isolated physical KIZ search; no stock or assembly operations.
+    @GET("api/v1/tsd/kiz-search")
+    Call<List<TsdKizSearch>> listKizSearch(@Header("Authorization") String authorization);
+    @GET("api/v1/tsd/kiz-search/{id}")
+    Call<TsdKizSearch> getKizSearch(@Header("Authorization") String authorization, @Path("id") String id);
+    @POST("api/v1/tsd/kiz-search/{id}/scan")
+    Call<TsdKizSearch.ScanResult> scanKizSearch(@Header("Authorization") String authorization, @Path("id") String id, @Body Map<String, String> request);
     // ADDED: independent administrator sorting; ordinary transfer APIs are unchanged.
     @GET("api/v1/pallet-sorting")
     Call<List<Map<String, Object>>> listPalletSortings(@Header("Authorization") String authorization);

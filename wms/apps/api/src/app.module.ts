@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { KizSearchModule } from './modules/kiz-search/kiz-search.module';
 import { OperationsStatisticsModule } from './modules/operations-statistics/operations-statistics.module';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
@@ -42,6 +43,7 @@ import { WmsAiModule } from './modules/wms-ai/wms-ai.module';
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     CommonModule,
+    KizSearchModule,
     AdministrationModule,
     AnalyticsModule,
     AuthModule,

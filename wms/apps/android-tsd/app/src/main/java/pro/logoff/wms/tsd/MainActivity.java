@@ -179,6 +179,7 @@ public class MainActivity extends Activity {
     private EditText transferScanInput;
     private EditText skuCollectionScanInput;
     private PalletSortingScreen palletSortingScreen; // ADDED: independent administrator workflow.
+    private KizSearchScreen kizSearchScreen; // FIX: independent physical search.
     private TsdAssemblyPlan assemblyPlan;
     private TsdBoxlessPackingResponse boxlessPacking;
     private TsdRelabelTask activeRelabelTask;
@@ -387,6 +388,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (kizSearchScreen != null) kizSearchScreen.close();
         if (monitorMessageOverlay != null) monitorMessageOverlay.close();
         if (palletSortingScreen != null) palletSortingScreen.close();
         mainHandler.removeCallbacks(monitorHeartbeatTask);
@@ -405,6 +407,7 @@ public class MainActivity extends Activity {
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN && event.getKeyCode() == KeyEvent.KEYCODE_ENTER) {
+            if (screen == Screen.KIZ_SEARCH && kizSearchScreen != null) { kizSearchScreen.submit(); return true; }
             if (screen == Screen.PALLET_SORTING && palletSortingScreen != null) {
                 palletSortingScreen.submit();
                 return true;
@@ -526,6 +529,9 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (screen == Screen.KIZ_SEARCH && kizSearchScreen != null) {
+            kizSearchScreen.close(); kizSearchScreen = null; renderMainScreen(); return;
+        }
         if (screen == Screen.PALLET_SORTING && palletSortingScreen != null) {
             if (!palletSortingScreen.canLeave()) {
                 showScanningErrorDialog("Сначала завершите текущую единицу или подтвердите результат запроса.");
@@ -567,6 +573,15 @@ public class MainActivity extends Activity {
         LinearLayout root = baseRoot();
         root.addView(header());
         root.addView(mainStatusLine());
+        if (KizSearchPolicy.canOpen(BuildConfig.FLAVOR, session)) {
+            root.addView(primaryMenuButton("Поиск КИЗ", view -> {
+                screen = Screen.KIZ_SEARCH;
+                if (kizSearchScreen != null) kizSearchScreen.close();
+                kizSearchScreen = new KizSearchScreen(this, session, WmsApiFactory.create(DEFAULT_BASE_URL), () -> {
+                    kizSearchScreen = null; renderMainScreen();
+                });
+            }));
+        }
         // FIX: use the tested sorting access policy for the current session and installation.
         if (PalletSortingAccess.canOpen(BuildConfig.FLAVOR, session)) {
             root.addView(primaryMenuButton("Сортировка и перемещение", view -> {
@@ -8855,6 +8870,7 @@ public class MainActivity extends Activity {
         }
         if (screen == Screen.SKU_COLLECTION) return skuCollectionScanInput;
         if (screen == Screen.PALLET_SORTING && palletSortingScreen != null) return palletSortingScreen.scannerField();
+        if (screen == Screen.KIZ_SEARCH && kizSearchScreen != null) return kizSearchScreen.scannerField();
         if (
             screen == Screen.BOX_SEARCH ||
             screen == Screen.RELABEL_BOX ||
@@ -8967,6 +8983,7 @@ public class MainActivity extends Activity {
 
     private void submitPhoneCameraScan() {
         if (screen == Screen.PALLET_SORTING && palletSortingScreen != null) { palletSortingScreen.submit(); return; }
+        if (screen == Screen.KIZ_SEARCH && kizSearchScreen != null) { kizSearchScreen.submit(); return; }
         if (screen == Screen.RECEIPT) {
             submitReceiptInput();
         } else if (screen == Screen.BOX_SEARCH) {
@@ -9847,6 +9864,10 @@ public class MainActivity extends Activity {
     }
 
     private void refreshCurrentScreen() {
+        if (screen == Screen.KIZ_SEARCH && kizSearchScreen != null) {
+            if (kizSearchScreen.belongsTo(safeSession())) return;
+            kizSearchScreen.close(); kizSearchScreen = null;
+        }
         if (screen == Screen.PALLET_SORTING && palletSortingScreen != null && safeSession() != null) {
             // FIX: the sorting screen refreshes after its own commands; heartbeat must not erase a scan.
             return;
@@ -10301,6 +10322,7 @@ public class MainActivity extends Activity {
         INVENTORY_COUNT,
         SKU_COLLECTION,
         PALLET_SORTING,
+        KIZ_SEARCH,
         INFO
     }
 
