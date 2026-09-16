@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { wbOrderStockLifecycleEnabled, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
 import { ClientStockBalanceMode, Prisma, StockStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
@@ -183,7 +184,7 @@ export class StockBalancesService {
       sku: skuWhere,
     };
 
-    return this.prisma.stockBalance.findMany({
+    const rows = await this.prisma.stockBalance.findMany({
       where,
       include: {
         sku: { include: { barcodes: true } },
@@ -194,6 +195,22 @@ export class StockBalancesService {
       orderBy: [{ updatedAt: 'desc' }],
       take: search ? 100 : undefined,
     });
+    // FIX: preserve physical box quantities; expose free stock separately for the cabinet/export.
+    if (!wbOrderStockLifecycleEnabled()) return rows;
+    const freeById = new Map<string, number>();
+    for (const clientId of [...new Set(rows.map(row => row.clientId))]) {
+      for (const warehouseId of [...new Set(rows.filter(row => row.clientId === clientId).map(row => row.warehouseId ?? row.box?.warehouseId).filter((id): id is string => Boolean(id)))]) {
+        const scoped = rows.filter(row => row.clientId === clientId && (row.warehouseId ?? row.box?.warehouseId) === warehouseId);
+        const reserved = await wbReservationQuantities(this.prisma, clientId, [...new Set(scoped.map(row => row.skuId))], warehouseId);
+        for (const row of scoped) {
+          const physical = row.status === StockStatus.AVAILABLE ? Math.max(0, row.quantity) : 0;
+          const deduction = Math.min(physical, reserved.get(row.skuId) ?? 0);
+          freeById.set(row.id, physical - deduction);
+          reserved.set(row.skuId, Math.max(0, (reserved.get(row.skuId) ?? 0) - deduction));
+        }
+      }
+    }
+    return rows.map(row => ({ ...row, freeQuantity: freeById.get(row.id) ?? 0 }));
   }
 
   balanceKey(input: BalanceKeyInput) {

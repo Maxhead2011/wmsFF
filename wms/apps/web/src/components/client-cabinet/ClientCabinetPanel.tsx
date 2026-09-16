@@ -227,7 +227,9 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
     const hideCancelledBilling = isClientUser(session.user);
 
     const stock = sortByDate(
-      state.data.stock.filter((balance) => !clientId || balance.clientId === clientId),
+      // FIX: cabinet uses the same free amount as Excel; storage screens keep physical quantities.
+      state.data.stock.filter((balance) => !clientId || balance.clientId === clientId)
+        .map(balance => balance.freeQuantity === undefined ? balance : { ...balance, quantity: balance.freeQuantity }),
       (balance) => balance.updatedAt,
     );
     const visibleStock = stock.filter((balance) => stockMatchesSearch(balance, stockSearch, isInternalUser(session.user)));
@@ -1253,7 +1255,7 @@ function buildClientSummary(client: ClientSummary, data: CabinetData): ClientCab
   return {
     client,
     skuCount: new Set(stock.map((balance) => balance.skuId)).size,
-    totalQuantity: stock.reduce((sum, balance) => sum + Number(balance.quantity), 0),
+    totalQuantity: stock.reduce((sum, balance) => sum + Number(balance.freeQuantity ?? balance.quantity), 0),
     activeRequests: data.requests.filter(
       (request) => request.clientId === client.id && !['DONE', 'CANCELLED', 'REJECTED'].includes(request.status),
     ).length,

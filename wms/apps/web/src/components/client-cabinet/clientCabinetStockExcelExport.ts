@@ -57,7 +57,7 @@ type AggregatedStockRow = {
   skuIds: Set<string>;
 };
 
-function aggregateStockRows(stock: StockBalance[], activeRequests: ClientRequestSummary[]) {
+export function aggregateStockRows(stock: StockBalance[], activeRequests: ClientRequestSummary[]) {
   const byBarcode = new Map<
     string,
     AggregatedStockRow & {
@@ -69,6 +69,7 @@ function aggregateStockRows(stock: StockBalance[], activeRequests: ClientRequest
   >();
 
   stock.forEach((balance) => {
+    if (balance.freeQuantity !== undefined && balance.freeQuantity <= 0) return;
     const barcode = primaryBarcode(balance) || `SKU:${balance.sku.id}`;
     const existing = byBarcode.get(barcode) ?? {
       internalSku: '',
@@ -93,7 +94,8 @@ function aggregateStockRows(stock: StockBalance[], activeRequests: ClientRequest
     existing.internalSkus.add(balance.sku.internalSku);
     existing.names.add(balance.sku.name);
     existing.statuses.add(stockStatusLabel(balance.status));
-    existing.quantity += Number(balance.quantity);
+    // FIX: server free stock excludes PACKING and includes incoming WB reservations.
+    existing.quantity += Number(balance.freeQuantity ?? balance.quantity);
     existing.updatedAt = latestDateString(existing.updatedAt, balance.updatedAt);
     existing.internalSku = [...existing.internalSkus].sort((left, right) => left.localeCompare(right, 'ru')).join(', ');
     existing.name = [...existing.names].sort((left, right) => left.localeCompare(right, 'ru')).join(', ');
@@ -102,7 +104,7 @@ function aggregateStockRows(stock: StockBalance[], activeRequests: ClientRequest
     byBarcode.set(barcode, existing);
   });
 
-  applyActiveRequestReservations(byBarcode, activeRequests);
+  if (!stock.every(balance => balance.freeQuantity !== undefined)) applyActiveRequestReservations(byBarcode, activeRequests);
 
   return [...byBarcode.values()]
     .filter((row) => row.quantity > 0)

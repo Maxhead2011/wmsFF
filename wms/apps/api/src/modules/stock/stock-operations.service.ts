@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { wbOrderStockLifecycleEnabled } from '../../common/stock/wb-order-stock-lifecycle';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import { assertSortingAdmin, sortingKizIdentity } from '../inventory/pallet-sorting-policy';
@@ -2009,6 +2010,7 @@ export class StockOperationsService {
               sourceDocument: request.id,
               type: MovementType.SHIP,
               quantity: { lt: 0 },
+              ...(wbOrderStockLifecycleEnabled() ? { OR: [{ idempotencyKey: null }, { NOT: [{ idempotencyKey: { startsWith: "wb-order-shipment:" } }, { idempotencyKey: { startsWith: "fbs-wb-shipment:" } }] }] } : {}),
             },
           ],
         },
@@ -2153,6 +2155,7 @@ export class StockOperationsService {
               sourceDocument: dto.requestId,
               type: MovementType.SHIP,
               quantity: { lt: 0 },
+              ...(wbOrderStockLifecycleEnabled() ? { OR: [{ idempotencyKey: null }, { NOT: [{ idempotencyKey: { startsWith: "wb-order-shipment:" } }, { idempotencyKey: { startsWith: "fbs-wb-shipment:" } }] }] } : {}),
             },
           ],
         },
@@ -2194,16 +2197,28 @@ export class StockOperationsService {
         };
       }
 
-      this.ensureManualDonePackageInput(
-        dto,
-        request.items.reduce((total, item) => total + item.quantity, 0),
-      );
+      // FIX: packaging still describes the full request; stock allocation contains only unshipped units.
+      const packageItems = wbOrderStockLifecycleEnabled()
+        ? await tx.clientRequestItem.findMany({ where: { requestId: request.id } }) : request.items;
+      this.ensureManualDonePackageInput(dto, packageItems.reduce((total, item) => total + item.quantity, 0));
       const savedSelections = await this.loadRequestBoxSelections(tx, request.id, operationWarehouseId);
-      const plan = await this.planFbsSafeManualShipment(tx, request, savedSelections, physicalSources, baseKey, operationWarehouseId);
+      const shippedSources = packageItems.flatMap(item => {
+        const remaining = request.items.find(row => row.id === item.id)?.quantity ?? 0;
+        const supplied = physicalSources.filter(row => row.requestItemId === item.id).reduce((sum, row) => sum + row.quantity, 0);
+        return supplied === item.quantity && item.quantity > remaining
+          ? [{ itemId: item.id, quantity: item.quantity - remaining, boxId: null }] : [];
+      });
+      const plan = await this.planFbsSafeManualShipment(tx, request, savedSelections,
+        subtractPickedQuantities(physicalSources, shippedSources), baseKey, operationWarehouseId);
+      const packagePlan = wbOrderStockLifecycleEnabled() ? { lines: await Promise.all(packageItems.map(async item => {
+        const sku = await this.resolveSku(tx, { clientId: request.clientId, skuId: item.skuId ?? undefined, barcode: item.barcode ?? undefined });
+        return { itemId: item.id, skuId: sku.id, skuWeightGrams: sku.weightGrams, barcode: item.barcode,
+          requestedQuantity: item.quantity, allocations: [] };
+      })) } : plan;
       await tx.clientRequestPackage.deleteMany({ where: { requestId: request.id } });
       const packages = await this.createRequestPackages(tx, {
         request,
-        plan,
+        plan: packagePlan,
         dto,
         user,
       });
@@ -2603,7 +2618,8 @@ export class StockOperationsService {
         }
         let remaining = proof.quantity;
         for (const balance of process) {
-          if (balance.skuId !== proof.skuId || balance.boxId !== proof.boxId || balance.palletId !== proof.palletId) continue;
+          const detachedPacking = wbOrderStockLifecycleEnabled() && balance.boxId === null && balance.palletId === null;
+          if (balance.skuId !== proof.skuId || (!detachedPacking && (balance.boxId !== proof.boxId || balance.palletId !== proof.palletId))) continue;
           const quantity = Math.min(remaining, Math.max(0, balance.quantity - (reserved.get(balance.id) ?? 0)));
           if (!quantity) continue;
           line.allocations.push({ balance, quantity });
@@ -2743,7 +2759,7 @@ export class StockOperationsService {
     return { lines };
   }
 
-  private loadRequestBoxSelections(
+  private async loadRequestBoxSelections(
     tx: Prisma.TransactionClient,
     requestId: string,
     warehouseId?: string,
@@ -2752,7 +2768,7 @@ export class StockOperationsService {
     if (!('clientRequestBoxSelection' in tx)) {
       return Promise.resolve([] as RequestBoxSelectionForAllocation[]);
     }
-    return tx.clientRequestBoxSelection.findMany({
+    const selections = await tx.clientRequestBoxSelection.findMany({
       where: {
         requestItem: { requestId },
         box: this.warehouseScopedBoxWhere(warehouseId),
@@ -2760,6 +2776,15 @@ export class StockOperationsService {
       include: { box: { select: allocationBoxSelect } },
       orderBy: [{ createdAt: 'asc' }],
     });
+    if (!wbOrderStockLifecycleEnabled() || !selections.length) return selections;
+    const facts = await tx.wbOrderShipment.findMany({ where: { requestId } });
+    const tasks = await tx.fbsTsdAssembly.findMany({ where: { id: { in: facts.map(fact => fact.assemblyId) } } });
+    return subtractPickedQuantities(selections, facts.flatMap(fact => {
+      const snapshot = fact.assemblySnapshot as { requestItemId?: string; boxId?: string | null };
+      const task = tasks.find(task => task.id === fact.assemblyId);
+      const itemId = snapshot.requestItemId ?? task?.requestItemId;
+      return itemId ? [{ itemId, boxId: snapshot.boxId ?? task?.boxId ?? null, quantity: fact.quantity }] : [];
+    }));
   }
 
   private async restoreCompletedFbsSelectionShortages(
@@ -3651,6 +3676,7 @@ export class StockOperationsService {
     operationName: string,
     allowDelivery = false,
   ) {
+    if (wbOrderStockLifecycleEnabled()) await tx.$queryRaw`SELECT id FROM "ClientRequest" WHERE id=${requestId} FOR UPDATE`;
     const request = await tx.clientRequest.findUnique({
       where: { id: requestId },
       include: {
@@ -3675,6 +3701,27 @@ export class StockOperationsService {
       );
     }
 
+    // FIX: shipment already recorded per WB order is excluded from subsequent whole-request operations.
+    if (wbOrderStockLifecycleEnabled() && request.status !== ClientRequestStatus.DONE) {
+      this.ensureRequestCanMove(request, operationName);
+      const facts = await tx.wbOrderShipment.findMany({ where: { requestId, clientId: request.clientId } });
+      const shippedBySku = new Map<string, number>();
+      facts.forEach(fact => shippedBySku.set(fact.skuId, (shippedBySku.get(fact.skuId) ?? 0) + fact.quantity));
+      if (facts.length) {
+        const remaining = request.items.map(item => {
+          const deducted = Math.min(item.quantity, shippedBySku.get(item.skuId ?? '') ?? 0);
+          shippedBySku.set(item.skuId ?? '', Math.max(0, (shippedBySku.get(item.skuId ?? '') ?? 0) - deducted));
+          return { ...item, quantity: item.quantity - deducted };
+        }).filter(item => item.quantity > 0);
+        if (!remaining.length && operationName === 'Отгрузка') {
+          await tx.clientRequest.update({ where: { id: requestId }, data: { status: ClientRequestStatus.DONE } });
+          await this.createRequestStatusEvent(tx, { request, statusTo: ClientRequestStatus.DONE, user,
+            body: 'Все заказы заявки уже отгружены из ВМС.', createdAt: new Date() });
+          return { ...request, status: ClientRequestStatus.DONE };
+        }
+        return { ...request, items: remaining, lifecycleShipmentAssemblyIds: facts.map(fact => fact.assemblyId) };
+      }
+    }
     return request;
   }
 
@@ -3948,6 +3995,8 @@ export class StockOperationsService {
     if (!('billingService' in tx) || !('clientBillingService' in tx) || !('billingCharge' in tx)) {
       return;
     }
+    // FIX: facts use FBS billing even if an old request lost its order link.
+    if (wbOrderStockLifecycleEnabled() && await tx.wbOrderShipment.count({ where: { requestId: input.request.id } })) return;
     if (
       'fbsOrderRequestLink' in tx &&
       typeof tx.fbsOrderRequestLink.count === 'function' &&

@@ -4079,6 +4079,8 @@ export type StockBalance = {
   palletId: string | null;
   status: string;
   quantity: number;
+  // FIX: supplied by the unified WB lifecycle; quantity remains the physical balance.
+  freeQuantity?: number;
   updatedAt: string;
   sku: {
     id: string;

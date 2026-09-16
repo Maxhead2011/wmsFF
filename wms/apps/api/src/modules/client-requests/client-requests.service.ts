@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { wbOrderStockLifecycleEnabled, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
 import { ClientNotificationEvent, ClientRequestEventType, ClientRequestStatus, ClientRequestType, MarketplaceType, MovementType, Prisma, StockStatus } from '@prisma/client';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -1901,6 +1902,10 @@ export class ClientRequestsService {
       return new Map<string, number>();
     }
 
+    // FIX: use the same physical stock rules as the client cabinet/export.
+    const stockClient = wbOrderStockLifecycleEnabled() ? await this.prisma.client.findUniqueOrThrow({
+      where: { id: clientId }, select: { storesWithoutBoxes: true, stockBalanceMode: true },
+    }) : null;
     const stockRows = await this.prisma.stockBalance.groupBy({
       by: ['skuId'],
       where: {
@@ -1908,7 +1913,14 @@ export class ClientRequestsService {
         skuId: { in: skuIds },
         status: StockStatus.AVAILABLE,
         quantity: { gt: 0 },
-        ...(includeLegacyUnassigned
+        ...(stockClient ? {
+          OR: [{ warehouseId }, { warehouseId: null, box: { warehouseId } }],
+          ...(stockClient.storesWithoutBoxes ? { boxId: null, palletId: null } : {
+            box: { warehouseId, status: { notIn: ['deleted', 'archived'] },
+              ...(stockClient.stockBalanceMode === 'PALLET_SORT' ? { storagePlacement: { is: { pallet: { warehouseId } } } } : {}),
+            },
+          }),
+        } : includeLegacyUnassigned
           ? {
               OR: [
                 { box: { warehouseId } },
@@ -1932,6 +1944,11 @@ export class ClientRequestsService {
     includeLegacyUnassigned = false,
   ) {
     const empty = new Map<string, { quantity: number; requests: ClientRequestAvailabilityConflict[] }>();
+    // FIX: include incoming WB demand and exclude already physically picked units.
+    if (wbOrderStockLifecycleEnabled()) {
+      const quantities = await wbReservationQuantities(this.prisma, clientId, skuIds, warehouseId, excludeRequestId);
+      return new Map([...quantities].map(([skuId, quantity]) => [skuId, { quantity, requests: [] as ClientRequestAvailabilityConflict[] }]));
+    }
     if (skuIds.length === 0 && barcodes.length === 0) {
       return empty;
     }
