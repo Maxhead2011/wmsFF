@@ -1,6 +1,7 @@
 import { wbOrderStockLifecycleEnabled, finalizeWbOrderShipment, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
 import { enqueueFbsPrintBilling, FbsPrintBillingWorker } from './fbs-print-billing-outbox';
 import { FbsDisplayCache, type FbsDisplaySync } from './fbs-display-cache';
+import { branchScopedFbsDateKey, loadFbsDateBillingBranches } from './fbs-billing-shipment-key';
 import { physicalKizLookup, physicalKizHistoryFilter } from '../../common/kiz-physical-identity';
 import { stockTransferBlockedReason, ordersWithoutTransferStock } from './fbs-stock-transfer';
 import { fbsStockAuditError, fbsKizAuditEnabled, validateFbsStockAudit } from './fbs-stock-audit';
@@ -26788,18 +26789,21 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       return result;
     }
 
+    // FIX: use the same branch-aware identity for source lookup, calculation and invoicing.
+    const legacyBranches = await loadFbsDateBillingBranches(this.prisma, clientId, orders, fbsShipmentKey);
+
     // FIX: a sent/paid/consolidated invoice is immutable; subsequent physical work gets a separate invoice.
     // This runs under the same billing lock as invoice issue and uses the immutable assembly identity.
     if (wbOrderStockLifecycleEnabled()) {
       const candidates = orders.filter(order => order.marketplace === MarketplaceType.WILDBERRIES && order.processingAssemblyId && !order.processingAttemptId);
-      const sourceKeys = uniqueStrings(candidates.map(order => `fbs-calculator:${clientId}:${fbsShipmentKey(order)}`));
+      const sourceKeys = uniqueStrings(candidates.map(order => `fbs-calculator:${clientId}:${fbsShipmentKey(order, legacyBranches)}`));
       const existing = sourceKeys.length ? await this.prisma.billingCharge.findMany({ where: { sourceKey: { in: sourceKeys } },
         include: { invoiceItems: { where: { invoice: { status: { not: 'CANCELLED' } } },
           select: { invoice: { select: { status: true, sourceKey: true, paidRub: true, _count: { select: { payments: true } } } } } } },
       }) : [];
       const bySource = new Map(existing.map(charge => [charge.sourceKey, charge]));
       for (const order of candidates) {
-        const shipmentKey = fbsShipmentKey(order);
+        const shipmentKey = fbsShipmentKey(order, legacyBranches);
         const charge = bySource.get(`fbs-calculator:${clientId}:${shipmentKey}`);
         const ids = asArray<unknown>(asRecord(charge?.metadata).orderIds);
         // FIX: even an existing draft retains its original prices and composition.
@@ -26903,7 +26907,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       settings.primaryProcessingEnabled && this.boxCodes
         ? await this.boxCodes.getPolicy()
         : undefined;
-    const batches = [...groupFbsOrdersByShipment(orders).entries()]
+    const batches = [...groupFbsOrdersByShipment(orders, legacyBranches).entries()]
       .map(([shipmentKey, batchOrders]) => ({
         shipmentKey,
         batchOrders,
@@ -27756,7 +27760,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     // FIX: confirmed WMS work can be invoiced without waiting for a WB supply plan.
     const eligibleOrders = orders.filter((order) => (order.shipmentPlan && order.supplyId) ||
       (wbOrderStockLifecycleEnabled() && order.marketplace === MarketplaceType.WILDBERRIES && order.request));
-    const shipments = groupFbsOrdersByShipment(eligibleOrders);
+    // FIX: a refresh containing only one branch must keep the same keys as the full feed.
+    const legacyBranches = await loadFbsDateBillingBranches(this.prisma, clientId, eligibleOrders, fbsShipmentKey);
+    const shipments = groupFbsOrdersByShipment(eligibleOrders, legacyBranches);
     for (const [shipmentKey, shipmentOrders] of shipments) {
       const warehouseId = await this.resolveFbsShipmentWarehouseId(clientId, shipmentOrders);
       const sourceKey = `fbs-invoice:${clientId}:${shipmentKey}`;
@@ -31128,11 +31134,12 @@ function fbsMarketplaceDisplayName(marketplace: MarketplaceType) {
   return 'маркетплейс';
 }
 
-function fbsShipmentKey(order: FbsOrderSummary) {
+function fbsShipmentKey(order: FbsOrderSummary, legacyBranches?: ReadonlyMap<string, string>) {
   const supply = order.supplyId?.trim();
   const date = (order.deliveryDate || order.sellerDate || order.createdAt || '').slice(0, 10);
   const batch = supply ? `supply:${supply}` : date ? `date:${date}` : `order:${order.id}`;
-  return `${order.marketplace}:${order.connectionId}:${batch}${order.processingAttemptId ? `:attempt:${order.processingAttemptId}` : ''}${order.processingInvoiceId ? `:invoice:${order.processingInvoiceId}` : ''}`;
+  const legacyKey = `${order.marketplace}:${order.connectionId}:${batch}${order.processingAttemptId ? `:attempt:${order.processingAttemptId}` : ''}${order.processingInvoiceId ? `:invoice:${order.processingInvoiceId}` : ''}`;
+  return branchScopedFbsDateKey(legacyKey, order, legacyBranches);
 }
 
 function fbsShipmentServiceDate(orders: FbsOrderSummary[]) {
@@ -31163,10 +31170,10 @@ function fbsOrderDeliveryPlan(
     : fallback;
 }
 
-function groupFbsOrdersByShipment(orders: FbsOrderSummary[]) {
+function groupFbsOrdersByShipment(orders: FbsOrderSummary[], legacyBranches?: ReadonlyMap<string, string>) {
   const groups = new Map<string, FbsOrderSummary[]>();
   for (const order of orders) {
-    const key = fbsShipmentKey(order);
+    const key = fbsShipmentKey(order, legacyBranches);
     const group = groups.get(key) ?? [];
     group.push(order);
     groups.set(key, group);
