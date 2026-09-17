@@ -89,7 +89,7 @@ export type WorkspaceNavItem = {
   requiresAdministrationAccess?: boolean;
 };
 
-export const workspaceNav: WorkspaceNavItem[] = [
+const workspaceDefinitions: WorkspaceNavItem[] = [
   { id: 'operations-statistics', title: 'Статистика', eyebrow: 'Склад и операции',
     description: 'Время от заказа до передачи в доставку, по клиентам, филиалам и складам WB/Ozon.',
     permissions: ['stock:read'], icon: BarChart3, status: 'ready', audience: 'all' }, // FIX: API restricts CLIENT to own statistics.
@@ -477,6 +477,17 @@ export const workspaceNav: WorkspaceNavItem[] = [
     audience: 'internal',
   },
 ];
+
+// FIX: keep sold installations unchanged; our FBO entry reuses the existing Ozon visibility setting.
+export function buildFboNavigation(items: WorkspaceNavItem[], enabled: boolean) {
+  if (!enabled) return items;
+  const fbo=items.find(i=>i.id==='fbo-ozon');
+  if (!fbo) return items;
+  const result=items.filter(i=>i.id!==fbo.id);
+  result.splice(result.findIndex(i=>i.id==='fbs')+1,0,{...fbo,title:'FBO',eyebrow:'Поставки на склады маркетплейсов',description:'FBO WB: Excel и ручные заявки. FBO Ozon: планы и поставки.'});
+  return result;
+}
+export const workspaceNav=buildFboNavigation(workspaceDefinitions,import.meta.env.VITE_FBO_WORKSPACE_ENABLED==='true');
 
 export function canOpenWorkspace(user: AuthUser, item: WorkspaceNavItem) {
   // FIX: preserve statistics scope alongside the deployed admin monitoring opt-in.

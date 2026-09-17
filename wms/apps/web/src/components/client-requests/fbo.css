@@ -1,0 +1,16 @@
+.fbo-marketplaces { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin:16px 0 24px; }
+.fbo-marketplaces button[aria-pressed="true"] { outline:3px solid var(--accent,#2563eb); outline-offset:2px; }
+.fbo-marketplaces .fbs-marketplace-card__content { display:grid; gap:8px; }
+.fbo-progress { display:grid; gap:16px; margin:20px 0; }
+.fbo-progress .online-execution-metrics { grid-template-columns:repeat(4,minmax(0,1fr)); }
+.fbo-progress-bars { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.fbo-progress-filters { display:flex; flex-wrap:wrap; gap:16px; align-items:end; }
+.fbo-progress-filters label { display:grid; gap:6px; flex:1 1 260px; }
+.fbo-progress-filters input { min-height:42px; padding:8px 12px; border:1px solid var(--line); border-radius:8px; }
+.fbo-progress-filters [role="group"] { display:flex; flex-wrap:wrap; gap:6px; }
+.fbo-progress-filters button { padding:10px 12px; }
+.fbo-progress-filters button[aria-pressed="true"] { background:#e8f0ff; color:#1742a5; }
+.fbo-progress .online-execution-table-wrap { max-height:480px; overflow:auto; }
+.fbo-progress-history summary { cursor:pointer; font-weight:700; padding:12px 0; }
+.fbo-kiz { overflow-wrap:anywhere; min-width:160px; max-width:240px; }
+@media(max-width:720px) { .fbo-marketplaces,.fbo-progress-bars { grid-template-columns:1fr; } .fbo-progress .online-execution-metrics { grid-template-columns:1fr 1fr; } }

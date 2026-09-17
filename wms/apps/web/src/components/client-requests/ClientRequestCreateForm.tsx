@@ -18,12 +18,13 @@ import { requestPriorityOptions, requestTypeOptions } from './clientRequestMeta'
 import { useRememberedClientId } from '../../lib/rememberedClient';
 
 type ClientRequestCreateFormProps = {
+  outboundOnly?: boolean; // FIX: the FBO entry creates outbound requests only.
   clients: ClientSummary[];
   session: AuthSession;
   onCreated: (request: ClientRequestSummary) => void;
 };
 
-export function ClientRequestCreateForm({ clients, session, onCreated }: ClientRequestCreateFormProps) {
+export function ClientRequestCreateForm({ clients, session, onCreated, outboundOnly=false }: ClientRequestCreateFormProps) {
   const writableClientIds = useMemo(() => {
     if (session.user.permissionCodes.includes('system:admin') || session.user.clientScopeMode === 'ALL') {
       return new Set(clients.map((client) => client.id));
@@ -183,6 +184,7 @@ export function ClientRequestCreateForm({ clients, session, onCreated }: ClientR
           <span>Тип</span>
           <select
             value={type}
+            disabled={outboundOnly}
             onChange={(event) => {
               setType(event.target.value as ClientRequestType);
               setAvailability(null);
