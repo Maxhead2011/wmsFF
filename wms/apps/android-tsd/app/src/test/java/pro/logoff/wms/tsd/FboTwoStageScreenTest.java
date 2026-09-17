@@ -24,6 +24,24 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class FboTwoStageScreenTest {
+    // TEST: grouped menus retain role restrictions and the required main-menu order.
+    @Test public void migrationAndKizGroupsPreserveExistingAccess() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        for(String role:new String[]{"OWNER","ADMIN","OPERATOR","WAREHOUSE_KEEPER"})try(var controller=Robolectric.buildActivity(MainActivity.class).setup()) {
+            MainActivity a=controller.get();var prefs=a.getSharedPreferences("logoff_wms_tsd_session",0);
+            prefs.edit().putString("access_token","test").putString("device_code","TEST").putString("user_id","test").putString("user_name","Test").putString("role_codes",role).commit();
+            java.lang.reflect.Method render=MainActivity.class.getDeclaredMethod("renderMainScreen");render.setAccessible(true);render.invoke(a);
+            View root=a.findViewById(android.R.id.content);TextView migration=find(root,"МИГРАЦИЯ"),inventory=find(root,"Инвентаризация"),kiz=find(root,"КИЗЫ");
+            assertNotNull(migration);assertNotNull(inventory);ViewGroup parent=(ViewGroup)migration.getParent();assertEquals(parent.indexOfChild(migration)+1,parent.indexOfChild(inventory));
+            assertNull(find(root,"Сортировка и перемещение"));assertNull(find(root,"Перемещения"));
+            if(!role.equals("WAREHOUSE_KEEPER")){assertNotNull(kiz);assertEquals(parent.indexOfChild(inventory)+1,parent.indexOfChild(kiz));}
+            else assertNull(kiz);
+            migration.performClick();root=a.findViewById(android.R.id.content);assertNotNull(find(root,"Перемещения"));
+            assertEquals(role.equals("OWNER")||role.equals("ADMIN"),find(root,"Сортировка и перемещение")!=null);
+            if(kiz!=null){render.invoke(a);find(a.findViewById(android.R.id.content),"КИЗЫ").performClick();root=a.findViewById(android.R.id.content);assertNotNull(find(root,"Поиск КИЗ"));assertEquals(!role.equals("OPERATOR"),find(root,"Проверка КИЗ")!=null);}
+            prefs.edit().clear().commit();
+        }
+    }
     // TEST: product feedback is independent of the previously scanned box and does not pick before KIZ.
     @Test public void productBarcodeIsGreenAndUnneededBarcodeIsRedInBothStages() throws Exception {
         for(boolean packing:new boolean[]{false,true})try(var controller=Robolectric.buildActivity(Activity.class).setup()) {

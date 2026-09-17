@@ -180,6 +180,7 @@ public class MainActivity extends Activity {
     private EditText skuCollectionScanInput;
     private PalletSortingScreen palletSortingScreen; // ADDED: independent administrator workflow.
     private KizLocationScreen kizLocationScreen;
+    private KizSearchScreen kizSearchScreen; // FIX: preserve the published physical search.
     private FboTwoStageScreen fboTwoStageScreen;
     private boolean fboPacking;
     private TsdAssemblyPlan assemblyPlan;
@@ -392,6 +393,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         if (fboTwoStageScreen != null) fboTwoStageScreen.close();
+        if (kizSearchScreen != null) kizSearchScreen.close();
         if (kizLocationScreen != null) kizLocationScreen.close();
         if (monitorMessageOverlay != null) monitorMessageOverlay.close();
         if (palletSortingScreen != null) palletSortingScreen.close();
@@ -412,6 +414,7 @@ public class MainActivity extends Activity {
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN && event.getKeyCode() == KeyEvent.KEYCODE_ENTER) {
             if (screen == Screen.FBO_TWO_STAGE && fboTwoStageScreen != null) { fboTwoStageScreen.submit(); return true; }
+            if (screen == Screen.KIZ_SEARCH && kizSearchScreen != null) { kizSearchScreen.submit(); return true; }
             if (screen == Screen.KIZ_LOCATION && kizLocationScreen != null) {
                 kizLocationScreen.submit();
                 return true;
@@ -537,6 +540,8 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (screen == Screen.KIZ_SEARCH && kizSearchScreen != null) { kizSearchScreen.close(); kizSearchScreen=null;renderKizMenu();return; }
+        if (screen == Screen.KIZ_MENU || screen == Screen.MIGRATION_MENU) { renderMainScreen();return; }
         if (screen == Screen.FBO_TWO_STAGE && fboTwoStageScreen != null) {
             if (!fboTwoStageScreen.canLeave()) { showScanningErrorDialog("Дождитесь ответа или повторите неподтверждённый запрос."); return; }
             fboTwoStageScreen.close(); fboTwoStageScreen = null; loadAssemblyRequests(); return;
@@ -589,30 +594,20 @@ public class MainActivity extends Activity {
         LinearLayout root = baseRoot();
         root.addView(header());
         root.addView(mainStatusLine());
-        // FIX: use the tested sorting access policy for the current session and installation.
-        if (PalletSortingAccess.canOpen(BuildConfig.FLAVOR, session)) {
-            root.addView(primaryMenuButton("Сортировка и перемещение", view -> {
-                screen = Screen.PALLET_SORTING;
-                if (palletSortingScreen != null) palletSortingScreen.close();
-                palletSortingScreen = new PalletSortingScreen(this, session, WmsApiFactory.create(DEFAULT_BASE_URL), () -> {
-                    palletSortingScreen = null;
-                    renderMainScreen();
-                });
-            }));
-        }
         if (isWarehouseKeeperOnly(session)) {
-            root.addView(primaryMenuButton(tr("Перемещения", "Ko‘chirish"), view -> openStockTransfer()));
+            if (!"logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton(tr("Перемещения", "Ko‘chirish"), view -> openStockTransfer()));
             root.addView(primaryMenuButton(
                 tr("Сборка паллетов", "Palletlarni yig‘ish"),
                 view -> openStoragePalletAssembly()
             ));
+            if ("logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton("МИГРАЦИЯ", v -> renderMigrationMenu()));
             root.addView(primaryMenuButton(
                 tr("Инвентаризация", "Inventarizatsiya"),
                 view -> renderInventoryMenu()
             ));
         } else {
             root.addView(primaryMenuButton(tr("Приемка товара", "Tovarni qabul qilish"), view -> openReceipt()));
-            root.addView(primaryMenuButton(tr("Перемещения", "Ko‘chirish"), view -> openStockTransfer()));
+            if (!"logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton(tr("Перемещения", "Ko‘chirish"), view -> openStockTransfer()));
             root.addView(primaryMenuButton("logoff".equals(BuildConfig.FLAVOR) ? "Сборка FBO" : tr("Сборка заявки", "Buyurtmani yig‘ish"), view -> {
                 if ("logoff".equals(BuildConfig.FLAVOR)) renderFboMenu(); else openAssemblyRequests();
             }));
@@ -626,10 +621,11 @@ public class MainActivity extends Activity {
                 tr("Сборка паллетов", "Palletlarni yig‘ish"),
                 view -> openStoragePalletAssembly()
             ));
+            if ("logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton("МИГРАЦИЯ", v -> renderMigrationMenu()));
             root.addView(primaryMenuButton(tr("Инвентаризация", "Inventarizatsiya"), view -> renderInventoryMenu()));
-            // FIX: administrator lookup is immediately below Inventory in our TSD menu.
-            if (KizLocationPolicy.canOpen(BuildConfig.FLAVOR, session)) {
-                root.addView(primaryMenuButton("Проверка КИЗ", view -> openKizLocation()));
+            // FIX: group existing KIZ workflows without granting additional access.
+            if (KizLocationPolicy.canOpen(BuildConfig.FLAVOR, session) || KizSearchPolicy.canOpen(BuildConfig.FLAVOR, session)) {
+                root.addView(primaryMenuButton("КИЗЫ", view -> renderKizMenu()));
             }
             root.addView(primaryMenuButton(
                 phoneMode
@@ -662,6 +658,35 @@ public class MainActivity extends Activity {
             if (session.hasRole(role)) return false;
         }
         return true;
+    }
+
+    // FIX: navigation only; existing operation screens and role policies are preserved.
+    private void renderMigrationMenu() {
+        TsdSession session=safeSession();if(session==null || !"logoff".equals(BuildConfig.FLAVOR)){renderMainScreen();return;}
+        screen=Screen.MIGRATION_MENU;LinearLayout root=baseRoot();root.addView(header());root.addView(title("МИГРАЦИЯ"));
+        root.addView(primaryMenuButton("Перемещения",v->openStockTransfer()));
+        // FIX: use the tested sorting access policy for the current session and installation.
+        if (PalletSortingAccess.canOpen(BuildConfig.FLAVOR, session)) {
+            root.addView(primaryMenuButton("Сортировка и перемещение", view -> {
+                screen = Screen.PALLET_SORTING;
+                if (palletSortingScreen != null) palletSortingScreen.close();
+                palletSortingScreen = new PalletSortingScreen(this, session, WmsApiFactory.create(DEFAULT_BASE_URL), () -> {
+                    palletSortingScreen = null;
+                    renderMigrationMenu();
+                });
+            }));
+        }
+        root.addView(secondaryButton("Назад",v->renderMainScreen()));setScrollableContent(root);
+    }
+    private void renderKizMenu() {
+        TsdSession session=safeSession();if(session==null || !"logoff".equals(BuildConfig.FLAVOR)){renderMainScreen();return;}
+        screen=Screen.KIZ_MENU;LinearLayout root=baseRoot();root.addView(header());root.addView(title("КИЗЫ"));
+        if(KizSearchPolicy.canOpen(BuildConfig.FLAVOR,session))root.addView(primaryMenuButton("Поиск КИЗ",v->{
+            screen=Screen.KIZ_SEARCH;if(kizSearchScreen!=null)kizSearchScreen.close();
+            kizSearchScreen=new KizSearchScreen(this,session,WmsApiFactory.create(DEFAULT_BASE_URL),()->{kizSearchScreen=null;renderKizMenu();});
+        }));
+        if(KizLocationPolicy.canOpen(BuildConfig.FLAVOR,session))root.addView(primaryMenuButton("Проверка КИЗ",v->openKizLocation()));
+        root.addView(secondaryButton("Назад",v->renderMainScreen()));setScrollableContent(root);
     }
 
     private void openKizLocation() {
@@ -8736,6 +8761,9 @@ public class MainActivity extends Activity {
 
     private String monitorScreenLabel(Screen value) {
         switch (value) {
+            case MIGRATION_MENU: return "МИГРАЦИЯ";
+            case KIZ_MENU: return "КИЗЫ";
+            case KIZ_SEARCH: return "Поиск КИЗ";
             case FBO_MENU: return "Сборка FBO";
             case FBO_TWO_STAGE: return fboPacking ? "Упаковка FBO" : "FBO WB";
             case PALLET_SORTING: return "Сортировка и перемещение";
@@ -8904,6 +8932,7 @@ public class MainActivity extends Activity {
         }
         if (screen == Screen.FBO_TWO_STAGE && fboTwoStageScreen != null) return fboTwoStageScreen.scannerField();
         if (screen == Screen.SKU_COLLECTION) return skuCollectionScanInput;
+        if (screen == Screen.KIZ_SEARCH && kizSearchScreen != null) return kizSearchScreen.scannerField();
         if (screen == Screen.KIZ_LOCATION && kizLocationScreen != null) return kizLocationScreen.scannerField();
         if (screen == Screen.PALLET_SORTING && palletSortingScreen != null) return palletSortingScreen.scannerField();
         if (
@@ -9019,6 +9048,7 @@ public class MainActivity extends Activity {
 
     private void submitPhoneCameraScan() {
         if (screen == Screen.FBO_TWO_STAGE && fboTwoStageScreen != null) { fboTwoStageScreen.submit(); return; }
+        if (screen == Screen.KIZ_SEARCH && kizSearchScreen != null) { kizSearchScreen.submit(); return; }
         if (screen == Screen.KIZ_LOCATION && kizLocationScreen != null) { kizLocationScreen.submit(); return; }
         if (screen == Screen.PALLET_SORTING && palletSortingScreen != null) { palletSortingScreen.submit(); return; }
         if (screen == Screen.RECEIPT) {
@@ -9901,6 +9931,7 @@ public class MainActivity extends Activity {
     }
 
     private void refreshCurrentScreen() {
+        if(screen==Screen.KIZ_SEARCH && kizSearchScreen!=null){if(kizSearchScreen.belongsTo(safeSession()))return;kizSearchScreen.close();kizSearchScreen=null;renderMainScreen();return;}
         if (screen == Screen.FBO_TWO_STAGE && fboTwoStageScreen != null) {
             if (fboTwoStageScreen.belongsTo(safeSession())) return;
             fboTwoStageScreen.close(); fboTwoStageScreen = null; renderMainScreen(); return;
@@ -9925,6 +9956,10 @@ public class MainActivity extends Activity {
             renderSettingsScreen();
         } else if (screen == Screen.RECEIPT) {
             renderReceiptScreen();
+        } else if (screen == Screen.MIGRATION_MENU) {
+            renderMigrationMenu();
+        } else if (screen == Screen.KIZ_MENU) {
+            renderKizMenu();
         } else if (screen == Screen.FBO_MENU) {
             renderFboMenu();
         } else if (screen == Screen.ASSEMBLY_LIST) {
@@ -10348,6 +10383,9 @@ public class MainActivity extends Activity {
         MAIN,
         SETTINGS,
         RECEIPT,
+        KIZ_MENU,
+        KIZ_SEARCH,
+        MIGRATION_MENU,
         FBO_MENU,
         ASSEMBLY_LIST,
         ASSEMBLY_DETAIL,

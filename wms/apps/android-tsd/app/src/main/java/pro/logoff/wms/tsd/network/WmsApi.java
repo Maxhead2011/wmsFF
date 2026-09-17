@@ -22,6 +22,13 @@ public interface WmsApi {
     Call<TsdFboPlan> getFboPlan(@Header("Authorization") String authorization,@Path("id") String id);
     @POST("api/v1/tsd/requests/{id}/fbo/actions")
     Call<TsdFboPlan> actFbo(@Header("Authorization") String authorization,@Path("id") String id,@Body Map<String,String> request);
+    // FIX: isolated physical KIZ search; no stock or assembly operations.
+    @GET("api/v1/tsd/kiz-search")
+    Call<List<TsdKizSearch>> listKizSearch(@Header("Authorization") String authorization);
+    @GET("api/v1/tsd/kiz-search/{id}")
+    Call<TsdKizSearch> getKizSearch(@Header("Authorization") String authorization, @Path("id") String id);
+    @POST("api/v1/tsd/kiz-search/{id}/scan")
+    Call<TsdKizSearch.ScanResult> scanKizSearch(@Header("Authorization") String authorization, @Path("id") String id, @Body Map<String, String> request);
     // FIX: read-only administrator lookup; no stock or marketplace mutations.
     @POST("api/v1/inventory/kiz-location/check")
     Call<TsdKizLocationResponse> checkKizLocation(@Header("Authorization") String authorization, @Body Map<String, String> request);
