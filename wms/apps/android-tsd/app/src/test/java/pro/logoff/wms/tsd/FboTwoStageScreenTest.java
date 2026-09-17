@@ -1,6 +1,8 @@
 package pro.logoff.wms.tsd;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import org.robolectric.shadows.ShadowAlertDialog;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
 import android.os.Looper;
@@ -27,23 +29,43 @@ public class FboTwoStageScreenTest {
     // TEST: successful whole-box picks and rejected stale routes both remove the old source from widgets.
     @Test public void wholeBoxSuccessAndRouteConflictReconcileTheScreen() throws Exception {
         for(boolean conflict:new boolean[]{false,true})try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
-            Activity a=controller.get();TsdFboPlan initial=plan("PICKING");initial.route.get(0).wholeBox=true;
+            Activity a=controller.get();TsdFboPlan initial=plan("PICKING");initial.route.get(0).wholeBox=true;initial.route.get(0).wholeBoxQuantity=2;
             TsdFboPlan next=plan("PICKING");next.route.get(0).boxCode="BOX_2";next.picked=conflict?0:1;
             AtomicInteger reads=new AtomicInteger(),writes=new AtomicInteger();
             WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)-> {
                 final boolean write=m.getName().equals("actFbo");
                 return Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(c,method,values)-> {
                     if(!method.getName().equals("execute"))return null;
-                    if(write){writes.incrementAndGet();if(conflict)return Response.error(409,okhttp3.ResponseBody.create(okhttp3.MediaType.parse("application/json"),"{\"message\":\"Маршрут изменился\"}"));return Response.success(next);}
+                    if(write){assertEquals("2",((Map<?,?>)args[2]).get("confirmedQuantity"));writes.incrementAndGet();if(conflict)return Response.error(409,okhttp3.ResponseBody.create(okhttp3.MediaType.parse("application/json"),"{\"message\":\"Маршрут изменился\"}"));return Response.success(next);}
                     return Response.success(reads.incrementAndGet()==1?initial:next);
                 });
             });
             FboTwoStageScreen s=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",false,()->{});
             try {
                 waitIdle(s);s.scannerField().setText("PL_1");s.submit();s.scannerField().setText("BOX_1");s.submit();
-                find(a.findViewById(android.R.id.content),"Короб забран целиком").performClick();waitIdle(s);
+                find(a.findViewById(android.R.id.content),"Короб забран целиком").performClick();
+                AlertDialog dialog=ShadowAlertDialog.getLatestAlertDialog();
+                assertEquals(0,writes.get());
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();assertEquals(0,writes.get());
+                s.scannerField().setText("1");dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();assertEquals(0,writes.get());
+                s.scannerField().setText("2");dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();waitIdle(s);
                 View root=a.findViewById(android.R.id.content);assertNull(find(root,"BOX_1"));assertNotNull(find(root,"BOX_2"));
                 assertNotNull(find(root,"Отобрано "+next.picked));assertEquals(1,writes.get());assertEquals(conflict?2:1,reads.get());
+            }finally{s.close();}
+        }
+    }
+    // TEST: opening transfers is navigation only, without an implicit pick or stock mutation.
+    @Test public void pickerCanChooseScansOrTransferRemainder() throws Exception {
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=plan("PICKING");p.route.get(0).remainderQuantity=3;
+            AtomicInteger writes=new AtomicInteger(),moves=new AtomicInteger();
+            FboTwoStageScreen s=open(a,p,false,writes,moves::incrementAndGet);
+            try {
+                s.scannerField().setText("PL_1");s.submit();s.scannerField().setText("BOX_1");s.submit();
+                find(a.findViewById(android.R.id.content),"Отобрать товар по ШК + КИЗ").performClick();
+                assertEquals(0,writes.get());assertEquals(0,moves.get());
+                find(a.findViewById(android.R.id.content),"Переместить ненужный остаток").performClick();
+                assertEquals(1,moves.get());assertEquals(0,writes.get());
             }finally{s.close();}
         }
     }
@@ -114,13 +136,16 @@ public class FboTwoStageScreenTest {
         TsdFboPlan.Route r=new TsdFboPlan.Route();r.boxCode="BOX_1";r.pallet="PL_1";r.zone="Zone";r.tasks=new ArrayList<>();p.route.add(r);return p;
     }
     private FboTwoStageScreen open(Activity a,TsdFboPlan p,boolean packing,AtomicInteger mutations) throws Exception {
+        return open(a,p,packing,mutations,null);
+    }
+    private FboTwoStageScreen open(Activity a,TsdFboPlan p,boolean packing,AtomicInteger mutations,Runnable move) throws Exception {
         WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->{
             if(m.getName().equals("actFbo"))mutations.incrementAndGet();
             return Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(c,method,values)->{
                 if(method.getName().equals("execute"))return Response.success(p);return null;
             });
         });
-        FboTwoStageScreen s=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",packing,()->{});
+        FboTwoStageScreen s=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",packing,()->{},move);
         java.lang.reflect.Field field=FboTwoStageScreen.class.getDeclaredField("busy");field.setAccessible(true);
         for(int i=0;i<200;i++){Shadows.shadowOf(Looper.getMainLooper()).idle();if(!field.getBoolean(s))return s;Thread.sleep(10);}
         fail("Plan did not load");return s;

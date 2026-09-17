@@ -7,6 +7,16 @@ import pro.logoff.wms.tsd.network.TsdFboPlan;
 import static org.junit.Assert.*;
 
 public class FboScanStateTest {
+    // TEST: a lost response and an app restart retain the same physical count and operation id.
+    @Test public void wholeBoxRetryPreservesConfirmedQuantity() {
+        FboScanState first=new FboScanState();first.source="BOX";
+        Map<String,String> payload=first.prepare("PICK_BOX",null,19);
+        FboScanState restarted=new FboScanState();restarted.restore(payload);
+        assertEquals("19",payload.get("confirmedQuantity"));
+        assertEquals(payload,restarted.prepare("PICK_BOX",null,18));
+        restarted.accepted();assertNotEquals(payload.get("operationId"),restarted.prepare("PICK_BOX",null,18).get("operationId"));
+    }
+
     // TEST: opening packing cannot start a pick; picking cannot pack or confirm boxes.
     @Test public void separatesPickingAndPackingWithoutChangingProgress() {
         for(String phase:Arrays.asList("NOT_STARTED","PICKING")) {

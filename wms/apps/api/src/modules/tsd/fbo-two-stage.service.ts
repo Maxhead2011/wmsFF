@@ -10,7 +10,7 @@ import { assertWarehouseAccess } from '../client-requests/client-request-warehou
 import { ClientRequestMarketplaceFilesService } from '../client-requests/client-request-marketplace-files.service';
 import { StockBalancesService } from '../stock/stock-balances.service';
 import { StockOperationsService } from '../stock/stock-operations.service';
-import { fboTwoStageEnabled, hasLegacyFboProgress, isFboTwoStageRequest, remainingFboLines, wholeBoxDecision } from './fbo-two-stage-policy';
+import { fboTwoStageEnabled, hasLegacyFboProgress, isFboTwoStageRequest, remainingFboLines, wholeBoxDecision, prioritizeFboWholeBoxes } from './fbo-two-stage-policy';
 import { FboActionDto } from './dto/fbo-action.dto';
 const include = { items: { include: { sku: { include: { barcodes: true } } } }, client: true,
     _count: { select: { fbsOrderLinks: true, packages: true } }, pickWaveRequests: { include: { wave: true } } } satisfies Prisma.ClientRequestInclude;
@@ -83,7 +83,11 @@ export class FboTwoStageService {
             if (boxes.some(b => b.productMarks.some(m => m.skuId === l.skuId && m.status === 'AVAILABLE')))
                 l.requiresKiz = true;
         boxes.sort((a, b) => (a.storagePlacement?.pallet.code ?? a.pallet?.code ?? '').localeCompare(b.storagePlacement?.pallet.code ?? b.pallet?.code ?? '', 'ru', { numeric: true }) || a.code.localeCompare(b.code, 'ru', { numeric: true }));
-        for (const box of boxes) {
+        // FIX: an exact whole box wins over loose stock in an earlier mixed box.
+        const prioritized = prioritizeFboWholeBoxes(boxes.filter(b => !busyBoxes.has(b.id)), demand, (box, remaining) =>
+            wholeBoxDecision(box.balances, remaining, box.productMarks.map(m => ({ ...m, identity: identity(m.value) })),
+                box.productMarks.length > 0 || lines.some(l => l.requiresKiz && box.balances.some(b => b.quantity > 0 && b.skuId === l.skuId))));
+        for (const box of prioritized) {
             if (busyBoxes.has(box.id)) continue;
             const tasks: Array<{
                 skuId: string;
@@ -102,9 +106,11 @@ export class FboTwoStageService {
             }
             if (!tasks.length)
                 continue;
-            const decision = wholeBoxDecision(box.balances, Object.fromEntries(tasks.map(t => [t.skuId, t.quantity])), box.productMarks.map(m => ({ ...m, identity: identity(m.value) })), tasks.some(t => t.requiresKiz));
+            const decision = wholeBoxDecision(box.balances, tasks.reduce<Record<string, number>>((sum, t) => { sum[t.skuId] = (sum[t.skuId] ?? 0) + t.quantity; return sum; }, {}), box.productMarks.map(m => ({ ...m, identity: identity(m.value) })), tasks.some(t => t.requiresKiz));
             route.push({ boxCode: box.code, pallet: box.storagePlacement?.pallet.code ?? box.pallet?.code ?? '',
-                zone: box.storagePlacement?.pallet.zone?.name ?? box.zone?.name ?? '', tasks, wholeBox: decision.allowed, recount: decision.recount });
+                zone: box.storagePlacement?.pallet.zone?.name ?? box.zone?.name ?? '', tasks, wholeBox: decision.allowed, recount: decision.recount,
+                wholeBoxQuantity: decision.allowed ? decision.quantity : 0,
+                remainderQuantity: Math.max(0, box.balances.filter(b => b.status === 'AVAILABLE').reduce((sum, b) => sum + Math.max(0, b.quantity), 0) - tasks.reduce((sum, t) => sum + t.quantity, 0)) });
         }
         return { requestId: r.id, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED', lines, route,
             needed: lines.reduce((s, l) => s + l.needed, 0), picked: lines.reduce((s, l) => s + l.picked, 0), packed: lines.reduce((s, l) => s + l.packed, 0),
@@ -126,6 +132,7 @@ export class FboTwoStageService {
             // FIX: persisted JSON can change property order after a terminal restart.
             const key = `${id}:${dto.operationId}`, payloadHash = hash([
                 dto.action, dto.sourceBoxCode ?? null, dto.targetBoxCode ?? null, dto.barcode ?? null, dto.kiz ?? null, dto.palletCode ?? null,
+                ...(dto.confirmedQuantity === undefined ? [] : [dto.confirmedQuantity]),
             ]);
             const previous = await tx.fboAssemblyAction.findUnique({ where: { id: key } });
             if (previous) {
@@ -168,6 +175,9 @@ export class FboTwoStageService {
                     mark: typeof marks[number] | null;
                 }> = [];
                 if (whole) {
+                    // FIX: never infer a physical confirmation from the displayed planned amount.
+                    if (!Number.isSafeInteger(dto.confirmedQuantity) || dto.confirmedQuantity! < 1)
+                        throw new ConflictException('Введите фактическое количество единиц в коробе. Обновите ТСД, если поля ввода нет.');
                     const demand: Record<string, number> = {};
                     for (const l of lines)
                         demand[l.skuId!] = (demand[l.skuId!] ?? 0) + l.remaining;
@@ -177,6 +187,8 @@ export class FboTwoStageService {
                         throw new ConflictException({ code: 'FBO_BOX_RECOUNT_REQUIRED', boxCode: source.code, message: 'Состав КИЗ не совпадает с остатком. Выполните актуализацию короба.' });
                     if (!decision.allowed)
                         throw new ConflictException('Короб нельзя забрать целиком. Отбирайте нужное количество через ШК и КИЗ.');
+                    if (dto.confirmedQuantity !== decision.quantity)
+                        throw new ConflictException(`Количество не совпадает: введено ${dto.confirmedQuantity}, в учёте ${decision.quantity}. Проверьте короб и актуализируйте остаток.`);
                     const skuId = balances.find(b => b.quantity > 0)!.skuId;
                     chosen = Array.from({ length: decision.quantity }, (_, i) => ({ skuId, mark: marked ? marks[i] : null }));
                 }

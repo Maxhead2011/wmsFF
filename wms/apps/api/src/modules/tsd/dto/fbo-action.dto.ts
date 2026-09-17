@@ -1,5 +1,12 @@
-import { IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, IsInt, Min, MaxLength, MinLength } from 'class-validator';
+import { Type } from 'class-transformer';
 export class FboActionDto {
+    // FIX: terminals send string values; validate the converted physical unit count.
+    @IsOptional()
+    @Type(() => Number)
+    @IsInt()
+    @Min(1)
+    confirmedQuantity?: number;
     @IsIn(['START', 'PICK_UNIT', 'PICK_BOX', 'FINISH_PICK', 'OPEN_BOX', 'PACK_UNIT', 'PACK_BOX', 'CLOSE_BOX', 'CANCEL_EMPTY_BOX', 'SORTED', 'CONFIRM_BOX', 'FINISH'])
     action!: string;
     @IsString()

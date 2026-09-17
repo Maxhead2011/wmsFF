@@ -51,3 +51,29 @@ export function wholeBoxDecision(balances: Array<{
     const consistent = marked ? (marks.length === quantity && marks.every(m => m.skuId === skuId && m.status === 'AVAILABLE' && m.identity) && new Set(marks.map(m => m.identity)).size === quantity) : marks.length === 0;
     return { allowed: consistent && (demand[skuId] ?? 0) >= quantity, recount: !consistent, quantity };
 }
+
+// FIX: reserve demand for complete reconciled boxes before allocating loose units.
+// Re-evaluate after each choice so two boxes cannot consume the same remaining demand.
+export function prioritizeFboWholeBoxes<T extends {
+    balances: Array<{ skuId: string; quantity: number; status: string }>;
+    productMarks: Array<{ skuId: string; status: string }>;
+}>(boxes: T[], demand: Record<string, number>, decide: (box: T, remaining: Record<string, number>) => ReturnType<typeof wholeBoxDecision>): T[] {
+    const remaining = { ...demand }, pending = [...boxes], result: T[] = [];
+    for (;;) {
+        let best = -1, quantity = 0, exact = false;
+        for (let i = 0; i < pending.length; i++) {
+            const decision = decide(pending[i], remaining);
+            if (!decision.allowed) continue;
+            const skuId = pending[i].balances.find(b => b.quantity > 0)!.skuId;
+            const fitsExactly = remaining[skuId] === decision.quantity;
+            if (best < 0 || (fitsExactly && !exact) || (fitsExactly === exact && decision.quantity > quantity)) {
+                best = i; quantity = decision.quantity; exact = fitsExactly;
+            }
+        }
+        if (best < 0) break;
+        const box = pending.splice(best, 1)[0];
+        remaining[box.balances.find(b => b.quantity > 0)!.skuId] -= quantity;
+        result.push(box);
+    }
+    return [...result, ...pending];
+}
