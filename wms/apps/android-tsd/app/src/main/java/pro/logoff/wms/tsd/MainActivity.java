@@ -4651,6 +4651,14 @@ public class MainActivity extends Activity {
                         : renderNonWbOrderStickerInstruction(root, task);
             }
             if (orderStickerReady) {
+                // FIX: show WB sticker digits directly above completion, only in our LOGOFF app.
+                if ("logoff".equals(BuildConfig.FLAVOR) && "WILDBERRIES".equalsIgnoreCase(taskMarketplace)) {
+                    String stickerNumber = FbsAssemblyUi.wbStickerNumber(task);
+                    root.addView(feedbackView(
+                        tr("Стикер: ", "Stiker: ") + nonEmpty(stickerNumber, tr("не получен", "olinmagan")),
+                        Color.rgb(219, 234, 254)
+                    ));
+                }
                 stickerAppliedButton = primaryMenuButton(
                     localOnlyRecovery && !hasRenderableSticker
                         ? tr("ТОВАР ОТОБРАН", "MAHSULOT OLINDI")

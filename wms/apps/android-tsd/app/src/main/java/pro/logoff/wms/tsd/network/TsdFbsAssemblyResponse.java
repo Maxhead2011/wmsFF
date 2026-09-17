@@ -38,6 +38,8 @@ public class TsdFbsAssemblyResponse {
         public boolean kizAccepted;
         public String wbMetaStatus;
         public OrderSticker orderSticker;
+        // FIX: WB digits remain available without a printable image.
+        public String wbStickerNumber;
         public String marketplaceSubmittedAt;
         public String marketplaceSubmitError;
         public String errorMessage;

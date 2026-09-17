@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 180 // FIX: recover FBO routes after conflicts and preserve physical picking.
-            versionName = "0.1.181-fbo-route-recovery"
+            versionCode = 184 // FIX: show WB sticker digits above picking completion.
+            versionName = "0.1.185-wb-sticker-caption"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
