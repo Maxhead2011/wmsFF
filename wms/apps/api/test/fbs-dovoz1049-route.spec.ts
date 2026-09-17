@@ -49,3 +49,52 @@ it('still releases request 1049 reservations after cancellation',async()=>{
   const writes=[...f.db.fbsTsdAssembly.updateMany.mock.calls,...f.db.fbsTsdAssembly.update.mock.calls];
   expect(writes.some(([arg]:any)=>arg.data.status==='RELEASED'&&arg.data.reservedBoxId===null)).toBe(true);
 });
+
+// TEST: the TSD queue must resolve the approved source even when the ordered size has no stock.
+it('uses live approved adjacent-size stock in the TSD queue', async () => {
+  const f=fixture();f.task.stockWarehouseId='warehouse';
+  f.task.sourceProductName='Approved size';f.task.sourceArticle='Source';f.task.sourceBarcodes=['old'];
+  f.db.stockBalance.findMany.mockResolvedValue([{boxId:'box',quantity:2,box:{code:'SOURCE_BOX'}}]);
+  f.service.fbsTsdReservationRows=vi.fn(async()=>[{boxId:'box',itemCount:1}]);
+  const source=await f.service.resolveDovoz1049TsdStockSource(f.task);
+  expect(source).toMatchObject({sourceSkuId:f.task.sourceSkuId,relabelRequired:true,withoutBoxQuantity:0,
+    storageBoxes:[{code:'SOURCE_BOX',quantity:1,status:'AVAILABLE'}]});
+  expect(f.db.stockBalance.findMany.mock.calls[0][0].where).toMatchObject({skuId:f.task.sourceSkuId,warehouseId:'warehouse',status:'AVAILABLE'});
+  expect(f.service.fbsTsdReservationRows).toHaveBeenCalledWith(expect.objectContaining({excludeTaskId:f.task.id,skuId:f.task.sourceSkuId}));
+});
+it('does not send TSD to a source fully reserved by other tasks', async () => {
+  // TEST: stored route data cannot override current stock or another reservation.
+  const f=fixture();f.task.stockWarehouseId='warehouse';
+  f.db.stockBalance.findMany.mockResolvedValue([{boxId:'box',quantity:1,box:{code:'SOURCE_BOX'}}]);
+  f.service.fbsTsdReservationRows=vi.fn(async()=>[{boxId:'box',itemCount:1}]);
+  expect((await f.service.resolveDovoz1049TsdStockSource(f.task)).storageBoxes).toEqual([]);
+});
+it('rejects the one-off source for another request or a released task', async()=>{
+  // TEST: no effect on the sold WMS or cancelled reservations.
+  const f=fixture('other');expect(await f.service.resolveDovoz1049TsdStockSource(f.task)).toBeNull();
+  f.task.requestId='16086a76-475c-463c-9dfd-430addda504b';f.task.status='RELEASED';
+  expect(await f.service.resolveDovoz1049TsdStockSource(f.task)).toBeNull();
+  expect(f.db.stockBalance.findMany).not.toHaveBeenCalled();
+});
+it('issues a TSD task for request 1049 when only the approved replacement is available', async()=>{
+  // TEST: reproduces the actual empty queue, rather than merely checking route formatting.
+  const f=fixture();f.task.stockWarehouseId='warehouse';f.task.sourceBarcodes=['old'];
+  f.db.fbsTsdAssembly.findFirst=vi.fn(async()=>null);
+  f.db.fbsTsdAssembly.findUnique=vi.fn(async()=>f.task);
+  f.db.fbsTsdAssembly.updateMany=vi.fn(async({data}:any)=>{Object.assign(f.task,data);return {count:1};});
+  f.db.clientRequest={findUnique:vi.fn(async()=>({id:f.task.requestId,number:1049,clientId:f.task.clientId,status:'IN_WORK'}))};
+  f.db.clientMarketplaceConnection={findMany:vi.fn(async()=>[{clientId:f.task.clientId}])};
+  f.db.clientRequestItem.findFirst=vi.fn(async()=>({id:'item'}));
+  f.db.stockBalance.findMany.mockResolvedValue([{boxId:'box',quantity:1,box:{code:'SOURCE_BOX'}}]);
+  f.service.clientScopes={requireClientAccess:vi.fn()};
+  f.service.loadFbsTsdRequestOrders=vi.fn(async()=>({orders:[{...f.order,storageBoxes:[]}]}));
+  f.service.mergeSyncedFbsTsdRequestOrders=vi.fn(async(_:any,r:any)=>r);
+  f.service.resolveFbsTsdStockSource=vi.fn(async()=>null);
+  f.service.fbsTsdReservationRows=vi.fn(async()=>[]);
+  f.service.formatFbsTsdAssembly=vi.fn(async(t:any)=>({state:'SCAN_BOX',task:t}));
+  f.service.emptyFbsTsdAssembly=vi.fn(async()=>({state:'EMPTY'}));
+  const result=await f.service.getNextFbsTsdAssembly('TSD-TEST',{id:'worker',name:'Worker'},f.task.requestId);
+  expect(result.state).toBe('SCAN_BOX');
+  expect(result.task).toMatchObject({sourceSkuId:'ac7d161f-a671-4efa-955b-d1a68d287bc4',reservedBoxCode:'SOURCE_BOX',status:'IN_PROGRESS'});
+  expect(f.service.resolveFbsTsdStockSource).not.toHaveBeenCalled();
+});
