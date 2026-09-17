@@ -38,6 +38,7 @@ import {
   type InventorySessionType,
 } from '../../lib/api';
 import './inventory.css';
+import { reportInventoryOpened, type InventoryNotificationTarget } from '../../lib/adminNotifications';
 import { useRememberedClientId } from '../../lib/rememberedClient';
 import { SkuCollectionPanel } from './SkuCollectionPanel';
 
@@ -89,7 +90,8 @@ const modes: Array<{
   },
 ];
 
-export function InventoryPanel({ session }: { session: AuthSession }) {
+export function InventoryPanel({ session, notificationTarget }: { session: AuthSession; notificationTarget?: InventoryNotificationTarget | null }) {
+  const [notificationSession, setNotificationSession] = useState<InventorySession | null>(null);
   const [mode, setMode] = useState<InventoryMode | null>(null);
   const [dashboard, setDashboard] = useState<InventoryDashboard | null>(null);
   const [clients, setClients] = useState<ClientSummary[]>([]);
@@ -146,6 +148,19 @@ export function InventoryPanel({ session }: { session: AuthSession }) {
     }, 5000);
     return () => window.clearInterval(timer);
   }, [session.accessToken]);
+
+  // FIX: load the precise check even when it is outside the dashboard history page.
+  useEffect(() => {
+    let live = true;
+    setNotificationSession(null);
+    if (notificationTarget) {
+      setMode('RECONCILIATION');
+      void fetchInventorySession(session.accessToken, notificationTarget.sessionId)
+        .then(value => { if (live) setNotificationSession(value); })
+        .catch(caught => { if (live) setMessage(errorMessage(caught)); });
+    }
+    return () => { live = false; };
+  }, [notificationTarget?.nonce, session.accessToken, session.user.activeWarehouseId]);
 
   async function approveRescan(request: InventoryBoxRescanRequest) {
     setApprovingRescanId(request.id);
@@ -230,7 +245,14 @@ export function InventoryPanel({ session }: { session: AuthSession }) {
               className={`inventory-mode ${mode === item.id ? 'inventory-mode--active' : ''} ${item.danger ? 'inventory-mode--danger' : ''}`}
               key={item.id}
               type="button"
-              onClick={() => setMode(item.id)}
+              onClick={() => {
+                setMode(item.id);
+                if (item.id === 'BOX_CHECK') {
+                  const existing = dashboard?.activeSessions.find(value => value.type === item.id);
+                  if (existing) void reportInventoryOpened(session.accessToken, session.user.id, existing.id)
+                    .catch(caught => setMessage(errorMessage(caught)));
+                }
+              }}
             >
               <span className="inventory-mode__number">{item.number}</span>
               <Icon size={24} />
@@ -259,6 +281,8 @@ export function InventoryPanel({ session }: { session: AuthSession }) {
 
           {mode === 'RECONCILIATION' ? (
             <Reconciliation
+              notificationSession={notificationSession}
+              notificationTarget={notificationTarget}
               dashboard={dashboard}
               session={session}
               onChanged={refreshDashboard}
@@ -348,7 +372,13 @@ function InventoryOperation({
         {candidates.length > 1 ? (
           <label className="inventory-field">
             <span>Активная проверка</span>
-            <select value={activeId} onChange={(event) => setActiveId(event.target.value)}>
+            <select value={activeId} onChange={(event) => {
+              const id = event.target.value;
+              setActiveId(id);
+              setCurrent(candidates.find(value => value.id === id) ?? null);
+              void reportInventoryOpened(session.accessToken, session.user.id, id)
+                .catch(caught => setMessage(errorMessage(caught)));
+            }}>
               {candidates.map((item) => (
                 <option key={item.id} value={item.id}>{item.title}</option>
               ))}
@@ -486,6 +516,10 @@ function BoxCounter({
     try {
       const next = await openInventoryBox(session.accessToken, inventory.id, boxCode);
       setBox(next);
+      if (inventory.boxes.some(value => value.id === next.id && value.status === 'COUNTING')) {
+        void reportInventoryOpened(session.accessToken, session.user.id, inventory.id, next.id)
+          .catch(caught => setMessage(errorMessage(caught)));
+      }
       setBoxCode(next.boxCode);
       setTimeout(() => barcodeRef.current?.focus(), 0);
     } catch (caught) {
@@ -667,10 +701,14 @@ function BoxResult({ box }: { box: InventoryAuditBox }) {
 }
 
 function Reconciliation({
+  notificationSession,
+  notificationTarget,
   dashboard,
   session,
   onChanged,
 }: {
+  notificationSession?: InventorySession | null;
+  notificationTarget?: InventoryNotificationTarget | null;
   dashboard: InventoryDashboard;
   session: AuthSession;
   onChanged: () => Promise<void>;
@@ -679,13 +717,24 @@ function Reconciliation({
   const [busyAction, setBusyAction] = useState<InventoryResolutionAction | null>(null);
   const [lineFeedback, setLineFeedback] = useState<Record<string, { tone: 'success' | 'error'; text: string }>>({});
   const [message, setMessage] = useState('');
-  const history = dashboard.historySessions ?? dashboard.reviewSessions;
+  const dashboardHistory = dashboard.historySessions ?? dashboard.reviewSessions;
+  const history = notificationSession
+    ? [dashboardHistory.find(value => value.id === notificationSession.id) ?? notificationSession,
+       ...dashboardHistory.filter(value => value.id !== notificationSession.id)]
+    : dashboardHistory;
+
+  useEffect(() => {
+    if (!notificationTarget || !notificationSession) return;
+    const target = document.getElementById(`inventory-notification-${notificationTarget.auditBoxId ?? notificationTarget.sessionId}`);
+    if (target instanceof HTMLDetailsElement) target.open = true;
+    target?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [notificationTarget?.nonce, notificationSession?.id]);
   const checkedBoxes = history.flatMap((inventory) => inventory.boxes)
     .filter((box) => box.status !== 'COUNTING');
   const matchedBoxes = checkedBoxes.filter((box) => box.status === 'MATCHED').length;
   const visibleReviews = history
     .map((review) => {
-      const visibleBoxes = review.type === 'BOX_CHECK'
+      const visibleBoxes = review.type === 'BOX_CHECK' && review.id !== notificationSession?.id
         ? review.boxes.filter((box) => box.lines.some(
           (line) => line.countedQuantity !== line.expectedQuantity,
         ))
@@ -697,7 +746,7 @@ function Reconciliation({
         ),
       };
     })
-    .filter(({ review, boxes }) => review.type !== 'BOX_CHECK' || boxes.length > 0)
+    .filter(({ review, boxes }) => review.id === notificationSession?.id || review.type !== 'BOX_CHECK' || boxes.length > 0)
     .sort(
       (left, right) =>
         Number(right.boxes.some(boxNeedsResolution)) - Number(left.boxes.some(boxNeedsResolution)),
@@ -759,7 +808,8 @@ function Reconciliation({
         </div>
       ) : null}
       {visibleReviews.map(({ review, boxes }) => (
-        <article className="inventory-review" key={review.id}>
+        <article className="inventory-review" key={review.id} id={`inventory-notification-${review.id}`}>
+          {review.id === notificationSession?.id ? <><SessionHeader current={review} /><p>{review.comment}</p></> : null}
           {boxes.map((box) => {
             const mismatches = box.lines.filter((line) => line.countedQuantity !== line.expectedQuantity);
             const missingQuantity = mismatches.reduce(
@@ -771,8 +821,13 @@ function Reconciliation({
               0,
             );
             return (
-            <details className="inventory-review-box" key={box.id}>
-              <summary className="inventory-review-box__summary">
+            <details className="inventory-review-box" key={box.id} id={`inventory-notification-${box.id}`}>
+              <summary className="inventory-review-box__summary" onClick={event => {
+                if (!(event.currentTarget.parentElement as HTMLDetailsElement).open) {
+                  void reportInventoryOpened(session.accessToken, session.user.id, review.id, box.id)
+                    .catch(caught => setMessage(errorMessage(caught)));
+                }
+              }}>
                 <strong>Короб {box.boxCode}</strong>
                 <span className={mismatches.length ? 'inventory-review-box__mismatch' : 'inventory-review-box__matched'}>
                   {mismatches.length

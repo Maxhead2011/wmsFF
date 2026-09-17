@@ -83,6 +83,77 @@ describe('WB reshipment journal', () => {
     expect(db.fbsAssemblyAttemptHistory.create).not.toHaveBeenCalled();
   });
 
+  // TEST: delivery transfers must use the portal command, never the public add-orders PATCH.
+  function setupPortalTransfer() {
+    setupStockTransfer(); vi.stubEnv('WMS_WB_PORTAL_TRANSFER_ENABLED', 'true');
+    wb.readReshipmentWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'complete', wbStatus: 'waiting', isTransferable: true }]]));
+    wb.readReshipmentWbStickers = vi.fn(async () => new Map([['order', '57692994752']]));
+    wb.readReshipmentWbSupply.mockImplementation(async (_c: string, _id: string, supplyId: string) =>
+      supplyId === 'old-supply' ? { id: supplyId, done: true, orderIds: ['order'] } : { id: supplyId, done: false, orderIds: [] });
+  }
+  async function portalRun() {
+    const result: any = await service.moveWithStockRouting({ clientId: 'client', orders: dto.orders }, user);
+    return result.transfers[0];
+  }
+  it('pauses delivery transfer for the browser without the failing public PATCH', async () => {
+    setupPortalTransfer(); const result = await portalRun();
+    expect(result).toMatchObject({ status: 'PENDING', portal: { ready: true, sourceSupplyId: 'old-supply', orderIds: ['order'] } });
+    expect(wb.addReshipmentWbOrders).not.toHaveBeenCalled(); expect(db.clientRequest.create).not.toHaveBeenCalled();
+    expect(wb.createReshipmentWbSupply).toHaveBeenCalledTimes(1);
+  });
+  it('issues only one browser command and only reconciles an unknown response', async () => {
+    setupPortalTransfer(); const result = await portalRun();
+    const started = await (service as any).startPortal({ clientId: 'client', runId: result.runId }, user);
+    expect(started.portalCommand).toMatchObject({ sourceSupplyId: 'old-supply', targetSupplyId: 'new-supply', orderIds: ['order'] });
+    const retry = await (service as any).startPortal({ clientId: 'client', runId: result.runId }, user);
+    expect(retry.portalCommand).toBeNull(); expect(retry.status).toBe('NEEDS_RECONCILIATION');
+    expect(wb.addReshipmentWbOrders).not.toHaveBeenCalled(); expect(wb.createReshipmentWbSupply).toHaveBeenCalledTimes(1);
+  });
+  it('verifies source absence, new sticker and status before finalizing a browser transfer', async () => {
+    setupPortalTransfer(); const result = await portalRun();
+    await (service as any).startPortal({ clientId: 'client', runId: result.runId }, user);
+    wb.readReshipmentWbSupply.mockImplementation(async (_c: string, _id: string, id: string) =>
+      ({ id, done: id === 'old-supply', orderIds: id === 'new-supply' ? ['order'] : [] }));
+    wb.readReshipmentWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'confirm', wbStatus: 'waiting' }]]));
+    const unchanged = await service.resume({ clientId: 'client', runId: result.runId }, user);
+    expect(unchanged.status).toBe('NEEDS_RECONCILIATION'); expect(db.clientRequest.create).not.toHaveBeenCalled();
+    wb.readReshipmentWbStickers.mockResolvedValue(new Map([['order', '57884350051']]));
+    const done = await service.resume({ clientId: 'client', runId: result.runId }, user);
+    expect(done).toMatchObject({ status: 'CREATED', portal: { stickers: [{ orderId: 'order', oldStickerId: '57692994752', newStickerId: '57884350051' }] } });
+    expect(db.clientRequest.create).toHaveBeenCalledTimes(1); expect(db.stockMovement.create).not.toHaveBeenCalled();
+    expect(wb.addReshipmentWbOrders).not.toHaveBeenCalled();
+  });
+  it('refuses browser commands after flag off, cancellation or physical picking', async () => {
+    setupPortalTransfer(); const result = await portalRun();
+    vi.stubEnv('WMS_WB_PORTAL_TRANSFER_ENABLED', 'false');
+    await expect((service as any).startPortal({ clientId: 'client', runId: result.runId }, user)).rejects.toThrow();
+    vi.stubEnv('WMS_WB_PORTAL_TRANSFER_ENABLED', 'true'); task.barcode = 'physically-scanned';
+    const changed = await (service as any).startPortal({ clientId: 'client', runId: result.runId }, user);
+    expect(changed.portalCommand).toBeNull(); expect(wb.addReshipmentWbOrders).not.toHaveBeenCalled();
+  });
+
+  // TEST: server scope, live source membership, WB permission and physical facts remain authoritative.
+  it('rejects foreign client or warehouse before issuing a browser command', async () => {
+    setupPortalTransfer(); const result = await portalRun();
+    await expect((service as any).startPortal({ clientId: 'foreign', runId: result.runId }, user)).rejects.toThrow();
+    await expect((service as any).startPortal({ clientId: 'client', runId: result.runId }, { ...user, activeWarehouseId: 'another', writableWarehouseIds: ['another'] })).rejects.toThrow();
+    expect(runs[0].phase).toBe('PORTAL_READY');
+  });
+  it('does not create an empty target when WB denies delivery transfer permission', async () => {
+    setupPortalTransfer(); wb.readReshipmentWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'complete', wbStatus: 'waiting', isTransferable: false }]]));
+    const result = await portalRun(); expect(result.status).toBe('NEEDS_RECONCILIATION');
+    expect(wb.createReshipmentWbSupply).not.toHaveBeenCalled(); expect(wb.addReshipmentWbOrders).not.toHaveBeenCalled();
+  });
+  it('does not finalize when the source still contains the order even with a new sticker', async () => {
+    setupPortalTransfer(); const result = await portalRun();
+    await (service as any).startPortal({ clientId: 'client', runId: result.runId }, user);
+    wb.readReshipmentWbSupply.mockImplementation(async (_c: string, _id: string, id: string) => ({ id, done: id === 'old-supply', orderIds: ['order'] }));
+    wb.readReshipmentWbStatuses.mockResolvedValue(new Map([['order', { supplierStatus: 'confirm', wbStatus: 'waiting' }]]));
+    wb.readReshipmentWbStickers.mockResolvedValue(new Map([['order', '57884350051']]));
+    expect((await service.resume({ clientId: 'client', runId: result.runId }, user)).status).toBe('NEEDS_RECONCILIATION');
+    expect(db.clientRequest.create).not.toHaveBeenCalled(); expect(db.stockMovement.create).not.toHaveBeenCalled();
+  });
+
   function setupStockTransfer() {
     vi.stubEnv('WMS_FBS_NO_STOCK_TRANSFER_ENABLED', 'true');
     Object.assign(task, { status: 'WAITING_STOCK', barcode: null, kiz: null, completedAt: null, workerUserId: null });

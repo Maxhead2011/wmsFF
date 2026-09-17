@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { checkFbsReshipment, createFbsReshipment, fetchFbsReshipmentCapabilities, previewFbsReshipment,
-  resumeFbsReshipment, type AuthSession, type FbsReshipmentCandidate, type FbsReshipmentMode,
+  resumeFbsReshipment, downloadFbsOrderStickersPdf, type AuthSession, type FbsReshipmentCandidate, type FbsReshipmentMode,
   type FbsReshipmentPreview, type FbsReshipmentRun, type FbsReshipmentSelection } from '../../lib/api';
 
 type ReshipmentApi = {
+  print?: (run: FbsReshipmentRun) => Promise<void>;
   check: (input: { clientId: string }) => Promise<{ candidates: FbsReshipmentCandidate[]; runs: FbsReshipmentRun[]; unverifiedCount?: number }>;
   preview: (input: FbsReshipmentSelection) => Promise<FbsReshipmentPreview>;
   create: (input: FbsReshipmentSelection & { previewToken: string; confirm: true }) => Promise<FbsReshipmentRun>;
@@ -115,6 +116,11 @@ export class FbsReshipmentController {
     if (!this.state.runs.some(run => run.runId === runId && (run.status !== 'CREATED' || run.sourceSyncPending))) return Promise.resolve();
     return this.execute(async () => { this.saveRun(await this.api.resume({ clientId: this.clientId, runId })); });
   }
+  print(runId: string) {
+    const run = this.state.runs.find(item => item.runId === runId);
+    if (!run?.portal?.stickers.length || run.status !== 'CREATED' || !this.api.print) return Promise.resolve();
+    return this.execute(async () => { await this.api.print!(run); });
+  }
   private saveRun(run: FbsReshipmentRun) { this.update({ runs: [run, ...this.state.runs.filter(item => item.runId !== run.runId)] }); }
 }
 
@@ -145,6 +151,14 @@ function ScopedReshipmentPanel({ session, clientId, onOpenRequest }: { session: 
       preview: input => previewFbsReshipment(session.accessToken, input),
       create: input => createFbsReshipment(session.accessToken, input),
       resume: input => resumeFbsReshipment(session.accessToken, input),
+      print: async run => {
+        const portal = run.portal!;
+        const blob = await downloadFbsOrderStickersPdf(session.accessToken, { clientId,
+          orders: portal.orderIds.map(id => ({ id, connectionId: portal.connectionId })) });
+        const url = URL.createObjectURL(blob); const link = document.createElement('a');
+        link.href = url; link.download = `WB-${run.supplyId}-новые-стикеры.pdf`; link.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      },
     });
     setModel(scopedModel);
     return () => scopedModel.dispose();
@@ -227,8 +241,16 @@ export function FbsReshipmentView({ model, onOpenRequest }: { model: FbsReshipme
         <p>{run.transferPurpose === 'NO_STOCK' ? 'logoff нет на складе' : run.mode === 'SAME_ITEM' ? 'Довоз собранного' : 'Новая сборка'} · {run.status === 'CREATED' ? 'Заявка создана' : 'Требуется продолжение проверки'}<br />
           Поставка: {run.supplyId || 'Пока не подтверждена'} · Заявка: {run.requestNumber ? `№${run.requestNumber}` : 'Пока не создана'}</p>
         {run.errorMessage && <p role="alert">{run.errorMessage}</p>}
+        {run.portal && run.status !== 'CREATED' && <p>Для переноса откройте кабинет нужного продавца WB в Яндекс Браузере.
+          {' '}<a href="/downloads/logoff-wb-transfer.zip" download>Скачать расширение LOGOFF</a>
+          {' · '}<a href="/downloads/wb-transfer-install.txt" target="_blank" rel="noreferrer">Как установить</a></p>}
+        {run.portal?.stickers.length ? <div role="status">
+          <p><strong>Распечатайте новые стикеры WB и замените прежние — иначе WB может вернуть заказы.</strong></p>
+          <ul>{run.portal.stickers.map(sticker => <li key={sticker.orderId}>Заказ {sticker.orderId}: {sticker.oldStickerId} → {sticker.newStickerId}</li>)}</ul>
+          {run.status === 'CREATED' && <button type="button" className="button-secondary" disabled={state.busy} onClick={() => void model.print(run.runId)}>Скачать новые стикеры WB</button>}
+        </div> : null}
         {run.requestId && onOpenRequest && <button type="button" className="button-secondary" onClick={() => onOpenRequest(run.requestId!)}>Открыть заявку</button>}
-        {(run.status !== 'CREATED' || run.sourceSyncPending) && <button type="button" className="button-secondary" disabled={state.busy} onClick={() => void model.resume(run.runId)}>Проверить и продолжить сохранённую операцию</button>}
+        {(run.status !== 'CREATED' || run.sourceSyncPending) && <button type="button" className="button-secondary" disabled={state.busy} onClick={() => void model.resume(run.runId)}>{run.portal?.ready ? 'Перенести через кабинет WB' : 'Проверить и продолжить сохранённую операцию'}</button>}
       </div>)}
     </div>}
   </section>;

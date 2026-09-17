@@ -12,6 +12,8 @@ import { PermissionsGuard } from '../src/modules/auth/guards/permissions.guard';
 describe('reshipment HTTP contract', () => {
   it('registers only the isolated permission-protected endpoints', () => {
     expect(Reflect.getMetadata('path', FbsReshipmentController)).toContain('marketplace-connections/fbs/reshipment');
+    expect(Reflect.getMetadata('path', FbsReshipmentController.prototype.startPortal)).toBe('portal/start');
+    expect(Reflect.getMetadata('method', FbsReshipmentController.prototype.startPortal)).toBe(1);
     expect(Reflect.getMetadata('requiredAnyPermissions', FbsReshipmentController)).toEqual(['clients:write', 'client-requests:write']);
     for (const name of ['check', 'preview', 'create', 'resume'] as const) {
       expect(Reflect.getMetadata('path', FbsReshipmentController.prototype[name])).toBe(name);
@@ -21,7 +23,7 @@ describe('reshipment HTTP contract', () => {
   // TEST: evaluate the actual endpoint metadata with the real global guard.
   it('allows client request writers through every endpoint guard, but not read-only clients', () => {
     const guard = new PermissionsGuard(new Reflector());
-    for (const name of ['capabilities', 'check', 'preview', 'create', 'resume'] as const) {
+    for (const name of ['capabilities', 'check', 'preview', 'create', 'resume', 'startPortal'] as const) {
       const context = (permissionCodes: string[]) => ({ getHandler: () => FbsReshipmentController.prototype[name],
         getClass: () => FbsReshipmentController, switchToHttp: () => ({ getRequest: () => ({ user: { roleCodes: ['CLIENT'], permissionCodes } }) }) }) as never;
       expect(guard.canActivate(context(['client-requests:write']))).toBe(true);

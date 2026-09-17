@@ -1,3 +1,5 @@
+import { completePortalRun } from './wb-portal-transfer';
+
 export type AuthUser = {
   id: string;
   email: string;
@@ -3694,7 +3696,8 @@ export type AssembleFbsOrdersResult = {
 export type RoutedFbsStockTransferResult = {
   routedTransfer: true;
   transfers: Array<{ runId: string; status: string; supplyName: string; supplyId: string | null;
-    requestNumber: number | null; errorMessage: string | null; orderCount: number }>;
+    requestNumber: number | null; errorMessage: string | null; orderCount: number;
+    portal?: FbsReshipmentRun['portal']; portalCommand?: WbPortalCommand | null }>;
   regularTransfer: MoveFbsOrdersToNewSupplyResult | null;
   errors: string[];
   skippedOrders: Array<{ id: string; reason: string }>;
@@ -7654,10 +7657,12 @@ export async function compareAdministrationWbStockApi(
   });
 }
 
-export async function fetchClients(accessToken: string, options: { includeArchived?: boolean } = {}) {
+export async function fetchClients(accessToken: string, options: { includeArchived?: boolean; displayWarehouseId?: string; allBranches?: boolean } = {}) {
   return request<ClientSummary[]>(
     withQuery('/clients', {
       includeArchived: options.includeArchived ? 'true' : undefined,
+      displayWarehouseId: options.displayWarehouseId,
+      allBranches: options.allBranches ? '1' : undefined,
     }),
     {
       accessToken,
@@ -9599,12 +9604,13 @@ export async function connectAnalyticsApi(accessToken: string, clientId: string,
   });
 }
 
-export async function fetchFbsOrders(accessToken: string, clientId: string, refresh = false, allBranches = false) {
+export async function fetchFbsOrders(accessToken: string, clientId: string, refresh = false, allBranches = false, displayWarehouseId?: string) {
   return request<ClientFbsOrders>(
     withQuery('/marketplace-connections/fbs/orders', {
       clientId,
       refresh: refresh ? '1' : undefined,
       allBranches: allBranches ? '1' : undefined,
+      displayWarehouseId,
     }),
     { accessToken },
   );
@@ -9735,9 +9741,10 @@ export async function fetchFbsActiveClients(
   accessToken: string,
   marketplace?: 'WILDBERRIES' | 'OZON' | 'YANDEX_MARKET',
   allBranches = false,
+  displayWarehouseId?: string,
 ) {
   return request<FbsActiveClientSummary[]>(
-    withQuery('/marketplace-connections/fbs/active-clients', { marketplace, allBranches: allBranches ? '1' : undefined }),
+    withQuery('/marketplace-connections/fbs/active-clients', { marketplace, allBranches: allBranches ? '1' : undefined, displayWarehouseId }),
     { accessToken },
   );
 }
@@ -9989,7 +9996,7 @@ export async function moveFbsOrdersToNewSupply(
   accessToken: string,
   payload: FbsOrderSelectionPayload,
 ) {
-  return request<MoveFbsOrdersToNewSupplyResult | RoutedFbsStockTransferResult>(
+  const result = await request<MoveFbsOrdersToNewSupplyResult | RoutedFbsStockTransferResult>(
     '/marketplace-connections/fbs/orders/move-to-new-supply',
     {
       method: 'POST',
@@ -9997,6 +10004,12 @@ export async function moveFbsOrdersToNewSupply(
       body: sanitizeFbsOrderSelectionPayload(payload),
     },
   );
+  // FIX: both existing move screens share the same browser continuation and durable recovery.
+  if ('routedTransfer' in result) for (let index = 0; index < result.transfers.length; index++) {
+    const run = result.transfers[index];
+    result.transfers[index] = await continueWbPortalRun(accessToken, payload.clientId, run);
+  }
+  return result;
 }
 
 // ADDED: analyze a failed mixed selection and move every order that remains safe.
@@ -12199,7 +12212,12 @@ export type FbsReshipmentCandidate = {
   supplierStatus: string | null; wbStatus: string | null;
   eligibleModes: FbsReshipmentMode[]; blockedReason: string | null;
 };
+export type WbPortalPlan = { sourceSupplyId: string; targetSupplyId: string; targetSupplyName: string; orderIds: string[] };
+export type WbPortalCommand = WbPortalPlan & { runId: string; commandId: string; expiresAt: string };
 export type FbsReshipmentRun = {
+  portalCommand?: WbPortalCommand | null;
+  portal?: (WbPortalPlan & { ready: boolean; started: boolean; connectionId: string;
+    stickers: Array<{ orderId: string; oldStickerId: string; newStickerId: string }> }) | null;
   sourceSyncPending?: boolean; supplyName?: string; transferPurpose?: 'NO_STOCK' | 'TRANSFER' | null;
   runId: string; status: 'CREATED' | 'NEEDS_RECONCILIATION' | 'PENDING'; mode: FbsReshipmentMode;
   supplyId: string | null; requestId: string | null; requestNumber?: number | null; errorMessage: string | null;
@@ -12221,11 +12239,23 @@ export function previewFbsReshipment(accessToken: string, input: FbsReshipmentSe
 export function createFbsReshipment(accessToken: string, input: FbsReshipmentSelection & { previewToken: string; confirm: true }) {
   return request<FbsReshipmentRun>('/marketplace-connections/fbs/reshipment/create', { method: 'POST', accessToken, body: input });
 }
-export function resumeFbsReshipment(accessToken: string, input: { clientId: string; runId: string }) {
+function rawResumeFbsReshipment(accessToken: string, input: { clientId: string; runId: string }) {
   return request<FbsReshipmentRun>('/marketplace-connections/fbs/reshipment/resume', { method: 'POST', accessToken, body: input });
 }
+function continueWbPortalRun<T extends { runId: string; status: string; errorMessage: string | null;
+  portal?: FbsReshipmentRun['portal']; portalCommand?: WbPortalCommand | null }>(accessToken: string, clientId: string, run: T) {
+  const input = { clientId, runId: run.runId };
+  return completePortalRun(run, {
+    start: () => request<FbsReshipmentRun>('/marketplace-connections/fbs/reshipment/portal/start', { method: 'POST', accessToken, body: input }),
+    reconcile: () => rawResumeFbsReshipment(accessToken, input),
+  });
+}
+export async function resumeFbsReshipment(accessToken: string, input: { clientId: string; runId: string }) {
+  const run = await rawResumeFbsReshipment(accessToken, input);
+  return continueWbPortalRun(accessToken, input.clientId, run);
+}
 
-async function request<T>(
+export async function request<T>(
   path: string,
   options: { method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: unknown; accessToken?: string } = {},
 ) {

@@ -1,3 +1,4 @@
+import { IsOptional, IsUUID } from 'class-validator';
 import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { AuthUser } from '../auth/auth.types';
@@ -16,6 +17,11 @@ import { InventoryService } from './inventory.service';
 import { CreateSkuCollectionDto, SearchSkuCollectionDto } from './dto/sku-collection.dto';
 import { SkuCollectionService } from './sku-collection.service';
 import { SkuSortingService } from './sku-sorting.service';
+
+class OpenedCheckDto {
+  @IsOptional() @IsUUID() auditBoxId?: string;
+  @IsUUID() openingId!: string;
+}
 
 @ApiTags('inventory')
 @RequirePermissions('stock:read')
@@ -74,6 +80,12 @@ export class InventoryController {
   @RequirePermissions('stock:write')
   start(@Body() dto: StartInventoryDto, @CurrentUser() user: AuthUser) {
     return this.inventory.startSession(dto, user);
+  }
+
+  // FIX: deliberate opening is distinct from background inventory GET requests.
+  @Post('sessions/:id/opened')
+  opened(@Param('id') id: string, @Body() dto: OpenedCheckDto, @CurrentUser() user: AuthUser) {
+    return this.inventory.recordViewed(id, dto.auditBoxId, dto.openingId, user);
   }
 
   @Post('sessions/:id/boxes/open')

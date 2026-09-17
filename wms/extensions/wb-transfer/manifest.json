@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "LOGOFF WMS — перенос WB",
+  "version": "0.1.0",
+  "description": "Перенос заказов WB из доставки в сборку по команде LOGOFF WMS.",
+  "permissions": ["scripting", "storage"],
+  "host_permissions": ["https://seller.wildberries.ru/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "content_scripts": [{ "matches": ["https://wms.logoff.pro/*"], "js": ["content.js"], "run_at": "document_start" }],
+  "action": { "default_title": "LOGOFF: откройте ВМС и кабинет WB в этом браузере" }
+}

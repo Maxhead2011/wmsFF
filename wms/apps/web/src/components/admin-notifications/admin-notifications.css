@@ -1,0 +1,15 @@
+/* FIX: operational popups stay independent from modal flows and existing themes. */
+.admin-notification-toasts{position:fixed;top:88px;right:20px;z-index:4000;display:grid;gap:12px;width:min(400px,calc(100vw - 32px));pointer-events:none}
+.admin-notification-toast{position:relative;pointer-events:auto;background:var(--surface,#fff);color:var(--text,#172033);border:1px solid #bfdbfe;border-left:5px solid #2563eb;border-radius:12px;box-shadow:0 12px 40px #0003;padding:18px;display:grid;gap:8px;overflow-wrap:anywhere}
+.admin-notification-toast.is-warning{border-left-color:#d97706}
+.admin-notification-toast>strong{padding-right:22px;font-size:15px}.admin-notification-toast p{margin:0;font-size:13px;line-height:1.5}.admin-notification-toast small{opacity:.65}
+.admin-notification-dismiss{position:absolute;right:8px;top:8px;border:0;background:transparent;color:inherit;cursor:pointer;padding:5px}
+.admin-notification-history{padding:12px;border-bottom:1px solid #94a3b840;max-height:55vh;overflow:auto}.admin-notification-history>strong{display:block;padding-bottom:8px}
+.admin-notification-row{border-bottom:1px solid #94a3b833}.admin-notification-row.is-unread{border-left:3px solid #d97706}.admin-notification-row .header-notification-item{width:100%}
+.admin-notification-read,.admin-notification-paging button{font:inherit;font-size:12px;cursor:pointer;border:0;background:transparent;color:inherit;text-decoration:underline;padding:8px 12px}
+.admin-notification-paging{display:flex;justify-content:space-between}.admin-notification-error{color:#b45309;font-size:12px}
+
+/* FIX: the existing bell was hidden in classic themes; retain access to event history. */
+.admin-notification-center--enabled > .modern-header-action{display:inline-flex;align-items:center;justify-content:center;gap:4px;min-width:36px;min-height:36px;border:1px solid #d8e0e8;border-radius:8px;background:var(--surface,#fff);color:var(--text,#172033);cursor:pointer}
+.admin-notification-center--enabled > .modern-header-action span{font-size:11px;font-weight:700}
+.admin-notification-toasts{max-height:calc(100dvh - 104px);overflow-y:auto;padding-bottom:8px}

@@ -140,6 +140,7 @@ public class MainActivity extends Activity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final ExecutorService monitorExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private PersonalLoginWelcome personalLoginWelcome;
     private final List<TsdClientSummary> clients = new ArrayList<>();
     private final List<TsdAssemblyRequestSummary> assemblyRequests = new ArrayList<>();
     private final List<TsdSkuCollection> skuCollections = new ArrayList<>();
@@ -384,6 +385,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (personalLoginWelcome != null) personalLoginWelcome.close();
         if (monitorMessageOverlay != null) monitorMessageOverlay.close();
         if (palletSortingScreen != null) palletSortingScreen.close();
         mainHandler.removeCallbacks(monitorHeartbeatTask);
@@ -8073,6 +8075,11 @@ public class MainActivity extends Activity {
                     + ". ТСД: " + body.device.name;
                 loadClients(false);
                 renderMainScreen();
+                // FIX: run only after explicit successful login; session reloads and screen refreshes do not replay it.
+                if (PersonalLoginWelcomeState.shouldShow(body.user == null ? null : body.user.id, BuildConfig.FLAVOR, baseUrl)) {
+                    if (personalLoginWelcome == null) personalLoginWelcome = new PersonalLoginWelcome(this);
+                    personalLoginWelcome.show();
+                }
             });
         });
     }

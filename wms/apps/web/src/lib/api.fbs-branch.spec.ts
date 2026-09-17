@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { fetchFbsActiveClients, fetchFbsOrders } from './api';
+import { fetchClients, fetchFbsActiveClients, fetchFbsOrders } from './api';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -20,4 +20,13 @@ it('sends show-all only for the explicit all-branches view', async () => {
   expect(queries[0].get('clientId')).toBe('client');
   expect(queries[1].get('marketplace')).toBe('WILDBERRIES');
   expect(urls.every(url => !url.includes('/activate'))).toBe(true);
+});
+
+it('passes the same display branch to orders, counters and clients', async () => {
+  const urls: string[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => { urls.push(url); return { ok: true, json: async () => [] }; }));
+  await fetchFbsOrders('token', 'client', false, false, 'ng');
+  await fetchFbsActiveClients('token', 'WILDBERRIES', false, 'ng');
+  await fetchClients('token', { displayWarehouseId: 'ng' });
+  expect(urls.map(url => new URL(url, 'https://example.test').searchParams.get('displayWarehouseId'))).toEqual(['ng', 'ng', 'ng']);
 });

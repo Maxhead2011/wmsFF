@@ -14,7 +14,12 @@ import type { CheckFbsReshipmentDto, CreateFbsReshipmentDto, PreviewFbsReshipmen
 
 type Link = Prisma.FbsOrderRequestLinkGetPayload<{ include: { request: true } }>;
 type OrderKey = { id: string; connectionId: string };
-type Status = { supplierStatus: string; wbStatus: string };
+type Status = { supplierStatus: string; wbStatus: string; isTransferable?: boolean };
+// FIX: only non-secret, server-verified transfer facts cross the browser bridge.
+type PortalState = { sourceSupplyId: string; oldStickers: Record<string, string>; commandId?: string;
+  stickers?: Array<{ orderId: string; oldStickerId: string; newStickerId: string }> };
+type PortalCommand = { runId: string; commandId: string; expiresAt: string; sourceSupplyId: string;
+  targetSupplyId: string; targetSupplyName: string; orderIds: string[] };
 type JournalRow = { id: string; connectionId: string; cycle: string; taskId: string; linkId: string;
   requestId: string; sourceSupplyId: string | null; taskRevision: string; linkRevision: string };
 type Delivery = Pick<FbsSupplyPlan, 'deliveryDestination' | 'marketplaceWarehouseId' | 'marketplaceWarehouseName' |
@@ -162,7 +167,8 @@ export class FbsReshipmentService {
     const routed = selection.orders.filter(row => row.noStock || row.supplierStatus === 'complete');
     const groups = new Map<string, typeof routed>();
     for (const row of routed) {
-      const key = JSON.stringify([row.connectionId, row.warehouseId || row.officeId, row.cargoType, row.crossBorderType, row.noStock]);
+      const key = JSON.stringify([row.connectionId, row.warehouseId || row.officeId, row.cargoType, row.crossBorderType, row.noStock,
+        ...(process.env.WMS_WB_PORTAL_TRANSFER_ENABLED === 'true' ? [row.supplierStatus === 'complete', row.supplyId] : [])]);
       const group = groups.get(key) ?? []; group.push(row); groups.set(key, group);
     }
     const planned = [];
@@ -284,6 +290,32 @@ export class FbsReshipmentService {
     return this.drive(dto.runId, dto.clientId, warehouseId, user);
   }
 
+  // FIX: a browser mutation is issued once; resume/check never reissues this command.
+  async startPortal(dto: ResumeFbsReshipmentDto, user: AuthUser) {
+    if (process.env.WMS_WB_PORTAL_TRANSFER_ENABLED !== 'true') throw new ForbiddenException('Перенос через кабинет WB отключён.');
+    const warehouseId = await this.authorize(dto.clientId, user);
+    return this.drive(dto.runId, dto.clientId, warehouseId, user, true);
+  }
+
+  private portalState(run: FbsReshipmentRun): PortalState | null {
+    const snapshot = run.snapshot as Record<string, unknown>;
+    return snapshot?.portal ? snapshot.portal as PortalState : null;
+  }
+
+  private async checkPortalSource(run: FbsReshipmentRun, rows: JournalRow[], user: AuthUser) {
+    const sourceSupplyId = rows[0].sourceSupplyId;
+    if (!sourceSupplyId || rows.some(row => row.sourceSupplyId !== sourceSupplyId)) {
+      throw new ConflictException('Для переноса из доставки выберите заказы одной исходной поставки.');
+    }
+    const source = await this.connections.readReshipmentWbSupply(run.clientId, run.connectionId, sourceSupplyId, user);
+    const statuses = await this.connections.readReshipmentWbStatuses(run.clientId, run.connectionId, rows.map(row => row.id), user);
+    if (source.id !== sourceSupplyId || !source.done || rows.some(row => !source.orderIds.includes(row.id) ||
+      statuses.get(row.id)?.supplierStatus !== 'complete' || statuses.get(row.id)?.wbStatus !== 'waiting' || statuses.get(row.id)?.isTransferable !== true)) {
+      throw new ConflictException('WB не подтвердил возможность переноса выбранных заказов из исходной поставки в доставке.');
+    }
+    return sourceSupplyId;
+  }
+
   private journal(run: FbsReshipmentRun): JournalRow[] {
     const snapshot = run.snapshot;
     if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot) || !Array.isArray(snapshot.orders)) throw new ConflictException('Журнал операции повреждён.');
@@ -320,7 +352,8 @@ export class FbsReshipmentService {
     }
   }
 
-  private async drive(id: string, clientId: string, warehouseId: string, user: AuthUser) {
+  private async drive(id: string, clientId: string, warehouseId: string, user: AuthUser, issuePortal = false) {
+    let portalCommand: PortalCommand | null = null;
     let run = await this.prisma.fbsReshipmentRun.findFirst({ where: { id, clientId, warehouseId } });
     if (!run) throw new NotFoundException('Операция не найдена в выбранном клиенте и филиале.');
     if (run.status === 'CREATED') {
@@ -348,6 +381,18 @@ export class FbsReshipmentService {
     try {
       const rows = this.journal(run);
       await this.validateBeforeMutation(run, rows, user);
+      let portal = this.portalState(run);
+      if (portal && process.env.WMS_WB_PORTAL_TRANSFER_ENABLED !== 'true') throw new ForbiddenException('Перенос через кабинет WB отключён.');
+      if (!portal && this.transferPurpose(run) && process.env.WMS_WB_PORTAL_TRANSFER_ENABLED === 'true') {
+        const statuses = await this.connections.readReshipmentWbStatuses(clientId, run.connectionId, rows.map(row => row.id), user);
+        if (rows.some(row => statuses.get(row.id)?.supplierStatus === 'complete')) {
+          const sourceSupplyId = await this.checkPortalSource(run, rows, user);
+          const stickers = await this.connections.readReshipmentWbStickers(clientId, run.connectionId, rows.map(row => row.id), user);
+          if (rows.some(row => !stickers.get(row.id))) throw new ConflictException('WB не подтвердил прежние стикеры. Перенос не выполнен.');
+          portal = { sourceSupplyId, oldStickers: Object.fromEntries(stickers) };
+          await save({ snapshot: json({ ...(run.snapshot as object), portal }) });
+        }
+      }
       if (!run.supplyId) {
         // FIX: fixed display names are not operation identifiers. Never adopt another transfer's supply.
         // A lost POST response stays in the journal for manual reconciliation; never repeat that POST.
@@ -374,21 +419,44 @@ export class FbsReshipmentService {
         throw new ConflictException('Поставка содержит посторонние заказы или её идентификатор не совпадает с журналом. Требуется сверка.');
       }
       const missing = rows.filter(row => !supply.orderIds.includes(row.id));
-      if (missing.length) {
+      if (missing.length && portal) {
+        // FIX: an unknown browser outcome is read-only reconciliation, even after a lease expires.
+        if (portal.commandId) throw new ConflictException('Ответ кабинета WB ещё не подтверждён. Повторите сверку; команда переноса повторно не отправляется.');
+        if (missing.length !== rows.length) throw new ConflictException('WB подтвердил только часть переноса. Требуется сверка состава поставки.');
+        await this.checkPortalSource(run, rows, user);
+        await this.validateBeforeMutation(run, rows, user);
+        await fence();
+        if (issuePortal) {
+          const commandId = randomUUID();
+          await save({ phase: 'PORTAL_STARTED', status: 'PENDING', snapshot: json({ ...(run.snapshot as object), portal: { ...portal, commandId } }) });
+          portalCommand = { runId: id, commandId, expiresAt: new Date(Date.now() + 120_000).toISOString(),
+            sourceSupplyId: portal.sourceSupplyId, targetSupplyId: supplyId, targetSupplyName: this.supplyDisplayName(run), orderIds: rows.map(row => row.id) };
+        } else await save({ phase: 'PORTAL_READY', status: 'PENDING' });
+      } else if (missing.length) {
         await this.validateBeforeMutation(run, rows, user);
         await fence();
         await save({ phase: 'WB_MOVE_STARTED' });
         await this.connections.addReshipmentWbOrders(clientId, run.connectionId, supplyId, missing.map(row => row.id), user);
         supply = await this.connections.readReshipmentWbSupply(clientId, run.connectionId, supplyId, user);
       }
-      if (supply.id !== supplyId || supply.done || rows.some(row => !supply.orderIds.includes(row.id)) ||
-        supply.orderIds.some(orderId => !rows.some(row => row.id === orderId))) throw new ConflictException('WB ещё не подтвердил точный состав поставки. Повторите сверку; новая заявка не создана.');
-      await this.freshStatuses(run, rows, user, true);
-      await fence();
-      await save({ phase: 'WB_VERIFIED' });
-      await this.finalize(run, rows, leaseToken, user);
-      if (this.transferPurpose(run)) await this.finishSourceSync(run);
-      this.connections.invalidateRepeatAssemblyCache(clientId);
+      if (!(missing.length && portal)) {
+        if (supply.id !== supplyId || supply.done || rows.some(row => !supply.orderIds.includes(row.id)) ||
+          supply.orderIds.some(orderId => !rows.some(row => row.id === orderId))) throw new ConflictException('WB ещё не подтвердил точный состав поставки. Повторите сверку; новая заявка не создана.');
+        await this.freshStatuses(run, rows, user, true);
+        if (portal) {
+          const source = await this.connections.readReshipmentWbSupply(clientId, run.connectionId, portal.sourceSupplyId, user);
+          if (source.id !== portal.sourceSupplyId || rows.some(row => source.orderIds.includes(row.id))) throw new ConflictException('WB ещё показывает заказ в исходной поставке. Повторите сверку.');
+          const fresh = await this.connections.readReshipmentWbStickers(clientId, run.connectionId, rows.map(row => row.id), user);
+          if (rows.some(row => !fresh.get(row.id) || fresh.get(row.id) === portal!.oldStickers[row.id])) throw new ConflictException('WB ещё не подтвердил новые стикеры. Повторите сверку.');
+          const stickers = rows.map(row => ({ orderId: row.id, oldStickerId: portal!.oldStickers[row.id], newStickerId: fresh.get(row.id)! }));
+          await save({ snapshot: json({ ...(run.snapshot as object), portal: { ...portal, stickers } }) });
+        }
+        await fence();
+        await save({ phase: 'WB_VERIFIED' });
+        await this.finalize(run, rows, leaseToken, user);
+        if (this.transferPurpose(run)) await this.finishSourceSync(run);
+        this.connections.invalidateRepeatAssemblyCache(clientId);
+      }
     } catch (error) {
       // Return the durable operation handle even for an unknown remote outcome.
       // FIX: post-commit cache/response failure must never downgrade success.
@@ -398,7 +466,7 @@ export class FbsReshipmentService {
     } finally {
       await this.prisma.fbsReshipmentRun.updateMany({ where: { id, leaseToken }, data: { leaseToken: null, leaseUntil: null } });
     }
-    return this.view((await this.prisma.fbsReshipmentRun.findUnique({ where: { id } }))!);
+    return { ...await this.view((await this.prisma.fbsReshipmentRun.findUnique({ where: { id } }))!), portalCommand };
   }
 
   private async finalize(run: FbsReshipmentRun, rows: JournalRow[], leaseToken: string, user: AuthUser) {
@@ -496,7 +564,12 @@ export class FbsReshipmentService {
 
   private async view(run: FbsReshipmentRun) {
     const request = run.requestId ? await this.prisma.clientRequest.findUnique({ where: { id: run.requestId }, select: { number: true } }) : null;
-    return { runId: run.id, status: run.status, mode: run.mode, supplyName: this.supplyDisplayName(run), transferPurpose: this.transferPurpose(run) ?? null, supplyId: run.supplyId, requestId: run.requestId,
+    const portal = this.portalState(run);
+    return { portalCommand: null as PortalCommand | null,
+      portal: portal ? { ready: run.phase === 'PORTAL_READY' && !portal.commandId, started: !!portal.commandId,
+        sourceSupplyId: portal.sourceSupplyId, targetSupplyId: run.supplyId, targetSupplyName: this.supplyDisplayName(run),
+        orderIds: this.journal(run).map(row => row.id), connectionId: run.connectionId, stickers: portal.stickers ?? [] } : null,
+      runId: run.id, status: run.status, mode: run.mode, supplyName: this.supplyDisplayName(run), transferPurpose: this.transferPurpose(run) ?? null, supplyId: run.supplyId, requestId: run.requestId,
       requestNumber: request?.number ?? null, sourceSyncPending: this.transferPurpose(run) ? run.phase === 'SOURCE_SYNC_PENDING' : false, errorMessage: run.errorMessage ?? null };
   }
 }

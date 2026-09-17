@@ -1,3 +1,6 @@
+import { reportInventoryOpened } from './lib/adminNotifications';
+import { AdminNotificationList, AdminNotificationToasts, useAdminNotifications } from './components/admin-notifications/AdminNotifications';
+import { type AdminNotification, type InventoryNotificationTarget } from './lib/adminNotifications';
 import {
   AlertTriangle,
   Bell,
@@ -153,16 +156,17 @@ const initialTheme = initialSession ? loadUiTheme(initialSession.user) : 'classi
 
 export function App() {
   const [session, setSession] = useState<AuthSession | null>(() => initialSession);
+  const [isRestoring, setRestoring] = useState(Boolean(session));
+  // FIX: claim popups only after the authenticated workspace can display them.
+  const adminNotifications = useAdminNotifications(isRestoring ? null : session);
+  const [inventoryNotificationTarget, setInventoryNotificationTarget] = useState<InventoryNotificationTarget | null>(null);
   const [showAuthPanel, setShowAuthPanel] = useState(false);
   const [uiTheme, setUiTheme] = useState<UiTheme>(() => initialTheme);
-  const [isRestoring, setRestoring] = useState(Boolean(session));
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<WorkspaceId>(() =>
     initialSession ? defaultWorkspaceForUser(initialSession.user) : 'overview',
   );
   const [branches, setBranches] = useState<BranchSummary[]>([]);
   const [branchBusy, setBranchBusy] = useState(false);
-  // FIX: all-branches is a FBS view, not a mutation of the working warehouse.
-  const [fbsAllBranches, setFbsAllBranches] = useState(false);
   const [kizUnread, setKizUnread] = useState(0);
   const [clientNotifications, setClientNotifications] = useState<ClientNotificationSummary[]>([]);
   const [notificationCenterOpen, setNotificationCenterOpen] = useState(false);
@@ -410,7 +414,7 @@ export function App() {
 
     return items.slice(0, 10);
   }, [availableWorkspaces, clientNotifications, kizUnread]);
-  const headerUnreadCount = headerNotifications.reduce(
+  const headerUnreadCount = adminNotifications.unreadCount + headerNotifications.reduce(
     (total, item) => total + (item.id === 'kiz-open-issues' ? kizUnread : item.unread ? 1 : 0),
     0,
   );
@@ -490,6 +494,26 @@ export function App() {
     } finally {
       setBranchBusy(false);
     }
+  }
+
+  async function openAdminNotification(item: AdminNotification) {
+    if (!session) return;
+    try {
+      if (item.warehouseId && item.warehouseId !== session.user.activeWarehouseId && branches.some(branch => branch.id === item.warehouseId)) {
+        await selectBranch(item.warehouseId);
+      }
+      const targetWorkspace = item.sessionId ? 'inventory' : 'requests';
+      if (!canKeepWorkspace(session.user, targetWorkspace)) throw new Error('Нет доступа к разделу события.');
+      if (item.sessionId) {
+        setInventoryNotificationTarget({ sessionId: item.sessionId, auditBoxId: item.auditBoxId, nonce: Date.now() });
+        void reportInventoryOpened(session.accessToken, session.user.id, item.sessionId, item.auditBoxId ?? undefined).catch(caught => adminNotifications.setError(caught instanceof Error ? caught.message : 'Не удалось зафиксировать открытие проверки.'));
+        setActiveWorkspaceId('inventory');
+      } else if (item.requestId) {
+        setFocusedRequestId(item.requestId); setActiveWorkspaceId('requests');
+      }
+      await adminNotifications.markRead(item);
+      setNotificationCenterOpen(false);
+    } catch (caught) { adminNotifications.setError(caught instanceof Error ? caught.message : 'Не удалось открыть событие. Проверьте доступ к филиалу и повторите.'); }
   }
 
   function openHeaderNotification(item: HeaderNotificationItem) {
@@ -652,18 +676,10 @@ export function App() {
                 <MapPin className="workspace-branch-select__icon" size={17} aria-hidden="true" />
                 <span>Город работы</span>
                 <select
-                  value={activeWorkspaceId === 'fbs' && fbsAllBranches ? '__all_fbs__' : session.user.activeWarehouseId || ''}
-                  disabled={branchBusy || (branches.length === 1 && activeWorkspaceId !== 'fbs')}
-                  onChange={(event) => {
-                    if (event.target.value === '__all_fbs__') {
-                      setFbsAllBranches(true);
-                    } else {
-                      setFbsAllBranches(false);
-                      void selectBranch(event.target.value);
-                    }
-                  }}
+                  value={session.user.activeWarehouseId || ''}
+                  disabled={branchBusy || branches.length === 1}
+                  onChange={(event) => void selectBranch(event.target.value)}
                 >
-                  {activeWorkspaceId === 'fbs' ? <option value="__all_fbs__">Показать всё</option> : null}
                   {branches.map((branch) => (
                     <option key={branch.id} value={branch.id}>
                       {branch.city} · {branch.name}
@@ -672,7 +688,7 @@ export function App() {
                 </select>
               </label>
             ) : null}
-            <div className="header-notification-center" ref={notificationCenterRef}>
+            <div className={`header-notification-center ${adminNotifications.enabled || adminNotifications.error ? 'admin-notification-center--enabled' : ''}`} ref={notificationCenterRef}>
               <button
                 className="modern-header-action"
                 type="button"
@@ -707,6 +723,7 @@ export function App() {
                     </button>
                   </header>
 
+                  <AdminNotificationList state={adminNotifications} onOpen={openAdminNotification} />
                   {headerNotifications.length ? (
                     <div className="header-notification-list">
                       {headerNotifications.map((notification) => (
@@ -732,13 +749,13 @@ export function App() {
                         </button>
                       ))}
                     </div>
-                  ) : (
+                  ) : !adminNotifications.items.length ? (
                     <div className="header-notification-empty">
                       <Bell size={22} aria-hidden="true" />
                       <strong>Всё спокойно</strong>
                       <span>Новых уведомлений и проблем нет.</span>
                     </div>
-                  )}
+                  ) : null}
                 </section>
               ) : null}
             </div>
@@ -803,10 +820,11 @@ export function App() {
               setActiveWorkspaceId('requests');
             },
             () => setFocusedRequestId(null),
-            fbsAllBranches,
+            inventoryNotificationTarget,
           )}
         </section>
 
+        <AdminNotificationToasts state={adminNotifications} onOpen={openAdminNotification} />
         <footer className="workspace-footer">
           <span>WMS фулфилмента LOGOFF</span>
           <span>Роли: {session.user.roleCodes.join(', ') || 'нет роли'}</span>
@@ -904,7 +922,7 @@ function renderWorkspace(
   focusedRequestId: string | null,
   openRequestFromFbs: (requestId: string) => void,
   clearFocusedRequest: () => void,
-  fbsAllBranches: boolean,
+  inventoryNotificationTarget: InventoryNotificationTarget | null,
 ) {
   switch (activeWorkspaceId) {
     case 'ai':
@@ -940,7 +958,7 @@ function renderWorkspace(
     case 'storage-zones':
       return <StorageZonesPanel session={session} />;
     case 'inventory':
-      return <InventoryPanel session={session} />;
+      return <InventoryPanel session={session} notificationTarget={inventoryNotificationTarget} />;
     case 'pallet-sorting':
       return <PalletSortingPanel session={session} />;
     case 'kiz':
@@ -956,8 +974,7 @@ function renderWorkspace(
     case 'contracts':
       return <ContractsPanel session={session} />;
     case 'fbs':
-      // FIX: reset old branch rows, selections and dialogs before loading the next branch.
-      return <Suspense fallback={<div className="workspace-loading">Загружаю FBS…</div>}><FbsPanel key={fbsAllBranches ? 'all' : session.user.activeWarehouseId || 'none'} allBranches={fbsAllBranches} session={session} onOpenRequest={availableWorkspaces.some((item) => item.id === 'requests') ? openRequestFromFbs : undefined} /></Suspense>;
+      return <Suspense fallback={<div className="workspace-loading">Загружаю FBS…</div>}><FbsPanel session={session} onOpenRequest={availableWorkspaces.some((item) => item.id === 'requests') ? openRequestFromFbs : undefined} /></Suspense>;
     case 'factory':
       return <Suspense fallback={<div className="workspace-loading">Загружаю фабрику…</div>}><FactoryPanel session={session} /></Suspense>;
     case 'fbs-packed':

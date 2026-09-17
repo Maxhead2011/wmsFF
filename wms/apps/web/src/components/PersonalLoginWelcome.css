@@ -1,0 +1,37 @@
+.personal-login-welcome {
+  position: fixed; inset: 0; z-index: 10000; display: grid; place-items: center;
+  overflow: hidden; padding: 28px; color: #fff3ff; background: #160c2b;
+  background: radial-gradient(ellipse at 50% 45%, #43214f 0%, #211132 48%, #100a1c 100%);
+}
+.personal-login-welcome__halo {
+  position: absolute; width: min(70vw, 650px); height: min(70vw, 650px); border-radius: 50%;
+  background: radial-gradient(circle, #c585d02b, #c585d000 68%); pointer-events: none;
+  animation: personal-welcome-breathe 3s ease-in-out infinite alternate;
+}
+.personal-login-welcome__content { position: relative; z-index: 1; width: min(780px, 100%); text-align: center; }
+.personal-login-welcome__eyebrow { margin: 0 0 28px; color: #ddb4e2; font-size: 14px; letter-spacing: .25em; }
+.personal-login-welcome h1 {
+  margin: 0; min-height: 3.8em; display: grid; align-items: center;
+  font-family: Georgia, 'Times New Roman', serif; font-weight: 400; line-height: 1.4;
+  font-size: clamp(28px, 5.2vw, 54px); overflow-wrap: anywhere;
+  text-shadow: 0 0 28px #e2acdf66;
+}
+.personal-login-welcome__cursor { color: #f0c6f0; font-weight: 300; }
+.personal-login-welcome__words { white-space: nowrap; }
+.personal-login-welcome button {
+  margin-top: 24px; padding: 12px 23px; border: 1px solid #dcb3df66; border-radius: 999px;
+  background: #ffffff0a; color: #f8e9fa; font: inherit; cursor: pointer;
+}
+.personal-login-welcome button:hover { background: #ffffff18; }
+.personal-login-welcome button:focus-visible { outline: 2px solid #f6d3f3; outline-offset: 5px; }
+.personal-login-welcome__dust { position: absolute; inset: 0; pointer-events: none; }
+.personal-login-welcome__dust i {
+  position: absolute; width: 3px; height: 3px; border-radius: 50%; background: #ffe3ba;
+  box-shadow: 0 0 9px 2px #f3bbdf55; animation: personal-welcome-drift 3.4s ease-in-out infinite alternate;
+}
+@keyframes personal-welcome-breathe { to { transform: scale(1.12); opacity: .7; } }
+@keyframes personal-welcome-drift { from { transform: translateY(8px); opacity: .25; } to { transform: translateY(-12px); opacity: .8; } }
+@media (prefers-reduced-motion: reduce) {
+  .personal-login-welcome__halo, .personal-login-welcome__dust i { animation: none; }
+  .personal-login-welcome__cursor { display: none; }
+}

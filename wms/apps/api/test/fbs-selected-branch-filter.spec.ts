@@ -49,6 +49,15 @@ describe('FBS selected branch filter', () => {
     expect(result.orders.map((o: any) => o.id)).toEqual(['one', 'two', 'central', 'unknown', 'ozon']);
   });
 
+  it('uses an explicit display branch without changing the working branch', async () => {
+    vi.stubEnv('WMS_FBS_SELECTED_BRANCH_FILTER', 'true');
+    const { service, response, user } = setup();
+    const result = await (service as any).scopeFbsOrdersForUser(response, user, false, 'ng');
+    expect(result.orders.map((o: any) => o.id)).toEqual(['two', 'ozon']);
+    expect(user.activeWarehouseId).toBe('msk');
+    await expect((service as any).scopeFbsOrdersForUser(response, { ...user, roleCodes: ['MANAGER'], permissionCodes: [], warehouseIds: ['msk'] }, false, 'ng')).rejects.toThrow();
+  });
+
   it('shows all non-excluded orders for an administrator in show-all mode', async () => {
     vi.stubEnv('WMS_FBS_SELECTED_BRANCH_FILTER', 'true');
     const { service, response, user } = setup();
