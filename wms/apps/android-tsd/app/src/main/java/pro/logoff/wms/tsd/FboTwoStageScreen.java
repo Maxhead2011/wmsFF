@@ -1,6 +1,8 @@
 package pro.logoff.wms.tsd;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.text.InputType;
 import android.app.DownloadManager;
 import android.content.Context;
 import android.content.SharedPreferences;
@@ -25,7 +27,9 @@ final class FboTwoStageScreen {
     private final TsdSession session;
     private final WmsApi api;
     private final String id, baseUrl;
-    private final Runnable back;
+    private final Runnable back, moveRemainder;
+    private AlertDialog quantityDialog;
+    private EditText quantityInput;
     private final boolean packing;
     private int feedbackColor=Color.TRANSPARENT;
     private final Handler handler=new Handler(Looper.getMainLooper());
@@ -39,6 +43,10 @@ final class FboTwoStageScreen {
     private String message="";
     private final Runnable automatic=this::submit;
     FboTwoStageScreen(Activity activity,TsdSession session,WmsApi api,String baseUrl,String id,boolean packing,Runnable back) {
+        this(activity,session,api,baseUrl,id,packing,back,null);
+    }
+    FboTwoStageScreen(Activity activity,TsdSession session,WmsApi api,String baseUrl,String id,boolean packing,Runnable back,Runnable moveRemainder) {
+        this.moveRemainder=moveRemainder;
         this.packing=packing;
         this.activity=activity;this.session=session;this.api=api;this.baseUrl=baseUrl;this.id=id;this.back=back;
         prefs=activity.getSharedPreferences("fbo-pending",Context.MODE_PRIVATE);pendingKey=session.userId+":"+id;
@@ -47,8 +55,8 @@ final class FboTwoStageScreen {
     }
     boolean belongsTo(TsdSession current){return session.hasSameAccessToken(current);}
     boolean canLeave(){return !busy&&state.pending()==null;}
-    EditText scannerField(){return input;}
-    void close(){closed=true;handler.removeCallbacks(automatic);executor.shutdownNow();}
+    EditText scannerField(){return quantityInput!=null?quantityInput:input;}
+    void close(){closed=true;if(quantityDialog!=null)quantityDialog.dismiss();handler.removeCallbacks(automatic);executor.shutdownNow();}
     private void text(LinearLayout root,String value){TextView v=new TsdUi.Label(activity);v.setText(value);v.setTextSize(19);v.setTextColor(Color.BLACK);v.setPadding(0,9,0,9);root.addView(v);}
     private void card(LinearLayout root,String value,int color){text(root,value);root.getChildAt(root.getChildCount()-1).setBackgroundColor(color);}
     private void button(LinearLayout root,String title,boolean enabled,Runnable action){Button b=new TsdUi.Button(activity);b.setText(title);b.setAllCaps(false);b.setEnabled(enabled&&!busy);b.setOnClickListener(v->action.run());root.addView(b);}
@@ -79,7 +87,10 @@ final class FboTwoStageScreen {
                     text(root,"Осталось отобрать "+(plan.needed-plan.picked));TsdFboPlan.Route r=source();
                     if(r!=null){card(root,r.boxCode+" · "+r.pallet+" · "+r.zone,Color.rgb(187,247,208));for(TsdFboPlan.Task t:r.tasks)text(root,"Отберите "+t.quantity+" ед. · "+t.name+" · "+t.barcode);
                         if(r.recount)text(root,"Для целого короба требуется актуализация: количество и КИЗ расходятся.");
-                        if(r.wholeBox)button(root,"Короб забран целиком",ready(),()->send("PICK_BOX",null));
+                        // FIX: picking and transferring the surplus are explicit choices, never automatic writes.
+                        button(root,"Отобрать товар по ШК + КИЗ",ready(),()->{state.barcode="";message="Сканируйте ШК нужного товара, затем КИЗ.";render();});
+                        if(r.remainderQuantity>0&&moveRemainder!=null)button(root,"Переместить ненужный остаток ("+r.remainderQuantity+" ед.)",ready()&&state.barcode.isEmpty(),()->{if(!canLeave())return;close();moveRemainder.run();});
+                        if(r.wholeBox)button(root,"Короб забран целиком",ready()&&state.barcode.isEmpty(),this::confirmWholeBoxDialog);
                         button(root,"Другой исходный короб",ready(),()->{state.source="";state.barcode="";render();});
                     }else {
                         if(state.pallet.isEmpty()){
@@ -109,7 +120,7 @@ final class FboTwoStageScreen {
         button(root,"Обновить",ready(),this::refresh);button(root,"Назад",canLeave(),()->{close();back.run();});
         ScrollView scroll=new ScrollView(activity);scroll.addView(root);activity.setContentView(scroll);if(input!=null&&ready())input.requestFocus();
     }
-    void submit(){handler.removeCallbacks(automatic);if(!ready()||input==null||plan==null)return;String value=input.getText().toString().trim();if(value.isEmpty())return;input.setText("");message="";
+    void submit(){if(quantityDialog!=null){confirmWholeBoxQuantity();return;}handler.removeCallbacks(automatic);if(!ready()||input==null||plan==null)return;String value=input.getText().toString().trim();if(value.isEmpty())return;input.setText("");message="";
         if("CONTROL".equals(plan.phase)){state.target=value;send("CONFIRM_BOX",null);return;}
         feedbackColor=Color.rgb(254,202,202);
         if(!FboScanState.phaseAllowed(packing,plan.phase))return;
@@ -132,7 +143,8 @@ final class FboTwoStageScreen {
         state.barcode=value;if(line.requiresKiz)render();else send("PICKING".equals(plan.phase)?"PICK_UNIT":"PACK_UNIT",null);
     }
     private void refresh(){if(busy)return;busy=true;render();executor.execute(()->{try{Response<TsdFboPlan> res=api.getFboPlan(session.authorizationHeader(),id).execute();if(!res.isSuccessful()||res.body()==null)throw new Exception(error(res));TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;if(state.pending()==null){state.reconcile(plan);state.barcode="";}busy=false;render();});}catch(Exception e){handler.post(()->{busy=false;message="Не удалось обновить: "+e.getMessage();render();});}});}
-    private void send(String action,String kiz){if(busy||closed)return;Map<String,String> payload=state.prepare(action,kiz);
+    private void send(String action,String kiz){send(action,kiz,null);}
+    private void send(String action,String kiz,Integer quantity){if(busy||closed)return;Map<String,String> payload=state.prepare(action,kiz,quantity);
         // FIX: persist before sending, so a restart can retry the identical operation.
         if(!prefs.edit().putString(pendingKey,new JSONObject(payload).toString()).commit()){message="Не удалось сохранить операцию. Проверьте память ТСД.";render();return;}
         busy=true;message="";render();executor.execute(()->{try{
@@ -143,6 +155,26 @@ final class FboTwoStageScreen {
             TsdFboPlan next=res.body();handler.post(()->{state.accepted();prefs.edit().remove(pendingKey).commit();plan=next;busy=false;feedbackColor=Color.rgb(187,247,208);message="Операция принята";
                 if("OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan);if("FINISH".equals(payload.get("action")))download();render();});
         }catch(Exception e){handler.post(()->{busy=false;feedbackColor=Color.rgb(254,202,202);message="Ответ не получен. Повторите тот же запрос.";render();});}});
+    }
+    // FIX: do not prefill a physical count or submit stock movements before confirmation.
+    private void confirmWholeBoxDialog(){
+        if(!ready()||source()==null)return;
+        handler.removeCallbacks(automatic);
+        quantityInput=new EditText(activity);quantityInput.setInputType(InputType.TYPE_CLASS_NUMBER);
+        quantityInput.setSingleLine(true);quantityInput.setHint("Фактическое количество единиц");
+        quantityDialog=new AlertDialog.Builder(activity).setTitle("Короб забран целиком")
+            .setMessage("Введите количество единиц товара в коробе. По учёту: "+source().wholeBoxQuantity)
+            .setView(quantityInput).setPositiveButton("Подтвердить",null).setNegativeButton("Отмена",null).create();
+        quantityDialog.setOnDismissListener(d->{quantityDialog=null;quantityInput=null;if(!closed)render();});
+        quantityDialog.show();quantityDialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->confirmWholeBoxQuantity());
+        quantityInput.requestFocus();
+    }
+    private void confirmWholeBoxQuantity(){
+        if(quantityInput==null||!ready())return;
+        int count;try{count=Integer.parseInt(quantityInput.getText().toString().trim());}catch(Exception e){quantityInput.setError("Введите целое положительное количество");return;}
+        TsdFboPlan.Route route=source();
+        if(count<1||route==null||count!=route.wholeBoxQuantity){quantityInput.setError("Количество не совпадает с учётом. Проверьте короб и обновите задание.");return;}
+        quantityDialog.dismiss();send("PICK_BOX",null,count);
     }
     private String error(Response<?> response){try{if(response.errorBody()!=null){Object m=new JSONObject(response.errorBody().string()).opt("message");if(m!=null)return m.toString();}}catch(Exception ignored){}return "Ошибка ВМС "+response.code();}
     private void download(){try{DownloadManager manager=(DownloadManager)activity.getSystemService(Context.DOWNLOAD_SERVICE);String url=baseUrl.replaceAll("/+$","")+"/api/v1/tsd/requests/"+id+"/fbo/wb-packages.xlsx";

@@ -22,7 +22,7 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
     }>;
     const scopes = { requireClientAccess: (u: AuthUser, c: string) => { if (c !== client || u.id !== uid)
             throw Error('Client access denied'); } };
-    const act = (action: string, extra: Record<string, string> = {}) => svc.act(request, { action, operationId: randomUUID(), ...extra }, user);
+    const act = (action: string, extra: Record<string, string | number> = {}) => svc.act(request, { action, operationId: randomUUID(), ...(action === 'PICK_BOX' ? { confirmedQuantity: 2 } : {}), ...extra }, user);
     beforeEach(async () => {
         vi.stubEnv('WMS_FBO_TWO_STAGE_ENABLED', 'true');
         [client, wh, uid, sku, other, request, whole, partial, target, line] = Array.from({ length: 10 }, () => randomUUID());
@@ -70,6 +70,23 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         vi.unstubAllEnvs();
     });
     afterAll(() => p.$disconnect());
+    // TEST: 1509_27 must not consume one unit of demand before an exact whole 1509_31.
+    it('prefers the complete matching box over an earlier mixed box', async () => {
+        await p.clientRequestItem.update({ where: { id: line }, data: { quantity: 2 } });
+        await p.box.update({ where: { id: partial }, data: { code: 'A_MIXED_' + partial } });
+        await p.box.update({ where: { id: whole }, data: { code: 'B_WHOLE_' + whole } });
+        const plan = await act('START');
+        expect(plan.route.map(b => b.boxCode)).toEqual(['B_WHOLE_' + whole]);
+        expect(plan.route[0]).toMatchObject({ wholeBox: true, wholeBoxQuantity: 2 });
+    });
+    // TEST: quantity confirmation must not silently take a different number of physical units.
+    it.each([undefined, 1])('rejects absent or mismatching whole-box confirmation %s before stock changes', async quantity => {
+        await act('START');
+        await expect(svc.act(request, { action: 'PICK_BOX', operationId: randomUUID(), sourceBoxCode: 'FFL_' + whole,
+            confirmedQuantity: quantity } as any, user)).rejects.toThrow(/количество/i);
+        expect(await p.fboAssemblyUnit.count({ where: { requestId: request } })).toBe(0);
+        expect((await p.stockBalance.aggregate({ where: { boxId: whole }, _sum: { quantity: true } }))._sum.quantity).toBe(2);
+    });
     // TEST: a failed serializable attempt rolls back its writes before the identical operation retries.
     it('retries a write conflict after stock writes without double picking', async () => {
         await act('START');
@@ -82,7 +99,7 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
             return result;
         }, options);
         (svc as any).prisma = new Proxy(p, { get: (target, key) => key === '$transaction' ? conflictedTransaction : Reflect.get(target, key) });
-        const dto = { action: 'PICK_BOX', operationId: randomUUID(), sourceBoxCode: 'FFL_' + whole };
+        const dto = { action: 'PICK_BOX', confirmedQuantity: 2, operationId: randomUUID(), sourceBoxCode: 'FFL_' + whole };
         const result = await svc.act(request, dto, user);
         expect(attempts).toBe(2);
         expect(result.picked).toBe(2);
@@ -118,7 +135,7 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         const plan = await act('START');
         expect(plan.route.some(b => b.boxCode === 'FFL_' + whole)).toBe(true);
         expect((await p.fbsTsdAssembly.findUniqueOrThrow({ where: { id: reservation.id } })).reservedBoxId).toBe(whole);
-        const dto = { action: 'PICK_BOX', operationId: randomUUID(), sourceBoxCode: 'FFL_' + whole };
+        const dto = { action: 'PICK_BOX', confirmedQuantity: 2, operationId: randomUUID(), sourceBoxCode: 'FFL_' + whole };
         const result = await svc.act(request, dto, user);
         expect(result.picked).toBe(2);
         expect(result.route.some(b => b.boxCode === 'FFL_' + whole)).toBe(false);

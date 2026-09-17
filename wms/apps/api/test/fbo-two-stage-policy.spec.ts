@@ -1,6 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { wholeBoxDecision, remainingFboLines } from '../src/modules/tsd/fbo-two-stage-policy';
+import { wholeBoxDecision, remainingFboLines, prioritizeFboWholeBoxes } from '../src/modules/tsd/fbo-two-stage-policy';
 describe('FBO physical picking', () => {
+    // TEST: reproduce 1509_27 (one needed unit) before 1509_31 (all 19 needed units).
+    it('prioritizes an exact 19-unit box without consuming demand on the mixed box', () => {
+        const box = (code: string, n: number, mixed = false) => ({ code,
+            balances: [{ skuId: 's', quantity: n, status: 'AVAILABLE' }, ...(mixed ? [{ skuId: 'other', quantity: 2, status: 'AVAILABLE' }] : [])],
+            productMarks: Array.from({ length: n }, (_, i) => ({ skuId: 's', status: 'AVAILABLE', identity: `${code}:${i}` })),
+        });
+        const mixed = box('1509_27', 1, true), whole = box('1509_31', 19), tooBig = box('OTHER', 20);
+        const decide = (b: ReturnType<typeof box>, demand: Record<string, number>) => wholeBoxDecision(b.balances, demand, b.productMarks, true);
+        const demand = { s: 19 };
+        expect(prioritizeFboWholeBoxes([mixed, tooBig, whole], demand, decide).map(b => b.code)).toEqual(['1509_31', '1509_27', 'OTHER']);
+        expect(demand).toEqual({ s: 19 });
+        // A broken KIZ list must not gain whole-box priority.
+        whole.productMarks.pop();
+        expect(prioritizeFboWholeBoxes([mixed, whole], demand, decide)[0]).toBe(mixed);
+    });
     // TEST: a homogeneous box cannot be taken wholesale when demand is smaller.
     it('requires individual scans for a 20-unit box when only five are required', () => {
         expect(wholeBoxDecision([{ skuId: 's', quantity: 20, status: 'AVAILABLE' }], { s: 5 }, [], false).allowed).toBe(false);

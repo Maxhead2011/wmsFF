@@ -17,6 +17,7 @@ public class TsdFboPlan {
     public static class Route {
         public String boxCode, pallet, zone;
         public boolean wholeBox, recount;
+        public int wholeBoxQuantity, remainderQuantity;
         public List<Task> tasks;
     }
     public static class Task { public String skuId, barcode, name; public int quantity; public boolean requiresKiz; }

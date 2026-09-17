@@ -13,7 +13,9 @@ final class FboScanState {
     }
     String pallet = "", source = "", target = "", barcode = "";
     private Map<String,String> pending;
-    Map<String,String> prepare(String action, String kiz) {
+    Map<String,String> prepare(String action, String kiz) { return prepare(action, kiz, null); }
+    // FIX: persist quantity together with the operation id so a retry cannot change it.
+    Map<String,String> prepare(String action, String kiz, Integer confirmedQuantity) {
         if (pending != null) return new LinkedHashMap<>(pending);
         Map<String,String> p = new LinkedHashMap<>(); p.put("action",action); p.put("operationId",UUID.randomUUID().toString());
         if (!pallet.isEmpty()) p.put("palletCode",pallet);
@@ -21,6 +23,7 @@ final class FboScanState {
         if (!target.isEmpty()) p.put("targetBoxCode",target);
         if (!barcode.isEmpty()) p.put("barcode",barcode);
         if (kiz != null && !kiz.isEmpty()) p.put("kiz",kiz);
+        if (confirmedQuantity != null) p.put("confirmedQuantity", String.valueOf(confirmedQuantity));
         pending = p; return new LinkedHashMap<>(p);
     }
     void restore(Map<String,String> value) {

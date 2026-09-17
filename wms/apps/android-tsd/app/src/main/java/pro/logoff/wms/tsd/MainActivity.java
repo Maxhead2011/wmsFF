@@ -182,6 +182,7 @@ public class MainActivity extends Activity {
     private KizLocationScreen kizLocationScreen;
     private KizSearchScreen kizSearchScreen; // FIX: preserve the published physical search.
     private FboTwoStageScreen fboTwoStageScreen;
+    private String fboTransferRequestId="";
     private boolean fboPacking;
     private TsdAssemblyPlan assemblyPlan;
     private TsdBoxlessPackingResponse boxlessPacking;
@@ -542,6 +543,7 @@ public class MainActivity extends Activity {
     public void onBackPressed() {
         if (screen == Screen.KIZ_SEARCH && kizSearchScreen != null) { kizSearchScreen.close(); kizSearchScreen=null;renderKizMenu();return; }
         if (screen == Screen.KIZ_MENU || screen == Screen.MIGRATION_MENU) { renderMainScreen();return; }
+        if (screen == Screen.STOCK_TRANSFER && !fboTransferRequestId.isEmpty()) { returnToFboAfterTransfer(); return; }
         if (screen == Screen.FBO_TWO_STAGE && fboTwoStageScreen != null) {
             if (!fboTwoStageScreen.canLeave()) { showScanningErrorDialog("Дождитесь ответа или повторите неподтверждённый запрос."); return; }
             fboTwoStageScreen.close(); fboTwoStageScreen = null; loadAssemblyRequests(); return;
@@ -580,6 +582,7 @@ public class MainActivity extends Activity {
     }
 
     private void renderMainScreen() {
+        fboTransferRequestId="";
         if (kizLocationScreen != null) { kizLocationScreen.close(); kizLocationScreen = null; }
         TsdSession session = safeSession();
         if (session == null) {
@@ -700,6 +703,20 @@ public class MainActivity extends Activity {
         });
     }
 
+    // FIX: enter the existing transfer menu and reload FBO from the server on return.
+    private void openFboRemainderTransfer() {
+        if(assemblyPlan==null)return;
+        fboTransferRequestId=assemblyPlan.id;
+        if(fboTwoStageScreen!=null){fboTwoStageScreen.close();fboTwoStageScreen=null;}
+        openStockTransfer();
+    }
+    private void returnToFboAfterTransfer() {
+        if(transferBusy||!transferSelectedItems.isEmpty()||transferPendingKizItem!=null){
+            showScanningErrorDialog("Завершите перемещение или отмените выбранные товары перед возвратом в сборку.");return;
+        }
+        String requestId=fboTransferRequestId;fboTransferRequestId="";
+        if(!requestId.isEmpty()){fboPacking=false;loadAssemblyPlan(requestId);}
+    }
     private void openStockTransfer() {
         transferWorkflow = null;
         transferOperationKey = "";
@@ -875,7 +892,8 @@ public class MainActivity extends Activity {
         if (transferBusy) {
             root.addView(messageView(tr("Проверяю…", "Tekshirilmoqda…")));
         }
-        root.addView(secondaryButton(tr("В главное меню", "Bosh menyuga"), view -> renderMainScreen()));
+        if(!fboTransferRequestId.isEmpty()) root.addView(secondaryButton("Вернуться в сборку ФБО",view->returnToFboAfterTransfer()));
+        else root.addView(secondaryButton(tr("В главное меню", "Bosh menyuga"), view -> renderMainScreen()));
         root.addView(versionView());
         setScrollableContent(root);
         refreshHeaderText();
@@ -6900,7 +6918,7 @@ public class MainActivity extends Activity {
             TsdSession session = safeSession(); if (session == null) return;
             if (fboTwoStageScreen != null) fboTwoStageScreen.close();
             screen = Screen.FBO_TWO_STAGE;
-            fboTwoStageScreen = new FboTwoStageScreen(this,session,WmsApiFactory.create(DEFAULT_BASE_URL),DEFAULT_BASE_URL,assemblyPlan.id,fboPacking,()->{fboTwoStageScreen=null;loadAssemblyRequests();});
+            fboTwoStageScreen = new FboTwoStageScreen(this,session,WmsApiFactory.create(DEFAULT_BASE_URL),DEFAULT_BASE_URL,assemblyPlan.id,fboPacking,()->{fboTwoStageScreen=null;loadAssemblyRequests();},this::openFboRemainderTransfer);
             return;
         }
         if (isAssemblyPackedOnServer()) {
