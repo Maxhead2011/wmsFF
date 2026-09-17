@@ -1,0 +1,79 @@
+import { BadRequestException } from '@nestjs/common';
+import type { PrismaService } from '../../common/prisma/prisma.service';
+import { wbOrderStockLifecycleEnabled } from '../../common/stock/wb-order-stock-lifecycle';
+
+type Order = {
+  id: string; supplyId?: string | null; deliveryDate?: string | null;
+  sellerDate?: string | null; createdAt?: string | null;
+  request?: { warehouseId?: string | null } | null;
+  reservation?: { warehouseId?: string | null } | null;
+};
+const isDateGroup = (order: Order) => !order.supplyId?.trim() &&
+  Boolean(order.deliveryDate || order.sellerDate || order.createdAt);
+
+// FIX: opt-in only; legacy order/service credits must remain enabled during rollout.
+export async function loadFbsDateBillingBranches<T extends Order>(
+  db: PrismaService, clientId: string, orders: T[], legacyKey: (order: T) => string,
+): Promise<Map<string, string> | undefined> {
+  if (process.env.WMS_FBS_DATE_BRANCH_BILLING_ENABLED !== 'true' || !wbOrderStockLifecycleEnabled()) return undefined;
+  const keys = [...new Set(orders.filter(isDateGroup).map(order => legacyKey(order)))];
+  const branches = new Map<string, string>();
+  if (!keys.length) return branches;
+  const invoiceKeys = new Map(keys.flatMap(key => [
+    [`fbs-invoice:${clientId}:${key}`, key], [`fbs-primary-invoice:${clientId}:${key}`, key],
+  ] as [string, string][]));
+  const chargeKeys = new Map(keys.map(key => [`fbs-calculator:${clientId}:${key}`, key]));
+  const primaryPrefixes = keys.map(key => ({ key, prefix: `fbs-primary:${clientId}:${key}:` }));
+  const [invoices, charges] = await Promise.all([
+    db.billingInvoice.findMany({ where: { clientId, sourceKey: { in: [...invoiceKeys.keys()] } },
+      select: { sourceKey: true, warehouseId: true } }),
+    db.billingCharge.findMany({ where: { clientId, OR: [
+      { sourceKey: { in: [...chargeKeys.keys()] } },
+      ...primaryPrefixes.map(p => ({ sourceKey: { startsWith: p.prefix } })),
+    ] }, select: { sourceKey: true, metadata: true, request: { select: { warehouseId: true } },
+      invoiceItems: { select: { invoice: { select: { warehouseId: true } } } } } }),
+  ]);
+  const evidence = new Map<string, Set<string>>();
+  const add = (key: string | undefined, ids: (string | null | undefined)[]) => {
+    if (!key) return;
+    const found = evidence.get(key) ?? new Set<string>();
+    for (const id of ids) if (id?.trim()) found.add(id.trim());
+    evidence.set(key, found);
+  };
+  for (const invoice of invoices) add(invoiceKeys.get(invoice.sourceKey ?? ''), [invoice.warehouseId]);
+  for (const charge of charges) {
+    const key = chargeKeys.get(charge.sourceKey ?? '') ??
+      primaryPrefixes.find(p => charge.sourceKey?.startsWith(p.prefix) &&
+        /^(SERVICE:.+|WHITE|GRAY|RETURN|RELABEL)$/.test(charge.sourceKey.slice(p.prefix.length)))?.key;
+    add(key, [charge.request?.warehouseId, ...charge.invoiceItems.map(i => i.invoice.warehouseId)]);
+  }
+  // FIX: even cancelled/merged documents retain their keys; never guess a branch for old money.
+  for (const [key, ids] of evidence) {
+    if (ids.size !== 1) throw new BadRequestException(
+      `Не удалось однозначно определить филиал старого начисления FBS (${key}). Требуется проверка счёта; повторное начисление не выполнено.`,
+    );
+    branches.set(key, [...ids][0]);
+  }
+  // FIX: an old order may lose its live request after shipment. Reuse only its recorded FBS snapshot.
+  for (const charge of charges) {
+    const key = chargeKeys.get(charge.sourceKey ?? '');
+    const metadata = charge.metadata;
+    if (!key || !metadata || typeof metadata !== 'object' || Array.isArray(metadata) ||
+      metadata.kind !== 'FBS' || !Array.isArray(metadata.orderIds)) continue;
+    const branch = branches.get(key);
+    if (branch) for (const id of metadata.orderIds) if (typeof id === 'string') branches.set(`${key}\0${id}`, branch);
+  }
+  return branches;
+}
+
+// FIX: date is not a supply identity. Keep the legacy key only for its proven original branch.
+export function branchScopedFbsDateKey(legacyKey: string, order: Order, branches?: ReadonlyMap<string, string>) {
+  if (!branches || !isDateGroup(order)) return legacyKey;
+  const warehouseId = order.request?.warehouseId?.trim() || order.reservation?.warehouseId?.trim();
+  const oldBranch = branches.get(legacyKey);
+  if (!warehouseId) {
+    if (oldBranch && branches.get(`${legacyKey}\0${order.id}`) !== oldBranch) throw new BadRequestException('Не определён филиал заказа для существующего счёта FBS. Повторное начисление не выполнено.');
+    return legacyKey;
+  }
+  return oldBranch === warehouseId ? legacyKey : `${legacyKey}:warehouse:${warehouseId}`;
+}

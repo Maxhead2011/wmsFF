@@ -29,11 +29,17 @@ describe('request list number and WB supply display', () => {
   // TEST: show the recorded author, never substitute the current viewer or expose their email.
   it('shows the creator next to the creation date', () => {
     const html = renderRequest({ createdBy: { id: 'creator', name: 'Тестовый автор', email: 'private@example.test' } });
-    expect(html).toMatch(/Создана:.*Автор: Тестовый автор<\/span>/);
+    // TEST: the name must be outside the date's two-line-clamped metadata block.
+    expect(html).toMatch(/Создана:[^<]+<\/span><span class="client-request-author"[^>]*>Автор: Тестовый автор<\/span>/);
     expect(html).not.toContain('private@example.test');
   });
   it('explicitly marks an unknown historical creator', () => {
     expect(renderRequest()).toContain('Автор: не указан');
+  });
+  it('shows the recorded WMS author without replacing a human author', () => {
+    expect(renderRequest({ createdBy: { id: 'system', name: 'WMS', email: '' } })).toContain('Автор: WMS');
+    expect(renderRequest({ creationAuthorLabel: 'WMS' })).toContain('Автор: WMS');
+    expect(renderRequest({ creationAuthorLabel: 'WMS', createdBy: { id: 'user', name: 'Соня', email: '' } })).toContain('Автор: Соня');
   });
   it.each([
     [1, '000', '001'], [999, '000', '999'], [1000, '00', '1000'],
