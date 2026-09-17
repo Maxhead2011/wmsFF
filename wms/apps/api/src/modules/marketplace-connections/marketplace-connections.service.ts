@@ -18,6 +18,7 @@ import { physicalStockRecoveryEnabled } from '../stock/tsd-physical-stock-reconc
 import { recountHash } from '../stock/tsd-transfer-kiz-recount';
 import { fbsTerminalQueueFilterEnabled, isFbsTerminalQueueOrder } from '../../common/fbs-terminal-queue';
 import { appendFbsAttemptHistory, readFbsAttemptHistory, hasFbsAttemptHistory, restoreAttemptSnapshot } from '../../common/shipment-history/fbs-attempt-history';
+import { fbsRequestSyncTitle } from './fbs-request-title';
 import { recordReshipmentTransition } from './fbs-reshipment-transition';
 import { requireFbsReshipmentClientAccess } from './fbs-reshipment-access';
 import { fbsAttemptPageWindow, mergeFbsAttemptPage } from '../../common/shipment-history/fbs-attempt-page';
@@ -24833,9 +24834,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const effectiveOrderIds = uniqueStrings(
         [...desiredItems.values()].flatMap((item) => item.orderIds),
       ).sort(naturalFbsIdCompare);
-      const nextTitle = reshipmentRun ? request.title : repeatRun
-        ? `Повторная сборка WB — ${effectiveOrderIds.length} заказов`
-        : `FBS — ${effectiveOrderIds.length} заказ(а/ов)`;
+      // FIX: the no-stock grouping label must survive background composition sync.
+      const nextTitle = fbsRequestSyncTitle(request.title, effectiveOrderIds.length,
+        !!reshipmentRun, !!repeatRun, process.env.WMS_FBS_NO_STOCK_TRANSFER_ENABLED === 'true');
       const nextComment = explicitBatch ? request.comment : fbsRequestCompositionComment(
         effectiveOrderIds,
         request.comment,
