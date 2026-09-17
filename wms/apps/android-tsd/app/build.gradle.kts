@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 179 // FIX: separate FBO picking/packing and show product scan feedback.
-            versionName = "0.1.180-fbo-picking-packing"
+            versionCode = 180 // FIX: recover FBO routes after conflicts and preserve physical picking.
+            versionName = "0.1.181-fbo-route-recovery"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
