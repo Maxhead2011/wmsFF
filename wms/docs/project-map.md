@@ -24,6 +24,7 @@
 | Остатки для FBS, публикация на маркетплейсе | `modules/marketplace-connections/fbs-stock-monitoring.service.ts`, `fbs-stock-allocation.service.ts`; `modules/stock/` | `components/fbs/`, `lib/api.ts` |
 | ТСД: сборка, короб, КИЗ, резерв | `modules/tsd/tsd-assembly.service.ts`; затем `modules/stock/` | Android `MainActivity.kt`, `network/WmsApi.kt` |
 | Повторная сборка | `modules/marketplace-connections/fbs-repeat-assembly.service.ts` | `components/fbs/FbsRepeatAssemblyPanel.tsx` |
+| Повторный довоз WB (плитка 15) | Существующие API повторной отгрузки | `components/fbs/FbsPanel.tsx` → `FbsReshipmentPanel.tsx`; вход перенесён из активных заказов, механизм довоза прежний |
 | Заявка FBO из Excel | `modules/client-requests/client-request-xlsx.service.ts`, `dto/import-outbound-request-xlsx.dto.ts`, `parsers/outbound-request-xlsx.parser.ts` | `components/client-requests/ClientRequestXlsxImportForm.tsx`, `lib/api.ts` |
 | Приёмка, синхронизация сканов | `modules/tsd/tsd-receipt.service.ts`, `tsd-sync.service.ts`, `tsd-review.service.ts` | `components/warehouse/OnlineReceiptPanel.tsx`, `ReceiptBatchesPanel.tsx`; Android |
 | Короба, паллеты, размещение | `modules/warehouse/`, `modules/stock/` | `components/warehouse/BoxManagementPanel.tsx`, `StoragePanel.tsx`, `StorageZonesPanel.tsx` |
