@@ -72,6 +72,17 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         await act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: m.value }); await act('FINISH_PICK'); }
     async function packed() { await picked(); await act('PACK_BOX', { sourceBoxCode: 'FFL_' + whole }); await act('OPEN_BOX', { targetBoxCode: 'FFL_' + target }); for (const m of marks.slice(2, 4))
         await act('PACK_UNIT', { targetBoxCode: 'FFL_' + target, barcode: '2051234567890', kiz: m.value }); await act('CLOSE_BOX', { targetBoxCode: 'FFL_' + target }); await act('SORTED'); }
+    // TEST: real database relation filters move a request between queues without a second stock operation.
+    it('moves a picked request from picking to packing queue', async () => {
+        const assembly = new TsdAssemblyService(p as never,
+            { ...scopes, resolveClientFilter: () => client } as never, {} as never, stock, {} as never, svc);
+        const ids = async (workflow: string) => (await assembly.listActiveRequests(user, workflow)).map(r => r.id);
+        expect(await ids('fbo-pick')).toContain(request);
+        expect(await ids('fbo-pack')).not.toContain(request);
+        await picked();
+        expect(await ids('fbo-pick')).not.toContain(request);
+        expect(await ids('fbo-pack')).toContain(request);
+    });
     it('completes the real mixed workflow with no second AVAILABLE debit, then exports the existing WB template', async () => {
         // TEST: packing and final box scans must never decrement source stock again.
         await packed();

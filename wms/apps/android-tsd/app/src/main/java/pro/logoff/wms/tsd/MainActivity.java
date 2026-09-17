@@ -181,6 +181,7 @@ public class MainActivity extends Activity {
     private PalletSortingScreen palletSortingScreen; // ADDED: independent administrator workflow.
     private KizLocationScreen kizLocationScreen;
     private FboTwoStageScreen fboTwoStageScreen;
+    private boolean fboPacking;
     private TsdAssemblyPlan assemblyPlan;
     private TsdBoxlessPackingResponse boxlessPacking;
     private TsdRelabelTask activeRelabelTask;
@@ -538,7 +539,7 @@ public class MainActivity extends Activity {
     public void onBackPressed() {
         if (screen == Screen.FBO_TWO_STAGE && fboTwoStageScreen != null) {
             if (!fboTwoStageScreen.canLeave()) { showScanningErrorDialog("Дождитесь ответа или повторите неподтверждённый запрос."); return; }
-            fboTwoStageScreen.close(); fboTwoStageScreen = null; renderAssemblyListScreen(); return;
+            fboTwoStageScreen.close(); fboTwoStageScreen = null; loadAssemblyRequests(); return;
         }
         if (screen == Screen.KIZ_LOCATION && kizLocationScreen != null) {
             kizLocationScreen.close();
@@ -612,12 +613,14 @@ public class MainActivity extends Activity {
         } else {
             root.addView(primaryMenuButton(tr("Приемка товара", "Tovarni qabul qilish"), view -> openReceipt()));
             root.addView(primaryMenuButton(tr("Перемещения", "Ko‘chirish"), view -> openStockTransfer()));
-            root.addView(primaryMenuButton(tr("Сборка заявки", "Buyurtmani yig‘ish"), view -> openAssemblyRequests()));
+            root.addView(primaryMenuButton("logoff".equals(BuildConfig.FLAVOR) ? "Сборка FBO" : tr("Сборка заявки", "Buyurtmani yig‘ish"), view -> {
+                if ("logoff".equals(BuildConfig.FLAVOR)) renderFboMenu(); else openAssemblyRequests();
+            }));
             root.addView(primaryMenuButton(tr("Сборка FBS", "FBS buyurtmasini yig‘ish"), view -> openFbsAssembly()));
-            root.addView(primaryMenuButton(tr("Сборка FBO Ozon", "Ozon FBO yig‘ish"), view -> openOzonFboAssembly()));
+            if (!"logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton(tr("Сборка FBO Ozon", "Ozon FBO yig‘ish"), view -> openOzonFboAssembly()));
             root.addView(primaryMenuButton(
-                tr("Упаковка FBS", "FBS qadoqlash"),
-                view -> openFbsCargoPacking()
+                "logoff".equals(BuildConfig.FLAVOR) ? "Упаковка FBO" : tr("Упаковка FBS", "FBS qadoqlash"),
+                view -> { if ("logoff".equals(BuildConfig.FLAVOR)) { fboPacking=true; openAssemblyRequests(); } else openFbsCargoPacking(); }
             ));
             root.addView(primaryMenuButton(
                 tr("Сборка паллетов", "Palletlarni yig‘ish"),
@@ -6430,6 +6433,15 @@ public class MainActivity extends Activity {
         renderReceiptScreen();
     }
 
+    // FIX: picking and packing have independent entry points, sharing persisted server progress.
+    private void renderFboMenu() {
+        screen=Screen.FBO_MENU;
+        LinearLayout root=baseRoot();root.addView(header());root.addView(title("Сборка FBO"));
+        root.addView(primaryMenuButton("FBO WB",v->{fboPacking=false;openAssemblyRequests();}));
+        root.addView(primaryMenuButton("FBO Ozon",v->openOzonFboAssembly()));
+        root.addView(secondaryButton("Назад",v->renderMainScreen()));setScrollableContent(root);
+    }
+
     private void openAssemblyRequests() {
         if (safeSession() == null) {
             statusMessage = "Сначала выполните вход в настройках.";
@@ -6449,7 +6461,9 @@ public class MainActivity extends Activity {
 
         runBackground(() -> {
             WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
-            Response<List<TsdAssemblyRequestSummary>> response = api.listAssemblyRequests(session.authorizationHeader()).execute();
+            Response<List<TsdAssemblyRequestSummary>> response = ("logoff".equals(BuildConfig.FLAVOR)
+                ? api.listFboRequests(session.authorizationHeader(), fboPacking ? "fbo-pack" : "fbo-pick")
+                : api.listAssemblyRequests(session.authorizationHeader())).execute();
             if (!response.isSuccessful()) {
                 throw new IOException("HTTP " + response.code());
             }
@@ -6472,7 +6486,7 @@ public class MainActivity extends Activity {
         screen = Screen.ASSEMBLY_LIST;
         LinearLayout root = baseRoot();
         root.addView(header());
-        root.addView(title("Сборка заявки"));
+        root.addView(title("logoff".equals(BuildConfig.FLAVOR) ? (fboPacking ? "Упаковка FBO" : "FBO WB") : "Сборка заявки"));
 
         if (assemblyRequests.isEmpty()) {
             root.addView(messageView("Активных заявок на сборку нет."));
@@ -6482,7 +6496,9 @@ public class MainActivity extends Activity {
         }
 
         root.addView(secondaryButton("Обновить", view -> loadAssemblyRequests()));
-        root.addView(secondaryButton("Назад", view -> renderMainScreen()));
+        root.addView(secondaryButton("Назад", view -> {
+            if ("logoff".equals(BuildConfig.FLAVOR) && !fboPacking) renderFboMenu(); else renderMainScreen();
+        }));
         if (!statusMessage.isEmpty()) {
             root.addView(messageView(statusMessage));
         }
@@ -6859,7 +6875,7 @@ public class MainActivity extends Activity {
             TsdSession session = safeSession(); if (session == null) return;
             if (fboTwoStageScreen != null) fboTwoStageScreen.close();
             screen = Screen.FBO_TWO_STAGE;
-            fboTwoStageScreen = new FboTwoStageScreen(this,session,WmsApiFactory.create(DEFAULT_BASE_URL),DEFAULT_BASE_URL,assemblyPlan.id,()->{fboTwoStageScreen=null;renderAssemblyListScreen();});
+            fboTwoStageScreen = new FboTwoStageScreen(this,session,WmsApiFactory.create(DEFAULT_BASE_URL),DEFAULT_BASE_URL,assemblyPlan.id,fboPacking,()->{fboTwoStageScreen=null;loadAssemblyRequests();});
             return;
         }
         if (isAssemblyPackedOnServer()) {
@@ -8720,7 +8736,8 @@ public class MainActivity extends Activity {
 
     private String monitorScreenLabel(Screen value) {
         switch (value) {
-            case FBO_TWO_STAGE: return "Сборка ФБО";
+            case FBO_MENU: return "Сборка FBO";
+            case FBO_TWO_STAGE: return fboPacking ? "Упаковка FBO" : "FBO WB";
             case PALLET_SORTING: return "Сортировка и перемещение";
             case RECEIPT: return "Приёмка";
             case ASSEMBLY_LIST:
@@ -9908,6 +9925,8 @@ public class MainActivity extends Activity {
             renderSettingsScreen();
         } else if (screen == Screen.RECEIPT) {
             renderReceiptScreen();
+        } else if (screen == Screen.FBO_MENU) {
+            renderFboMenu();
         } else if (screen == Screen.ASSEMBLY_LIST) {
             renderAssemblyListScreen();
         } else if (screen == Screen.ASSEMBLY_DETAIL) {
@@ -10329,6 +10348,7 @@ public class MainActivity extends Activity {
         MAIN,
         SETTINGS,
         RECEIPT,
+        FBO_MENU,
         ASSEMBLY_LIST,
         ASSEMBLY_DETAIL,
         BOX_SEARCH,

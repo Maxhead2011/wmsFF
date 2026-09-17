@@ -335,6 +335,9 @@ public interface WmsApi {
     @GET("api/v1/tsd/requests")
     Call<List<TsdAssemblyRequestSummary>> listAssemblyRequests(@Header("Authorization") String authorization);
 
+    @GET("api/v1/tsd/requests")
+    Call<List<TsdAssemblyRequestSummary>> listFboRequests(@Header("Authorization") String authorization, @Query("workflow") String workflow);
+
     @GET("api/v1/tsd/requests/{id}")
     Call<TsdAssemblyPlan> getAssemblyRequest(
         @Header("Authorization") String authorization,
