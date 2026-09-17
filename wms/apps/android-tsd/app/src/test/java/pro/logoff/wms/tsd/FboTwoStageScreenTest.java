@@ -24,6 +24,27 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class FboTwoStageScreenTest {
+    // TEST: product feedback is independent of the previously scanned box and does not pick before KIZ.
+    @Test public void productBarcodeIsGreenAndUnneededBarcodeIsRedInBothStages() throws Exception {
+        for(boolean packing:new boolean[]{false,true})try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();AtomicInteger mutations=new AtomicInteger();TsdFboPlan p=plan(packing?"PACKING":"PICKING");
+            TsdFboPlan.Line line=new TsdFboPlan.Line();line.barcode="2051234567890";line.requiresKiz=true;line.remaining=1;line.picked=1;p.lines.add(line);
+            if(packing){TsdFboPlan.Box box=new TsdFboPlan.Box();box.code="TARGET";p.boxes.add(box);}
+            FboTwoStageScreen s=open(a,p,packing,mutations);
+            try {
+                java.lang.reflect.Field field=FboTwoStageScreen.class.getDeclaredField("state");field.setAccessible(true);
+                FboScanState state=(FboScanState)field.get(s);
+                if(packing)state.target="TARGET";else{state.pallet="PL_1";state.source="BOX_1";}
+                s.scannerField().setText("WRONG_PRODUCT");s.submit();
+                TextView bad=find(a.findViewById(android.R.id.content),"Этот ШК не требуется");assertNotNull(bad);
+                assertEquals(Color.rgb(254,202,202),((ColorDrawable)bad.getBackground()).getColor());assertEquals("",state.barcode);
+                s.scannerField().setText(line.barcode);s.submit();
+                TextView good=find(a.findViewById(android.R.id.content),"Нужный товар");assertNotNull(good);
+                assertEquals(Color.rgb(187,247,208),((ColorDrawable)good.getBackground()).getColor());
+                assertEquals(line.barcode,state.barcode);assertNotNull(find(a.findViewById(android.R.id.content),"КИЗ товара"));assertEquals(0,mutations.get());
+            }finally{s.close();}
+        }
+    }
     // TEST: only our installation replaces packing and nests Ozon; sold variants retain their menu.
     @Test public void menuIsSeparatedOnlyInOurInstallation() throws Exception {
         try(var controller=Robolectric.buildActivity(MainActivity.class).setup()) {
