@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Post, Query } from '@nestjs/common';
-import { ArrayMaxSize, ArrayMinSize, ArrayUnique, IsArray, IsString, IsUUID, Matches } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, ArrayUnique, IsArray, IsOptional, IsString, IsUUID, Matches } from 'class-validator';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
@@ -7,8 +7,10 @@ import { UnprintedKizService } from './unprinted-kiz.service';
 export class UnprintedKizQuery {
   @IsUUID() clientId!:string;
   @IsUUID() warehouseId!:string;
-  @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) dateFrom!:string;
-  @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) dateTo!:string;
+  @IsOptional() @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) dateFrom?:string;
+  @IsOptional() @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) dateTo?:string;
+  @IsOptional() @IsString() @Matches(/^\d{1,9}$/) requestNumber?:string;
+  @IsOptional() @IsString() @Matches(/^WB-GI-\d+$/) supplyId?:string;
 }
 export class CreateKizSearchDto extends UnprintedKizQuery {
   @IsUUID() assignedToUserId!:string;

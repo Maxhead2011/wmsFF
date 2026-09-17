@@ -1,3 +1,4 @@
+import { readPackingProgress } from '../service/fbs-packing-progress';
 import { FBS_WB_ACCOUNTED, FBS_WB_ACCOUNTED_ACTION, fbsWbAccountingEnabled, isFbsWbAccounted, isFbsWbAccountingStatus, isFbsWbAccountingUntouched, isFbsWbKizShipmentCandidate } from '../../common/fbs-wb-accounting';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
@@ -1004,7 +1005,11 @@ export class TsdAssemblyService {
         },
       ]),
     );
+    // FIX: shared SOS WB2 print evidence, isolated to our deployment.
+    const packing = process.env.WMS_UNPRINTED_KIZ_SEARCH === 'true'
+      ? await readPackingProgress(this.prisma, requestId, rows.filter(row => savedLinks.some(link => link.marketplace === 'WILDBERRIES' && link.connectionId === row.connectionId && link.orderId === row.orderId)).map(row => ({...row,requestId}))) : new Map();
     const facts = rows.map((row) => ({
+      ...(packing.has(row.id) ? { packing: packing.get(row.id) } : {}),
       id: row.id,
       orderId: row.orderId,
       sourceBoxCode: row.boxCode,

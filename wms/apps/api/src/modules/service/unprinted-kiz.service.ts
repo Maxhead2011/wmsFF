@@ -6,7 +6,7 @@ import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { WarehouseAuthScopeService } from '../auth/warehouse-auth-scope.service';
 import { assertWarehouseAccess } from '../client-requests/client-request-warehouse-scope';
-import { kizIdentity, scanPeriod, withoutConfirmedPrint } from './unprinted-kiz.policy';
+import { kizIdentity, inspectionScope, withoutConfirmedPrint } from './unprinted-kiz.policy';
 import type { CreateKizSearchDto, UnprintedKizQuery } from './unprinted-kiz.controller';
 
 const record=(value:unknown):Record<string,unknown>=>value && typeof value==='object' && !Array.isArray(value)?value as Record<string,unknown>:{};
@@ -23,7 +23,7 @@ export class UnprintedKizService {
     if (process.env.WMS_UNPRINTED_KIZ_SEARCH!=='true') throw new NotFoundException('Поиск неотгруженных КИЗ выключен.');
   }
   private async check(db:Db,input:UnprintedKizQuery,user:AuthUser,write=false) {
-    this.enabled(user); scanPeriod(input.dateFrom,input.dateTo);
+    this.enabled(user); inspectionScope(input);
     this.scopes.requireClientAccess(user,input.clientId,write?'write':'read');
     assertWarehouseAccess(user,{warehouseId:input.warehouseId},write?'write':'read');
     const client=await db.client.findFirst({where:{id:input.clientId,isDemo:Boolean(user.isDemo)},select:{id:true}});
@@ -38,15 +38,30 @@ export class UnprintedKizService {
     },{isolationLevel:Prisma.TransactionIsolationLevel.RepeatableRead,timeout:30000});
   }
   private async rows(db:Db,input:UnprintedKizQuery) {
-    const period=scanPeriod(input.dateFrom,input.dateTo);
+    const scope=inspectionScope(input);
+    let selectedRequests:string[]|undefined;
+    let selectedAssemblies:string[]|undefined;
+    if(scope.kind!=='period') {
+      const requests=await db.clientRequest.findMany({where:{clientId:input.clientId,warehouseId:input.warehouseId,...(scope.kind==='request'?{number:scope.number}:{})},select:{id:true}});
+      selectedRequests=requests.map(r=>r.id);
+      if(scope.kind==='supply') {
+        const [tasks,links]=await Promise.all([
+          db.fbsTsdAssembly.findMany({where:{clientId:input.clientId,marketplace:'WILDBERRIES',requestId:{in:selectedRequests},supplyId:scope.supplyId},select:{id:true}}),
+          db.fbsOrderRequestLink.findMany({where:{clientId:input.clientId,marketplace:'WILDBERRIES',requestId:{in:selectedRequests},lastSupplyId:scope.supplyId},select:{connectionId:true,orderId:true,requestId:true}}),
+        ]);
+        const linked=links.length?await db.fbsTsdAssembly.findMany({where:{clientId:input.clientId,marketplace:'WILDBERRIES',OR:links.map(l=>({connectionId:l.connectionId,orderId:l.orderId,requestId:l.requestId}))},select:{id:true}}):[];
+        selectedAssemblies=[...new Set([...tasks,...linked].map(t=>t.id))];
+      }
+      if(!selectedRequests.length || selectedAssemblies?.length===0) return [];
+    }
     const audits=await db.auditLog.findMany({where:{entity:'FbsTsdAssembly',action:{in:['FBS_KIZ_SCAN_ACCEPTED','FBS_WB_KIZ_REPLACED_AFTER_PRODUCT_PICK']},
-      createdAt:{gte:period.from,lt:period.until},payload:{path:['clientId'],equals:input.clientId}},orderBy:[{createdAt:'desc'},{id:'asc'}],take:5001});
-    if(audits.length>5000) throw new BadRequestException('За период более 5000 сканирований. Сократите период проверки.');
+      ...(scope.kind==='period'?{createdAt:{gte:scope.from,lt:scope.until}}:{AND:[{OR:selectedRequests!.map(id=>({payload:{path:['requestId'],equals:id}}))}],...(selectedAssemblies?{entityId:{in:selectedAssemblies}}:{})}),payload:{path:['clientId'],equals:input.clientId}},orderBy:[{createdAt:'desc'},{id:'asc'}],take:5001});
+    if(audits.length>5000) throw new BadRequestException('Найдено более 5000 сканирований. Уточните период или выберите отдельную заявку.');
     const ids=audits.map(a=>a.entityId).filter((x):x is string=>!!x);
     const requestIds=[...new Set(audits.map(a=>text(record(a.payload).requestId)).filter(Boolean))];
     const [requests,tasks,attempts,jobs,shipments,markers]=await Promise.all([
       db.clientRequest.findMany({where:{id:{in:requestIds},clientId:input.clientId,warehouseId:input.warehouseId},select:{id:true,number:true}}),
-      db.fbsTsdAssembly.findMany({where:{id:{in:ids},clientId:input.clientId,marketplace:'WILDBERRIES'},select:{id:true,requestId:true,orderId:true,skuId:true,barcode:true,productName:true,kiz:true,connectionId:true}}),
+      db.fbsTsdAssembly.findMany({where:{id:{in:ids},clientId:input.clientId,marketplace:'WILDBERRIES'},select:{id:true,requestId:true,orderId:true,skuId:true,barcode:true,productName:true,kiz:true,connectionId:true,status:true}}),
       db.fbsAssemblyAttemptHistory.findMany({where:{clientId:input.clientId,requestId:{in:requestIds}},select:{id:true,requestId:true,orderId:true,kiz:true,taskSnapshot:true}}),
       db.fbsPrintJob.findMany({where:{assemblyId:{in:ids}},select:{id:true,assemblyId:true,requestId:true,orderId:true,kiz:true,status:true,printedAt:true}}),
       db.shippedKizHistory.findMany({where:{clientId:input.clientId,assemblyId:{in:ids}},select:{assemblyId:true,kiz:true,shippedAt:true}}),
@@ -58,13 +73,16 @@ export class UnprintedKizService {
     const searches=await db.clientRequest.findMany({where:{id:{in:markers.map(m=>m.entityId).filter((x):x is string=>!!x)},clientId:input.clientId,warehouseId:input.warehouseId},select:{id:true,number:true,status:true}});
     const actors=await db.user.findMany({where:{id:{in:audits.map(a=>a.userId).filter((x):x is string=>!!x)}},select:{id:true,name:true}});
     const boxes=await db.box.findMany({where:{clientId:input.clientId,warehouseId:input.warehouseId,code:{in:audits.map(a=>text(record(a.payload).boxCode)).filter(Boolean)}},select:{code:true}});
-    const archived=attempts.map(a=>{const s=record(a.taskSnapshot);return {id:text(s.id)||a.id,requestId:a.requestId,orderId:a.orderId,skuId:text(s.skuId),barcode:text(s.barcode),productName:text(s.productName),connectionId:text(s.connectionId),kiz:a.kiz};});
+    const archived=attempts.map(a=>{const s=record(a.taskSnapshot);return {id:text(s.id)||a.id,requestId:a.requestId,orderId:a.orderId,skuId:text(s.skuId),barcode:text(s.barcode),productName:text(s.productName),connectionId:text(s.connectionId),status:text(s.status),kiz:a.kiz};});
     const seen=new Set<string>();
     return audits.flatMap(a=>{
       const p=record(a.payload),requestId=text(p.requestId),orderId=text(p.orderId),raw=text(p.kiz)||text(p.scannedKiz),kiz=kizIdentity(raw),assemblyId=a.entityId??'';
       const request=requests.find(r=>r.id===requestId);
       if(!request||!assemblyId||!kiz||!orderId) return [];
       const task=[...tasks,...archived].find(t=>t.id===assemblyId && t.requestId===requestId && t.orderId===orderId && kizIdentity(t.kiz??'')===kiz);
+      if(task?.status && task.status!=='COMPLETED') return [];
+      const replaced=audits.some(e=>{const next=record(e.payload);return e.entityId===assemblyId && text(next.requestId)===requestId && text(next.orderId)===orderId && e.action==='FBS_WB_KIZ_REPLACED_AFTER_PRODUCT_PICK' && e.createdAt>=a.createdAt && Array.isArray(next.previousKiz) && next.previousKiz.some(k=>kizIdentity(String(k))===kiz) && kizIdentity(text(next.scannedKiz))!==kiz;});
+      if(replaced) return [];
       const key=[assemblyId,requestId,orderId,kiz].join('|');
       if(seen.has(key)) return [];seen.add(key);
       if(!withoutConfirmedPrint({assemblyId,requestId,orderId,kiz,at:a.createdAt},confirmed)) return [];
@@ -105,7 +123,7 @@ export class UnprintedKizService {
       await this.check(db,input,user,true);
       // FIX: serialize creators for this client/branch; retries return the same request.
       await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`unprinted-kiz:${input.clientId}:${input.warehouseId}`}))::text`;
-      const fingerprint=createHash('sha256').update(JSON.stringify({clientId:input.clientId,warehouseId:input.warehouseId,dateFrom:input.dateFrom,dateTo:input.dateTo,assignedToUserId:input.assignedToUserId,scanIds:[...input.scanIds].sort()})).digest('hex');
+      const fingerprint=createHash('sha256').update(JSON.stringify({clientId:input.clientId,warehouseId:input.warehouseId,dateFrom:input.dateFrom,dateTo:input.dateTo,requestNumber:input.requestNumber,supplyId:input.supplyId,assignedToUserId:input.assignedToUserId,scanIds:[...input.scanIds].sort()})).digest('hex');
       const previous=await db.auditLog.findFirst({where:{action:CREATED,payload:{path:['operationKey'],equals:input.operationId}}});
       if(previous) {
         if(previous.userId!==user.id || record(previous.payload).fingerprint!==fingerprint) throw new ConflictException('Ключ операции уже использован. Обновите список.');
@@ -117,11 +135,11 @@ export class UnprintedKizService {
       if(new Set(selected.map(r=>r.kiz)).size!==selected.length) throw new BadRequestException('Один физический КИЗ выбран несколько раз. Оставьте одну строку.');
       const targets=selected.map(r=>({itemId:randomUUID(),boxCode:r.boxCode,kiz:r.kiz,order:r.orderId,firstWorker:r.workerName,sourceAuditId:r.id,sourceRequestId:r.requestId,assemblyId:r.assemblyId}));
       const request=await db.clientRequest.create({data:{clientId:input.clientId,warehouseId:input.warehouseId,type:'OTHER',status:'SUBMITTED',assignedToUserId:input.assignedToUserId,createdByUserId:user.id,
-        title:`Поиск ${selected.length} КИЗ без печати · ${input.dateFrom}–${input.dateTo}`,
+        title:`Поиск ${selected.length} КИЗ без печати · ${inspectionScope(input).label}`,
         comment:'Сканируйте исходный короб, затем КИЗ. Найденный товар отложите отдельно. Поиск не изменяет остатки и привязки к заказам.',
         items:{create:selected.map((r,i)=>({id:targets[i].itemId,skuId:r.skuId,barcode:r.barcode,quantity:1,name:r.productName,comment:`Короб: ${r.boxCode}\nЗаказ WB: ${r.orderId}\nКИЗ: ${r.kiz}\nПервый сборщик: ${r.workerName}`}))}},select:{id:true,number:true}});
       await db.auditLog.create({data:{userId:user.id,action:CREATED,entity:'ClientRequest',entityId:request.id,payload:{operationKey:input.operationId,fingerprint,oneOff:true,assignedToUserId:input.assignedToUserId,sourceRequestNumbers:[...new Set(selected.map(r=>r.requestNumber))],targets}}});
-      await db.clientRequestEvent.create({data:{requestId:request.id,clientId:input.clientId,eventType:'CREATED',createdByUserId:user.id,title:'Создана заявка поиска КИЗ без подтверждённой печати',body:`Период сканирования: ${input.dateFrom}–${input.dateTo}, МСК. ${selected.length} единиц.`}});
+      await db.clientRequestEvent.create({data:{requestId:request.id,clientId:input.clientId,eventType:'CREATED',createdByUserId:user.id,title:'Создана заявка поиска КИЗ без подтверждённой печати',body:`Проверка: ${inspectionScope(input).label}, МСК. ${selected.length} единиц.`}});
       return request;
     },{timeout:30000});
   }

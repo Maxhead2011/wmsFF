@@ -79,3 +79,39 @@ describe('unprinted KIZ service',()=>{
     expect(db.clientRequest.create).not.toHaveBeenCalled();
   });
 });
+
+// TEST: reference scopes are branch/client scoped and do not silently retain a date interval.
+describe('inspection by request and supply',()=>{
+ it('loads the complete request without a scan date limit',async()=>{
+  const {db,service}=setup();db.clientRequest.findMany.mockImplementation(async(q:any)=>q.where.number?[{id:'r',number:1029}]:q.where.id?.in.includes('r')?[{id:'r',number:1029}]:[]);
+  const result=await service.report({clientId:'c',warehouseId:'w',requestNumber:'001029'},user);
+  expect(result.rows).toHaveLength(1);
+  expect(db.clientRequest.findMany.mock.calls[0][0].where).toEqual({clientId:'c',warehouseId:'w',number:1029});
+  expect(db.auditLog.findMany.mock.calls[0][0].where.createdAt).toBeUndefined();
+ });
+ it('does not leak another branch or client when request is not accessible',async()=>{
+  const {db,service}=setup();db.clientRequest.findMany.mockResolvedValue([]);
+  expect((await service.report({clientId:'c',warehouseId:'w',requestNumber:'1029'},user)).rows).toEqual([]);
+  expect(db.auditLog.findMany).not.toHaveBeenCalled();
+ });
+ it('resolves supply orders by connection and request, not order number alone',async()=>{
+  const {db,service}=setup();db.clientRequest.findMany.mockImplementation(async(q:any)=>!q.where.id?[{id:'r'}]:q.where.id.in.includes('r')?[{id:'r',number:1029}]:[]);
+  db.fbsOrderRequestLink={findMany:vi.fn(async()=>[{connectionId:'conn',orderId:'1',requestId:'r'}])};
+  await service.report({clientId:'c',warehouseId:'w',supplyId:'WB-GI-123'},user);
+  expect(db.fbsOrderRequestLink.findMany.mock.calls[0][0].where).toMatchObject({clientId:'c',marketplace:'WILDBERRIES',requestId:{in:['r']},lastSupplyId:'WB-GI-123'});
+  expect(db.fbsTsdAssembly.findMany.mock.calls[1][0].where.OR).toEqual([{connectionId:'conn',orderId:'1',requestId:'r'}]);
+ });
+ it('excludes old KIZ after explicit relabel and retains the new physical identity',async()=>{
+  const {db,service,audit}=setup();const replacement={...audit,id:'replacement',action:'FBS_WB_KIZ_REPLACED_AFTER_PRODUCT_PICK',createdAt:new Date('2026-09-15T11:00:00Z'),payload:{...audit.payload,kiz:undefined,scannedKiz:kiz.toUpperCase(),previousKiz:[kiz]}};
+  db.auditLog.findMany.mockImplementation(async(q:any)=>typeof q.where.action==='object'?[replacement,audit]:[]);
+  db.fbsTsdAssembly.findMany.mockResolvedValue([{id:'a',requestId:'r',orderId:'1',skuId:'sku',kiz:kiz.toUpperCase()}]);
+  const rows=(await service.report(filter,user)).rows;
+  expect(rows).toHaveLength(1);expect(rows[0].kiz).toBe(kiz.toUpperCase());
+ });
+});
+
+// TEST: accepting a KIZ without completing physical collection is not a missing packed item.
+it('excludes an unfinished physical pick from the search queue',async()=>{
+ const {db,service}=setup();db.fbsTsdAssembly.findMany.mockResolvedValue([{id:'a',requestId:'r',orderId:'1',skuId:'sku',kiz,status:'IN_PROGRESS'}]);
+ expect((await service.report(filter,user)).rows).toHaveLength(0);
+});

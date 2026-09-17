@@ -20,3 +20,18 @@ export function withoutConfirmedPrint(scan:{assemblyId:string;requestId:string;o
   return !jobs.some(j=>j.assemblyId===scan.assemblyId && j.requestId===scan.requestId && j.orderId===scan.orderId &&
     key!==null && kizIdentity(j.kiz)===key && j.status==='PRINTED' && j.printedAt!==null && j.printedAt>=scan.at);
 }
+
+// FIX: mutually exclusive scopes; request/supply inspections cover the entire attempt.
+export function inspectionScope(input:{dateFrom?:string;dateTo?:string;requestNumber?:string;supplyId?:string}) {
+  const kinds=Number(Boolean(input.dateFrom||input.dateTo))+Number(Boolean(input.requestNumber))+Number(Boolean(input.supplyId));
+  if(kinds!==1) throw new BadRequestException('Выберите период, заявку ВМС или поставку WB.');
+  if(input.requestNumber) {
+    if(!/^\d{1,9}$/.test(input.requestNumber)||Number(input.requestNumber)<1) throw new BadRequestException('Укажите номер заявки ВМС.');
+    return {kind:'request' as const,number:Number(input.requestNumber),label:`заявка №${Number(input.requestNumber)}`};
+  }
+  if(input.supplyId) {
+    if(!/^WB-GI-\d+$/.test(input.supplyId)) throw new BadRequestException('Укажите номер поставки WB-GI-…');
+    return {kind:'supply' as const,supplyId:input.supplyId,label:`поставка ${input.supplyId}`};
+  }
+  return {kind:'period' as const,...scanPeriod(input.dateFrom??'',input.dateTo??''),label:`${input.dateFrom}–${input.dateTo}, МСК`};
+}

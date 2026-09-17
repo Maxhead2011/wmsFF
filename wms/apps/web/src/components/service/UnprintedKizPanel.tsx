@@ -7,12 +7,14 @@ const dateTime=(value:string)=>new Date(value).toLocaleString('ru-RU',{timeZone:
 // FIX: mounted with a client/warehouse key; a previous client's rows cannot be submitted.
 export function UnprintedKizPanel({accessToken,clientId,warehouseId}:{accessToken:string;clientId:string;warehouseId:string}) {
   const [dateFrom,setFrom]=useState(today),[dateTo,setTo]=useState(today);
+  const [mode,setMode]=useState<'period'|'request'|'supply'>('period');
+  const [reference,setReference]=useState('');
   const [report,setReport]=useState<UnprintedKizReport|null>(null);
   const [assignees,setAssignees]=useState<Array<{id:string;name:string}>>([]),[assignee,setAssignee]=useState('');
   const [selected,setSelected]=useState<string[]>([]),[worker,setWorker]=useState('');
   const [busy,setBusy]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState('');
   const operation=useRef<{signature:string;id:string}|null>(null);
-  const filter={clientId,warehouseId,dateFrom,dateTo};
+  const filter={clientId,warehouseId,...(mode==='period'?{dateFrom,dateTo}:mode==='request'?{requestNumber:reference.trim().replace(/^№\s*/, '')}:{supplyId:reference.trim().toUpperCase()})};
   const visible=(report?.rows??[]).filter(r=>!worker||r.workerName===worker);
   const selectable=visible.filter(r=>!r.blockedReason);
   async function check() {
@@ -35,15 +37,17 @@ export function UnprintedKizPanel({accessToken,clientId,warehouseId}:{accessToke
     } catch(e) {setError(e instanceof Error?e.message:'Не удалось создать заявку. Повторите действие — повторная заявка не создастся.');}
     finally {setBusy(false);}
   }
+  function resetReport(){setReport(null);setSelected([]);setMessage('');operation.current=null;}
   function dates(value:string,which:'from'|'to') {which==='from'?setFrom(value):setTo(value);setReport(null);setSelected([]);setMessage('');operation.current=null;}
   return <section className="service-card unprinted-kiz-panel">
     <h3>Поиск неотгруженных КИЗ</h3>
-    <p>КИЗ, отсканированные за выбранный период, без подтверждённой печати этикетки через SOS WB 2. Даты и время — московские. Отсутствие печати само по себе не подтверждает наличие товара на складе.</p>
+    <p>Контроль прохождения упаковки: отобранные КИЗ без подтверждённой печати через SOS WB 2. Выберите период отбора, заявку ВМС или поставку WB. Для заявки и поставки проверяются все даты. Даты и время — московские. Отсутствие печати само по себе не подтверждает наличие товара на складе.</p>
     {!clientId||!warehouseId?<p role="status">Выберите клиента и рабочий филиал.</p>:null}
     <div className="service-search-row">
-      <label>С <input type="date" aria-label="Период с" value={dateFrom} disabled={busy} onChange={e=>dates(e.target.value,'from')}/></label>
-      <label>По <input type="date" aria-label="Период по" value={dateTo} disabled={busy} onChange={e=>dates(e.target.value,'to')}/></label>
-      <button type="button" className="primary-button" disabled={busy||!clientId||!warehouseId||!dateFrom||!dateTo} onClick={()=>void check()}>{busy?'Выполняется…':'Проверить неотгруженные КИЗ'}</button>
+      <label>Проверить по <select aria-label="Способ проверки" value={mode} disabled={busy} onChange={e=>{setMode(e.target.value as typeof mode);setReference('');resetReport();}}><option value="period">Периоду</option><option value="request">Заявке ВМС</option><option value="supply">Поставке WB</option></select></label>
+      {mode==='period'?<><label>С <input type="date" aria-label="Период с" value={dateFrom} disabled={busy} onChange={e=>dates(e.target.value,'from')}/></label>
+      <label>По <input type="date" aria-label="Период по" value={dateTo} disabled={busy} onChange={e=>dates(e.target.value,'to')}/></label></>:<label>{mode==='request'?'Номер заявки ВМС':'Номер поставки WB'} <input aria-label={mode==='request'?'Номер заявки ВМС':'Номер поставки WB'} value={reference} placeholder={mode==='request'?'001029':'WB-GI-…'} disabled={busy} onChange={e=>{setReference(e.target.value);resetReport();}}/></label>}
+      <button type="button" className="primary-button" disabled={busy||!clientId||!warehouseId||(mode==='period'?(!dateFrom||!dateTo):!reference.trim())} onClick={()=>void check()}>{busy?'Выполняется…':'Проверить неотгруженные КИЗ'}</button>
     </div>
     {error?<p className="service-message service-message--error" role="alert">{error}</p>:null}
     {message?<p className="service-message" role="status">{message}</p>:null}
@@ -59,7 +63,7 @@ export function UnprintedKizPanel({accessToken,clientId,warehouseId}:{accessToke
         <thead><tr><th><input type="checkbox" aria-label="Выбрать все доступные" disabled={busy||!selectable.length} checked={selectable.length>0&&selectable.every(r=>selected.includes(r.id))} onChange={e=>setSelected(e.target.checked?selectable.map(r=>r.id):[])}/></th><th>Когда / кто</th><th>КИЗ / товар</th><th>Заявка / заказ WB</th><th>Из короба</th><th>Печать / поиск</th></tr></thead>
         <tbody>{visible.map(r=><tr key={r.id}><td><input type="checkbox" aria-label={`Выбрать заказ ${r.orderId}`} disabled={busy||!!r.blockedReason} checked={selected.includes(r.id)} onChange={e=>setSelected(current=>e.target.checked?[...current,r.id]:current.filter(id=>id!==r.id))}/></td><td>{dateTime(r.scannedAt)}<br/>{r.workerName}</td><td><code>{r.kiz}</code><br/>{r.productName}<br/>{r.barcode}</td><td>№{r.requestNumber}<br/>{r.orderId}</td><td>{r.boxCode}</td><td>{printLabel(r.printState)}<br/>{r.blockedReason||'Можно включить в поиск'}</td></tr>)}</tbody>
       </table></div>
-      {!visible.length?<p role="status">За выбранный период подходящих сканирований нет.</p>:null}
+      {!visible.length?<p role="status">По выбранному условию КИЗ без подтверждённой упаковки не найдено.</p>:null}
     </>:null}
   </section>;
 }

@@ -1,3 +1,4 @@
+import { FbsPackingStatus } from './FbsPackingStatus';
 import { FbsWbAccounting } from './FbsWbAccounting';
 import { runWbAccountingBatch, type WbAccountingBatchHandler, type WbAccountingOrder } from '../../lib/fbs-wb-accounting-batch';
 import { describeStockTransfer } from '../../lib/fbs-stock-transfer';
@@ -4795,6 +4796,7 @@ function OnlineExecutionModal({
                                 <span>{row.wbStickerBarcode ? `полный ШК: ${row.wbStickerBarcode}` : 'появится после получения наклейки WB'}</span>
                               </td>
                               <td>
+                                {row.packing?.stage ? <FbsPackingStatus packing={{...row.packing,stage:row.packing.stage}}/> : <>
                                 <span
                                   className={`online-execution-pill ${
                                     row.completionSource === 'SOS_WB'
@@ -4818,6 +4820,7 @@ function OnlineExecutionModal({
                                 {row.completionSource === 'SOS_WB' ? (
                                   <span>{row.workerName ? `${row.workerName} · ` : ''}{row.completedAt ? formatOnlineDateTime(row.completedAt) : ''}</span>
                                 ) : null}
+                                </>}
                               </td>
                               <td>
                                 {onResetFbsAssembly && ['IN_PROGRESS', 'RESCAN_REQUIRED'].includes(row.status) ? (
