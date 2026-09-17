@@ -5671,7 +5671,7 @@ function FbsOrdersView({
     (order) => !hiddenWaitingStockKeys.has(fbsOrderSelectionKey(order)),
   );
   const readOnlyView = view === 'archive' || view === 'cancelled';
-  const orderGroups = groupFbsOrdersBySupply(visibleOrders, view, orderSort);
+  const orderGroups = groupFbsOrdersBySupply(visibleOrders, view, orderSort, data?.stockTransferEnabled === true);
   const tableColumnCount = 6 + (!readOnlyView ? 1 : 0) + (view === 'active' ? 1 : 0) + (view === 'cancelled' ? 1 : 0);
   const itemsCount = visibleOrders.reduce((sum, order) => sum + Math.max(1, order.itemCount), 0);
   const hasWildberriesOrders = visibleOrders.some((order) => order.marketplace === 'WILDBERRIES');
@@ -8027,8 +8027,9 @@ function groupFbsOrdersBySupply(
   orders: FbsOrderSummary[],
   view: FbsView,
   sort: FbsOrderSort,
+  groupNoStockRequests = false,
 ): FbsOrderGroup[] {
-  if (view !== 'shipped') return groupFbsOrdersBySupplyOnly(orders);
+  if (view !== 'shipped') return groupFbsOrdersBySupplyOnly(orders, view === 'active' && groupNoStockRequests);
 
   const baseGroups = groupFbsOrdersBySupplyOnly(orders);
   const dateGroups = new Map<string, FbsOrderGroup[]>();
@@ -8104,7 +8105,7 @@ function filterFbsShippedOrdersByDate(
   });
 }
 
-function groupFbsOrdersBySupplyOnly(orders: FbsOrderSummary[]): FbsOrderGroup[] {
+export function groupFbsOrdersBySupplyOnly(orders: FbsOrderSummary[], groupNoStockRequests = false): FbsOrderGroup[] {
   const groups = new Map<
     string,
     Omit<FbsOrderGroup, 'isGrouped' | 'parentDateKey'>
@@ -8112,7 +8113,10 @@ function groupFbsOrdersBySupplyOnly(orders: FbsOrderSummary[]): FbsOrderGroup[] 
   for (const order of orders) {
     const supplyId = order.supplyId?.trim() ?? '';
     const requestId = order.request?.id ?? '';
-    const kind = supplyId ? 'supply' : requestId ? 'request' : 'order';
+    // FIX: display the consolidated shortage request without changing WB supply membership.
+    const noStockRequest = groupNoStockRequests && order.marketplace === 'WILDBERRIES' && requestId &&
+      order.request?.title.trim().toLocaleLowerCase('ru-RU') === 'logoff нет на складе';
+    const kind = noStockRequest ? 'request' : supplyId ? 'supply' : requestId ? 'request' : 'order';
     const key =
       kind === 'supply'
         ? `supply:${order.connectionId}:${supplyId}`
@@ -8122,7 +8126,7 @@ function groupFbsOrdersBySupplyOnly(orders: FbsOrderSummary[]): FbsOrderGroup[] 
     const group = groups.get(key) ?? {
       key,
       kind,
-      supplyId,
+      supplyId: noStockRequest ? '' : supplyId,
       requestNumber: order.request?.number ?? null,
       requestNumbers: [],
       orders: [],
@@ -8151,7 +8155,9 @@ function fbsOrderGroupTitle(group: FbsOrderGroup, view: FbsView) {
     return `Заказы за ${formatDateOnly(day)}`;
   }
   if (group.kind === 'request') {
-    return `Заявка WMS №${String(group.requestNumber ?? '').padStart(6, '0')}`;
+    const title = group.orders[0]?.request?.title;
+    const label = title?.trim().toLocaleLowerCase('ru-RU') === 'logoff нет на складе' ? ` · ${title.trim()}` : '';
+    return `Заявка WMS №${String(group.requestNumber ?? '').padStart(6, '0')}${label}`;
   }
   if (view === 'shipped' && group.supplyId) {
     return `${fbsMarketplaceShipmentLabel(group.orders[0])} ${group.supplyId}`;
@@ -8188,6 +8194,11 @@ function fbsOrderGroupDescription(
     return `${ordersLabel} · ${itemsCount} товаров · ${supplies} поставок`;
   }
   if (group.kind === 'request') {
+    const supplies = new Set(group.orders.map(order => order.supplyId).filter(Boolean));
+    if (supplies.size > 0) {
+      const itemsCount = group.orders.reduce((sum, order) => sum + Math.max(1, order.itemCount), 0);
+      return `${ordersLabel} · ${itemsCount} товаров · ${supplies.size} поставок WB`;
+    }
     const marketplace = group.orders[0]?.marketplace ?? 'WILDBERRIES';
     const shipment = marketplace === 'WILDBERRIES'
       ? 'поставке WB'
