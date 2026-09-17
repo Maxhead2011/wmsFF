@@ -122,6 +122,16 @@ describe('FBS date groups respect execution branches', () => {
       .toThrow('Не определён филиал');
   });
 
+  // TEST: full-copy rehearsal exposed old shipped orders that no longer have a live request.
+  it('retains a missing-branch order only when the old FBS charge explicitly contains that order', async () => {
+    const f = fixture();
+    f.legacyCharges.push({ sourceKey: `fbs-calculator:client:${key}`, request: null,
+      invoiceItems: [{ invoice: { warehouseId: 'moscow' } }], metadata: { kind: 'FBS', orderIds: ['4'] } });
+    const branches = await loadFbsDateBillingBranches(f.db, 'client', f.orders, () => key);
+    expect(branchScopedFbsDateKey(key, order('4', ''), branches)).toBe(key);
+    expect(() => branchScopedFbsDateKey(key, order('new', ''), branches)).toThrow('Не определён филиал');
+  });
+
   it('requires lifecycle duplicate protection and performs no extra reads when it is off', async () => {
     const f = fixture(); vi.stubEnv('WMS_WB_ORDER_STOCK_LIFECYCLE_ENABLED', 'false');
     expect(await loadFbsDateBillingBranches(f.db, 'client', f.orders, () => key)).toBeUndefined();

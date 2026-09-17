@@ -30,7 +30,7 @@ export async function loadFbsDateBillingBranches<T extends Order>(
     db.billingCharge.findMany({ where: { clientId, OR: [
       { sourceKey: { in: [...chargeKeys.keys()] } },
       ...primaryPrefixes.map(p => ({ sourceKey: { startsWith: p.prefix } })),
-    ] }, select: { sourceKey: true, request: { select: { warehouseId: true } },
+    ] }, select: { sourceKey: true, metadata: true, request: { select: { warehouseId: true } },
       invoiceItems: { select: { invoice: { select: { warehouseId: true } } } } } }),
   ]);
   const evidence = new Map<string, Set<string>>();
@@ -54,6 +54,15 @@ export async function loadFbsDateBillingBranches<T extends Order>(
     );
     branches.set(key, [...ids][0]);
   }
+  // FIX: an old order may lose its live request after shipment. Reuse only its recorded FBS snapshot.
+  for (const charge of charges) {
+    const key = chargeKeys.get(charge.sourceKey ?? '');
+    const metadata = charge.metadata;
+    if (!key || !metadata || typeof metadata !== 'object' || Array.isArray(metadata) ||
+      metadata.kind !== 'FBS' || !Array.isArray(metadata.orderIds)) continue;
+    const branch = branches.get(key);
+    if (branch) for (const id of metadata.orderIds) if (typeof id === 'string') branches.set(`${key}\0${id}`, branch);
+  }
   return branches;
 }
 
@@ -63,7 +72,7 @@ export function branchScopedFbsDateKey(legacyKey: string, order: Order, branches
   const warehouseId = order.request?.warehouseId?.trim() || order.reservation?.warehouseId?.trim();
   const oldBranch = branches.get(legacyKey);
   if (!warehouseId) {
-    if (oldBranch) throw new BadRequestException('Не определён филиал заказа для существующего счёта FBS. Повторное начисление не выполнено.');
+    if (oldBranch && branches.get(`${legacyKey}\0${order.id}`) !== oldBranch) throw new BadRequestException('Не определён филиал заказа для существующего счёта FBS. Повторное начисление не выполнено.');
     return legacyKey;
   }
   return oldBranch === warehouseId ? legacyKey : `${legacyKey}:warehouse:${warehouseId}`;
