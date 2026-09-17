@@ -6,6 +6,11 @@ import pro.logoff.wms.tsd.network.TsdFboPlan;
 
 // FIX: barcode and KIZ are a pair; an unanswered command keeps its original id.
 final class FboScanState {
+    // FIX: changing entry point never changes the persisted phase or performs a stock operation.
+    static boolean phaseAllowed(boolean packing,String phase) {
+        return packing ? "PACKING".equals(phase)||"CONTROL".equals(phase)||"COMPLETED".equals(phase)
+            : "NOT_STARTED".equals(phase)||"PICKING".equals(phase);
+    }
     String pallet = "", source = "", target = "", barcode = "";
     private Map<String,String> pending;
     Map<String,String> prepare(String action, String kiz) {

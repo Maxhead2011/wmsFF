@@ -386,8 +386,8 @@ export class TsdDeviceController {
   @Get('requests')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
-  listAssemblyRequests(@CurrentUser() user: AuthUser) {
-    return this.assembly.listActiveRequests(user);
+  listAssemblyRequests(@CurrentUser() user: AuthUser, @Query('workflow') workflow?: string) {
+    return this.assembly.listActiveRequests(user, workflow);
   }
 
   @Get('requests/active')

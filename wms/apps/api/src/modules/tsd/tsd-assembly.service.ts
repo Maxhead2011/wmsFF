@@ -82,13 +82,23 @@ export class TsdAssemblyService {
     private readonly fbo?: FboTwoStageService,
   ) {}
 
-  async listActiveRequests(user: AuthUser) {
+  async listActiveRequests(user: AuthUser, workflow?: string) {
+    // FIX: explicit FBO queues exclude FBS before pagination; legacy installations keep their queue.
+    if (workflow && !['fbo-pick', 'fbo-pack'].includes(workflow)) throw new BadRequestException('Неизвестный этап сборки.');
+    if (workflow && !fboTwoStageEnabled()) throw new BadRequestException('Сборка FBO недоступна в этой ВМС.');
+    const fboFilter: Prisma.ClientRequestWhereInput = !workflow ? {} : {
+      fbsOrderLinks: { none: {} },
+      ...(workflow === 'fbo-pack'
+        ? { fboAssembly: { is: { phase: { in: ['PACKING', 'CONTROL'] } } } }
+        : { OR: [{ fboAssembly: { is: null } }, { fboAssembly: { is: { phase: 'PICKING' } } }] }),
+    };
     const clientFilter = this.clientScopes.resolveClientFilter(user);
     const requests = await this.prisma.clientRequest.findMany({
       where: {
         clientId: clientFilter,
         ...warehouseScopeWhere(user),
         type: ClientRequestType.OUTBOUND,
+        ...fboFilter,
         status: { in: activeAssemblyStatuses },
       },
       orderBy: [{ updatedAt: 'desc' }],

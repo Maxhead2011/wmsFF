@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 178 // FIX: Android-compatible template parsing; upgrade without clearing device data.
-            versionName = "0.1.179-language-startup"
+            versionCode = 179 // FIX: separate FBO picking/packing and show product scan feedback.
+            versionName = "0.1.180-fbo-picking-packing"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

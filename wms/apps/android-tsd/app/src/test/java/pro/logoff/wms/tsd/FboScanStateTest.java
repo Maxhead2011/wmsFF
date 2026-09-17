@@ -7,6 +7,16 @@ import pro.logoff.wms.tsd.network.TsdFboPlan;
 import static org.junit.Assert.*;
 
 public class FboScanStateTest {
+    // TEST: opening packing cannot start a pick; picking cannot pack or confirm boxes.
+    @Test public void separatesPickingAndPackingWithoutChangingProgress() {
+        for(String phase:Arrays.asList("NOT_STARTED","PICKING")) {
+            assertTrue(FboScanState.phaseAllowed(false,phase));assertFalse(FboScanState.phaseAllowed(true,phase));
+        }
+        for(String phase:Arrays.asList("PACKING","CONTROL","COMPLETED")) {
+            assertFalse(FboScanState.phaseAllowed(false,phase));assertTrue(FboScanState.phaseAllowed(true,phase));
+        }
+        assertFalse(FboScanState.phaseAllowed(true,null));assertFalse(FboScanState.phaseAllowed(false,"UNKNOWN"));
+    }
     @Test public void retriesTheSameUnitWithoutGeneratingAnotherOperation() {
         // TEST: a lost server response must not turn a retry into a second physical pick.
         FboScanState state=new FboScanState();state.source="FFL_1";state.barcode="2051234567890";
