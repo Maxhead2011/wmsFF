@@ -2499,6 +2499,7 @@ export type TsdAssemblyPlan = {
       sourceBoxPending: boolean;
       syncIssue: string | null;
       workerName: string | null;
+      packing?: {stage:'FOUND'|'PACKED'|null;foundAt:string|null;foundBy:string|null;packedAt:string|null;packedBy:string|null};
       completionSource: 'SOS_WB' | 'STANDARD';
       completedAt: string | null;
       updatedAt: string;

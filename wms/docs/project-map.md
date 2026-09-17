@@ -67,7 +67,7 @@
 
 ## Поиск и тесты
 
-КИЗ без подтверждённой печати SOS WB 2: `modules/service/unprinted-kiz.{controller,service,policy}.ts`, web `components/service/UnprintedKizPanel.tsx` и `lib/unprintedKiz.ts`. Период относится к сканированию, последующая печать проверяется без ограничения этим периодом. Создание поиска использует существующий формат `KIZ_SEARCH_CREATED` для ТСД. Флаги и критерии: [описание проверки](testing/service-unprinted-kiz-search.md).
+КИЗ без подтверждённой печати SOS WB 2: `modules/service/unprinted-kiz.{controller,service,policy}.ts`, web `components/service/UnprintedKizPanel.tsx` и `lib/unprintedKiz.ts`. Выбор по периоду сканирования, номеру заявки ВМС или поставке WB; последующая печать проверяется без ограничения датой. Онлайн-сборка `TsdAssemblyService.loadFbsAssemblyFacts` использует `service/fbs-packing-progress.ts` для этапов «Найдено» и «Упаковано»; web-компонент `FbsPackingStatus.tsx` показывает время и сотрудников. Создание поиска использует существующий формат `KIZ_SEARCH_CREATED` для ТСД. Флаги и критерии: [описание проверки](testing/service-unprinted-kiz-search.md).
 
 Из папки `wms/`:
 
