@@ -459,3 +459,9 @@
     gap: 3px;
   }
 }
+.unprinted-kiz-table { overflow-x: auto; }
+.unprinted-kiz-panel .service-search-row { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.unprinted-kiz-panel label { display: grid; gap: 6px; }
+.unprinted-kiz-panel .service-search-row label { min-width: 180px; }
+.unprinted-kiz-panel .service-search-row select { min-height: 40px; padding: 8px 12px; border: 1px solid #d5dce6; border-radius: 8px; background: white; }
+.unprinted-kiz-panel .service-search-row button { min-height: 40px; }
