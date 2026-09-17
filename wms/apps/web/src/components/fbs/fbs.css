@@ -5569,3 +5569,58 @@
   .fbs-allocation__api-create, .fbs-allocation__secret { align-items: stretch; flex-direction: column; }
   .fbs-allocation__api-create input { min-width: 0; width: 100%; }
 }
+
+/* FIX: explicit header positions prevent the display filter taking the icon's narrow column. */
+.fbs-panel__hero.fbs-panel__hero--display-mode {
+  grid-template-columns: 50px minmax(0, 1fr) minmax(240px, 300px);
+  align-items: center;
+}
+.fbs-panel__hero.fbs-panel__hero--display-mode > .fbs-panel__heading {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+}
+.fbs-panel__hero.fbs-panel__hero--display-mode > .fbs-display-mode {
+  grid-column: 3;
+  grid-row: 1;
+  min-width: 0;
+  width: 100%;
+}
+.fbs-display-mode select { box-sizing: border-box; padding-right: 32px; }
+.fbs-panel__hero.fbs-panel__hero--display-mode > .fbs-panel__scope {
+  grid-column: 2 / -1;
+  grid-row: 2;
+  justify-self: start;
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+/* FIX: the client tile spans both rows; tiles 9–15 fill the row below 2–8. */
+.fbs-tiles--wb { grid-template-columns: repeat(8, minmax(0, 1fr)); align-items: stretch; }
+.fbs-tiles--wb > .fbs-tile--has-clients { grid-row: span 2; }
+.fbs-tiles--wb .fbs-tile__clients { flex: 1; align-content: start; max-height: 220px; }
+@media (max-width: 1799px) {
+  .fbs-tiles--wb { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@media (max-width: 1180px) {
+  .fbs-tiles--wb { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 1000px) {
+  .fbs-panel__hero.fbs-panel__hero--display-mode { grid-template-columns: 50px minmax(0, 1fr); }
+  .fbs-panel__hero.fbs-panel__hero--display-mode > .fbs-display-mode {
+    grid-column: 1 / -1; grid-row: 2; max-width: 360px;
+  }
+  .fbs-panel__hero.fbs-panel__hero--display-mode > .fbs-panel__scope { grid-column: 1 / -1; grid-row: 3; }
+}
+@media (max-width: 760px) {
+  .fbs-panel__hero.fbs-panel__hero--display-mode { grid-template-columns: minmax(0, 1fr); }
+  .fbs-panel__hero.fbs-panel__hero--display-mode > .fbs-panel__heading { grid-column: 1; }
+}
+@media (max-width: 520px) {
+  .fbs-tiles--wb { grid-template-columns: minmax(0, 1fr); }
+  .fbs-tiles--wb > .fbs-tile--has-clients { grid-row: auto; }
+}
