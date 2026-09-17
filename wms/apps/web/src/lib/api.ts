@@ -9498,6 +9498,29 @@ export async function testServiceTelegramClient(accessToken: string, clientId: s
   });
 }
 
+export type WbPrintCheckReport = {
+  orderId: string;
+  checkedAt: string;
+  results: Array<{
+    id: string; clientId: string; clientName: string; connectionName: string | null;
+    requestNumber: number | null; warehouseName: string | null;
+    productName: string; article: string | null; barcode: string | null; boxCode: string | null;
+    workerName: string | null; kiz: string | null; wbMetaStatus: string; status: string;
+    completedAt: string | null; updatedAt: string; archived: boolean; errorMessage: string | null;
+    stickerPartA: string | null; stickerPartB: string | null;
+    scans: Array<{ action: string; at: string; worker: string | null; kiz: string | null; boxCode: string | null }>;
+    prints: Array<{ id: string; kiz: string; status: string; source: string; deviceCode: string | null;
+      requestedBy: string; createdAt: string; claimedAt: string | null; printedAt: string | null; failedAt: string | null;
+      errorMessage: string | null; attempts: number; stickerCode: string | null; station: { name: string; printerName: string } }>;
+    labelRequests: Array<{ at: string; worker: string; kiz: string; stickerCode: string | null; hasPrintJob: boolean }>;
+  }>;
+};
+
+// FIX: one exact-order read, with the normal authenticated service permissions.
+export function fetchWbPrintCheck(accessToken: string, orderId: string) {
+  return request<WbPrintCheckReport>(withQuery('/service/wb-print-check', { orderId }), { accessToken });
+}
+
 export async function searchServiceKiz(
   accessToken: string,
   filter: { clientId?: string; search?: string },

@@ -3,10 +3,12 @@ import { ClientNotificationsModule } from '../client-notifications/client-notifi
 import { ServiceCenterController } from './service-center.controller';
 import { ServiceCenterService } from './service-center.service';
 import { StorageOptimizationService } from './storage-optimization.service';
+import { AuthModule } from '../auth/auth.module';
+import { WbPrintCheckService } from './wb-print-check.service';
 
 @Module({
-  imports: [ClientNotificationsModule],
+  imports: [ClientNotificationsModule, AuthModule],
   controllers: [ServiceCenterController],
-  providers: [ServiceCenterService, StorageOptimizationService],
+  providers: [ServiceCenterService, StorageOptimizationService, WbPrintCheckService],
 })
 export class ServiceCenterModule {}

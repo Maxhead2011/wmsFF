@@ -470,6 +470,8 @@ describe.skipIf(!url).sequential('WB stock lifecycle SQL integration', () => {
     await db.$transaction(async tx => {
       await finalizeWbOrderShipment(tx, f.taskId, 'PRINT_CONFIRMED', order);
       await enqueueFbsPrintBilling(tx, f.clientId);
+      // TEST: this scenario starts with eligible work, independent of database timestamp rounding.
+      await tx.fbsPrintBillingOutbox.update({ where: { clientId: f.clientId }, data: { nextAttemptAt: new Date(0) } });
     });
     const scoped = Object.create(db);
     Object.defineProperty(scoped, 'fbsPrintBillingOutbox', { value: new Proxy(db.fbsPrintBillingOutbox, {
