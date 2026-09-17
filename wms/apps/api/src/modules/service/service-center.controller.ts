@@ -7,6 +7,7 @@ import { RequirePermissions } from '../auth/decorators/require-permissions.decor
 import { ServiceCenterService } from './service-center.service';
 import type { TelegramNotificationSection } from '../client-notifications/telegram-notification.service';
 import { StorageOptimizationService } from './storage-optimization.service';
+import { WbPrintCheckService } from './wb-print-check.service';
 
 @ApiTags('service')
 @RequirePermissions('system:admin')
@@ -15,7 +16,14 @@ export class ServiceCenterController {
   constructor(
     private readonly serviceCenter: ServiceCenterService,
     private readonly storageOptimization: StorageOptimizationService,
+    private readonly wbPrintCheck: WbPrintCheckService,
   ) {}
+
+  // FIX: read-only evidence for an exact WB order; never enqueue or reprint labels.
+  @Get('wb-print-check')
+  checkWbPrint(@Query('orderId') orderId: string | undefined, @CurrentUser() user: AuthUser) {
+    return this.wbPrintCheck.inspect(orderId, user);
+  }
 
   @Get('clients/:clientId/storage-optimization')
   getStorageOptimization(@Param('clientId') clientId: string) {

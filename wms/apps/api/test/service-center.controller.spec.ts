@@ -11,12 +11,20 @@ describe('ServiceCenterController storage optimization', () => {
         rows: [],
       }),
     };
-    const controller = new ServiceCenterController({} as never, optimization as never);
+    const controller = new ServiceCenterController({} as never, optimization as never, {} as never);
 
     // TEST: the endpoint delegates by client id and performs no stock mutation itself.
     const result = await controller.getStorageOptimization('client-lukin');
 
     expect(optimization.buildReport).toHaveBeenCalledWith('client-lukin');
     expect(result.client.id).toBe('client-lukin');
+  });
+  // TEST: the diagnostic route passes user scope through to the read-only report.
+  it('delegates WB print inspection with the authenticated user', async () => {
+    const user = { id: 'owner' } as never;
+    const inspection = { inspect: vi.fn().mockResolvedValue({ orderId: '5786259714', results: [] }) };
+    const controller = new ServiceCenterController({} as never, {} as never, inspection as never);
+    await controller.checkWbPrint('5786259714', user);
+    expect(inspection.inspect).toHaveBeenCalledWith('5786259714', user);
   });
 });

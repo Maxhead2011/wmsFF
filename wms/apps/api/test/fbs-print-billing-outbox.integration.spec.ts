@@ -23,7 +23,11 @@ describe.skipIf(!url).sequential('durable print billing outbox', () => {
     }) });
     return new FbsPrintBillingWorker(scoped, bill, report);
   };
-  const enqueue = (id: string) => db.$transaction(tx => enqueueFbsPrintBilling(tx, id));
+  // TEST: readiness is explicit; PostgreSQL timestamp rounding must not delay a one-shot test worker.
+  const enqueue = (id: string) => db.$transaction(async tx => {
+    await enqueueFbsPrintBilling(tx, id);
+    await tx.fbsPrintBillingOutbox.update({ where: { clientId: id }, data: { nextAttemptAt: new Date(0) } });
+  });
   afterAll(async () => {
     await db.fbsPrintBillingOutbox.deleteMany({ where: { clientId: { in: clients } } });
     await db.$disconnect();
