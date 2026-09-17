@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 183 // FIX: offline pallet, box and product speech in FBO/FBS.
-            versionName = "0.1.184-assembly-scan-voice"
+            versionCode = 186 // FIX: approved LOGOFF launcher icon.
+            versionName = "0.1.186-launcher-icon"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

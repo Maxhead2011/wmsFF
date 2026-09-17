@@ -1,0 +1,4 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- FIX: brand-specific launcher resources do not change sold installations. -->
+    <application android:icon="@mipmap/ic_logoff_launcher" android:roundIcon="@mipmap/ic_logoff_launcher" />
+</manifest>
