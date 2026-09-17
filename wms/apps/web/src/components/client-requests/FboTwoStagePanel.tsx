@@ -1,4 +1,6 @@
-import { FormEvent, useRef, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
+import { startFboPolling } from './fboLivePolling';
+import { FboProgress } from './FboProgress';
 import { actFbo, fetchFboPlan, downloadFboWbFile, type FboPlan, type FboAction } from '../../lib/api';
 
 // FIX: pallet scan narrows the list before the source box can be selected.
@@ -12,11 +14,16 @@ export function selectFboLocation(route:FboPlan['route'], pallet:string, scan:st
 export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClose }: {initial:FboPlan;accessToken:string;userId:string;canWrite:boolean;onClose:()=>void}) {
   const [plan,setPlan]=useState(initial),[code,setCode]=useState(''),[source,setSource]=useState(''),[target,setTarget]=useState(''),[barcode,setBarcode]=useState('');
   const [pallet,setPallet]=useState('');
+  const [scanMode,setScanMode]=useState(false);
   const storageKey=`fbo-pending:${userId}:${initial.requestId}`;
   const [busy,setBusy]=useState(false),[error,setError]=useState(''),[pending,setPending]=useState<FboAction|null>(()=>{
     try{return JSON.parse(localStorage.getItem(storageKey)||'null');}catch{return null;}
   });
   const inFlight=useRef(false),field=useRef<HTMLInputElement>(null);
+  const active=useRef(true),refreshRef=useRef<()=>void>(()=>{});
+  // FIX: refresh the panel's own plan, rather than ignoring updated parent props.
+  refreshRef.current=()=>{if(!scanMode&&!code&&!barcode)void refresh();};
+  useEffect(()=>{active.current=true;const stop=startFboPolling(()=>refreshRef.current(),()=>document.visibilityState==='visible');return()=>{active.current=false;stop();};},[]);
   const sourceTask=plan.route.find(b=>b.boxCode===source);
   const title=plan.phase==='CONTROL'?'Проверка всех коробов поставки':plan.phase==='PACKING'?'2. Упаковка поставки':'1. Отбор товара';
   async function command(action:string,extra:Partial<FboAction>={}) {
@@ -41,18 +48,19 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
     if(line.requiresKiz){setBarcode(value);setError('');}
     else await command(plan.phase==='PICKING'?'PICK_UNIT':'PACK_UNIT',{sourceBoxCode:source,targetBoxCode:target,barcode:value});
   }
-  async function refresh(){if(inFlight.current||pending)return;inFlight.current=true;setBusy(true);try{const next=await fetchFboPlan(accessToken,plan.requestId);setPlan(next);if(!next.route.some(r=>r.boxCode===source&&r.pallet===pallet)){setSource('');setBarcode('');}if(!next.route.some(r=>r.pallet===pallet))setPallet('');if(!next.boxes.some(b=>b.code===target&&!b.closed))setTarget('');setError('');}catch(e){setError(String(e));}finally{inFlight.current=false;setBusy(false);}}
+  async function refresh(){if(inFlight.current||pending)return;inFlight.current=true;setBusy(true);try{const next=await fetchFboPlan(accessToken,plan.requestId);if(!active.current)return;setPlan(next);if(!next.route.some(r=>r.boxCode===source&&r.pallet===pallet)){setSource('');setBarcode('');}if(!next.route.some(r=>r.pallet===pallet))setPallet('');if(!next.boxes.some(b=>b.code===target&&!b.closed))setTarget('');setError('');}catch(e){if(active.current)setError(`Не удалось обновить статистику: ${String(e)}`);}finally{inFlight.current=false;if(active.current)setBusy(false);}}
   async function download(){try{const file=await downloadFboWbFile(accessToken,plan.requestId);const a=document.createElement('a');const url=URL.createObjectURL(file);a.href=url;a.download='wb-packages.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){setError(String(e));}}
   const hint=plan.phase==='CONTROL'?'ШК короба поставки':plan.phase==='PICKING'&&!source?(pallet?'ШК короба на выбранном паллете':'ШК паллета или короба без паллета'):plan.phase==='PACKING'&&!target?'ШК короба для упаковки или целого отобранного короба':barcode?'КИЗ товара':'ШК товара';
   return <div className="online-execution-modal" role="dialog" aria-modal="true" aria-label="Двухэтапная сборка ФБО"><section className="online-execution-modal__panel" style={{display:'block',maxWidth:1000,width:'95vw',maxHeight:'92vh',overflow:'auto',padding:24}}>
-    <h2>ФБО · {plan.title}</h2><p>Нужно {plan.needed} · Отобрано {plan.picked} · Упаковано {plan.packed}</p>
+    <h2>FBO WB {plan.number ? `· №${String(plan.number).padStart(6,'0')}` : ''} · {plan.title}</h2>
+    <FboProgress plan={plan} paused={scanMode||!!pending}/>
     {plan.compositionChanged&&<p role="alert">Состав заявки изменился. Требуется сверка.</p>}
     {plan.shortage>0&&<p role="alert">Недостаточно доступного остатка: {plan.shortage} ед.</p>}
     <h3>{plan.phase==='COMPLETED'?'Поставка проверена':title}</h3>
     {error&&<p role="alert">{error}</p>}
     {pending&&!busy&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} onClick={()=>void command(pending.action)}>Повторить неподтверждённый запрос</button>}
     {plan.phase==='NOT_STARTED'&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||!canWrite} onClick={()=>void command('START')}>Начать отбор</button>}
-    {['PICKING','PACKING','CONTROL'].includes(plan.phase)&&<form onSubmit={scan} style={{display:'flex',gap:12,alignItems:'end',flexWrap:'wrap',margin:'20px 0'}}><label style={{display:'grid',gap:8,flex:'1 1 240px'}}>{hint}<input ref={field} autoFocus value={code} onChange={e=>setCode(e.target.value)} disabled={busy||!!pending||!canWrite} style={{minHeight:44,padding:10,border:'1px solid var(--line)',borderRadius:6}}/></label><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||!canWrite}>Подтвердить скан</button></form>}
+    {canWrite&&['PICKING','PACKING','CONTROL'].includes(plan.phase)&&<details onToggle={e=>setScanMode(e.currentTarget.open)}><summary>Сканирование в ВМС</summary><form onSubmit={scan} style={{display:'flex',gap:12,alignItems:'end',flexWrap:'wrap',margin:'20px 0'}}><label style={{display:'grid',gap:8,flex:'1 1 240px'}}>{hint}<input ref={field} value={code} onChange={e=>setCode(e.target.value)} disabled={busy||!!pending} style={{minHeight:44,padding:10,border:'1px solid var(--line)',borderRadius:6}}/></label><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending}>Подтвердить скан</button></form></details>}
     {sourceTask&&plan.phase==='PICKING'&&<div><p>{sourceTask.boxCode} · {sourceTask.pallet} · {sourceTask.zone}</p>{sourceTask.tasks.map(t=><p key={t.skuId}>Отберите {t.quantity} ед. · {t.name} · {t.barcode}</p>)}
       {sourceTask.recount&&<p role="alert">Количество и КИЗ расходятся. Требуется актуализация короба.</p>}
       {sourceTask.wholeBox&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||!canWrite} onClick={()=>void command('PICK_BOX',{sourceBoxCode:source})}>Короб забран целиком</button>}

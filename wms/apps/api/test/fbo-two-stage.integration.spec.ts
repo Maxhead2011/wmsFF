@@ -70,6 +70,24 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         vi.unstubAllEnvs();
     });
     afterAll(() => p.$disconnect());
+    // TEST: live employee/KIZ details remain inside the existing feature flag and client access scope.
+    it('does not expose online details without access or when FBO is disabled', async () => {
+        await expect(svc.plan(request,{...user,id:randomUUID()})).rejects.toThrow('Client access denied');
+        vi.stubEnv('WMS_FBO_TWO_STAGE_ENABLED','false');
+        await expect(svc.plan(request,user)).rejects.toThrow('выключена');
+    });
+    // TEST: a fresh monitor snapshot includes committed scans and employee names without writing stock.
+    it('reports live progress and the employee for each physical unit', async () => {
+        await act('START');
+        expect((await svc.plan(request,user)).pickedUnits).toEqual([]);
+        await act('PICK_UNIT',{sourceBoxCode:'FFL_'+partial,barcode:'2051234567890',kiz:marks[2].value});
+        const movements=await p.stockMovement.count({where:{clientId:client}});
+        const current=await svc.plan(request,user);
+        expect(current.picked).toBe(1);expect(current.lines[0].remaining).toBe(3);
+        expect(current.pickedUnits).toHaveLength(1);
+        expect(current.pickedUnits[0]).toMatchObject({pickedBy:'Picker',kiz:marks[2].value,sourceBoxCode:'FFL_'+partial,state:'PICKED'});
+        expect(await p.stockMovement.count({where:{clientId:client}})).toBe(movements);
+    });
     // TEST: a failed serializable attempt rolls back its writes before the identical operation retries.
     it('retries a write conflict after stock writes without double picking', async () => {
         await act('START');

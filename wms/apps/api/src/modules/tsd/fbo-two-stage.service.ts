@@ -63,6 +63,9 @@ export class FboTwoStageService {
     private async snapshot(tx: Prisma.TransactionClient, r: Request) {
         const assembly = await tx.fboAssembly.findUnique({ where: { requestId: r.id }, include: { units: true, boxes: true } });
         const units = assembly?.units ?? [];
+        // FIX: expose persisted physical progress to the web monitor, including who scanned each unit.
+        const actors = await tx.user.findMany({ where: { id: { in: [...new Set(units.flatMap(u => [u.pickedByUserId, u.packedByUserId]).filter((id): id is string => !!id))] } }, select: { id: true, name: true } });
+        const actorNames = new Map(actors.map(a => [a.id, a.name]));
         const lines = remainingFboLines(r.items, units).map(i => ({ id: i.id, skuId: i.skuId!, barcode: i.barcode!,
             name: i.name || i.sku!.name, article: i.sku!.article, size: i.sku!.size, requiresKiz: (i.sku!.needsChestnyZnak && !i.sku!.isUnmarked) || units.some(u => u.skuId === i.skuId && !!u.markId),
             needed: i.needed, picked: i.picked, packed: i.packed, remaining: i.remaining }));
@@ -106,7 +109,12 @@ export class FboTwoStageService {
             route.push({ boxCode: box.code, pallet: box.storagePlacement?.pallet.code ?? box.pallet?.code ?? '',
                 zone: box.storagePlacement?.pallet.zone?.name ?? box.zone?.name ?? '', tasks, wholeBox: decision.allowed, recount: decision.recount });
         }
-        return { requestId: r.id, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED', lines, route,
+        return { requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED', lines, route,
+            observedAt: new Date().toISOString(),
+            pickedUnits: units.filter(u => u.state !== 'RETURNED').map(u => ({ id: u.id, requestItemId: u.requestItemId, barcode: u.barcode,
+                kiz: u.kiz, sourceBoxCode: u.sourceBoxCode, targetBoxCode: u.targetBoxCode, wholeBox: u.wholeBox, state: u.state,
+                pickedAt: u.pickedAt, packedAt: u.packedAt, pickedBy: actorNames.get(u.pickedByUserId) ?? null,
+                packedBy: u.packedByUserId ? actorNames.get(u.packedByUserId) ?? null : null })),
             needed: lines.reduce((s, l) => s + l.needed, 0), picked: lines.reduce((s, l) => s + l.picked, 0), packed: lines.reduce((s, l) => s + l.packed, 0),
             looseRemaining: units.filter(u => !u.wholeBox && u.state === 'PICKED').length,
             wholeBoxes: [...new Set(units.filter(u => u.wholeBox && u.state === 'PICKED').map(u => u.sourceBoxCode))],

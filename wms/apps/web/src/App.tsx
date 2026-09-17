@@ -98,6 +98,7 @@ const MonitoringPanel = lazy(() =>
 const DbsPanel = lazy(() =>
   import('./components/dbs/DbsPanel').then((module) => ({ default: module.DbsPanel })),
 );
+const FboWorkspace = lazy(() => import('./components/client-requests/FboWorkspace').then(module => ({ default: module.FboWorkspace })));
 const OzonFboPanel = lazy(() =>
   import('./components/ozon-fbo/OzonFboPanel').then((module) => ({ default: module.OzonFboPanel })),
 );
@@ -958,6 +959,7 @@ function renderWorkspace(
     case 'dbs':
       return <Suspense fallback={<div className="workspace-loading">Загружаю DBS…</div>}><DbsPanel session={session} /></Suspense>;
     case 'fbo-ozon':
+      if (import.meta.env.VITE_FBO_WORKSPACE_ENABLED === 'true') return <Suspense fallback={<div className="workspace-loading">Загружаю FBO…</div>}><FboWorkspace session={session}/></Suspense>;
       return <Suspense fallback={<div className="workspace-loading">Загружаю FBO Ozon…</div>}><OzonFboPanel session={session} /></Suspense>;
     case 'relabeling':
       return <Suspense fallback={<div className="workspace-loading">Загружаю переклейку…</div>}><RelabelingPanel session={session} /></Suspense>;

@@ -76,6 +76,7 @@ import { ClientRequestXlsxImportForm } from './ClientRequestXlsxImportForm';
 import './client-requests.css';
 import { ClientRequestsTable } from './ClientRequestsTable';
 import { FboTwoStagePanel } from './FboTwoStagePanel';
+import { isWbFboRequest } from './fboRequestScope';
 import {
   buildUnknownSourceNoBoxStockSources,
   isProblemCloseStockSourceItem,
@@ -98,6 +99,7 @@ type LoadState<T> = {
 };
 
 type ClientRequestsPanelProps = {
+  fboOnly?: boolean;
   session: AuthSession;
   onOpenFbsOrders?: (request: ClientRequestSummary) => void;
   focusRequestId?: string | null;
@@ -178,6 +180,7 @@ type FbsSynchronizationAudit = {
 };
 
 export function ClientRequestsPanel({
+  fboOnly = false,
   session,
   onOpenFbsOrders,
   focusRequestId = null,
@@ -285,6 +288,7 @@ export function ClientRequestsPanel({
     () => ({
       ...requests,
       data: requests.data
+        .filter(request => !fboOnly || isWbFboRequest(request))
         .filter((request) => {
           const isArchived = request.status === 'DONE' || request.status === 'CANCELLED';
           return showArchive ? isArchived : !isArchived;
@@ -304,7 +308,7 @@ export function ClientRequestsPanel({
           return requestSortDirection === 'asc' ? difference : -difference;
         }),
     }),
-    [requests, requestSortDirection, requestSortField, showArchive],
+    [requests, requestSortDirection, requestSortField, showArchive, fboOnly],
   );
   const fbsTailEligibleRequests = useMemo(
     () =>
@@ -404,7 +408,7 @@ export function ClientRequestsPanel({
 
   useEffect(() => {
     const requestId = onlinePreview?.request.id;
-    if (!requestId) {
+    if (!requestId || onlinePreview?.plan?.fbo) {
       return;
     }
 
@@ -445,7 +449,7 @@ export function ClientRequestsPanel({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [onlinePreview?.request.id, session.accessToken]);
+  }, [onlinePreview?.request.id, !!onlinePreview?.plan?.fbo, session.accessToken]);
 
   if (!canRead) {
     return null;
@@ -618,6 +622,11 @@ export function ClientRequestsPanel({
     setError(null);
 
     try {
+      // FIX: our FBO request opens live execution; legacy requests retain their document view.
+      if (import.meta.env.VITE_FBO_WORKSPACE_ENABLED === 'true' && isWbFboRequest(request)) {
+        const plan=await fetchTsdAssemblyPlan(session.accessToken,request.id);
+        if(plan.fbo){setOnlinePreview({request,plan,status:'ready'});return;}
+      }
       setDocumentPreview(await fetchClientRequestDocument(session.accessToken, request.id));
     } catch (caught) {
       setError(errorMessage(caught));
@@ -1918,7 +1927,7 @@ export function ClientRequestsPanel({
       <div className="section-heading client-requests-panel__heading">
         <div>
           <p className="eyebrow">Клиентские заявки</p>
-          <h2>{showArchive ? 'Архив заявок' : 'Клиентские заявки'}</h2>
+          <h2>{fboOnly ? (showArchive?'Архив FBO WB':'Заявки FBO WB') : showArchive ? 'Архив заявок' : 'Клиентские заявки'}</h2>
         </div>
         <div className="client-requests-panel__heading-actions">
           {onOpenFbsOrders ? (
@@ -1932,7 +1941,7 @@ export function ClientRequestsPanel({
               <span>К заказам FBS</span>
             </button>
           ) : null}
-          {!showArchive ? (
+          {!showArchive && !fboOnly ? (
             <button
               className="client-request-fbs-audit-trigger"
               type="button"
@@ -1988,7 +1997,7 @@ export function ClientRequestsPanel({
       {!showArchive && canWrite && clients.status === 'ready' ? (
         <>
           <ClientRequestXlsxImportForm clients={visibleClients} session={session} onCreated={acceptCreated} />
-          <ClientRequestCreateForm clients={visibleClients} session={session} onCreated={acceptCreated} />
+          <ClientRequestCreateForm clients={visibleClients} session={session} onCreated={acceptCreated} outboundOnly={fboOnly} />
         </>
       ) : null}
 
