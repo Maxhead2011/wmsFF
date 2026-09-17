@@ -31,6 +31,7 @@ final class FboTwoStageScreen {
     private AlertDialog quantityDialog;
     private EditText quantityInput;
     private final boolean packing;
+    private final FboScanFeedback scanFeedback;
     private int feedbackColor=Color.TRANSPARENT;
     private final Handler handler=new Handler(Looper.getMainLooper());
     private final ExecutorService executor=Executors.newSingleThreadExecutor();
@@ -46,6 +47,11 @@ final class FboTwoStageScreen {
         this(activity,session,api,baseUrl,id,packing,back,null);
     }
     FboTwoStageScreen(Activity activity,TsdSession session,WmsApi api,String baseUrl,String id,boolean packing,Runnable back,Runnable moveRemainder) {
+        this(activity,session,api,baseUrl,id,packing,back,moveRemainder,
+            !packing&&"logoff".equals(BuildConfig.FLAVOR)?new FboScanFeedback.Voice(activity):null);
+    }
+    FboTwoStageScreen(Activity activity,TsdSession session,WmsApi api,String baseUrl,String id,boolean packing,Runnable back,Runnable moveRemainder,FboScanFeedback scanFeedback) {
+        this.scanFeedback=scanFeedback;
         this.moveRemainder=moveRemainder;
         this.packing=packing;
         this.activity=activity;this.session=session;this.api=api;this.baseUrl=baseUrl;this.id=id;this.back=back;
@@ -56,11 +62,13 @@ final class FboTwoStageScreen {
     boolean belongsTo(TsdSession current){return session.hasSameAccessToken(current);}
     boolean canLeave(){return !busy&&state.pending()==null;}
     EditText scannerField(){return quantityInput!=null?quantityInput:input;}
-    void close(){closed=true;if(quantityDialog!=null)quantityDialog.dismiss();handler.removeCallbacks(automatic);executor.shutdownNow();}
+    void close(){closed=true;if(scanFeedback!=null)scanFeedback.close();if(quantityDialog!=null)quantityDialog.dismiss();handler.removeCallbacks(automatic);executor.shutdownNow();}
     private void text(LinearLayout root,String value){TextView v=new TsdUi.Label(activity);v.setText(value);v.setTextSize(19);v.setTextColor(Color.BLACK);v.setPadding(0,9,0,9);root.addView(v);}
     private void card(LinearLayout root,String value,int color){text(root,value);root.getChildAt(root.getChildCount()-1).setBackgroundColor(color);}
     private void button(LinearLayout root,String title,boolean enabled,Runnable action){Button b=new TsdUi.Button(activity);b.setText(title);b.setAllCaps(false);b.setEnabled(enabled&&!busy);b.setOnClickListener(v->action.run());root.addView(b);}
     private TsdFboPlan.Route source(){if(plan!=null&&plan.route!=null)for(TsdFboPlan.Route r:plan.route)if(r.boxCode.equals(state.source))return r;return null;}
+    // FIX: speak only for product barcodes during picking, never for KIZ or server responses.
+    private void speakScan(boolean accepted){if(!closed&&!packing&&plan!=null&&"PICKING".equals(plan.phase)&&"logoff".equals(BuildConfig.FLAVOR)&&scanFeedback!=null)scanFeedback.play(accepted);}
     private boolean ready(){return state.pending()==null&&!busy;}
     private void render(){
         if(closed||activity.isDestroyed())return;
@@ -86,6 +94,7 @@ final class FboTwoStageScreen {
                 if("PICKING".equals(plan.phase)){
                     text(root,"Осталось отобрать "+(plan.needed-plan.picked));TsdFboPlan.Route r=source();
                     if(r!=null){card(root,r.boxCode+" · "+r.pallet+" · "+r.zone,Color.rgb(187,247,208));for(TsdFboPlan.Task t:r.tasks)text(root,"Отберите "+t.quantity+" ед. · "+t.name+" · "+t.barcode);
+                        if(r.wholeBox&&"logoff".equals(BuildConfig.FLAVOR))card(root,"Короб уезжает целиком · "+r.wholeBoxQuantity+" ед.",Color.rgb(187,247,208));
                         if(r.recount)text(root,"Для целого короба требуется актуализация: количество и КИЗ расходятся.");
                         // FIX: picking and transferring the surplus are explicit choices, never automatic writes.
                         button(root,"Отобрать товар по ШК + КИЗ",ready(),()->{state.barcode="";message="Сканируйте ШК нужного товара, затем КИЗ.";render();});
@@ -137,9 +146,9 @@ final class FboTwoStageScreen {
         }
         if(!state.barcode.isEmpty()){send("PICKING".equals(plan.phase)?"PICK_UNIT":"PACK_UNIT",value);return;}
         TsdFboPlan.Line line=null;for(TsdFboPlan.Line l:plan.lines)if(value.equals(l.barcode)&&("PICKING".equals(plan.phase)?l.remaining>0:l.picked>l.packed)){line=l;break;}
-        if(line==null){message="Этот ШК не требуется на текущем этапе.";render();return;}
+        if(line==null){speakScan(false);message="Этот ШК не требуется на текущем этапе.";render();return;}
         // FIX: show the accepted product while waiting for its KIZ; a barcode alone is not a completed pick.
-        feedbackColor=Color.rgb(187,247,208);message="Нужный товар";
+        feedbackColor=Color.rgb(187,247,208);message="Нужный товар";speakScan(true);
         state.barcode=value;if(line.requiresKiz)render();else send("PICKING".equals(plan.phase)?"PICK_UNIT":"PACK_UNIT",null);
     }
     private void refresh(){if(busy)return;busy=true;render();executor.execute(()->{try{Response<TsdFboPlan> res=api.getFboPlan(session.authorizationHeader(),id).execute();if(!res.isSuccessful()||res.body()==null)throw new Exception(error(res));TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;if(state.pending()==null){state.reconcile(plan);state.barcode="";}busy=false;render();});}catch(Exception e){handler.post(()->{busy=false;message="Не удалось обновить: "+e.getMessage();render();});}});}
