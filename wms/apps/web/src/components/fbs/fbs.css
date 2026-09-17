@@ -51,6 +51,30 @@
   text-align: center;
 }
 
+/* FIX: keep the selected client out of the narrow icon column in compact headers. */
+.fbs-panel__hero > div:nth-child(2) {
+  grid-column: 2 / -1;
+  min-width: 0;
+}
+
+.fbs-panel__hero > .fbs-panel__scope {
+  grid-column: 1 / -1;
+  justify-self: start;
+  width: fit-content;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+@media (max-width: 760px) {
+  .fbs-panel__hero > div:nth-child(2) {
+    grid-column: 1 / -1;
+  }
+}
+
 .fbs-marketplace-entry {
   min-height: min(720px, calc(100vh - 150px));
   align-content: start;
