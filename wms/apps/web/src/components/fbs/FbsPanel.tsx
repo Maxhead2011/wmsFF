@@ -133,6 +133,7 @@ import { useRememberedClientId, validRememberedClientId } from '../../lib/rememb
 
 type FbsPanelProps = {
   session: AuthSession;
+  allBranches?: boolean;
   onOpenRequest?: (requestId: string) => void;
 };
 
@@ -400,7 +401,7 @@ const fbsViews = [
 // FIX: both WB-only reports stay hidden for Ozon and Yandex after merging their tiles.
 const ozonHiddenViews = new Set<FbsView>(['deadlines', 'stocks', 'allocation', 'cargo', 'report', 'passes', 'penalties']);
 
-export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
+export function FbsPanel({ session, onOpenRequest, allBranches = false }: FbsPanelProps) {
   const [marketplace, setMarketplace] = useState<FbsMarketplace | null>(null);
   const [activeView, setActiveView] = useState<FbsView>('active');
   const [clients, setClients] = useState<ClientSummary[]>([]);
@@ -536,7 +537,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
       const sequence = ++loadSequence.current;
       setOrdersState((current) => ({ status: 'loading', data: current.data, error: '' }));
       try {
-        const data = await fetchFbsOrders(session.accessToken, selectedClientId, refresh);
+        const data = await fetchFbsOrders(session.accessToken, selectedClientId, refresh, allBranches);
         if (loadSequence.current === sequence) {
           setOrdersState({ status: 'ready', data, error: '' });
         }
@@ -550,7 +551,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
         }
       }
     },
-    [marketplace, selectedClientId, session.accessToken],
+    [marketplace, selectedClientId, session.accessToken, allBranches],
   );
 
   async function runFbsSynchronizationAudit() {
@@ -560,7 +561,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     try {
       // The audit intentionally requests a fresh marketplace snapshot first.
       // It only reports inconsistencies; it never changes request statuses itself.
-      const fresh = await fetchFbsOrders(session.accessToken, selectedClientId, true);
+      const fresh = await fetchFbsOrders(session.accessToken, selectedClientId, true, allBranches);
       setOrdersState({ status: 'ready', data: fresh, error: '' });
       setSyncAudit(buildFbsSynchronizationAudit(fresh, marketplace));
     } catch (caught) {
@@ -582,7 +583,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     }
     setActiveClientsLoading(true);
     try {
-      const rows = await fetchFbsActiveClients(session.accessToken, marketplace);
+      const rows = await fetchFbsActiveClients(session.accessToken, marketplace, allBranches);
       setActiveClients(rows);
       setSelectedClientId((current) => {
         if (rows.some((item) => item.client.id === current)) return current;
@@ -593,7 +594,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     } finally {
       setActiveClientsLoading(false);
     }
-  }, [marketplace, session.accessToken]);
+  }, [marketplace, session.accessToken, allBranches]);
 
   const loadMarketplaceOrderCounts = useCallback(async () => {
     const sequence = ++marketplaceCountsLoadSequence.current;
@@ -608,7 +609,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     // а следующие два считают свои маркетплейсы без лишних параллельных запросов к API.
     for (const targetMarketplace of FBS_MARKETPLACES) {
       try {
-        const rows = await fetchFbsActiveClients(session.accessToken, targetMarketplace);
+        const rows = await fetchFbsActiveClients(session.accessToken, targetMarketplace, allBranches);
         results.push([
           targetMarketplace,
           {
@@ -625,7 +626,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     setMarketplaceOrderCounts(
       Object.fromEntries(results) as Record<FbsMarketplace, FbsMarketplaceActiveCount>,
     );
-  }, [session.accessToken]);
+  }, [session.accessToken, allBranches]);
 
   const loadCargoPackings = useCallback(async () => {
     if (!selectedClientId) {

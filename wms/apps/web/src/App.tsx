@@ -161,6 +161,8 @@ export function App() {
   );
   const [branches, setBranches] = useState<BranchSummary[]>([]);
   const [branchBusy, setBranchBusy] = useState(false);
+  // FIX: all-branches is a FBS view, not a mutation of the working warehouse.
+  const [fbsAllBranches, setFbsAllBranches] = useState(false);
   const [kizUnread, setKizUnread] = useState(0);
   const [clientNotifications, setClientNotifications] = useState<ClientNotificationSummary[]>([]);
   const [notificationCenterOpen, setNotificationCenterOpen] = useState(false);
@@ -650,10 +652,18 @@ export function App() {
                 <MapPin className="workspace-branch-select__icon" size={17} aria-hidden="true" />
                 <span>Город работы</span>
                 <select
-                  value={session.user.activeWarehouseId || ''}
-                  disabled={branchBusy || branches.length === 1}
-                  onChange={(event) => void selectBranch(event.target.value)}
+                  value={activeWorkspaceId === 'fbs' && fbsAllBranches ? '__all_fbs__' : session.user.activeWarehouseId || ''}
+                  disabled={branchBusy || (branches.length === 1 && activeWorkspaceId !== 'fbs')}
+                  onChange={(event) => {
+                    if (event.target.value === '__all_fbs__') {
+                      setFbsAllBranches(true);
+                    } else {
+                      setFbsAllBranches(false);
+                      void selectBranch(event.target.value);
+                    }
+                  }}
                 >
+                  {activeWorkspaceId === 'fbs' ? <option value="__all_fbs__">Показать всё</option> : null}
                   {branches.map((branch) => (
                     <option key={branch.id} value={branch.id}>
                       {branch.city} · {branch.name}
@@ -793,6 +803,7 @@ export function App() {
               setActiveWorkspaceId('requests');
             },
             () => setFocusedRequestId(null),
+            fbsAllBranches,
           )}
         </section>
 
@@ -893,6 +904,7 @@ function renderWorkspace(
   focusedRequestId: string | null,
   openRequestFromFbs: (requestId: string) => void,
   clearFocusedRequest: () => void,
+  fbsAllBranches: boolean,
 ) {
   switch (activeWorkspaceId) {
     case 'ai':
@@ -944,7 +956,8 @@ function renderWorkspace(
     case 'contracts':
       return <ContractsPanel session={session} />;
     case 'fbs':
-      return <Suspense fallback={<div className="workspace-loading">Загружаю FBS…</div>}><FbsPanel session={session} onOpenRequest={availableWorkspaces.some((item) => item.id === 'requests') ? openRequestFromFbs : undefined} /></Suspense>;
+      // FIX: reset old branch rows, selections and dialogs before loading the next branch.
+      return <Suspense fallback={<div className="workspace-loading">Загружаю FBS…</div>}><FbsPanel key={fbsAllBranches ? 'all' : session.user.activeWarehouseId || 'none'} allBranches={fbsAllBranches} session={session} onOpenRequest={availableWorkspaces.some((item) => item.id === 'requests') ? openRequestFromFbs : undefined} /></Suspense>;
     case 'factory':
       return <Suspense fallback={<div className="workspace-loading">Загружаю фабрику…</div>}><FactoryPanel session={session} /></Suspense>;
     case 'fbs-packed':

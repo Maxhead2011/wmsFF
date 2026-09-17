@@ -9599,11 +9599,12 @@ export async function connectAnalyticsApi(accessToken: string, clientId: string,
   });
 }
 
-export async function fetchFbsOrders(accessToken: string, clientId: string, refresh = false) {
+export async function fetchFbsOrders(accessToken: string, clientId: string, refresh = false, allBranches = false) {
   return request<ClientFbsOrders>(
     withQuery('/marketplace-connections/fbs/orders', {
       clientId,
       refresh: refresh ? '1' : undefined,
+      allBranches: allBranches ? '1' : undefined,
     }),
     { accessToken },
   );
@@ -9733,9 +9734,10 @@ export async function downloadFbsPenaltiesReport(
 export async function fetchFbsActiveClients(
   accessToken: string,
   marketplace?: 'WILDBERRIES' | 'OZON' | 'YANDEX_MARKET',
+  allBranches = false,
 ) {
   return request<FbsActiveClientSummary[]>(
-    withQuery('/marketplace-connections/fbs/active-clients', { marketplace }),
+    withQuery('/marketplace-connections/fbs/active-clients', { marketplace, allBranches: allBranches ? '1' : undefined }),
     { accessToken },
   );
 }
