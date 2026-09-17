@@ -405,21 +405,31 @@ const ozonHiddenViews = new Set<FbsView>(['deadlines', 'stocks', 'allocation', '
 export function FbsPanel(props: FbsPanelProps) {
   // FIX: display mode is local to FBS; keep marketplace while clearing old rows/selections.
   const [marketplace, setMarketplace] = useState<FbsMarketplace | null>(null);
-  const [displayMode, setDisplayMode] = useState(props.session.user.activeWarehouseId || 'all');
+  // FIX: each marketplace owns its display filter, including its entry-card counter.
+  const [displayModes, setDisplayModes] = useState<Record<FbsMarketplace, string>>(() => ({
+    WILDBERRIES: props.session.user.activeWarehouseId || 'all',
+    OZON: props.session.user.activeWarehouseId || 'all',
+    YANDEX_MARKET: props.session.user.activeWarehouseId || 'all',
+  }));
+  const displayMode = marketplace ? displayModes[marketplace] : props.session.user.activeWarehouseId || 'all';
+  const setDisplayMode = (mode: string) => {
+    if (marketplace) setDisplayModes(current => ({ ...current, [marketplace]: mode }));
+  };
   const [branches, setBranches] = useState<BranchSummary[]>([]);
   useEffect(() => {
     let active = true;
     void fetchBranches(props.session.accessToken).then(rows => { if (active) setBranches(rows.filter(row => row.isActive)); }).catch(() => { if (active) setBranches([]); });
     return () => { active = false; };
   }, [props.session.accessToken]);
-  return <FbsPanelContent {...props} key={`${props.session.user.id}:${displayMode}`} marketplace={marketplace} setMarketplace={setMarketplace}
-    displayMode={displayMode} setDisplayMode={setDisplayMode} branches={branches} />;
+  return <FbsPanelContent {...props} key={`${props.session.user.id}:${marketplace}:${displayMode}`} marketplace={marketplace} setMarketplace={setMarketplace}
+    displayMode={displayMode} displayModes={displayModes} setDisplayMode={setDisplayMode} branches={branches} />;
 }
 
-function FbsPanelContent({ session, onOpenRequest, marketplace, setMarketplace, displayMode, setDisplayMode, branches }: FbsPanelProps & {
+function FbsPanelContent({ session, onOpenRequest, marketplace, setMarketplace, displayMode, displayModes, setDisplayMode, branches }: FbsPanelProps & {
   marketplace: FbsMarketplace | null;
   setMarketplace: (marketplace: FbsMarketplace | null) => void;
   displayMode: string;
+  displayModes: Record<FbsMarketplace, string>;
   setDisplayMode: (mode: string) => void;
   branches: BranchSummary[];
 }) {
@@ -631,7 +641,9 @@ function FbsPanelContent({ session, onOpenRequest, marketplace, setMarketplace, 
     // а следующие два считают свои маркетплейсы без лишних параллельных запросов к API.
     for (const targetMarketplace of FBS_MARKETPLACES) {
       try {
-        const rows = await fetchFbsActiveClients(session.accessToken, targetMarketplace, allBranches, displayWarehouseId);
+        // FIX: the entry screen must count each marketplace using its own filter.
+        const mode = displayModes[targetMarketplace];
+        const rows = await fetchFbsActiveClients(session.accessToken, targetMarketplace, mode === 'all', mode === 'all' ? undefined : mode);
         results.push([
           targetMarketplace,
           {
@@ -648,7 +660,7 @@ function FbsPanelContent({ session, onOpenRequest, marketplace, setMarketplace, 
     setMarketplaceOrderCounts(
       Object.fromEntries(results) as Record<FbsMarketplace, FbsMarketplaceActiveCount>,
     );
-  }, [session.accessToken, allBranches, displayWarehouseId]);
+  }, [session.accessToken, displayModes]);
 
   const loadCargoPackings = useCallback(async () => {
     if (!selectedClientId) {
