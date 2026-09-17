@@ -147,8 +147,8 @@ public class FboTwoStageScreenTest {
             }finally{s.close();}
         }
     }
-    // TEST: only a product barcode speaks; location scans, KIZ, refreshes and packing are silent.
-    @Test public void voiceIsOnlyForPickingBarcodesAndNeverKiz() throws Exception {
+    // TEST: locations and products speak during picking; KIZ, refreshes and packing stay silent.
+    @Test public void voiceIncludesPickingLocationsAndBarcodesButNeverKiz() throws Exception {
         for(boolean packing:new boolean[]{false,true})for(boolean requiresKiz:new boolean[]{true,false})
         try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
             Activity a=controller.get();AtomicInteger mutations=new AtomicInteger();List<Boolean> spoken=new ArrayList<>();
@@ -163,10 +163,10 @@ public class FboTwoStageScreenTest {
                 else {
                     for(String code:new String[]{"WRONG_PALLET","PL_1","WRONG_BOX","BOX_1"}){screen.scannerField().setText(code);screen.submit();}
                 }
-                assertTrue(spoken.isEmpty());
+                assertEquals(!packing&&"logoff".equals(BuildConfig.FLAVOR)?Arrays.asList(false,true,false,true):Collections.emptyList(),spoken);
                 screen.scannerField().setText("WRONG_PRODUCT");screen.submit();
                 screen.scannerField().setText(line.barcode);screen.submit();waitIdle(screen);
-                List<Boolean> expected=!packing&&"logoff".equals(BuildConfig.FLAVOR)?Arrays.asList(false,true):Collections.emptyList();
+                List<Boolean> expected=!packing&&"logoff".equals(BuildConfig.FLAVOR)?Arrays.asList(false,true,false,true,false,true):Collections.emptyList();
                 assertEquals(expected,spoken);
                 if(requiresKiz){screen.scannerField().setText("010123456789012321SERIAL");screen.submit();waitIdle(screen);}
                 assertEquals(expected,spoken);
