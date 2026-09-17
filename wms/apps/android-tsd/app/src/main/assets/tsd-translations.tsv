@@ -1486,3 +1486,6 @@ FBO Ozon	FBO Ozon	FBO Ozon
 Нужный товар	Kerakli tovar	Required product
 МИГРАЦИЯ	MIGRATSIYA	MIGRATION
 КИЗЫ	KIZLAR	KIZ CODES
+# FIX: WB picking sticker caption.
+Стикер:\s	Stiker:\s	Sticker:\s
+не получен	olinmagan	not received

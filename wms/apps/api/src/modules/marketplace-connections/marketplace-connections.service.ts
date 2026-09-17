@@ -15924,6 +15924,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         kizAccepted: Boolean(task.kiz && task.wbMetaStatus === 'ACCEPTED'),
         wbMetaStatus: task.wbMetaStatus,
         orderSticker,
+        // FIX: expose the saved WB digits even when local recovery has no label image.
+        wbStickerNumber: task.marketplace === MarketplaceType.WILDBERRIES
+          ? (orderSticker
+              ? [textValue(orderSticker.partA), textValue(orderSticker.partB)].filter(Boolean).join(' ') || textValue(orderSticker.barcode)
+              : [textValue(task.stickerPartA), textValue(task.stickerPartB)].filter(Boolean).join(' ') || textValue(task.stickerBarcode)) || null
+          : null,
         marketplaceSubmittedAt: task.marketplaceSubmittedAt?.toISOString() ?? null,
         marketplaceSubmitError: task.marketplaceSubmitError,
         errorMessage: task.errorMessage,
