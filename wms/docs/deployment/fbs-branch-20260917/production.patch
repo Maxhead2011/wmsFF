@@ -1,0 +1,457 @@
+--- a/wms/apps/api/src/modules/clients/clients.controller.ts
++++ b/wms/apps/api/src/modules/clients/clients.controller.ts
+@@ -16,8 +16,9 @@
+   constructor(private readonly clients: ClientsService) {}
+ 
+   @Get()
+-  list(@CurrentUser() user: AuthUser, @Query('includeArchived') includeArchived?: string) {
+-    return this.clients.list(user, includeArchived === 'true');
++  list(@CurrentUser() user: AuthUser, @Query('includeArchived') includeArchived?: string,
++    @Query('displayWarehouseId') displayWarehouseId?: string, @Query('allBranches') allBranches?: string) {
++    return this.clients.list(user, includeArchived === 'true', { displayWarehouseId, allBranches: allBranches === '1' });
+   }
+ 
+   @Get(':id')
+--- a/wms/apps/api/src/modules/clients/clients.service.ts
++++ b/wms/apps/api/src/modules/clients/clients.service.ts
+@@ -1,4 +1,4 @@
+-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
++import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+ import { ClientKind, ClientLogisticsInvoiceMode, ClientStatus, ClientStorageBillingMode, Prisma } from '@prisma/client';
+ import * as XLSX from 'xlsx';
+ import { PrismaService } from '../../common/prisma/prisma.service';
+@@ -29,16 +29,26 @@
+     private readonly clientScopes: ClientScopeService,
+   ) {}
+ 
+-  list(user: AuthUser, includeArchived = false) {
++  list(user: AuthUser, includeArchived = false, view: { displayWarehouseId?: string; allBranches?: boolean } = {}) {
+     const clientFilter = this.clientScopes.resolveClientFilter(user);
++    // FIX: an explicit FBS view never changes the user's operational warehouse.
++    const explicitView = process.env.WMS_FBS_SELECTED_BRANCH_FILTER === 'true' && Boolean(view.displayWarehouseId || view.allBranches);
++    const globalAccess = this.hasGlobalClientManagement(user) || user.roleCodes.includes('CLIENT');
++    const displayWarehouseId = explicitView ? view.displayWarehouseId?.trim() : undefined;
++    if (displayWarehouseId && !globalAccess && !(user.warehouseIds ?? []).includes(displayWarehouseId)) {
++      throw new ForbiddenException('Нет доступа к выбранному филиалу.');
++    }
++    const warehouseFilter = explicitView
++      ? view.allBranches ? globalAccess ? undefined : { in: user.warehouseIds ?? [] } : displayWarehouseId
++      : !user.roleCodes.includes('CLIENT') ? user.activeWarehouseId : undefined;
+     const where: Prisma.ClientWhereInput = {
+       ...(clientFilter === undefined ? {} : { id: clientFilter }),
+       isDemo: Boolean(user.isDemo),
+-      ...(user.activeWarehouseId && !user.roleCodes.includes('CLIENT')
++      ...(warehouseFilter
+         ? {
+             warehouseLinks: {
+               some: {
+-                warehouseId: user.activeWarehouseId,
++                warehouseId: warehouseFilter,
+                 status: 'ACTIVE',
+               },
+             },
+--- a/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.controller.ts
++++ b/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.controller.ts
+@@ -117,11 +117,13 @@
+     @Query('clientId') clientId: string,
+     @Query('refresh') refresh?: string,
+     @Query('view') view?: string,
++    @Query('allBranches') allBranches?: string,
++    @Query('displayWarehouseId') displayWarehouseId?: string,
+   ) {
+     // FIX: only the screen opts into asynchronous reads; legacy/action callers remain strict.
+     const result = view === 'snapshot'
+-      ? await this.connections.listFbsOrdersForDisplay(clientId, user, refresh === 'true' || refresh === '1')
+-      : await this.connections.listFbsOrders(clientId, user, refresh === 'true' || refresh === '1');
++      ? await this.connections.listFbsOrdersForDisplay(clientId, user, refresh === 'true' || refresh === '1', allBranches === '1', displayWarehouseId)
++      : await this.connections.listFbsOrders(clientId, user, refresh === 'true' || refresh === '1', allBranches === '1', displayWarehouseId);
+     return { ...result, ...(process.env.WMS_FBS_NO_STOCK_TRANSFER_ENABLED === 'true' && process.env.WMS_FBS_RESHIPMENT_ENABLED === 'true' ? { stockTransferEnabled: true } : {}) };
+   }
+ 
+@@ -286,8 +288,10 @@
+     @CurrentUser() user: AuthUser,
+     @Query('marketplace') marketplace: string | undefined,
+     @Query('view') view?: string,
+-  ) {
+-    return this.connections.listFbsActiveClients(user, marketplace, view === 'snapshot');
++    @Query('allBranches') allBranches?: string,
++    @Query('displayWarehouseId') displayWarehouseId?: string,
++  ) {
++    return this.connections.listFbsActiveClients(user, marketplace, view === 'snapshot', allBranches === '1', displayWarehouseId);
+   }
+ 
+   @Get('fbs/cargo-packings')
+--- a/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
++++ b/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
+@@ -2033,7 +2033,7 @@
+   }
+ 
+   // FIX: opt-in screen read. Mutating workflows keep listFbsOrders and its live validation.
+-  async listFbsOrdersForDisplay(clientId: string, user: AuthUser, refresh = false): Promise<FbsOrdersResponse> {
++  async listFbsOrdersForDisplay(clientId: string, user: AuthUser, refresh = false, allBranches = false, displayWarehouseId?: string): Promise<FbsOrdersResponse> {
+     const id = clientId?.trim();
+     if (!id) throw new BadRequestException('Выберите клиента для просмотра заказов FBS.');
+     this.clientScopes.requireClientAccess(user, id, 'read');
+@@ -2048,7 +2048,7 @@
+     // A cold start shows only saved active WMS requests, not a complete WB snapshot.
+     const local = value ? await this.mergeSyncedFbsTsdRequestOrders(id, value)
+       : await this.loadFbsTsdRequestOrders(id, undefined, undefined, true);
+-    const scoped = await this.scopeFbsOrdersForUser(local, user);
++    const scoped = await this.scopeFbsOrdersForUser(local, user, allBranches, displayWarehouseId);
+     const state = this.fbsDisplayCache.get(id);
+     return { ...scoped, fetchedAt: value?.fetchedAt ?? '', sync: {
+       refreshing: state?.pending ?? false, partial: !value,
+@@ -2056,7 +2056,7 @@
+     } };
+   }
+ 
+-  async listFbsOrders(clientId: string, user: AuthUser, refresh = false) {
++  async listFbsOrders(clientId: string, user: AuthUser, refresh = false, allBranches = false, displayWarehouseId?: string) {
+     const normalizedClientId = clientId?.trim();
+     if (!normalizedClientId) {
+       throw new BadRequestException('Выберите клиента для просмотра заказов FBS.');
+@@ -2077,7 +2077,7 @@
+         // active composition, so do not let a shortened marketplace response
+         // make most of the supply disappear from the FBS screen.
+         const merged = await this.mergeSyncedFbsTsdRequestOrders(normalizedClientId, cached.value);
+-        return this.scopeFbsOrdersForUser(merged, user);
++        return this.scopeFbsOrdersForUser(merged, user, allBranches, displayWarehouseId);
+       }
+     }
+ 
+@@ -2112,7 +2112,7 @@
+       expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
+       value,
+     });
+-    return this.scopeFbsOrdersForUser(value, user);
++    return this.scopeFbsOrdersForUser(value, user, allBranches, displayWarehouseId);
+   }
+ 
+   private hasGlobalFbsBranchAccess(user: AuthUser) {
+@@ -2132,16 +2132,30 @@
+   private async scopeFbsOrdersForUser(
+     response: FbsOrdersResponse,
+     user: AuthUser,
++    allBranches = false,
++    displayWarehouseId?: string,
+   ): Promise<FbsOrdersResponse> {
+     // FIX: EXCLUDED is a warehouse processing rule, not a branch-visibility
+     // rule. Global roles need the same exclusion that branch users already
+     // receive below, otherwise admins can still select these WB orders.
+-    if (this.hasGlobalFbsBranchAccess(user)) {
++    // FIX: opt-in display filter also respects the selected branch for global roles.
++    // Keep the sold deployment's behavior until its flag is explicitly enabled.
++    const selectedBranchFilter = process.env.WMS_FBS_SELECTED_BRANCH_FILTER === 'true';
++    const globalAccess = this.hasGlobalFbsBranchAccess(user);
++    const selectedBranchId = (selectedBranchFilter ? displayWarehouseId?.trim() : '') || user.activeWarehouseId?.trim() || '';
++    if (selectedBranchFilter && displayWarehouseId?.trim() && !globalAccess && !(user.warehouseIds ?? []).includes(selectedBranchId)) {
++      throw new ForbiddenException('Нет доступа к выбранному филиалу.');
++    }
++    if (globalAccess && (!selectedBranchFilter || allBranches || !selectedBranchId)) {
+       return this.hideExcludedFbsWarehouseOrders(response);
+     }
+ 
+-    const activeWarehouseId = this.activeFbsBranchId(user);
+-    if (!activeWarehouseId) {
++    const activeWarehouseId = globalAccess || (selectedBranchFilter && displayWarehouseId?.trim()) ? selectedBranchId : this.activeFbsBranchId(user);
++    // FIX: show-all is a union of permitted branches, never an access bypass.
++    const visibleBranchIds = new Set(selectedBranchFilter && allBranches
++      ? user.warehouseIds ?? []
++      : activeWarehouseId ? [activeWarehouseId] : []);
++    if (visibleBranchIds.size === 0) {
+       return {
+         ...response,
+         connected: false,
+@@ -2190,13 +2204,14 @@
+     );
+ 
+     const isVisible = (order: FbsOrderSummary) => {
+-      if (order.request?.warehouseId) {
+-        return order.request.warehouseId === activeWarehouseId;
++      // FIX: historical request placement must not override the current seller route.
++      if (!selectedBranchFilter && order.request?.warehouseId) {
++        return visibleBranchIds.has(order.request.warehouseId);
+       }
+       const connection = connectionById.get(order.connectionId);
+       if (!connection) return false;
+       if (order.marketplace !== MarketplaceType.WILDBERRIES) {
+-        return connection.fbsExecutionWarehouseId === activeWarehouseId;
++        return visibleBranchIds.has(connection.fbsExecutionWarehouseId ?? '');
+       }
+       const rule = order.warehouseId
+         ? ruleByKey.get(`${order.connectionId}:${order.warehouseId}`)
+@@ -2204,24 +2219,24 @@
+       const mode = normalizeFbsWarehouseRouteMode(rule?.mode);
+       if (mode === 'EXCLUDED') return false;
+       if (mode === 'BRANCH') {
+-        return rule?.executionWarehouseId === activeWarehouseId;
++        return visibleBranchIds.has(rule?.executionWarehouseId ?? '');
+       }
+       if (mode === 'CENTRAL') {
+-        return connection.fbsExecutionWarehouseId === activeWarehouseId;
++        return visibleBranchIds.has(connection.fbsExecutionWarehouseId ?? '');
+       }
+       return connection.fbsAutoRouteNewWarehouses &&
+-        connection.fbsExecutionWarehouseId === activeWarehouseId;
++        visibleBranchIds.has(connection.fbsExecutionWarehouseId ?? '');
+     };
+ 
+     const orders = response.orders.filter(isVisible);
+     const visibleConnectionIds = new Set(orders.map((order) => order.connectionId));
+     routingRules.forEach((rule) => {
+-      if (rule.mode === 'BRANCH' && rule.executionWarehouseId === activeWarehouseId) {
++      if (rule.mode === 'BRANCH' && visibleBranchIds.has(rule.executionWarehouseId ?? '')) {
+         visibleConnectionIds.add(rule.connectionId);
+       }
+     });
+     connections.forEach((connection) => {
+-      if (connection.fbsExecutionWarehouseId === activeWarehouseId) {
++      if (visibleBranchIds.has(connection.fbsExecutionWarehouseId ?? '')) {
+         visibleConnectionIds.add(connection.id);
+       }
+     });
+@@ -5172,7 +5187,7 @@
+     };
+   }
+ 
+-  async listFbsActiveClients(user: AuthUser, marketplaceValue: unknown = undefined, displayOnly = false) {
++  async listFbsActiveClients(user: AuthUser, marketplaceValue: unknown = undefined, displayOnly = false, allBranches = false, displayWarehouseId?: string) {
+     const clientFilter = this.clientScopes.resolveClientFilter(user);
+     const requestedMarketplace = textValue(marketplaceValue)?.toUpperCase();
+     const marketplace = requestedMarketplace === MarketplaceType.WILDBERRIES
+@@ -5205,7 +5220,7 @@
+       try {
+         // FIX: do not rebuild every client's orders/invoices in the cabinet picker.
+         if (displayOnly) {
+-          const orders = await this.listFbsOrdersForDisplay(client.id, user);
++          const orders = await this.listFbsOrdersForDisplay(client.id, user, false, allBranches, displayWarehouseId);
+           const activeOrders = marketplace
+             ? orders.orders.filter(order => order.marketplace === marketplace && order.category === 'active').length
+             : orders.counts.active;
+@@ -5226,7 +5241,7 @@
+             value: orders,
+           });
+         }
+-        const scopedOrders = await this.scopeFbsOrdersForUser(orders, user);
++        const scopedOrders = await this.scopeFbsOrdersForUser(orders, user, allBranches, displayWarehouseId);
+         const activeOrders = marketplace
+           ? scopedOrders.orders.filter(
+               (order) => order.marketplace === marketplace && order.category === 'active',
+--- a/wms/apps/web/src/components/fbs/fbs.css
++++ b/wms/apps/web/src/components/fbs/fbs.css
+@@ -20,6 +20,15 @@
+ .fbs-workspace__heading h3 {
+   margin: 2px 0 0;
+ }
++
++/* FIX: keep the FBS display selector in the middle of the marketplace header. */
++.fbs-panel__hero--display-mode {
++  grid-template-columns: auto minmax(0, 1fr) minmax(220px, 300px) minmax(0, 1fr);
++}
++
++.fbs-panel__hero--display-mode .fbs-panel__scope { justify-self: end; }
++.fbs-display-mode { display: grid; gap: 7px; font-size: 13px; font-weight: 700; }
++.fbs-display-mode select { width: 100%; min-height: 42px; padding: 10px 12px; border: 1px solid #dbe2ea; border-radius: 10px; background: #fff; color: #171717; font: inherit; }
+ 
+ .fbs-panel__hero p:last-child,
+ .fbs-workspace__heading p:last-child {
+@@ -3884,6 +3893,8 @@
+ }
+ 
+ @media (max-width: 760px) {
++  .fbs-panel__hero--display-mode { grid-template-columns: 1fr; }
++  .fbs-panel__hero--display-mode .fbs-panel__scope { justify-self: start; }
+   .fbs-panel__hero,
+   .fbs-workspace__heading {
+     display: grid;
+--- a/wms/apps/web/src/components/fbs/FbsPanel.tsx
++++ b/wms/apps/web/src/components/fbs/FbsPanel.tsx
+@@ -67,6 +67,8 @@
+   downloadFbsSupplyStickersPdf,
+   enableFbsEmergencyAssembly,
+   fetchClients,
++  fetchBranches,
++  type BranchSummary,
+   fetchFbsBillingSettings,
+   fetchFbsActiveClients,
+   fetchFbsCargoPackings,
+@@ -401,8 +403,29 @@
+ // FIX: both WB-only reports stay hidden for Ozon and Yandex after merging their tiles.
+ const ozonHiddenViews = new Set<FbsView>(['deadlines', 'stocks', 'allocation', 'cargo', 'report', 'passes', 'penalties']);
+ 
+-export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
++export function FbsPanel(props: FbsPanelProps) {
++  // FIX: display mode is local to FBS; keep marketplace while clearing old rows/selections.
+   const [marketplace, setMarketplace] = useState<FbsMarketplace | null>(null);
++  const [displayMode, setDisplayMode] = useState(props.session.user.activeWarehouseId || 'all');
++  const [branches, setBranches] = useState<BranchSummary[]>([]);
++  useEffect(() => {
++    let active = true;
++    void fetchBranches(props.session.accessToken).then(rows => { if (active) setBranches(rows.filter(row => row.isActive)); }).catch(() => { if (active) setBranches([]); });
++    return () => { active = false; };
++  }, [props.session.accessToken]);
++  return <FbsPanelContent {...props} key={`${props.session.user.id}:${displayMode}`} marketplace={marketplace} setMarketplace={setMarketplace}
++    displayMode={displayMode} setDisplayMode={setDisplayMode} branches={branches} />;
++}
++
++function FbsPanelContent({ session, onOpenRequest, marketplace, setMarketplace, displayMode, setDisplayMode, branches }: FbsPanelProps & {
++  marketplace: FbsMarketplace | null;
++  setMarketplace: (marketplace: FbsMarketplace | null) => void;
++  displayMode: string;
++  setDisplayMode: (mode: string) => void;
++  branches: BranchSummary[];
++}) {
++  const allBranches = displayMode === 'all';
++  const displayWarehouseId = allBranches ? undefined : displayMode;
+   const [activeView, setActiveView] = useState<FbsView>('active');
+   const [clients, setClients] = useState<ClientSummary[]>([]);
+   const [activeClients, setActiveClients] = useState<FbsActiveClientSummary[]>([]);
+@@ -515,7 +538,7 @@
+ 
+   useEffect(() => {
+     let active = true;
+-    void fetchClients(session.accessToken)
++    void fetchClients(session.accessToken, { allBranches, displayWarehouseId })
+       .then((rows) => {
+         if (!active) return;
+         setClients(rows);
+@@ -528,7 +551,7 @@
+     return () => {
+       active = false;
+     };
+-  }, [session.accessToken]);
++  }, [session.accessToken, allBranches, displayWarehouseId]);
+ 
+   const loadOrders = useCallback(
+     async (refresh = false) => {
+@@ -539,7 +562,7 @@
+       const sequence = ++loadSequence.current;
+       setOrdersState((current) => ({ status: 'loading', data: current.data?.client.id === selectedClientId ? current.data : null, error: '' }));
+       try {
+-        const data = await fetchFbsOrders(session.accessToken, selectedClientId, refresh, 'snapshot');
++        const data = await fetchFbsOrders(session.accessToken, selectedClientId, refresh, 'snapshot', allBranches, displayWarehouseId);
+         if (loadSequence.current === sequence) {
+           setOrdersState({ status: 'ready', data, error: '' });
+         }
+@@ -553,7 +576,7 @@
+         }
+       }
+     },
+-    [marketplace, selectedClientId, session.accessToken],
++    [marketplace, selectedClientId, session.accessToken, allBranches, displayWarehouseId],
+   );
+ 
+   async function runFbsSynchronizationAudit() {
+@@ -563,7 +586,7 @@
+     try {
+       // The audit intentionally requests a fresh marketplace snapshot first.
+       // It only reports inconsistencies; it never changes request statuses itself.
+-      const fresh = await fetchFbsOrders(session.accessToken, selectedClientId, true);
++      const fresh = await fetchFbsOrders(session.accessToken, selectedClientId, true, undefined, allBranches, displayWarehouseId);
+       setOrdersState({ status: 'ready', data: fresh, error: '' });
+       setSyncAudit(buildFbsSynchronizationAudit(fresh, marketplace));
+     } catch (caught) {
+@@ -587,7 +610,7 @@
+     setActiveClientsLoading(true);
+     setActiveClientsError('');
+     try {
+-      const rows = await fetchFbsActiveClients(session.accessToken, marketplace, 'snapshot');
++      const rows = await fetchFbsActiveClients(session.accessToken, marketplace, 'snapshot', allBranches, displayWarehouseId);
+       if (sequence !== activeClientsSequence.current) return;
+       setActiveClients(rows);
+       setSelectedClientId((current) => {
+@@ -600,7 +623,7 @@
+     } finally {
+       if (sequence === activeClientsSequence.current) setActiveClientsLoading(false);
+     }
+-  }, [marketplace, session.accessToken]);
++  }, [marketplace, session.accessToken, allBranches, displayWarehouseId]);
+ 
+   useEffect(() => {
+     // FIX: do not retain one marketplace's cabinets when switching to another.
+@@ -622,7 +645,7 @@
+     // а следующие два считают свои маркетплейсы без лишних параллельных запросов к API.
+     for (const targetMarketplace of FBS_MARKETPLACES) {
+       try {
+-        const rows = await fetchFbsActiveClients(session.accessToken, targetMarketplace, 'snapshot');
++        const rows = await fetchFbsActiveClients(session.accessToken, targetMarketplace, 'snapshot', allBranches, displayWarehouseId);
+         results.push([
+           targetMarketplace,
+           {
+@@ -639,7 +662,7 @@
+     setMarketplaceOrderCounts(
+       Object.fromEntries(results) as Record<FbsMarketplace, FbsMarketplaceActiveCount>,
+     );
+-  }, [session.accessToken]);
++  }, [session.accessToken, allBranches, displayWarehouseId]);
+ 
+   const loadCargoPackings = useCallback(async () => {
+     if (!selectedClientId) {
+@@ -1684,7 +1707,7 @@
+ 
+   return (
+     <section className="fbs-panel" aria-label="FBS">
+-      <header className="fbs-panel__hero">
++      <header className="fbs-panel__hero fbs-panel__hero--display-mode">
+         <div className="fbs-panel__hero-icon">
+           <ShoppingBasket size={24} aria-hidden="true" />
+         </div>
+@@ -1703,6 +1726,13 @@
+                 : 'Заказы Яндекс Маркета, сборка, статусы отгрузки, архив и стоимость обработки.'}
+           </p>
+         </div>
++        <label className="fbs-display-mode">
++          <span>Режим отображения</span>
++          <select value={displayMode} onChange={event => setDisplayMode(event.target.value)}>
++            <option value="all">Показать всё</option>
++            {branches.map(branch => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
++          </select>
++        </label>
+         <span className="fbs-panel__scope">
+           {activeView === 'calculator'
+             ? 'Предварительный расчёт'
+--- a/wms/apps/web/src/lib/api.ts
++++ b/wms/apps/web/src/lib/api.ts
+@@ -7704,10 +7704,12 @@
+   return request<OperationsStatisticsReport>(withQuery('/operations-statistics', filter), { accessToken });
+ }
+ 
+-export async function fetchClients(accessToken: string, options: { includeArchived?: boolean } = {}) {
++export async function fetchClients(accessToken: string, options: { includeArchived?: boolean; displayWarehouseId?: string; allBranches?: boolean } = {}) {
+   return request<ClientSummary[]>(
+     withQuery('/clients', {
+       includeArchived: options.includeArchived ? 'true' : undefined,
++      displayWarehouseId: options.displayWarehouseId,
++      allBranches: options.allBranches ? '1' : undefined,
+     }),
+     {
+       accessToken,
+@@ -9669,12 +9671,14 @@
+   });
+ }
+ 
+-export async function fetchFbsOrders(accessToken: string, clientId: string, refresh = false, view?: 'snapshot') {
++export async function fetchFbsOrders(accessToken: string, clientId: string, refresh = false, view?: 'snapshot', allBranches = false, displayWarehouseId?: string) {
+   return request<ClientFbsOrders>(
+     withQuery('/marketplace-connections/fbs/orders', {
+       clientId,
+       refresh: refresh ? '1' : undefined,
+       view,
++      allBranches: allBranches ? '1' : undefined,
++      displayWarehouseId,
+     }),
+     { accessToken },
+   );
+@@ -9805,9 +9809,11 @@
+   accessToken: string,
+   marketplace?: 'WILDBERRIES' | 'OZON' | 'YANDEX_MARKET',
+   view?: 'snapshot',
++  allBranches = false,
++  displayWarehouseId?: string,
+ ) {
+   return request<FbsActiveClientSummary[]>(
+-    withQuery('/marketplace-connections/fbs/active-clients', { marketplace, view }),
++    withQuery('/marketplace-connections/fbs/active-clients', { marketplace, view, allBranches: allBranches ? '1' : undefined, displayWarehouseId }),
+     { accessToken },
+   );
+ }

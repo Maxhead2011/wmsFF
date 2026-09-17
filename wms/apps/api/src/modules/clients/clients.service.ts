@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ClientKind, ClientLogisticsInvoiceMode, ClientStatus, ClientStorageBillingMode, Prisma } from '@prisma/client';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -29,16 +29,26 @@ export class ClientsService {
     private readonly clientScopes: ClientScopeService,
   ) {}
 
-  list(user: AuthUser, includeArchived = false) {
+  list(user: AuthUser, includeArchived = false, view: { displayWarehouseId?: string; allBranches?: boolean } = {}) {
     const clientFilter = this.clientScopes.resolveClientFilter(user);
+    // FIX: an explicit FBS view never changes the user's operational warehouse.
+    const explicitView = process.env.WMS_FBS_SELECTED_BRANCH_FILTER === 'true' && Boolean(view.displayWarehouseId || view.allBranches);
+    const globalAccess = this.hasGlobalClientManagement(user) || user.roleCodes.includes('CLIENT');
+    const displayWarehouseId = explicitView ? view.displayWarehouseId?.trim() : undefined;
+    if (displayWarehouseId && !globalAccess && !(user.warehouseIds ?? []).includes(displayWarehouseId)) {
+      throw new ForbiddenException('Нет доступа к выбранному филиалу.');
+    }
+    const warehouseFilter = explicitView
+      ? view.allBranches ? globalAccess ? undefined : { in: user.warehouseIds ?? [] } : displayWarehouseId
+      : !user.roleCodes.includes('CLIENT') ? user.activeWarehouseId : undefined;
     const where: Prisma.ClientWhereInput = {
       ...(clientFilter === undefined ? {} : { id: clientFilter }),
       isDemo: Boolean(user.isDemo),
-      ...(user.activeWarehouseId && !user.roleCodes.includes('CLIENT')
+      ...(warehouseFilter
         ? {
             warehouseLinks: {
               some: {
-                warehouseId: user.activeWarehouseId,
+                warehouseId: warehouseFilter,
                 status: 'ACTIVE',
               },
             },

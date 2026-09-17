@@ -1997,7 +1997,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return this.listFbsWarehouseRoutes(connectionId, user);
   }
 
-  async listFbsOrders(clientId: string, user: AuthUser, refresh = false) {
+  async listFbsOrders(clientId: string, user: AuthUser, refresh = false, allBranches = false, displayWarehouseId?: string) {
     const normalizedClientId = clientId?.trim();
     if (!normalizedClientId) {
       throw new BadRequestException('Выберите клиента для просмотра заказов FBS.');
@@ -2018,7 +2018,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         // active composition, so do not let a shortened marketplace response
         // make most of the supply disappear from the FBS screen.
         const merged = await this.mergeSyncedFbsTsdRequestOrders(normalizedClientId, cached.value);
-        return this.scopeFbsOrdersForUser(merged, user);
+        return this.scopeFbsOrdersForUser(merged, user, allBranches, displayWarehouseId);
       }
     }
 
@@ -2053,7 +2053,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
       value,
     });
-    return this.scopeFbsOrdersForUser(value, user);
+    return this.scopeFbsOrdersForUser(value, user, allBranches, displayWarehouseId);
   }
 
   private hasGlobalFbsBranchAccess(user: AuthUser) {
@@ -2073,16 +2073,30 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   private async scopeFbsOrdersForUser(
     response: FbsOrdersResponse,
     user: AuthUser,
+    allBranches = false,
+    displayWarehouseId?: string,
   ): Promise<FbsOrdersResponse> {
     // FIX: EXCLUDED is a warehouse processing rule, not a branch-visibility
     // rule. Global roles need the same exclusion that branch users already
     // receive below, otherwise admins can still select these WB orders.
-    if (this.hasGlobalFbsBranchAccess(user)) {
+    // FIX: opt-in display filter also respects the selected branch for global roles.
+    // Keep the sold deployment's behavior until its flag is explicitly enabled.
+    const selectedBranchFilter = process.env.WMS_FBS_SELECTED_BRANCH_FILTER === 'true';
+    const globalAccess = this.hasGlobalFbsBranchAccess(user);
+    const selectedBranchId = (selectedBranchFilter ? displayWarehouseId?.trim() : '') || user.activeWarehouseId?.trim() || '';
+    if (selectedBranchFilter && displayWarehouseId?.trim() && !globalAccess && !(user.warehouseIds ?? []).includes(selectedBranchId)) {
+      throw new ForbiddenException('Нет доступа к выбранному филиалу.');
+    }
+    if (globalAccess && (!selectedBranchFilter || allBranches || !selectedBranchId)) {
       return this.hideExcludedFbsWarehouseOrders(response);
     }
 
-    const activeWarehouseId = this.activeFbsBranchId(user);
-    if (!activeWarehouseId) {
+    const activeWarehouseId = globalAccess || (selectedBranchFilter && displayWarehouseId?.trim()) ? selectedBranchId : this.activeFbsBranchId(user);
+    // FIX: show-all is a union of permitted branches, never an access bypass.
+    const visibleBranchIds = new Set(selectedBranchFilter && allBranches
+      ? user.warehouseIds ?? []
+      : activeWarehouseId ? [activeWarehouseId] : []);
+    if (visibleBranchIds.size === 0) {
       return {
         ...response,
         connected: false,
@@ -2131,13 +2145,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     );
 
     const isVisible = (order: FbsOrderSummary) => {
-      if (order.request?.warehouseId) {
-        return order.request.warehouseId === activeWarehouseId;
+      // FIX: historical request placement must not override the current seller route.
+      if (!selectedBranchFilter && order.request?.warehouseId) {
+        return visibleBranchIds.has(order.request.warehouseId);
       }
       const connection = connectionById.get(order.connectionId);
       if (!connection) return false;
       if (order.marketplace !== MarketplaceType.WILDBERRIES) {
-        return connection.fbsExecutionWarehouseId === activeWarehouseId;
+        return visibleBranchIds.has(connection.fbsExecutionWarehouseId ?? '');
       }
       const rule = order.warehouseId
         ? ruleByKey.get(`${order.connectionId}:${order.warehouseId}`)
@@ -2145,24 +2160,24 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const mode = normalizeFbsWarehouseRouteMode(rule?.mode);
       if (mode === 'EXCLUDED') return false;
       if (mode === 'BRANCH') {
-        return rule?.executionWarehouseId === activeWarehouseId;
+        return visibleBranchIds.has(rule?.executionWarehouseId ?? '');
       }
       if (mode === 'CENTRAL') {
-        return connection.fbsExecutionWarehouseId === activeWarehouseId;
+        return visibleBranchIds.has(connection.fbsExecutionWarehouseId ?? '');
       }
       return connection.fbsAutoRouteNewWarehouses &&
-        connection.fbsExecutionWarehouseId === activeWarehouseId;
+        visibleBranchIds.has(connection.fbsExecutionWarehouseId ?? '');
     };
 
     const orders = response.orders.filter(isVisible);
     const visibleConnectionIds = new Set(orders.map((order) => order.connectionId));
     routingRules.forEach((rule) => {
-      if (rule.mode === 'BRANCH' && rule.executionWarehouseId === activeWarehouseId) {
+      if (rule.mode === 'BRANCH' && visibleBranchIds.has(rule.executionWarehouseId ?? '')) {
         visibleConnectionIds.add(rule.connectionId);
       }
     });
     connections.forEach((connection) => {
-      if (connection.fbsExecutionWarehouseId === activeWarehouseId) {
+      if (visibleBranchIds.has(connection.fbsExecutionWarehouseId ?? '')) {
         visibleConnectionIds.add(connection.id);
       }
     });
@@ -5101,7 +5116,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
-  async listFbsActiveClients(user: AuthUser, marketplaceValue: unknown = undefined) {
+  async listFbsActiveClients(user: AuthUser, marketplaceValue: unknown = undefined, allBranches = false, displayWarehouseId?: string) {
     const clientFilter = this.clientScopes.resolveClientFilter(user);
     const requestedMarketplace = textValue(marketplaceValue)?.toUpperCase();
     const marketplace = requestedMarketplace === MarketplaceType.WILDBERRIES
@@ -5143,7 +5158,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             value: orders,
           });
         }
-        const scopedOrders = await this.scopeFbsOrdersForUser(orders, user);
+        const scopedOrders = await this.scopeFbsOrdersForUser(orders, user, allBranches, displayWarehouseId);
         const activeOrders = marketplace
           ? scopedOrders.orders.filter(
               (order) => order.marketplace === marketplace && order.category === 'active',

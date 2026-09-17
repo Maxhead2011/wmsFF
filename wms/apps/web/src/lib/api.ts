@@ -7657,10 +7657,12 @@ export async function compareAdministrationWbStockApi(
   });
 }
 
-export async function fetchClients(accessToken: string, options: { includeArchived?: boolean } = {}) {
+export async function fetchClients(accessToken: string, options: { includeArchived?: boolean; displayWarehouseId?: string; allBranches?: boolean } = {}) {
   return request<ClientSummary[]>(
     withQuery('/clients', {
       includeArchived: options.includeArchived ? 'true' : undefined,
+      displayWarehouseId: options.displayWarehouseId,
+      allBranches: options.allBranches ? '1' : undefined,
     }),
     {
       accessToken,
@@ -9602,11 +9604,13 @@ export async function connectAnalyticsApi(accessToken: string, clientId: string,
   });
 }
 
-export async function fetchFbsOrders(accessToken: string, clientId: string, refresh = false) {
+export async function fetchFbsOrders(accessToken: string, clientId: string, refresh = false, allBranches = false, displayWarehouseId?: string) {
   return request<ClientFbsOrders>(
     withQuery('/marketplace-connections/fbs/orders', {
       clientId,
       refresh: refresh ? '1' : undefined,
+      allBranches: allBranches ? '1' : undefined,
+      displayWarehouseId,
     }),
     { accessToken },
   );
@@ -9736,9 +9740,11 @@ export async function downloadFbsPenaltiesReport(
 export async function fetchFbsActiveClients(
   accessToken: string,
   marketplace?: 'WILDBERRIES' | 'OZON' | 'YANDEX_MARKET',
+  allBranches = false,
+  displayWarehouseId?: string,
 ) {
   return request<FbsActiveClientSummary[]>(
-    withQuery('/marketplace-connections/fbs/active-clients', { marketplace }),
+    withQuery('/marketplace-connections/fbs/active-clients', { marketplace, allBranches: allBranches ? '1' : undefined, displayWarehouseId }),
     { accessToken },
   );
 }

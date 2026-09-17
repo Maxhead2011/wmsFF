@@ -39,7 +39,9 @@ function elements(node: any): any[] {
 }
 function render() {
   hooks.cursor = 0;
-  return FbsPanel({ session: { accessToken: 'token', user: { id: 'user', clientIds: ['client'], permissionCodes: [], roleCodes: [] } } as any });
+  // TEST: render the display-mode wrapper and its real content with one hook cursor.
+  const wrapper = FbsPanel({ session: { accessToken: 'token', user: { id: 'user', clientIds: ['client'], permissionCodes: [], roleCodes: [] } } as any });
+  return wrapper.type(wrapper.props);
 }
 function deliveryDialog() { return elements(render()).find(node => node.props?.state?.options?.supplies); }
 function dialogControls() { const dialog = deliveryDialog(); return elements(dialog.type(dialog.props)); }

@@ -16,8 +16,9 @@ export class ClientsController {
   constructor(private readonly clients: ClientsService) {}
 
   @Get()
-  list(@CurrentUser() user: AuthUser, @Query('includeArchived') includeArchived?: string) {
-    return this.clients.list(user, includeArchived === 'true');
+  list(@CurrentUser() user: AuthUser, @Query('includeArchived') includeArchived?: string,
+    @Query('displayWarehouseId') displayWarehouseId?: string, @Query('allBranches') allBranches?: string) {
+    return this.clients.list(user, includeArchived === 'true', { displayWarehouseId, allBranches: allBranches === '1' });
   }
 
   @Get(':id')

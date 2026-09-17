@@ -66,6 +66,8 @@ import {
   downloadFbsSupplyStickersPdf,
   enableFbsEmergencyAssembly,
   fetchClients,
+  fetchBranches,
+  type BranchSummary,
   fetchFbsBillingSettings,
   fetchFbsActiveClients,
   fetchFbsCargoPackings,
@@ -400,8 +402,29 @@ const fbsViews = [
 // FIX: both WB-only reports stay hidden for Ozon and Yandex after merging their tiles.
 const ozonHiddenViews = new Set<FbsView>(['deadlines', 'stocks', 'allocation', 'cargo', 'report', 'passes', 'penalties']);
 
-export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
+export function FbsPanel(props: FbsPanelProps) {
+  // FIX: display mode is local to FBS; keep marketplace while clearing old rows/selections.
   const [marketplace, setMarketplace] = useState<FbsMarketplace | null>(null);
+  const [displayMode, setDisplayMode] = useState(props.session.user.activeWarehouseId || 'all');
+  const [branches, setBranches] = useState<BranchSummary[]>([]);
+  useEffect(() => {
+    let active = true;
+    void fetchBranches(props.session.accessToken).then(rows => { if (active) setBranches(rows.filter(row => row.isActive)); }).catch(() => { if (active) setBranches([]); });
+    return () => { active = false; };
+  }, [props.session.accessToken]);
+  return <FbsPanelContent {...props} key={`${props.session.user.id}:${displayMode}`} marketplace={marketplace} setMarketplace={setMarketplace}
+    displayMode={displayMode} setDisplayMode={setDisplayMode} branches={branches} />;
+}
+
+function FbsPanelContent({ session, onOpenRequest, marketplace, setMarketplace, displayMode, setDisplayMode, branches }: FbsPanelProps & {
+  marketplace: FbsMarketplace | null;
+  setMarketplace: (marketplace: FbsMarketplace | null) => void;
+  displayMode: string;
+  setDisplayMode: (mode: string) => void;
+  branches: BranchSummary[];
+}) {
+  const allBranches = displayMode === 'all';
+  const displayWarehouseId = allBranches ? undefined : displayMode;
   const [activeView, setActiveView] = useState<FbsView>('active');
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [activeClients, setActiveClients] = useState<FbsActiveClientSummary[]>([]);
@@ -512,7 +535,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
 
   useEffect(() => {
     let active = true;
-    void fetchClients(session.accessToken)
+    void fetchClients(session.accessToken, { allBranches, displayWarehouseId })
       .then((rows) => {
         if (!active) return;
         setClients(rows);
@@ -525,7 +548,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     return () => {
       active = false;
     };
-  }, [session.accessToken]);
+  }, [session.accessToken, allBranches, displayWarehouseId]);
 
   const loadOrders = useCallback(
     async (refresh = false) => {
@@ -536,7 +559,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
       const sequence = ++loadSequence.current;
       setOrdersState((current) => ({ status: 'loading', data: current.data, error: '' }));
       try {
-        const data = await fetchFbsOrders(session.accessToken, selectedClientId, refresh);
+        const data = await fetchFbsOrders(session.accessToken, selectedClientId, refresh, allBranches, displayWarehouseId);
         if (loadSequence.current === sequence) {
           setOrdersState({ status: 'ready', data, error: '' });
         }
@@ -550,7 +573,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
         }
       }
     },
-    [marketplace, selectedClientId, session.accessToken],
+    [marketplace, selectedClientId, session.accessToken, allBranches, displayWarehouseId],
   );
 
   async function runFbsSynchronizationAudit() {
@@ -560,7 +583,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     try {
       // The audit intentionally requests a fresh marketplace snapshot first.
       // It only reports inconsistencies; it never changes request statuses itself.
-      const fresh = await fetchFbsOrders(session.accessToken, selectedClientId, true);
+      const fresh = await fetchFbsOrders(session.accessToken, selectedClientId, true, allBranches, displayWarehouseId);
       setOrdersState({ status: 'ready', data: fresh, error: '' });
       setSyncAudit(buildFbsSynchronizationAudit(fresh, marketplace));
     } catch (caught) {
@@ -582,7 +605,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     }
     setActiveClientsLoading(true);
     try {
-      const rows = await fetchFbsActiveClients(session.accessToken, marketplace);
+      const rows = await fetchFbsActiveClients(session.accessToken, marketplace, allBranches, displayWarehouseId);
       setActiveClients(rows);
       setSelectedClientId((current) => {
         if (rows.some((item) => item.client.id === current)) return current;
@@ -593,7 +616,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     } finally {
       setActiveClientsLoading(false);
     }
-  }, [marketplace, session.accessToken]);
+  }, [marketplace, session.accessToken, allBranches, displayWarehouseId]);
 
   const loadMarketplaceOrderCounts = useCallback(async () => {
     const sequence = ++marketplaceCountsLoadSequence.current;
@@ -608,7 +631,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     // а следующие два считают свои маркетплейсы без лишних параллельных запросов к API.
     for (const targetMarketplace of FBS_MARKETPLACES) {
       try {
-        const rows = await fetchFbsActiveClients(session.accessToken, targetMarketplace);
+        const rows = await fetchFbsActiveClients(session.accessToken, targetMarketplace, allBranches, displayWarehouseId);
         results.push([
           targetMarketplace,
           {
@@ -625,7 +648,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     setMarketplaceOrderCounts(
       Object.fromEntries(results) as Record<FbsMarketplace, FbsMarketplaceActiveCount>,
     );
-  }, [session.accessToken]);
+  }, [session.accessToken, allBranches, displayWarehouseId]);
 
   const loadCargoPackings = useCallback(async () => {
     if (!selectedClientId) {
@@ -1657,7 +1680,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
 
   return (
     <section className="fbs-panel" aria-label="FBS">
-      <header className="fbs-panel__hero">
+      <header className="fbs-panel__hero fbs-panel__hero--display-mode">
         <div className="fbs-panel__hero-icon">
           <ShoppingBasket size={24} aria-hidden="true" />
         </div>
@@ -1676,6 +1699,13 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
                 : 'Заказы Яндекс Маркета, сборка, статусы отгрузки, архив и стоимость обработки.'}
           </p>
         </div>
+        <label className="fbs-display-mode">
+          <span>Режим отображения</span>
+          <select value={displayMode} onChange={event => setDisplayMode(event.target.value)}>
+            <option value="all">Показать всё</option>
+            {branches.map(branch => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+          </select>
+        </label>
         <span className="fbs-panel__scope">
           {activeView === 'calculator'
             ? 'Предварительный расчёт'

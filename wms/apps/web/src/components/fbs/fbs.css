@@ -21,6 +21,15 @@
   margin: 2px 0 0;
 }
 
+/* FIX: keep the FBS display selector in the middle of the marketplace header. */
+.fbs-panel__hero--display-mode {
+  grid-template-columns: auto minmax(0, 1fr) minmax(220px, 300px) minmax(0, 1fr);
+}
+
+.fbs-panel__hero--display-mode .fbs-panel__scope { justify-self: end; }
+.fbs-display-mode { display: grid; gap: 7px; font-size: 13px; font-weight: 700; }
+.fbs-display-mode select { width: 100%; min-height: 42px; padding: 10px 12px; border: 1px solid #dbe2ea; border-radius: 10px; background: #fff; color: #171717; font: inherit; }
+
 .fbs-panel__hero p:last-child,
 .fbs-workspace__heading p:last-child {
   margin: 6px 0 0;
@@ -3884,6 +3893,8 @@
 }
 
 @media (max-width: 760px) {
+  .fbs-panel__hero--display-mode { grid-template-columns: 1fr; }
+  .fbs-panel__hero--display-mode .fbs-panel__scope { justify-self: start; }
   .fbs-panel__hero,
   .fbs-workspace__heading {
     display: grid;
