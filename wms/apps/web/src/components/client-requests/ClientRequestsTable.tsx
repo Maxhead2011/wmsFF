@@ -246,8 +246,10 @@ export function ClientRequestsTable({
                 ) : null}
                 <span className="client-request-list-meta">
                   Создана: {createdAtFormatter.format(new Date(request.createdAt))}
-                  {/* FIX: display the persisted creator, not the current viewer. */}
-                  {' · Автор: '}{request.createdBy?.name?.trim() || 'не указан'}
+                </span>
+                {/* FIX: author has its own unclamped line; unknown history is never assumed to be WMS. */}
+                <span className="client-request-author">
+                  Автор: {request.createdBy?.name?.trim() || request.creationAuthorLabel || 'не указан'}
                 </span>
                 {onOpenFbsOrders && isFbsRequest(request) ? (
                   <button

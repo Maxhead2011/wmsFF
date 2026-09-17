@@ -1458,6 +1458,8 @@ export type ClientRequestTimeline = {
 };
 
 export type ClientRequestSummary = {
+  // FIX: populated only when system authorship is explicitly confirmed by server audit.
+  creationAuthorLabel?: string;
   id: string;
   number: number;
   clientId: string;

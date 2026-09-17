@@ -10,6 +10,7 @@ import { TelegramNotificationService } from '../client-notifications/telegram-no
 import { StockOperationsService } from '../stock/stock-operations.service';
 import { clientRequestFileSummarySelect } from './client-request-files.service';
 import { clientRequestPackageInclude } from './client-request-packages.include';
+import { attachConfirmedRequestAuthors } from './client-request-author';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import { fbsTerminalQueueFilterEnabled, isFbsTerminalQueueOrder } from '../../common/fbs-terminal-queue';
 import {
@@ -99,12 +100,12 @@ export class ClientRequestsService {
         : undefined,
     };
 
-    const requests = await this.prisma.clientRequest.findMany({
+    const requests = await attachConfirmedRequestAuthors(this.prisma, await this.prisma.clientRequest.findMany({
       where,
       include: clientRequestInclude,
       orderBy: [{ updatedAt: 'desc' }],
       take: 200,
-    });
+    }));
     const previousAttempts = await readFbsAttemptHistory(this.prisma, { requestId: { in: requests.map(request => request.id) } });
     for (const request of requests) {
       request._count.fbsOrderLinks += previousAttempts.filter(row => row.task.requestId === request.id).length;
