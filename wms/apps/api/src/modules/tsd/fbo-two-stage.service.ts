@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
-import { Prisma, StockStatus } from '@prisma/client';
+import { FbsTsdAssembly, Prisma, StockStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
 import { physicalKizIdentity } from '../../common/kiz-physical-identity';
@@ -18,6 +18,10 @@ type Request = Prisma.ClientRequestGetPayload<{
     include: typeof include;
 }>;
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+// FIX: use the FBS physical-claim rule: an untouched route is not physical stock ownership.
+const untouchedFbsRoute = (task: FbsTsdAssembly) =>
+    !task.sourceBarcode && !task.barcode && !task.kiz && !task.relabelConfirmedAt &&
+    ((task.status === 'RESERVED' && task.deviceCode === 'AUTO:FBS:PALLET_SORT' && !task.boxId) || task.status === 'IN_PROGRESS');
 const identity = (value: string) => physicalKizIdentity(value) || value.trim();
 const composition = (r: Request) => hash(r.items.map(i => [i.id, i.skuId, i.barcode, i.quantity]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
 @Injectable()
@@ -73,12 +77,14 @@ export class FboTwoStageService {
                 storagePlacement: { include: { pallet: { include: { zone: true } } } }, pallet: true, zone: true }, orderBy: { code: 'asc' },
         });
         const route = [];
+        const busyBoxes = await this.busyBoxes(tx, boxes.map(b => b.id), r.id, true);
         // FIX: historical stock may have real marks even when the SKU flag was never filled.
         for (const l of lines)
             if (boxes.some(b => b.productMarks.some(m => m.skuId === l.skuId && m.status === 'AVAILABLE')))
                 l.requiresKiz = true;
         boxes.sort((a, b) => (a.storagePlacement?.pallet.code ?? a.pallet?.code ?? '').localeCompare(b.storagePlacement?.pallet.code ?? b.pallet?.code ?? '', 'ru', { numeric: true }) || a.code.localeCompare(b.code, 'ru', { numeric: true }));
         for (const box of boxes) {
+            if (busyBoxes.has(box.id)) continue;
             const tasks: Array<{
                 skuId: string;
                 barcode: string;
@@ -113,7 +119,7 @@ export class FboTwoStageService {
             throw new NotFoundException('Двухэтапная сборка ФБО выключена.');
         await this.lock.assertStockMovementsAllowed();
         // FIX: one durable operation id and a request lock make retries and concurrent terminals safe.
-        await this.prisma.$transaction(async (tx) => {
+        const execute = () => this.prisma.$transaction(async (tx) => {
             await tx.$queryRaw `SELECT "id" FROM "ClientRequest" WHERE "id"=${id} FOR UPDATE`;
             const r = await this.load(tx, id, user, 'write');
             this.requireFbo(r);
@@ -149,7 +155,7 @@ export class FboTwoStageService {
             if (dto.action === 'PICK_UNIT' || dto.action === 'PICK_BOX') {
                 requirePhase('PICKING');
                 const source = await this.box(tx, r, dto.sourceBoxCode);
-                await this.requireIdleBox(tx, source.id, id);
+                await this.requireIdleBox(tx, source.id, id, true);
                 const location = await tx.box.findUniqueOrThrow({ where: { id: source.id }, include: { pallet: true, storagePlacement: { include: { pallet: true } } } });
                 const palletCode = location.storagePlacement?.pallet.code ?? location.pallet?.code;
                 if (palletCode && dto.palletCode !== palletCode)
@@ -205,6 +211,7 @@ export class FboTwoStageService {
                     await tx.fboAssemblyUnit.create({ data: { id: unitId, requestId: id, requestItemId: line.id, skuId: pick.skuId, barcode: line.barcode!,
                             markId: pick.mark?.id, activeMarkId: pick.mark?.id, kiz: pick.mark?.value, sourceBoxId: source.id, sourceBoxCode: source.code, wholeBox: whole, pickedByUserId: user.id } });
                 }
+                await this.releaseDisplacedRoutes(tx, source.id, source.code, [...new Set(chosen.map(p => p.skuId))]);
             }
             else if (dto.action === 'FINISH_PICK') {
                 requirePhase('PICKING');
@@ -317,6 +324,15 @@ export class FboTwoStageService {
             await tx.fboAssemblyAction.create({ data: { id: key, requestId: id, payloadHash, actorId: user.id } });
             await tx.auditLog.create({ data: { userId: user.id, action: `FBO_${dto.action}`, entity: 'ClientRequest', entityId: id, payload: { operationId: dto.operationId, palletCode: dto.palletCode, sourceBoxCode: dto.sourceBoxCode, targetBoxCode: dto.targetBoxCode, barcode: dto.barcode } } });
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 60000 });
+        // FIX: retry only rolled-back serialization conflicts, retaining the durable operation id.
+        for (let attempt = 0; ; attempt++) {
+            try { await execute(); break; }
+            catch (error) {
+                if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2034' || attempt >= 2)
+                    throw error;
+                await new Promise(resolve => setTimeout(resolve, 25 * (attempt + 1)));
+            }
+        }
         return this.plan(id, user);
     }
     private async box(tx: Prisma.TransactionClient, r: Request, code?: string) {
@@ -334,15 +350,42 @@ export class FboTwoStageService {
         await tx.box.upsert({ where: { code }, create: { code, clientId: r.clientId, warehouseId: r.warehouseId }, update: {} });
         return this.box(tx, r, code);
     }
-    private async requireIdleBox(tx: Prisma.TransactionClient, boxId: string, requestId: string) {
-        const [count, task, selection, parcel] = await Promise.all([
-            tx.inventoryAuditBox.findFirst({ where: { boxId, status: { in: ['COUNTING', 'MISMATCH'] }, session: { status: { in: ['ACTIVE', 'REVIEW'] } } } }),
-            tx.fbsTsdAssembly.findFirst({ where: { OR: [{ boxId }, { reservedBoxId: boxId }], status: { in: ['RESERVED', 'IN_PROGRESS'] } } }),
-            tx.clientRequestBoxSelection.findFirst({ where: { boxId, requestItem: { request: { id: { not: requestId }, status: { in: ['APPROVED', 'IN_WORK'] } } } } }),
-            tx.fboAssemblyBox.findFirst({ where: { activeBoxId: boxId, requestId: { not: requestId } } }),
+    private async busyBoxes(tx: Prisma.TransactionClient, ids: string[], requestId: string, allowUntouchedRoutes = false) {
+        if (!ids.length) return new Set<string>();
+        const boxId = { in: ids };
+        const [counts, tasks, selections, parcels] = await Promise.all([
+            tx.inventoryAuditBox.findMany({ where: { boxId, status: { in: ['COUNTING', 'MISMATCH'] }, session: { status: { in: ['ACTIVE', 'REVIEW'] } } }, select: { boxId: true } }),
+            tx.fbsTsdAssembly.findMany({ where: { OR: [{ boxId }, { reservedBoxId: boxId }], status: { in: ['RESERVED', 'IN_PROGRESS'] } } }),
+            tx.clientRequestBoxSelection.findMany({ where: { boxId, requestItem: { request: { id: { not: requestId }, status: { in: ['APPROVED', 'IN_WORK'] } } } }, select: { boxId: true } }),
+            tx.fboAssemblyBox.findMany({ where: { activeBoxId: boxId, requestId: { not: requestId } }, select: { activeBoxId: true } }),
         ]);
-        if (count || task || selection || parcel)
+        return new Set([...counts.map(b => b.boxId), ...selections.map(b => b.boxId), ...parcels.map(b => b.activeBoxId),
+            ...tasks.filter(t => !allowUntouchedRoutes || !untouchedFbsRoute(t)).flatMap(t => [t.boxId, t.reservedBoxId])].filter((id): id is string => !!id));
+    }
+    private async requireIdleBox(tx: Prisma.TransactionClient, boxId: string, requestId: string, allowUntouchedRoutes = false) {
+        if ((await this.busyBoxes(tx, [boxId], requestId, allowUntouchedRoutes)).has(boxId))
             throw new ConflictException('Короб участвует в актуализации или другой активной сборке.');
+    }
+    private async releaseDisplacedRoutes(tx: Prisma.TransactionClient, boxId: string, boxCode: string, skuIds: string[]) {
+        // FIX: release only excess untouched reservations, atomically with the successful physical pick.
+        const tasks = await tx.fbsTsdAssembly.findMany({ where: { OR: [{ boxId }, { boxId: null, reservedBoxId: boxId }], status: { in: ['RESERVED', 'IN_PROGRESS'] } }, orderBy: { createdAt: 'asc' } });
+        for (const skuId of skuIds) {
+            const rows = tasks.filter(t => (t.sourceSkuId && !t.relabelConfirmedAt ? t.sourceSkuId : t.skuId) === skuId);
+            const available = await tx.stockBalance.aggregate({ where: { boxId, skuId, status: 'AVAILABLE' }, _sum: { quantity: true } });
+            let excess = rows.reduce((s, t) => s + Math.max(1, t.itemCount), 0) - (available._sum.quantity ?? 0);
+            for (const task of [...rows].reverse()) {
+                if (excess <= 0) break;
+                if (!untouchedFbsRoute(task)) continue;
+                const changed = await tx.fbsTsdAssembly.updateMany({ where: { id: task.id, updatedAt: task.updatedAt, status: task.status,
+                    sourceBarcode: null, barcode: null, kiz: null, relabelConfirmedAt: null }, data: {
+                    ...(task.status === 'RESERVED' ? { status: 'WAITING_STOCK' } : {}),
+                    boxId: null, boxCode: null, reservedBoxId: null, reservedBoxCode: null, reservedAt: null,
+                    errorMessage: `Маршрут изменён: товар из короба ${boxCode} отобран в FBO. Используйте новый маршрут на экране.`,
+                } });
+                if (changed.count !== 1) throw new ConflictException('Маршрут изменился. Повторите сканирование.');
+                excess -= Math.max(1, task.itemCount);
+            }
+        }
     }
     private async exactMark(tx: Prisma.TransactionClient, kiz: string) {
         const key = identity(kiz);

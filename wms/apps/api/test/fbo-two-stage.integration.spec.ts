@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import * as XLSX from 'xlsx';
 import { FboTwoStageService } from '../src/modules/tsd/fbo-two-stage.service';
@@ -46,6 +46,8 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         svc = new FboTwoStageService(p as never, scopes as never, balances, stock, { assertStockMovementsAllowed: async () => { } } as never, new ClientRequestMarketplaceFilesService(p as never, scopes as never));
     });
     afterEach(async () => {
+        vi.restoreAllMocks();
+        await p.fbsTsdAssembly.deleteMany({ where: { clientId: client } });
         await p.auditLog.deleteMany({ where: { entityId: request } });
         await p.tsdOperation.deleteMany({ where: { payload: { path: ['requestId'], equals: request } } });
         await p.fboAssemblyAction.deleteMany({ where: { requestId: request } });
@@ -68,6 +70,96 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         vi.unstubAllEnvs();
     });
     afterAll(() => p.$disconnect());
+    // TEST: a failed serializable attempt rolls back its writes before the identical operation retries.
+    it('retries a write conflict after stock writes without double picking', async () => {
+        await act('START');
+        const transaction = p.$transaction.bind(p);
+        let attempts = 0;
+        const conflictedTransaction = (callback: any, options: any) => transaction(async (tx: any) => {
+            const result = await callback(tx);
+            if (options?.isolationLevel === 'Serializable' && ++attempts === 1)
+                throw new Prisma.PrismaClientKnownRequestError('write conflict', { code: 'P2034', clientVersion: Prisma.prismaVersion.client });
+            return result;
+        }, options);
+        (svc as any).prisma = new Proxy(p, { get: (target, key) => key === '$transaction' ? conflictedTransaction : Reflect.get(target, key) });
+        const dto = { action: 'PICK_BOX', operationId: randomUUID(), sourceBoxCode: 'FFL_' + whole };
+        const result = await svc.act(request, dto, user);
+        expect(attempts).toBe(2);
+        expect(result.picked).toBe(2);
+        expect(result.route.some(b => b.boxCode === dto.sourceBoxCode)).toBe(false);
+        expect((await svc.act(request, dto, user)).picked).toBe(2);
+        expect(await p.fboAssemblyUnit.count({ where: { requestId: request } })).toBe(2);
+        expect(await p.fboAssemblyAction.count({ where: { id: `${request}:${dto.operationId}` } })).toBe(1);
+        expect((await p.stockBalance.aggregate({ where: { boxId: whole, status: 'AVAILABLE' }, _sum: { quantity: true } }))._sum.quantity).toBe(0);
+    });
+    // TEST: the route must apply the same live box reservations as the pick endpoint.
+    it('routes around an FBS reservation and includes the box again once released', async () => {
+        const reservation = await p.fbsTsdAssembly.create({ data: {
+            clientId: client, connectionId: randomUUID(), orderId: randomUUID(), requestId: randomUUID(), requestItemId: randomUUID(),
+            skuId: sku, productName: 'FBS reserved', barcodes: [], storageBoxes: [], deviceCode: 'AUTO:FBS:PALLET_SORT',
+            status: 'IN_PROGRESS', reservedBoxId: whole, barcode: '2051234567890',
+        } });
+        const result = await act('START');
+        expect(result.route.some(b => b.boxCode === 'FFL_' + whole)).toBe(false);
+        expect(result.route.find(b => b.boxCode === 'FFL_' + partial)?.tasks[0].quantity).toBe(3);
+        expect(result.shortage).toBe(1);
+        await expect(act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole })).rejects.toThrow('активной сборке');
+        expect((await p.fbsTsdAssembly.findUniqueOrThrow({ where: { id: reservation.id } })).status).toBe('IN_PROGRESS');
+        await p.fbsTsdAssembly.update({ where: { id: reservation.id }, data: { status: 'COMPLETED' } });
+        expect((await svc.plan(request, user)).route.some(b => b.boxCode === 'FFL_' + whole)).toBe(true);
+    });
+    // TEST: automatic and box-only routes yield to physical picking without clearing another SKU's route.
+    it.each(['RESERVED', 'IN_PROGRESS'])('releases an untouched %s route when FBO physically takes its stock', async (status) => {
+        const reservation = await p.fbsTsdAssembly.create({ data: {
+            clientId: client, connectionId: randomUUID(), orderId: randomUUID(), requestId: randomUUID(), requestItemId: randomUUID(),
+            skuId: sku, productName: 'FBS reserved', barcodes: [], storageBoxes: [], deviceCode: status === 'RESERVED' ? 'AUTO:FBS:PALLET_SORT' : 'TSD',
+            status, reservedBoxId: whole, boxId: status === 'IN_PROGRESS' ? whole : null,
+        } });
+        const plan = await act('START');
+        expect(plan.route.some(b => b.boxCode === 'FFL_' + whole)).toBe(true);
+        expect((await p.fbsTsdAssembly.findUniqueOrThrow({ where: { id: reservation.id } })).reservedBoxId).toBe(whole);
+        const dto = { action: 'PICK_BOX', operationId: randomUUID(), sourceBoxCode: 'FFL_' + whole };
+        const result = await svc.act(request, dto, user);
+        expect(result.picked).toBe(2);
+        expect(result.route.some(b => b.boxCode === 'FFL_' + whole)).toBe(false);
+        expect(await p.fbsTsdAssembly.findUniqueOrThrow({ where: { id: reservation.id } })).toMatchObject({
+            status: status === 'RESERVED' ? 'WAITING_STOCK' : 'IN_PROGRESS', boxId: null, reservedBoxId: null,
+        });
+        expect((await svc.act(request, dto, user)).picked).toBe(2);
+    });
+    // TEST: partial picking keeps reservations covered by remaining stock and never releases another SKU.
+    it('releases only reservations displaced by the accepted quantity', async () => {
+        const reserve = async (skuId: string, itemCount: number) => p.fbsTsdAssembly.create({ data: {
+            clientId: client, connectionId: randomUUID(), orderId: randomUUID(), requestId: randomUUID(), requestItemId: randomUUID(),
+            skuId, itemCount, productName: 'FBS reserved', barcodes: [], storageBoxes: [], deviceCode: 'AUTO:FBS:PALLET_SORT',
+            status: 'RESERVED', reservedBoxId: partial,
+        } });
+        const same = await reserve(sku, 2), different = await reserve(other, 1);
+        await act('START');
+        const pick = (kiz: string) => act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz });
+        await expect(pick(marks[0].value)).rejects.toThrow('не доступен');
+        expect((await p.fbsTsdAssembly.findUniqueOrThrow({ where: { id: same.id } })).reservedBoxId).toBe(partial);
+        await pick(marks[2].value);
+        expect((await p.fbsTsdAssembly.findUniqueOrThrow({ where: { id: same.id } })).reservedBoxId).toBe(partial);
+        await pick(marks[3].value);
+        expect((await p.fbsTsdAssembly.findUniqueOrThrow({ where: { id: same.id } })).reservedBoxId).toBeNull();
+        expect((await p.fbsTsdAssembly.findUniqueOrThrow({ where: { id: different.id } })).reservedBoxId).toBe(partial);
+    });
+    // TEST: permanent failures and exhausted conflicts do not commit a partial debit or retry indefinitely.
+    it.each(['P2034', 'P2028'])('rolls back and bounds retries for %s', async (code) => {
+        await act('START');
+        const transaction = p.$transaction.bind(p);
+        let attempts = 0;
+        (svc as any).prisma = new Proxy(p, { get: (target, key) => key !== '$transaction' ? Reflect.get(target, key) :
+            (callback: any, options: any) => transaction(async (tx: any) => {
+                await callback(tx);attempts++;
+                throw new Prisma.PrismaClientKnownRequestError('injected failure', { code, clientVersion: Prisma.prismaVersion.client });
+            }, options) });
+        await expect(act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole })).rejects.toMatchObject({ code });
+        expect(attempts).toBe(code === 'P2034' ? 3 : 1);
+        expect(await p.fboAssemblyUnit.count({ where: { requestId: request } })).toBe(0);
+        expect(await p.stockMovement.count({ where: { clientId: client } })).toBe(0);
+    });
     async function picked() { await act('START'); await act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole }); for (const m of marks.slice(2, 4))
         await act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: m.value }); await act('FINISH_PICK'); }
     async function packed() { await picked(); await act('PACK_BOX', { sourceBoxCode: 'FFL_' + whole }); await act('OPEN_BOX', { targetBoxCode: 'FFL_' + target }); for (const m of marks.slice(2, 4))
