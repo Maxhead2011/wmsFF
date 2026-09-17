@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 182 // FIX: whole-box instruction and offline product-barcode speech.
-            versionName = "0.1.183-fbo-scan-voice"
+            versionCode = 183 // FIX: offline pallet, box and product speech in FBO/FBS.
+            versionName = "0.1.184-assembly-scan-voice"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

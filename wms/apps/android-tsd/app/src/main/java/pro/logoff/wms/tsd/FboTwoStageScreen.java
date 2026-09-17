@@ -67,7 +67,7 @@ final class FboTwoStageScreen {
     private void card(LinearLayout root,String value,int color){text(root,value);root.getChildAt(root.getChildCount()-1).setBackgroundColor(color);}
     private void button(LinearLayout root,String title,boolean enabled,Runnable action){Button b=new TsdUi.Button(activity);b.setText(title);b.setAllCaps(false);b.setEnabled(enabled&&!busy);b.setOnClickListener(v->action.run());root.addView(b);}
     private TsdFboPlan.Route source(){if(plan!=null&&plan.route!=null)for(TsdFboPlan.Route r:plan.route)if(r.boxCode.equals(state.source))return r;return null;}
-    // FIX: speak only for product barcodes during picking, never for KIZ or server responses.
+    // FIX: speak for locations and product barcodes during picking, never for KIZ or server responses.
     private void speakScan(boolean accepted){if(!closed&&!packing&&plan!=null&&"PICKING".equals(plan.phase)&&"logoff".equals(BuildConfig.FLAVOR)&&scanFeedback!=null)scanFeedback.play(accepted);}
     private boolean ready(){return state.pending()==null&&!busy;}
     private void render(){
@@ -137,7 +137,7 @@ final class FboTwoStageScreen {
             boolean accepted=state.scanLocation(plan,value);
             feedbackColor=accepted?Color.rgb(187,247,208):Color.rgb(254,202,202);
             message=accepted?(state.source.isEmpty()?"Паллет найден":"Нужный короб"):"Короб или паллет не требуется для этой сборки.";
-            render();return;
+            if(!AssemblyScanVoice.isKiz(value))speakScan(accepted);render();return;
         }
         if("PACKING".equals(plan.phase)&&state.target.isEmpty()){
             if(plan.wholeBoxes.contains(value)){state.source=value;send("PACK_BOX",null);}
@@ -146,7 +146,7 @@ final class FboTwoStageScreen {
         }
         if(!state.barcode.isEmpty()){send("PICKING".equals(plan.phase)?"PICK_UNIT":"PACK_UNIT",value);return;}
         TsdFboPlan.Line line=null;for(TsdFboPlan.Line l:plan.lines)if(value.equals(l.barcode)&&("PICKING".equals(plan.phase)?l.remaining>0:l.picked>l.packed)){line=l;break;}
-        if(line==null){speakScan(false);message="Этот ШК не требуется на текущем этапе.";render();return;}
+        if(line==null){if(!AssemblyScanVoice.isKiz(value))speakScan(false);message="Этот ШК не требуется на текущем этапе.";render();return;}
         // FIX: show the accepted product while waiting for its KIZ; a barcode alone is not a completed pick.
         feedbackColor=Color.rgb(187,247,208);message="Нужный товар";speakScan(true);
         state.barcode=value;if(line.requiresKiz)render();else send("PICKING".equals(plan.phase)?"PICK_UNIT":"PACK_UNIT",null);

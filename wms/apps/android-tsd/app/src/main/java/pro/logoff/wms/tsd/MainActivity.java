@@ -182,6 +182,8 @@ public class MainActivity extends Activity {
     private KizLocationScreen kizLocationScreen;
     private KizSearchScreen kizSearchScreen; // FIX: preserve the published physical search.
     private FboTwoStageScreen fboTwoStageScreen;
+    private FboScanFeedback assemblyScanVoice;
+    private boolean assemblyVoicePaused;
     private String fboTransferRequestId="";
     private boolean fboPacking;
     private TsdAssemblyPlan assemblyPlan;
@@ -393,6 +395,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        closeAssemblyScanVoice();
         if (fboTwoStageScreen != null) fboTwoStageScreen.close();
         if (kizSearchScreen != null) kizSearchScreen.close();
         if (kizLocationScreen != null) kizLocationScreen.close();
@@ -520,6 +523,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        assemblyVoicePaused=true;closeAssemblyScanVoice();
         if (phoneBarcodeView != null) {
             phoneBarcodeView.pause();
         }
@@ -528,6 +532,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onResume() {
+        assemblyVoicePaused=false;
         super.onResume();
         if (
             phoneBarcodeView != null &&
@@ -4117,13 +4122,16 @@ public class MainActivity extends Activity {
         for (TsdOzonFboPlan.Box box : ozonFboPlan.boxes) {
             if (box != null && code.equals(nonEmpty(box.boxCode, "").toUpperCase(Locale.ROOT))) {
                 if (box.isClosed()) {
+                    speakAssemblyScan(false,code);
                     showOzonFboError(tr("Этот короб уже закрыт.", "Bu quti allaqachon yopilgan."));
                     return;
                 }
+                speakAssemblyScan(true,code);
                 selectOzonFboBox(box);
                 return;
             }
         }
+        speakAssemblyScan(false,code);
         showOzonFboError(tr("Короб не относится к выбранной поставке FBO Ozon.", "Quti tanlangan Ozon FBO yetkazib berishiga tegishli emas."));
     }
 
@@ -4202,9 +4210,12 @@ public class MainActivity extends Activity {
             return;
         }
         if (isCurrentOzonFboBoxCode(code)) {
+            speakAssemblyScan(false,code);
             showOzonFboError(tr("Сейчас нужен ШК товара, а не номер короба WMS.", "Hozir mahsulot SHKi kerak, WMS quti raqami emas."));
             return;
         }
+        String scanBoxId=ozonFboBox.id;
+        String scanOwner=fbsSessionOwnerKey(session);
         ozonFboBusy = true;
         Map<String, String> body = new LinkedHashMap<>();
         body.put("code", code);
@@ -4214,11 +4225,15 @@ public class MainActivity extends Activity {
                 .execute();
             if (!response.isSuccessful() || response.body() == null) {
                 String message = responseErrorMessage(response, tr("Товар не принят в короб FBO Ozon.", "Tovar Ozon FBO qutisiga qabul qilinmadi."));
-                mainHandler.post(() -> showOzonFboError(message));
+                mainHandler.post(() -> {
+                    if(ozonFboBox!=null&&scanBoxId.equals(ozonFboBox.id)&&scanOwner.equals(fbsSessionOwnerKey(safeSession()))&&AssemblyScanVoice.rejected(response.code()))speakAssemblyScan(false,code);
+                    showOzonFboError(message);
+                });
                 return;
             }
             TsdOzonFboPlan.Box updated = response.body();
             mainHandler.post(() -> {
+                if(ozonFboBox!=null&&scanBoxId.equals(ozonFboBox.id)&&scanOwner.equals(fbsSessionOwnerKey(safeSession())))speakAssemblyScan(true,code);
                 online = true;
                 ozonFboBusy = false;
                 ozonFboFeedbackColor = BOX_FOUND_GREEN;
@@ -5929,6 +5944,7 @@ public class MainActivity extends Activity {
                         fbsScanInput.setText("");
                         fbsScanInput.requestFocus();
                     }
+                    speakFbsScan(action,submittedState,value,response.code(),null,actionOwnerKey,taskId);
                     showFbsError(errorDetails.message, response.code() < 500);
                 });
                 return;
@@ -5937,6 +5953,7 @@ public class MainActivity extends Activity {
             mainHandler.post(() -> {
                 online = true;
                 fbsBusy = false;
+                speakFbsScan(action,submittedState,value,response.code(),updated,actionOwnerKey,taskId);
                 fbsAssembly = updated;
                 boolean problemWasReportedAfterBoxScan =
                     !previousBoxCode.isEmpty() && "release".equals(action);
@@ -6049,6 +6066,21 @@ public class MainActivity extends Activity {
         playFbsError();
         renderFbsRequestSelectionScreen();
         showScanningErrorDialog(message);
+    }
+
+    // FIX: share the offline voice with FBS WB/Ozon and FBO Ozon, keeping KIZ and background callbacks silent.
+    private void closeAssemblyScanVoice() {
+        if(assemblyScanVoice!=null){assemblyScanVoice.close();assemblyScanVoice=null;}
+    }
+    private void speakAssemblyScan(Boolean accepted,String code) {
+        if(accepted==null||assemblyVoicePaused||isFinishing()||isDestroyed()||!"logoff".equals(BuildConfig.FLAVOR)||AssemblyScanVoice.isKiz(code))return;
+        if(screen!=Screen.FBS_ASSEMBLY&&screen!=Screen.OZON_FBO_BOXES&&screen!=Screen.OZON_FBO_ASSEMBLY)return;
+        if(assemblyScanVoice==null)assemblyScanVoice=new FboScanFeedback.Voice(this);
+        assemblyScanVoice.play(accepted);
+    }
+    private void speakFbsScan(String action,String state,String code,int status,TsdFbsAssemblyResponse result,String owner,String taskId) {
+        if(screen!=Screen.FBS_ASSEMBLY||!owner.equals(fbsSessionOwnerKey(safeSession()))||fbsAssembly==null||fbsAssembly.task==null||!taskId.equals(fbsAssembly.task.id))return;
+        speakAssemblyScan(AssemblyScanVoice.fbs(action,state,code,status,result),code);
     }
 
     private void playFbsSuccess() {
