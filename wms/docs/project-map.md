@@ -67,6 +67,8 @@
 
 ## Поиск и тесты
 
+КИЗ без подтверждённой печати SOS WB 2: `modules/service/unprinted-kiz.{controller,service,policy}.ts`, web `components/service/UnprintedKizPanel.tsx` и `lib/unprintedKiz.ts`. Период относится к сканированию, последующая печать проверяется без ограничения этим периодом. Создание поиска использует существующий формат `KIZ_SEARCH_CREATED` для ТСД. Флаги и критерии: [описание проверки](testing/service-unprinted-kiz-search.md).
+
 Из папки `wms/`:
 
 ```powershell

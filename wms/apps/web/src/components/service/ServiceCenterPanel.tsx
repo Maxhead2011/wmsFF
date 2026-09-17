@@ -46,6 +46,7 @@ import {
   type TelegramNotificationSection,
 } from '../../lib/api';
 import { StorageOptimizationPanel } from './StorageOptimizationPanel';
+import { UnprintedKizPanel } from './UnprintedKizPanel';
 import './service-center.css';
 import { useRememberedClientId } from '../../lib/rememberedClient';
 
@@ -84,6 +85,7 @@ const tabs = [
   { id: 'sessions', label: 'Сессии', icon: Users },
   { id: 'telegram', label: 'Telegram', icon: Bell },
   { id: 'kiz', label: 'КИЗ', icon: Search },
+  { id: 'unprintedKiz', label: 'Поиск неотгруженных КИЗ', icon: Search },
   { id: 'storageOptimization', label: 'Оптимизация хранения', icon: Boxes },
   { id: 'stock', label: 'Остатки', icon: Database },
   { id: 'requests', label: 'Заявки', icon: Trash2 },
@@ -370,7 +372,7 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
       </div>
 
       <div className="service-tabs" role="tablist" aria-label="Разделы сервисного меню">
-        {tabs.map((tab) => {
+        {tabs.filter(tab => tab.id !== 'unprintedKiz' || import.meta.env.VITE_UNPRINTED_KIZ_SEARCH === 'true').map((tab) => {
           const Icon = tab.icon;
           return (
             <button
@@ -678,6 +680,8 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
           )}
         </Section>
       ) : null}
+
+      {activeTab === 'unprintedKiz' ? <UnprintedKizPanel key={`${selectedClientId}:${session.user.activeWarehouseId}`} accessToken={session.accessToken} clientId={selectedClientId} warehouseId={session.user.activeWarehouseId ?? ''}/> : null}
 
       {activeTab === 'kiz' ? (
         <Section title="Поиск КИЗ" icon={<Search size={18} />}>
