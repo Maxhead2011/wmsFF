@@ -67,7 +67,9 @@ describe('AdministrationInternalApiService', () => {
     // ADDED: A new controller or endpoint must also receive an explanation in the admin registry.
     expect(new Set(registryPrefixes)).toEqual(new Set(sourcePrefixes));
     expect(registryRoutes).toBe(sourceRoutes);
-    expect(INTERNAL_API_DEFINITIONS).toHaveLength(32);
+    // TEST: deployments can contain additional modules; prefixes/routes above
+    // must match their actual controllers, and registry IDs must remain unique.
+    expect(new Set(INTERNAL_API_DEFINITIONS.map(item => item.id)).size).toBe(INTERNAL_API_DEFINITIONS.length);
   });
 
   it('не рисует ложный зелёный статус при ошибке основной БД', async () => {
