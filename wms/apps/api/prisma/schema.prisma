@@ -3370,6 +3370,9 @@ model AuditLog {
   payload   Json?
   user      User?    @relation(fields: [userId], references: [id])
   createdAt DateTime @default(now())
+
+  // FIX: inventory reviews search scans by audit box, action and counting round.
+  @@index([entityId, action, createdAt], map: "AuditLog_entityId_action_createdAt_idx")
 }
 
 // ADDED: credentials for isolated external WMS integrations. Only a SHA-256 hash is stored.
