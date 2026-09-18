@@ -51,7 +51,7 @@ final class FboTwoStageScreen {
     }
     private void packingCompleteButton(LinearLayout root){
         boolean allClosed=true;for(TsdFboPlan.Box b:plan.boxes)if(!b.closed)allClosed=false;
-        button(root,"Короба разобраны",ready()&&plan.packed==plan.needed&&allClosed,()->send("SORTED",null));
+        button(root,packingChoices()?"Сканировать все короба поставки":"Короба разобраны",ready()&&plan.packed==plan.needed&&allClosed,()->send("SORTED",null));
     }
     private String message="";
     private final Runnable automatic=this::submit;
@@ -92,12 +92,18 @@ final class FboTwoStageScreen {
             if(plan.shortage>0)text(root,"Недостаточно доступного остатка: "+plan.shortage+" ед.");
             if(!FboScanState.phaseAllowed(packing,plan.phase))text(root,packing?"Сначала завершите отбор в Сборка FBO.":"Отбор завершён. Откройте Упаковка FBO.");
             else if("NOT_STARTED".equals(plan.phase))button(root,"Начать отбор",ready(),()->send("START",null));
-            else if("COMPLETED".equals(plan.phase)){text(root,"Все короба поставки подтверждены");button(root,"Скачать файл WB",ready(),this::download);}
+            else if("COMPLETED".equals(plan.phase)){text(root,"Все короба поставки подтверждены");
+                // FIX: both confirmed-shipment templates remain downloadable from the request.
+                if(packingChoices()){
+                    button(root,"Скачать состав для WB",ready(),()->download("products"));
+                    button(root,"Скачать распределение по коробам для WB",ready(),()->download("packages"));
+                }else button(root,"Скачать файл WB",ready(),this::download);
+            }
             // FIX: a pending request remains retryable after a restart with the same operation id.
             else if(packingChoices()&&"PACKING".equals(plan.phase)&&packingMode==PackingMode.MENU&&state.pending()==null){
                 button(root,"Собрать новые короба",ready(),()->choosePackingMode(PackingMode.NEW_BOXES));
                 button(root,"Отсканировать целые короба",ready(),()->choosePackingMode(PackingMode.WHOLE_BOXES));
-                if(plan.packed==plan.needed)packingCompleteButton(root);
+                packingCompleteButton(root);
                 for(TsdFboPlan.Box b:plan.boxes)text(root,b.code+" · "+b.quantity+" ед. · "+(b.closed?"Закрыт":"Открыт"));
             }
             else {
@@ -143,7 +149,8 @@ final class FboTwoStageScreen {
                 }else if("CONTROL".equals(plan.phase)){
                     int count=0;for(TsdFboPlan.Box b:plan.boxes)if(b.confirmed)count++;
                     text(root,"Подтверждено коробов "+count+" из "+plan.boxes.size());
-                    button(root,"Завершить проверку и сформировать файл WB",ready()&&count==plan.boxes.size(),()->send("FINISH",null));
+                    if(packingChoices())text(root,"Осталось отсканировать: "+String.join(", ",unconfirmedBoxes()));
+                    button(root,packingChoices()?"Завершить проверку и сформировать файлы WB":"Завершить проверку и сформировать файл WB",ready()&&count==plan.boxes.size(),()->send("FINISH",null));
                 }
                 for(TsdFboPlan.Box b:plan.boxes)text(root,b.code+" · "+b.quantity+" ед. · "+(b.confirmed?"Подтверждён":b.closed?"Закрыт":"Открыт"));
             }
@@ -196,7 +203,7 @@ final class FboTwoStageScreen {
                 // FIX: a definitive stock/route conflict must not leave the picker on a stale box.
                 if(res.code()==409&&rejected)refresh();else render();});return;}
             TsdFboPlan next=res.body();handler.post(()->{state.accepted();prefs.edit().remove(pendingKey).commit();plan=next;busy=false;feedbackColor=Color.rgb(187,247,208);message="Операция принята";
-                if("OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan);if("FINISH".equals(payload.get("action")))download();render();});
+                if("OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan);if("FINISH".equals(payload.get("action"))&&!packingChoices())download();render();});
         }catch(Exception e){handler.post(()->{busy=false;feedbackColor=Color.rgb(254,202,202);message="Ответ не получен. Повторите тот же запрос.";render();});}});
     }
     // FIX: do not prefill a physical count or submit stock movements before confirmation.
@@ -220,6 +227,9 @@ final class FboTwoStageScreen {
         quantityDialog.dismiss();send("PICK_BOX",null,count);
     }
     private String error(Response<?> response){try{if(response.errorBody()!=null){Object m=new JSONObject(response.errorBody().string()).opt("message");if(m!=null)return m.toString();}}catch(Exception ignored){}return "Ошибка ВМС "+response.code();}
-    private void download(){try{DownloadManager manager=(DownloadManager)activity.getSystemService(Context.DOWNLOAD_SERVICE);String url=baseUrl.replaceAll("/+$","")+"/api/v1/tsd/requests/"+id+"/fbo/wb-packages.xlsx";
-        DownloadManager.Request req=new DownloadManager.Request(Uri.parse(url));req.addRequestHeader("Authorization",session.authorizationHeader());req.setTitle("Короба ФБО для WB");req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);req.setDestinationInExternalFilesDir(activity,Environment.DIRECTORY_DOWNLOADS,"wb-packages-"+id+"-"+System.currentTimeMillis()+".xlsx");manager.enqueue(req);message="Файл загружается. Откройте его из уведомления.";render();}catch(Exception e){message="Не удалось скачать файл: "+e.getMessage();render();}}
+    // FIX: an explicit list makes omitted boxes visible without changing confirmation counts.
+    private List<String> unconfirmedBoxes(){List<String> result=new ArrayList<>();for(TsdFboPlan.Box b:plan.boxes)if(!b.confirmed)result.add(b.code);return result;}
+    private void download(){download("packages");}
+    private void download(String kind){try{DownloadManager manager=(DownloadManager)activity.getSystemService(Context.DOWNLOAD_SERVICE);String url=baseUrl.replaceAll("/+$","")+"/api/v1/tsd/requests/"+id+"/fbo/wb-"+kind+".xlsx";
+        DownloadManager.Request req=new DownloadManager.Request(Uri.parse(url));req.addRequestHeader("Authorization",session.authorizationHeader());req.setTitle("products".equals(kind)?"Состав ФБО для WB":"Короба ФБО для WB");req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);req.setDestinationInExternalFilesDir(activity,Environment.DIRECTORY_DOWNLOADS,"wb-"+kind+"-"+id+"-"+System.currentTimeMillis()+".xlsx");manager.enqueue(req);message="Файл загружается. Откройте его из уведомления.";render();}catch(Exception e){message="Не удалось скачать файл: "+e.getMessage();render();}}
 }

@@ -44,7 +44,7 @@ public class FboPackingModeTest {
             FboTwoStageScreen s=new FboTwoStageScreen(a,new TsdSession("token","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",true,()->{});
             try{idle(s);View root=a.findViewById(android.R.id.content);
                 if(!"logoff".equals(BuildConfig.FLAVOR)){assertNull(find(root,"Собрать новые короба"));assertNotNull(s.scannerField());s.scannerField().setText("NEW");s.submit();assertTrue(writes.isEmpty());return;}
-                assertNotNull(find(root,"Собрать новые короба"));assertNotNull(find(root,"Отсканировать целые короба"));assertNull(s.scannerField());assertTrue(writes.isEmpty());
+                assertNotNull(find(root,"Собрать новые короба"));assertNotNull(find(root,"Отсканировать целые короба"));assertNull(s.scannerField());assertTrue(writes.isEmpty());assertFalse(find(root,"Сканировать все короба поставки").isEnabled());
                 find(root,"Собрать новые короба").performClick();s.scannerField().setText("NEW");s.submit();idle(s);assertEquals("OPEN_BOX",writes.get(0).get("action"));
                 assertFalse(find(a.findViewById(android.R.id.content),"Завершить формирование новых коробов").isEnabled());
                 s.scannerField().setText("123");s.submit();assertEquals(1,writes.size());s.scannerField().setText("KIZ-1");s.submit();idle(s);
@@ -52,7 +52,7 @@ public class FboPackingModeTest {
                 find(a.findViewById(android.R.id.content),"Завершить формирование новых коробов").performClick();assertEquals(3,writes.size());assertEquals("PACKING",p.phase);assertNull(s.scannerField());
                 find(a.findViewById(android.R.id.content),"Отсканировать целые короба").performClick();s.scannerField().setText("WRONG");s.submit();assertEquals(3,writes.size());
                 s.scannerField().setText("WHOLE");s.submit();idle(s);assertEquals(4,writes.size());
-                find(a.findViewById(android.R.id.content),"Завершить сканирование целых коробов").performClick();assertNull(s.scannerField());assertEquals("PACKING",p.phase);assertTrue(find(a.findViewById(android.R.id.content),"Короба разобраны").isEnabled());
+                find(a.findViewById(android.R.id.content),"Завершить сканирование целых коробов").performClick();assertNull(s.scannerField());assertEquals("PACKING",p.phase);assertTrue(find(a.findViewById(android.R.id.content),"Сканировать все короба поставки").isEnabled());
             }finally{s.close();}
         }
     }
@@ -84,6 +84,40 @@ public class FboPackingModeTest {
                 assertEquals(Arrays.asList(pending,pending),writes);
                 assertFalse(a.getSharedPreferences("fbo-pending",0).contains(userId+":request"));
                 assertEquals(action.equals("PACK_BOX"),find(a.findViewById(android.R.id.content),finish).isEnabled());
+            }finally{screen.close();}
+        }
+    }
+
+    // TEST: final control is explicit; omitted, foreign and repeated scans never add quantities.
+    @Test public void scanAllBoxesThenExposeBothFiles()throws Exception{
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()){
+            Activity a=controller.get();TsdFboPlan p=new TsdFboPlan();p.phase="PACKING";p.title="Request";p.needed=2;p.picked=2;p.packed=2;
+            p.boxes=new ArrayList<>();p.lines=new ArrayList<>();p.route=new ArrayList<>();p.wholeBoxes=new ArrayList<>();
+            for(String code:new String[]{"NEW","WHOLE"}){TsdFboPlan.Box b=new TsdFboPlan.Box();b.code=code;b.quantity=1;b.closed=true;p.boxes.add(b);}
+            List<String> actions=new ArrayList<>();
+            WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(c,method,v)->{
+                if(!method.getName().equals("execute"))return null;
+                if(m.getName().equals("actFbo")){
+                    Map<String,String> data=(Map<String,String>)args[2];String action=data.get("action");actions.add(action);
+                    if(action.equals("SORTED"))p.phase="CONTROL";
+                    else if(action.equals("CONFIRM_BOX")){
+                        TsdFboPlan.Box box=null;for(TsdFboPlan.Box b:p.boxes)if(b.code.equals(data.get("targetBoxCode")))box=b;
+                        if(box==null||box.confirmed)return Response.error(409,okhttp3.ResponseBody.create(okhttp3.MediaType.parse("application/json"),"{}"));
+                        box.confirmed=true;
+                    }else if(action.equals("FINISH")){assertTrue(p.boxes.stream().allMatch(b->b.confirmed));p.phase="COMPLETED";}else fail(action);
+                }return Response.success(p);
+            }));
+            FboTwoStageScreen screen=new FboTwoStageScreen(a,new TsdSession("token","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",true,()->{});
+            try{idle(screen);find(a.findViewById(android.R.id.content),"Сканировать все короба поставки").performClick();idle(screen);
+                String finish="Завершить проверку и сформировать файлы WB";
+                assertFalse(find(a.findViewById(android.R.id.content),finish).isEnabled());
+                assertNotNull(find(a.findViewById(android.R.id.content),"Осталось отсканировать: NEW, WHOLE"));
+                for(String code:new String[]{"FOREIGN","NEW","NEW"}){screen.scannerField().setText(code);screen.submit();idle(screen);}
+                assertFalse(find(a.findViewById(android.R.id.content),finish).isEnabled());assertEquals(2,p.packed);
+                screen.scannerField().setText("WHOLE");screen.submit();idle(screen);find(a.findViewById(android.R.id.content),finish).performClick();idle(screen);
+                assertEquals("COMPLETED",p.phase);assertNotNull(find(a.findViewById(android.R.id.content),"Скачать состав для WB"));assertNotNull(find(a.findViewById(android.R.id.content),"Скачать распределение по коробам для WB"));
+                assertEquals(Arrays.asList("SORTED","CONFIRM_BOX","CONFIRM_BOX","CONFIRM_BOX","CONFIRM_BOX","FINISH"),actions);
             }finally{screen.close();}
         }
     }

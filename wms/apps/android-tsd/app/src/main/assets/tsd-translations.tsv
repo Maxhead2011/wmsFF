@@ -1497,3 +1497,9 @@ FBO Ozon	FBO Ozon	FBO Ozon
 ШК короба для упаковки	Qadoqlash qutisi shtrix-kodi	Packing box barcode
 Этот короб не ожидается среди целых коробов заявки.	Bu quti topshiriqning butun qutilari orasida kutilmayapti.	This box is not among the expected whole boxes.
 Выберите «Отсканировать целые короба» для этого короба.	Bu quti uchun «Butun qutilarni skanerlash»ni tanlang.	Choose Scan whole boxes for this box.
+
+Сканировать все короба поставки	Yetkazmaning barcha qutilarini skanerlash	Scan all shipment boxes
+Завершить проверку и сформировать файлы WB	Tekshiruvni yakunlash va WB fayllarini yaratish	Finish verification and generate WB files
+Скачать состав для WB	WB uchun tarkibni yuklab olish	Download WB shipment contents
+Скачать распределение по коробам для WB	WB uchun qutilar taqsimotini yuklab olish	Download WB box allocation
+Осталось отсканировать: {0}	Skanerlash qoldi: {0}	Remaining boxes to scan: {0}

@@ -452,10 +452,10 @@ export class FboTwoStageService {
         if (marks.length !== expected.filter(u => u.markId).length || marks.some(m => m.status !== 'PACKING' || !expected.some(u => u.markId === m.id && u.skuId === m.skuId)))
             throw new ConflictException('КИЗ короба изменились после упаковки.');
     }
-    async wbFile(id: string, user: AuthUser) {
+    async wbFile(id: string, user: AuthUser, kind: 'products' | 'packages' = 'packages') {
         const plan = await this.plan(id, user);
         if (plan.phase !== 'COMPLETED')
             throw new ConflictException('Сначала подтвердите все короба поставки.');
-        return this.files.getWbPackagingTemplate(id, user);
+        return kind === 'products' ? this.files.getWbProductsTemplate(id, user) : this.files.getWbPackagingTemplate(id, user);
     }
 }

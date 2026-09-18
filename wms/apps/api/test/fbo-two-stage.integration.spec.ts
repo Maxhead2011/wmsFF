@@ -210,9 +210,12 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         expect(await p.fboAssemblyBox.count({ where: { requestId: request, activeBoxId: { not: null } } })).toBe(0);
         const file = await svc.wbFile(request, user);
         const workbook = XLSX.read(file.content, { type: 'buffer' });
-        const rows = XLSX.utils.sheet_to_json(workbook.Sheets.TDSheet, { header: 1 }) as unknown[][];
-        expect(rows[0]).toEqual(['Баркод товара', 'Кол-во товаров', 'ШК короба', 'Срок годности']);
+        const rows = XLSX.utils.sheet_to_json(workbook.Sheets.Sheet1, { header: 1 }) as unknown[][];
+        expect(rows[0]).toEqual(['Баркод товара', 'Кол-во товаров', 'ШК короба', 'Срок годности', 'ШК короба для печати в стороннем сервисе']);
         expect(rows.slice(1).map(r => r[1]).sort()).toEqual([2, 2]);
+        // TEST: totals and box allocation files use the same confirmed physical shipment.
+        const products = XLSX.read((await svc.wbFile(request, user, 'products')).content, {type:'buffer'});
+        expect(XLSX.utils.sheet_to_json(products.Sheets.Sheet1,{header:1})).toEqual([['Баркод','Количество'],['2051234567890',4]]);
         expect(await p.stockMovement.aggregate({ where: { clientId: client, skuId: sku, status: 'AVAILABLE' }, _sum: { quantity: true } })).toMatchObject({ _sum: { quantity: -4 } });
     });
     it('retries an unanswered unit scan with the same operation id and refuses changed payloads', async () => {
