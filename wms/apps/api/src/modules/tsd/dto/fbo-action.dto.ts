@@ -7,7 +7,8 @@ export class FboActionDto {
     @IsInt()
     @Min(1)
     confirmedQuantity?: number;
-    @IsIn(['START', 'PICK_UNIT', 'PICK_BOX', 'FINISH_PICK', 'OPEN_BOX', 'PACK_UNIT', 'PACK_BOX', 'CLOSE_BOX', 'CANCEL_EMPTY_BOX', 'SORTED', 'CONFIRM_BOX', 'FINISH'])
+    // FIX: explicit WMS close is separate from the terminal's strict full-pick transition.
+    @IsIn(['START', 'PICK_UNIT', 'PICK_BOX', 'FINISH_PICK', 'STOP_PICK', 'OPEN_BOX', 'PACK_UNIT', 'PACK_BOX', 'CLOSE_BOX', 'CANCEL_EMPTY_BOX', 'SORTED', 'CONFIRM_BOX', 'FINISH'])
     action!: string;
     @IsString()
     @MinLength(8)

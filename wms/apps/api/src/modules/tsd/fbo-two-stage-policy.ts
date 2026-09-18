@@ -1,4 +1,17 @@
 import type { Prisma } from '@prisma/client';
+import { ConflictException } from '@nestjs/common';
+export const fboClosePickEnabled = () => process.env.WMS_FBO_CLOSE_PICK_ENABLED === 'true';
+// FIX: preserve requested quantities while all later stock operations use the frozen physical target.
+// A recorded closure remains authoritative even if the rollout flag is subsequently disabled.
+export function closedFboItems<T extends { id: string; quantity: number }>(items: T[], closure: Prisma.JsonValue | null | undefined): T[] {
+    if (closure == null) return items;
+    const value = closure as { version?: number; quantities?: Record<string, number> };
+    if (value.version !== 1 || !value.quantities || Array.isArray(value.quantities)
+        || Object.keys(value.quantities).length !== items.length
+        || items.some(i => !Number.isSafeInteger(value.quantities![i.id]) || value.quantities![i.id] < 0 || value.quantities![i.id] > i.quantity))
+        throw new ConflictException('Результат завершения отбора не совпадает с заявкой. Требуется сверка.');
+    return items.map(i => ({ ...i, quantity: value.quantities![i.id] }));
+}
 export const fboTwoStageEnabled = () => process.env.WMS_FBO_TWO_STAGE_ENABLED === 'true';
 export async function hasLegacyFboProgress(db: Prisma.TransactionClient, requestId: string) {
     return !!(await db.stockMovement.findFirst({ where: { sourceDocument: requestId, type: { in: ['PICK', 'PACK', 'SHIP'] } } }) ||

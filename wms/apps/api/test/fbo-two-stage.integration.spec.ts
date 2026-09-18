@@ -71,6 +71,68 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         vi.unstubAllEnvs();
     });
     afterAll(() => p.$disconnect());
+    // TEST: closing a short pick preserves the order, prevents late picks, and ships only physical units.
+    it('closes a partial pick and completes actual packing without reducing the original order', async () => {
+        vi.stubEnv('WMS_FBO_CLOSE_PICK_ENABLED', 'true');
+        await act('START');
+        await act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole });
+        const stop = { action: 'STOP_PICK', operationId: randomUUID() };
+        const closed = await svc.act(request, stop, user);
+        expect(closed).toMatchObject({ phase: 'PACKING', needed: 2, plannedNeeded: 4, picked: 2, packingNeeded: 2, unpicked: 2 });
+        expect(await svc.act(request, stop, user)).toMatchObject({ phase: 'PACKING', packingNeeded: 2 });
+        expect((await p.clientRequestItem.findUniqueOrThrow({ where: { id: line } })).quantity).toBe(4);
+        await expect(act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[2].value })).rejects.toThrow();
+        await expect(act('SORTED')).rejects.toThrow();
+        await expect(svc.wbFile(request, user)).rejects.toThrow();
+        await act('PACK_BOX', { sourceBoxCode: 'FFL_' + whole });
+        await act('SORTED');
+        await expect(act('FINISH')).rejects.toThrow();
+        await act('CONFIRM_BOX', { targetBoxCode: 'FFL_' + whole });
+        const finish = { action: 'FINISH', operationId: randomUUID() };
+        expect(await svc.act(request, finish, user)).toMatchObject({ phase: 'COMPLETED', packed: 2 });
+        await svc.act(request, finish, user);
+        const files = new ClientRequestMarketplaceFilesService(p as never, scopes as never);
+        for (const file of [await files.getWbProductsTemplate(request, user), await svc.wbFile(request, user)]) {
+            const workbook = XLSX.read(file.content, { type: 'buffer' });
+            const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 }) as unknown[][];
+            expect(rows.slice(1).map(row => [row[0], row[1]])).toEqual([['2051234567890', 2]]);
+        }
+        await stock.shipClientRequest({ requestId: request, idempotencyKey: randomUUID() }, user);
+        expect((await p.clientRequest.findUniqueOrThrow({ where: { id: request } })).status).toBe('DONE');
+        expect((await p.stockBalance.aggregate({ where: { boxId: partial, skuId: sku, status: 'AVAILABLE' }, _sum: { quantity: true } }))._sum.quantity).toBe(3);
+        expect((await p.clientRequestItem.findUniqueOrThrow({ where: { id: line } })).quantity).toBe(4);
+    });
+    // TEST: concurrent retries and a competing physical scan cannot leave an unaccounted picked unit.
+    it('serializes closing with a concurrent scan and keeps the closure valid after rollout disablement', async () => {
+        vi.stubEnv('WMS_FBO_CLOSE_PICK_ENABLED', 'true');
+        await act('START');
+        await act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole });
+        const stop = { action: 'STOP_PICK', operationId: randomUUID() };
+        const result = await Promise.allSettled([
+            svc.act(request, stop, user), svc.act(request, stop, user),
+            act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[2].value }),
+        ]);
+        expect(result[0].status).toBe('fulfilled');
+        expect(result[1].status).toBe('fulfilled');
+        vi.stubEnv('WMS_FBO_CLOSE_PICK_ENABLED', 'false');
+        const plan = await svc.plan(request, user);
+        expect(plan.phase).toBe('PACKING');
+        expect(plan.needed).toBe(plan.picked);
+        expect(plan.plannedNeeded).toBe(4);
+        expect(plan.picked).toBe(result[2].status === 'fulfilled' ? 3 : 2);
+        expect(await p.auditLog.count({ where: { entityId: request, action: 'FBO_PICK_CLOSED' } })).toBe(1);
+    });
+    // TEST: neither disabled installations nor empty picks can silently close an order.
+    it('rejects premature and disabled short-pick completion', async () => {
+        await act('START');
+        vi.stubEnv('WMS_FBO_CLOSE_PICK_ENABLED', 'true');
+        await expect(act('STOP_PICK')).rejects.toThrow();
+        await act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole });
+        vi.stubEnv('WMS_FBO_CLOSE_PICK_ENABLED', 'false');
+        await expect(act('STOP_PICK')).rejects.toThrow();
+        await expect(act('FINISH_PICK')).rejects.toThrow();
+        expect(await svc.plan(request, user)).toMatchObject({ phase: 'PICKING', needed: 4 });
+    });
     // TEST: mixed-box picks retain each SKU, request line and KIZ through retry and whole-box packing.
     it.each([true, false])('picks and packs a mixed box with second SKU marked=%s', async secondMarked => {
         vi.stubEnv('WMS_FBO_MIXED_WHOLE_BOX_ENABLED', 'true');

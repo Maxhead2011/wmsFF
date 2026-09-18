@@ -1,5 +1,5 @@
 import { FormEvent, useRef, useState } from 'react';
-import { actFbo, fetchFboPlan, downloadFboWbFile, type FboPlan, type FboAction } from '../../lib/api';
+import { actFbo, fetchFboPlan, downloadFboWbFile, downloadFboShippingFiles, downloadClientRequestWbProductsXlsx, downloadClientRequestWbPackagesXlsx, type FboPlan, type FboAction } from '../../lib/api';
 
 // FIX: pallet scan narrows the list before the source box can be selected.
 export function selectFboLocation(route:FboPlan['route'], pallet:string, scan:string) {
@@ -12,6 +12,8 @@ export function selectFboLocation(route:FboPlan['route'], pallet:string, scan:st
 export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClose }: {initial:FboPlan;accessToken:string;userId:string;canWrite:boolean;onClose:()=>void}) {
   const [plan,setPlan]=useState(initial),[code,setCode]=useState(''),[source,setSource]=useState(''),[target,setTarget]=useState(''),[barcode,setBarcode]=useState('');
   const [pallet,setPallet]=useState('');
+  const [downloading,setDownloading]=useState(false);
+  const downloadInFlight=useRef(false);
   const storageKey=`fbo-pending:${userId}:${initial.requestId}`;
   const [busy,setBusy]=useState(false),[error,setError]=useState(''),[pending,setPending]=useState<FboAction|null>(()=>{
     try{return JSON.parse(localStorage.getItem(storageKey)||'null');}catch{return null;}
@@ -42,7 +44,19 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
     else await command(plan.phase==='PICKING'?'PICK_UNIT':'PACK_UNIT',{sourceBoxCode:source,targetBoxCode:target,barcode:value});
   }
   async function refresh(){if(inFlight.current||pending)return;inFlight.current=true;setBusy(true);try{const next=await fetchFboPlan(accessToken,plan.requestId);setPlan(next);if(!next.route.some(r=>r.boxCode===source&&r.pallet===pallet)){setSource('');setBarcode('');}if(!next.route.some(r=>r.pallet===pallet))setPallet('');if(!next.boxes.some(b=>b.code===target&&!b.closed))setTarget('');setError('');}catch(e){setError(String(e));}finally{inFlight.current=false;setBusy(false);}}
-  async function download(){try{const file=await downloadFboWbFile(accessToken,plan.requestId);const a=document.createElement('a');const url=URL.createObjectURL(file);a.href=url;a.download='wb-packages.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){setError(String(e));}}
+  // FIX: document retries are read-only; final packing is already committed before a download starts.
+  async function download(kind?:'products'|'packages'){
+    if(downloadInFlight.current)return;downloadInFlight.current=true;setDownloading(true);setError('');
+    try{
+      const files=kind?[{name:`wb-${kind}-${plan.requestId}.xlsx`,blob:await (kind==='products'?downloadClientRequestWbProductsXlsx:downloadClientRequestWbPackagesXlsx)(accessToken,plan.requestId)}]
+        :plan.closePickSupported?await downloadFboShippingFiles(accessToken,plan.requestId):[{name:'wb-packages.xlsx',blob:await downloadFboWbFile(accessToken,plan.requestId)}];
+      for(const file of files){const a=document.createElement('a'),url=URL.createObjectURL(file.blob);a.href=url;a.download=file.name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);}
+    }catch(e){setError(`Не удалось скачать документы. Упаковка сохранена; повторите скачивание. ${e instanceof Error?e.message:String(e)}`);}
+    finally{downloadInFlight.current=false;setDownloading(false);}
+  }
+  function finishPicking(){
+    if(window.confirm(`Завершить отбор? Сейчас отобрано ${plan.picked} из ${plan.needed} ед. Дальнейший отбор будет закрыт, упаковка продолжится по фактически отобранным товарам.`))void command('STOP_PICK');
+  }
   const hint=plan.phase==='CONTROL'?'ШК короба поставки':plan.phase==='PICKING'&&!source?(pallet?'ШК короба на выбранном паллете':'ШК паллета или короба без паллета'):plan.phase==='PACKING'&&!target?'ШК короба для упаковки или целого отобранного короба':barcode?'КИЗ товара':'ШК товара';
   return <div className="online-execution-modal" role="dialog" aria-modal="true" aria-label="Двухэтапная сборка ФБО"><section className="online-execution-modal__panel" style={{display:'block',maxWidth:1000,width:'95vw',maxHeight:'92vh',overflow:'auto',padding:24}}>
     {/* FIX: keep closing the view accessible even while the assembly plan is scrolled. */}
@@ -52,7 +66,8 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
       </button>
       <h2 style={{margin:0,overflowWrap:'anywhere'}}>ФБО · {plan.title}</h2>
     </header>
-    <p>Нужно {plan.needed} · Отобрано {plan.picked} · Упаковано {plan.packed}</p>
+    <p>Нужно {plan.plannedNeeded??plan.needed} · Отобрано {plan.picked} · Упаковано {plan.packed}</p>
+    {plan.pickClosed&&<p>Отбор завершён · К упаковке {plan.packingNeeded??plan.needed} ед. · Не отобрано {plan.unpicked??0} ед.</p>}
     {plan.compositionChanged&&<p role="alert">Состав заявки изменился. Требуется сверка.</p>}
     {plan.shortage>0&&<p role="alert">Недостаточно доступного остатка: {plan.shortage} ед.</p>}
     <h3>{plan.phase==='COMPLETED'?'Поставка проверена':title}</h3>
@@ -64,7 +79,9 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
       {sourceTask.recount&&<p role="alert">Количество и КИЗ расходятся. Требуется актуализация короба.</p>}
       {sourceTask.wholeBox&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||!canWrite} onClick={()=>void command('PICK_BOX',{sourceBoxCode:source})}>Короб забран целиком</button>}
       <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending} onClick={()=>{setSource('');setBarcode('');}}>Другой исходный короб</button></div>}
-    {plan.phase==='PICKING'&&<><p>Осталось отобрать: {plan.needed-plan.picked}</p><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||plan.picked!==plan.needed||!canWrite} onClick={()=>void command('FINISH_PICK')}>Перейти к упаковке</button>
+    {plan.phase==='PICKING'&&<><p>Осталось отобрать: {plan.needed-plan.picked}</p>{plan.closePickSupported
+      ?<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||!plan.picked||plan.compositionChanged||!canWrite} onClick={finishPicking}>Завершить отбор</button>
+      :<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||plan.picked!==plan.needed||!canWrite} onClick={()=>void command('FINISH_PICK')}>Перейти к упаковке</button>}
       {!!pallet&&<p>Паллет {pallet} <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending} onClick={()=>{setPallet('');setSource('');setBarcode('');}}>Другой паллет</button></p>}
       {!pallet&&<ul>{[...new Set(plan.route.map(r=>r.pallet).filter(Boolean))].map(p=><li key={p}>{p} · Нужных коробов: {plan.route.filter(r=>r.pallet===p).length}</li>)}</ul>}
       <div className="online-execution-table-wrap"><table className="online-execution-table"><thead><tr><th>Паллет / зона</th><th>Нужный короб</th><th>Отобрать</th></tr></thead><tbody>{plan.route.filter(r=>r.pallet===pallet).map(r=><tr key={r.boxCode}><td>{r.pallet||'Без паллета'} · {r.zone}</td><td>{r.boxCode}</td><td>{r.tasks.map(t=>`${t.name}: ${t.quantity}`).join('; ')}</td></tr>)}</tbody></table></div></>}
@@ -74,8 +91,9 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
       {plan.wholeBoxes.length>0&&<p>Целые короба к добавлению: {plan.wholeBoxes.join(', ')}</p>}
       <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||plan.packed!==plan.needed||plan.boxes.some(b=>!b.closed)||!canWrite} onClick={()=>void command('SORTED')}>Короба разобраны</button></>}
     {['PACKING','CONTROL','COMPLETED'].includes(plan.phase)&&<ul>{plan.boxes.map(b=><li key={b.code}>{b.code} · {b.quantity} ед. · {b.confirmed?'Подтверждён':b.closed?'Закрыт':'Открыт'}</li>)}</ul>}
-    {plan.phase==='CONTROL'&&<><p>Подтверждено коробов {plan.boxes.filter(b=>b.confirmed).length} из {plan.boxes.length}</p><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||plan.boxes.some(b=>!b.confirmed)||!canWrite} onClick={()=>void command('FINISH')}>Завершить проверку и сформировать файл WB</button></>}
-    {plan.phase==='COMPLETED'&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} onClick={()=>void download()}>Скачать файл WB</button>}
+    {plan.phase==='CONTROL'&&<><p>Подтверждено коробов {plan.boxes.filter(b=>b.confirmed).length} из {plan.boxes.length}</p><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||!plan.boxes.length||plan.boxes.some(b=>!b.confirmed)||plan.packed!==plan.needed||plan.compositionChanged||!canWrite} onClick={()=>void command('FINISH')}>{plan.closePickSupported?'Упаковка завершена':'Завершить проверку и сформировать файл WB'}</button></>}
+    {plan.phase==='COMPLETED'&&<><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={downloading} onClick={()=>void download()}>{plan.closePickSupported?'Скачать файлы отгрузки':'Скачать файл WB'}</button>
+      {plan.closePickSupported&&<p>Скачать отдельно: <button disabled={downloading} onClick={()=>void download('products')}>Файл товаров WB</button> <button disabled={downloading} onClick={()=>void download('packages')}>Файл коробов WB</button></p>}</>}
     <p><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending} onClick={()=>void refresh()}>Обновить</button> <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending} onClick={onClose}>Закрыть</button></p>
   </section></div>;
 }
