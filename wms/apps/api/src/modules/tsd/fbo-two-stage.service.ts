@@ -162,7 +162,8 @@ export class FboTwoStageService {
             if (dto.action === 'PICK_UNIT' || dto.action === 'PICK_BOX') {
                 requirePhase('PICKING');
                 const source = await this.box(tx, r, dto.sourceBoxCode);
-                await this.requireIdleBox(tx, source.id, id, true);
+                const reconcileUnit = dto.action === 'PICK_UNIT' && process.env.WMS_FBO_PICK_BIND_KIZ === 'true';
+                if (!reconcileUnit) await this.requireIdleBox(tx, source.id, id, true);
                 const location = await tx.box.findUniqueOrThrow({ where: { id: source.id }, include: { pallet: true, storagePlacement: { include: { pallet: true } } } });
                 const palletCode = location.storagePlacement?.pallet.code ?? location.pallet?.code;
                 if (palletCode && dto.palletCode !== palletCode)
@@ -199,9 +200,13 @@ export class FboTwoStageService {
                     const marked = (line.sku!.needsChestnyZnak && !line.sku!.isUnmarked) || marks.some(m => m.skuId === line.skuId && m.status === 'AVAILABLE');
                     if (marked && !dto.kiz)
                         throw new BadRequestException('После ШК отсканируйте КИЗ.');
-                    const mark = dto.kiz ? await this.exactMark(tx, dto.kiz) : null;
+                    // FIX: a physical unit scan can reconcile its KIZ in the same stock transaction.
+                    const mark = dto.kiz ? (process.env.WMS_FBO_PICK_BIND_KIZ === 'true'
+                        ? await this.bindPickedMark(tx, r, line.skuId!, source.id, dto.kiz, key, user)
+                        : await this.exactMark(tx, dto.kiz)) : null;
                     if (mark && (mark.clientId !== r.clientId || mark.skuId !== line.skuId || mark.boxId !== source.id || mark.status !== 'AVAILABLE'))
                         throw new ConflictException('Этот КИЗ не доступен в указанном коробе для данного товара.');
+                    if (reconcileUnit) await this.requireIdleBox(tx, source.id, id, true);
                     chosen = [{ skuId: line.skuId!, mark }];
                 }
                 const holding = whole ? source : await tx.box.upsert({ where: { code: `FBO-PICK-${id}` }, create: { code: `FBO-PICK-${id}`, clientId: r.clientId, warehouseId: r.warehouseId, status: 'fbo-picking' }, update: {} });
@@ -398,6 +403,76 @@ export class FboTwoStageService {
                 excess -= Math.max(1, task.itemCount);
             }
         }
+    }
+    private async bindPickedMark(tx: Prisma.TransactionClient, r: Request, skuId: string, boxId: string, kiz: string, key: string, user: AuthUser) {
+        const physical = physicalKizIdentity(kiz);
+        if (!physical) throw new BadRequestException('Сканируйте корректный КИЗ товара.');
+        await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`sorting-kiz:${physical}`}))`);
+        const prefixes = [physical, ']d2' + physical, ']D2' + physical].map(p => p.replace(/[\\%_]/g, '\\$&'));
+        const filter = { OR: prefixes.map(p => ({ kiz: { startsWith: p } })) };
+        const matches = (await tx.productMark.findMany({ where: { OR: prefixes.map(p => ({ value: { startsWith: p } })) } }))
+            .filter(m => identity(m.value) === physical);
+        if (matches.length > 1) throw new ConflictException('КИЗ имеет несколько записей. Нужен разбор дублей.');
+        const previous = matches[0];
+        if (previous && (previous.clientId !== r.clientId || previous.skuId !== skuId))
+            throw new ConflictException('Этот КИЗ не доступен для данного клиента и товара.');
+        const oldUnits = (await tx.fboAssemblyUnit.findMany({ where: { ...filter, state: { not: 'RETURNED' } }, include: { assembly: true } }))
+            .filter(u => u.kiz && identity(u.kiz) === physical);
+        if (oldUnits.some(u => u.requestId === r.id)) throw new ConflictException('Этот КИЗ уже отобран в данной заявке и не доступен повторно.');
+        const oldTasks = (await tx.fbsTsdAssembly.findMany({ where: filter })).filter(t => t.kiz && identity(t.kiz) === physical);
+        if (oldTasks.some(t => t.clientId !== r.clientId || t.skuId !== skuId) || oldUnits.some(u => u.skuId !== skuId))
+            throw new ConflictException('КИЗ связан с другим клиентом или товаром.');
+        const oldBox = previous?.boxId ? await tx.box.findUnique({ where: { id: previous.boxId } }) : null;
+        if (oldBox && (oldBox.clientId !== r.clientId || oldBox.warehouseId !== r.warehouseId))
+            throw new ConflictException('КИЗ числится в другом филиале или у другого клиента.');
+        if (oldBox && await tx.inventoryAuditBox.count({ where: { boxId: oldBox.id, status: { in: ['COUNTING', 'MISMATCH'] }, session: { status: { in: ['ACTIVE', 'REVIEW'] } } } }))
+            throw new ConflictException('Прежний короб участвует в актуализации. Завершите её перед восстановлением КИЗ.');
+        // FIX: retain completed shipment evidence, but invalidate unfinished physical ownership.
+        for (const unit of oldUnits.filter(u => u.assembly.phase !== 'COMPLETED')) {
+            await tx.$queryRaw`SELECT "id" FROM "ClientRequest" WHERE "id"=${unit.requestId} FOR UPDATE`;
+            await tx.fboAssemblyUnit.update({ where: { id: unit.id }, data: { state: 'RETURNED', activeMarkId: null } });
+            await tx.fboAssembly.update({ where: { requestId: unit.requestId }, data: { phase: 'PICKING' } });
+            if (unit.targetBoxId) await tx.fboAssemblyBox.updateMany({ where: { requestId: unit.requestId, boxId: unit.targetBoxId },
+                data: { closedAt: null, confirmedAt: null, confirmedByUserId: null } });
+        }
+        for (const task of oldTasks.filter(t => !['COMPLETED', 'RELEASED', 'CANCELLED'].includes(t.status))) {
+            await tx.fbsTsdAssembly.update({ where: { id: task.id }, data: { status: 'RELEASED',
+                errorMessage: `Единица физически найдена и отобрана в ФБО №${r.number}. Прежняя привязка сохранена в истории.` } });
+        }
+        const source = previous ? await tx.stockBalance.findFirst({ where: { clientId: r.clientId, warehouseId: r.warehouseId, skuId,
+            boxId: previous.boxId, status: previous.status, quantity: { gt: 0 } }, orderBy: { id: 'asc' } }) : null;
+        const physicalBalance = await tx.stockBalance.findFirst({ where: { clientId: r.clientId, warehouseId: r.warehouseId, skuId,
+            boxId, status: 'AVAILABLE', quantity: { gt: 0 } } });
+        // Reconcile the recorded ledger when it exists; otherwise consume the physical box's stock.
+        // A historical picked/shipped identity without stock is an explicit physical recovery.
+        const recover = !source && !physicalBalance && ((!!previous && previous.status !== 'AVAILABLE') || oldUnits.length > 0 || oldTasks.length > 0);
+        let movementId = previous?.stockMovementId ?? null;
+        if ((source && (source.boxId !== boxId || source.status !== 'AVAILABLE')) || recover) {
+            if (source) {
+                const changed = await tx.stockBalance.updateMany({ where: { id: source.id, quantity: { gte: 1 } }, data: { quantity: { decrement: 1 } } });
+                if (changed.count !== 1) throw new ConflictException('Остаток изменился. Повторите сканирование.');
+                await tx.stockMovement.create({ data: { clientId: r.clientId, warehouseId: r.warehouseId, skuId, boxId: source.boxId,
+                    palletId: source.palletId, status: source.status, type: 'INVENTORY_ADJUSTMENT', quantity: -1,
+                    sourceDocument: r.id, idempotencyKey: `${key}:kiz-rebind:out`, comment: 'ФБО: исправление привязки по физическому скану КИЗ' } });
+            }
+            const target = await tx.box.findUniqueOrThrow({ where: { id: boxId } });
+            const dimensions = { clientId: r.clientId, warehouseId: r.warehouseId, skuId, boxId, palletId: target.palletId, status: StockStatus.AVAILABLE };
+            const balanceKey = this.balances.balanceKey(dimensions);
+            await tx.stockBalance.upsert({ where: { balanceKey }, create: { ...dimensions, balanceKey, quantity: 1 }, update: { quantity: { increment: 1 } } });
+            movementId = (await tx.stockMovement.create({ data: { ...dimensions, type: 'INVENTORY_ADJUSTMENT', quantity: 1,
+                sourceDocument: r.id, idempotencyKey: `${key}:kiz-rebind:in`, comment: 'ФБО: единица физически подтверждена сканированием КИЗ' } })).id;
+            if (source?.status === 'AVAILABLE' && oldBox && oldBox.id !== boxId)
+                await this.releaseDisplacedRoutes(tx, oldBox.id, oldBox.code, [skuId]);
+        }
+        const mark = previous
+            ? await tx.productMark.update({ where: { id: previous.id }, data: { boxId, status: 'AVAILABLE', stockMovementId: movementId } })
+            : await tx.productMark.create({ data: { clientId: r.clientId, skuId, boxId, value: kiz.trim(), status: 'AVAILABLE', sourceDocument: `FBO-PICK:${r.id}` } });
+        await tx.auditLog.create({ data: { userId: user.id, action: 'FBO_PICK_KIZ_BOUND', entity: 'ClientRequest', entityId: r.id,
+            payload: { operationId: key, identity: physical, markId: mark.id, sourceBoxId: boxId, recovered: recover,
+                previousMark: previous ? { id: previous.id, boxId: previous.boxId, status: previous.status, stockMovementId: previous.stockMovementId } : null,
+                previousFbsTasks: oldTasks.map(t => ({ id: t.id, requestId: t.requestId, orderId: t.orderId, status: t.status })),
+                previousFboUnits: oldUnits.map(u => ({ id: u.id, requestId: u.requestId, state: u.state, phase: u.assembly.phase, targetBoxId: u.targetBoxId })) } } });
+        return mark;
     }
     private async exactMark(tx: Prisma.TransactionClient, kiz: string) {
         const key = identity(kiz);

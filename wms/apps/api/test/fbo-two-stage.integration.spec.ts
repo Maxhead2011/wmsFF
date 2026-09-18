@@ -9,8 +9,9 @@ import { StockBalancesService } from '../src/modules/stock/stock-balances.servic
 import { StockOperationsService } from '../src/modules/stock/stock-operations.service';
 import { ClientRequestMarketplaceFilesService } from '../src/modules/client-requests/client-request-marketplace-files.service';
 import type { AuthUser } from '../src/modules/auth/auth.types';
-const url = process.env.KIZ_DUPLICATE_TEST_DATABASE_URL;
-if (url && !/^postgresql:\/\/codex_tests@127\.0\.0\.1:55469\/kiz_duplicate_tests/.test(url))
+const url = process.env.FBO_TEST_DATABASE_URL ?? process.env.KIZ_DUPLICATE_TEST_DATABASE_URL;
+// TEST: Windows may reserve 55469 after reboot; both ports still require the isolated local database.
+if (url && !/^postgresql:\/\/codex_tests@127\.0\.0\.1:554(?:69|85)\/kiz_duplicate_tests(?:\?|$)/.test(url))
     throw Error('Dedicated local test DB only');
 describe.skipIf(!url).sequential('FBO physical pick, pack and final box control', () => {
     const p = new PrismaClient(url ? { datasources: { db: { url } } } : undefined);
@@ -70,6 +71,112 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         vi.unstubAllEnvs();
     });
     afterAll(() => p.$disconnect());
+    // TEST: unknown physical KIZ is registered and consumed atomically, without a recount.
+    it('binds a new unit scan once and retries without another stock debit', async () => {
+        vi.stubEnv('WMS_FBO_PICK_BIND_KIZ', 'true');
+        await p.productMark.delete({ where: { id: marks[2].id } });
+        await act('START');
+        const dto = { action: 'PICK_UNIT', operationId: randomUUID(), sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[2].value };
+        await svc.act(request, dto, user); await svc.act(request, dto, user);
+        const mark = await p.productMark.findFirstOrThrow({ where: { clientId: client, value: dto.kiz } });
+        expect(mark).toMatchObject({ skuId: sku, status: 'PACKING', sourceDocument: `FBO-PICK:${request}` });
+        expect(await p.fboAssemblyUnit.count({ where: { requestId: request, markId: mark.id } })).toBe(1);
+        expect((await p.stockBalance.aggregate({ where: { clientId: client, skuId: sku, status: 'AVAILABLE' }, _sum: { quantity: true } }))._sum.quantity).toBe(4);
+        expect(await p.auditLog.count({ where: { entityId: request, action: 'FBO_PICK_KIZ_BOUND' } })).toBe(1);
+    });
+    // TEST: physical correction moves the recorded balance first; the warehouse loses only one available unit.
+    it('corrects an available KIZ from another box without debiting two units', async () => {
+        vi.stubEnv('WMS_FBO_PICK_BIND_KIZ', 'true');
+        await act('START');
+        await act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[0].value });
+        expect(await p.productMark.findUnique({ where: { id: marks[0].id } })).toMatchObject({ status: 'PACKING' });
+        expect((await p.stockBalance.aggregate({ where: { boxId: whole, skuId: sku, status: 'AVAILABLE' }, _sum: { quantity: true } }))._sum.quantity).toBe(1);
+        expect((await p.stockBalance.aggregate({ where: { boxId: partial, skuId: sku, status: 'AVAILABLE' }, _sum: { quantity: true } }))._sum.quantity).toBe(3);
+        expect(await p.fboAssemblyUnit.findFirst({ where: { requestId: request } })).toMatchObject({ sourceBoxId: partial, markId: marks[0].id });
+    });
+    // TEST: a failed pick rolls the new identity back instead of receiving extra stock.
+    it('does not register a new KIZ when no available stock exists', async () => {
+        vi.stubEnv('WMS_FBO_PICK_BIND_KIZ', 'true');
+        await p.productMark.delete({ where: { id: marks[2].id } });
+        await p.stockBalance.updateMany({ where: { boxId: partial, skuId: sku }, data: { quantity: 0 } });
+        await act('START');
+        await expect(act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[2].value })).rejects.toThrow('остатка');
+        expect(await p.productMark.count({ where: { clientId: client, value: marks[2].value } })).toBe(0);
+        expect(await p.stockMovement.count({ where: { clientId: client } })).toBe(0);
+        expect(await p.auditLog.count({ where: { entityId: request, action: 'FBO_PICK_KIZ_BOUND' } })).toBe(0);
+    });
+    // TEST: an explicit physical scan restores shipped identity, but cannot change SKU ownership.
+    it('restores a shipped KIZ and rejects a KIZ belonging to another SKU', async () => {
+        vi.stubEnv('WMS_FBO_PICK_BIND_KIZ', 'true'); await act('START');
+        await p.productMark.update({ where: { id: marks[0].id }, data: { status: 'SHIPPING' } });
+        await p.productMark.update({ where: { id: marks[1].id }, data: { skuId: other } });
+        await act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[0].value });
+        expect(await p.productMark.findUnique({ where: { id: marks[0].id } })).toMatchObject({ status: 'PACKING' });
+        await expect(act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[1].value })).rejects.toThrow('не доступен');
+        expect(await p.fboAssemblyUnit.count({ where: { requestId: request } })).toBe(1);
+    });
+    // TEST: unknown scanner garbage is not converted into a product mark.
+    it('recovers a historical shipped unit without inventing a second available unit', async () => {
+        vi.stubEnv('WMS_FBO_PICK_BIND_KIZ', 'true');
+        await p.productMark.update({ where: { id: marks[2].id }, data: { status: 'SHIPPING' } });
+        await p.stockBalance.updateMany({ where: { boxId: partial, skuId: sku }, data: { quantity: 0 } });
+        await act('START');
+        await act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[2].value });
+        expect((await p.stockBalance.aggregate({ where: { clientId: client, skuId: sku, status: 'PACKING' }, _sum: { quantity: true } }))._sum.quantity).toBe(1);
+        expect((await p.stockBalance.aggregate({ where: { boxId: partial, skuId: sku, status: 'AVAILABLE' }, _sum: { quantity: true } }))._sum.quantity).toBe(0);
+        const audit = await p.auditLog.findFirstOrThrow({ where: { entityId: request, action: 'FBO_PICK_KIZ_BOUND' } });
+        expect(audit.payload).toMatchObject({ recovered: true, previousMark: { status: 'SHIPPING' } });
+    });
+    // TEST: a physical return releases an old active FBS claim and retains its KIZ/order evidence.
+    it('reclaims a KIZ from another active order in the scanned box', async () => {
+        vi.stubEnv('WMS_FBO_PICK_BIND_KIZ', 'true');
+        const task = await p.fbsTsdAssembly.create({ data: { clientId: client, connectionId: randomUUID(), orderId: 'old-order',
+            requestId: randomUUID(), requestItemId: randomUUID(), skuId: sku, productName: 'Previous order', barcodes: [], storageBoxes: [],
+            deviceCode: 'test', status: 'IN_PROGRESS', boxId: partial, kiz: marks[2].value } });
+        await act('START');
+        await act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[2].value });
+        expect(await p.fbsTsdAssembly.findUnique({ where: { id: task.id } })).toMatchObject({ status: 'RELEASED', kiz: marks[2].value, orderId: 'old-order' });
+        expect(await p.fboAssemblyUnit.count({ where: { requestId: request } })).toBe(1);
+    });
+    // TEST: the old unfinished FBO loses this physical unit and is reopened for picking.
+    it('reclaims an unfinished FBO unit without counting it in both requests', async () => {
+        vi.stubEnv('WMS_FBO_PICK_BIND_KIZ', 'true');
+        const prior = randomUUID();
+        await p.clientRequest.create({ data: { id: prior, clientId: client, warehouseId: wh, type: 'OUTBOUND', title: 'Prior FBO' } });
+        await p.fboAssembly.create({ data: { requestId: prior, compositionHash: 'test', phase: 'PACKING' } });
+        const unit = await p.fboAssemblyUnit.create({ data: { requestId: prior, requestItemId: randomUUID(), skuId: sku, barcode: '2051234567890',
+            markId: marks[0].id, activeMarkId: marks[0].id, kiz: marks[0].value, sourceBoxId: whole, sourceBoxCode: 'FFL_' + whole, pickedByUserId: uid } });
+        await p.productMark.update({ where: { id: marks[0].id }, data: { status: 'PACKING' } });
+        await p.stockBalance.updateMany({ where: { boxId: whole, skuId: sku }, data: { status: 'PACKING' } });
+        try {
+            await act('START');
+            await act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[0].value });
+            expect(await p.fboAssemblyUnit.findUnique({ where: { id: unit.id } })).toMatchObject({ state: 'RETURNED', activeMarkId: null });
+            expect(await p.fboAssembly.findUnique({ where: { requestId: prior } })).toMatchObject({ phase: 'PICKING' });
+            expect(await p.fboAssemblyUnit.count({ where: { activeMarkId: marks[0].id } })).toBe(1);
+        } finally {
+            await p.fboAssemblyUnit.deleteMany({ where: { requestId: prior } });
+            await p.fboAssembly.delete({ where: { requestId: prior } });
+            await p.clientRequest.delete({ where: { id: prior } });
+        }
+    });
+    // TEST: two concurrent attempts cannot create/consume the same previously unknown KIZ twice.
+    it('serializes simultaneous scans of an unknown KIZ', async () => {
+        vi.stubEnv('WMS_FBO_PICK_BIND_KIZ', 'true');
+        await p.productMark.delete({ where: { id: marks[2].id } }); await act('START');
+        const dto = { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[2].value };
+        const results = await Promise.allSettled([act('PICK_UNIT', dto), act('PICK_UNIT', dto)]);
+        expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1);
+        expect(await p.productMark.count({ where: { clientId: client, value: marks[2].value } })).toBe(1);
+        expect(await p.fboAssemblyUnit.count({ where: { requestId: request } })).toBe(1);
+    });
+    // TEST: unknown scanner garbage is not converted into a product mark.
+    it('validates new KIZs and preserves the old behavior with the flag disabled', async () => {
+        await p.productMark.delete({ where: { id: marks[2].id } }); await act('START');
+        await expect(act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[2].value })).rejects.toThrow('актуализация');
+        vi.stubEnv('WMS_FBO_PICK_BIND_KIZ', 'true');
+        await expect(act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: 'invalid' })).rejects.toThrow('КИЗ');
+    });
     // TEST: 1509_27 must not consume one unit of demand before an exact whole 1509_31.
     it('prefers the complete matching box over an earlier mixed box', async () => {
         await p.clientRequestItem.update({ where: { id: line }, data: { quantity: 2 } });
