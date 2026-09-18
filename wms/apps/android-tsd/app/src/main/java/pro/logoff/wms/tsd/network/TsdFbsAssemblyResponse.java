@@ -24,6 +24,9 @@ public class TsdFbsAssemblyResponse {
         public Product product;
         public Relabeling relabeling;
         public int itemCount;
+        // FIX: retain the server's per-unit compare-and-set counter across retries.
+        public boolean perUnitScanning;
+        public int scannedItemCount;
         public boolean sourceWithoutBox;
         public boolean requiresKiz;
         public String recommendedBoxCode;
