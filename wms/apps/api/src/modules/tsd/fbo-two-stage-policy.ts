@@ -39,8 +39,26 @@ export function wholeBoxDecision(balances: Array<{
     skuId: string;
     identity: string;
     status: string;
-}>, marked: boolean) {
+}>, marked: boolean, markedSkuIds?: ReadonlySet<string>) {
     const positive = balances.filter(b => b.quantity > 0);
+    // FIX: our installation may take mixed contents only when every SKU and physical mark fits.
+    if (process.env.WMS_FBO_MIXED_WHOLE_BOX_ENABLED === 'true') {
+        if (balances.some(b => !Number.isSafeInteger(b.quantity) || b.quantity < 0))
+            return { allowed: false, recount: true, quantity: 0 };
+        if (!positive.length || positive.some(b => b.status !== 'AVAILABLE'))
+            return { allowed: false, recount: false, quantity: 0 };
+        const quantities = new Map<string, number>();
+        for (const b of positive) quantities.set(b.skuId, (quantities.get(b.skuId) ?? 0) + b.quantity);
+        const quantity = positive.reduce((sum, b) => sum + b.quantity, 0);
+        const validMarks = marks.every(m => quantities.has(m.skuId) && m.status === 'AVAILABLE' && m.identity)
+            && new Set(marks.map(m => m.identity)).size === marks.length;
+        const consistent = validMarks && [...quantities].every(([skuId, count]) => {
+            const actual = marks.filter(m => m.skuId === skuId).length;
+            const required = (markedSkuIds ? markedSkuIds.has(skuId) : marked) || actual > 0;
+            return actual === (required ? count : 0);
+        });
+        return { allowed: consistent && [...quantities].every(([skuId, count]) => (demand[skuId] ?? 0) >= count), recount: !consistent, quantity };
+    }
     if (balances.some(b => b.quantity < 0))
         return { allowed: false, recount: true, quantity: 0 };
     const skus = new Set(positive.map(b => b.skuId));
@@ -64,15 +82,17 @@ export function prioritizeFboWholeBoxes<T extends {
         for (let i = 0; i < pending.length; i++) {
             const decision = decide(pending[i], remaining);
             if (!decision.allowed) continue;
-            const skuId = pending[i].balances.find(b => b.quantity > 0)!.skuId;
-            const fitsExactly = remaining[skuId] === decision.quantity;
+            const quantities = new Map<string, number>();
+            for (const b of pending[i].balances.filter(b => b.quantity > 0)) quantities.set(b.skuId, (quantities.get(b.skuId) ?? 0) + b.quantity);
+            const fitsExactly = [...quantities].every(([skuId, count]) => remaining[skuId] === count);
             if (best < 0 || (fitsExactly && !exact) || (fitsExactly === exact && decision.quantity > quantity)) {
                 best = i; quantity = decision.quantity; exact = fitsExactly;
             }
         }
         if (best < 0) break;
         const box = pending.splice(best, 1)[0];
-        remaining[box.balances.find(b => b.quantity > 0)!.skuId] -= quantity;
+        // FIX: a mixed box consumes demand separately for every SKU.
+        for (const b of box.balances.filter(b => b.quantity > 0)) remaining[b.skuId] -= b.quantity;
         result.push(box);
     }
     return [...result, ...pending];

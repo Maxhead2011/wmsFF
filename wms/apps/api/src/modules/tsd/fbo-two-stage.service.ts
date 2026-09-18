@@ -124,7 +124,8 @@ export class FboTwoStageService {
         // FIX: an exact whole box wins over loose stock in an earlier mixed box.
         const prioritized = prioritizeFboWholeBoxes(boxes.filter(b => !busyBoxes.has(b.id)), demand, (box, remaining) =>
             wholeBoxDecision(box.balances, remaining, box.productMarks.map(m => ({ ...m, identity: identity(m.value) })),
-                box.productMarks.length > 0 || lines.some(l => l.requiresKiz && box.balances.some(b => b.quantity > 0 && b.skuId === l.skuId))));
+                box.productMarks.length > 0 || lines.some(l => l.requiresKiz && box.balances.some(b => b.quantity > 0 && b.skuId === l.skuId)),
+                new Set(lines.filter(l => l.requiresKiz).map(l => l.skuId))));
         for (const box of prioritized) {
             if (busyBoxes.has(box.id)) continue;
             const tasks: Array<{
@@ -144,7 +145,7 @@ export class FboTwoStageService {
             }
             if (!tasks.length)
                 continue;
-            const decision = wholeBoxDecision(box.balances, tasks.reduce<Record<string, number>>((sum, t) => { sum[t.skuId] = (sum[t.skuId] ?? 0) + t.quantity; return sum; }, {}), box.productMarks.map(m => ({ ...m, identity: identity(m.value) })), tasks.some(t => t.requiresKiz));
+            const decision = wholeBoxDecision(box.balances, tasks.reduce<Record<string, number>>((sum, t) => { sum[t.skuId] = (sum[t.skuId] ?? 0) + t.quantity; return sum; }, {}), box.productMarks.map(m => ({ ...m, identity: identity(m.value) })), tasks.some(t => t.requiresKiz), new Set(tasks.filter(t => t.requiresKiz).map(t => t.skuId)));
             route.push({ boxCode: box.code, pallet: box.storagePlacement?.pallet.code ?? box.pallet?.code ?? '',
                 zone: box.storagePlacement?.pallet.zone?.name ?? box.zone?.name ?? '', tasks, wholeBox: decision.allowed, recount: decision.recount,
                 wholeBoxQuantity: decision.allowed ? decision.quantity : 0,
@@ -234,15 +235,25 @@ export class FboTwoStageService {
                     for (const l of lines)
                         demand[l.skuId!] = (demand[l.skuId!] ?? 0) + l.remaining;
                     const marked = marks.length > 0 || lines.some(l => balances.some(b => b.skuId === l.skuId && b.quantity > 0) && l.sku!.needsChestnyZnak && !l.sku!.isUnmarked);
-                    const decision = wholeBoxDecision(balances, demand, marks.map(m => ({ ...m, identity: identity(m.value) })), marked);
+                    const decision = wholeBoxDecision(balances, demand, marks.map(m => ({ ...m, identity: identity(m.value) })), marked,
+                        new Set(lines.filter(l => l.sku!.needsChestnyZnak && !l.sku!.isUnmarked).map(l => l.skuId!)));
                     if (decision.recount)
                         throw new ConflictException({ code: 'FBO_BOX_RECOUNT_REQUIRED', boxCode: source.code, message: 'Состав КИЗ не совпадает с остатком. Выполните актуализацию короба.' });
                     if (!decision.allowed)
                         throw new ConflictException('Короб нельзя забрать целиком. Отбирайте нужное количество через ШК и КИЗ.');
                     if (dto.confirmedQuantity !== decision.quantity)
                         throw new ConflictException(`Количество не совпадает: введено ${dto.confirmedQuantity}, в учёте ${decision.quantity}. Проверьте короб и актуализируйте остаток.`);
-                    const skuId = balances.find(b => b.quantity > 0)!.skuId;
-                    chosen = Array.from({ length: decision.quantity }, (_, i) => ({ skuId, mark: marked ? marks[i] : null }));
+                    if (process.env.WMS_FBO_MIXED_WHOLE_BOX_ENABLED === 'true') {
+                        // FIX: each unit retains its own SKU and corresponding KIZ, including mixed marked/unmarked contents.
+                        const bySku = new Map<string, typeof marks>();
+                        for (const mark of marks) { const list = bySku.get(mark.skuId) ?? []; list.push(mark); bySku.set(mark.skuId, list); }
+                        chosen = balances.filter(b => b.quantity > 0).flatMap(b => Array.from({ length: b.quantity }, () => ({
+                            skuId: b.skuId, mark: bySku.get(b.skuId)?.shift() ?? null,
+                        })));
+                    } else {
+                        const skuId = balances.find(b => b.quantity > 0)!.skuId;
+                        chosen = Array.from({ length: decision.quantity }, (_, i) => ({ skuId, mark: marked ? marks[i] : null }));
+                    }
                 }
                 else {
                     const line = lines.find(l => l.remaining > 0 && (l.barcode === dto.barcode || l.sku!.barcodes.some(b => b.value === dto.barcode)));

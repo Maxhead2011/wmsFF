@@ -71,6 +71,45 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         vi.unstubAllEnvs();
     });
     afterAll(() => p.$disconnect());
+    // TEST: mixed-box picks retain each SKU, request line and KIZ through retry and whole-box packing.
+    it.each([true, false])('picks and packs a mixed box with second SKU marked=%s', async secondMarked => {
+        vi.stubEnv('WMS_FBO_MIXED_WHOLE_BOX_ENABLED', 'true');
+        await p.clientRequestItem.update({ where: { id: line }, data: { quantity: 2 } });
+        const secondLine = await p.clientRequestItem.create({ data: { requestId: request, skuId: other, barcode: '2051234567883', quantity: 1 } });
+        await p.stockBalance.create({ data: { balanceKey: randomUUID(), clientId: client, warehouseId: wh, boxId: whole, skuId: other, status: 'AVAILABLE', quantity: 1 } });
+        let secondMark: { id: string; value: string } | undefined;
+        if (secondMarked) {
+            await p.sku.update({ where: { id: other }, data: { needsChestnyZnak: true } });
+            secondMark = await p.productMark.create({ data: { clientId: client, skuId: other, boxId: whole, status: 'AVAILABLE', value: `010468099259845521CCCCCCCCCCCC1\u001d91EE12\u001d92${client}` } });
+        }
+        const plan = await act('START');
+        expect(plan.route.find(b => b.boxCode === 'FFL_' + whole)).toMatchObject({ wholeBox: true, wholeBoxQuantity: 3 });
+        const dto = { action: 'PICK_BOX', operationId: randomUUID(), sourceBoxCode: 'FFL_' + whole, confirmedQuantity: 3 };
+        await svc.act(request, dto, user);
+        await svc.act(request, dto, user);
+        const units = await p.fboAssemblyUnit.findMany({ where: { requestId: request } });
+        expect(units).toHaveLength(3);
+        expect(units.filter(u => u.skuId === sku).map(u => u.markId).sort()).toEqual(marks.slice(0, 2).map(m => m.id).sort());
+        expect(units.find(u => u.skuId === other)).toMatchObject({ requestItemId: secondLine.id, markId: secondMark?.id ?? null, wholeBox: true });
+        expect(units.every(u => u.sourceBoxId === whole)).toBe(true);
+        await act('FINISH_PICK');
+        const packed = await act('PACK_BOX', { sourceBoxCode: 'FFL_' + whole });
+        expect(packed.packed).toBe(3);
+        const quantities = await p.stockBalance.findMany({ where: { boxId: whole, status: 'PACKING', quantity: { gt: 0 } } });
+        expect(quantities.map(b => [b.skuId, b.quantity]).sort()).toEqual([[sku, 2], [other, 1]].sort());
+        await act('SORTED');
+        await act('CONFIRM_BOX', { targetBoxCode: 'FFL_' + whole });
+        expect((await act('FINISH')).phase).toBe('COMPLETED');
+        const shipped = await p.stockBalance.findMany({ where: { boxId: whole, status: 'SHIPPING', quantity: { gt: 0 } } });
+        expect(shipped.map(b => [b.skuId, b.quantity]).sort()).toEqual([[sku, 2], [other, 1]].sort());
+        expect((await p.stockMovement.aggregate({ where: { clientId: client, status: 'AVAILABLE' }, _sum: { quantity: true } }))._sum.quantity).toBe(-3);
+        const file = await svc.wbFile(request, user);
+        const workbook = XLSX.read(file.content, { type: 'buffer' });
+        const rows = XLSX.utils.sheet_to_json(workbook.Sheets.TDSheet, { header: 1 }) as unknown[][];
+        expect(rows.slice(1).map(row => [row[0], row[1], row[2]]).sort()).toEqual([
+            ['2051234567890', 2, 'FFL_' + whole], ['2051234567883', 1, 'FFL_' + whole],
+        ].sort());
+    });
     // TEST: committed picks must be acknowledged even when rebuilding the route fails.
     it('acknowledges a pick and its retry without rebuilding the route or debiting twice', async () => {
         vi.stubEnv('WMS_FBO_FAST_ACK_ENABLED', 'true');
