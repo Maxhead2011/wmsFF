@@ -11012,6 +11012,8 @@ export async function fetchTsdAssemblyPlan(accessToken: string, requestId: strin
 }
 
 export type FboPlan = {
+  // FIX: original demand remains visible after freezing the actual packing target.
+  closePickSupported?:boolean; pickClosed?:boolean; plannedNeeded?:number; packingNeeded?:number; unpicked?:number;
   requestId:string; title:string; phase:string; needed:number; picked:number; packed:number; looseRemaining:number; shortage:number;
   compositionChanged:boolean; wholeBoxes:string[];
   lines:Array<{id:string;skuId:string;barcode:string;name:string;article:string|null;size:string|null;requiresKiz:boolean;needed:number;picked:number;packed:number;remaining:number}>;
@@ -11026,6 +11028,13 @@ export async function actFbo(accessToken:string,id:string,body:FboAction) {
   return await response.json() as FboPlan;
 }
 export function downloadFboWbFile(accessToken:string,id:string){return requestBlob(`/tsd/requests/${id}/fbo/wb-packages.xlsx`,accessToken);}
+// FIX: reuse the exact two established WB exports; fetch both before starting browser downloads.
+export async function downloadFboShippingFiles(accessToken:string,id:string) {
+  const [products,packages]=await Promise.all([
+    downloadClientRequestWbProductsXlsx(accessToken,id),downloadClientRequestWbPackagesXlsx(accessToken,id),
+  ]);
+  return [{name:`wb-products-${id}.xlsx`,blob:products},{name:`wb-packages-${id}.xlsx`,blob:packages}];
+}
 
 export async function resolveTsdFbsKizConflict(
   accessToken: string,

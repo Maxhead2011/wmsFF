@@ -3406,6 +3406,8 @@ model FboAssembly {
   requestId String @id
   phase String @default("PICKING")
   compositionHash String
+  // FIX: immutable actual picking target; original request quantities remain unchanged.
+  pickClosure Json?
   request ClientRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
   units FboAssemblyUnit[]
   actions FboAssemblyAction[]

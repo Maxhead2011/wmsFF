@@ -7,6 +7,18 @@ import type { FboPlan } from '../../lib/api';
 const base:FboPlan={requestId:'r',title:'1029',phase:'PACKING',needed:2,picked:2,packed:2,looseRemaining:0,shortage:0,compositionChanged:false,wholeBoxes:[],lines:[],route:[],boxes:[{code:'FFL_1',quantity:2,wholeBox:false,closed:true,confirmed:false}]};
 const render=(plan:FboPlan)=>renderToStaticMarkup(<FboTwoStagePanel initial={plan} accessToken="test" userId="picker" canWrite onClose={()=>{}}/>);
 describe('FBO packing and final box control',()=>{
+  // TEST: WMS exposes explicit short-pick closure and finalization only on their respective stages.
+  it('offers short-pick completion before the full quantity is collected',()=>{
+    const html=render({...base,phase:'PICKING',needed:4,picked:2,packed:0,closePickSupported:true} as FboPlan);
+    expect(html).toContain('Завершить отбор');
+    expect(html).not.toMatch(/disabled="">Завершить отбор/);
+    expect(render({...base,phase:'PICKING'})).not.toContain('Завершить отбор');
+  });
+  it('names final packing and both existing shipment downloads explicitly',()=>{
+    const html=render({...base,phase:'CONTROL',closePickSupported:true} as FboPlan);
+    expect(html).toMatch(/disabled="">Упаковка завершена/);
+    expect(render({...base,phase:'COMPLETED',closePickSupported:true} as FboPlan)).toContain('Скачать файлы отгрузки');
+  });
   // TEST: the close control must be accessible at the top without scrolling through the plan.
   it('shows a labelled close icon before the title on every assembly phase',()=>{
     for(const phase of ['NOT_STARTED','PICKING','PACKING','CONTROL','COMPLETED'] as FboPlan['phase'][]){
