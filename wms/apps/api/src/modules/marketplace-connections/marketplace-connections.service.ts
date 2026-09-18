@@ -1,3 +1,4 @@
+import { WbSyncHealthService, wbHealthError } from './wb-sync-health.service';
 import { WbStockObservations, wbStockCheckDto } from './wb-stock-observations';
 import { publishWbStockPlan, selectKnownWbStockTargets } from './wb-stock-safe-publication';
 import { analyzeWbStockDemand } from './wb-stock-demand-analysis';
@@ -660,6 +661,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     private readonly archivedEmptyBoxDetach?: ArchivedEmptyBoxPalletDetachService,
     private readonly adminNotifications?: AdminNotificationsService,
     private readonly stockControl: MarketplaceStockControlService = new MarketplaceStockControlService(prisma, clientScopes),
+    private readonly syncHealth?: WbSyncHealthService,
   ) {}
 
   pruneExpiredRuntimeCaches(now = Date.now()) {
@@ -753,6 +755,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             const next = queue.shift();
             if (!next) return;
             const { clientId } = next;
+            // FIX: persistent cycle evidence survives container replacement.
+            const healthCycle = await this.syncHealth?.begin(clientId);
             try {
               const previous = this.fbsOrdersCache.get(clientId)?.value;
               const previousOrderStates = previous
@@ -784,23 +788,27 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               // ADDED: monitoring failures are isolated inside the observer and
               // cannot stop the existing order refresh or stock synchronizer.
               await this.ingestFbsStockMonitoringOrders(clientId, refreshed.orders);
+              if (healthCycle) healthCycle.orders = 'Завершено';
               const stocksStartedAt = Date.now();
               await runWithWildberriesRequestPriority(
                 'background',
-                () => this.autoSyncFbsStocksForClient(clientId),
+                () => this.autoSyncFbsStocksForClient(clientId, healthCycle),
               );
               const stocksDurationMs = Date.now() - stocksStartedAt;
               // FIX: a financial timeout must not prevent publishing current physical stock.
               if (isolatedBilling) {
                 try {
                   const billing = await this.ensureFbsProcessingCharges(clientId, value.orders.filter(order => order.category === 'shipped'));
+                  if (healthCycle) healthCycle.billing = 'Завершено';
                   if (this.fbsOrdersCache.get(clientId)?.value === value) {
                     value.orders = value.orders.map(order => ({ ...order, billing: billing.get(fbsOrderKey(order)) ?? order.billing ?? null }));
                   }
                 } catch (caught) {
+                  if (healthCycle) healthCycle.billing = wbHealthError(caught);
                   this.logger.warn(`FBS billing refresh failed for client ${clientId}; stock refresh already attempted: ${marketplaceErrorText(caught)}`);
                 }
               }
+              if (healthCycle && !isolatedBilling) healthCycle.billing = 'Завершено';
               if (ordersDurationMs >= 2_000 || stocksDurationMs >= 2_000) {
                 this.logger.log(
                   `FBS background refresh timing for client ${clientId}: orders=${ordersDurationMs}ms, stocks=${stocksDurationMs}ms.`,
@@ -809,6 +817,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             } catch (caught) {
               const message = caught instanceof Error ? caught.message : 'Unknown marketplace API error';
               this.logger.warn(`FBS refresh failed for client ${clientId}: ${message}`);
+              if (healthCycle) healthCycle.error = wbHealthError(caught);
+            } finally {
+              await this.syncHealth?.finish(clientId, healthCycle);
             }
             // Let interactive TSD/API requests run between marketplace clients.
             await new Promise<void>((resolve) => setImmediate(resolve));
@@ -1128,7 +1139,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
   }
 
-  private async autoSyncFbsStocksForClient(clientId: string) {
+  private async autoSyncFbsStocksForClient(clientId: string, healthCycle?: { error: string | null }) {
     if (
       typeof this.prisma.clientMarketplaceConnection?.findMany !== 'function'
     ) {
@@ -1167,6 +1178,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         try {
           await this.syncAllocatedFbsStocksForConnection(connection.clientId, connection.id);
         } catch (caught) {
+          if (healthCycle) healthCycle.error = wbHealthError(caught);
           this.logger.warn(
             `Automatic allocated FBS stock sync failed for connection ${connection.id}: ${marketplaceErrorText(caught)}`,
           );

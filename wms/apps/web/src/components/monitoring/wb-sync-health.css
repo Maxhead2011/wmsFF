@@ -1,0 +1,8 @@
+.wb-sync-health header { display: flex; gap: 24px; justify-content: space-between; align-items: center; }
+.wb-sync-health article { background: white; border: 1px solid #d8e0eb; border-radius: 16px; padding: 20px; margin-top: 20px; }
+.wb-sync-health p { color: #53617a; line-height: 1.5; }
+.wb-sync-health [role=alert], .wb-sync-health [role=status] { color: #9c3e09; background: #fff3df; padding: 12px; border-radius: 8px; }
+.wb-sync-health__scroll { overflow-x: auto; }
+.wb-sync-health table { width: 100%; border-collapse: collapse; text-align: left; }
+.wb-sync-health th, .wb-sync-health td { padding: 12px; border-bottom: 1px solid #e1e7f0; vertical-align: top; }
+.wb-sync-health th { background: #f4f7fb; }
