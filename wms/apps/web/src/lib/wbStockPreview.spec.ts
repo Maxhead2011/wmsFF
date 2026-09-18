@@ -1,5 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { wbStockPreview } from './wbStockPreview';
+import { filterWbStockPreviewRows, WB_STOCK_PREVIEW_LIMIT, wbStockPreview } from './wbStockPreview';
+
+// TEST: zero stock must not occupy preview rows; a reserve is not missing stock.
+it('filters zero stock before pagination while retaining reserved/blocked available goods', () => {
+  const empty = Array.from({ length: 101 }, (_, i) => ({ name: 'Пустой', barcode: `${i}`, available: 0, publishable: 0 }));
+  const present = { name: 'Реглан', barcode: '123', available: 3, publishable: 0 };
+  const rows = [...empty, present];
+  expect(filterWbStockPreviewRows(rows, '').slice(0, WB_STOCK_PREVIEW_LIMIT)).toEqual([present]);
+  expect(filterWbStockPreviewRows(rows, 'РЕГ')).toEqual([present]);
+  expect(filterWbStockPreviewRows(rows, '123')).toEqual([present]);
+  expect(filterWbStockPreviewRows(rows, 'Пустой')).toEqual([]);
+  expect(rows).toHaveLength(102);
+});
+
+// TEST: limiting output does not hide later products from barcode search.
+it('shows 30 available positions and can find a position beyond the limit', () => {
+  const rows = Array.from({ length: 45 }, (_, i) => ({ name: `Товар ${i}`, barcode: `barcode-${i}`, available: 1 }));
+  expect(filterWbStockPreviewRows(rows, '').slice(0, WB_STOCK_PREVIEW_LIMIT)).toEqual(rows.slice(0, 30));
+  expect(filterWbStockPreviewRows(rows, 'barcode-44').slice(0, WB_STOCK_PREVIEW_LIMIT)).toEqual([rows[44]]);
+});
 describe('WB stock preview', () => {
   // TEST: sums are conserved, rounding is deterministic, invalid drafts are not publishable.
   const shares = [{ warehouseId: 'a', percent: 60, isPrimary: true }, { warehouseId: 'b', percent: 40, isPrimary: false }];

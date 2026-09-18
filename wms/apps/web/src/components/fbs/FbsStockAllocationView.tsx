@@ -1,4 +1,4 @@
-import { wbStockPreview } from '../../lib/wbStockPreview';
+import { filterWbStockPreviewRows, WB_STOCK_PREVIEW_LIMIT, wbStockPreview } from '../../lib/wbStockPreview';
 import { canEditWbReserve, WbClientReserveEditor, WbAnalysisSettings, WbPublicationChecks, WbSkuRuleEditor } from './WbStockFineControls';
 import { AlertTriangle, CheckCircle2, Copy, KeyRound, RefreshCw, Save, ShieldCheck, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -37,6 +37,7 @@ export function FbsStockAllocationView({
   const isClient = session.user.roleCodes.includes('CLIENT');
   const canEditFineSettings = !isClient && !session.user.isDemo && session.user.permissionCodes.includes('system:admin');
   const canEditReserve = canEditWbReserve(session.user, clientId);
+  const previewRows = useMemo(() => filterWbStockPreviewRows(data?.analysis?.rows ?? [], stockSearch), [data?.analysis?.rows, stockSearch]);
 
   const load = useCallback(async (preserveDraft = false) => {
     if (!clientId || !connectionId) return;
@@ -201,12 +202,13 @@ export function FbsStockAllocationView({
           {!data.analysis.hasEvidence && <p>Недостаточно истории: сохраняем ручное распределение.</p>}
           <details><summary>Как рассчитана рекомендация</summary>{data.analysis.warnings.map(text => <p key={text}>{text}</p>)}<p>Доли товара следуют спросу; для Y используется 75% рекомендации и 25% ручных долей, для Z — 50/50. Общая рекомендация взвешена количеством товара к продаже. После применения общие доли действуют на все позиции. Пересчёт — при открытии раздела; автоматического сохранения нет.</p></details>
           <label>Поиск позиции <input value={stockSearch} onChange={e => setStockSearch(e.target.value)} placeholder="Название или штрихкод" /></label>
-          <p>Предпросмотр по введённым долям и порогу малого остатка, до сохранения. Показаны первые 100 подходящих позиций из {data.analysis.rows.length}; для остальных используйте поиск.</p>
+          <p>Предпросмотр по введённым долям и порогу малого остатка, до сохранения. Только позиции с доступным остатком. Показано {Math.min(WB_STOCK_PREVIEW_LIMIT, previewRows.length)} из {previewRows.length} найденных позиций; для остальных используйте поиск.</p>
           <div className="fbs-allocation__table-wrap"><table className="fbs-allocation__table"><thead><tr><th>Товар / ШК</th><th>Доступно</th><th>Резерв</th><th>На WB с учётом лимита</th><th>ABC–XYZ / спрос</th><th>По складам</th></tr></thead><tbody>
-            {data.analysis.rows.filter(row => `${row.name} ${row.barcode}`.toLocaleLowerCase().includes(stockSearch.toLocaleLowerCase())).slice(0, 100).map(row => <tr key={row.skuId}>
+            {previewRows.slice(0, WB_STOCK_PREVIEW_LIMIT).map(row => <tr key={row.skuId}>
               <td>{row.name}<br />{row.barcode}{canEditReserve && <WbSkuRuleEditor key={`${clientId}:${row.skuId}:${row.ruleUpdatedAt}`} session={session} clientId={clientId} row={row} onSaved={() => load(true)} />}{row.blocked && <strong> · Публикация запрещена</strong>}</td><td>{row.available}</td><td>{row.reserveQuantity}</td><td>{row.publishable}</td><td>{row.abc}{row.xyz} · {row.orderedUnits} шт.{!row.sufficient && ' · мало данных'}<br />Покрытие: {row.coveredDays ?? 0} дней; без наличия: {row.stockoutDays ?? 0} складо-дней</td>
               <td>{wbStockPreview(row.publishable, threshold, shares)?.map(a => `${shares.find(s => s.warehouseId === a.warehouseId)?.warehouseName ?? a.warehouseId}: ${a.amount}`).join('; ') ?? 'Проверьте доли и основной склад'}</td>
             </tr>)}
+            {!previewRows.length && <tr><td colSpan={6}>Нет подходящих позиций с доступным остатком.</td></tr>}
           </tbody></table></div>
         </>}
       </section>}
