@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { FbsPanel } from './FbsPanel';
-import { createFbsRequest, fetchFbsOrders, deliverFbsSupplies, fetchFbsSupplyDeliveryOptions } from '../../lib/api';
+import { assembleFbsOrders, createFbsRequest, fetchFbsOrders, deliverFbsSupplies, fetchFbsSupplyDeliveryOptions } from '../../lib/api';
 
 // TEST: exercise the panel's actual callbacks and request payload with the project's hook harness.
 const hooks = vi.hoisted(() => ({ values: [] as any[], cursor: 0 }));
@@ -26,7 +26,7 @@ vi.mock('../../lib/rememberedClient', async () => ({
 vi.mock('../../lib/api', async () => ({
   ...await vi.importActual<typeof import('../../lib/api')>('../../lib/api'),
   fetchFbsSupplyDeliveryOptions: vi.fn(), deliverFbsSupplies: vi.fn(),
-  createFbsRequest: vi.fn(), fetchFbsOrders: vi.fn(),
+  assembleFbsOrders: vi.fn(), createFbsRequest: vi.fn(), fetchFbsOrders: vi.fn(),
 }));
 const orders = [{ connectionId: 'cabinet', id: 'order', supplyId: 'WB-GI-1' }] as any;
 const options = {
@@ -51,6 +51,33 @@ function deliveryButton() { return dialogControls().find(node => node.type === '
 async function openDialog() { await elements(render()).find(node => typeof node.props?.onDeliver === 'function').props.onDeliver(orders); }
 
 describe('FBS supply delivery confirmation', () => {
+  // TEST: "Передаю" finishes on the confirmed operation; the catalogue can still be pending.
+  it('keeps unrelated rows and releases assemble while catalogue refresh is pending', async () => {
+    const selected = { id: '123', connectionId: 'cabinet', marketplace: 'WILDBERRIES', supplierStatus: 'new', category: 'active' };
+    const other = { ...selected, id: '456' };
+    render();
+    const stateIndex = hooks.values.findIndex(value => value?.status === 'idle' && 'data' in value);
+    const data = { client: { id: 'client' }, connected: true, orders: [selected, other],
+      connections: [{ id: 'cabinet', marketplace: 'WILDBERRIES', accountName: 'WB' }], fetchedAt: 'old',
+      counts: { all: 2, active: 2, shipped: 0, cancelled: 0, archive: 0 }, deliveryPlan: { destination: 'PICKUP_POINT' } };
+    hooks.values[stateIndex] = { status: 'ready', data, error: '' };
+    vi.mocked(fetchFbsOrders).mockReturnValue(new Promise(() => {}));
+    vi.mocked(assembleFbsOrders).mockResolvedValue({ assembled: 1, ordersPartial: true,
+      deliveryPlan: { requiresCargoPlaces: false }, supplies: [],
+      orders: { ...data, orders: [{ ...selected, supplierStatus: 'confirm', supplyId: 'WB-GI-test' }] },
+    } as any);
+    await elements(render()).find(node => node.props?.onAssemble).props.onAssemble([selected]);
+    elements(render()).find(node => node.props?.mode === 'assemble' && node.props?.onSubmit).props.onSubmit();
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect(assembleFbsOrders).toHaveBeenCalledOnce();
+    expect(hooks.values[stateIndex].data.orders).toEqual([
+      expect.objectContaining({ id: '123', supplierStatus: 'confirm' }), other,
+    ]);
+    expect(hooks.values[stateIndex].data.counts.all).toBe(2);
+    expect(hooks.values).not.toContain('assemble');
+    expect(vi.mocked(fetchFbsOrders)).toHaveBeenCalledOnce();
+    expect(hooks.values.some(value => typeof value === 'string' && value.includes('переведено в сборку'))).toBe(true);
+  });
   // TEST: a saved request is complete even while the display snapshot is still loading.
   it.each(['single', 'groups'])('releases %s creation without waiting for the catalogue refresh', async (mode) => {
     vi.mocked(createFbsRequest).mockResolvedValue({ request: { id: 'saved', number: 1117 }, linkedOrders: 1 } as any);
