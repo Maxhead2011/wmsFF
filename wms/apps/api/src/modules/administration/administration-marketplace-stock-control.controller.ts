@@ -21,6 +21,16 @@ export class AdministrationMarketplaceStockControlController {
     return this.control.updateReserve(clientId, body, user);
   }
 
+  @Put(':clientId/skus/:skuId')
+  updateSkuRule(@Param('clientId') clientId: string, @Param('skuId') skuId: string, @Body() body: { reserve?: unknown; blocked?: unknown; expectedUpdatedAt?: unknown }, @CurrentUser() user: AuthUser) {
+    return this.control.updateFineRule(clientId, skuId, body, user);
+  }
+
+  @Put(':clientId/analysis')
+  updateAnalysis(@Param('clientId') clientId: string, @Body() body: { maxShareChange?: unknown; expectedUpdatedAt?: unknown }, @CurrentUser() user: AuthUser) {
+    return this.control.updateFineRule(clientId, null, body, user);
+  }
+
   @Put(':clientId')
   update(@Param('clientId') clientId: string, @Body() body: { enabled?: unknown; expectedEnabled?: unknown }, @CurrentUser() user: AuthUser) {
     return this.control.update(clientId, body, user);

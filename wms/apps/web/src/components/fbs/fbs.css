@@ -5561,6 +5561,20 @@
 .fbs-allocation__error { color: #9b3424; background: #fff0ed; }
 .fbs-allocation-empty { color: #607185; background: #f4f7fa; }
 
+/* FIX: keep fine settings readable within the stock allocation screen. */
+.fbs-allocation__fine { padding: 20px; border: 1px solid #dde5ed; border-radius: 16px; background: #fff; }
+.fbs-allocation__fine h4 { margin: 0 0 14px; font-size: 17px; }
+.fbs-allocation__fine p { margin: 10px 0; line-height: 1.5; color: #526477; }
+.fbs-allocation__fine label { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 10px 0; }
+.fbs-allocation__fine input:not([type=checkbox]), .fbs-allocation__fine select { padding: 8px 10px; border: 1px solid #cbd6e2; border-radius: 8px; font: inherit; }
+.fbs-allocation__fine input[type=number] { width: 95px; }
+.fbs-allocation__fine summary { cursor: pointer; color: #1765ad; padding: 6px 0; }
+.fbs-allocation__sku-rule[open] { min-width: 230px; padding: 8px; margin-top: 8px; background: #f4f7fa; border-radius: 8px; }
+.fbs-allocation__fine [role=alert] { color: #a12b22; }
+.fbs-allocation__proof { display: inline-block; padding: 5px 9px; border-radius: 10px; }
+.fbs-allocation__proof.is-confirmed { color: #14653e; background: #eaf8f0; }
+.fbs-allocation__proof.is-pending { color: #9b3424; background: #fff0ed; }
+
 @media (max-width: 860px) {
   .fbs-allocation__header { flex-direction: column; }
   .fbs-allocation__switch { min-width: 0; width: 100%; }

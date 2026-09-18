@@ -2,6 +2,47 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// FIX: outbound acknowledgement is distinct from a verified marketplace quantity.
+model WbStockPublicationCheck {
+  id               String   @id @default(uuid())
+  runId            String
+  clientId         String
+  connectionId     String
+  warehouseId      String
+  skuId            String?
+  chrtId           Int
+  phase            String
+  calculatedAmount Int
+  sentAmount       Int?
+  observedAmount   Int?
+  status           String   @default("PLANNED")
+  sentAt           DateTime?
+  checkedAt        DateTime?
+  error            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([clientId, connectionId, createdAt])
+  @@index([runId])
+  @@unique([connectionId, warehouseId, chrtId])
+}
+
+// FIX: hourly bit masks distinguish unknown time from observed zero stock.
+model WbStockAvailabilityDay {
+  id            String   @id @default(uuid())
+  clientId      String
+  connectionId  String
+  warehouseId   String
+  skuId         String
+  day           String
+  observedMask  Int      @default(0)
+  positiveMask  Int      @default(0)
+  updatedAt     DateTime @updatedAt
+
+  @@unique([connectionId, warehouseId, skuId, day])
+  @@index([clientId, connectionId, day])
+}
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")

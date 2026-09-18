@@ -18,3 +18,9 @@ export function wbStockAfterReserve(available: number, rule: WbStockReserve = NO
   const reserve = rule.mode === 'PERCENT' ? Math.ceil(quantity * rule.value / 100) : rule.mode === 'UNITS' ? rule.value : 0;
   return Math.max(0, quantity - reserve);
 }
+
+// FIX: explicit product exclusion wins over both client and product reserve settings.
+export function reserveForSku(plan: { reserve?: WbStockReserve; skuRules?: Map<string, { reserve: WbStockReserve | null; blocked: boolean }> }, skuId: string): WbStockReserve {
+  const rule = plan.skuRules?.get(skuId);
+  return rule?.blocked ? { mode: 'PERCENT', value: 100 } : rule?.reserve ?? plan.reserve ?? NO_WB_RESERVE;
+}

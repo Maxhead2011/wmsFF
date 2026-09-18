@@ -1,4 +1,5 @@
 import { wbStockPreview } from '../../lib/wbStockPreview';
+import { WbAnalysisSettings, WbPublicationChecks, WbSkuRuleEditor } from './WbStockFineControls';
 import { AlertTriangle, CheckCircle2, Copy, KeyRound, RefreshCw, Save, ShieldCheck, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -34,17 +35,21 @@ export function FbsStockAllocationView({
   const [keyName, setKeyName] = useState('Внешняя система учёта');
   const [generatedKey, setGeneratedKey] = useState('');
   const isClient = session.user.roleCodes.includes('CLIENT');
+  const canEditFineSettings = !isClient && !session.user.isDemo && session.user.permissionCodes.includes('system:admin');
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (preserveDraft = false) => {
     if (!clientId || !connectionId) return;
     setStatus('loading');
     setError('');
     try {
       const response = await fetchFbsStockAllocation(session.accessToken, clientId, connectionId);
       setData(response);
-      setShares(response.shares);
-      setEnabled(response.policy.enabled);
-      setThreshold(response.policy.lowStockThreshold);
+      // FIX: checking WB or saving an exception must not discard unsaved warehouse shares.
+      if (!preserveDraft) {
+        setShares(response.shares);
+        setEnabled(response.policy.enabled);
+        setThreshold(response.policy.lowStockThreshold);
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Не удалось загрузить распределение остатков.');
     } finally {
@@ -163,7 +168,7 @@ export function FbsStockAllocationView({
         <div>
           <p className="eyebrow">Распределение остатков WB</p>
           <h3>Один физический остаток — несколько рабочих складов</h3>
-          <p>Склады берутся из маршрутизации FBS. Суммарная публикация никогда не превышает свободный остаток WMS.</p>
+          <p>Склады берутся из маршрутизации FBS. Свободный остаток WMS распределяется между ними с учётом резерва и лимитов.</p>
         </div>
         <label className="fbs-allocation__switch">
           <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
@@ -182,10 +187,12 @@ export function FbsStockAllocationView({
         </div>
       ) : null}
 
-      {data?.fineSettingsEnabled && <section className="admin-card">
+      {data?.fineSettingsEnabled && <section className="fbs-allocation__fine">
         <h4>Резерв и предпросмотр WB</h4>
         <p>Резерв: {data.reserve?.mode === 'UNITS' ? `${data.reserve.value} шт. на позицию` : data.reserve?.mode === 'PERCENT' ? `${data.reserve.value}% на позицию` : 'без резерва'}. Изменение — Администрирование → Контроль остатков на МП.</p>
         <p>{data.publicationEnabled ? 'Отправка WB разрешена.' : 'Отправка WB для клиента выключена. Сохранённые доли не будут выгружены.'}</p>
+        <p>При включённом автоуправлении сохранённые изменения доступного остатка — после инвентаризации, актуализации короба, сортировки и перемещения — учитываются в очередном фоновом пересчёте. Обычное перемещение между коробами одного склада не увеличивает общий остаток.</p>
+        {canEditFineSettings && data.analysisSettings && <WbAnalysisSettings key={`${clientId}:${data.analysisSettings.updatedAt}`} session={session} clientId={clientId} settings={data.analysisSettings} onSaved={() => load(true)} />}
         {!data.analysis && <p>Сначала задайте доли в сумме 100% и основной склад, сохраните настройки и обновите раздел.</p>}
         {data.analysis && <>
           <p>Расчёт на {new Date(data.analysis.generatedAt).toLocaleString('ru-RU')}. {data.analysis.orderedUnits} заказанных единиц; {data.analysis.excluded} записей исключено из-за даты, склада или отсутствия привязки к товару.</p>
@@ -195,12 +202,14 @@ export function FbsStockAllocationView({
           <p>Предпросмотр по введённым долям и порогу малого остатка, до сохранения. Показаны первые 100 подходящих позиций из {data.analysis.rows.length}; для остальных используйте поиск.</p>
           <div className="fbs-allocation__table-wrap"><table className="fbs-allocation__table"><thead><tr><th>Товар / ШК</th><th>Доступно</th><th>Резерв</th><th>На WB с учётом лимита</th><th>ABC–XYZ / спрос</th><th>По складам</th></tr></thead><tbody>
             {data.analysis.rows.filter(row => `${row.name} ${row.barcode}`.toLocaleLowerCase().includes(stockSearch.toLocaleLowerCase())).slice(0, 100).map(row => <tr key={row.skuId}>
-              <td>{row.name}<br />{row.barcode}</td><td>{row.available}</td><td>{row.reserveQuantity}</td><td>{row.publishable}</td><td>{row.abc}{row.xyz} · {row.orderedUnits} шт.{!row.sufficient && ' · мало данных'}</td>
+              <td>{row.name}<br />{row.barcode}{canEditFineSettings && <WbSkuRuleEditor key={`${clientId}:${row.skuId}:${row.ruleUpdatedAt}`} session={session} clientId={clientId} row={row} onSaved={() => load(true)} />}{row.blocked && <strong> · Публикация запрещена</strong>}</td><td>{row.available}</td><td>{row.reserveQuantity}</td><td>{row.publishable}</td><td>{row.abc}{row.xyz} · {row.orderedUnits} шт.{!row.sufficient && ' · мало данных'}<br />Покрытие: {row.coveredDays ?? 0} дней; без наличия: {row.stockoutDays ?? 0} складо-дней</td>
               <td>{wbStockPreview(row.publishable, threshold, shares)?.map(a => `${shares.find(s => s.warehouseId === a.warehouseId)?.warehouseName ?? a.warehouseId}: ${a.amount}`).join('; ') ?? 'Проверьте доли и основной склад'}</td>
             </tr>)}
           </tbody></table></div>
         </>}
       </section>}
+
+      {data?.fineSettingsEnabled && <WbPublicationChecks key={`${clientId}:${connectionId}`} session={session} clientId={clientId} connectionId={connectionId} data={data} onSaved={() => load(true)} />}
 
       <div className="fbs-allocation__rules">
         <label>

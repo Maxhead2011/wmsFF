@@ -494,6 +494,13 @@ export class MarketplaceConnectionsController {
     return this.connections.syncFbsStockAllocation(dto, user);
   }
 
+  // FIX: verify actual WB amounts without sending new stock quantities.
+  @Post('fbs/stocks/allocation/check')
+  @RequirePermissions()
+  checkFbsStockPublication(@Body() dto: SyncFbsStockAllocationDto, @CurrentUser() user: AuthUser) {
+    return this.connections.checkFbsStockPublication(dto, user);
+  }
+
   @Post('fbs/stocks/allocation/api-keys')
   @RequirePermissions()
   createFbsStockIntegrationKey(
