@@ -278,9 +278,9 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'tsd',
     name: 'ТСД',
     prefixes: ['/tsd', '/tsd/requests/:id/fbo'],
-    routeCount: 91, // FIX: FBO plan, idempotent action and confirmed WB box workbook.
+    routeCount: 93, // FIX: compact FBO acknowledgement and read-only operation-status handlers.
     description: 'Приёмка, размещение, сборка FBS/ФБО, перемещения и синхронизация ТСД.',
-    logic: ['Выдаёт следующее действие сборщику.', 'Проверяет паллет-сорт, короб, товар и КИЗ.', 'Фиксирует сканы, операции и восстановление сессий устройства.', 'При включённом WMS_FBO_TWO_STAGE_ENABLED ведёт отбор ФБО, упаковку и финальные сканы всех коробов перед файлом WB.'],
+    logic: ['Выдаёт следующее действие сборщику.', 'Проверяет паллет-сорт, короб, товар и КИЗ.', 'Фиксирует сканы, операции и восстановление сессий устройства.', 'При включённом WMS_FBO_TWO_STAGE_ENABLED ведёт отбор ФБО, упаковку и финальные сканы всех коробов перед файлом WB.', 'При WMS_FBO_FAST_ACK_ENABLED подтверждает сохранённую операцию отдельно от маршрута и проверяет её результат без повторного списания.'],
     dependencies: ['Основная БД', 'Склад', 'JWT устройства'],
   },
   {

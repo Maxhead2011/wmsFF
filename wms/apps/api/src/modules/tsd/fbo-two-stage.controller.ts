@@ -26,6 +26,19 @@ export class FboTwoStageController {
     return this.fbo.act(id, dto, user);
   }
 
+  // FIX: opt-in terminals receive a durable receipt independently of the expensive route.
+  @Post('actions/ack')
+  @RequirePermissions('stock:write')
+  acknowledge(@Param('id') id: string, @Body() dto: FboActionDto, @CurrentUser() user: AuthUser) {
+    return this.fbo.actAcknowledged(id, dto, user);
+  }
+
+  @Post('actions/status')
+  @RequirePermissions('stock:write')
+  operationStatus(@Param('id') id: string, @Body() dto: FboActionDto, @CurrentUser() user: AuthUser) {
+    return this.fbo.operationStatus(id, dto, user);
+  }
+
   @Get('wb-packages.xlsx')
   @RequirePermissions('stock:read')
   async file(@Param('id') id: string, @CurrentUser() user: AuthUser, @Res({ passthrough: true }) res: Response) {

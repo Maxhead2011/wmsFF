@@ -22,6 +22,11 @@ public interface WmsApi {
     Call<TsdFboPlan> getFboPlan(@Header("Authorization") String authorization,@Path("id") String id);
     @POST("api/v1/tsd/requests/{id}/fbo/actions")
     Call<TsdFboPlan> actFbo(@Header("Authorization") String authorization,@Path("id") String id,@Body Map<String,String> request);
+    // FIX: only opted-in LOGOFF terminals use independent acknowledgement and read-only status.
+    @POST("api/v1/tsd/requests/{id}/fbo/actions/ack")
+    Call<TsdFboAcknowledgement> acknowledgeFbo(@Header("Authorization") String authorization,@Path("id") String id,@Body Map<String,String> request);
+    @POST("api/v1/tsd/requests/{id}/fbo/actions/status")
+    Call<TsdFboAcknowledgement> fboOperationStatus(@Header("Authorization") String authorization,@Path("id") String id,@Body Map<String,String> request);
     // FIX: isolated physical KIZ search; no stock or assembly operations.
     @GET("api/v1/tsd/kiz-search")
     Call<List<TsdKizSearch>> listKizSearch(@Header("Authorization") String authorization);

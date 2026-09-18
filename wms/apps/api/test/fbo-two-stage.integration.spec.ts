@@ -71,6 +71,56 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         vi.unstubAllEnvs();
     });
     afterAll(() => p.$disconnect());
+    // TEST: committed picks must be acknowledged even when rebuilding the route fails.
+    it('acknowledges a pick and its retry without rebuilding the route or debiting twice', async () => {
+        vi.stubEnv('WMS_FBO_FAST_ACK_ENABLED', 'true');
+        await act('START');
+        const dto = { action: 'PICK_UNIT', operationId: randomUUID(), sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[2].value };
+        const plan = vi.spyOn(svc, 'plan').mockRejectedValue(new Error('Route is slow'));
+        const ack = await (svc as any).actAcknowledged(request, dto, user);
+        expect(ack).toMatchObject({ accepted: true, requestId: request, operationId: dto.operationId, action: 'PICK_UNIT' });
+        expect(await (svc as any).operationStatus(request, dto, user)).toMatchObject(ack);
+        const transaction = vi.fn().mockRejectedValue(new Error('No transaction slot'));
+        (svc as any).prisma = new Proxy(p, { get: (target, key) => key === '$transaction' ? transaction : Reflect.get(target, key) });
+        expect(await (svc as any).actAcknowledged(request, dto, user)).toMatchObject(ack);
+        expect(transaction).not.toHaveBeenCalled();
+        expect(plan).not.toHaveBeenCalled();
+        expect(await p.fboAssemblyUnit.count({ where: { requestId: request, markId: marks[2].id } })).toBe(1);
+        expect((await p.stockBalance.aggregate({ where: { clientId: client, skuId: sku, status: 'AVAILABLE' }, _sum: { quantity: true } }))._sum.quantity).toBe(4);
+    });
+    // TEST: checking an unknown operation is read-only; an acknowledgement is bound to actor and payload.
+    it('checks operation status without mutation and rejects mismatched replay data', async () => {
+        vi.stubEnv('WMS_FBO_FAST_ACK_ENABLED', 'true');
+        await act('START');
+        const dto = { action: 'PICK_UNIT', operationId: randomUUID(), sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[2].value };
+        expect(await (svc as any).operationStatus(request, dto, user)).toMatchObject({ accepted: false, operationId: dto.operationId });
+        expect(await p.fboAssemblyUnit.count({ where: { requestId: request } })).toBe(0);
+        await (svc as any).actAcknowledged(request, dto, user);
+        await expect((svc as any).operationStatus(request, { ...dto, kiz: marks[3].value }, user)).rejects.toThrow('другими данными');
+        await expect((svc as any).operationStatus(request, dto, { ...user, id: randomUUID() })).rejects.toThrow('Client access denied');
+        await p.fboAssemblyAction.update({ where: { id: `${request}:${dto.operationId}` }, data: { actorId: randomUUID() } });
+        await expect((svc as any).operationStatus(request, dto, user)).rejects.toThrow('другими данными');
+    });
+    // TEST: sold/default configuration retains the existing full-plan API and does not expose fast writes.
+    it('requires explicit enablement for fast acknowledgements', async () => {
+        vi.stubEnv('WMS_FBO_FAST_ACK_ENABLED', 'false');
+        expect(await svc.plan(request, user)).toMatchObject({ fastAcknowledgementSupported: false });
+        await expect((svc as any).actAcknowledged(request, { action: 'START', operationId: randomUUID() }, user)).rejects.toThrow();
+        expect(await p.fboAssemblyAction.count({ where: { requestId: request } })).toBe(0);
+        expect(await act('START')).toMatchObject({ phase: 'PICKING' });
+    });
+    // TEST: simultaneous retries share one transaction result, including after request edits.
+    it('acknowledges concurrent retries once and retains receipts after composition changes', async () => {
+        vi.stubEnv('WMS_FBO_FAST_ACK_ENABLED', 'true');
+        await act('START');
+        const dto = { action: 'PICK_UNIT', operationId: randomUUID(), sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[2].value };
+        const responses = await Promise.all([svc.actAcknowledged(request, dto, user), svc.actAcknowledged(request, dto, user)]);
+        expect(responses.every(r => r.accepted)).toBe(true);
+        expect(await p.fboAssemblyUnit.count({ where: { requestId: request } })).toBe(1);
+        await p.clientRequestItem.update({ where: { id: line }, data: { quantity: 0 } });
+        expect(await svc.operationStatus(request, dto, user)).toMatchObject({ accepted: true });
+        await expect(svc.actAcknowledged(request, { ...dto, operationId: randomUUID() }, user)).rejects.toThrow();
+    });
     // TEST: unknown physical KIZ is registered and consumed atomically, without a recount.
     it('binds a new unit scan once and retries without another stock debit', async () => {
         vi.stubEnv('WMS_FBO_PICK_BIND_KIZ', 'true');
