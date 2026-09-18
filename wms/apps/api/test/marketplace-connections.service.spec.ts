@@ -103,6 +103,7 @@ describe('MarketplaceConnectionsService', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it('расшифровывает конфликт WB 409 вместе с кодом и проблемным заказом', () => {
@@ -3293,7 +3294,9 @@ describe('MarketplaceConnectionsService', () => {
     });
   });
 
-  it('creates an idempotent FBS processing charge when an order is shipped', async () => {
+  // TEST: daily transactions preserve exact tariffs, shared daily logistics and source keys.
+  it.each(['false', 'true'])('creates an idempotent FBS processing charge with daily transactions=%s', async (enabled) => {
+    vi.stubEnv('WMS_FBS_BILLING_DAILY_TRANSACTIONS', enabled);
     const fbsService = {
       id: 'service-fbs',
       code: 'FBS_PROCESSING',

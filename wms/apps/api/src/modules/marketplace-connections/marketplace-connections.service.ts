@@ -764,10 +764,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
                   )
                 : undefined;
               const ordersStartedAt = Date.now();
+              const isolatedBilling = process.env.WMS_FBS_BILLING_DAILY_TRANSACTIONS === 'true';
               // ADDED: background refresh yields to an interactive TSD/Web request.
               const refreshed = await runWithWildberriesRequestPriority(
                 'background',
-                () => this.loadFbsOrders(clientId, previousOrderStates),
+                () => this.loadFbsOrders(clientId, previousOrderStates, isolatedBilling ? { billingMode: 'skip' } : {}),
               );
               const value = previous
                 ? this.mergeIncrementalFbsOrders(previous, refreshed)
@@ -789,6 +790,17 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
                 () => this.autoSyncFbsStocksForClient(clientId),
               );
               const stocksDurationMs = Date.now() - stocksStartedAt;
+              // FIX: a financial timeout must not prevent publishing current physical stock.
+              if (isolatedBilling) {
+                try {
+                  const billing = await this.ensureFbsProcessingCharges(clientId, value.orders.filter(order => order.category === 'shipped'));
+                  if (this.fbsOrdersCache.get(clientId)?.value === value) {
+                    value.orders = value.orders.map(order => ({ ...order, billing: billing.get(fbsOrderKey(order)) ?? order.billing ?? null }));
+                  }
+                } catch (caught) {
+                  this.logger.warn(`FBS billing refresh failed for client ${clientId}; stock refresh already attempted: ${marketplaceErrorText(caught)}`);
+                }
+              }
               if (ordersDurationMs >= 2_000 || stocksDurationMs >= 2_000) {
                 this.logger.log(
                   `FBS background refresh timing for client ${clientId}: orders=${ordersDurationMs}ms, stocks=${stocksDurationMs}ms.`,
@@ -26617,6 +26629,24 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   private async ensureFbsProcessingCharges(clientId: string, orders: FbsOrderSummary[]) {
+    if (process.env.WMS_FBS_BILLING_DAILY_TRANSACTIONS === 'true') {
+      // FIX: preserve the whole day's logistics calculation and global financial lock,
+      // without keeping the client's entire history in one transaction.
+      const byDay = new Map<string, FbsOrderSummary[]>();
+      for (const shipment of groupFbsOrdersByShipment(orders).values()) {
+        const day = fbsBillingDayKey(fbsShipmentServiceDate(shipment));
+        const group = byDay.get(day) ?? [];
+        group.push(...shipment);
+        byDay.set(day, group);
+      }
+      const result = new Map<string, NonNullable<FbsOrderSummary['billing']>>();
+      for (const day of [...byDay.keys()].sort()) {
+        const charges = await runBillingMutation(this.prisma, db =>
+          withBillingDb(this, db).ensureFbsProcessingChargesLocked(clientId, byDay.get(day)!));
+        for (const [key, charge] of charges) result.set(key, charge);
+      }
+      return result;
+    }
     // FIX: lock before source-charge reads, not only when the resulting invoice is written.
     return runBillingMutation(this.prisma, (db) =>
       withBillingDb(this, db).ensureFbsProcessingChargesLocked(clientId, orders));
