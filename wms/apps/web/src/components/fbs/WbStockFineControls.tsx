@@ -1,8 +1,35 @@
 import { useState } from 'react';
-import { checkFbsStockPublication, updateWbAnalysisSettings, updateWbSkuRule, type AuthSession, type FbsStockAllocationResponse, type WbStockReserve } from '../../lib/api';
+import { checkFbsStockPublication, updateWbStockReserve, updateWbAnalysisSettings, updateWbSkuRule, type AuthSession, type FbsStockAllocationResponse, type WbStockReserve } from '../../lib/api';
 
 type Row = NonNullable<FbsStockAllocationResponse['analysis']>['rows'][number];
 type Context = { session: AuthSession; clientId: string; onSaved: () => Promise<void> };
+// FIX: only explicitly writable client assignments may edit client-side stock rules.
+export function canEditWbReserve(user: AuthSession['user'], clientId: string) {
+  if (user.isDemo) return false;
+  if (user.roleCodes.includes('CLIENT')) return user.permissionCodes.includes('stock:read') && user.clientIds.includes(clientId) && user.writableClientIds.includes(clientId);
+  return user.permissionCodes.includes('system:admin');
+}
+
+export function WbClientReserveEditor({ session, clientId, onSaved, data }: Context & { data: FbsStockAllocationResponse }) {
+  const [reserve, setReserve] = useState<WbStockReserve>(data.reserve ?? { mode: 'NONE', value: 0 });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  async function save() {
+    setBusy(true); setError('');
+    try { await updateWbStockReserve(session.accessToken, clientId, reserve, data.reserveUpdatedAt ?? null); await onSaved(); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Не удалось сохранить резерв.'); }
+    finally { setBusy(false); }
+  }
+  return <details><summary>Изменить резерв клиента</summary>
+    <label>Резерв каждой позиции<select value={reserve.mode} disabled={busy} onChange={e => setReserve({ mode: e.target.value as WbStockReserve['mode'], value: 0 })}>
+      <option value="NONE">Без резерва</option><option value="UNITS">В штуках</option><option value="PERCENT">В процентах</option>
+    </select></label>
+    {reserve.mode !== 'NONE' && <label>Величина резерва<input type="number" min={0} max={reserve.mode === 'PERCENT' ? 100 : 1000000} step={1} disabled={busy} value={reserve.value} onChange={e => setReserve({ ...reserve, value: Number(e.target.value) })} /></label>}
+    <p>Резерв применяется ко всем позициям клиента перед распределением на WB. Исключения товаров имеют приоритет. Сохранение не включает выгрузку и не меняет физические остатки.</p>
+    <button type="button" disabled={busy || !Number.isSafeInteger(reserve.value) || reserve.value < 0 || reserve.value > (reserve.mode === 'PERCENT' ? 100 : 1000000)} onClick={() => void save()}>Сохранить резерв</button>
+    {error && <p role="alert">{error}</p>}
+  </details>;
+}
 // FIX: an explicit per-SKU rule overrides the client reserve, not physical warehouse stock.
 export function WbSkuRuleEditor({ session, clientId, onSaved, row }: Context & { row: Row }) {
   const [mode, setMode] = useState<WbStockReserve['mode'] | 'INHERIT'>(row.reserveOverride?.mode ?? 'INHERIT');

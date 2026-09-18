@@ -17,11 +17,14 @@ export class AdministrationMarketplaceStockControlController {
   list(@CurrentUser() user: AuthUser) { return this.control.list(user); }
 
   @Put(':clientId/reserve')
+  // FIX: service checks writable client assignment; other administration remains restricted.
+  @RequirePermissions('stock:read')
   updateReserve(@Param('clientId') clientId: string, @Body() body: { reserve?: unknown; expectedUpdatedAt?: unknown }, @CurrentUser() user: AuthUser) {
     return this.control.updateReserve(clientId, body, user);
   }
 
   @Put(':clientId/skus/:skuId')
+  @RequirePermissions('stock:read')
   updateSkuRule(@Param('clientId') clientId: string, @Param('skuId') skuId: string, @Body() body: { reserve?: unknown; blocked?: unknown; expectedUpdatedAt?: unknown }, @CurrentUser() user: AuthUser) {
     return this.control.updateFineRule(clientId, skuId, body, user);
   }

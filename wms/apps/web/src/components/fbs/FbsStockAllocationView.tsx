@@ -1,5 +1,5 @@
 import { wbStockPreview } from '../../lib/wbStockPreview';
-import { WbAnalysisSettings, WbPublicationChecks, WbSkuRuleEditor } from './WbStockFineControls';
+import { canEditWbReserve, WbClientReserveEditor, WbAnalysisSettings, WbPublicationChecks, WbSkuRuleEditor } from './WbStockFineControls';
 import { AlertTriangle, CheckCircle2, Copy, KeyRound, RefreshCw, Save, ShieldCheck, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -36,6 +36,7 @@ export function FbsStockAllocationView({
   const [generatedKey, setGeneratedKey] = useState('');
   const isClient = session.user.roleCodes.includes('CLIENT');
   const canEditFineSettings = !isClient && !session.user.isDemo && session.user.permissionCodes.includes('system:admin');
+  const canEditReserve = canEditWbReserve(session.user, clientId);
 
   const load = useCallback(async (preserveDraft = false) => {
     if (!clientId || !connectionId) return;
@@ -189,7 +190,8 @@ export function FbsStockAllocationView({
 
       {data?.fineSettingsEnabled && <section className="fbs-allocation__fine">
         <h4>Резерв и предпросмотр WB</h4>
-        <p>Резерв: {data.reserve?.mode === 'UNITS' ? `${data.reserve.value} шт. на позицию` : data.reserve?.mode === 'PERCENT' ? `${data.reserve.value}% на позицию` : 'без резерва'}. Изменение — Администрирование → Контроль остатков на МП.</p>
+        <p>Резерв: {data.reserve?.mode === 'UNITS' ? `${data.reserve.value} шт. на позицию` : data.reserve?.mode === 'PERCENT' ? `${data.reserve.value}% на позицию` : 'без резерва'}.</p>
+        {canEditReserve && <WbClientReserveEditor key={`${clientId}:${data.reserveUpdatedAt}`} session={session} clientId={clientId} data={data} onSaved={() => load(true)} />}
         <p>{data.publicationEnabled ? 'Отправка WB разрешена.' : 'Отправка WB для клиента выключена. Сохранённые доли не будут выгружены.'}</p>
         <p>При включённом автоуправлении сохранённые изменения доступного остатка — после инвентаризации, актуализации короба, сортировки и перемещения — учитываются в очередном фоновом пересчёте. Обычное перемещение между коробами одного склада не увеличивает общий остаток.</p>
         {canEditFineSettings && data.analysisSettings && <WbAnalysisSettings key={`${clientId}:${data.analysisSettings.updatedAt}`} session={session} clientId={clientId} settings={data.analysisSettings} onSaved={() => load(true)} />}
@@ -202,7 +204,7 @@ export function FbsStockAllocationView({
           <p>Предпросмотр по введённым долям и порогу малого остатка, до сохранения. Показаны первые 100 подходящих позиций из {data.analysis.rows.length}; для остальных используйте поиск.</p>
           <div className="fbs-allocation__table-wrap"><table className="fbs-allocation__table"><thead><tr><th>Товар / ШК</th><th>Доступно</th><th>Резерв</th><th>На WB с учётом лимита</th><th>ABC–XYZ / спрос</th><th>По складам</th></tr></thead><tbody>
             {data.analysis.rows.filter(row => `${row.name} ${row.barcode}`.toLocaleLowerCase().includes(stockSearch.toLocaleLowerCase())).slice(0, 100).map(row => <tr key={row.skuId}>
-              <td>{row.name}<br />{row.barcode}{canEditFineSettings && <WbSkuRuleEditor key={`${clientId}:${row.skuId}:${row.ruleUpdatedAt}`} session={session} clientId={clientId} row={row} onSaved={() => load(true)} />}{row.blocked && <strong> · Публикация запрещена</strong>}</td><td>{row.available}</td><td>{row.reserveQuantity}</td><td>{row.publishable}</td><td>{row.abc}{row.xyz} · {row.orderedUnits} шт.{!row.sufficient && ' · мало данных'}<br />Покрытие: {row.coveredDays ?? 0} дней; без наличия: {row.stockoutDays ?? 0} складо-дней</td>
+              <td>{row.name}<br />{row.barcode}{canEditReserve && <WbSkuRuleEditor key={`${clientId}:${row.skuId}:${row.ruleUpdatedAt}`} session={session} clientId={clientId} row={row} onSaved={() => load(true)} />}{row.blocked && <strong> · Публикация запрещена</strong>}</td><td>{row.available}</td><td>{row.reserveQuantity}</td><td>{row.publishable}</td><td>{row.abc}{row.xyz} · {row.orderedUnits} шт.{!row.sufficient && ' · мало данных'}<br />Покрытие: {row.coveredDays ?? 0} дней; без наличия: {row.stockoutDays ?? 0} складо-дней</td>
               <td>{wbStockPreview(row.publishable, threshold, shares)?.map(a => `${shares.find(s => s.warehouseId === a.warehouseId)?.warehouseName ?? a.warehouseId}: ${a.amount}`).join('; ') ?? 'Проверьте доли и основной склад'}</td>
             </tr>)}
           </tbody></table></div>

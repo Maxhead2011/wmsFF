@@ -18,13 +18,18 @@ export class MarketplaceStockControlService {
   constructor(private readonly prisma: PrismaService, private readonly scopes: ClientScopeService) {}
 
   async reserve(clientId: string) {
-    if (!fineStockSettingsEnabled()) return { ...NO_WB_RESERVE };
+    return (await this.reserveSettings(clientId)).reserve;
+  }
+
+  // FIX: value and optimistic-lock version come from the same database read.
+  async reserveSettings(clientId: string) {
+    if (!fineStockSettingsEnabled()) return { reserve: { ...NO_WB_RESERVE }, reserveUpdatedAt: null };
     const setting = await this.prisma.systemSetting.findUnique({ where: { key: RESERVE_PREFIX + clientId } });
-    return setting ? parseWbStockReserve(setting.value) : { ...NO_WB_RESERVE };
+    return { reserve: setting ? parseWbStockReserve(setting.value) : { ...NO_WB_RESERVE }, reserveUpdatedAt: setting?.updatedAt.toISOString() ?? null };
   }
 
   async updateReserve(clientId: string, body: { reserve?: unknown; expectedUpdatedAt?: unknown }, user: AuthUser) {
-    this.requireAdmin(user);
+    this.requireReserveEditor(user, clientId);
     this.scopes.requireClientAccess(user, clientId, 'write');
     if (!fineStockSettingsEnabled()) throw new ForbiddenException('Тонкие настройки WB не включены.');
     let value;
@@ -65,7 +70,9 @@ export class MarketplaceStockControlService {
   }
 
   async updateFineRule(clientId: string, skuId: string | null, body: { reserve?: unknown; blocked?: unknown; maxShareChange?: unknown; expectedUpdatedAt?: unknown }, user: AuthUser) {
-    this.requireAdmin(user); this.scopes.requireClientAccess(user, clientId, 'write');
+    if (skuId) this.requireReserveEditor(user, clientId);
+    else this.requireAdmin(user);
+    this.scopes.requireClientAccess(user, clientId, 'write');
     if (!fineStockSettingsEnabled()) throw new ForbiddenException('Тонкие настройки WB не включены.');
     if (body.expectedUpdatedAt !== null && typeof body.expectedUpdatedAt !== 'string') throw new BadRequestException('Передайте версию настройки.');
     let value: { reserve: ReturnType<typeof parseWbStockReserve> | null; blocked: boolean } | { maxShareChange: number };
@@ -101,6 +108,15 @@ export class MarketplaceStockControlService {
     if (!await this.isEnabled(clientId)) {
       throw new ForbiddenException('Контроль остатков на МП через WMS отключён для клиента. Остатками управляет отдел продаж. Включить контроль можно в разделе «Администрирование → Контроль остатков на МП».');
     }
+  }
+
+  // FIX: client managers need explicit writable assignment even with mixed administrative roles.
+  private requireReserveEditor(user: AuthUser, clientId: string) {
+    if (user.roleCodes.includes('CLIENT')) {
+      if (!user.isDemo && fineStockSettingsEnabled() && user.permissionCodes.includes('stock:read') && user.clientIds.includes(clientId) && user.writableClientIds.includes(clientId)) return;
+      throw new ForbiddenException('Нет права изменять резерв этого клиента.');
+    }
+    this.requireAdmin(user);
   }
 
   private requireAdmin(user: AuthUser) {

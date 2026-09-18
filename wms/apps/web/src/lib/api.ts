@@ -3542,6 +3542,7 @@ export type FbsStocksResponse = {
 
 export type FbsStockAllocationResponse = {
   fineSettingsEnabled?: boolean;
+  reserveUpdatedAt?: string | null;
   analysisSettings?: { maxShareChange: number; updatedAt: string | null };
   publicationChecks?: Array<{ id: string; warehouseId: string; skuId: string | null; chrtId: number; calculatedAmount: number; sentAmount: number | null; observedAmount: number | null; status: string; sentAt: string | null; checkedAt: string | null; error: string | null }>;
   reserve?: WbStockReserve;
