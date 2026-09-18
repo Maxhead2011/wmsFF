@@ -401,7 +401,8 @@ export class TsdDeviceController {
   @ApiBearerAuth()
   @RequirePermissions('stock:read')
   getAssemblyRequest(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.assembly.getRequestPlan(id, user);
+    // FIX: avoid building the legacy instruction when opening FBO on a terminal.
+    return this.assembly.getDeviceRequestPlan(id, user);
   }
 
   @Post('requests/:id/fbs-kiz-conflicts/:taskId/resolve')

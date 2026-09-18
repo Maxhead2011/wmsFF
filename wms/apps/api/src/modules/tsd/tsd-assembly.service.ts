@@ -161,6 +161,18 @@ export class TsdAssemblyService {
     }));
   }
 
+  async getDeviceRequestPlan(requestId: string, user: AuthUser) {
+    // FIX: the dedicated FBO terminal screen loads its own plan. Building the
+    // legacy picking document first can exceed the terminal's network timeout.
+    // Preserve the full response for web clients, FBS and other installations.
+    if (user.deviceId && this.fbo && fboTwoStageEnabled() && await this.fbo.eligible(requestId, user)) {
+      const fbo = await this.fbo.plan(requestId, user);
+      return { id: fbo.requestId, title: fbo.title, assemblyMode: 'FBO_TWO_STAGE',
+        storesWithoutBoxes: false, fbo };
+    }
+    return this.getRequestPlan(requestId, user);
+  }
+
   async getRequestPlan(requestId: string, user: AuthUser) {
     const exists = await this.prisma.clientRequest.findUnique({
       where: { id: requestId },
