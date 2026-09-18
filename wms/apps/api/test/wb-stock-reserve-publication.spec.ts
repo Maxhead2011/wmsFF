@@ -3,18 +3,22 @@ import { MarketplaceConnectionsService } from '../src/modules/marketplace-connec
 import { MarketplaceStockControlService } from '../src/modules/marketplace-connections/marketplace-stock-control.service';
 describe('WB reserve publication integration', () => { afterEach(() => vi.restoreAllMocks());
   // TEST: the reserve is applied once to the pool, before actual warehouse PUT batches.
-  it('splits ten free units minus three reserve into four and three', async () => {
+  it.each([
+    { available: 10, lowStock: undefined, expected: [4, 3] },
+    { available: 4, lowStock: { threshold: 5, reserveUnits: 1 }, expected: [2, 1] },
+    { available: 5, lowStock: { threshold: 5, reserveUnits: 1 }, expected: [1, 1] },
+  ])('applies one reserve before sending stock to warehouses: %j', async ({ available, lowStock, expected }) => {
     const publications = ['1', '2'].map(warehouseId => ({ id: warehouseId, clientId: 'c', connectionId: 'conn', warehouseId, skuId: 's', enabled: true, saleLimit: null, sku: { id: 's', marketplaceProductId: '10:20' } }));
     const db: any = { clientMarketplaceConnection: { findFirst: vi.fn(async () => ({ id: 'conn', clientId: 'c', apiKey: 'test', fbsWarehouseId: '1' })) }, fbsStockPublication: { findMany: vi.fn(async () => publications), update: vi.fn(async () => ({})), updateMany: vi.fn(async () => ({})) }, $transaction: async (items: any) => Promise.all(items) };
     const service: any = new MarketplaceConnectionsService(db, {} as never);
     service.stockAllocation = { activePolicy: vi.fn(async () => ({ id: 'policy', primaryWarehouseId: '1', lowStockThreshold: 0, overrides: [], shares: [{ warehouseId: '1', percent: 60, isPrimary: true }, { warehouseId: '2', percent: 40, isPrimary: false }] })), markSync: vi.fn() };
     vi.spyOn(service, 'resolveFbsExecutionWarehouseId').mockResolvedValue('msk');
-    vi.spyOn(service, 'calculateFbsRelabelStockPlan').mockResolvedValue({ reserve: { mode: 'UNITS', value: 3 }, quantities: new Map([['s', { skuId: 's', chrtId: 20, sellable: 10 }]]), meta: new Map() });
+    vi.spyOn(service, 'calculateFbsRelabelStockPlan').mockResolvedValue({ reserve: { mode: 'UNITS', value: 3, lowStock }, quantities: new Map([['s', { skuId: 's', chrtId: 20, sellable: available }]]), meta: new Map() });
     const send = vi.spyOn(service, 'putWildberriesStocks').mockResolvedValue({});
     const result = await service.syncAllocatedFbsStocksForConnection('c', 'conn');
-    expect(result.publishedAmount).toBe(7);
-    expect(send).toHaveBeenCalledWith('c', 'test', '1', [{ chrtId: 20, amount: 4 }]);
-    expect(send).toHaveBeenCalledWith('c', 'test', '2', [{ chrtId: 20, amount: 3 }]);
+    expect(result.publishedAmount).toBe(expected[0] + expected[1]);
+    expect(send).toHaveBeenCalledWith('c', 'test', '1', [{ chrtId: 20, amount: expected[0] }]);
+    expect(send).toHaveBeenCalledWith('c', 'test', '2', [{ chrtId: 20, amount: expected[1] }]);
   });
 // TEST: the original sender published 15, leaving no additional client reserve.
   it('applies client reserve to the actual manual WB publication', async () => {

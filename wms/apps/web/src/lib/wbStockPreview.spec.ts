@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { filterWbStockPreviewRows, WB_STOCK_PREVIEW_LIMIT, wbStockPreview } from './wbStockPreview';
+import { filterWbStockPreviewRows, WB_STOCK_PREVIEW_LIMIT, wbStockPreview, wbReservePreviewAmount } from './wbStockPreview';
+
+// TEST: administrative example must match publication on both sides of the strict threshold.
+it('shows the replacement reserve below the threshold and the main reserve at it', () => {
+  const rule = { mode: 'UNITS', value: 3, lowStock: { threshold: 5, reserveUnits: 1 } } as const;
+  expect([0, 1, 4, 5, 6].map(n => wbReservePreviewAmount(n, rule))).toEqual([0, 0, 3, 2, 3]);
+  expect(wbReservePreviewAmount(4, { ...rule, mode: 'PERCENT', value: 50 })).toBe(3);
+  expect(wbReservePreviewAmount(5, { ...rule, mode: 'PERCENT', value: 50 })).toBe(2);
+});
 
 // TEST: zero stock must not occupy preview rows; a reserve is not missing stock.
 it('filters zero stock before pagination while retaining reserved/blocked available goods', () => {

@@ -1,4 +1,5 @@
 import { filterWbStockPreviewRows, WB_STOCK_PREVIEW_LIMIT, wbStockPreview } from '../../lib/wbStockPreview';
+import { WbLowStockReserveSummary } from './WbLowStockReserveFields';
 import { canEditWbReserve, WbClientReserveEditor, WbAnalysisSettings, WbPublicationChecks, WbSkuRuleEditor } from './WbStockFineControls';
 import { AlertTriangle, CheckCircle2, Copy, KeyRound, RefreshCw, Save, ShieldCheck, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -191,6 +192,7 @@ export function FbsStockAllocationView({
 
       {data?.fineSettingsEnabled && <section className="fbs-allocation__fine">
         <h4>Резерв и предпросмотр WB</h4>
+        <WbLowStockReserveSummary rule={data.reserve?.lowStock} />
         <p>Резерв: {data.reserve?.mode === 'UNITS' ? `${data.reserve.value} шт. на позицию` : data.reserve?.mode === 'PERCENT' ? `${data.reserve.value}% на позицию` : 'без резерва'}.</p>
         {canEditReserve && <WbClientReserveEditor key={`${clientId}:${data.reserveUpdatedAt}`} session={session} clientId={clientId} data={data} onSaved={() => load(true)} />}
         <p>{data.publicationEnabled ? 'Отправка WB разрешена.' : 'Отправка WB для клиента выключена. Сохранённые доли не будут выгружены.'}</p>

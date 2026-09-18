@@ -43,6 +43,20 @@ it('allows a scoped client manager to save reserves and product rules, but not a
   await expect(service.updateReserve('c', body, manager)).rejects.toThrow();
   expect(db.systemSetting.upsert).toHaveBeenCalledTimes(2);
 });
+// TEST: optional low-stock settings survive storage/audit and can be removed explicitly by omission.
+it('saves and removes low-stock rules with versioned client and SKU settings', async () => {
+  vi.stubEnv('WMS_WB_STOCK_FINE_SETTINGS', 'true');
+  const { service, db } = setup();
+  const reserve = { mode: 'UNITS', value: 3, lowStock: { threshold: 5, reserveUnits: 1 } };
+  const saved = await service.updateReserve('c', { reserve, expectedUpdatedAt: null }, admin);
+  expect(await service.reserve('c')).toEqual(reserve);
+  expect(db.auditLog.create.mock.calls[0][0].data.payload.after).toEqual(reserve);
+  await service.updateFineRule('c', 's', { reserve, blocked: false, expectedUpdatedAt: null }, admin);
+  expect((await service.skuRules('c')).get('s')?.reserve).toEqual(reserve);
+  await service.updateReserve('c', { reserve: { mode: 'UNITS', value: 3 }, expectedUpdatedAt: saved.reserveUpdatedAt }, admin);
+  expect(await service.reserve('c')).toEqual({ mode: 'UNITS', value: 3 });
+});
+
 // TEST: sold/default installation must never load or apply the new reserve.
 it('preserves the legacy default and fails closed for malformed enabled settings', async () => {
   const { service, db, settings } = setup();
