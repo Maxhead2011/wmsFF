@@ -1,6 +1,6 @@
 # FBO manual packing, release 193
 
-Authorized integration of PR219 with the exact published API and Android192 sources. Preserve fast acknowledgements, durable retry/checkpoint recovery, parallel packing, scanner focus, and every unrelated module. The reviewed production overlay is published-source.patch; binary voice assets are in PR219. No database migration.
+Authorized integration of PR219 with the exact published API and Android192 sources. Preserve fast acknowledgements, durable retry/checkpoint recovery, parallel packing, scanner focus, and every unrelated module. The reviewed production overlay is published-source.patch (apply with --unidiff-zero); binary voice assets are in PR219. No database migration.
 
 Only our API enables WMS_FBO_MANUAL_PACKING_ENABLED=true via the derived image; other existing environment values remain unchanged. Only LOGOFF Android offers the new menu. The APK is signed with the existing certificate and upgraded over 192 without clearing device data.
 
