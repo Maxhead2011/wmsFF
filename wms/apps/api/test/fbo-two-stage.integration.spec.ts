@@ -71,6 +71,63 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         vi.unstubAllEnvs();
     });
     afterAll(() => p.$disconnect());
+    // TEST: manual additions after STOP_PICK extend the physical target once and retain actor/KIZ evidence.
+    it.each(['within-plan', 'above-plan', 'new-sku'])('records manual packing after closing: %s', async mode => {
+        vi.stubEnv('WMS_FBO_CLOSE_PICK_ENABLED', 'true');
+        vi.stubEnv('WMS_FBO_MANUAL_PACKING_ENABLED', 'true');
+        if (mode === 'above-plan') await p.clientRequestItem.update({ where: { id: line }, data: { quantity: 2 } });
+        await act('START');
+        await act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole });
+        await act('STOP_PICK');
+        const originalClosure = (await p.fboAssembly.findUniqueOrThrow({ where: { requestId: request } })).pickClosure as any;
+        await act('PACK_BOX', { sourceBoxCode: 'FFL_' + whole });
+        await act('MANUAL_OPEN_BOX', { targetBoxCode: 'FFL_' + target });
+        const scannedMark = mode === 'new-sku' ? await p.productMark.create({ data: { clientId: client, skuId: other, boxId: partial, value: `010468099259845521MANUALADD0001\u001d91EE12\u001d92${client}`, status: 'AVAILABLE' } }) : marks[2];
+        const barcode = mode === 'new-sku' ? '2051234567883' : '2051234567890';
+        const dto = { action: 'MANUAL_PACK_UNIT', operationId: randomUUID(), targetBoxCode: 'FFL_' + target, barcode, kiz: scannedMark.value };
+        expect(await svc.act(request, dto, user)).toMatchObject({ phase: 'PACKING', needed: 3, picked: 3, packed: 3 });
+        await svc.act(request, dto, user);
+        const closure = (await p.fboAssembly.findUniqueOrThrow({ where: { requestId: request } })).pickClosure as any;
+        expect(closure.closedAt).toBe(originalClosure.closedAt);
+        expect(closure.requested).toEqual(originalClosure.requested);
+        expect(Object.values(closure.quantities).reduce((a: number, b: any) => a + b, 0)).toBe(3);
+        const events = await p.auditLog.findMany({ where: { entityId: request, action: 'FBO_MANUAL_PACK_RECORDED' } });
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({ userId: uid, payload: { operationId: dto.operationId, barcode, kiz: scannedMark.value, sourceBoxCode: 'FFL_' + partial, targetBoxCode: 'FFL_' + target, afterPickClosed: true, packingTargetBefore: 2, packingTargetAfter: 3, recoveredPick: true } });
+        const history = await p.clientRequestEvent.findMany({ where: { requestId: request, title: 'Ручное добавление при упаковке ФБО' } });
+        expect(history).toHaveLength(1);
+        expect(history[0].createdByUserId).toBe(uid);
+        expect(history[0].body).toContain(barcode);
+        expect(history[0].body).toContain(scannedMark.value.split('\u001d')[0]);
+        expect(history[0].body).toContain('FFL_' + partial);
+        expect(history[0].body).toContain('FFL_' + target);
+        await act('CLOSE_BOX', { targetBoxCode: 'FFL_' + target });
+        await act('SORTED');
+        for (const id of [whole, target]) await act('CONFIRM_BOX', { targetBoxCode: 'FFL_' + id });
+        await act('FINISH');
+        const workbook = XLSX.read((await svc.wbFile(request, user)).content, { type: 'buffer' });
+        const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 }) as any[][];
+        expect(rows.slice(1).reduce((sum, row) => sum + row[1], 0)).toBe(3);
+        expect(rows.slice(1).map(row => row[2]).sort()).toEqual(['FFL_' + whole, 'FFL_' + target].sort());
+        await stock.shipClientRequest({ requestId: request, idempotencyKey: randomUUID() }, user);
+    });
+    // TEST: manually packing an existing pick records the scan without increasing demand or debiting twice.
+    it('audits an already picked manual unit once and rejects a second physical packing', async () => {
+        vi.stubEnv('WMS_FBO_CLOSE_PICK_ENABLED', 'true');
+        vi.stubEnv('WMS_FBO_MANUAL_PACKING_ENABLED', 'true');
+        await act('START');
+        await act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[2].value });
+        await act('STOP_PICK');
+        await act('MANUAL_OPEN_BOX', { targetBoxCode: 'FFL_' + target });
+        const dto = { action: 'MANUAL_PACK_UNIT', operationId: randomUUID(), targetBoxCode: 'FFL_' + target, barcode: '2051234567890', kiz: marks[2].value };
+        expect(await svc.act(request, dto, user)).toMatchObject({ needed: 1, picked: 1, packed: 1 });
+        await svc.act(request, dto, user);
+        await expect(svc.act(request, { ...dto, operationId: randomUUID() }, user)).rejects.toThrow();
+        const events = await p.auditLog.findMany({ where: { entityId: request, action: 'FBO_MANUAL_PACK_RECORDED' } });
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({ userId: uid, payload: { recoveredPick: false, packingTargetBefore: 1, packingTargetAfter: 1, kiz: marks[2].value, afterPickClosed: true } });
+        expect((await p.stockMovement.aggregate({ where: { clientId: client, status: 'AVAILABLE' }, _sum: { quantity: true } }))._sum.quantity).toBe(-1);
+    });
     // TEST: closing a short pick preserves the order, prevents late picks, and ships only physical units.
     it('closes a partial pick and completes actual packing without reducing the original order', async () => {
         vi.stubEnv('WMS_FBO_CLOSE_PICK_ENABLED', 'true');

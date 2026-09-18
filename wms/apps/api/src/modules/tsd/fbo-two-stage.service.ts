@@ -151,7 +151,7 @@ export class FboTwoStageService {
                 wholeBoxQuantity: decision.allowed ? decision.quantity : 0,
                 remainderQuantity: Math.max(0, box.balances.filter(b => b.status === 'AVAILABLE').reduce((sum, b) => sum + Math.max(0, b.quantity), 0) - tasks.reduce((sum, t) => sum + t.quantity, 0)) });
         }
-        return { requestId: r.id, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED', lines, route,
+        return { manualPackingEnabled: process.env.WMS_FBO_MANUAL_PACKING_ENABLED === 'true', requestId: r.id, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED', lines, route,
             // FIX: existing terminals receive the actual packing target; WMS also retains the original plan.
             closePickSupported: fboClosePickEnabled(), pickClosed: !!assembly?.pickClosure,
             plannedNeeded: r.items.reduce((s, i) => s + i.quantity, 0),
@@ -173,6 +173,9 @@ export class FboTwoStageService {
     private async executeAction(id: string, dto: FboActionDto, user: AuthUser) {
         if (!fboTwoStageEnabled())
             throw new NotFoundException('Двухэтапная сборка ФБО выключена.');
+        // FIX: explicitly enabled only for our deployment; old clients and sold VMs retain their behavior.
+        if (dto.action.startsWith('MANUAL_') && process.env.WMS_FBO_MANUAL_PACKING_ENABLED !== 'true')
+            throw new BadRequestException('Ручное добавление при упаковке выключено.');
         await this.lock.assertStockMovementsAllowed();
         // FIX: one durable operation id and a request lock make retries and concurrent terminals safe.
         const execute = () => {
@@ -315,7 +318,7 @@ export class FboTwoStageService {
                     throw new ConflictException('Сначала отберите все единицы заявки.');
                 await tx.fboAssembly.update({ where: { requestId: id }, data: { phase: 'PACKING' } });
             }
-            else if (dto.action === 'OPEN_BOX') {
+            else if (dto.action === 'OPEN_BOX' || dto.action === 'MANUAL_OPEN_BOX') {
                 requirePacking();
                 const target = await this.target(tx, r, dto.targetBoxCode);
                 await this.requireIdleBox(tx, target.id, id);
@@ -327,10 +330,14 @@ export class FboTwoStageService {
                 else {
                     if (await tx.stockBalance.count({ where: { boxId: target.id, quantity: { not: 0 } } }) || await tx.productMark.count({ where: { boxId: target.id } }))
                         throw new ConflictException('Для упаковки нужен пустой короб.');
-                    if (!units.some(u => !u.wholeBox && u.state === 'PICKED'))
+                    if (dto.action !== 'MANUAL_OPEN_BOX' && !units.some(u => !u.wholeBox && u.state === 'PICKED'))
                         throw new ConflictException('Все отдельные единицы уже вложены.');
                     await tx.fboAssemblyBox.create({ data: { requestId: id, boxId: target.id, activeBoxId: target.id, boxCode: target.code } });
                 }
+            }
+            else if (dto.action === 'MANUAL_PACK_UNIT') {
+                requirePacking();
+                await this.manualPack(tx, r, dto, user, key);
             }
             else if (dto.action === 'PACK_UNIT') {
                 requirePacking();
@@ -430,6 +437,93 @@ export class FboTwoStageService {
                 await new Promise(resolve => setTimeout(resolve, 25 * (attempt + 1)));
             }
         }
+    }
+    // FIX: recover a missed physical pick and pack atomically using the exact scanned mark.
+    private async manualPack(tx: Prisma.TransactionClient, r: Request, dto: FboActionDto, user: AuthUser, key: string) {
+        if (!dto.kiz || !dto.barcode) throw new BadRequestException('Отсканируйте ШК и КИЗ товара.');
+        // FIX: retain the original closure and expand only the physically confirmed packing target.
+        const assembly = await tx.fboAssembly.findUniqueOrThrow({ where: { requestId: r.id } });
+        const previousItems = closedFboItems(r.items, assembly.pickClosure);
+        const packingTargetBefore = previousItems.reduce((sum, i) => sum + i.quantity, 0);
+        let packingTargetAfter = packingTargetBefore, addedQuantity = 0;
+        const mark = await this.exactMark(tx, dto.kiz);
+        const sku = await tx.sku.findUnique({ where: { id: mark.skuId }, include: { barcodes: true } });
+        if (mark.clientId !== r.clientId || !sku || sku.clientId !== r.clientId ||
+            !sku.barcodes.some(b => b.value === dto.barcode) && !r.items.some(i => i.skuId === sku.id && i.barcode === dto.barcode))
+            throw new ConflictException('КИЗ не относится к этому товару или клиенту заявки.');
+        const target = await this.box(tx, r, dto.targetBoxCode);
+        await this.requireIdleBox(tx, target.id, r.id);
+        const parcel = await tx.fboAssemblyBox.findUnique({ where: { activeBoxId: target.id } });
+        if (!parcel || parcel.requestId !== r.id || parcel.closedAt || parcel.wholeBox)
+            throw new ConflictException('Сначала откройте короб для ручного добавления.');
+        const existing = await tx.fboAssemblyUnit.findUnique({ where: { activeMarkId: mark.id } });
+        if (existing && (existing.requestId !== r.id || existing.state !== 'PICKED' || existing.wholeBox))
+            throw new ConflictException(existing.requestId === r.id && existing.state === 'PACKED'
+                ? `Товар уже упакован в короб ${existing.targetBoxCode}.`
+                : 'КИЗ уже отобран в другой короб или другую сборку.');
+        let source;
+        if (existing) {
+            source = await tx.box.findUniqueOrThrow({ where: { code: `FBO-PICK-${r.id}` } });
+            if (mark.status !== 'PACKING' || mark.boxId !== source.id)
+                throw new ConflictException('КИЗ перемещён после отбора. Нужна сверка.');
+        } else {
+            if (mark.status !== 'AVAILABLE' || !mark.boxId)
+                throw new ConflictException('КИЗ не имеет доступного складского остатка.');
+            const recordedSource = await tx.box.findUniqueOrThrow({ where: { id: mark.boxId } });
+            source = await this.box(tx, r, recordedSource.code);
+            await this.requireIdleBox(tx, source.id, r.id, true);
+        }
+        if (source.id === target.id) throw new ConflictException('Исходный короб совпадает с коробом упаковки. Нужна сверка.');
+        const movement = await this.move(tx, r, sku.id, source.id, target.id, existing ? 'PACKING' : 'AVAILABLE', 'PACKING', 1, key, user);
+        const changed = await tx.productMark.updateMany({ where: { id: mark.id, boxId: source.id, status: existing ? 'PACKING' : 'AVAILABLE' },
+            data: { boxId: target.id, status: 'PACKING', stockMovementId: movement.id } });
+        if (changed.count !== 1) throw new ConflictException('КИЗ уже перемещён другим сотрудником.');
+        const packed = { state: 'PACKED' as const, targetBoxId: target.id, targetBoxCode: target.code, packedAt: new Date(), packedByUserId: user.id };
+        if (existing) {
+            await tx.fboAssemblyUnit.update({ where: { id: existing.id }, data: packed });
+        } else {
+            const units = await tx.fboAssemblyUnit.findMany({ where: { requestId: r.id, state: { not: 'RETURNED' } } });
+            const lines = remainingFboLines(r.items, units);
+            let line = r.items.find(i => i.skuId === sku.id && lines.some(l => l.id === i.id && l.remaining > 0)) ?? r.items.find(i => i.skuId === sku.id);
+            if (line) {
+                if (!lines.some(l => l.id === line!.id && l.remaining > 0)) {
+                    await tx.clientRequestItem.update({ where: { id: line.id }, data: { quantity: { increment: 1 } } });
+                    addedQuantity = 1;
+                }
+            } else {
+                line = await tx.clientRequestItem.create({ data: { requestId: r.id, skuId: sku.id, barcode: dto.barcode, name: sku.name, quantity: 1,
+                    comment: 'Добавлено вручную при упаковке FBO' }, include: { sku: { include: { barcodes: true } } } });
+                addedQuantity = 1;
+            }
+            await tx.fboAssemblyUnit.create({ data: { requestId: r.id, requestItemId: line.id, skuId: sku.id, barcode: line.barcode!,
+                markId: mark.id, activeMarkId: mark.id, kiz: mark.value, sourceBoxId: source.id, sourceBoxCode: source.code,
+                wholeBox: false, pickedByUserId: user.id, ...packed } });
+            const refreshed = await this.load(tx, r.id, user, 'write');
+            let pickClosure: Prisma.InputJsonObject | undefined;
+            if (assembly.pickClosure) {
+                const quantities = Object.fromEntries(previousItems.map(i => [i.id, i.quantity]));
+                // Do not reduce another line's target if an earlier unit subsequently needs recovery.
+                quantities[line.id] = Math.max(quantities[line.id] ?? 0, units.filter(u => u.requestItemId === line!.id).length + 1);
+                const updated = { ...(assembly.pickClosure as Prisma.JsonObject), quantities };
+                packingTargetAfter = closedFboItems(refreshed.items, updated).reduce((sum, i) => sum + i.quantity, 0);
+                pickClosure = updated;
+            } else packingTargetAfter = refreshed.items.reduce((sum, i) => sum + i.quantity, 0);
+            await tx.fboAssembly.update({ where: { requestId: r.id }, data: { compositionHash: composition(refreshed), ...(pickClosure ? { pickClosure } : {}) } });
+            await this.releaseDisplacedRoutes(tx, source.id, source.code, [sku.id]);
+            await tx.auditLog.create({ data: { userId: user.id, action: 'FBO_MANUAL_PICK_RECOVERED', entity: 'ClientRequest', entityId: r.id,
+                payload: { operationId: dto.operationId, sourceBoxCode: source.code, targetBoxCode: target.code, markId: mark.id, barcode: dto.barcode, addedQuantity } } });
+        }
+        // FIX: every manual addition has one durable audit record, including already picked units.
+        await tx.auditLog.create({ data: { userId: user.id, action: 'FBO_MANUAL_PACK_RECORDED', entity: 'ClientRequest', entityId: r.id,
+            payload: { operationId: dto.operationId, sourceBoxCode: source.code, targetBoxCode: target.code,
+                pickedSourceBoxCode: existing?.sourceBoxCode ?? source.code,
+                skuId: sku.id, markId: mark.id, barcode: dto.barcode, kiz: mark.value, quantity: 1,
+                recoveredPick: !existing, afterPickClosed: !!assembly.pickClosure, addedQuantity,
+                packingTargetBefore, packingTargetAfter } } });
+        // FIX: expose the same event in the request's visible history, in this transaction.
+        await tx.clientRequestEvent.create({ data: { requestId: r.id, clientId: r.clientId, eventType: 'COMMENT',
+            title: 'Ручное добавление при упаковке ФБО', createdByUserId: user.id,
+            body: `${assembly.pickClosure ? 'После завершения отбора. ' : ''}${sku.name} · ШК ${dto.barcode} · КИЗ ${identity(mark.value)}. ${existing?.sourceBoxCode ?? source.code} → ${target.code}. 1 ед. К упаковке: ${packingTargetBefore} → ${packingTargetAfter}.` } });
     }
     private async box(tx: Prisma.TransactionClient, r: Request, code?: string) {
         if (!code)
