@@ -25,6 +25,11 @@ export type InternalApiDefinition = {
 // ADDED: Explicit registry documents every controller group loaded by AppModule.
 // Keeping it declarative avoids a global interceptor and therefore does not touch normal API traffic.
 export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object.freeze([
+  // FIX: expose the read-only cycle monitor in the internal API registry.
+  { id: 'wb-sync-health', name: 'Контроль синхронизации WB', prefixes: ['/wb-sync-health'], routeCount: 1,
+    description: 'Сохранённые циклы WB, свежие подтверждения остатков и отдельные ошибки биллинга.',
+    logic: ['Читает последние 20 циклов с учётом прав клиента и филиала.', 'Обновление экрана не запускает отправку остатков.'],
+    dependencies: ['Основная БД', 'WMS_WB_SYNC_HEALTH_ENABLED'] },
   {
     id: 'health',
     name: 'Состояние сервиса',

@@ -1,3 +1,5 @@
+import { WbSyncHealthService } from './wb-sync-health.service';
+import { WbSyncHealthController } from './wb-sync-health.controller';
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { LogisticsModule } from '../logistics/logistics.module';
@@ -17,8 +19,8 @@ import { FbsReshipmentService } from './fbs-reshipment.service';
 
 @Module({
   imports: [AuthModule, LogisticsModule],
-  controllers: [MarketplaceConnectionsController, FbsStockAllocationExternalController, FbsRepeatAssemblyController, FbsReshipmentController],
-  providers: [
+  controllers: [WbSyncHealthController, MarketplaceConnectionsController, FbsStockAllocationExternalController, FbsRepeatAssemblyController, FbsReshipmentController],
+  providers: [WbSyncHealthService,
     MarketplaceStockControlService,
     // FIX: keep current stock-control registration when adding independent repeats.
     FbsRepeatAssemblyService,

@@ -7394,6 +7394,18 @@ export async function fetchTsdMonitoring(accessToken: string) {
 }
 
 // ADDED: refresh starts read-only checks and never changes stock.
+export type WbSyncHealthResponse = {
+  enabled: boolean;
+  items: Array<{ clientId: string; clientName: string; active: boolean; incidentAt: string | null; failures: number;
+    nextCheckAt: string; lastSuccessAt: string | null; checkedAt: string | null;
+    cycles: Array<{ id: string; startedAt: string; finishedAt: string | null; orders: string; billing: string; error: string | null;
+      connections: Array<{ id: string; warehouseId: string | null; proof: { runIds: string[]; confirmed: number; mismatch: number; unknown: number; unconfirmed: number; success: boolean } }> }> }>;
+};
+// FIX: read-only monitor; refreshing this view never publishes stock.
+export function fetchWbSyncHealth(accessToken: string) {
+  return request<WbSyncHealthResponse>('/wb-sync-health', { accessToken });
+}
+
 export async function fetchFbsStockMonitor(
   accessToken: string,
   filter: {

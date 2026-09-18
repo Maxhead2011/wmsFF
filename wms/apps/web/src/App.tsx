@@ -502,9 +502,13 @@ export function App() {
       if (item.warehouseId && item.warehouseId !== session.user.activeWarehouseId && branches.some(branch => branch.id === item.warehouseId)) {
         await selectBranch(item.warehouseId);
       }
-      const targetWorkspace = item.sessionId ? 'inventory' : 'requests';
+      const targetWorkspace = item.type === 'WB_SYNC_HEALTH' ? 'monitoring' : item.sessionId ? 'inventory' : 'requests';
       if (!canKeepWorkspace(session.user, targetWorkspace)) throw new Error('Нет доступа к разделу события.');
-      if (item.sessionId) {
+      if (item.type === 'WB_SYNC_HEALTH') {
+        sessionStorage.setItem('monitoring-surface', 'wb-sync');
+        setActiveWorkspaceId('monitoring');
+        window.dispatchEvent(new Event('wb-sync-health-open'));
+      } else if (item.sessionId) {
         setInventoryNotificationTarget({ sessionId: item.sessionId, auditBoxId: item.auditBoxId, nonce: Date.now() });
         void reportInventoryOpened(session.accessToken, session.user.id, item.sessionId, item.auditBoxId ?? undefined).catch(caught => adminNotifications.setError(caught instanceof Error ? caught.message : 'Не удалось зафиксировать открытие проверки.'));
         setActiveWorkspaceId('inventory');

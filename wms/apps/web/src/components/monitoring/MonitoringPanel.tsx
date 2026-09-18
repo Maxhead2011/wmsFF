@@ -1,23 +1,34 @@
 import { Boxes, RadioTower } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { AuthSession } from '../../lib/api';
 import { FbsStockMonitoringPanel } from './FbsStockMonitoringPanel';
 import { TsdMonitoringPanel } from './TsdMonitoringPanel';
 import './stock-monitoring.css';
+import { WbSyncHealthPanel } from './WbSyncHealthPanel';
+import './wb-sync-health.css';
 
 type Props = { session: AuthSession };
-type MonitorSurface = 'tsd' | 'stock';
+type MonitorSurface = 'tsd' | 'stock' | 'wb-sync';
 
 export function MonitoringPanel({ session }: Props) {
   const canSeeTsd = session.user.permissionCodes.includes('system:admin')
     || session.user.permissionCodes.includes('administration:demo');
   // FIX: клиент сразу попадает в безопасный монитор остатков и не получает
   // даже переключателя внутренней диспетчерской ТСД.
-  const [surface, setSurface] = useState<MonitorSurface>(() => canSeeTsd ? 'tsd' : 'stock');
+  const canSeeSync = session.user.permissionCodes.includes('system:admin') || session.user.roleCodes.some(role => ['ADMIN', 'OWNER'].includes(role));
+  const [surface, setSurface] = useState<MonitorSurface>(() => canSeeSync && sessionStorage.getItem('monitoring-surface') === 'wb-sync' ? 'wb-sync' : canSeeTsd ? 'tsd' : 'stock');
+  useEffect(() => {
+    const open = () => { if (canSeeSync) setSurface('wb-sync'); };
+    window.addEventListener('wb-sync-health-open', open);
+    return () => window.removeEventListener('wb-sync-health-open', open);
+  }, [canSeeSync]);
 
   return (
     <div className="monitoring-hub">
       <nav className="monitoring-hub__switcher" aria-label="Сервисы мониторинга">
+        {canSeeSync ? <button type="button" className={surface === 'wb-sync' ? 'is-active' : ''} aria-pressed={surface === 'wb-sync'} onClick={() => setSurface('wb-sync')}>
+          <RadioTower size={20} aria-hidden="true" /><span><strong>Синхронизация WB</strong><small>Циклы, подтверждения WB и ошибки биллинга</small></span>
+        </button> : null}
         {canSeeTsd ? (
           <button
             type="button"
@@ -40,7 +51,7 @@ export function MonitoringPanel({ session }: Props) {
         </button>
       </nav>
 
-      {surface === 'stock'
+      {surface === 'wb-sync' ? <WbSyncHealthPanel session={session} /> : surface === 'stock'
         ? <FbsStockMonitoringPanel session={session} />
         : <TsdMonitoringPanel session={session} />}
     </div>
