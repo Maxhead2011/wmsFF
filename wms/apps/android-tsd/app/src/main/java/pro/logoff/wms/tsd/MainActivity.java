@@ -8498,6 +8498,13 @@ public class MainActivity extends Activity {
                             error.getMessage(),
                             tr("Ошибка приложения.", "Ilova xatosi.")
                         );
+                    // FIX: a slow server/WB response is not proof that the terminal lost internet.
+                    if ("logoff".equals(BuildConfig.FLAVOR) &&
+                        (screen == Screen.FBS_ASSEMBLY || screen == Screen.FBS_REQUESTS) &&
+                        pro.logoff.wms.tsd.network.FbsRequestTimeouts.isTimeout(error)) {
+                        failureMessage = tr("Сервер не успел ответить. Подтверждение не получено. Повторите отправку; заново сканировать товар не нужно.",
+                            "Server javob berishga ulgurmadi. Tasdiq olinmadi. Yuborishni takrorlang; tovarni qayta skanerlash shart emas.");
+                    }
                     if (screen == Screen.FBS_ASSEMBLY) {
                         showFbsError(failureMessage, !networkFailure);
                         return;

@@ -46,7 +46,7 @@ function fixture(enabled = false) {
   return { service, request, tasks, db, scopes, audits, events };
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 describe('FBS remaining-only local search', () => {
   it('enables local search with no task reset, stock writes, KIZ writes or WB requests', async () => {
@@ -92,7 +92,9 @@ describe('FBS remaining-only local search', () => {
   });
 
   // TEST: run the actual queue allocator against completed and remaining tasks together.
-  it('assigns only the thirteenth order without recreating any completed task or calling WB', async () => {
+  it.each([false, true])('assigns only the thirteenth order; fast-local=%s', async fast => {
+    // TEST: completed orders must not incur stock routing or a second queue load.
+    vi.stubEnv('WMS_FBS_TSD_FAST_LOCAL_ENABLED', String(fast));
     const f = fixture(true); const completedBefore = structuredClone(f.tasks.slice(0, 12));
     const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
     const boxes = [{ code: 'FFL_LKB2507_126', quantity: 1, status: 'AVAILABLE' }];
@@ -122,6 +124,12 @@ describe('FBS remaining-only local search', () => {
     expect(f.db.fbsTsdAssembly.create).not.toHaveBeenCalled();
     expect(f.tasks.slice(0, 12)).toEqual(completedBefore);
     expect(fetch).not.toHaveBeenCalled();
+    expect(f.service.resolveFbsTsdStockSource).toHaveBeenCalledTimes(fast ? 1 : 13);
+    if (fast) {
+      expect(f.service.loadFbsTsdRequestOrders).toHaveBeenCalledWith('client-1', f.request.id);
+      expect(f.service.mergeSyncedFbsTsdRequestOrders).not.toHaveBeenCalled();
+      expect(f.service.fbsTsdRequestFallbackCache.has('client-1')).toBe(false);
+    }
   });
 
   it('cannot finish the missing item before source, barcode and KIZ are scanned', async () => {
