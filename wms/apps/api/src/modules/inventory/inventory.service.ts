@@ -49,7 +49,21 @@ export class InventoryService {
     private readonly archivedEmptyBoxDetach?: ArchivedEmptyBoxPalletDetachService,
   ) {}
 
+  // FIX: overlapping refreshes share only an identical user's read; never cache completed or failed snapshots.
+  private readonly dashboardRequests = new Map<string, ReturnType<InventoryService['dashboardSnapshot']>>();
+
   async dashboard(user: AuthUser, hideResolvedBoxes = false) {
+    if (process.env.WMS_INVENTORY_REVIEW_BATCH_ENABLED !== 'true') return this.dashboardSnapshot(user, hideResolvedBoxes);
+    const key = JSON.stringify([user, hideResolvedBoxes]);
+    const existing = this.dashboardRequests.get(key);
+    if (existing) return existing;
+    const request = this.dashboardSnapshot(user, hideResolvedBoxes);
+    this.dashboardRequests.set(key, request);
+    try { return await request; }
+    finally { if (this.dashboardRequests.get(key) === request) this.dashboardRequests.delete(key); }
+  }
+
+  private async dashboardSnapshot(user: AuthUser, hideResolvedBoxes = false) {
     const globalAccess = hasGlobalInventoryAccess(user);
     const warehouseId = this.resolveScopedWarehouseId(user, 'read');
     const warehouseWhere = warehouseId ? { warehouseId } : {};

@@ -40,5 +40,19 @@ describe('batched pending inventory KIZ reviews',()=>{
   const f=fixture(1);f.db.inventoryAuditBox.findMany.mockResolvedValue([{...f.boxes[0],startedAt:new Date(start.getTime()+1000)}]);
   expect([...await pendingScannedReviewIds(f.db as never,f.boxes)]).toEqual([]);expect(f.db.auditLog.findMany).not.toHaveBeenCalled();
  });
+ // TEST: five-second polling and two tabs must share an outstanding snapshot, but never cross access scopes.
+ it('shares only identical in-flight dashboards and releases failures for retry',async()=>{
+  vi.stubEnv('WMS_INVENTORY_REVIEW_BATCH_ENABLED','true');
+  const service=new InventoryService({} as never,{} as never,{} as never);
+  const user:any={id:'owner',roleCodes:['OWNER'],permissionCodes:['system:admin'],clientScopeMode:'ALL'};
+  let reject!: (e:Error)=>void;
+  const snapshot=vi.spyOn(service as any,'dashboardSnapshot').mockImplementation(()=>new Promise((_,fail)=>{reject=fail}));
+  const first=service.dashboard(user), second=service.dashboard({...user});
+  expect(snapshot.mock.calls.length).toBe(1);
+  const outcomes=Promise.allSettled([first,second]);reject(new Error('retry'));expect((await outcomes).map(r=>r.status)).toEqual(['rejected','rejected']);
+  snapshot.mockResolvedValue({ok:true});await service.dashboard(user);expect(snapshot.mock.calls.length).toBe(2);
+  snapshot.mockClear();await Promise.all([service.dashboard(user),service.dashboard({...user,hiddenClientIds:['private']}),service.dashboard(user,true)]);
+  expect(snapshot.mock.calls.length).toBe(3);
+ });
  it('propagates database errors rather than hiding reviews',async()=>{const f=fixture(1);f.db.auditLog.findMany.mockRejectedValue(new Error('db down'));await expect(pendingScannedReviewIds(f.db as never,f.boxes)).rejects.toThrow('db down');});
 });
