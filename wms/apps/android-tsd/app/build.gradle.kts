@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 186 // FIX: approved LOGOFF launcher icon.
-            versionName = "0.1.186-launcher-icon"
+            versionCode = 187 // FIX: approved LOGOFF launcher icon.
+            versionName = "0.1.187-reliable-picking"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

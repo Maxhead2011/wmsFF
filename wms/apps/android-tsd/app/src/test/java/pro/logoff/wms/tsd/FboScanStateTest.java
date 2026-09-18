@@ -7,6 +7,16 @@ import pro.logoff.wms.tsd.network.TsdFboPlan;
 import static org.junit.Assert.*;
 
 public class FboScanStateTest {
+    // TEST: restoring navigation does not create a stock command and rejects stale source context.
+    @Test public void restoresPositionAndBarcodeOnlyWhileStillNeeded(){
+        FboScanState old=new FboScanState();old.pallet="P";old.source="B";old.barcode="sku";
+        FboScanState restored=new FboScanState();restored.restoreCheckpoint(old.checkpoint());
+        TsdFboPlan p=new TsdFboPlan();p.phase="PICKING";p.boxes=Collections.emptyList();
+        TsdFboPlan.Route r=new TsdFboPlan.Route();r.pallet="P";r.boxCode="B";p.route=Collections.singletonList(r);
+        TsdFboPlan.Line line=new TsdFboPlan.Line();line.barcode="sku";line.remaining=1;p.lines=Collections.singletonList(line);
+        restored.reconcile(p);assertEquals("B",restored.source);assertEquals("sku",restored.barcode);assertNull(restored.pending());
+        p.route=Collections.emptyList();restored.reconcile(p);assertEquals("",restored.source);assertEquals("",restored.barcode);
+    }
     // TEST: a lost response and an app restart retain the same physical count and operation id.
     @Test public void wholeBoxRetryPreservesConfirmedQuantity() {
         FboScanState first=new FboScanState();first.source="BOX";
