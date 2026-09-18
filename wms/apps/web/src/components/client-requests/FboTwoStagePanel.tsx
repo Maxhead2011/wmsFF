@@ -45,7 +45,14 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
   async function download(){try{const file=await downloadFboWbFile(accessToken,plan.requestId);const a=document.createElement('a');const url=URL.createObjectURL(file);a.href=url;a.download='wb-packages.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){setError(String(e));}}
   const hint=plan.phase==='CONTROL'?'ШК короба поставки':plan.phase==='PICKING'&&!source?(pallet?'ШК короба на выбранном паллете':'ШК паллета или короба без паллета'):plan.phase==='PACKING'&&!target?'ШК короба для упаковки или целого отобранного короба':barcode?'КИЗ товара':'ШК товара';
   return <div className="online-execution-modal" role="dialog" aria-modal="true" aria-label="Двухэтапная сборка ФБО"><section className="online-execution-modal__panel" style={{display:'block',maxWidth:1000,width:'95vw',maxHeight:'92vh',overflow:'auto',padding:24}}>
-    <h2>ФБО · {plan.title}</h2><p>Нужно {plan.needed} · Отобрано {plan.picked} · Упаковано {plan.packed}</p>
+    {/* FIX: keep closing the view accessible even while the assembly plan is scrolled. */}
+    <header style={{position:'sticky',top:0,zIndex:2,display:'flex',flexDirection:'row-reverse',alignItems:'center',justifyContent:'space-between',gap:16,background:'var(--surface, #fff)',padding:'8px 0'}}>
+      <button type="button" className="icon-text-button" aria-label="Закрыть просмотр ФБО" title="Закрыть просмотр ФБО" disabled={busy||!!pending} onClick={onClose} style={{flexShrink:0,width:44,height:44,display:'grid',placeItems:'center'}}>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+      <h2 style={{margin:0,overflowWrap:'anywhere'}}>ФБО · {plan.title}</h2>
+    </header>
+    <p>Нужно {plan.needed} · Отобрано {plan.picked} · Упаковано {plan.packed}</p>
     {plan.compositionChanged&&<p role="alert">Состав заявки изменился. Требуется сверка.</p>}
     {plan.shortage>0&&<p role="alert">Недостаточно доступного остатка: {plan.shortage} ед.</p>}
     <h3>{plan.phase==='COMPLETED'?'Поставка проверена':title}</h3>
