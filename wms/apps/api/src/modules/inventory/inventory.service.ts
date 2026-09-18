@@ -1,3 +1,4 @@
+import { pendingScannedReviewIds } from './pending-kiz-review';
 import { physicalKizIdentity, kizIdentityTransferEnabled } from '../../common/kiz-physical-identity';
 import { inventoryKizTransferWarnings, lockInventoryKizTransferSources } from './confirmed-kiz-transfer';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
@@ -191,6 +192,15 @@ export class InventoryService {
         ...(warehouseId ? { warehouseId } : {}),
         boxes: { some: { status: { in: [InventoryBoxStatus.MATCHED, InventoryBoxStatus.MISMATCH, InventoryBoxStatus.RESOLVED] } } },
       }, include: sessionInclude, orderBy: { updatedAt: 'desc' } });
+      // FIX: batch the same read-only gates; never expose hidden clients or discard older pending sessions.
+      if (process.env.WMS_INVENTORY_REVIEW_BATCH_ENABLED === 'true') {
+        const visible = sessions.filter(session => canSeeInventorySession(user, session.clientId) &&
+          !user.hiddenClientIds?.includes(session.clientId ?? ''));
+        const pending = await pendingScannedReviewIds(this.prisma, visible.flatMap(session =>
+          session.boxes.filter(box => box.status !== InventoryBoxStatus.COUNTING)));
+        return visible.map(session => ({ ...session, boxes: session.boxes.filter(box => pending.has(box.id))
+          .map(box => ({ ...box, kizReview: { required: true, orderId: '', message: 'Сканы сохранены. Администратор или собственник должен подтвердить фактический состав КИЗ.' } })) })).filter(session => session.boxes.length);
+      }
       const result: KizReviewSession[] = [];
       for (const session of sessions) {
         if (!canSeeInventorySession(user, session.clientId) || user.hiddenClientIds?.includes(session.clientId ?? '')) continue;
