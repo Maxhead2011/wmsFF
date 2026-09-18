@@ -1,3 +1,4 @@
+import { addFboMonitoring } from './fbo-monitoring';
 import { appendFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import { TsdMonitorMessages } from '../tsd/tsd-monitor-messages';
 import {
@@ -697,7 +698,7 @@ export class AdministrationService {
     // A short Wi-Fi handover or a busy scan request must not make a physical
     // terminal disappear from the wall between two heartbeats.
     const onlineCutoff = Date.now() - 90_000;
-    const devices = [...base.devices, ...discoveredDevices].map((device) => {
+    const devices = await addFboMonitoring(this.prisma, [...base.devices, ...discoveredDevices].map((device) => {
       const canonicalDeviceCode = administrationCanonicalTsdDeviceCode(device.deviceCode);
       const heartbeat = heartbeatByDevice.get(canonicalDeviceCode);
       const state = heartbeat ? administrationJsonRecord(heartbeat.payload) : null;
@@ -720,7 +721,7 @@ export class AdministrationService {
       right.deviceCode,
       'ru-RU',
       { numeric: true, sensitivity: 'base' },
-    ));
+    )), Boolean(user.isDemo));
     return {
       ...base,
       checkedAt: new Date().toISOString(),
