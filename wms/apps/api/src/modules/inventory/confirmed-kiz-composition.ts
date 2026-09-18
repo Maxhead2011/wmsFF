@@ -121,11 +121,30 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
   for (const boxId of lockBoxes) await tx.$queryRaw(Prisma.sql`SELECT id FROM "Box" WHERE id = ${boxId} FOR UPDATE`);
   const returnedShipments: Array<{ markId: string; shipmentId: string; orderId: string | null;
     previousStatus: string; shippedAt: Date; quantityAlreadyCounted: boolean }> = [];
+  // FIX: plan reconciliation before any write; all original aliases remain in the audit proof.
+  const reconcileEnabled = process.env.WMS_INVENTORY_ADMIN_KIZ_RECONCILE_ENABLED === 'true';
+  const reconciledIdentities: Array<{ identity: string; canonicalMarkId: string; removedMarkIds: string[]; skuId: string }> = [];
+  const previousScannedMarks = JSON.parse(JSON.stringify(related));
   for (const scan of scans) {
     const matches = related.filter(mark => identity(mark.value) === scan.identity);
-    if (matches.length > 1 || matches.some(mark => mark.clientId !== box!.clientId || mark.skuId !== scan.skuId))
+    const correction = matches.length > 1 || matches.some(mark => mark.skuId !== scan.skuId);
+    if (matches.some(mark => mark.clientId !== box!.clientId) || correction && !reconcileEnabled)
       stop('Отсканированный КИЗ имеет другую принадлежность или дубль.');
     if (matches.some(mark => mark.box?.warehouseId && mark.box.warehouseId !== box!.warehouseId)) stop('КИЗ числится в другом филиале. Нужна проверка перемещения.');
+    if (correction) {
+      if (matches.some(mark => mark.boxId && mark.boxId !== box!.id || !(mark.updatedAt < audit.startedAt)))
+        stop('Исправление КИЗ: изменена привязка после начала пересчёта или товар числится в другом коробе.');
+      const where = { OR: [scan.identity, ']d2' + scan.identity, ']D2' + scan.identity].map(prefix => ({ kiz: { startsWith: prefix } })) };
+      const [fbs, fbo] = await Promise.all([
+        tx.fbsTsdAssembly.findFirst({ where: { ...where, status: { notIn: ['COMPLETED', 'WB_ACCOUNTED', 'RELEASED'] } }, select: { id: true } }),
+        tx.fboAssemblyUnit.findFirst({ where: { OR: [{ activeMarkId: { in: matches.map(mark => mark.id) } },
+          { ...where, state: { in: ['PICKED', 'PACKED'] } }] }, select: { id: true } }),
+      ]);
+      if (fbs || fbo) stop('Исправление КИЗ: товар используется активной сборкой.');
+      const canonical = [...matches].sort((a, b) => Number(b.value === scan.value) - Number(a.value === scan.value) || a.id.localeCompare(b.id))[0];
+      reconciledIdentities.push({ identity: scan.identity, canonicalMarkId: canonical.id,
+        removedMarkIds: matches.filter(mark => mark.id !== canonical.id).map(mark => mark.id), skuId: scan.skuId });
+    }
     for (const mark of matches.filter(mark => mark.status !== 'AVAILABLE')) {
       // FIX: a physically scanned reserved unit belongs to this confirmed count.
       // Only this box's reservation may be released; another box is not implicitly approved.
@@ -138,7 +157,7 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
         const where = { OR: prefixes.map(prefix => ({ kiz: { startsWith: prefix } })) };
         const shipment = await tx.shippedKizHistory.findFirst({ where,
           orderBy: [{ shippedAt: 'desc' }, { id: 'desc' }] });
-        if (!shipment || shipment.clientId !== box!.clientId || shipment.skuId !== scan.skuId ||
+        if (!shipment || shipment.clientId !== box!.clientId || shipment.skuId !== (correction ? mark.skuId : scan.skuId) ||
             shipment.warehouseId !== box!.warehouseId || !(shipment.shippedAt < audit.startedAt))
           stop('Возврат КИЗ: не подтверждена прежняя отгрузка этого товара из данного филиала.');
         const [fbs, fbo] = await Promise.all([
@@ -221,12 +240,21 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
   const attached: string[] = [];
   const transfers = [];
   for (const scan of scans) {
-    const mark = related.find(mark => identity(mark.value) === scan.identity);
+    const correction = reconciledIdentities.find(row => row.identity === scan.identity);
+    const mark = related.find(mark => correction ? mark.id === correction.canonicalMarkId : identity(mark.value) === scan.identity);
+    // FIX: consolidate only current registration rows; immutable order/print/shipment histories stay intact.
+    for (const aliasId of correction?.removedMarkIds ?? []) {
+      const alias = related.find(row => row.id === aliasId)!;
+      const deleted = await tx.productMark.deleteMany({ where: { id: alias.id, updatedAt: alias.updatedAt,
+        clientId: alias.clientId, skuId: alias.skuId, status: alias.status, boxId: alias.boxId } });
+      if (deleted.count !== 1) stop('Дубль КИЗ изменился параллельно с подтверждением.');
+    }
     if (mark) {
-      if (mark.boxId !== box!.id || mark.status === 'RESERVED') {
+      if (correction || mark.boxId !== box!.id || mark.status === 'RESERVED') {
         const transfer = await debitConfirmedKizSource(tx, { mark, destination: box!, auditId: audit.id, startedAt: audit.startedAt, userId: user.id });
         if (transfer) transfers.push(transfer);
-        const changed = await tx.productMark.updateMany({ where: { id: mark.id, boxId: mark.boxId, updatedAt: mark.updatedAt, status: mark.status }, data: { boxId: box!.id, stockMovementId: null, status: 'AVAILABLE' } });
+        const changed = await tx.productMark.updateMany({ where: { id: mark.id, boxId: mark.boxId, updatedAt: mark.updatedAt, status: mark.status }, data: { boxId: box!.id, stockMovementId: null, status: 'AVAILABLE',
+          ...(correction ? { skuId: scan.skuId, value: scan.value } : {}) } });
         if (changed.count !== 1) stop('КИЗ перемещён параллельно с подтверждением.');
       }
       attached.push(mark.id);
@@ -237,8 +265,8 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
     .map(({ id, skuId, status, quantity }) => ({ id, skuId, status, quantity }));
   await tx.auditLog.create({ data: { id, userId: user.id, action: 'INVENTORY_KIZ_COMPOSITION_CONFIRMED', entity: 'InventoryAuditBox', entityId: audit.id,
     payload: JSON.parse(JSON.stringify({ auditBoxId: audit.id, roundStartedAt: audit.startedAt.toISOString(), boxId: box!.id,
-      clientId: box!.clientId, warehouseId: box!.warehouseId, nonPhysicalBalances, retiredMarks: retired, previousScannedMarks: related,
-      attachedMarkIds: attached, scans, transfers, releasedReservations, releasedTaskIds, returnedShipments,
+      clientId: box!.clientId, warehouseId: box!.warehouseId, nonPhysicalBalances, retiredMarks: retired, previousScannedMarks,
+      attachedMarkIds: attached, scans, transfers, releasedReservations, releasedTaskIds, returnedShipments, reconciledIdentities,
       archivedMarkIds, archiveReason: 'Не подтверждено при пересчёте',
       evidenceIds: evidence.map(row => row.id), quantityChanged: -transfers.length - releasedReservations.reduce((sum, row) => sum + row.quantity, 0) })) } });
 }

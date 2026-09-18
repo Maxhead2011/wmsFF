@@ -182,6 +182,35 @@ export class InventoryService {
   // Approval remains the existing resolveBox transaction; listing never changes stock or marks.
   private async pendingKizReviews(user: AuthUser, warehouseId: string | null, sessionId?: string): Promise<KizReviewSession[]> {
     if (!fbsKizAuditEnabled() || user.isDemo || !canManageInventory(user)) return [];
+    // FIX: ordinary workers submit saved scans; ADMIN/OWNER reviews every box check in WMS,
+    // including quantity-matched checks outside an FBS task. Listing never applies corrections.
+    if (process.env.WMS_INVENTORY_ADMIN_KIZ_RECONCILE_ENABLED === 'true') {
+      const sessions = await this.prisma.inventorySession.findMany({ where: {
+        ...(sessionId ? { id: sessionId } : {}), type: InventorySessionType.BOX_CHECK,
+        status: { in: [InventorySessionStatus.ACTIVE, InventorySessionStatus.REVIEW, InventorySessionStatus.COMPLETED] },
+        ...(warehouseId ? { warehouseId } : {}),
+        boxes: { some: { status: { in: [InventoryBoxStatus.MATCHED, InventoryBoxStatus.MISMATCH, InventoryBoxStatus.RESOLVED] } } },
+      }, include: sessionInclude, orderBy: { updatedAt: 'desc' } });
+      const result: KizReviewSession[] = [];
+      for (const session of sessions) {
+        if (!canSeeInventorySession(user, session.clientId) || user.hiddenClientIds?.includes(session.clientId ?? '')) continue;
+        const boxes: KizReviewSession['boxes'] = [];
+        for (const box of session.boxes) {
+          if (box.status === InventoryBoxStatus.COUNTING) continue;
+          const latest = await this.prisma.inventoryAuditBox.findFirst({ where: { boxId: box.boxId },
+            orderBy: [{ startedAt: 'desc' }, { id: 'desc' }], select: { id: true } });
+          if (latest?.id !== box.id) continue;
+          const proof = await this.prisma.auditLog.findUnique({ where: { id: `inventory-kiz-confirm:${box.id}:${box.startedAt.toISOString()}` } });
+          if (proof) continue;
+          const scans = await this.prisma.auditLog.findMany({ where: { action: 'INVENTORY_KIZ_SCAN', entity: 'InventoryAuditBox',
+            entityId: box.id, createdAt: { gte: box.startedAt } }, select: { id: true }, take: 1 });
+          if (!scans.length) continue;
+          boxes.push({ ...box, kizReview: { required: true, orderId: '', message: 'Сканы сохранены. Администратор или собственник должен подтвердить фактический состав КИЗ.' } });
+        }
+        if (boxes.length) result.push({ ...session, boxes });
+      }
+      return result;
+    }
     const sessions = (await this.prisma.inventorySession.findMany({
       where: { ...(sessionId ? { id: sessionId } : {}), type: InventorySessionType.BOX_CHECK,
         status: { in: [InventorySessionStatus.ACTIVE, InventorySessionStatus.REVIEW, InventorySessionStatus.COMPLETED] }, comment: { contains: FBS_KIZ_AUDIT_MARKER },
@@ -780,7 +809,7 @@ export class InventoryService {
 
   async decideLine(lineId: string, dto: InventoryDecisionDto, user: AuthUser): Promise<Prisma.InventoryAuditBoxGetPayload<{ include: { lines: true } }> | null> {
     // FIX: quantity, source debit, KIZ ownership and approval share one commit.
-    if (kizIdentityTransferEnabled() && !this.inventoryDecisionTx && !user.isDemo)
+    if ((kizIdentityTransferEnabled() || process.env.WMS_INVENTORY_ADMIN_KIZ_RECONCILE_ENABLED === 'true') && !this.inventoryDecisionTx && !user.isDemo)
       return this.atomicKizDecision(service => service.decideLine(lineId, dto, user));
     this.requireManager(user);
     const action =
@@ -1125,7 +1154,7 @@ export class InventoryService {
 
   async resolveBox(auditBoxId: string, dto: ResolveInventoryBoxDto, user: AuthUser): Promise<Prisma.InventoryAuditBoxGetPayload<{ include: { lines: true } }> | null> {
     // FIX: resolving multiple lines must roll back every line if any KIZ transfer fails.
-    if (kizIdentityTransferEnabled() && !this.inventoryDecisionTx && !user.isDemo)
+    if ((kizIdentityTransferEnabled() || process.env.WMS_INVENTORY_ADMIN_KIZ_RECONCILE_ENABLED === 'true') && !this.inventoryDecisionTx && !user.isDemo)
       return this.atomicKizDecision(service => service.resolveBox(auditBoxId, dto, user));
     this.requireManager(user);
     const auditBox = await this.prisma.inventoryAuditBox.findUnique({

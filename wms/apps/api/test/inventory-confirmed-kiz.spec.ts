@@ -212,6 +212,35 @@ function wmsReviewFixture() {
   const service: any = new InventoryService(f.db, { requireClientAccess: vi.fn() } as never, {} as never);
   return { ...f, service, review: () => service.pendingKizReviews(f.user, null) };
 }
+it('queues a normal worker count without an FBS task in WMS, then approves the saved scans', async () => {
+  // TEST: ordinary TSD staff never rewrite SKU ownership; WMS reuses their original round.
+  vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT', 'true');
+  vi.stubEnv('WMS_INVENTORY_ADMIN_KIZ_RECONCILE_ENABLED', 'true');
+  const f = wmsReviewFixture(); f.session.comment = null;
+  Object.assign(f.marks[0], { value: kiz, skuId: 'old-size', updatedAt: new Date('2026-08-01') });
+  f.db.sku.findMany.mockImplementation(async ({ where }: any) => where.id.in.map((id: string) => ({ id, needsChestnyZnak: true, isUnmarked: false })));
+  f.db.fbsTsdAssembly.findFirst.mockResolvedValue(null);
+  f.db.fboAssemblyUnit = { findFirst: vi.fn(async () => null) };
+  const scans = structuredClone(f.evidence);
+  await confirmInventoryKizComposition(f.db, 'audit', { ...f.user, roleCodes: ['TSD'] });
+  expect(f.marks[0].skuId).toBe('old-size');
+  await expect(f.review()).resolves.toEqual([expect.objectContaining({ boxes: [expect.objectContaining({ kizReview: expect.objectContaining({ required: true }) })] })]);
+  expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
+  await new InventoryController(f.service, {} as never).resolveBox('audit', { action: 'APPLY_ACTUAL' } as never, f.user);
+  expect(f.marks[0].skuId).toBe('sku'); expect(f.evidence).toEqual(scans);
+  await expect(f.review()).resolves.toEqual([]);
+});
+it.each(['hidden', 'no-scans', 'new-round', 'worker'])('does not expose an unrelated general KIZ review: %s', async kind => {
+  // TEST: general WMS review respects client access and saved physical evidence.
+  vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT', 'true');
+  vi.stubEnv('WMS_INVENTORY_ADMIN_KIZ_RECONCILE_ENABLED', 'true');
+  const f = wmsReviewFixture(); f.session.comment = null;
+  if (kind === 'hidden') f.user.hiddenClientIds = ['client'];
+  if (kind === 'no-scans') f.evidence.length = 0;
+  if (kind === 'new-round') f.db.inventoryAuditBox.findFirst.mockResolvedValue({ id: 'other' });
+  if (kind === 'worker') { f.user.roleCodes = ['TSD']; f.user.permissionCodes = []; }
+  await expect(f.review()).resolves.toEqual([]);
+});
 
 it('exposes a saved quantity-matched worker count in the WMS review queue without writing', async () => {
   // TEST: the menu must include KIZ-only mismatches even when quantity is 7 of 7.
@@ -304,6 +333,44 @@ function shippedReturnFixture() {
   f.db.fboAssemblyUnit = { findFirst: vi.fn(async () => null) };
   return { ...f, shipment };
 }
+it.each(['ADMIN', 'OWNER'])('accepts box 160 physical SKU and duplicate identity on WMS confirmation by %s', async role => {
+  // TEST: worker scans XS/40; old S/42 aliases contain AVAILABLE and SHIPPING records.
+  const f = shippedReturnFixture();
+  vi.stubEnv('WMS_INVENTORY_ADMIN_KIZ_RECONCILE_ENABLED', 'true');
+  f.user.roleCodes = [role];
+  f.marks[0].skuId = 'old-size'; f.shipment.skuId = 'old-size';
+  f.marks.push({ ...f.marks[0], id: 'alias', boxId: 'box', status: 'AVAILABLE', value: kiz + '-old-tail' });
+  f.db.sku.findMany.mockImplementation(async ({ where }: any) => where.id.in.map((id: string) => ({ id, needsChestnyZnak: true, isUnmarked: false })));
+  f.db.productMark.deleteMany = vi.fn(async ({ where }: any) => {
+    const i = f.marks.findIndex(m => m.id === where.id); if (i < 0) return { count: 0 };
+    f.marks.splice(i, 1); return { count: 1 };
+  });
+  const stock = structuredClone(f.balances), history = structuredClone(f.shipment), scans = structuredClone(f.evidence);
+  await f.service.resolveBox('audit', { action: 'APPLY_ACTUAL' }, f.user);
+  expect(f.marks).toEqual([expect.objectContaining({ id: 'current', skuId: 'sku', status: 'AVAILABLE', boxId: 'box', value: kiz })]);
+  expect(f.balances).toEqual(stock); expect(f.shipment).toEqual(history); expect(f.evidence).toEqual(scans);
+  expect(f.db.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ payload: expect.objectContaining({
+    reconciledIdentities: [expect.objectContaining({ canonicalMarkId: 'current', removedMarkIds: ['alias'], skuId: 'sku' })],
+    previousScannedMarks: expect.arrayContaining([expect.objectContaining({ id: 'alias', skuId: 'old-size' })]),
+  }) }) }));
+  await f.service.resolveBox('audit', { action: 'APPLY_ACTUAL' }, f.user);
+  expect(f.db.productMark.deleteMany).toHaveBeenCalledTimes(1);
+});
+it.each(['flag-off', 'worker', 'other-client', 'other-box', 'active-fbs', 'active-fbo', 'concurrent-change'])('does not reconcile identity without valid authority and evidence: %s', async kind => {
+  // TEST: accepting a physical SKU must not bypass current ownership or ordinary-worker approval.
+  const f = shippedReturnFixture();
+  vi.stubEnv('WMS_INVENTORY_ADMIN_KIZ_RECONCILE_ENABLED', kind === 'flag-off' ? 'false' : 'true');
+  f.marks[0].skuId = 'old-size'; f.shipment.skuId = 'old-size';
+  if (kind === 'worker') f.user.roleCodes = ['TSD'];
+  if (kind === 'other-client') f.marks[0].clientId = 'other';
+  if (kind === 'other-box') f.marks[0].boxId = 'other';
+  if (kind === 'active-fbs') f.db.fbsTsdAssembly.findFirst.mockResolvedValue({ id: 'active' });
+  if (kind === 'active-fbo') f.db.fboAssemblyUnit.findFirst.mockResolvedValue({ id: 'active' });
+  if (kind === 'concurrent-change') f.marks[0].updatedAt = startedAt;
+  if (kind === 'worker') await f.confirm(); else await expect(f.confirm()).rejects.toThrow();
+  expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
+  expect(f.db.auditLog.create).not.toHaveBeenCalled();
+});
 it('receives a physically counted shipped mark once, preserving shipment history and counted quantity', async () => {
   // TEST: FFL_LKB0104_80 contains a scanned unit recorded as shipped on September 4.
   const f = shippedReturnFixture(), stock = structuredClone(f.balances), history = structuredClone(f.shipment);
