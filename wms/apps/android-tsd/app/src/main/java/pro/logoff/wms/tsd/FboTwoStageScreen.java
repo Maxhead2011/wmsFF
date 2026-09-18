@@ -40,7 +40,8 @@ final class FboTwoStageScreen {
     private final String pendingKey;
     private TsdFboPlan plan;
     private EditText input;
-    private boolean busy,closed;
+    private boolean busy,closed,routeStale;
+    private Runnable statusCheck;
     private String message="";
     private final Runnable automatic=this::submit;
     FboTwoStageScreen(Activity activity,TsdSession session,WmsApi api,String baseUrl,String id,boolean packing,Runnable back) {
@@ -58,7 +59,7 @@ final class FboTwoStageScreen {
         prefs=activity.getSharedPreferences("fbo-pending",Context.MODE_PRIVATE);pendingKey=session.userId+":"+id;
         try{state.restoreCheckpoint(readSaved(pendingKey+":position"));}catch(Exception ignored){}
         try {String saved=prefs.getString(pendingKey,"");if(!saved.isEmpty()){JSONObject json=new JSONObject(saved);Map<String,String> p=new LinkedHashMap<>();Iterator<String> keys=json.keys();while(keys.hasNext()){String k=keys.next();p.put(k,json.getString(k));}state.restore(p);}}catch(Exception e){message="Не удалось прочитать сохранённую операцию.";}
-        refresh();
+        if(fastConfirmation()&&state.pending()!=null)checkPending(0);else refresh();
     }
     boolean belongsTo(TsdSession current){return session.hasSameAccessToken(current);}
     private Map<String,String> readSaved(String key)throws Exception {
@@ -71,7 +72,7 @@ final class FboTwoStageScreen {
         Map<String,Object> p=new LinkedHashMap<>();p.put("requestId",id);
         p.put("screenLabel","ФБО · "+FboFeedback.phase(plan==null?null:plan.phase));
         p.put("stage",plan==null?"LOADING":plan.phase);p.put("boxCode",packing?state.target:state.source);
-        p.put("barcode",state.barcode);p.put("lastAction",busy?"Отправка запроса…":state.pending()!=null?"Подтверждение не получено. Повторите отправку.":message);
+        p.put("barcode",state.barcode);p.put("lastAction",routeStale?message+" Обновляется маршрут.":busy?"Отправка запроса…":state.pending()!=null?"Подтверждение не получено. Повторите отправку.":message);
         if(plan!=null){boolean control="CONTROL".equals(plan.phase);int total=control?plan.boxes.size():plan.needed;
             int done=control?FboFeedback.confirmed(plan):"PICKING".equals(plan.phase)||"NOT_STARTED".equals(plan.phase)?plan.picked:plan.packed;
             p.put("total",total);p.put("completed",done);p.put("remaining",Math.max(0,total-done));}
@@ -79,14 +80,14 @@ final class FboTwoStageScreen {
     }
     boolean canLeave(){return !busy&&state.pending()==null;}
     EditText scannerField(){return quantityInput!=null?quantityInput:input;}
-    void close(){closed=true;if(scanFeedback!=null)scanFeedback.close();if(quantityDialog!=null)quantityDialog.dismiss();handler.removeCallbacks(automatic);executor.shutdownNow();}
+    void close(){closed=true;if(scanFeedback!=null)scanFeedback.close();if(quantityDialog!=null)quantityDialog.dismiss();handler.removeCallbacks(automatic);if(statusCheck!=null)handler.removeCallbacks(statusCheck);executor.shutdownNow();}
     private void text(LinearLayout root,String value){TextView v=new TsdUi.Label(activity);v.setText(value);v.setTextSize(19);v.setTextColor(Color.BLACK);v.setPadding(0,9,0,9);root.addView(v);}
     private void card(LinearLayout root,String value,int color){text(root,value);root.getChildAt(root.getChildCount()-1).setBackgroundColor(color);}
     private void button(LinearLayout root,String title,boolean enabled,Runnable action){Button b=new TsdUi.Button(activity);b.setText(title);b.setAllCaps(false);b.setEnabled(enabled&&!busy);b.setOnClickListener(v->action.run());root.addView(b);}
     private TsdFboPlan.Route source(){if(plan!=null&&plan.route!=null)for(TsdFboPlan.Route r:plan.route)if(r.boxCode.equals(state.source))return r;return null;}
     // FIX: speak for locations and product barcodes during picking, never for KIZ or server responses.
     private void speakScan(boolean accepted){if(!closed&&!packing&&plan!=null&&"PICKING".equals(plan.phase)&&"logoff".equals(BuildConfig.FLAVOR)&&scanFeedback!=null)scanFeedback.play(accepted);}
-    private boolean ready(){return state.pending()==null&&!busy;}
+    private boolean ready(){return state.pending()==null&&!busy&&!routeStale;}
     private void render(){
         if(closed||activity.isDestroyed())return;
         prefs.edit().putString(pendingKey+":position",new JSONObject(state.checkpoint()).toString()).commit();
@@ -149,7 +150,8 @@ final class FboTwoStageScreen {
             text(root,busy?"Отправка запроса…":"Подтверждение не получено. Запрос сохранён — повторное сканирование не требуется.");
             button(root,"Повторить отправку",!busy,()->send("",null));
         }
-        button(root,"Обновить",ready(),this::refresh);button(root,"Назад",canLeave(),()->{close();back.run();});
+        if(routeStale)text(root,"Операция подтверждена. Ожидается обновление маршрута; повторный отбор не нужен.");
+        button(root,"Обновить",state.pending()==null&&!busy,this::refresh);button(root,"Назад",canLeave(),()->{close();back.run();});
         ScrollView scroll=new ScrollView(activity);scroll.addView(root);activity.setContentView(scroll);if(input!=null&&ready())input.requestFocus();
     }
     void submit(){if(quantityDialog!=null){confirmWholeBoxQuantity();return;}handler.removeCallbacks(automatic);if(!ready()||input==null||plan==null)return;String value=input.getText().toString().trim();if(value.isEmpty())return;input.setText("");message="";
@@ -174,11 +176,56 @@ final class FboTwoStageScreen {
         feedbackColor=Color.rgb(187,247,208);message="Нужный товар";speakScan(true);
         state.barcode=value;if(line.requiresKiz)render();else send("PICKING".equals(plan.phase)?"PICK_UNIT":"PACK_UNIT",null);
     }
-    private void refresh(){if(busy||closed)return;busy=true;render();executor.execute(()->{try{Response<TsdFboPlan> res=api.getFboPlan(session.authorizationHeader(),id).execute();if(!res.isSuccessful()||res.body()==null)throw new Exception(error(res));TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;if(state.pending()==null)state.reconcile(plan);busy=false;render();});}catch(Exception e){handler.post(()->{if(closed)return;busy=false;message="Не удалось обновить: "+e.getMessage();render();});}});}
+    private void refresh(){if(busy||closed)return;busy=true;render();executor.execute(()->{try{Response<TsdFboPlan> res=api.getFboPlan(session.authorizationHeader(),id).execute();if(!res.isSuccessful()||res.body()==null)throw new Exception(error(res));TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;routeStale=false;if(state.pending()==null)state.reconcile(plan);busy=false;render();});}catch(Exception e){handler.post(()->{if(closed)return;busy=false;if(!routeStale)message="Не удалось обновить: "+e.getMessage();render();});}});}
+    private boolean fastConfirmation(){return "logoff".equals(BuildConfig.FLAVOR)&&((plan!=null&&plan.fastAcknowledgementSupported)||prefs.getBoolean(pendingKey+":fast",false));}
+    // FIX: the compact receipt clears the durable request before any route recalculation.
+    private boolean validReceipt(TsdFboAcknowledgement ack,Map<String,String> payload){return ack!=null&&ack.accepted&&id.equals(ack.requestId)
+        &&payload.get("operationId").equals(ack.operationId)&&payload.get("action").equals(ack.action);}
+    private void acceptReceipt(TsdFboAcknowledgement ack,Map<String,String> payload){
+        if(closed||!validReceipt(ack,payload))return;
+        Map<String,String> position=state.checkpoint();position.put("barcode","");
+        if("OPEN_BOX".equals(payload.get("action")))position.put("targetBoxCode",payload.get("targetBoxCode"));
+        if(!prefs.edit().remove(pendingKey).remove(pendingKey+":fast").putString(pendingKey+":position",new JSONObject(position).toString()).commit()){
+            busy=false;message="Операция принята, но подтверждение не сохранилось на ТСД. Повторите отправку.";render();return;
+        }
+        state.accepted();state.restoreCheckpoint(position);busy=false;routeStale=true;feedbackColor=Color.rgb(187,247,208);
+        message=FboFeedback.accepted(payload,plan);render();
+        if("FINISH".equals(payload.get("action")))download();refresh();
+    }
+    private void sendAcknowledged(Map<String,String> payload){
+        if(statusCheck!=null)handler.removeCallbacks(statusCheck);
+        busy=true;message="";render();executor.execute(()->{try{
+            Response<TsdFboAcknowledgement> res=api.acknowledgeFbo(session.authorizationHeader(),id,payload).execute();
+            if(res.isSuccessful()&&validReceipt(res.body(),payload)){handler.post(()->acceptReceipt(res.body(),payload));return;}
+            if(!res.isSuccessful()&&FboFeedback.definitiveRejection(res.code())&&res.code()!=404&&res.code()!=405){
+                String detail=error(res);handler.post(()->{if(closed)return;busy=false;
+                    if(prefs.edit().remove(pendingKey).remove(pendingKey+":fast").commit())state.rejected();
+                    message=detail;feedbackColor=Color.rgb(254,202,202);if(res.code()==409&&state.pending()==null)refresh();else render();});return;
+            }
+        }catch(Exception e){android.util.Log.w("FboConfirmation","Acknowledgement unavailable: "+e.getClass().getSimpleName());}
+            handler.post(()->{if(closed)return;busy=false;checkPending(0);});
+        });
+    }
+    // FIX: bounded automatic checks are read-only; they never resubmit an unknown stock mutation.
+    private void checkPending(int attempt){
+        if(closed||busy||state.pending()==null)return;Map<String,String> payload=state.pending();busy=true;
+        message="Проверяю результат отправленного запроса…";render();executor.execute(()->{
+            TsdFboAcknowledgement receipt=null;
+            try{Response<TsdFboAcknowledgement> res=api.fboOperationStatus(session.authorizationHeader(),id,payload).execute();if(res.isSuccessful()&&validReceipt(res.body(),payload))receipt=res.body();}
+            catch(Exception e){android.util.Log.w("FboConfirmation","Status unavailable: "+e.getClass().getSimpleName());}
+            TsdFboAcknowledgement result=receipt;handler.post(()->{if(closed)return;
+                if(result!=null){acceptReceipt(result,payload);return;}
+                busy=false;message="Подтверждение не получено. Запрос сохранён. Повторное сканирование не требуется.";render();
+                if(attempt<2){statusCheck=()->{Map<String,String> current=state.pending();if(current!=null&&payload.get("operationId").equals(current.get("operationId")))checkPending(attempt+1);};handler.postDelayed(statusCheck,attempt==0?1500:3000);}
+            });
+        });
+    }
     private void send(String action,String kiz){send(action,kiz,null);}
     private void send(String action,String kiz,Integer quantity){if(busy||closed)return;Map<String,String> payload=state.prepare(action,kiz,quantity);
         // FIX: persist before sending, so a restart can retry the identical operation.
-        if(!prefs.edit().putString(pendingKey,new JSONObject(payload).toString()).commit()){message="Не удалось сохранить операцию. Проверьте память ТСД.";render();return;}
+        boolean fast=fastConfirmation();
+        if(!prefs.edit().putString(pendingKey,new JSONObject(payload).toString()).putBoolean(pendingKey+":fast",fast).commit()){message="Не удалось сохранить операцию. Проверьте память ТСД.";render();return;}
+        if(fast){sendAcknowledged(payload);return;}
         busy=true;message="";render();executor.execute(()->{try{
             Response<TsdFboPlan> res=api.actFbo(session.authorizationHeader(),id,payload).execute();
             if(!res.isSuccessful()||res.body()==null){boolean rejected=FboFeedback.definitiveRejection(res.code());String detail=error(res);handler.post(()->{if(closed)return;if(rejected&&prefs.edit().remove(pendingKey).commit()){state.rejected();if("OPEN_BOX".equals(payload.get("action")))state.target="";}busy=false;feedbackColor=Color.rgb(254,202,202);message=detail;

@@ -21,7 +21,7 @@ final class FboFeedback {
         if("PICK_UNIT".equals(action))return "Принято: 1 шт. Товар отобран.";
         if("PACK_UNIT".equals(action))return "Принято: 1 шт. Товар упакован.";
         if("PICK_BOX".equals(action))return "Короб принят: "+request.get("confirmedQuantity")+" шт.";
-        if("PACK_BOX".equals(action)&&plan.boxes!=null)for(TsdFboPlan.Box b:plan.boxes)
+        if("PACK_BOX".equals(action)&&plan!=null&&plan.boxes!=null)for(TsdFboPlan.Box b:plan.boxes)
             if(b.code.equals(request.get("sourceBoxCode")))return "Короб упакован: "+b.quantity+" шт.";
         if("CONFIRM_BOX".equals(action))return "Короб проверен: "+request.get("targetBoxCode");
         if("FINISH_PICK".equals(action))return "Отбор завершён. Передайте товар на упаковку.";

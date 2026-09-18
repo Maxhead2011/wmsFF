@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import { FbsTsdAssembly, Prisma, StockStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -26,6 +26,40 @@ const identity = (value: string) => physicalKizIdentity(value) || value.trim();
 const composition = (r: Request) => hash(r.items.map(i => [i.id, i.skuId, i.barcode, i.quantity]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
 @Injectable()
 export class FboTwoStageService {
+    private readonly logger = new Logger(FboTwoStageService.name);
+    private fastAcknowledgementEnabled() { return process.env.WMS_FBO_FAST_ACK_ENABLED === 'true'; }
+    // FIX: the original payload and actor identify the same durable operation on every retry.
+    private actionHash(dto: FboActionDto) {
+        return hash([dto.action, dto.sourceBoxCode ?? null, dto.targetBoxCode ?? null, dto.barcode ?? null,
+            dto.kiz ?? null, dto.palletCode ?? null, ...(dto.confirmedQuantity === undefined ? [] : [dto.confirmedQuantity])]);
+    }
+    private requireFastAcknowledgement() {
+        if (!fboTwoStageEnabled() || !this.fastAcknowledgementEnabled())
+            throw new NotFoundException('Быстрое подтверждение ФБО выключено.');
+    }
+    async operationStatus(id: string, dto: FboActionDto, user: AuthUser) {
+        this.requireFastAcknowledgement();
+        // A committed receipt remains valid if the request's composition changed afterwards.
+        await this.load(this.prisma, id, user, 'write');
+        const previous = await this.prisma.fboAssemblyAction.findUnique({ where: { id: `${id}:${dto.operationId}` } });
+        if (previous && (previous.payloadHash !== this.actionHash(dto) || previous.actorId !== user.id))
+            throw new ConflictException('Номер операции уже использован с другими данными.');
+        return { requestId: id, operationId: dto.operationId, action: dto.action, accepted: !!previous };
+    }
+    async actAcknowledged(id: string, dto: FboActionDto, user: AuthUser) {
+        this.requireFastAcknowledgement();
+        const started = Date.now();
+        // FIX: committed retries need neither a stock transaction nor a new route snapshot.
+        const previous = await this.operationStatus(id, dto, user);
+        if (previous.accepted) return previous;
+        try {
+            await this.executeAction(id, dto, user);
+            return { ...previous, accepted: true };
+        } finally {
+            this.logger.log(JSON.stringify({ event: 'fbo_action_ack', requestId: id, operationId: dto.operationId,
+                action: dto.action, durationMs: Date.now() - started }));
+        }
+    }
     constructor(private readonly prisma: PrismaService, private readonly scopes: ClientScopeService, private readonly balances: StockBalancesService, private readonly stock: StockOperationsService, private readonly lock: InventoryLockService, private readonly files: ClientRequestMarketplaceFilesService) { }
     async eligible(requestId: string, user: AuthUser) {
         if (!fboTwoStageEnabled())
@@ -44,11 +78,15 @@ export class FboTwoStageService {
     async plan(id: string, user: AuthUser) {
         if (!fboTwoStageEnabled())
             throw new NotFoundException('Двухэтапная сборка ФБО выключена.');
-        return this.prisma.$transaction(async (tx) => {
+        const started = Date.now();
+        try { return await this.prisma.$transaction(async (tx) => {
             const r = await this.load(tx, id, user, 'read');
             this.requireFbo(r);
             return this.snapshot(tx, r);
         }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 30000 });
+        } finally {
+            if (this.fastAcknowledgementEnabled()) this.logger.log(JSON.stringify({ event: 'fbo_plan', requestId: id, durationMs: Date.now() - started }));
+        }
     }
     private requireFbo(r: Request) {
         if (r.type !== 'OUTBOUND' || r._count.fbsOrderLinks || r.client.storesWithoutBoxes)
@@ -113,6 +151,7 @@ export class FboTwoStageService {
                 remainderQuantity: Math.max(0, box.balances.filter(b => b.status === 'AVAILABLE').reduce((sum, b) => sum + Math.max(0, b.quantity), 0) - tasks.reduce((sum, t) => sum + t.quantity, 0)) });
         }
         return { requestId: r.id, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED', lines, route,
+            fastAcknowledgementSupported: this.fastAcknowledgementEnabled(),
             needed: lines.reduce((s, l) => s + l.needed, 0), picked: lines.reduce((s, l) => s + l.picked, 0), packed: lines.reduce((s, l) => s + l.packed, 0),
             looseRemaining: units.filter(u => !u.wholeBox && u.state === 'PICKED').length,
             wholeBoxes: [...new Set(units.filter(u => u.wholeBox && u.state === 'PICKED').map(u => u.sourceBoxCode))],
@@ -121,19 +160,25 @@ export class FboTwoStageService {
             shortage: Object.values(demand).reduce((s, n) => s + n, 0), compositionChanged: !!assembly && assembly.compositionHash !== composition(r) };
     }
     async act(id: string, dto: FboActionDto, user: AuthUser) {
+        await this.executeAction(id, dto, user);
+        return this.plan(id, user);
+    }
+    private async executeAction(id: string, dto: FboActionDto, user: AuthUser) {
         if (!fboTwoStageEnabled())
             throw new NotFoundException('Двухэтапная сборка ФБО выключена.');
         await this.lock.assertStockMovementsAllowed();
         // FIX: one durable operation id and a request lock make retries and concurrent terminals safe.
-        const execute = () => this.prisma.$transaction(async (tx) => {
+        const execute = () => {
+            const queuedAt = Date.now();
+            return this.prisma.$transaction(async (tx) => {
+            const openedAt = Date.now();
             await tx.$queryRaw `SELECT "id" FROM "ClientRequest" WHERE "id"=${id} FOR UPDATE`;
+            if (this.fastAcknowledgementEnabled()) this.logger.log(JSON.stringify({ event: 'fbo_transaction_wait', requestId: id,
+                operationId: dto.operationId, poolWaitMs: openedAt - queuedAt, requestLockWaitMs: Date.now() - openedAt }));
             const r = await this.load(tx, id, user, 'write');
             this.requireFbo(r);
             // FIX: persisted JSON can change property order after a terminal restart.
-            const key = `${id}:${dto.operationId}`, payloadHash = hash([
-                dto.action, dto.sourceBoxCode ?? null, dto.targetBoxCode ?? null, dto.barcode ?? null, dto.kiz ?? null, dto.palletCode ?? null,
-                ...(dto.confirmedQuantity === undefined ? [] : [dto.confirmedQuantity]),
-            ]);
+            const key = `${id}:${dto.operationId}`, payloadHash = this.actionHash(dto);
             const previous = await tx.fboAssemblyAction.findUnique({ where: { id: key } });
             if (previous) {
                 if (previous.payloadHash !== payloadHash || previous.actorId !== user.id)
@@ -341,6 +386,7 @@ export class FboTwoStageService {
             await tx.fboAssemblyAction.create({ data: { id: key, requestId: id, payloadHash, actorId: user.id } });
             await tx.auditLog.create({ data: { userId: user.id, action: `FBO_${dto.action}`, entity: 'ClientRequest', entityId: id, payload: { operationId: dto.operationId, palletCode: dto.palletCode, sourceBoxCode: dto.sourceBoxCode, targetBoxCode: dto.targetBoxCode, barcode: dto.barcode } } });
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 60000 });
+        };
         // FIX: retry only rolled-back serialization conflicts, retaining the durable operation id.
         for (let attempt = 0; ; attempt++) {
             try { await execute(); break; }
@@ -350,7 +396,6 @@ export class FboTwoStageService {
                 await new Promise(resolve => setTimeout(resolve, 25 * (attempt + 1)));
             }
         }
-        return this.plan(id, user);
     }
     private async box(tx: Prisma.TransactionClient, r: Request, code?: string) {
         if (!code)
